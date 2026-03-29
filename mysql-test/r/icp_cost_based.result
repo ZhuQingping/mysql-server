@@ -1,0 +1,67 @@
+CREATE TABLE t1 (
+a INT NOT NULL,
+b INT NOT NULL,
+c INT NOT NULL,
+payload CHAR(32) NOT NULL,
+KEY idx_abc (a, b, c)
+) ENGINE=InnoDB;
+CREATE TABLE t2 (
+id INT NOT NULL,
+PRIMARY KEY(id)
+) ENGINE=InnoDB;
+INSERT INTO t2 VALUES (0), (1), (2), (3), (4);
+INSERT INTO t1
+WITH RECURSIVE seq AS (
+SELECT 1 AS n
+UNION ALL
+SELECT n + 1 FROM seq WHERE n < 200
+)
+SELECT
+1 AS a,
+n % 5 AS b,
+IF(n <= 5, 0, 1) AS c,
+LPAD(n, 32, 'x') AS payload
+FROM seq;
+ANALYZE TABLE t1, t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+SET optimizer_trace='enabled=on,one_line=on';
+SELECT SUM(CHAR_LENGTH(payload))
+FROM t1 FORCE INDEX(idx_abc)
+WHERE t1.a = 1 AND t1.b = 1 AND (t1.c + 0) >= 0;
+SUM(CHAR_LENGTH(payload))
+1280
+SELECT
+LOCATE('"icp_cost_based":true', REPLACE(TRACE, ' ', '')) > 0
+AS has_icp_cost_based,
+LOCATE('"icp_enabled":', REPLACE(TRACE, ' ', '')) > 0 AS has_icp_enabled,
+LOCATE('"icp_cost_if_disabled":', REPLACE(TRACE, ' ', '')) > 0
+AS has_icp_cost_if_disabled,
+LOCATE('"icp_cost_if_enabled":', REPLACE(TRACE, ' ', '')) > 0
+AS has_icp_cost_if_enabled
+FROM information_schema.optimizer_trace;
+has_icp_cost_based	has_icp_enabled	has_icp_cost_if_disabled	has_icp_cost_if_enabled
+0	0	0	0
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+SET optimizer_trace='enabled=on,one_line=on';
+SELECT SUM(CHAR_LENGTH(payload))
+FROM t1 FORCE INDEX(idx_abc)
+WHERE t1.a = 1 AND t1.b = 1 AND (t1.c + 0) = 0;
+SUM(CHAR_LENGTH(payload))
+32
+SELECT
+LOCATE('"icp_cost_based":true', REPLACE(TRACE, ' ', '')) > 0
+AS has_icp_cost_based,
+LOCATE('"icp_enabled":', REPLACE(TRACE, ' ', '')) > 0 AS has_icp_enabled,
+LOCATE('"icp_cost_if_disabled":', REPLACE(TRACE, ' ', '')) > 0
+AS has_icp_cost_if_disabled,
+LOCATE('"icp_cost_if_enabled":', REPLACE(TRACE, ' ', '')) > 0
+AS has_icp_cost_if_enabled
+FROM information_schema.optimizer_trace;
+has_icp_cost_based	has_icp_enabled	has_icp_cost_if_disabled	has_icp_cost_if_enabled
+1	1	1	1
+DROP TABLE t2, t1;

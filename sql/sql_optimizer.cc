@@ -3205,6 +3205,8 @@ bool JOIN::get_best_combination() {
     best_ref[target] = tab;
     tab->set_idx(target);
     tab->set_position(pos);
+    tab->set_cost_based_icp_decision(pos->icp_decision_made,
+                                     pos->use_cost_based_icp, pos->icp_keyno);
     TABLE *const table = tab->table();
     if (tab->type() != JT_CONST && tab->type() != JT_SYSTEM) {
       if (pos->sj_strategy == SJ_OPT_LOOSE_SCAN && tab->range_scan() &&

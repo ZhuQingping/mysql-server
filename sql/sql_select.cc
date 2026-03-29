@@ -2915,6 +2915,12 @@ void QEP_TAB::push_index_cond(const JOIN_TAB *join_tab, uint keyno,
 
   TABLE *const tbl = table();
 
+  if (join_tab->has_cost_based_icp_decision_for(keyno) &&
+      !join_tab->use_cost_based_icp()) {
+    trace_obj->add("not_pushed_due_to_icp_cost", true);
+    return;
+  }
+
   // Disable ICP for Innodb intrinsic temp table because of performance
   if (tbl->s->db_type() == innodb_hton && tbl->s->tmp_table != NO_TMP_TABLE &&
       tbl->s->tmp_table != TRANSACTIONAL_TMP_TABLE)

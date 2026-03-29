@@ -164,6 +164,91 @@ double find_cost_for_ref(const THD *thd, TABLE *table, unsigned keyno,
 }
 
 /**
+  Lightweight pre-check for whether ICP can be considered for cost modeling
+  on a given key. This intentionally mirrors stable gates in
+  QEP_TAB::push_index_cond().
+*/
+static bool can_consider_icp_cost(const JOIN_TAB *tab, uint keyno) {
+  TABLE *const table = tab->table();
+  const JOIN *const join = tab->join();
+  THD *const thd = join->thd;
+
+  if (!thd->optimizer_switch_flag(OPTIMIZER_SWITCH_ICP_COST_BASED)) return false;
+
+  if (keyno == MAX_KEY) return false;
+
+  if (!(table->file->index_flags(keyno, 0, true) & HA_DO_INDEX_COND_PUSHDOWN))
+    return false;
+
+  if (!hint_key_state(thd, tab->table_ref, keyno, ICP_HINT_ENUM,
+                      OPTIMIZER_SWITCH_INDEX_CONDITION_PUSHDOWN))
+    return false;
+
+  if (thd->lex->sql_command == SQLCOM_UPDATE_MULTI ||
+      thd->lex->sql_command == SQLCOM_DELETE_MULTI)
+    return false;
+
+  if (tab->has_guarded_conds()) return false;
+
+  // Virtual generated columns are not supported for ICP.
+  if (table->vfield && table->index_contains_some_virtual_gcol(keyno))
+    return false;
+
+  if (keyno == table->s->primary_key && table->file->primary_key_is_clustered())
+    return false;
+
+  // If key-only read is possible, make_join_readinfo() will skip ICP anyway.
+  if (table->covering_keys.is_set(keyno) && !table->no_keyread) return false;
+
+  return true;
+}
+
+/**
+  Estimate whether ICP should be enabled for the chosen access path.
+  The estimate compares:
+    - no ICP: row lookup + SQL-layer predicate evaluation on fetched rows
+    - with ICP: fewer row lookups + SQL-layer eval on remaining rows +
+      engine-side predicate eval on index entries.
+*/
+static bool should_enable_icp_by_cost(const JOIN_TAB *tab, uint keyno,
+                                      double prefix_rowcount,
+                                      double rows_fetched, float filter_effect,
+                                      double *cost_if_no_icp,
+                                      double *cost_if_with_icp) {
+  const JOIN *const join = tab->join();
+  const Cost_model_server *const cost_model = join->cost_model();
+
+  const double bounded_filter = std::max(0.0, std::min(1.0, (double)filter_effect));
+  const double rows_after_filter = rows_fetched * bounded_filter;
+  const double filtered_out_rows = rows_fetched - rows_after_filter;
+
+  // No meaningful filtering potential.
+  if (filtered_out_rows <= 0.0) return false;
+
+  // Approximate row retrieval cost for one fetched row.
+  const double row_lookup_cost =
+      find_cost_for_ref(join->thd, tab->table(), keyno, 1.0, tab->worst_seeks);
+
+  const double no_icp_lookup_cost =
+      prefix_rowcount * rows_fetched * row_lookup_cost;
+  const double no_icp_eval_cost =
+      cost_model->row_evaluate_cost(prefix_rowcount * rows_fetched);
+
+  // Model engine-side ICP eval as cheaper than SQL-layer eval.
+  static constexpr double kIcpEvalCpuFactor = 0.25;
+  const double with_icp_lookup_cost =
+      prefix_rowcount * rows_after_filter * row_lookup_cost;
+  const double with_icp_eval_cost =
+      cost_model->row_evaluate_cost(prefix_rowcount * rows_after_filter) +
+      cost_model->row_evaluate_cost(prefix_rowcount * rows_fetched *
+                                    kIcpEvalCpuFactor);
+
+  *cost_if_no_icp = no_icp_lookup_cost + no_icp_eval_cost;
+  *cost_if_with_icp = with_icp_lookup_cost + with_icp_eval_cost;
+  return *cost_if_with_icp < *cost_if_no_icp;
+}
+
+/**
   Find the best index to do 'ref' access on for a table.
 
   The best index chosen using the following priority list
@@ -990,6 +1075,11 @@ void Optimize_table_order::best_access_path(JOIN_TAB *tab,
   const Cost_model_server *const cost_model = join->cost_model();
 
   float filter_effect = 1.0;
+  bool icp_decision_made = false;
+  bool use_cost_based_icp = true;
+  uint icp_keyno = MAX_KEY;
+  double cost_if_no_icp = 0.0;
+  double cost_if_with_icp = 0.0;
 
   thd->m_current_query_partial_plans++;
 
@@ -1214,6 +1304,42 @@ void Optimize_table_order::best_access_path(JOIN_TAB *tab,
         tab, best_ref, ~remaining_tables & ~excluded_tables, rows_fetched,
         false, false, trace_access_scan);
 
+  /*
+    Make a cost-based ICP decision for the chosen access method, if applicable.
+    Decision is persisted in POSITION and later copied to JOIN_TAB.
+  */
+  if (best_ref != nullptr) {
+    icp_keyno = best_ref->key;
+  } else if (tab->range_scan() != nullptr &&
+             calc_join_type(tab->range_scan()) == JT_RANGE) {
+    icp_keyno = used_index(tab->range_scan());
+  }
+
+  if (can_consider_icp_cost(tab, icp_keyno)) {
+    icp_decision_made = true;
+    use_cost_based_icp =
+        should_enable_icp_by_cost(tab, icp_keyno, prefix_rowcount, rows_fetched,
+                                  filter_effect, &cost_if_no_icp,
+                                  &cost_if_with_icp);
+    trace_access_scan.add("icp_cost_based", true);
+    trace_access_scan.add("icp_cost_keyno", icp_keyno);
+    trace_access_scan.add("icp_rows_fetched", rows_fetched);
+    trace_access_scan.add("icp_filter_effect", filter_effect);
+    trace_access_scan.add("icp_cost_if_disabled", cost_if_no_icp);
+    trace_access_scan.add("icp_cost_if_enabled", cost_if_with_icp);
+    trace_access_scan.add("icp_enabled", use_cost_based_icp);
+    if (use_cost_based_icp) {
+      /*
+        Feed the estimated ICP benefit back into access-path cost, so join order
+        planning can prefer plans where ICP is expected to help.
+      */
+      const double icp_benefit_adjustment = cost_if_with_icp - cost_if_no_icp;
+      best_read_cost += icp_benefit_adjustment;
+      trace_access_scan.add("icp_cost_adjustment", icp_benefit_adjustment);
+      trace_access_scan.add("icp_adjusted_read_cost", best_read_cost);
+    }
+  }
+
   best_read_cost += derived_mat_cost;
   pos->filter_effect = filter_effect;
   pos->rows_fetched = rows_fetched;
@@ -1223,6 +1349,11 @@ void Optimize_table_order::best_access_path(JOIN_TAB *tab,
   pos->ref_depend_map = ref_depend_map;
   pos->loosescan_key = MAX_KEY;
   pos->use_join_buffer = best_uses_jbuf;
+  pos->icp_decision_made = icp_decision_made;
+  pos->use_cost_based_icp = use_cost_based_icp;
+  pos->icp_keyno = icp_keyno;
+  pos->cost_if_no_icp = cost_if_no_icp;
+  pos->cost_if_with_icp = cost_if_with_icp;
 
   if (!best_ref && idx == join->const_tables && table == join->sort_by_table &&
       join->query_expression()->select_limit_cnt >= rows_fetched) {
@@ -1626,6 +1757,11 @@ bool Optimize_table_order::semijoin_loosescan_fill_driving_table_position(
 
   pos->read_cost = DBL_MAX;
   pos->use_join_buffer = false;
+  pos->icp_decision_made = false;
+  pos->use_cost_based_icp = true;
+  pos->icp_keyno = MAX_KEY;
+  pos->cost_if_no_icp = 0.0;
+  pos->cost_if_with_icp = 0.0;
   /*
     No join buffer, so no need to manage any
     Table_map_restorer object.
