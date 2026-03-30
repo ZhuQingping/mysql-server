@@ -451,6 +451,16 @@ ulong thd_parallel_read_threads(THD *thd);
 @return memory upper limit in bytes. */
 [[nodiscard]] ulong thd_ddl_buffer_size(THD *thd);
 
+/** Whether statement-level InnoDB slow log IO stats should be collected for
+the current foreground context. */
+bool innobase_collect_slow_log_io() noexcept;
+
+/** Record statement-level storage-read statistics for the current foreground
+context. A non-zero byte count denotes a storage read initiated by the current
+statement. */
+void innobase_register_slow_log_storage_read(ulint bytes,
+                                             uint64_t wait_us) noexcept;
+
 /** Whether this is a computed virtual column */
 #define innobase_is_v_fld(field) ((field)->gcol_info && !(field)->stored_in_db)
 

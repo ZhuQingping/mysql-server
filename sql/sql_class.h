@@ -1113,6 +1113,19 @@ class THD : public MDL_context_owner,
   struct System_status_var *initial_status_var; /* used by show status */
   // has status_var already been added to global_status_var?
   bool status_var_aggregated;
+  struct Slow_log_innodb_io_stats {
+    bool innodb_used{false};
+    ulonglong storage_read_ops{0};
+    ulonglong storage_read_bytes{0};
+    ulonglong storage_read_wait_us{0};
+
+    void reset() {
+      innodb_used = false;
+      storage_read_ops = 0;
+      storage_read_bytes = 0;
+      storage_read_wait_us = 0;
+    }
+  } slow_log_innodb_io_stats;
 
   /**
     Session's connection attributes for the connected client
@@ -1180,6 +1193,19 @@ class THD : public MDL_context_owner,
       /* Reset for values at start of next statement */
       *copy_status_var_ptr = status_var;
     }
+  }
+
+  void reset_slow_log_innodb_io_stats() { slow_log_innodb_io_stats.reset(); }
+
+  void note_slow_log_innodb_used() { slow_log_innodb_io_stats.innodb_used = true; }
+
+  void add_slow_log_storage_read_stats(ulonglong bytes, ulonglong wait_us) {
+    slow_log_innodb_io_stats.innodb_used = true;
+    if (bytes != 0) {
+      ++slow_log_innodb_io_stats.storage_read_ops;
+      slow_log_innodb_io_stats.storage_read_bytes += bytes;
+    }
+    slow_log_innodb_io_stats.storage_read_wait_us += wait_us;
   }
 
   THR_LOCK_INFO lock_info;  // Locking info of this thread

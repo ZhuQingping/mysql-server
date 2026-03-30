@@ -31,6 +31,7 @@ this program; if not, write to the Free Software Foundation, Inc.,
  Created 11/5/1995 Heikki Tuuri
  *******************************************************/
 
+#include <chrono>
 #include <mysql/service_thd_wait.h>
 #include <stddef.h>
 
@@ -108,6 +109,11 @@ ulint buf_read_page_low(dberr_t *err, bool sync, ulint type, ulint mode,
   ut_ad(buf_page_in_file(bpage));
   ut_ad(!mutex_own(&buf_pool_from_bpage(bpage)->LRU_list_mutex));
 
+  const bool collect_slow_log_io = sync && innobase_collect_slow_log_io();
+  const auto read_start_time = collect_slow_log_io
+                                   ? std::chrono::steady_clock::now()
+                                   : std::chrono::steady_clock::time_point{};
+
   if (sync) {
     thd_wait_begin(nullptr, THD_WAIT_DISKIO);
   }
@@ -129,6 +135,13 @@ ulint buf_read_page_low(dberr_t *err, bool sync, ulint type, ulint mode,
 
   if (sync) {
     thd_wait_end(nullptr);
+  }
+
+  if (collect_slow_log_io) {
+    const auto wait_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::steady_clock::now() - read_start_time)
+                             .count();
+    innobase_register_slow_log_storage_read(page_size.physical(), wait_us);
   }
 
   if (*err != DB_SUCCESS) {

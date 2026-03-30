@@ -796,6 +796,23 @@ bool File_query_log::write_slow(THD *thd, ulonglong current_utime,
       goto err; /* purecov: inspected */
   }
 
+  if (opt_log_slow_innodb_io && thd->slow_log_innodb_io_stats.innodb_used) {
+    char storage_read_wait_buff[22 + 7];
+    sprintf(storage_read_wait_buff, "%.6f",
+            ulonglong2double(
+                thd->slow_log_innodb_io_stats.storage_read_wait_us) /
+                1000000.0);
+    if (my_b_printf(
+            &log_file,
+            "# InnoDB_storage_read_ops: %llu"
+            "  InnoDB_storage_read_bytes: %llu"
+            "  InnoDB_storage_read_wait: %s\n",
+            thd->slow_log_innodb_io_stats.storage_read_ops,
+            thd->slow_log_innodb_io_stats.storage_read_bytes,
+            storage_read_wait_buff) == (uint)-1)
+      goto err;
+  }
+
   if (thd->db().str && strcmp(thd->db().str, db)) {  // Database changed
     if (my_b_printf(&log_file, "use %s;\n", thd->db().str) == (uint)-1)
       goto err;

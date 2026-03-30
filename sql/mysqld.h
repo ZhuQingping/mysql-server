@@ -172,6 +172,7 @@ extern ulonglong log_output_options;
 extern bool opt_log_queries_not_using_indexes;
 extern ulong opt_log_throttle_queries_not_using_indexes;
 extern bool opt_log_slow_extra;
+extern bool opt_log_slow_innodb_io;
 extern bool opt_disable_networking, opt_skip_show_db;
 extern bool opt_skip_name_resolve;
 extern bool opt_help;

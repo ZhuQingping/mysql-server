@@ -1,0 +1,102 @@
+--echo # WL: log_slow_innodb_io basic coverage
+--echo
+
+--source include/no_ps_protocol.inc
+--source include/not_valgrind.inc
+
+SET @save_sqlf=@@global.slow_query_log_file;
+SET @save_sql=@@global.slow_query_log;
+SET @save_lqt=@@long_query_time;
+SET @save_lsi=@@global.log_slow_innodb_io;
+SET @save_lo=@@global.log_output;
+SET @save_debug=@@global.debug;
+
+SET GLOBAL log_output='FILE';
+SET GLOBAL slow_query_log=0;
+SET long_query_time=0;
+SET GLOBAL log_slow_innodb_io=0;
+
+--disable_warnings
+DROP TABLE IF EXISTS t_slow_log_innodb_io;
+--enable_warnings
+CREATE TABLE t_slow_log_innodb_io(id INT PRIMARY KEY) ENGINE=InnoDB;
+INSERT INTO t_slow_log_innodb_io VALUES (1), (2), (3);
+
+--echo # Feature OFF: no extra line should be written
+--replace_result $MYSQL_TMP_DIR ...
+eval SET GLOBAL slow_query_log_file='$MYSQL_TMP_DIR/slow_log_innodb_io_off.log';
+SET GLOBAL slow_query_log=1;
+SELECT COUNT(*) FROM t_slow_log_innodb_io;
+SET GLOBAL slow_query_log=0;
+
+let $SLOW_LOG_OFF= `SELECT @@global.slow_query_log_file`;
+--perl
+  my $file= $ENV{'MYSQL_TMP_DIR'} . "/slow_log_innodb_io_off.log";
+  my $found= 0;
+  open(FILE, "$file") or die("Unable to open $file: $!");
+  while (<FILE>) {
+    $found = 1 if /^# InnoDB_storage_read_ops:/;
+  }
+  close(FILE);
+  print($found ? "[ FAIL ] unexpected InnoDB IO line when feature is OFF\n"
+               : "[ PASS ] no InnoDB IO line when feature is OFF\n");
+EOF
+--remove_file $SLOW_LOG_OFF
+
+--echo # Feature ON with forced storage read stats
+SET GLOBAL log_slow_innodb_io=1;
+SET GLOBAL debug='+d,innodb_slow_log_force_storage_read';
+--replace_result $MYSQL_TMP_DIR ...
+eval SET GLOBAL slow_query_log_file='$MYSQL_TMP_DIR/slow_log_innodb_io_on.log';
+SET GLOBAL slow_query_log=1;
+SELECT COUNT(*) FROM t_slow_log_innodb_io;
+SET GLOBAL slow_query_log=0;
+SET GLOBAL debug=DEFAULT;
+
+let $SLOW_LOG_ON= `SELECT @@global.slow_query_log_file`;
+--perl
+  my $file= $ENV{'MYSQL_TMP_DIR'} . "/slow_log_innodb_io_on.log";
+  my $found= 0;
+  open(FILE, "$file") or die("Unable to open $file: $!");
+  while (<FILE>) {
+    if (/^# InnoDB_storage_read_ops: ([1-9]\d*)  InnoDB_storage_read_bytes: ([1-9]\d*)  InnoDB_storage_read_wait: ([0-9]+\.[0-9]+)$/) {
+      $found = 1;
+    }
+  }
+  close(FILE);
+  print($found ? "[ PASS ] InnoDB IO line written with positive stats\n"
+               : "[ FAIL ] expected InnoDB IO line with positive stats\n");
+EOF
+--remove_file $SLOW_LOG_ON
+
+--echo # Feature ON with reporting suppressed: zero line should still be written
+SET GLOBAL debug='+d,innodb_slow_log_skip_storage_reads';
+--replace_result $MYSQL_TMP_DIR ...
+eval SET GLOBAL slow_query_log_file='$MYSQL_TMP_DIR/slow_log_innodb_io_zero.log';
+SET GLOBAL slow_query_log=1;
+SELECT COUNT(*) FROM t_slow_log_innodb_io;
+SET GLOBAL slow_query_log=0;
+SET GLOBAL debug=DEFAULT;
+
+let $SLOW_LOG_ZERO= `SELECT @@global.slow_query_log_file`;
+--perl
+  my $file= $ENV{'MYSQL_TMP_DIR'} . "/slow_log_innodb_io_zero.log";
+  my $found= 0;
+  open(FILE, "$file") or die("Unable to open $file: $!");
+  while (<FILE>) {
+    $found = 1 if /^# InnoDB_storage_read_ops: 0  InnoDB_storage_read_bytes: 0  InnoDB_storage_read_wait: 0\.000000$/;
+  }
+  close(FILE);
+  print($found ? "[ PASS ] zero-valued InnoDB IO line written\n"
+               : "[ FAIL ] expected zero-valued InnoDB IO line\n");
+EOF
+--remove_file $SLOW_LOG_ZERO
+
+DROP TABLE t_slow_log_innodb_io;
+
+SET GLOBAL slow_query_log_file=@save_sqlf;
+SET GLOBAL slow_query_log=@save_sql;
+SET long_query_time=@save_lqt;
+SET GLOBAL log_slow_innodb_io=@save_lsi;
+SET GLOBAL log_output=@save_lo;
+SET GLOBAL debug=@save_debug;

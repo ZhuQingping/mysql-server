@@ -5182,6 +5182,7 @@ void THD::reset_for_next_command() {
 
   thd->rand_used = false;
   thd->m_sent_row_count = thd->m_examined_row_count = 0;
+  thd->reset_slow_log_innodb_io_stats();
 
   thd->reset_current_stmt_binlog_format_row();
   thd->binlog_unsafe_warning_flags = 0;

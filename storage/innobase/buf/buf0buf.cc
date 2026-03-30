@@ -40,6 +40,8 @@ this program; if not, write to the Free Software Foundation, Inc.,
 
 #include "my_config.h"
 
+#include <chrono>
+
 #include "btr0btr.h"
 #include "buf0buf.h"
 #include "fil0fil.h"
@@ -3342,6 +3344,9 @@ got_block:
   if (must_read) {
     /* Let us wait until the read operation
     completes */
+    const auto wait_start_time =
+        innobase_collect_slow_log_io() ? std::chrono::steady_clock::now()
+                                       : std::chrono::steady_clock::time_point{};
 
     for (;;) {
       enum buf_io_fix io_fix;
@@ -3355,6 +3360,14 @@ got_block:
       } else {
         break;
       }
+    }
+
+    if (wait_start_time != std::chrono::steady_clock::time_point{}) {
+      const auto wait_us =
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::steady_clock::now() - wait_start_time)
+              .count();
+      innobase_register_slow_log_storage_read(0, wait_us);
     }
   }
 
@@ -3526,12 +3539,21 @@ static void buf_wait_for_read(buf_block_t *block) {
 
   The repeated reads of io_fix will not be optimized out because it's an atomic
   variable.*/
+  const auto wait_start_time =
+      innobase_collect_slow_log_io() ? std::chrono::steady_clock::now()
+                                     : std::chrono::steady_clock::time_point{};
   while (block->page.was_io_fix_read()) {
     /* Page is X-latched on block->lock until the read is completed.
     Let's just wait for S-lock on block->lock, it will be granted as soon as the
     read completes. */
     rw_lock_s_lock(&block->lock, UT_LOCATION_HERE);
     rw_lock_s_unlock(&block->lock);
+  }
+  if (wait_start_time != std::chrono::steady_clock::time_point{}) {
+    const auto wait_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::steady_clock::now() - wait_start_time)
+                             .count();
+    innobase_register_slow_log_storage_read(0, wait_us);
   }
 }
 

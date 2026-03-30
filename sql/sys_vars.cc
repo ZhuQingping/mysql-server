@@ -6121,6 +6121,14 @@ static Sys_var_bool Sys_slow_log_extra(
     NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(check_slow_log_extra),
     ON_UPDATE(nullptr));
 
+static Sys_var_bool Sys_slow_log_innodb_io(
+    "log_slow_innodb_io",
+    "Print InnoDB storage-read statistics caused by buffer pool misses to "
+    "the slow query log file. Has no effect on logging to table.",
+    GLOBAL_VAR(opt_log_slow_innodb_io), CMD_LINE(OPT_ARG), DEFAULT(false),
+    NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(check_slow_log_extra),
+    ON_UPDATE(nullptr));
+
 static bool check_not_empty_set(sys_var *, THD *, set_var *var) {
   return var->save_result.ulonglong_value == 0;
 }

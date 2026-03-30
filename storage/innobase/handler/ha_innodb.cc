@@ -2987,6 +2987,21 @@ ha_innobase::ha_innobase(handlerton *hton, TABLE_SHARE *table_arg)
 /** Updates the user_thd field in a handle and also allocates a new InnoDB
  transaction handle if needed, and updates the transaction fields in the
  m_prebuilt struct. */
+bool innobase_collect_slow_log_io() noexcept {
+  THD *thd = current_thd;
+
+  return thd != nullptr && opt_log_slow_innodb_io &&
+         !thd->is_bootstrap_system_thread();
+}
+
+void innobase_register_slow_log_storage_read(ulint bytes,
+                                             uint64_t wait_us) noexcept {
+  if (!innobase_collect_slow_log_io()) return;
+  DBUG_EXECUTE_IF("innodb_slow_log_skip_storage_reads", return;);
+
+  current_thd->add_slow_log_storage_read_stats(bytes, wait_us);
+}
+
 void ha_innobase::update_thd(THD *thd) /*!< in: thd to use the handle */
 {
   DBUG_TRACE;
@@ -3005,6 +3020,12 @@ void ha_innobase::update_thd(THD *thd) /*!< in: thd to use the handle */
   }
 
   m_user_thd = thd;
+
+  if (opt_log_slow_innodb_io && !thd->is_bootstrap_system_thread()) {
+    thd->note_slow_log_innodb_used();
+    DBUG_EXECUTE_IF("innodb_slow_log_force_storage_read",
+                    thd->add_slow_log_storage_read_stats(UNIV_PAGE_SIZE, 1000););
+  }
 
   assert(m_prebuilt->trx->magic_n == TRX_MAGIC_N);
   assert(m_prebuilt->trx == thd_to_trx(m_user_thd));
