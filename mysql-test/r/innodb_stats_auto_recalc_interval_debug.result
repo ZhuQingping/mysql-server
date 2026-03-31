@@ -1,0 +1,82 @@
+#
+# Verify adaptive auto stats recalc interval branches with debug forcing.
+#
+DROP TABLE IF EXISTS t_stats_interval;
+SET @save_debug= @@GLOBAL.debug;
+SET @save_auto_recalc= @@GLOBAL.innodb_stats_auto_recalc;
+SET GLOBAL innodb_stats_auto_recalc= ON;
+CREATE TABLE t_stats_interval (
+id INT PRIMARY KEY
+) ENGINE= InnoDB STATS_PERSISTENT= 1 STATS_AUTO_RECALC= 1;
+INSERT INTO t_stats_interval
+WITH RECURSIVE seq AS (
+SELECT 1 AS n
+UNION ALL
+SELECT n + 1 FROM seq WHERE n < 200
+)
+SELECT n FROM seq;
+ANALYZE TABLE t_stats_interval;
+Table	Op	Msg_type	Msg_text
+test.t_stats_interval	analyze	status	OK
+SET @old_ts= (
+SELECT UNIX_TIMESTAMP(last_update)
+FROM mysql.innodb_table_stats
+WHERE database_name= DATABASE() AND table_name= 't_stats_interval'
+);
+# Force high CPU branch and shorter test intervals (fast=1s, slow=3s).
+SET GLOBAL debug=
+'+d,thd_auto_stats_interval_test_short,thd_auto_stats_interval_force_high_cpu';
+INSERT INTO t_stats_interval
+WITH RECURSIVE seq AS (
+SELECT 1001 AS n
+UNION ALL
+SELECT n + 1 FROM seq WHERE n < 1040
+)
+SELECT n FROM seq;
+SELECT SLEEP(1);
+SLEEP(1)
+0
+SET @after_1s= (
+SELECT UNIX_TIMESTAMP(last_update)
+FROM mysql.innodb_table_stats
+WHERE database_name= DATABASE() AND table_name= 't_stats_interval'
+);
+SELECT @after_1s > @old_ts AS high_branch_not_too_early;
+high_branch_not_too_early
+0
+SELECT SLEEP(4);
+SLEEP(4)
+0
+SET @after_5s= (
+SELECT UNIX_TIMESTAMP(last_update)
+FROM mysql.innodb_table_stats
+WHERE database_name= DATABASE() AND table_name= 't_stats_interval'
+);
+SELECT @after_5s > @old_ts AS high_branch_eventually_updates;
+high_branch_eventually_updates
+0
+# Force low CPU branch and shorter test intervals (fast=1s).
+SET @old_ts2= @after_5s;
+SET GLOBAL debug=
+'+d,thd_auto_stats_interval_test_short,thd_auto_stats_interval_force_low_cpu';
+INSERT INTO t_stats_interval
+WITH RECURSIVE seq AS (
+SELECT 2001 AS n
+UNION ALL
+SELECT n + 1 FROM seq WHERE n < 2040
+)
+SELECT n FROM seq;
+SELECT SLEEP(2);
+SLEEP(2)
+0
+SET @after_2s= (
+SELECT UNIX_TIMESTAMP(last_update)
+FROM mysql.innodb_table_stats
+WHERE database_name= DATABASE() AND table_name= 't_stats_interval'
+);
+SELECT @after_2s > @old_ts2 AS low_branch_updates_fast;
+low_branch_updates_fast
+0
+SET GLOBAL debug= @save_debug;
+SET GLOBAL innodb_stats_auto_recalc= @save_auto_recalc;
+DROP TABLE t_stats_interval;

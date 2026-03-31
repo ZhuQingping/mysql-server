@@ -47,9 +47,6 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #include "srv0start.h"
 #include "ut0new.h"
 
-/** Minimum time interval between stats recalc for a given table */
-constexpr std::chrono::seconds MIN_RECALC_INTERVAL{10};
-
 static inline bool SHUTTING_DOWN() {
   return srv_shutdown_state.load() >=
          SRV_SHUTDOWN_PRE_DD_AND_SYSTEM_TRANSACTIONS;
@@ -308,7 +305,7 @@ static void dict_stats_process_entry_from_recalc_pool(THD *thd) {
   approach. */
 
   if (std::chrono::steady_clock::now() - table->stats_last_recalc <
-      MIN_RECALC_INTERVAL) {
+      thd_auto_stats_recalc_interval()) {
     /* Stats were (re)calculated not long ago. To avoid
     too frequent stats updates we put back the table on
     the auto recalc list and do nothing. */
@@ -363,7 +360,7 @@ void dict_stats_thread() {
     dict_stats_process_entry_from_recalc_pool() puts the entry back
     in the list, the os_event_set() will be lost by the subsequent
     os_event_reset(). */
-    os_event_wait_time(dict_stats_event, MIN_RECALC_INTERVAL);
+    os_event_wait_time(dict_stats_event, thd_auto_stats_recalc_interval());
 
 #ifdef UNIV_DEBUG
     while (innodb_dict_stats_disabled_debug) {

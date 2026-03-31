@@ -24,6 +24,8 @@
 #ifndef SQL_THD_INTERNAL_API_INCLUDED
 #define SQL_THD_INTERNAL_API_INCLUDED
 
+#include <chrono>
+
 /*
   This file defines THD-related API calls that are meant for internal
   usage (e.g. InnoDB, Thread Pool) only. There are therefore no stability
@@ -291,4 +293,19 @@ bool thd_is_bootstrap_thread(THD *thd);
 bool thd_is_dd_update_stmt(const THD *thd);
 
 my_thread_id thd_thread_id(const THD *thd);
+
+/**
+  Return adaptive recalc interval for background InnoDB table stats updates.
+
+  The value is used by InnoDB's background stats thread to decide:
+  1) the minimum time gap between two auto recalculations of the same table,
+  2) the wait interval when the recalc queue is idle.
+
+  The implementation samples mysqld process CPU usage and maps it to either
+  a fast interval (for low CPU load) or a slow interval (for high CPU load)
+  using a single CPU threshold.
+
+  @return Adaptive stats recalc interval.
+*/
+std::chrono::seconds thd_auto_stats_recalc_interval();
 #endif  // SQL_THD_INTERNAL_API_INCLUDED

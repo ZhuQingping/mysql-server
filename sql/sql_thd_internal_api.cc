@@ -24,11 +24,21 @@
 #include "sql/sql_thd_internal_api.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <thread>
 
 #include "my_config.h"
 
 #include <fcntl.h>
+#include <stdlib.h>
 #include <string.h>
+#if defined(__linux__)
+#include <sched.h>
+#endif
+#if defined(HAVE_SYS_RESOURCE_H)
+#include <sys/resource.h>
+#endif
 
 #include "m_string.h"
 #include "mysql/components/services/bits/psi_stage_bits.h"
@@ -64,6 +74,97 @@
 
 struct mysql_cond_t;
 struct mysql_mutex_t;
+
+namespace {
+
+/**
+  Read CPU quota from cgroup v2 cpu.max.
+  @retval true   quota detected in @c cpus
+  @retval false  unlimited/invalid/unavailable
+*/
+bool read_cgroup_v2_cpu_quota(double *cpus) {
+  FILE *f = std::fopen("/sys/fs/cgroup/cpu.max", "r");
+  if (f == nullptr) return false;
+
+  char quota[32] = {0};
+  long long period = 0;
+  const int n = std::fscanf(f, "%31s %lld", quota, &period);
+  std::fclose(f);
+
+  if (n != 2 || period <= 0) return false;
+  if (std::strcmp(quota, "max") == 0) return false;
+
+  char *end = nullptr;
+  const long long q = std::strtoll(quota, &end, 10);
+  if (end == quota || *end != '\0' || q <= 0) return false;
+
+  *cpus = static_cast<double>(q) / static_cast<double>(period);
+  return *cpus > 0.0;
+}
+
+/**
+  Read CPU quota from common cgroup v1 locations.
+  @retval true   quota detected in @c cpus
+  @retval false  unlimited/invalid/unavailable
+*/
+bool read_cgroup_v1_cpu_quota(double *cpus) {
+  const char *quota_paths[] = {"/sys/fs/cgroup/cpu/cpu.cfs_quota_us",
+                               "/sys/fs/cgroup/cpu,cpuacct/cpu.cfs_quota_us"};
+  const char *period_paths[] = {"/sys/fs/cgroup/cpu/cpu.cfs_period_us",
+                                "/sys/fs/cgroup/cpu,cpuacct/cpu.cfs_period_us"};
+
+  for (size_t i = 0; i < sizeof(quota_paths) / sizeof(quota_paths[0]); ++i) {
+    FILE *fq = std::fopen(quota_paths[i], "r");
+    FILE *fp = std::fopen(period_paths[i], "r");
+    if (fq == nullptr || fp == nullptr) {
+      if (fq != nullptr) std::fclose(fq);
+      if (fp != nullptr) std::fclose(fp);
+      continue;
+    }
+
+    long long quota = -1;
+    long long period = 0;
+    const int nq = std::fscanf(fq, "%lld", &quota);
+    const int np = std::fscanf(fp, "%lld", &period);
+    std::fclose(fq);
+    std::fclose(fp);
+
+    if (nq != 1 || np != 1 || period <= 0 || quota <= 0) continue;
+
+    *cpus = static_cast<double>(quota) / static_cast<double>(period);
+    if (*cpus > 0.0) return true;
+  }
+
+  return false;
+}
+
+/**
+  Compute effective CPU capacity for the current process.
+  It honors both CPU affinity and cgroup CPU quota (if set), returning
+  the smaller capacity to avoid underestimating usage in containers.
+*/
+double effective_cpu_capacity() {
+  double affinity_cpus = 1.0;
+  cpu_set_t cpu_set;
+  CPU_ZERO(&cpu_set);
+  if (sched_getaffinity(0, sizeof(cpu_set), &cpu_set) == 0) {
+    const int n = CPU_COUNT(&cpu_set);
+    if (n > 0) affinity_cpus = static_cast<double>(n);
+  } else {
+    const auto hw = std::thread::hardware_concurrency();
+    if (hw > 0) affinity_cpus = static_cast<double>(hw);
+  }
+
+  double quota_cpus = 0.0;
+  if (read_cgroup_v2_cpu_quota(&quota_cpus) ||
+      read_cgroup_v1_cpu_quota(&quota_cpus)) {
+    return std::max(0.001, std::min(affinity_cpus, quota_cpus));
+  }
+
+  return std::max(0.001, affinity_cpus);
+}
+
+}  // namespace
 
 THD *create_internal_thd() {
   /* For internal threads, use enabled_plugins = false. */
@@ -376,3 +477,111 @@ bool thd_is_dd_update_stmt(const THD *thd) {
 }
 
 my_thread_id thd_thread_id(const THD *thd) { return (thd->thread_id()); }
+
+std::chrono::seconds thd_auto_stats_recalc_interval() {
+  std::chrono::seconds fast_interval{10};
+  std::chrono::seconds slow_interval{30};
+  constexpr std::chrono::seconds kRefresh_interval{1};
+  constexpr double kCpu_load_threshold_pct = 75.0;
+  DBUG_EXECUTE_IF("thd_auto_stats_interval_test_short", {
+    fast_interval = std::chrono::seconds{1};
+    slow_interval = std::chrono::seconds{3};
+  };);
+
+  // This helper is currently used by a single background stats thread.
+  // Static state keeps the implementation lightweight without extra locks.
+  // The state stores:
+  // - last refresh timestamp (to cap sampling frequency),
+  // - CPU usage sampling points (for delta-based CPU utilization),
+  // - current interval mode.
+  struct State {
+    bool use_slow_interval{false};
+    std::chrono::seconds cached_interval{10};
+    std::chrono::steady_clock::time_point last_refresh{};
+    std::chrono::steady_clock::time_point last_cpu_sample{};
+    double last_cpu_total_us{0.0};
+    bool has_cpu_sample{false};
+#ifndef NDEBUG
+    bool owner_thread_initialized{false};
+    my_thread_t owner_thread{};
+#endif
+  };
+  static State state;
+
+#ifndef NDEBUG
+  // Debug safety check: this function is expected to be called by a single
+  // thread. If another thread enters, fail fast in debug builds.
+  if (!state.owner_thread_initialized) {
+    state.owner_thread = my_thread_self();
+    state.owner_thread_initialized = true;
+  } else {
+    assert(my_thread_equal(state.owner_thread, my_thread_self()));
+  }
+#endif
+
+  const auto now = std::chrono::steady_clock::now();
+  // Sampling is intentionally rate-limited to once per second. Between two
+  // refresh points we return the last computed interval.
+  if (state.last_refresh != std::chrono::steady_clock::time_point{} &&
+      now - state.last_refresh < kRefresh_interval) {
+    return state.cached_interval;
+  }
+  state.last_refresh = now;
+
+  rusage usage;
+  // On sampling failure, choose a conservative interval to avoid creating
+  // extra work under uncertain conditions.
+  if (getrusage(RUSAGE_SELF, &usage) != 0) {
+    state.use_slow_interval = false;
+    state.cached_interval = fast_interval;
+    return state.cached_interval;
+  }
+
+  const double cpu_total_us =
+      static_cast<double>(usage.ru_utime.tv_sec) * 1000000.0 +
+      static_cast<double>(usage.ru_utime.tv_usec) +
+      static_cast<double>(usage.ru_stime.tv_sec) * 1000000.0 +
+      static_cast<double>(usage.ru_stime.tv_usec);
+
+  if (!state.has_cpu_sample) {
+    // First sample initializes the baseline and keeps conservative behavior
+    // until we have enough data to compute a delta.
+    state.last_cpu_total_us = cpu_total_us;
+    state.last_cpu_sample = now;
+    state.has_cpu_sample = true;
+    state.use_slow_interval = false;
+    state.cached_interval = fast_interval;
+    return state.cached_interval;
+  }
+
+  const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                              now - state.last_cpu_sample)
+                              .count();
+  if (elapsed_us <= 0) {
+    return state.cached_interval;
+  }
+
+  const double cpu_delta_us =
+      std::max(0.0, cpu_total_us - state.last_cpu_total_us);
+  state.last_cpu_total_us = cpu_total_us;
+  state.last_cpu_sample = now;
+
+  // Normalize by effective CPU capacity (affinity and cgroup quota aware).
+  const double cpu_capacity = effective_cpu_capacity();
+
+  double cpu_usage_pct =
+      cpu_delta_us * 100.0 / static_cast<double>(elapsed_us) / cpu_capacity;
+  cpu_usage_pct = std::clamp(cpu_usage_pct, 0.0, 100.0);
+  DBUG_EXECUTE_IF("thd_auto_stats_interval_force_high_cpu", cpu_usage_pct = 100.0;);
+  DBUG_EXECUTE_IF("thd_auto_stats_interval_force_low_cpu", cpu_usage_pct = 0.0;);
+
+  // Single-threshold mode:
+  // high load (>= threshold) -> slow interval, otherwise fast interval.
+  state.use_slow_interval = (cpu_usage_pct >= kCpu_load_threshold_pct);
+
+  // Low CPU load -> faster stats refresh cadence.
+  // High CPU load -> slower cadence to reduce background CPU pressure.
+  state.cached_interval =
+      state.use_slow_interval ? slow_interval : fast_interval;
+  return state.cached_interval;
+}
