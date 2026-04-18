@@ -180,8 +180,6 @@ SET cte_max_recursion_depth = @saved_cte_max_recursion_depth;
 ANALYZE TABLE tt;
 Table	Op	Msg_type	Msg_text
 test.tt	analyze	status	OK
-SET optimizer_switch=
-'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
 #
 # Case 4 (issue-1 ref form, KNOWN LIMITATION):
 #   Three equality-eligible indexes share the leading key `a`: idx_a,
@@ -189,41 +187,66 @@ SET optimizer_switch=
 #   condition (filter ~100x). Today the optimizer picks the narrowest
 #   index (idx_a) plus a post-scan Filter on (c=6), because the cost
 #   comparison between the three indexes never accounts for the ICP
-#   benefit that idx_abc alone can exploit. When issue 1 is fixed the
-#   plan tree should switch to:
+#   benefit that idx_abc alone can exploit.
+#
+#   We print the plan twice -- once with icp_cost_based=off (community
+#   baseline) and once with icp_cost_based=on -- to confirm that the
+#   feature flag does NOT influence access-method selection today.
+#   When issue 1 is fixed the icp_cost_based=on plan should switch to:
 #     "Index lookup on tt using idx_abc (a=4),
 #        with index condition: (tt.c = 6)"
+#   while the icp_cost_based=off plan stays as the legacy baseline.
 #
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
 EXPLAIN FORMAT=TREE
 SELECT * FROM tt WHERE a = 4 AND c = 6;
 EXPLAIN
 -> Filter: (tt.c = 6)  (cost=X rows=N)
     -> Index lookup on tt using idx_a (a=4)  (cost=X rows=N)
 
-#
-# Case 5 (issue-1 range form, KNOWN LIMITATION):
-#   Without FORCE INDEX the optimizer picks a table scan for this
-#   leading-key range + trailing-key equality shape -- the same class
-#   of problem as Case 4, just with a range instead of a ref. When
-#   issue 1 is fixed the plan tree should contain:
-#     "Index range scan on tt using idx_abc over (...),
-#        with index condition: (tt.c = 50 and tt.a between 2 and 4)"
-#   (exact text depends on how range optimizer prints the ranges).
-#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
 EXPLAIN FORMAT=TREE
-SELECT * FROM tt WHERE a BETWEEN 2 AND 4 AND c = 50;
+SELECT * FROM tt WHERE a = 4 AND c = 6;
 EXPLAIN
--> Filter: ((tt.c = 50) and (tt.a between 2 and 4))  (cost=X rows=N)
-    -> Table scan on tt  (cost=X rows=N)
+-> Filter: (tt.c = 6)  (cost=X rows=N)
+    -> Index lookup on tt using idx_a (a=4)  (cost=X rows=N)
 
 EXPLAIN FORMAT=TREE
 SELECT * FROM tt FORCE INDEX(idx_abc) WHERE a = 4 AND c = 6;
 EXPLAIN
 -> Index lookup on tt using idx_abc (a=4), with index condition: (tt.c = 6)  (cost=X rows=N)
 
+#
+# Case 5 (issue-1 range form, KNOWN LIMITATION):
+#   Leading-key range + trailing-key equality without any index hint --
+#   this is the single-table shape of the customer_fund_daily_statement
+#   reproducer. Same class of problem as Case 4 (range on leading key
+#   instead of an equality), and again the feature flag must not be
+#   able to move the needle until issue 1 is fixed.
+#
+#   We print the plan twice to confirm icp_cost_based=off and
+#   icp_cost_based=on produce exactly the same access method today.
+#   When issue 1 is fixed the icp_cost_based=on plan should become:
+#     "Index range scan on tt using idx_abc over (...),
+#        with index condition: (tt.c = 50 and tt.a between 2 and 4)"
+#   (exact text depends on how range optimizer prints the ranges).
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
 EXPLAIN FORMAT=TREE
-SELECT * FROM tt FORCE INDEX(idx_abc) WHERE a BETWEEN 2 AND 4 AND c = 50;
+SELECT * FROM tt WHERE a BETWEEN 2 AND 4 AND c = 50;
 EXPLAIN
--> Index range scan on tt using idx_abc over (2 <= a <= 4), with index condition: ((tt.c = 50) and (tt.a between 2 and 4))  (cost=X rows=N)
+-> Filter: ((tt.c = 50) and (tt.a between 2 and 4))  (cost=X rows=N)
+    -> Table scan on tt  (cost=X rows=N)
+
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a BETWEEN 2 AND 4 AND c = 50;
+EXPLAIN
+-> Filter: ((tt.c = 50) and (tt.a between 2 and 4))  (cost=X rows=N)
+    -> Table scan on tt  (cost=X rows=N)
 
 DROP TABLE tt, t3, t2, t1;
