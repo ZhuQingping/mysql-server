@@ -139,4 +139,94 @@ SELECT
     AS icp_suppressed_by_cost_model
 FROM information_schema.optimizer_trace;
 
-DROP TABLE t3, t2, t1;
+--echo #
+--echo # -----------------------------------------------------------------------
+--echo # Issue-1 trackers (known limitation, not yet fixed):
+--echo #
+--echo # The current implementation applies the ICP cost reward AFTER the
+--echo # scan-vs-ref selection in best_access_path(). It therefore cannot flip
+--echo # access-method choices even when ref/range + ICP would be clearly
+--echo # cheaper than a table scan. The two cases below are recorded as the
+--echo # canonical reproducers so we can watch the plan change as the fix
+--echo # lands. Expected access type today is "Table scan" (broken); after
+--echo # integrating ICP benefit into find_best_ref() / calculate_scan_cost()
+--echo # the plan tree should become an Index lookup / Index range scan with
+--echo # "with index condition: ..." present.
+--echo # -----------------------------------------------------------------------
+--echo #
+
+CREATE TABLE tt (
+  a INT,
+  b INT,
+  c INT,
+  d INT,
+  INDEX idx_a(a),
+  INDEX idx_ab(a, b),
+  INDEX idx_abc(a, b, c)
+) ENGINE=InnoDB;
+
+SET @saved_cte_max_recursion_depth = @@cte_max_recursion_depth;
+SET cte_max_recursion_depth = 20000;
+
+INSERT INTO tt (a, b, c, d)
+WITH RECURSIVE number_series AS (
+  SELECT 1 AS n
+  UNION ALL
+  SELECT n + 1 FROM number_series WHERE n < 10000
+)
+SELECT
+  n %    5 + 1,
+  n %   10 + 1,
+  n %  100 + 1,
+  n % 1000 + 1
+FROM number_series;
+
+SET cte_max_recursion_depth = @saved_cte_max_recursion_depth;
+
+ANALYZE TABLE tt;
+
+SET optimizer_switch=
+  'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+
+--echo #
+--echo # Case 4 (issue-1 ref form, KNOWN LIMITATION):
+--echo #   Three equality-eligible indexes share the leading key `a`: idx_a,
+--echo #   idx_ab, idx_abc. Only idx_abc can turn c=6 into a pushed index
+--echo #   condition (filter ~100x). Today the optimizer picks the narrowest
+--echo #   index (idx_a) plus a post-scan Filter on (c=6), because the cost
+--echo #   comparison between the three indexes never accounts for the ICP
+--echo #   benefit that idx_abc alone can exploit. When issue 1 is fixed the
+--echo #   plan tree should switch to:
+--echo #     "Index lookup on tt using idx_abc (a=4),
+--echo #        with index condition: (tt.c = 6)"
+--echo #
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a = 4 AND c = 6;
+
+--echo #
+--echo # Case 5 (issue-1 range form, KNOWN LIMITATION):
+--echo #   Without FORCE INDEX the optimizer picks a table scan for this
+--echo #   leading-key range + trailing-key equality shape -- the same class
+--echo #   of problem as Case 4, just with a range instead of a ref. When
+--echo #   issue 1 is fixed the plan tree should contain:
+--echo #     "Index range scan on tt using idx_abc over (...),
+--echo #        with index condition: (tt.c = 50 and tt.a between 2 and 4)"
+--echo #   (exact text depends on how range optimizer prints the ranges).
+--echo #
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a BETWEEN 2 AND 4 AND c = 50;
+
+# Sanity: with FORCE INDEX the plan is already reachable and ICP is pushed,
+# mirroring Case 3. This documents that the execution-path support is fine
+# and the gap really is in access-method selection.
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt FORCE INDEX(idx_abc) WHERE a = 4 AND c = 6;
+
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt FORCE INDEX(idx_abc) WHERE a BETWEEN 2 AND 4 AND c = 50;
+
+DROP TABLE tt, t3, t2, t1;

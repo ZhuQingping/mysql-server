@@ -138,4 +138,92 @@ AS icp_suppressed_by_cost_model
 FROM information_schema.optimizer_trace;
 icp_suppressed_by_cost_model
 0
-DROP TABLE t3, t2, t1;
+#
+# -----------------------------------------------------------------------
+# Issue-1 trackers (known limitation, not yet fixed):
+#
+# The current implementation applies the ICP cost reward AFTER the
+# scan-vs-ref selection in best_access_path(). It therefore cannot flip
+# access-method choices even when ref/range + ICP would be clearly
+# cheaper than a table scan. The two cases below are recorded as the
+# canonical reproducers so we can watch the plan change as the fix
+# lands. Expected access type today is "Table scan" (broken); after
+# integrating ICP benefit into find_best_ref() / calculate_scan_cost()
+# the plan tree should become an Index lookup / Index range scan with
+# "with index condition: ..." present.
+# -----------------------------------------------------------------------
+#
+CREATE TABLE tt (
+a INT,
+b INT,
+c INT,
+d INT,
+INDEX idx_a(a),
+INDEX idx_ab(a, b),
+INDEX idx_abc(a, b, c)
+) ENGINE=InnoDB;
+SET @saved_cte_max_recursion_depth = @@cte_max_recursion_depth;
+SET cte_max_recursion_depth = 20000;
+INSERT INTO tt (a, b, c, d)
+WITH RECURSIVE number_series AS (
+SELECT 1 AS n
+UNION ALL
+SELECT n + 1 FROM number_series WHERE n < 10000
+)
+SELECT
+n %    5 + 1,
+n %   10 + 1,
+n %  100 + 1,
+n % 1000 + 1
+FROM number_series;
+SET cte_max_recursion_depth = @saved_cte_max_recursion_depth;
+ANALYZE TABLE tt;
+Table	Op	Msg_type	Msg_text
+test.tt	analyze	status	OK
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+#
+# Case 4 (issue-1 ref form, KNOWN LIMITATION):
+#   Three equality-eligible indexes share the leading key `a`: idx_a,
+#   idx_ab, idx_abc. Only idx_abc can turn c=6 into a pushed index
+#   condition (filter ~100x). Today the optimizer picks the narrowest
+#   index (idx_a) plus a post-scan Filter on (c=6), because the cost
+#   comparison between the three indexes never accounts for the ICP
+#   benefit that idx_abc alone can exploit. When issue 1 is fixed the
+#   plan tree should switch to:
+#     "Index lookup on tt using idx_abc (a=4),
+#        with index condition: (tt.c = 6)"
+#
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a = 4 AND c = 6;
+EXPLAIN
+-> Filter: (tt.c = 6)  (cost=X rows=N)
+    -> Index lookup on tt using idx_a (a=4)  (cost=X rows=N)
+
+#
+# Case 5 (issue-1 range form, KNOWN LIMITATION):
+#   Without FORCE INDEX the optimizer picks a table scan for this
+#   leading-key range + trailing-key equality shape -- the same class
+#   of problem as Case 4, just with a range instead of a ref. When
+#   issue 1 is fixed the plan tree should contain:
+#     "Index range scan on tt using idx_abc over (...),
+#        with index condition: (tt.c = 50 and tt.a between 2 and 4)"
+#   (exact text depends on how range optimizer prints the ranges).
+#
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a BETWEEN 2 AND 4 AND c = 50;
+EXPLAIN
+-> Filter: ((tt.c = 50) and (tt.a between 2 and 4))  (cost=X rows=N)
+    -> Table scan on tt  (cost=X rows=N)
+
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt FORCE INDEX(idx_abc) WHERE a = 4 AND c = 6;
+EXPLAIN
+-> Index lookup on tt using idx_abc (a=4), with index condition: (tt.c = 6)  (cost=X rows=N)
+
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt FORCE INDEX(idx_abc) WHERE a BETWEEN 2 AND 4 AND c = 50;
+EXPLAIN
+-> Index range scan on tt using idx_abc over (2 <= a <= 4), with index condition: ((tt.c = 50) and (tt.a between 2 and 4))  (cost=X rows=N)
+
+DROP TABLE tt, t3, t2, t1;
