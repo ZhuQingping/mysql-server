@@ -1,5 +1,7 @@
 # Cost-based ICP High-level Design
 
+> Chinese translation: [icp_cost_based_high_level_design.zh_CN.md](icp_cost_based_high_level_design.zh_CN.md)
+
 ## Background
 
 In community MySQL behavior, ICP (Index Condition Pushdown) is primarily

@@ -1,5 +1,7 @@
 # Cost-based ICP Low-level Design
 
+> Chinese translation: [icp_cost_based_low_level_design.zh_CN.md](icp_cost_based_low_level_design.zh_CN.md)
+
 ## 1. Switch and Constants
 
 ### 1.1 `sql/sql_const.h`
