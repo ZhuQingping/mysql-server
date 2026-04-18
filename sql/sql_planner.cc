@@ -1307,6 +1307,24 @@ void Optimize_table_order::best_access_path(JOIN_TAB *tab,
   /*
     Make a cost-based ICP decision for the chosen access method, if applicable.
     Decision is persisted in POSITION and later copied to JOIN_TAB.
+
+    Design notes (issue 2 fix):
+    1) For a range-scan-chosen path, `rows_fetched` has been overwritten with
+       `rows_after_filtering` (which already applies the full WHERE filter),
+       and `filter_effect` collapses to ~1.0 because it is defined as
+       `min(1, found_records * full_filter / rows_after_filtering)`. Using
+       those values directly in the ICP benefit model causes
+       `filtered_out_rows == 0` and the model always concludes "ICP not
+       beneficial" -- even when ICP would save most of the row lookups.
+       Rebuild an index-scan-output baseline using `tab->found_records` for
+       that case.
+
+    2) Only persist an ON decision. When the cost model cannot positively
+       show that ICP helps (including the "unreliable filter_effect" cases),
+       we deliberately leave `icp_decision_made = false` so that
+       `QEP_TAB::push_index_cond()` falls back to the community default
+       pushdown path. Without this safety net, an inaccurate cost estimate
+       can silently disable ICP and regress plans that used to be fast.
   */
   if (best_ref != nullptr) {
     icp_keyno = best_ref->key;
@@ -1316,27 +1334,54 @@ void Optimize_table_order::best_access_path(JOIN_TAB *tab,
   }
 
   if (can_consider_icp_cost(tab, icp_keyno)) {
-    icp_decision_made = true;
-    use_cost_based_icp =
-        should_enable_icp_by_cost(tab, icp_keyno, prefix_rowcount, rows_fetched,
-                                  filter_effect, &cost_if_no_icp,
-                                  &cost_if_with_icp);
+    // Build a reliable baseline for ICP benefit estimation.
+    double icp_rows_fetched = rows_fetched;
+    float icp_filter_effect = filter_effect;
+    const bool range_scan_chosen =
+        (best_ref == nullptr && tab->range_scan() != nullptr);
+    if (range_scan_chosen && tab->found_records > 0 &&
+        rows_fetched < static_cast<double>(tab->found_records)) {
+      // `rows_fetched` here was set to `rows_after_filtering`, i.e. the
+      // post-WHERE estimate. ICP actually operates on the raw rows produced
+      // by the index scan, so use `tab->found_records` (index-output rows)
+      // as the baseline and derive an index-level filter effect.
+      icp_rows_fetched = static_cast<double>(tab->found_records);
+      icp_filter_effect =
+          static_cast<float>(std::min(1.0, rows_fetched / icp_rows_fetched));
+    }
+
+    const bool icp_favored_by_cost = should_enable_icp_by_cost(
+        tab, icp_keyno, prefix_rowcount, icp_rows_fetched, icp_filter_effect,
+        &cost_if_no_icp, &cost_if_with_icp);
+
     trace_access_scan.add("icp_cost_based", true);
     trace_access_scan.add("icp_cost_keyno", icp_keyno);
-    trace_access_scan.add("icp_rows_fetched", rows_fetched);
-    trace_access_scan.add("icp_filter_effect", filter_effect);
+    trace_access_scan.add("icp_rows_fetched", icp_rows_fetched);
+    trace_access_scan.add("icp_filter_effect", icp_filter_effect);
     trace_access_scan.add("icp_cost_if_disabled", cost_if_no_icp);
     trace_access_scan.add("icp_cost_if_enabled", cost_if_with_icp);
-    trace_access_scan.add("icp_enabled", use_cost_based_icp);
-    if (use_cost_based_icp) {
+    trace_access_scan.add("icp_enabled", icp_favored_by_cost);
+
+    if (icp_favored_by_cost) {
       /*
-        Feed the estimated ICP benefit back into access-path cost, so join order
-        planning can prefer plans where ICP is expected to help.
+        Feed the estimated ICP benefit back into access-path cost, so join
+        order planning can prefer plans where ICP is expected to help.
       */
+      icp_decision_made = true;
+      use_cost_based_icp = true;
       const double icp_benefit_adjustment = cost_if_with_icp - cost_if_no_icp;
       best_read_cost += icp_benefit_adjustment;
       trace_access_scan.add("icp_cost_adjustment", icp_benefit_adjustment);
       trace_access_scan.add("icp_adjusted_read_cost", best_read_cost);
+    } else {
+      /*
+        Do NOT record an OFF decision. The current cost model is not yet
+        reliable enough to safely override the community default ICP
+        pushdown. Falling back here avoids regressions like the
+        FORCE INDEX + range scan case where `filter_effect` is estimated
+        as ~1.0 by construction.
+      */
+      trace_access_scan.add("icp_fallback_to_default", true);
     }
   }
 

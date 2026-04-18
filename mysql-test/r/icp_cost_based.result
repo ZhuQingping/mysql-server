@@ -28,7 +28,20 @@ test.t1	analyze	status	OK
 test.t2	analyze	status	OK
 SET optimizer_switch=
 'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+#
+# Case 1: feature OFF should fallback to legacy behavior.
+#         FORCE INDEX + eq-ref on (a,b) with a non-sargable predicate on c.
+#         Expected plan: ref access on idx_abc with ICP ("Using index condition").
+#
 SET optimizer_trace='enabled=on,one_line=on';
+EXPLAIN FORMAT=TREE
+SELECT SUM(CHAR_LENGTH(payload))
+FROM t1 FORCE INDEX(idx_abc)
+WHERE t1.a = 1 AND t1.b = 1 AND (t1.c + 0) >= 0;
+EXPLAIN
+-> Aggregate: sum(char_length(t1.payload))  (cost=X rows=N)
+    -> Index lookup on t1 using idx_abc (a=1, b=1), with index condition: ((t1.c + 0) >= 0)  (cost=X rows=N)
+
 SELECT SUM(CHAR_LENGTH(payload))
 FROM t1 FORCE INDEX(idx_abc)
 WHERE t1.a = 1 AND t1.b = 1 AND (t1.c + 0) >= 0;
@@ -45,9 +58,21 @@ AS has_icp_cost_if_enabled
 FROM information_schema.optimizer_trace;
 has_icp_cost_based	has_icp_enabled	has_icp_cost_if_disabled	has_icp_cost_if_enabled
 0	0	0	0
+#
+# Case 2: feature ON should expose cost-based ICP trace fields and
+#         still produce a ref access plan with ICP pushdown.
+#
 SET optimizer_switch=
 'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
 SET optimizer_trace='enabled=on,one_line=on';
+EXPLAIN FORMAT=TREE
+SELECT SUM(CHAR_LENGTH(payload))
+FROM t1 FORCE INDEX(idx_abc)
+WHERE t1.a = 1 AND t1.b = 1 AND (t1.c + 0) = 0;
+EXPLAIN
+-> Aggregate: sum(char_length(t1.payload))  (cost=X rows=N)
+    -> Index lookup on t1 using idx_abc (a=1, b=1), with index condition: ((t1.c + 0) = 0)  (cost=X rows=N)
+
 SELECT SUM(CHAR_LENGTH(payload))
 FROM t1 FORCE INDEX(idx_abc)
 WHERE t1.a = 1 AND t1.b = 1 AND (t1.c + 0) = 0;
@@ -64,4 +89,53 @@ AS has_icp_cost_if_enabled
 FROM information_schema.optimizer_trace;
 has_icp_cost_based	has_icp_enabled	has_icp_cost_if_disabled	has_icp_cost_if_enabled
 1	1	1	1
-DROP TABLE t2, t1;
+#
+# Case 3 (issue-2 regression):
+#   FORCE INDEX + range scan on leading key + equality on trailing index
+#   column. Before the fix the range-scan baseline made filter_effect
+#   collapse to ~1.0 and should_enable_icp_by_cost() always returned
+#   false, so push_index_cond() emitted "not_pushed_due_to_icp_cost"
+#   and skipped pushdown (10x slower vs community default in practice).
+#
+#   Expected plan with icp_cost_based=on: range access on idx_ab with
+#   ICP ("Using index condition") still present.
+#
+CREATE TABLE t3 (
+a INT NOT NULL,
+b INT NOT NULL,
+payload CHAR(32) NOT NULL,
+KEY idx_ab (a, b)
+) ENGINE=InnoDB;
+INSERT INTO t3
+WITH RECURSIVE seq AS (
+SELECT 1 AS n
+UNION ALL
+SELECT n + 1 FROM seq WHERE n < 1000
+)
+SELECT n DIV 10, n MOD 10, LPAD(n, 32, 'x') FROM seq;
+ANALYZE TABLE t3;
+Table	Op	Msg_type	Msg_text
+test.t3	analyze	status	OK
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+SET optimizer_trace='enabled=on,one_line=on';
+EXPLAIN FORMAT=TREE
+SELECT SUM(CHAR_LENGTH(payload))
+FROM t3 FORCE INDEX(idx_ab)
+WHERE a BETWEEN 10 AND 80 AND b = 5;
+EXPLAIN
+-> Aggregate: sum(char_length(t3.payload))  (cost=X rows=N)
+    -> Index range scan on t3 using idx_ab over (10 <= a <= 80 AND b = 5), with index condition: ((t3.b = 5) and (t3.a between 10 and 80))  (cost=X rows=N)
+
+SELECT SUM(CHAR_LENGTH(payload))
+FROM t3 FORCE INDEX(idx_ab)
+WHERE a BETWEEN 10 AND 80 AND b = 5;
+SUM(CHAR_LENGTH(payload))
+2272
+SELECT
+LOCATE('"not_pushed_due_to_icp_cost":true', REPLACE(TRACE, ' ', '')) > 0
+AS icp_suppressed_by_cost_model
+FROM information_schema.optimizer_trace;
+icp_suppressed_by_cost_model
+0
+DROP TABLE t3, t2, t1;

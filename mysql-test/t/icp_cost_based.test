@@ -28,11 +28,28 @@ FROM seq;
 
 ANALYZE TABLE t1, t2;
 
+# Normalize volatile parts of EXPLAIN FORMAT=TREE output (costs, rowcount
+# estimates, actual timings) so the expected plan shape stays stable across
+# platforms and cost-model tweaks. We only check that:
+#   - the chosen access type (ref / range / table scan) is the expected one,
+#   - ICP pushdown is visible in the plan tree when it is expected.
+--let $explain_mask = /\(cost=[0-9.e+-]+ rows=[0-9.e+-]+\)/(cost=X rows=N)/ /\(actual time=[^)]*\)/(actual time=X)/ /never executed/(actual time=X)/
+
 SET optimizer_switch=
   'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
 
-# Case 1: feature OFF should fallback to legacy behavior.
+--echo #
+--echo # Case 1: feature OFF should fallback to legacy behavior.
+--echo #         FORCE INDEX + eq-ref on (a,b) with a non-sargable predicate on c.
+--echo #         Expected plan: ref access on idx_abc with ICP ("Using index condition").
+--echo #
 SET optimizer_trace='enabled=on,one_line=on';
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT SUM(CHAR_LENGTH(payload))
+FROM t1 FORCE INDEX(idx_abc)
+WHERE t1.a = 1 AND t1.b = 1 AND (t1.c + 0) >= 0;
+
 SELECT SUM(CHAR_LENGTH(payload))
 FROM t1 FORCE INDEX(idx_abc)
 WHERE t1.a = 1 AND t1.b = 1 AND (t1.c + 0) >= 0;
@@ -47,10 +64,19 @@ SELECT
     AS has_icp_cost_if_enabled
 FROM information_schema.optimizer_trace;
 
-# Case 2: feature ON should expose cost-based ICP trace fields.
+--echo #
+--echo # Case 2: feature ON should expose cost-based ICP trace fields and
+--echo #         still produce a ref access plan with ICP pushdown.
+--echo #
 SET optimizer_switch=
   'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
 SET optimizer_trace='enabled=on,one_line=on';
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT SUM(CHAR_LENGTH(payload))
+FROM t1 FORCE INDEX(idx_abc)
+WHERE t1.a = 1 AND t1.b = 1 AND (t1.c + 0) = 0;
+
 SELECT SUM(CHAR_LENGTH(payload))
 FROM t1 FORCE INDEX(idx_abc)
 WHERE t1.a = 1 AND t1.b = 1 AND (t1.c + 0) = 0;
@@ -65,4 +91,52 @@ SELECT
     AS has_icp_cost_if_enabled
 FROM information_schema.optimizer_trace;
 
-DROP TABLE t2, t1;
+--echo #
+--echo # Case 3 (issue-2 regression):
+--echo #   FORCE INDEX + range scan on leading key + equality on trailing index
+--echo #   column. Before the fix the range-scan baseline made filter_effect
+--echo #   collapse to ~1.0 and should_enable_icp_by_cost() always returned
+--echo #   false, so push_index_cond() emitted "not_pushed_due_to_icp_cost"
+--echo #   and skipped pushdown (10x slower vs community default in practice).
+--echo #
+--echo #   Expected plan with icp_cost_based=on: range access on idx_ab with
+--echo #   ICP ("Using index condition") still present.
+--echo #
+CREATE TABLE t3 (
+  a INT NOT NULL,
+  b INT NOT NULL,
+  payload CHAR(32) NOT NULL,
+  KEY idx_ab (a, b)
+) ENGINE=InnoDB;
+
+INSERT INTO t3
+WITH RECURSIVE seq AS (
+  SELECT 1 AS n
+  UNION ALL
+  SELECT n + 1 FROM seq WHERE n < 1000
+)
+SELECT n DIV 10, n MOD 10, LPAD(n, 32, 'x') FROM seq;
+
+ANALYZE TABLE t3;
+
+SET optimizer_switch=
+  'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+SET optimizer_trace='enabled=on,one_line=on';
+
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT SUM(CHAR_LENGTH(payload))
+FROM t3 FORCE INDEX(idx_ab)
+WHERE a BETWEEN 10 AND 80 AND b = 5;
+
+SELECT SUM(CHAR_LENGTH(payload))
+FROM t3 FORCE INDEX(idx_ab)
+WHERE a BETWEEN 10 AND 80 AND b = 5;
+
+# Must be 0 after fix: community ICP is still pushed down.
+SELECT
+  LOCATE('"not_pushed_due_to_icp_cost":true', REPLACE(TRACE, ' ', '')) > 0
+    AS icp_suppressed_by_cost_model
+FROM information_schema.optimizer_trace;
+
+DROP TABLE t3, t2, t1;
