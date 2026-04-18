@@ -63,6 +63,9 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
 
 #include <sql_table.h>
 #include "mysql/components/services/system_variable_source.h"
@@ -2987,19 +2990,76 @@ ha_innobase::ha_innobase(handlerton *hton, TABLE_SHARE *table_arg)
 /** Updates the user_thd field in a handle and also allocates a new InnoDB
  transaction handle if needed, and updates the transaction fields in the
  m_prebuilt struct. */
+static std::mutex innobase_slow_log_io_bindings_mutex;
+static std::unordered_map<std::thread::id, innobase_slow_log_io_stats_t *>
+    innobase_slow_log_io_bindings;
+
+static innobase_slow_log_io_stats_t *innobase_get_bound_slow_log_io_stats()
+    noexcept {
+  const auto thread_id = std::this_thread::get_id();
+  std::lock_guard<std::mutex> guard(innobase_slow_log_io_bindings_mutex);
+  const auto it = innobase_slow_log_io_bindings.find(thread_id);
+  return it == innobase_slow_log_io_bindings.end() ? nullptr : it->second;
+}
+
 bool innobase_collect_slow_log_io() noexcept {
   THD *thd = current_thd;
 
-  return thd != nullptr && opt_log_slow_innodb_io &&
-         !thd->is_bootstrap_system_thread();
+  if (thd != nullptr && opt_log_slow_innodb_io &&
+      !thd->is_bootstrap_system_thread()) {
+    return true;
+  }
+
+  return innobase_get_bound_slow_log_io_stats() != nullptr;
 }
 
 void innobase_register_slow_log_storage_read(ulint bytes,
                                              uint64_t wait_us) noexcept {
-  if (!innobase_collect_slow_log_io()) return;
-  DBUG_EXECUTE_IF("innodb_slow_log_skip_storage_reads", return;);
+  THD *thd = current_thd;
+  if (thd != nullptr && opt_log_slow_innodb_io &&
+      !thd->is_bootstrap_system_thread()) {
+    DBUG_EXECUTE_IF("innodb_slow_log_skip_storage_reads", return;);
+    thd->add_slow_log_storage_read_stats(bytes, wait_us);
+    return;
+  }
 
-  current_thd->add_slow_log_storage_read_stats(bytes, wait_us);
+  if (innobase_slow_log_io_stats_t *bound_stats =
+          innobase_get_bound_slow_log_io_stats()) {
+    DBUG_EXECUTE_IF("innodb_slow_log_skip_storage_reads", return;);
+    if (bytes != 0) {
+      ++bound_stats->storage_read_ops;
+      bound_stats->storage_read_bytes += bytes;
+    }
+    bound_stats->storage_read_wait_us += wait_us;
+  }
+}
+
+void innobase_bind_slow_log_io_stats(
+    innobase_slow_log_io_stats_t *stats) noexcept {
+  const auto thread_id = std::this_thread::get_id();
+  std::lock_guard<std::mutex> guard(innobase_slow_log_io_bindings_mutex);
+  if (stats == nullptr) {
+    innobase_slow_log_io_bindings.erase(thread_id);
+  } else {
+    innobase_slow_log_io_bindings[thread_id] = stats;
+  }
+}
+
+void innobase_merge_slow_log_io_stats(
+    const innobase_slow_log_io_stats_t &stats) noexcept {
+  if (stats.storage_read_ops == 0 && stats.storage_read_wait_us == 0) {
+    return;
+  }
+
+  THD *thd = current_thd;
+  if (thd == nullptr || !opt_log_slow_innodb_io ||
+      thd->is_bootstrap_system_thread()) {
+    return;
+  }
+
+  thd->add_slow_log_storage_read_stats_bulk(
+      stats.storage_read_ops, stats.storage_read_bytes,
+      stats.storage_read_wait_us);
 }
 
 void ha_innobase::update_thd(THD *thd) /*!< in: thd to use the handle */

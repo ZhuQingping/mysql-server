@@ -4354,11 +4354,36 @@ dberr_t row_mysql_parallel_select_count_star(
   Shards n_recs;
   Counter::clear(n_recs);
 
+  std::vector<innobase_slow_log_io_stats_t, ut::allocator<innobase_slow_log_io_stats_t>>
+      slow_log_io_stats_by_thread;
+
+  slow_log_io_stats_by_thread.resize(n_threads);
+
   const Parallel_reader::Scan_range FULL_SCAN;
 
   Parallel_reader reader(n_threads);
 
   dberr_t err{DB_SUCCESS};
+
+  reader.set_start_callback([&](Parallel_reader::Thread_ctx *thread_ctx) {
+    if (thread_ctx->get_state() != Parallel_reader::State::THREAD) {
+      return DB_SUCCESS;
+    }
+
+    const auto thread_id = thread_ctx->m_thread_id;
+    if (thread_id < slow_log_io_stats_by_thread.size()) {
+      innobase_bind_slow_log_io_stats(&slow_log_io_stats_by_thread[thread_id]);
+    }
+
+    return DB_SUCCESS;
+  });
+
+  reader.set_finish_callback([&](Parallel_reader::Thread_ctx *thread_ctx) {
+    if (thread_ctx->get_state() == Parallel_reader::State::THREAD) {
+      innobase_bind_slow_log_io_stats(nullptr);
+    }
+    return DB_SUCCESS;
+  });
 
   for (auto index : indexes) {
     Parallel_reader::Config config(FULL_SCAN, index);
@@ -4393,6 +4418,10 @@ dberr_t row_mysql_parallel_select_count_star(
         *n_rows += n;
       }
     });
+  }
+
+  for (const auto &stats : slow_log_io_stats_by_thread) {
+    innobase_merge_slow_log_io_stats(stats);
   }
 
   return err;

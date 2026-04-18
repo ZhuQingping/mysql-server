@@ -1199,13 +1199,16 @@ class THD : public MDL_context_owner,
 
   void note_slow_log_innodb_used() { slow_log_innodb_io_stats.innodb_used = true; }
 
-  void add_slow_log_storage_read_stats(ulonglong bytes, ulonglong wait_us) {
+  void add_slow_log_storage_read_stats_bulk(ulonglong ops, ulonglong bytes,
+                                            ulonglong wait_us) {
     slow_log_innodb_io_stats.innodb_used = true;
-    if (bytes != 0) {
-      ++slow_log_innodb_io_stats.storage_read_ops;
-      slow_log_innodb_io_stats.storage_read_bytes += bytes;
-    }
+    slow_log_innodb_io_stats.storage_read_ops += ops;
+    slow_log_innodb_io_stats.storage_read_bytes += bytes;
     slow_log_innodb_io_stats.storage_read_wait_us += wait_us;
+  }
+
+  void add_slow_log_storage_read_stats(ulonglong bytes, ulonglong wait_us) {
+    add_slow_log_storage_read_stats_bulk(bytes != 0 ? 1 : 0, bytes, wait_us);
   }
 
   THR_LOCK_INFO lock_info;  // Locking info of this thread

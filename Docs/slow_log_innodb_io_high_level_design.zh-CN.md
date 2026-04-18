@@ -572,3 +572,107 @@ cd build/mysql-test
 
 在当前已确认的工具行为下，“默认关闭 + 不改标准 `Query_time` 行 +
 新增独立扩展注释行”是目前兼容性风险最低的推荐实现方式。
+
+
+
+## InnoDB 内部实现是什么样的
+
+`Innodb_buffer_pool_reads`
+
+`Innodb_pages_read`
+
+`innobase_register_slow_log_storage_read`
+
+调用接口如下：
+
+`buf_read_page_low`
+
+`buf_page_get_zip`
+
+`buf_wait_for_read` : innobase_register_slow_log_storage_read(0, wait_us);
+
+```
+./buf/buf0rea.cc:144:    innobase_register_slow_log_storage_read(page_size.physical(), wait_us);
+./buf/buf0buf.cc:3370:      innobase_register_slow_log_storage_read(0, wait_us);
+./buf/buf0buf.cc:3556:    innobase_register_slow_log_storage_read(0, wait_us);
+```
+
+
+
+
+
+Percona 调用接口
+
+```c++
+
+buf_wait_for_read
+
+/** Wait for the block to be read in.
+@param[in]      block   The block to check
+@param          trx     Transaction to account the I/Os to */
+static void buf_wait_for_read(buf_block_t *block, trx_t *trx) {
+  /* Note:
+  This unlocked read of IO fix is safe as we have the block buf-fixed. The page
+  can only transition away from the IO_READ state, and once this is done, it
+  will not be IO_READ again as long as we have it buf-fixed.
+
+  The repeated reads of io_fix will not be optimized out because it's an atomic
+  variable.*/
+  std::chrono::steady_clock::time_point start_time;
+  while (block->page.was_io_fix_read()) {
+    if (start_time == std::chrono::steady_clock::time_point{})
+      start_time = trx_stats::start_io_read(trx, 0);
+    /* Page is X-latched on block->lock until the read is completed.
+    Let's just wait for S-lock on block->lock, it will be granted as soon as the
+    read completes. */
+    rw_lock_s_lock(&block->lock, UT_LOCATION_HERE);
+    rw_lock_s_unlock(&block->lock);
+  }
+  if (start_time != std::chrono::steady_clock::time_point{})
+    trx_stats::end_io_read(trx, start_time);
+}
+
+/** Does a synchronous read operation in Posix.
+@param[in]      type            IO flags
+@param[in]      file            handle to an open file
+@param[out]     buf             buffer where to read
+@param[in]      offset          file offset from the start where to read
+@param[in]      n               number of bytes to read, starting from offset
+@param[out]     err             DB_SUCCESS or error code
+@return number of bytes read, -1 if error */
+[[nodiscard]] static ssize_t os_file_pread(IORequest &type, os_file_t file,
+    ¦   ¦   ¦   ¦   ¦   ¦   ¦   ¦   ¦   ¦  void *buf, ulint n,
+    ¦   ¦   ¦   ¦   ¦   ¦   ¦   ¦   ¦   ¦  os_offset_t offset, trx_t *trx,
+    ¦   ¦   ¦   ¦   ¦   ¦   ¦   ¦   ¦   ¦  dberr_t *err) {
+#ifdef UNIV_HOTBACKUP
+  static meb::Mutex meb_mutex;
+
+  meb_mutex.lock();
+#endif /* UNIV_HOTBACKUP */
+  ++os_n_file_reads;
+#ifdef UNIV_HOTBACKUP
+  meb_mutex.unlock();
+#endif /* UNIV_HOTBACKUP */
+
+  const auto start_time = trx_stats::start_io_read(trx, n);
+
+  os_n_pending_reads.fetch_add(1);
+  MONITOR_ATOMIC_INC(MONITOR_OS_PENDING_READS);
+
+  ssize_t n_bytes = os_file_io(type, file, buf, n, offset, err, nullptr);
+
+  trx_stats::end_io_read(trx, start_time);
+
+  os_n_pending_reads.fetch_sub(1);
+  MONITOR_ATOMIC_DEC(MONITOR_OS_PENDING_READS);
+
+  return (n_bytes);
+}
+```
+
+
+
+`buf_wait_for_read`
+
+
+

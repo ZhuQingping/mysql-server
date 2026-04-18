@@ -455,11 +455,29 @@ ulong thd_parallel_read_threads(THD *thd);
 the current foreground context. */
 bool innobase_collect_slow_log_io() noexcept;
 
+/** Per-worker accumulator used by InnoDB parallel scan workers to collect
+slow-log storage-read statistics without updating THD concurrently. */
+struct innobase_slow_log_io_stats_t {
+  ulonglong storage_read_ops{0};
+  ulonglong storage_read_bytes{0};
+  ulonglong storage_read_wait_us{0};
+};
+
 /** Record statement-level storage-read statistics for the current foreground
 context. A non-zero byte count denotes a storage read initiated by the current
 statement. */
 void innobase_register_slow_log_storage_read(ulint bytes,
                                              uint64_t wait_us) noexcept;
+
+/** Bind or unbind a slow-log accumulator to the current worker thread context.
+Passing nullptr unbinds the current thread context. */
+void innobase_bind_slow_log_io_stats(
+    innobase_slow_log_io_stats_t *stats) noexcept;
+
+/** Merge worker-collected slow-log IO statistics into the current foreground
+THD context. */
+void innobase_merge_slow_log_io_stats(
+    const innobase_slow_log_io_stats_t &stats) noexcept;
 
 /** Whether this is a computed virtual column */
 #define innobase_is_v_fld(field) ((field)->gcol_info && !(field)->stored_in_db)
