@@ -186,21 +186,27 @@ SET cte_max_recursion_depth = @saved_cte_max_recursion_depth;
 ANALYZE TABLE tt;
 
 --echo #
---echo # Case 4 (issue-1 ref form, KNOWN LIMITATION):
+--echo # Case 4 (issue-1 ref form, FIXED via find_best_ref() ICP reward):
 --echo #   Three equality-eligible indexes share the leading key `a`: idx_a,
 --echo #   idx_ab, idx_abc. Only idx_abc can turn c=6 into a pushed index
---echo #   condition (filter ~100x). Today the optimizer picks the narrowest
---echo #   index (idx_a) plus a post-scan Filter on (c=6), because the cost
---echo #   comparison between the three indexes never accounts for the ICP
---echo #   benefit that idx_abc alone can exploit.
+--echo #   condition (filter ~100x). Before the fix the optimizer picked the
+--echo #   narrowest index (idx_a) plus a post-scan Filter on (c=6), because
+--echo #   the ref cost comparison treated all three indexes identically --
+--echo #   the extra ICP filtering that only idx_abc can exploit was invisible
+--echo #   to find_best_ref().
 --echo #
---echo #   We print the plan twice -- once with icp_cost_based=off (community
---echo #   baseline) and once with icp_cost_based=on -- to confirm that the
---echo #   feature flag does NOT influence access-method selection today.
---echo #   When issue 1 is fixed the icp_cost_based=on plan should switch to:
---echo #     "Index lookup on tt using idx_abc (a=4),
---echo #        with index condition: (tt.c = 6)"
---echo #   while the icp_cost_based=off plan stays as the legacy baseline.
+--echo #   After the fix, when icp_cost_based=on, find_best_ref() detects that
+--echo #   the set of WHERE-columns not bound by ref (here: {c}) is a subset
+--echo #   of idx_abc's remaining keyparts (here: {b, c}) and subtracts the
+--echo #   estimated ICP benefit from idx_abc's ref cost. idx_a / idx_ab do
+--echo #   NOT receive that reward (c is not a keypart of either), so idx_abc
+--echo #   wins the ref tournament cleanly.
+--echo #
+--echo #   Expected:
+--echo #     - icp_cost_based=off -> legacy plan ("Index lookup on idx_a" +
+--echo #       server-side Filter on c), unchanged across releases;
+--echo #     - icp_cost_based=on  -> "Index lookup on tt using idx_abc (a=4),
+--echo #       with index condition: (tt.c = 6)".
 --echo #
 SET optimizer_switch=
   'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
@@ -216,10 +222,57 @@ SELECT * FROM tt WHERE a = 4 AND c = 6;
 
 # Sanity: with FORCE INDEX the execution path is already reachable and ICP
 # is pushed down, mirroring Case 3. This documents that the engine-side ICP
-# support is fine and the gap really is in access-method selection.
+# support was always fine -- the gap used to be access-method selection.
 --replace_regex $explain_mask
 EXPLAIN FORMAT=TREE
 SELECT * FROM tt FORCE INDEX(idx_abc) WHERE a = 4 AND c = 6;
+
+--echo #
+--echo # Case 4a (feature-gate guardrail):
+--echo #   The new ICP cost reward must be strictly gated by
+--echo #   icp_cost_based=on. Re-running the exact same query with the flag
+--echo #   back OFF has to restore the legacy plan. This protects against
+--echo #   accidental ON-by-default changes or stuck optimizer state.
+--echo #
+SET optimizer_switch=
+  'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a = 4 AND c = 6;
+
+--echo #
+--echo # Case 4b (full-ref keyparts, reward must NOT fire):
+--echo #   When every keypart of idx_abc is bound by ref (a=4 AND b=5 AND
+--echo #   c=6), there are no unbound WHERE-columns left for ICP to absorb.
+--echo #   The gate in find_best_ref() must detect this and skip the reward;
+--echo #   the plan should be a plain ref/eq_ref on idx_abc without any
+--echo #   "with index condition" text, regardless of icp_cost_based value.
+--echo #
+SET optimizer_switch=
+  'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a = 4 AND b = 5 AND c = 6;
+
+--echo #
+--echo # Case 4c (remaining WHERE columns not on the index, reward must NOT
+--echo # fire):
+--echo #   Here `d` is NOT a keypart of any index. Even with icp_cost_based
+--echo #   on, the new gate must refuse to reward idx_a / idx_ab / idx_abc,
+--echo #   because {d} is not a subset of any of their keypart sets. The
+--echo #   plan therefore has to match the icp_cost_based=off baseline.
+--echo #
+SET optimizer_switch=
+  'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a = 4 AND d = 7;
+
+SET optimizer_switch=
+  'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a = 4 AND d = 7;
 
 --echo #
 --echo # Case 5 (issue-1 range form, KNOWN LIMITATION):

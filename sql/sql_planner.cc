@@ -773,10 +773,117 @@ Key_use *Optimize_table_order::find_best_ref(
     start_key->fanout = cur_fanout;
     start_key->read_cost = cur_read_cost;
 
-    const double cur_ref_cost =
+    double cur_ref_cost =
         cur_read_cost +
         prefix_rowcount * join->cost_model()->row_evaluate_cost(cur_fanout);
     trace_access_idx.add("rows", cur_fanout).add("cost", cur_ref_cost);
+
+    /*
+      Cost-based ICP for ref access (issue-1 fix, first cut).
+
+      Several indexes can share the same leading keypart (e.g. idx_a,
+      idx_ab, idx_abc all start with `a`). Classic ref costing compares
+      the three using only `cur_fanout` -- the number of rows that the
+      leading `a=const` match will return -- which makes them look equal
+      or makes the narrowest index look cheapest. If a wider index can
+      pin additional WHERE predicates via ICP (idx_abc pushing `c=const`
+      into the engine), the narrower index loses that filtering
+      opportunity entirely, yet the loss is invisible to this loop.
+
+      Here we give the wider index a "preview" of its ICP benefit:
+
+        1. Collect the set of WHERE-columns that are NOT bound by the
+           current ref keyparts (i.e. predicates the ref access cannot
+           absorb).
+        2. If all of those columns are covered by the remaining keyparts
+           of this index, the whole remaining-WHERE selectivity can be
+           pushed down via ICP (the engine can evaluate it).
+        3. Estimate that selectivity with the same machinery used by
+           calculate_condition_filter() -- Item::get_filtering_effect().
+        4. Feed (rows_fetched=cur_fanout, filter_effect=estimate) into
+           should_enable_icp_by_cost(). If the model says ICP pays off,
+           subtract the benefit from cur_ref_cost so this candidate can
+           win the ref tournament below.
+
+      We ONLY reduce cost, never increase it, and we bail out
+      conservatively when any input is missing -- so the legacy path is
+      preserved bit-for-bit when the new logic has no confident estimate.
+    */
+    if (cur_keytype != FULLTEXT && can_consider_icp_cost(tab, key) &&
+        cur_fanout > 0.0 && tab->join()->where_cond != nullptr &&
+        !bitmap_is_clear_all(&table->cond_set)) {
+      const bool has_unbound_keyparts =
+          found_part !=
+          LOWER_BITS(key_part_map, actual_key_parts(keyinfo));
+      if (has_unbound_keyparts) {
+        // Build the set of this key's keyparts (columns on index).
+        assert(bitmap_is_clear_all(&table->tmp_set));
+        for (uint i = 0; i < actual_key_parts(keyinfo); i++) {
+          bitmap_set_bit(&table->tmp_set,
+                         keyinfo->key_part[i].field->field_index());
+        }
+
+        // Subset check: every column that has a predicate AND is not
+        // bound by ref must live on this index.
+        char refbuf[MAX_FIELDS / 8];
+        my_bitmap_map *const refbits =
+            static_cast<my_bitmap_map *>(static_cast<void *>(&refbuf));
+        MY_BITMAP ref_bound_cols;
+        bitmap_init(&ref_bound_cols, refbits, table->s->fields);
+        for (uint kp = 0; kp < actual_key_parts(keyinfo); kp++) {
+          if (found_part & (key_part_map{1} << kp)) {
+            bitmap_set_bit(&ref_bound_cols,
+                           keyinfo->key_part[kp].field->field_index());
+          }
+        }
+
+        char rembuf[MAX_FIELDS / 8];
+        my_bitmap_map *const rembits =
+            static_cast<my_bitmap_map *>(static_cast<void *>(&rembuf));
+        MY_BITMAP remaining_cond_cols;
+        bitmap_init(&remaining_cond_cols, rembits, table->s->fields);
+        bitmap_copy(&remaining_cond_cols, &table->cond_set);
+        bitmap_subtract(&remaining_cond_cols, &ref_bound_cols);
+
+        const bool remaining_on_index = !bitmap_is_clear_all(&remaining_cond_cols) &&
+            bitmap_is_subset(&remaining_cond_cols, &table->tmp_set);
+
+        if (remaining_on_index) {
+          // Columns already consumed by the ref key must be excluded
+          // from get_filtering_effect() to avoid double-counting them.
+          const float remaining_filter =
+              tab->join()->where_cond->get_filtering_effect(
+                  tab->join()->thd, tab->table_ref->map(),
+                  /*read_tables=*/0, &ref_bound_cols,
+                  static_cast<double>(tab->records()));
+
+          if (remaining_filter > 0.0f && remaining_filter < 1.0f) {
+            double ref_cost_if_no_icp = 0.0;
+            double ref_cost_if_with_icp = 0.0;
+            const bool icp_helps = should_enable_icp_by_cost(
+                tab, key, prefix_rowcount, cur_fanout, remaining_filter,
+                &ref_cost_if_no_icp, &ref_cost_if_with_icp);
+
+            trace_access_idx.add("icp_cost_based", true);
+            trace_access_idx.add("icp_rows_fetched", cur_fanout);
+            trace_access_idx.add("icp_filter_effect", remaining_filter);
+            trace_access_idx.add("icp_cost_if_disabled", ref_cost_if_no_icp);
+            trace_access_idx.add("icp_cost_if_enabled", ref_cost_if_with_icp);
+            trace_access_idx.add("icp_enabled", icp_helps);
+
+            if (icp_helps) {
+              const double icp_benefit_adjustment =
+                  ref_cost_if_with_icp - ref_cost_if_no_icp;
+              cur_ref_cost += icp_benefit_adjustment;
+              trace_access_idx.add("icp_cost_adjustment",
+                                   icp_benefit_adjustment);
+              trace_access_idx.add("icp_adjusted_ref_cost", cur_ref_cost);
+            }
+          }
+        }
+        bitmap_clear_all(&table->tmp_set);
+      }
+    }
 
     /*
       The current index usage is better than the best index usage found

@@ -181,21 +181,27 @@ ANALYZE TABLE tt;
 Table	Op	Msg_type	Msg_text
 test.tt	analyze	status	OK
 #
-# Case 4 (issue-1 ref form, KNOWN LIMITATION):
+# Case 4 (issue-1 ref form, FIXED via find_best_ref() ICP reward):
 #   Three equality-eligible indexes share the leading key `a`: idx_a,
 #   idx_ab, idx_abc. Only idx_abc can turn c=6 into a pushed index
-#   condition (filter ~100x). Today the optimizer picks the narrowest
-#   index (idx_a) plus a post-scan Filter on (c=6), because the cost
-#   comparison between the three indexes never accounts for the ICP
-#   benefit that idx_abc alone can exploit.
+#   condition (filter ~100x). Before the fix the optimizer picked the
+#   narrowest index (idx_a) plus a post-scan Filter on (c=6), because
+#   the ref cost comparison treated all three indexes identically --
+#   the extra ICP filtering that only idx_abc can exploit was invisible
+#   to find_best_ref().
 #
-#   We print the plan twice -- once with icp_cost_based=off (community
-#   baseline) and once with icp_cost_based=on -- to confirm that the
-#   feature flag does NOT influence access-method selection today.
-#   When issue 1 is fixed the icp_cost_based=on plan should switch to:
-#     "Index lookup on tt using idx_abc (a=4),
-#        with index condition: (tt.c = 6)"
-#   while the icp_cost_based=off plan stays as the legacy baseline.
+#   After the fix, when icp_cost_based=on, find_best_ref() detects that
+#   the set of WHERE-columns not bound by ref (here: {c}) is a subset
+#   of idx_abc's remaining keyparts (here: {b, c}) and subtracts the
+#   estimated ICP benefit from idx_abc's ref cost. idx_a / idx_ab do
+#   NOT receive that reward (c is not a keypart of either), so idx_abc
+#   wins the ref tournament cleanly.
+#
+#   Expected:
+#     - icp_cost_based=off -> legacy plan ("Index lookup on idx_a" +
+#       server-side Filter on c), unchanged across releases;
+#     - icp_cost_based=on  -> "Index lookup on tt using idx_abc (a=4),
+#       with index condition: (tt.c = 6)".
 #
 SET optimizer_switch=
 'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
@@ -210,13 +216,67 @@ SET optimizer_switch=
 EXPLAIN FORMAT=TREE
 SELECT * FROM tt WHERE a = 4 AND c = 6;
 EXPLAIN
--> Filter: (tt.c = 6)  (cost=X rows=N)
-    -> Index lookup on tt using idx_a (a=4)  (cost=X rows=N)
+-> Index lookup on tt using idx_abc (a=4), with index condition: (tt.c = 6)  (cost=X rows=N)
 
 EXPLAIN FORMAT=TREE
 SELECT * FROM tt FORCE INDEX(idx_abc) WHERE a = 4 AND c = 6;
 EXPLAIN
 -> Index lookup on tt using idx_abc (a=4), with index condition: (tt.c = 6)  (cost=X rows=N)
+
+#
+# Case 4a (feature-gate guardrail):
+#   The new ICP cost reward must be strictly gated by
+#   icp_cost_based=on. Re-running the exact same query with the flag
+#   back OFF has to restore the legacy plan. This protects against
+#   accidental ON-by-default changes or stuck optimizer state.
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a = 4 AND c = 6;
+EXPLAIN
+-> Filter: (tt.c = 6)  (cost=X rows=N)
+    -> Index lookup on tt using idx_a (a=4)  (cost=X rows=N)
+
+#
+# Case 4b (full-ref keyparts, reward must NOT fire):
+#   When every keypart of idx_abc is bound by ref (a=4 AND b=5 AND
+#   c=6), there are no unbound WHERE-columns left for ICP to absorb.
+#   The gate in find_best_ref() must detect this and skip the reward;
+#   the plan should be a plain ref/eq_ref on idx_abc without any
+#   "with index condition" text, regardless of icp_cost_based value.
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a = 4 AND b = 5 AND c = 6;
+EXPLAIN
+-> Filter: (tt.c = 6)  (cost=X rows=N)
+    -> Index lookup on tt using idx_ab (a=4, b=5)  (cost=X rows=N)
+
+#
+# Case 4c (remaining WHERE columns not on the index, reward must NOT
+# fire):
+#   Here `d` is NOT a keypart of any index. Even with icp_cost_based
+#   on, the new gate must refuse to reward idx_a / idx_ab / idx_abc,
+#   because {d} is not a subset of any of their keypart sets. The
+#   plan therefore has to match the icp_cost_based=off baseline.
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a = 4 AND d = 7;
+EXPLAIN
+-> Filter: (tt.d = 7)  (cost=X rows=N)
+    -> Index lookup on tt using idx_a (a=4)  (cost=X rows=N)
+
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a = 4 AND d = 7;
+EXPLAIN
+-> Filter: (tt.d = 7)  (cost=X rows=N)
+    -> Index lookup on tt using idx_a (a=4)  (cost=X rows=N)
 
 #
 # Case 5 (issue-1 range form, KNOWN LIMITATION):
