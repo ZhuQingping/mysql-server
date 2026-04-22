@@ -407,6 +407,29 @@ range-scan shape that used to hit it.
   for every candidate. Plan must be the same Table-scan baseline
   with ICP on and off.
 
+- Case 6a (multi-table guardrail, STRAIGHT_JOIN): the pinned join
+  order `tj_driver -> tt` holds on both sides of the toggle; ON
+  legitimately upgrades `tt`'s access from `idx_a + SQL Filter`
+  to `idx_abc + index condition: (tt.c = 50)`.
+
+- Case 6b (multi-table guardrail, free join order): the optimizer
+  must still choose `tj_driver` (5 rows) as the driver when ON,
+  even though `tt` (10k rows) now looks cheaper due to the reward.
+  This is ensured by NOT writing the reward into
+  `pos->rows_fetched` / `pos->filter_effect` (line 1496-1497 of
+  `sql_planner.cc`); join-order DP sees the same fanout estimate
+  on both sides.
+
+- Case 6c (multi-table guardrail, semijoin strategy change, EXPECTED):
+  OFF -> `MaterializeLookup` on `tt`; ON -> `FirstMatch` on
+  `idx_abc + ICP`. This is an EXPECTED consequence of
+  `advance_sj_state()` / `fix_semijoin_strategies_for_picked_join_order`
+  reading `pos->read_cost` (which DOES carry the reward). The
+  guardrail records the exact plan strings so any unexpected
+  strategy drift is surfaced the next time the baseline is
+  recorded. Release notes / operator-facing docs should call out
+  this potential strategy migration when turning the feature on.
+
 All `EXPLAIN FORMAT=TREE` output is normalized via `--replace_regex` to
 strip `cost=...`, `rows=...` and `(actual time=...)` so the test is
 stable across platforms and cost-model tweaks.
@@ -418,6 +441,11 @@ Regression sanity:
 - `main.1st` remains pass.
 - Broader ICP suites pass: `innodb_icp`, `innodb_icp_all`,
   `innodb_icp_none`, `range_icp`, `func_in_icp`, `null_key_icp_innodb`.
+- Semijoin strategy suites pass with default
+  `optimizer_switch`: `subquery_sj_firstmatch`, `subquery_sj_mat`,
+  `subquery_sj_loosescan` (these confirm that with
+  `icp_cost_based=off`, the default, no strategy migration happens
+  to the existing baselines).
 
 ## 6. Follow-up Work
 

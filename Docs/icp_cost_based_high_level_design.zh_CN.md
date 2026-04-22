@@ -129,6 +129,10 @@
   `Index range scan on tt using idx_abc over (2 <= a <= 4), with index condition: ((tt.c = 50) and (tt.a between 2 and 4))`——range 候选预演奖励了唯一能把 `c = 50` 下推进引擎的 `idx_abc`。
 - **Case 5a**（range + 全 keypart 绑定，预演必须**不触发**）：`WHERE a BETWEEN 2 AND 4 AND b = 3 AND c = 50` —— range 已经把优化器能用到的所有 keypart 全部绑定，`bound_keyparts == user_defined_key_parts`，gate 拒绝奖励；plan 必须和社区行为一致，**不因 feature flag 变化**。
 - **Case 5b**（剩余列不在任何索引上，预演必须**不触发**）：`WHERE a BETWEEN 2 AND 4 AND d = 7` —— `d` 不是任何索引的 keypart，`remaining_cond_cols ⊆ key_cols` 子集检查对所有候选都失败；plan 必须与 OFF 基线同为 Table scan。
+- **Case 6a**（多表 guardrail，STRAIGHT_JOIN）：`tj_driver STRAIGHT_JOIN tt WHERE d.id <= 3 AND tt.c = 50`，`SELECT tt.payload` 强制非覆盖扫描。ON 时 `tt` 的访问方式可能从 `idx_a`（OFF）升级到 `idx_abc + index condition: (tt.c = 50)`（ON），但 `STRAIGHT_JOIN` 固定了驱动表，plan 拓扑（`d` 驱动、`tt` inner）在 OFF/ON 之间保持一致。
+- **Case 6b**（多表 guardrail，自由 join order）：同样两张表，不加 `STRAIGHT_JOIN`。奖励允许升级 `tt` 的访问方式，但**最终选中的 JOIN ORDER（小的 `tj_driver` 驱动、`tt` inner）必须在 OFF/ON 之间不变**。否则就意味着 `rows_fetched` / `filter_effect` 串进了 join-order DP；我们在奖励里**显式不写**这两个字段，就是为了守这条线。
+- **Case 6c**（多表 guardrail，EXISTS 子查询，**预期策略变化**）：`EXISTS (SELECT 1 FROM tt WHERE tt.a = d.a AND tt.c = 50 AND tt.payload <> '')`。这条用例**故意**记录一个 **预期行为变化**：`advance_sj_state()` / `fix_semijoin_strategies_for_picked_join_order` 做 semijoin 策略选择时会读 `pos->read_cost`，而 `pos->read_cost` 是**带奖励值**的。OFF 时优化器选 `MaterializeLookup`（对 `tt` 做一次 table scan + 哈希 probe）；ON 时由于 `idx_abc + ICP` 让每次 probe 成本足够低，`FirstMatch` 跑赢了 Materialize。两者都是正确 plan，但运维上线这个特性时**要预期到**：EXISTS / IN 子查询的 semijoin 策略可能发生迁移。
 
-同时保证 `main.1st` 以及更广的 ICP 用例集绿灯：
-`innodb_icp`、`innodb_icp_all`、`innodb_icp_none`、`range_icp`、`func_in_icp`、`null_key_icp_innodb`。
+同时保证 `main.1st` 以及更广的 ICP / semijoin 用例集绿灯：
+- ICP：`innodb_icp`、`innodb_icp_all`、`innodb_icp_none`、`range_icp`、`func_in_icp`、`null_key_icp_innodb`；
+- Semijoin：`subquery_sj_firstmatch`、`subquery_sj_mat`、`subquery_sj_loosescan`。

@@ -259,6 +259,12 @@
 - **Case 5b（剩余列不在任何索引上，预演必须不触发）** —— `WHERE a BETWEEN 2 AND 4 AND d = 7`：
   `d` 不是任何索引的 keypart，`remaining_cond_cols ⊆ key_cols` 子集检查对所有候选都失败；ON / OFF 都得到一样的 Table-scan 基线。
 
+- **Case 6a（多表 guardrail，STRAIGHT_JOIN）** —— `tj_driver STRAIGHT_JOIN tt`：`STRAIGHT_JOIN` 固定驱动表，ON/OFF 两侧顶层 plan（`d` 驱动，`tt` 被驱动）必须一致；`tt` 的访问方式在 ON 时可以从 `idx_a + SQL Filter` 升级到 `idx_abc + index condition: (tt.c = 50)`。
+
+- **Case 6b（多表 guardrail，自由 join order）** —— 同两张表，无 `STRAIGHT_JOIN`：即便 ON 时 `tt` 看似更便宜，优化器**必须**仍然选择 `tj_driver`（5 行）作为驱动表。这正是靠"`pos->rows_fetched` / `pos->filter_effect` 在奖励后**不被改写**"（`sql_planner.cc:1496-1497`）来守护的——join-order DP 两侧看到的是同样的 fanout 估计。
+
+- **Case 6c（多表 guardrail，semijoin 策略变化，预期）** —— `EXISTS (SELECT 1 FROM tt WHERE tt.a = d.a AND tt.c = 50 AND tt.payload <> '')`：OFF 选 `MaterializeLookup`（对 `tt` 做一次 table scan + 哈希 probe）；ON 选 `FirstMatch` on `idx_abc + ICP`。这是**预期**行为：`advance_sj_state()` / `fix_semijoin_strategies_for_picked_join_order` 在做 semijoin 策略选择时**会读 `pos->read_cost`**，而 `pos->read_cost` 是**带奖励**的。guardrail 把两边精确 plan 字符串记录下来，一旦策略再漂移会立即被 `--record` 对比出来；运维上线该特性时应在 release notes / 运维文档里提示：EXISTS / IN 子查询的 semijoin 策略可能发生迁移。
+
 所有 `EXPLAIN FORMAT=TREE` 输出用 `--replace_regex` 将 `cost=...`、`rows=...`、`(actual time=...)` 等易变数值归一化，保证结果在不同平台与代价调参下稳定。
 
 预期输出存放在 `mysql-test/r/icp_cost_based.result`。
@@ -266,7 +272,8 @@
 **回归稳健性**：
 
 - `main.1st` 继续绿；
-- 广义 ICP 用例集绿：`innodb_icp`、`innodb_icp_all`、`innodb_icp_none`、`range_icp`、`func_in_icp`、`null_key_icp_innodb`。
+- 广义 ICP 用例集绿：`innodb_icp`、`innodb_icp_all`、`innodb_icp_none`、`range_icp`、`func_in_icp`、`null_key_icp_innodb`；
+- Semijoin 套件在**默认** `optimizer_switch` 下绿：`subquery_sj_firstmatch`、`subquery_sj_mat`、`subquery_sj_loosescan`——即 `icp_cost_based=off`（默认）时社区基线不漂移。
 
 ## 6. 后续工作（follow-up）
 

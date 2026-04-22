@@ -283,7 +283,35 @@ Use `main.icp_cost_based` to verify:
   `WHERE a BETWEEN 2 AND 4 AND d = 7`: `d` is not a keypart of any
   index; the subset check in the preview must fail, so the planner
   still falls back to a Table scan exactly like `icp_cost_based=off`.
+- **Case 6a** (multi-table guardrail, STRAIGHT_JOIN) --
+  `tj_driver STRAIGHT_JOIN tt WHERE d.id <= 3 AND tt.c = 50`
+  projecting `tt.payload` to force a non-covering scan. The reward on
+  `tt` can legitimately upgrade its access method from `idx_a` (OFF)
+  to `idx_abc + index condition: (tt.c = 50)` (ON), but because
+  `STRAIGHT_JOIN` pins the driver, the plan topology (nested loop
+  with `d` driving, `tt` inner) stays identical between OFF and ON.
+- **Case 6b** (multi-table guardrail, free join order) -- same two
+  tables, no `STRAIGHT_JOIN`. The reward may upgrade `tt`'s access
+  method, but the chosen JOIN ORDER (tiny `tj_driver` drives, `tt`
+  inner) must NOT flip between OFF and ON. If it did, that would
+  mean `rows_fetched` / `filter_effect` leaked into join-order DP;
+  we explicitly do not write into those fields when applying the
+  reward.
+- **Case 6c** (multi-table guardrail, EXISTS subquery, expected
+  strategy change) -- `EXISTS (SELECT 1 FROM tt WHERE tt.a = d.a
+  AND tt.c = 50 AND tt.payload <> '')`. This case DOCUMENTS an
+  expected behavior change: semijoin strategy selection in
+  `advance_sj_state()` / `fix_semijoin_strategies_for_picked_join_order`
+  uses `pos->read_cost`, which DOES carry the ICP reward. The OFF
+  plan uses `MaterializeLookup` (one table scan on `tt` + hashed
+  probe per outer row); the ON plan uses `FirstMatch` on
+  `idx_abc + ICP` because the per-probe cost becomes cheap enough
+  to beat materialization. Both plans are correct; operators
+  enabling `icp_cost_based` on workloads with EXISTS / IN
+  subqueries should expect some semijoin-strategy migration.
 
 Also keep the baseline `main.1st` green, plus the broader ICP suites
 (`innodb_icp`, `innodb_icp_all`, `innodb_icp_none`, `range_icp`,
-`func_in_icp`, `null_key_icp_innodb`) to guard against broad regression.
+`func_in_icp`, `null_key_icp_innodb`) and semijoin suites
+(`subquery_sj_firstmatch`, `subquery_sj_mat`,
+`subquery_sj_loosescan`) to guard against broad regression.

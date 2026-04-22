@@ -160,6 +160,7 @@ CREATE TABLE tt (
   b INT,
   c INT,
   d INT,
+  payload CHAR(32) NOT NULL DEFAULT '',
   INDEX idx_a(a),
   INDEX idx_ab(a, b),
   INDEX idx_abc(a, b, c)
@@ -168,7 +169,7 @@ CREATE TABLE tt (
 SET @saved_cte_max_recursion_depth = @@cte_max_recursion_depth;
 SET cte_max_recursion_depth = 20000;
 
-INSERT INTO tt (a, b, c, d)
+INSERT INTO tt (a, b, c, d, payload)
 WITH RECURSIVE number_series AS (
   SELECT 1 AS n
   UNION ALL
@@ -178,7 +179,8 @@ SELECT
   n %    5 + 1,
   n %   10 + 1,
   n %  100 + 1,
-  n % 1000 + 1
+  n % 1000 + 1,
+  LPAD(n, 32, 'x')
 FROM number_series;
 
 SET cte_max_recursion_depth = @saved_cte_max_recursion_depth;
@@ -350,5 +352,136 @@ SET optimizer_switch=
 --replace_regex $explain_mask
 EXPLAIN FORMAT=TREE
 SELECT * FROM tt WHERE a BETWEEN 2 AND 4 AND d = 7;
+
+--echo #
+--echo # -----------------------------------------------------------------------
+--echo # Multi-table guardrails (completeness check):
+--echo #
+--echo # The ICP cost reward touches pos->read_cost but must never mutate
+--echo # pos->rows_fetched or pos->filter_effect. The join-order DP, semijoin
+--echo # strategy selection, derived-table materialization etc. all read the
+--echo # latter two fields; if we accidentally let the reward propagate there,
+--echo # we would silently perturb every cost-based decision downstream.
+--echo #
+--echo # These cases stress 3 join shapes; each SELECT forces tt to fetch
+--echo # `payload` so the chosen idx_abc scan is NOT covering -- otherwise
+--echo # the engine skips ICP entirely (Gate G2 in range_icp_preview /
+--echo # can_consider_icp_cost) and the guardrail loses its teeth.
+--echo #
+--echo # Cases:
+--echo #   6a: 2-table inner join with STRAIGHT_JOIN, tt is the inner
+--echo #       (non-driving) side. Plan must be identical on/off at
+--echo #       join-order level; only the access method on tt may upgrade
+--echo #       when the reward is on (table scan / idx_a -> idx_abc + ICP).
+--echo #   6b: 2-table inner join, optimizer picks join order freely. The
+--echo #       reward may legitimately upgrade tt's access method; however
+--echo #       the JOIN ORDER itself (which table drives) must not flip --
+--echo #       that would mean rows_fetched / filter_effect leaked into
+--echo #       join-order DP.
+--echo #   6c: EXISTS subquery. This case deliberately documents an
+--echo #       EXPECTED behavior change: semijoin strategy selection
+--echo #       (MaterializeLookup / FirstMatch / DuplicateWeedout) reads
+--echo #       `pos->read_cost` through `advance_sj_state()`, and that
+--echo #       field DOES get the ICP reward. So the reward can legitimately
+--echo #       flip the chosen strategy when two candidates are close in
+--echo #       cost. This is part of the cost-based design contract, not a
+--echo #       regression. What we guarantee here is still strong:
+--echo #         * the chosen inner-table access method is never worse;
+--echo #         * rows_fetched / filter_effect for both tables are
+--echo #           identical on vs off (they are stored on POSITION as the
+--echo #           pre-reward values -- see pos->filter_effect/rows_fetched
+--echo #           assignments in best_access_path).
+--echo #       Operators should know: enabling icp_cost_based on a workload
+--echo #       with semijoin subqueries MAY change strategy selection.
+--echo # -----------------------------------------------------------------------
+--echo #
+
+CREATE TABLE tj_driver (
+  id INT NOT NULL PRIMARY KEY,
+  a  INT NOT NULL
+) ENGINE=InnoDB;
+
+INSERT INTO tj_driver VALUES (1, 2), (2, 3), (3, 4), (4, 4), (5, 2);
+
+ANALYZE TABLE tj_driver;
+
+--echo #
+--echo # Case 6a: STRAIGHT_JOIN pins tj_driver as driver. tt must be the
+--echo #          inner side with or without the reward. The reward (when
+--echo #          on) may change tt's access method to idx_abc + ICP; the
+--echo #          join order is already pinned by STRAIGHT_JOIN, so the top
+--echo #          line of the plan tree ("Nested loop inner join" with d
+--echo #          first, tt second) is what we compare.
+--echo #
+SET optimizer_switch=
+  'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT STRAIGHT_JOIN tt.payload
+FROM tj_driver d JOIN tt ON tt.a = d.a
+WHERE d.id <= 3 AND tt.c = 50;
+
+SET optimizer_switch=
+  'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT STRAIGHT_JOIN tt.payload
+FROM tj_driver d JOIN tt ON tt.a = d.a
+WHERE d.id <= 3 AND tt.c = 50;
+
+--echo #
+--echo # Case 6b: No STRAIGHT_JOIN -- the optimizer picks join order
+--echo #          freely. Both plans must keep tj_driver (5 rows, tiny)
+--echo #          as the driver; tt (10 000 rows) as the inner side. If
+--echo #          the reward leaked into rows_fetched / filter_effect,
+--echo #          tt's estimated fanout would change and the DP could
+--echo #          swap the driver -- which we explicitly watch for here.
+--echo #
+SET optimizer_switch=
+  'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT tt.payload
+FROM tj_driver d JOIN tt ON tt.a = d.a
+WHERE d.a >= 2 AND tt.c = 50;
+
+SET optimizer_switch=
+  'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT tt.payload
+FROM tj_driver d JOIN tt ON tt.a = d.a
+WHERE d.a >= 2 AND tt.c = 50;
+
+--echo #
+--echo # Case 6c: EXISTS subquery (semijoin). tt is the inner table and is
+--echo #          ICP-eligible on c=50. Expected: the chosen semijoin
+--echo #          strategy CAN flip between on/off -- on OFF the optimizer
+--echo #          prefers MaterializeLookup (because fetching 10000 rows
+--echo #          once and probing beats a table scan per outer row); on
+--echo #          ON, idx_abc + ICP makes the per-probe inner fetch cheap
+--echo #          enough that FirstMatch wins. Both are correct plans; we
+--echo #          record the exact strings so a future regression here is
+--echo #          noticed immediately and can be reviewed intentionally.
+--echo #
+SET optimizer_switch=
+  'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT d.id, d.a FROM tj_driver d
+WHERE EXISTS (SELECT 1 FROM tt
+              WHERE tt.a = d.a AND tt.c = 50
+                AND tt.payload <> '');
+
+SET optimizer_switch=
+  'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT d.id, d.a FROM tj_driver d
+WHERE EXISTS (SELECT 1 FROM tt
+              WHERE tt.a = d.a AND tt.c = 50
+                AND tt.payload <> '');
+
+DROP TABLE tj_driver;
 
 DROP TABLE tt, t3, t2, t1;
