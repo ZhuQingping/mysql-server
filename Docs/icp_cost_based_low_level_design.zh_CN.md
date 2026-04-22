@@ -124,7 +124,59 @@
 - 对例子 `WHERE a = 4 AND c = 6`，`idx_a` / `idx_ab` 因为 `{c}` 不是它们 keypart 集合的子集，直接被 Gate 3 拒绝，不做任何调整。
 - 预演只作用在**候选循环内部**，不写 `POSITION` 任何字段——那仍然由 2.3 在"最终赢家"身上完成。
 
-**暂不覆盖**：range 候选、非 ref 的半连接物化路径、hypergraph 优化器。这些都作为 follow-up 单独跟进（见第 6 节）。
+**暂不覆盖**：非 ref 的半连接物化路径、hypergraph 优化器。这些都作为 follow-up 单独跟进（见第 6 节）。range 候选走自己的预演路径，见 2.5。
+
+### 2.5 range 候选的 ICP 预演（issue-1 range 形式）
+
+文件：`sql/range_optimizer/index_range_scan_plan.cc`。
+
+`get_key_scans_params()` 用每个 range 候选的 handler `check_quick_select()` 代价和 `cost_est`（来自 `best_access_path()` 的 table-scan 基线）做擂台比较。handler 代价只反映"原始回表成本"，不知道"SQL 层稍后还能不能下推"，于是**凡是"如果做了 ICP 会很便宜"的候选全部以 `cause: cost` 被拒**，整个 range 选项被折叠成 `nullptr`。range 形式修复通过**本地 ICP 预演**，仅影响"擂台比较"这一步。
+
+**静态 helper**（定义在 `index_range_scan_plan.cc` 的匿名 namespace）：
+
+1. `range_icp_preview_gates(thd, table, keynr)`：以下全部成立时返回 true：
+   - `optimizer_switch=icp_cost_based=on`；
+   - `keynr != MAX_KEY`；
+   - 引擎对该 key 声明 `HA_DO_INDEX_COND_PUSHDOWN`；
+   - `hint_key_state(thd, table->pos_in_table_list, keynr, ICP_HINT_ENUM, OPTIMIZER_SWITCH_INDEX_CONDITION_PUSHDOWN)` 允许下推；
+   - 命令**不是** `SQLCOM_UPDATE_MULTI` / `SQLCOM_DELETE_MULTI`；
+   - 索引**不含**虚拟生成列；
+   - 不是聚簇主键；
+   - 不是覆盖索引（即 `table->covering_keys.is_set(keynr) && !table->no_keyread` 为假）。
+
+2. `range_icp_preview(thd, table, keynr, where_cond, found_records, original_cost, trace_idx)`：返回"有效代价"：
+   - 当 `where_cond == nullptr`、`found_records` 为 0 或 `HA_POS_ERROR`、或 (1) 中的 gate 失败时，直接返回 `original_cost`；
+   - 读取 `bound_keyparts = table->quick_key_parts[keynr]`；若 `bound_keyparts == 0` 或 `bound_keyparts >= total_keyparts`，返回 `original_cost`（没有剩余 keypart 可下推，或完全没被 range 绑定）；
+   - 基于 `table->s->fields` 构建两个位图：
+     - `key_cols` = 当前 key 所有 keypart 对应的字段；
+     - `range_bound_cols` = 前 `bound_keyparts` 个 keypart 对应的字段；
+   - 通过 `Item::add_field_to_cond_set_processor` 遍历 `where_cond` 把列写进 `table->cond_set`。由于 `choose_table_order` 会在 `best_access_path()` 之前重新清空并回填 `cond_set`，此处"临时写"是安全的；helper 在退出时若 `cond_set` 原本为空会恢复为空；
+   - 计算 `remaining_cond_cols = cond_set \ range_bound_cols`：若为空（已无谓词可下推）或不是 `key_cols` 的子集（有剩余列不在本索引上），返回 `original_cost`；
+   - 估算 `remaining_filter = where_cond->get_filtering_effect(thd, table_map, read_tables=0, &range_bound_cols, found_records)`；要求 `0 < remaining_filter < 1`，否则返回 `original_cost`；
+   - 计算
+     `cost_if_with_icp = original_cost * remaining_filter + cost_model->row_evaluate_cost(found_records * kRangeIcpEvalCpuFactor)`，
+     其中 `kRangeIcpEvalCpuFactor = 0.25`（文件局部常量，对应 `should_enable_icp_by_cost()` 里 `kIcpEvalCpuFactor` 的思想）；
+   - 只有当 `cost_if_with_icp` **严格小于** `original_cost` 才返回 `cost_if_with_icp`，否则返回 `original_cost`；
+   - 给出奖励时，打印 trace 字段 `icp_cost_based`、`icp_rows_fetched`、`icp_filter_effect`、`icp_cost_if_disabled`、`icp_cost_if_enabled`、`icp_enabled`、`icp_cost_adjustment`、`icp_adjusted_range_cost`。
+
+**在 `get_key_scans_params()` 里的集成**：每个候选循环中维护两个运行值：
+
+- `read_cost`：当前擂台最好"有效代价"（可能是 ICP 调整后的值），仅用于比较；
+- `best_original_cost`：当前赢家的 handler 原始代价，用于 `AccessPath::cost` 以及下游所有消费方；
+
+流程：
+
+- `check_quick_select()` 算出 `(found_records, cost)` 之后，只有在 `!ror_only` 时从 `param->query_block->where_cond()` 取 `where_cond`（index-merge 构造完全不参与这次预演），调用
+  `effective_cost = range_icp_preview(thd, param->table, keynr, where_cond, found_records, cost.total_cost(), &trace_idx)`；
+- 擂台比较改为 `read_cost > effective_cost`（原为 `read_cost > cost.total_cost()`）；
+- 新赢家出现时同时更新 `read_cost = effective_cost` 和 `best_original_cost = cost.total_cost()`；
+- 循环结束时：`path->cost = best_original_cost`（**不是** `read_cost`）。
+
+**保证**：
+
+- `AccessPath::cost` 与社区实现字字相同——ICP 调整只影响 `get_key_scans_params()` 内部的**比较**，不影响"赢家的 cost 度量"。`calculate_scan_cost`、EXPLAIN、join 顺序 DP 看到的依旧是原来的数字。
+- index-merge 构造（`ror_only = true`）强制 `where_cond = nullptr`，本次预演完全不介入——经典的"候选是否 rowid 有序、能否参与 ROR intersect"判据保持不变。
+- 覆盖索引、聚簇主键、全 keypart 绑定、剩余列跨索引等不应从预演获益的形态，全部在 helper 内返回 `original_cost`，`read_cost > cost.total_cost()` 的老比较逻辑字字保留。
 
 ## 3. 数据传递
 
@@ -198,8 +250,14 @@
 - **Case 4c（剩余列不在索引上，预演必须不触发）** —— `WHERE a = 4 AND d = 7`：
   `d` 不是任何索引的 keypart，Gate 3 的 `remaining_cond_cols ⊆ key_columns` 子集检查对所有候选都失败；因此 OFF / ON 必须产生完全相同的 plan。
 
-- **Case 5（issue-1 range 形式，已知限制）** —— `WHERE a BETWEEN 2 AND 4 AND c = 50`，不带 hint：
-  目前仍回落到 table scan，因为 range 路径还没接入 ref 擂台预演机制；`.result` **故意**把这个"坏"计划钉住——未来 range 形式的修复会直接在 `.result` diff 里冒出来，起到"进度信号"作用。
+- **Case 5（issue-1 range 形式）** —— `WHERE a BETWEEN 2 AND 4 AND c = 50`，不带 hint。`icp_cost_based=off` 时由于所有 range 候选 handler 原始代价都高于 table-scan 基线，计划为 Table scan。`icp_cost_based=on` 时 range 候选预演（见 2.5）奖励了 `idx_abc`（唯一能把 `c = 50` 下推给引擎的索引），计划切换为
+  `Index range scan on tt using idx_abc over (2 <= a <= 4), with index condition: ((tt.c = 50) and (tt.a between 2 and 4))`。
+
+- **Case 5a（range 绑满 keypart，预演必须不触发）** —— `WHERE a BETWEEN 2 AND 4 AND b = 3 AND c = 50`，`icp_cost_based=on`：
+  range 已经把 `idx_abc` 所有 keypart 绑定了，`bound_keyparts == total_keyparts`，helper 返回 `original_cost`，plan 与社区行为一致。
+
+- **Case 5b（剩余列不在任何索引上，预演必须不触发）** —— `WHERE a BETWEEN 2 AND 4 AND d = 7`：
+  `d` 不是任何索引的 keypart，`remaining_cond_cols ⊆ key_cols` 子集检查对所有候选都失败；ON / OFF 都得到一样的 Table-scan 基线。
 
 所有 `EXPLAIN FORMAT=TREE` 输出用 `--replace_regex` 将 `cost=...`、`rows=...`、`(actual time=...)` 等易变数值归一化，保证结果在不同平台与代价调参下稳定。
 
@@ -212,7 +270,7 @@
 
 ## 6. 后续工作（follow-up）
 
-- **issue-1 的 range 形式**：把预演机制扩展到 range 候选，让"leading 列 range + 尾列等值"这样的形态（Case 5）也能倾向于"能做 ICP 的更宽索引"，而不是 table scan 或更窄的 range。
-- **Hypergraph 优化器**：当前预演只挂在经典的 `find_best_ref()` 路径上；hypergraph 路径另有一套访问方法选择的代码流，需要单独接入一次。
-- **selectivity 校准**：`Item::get_filtering_effect()` 偏保守。若上线后的 trace 数据显示在某些谓词形态上系统性地给多/给少奖励，可以在 gate 逻辑不动的前提下把估算器换成更好的；接口约束是"对 `(0,1)` 开区间的单一浮点数 selectivity 作答"。
+- **Hypergraph 优化器**：当前两套预演分别挂在经典的 `find_best_ref()` 与 `get_key_scans_params()` 路径上；hypergraph 路径自己有另一套访问方法选择代码，ref 形式与 range 形式**都需要**额外接一次。
+- **selectivity 校准**：`Item::get_filtering_effect()` 偏保守。若上线后的 trace 数据显示在某些谓词形态上系统性地给多/给少奖励，可以在 gate 逻辑不动的前提下把估算器换成更好的；接口约束是"对 `(0,1)` 开区间的单一浮点数 selectivity 作答"。range 形式目前用的是文件局部常量 `kRangeIcpEvalCpuFactor`，两边稳定一段时间后可考虑与规划器侧的 `kIcpEvalCpuFactor` 统一。
 - **基于代价的 OFF 决策**：2.3 节出于谨慎目前不写 OFF 决策；等代价模型校准更稳后可以打开——执行期（第 4 节）的 OFF 分支已经就位，无需再改数据结构。
+- **非命中情况的 trace**：range 形式 helper 目前只在"被奖励"时输出 trace。后续可以把 skip 原因（`"covering"`、`"fully_bound"`、`"not_on_index"` 等）也补上，方便不读 C++ 也能定位 gate 用例行为。

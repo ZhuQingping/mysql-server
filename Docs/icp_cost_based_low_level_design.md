@@ -170,9 +170,122 @@ other callers see it empty.
   are written here -- that is still the responsibility of section
   2.3 on the eventual winner.
 
-**Out of scope for this cut.** Range-scan candidates, non-ref
-semi-join materializations, and the hypergraph optimizer are not
-touched. These are tracked as separate follow-ups (see section 6).
+**Out of scope for this cut.** Non-ref semi-join materializations and
+the hypergraph optimizer are not touched. These are tracked as
+separate follow-ups (see section 6). Range-scan candidates have their
+own preview; see section 2.5.
+
+### 2.5 Range-candidate ICP preview (issue-1 range form)
+
+File: `sql/range_optimizer/index_range_scan_plan.cc`.
+
+`get_key_scans_params()` picks the winning range candidate by
+comparing each candidate's handler-reported `check_quick_select()`
+cost against `cost_est` (the table-scan cost passed in from
+`best_access_path()`). Handler cost is blind to "what the SQL layer
+will push down later", so candidates that would be very cheap *with*
+ICP get rejected with `cause: cost` and the entire range option is
+collapsed to `nullptr`. The range-form fix adds a local ICP preview
+that only influences tournament comparisons.
+
+**Static helpers** (inside an anonymous namespace in
+`index_range_scan_plan.cc`):
+
+1. `range_icp_preview_gates(thd, table, keynr)` returns true iff:
+   - `optimizer_switch=icp_cost_based=on`;
+   - `keynr != MAX_KEY`;
+   - engine reports `HA_DO_INDEX_COND_PUSHDOWN` for `keynr`;
+   - the ICP hint/switch allows pushdown on this key
+     (`hint_key_state(thd, table->pos_in_table_list, keynr,
+     ICP_HINT_ENUM, OPTIMIZER_SWITCH_INDEX_CONDITION_PUSHDOWN)`);
+   - command is **not** `SQLCOM_UPDATE_MULTI` /
+     `SQLCOM_DELETE_MULTI`;
+   - the index does **not** contain virtual generated columns;
+   - the key is **not** a clustered PK;
+   - the key is **not** a covering index
+     (`table->covering_keys.is_set(keynr) && !table->no_keyread` is
+     false).
+
+2. `range_icp_preview(thd, table, keynr, where_cond, found_records,
+   original_cost, trace_idx)` returns the effective cost:
+   - early return `original_cost` if
+     `where_cond == nullptr`, `found_records` is 0 or
+     `HA_POS_ERROR`, or the gates in (1) fail;
+   - reads `bound_keyparts = table->quick_key_parts[keynr]`; if
+     `bound_keyparts == 0` or `bound_keyparts >= total_keyparts`,
+     return `original_cost` (nothing trailing to push into, or
+     nothing bound by the range at all);
+   - builds two bitmaps over `table->s->fields`:
+     - `key_cols` = every field of every keypart of `keynr`;
+     - `range_bound_cols` = fields backing the first
+       `bound_keyparts` keyparts;
+   - walks `where_cond` with
+     `Item::add_field_to_cond_set_processor` to populate
+     `table->cond_set`. The planner clears and re-walks `cond_set`
+     later in `choose_table_order` before `best_access_path()`
+     runs, so temporarily writing here is safe; the helper also
+     restores `cond_set` on exit when it was initially empty;
+   - computes `remaining_cond_cols = cond_set \ range_bound_cols`;
+     returns `original_cost` when this set is empty (no predicates
+     left to push) or not a subset of `key_cols` (some remaining
+     predicate column is off this index);
+   - estimates
+     `remaining_filter = where_cond->get_filtering_effect(thd,
+     table_map, read_tables=0, &range_bound_cols, found_records)`;
+     requires `0 < remaining_filter < 1`, else returns
+     `original_cost`;
+   - computes
+     `cost_if_with_icp = original_cost * remaining_filter +
+     cost_model->row_evaluate_cost(found_records *
+     kRangeIcpEvalCpuFactor)`
+     where `kRangeIcpEvalCpuFactor = 0.25` (file-local constant
+     that parallels the `kIcpEvalCpuFactor` used by
+     `should_enable_icp_by_cost()`);
+   - returns `cost_if_with_icp` only when it is strictly smaller
+     than `original_cost`; otherwise returns `original_cost`;
+   - when a reward is applied, emits trace fields
+     `icp_cost_based`, `icp_rows_fetched`,
+     `icp_filter_effect`, `icp_cost_if_disabled`,
+     `icp_cost_if_enabled`, `icp_enabled`,
+     `icp_cost_adjustment`, `icp_adjusted_range_cost`.
+
+**Integration in `get_key_scans_params()`.** Inside the per-index
+loop:
+
+- track two running values:
+  - `read_cost` -- current best "effective" cost used for
+    comparisons (may be ICP-adjusted);
+  - `best_original_cost` -- current winner's handler-reported cost
+    used for `AccessPath::cost` and all downstream consumers;
+- after `check_quick_select()` produces `(found_records, cost)`,
+  pull `where_cond` from `param->query_block->where_cond()` (only
+  when `!ror_only`, to keep index-merge construction completely
+  untouched), then call
+  `effective_cost = range_icp_preview(thd, param->table, keynr,
+  where_cond, found_records, cost.total_cost(), &trace_idx)`;
+- compare `read_cost > effective_cost` instead of
+  `read_cost > cost.total_cost()`;
+- on a new winner, update
+  `read_cost = effective_cost` and
+  `best_original_cost = cost.total_cost()`;
+- on exit, set `path->cost = best_original_cost` (not `read_cost`).
+
+**Guarantees.**
+
+- `AccessPath::cost` is identical to community behavior for the
+  winning candidate; only the *comparison* inside
+  `get_key_scans_params()` may see an ICP-reduced value. As a
+  result `calculate_scan_cost`, EXPLAIN, and join-order DP see the
+  same numbers they would see today.
+- Index-merge construction (`ror_only = true`) is skipped entirely
+  inside the loop by forcing `where_cond = nullptr`; the classic
+  "is this candidate rowid-ordered enough to participate in ROR
+  intersect" check is untouched.
+- Index shapes that cannot benefit from the preview (covering
+  indexes, clustered PKs, fully-bound prefixes, off-index
+  remainders, etc.) return `original_cost` from the helper and the
+  legacy `read_cost > cost.total_cost()` comparison is preserved
+  byte-for-byte.
 
 ## 3. Data Propagation
 
@@ -272,12 +385,27 @@ range-scan shape that used to hit it.
   so Gate 3 (`remaining_cond_cols ⊆ key_columns`) fails for every
   candidate. Both `off` and `on` must produce the same plan.
 
-- Case 5 (issue-1 range form, KNOWN LIMITATION) -- `WHERE a BETWEEN
-  2 AND 4 AND c = 50` with no hint: currently still falls back to a
-  table scan because the range path does not yet benefit from the
-  ref-tournament preview. The baseline `.result` pins the broken
-  plan intentionally: when the range-form fix lands it will surface
-  as a `.result` diff and become the progress signal.
+- Case 5 (issue-1 range form) -- `WHERE a BETWEEN 2 AND 4 AND c = 50`
+  with no hint. With `icp_cost_based=off`, every range candidate's
+  handler cost exceeds the table-scan baseline, so the plan is a
+  Table scan. With `icp_cost_based=on`, the range-candidate preview
+  (see 2.5) rewards `idx_abc` because `c = 50` can be pushed down,
+  and the plan becomes `Index range scan on tt using idx_abc over
+  (2 <= a <= 4), with index condition: ((tt.c = 50) and (tt.a between
+  2 and 4))`.
+
+- Case 5a (full-prefix keyparts, reward must NOT fire) --
+  `WHERE a BETWEEN 2 AND 4 AND b = 3 AND c = 50` with
+  `icp_cost_based=on`: the range already binds every keypart of
+  `idx_abc`, so `bound_keyparts == total_keyparts` and the preview
+  gate returns `original_cost` unchanged. Plan must match community
+  behavior.
+
+- Case 5b (remaining column off any index, reward must NOT fire) --
+  `WHERE a BETWEEN 2 AND 4 AND d = 7`: column `d` is not a keypart
+  of any index, so the `remaining_cond_cols ⊆ key_cols` check fails
+  for every candidate. Plan must be the same Table-scan baseline
+  with ICP on and off.
 
 All `EXPLAIN FORMAT=TREE` output is normalized via `--replace_regex` to
 strip `cost=...`, `rows=...` and `(actual time=...)` so the test is
@@ -293,17 +421,23 @@ Regression sanity:
 
 ## 6. Follow-up Work
 
-- **Issue-1 range form.** Extend the preview to range-scan candidates
-  so shapes like Case 5 can also prefer an ICP-capable wider index
-  over a narrower range scan or table scan.
-- **Hypergraph optimizer.** The current preview lives in the classic
-  `find_best_ref()` path. The hypergraph path picks access methods
-  through a different code flow and needs its own integration point.
+- **Hypergraph optimizer.** The current previews live in the classic
+  `find_best_ref()` and `get_key_scans_params()` paths. The
+  hypergraph path picks access methods through a different code flow
+  and needs its own integration point for both ref and range forms.
 - **Selectivity calibration.** `Item::get_filtering_effect()` is a
   conservative guesstimate. If telemetry shows systematic
-  under/over-reward on specific predicate shapes, the preview can
-  swap in a better estimator without reshaping the gate logic.
+  under/over-reward on specific predicate shapes, both previews can
+  swap in a better estimator without reshaping the gate logic. The
+  range-form helper also uses a standalone `kRangeIcpEvalCpuFactor`;
+  a future unification with the planner-side `kIcpEvalCpuFactor`
+  would be cleaner once both have soaked long enough.
 - **Cost-based OFF decisions.** Section 2.3 deliberately does not
   persist OFF decisions today. A future, better-calibrated cost
   model can opt in without further refactoring; the execution-side
   machinery in section 4 is already wired up.
+- **Trace for off-tournament skips.** The range-form helper emits
+  trace only when a reward is applied. Adding a concise skip
+  reason (`icp_preview_skipped = "covering"`, `"fully_bound"`,
+  `"not_on_index"`, etc.) would make the MTR gate cases easier to
+  diagnose without reading the C++ code.

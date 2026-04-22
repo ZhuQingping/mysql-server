@@ -275,19 +275,34 @@ EXPLAIN FORMAT=TREE
 SELECT * FROM tt WHERE a = 4 AND d = 7;
 
 --echo #
---echo # Case 5 (issue-1 range form, KNOWN LIMITATION):
+--echo # Case 5 (issue-1 range form, FIXED via range-optimizer ICP preview):
 --echo #   Leading-key range + trailing-key equality without any index hint --
 --echo #   this is the single-table shape of the customer_fund_daily_statement
---echo #   reproducer. Same class of problem as Case 4 (range on leading key
---echo #   instead of an equality), and again the feature flag must not be
---echo #   able to move the needle until issue 1 is fixed.
+--echo #   reproducer.
 --echo #
---echo #   We print the plan twice to confirm icp_cost_based=off and
---echo #   icp_cost_based=on produce exactly the same access method today.
---echo #   When issue 1 is fixed the icp_cost_based=on plan should become:
---echo #     "Index range scan on tt using idx_abc over (...),
---echo #        with index condition: (tt.c = 50 and tt.a between 2 and 4)"
---echo #   (exact text depends on how range optimizer prints the ranges).
+--echo #   The range optimizer estimates `a BETWEEN 2 AND 4` to return about
+--echo #   60% of the table, which makes every candidate range scan's cost
+--echo #   (including idx_abc's) higher than the table-scan baseline. Before
+--echo #   the fix, all candidates were rejected with "cause: cost" inside
+--echo #   analyzing_range_alternatives and best_access_path fell back to a
+--echo #   Table scan -- so ICP was never given a chance, even though c=50
+--echo #   would push the row lookup down to ~1% of the range.
+--echo #
+--echo #   The fix teaches get_key_scans_params() to compute an ICP-adjusted
+--echo #   "effective cost" for candidates that could push trailing-keypart
+--echo #   predicates into the engine (gates mirror Case 4: feature on,
+--echo #   engine supports HA_DO_INDEX_COND_PUSHDOWN, at least one trailing
+--echo #   keypart is unbound, every WHERE column outside the range prefix
+--echo #   lives on this index). The effective cost only drives the "which
+--echo #   candidate wins" comparison; path->cost keeps the handler-reported
+--echo #   value so downstream cost accounting stays identical.
+--echo #
+--echo #   Expected:
+--echo #     - icp_cost_based=off -> legacy plan (Table scan + server-side
+--echo #       Filter on (c, a)), unchanged across releases;
+--echo #     - icp_cost_based=on  -> "Index range scan on tt using idx_abc
+--echo #       over (...), with index condition: (tt.c = 50 and tt.a between
+--echo #       2 and 4)".
 --echo #
 SET optimizer_switch=
   'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
@@ -300,5 +315,40 @@ SET optimizer_switch=
 --replace_regex $explain_mask
 EXPLAIN FORMAT=TREE
 SELECT * FROM tt WHERE a BETWEEN 2 AND 4 AND c = 50;
+
+--echo #
+--echo # Case 5a (range + full-prefix keyparts, reward must NOT fire):
+--echo #   When the range AND every trailing keypart of idx_abc are pinned
+--echo #   (a BETWEEN 2 AND 4 AND b = 3 AND c = 50), there is no "remaining"
+--echo #   column set for ICP to absorb -- the range itself already binds
+--echo #   all the keyparts the range optimizer can exploit. The preview
+--echo #   gate must skip this candidate. Plan should be the same with and
+--echo #   without icp_cost_based.
+--echo #
+SET optimizer_switch=
+  'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a BETWEEN 2 AND 4 AND b = 3 AND c = 50;
+
+--echo #
+--echo # Case 5b (remaining WHERE columns not on any index, reward must NOT
+--echo # fire):
+--echo #   `d` is not part of any index. The preview gate must refuse to
+--echo #   reward idx_a / idx_ab / idx_abc because {d} is not a subset of
+--echo #   any of their keypart sets. Plan must therefore match the
+--echo #   icp_cost_based=off baseline (Table scan).
+--echo #
+SET optimizer_switch=
+  'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a BETWEEN 2 AND 4 AND d = 7;
+
+SET optimizer_switch=
+  'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a BETWEEN 2 AND 4 AND d = 7;
 
 DROP TABLE tt, t3, t2, t1;

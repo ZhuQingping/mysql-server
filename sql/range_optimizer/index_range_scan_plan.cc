@@ -68,6 +68,212 @@ static bool get_ranges_from_tree_given_base(
     uint max_key_flag, bool first_keypart_is_asc, uint num_key_parts,
     uint *used_key_parts, uint *num_exact_key_parts, Quick_ranges *ranges);
 
+namespace {
+
+/*
+  ICP preview for range-scan candidates (issue-1 range form).
+
+  Motivation:
+    get_key_scans_params() compares each candidate range scan's handler-
+    reported cost against `cost_est` (typically the table-scan cost).
+    That comparison does not account for any ICP benefit the candidate
+    could obtain on its trailing keyparts -- because handler cost
+    estimates the raw row fetch cost and does not know what the SQL
+    layer will or will not push down later.
+
+    The classic consequence for shapes like
+        SELECT ... FROM t WHERE a BETWEEN X AND Y AND c = K
+    with indexes (a), (a,b), (a,b,c) is:
+      - the range optimizer estimates all three indexes' range cost
+        identically from the `a` range alone,
+      - none of them beats the table-scan baseline,
+      - the range optimizer returns nullptr,
+      - best_access_path() falls back to Table scan,
+      - ICP is never given a chance.
+
+    The fix computes a candidate-local "ICP-adjusted" cost and uses
+    that value -- *not* the handler cost -- when deciding whether the
+    candidate beats the running best. The candidate's path->cost is
+    still set to the original handler cost, so downstream consumers
+    (calculate_scan_cost, EXPLAIN) see stable values.
+
+  Gates (strictly additive, skip on any failure):
+    G1. icp_cost_based=on, ICP globally allowed by switches/hints.
+    G2. engine supports HA_DO_INDEX_COND_PUSHDOWN on `keynr`, not a
+        clustered PK, not a covering index, not a virtual-gcol index,
+        not a multi-table update/delete.
+    G3. Range covers only the leading prefix (at least one trailing
+        keypart is unbound).
+    G4. Some WHERE column lives on the trailing keyparts of this index
+        (otherwise no predicate can be pushed down).
+    G5. Item::get_filtering_effect() returns a selectivity in (0, 1)
+        strictly smaller than 1.0.
+
+  Output: returns `adjusted_cost = original_cost * filter +
+  row_eval(found_records * kIcpEvalCpuFactor)`. Never larger than
+  `original_cost`.
+*/
+constexpr double kRangeIcpEvalCpuFactor = 0.25;
+
+static bool range_icp_preview_gates(THD *thd, TABLE *table, uint keynr) {
+  if (!thd->optimizer_switch_flag(OPTIMIZER_SWITCH_ICP_COST_BASED))
+    return false;
+  if (keynr == MAX_KEY) return false;
+  if (!(table->file->index_flags(keynr, 0, true) & HA_DO_INDEX_COND_PUSHDOWN))
+    return false;
+
+  // Hint / switch allow ICP on this key.
+  if (!hint_key_state(thd, table->pos_in_table_list, keynr, ICP_HINT_ENUM,
+                      OPTIMIZER_SWITCH_INDEX_CONDITION_PUSHDOWN))
+    return false;
+
+  if (thd->lex->sql_command == SQLCOM_UPDATE_MULTI ||
+      thd->lex->sql_command == SQLCOM_DELETE_MULTI)
+    return false;
+
+  if (table->vfield && table->index_contains_some_virtual_gcol(keynr))
+    return false;
+
+  if (keynr == table->s->primary_key && table->file->primary_key_is_clustered())
+    return false;
+
+  // Covering-index reads never exercise ICP (the engine never goes to
+  // the row), so the reward would be a fiction.
+  if (table->covering_keys.is_set(keynr) && !table->no_keyread) return false;
+
+  return true;
+}
+
+/*
+  Core ICP preview body. `original_cost` is the handler-reported range
+  cost for `keynr`. Returns an "effective cost" to be used strictly for
+  the `read_cost > effective_cost` comparison in get_key_scans_params().
+  If any gate fails or the model cannot show a clear improvement, the
+  function returns `original_cost` unchanged so the legacy comparison
+  path is preserved bit-for-bit.
+
+  On a successful reward, writes the trace fields that are mirrored in
+  best_access_path() so observability stays consistent between the two
+  entry points.
+*/
+static double range_icp_preview(THD *thd, TABLE *table, uint keynr,
+                                Item *where_cond, ha_rows found_records,
+                                double original_cost,
+                                Opt_trace_object *trace_idx) {
+  if (where_cond == nullptr) return original_cost;
+  if (found_records == 0 || found_records == HA_POS_ERROR)
+    return original_cost;
+  if (!range_icp_preview_gates(thd, table, keynr)) return original_cost;
+
+  const KEY &key_info = table->key_info[keynr];
+  const uint total_keyparts = key_info.user_defined_key_parts;
+
+  // G3: range optimizer already told us how many leading keyparts the
+  //     scan exercises.
+  const uint bound_keyparts = table->quick_key_parts[keynr];
+  if (bound_keyparts == 0 || bound_keyparts >= total_keyparts)
+    return original_cost;
+
+  // Build this key's full column set (for G4 subset check) and the
+  // "bound by range" column set (used as ignore set for selectivity).
+  char keybuf[MAX_FIELDS / 8];
+  my_bitmap_map *const kbits =
+      static_cast<my_bitmap_map *>(static_cast<void *>(&keybuf));
+  MY_BITMAP key_cols;
+  bitmap_init(&key_cols, kbits, table->s->fields);
+  for (uint i = 0; i < total_keyparts; i++) {
+    bitmap_set_bit(&key_cols, key_info.key_part[i].field->field_index());
+  }
+
+  char rbndbuf[MAX_FIELDS / 8];
+  my_bitmap_map *const rbndbits =
+      static_cast<my_bitmap_map *>(static_cast<void *>(&rbndbuf));
+  MY_BITMAP range_bound_cols;
+  bitmap_init(&range_bound_cols, rbndbits, table->s->fields);
+  for (uint i = 0; i < bound_keyparts; i++) {
+    bitmap_set_bit(&range_bound_cols,
+                   key_info.key_part[i].field->field_index());
+  }
+
+  // Collect WHERE columns for `table`. `add_field_to_cond_set_processor`
+  // writes into `field->table->cond_set`, which is exactly the semantic
+  // we want. At this point in optimization the planner has not yet
+  // filled cond_set (that happens in choose_table_order() right before
+  // best_access_path); the planner also unconditionally clears and
+  // re-walks cond_set there, so writing into it here is safe. We
+  // restore the original contents on function exit to avoid leaking
+  // bits into other tables' cond_set (the processor only touches this
+  // table's cond_set, so the restore is trivially scoped).
+  const bool cond_set_was_empty = bitmap_is_clear_all(&table->cond_set);
+  if (cond_set_was_empty) {
+    where_cond->walk(&Item::add_field_to_cond_set_processor,
+                     enum_walk::POSTFIX, nullptr);
+  }
+
+  // G4: "remaining WHERE columns" must live on this key's trailing
+  // keyparts. We also require non-empty remaining (otherwise ICP has
+  // nothing to filter).
+  char rembuf[MAX_FIELDS / 8];
+  my_bitmap_map *const rembits =
+      static_cast<my_bitmap_map *>(static_cast<void *>(&rembuf));
+  MY_BITMAP remaining_cond_cols;
+  bitmap_init(&remaining_cond_cols, rembits, table->s->fields);
+  bitmap_copy(&remaining_cond_cols, &table->cond_set);
+  bitmap_subtract(&remaining_cond_cols, &range_bound_cols);
+
+  auto cond_set_guard = [&]() {
+    if (cond_set_was_empty) bitmap_clear_all(&table->cond_set);
+  };
+
+  if (bitmap_is_clear_all(&remaining_cond_cols)) {
+    cond_set_guard();
+    return original_cost;
+  }
+  if (!bitmap_is_subset(&remaining_cond_cols, &key_cols)) {
+    cond_set_guard();
+    return original_cost;
+  }
+
+  // G5: selectivity of predicates not bound by the range.
+  const double full_rows = static_cast<double>(found_records);
+  const float remaining_filter = where_cond->get_filtering_effect(
+      thd, table->pos_in_table_list->map(), /*read_tables=*/0,
+      &range_bound_cols, full_rows);
+  if (!(remaining_filter > 0.0f) || !(remaining_filter < 1.0f)) {
+    cond_set_guard();
+    return original_cost;
+  }
+
+  // Cost model (mirrors should_enable_icp_by_cost() at the range level):
+  //   - without ICP: pay original_cost to fetch all `found_records` rows.
+  //   - with ICP:    pay original_cost * filter to fetch the survivors,
+  //                  plus a per-index-entry eval overhead.
+  const Cost_model_server *const cost_model = thd->cost_model();
+  const double cost_if_no_icp = original_cost;
+  const double cost_if_with_icp =
+      original_cost * static_cast<double>(remaining_filter) +
+      cost_model->row_evaluate_cost(full_rows * kRangeIcpEvalCpuFactor);
+
+  if (!(cost_if_with_icp < cost_if_no_icp)) {
+    cond_set_guard();
+    return original_cost;
+  }
+
+  trace_idx->add("icp_cost_based", true);
+  trace_idx->add("icp_rows_fetched", full_rows);
+  trace_idx->add("icp_filter_effect", remaining_filter);
+  trace_idx->add("icp_cost_if_disabled", cost_if_no_icp);
+  trace_idx->add("icp_cost_if_enabled", cost_if_with_icp);
+  trace_idx->add("icp_enabled", true);
+  trace_idx->add("icp_cost_adjustment", cost_if_with_icp - cost_if_no_icp);
+  trace_idx->add("icp_adjusted_range_cost", cost_if_with_icp);
+
+  cond_set_guard();
+  return cost_if_with_icp;
+}
+
+}  // namespace
+
 /* MRR range sequence, SEL_ARG* implementation: stack entry */
 struct RANGE_SEQ_ENTRY {
   /*
@@ -831,6 +1037,13 @@ AccessPath *get_key_scans_params(THD *thd, RANGE_OPT_PARAM *param,
   ha_rows best_records = 0; /* protected by key_to_read */
   uint best_mrr_flags = 0, best_buf_size = 0;
   double read_cost = cost_est;
+  /*
+    Handler-reported cost of the currently winning candidate. This is
+    what will end up in path->cost if we have a winner at all. Kept
+    separate from `read_cost` (which may include an ICP preview
+    adjustment) so path->cost remains stable for downstream consumers.
+  */
+  double best_original_cost = cost_est;
   DBUG_TRACE;
   Opt_trace_context *const trace = &thd->opt_trace;
   /*
@@ -920,8 +1133,31 @@ AccessPath *get_key_scans_params(THD *thd, RANGE_OPT_PARAM *param,
         tree->ror_scans_map.set_bit(idx);
       }
 
+      /*
+        Cost-based ICP preview for this candidate (issue-1 range form).
+        Only influences the tournament comparison below; the final
+        AccessPath->cost remains the handler-reported value.
+
+        Skipped entirely for ror_only index-merge construction because
+        that path doesn't care about "range vs table scan", it only
+        asks which candidates are rowid-ordered.
+      */
+      // Prefer the ACTIVE WHERE pointer from the JOIN (may have been
+      // rewritten during optimization); fall back to Query_block's
+      // m_where_cond if JOIN is not yet attached. The JOIN's
+      // `where_cond` field is accessed via its Query_block accessor to
+      // avoid pulling JOIN's full definition into this TU.
+      Item *where_cond = nullptr;
+      if (!ror_only && param->query_block != nullptr) {
+        where_cond = param->query_block->where_cond();
+      }
+      const double original_cost = cost.total_cost();
+      const double effective_cost =
+          range_icp_preview(thd, param->table, keynr, where_cond, found_records,
+                            original_cost, &trace_idx);
+
       if (found_records != HA_POS_ERROR &&
-          (read_cost > cost.total_cost() ||
+          (read_cost > effective_cost ||
            /*
              Ignore cost check if INDEX_MERGE hint is used with
              explicitly specified indexes or if INDEX_MERGE hint
@@ -931,13 +1167,14 @@ AccessPath *get_key_scans_params(THD *thd, RANGE_OPT_PARAM *param,
            (force_index_merge &&
             (!use_cheapest_index_merge || !key_to_read)))) {
         trace_idx.add("chosen", true);
-        read_cost = cost.total_cost();
+        read_cost = effective_cost;
         best_records = found_records;
         key_to_read = key;
         best_idx = idx;
         best_mrr_flags = mrr_flags;
         best_buf_size = buf_size;
         is_best_idx_imerge_scan = is_imerge_scan;
+        best_original_cost = original_cost;
       } else {
         trace_idx.add("chosen", false);
         if (found_records == HA_POS_ERROR)
@@ -972,7 +1209,7 @@ AccessPath *get_key_scans_params(THD *thd, RANGE_OPT_PARAM *param,
 
   AccessPath *path = new (param->return_mem_root) AccessPath;
   path->type = AccessPath::INDEX_RANGE_SCAN;
-  path->cost = read_cost;
+  path->cost = best_original_cost;
   path->set_num_output_rows(best_records);
   path->index_range_scan().index = param->real_keynr[best_idx];
   path->index_range_scan().num_used_key_parts = used_key_parts;

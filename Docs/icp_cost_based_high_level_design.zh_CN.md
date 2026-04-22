@@ -32,6 +32,8 @@
 
 0. `find_best_ref()` 中：**在** `best_access_path()` 的访问方法擂台选出 ref 赢家**之前**，对每个 ref 候选预演一次 ICP 收益，并反馈到该候选自己的代价里——防止最窄的那把索引凭空赢下擂台（**issue-1 ref 形式**，详见后文"ref 候选的基于代价 ICP"一节）。
 
+0b. `get_key_scans_params()` 中：**range 优化器在擂台选出胜出的 range 候选过程中**，对每个候选预演一次 ICP 收益，用"**ICP 调整后的有效代价**"进行胜负比较（而不是用 handler 原始代价）。这解决 **issue-1 的 range 形式**：对于 `WHERE a BETWEEN X AND Y AND c = K` 这种形态，所有 range 候选的 handler 原始代价都会高于 table-scan 基线，于是 range 优化器返回 nullptr，ICP 连"上场机会"都拿不到。详见后文"range 候选的基于代价 ICP"一节。
+
 1. `best_access_path()` 中：
    - 确定候选索引（`ref` 用到的 key，或者被选中的 range key）；
    - 跑一遍资格预检；
@@ -63,7 +65,27 @@
 
 **安全性保证**：预演**只会降低候选代价，永不抬高**。任何一道 gate 不通过时，`cur_ref_cost` 与旧行为逐字节一致，所以拿不到 ICP 收益的候选（比如上面例子里的 `idx_a` / `idx_ab`，因为 `{c}` 不是它们 keypart 集合的子集）自动走"不变"分支。
 
-**适用范围**：这轮改动只修复 issue 1 的 **ref 子树**。range 子树（对应 `main.icp_cost_based` 的 Case 5）仍是已知限制，作为 follow-up 单独推进。
+**适用范围**：这轮改动只修复 issue 1 的 **ref 子树**。range 子树由下面的 range 优化器预演单独解决。
+
+## range 候选的基于代价 ICP（issue-1 range 形式）
+
+**动机**：`get_key_scans_params()` 对每个 range 候选用 handler 上报的 `check_quick_select()` 代价与 `cost_est`（来自 `best_access_path()` 的 table-scan 基线）比较。handler 代价只反映"原始回表成本"，对"SQL 层稍后会不会下推"一无所知。对于 `SELECT * FROM t WHERE a BETWEEN 2 AND 4 AND c = 50`（索引 `(a)`、`(a, b)`、`(a, b, c)`），**三把索引的 range 代价都是基于 `a` 范围估算**，大表场景下三把索引 **全部** 都会高于 table-scan 基线。后果：range 优化器返回 nullptr，`best_access_path()` 回落到 Table scan，ICP 从头到尾没有上场机会。
+
+**设计**：在 `get_key_scans_params()` 的每候选循环中，在 `check_quick_select()` 算出 `(found_records, cost)` 后，**对该候选单独算一份"有效代价"（effective cost）**——只用在擂台比较里：
+
+- gate：`icp_cost_based=on`、引擎支持 `HA_DO_INDEX_COND_PUSHDOWN`、ICP 相关 hint/switch 没禁掉下推、非聚簇主键、非覆盖索引读、非虚拟生成列索引、非多表 UPDATE/DELETE；
+- 要求 range 只绑定了索引的**前缀**：`bound_keyparts > 0` 并且 `bound_keyparts < user_defined_key_parts`（至少还有一个尾列可用来下推）；
+- 计算"剩余 WHERE 列"（WHERE 列减去已被 range 绑定的列），要求其**是当前 key 所有 keypart 列的子集**（否则有列根本不在本索引上，引擎无法评估）；
+- 通过 `Item::get_filtering_effect()` 估算剩余谓词的 selectivity，把 range 已绑定的列作为"已消化集合"传进去；
+- 按
+  `effective_cost = original_cost * filter + row_eval(found_records * k)`
+  计算，其中 `k` 是一个很小的"每索引项评估因子"；只有当 `effective_cost < original_cost` 严格成立，才把 `effective_cost` 用于擂台。
+
+在循环内部：将原来的胜负比较 `read_cost > cost.total_cost()` 改为 `read_cost > effective_cost`；同时用 `best_original_cost` 单独跟踪**当前赢家的 handler 原始代价**。循环结束后，`AccessPath::cost` 写的是 `best_original_cost`，**而不是** ICP 调整后的值——下游所有 cost 计算（`calculate_scan_cost`、EXPLAIN、join 顺序 DP）看到的都是与改动前完全一致的数字，这份预演只影响"擂台赢家选择"，不影响"赢家的 cost 度量"。
+
+**安全性保证**：预演只会**降低**候选的有效代价。任一 gate 不通过时，helper 返回 `original_cost`，`read_cost > cost.total_cost()` 的老比较逻辑字字保留。覆盖索引、聚簇主键、全 keypart 绑定、剩余列跨索引等无法真正从 ICP 获益的形态，都会被 gate 拦掉。index-merge 构造（`ror_only = true`）完全跳过：index-merge 选"rowid 有序的候选"走的是另一套标准，和"range vs table scan"无关。
+
+**与步骤 1 的关系**：若 range 优化器因为这次预演而挑出了之前被 table-scan 挤掉的候选，后续流程照常运转：`best_access_path()` 收到的 `AccessPath` 携带 handler 原始代价；步骤 1 的 scan-path 奖励仍可能再叠一轮；`push_index_cond()` 照常执行真正的下推。**不需要改数据结构。**
 
 ## 可观测性
 
@@ -82,6 +104,11 @@
   - `icp_rows_fetched`、`icp_filter_effect`；
   - `icp_cost_if_disabled`、`icp_cost_if_enabled`、`icp_enabled`；
   - `icp_cost_adjustment` / `icp_adjusted_ref_cost`：**仅当该候选被打了折扣时**才出现。
+- **range 擂台预演**（由 `get_key_scans_params()` 对每个候选 key 输出，嵌在 `analyzing_range_alternatives` 之内）：
+  - `icp_cost_based`；
+  - `icp_rows_fetched`、`icp_filter_effect`；
+  - `icp_cost_if_disabled`、`icp_cost_if_enabled`、`icp_enabled`；
+  - `icp_cost_adjustment` / `icp_adjusted_range_cost`：**仅当该候选被打了折扣时**才出现。
 
 当 `icp_cost_based=off` 时，上述字段都不会出现。若某个 ref 候选没有通过预演 gate（例如没有未绑定的 keypart，或剩余 WHERE 列不在这把索引上），则该候选不会输出 ref 预演那一组字段——这也是 gate 命中情况的可观测信号。
 
@@ -98,7 +125,10 @@
 - **Case 4a**（feature-gate 保护）：同样的查询，把 `icp_cost_based` 切回 `off`，必须恢复 OFF 基线 plan——防止"默认变 ON"或"优化器状态残留"造成意外回归。
 - **Case 4b**（全 keypart 被 ref 绑定，预演必须**不触发**）：`WHERE a = 4 AND b = 5 AND c = 6` —— `idx_abc` 的所有 keypart 都被 ref 占用，没有剩余 WHERE 列可让 ICP 吸收；Gate 3 的 `remaining_cond_cols` 为空，预演应直接跳过，plan 保持与社区一致（`idx_ab` lookup + server-side Filter）。
 - **Case 4c**（剩余列不在任何索引上，预演必须**不触发**）：`WHERE a = 4 AND d = 7` —— `d` 不是任何索引的 keypart，`remaining_cond_cols ⊆ key_columns` 子集检查对所有候选都失败；OFF 与 ON 产生完全相同的 plan。
-- **Case 5**（issue-1 range 形式，**已知限制**）：ON + 不带 hint、leading 列 range + 尾列等值 —— 目前仍回落到 table scan（与 OFF 一致），**故意把"坏"基线钉住**，这样未来 range 形式修复后，直接表现为 `.result` diff，起到"进度信号"作用。
+- **Case 5**（issue-1 range 形式）：ON + 不带 hint，`WHERE a BETWEEN 2 AND 4 AND c = 50`，索引 `idx_a`/`idx_ab`/`idx_abc`。OFF 基线为 Table scan（每个 range 候选 handler 原始代价都超过 table-scan 基线）。ON 后 plan 必须切换为
+  `Index range scan on tt using idx_abc over (2 <= a <= 4), with index condition: ((tt.c = 50) and (tt.a between 2 and 4))`——range 候选预演奖励了唯一能把 `c = 50` 下推进引擎的 `idx_abc`。
+- **Case 5a**（range + 全 keypart 绑定，预演必须**不触发**）：`WHERE a BETWEEN 2 AND 4 AND b = 3 AND c = 50` —— range 已经把优化器能用到的所有 keypart 全部绑定，`bound_keyparts == user_defined_key_parts`，gate 拒绝奖励；plan 必须和社区行为一致，**不因 feature flag 变化**。
+- **Case 5b**（剩余列不在任何索引上，预演必须**不触发**）：`WHERE a BETWEEN 2 AND 4 AND d = 7` —— `d` 不是任何索引的 keypart，`remaining_cond_cols ⊆ key_cols` 子集检查对所有候选都失败；plan 必须与 OFF 基线同为 Table scan。
 
 同时保证 `main.1st` 以及更广的 ICP 用例集绿灯：
 `innodb_icp`、`innodb_icp_all`、`innodb_icp_none`、`range_icp`、`func_in_icp`、`null_key_icp_innodb`。

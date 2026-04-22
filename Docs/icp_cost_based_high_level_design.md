@@ -43,6 +43,16 @@ Add `optimizer_switch` option:
    narrowest index no longer wins by accident (**issue-1 ref form**; see
    the "Cost-based ICP for ref candidates" section below).
 
+0b. In `get_key_scans_params()`, **while the range optimizer is picking a
+   winning range candidate**, preview each candidate's ICP benefit and
+   compare candidates (and the table-scan baseline) on an *ICP-adjusted
+   effective cost*, not on the handler-reported raw cost. This closes
+   **issue-1 range form**: shapes like
+   `WHERE a BETWEEN X AND Y AND c = K` where every candidate's raw range
+   cost is higher than the table-scan baseline, so the range optimizer
+   used to return nullptr and ICP was never given a chance. See the
+   "Cost-based ICP for range candidates" section below.
+
 1. In `best_access_path()`:
    - determine candidate key (`ref` key or chosen range key),
    - run eligibility prechecks,
@@ -113,8 +123,69 @@ for the motivating shape fall into this "unchanged" path automatically
 because `{c}` is not a subset of their keyparts.
 
 **Scope.** This mechanism only lifts the ref-form subtree of issue 1.
-The range-form subtree (Case 5 in `main.icp_cost_based`) is still a
-known limitation and is tracked as a follow-up.
+The range-form subtree is handled separately by the range-optimizer
+preview below.
+
+## Cost-based ICP for range candidates (issue-1 range form)
+
+**Motivation.** `get_key_scans_params()` compares each range candidate's
+handler-reported cost against `cost_est` (the table-scan cost coming
+from `best_access_path`). Handler cost reflects the raw row-fetch cost
+and is blind to "what the SQL layer will push down later." For a query
+like `SELECT * FROM t WHERE a BETWEEN 2 AND 4 AND c = 50` on indexes
+`(a)`, `(a, b)`, `(a, b, c)`, all three candidates produce identical
+range cost estimated purely from the `a` range, and in bulkier tables
+*all three* exceed the table-scan baseline. Result: the range optimizer
+returns `nullptr`, `best_access_path()` falls back to Table scan, and
+ICP is never offered a chance to absorb `c = 50`.
+
+**Design.** Inside the per-candidate loop in `get_key_scans_params()`,
+after `check_quick_select()` returns `(found_records, cost)` for a
+candidate, compute a side-car *effective cost* that only drives the
+tournament comparison:
+
+- gate on `icp_cost_based=on`, engine support for
+  `HA_DO_INDEX_COND_PUSHDOWN`, and other usual ICP legality checks
+  (not clustered PK, not covering-index-read, not virtual-gcol index,
+  not multi-table update/delete, ICP hint allows the pushdown);
+- require the range to bind only the leading prefix of the key --
+  `bound_keyparts > 0` and `bound_keyparts < user_defined_key_parts`
+  (otherwise there are no trailing keyparts to push into);
+- collect "remaining WHERE columns" (WHERE columns minus
+  range-bound columns) and require them to be a subset of this key's
+  keyparts (otherwise the engine cannot evaluate the remainder);
+- estimate the remaining selectivity via
+  `Item::get_filtering_effect()`, treating the range-bound columns as
+  the already-consumed set;
+- compute
+  `effective_cost = original_cost * filter + row_eval(found_records * k)`
+  where `k` is a small index-entry eval factor; only use this value if
+  it is strictly less than `original_cost`.
+
+In the loop body itself, replace the candidate's tournament comparison
+from `read_cost > cost.total_cost()` to `read_cost > effective_cost`,
+and track the winning candidate's handler-reported cost separately in
+`best_original_cost`. On exit, `AccessPath::cost` is set to
+`best_original_cost`, **not** to the ICP-adjusted value -- downstream
+cost accounting (calculate_scan_cost, EXPLAIN, join-order DP) sees
+exactly the cost it saw before, so this preview is opt-in for the
+*decision* and inert for every *measurement*.
+
+**Safety.** The preview can only *lower* a candidate's effective cost.
+Any failed gate returns `original_cost` unchanged, keeping the legacy
+`read_cost > cost.total_cost()` comparison bit-for-bit intact. Index
+shapes that cannot meaningfully use ICP (covering indexes, fully-bound
+prefixes, cross-index remaining columns, clustered PK, etc.) are
+excluded by the gates. Index-merge construction (`ror_only = true`) is
+skipped entirely; index-merge picks rowid-ordered candidates via a
+different criterion that does not care about "range vs table scan".
+
+**Relationship with step 1.** If the range optimizer now returns a
+candidate that previously lost to the table-scan baseline, the normal
+flow continues: `best_access_path()` receives an `AccessPath` with the
+handler-reported cost, the scan-path ICP preview of step 1 may still
+apply its own reward on top, and `push_index_cond()` performs the
+actual pushdown as usual. No data structure changes are required.
 
 ## Observability
 
@@ -140,6 +211,16 @@ With `icp_cost_based=on`, optimizer trace includes:
   - `icp_cost_if_enabled`
   - `icp_enabled`
   - `icp_cost_adjustment` / `icp_adjusted_ref_cost` (only when the
+    candidate received a cost reward)
+- Range-tournament preview (from `get_key_scans_params()`, per
+  candidate key, nested inside `analyzing_range_alternatives`):
+  - `icp_cost_based`
+  - `icp_rows_fetched`
+  - `icp_filter_effect`
+  - `icp_cost_if_disabled`
+  - `icp_cost_if_enabled`
+  - `icp_enabled`
+  - `icp_cost_adjustment` / `icp_adjusted_range_cost` (only when the
     candidate received a cost reward)
 
 With `icp_cost_based=off`, none of these fields appear. A ref candidate
@@ -184,11 +265,24 @@ Use `main.icp_cost_based` to verify:
 - **Case 4c** (remaining WHERE not on the index) -- `WHERE a = 4 AND
   d = 7`: column `d` is not a keypart of any index; the subset check
   must fail for all candidates so OFF and ON produce identical plans.
-- **Case 5** (issue-1 range form, KNOWN LIMITATION) -- ON path, no
-  hint, leading-key range + trailing-key equality: currently still
-  falls back to a table scan (same as OFF). Deliberately kept as a
-  red baseline so the follow-up range-form fix surfaces as a
-  `.result` diff.
+- **Case 5** (issue-1 range form) -- ON path, no hint,
+  `WHERE a BETWEEN 2 AND 4 AND c = 50` on `idx_a`/`idx_ab`/`idx_abc`.
+  The OFF baseline is a Table scan (every range candidate's raw cost
+  exceeds the table-scan baseline). The ON plan must switch to
+  `Index range scan on tt using idx_abc over (2 <= a <= 4), with index
+  condition: ((tt.c = 50) and (tt.a between 2 and 4))` as the
+  range-candidate preview rewards the only index that can push
+  `c = 50` into the engine.
+- **Case 5a** (range + full-prefix keyparts, reward must NOT fire) --
+  `WHERE a BETWEEN 2 AND 4 AND b = 3 AND c = 50`: the range binds
+  every keypart the optimizer can exploit, so `bound_keyparts ==
+  user_defined_key_parts` and the preview gate skips the reward. Plan
+  must match the community baseline and must not change with the
+  feature flag.
+- **Case 5b** (remaining WHERE column off-index) --
+  `WHERE a BETWEEN 2 AND 4 AND d = 7`: `d` is not a keypart of any
+  index; the subset check in the preview must fail, so the planner
+  still falls back to a Table scan exactly like `icp_cost_based=off`.
 
 Also keep the baseline `main.1st` green, plus the broader ICP suites
 (`innodb_icp`, `innodb_icp_all`, `innodb_icp_none`, `range_icp`,

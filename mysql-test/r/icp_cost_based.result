@@ -279,19 +279,34 @@ EXPLAIN
     -> Index lookup on tt using idx_a (a=4)  (cost=X rows=N)
 
 #
-# Case 5 (issue-1 range form, KNOWN LIMITATION):
+# Case 5 (issue-1 range form, FIXED via range-optimizer ICP preview):
 #   Leading-key range + trailing-key equality without any index hint --
 #   this is the single-table shape of the customer_fund_daily_statement
-#   reproducer. Same class of problem as Case 4 (range on leading key
-#   instead of an equality), and again the feature flag must not be
-#   able to move the needle until issue 1 is fixed.
+#   reproducer.
 #
-#   We print the plan twice to confirm icp_cost_based=off and
-#   icp_cost_based=on produce exactly the same access method today.
-#   When issue 1 is fixed the icp_cost_based=on plan should become:
-#     "Index range scan on tt using idx_abc over (...),
-#        with index condition: (tt.c = 50 and tt.a between 2 and 4)"
-#   (exact text depends on how range optimizer prints the ranges).
+#   The range optimizer estimates `a BETWEEN 2 AND 4` to return about
+#   60% of the table, which makes every candidate range scan's cost
+#   (including idx_abc's) higher than the table-scan baseline. Before
+#   the fix, all candidates were rejected with "cause: cost" inside
+#   analyzing_range_alternatives and best_access_path fell back to a
+#   Table scan -- so ICP was never given a chance, even though c=50
+#   would push the row lookup down to ~1% of the range.
+#
+#   The fix teaches get_key_scans_params() to compute an ICP-adjusted
+#   "effective cost" for candidates that could push trailing-keypart
+#   predicates into the engine (gates mirror Case 4: feature on,
+#   engine supports HA_DO_INDEX_COND_PUSHDOWN, at least one trailing
+#   keypart is unbound, every WHERE column outside the range prefix
+#   lives on this index). The effective cost only drives the "which
+#   candidate wins" comparison; path->cost keeps the handler-reported
+#   value so downstream cost accounting stays identical.
+#
+#   Expected:
+#     - icp_cost_based=off -> legacy plan (Table scan + server-side
+#       Filter on (c, a)), unchanged across releases;
+#     - icp_cost_based=on  -> "Index range scan on tt using idx_abc
+#       over (...), with index condition: (tt.c = 50 and tt.a between
+#       2 and 4)".
 #
 SET optimizer_switch=
 'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
@@ -306,7 +321,46 @@ SET optimizer_switch=
 EXPLAIN FORMAT=TREE
 SELECT * FROM tt WHERE a BETWEEN 2 AND 4 AND c = 50;
 EXPLAIN
--> Filter: ((tt.c = 50) and (tt.a between 2 and 4))  (cost=X rows=N)
+-> Index range scan on tt using idx_abc over (2 <= a <= 4), with index condition: ((tt.c = 50) and (tt.a between 2 and 4))  (cost=X rows=N)
+
+#
+# Case 5a (range + full-prefix keyparts, reward must NOT fire):
+#   When the range AND every trailing keypart of idx_abc are pinned
+#   (a BETWEEN 2 AND 4 AND b = 3 AND c = 50), there is no "remaining"
+#   column set for ICP to absorb -- the range itself already binds
+#   all the keyparts the range optimizer can exploit. The preview
+#   gate must skip this candidate. Plan should be the same with and
+#   without icp_cost_based.
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a BETWEEN 2 AND 4 AND b = 3 AND c = 50;
+EXPLAIN
+-> Index range scan on tt using idx_abc over (2 <= a <= 4 AND b = 3 AND c = 50), with index condition: ((tt.c = 50) and (tt.b = 3) and (tt.a between 2 and 4))  (cost=X rows=N)
+
+#
+# Case 5b (remaining WHERE columns not on any index, reward must NOT
+# fire):
+#   `d` is not part of any index. The preview gate must refuse to
+#   reward idx_a / idx_ab / idx_abc because {d} is not a subset of
+#   any of their keypart sets. Plan must therefore match the
+#   icp_cost_based=off baseline (Table scan).
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a BETWEEN 2 AND 4 AND d = 7;
+EXPLAIN
+-> Filter: ((tt.d = 7) and (tt.a between 2 and 4))  (cost=X rows=N)
+    -> Table scan on tt  (cost=X rows=N)
+
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a BETWEEN 2 AND 4 AND d = 7;
+EXPLAIN
+-> Filter: ((tt.d = 7) and (tt.a between 2 and 4))  (cost=X rows=N)
     -> Table scan on tt  (cost=X rows=N)
 
 DROP TABLE tt, t3, t2, t1;
