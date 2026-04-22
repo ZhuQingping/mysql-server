@@ -30,6 +30,8 @@
 
 ## 执行流程
 
+0. `find_best_ref()` 中：**在** `best_access_path()` 的访问方法擂台选出 ref 赢家**之前**，对每个 ref 候选预演一次 ICP 收益，并反馈到该候选自己的代价里——防止最窄的那把索引凭空赢下擂台（**issue-1 ref 形式**，详见后文"ref 候选的基于代价 ICP"一节）。
+
 1. `best_access_path()` 中：
    - 确定候选索引（`ref` 用到的 key，或者被选中的 range key）；
    - 跑一遍资格预检；
@@ -48,19 +50,40 @@
 
    目前规划器**只会写 ON 决策**，所以 "存在决策且为 OFF" 这一分支在当前实现中是"空转"的。保留该分支的代码，是为了将来校准更准的代价模型时可以直接启用"基于代价关闭 ICP"，不需要再动数据结构。
 
+## ref 候选的基于代价 ICP（issue-1 ref 形式）
+
+**动机**：当多把索引共享相同的起始键（例如 `idx_a(a)`、`idx_ab(a, b)`、`idx_abc(a, b, c)`），`find_best_ref()` 原本的擂台只按 fanout 和索引宽度比较。对于 `WHERE a = 4 AND c = 6`，三把索引在 `a = 4` 上都产出相同的 fanout，最窄的 `idx_a` 就赢下擂台——**只有 `idx_abc` 才可能把 `c = 6` 交给引擎用 ICP 过滤**，但这份收益完全被现有擂台忽视。上一节 `best_access_path()` 里的 `icp_cost_based=on` 奖励**来得太晚**，赢家已经选完，救不回来。
+
+**设计**：在 `find_best_ref()` 的每个候选循环里，**在 `cur_ref_cost` 算出之后、进入擂台比较之前**，对这个具体候选预演它的 ICP 收益：
+
+- 若 `icp_cost_based=off`，或 `can_consider_icp_cost()` 否决，跳过；
+- 若该 key 没有未绑定 keypart（ref 已经用完所有 keypart），跳过；
+- 计算"**被 WHERE 引用但未被当前 ref 绑定**"的列集合；若该集合**不是**当前候选 keypart 集合的子集（说明有列根本不在这把索引上，ICP 无法下推），跳过；
+- 否则通过 `Item::get_filtering_effect()` 估算剩余谓词的过滤比例（注意要排除已经被 ref 绑定的列，避免双重计数），传入 `should_enable_icp_by_cost()` 以 `rows_fetched = cur_fanout`、`filter_effect = remaining_filter` 做正式判定；判定为有收益时，从 `cur_ref_cost` 中减去 `cost_if_with_icp − cost_if_no_icp`（一个负值）。
+
+**安全性保证**：预演**只会降低候选代价，永不抬高**。任何一道 gate 不通过时，`cur_ref_cost` 与旧行为逐字节一致，所以拿不到 ICP 收益的候选（比如上面例子里的 `idx_a` / `idx_ab`，因为 `{c}` 不是它们 keypart 集合的子集）自动走"不变"分支。
+
+**适用范围**：这轮改动只修复 issue 1 的 **ref 子树**。range 子树（对应 `main.icp_cost_based` 的 Case 5）仍是已知限制，作为 follow-up 单独推进。
+
 ## 可观测性
 
 当 `icp_cost_based=on` 时，optimizer trace 中会出现以下字段：
 
-- `icp_cost_based`：是否进入了基于代价的 ICP 评估；
-- `icp_cost_keyno`：评估基于的候选 key；
-- `icp_rows_fetched`、`icp_filter_effect`：模型使用的行数基线与过滤比例；
-- `icp_cost_if_disabled`、`icp_cost_if_enabled`：两种方案的估算代价；
-- `icp_enabled`：代价模型自己的判定结果；
-- `icp_cost_adjustment` / `icp_adjusted_read_cost`：**仅在 ON 分支**（即给了成本奖励）时出现；
-- `icp_fallback_to_default`：**仅在模型无法证明收益**、规划器主动回落到社区默认路径时出现。
+- **扫描路径判定**（由 `best_access_path()` 输出）：
+  - `icp_cost_based`：是否进入了基于代价的 ICP 评估；
+  - `icp_cost_keyno`：评估基于的候选 key；
+  - `icp_rows_fetched`、`icp_filter_effect`：模型使用的行数基线与过滤比例；
+  - `icp_cost_if_disabled`、`icp_cost_if_enabled`：两种方案的估算代价；
+  - `icp_enabled`：代价模型自己的判定结果；
+  - `icp_cost_adjustment` / `icp_adjusted_read_cost`：**仅在 ON 分支**（即给了成本奖励）时出现；
+  - `icp_fallback_to_default`：**仅在模型无法证明收益**、规划器主动回落到社区默认路径时出现。
+- **ref 擂台预演**（由 `find_best_ref()` 对每个候选 key 输出）：
+  - `icp_cost_based`；
+  - `icp_rows_fetched`、`icp_filter_effect`；
+  - `icp_cost_if_disabled`、`icp_cost_if_enabled`、`icp_enabled`；
+  - `icp_cost_adjustment` / `icp_adjusted_ref_cost`：**仅当该候选被打了折扣时**才出现。
 
-当 `icp_cost_based=off` 时，上述字段都不会出现。
+当 `icp_cost_based=off` 时，上述字段都不会出现。若某个 ref 候选没有通过预演 gate（例如没有未绑定的 keypart，或剩余 WHERE 列不在这把索引上），则该候选不会输出 ref 预演那一组字段——这也是 gate 命中情况的可观测信号。
 
 `push_index_cond()` 这一层仍然会在"检测到已写入 OFF 决策并因此跳过下推"时输出 `not_pushed_due_to_icp_cost`。由于当前规划器不会写入 OFF 决策，这个 token 在实际运行中**不应出现**，MTR 用例据此做反向断言以作为回归保护。
 
@@ -68,10 +91,14 @@
 
 使用 `main.icp_cost_based` 用例验证：
 
-- **OFF 路径**：完全与社区行为一致（新字段都不出现，`EXPLAIN` 计划与社区基线相同）；
-- **ON 路径 / ref 访问**：新 trace 字段被打印出来，并且 `EXPLAIN FORMAT=TREE` 中仍然保留 `with index condition: ...` 注解；
-- **ON 路径 / range 扫描（issue-2 回归保护）**：`FORCE INDEX` + leading 列 range + 尾列等值的组合必须仍然产生
-  `Index range scan on ... with index condition: ...`；同时断言 `icp_suppressed_by_cost_model = 0`，防止本特性悄悄关掉该形态的 ICP。
+- **Case 1**：OFF + FORCE INDEX + ref —— 与社区行为一致，新字段都不出现。
+- **Case 2**：ON + FORCE INDEX + ref —— 新 trace 字段被打印，并且 `EXPLAIN FORMAT=TREE` 中仍然保留 `with index condition: ...`。
+- **Case 3**（issue-2 回归保护）：ON + FORCE INDEX + leading 列 range + 尾列等值 —— 必须仍然产生 `Index range scan on ... with index condition: ...`，同时 `icp_suppressed_by_cost_model = 0`，防止特性悄悄关掉本形态的 ICP。
+- **Case 4**（issue-1 ref 形式）：ON + **不带任何 index hint**、三把索引共享起始键 `a` —— 计划必须从 OFF 基线 `Filter(c=6) + Index lookup on idx_a` 切换为 `Index lookup on idx_abc, with index condition: (tt.c = 6)`。配套的 `FORCE INDEX(idx_abc)` 对照说明执行层自始至终都支持这个 plan，问题一直只在"访问方法选择"层面。
+- **Case 4a**（feature-gate 保护）：同样的查询，把 `icp_cost_based` 切回 `off`，必须恢复 OFF 基线 plan——防止"默认变 ON"或"优化器状态残留"造成意外回归。
+- **Case 4b**（全 keypart 被 ref 绑定，预演必须**不触发**）：`WHERE a = 4 AND b = 5 AND c = 6` —— `idx_abc` 的所有 keypart 都被 ref 占用，没有剩余 WHERE 列可让 ICP 吸收；Gate 3 的 `remaining_cond_cols` 为空，预演应直接跳过，plan 保持与社区一致（`idx_ab` lookup + server-side Filter）。
+- **Case 4c**（剩余列不在任何索引上，预演必须**不触发**）：`WHERE a = 4 AND d = 7` —— `d` 不是任何索引的 keypart，`remaining_cond_cols ⊆ key_columns` 子集检查对所有候选都失败；OFF 与 ON 产生完全相同的 plan。
+- **Case 5**（issue-1 range 形式，**已知限制**）：ON + 不带 hint、leading 列 range + 尾列等值 —— 目前仍回落到 table scan（与 OFF 一致），**故意把"坏"基线钉住**，这样未来 range 形式修复后，直接表现为 `.result` diff，起到"进度信号"作用。
 
 同时保证 `main.1st` 以及更广的 ICP 用例集绿灯：
 `innodb_icp`、`innodb_icp_all`、`innodb_icp_none`、`range_icp`、`func_in_icp`、`null_key_icp_innodb`。
