@@ -369,42 +369,48 @@ EXPLAIN
 # -----------------------------------------------------------------------
 # Multi-table guardrails (completeness check):
 #
-# The ICP cost reward touches pos->read_cost but must never mutate
-# pos->rows_fetched or pos->filter_effect. The join-order DP, semijoin
-# strategy selection, derived-table materialization etc. all read the
-# latter two fields; if we accidentally let the reward propagate there,
-# we would silently perturb every cost-based decision downstream.
+# The cost-based ICP reward is written into pos->read_cost on the
+# winning scan/range path (sql_planner.cc, see best_access_path
+# scan branch). It is deliberately NOT written into
+# pos->rows_fetched / pos->filter_effect. That separation means:
 #
-# These cases stress 3 join shapes; each SELECT forces tt to fetch
-# `payload` so the chosen idx_abc scan is NOT covering -- otherwise
-# the engine skips ICP entirely (Gate G2 in range_icp_preview /
-# can_consider_icp_cost) and the guardrail loses its teeth.
+#   * per-table row-count / selectivity estimates stay identical
+#     on vs off, so the row-count side of join-order DP is stable;
+#   * per-table read_cost DOES carry the reward, and because DP
+#     sums pos->read_cost across the prefix, the reward CAN in
+#     principle change join order, join method, and semijoin
+#     strategy when the OFF-baseline gap between alternatives is
+#     small.
 #
-# Cases:
-#   6a: 2-table inner join with STRAIGHT_JOIN, tt is the inner
-#       (non-driving) side. Plan must be identical on/off at
-#       join-order level; only the access method on tt may upgrade
-#       when the reward is on (table scan / idx_a -> idx_abc + ICP).
-#   6b: 2-table inner join, optimizer picks join order freely. The
-#       reward may legitimately upgrade tt's access method; however
-#       the JOIN ORDER itself (which table drives) must not flip --
-#       that would mean rows_fetched / filter_effect leaked into
-#       join-order DP.
-#   6c: EXISTS subquery. This case deliberately documents an
-#       EXPECTED behavior change: semijoin strategy selection
-#       (MaterializeLookup / FirstMatch / DuplicateWeedout) reads
-#       `pos->read_cost` through `advance_sj_state()`, and that
-#       field DOES get the ICP reward. So the reward can legitimately
-#       flip the chosen strategy when two candidates are close in
-#       cost. This is part of the cost-based design contract, not a
-#       regression. What we guarantee here is still strong:
-#         * the chosen inner-table access method is never worse;
-#         * rows_fetched / filter_effect for both tables are
-#           identical on vs off (they are stored on POSITION as the
-#           pre-reward values -- see pos->filter_effect/rows_fetched
-#           assignments in best_access_path).
-#       Operators should know: enabling icp_cost_based on a workload
-#       with semijoin subqueries MAY change strategy selection.
+# These cases map out what actually happens at each scale:
+#
+#   6a: 2-table join with STRAIGHT_JOIN pinning the order. The
+#       reward can only change the inner table's access method.
+#
+#   6b: 2-table join, free order, row-count gap HUGE (5 vs 10000).
+#       The reward cannot overcome that gap -- join order stays
+#       put. This is NOT a universal "join order cannot flip"
+#       guarantee; see Case 6d for the counter-example.
+#
+#   6c: EXISTS subquery. Semijoin strategy selection reads
+#       pos->read_cost through advance_sj_state(), so the reward
+#       CAN flip the chosen strategy (MaterializeLookup <->
+#       FirstMatch etc.). Both plans are correct; operators
+#       enabling the feature on workloads with EXISTS / IN
+#       subqueries should expect some strategy migration.
+#
+#   6d: 2-table join, free order, row-count equal (10000 vs
+#       10000), only index coverage asymmetric (tt has idx_abc,
+#       tu only idx_a). Close baseline + big reward on tt's
+#       range-ICP side -> the optimizer flips the join method
+#       (hash -> NL), the driver (tt -> tu), AND tt's access
+#       method (table scan -> idx_abc + ICP) all at once. This
+#       is the expected consequence of cost-based reasoning.
+#
+# Every SELECT on tt / tu below fetches `payload` to force a
+# non-covering scan; otherwise the engine would skip ICP entirely
+# (gate G2 in range_icp_preview / can_consider_icp_cost) and the
+# guardrail would lose its teeth.
 # -----------------------------------------------------------------------
 #
 CREATE TABLE tj_driver (
@@ -450,11 +456,19 @@ EXPLAIN
 
 #
 # Case 6b: No STRAIGHT_JOIN -- the optimizer picks join order
-#          freely. Both plans must keep tj_driver (5 rows, tiny)
-#          as the driver; tt (10 000 rows) as the inner side. If
-#          the reward leaked into rows_fetched / filter_effect,
-#          tt's estimated fanout would change and the DP could
-#          swap the driver -- which we explicitly watch for here.
+#          freely. With the baseline gap HUGE (5 rows vs 10 000
+#          rows) the reward cannot tip the DP, so both OFF and
+#          ON pick the same join order (tj_driver driving, tt
+#          inner). The reward DOES still upgrade tt's access
+#          method from idx_a to idx_abc + ICP on the inner side.
+#
+#          Important: this case is NOT a general "join order
+#          cannot flip" guarantee -- see Case 6d for the
+#          counter-example where the baseline is close and the
+#          reward DOES flip the driver. What Case 6b really
+#          asserts is that, when rows_fetched/filter_effect are
+#          the dominating signal (orders-of-magnitude row-count
+#          gap), the reward does not secretly mutate them.
 #
 SET optimizer_switch=
 'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
@@ -526,4 +540,94 @@ EXPLAIN
 Warnings:
 Note	1276	Field or reference 'test.d.a' of SELECT #2 was resolved in SELECT #1
 DROP TABLE tj_driver;
+#
+# Case 6d (multi-table guardrail, EXPECTED behavior change across
+# join method, join order AND access method):
+#
+#   This case DELIBERATELY demonstrates that the cost-based ICP
+#   reward CAN reshape an entire multi-table plan when the two
+#   sides are close in baseline cost. It documents the limit of
+#   the "non-pollution" guarantee given by Case 6b: rows_fetched
+#   and filter_effect stay intact, but pos->read_cost DOES carry
+#   the reward and that is enough to change join-order DP when
+#   the baseline gap is small.
+#
+#   Setup: tt and tu have identical row count (10000), identical
+#   column distributions, and the same join key shape. The only
+#   asymmetry is INDEX COVERAGE -- tt has idx_abc(a,b,c) so
+#   `a between 2 and 4 AND c = 50` is ICP-eligible; tu only has
+#   idx_a(a), so its trailing c=50 cannot be pushed via the
+#   range-optimizer preview.
+#
+#   Observed plans recorded below:
+#     - OFF: Hash join, tt and tu both via table scan + SQL-layer
+#       filters. No index chosen on either side.
+#     - ON:  Nested loop, tu as driver (table scan + filter),
+#       tt as inner via idx_abc + ICP (`a=tu.a, with index
+#       condition: (tt.c = 50)`). tt's ICP reward made the
+#       per-probe inner cost cheap enough that BOTH the join
+#       algorithm (hash -> NL) AND the driver (tt -> tu) changed,
+#       AND tt's own access method switched from table scan to
+#       idx_abc + ICP.
+#
+#   All three changes are legitimate cost-based outcomes. We
+#   pin the exact plan strings so any future unintended movement
+#   (either direction) surfaces at --record time and can be
+#   triaged intentionally.
+#
+CREATE TABLE tu (
+a INT,
+b INT,
+c INT,
+d INT,
+payload CHAR(32) NOT NULL DEFAULT '',
+INDEX idx_a(a)
+) ENGINE=InnoDB;
+SET cte_max_recursion_depth = 20000;
+INSERT INTO tu (a, b, c, d, payload)
+WITH RECURSIVE number_series AS (
+SELECT 1 AS n
+UNION ALL
+SELECT n + 1 FROM number_series WHERE n < 10000
+)
+SELECT
+n %    5 + 1,
+n %   10 + 1,
+n %  100 + 1,
+n % 1000 + 1,
+LPAD(n, 32, 'y')
+FROM number_series;
+SET cte_max_recursion_depth = @saved_cte_max_recursion_depth;
+ANALYZE TABLE tu;
+Table	Op	Msg_type	Msg_text
+test.tu	analyze	status	OK
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+EXPLAIN FORMAT=TREE
+SELECT tt.payload, tu.payload
+FROM tt JOIN tu ON tu.a = tt.a
+WHERE tt.a BETWEEN 2 AND 4 AND tt.c = 50
+AND tu.a BETWEEN 2 AND 4 AND tu.c = 50;
+EXPLAIN
+-> Inner hash join (tu.a = tt.a)  (cost=X rows=N)
+    -> Filter: (tu.c = 50)  (cost=X rows=N)
+        -> Table scan on tu  (cost=X rows=N)
+    -> Hash
+        -> Filter: ((tt.c = 50) and (tt.a between 2 and 4) and (tt.a between 2 and 4))  (cost=X rows=N)
+            -> Table scan on tt  (cost=X rows=N)
+
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+EXPLAIN FORMAT=TREE
+SELECT tt.payload, tu.payload
+FROM tt JOIN tu ON tu.a = tt.a
+WHERE tt.a BETWEEN 2 AND 4 AND tt.c = 50
+AND tu.a BETWEEN 2 AND 4 AND tu.c = 50;
+EXPLAIN
+-> Nested loop inner join  (cost=X rows=N)
+    -> Filter: ((tu.c = 50) and (tu.a between 2 and 4) and (tu.a between 2 and 4) and (tu.a is not null))  (cost=X rows=N)
+        -> Table scan on tu  (cost=X rows=N)
+    -> Index lookup on tt using idx_abc (a=tu.a), with index condition: (tt.c = 50)  (cost=X rows=N)
+
+DROP TABLE tu;
 DROP TABLE tt, t3, t2, t1;

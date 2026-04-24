@@ -20,6 +20,7 @@
 - **必须由一个显式开关控制**是否启用新行为。
 - **执行期的安全校验必须保留**。
 - **严格改进（strict improvement）**：当代价模型**不能明确证明** ICP 有收益时，必须回落到社区默认的下推流程——可以不奖励有利 plan，但绝不允许"悄悄关掉本该下推的 ICP"。
+- **有界奖励（bounded adjustment）**：任何一次 ICP 成本奖励都不得超过"无 ICP 基线"的一个固定比例（详见"ICP 奖励硬封顶"一节）。这样即便 `Item::get_filtering_effect()` 对某种谓词形态严重低估了存活行数，单次估算偏差也不会让某条路径的成本被"打到接近 0"，进而独自支配 join-order DP。
 
 ## 特性开关
 
@@ -87,6 +88,24 @@
 
 **与步骤 1 的关系**：若 range 优化器因为这次预演而挑出了之前被 table-scan 挤掉的候选，后续流程照常运转：`best_access_path()` 收到的 `AccessPath` 携带 handler 原始代价；步骤 1 的 scan-path 奖励仍可能再叠一轮；`push_index_cond()` 照常执行真正的下推。**不需要改数据结构。**
 
+## ICP 奖励硬封顶
+
+`Item::get_filtering_effect()` 是"尽力而为"的选择性估算器。遇到复合谓词、索引表达式边界、相关列这些形态，它可能显著**低估**存活行数——这会放大上面三处预演的 ICP 奖励。若不加约束，一次估算偏差就能让某条路径的奖励后成本降到接近 0，独自主导 join-order DP，把"轻微选择性失真"放大成"执行计划结构级的跳变"。
+
+**规则**：任何一次奖励调整必须满足
+`|adjustment| <= kIcpBenefitCapRatio * cost_if_no_icp`
+其中 `kIcpBenefitCapRatio = 0.5`。换句话说，**单次 ICP 奖励最多抹去原路径一半的成本**，剩下的那一半仍然会被 join-order 规划看到。一旦预演得到的奖励会超过这条上限，就按 50% 夹住——候选依然在擂台里以一个"有界的优势"参与胜负比较。
+
+**三处落点**（覆盖所有奖励通道，任何一处都不能绕过）：
+
+- **scan/range 路径奖励**（`best_access_path()`）：在把 `cost_if_with_icp - cost_if_no_icp` 写进 `best_read_cost` 之前夹住。
+- **ref 擂台奖励**（`find_best_ref()`）：在把同一差值写进 `cur_ref_cost` 之前夹住。
+- **range 候选预演**（`range_icp_preview()`）：`effective_cost` 的下界为 `(1 - kRangeIcpBenefitCapRatio) * original_cost`（range 形式用的是镜像常量，以便两条通路的预算等价）。
+
+**50% 怎么来的**：实测上，一个被很好利用的 ICP 谓词大约能节省 30%–80% 的回表；50% 足以让真正的赢家保住赢的幅度，又窄到让"单次选择性估算失真"不能独自重塑整个 plan。未来若线上 telemetry 显示这个门槛偏宽/偏窄，只需调整这两个常量再重录基线；想放宽上限，前提是先证明估算器本身更可信。
+
+**可观测性**：真正触发 50% 夹子时，对应 trace 点会额外打一条 `icp_cost_adjustment_capped: true`，与通常的 `icp_cost_adjustment` / `icp_adjusted_*_cost` 并列。这个字段是"ICP 拿到的奖励为什么比原始估算小"的主要排查入口——如果某个按直觉该翻盘的计划最终没翻，看到这个 flag 就说明估算器 + 封顶一起守住了底线。
+
 ## 可观测性
 
 当 `icp_cost_based=on` 时，optimizer trace 中会出现以下字段：
@@ -98,17 +117,20 @@
   - `icp_cost_if_disabled`、`icp_cost_if_enabled`：两种方案的估算代价；
   - `icp_enabled`：代价模型自己的判定结果；
   - `icp_cost_adjustment` / `icp_adjusted_read_cost`：**仅在 ON 分支**（即给了成本奖励）时出现；
+  - `icp_cost_adjustment_capped`：**仅当 50% 硬封顶真的夹住了本次奖励时**出现（参见"ICP 奖励硬封顶"一节）；
   - `icp_fallback_to_default`：**仅在模型无法证明收益**、规划器主动回落到社区默认路径时出现。
 - **ref 擂台预演**（由 `find_best_ref()` 对每个候选 key 输出）：
   - `icp_cost_based`；
   - `icp_rows_fetched`、`icp_filter_effect`；
   - `icp_cost_if_disabled`、`icp_cost_if_enabled`、`icp_enabled`；
-  - `icp_cost_adjustment` / `icp_adjusted_ref_cost`：**仅当该候选被打了折扣时**才出现。
+  - `icp_cost_adjustment` / `icp_adjusted_ref_cost`：**仅当该候选被打了折扣时**才出现；
+  - `icp_cost_adjustment_capped`：**仅当 50% 硬封顶真的夹住了本候选的奖励时**出现。
 - **range 擂台预演**（由 `get_key_scans_params()` 对每个候选 key 输出，嵌在 `analyzing_range_alternatives` 之内）：
   - `icp_cost_based`；
   - `icp_rows_fetched`、`icp_filter_effect`；
   - `icp_cost_if_disabled`、`icp_cost_if_enabled`、`icp_enabled`；
-  - `icp_cost_adjustment` / `icp_adjusted_range_cost`：**仅当该候选被打了折扣时**才出现。
+  - `icp_cost_adjustment` / `icp_adjusted_range_cost`：**仅当该候选被打了折扣时**才出现；
+  - `icp_cost_adjustment_capped`：**仅当 50% 硬封顶真的夹住了本候选的奖励时**出现。
 
 当 `icp_cost_based=off` 时，上述字段都不会出现。若某个 ref 候选没有通过预演 gate（例如没有未绑定的 keypart，或剩余 WHERE 列不在这把索引上），则该候选不会输出 ref 预演那一组字段——这也是 gate 命中情况的可观测信号。
 

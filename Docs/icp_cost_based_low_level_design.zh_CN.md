@@ -51,6 +51,29 @@
 - 当 `cost_if_with_icp < cost_if_no_icp` 时，返回 `true`；
 - 否则返回 `false`；调用方会把这种情况解释为"**不写 ON 决策**"，而不是"**写 OFF 决策**"（见 2.3 / 第 4 节）。
 
+#### 2.2.2 奖励幅度硬封顶
+
+文件：`sql/sql_planner.cc`
+
+`should_enable_icp_by_cost()` 与 `range_icp_preview()` 给出的原始 `adjustment` 在被写回任何 cost 字段之前，统一过一道"硬封顶"：
+
+- 常量 `kIcpBenefitCapRatio = 0.5`（`sql_planner.cc` 文件局部）；
+- helper `cap_icp_benefit_adjustment(adjustment, cost_if_no_icp, capped_out)`：
+  - 约定 `adjustment <= 0`（调用方总是传 `cost_if_with_icp - cost_if_no_icp`）；
+  - 当 `cost_if_no_icp <= 0` 或 `adjustment >= 0` 时，原样透传；
+  - 否则按 `|adjustment| <= kIcpBenefitCapRatio * cost_if_no_icp` 夹住，置 `*capped_out = true`，返回夹后的值；
+  - 未夹住时 `*capped_out = false`，返回原值。
+
+该封顶在**三处**奖励落点同步应用，确保没有任何一条奖励通路可以绕过：
+
+1. `best_access_path()` 的 scan/range 奖励（见 2.3）：夹后的值才写进 `best_read_cost`；
+2. `find_best_ref()` 的 ref 擂台奖励（见 2.4）：夹后的值才写进 `cur_ref_cost`；
+3. `range_icp_preview()` 的 range 候选预演（见 2.5）：用镜像常量 `kRangeIcpBenefitCapRatio = 0.5`，把 `effective_cost` 底线锁在 `(1 - kRangeIcpBenefitCapRatio) * original_cost`。
+
+封顶触发时，对应 trace 点打 `icp_cost_adjustment_capped = true`（三处 trace 字段列表见 2.3 / 2.4 / 2.5）。
+
+**为什么选 50%**：实测上被很好利用的 ICP 谓词能节省 30%–80% 的回表；50% 足以让真正赢家的优势继续成立，又窄到让单次 `get_filtering_effect()` 失真不能"独自把某条路径打到接近 0"去重塑 join-order DP。后续若 telemetry 表明这个门槛偏宽/偏窄，只需改这两个常量并重录基线；如果要放宽，前提是先证明估算器比现在更可靠。
+
 #### 2.2.1 range 扫描被选中时的基线修正
 
 当 range 扫描在 `best_access_path()` 的 scan-vs-ref 比较中胜出，规划器会：
@@ -83,8 +106,8 @@
   - 设置 `POSITION::icp_decision_made = true`、
     `POSITION::use_cost_based_icp = true`、
     `POSITION::icp_keyno = icp_keyno`；
-  - 给 cost 奖励：`best_read_cost += (cost_if_with_icp - cost_if_no_icp)`；
-  - 打印 `icp_cost_adjustment` 与 `icp_adjusted_read_cost`；
+  - 把原始差值 `cost_if_with_icp - cost_if_no_icp` 经过 `cap_icp_benefit_adjustment(..., cost_if_no_icp, &capped)`（见 2.2.2）得到夹后的奖励，再加到 `best_read_cost` 上；
+  - 打印 `icp_cost_adjustment` 与 `icp_adjusted_read_cost`；若封顶触发，额外打 `icp_cost_adjustment_capped = true`；
 - **如果模型未能证明 ICP 有收益**：
   - 保持 `POSITION::icp_decision_made = false`；
   - 打印 `icp_fallback_to_default = true`；
@@ -113,8 +136,7 @@
    `Item::get_filtering_effect(thd, tab_map, /*read_tables=*/0, &ref_bound_cols, tab->records())`
    估算"剩余谓词"的整体过滤比例。把 `ref_bound_cols` 作为"忽略集合"传进去，避免把已经被 ref 消化掉的谓词重复计数。若结果不在 `(0, 1)` 开区间，则估算不可用，直接跳过。
 
-5. **cost 决策**。调用 `should_enable_icp_by_cost(tab, key, prefix_rowcount, cur_fanout, remaining_filter, &no, &with)`；若返回 `true`，按
-   `cur_ref_cost += (with - no)`（负值 → 降 cost）调整本候选的 ref cost，同时逐候选打印 trace 字段：`icp_cost_based`、`icp_rows_fetched`、`icp_filter_effect`、`icp_cost_if_disabled`、`icp_cost_if_enabled`、`icp_enabled`、`icp_cost_adjustment`、`icp_adjusted_ref_cost`。
+5. **cost 决策**。调用 `should_enable_icp_by_cost(tab, key, prefix_rowcount, cur_fanout, remaining_filter, &no, &with)`；若返回 `true`，把原始差值 `with - no` 经 `cap_icp_benefit_adjustment(..., no, &capped)`（见 2.2.2）得到夹后的奖励，再加到 `cur_ref_cost` 上。同时逐候选打印 trace 字段：`icp_cost_based`、`icp_rows_fetched`、`icp_filter_effect`、`icp_cost_if_disabled`、`icp_cost_if_enabled`、`icp_enabled`、`icp_cost_adjustment`、`icp_adjusted_ref_cost`；当本候选的封顶真正触发时，额外打 `icp_cost_adjustment_capped = true`。
 
 离开该代码块前，**务必清空 `tmp_set`**，防止后续迭代或别的调用方看到脏位图。
 
@@ -157,7 +179,8 @@
      `cost_if_with_icp = original_cost * remaining_filter + cost_model->row_evaluate_cost(found_records * kRangeIcpEvalCpuFactor)`，
      其中 `kRangeIcpEvalCpuFactor = 0.25`（文件局部常量，对应 `should_enable_icp_by_cost()` 里 `kIcpEvalCpuFactor` 的思想）；
    - 只有当 `cost_if_with_icp` **严格小于** `original_cost` 才返回 `cost_if_with_icp`，否则返回 `original_cost`；
-   - 给出奖励时，打印 trace 字段 `icp_cost_based`、`icp_rows_fetched`、`icp_filter_effect`、`icp_cost_if_disabled`、`icp_cost_if_enabled`、`icp_enabled`、`icp_cost_adjustment`、`icp_adjusted_range_cost`。
+   - 应用硬封顶（`kRangeIcpBenefitCapRatio = 0.5`，见 2.2.2）：若候选的 `cost_if_with_icp` 跌破 `(1 - kRangeIcpBenefitCapRatio) * original_cost`，返回值被夹到该下限（`effective_cost = 最低允许值`），并记录一个"已封顶"的内部标记；
+   - 给出奖励时，打印 trace 字段 `icp_cost_based`、`icp_rows_fetched`、`icp_filter_effect`、`icp_cost_if_disabled`、`icp_cost_if_enabled`、`icp_enabled`、`icp_cost_adjustment`、`icp_adjusted_range_cost`；当封顶触发时，额外打 `icp_cost_adjustment_capped = true`。
 
 **在 `get_key_scans_params()` 里的集成**：每个候选循环中维护两个运行值：
 
@@ -278,6 +301,6 @@
 ## 6. 后续工作（follow-up）
 
 - **Hypergraph 优化器**：当前两套预演分别挂在经典的 `find_best_ref()` 与 `get_key_scans_params()` 路径上；hypergraph 路径自己有另一套访问方法选择代码，ref 形式与 range 形式**都需要**额外接一次。
-- **selectivity 校准**：`Item::get_filtering_effect()` 偏保守。若上线后的 trace 数据显示在某些谓词形态上系统性地给多/给少奖励，可以在 gate 逻辑不动的前提下把估算器换成更好的；接口约束是"对 `(0,1)` 开区间的单一浮点数 selectivity 作答"。range 形式目前用的是文件局部常量 `kRangeIcpEvalCpuFactor`，两边稳定一段时间后可考虑与规划器侧的 `kIcpEvalCpuFactor` 统一。
+- **selectivity 校准**：`Item::get_filtering_effect()` 偏保守。若上线后的 trace 数据显示在某些谓词形态上系统性地给多/给少奖励，可以在 gate 逻辑不动的前提下把估算器换成更好的；接口约束是"对 `(0,1)` 开区间的单一浮点数 selectivity 作答"。range 形式目前用的是文件局部常量 `kRangeIcpEvalCpuFactor`，两边稳定一段时间后可考虑与规划器侧的 `kIcpEvalCpuFactor` 统一。一旦 `icp_cost_adjustment_capped` 的 telemetry 显示当前 50% 预算过紧/过松，可同步调整 `kIcpBenefitCapRatio` / `kRangeIcpBenefitCapRatio`（2.2.2）并重录基线。
 - **基于代价的 OFF 决策**：2.3 节出于谨慎目前不写 OFF 决策；等代价模型校准更稳后可以打开——执行期（第 4 节）的 OFF 分支已经就位，无需再改数据结构。
 - **非命中情况的 trace**：range 形式 helper 目前只在"被奖励"时输出 trace。后续可以把 skip 原因（`"covering"`、`"fully_bound"`、`"not_on_index"` 等）也补上，方便不读 C++ 也能定位 gate 用例行为。

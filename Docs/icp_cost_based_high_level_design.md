@@ -27,6 +27,11 @@ and rollback guarantees:
   helps, fall back to the community default pushdown. The feature may only
   reward beneficial plans; it must never silently disable a pushdown that
   the community code would have performed.
+- **Bounded adjustment**: any single ICP cost reward is hard-capped at a
+  fixed fraction of the no-ICP baseline (see "ICP benefit hard cap"). A
+  selectivity mis-estimate by `Item::get_filtering_effect()` can therefore
+  never single-handedly collapse a path's cost to zero and dominate the
+  join-order DP.
 
 ## Feature Gate
 
@@ -187,6 +192,55 @@ handler-reported cost, the scan-path ICP preview of step 1 may still
 apply its own reward on top, and `push_index_cond()` performs the
 actual pushdown as usual. No data structure changes are required.
 
+## ICP benefit hard cap
+
+`Item::get_filtering_effect()` is a best-effort selectivity estimator.
+For composite predicates, index-expression boundaries, or correlated
+columns it can substantially under-estimate the surviving row count,
+which translates into an over-stated ICP reward inside the three
+preview points above. Without a ceiling, a single mis-estimate could
+reduce a path's post-reward cost to nearly zero and dominate the
+join-order DP, turning a subtle selectivity miss into a fundamentally
+different plan.
+
+**Rule.** Every applied adjustment obeys:
+`|adjustment| <= kIcpBenefitCapRatio * cost_if_no_icp`,
+where `kIcpBenefitCapRatio = 0.5`. In other words, a single ICP
+reward may wipe out at most half of the original path's cost; the
+remaining half stays visible to join-order planning. When a preview
+would otherwise exceed that ceiling, the reward is clamped to the
+50% limit and the path still wins/loses the tournament on a bounded
+advantage.
+
+**Where the cap is applied.** The cap lives at all three integration
+points so no reward pathway can bypass it:
+
+- Scan/range path reward in `best_access_path()` -- clamps
+  `cost_if_with_icp - cost_if_no_icp` before it is added to
+  `best_read_cost`.
+- Ref tournament reward in `find_best_ref()` -- clamps the same
+  difference before it is added to `cur_ref_cost` for the candidate.
+- Range-candidate preview in `range_icp_preview()` -- floors
+  `effective_cost` at `(1 - kRangeIcpBenefitCapRatio) * original_cost`
+  (the range-form ratio mirrors the planner constant so the two
+  pathways cap at the same budget).
+
+**Calibration rationale.** A well-filtered ICP predicate empirically
+saves 30%-80% of row lookups, so 50% is wide enough that genuine
+wins keep their win margin but narrow enough that a single
+selectivity miss cannot reshape a whole plan. A follow-up can lower
+the cap once we collect telemetry on the real distribution of
+`Item::get_filtering_effect()` errors; raising it would require first
+demonstrating that the estimator itself is safer.
+
+**Observability.** When the cap actually kicks in, the optimizer trace
+emits `icp_cost_adjustment_capped: true` alongside the usual
+`icp_cost_adjustment` / `icp_adjusted_*_cost` fields. This flag is the
+primary signal for diagnosing "why did ICP get less of a reward than
+the raw cost model suggested"; its presence on a plan the operator
+thinks should have flipped is a hint that the estimator and the cap
+together are holding the line.
+
 ## Observability
 
 With `icp_cost_based=on`, optimizer trace includes:
@@ -201,6 +255,8 @@ With `icp_cost_based=on`, optimizer trace includes:
   - `icp_enabled`  -- cost model's own opinion about ICP benefit
   - `icp_cost_adjustment` / `icp_adjusted_read_cost` (only when the ON
     path is taken and a cost reward has been applied)
+  - `icp_cost_adjustment_capped` (only when the 50% hard cap actually
+    clamped the reward; see "ICP benefit hard cap")
   - `icp_fallback_to_default` (only when the model could not show a
     benefit and the planner deliberately falls back to community default)
 - Ref-tournament preview (from `find_best_ref()`, per candidate key):
@@ -212,6 +268,8 @@ With `icp_cost_based=on`, optimizer trace includes:
   - `icp_enabled`
   - `icp_cost_adjustment` / `icp_adjusted_ref_cost` (only when the
     candidate received a cost reward)
+  - `icp_cost_adjustment_capped` (only when the 50% hard cap actually
+    clamped the reward for this candidate)
 - Range-tournament preview (from `get_key_scans_params()`, per
   candidate key, nested inside `analyzing_range_alternatives`):
   - `icp_cost_based`
@@ -222,6 +280,8 @@ With `icp_cost_based=on`, optimizer trace includes:
   - `icp_enabled`
   - `icp_cost_adjustment` / `icp_adjusted_range_cost` (only when the
     candidate received a cost reward)
+  - `icp_cost_adjustment_capped` (only when the 50% hard cap actually
+    clamped the reward for this candidate)
 
 With `icp_cost_based=off`, none of these fields appear. A ref candidate
 that does not pass the preview gates (e.g. no unbound keyparts, or

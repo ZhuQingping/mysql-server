@@ -55,6 +55,50 @@ Decision:
 - otherwise return false; the caller interprets this as "no ON decision"
   rather than "persist an OFF decision" (see 2.3 / section 4).
 
+#### 2.2.2 Hard cap on applied adjustment
+
+File: `sql/sql_planner.cc`
+
+Raw adjustments produced by `should_enable_icp_by_cost()` and
+`range_icp_preview()` are fed through a shared hard cap before the
+caller writes them back into any cost field:
+
+- constant `kIcpBenefitCapRatio = 0.5` (file-local, `sql_planner.cc`);
+- helper `cap_icp_benefit_adjustment(adjustment, cost_if_no_icp,
+  capped_out)`:
+  - expects `adjustment <= 0` (callers always pass
+    `cost_if_with_icp - cost_if_no_icp`);
+  - passes the adjustment through unchanged when
+    `cost_if_no_icp <= 0` or `adjustment >= 0`;
+  - otherwise clamps the magnitude so that
+    `|adjustment| <= kIcpBenefitCapRatio * cost_if_no_icp`, sets
+    `*capped_out = true`, and returns the clamped value;
+  - otherwise leaves `*capped_out = false` and returns the original
+    adjustment.
+
+The cap is applied at three integration points so no reward pathway can
+bypass it:
+
+1. Scan/range path reward in `best_access_path()` -- see 2.3; the
+   clamped value is what lands in `best_read_cost`.
+2. Ref tournament reward in `find_best_ref()` -- see 2.4; the clamped
+   value is what lands in `cur_ref_cost`.
+3. Range-candidate preview in `range_icp_preview()` -- see 2.5;
+   uses a mirror constant `kRangeIcpBenefitCapRatio = 0.5` and floors
+   `effective_cost` at `(1 - kRangeIcpBenefitCapRatio) * original_cost`.
+
+When the clamp fires, the corresponding trace point emits
+`icp_cost_adjustment_capped = true` (see trace field lists in 2.3 /
+2.4 / 2.5).
+
+Why 50%: empirically well-filtered ICP predicates save 30%-80% of row
+lookups; 50% is wide enough to preserve meaningful wins but narrow
+enough that a single `get_filtering_effect()` miss cannot single-
+handedly collapse a path to near-zero cost and reshape the join-order
+DP. Tightening the cap in the future requires only changing the
+two constants and rebaselining; loosening requires first showing that
+the estimator is more trustworthy than it is today.
+
 #### 2.2.1 Baseline for range-scan-chosen paths
 
 `best_access_path()` overwrites `rows_fetched` with `rows_after_filtering`
@@ -95,8 +139,12 @@ In `best_access_path()`:
   - set `POSITION::icp_decision_made = true`,
     `POSITION::use_cost_based_icp = true`,
     `POSITION::icp_keyno = icp_keyno`,
-  - apply cost reward: `best_read_cost += (cost_if_with_icp - cost_if_no_icp)`,
-  - emit `icp_cost_adjustment` / `icp_adjusted_read_cost`;
+  - run the raw adjustment `cost_if_with_icp - cost_if_no_icp` through
+    `cap_icp_benefit_adjustment(..., cost_if_no_icp, &capped)` (see
+    2.2.2);
+  - apply the (possibly clamped) reward to `best_read_cost`;
+  - emit `icp_cost_adjustment` / `icp_adjusted_read_cost`, plus
+    `icp_cost_adjustment_capped = true` when the cap fired;
 - if the model does not show a benefit:
   - leave `POSITION::icp_decision_made = false`,
   - emit `icp_fallback_to_default = true`,
@@ -148,12 +196,14 @@ comparison, preview each candidate's ICP benefit and feed it back into
 
 5. **Cost decision.** Call `should_enable_icp_by_cost(tab, key,
    prefix_rowcount, cur_fanout, remaining_filter, &no, &with)`. If the
-   call returns true, apply
-   `cur_ref_cost += (with - no)` (a negative adjustment that reduces
-   cost), and emit per-candidate trace fields: `icp_cost_based`,
-   `icp_rows_fetched`, `icp_filter_effect`, `icp_cost_if_disabled`,
-   `icp_cost_if_enabled`, `icp_enabled`, `icp_cost_adjustment`,
-   `icp_adjusted_ref_cost`.
+   call returns true, pass the raw `with - no` through
+   `cap_icp_benefit_adjustment(..., no, &capped)` (see 2.2.2) and apply
+   the clamped value to `cur_ref_cost`. Emit per-candidate trace
+   fields: `icp_cost_based`, `icp_rows_fetched`, `icp_filter_effect`,
+   `icp_cost_if_disabled`, `icp_cost_if_enabled`, `icp_enabled`,
+   `icp_cost_adjustment`, `icp_adjusted_ref_cost`; additionally emit
+   `icp_cost_adjustment_capped = true` when the cap fired for this
+   candidate.
 
 Always clear `tmp_set` before leaving the block so later iterations and
 other callers see it empty.
@@ -243,11 +293,17 @@ that only influences tournament comparisons.
      `should_enable_icp_by_cost()`);
    - returns `cost_if_with_icp` only when it is strictly smaller
      than `original_cost`; otherwise returns `original_cost`;
+   - enforces the hard cap (`kRangeIcpBenefitCapRatio = 0.5`, see
+     2.2.2): if the candidate's `cost_if_with_icp` dips below
+     `(1 - kRangeIcpBenefitCapRatio) * original_cost`, the helper
+     floors the returned value at that floor (`effective_cost = min
+     allowed value`) and sets an internal "capped" flag;
    - when a reward is applied, emits trace fields
      `icp_cost_based`, `icp_rows_fetched`,
      `icp_filter_effect`, `icp_cost_if_disabled`,
      `icp_cost_if_enabled`, `icp_enabled`,
-     `icp_cost_adjustment`, `icp_adjusted_range_cost`.
+     `icp_cost_adjustment`, `icp_adjusted_range_cost`; additionally
+     emits `icp_cost_adjustment_capped = true` when the cap fired.
 
 **Integration in `get_key_scans_params()`.** Inside the per-index
 loop:
@@ -459,7 +515,10 @@ Regression sanity:
   swap in a better estimator without reshaping the gate logic. The
   range-form helper also uses a standalone `kRangeIcpEvalCpuFactor`;
   a future unification with the planner-side `kIcpEvalCpuFactor`
-  would be cleaner once both have soaked long enough.
+  would be cleaner once both have soaked long enough. Tighten /
+  loosen `kIcpBenefitCapRatio` / `kRangeIcpBenefitCapRatio` (2.2.2)
+  in lockstep once `icp_cost_adjustment_capped` telemetry suggests
+  the current 50% budget is too tight or too loose.
 - **Cost-based OFF decisions.** Section 2.3 deliberately does not
   persist OFF decisions today. A future, better-calibrated cost
   model can opt in without further refactoring; the execution-side

@@ -259,17 +259,34 @@ static double range_icp_preview(THD *thd, TABLE *table, uint keynr,
     return original_cost;
   }
 
+  /*
+    Hard-cap the range-level ICP reward: the effective_cost cannot drop
+    below (1 - kRangeIcpBenefitCapRatio) * original_cost. Mirrors the
+    sql_planner.cc cap so that get_filtering_effect() mis-estimates cannot
+    single-handedly reshape range-scan selection.
+  */
+  static constexpr double kRangeIcpBenefitCapRatio = 0.5;
+  const double min_effective_cost =
+      (1.0 - kRangeIcpBenefitCapRatio) * original_cost;
+  double effective_cost = cost_if_with_icp;
+  bool icp_capped = false;
+  if (effective_cost < min_effective_cost) {
+    effective_cost = min_effective_cost;
+    icp_capped = true;
+  }
+
   trace_idx->add("icp_cost_based", true);
   trace_idx->add("icp_rows_fetched", full_rows);
   trace_idx->add("icp_filter_effect", remaining_filter);
   trace_idx->add("icp_cost_if_disabled", cost_if_no_icp);
   trace_idx->add("icp_cost_if_enabled", cost_if_with_icp);
   trace_idx->add("icp_enabled", true);
-  trace_idx->add("icp_cost_adjustment", cost_if_with_icp - cost_if_no_icp);
-  trace_idx->add("icp_adjusted_range_cost", cost_if_with_icp);
+  trace_idx->add("icp_cost_adjustment", effective_cost - cost_if_no_icp);
+  if (icp_capped) trace_idx->add("icp_cost_adjustment_capped", true);
+  trace_idx->add("icp_adjusted_range_cost", effective_cost);
 
   cond_set_guard();
-  return cost_if_with_icp;
+  return effective_cost;
 }
 
 }  // namespace

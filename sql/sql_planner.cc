@@ -163,6 +163,37 @@ double find_cost_for_ref(const THD *thd, TABLE *table, unsigned keyno,
   return min(table->file->page_read_cost(keyno, num_rows), worst_seeks);
 }
 
+/*
+  Hard cap on the magnitude of any single ICP cost adjustment, expressed as
+  a fraction of the pre-adjustment baseline (cost_if_no_icp / original_cost).
+  `Item::get_filtering_effect()` can substantially under-estimate the
+  surviving row count for composite predicates; without a cap, a bad
+  selectivity estimate could wipe out most of a path's cost and flip the
+  optimizer to a fundamentally different plan. 50% leaves room for genuine
+  wins (a well-filtered ICP typically saves 30%~80% of row lookups) while
+  ensuring no single reward alone can dominate the DP.
+*/
+static constexpr double kIcpBenefitCapRatio = 0.5;
+
+/*
+  Clamp an ICP benefit adjustment so that its magnitude does not exceed
+  kIcpBenefitCapRatio * cost_if_no_icp. The adjustment is expected to be
+  <= 0 (with-ICP cheaper than without). Returns the capped adjustment and
+  writes an advisory flag through `capped_out` for optimizer-trace use.
+*/
+static double cap_icp_benefit_adjustment(double adjustment,
+                                         double cost_if_no_icp,
+                                         bool *capped_out) {
+  if (capped_out != nullptr) *capped_out = false;
+  if (!(adjustment < 0.0) || !(cost_if_no_icp > 0.0)) return adjustment;
+  const double max_savings = kIcpBenefitCapRatio * cost_if_no_icp;
+  if (-adjustment > max_savings) {
+    if (capped_out != nullptr) *capped_out = true;
+    return -max_savings;
+  }
+  return adjustment;
+}
+
 /**
   Lightweight pre-check for whether ICP can be considered for cost modeling
   on a given key. This intentionally mirrors stable gates in
@@ -872,11 +903,15 @@ Key_use *Optimize_table_order::find_best_ref(
             trace_access_idx.add("icp_enabled", icp_helps);
 
             if (icp_helps) {
-              const double icp_benefit_adjustment =
-                  ref_cost_if_with_icp - ref_cost_if_no_icp;
+              bool icp_benefit_capped = false;
+              const double icp_benefit_adjustment = cap_icp_benefit_adjustment(
+                  ref_cost_if_with_icp - ref_cost_if_no_icp,
+                  ref_cost_if_no_icp, &icp_benefit_capped);
               cur_ref_cost += icp_benefit_adjustment;
               trace_access_idx.add("icp_cost_adjustment",
                                    icp_benefit_adjustment);
+              if (icp_benefit_capped)
+                trace_access_idx.add("icp_cost_adjustment_capped", true);
               trace_access_idx.add("icp_adjusted_ref_cost", cur_ref_cost);
             }
           }
@@ -1473,12 +1508,19 @@ void Optimize_table_order::best_access_path(JOIN_TAB *tab,
       /*
         Feed the estimated ICP benefit back into access-path cost, so join
         order planning can prefer plans where ICP is expected to help.
+        The adjustment is hard-capped at kIcpBenefitCapRatio of the no-ICP
+        baseline to guard against selectivity mis-estimation.
       */
       icp_decision_made = true;
       use_cost_based_icp = true;
-      const double icp_benefit_adjustment = cost_if_with_icp - cost_if_no_icp;
+      bool icp_benefit_capped = false;
+      const double icp_benefit_adjustment = cap_icp_benefit_adjustment(
+          cost_if_with_icp - cost_if_no_icp, cost_if_no_icp,
+          &icp_benefit_capped);
       best_read_cost += icp_benefit_adjustment;
       trace_access_scan.add("icp_cost_adjustment", icp_benefit_adjustment);
+      if (icp_benefit_capped)
+        trace_access_scan.add("icp_cost_adjustment_capped", true);
       trace_access_scan.add("icp_adjusted_read_cost", best_read_cost);
     } else {
       /*
