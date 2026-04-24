@@ -1,0 +1,49 @@
+---
+description: MySQL 8.0.41 server build & test commands (always-on)
+alwaysApply: true
+---
+
+# 构建 / mtr 铁律
+
+本仓库的编译、链接、mtr 运行，**必须**使用 Ninja 生成器和 `build-ninja/` 目录。不允许在 `build/` 或源码根目录调用 `make` / `mysql-test-run.pl` 运行服务端测试。
+
+## 增量编译 mysqld
+
+```bash
+cd /Users/zhuqingping/Work/Database/MySQL/mysql-server/build-ninja
+ninja mysqld -j 16
+```
+
+- `ninja` 可直接做增量，改一个 TU 一般在 10~60 秒级别完成。
+- 全量重编可用 `ninja -j 16`；安装树用 `ninja install -j 16`。
+
+## 运行 mtr
+
+```bash
+cd /Users/zhuqingping/Work/Database/MySQL/mysql-server/build-ninja/mysql-test
+./mtr [test_name]            # 例: ./mtr main.icp_cost_based
+./mtr [test_name] --record   # 需要刷新基线时
+```
+
+禁止在源码根目录的 `mysql-test/` 下直接 `perl mysql-test-run.pl`——会指向错误或未更新的二进制。
+
+## 反模式（禁用）
+
+| 做法 | 问题 |
+|------|------|
+| `make -j16 mysqld` in `build/` | 仓库里曾经有一份 Unix Makefiles 生成器，极慢（~19 min vs ninja ~8 s 同一增量），已移除 |
+| `cmake -G "Unix Makefiles"` in `build/` | 与 AGENTS.md 约定冲突，不要恢复 |
+| 在源码根目录跑 mysql-test-run.pl | 可能用到未重编的旧二进制 |
+
+## 需要重配时的完整 cmake 命令
+
+见 `AGENTS.md` §编译命令，或直接执行 `/Users/zhuqingping/Work/Database/MySQL/mysql-8.0.41/compile_source_code.sh`。核心一行（build-ninja 目录下）：
+
+```bash
+cmake -G Ninja .. \
+  -DWITH_BOOST=/Users/zhuqingping/Work/DataBase/MySQL/boost/boost_1_77_0 \
+  -DBISON_EXECUTABLE=/opt/homebrew/opt/bison/bin/bison \
+  -DCMAKE_INSTALL_PREFIX=/Users/zhuqingping/Work/DataBase/MySQL/mysql-8.0.41/install \
+  -DCMAKE_BUILD_TYPE=debug \
+  -DWITH_UNIT_TESTS=0 -DWITH_ASAN=0
+```

@@ -52,6 +52,7 @@
 #include "sql/enum_query_type.h"
 #include "sql/field.h"
 #include "sql/handler.h"
+#include "sql/icp_cost_based.h"
 #include "sql/item.h"
 #include "sql/item_cmpfunc.h"
 #include "sql/join_optimizer/access_path.h"
@@ -161,122 +162,6 @@ double find_cost_for_ref(const THD *thd, TABLE *table, unsigned keyno,
     return table_read_cost.total_cost();
   }
   return min(table->file->page_read_cost(keyno, num_rows), worst_seeks);
-}
-
-/*
-  Hard cap on the magnitude of any single ICP cost adjustment, expressed as
-  a fraction of the pre-adjustment baseline (cost_if_no_icp / original_cost).
-  `Item::get_filtering_effect()` can substantially under-estimate the
-  surviving row count for composite predicates; without a cap, a bad
-  selectivity estimate could wipe out most of a path's cost and flip the
-  optimizer to a fundamentally different plan. 50% leaves room for genuine
-  wins (a well-filtered ICP typically saves 30%~80% of row lookups) while
-  ensuring no single reward alone can dominate the DP.
-*/
-static constexpr double kIcpBenefitCapRatio = 0.5;
-
-/*
-  Clamp an ICP benefit adjustment so that its magnitude does not exceed
-  kIcpBenefitCapRatio * cost_if_no_icp. The adjustment is expected to be
-  <= 0 (with-ICP cheaper than without). Returns the capped adjustment and
-  writes an advisory flag through `capped_out` for optimizer-trace use.
-*/
-static double cap_icp_benefit_adjustment(double adjustment,
-                                         double cost_if_no_icp,
-                                         bool *capped_out) {
-  if (capped_out != nullptr) *capped_out = false;
-  if (!(adjustment < 0.0) || !(cost_if_no_icp > 0.0)) return adjustment;
-  const double max_savings = kIcpBenefitCapRatio * cost_if_no_icp;
-  if (-adjustment > max_savings) {
-    if (capped_out != nullptr) *capped_out = true;
-    return -max_savings;
-  }
-  return adjustment;
-}
-
-/**
-  Lightweight pre-check for whether ICP can be considered for cost modeling
-  on a given key. This intentionally mirrors stable gates in
-  QEP_TAB::push_index_cond().
-*/
-static bool can_consider_icp_cost(const JOIN_TAB *tab, uint keyno) {
-  TABLE *const table = tab->table();
-  const JOIN *const join = tab->join();
-  THD *const thd = join->thd;
-
-  if (!thd->optimizer_switch_flag(OPTIMIZER_SWITCH_ICP_COST_BASED)) return false;
-
-  if (keyno == MAX_KEY) return false;
-
-  if (!(table->file->index_flags(keyno, 0, true) & HA_DO_INDEX_COND_PUSHDOWN))
-    return false;
-
-  if (!hint_key_state(thd, tab->table_ref, keyno, ICP_HINT_ENUM,
-                      OPTIMIZER_SWITCH_INDEX_CONDITION_PUSHDOWN))
-    return false;
-
-  if (thd->lex->sql_command == SQLCOM_UPDATE_MULTI ||
-      thd->lex->sql_command == SQLCOM_DELETE_MULTI)
-    return false;
-
-  if (tab->has_guarded_conds()) return false;
-
-  // Virtual generated columns are not supported for ICP.
-  if (table->vfield && table->index_contains_some_virtual_gcol(keyno))
-    return false;
-
-  if (keyno == table->s->primary_key && table->file->primary_key_is_clustered())
-    return false;
-
-  // If key-only read is possible, make_join_readinfo() will skip ICP anyway.
-  if (table->covering_keys.is_set(keyno) && !table->no_keyread) return false;
-
-  return true;
-}
-
-/**
-  Estimate whether ICP should be enabled for the chosen access path.
-  The estimate compares:
-    - no ICP: row lookup + SQL-layer predicate evaluation on fetched rows
-    - with ICP: fewer row lookups + SQL-layer eval on remaining rows +
-      engine-side predicate eval on index entries.
-*/
-static bool should_enable_icp_by_cost(const JOIN_TAB *tab, uint keyno,
-                                      double prefix_rowcount,
-                                      double rows_fetched, float filter_effect,
-                                      double *cost_if_no_icp,
-                                      double *cost_if_with_icp) {
-  const JOIN *const join = tab->join();
-  const Cost_model_server *const cost_model = join->cost_model();
-
-  const double bounded_filter = std::max(0.0, std::min(1.0, (double)filter_effect));
-  const double rows_after_filter = rows_fetched * bounded_filter;
-  const double filtered_out_rows = rows_fetched - rows_after_filter;
-
-  // No meaningful filtering potential.
-  if (filtered_out_rows <= 0.0) return false;
-
-  // Approximate row retrieval cost for one fetched row.
-  const double row_lookup_cost =
-      find_cost_for_ref(join->thd, tab->table(), keyno, 1.0, tab->worst_seeks);
-
-  const double no_icp_lookup_cost =
-      prefix_rowcount * rows_fetched * row_lookup_cost;
-  const double no_icp_eval_cost =
-      cost_model->row_evaluate_cost(prefix_rowcount * rows_fetched);
-
-  // Model engine-side ICP eval as cheaper than SQL-layer eval.
-  static constexpr double kIcpEvalCpuFactor = 0.25;
-  const double with_icp_lookup_cost =
-      prefix_rowcount * rows_after_filter * row_lookup_cost;
-  const double with_icp_eval_cost =
-      cost_model->row_evaluate_cost(prefix_rowcount * rows_after_filter) +
-      cost_model->row_evaluate_cost(prefix_rowcount * rows_fetched *
-                                    kIcpEvalCpuFactor);
-
-  *cost_if_no_icp = no_icp_lookup_cost + no_icp_eval_cost;
-  *cost_if_with_icp = with_icp_lookup_cost + with_icp_eval_cost;
-  return *cost_if_with_icp < *cost_if_no_icp;
 }
 
 /**
@@ -821,103 +706,19 @@ Key_use *Optimize_table_order::find_best_ref(
       into the engine), the narrower index loses that filtering
       opportunity entirely, yet the loss is invisible to this loop.
 
-      Here we give the wider index a "preview" of its ICP benefit:
-
-        1. Collect the set of WHERE-columns that are NOT bound by the
-           current ref keyparts (i.e. predicates the ref access cannot
-           absorb).
-        2. If all of those columns are covered by the remaining keyparts
-           of this index, the whole remaining-WHERE selectivity can be
-           pushed down via ICP (the engine can evaluate it).
-        3. Estimate that selectivity with the same machinery used by
-           calculate_condition_filter() -- Item::get_filtering_effect().
-        4. Feed (rows_fetched=cur_fanout, filter_effect=estimate) into
-           should_enable_icp_by_cost(). If the model says ICP pays off,
-           subtract the benefit from cur_ref_cost so this candidate can
-           win the ref tournament below.
-
-      We ONLY reduce cost, never increase it, and we bail out
-      conservatively when any input is missing -- so the legacy path is
-      preserved bit-for-bit when the new logic has no confident estimate.
+      Delegated to icp_cost_based::preview_ref_candidate(), which
+      identifies the predicates not bound by the current ref keyparts,
+      checks whether they all live on this index's trailing keyparts,
+      estimates their selectivity via Item::get_filtering_effect(), and
+      feeds the result into the cost model. On an ON verdict it reduces
+      (capped) `cur_ref_cost` so this candidate can win the ref
+      tournament below. Any inability to produce a confident estimate
+      leaves the tournament cost untouched, preserving the legacy path.
     */
-    if (cur_keytype != FULLTEXT && can_consider_icp_cost(tab, key) &&
-        cur_fanout > 0.0 && tab->join()->where_cond != nullptr &&
-        !bitmap_is_clear_all(&table->cond_set)) {
-      const bool has_unbound_keyparts =
-          found_part !=
-          LOWER_BITS(key_part_map, actual_key_parts(keyinfo));
-      if (has_unbound_keyparts) {
-        // Build the set of this key's keyparts (columns on index).
-        assert(bitmap_is_clear_all(&table->tmp_set));
-        for (uint i = 0; i < actual_key_parts(keyinfo); i++) {
-          bitmap_set_bit(&table->tmp_set,
-                         keyinfo->key_part[i].field->field_index());
-        }
-
-        // Subset check: every column that has a predicate AND is not
-        // bound by ref must live on this index.
-        char refbuf[MAX_FIELDS / 8];
-        my_bitmap_map *const refbits =
-            static_cast<my_bitmap_map *>(static_cast<void *>(&refbuf));
-        MY_BITMAP ref_bound_cols;
-        bitmap_init(&ref_bound_cols, refbits, table->s->fields);
-        for (uint kp = 0; kp < actual_key_parts(keyinfo); kp++) {
-          if (found_part & (key_part_map{1} << kp)) {
-            bitmap_set_bit(&ref_bound_cols,
-                           keyinfo->key_part[kp].field->field_index());
-          }
-        }
-
-        char rembuf[MAX_FIELDS / 8];
-        my_bitmap_map *const rembits =
-            static_cast<my_bitmap_map *>(static_cast<void *>(&rembuf));
-        MY_BITMAP remaining_cond_cols;
-        bitmap_init(&remaining_cond_cols, rembits, table->s->fields);
-        bitmap_copy(&remaining_cond_cols, &table->cond_set);
-        bitmap_subtract(&remaining_cond_cols, &ref_bound_cols);
-
-        const bool remaining_on_index = !bitmap_is_clear_all(&remaining_cond_cols) &&
-            bitmap_is_subset(&remaining_cond_cols, &table->tmp_set);
-
-        if (remaining_on_index) {
-          // Columns already consumed by the ref key must be excluded
-          // from get_filtering_effect() to avoid double-counting them.
-          const float remaining_filter =
-              tab->join()->where_cond->get_filtering_effect(
-                  tab->join()->thd, tab->table_ref->map(),
-                  /*read_tables=*/0, &ref_bound_cols,
-                  static_cast<double>(tab->records()));
-
-          if (remaining_filter > 0.0f && remaining_filter < 1.0f) {
-            double ref_cost_if_no_icp = 0.0;
-            double ref_cost_if_with_icp = 0.0;
-            const bool icp_helps = should_enable_icp_by_cost(
-                tab, key, prefix_rowcount, cur_fanout, remaining_filter,
-                &ref_cost_if_no_icp, &ref_cost_if_with_icp);
-
-            trace_access_idx.add("icp_cost_based", true);
-            trace_access_idx.add("icp_rows_fetched", cur_fanout);
-            trace_access_idx.add("icp_filter_effect", remaining_filter);
-            trace_access_idx.add("icp_cost_if_disabled", ref_cost_if_no_icp);
-            trace_access_idx.add("icp_cost_if_enabled", ref_cost_if_with_icp);
-            trace_access_idx.add("icp_enabled", icp_helps);
-
-            if (icp_helps) {
-              bool icp_benefit_capped = false;
-              const double icp_benefit_adjustment = cap_icp_benefit_adjustment(
-                  ref_cost_if_with_icp - ref_cost_if_no_icp,
-                  ref_cost_if_no_icp, &icp_benefit_capped);
-              cur_ref_cost += icp_benefit_adjustment;
-              trace_access_idx.add("icp_cost_adjustment",
-                                   icp_benefit_adjustment);
-              if (icp_benefit_capped)
-                trace_access_idx.add("icp_cost_adjustment_capped", true);
-              trace_access_idx.add("icp_adjusted_ref_cost", cur_ref_cost);
-            }
-          }
-        }
-        bitmap_clear_all(&table->tmp_set);
-      }
+    if (cur_keytype != FULLTEXT) {
+      icp_cost_based::preview_ref_candidate(tab, key, found_part,
+                                            prefix_rowcount, cur_fanout,
+                                            &trace_access_idx, &cur_ref_cost);
     }
 
     /*
@@ -1217,11 +1018,6 @@ void Optimize_table_order::best_access_path(JOIN_TAB *tab,
   const Cost_model_server *const cost_model = join->cost_model();
 
   float filter_effect = 1.0;
-  bool icp_decision_made = false;
-  bool use_cost_based_icp = true;
-  uint icp_keyno = MAX_KEY;
-  double cost_if_no_icp = 0.0;
-  double cost_if_with_icp = 0.0;
 
   thd->m_current_query_partial_plans++;
 
@@ -1447,92 +1243,16 @@ void Optimize_table_order::best_access_path(JOIN_TAB *tab,
         false, false, trace_access_scan);
 
   /*
-    Make a cost-based ICP decision for the chosen access method, if applicable.
-    Decision is persisted in POSITION and later copied to JOIN_TAB.
-
-    Design notes (issue 2 fix):
-    1) For a range-scan-chosen path, `rows_fetched` has been overwritten with
-       `rows_after_filtering` (which already applies the full WHERE filter),
-       and `filter_effect` collapses to ~1.0 because it is defined as
-       `min(1, found_records * full_filter / rows_after_filtering)`. Using
-       those values directly in the ICP benefit model causes
-       `filtered_out_rows == 0` and the model always concludes "ICP not
-       beneficial" -- even when ICP would save most of the row lookups.
-       Rebuild an index-scan-output baseline using `tab->found_records` for
-       that case.
-
-    2) Only persist an ON decision. When the cost model cannot positively
-       show that ICP helps (including the "unreliable filter_effect" cases),
-       we deliberately leave `icp_decision_made = false` so that
-       `QEP_TAB::push_index_cond()` falls back to the community default
-       pushdown path. Without this safety net, an inaccurate cost estimate
-       can silently disable ICP and regress plans that used to be fast.
+    Make a cost-based ICP decision for the chosen access method, if
+    applicable, and persist it into POSITION so it can be copied to the
+    final JOIN_TAB. The helper also reduces `best_read_cost` (subject
+    to the ICP benefit hard cap) when it decides ICP should be ON, so
+    the decision feeds back into join-order DP. See
+    Docs/icp_cost_based_*.md and sql/icp_cost_based.h.
   */
-  if (best_ref != nullptr) {
-    icp_keyno = best_ref->key;
-  } else if (tab->range_scan() != nullptr &&
-             calc_join_type(tab->range_scan()) == JT_RANGE) {
-    icp_keyno = used_index(tab->range_scan());
-  }
-
-  if (can_consider_icp_cost(tab, icp_keyno)) {
-    // Build a reliable baseline for ICP benefit estimation.
-    double icp_rows_fetched = rows_fetched;
-    float icp_filter_effect = filter_effect;
-    const bool range_scan_chosen =
-        (best_ref == nullptr && tab->range_scan() != nullptr);
-    if (range_scan_chosen && tab->found_records > 0 &&
-        rows_fetched < static_cast<double>(tab->found_records)) {
-      // `rows_fetched` here was set to `rows_after_filtering`, i.e. the
-      // post-WHERE estimate. ICP actually operates on the raw rows produced
-      // by the index scan, so use `tab->found_records` (index-output rows)
-      // as the baseline and derive an index-level filter effect.
-      icp_rows_fetched = static_cast<double>(tab->found_records);
-      icp_filter_effect =
-          static_cast<float>(std::min(1.0, rows_fetched / icp_rows_fetched));
-    }
-
-    const bool icp_favored_by_cost = should_enable_icp_by_cost(
-        tab, icp_keyno, prefix_rowcount, icp_rows_fetched, icp_filter_effect,
-        &cost_if_no_icp, &cost_if_with_icp);
-
-    trace_access_scan.add("icp_cost_based", true);
-    trace_access_scan.add("icp_cost_keyno", icp_keyno);
-    trace_access_scan.add("icp_rows_fetched", icp_rows_fetched);
-    trace_access_scan.add("icp_filter_effect", icp_filter_effect);
-    trace_access_scan.add("icp_cost_if_disabled", cost_if_no_icp);
-    trace_access_scan.add("icp_cost_if_enabled", cost_if_with_icp);
-    trace_access_scan.add("icp_enabled", icp_favored_by_cost);
-
-    if (icp_favored_by_cost) {
-      /*
-        Feed the estimated ICP benefit back into access-path cost, so join
-        order planning can prefer plans where ICP is expected to help.
-        The adjustment is hard-capped at kIcpBenefitCapRatio of the no-ICP
-        baseline to guard against selectivity mis-estimation.
-      */
-      icp_decision_made = true;
-      use_cost_based_icp = true;
-      bool icp_benefit_capped = false;
-      const double icp_benefit_adjustment = cap_icp_benefit_adjustment(
-          cost_if_with_icp - cost_if_no_icp, cost_if_no_icp,
-          &icp_benefit_capped);
-      best_read_cost += icp_benefit_adjustment;
-      trace_access_scan.add("icp_cost_adjustment", icp_benefit_adjustment);
-      if (icp_benefit_capped)
-        trace_access_scan.add("icp_cost_adjustment_capped", true);
-      trace_access_scan.add("icp_adjusted_read_cost", best_read_cost);
-    } else {
-      /*
-        Do NOT record an OFF decision. The current cost model is not yet
-        reliable enough to safely override the community default ICP
-        pushdown. Falling back here avoids regressions like the
-        FORCE INDEX + range scan case where `filter_effect` is estimated
-        as ~1.0 by construction.
-      */
-      trace_access_scan.add("icp_fallback_to_default", true);
-    }
-  }
+  icp_cost_based::preview_scan_or_range(tab, best_ref, pos, prefix_rowcount,
+                                        rows_fetched, filter_effect,
+                                        &trace_access_scan, &best_read_cost);
 
   best_read_cost += derived_mat_cost;
   pos->filter_effect = filter_effect;
@@ -1543,11 +1263,6 @@ void Optimize_table_order::best_access_path(JOIN_TAB *tab,
   pos->ref_depend_map = ref_depend_map;
   pos->loosescan_key = MAX_KEY;
   pos->use_join_buffer = best_uses_jbuf;
-  pos->icp_decision_made = icp_decision_made;
-  pos->use_cost_based_icp = use_cost_based_icp;
-  pos->icp_keyno = icp_keyno;
-  pos->cost_if_no_icp = cost_if_no_icp;
-  pos->cost_if_with_icp = cost_if_with_icp;
 
   if (!best_ref && idx == join->const_tables && table == join->sort_by_table &&
       join->query_expression()->select_limit_cnt >= rows_fetched) {
@@ -1951,11 +1666,7 @@ bool Optimize_table_order::semijoin_loosescan_fill_driving_table_position(
 
   pos->read_cost = DBL_MAX;
   pos->use_join_buffer = false;
-  pos->icp_decision_made = false;
-  pos->use_cost_based_icp = true;
-  pos->icp_keyno = MAX_KEY;
-  pos->cost_if_no_icp = 0.0;
-  pos->cost_if_with_icp = 0.0;
+  icp_cost_based::reset_position_decision(pos);
   /*
     No join buffer, so no need to manage any
     Table_map_restorer object.
