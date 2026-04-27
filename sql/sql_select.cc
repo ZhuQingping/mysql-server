@@ -71,6 +71,7 @@
 #include "sql/field.h"
 #include "sql/filesort.h"  // filesort_free_buffers
 #include "sql/handler.h"
+#include "sql/icp_cost_based.h"
 #include "sql/intrusive_list_iterator.h"
 #include "sql/item.h"
 #include "sql/item_func.h"
@@ -2914,6 +2915,9 @@ void QEP_TAB::push_index_cond(const JOIN_TAB *join_tab, uint keyno,
     return;
 
   TABLE *const tbl = table();
+
+  if (icp_cost_based::legacy_pushdown_suppressed(join_tab, keyno, trace_obj))
+    return;
 
   // Disable ICP for Innodb intrinsic temp table because of performance
   if (tbl->s->db_type() == innodb_hton && tbl->s->tmp_table != NO_TMP_TABLE &&

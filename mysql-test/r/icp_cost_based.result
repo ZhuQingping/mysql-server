@@ -1,0 +1,754 @@
+CREATE TABLE t1 (
+a INT NOT NULL,
+b INT NOT NULL,
+c INT NOT NULL,
+payload CHAR(32) NOT NULL,
+KEY idx_abc (a, b, c)
+) ENGINE=InnoDB;
+CREATE TABLE t2 (
+id INT NOT NULL,
+PRIMARY KEY(id)
+) ENGINE=InnoDB;
+INSERT INTO t2 VALUES (0), (1), (2), (3), (4);
+INSERT INTO t1
+WITH RECURSIVE seq AS (
+SELECT 1 AS n
+UNION ALL
+SELECT n + 1 FROM seq WHERE n < 200
+)
+SELECT
+1 AS a,
+n % 5 AS b,
+IF(n <= 5, 0, 1) AS c,
+LPAD(n, 32, 'x') AS payload
+FROM seq;
+ANALYZE TABLE t1, t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+#
+# Case 1: feature OFF should fallback to legacy behavior.
+#         FORCE INDEX + eq-ref on (a,b) with a non-sargable predicate on c.
+#         Expected plan: ref access on idx_abc with ICP ("Using index condition").
+#
+SET optimizer_trace='enabled=on,one_line=on';
+EXPLAIN FORMAT=TREE
+SELECT SUM(CHAR_LENGTH(payload))
+FROM t1 FORCE INDEX(idx_abc)
+WHERE t1.a = 1 AND t1.b = 1 AND (t1.c + 0) >= 0;
+EXPLAIN
+-> Aggregate: sum(char_length(t1.payload))  (cost=X rows=N)
+    -> Index lookup on t1 using idx_abc (a=1, b=1), with index condition: ((t1.c + 0) >= 0)  (cost=X rows=N)
+
+SELECT SUM(CHAR_LENGTH(payload))
+FROM t1 FORCE INDEX(idx_abc)
+WHERE t1.a = 1 AND t1.b = 1 AND (t1.c + 0) >= 0;
+SUM(CHAR_LENGTH(payload))
+1280
+SELECT
+LOCATE('"icp_cost_based":true', REPLACE(TRACE, ' ', '')) > 0
+AS has_icp_cost_based,
+LOCATE('"icp_enabled":', REPLACE(TRACE, ' ', '')) > 0 AS has_icp_enabled,
+LOCATE('"icp_cost_if_disabled":', REPLACE(TRACE, ' ', '')) > 0
+AS has_icp_cost_if_disabled,
+LOCATE('"icp_cost_if_enabled":', REPLACE(TRACE, ' ', '')) > 0
+AS has_icp_cost_if_enabled
+FROM information_schema.optimizer_trace;
+has_icp_cost_based	has_icp_enabled	has_icp_cost_if_disabled	has_icp_cost_if_enabled
+0	0	0	0
+#
+# Case 2: feature ON should expose cost-based ICP trace fields and
+#         still produce a ref access plan with ICP pushdown.
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+SET optimizer_trace='enabled=on,one_line=on';
+EXPLAIN FORMAT=TREE
+SELECT SUM(CHAR_LENGTH(payload))
+FROM t1 FORCE INDEX(idx_abc)
+WHERE t1.a = 1 AND t1.b = 1 AND (t1.c + 0) = 0;
+EXPLAIN
+-> Aggregate: sum(char_length(t1.payload))  (cost=X rows=N)
+    -> Index lookup on t1 using idx_abc (a=1, b=1), with index condition: ((t1.c + 0) = 0)  (cost=X rows=N)
+
+SELECT SUM(CHAR_LENGTH(payload))
+FROM t1 FORCE INDEX(idx_abc)
+WHERE t1.a = 1 AND t1.b = 1 AND (t1.c + 0) = 0;
+SUM(CHAR_LENGTH(payload))
+32
+SELECT
+LOCATE('"icp_cost_based":true', REPLACE(TRACE, ' ', '')) > 0
+AS has_icp_cost_based,
+LOCATE('"icp_enabled":', REPLACE(TRACE, ' ', '')) > 0 AS has_icp_enabled,
+LOCATE('"icp_cost_if_disabled":', REPLACE(TRACE, ' ', '')) > 0
+AS has_icp_cost_if_disabled,
+LOCATE('"icp_cost_if_enabled":', REPLACE(TRACE, ' ', '')) > 0
+AS has_icp_cost_if_enabled
+FROM information_schema.optimizer_trace;
+has_icp_cost_based	has_icp_enabled	has_icp_cost_if_disabled	has_icp_cost_if_enabled
+1	1	1	1
+#
+# Case 3 (issue-2 regression):
+#   FORCE INDEX + range scan on leading key + equality on trailing index
+#   column. Before the fix the range-scan baseline made filter_effect
+#   collapse to ~1.0 and should_enable_icp_by_cost() always returned
+#   false, so push_index_cond() emitted "not_pushed_due_to_icp_cost"
+#   and skipped pushdown (10x slower vs community default in practice).
+#
+#   Expected plan with icp_cost_based=on: range access on idx_ab with
+#   ICP ("Using index condition") still present.
+#
+CREATE TABLE t3 (
+a INT NOT NULL,
+b INT NOT NULL,
+payload CHAR(32) NOT NULL,
+KEY idx_ab (a, b)
+) ENGINE=InnoDB;
+INSERT INTO t3
+WITH RECURSIVE seq AS (
+SELECT 1 AS n
+UNION ALL
+SELECT n + 1 FROM seq WHERE n < 1000
+)
+SELECT n DIV 10, n MOD 10, LPAD(n, 32, 'x') FROM seq;
+ANALYZE TABLE t3;
+Table	Op	Msg_type	Msg_text
+test.t3	analyze	status	OK
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+SET optimizer_trace='enabled=on,one_line=on';
+EXPLAIN FORMAT=TREE
+SELECT SUM(CHAR_LENGTH(payload))
+FROM t3 FORCE INDEX(idx_ab)
+WHERE a BETWEEN 10 AND 80 AND b = 5;
+EXPLAIN
+-> Aggregate: sum(char_length(t3.payload))  (cost=X rows=N)
+    -> Index range scan on t3 using idx_ab over (10 <= a <= 80 AND b = 5), with index condition: ((t3.b = 5) and (t3.a between 10 and 80))  (cost=X rows=N)
+
+SELECT SUM(CHAR_LENGTH(payload))
+FROM t3 FORCE INDEX(idx_ab)
+WHERE a BETWEEN 10 AND 80 AND b = 5;
+SUM(CHAR_LENGTH(payload))
+2272
+SELECT
+LOCATE('"not_pushed_due_to_icp_cost":true', REPLACE(TRACE, ' ', '')) > 0
+AS icp_suppressed_by_cost_model
+FROM information_schema.optimizer_trace;
+icp_suppressed_by_cost_model
+0
+#
+# -----------------------------------------------------------------------
+# Issue-1 access-path selection coverage:
+#
+# Cases 4 and 5 verify that ICP benefit participates early enough in
+# ref and range candidate selection. With icp_cost_based=off they keep
+# the legacy baseline; with icp_cost_based=on the optimizer should pick
+# the ICP-capable index and expose "with index condition" in the plan.
+# -----------------------------------------------------------------------
+#
+CREATE TABLE tt (
+a INT,
+b INT,
+c INT,
+d INT,
+payload CHAR(32) NOT NULL DEFAULT '',
+INDEX idx_a(a),
+INDEX idx_ab(a, b),
+INDEX idx_abc(a, b, c)
+) ENGINE=InnoDB;
+SET @saved_cte_max_recursion_depth = @@cte_max_recursion_depth;
+SET cte_max_recursion_depth = 20000;
+INSERT INTO tt (a, b, c, d, payload)
+WITH RECURSIVE number_series AS (
+SELECT 1 AS n
+UNION ALL
+SELECT n + 1 FROM number_series WHERE n < 10000
+)
+SELECT
+n %    5 + 1,
+n %   10 + 1,
+n %  100 + 1,
+n % 1000 + 1,
+LPAD(n, 32, 'x')
+FROM number_series;
+SET cte_max_recursion_depth = @saved_cte_max_recursion_depth;
+ANALYZE TABLE tt;
+Table	Op	Msg_type	Msg_text
+test.tt	analyze	status	OK
+#
+# Case 4 (issue-1 ref form):
+#   Three equality-eligible indexes share the leading key `a`: idx_a,
+#   idx_ab, idx_abc. Only idx_abc can turn c=6 into a pushed index
+#   condition (filter ~100x). This case checks whether the ref
+#   tournament can see that benefit before choosing the narrowest
+#   leading-key index.
+#
+#   With icp_cost_based=on, find_best_ref() rewards idx_abc because the
+#   remaining WHERE column set ({c}) lives on that index. idx_a / idx_ab
+#   do not receive the reward, so idx_abc wins the ref tournament.
+#
+#   Expected:
+#     - icp_cost_based=off -> legacy plan ("Index lookup on idx_a" +
+#       server-side Filter on c), unchanged across releases;
+#     - icp_cost_based=on  -> "Index lookup on tt using idx_abc (a=4),
+#       with index condition: (tt.c = 6)".
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a = 4 AND c = 6;
+EXPLAIN
+-> Filter: (tt.c = 6)  (cost=X rows=N)
+    -> Index lookup on tt using idx_a (a=4)  (cost=X rows=N)
+
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a = 4 AND c = 6;
+EXPLAIN
+-> Index lookup on tt using idx_abc (a=4), with index condition: (tt.c = 6)  (cost=X rows=N)
+
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt FORCE INDEX(idx_abc) WHERE a = 4 AND c = 6;
+EXPLAIN
+-> Index lookup on tt using idx_abc (a=4), with index condition: (tt.c = 6)  (cost=X rows=N)
+
+#
+# Case 4a (feature-gate guardrail):
+#   The new ICP cost reward must be strictly gated by
+#   icp_cost_based=on. Re-running the exact same query with the flag
+#   back OFF has to restore the legacy plan. This protects against
+#   accidental ON-by-default changes or stuck optimizer state.
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a = 4 AND c = 6;
+EXPLAIN
+-> Filter: (tt.c = 6)  (cost=X rows=N)
+    -> Index lookup on tt using idx_a (a=4)  (cost=X rows=N)
+
+#
+# Case 4b (full-ref keyparts, reward must NOT fire):
+#   When every keypart of idx_abc is bound by ref (a=4 AND b=5 AND
+#   c=6), there are no unbound WHERE-columns left for ICP to absorb.
+#   The gate in find_best_ref() must detect this and skip the reward;
+#   the plan should be a plain ref/eq_ref on idx_abc without any
+#   "with index condition" text, regardless of icp_cost_based value.
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a = 4 AND b = 5 AND c = 6;
+EXPLAIN
+-> Filter: (tt.c = 6)  (cost=X rows=N)
+    -> Index lookup on tt using idx_ab (a=4, b=5)  (cost=X rows=N)
+
+#
+# Case 4c (remaining WHERE columns not on the index, reward must NOT
+# fire):
+#   Here `d` is NOT a keypart of any index. Even with icp_cost_based
+#   on, the new gate must refuse to reward idx_a / idx_ab / idx_abc,
+#   because {d} is not a subset of any of their keypart sets. The
+#   plan therefore has to match the icp_cost_based=off baseline.
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a = 4 AND d = 7;
+EXPLAIN
+-> Filter: (tt.d = 7)  (cost=X rows=N)
+    -> Index lookup on tt using idx_a (a=4)  (cost=X rows=N)
+
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a = 4 AND d = 7;
+EXPLAIN
+-> Filter: (tt.d = 7)  (cost=X rows=N)
+    -> Index lookup on tt using idx_a (a=4)  (cost=X rows=N)
+
+#
+# Case 5 (issue-1 range form):
+#   Leading-key range + trailing-key equality without any index hint --
+#   this is the single-table shape of the customer_fund_daily_statement
+#   reproducer.
+#
+#   The range optimizer estimates `a BETWEEN 2 AND 4` to return about
+#   60% of the table, which makes every candidate range scan's cost
+#   (including idx_abc's) higher than the table-scan baseline when ICP
+#   benefit is invisible. The range preview gives idx_abc an effective
+#   cost that reflects pushing c=50 into the engine.
+#
+#   The effective cost only drives the "which candidate wins" comparison;
+#   path->cost keeps the handler-reported value so downstream cost
+#   accounting stays identical.
+#
+#   Expected:
+#     - icp_cost_based=off -> legacy plan (Table scan + server-side
+#       Filter on (c, a)), unchanged across releases;
+#     - icp_cost_based=on  -> "Index range scan on tt using idx_abc
+#       over (...), with index condition: (tt.c = 50 and tt.a between
+#       2 and 4)".
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a BETWEEN 2 AND 4 AND c = 50;
+EXPLAIN
+-> Filter: ((tt.c = 50) and (tt.a between 2 and 4))  (cost=X rows=N)
+    -> Table scan on tt  (cost=X rows=N)
+
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a BETWEEN 2 AND 4 AND c = 50;
+EXPLAIN
+-> Index range scan on tt using idx_abc over (2 <= a <= 4), with index condition: ((tt.c = 50) and (tt.a between 2 and 4))  (cost=X rows=N)
+
+#
+# Case 5a (range + full-prefix keyparts, reward must NOT fire):
+#   When the range AND every trailing keypart of idx_abc are pinned
+#   (a BETWEEN 2 AND 4 AND b = 3 AND c = 50), there is no "remaining"
+#   column set for ICP to absorb -- the range itself already binds
+#   all the keyparts the range optimizer can exploit. The preview
+#   gate must skip this candidate. Plan should be the same with and
+#   without icp_cost_based.
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a BETWEEN 2 AND 4 AND b = 3 AND c = 50;
+EXPLAIN
+-> Index range scan on tt using idx_abc over (2 <= a <= 4 AND b = 3 AND c = 50), with index condition: ((tt.c = 50) and (tt.b = 3) and (tt.a between 2 and 4))  (cost=X rows=N)
+
+#
+# Case 5b (remaining WHERE columns not on any index, reward must NOT
+# fire):
+#   `d` is not part of any index. The preview gate must refuse to
+#   reward idx_a / idx_ab / idx_abc because {d} is not a subset of
+#   any of their keypart sets. Plan must therefore match the
+#   icp_cost_based=off baseline (Table scan).
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a BETWEEN 2 AND 4 AND d = 7;
+EXPLAIN
+-> Filter: ((tt.d = 7) and (tt.a between 2 and 4))  (cost=X rows=N)
+    -> Table scan on tt  (cost=X rows=N)
+
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a BETWEEN 2 AND 4 AND d = 7;
+EXPLAIN
+-> Filter: ((tt.d = 7) and (tt.a between 2 and 4))  (cost=X rows=N)
+    -> Table scan on tt  (cost=X rows=N)
+
+#
+# Case 5c (single-table result correctness):
+#   Cases 4/5 assert plan shape. This block uses matching predicates to
+#   prove that icp_cost_based=on and off return identical aggregate
+#   results across ref, range, fully-bound, and off-index gate shapes.
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+SELECT 'ref_nonempty_off' AS scenario, COUNT(*) AS cnt,
+COALESCE(SUM(CHAR_LENGTH(payload)), 0) AS payload_len
+FROM tt
+WHERE a = 4 AND c = 49;
+scenario	cnt	payload_len
+ref_nonempty_off	100	3200
+SELECT 'range_nonempty_off' AS scenario, COUNT(*) AS cnt,
+COALESCE(SUM(CHAR_LENGTH(payload)), 0) AS payload_len
+FROM tt
+WHERE a BETWEEN 2 AND 4 AND c = 49;
+scenario	cnt	payload_len
+range_nonempty_off	100	3200
+SELECT 'full_prefix_off' AS scenario, COUNT(*) AS cnt,
+COALESCE(SUM(CHAR_LENGTH(payload)), 0) AS payload_len
+FROM tt
+WHERE a BETWEEN 2 AND 4 AND b = 9 AND c = 49;
+scenario	cnt	payload_len
+full_prefix_off	100	3200
+SELECT 'off_index_off' AS scenario, COUNT(*) AS cnt,
+COALESCE(SUM(CHAR_LENGTH(payload)), 0) AS payload_len
+FROM tt
+WHERE a BETWEEN 2 AND 4 AND d = 49;
+scenario	cnt	payload_len
+off_index_off	10	320
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+SELECT 'ref_nonempty_on' AS scenario, COUNT(*) AS cnt,
+COALESCE(SUM(CHAR_LENGTH(payload)), 0) AS payload_len
+FROM tt
+WHERE a = 4 AND c = 49;
+scenario	cnt	payload_len
+ref_nonempty_on	100	3200
+SELECT 'range_nonempty_on' AS scenario, COUNT(*) AS cnt,
+COALESCE(SUM(CHAR_LENGTH(payload)), 0) AS payload_len
+FROM tt
+WHERE a BETWEEN 2 AND 4 AND c = 49;
+scenario	cnt	payload_len
+range_nonempty_on	100	3200
+SELECT 'full_prefix_on' AS scenario, COUNT(*) AS cnt,
+COALESCE(SUM(CHAR_LENGTH(payload)), 0) AS payload_len
+FROM tt
+WHERE a BETWEEN 2 AND 4 AND b = 9 AND c = 49;
+scenario	cnt	payload_len
+full_prefix_on	100	3200
+SELECT 'off_index_on' AS scenario, COUNT(*) AS cnt,
+COALESCE(SUM(CHAR_LENGTH(payload)), 0) AS payload_len
+FROM tt
+WHERE a BETWEEN 2 AND 4 AND d = 49;
+scenario	cnt	payload_len
+off_index_on	10	320
+#
+# -----------------------------------------------------------------------
+# Multi-table guardrails (completeness check):
+#
+# The cost-based ICP reward is written into pos->read_cost on the
+# winning scan/range path (sql_planner.cc, see best_access_path
+# scan branch). It is deliberately NOT written into
+# pos->rows_fetched / pos->filter_effect. That separation means:
+#
+#   * per-table row-count / selectivity estimates stay identical
+#     on vs off, so the row-count side of join-order DP is stable;
+#   * per-table read_cost DOES carry the reward, and because DP
+#     sums pos->read_cost across the prefix, the reward CAN in
+#     principle change join order, join method, and semijoin
+#     strategy when the OFF-baseline gap between alternatives is
+#     small.
+#
+# These cases map out what actually happens at each scale:
+#
+#   6a: 2-table join with STRAIGHT_JOIN pinning the order. The
+#       reward can only change the inner table's access method.
+#
+#   6b: 2-table join, free order, row-count gap HUGE (5 vs 10000).
+#       The reward cannot overcome that gap -- join order stays
+#       put. This is NOT a universal "join order cannot flip"
+#       guarantee; see Case 6d for the counter-example.
+#
+#   6c: EXISTS subquery. Semijoin strategy selection reads
+#       pos->read_cost through advance_sj_state(), so the reward
+#       CAN flip the chosen strategy (MaterializeLookup <->
+#       FirstMatch etc.). Both plans are correct; operators
+#       enabling the feature on workloads with EXISTS / IN
+#       subqueries should expect some strategy migration.
+#
+#   6d: 2-table join, free order, row-count equal (10000 vs
+#       10000), only index coverage asymmetric (tt has idx_abc,
+#       tu only idx_a). Close baseline + big reward on tt's
+#       range-ICP side -> the optimizer flips the join method
+#       (hash -> NL), the driver (tt -> tu), AND tt's access
+#       method (table scan -> idx_abc + ICP) all at once. This
+#       is the expected consequence of cost-based reasoning.
+#
+# Every SELECT on tt / tu below fetches `payload` to force a
+# non-covering scan; otherwise the engine would skip ICP entirely
+# (gate G2 in range_icp_preview / can_consider_icp_cost) and the
+# guardrail would lose its teeth.
+# -----------------------------------------------------------------------
+#
+CREATE TABLE tj_driver (
+id INT NOT NULL PRIMARY KEY,
+a  INT NOT NULL
+) ENGINE=InnoDB;
+INSERT INTO tj_driver VALUES (1, 2), (2, 3), (3, 4), (4, 4), (5, 2);
+ANALYZE TABLE tj_driver;
+Table	Op	Msg_type	Msg_text
+test.tj_driver	analyze	status	OK
+#
+# Case 6a: STRAIGHT_JOIN pins tj_driver as driver. tt must be the
+#          inner side with or without the reward. The reward (when
+#          on) may change tt's access method to idx_abc + ICP; the
+#          join order is already pinned by STRAIGHT_JOIN, so the top
+#          line of the plan tree ("Nested loop inner join" with d
+#          first, tt second) is what we compare.
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+EXPLAIN FORMAT=TREE
+SELECT STRAIGHT_JOIN tt.payload
+FROM tj_driver d JOIN tt ON tt.a = d.a
+WHERE d.id <= 3 AND tt.c = 50;
+EXPLAIN
+-> Nested loop inner join  (cost=X rows=N)
+    -> Filter: (d.id <= 3)  (cost=X rows=N)
+        -> Index range scan on d using PRIMARY over (id <= 3)  (cost=X rows=N)
+    -> Filter: (tt.c = 50)  (cost=X rows=N)
+        -> Index lookup on tt using idx_a (a=d.a)  (cost=X rows=N)
+
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+EXPLAIN FORMAT=TREE
+SELECT STRAIGHT_JOIN tt.payload
+FROM tj_driver d JOIN tt ON tt.a = d.a
+WHERE d.id <= 3 AND tt.c = 50;
+EXPLAIN
+-> Nested loop inner join  (cost=X rows=N)
+    -> Filter: (d.id <= 3)  (cost=X rows=N)
+        -> Index range scan on d using PRIMARY over (id <= 3)  (cost=X rows=N)
+    -> Index lookup on tt using idx_abc (a=d.a), with index condition: (tt.c = 50)  (cost=X rows=N)
+
+#
+# Case 6b: No STRAIGHT_JOIN -- the optimizer picks join order
+#          freely. With the baseline gap HUGE (5 rows vs 10 000
+#          rows) the reward cannot tip the DP, so both OFF and
+#          ON pick the same join order (tj_driver driving, tt
+#          inner). The reward DOES still upgrade tt's access
+#          method from idx_a to idx_abc + ICP on the inner side.
+#
+#          Important: this case is NOT a general "join order
+#          cannot flip" guarantee -- see Case 6d for the
+#          counter-example where the baseline is close and the
+#          reward DOES flip the driver. What Case 6b really
+#          asserts is that, when rows_fetched/filter_effect are
+#          the dominating signal (orders-of-magnitude row-count
+#          gap), the reward does not secretly mutate them.
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+EXPLAIN FORMAT=TREE
+SELECT tt.payload
+FROM tj_driver d JOIN tt ON tt.a = d.a
+WHERE d.a >= 2 AND tt.c = 50;
+EXPLAIN
+-> Nested loop inner join  (cost=X rows=N)
+    -> Filter: (d.a >= 2)  (cost=X rows=N)
+        -> Table scan on d  (cost=X rows=N)
+    -> Filter: (tt.c = 50)  (cost=X rows=N)
+        -> Index lookup on tt using idx_a (a=d.a)  (cost=X rows=N)
+
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+EXPLAIN FORMAT=TREE
+SELECT tt.payload
+FROM tj_driver d JOIN tt ON tt.a = d.a
+WHERE d.a >= 2 AND tt.c = 50;
+EXPLAIN
+-> Nested loop inner join  (cost=X rows=N)
+    -> Filter: (d.a >= 2)  (cost=X rows=N)
+        -> Table scan on d  (cost=X rows=N)
+    -> Index lookup on tt using idx_abc (a=d.a), with index condition: (tt.c = 50)  (cost=X rows=N)
+
+#
+# Case 6c: EXISTS subquery (semijoin). tt is the inner table and is
+#          ICP-eligible on c=50. Expected: the chosen semijoin
+#          strategy CAN flip between on/off -- on OFF the optimizer
+#          prefers MaterializeLookup (because fetching 10000 rows
+#          once and probing beats a table scan per outer row); on
+#          ON, idx_abc + ICP makes the per-probe inner fetch cheap
+#          enough that FirstMatch wins. Both are correct plans; we
+#          record the exact strings so a future regression here is
+#          noticed immediately and can be reviewed intentionally.
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+EXPLAIN FORMAT=TREE
+SELECT d.id, d.a FROM tj_driver d
+WHERE EXISTS (SELECT 1 FROM tt
+WHERE tt.a = d.a AND tt.c = 50
+AND tt.payload <> '');
+EXPLAIN
+-> Nested loop inner join  (cost=X rows=N)
+    -> Table scan on d  (cost=X rows=N)
+    -> Single-row index lookup on <subquery2> using <auto_distinct_key> (a=d.a)  (cost=X rows=N)
+        -> Materialize with deduplication  (cost=X rows=N)
+            -> Filter: (tt.a is not null)  (cost=X rows=N)
+                -> Filter: ((tt.c = 50) and (tt.payload <> ''))  (cost=X rows=N)
+                    -> Table scan on tt  (cost=X rows=N)
+
+Warnings:
+Note	1276	Field or reference 'test.d.a' of SELECT #2 was resolved in SELECT #1
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+EXPLAIN FORMAT=TREE
+SELECT d.id, d.a FROM tj_driver d
+WHERE EXISTS (SELECT 1 FROM tt
+WHERE tt.a = d.a AND tt.c = 50
+AND tt.payload <> '');
+EXPLAIN
+-> Nested loop semijoin  (cost=X rows=N)
+    -> Table scan on d  (cost=X rows=N)
+    -> Filter: ((tt.c = 50) and (tt.payload <> ''))  (cost=X rows=N)
+        -> Index lookup on tt using idx_a (a=d.a)  (cost=X rows=N)
+
+Warnings:
+Note	1276	Field or reference 'test.d.a' of SELECT #2 was resolved in SELECT #1
+#
+# Case 6e (multi-table result correctness):
+#   Plan shape may change with the reward, but the row set must remain
+#   stable. Use non-empty predicates to compare aggregate results under
+#   STRAIGHT_JOIN, free join order, and EXISTS/semijoin shapes.
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+SELECT 'straight_join_off' AS scenario, COUNT(*) AS cnt,
+COALESCE(SUM(CHAR_LENGTH(tt.payload)), 0) AS payload_len
+FROM tj_driver d STRAIGHT_JOIN tt ON tt.a = d.a
+WHERE d.id <= 3 AND tt.c = 49;
+scenario	cnt	payload_len
+straight_join_off	100	3200
+SELECT 'free_join_off' AS scenario, COUNT(*) AS cnt,
+COALESCE(SUM(CHAR_LENGTH(tt.payload)), 0) AS payload_len
+FROM tj_driver d JOIN tt ON tt.a = d.a
+WHERE d.a >= 2 AND tt.c = 49;
+scenario	cnt	payload_len
+free_join_off	200	6400
+SELECT 'exists_off' AS scenario, COUNT(*) AS cnt, COALESCE(SUM(id), 0) AS id_sum
+FROM (
+SELECT d.id
+FROM tj_driver d
+WHERE EXISTS (SELECT 1 FROM tt
+WHERE tt.a = d.a AND tt.c = 49
+AND tt.payload <> '')
+) AS matched_driver;
+scenario	cnt	id_sum
+exists_off	2	7
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+SELECT 'straight_join_on' AS scenario, COUNT(*) AS cnt,
+COALESCE(SUM(CHAR_LENGTH(tt.payload)), 0) AS payload_len
+FROM tj_driver d STRAIGHT_JOIN tt ON tt.a = d.a
+WHERE d.id <= 3 AND tt.c = 49;
+scenario	cnt	payload_len
+straight_join_on	100	3200
+SELECT 'free_join_on' AS scenario, COUNT(*) AS cnt,
+COALESCE(SUM(CHAR_LENGTH(tt.payload)), 0) AS payload_len
+FROM tj_driver d JOIN tt ON tt.a = d.a
+WHERE d.a >= 2 AND tt.c = 49;
+scenario	cnt	payload_len
+free_join_on	200	6400
+SELECT 'exists_on' AS scenario, COUNT(*) AS cnt, COALESCE(SUM(id), 0) AS id_sum
+FROM (
+SELECT d.id
+FROM tj_driver d
+WHERE EXISTS (SELECT 1 FROM tt
+WHERE tt.a = d.a AND tt.c = 49
+AND tt.payload <> '')
+) AS matched_driver;
+scenario	cnt	id_sum
+exists_on	2	7
+DROP TABLE tj_driver;
+#
+# Case 6d (multi-table guardrail, EXPECTED behavior change across
+# join method, join order AND access method):
+#
+#   This case DELIBERATELY demonstrates that the cost-based ICP
+#   reward CAN reshape an entire multi-table plan when the two
+#   sides are close in baseline cost. It documents the limit of
+#   the "non-pollution" guarantee given by Case 6b: rows_fetched
+#   and filter_effect stay intact, but pos->read_cost DOES carry
+#   the reward and that is enough to change join-order DP when
+#   the baseline gap is small.
+#
+#   Setup: tt and tu have identical row count (10000), identical
+#   column distributions, and the same join key shape. The only
+#   asymmetry is INDEX COVERAGE -- tt has idx_abc(a,b,c) so
+#   `a between 2 and 4 AND c = 50` is ICP-eligible; tu only has
+#   idx_a(a), so its trailing c=50 cannot be pushed via the
+#   range-optimizer preview.
+#
+#   Observed plans recorded below:
+#     - OFF: Hash join, tt and tu both via table scan + SQL-layer
+#       filters. No index chosen on either side.
+#     - ON:  Nested loop, tu as driver (table scan + filter),
+#       tt as inner via idx_abc + ICP (`a=tu.a, with index
+#       condition: (tt.c = 50)`). tt's ICP reward made the
+#       per-probe inner cost cheap enough that BOTH the join
+#       algorithm (hash -> NL) AND the driver (tt -> tu) changed,
+#       AND tt's own access method switched from table scan to
+#       idx_abc + ICP.
+#
+#   All three changes are legitimate cost-based outcomes. We
+#   pin the exact plan strings so any future unintended movement
+#   (either direction) surfaces at --record time and can be
+#   triaged intentionally.
+#
+CREATE TABLE tu (
+a INT,
+b INT,
+c INT,
+d INT,
+payload CHAR(32) NOT NULL DEFAULT '',
+INDEX idx_a(a)
+) ENGINE=InnoDB;
+SET cte_max_recursion_depth = 20000;
+INSERT INTO tu (a, b, c, d, payload)
+WITH RECURSIVE number_series AS (
+SELECT 1 AS n
+UNION ALL
+SELECT n + 1 FROM number_series WHERE n < 10000
+)
+SELECT
+n %    5 + 1,
+n %   10 + 1,
+n %  100 + 1,
+n % 1000 + 1,
+LPAD(n, 32, 'y')
+FROM number_series;
+SET cte_max_recursion_depth = @saved_cte_max_recursion_depth;
+ANALYZE TABLE tu;
+Table	Op	Msg_type	Msg_text
+test.tu	analyze	status	OK
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+EXPLAIN FORMAT=TREE
+SELECT tx.payload, tx.payload
+FROM tt JOIN tu ON tx.a = tx.a
+WHERE tx.a BETWEEN 2 AND 4 AND tx.c = 50
+AND tx.a BETWEEN 2 AND 4 AND tx.c = 50;
+EXPLAIN
+-> Inner hash join (tx.a = tx.a)  (cost=X rows=N)
+    -> Filter: (tx.c = 50)  (cost=X rows=N)
+        -> Table scan on tx  (cost=X rows=N)
+    -> Hash
+        -> Filter: ((tx.c = 50) and (tx.a between 2 and 4) and (tx.a between 2 and 4))  (cost=X rows=N)
+            -> Table scan on tx  (cost=X rows=N)
+
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+EXPLAIN FORMAT=TREE
+SELECT tt.payload, tu.payload
+FROM tt JOIN tu ON tu.a = tt.a
+WHERE tt.a BETWEEN 2 AND 4 AND tt.c = 50
+AND tu.a BETWEEN 2 AND 4 AND tu.c = 50;
+EXPLAIN
+-> Nested loop inner join  (cost=X rows=N)
+    -> Filter: ((tu.c = 50) and (tu.a between 2 and 4) and (tu.a between 2 and 4) and (tu.a is not null))  (cost=X rows=N)
+        -> Table scan on tu  (cost=X rows=N)
+    -> Index lookup on tt using idx_abc (a=tu.a), with index condition: (tt.c = 50)  (cost=X rows=N)
+
+#
+# Case 6f (join-order flip result correctness):
+#   Case 6d allows the optimizer to flip join method, driver, and tt's
+#   access method. The same non-empty join must still return the same
+#   aggregate result with the feature off and on.
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=off';
+SELECT 'join_flip_off' AS scenario, COUNT(*) AS cnt,
+COALESCE(SUM(CHAR_LENGTH(tt.payload) + CHAR_LENGTH(tu.payload)), 0)
+AS payload_len
+FROM tt JOIN tu ON tu.a = tt.a
+WHERE tt.a BETWEEN 2 AND 4 AND tt.c = 49
+AND tu.a BETWEEN 2 AND 4 AND tu.c = 49;
+scenario	cnt	payload_len
+join_flip_off	10000	640000
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+SELECT 'join_flip_on' AS scenario, COUNT(*) AS cnt,
+COALESCE(SUM(CHAR_LENGTH(tt.payload) + CHAR_LENGTH(tu.payload)), 0)
+AS payload_len
+FROM tt JOIN tu ON tu.a = tt.a
+WHERE tt.a BETWEEN 2 AND 4 AND tt.c = 49
+AND tu.a BETWEEN 2 AND 4 AND tu.c = 49;
+scenario	cnt	payload_len
+join_flip_on	10000	640000
+DROP TABLE tu;
+DROP TABLE tt, t3, t2, t1;

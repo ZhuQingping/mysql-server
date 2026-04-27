@@ -33,6 +33,7 @@
 #include "my_base.h"
 #include "my_inttypes.h"
 #include "my_sys.h"
+#include "sql/icp_cost_based.h"
 #include "sql/join_optimizer/access_path.h"
 #include "sql/key.h"
 #include "sql/mem_root_array.h"
@@ -831,6 +832,13 @@ AccessPath *get_key_scans_params(THD *thd, RANGE_OPT_PARAM *param,
   ha_rows best_records = 0; /* protected by key_to_read */
   uint best_mrr_flags = 0, best_buf_size = 0;
   double read_cost = cost_est;
+  /*
+    Handler-reported cost of the currently winning candidate. This is
+    what will end up in path->cost if we have a winner at all. Kept
+    separate from `read_cost` (which may include an ICP preview
+    adjustment) so path->cost remains stable for downstream consumers.
+  */
+  double best_original_cost = cost_est;
   DBUG_TRACE;
   Opt_trace_context *const trace = &thd->opt_trace;
   /*
@@ -920,8 +928,31 @@ AccessPath *get_key_scans_params(THD *thd, RANGE_OPT_PARAM *param,
         tree->ror_scans_map.set_bit(idx);
       }
 
+      /*
+        Cost-based ICP preview for this candidate (issue-1 range form).
+        Only influences the tournament comparison below; the final
+        AccessPath->cost remains the handler-reported value.
+
+        Skipped entirely for ror_only index-merge construction because
+        that path doesn't care about "range vs table scan", it only
+        asks which candidates are rowid-ordered.
+      */
+      // Prefer the ACTIVE WHERE pointer from the JOIN (may have been
+      // rewritten during optimization); fall back to Query_block's
+      // m_where_cond if JOIN is not yet attached. The JOIN's
+      // `where_cond` field is accessed via its Query_block accessor to
+      // avoid pulling JOIN's full definition into this TU.
+      Item *where_cond = nullptr;
+      if (!ror_only && param->query_block != nullptr) {
+        where_cond = param->query_block->where_cond();
+      }
+      const double original_cost = cost.total_cost();
+      const double effective_cost = icp_cost_based::preview_range_candidate(
+          thd, param->table, keynr, where_cond, found_records, original_cost,
+          &trace_idx);
+
       if (found_records != HA_POS_ERROR &&
-          (read_cost > cost.total_cost() ||
+          (read_cost > effective_cost ||
            /*
              Ignore cost check if INDEX_MERGE hint is used with
              explicitly specified indexes or if INDEX_MERGE hint
@@ -931,13 +962,14 @@ AccessPath *get_key_scans_params(THD *thd, RANGE_OPT_PARAM *param,
            (force_index_merge &&
             (!use_cheapest_index_merge || !key_to_read)))) {
         trace_idx.add("chosen", true);
-        read_cost = cost.total_cost();
+        read_cost = effective_cost;
         best_records = found_records;
         key_to_read = key;
         best_idx = idx;
         best_mrr_flags = mrr_flags;
         best_buf_size = buf_size;
         is_best_idx_imerge_scan = is_imerge_scan;
+        best_original_cost = original_cost;
       } else {
         trace_idx.add("chosen", false);
         if (found_records == HA_POS_ERROR)
@@ -972,7 +1004,7 @@ AccessPath *get_key_scans_params(THD *thd, RANGE_OPT_PARAM *param,
 
   AccessPath *path = new (param->return_mem_root) AccessPath;
   path->type = AccessPath::INDEX_RANGE_SCAN;
-  path->cost = read_cost;
+  path->cost = best_original_cost;
   path->set_num_output_rows(best_records);
   path->index_range_scan().index = param->real_keynr[best_idx];
   path->index_range_scan().num_used_key_parts = used_key_parts;

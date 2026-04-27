@@ -52,6 +52,7 @@
 #include "sql/enum_query_type.h"
 #include "sql/field.h"
 #include "sql/handler.h"
+#include "sql/icp_cost_based.h"
 #include "sql/item.h"
 #include "sql/item_cmpfunc.h"
 #include "sql/join_optimizer/access_path.h"
@@ -688,10 +689,37 @@ Key_use *Optimize_table_order::find_best_ref(
     start_key->fanout = cur_fanout;
     start_key->read_cost = cur_read_cost;
 
-    const double cur_ref_cost =
+    double cur_ref_cost =
         cur_read_cost +
         prefix_rowcount * join->cost_model()->row_evaluate_cost(cur_fanout);
     trace_access_idx.add("rows", cur_fanout).add("cost", cur_ref_cost);
+
+    /*
+      Cost-based ICP for ref access (issue-1 fix, first cut).
+
+      Several indexes can share the same leading keypart (e.g. idx_a,
+      idx_ab, idx_abc all start with `a`). Classic ref costing compares
+      the three using only `cur_fanout` -- the number of rows that the
+      leading `a=const` match will return -- which makes them look equal
+      or makes the narrowest index look cheapest. If a wider index can
+      pin additional WHERE predicates via ICP (idx_abc pushing `c=const`
+      into the engine), the narrower index loses that filtering
+      opportunity entirely, yet the loss is invisible to this loop.
+
+      Delegated to icp_cost_based::preview_ref_candidate(), which
+      identifies the predicates not bound by the current ref keyparts,
+      checks whether they all live on this index's trailing keyparts,
+      estimates their selectivity via Item::get_filtering_effect(), and
+      feeds the result into the cost model. On an ON verdict it reduces
+      (capped) `cur_ref_cost` so this candidate can win the ref
+      tournament below. Any inability to produce a confident estimate
+      leaves the tournament cost untouched, preserving the legacy path.
+    */
+    if (cur_keytype != FULLTEXT) {
+      icp_cost_based::preview_ref_candidate(tab, key, found_part,
+                                            prefix_rowcount, cur_fanout,
+                                            &trace_access_idx, &cur_ref_cost);
+    }
 
     /*
       The current index usage is better than the best index usage found
@@ -1214,6 +1242,18 @@ void Optimize_table_order::best_access_path(JOIN_TAB *tab,
         tab, best_ref, ~remaining_tables & ~excluded_tables, rows_fetched,
         false, false, trace_access_scan);
 
+  /*
+    Make a cost-based ICP decision for the chosen access method, if
+    applicable, and persist it into POSITION so it can be copied to the
+    final JOIN_TAB. The helper also reduces `best_read_cost` (subject
+    to the ICP benefit hard cap) when it decides ICP should be ON, so
+    the decision feeds back into join-order DP. See
+    Docs/icp_cost_based_*.md and sql/icp_cost_based.h.
+  */
+  icp_cost_based::preview_scan_or_range(tab, best_ref, pos, prefix_rowcount,
+                                        rows_fetched, filter_effect,
+                                        &trace_access_scan, &best_read_cost);
+
   best_read_cost += derived_mat_cost;
   pos->filter_effect = filter_effect;
   pos->rows_fetched = rows_fetched;
@@ -1626,6 +1666,7 @@ bool Optimize_table_order::semijoin_loosescan_fill_driving_table_position(
 
   pos->read_cost = DBL_MAX;
   pos->use_join_buffer = false;
+  icp_cost_based::reset_position_decision(pos);
   /*
     No join buffer, so no need to manage any
     Table_map_restorer object.

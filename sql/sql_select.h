@@ -445,6 +445,19 @@ struct POSITION {
   /** If ref-based access is used: bitmap of tables this table depends on  */
   table_map ref_depend_map;
   bool use_join_buffer;
+  /**
+    If true, optimizer has made a cost-based ICP decision for icp_keyno.
+    If false, ICP behavior falls back to legacy gating in push_index_cond().
+  */
+  bool icp_decision_made;
+  /// Valid only when icp_decision_made is true.
+  bool use_cost_based_icp;
+  /// Index number for which cost-based ICP decision applies.
+  uint icp_keyno;
+  /// Estimated per-prefix cost if ICP is disabled.
+  double cost_if_no_icp;
+  /// Estimated per-prefix cost if ICP is enabled.
+  double cost_if_with_icp;
 
   /**
     Current optimization state: Semi-join strategy to be used for this
@@ -627,6 +640,15 @@ class JOIN_TAB : public QEP_shared_owner {
   void set_use_join_cache(uint u) { m_use_join_cache = u; }
   Key_use *keyuse() const { return m_keyuse; }
   void set_keyuse(Key_use *k) { m_keyuse = k; }
+  bool has_cost_based_icp_decision_for(uint keyno) const {
+    return m_icp_decision_made && m_icp_keyno == keyno;
+  }
+  bool use_cost_based_icp() const { return m_use_cost_based_icp; }
+  void set_cost_based_icp_decision(bool made, bool enabled, uint keyno) {
+    m_icp_decision_made = made;
+    m_use_cost_based_icp = enabled;
+    m_icp_keyno = keyno;
+  }
 
   Table_ref *table_ref; /**< points to table reference               */
 
@@ -719,6 +741,9 @@ class JOIN_TAB : public QEP_shared_owner {
     After optimization it contains chosen join buffering strategy (if any).
   */
   uint m_use_join_cache;
+  bool m_icp_decision_made;
+  bool m_use_cost_based_icp;
+  uint m_icp_keyno;
 
   /* SemiJoinDuplicateElimination variables: */
   /*
@@ -767,6 +792,9 @@ inline JOIN_TAB::JOIN_TAB()
       used_fieldlength(0),
       use_quick(QS_NONE),
       m_use_join_cache(0),
+      m_icp_decision_made(false),
+      m_use_cost_based_icp(true),
+      m_icp_keyno(MAX_KEY),
       emb_sj_nest(nullptr),
       embedding_map(0),
       join_cache_flags(0),
