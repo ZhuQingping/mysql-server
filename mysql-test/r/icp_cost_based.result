@@ -94,8 +94,8 @@ has_icp_cost_based	has_icp_enabled	has_icp_cost_if_disabled	has_icp_cost_if_enab
 #   FORCE INDEX + range scan on leading key + equality on trailing index
 #   column. Before the fix the range-scan baseline made filter_effect
 #   collapse to ~1.0 and should_enable_icp_by_cost() always returned
-#   false, so push_index_cond() emitted "not_pushed_due_to_icp_cost"
-#   and skipped pushdown (10x slower vs community default in practice).
+#   false. The planner now treats that as "no cost-based ON decision"
+#   and leaves push_index_cond() free to use the community ICP path.
 #
 #   Expected plan with icp_cost_based=on: range access on idx_ab with
 #   ICP ("Using index condition") still present.
@@ -132,12 +132,6 @@ FROM t3 FORCE INDEX(idx_ab)
 WHERE a BETWEEN 10 AND 80 AND b = 5;
 SUM(CHAR_LENGTH(payload))
 2272
-SELECT
-LOCATE('"not_pushed_due_to_icp_cost":true', REPLACE(TRACE, ' ', '')) > 0
-AS icp_suppressed_by_cost_model
-FROM information_schema.optimizer_trace;
-icp_suppressed_by_cost_model
-0
 #
 # -----------------------------------------------------------------------
 # Issue-1 access-path selection coverage:
@@ -215,6 +209,32 @@ SELECT * FROM tt FORCE INDEX(idx_abc) WHERE a = 4 AND c = 6;
 EXPLAIN
 -> Index lookup on tt using idx_abc (a=4), with index condition: (tt.c = 6)  (cost=X rows=N)
 
+#
+# Case 4d (late ICP restriction, reverse ref access):
+#   ORDER BY b DESC turns the chosen ref access into a reverse iterator
+#   after the ref tournament has already seen the ICP benefit. The
+#   execution-stage push_index_cond() path currently refuses ICP for
+#   reversed_access, so this guardrail documents the planning/execution
+#   mismatch that still needs a follow-up fix or reward rollback.
+#
+SET optimizer_switch=
+'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+SET optimizer_trace='enabled=on,one_line=on';
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a = 4 AND c = 6 ORDER BY b DESC LIMIT 5;
+EXPLAIN
+-> Limit: 5 row(s)  (cost=X rows=N)
+    -> Filter: (tt.c = 6)  (cost=X rows=N)
+        -> Index lookup on tt using idx_abc (a=4) (reverse)  (cost=X rows=N)
+
+SELECT
+LOCATE('"icp_cost_based":true', REPLACE(TRACE, ' ', '')) > 0
+AS has_icp_cost_preview,
+LOCATE('"icp_enabled":true', REPLACE(TRACE, ' ', '')) > 0
+AS has_icp_reward
+FROM information_schema.optimizer_trace;
+has_icp_cost_preview	has_icp_reward
+1	1
 #
 # Case 4a (feature-gate guardrail):
 #   The new ICP cost reward must be strictly gated by

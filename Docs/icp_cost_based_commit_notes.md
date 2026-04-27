@@ -33,8 +33,10 @@ selection while keeping rollback easy and behavior safe.
 3. Persist the decision:
    - Store on `POSITION`.
    - Copy to `JOIN_TAB` when the final combination is built.
-4. Enforce decision at execution-plan refinement:
-   - In `QEP_TAB::push_index_cond`, skip pushdown when planner decided off.
+4. Keep execution-stage pushdown on the community path:
+   - `QEP_TAB::push_index_cond` keeps the existing legality checks.
+   - The planner rewards beneficial ICP-capable paths but does not persist
+     OFF decisions or suppress legacy pushdown at execution refinement time.
 5. Improve observability:
    - Emit optimizer trace fields to debug decision inputs and outputs.
 
@@ -71,9 +73,12 @@ cd build-ninja/mysql-test
 - Documented current scope: this cut supports the classic optimizer path only.
   Hypergraph optimizer access-path selection is out of scope until equivalent
   ref/range preview hooks are added under its costing flow.
+- Documented late execution-stage restrictions that can still reject ICP after
+  planning paid an ICP reward, including reverse access and some BKA/BNL
+  join-cache cases.
 - Calibrate engine-side ICP CPU factor with broader benchmark data.
 - Add optimizer_switch combination tests for `default/on/off` transitions.
-- Add more corner-case tests (reverse scan, temp-table-related paths).
+- Add more corner-case tests for temp-table-related paths.
 
 ## Future Optimization Ideas
 
@@ -82,3 +87,6 @@ cd build-ninja/mysql-test
 - Refine interaction with range optimizer for borderline plans.
 - Add Hypergraph optimizer integration once its access-path costing layer can
   consume equivalent ICP benefit previews.
+- Make late ICP restrictions visible before reward application, or roll back
+  the reward when reverse access / BKA- or BNL-related decisions make pushdown
+  impossible.

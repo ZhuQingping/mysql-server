@@ -14,6 +14,10 @@
 - 通过保守的代价检查，避免性能回退；
 - 通过 `optimizer_switch` 在运行时可回滚。
 
+## 术语
+
+本文中的 **DP** 指 **dynamic programming（动态规划）**，不是“数据页”“磁盘分区”等其它缩写。文中出现的 **join-order DP** 指经典优化器在枚举 **join 顺序** 时，用 **dynamic programming** 复用已算好的 **前缀** 代价、递推寻找整体更优顺序的那类搜索。基于代价的 ICP 奖励会通过每张表的 `POSITION::read_cost` 进入该搜索；因此即便行数估计不变，过大的奖励也可能改变“哪个前缀看起来更便宜”。
+
 ## 设计原则
 
 - **默认行为必须保持与社区路径兼容**。
@@ -47,6 +51,20 @@ ICP 奖励已经参与了选路”；该路径仍回落到 Hypergraph 优化器�
 ICP 行为。后续可以在 Hypergraph optimizer 的访问路径代价接口上补等价的
 ref/range 接入点，扩展支持新的优化器引擎。
 
+规划期的 ICP 奖励 gate 会尽量镜像 `QEP_TAB::push_index_cond()` 中稳定且
+规划期可见的合法性子集（引擎能力、hint、多表 update/delete、在有
+`JOIN_TAB` 时的 guarded condition、虚拟生成列索引、聚簇主键、覆盖索引读、
+InnoDB intrinsic 临时表）。仍有一部分执行期限制是在 ref/range 擂台已经发放
+奖励之后才确定的，当前已知差异包括：
+
+- 反向 ref/range 访问：`push_index_cond()` 目前在 `JOIN_TAB::reversed_access`
+  置位时拒绝 ICP，但这个状态可能晚于 ref/range 候选获得 ICP 奖励；
+- BKA/BNL join cache 细节：`push_index_cond()` 可能因为 BKA 相关谓词把完整
+  index condition 留作 remainder，而早期预演不一定能知道最终 join-cache 决策。
+
+这些差异会在可行处用 MTR 记录保护；后续应通过“避免给 late-ineligible path
+发奖励”或“后期决策确定后撤销奖励”来闭合。
+
 ## 执行流程
 
 0. `find_best_ref()` 中：**在** `best_access_path()` 的访问方法擂台选出 ref 赢家**之前**，对每个 ref 候选预演一次 ICP 收益，并反馈到该候选自己的代价里——防止最窄的那把索引凭空赢下擂台（**issue-1 ref 形式**，详见后文"ref 候选的基于代价 ICP"一节）。
@@ -66,10 +84,11 @@ ref/range 接入点，扩展支持新的优化器引擎。
    - 把 `POSITION` 里记录的决策拷贝到 `JOIN_TAB`。
 
 3. `push_index_cond()` 中：
-   - 若当前 key 上**已存在**决策，按决策执行；
-   - 否则（包括上文"未写决策"的情况），保留社区老 ICP 流程。
+   - 保留社区原有 ICP 下推流程与合法性检查。
 
-   目前规划器**只会写 ON 决策**，所以 "存在决策且为 OFF" 这一分支在当前实现中是"空转"的。保留该分支的代码，是为了将来校准更准的代价模型时可以直接启用"基于代价关闭 ICP"，不需要再动数据结构。
+   规划器只使用代价模型在规划阶段奖励 ICP-capable 路径，不写入 OFF 决策；
+   执行期的 ICP 下推也不会被代价模型抑制。只要 `push_index_cond()` 按社区
+   既有规则判断可以合法下推，就应该继续下推。
 
 ## ref 候选的基于代价 ICP（issue-1 ref 形式）
 
@@ -152,16 +171,15 @@ ref/range 接入点，扩展支持新的优化器引擎。
 
 当 `icp_cost_based=off` 时，上述字段都不会出现。若某个 ref 候选没有通过预演 gate（例如没有未绑定的 keypart，或剩余 WHERE 列不在这把索引上），则该候选不会输出 ref 预演那一组字段——这也是 gate 命中情况的可观测信号。
 
-`push_index_cond()` 这一层仍然会在"检测到已写入 OFF 决策并因此跳过下推"时输出 `not_pushed_due_to_icp_cost`。由于当前规划器不会写入 OFF 决策，这个 token 在实际运行中**不应出现**，MTR 用例据此做反向断言以作为回归保护。
-
 ## 验证
 
 使用 `main.icp_cost_based` 用例验证：
 
 - **Case 1**：OFF + FORCE INDEX + ref —— 与社区行为一致，新字段都不出现。
 - **Case 2**：ON + FORCE INDEX + ref —— 新 trace 字段被打印，并且 `EXPLAIN FORMAT=TREE` 中仍然保留 `with index condition: ...`。
-- **Case 3**（issue-2 回归保护）：ON + FORCE INDEX + leading 列 range + 尾列等值 —— 必须仍然产生 `Index range scan on ... with index condition: ...`，同时 `icp_suppressed_by_cost_model = 0`，防止特性悄悄关掉本形态的 ICP。
+- **Case 3**（issue-2 回归保护）：ON + FORCE INDEX + leading 列 range + 尾列等值 —— 必须仍然产生 `Index range scan on ... with index condition: ...`，防止"代价模型无法证明有收益"退化成关闭社区原本会做的 ICP。
 - **Case 4**（issue-1 ref 形式）：ON + **不带任何 index hint**、三把索引共享起始键 `a` —— 计划必须从 OFF 基线 `Filter(c=6) + Index lookup on idx_a` 切换为 `Index lookup on idx_abc, with index condition: (tt.c = 6)`。配套的 `FORCE INDEX(idx_abc)` 对照说明执行层自始至终都支持这个 plan，问题一直只在"访问方法选择"层面。
+- **Case 4d**（执行期后置限制，反向 ref 访问）：`ORDER BY b DESC` 会在 ref 擂台已经看到 ICP 收益之后，把所选 ref 访问变成 reverse iterator。trace 确认规划期发放了 ICP 奖励，但最终 plan 是反向 index lookup + server-side Filter，没有 `with index condition`。这条用例记录当前规划/执行不一致，作为后续修复的 guardrail。
 - **Case 4a**（feature-gate 保护）：同样的查询，把 `icp_cost_based` 切回 `off`，必须恢复 OFF 基线 plan——防止"默认变 ON"或"优化器状态残留"造成意外回归。
 - **Case 4b**（全 keypart 被 ref 绑定，预演必须**不触发**）：`WHERE a = 4 AND b = 5 AND c = 6` —— `idx_abc` 的所有 keypart 都被 ref 占用，没有剩余 WHERE 列可让 ICP 吸收；Gate 3 的 `remaining_cond_cols` 为空，预演应直接跳过，plan 保持与社区一致（`idx_ab` lookup + server-side Filter）。
 - **Case 4c**（剩余列不在任何索引上，预演必须**不触发**）：`WHERE a = 4 AND d = 7` —— `d` 不是任何索引的 keypart，`remaining_cond_cols ⊆ key_columns` 子集检查对所有候选都失败；OFF 与 ON 产生完全相同的 plan。

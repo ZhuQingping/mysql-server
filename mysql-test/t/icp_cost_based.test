@@ -97,8 +97,8 @@ FROM information_schema.optimizer_trace;
 --echo #   FORCE INDEX + range scan on leading key + equality on trailing index
 --echo #   column. Before the fix the range-scan baseline made filter_effect
 --echo #   collapse to ~1.0 and should_enable_icp_by_cost() always returned
---echo #   false, so push_index_cond() emitted "not_pushed_due_to_icp_cost"
---echo #   and skipped pushdown (10x slower vs community default in practice).
+--echo #   false. The planner now treats that as "no cost-based ON decision"
+--echo #   and leaves push_index_cond() free to use the community ICP path.
 --echo #
 --echo #   Expected plan with icp_cost_based=on: range access on idx_ab with
 --echo #   ICP ("Using index condition") still present.
@@ -133,12 +133,6 @@ WHERE a BETWEEN 10 AND 80 AND b = 5;
 SELECT SUM(CHAR_LENGTH(payload))
 FROM t3 FORCE INDEX(idx_ab)
 WHERE a BETWEEN 10 AND 80 AND b = 5;
-
-# Must be 0 after fix: community ICP is still pushed down.
-SELECT
-  LOCATE('"not_pushed_due_to_icp_cost":true', REPLACE(TRACE, ' ', '')) > 0
-    AS icp_suppressed_by_cost_model
-FROM information_schema.optimizer_trace;
 
 --echo #
 --echo # -----------------------------------------------------------------------
@@ -219,6 +213,28 @@ SELECT * FROM tt WHERE a = 4 AND c = 6;
 --replace_regex $explain_mask
 EXPLAIN FORMAT=TREE
 SELECT * FROM tt FORCE INDEX(idx_abc) WHERE a = 4 AND c = 6;
+
+--echo #
+--echo # Case 4d (late ICP restriction, reverse ref access):
+--echo #   ORDER BY b DESC turns the chosen ref access into a reverse iterator
+--echo #   after the ref tournament has already seen the ICP benefit. The
+--echo #   execution-stage push_index_cond() path currently refuses ICP for
+--echo #   reversed_access, so this guardrail documents the planning/execution
+--echo #   mismatch that still needs a follow-up fix or reward rollback.
+--echo #
+SET optimizer_switch=
+  'index_condition_pushdown=on,condition_fanout_filter=on,mrr=off,mrr_cost_based=off,icp_cost_based=on';
+SET optimizer_trace='enabled=on,one_line=on';
+--replace_regex $explain_mask
+EXPLAIN FORMAT=TREE
+SELECT * FROM tt WHERE a = 4 AND c = 6 ORDER BY b DESC LIMIT 5;
+
+SELECT
+  LOCATE('"icp_cost_based":true', REPLACE(TRACE, ' ', '')) > 0
+    AS has_icp_cost_preview,
+  LOCATE('"icp_enabled":true', REPLACE(TRACE, ' ', '')) > 0
+    AS has_icp_reward
+FROM information_schema.optimizer_trace;
 
 --echo #
 --echo # Case 4a (feature-gate guardrail):

@@ -39,6 +39,7 @@
 #include "sql/handler.h"
 #include "sql/item.h"
 #include "sql/key.h"
+#include "sql/mysqld.h"  // innodb_hton
 #include "sql/opt_costmodel.h"
 #include "sql/opt_hints.h"
 #include "sql/opt_trace.h"
@@ -56,6 +57,13 @@
 
 namespace icp_cost_based {
 
+/*
+  Keep implementation-only helpers in an anonymous namespace nested inside
+  icp_cost_based. The named namespace is the module boundary exposed by
+  icp_cost_based.h; the anonymous namespace keeps constants, gate helpers, and
+  small cost-model utilities local to this translation unit so other optimizer
+  files can only use the documented entry points below.
+*/
 namespace {
 
 /*
@@ -78,6 +86,12 @@ constexpr double kIcpBenefitCapRatio = 0.5;
 */
 constexpr double kIcpEvalCpuFactor = 0.25;
 
+enum class GuardedCondState {
+  kUnknown,
+  kAbsent,
+  kPresent,
+};
+
 /*
   Clamp an ICP benefit adjustment so that its magnitude does not exceed
   kIcpBenefitCapRatio * cost_if_no_icp. The adjustment is expected to be
@@ -98,17 +112,29 @@ double cap_icp_benefit_adjustment(double adjustment, double cost_if_no_icp,
 }
 
 /*
-  Lightweight pre-check for whether ICP can be considered for cost
-  modeling on a given key. Intentionally mirrors the stable gates in
-  QEP_TAB::push_index_cond(), so a cost-based ON decision cannot end up
-  in a path that push_index_cond() would later reject for unrelated
-  reasons.
-*/
-bool can_consider(const JOIN_TAB *tab, uint keyno) {
-  TABLE *const table = tab->table();
-  const JOIN *const join = tab->join();
-  THD *const thd = join->thd;
+  Shared pre-check for whether a key may receive a cost-based ICP reward.
 
+  This deliberately mirrors the stable, planning-visible subset of
+  QEP_TAB::push_index_cond(). The reward is paid during planning, while the
+  actual pushdown is still decided later by push_index_cond(); if this gate is
+  looser than push_index_cond(), the optimizer can choose a path that only
+  looks cheap because we assumed ICP would happen.
+
+  Not every push_index_cond() check is available at every preview point:
+    * ref and final scan/range previews have JOIN_TAB context, so they can
+      pass the guarded-condition state;
+    * range-candidate preview runs inside the range optimizer before it has a
+      JOIN_TAB, so guarded conditions are unknown there;
+    * late plan-refinement state such as reversed_access and BKA/BNL cache
+      decisions is intentionally not checked here because it can be decided
+      after the access-path tournaments.
+
+  Maintenance rule: whenever QEP_TAB::push_index_cond() adds or changes a
+  stable legality gate, update this function (or explicitly document why the
+  gate is unavailable or too late for planning-time ICP costing).
+*/
+bool can_consider_icp_cost(THD *thd, TABLE *table, Table_ref *table_ref,
+                           uint keyno, GuardedCondState guarded_conds) {
   if (!thd->optimizer_switch_flag(OPTIMIZER_SWITCH_ICP_COST_BASED)) return false;
 
   if (keyno == MAX_KEY) return false;
@@ -116,7 +142,7 @@ bool can_consider(const JOIN_TAB *tab, uint keyno) {
   if (!(table->file->index_flags(keyno, 0, true) & HA_DO_INDEX_COND_PUSHDOWN))
     return false;
 
-  if (!hint_key_state(thd, tab->table_ref, keyno, ICP_HINT_ENUM,
+  if (!hint_key_state(thd, table_ref, keyno, ICP_HINT_ENUM,
                       OPTIMIZER_SWITCH_INDEX_CONDITION_PUSHDOWN))
     return false;
 
@@ -124,7 +150,13 @@ bool can_consider(const JOIN_TAB *tab, uint keyno) {
       thd->lex->sql_command == SQLCOM_DELETE_MULTI)
     return false;
 
-  if (tab->has_guarded_conds()) return false;
+  if (guarded_conds == GuardedCondState::kPresent) return false;
+
+  // Disable ICP for InnoDB intrinsic temp tables, matching push_index_cond().
+  if (table->s->db_type() == innodb_hton &&
+      table->s->tmp_table != NO_TMP_TABLE &&
+      table->s->tmp_table != TRANSACTIONAL_TMP_TABLE)
+    return false;
 
   // Virtual generated columns are not supported for ICP.
   if (table->vfield && table->index_contains_some_virtual_gcol(keyno))
@@ -137,6 +169,13 @@ bool can_consider(const JOIN_TAB *tab, uint keyno) {
   if (table->covering_keys.is_set(keyno) && !table->no_keyread) return false;
 
   return true;
+}
+
+bool can_consider(const JOIN_TAB *tab, uint keyno) {
+  return can_consider_icp_cost(
+      tab->join()->thd, tab->table(), tab->table_ref, keyno,
+      tab->has_guarded_conds() ? GuardedCondState::kPresent
+                               : GuardedCondState::kAbsent);
 }
 
 /*
@@ -180,42 +219,15 @@ bool should_enable_icp_by_cost(const JOIN_TAB *tab, uint keyno,
   return *cost_if_with_icp < *cost_if_no_icp;
 }
 
-/*
-  Lightweight gate used by the range-optimizer preview. Kept in sync
-  with can_consider() above so the two entry points enable/disable on
-  the same criteria.
-*/
 bool range_preview_gates(THD *thd, TABLE *table, uint keynr) {
-  if (!thd->optimizer_switch_flag(OPTIMIZER_SWITCH_ICP_COST_BASED))
-    return false;
-  if (keynr == MAX_KEY) return false;
-  if (!(table->file->index_flags(keynr, 0, true) & HA_DO_INDEX_COND_PUSHDOWN))
-    return false;
-
-  if (!hint_key_state(thd, table->pos_in_table_list, keynr, ICP_HINT_ENUM,
-                      OPTIMIZER_SWITCH_INDEX_CONDITION_PUSHDOWN))
-    return false;
-
-  if (thd->lex->sql_command == SQLCOM_UPDATE_MULTI ||
-      thd->lex->sql_command == SQLCOM_DELETE_MULTI)
-    return false;
-
-  if (table->vfield && table->index_contains_some_virtual_gcol(keynr))
-    return false;
-
-  if (keynr == table->s->primary_key && table->file->primary_key_is_clustered())
-    return false;
-
-  // Covering-index reads never exercise ICP (the engine never goes to
-  // the row), so the reward would be a fiction.
-  if (table->covering_keys.is_set(keynr) && !table->no_keyread) return false;
-
-  return true;
+  return can_consider_icp_cost(thd, table, table->pos_in_table_list, keynr,
+                               GuardedCondState::kUnknown);
 }
 
 }  // namespace
 
 void reset_position_decision(POSITION *pos) {
+  // Defaults mean "no cost-based ICP override"; push_index_cond() decides.
   pos->icp_decision_made = false;
   pos->use_cost_based_icp = true;
   pos->icp_keyno = MAX_KEY;
@@ -536,16 +548,6 @@ double preview_range_candidate(THD *thd, TABLE *table, uint keynr,
 
   cond_set_guard();
   return effective_cost;
-}
-
-bool legacy_pushdown_suppressed(const JOIN_TAB *tab, uint keyno,
-                                Opt_trace_object *trace_obj) {
-  if (tab->has_cost_based_icp_decision_for(keyno) &&
-      !tab->use_cost_based_icp()) {
-    trace_obj->add("not_pushed_due_to_icp_cost", true);
-    return true;
-  }
-  return false;
 }
 
 }  // namespace icp_cost_based

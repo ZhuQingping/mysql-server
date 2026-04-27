@@ -2,6 +2,10 @@
 
 > 本文档是 `icp_cost_based_low_level_design.md` 的中文对照版本，内容与英文版保持一致。若两者出现不一致，以英文版为准。
 
+## 0. 术语
+
+**DP** 指 **dynamic programming（动态规划）**。在 join 优化语境下，**join-order DP** 指用 **dynamic programming** 对 **join 顺序的前缀**（已排好的一段表）做代价递推与复用的那类搜索。基于代价的 ICP 会改写某张表在某个前缀下的 `POSITION::read_cost`，从而改变 **dynamic programming** 看到的局部代价；当两侧基线差距很小时，就可能改变最终 join 顺序。
+
 ## 1. 开关与常量
 
 ### 1.1 `sql/sql_const.h`
@@ -225,24 +229,35 @@
 - `use_cost_based_icp()`
 - `set_cost_based_icp_decision(...)`
 
-由于当前规划器只会写 ON 决策（见 2.3），`has_cost_based_icp_decision_for(keyno) == true` **目前等价于** `use_cost_based_icp() == true`。之所以仍然把两者分开保留，是为了日后校准更准的代价模型时，可以直接"打开"基于代价的 OFF 能力，而不需要再改数据结构。
+由于当前规划器只会写 ON 决策（见 2.3），`has_cost_based_icp_decision_for(keyno) == true` **目前等价于** `use_cost_based_icp() == true`。这些字段仅作为规划器决策的记录；执行期 ICP 下推当前不会消费它们来关闭 ICP。
 
 ### 3.2 `sql/sql_optimizer.cc`
 
 在 `JOIN::get_best_combination()` 中，把 `POSITION` 的决策拷贝到 `JOIN_TAB`。
 
-## 4. 执行期的强制校验
+## 4. 执行期下推
 
 文件：`sql/sql_select.cc`
 
-`QEP_TAB::push_index_cond(...)` 中：
+`QEP_TAB::push_index_cond(...)` 有意保留社区默认的下推流程。基于代价的
+ICP 特性只在规划阶段奖励 ICP-capable 访问路径，不在执行计划精修阶段抑制
+下推。
 
-- 若当前 `keyno` 上已存在决策且为 OFF：
-  - 打印 trace `not_pushed_due_to_icp_cost = true`；
-  - 直接返回，不下推 ICP；
-- 否则保留社区默认的下推流程。
+根据 2.3，规划器不会持久化 OFF 决策。只要 `push_index_cond()` 根据已有的
+引擎能力、hint、guarded condition、key-only read、聚簇主键等检查判断可以
+合法下推，就应该继续下推。
 
-根据 2.3，**OFF 分支目前处于空转状态**。对应地，MTR 用例用"`not_pushed_due_to_icp_cost` 不应出现"作为反向断言，保护曾经中招的 range-scan 形态。
+`sql/icp_cost_based.cc` 中的规划期 gate 有意复用执行计划精修前可见的稳定
+检查，并应随 `push_index_cond()` 中稳定合法性检查的变化同步更新。目前仍有两类
+检查尚未完全闭合：
+
+- **range 预演阶段不可得**：`get_key_scans_params()` 有 `TABLE`，但没有
+  `JOIN_TAB`，因此 range 候选擂台不知道 guarded condition 状态。ref 预演和
+  最终 scan/range 预演有 `JOIN_TAB`，会把 guarded condition 状态传入公共 gate。
+- **访问路径擂台之后才确定**：`JOIN_TAB::reversed_access` 以及 BKA/BNL
+  join-cache 细节可能在 ref/range 候选已经获得 ICP 奖励之后才确定。这些情况下，
+  最终 `push_index_cond()` 可能拒绝或避免下推，但规划期 cost 已经包含 ICP 收益。
+  这是当前已知限制；后续应在发放奖励前让这些限制可见，或在后期限制确定后撤销奖励。
 
 ## 5. 测试覆盖
 
@@ -256,14 +271,20 @@
   验证新 trace 字段被打印出来，且计划仍然是 `Index lookup` 并带 `index condition: ...` 注解。
 
 - **Case 3（issue-2 回归保护）** —— `icp_cost_based=on`，`FORCE INDEX` + leading 列 range + 尾列等值：
-  验证规划器**不会**悄悄关掉 ICP。`EXPLAIN FORMAT=TREE` 断言
-  `Index range scan on t3 using idx_ab ..., with index condition: ...`，
-  trace 层再用 `icp_suppressed_by_cost_model = 0` 保证没有出现 `not_pushed_due_to_icp_cost`。
+  验证当代价模型无法证明 ICP 有收益时，会回落社区默认下推路径，而不是关闭
+  ICP。`EXPLAIN FORMAT=TREE` 断言
+  `Index range scan on t3 using idx_ab ..., with index condition: ...`。
 
 - **Case 4（issue-1 ref 形式）** —— `icp_cost_based=on`，**不带任何 index hint**，三把索引（`idx_a`、`idx_ab`、`idx_abc`）共享起始键 `a`，查询为 `WHERE a = 4 AND c = 6`：
   OFF 基线为 `Filter: (tt.c = 6) -> Index lookup on tt using idx_a (a=4)`；
   ON 后计划必须切换为 `Index lookup on tt using idx_abc (a=4), with index condition: (tt.c = 6)`。
   配套一条 `FORCE INDEX(idx_abc)` 对照说明：只要把优化器指向对的那把索引，执行层一直都能跑出这个 plan——问题纯粹出在"访问方法选择"这一步。
+
+- **Case 4d（执行期后置限制，反向 ref 访问）** —— `WHERE a = 4 AND c = 6 ORDER BY b DESC LIMIT 5`：
+  ref 擂台奖励了 `idx_abc`，但后续 ORDER BY 优化把访问变成 reverse iterator。
+  `push_index_cond()` 对 `reversed_access` 拒绝 ICP，最终 plan 是反向 index lookup +
+  server-side Filter。optimizer trace 断言 cost preview/reward 已经发生，plan 断言记录
+  没有 `with index condition`，作为当前规划/执行不一致的 guardrail。
 
 - **Case 4a（feature-gate 保护）** —— 同一条查询，把 `icp_cost_based` 切回 `off` 后必须恢复 OFF 基线 plan。这条用例把"开关"钉死，防止哪天因为默认值变 ON 或优化器状态残留悄悄回退。
 
@@ -306,7 +327,7 @@
 - `get_key_scans_params()`：在 range 候选选出前调整每个索引的有效擂台代价；
 - `best_access_path()`：把最终基于代价的 ON 决策写入 `POSITION`；
   `JOIN::get_best_combination()` 再把它拷贝到 `JOIN_TAB`；
-- `QEP_TAB::push_index_cond()`：在经典计划精修阶段消费这个已拷贝的决策。
+- `QEP_TAB::push_index_cond()`：保留社区下推合法性检查，不消费 cost-based 决策来关闭 ICP。
 
 Hypergraph optimizer 的访问路径枚举和代价流不走这条完全相同的规划链路。
 因此，只在 `find_best_ref()` 和 `get_key_scans_params()` 上加 hook，并不能让
@@ -326,5 +347,10 @@ Hypergraph 访问路径自动使用本文描述的 ICP 调整后有效代价来�
 
 - **Hypergraph 优化器**：当前两套预演分别挂在经典的 `find_best_ref()` 与 `get_key_scans_params()` 路径上；hypergraph 路径自己有另一套访问方法选择代码，ref 形式与 range 形式**都需要**额外接一次。
 - **selectivity 校准**：`Item::get_filtering_effect()` 偏保守。若上线后的 trace 数据显示在某些谓词形态上系统性地给多/给少奖励，可以在 gate 逻辑不动的前提下把估算器换成更好的；接口约束是"对 `(0,1)` 开区间的单一浮点数 selectivity 作答"。range 形式目前用的是文件局部常量 `kRangeIcpEvalCpuFactor`，两边稳定一段时间后可考虑与规划器侧的 `kIcpEvalCpuFactor` 统一。一旦 `icp_cost_adjustment_capped` 的 telemetry 显示当前 50% 预算过紧/过松，可同步调整 `kIcpBenefitCapRatio` / `kRangeIcpBenefitCapRatio`（2.2.2）并重录基线。
-- **基于代价的 OFF 决策**：2.3 节出于谨慎目前不写 OFF 决策；等代价模型校准更稳后可以打开——执行期（第 4 节）的 OFF 分支已经就位，无需再改数据结构。
+- **基于代价的 OFF 决策**：2.3 节出于谨慎目前不写 OFF 决策；第 4 节也刻意让
+  `push_index_cond()` 保持社区默认下推路径。若未来更准确的代价模型需要按代价关闭
+  ICP，应单独补充明确的执行期设计，而不是隐式复用当前"只奖励"路径。
+- **后期才发现不能 ICP 的路径**：reverse access 和部分 BKA/BNL 场景是在早期
+  ref/range 擂台之后才决定的。Case 4d 记录了 reverse-ref 不一致。后续应让这些
+  后期限制在发放奖励前可见，或在限制确定后扣回奖励。
 - **非命中情况的 trace**：range 形式 helper 目前只在"被奖励"时输出 trace。后续可以把 skip 原因（`"covering"`、`"fully_bound"`、`"not_on_index"` 等）也补上，方便不读 C++ 也能定位 gate 用例行为。

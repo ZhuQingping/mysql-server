@@ -1666,6 +1666,11 @@ bool Optimize_table_order::semijoin_loosescan_fill_driving_table_position(
 
   pos->read_cost = DBL_MAX;
   pos->use_join_buffer = false;
+  /*
+    LooseScan fills POSITION directly instead of going through
+    best_access_path()/preview_scan_or_range(), so clear any ICP planner state
+    left from an earlier candidate in this reusable POSITION slot.
+  */
   icp_cost_based::reset_position_decision(pos);
   /*
     No join buffer, so no need to manage any

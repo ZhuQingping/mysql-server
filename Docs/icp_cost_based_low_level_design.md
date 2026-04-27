@@ -2,6 +2,15 @@
 
 > Chinese translation: [icp_cost_based_low_level_design.zh_CN.md](icp_cost_based_low_level_design.zh_CN.md)
 
+## 0. Terminology
+
+**DP** means **dynamic programming**. In join optimization, **join-order DP**
+refers to the **dynamic programming** algorithm that evaluates join **prefixes**
+(collections of already-ordered tables) and accumulates their costs. The
+cost-based ICP feature adjusts `POSITION::read_cost` for a table under a prefix,
+so those prefix costs change and the **dynamic programming** search may prefer a
+different join order when the baseline margin between alternatives is small.
+
 ## 1. Switch and Constants
 
 ### 1.1 `sql/sql_const.h`
@@ -369,9 +378,9 @@ plus helper APIs:
 
 Because the planner only writes ON decisions today (section 2.3),
 `has_cost_based_icp_decision_for(keyno) == true` currently implies
-`use_cost_based_icp() == true`. The separation is preserved so a future,
-better-calibrated model can opt in to cost-based OFF without reshaping
-the data structures.
+`use_cost_based_icp() == true`. The separation is bookkeeping for the
+planner decision; execution-stage ICP pushdown does not currently consume
+it to disable ICP.
 
 ### 3.2 `sql/sql_optimizer.cc`
 
@@ -381,16 +390,32 @@ In `JOIN::get_best_combination()`, copy decision from `POSITION` to `JOIN_TAB`.
 
 File: `sql/sql_select.cc`
 
-In `QEP_TAB::push_index_cond(...)`:
+`QEP_TAB::push_index_cond(...)` is intentionally left on the legacy
+community pushdown path. The cost-based ICP feature only rewards
+ICP-capable access paths during planning; it does not suppress pushdown
+at execution-plan refinement time.
 
-- if a decision exists for `keyno` and is OFF:
-  - add trace `not_pushed_due_to_icp_cost=true`
-  - return without pushing ICP
-- otherwise preserve the legacy community pushdown path.
+Given section 2.3, the planner never persists OFF decisions. If
+`push_index_cond()` can legally push ICP according to the existing engine,
+hint, guarded-condition, key-only-read, and clustered-PK checks, it should
+continue to do so.
 
-Given section 2.3, the OFF branch is inert for now. The MTR regression
-guard asserts that `not_pushed_due_to_icp_cost` does *not* appear for the
-range-scan shape that used to hit it.
+The planning-time gate in `sql/icp_cost_based.cc` intentionally shares the
+stable checks that are visible before execution-plan refinement. It should be
+kept in sync with stable `push_index_cond()` legality checks. Two classes of
+checks are currently not fully closed:
+
+- **Unavailable during range preview.** `get_key_scans_params()` has `TABLE`
+  but not `JOIN_TAB`, so guarded-condition state is unknown for the
+  range-candidate tournament. Ref and final scan/range previews do have
+  `JOIN_TAB` and pass the guarded-condition state into the shared gate.
+- **Decided after access-path tournaments.** `JOIN_TAB::reversed_access` and
+  BKA/BNL join-cache details may be decided after a ref or range candidate has
+  already received an ICP reward. In these cases, the final
+  `push_index_cond()` path can reject or avoid the pushdown even though the
+  planning cost included an ICP benefit. This is a known limitation; follow-up
+  work should either prevent the reward for late-ineligible paths or roll the
+  reward back after those late decisions are known.
 
 ## 5. Test Coverage
 
@@ -407,11 +432,10 @@ range-scan shape that used to hit it.
 
 - Case 3 (issue-2 regression) -- `icp_cost_based=on`, FORCE INDEX + range
   on leading key + equality on a trailing index column:
-  verifies that the planner does *not* silently disable ICP. The
+  verifies that a non-beneficial cost estimate falls back to the community
+  pushdown path instead of disabling ICP. The
   `EXPLAIN FORMAT=TREE` result asserts
-  `Index range scan on t3 using idx_ab ..., with index condition: ...`
-  and the trace assertion `icp_suppressed_by_cost_model = 0` confirms
-  the absence of `not_pushed_due_to_icp_cost`.
+  `Index range scan on t3 using idx_ab ..., with index condition: ...`.
 
 - Case 4 (issue-1 ref form) -- `icp_cost_based=on`, no hint, three
   equality-eligible indexes sharing the leading key `a` (`idx_a`,
@@ -423,6 +447,15 @@ range-scan shape that used to hit it.
   (tt.c = 6)`. A paired `FORCE INDEX(idx_abc)` query documents that
   the execution layer already produced this plan when pointed at the
   right index -- the gap was purely in access-method selection.
+
+- Case 4d (late ICP restriction, reverse ref access) --
+  `WHERE a = 4 AND c = 6 ORDER BY b DESC LIMIT 5`: the ref tournament
+  rewards `idx_abc`, but later ORDER BY optimization turns the access into
+  a reverse iterator. `push_index_cond()` refuses ICP for `reversed_access`,
+  so the final plan is a reverse index lookup with a server-side filter.
+  Optimizer trace asserts that the cost preview and reward happened; the
+  plan assertion records the missing `with index condition` as a known
+  planning/execution mismatch.
 
 - Case 4a (feature-gate guardrail) -- same query, flipping
   `icp_cost_based` back to `off` must restore the legacy plan. Pins
@@ -515,8 +548,8 @@ optimizer data structures and call sites:
   tournament cost before a range candidate is selected.
 - `best_access_path()` writes the final cost-based ON decision into
   `POSITION`; `JOIN::get_best_combination()` copies it into `JOIN_TAB`.
-- `QEP_TAB::push_index_cond()` consumes the copied decision during classic
-  plan refinement.
+- `QEP_TAB::push_index_cond()` keeps the community pushdown legality checks
+  and does not consume cost-based decisions to disable ICP.
 
 The Hypergraph optimizer does not use this exact planning flow for access-path
 enumeration and costing. In particular, adding hooks to `find_best_ref()` and
@@ -551,9 +584,16 @@ decision propagation hooks to the Hypergraph access-path costing layer.
   in lockstep once `icp_cost_adjustment_capped` telemetry suggests
   the current 50% budget is too tight or too loose.
 - **Cost-based OFF decisions.** Section 2.3 deliberately does not
-  persist OFF decisions today. A future, better-calibrated cost
-  model can opt in without further refactoring; the execution-side
-  machinery in section 4 is already wired up.
+  persist OFF decisions today, and section 4 deliberately keeps
+  `push_index_cond()` on the community pushdown path. If a future,
+  better-calibrated model wants to disable ICP by cost, it should add an
+  explicit execution-stage design instead of reusing the current
+  reward-only path implicitly.
+- **Late ICP-ineligible paths.** Reverse access and some BKA/BNL cases are
+  decided after early ref/range tournaments. Case 4d records the reverse-ref
+  mismatch. A follow-up should either make those late restrictions visible
+  before rewards are applied or subtract the reward when the late restriction
+  becomes known.
 - **Trace for off-tournament skips.** The range-form helper emits
   trace only when a reward is applied. Adding a concise skip
   reason (`icp_preview_skipped = "covering"`, `"fully_bound"`,

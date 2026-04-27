@@ -18,6 +18,17 @@ and rollback guarantees:
 - Avoid performance regression by using conservative cost checks.
 - Keep runtime rollback via `optimizer_switch`.
 
+## Terminology
+
+**DP** in this document means **dynamic programming** (not “data page”, “disk
+partition”, etc.). The classic join optimizer explores many possible **join
+orders**; when the text says **join-order DP**, it refers to the **dynamic
+programming** search that builds optimal (lowest-cost) **prefixes** of a join
+order by reusing previously computed partial costs. Cost-based ICP rewards feed
+into that search through per-table `POSITION::read_cost`, so unusually large
+rewards can change which prefix looks cheapest even when row-count estimates stay
+the same.
+
 ## Design Principles
 
 - Default behavior must remain compatible with community path.
@@ -59,6 +70,24 @@ cost-based ICP rewards participated in access-path selection; the plan falls
 back to whatever ICP behavior that optimizer path already provides. A follow-up
 can add equivalent ref/range integration points for the Hypergraph optimizer
 once its access-path costing interfaces are wired for this decision.
+
+The planner-side ICP reward gate mirrors the stable, planning-visible subset of
+`QEP_TAB::push_index_cond()` (engine support, hints, multi-table update/delete,
+guarded conditions when `JOIN_TAB` is available, virtual generated-column
+indexes, clustered primary keys, covering reads, and InnoDB intrinsic temporary
+tables). Some execution-stage restrictions are decided later, after the
+ref/range tournaments have already applied their rewards. Current known gaps:
+
+- reverse ref/range access: `push_index_cond()` currently refuses ICP when
+  `JOIN_TAB::reversed_access` is set, but this can be decided after a ref or
+  range candidate has already received an ICP reward;
+- BKA/BNL join-cache details: `push_index_cond()` may keep the full index
+  condition as a remainder for BKA-dependent predicates, while the early
+  previews cannot always know the final join-cache decision.
+
+These gaps are documented and guarded by MTR where practical; they should be
+closed by either avoiding the reward for late-ineligible paths or rolling the
+reward back once those late decisions are made.
 
 ## Execution Flow
 
@@ -102,14 +131,13 @@ once its access-path costing interfaces are wired for this decision.
    - copy decision from `POSITION` into `JOIN_TAB`.
 
 3. In `push_index_cond()`:
-   - if a decision exists for this key, honor it;
-   - otherwise (including the "no decision written" case above), preserve
-     the legacy community ICP flow.
+   - preserve the legacy community ICP flow and legality checks.
 
-   Today the planner only ever writes ON decisions, so the "decision exists
-   and is OFF" branch is effectively dormant. The branch is kept in the
-   code so a future, better-calibrated cost model can safely opt in to
-   cost-based OFF behavior without further refactoring.
+   The planner only uses the cost model to reward ICP-capable paths during
+   planning. It does not persist OFF decisions, and execution-stage
+   pushdown is not suppressed by the cost model. If `push_index_cond()` can
+   legally push ICP according to the existing community rules, it should
+   still do so.
 
 ## Cost-based ICP for ref candidates (issue-1 ref form)
 
@@ -308,11 +336,6 @@ that does not pass the preview gates (e.g. no unbound keyparts, or
 remaining WHERE columns not on this index) simply does not emit the
 per-candidate block.
 
-In `push_index_cond()` the trace still emits `not_pushed_due_to_icp_cost`
-when a persisted OFF decision suppresses a pushdown. Because the current
-planner never writes OFF decisions, this token does not appear in practice
-today; its absence is used as a regression assertion in the MTR tests.
-
 ## Validation
 
 Use `main.icp_cost_based` to verify:
@@ -324,9 +347,9 @@ Use `main.icp_cost_based` to verify:
   `EXPLAIN FORMAT=TREE`.
 - **Case 3** (issue-2 regression) -- ON path, FORCE INDEX + leading-key
   range + equality on a trailing index column: must still produce
-  `Index range scan on ... with index condition: ...`. The assertion
-  `icp_suppressed_by_cost_model = 0` guards against silent pushdown
-  disabling on this shape.
+  `Index range scan on ... with index condition: ...`. This guards
+  against falling back from "cost model did not prove a benefit" to
+  disabling a pushdown that the community path would have performed.
 - **Case 4** (issue-1 ref form) -- ON path, no hint, three indexes
   sharing the leading key `a`: the plan must switch from
   `Filter(c=6) + Index lookup on idx_a` (OFF baseline) to
@@ -334,6 +357,12 @@ Use `main.icp_cost_based` to verify:
   `FORCE INDEX(idx_abc)` sanity probe documents that the execution
   layer has always supported this plan; the fix lives purely in
   access-method selection.
+- **Case 4d** (late ICP restriction, reverse ref access) -- `ORDER BY b
+  DESC` turns the chosen ref access into a reverse iterator after the ref
+  tournament has already seen the ICP reward. The trace confirms that the
+  cost preview rewarded ICP, while the final plan has a reverse index lookup
+  with a server-side filter and no `with index condition`. This documents the
+  current planning/execution mismatch for follow-up work.
 - **Case 4a** (feature-gate guardrail) -- same query, flipping
   `icp_cost_based` back to `off` must restore the legacy plan; this
   protects against accidental ON-by-default changes or stuck

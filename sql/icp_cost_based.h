@@ -41,8 +41,6 @@
     * Range-optimizer preview so a range candidate's ICP benefit can
       participate in its internal tournament against the table-scan
       baseline.
-    * Suppression of the classic pushdown path when a cost-based OFF
-      decision has been made.
 
   Core optimizer files should stay independent of this module's
   internals and only hold thin call sites into the entry points below.
@@ -65,8 +63,15 @@ namespace icp_cost_based {
 
 /**
   Reset the cost-based ICP decision fields of @a pos to their defaults
-  ("no decision"). Called wherever the optimizer (re-)initializes a
-  POSITION that must start without any ICP override.
+  ("no decision"). This does not disable ICP; it only clears planner-side
+  bookkeeping so execution can fall back to the legacy push_index_cond()
+  gates.
+
+  Call this whenever optimizer code (re-)initializes a POSITION without going
+  through preview_scan_or_range(). The common best_access_path() path is already
+  covered because preview_scan_or_range() resets first. Special POSITION writers
+  such as semijoin LooseScan must reset explicitly to avoid reusing stale
+  icp_decision_made/icp_keyno/cost_if_* fields from an earlier candidate.
 */
 void reset_position_decision(POSITION *pos);
 
@@ -140,15 +145,6 @@ double preview_range_candidate(THD *thd, TABLE *table, uint keynr,
                                Item *where_cond, ha_rows found_records,
                                double original_cost,
                                Opt_trace_object *trace_idx);
-
-/**
-  Suppress the classic pushdown path when a cost-based decision has
-  concluded "ICP off" for @a keyno. Returns true iff the caller should
-  skip its legacy pushdown work. Writes the `not_pushed_due_to_icp_cost`
-  trace flag on true.
-*/
-bool legacy_pushdown_suppressed(const JOIN_TAB *tab, uint keyno,
-                                Opt_trace_object *trace_obj);
 
 }  // namespace icp_cost_based
 
