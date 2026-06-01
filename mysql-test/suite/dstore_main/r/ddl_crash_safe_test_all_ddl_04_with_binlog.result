@@ -1,0 +1,400 @@
+#
+#  DDL CRASH SAFE TEST: ALL DDL TEST PART 04
+#  This test will check whether the server can recovery from different
+#  phases of ALL DDLs without inconsistency between dstore and
+#  innodb. Each DDL will be tested at 3 crash points and recovery
+#  results will be verified.
+#
+CREATE DATABASE test_ddl_crash_comprehensive;
+USE test_ddl_crash_comprehensive;
+CREATE USER 'testuser_crash'@'localhost' IDENTIFIED BY 'password';
+#  30. Crash on CREATE ROLE statement.
+#  30.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+CREATE ROLE 'role_crash';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify role should not exist
+SELECT COUNT(*) AS role_count FROM mysql.user WHERE USER='role_crash';
+role_count
+0
+#  30.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+CREATE ROLE 'role_crash';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify role should not exist
+SELECT COUNT(*) AS role_count FROM mysql.user WHERE USER='role_crash';
+role_count
+0
+#  30.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+CREATE ROLE 'role_crash';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify role should exist
+SELECT COUNT(*) AS role_count FROM mysql.user WHERE USER='role_crash';
+role_count
+1
+SELECT USER FROM mysql.user WHERE USER='role_crash';
+USER
+role_crash
+#  31. Crash on GRANT statement.
+#  31.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+GRANT SELECT ON test_ddl_crash_comprehensive.* TO 'role_crash';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify grant should not exist
+SELECT COUNT(*) AS grant_count FROM mysql.db WHERE User='role_crash' AND Db='test_ddl_crash_comprehensive';
+grant_count
+0
+#  31.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+GRANT SELECT ON test_ddl_crash_comprehensive.* TO 'role_crash';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify grant should not exist
+SELECT COUNT(*) AS grant_count FROM mysql.db WHERE User='role_crash' AND Db='test_ddl_crash_comprehensive';
+grant_count
+0
+#  31.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+GRANT SELECT ON test_ddl_crash_comprehensive.* TO 'role_crash';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify grant should exist
+SELECT COUNT(*) AS grant_count FROM mysql.db WHERE User='role_crash' AND Db='test_ddl_crash_comprehensive';
+grant_count
+1
+#  32. Crash on GRANT ROLE statement.
+#  32.1 Crash before InnoDB prepare.
+ALTER USER 'testuser_crash'@'localhost' ACCOUNT UNLOCK;
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+GRANT 'role_crash' TO 'testuser_crash'@'localhost';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify role grant should not exist
+SELECT COUNT(*) AS role_edge_count FROM mysql.role_edges WHERE FROM_USER='role_crash';
+role_edge_count
+0
+#  32.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+GRANT 'role_crash' TO 'testuser_crash'@'localhost';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify role grant should not exist
+SELECT COUNT(*) AS role_edge_count FROM mysql.role_edges WHERE FROM_USER='role_crash';
+role_edge_count
+0
+#  32.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+GRANT 'role_crash' TO 'testuser_crash'@'localhost';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify role grant should exist
+SELECT COUNT(*) AS role_edge_count FROM mysql.role_edges WHERE FROM_USER='role_crash';
+role_edge_count
+1
+SELECT TO_USER FROM mysql.role_edges WHERE FROM_USER='role_crash';
+TO_USER
+testuser_crash
+#  33. Crash on REVOKE statement.
+#  33.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+REVOKE SELECT ON test_ddl_crash_comprehensive.* FROM 'role_crash';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify grant should still exist
+SELECT COUNT(*) AS grant_count FROM mysql.db WHERE User='role_crash' AND Db='test_ddl_crash_comprehensive';
+grant_count
+1
+#  33.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+REVOKE SELECT ON test_ddl_crash_comprehensive.* FROM 'role_crash';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify grant should still exist
+SELECT COUNT(*) AS grant_count FROM mysql.db WHERE User='role_crash' AND Db='test_ddl_crash_comprehensive';
+grant_count
+1
+#  33.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+REVOKE SELECT ON test_ddl_crash_comprehensive.* FROM 'role_crash';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify grant should be revoked
+SELECT COUNT(*) AS grant_count FROM mysql.db WHERE User='role_crash' AND Db='test_ddl_crash_comprehensive';
+grant_count
+0
+#  34. Crash on REVOKE ROLE statement.
+#  34.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+REVOKE 'role_crash' FROM 'testuser_crash'@'localhost';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify role grant should still exist
+SELECT COUNT(*) AS role_edge_count FROM mysql.role_edges WHERE FROM_USER='role_crash';
+role_edge_count
+1
+#  34.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+REVOKE 'role_crash' FROM 'testuser_crash'@'localhost';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify role grant should still exist
+SELECT COUNT(*) AS role_edge_count FROM mysql.role_edges WHERE FROM_USER='role_crash';
+role_edge_count
+1
+#  34.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+REVOKE 'role_crash' FROM 'testuser_crash'@'localhost';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify role grant should be revoked
+SELECT COUNT(*) AS role_edge_count FROM mysql.role_edges WHERE FROM_USER='role_crash';
+role_edge_count
+0
+#  35. Crash on RENAME USER statement.
+#  35.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+RENAME USER 'testuser_crash'@'localhost' TO 'newuser_crash'@'localhost';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify old user name should still exist
+SELECT COUNT(*) AS old_user_count FROM mysql.user WHERE USER='testuser_crash';
+old_user_count
+1
+SELECT COUNT(*) AS new_user_count FROM mysql.user WHERE USER='newuser_crash';
+new_user_count
+0
+#  35.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+RENAME USER 'testuser_crash'@'localhost' TO 'newuser_crash'@'localhost';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify old user name should still exist
+SELECT COUNT(*) AS old_user_count FROM mysql.user WHERE USER='testuser_crash';
+old_user_count
+1
+SELECT COUNT(*) AS new_user_count FROM mysql.user WHERE USER='newuser_crash';
+new_user_count
+0
+#  35.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+RENAME USER 'testuser_crash'@'localhost' TO 'newuser_crash'@'localhost';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify user should be renamed
+SELECT COUNT(*) AS old_user_count FROM mysql.user WHERE USER='testuser_crash';
+old_user_count
+0
+SELECT COUNT(*) AS new_user_count FROM mysql.user WHERE USER='newuser_crash';
+new_user_count
+1
+SELECT USER FROM mysql.user WHERE USER LIKE '%user_crash';
+USER
+newuser_crash
+#  36. Crash on CREATE DATABASE statement.
+#  36.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+CREATE DATABASE db_crash_test;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify database should not exist
+SELECT COUNT(*) AS db_count FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='db_crash_test';
+db_count
+0
+#  36.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+CREATE DATABASE db_crash_test;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify database should not exist
+SELECT COUNT(*) AS db_count FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='db_crash_test';
+db_count
+0
+#  36.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+CREATE DATABASE db_crash_test;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify database should exist
+SELECT COUNT(*) AS db_count FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='db_crash_test';
+db_count
+1
+SHOW DATABASES LIKE 'db_crash_test';
+Database (db_crash_test)
+db_crash_test
+#  37. Crash on ALTER DATABASE statement.
+#  37.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+ALTER DATABASE db_crash_test CHARACTER SET = latin1;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify database charset should not be changed
+SELECT DEFAULT_CHARACTER_SET_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='db_crash_test';
+DEFAULT_CHARACTER_SET_NAME
+utf8mb4
+#  37.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+ALTER DATABASE db_crash_test CHARACTER SET = latin1;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify database charset should not be changed
+SELECT DEFAULT_CHARACTER_SET_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='db_crash_test';
+DEFAULT_CHARACTER_SET_NAME
+utf8mb4
+#  37.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+ALTER DATABASE db_crash_test CHARACTER SET = latin1;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify database charset should be changed
+SELECT DEFAULT_CHARACTER_SET_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='db_crash_test';
+DEFAULT_CHARACTER_SET_NAME
+latin1
+CREATE TABLE t_ddl_crash_ctas(pk INT PRIMARY KEY, col1 INT);
+#  38. Crash on DROP TABLE statement.
+#  38.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+DROP TABLE t_ddl_crash_ctas;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify table should still exist
+SELECT COUNT(*) AS table_count FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='t_ddl_crash_ctas';
+table_count
+1
+SHOW CREATE TABLE t_ddl_crash_ctas;
+Table	Create Table
+t_ddl_crash_ctas	CREATE TABLE `t_ddl_crash_ctas` (
+  `pk` int NOT NULL,
+  `col1` int DEFAULT NULL,
+  PRIMARY KEY (`pk`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+#  38.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+DROP TABLE t_ddl_crash_ctas;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify table should still exist
+SELECT COUNT(*) AS table_count FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='t_ddl_crash_ctas';
+table_count
+1
+SHOW CREATE TABLE t_ddl_crash_ctas;
+Table	Create Table
+t_ddl_crash_ctas	CREATE TABLE `t_ddl_crash_ctas` (
+  `pk` int NOT NULL,
+  `col1` int DEFAULT NULL,
+  PRIMARY KEY (`pk`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+#  38.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+DROP TABLE t_ddl_crash_ctas;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify table should be dropped
+SELECT COUNT(*) AS table_count FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='t_ddl_crash_ctas';
+table_count
+0
+SHOW CREATE TABLE t_ddl_crash_ctas;
+ERROR 42S02: Table 'test_ddl_crash_comprehensive.t_ddl_crash_ctas' doesn't exist
+#  39. Crash on DROP DATABASE statement.
+#  39.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+DROP DATABASE db_crash_test;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify database should still exist
+SELECT COUNT(*) AS db_count FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='db_crash_test';
+db_count
+1
+#  39.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+DROP DATABASE db_crash_test;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify database should still exist
+SELECT COUNT(*) AS db_count FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='db_crash_test';
+db_count
+1
+#  39.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+DROP DATABASE db_crash_test;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify database should be dropped
+SELECT COUNT(*) AS db_count FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='db_crash_test';
+db_count
+0
+# Final cleanup and summary
+# Drop remaining objects for complete cleanup
+DROP USER 'newuser_crash'@'localhost';
+DROP ROLE 'role_crash';
+# Summary: All DDL crash recovery tests completed successfully
+# Each DDL was tested at 3 crash points with proper recovery verification
+# - Before InnoDB prepare: DDL should be rolled back
+# - After InnoDB prepare but before DStore commit: DDL should be rolled back
+# - After DStore commit: DDL should be committed and visible
+SET debug='reset';
+DROP DATABASE test_ddl_crash_comprehensive;

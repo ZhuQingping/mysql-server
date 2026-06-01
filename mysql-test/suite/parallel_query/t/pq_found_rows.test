@@ -1,0 +1,24 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+
+# found_rows for simple query
+create table t2 ( f1 integer );
+insert into t2 values (1),(2),(3),(4);
+select sql_calc_found_rows * from t2 limit 2;
+select found_rows();
+select * from t2 limit 2;
+select found_rows();
+drop table t2;
+
+# found_rows for UNOIN
+CREATE TABLE t1 (a int not null, b char (10) not null);
+insert into t1 values(1,'a'),(2,'b'),(3,'c'),(3,'c');
+CREATE TABLE t2 (a int not null, b char (10) not null);
+insert into t2 values (3,'c'),(4,'d'),(5,'f'),(6,'e');
+analyze table t1;
+analyze table t2;
+(select sql_calc_found_rows a,b from t1 limit 2)  union all (select a,b from t2 order by a) limit 2;
+select found_rows();
+(select a,b from t1 limit 2)  union all (select a,b from t2 order by a) limit 2;
+select found_rows();
+drop table t1, t2;

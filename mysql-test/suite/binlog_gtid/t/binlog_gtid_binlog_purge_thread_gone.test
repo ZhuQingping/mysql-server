@@ -1,0 +1,48 @@
+# ==== Purpose ====
+#  
+# Verify that the status of binlog purge thread is 'GONE' after
+# the binlog purge thread went away unusually.
+#
+# ==== References ====
+#
+# US2023121500746  Decouple binlog purge and transaction commit
+#
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+--source include/have_binlog_format_row.inc
+--source include/force_restart.inc
+
+call mtr.add_suppression('The binlog purge thread went away unusually');
+call mtr.add_suppression('Failed to create binlog purge thread');
+RESET MASTER;
+
+--echo #
+--echo # Expect that the status of binlog purge thread is 'NOT_CREATED'
+--echo #
+SELECT @@GLOBAL.rds_binlog_purge_thread_status;
+
+SET GLOBAL debug="+d,simulate_create_purge_thread_failure";
+--echo #
+--echo # Expect that the status of binlog purge thread is 'INITIALIZING'
+--echo # after setting rds_purge_binary_logs_asynchronously to true.
+--echo #
+SET GLOBAL rds_purge_binary_logs_asynchronously= true;
+SELECT @@GLOBAL.rds_binlog_purge_thread_status;
+
+SET GLOBAL debug="-d,simulate_create_purge_thread_failure";
+
+CREATE TABLE t1(c1 TEXT); 
+
+--echo #
+--echo # Expect that the status of binlog purge thread is 'RESET'
+--echo # and then it becomes 'GONE' after rotating binlog more
+--echo # than 60 times.
+--echo #
+--let $i = 1
+while ($i < 66) {
+  INSERT INTO t1 VALUES (REPEAT('a',4096));
+  SELECT @@GLOBAL.rds_binlog_purge_thread_status;
+  --inc $i
+}
+
+DROP TABLE t1;

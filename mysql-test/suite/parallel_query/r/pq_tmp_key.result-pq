@@ -1,0 +1,116 @@
+set @old_force_parallel_execute = @@force_parallel_execute;
+CREATE TABLE `store_sales` (
+`ss_sold_date_sk` int DEFAULT NULL,
+`ss_item_sk` int NOT NULL,
+`ss_store_sk` int DEFAULT NULL,
+`ss_ticket_number` int NOT NULL,
+`ss_ext_sales_price` decimal(7,2) DEFAULT NULL,
+PRIMARY KEY (`ss_item_sk`,`ss_ticket_number`)
+) ENGINE=InnoDB;
+CREATE TABLE `store_returns` (
+`sr_returned_date_sk` int DEFAULT NULL,
+`sr_item_sk` int NOT NULL,
+`sr_store_sk` int DEFAULT NULL,
+`sr_ticket_number` int NOT NULL,
+PRIMARY KEY (`sr_item_sk`,`sr_ticket_number`)
+) ENGINE=InnoDB;
+CREATE TABLE `date_dim` (
+`d_date_sk` int NOT NULL,
+`d_date_id` char(16) NOT NULL,
+`d_date` date DEFAULT NULL,
+PRIMARY KEY (`d_date_sk`)
+) ENGINE=InnoDB;
+CREATE TABLE `store` (
+`s_store_sk` int NOT NULL,
+`s_store_id` char(16) NOT NULL,
+PRIMARY KEY (`s_store_sk`)
+) ENGINE=InnoDB;
+set force_parallel_execute=0;
+explain
+with ssr as
+(select /*+ JOIN_SUFFIX(store) */
+s_store_id,
+sum(sales_price) as sales
+from
+( select  ss_store_sk as store_sk,
+ss_sold_date_sk  as date_sk,
+ss_ext_sales_price as sales_price
+from store_sales
+union all
+select sr_store_sk as store_sk,
+sr_returned_date_sk as date_sk,
+cast(0 as decimal(7,2)) as sales_price
+from store_returns
+) salesreturns,
+date_dim,
+store
+where date_sk = d_date_sk
+and d_date between cast('2001-08-04' as date)
+and date_add(cast('2001-08-04' as date), interval 14 day)
+and store_sk = s_store_sk
+group by s_store_id)
+select
+id
+from
+(select
+s_store_id as id
+from   ssr
+) x;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<derived3>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+3	DERIVED	date_dim	NULL	ALL	PRIMARY	NULL	NULL	NULL	1	100.00	Using where; Using temporary
+3	DERIVED	<derived4>	NULL	ref	<auto_key1>	<auto_key1>	5	test.date_dim.d_date_sk	2	100.00	NULL
+3	DERIVED	store	NULL	ALL	PRIMARY	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (hash join)
+4	DERIVED	store_sales	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+5	UNION	store_returns	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	with `ssr` as (/* select#3 */ select `test`.`store`.`s_store_id` AS `s_store_id`,sum(`salesreturns`.`sales_price`) AS `sales` from (/* select#4 */ select `test`.`store_sales`.`ss_store_sk` AS `store_sk`,`test`.`store_sales`.`ss_sold_date_sk` AS `date_sk`,`test`.`store_sales`.`ss_ext_sales_price` AS `sales_price` from `test`.`store_sales` union all /* select#5 */ select `test`.`store_returns`.`sr_store_sk` AS `store_sk`,`test`.`store_returns`.`sr_returned_date_sk` AS `date_sk`,cast(0 as decimal(7,2)) AS `sales_price` from `test`.`store_returns`) `salesreturns` join `test`.`date_dim` join `test`.`store` where ((`test`.`store`.`s_store_sk` = `salesreturns`.`store_sk`) and (`salesreturns`.`date_sk` = `test`.`date_dim`.`d_date_sk`) and (`test`.`date_dim`.`d_date` between <cache>(cast('2001-08-04' as date)) and <cache>((cast('2001-08-04' as date) + interval 14 day)))) group by `test`.`store`.`s_store_id`) /* select#1 */ select /*+ JOIN_SUFFIX(@`select#3` `store`) */ `ssr`.`s_store_id` AS `id` from `ssr`
+set force_parallel_execute=1;
+explain
+with ssr as
+(select /*+ JOIN_SUFFIX(store) */
+s_store_id,
+sum(sales_price) as sales
+from
+( select  ss_store_sk as store_sk,
+ss_sold_date_sk  as date_sk,
+ss_ext_sales_price as sales_price
+from store_sales
+union all
+select sr_store_sk as store_sk,
+sr_returned_date_sk as date_sk,
+cast(0 as decimal(7,2)) as sales_price
+from store_returns
+) salesreturns,
+date_dim,
+store
+where date_sk = d_date_sk
+and d_date between cast('2001-08-04' as date)
+and date_add(cast('2001-08-04' as date), interval 14 day)
+and store_sk = s_store_sk
+group by s_store_id)
+select
+id
+from
+(select
+s_store_id as id
+from   ssr
+) x;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, .ssr)
+1	SIMPLE	<derived3>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+3	DERIVED	<gather3>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.date_dim)
+3	SIMPLE	date_dim	NULL	ALL	PRIMARY	NULL	NULL	NULL	1	100.00	Using where; Using temporary
+3	SIMPLE	<derived4>	NULL	ref	<auto_key1>	<auto_key1>	5	test.date_dim.d_date_sk	2	100.00	NULL
+3	SIMPLE	store	NULL	ALL	PRIMARY	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (hash join)
+4	DERIVED	<gather4>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.store_sales)
+4	SIMPLE	store_sales	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+5	UNION	<gather5>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.store_returns)
+5	SIMPLE	store_returns	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	with `ssr` as (/* select#3 */ select `test`.`store`.`s_store_id` AS `s_store_id`,sum(`salesreturns`.`sales_price`) AS `sales` from (/* select#4 */ select `test`.`store_sales`.`ss_store_sk` AS `store_sk`,`test`.`store_sales`.`ss_sold_date_sk` AS `date_sk`,`test`.`store_sales`.`ss_ext_sales_price` AS `sales_price` from `test`.`store_sales` union all /* select#5 */ select `test`.`store_returns`.`sr_store_sk` AS `store_sk`,`test`.`store_returns`.`sr_returned_date_sk` AS `date_sk`,cast(0 as decimal(7,2)) AS `sales_price` from `test`.`store_returns`) `salesreturns` join `test`.`date_dim` join `test`.`store` where ((`test`.`store`.`s_store_sk` = `salesreturns`.`store_sk`) and (`salesreturns`.`date_sk` = `test`.`date_dim`.`d_date_sk`) and (`test`.`date_dim`.`d_date` between <cache>(cast('2001-08-04' as date)) and <cache>((cast('2001-08-04' as date) + interval 14 day)))) group by `test`.`store`.`s_store_id`) /* select#1 */ select /*+ JOIN_SUFFIX(@`select#3` `store`) */ `ssr`.`s_store_id` AS `id` from `ssr`
+set force_parallel_execute = @old_force_parallel_execute;
+drop table store_sales;
+drop table store_returns;
+drop table date_dim;
+drop table store;

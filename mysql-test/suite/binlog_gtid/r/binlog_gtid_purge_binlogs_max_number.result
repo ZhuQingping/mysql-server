@@ -1,0 +1,55 @@
+RESET MASTER;
+CREATE TABLE t1(c1 INT);
+#
+# Generate some binlogs by 'FLUSH BINARY LOGS'
+#
+#
+# Expect that there are 21 binary logs before binlog purge
+#
+show binary logs;
+Log_name	File_size	Encrypted
+binlog.000001	#	#
+binlog.000002	#	#
+binlog.000003	#	#
+binlog.000004	#	#
+binlog.000005	#	#
+binlog.000006	#	#
+binlog.000007	#	#
+binlog.000008	#	#
+binlog.000009	#	#
+binlog.000010	#	#
+binlog.000011	#	#
+binlog.000012	#	#
+binlog.000013	#	#
+binlog.000014	#	#
+binlog.000015	#	#
+binlog.000016	#	#
+binlog.000017	#	#
+binlog.000018	#	#
+binlog.000019	#	#
+binlog.000020	#	#
+binlog.000021	#	#
+#
+# Expect that the only 10 expired binary logs from binlog.000001 to
+# binlog.000010 are purged asynchronously after a binlog rotation
+# triggered by the following transaction commit(there are 20 expired
+# binary logs), because rds_max_num_of_binary_logs_purged_per_time
+# is set to 10.
+#
+SET SESSION DEBUG="+d,force_rotate";
+INSERT INTO t1 VALUES (2000);
+show binary logs;
+Log_name	File_size	Encrypted
+binlog.000012	#	#
+binlog.000013	#	#
+binlog.000014	#	#
+binlog.000015	#	#
+binlog.000016	#	#
+binlog.000017	#	#
+binlog.000018	#	#
+binlog.000019	#	#
+binlog.000020	#	#
+binlog.000021	#	#
+binlog.000022	#	#
+SET SESSION DEBUG="-d,force_rotate";
+DROP TABLE t1;

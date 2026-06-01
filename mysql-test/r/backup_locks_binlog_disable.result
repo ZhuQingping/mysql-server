@@ -1,0 +1,269 @@
+#-----------------------------------------------------------------------
+# Test sql_log_bin = 0 and rds_binlog_lock_enable = ON
+#-----------------------------------------------------------------------
+SHOW VARIABLES LIKE 'rds_binlog_lock_enable';
+Variable_name	Value
+rds_binlog_lock_enable	ON
+#-----------------------------------------------------------------------
+# Setup
+#-----------------------------------------------------------------------
+DROP TABLE if exists t_innodb;
+Warnings:
+Note	1051	Unknown table 'test.t_innodb'
+CREATE TABLE t_innodb(a INT NOT NULL, KEY (a)) ENGINE=InnoDB;
+DROP VIEW if exists v_innodb;
+Warnings:
+Note	1051	Unknown table 'test.v_innodb'
+CREATE VIEW v_innodb AS SELECT * FROM t_innodb;
+set session sql_log_bin = 0;
+#-----------------------------------------------------------------------
+# Basic syntax checks
+#-----------------------------------------------------------------------
+LOCK TABLES t_innodb FOR BACKUP;
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'FOR BACKUP' at line 1
+LOCK TABLES t_innodb READ FOR BACKUP;
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'FOR BACKUP' at line 1
+LOCK TABLES t_innodb FOR BACKUP READ;
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'FOR BACKUP READ' at line 1
+LOCK BINLOG t_innodb FOR BACKUP;
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 't_innodb FOR BACKUP' at line 1
+LOCK BINLOG t_innodb READ FOR BACKUP;
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 't_innodb READ FOR BACKUP' at line 1
+LOCK BINLOG t_innodb FOR BACKUP READ;
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 't_innodb FOR BACKUP READ' at line 1
+LOCK BINLOG FOR BACKUP;
+UNLOCK BINLOG;
+#-----------------------------------------------------------------------
+# No backup locks are allowed in stored routines
+#-----------------------------------------------------------------------
+CREATE PROCEDURE p2()
+BEGIN
+LOCK BINLOG FOR BACKUP;
+END|
+ERROR 0A000: LOCK is not allowed in stored procedures
+CREATE FUNCTION f2() RETURNS INT DETERMINISTIC
+BEGIN
+LOCK BINLOG FOR BACKUP;
+RETURN 1;
+END|
+ERROR 0A000: LOCK is not allowed in stored procedures
+#-----------------------------------------------------------------------
+# Single-threaded tests
+#-----------------------------------------------------------------------
+SET SESSION lock_wait_timeout=1;
+FLUSH STATUS;
+LOCK BINLOG FOR BACKUP;
+LOCK BINLOG FOR BACKUP;
+SHOW STATUS LIKE 'Com_lock_binlog_for_backup';
+Variable_name	Value
+Com_lock_binlog_for_backup	2
+UNLOCK BINLOG;
+SHOW STATUS LIKE 'Com_unlock_binlog';
+Variable_name	Value
+Com_unlock_binlog	1
+LOCK BINLOG FOR BACKUP;
+DELETE FROM t_innodb;
+INSERT INTO t_innodb VALUES(0);
+UPDATE t_innodb SET a = 1;
+REPLACE INTO t_innodb VALUES(1);
+SELECT * from t_innodb;
+a
+1
+1
+HANDLER t_innodb OPEN;
+HANDLER t_innodb READ a FIRST;
+a
+1
+HANDLER t_innodb CLOSE;
+CREATE TABLE tt_innodb(a INT NOT NULL) ENGINE=InnoDB;
+DROP TABLE tt_innodb;
+DROP TABLE non_existing;
+ERROR 42S02: Unknown table 'test.non_existing'
+TRUNCATE TABLE t_innodb;
+RENAME TABLE t_innodb TO tmp, tmp TO t_innodb;
+ALTER TABLE t_innodb ADD COLUMN b CHAR(10) NOT NULL;
+ALTER TABLE t_innodb DROP COLUMN b;
+ALTER TABLE t_innodb ADD KEY tmp (a);
+Warnings:
+Warning	1831	Duplicate index 'tmp' defined on the table 'test.t_innodb'. This is deprecated and will be disallowed in a future release.
+ALTER TABLE t_innodb DROP KEY tmp;
+CREATE DATABASE test1;
+DROP DATABASE test1;
+CREATE PROCEDURE p1()
+BEGIN
+SELECT 1;
+END|
+DROP PROCEDURE p1|
+CREATE FUNCTION f1() RETURNS INT DETERMINISTIC
+BEGIN
+RETURN 1;
+END|
+DROP FUNCTION f1|
+CREATE VIEW v1 AS SELECT * FROM t_innodb;
+DROP VIEW v1;
+INSERT INTO v_innodb VALUES(1);
+UNLOCK BINLOG;
+CREATE TEMPORARY TABLE tt_innodb(a INT NOT NULL) ENGINE=InnoDB;
+LOCK BINLOG FOR BACKUP;
+START TRANSACTION;
+SELECT * FROM tt_innodb;
+a
+INSERT INTO tt_innodb VALUES(6);
+COMMIT;
+SELECT * FROM tt_innodb;
+a
+6
+DROP TEMPORARY TABLE tt_innodb;
+UNLOCK BINLOG;
+LOCK BINLOG FOR BACKUP;
+INSERT INTO t_innodb VALUES(1);
+UNLOCK BINLOG;
+SET @old_general_log = @@general_log;
+SET @old_slow_query_log = @@slow_query_log;
+SET @old_log_output = @@log_output;
+SET @old_long_query_time = @@SESSION.long_query_time;
+SET SESSION long_query_time = 0;
+SET GLOBAL log_output = 'TABLE';
+SET GLOBAL general_log = ON;
+SET GLOBAL slow_query_log = ON;
+LOCK BINLOG FOR BACKUP;
+SELECT 1;
+1
+1
+UNLOCK BINLOG;
+SET SESSION long_query_time = @old_long_query_time;
+SET GLOBAL log_output = @old_log_output;
+SET GLOBAL slow_query_log = @old_slow_query_log;
+SET GLOBAL general_log = @old_general_log;
+SET SESSION lock_wait_timeout=default;
+#-----------------------------------------------------------------------
+# Multi-threaded tests
+#-----------------------------------------------------------------------
+SET GLOBAL lock_wait_timeout=1;
+# connection con1
+CREATE TEMPORARY TABLE tt_innodb(a INT NOT NULL) ENGINE=InnoDB;
+# connection default
+LOCK BINLOG FOR BACKUP;
+# connection con1
+START TRANSACTION;
+SELECT * FROM tt_innodb;
+a
+INSERT INTO tt_innodb VALUES(6);
+COMMIT;
+SELECT * FROM tt_innodb;
+a
+6
+DROP TEMPORARY TABLE tt_innodb;
+# connection default
+UNLOCK BINLOG;
+set session sql_log_bin=0;
+LOCK BINLOG FOR BACKUP;
+# connection con1
+set session sql_log_bin=0;
+DELETE FROM t_innodb;
+INSERT INTO t_innodb VALUES(0);
+UPDATE t_innodb SET a = 1;
+REPLACE INTO t_innodb VALUES(1);
+SELECT * from t_innodb;
+a
+1
+1
+HANDLER t_innodb OPEN;
+HANDLER t_innodb READ a FIRST;
+a
+1
+HANDLER t_innodb CLOSE;
+CREATE TABLE tt_innodb(a INT NOT NULL) ENGINE=InnoDB;
+DROP TABLE tt_innodb;
+DROP TABLE non_existing;
+ERROR 42S02: Unknown table 'test.non_existing'
+TRUNCATE TABLE t_innodb;
+RENAME TABLE t_innodb TO tmp, tmp TO t_innodb;
+ALTER TABLE t_innodb ADD COLUMN b CHAR(10) NOT NULL;
+ALTER TABLE t_innodb DROP COLUMN b;
+ALTER TABLE t_innodb ADD KEY tmp (a);
+Warnings:
+Warning	1831	Duplicate index 'tmp' defined on the table 'test.t_innodb'. This is deprecated and will be disallowed in a future release.
+ALTER TABLE t_innodb DROP KEY tmp;
+CREATE DATABASE test1;
+DROP DATABASE test1;
+CREATE PROCEDURE p1()
+BEGIN
+SELECT 1;
+END|
+DROP PROCEDURE p1|
+CREATE FUNCTION f1() RETURNS INT DETERMINISTIC
+BEGIN
+RETURN 1;
+END|
+DROP FUNCTION f1|
+CREATE VIEW v1 AS SELECT * FROM t_innodb;
+DROP VIEW v1;
+INSERT INTO v_innodb VALUES(1);
+# connection default
+UNLOCK BINLOG;
+SET @old_general_log = @@general_log;
+SET @old_slow_query_log = @@slow_query_log;
+SET @old_log_output = @@log_output;
+SET GLOBAL log_output = 'TABLE';
+SET GLOBAL general_log = ON;
+SET GLOBAL slow_query_log = ON;
+# connection con1
+SET @old_long_query_time = @@SESSION.long_query_time;
+SET SESSION long_query_time = 0;
+SELECT 1;
+1
+1
+# connection default
+LOCK BINLOG FOR BACKUP;
+SELECT 1;
+1
+1
+# connection con1
+SET SESSION long_query_time = @old_long_query_time;
+# connection default
+UNLOCK BINLOG;
+SET GLOBAL log_output = @old_log_output;
+SET GLOBAL slow_query_log = @old_slow_query_log;
+SET GLOBAL general_log = @old_general_log;
+truncate table mysql.general_log;
+truncate table mysql.slow_log;
+#-----------------------------------------------------------------------
+# Test sql_log_bin = 1 and rds_binlog_lock_enable = OFF
+#-----------------------------------------------------------------------
+SET PERSIST_ONLY rds_binlog_lock_enable=0;
+# Restart server and check if server starts
+# restart:
+SELECT @@global.rds_binlog_lock_enable;
+@@global.rds_binlog_lock_enable
+0
+SELECT * FROM performance_schema.persisted_variables;
+VARIABLE_NAME	VARIABLE_VALUE
+rds_binlog_lock_enable	OFF
+SHOW VARIABLES LIKE 'rds_binlog_lock_enable';
+Variable_name	Value
+rds_binlog_lock_enable	OFF
+SET DEBUG_SYNC= "binlog_protection_acquired WAIT_FOR released";
+INSERT INTO t_innodb VALUES(5);
+select LOCK_TYPE,LOCK_DURATION,LOCK_STATUS from performance_schema.metadata_locks where OBJECT_TYPE = 'BINLOG' order by LOCK_TYPE;
+LOCK_TYPE	LOCK_DURATION	LOCK_STATUS
+SET DEBUG_SYNC= "now SIGNAL released";
+LOCK BINLOG FOR BACKUP;
+ERROR HY000: Binlog metadata lock is not enabled.
+select LOCK_TYPE,LOCK_DURATION,LOCK_STATUS from performance_schema.metadata_locks where OBJECT_TYPE = 'BINLOG' order by LOCK_TYPE;
+LOCK_TYPE	LOCK_DURATION	LOCK_STATUS
+UNLOCK BINLOG;
+SELECT * FROM t_innodb;
+a
+1
+5
+#-----------------------------------------------------------------------
+# Cleanup
+#-----------------------------------------------------------------------
+SET GLOBAL lock_wait_timeout=default;
+set session sql_log_bin = 1;
+DROP VIEW v_innodb;
+DROP TABLE t_innodb;
+RESET PERSIST;
+# Restart server and check if server starts
+# restart:

@@ -1,0 +1,449 @@
+--source include/have_only_dstore.inc
+# Nested loop join and distinct optimization.
+
+--echo # Customer encounter performance regression for "Multi-join + distinct" scenario
+--echo # when they upgrade from MySQL 5.7 to GaussDB(for MySQL) 8.0.22. The reason is
+--echo # that MySQL 8.0 (>=8.0.16) new Volcano iterator executor do not apply distinct
+--echo # optimization for this scenario, even if optimizer already mark "Distinct".
+
+# For example: 
+# mysql> explain select distinct tt1.a from tt1, tt1 as tt2, tt1 as tt3;
+# +----+-------------+-------+------------+-------+---------------+------+---------+------+------+----------+------------------------------+
+# | id | select_type | table | partitions | type  | possible_keys | key  | key_len | ref  | rows | filtered | Extra                        |
+# +----+-------------+-------+------------+-------+---------------+------+---------+------+------+----------+------------------------------+
+# |  1 | SIMPLE      | tt1   | NULL       | index | a             | a    | 5       | NULL |    3 |   100.00 | Using index; Using temporary |
+# |  1 | SIMPLE      | tt2   | NULL       | index | NULL          | a    | 5       | NULL |    3 |   100.00 | Using index; Distinct        |
+# |  1 | SIMPLE      | tt3   | NULL       | index | NULL          | a    | 5       | NULL |    3 |   100.00 | Using index; Distinct        |
+# +----+-------------+-------+------------+-------+---------------+------+---------+------+------+----------+------------------------------+
+
+--echo # Refer to MySQL old version (5.7) optimization ideas, we can stop scan nested
+--echo # loop join inner table when find out one new matched record. We introduce new
+--echo # optimizer switch variable "nlj_distinct_optimize" to enable/disable this optimization.
+
+--echo #
+--echo # test case: session level hint updateable optimizer switch variable "nlj_distinct_optimize"
+--echo #
+
+# default value
+SELECT @@optimizer_switch;
+SET @origin_optimizer_switch=@@optimizer_switch;
+
+SET @origin_dstore_use_histogram_auto_update=@@global.dstore_use_histogram_auto_update;
+SET GLOBAL dstore_use_histogram_auto_update=OFF;
+
+# session variable
+SET SESSION optimizer_switch="nlj_distinct_optimize=ON";
+SELECT LOCATE('nlj_distinct_optimize=on', @@session.optimizer_switch);
+SET SESSION optimizer_switch="nlj_distinct_optimize=OFF";
+SELECT LOCATE('nlj_distinct_optimize=off', @@session.optimizer_switch);
+
+# update global variable
+SET @origin_global_optimizer_switch=@@global.optimizer_switch;
+
+# If join elimination is on, many queries end up as single-table queries where the optimization mentioned above does not apply.
+--source include/turn_off_join_elimination.inc
+# We also need to turn it off globally, as the test uses the 'default'
+# value several times.
+--disable_query_log
+set global optimizer_switch="left_join_elimination=off";
+--enable_query_log
+
+SET GLOBAL optimizer_switch="nlj_distinct_optimize=ON";
+SELECT LOCATE('nlj_distinct_optimize=on', @@global.optimizer_switch);
+SET GLOBAL optimizer_switch="nlj_distinct_optimize=OFF";
+SELECT LOCATE('nlj_distinct_optimize=off', @@global.optimizer_switch);
+
+# variable hint updateable
+SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=ON") */ LOCATE('nlj_distinct_optimize=on', @@session.optimizer_switch);
+SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=ON") */ LOCATE('nlj_distinct_optimize=off', @@session.optimizer_switch);
+
+--echo #
+--echo # test case: we can check this optimization worked by explain format=tree or explain analyze.
+--echo #            "Nested loop inner join distinct" and "Nested loop left join distinct" means
+--echo #            distinct optimization worked. Explain traditional and json format can not help
+--echo #            to check the optimization work or not.
+--echo #
+
+# Prepare table and data
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(1),(2),(5),(6);
+INSERT INTO t1 VALUES(1),(2),(5),(6);
+ANALYZE TABLE t1;
+
+# Disable hash join
+SET optimizer_switch='block_nested_loop=OFF';
+
+# Nested loop inner join + distinct
+let $query1= SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=ON") */ DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+let $query2= SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=OFF") */ DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+
+# Explain traditional format keep same
+--replace_column 10 # 11 #
+eval EXPLAIN $query1;
+--replace_column 10 # 11 #
+eval EXPLAIN $query2;
+
+# Explain tree format are different
+--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
+eval EXPLAIN FORMAT=TREE $query1;
+--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
+eval EXPLAIN FORMAT=TREE $query2;
+
+# Explain analyze are different
+--replace_regex /\(cost=.*rows=.*\)\s*\(actual time=.*rows=.*(loops=.*)\)/(cost=X rows=X) (actual time=X rows=X loops=X)/
+eval EXPLAIN ANALYZE $query1;
+--replace_regex /\(cost=.*rows=.*\)\s*\(actual time=.*rows=.*(loops=.*)\)/(cost=X rows=X) (actual time=X rows=X loops=X)/
+eval EXPLAIN ANALYZE $query2;
+
+# Nested loop outer join + distinct
+let $query3= SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=ON") */ DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON tt1.a + 6 > tt2.a LEFT JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+let $query4= SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=OFF") */ DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON tt1.a + 6 > tt2.a LEFT JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+
+# Explain traditional format keep same
+--replace_column 10 # 11 #
+eval EXPLAIN $query3;
+--replace_column 10 # 11 #
+eval EXPLAIN $query4;
+
+# Explain tree format are different
+--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
+eval EXPLAIN FORMAT=TREE $query3;
+--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
+eval EXPLAIN FORMAT=TREE $query4;
+
+# Explain analyze are different
+--replace_regex /\(cost=.*rows=.*\)\s*\(actual time=.*rows=.*(loops=.*)\)/(cost=X rows=X) (actual time=X rows=X loops=X)/
+eval EXPLAIN ANALYZE $query3;
+--replace_regex /\(cost=.*rows=.*\)\s*\(actual time=.*rows=.*(loops=.*)\)/(cost=X rows=X) (actual time=X rows=X loops=X)/
+eval EXPLAIN ANALYZE $query4;
+
+--echo #
+--echo # test case: when this optimization worked, scan less records can get distinct result,
+--echo #            then query runs faster compared with no this optimization
+--echo #
+
+--echo # with optimization, handler_read status
+--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
+eval EXPLAIN FORMAT=TREE $query1;
+FLUSH STATUS;
+eval $query1;
+SELECT SUM(VARIABLE_VALUE) INTO @with_optimize_read1 FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+
+--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
+eval EXPLAIN FORMAT=TREE $query3;
+FLUSH STATUS;
+eval $query3;
+SELECT SUM(VARIABLE_VALUE) INTO @with_optimize_read2 FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+
+--echo # without optimization, handler_read status
+--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
+eval EXPLAIN FORMAT=TREE $query2;
+FLUSH STATUS;
+eval $query2;
+SELECT SUM(VARIABLE_VALUE) INTO @without_optimize_read1 FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+
+--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
+eval EXPLAIN FORMAT=TREE $query4;
+FLUSH STATUS;
+eval $query4;
+SELECT SUM(VARIABLE_VALUE) INTO @without_optimize_read2 FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+
+--echo # following check always true
+SELECT IF(@with_optimize_read1 < @without_optimize_read1, 'TRUE', 'FALSE') AS 'check'; 
+SELECT IF(@with_optimize_read2 < @without_optimize_read2, 'TRUE', 'FALSE') AS 'check'; 
+
+# Cleanup
+DROP TABLE t1;
+SET optimizer_switch=DEFAULT;
+
+--echo #
+--echo # test case: this optimization only support:
+--echo #            - nested loop inner join + distinct
+--echo #            - nested loop outer join + distinct
+--echo #            do not support:
+--echo #            - nested loop semi join + distinct
+--echo #            - nested loop anti join + distinct
+--echo #            - hash join + distinct
+--echo #            - batched key access + distinct
+--echo #
+
+# Prepare table and data
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(0),(1),(2),(5),(6);
+INSERT INTO t1 VALUES(0),(1),(2),(5),(6);
+ANALYZE TABLE t1;
+
+--echo # Optimization work for nested loop inner join + distinct
+SET optimizer_switch='block_nested_loop=OFF';
+let $query= SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 JOIN t1 AS tt3 ON tt2.a + 1 = tt3.a JOIN t1 AS tt4 ON tt3.a=tt4.a ORDER BY 1;
+--source include/distinct_optimize_check.inc
+
+--echo # Optimization not work for inner hash join + distinct
+SET optimizer_switch=DEFAULT;
+SET optimizer_switch="nlj_distinct_optimize=ON";
+--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+
+--echo # Optimization work for nested loop outer join + distinct
+CREATE TABLE t2 (
+  pk integer NOT NULL,
+  f1 integer,
+  f2 varchar(10),
+  f3 varchar(255)
+);
+INSERT INTO t2 VALUES (14,7,'G','W'),(16,8,'W','p'),(23,NULL,'q','w');
+INSERT INTO t2 VALUES (14,7,'G','W'),(16,8,'W','p'),(23,NULL,'q','w');
+ANALYZE TABLE t2;
+
+SET optimizer_switch='block_nested_loop=OFF';
+let $query= SELECT DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON TRUE LEFT JOIN t1 AS tt3 ON tt2.a + 1 = tt3.a LEFT JOIN t1 AS tt4 ON tt3.a=tt4.a ORDER BY 1;
+--source include/distinct_optimize_check.inc
+
+let $query= SELECT DISTINCT table1.pk FROM t2 AS table1 LEFT JOIN t2 AS table2 ON table1.f2=table2.f3 WHERE table2.f1 IS NULL;
+--source include/distinct_optimize_check.inc
+
+--echo # Optimization not work for left hash join + distinct
+SET optimizer_switch=DEFAULT;
+SET optimizer_switch="nlj_distinct_optimize=ON";
+let $query= SELECT DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON TRUE LEFT JOIN t1 AS tt3 ON tt2.a + 1 = tt3.a LEFT JOIN t1 AS tt4 ON tt3.a=tt4.a ORDER BY 1;
+--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+let $query= SELECT DISTINCT table1.pk FROM t2 AS table1 LEFT JOIN t2 AS table2 ON table1.f2=table2.f3 WHERE table2.f1 IS NULL;
+--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+
+# semi-join + distinct test
+# Currently semi-join has 4 different implemation: Materialization, FirstMatch, LooseScan, Duplicate Weedout
+
+# semi-join materialize + distinct
+--echo # Optimization work for semi-join materialize
+SET optimizer_switch='block_nested_loop=off,firstmatch=off';
+let $query= SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 ON tt1.a > tt2.a WHERE tt1.a + tt2.a IN (SELECT a FROM t1 AS tt3);
+--source include/distinct_optimize_check.inc
+
+let $query= SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 ON tt1.a > tt2.a JOIN t1 AS tt3 WHERE tt1.a - tt2.a IN (SELECT tt4.a + tt5.a - tt6.a FROM t1 AS tt4, t1 AS tt5, t1 AS tt6);
+--source include/distinct_optimize_check.inc
+
+SET optimizer_switch=DEFAULT;
+DROP TABLE t1,t2;
+
+# semi-join LooseScan + distinct
+--echo # Optimization work for semi-join loosescan
+CREATE TABLE t1(a INT, KEY (a));
+INSERT INTO t1 VALUES(0),(1),(2),(5),(6);
+INSERT INTO t1 VALUES(0),(1),(2),(5),(6);
+ANALYZE TABLE t1 UPDATE HISTOGRAM ON a;
+ANALYZE TABLE t1;
+
+SET optimizer_switch='materialization=off,firstmatch=off,duplicateweedout=off,block_nested_loop=off';
+SET optimizer_switch='semijoin=on,loosescan=on';
+let $query= SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 ON tt1.a > tt2.a WHERE tt1.a + tt2.a IN (SELECT a FROM t1 AS tt3);
+--source include/distinct_optimize_check.inc
+
+SET optimizer_switch=DEFAULT;
+DROP TABLE t1;
+
+# semi-join firstmatch + distinct, not support
+--echo # Optimization not work for semi-join firstmatch
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(1),(2),(5),(6);
+INSERT INTO t1 VALUES(1),(2),(5),(6);
+ANALYZE TABLE t1;
+
+SET optimizer_switch='block_nested_loop=off,materialization=off';
+SET optimizer_switch="nlj_distinct_optimize=ON";
+let $query= SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 ON tt1.a > tt2.a WHERE tt1.a + tt2.a IN (SELECT a FROM t1 AS tt3);
+--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+SET optimizer_switch=DEFAULT;
+DROP TABLE t1;
+
+# semi-join Duplicate Weedout + distinct, not support
+--echo # Optimization not work for semi-join duplicateweedout
+CREATE TABLE t1 (a int, b int, index a (a,b));
+CREATE TABLE t2 (a int, index a (a)); 
+INSERT INTO t1 VALUES (1,10), (2,20), (3,30), (4,40);
+CREATE TABLE t0(a int); 
+INSERT INTO t0 VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+INSERT INTO t1
+SELECT rand()*100000+200,rand()*100000 from t0 A, t0 B, t0 C, t0 D;  
+INSERT INTO t2 VALUES (2), (3), (4), (5);
+ANALYZE TABLE t1 UPDATE HISTOGRAM ON a,b;
+ANALYZE TABLE t2 UPDATE HISTOGRAM ON a;
+ANALYZE TABLE t1,t2;
+
+SET optimizer_switch='block_nested_loop=off,firstmatch=off';
+SET optimizer_switch="nlj_distinct_optimize=ON";
+let $query= SELECT DISTINCT(t2.a) FROM t2 WHERE t2.a IN (SELECT tt2.a FROM t1 AS tt2, t2 AS tt3, t2 AS tt4);
+--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+SET optimizer_switch=DEFAULT;
+
+DROP TABLE t0,t1,t2;
+
+--echo #
+--echo # test case: Optimization not work for anti-join
+--echo #
+# Anti-join + distinct, not support
+CREATE TABLE t1(
+ pk INTEGER PRIMARY KEY,
+ uk INTEGER UNIQUE,
+ ukn INTEGER UNIQUE NOT NULL,
+ ik INTEGER,
+ d INTEGER,
+ INDEX ik(ik));
+INSERT INTO t1 VALUES
+(0, NULL, 0, NULL, NULL),
+(1, 10, 20, 30, 40),
+(2, 20, 40, 60, 80);
+ANALYZE TABLE t1 UPDATE HISTOGRAM ON pk,uk,ukn,ik,d;
+
+CREATE TABLE t2(id INTEGER PRIMARY KEY);
+INSERT INTO t2 VALUES
+ (1), (2), (3), (4), (5), (6), (7), (8), (9),(10),
+(11),(12),(13),(14),(15),(16),(17),(18),(19),(20),
+(21),(22),(23),(24),(25),(26),(27),(28),(29),(30),
+(31),(32),(33),(34),(35),(36),(37),(38),(39),(40);
+ANALYZE TABLE t2 UPDATE HISTOGRAM ON id;
+
+CREATE TABLE t3 AS SELECT * FROM t2;
+ANALYZE TABLE t1,t2,t3;
+
+let $query1= SELECT distinct id FROM t2 as ot WHERE NOT EXISTS (SELECT * FROM t1 AS it WHERE it.uk=ot.id) AND ot.id<25;
+let $query2= SELECT distinct id FROM t3 as ot WHERE NOT EXISTS (SELECT * FROM t1 AS it WHERE it.uk=ot.id) AND ot.id<25;
+SET optimizer_switch="nlj_distinct_optimize=ON";
+--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
+eval EXPLAIN FORMAT=TREE $query1;
+eval $query1;
+--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
+eval EXPLAIN FORMAT=TREE $query2;
+eval $query2;
+
+DROP TABLE t1,t2,t3;
+
+--echo #
+--echo # test case: Optimization work for UNION and UNION ALL
+--echo #
+
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(1),(1),(2),(2),(3);
+CREATE TABLE t2(a INT);
+INSERT INTO t2 VALUES(2),(3),(4),(5),(5);
+CREATE TABLE t3(a INT);
+INSERT INTO t3 VALUES(0),(5),(6),(7),(8);
+ANALYZE TABLE t1,t2,t3;
+SET optimizer_switch='block_nested_loop=off';
+
+# UNION
+let $query= 
+SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t3 AS tt2 JOIN t3 AS tt3 ON tt2.a + 5 = tt3.a
+UNION 
+SELECT DISTINCT tt1.a FROM t2 AS tt1 JOIN t3 AS tt2 JOIN t2 AS tt3 ON tt2.a + 5 = tt3.a;
+--source include/distinct_optimize_check.inc
+
+# UNION ALL
+let $query= 
+SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t3 AS tt2 JOIN t3 AS tt3 ON tt2.a + 5 = tt3.a
+UNION ALL 
+SELECT DISTINCT tt1.a FROM t2 AS tt1 JOIN t3 AS tt2 JOIN t2 AS tt3 ON tt2.a + 5 = tt3.a;
+--source include/distinct_optimize_check.inc
+
+SET optimizer_switch=DEFAULT;
+DROP TABLE t1,t2,t3;
+
+--echo # Optimization work for non left deep plan
+# Prepare table and data
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(0),(1),(2),(5),(6);
+INSERT INTO t1 VALUES(0),(1),(2),(5),(6);
+ANALYZE TABLE t1;
+
+SET optimizer_switch='block_nested_loop=OFF';
+let $query= SELECT DISTINCT t1.* FROM (t1 LEFT JOIN t1 AS t2 ON t1.a = t2.a) LEFT JOIN (t1 AS t3 LEFT JOIN t1 AS t4 ON t3.a = t4.a) ON t1.a = t4.a;
+--source include/distinct_optimize_check.inc
+
+SET optimizer_switch=DEFAULT;
+DROP TABLE t1;
+
+# Semijoin materialize + distinct 
+--echo # Optimization work for semi-join materialize
+CREATE TABLE t1 (a INT, b INT, INDEX a(a,b));
+CREATE TABLE t2 (a INT, INDEX a(a));
+CREATE TABLE t3 (a INT, b INT, INDEX a(a));
+INSERT INTO t1 VALUES (1,10), (2,20), (3,30), (4,40);
+INSERT INTO t2 VALUES (2), (3), (4), (5);
+INSERT INTO t3 VALUES (2,3), (3,3), (4,2), (5,4);
+ANALYZE TABLE t1 UPDATE HISTOGRAM ON a,b;
+ANALYZE TABLE t2 UPDATE HISTOGRAM ON a;
+ANALYZE TABLE t3 UPDATE HISTOGRAM ON a;
+ANALYZE TABLE t1,t2,t3;
+
+SET optimizer_switch='block_nested_loop=off,firstmatch=off';
+let $query= SELECT DISTINCT aaa.* FROM (SELECT t1.a FROM t1 LEFT JOIN t2 ON (EXISTS (
+SELECT t3.b FROM t3 LEFT JOIN (SELECT b FROM t2 WHERE false
+ GROUP BY b) AS tt ON t3.a = t2.a and t3.b = t1.b))) AS aaa;
+--source include/distinct_optimize_check.inc
+
+let $query= SELECT DISTINCT aaa.* FROM (SELECT t1.a FROM t1 LEFT JOIN t2 ON (EXISTS (
+  SELECT t3.a FROM t3 straight_join t2 on t3.a = t2.a))) AS aaa;
+--source include/distinct_optimize_check.inc
+
+SET optimizer_switch=DEFAULT;
+DROP TABLE t1,t2,t3;
+
+--echo #
+--echo # BUG2024030401326: Crash occur for debug version when access more than 31 tables
+--echo #
+CREATE TABLE t1 (a INT);
+ANALYZE TABLE t1;
+PREPARE s1 FROM '
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( SELECT a FROM t1) 
+  ))))))))))))))))))))))))))))))';
+EXECUTE s1;
+SET optimizer_switch="nlj_distinct_optimize=ON";
+EXECUTE s1;
+SET optimizer_switch="nlj_distinct_optimize=OFF";
+EXECUTE s1;
+DROP PREPARE s1;
+DROP TABLE t1;
+
+# Cleanup
+--source include/restore_opt_switch_after_turn_off_join_elimination.inc
+SET optimizer_switch=@origin_optimizer_switch;
+SET GLOBAL optimizer_switch = @origin_global_optimizer_switch;
+SET GLOBAL dstore_use_histogram_auto_update=@origin_dstore_use_histogram_auto_update;

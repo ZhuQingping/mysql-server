@@ -1,0 +1,28 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+--echo #
+--echo #  Test whether DDL recovery can work normally with active DML transaction.
+--echo #
+
+--echo # 1. The follow test will crash before this patch.
+CREATE DATABASE test_active_dml_ddl;
+USE test_active_dml_ddl;
+CREATE TABLE T( i int);
+BEGIN;
+INSERT INTO T values (9);
+ALTER TABLE T ADD COLUMN col1 INT DEFAULT 888;
+SELECT * FROM T;
+
+--echo # 2. Test the DDL can recovery normally after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+ALTER TABLE T ADD COLUMN col2 INT DEFAULT 999;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+SHOW CREATE TABLE T;
+SELECT * FROM T;
+
+DROP DATABASE test_active_dml_ddl;

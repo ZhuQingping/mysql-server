@@ -1,0 +1,90 @@
+create database restore_resume;
+use restore_resume;
+create table t1(s varchar(100)) engine=dstore;
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1000
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+call rds_backup.start_log_archive();
+DROP PROCEDURE IF EXISTS load_data;
+CALL load_data('t1','s',300000);
+select count(*) from t1;
+count(*)
+301000
+Pattern "Local backup restore current flushed plsn \d+" found
+select count(*) from t1;
+count(*)
+301000
+insert into t1 values('a');
+select count(*) from t1;
+count(*)
+301001
+select count(*) from t1;
+count(*)
+301000
+insert into t1 values('a');
+select count(*) from t1;
+count(*)
+301001
+Pattern "Local backup restore current flushed plsn \d+" found
+# restart: --dstore_open_restore_mode=on
+Pattern "Local backup restore current flushed plsn \d+" found
+# Kill the server
+# restart
+Pattern "Local backup restore current flushed plsn \d+" not found
+# Kill the server
+# restart: --dstore_open_restore_mode=on
+Pattern "Local backup restore current flushed plsn \d+" found
+Pattern "Restore use start_recovery_lsn (?<plsn>[1-9]\d+) end_recovery_lsn \k<plsn>" found
+select count(*) from t1;
+count(*)
+301000
+insert into t1 values('a');
+select count(*) from t1;
+count(*)
+301001
+Pattern "Local backup restore current flushed plsn \d+" found
+Pattern "dstore_exit_after_restore is set. Exit after restore finish" not found
+Pattern "Local backup restore current flushed plsn \d+" found
+Pattern "dstore_exit_after_restore is set. Exit after restore finish" not found
+# Kill the server
+# restart: --dstore_open_restore_mode=on
+Pattern "Local backup restore current flushed plsn \d+" found
+Pattern "Restore use start_recovery_lsn (?<plsn>[1-9]\d+) end_recovery_lsn \k<plsn>" not found
+Pattern "Restore use start_recovery_lsn \d+ end_recovery_lsn \d+" found
+select count(*) from t1;
+count(*)
+301000
+insert into t1 values('a');
+select count(*) from t1;
+count(*)
+301001
+# Kill the server
+Pattern "create restore meta file object fail when update restore start point" found
+Pattern "open file .* fail when update restore start point" found
+Pattern "read point from .* fail when update restore start point" found
+Pattern "write restore start point to restore meta file .* fail" found
+Pattern "failed to write recovery point to restore meta file" found
+Pattern "dstore_exit_after_restore is set. Exit after restore finish" found
+# restart: --dstore_open_restore_mode=on
+select count(*) from t1;
+count(*)
+301001
+insert into t1 values('a');
+select count(*) from t1;
+count(*)
+301002
+drop database restore_resume;

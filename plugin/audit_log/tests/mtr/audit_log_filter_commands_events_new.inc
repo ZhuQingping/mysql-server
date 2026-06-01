@@ -1,0 +1,70 @@
+
+PING;
+CREATE DATABASE db1 DEFAULT CHARACTER SET latin1;
+CREATE DATABASE db2 DEFAULT CHARACTER SET latin1;
+USE db1;
+CREATE TABLE t1 (a INT, b INT, KEY(b)) engine=MyISAM;
+CREATE TABLE t2 (a INT, b INT, KEY(b)) engine=InnoDB;
+SELECT *FROM t1;
+REPAIR TABLE db1.t1;
+DELIMITER //;
+CREATE PROCEDURE p1()
+BEGIN
+  INSERT INTO t1 (a, b) VALUES (1, 1);
+END//
+
+DELIMITER ;//
+
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
+BEGIN;
+  INSERT INTO t1 (a, b) VALUES (2, 2);
+COMMIT;
+
+BEGIN;
+  INSERT INTO t1 (a, b) VALUES (3, 3);
+ROLLBACK;
+
+DELETE FROM db1.t1 WHERE a=2;
+
+UPDATE db1.t1 SET a = 4 WHERE b=3;
+
+OPTIMIZE TABLE db1.t1;
+
+REPLACE INTO db1.t1 (a,b)
+VALUES (6,6);
+
+PREPARE get_value FROM 'SELECT *FROM db1.t1';
+
+CREATE TRIGGER trigger1 BEFORE INSERT ON t1 FOR EACH ROW INSERT INTO t2 (a, b) VALUES (new.a, new.b);
+
+INSERT INTO t1 VALUES (5,5);
+CALL p1();
+
+SET GLOBAL keycache1.key_buffer_size=128*1024;
+CACHE INDEX t1 IN keycache1;
+ALTER DATABASE db1 DEFAULT CHARACTER SET utf8mb4;
+
+CREATE USER 'username1'@'localhost' IDENTIFIED BY 'password1';
+
+ALTER USER 'username1'@'localhost' IDENTIFIED BY 'new_password';
+
+FLUSH PRIVILEGES;
+
+LOCK TABLES db1.t2 READ;
+UNLOCK TABLES;
+TRUNCATE TABLE db1.t2;
+
+USE test;
+
+INSTALL PLUGIN validate_password SONAME 'validate_password.so';
+UNINSTALL PLUGIN  validate_password;
+
+INSTALL COMPONENT 'file://component_validate_password';
+UNINSTALL COMPONENT 'file://component_validate_password';
+
+DROP TABLE db1.t1;
+DROP DATABASE db1;
+DROP DATABASE db2;
+DROP USER 'username1'@'localhost';
+PING;

@@ -1,0 +1,197 @@
+#
+#  The feature to test:
+#    A separate connection limit for the reserved user.
+#  porting from HWSQL5.7: http://cloudos-review.huawei.com/#/c/295787/
+--source include/count_sessions.inc
+
+USE mysql;
+
+--echo # prepare
+call mtr.add_suppression("Too many connections*");
+CREATE USER 'reserved_user_with_super'@'%' IDENTIFIED BY '123456';
+--disable_warnings
+GRANT SELECT,SUPER ON *.* TO 'reserved_user_with_super'@'%' WITH GRANT OPTION;
+--enable_warnings
+SHOW GRANTS for 'reserved_user_with_super'@'%';
+
+CREATE USER 'reserved_user_without_super'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, REFERENCES, INDEX, ALTER, SHOW DATABASES, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER ON *.* TO 'reserved_user_without_super'@'%' WITH GRANT OPTION;
+
+CREATE USER 'normal_user_with_super'@'%' IDENTIFIED BY '123456';
+--disable_warnings
+GRANT SELECT, SUPER ON *.* TO 'normal_user_with_super'@'%' WITH GRANT OPTION;
+--enable_warnings
+SHOW GRANTS for 'normal_user_with_super'@'%';
+
+CREATE USER 'normal_user_without_super'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, REFERENCES, INDEX, ALTER, SHOW DATABASES, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER ON *.* TO 'normal_user_without_super'@'%' WITH GRANT OPTION;
+
+FLUSH PRIVILEGES;
+
+show variables like 'rds_reserved_users';
+show variables like 'rds_reserved_connections';
+show variables like 'max_connections';
+
+--echo #
+--echo # Test 1: The reserved user can connect to the database through the non-extra port.
+--echo #
+connect(res_conn1,127.0.0.1,reserved_user_without_super,123456,mysql,1301);
+connection default;
+select count(*) from information_schema.PROCESSLIST where user in ('root','normal_user_with_super','normal_user_without_super');
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user_with_super','reserved_user_without_super');
+
+--echo #
+--echo # Test 2: The non-reserved user can connect to the database through the non-extra port.
+--echo #
+connect(nor_conn1,127.0.0.1,normal_user_without_super,123456,mysql,1301);
+connection default;
+select count(*) from information_schema.PROCESSLIST where user in ('root','normal_user_with_super','normal_user_without_super');
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user_with_super','reserved_user_without_super');
+
+--echo #
+--echo # Test 3: The number of sessions connected by reserved user(without super) through non-extra port can be
+--echo #         up to rds_reserved_connections.
+--echo #
+connect(res_conn2,127.0.0.1,reserved_user_without_super,123456,mysql,1301);
+connect(res_conn3,127.0.0.1,reserved_user_without_super,123456,mysql,1301);
+connect(res_conn4,127.0.0.1,reserved_user_without_super,123456,mysql,1301);
+connect(res_conn5,127.0.0.1,reserved_user_without_super,123456,mysql,1301);
+connection default;
+select count(*) from information_schema.PROCESSLIST where user in ('root','normal_user_with_super','normal_user_without_super');
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user_with_super','reserved_user_without_super');
+
+--disable_query_log
+--error 1040
+connect(res_conn6,127.0.0.1,reserved_user_without_super,123456,mysql,1301);
+--enable_query_log
+
+let $status_var= Threads_connected;
+let $status_var_value= 7;
+source include/wait_for_status_var.inc;
+
+--echo #
+--echo # Test 4: When the rds_reserved_connections resource is consumed, it does not allowed the
+--echo #         reserved user to login in, even if you have super permissions.
+--echo #
+--disable_query_log
+--error 1040
+connect(res_conn6,127.0.0.1,reserved_user_with_super,123456,mysql,1301);
+--enable_query_log
+
+let $status_var= Threads_connected;
+let $status_var_value= 7;
+source include/wait_for_status_var.inc;
+
+--echo #
+--echo # Test 5: The number of sessions connected by non-reserved(without super) user through non-extra port can be
+--echo #         up to max_connections.
+--echo #
+# the user root is alse normal user(the default connection).
+connect(nor_conn2,127.0.0.1,normal_user_without_super,123456,mysql,1301);
+connect(nor_conn3,127.0.0.1,normal_user_without_super,123456,mysql,1301);
+connect(nor_conn4,127.0.0.1,normal_user_without_super,123456,mysql,1301);
+connection default;
+select count(*) from information_schema.PROCESSLIST where user in ('root','normal_user_with_super','normal_user_without_super');
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user_with_super','reserved_user_without_super');
+
+--disable_query_log
+--error 1040
+connect(nor_conn5,127.0.0.1,normal_user_without_super,123456,mysql,1301);
+--enable_query_log
+
+let $status_var= Threads_connected;
+let $status_var_value= 10;
+source include/wait_for_status_var.inc;
+
+--echo #
+--echo # Test 6: When the max_connections resource is consumed, it allows one
+--echo #         normal user(with super) to login in.
+--echo #
+connect(nor_conn5,127.0.0.1,normal_user_with_super,123456,mysql,1301);
+connection default;
+select count(*) from information_schema.PROCESSLIST where user in ('root','normal_user_with_super','normal_user_without_super');
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user_with_super','reserved_user_without_super');
+
+--disable_query_log
+--error 1040
+connect(nor_conn6,127.0.0.1,normal_user_with_super,123456,mysql,1301);
+--enable_query_log
+
+let $status_var= Threads_connected;
+let $status_var_value= 11;
+source include/wait_for_status_var.inc;
+
+# The connection number of the reserved user does not affect the non-reserved user.
+disconnect res_conn5;
+let $status_var= Threads_connected;
+let $status_var_value= 10;
+source include/wait_for_status_var.inc;
+
+--disable_query_log
+--error 1040
+connect(nor_conn6,127.0.0.1,normal_user_with_super,123456,mysql,1301);
+--enable_query_log
+
+let $status_var= Threads_connected;
+let $status_var_value= 10;
+source include/wait_for_status_var.inc;
+
+connect(res_conn5,127.0.0.1,reserved_user_without_super,123456,mysql,1301);
+connection default;
+select count(*) from information_schema.PROCESSLIST where user in ('root','normal_user_with_super','normal_user_without_super');
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user_with_super','reserved_user_without_super');
+
+--echo #
+--echo # Test 7: When the max_connections resource is consumed, it does not affect the 
+--echo #         reserved user login in.
+--echo #
+
+disconnect res_conn1;
+let $status_var= Threads_connected;
+let $status_var_value= 10;
+source include/wait_for_status_var.inc;
+connect(res_conn1,127.0.0.1,reserved_user_without_super,123456,mysql,1301);
+connection default;
+select count(*) from information_schema.PROCESSLIST where user in ('root','normal_user_with_super','normal_user_without_super');
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user_with_super','reserved_user_without_super');
+
+--echo #
+--echo # Test 8: When the rds_reserved_connections resource is consumed, it does not affect the 
+--echo #         non-reserved user login in.
+--echo #
+disconnect nor_conn5;
+let $status_var= Threads_connected;
+let $status_var_value= 10;
+source include/wait_for_status_var.inc;
+connect(nor_conn5,127.0.0.1,normal_user_with_super,123456,mysql,1301);
+
+disconnect nor_conn1;
+disconnect nor_conn2;
+let $status_var= Threads_connected;
+let $status_var_value= 9;
+source include/wait_for_status_var.inc;
+connect(nor_conn1,127.0.0.1,normal_user_without_super,123456,mysql,1301);
+connect(nor_conn2,127.0.0.1,normal_user_with_super,123456,mysql,1301);
+connection default;
+select count(*) from information_schema.PROCESSLIST where user in ('root','normal_user_with_super','normal_user_without_super');
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user_with_super','reserved_user_without_super');
+
+--echo # Cleanup
+
+connection default;
+--disable_warnings
+DROP USER reserved_user_with_super,reserved_user_without_super,normal_user_with_super,normal_user_without_super;
+--enable_warnings
+
+disconnect res_conn1;
+disconnect res_conn2;
+disconnect res_conn3;
+disconnect res_conn4;
+disconnect res_conn5;
+disconnect nor_conn1;
+disconnect nor_conn2;
+disconnect nor_conn3;
+disconnect nor_conn4;
+disconnect nor_conn5;
+--source include/wait_until_count_sessions.inc
+

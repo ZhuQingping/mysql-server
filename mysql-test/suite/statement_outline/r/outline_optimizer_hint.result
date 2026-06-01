@@ -1,0 +1,589 @@
+set @start_opt_outline_enabled= @@global.rds_opt_outline_enabled;
+set global rds_opt_outline_enabled = ON;
+create database outline_db;
+create table outline_db.t1(id int auto_increment primary key,
+col1 int,
+col2 varchar(100),
+key ind_1(col1),
+key ind_2(col2)) engine = Dstore;
+create table outline_db.t2(id int auto_increment primary key,
+col1 int,
+col2 varchar(100),
+key ind_1(col1),
+key ind_2(col2)) engine = Dstore;
+insert into outline_db.t1 values(1, 2, 'xpchild');
+insert into outline_db.t2 values(1, 2, 'xpchild');
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ MAX_EXECUTION_TIME(1000) */',
+"select * from t1 where col1 = 2 and col2 = 'xpchild'");
+use outline_db;
+explain select * from t1 where col1 = 2 and col2 = 'xpchild';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_1,ind_2	ind_1	5	const	1	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select /*+ MAX_EXECUTION_TIME(1000) */ `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t1`.`col1` AS `col1`,`outline_db`.`t1`.`col2` AS `col2` from `outline_db`.`t1` where ((`outline_db`.`t1`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 2))
+call dbms_outln.preview_outline("outline_db", "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	c3fa7558f4dd3dd0713428fbd60beda118f35ed9c447ce58b2bb9239539fab76	QUERY		1	/*+ MAX_EXECUTION_TIME(1000) */ 
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ MAX_EXECUTION_TIME(1000) */',
+"update t1 set col1 = 1");
+explain update t1 set col1 = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	UPDATE	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	update `outline_db`.`t1` set `outline_db`.`t1`.`col1` = 1
+call dbms_outln.preview_outline("outline_db", "update t1 set col1 = 1");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+Warnings:
+Warning	3125	MAX_EXECUTION_TIME hint is supported by top-level standalone SELECT statements only
+call dbms_outln.add_optimizer_outline('outline_db', '', 2, '/*+ MAX_EXECUTION_TIME(1000) */',
+"select id from (select * from t2 where col1 = 1 and col2 = 'xpchild') as a");
+call dbms_outln.preview_outline("outline_db", "select id from (select * from t2 where col1 = 1 and col2 = 'xpchild') as a");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+call dbms_outln.add_optimizer_outline('outline_db', '', 2, '/*+ MAX_EXECUTION_TIME(1000) */',
+"select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild')");
+call dbms_outln.preview_outline("outline_db", "select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild')");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+explain select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild');
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_1	ind_1	5	const	1	100.00	NULL
+1	SIMPLE	t2	NULL	ref	ind_1,ind_2	ind_1	5	const	1	100.00	Using where; FirstMatch(t1)
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`id` AS `id` from `outline_db`.`t1` semi join (`outline_db`.`t2`) where ((`outline_db`.`t2`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 1) and (`outline_db`.`t2`.`col1` = 1))
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ SET_VAR(foreign_key_checks=OFF) */',
+"insert into t1 values(123, 123, 'xpchild')");
+use outline_db;
+explain insert into t1 values(123, 123, 'xpchild');
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	INSERT	t1	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+Warnings:
+Note	1003	insert /*+ SET_VAR(foreign_key_checks='OFF') */ into `outline_db`.`t1` values (123,123,'xpchild')
+call dbms_outln.preview_outline("outline_db", "insert into t1 values(123, 123,'xpchild')");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	ad3f683e5cc182711f4a1c9c23c4932bc3efb24698a84843f9db7321baeb24fb	QUERY		1	/*+ SET_VAR(foreign_key_checks='OFF') */ 
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, "/*+ SET_VAR(collation_server = 'utf8mb4') */",
+"select * from t1 where col1 = 2 and col2 = 'xpchild'");
+call dbms_outln.preview_outline("outline_db","select * from t1 where col1 = 2 and col2 = 'xpchild'");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+Warnings:
+Warning	3637	Variable 'collation_server' cannot be set using SET_VAR hint.
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, "/*+ SET_VAR(optimizer_switch = 'mrr_cost_based=off') SET_VAR(max_heap_table_size = 1G) */",
+"select * from t1 where col1 = 2 and col2 = 'xpchild'");
+explain select * from t1 where col1 = 2 and col2 = 'xpchild';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_1,ind_2	ind_1	5	const	1	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select /*+ SET_VAR(optimizer_switch='mrr_cost_based=off') SET_VAR(max_heap_table_size=1073741824) */ `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t1`.`col1` AS `col1`,`outline_db`.`t1`.`col2` AS `col2` from `outline_db`.`t1` where ((`outline_db`.`t1`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 2))
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, "/*+ SET_VAR(optimizer_switch = 'mrr_cost_based=off') */",
+"select * from t1 where col1 = 2 and col2 = 'xpchild'");
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, "/*+ SET_VAR(max_heap_table_size = 1G) */",
+"select * from t1 where col1 = 2 and col2 = 'xpchild'");
+explain select * from t1 where col1 = 2 and col2 = 'xpchild';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_1,ind_2	ind_1	5	const	1	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select /*+ SET_VAR(optimizer_switch='mrr_cost_based=off') SET_VAR(max_heap_table_size=1073741824) */ `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t1`.`col1` AS `col1`,`outline_db`.`t1`.`col2` AS `col2` from `outline_db`.`t1` where ((`outline_db`.`t1`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 2))
+call dbms_outln.preview_outline("outline_db", "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	c3fa7558f4dd3dd0713428fbd60beda118f35ed9c447ce58b2bb9239539fab76	QUERY		1	/*+ SET_VAR(optimizer_switch='mrr_cost_based=off') SET_VAR(max_heap_table_size=1073741824) */ 
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, "/*+ SET_VAR(max_heap_table_size = 1G) */",
+"select * from t1 where col1 = 2 and col2 = 'xpchild'");
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, "/*+ SET_VAR(max_heap_table_size = 3G) */",
+"select * from t1 where col1 = 2 and col2 = 'xpchild'");
+call dbms_outln.preview_outline("outline_db", "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	c3fa7558f4dd3dd0713428fbd60beda118f35ed9c447ce58b2bb9239539fab76	QUERY		1	/*+ SET_VAR(optimizer_switch='mrr_cost_based=off') SET_VAR(max_heap_table_size=1073741824) */ 
+Warnings:
+Warning	3126	Hint SET_VAR(max_heap_table_size=1073741824)  is ignored as conflicting/duplicated
+Warning	3126	Hint SET_VAR(max_heap_table_size=3221225472)  is ignored as conflicting/duplicated
+explain select * from t1 where col1 = 2 and col2 = 'xpchild';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_1,ind_2	ind_1	5	const	1	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select /*+ SET_VAR(optimizer_switch='mrr_cost_based=off') SET_VAR(max_heap_table_size=1073741824) */ `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t1`.`col1` AS `col1`,`outline_db`.`t1`.`col2` AS `col2` from `outline_db`.`t1` where ((`outline_db`.`t1`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 2))
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, "/*+ SET_VAR(max_size = 1G) */",
+"select * from t1 where col1 = 2 and col2 = 'xpchild'");
+call dbms_outln.preview_outline("outline_db", "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	c3fa7558f4dd3dd0713428fbd60beda118f35ed9c447ce58b2bb9239539fab76	QUERY		1	/*+ SET_VAR(optimizer_switch='mrr_cost_based=off') SET_VAR(max_heap_table_size=1073741824) */ 
+Warnings:
+Warning	3126	Hint SET_VAR(max_heap_table_size=1073741824)  is ignored as conflicting/duplicated
+Warning	3126	Hint SET_VAR(max_heap_table_size=3221225472)  is ignored as conflicting/duplicated
+Warning	3128	Unresolved name 'max_size' for SET_VAR hint
+call dbms_outln.add_optimizer_outline('outline_db', '', 2, '/*+ SET_VAR(max_heap_table_size = 1G) */', "SELECT * FROM t1 WHERE t1.col1 IN (SELECT  col1 FROM t2)");
+call dbms_outln.preview_outline("outline_db", "SELECT * FROM t1 WHERE t1.col1 IN (SELECT  col1 FROM t2)");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+delete from mysql.outline;
+call dbms_outln.flush_outline();
+create table tt1 (id int not null primary key, name varchar(20));
+create table tt2 (id int not null primary key, name varchar(20));
+insert into tt1 values (1,'tt1');
+insert into tt2 values (1,'tt2');
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+join_order(tt2,tt1)*/','select tt1.*,tt2.* from tt1,tt2 where tt1.id =tt2.id');
+explain select tt1.*,tt2.* from tt1,tt2 where tt1.id =tt2.id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tt2	NULL	ALL	PRIMARY	NULL	NULL	NULL	1	100.00	NULL
+1	SIMPLE	tt1	NULL	eq_ref	PRIMARY	PRIMARY	4	outline_db.tt2.id	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select /*+ JOIN_ORDER(@`select#1` `tt2`,`tt1`) */ `outline_db`.`tt1`.`id` AS `id`,`outline_db`.`tt1`.`name` AS `name`,`outline_db`.`tt2`.`id` AS `id`,`outline_db`.`tt2`.`name` AS `name` from `outline_db`.`tt1` join `outline_db`.`tt2` where (`outline_db`.`tt1`.`id` = `outline_db`.`tt2`.`id`)
+call dbms_outln.preview_outline("outline_db", "select tt1.*,tt2.* from tt1,tt2 where tt1.id =tt2.id");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	9f94b30a4b56b0df1fdcb93e5be83939c8782d984d112db5e66cc803ab5a8249	QUERY		1	/*+ JOIN_ORDER(@`select#1` `tt2`,`tt1`) */ 
+delete from mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+JOIN_PREFIX(tt2)*/','select tt1.*,tt2.* from tt1,tt2 where tt1.id =tt2.id');
+explain select tt1.*,tt2.* from tt1,tt2 where tt1.id =tt2.id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tt2	NULL	ALL	PRIMARY	NULL	NULL	NULL	1	100.00	NULL
+1	SIMPLE	tt1	NULL	eq_ref	PRIMARY	PRIMARY	4	outline_db.tt2.id	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select /*+ JOIN_PREFIX(@`select#1` `tt2`) */ `outline_db`.`tt1`.`id` AS `id`,`outline_db`.`tt1`.`name` AS `name`,`outline_db`.`tt2`.`id` AS `id`,`outline_db`.`tt2`.`name` AS `name` from `outline_db`.`tt1` join `outline_db`.`tt2` where (`outline_db`.`tt1`.`id` = `outline_db`.`tt2`.`id`)
+call dbms_outln.preview_outline("outline_db", "select tt1.*,tt2.* from tt1,tt2 where tt1.id =tt2.id");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	9f94b30a4b56b0df1fdcb93e5be83939c8782d984d112db5e66cc803ab5a8249	QUERY		1	/*+ JOIN_PREFIX(@`select#1` `tt2`) */ 
+delete from mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+JOIN_FIXED_ORDER() */','select tt1.*,tt2.* from tt1,tt2 where tt1.id =tt2.id');
+explain select tt1.*,tt2.* from tt1,tt2 where tt1.id =tt2.id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tt1	NULL	ALL	PRIMARY	NULL	NULL	NULL	1	100.00	NULL
+1	SIMPLE	tt2	NULL	eq_ref	PRIMARY	PRIMARY	4	outline_db.tt1.id	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select /*+ JOIN_FIXED_ORDER(@`select#1`) */ straight_join `outline_db`.`tt1`.`id` AS `id`,`outline_db`.`tt1`.`name` AS `name`,`outline_db`.`tt2`.`id` AS `id`,`outline_db`.`tt2`.`name` AS `name` from `outline_db`.`tt1` join `outline_db`.`tt2` where (`outline_db`.`tt2`.`id` = `outline_db`.`tt1`.`id`)
+call dbms_outln.preview_outline("outline_db", "select tt1.*,tt2.* from tt1,tt2 where tt1.id =tt2.id");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	9f94b30a4b56b0df1fdcb93e5be83939c8782d984d112db5e66cc803ab5a8249	QUERY		1	/*+ JOIN_FIXED_ORDER(@`select#1`) */ 
+delete from mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ BNL(t1,t2) */',
+"select t1.id, t2.id from t1,t2");
+use outline_db;
+explain select t1.id, t2.id from t1,t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	1	100.00	Using index
+1	SIMPLE	t2	NULL	index	NULL	PRIMARY	4	NULL	1	100.00	Using index; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select /*+ BNL(`t1`@`select#1`) BNL(`t2`@`select#1`) */ `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t2`.`id` AS `id` from `outline_db`.`t1` join `outline_db`.`t2`
+call dbms_outln.preview_outline("outline_db", "select t1.id, t2.id from t1,t2");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	d4dcef634a4a664518e5fb8a21c6ce9b79fccb44b773e86431eb67840975b649	QUERY		1	/*+ BNL(`t1`@`select#1`) BNL(`t2`@`select#1`) */ 
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ MAX_EXECUTION_TIME(1000) */',
+"select t1.id, t2.id from t1,t2");
+use outline_db;
+explain select t1.id, t2.id from t1,t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	1	100.00	Using index
+1	SIMPLE	t2	NULL	index	NULL	PRIMARY	4	NULL	1	100.00	Using index; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select /*+ MAX_EXECUTION_TIME(1000) BNL(`t1`@`select#1`) BNL(`t2`@`select#1`) */ `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t2`.`id` AS `id` from `outline_db`.`t1` join `outline_db`.`t2`
+call dbms_outln.preview_outline("outline_db", "select t1.id, t2.id from t1,t2");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	d4dcef634a4a664518e5fb8a21c6ce9b79fccb44b773e86431eb67840975b649	QUERY		1	/*+ MAX_EXECUTION_TIME(1000) BNL(`t1`@`select#1`) BNL(`t2`@`select#1`) */ 
+delete from mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_optimizer_outline('outline_db', '', 2, '/*+ INDEX_MERGE(t2 ind_1, ind_2) */',
+"select t1.id from t1 where t1.col1 in (select t2.col1 from t2 where t2.col1 = 1 and t2.col2 = 'xpchild')");
+use outline_db;
+explain select t1.id from t1 where t1.col1 in (select t2.col1 from t2 where t2.col1 = 1 and t2.col2 = 'xpchild');
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_1	ind_1	5	const	1	100.00	NULL
+1	SIMPLE	t2	NULL	ref	ind_1,ind_2	ind_1	5	const	1	100.00	Using where; FirstMatch(t1)
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`id` AS `id` from `outline_db`.`t1` semi join (`outline_db`.`t2`) where ((`outline_db`.`t2`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 1) and (`outline_db`.`t2`.`col1` = 1))
+call dbms_outln.preview_outline("outline_db", "select t1.id from t1 where t1.col1 in (select t2.col1 from t2 where t2.col1 = 1 and t2.col2 = 'xpchild')");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+delete from mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_optimizer_outline('outline_db', '', 2, ' /*+ QB_NAME(subq1) */', "SELECT * FROM t1 WHERE t1.col1 IN (SELECT  col1 FROM t2)");
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ SEMIJOIN(@subq1 MATERIALIZATION, DUPSWEEDOUT) */ ', "SELECT * FROM t1 WHERE t1.col1 IN (SELECT  col1 FROM t2)");
+use outline_db;
+explain SELECT * FROM t1 WHERE t1.col1 IN (SELECT  col1 FROM t2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	ind_1	NULL	NULL	NULL	1	100.00	NULL
+1	SIMPLE	t2	NULL	index	ind_1	ind_1	5	NULL	1	100.00	Using where; Using index; FirstMatch(t1); Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t1`.`col1` AS `col1`,`outline_db`.`t1`.`col2` AS `col2` from `outline_db`.`t1` semi join (`outline_db`.`t2`) where (`outline_db`.`t2`.`col1` = `outline_db`.`t1`.`col1`)
+call dbms_outln.preview_outline("outline_db", "SELECT * FROM t1 WHERE t1.col1 IN (SELECT  col1 FROM t2)");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+Warnings:
+Warning	3127	Query block name `subq1` is not found for SEMIJOIN hint
+explain SELECT /*+ SEMIJOIN(@subq1 MATERIALIZATION, DUPSWEEDOUT) */ * FROM t1 WHERE t1.col1 IN (SELECT /*+ QB_NAME(subq1) */ col1 FROM t2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	ind_1	NULL	NULL	NULL	1	100.00	Using where
+1	SIMPLE	<subquery2>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	5	outline_db.t1.col1	1	100.00	NULL
+2	MATERIALIZED	t2	NULL	index	ind_1	ind_1	5	NULL	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select /*+ SEMIJOIN(@`subq1` MATERIALIZATION, DUPSWEEDOUT) */ `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t1`.`col1` AS `col1`,`outline_db`.`t1`.`col2` AS `col2` from `outline_db`.`t1` semi join (`outline_db`.`t2`) where (`<subquery2>`.`col1` = `outline_db`.`t1`.`col1`)
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1', '', "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ NO_INDEX(t1 ind_1) */',"select * from t1 where col1 = 2 and col2 = 'xpchild'");
+call dbms_outln.preview_outline("outline_db", "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	c3fa7558f4dd3dd0713428fbd60beda118f35ed9c447ce58b2bb9239539fab76	TABLE	t1	1	USE INDEX (`ind_1`)
+outline_db	c3fa7558f4dd3dd0713428fbd60beda118f35ed9c447ce58b2bb9239539fab76	QUERY		1	/*+ NO_INDEX(`t1`@`select#1` `ind_1`) */ 
+explain select * from t1 where col1 = 2 and col2 = 'xpchild';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_2	ind_2	403	const	1	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select /*+ NO_INDEX(`t1`@`select#1` `ind_1`) */ `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t1`.`col1` AS `col1`,`outline_db`.`t1`.`col2` AS `col2` from `outline_db`.`t1` where ((`outline_db`.`t1`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 2))
+delete from mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1', '', "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ MAX_EXECUTION_TIME(1000) */', "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+explain select * from t1 where col1 = 2 and col2 = 'xpchild';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_1	ind_1	5	const	1	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select /*+ MAX_EXECUTION_TIME(1000) */ `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t1`.`col1` AS `col1`,`outline_db`.`t1`.`col2` AS `col2` from `outline_db`.`t1` USE INDEX (`ind_1`) where ((`outline_db`.`t1`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 2))
+delete from mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_optimizer_outline('outline_db', '', 2, '/*+ INDEX_MERGE(t2 ind_1, ind_2) */',
+"select a.id from (select t2.id, t2.col1 from t2 where t2.col1 = 1 and t2.col2 = 'xpchild') as a");
+call dbms_outln.preview_outline("outline_db", "select a.id from (select t2.id, t2.col1 from t2 where t2.col1 = 1 and t2.col2 = 'xpchild') as a");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+set optimizer_trace='enabled=on';
+prepare pre_stmt from 'select a.id from (select t2.id, t2.col1 from t2 where t2.col1 = ? and t2.col2 = ?) as a';
+set @a = 3,@b = 'xpchild';
+execute pre_stmt using @a,@b;
+id
+select * from information_schema.optimizer_trace;
+QUERY	TRACE	MISSING_BYTES_BEYOND_MAX_MEM_SIZE	INSUFFICIENT_PRIVILEGES
+select a.id from (select t2.id, t2.col1 from t2 where t2.col1 = 3 and t2.col2 = 'xpchild') as a	{
+  "steps": [
+    {
+      "statement_parameters": [
+        "LONGLONG",
+        "VARCHAR"
+      ]
+    },
+    {
+      "join_optimization": {
+        "select#": 1,
+        "steps": [
+          {
+            "condition_processing": {
+              "condition": "WHERE",
+              "original_condition": "((`t2`.`col1` = 3) and (`t2`.`col2` = 'xpchild'))",
+              "steps": [
+                {
+                  "transformation": "equality_propagation",
+                  "resulting_condition": "(multiple equal(3, `t2`.`col1`) and multiple equal('xpchild', `t2`.`col2`))"
+                },
+                {
+                  "transformation": "constant_propagation",
+                  "resulting_condition": "(multiple equal(3, `t2`.`col1`) and multiple equal('xpchild', `t2`.`col2`))"
+                },
+                {
+                  "transformation": "trivial_condition_removal",
+                  "resulting_condition": "(multiple equal(3, `t2`.`col1`) and multiple equal('xpchild', `t2`.`col2`))"
+                }
+              ]
+            }
+          },
+          {
+            "substitute_generated_columns": {
+            }
+          },
+          {
+            "table_dependencies": [
+              {
+                "table": "`t2`",
+                "row_may_be_null": false,
+                "map_bit": 0,
+                "depends_on_map_bits": [
+                ]
+              }
+            ]
+          },
+          {
+            "ref_optimizer_key_uses": [
+              {
+                "table": "`t2`",
+                "field": "col1",
+                "equals": "3",
+                "null_rejecting": true
+              },
+              {
+                "table": "`t2`",
+                "field": "col2",
+                "equals": "'xpchild'",
+                "null_rejecting": true
+              }
+            ]
+          },
+          {
+            "rows_estimation": [
+              {
+                "table": "`t2`",
+                "range_analysis": {
+                  "table_scan": {
+                    "rows": 1,
+                    "cost": 2.45
+                  },
+                  "potential_range_indexes": [
+                    {
+                      "index": "PRIMARY",
+                      "usable": false,
+                      "cause": "not_applicable"
+                    },
+                    {
+                      "index": "ind_1",
+                      "usable": true,
+                      "key_parts": [
+                        "col1"
+                      ]
+                    },
+                    {
+                      "index": "ind_2",
+                      "usable": true,
+                      "key_parts": [
+                        "col2"
+                      ]
+                    }
+                  ],
+                  "setup_range_conditions": [
+                  ],
+                  "group_index_range": {
+                    "chosen": false,
+                    "cause": "not_group_by_or_distinct"
+                  },
+                  "skip_scan_range": {
+                    "potential_skip_scan_indexes": [
+                      {
+                        "index": "ind_1",
+                        "usable": false,
+                        "cause": "query_references_nonkey_column"
+                      },
+                      {
+                        "index": "ind_2",
+                        "usable": false,
+                        "cause": "query_references_nonkey_column"
+                      }
+                    ]
+                  },
+                  "analyzing_range_alternatives": {
+                    "range_scan_alternatives": [
+                      {
+                        "index": "ind_1",
+                        "ranges": [
+                          "col1 = 3"
+                        ],
+                        "index_dives_for_eq_ranges": true,
+                        "rowid_ordered": true,
+                        "using_mrr": false,
+                        "index_only": false,
+                        "in_memory": -1,
+                        "rows": 1,
+                        "cost": 0.61,
+                        "chosen": true
+                      },
+                      {
+                        "index": "ind_2",
+                        "ranges": [
+                          "col2 = 'xpchild'"
+                        ],
+                        "index_dives_for_eq_ranges": true,
+                        "rowid_ordered": true,
+                        "using_mrr": false,
+                        "index_only": false,
+                        "in_memory": -1,
+                        "rows": 1,
+                        "cost": 0.61,
+                        "chosen": false,
+                        "cause": "cost"
+                      }
+                    ],
+                    "analyzing_roworder_intersect": {
+                      "intersecting_indexes": [
+                        {
+                          "index": "ind_1",
+                          "cumulated_total_cost": 0,
+                          "usable": false,
+                          "cause": "does_not_reduce_cost_of_intersect"
+                        },
+                        {
+                          "index": "ind_2",
+                          "cumulated_total_cost": 0,
+                          "usable": false,
+                          "cause": "does_not_reduce_cost_of_intersect"
+                        }
+                      ],
+                      "chosen": false,
+                      "cause": "does_not_increase_selectivity"
+                    }
+                  },
+                  "chosen_range_access_summary": {
+                    "range_access_plan": {
+                      "type": "range_scan",
+                      "index": "ind_1",
+                      "rows": 1,
+                      "ranges": [
+                        "col1 = 3"
+                      ]
+                    },
+                    "rows_for_plan": 1,
+                    "cost_for_plan": 0.61,
+                    "chosen": true
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "considered_execution_plans": [
+              {
+                "plan_prefix": [
+                ],
+                "table": "`t2`",
+                "best_access_path": {
+                  "considered_access_paths": [
+                    {
+                      "access_type": "ref",
+                      "index": "ind_1",
+                      "rows": 1,
+                      "cost": 0.35,
+                      "chosen": true
+                    },
+                    {
+                      "access_type": "ref",
+                      "index": "ind_2",
+                      "rows": 1,
+                      "cost": 0.35,
+                      "chosen": false
+                    },
+                    {
+                      "access_type": "range",
+                      "range_details": {
+                        "used_index": "ind_1"
+                      },
+                      "chosen": false,
+                      "cause": "heuristic_index_cheaper"
+                    }
+                  ]
+                },
+                "condition_filtering_pct": 100,
+                "rows_for_plan": 1,
+                "cost_for_plan": 0.35,
+                "chosen": true
+              }
+            ]
+          },
+          {
+            "attaching_conditions_to_tables": {
+              "original_condition": "((`t2`.`col2` = 'xpchild') and (`t2`.`col1` = 3))",
+              "attached_conditions_computation": [
+              ],
+              "attached_conditions_summary": [
+                {
+                  "table": "`t2`",
+                  "attached": "((`t2`.`col2` = 'xpchild') and (`t2`.`col1` = 3))"
+                }
+              ]
+            }
+          },
+          {
+            "finalizing_table_conditions": [
+              {
+                "table": "`t2`",
+                "original_table_condition": "((`t2`.`col2` = 'xpchild') and (`t2`.`col1` = 3))",
+                "final_table_condition   ": "(`t2`.`col2` = 'xpchild')"
+              }
+            ]
+          },
+          {
+            "refine_plan": [
+              {
+                "table": "`t2`"
+              }
+            ]
+          },
+          {
+            "cache_plan": {
+              "cached": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "not_apply_pq_plan": {
+        "select#": 1,
+        "chosen": false,
+        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+      }
+    },
+    {
+      "join_execution": {
+        "select#": 1,
+        "steps": [
+        ]
+      }
+    }
+  ]
+}	0	0
+set optimizer_trace='enabled=off';
+delete from mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ NO_INDEX(t1 ind_1) */', "select id from t1 union select id from t2");
+call dbms_outln.add_optimizer_outline('outline_db', '', 2, '/*+ MAX_EXECUTION_TIME(1000) */', "select id from t1 union select id from t2");
+call dbms_outln.preview_outline("outline_db", "select id from t1 union select id from t2");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	0e9bfbcb14447d03beba29d4d8da38f4006c4970b6d6735281f0539d73b133b8	QUERY		1	/*+ NO_INDEX(`t1`@`select#1` `ind_1`) */ 
+Warnings:
+Warning	3125	MAX_EXECUTION_TIME hint is supported by top-level standalone SELECT statements only
+explain select id from t1 union select id from t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	index	NULL	PRIMARY	4	NULL	1	100.00	Using index
+2	UNION	t2	NULL	index	NULL	PRIMARY	4	NULL	1	100.00	Using index
+3	UNION RESULT	<union1,2>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select /*+ NO_INDEX(`t1`@`select#1` `ind_1`) */ `outline_db`.`t1`.`id` AS `id` from `outline_db`.`t1` union /* select#2 */ select `outline_db`.`t2`.`id` AS `id` from `outline_db`.`t2`
+explain select /*+ NO_INDEX(t1 ind_1) */ id from t1 union select /*+ MAX_EXECUTION_TIME(1000) */ id from t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	index	NULL	PRIMARY	4	NULL	1	100.00	Using index
+2	UNION	t2	NULL	index	NULL	PRIMARY	4	NULL	1	100.00	Using index
+3	UNION RESULT	<union1,2>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	Using temporary
+Warnings:
+Warning	3125	MAX_EXECUTION_TIME hint is supported by top-level standalone SELECT statements only
+Note	1003	/* select#1 */ select /*+ NO_INDEX(`t1`@`select#1` `ind_1`) */ `outline_db`.`t1`.`id` AS `id` from `outline_db`.`t1` union /* select#2 */ select `outline_db`.`t2`.`id` AS `id` from `outline_db`.`t2`
+drop database outline_db;
+create database outline_db;
+use outline_db;
+create table t1 (a int, key ind_1(a)) engine=Dstore;
+create table t2 (a int, key ind_1(a)) engine=Dstore;
+create table t3 (a int, key ind_1(a)) engine=Dstore;
+insert into t1 values (1),(2),(3),(4);
+insert into t2 values (10),(20),(30),(40);
+insert into t3 values (1),(2),(10),(50);
+select a from t3 where t3.a in (select a from t1 where a <= 3 union select * from t2 where a <= 30);
+a
+1
+2
+10
+call dbms_outln.add_optimizer_outline('outline_db', '', 2, '/*+ MAX_EXECUTION_TIME(1000) */', "select a from t3 where t3.a in (select a from t1 where a <= 3 union select * from t2 where a <= 30)");
+call dbms_outln.add_optimizer_outline('outline_db', '', 3, '/*+ INDEX(t2 ind_1) */', "select a from t3 where t3.a in (select a from t1 where a <= 3 union select * from t2 where a <= 30)");
+call dbms_outln.preview_outline('outline_db', "select a from t3 where t3.a in (select a from t1 where a <= 3 union select * from t2 where a <= 30)");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+explain select a from t3 where t3.a in (select a from t1 where a <= 3 union select * from t2 where a <= 30);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t3	NULL	index	NULL	ind_1	5	NULL	4	100.00	Using where; Using index
+2	DEPENDENT SUBQUERY	t1	NULL	ref	ind_1	ind_1	5	func	1	100.00	Using where; Using index
+3	DEPENDENT UNION	t2	NULL	ref	ind_1	ind_1	5	func	1	100.00	Using where; Using index
+4	UNION RESULT	<union2,3>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t3`.`a` AS `a` from `outline_db`.`t3` where <in_optimizer>(`outline_db`.`t3`.`a`,<exists>(/* select#2 */ select `outline_db`.`t1`.`a` from `outline_db`.`t1` where ((`outline_db`.`t1`.`a` <= 3) and (<cache>(`outline_db`.`t3`.`a`) = `outline_db`.`t1`.`a`)) union /* select#3 */ select `outline_db`.`t2`.`a` from `outline_db`.`t2` where ((`outline_db`.`t2`.`a` <= 30) and (<cache>(`outline_db`.`t3`.`a`) = `outline_db`.`t2`.`a`))))
+explain select a from t3 where t3.a in (select /*+ MAX_EXECUTION_TIME(1000) */ a from t1 where a <= 3 union select /*+ INDEX(t2 ind_1) */ * from t2 where a <= 30);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t3	NULL	index	NULL	ind_1	5	NULL	4	100.00	Using where; Using index
+2	DEPENDENT SUBQUERY	t1	NULL	ref	ind_1	ind_1	5	func	1	100.00	Using where; Using index
+3	DEPENDENT UNION	t2	NULL	ref	ind_1	ind_1	5	func	1	100.00	Using where; Using index
+4	UNION RESULT	<union2,3>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	Using temporary
+Warnings:
+Warning	3125	MAX_EXECUTION_TIME hint is supported by top-level standalone SELECT statements only
+Note	1003	/* select#1 */ select /*+ INDEX(`t2`@`select#3` `ind_1`) */ `outline_db`.`t3`.`a` AS `a` from `outline_db`.`t3` where <in_optimizer>(`outline_db`.`t3`.`a`,<exists>(/* select#2 */ select `outline_db`.`t1`.`a` from `outline_db`.`t1` where ((`outline_db`.`t1`.`a` <= 3) and (<cache>(`outline_db`.`t3`.`a`) = `outline_db`.`t1`.`a`)) union /* select#3 */ select `outline_db`.`t2`.`a` from `outline_db`.`t2` where ((`outline_db`.`t2`.`a` <= 30) and (<cache>(`outline_db`.`t3`.`a`) = `outline_db`.`t2`.`a`))))
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+drop database outline_db;
+set global rds_opt_outline_enabled = OFF;

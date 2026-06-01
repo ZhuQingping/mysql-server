@@ -1,0 +1,116 @@
+#
+# Continue local backup and log archive after restart
+#
+
+call mtr.add_suppression("full backup found binlog is not enabled");
+
+--source suite/local_backup/include/prepare_for_backup.inc
+
+# 1. prepare some data
+create database backup_after_restart;
+use backup_after_restart;
+create table t1(s varchar(100)) engine=Dstore;
+
+# insert 1000 records
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 1000
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+# 2. Create a full backup
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+
+# 3. Kill mysqld and restart
+--source include/kill_mysqld.inc
+--source include/start_mysqld.inc
+
+# 5. Create full backup after restart
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 100
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+# 6. Restore
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+--let $list_type = full_backup
+--source suite/local_backup/include/restore_with_script.inc
+
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+select count(*) from t1;
+
+# 7. Create full backup and start log archive
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+--source suite/local_backup/include/start_log_archive.inc
+
+# 8. Add more data for log archive
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $i = 100
+--source include/Load_data.inc
+--sleep 3
+--let $i = 200
+--source include/Load_data.inc
+--sleep 3
+--let $i = 300
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+# 9. Kill mysqld and restart
+--source include/kill_mysqld.inc
+--let $restart_parameters= restart: --dstore_can_do_wal_archive=on
+--source include/start_mysqld.inc
+
+# 10. Start log archive
+--source suite/local_backup/include/start_log_archive.inc
+
+# 11. Add more data
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 50
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+--sleep 3
+
+# 12. Restore
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+--let $list_type = wal_archive
+--source suite/local_backup/include/restore_with_script.inc
+
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+select count(*) from t1;
+
+drop database backup_after_restart;
+
+--source suite/local_backup/include/clean_backup.inc

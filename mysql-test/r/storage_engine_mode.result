@@ -1,0 +1,102 @@
+CALL mtr.add_suppression(".*but storage engine mode is .*");
+CALL mtr.add_suppression(".* is set to a disabled storage engine .*");
+CALL mtr.add_suppression(".* is not set as disabled .*");
+CALL mtr.add_suppression(".* For ONLY_DSTORE, disabled storage engines are InnoDB .*");
+CALL mtr.add_suppression(".* Aborting .*");
+SELECT PLUGIN_NAME, PLUGIN_AUTHOR FROM information_schema.plugins WHERE PLUGIN_TYPE="STORAGE ENGINE";
+PLUGIN_NAME	PLUGIN_AUTHOR
+binlog	Oracle Corporation
+CSV	Oracle Corporation
+MEMORY	Oracle Corporation
+InnoDB	Oracle Corporation
+MyISAM	Oracle Corporation
+MRG_MYISAM	Oracle Corporation
+PERFORMANCE_SCHEMA	Oracle Corporation
+TempTable	Oracle Corporation
+Dstore	Huawei Technologies Co. Ltd
+# restart failed
+# Kill the server
+[VFS]Loading adapter info: magic[6893230615586168389], mode[1], version[1]
+[VFS]Thread exit.
+[VFS]Thread exit.
+[VFS]static local vfs has files not close
+SHOW VARIABLES LIKE 'storage_engine_mode';
+Variable_name	Value
+storage_engine_mode	ONLY_DSTORE
+SHOW VARIABLES LIKE 'disabled_storage_engines';
+Variable_name	Value
+disabled_storage_engines	InnoDB,CSV,Memory,MyISAM,MRG_MyISAM
+SHOW VARIABLES LIKE 'default_tmp_storage_engine';
+Variable_name	Value
+default_tmp_storage_engine	Dstore
+SHOW VARIABLES LIKE 'disabled_storage_engines';
+Variable_name	Value
+disabled_storage_engines	InnoDB,CSV,Memory,MyISAM,MRG_MyISAM
+SET default_storage_engine = ARCHIVE;
+ERROR 42000: Unknown storage engine 'ARCHIVE'
+SET default_storage_engine = BLACKHOLE;
+ERROR 42000: Unknown storage engine 'BLACKHOLE'
+SET default_storage_engine = FEDERATED;
+ERROR 42000: Unknown storage engine 'FEDERATED'
+SET default_storage_engine = InnoDB;
+show warnings;
+Level	Code	Message
+Warning	8023	default_storage_engine set into InnoDB, doesn't match with storage_engine_mode. InnoDB is disabled.
+SET default_tmp_storage_engine = InnoDB;
+show warnings;
+Level	Code	Message
+Warning	8023	default_tmp_storage_engine set into InnoDB, doesn't match with storage_engine_mode. InnoDB is disabled.
+# should be Dstore
+SHOW VARIABLES LIKE 'default_storage_engine';
+Variable_name	Value
+default_storage_engine	Dstore
+SHOW VARIABLES LIKE 'default_tmp_storage_engine';
+Variable_name	Value
+default_tmp_storage_engine	Dstore
+SET default_storage_engine = Dstore;
+SET default_tmp_storage_engine = Dstore;
+CREATE TABLE t1 (c1 int) ENGINE=InnoDB;
+ERROR HY000: Storage engine InnoDB is disabled (Table creation is disallowed).
+CREATE TEMPORARY TABLE t1 (c1 int) ENGINE=InnoDB;
+ERROR HY000: Storage engine InnoDB is disabled (Table creation is disallowed).
+SHOW VARIABLES LIKE 'storage_engine_mode';
+Variable_name	Value
+storage_engine_mode	ONLY_INNODB
+SHOW VARIABLES LIKE 'disabled_storage_engines';
+Variable_name	Value
+disabled_storage_engines	Dstore,CSV,Memory,MyISAM,MRG_MyISAM
+SHOW VARIABLES LIKE 'default_tmp_storage_engine';
+Variable_name	Value
+default_tmp_storage_engine	InnoDB
+SHOW VARIABLES LIKE 'disabled_storage_engines';
+Variable_name	Value
+disabled_storage_engines	Dstore,CSV,Memory,MyISAM,MRG_MyISAM
+SET default_storage_engine = InnoDB;
+SET default_tmp_storage_engine = InnoDB;
+CREATE TABLE t1 (c1 int) ENGINE=Dstore;
+Got one of the listed errors
+CREATE TEMPORARY TABLE t1 (c1 int) ENGINE=Dstore;
+Got one of the listed errors
+SHOW VARIABLES LIKE 'storage_engine_mode';
+Variable_name	Value
+storage_engine_mode	BOTH_STORAGE_ENGINE
+SHOW VARIABLES LIKE 'disabled_storage_engines';
+Variable_name	Value
+disabled_storage_engines	
+SHOW VARIABLES LIKE 'default_tmp_storage_engine';
+Variable_name	Value
+default_tmp_storage_engine	InnoDB
+SHOW VARIABLES LIKE 'disabled_storage_engines';
+Variable_name	Value
+disabled_storage_engines	
+SET default_storage_engine = InnoDB;
+SET default_tmp_storage_engine = Dstore;
+CREATE TABLE t1(a int) ENGINE=Dstore;
+DROP TABLE t1;
+CREATE TABLE t1(a int) ENGINE=InnoDB;
+DROP TABLE t1;
+CREATE TEMPORARY TABLE t1 (c1 int) ENGINE=Dstore;
+DROP TABLE t1;
+CREATE TEMPORARY TABLE t1 (c1 int) ENGINE=InnoDB;
+DROP TABLE t1;
+# restart

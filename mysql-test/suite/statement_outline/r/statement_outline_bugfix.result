@@ -1,0 +1,73 @@
+# BUG2025031918454
+create user 'user1'@'%';
+CREATE user 'user2'@'%';
+grant all privileges on *.* to 'user2'@'%';
+connection user1
+call dbms_outln.add_optimizer_outline('','',1,'/*+MAX_EXECUTION_TIME(1000) */','select a from  t1  where a>6');
+ERROR HY000: command denied to current user
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+insert into mysql.outline values (2,'testdb','test_digest','digest_test','OPTIMIZER','','N',2,'hint_text');
+ERROR 42000: INSERT command denied to user 'user1'@'localhost' for table 'outline'
+update mysql.outline set Schema_name = 'test_database' where id = 2;
+ERROR 42000: UPDATE command denied to user 'user1'@'localhost' for table 'outline'
+delete from mysql.outline where id = 2;
+ERROR 42000: DELETE command denied to user 'user1'@'localhost' for table 'outline'
+connection user2
+call dbms_outln.add_optimizer_outline('','',1,'/*+MAX_EXECUTION_TIME(1000) */','select a from  t1  where a>6');
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+1		be3cdad5a2a71788a0e8d785dbcf2e3c538d0ca030c0aed4077df9951032fe27	OPTIMIZER		1	/*+MAX_EXECUTION_TIME(1000) */	0	0	SELECT `a` FROM `t1` WHERE `a` > ?
+use mysql;
+insert into mysql.outline values (2,'testdb','test_digest','digest_test','OPTIMIZER','','N',2,'hint_text');
+ERROR 45000: Access denied for user 'user2@localhost' to table 'mysql.outline'.
+update mysql.outline set Schema_name = 'test_database' where id = 1;
+ERROR 45000: Access denied for user 'user2@localhost' to table 'mysql.outline'.
+delete from mysql.outline where id = 1;
+ERROR 45000: Access denied for user 'user2@localhost' to table 'mysql.outline'.
+call dbms_outln.del_outline(1);
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+connection root
+call dbms_outln.add_optimizer_outline('','',1,'/*+MAX_EXECUTION_TIME(1000) */','select a from  t1  where a>6');
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+2		be3cdad5a2a71788a0e8d785dbcf2e3c538d0ca030c0aed4077df9951032fe27	OPTIMIZER		1	/*+MAX_EXECUTION_TIME(1000) */	0	0	SELECT `a` FROM `t1` WHERE `a` > ?
+use mysql;
+insert into mysql.outline values (3,'testdb','test_digest','digest_test','OPTIMIZER','','N',2,'hint_text');
+ERROR 45000: Access denied for user 'root@localhost' to table 'mysql.outline'.
+update mysql.outline set Schema_name = 'test_database' where id = 2;
+ERROR 45000: Access denied for user 'root@localhost' to table 'mysql.outline'.
+delete from mysql.outline where id = 2;
+ERROR 45000: Access denied for user 'root@localhost' to table 'mysql.outline'.
+call dbms_outln.del_outline(2);
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+connection rdsAdmin
+select user();
+user()
+rdsAdmin@localhost
+call dbms_outln.add_optimizer_outline('','',1,'/*+MAX_EXECUTION_TIME(1000) */','select a from  t1  where a>6');
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+3		be3cdad5a2a71788a0e8d785dbcf2e3c538d0ca030c0aed4077df9951032fe27	OPTIMIZER		1	/*+MAX_EXECUTION_TIME(1000) */	0	0	SELECT `a` FROM `t1` WHERE `a` > ?
+use mysql;
+insert into mysql.outline values (4,'testdb','test_digest','digest_test','OPTIMIZER','','N',2,'hint_text');
+select * from mysql.outline;
+Id	Schema_name	Digest	Digest_text	Type	Scope	State	Position	Hint
+3	NULL	be3cdad5a2a71788a0e8d785dbcf2e3c538d0ca030c0aed4077df9951032fe27	SELECT `a` FROM `t1` WHERE `a` > ?	OPTIMIZER		Y	1	/*+MAX_EXECUTION_TIME(1000) */
+4	testdb	test_digest	digest_test	OPTIMIZER		N	2	hint_text
+update mysql.outline set Schema_name = 'test_database' where id = 4;
+select * from mysql.outline;
+Id	Schema_name	Digest	Digest_text	Type	Scope	State	Position	Hint
+3	NULL	be3cdad5a2a71788a0e8d785dbcf2e3c538d0ca030c0aed4077df9951032fe27	SELECT `a` FROM `t1` WHERE `a` > ?	OPTIMIZER		Y	1	/*+MAX_EXECUTION_TIME(1000) */
+4	test_database	test_digest	digest_test	OPTIMIZER		N	2	hint_text
+delete from mysql.outline where id = 4;
+select * from mysql.outline;
+Id	Schema_name	Digest	Digest_text	Type	Scope	State	Position	Hint
+3	NULL	be3cdad5a2a71788a0e8d785dbcf2e3c538d0ca030c0aed4077df9951032fe27	SELECT `a` FROM `t1` WHERE `a` > ?	OPTIMIZER		Y	1	/*+MAX_EXECUTION_TIME(1000) */
+call dbms_outln.del_outline(3);
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+drop user 'user1'@'%';
+drop user 'user2'@'%';

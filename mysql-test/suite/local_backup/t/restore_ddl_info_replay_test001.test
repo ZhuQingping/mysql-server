@@ -1,0 +1,265 @@
+#
+# Basic test for DDL info replay during archive restore
+#
+
+call mtr.add_suppression("Local backup\: wal archiver is running");
+call mtr.add_suppression("failed to start wal archiver");
+call mtr.add_suppression("log archive path not configured");
+call mtr.add_suppression("start wal archive fail for pdb");
+call mtr.add_suppression("Plugin 'Dstore' will be forced to shutdown");
+call mtr.add_suppression("Plugin 'Dstore' has ref_count=[0-9]* after shutdown");
+call mtr.add_suppression("full backup found binlog is not enabled");
+
+--source suite/local_backup/include/prepare_for_backup.inc
+
+# 1. prepare some data: DDL operations before full backup
+create database full_backup_archive_restore;
+use full_backup_archive_restore;
+create table t1(s varchar(100)) engine=Dstore;
+--sleep 3
+
+# 2. Create a full backup
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+
+--source suite/local_backup/include/wait_full_backup.inc
+--source suite/local_backup/include/stop_full_backup.inc
+
+show status like "Rds_local_backup_last_full_backup_status";
+
+# 3. Start log archive
+--source suite/local_backup/include/start_log_archive.inc
+# should report error when start again
+--error ER_DA_LOCAL_BACKUP_ERROR
+call rds_backup.start_log_archive();
+
+# 4. various basic DDL operations for log archive
+## SQLCOM_CREATE_DB
+create database ddl_test0; USE ddl_test0;
+
+## SQLCOM_CREATE_TABLE
+CREATE TABLE t1 (id INT, name VARCHAR(20), mylob BLOB);
+CREATE TABLE t2 (id INT primary key auto_increment, name VARCHAR(20), mylob BLOB);
+
+## SQLCOM_ALTER_DB
+ALTER DATABASE ddl_test0 CHARACTER SET = utf8mb4;
+
+## SQLCOM_DROP_TABLE
+DROP TABLE t2;
+
+## SQLCOM_DROP_DB
+drop database ddl_test0;
+
+## Inplace ddl
+CREATE DATABASE ddl_inplace_test0;
+CREATE DATABASE ddl_inplace_test1;
+USE ddl_inplace_test0;
+CREATE TABLE t1(c1 int)ENGINE=Dstore;
+ALTER TABLE t1 ADD INDEX idx(c1), RENAME TO ddl_inplace_test1.t2, ALGORITHM=INPLACE;
+USE ddl_inplace_test1;
+ALTER TABLE t2 RENAME INDEX idx TO idx2, ALGORITHM=INPLACE;
+ALTER TABLE t2 DROP INDEX idx2, ALGORITHM=INPLACE;
+ALTER TABLE t2 RENAME COLUMN c1 to c2, ALGORITHM=INPLACE;
+DROP DATABASE ddl_inplace_test0;
+DROP DATABASE ddl_inplace_test1;
+
+
+create database ddl_test1; USE ddl_test1;
+
+## SQLCOM_CREATE_TABLE
+CREATE TABLE t1 (id INT, name VARCHAR(20), mylob BLOB);
+### create with select
+create table t_select charset utf8mb4 select if(1, 9223372036854775808, 1) i,case when 1 then 9223372036854775808 else 1 end c,coalesce(9223372036854775808, 1);  
+
+## SQLCOM_CREATE_INDEX
+CREATE INDEX idx1 ON t1(id);
+
+## SQLCOM_DROP_INDEX
+DROP INDEX idx1 ON t1;
+
+CREATE INDEX idx2 ON t1(name);
+
+## SQLCOM_ALTER_TABLE
+ALTER TABLE t1 ADD COLUMN age INT;
+
+## SQLCOM_OPTIMIZE
+OPTIMIZE TABLE t1;
+
+## SQLCOM_TRUNCATE
+TRUNCATE TABLE t1;
+
+## SQLCOM_RENAME_TABLE
+RENAME TABLE t1 TO t2;
+
+## SQLCOM_CREATE_VIEW
+CREATE VIEW v1 AS SELECT 1 AS col;
+
+## SQLCOM_DROP_VIEW
+DROP VIEW v1;
+
+CREATE VIEW v1 AS SELECT * FROM t2;
+
+## SQLCOM_CREATE_FUNCTION
+CREATE FUNCTION hello() RETURNS INT DETERMINISTIC RETURN 1;
+
+## SQLCOM_DROP_FUNCTION
+DROP FUNCTION hello;
+
+CREATE FUNCTION hello() RETURNS INT DETERMINISTIC RETURN 100;
+
+## SQLCOM_CREATE_PROCEDURE
+DELIMITER |;
+CREATE PROCEDURE p1() BEGIN SELECT 1; END|
+DELIMITER ;|
+
+## SQLCOM_DROP_PROCEDURE
+DROP PROCEDURE p1;
+
+DELIMITER |;
+CREATE PROCEDURE p1() BEGIN SELECT 100; END|
+DELIMITER ;|
+
+## SQLCOM_ALTER_PROCEDURE
+ALTER PROCEDURE p1 COMMENT 'modified';
+
+## SQLCOM_CREATE_TRIGGER
+CREATE TABLE t3 (id INT);
+CREATE TRIGGER tr1 BEFORE INSERT ON t3 FOR EACH ROW SET NEW.id = 0;
+
+## SQLCOM_DROP_TRIGGER
+DROP TRIGGER tr1;
+
+CREATE TRIGGER tr1 BEFORE INSERT ON t3 FOR EACH ROW SET NEW.id = 100;
+
+## SQLCOM_CREATE_EVENT
+CREATE EVENT e1 ON SCHEDULE EVERY 1 DAY DO DELETE FROM t3;
+
+## SQLCOM_DROP_EVENT
+DROP EVENT e1;
+
+CREATE EVENT e1 ON SCHEDULE EVERY 1 DAY DO DELETE FROM t3 WHERE id < 100;
+
+## SQLCOM_ALTER_EVENT
+ALTER EVENT e1 DISABLE;
+
+## CREATE Server is not recorded in binlog
+### SQLCOM_CREATE_SERVER
+#CREATE SERVER s1 FOREIGN DATA WRAPPER mysql OPTIONS (HOST '127.0.0.1');
+#
+### SQLCOM_DROP_SERVER
+#DROP SERVER s1;
+#
+#CREATE SERVER s1 FOREIGN DATA WRAPPER mysql8 OPTIONS (HOST '127.0.0.1');
+#
+### SQLCOM_ALTER_SERVER
+#ALTER SERVER s1 OPTIONS (USER 'test');
+
+### Resource group would not be recorded in binlog
+### SQLCOM_CREATE_RESOURCE_GROUP
+#CREATE RESOURCE GROUP rg1 TYPE = USER;
+#
+### SQLCOM_DROP_RESOURCE_GROUP
+#DROP RESOURCE GROUP rg1;
+#
+#CREATE RESOURCE GROUP rg1 TYPE = SYSTEM;
+#
+### SQLCOM_ALTER_RESOURCE_GROUP
+#ALTER RESOURCE GROUP rg1 VCPU = 0-1;
+
+## SQLCOM_CREATE_USER
+CREATE USER 'testuser'@'localhost' IDENTIFIED BY 'password';
+CREATE USER 'testuser2'@'localhost' IDENTIFIED BY 'password';
+
+## SQLCOM_ALTER_USER
+ALTER USER 'testuser'@'localhost' IDENTIFIED BY 'new_password';
+
+## SQLCOM_RENAME_USER
+RENAME USER 'testuser'@'localhost' TO 'newuser'@'localhost';
+
+## SQLCOM_SET_PASSWORD
+SET PASSWORD FOR 'newuser'@'localhost' = 'pass';
+
+## SQLCOM_DROP_USER
+DROP USER 'testuser2'@'localhost';
+
+## SQLCOM_CREATE_ROLE
+CREATE ROLE 'role1';
+CREATE ROLE 'role2';
+
+## SQLCOM_GRANT_ROLE
+GRANT 'role1' TO 'newuser'@'localhost';
+GRANT 'role2' TO 'root'@'localhost';
+
+## SQLCOM_DROP_ROLE
+DROP ROLE 'role2';
+
+CREATE ROLE 'role2';
+GRANT 'role2' TO 'newuser'@'localhost';
+
+## SQLCOM_GRANT
+GRANT SELECT ON ddl_test1.* TO 'role1';
+GRANT SELECT ON ddl_test1.* TO 'role2';
+
+## SQLCOM_REVOKE_ROLE
+REVOKE 'role2' FROM 'newuser'@'localhost';
+
+## SQLCOM_REVOKE
+REVOKE SELECT ON ddl_test1.* FROM 'role2';
+
+## SQLCOM_ALTER_USER_DEFAULT_ROLE
+ALTER USER 'newuser'@'localhost' DEFAULT ROLE 'role1';
+
+--sleep 3
+
+# 5. Stop log archive
+--source suite/local_backup/include/stop_log_archive.inc
+
+# 6. Restore
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+--let $list_type = wal_archive
+--source suite/local_backup/include/restore_with_script.inc
+
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+# 7. Verify data. DDL in step 4 should be replayed.
+select count(*) from mysql.ddl_info_replay_trace;
+show tables;
+show create view v1;
+select * from v1;
+show create function hello;
+SELECT hello();
+show create procedure p1;
+call p1;
+SELECT TRIGGER_CATALOG, TRIGGER_SCHEMA, TRIGGER_NAME, ACTION_STATEMENT, DEFINER FROM information_schema.TRIGGERS WHERE TRIGGER_NAME = 'tr1';
+INSERT INTO t3 (id) VALUES (5);
+SELECT * FROM t3;
+select EVENT_CATALOG, EVENT_SCHEMA, EVENT_NAME, EVENT_DEFINITION, STATUS from information_schema.EVENTS WHERE EVENT_SCHEMA = 'ddl_test1';
+select * from mysql.servers;
+SELECT *  FROM INFORMATION_SCHEMA.RESOURCE_GROUPS WHERE RESOURCE_GROUP_NAME = 'rg1';
+SHOW GRANTS FOR 'role1';
+SHOW GRANTS FOR 'role2';
+SHOW GRANTS FOR 'newuser'@'localhost';
+SELECT * FROM mysql.role_edges WHERE FROM_USER = 'role1';
+SELECT default_role_user FROM mysql.default_roles WHERE user = 'newuser' AND host = 'localhost';
+
+# 8. cleanup
+
+DROP PROCEDURE p1;
+DROP TRIGGER tr1;
+REVOKE 'role1' FROM 'newuser'@'localhost';
+REVOKE SELECT ON ddl_test1.* FROM 'role1';
+DROP ROLE 'role1';
+DROP ROLE 'role2';
+DROP USER 'newuser'@'localhost';
+#DROP RESOURCE GROUP rg1;
+DROP FUNCTION hello;
+#DROP SERVER s1;
+DROP EVENT e1;
+
+drop database ddl_test1;
+drop database full_backup_archive_restore;
+
+--source suite/local_backup/include/clean_backup.inc

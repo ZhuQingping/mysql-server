@@ -1,0 +1,79 @@
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("OBS error occur when get object meta");
+call mtr.add_suppression("OBS get object metadata fail");
+call mtr.add_suppression("LocalBackup failed to write binlog meta file");
+call mtr.add_suppression("finish full local binlog logic failed");
+call mtr.add_suppression("failed to finish backup binlog logic");
+call mtr.add_suppression("Local backup: failed to generate binlog files meta data for OBS object");
+call mtr.add_suppression("Local backup: full backup failed to copy binlog file");
+call mtr.add_suppression("LocalBackup get binlog point fail");
+call mtr.add_suppression("start full local backup fail, pdb id ");
+call mtr.add_suppression("Local backup: failed to do full backup for dstore");
+call mtr.add_suppression("Local backup: failed to append binlog file ");
+call mtr.add_suppression("Local backup: failed to append binlog index to OBS object");
+call mtr.add_suppression("the start recovery lsn invalid when search point from parent meta");
+call mtr.add_suppression("search point from full parent meta fail when create restore meta");
+call mtr.add_suppression("create full backup restore meta fail with time point");
+call mtr.add_suppression("Local backup: failed to write full backup restore meta to OBS");
+SET GLOBAL debug='+d,mock_put_object';
+SET GLOBAL debug='+d,mock_append_object';
+SET GLOBAL debug='+d,mock_get_object';
+SET GLOBAL debug='+d,mock_list_object';
+SET GLOBAL debug='+d,mock_delete_object';
+SET GLOBAL debug='+d,mock_get_object_meta';
+CREATE DATABASE db1;
+USE db1;
+CREATE TABLE t1(a int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+a
+1
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+INSERT INTO t1 VALUES(2);
+SELECT * FROM t1 order by a;
+a
+1
+2
+SET GLOBAL debug='+d,upload_last_binlog_and_index_to_obs_gen_merged_file_obj_meta_fail';
+call rds_backup.start_full_local_backup(0);
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+SET GLOBAL debug='-d,upload_last_binlog_and_index_to_obs_gen_merged_file_obj_meta_fail';
+SET GLOBAL debug='+d,upload_last_binlog_and_index_to_obs_append_one_file_to_obj_fail';
+call rds_backup.start_full_local_backup(0);
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+SET GLOBAL debug='-d,upload_last_binlog_and_index_to_obs_append_one_file_to_obj_fail';
+SET GLOBAL debug='+d,upload_last_binlog_and_index_to_obs_append_data_to_obj_fail';
+call rds_backup.start_full_local_backup(0);
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+SET GLOBAL debug='-d,upload_last_binlog_and_index_to_obs_append_data_to_obj_fail';
+DROP DATABASE db1;
+SET GLOBAL debug='-d,mock_put_object';
+SET GLOBAL debug='-d,mock_append_object';
+SET GLOBAL debug='-d,mock_get_object';
+SET GLOBAL debug='-d,mock_list_object';
+SET GLOBAL debug='-d,mock_delete_object';
+SET GLOBAL debug='-d,mock_get_object_meta';

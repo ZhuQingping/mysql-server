@@ -1,0 +1,55 @@
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("OBS error occur when get object meta");
+call mtr.add_suppression("OBS get object metadata fail");
+CREATE DATABASE db1;
+USE db1;
+CREATE TABLE t1(a int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+a
+1
+INSERT INTO t1 VALUES(2);
+SET GLOBAL debug='+d,lb_pause_after_first_dstore_tbs_data_arrive';
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+CREATE TABLE table_after_backup(s varchar(100)) ENGINE=Dstore;
+INSERT INTO table_after_backup VALUES("string after backup start");
+INSERT INTO table_after_backup VALUES("string after backup start");
+DELETE FROM table_after_backup LIMIT 1;
+UPDATE table_after_backup SET s="string after backup start updated";
+SELECT * FROM table_after_backup;
+s
+string after backup start updated
+SET GLOBAL debug='-d,lb_pause_after_first_dstore_tbs_data_arrive';
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+include/read_file_to_var.inc
+SELECT * FROM t1 order by a;
+a
+1
+2
+INSERT INTO t1 VALUES(3);
+SELECT * FROM t1 order by a;
+a
+1
+2
+3
+# Shut server down.
+# Restart the server.
+# restart: --dstore_open_restore_mode=on
+USE db1;
+SELECT * FROM t1 order by a;
+a
+1
+2
+SELECT * FROM table_after_backup;
+s
+string after backup start updated
+DROP DATABASE db1;

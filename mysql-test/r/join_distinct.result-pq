@@ -1,0 +1,1475 @@
+# Customer encounter performance regression for "Multi-join + distinct" scenario
+# when they upgrade from MySQL 5.7 to GaussDB(for MySQL) 8.0.22. The reason is
+# that MySQL 8.0 (>=8.0.16) new Volcano iterator executor do not apply distinct
+# optimization for this scenario, even if optimizer already mark "Distinct".
+# Refer to MySQL old version (5.7) optimization ideas, we can stop scan nested
+# loop join inner table when find out one new matched record. We introduce new
+# optimizer switch variable "nlj_distinct_optimize" to enable/disable this optimization.
+#
+# test case: session level hint updateable optimizer switch variable "nlj_distinct_optimize"
+#
+SELECT @@optimizer_switch;
+@@optimizer_switch
+index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on,offset_pushdown=on,nlj_distinct_optimize=on,partial_result_cache=on,left_join_elimination=on,dstore_enable_indexscan=on,aggregate_pushdown=on
+SET @origin_optimizer_switch=@@optimizer_switch;
+SET @origin_dstore_use_histogram_auto_update=@@global.dstore_use_histogram_auto_update;
+SET GLOBAL dstore_use_histogram_auto_update=OFF;
+SET SESSION optimizer_switch="nlj_distinct_optimize=ON";
+SELECT LOCATE('nlj_distinct_optimize=on', @@session.optimizer_switch);
+LOCATE('nlj_distinct_optimize=on', @@session.optimizer_switch)
+645
+SET SESSION optimizer_switch="nlj_distinct_optimize=OFF";
+SELECT LOCATE('nlj_distinct_optimize=off', @@session.optimizer_switch);
+LOCATE('nlj_distinct_optimize=off', @@session.optimizer_switch)
+645
+SET @origin_global_optimizer_switch=@@global.optimizer_switch;
+SET GLOBAL optimizer_switch="nlj_distinct_optimize=ON";
+SELECT LOCATE('nlj_distinct_optimize=on', @@global.optimizer_switch);
+LOCATE('nlj_distinct_optimize=on', @@global.optimizer_switch)
+645
+SET GLOBAL optimizer_switch="nlj_distinct_optimize=OFF";
+SELECT LOCATE('nlj_distinct_optimize=off', @@global.optimizer_switch);
+LOCATE('nlj_distinct_optimize=off', @@global.optimizer_switch)
+645
+SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=ON") */ LOCATE('nlj_distinct_optimize=on', @@session.optimizer_switch);
+LOCATE('nlj_distinct_optimize=on', @@session.optimizer_switch)
+645
+SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=OFF") */ LOCATE('nlj_distinct_optimize=off', @@session.optimizer_switch);
+LOCATE('nlj_distinct_optimize=off', @@session.optimizer_switch)
+645
+#
+# test case: we can check this optimization worked by explain format=tree or explain analyze.
+#            "Nested loop inner join distinct" and "Nested loop left join distinct" means
+#            distinct optimization worked. Explain traditional and json format can not help
+#            to check the optimization work or not.
+#
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(1),(2),(5),(6);
+INSERT INTO t1 VALUES(1),(2),(5),(6);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SET optimizer_switch='block_nested_loop=OFF';
+EXPLAIN SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=ON") */ DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.tt1)
+1	SIMPLE	tt1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using temporary
+1	SIMPLE	tt2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Distinct
+1	SIMPLE	tt3	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Distinct
+Warnings:
+Note	1003	/* select#1 */ select /*+ SET_VAR(optimizer_switch='nlj_distinct_optimize=ON') */ distinct `test`.`tt1`.`a` AS `a` from `test`.`t1` `tt1` join `test`.`t1` `tt2` join `test`.`t1` `tt3` where ((`test`.`tt2`.`a` + 3) = `test`.`tt3`.`a`)
+EXPLAIN SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=OFF") */ DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.tt1)
+1	SIMPLE	tt1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using temporary
+1	SIMPLE	tt2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Distinct
+1	SIMPLE	tt3	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Distinct
+Warnings:
+Note	1003	/* select#1 */ select /*+ SET_VAR(optimizer_switch='nlj_distinct_optimize=OFF') */ distinct `test`.`tt1`.`a` AS `a` from `test`.`t1` `tt1` join `test`.`t1` `tt2` join `test`.`t1` `tt3` where ((`test`.`tt2`.`a` + 3) = `test`.`tt3`.`a`)
+EXPLAIN FORMAT=TREE SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=ON") */ DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                        -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                            -> Parallel table scan on tt1  (cost=X rows=X)
+                            -> Table scan on tt2  (cost=X rows=X)
+                        -> Limit: 1 row(s)  (cost=X rows=X)
+                            -> Filter: ((tt2.a + 3) = tt3.a)  (cost=X rows=X)
+                                -> Table scan on tt3  (cost=X rows=X)
+
+EXPLAIN FORMAT=TREE SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=OFF") */ DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Nested loop inner join  (cost=X rows=X)
+                        -> Nested loop inner join  (cost=X rows=X)
+                            -> Parallel table scan on tt1  (cost=X rows=X)
+                            -> Table scan on tt2  (cost=X rows=X)
+                        -> Limit: 1 row(s)  (cost=X rows=X)
+                            -> Filter: ((tt2.a + 3) = tt3.a)  (cost=X rows=X)
+                                -> Table scan on tt3  (cost=X rows=X)
+
+EXPLAIN ANALYZE SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=ON") */ DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X) (actual time=X rows=X loops=X)
+    -> Temporary table with deduplication  (cost=X rows=X) (actual time=X rows=X loops=X)
+        -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X) (actual time=X rows=X loops=X)
+            -> Table scan on <temporary>  (cost=X rows=X) (actual time=X rows=X loops=X)
+                -> Temporary table with deduplication  (cost=X rows=X) (actual time=X rows=X loops=X)
+                    -> Nested loop inner join with distinct optimization  (cost=X rows=X) (actual time=X rows=X loops=X)
+                        -> Nested loop inner join with distinct optimization  (cost=X rows=X) (actual time=X rows=X loops=X)
+                            -> Parallel table scan on tt1  (cost=X rows=X) (actual time=X rows=X loops=X)
+                            -> Table scan on tt2  (cost=X rows=X) (actual time=X rows=X loops=X)
+                        -> Limit: 1 row(s)  (cost=X rows=X) (actual time=X rows=X loops=X)
+                            -> Filter: ((tt2.a + 3) = tt3.a)  (cost=X rows=X) (actual time=X rows=X loops=X)
+                                -> Table scan on tt3  (cost=X rows=X) (actual time=X rows=X loops=X)
+
+EXPLAIN ANALYZE SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=OFF") */ DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X) (actual time=X rows=X loops=X)
+    -> Temporary table with deduplication  (cost=X rows=X) (actual time=X rows=X loops=X)
+        -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X) (actual time=X rows=X loops=X)
+            -> Table scan on <temporary>  (cost=X rows=X) (actual time=X rows=X loops=X)
+                -> Temporary table with deduplication  (cost=X rows=X) (actual time=X rows=X loops=X)
+                    -> Nested loop inner join  (cost=X rows=X) (actual time=X rows=X loops=X)
+                        -> Nested loop inner join  (cost=X rows=X) (actual time=X rows=X loops=X)
+                            -> Parallel table scan on tt1  (cost=X rows=X) (actual time=X rows=X loops=X)
+                            -> Table scan on tt2  (cost=X rows=X) (actual time=X rows=X loops=X)
+                        -> Limit: 1 row(s)  (cost=X rows=X) (actual time=X rows=X loops=X)
+                            -> Filter: ((tt2.a + 3) = tt3.a)  (cost=X rows=X) (actual time=X rows=X loops=X)
+                                -> Table scan on tt3  (cost=X rows=X) (actual time=X rows=X loops=X)
+
+EXPLAIN SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=ON") */ DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON tt1.a + 6 > tt2.a LEFT JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.tt1)
+1	SIMPLE	tt1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using temporary
+1	SIMPLE	tt2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Distinct
+1	SIMPLE	tt3	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Distinct
+Warnings:
+Note	1003	/* select#1 */ select /*+ SET_VAR(optimizer_switch='nlj_distinct_optimize=ON') */ distinct `test`.`tt1`.`a` AS `a` from `test`.`t1` `tt1` left join `test`.`t1` `tt2` on(((`test`.`tt1`.`a` + 6) > `test`.`tt2`.`a`)) left join `test`.`t1` `tt3` on(((`test`.`tt2`.`a` + 3) = `test`.`tt3`.`a`)) where true
+EXPLAIN SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=OFF") */ DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON tt1.a + 6 > tt2.a LEFT JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.tt1)
+1	SIMPLE	tt1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using temporary
+1	SIMPLE	tt2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Distinct
+1	SIMPLE	tt3	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Distinct
+Warnings:
+Note	1003	/* select#1 */ select /*+ SET_VAR(optimizer_switch='nlj_distinct_optimize=OFF') */ distinct `test`.`tt1`.`a` AS `a` from `test`.`t1` `tt1` left join `test`.`t1` `tt2` on(((`test`.`tt1`.`a` + 6) > `test`.`tt2`.`a`)) left join `test`.`t1` `tt3` on(((`test`.`tt2`.`a` + 3) = `test`.`tt3`.`a`)) where true
+EXPLAIN FORMAT=TREE SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=ON") */ DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON tt1.a + 6 > tt2.a LEFT JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Nested loop left join with distinct optimization  (cost=X rows=X)
+                        -> Nested loop left join with distinct optimization  (cost=X rows=X)
+                            -> Parallel table scan on tt1  (cost=X rows=X)
+                            -> Filter: ((tt1.a + 6) > tt2.a)  (cost=X rows=X)
+                                -> Table scan on tt2  (cost=X rows=X)
+                        -> Filter: ((tt2.a + 3) = tt3.a)  (cost=X rows=X)
+                            -> Table scan on tt3  (cost=X rows=X)
+
+EXPLAIN FORMAT=TREE SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=OFF") */ DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON tt1.a + 6 > tt2.a LEFT JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Nested loop left join  (cost=X rows=X)
+                        -> Nested loop left join  (cost=X rows=X)
+                            -> Parallel table scan on tt1  (cost=X rows=X)
+                            -> Filter: ((tt1.a + 6) > tt2.a)  (cost=X rows=X)
+                                -> Table scan on tt2  (cost=X rows=X)
+                        -> Filter: ((tt2.a + 3) = tt3.a)  (cost=X rows=X)
+                            -> Table scan on tt3  (cost=X rows=X)
+
+EXPLAIN ANALYZE SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=ON") */ DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON tt1.a + 6 > tt2.a LEFT JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X) (actual time=X rows=X loops=X)
+    -> Temporary table with deduplication  (cost=X rows=X) (actual time=X rows=X loops=X)
+        -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X) (actual time=X rows=X loops=X)
+            -> Table scan on <temporary>  (cost=X rows=X) (actual time=X rows=X loops=X)
+                -> Temporary table with deduplication  (cost=X rows=X) (actual time=X rows=X loops=X)
+                    -> Nested loop left join with distinct optimization  (cost=X rows=X) (actual time=X rows=X loops=X)
+                        -> Nested loop left join with distinct optimization  (cost=X rows=X) (actual time=X rows=X loops=X)
+                            -> Parallel table scan on tt1  (cost=X rows=X) (actual time=X rows=X loops=X)
+                            -> Filter: ((tt1.a + 6) > tt2.a)  (cost=X rows=X) (actual time=X rows=X loops=X)
+                                -> Table scan on tt2  (cost=X rows=X) (actual time=X rows=X loops=X)
+                        -> Filter: ((tt2.a + 3) = tt3.a)  (cost=X rows=X) (actual time=X rows=X loops=X)
+                            -> Table scan on tt3  (cost=X rows=X) (actual time=X rows=X loops=X)
+
+EXPLAIN ANALYZE SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=OFF") */ DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON tt1.a + 6 > tt2.a LEFT JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X) (actual time=X rows=X loops=X)
+    -> Temporary table with deduplication  (cost=X rows=X) (actual time=X rows=X loops=X)
+        -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X) (actual time=X rows=X loops=X)
+            -> Table scan on <temporary>  (cost=X rows=X) (actual time=X rows=X loops=X)
+                -> Temporary table with deduplication  (cost=X rows=X) (actual time=X rows=X loops=X)
+                    -> Nested loop left join  (cost=X rows=X) (actual time=X rows=X loops=X)
+                        -> Nested loop left join  (cost=X rows=X) (actual time=X rows=X loops=X)
+                            -> Parallel table scan on tt1  (cost=X rows=X) (actual time=X rows=X loops=X)
+                            -> Filter: ((tt1.a + 6) > tt2.a)  (cost=X rows=X) (actual time=X rows=X loops=X)
+                                -> Table scan on tt2  (cost=X rows=X) (actual time=X rows=X loops=X)
+                        -> Filter: ((tt2.a + 3) = tt3.a)  (cost=X rows=X) (actual time=X rows=X loops=X)
+                            -> Table scan on tt3  (cost=X rows=X) (actual time=X rows=X loops=X)
+
+#
+# test case: when this optimization worked, scan less records can get distinct result,
+#            then query runs faster compared with no this optimization
+#
+# with optimization, handler_read status
+EXPLAIN FORMAT=TREE SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=ON") */ DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                        -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                            -> Parallel table scan on tt1  (cost=X rows=X)
+                            -> Table scan on tt2  (cost=X rows=X)
+                        -> Limit: 1 row(s)  (cost=X rows=X)
+                            -> Filter: ((tt2.a + 3) = tt3.a)  (cost=X rows=X)
+                                -> Table scan on tt3  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=ON") */ DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+a
+1
+2
+5
+6
+SELECT SUM(VARIABLE_VALUE) INTO @with_optimize_read1 FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+EXPLAIN FORMAT=TREE SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=ON") */ DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON tt1.a + 6 > tt2.a LEFT JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Nested loop left join with distinct optimization  (cost=X rows=X)
+                        -> Nested loop left join with distinct optimization  (cost=X rows=X)
+                            -> Parallel table scan on tt1  (cost=X rows=X)
+                            -> Filter: ((tt1.a + 6) > tt2.a)  (cost=X rows=X)
+                                -> Table scan on tt2  (cost=X rows=X)
+                        -> Filter: ((tt2.a + 3) = tt3.a)  (cost=X rows=X)
+                            -> Table scan on tt3  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=ON") */ DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON tt1.a + 6 > tt2.a LEFT JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+a
+1
+2
+5
+6
+SELECT SUM(VARIABLE_VALUE) INTO @with_optimize_read2 FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# without optimization, handler_read status
+EXPLAIN FORMAT=TREE SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=OFF") */ DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Nested loop inner join  (cost=X rows=X)
+                        -> Nested loop inner join  (cost=X rows=X)
+                            -> Parallel table scan on tt1  (cost=X rows=X)
+                            -> Table scan on tt2  (cost=X rows=X)
+                        -> Limit: 1 row(s)  (cost=X rows=X)
+                            -> Filter: ((tt2.a + 3) = tt3.a)  (cost=X rows=X)
+                                -> Table scan on tt3  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=OFF") */ DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+a
+1
+2
+5
+6
+SELECT SUM(VARIABLE_VALUE) INTO @without_optimize_read1 FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+EXPLAIN FORMAT=TREE SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=OFF") */ DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON tt1.a + 6 > tt2.a LEFT JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Nested loop left join  (cost=X rows=X)
+                        -> Nested loop left join  (cost=X rows=X)
+                            -> Parallel table scan on tt1  (cost=X rows=X)
+                            -> Filter: ((tt1.a + 6) > tt2.a)  (cost=X rows=X)
+                                -> Table scan on tt2  (cost=X rows=X)
+                        -> Filter: ((tt2.a + 3) = tt3.a)  (cost=X rows=X)
+                            -> Table scan on tt3  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT/*+ SET_VAR(optimizer_switch="nlj_distinct_optimize=OFF") */ DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON tt1.a + 6 > tt2.a LEFT JOIN t1 AS tt3 ON tt2.a + 3 = tt3.a;
+a
+1
+2
+5
+6
+SELECT SUM(VARIABLE_VALUE) INTO @without_optimize_read2 FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# following check always true
+SELECT IF(@with_optimize_read1 < @without_optimize_read1, 'TRUE', 'FALSE') AS 'check';
+check
+TRUE
+SELECT IF(@with_optimize_read2 < @without_optimize_read2, 'TRUE', 'FALSE') AS 'check';
+check
+TRUE
+DROP TABLE t1;
+SET optimizer_switch=DEFAULT;
+#
+# test case: this optimization only support:
+#            - nested loop inner join + distinct
+#            - nested loop outer join + distinct
+#            do not support:
+#            - nested loop semi join + distinct
+#            - nested loop anti join + distinct
+#            - hash join + distinct
+#            - batched key access + distinct
+#
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(0),(1),(2),(5),(6);
+INSERT INTO t1 VALUES(0),(1),(2),(5),(6);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+# Optimization work for nested loop inner join + distinct
+SET optimizer_switch='block_nested_loop=OFF';
+# with optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=ON";
+EXPLAIN FORMAT=TREE SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 JOIN t1 AS tt3 ON tt2.a + 1 = tt3.a JOIN t1 AS tt4 ON tt3.a=tt4.a ORDER BY 1;
+EXPLAIN
+-> Sort: tt1.a
+    -> Table scan on <temporary>  (cost=X rows=X)
+        -> Temporary table with deduplication  (cost=X rows=X)
+            -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+                -> Table scan on <temporary>  (cost=X rows=X)
+                    -> Temporary table with deduplication  (cost=X rows=X)
+                        -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                            -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                                -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                                    -> Parallel table scan on tt1  (cost=X rows=X)
+                                    -> Table scan on tt2  (cost=X rows=X)
+                                -> Filter: ((tt2.a + 1) = tt3.a)  (cost=X rows=X)
+                                    -> Table scan on tt3  (cost=X rows=X)
+                            -> Limit: 1 row(s)  (cost=X rows=X)
+                                -> Filter: (tt4.a = tt3.a)  (cost=X rows=X)
+                                    -> Table scan on tt4  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 JOIN t1 AS tt3 ON tt2.a + 1 = tt3.a JOIN t1 AS tt4 ON tt3.a=tt4.a ORDER BY 1;
+a
+0
+1
+2
+5
+6
+SELECT SUM(VARIABLE_VALUE) INTO @with_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# without optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=OFF";
+EXPLAIN FORMAT=TREE SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 JOIN t1 AS tt3 ON tt2.a + 1 = tt3.a JOIN t1 AS tt4 ON tt3.a=tt4.a ORDER BY 1;
+EXPLAIN
+-> Sort: tt1.a
+    -> Table scan on <temporary>  (cost=X rows=X)
+        -> Temporary table with deduplication  (cost=X rows=X)
+            -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+                -> Table scan on <temporary>  (cost=X rows=X)
+                    -> Temporary table with deduplication  (cost=X rows=X)
+                        -> Nested loop inner join  (cost=X rows=X)
+                            -> Nested loop inner join  (cost=X rows=X)
+                                -> Nested loop inner join  (cost=X rows=X)
+                                    -> Parallel table scan on tt1  (cost=X rows=X)
+                                    -> Table scan on tt2  (cost=X rows=X)
+                                -> Filter: ((tt2.a + 1) = tt3.a)  (cost=X rows=X)
+                                    -> Table scan on tt3  (cost=X rows=X)
+                            -> Limit: 1 row(s)  (cost=X rows=X)
+                                -> Filter: (tt4.a = tt3.a)  (cost=X rows=X)
+                                    -> Table scan on tt4  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 JOIN t1 AS tt3 ON tt2.a + 1 = tt3.a JOIN t1 AS tt4 ON tt3.a=tt4.a ORDER BY 1;
+a
+0
+1
+2
+5
+6
+SELECT SUM(VARIABLE_VALUE) INTO @without_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# following check should always true
+SELECT IF(@with_optimize_read < @without_optimize_read, 'TRUE', 'FALSE') AS 'check';
+check
+TRUE
+# Optimization not work for inner hash join + distinct
+SET optimizer_switch=DEFAULT;
+SET optimizer_switch="nlj_distinct_optimize=ON";
+EXPLAIN FORMAT=TREE SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 JOIN t1 AS tt3 ON tt2.a + 1 = tt3.a JOIN t1 AS tt4 ON tt3.a=tt4.a ORDER BY 1;
+EXPLAIN
+-> Sort: tt1.a
+    -> Table scan on <temporary>  (cost=X rows=X)
+        -> Temporary table with deduplication  (cost=X rows=X)
+            -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+                -> Table scan on <temporary>  (cost=X rows=X)
+                    -> Temporary table with deduplication  (cost=X rows=X)
+                        -> Inner hash join, one hash table per worker (tt4.a = tt3.a)  (cost=X rows=X)
+                            -> Table scan on tt4  (cost=X rows=X)
+                            -> Hash
+                                -> Inner hash join, one hash table per worker ((tt2.a + 1) = tt3.a)  (cost=X rows=X)
+                                    -> Table scan on tt3  (cost=X rows=X)
+                                    -> Hash
+                                        -> Inner hash join, one hash table per worker (no condition)  (cost=X rows=X)
+                                            -> Table scan on tt2  (cost=X rows=X)
+                                            -> Hash
+                                                -> Parallel table scan on tt1  (cost=X rows=X)
+
+SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 JOIN t1 AS tt3 ON tt2.a + 1 = tt3.a JOIN t1 AS tt4 ON tt3.a=tt4.a ORDER BY 1;
+a
+0
+1
+2
+5
+6
+# Optimization work for nested loop outer join + distinct
+CREATE TABLE t2 (
+pk integer NOT NULL,
+f1 integer,
+f2 varchar(10),
+f3 varchar(255)
+);
+INSERT INTO t2 VALUES (14,7,'G','W'),(16,8,'W','p'),(23,NULL,'q','w');
+INSERT INTO t2 VALUES (14,7,'G','W'),(16,8,'W','p'),(23,NULL,'q','w');
+ANALYZE TABLE t2;
+Table	Op	Msg_type	Msg_text
+test.t2	analyze	status	OK
+SET optimizer_switch='block_nested_loop=OFF';
+# with optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=ON";
+EXPLAIN FORMAT=TREE SELECT DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON TRUE LEFT JOIN t1 AS tt3 ON tt2.a + 1 = tt3.a LEFT JOIN t1 AS tt4 ON tt3.a=tt4.a ORDER BY 1;
+EXPLAIN
+-> Sort: tt1.a
+    -> Table scan on <temporary>  (cost=X rows=X)
+        -> Temporary table with deduplication  (cost=X rows=X)
+            -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+                -> Table scan on <temporary>  (cost=X rows=X)
+                    -> Temporary table with deduplication  (cost=X rows=X)
+                        -> Nested loop left join with distinct optimization  (cost=X rows=X)
+                            -> Nested loop left join with distinct optimization  (cost=X rows=X)
+                                -> Nested loop left join with distinct optimization  (cost=X rows=X)
+                                    -> Parallel table scan on tt1  (cost=X rows=X)
+                                    -> Table scan on tt2  (cost=X rows=X)
+                                -> Filter: ((tt2.a + 1) = tt3.a)  (cost=X rows=X)
+                                    -> Table scan on tt3  (cost=X rows=X)
+                            -> Filter: (tt4.a = tt3.a)  (cost=X rows=X)
+                                -> Table scan on tt4  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON TRUE LEFT JOIN t1 AS tt3 ON tt2.a + 1 = tt3.a LEFT JOIN t1 AS tt4 ON tt3.a=tt4.a ORDER BY 1;
+a
+0
+1
+2
+5
+6
+SELECT SUM(VARIABLE_VALUE) INTO @with_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# without optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=OFF";
+EXPLAIN FORMAT=TREE SELECT DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON TRUE LEFT JOIN t1 AS tt3 ON tt2.a + 1 = tt3.a LEFT JOIN t1 AS tt4 ON tt3.a=tt4.a ORDER BY 1;
+EXPLAIN
+-> Sort: tt1.a
+    -> Table scan on <temporary>  (cost=X rows=X)
+        -> Temporary table with deduplication  (cost=X rows=X)
+            -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+                -> Table scan on <temporary>  (cost=X rows=X)
+                    -> Temporary table with deduplication  (cost=X rows=X)
+                        -> Nested loop left join  (cost=X rows=X)
+                            -> Nested loop left join  (cost=X rows=X)
+                                -> Nested loop left join  (cost=X rows=X)
+                                    -> Parallel table scan on tt1  (cost=X rows=X)
+                                    -> Table scan on tt2  (cost=X rows=X)
+                                -> Filter: ((tt2.a + 1) = tt3.a)  (cost=X rows=X)
+                                    -> Table scan on tt3  (cost=X rows=X)
+                            -> Filter: (tt4.a = tt3.a)  (cost=X rows=X)
+                                -> Table scan on tt4  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON TRUE LEFT JOIN t1 AS tt3 ON tt2.a + 1 = tt3.a LEFT JOIN t1 AS tt4 ON tt3.a=tt4.a ORDER BY 1;
+a
+0
+1
+2
+5
+6
+SELECT SUM(VARIABLE_VALUE) INTO @without_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# following check should always true
+SELECT IF(@with_optimize_read < @without_optimize_read, 'TRUE', 'FALSE') AS 'check';
+check
+TRUE
+# with optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=ON";
+EXPLAIN FORMAT=TREE SELECT DISTINCT table1.pk FROM t2 AS table1 LEFT JOIN t2 AS table2 ON table1.f2=table2.f3 WHERE table2.f1 IS NULL;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on table1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Filter: (table2.f1 is null)  (cost=X rows=X)
+                        -> Nested loop left join with distinct optimization  (cost=X rows=X)
+                            -> Parallel table scan on table1  (cost=X rows=X)
+                            -> Filter: (table1.f2 = table2.f3)  (cost=X rows=X)
+                                -> Table scan on table2  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT table1.pk FROM t2 AS table1 LEFT JOIN t2 AS table2 ON table1.f2=table2.f3 WHERE table2.f1 IS NULL;
+pk
+14
+16
+23
+SELECT SUM(VARIABLE_VALUE) INTO @with_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# without optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=OFF";
+EXPLAIN FORMAT=TREE SELECT DISTINCT table1.pk FROM t2 AS table1 LEFT JOIN t2 AS table2 ON table1.f2=table2.f3 WHERE table2.f1 IS NULL;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on table1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Filter: (table2.f1 is null)  (cost=X rows=X)
+                        -> Nested loop left join  (cost=X rows=X)
+                            -> Parallel table scan on table1  (cost=X rows=X)
+                            -> Filter: (table1.f2 = table2.f3)  (cost=X rows=X)
+                                -> Table scan on table2  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT table1.pk FROM t2 AS table1 LEFT JOIN t2 AS table2 ON table1.f2=table2.f3 WHERE table2.f1 IS NULL;
+pk
+14
+16
+23
+SELECT SUM(VARIABLE_VALUE) INTO @without_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# following check should always true
+SELECT IF(@with_optimize_read < @without_optimize_read, 'TRUE', 'FALSE') AS 'check';
+check
+TRUE
+# Optimization not work for left hash join + distinct
+SET optimizer_switch=DEFAULT;
+SET optimizer_switch="nlj_distinct_optimize=ON";
+EXPLAIN FORMAT=TREE SELECT DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON TRUE LEFT JOIN t1 AS tt3 ON tt2.a + 1 = tt3.a LEFT JOIN t1 AS tt4 ON tt3.a=tt4.a ORDER BY 1;
+EXPLAIN
+-> Sort: tt1.a
+    -> Table scan on <temporary>  (cost=X rows=X)
+        -> Temporary table with deduplication  (cost=X rows=X)
+            -> Gather: 4 workers, parallel scan on tt4, tt1  (cost=X rows=X)
+                -> Table scan on <temporary>  (cost=X rows=X)
+                    -> Temporary table with deduplication  (cost=X rows=X)
+                        -> Left hash join, hash table shared by worker threads (tt4.a = tt3.a)  (cost=X rows=X)
+                            -> Left hash join, one hash table per worker ((tt2.a + 1) = tt3.a)  (cost=X rows=X)
+                                -> Left hash join, one hash table per worker (no condition)  (cost=X rows=X)
+                                    -> Parallel table scan on tt1  (cost=X rows=X)
+                                    -> Hash
+                                        -> Table scan on tt2  (cost=X rows=X)
+                                -> Hash
+                                    -> Table scan on tt3  (cost=X rows=X)
+                            -> Hash
+                                -> Parallel table scan on tt4  (cost=516e-6 rows=2.5)
+
+SELECT DISTINCT tt1.a FROM t1 AS tt1 LEFT JOIN t1 AS tt2 ON TRUE LEFT JOIN t1 AS tt3 ON tt2.a + 1 = tt3.a LEFT JOIN t1 AS tt4 ON tt3.a=tt4.a ORDER BY 1;
+a
+0
+1
+2
+5
+6
+EXPLAIN FORMAT=TREE SELECT DISTINCT table1.pk FROM t2 AS table1 LEFT JOIN t2 AS table2 ON table1.f2=table2.f3 WHERE table2.f1 IS NULL;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on table2, table1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Filter: (table2.f1 is null)  (cost=X rows=X)
+                        -> Left hash join, hash table shared by worker threads (<hash>(table1.f2)=<hash>(table2.f3)), extra conditions: (table1.f2 = table2.f3)  (cost=X rows=X)
+                            -> Parallel table scan on table1  (cost=X rows=X)
+                            -> Hash
+                                -> Parallel table scan on table2  (cost=X rows=X)
+
+SELECT DISTINCT table1.pk FROM t2 AS table1 LEFT JOIN t2 AS table2 ON table1.f2=table2.f3 WHERE table2.f1 IS NULL;
+pk
+14
+16
+23
+# Optimization work for semi-join materialize
+SET optimizer_switch='block_nested_loop=off,firstmatch=off';
+# with optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=ON";
+EXPLAIN FORMAT=TREE SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 ON tt1.a > tt2.a WHERE tt1.a + tt2.a IN (SELECT a FROM t1 AS tt3);
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                        -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                            -> Parallel table scan on tt1  (cost=X rows=X)
+                            -> Filter: (tt1.a > tt2.a)  (cost=X rows=X)
+                                -> Table scan on tt2  (cost=X rows=X)
+                        -> Limit: 1 row(s)  (cost=X rows=X)
+                            -> Filter: ((tt1.a + tt2.a) = `<subquery2>`.a)  (cost=X rows=X)
+                                -> Single-row index lookup on <subquery2> using <auto_distinct_key> (a=(tt1.a + tt2.a))  (cost=X rows=X)
+                                    -> Materialize with deduplication  (cost=X rows=X)
+                                        -> Filter: (tt3.a is not null)  (cost=X rows=X)
+                                            -> Table scan on tt3  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 ON tt1.a > tt2.a WHERE tt1.a + tt2.a IN (SELECT a FROM t1 AS tt3);
+a
+1
+2
+5
+6
+SELECT SUM(VARIABLE_VALUE) INTO @with_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# without optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=OFF";
+EXPLAIN FORMAT=TREE SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 ON tt1.a > tt2.a WHERE tt1.a + tt2.a IN (SELECT a FROM t1 AS tt3);
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Nested loop inner join  (cost=X rows=X)
+                        -> Nested loop inner join  (cost=X rows=X)
+                            -> Parallel table scan on tt1  (cost=X rows=X)
+                            -> Filter: (tt1.a > tt2.a)  (cost=X rows=X)
+                                -> Table scan on tt2  (cost=X rows=X)
+                        -> Limit: 1 row(s)  (cost=X rows=X)
+                            -> Filter: ((tt1.a + tt2.a) = `<subquery2>`.a)  (cost=X rows=X)
+                                -> Single-row index lookup on <subquery2> using <auto_distinct_key> (a=(tt1.a + tt2.a))  (cost=X rows=X)
+                                    -> Materialize with deduplication  (cost=X rows=X)
+                                        -> Filter: (tt3.a is not null)  (cost=X rows=X)
+                                            -> Table scan on tt3  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 ON tt1.a > tt2.a WHERE tt1.a + tt2.a IN (SELECT a FROM t1 AS tt3);
+a
+1
+2
+5
+6
+SELECT SUM(VARIABLE_VALUE) INTO @without_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# following check should always true
+SELECT IF(@with_optimize_read < @without_optimize_read, 'TRUE', 'FALSE') AS 'check';
+check
+TRUE
+# with optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=ON";
+EXPLAIN FORMAT=TREE SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 ON tt1.a > tt2.a JOIN t1 AS tt3 WHERE tt1.a - tt2.a IN (SELECT tt4.a + tt5.a - tt6.a FROM t1 AS tt4, t1 AS tt5, t1 AS tt6);
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                        -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                            -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                                -> Parallel table scan on tt1  (cost=X rows=X)
+                                -> Filter: (tt1.a > tt2.a)  (cost=X rows=X)
+                                    -> Table scan on tt2  (cost=X rows=X)
+                            -> Table scan on tt3  (cost=X rows=X)
+                        -> Limit: 1 row(s)  (cost=X rows=X)
+                            -> Filter: ((tt1.a - tt2.a) = `<subquery2>`.`tt4.a + tt5.a - tt6.a`)  (cost=X rows=X)
+                                -> Single-row index lookup on <subquery2> using <auto_distinct_key> (tt4.a + tt5.a - tt6.a=(tt1.a - tt2.a))  (cost=X rows=X)
+                                    -> Materialize with deduplication  (cost=X rows=X)
+                                        -> Filter: (((tt4.a + tt5.a) - tt6.a) is not null)  (cost=X rows=X)
+                                            -> Nested loop inner join  (cost=X rows=X)
+                                                -> Nested loop inner join  (cost=X rows=X)
+                                                    -> Table scan on tt4  (cost=X rows=X)
+                                                    -> Table scan on tt5  (cost=X rows=X)
+                                                -> Table scan on tt6  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 ON tt1.a > tt2.a JOIN t1 AS tt3 WHERE tt1.a - tt2.a IN (SELECT tt4.a + tt5.a - tt6.a FROM t1 AS tt4, t1 AS tt5, t1 AS tt6);
+a
+1
+2
+5
+6
+SELECT SUM(VARIABLE_VALUE) INTO @with_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# without optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=OFF";
+EXPLAIN FORMAT=TREE SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 ON tt1.a > tt2.a JOIN t1 AS tt3 WHERE tt1.a - tt2.a IN (SELECT tt4.a + tt5.a - tt6.a FROM t1 AS tt4, t1 AS tt5, t1 AS tt6);
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Nested loop inner join  (cost=X rows=X)
+                        -> Nested loop inner join  (cost=X rows=X)
+                            -> Nested loop inner join  (cost=X rows=X)
+                                -> Parallel table scan on tt1  (cost=X rows=X)
+                                -> Filter: (tt1.a > tt2.a)  (cost=X rows=X)
+                                    -> Table scan on tt2  (cost=X rows=X)
+                            -> Table scan on tt3  (cost=X rows=X)
+                        -> Limit: 1 row(s)  (cost=X rows=X)
+                            -> Filter: ((tt1.a - tt2.a) = `<subquery2>`.`tt4.a + tt5.a - tt6.a`)  (cost=X rows=X)
+                                -> Single-row index lookup on <subquery2> using <auto_distinct_key> (tt4.a + tt5.a - tt6.a=(tt1.a - tt2.a))  (cost=X rows=X)
+                                    -> Materialize with deduplication  (cost=X rows=X)
+                                        -> Filter: (((tt4.a + tt5.a) - tt6.a) is not null)  (cost=X rows=X)
+                                            -> Nested loop inner join  (cost=X rows=X)
+                                                -> Nested loop inner join  (cost=X rows=X)
+                                                    -> Table scan on tt4  (cost=X rows=X)
+                                                    -> Table scan on tt5  (cost=X rows=X)
+                                                -> Table scan on tt6  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 ON tt1.a > tt2.a JOIN t1 AS tt3 WHERE tt1.a - tt2.a IN (SELECT tt4.a + tt5.a - tt6.a FROM t1 AS tt4, t1 AS tt5, t1 AS tt6);
+a
+1
+2
+5
+6
+SELECT SUM(VARIABLE_VALUE) INTO @without_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# following check should always true
+SELECT IF(@with_optimize_read < @without_optimize_read, 'TRUE', 'FALSE') AS 'check';
+check
+TRUE
+SET optimizer_switch=DEFAULT;
+DROP TABLE t1,t2;
+# Optimization work for semi-join loosescan
+CREATE TABLE t1(a INT, KEY (a));
+INSERT INTO t1 VALUES(0),(1),(2),(5),(6);
+INSERT INTO t1 VALUES(0),(1),(2),(5),(6);
+ANALYZE TABLE t1 UPDATE HISTOGRAM ON a;
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'a'.
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SET optimizer_switch='materialization=off,firstmatch=off,duplicateweedout=off,block_nested_loop=off';
+SET optimizer_switch='semijoin=on,loosescan=on';
+# with optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=ON";
+EXPLAIN FORMAT=TREE SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 ON tt1.a > tt2.a WHERE tt1.a + tt2.a IN (SELECT a FROM t1 AS tt3);
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                        -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                            -> Parallel index scan on tt1 using a  (cost=X rows=X)
+                            -> Result cache : cache keys(tt1.a)  (cost=X rows=X)
+                                -> Remove duplicates from input sorted on a  (cost=X rows=X)
+                                    -> Index scan on tt3 using a  (cost=X rows=X)
+                        -> Result cache : cache keys(tt1.a, tt3.a)  (cost=X rows=X)
+                            -> Limit: 1 row(s)  (cost=X rows=X)
+                                -> Filter: (((tt1.a + tt2.a) = tt3.a) and (tt1.a > tt2.a))  (cost=X rows=X)
+                                    -> Index range scan on tt2 (re-planned for each iteration)  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 ON tt1.a > tt2.a WHERE tt1.a + tt2.a IN (SELECT a FROM t1 AS tt3);
+a
+1
+2
+5
+6
+SELECT SUM(VARIABLE_VALUE) INTO @with_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# without optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=OFF";
+EXPLAIN FORMAT=TREE SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 ON tt1.a > tt2.a WHERE tt1.a + tt2.a IN (SELECT a FROM t1 AS tt3);
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Nested loop inner join  (cost=X rows=X)
+                        -> Nested loop inner join  (cost=X rows=X)
+                            -> Parallel index scan on tt1 using a  (cost=X rows=X)
+                            -> Result cache : cache keys(tt1.a)  (cost=X rows=X)
+                                -> Remove duplicates from input sorted on a  (cost=X rows=X)
+                                    -> Index scan on tt3 using a  (cost=X rows=X)
+                        -> Result cache : cache keys(tt1.a, tt3.a)  (cost=X rows=X)
+                            -> Limit: 1 row(s)  (cost=X rows=X)
+                                -> Filter: (((tt1.a + tt2.a) = tt3.a) and (tt1.a > tt2.a))  (cost=X rows=X)
+                                    -> Index range scan on tt2 (re-planned for each iteration)  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 ON tt1.a > tt2.a WHERE tt1.a + tt2.a IN (SELECT a FROM t1 AS tt3);
+a
+1
+2
+5
+6
+SELECT SUM(VARIABLE_VALUE) INTO @without_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# following check should always true
+SELECT IF(@with_optimize_read < @without_optimize_read, 'TRUE', 'FALSE') AS 'check';
+check
+TRUE
+SET optimizer_switch=DEFAULT;
+DROP TABLE t1;
+# Optimization not work for semi-join firstmatch
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(1),(2),(5),(6);
+INSERT INTO t1 VALUES(1),(2),(5),(6);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SET optimizer_switch='block_nested_loop=off,materialization=off';
+SET optimizer_switch="nlj_distinct_optimize=ON";
+EXPLAIN FORMAT=TREE SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 ON tt1.a > tt2.a WHERE tt1.a + tt2.a IN (SELECT a FROM t1 AS tt3);
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Nested loop semijoin  (cost=X rows=X)
+                        -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                            -> Parallel table scan on tt1  (cost=X rows=X)
+                            -> Filter: (tt1.a > tt2.a)  (cost=X rows=X)
+                                -> Table scan on tt2  (cost=X rows=X)
+                        -> Filter: ((tt1.a + tt2.a) = tt3.a)  (cost=X rows=X)
+                            -> Table scan on tt3  (cost=X rows=X)
+
+SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t1 AS tt2 ON tt1.a > tt2.a WHERE tt1.a + tt2.a IN (SELECT a FROM t1 AS tt3);
+a
+5
+SET optimizer_switch=DEFAULT;
+DROP TABLE t1;
+# Optimization not work for semi-join duplicateweedout
+CREATE TABLE t1 (a int, b int, index a (a,b));
+CREATE TABLE t2 (a int, index a (a));
+INSERT INTO t1 VALUES (1,10), (2,20), (3,30), (4,40);
+CREATE TABLE t0(a int);
+INSERT INTO t0 VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+INSERT INTO t1
+SELECT rand()*100000+200,rand()*100000 from t0 A, t0 B, t0 C, t0 D;
+INSERT INTO t2 VALUES (2), (3), (4), (5);
+ANALYZE TABLE t1 UPDATE HISTOGRAM ON a,b;
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'a'.
+test.t1	histogram	status	Histogram statistics created for column 'b'.
+ANALYZE TABLE t2 UPDATE HISTOGRAM ON a;
+Table	Op	Msg_type	Msg_text
+test.t2	histogram	status	Histogram statistics created for column 'a'.
+ANALYZE TABLE t1,t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+SET optimizer_switch='block_nested_loop=off,firstmatch=off';
+SET optimizer_switch="nlj_distinct_optimize=ON";
+EXPLAIN FORMAT=TREE SELECT DISTINCT(t2.a) FROM t2 WHERE t2.a IN (SELECT tt2.a FROM t1 AS tt2, t2 AS tt3, t2 AS tt4);
+EXPLAIN
+-> Group (no aggregates)  (cost=X rows=X)
+    -> Gather: 4 workers, parallel scan on t2  (cost=X rows=X)
+        -> Group (no aggregates)  (cost=X rows=X)
+            -> Nested loop inner join  (cost=X rows=X)
+                -> Filter: (t2.a is not null)  (cost=X rows=X)
+                    -> Parallel index scan on t2 using a  (cost=X rows=X)
+                -> Limit: 1 row(s)  (cost=X rows=X)
+                    -> Nested loop inner join  (cost=X rows=X)
+                        -> Nested loop inner join  (cost=X rows=X)
+                            -> Covering index lookup on tt2 using a (a=t2.a)  (cost=X rows=X)
+                            -> Index scan on tt3 using a  (cost=X rows=X)
+                        -> Index scan on tt4 using a  (cost=X rows=X)
+
+SELECT DISTINCT(t2.a) FROM t2 WHERE t2.a IN (SELECT tt2.a FROM t1 AS tt2, t2 AS tt3, t2 AS tt4);
+a
+2
+3
+4
+SET optimizer_switch=DEFAULT;
+DROP TABLE t0,t1,t2;
+#
+# test case: Optimization not work for anti-join
+#
+CREATE TABLE t1(
+pk INTEGER PRIMARY KEY,
+uk INTEGER UNIQUE,
+ukn INTEGER UNIQUE NOT NULL,
+ik INTEGER,
+d INTEGER,
+INDEX ik(ik));
+INSERT INTO t1 VALUES
+(0, NULL, 0, NULL, NULL),
+(1, 10, 20, 30, 40),
+(2, 20, 40, 60, 80);
+ANALYZE TABLE t1 UPDATE HISTOGRAM ON pk,uk,ukn,ik,d;
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'd'.
+test.t1	histogram	status	Histogram statistics created for column 'ik'.
+test.t1	histogram	status	Histogram statistics created for column 'pk'.
+test.t1	histogram	status	Histogram statistics created for column 'uk'.
+test.t1	histogram	status	Histogram statistics created for column 'ukn'.
+CREATE TABLE t2(id INTEGER PRIMARY KEY);
+INSERT INTO t2 VALUES
+(1), (2), (3), (4), (5), (6), (7), (8), (9),(10),
+(11),(12),(13),(14),(15),(16),(17),(18),(19),(20),
+(21),(22),(23),(24),(25),(26),(27),(28),(29),(30),
+(31),(32),(33),(34),(35),(36),(37),(38),(39),(40);
+ANALYZE TABLE t2 UPDATE HISTOGRAM ON id;
+Table	Op	Msg_type	Msg_text
+test.t2	histogram	status	Histogram statistics created for column 'id'.
+CREATE TABLE t3 AS SELECT * FROM t2;
+ANALYZE TABLE t1,t2,t3;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+test.t3	analyze	status	OK
+SET optimizer_switch="nlj_distinct_optimize=ON";
+EXPLAIN FORMAT=TREE SELECT distinct id FROM t2 as ot WHERE NOT EXISTS (SELECT * FROM t1 AS it WHERE it.uk=ot.id) AND ot.id<25;
+EXPLAIN
+-> Group (no aggregates)  (cost=X rows=X)
+    -> Gather: 4 workers, parallel scan on ot  (cost=X rows=X)
+        -> Group (no aggregates)  (cost=X rows=X)
+            -> Nested loop antijoin  (cost=X rows=X)
+                -> Parallel covering index range scan on ot using PRIMARY over (id < 25)  (cost=X rows=X)
+                -> Single-row index lookup on <subquery2> using <auto_distinct_key> (uk=ot.id)  (cost=X rows=X)
+                    -> Materialize with deduplication  (cost=X rows=X)
+                        -> Filter: (it.uk is not null)  (cost=X rows=X)
+                            -> Index scan on it using uk  (cost=X rows=X)
+
+Warnings:
+Note	1276	Field or reference 'test.ot.id' of SELECT #2 was resolved in SELECT #1
+SELECT distinct id FROM t2 as ot WHERE NOT EXISTS (SELECT * FROM t1 AS it WHERE it.uk=ot.id) AND ot.id<25;
+id
+1
+2
+3
+4
+5
+6
+7
+8
+9
+11
+12
+13
+14
+15
+16
+17
+18
+19
+21
+22
+23
+24
+EXPLAIN FORMAT=TREE SELECT distinct id FROM t3 as ot WHERE NOT EXISTS (SELECT * FROM t1 AS it WHERE it.uk=ot.id) AND ot.id<25;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on ot  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Nested loop antijoin  (cost=X rows=X)
+                        -> Filter: (ot.id < 25)  (cost=X rows=X)
+                            -> Parallel table scan on ot  (cost=X rows=X)
+                        -> Single-row index lookup on <subquery2> using <auto_distinct_key> (uk=ot.id)  (cost=X rows=X)
+                            -> Materialize with deduplication  (cost=X rows=X)
+                                -> Filter: (it.uk is not null)  (cost=X rows=X)
+                                    -> Index scan on it using uk  (cost=X rows=X)
+
+Warnings:
+Note	1276	Field or reference 'test.ot.id' of SELECT #2 was resolved in SELECT #1
+SELECT distinct id FROM t3 as ot WHERE NOT EXISTS (SELECT * FROM t1 AS it WHERE it.uk=ot.id) AND ot.id<25;
+id
+1
+2
+3
+4
+5
+6
+7
+8
+9
+11
+12
+13
+14
+15
+16
+17
+18
+19
+21
+22
+23
+24
+DROP TABLE t1,t2,t3;
+#
+# test case: Optimization work for UNION and UNION ALL
+#
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(1),(1),(2),(2),(3);
+CREATE TABLE t2(a INT);
+INSERT INTO t2 VALUES(2),(3),(4),(5),(5);
+CREATE TABLE t3(a INT);
+INSERT INTO t3 VALUES(0),(5),(6),(7),(8);
+ANALYZE TABLE t1,t2,t3;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+test.t3	analyze	status	OK
+SET optimizer_switch='block_nested_loop=off';
+# with optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=ON";
+EXPLAIN FORMAT=TREE SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t3 AS tt2 JOIN t3 AS tt3 ON tt2.a + 5 = tt3.a
+UNION 
+SELECT DISTINCT tt1.a FROM t2 AS tt1 JOIN t3 AS tt2 JOIN t2 AS tt3 ON tt2.a + 5 = tt3.a;
+EXPLAIN
+-> Table scan on <union temporary>  (cost=X rows=X)
+    -> Union materialize with deduplication  (cost=X rows=X)
+        -> Table scan on <temporary>  (cost=X rows=X)
+            -> Temporary table with deduplication  (cost=X rows=X)
+                -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+                    -> Table scan on <temporary>  (cost=X rows=X)
+                        -> Temporary table with deduplication  (cost=X rows=X)
+                            -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                                -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                                    -> Parallel table scan on tt1  (cost=X rows=X)
+                                    -> Table scan on tt2  (cost=X rows=X)
+                                -> Limit: 1 row(s)  (cost=X rows=X)
+                                    -> Filter: ((tt2.a + 5) = tt3.a)  (cost=X rows=X)
+                                        -> Table scan on tt3  (cost=X rows=X)
+        -> Table scan on <temporary>  (cost=X rows=X)
+            -> Temporary table with deduplication  (cost=X rows=X)
+                -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+                    -> Table scan on <temporary>  (cost=X rows=X)
+                        -> Temporary table with deduplication  (cost=X rows=X)
+                            -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                                -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                                    -> Parallel table scan on tt1  (cost=X rows=X)
+                                    -> Table scan on tt2  (cost=X rows=X)
+                                -> Limit: 1 row(s)  (cost=X rows=X)
+                                    -> Filter: ((tt2.a + 5) = tt3.a)  (cost=X rows=X)
+                                        -> Table scan on tt3  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t3 AS tt2 JOIN t3 AS tt3 ON tt2.a + 5 = tt3.a
+UNION 
+SELECT DISTINCT tt1.a FROM t2 AS tt1 JOIN t3 AS tt2 JOIN t2 AS tt3 ON tt2.a + 5 = tt3.a;
+a
+1
+2
+3
+4
+5
+SELECT SUM(VARIABLE_VALUE) INTO @with_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# without optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=OFF";
+EXPLAIN FORMAT=TREE SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t3 AS tt2 JOIN t3 AS tt3 ON tt2.a + 5 = tt3.a
+UNION 
+SELECT DISTINCT tt1.a FROM t2 AS tt1 JOIN t3 AS tt2 JOIN t2 AS tt3 ON tt2.a + 5 = tt3.a;
+EXPLAIN
+-> Table scan on <union temporary>  (cost=X rows=X)
+    -> Union materialize with deduplication  (cost=X rows=X)
+        -> Table scan on <temporary>  (cost=X rows=X)
+            -> Temporary table with deduplication  (cost=X rows=X)
+                -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+                    -> Table scan on <temporary>  (cost=X rows=X)
+                        -> Temporary table with deduplication  (cost=X rows=X)
+                            -> Nested loop inner join  (cost=X rows=X)
+                                -> Nested loop inner join  (cost=X rows=X)
+                                    -> Parallel table scan on tt1  (cost=X rows=X)
+                                    -> Table scan on tt2  (cost=X rows=X)
+                                -> Limit: 1 row(s)  (cost=X rows=X)
+                                    -> Filter: ((tt2.a + 5) = tt3.a)  (cost=X rows=X)
+                                        -> Table scan on tt3  (cost=X rows=X)
+        -> Table scan on <temporary>  (cost=X rows=X)
+            -> Temporary table with deduplication  (cost=X rows=X)
+                -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+                    -> Table scan on <temporary>  (cost=X rows=X)
+                        -> Temporary table with deduplication  (cost=X rows=X)
+                            -> Nested loop inner join  (cost=X rows=X)
+                                -> Nested loop inner join  (cost=X rows=X)
+                                    -> Parallel table scan on tt1  (cost=X rows=X)
+                                    -> Table scan on tt2  (cost=X rows=X)
+                                -> Limit: 1 row(s)  (cost=X rows=X)
+                                    -> Filter: ((tt2.a + 5) = tt3.a)  (cost=X rows=X)
+                                        -> Table scan on tt3  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t3 AS tt2 JOIN t3 AS tt3 ON tt2.a + 5 = tt3.a
+UNION 
+SELECT DISTINCT tt1.a FROM t2 AS tt1 JOIN t3 AS tt2 JOIN t2 AS tt3 ON tt2.a + 5 = tt3.a;
+a
+1
+2
+3
+4
+5
+SELECT SUM(VARIABLE_VALUE) INTO @without_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# following check should always true
+SELECT IF(@with_optimize_read < @without_optimize_read, 'TRUE', 'FALSE') AS 'check';
+check
+TRUE
+# with optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=ON";
+EXPLAIN FORMAT=TREE SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t3 AS tt2 JOIN t3 AS tt3 ON tt2.a + 5 = tt3.a
+UNION ALL 
+SELECT DISTINCT tt1.a FROM t2 AS tt1 JOIN t3 AS tt2 JOIN t2 AS tt3 ON tt2.a + 5 = tt3.a;
+EXPLAIN
+-> Append  (cost=X rows=X)
+    -> Stream results  (cost=X rows=X)
+        -> Table scan on <temporary>  (cost=X rows=X)
+            -> Temporary table with deduplication  (cost=X rows=X)
+                -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+                    -> Table scan on <temporary>  (cost=X rows=X)
+                        -> Temporary table with deduplication  (cost=X rows=X)
+                            -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                                -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                                    -> Parallel table scan on tt1  (cost=X rows=X)
+                                    -> Table scan on tt2  (cost=X rows=X)
+                                -> Limit: 1 row(s)  (cost=X rows=X)
+                                    -> Filter: ((tt2.a + 5) = tt3.a)  (cost=X rows=X)
+                                        -> Table scan on tt3  (cost=X rows=X)
+    -> Stream results  (cost=X rows=X)
+        -> Table scan on <temporary>  (cost=X rows=X)
+            -> Temporary table with deduplication  (cost=X rows=X)
+                -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+                    -> Table scan on <temporary>  (cost=X rows=X)
+                        -> Temporary table with deduplication  (cost=X rows=X)
+                            -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                                -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                                    -> Parallel table scan on tt1  (cost=X rows=X)
+                                    -> Table scan on tt2  (cost=X rows=X)
+                                -> Limit: 1 row(s)  (cost=X rows=X)
+                                    -> Filter: ((tt2.a + 5) = tt3.a)  (cost=X rows=X)
+                                        -> Table scan on tt3  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t3 AS tt2 JOIN t3 AS tt3 ON tt2.a + 5 = tt3.a
+UNION ALL 
+SELECT DISTINCT tt1.a FROM t2 AS tt1 JOIN t3 AS tt2 JOIN t2 AS tt3 ON tt2.a + 5 = tt3.a;
+a
+1
+2
+3
+2
+3
+4
+5
+SELECT SUM(VARIABLE_VALUE) INTO @with_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# without optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=OFF";
+EXPLAIN FORMAT=TREE SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t3 AS tt2 JOIN t3 AS tt3 ON tt2.a + 5 = tt3.a
+UNION ALL 
+SELECT DISTINCT tt1.a FROM t2 AS tt1 JOIN t3 AS tt2 JOIN t2 AS tt3 ON tt2.a + 5 = tt3.a;
+EXPLAIN
+-> Append  (cost=X rows=X)
+    -> Stream results  (cost=X rows=X)
+        -> Table scan on <temporary>  (cost=X rows=X)
+            -> Temporary table with deduplication  (cost=X rows=X)
+                -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+                    -> Table scan on <temporary>  (cost=X rows=X)
+                        -> Temporary table with deduplication  (cost=X rows=X)
+                            -> Nested loop inner join  (cost=X rows=X)
+                                -> Nested loop inner join  (cost=X rows=X)
+                                    -> Parallel table scan on tt1  (cost=X rows=X)
+                                    -> Table scan on tt2  (cost=X rows=X)
+                                -> Limit: 1 row(s)  (cost=X rows=X)
+                                    -> Filter: ((tt2.a + 5) = tt3.a)  (cost=X rows=X)
+                                        -> Table scan on tt3  (cost=X rows=X)
+    -> Stream results  (cost=X rows=X)
+        -> Table scan on <temporary>  (cost=X rows=X)
+            -> Temporary table with deduplication  (cost=X rows=X)
+                -> Gather: 4 workers, parallel scan on tt1  (cost=X rows=X)
+                    -> Table scan on <temporary>  (cost=X rows=X)
+                        -> Temporary table with deduplication  (cost=X rows=X)
+                            -> Nested loop inner join  (cost=X rows=X)
+                                -> Nested loop inner join  (cost=X rows=X)
+                                    -> Parallel table scan on tt1  (cost=X rows=X)
+                                    -> Table scan on tt2  (cost=X rows=X)
+                                -> Limit: 1 row(s)  (cost=X rows=X)
+                                    -> Filter: ((tt2.a + 5) = tt3.a)  (cost=X rows=X)
+                                        -> Table scan on tt3  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT tt1.a FROM t1 AS tt1 JOIN t3 AS tt2 JOIN t3 AS tt3 ON tt2.a + 5 = tt3.a
+UNION ALL 
+SELECT DISTINCT tt1.a FROM t2 AS tt1 JOIN t3 AS tt2 JOIN t2 AS tt3 ON tt2.a + 5 = tt3.a;
+a
+1
+2
+3
+2
+3
+4
+5
+SELECT SUM(VARIABLE_VALUE) INTO @without_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# following check should always true
+SELECT IF(@with_optimize_read < @without_optimize_read, 'TRUE', 'FALSE') AS 'check';
+check
+TRUE
+SET optimizer_switch=DEFAULT;
+DROP TABLE t1,t2,t3;
+# Optimization work for non left deep plan
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(0),(1),(2),(5),(6);
+INSERT INTO t1 VALUES(0),(1),(2),(5),(6);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SET optimizer_switch='block_nested_loop=OFF';
+# with optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=ON";
+EXPLAIN FORMAT=TREE SELECT DISTINCT t1.* FROM (t1 LEFT JOIN t1 AS t2 ON t1.a = t2.a) LEFT JOIN (t1 AS t3 LEFT JOIN t1 AS t4 ON t3.a = t4.a) ON t1.a = t4.a;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on t1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Nested loop left join with distinct optimization  (cost=X rows=X)
+                        -> Nested loop left join with distinct optimization  (cost=X rows=X)
+                            -> Parallel table scan on t1  (cost=X rows=X)
+                            -> Filter: (t2.a = t1.a)  (cost=X rows=X)
+                                -> Table scan on t2  (cost=X rows=X)
+                        -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                            -> Filter: (t3.a = t1.a)  (cost=X rows=X)
+                                -> Table scan on t3  (cost=X rows=X)
+                            -> Filter: (t4.a = t1.a)  (cost=X rows=X)
+                                -> Table scan on t4  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT t1.* FROM (t1 LEFT JOIN t1 AS t2 ON t1.a = t2.a) LEFT JOIN (t1 AS t3 LEFT JOIN t1 AS t4 ON t3.a = t4.a) ON t1.a = t4.a;
+a
+0
+1
+2
+5
+6
+SELECT SUM(VARIABLE_VALUE) INTO @with_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# without optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=OFF";
+EXPLAIN FORMAT=TREE SELECT DISTINCT t1.* FROM (t1 LEFT JOIN t1 AS t2 ON t1.a = t2.a) LEFT JOIN (t1 AS t3 LEFT JOIN t1 AS t4 ON t3.a = t4.a) ON t1.a = t4.a;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Gather: 4 workers, parallel scan on t1  (cost=X rows=X)
+            -> Table scan on <temporary>  (cost=X rows=X)
+                -> Temporary table with deduplication  (cost=X rows=X)
+                    -> Nested loop left join  (cost=X rows=X)
+                        -> Nested loop left join  (cost=X rows=X)
+                            -> Parallel table scan on t1  (cost=X rows=X)
+                            -> Filter: (t2.a = t1.a)  (cost=X rows=X)
+                                -> Table scan on t2  (cost=X rows=X)
+                        -> Nested loop inner join  (cost=X rows=X)
+                            -> Filter: (t3.a = t1.a)  (cost=X rows=X)
+                                -> Table scan on t3  (cost=X rows=X)
+                            -> Filter: (t4.a = t1.a)  (cost=X rows=X)
+                                -> Table scan on t4  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT t1.* FROM (t1 LEFT JOIN t1 AS t2 ON t1.a = t2.a) LEFT JOIN (t1 AS t3 LEFT JOIN t1 AS t4 ON t3.a = t4.a) ON t1.a = t4.a;
+a
+0
+1
+2
+5
+6
+SELECT SUM(VARIABLE_VALUE) INTO @without_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# following check should always true
+SELECT IF(@with_optimize_read < @without_optimize_read, 'TRUE', 'FALSE') AS 'check';
+check
+TRUE
+SET optimizer_switch=DEFAULT;
+DROP TABLE t1;
+# Optimization work for semi-join materialize
+CREATE TABLE t1 (a INT, b INT, INDEX a(a,b));
+CREATE TABLE t2 (a INT, INDEX a(a));
+CREATE TABLE t3 (a INT, b INT, INDEX a(a));
+INSERT INTO t1 VALUES (1,10), (2,20), (3,30), (4,40);
+INSERT INTO t2 VALUES (2), (3), (4), (5);
+INSERT INTO t3 VALUES (2,3), (3,3), (4,2), (5,4);
+ANALYZE TABLE t1 UPDATE HISTOGRAM ON a,b;
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'a'.
+test.t1	histogram	status	Histogram statistics created for column 'b'.
+ANALYZE TABLE t2 UPDATE HISTOGRAM ON a;
+Table	Op	Msg_type	Msg_text
+test.t2	histogram	status	Histogram statistics created for column 'a'.
+ANALYZE TABLE t3 UPDATE HISTOGRAM ON a;
+Table	Op	Msg_type	Msg_text
+test.t3	histogram	status	Histogram statistics created for column 'a'.
+ANALYZE TABLE t1,t2,t3;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+test.t3	analyze	status	OK
+SET optimizer_switch='block_nested_loop=off,firstmatch=off';
+# with optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=ON";
+EXPLAIN FORMAT=TREE SELECT DISTINCT aaa.* FROM (SELECT t1.a FROM t1 LEFT JOIN t2 ON (EXISTS (
+SELECT t3.b FROM t3 LEFT JOIN (SELECT b FROM t2 WHERE false
+GROUP BY b) AS tt ON t3.a = t2.a and t3.b = t1.b))) AS aaa;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Nested loop left join with distinct optimization  (cost=X rows=X)
+            -> Invalidate materialized tables (row from t1)  (cost=X rows=X)
+                -> Index scan on t1 using a  (cost=X rows=X)
+            -> Nested loop inner join  (cost=X rows=X)
+                -> Index scan on t2 using a  (cost=X rows=X)
+                -> Limit: 1 row(s)  (cost=X rows=X)
+                    -> Nested loop left join with distinct optimization  (cost=X rows=X)
+                        -> Table scan on t3  (cost=X rows=X)
+                        -> Filter: ((t3.a = t2.a) and (t3.b = t1.b))  (cost=X rows=X)
+                            -> Table scan on tt  (cost=X rows=X)
+                                -> Materialize (invalidate on row from t1)  (cost=X rows=X)
+                                    -> Zero rows (Impossible WHERE)  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT aaa.* FROM (SELECT t1.a FROM t1 LEFT JOIN t2 ON (EXISTS (
+SELECT t3.b FROM t3 LEFT JOIN (SELECT b FROM t2 WHERE false
+GROUP BY b) AS tt ON t3.a = t2.a and t3.b = t1.b))) AS aaa;
+a
+1
+2
+3
+4
+SELECT SUM(VARIABLE_VALUE) INTO @with_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# without optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=OFF";
+EXPLAIN FORMAT=TREE SELECT DISTINCT aaa.* FROM (SELECT t1.a FROM t1 LEFT JOIN t2 ON (EXISTS (
+SELECT t3.b FROM t3 LEFT JOIN (SELECT b FROM t2 WHERE false
+GROUP BY b) AS tt ON t3.a = t2.a and t3.b = t1.b))) AS aaa;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Nested loop left join  (cost=X rows=X)
+            -> Invalidate materialized tables (row from t1)  (cost=X rows=X)
+                -> Index scan on t1 using a  (cost=X rows=X)
+            -> Nested loop inner join  (cost=X rows=X)
+                -> Index scan on t2 using a  (cost=X rows=X)
+                -> Limit: 1 row(s)  (cost=X rows=X)
+                    -> Nested loop left join  (cost=X rows=X)
+                        -> Table scan on t3  (cost=X rows=X)
+                        -> Filter: ((t3.a = t2.a) and (t3.b = t1.b))  (cost=X rows=X)
+                            -> Table scan on tt  (cost=X rows=X)
+                                -> Materialize (invalidate on row from t1)  (cost=X rows=X)
+                                    -> Zero rows (Impossible WHERE)  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT aaa.* FROM (SELECT t1.a FROM t1 LEFT JOIN t2 ON (EXISTS (
+SELECT t3.b FROM t3 LEFT JOIN (SELECT b FROM t2 WHERE false
+GROUP BY b) AS tt ON t3.a = t2.a and t3.b = t1.b))) AS aaa;
+a
+1
+2
+3
+4
+SELECT SUM(VARIABLE_VALUE) INTO @without_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# following check should always true
+SELECT IF(@with_optimize_read < @without_optimize_read, 'TRUE', 'FALSE') AS 'check';
+check
+TRUE
+# with optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=ON";
+EXPLAIN FORMAT=TREE SELECT DISTINCT aaa.* FROM (SELECT t1.a FROM t1 LEFT JOIN t2 ON (EXISTS (
+SELECT t3.a FROM t3 straight_join t2 on t3.a = t2.a))) AS aaa;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Nested loop left join with distinct optimization  (cost=X rows=X)
+            -> Index scan on t1 using a  (cost=X rows=X)
+            -> Nested loop inner join with distinct optimization  (cost=X rows=X)
+                -> Index scan on t2 using a  (cost=X rows=X)
+                -> Constant row from <subquery3>  (cost=X rows=X)
+                    -> Materialize with deduplication  (cost=X rows=X)
+                        -> Nested loop inner join  (cost=X rows=X)
+                            -> Index scan on t3 using a  (cost=X rows=X)
+                            -> Covering index lookup on t2 using a (a=t3.a)  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT aaa.* FROM (SELECT t1.a FROM t1 LEFT JOIN t2 ON (EXISTS (
+SELECT t3.a FROM t3 straight_join t2 on t3.a = t2.a))) AS aaa;
+a
+1
+2
+3
+4
+SELECT SUM(VARIABLE_VALUE) INTO @with_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# without optimization, handler_read status
+SET optimizer_switch="nlj_distinct_optimize=OFF";
+EXPLAIN FORMAT=TREE SELECT DISTINCT aaa.* FROM (SELECT t1.a FROM t1 LEFT JOIN t2 ON (EXISTS (
+SELECT t3.a FROM t3 straight_join t2 on t3.a = t2.a))) AS aaa;
+EXPLAIN
+-> Table scan on <temporary>  (cost=X rows=X)
+    -> Temporary table with deduplication  (cost=X rows=X)
+        -> Nested loop left join  (cost=X rows=X)
+            -> Index scan on t1 using a  (cost=X rows=X)
+            -> Nested loop inner join  (cost=X rows=X)
+                -> Index scan on t2 using a  (cost=X rows=X)
+                -> Constant row from <subquery3>  (cost=X rows=X)
+                    -> Materialize with deduplication  (cost=X rows=X)
+                        -> Nested loop inner join  (cost=X rows=X)
+                            -> Index scan on t3 using a  (cost=X rows=X)
+                            -> Covering index lookup on t2 using a (a=t3.a)  (cost=X rows=X)
+
+FLUSH STATUS;
+SELECT DISTINCT aaa.* FROM (SELECT t1.a FROM t1 LEFT JOIN t2 ON (EXISTS (
+SELECT t3.a FROM t3 straight_join t2 on t3.a = t2.a))) AS aaa;
+a
+1
+2
+3
+4
+SELECT SUM(VARIABLE_VALUE) INTO @without_optimize_read FROM performance_schema.session_status WHERE VARIABLE_NAME LIKE 'Handler_read%';
+# following check should always true
+SELECT IF(@with_optimize_read < @without_optimize_read, 'TRUE', 'FALSE') AS 'check';
+check
+TRUE
+SET optimizer_switch=DEFAULT;
+DROP TABLE t1,t2,t3;
+#
+# BUG2024030401326: Crash occur for debug version when access more than 31 tables
+#
+CREATE TABLE t1 (a INT);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+PREPARE s1 FROM '
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( 
+  SELECT a FROM t1 WHERE a IN ( SELECT a FROM t1) 
+  ))))))))))))))))))))))))))))))';
+EXECUTE s1;
+a
+SET optimizer_switch="nlj_distinct_optimize=ON";
+EXECUTE s1;
+a
+SET optimizer_switch="nlj_distinct_optimize=OFF";
+EXECUTE s1;
+a
+DROP PREPARE s1;
+DROP TABLE t1;
+SET optimizer_switch=@origin_optimizer_switch;
+SET GLOBAL optimizer_switch = @origin_global_optimizer_switch;
+SET GLOBAL dstore_use_histogram_auto_update=@origin_dstore_use_histogram_auto_update;

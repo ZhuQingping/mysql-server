@@ -1,0 +1,252 @@
+# prepare data
+CREATE TABLE t1 (
+id INT,
+year INT
+);
+INSERT INTO t1 VALUES (1, 1991), (2, 1992), (3, 1993);
+#
+# Scenario 1: With only lock_wait_timeout, DMLs will be blocked
+#             for 5 seconds as setting.
+#
+SET GLOBAL lock_wait_timeout=5;
+# conn1: A select to block DDL
+START TRANSACTION;
+SELECT * FROM t1;
+id	year
+1	1991
+2	1992
+3	1993
+# conn2: DDL
+SET SESSION lock_wait_timeout=8;
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+# conn3: DML has to wait for 5 seconds
+INSERT INTO t1 VALUES (4, 2004);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn3 waited for 5 seconds: 1
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn2 waited for 8 seconds: 1
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `id` int DEFAULT NULL,
+  `year` int DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+# conn3: select from conn3 now should work
+# 3 rows expected
+SELECT * FROM t1;
+id	year
+1	1991
+2	1992
+3	1993
+# conn1: commit
+COMMIT;
+# 3 rows expected
+SELECT * FROM t1;
+id	year
+1	1991
+2	1992
+3	1993
+#
+# Scenario 2: By setting rds_ddl_lock_wait_timeout, DDL can timeout
+#             and exit earlier
+#
+# conn1: a select to block DDL
+START TRANSACTION;
+SELECT * FROM t1;
+id	year
+1	1991
+2	1992
+3	1993
+# conn2: DDL
+SET SESSION rds_ddl_lock_wait_timeout=3;
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+# conn3: DML only waits for 3s
+START TRANSACTION;
+INSERT INTO t1 VALUES(4, 2004);
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn2 waited for 3 seconds: 1
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `id` int DEFAULT NULL,
+  `year` int DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+# Expect to be 3
+SELECT @@session.rds_ddl_lock_wait_timeout;
+@@session.rds_ddl_lock_wait_timeout
+3
+# Expect to be 5
+SELECT @@session.lock_wait_timeout;
+@@session.lock_wait_timeout
+5
+# conn3: Verify that it succeeded
+# 4 rows expected
+SELECT * FROM t1;
+id	year
+1	1991
+2	1992
+3	1993
+4	2004
+ROLLBACK;
+# conn1: commit
+COMMIT;
+# 3 rows expected
+SELECT * FROM t1;
+id	year
+1	1991
+2	1992
+3	1993
+#
+# Scenario 3: By setting rds_ddl_lock_wait_timeout, DDL can timeout
+#             and exit earlier, but this setting won't affect the
+#             following DMLs from the same session, etc.
+#
+SET GLOBAL lock_wait_timeout=5;
+SET GLOBAL innodb_lock_wait_timeout=5;
+# conn1: a trx to block DDL
+START TRANSACTION;
+INSERT INTO t1 VALUES(11, 2001);
+# conn2: DDL
+SET SESSION rds_ddl_lock_wait_timeout=3;
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+# conn3: DML only waits for 3s
+START TRANSACTION;
+INSERT INTO t1 VALUES(12, 2002);
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn2 waited for 3 seconds: 1
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `id` int DEFAULT NULL,
+  `year` int DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+# conn3: Verify that it succeeded
+# 4 rows are expected
+SELECT * FROM t1;
+id	year
+1	1991
+2	1992
+3	1993
+12	2002
+ROLLBACK;
+# conn2: Verify that following DML will timeout according
+#        to the innodb_lock_wait_timeout rather than the
+#        rds_ddl_lock_wait_timeout
+# conn2: Verify the follow-up statements
+DELETE FROM t1 WHERE id = 11;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# This verifies that the timeout is innodb_lock_wait_timeout 5s rather
+# than the rds_ddl_lock_wait_timeout 3s
+# conn2 waited for 5 seconds: 1
+# Reset the session lock_wait_timeout and innodb_lock_wait_timeout
+# to bigger value 20 and 10 seconds.
+# Let's try another DDL, then it will timeout in about 3 seconds
+# rather than 10 seconds.
+SET SESSION lock_wait_timeout = 20;
+SET SESSION innodb_lock_wait_timeout = 10;
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# This verifies that the timeout is the rds_ddl_lock_wait_timeout,
+# rather than the lock_wait_timeout
+# conn2 waited for 3 seconds: 1
+# conn2 waited for less than 10 seconds: 1
+# Do again the DML, it has to timeout in 10 seconds now
+# according to the lock_wait_timeout
+DELETE FROM t1 WHERE id = 11;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn2 waited for 10 seconds: 1
+# conn2 waited for less than 20 seconds: 1
+# conn1: rollback
+ROLLBACK;
+# 3 rows are expected
+SELECT * FROM t1;
+id	year
+1	1991
+2	1992
+3	1993
+#
+# Scenario 4: Test the DDL timeout from different sessions, and
+#             restricted by GLOBAL or SESSION timeout, etc.
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=3;
+# conn1: a trx to block DDL
+START TRANSACTION;
+SELECT * FROM t1 WHERE id <= 3 FOR UPDATE;
+id	year
+1	1991
+2	1992
+3	1993
+# conn2: DDL
+# First DDL should follow the global DDL timeout 3s
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn2 waited for 3 seconds: 1
+# conn2 waited for less than 10 seconds: 1
+# Second DDL should follow the SESSION timeout 5s'
+SET SESSION rds_ddl_lock_wait_timeout = 5;
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn2 waited for 5 seconds: 1
+# conn2 waited for less than 10 seconds: 1
+# Invalidate the session DDL timeout, it should follow the
+# min of two lock wait timeouts, which is 10s for now
+SET SESSION rds_ddl_lock_wait_timeout = 31536000;
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn2 waited for 10 seconds: 1
+# conn2 waited for less than 15 seconds: 1
+# conn3: it should follow the global 3s timeout
+SHOW GLOBAL VARIABLES LIKE '%ddl_lock_wait_timeout%';
+Variable_name	Value
+rds_ddl_lock_wait_timeout	3
+SHOW SESSION VARIABLES LIKE '%ddl_lock_wait_timeout%';
+Variable_name	Value
+rds_ddl_lock_wait_timeout	3
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn3 waited for 3 seconds: 1
+# conn3 waited for less than 10 seconds: 1
+# Verify that when one DDL is waiting for DML
+# to finish, the other DDL on the same table has
+# to wait for the first DDL. They will timeout
+# separately, or proceed if the DML finishes
+# conn2 DDL to wait for DML
+SET SESSION lock_wait_timeout=10;
+SET SESSION rds_ddl_lock_wait_timeout=5;
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+# conn3 new DDL to wait for DDL/DML
+SET SESSION lock_wait_timeout=25;
+SET SESSION rds_ddl_lock_wait_timeout=20;
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+# conn2 verify it timeout
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn2 waited for 5 seconds: 1
+# conn2 waited for less than 10 seconds: 1
+# conn1 finish the DML
+# sleep 8 seconds to check if the last DDL will be blocked too
+ROLLBACK;
+# conn3 DDL should succeed
+# conn3 waited for 13 seconds: 1
+# conn3 waited for less than 18 seconds: 1
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `id` int DEFAULT NULL,
+  `year` int DEFAULT NULL,
+  `comment` char(20) DEFAULT ''
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+# 3 rows expected, with 2 columns
+SELECT * FROM t1;
+id	year	comment
+1	1991	
+2	1992	
+3	1993	
+# teardown
+DROP TABLE t1;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+SET GLOBAL innodb_lock_wait_timeout = 50;

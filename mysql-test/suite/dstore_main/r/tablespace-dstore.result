@@ -1,0 +1,130 @@
+#
+# Validate tablespace names in the SE.
+#
+# 1. Tablespace DDL.
+# 1.1 Create/drop predefined tablespaces.
+CREATE TABLESPACE dstore_default ENGINE DStore;
+ERROR 42000: DStore: `dstore_default` is a reserved DStore's tablespace name.
+CREATE TABLESPACE dstore_temporary ENGINE DStore;
+ERROR 42000: DStore: `dstore_temporary` is a reserved DStore's tablespace name.
+CREATE TABLESPACE dstore_global ENGINE DStore;
+ERROR 42000: DStore: `dstore_global` is a reserved DStore's tablespace name.
+CREATE UNDO TABLESPACE test ADD DATAFILE "undo.ibu" ENGINE DStore;
+ERROR HY000: Feature UNDO TABLESPACE is unsupported (by DStore).
+CREATE LOGFILE GROUP lg1 ADD UNDOFILE "lg1.dat" ENGINE DStore;
+ERROR HY000: Feature LOGFILE GROUP is unsupported (by DStore).
+CREATE TABLESPACE dstore_test;
+ERROR 42000: DStore: Tablespace names starting with `dstore_` are reserved.
+CREATE TABLESPACE test max_size 1M;
+ERROR HY000: TABLESPACE test max_size is out of range in create tablespace. It must be within [40M,32P].
+create tablespace test ENGINE DStore;
+select * from information_schema.dstore_tablespaces order by SPACE;
+SPACE	NAME	MAX_SIZE	SPACE_TYPE	FILES
+1	dstore_global	36028797018963968	System	5141
+2	dstore_default	36028797018963968	General	5121,5122,5123,5124,5125
+5	dstore_temporary	36028797018963968	System	1
+25	test	36028797018963968	Single	5142,5143,5144,5145,5146
+alter tablespace test rename to test1;
+select * from information_schema.dstore_tablespaces order by SPACE;
+SPACE	NAME	MAX_SIZE	SPACE_TYPE	FILES
+1	dstore_global	36028797018963968	System	5141
+2	dstore_default	36028797018963968	General	5121,5122,5123,5124,5125
+5	dstore_temporary	36028797018963968	System	1
+25	test1	36028797018963968	Single	5142,5143,5144,5145,5146
+create temporary table test(a int) tablespace=test;
+ERROR HY000: DStore: Tablespace `test` cannot contain TEMPORARY tables.
+drop tablespace test;
+ERROR HY000: Tablespace test doesn't exist.
+create table test2 (a int) tablespace=test1;
+insert into test2 values(10);
+alter table test2 tablespace=dstore_temporary;
+ERROR HY000: DStore: Tablespace `dstore_temporary` can only contain TEMPORARY tables.
+select * from test2;
+a
+10
+drop table test2;
+drop tablespace test1;
+SET SESSION DEBUG="+d,addtablespace_zalloc_failed";
+create tablespace test;
+ERROR HY000: Failed to create TABLESPACE
+SET SESSION DEBUG="-d,addtablespace_zalloc_failed";
+create tablespace test;
+SET SESSION DEBUG="+d,rename_tablespace_old_not_exist";
+alter tablespace test rename to test1;
+ERROR HY000: Failed to alter: TABLESPACE
+SET SESSION DEBUG="-d,rename_tablespace_old_not_exist";
+drop tablespace test;
+alter tablespace dstore_default rename to testy;
+ERROR 42000: dstore: dstore_default is a reserved tablespace name.
+alter tablespace dstore_global rename to testy;
+ERROR 42000: DStore: `dstore_global` is a reserved DStore's tablespace name.
+alter tablespace dstore_temporary rename to testy;
+ERROR 42000: DStore: `dstore_temporary` is a reserved DStore's tablespace name.
+create tablespace test2 max_size=41943040;
+CREATE TABLE users (
+id INT AUTO_INCREMENT PRIMARY KEY,
+name VARCHAR(100) NOT NULL,
+email VARCHAR(150) NOT NULL,
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) tablespace=test2;
+CREATE PROCEDURE insert_many_users(IN num_rows INT)
+BEGIN
+DECLARE i INT DEFAULT 0;
+DECLARE random_name VARCHAR(100);
+DECLARE random_email VARCHAR(150);
+WHILE i < num_rows DO
+SET random_name = CONCAT('User', FLOOR(RAND() * 1000000));
+SET random_email = CONCAT(random_name, '@example.com');
+INSERT INTO users (name, email) VALUES (random_name, random_email);
+SET i = i + 1;
+END WHILE;
+END |
+call insert_many_users(100000);
+ERROR HY000: Tablespace has reached to it's max_size
+drop procedure insert_many_users;
+drop table users;
+drop tablespace test2;
+create table test(a int);
+insert into test values(10);
+alter table test tablespace=innodb_system;
+ERROR HY000: DStore: A general tablespace named `innodb_system` cannot be found.
+alter table test tablespace=dstore_temporary;
+ERROR HY000: DStore: Tablespace `dstore_temporary` can only contain TEMPORARY tables.
+alter table test tablespace=dstore_global;
+ERROR HY000: The table './test/test' may not be created in the reserved tablespace 'dstore_global'.
+drop table test;
+CREATE TABLE `test_data` (
+`id` INT AUTO_INCREMENT PRIMARY KEY,
+`username` VARCHAR(50),
+`score` INT,
+`created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE PROCEDURE BatchInsertData()
+BEGIN
+DECLARE i INT DEFAULT 1;
+START TRANSACTION;
+WHILE i <= 100000 DO
+INSERT INTO test_data (username, score) 
+VALUES (CONCAT('user_', i), FLOOR(RAND() * 100));
+IF i % 10000 = 0 THEN
+COMMIT;
+START TRANSACTION;
+END IF;
+SET i = i + 1;
+END WHILE;
+END;
+//
+CALL BatchInsertData();
+create tablespace ts1 max_size 43554432;
+drop tablespace ts1;
+drop procedure BatchInsertData;
+drop table test_data;
+drop tablespace dstore_default;
+Warnings:
+Warning	8059	Rebuild default tablespace success
+create table test (a int) tablespace=dstore_default;
+drop table test;
+create tablespace test1;
+SET DEBUG='+d,insert_legacy_drop_segment_tablespaceid_op';
+drop tablespace test1;
+ERROR HY000: Failed to drop TABLESPACE

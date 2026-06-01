@@ -1,0 +1,61 @@
+set @saved_rds_recycle_bin_mode = @@GLOBAL.rds_recycle_bin_mode;
+set global rds_recycle_bin_mode = ON;
+create database sbtest1;
+create database sbtest2;
+create table sbtest1.t1(id int);
+create table sbtest2.t2(id int);
+create table sbtest1.another_t1(uid int, name varchar(255));
+create user 'test1'@'localhost' identified by '123456';
+create user 'test2'@'localhost' identified by '123456';
+create user 'my_root'@'localhost' identified by '123456';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, SHUTDOWN, PROCESS, FILE, REFERENCES, INDEX, ALTER, SHOW DATABASES,
+CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER,
+CREATE TABLESPACE, CREATE ROLE, DROP ROLE ON *.* TO 'my_root'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP ON sbtest1.* TO 'test1'@'localhost';
+GRANT SHOW DATABASES ON *.* TO 'test1'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP ON __recyclebin__.* TO 'test1'@'localhost';
+GRANT SHOW DATABASES ON *.* TO 'test2'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP ON __recyclebin__.* TO 'test2'@'localhost';
+#
+# prepare the conn
+#
+#
+# Case 1: If other connection hold the backup lock, a timeout error is returned when rds_recycle_bin_mode is set.
+#
+drop database __recyclebin__;
+set rds_recycle_bin_mode = ON;
+ERROR HY000: Recycle table failed : create database __recyclebin__ failed.
+lock instance for backup;
+show databases;
+Database
+information_schema
+mtr
+mysql
+performance_schema
+sbtest1
+sbtest2
+sys
+test
+set rds_recycle_bin_mode = ON;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+unlock instance;
+set rds_recycle_bin_mode = ON;
+set rds_recycle_bin_mode = ON;
+show databases;
+Database
+__recyclebin__
+information_schema
+mtr
+mysql
+performance_schema
+sbtest1
+sbtest2
+sys
+test
+set rds_recycle_bin_mode = OFF;
+drop database sbtest1;
+drop database sbtest2;
+drop user test1@localhost;
+drop user test2@localhost;
+drop user my_root@localhost;
+set global rds_recycle_bin_mode = @saved_rds_recycle_bin_mode;

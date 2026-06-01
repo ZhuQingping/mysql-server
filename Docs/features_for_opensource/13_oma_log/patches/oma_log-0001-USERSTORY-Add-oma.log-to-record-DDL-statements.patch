@@ -1,0 +1,2114 @@
+From 27b20ff70a8fa592da238055302c68efa3b739ef Mon Sep 17 00:00:00 2001
+From: kuangxiangbin <kuangxiangbin@contributor>
+
+
+Date: Tue, 8 Jul 2025 15:12:20 +0800
+Subject: [PATCH] USERSTORY Add oma.log to record DDL statements.
+
+Issue:
+------
+Add oma.log to record DDL statements.
+
+Solution:
+---------
+Add code to log all DDL statements at the mysql-server layer.
+---
+ include/mysql_com.h                           |   1 +
+ local_ci/script/start_mysqld.sh               |   2 +
+ mysql-test/include/mysqld--help.inc           |   2 +-
+ mysql-test/r/all_persisted_variables.result   |   8 +-
+ mysql-test/r/log_state.result                 |   4 +
+ mysql-test/r/mysqld--help-notwin.result       |   6 +
+ mysql-test/r/oma_log.result                   | 393 ++++++++++++++++++
+ .../dstore_main/r/log_state-dstore.result     |   4 +
+ .../r/mysqld--help-notwin-dstore.result       |   6 +
+ .../suite/dstore_main/t/log_state-dstore.test |   5 +-
+ mysql-test/suite/sys_vars/r/all_vars.result   |   4 +
+ mysql-test/t/all_persisted_variables.test     |   2 +-
+ mysql-test/t/log_state.test                   |   4 +-
+ mysql-test/t/oma_log.test                     | 327 +++++++++++++++
+ sql/ddl_info.cc                               |  19 +-
+ sql/ddl_info.h                                |  51 ++-
+ sql/log.cc                                    | 341 ++++++++++++++-
+ sql/log.h                                     |  73 +++-
+ sql/mysqld.cc                                 |  26 +-
+ sql/mysqld.h                                  |   4 +-
+ sql/sql_class.h                               |   4 +
+ sql/sql_parse.cc                              |  12 +-
+ sql/sql_reload.cc                             |   5 +
+ sql/sys_vars.cc                               | 105 +++++
+ storage/dstore/handler/ha_cde.cc              |   4 +-
+ 25 files changed, 1381 insertions(+), 31 deletions(-)
+ create mode 100644 mysql-test/r/oma_log.result
+ create mode 100644 mysql-test/t/oma_log.test
+
+diff --git a/include/mysql_com.h b/include/mysql_com.h
+index b377c77b707..95fb4307417 100644
+--- a/include/mysql_com.h
++++ b/include/mysql_com.h
+@@ -251,6 +251,7 @@
+ #define REFRESH_FOR_EXPORT 0x100000L      /** FLUSH TABLES ... FOR EXPORT */
+ #define REFRESH_OPTIMIZER_COSTS 0x200000L /** FLUSH OPTIMIZER_COSTS */
+ #define REFRESH_PERSIST 0x400000L         /** RESET PERSIST */
++#define REFRESH_OMA_LOG 0x800000L         /**< Flush the oma log */
+ 
+ /** @}*/
+ 
+diff --git a/local_ci/script/start_mysqld.sh b/local_ci/script/start_mysqld.sh
+index 8863b949dc5..570b0f4f80d 100644
+--- a/local_ci/script/start_mysqld.sh
++++ b/local_ci/script/start_mysqld.sh
+@@ -51,6 +51,8 @@ core-file
+ loose_innodb_buffer_pool_in_core_file=1
+ general_log=ON
+ general_log_file=$install_path/mysql_general_log.txt
++rds_oma_log=ON
++rds_oma_log_file=$install_path/mysql_oma_log.txt
+ gdb
+ 
+ [mysqld_safe]
+diff --git a/mysql-test/include/mysqld--help.inc b/mysql-test/include/mysqld--help.inc
+index 6de6123233c..802ee5ba3c8 100644
+--- a/mysql-test/include/mysqld--help.inc
++++ b/mysql-test/include/mysqld--help.inc
+@@ -20,7 +20,7 @@ perl;
+   # Variables which we don't want to display in the result file since
+   # their paths may vary:
+   @skipvars=qw/basedir open-files-limit general-log-file plugin-dir
+-               pid-file slow-query-log-file
++               pid-file slow-query-log-file rds-oma-log-file
+                language lc-messages-dir
+                datadir replica-load-tmpdir slave-load-tmpdir tmpdir socket table-definition-cache table-open-cache
+                tls-version admin-tls-version secure-file-priv dstore-log-path dstore-tenant-config threadpool-size/;
+diff --git a/mysql-test/r/all_persisted_variables.result b/mysql-test/r/all_persisted_variables.result
+index 1ffed07c968..1edcb9425f4 100644
+--- a/mysql-test/r/all_persisted_variables.result
++++ b/mysql-test/r/all_persisted_variables.result
+@@ -40,7 +40,7 @@ include/assert.inc [Expect 500+ variables in the table. Due to open Bugs, we are
+ 
+ # Test SET PERSIST
+ 
+-include/assert.inc [Expect 480 persisted variables in the table.]
++include/assert.inc [Expect 482 persisted variables in the table.]
+ 
+ ************************************************************
+ * 3. Restart server, it must preserve the persisted variable
+@@ -48,9 +48,9 @@ include/assert.inc [Expect 480 persisted variables in the table.]
+ ************************************************************
+ # restart
+ 
+-include/assert.inc [Expect 480 persisted variables in persisted_variables table.]
+-include/assert.inc [Expect 480 persisted variables shown as PERSISTED in variables_info table.]
+-include/assert.inc [Expect 480 persisted variables with matching peristed and global values.]
++include/assert.inc [Expect 482 persisted variables in persisted_variables table.]
++include/assert.inc [Expect 482 persisted variables shown as PERSISTED in variables_info table.]
++include/assert.inc [Expect 482 persisted variables with matching peristed and global values.]
+ 
+ ************************************************************
+ * 4. Test RESET PERSIST IF EXISTS. Verify persisted variable
+diff --git a/mysql-test/r/log_state.result b/mysql-test/r/log_state.result
+index b4da4dc0ff5..801c7e7ef62 100644
+--- a/mysql-test/r/log_state.result
++++ b/mysql-test/r/log_state.result
+@@ -2,6 +2,7 @@ SET @old_general_log= @@global.general_log;
+ SET @old_general_log_file= @@global.general_log_file;
+ SET @old_slow_query_log= @@global.slow_query_log;
+ SET @old_slow_query_log_file= @@global.slow_query_log_file;
++SET @old_rds_oma_log_file= @@global.rds_oma_log_file;
+ set global general_log= OFF;
+ truncate table mysql.general_log;
+ truncate table mysql.slow_log;
+@@ -197,14 +198,17 @@ SET GLOBAL slow_query_log_file= @old_slow_query_log_file;
+ 
+ SET GLOBAL general_log_file = 'bug32748.query.log';
+ SET GLOBAL slow_query_log_file = 'bug32748.slow.log';
++SET GLOBAL rds_oma_log_file = 'bug32748.oma.log';
+ 
+ SHOW VARIABLES LIKE '%log_file';
+ Variable_name	Value
+ general_log_file	bug32748.query.log
++rds_oma_log_file	bug32748.oma.log
+ slow_query_log_file	bug32748.slow.log
+ 
+ SET GLOBAL general_log_file = @old_general_log_file;
+ SET GLOBAL slow_query_log_file = @old_slow_query_log_file;
++SET GLOBAL rds_oma_log_file = @old_rds_oma_log_file;
+ 
+ # -- End of Bug#32748.
+ #
+diff --git a/mysql-test/r/mysqld--help-notwin.result b/mysql-test/r/mysqld--help-notwin.result
+index a07bff8dfee..3c020f90e19 100644
+--- a/mysql-test/r/mysqld--help-notwin.result
++++ b/mysql-test/r/mysqld--help-notwin.result
+@@ -1294,6 +1294,11 @@ The following options may be given as the first argument:
+  should use per thread
+  --rds-log-archive-path[=name] 
+  Path for incremental local backup data
++ --rds-oma-log       Record DDL statements to a log file oma.log.
++ --rds-oma-log-file=name 
++ Log queries to given log file for Operating and
++ Maintenance Assistant purpose. Defaults logging to
++ oma.log.
+  --rds-plan-cache    Allows the server to store query plans into a cache and
+  to reuse them for next queries.
+  (Defaults to on; use --skip-rds-plan-cache to disable.)
+@@ -2290,6 +2295,7 @@ rds-full-local-backup-path
+ rds-local-backup-lock-timeout 300
+ rds-local-socket-using-per-thread FALSE
+ rds-log-archive-path 
++rds-oma-log FALSE
+ rds-plan-cache TRUE
+ rds-plan-cache-allow-change-ratio 0.2
+ rds-use-ddl-info-replay FALSE
+diff --git a/mysql-test/r/oma_log.result b/mysql-test/r/oma_log.result
+new file mode 100644
+index 00000000000..23ccd49e58d
+--- /dev/null
++++ b/mysql-test/r/oma_log.result
+@@ -0,0 +1,393 @@
++#Test Basic function of OMA log.
++#
++# Test 1: Test record modify rds_oma_log and rds_oma_log_file log
++#
++SET timestamp=10;
++SET GLOBAL rds_oma_log = OFF;
++show variables like 'rds_oma_log';
++Variable_name	Value
++rds_oma_log	OFF
++SET GLOBAL rds_oma_log = ON;
++show variables like 'rds_oma_log';
++Variable_name	Value
++rds_oma_log	ON
++show variables like 'rds_oma_log_file';
++Variable_name	Value
++rds_oma_log_file	/home/ci/install/mysql/mysql-test/var/mysqld.1/data/localhost-oma.log
++SET GLOBAL rds_oma_log_file = '/home/ci/install/mysql/mysql-test/var/mysqld.1/data//oma.log';
++show variables like 'rds_oma_log_file';
++Variable_name	Value
++rds_oma_log_file	/home/ci/install/mysql/mysql-test/var/mysqld.1/data//oma.log
++#
++# Test 2: Test record read_only and super_read_only log
++#
++set global read_only = on;
++set global super_read_only = on;
++set global read_only = off;
++set global super_read_only = off;
++#
++# Test 3: Test record other ddl log
++#
++CREATE DATABASE oma_log_test;
++USE oma_log_test;
++CREATE TABLE oma_log_test_table_001(c1 int) ENGINE=innodb;
++ALTER TABLE oma_log_test_table_001 ADD COLUMN (c2 int);
++CREATE INDEX idx_oma_log_test_c2 ON oma_log_test_table_001 (c2);
++DROP INDEX idx_oma_log_test_c2 ON oma_log_test_table_001;
++RENAME TABLE oma_log_test_table_001 TO oma_log_test_table_001_new;
++INSERT INTO oma_log_test_table_001_new VALUES (1,2);
++SELECT * FROM oma_log_test_table_001_new;
++c1	c2
++1	2
++OPTIMIZE TABLE oma_log_test_table_001_new;
++Table	Op	Msg_type	Msg_text
++oma_log_test.oma_log_test_table_001_new	optimize	note	Table does not support optimize, doing recreate + analyze instead
++oma_log_test.oma_log_test_table_001_new	optimize	status	OK
++ANALYZE TABLE oma_log_test_table_001_new;
++Table	Op	Msg_type	Msg_text
++oma_log_test.oma_log_test_table_001_new	analyze	status	OK
++TRUNCATE TABLE oma_log_test_table_001_new;
++CREATE VIEW v_oma_log_test_table_001_new AS SELECT c1, c2 FROM oma_log_test_table_001_new;
++DROP VIEW v_oma_log_test_table_001_new;
++DROP TABLE oma_log_test_table_001_new;
++CREATE ROLE if not exists 'ROLE_066';
++CREATE ROLE if not exists 'ROLE_SE_066';
++CREATE USER if not exists 'USER_066'@'localhost' IDENTIFIED BY 'dev1pass';
++GRANT 'ROLE_066' TO 'ROLE_SE_066';
++GRANT 'ROLE_SE_066' TO 'USER_066'@'localhost';
++REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'ROLE_066';
++SHOW GRANTS FOR 'USER_066'@'localhost';
++Grants for USER_066@localhost
++GRANT USAGE ON *.* TO `USER_066`@`localhost`
++GRANT `ROLE_SE_066`@`%` TO `USER_066`@`localhost`
++SHOW GRANTS FOR 'ROLE_SE_066';
++Grants for ROLE_SE_066@%
++GRANT USAGE ON *.* TO `ROLE_SE_066`@`%`
++GRANT `ROLE_066`@`%` TO `ROLE_SE_066`@`%`
++SHOW GRANTS FOR 'ROLE_066';
++Grants for ROLE_066@%
++GRANT USAGE ON *.* TO `ROLE_066`@`%`
++REVOKE 'ROLE_066' FROM 'ROLE_SE_066';
++SET PASSWORD FOR 'USER_066'@'localhost'='dev2pass';
++DROP USER IF EXISTS 'USER_066'@'localhost';
++DROP ROLE IF EXISTS 'ROLE_066';
++DROP ROLE IF EXISTS 'ROLE_SE_066';
++create user if not exists 'RENAME_USER_024'@'%' identified by 'Baidu+123';
++ALTER USER 'RENAME_USER_024'@'%' IDENTIFIED BY 'Huawei+123';
++create user if not exists 'RENAME_USER_024_02'@'%' identified by 'Baidu+123';
++ALTER USER 'RENAME_USER_024_02'@'%' DEFAULT ROLE ALL;
++grant select,create tablespace on *.* to 'RENAME_USER_024'@'%';
++grant select,create temporary tables on *.* to 'RENAME_USER_024_02'@'%';
++RENAME USER 'RENAME_USER_024'@'%' TO RENAME_USER_024_new ,'RENAME_USER_024_02'@'%' TO 'RENAME_USER_024_02_new'@'localhost';
++drop user 'RENAME_USER_024_new'@'%';
++drop user 'RENAME_USER_024_02_new'@'localhost';
++CREATE PROCEDURE oma_test_sp() 
++BEGIN
++CREATE TABLE oma_log_test.p_name (c1 int) engine=innodb;
++DROP TABLE oma_log_test.p_name;
++CREATE USER 'USER_005'@'localhost' IDENTIFIED BY 'dev1pass';
++DROP USER 'USER_005'@'localhost';
++END//
++CALL oma_test_sp();
++DROP PROCEDURE oma_test_sp;
++CREATE PROCEDURE oma_test_sp_2()
++BEGIN
++CREATE TABLE oma_log_test.p_name_2 (c1 int) engine=innodb;
++DROP TABLE oma_log_test.p_name_2;
++CREATE USER if not exists 'USER_006'@'localhost' IDENTIFIED BY 'dev1pass';
++END//
++ALTER PROCEDURE oma_test_sp_2 LANGUAGE SQL;
++CALL oma_test_sp_2();
++DROP PROCEDURE oma_test_sp_2;
++DROP USER 'USER_006'@'localhost';
++CREATE FUNCTION oma_test_sf() RETURNS INT 
++BEGIN
++RETURN (SELECT 1);
++END;
++//
++ALTER FUNCTION oma_test_sf COMMENT 'just for test';
++DROP FUNCTION oma_test_sf;
++CREATE TABLE TABLE_TEST_01 (c1 INT,c2 VARCHAR(100)) engine=InnoDB;
++CREATE EVENT oma_test_event ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 1 SECOND DO
++BEGIN
++SET timestamp=10;
++CREATE TABLE oma_log_test.p_name_event (c1 int) engine=innodb;
++END//
++DROP TABLE oma_log_test.p_name_event;
++SELECT COUNT(*)=1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'oma_log_test' AND TABLE_NAME = 'p_name_event';
++COUNT(*)=1
++0
++CREATE EVENT event1 ON SCHEDULE EVERY 10 HOUR DO SELECT 1;
++ALTER EVENT event1 RENAME TO event0;
++DROP EVENT event0;
++CRATE TABLE t1;
++ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'CRATE TABLE t1' at line 1
++CREATE TRIGGER TRIGGER_TEST_01 AFTER INSERT ON TABLE_TEST_01
++FOR EACH ROW
++BEGIN
++CREATE TABLE NEW.c2 (c1 int) engine=innodb;
++END//
++ERROR HY000: Explicit or implicit commit is not allowed in stored function or trigger.
++CREATE TRIGGER TRIGGER_TEST_01 BEFORE INSERT ON TABLE_TEST_01
++FOR EACH ROW
++BEGIN
++SET NEW.c2 = '';
++END//
++DROP TRIGGER TRIGGER_TEST_01;
++SET @user_name = 'dave';
++SET @password = 'dave_123';
++SET @s = CONCAT('CREATE USER if not exists ', @user_name, '@localhost  IDENTIFIED BY \'', @password, '\'');
++PREPARE stmt1 FROM @s;
++SET @s2 = CONCAT('DROP USER ', @user_name, '@localhost');
++PREPARE stmt2 FROM @s2;
++EXECUTE stmt1;
++EXECUTE stmt2;
++DEALLOCATE PREPARE stmt1;
++DEALLOCATE PREPARE stmt2;
++CREATE TABLESPACE sample_tablespace engine=innodb;
++DROP TABLESPACE sample_tablespace;
++CREATE SERVER s FOREIGN DATA WRAPPER mysql OPTIONS (USER 'Remote', HOST '192.168.100.106', DATABASE 'test');
++ALTER SERVER s OPTIONS (USER 'sally');
++DROP SERVER s;
++ALTER INSTANCE ENABLE INNODB REDO_LOG;
++CREATE TABLE t1(a int, b int) engine=innodb;
++CREATE TABLE t2(a int, b int) engine=innodb;
++INSERT INTO t1 values(1,1),(2,2);
++INSERT INTO t2 values(1,1),(2,2);
++LOCK TABLES t1 READ;
++UNLOCK TABLES;
++LOCK TABLES t1 READ LOCAL;
++UNLOCK TABLES;
++LOCK TABLES t1 WRITE;
++UNLOCK TABLES;
++LOCK TABLES t1 LOW_PRIORITY WRITE;
++Warnings:
++Warning	1287	'LOW_PRIORITY WRITE' is deprecated and will be removed in a future release. Please use WRITE instead
++UNLOCK TABLES;
++LOCK TABLES t1 READ, t2 WRITE;
++UNLOCK TABLES;
++FLUSH TABLES WITH READ LOCK;
++UNLOCK TABLES;
++FLUSH TABLES t1, t2 WITH READ LOCK;
++UNLOCK TABLES;
++FLUSH TABLES t1, t2 FOR EXPORT;
++UNLOCK TABLES;
++FLUSH TABLES;
++FLUSH TABLES t1, t2;
++DROP TABLE t1, t2;
++ALTER DATABASE oma_log_test CHARACTER SET = 'utf8';
++Warnings:
++Warning	3719	'utf8' is currently an alias for the character set UTF8MB3, but will be an alias for UTF8MB4 in a future release. Please consider using UTF8MB4 in order to be unambiguous.
++DROP DATABASE oma_log_test;
++
++# dump content of OMA log.
++
++Time                 Id Command    Argument
++use test;
++SET timestamp=10;
++set global read_only = on;
++SET timestamp=10;
++set global super_read_only = on;
++SET timestamp=10;
++set global read_only = off;
++SET timestamp=10;
++set global super_read_only = off;
++SET timestamp=10;
++CREATE DATABASE oma_log_test;
++use oma_log_test;
++SET timestamp=10;
++CREATE TABLE oma_log_test_table_001(c1 int) ENGINE=innodb;
++SET timestamp=10;
++ALTER TABLE oma_log_test_table_001 ADD COLUMN (c2 int);
++SET timestamp=10;
++CREATE INDEX idx_oma_log_test_c2 ON oma_log_test_table_001 (c2);
++SET timestamp=10;
++DROP INDEX idx_oma_log_test_c2 ON oma_log_test_table_001;
++SET timestamp=10;
++RENAME TABLE oma_log_test_table_001 TO oma_log_test_table_001_new;
++SET timestamp=10;
++OPTIMIZE TABLE oma_log_test_table_001_new;
++SET timestamp=10;
++ANALYZE TABLE oma_log_test_table_001_new;
++SET timestamp=10;
++TRUNCATE TABLE oma_log_test_table_001_new;
++SET timestamp=10;
++CREATE VIEW v_oma_log_test_table_001_new AS SELECT c1, c2 FROM oma_log_test_table_001_new;
++SET timestamp=10;
++DROP VIEW v_oma_log_test_table_001_new;
++SET timestamp=10;
++DROP TABLE oma_log_test_table_001_new;
++SET timestamp=10;
++CREATE ROLE if not exists 'ROLE_066';
++SET timestamp=10;
++CREATE ROLE if not exists 'ROLE_SE_066';
++SET timestamp=10;
++CREATE USER IF NOT EXISTS 'USER_066'@'localhost' IDENTIFIED BY <secret>;
++SET timestamp=10;
++GRANT 'ROLE_066' TO 'ROLE_SE_066';
++SET timestamp=10;
++GRANT 'ROLE_SE_066' TO 'USER_066'@'localhost';
++SET timestamp=10;
++REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'ROLE_066';
++SET timestamp=10;
++REVOKE 'ROLE_066' FROM 'ROLE_SE_066';
++SET timestamp=10;
++SET PASSWORD FOR `USER_066`@`localhost`=<secret>;
++SET timestamp=10;
++DROP USER IF EXISTS 'USER_066'@'localhost';
++SET timestamp=10;
++DROP ROLE IF EXISTS 'ROLE_066';
++SET timestamp=10;
++DROP ROLE IF EXISTS 'ROLE_SE_066';
++SET timestamp=10;
++CREATE USER IF NOT EXISTS 'RENAME_USER_024'@'%' IDENTIFIED BY <secret>;
++SET timestamp=10;
++ALTER USER 'RENAME_USER_024'@'%' IDENTIFIED BY <secret>;
++SET timestamp=10;
++CREATE USER IF NOT EXISTS 'RENAME_USER_024_02'@'%' IDENTIFIED BY <secret>;
++SET timestamp=10;
++ALTER USER 'RENAME_USER_024_02'@'%' DEFAULT ROLE ALL;
++SET timestamp=10;
++GRANT SELECT, CREATE TABLESPACE ON *.* TO 'RENAME_USER_024'@'%';
++SET timestamp=10;
++GRANT SELECT, CREATE TEMPORARY TABLES ON *.* TO 'RENAME_USER_024_02'@'%';
++SET timestamp=10;
++RENAME USER 'RENAME_USER_024'@'%' TO RENAME_USER_024_new ,'RENAME_USER_024_02'@'%' TO 'RENAME_USER_024_02_new'@'localhost';
++SET timestamp=10;
++drop user 'RENAME_USER_024_new'@'%';
++SET timestamp=10;
++drop user 'RENAME_USER_024_02_new'@'localhost';
++SET timestamp=10;
++CREATE PROCEDURE oma_test_sp ... ;
++SET timestamp=10;
++CREATE TABLE oma_log_test.p_name (c1 int) engine=innodb;
++SET timestamp=10;
++DROP TABLE oma_log_test.p_name;
++SET timestamp=10;
++CREATE USER 'USER_005'@'localhost' IDENTIFIED BY <secret>;
++SET timestamp=10;
++DROP USER 'USER_005'@'localhost';
++SET timestamp=10;
++CALL oma_test_sp();
++SET timestamp=10;
++DROP PROCEDURE oma_test_sp;
++SET timestamp=10;
++CREATE PROCEDURE oma_test_sp_2 ... ;
++SET timestamp=10;
++ALTER PROCEDURE oma_test_sp_2 LANGUAGE SQL;
++SET timestamp=10;
++CREATE TABLE oma_log_test.p_name_2 (c1 int) engine=innodb;
++SET timestamp=10;
++DROP TABLE oma_log_test.p_name_2;
++SET timestamp=10;
++CREATE USER IF NOT EXISTS 'USER_006'@'localhost' IDENTIFIED BY <secret>;
++SET timestamp=10;
++CALL oma_test_sp_2();
++SET timestamp=10;
++DROP PROCEDURE oma_test_sp_2;
++SET timestamp=10;
++DROP USER 'USER_006'@'localhost';
++SET timestamp=10;
++CREATE FUNCTION oma_test_sf ... ;
++SET timestamp=10;
++ALTER FUNCTION oma_test_sf COMMENT 'just for test';
++SET timestamp=10;
++DROP FUNCTION oma_test_sf;
++SET timestamp=10;
++CREATE TABLE TABLE_TEST_01 (c1 INT,c2 VARCHAR(100)) engine=InnoDB;
++SET timestamp=10;
++CREATE EVENT oma_test_event ... ;
++SET timestamp=10;
++CREATE TABLE oma_log_test.p_name_event (c1 int) engine=innodb;
++SET timestamp=10;
++DROP TABLE oma_log_test.p_name_event;
++SET timestamp=10;
++CREATE EVENT event1 ... ;
++SET timestamp=10;
++ALTER EVENT event1 RENAME TO event0;
++SET timestamp=10;
++DROP EVENT event0;
++SET timestamp=10;
++CREATE TRIGGER TRIGGER_TEST_01 BEFORE INSERT ON TABLE_TEST_01
++FOR EACH ROW
++BEGIN
++SET NEW.c2 = '';
++END;
++SET timestamp=10;
++DROP TRIGGER TRIGGER_TEST_01;
++SET timestamp=10;
++CREATE USER IF NOT EXISTS 'dave'@'localhost' IDENTIFIED BY <secret>;
++SET timestamp=10;
++DROP USER dave@localhost;
++SET timestamp=10;
++CREATE TABLESPACE sample_tablespace engine=innodb;
++SET timestamp=10;
++DROP TABLESPACE sample_tablespace;
++SET timestamp=10;
++CREATE SERVER s FOREIGN DATA WRAPPER mysql OPTIONS (USER 'Remote', HOST '192.168.100.106', DATABASE 'test');
++SET timestamp=10;
++ALTER SERVER s OPTIONS (USER 'sally');
++SET timestamp=10;
++DROP SERVER s;
++SET timestamp=10;
++ALTER INSTANCE ENABLE INNODB REDO_LOG;
++SET timestamp=10;
++CREATE TABLE t1(a int, b int) engine=innodb;
++SET timestamp=10;
++CREATE TABLE t2(a int, b int) engine=innodb;
++SET timestamp=10;
++LOCK TABLES t1 READ;
++SET timestamp=10;
++UNLOCK TABLES;
++SET timestamp=10;
++LOCK TABLES t1 READ LOCAL;
++SET timestamp=10;
++UNLOCK TABLES;
++SET timestamp=10;
++LOCK TABLES t1 WRITE;
++SET timestamp=10;
++UNLOCK TABLES;
++SET timestamp=10;
++LOCK TABLES t1 LOW_PRIORITY WRITE;
++SET timestamp=10;
++UNLOCK TABLES;
++SET timestamp=10;
++LOCK TABLES t1 READ, t2 WRITE;
++SET timestamp=10;
++UNLOCK TABLES;
++SET timestamp=10;
++FLUSH TABLES WITH READ LOCK;
++SET timestamp=10;
++UNLOCK TABLES;
++SET timestamp=10;
++FLUSH TABLES t1, t2 WITH READ LOCK;
++SET timestamp=10;
++UNLOCK TABLES;
++SET timestamp=10;
++FLUSH TABLES t1, t2 FOR EXPORT;
++SET timestamp=10;
++UNLOCK TABLES;
++SET timestamp=10;
++DROP TABLE t1, t2;
++SET timestamp=10;
++ALTER DATABASE oma_log_test CHARACTER SET = 'utf8';
++SET timestamp=10;
++DROP DATABASE oma_log_test;
++
++# dump content of OMA log end.
++
++
++#Test log output while switch off..
++
++SET GLOBAL rds_oma_log_file= '.../my_oma_empty.log';
++SET GLOBAL rds_oma_log = OFF;
++
++# dump content of OMA log.
++
++Time                 Id Command    Argument
++
++# dump content of OMA log end.
++
++
++# restart to reset rds_oma_log_file parameter value
++# restart
+diff --git a/mysql-test/suite/dstore_main/r/log_state-dstore.result b/mysql-test/suite/dstore_main/r/log_state-dstore.result
+index 66c2fdf9d7c..c6d1736c773 100644
+--- a/mysql-test/suite/dstore_main/r/log_state-dstore.result
++++ b/mysql-test/suite/dstore_main/r/log_state-dstore.result
+@@ -2,6 +2,7 @@ SET @old_general_log= @@global.general_log;
+ SET @old_general_log_file= @@global.general_log_file;
+ SET @old_slow_query_log= @@global.slow_query_log;
+ SET @old_slow_query_log_file= @@global.slow_query_log_file;
++SET @old_rds_oma_log_file= @@global.rds_oma_log_file;
+ set global general_log= OFF;
+ truncate table mysql.general_log;
+ truncate table mysql.slow_log;
+@@ -197,14 +198,17 @@ SET GLOBAL slow_query_log_file= @old_slow_query_log_file;
+ 
+ SET GLOBAL general_log_file = 'bug32748.query.log';
+ SET GLOBAL slow_query_log_file = 'bug32748.slow.log';
++SET GLOBAL rds_oma_log_file = 'bug32748.oma.log';
+ 
+ SHOW VARIABLES LIKE '%log_file';
+ Variable_name	Value
+ general_log_file	bug32748.query.log
++rds_oma_log_file	bug32748.oma.log
+ slow_query_log_file	bug32748.slow.log
+ 
+ SET GLOBAL general_log_file = @old_general_log_file;
+ SET GLOBAL slow_query_log_file = @old_slow_query_log_file;
++SET GLOBAL rds_oma_log_file = @old_rds_oma_log_file;
+ 
+ # -- End of Bug#32748.
+ #
+diff --git a/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result b/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
+index a07bff8dfee..3c020f90e19 100644
+--- a/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
++++ b/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
+@@ -1294,6 +1294,11 @@ The following options may be given as the first argument:
+  should use per thread
+  --rds-log-archive-path[=name] 
+  Path for incremental local backup data
++ --rds-oma-log       Record DDL statements to a log file oma.log.
++ --rds-oma-log-file=name 
++ Log queries to given log file for Operating and
++ Maintenance Assistant purpose. Defaults logging to
++ oma.log.
+  --rds-plan-cache    Allows the server to store query plans into a cache and
+  to reuse them for next queries.
+  (Defaults to on; use --skip-rds-plan-cache to disable.)
+@@ -2290,6 +2295,7 @@ rds-full-local-backup-path
+ rds-local-backup-lock-timeout 300
+ rds-local-socket-using-per-thread FALSE
+ rds-log-archive-path 
++rds-oma-log FALSE
+ rds-plan-cache TRUE
+ rds-plan-cache-allow-change-ratio 0.2
+ rds-use-ddl-info-replay FALSE
+diff --git a/mysql-test/suite/dstore_main/t/log_state-dstore.test b/mysql-test/suite/dstore_main/t/log_state-dstore.test
+index b873929db06..d06335005c0 100644
+--- a/mysql-test/suite/dstore_main/t/log_state-dstore.test
++++ b/mysql-test/suite/dstore_main/t/log_state-dstore.test
+@@ -10,7 +10,7 @@ SET @old_general_log= @@global.general_log;
+ SET @old_general_log_file= @@global.general_log_file;
+ SET @old_slow_query_log= @@global.slow_query_log;
+ SET @old_slow_query_log_file= @@global.slow_query_log_file;
+-
++SET @old_rds_oma_log_file= @@global.rds_oma_log_file;
+ 
+ --disable_ps_protocol
+ 
+@@ -241,6 +241,7 @@ SET GLOBAL slow_query_log_file= @old_slow_query_log_file;
+ --echo
+ SET GLOBAL general_log_file = 'bug32748.query.log';
+ SET GLOBAL slow_query_log_file = 'bug32748.slow.log';
++SET GLOBAL rds_oma_log_file = 'bug32748.oma.log';
+ 
+ --echo
+ SHOW VARIABLES LIKE '%log_file';
+@@ -249,7 +250,7 @@ SHOW VARIABLES LIKE '%log_file';
+ --echo
+ SET GLOBAL general_log_file = @old_general_log_file;
+ SET GLOBAL slow_query_log_file = @old_slow_query_log_file;
+-
++SET GLOBAL rds_oma_log_file = @old_rds_oma_log_file;
+ --echo
+ --echo # -- End of Bug#32748.
+ 
+diff --git a/mysql-test/suite/sys_vars/r/all_vars.result b/mysql-test/suite/sys_vars/r/all_vars.result
+index 0233b98d7ec..139edf91387 100644
+--- a/mysql-test/suite/sys_vars/r/all_vars.result
++++ b/mysql-test/suite/sys_vars/r/all_vars.result
+@@ -201,6 +201,10 @@ rds_local_backup_lock_timeout
+ rds_local_backup_lock_timeout
+ rds_log_archive_path
+ rds_log_archive_path
++rds_oma_log
++rds_oma_log
++rds_oma_log_file
++rds_oma_log_file
+ rds_plan_cache
+ rds_plan_cache
+ rds_plan_cache_allow_change_ratio
+diff --git a/mysql-test/t/all_persisted_variables.test b/mysql-test/t/all_persisted_variables.test
+index a8e517ae974..811f99facc1 100644
+--- a/mysql-test/t/all_persisted_variables.test
++++ b/mysql-test/t/all_persisted_variables.test
+@@ -41,7 +41,7 @@ call mtr.add_suppression("\\[Warning\\] .*MY-\\d+.* Changing innodb_extend_and_i
+ call mtr.add_suppression("Failed to initialize TLS for channel: mysql_main");
+ 
+ let $total_global_vars=`SELECT COUNT(*) FROM performance_schema.global_variables where variable_name NOT LIKE 'ndb_%' AND variable_name NOT LIKE 'debug_%'`;
+-let $total_persistent_vars=480;
++let $total_persistent_vars=482;
+ 
+ --echo ***************************************************************
+ --echo * 0. Verify that variables present in performance_schema.global
+diff --git a/mysql-test/t/log_state.test b/mysql-test/t/log_state.test
+index 37cb64bbfb7..9033315ffb1 100644
+--- a/mysql-test/t/log_state.test
++++ b/mysql-test/t/log_state.test
+@@ -10,7 +10,7 @@ SET @old_general_log= @@global.general_log;
+ SET @old_general_log_file= @@global.general_log_file;
+ SET @old_slow_query_log= @@global.slow_query_log;
+ SET @old_slow_query_log_file= @@global.slow_query_log_file;
+-
++SET @old_rds_oma_log_file= @@global.rds_oma_log_file;
+ 
+ --disable_ps_protocol
+ 
+@@ -241,6 +241,7 @@ SET GLOBAL slow_query_log_file= @old_slow_query_log_file;
+ --echo
+ SET GLOBAL general_log_file = 'bug32748.query.log';
+ SET GLOBAL slow_query_log_file = 'bug32748.slow.log';
++SET GLOBAL rds_oma_log_file = 'bug32748.oma.log';
+ 
+ --echo
+ SHOW VARIABLES LIKE '%log_file';
+@@ -249,6 +250,7 @@ SHOW VARIABLES LIKE '%log_file';
+ --echo
+ SET GLOBAL general_log_file = @old_general_log_file;
+ SET GLOBAL slow_query_log_file = @old_slow_query_log_file;
++SET GLOBAL rds_oma_log_file = @old_rds_oma_log_file;
+ 
+ --echo
+ --echo # -- End of Bug#32748.
+diff --git a/mysql-test/t/oma_log.test b/mysql-test/t/oma_log.test
+new file mode 100644
+index 00000000000..5a2f4a08c6f
+--- /dev/null
++++ b/mysql-test/t/oma_log.test
+@@ -0,0 +1,327 @@
++--echo #Test Basic function of OMA log.
++ 
++#
++# Test 1: Test record modify rds_oma_log and rds_oma_log_file log
++#
++-- echo #
++-- echo # Test 1: Test record modify rds_oma_log and rds_oma_log_file log
++-- echo #
++SET timestamp=10;
++SET GLOBAL rds_oma_log = OFF;
++show variables like 'rds_oma_log';
++
++SET GLOBAL rds_oma_log = ON;
++show variables like 'rds_oma_log';
++
++show variables like 'rds_oma_log_file';
++-- let $OMA_TEST_DIR= `select @@datadir`
++eval SET GLOBAL rds_oma_log_file = '$OMA_TEST_DIR/oma.log';
++show variables like 'rds_oma_log_file';
++
++#
++# Test 2: Test record read_only and super_read_only log
++#
++-- echo #
++-- echo # Test 2: Test record read_only and super_read_only log
++-- echo #
++set global read_only = on;
++set global super_read_only = on;
++set global read_only = off;
++set global super_read_only = off;
++
++
++#
++# Test 3: Test record other ddl log
++#
++-- echo #
++-- echo # Test 3: Test record other ddl log
++-- echo #
++ 
++# Simple DDL operations
++ 
++CREATE DATABASE oma_log_test;
++ 
++USE oma_log_test;
++ 
++CREATE TABLE oma_log_test_table_001(c1 int) ENGINE=innodb;
++ 
++ALTER TABLE oma_log_test_table_001 ADD COLUMN (c2 int);
++ 
++CREATE INDEX idx_oma_log_test_c2 ON oma_log_test_table_001 (c2);
++ 
++DROP INDEX idx_oma_log_test_c2 ON oma_log_test_table_001;
++ 
++RENAME TABLE oma_log_test_table_001 TO oma_log_test_table_001_new;
++ 
++INSERT INTO oma_log_test_table_001_new VALUES (1,2);
++ 
++SELECT * FROM oma_log_test_table_001_new;
++ 
++OPTIMIZE TABLE oma_log_test_table_001_new;
++ 
++ANALYZE TABLE oma_log_test_table_001_new;
++TRUNCATE TABLE oma_log_test_table_001_new;
++ 
++CREATE VIEW v_oma_log_test_table_001_new AS SELECT c1, c2 FROM oma_log_test_table_001_new;
++DROP VIEW v_oma_log_test_table_001_new;
++DROP TABLE oma_log_test_table_001_new;
++ 
++CREATE ROLE if not exists 'ROLE_066';
++CREATE ROLE if not exists 'ROLE_SE_066';
++CREATE USER if not exists 'USER_066'@'localhost' IDENTIFIED BY 'dev1pass';
++ 
++GRANT 'ROLE_066' TO 'ROLE_SE_066';
++GRANT 'ROLE_SE_066' TO 'USER_066'@'localhost';
++ 
++REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'ROLE_066';
++ 
++SHOW GRANTS FOR 'USER_066'@'localhost';
++SHOW GRANTS FOR 'ROLE_SE_066';
++SHOW GRANTS FOR 'ROLE_066';
++ 
++REVOKE 'ROLE_066' FROM 'ROLE_SE_066';
++SET PASSWORD FOR 'USER_066'@'localhost'='dev2pass';
++ 
++DROP USER IF EXISTS 'USER_066'@'localhost';
++DROP ROLE IF EXISTS 'ROLE_066';
++DROP ROLE IF EXISTS 'ROLE_SE_066';
++ 
++create user if not exists 'RENAME_USER_024'@'%' identified by 'Baidu+123';
++ALTER USER 'RENAME_USER_024'@'%' IDENTIFIED BY 'Huawei+123';
++create user if not exists 'RENAME_USER_024_02'@'%' identified by 'Baidu+123';
++ALTER USER 'RENAME_USER_024_02'@'%' DEFAULT ROLE ALL;
++ 
++grant select,create tablespace on *.* to 'RENAME_USER_024'@'%';
++grant select,create temporary tables on *.* to 'RENAME_USER_024_02'@'%';
++ 
++RENAME USER 'RENAME_USER_024'@'%' TO RENAME_USER_024_new ,'RENAME_USER_024_02'@'%' TO 'RENAME_USER_024_02_new'@'localhost';
++ 
++drop user 'RENAME_USER_024_new'@'%';
++ 
++drop user 'RENAME_USER_024_02_new'@'localhost';
++ 
++# Test log output about Procedure.
++delimiter //;
++CREATE PROCEDURE oma_test_sp() 
++BEGIN
++CREATE TABLE oma_log_test.p_name (c1 int) engine=innodb;
++DROP TABLE oma_log_test.p_name;
++CREATE USER 'USER_005'@'localhost' IDENTIFIED BY 'dev1pass';
++DROP USER 'USER_005'@'localhost';
++END//
++delimiter ;//
++ 
++CALL oma_test_sp();
++DROP PROCEDURE oma_test_sp;
++ 
++# Test log output with rewrite sql in the procedure.
++delimiter //;
++CREATE PROCEDURE oma_test_sp_2()
++BEGIN
++CREATE TABLE oma_log_test.p_name_2 (c1 int) engine=innodb;
++DROP TABLE oma_log_test.p_name_2;
++CREATE USER if not exists 'USER_006'@'localhost' IDENTIFIED BY 'dev1pass';
++END//
++delimiter ;//
++ALTER PROCEDURE oma_test_sp_2 LANGUAGE SQL;
++ 
++CALL oma_test_sp_2();
++DROP PROCEDURE oma_test_sp_2;
++ 
++DROP USER 'USER_006'@'localhost';
++ 
++# Test log output about Function.
++delimiter //;
++CREATE FUNCTION oma_test_sf() RETURNS INT 
++BEGIN
++RETURN (SELECT 1);
++END;
++//
++delimiter ;//
++ALTER FUNCTION oma_test_sf COMMENT 'just for test';
++DROP FUNCTION oma_test_sf;
++ 
++# Test log output about Trigger.
++CREATE TABLE TABLE_TEST_01 (c1 INT,c2 VARCHAR(100)) engine=InnoDB;
++ 
++# Test log output about Event.
++delimiter //;
++CREATE EVENT oma_test_event ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 1 SECOND DO
++BEGIN
++SET timestamp=10;
++CREATE TABLE oma_log_test.p_name_event (c1 int) engine=innodb;
++END//
++delimiter ;//
++ 
++let $wait_condition=SELECT COUNT(*)=1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'oma_log_test' AND TABLE_NAME = 'p_name_event';
++--source include/wait_condition.inc
++ 
++DROP TABLE oma_log_test.p_name_event;
++SELECT COUNT(*)=1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'oma_log_test' AND TABLE_NAME = 'p_name_event';
++ 
++CREATE EVENT event1 ON SCHEDULE EVERY 10 HOUR DO SELECT 1;
++ALTER EVENT event1 RENAME TO event0;
++DROP EVENT event0;
++ 
++# SQL with syntax ERROR won't be logged.
++-- error 1064
++CRATE TABLE t1;
++ 
++# SQL with ERROR won't logged.
++delimiter //;
++-- error 1422
++CREATE TRIGGER TRIGGER_TEST_01 AFTER INSERT ON TABLE_TEST_01
++FOR EACH ROW
++BEGIN
++CREATE TABLE NEW.c2 (c1 int) engine=innodb;
++END//
++delimiter ;//
++ 
++delimiter //;
++CREATE TRIGGER TRIGGER_TEST_01 BEFORE INSERT ON TABLE_TEST_01
++FOR EACH ROW
++BEGIN
++SET NEW.c2 = '';
++END//
++delimiter ;//
++ 
++DROP TRIGGER TRIGGER_TEST_01;
++ 
++# prepared statement with secret field.
++SET @user_name = 'dave';
++SET @password = 'dave_123';
++SET @s = CONCAT('CREATE USER if not exists ', @user_name, '@localhost  IDENTIFIED BY \'', @password, '\'');
++PREPARE stmt1 FROM @s;
++ 
++SET @s2 = CONCAT('DROP USER ', @user_name, '@localhost');
++PREPARE stmt2 FROM @s2;
++ 
++EXECUTE stmt1;
++EXECUTE stmt2;
++ 
++DEALLOCATE PREPARE stmt1;
++DEALLOCATE PREPARE stmt2;
++ 
++# test tablespace
++CREATE TABLESPACE sample_tablespace engine=innodb; 
++DROP TABLESPACE sample_tablespace;
++ 
++# test server
++CREATE SERVER s FOREIGN DATA WRAPPER mysql OPTIONS (USER 'Remote', HOST '192.168.100.106', DATABASE 'test');
++ALTER SERVER s OPTIONS (USER 'sally');
++DROP SERVER s;
++ 
++# test instance
++ALTER INSTANCE ENABLE INNODB REDO_LOG;
++ 
++# test lock tables, unlock tables
++CREATE TABLE t1(a int, b int) engine=innodb;
++CREATE TABLE t2(a int, b int) engine=innodb;
++INSERT INTO t1 values(1,1),(2,2);
++INSERT INTO t2 values(1,1),(2,2);
++ 
++LOCK TABLES t1 READ;
++UNLOCK TABLES;
++LOCK TABLES t1 READ LOCAL;
++UNLOCK TABLES;
++LOCK TABLES t1 WRITE;
++UNLOCK TABLES;
++LOCK TABLES t1 LOW_PRIORITY WRITE;
++UNLOCK TABLES; 
++LOCK TABLES t1 READ, t2 WRITE;
++UNLOCK TABLES;
++ 
++# test flush tables
++# write into oma log
++FLUSH TABLES WITH READ LOCK;
++UNLOCK TABLES; 
++FLUSH TABLES t1, t2 WITH READ LOCK;
++UNLOCK TABLES; 
++FLUSH TABLES t1, t2 FOR EXPORT;
++UNLOCK TABLES;
++# do not write into oma log
++FLUSH TABLES;
++FLUSH TABLES t1, t2;
++ 
++DROP TABLE t1, t2;
++ALTER DATABASE oma_log_test CHARACTER SET = 'utf8';
++DROP DATABASE oma_log_test;
++ 
++--echo
++--echo # dump content of OMA log.
++--echo
++ 
++let OMA_LOG= `SELECT @@global.rds_oma_log_file`;
++ 
++--perl
++   use strict;
++ 
++   my $file= $ENV{'OMA_LOG'} or die("oma log not set");
++   my $result=0;
++ 
++   open(FILE, "$file") or die("Unable to open $file: $!");
++   while (<FILE>) {
++     my $line = $_;
++ 
++     if ($line !~ m/^(# Query_time|# Time|Tcp port|# User)|(Source distribution)/) {
++       #$line =~ s/Thread_id: \d* Schema:/Thread_id: 0 Schema:/;
++       #$line =~ m/(Rows_sent.*) Start.*/;
++       print "$line";
++     }
++   }
++   close(FILE);
++ 
++EOF
++ 
++--echo
++--echo # dump content of OMA log end.
++--echo
++ 
++--remove_file $OMA_TEST_DIR/oma.log
++ 
++--echo
++--echo #Test log output while switch off..
++--echo
++--replace_result $OMA_TEST_DIR ...
++eval SET GLOBAL rds_oma_log_file= '$OMA_TEST_DIR/my_oma_empty.log';
++SET GLOBAL rds_oma_log = OFF;
++ 
++let OMA_LOG= `SELECT @@global.rds_oma_log_file`;
++ 
++--echo
++--echo # dump content of OMA log.
++--echo
++ 
++--perl
++   use strict;
++ 
++   my $file= $ENV{'OMA_LOG'} or die("oma log not set");
++   my $result=0;
++ 
++   open(FILE, "$file") or die("Unable to open $file: $!");
++   while (<FILE>) {
++     my $line = $_;
++ 
++     if ($line !~ m/^(# Query_time|# Time|Tcp port|# User)|(Source distribution)/) {
++       print "$line";
++     }
++   }
++   close(FILE);
++ 
++EOF
++ 
++--echo
++--echo # dump content of OMA log end.
++--echo
++ 
++--remove_file $OMA_TEST_DIR/my_oma_empty.log
++
++# cleanup
++--echo
++--echo # restart to reset rds_oma_log_file parameter value
++--source include/restart_mysqld.inc
++
++
++
++
++
+diff --git a/sql/ddl_info.cc b/sql/ddl_info.cc
+index 8c3f156a9cd..d6d947f270c 100644
+--- a/sql/ddl_info.cc
++++ b/sql/ddl_info.cc
+@@ -260,10 +260,10 @@ end:
+   return error;
+ }
+ 
+-bool is_ddl_command_all(THD *thd) {
++ddl_command_type get_ddl_command_type(THD *thd) {
+   enum_sql_command sql_command = (enum_sql_command)thd_sql_command(thd);
+-
+   switch (sql_command) {
++    /* Schema object modification commands */
+     case SQLCOM_ALTER_TABLE:
+     case SQLCOM_ALTER_DB:
+     case SQLCOM_ALTER_PROCEDURE:
+@@ -296,6 +296,9 @@ bool is_ddl_command_all(THD *thd) {
+     case SQLCOM_OPTIMIZE:
+     case SQLCOM_TRUNCATE:
+     case SQLCOM_RENAME_TABLE:
++      return DDLCOM_OTHER;
++
++    /* User/privilege management commands */
+     case SQLCOM_RENAME_USER:
+     case SQLCOM_ALTER_USER:
+     case SQLCOM_ALTER_USER_DEFAULT_ROLE:
+@@ -309,15 +312,20 @@ bool is_ddl_command_all(THD *thd) {
+     case SQLCOM_GRANT:
+     case SQLCOM_GRANT_ROLE:
+     case SQLCOM_SET_PASSWORD:
++      return DDLCOM_PRIVI;
++
++    /* Stored procedure/function ACL commands */
+     case SQLCOM_CREATE_PROCEDURE:
+     case SQLCOM_CREATE_SPFUNCTION:
+     case SQLCOM_DROP_FUNCTION:
+     case SQLCOM_DROP_PROCEDURE:
+-      return true;
++      return DDLCOM_ACL;
++
+     default:
+       break;
+   }
+-  return false;
++
++  return DDLCOM_NONE;
+ }
+ 
+ size_t max_ddl_info_len() {
+@@ -1154,7 +1162,8 @@ bool need_ddl_info(THD *thd) {
+       thd->system_thread == SYSTEM_THREAD_BACKGROUND ||
+       thd->for_ddl_info_replay)
+     return false;
+-  if (!is_ddl_command_all(thd) || thd->is_ddl_info_written) return false;
++  if (get_ddl_command_type(thd) == DDLCOM_NONE || thd->is_ddl_info_written)
++    return false;
+   return true;
+ }
+ 
+diff --git a/sql/ddl_info.h b/sql/ddl_info.h
+index 28e72ade317..56065ecf15f 100644
+--- a/sql/ddl_info.h
++++ b/sql/ddl_info.h
+@@ -19,6 +19,7 @@
+ #define DDL_INFO_H_INCLUDED
+ 
+ #include "sql/binlog.h"
++#include "sql/log.h"
+ 
+ extern thread_local THD *replay_thd;
+ 
+@@ -60,13 +61,53 @@ class Conf_table_intact : public Table_check_intact {
+ };
+ 
+ /**
+-   Check if a given THD is executing a DDL command.
++   Enumeration of DDL (Data Definition Language) command types.
++   Used to classify different DDL operations for proper handling,
++   particularly in replication scenarios.
++ */
++enum ddl_command_type {
++  /**
++     Not a DDL command or DDL command that doesn't require special handling.
++     Default value indicating the operation is not a DDL command or doesn't
++     require any special ACL or privilege handling.
++   */
++  DDLCOM_NONE = 0,
++
++  /**
++     Privilege-related DDL operation that requires ACL and grant cache reload
++     on replica servers.
++     Includes commands like CREATE/DROP USER, GRANT, REVOKE, etc. that modify
++     user privileges and require cache invalidation on all servers.
++   */
++  DDLCOM_PRIVI,
++
++  /**
++     ACL-related DDL operation that requires invalidation with ACL lock on
++     replicas. Includes stored procedure/function operations that need ACL
++     validation but don't require full grant cache reload.
++   */
++  DDLCOM_ACL,
++
++  /**
++     Other types of DDL commands that don't affect privileges or ACLs directly.
++     Includes standard schema modification commands like CREATE/ALTER/DROP
++     TABLE, INDEX, etc. that only require standard DDL handling.
++   */
++  DDLCOM_OTHER
++};
+ 
+-   @param thd Pointer to the THD object.
+-   @retval true If the command is a DDL command.
+-   @retval false Otherwise.
++/**
++   Determines the type of DDL (Data Definition Language) command based on SQL
++   command enum.
++
++   @param sql_command The SQL command type to classify
++
++   @retval DDLCOM_OTHER General DDL commands (ALTER/CREATE/DROP objects)
++   @retval DDLCOM_PRIVI Privilege-related commands (user/role management)
++   @retval DDLCOM_ACL ACL-related commands (procedures/functions)
++   @retval DDLCOM_NONE Not a DDL command
+  */
+-bool is_ddl_command_all(THD *thd);
++ddl_command_type get_ddl_command_type(THD *thd);
+ 
+ /**
+    Return the maximum allowed length of DDL information.
+diff --git a/sql/log.cc b/sql/log.cc
+index 600cf879962..37f05f9e615 100644
+--- a/sql/log.cc
++++ b/sql/log.cc
+@@ -77,16 +77,19 @@
+ #include "sql/auth/auth_acls.h"
+ #include "sql/auth/sql_security_ctx.h"
+ #include "sql/current_thd.h"
++#include "sql/ddl_info.h"
+ #include "sql/debug_sync.h"
+ #include "sql/derror.h"  // ER_DEFAULT
+ #include "sql/discrete_interval.h"
+-#include "sql/error_handler.h"  // Internal_error_handler
++#include "sql/error_handler.h"     // Internal_error_handler
++#include "sql/event_parse_data.h"  // Event_parse_data
+ #include "sql/field.h"
+ #include "sql/handler.h"
+ #include "sql/mysqld.h"
+ #include "sql/protocol_classic.h"
+ #include "sql/psi_memory_key.h"  // key_memory_File_query_log_name
+ #include "sql/query_options.h"
++#include "sql/sp_head.h"    // sp_head
+ #include "sql/sql_audit.h"  // mysql_audit_general_log
+ #include "sql/sql_base.h"   // close_log_table
+ #include "sql/sql_class.h"  // THD
+@@ -346,6 +349,26 @@ class File_query_log {
+                   ulonglong lock_utime, bool is_command, const char *sql_text,
+                   size_t sql_text_len);
+ 
++  /**
++     Log command to the OMA log.
++
++     @param thd                THD of the query
++     @param current_utime      Current timestamp in microseconds
++     @param query_start_utime  Command start timestamp in microseconds
++     @param user_host          The pointer to the string with user\@host info
++     @param query_utime        Number of microseconds query execution took
++     @param lock_utime         Number of microseconds the query was locked
++     @param sql_text           The query in textual form
++     @param sql_text_len       The length of sql_text string
++
++     @retval  false   OK
++     @retval  true    error occurred
++  */
++  bool write_oma(THD *thd, ulonglong current_utime, ulonglong query_start_utime,
++                 const char *user_host, ulonglong query_utime,
++                 ulonglong lock_utime, const char *sql_text,
++                 size_t sql_text_len);
++
+  private:
+   /** Type of log file. */
+   const enum_log_table_type m_log_type;
+@@ -854,6 +877,90 @@ err:
+   return true;
+ }
+ 
++bool File_query_log::write_oma(THD *thd, ulonglong current_utime,
++                               ulonglong query_start_utime,
++                               const char *user_host, ulonglong query_utime,
++                               ulonglong lock_utime, const char *sql_text,
++                               size_t sql_text_len) {
++  char buff[80], *end;
++  char query_time_buff[22 + 7], lock_time_buff[22 + 7];
++  size_t buff_len;
++  end = buff;
++
++  mysql_mutex_lock(&LOCK_log);
++  assert(is_open());
++
++  if (!(specialflag & SPECIAL_SHORT_LOG_FORMAT)) {
++    char my_timestamp[iso8601_size];
++
++    make_iso8601_timestamp(my_timestamp, current_utime,
++                           iso8601_sysvar_logtimestamps);
++
++    /* Write timestamp line to log */
++    buff_len = snprintf(buff, sizeof(buff), "# Time: %s\n", my_timestamp);
++    /* Note that my_b_write() assumes it knows the length for this */
++    if (my_b_write(&log_file, (uchar *)buff, buff_len)) goto err;
++
++    /* Write user/host and thread ID information */
++    buff_len = snprintf(buff, 32, "%5u", thd->thread_id());
++    if (my_b_printf(&log_file, "# User@Host: %s  Id: %s\n", user_host, buff) ==
++        (uint)-1)
++      goto err;
++  }
++
++  /* Convert microsecond times to seconds with 6 decimal places */
++  sprintf(query_time_buff, "%.6f", ulonglong2double(query_utime) / 1000000.0);
++  sprintf(lock_time_buff, "%.6f", ulonglong2double(lock_utime) / 1000000.0);
++
++  /* Write query metrics (execution time, lock time, rows processed) */
++  if (my_b_printf(&log_file,
++                  "# Query_time: %s  Lock_time: %s"
++                  " Rows_sent: %lu  Rows_examined: %lu\n",
++                  query_time_buff, lock_time_buff,
++                  (ulong)thd->get_sent_row_count(),
++                  (ulong)thd->get_examined_row_count()) == (uint)-1) {
++    goto err;
++  }
++
++  /* Write database context if it has changed */
++  if (thd->db().str &&
++      strncmp(thd->db().str, db, thd->db().length)) {  // Database changed
++    if (my_b_printf(&log_file, "use %s;\n", thd->db().str) == (uint)-1)
++      goto err;
++    my_stpcpy(db, thd->db().str);
++  }
++
++  /*
++    The timestamp used to only be set when the query had checked the
++    start time.
++  */
++  end = my_stpcpy(end, ",timestamp=");
++  end = longlong10_to_str(query_start_utime / 1000000, end, 10);
++
++  /* Write SET timestamp command if needed */
++  if (end != buff) {
++    *end++ = ';';
++    *end = '\n';
++    if (my_b_write(&log_file, pointer_cast<const uchar *>("SET "), 4) ||
++        my_b_write(&log_file, (uchar *)buff + 1, (uint)(end - buff)))
++      goto err;
++  }
++
++  /* Write the actual SQL query and closing semicolon */
++  if (my_b_write(&log_file, pointer_cast<const uchar *>(sql_text),
++                 sql_text_len) ||
++      my_b_write(&log_file, pointer_cast<const uchar *>(";\n"), 2) ||
++      flush_io_cache(&log_file))
++    goto err;
++
++  mysql_mutex_unlock(&LOCK_log);
++  return false;
++err:
++  check_and_print_write_error();
++  mysql_mutex_unlock(&LOCK_log);
++  return true;
++}
++
+ bool Log_to_csv_event_handler::log_general(
+     THD *thd, ulonglong event_utime, const char *user_host,
+     size_t user_host_len, my_thread_id thread_id, const char *command_type,
+@@ -1168,6 +1275,9 @@ bool Log_to_csv_event_handler::activate_log(
+       log_name = SLOW_LOG_NAME.str;
+       log_name_length = SLOW_LOG_NAME.length;
+       break;
++    case QUERY_LOG_OMA:
++      // CSV format not supported.
++      return false;
+     default:
+       assert(false);
+   }
+@@ -1191,6 +1301,7 @@ bool Log_to_csv_event_handler::activate_log(
+ class Log_to_file_event_handler : public Log_event_handler {
+   File_query_log mysql_general_log;
+   File_query_log mysql_slow_log;
++  File_query_log mysql_oma_log;
+ 
+  public:
+   /**
+@@ -1212,22 +1323,39 @@ class Log_to_file_event_handler : public Log_event_handler {
+                    const char *sql_text, size_t sql_text_len,
+                    const CHARSET_INFO *client_cs) override;
+ 
++  /**
++     Wrapper around File_query_log::write_oma() for oma log.
++     @see Log_event_handler::log_oma().
++  */
++  bool log_oma(THD *thd, ulonglong current_utime, ulonglong query_start_utime,
++               const char *user_host, ulonglong query_utime,
++               ulonglong lock_utime, const char *sql_text,
++               size_t sql_text_len) override;
++
+  private:
+   Log_to_file_event_handler()
+-      : mysql_general_log(QUERY_LOG_GENERAL), mysql_slow_log(QUERY_LOG_SLOW) {}
++      : mysql_general_log(QUERY_LOG_GENERAL),
++        mysql_slow_log(QUERY_LOG_SLOW),
++        mysql_oma_log(QUERY_LOG_OMA) {}
+ 
+   /** Close slow and general log files. */
+   void cleanup() {
+     mysql_general_log.close();
+     mysql_slow_log.close();
++    mysql_oma_log.close();
+   }
+ 
+   /** @return File_query_log instance responsible for writing to slow/general
+    * log.*/
+   File_query_log *get_query_log(enum_log_table_type log_type) {
+-    if (log_type == QUERY_LOG_SLOW) return &mysql_slow_log;
+-    assert(log_type == QUERY_LOG_GENERAL);
+-    return &mysql_general_log;
++    if (log_type == QUERY_LOG_SLOW) {
++      return &mysql_slow_log;
++    } else if (log_type == QUERY_LOG_OMA) {
++      return &mysql_oma_log;
++    } else {
++      assert(log_type == QUERY_LOG_GENERAL);
++      return &mysql_general_log;
++    }
+   }
+ 
+   friend class Query_logger;
+@@ -1264,11 +1392,37 @@ bool Log_to_file_event_handler::log_general(
+   return retval;
+ }
+ 
++bool Log_to_file_event_handler::log_oma(
++    THD *thd, ulonglong current_utime, ulonglong query_start_utime,
++    const char *user_host, ulonglong query_utime, ulonglong lock_utime,
++    const char *sql_text, size_t sql_text_len) {
++  /* Early return if OMA log is not open (not treated as an error) */
++  if (!mysql_oma_log.is_open()) {
++    return false;
++  }
++
++  /* Install silent error handler to suppress log table errors */
++  Silence_log_table_errors error_handler;
++  thd->push_internal_handler(&error_handler);
++
++  /* Delegate actual log writing to File_query_log implementation */
++  bool retval =
++      mysql_oma_log.write_oma(thd, current_utime, query_start_utime, user_host,
++                              query_utime, lock_utime, sql_text, sql_text_len);
++
++  /* Restore original error handler */
++  thd->pop_internal_handler();
++
++  return retval;
++}
++
+ bool Query_logger::is_log_table_enabled(enum_log_table_type log_type) const {
+   if (log_type == QUERY_LOG_SLOW)
+     return (opt_slow_log && (log_output_options & LOG_TABLE));
+   else if (log_type == QUERY_LOG_GENERAL)
+     return (opt_general_log && (log_output_options & LOG_TABLE));
++  else if (log_type == QUERY_LOG_OMA)
++    return (opt_oma_log && (log_output_options & LOG_TABLE));
+   assert(false);
+   return false; /* make compiler happy */
+ }
+@@ -1406,6 +1560,84 @@ bool Query_logger::general_log_write(THD *thd, enum_server_command command,
+   return error;
+ }
+ 
++bool Query_logger::oma_log_write(THD *thd, const char *query,
++                                 size_t query_length) {
++  assert(opt_oma_log);
++
++  /* Early return if no log handlers are registered */
++  if (!(*oma_log_handler_list)) return false;
++
++  /*
++   Format user/host information string in the format:
++   "username[user] @ hostname [ip]"
++  */
++  char user_host_buff[MAX_USER_HOST_SIZE + 1];
++  Security_context *sctx = thd->security_context();
++  LEX_CSTRING sctx_user = sctx->user();
++  LEX_CSTRING sctx_host = sctx->host();
++  LEX_CSTRING sctx_ip = sctx->ip();
++
++  strxnmov(user_host_buff, MAX_USER_HOST_SIZE, sctx->priv_user().str, "[",
++           sctx_user.length ? sctx_user.str : "", "] @ ",
++           sctx_host.length ? sctx_host.str : "", " [",
++           sctx_ip.length ? sctx_ip.str : "", "]", NullS);
++
++  /* Calculate query timing metrics */
++  ulonglong current_utime = my_micro_time();
++  ulonglong query_utime, lock_utime;
++  if (thd->start_utime) {
++    query_utime = (current_utime - thd->start_utime);  // Total execution time
++    lock_utime = (thd->utime_after_lock - thd->start_utime);  // Lock wait time
++  } else {
++    query_utime = 0;
++    lock_utime = 0;
++  }
++
++  /*
++    Handle special cases for stored procedures/functions/events to avoid logging
++    potentially sensitive information in the body.
++  */
++  std::stringstream ss_query;
++  if (thd->lex->sql_command == SQLCOM_CREATE_PROCEDURE ||
++      thd->lex->sql_command == SQLCOM_CREATE_SPFUNCTION) {
++    // Already verified in log_oma_applicable
++    assert(thd->lex->sphead != nullptr);
++    ss_query << "CREATE "
++             << (thd->lex->sql_command == SQLCOM_CREATE_PROCEDURE ? "PROCEDURE "
++                                                                  : "FUNCTION ")
++             << thd->lex->sphead->m_name.str << " ... ";
++  } else if (thd->lex->sql_command == SQLCOM_CREATE_EVENT) {
++    // Already verified in log_oma_applicable
++    assert(thd->lex->event_parse_data != nullptr);
++    ss_query << "CREATE EVENT " << thd->lex->event_parse_data->name.str
++             << " ... ";
++  } else {
++    /* For regular queries, log the complete text */
++    ss_query << std::string(query, query_length);
++  }
++
++  /* Acquire read lock for thread-safe access to log handlers */
++  mysql_rwlock_rdlock(&LOCK_logger);
++
++  bool error = false;
++
++  /* Dispatch to all registered log handlers */
++  for (Log_event_handler **current_handler = oma_log_handler_list;
++       *current_handler;) {
++    error |= (*current_handler++)
++                 ->log_oma(thd, current_utime,
++                           (thd->start_time.tv_sec * 1000000ULL) +
++                               thd->start_time.tv_usec,
++                           user_host_buff, query_utime, lock_utime,
++                           ss_query.str().c_str(), ss_query.str().size());
++  }
++
++  /* Release lock */
++  mysql_rwlock_unlock(&LOCK_logger);
++
++  return error;
++}
++
+ bool Query_logger::general_log_print(THD *thd, enum_server_command command,
+                                      const char *format, ...) {
+   /*
+@@ -1483,6 +1715,22 @@ void Query_logger::init_query_log(enum_log_table_type log_type,
+         general_log_handler_list[2] = nullptr;
+         break;
+     }
++  } else if (log_type == QUERY_LOG_OMA) {
++    if (log_printer & LOG_NONE) {
++      oma_log_handler_list[0] = nullptr;
++      return;
++    }
++
++    // Only support file format for oma log.
++    switch (log_printer) {
++      case LOG_FILE:
++        oma_log_handler_list[0] = file_log_handler;
++        oma_log_handler_list[1] = nullptr;
++        break;
++      default:
++        oma_log_handler_list[0] = nullptr;
++        break;
++    }
+   } else
+     assert(false);
+ }
+@@ -1492,6 +1740,7 @@ void Query_logger::set_handlers(ulonglong log_printer) {
+ 
+   init_query_log(QUERY_LOG_SLOW, log_printer);
+   init_query_log(QUERY_LOG_GENERAL, log_printer);
++  init_query_log(QUERY_LOG_OMA, log_printer);
+ 
+   mysql_rwlock_unlock(&LOCK_logger);
+ }
+@@ -1527,6 +1776,8 @@ bool Query_logger::set_log_file(enum_log_table_type log_type) {
+     log_name = opt_slow_logname;
+   else if (log_type == QUERY_LOG_GENERAL)
+     log_name = opt_general_logname;
++  else if (log_type == QUERY_LOG_OMA)
++    log_name = opt_oma_logname;
+   else
+     assert(false);
+ 
+@@ -1581,6 +1832,8 @@ char *make_query_log_name(char *buff, enum_log_table_type log_type) {
+     log_ext = ".log";
+   else if (log_type == QUERY_LOG_SLOW)
+     log_ext = "-slow.log";
++  else if (log_type == QUERY_LOG_OMA)
++    log_ext = "-oma.log";
+   else
+     assert(false);
+ 
+@@ -1662,6 +1915,84 @@ void log_slow_statement(THD *thd) {
+   if (log_slow_applicable(thd)) log_slow_do(thd);
+ }
+ 
++static bool log_oma_applicable(THD *thd, bool &log_rewritten_query) {
++  assert(nullptr != thd);
++
++  /* Skip failed or rolled back queries */
++  if (thd->transaction_rollback_request || thd->is_error()) {
++    return false;
++  }
++
++  log_rewritten_query = false;
++
++  switch (thd->lex->sql_command) {
++    /*
++      Special cases that are always logged:
++      - CALL statements (log original CALL, not desensitized content)
++      - LOCK/UNLOCK TABLE commands
++    */
++    case SQLCOM_CALL:
++    case SQLCOM_LOCK_TABLES:
++    case SQLCOM_UNLOCK_TABLES:
++      return true;
++
++    /* Only log valid stored procedures/functions */
++    case SQLCOM_CREATE_PROCEDURE:
++    case SQLCOM_CREATE_SPFUNCTION:
++      return (thd->lex->sphead != nullptr);
++
++    /* Only log valid event definitions */
++    case SQLCOM_CREATE_EVENT:
++      return (thd->lex->event_parse_data != nullptr);
++
++    /* Only log specific FLUSH variants that acquire locks */
++    case SQLCOM_FLUSH:
++      return (thd->lex->type & (REFRESH_READ_LOCK | REFRESH_FOR_EXPORT));
++
++    default:
++      break;
++  }
++
++  /* Classify DDL commands */
++  ddl_command_type ddl_type = get_ddl_command_type(thd);
++
++  /*
++    For privilege-related commands, use rewritten query that has
++    sensitive information (like passwords) removed
++  */
++  log_rewritten_query = (ddl_type == DDLCOM_PRIVI);
++
++  /* Log all DDL commands except those classified as NONE */
++  return (ddl_type != DDLCOM_NONE);
++}
++
++void log_oma(THD *thd, bool force_write) {
++  /* Early return if OMA logging is disabled */
++  if (!opt_oma_log) return;
++
++  /* Forced logging path (bypasses all checks) */
++  if (unlikely(force_write)) {
++    assert(thd != nullptr);
++    THD_STAGE_INFO(thd, stage_logging_oma);
++    query_logger.oma_log_write(thd, thd->query().str, thd->query().length);
++    return;
++  }
++
++  /* Normal logging path with applicability checks */
++  bool log_rewritten_query = false;
++  if (log_oma_applicable(thd, log_rewritten_query)) {
++    THD_STAGE_INFO(thd, stage_logging_oma);
++    /* Use rewritten query for privilege commands if available */
++    if (log_rewritten_query && thd->rewritten_query().length()) {
++      query_logger.oma_log_write(thd, thd->rewritten_query().ptr(),
++                                 thd->rewritten_query().length());
++    } else {
++      /* Fall back to original query text */
++      query_logger.oma_log_write(thd, thd->query().str, thd->query().length);
++    }
++  }
++}
++
+ void Log_throttle::new_window(ulonglong now) {
+   count = 0;
+   window_end = now + window_size;
+diff --git a/sql/log.h b/sql/log.h
+index 53ffac32116..ef987944450 100644
+--- a/sql/log.h
++++ b/sql/log.h
+@@ -149,7 +149,8 @@ my_thread_id log_get_thread_id(THD *thd);
+ enum enum_log_table_type {
+   QUERY_LOG_NONE = 0,
+   QUERY_LOG_SLOW = 1,
+-  QUERY_LOG_GENERAL = 2
++  QUERY_LOG_GENERAL = 2,
++  QUERY_LOG_OMA = 3
+ };
+ 
+ /**
+@@ -218,6 +219,27 @@ class Log_event_handler {
+                            size_t command_type_len, const char *sql_text,
+                            size_t sql_text_len,
+                            const CHARSET_INFO *client_cs) = 0;
++  /**
++     Log command to the OMA log.
++
++     @param thd                THD of the query
++     @param current_utime      Current timestamp in microseconds
++     @param query_start_utime  Command start timestamp in microseconds
++     @param user_host          The pointer to the string with user\@host info
++     @param query_utime        Number of microseconds query execution took
++     @param lock_utime         Number of microseconds the query was locked
++     @param sql_text           The query in textual form
++     @param sql_text_len       The length of sql_text string
++     @param query_start_status Pointer to a snapshot of thd->status_var taken
++                               at the start of execution
++
++     @retval  false   OK
++     @retval  true    error occurred
++  */
++  virtual bool log_oma(THD *thd, ulonglong current_utime,
++                       ulonglong query_start_utime, const char *user_host,
++                       ulonglong query_utime, ulonglong lock_utime,
++                       const char *sql_text, size_t sql_text_len) = 0;
+ };
+ 
+ /** Class responsible for table based logging. */
+@@ -236,6 +258,19 @@ class Log_to_csv_event_handler : public Log_event_handler {
+                    const char *sql_text, size_t sql_text_len,
+                    const CHARSET_INFO *client_cs) override;
+ 
++  bool log_oma(THD *thd MY_ATTRIBUTE((unused)),
++               ulonglong current_utime MY_ATTRIBUTE((unused)),
++               ulonglong query_start_arg MY_ATTRIBUTE((unused)),
++               const char *user_host MY_ATTRIBUTE((unused)),
++               ulonglong query_utime MY_ATTRIBUTE((unused)),
++               ulonglong lock_utime MY_ATTRIBUTE((unused)),
++               const char *sql_text MY_ATTRIBUTE((unused)),
++               size_t sql_text_len MY_ATTRIBUTE((unused))) override {
++    // csv format not supported, should never be called.
++    DBUG_ASSERT(false);
++    return false;
++  }
++
+  private:
+   /**
+      Check if log table for given log type exists and can be opened.
+@@ -279,6 +314,7 @@ class Query_logger {
+   /** NULL-terminated arrays of log handlers. */
+   Log_event_handler *slow_log_handler_list[MAX_LOG_HANDLERS_NUM + 1];
+   Log_event_handler *general_log_handler_list[MAX_LOG_HANDLERS_NUM + 1];
++  Log_event_handler *oma_log_handler_list[MAX_LOG_HANDLERS_NUM + 1];
+ 
+  private:
+   /**
+@@ -367,6 +403,18 @@ class Query_logger {
+   bool general_log_write(THD *thd, enum_server_command command,
+                          const char *query, size_t query_length);
+ 
++  /**
++   Log DDL query for audit purpose.
++
++   @param thd                 THD of the statement being logged.
++   @param query               The query string being logged.
++
++   @return true if error, false otherwise.
++
++   @note replica node can run ANALYZE TABLE to call this
++*/
++  bool oma_log_write(THD *thd, const char *query, size_t query_length);
++
+   /**
+      Enable log event handlers for slow/general log.
+ 
+@@ -485,6 +533,29 @@ void log_slow_do(THD *thd);
+ */
+ void log_slow_statement(THD *thd);
+ 
++/**
++  Check whether we need to write the current statement (or its rewritten
++  version if it exists) to the oma log.
++
++  @param thd          thread handle
++
++  @retval
++    true              statement needs to be logged
++  @retval
++    false             statement does not need to be logged
++*/
++bool log_oma_applicable(THD *thd);
++
++/**
++  writes the current statement (or its rewritten version if it exists) to the
++  OMA log.
++
++  @param thd                 thread handle
++  @param query_start_status  Pointer to a snapshot of thd->status_var taken
++                             at the start of execution
++*/
++void log_oma(THD *thd, bool force_write = false);
++
+ /**
+   @class Log_throttle
+   @brief Base class for rate-limiting a log (slow query log etc.)
+diff --git a/sql/mysqld.cc b/sql/mysqld.cc
+index 3ba3673a9a3..18bca660fe2 100644
+--- a/sql/mysqld.cc
++++ b/sql/mysqld.cc
+@@ -1222,6 +1222,7 @@ bool opt_keyring_migration_to_component = false;
+ bool opt_persist_sensitive_variables_in_plaintext{true};
+ int argc_cached;
+ char **argv_cached;
++bool opt_oma_log = true;
+ 
+ #if defined(_WIN32)
+ /*
+@@ -1531,6 +1532,7 @@ size_t mysql_data_home_len = 1;
+ uint reg_ext_length;
+ char logname_path[FN_REFLEN];
+ char slow_logname_path[FN_REFLEN];
++char oma_logname_path[FN_REFLEN];
+ char secure_file_real_path[FN_REFLEN];
+ Time_zone *default_tz;
+ char *mysql_data_home = const_cast<char *>(".");
+@@ -1710,6 +1712,7 @@ bool log_replica_updates_supplied = false;
+ */
+ bool replica_preserve_commit_order_supplied = false;
+ char *opt_general_logname, *opt_slow_logname, *opt_bin_logname;
++char *opt_oma_logname;
+ 
+ /*
+   True if expire_logs_days and binlog_expire_logs_seconds are set
+@@ -5242,6 +5245,11 @@ int init_common_variables() {
+     LogErr(WARNING_LEVEL, ER_LOG_FILES_GIVEN_LOG_OUTPUT_IS_TABLE,
+            "--slow-query-log-file option");
+ 
++  if (opt_oma_log && opt_oma_logname && !(log_output_options & LOG_FILE) &&
++      !(log_output_options & LOG_NONE))
++    LogErr(WARNING_LEVEL, ER_LOG_FILES_GIVEN_LOG_OUTPUT_IS_TABLE,
++           "--oma_log_file option");
++
+   if (opt_general_logname &&
+       !is_valid_log_name(opt_general_logname, strlen(opt_general_logname))) {
+     LogErr(ERROR_LEVEL, ER_LOG_FILE_INVALID, "--general_log_file",
+@@ -5256,6 +5264,12 @@ int init_common_variables() {
+     return 1;
+   }
+ 
++  if (opt_oma_logname &&
++      !is_valid_log_name(opt_oma_logname, strlen(opt_oma_logname))) {
++    LogErr(ERROR_LEVEL, ER_LOG_FILE_INVALID, "--oma_log_file", opt_oma_logname);
++    return 1;
++  }
++
+   if (global_system_variables.transaction_write_set_extraction ==
+           HASH_ALGORITHM_OFF &&
+       mysql_bin_log.m_dependency_tracker.m_opt_tracking_mode !=
+@@ -5274,6 +5288,8 @@ int init_common_variables() {
+               make_query_log_name(logname_path, QUERY_LOG_GENERAL));
+   FIX_LOG_VAR(opt_slow_logname,
+               make_query_log_name(slow_logname_path, QUERY_LOG_SLOW));
++  FIX_LOG_VAR(opt_oma_logname,
++              make_query_log_name(oma_logname_path, QUERY_LOG_OMA));
+ 
+ #if defined(ENABLED_DEBUG_SYNC)
+   /* Initialize the debug sync facility. See debug_sync.cc. */
+@@ -6893,6 +6909,11 @@ static int init_server_components() {
+   if (opt_general_log && query_logger.reopen_log_file(QUERY_LOG_GENERAL))
+     opt_general_log = false;
+ 
++  // Open oma log file if enabled.
++  query_logger.set_log_file(QUERY_LOG_OMA);
++  if (opt_oma_log && query_logger.reopen_log_file(QUERY_LOG_OMA))
++    opt_oma_log = false;
++
+   /*
+     Set the default storage engines
+   */
+@@ -10237,7 +10258,8 @@ static int mysql_init_variables() {
+   opt_general_log = opt_slow_log = false;
+   opt_disable_networking = opt_skip_show_db = false;
+   opt_skip_name_resolve = false;
+-  opt_general_logname = opt_binlog_index_name = opt_slow_logname = nullptr;
++  opt_general_logname = opt_binlog_index_name = opt_slow_logname =
++      opt_oma_logname = nullptr;
+   opt_tc_log_file = "tc.log";  // no hostname in tc_log file name !
+   opt_myisam_log = false;
+   mqh_used = false;
+@@ -12266,6 +12288,7 @@ PSI_stage_info stage_fulltext_initialization= { 0, "FULLTEXT initialization", 0,
+ PSI_stage_info stage_init= { 0, "init", 0, PSI_DOCUMENT_ME};
+ PSI_stage_info stage_killing_replica= { 0, "Killing replica", 0, PSI_DOCUMENT_ME};
+ PSI_stage_info stage_logging_slow_query= { 0, "logging slow query", 0, PSI_DOCUMENT_ME};
++PSI_stage_info stage_logging_oma = { 0, "logging oma", 0, PSI_DOCUMENT_ME };
+ PSI_stage_info stage_making_temp_file_append_before_load_data= { 0, "Making temporary file (append) before replaying LOAD DATA INFILE", 0, PSI_DOCUMENT_ME};
+ PSI_stage_info stage_manage_keys= { 0, "manage keys", 0, PSI_DOCUMENT_ME};
+ PSI_stage_info stage_source_has_sent_all_binlog_to_replica= { 0, "Source has sent all binlog to replica; waiting for more updates", 0, PSI_DOCUMENT_ME};
+@@ -12374,6 +12397,7 @@ PSI_stage_info *all_server_stages[] = {
+     &stage_init,
+     &stage_killing_replica,
+     &stage_logging_slow_query,
++    &stage_logging_oma,
+     &stage_making_temp_file_append_before_load_data,
+     &stage_manage_keys,
+     &stage_source_has_sent_all_binlog_to_replica,
+diff --git a/sql/mysqld.h b/sql/mysqld.h
+index 731756a757f..3e9bce4b39a 100644
+--- a/sql/mysqld.h
++++ b/sql/mysqld.h
+@@ -167,7 +167,7 @@ extern bool opt_large_files, server_id_supplied;
+ extern bool opt_bin_log;
+ extern bool opt_log_replica_updates;
+ extern bool opt_log_unsafe_statements;
+-extern bool opt_general_log, opt_slow_log, opt_general_log_raw;
++extern bool opt_general_log, opt_slow_log, opt_general_log_raw, opt_oma_log;
+ extern ulonglong log_output_options;
+ extern bool opt_log_queries_not_using_indexes;
+ extern ulong opt_log_throttle_queries_not_using_indexes;
+@@ -276,6 +276,7 @@ extern ulong opt_log_timestamps;
+ extern const char *timestamp_type_names[];
+ extern char *opt_general_logname, *opt_slow_logname, *opt_bin_logname,
+     *opt_relay_logname;
++extern char *opt_oma_logname;
+ extern char *mysql_home_ptr, *pidfile_name_ptr;
+ extern char *default_auth_plugin;
+ extern uint default_password_lifetime;
+@@ -594,6 +595,7 @@ extern PSI_stage_info stage_fulltext_initialization;
+ extern PSI_stage_info stage_init;
+ extern PSI_stage_info stage_killing_replica;
+ extern PSI_stage_info stage_logging_slow_query;
++extern PSI_stage_info stage_logging_oma;
+ extern PSI_stage_info stage_making_temp_file_append_before_load_data;
+ extern PSI_stage_info stage_manage_keys;
+ extern PSI_stage_info stage_source_has_sent_all_binlog_to_replica;
+diff --git a/sql/sql_class.h b/sql/sql_class.h
+index ac07cdfe0f5..c5f42b82d28 100644
+--- a/sql/sql_class.h
++++ b/sql/sql_class.h
+@@ -1600,6 +1600,10 @@ class THD : public MDL_context_owner,
+     Query start time, expressed in microseconds.
+   */
+   ulonglong start_utime;
++  /**
++    Time after acquiring the lock, expressed in microseconds.
++  */
++  ulonglong utime_after_lock;
+ 
+  private:
+   /**
+diff --git a/sql/sql_parse.cc b/sql/sql_parse.cc
+index 7f2aa51257e..46f5b038991 100644
+--- a/sql/sql_parse.cc
++++ b/sql/sql_parse.cc
+@@ -2987,11 +2987,15 @@ int mysql_execute_command(THD *thd, bool first_level) {
+     If there is a CREATE TABLE...START TRANSACTION command which
+     is not yet committed or rollbacked, then we should allow only
+     BINLOG INSERT, COMMIT or ROLLBACK command.
++    In order to reduce the complexity of the circle,
++    put the judgment condition outside the if.
+     TODO: Should we really check name of table when we cable BINLOG INSERT ?
+   */
+-  if (thd->m_transactional_ddl.inited() && lex->sql_command != SQLCOM_COMMIT &&
++  bool isInvalidTransactionCommand =
++      thd->m_transactional_ddl.inited() && lex->sql_command != SQLCOM_COMMIT &&
+       lex->sql_command != SQLCOM_ROLLBACK &&
+-      lex->sql_command != SQLCOM_BINLOG_BASE64_EVENT) {
++      lex->sql_command != SQLCOM_BINLOG_BASE64_EVENT;
++  if (isInvalidTransactionCommand) {
+     my_error(ER_STATEMENT_NOT_ALLOWED_AFTER_START_TRANSACTION, MYF(0));
+     binlog_gtid_end_transaction(thd);
+     return 1;
+@@ -5092,6 +5096,10 @@ finish:
+     DEBUG_SYNC(thd, "restore_previous_state_after_statement_failed");
+   }
+ 
++  if (!res && !thd->is_error()) {
++    log_oma(thd);
++  }
++
+   thd->skip_gtid_rollback = false;
+ 
+   return res || thd->is_error();
+diff --git a/sql/sql_reload.cc b/sql/sql_reload.cc
+index 5f149800a8d..f060428af49 100644
+--- a/sql/sql_reload.cc
++++ b/sql/sql_reload.cc
+@@ -193,6 +193,7 @@ bool handle_reload_request(THD *thd, unsigned long options, Table_ref *tables,
+     options |= REFRESH_GENERAL_LOG;
+     options |= REFRESH_ENGINE_LOG;
+     options |= REFRESH_ERROR_LOG;
++    options |= REFRESH_OMA_LOG;
+   }
+ 
+   if (options & REFRESH_ERROR_LOG) {
+@@ -207,6 +208,10 @@ bool handle_reload_request(THD *thd, unsigned long options, Table_ref *tables,
+       (log_output_options & LOG_FILE))
+     if (query_logger.reopen_log_file(QUERY_LOG_GENERAL)) result = true;
+ 
++  if ((options & REFRESH_OMA_LOG) && opt_oma_log &&
++      (log_output_options & LOG_FILE))
++    if (query_logger.reopen_log_file(QUERY_LOG_OMA)) result = true;
++
+   if (options & REFRESH_ENGINE_LOG) {
+     if (ha_flush_logs()) {
+       result = true;
+diff --git a/sql/sys_vars.cc b/sql/sys_vars.cc
+index 22930745754..e6f9c7876af 100644
+--- a/sql/sys_vars.cc
++++ b/sql/sys_vars.cc
+@@ -3747,6 +3747,7 @@ static bool fix_read_only(sys_var *self, THD *thd, enum_var_type) {
+   bool new_read_only = read_only;  // make a copy before releasing a mutex
+   DBUG_TRACE;
+ 
++  log_oma(thd, true);
+   /*
+     If we're not newly turning on READ_ONLY, we don't have to worry
+     about locks.
+@@ -3836,6 +3837,8 @@ end:
+ static bool fix_super_read_only(sys_var *, THD *thd, enum_var_type type) {
+   DBUG_TRACE;
+ 
++  log_oma(thd, true);
++
+   /* return if no changes: */
+   if (super_read_only == opt_super_readonly) return false;
+ 
+@@ -6018,6 +6021,56 @@ static Sys_var_charptr Sys_slow_log_path(
+     DEFAULT(nullptr), NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(check_log_path),
+     ON_UPDATE(fix_slow_log_file));
+ 
++/**
++   Handles the update operation for the OMA (Operating and Maintenance
++   Assistant) log file path. This function is called when the oma_log_file
++   system variable is modified.
++
++   @param self Pointer to the system variable structure
++   @param thd Thread handler (unused in this context)
++   @param type Type of variable being set (GLOBAL/SESSION)
++
++   @retval true if an error occurred during log file update
++   @retval false if log file was successfully updated
++ */
++static bool fix_oma_log_file(sys_var *, THD *, enum_var_type) {
++  bool res;
++
++  /* Handle DEFAULT value assignment */
++  if (!opt_oma_logname)  // SET ... = DEFAULT
++  {
++    char buff[FN_REFLEN];
++    /* Generate default log file path */
++    opt_oma_logname =
++        my_strdup(key_memory_LOG_name, make_query_log_name(buff, QUERY_LOG_OMA),
++                  MYF(MY_FAE + MY_WME));
++    if (!opt_oma_logname) return true;  // Memory allocation failed
++  }
++
++  /* Update log file path in query logger */
++  res = query_logger.set_log_file(QUERY_LOG_OMA);
++
++  /* If logging is active, reopen the log file with new path */
++  if (opt_oma_log) {
++    /* Temporarily release global lock during file operations */
++    mysql_mutex_unlock(&LOCK_global_system_variables);
++
++    if (!res) /* Successful path update - reopen log file */
++      res = query_logger.reopen_log_file(QUERY_LOG_OMA);
++    else
++      /* Path update failed - deactivate logging */
++      query_logger.deactivate_log_handler(QUERY_LOG_OMA);
++
++    /* Reacquire global lock */
++    mysql_mutex_lock(&LOCK_global_system_variables);
++  }
++
++  /* Disable logging if any operation failed */
++  if (res) opt_oma_log = false;
++
++  return res;
++}
++
+ static Sys_var_have Sys_have_compress(
+     "have_compress", "have_compress",
+     READ_ONLY NON_PERSIST GLOBAL_VAR(have_compress), NO_CMD_LINE);
+@@ -6152,6 +6205,45 @@ static Sys_var_bool Sys_slow_log_extra(
+     NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(check_slow_log_extra),
+     ON_UPDATE(nullptr));
+ 
++/**
++   Handles the update operation for the OMA (Operating and Maintenance
++   Assistant) log state. This function is called when the oma_log system
++   variable is modified to enable/disable logging.
++
++   @param self Pointer to the system variable structure
++   @param thd Thread handler (used for activation)
++   @param type Type of variable being set (GLOBAL/SESSION)
++
++   @retval true if an error occurred during state change
++   @retval false if state was successfully updated
++ */
++static bool fix_oma_log_state(sys_var *, THD *thd, enum_var_type) {
++  bool new_state = opt_oma_log, res = false;
++
++  /* Early return if current state matches requested state */
++  if (query_logger.is_log_file_enabled(QUERY_LOG_OMA) == new_state)
++    return false;
++
++  /* Release global lock during file operations */
++  mysql_mutex_unlock(&LOCK_global_system_variables);
++
++  if (!new_state) {
++    /* Deactivate logging handler */
++    query_logger.deactivate_log_handler(QUERY_LOG_OMA);
++  } else {
++    /* Activate logging handler with thread context */
++    res = query_logger.activate_log_handler(thd, QUERY_LOG_OMA);
++  }
++
++  /* Reacquire global lock */
++  mysql_mutex_lock(&LOCK_global_system_variables);
++
++  /* Maintain consistency - disable if activation failed */
++  if (res) opt_oma_log = false;
++
++  return res;
++}
++
+ static bool check_not_empty_set(sys_var *, THD *, set_var *var) {
+   return var->save_result.ulonglong_value == 0;
+ }
+@@ -7837,3 +7929,16 @@ static Sys_var_bool Sys_rds_use_ddl_info_replay(
+     "physical replication.",
+     READ_ONLY GLOBAL_VAR(rds_use_ddl_info_replay), CMD_LINE(OPT_ARG),
+     DEFAULT(false), NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(nullptr));
++
++static Sys_var_charptr Sys_rds_oma_log_path(
++    "rds_oma_log_file",
++    "Log queries to given log file for Operating and Maintenance Assistant "
++    "purpose. Defaults logging to oma.log.",
++    GLOBAL_VAR(opt_oma_logname), CMD_LINE(REQUIRED_ARG), IN_FS_CHARSET,
++    DEFAULT(nullptr), NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(check_log_path),
++    ON_UPDATE(fix_oma_log_file));
++
++static Sys_var_bool Sys_rds_oma_log(
++    "rds_oma_log", "Record DDL statements to a log file oma.log.",
++    GLOBAL_VAR(opt_oma_log), CMD_LINE(OPT_ARG), DEFAULT(false), NO_MUTEX_GUARD,
++    NOT_IN_BINLOG, ON_CHECK(nullptr), ON_UPDATE(fix_oma_log_state));
+\ No newline at end of file
+diff --git a/storage/dstore/handler/ha_cde.cc b/storage/dstore/handler/ha_cde.cc
+index 8038a0b219c..ee496794f13 100644
+--- a/storage/dstore/handler/ha_cde.cc
++++ b/storage/dstore/handler/ha_cde.cc
+@@ -1467,7 +1467,7 @@ int CdeDdWriteExtraCommitWalCallback(uint32_t control_flag, uint64 end_plsn,
+ static void CdeSetExtraCommitWal(THD *thd, const unsigned char *buffer,
+                                  unsigned long length) {
+   if (likely(rds_binlog_concurrent_commit)) {
+-    if (is_ddl_command_all(thd)) {
++    if (get_ddl_command_type(thd) != DDLCOM_NONE) {
+       CdeCreateOrGetSession(thd);
+       TransactionInterface::WriteBinlogExtraIntoWal(buffer, length);
+     } else {
+@@ -1480,7 +1480,7 @@ static void CdeSetExtraCommitWal(THD *thd, const unsigned char *buffer,
+     auto reset_guard = create_scope_guard([dstore_thrd] {
+       ThreadContextInterface::SwapCurrentThreadContext(dstore_thrd);
+     });
+-    if (is_ddl_command_all(thd)) {
++    if (get_ddl_command_type(thd) != DDLCOM_NONE) {
+       TransactionInterface::WriteBinlogExtraIntoWal(buffer, length);
+     } else {
+       TransactionInterface::SetExtraCommitWAL(buffer, length);
+-- 
+2.23.0
+

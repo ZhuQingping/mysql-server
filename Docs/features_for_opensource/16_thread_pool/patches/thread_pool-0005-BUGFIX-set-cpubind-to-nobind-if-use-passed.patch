@@ -1,0 +1,194 @@
+From 34e631aeb417d16484b454aea5a32815c2f83983 Mon Sep 17 00:00:00 2001
+From: songliyong <songliyong@contributor>
+
+
+Date: Wed, 14 May 2025 18:01:11 +0800
+Subject: [PATCH] BUGFIX set cpubind to 'nobind' if use passed
+ cpubind is invalid
+
+Issue:
+--------
+If threadpool_cpubind_info is invalid, the input parameter is still displayed.
+Actually, nobind is used. Show variables should also display nobind.
+
+Solution:
+--------
+1.Restore the threadpool_cpubind_info to 'nobind' if user passed parameter is invalid.
+So show variables like 'threadpool_cpubind_info' will display 'nobind'.
+2.Adaptation index range scan optimization
+---
+ .../tests/mtr/pool_of_threads.result          |  2 +-
+ plugin/threadpool/threadpool.h                |  3 ++
+ plugin/threadpool/threadpool_cpubind.cc       |  2 -
+ plugin/threadpool/threadpool_plugin.cc        | 40 +++++++++++++++++--
+ unittest/gunit/threadpool/cpubind-t.cc        | 30 ++++++++++++--
+ 5 files changed, 68 insertions(+), 9 deletions(-)
+
+diff --git a/plugin/threadpool/tests/mtr/pool_of_threads.result b/plugin/threadpool/tests/mtr/pool_of_threads.result
+index 014646e4ce3..7149e7e6afc 100644
+--- a/plugin/threadpool/tests/mtr/pool_of_threads.result
++++ b/plugin/threadpool/tests/mtr/pool_of_threads.result
+@@ -170,7 +170,7 @@ honeysuckle
+ honoring
+ explain select t2.fld3 from t2 where fld3 >= 'honeysuckle' and fld3 <= 'honoring' order by fld3;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t2	NULL	range	fld3	fld3	120	NULL	#	#	Using where; Using index
++1	SIMPLE	t2	NULL	range	fld3	fld3	120	NULL	#	#	Using index
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t2`.`fld3` AS `fld3` from `test`.`t2` where ((`test`.`t2`.`fld3` >= 'honeysuckle') and (`test`.`t2`.`fld3` <= 'honoring')) order by `test`.`t2`.`fld3`
+ select fld1,fld3 from t2 where fld3="Colombo" or fld3 = "nondecreasing" order by fld3;
+diff --git a/plugin/threadpool/threadpool.h b/plugin/threadpool/threadpool.h
+index b27d5b8cb9c..1294a35d3e7 100644
+--- a/plugin/threadpool/threadpool.h
++++ b/plugin/threadpool/threadpool.h
+@@ -25,6 +25,9 @@
+ #include "sql/sql_list.h"
+ #include "sql/sql_plist.h"
+ 
++#define TP_NO_BIND "nobind"
++#define TP_CPU_BIND_PREFIX "cpubind"
++
+ class TP_atomic_counter {
+  private:
+   std::atomic<uint64_t> m_val;
+diff --git a/plugin/threadpool/threadpool_cpubind.cc b/plugin/threadpool/threadpool_cpubind.cc
+index f9a7d145e34..38c5401d6f7 100644
+--- a/plugin/threadpool/threadpool_cpubind.cc
++++ b/plugin/threadpool/threadpool_cpubind.cc
+@@ -26,8 +26,6 @@
+ #include "mysqld_error.h"
+ #include "threadpool.h"
+ 
+-#define TP_NO_BIND "nobind"
+-#define TP_CPU_BIND_PREFIX "cpubind"
+ struct Cpu_range_t {
+   int start;
+   int end;
+diff --git a/plugin/threadpool/threadpool_plugin.cc b/plugin/threadpool/threadpool_plugin.cc
+index c6c1f60606b..5e52eeb34cd 100644
+--- a/plugin/threadpool/threadpool_plugin.cc
++++ b/plugin/threadpool/threadpool_plugin.cc
+@@ -329,6 +329,33 @@ THD_event_functions thd_event_functions = {
+     tp_post_kill_notification,
+ };
+ 
++/**
++  Restore the threadpool_cpubind_info to default value
++  if the user pass invalid cpubind info.show variables
++  like 'threadpool_cpubind_info' will display 'nobind',
++  not the user passed invalid value.
++
++  @return 0 if cpubind info can be restored to default value
++          non-zero means memory is insufficient.
++*/
++static inline int restore_default_cpubind_value() {
++  /* Do not want to introduce secure c api here. It's only called at
++     startup and the parameter is invalid. So just use my_free and
++     my_strdup, the memory will be freed when mysqld is shutdown.
++  */
++  if (threadpool_cpubind_info != nullptr) {
++    my_free(threadpool_cpubind_info);
++  }
++  threadpool_cpubind_info = my_strdup(PSI_NOT_INSTRUMENTED, TP_NO_BIND, MYF(0));
++  if (threadpool_cpubind_info == nullptr) {
++#ifdef NDEBUG
++    LogErr(ERROR_LEVEL, ER_SERVER_OUTOFMEMORY, strlen(TP_NO_BIND));
++#endif
++    return 1;
++  }
++  return 0;
++}
++
+ /** parse user passed cpubind parameters, and check
+ whether it is valid. Log an error if it is invalid.
+ 
+@@ -336,8 +363,11 @@ For log_builtins.cc:1323 will assert if we log an error.
+ So we can not use mtr to test invalid param.
+ 
+ @param[in] cpubind_info user passed parameters
++
++@return 0 if cpubind info is valid or can be restored to default value
++       non-zero means memory is insufficient.
+ */
+-void parse_cpu_bind_info(const char *cpubind_info) {
++int parse_cpu_bind_info(const char *cpubind_info) {
+   if (cpubind_info != nullptr) {
+     int ret = parse_and_check_cpubind_info(cpubind_info);
+     if (ret != 0) {
+@@ -345,8 +375,12 @@ void parse_cpu_bind_info(const char *cpubind_info) {
+ #ifdef NDEBUG
+       LogErr(ERROR_LEVEL, ER_INVALID_PARAMETER_USE, cpubind_info);
+ #endif
++      /* set cpubind to 'nobind' if user parameter is invalid.
++         threadpool_cpubind_info will show 'nobind' */
++      return restore_default_cpubind_value();
+     }
+   }
++  return 0;
+ }
+ 
+ /** thread plugin init
+@@ -361,9 +395,9 @@ static int threadpool_plugin_init(void *p MY_ATTRIBUTE((unused))) {
+   // skip init if threadpool is not enabled
+   if (!threadpool_enabled) DBUG_RETURN(0);
+   tp_init();
+-  parse_cpu_bind_info(threadpool_cpubind_info);
++  int ret = parse_cpu_bind_info(threadpool_cpubind_info);
+   my_connection_handler_set(&tp_handler_functions);
+-  DBUG_RETURN(0);
++  DBUG_RETURN(ret);
+ }
+ 
+ /* when unload the thread pool plugin,
+diff --git a/unittest/gunit/threadpool/cpubind-t.cc b/unittest/gunit/threadpool/cpubind-t.cc
+index fb7057cc93e..fabca752b04 100644
+--- a/unittest/gunit/threadpool/cpubind-t.cc
++++ b/unittest/gunit/threadpool/cpubind-t.cc
+@@ -17,11 +17,17 @@
+ 
+ /* See http://code.google.com/p/googletest/wiki/Primer */
+ #include <gtest/gtest.h>
+-#include <cassert>
++#include <cstring>
++
++#include "my_dbug.h"
++#include "my_inttypes.h"
++#include "mysql/service_mysql_alloc.h"
+ 
+ extern int parse_and_check_cpubind_info(const char *proposed_value);
+ extern int get_cpuid_by_group_index(int index);
+-extern void parse_cpu_bind_info(const char *cpubind_info);
++extern int parse_cpu_bind_info(const char *cpubind_info);
++extern char *threadpool_cpubind_info;
++
+ void my_assert_handler(const char *, const char *, int) {}
+ TEST(cpubind, cpubindtest) {
+   int ret = parse_and_check_cpubind_info("cpubind:0-1");
+@@ -75,5 +81,23 @@ TEST(cpubind, cpubindtest) {
+   EXPECT_TRUE(ret != 0);
+ 
+   // just for coverage.
+-  parse_cpu_bind_info("CpU bind : 3- 2000");
++  ret = parse_cpu_bind_info("cpubind : 1-1000");
++  EXPECT_EQ(ret, 0);
++
++  threadpool_cpubind_info = nullptr;
++  ret = parse_cpu_bind_info("cpubind: 1");
++  EXPECT_EQ(ret, 0);
++  EXPECT_STREQ("nobind", threadpool_cpubind_info);
++
++  threadpool_cpubind_info =
++      my_strdup(PSI_NOT_INSTRUMENTED, "CpU bind : 3- 2000", MYF(0));
++  ret = parse_cpu_bind_info(threadpool_cpubind_info);
++  EXPECT_EQ(ret, 0);
++  EXPECT_STREQ("nobind", threadpool_cpubind_info);
++
++  // Inject out of memory
++  DBUG_SET("+d,simulate_out_of_memory");
++  ret = parse_cpu_bind_info("cpubind: 1");
++  DBUG_SET("-d,simulate_out_of_memory");
++  EXPECT_NE(ret, 0);
+ }
+-- 
+2.23.0
+

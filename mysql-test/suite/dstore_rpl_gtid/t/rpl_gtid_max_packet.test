@@ -1,0 +1,49 @@
+# ==== Purpose =======
+# 
+# Validate that executing massive SQL files runs without throwing exceptions
+# ==== References ====
+#
+# BUG2026031144302 Got a packet bigger than 'max_allowed_packet' bytes
+#
+ 
+
+--source include/have_only_dstore.inc
+--source include/have_log_bin.inc
+--source include/have_binlog_format_row.inc
+--source include/master-slave.inc
+
+--connection master
+
+--echo # Create test table with longtext fields
+CREATE TABLE test (id int DEFAULT NULL, long_blob_col longtext, long_text_col longtext);
+--let $binlog_file= query_get_value(SHOW MASTER STATUS, File, 1)
+
+--echo # Insert data with large longtext values
+INSERT INTO test (id, long_blob_col, long_text_col) VALUES (2, REPEAT('A',1024*1024*511), REPEAT('B', 1048545));
+
+--echo # Update the id field
+UPDATE test SET id = 1 WHERE id = 2;
+
+--echo # Modify data with sql_log_bin=0 (this won't be binlogged)
+SET sql_log_bin=0;
+UPDATE test SET id = 2 WHERE id = 1;
+SET sql_log_bin=1;
+
+let $MYSQLD_DATADIR= `SELECT @@DATADIR`;
+let $UUID= `SELECT @@SERVER_UUID`;
+
+--exec $MYSQL_BINLOG -vv --skip-gtids --include-gtids=$UUID:3 $MYSQLD_DATADIR/$binlog_file > $MYSQLTEST_VARDIR/tmp/binlog_data.sql
+
+--echo #Expect success
+--exec $MYSQL -e "SET SQL_LOG_BIN=0; SOURCE $MYSQLTEST_VARDIR/tmp/binlog_data.sql;"
+
+select id from test;
+
+#
+#cleanup
+#
+--connection master
+drop table test;
+
+--remove_file $MYSQLTEST_VARDIR/tmp/binlog_data.sql
+--source include/rpl_end.inc

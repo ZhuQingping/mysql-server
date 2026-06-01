@@ -1,0 +1,126 @@
+From 153cd946cfc2a61d3e0f4c408a11cd9f1ddfc63e Mon Sep 17 00:00:00 2001
+From: zhangzhiqiang <zhangzhiqiang40@contributor>
+
+
+Date: Tue, 26 Aug 2025 16:13:12 +0800
+Subject: [PATCH] BUGFIX Fix bug:audit_log_include_commands not work.
+
+Issue:
+------
+There is an error in the logic of audit_log_include_commands in
+audit_log_update_thd_local(). This causes commands in audit_log_include_commands
+to not be audited. We fix it using the approach from MySQL.
+
+Solution:
+------
+The fix is simply to negate the current logic.
+---
+ local_ci/script/start_mysqld.sh               |  2 ++
+ plugin/audit_log/audit_log.cc                 |  4 +--
+ ...filter_include_command_not_work-master.opt |  4 +++
+ ...log_filter_include_command_not_work.result | 26 +++++++++++++++++++
+ ...t_log_filter_include_command_not_work.test | 20 ++++++++++++++
+ 5 files changed, 54 insertions(+), 2 deletions(-)
+ create mode 100644 plugin/audit_log/tests/mtr/audit_log_filter_include_command_not_work-master.opt
+ create mode 100644 plugin/audit_log/tests/mtr/audit_log_filter_include_command_not_work.result
+ create mode 100644 plugin/audit_log/tests/mtr/audit_log_filter_include_command_not_work.test
+
+diff --git a/local_ci/script/start_mysqld.sh b/local_ci/script/start_mysqld.sh
+index e9495af12a3..84e89a574d5 100644
+--- a/local_ci/script/start_mysqld.sh
++++ b/local_ci/script/start_mysqld.sh
+@@ -55,6 +55,8 @@ rds_oma_log=ON
+ rds_oma_log_file=$install_path/mysql_oma_log.txt
+ rds_write_ddl_info_into_redo=on
+ plugin-load-add=audit_log.so
++# Make audit log debug easier during development.
++loose-audit_log_strategy=SYNCHRONOUS
+ 
+ # For debug utility.
+ loose-debug_sync_timeout=3600
+diff --git a/plugin/audit_log/audit_log.cc b/plugin/audit_log/audit_log.cc
+index e04699d7060..2cf9501443b 100644
+--- a/plugin/audit_log/audit_log.cc
++++ b/plugin/audit_log/audit_log.cc
+@@ -1338,8 +1338,8 @@ static bool audit_log_update_thd_local(MYSQL_THD thd,
+                     (static_cast<int>(SQLCOM_END) + 1));
+         local->skip_query |= static_cast<int>(
+             audit_log_include_commands != nullptr &&
+-            include_commands_arr[event_general                  // NOLINT
+-                                     ->general_sql_cmd_enum]);  // NOLINT
++            !include_commands_arr[event_general                  // NOLINT
++                                      ->general_sql_cmd_enum]);  // NOLINT
+ 
+         local->skip_query |= static_cast<int>(
+             audit_log_exclude_commands != nullptr &&
+diff --git a/plugin/audit_log/tests/mtr/audit_log_filter_include_command_not_work-master.opt b/plugin/audit_log/tests/mtr/audit_log_filter_include_command_not_work-master.opt
+new file mode 100644
+index 00000000000..31c421fecde
+--- /dev/null
++++ b/plugin/audit_log/tests/mtr/audit_log_filter_include_command_not_work-master.opt
+@@ -0,0 +1,4 @@
++--audit_log_file=test_audit.log
++--audit-log-format=CSV
++--audit_log_strategy=SYNCHRONOUS
++--audit_log_policy=NONE
+diff --git a/plugin/audit_log/tests/mtr/audit_log_filter_include_command_not_work.result b/plugin/audit_log/tests/mtr/audit_log_filter_include_command_not_work.result
+new file mode 100644
+index 00000000000..77363238e27
+--- /dev/null
++++ b/plugin/audit_log/tests/mtr/audit_log_filter_include_command_not_work.result
+@@ -0,0 +1,26 @@
++set global audit_log_include_commands='select,create_table,insert';
++select @@audit_log_include_commands;
++@@audit_log_include_commands
++select,create_table,insert
++set global audit_log_policy=ALL;
++drop database if exists auditlog_test;
++Warnings:
++Note	1008	Can't drop database 'auditlog_test'; database doesn't exist
++create database auditlog_test;
++use auditlog_test;
++create table tb_audit_log_001(a int);
++insert into tb_audit_log_001 values(1),(2),(3);
++select * from tb_audit_log_001;
++a
++1
++2
++3
++drop database auditlog_test;
++set global audit_log_flush= ON;
++===================================================================
++"Query","<ID>","<DATETIME>","create_table","<CONN_ID>",0,"create table tb_audit_log_001(a int)","root[root] @ localhost []","localhost","","","auditlog_test"
++"Query","<ID>","<DATETIME>","insert","<CONN_ID>",0,"insert into tb_audit_log_001 values(1),(2),(3)","root[root] @ localhost []","localhost","","","auditlog_test"
++"Query","<ID>","<DATETIME>","select","<CONN_ID>",0,"select * from tb_audit_log_001","root[root] @ localhost []","localhost","","","auditlog_test"
++===================================================================
++set global audit_log_include_commands=NULL;
++set global audit_log_policy=NONE;
+diff --git a/plugin/audit_log/tests/mtr/audit_log_filter_include_command_not_work.test b/plugin/audit_log/tests/mtr/audit_log_filter_include_command_not_work.test
+new file mode 100644
+index 00000000000..a41e49520f9
+--- /dev/null
++++ b/plugin/audit_log/tests/mtr/audit_log_filter_include_command_not_work.test
+@@ -0,0 +1,20 @@
++# Merge BUGFIX from TaurusDB
++
++let $MYSQLD_DATADIR= `select @@datadir`;
++let $log_file=$MYSQLD_DATADIR/test_audit.log;
++
++set global audit_log_include_commands='select,create_table,insert';
++select @@audit_log_include_commands;
++set global audit_log_policy=ALL;
++drop database if exists auditlog_test;
++create database auditlog_test;
++use auditlog_test;
++create table tb_audit_log_001(a int);
++insert into tb_audit_log_001 values(1),(2),(3);
++select * from tb_audit_log_001;
++drop database auditlog_test;
++
++--source audit_log_echo.inc
++
++set global audit_log_include_commands=NULL;
++set global audit_log_policy=NONE;
+-- 
+2.23.0
+

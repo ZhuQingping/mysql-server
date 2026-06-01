@@ -1,0 +1,39 @@
+# =============== Purpose ===========
+#  When verifying binary log rotation while transactions are 
+#  being executed, if a crash occurs, upon restart, a prepared 
+#  transaction is found. This transaction can be rolled back, 
+#  and the system successfully restarts.
+#   
+# =============== References ========
+#
+# BUG2025081936325 During binlog rotation, if a crash occurs 
+# while transactions are in progress, upon restart, a transaction 
+# in PREPARE state may be found. However, because total_ha_2pc 
+# is greater than opt_bin_log + 1, the system will not 
+# perform rollback, leading to a failed restart.
+#
+--source include/have_binlog_format_row.inc
+--source include/have_only_dstore.inc
+create  table t(id int)engine=innodb;
+
+set global debug="+d,binlog_sleep_before_crash_between_close_and_open,binlog_crash_between_close_and_open";
+--source include/expect_crash.inc
+--connect(con1,localhost,root)
+--connection con1
+--send flush logs
+
+--connect(con2,localhost,root)
+--connection con2
+--send insert into t values(1)
+
+--connection con1
+--error 2013
+--reap
+
+--connection con2
+--error 2013
+--reap
+
+--source include/start_mysqld.inc
+
+drop table t;

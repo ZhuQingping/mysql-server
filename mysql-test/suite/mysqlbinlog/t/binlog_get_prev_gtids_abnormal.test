@@ -1,0 +1,35 @@
+# ==== Purpose ====
+#
+# test mysqlbinlog tool option: --get_prev_gtids
+# Its function is to print gtids in prev_gtid_log_event
+#
+#
+--source include/have_log_bin.inc
+--source include/mysqlbinlog_have_debug.inc
+#--disable_query_log
+--disable_warnings
+DROP DATABASE IF EXISTS mtest;
+RESET MASTER;
+CREATE DATABASE mtest;
+--enable_warnings
+
+let $data_dir=query_get_value(SHOW VARIABLES LIKE 'datadir',Value,1);
+let $binlog_name=query_get_value(SHOW MASTER STATUS,File,1);
+
+FLUSH LOGS;
+
+--echo # test without binlog file
+--error 1
+--exec $MYSQL_BINLOG --get-prev-gtids - 2>&1
+
+--echo # test without Previous_gtids_log_event
+--error 1
+--exec $MYSQL_BINLOG --get-prev-gtids -#d,'inject_without_prev_gtid_event' $data_dir$binlog_name 2>&1
+
+--echo # test inject get_str_null
+--error 1
+--exec $MYSQL_BINLOG --get-prev-gtids -#d,'inject_str_is_null' $data_dir$binlog_name 2>&1
+
+DROP DATABASE mtest;
+--exec rm -f tmp.log
+

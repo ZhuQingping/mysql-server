@@ -1,0 +1,1365 @@
+From 9ac621ef5ac795ba46b95428db539fd6ff00a0ad Mon Sep 17 00:00:00 2001
+From: Guilhem Bichot <guilhem.bichot@contributor>
+
+Date: Thu, 11 Sep 2025 16:54:10 +0200
+Subject: [PATCH] decrease the memory footprint of session
+ plan cache.
+
+( Note: in the patches I added some more '#ifdef PLAN_CACHE_TAURUS'.
+These ifdefs make code a bit hard to read. I plan to keep them for few
+more months, at least until the PQ code goes into the dstore branch,
+until we decide if plan cache has to use PQ code again (like it did
+before, and like it does not anymore), until plan cache is used in
+production and validated by customer use (telling if my approach to do
+without PQ code made a working feature or not). Once there, we can
+make final decisions and perhaps remove the ifdefs. )
+
+Allocate cached plan into dedicated MEM_ROOT to decrease memory usage
+when there are invalidations.
+
+Before this patch, as the cached plan was allocated in the prepared
+statement's MEM_ROOT, if the plan got invalidated we could not free
+it. This could cause ever-increasing memory usage, which we prevented
+by re-preparing the statement after 5 invalidations.
+
+So we observed the following behaviour in a long sysbench run. Memory
+usage grew until all 320000 prepared statements had a cached
+plan (expected), then it grew again very slowly for more hours then
+stabilized. The reason for the second growth phase was this:
+invalidations happened, though rarely, causing a slow increase, until
+all statements got 5 invalidations, then that was the maximum
+consumption.
+
+Now, with this patch, there is a dedicated MEM_ROOT which is freed at
+first invalidation and the prepared statement is not re-prepared,
+which is more efficient. As a consequence there also needs to be a
+dedicated Query_arena.
+
+Expose the memory usage in performance.schema, one can use:
+SELECT * FROM
+performance_schema.memory_summary_by_thread_by_event_name WHERE
+event_name="memory/sql/plan_cache_mem_root";
+
+In the mtr test:
+- we check memory usage
+- some EXECUTE are removed as we neither want nor can trigger
+statement's re-preparation anymore, so the invalidation count for the
+rest of the test is reduced by 7.
+- a test with a JSON function is added, because it exposed a mistake
+(a memory leak) in the initial version of this patch.
+- test group_replication.gr_assert_psi_memory_instruments_disabled is
+reading a row from the Performance_schema.setup_instruments, about key
+memory/group_rpl/Gcs_message_data::m_buffer, and did not find it
+anymore. This is because the said table has a max size of 450, and
+this limit was already reached before this patch. As this patch adds
+one key, which is registered early, the table is already full when
+registering the Gcs key, which thus is not inserted into the table.
+Fix: increase the default table's size from 450 to 454.
+---
+ mysql-test/include/session_plan_cache.inc     | 112 ++++++++--
+ mysql-test/r/mysqld--help-notwin.result       |   2 +-
+ mysql-test/r/session_plan_cache.result        | 202 ++++++++++++------
+ .../r/mysqld--help-notwin-dstore.result       |   2 +-
+ .../dstore_main/r/session_plan_cache.result   | 165 ++++++++------
+ .../r/memory_key_descriptions.result          |   1 +
+ .../perfschema/t/memory_key_descriptions.test |   2 +-
+ sql/psi_memory_key.cc                         |   3 +
+ sql/psi_memory_key.h                          |   1 +
+ sql/sql_lex.h                                 |   4 -
+ sql/sql_plan_cache.cc                         | 148 +++++++++----
+ sql/sql_plan_cache.h                          |   5 +-
+ sql/sql_prepare.cc                            |   5 +-
+ sql/sql_union.cc                              |   7 +-
+ storage/perfschema/pfs_server.h               |   6 +-
+ 15 files changed, 455 insertions(+), 210 deletions(-)
+
+diff --git a/mysql-test/include/session_plan_cache.inc b/mysql-test/include/session_plan_cache.inc
+index 681f56e619a..acec803ed20 100644
+--- a/mysql-test/include/session_plan_cache.inc
++++ b/mysql-test/include/session_plan_cache.inc
+@@ -1439,11 +1439,46 @@ INSERT INTO t1 VALUES (1,1000), (1,1001), (1,2000),
+ (1,2001), (1,3000), (1,3002);
+ ANALYZE TABLE t1;
+ flush status;
++
++select (@thread_id:=thread_id)*0 from performance_schema.threads where processlist_id=connection_id();
++show session status like "cached_plan%";
++
+ PREPARE s FROM "SELECT a, MAX(b) FROM t1 WHERE a = 1 AND b <= 1999.5 GROUP BY a";
++
++# This is a set of 3 queries to measure the memory usage of Plan Cache.
++# This stores in variables the net amount of allocations and current number of bytes used.
++let $measure_mem=
++select (@delta_alloc:=(count_alloc-count_free))*0,
++       (@bytes:=current_number_of_bytes_used)*0
++       from performance_schema.memory_summary_by_thread_by_event_name
++       where event_name="memory/sql/plan_cache_mem_root" and thread_id=@thread_id;
++# This uses the variables above as reference, to verify that nothing has changed since they were set.
++let $check_mem_unchanged=
++select @delta_alloc=(count_alloc-count_free),
++       @bytes=current_number_of_bytes_used
++        from performance_schema.memory_summary_by_thread_by_event_name
++        where event_name="memory/sql/plan_cache_mem_root" and thread_id=@thread_id;
++# This checks that there are no allocations, no bytes used.
++let $measure_zero_mem=
++select count_alloc=count_free,
++       current_number_of_bytes_used=0
++       from performance_schema.memory_summary_by_thread_by_event_name
++       where event_name="memory/sql/plan_cache_mem_root" and thread_id=@thread_id;
++
++# initial state of plan cache (empty), and of memory (nothing used by cache):
++show session status like "cached_plan%";
++eval $measure_zero_mem;
+ EXECUTE s;
++# Execute again and verify that it causes an invalidation:
++show session status like "cached_plan%";
++eval $measure_mem;
++select @delta_alloc>0, @bytes>0;
+ EXECUTE s;
++eval $measure_mem;
++select @delta_alloc>0, @bytes>0;
++show session status like "cached_plan%";
+ 
+-# We see a plan was cached but it was not used later. This is because:
++# We see a plan was cached but it was not used later (hit=0). This is because:
+ 
+ # - during the optimization, we pick a range access of type
+ # GROUP_INDEX_SKIP_SCAN, then we drop the GROUP BY clause as the WHERE
+@@ -1462,30 +1497,25 @@ EXECUTE s;
+ # time we have a GROUP BY, so we'll make a GROUP_INDEX_SKIP_SCAN and
+ # cache it, again.
+ 
+-show session status like "cached_plan%";
++# As what happened in the second execution (get an inconsistent range
++# access path, invalidate the cached plan and free its MEM_ROOT, make
++# a new range access path, make a cached plan in a MEM_ROOT), gets
++# repeated over and over below, the next-produced cached plans should
++# not use more memory than the second one did. We check that below. We
++# also check that the number of allocations-minus-free is also
++# identical.
+ 
+-# Do it a few more times, to verify that at some point we reprepare the statement to stop the memory growth resulting from the repeated sequence of {allocate a cached plan, ditch it}
+-show session status like "Com_stmt_reprepare";
+-EXECUTE s;
+-show session status like "Com_stmt_reprepare";
+ EXECUTE s;
+-show session status like "Com_stmt_reprepare";
+-EXECUTE s;
+-show session status like "Com_stmt_reprepare";
+-EXECUTE s;
+-# This was the fifth invalidation, has triggered repreparation
+-show session status like "Com_stmt_reprepare";
+-EXECUTE s;
+-show session status like "Com_stmt_reprepare";
+-EXECUTE s;
+-show session status like "Com_stmt_reprepare";
+-EXECUTE s;
+-show session status like "Com_stmt_reprepare";
+-EXECUTE s;
+-show session status like "Com_stmt_reprepare";
++eval $check_mem_unchanged;
++show session status like "cached_plan%";
+ EXECUTE s;
+-# This was again the fifth invalidation, has triggered repreparation
+-show session status like "Com_stmt_reprepare";
++eval $check_mem_unchanged;
++show session status like "cached_plan%";
++DROP PREPARE s;
++
++# here we check that plan cache uses no memory anymore.
++eval $measure_zero_mem;
++show session status like "cached_plan%";
+ 
+ DROP TABLE t1;
+ 
+@@ -2044,6 +2074,44 @@ DROP PREPARE stmt;
+ DROP TABLE t;
+ set sql_mode=default;
+ 
++# requires multi-valued index
++if (!$missing_features)
++{
++# Test for a memory leak when using a dedicated MEM_ROOT (snippet from json.array_index)
++
++create table t1 (f1 json, id varchar(255) as (f1->"$[0]") stored not null primary key );
++create index i1 on t1((cast(f1->"$[*]" as unsigned array)));
++insert into t1(f1) values
++  (cast('[1,3]' as json)), (cast(2 as json)), (cast('[3,3,4,4,7]' as json)),
++  (cast(4 as json)), (cast('[100,5,7]' as json)), (cast(6 as json)),
++  (cast(7 as json)), (cast('[8,4,3,5]' as json)), (cast('[5,6,7]' as json)),
++  (cast('[9,2,7]' as json));
++
++prepare s from "select * from t1 force index(i1)
++  where json_overlaps(f1->'$[*]', '[4,3,7]') order by id";
++
++execute s;
++
++# There is JSON data remaining in memory: in the open table and in the cached plan.
++
++SELECT COUNT(*) FROM performance_schema.memory_summary_by_thread_by_event_name
++WHERE thread_id=@thread_id AND
++      event_name = 'memory/sql/JSON' AND
++      (count_alloc <> count_free OR
++       sum_number_of_bytes_alloc <> sum_number_of_bytes_free);
++
++drop prepare s; # this frees the cached plan
++
++drop table t1; # and this frees the open table
++
++# Now there should be no more JSON in memory for this thread:
++SELECT COUNT(*) FROM performance_schema.memory_summary_by_thread_by_event_name
++WHERE thread_id=@thread_id AND
++      event_name = 'memory/sql/JSON' AND
++      (count_alloc <> count_free OR
++       sum_number_of_bytes_alloc <> sum_number_of_bytes_free);
++}
++
+ SET optimizer_switch=default;
+ set rds_plan_cache = @old_plan_cache;
+ set global dstore_use_histogram_auto_update=default;
+diff --git a/mysql-test/r/mysqld--help-notwin.result b/mysql-test/r/mysqld--help-notwin.result
+index 9ad421d3099..320201aedd5 100644
+--- a/mysql-test/r/mysqld--help-notwin.result
++++ b/mysql-test/r/mysqld--help-notwin.result
+@@ -2573,7 +2573,7 @@ performance-schema-max-file-classes 80
+ performance-schema-max-file-handles 32768
+ performance-schema-max-file-instances -1
+ performance-schema-max-index-stat -1
+-performance-schema-max-memory-classes 450
++performance-schema-max-memory-classes 454
+ performance-schema-max-metadata-locks -1
+ performance-schema-max-mutex-classes 350
+ performance-schema-max-mutex-instances -1
+diff --git a/mysql-test/r/session_plan_cache.result b/mysql-test/r/session_plan_cache.result
+index b1c39cd9e3f..3050cfa2822 100644
+--- a/mysql-test/r/session_plan_cache.result
++++ b/mysql-test/r/session_plan_cache.result
+@@ -2746,75 +2746,108 @@ ANALYZE TABLE t1;
+ Table	Op	Msg_type	Msg_text
+ test.t1	analyze	status	OK
+ flush status;
+-PREPARE s FROM "SELECT a, MAX(b) FROM t1 WHERE a = 1 AND b <= 1999.5 GROUP BY a";
+-EXECUTE s;
+-a	MAX(b)
+-1	1001
+-EXECUTE s;
+-a	MAX(b)
+-1	1001
++select (@thread_id:=thread_id)*0 from performance_schema.threads where processlist_id=connection_id();
++(@thread_id:=thread_id)*0
++0
++Warnings:
++Warning	1287	Setting user variables within expressions is deprecated and will be removed in a future release. Consider alternatives: 'SET variable=expression, ...', or 'SELECT expression(s) INTO variables(s)'.
+ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
+-Cached_plan_invalidations	16
+-show session status like "Com_stmt_reprepare";
+-Variable_name	Value
+-Com_stmt_reprepare	0
+-EXECUTE s;
+-a	MAX(b)
+-1	1001
+-show session status like "Com_stmt_reprepare";
+-Variable_name	Value
+-Com_stmt_reprepare	0
+-EXECUTE s;
+-a	MAX(b)
+-1	1001
+-show session status like "Com_stmt_reprepare";
+-Variable_name	Value
+-Com_stmt_reprepare	0
+-EXECUTE s;
+-a	MAX(b)
+-1	1001
+-show session status like "Com_stmt_reprepare";
+-Variable_name	Value
+-Com_stmt_reprepare	0
+-EXECUTE s;
+-a	MAX(b)
+-1	1001
+-show session status like "Com_stmt_reprepare";
++Cached_plan_invalidations	15
++PREPARE s FROM "SELECT a, MAX(b) FROM t1 WHERE a = 1 AND b <= 1999.5 GROUP BY a";
++show session status like "cached_plan%";
+ Variable_name	Value
+-Com_stmt_reprepare	1
++Cached_plan_count	0
++Cached_plan_hits	0
++Cached_plan_invalidations	15
++select count_alloc=count_free,
++current_number_of_bytes_used=0
++from performance_schema.memory_summary_by_thread_by_event_name
++where event_name="memory/sql/plan_cache_mem_root" and thread_id=@thread_id;
++count_alloc=count_free	current_number_of_bytes_used=0
++1	1
+ EXECUTE s;
+ a	MAX(b)
+ 1	1001
+-show session status like "Com_stmt_reprepare";
++show session status like "cached_plan%";
+ Variable_name	Value
+-Com_stmt_reprepare	1
++Cached_plan_count	1
++Cached_plan_hits	0
++Cached_plan_invalidations	15
++select (@delta_alloc:=(count_alloc-count_free))*0,
++(@bytes:=current_number_of_bytes_used)*0
++from performance_schema.memory_summary_by_thread_by_event_name
++where event_name="memory/sql/plan_cache_mem_root" and thread_id=@thread_id;
++(@delta_alloc:=(count_alloc-count_free))*0	(@bytes:=current_number_of_bytes_used)*0
++0	0
++Warnings:
++Warning	1287	Setting user variables within expressions is deprecated and will be removed in a future release. Consider alternatives: 'SET variable=expression, ...', or 'SELECT expression(s) INTO variables(s)'.
++Warning	1287	Setting user variables within expressions is deprecated and will be removed in a future release. Consider alternatives: 'SET variable=expression, ...', or 'SELECT expression(s) INTO variables(s)'.
++select @delta_alloc>0, @bytes>0;
++@delta_alloc>0	@bytes>0
++1	1
+ EXECUTE s;
+ a	MAX(b)
+ 1	1001
+-show session status like "Com_stmt_reprepare";
++select (@delta_alloc:=(count_alloc-count_free))*0,
++(@bytes:=current_number_of_bytes_used)*0
++from performance_schema.memory_summary_by_thread_by_event_name
++where event_name="memory/sql/plan_cache_mem_root" and thread_id=@thread_id;
++(@delta_alloc:=(count_alloc-count_free))*0	(@bytes:=current_number_of_bytes_used)*0
++0	0
++Warnings:
++Warning	1287	Setting user variables within expressions is deprecated and will be removed in a future release. Consider alternatives: 'SET variable=expression, ...', or 'SELECT expression(s) INTO variables(s)'.
++Warning	1287	Setting user variables within expressions is deprecated and will be removed in a future release. Consider alternatives: 'SET variable=expression, ...', or 'SELECT expression(s) INTO variables(s)'.
++select @delta_alloc>0, @bytes>0;
++@delta_alloc>0	@bytes>0
++1	1
++show session status like "cached_plan%";
+ Variable_name	Value
+-Com_stmt_reprepare	1
++Cached_plan_count	1
++Cached_plan_hits	0
++Cached_plan_invalidations	16
+ EXECUTE s;
+ a	MAX(b)
+ 1	1001
+-show session status like "Com_stmt_reprepare";
++select @delta_alloc=(count_alloc-count_free),
++@bytes=current_number_of_bytes_used
++from performance_schema.memory_summary_by_thread_by_event_name
++where event_name="memory/sql/plan_cache_mem_root" and thread_id=@thread_id;
++@delta_alloc=(count_alloc-count_free)	@bytes=current_number_of_bytes_used
++1	1
++show session status like "cached_plan%";
+ Variable_name	Value
+-Com_stmt_reprepare	1
++Cached_plan_count	1
++Cached_plan_hits	0
++Cached_plan_invalidations	17
+ EXECUTE s;
+ a	MAX(b)
+ 1	1001
+-show session status like "Com_stmt_reprepare";
++select @delta_alloc=(count_alloc-count_free),
++@bytes=current_number_of_bytes_used
++from performance_schema.memory_summary_by_thread_by_event_name
++where event_name="memory/sql/plan_cache_mem_root" and thread_id=@thread_id;
++@delta_alloc=(count_alloc-count_free)	@bytes=current_number_of_bytes_used
++1	1
++show session status like "cached_plan%";
+ Variable_name	Value
+-Com_stmt_reprepare	1
+-EXECUTE s;
+-a	MAX(b)
+-1	1001
+-show session status like "Com_stmt_reprepare";
++Cached_plan_count	1
++Cached_plan_hits	0
++Cached_plan_invalidations	18
++DROP PREPARE s;
++select count_alloc=count_free,
++current_number_of_bytes_used=0
++from performance_schema.memory_summary_by_thread_by_event_name
++where event_name="memory/sql/plan_cache_mem_root" and thread_id=@thread_id;
++count_alloc=count_free	current_number_of_bytes_used=0
++1	1
++show session status like "cached_plan%";
+ Variable_name	Value
+-Com_stmt_reprepare	2
++Cached_plan_count	0
++Cached_plan_hits	0
++Cached_plan_invalidations	18
+ DROP TABLE t1;
+ CREATE TABLE t1 (colA TINYINT UNSIGNED );
+ INSERT INTO t1 VALUES (0), (1),
+@@ -2848,7 +2881,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
+-Cached_plan_invalidations	25
++Cached_plan_invalidations	18
+ DROP TABLE t1;
+ CREATE TABLE t1(u TINYINT UNSIGNED);
+ INSERT INTO t1 VALUES (0), (3), (255), (NULL);
+@@ -2868,7 +2901,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
+-Cached_plan_invalidations	25
++Cached_plan_invalidations	18
+ DROP TABLE t1;
+ CREATE TABLE t1(i TINYINT);
+ INSERT INTO t1 VALUES (10),(100),(1),(0),(NULL);
+@@ -2886,7 +2919,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
+-Cached_plan_invalidations	25
++Cached_plan_invalidations	18
+ DROP TABLE t1;
+ DROP PREPARE s;
+ CREATE USER test@localhost;
+@@ -2909,7 +2942,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
+-Cached_plan_invalidations	25
++Cached_plan_invalidations	18
+ COMMIT;
+ EXECUTE s;
+ a
+@@ -2922,7 +2955,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	3
+-Cached_plan_invalidations	25
++Cached_plan_invalidations	18
+ SELECT * FROM t1 WHERE a = 2 FOR UPDATE NOWAIT;
+ ERROR HY000: Statement aborted because lock(s) could not be acquired immediately and NOWAIT is set.
+ DROP TABLE t1;
+@@ -2962,7 +2995,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	6
+-Cached_plan_invalidations	25
++Cached_plan_invalidations	18
+ drop prepare s;
+ drop table t1;
+ #
+@@ -3249,7 +3282,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	10
+-Cached_plan_invalidations	25
++Cached_plan_invalidations	18
+ DROP PREPARE stmt1;
+ set @sql_text1='select sex,create_time,id,avg(id) over (order by create_time ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) as moving_avg_id from t_general_test_pk t order by sex,create_time;';
+ PREPARE stmt1 FROM @sql_text1;
+@@ -3479,7 +3512,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	12
+-Cached_plan_invalidations	25
++Cached_plan_invalidations	18
+ DROP PREPARE stmt1;
+ DROP TABLE t_general_test_pk;
+ #
+@@ -3563,7 +3596,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	4
+ Cached_plan_hits	20
+-Cached_plan_invalidations	25
++Cached_plan_invalidations	18
+ DROP PREPARE stmt1;
+ DROP TABLE t_general_test;
+ # Second problem in BUGFIX ('reverse' property of index access was lost)
+@@ -3603,7 +3636,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	22
+-Cached_plan_invalidations	25
++Cached_plan_invalidations	18
+ DROP PREPARE stmt;
+ DROP TABLE tbl_1_all_type2index_desc;
+ #
+@@ -3692,7 +3725,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	22
+-Cached_plan_invalidations	26
++Cached_plan_invalidations	19
+ DROP TABLE tbl_1_all_type2index_desc;
+ #
+ # BUGFIX while executing a prepared query including "order by int, tinytext", the second time using cached plan, mysqld will coredump.
+@@ -3729,7 +3762,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	25
+-Cached_plan_invalidations	26
++Cached_plan_invalidations	19
+ DEALLOCATE PREPARE stmt0;
+ DROP TABLE tbtest_part;
+ #
+@@ -3770,7 +3803,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	3
+-Cached_plan_invalidations	26
++Cached_plan_invalidations	19
+ DEALLOCATE PREPARE stmt0;
+ DROP TABLE tbtest_part;
+ #
+@@ -3815,7 +3848,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
+-Cached_plan_invalidations	26
++Cached_plan_invalidations	19
+ set @enum_col0='i';
+ set @blob_col1='iii2';
+ set @bool_col2='NULL';
+@@ -3829,7 +3862,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
+-Cached_plan_invalidations	26
++Cached_plan_invalidations	19
+ set @enum_col0='NULL';
+ set @blob_col1='a';
+ set @bool_col2='1901';
+@@ -3839,7 +3872,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
+-Cached_plan_invalidations	27
++Cached_plan_invalidations	20
+ set @enum_col0='iii2';
+ set @blob_col1='a';
+ set @bool_col2='2020';
+@@ -3849,7 +3882,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
+-Cached_plan_invalidations	27
++Cached_plan_invalidations	20
+ set @enum_col0='i';
+ set @blob_col1='iii2';
+ set @bool_col2='NULL';
+@@ -3863,7 +3896,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
+-Cached_plan_invalidations	27
++Cached_plan_invalidations	20
+ set @enum_col0='NULL';
+ set @blob_col1='a';
+ set @bool_col2='1901';
+@@ -3873,7 +3906,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
+-Cached_plan_invalidations	28
++Cached_plan_invalidations	21
+ drop prepare stmt;
+ drop table tbl_1_all_type2index_desc,tbl_3_all_typeindex_desc,tbl_1_all_typeindex_desc;
+ # BUGFIX [plan_cache][wrong result] after enable plan_cache, a query including a where subclause like "tinyblob_col IS NOT UNKNOWN AND int_col NOT BETWEEN ? AND ?" return the result set with wrong sort
+@@ -3943,7 +3976,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
+-Cached_plan_invalidations	28
++Cached_plan_invalidations	21
+ DROP PREPARE stmt;
+ DROP TABLE t;
+ # BUGFIX after enable plan_cache, In the scenario where subqueries are nested and subqueries of the year type are queried, for debug pkg: mysqld will crash; for release pkg:the result is incorrect when the plan_cache feature is used for the second time.
+@@ -3970,10 +4003,43 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	3
+-Cached_plan_invalidations	28
++Cached_plan_invalidations	21
+ DROP PREPARE stmt;
+ DROP TABLE t;
+ set sql_mode=default;
++create table t1 (f1 json, id varchar(255) as (f1->"$[0]") stored not null primary key );
++create index i1 on t1((cast(f1->"$[*]" as unsigned array)));
++insert into t1(f1) values
++(cast('[1,3]' as json)), (cast(2 as json)), (cast('[3,3,4,4,7]' as json)),
++(cast(4 as json)), (cast('[100,5,7]' as json)), (cast(6 as json)),
++(cast(7 as json)), (cast('[8,4,3,5]' as json)), (cast('[5,6,7]' as json)),
++(cast('[9,2,7]' as json));
++prepare s from "select * from t1 force index(i1)
++  where json_overlaps(f1->'$[*]', '[4,3,7]') order by id";
++execute s;
++f1	id
++[1, 3]	1
++[100, 5, 7]	100
++[3, 3, 4, 4, 7]	3
++[5, 6, 7]	5
++[8, 4, 3, 5]	8
++[9, 2, 7]	9
++SELECT COUNT(*) FROM performance_schema.memory_summary_by_thread_by_event_name
++WHERE thread_id=@thread_id AND
++event_name = 'memory/sql/JSON' AND
++(count_alloc <> count_free OR
++sum_number_of_bytes_alloc <> sum_number_of_bytes_free);
++COUNT(*)
++1
++drop prepare s;
++drop table t1;
++SELECT COUNT(*) FROM performance_schema.memory_summary_by_thread_by_event_name
++WHERE thread_id=@thread_id AND
++event_name = 'memory/sql/JSON' AND
++(count_alloc <> count_free OR
++sum_number_of_bytes_alloc <> sum_number_of_bytes_free);
++COUNT(*)
++0
+ SET optimizer_switch=default;
+ set rds_plan_cache = @old_plan_cache;
+ set global dstore_use_histogram_auto_update=default;
+diff --git a/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result b/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
+index 9ad421d3099..320201aedd5 100644
+--- a/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
++++ b/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
+@@ -2573,7 +2573,7 @@ performance-schema-max-file-classes 80
+ performance-schema-max-file-handles 32768
+ performance-schema-max-file-instances -1
+ performance-schema-max-index-stat -1
+-performance-schema-max-memory-classes 450
++performance-schema-max-memory-classes 454
+ performance-schema-max-metadata-locks -1
+ performance-schema-max-mutex-classes 350
+ performance-schema-max-mutex-instances -1
+diff --git a/mysql-test/suite/dstore_main/r/session_plan_cache.result b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+index 415bd1d224c..5685f74f87c 100644
+--- a/mysql-test/suite/dstore_main/r/session_plan_cache.result
++++ b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+@@ -2608,75 +2608,108 @@ ANALYZE TABLE t1;
+ Table	Op	Msg_type	Msg_text
+ test.t1	analyze	status	OK
+ flush status;
+-PREPARE s FROM "SELECT a, MAX(b) FROM t1 WHERE a = 1 AND b <= 1999.5 GROUP BY a";
+-EXECUTE s;
+-a	MAX(b)
+-1	1001
+-EXECUTE s;
+-a	MAX(b)
+-1	1001
++select (@thread_id:=thread_id)*0 from performance_schema.threads where processlist_id=connection_id();
++(@thread_id:=thread_id)*0
++0
++Warnings:
++Warning	1287	Setting user variables within expressions is deprecated and will be removed in a future release. Consider alternatives: 'SET variable=expression, ...', or 'SELECT expression(s) INTO variables(s)'.
+ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
+-Cached_plan_invalidations	14
+-show session status like "Com_stmt_reprepare";
+-Variable_name	Value
+-Com_stmt_reprepare	0
+-EXECUTE s;
+-a	MAX(b)
+-1	1001
+-show session status like "Com_stmt_reprepare";
+-Variable_name	Value
+-Com_stmt_reprepare	0
+-EXECUTE s;
+-a	MAX(b)
+-1	1001
+-show session status like "Com_stmt_reprepare";
+-Variable_name	Value
+-Com_stmt_reprepare	0
+-EXECUTE s;
+-a	MAX(b)
+-1	1001
+-show session status like "Com_stmt_reprepare";
+-Variable_name	Value
+-Com_stmt_reprepare	0
+-EXECUTE s;
+-a	MAX(b)
+-1	1001
+-show session status like "Com_stmt_reprepare";
++Cached_plan_invalidations	13
++PREPARE s FROM "SELECT a, MAX(b) FROM t1 WHERE a = 1 AND b <= 1999.5 GROUP BY a";
++show session status like "cached_plan%";
+ Variable_name	Value
+-Com_stmt_reprepare	1
++Cached_plan_count	0
++Cached_plan_hits	0
++Cached_plan_invalidations	13
++select count_alloc=count_free,
++current_number_of_bytes_used=0
++from performance_schema.memory_summary_by_thread_by_event_name
++where event_name="memory/sql/plan_cache_mem_root" and thread_id=@thread_id;
++count_alloc=count_free	current_number_of_bytes_used=0
++1	1
+ EXECUTE s;
+ a	MAX(b)
+ 1	1001
+-show session status like "Com_stmt_reprepare";
++show session status like "cached_plan%";
+ Variable_name	Value
+-Com_stmt_reprepare	1
++Cached_plan_count	1
++Cached_plan_hits	0
++Cached_plan_invalidations	13
++select (@delta_alloc:=(count_alloc-count_free))*0,
++(@bytes:=current_number_of_bytes_used)*0
++from performance_schema.memory_summary_by_thread_by_event_name
++where event_name="memory/sql/plan_cache_mem_root" and thread_id=@thread_id;
++(@delta_alloc:=(count_alloc-count_free))*0	(@bytes:=current_number_of_bytes_used)*0
++0	0
++Warnings:
++Warning	1287	Setting user variables within expressions is deprecated and will be removed in a future release. Consider alternatives: 'SET variable=expression, ...', or 'SELECT expression(s) INTO variables(s)'.
++Warning	1287	Setting user variables within expressions is deprecated and will be removed in a future release. Consider alternatives: 'SET variable=expression, ...', or 'SELECT expression(s) INTO variables(s)'.
++select @delta_alloc>0, @bytes>0;
++@delta_alloc>0	@bytes>0
++1	1
+ EXECUTE s;
+ a	MAX(b)
+ 1	1001
+-show session status like "Com_stmt_reprepare";
++select (@delta_alloc:=(count_alloc-count_free))*0,
++(@bytes:=current_number_of_bytes_used)*0
++from performance_schema.memory_summary_by_thread_by_event_name
++where event_name="memory/sql/plan_cache_mem_root" and thread_id=@thread_id;
++(@delta_alloc:=(count_alloc-count_free))*0	(@bytes:=current_number_of_bytes_used)*0
++0	0
++Warnings:
++Warning	1287	Setting user variables within expressions is deprecated and will be removed in a future release. Consider alternatives: 'SET variable=expression, ...', or 'SELECT expression(s) INTO variables(s)'.
++Warning	1287	Setting user variables within expressions is deprecated and will be removed in a future release. Consider alternatives: 'SET variable=expression, ...', or 'SELECT expression(s) INTO variables(s)'.
++select @delta_alloc>0, @bytes>0;
++@delta_alloc>0	@bytes>0
++1	1
++show session status like "cached_plan%";
+ Variable_name	Value
+-Com_stmt_reprepare	1
++Cached_plan_count	1
++Cached_plan_hits	0
++Cached_plan_invalidations	14
+ EXECUTE s;
+ a	MAX(b)
+ 1	1001
+-show session status like "Com_stmt_reprepare";
++select @delta_alloc=(count_alloc-count_free),
++@bytes=current_number_of_bytes_used
++from performance_schema.memory_summary_by_thread_by_event_name
++where event_name="memory/sql/plan_cache_mem_root" and thread_id=@thread_id;
++@delta_alloc=(count_alloc-count_free)	@bytes=current_number_of_bytes_used
++1	1
++show session status like "cached_plan%";
+ Variable_name	Value
+-Com_stmt_reprepare	1
++Cached_plan_count	1
++Cached_plan_hits	0
++Cached_plan_invalidations	15
+ EXECUTE s;
+ a	MAX(b)
+ 1	1001
+-show session status like "Com_stmt_reprepare";
++select @delta_alloc=(count_alloc-count_free),
++@bytes=current_number_of_bytes_used
++from performance_schema.memory_summary_by_thread_by_event_name
++where event_name="memory/sql/plan_cache_mem_root" and thread_id=@thread_id;
++@delta_alloc=(count_alloc-count_free)	@bytes=current_number_of_bytes_used
++1	1
++show session status like "cached_plan%";
+ Variable_name	Value
+-Com_stmt_reprepare	1
+-EXECUTE s;
+-a	MAX(b)
+-1	1001
+-show session status like "Com_stmt_reprepare";
++Cached_plan_count	1
++Cached_plan_hits	0
++Cached_plan_invalidations	16
++DROP PREPARE s;
++select count_alloc=count_free,
++current_number_of_bytes_used=0
++from performance_schema.memory_summary_by_thread_by_event_name
++where event_name="memory/sql/plan_cache_mem_root" and thread_id=@thread_id;
++count_alloc=count_free	current_number_of_bytes_used=0
++1	1
++show session status like "cached_plan%";
+ Variable_name	Value
+-Com_stmt_reprepare	2
++Cached_plan_count	0
++Cached_plan_hits	0
++Cached_plan_invalidations	16
+ DROP TABLE t1;
+ CREATE TABLE t1 (colA TINYINT UNSIGNED );
+ INSERT INTO t1 VALUES (0), (1),
+@@ -2710,7 +2743,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
+-Cached_plan_invalidations	23
++Cached_plan_invalidations	16
+ DROP TABLE t1;
+ CREATE TABLE t1(u TINYINT UNSIGNED);
+ INSERT INTO t1 VALUES (0), (3), (255), (NULL);
+@@ -2730,7 +2763,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
+-Cached_plan_invalidations	23
++Cached_plan_invalidations	16
+ DROP TABLE t1;
+ CREATE TABLE t1(i TINYINT);
+ INSERT INTO t1 VALUES (10),(100),(1),(0),(NULL);
+@@ -2748,7 +2781,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
+-Cached_plan_invalidations	23
++Cached_plan_invalidations	16
+ DROP TABLE t1;
+ DROP PREPARE s;
+ create table t1(a int, b int, c int, d int, e int, key(a,b,c,d DESC));
+@@ -2785,7 +2818,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	6
+-Cached_plan_invalidations	23
++Cached_plan_invalidations	16
+ drop prepare s;
+ drop table t1;
+ #
+@@ -3072,7 +3105,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	10
+-Cached_plan_invalidations	23
++Cached_plan_invalidations	16
+ DROP PREPARE stmt1;
+ set @sql_text1='select sex,create_time,id,avg(id) over (order by create_time ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) as moving_avg_id from t_general_test_pk t order by sex,create_time;';
+ PREPARE stmt1 FROM @sql_text1;
+@@ -3302,7 +3335,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	12
+-Cached_plan_invalidations	23
++Cached_plan_invalidations	16
+ DROP PREPARE stmt1;
+ DROP TABLE t_general_test_pk;
+ #
+@@ -3386,7 +3419,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	4
+ Cached_plan_hits	20
+-Cached_plan_invalidations	23
++Cached_plan_invalidations	16
+ DROP PREPARE stmt1;
+ DROP TABLE t_general_test;
+ # Second problem in BUGFIX ('reverse' property of index access was lost)
+@@ -3426,7 +3459,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	22
+-Cached_plan_invalidations	23
++Cached_plan_invalidations	16
+ DROP PREPARE stmt;
+ DROP TABLE tbl_1_all_type2index_desc;
+ #
+@@ -3561,7 +3594,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	22
+-Cached_plan_invalidations	25
++Cached_plan_invalidations	18
+ DROP TABLE tbl_1_all_type2index_desc;
+ #
+ # BUGFIX while executing a prepared query including "order by int, tinytext", the second time using cached plan, mysqld will coredump.
+@@ -3598,7 +3631,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	25
+-Cached_plan_invalidations	25
++Cached_plan_invalidations	18
+ DEALLOCATE PREPARE stmt0;
+ DROP TABLE tbtest_part;
+ #
+@@ -3639,7 +3672,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	3
+-Cached_plan_invalidations	25
++Cached_plan_invalidations	18
+ DEALLOCATE PREPARE stmt0;
+ DROP TABLE tbtest_part;
+ #
+@@ -3684,7 +3717,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
+-Cached_plan_invalidations	25
++Cached_plan_invalidations	18
+ set @enum_col0='i';
+ set @blob_col1='iii2';
+ set @bool_col2='NULL';
+@@ -3698,7 +3731,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
+-Cached_plan_invalidations	25
++Cached_plan_invalidations	18
+ set @enum_col0='NULL';
+ set @blob_col1='a';
+ set @bool_col2='1901';
+@@ -3708,7 +3741,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
+-Cached_plan_invalidations	26
++Cached_plan_invalidations	19
+ set @enum_col0='iii2';
+ set @blob_col1='a';
+ set @bool_col2='2020';
+@@ -3718,7 +3751,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
+-Cached_plan_invalidations	26
++Cached_plan_invalidations	19
+ set @enum_col0='i';
+ set @blob_col1='iii2';
+ set @bool_col2='NULL';
+@@ -3732,7 +3765,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
+-Cached_plan_invalidations	26
++Cached_plan_invalidations	19
+ set @enum_col0='NULL';
+ set @blob_col1='a';
+ set @bool_col2='1901';
+@@ -3742,7 +3775,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
+-Cached_plan_invalidations	27
++Cached_plan_invalidations	20
+ drop prepare stmt;
+ drop table tbl_1_all_type2index_desc,tbl_3_all_typeindex_desc,tbl_1_all_typeindex_desc;
+ # BUGFIX [plan_cache][wrong result] after enable plan_cache, a query including a where subclause like "tinyblob_col IS NOT UNKNOWN AND int_col NOT BETWEEN ? AND ?" return the result set with wrong sort
+@@ -3812,7 +3845,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
+-Cached_plan_invalidations	27
++Cached_plan_invalidations	20
+ DROP PREPARE stmt;
+ DROP TABLE t;
+ # BUGFIX after enable plan_cache, In the scenario where subqueries are nested and subqueries of the year type are queried, for debug pkg: mysqld will crash; for release pkg:the result is incorrect when the plan_cache feature is used for the second time.
+@@ -3839,7 +3872,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	3
+-Cached_plan_invalidations	27
++Cached_plan_invalidations	20
+ DROP PREPARE stmt;
+ DROP TABLE t;
+ set sql_mode=default;
+diff --git a/mysql-test/suite/perfschema/r/memory_key_descriptions.result b/mysql-test/suite/perfschema/r/memory_key_descriptions.result
+index 4c14be5c7ca..662580080f0 100644
+--- a/mysql-test/suite/perfschema/r/memory_key_descriptions.result
++++ b/mysql-test/suite/perfschema/r/memory_key_descriptions.result
+@@ -35,6 +35,7 @@ memory/sql/Partition::syntax_buffer	Buffer used for formatting the partition exp
+ memory/sql/Persisted_variables::memroot	Memory allocated to process persisted variables during server start-up and plugin/component initialization.
+ memory/sql/Persisted_variables::unordered_map	Memory allocated for in-memory maps for persisted variables
+ memory/sql/Persisted_variables::unordered_set	Memory allocated for in-memory sets for persisted variables
++memory/sql/plan_cache_mem_root	Memory allocated for caching optimizer's plans
+ memory/sql/Prepared_statement::infrastructure	Map infrastructure for prepared statements per session.
+ memory/sql/Prepared_statement::main_mem_root	Mem root for each prepared statement for items etc.
+ memory/sql/rm_db::mdl_reqs_root	Mem root for allocating MDL requests while dropping datbase.
+diff --git a/mysql-test/suite/perfschema/t/memory_key_descriptions.test b/mysql-test/suite/perfschema/t/memory_key_descriptions.test
+index 03afea03e70..eae8280090b 100644
+--- a/mysql-test/suite/perfschema/t/memory_key_descriptions.test
++++ b/mysql-test/suite/perfschema/t/memory_key_descriptions.test
+@@ -8,6 +8,6 @@ let $query_clause = FROM performance_schema.setup_instruments
+ eval SELECT NAME, DOCUMENTATION $query_clause;
+ eval SET @rows = (SELECT COUNT(NAME) $query_clause);
+ 
+-let $assert_cond = @rows = 60;
++let $assert_cond = @rows = 61;
+ let $assert_text = The number of documented P_S memory keys in the SQL category is as expected.;
+ source include/assert.inc;
+diff --git a/sql/psi_memory_key.cc b/sql/psi_memory_key.cc
+index 932abdcf79e..e99f4715246 100644
+--- a/sql/psi_memory_key.cc
++++ b/sql/psi_memory_key.cc
+@@ -147,6 +147,7 @@ PSI_memory_key key_memory_user_var_entry_value;
+ PSI_memory_key key_memory_sp_cache;
+ PSI_memory_key key_memory_write_set_extraction;
+ PSI_memory_key key_memory_ptrc_mem_root;
++PSI_memory_key key_memory_plan_cache_mem_root;
+ 
+ PSI_memory_key key_memory_thread_pool_connection;
+ PSI_memory_key key_memory_restricted_dynamic_privileges_list;
+@@ -397,6 +398,8 @@ static PSI_memory_info all_server_memory[] = {
+      PSI_DOCUMENT_ME},
+     {&key_memory_ptrc_mem_root, "partial_result_cache_mem_root", 0, 0,
+      PSI_DOCUMENT_ME},
++    {&key_memory_plan_cache_mem_root, "plan_cache_mem_root", 0, 0,
++     "Memory allocated for caching optimizer's plans"},
+     {&key_memory_restricted_dynamic_privileges_list,
+      "restricted_dynamic_privileges_list", 0, 0, PSI_DOCUMENT_ME},
+     {&key_memory_Sql_filter, "Sql_filter", 0, 0, PSI_DOCUMENT_ME}};
+diff --git a/sql/psi_memory_key.h b/sql/psi_memory_key.h
+index 0d8a9a1dfa0..48881abe837 100644
+--- a/sql/psi_memory_key.h
++++ b/sql/psi_memory_key.h
+@@ -174,6 +174,7 @@ extern PSI_memory_key key_memory_sp_cache;
+ extern PSI_memory_key key_memory_write_set_extraction;
+ extern PSI_memory_key key_memory_thread_pool_connection;
+ extern PSI_memory_key key_memory_ptrc_mem_root;
++extern PSI_memory_key key_memory_plan_cache_mem_root;
+ extern PSI_memory_key key_memory_restricted_dynamic_privileges_list;
+ 
+ #endif  // PSI_MEMORY_KEY_INCLUDED
+diff --git a/sql/sql_lex.h b/sql/sql_lex.h
+index 9d1625e1125..8e535855ed3 100644
+--- a/sql/sql_lex.h
++++ b/sql/sql_lex.h
+@@ -2184,10 +2184,6 @@ class Query_block : public Query_term {
+   plan_cache::plan_cache_state plan_cache_state{
+       plan_cache::plan_cache_state::NONE};
+ 
+-  /// PLAN_CACHE_PORT added in the new implementation: count of many times this
+-  /// Query block had an invalidation of cached plan.
+-  uint8 plan_cache_invalidations{0};
+-
+  private:
+   friend class Query_expression;
+   friend class Condition_context;
+diff --git a/sql/sql_plan_cache.cc b/sql/sql_plan_cache.cc
+index 5044aace75c..522979ce646 100644
+--- a/sql/sql_plan_cache.cc
++++ b/sql/sql_plan_cache.cc
+@@ -182,17 +182,24 @@ static_assert(false, "you should not enable this, code is not functional");
+ 
+   New features in the porting:
+ 
+-  - after PLAN_CACHE_MAX_INVALIDATIONS invalidations, we ask for silent
+-  repreparation of the prepared statement, to stop memory growth in the
+-  permanent MEM_ROOT (that was an old problem).
++  - the cached plan is allocated in a dedicated MEM_ROOT, to stop memory
++  growth in the permanent MEM_ROOT (that was an old problem).
++
++  - When caching a plan (cache_plan()) we do not allocate and open a
++  TABLE_LIST anymore; this object was not much used (probably it was there
++  because PQ functions needed it?), f.ex. when the plan was later used the
++  JOIN's tables_list was (of course) re-pointed to the instance used by _that_
++  execution. And it was using memory, also in the engine (as we did
++  open_table()); it caused most of the memory usage of plan cache in simple
++  queries.
++
++  - We added a count of plan cache invalidations in SHOW GLOBAL STATUS.
+ 
+   - subqueries are supported, in a very restricted scenario (which covers what
+   is used in TPC-C): it has to be a non-correlated scalar subquery, plus some
+   other restrictions.
+ */
+ 
+-constexpr int PLAN_CACHE_MAX_INVALIDATIONS = 5;
+-
+ // PLAN_CACHE_PORT In order to help the reviewer (diminish the number of "noisy
+ // changes"), I didn't replace SELECT_LEX with Query_block everywhere, instead I
+ // kept the original code and added a substitution:
+@@ -1493,10 +1500,8 @@ void set_uncacheable(SELECT_LEX *sl) {
+   // This state is final. After that, 'sl' will never do plan caching.
+ }
+ 
+-/// Throws away an already cached plan. If too many invalidations, and a THD
+-/// is provided, ask for repreparation of the statement, in order to stop
+-/// memory growth in the permanent MEM_ROOT.
+-void invalidate_cached_plan(THD *thd, SELECT_LEX *select) {
++/// Throws away an already cached plan.
++void invalidate_cached_plan(SELECT_LEX *select) {
+   JOIN *plan = select->cached_plan;
+   if (!plan) return;
+ 
+@@ -1530,17 +1535,46 @@ void invalidate_cached_plan(THD *thd, SELECT_LEX *select) {
+   // failures.
+ 
+   if (!plan->is_cached_plan_hit()) plan->destroy();
+-  ::destroy(plan);  // Note: this is a call to ~JOIN(), not to JOIN::destroy()
++  destroy_cached_plan(plan);
+   select->cached_plan = nullptr;
+   select->plan_cache_state = plan_cache_state::NONE;
+-  if (++select->plan_cache_invalidations >= PLAN_CACHE_MAX_INVALIDATIONS &&
+-      thd != nullptr) {
+-    ask_to_reprepare(thd);
+-  }
+-  cached_plan_count--;
+   cached_plan_invalidations++;
+ }
+ 
++void destroy_cached_plan(JOIN *join) {
++  cached_plan_count--;
++  auto arena = (join->plan_cache_exec_context != nullptr)
++                   ? join->plan_cache_exec_context->arena
++                   : nullptr;
++  destroy(join);  // Note: this is a call to ~JOIN(), not to JOIN::destroy(),
++  // and it calls ~Exec_context() too. Which is why we saved
++  // Exec_context::arena first.
++  if (arena) {
++    cleanup_items(arena->item_list());
++    // This is necessary, or we may leak memory. F.ex. we cloned an Item_json
++    // and Item_json::clone_item() allocated a Json_dom on the heap (not on a
++    // MEM_ROOT ; look at all the calls to 'new' in json_dom.cc) ; this thing
++    // remains reachable only from Item_json. We must free it by calling the
++    // destructor of Item_json below.
++    arena->free_items();
++    // This is where memory allocated in a MEM_ROOT to hold the cached plan
++    // (Exec_context, JOIN, QEP_TAB, clones of Items...), is finally freed. We
++    // have to be cautious: the MEM_ROOT itself is allocated in its own
++    // buffers (see at the end of cache_plan(), the variable mem_root_heap),
++    // so if we destroy the MEM_ROOT it risks becoming unreadable by its
++    // own destructor. So we first move this MEM_ROOT to a stack object, which
++    // takes ownership of the buffers, and whose destructor is then implicitly
++    // called when it goes out of scope. This is the reverse operation
++    // (move-to-stack) of what was done at the end of cache_plan()
++    // (move-from-stack).
++    auto root(std::move(*arena->mem_root));
++    // Make sure the compiler moved it, not copied it.
++    assert(arena->mem_root->allocated_size() == 0 &&
++           root.allocated_size() != 0);
++    ::destroy(arena);
++  }
++}
++
+ bool is_ready(SELECT_LEX *sl) {
+   return sl->plan_cache_state == plan_cache_state::READY;
+ }
+@@ -1908,35 +1942,40 @@ bool cache_plan(JOIN *orig_join) {
+   sl->plan_cache_state = plan_cache_state::START;
+   DBUG_ASSERT(thd->stmt_arena);
+ 
+-  // Before switching to the permanent MEM_ROOT, save pointers to transient
+-  // items:
++  // Before switching to a new MEM_ROOT, save pointers to transient items:
+   auto transient_mem_root = thd->mem_root;
+   auto transient_item_list = thd->item_list();
+ 
+-  // We here switch to the statement's permanent mem_root. It makes sense, as
+-  // the other mem_root (the execution mem_root), will be freed at the end of
+-  // execution, and our cached plan (JOIN, Item-s etc) must survive longer.
+-  // However, there is a bad consequence: if we later invalidate this plan,
+-  // and then make a new cached plan, invalidate it, etc, we'll grow the
+-  // permanent mem_root indefinitely as we make new clones (yes this can
+-  // happen in real life, grep for GROUP_INDEX_SKIP_SCAN in
+-  // session_plan_cache.test). It can also be provoked at will, if you look at
+-  // is_environment_changed(): prepare, execute, change optimizer_switch flag
+-  // to "mrr=off", execute, change to "mrr=on", execute, repeat forever. This
+-  // problem is smaller in the new impl where we clone less, but it still
+-  // exists. To prevent this, in the new impl PLAN_CACHE_PORT we do this:
+-  // after a certain number of invalidations (see invalidate_cached_plan()),
+-  // we ask for silent repreparation of the prepared statement. This stops the
+-  // memory growth as it frees the current statement including its permanent
+-  // mem_root.
+-
+-  Prepared_stmt_arena_holder ps_arena_holder(thd);
++  // We here switch to a MEM_ROOT which is dedicated to plan cache. It makes
++  // sense, as the current MEM_ROOT (the execution MEM_ROOT), will be freed at
++  // the end of execution, and our cached plan (JOIN, Item-s etc) must survive
++  // longer. The original implementation instead used the statement's
++  // permanent MEM_ROOT (thd->stmt_arena->mem_root). But this had a bad
++  // consequence: if we later invalidated this plan, and then made a new
++  // cached plan, invalidated it, etc, we used to grow the permanent MEM_ROOT
++  // indefinitely as we made new clones (yes this can happen in real life,
++  // grep for GROUP_INDEX_SKIP_SCAN in session_plan_cache.test; it can also be
++  // provoked at will, if you look at is_environment_changed(): prepare,
++  // execute, change optimizer_switch flag to "mrr=off", execute, change to
++  // "mrr=on", execute, repeat forever).
++
++  MEM_ROOT mem_root{key_memory_plan_cache_mem_root, 1024};
++
++  // When a plan is invalidated, the MEM_ROOT above is freed, and so are any
++  // Items which were allocated into it. Therefore, these Items must not be
++  // left in the item_list() of some Query_arena which would outlive the plan.
++  // We thus have a dedicated arena too:
++  Query_arena arena(&mem_root, Query_arena::STMT_PREPARED), arena_backup;
++  // With this, all new Items created by the plan cache will be in the
++  // item_list() of 'arena', and thd->mem_root is updated.
++  thd->swap_query_arena(arena, &arena_backup);
+ 
+   Clone_plan_RAII cpr(thd);
+   JOIN *join_local = new (thd->mem_root) JOIN(thd, sl);
+ 
+   auto error_guard =
+-      create_scope_guard([&trace_plan_cache, orig_join, join_local, sl]() {
++      create_scope_guard([&trace_plan_cache, orig_join, join_local, sl, thd,
++                          &arena, &arena_backup]() {
+         trace_plan_cache.add("cached", false);
+         orig_join->select_lex->cached_plan = nullptr;
+         if (join_local) {
+@@ -1944,6 +1983,11 @@ bool cache_plan(JOIN *orig_join) {
+           ::destroy(join_local);
+         }
+         set_uncacheable(sl);
++        // return to the previous arena and destroy unneeded Items
++        thd->swap_query_arena(arena_backup, &arena);
++        cleanup_items(arena.item_list());
++        arena.free_items();
++        // MEM_ROOT is on stack, will be destroyed implicitly.
+       });
+ 
+   auto some_item_param_are_gone = [thd]() {
+@@ -2057,9 +2101,34 @@ bool cache_plan(JOIN *orig_join) {
+ 
+   if (join_local->alloc_func_list()) return true;
+ 
++  // Now we have to protect the plan's MEM_ROOT (an object on the stack) from
++  // being deleted when leaving the function. For that, we save (move) it to
++  // heap memory and keep a pointer in the Exec_context. And do the same for
++  // Query_arena.
++  auto root_storage = mem_root.Alloc(sizeof(MEM_ROOT));
++  if (root_storage == nullptr) return true;
++  auto arena_storage = mem_root.Alloc(sizeof(Query_arena));
++  if (arena_storage == nullptr) return true;
++
++  thd->swap_query_arena(arena_backup, &arena);
++  error_guard.release();
++  // From here, no call must fail until the function ends.
++  auto mem_root_heap = new (root_storage) MEM_ROOT(std::move(mem_root));
++  // Make sure the compiler moved it, not copied it.
++  assert(mem_root.allocated_size() == 0 &&
++         mem_root_heap->allocated_size() != 0);
++  // Query_arena has no move constructor so we do a swap.
++  auto arena_heap = new (arena_storage) Query_arena();
++  std::swap(arena, *arena_heap);
++  assert(arena.mem_root == nullptr && arena_heap->mem_root == &mem_root);
++  arena_heap->mem_root = mem_root_heap;
++  // Items which have just been created for this plan, are not going to be
++  // used in this execution, so we clean up them up, as is commonly done when
++  // an execution ends. They will be re-bound (to tables) with bind_fields().
++  cleanup_items(arena_heap->item_list());
++  join_local->plan_cache_exec_context->arena = arena_heap;
+   cached_plan_count++;
+   trace_plan_cache.add("cached", true);
+-  error_guard.release();  // because no error
+   return false;
+ }
+ 
+@@ -2361,7 +2430,7 @@ static bool apply_cached_plan_if_suitable(THD *thd, SELECT_LEX *select_lex,
+   TABLE_LIST *tl = select_lex->leaf_tables;
+ 
+   auto error_guard = create_scope_guard(
+-      [thd, select_lex]() { invalidate_cached_plan(thd, select_lex); });
++      [select_lex]() { invalidate_cached_plan(select_lex); });
+ 
+   if (!thd->change_list.is_empty()) {
+     // We expect the change list to be empty, because we are in execution,
+@@ -2520,7 +2589,7 @@ bool exec_cached_plan(SELECT_LEX *sl) {
+     // PLAN_CACHE_PORT this is to replace other invalidations scattered in
+     // callees. It makes sense to say: if it failed to apply, no matter why,
+     // invalidate it.
+-    invalidate_cached_plan(thd, sl);
++    invalidate_cached_plan(sl);
+   });
+ 
+   const bool has_windows = join->m_windows.elements != 0;
+@@ -2629,6 +2698,7 @@ static bool apply_cached_plan(JOIN *join) {
+   Exec_context *context = join->plan_cache_exec_context;
+   SELECT_LEX *sl = join->select_lex;
+   DBUG_ASSERT(sl->leaf_table_count == 1);
++  bind_fields(context->arena->item_list());
+   reset_cached_plan(join);
+   // PLAN_CACHE_PORT not needed, we do not clone Item_param anymore
+ #ifdef PLAN_CACHE_TAURUS
+diff --git a/sql/sql_plan_cache.h b/sql/sql_plan_cache.h
+index 786b3f66ed8..3f8a8361959 100644
+--- a/sql/sql_plan_cache.h
++++ b/sql/sql_plan_cache.h
+@@ -95,6 +95,8 @@ struct Exec_context {
+   bool streaming_aggregation;
+   bool select_distinct;
+   double best_read;
++  /// Owns memory for this cached plan
++  Query_arena *arena{nullptr};
+ 
+   using allocator_for_map = Mem_root_allocator<std::pair<Item *const, Item *>>;
+   std::map<Item *, Item *, std::less<Item *>, allocator_for_map>
+@@ -134,11 +136,12 @@ void set_uncacheable(Query_block *sl);
+ void collect_item_params(Item *item, std::set<Item *> &params);
+ void set_ready(Query_block *sl);
+ bool is_clone_for_plan_cache(const Query_block *sl);
+-void invalidate_cached_plan(THD *thd, Query_block *select);
++void invalidate_cached_plan(Query_block *select);
+ bool emulates_hint(const THD *thd, opt_hints_enum hint);
+ void restore_param_snapshot_clones(LEX *lex);
+ void cmp_item_params_after_reduce_cond(THD *thd,
+                                        const std::set<Item *> &old_params,
+                                        Item *condition);
++void destroy_cached_plan(JOIN *join);
+ }  // namespace plan_cache
+ #endif  // PLAN_CACHE_INCLUDE_H
+diff --git a/sql/sql_prepare.cc b/sql/sql_prepare.cc
+index 27667abe98f..db621eac861 100644
+--- a/sql/sql_prepare.cc
++++ b/sql/sql_prepare.cc
+@@ -3527,10 +3527,7 @@ bool Prepared_statement::reprepare(THD *thd) {
+   Prepared_statement copy(thd);
+ 
+   swap_prepared_statement(&copy);
+-  plan_cache::invalidate_cached_plan(nullptr,  // passing thd=nullptr because
+-                                               // re-preparation is already
+-                                               // ongoing
+-                                     copy.m_lex->query_block);
++  plan_cache::invalidate_cached_plan(copy.m_lex->query_block);
+   auto copy_guard =
+       create_scope_guard([&]() { swap_prepared_statement(&copy); });
+ 
+diff --git a/sql/sql_union.cc b/sql/sql_union.cc
+index 151ce7f8612..f8757ca3d4d 100644
+--- a/sql/sql_union.cc
++++ b/sql/sql_union.cc
+@@ -91,6 +91,7 @@
+ #include "sql/sql_lex.h"
+ #include "sql/sql_list.h"
+ #include "sql/sql_optimizer.h"   // JOIN
++#include "sql/sql_parse.h"       // cleanup_items
+ #include "sql/sql_plan_cache.h"  // is_active, set_ready, cached_plan_count
+ #include "sql/sql_select.h"
+ #include "sql/sql_tmp_table.h"   // tmp tables
+@@ -2096,6 +2097,9 @@ void Query_block::cleanup(bool full) {
+       } else {
+         // Current JOIN is the cached plan, may be reused later, keep it:
+         plan_cache::set_ready(this);
++        auto context = join->plan_cache_exec_context;
++        if (context && context->arena)
++          cleanup_items(context->arena->item_list());
+         // The temporary table will be released after the SQL statement
+         // execution is completed. It must be set to null here; otherwise,
+         // there is a risk of dangling pointer access and double release.
+@@ -2161,9 +2165,8 @@ void Query_block::destroy() {
+   }
+ 
+   if (cached_plan) {
+-    ::destroy(cached_plan);
++    plan_cache::destroy_cached_plan(cached_plan);
+     cached_plan = nullptr;
+-    plan_cache::cached_plan_count--;
+   }
+ 
+   invalidate();
+diff --git a/storage/perfschema/pfs_server.h b/storage/perfschema/pfs_server.h
+index 08b364a55c2..77fcdc462d1 100644
+--- a/storage/perfschema/pfs_server.h
++++ b/storage/perfschema/pfs_server.h
+@@ -83,7 +83,11 @@
+ #define PFS_STATEMENTS_STACK_SIZE 10
+ #endif
+ #ifndef PFS_MAX_MEMORY_CLASS
+-#define PFS_MAX_MEMORY_CLASS 450
++/// Huawei has added 4 classes in psi_memory_key.cc. The maximum value in
++/// MySQL 8.0.41, is 450 and is reached during testing (e.g. in mtr test
++/// gr_assert_psi_memory_instruments_disabled). So we bumped it to 454 to not
++/// have lost classes.
++#define PFS_MAX_MEMORY_CLASS 454
+ #endif
+ 
+ #ifndef PFS_MAX_GLOBAL_SERVER_ERRORS
+-- 
+2.23.0
+

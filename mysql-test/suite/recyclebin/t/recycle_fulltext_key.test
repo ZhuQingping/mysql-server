@@ -1,0 +1,85 @@
+--source include/not_have_only_dstore.inc
+#
+# Test for recycle table which has fulltext key
+#
+
+--echo # Connect to master
+connection default;
+create database db_recycle;
+
+set rds_recycle_bin_mode=ON;
+
+use db_recycle;
+CREATE TABLE t1 (
+        id INT UNSIGNED AUTO_INCREMENT NOT NULL PRIMARY KEY,
+        title VARCHAR(200),
+  content TEXT,
+  FULLTEXT INDEX ft_content (content)
+) ENGINE=InnoDB DEFAULT CHARACTER SET gb2312 COLLATE gb2312_chinese_ci;
+drop table t1;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+CREATE TABLE t2 (
+        id INT UNSIGNED AUTO_INCREMENT NOT NULL PRIMARY KEY,
+        title VARCHAR(200),
+  content TEXT,
+  FULLTEXT INDEX ft_content (content)
+) ENGINE=InnoDB DEFAULT CHARACTER SET gb2312 COLLATE gb2312_chinese_ci;
+DROP INDEX ft_content on t2;
+drop table t2;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t2_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+--replace_result $t2_name_in_recyclebin t2
+eval call dbms_recyclebin.purge_table('$t2_name_in_recyclebin');
+
+CREATE TABLE t3 (
+        id INT UNSIGNED AUTO_INCREMENT NOT NULL PRIMARY KEY,
+        title VARCHAR(200),
+  content TEXT,
+  FULLTEXT INDEX ft_content (content)
+) ENGINE=InnoDB DEFAULT CHARACTER SET gb2312 COLLATE gb2312_chinese_ci;
+
+CREATE TABLE t4 (
+        id INT
+) ENGINE=InnoDB DEFAULT CHARACTER SET gb2312 COLLATE gb2312_chinese_ci;
+
+drop table t3,t4;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t4_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+--replace_result $t4_name_in_recyclebin t4
+eval call dbms_recyclebin.purge_table('$t4_name_in_recyclebin');
+
+CREATE TABLE t3 (
+        id INT UNSIGNED AUTO_INCREMENT NOT NULL PRIMARY KEY,
+        title VARCHAR(200),
+  content TEXT,
+  FULLTEXT INDEX ft_content (content)
+) ENGINE=InnoDB DEFAULT CHARACTER SET gb2312 COLLATE gb2312_chinese_ci;
+
+CREATE TABLE t4 (
+        id INT
+) ENGINE=InnoDB DEFAULT CHARACTER SET gb2312 COLLATE gb2312_chinese_ci;
+
+drop table t4,t3;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t4_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+--replace_result $t4_name_in_recyclebin t4
+eval call dbms_recyclebin.purge_table('$t4_name_in_recyclebin');
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+drop database db_recycle;
+drop database __recyclebin__;
+CREATE DATABASE IF NOT EXISTS __recyclebin__ DEFAULT CHARACTER SET utf8mb4;

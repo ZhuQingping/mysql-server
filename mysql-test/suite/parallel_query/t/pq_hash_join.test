@@ -1,0 +1,825 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+--source include/have_debug_sync.inc
+
+--echo # Start out simple: see that a simple parallel-oblivious hash join
+--echo # without any re-fill of the hash table works as expected.
+CREATE TABLE t (i INTEGER);
+INSERT INTO t VALUES (1), (2), (3);
+ANALYZE TABLE t;
+
+let $query = SELECT /*+ PQ(t 2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+let $query = SELECT /*+ PQ(t 64) */ * FROM t JOIN t t2 ON t.i = t2.i;
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+DROP TABLE t;
+
+--echo # Increase the number of rows, and decrease the join buffer size.
+--echo # See that we disable parallel query when we estimate the number
+--echo # of hash table re-fills to become high.
+CREATE TABLE t (i INTEGER);
+INSERT INTO t VALUES
+  (1), (2), (3), (4), (5), (6), (7), (8), (9), (10),
+  (11), (12), (13), (14), (15), (16), (17), (18), (19), (20),
+  (21), (22), (23), (24), (25), (26), (27), (28), (29), (30);
+ANALYZE TABLE t;
+
+SET join_buffer_size = 128;
+let $query = SELECT /*+ PQ(t 2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+
+--echo # Now, ignore the number of re-fills limit to see that we can
+--echo # execute a parallel-oblivious hash join with multiple re-fills.
+SET session debug = '+d,ignore_pq_hash_join_num_refills';
+
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+let $query = SELECT /*+ PQ(t 64) */ * FROM t JOIN t t2 ON t.i = t2.i;
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+SET join_buffer_size = DEFAULT;
+SET session debug = '-d,ignore_pq_hash_join_num_refills';
+DROP TABLE t;
+
+--echo # Test a three table join including one parallel-aware hash join node.
+CREATE TABLE t (i INTEGER);
+INSERT INTO t VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9), (10);
+ANALYZE TABLE t;
+
+let $query = SELECT /*+ PQ(t2 2) */ * FROM t
+  JOIN t t2 ON t.i = t2.i
+  JOIN t t3 on t2.i = t3.i
+  ORDER BY t.i, t2.i, t3.i;
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+let $query = SELECT /*+ PQ(t2 64) */ * FROM t
+  JOIN t t2 ON t.i = t2.i
+  JOIN t t3 on t2.i = t3.i
+  ORDER BY t.i, t2.i, t3.i;
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+DROP TABLE t;
+
+--echo # Increase the number of rows, and decrease the join buffer size.
+--echo # We want to fill up the join buffer so that at least one re-fill
+--echo # of the hash table is necessary.
+SET session debug = '+d,ignore_pq_hash_join_num_refills';
+CREATE TABLE t (i INTEGER);
+INSERT INTO t VALUES
+  (1), (2), (3), (4), (5), (6), (7), (8), (9), (10),
+  (11), (12), (13), (14), (15), (16), (17), (18), (19), (20),
+  (21), (22), (23), (24), (25), (26), (27), (28), (29), (30);
+ANALYZE TABLE t;
+
+SET join_buffer_size = 128;
+let $query = SELECT /*+ PQ(t2 2) */ * FROM t
+  JOIN t t2 ON t.i = t2.i
+  JOIN t t3 ON t2.i = t3.i
+  ORDER BY t.i, t2.i, t3.i;
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+eval $query;
+
+let $query = SELECT /*+ PQ(t2 64) */ * FROM t
+  JOIN t t2 ON t.i = t2.i
+  JOIN t t3 ON t2.i = t3.i
+  ORDER BY t.i, t2.i, t3.i;
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+eval $query;
+
+SET join_buffer_size = DEFAULT;
+SET session debug = '-d,ignore_pq_hash_join_num_refills';
+DROP TABLE t;
+
+--echo # The following test case exercises the need for detaching from the
+--echo # message queue after the probe phase has completed. If we do not
+--echo # temporarily detach while waiting for other workers to complete
+--echo # their probe phase, we will most likely end up in a deadlock.
+CREATE TABLE t (i BIGINT);
+
+INSERT INTO t (i) VALUES (1), (1), (1), (1), (1), (1), (1), (1), (1), (1);
+INSERT INTO t (i) VALUES (1), (1), (1), (1), (1), (1), (1), (1), (1), (1);
+INSERT INTO t (i) VALUES (1), (1), (1), (1), (1), (1), (1), (1), (1), (1);
+INSERT INTO t (i) VALUES (1);
+
+ANALYZE TABLE t;
+
+let $query = SELECT /*+ PQ(t3 2) */ * FROM t
+  JOIN t t2 ON t.i = t2.i
+  JOIN t t3 ON t2.i = t3.i;
+
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+
+--disable_result_log
+eval $query;
+--enable_result_log
+
+DROP TABLE t;
+
+--echo # Increase the number of rows, and decrease the join buffer size.
+--echo # We want to fill up the join buffer so that at least one re-fill
+--echo # of the hash table is necessary. The following test case exercises
+--echo # the need for setting nowait mode of worker msg queue slot after
+--echo # the probe phase has completed. If we do not set nowait mode while
+--echo # waiting for other workers to complete, their probe phase, we will
+--echo # most likely end up in a deadlock.
+CREATE TABLE t (i BIGINT);
+
+INSERT INTO t (i) VALUES (1), (1), (1), (1), (1), (1), (1), (1), (1), (1);
+INSERT INTO t (i) VALUES (1), (1), (1), (1), (1), (1), (1), (1), (1), (1);
+INSERT INTO t (i) VALUES (1), (1), (1), (1), (1), (1), (1), (1), (1), (1);
+INSERT INTO t (i) VALUES (1);
+
+ANALYZE TABLE t;
+
+SET join_buffer_size = 128;
+SET session debug = '+d,ignore_pq_hash_join_num_refills';
+
+let $query = SELECT /*+ PQ(t3 2) */ * FROM t
+  JOIN t t2 ON t.i = t2.i
+  JOIN t t3 ON t2.i = t3.i;
+
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+
+--disable_result_log
+eval $query;
+--enable_result_log
+
+SET join_buffer_size = DEFAULT;
+SET session debug = '-d,ignore_pq_hash_join_num_refills';
+
+DROP TABLE t;
+
+--echo # Set up a test which verifies that we can find/mark the cut table
+--echo # when the execution tree contains a StreamingIterator and/or
+--echo # a MaterializeIterator that are not on a query block boundary.
+CREATE TABLE t (i INTEGER);
+
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t3 2) */ * FROM t JOIN t t2 JOIN t t3 ORDER BY t.i;
+
+DROP TABLE t;
+
+--echo # ISSUE 627: deadlock of parallel-aware hash join
+
+CREATE TABLE t (i BIGINT);
+INSERT INTO t (i) VALUES (1), (1), (1), (1), (1), (1), (1), (1), (1), (1);
+INSERT INTO t (i) VALUES (1), (1), (1), (1), (1), (1), (1), (1), (1), (1);
+INSERT INTO t (i) VALUES (1), (1), (1), (1), (1), (1), (1), (1), (1), (1);
+INSERT INTO t (i) VALUES (1);
+
+analyze table t;
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+EXPLAIN SELECT /*+ PQ(t3 2) */ * FROM t JOIN t t2 ON t.i = t2.i JOIN t t3 ON t2.i = t3.i;
+--disable_result_log
+SELECT /*+ PQ(t3 2) */ * FROM t JOIN t t2 ON t.i = t2.i JOIN t t3 ON t2.i = t3.i;
+--enable_result_log
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+EXPLAIN SELECT /*+ PQ(t3 2) */ * FROM t JOIN t t2 ON t.i = t2.i JOIN t t3 ON t2.i = t3.i ORDER by t.i;
+--disable_result_log
+SELECT /*+ PQ(t3 2) */ * FROM t JOIN t t2 ON t.i = t2.i JOIN t t3 ON t2.i = t3.i ORDER by t.i;
+--enable_result_log
+
+--echo # test HJ with index scan
+
+create table t2 like t;
+insert into t2 select * from t;
+create table t3 like t;
+insert into t3 select * from t;
+--echo # test if order-by with index-scan
+alter table t add index(i);
+
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+EXPLAIN SELECT /*+ PQ(t3 2) */ * FROM t JOIN t2 ON t.i = t2.i JOIN t3 ON t2.i = t3.i;
+--disable_result_log
+SELECT /*+ PQ(t3 2) */ * FROM t JOIN t2 ON t.i = t2.i JOIN t3 ON t2.i = t3.i;
+--enable_result_log
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+EXPLAIN SELECT /*+ PQ(t3 2) */ * FROM t JOIN t2 ON t.i = t2.i JOIN t3 ON t2.i = t3.i ORDER by t.i;
+--disable_result_log
+SELECT /*+ PQ(t3 2) */ * FROM t JOIN t2 ON t.i = t2.i JOIN t3 ON t2.i = t3.i ORDER by t.i;
+--enable_result_log 
+
+DROP table t, t2, t3;
+
+## CUT TABLE
+CREATE TABLE `t1` (
+  `id` int DEFAULT NULL,
+    `a` int DEFAULT NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE `t2` (
+  `id` int DEFAULT NULL,
+    `a` int DEFAULT NULL
+) ENGINE=InnoDB;
+
+insert into t1 values(1,2);
+insert into t1 values(2,3);
+insert into t1 values(3,4);
+
+insert into t2 select * from t1;
+insert into t2 select * from t1;
+insert into t2 select * from t1;
+insert into t2 select * from t1;
+insert into t2 select * from t1;
+
+ANALYZE TABLE t1, t2;
+
+set @saved_threshold = @@parallel_rows_threshold;
+
+## choose t1 as divide table, no cut table.
+set session parallel_rows_threshold = 1;
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+explain select count(*) from t1 join t2 on t1.id=t2.id;
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+explain format=tree select count(*) from t1 join t2 on t1.id=t2.id;
+select count(*) from t1 join t2 on t1.id=t2.id;
+
+## choose t2 as divide table, t1 as cut table.
+set session parallel_rows_threshold = 3;
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+explain select count(*) from t1 join t2 on t1.id=t2.id;
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+explain format=tree select count(*) from t1 join t2 on t1.id=t2.id;
+select count(*) from t1 join t2 on t1.id=t2.id;
+
+set session parallel_rows_threshold = @saved_threshold;
+
+drop table t1,t2;
+
+# Set up a test case that shows the need of calling ArriveAndDrop() in the
+# HashJoinIterator destructor. With LIMIT in the query (and most likely in
+# other cases as well), some workers will finish early and cause the
+# destructor to be called before other workers are done returning rows.
+# In the hash join destructor, there is a barrier to avoid workers from
+# clearing its MEM_ROOT that might hold data that other workers need. So if one
+# worker waits at this barrier while other workers are waiting at other
+# barriers, we may end up in a deadlock.
+CREATE TABLE t1 (i INTEGER);
+CREATE TABLE t2 (i INTEGER);
+
+INSERT INTO t1 (i) VALUES (1), (1);
+INSERT INTO t2 (i) VALUES (1);
+
+let $query = SELECT * FROM t1, t2 LIMIT 1;
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+eval $query;
+
+DROP TABLE t1, t2;
+
+# ISSUE 634: inner query and outer query have the same HJ shared context
+
+SET @save_optimizer_switch= @@optimizer_switch;
+SET @save_sql_mode= @@sql_mode;
+set optimizer_switch='semijoin=on,materialization=on,firstmatch=on,loosescan=on,index_condition_pushdown=on,mrr=on';
+set optimizer_switch='subquery_materialization_cost_based=off';
+SET sql_mode = 'NO_ENGINE_SUBSTITUTION';
+
+drop table if exists t1, t2, t3;
+create table t1 (a1 char(8), a2 char(8)) charset utf8mb4;
+create table t2 (b1 char(8), b2 char(8)) charset utf8mb4;
+create table t3 (c1 char(8), c2 char(8)) charset utf8mb4;
+insert into t1 values ('1 - 00', '2 - 00');
+insert into t1 values ('1 - 01', '2 - 01');
+insert into t1 values ('1 - 02', '2 - 02');
+insert into t2 values ('1 - 01', '2 - 01');
+insert into t2 values ('1 - 01', '2 - 01');
+insert into t2 values ('1 - 02', '2 - 02');
+insert into t2 values ('1 - 02', '2 - 02');
+insert into t2 values ('1 - 03', '2 - 03');
+insert into t3 values ('1 - 01', '2 - 01');
+insert into t3 values ('1 - 02', '2 - 02');
+insert into t3 values ('1 - 03', '2 - 03');
+insert into t3 values ('1 - 04', '2 - 04');
+
+create algorithm=merge view v1 as select b1, c2 from t2, t3 where b2 > c2;
+create algorithm=merge view v2 as select b1, c2 from t2, t3 group by b2, c2;
+
+ANALYZE TABLE t1, t2, t3;
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+explain select * from v1 where (c2, b1) in (select c2, b1 from v2 where b1 is not null);
+select * from v1 where (c2, b1) in (select c2, b1 from v2 where b1 is not null);
+
+DROP TABLE t1, t2, t3;
+DROP VIEW v1, v2;
+
+SET @@optimizer_switch = @save_optimizer_switch;
+SET @@sql_mode = @save_sql_mode;
+
+# Test divided table is not probe table of hash join, it do not need to
+# choose a table as cut table.
+CREATE TABLE t1(f1 INT(11) NOT NULL);
+INSERT INTO t1 VALUES (10);
+
+CREATE TABLE t2
+(
+  f1 INT(11) NOT NULL AUTO_INCREMENT,
+  f2 INT(11) DEFAULT NULL,
+  PRIMARY KEY (f1),
+  KEY (f2)
+);
+INSERT INTO t2 VALUES (1, 7), (2, 1), (4, 7);
+
+CREATE TABLE t4(f1 INT DEFAULT NULL);
+INSERT INTO t4 VALUES (2);
+
+ANALYZE TABLE t1, t2, t4;
+
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+explain format=tree SELECT /*+ JOIN_PREFIX(t2@qb2, t4@qb1, ta3, ta4) PQ(ta4) */ COUNT(*) FROM t1 JOIN t2 AS ta3 JOIN t2 AS ta4 WHERE ta4.f2 IN (SELECT /*+ QB_NAME(qb1) */ f1 FROM t4) AND ta3.f2 IN (SELECT /*+ QB_NAME(qb2) */ f2 FROM t2);
+
+DROP TABLE t1,t2,t4;
+
+# Test cut table do not support MRR in Parallel Query
+CREATE TABLE `t0` (
+  `c0` double unsigned zerofill DEFAULT NULL,
+  `c1` smallint DEFAULT NULL COMMENT 'asdf',
+  UNIQUE KEY `c0` (`c0`),
+  UNIQUE KEY `c1` (`c1`)
+);
+CREATE TABLE `t1` (
+  `c0` float DEFAULT NULL,
+  UNIQUE KEY `c0` (`c0`),
+  KEY `i0` (`c0`)
+);
+INSERT INTO t0 VALUES(0000000000000207520508, 0);
+INSERT INTO t1 VALUES(NULL), (0), (1847920000);
+
+ANALYZE TABLE t0, t1;
+
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+EXPLAIN SELECT /*+MRR(t0)*/ ALL t0.c0 AS ref0 FROM t0, t1 WHERE (t0.c1) NOT IN ("");
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+EXPLAIN FORMAT=TREE SELECT /*+MRR(t0)*/ ALL t0.c0 AS ref0 FROM t0, t1 WHERE (t0.c1) NOT IN ("");
+SELECT /*+MRR(t0)*/ ALL t0.c0 AS ref0 FROM t0, t1 WHERE (t0.c1) NOT IN ("");
+DROP TABLE t0, t1;
+
+--echo # Test for semi/anti/outer hash join
+
+--echo # Test parallel hash join. For semi/anti/outer hash join, it just
+--echo # can choose probe table as divided table. If the build table is
+--echo # considered small or is not suitable as cut table, it will be
+--echo # executed as parallel-oblivious hash join. If the build table is
+--echo # considered large or is suitable as cut table, it will be executed
+--echo # as parallel-aware hash join with building a shared hash table.
+
+### Set threshold, let build tables be considered small or large
+set @saved_threshold = @@parallel_rows_threshold;
+
+### Parallel semi hash join
+CREATE TABLE t1 (i INTEGER);
+CREATE TABLE t2 (i INTEGER);
+INSERT INTO t1 VALUES (1), (2);
+INSERT INTO t2 VALUES (1), (1);
+ANALYZE TABLE t1, t2;
+
+--echo # Parallel-oblivious semi hash join
+set session parallel_rows_threshold = 100;
+let $query = SELECT /*+PQ(t1)*/ * FROM t1 WHERE (t1.i) IN (SELECT t2.i FROM t2);
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+--echo # Parallel-aware semi hash join
+set session parallel_rows_threshold = 0;
+let $query = SELECT * FROM t1 WHERE (t1.i) IN (SELECT t2.i FROM t2);
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+DROP TABLE t1, t2;
+
+### Parallel anti hash join
+CREATE TABLE t1 (f1 INTEGER PRIMARY KEY);
+INSERT INTO t1 VALUES (1), (2), (3);
+CREATE TABLE t2 (f1 INTEGER NOT NULL);
+INSERT INTO t2 VALUES (1), (2), (3), (4);
+ANALYZE TABLE t1, t2;
+
+--echo # Parallel-oblivious anti hash join
+set session parallel_rows_threshold = 100;
+let $query = SELECT /*+PQ(t1)*/ * FROM t1 LEFT JOIN t2 USING (f1) WHERE t2.f1 IS NULL;
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+--echo # Parallel-aware anti hash join
+set session parallel_rows_threshold = 0;
+let $query = SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t2.f1 IS NULL;
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+DROP TABLE t1, t2;
+
+### Parallel-oblivious outer hash join
+CREATE TABLE t1 (col1 INTEGER);
+CREATE TABLE t2 (col1 INTEGER);
+INSERT INTO t1 VALUES (1), (2);
+INSERT INTO t2 VALUES (1);
+ANALYZE TABLE t1, t2;
+
+--echo # Parallel-oblivious outer hash join
+set session parallel_rows_threshold = 100;
+let $query = SELECT /*+PQ(t1)*/ * FROM t1 LEFT JOIN t2 ON t1.col1 = t2.col1;
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+--echo # Parallel-aware outer hash join
+set session parallel_rows_threshold = 0;
+let $query = SELECT * FROM t1 LEFT JOIN t2 ON t1.col1 = t2.col1;
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+set session parallel_rows_threshold = @saved_threshold;
+DROP TABLE t1, t2;
+
+### If row buffer is full, all worker need enable probe row saving.
+### If W1 read end of records of build iterator, it will not enable probe
+### row saving, which will result in uncorrect result with missing some rows.
+CREATE TABLE t1 (i INTEGER);
+CREATE TABLE t2 (i INTEGER);
+
+--disable_query_log
+let $i=100;
+while ($i)
+{
+  eval insert into t1 values($i);
+  dec $i;
+}
+INSERT INTO t2 SELECT * FROM t1;
+--enable_query_log
+ANALYZE TABLE t1, t2;
+
+SET @save_optimizer_switch= @@optimizer_switch;
+SET @save_pq_hash_join_max_hash_table_refills= @@pq_hash_join_max_hash_table_refills;
+SET optimizer_switch="materialization=off";
+SET join_buffer_size = 128;
+SET pq_hash_join_max_hash_table_refills = 999999999;
+
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+EXPLAIN FORMAT=tree SELECT * FROM t1 WHERE t1.i IN (SELECT t2.i FROM t2) order by t1.i limit 5;
+SELECT * FROM t1 WHERE t1.i IN (SELECT t2.i FROM t2) order by t1.i limit 5;
+
+SET @@optimizer_switch = @save_optimizer_switch;
+SET join_buffer_size = DEFAULT;
+SET @@pq_hash_join_max_hash_table_refills = @save_pq_hash_join_max_hash_table_refills;
+DROP TABLE t1,t2;
+
+### If non-inner hash join needs re-fill hash table, it will enable saving file.
+### For the last re-fill hash table, if the shared hash table is not full and also
+### not empty, it need disable saving file.
+CREATE TABLE t1 (i BIGINT NOT NULL);
+CREATE TABLE t2 (i BIGINT NOT NULL);
+
+INSERT INTO t1 SELECT RAND(1) * 10000000;
+INSERT INTO t1 SELECT RAND(2) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(3) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(4) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(5) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(6) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(7) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(8) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(9) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(10) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(11) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(12) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(13) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(14) * 10000000 FROM t1;
+INSERT INTO t2 SELECT RAND(15) * 10000000 FROM t1;
+
+ANALYZE TABLE t1, t2;
+SET @save_optimizer_switch= @@optimizer_switch;
+SET optimizer_switch="materialization=off";
+
+EXPLAIN FORMAT=tree SELECT * FROM t1 WHERE i NOT IN (SELECT /*+ PQ() */ i FROM t2) ORDER BY t1.i LIMIT 2;
+SELECT * FROM t1 WHERE i NOT IN (SELECT /*+ PQ() */ i FROM t2) ORDER BY t1.i LIMIT 2;
+
+### Disable reject duplicate keys in parallel-aware hash join.
+### Because before inserting into the shared hash table, it will check whether the
+### shared hash table contains the key, but it don't get a lock. While other worker
+### may be modifying the shared hash table.
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+EXPLAIN FORMAT=tree SELECT * FROM t1 WHERE i NOT IN (SELECT /*+ PQ(64) */ i FROM t2) ORDER BY t1.i LIMIT 2;
+SELECT * FROM t1 WHERE i NOT IN (SELECT /*+ PQ(64) */ i FROM t2) ORDER BY t1.i LIMIT 2;
+
+SET @@optimizer_switch = @save_optimizer_switch;
+DROP TABLE t1,t2;
+
+--echo #
+--echo # BUG2022112202646 For parallel-aware hash join, if cut table is under the
+--echo #                  WEEDOUT, it will result duplicate results. Because for
+--echo #                  workers, it just remove duplicate in worker, not between
+--echo #                  workers. So WEEDOUT can not contain cut table.
+--echo #                  Due to this scenario is related to big distribution and
+--echo #                  big data, only related execution plan is displayed here.
+
+SET @@optimizer_switch = @save_optimizer_switch;
+
+CREATE TABLE t1 (
+  id_col int NOT NULL AUTO_INCREMENT,
+  mediumint_col mediumint DEFAULT NULL,
+  decimal_col decimal(25,5) DEFAULT NULL,
+  PRIMARY KEY (id_col DESC),
+  KEY ndx_mediumint_decimal_col (mediumint_col DESC, decimal_col DESC)
+) ENGINE=InnoDB AUTO_INCREMENT=114 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE t2 (
+  id_col int NOT NULL AUTO_INCREMENT,
+  mediumint_col mediumint DEFAULT NULL,
+  decimal_col decimal(25,5) DEFAULT NULL,
+  PRIMARY KEY (id_col DESC)
+) ENGINE=InnoDB AUTO_INCREMENT=114 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE t3 (
+  id_col int NOT NULL,
+  mediumint_col mediumint DEFAULT NULL,
+  decimal_col decimal(25,5) DEFAULT NULL,
+  float_col float DEFAULT NULL,
+  datetimelist_col datetime(6) NOT NULL,
+  PRIMARY KEY (datetimelist_col DESC, id_col DESC),
+  KEY ndx_decimal_float_col (datetimelist_col DESC, decimal_col DESC, float_col DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+SET optimizer_switch="loosescan=off,firstmatch=off";
+
+--echo # The origin execution plan choose C as cut table. After fixed, the cut table can
+--echo # not under WEEDOUT
+let $query = WITH A AS (SELECT /*+PQ(C, B)*/ A.decimal_col, A.mediumint_col FROM t1 A JOIN t2 B ON A.decimal_col = B.decimal_col AND A.mediumint_col = B.mediumint_col WHERE (A.decimal_col, A.mediumint_col) = ANY (SELECT decimal_col, mediumint_col FROM t3 C WHERE (C.datetimelist_col = '1984-02-01 00:00:00' OR C.datetimelist_col = '1984-02-29 23:59:59') AND C.decimal_col > 0.00000)) SELECT /*+join_order(A,C,B)*/ A.decimal_col, RADIANS(A.mediumint_col) FROM A WHERE A.mediumint_col > 1 ORDER BY 1, 2;
+
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+
+SET @@optimizer_switch = @save_optimizer_switch;
+drop table t1, t2, t3;
+
+--echo #
+--echo # BUG2023042803295 PQ remaining workers assertion error
+--echo #
+CREATE TABLE t0 (c0 INT UNIQUE KEY);
+CREATE TABLE t1 (c0 INT);
+INSERT INTO t0(c0) VALUES (1),(2),(3),(4),(5);
+INSERT INTO t1(c0) VALUES (1);
+ANALYZE TABLE t0, t1;
+let $query = SELECT ((SELECT 1 FROM t1 JOIN t0) UNION (SELECT 1 WHERE t0.c0 = 1)) FROM t0;
+
+--echo # Verify that we have a parallel hash join under a dependent subquery.
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+eval $query;
+DROP TABLE t0, t1;
+
+#
+# BUG2022111800821 zero-length values hits an assertion
+#
+# In order to create a zero-length value, we need:
+# - A collation with PAD SPACE.
+# - A string with no length.
+# - A data type with max length == 0.
+CREATE TABLE t (s VARCHAR(0) COLLATE utf8mb4_bin);
+INSERT INTO t VALUES ("");
+let $query = SELECT * FROM t JOIN t t2 ON t.s = t2.s;
+
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+eval EXPLAIN FORMAT=tree $query;
+eval $query;
+
+# Set debug flags to increase code coverage.
+SET SESSION debug="+d, force_bloom_filter_miss";
+eval $query;
+SET SESSION debug="-d, force_bloom_filter_miss";
+
+DROP TABLE t;
+
+--echo #
+--echo # Test parallel-aware hash join with spill to disk.
+--echo #
+CREATE TABLE t1 (i INTEGER NOT NULL, s VARCHAR(255) NOT NULL);
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID();
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+
+ANALYZE TABLE t1;
+
+# UUID() should be random enough to not give any duplicate values. Also, reduce
+# join_buffer_size to make sure that spill-to-disk is triggered.
+SET GLOBAL join_buffer_size = 128;
+
+# Do a set of tests with parallel-aware hash join with spill to disk, where we
+# change the value of vfd_max_open_files.
+SET GLOBAL vfd_max_open_files = 1;
+--source ../include/pq_on_disk_hash_join.inc
+
+SET GLOBAL vfd_max_open_files = 256;
+--source ../include/pq_on_disk_hash_join.inc
+
+SET GLOBAL vfd_max_open_files = DEFAULT;
+--source ../include/pq_on_disk_hash_join.inc
+
+# Do the same test, but now with spill to disk disabled for parallel hash join.
+SET GLOBAL pq_support_features_switch='hash_join_spill_to_disk=off';
+--source ../include/pq_on_disk_hash_join.inc
+
+SET GLOBAL join_buffer_size = DEFAULT;
+
+# Note: The default is currently OFF, but MTR will set it to ON using command
+# line argument. So if we reset it to DEFAULT, "check-testcase" will fail saying
+# that it has not been reset properly (it should have been reset to the value it
+# had at the start of the test).
+SET GLOBAL pq_support_features_switch='hash_join_spill_to_disk=on';
+
+# Reconnect so that changes to the global variables are visible for the next
+# test.
+--disconnect default
+--connect (default,localhost,root,,test)
+
+DROP TABLE t1;
+
+--echo #
+--echo # BUG2023082400256
+--echo #
+# We want to create the following query plan:
+#
+#           Parallel-aware hash join
+#           | (probe)              | (build)
+#          t3            parallel-oblivious hash join
+#                        | (probe)                  | (build)
+#                       t2                          t1
+#
+# In addition, we want the shared hash table in the parallel-aware hash join to
+# only store rows with zero length and zero-length hash table keys. In order to
+# create a zero-length values, we only select columns from t3. To create
+# zero-length hash table keys, we simply join without any join condition.
+CREATE TABLE t (i INTEGER NOT NULL);
+INSERT INTO t SELECT 0;
+INSERT INTO t SELECT 0 FROM t;
+INSERT INTO t SELECT 0 FROM t;
+INSERT INTO t SELECT 0 FROM t;
+INSERT INTO t SELECT 0 FROM t;
+INSERT INTO t SELECT 0 FROM t;
+INSERT INTO t SELECT 0 FROM t;
+INSERT INTO t SELECT 0 FROM t;
+
+ANALYZE TABLE t;
+
+# Reduce the join buffer size so that we more easily can verify an effective
+# bugfix without having a very large test table.
+SET join_buffer_size = 128;
+
+# Clean the performance schema table so we start with a clean state.
+TRUNCATE performance_schema.memory_summary_global_by_event_name;
+SELECT HIGH_NUMBER_OF_BYTES_USED
+FROM performance_schema.memory_summary_global_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+
+--replace_regex /cost=[0-9e\.\+]+/cost=***/  /rows=[0-9e\.\+]+/rows=***/
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t3 1) */ SUM(t3.i) FROM t JOIN t t2 JOIN t t3;
+SELECT /*+ PQ(t3 1) */ SUM(t3.i) FROM t JOIN t t2 JOIN t t3;
+
+# See that the memory usage is well below one megabyte. Before the bugfix, this
+# would grow approx. 2 megabytes, so a limit of 0.5 megabyte should clearly
+# indicate an effective bugfix.
+SELECT HIGH_NUMBER_OF_BYTES_USED < 500 * 1000
+FROM performance_schema.memory_summary_global_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+
+SET join_buffer_size = DEFAULT;
+SET pq_hash_join_max_hash_table_refills = DEFAULT;
+DROP TABLE t;
+--echo # BUG2021120300060
+--echo #
+--echo # The following test case is probably way more complex than it needs to
+--echo # be, but I haven't found any way to simplify it further. What we want to
+--echo # achieve is a parallel-aware hash join below a weedout, where the build
+--echo # input contains a parallel-oblivious hash join with a materialize iterator
+--echo # as its probe input. In ASCII art, we want something that looks like this:
+--echo #
+--echo #              weedout
+--echo #                 |
+--echo #      hash join, parallel-aware
+--echo #      |                       |
+--echo #  hash join                  t3
+--echo #  |       |
+--echo #  t1  materialize
+--echo #          |
+--echo #         t2
+--echo #
+CREATE TABLE t1 (s VARCHAR(255), INDEX idx (s));
+INSERT INTO t1 SELECT UUID();
+INSERT INTO t1 SELECT UUID() FROM t1;
+INSERT INTO t1 SELECT UUID() FROM t1;
+INSERT INTO t1 SELECT UUID() FROM t1;
+INSERT INTO t1 SELECT UUID() FROM t1;
+INSERT INTO t1 SELECT UUID() FROM t1;
+INSERT INTO t1 SELECT UUID() FROM t1;
+INSERT INTO t1 SELECT UUID() FROM t1;
+INSERT INTO t1 SELECT UUID() FROM t1;
+
+CREATE TABLE t2 (i INTEGER);
+INSERT INTO t2 SELECT RAND(1) * 1000 FROM t1 LIMIT 27;
+
+CREATE TABLE t3 (i INTEGER, INDEX idx (i));
+INSERT INTO t3 SELECT IF(RAND(1) > 0.5, NULL, RAND(1) * 1000) FROM t1 LIMIT 50;
+
+CREATE TABLE t4 (i INTEGER);
+INSERT INTO t4 SELECT 1 FROM t1 LIMIT 27;
+
+CREATE VIEW view1 AS
+  SELECT 1 FROM t1
+  UNION ALL
+  SELECT 1 FROM t1;
+
+CREATE VIEW view2 AS
+  SELECT
+  subq_1.c0 AS c1
+  FROM
+    (SELECT pi() AS c0, subq_0.c0 AS c1 FROM
+      (t2 LEFT JOIN
+        (SELECT 1 AS c0 FROM t3 ref_1 WHERE (ref_1.i IS NULL)) subq_0
+      ON (subq_0.c0 IS NOT NULL))) subq_1
+  GROUP BY subq_1.c1, subq_1.c0;
+
+CREATE VIEW view3 AS
+  SELECT
+    subq_0.c2 AS c2
+  FROM
+  (SELECT
+    i AS c2 FROM t4) subq_0
+  GROUP BY subq_0.c2
+  ORDER BY subq_0.c2;
+
+ANALYZE TABLE t1, t2, t3, t4;
+
+let $query = SELECT /*+ PQ(ref_12 4) */
+  1
+FROM
+  view1 AS ref_9
+  INNER JOIN t1 AS ref_11 ON (false)
+  RIGHT JOIN t1 AS ref_12
+  LEFT JOIN view2 AS ref_13
+  INNER JOIN t1 AS ref_14 ON (true)
+    ON (EXISTS (
+      SELECT
+        ref_15.c2 AS c0
+      FROM
+        view3 AS ref_15
+      WHERE ref_14.s IS NOT NULL))
+  ON (ref_13.c1 IS NOT NULL);
+
+# to preserve plans:
+--source include/turn_off_join_elimination.inc
+
+eval EXPLAIN FORMAT=tree $query;
+--echo # We only want to see that we do not hit any assertion,
+--echo # so disable the result log.
+--disable_result_log
+eval $query;
+--enable_result_log
+
+--source include/restore_opt_switch_after_turn_off_join_elimination.inc
+DROP VIEW view1, view2, view3;
+DROP TABLE t1, t2, t3, t4;

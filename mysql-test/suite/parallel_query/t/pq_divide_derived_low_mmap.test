@@ -1,0 +1,22 @@
+--source include/pq_test.inc
+--source include/not_valgrind.inc
+--source ../include/pq_divide_derived_setup.inc
+
+# Temptable engine with low limit on RAM, to force use of MMAP
+
+select @@global.temptable_max_ram, @@global.temptable_use_mmap;
+
+eval $check_disk_alloc;
+
+eval explain $query_full_big;
+eval $query_full_big;
+
+# No point in running the query, as Temptable doesn't support PQ with index access
+eval explain $query_ref_big;
+#eval $query_ref_big;
+
+eval $check_disk_alloc;
+
+show status like "Created_tmp_disk_tables";
+
+drop database pq_test;

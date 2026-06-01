@@ -1,0 +1,208 @@
+# This Tests repair functionality of Myisam engine specific tables
+# To test the Bug fixes (BUG#18874,BUG#22562,BUG#23175,BUG#36055)
+# All tests are required to run with MyISAM.
+# Hence MTR starts mysqld with MyISAM as default
+
+--source include/force_myisam_default.inc
+--source include/have_myisam.inc
+
+CALL mtr.add_suppression("Enabling keys got errno");
+
+#
+# Test of repair table
+#
+
+--disable_warnings
+drop table if exists t1;
+--enable_warnings
+
+create table t1 SELECT 1,"table 1";
+repair table t1 use_frm;
+alter table t1 ENGINE=HEAP;
+repair table t1 use_frm;
+drop table t1;
+
+#
+# disabled keys during repair
+#
+create table t1(id int PRIMARY KEY, st varchar(10), KEY st_key(st));
+insert into t1 values(1, "One");
+alter table t1 disable keys;
+analyze table t1;
+show keys from t1;
+repair table t1 extended;
+analyze table t1;
+show keys from t1;
+drop table t1;
+
+
+# non-existent table
+repair table t1 use_frm;
+
+create table t1 engine=myisam SELECT 1,"table 1";
+flush tables;
+let $MYSQLD_DATADIR= `select @@datadir`;
+exec echo 1 > $MYSQLD_DATADIR/test/t1.MYI ;
+repair table t1;
+repair table t1 use_frm;
+drop table t1;
+
+#
+# BUG#22562 - REPAIR TABLE .. USE_FRM causes server crash on Windows and
+#             server hangs on Linux
+#
+CREATE TABLE t1(a INT);
+USE mysql;
+REPAIR TABLE test.t1 USE_FRM;
+USE test;
+DROP TABLE t1;
+
+#
+# BUG#23175 - MYISAM crash/repair failed during repair
+#
+CREATE TABLE t1(a CHAR(255), KEY(a)) charset latin1;
+SET myisam_sort_buffer_size=4096;
+INSERT INTO t1 VALUES
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0');
+REPAIR TABLE t1;
+SET myisam_sort_buffer_size=@@global.myisam_sort_buffer_size;
+DROP TABLE t1;
+
+#
+# BUG#31174 - "Repair" command on MyISAM crashes with small 
+#              myisam_sort_buffer_size
+#
+CREATE TABLE t1(a CHAR(255), KEY(a)) charset latin1;
+SET myisam_sort_buffer_size=4496;
+INSERT INTO t1 VALUES
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),('0'),
+('0'),('0'),('0'),('0'),('0'),('0'),('0');
+REPAIR TABLE t1;
+SET myisam_sort_buffer_size=@@global.myisam_sort_buffer_size;
+DROP TABLE t1;
+
+--echo End of 4.1 tests
+
+
+#
+# Bug#18775 - Temporary table from alter table visible to other threads
+#
+# REPAIR TABLE ... USE_FRM on temporary table crashed the table or server.
+--disable_warnings
+DROP TABLE IF EXISTS tt1;
+--enable_warnings
+CREATE TEMPORARY TABLE tt1 (c1 INT);
+REPAIR TABLE tt1 USE_FRM;
+DROP TABLE tt1;
+
+
+--echo #
+--echo # Bug #48248 assert in MDL_ticket::upgrade_shared_lock_to_exclusive
+--echo #
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1(a INT);
+LOCK TABLES t1 READ;
+REPAIR TABLE t1;
+
+UNLOCK TABLES;
+DROP TABLE t1;
+
+
+--echo #
+--echo # Test for bug #50784 "MDL: Assertion `m_tickets.is_empty() ||
+--echo #                      m_tickets.front() == m_trans_sentinel'"
+--echo #
+--disable_warnings
+drop tables if exists t1, t2;
+--enable_warnings
+create table t1 (i int);
+create table t2 (j int);
+set @@autocommit= 0;
+repair table t1, t2;
+set @@autocommit= default;
+drop tables t1, t2;
+
+
+
+--echo #
+--echo # Test for BUG2025122427775 - when REPAIR TABLE . USE_FRM
+--echo #             the open_and_lock_tables() success but the
+--echo #             acquire_shared_backup_lock() fails, the next
+--echo #             ddl in same session will causes server crash.
+
+--echo # create 2 connection
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+--echo # con1 get BACKUP_LOCK  MLD_SHARED
+connection con1;
+USE test;
+CREATE TABLE t2(a INT);
+LOCK INSTANCE FOR BACKUP;
+
+
+--echo # con2 REPAIR temp table t1, for TEMPORARY TABLE
+--echo # open_and_lock_tables() will success, but
+--echo # acquire_shared_backup_lock() will be blocked by con1.
+--echo # DDL after repair table will be execute normally.
+connection con2;
+USE test;
+SET lock_wait_timeout=1;
+CREATE TEMPORARY TABLE t1 (a int);
+REPAIR TABLE t1 USE_FRM;
+--error ER_LOCK_WAIT_TIMEOUT
+alter table t2 add index(a);
+
+--echo # con1 release BACKUP_LOCK  MLD_SHARED
+connection con1;
+UNLOCK INSTANCE;
+
+--echo # con2 repair table and ddl will be execute normally
+connection con2;
+alter table t2 add index(a);
+alter table t2 drop index a;
+REPAIR TABLE t1 USE_FRM;
+alter table t2 add index(a);
+alter table t2 drop index a;
+DROP TABLE t1;
+
+
+--echo # clean up
+connection default;
+DROP TABLE t2;
+
+disconnect con1;
+disconnect con2;

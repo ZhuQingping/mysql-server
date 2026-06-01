@@ -1,0 +1,213 @@
+--source include/have_only_dstore.inc
+
+--echo # FE2025032900033 convert COUNT(col) to COUNT(*) if "col" is not nullable
+
+create table t1(a int not null, b int, index(b));
+show create table t1;
+insert into t1 values (1,1),(2,2),(3,3),(5,3),(8,3),(4,-1);
+analyze table t1 update histogram on b;
+analyze table t1;
+create view v1 as select a,a+1 as c,b from t1;
+
+--echo # First the feature is off, then it is on. There are two things to observe in the "on" case, in EXPLAIN output:
+--echo # - the rewrite to count(0), in the 'Note' line
+--echo # - the "using index", which appears for most queries. Those for which it does not appear, have a good reason:
+--echo # even after the simplification to count(0) there remains reasons why the index on 'b' is not enough (see comments
+--echo # further down).
+
+let $c=2;
+
+while ($c)
+{
+
+dec $c;
+
+# Turn off simplify_count_not_null feature
+if ($c == 1) {
+set optimizer_switch='simplify_count_not_null=off';
+select @@optimizer_switch like '%simplify_count_not_null=on%' as simplify_count_not_null;
+}
+
+# Turn on simplify_count_not_null feature
+if($c == 0) {
+set optimizer_switch='simplify_count_not_null=on';
+select @@optimizer_switch like '%simplify_count_not_null=on%' as simplify_count_not_null;
+}
+
+--echo # Optimal case, using index only
+explain select count(*) from t1 where b>1;
+
+--echo # same
+explain select count(0) from t1 where b>1;
+
+--echo # this demonstrates the basic case for the feature: without/with the feature, a covering index is used or not.
+let $query=select count(a) from t1 where b>1;
+eval explain $query;
+eval $query;
+
+--echo # we see the rewriting is done, and only on "count(a)". But as "count(distinct a)" is used, not "using index".
+let $query=select count(a), count(distinct a), count(b), sum(a), count(a+1) from t1 where b>1;
+eval explain $query;
+eval $query;
+
+--echo # these two show the difference between inner join and left join: on the right side of the latter, columns become nullable.
+let $query=select count(t1.a), count(t2.a) from t1, t1 as t2 where t1.b>1;
+eval explain $query;
+eval $query;
+
+let $query=select count(t1.a), count(t2.a) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
+eval explain $query;
+eval $query;
+
+--echo # see the difference between the counts
+let $query=select count(t1.a), count(t2.a), count(*) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
+eval explain $query;
+eval $query;
+
+--echo # a slightly more complicated case
+let $query=select count(t2.a), count(t1.a), count(t3.a) from t1 left join (t1 as t2, t1 as t3) on t1.b>=3 where t1.b>1;
+eval explain $query;
+eval $query;
+
+--echo # the feature works on merged views' columns too
+let $query=select count(a), count(c), count(b) from v1 where b>1;
+eval explain $query;
+eval $query;
+
+--echo # and also if the view is materialized: the tmp table's have proper (non-)nullability so we can use this information, and rewrite. No "using index" though, which is understandable: MySQL has not created any index on the tmp table.
+let $query=select /*+ no_merge() */ count(a), count(c), count(b) from v1 where b>1;
+eval explain $query;
+eval $query;
+
+--echo # same, with derived tables
+let $query=select count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
+eval explain $query;
+eval $query;
+
+let $query=select /*+ no_merge() */ count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
+eval explain $query;
+eval $query;
+
+--echo # GROUP BY
+let $query=select b, count(a) from t1 where b>1 group by b;
+eval explain $query;
+eval $query;
+
+--echo # outer reference. Here the feature brings nothing, because in the subquery ext.a is a constant, so even without any rewriting we have "using index" in the subquery. Alas we do not have "using index" in the top query (see comment in Item_sum_count::fix_fields() for an explanation).
+--echo # However, note that the rewriting happens *after* deciding of where aggregation happens, so we get an error here (aggregation in top query), while we do not get an error if the user has written count(0) (aggregation in subquery), and each time this is proper behaviour.
+let $query=select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
+eval explain $query;
+--error ER_SUBQUERY_NO_1_ROW
+eval $query;
+
+let $query=select (select count(0) from t1 where t1.b>1) from t1 as ext where b>1;
+eval explain $query;
+eval $query;
+
+--echo # As a consequence, such rewriting must not be done while creating a view (but it can be done when reading from this view), otherwise, the query's meaning would change.
+create view v2 as select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
+--echo # Not done when creating:
+show create view v2;
+--echo # Done when reading:
+set optimizer_trace='enabled=on';
+--error ER_SUBQUERY_NO_1_ROW
+select * from v2;
+--echo # The rewriting happened above ; it cannot be seen in EXPLAIN (which would fail with ER_SUBQUERY_NO_1_ROW because the view is single-row so materialized during EXPLAIN) but it can be seen in the optimizer trace:
+select trace like '% count(0) %' from information_schema.optimizer_trace;
+set optimizer_trace=default;
+drop view v2;
+
+--echo # GROUP BY and outer reference
+let $query=select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
+eval explain $query;
+--error ER_SUBQUERY_NO_1_ROW
+eval $query;
+
+let $query=select b,(select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
+eval explain $query;
+--error ER_SUBQUERY_NO_1_ROW
+eval $query;
+
+--echo # HAVING
+let $query=select b from t1 where b>1 group by b having count(a)>0;
+eval explain $query;
+eval $query;
+
+let $query=select b, count(a) from t1 where b>1 group by b having count(a)>0;
+eval explain $query;
+eval $query;
+
+--echo # HAVING and merged view
+let $query=select b from v1 where b>1 group by b having count(a)>0;
+eval explain $query;
+eval $query;
+
+let $query=select b, count(a) from v1 where b>1 group by b having count(a)>0;
+eval explain $query;
+eval $query;
+
+--echo # ROLLUP
+--echo # Rewritten, but cannot use index only, as we group by 'a'
+let $query=select count(a) from t1 where b>1 group by a;
+eval explain $query;
+eval $query;
+
+let $query=select count(a) from t1 where b>1 group by a with rollup;
+eval explain $query;
+eval $query;
+
+--echo # COUNT as window function: the feature works too
+explain select count(a) over() from t1 where b>1;
+select count(a) over() from t1 where b>1;
+explain select count(*) over() from t1 where b>1;
+select count(*) over() from t1 where b>1;
+
+--echo # A window function is computed on the output of ROLLUP, and ROLLUP makes 'a' nullable; as explained in the code, the feature is disabled.
+explain select a, count(a) over(), count(0) over() from t1 group by a with rollup;
+select a, count(a) over(), count(0) over() from t1 group by a with rollup;
+
+--echo # compare to no-ROLLUP:
+explain select a, count(a) over() from t1 group by a;
+select a, count(a) over() from t1 group by a;
+
+--echo # prepare statement
+prepare s1 from "explain select count(a) from t1 where b>?";
+prepare s2 from "select count(a) from t1 where b>?";
+set @b=1;
+execute s1 using @b;
+execute s2 using @b;
+set @b=2;
+execute s1 using @b;
+execute s2 using @b;
+set @b=3;
+execute s1 using @b;
+execute s2 using @b;
+# cleanup
+deallocate prepare s1;
+deallocate prepare s2;
+
+--echo # store procedure
+delimiter |;
+create procedure p1(in arg int)
+begin
+  explain select count(a) from t1 where b>arg;
+  select count(a) from t1 where b>arg;
+end|
+delimiter ;|
+call p1(1);
+call p1(2);
+call p1(3);
+# cleanup
+drop procedure p1;
+}
+
+# As we change arguments of COUNT, verify that it is a permanent transformation
+select @@optimizer_switch like '%simplify_count_not_null=on%' as simplify_count_not_null;
+prepare s from 'explain select count(a) from t1 where b>1';
+execute s;
+execute s;
+drop prepare s;
+
+drop view v1;
+drop table t1;
+set optimizer_switch=default;

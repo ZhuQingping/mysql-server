@@ -1,0 +1,195 @@
+# ==== Purpose ====
+# 
+# Test kill-related functions, including KILL QUERY, KILL CONNECTION, CTRL+C, and execution time over max_execution_time.
+# 
+# ==== Implementation ====
+# 
+# 1, kill query only affects the currently executing SQL statement (some scenarios can not exit)
+# 2, kill connection will interrupt the specified connection and resource normal cleanup, no effect on other connections
+# 3, ctrl + c can not be simulated, temporarily ignored
+# 4, max_execution_time use case reference main.max_statement_time.test
+#
+
+--source include/have_only_dstore.inc
+# create user
+connect (root_connection,localhost,root,,test);
+connection root_connection;
+
+create database test_db;
+create table test_db.test_tbl (a int primary key, b int);
+insert into test_db.test_tbl values (0, 1), (2, 3);
+
+create user test_user@localhost;
+grant select on performance_schema.* to test_user@localhost;
+grant insert on test_db.* to test_user@localhost;
+grant select on test_db.* to test_user@localhost;
+grant delete on test_db.* to test_user@localhost;
+grant create on test_db.* to test_user@localhost;
+grant create temporary tables on test_db.* to test_user@localhost;
+flush privileges;
+
+connect (user_connection1, localhost, test_user,,test_db,,);
+connection user_connection1;
+--disable_reconnect
+
+connect (user_connection2, localhost, test_user,,test_db,,);
+connection user_connection2;
+--disable_reconnect
+
+--echo # 
+--echo # 1. Test kill query functionality.
+--echo #
+
+--connection user_connection1
+
+# Get connection id
+--let $connection_id=`SELECT CONNECTION_ID()`
+--send /* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000)
+
+--connection user_connection2
+# Kill query.
+let $wait_condition= SELECT COUNT(processlist_info) FROM performance_schema.threads WHERE processlist_state="User sleep" AND processlist_info LIKE "%KILL QUERY: SELECT SLEEP(1000)%";
+--source include/wait_condition.inc
+--replace_result $connection_id <CONNECTION_ID>
+--eval KILL QUERY $connection_id
+
+
+--connection user_connection1
+--reap
+select "connection is active after kill query";
+
+begin;
+insert into test_db.test_tbl values (4, 5);
+--send /* KILL QUERY: SELECT SLEEP(2000) */ SELECT SLEEP(2000)
+
+--connection user_connection2
+# Kill query.
+let $wait_condition= SELECT COUNT(processlist_info) FROM performance_schema.threads WHERE processlist_state="User sleep" AND processlist_info LIKE "%KILL QUERY: SELECT SLEEP(2000)%";
+--source include/wait_condition.inc
+--replace_result $connection_id <CONNECTION_ID>
+--eval KILL QUERY $connection_id
+
+
+--connection user_connection1
+--reap
+select "connection is active after kill query";
+commit;
+select * from test_db.test_tbl;     #  (4, 5) is inserted
+
+
+--echo # 
+--echo # 2. Test kill connection functionality.
+--echo #
+
+--connection user_connection1
+# Get connection id
+--let $connection_id=`SELECT CONNECTION_ID()`
+--send /* KILL CONNECTION: SELECT SLEEP(3000) */ SELECT SLEEP(3000)
+
+--connection user_connection2
+# Kill connection.
+let $wait_condition= SELECT COUNT(processlist_info) FROM performance_schema.threads WHERE processlist_state="User sleep" AND processlist_info LIKE "%KILL CONNECTION: SELECT SLEEP(3000)%";
+--source include/wait_condition.inc
+--replace_result $connection_id <CONNECTION_ID>
+--eval KILL CONNECTION $connection_id
+
+--connection user_connection1
+--echo # connection is broken
+# These are client-library errors, not ER_*, so we're using the numeric value.
+--error ER_QUERY_INTERRUPTED,2013
+--reap
+# cleanup 
+disconnect user_connection1;
+
+connect (user_connection1, localhost, test_user,,test_db,,);
+--connection user_connection1
+--disable_reconnect
+# Get connection id
+--let $connection_id=`SELECT CONNECTION_ID()`
+
+begin;
+select * from test_db.test_tbl for update;
+insert into test_db.test_tbl values (6, 7);
+create temporary table test_tmp_tbl ( a int, b varchar(50));
+insert into test_db.test_tmp_tbl values (0, "abc");
+--send /* KILL CONNECTION: SELECT SLEEP(4000)  */ SELECT SLEEP(4000)
+
+--connection user_connection2
+# Kill connection.
+let $wait_condition= SELECT COUNT(processlist_info) FROM performance_schema.threads WHERE processlist_state="User sleep" AND processlist_info LIKE "%KILL CONNECTION: SELECT SLEEP(4000)%";
+--source include/wait_condition.inc
+--replace_result $connection_id <CONNECTION_ID>
+--eval KILL CONNECTION $connection_id
+
+--connection user_connection1
+--echo # connection is broken
+# These are client-library errors, not ER_*, so we're using the numeric value.
+--error ER_QUERY_INTERRUPTED,2013
+--reap
+
+
+--connection user_connection2
+--echo # insert (6, 7) has benn rollback
+select * from test_db.test_tbl;
+--echo # create temporary table is rollback
+--error ER_NO_SUCH_TABLE
+select * from test_db.test_tmp_tbl;
+
+disconnect user_connection1;
+connect (user_connection1, localhost, test_user,,test_db,,);
+--connection user_connection1
+
+--connection user_connection2
+select * from test_db.test_tbl;
+
+# deadlock test
+disconnect user_connection1;
+connect (user_connection1, localhost, test_user,,test_db,,);
+--connection user_connection1
+--disable_reconnect
+# Get connection id
+--let $connection_id1=`SELECT CONNECTION_ID()`
+begin;
+select * from test_db.test_tbl where a = 0 for update;
+
+connect (user_connection3, localhost, test_user,,test_db,,);
+--connection user_connection3
+--disable_reconnect
+# Get connection id
+--let $connection_id3=`SELECT CONNECTION_ID()`
+begin;
+send select * from test_db.test_tbl where a = 0 for update;
+
+--connection user_connection2
+--replace_result $connection_id3 <CONNECTION_ID>
+--eval KILL QUERY $connection_id3;
+
+--connection user_connection3
+--error ER_QUERY_INTERRUPTED,2013
+--reap
+# try second time
+begin;
+send select * from test_db.test_tbl where a = 0 for update;
+
+--connection user_connection2
+--replace_result $connection_id3 <CONNECTION_ID>
+--eval KILL QUERY $connection_id3;
+
+--connection user_connection3
+--error ER_QUERY_INTERRUPTED,2013
+--reap
+
+--echo #
+--echo # 3. cleanup.
+--echo #
+
+disconnect user_connection1;
+disconnect user_connection2;
+disconnect user_connection3;
+
+connection root_connection;
+use test;
+drop user test_user@localhost;
+drop database test_db;
+disconnect root_connection;
+

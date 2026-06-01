@@ -1,0 +1,28 @@
+#
+# BUG2025112020531: Dstore recovery failure due to empty DDL SQL check in CdeDdWriteExtraCommitWalCallback
+#
+# Description:
+# This test verifies that the server can recover successfully after a crash occurs 
+# immediately after DStore commits a DDL operation. Previously, recovery would
+# panic in `CdeDdWriteExtraCommitWalCallback` due to an incorrect error check 
+# for empty DDL SQL strings.
+#
+#
+# Step 1: Simulate a crash after DStore commit during DDL execution
+#
+SET GLOBAL debug='d,ddl_crash_safe_crash_after_commit_in_dstore';
+# Expect the server to crash during the following CREATE TABLE statement
+CREATE TABLE t1(pk INT PRIMARY KEY, col1 INT);
+ERROR HY000: Lost connection to MySQL server during query
+#
+# Step 2: Restart the server and verify recovery
+#
+# Wait for the disconnect to complete
+# Restart the server. 
+# Without the fix, this step would fail because DStore recovery would panic.
+# restart
+#
+# Step 3: Cleanup
+#
+DROP TABLE t1;
+# Test completed successfully.

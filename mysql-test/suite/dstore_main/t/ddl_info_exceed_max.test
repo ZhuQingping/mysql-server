@@ -1,0 +1,85 @@
+# ==== Purpose ====
+#
+# Verify if the DDL-info is too long and exceeds the max allowed size,
+# it will early return and report error to client.
+#
+# ==== References ====
+#
+# US2025031001018 DD In InnoDB--adaptation on SQL layer
+# 
+# ==== Implementation ====
+#
+# 1. enable rds_write_binlog_into_redo and rds_dstore_write_ddl_info_into_redo in the file ddl_info_exceed_max.cnf
+# 2. prepare a long create statement by filling the comment with long string. 
+# 3. check if it return ER_DSTORE_DDL_INFO_SIZE_INVALID when executing this statement
+
+--source include/have_only_dstore.inc
+
+--let $repeat_count = 1023
+
+--eval SELECT REPEAT('a', $repeat_count) AS comment INTO @comment;
+
+--let $comment = `SELECT @comment`
+
+let create_stmt = CREATE TABLE long_comment_table (
+  `id_col` int NOT NULL AUTO_INCREMENT,
+  `tinyint_col` tinyint DEFAULT NULL COMMENT '$comment',
+  `bool_col` tinyint(1) DEFAULT NULL COMMENT '$comment',
+  `tinyint_col2` tinyint DEFAULT NULL COMMENT '$comment',
+  `bool_col2` tinyint(1) DEFAULT NULL COMMENT '$comment',
+  `smallint_col` smallint DEFAULT NULL COMMENT '$comment',
+  `smallint_col2` smallint DEFAULT NULL COMMENT '$comment',
+  `mediumint_col` mediumint DEFAULT NULL COMMENT '$comment',
+  `int_col` int DEFAULT NULL COMMENT '$comment',
+  `bigint_col` bigint NOT NULL COMMENT '$comment',
+  `decimal_col` decimal(25,5) DEFAULT NULL COMMENT '$comment',
+  `float_col` float DEFAULT NULL COMMENT '$comment',
+  `double_col` double DEFAULT NULL COMMENT '$comment',
+  `date_col` date DEFAULT NULL COMMENT '$comment',
+  `datetime_col` datetime(6) DEFAULT NULL COMMENT '$comment',
+  `timestamp_col` timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '$comment',
+  `time_col` time(6) DEFAULT NULL COMMENT '$comment',
+  `year_col` year DEFAULT NULL COMMENT '$comment',
+  `char_col` char(4) CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL COMMENT '$comment',
+  `varchar_col` varchar(255) CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL COMMENT '$comment',
+  `binary_col` binary(11) DEFAULT NULL COMMENT '$comment',
+  `varbinary_col` varbinary(255) DEFAULT NULL COMMENT '$comment',
+  `tinyblob_col` varchar(32) DEFAULT NULL COMMENT '$comment',
+  `blob_col` varchar(64) DEFAULT NULL COMMENT '$comment',
+  `mediumblob_col` varchar(128) DEFAULT NULL COMMENT '$comment',
+  `longblob_col` varchar(256) DEFAULT NULL COMMENT '$comment',
+  `tinytext_col` varchar(32) CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL COMMENT '$comment',
+  `text_col` varchar(64) CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL COMMENT '$comment',
+  `mediumtext_col` varchar(128) CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL COMMENT '$comment',
+  `longtext_col` varchar(256) CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL COMMENT '$comment',
+  `enum_col` enum('aaa','bbb','ccc') CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL COMMENT '$comment',
+  `set_col` set('111','222','333') CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL COMMENT '$comment',
+  `json_col` varchar(16) DEFAULT NULL COMMENT '$comment',
+  `bit_col` bit(8) DEFAULT b'0' COMMENT '$comment',
+  PRIMARY KEY (`id_col`),
+  KEY `ndx_tinyint_col` (`tinyint_col`),
+  KEY `ndx_int_bool_col` (`int_col`,`bool_col`),
+  KEY `ndx_bigint_col` (`bigint_col` DESC),
+  KEY `ndx_float_col` (`float_col`,`bool_col`),
+  KEY `ndx_decimal_col` (`decimal_col` DESC),
+  KEY `ndx_date_bool_col` (`date_col`,`bool_col`),
+  KEY `ndx_datetime_col` (`datetime_col`),
+  KEY `ndx_year_col` (`year_col` DESC),
+  KEY `ndx_varchar_col` (`varchar_col`(4)),
+  KEY `ndx_binary_col` (`binary_col`),
+  KEY `ndx_bit_col` (`bit_col`),
+  KEY `ndx_time_col` ((time_to_sec(`time_col`)))
+) ENGINE=Dstore COMMENT='$comment$comment';
+
+--disable_query_log
+--eval SELECT LENGTH("$create_stmt") AS actual_length
+
+SET SQL_LOG_BIN = 0;
+CALL mtr.add_suppression("ddl info generating fail");
+SET SQL_LOG_BIN = 1;
+
+--error ER_DSTORE_DDL_INFO_SIZE_INVALID
+--eval $create_stmt
+--enable_query_log
+
+DROP TABLE IF EXISTS long_comment_table;

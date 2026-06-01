@@ -1,0 +1,208 @@
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("Creating tablespace is not allowed when local backup is running");
+call mtr.add_suppression("Dropping tablespace is not allowed when local backup is running");
+CREATE DATABASE db1;
+USE db1;
+CREATE TABLE t1(a int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+a
+1
+SET GLOBAL debug='+d,lb_pause_after_first_dstore_tbs_data_arrive';
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+INSERT INTO t1 VALUES(2);
+SELECT * FROM t1 order by a;
+a
+1
+2
+CREATE TABLESPACE ts1 MAX_SIZE=41943040;
+ERROR HY000: Failed to create TABLESPACE
+SET GLOBAL debug='-d,lb_pause_after_first_dstore_tbs_data_arrive';
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+INSERT INTO t1 VALUES(3);
+SELECT * FROM t1 order by a;
+a
+1
+2
+3
+# Shut server down.
+# Restart the server.
+# restart: --dstore_open_restore_mode=on
+USE db1;
+SELECT * FROM t1 order by a;
+a
+1
+2
+SELECT * FROM information_schema.dstore_tablespaces;
+SPACE	NAME	MAX_SIZE	SPACE_TYPE	FILES
+5	dstore_temporary	36028797018963968	System	
+2	dstore_default	36028797018963968	General	5121,5122,5123,5124,5125
+1	dstore_global	36028797018963968	System	5141
+CREATE TABLESPACE ts1 MAX_SIZE=41943040;
+CREATE TABLE t2(a int) ENGINE=Dstore, TABLESPACE=ts1;
+INSERT INTO t2 VALUES(100);
+SELECT * FROM t2;
+a
+100
+SET GLOBAL debug='+d,lb_pause_after_first_dstore_tbs_data_arrive';
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+INSERT INTO t1 VALUES(4);
+SELECT * FROM t1 order by a;
+a
+1
+2
+4
+INSERT INTO t2 VALUES(200);
+DROP TABLE t2;
+DROP TABLESPACE ts1;
+ERROR HY000: Failed to drop TABLESPACE
+SET GLOBAL debug='-d,lb_pause_after_first_dstore_tbs_data_arrive';
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+INSERT INTO t1 VALUES(5);
+SELECT * FROM t1 order by a;
+a
+1
+2
+4
+5
+# Shut server down.
+# Restart the server.
+# restart: --dstore_open_restore_mode=on
+USE db1;
+SELECT * FROM t1 order by a;
+a
+1
+2
+4
+SELECT * FROM information_schema.dstore_tablespaces;
+SPACE	NAME	MAX_SIZE	SPACE_TYPE	FILES
+5	dstore_temporary	36028797018963968	System	
+2	dstore_default	36028797018963968	General	5121,5122,5123,5124,5125
+1	dstore_global	36028797018963968	System	5141
+25	ts1	41943040	Single	5142,5143,5144,5145,5146
+CREATE TABLESPACE ts2 MAX_SIZE=41943040;
+CREATE TABLE t3(a int) ENGINE=Dstore, TABLESPACE=ts2;
+INSERT INTO t3 VALUES(100);
+SELECT * FROM t3;
+a
+100
+SET GLOBAL debug='+d,lb_pause_before_last_dstore_tbs_data_arrive';
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+INSERT INTO t1 VALUES(6);
+SELECT * FROM t1 order by a;
+a
+1
+2
+4
+6
+INSERT INTO t3 VALUES(200);
+DROP TABLE t3;
+DROP TABLESPACE ts2;
+ERROR HY000: Failed to drop TABLESPACE
+SET GLOBAL debug='-d,lb_pause_before_last_dstore_tbs_data_arrive';
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+INSERT INTO t1 VALUES(7);
+SELECT * FROM t1 order by a;
+a
+1
+2
+4
+6
+7
+# Shut server down.
+# Restart the server.
+# restart: --dstore_open_restore_mode=on
+USE db1;
+SELECT * FROM t1 order by a;
+a
+1
+2
+4
+6
+SELECT * FROM information_schema.dstore_tablespaces;
+SPACE	NAME	MAX_SIZE	SPACE_TYPE	FILES
+5	dstore_temporary	36028797018963968	System	
+2	dstore_default	36028797018963968	General	5121,5122,5123,5124,5125
+1	dstore_global	36028797018963968	System	5141
+25	ts1	41943040	Single	5142,5143,5144,5145,5146
+26	ts2	41943040	Single	5147,5148,5149,5150,5151
+SET GLOBAL debug='+d,lb_pause_before_last_dstore_tbs_data_arrive';
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+INSERT INTO t1 VALUES(8);
+SELECT * FROM t1 order by a;
+a
+1
+2
+4
+6
+8
+CREATE TABLESPACE ts3 MAX_SIZE=41943040;
+ERROR HY000: Failed to create TABLESPACE
+SET GLOBAL debug='-d,lb_pause_before_last_dstore_tbs_data_arrive';
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+INSERT INTO t1 VALUES(9);
+SELECT * FROM t1 order by a;
+a
+1
+2
+4
+6
+8
+9
+# Shut server down.
+# Restart the server.
+# restart: --dstore_open_restore_mode=on
+USE db1;
+SELECT * FROM t1 order by a;
+a
+1
+2
+4
+6
+8
+SELECT * FROM information_schema.dstore_tablespaces;
+SPACE	NAME	MAX_SIZE	SPACE_TYPE	FILES
+5	dstore_temporary	36028797018963968	System	
+2	dstore_default	36028797018963968	General	5121,5122,5123,5124,5125
+1	dstore_global	36028797018963968	System	5141
+25	ts1	41943040	Single	5142,5143,5144,5145,5146
+26	ts2	41943040	Single	5147,5148,5149,5150,5151
+DROP DATABASE db1;
+DROP TABLESPACE ts1;
+DROP TABLESPACE ts2;

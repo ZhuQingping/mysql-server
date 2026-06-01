@@ -1,0 +1,62 @@
+CREATE PROCEDURE delete_one_sql_filter_rule(IN offset_value INT)
+begin
+declare my_var BIGINT default 1;
+select item_id into my_var from mysql.rds_sql_filter_rules limit offset_value,1;
+call dbms_sqlfilter.delete_sql_filter(my_var);
+end |
+#
+# only rdsAdmin could insert/update/delete mysql.rds_sql_filter_rules table.
+#
+create user 'user1'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, REFERENCES, INDEX, ALTER, SHOW DATABASES, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER, CREATE ROLE, DROP ROLE ON *.* TO `user1`@`%` WITH GRANT OPTION;
+CREATE user 'user2'@'%';
+grant all privileges on *.* to 'user2'@'%';
+call dbms_sqlfilter.add_sql_filter("select", 10, "select~t","");
+# common user can not execute add_sql_filter/delete_sql_filter/flush_sql_filter
+call dbms_sqlfilter.add_sql_filter("select", 10, "select~t","");
+ERROR 42000: Access denied; you need (at least one of) the SUPER privilege(s) for this operation
+call dbms_sqlfilter.delete_sql_filter(1);
+ERROR 42000: Access denied; you need (at least one of) the SUPER privilege(s) for this operation
+call dbms_sqlfilter.flush_sql_filter();
+ERROR 42000: Access denied; you need (at least one of) the SUPER privilege(s) for this operation
+# common user can not insert/update/delete mysql.rds_sql_filter_rules table、
+insert into mysql.rds_sql_filter_rules values(2, 'select', 0, 'select~t','');
+ERROR 45000: Access denied for user 'user1@localhost' to table 'mysql.rds_sql_filter_rules'.
+update mysql.rds_sql_filter_rules set type='select';
+ERROR 45000: Access denied for user 'user1@localhost' to table 'mysql.rds_sql_filter_rules'.
+delete from mysql.rds_sql_filter_rules;
+ERROR 45000: Access denied for user 'user1@localhost' to table 'mysql.rds_sql_filter_rules'.
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	10	2	0	select~t	
+# common user which has super privilege can execute add_sql_filter/delete_sql_filter/flush_sql_filter
+call dbms_sqlfilter.add_sql_filter("select", 10, "select~t","");
+call delete_one_sql_filter_rule(0);
+call dbms_sqlfilter.flush_sql_filter();
+# common user which has all privileges can not insert/update/delete mysql.rds_sql_filter_rules table
+insert into mysql.rds_sql_filter_rules values(2, 'select', 0, 'select~t','');
+ERROR 45000: Access denied for user 'user2@localhost' to table 'mysql.rds_sql_filter_rules'.
+update mysql.rds_sql_filter_rules set type='select';
+ERROR 45000: Access denied for user 'user2@localhost' to table 'mysql.rds_sql_filter_rules'.
+delete from mysql.rds_sql_filter_rules;
+ERROR 45000: Access denied for user 'user2@localhost' to table 'mysql.rds_sql_filter_rules'.
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	10	2	0	select~t	
+# rdsAdmin@localhost which has super privileges can execute add_sql_filter/delete_sql_filter/flush_sql_filter
+call dbms_sqlfilter.add_sql_filter("select", 10, "select~t","");
+call delete_one_sql_filter_rule(0);
+call dbms_sqlfilter.flush_sql_filter();
+# rdsAdmin@localhost can insert/update/delete mysql.rds_sql_filter_rules table
+select user();
+user()
+rdsAdmin@localhost
+insert into mysql.rds_sql_filter_rules values(10, 'select', 0, 'select~t','');
+update mysql.rds_sql_filter_rules set type='select';
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+drop user 'user1'@'%';
+drop user 'user2'@'%';
+DROP PROCEDURE delete_one_sql_filter_rule;

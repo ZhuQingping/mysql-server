@@ -1,0 +1,289 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+
+# ==== TEST CASE 1: Persistent Stats - Commit Updates Statistics ====
+# Purpose: Verify that in persistent stats mode, table statistics are automatically
+#          updated after transaction commit (with background recalculation)
+
+--source include/count_sessions.inc
+--let $old_persistent = `SELECT @@GLOBAL.dstore_stats_persistent`
+--let $old_auto_recalc = `SELECT @@GLOBAL.dstore_stats_auto_recalc`
+SET GLOBAL dstore_stats_persistent = ON;
+SET GLOBAL dstore_stats_auto_recalc = ON;
+SET SESSION cte_max_recursion_depth = 10000;
+
+CREATE TABLE t (id INT) ENGINE=Dstore;
+
+--echo # Initial statistics (should show 0 row)
+ANALYZE TABLE t;
+explain select * from t;
+BEGIN;
+--echo # Inserting 30,000 rows (batch insert)
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM nums WHERE n < 10000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM nums WHERE n < 10000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM nums WHERE n < 10000
+)
+SELECT n FROM nums;
+--echo # Statistics during transaction (should show 30000 row), because have not recalc
+SELECT SLEEP(1);
+explain select * from t;
+--echo # Commit transaction
+COMMIT;
+explain select * from t;
+--echo # Wait for background stats recalculation (persistent mode)
+SELECT SLEEP(11);
+--echo # Statistics after background update (should show != 30,000 rows)
+--replace_column 10 X
+explain select * from t;
+DROP TABLE t;
+--eval SET GLOBAL dstore_stats_persistent = $old_persistent
+--eval SET GLOBAL dstore_stats_auto_recalc = $old_auto_recalc
+
+
+# ==== TEST CASE 3: Rollback - Statistics Remain Unchanged (Persistent Mode) ====
+# Purpose: Verify that rolled back transactions don't affect table statistics
+--let $old_persistent = `SELECT @@GLOBAL.dstore_stats_persistent`
+SET GLOBAL dstore_stats_persistent = ON;
+CREATE TABLE t (id INT) ENGINE=Dstore;
+ANALYZE TABLE t;
+explain select * from t;
+BEGIN;
+--echo # Insert 3,000 rows
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM nums WHERE n < 1000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM nums WHERE n < 1000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM nums WHERE n < 1000
+)
+SELECT n FROM nums;
+--echo # Statistics during transaction (should be unchanged)
+explain select * from t;
+--echo # Rollback transaction
+ROLLBACK;
+--echo # Wait to ensure background update occurs
+SELECT SLEEP(11);
+--echo # Statistics after background update (should show == 0 rows)
+explain select * from t;
+DROP TABLE t;
+--eval SET GLOBAL dstore_stats_persistent = $old_persistent
+
+
+# ==== TEST CASE 4: Rollback - Concurrent Session Statistics (Persistent) ====
+# Purpose: Verify other sessions see correct statistics during/after rollback
+--let $old_persistent = `SELECT @@GLOBAL.dstore_stats_persistent`
+SET GLOBAL dstore_stats_persistent = ON;
+CREATE TABLE t (id INT) ENGINE=Dstore;
+--connect(con1,localhost,root,,)
+BEGIN;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM nums WHERE n < 1000
+)
+SELECT n FROM nums;
+--connection default
+--echo # In main session: Check stats while transaction is active
+--sleep 1
+explain select * from t;
+--connection con1
+ROLLBACK;
+DISCONNECT con1;
+--connection default
+--echo # After rollback in main session
+--echo # Wait to ensure background update occurs
+SELECT SLEEP(11);
+--echo # Statistics after background update (should show == 0 rows), because rollback trx
+explain select * from t;
+DROP TABLE t;
+--eval SET GLOBAL dstore_stats_persistent = $old_persistent
+
+--echo #
+--echo # Dstore statistics updated immediately when table has been changed more than 10%.
+--echo # To avoid statistics updated too frequently of small tables, only when the time
+--echo # since the last update is more than 1 second will trigger automatic update logic.
+--echo #
+# Test 1, insert + delete
+CREATE TABLE t1(a INT, INDEX(a))ENGINE=Dstore;
+# Configure the table and columns we should wait for.
+--let $table_name= "t1"
+--let $columns= "a"
+--source include/pre_wait_for_histogram.inc
+INSERT INTO t1 VALUES(1),(2),(3),(4);
+# This statement will now wait for histograms to be updated for "t1.a".
+--source include/post_wait_for_histogram.inc
+# Table histogram statistics should be updated
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS WHERE TABLE_NAME IN ('t1');
+EXPLAIN SELECT * FROM t1 WHERE a=2;
+# Statistics will not updated too frequently
+DELETE FROM t1 WHERE a IN (3,4);
+# Table histogram statistics should not be updated since last update less than 1 second
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS WHERE TABLE_NAME IN ('t1');
+EXPLAIN SELECT * FROM t1 WHERE a=4;
+--sleep 11
+# 11 seconds passed, histogram statistics should be updated again.
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS WHERE TABLE_NAME IN ('t1');
+EXPLAIN SELECT * FROM t1 WHERE a=4;
+
+# Test 2, insert + insert
+CREATE TABLE t2(a VARCHAR(50), INDEX(a))ENGINE=Dstore;
+# Configure the table and columns we should wait for.
+--let $table_name= "t2"
+--let $columns= "a"
+--source include/pre_wait_for_histogram.inc
+INSERT INTO t2 VALUES('MySQL'),('Dstore'),('TaurusDB'),('GaussDB');
+# This statement will now wait for histograms to be updated for "t2.a".
+--source include/post_wait_for_histogram.inc
+# Table histogram statistics should be updated
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS WHERE TABLE_NAME IN ('t2');
+EXPLAIN SELECT * FROM t2 WHERE a='MySQL';
+# Statistics will not updated too frequently
+INSERT INTO t2 VALUES('Oracle'),('DB2'),('SQL Server'),('Aurora');
+# Table histogram statistics should not be updated since last update less than 1 second
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS WHERE TABLE_NAME IN ('t2');
+EXPLAIN SELECT * FROM t2 WHERE a='Aurora';
+--sleep 11
+# 11 seconds passed, histogram statistics should be updated again.
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS WHERE TABLE_NAME IN ('t2');
+EXPLAIN SELECT * FROM t2 WHERE a='Aurora';
+
+# Cleanup
+DROP TABLE t1,t2;
+
+--echo #
+--echo # When table was droped, the element will be removed from delay recalculate pool
+--echo #
+CREATE TABLE t1(a INT, INDEX(a))ENGINE=Dstore;
+SET debug='+d,dstore_recalc_pool_del_print';
+# Configure the table and columns we should wait for.
+--let $table_name= "t1"
+--let $columns= "a"
+--source include/pre_wait_for_histogram.inc
+INSERT INTO t1 VALUES(1),(2),(3),(4);
+# This statement will now wait for histograms to be updated for "t1.a".
+--source include/post_wait_for_histogram.inc
+# Table histogram statistics should be updated
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS WHERE TABLE_NAME IN ('t1');
+EXPLAIN SELECT * FROM t1 WHERE a=2;
+
+INSERT INTO t1 VALUES(5),(6),(7),(8);
+--sleep 0.1
+# Table t1 add into delay recalculate pool since last update less than 10 seconds
+
+DROP TABLE t1;
+# Table t1 should be removed from delay recalculate pool
+
+--let SEARCH_FILE= $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let SEARCH_PATTERN= Remove table from backend auto update delay recalculate pool, table name: ./test/t1
+--source include/search_pattern.inc
+
+# Cleanup
+SET debug='-d,dstore_recalc_pool_del_print';
+
+--echo #
+--echo # Verify adaptive auto stats recalc interval branches with debug forcing.
+--echo #
+CREATE TABLE t_stats_interval (
+  id INT PRIMARY KEY
+) STATS_PERSISTENT=1 STATS_AUTO_RECALC=1;
+
+INSERT INTO t_stats_interval
+WITH RECURSIVE seq AS (
+  SELECT 1 AS n
+  UNION ALL
+  SELECT n + 1 FROM seq WHERE n < 200
+)
+SELECT n FROM seq;
+
+ANALYZE TABLE t_stats_interval UPDATE HISTOGRAM ON id;
+ANALYZE TABLE t_stats_interval;
+
+SET @old_ts= (
+  SELECT UNIX_TIMESTAMP(last_update)
+  FROM mysql.dstore_table_stats
+  WHERE database_name= DATABASE() AND table_name= 't_stats_interval'
+);
+
+--echo # Force high CPU branch and shorter test intervals (fast=1s, slow=3s).
+SET @save_debug= @@GLOBAL.debug;
+SET GLOBAL debug=
+  '+d,dstore_auto_stats_interval_test_short,dstore_auto_stats_interval_force_high_cpu';
+
+INSERT INTO t_stats_interval
+WITH RECURSIVE seq AS (
+  SELECT 1001 AS n
+  UNION ALL
+  SELECT n + 1 FROM seq WHERE n < 1040
+)
+SELECT n FROM seq;
+
+SELECT SLEEP(1);
+SET @new_ts = (
+  SELECT UNIX_TIMESTAMP(last_update)
+  FROM mysql.dstore_table_stats
+  WHERE database_name= DATABASE() AND table_name= 't_stats_interval'
+);
+SELECT @new_ts > @old_ts AS high_branch_not_too_early;
+
+SELECT SLEEP(10);
+SET @new_ts= (
+  SELECT UNIX_TIMESTAMP(last_update)
+  FROM mysql.dstore_table_stats
+  WHERE database_name= DATABASE() AND table_name= 't_stats_interval'
+);
+SELECT @new_ts > @old_ts AS high_branch_eventually_updates;
+
+--echo # Force low CPU branch and shorter test intervals (fast=1s).
+SET @old_ts= @new_ts;
+SET GLOBAL debug=
+  '+d,dstore_auto_stats_interval_test_short,dstore_auto_stats_interval_force_low_cpu';
+
+INSERT INTO t_stats_interval
+WITH RECURSIVE seq AS (
+  SELECT 2001 AS n
+  UNION ALL
+  SELECT n + 1 FROM seq WHERE n < 2040
+)
+SELECT n FROM seq;
+
+SELECT SLEEP(11);
+SET @new_ts= (
+  SELECT UNIX_TIMESTAMP(last_update)
+  FROM mysql.dstore_table_stats
+  WHERE database_name= DATABASE() AND table_name= 't_stats_interval'
+);
+SELECT @new_ts > @old_ts AS low_branch_updates_fast;
+
+SET GLOBAL debug= @save_debug;
+
+DROP TABLE t_stats_interval;

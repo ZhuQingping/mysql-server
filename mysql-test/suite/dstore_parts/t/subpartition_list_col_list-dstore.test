@@ -1,0 +1,515 @@
+SET @saved_rds_extended_partitions_enabled=@@rds_extended_partitions_enabled;
+SET global rds_extended_partitions_enabled = true;
+
+let $part_opt_columns=columns;
+let $subpart_opt_columns=;
+--source suite/dstore_parts/inc/subpartition_signal_columns.inc
+
+# Test : value type
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  m_date      date,
+  d           double
+)
+partition by list columns(country, m_date)
+subpartition by list (dept_no)
+(
+  partition p0 values in (('A', '2021-01-01'), ('B', '2022-01-02'))(
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4)
+  ),
+  partition p1 values in (('C', '2021-01-01'), ('D', '2022-01-02'))(
+    subpartition partno3 values in (1, 2),
+    subpartition partno4 values in (3, 4)
+  )
+);
+show create table t1; drop table t1;
+
+--error ER_FIELD_TYPE_NOT_ALLOWED_AS_PARTITION_FIELD
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  m_date      date,
+  d           double
+)
+partition by list columns(country, d)
+subpartition by list (dept_no)
+(
+  partition p0 values in (('A', 3.1), ('B', 10.1))(
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4)
+  ),
+  partition p1 values in (('C', 3.1), ('D', 10.1))(
+    subpartition partno3 values in (1, 2),
+    subpartition partno4 values in (3, 4)
+  )
+);
+
+# cant not support expr
+--error ER_PARSE_ERROR
+create table t1
+(
+  dept_no     INT,
+  part_no     INT,
+  country     varchar(20),
+  date        DATE,
+  amount      INT
+)
+partition by list columns(dept_no + part_no)
+subpartition by list (dept_no)
+(
+  partition p0 values in (1) (
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4)
+  ),
+  partition p1 values in (2,3) (
+    subpartition partno3 values in (1, 2),
+    subpartition partno4 values in (3, 4)
+  )
+);
+
+--echo #
+--echo # DDL for list-list
+--echo #
+
+# Test: add partition
+create table t1 (a int,b int,c int,d int,e int)
+partition by list columns(a,b,c) subpartition by list(d)
+(
+  partition p0 values in ((1,1,1),(1,1,2),(1,2,1),(1,4,4))(
+    subpartition p0_0 values in (1,2,3,4),
+    subpartition p0_1 values in (5,6,7,8)
+  ),
+  partition p1 values in ((2,1,1),(2,1,2),(2,5,3),(2,7,4))(
+    subpartition p1_0 values in (1,2,3,4),
+    subpartition p1_1 values in (5,6,7,8)
+  )
+);
+
+--error ER_ADD_PARTITION_SUBPART_ERROR
+alter table t1 add partition (
+  partition p2 values in ((5,1,1),(5,1,2),(5,5,3),(5,7,4))(
+    subpartition p2_0 values in (1,2,3,4)
+  )
+);
+
+--error ER_PARTITION_WRONG_VALUES_ERROR
+alter table t1 add partition (
+  partition p2 values in ((5,1,1),(5,1,2),(5,5,3),(5,7,4)) (
+    subpartition p2sp0 values less than (5),
+    subpartition p2sp0 values in (1,2,3,4)
+  )
+);
+show create table t1;
+
+alter table t1 add partition (
+  partition p2 values in ((5,1,1),(5,1,2),(5,5,3),(5,7,4)) (
+    subpartition p2_0 values in (1,2,3,4),
+    subpartition p2_1 values in (5,6,7,8)
+  )
+);
+show create table t1;
+insert into t1 values(1,2,1,1,1),(1,1,2,1,1),(2,1,1,5,3),(2,5,3,7,5),(5,1,2,1,2),(5,7,4,8,1);
+select * from t1 partition(p2_1) order by a,b,c,d,e;
+drop table t1;
+
+# Test: converting a Non-partitioned Table to a Partitioned Table
+
+create table t1 (a int,b int,c int,d int,e int);
+insert into t1 values(1,2,1,1,1),(1,2,2,1,1),(1,2,2,5,3),(1,2,2,7,5),(1,2,2,1,2),(1,2,2,1,1);
+insert into t1 values(3,4,1,1,1),(5,4,2,1,1),(6,4,2,5,3),(7,4,2,7,4),(3,4,2,1,2),(3,4,2,1,1);
+
+alter table t1 partition by list columns(a,b,c) subpartition by list(d) (
+  partition p0 values in ((1,2,1),(1,2,2),(3,4,1),(3,4,2))(
+    subpartition p0_0 values in (1,2,3),
+    subpartition p0_1 values in (4,5,6,7)
+  ),
+  partition p1 values in ((5,4,2),(6,4,2),(7,4,2))(
+    subpartition p1_0 values in (1,2,3),
+    subpartition p1_1 values in (4,5,6,7)
+  )
+);
+show create table t1;
+select * from t1 partition(p0_0) order by a,b,c,d,e;
+select * from t1 partition(p0) order by a,b,c,d,e;
+select * from t1 partition(p1) order by a,b,c,d,e;
+
+--error ER_NO_PARTITION_FOR_GIVEN_VALUE
+alter table t1 partition by list columns(a,b,c) subpartition by list(d) (
+  partition p0 values in ((1,2,1),(1,2,2),(3,4,2))(
+    subpartition p0_0 values in (1,2,3),
+    subpartition p0_1 values in (4,5,6,7)
+  ),
+  partition p1 values in ((5,4,2),(6,4,2),(7,4,2))(
+    subpartition p1_0 values in (1,2,3),
+    subpartition p1_1 values in (4,5,6)
+  )
+);
+
+# Test: drop partition
+
+--error ER_DROP_PARTITION_NON_EXISTENT
+alter table t1 drop partition p0_0;
+# Currently, we only support copy algorithm for partitioned tables in DStore.
+# The default for MySQL for DROP PARTITION is the inplace algorithm.
+# The behavior for inplace and copy algorithm is different for drop partition
+# (i.e. there is an error for copy).
+# alter table t1 drop partition p0;
+show create table t1;
+select * from t1 order by a,b,c,d,e;
+analyze table t1;
+select partition_name, subpartition_name, table_rows from
+  information_schema.partitions where table_name = 't1';
+
+--echo # Test for truncate partition
+select * from t1 partition(p1_0) order by a,b,c,d,e;
+alter table t1 truncate partition p1_0;
+show create table t1;
+select * from t1 partition(p1_0) order by a,b,c,d,e;
+insert into t1 values(6,4,2,4,4);
+select * from t1 partition(p1) order by a,b,c,d,e;
+alter table t1 truncate partition p1;
+select * from t1 partition(p1) order by a,b,c,d,e;
+drop table t1;
+
+# Test: for reorganize partition
+
+create table t1 (a int,b int,c int,d int,e int)
+partition by list columns(a,b,c) subpartition by list(d)
+(
+  partition p0 values in ((1,2,1),(1,2,2),(3,4,2))(
+    subpartition p0_0 values in (1,2,3),
+    subpartition p0_1 values in (4,5,6,7)
+  ),
+  partition p1 values in ((5,4,2),(6,4,2),(7,4,2))(
+    subpartition p1_0 values in (1,2,3),
+    subpartition p1_1 values in (4,5,6)
+  ),
+  partition p2 values in ((5,1,1),(5,1,2),(5,5,3),(5,7,4)) (
+    subpartition p2_0 values in (1,2,3,4),
+    subpartition p2_1 values in (5,6,7,8)
+  )
+);
+insert into t1 values(1,2,1,1,1),(1,2,2,2,1),(1,2,2,5,3),(1,2,2,7,5),(1,2,1,1,1),(1,2,1,2,1);
+insert into t1 values(5,4,2,3,1),(5,1,1,1,1),(5,1,2,5,3),(3,4,2,7,4),(5,5,3,5,1),(6,4,2,6,1);
+insert into t1 values(5,4,2,1,1),(6,4,2,1,1),(5,5,3,5,3),(5,7,4,7,4),(7,4,2,1,1),(6,4,2,6,1);
+
+select * from t1 partition(p1_0) order by a,b,c,d,e;
+select * from t1 partition(p1_1) order by a,b,c,d,e;
+
+alter table t1 reorganize partition p1 into (
+  partition p1 values in ((5,4,2),(6,4,2),(7,4,2))(
+    subpartition p1_0 values in (1),
+    subpartition p1_1 values in (2,3,4,5,6)
+  )
+);
+show create table t1;
+select * from t1 partition(p1_0) order by a,b,c,d,e;
+select * from t1 partition(p1_1) order by a,b,c,d,e;
+
+alter table t1 reorganize partition p1,p2 into (
+  partition p1 values in ((5,4,2),(6,4,2),(7,4,2),(5,1,1),(5,1,2),(5,5,3),(5,7,4))(
+    subpartition p1_0 values in (1,2,3,4),
+    subpartition p1_1 values in (5,6,7,8)
+  )
+);
+show create table t1;
+select * from t1 partition(p1) order by a,b,c,d,e;
+drop table t1;
+
+# Error scenario
+create table t1 (a int,b int,c int,d int,e int)
+partition by list columns(a,b,c) subpartition by list(d)
+(
+  partition p0 values in ((1,2,1),(1,2,2),(3,4,2))(
+    subpartition p0_0 values in (1,2,3),
+    subpartition p0_1 values in (4,5,6,7)
+  ),
+  partition p1 values in ((5,4,2),(6,4,2),(7,4,2))(
+    subpartition p1_0 values in (1,2,3),
+    subpartition p1_1 values in (4,5,6)
+  ),
+  partition p2 values in ((5,1,1),(5,1,2),(5,5,3),(5,7,4)) (
+    subpartition p2_0 values in (1,2,3,4),
+    subpartition p2_1 values in (5,6,7,8)
+  )
+);
+insert into t1 values(1,2,1,1,1),(1,2,2,2,1),(1,2,2,5,3),(1,2,2,7,5),(1,2,1,1,1),(1,2,1,2,1);
+insert into t1 values(5,4,2,3,1),(5,1,1,1,1),(5,1,2,5,3),(3,4,2,7,4),(5,5,3,5,1),(6,4,2,6,1);
+insert into t1 values(5,4,2,1,1),(6,4,2,1,1),(5,5,3,5,3),(5,7,4,7,4),(7,4,2,1,1),(6,4,2,6,1);
+
+# Currently, we only support copy algorithm for partitioned tables in DStore.
+# The default for MySQL for REORGANIZE PARTITION is the inplace algorithm.
+# The behavior for inplace and copy algorithm is different for reorganize partition.
+#alter table t1 reorganize partition p2 into (
+#  partition p2 values in ((5,1,1),(5,1,2),(5,5,3),(5,7,4)) (
+#    subpartition p2_0 values in (1,2,3,4),
+#    subpartition p2_1 values in (6,7,8)
+#  )
+#);
+# leading to data loss
+select * from t1 order by a,b,c,d,e;
+drop table t1;
+
+# Test: exchange partition
+
+create table t1 (a int,b int,c int,d int,e int)
+partition by list columns(a,b,c) subpartition by list(d)
+(
+  partition p0 values in ((1,2,1),(1,2,2),(3,4,2))(
+    subpartition p0_0 values in (1,2,3),
+    subpartition p0_1 values in (4,5,6,7)
+  ),
+  partition p1 values in ((5,4,2),(6,4,2),(7,4,2))(
+    subpartition p1_0 values in (1,2,3),
+    subpartition p1_1 values in (4,5,6)
+  ),
+  partition p2 values in ((5,1,1),(5,1,2),(5,5,3),(5,7,4)) (
+    subpartition p2_0 values in (1,2,3,4),
+    subpartition p2_1 values in (5,6,7,8)
+  )
+);
+insert into t1 values(1,2,1,1,1),(1,2,2,2,1),(1,2,2,5,3),(1,2,2,7,5),(1,2,1,1,1),(1,2,1,2,1);
+insert into t1 values(5,4,2,3,1),(5,1,1,1,1),(5,1,2,5,3),(3,4,2,7,4),(5,5,3,5,1),(6,4,2,6,1);
+insert into t1 values(5,4,2,1,1),(6,4,2,1,1),(5,5,3,5,3),(5,7,4,7,4),(7,4,2,1,1),(6,4,2,6,1);
+
+create table t2 like t1;
+alter table t2 remove partitioning;
+select * from t1 partition(p2_0) order by a,b,c,d,e;
+alter table t1 exchange partition p2_0 with table t2;
+select * from t1 partition(p2_0) order by a,b,c,d,e;
+select * from t2 order by a,b,c,d,e;
+
+delete from t2;
+insert into t2 values(5,5,3,9,3);
+--error ER_NO_PARTITION_FOR_GIVEN_VALUE
+alter table t1 exchange partition p2_0 with table t2;
+
+alter table t1 exchange partition p2_0 with table t2 without validation;
+select * from t1 partition(p2_0) order by a,b,c,d,e;
+# data loss
+select * from t1 where d > 7 order by a,b,c,d,e;
+select * from t2 order by a,b,c,d,e;
+
+drop table t1, t2;
+
+# Test: analyze partition
+create table t1 (a int,b int,c int,d int,e int)
+partition by list columns(a,b,c) subpartition by list(d)
+(
+  partition p0 values in ((1,2,1),(1,2,2),(3,4,2))(
+    subpartition p0_0 values in (1,2,3),
+    subpartition p0_1 values in (4,5,6,7)
+  ),
+  partition p1 values in ((5,4,2),(6,4,2),(7,4,2))(
+    subpartition p1_0 values in (1,2,3),
+    subpartition p1_1 values in (4,5,6)
+  ),
+  partition p2 values in ((5,1,1),(5,1,2),(5,5,3),(5,7,4)) (
+    subpartition p2_0 values in (1,2,3,4),
+    subpartition p2_1 values in (5,6,7,8)
+  )
+);
+insert into t1 values(1,2,1,1,1),(1,2,2,2,1),(1,2,2,5,3),(1,2,2,7,5),(1,2,1,1,1),(1,2,1,2,1);
+insert into t1 values(5,4,2,3,1),(5,1,1,1,1),(5,1,2,5,3),(3,4,2,7,4),(5,5,3,5,1),(6,4,2,6,1);
+insert into t1 values(5,4,2,1,1),(6,4,2,1,1),(5,5,3,5,3),(5,7,4,7,4),(7,4,2,1,1),(6,4,2,6,1);
+
+alter table t1 analyze partition p1_0, p2_1;
+select * from t1 partition(p2_1) order by a,b,c,d,e;
+
+# Test: check partition
+select * from t1 partition(p0_1,p1,p2_1);
+alter table t1 check partition p0_1, p1, p2_1;
+select * from t1 partition(p0_1,p1,p2_1);
+
+# Test: optimize partition
+alter table t1 optimize partition p0_1, p1, p2_1;
+select * from t1 partition(p0_1,p1,p2_1);
+
+# Test: rebuild partition, only for partiton_name, not for subpartition_name
+select * from t1 partition(p0);
+alter table t1 rebuild partition p0;
+select * from t1 partition(p0);
+
+--error ER_DROP_PARTITION_NON_EXISTENT
+alter table t1 rebuild partition p0_1;
+
+# Test: repair partition
+select * from t1 partition(p0_1);
+alter table t1 repair partition p0_1;
+select * from t1 partition(p0_1);
+
+# Test: remove partitioning
+alter table t1 remove partitioning;
+show create table t1;
+drop table t1;
+
+# Test: DDL for partition table
+create table t1 (a int,b int,c int,d int,e int)
+partition by list columns(a,b,c) subpartition by list(d)
+(
+  partition p0 values in ((1,2,1),(1,2,2),(3,4,2))(
+    subpartition p0_0 values in (1,2,3),
+    subpartition p0_1 values in (4,5,6,7)
+  ),
+  partition p1 values in ((5,4,2),(6,4,2),(7,4,2))(
+    subpartition p1_0 values in (1,2,3),
+    subpartition p1_1 values in (4,5,6)
+  ),
+  partition p2 values in ((5,1,1),(5,1,2),(5,5,3),(5,7,4)) (
+    subpartition p2_0 values in (1,2,3,4),
+    subpartition p2_1 values in (5,6,7,8)
+  )
+);
+insert into t1 values(1,2,1,1,1),(1,2,2,2,1),(1,2,2,5,3),(1,2,2,7,5),(1,2,1,1,1),(1,2,1,2,1);
+insert into t1 values(5,4,2,3,1),(5,1,1,1,1),(5,1,2,5,3),(3,4,2,7,4),(5,5,3,5,1),(6,4,2,6,1);
+insert into t1 values(5,4,2,1,1),(6,4,2,1,1),(5,5,3,5,3),(5,7,4,7,4),(7,4,2,1,1),(6,4,2,6,1);
+
+alter table t1 add column col1 date;
+show create table t1;
+create index idx1 on t1(c,d,e);
+show indexes from t1;
+drop table t1;
+
+# Verify index
+create table t1 (a int,b int,c int,d int,e int)
+partition by list columns(a,b,c) subpartition by list(d)
+(
+  partition p0 values in ((1,2,1),(1,2,2),(3,4,2))(
+    subpartition p0_0 values in (1,2,3),
+    subpartition p0_1 values in (4,5,6,7)
+  ),
+  partition p1 values in ((5,4,2),(6,4,2),(7,4,2))(
+    subpartition p1_0 values in (1,2,3),
+    subpartition p1_1 values in (4,5,6)
+  ),
+  partition p2 values in ((5,1,1),(5,1,2),(5,5,3),(5,7,4)) (
+    subpartition p2_0 values in (1,2,3,4),
+    subpartition p2_1 values in (5,6,7,8)
+  )
+);
+insert into t1 values(1,2,1,1,1),(1,2,2,2,1),(1,2,2,5,3),(1,2,2,7,5),(1,2,1,1,1),(1,2,1,2,1);
+insert into t1 values(5,4,2,3,1),(5,1,1,1,1),(5,1,2,5,3),(3,4,2,7,4),(5,5,3,5,1),(6,4,2,6,1);
+insert into t1 values(5,4,2,1,1),(6,4,2,1,1),(5,5,3,5,3),(5,7,4,7,4),(7,4,2,1,1),(6,4,2,6,1);
+
+--replace_column 10 # 11 #
+explain select * from t1 where a < 5;
+alter table t1 add index idx(a);
+select * from t1 where a < 5 order by a,b,c,d,e;
+explain select * from t1 where a < 5;
+--replace_column 10 # 11 #
+alter table t1 add index idx1(a, b);
+select * from t1 where a = 5 and b = 6 order by a,b,c,d,e;
+# In order to get the same result as in INNODB in the below query.
+# We need to add primary key to t1. INNODB always adds a primary
+# key to a table. Optimizer will use this primary key - to search
+# in a const table (i.e. the table we query and the optimizer knows
+# that it can return at most 1 row) - instead of using index.
+# Here we cannot add primary key as it must include all columns as
+# all columns are included in partitioning. For all columns we will
+# get duplicate entries. 
+--replace_column 10 # 11 #
+explain select * from t1 where a = 5 and b = 6;
+alter table t1 drop index idx;
+alter table t1 drop index idx1;
+alter table t1 add index idx2(c,d);
+--replace_column 10 # 11 #
+explain select * from t1 where a >= 1 and b = 2 and c = 2;
+select * from t1 where a >= 1 and b = 2 and c = 2 order by a,b,c,d,e;
+drop table t1;
+
+# Test partitioning interval analysis
+create table t1 (a int,b int,c int,d int,e int)
+partition by list columns(a,b,c) subpartition by list(d)
+(
+  partition p0 values in ((1,2,1),(1,2,2),(3,4,2))(
+    subpartition p0_0 values in (1,2,3),
+    subpartition p0_1 values in (4,5,6,7)
+  ),
+  partition p1 values in ((5,4,2),(6,4,2),(7,4,2))(
+    subpartition p1_0 values in (1,2,3),
+    subpartition p1_1 values in (4,5,6)
+  ),
+  partition p2 values in ((5,1,1),(5,1,2),(5,5,3),(5,7,4)) (
+    subpartition p2_0 values in (1,2,3,4),
+    subpartition p2_1 values in (5,6,7,8)
+  )
+);
+insert into t1 values(1,2,1,1,1),(1,2,2,2,1),(1,2,2,5,3),(1,2,2,7,5),(1,2,1,1,1),(1,2,1,2,1);
+insert into t1 values(5,4,2,3,1),(5,1,1,1,1),(5,1,2,5,3),(3,4,2,7,4),(5,5,3,5,1),(6,4,2,6,1);
+insert into t1 values(5,4,2,1,1),(6,4,2,1,1),(5,5,3,5,3),(5,7,4,7,4),(7,4,2,1,1),(6,4,2,6,1);
+
+select * from t1 where a >= 1 and b > 3 and c >= 1 and d = 5 order by a,b,c,d,e;
+--replace_column 10 # 11 #
+explain select * from t1 where a >= 1 and b > 3 and c >= 1 and d = 5;
+select * from t1 where a = 1 and b = 2 and c >= 1 and d > 3 order by a,b,c,d,e;
+--replace_column 10 # 11 #
+explain select * from t1 where a = 1 and b = 2 and c >= 1 and d > 3;
+select * from t1 where a = 1 and b > 1 and c >= 1 and d = 7 order by a,b,c,d,e;
+--replace_column 10 # 11 #
+explain select * from t1 where a = 1 and b > 1 and c >= 1 and d = 7;
+select * from t1 where a > 1 and c >= 1 and d = 5 order by a,b,c,d,e;
+--replace_column 10 # 11 #
+explain select * from t1 where a > 1 and c >= 1 and d = 5;
+select * from t1 where a > 1 and c >= 1 and d > 5 order by a,b,c,d,e;
+--replace_column 10 # 11 #
+explain select * from t1 where a > 1 and c >= 1 and d > 5;
+select * from t1 where a > 3 and c = 2 and d = 5 order by a,b,c,d,e;
+--replace_column 10 # 11 #
+explain select * from t1 where a > 3 and c = 2 and d = 5;
+select * from t1 where a > 1 and c = 2 and d > 5 order by a,b,c,d,e;
+--replace_column 10 # 11 #
+explain select * from t1 where a > 1 and c = 2 and d > 5;
+
+select * from t1 where b > 2 and d > 6 order by a,b,c,d,e;
+--replace_column 10 # 11 #
+explain select * from t1 where b > 2 and d > 6;
+
+select * from t1 where d > 3 order by a,b,c,d,e;
+--replace_column 10 # 11 #
+explain select * from t1 where d > 3;
+select * from t1 where d = 5 order by a,b,c,d,e;
+--replace_column 10 # 11 #
+explain select * from t1 where d = 5;
+drop table t1;
+
+# null
+create table t1 (a int,b int,c int,d int,e int)
+partition by list columns(a,b,c) subpartition by list(d)
+(
+  partition p0 values in ((1,2,1),(1,2,2),(3,4,2))(
+    subpartition p0_0 values in (1,2,3),
+    subpartition p0_1 values in (4,5,6,7)
+  ),
+  partition p1 values in ((5,4,2),(6,4,2),(7,4,2),(5,4,null))(
+    subpartition p1_0 values in (1,2,3),
+    subpartition p1_1 values in (4,5,6,null)
+  ),
+  partition p2 values in ((5,1,1),(5,1,2),(5,5,3),(5,7,4),(5,1,null),(null,1,1)) (
+    subpartition p2_0 values in (1,2,3,4,null),
+    subpartition p2_1 values in (5,6,7,8)
+  )
+);
+insert into t1 values(5,4,null,null,1),(5,4,null,2,2),(null,1,1,null,3),(null,1,1,6,4);
+
+select * from t1 where a = 5 and b = 4 and c is null and d is null order by a,b,c,d,e;
+--replace_column 10 # 11 #
+explain select * from t1 where a = 5 and b = 4 and c is null and d is null;
+select * from t1 where a is not null and d is null order by a,b,c,d,e;
+--replace_column 10 # 11 #
+explain select * from t1 where a is not null and d is null;
+select * from t1 where a is null and d is null order by a,b,c,d,e;
+--replace_column 10 # 11 #
+explain select * from t1 where a is null and d is null;
+select * from t1 where d is null order by a,b,c,d,e;
+--replace_column 10 # 11 #
+explain select * from t1 where d is null;
+drop table t1;
+
+#reset
+SET global rds_extended_partitions_enabled = @saved_rds_extended_partitions_enabled;

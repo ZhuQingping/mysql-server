@@ -1,0 +1,31 @@
+--source include/count_sessions.inc
+
+# Test different transaction isolation levels
+SET global dstore_lock_wait_timeout=1;
+
+connect (con1,localhost,root,,);
+
+connection default;
+
+let $trx_isolation_level = READ UNCOMMITTED;
+let $for_share = FOR SHARE;
+--source suite/dstore_main/include/skip_locked_nowait_isolation.inc
+
+let $trx_isolation_level = READ COMMITTED;
+let $for_share = FOR SHARE;
+--source suite/dstore_main/include/skip_locked_nowait_isolation.inc
+
+let $trx_isolation_level = REPEATABLE READ;
+let $for_share = FOR SHARE;
+--source suite/dstore_main/include/skip_locked_nowait_isolation.inc
+
+let $trx_isolation_level = SERIALIZABLE;
+# Serializable will lock records by default.
+let $for_share =;
+--source suite/dstore_main/include/skip_locked_nowait_isolation.inc
+
+connection default;
+disconnect con1;
+
+SET global dstore_lock_wait_timeout=default;
+--source include/wait_until_count_sessions.inc

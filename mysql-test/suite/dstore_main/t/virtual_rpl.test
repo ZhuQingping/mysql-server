@@ -1,0 +1,119 @@
+--source include/have_only_dstore.inc
+--source include/have_binlog_format_row.inc
+--source include/have_log_bin.inc
+--source include/master-slave.inc
+
+--echo #
+--echo # BUG2025061129397: Unknown (generic) error from engine' from storage engine, Error_code: 1030;
+--echo #                   Last_Error: Coordinator stopped because there were error(s) in the worker(s).
+--echo #
+
+--echo # master
+--connection master
+
+CREATE TABLE `multi_tbl_3_all_type2index` (
+		  `int_col` INT DEFAULT NULL,
+		  `time_col` TIME(6) DEFAULT NULL,
+		  INDEX `ndx_int_time_col` ((`int_col` * 10))
+		) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+INSERT INTO multi_tbl_3_all_type2index (int_col, time_col) VALUES (1, '23:59:59.000000');
+SELECT * FROM multi_tbl_3_all_type2index;
+
+--sync_slave_with_master
+
+--echo # slave
+--connection slave
+SELECT * FROM multi_tbl_3_all_type2index;
+
+--echo # master
+--connection master
+DELETE FROM multi_tbl_3_all_type2index;
+SELECT * FROM multi_tbl_3_all_type2index;
+
+--sync_slave_with_master
+
+--echo # slave
+--connection slave
+SELECT * FROM multi_tbl_3_all_type2index;
+
+--echo # master
+--connection master
+DROP TABLE multi_tbl_3_all_type2index;
+
+--echo #
+--echo # BUG2025092430438
+--echo #
+
+create table t1(c_char char(4),c2 varbinary(255),c3 set('111','222','333'),c_varchar varchar(255),c5 double,c6 TIMESTAMP);
+create table t2(c_char char(4),c2 varbinary(255),c3 set('111','222','333'),c_varchar varchar(255),c5 double,c6 INT);
+alter table t1 add index(c5);
+alter table t1 add index(c2);
+alter table t2 add index(c5);
+alter table t2 add index(c2);
+alter table t1 add column c_generate char(4)  as (c_char) virtual first;
+alter table t1 add column c6_generate TIMESTAMP  as (c6) virtual first;
+alter table t2 add column c_generate varbinary(255) as (c2) virtual;
+alter table t2 add column c6_generate INT as (c6) virtual first;
+alter table t1 add index(c_generate);
+alter table t1 add index(c6_generate);
+alter table t2 add index(c_generate);
+alter table t2 add index(c6_generate);
+insert into t1 (c_char,c2,c3,c_varchar,c5,c6) values('aabb','a',NULL,'bbbbbbbbcd',-1.7976931348623157e+308, '2024-12-31 23:59:59');
+insert into t2 (c_char,c2,c3,c_varchar,c5,c6) values('aabb','a',NULL,'bbbbbbbbcd',-1.7976931348623157e+308, 1);
+
+--sync_slave_with_master
+
+--echo # master
+--connection master
+update t1 set c_char='ccdd';
+update t1 set c6='2024-12-31 00:00:00';
+update t2 set c2='b';
+update t2 set c6=2;
+select * from t1;
+select * from t2;
+
+--sync_slave_with_master
+
+--echo # slave
+--connection slave
+
+SELECT * FROM t1;
+SELECT * FROM t2;
+
+--echo # master
+--connection master
+
+DROP TABLE t2,t1;
+
+--echo #
+--echo # BUG2025092916883: master-replica binlog replication. Delete table with expression index on master,
+--echo #                   the replication is interrupted, Error_code: 1030; handler error HA_ERR_GENERIC.
+--echo # 
+
+CREATE TABLE `multi_tbl_3_all_type2index` (
+  `int_col` int DEFAULT NULL,
+  `time_col` time(6) DEFAULT NULL,
+   KEY `ndx_int_time_col` ((((`int_col` * 10) + `time_col`)),`time_col`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+INSERT INTO multi_tbl_3_all_type2index (int_col, time_col) VALUES (1, '24:59:59.000000');
+
+--sync_slave_with_master
+--connection master
+
+DELETE FROM multi_tbl_3_all_type2index;
+
+--sync_slave_with_master
+
+--echo # slave
+--connection slave
+
+SELECT * FROM multi_tbl_3_all_type2index;
+
+--echo # master
+--connection master
+
+DROP TABLE multi_tbl_3_all_type2index;
+
+--source include/rpl_end.inc

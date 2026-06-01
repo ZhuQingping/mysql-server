@@ -1,0 +1,76 @@
+--source ../include/sqlfilter_prepare.inc
+
+--echo #
+--echo # only rdsAdmin could insert/update/delete mysql.rds_sql_filter_rules table.
+--echo #
+create user 'user1'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, REFERENCES, INDEX, ALTER, SHOW DATABASES, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER, CREATE ROLE, DROP ROLE ON *.* TO `user1`@`%` WITH GRANT OPTION;
+CREATE user 'user2'@'%';
+grant all privileges on *.* to 'user2'@'%';
+ 
+connect(con_u1, localhost, user1,,);
+connect(con_u2, localhost, user2,,);
+connect(conn_rdsAdmin, 127.0.0.1, rdsAdmin,,test);
+
+call dbms_sqlfilter.add_sql_filter("select", 10, "select~t","");
+
+--echo # common user can not execute add_sql_filter/delete_sql_filter/flush_sql_filter
+connection con_u1;
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+call dbms_sqlfilter.add_sql_filter("select", 10, "select~t","");
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+call dbms_sqlfilter.delete_sql_filter(1);
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+call dbms_sqlfilter.flush_sql_filter();
+
+--echo # common user can not insert/update/delete mysql.rds_sql_filter_rules table、
+connection con_u1;
+--error ER_SIGNAL_EXCEPTION
+insert into mysql.rds_sql_filter_rules values(2, 'select', 0, 'select~t','');
+--error ER_SIGNAL_EXCEPTION
+update mysql.rds_sql_filter_rules set type='select';
+--error ER_SIGNAL_EXCEPTION
+delete from mysql.rds_sql_filter_rules;
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+ 
+--echo # common user which has super privilege can execute add_sql_filter/delete_sql_filter/flush_sql_filter
+connection con_u2;
+call dbms_sqlfilter.add_sql_filter("select", 10, "select~t","");
+call delete_one_sql_filter_rule(0);
+call dbms_sqlfilter.flush_sql_filter();
+
+--echo # common user which has all privileges can not insert/update/delete mysql.rds_sql_filter_rules table
+connection con_u2;
+--error ER_SIGNAL_EXCEPTION
+insert into mysql.rds_sql_filter_rules values(2, 'select', 0, 'select~t','');
+--error ER_SIGNAL_EXCEPTION
+update mysql.rds_sql_filter_rules set type='select';
+--error ER_SIGNAL_EXCEPTION
+delete from mysql.rds_sql_filter_rules;
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--echo # rdsAdmin@localhost which has super privileges can execute add_sql_filter/delete_sql_filter/flush_sql_filter
+connection conn_rdsAdmin;
+call dbms_sqlfilter.add_sql_filter("select", 10, "select~t","");
+call delete_one_sql_filter_rule(0);
+call dbms_sqlfilter.flush_sql_filter();
+
+--echo # rdsAdmin@localhost can insert/update/delete mysql.rds_sql_filter_rules table
+connection conn_rdsAdmin;
+select user();
+insert into mysql.rds_sql_filter_rules values(10, 'select', 0, 'select~t','');
+update mysql.rds_sql_filter_rules set type='select';
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.show_sql_filter();
+ 
+connection default;
+drop user 'user1'@'%';
+drop user 'user2'@'%';
+disconnect con_u1;
+disconnect con_u2;
+disconnect conn_rdsAdmin;
+
+--source ../include/sqlfilter_cleanup.inc

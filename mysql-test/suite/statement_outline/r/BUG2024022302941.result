@@ -1,0 +1,23 @@
+# BUG2024022302941 outline hits are incorrect.
+set @save_opt_outline_enabled = @@global.rds_opt_outline_enabled;
+set global rds_opt_outline_enabled=ON;
+create table tbl1 (
+id_col int not null auto_increment,
+tinyint_col tinyint default null,
+int_col int default null,
+bigint_col bigint not null,
+primary key (`id_col`),
+key ndx_int_bigint_col ((int_col+tinyint_col), bigint_col)
+);
+call dbms_outln.add_optimizer_outline('test','',1,'/*+MAX_EXECUTION_TIME(1000) */','select id_col from tbl1 where id_col>2');
+flush tables;
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+#	test	949a0a11f6d49049be223cbabc5160ec9a3f86b0838836aaeb66685c52f13818	OPTIMIZER		1	/*+MAX_EXECUTION_TIME(1000) */	0	0	SELECT `id_col` FROM `tbl1` WHERE `id_col` > ?
+select id_col from tbl1 where id_col>2;
+id_col
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+#	test	949a0a11f6d49049be223cbabc5160ec9a3f86b0838836aaeb66685c52f13818	OPTIMIZER		1	/*+MAX_EXECUTION_TIME(1000) */	1	0	SELECT `id_col` FROM `tbl1` WHERE `id_col` > ?
+drop table tbl1;
+set global rds_opt_outline_enabled=@save_opt_outline_enabled;

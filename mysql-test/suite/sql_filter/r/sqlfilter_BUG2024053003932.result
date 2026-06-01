@@ -1,0 +1,91 @@
+CREATE PROCEDURE delete_one_sql_filter_rule(IN offset_value INT)
+begin
+declare my_var BIGINT default 1;
+select item_id into my_var from mysql.rds_sql_filter_rules limit offset_value,1;
+call dbms_sqlfilter.delete_sql_filter(my_var);
+end |
+set global rds_sqlfilter_control = on;
+use test;
+CALL dbms_sqlfilter.add_sql_filter("SELECT",0,"SELECT~FROM","");
+SELECT * FROM mysql.rds_sql_filter_rules;
+item_id	type	max_concurrency	key_str	node_id
+#	SELECT	0	SELECT~FROM	
+CALL dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	2	0	SELECT~FROM	
+create table t1(a int);
+select * from t1;
+ERROR 70100: Query execution was interrupted
+drop table t1;
+#
+# mysql
+#
+create database mysql_test;
+use mysql_test;
+SELECT * FROM mysql.rds_sql_filter_rules;
+item_id	type	max_concurrency	key_str	node_id
+#	SELECT	0	SELECT~FROM	
+CALL dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	2	1	SELECT~FROM	
+create table t1(a int);
+select * from t1;
+ERROR 70100: Query execution was interrupted
+drop table t1;
+#
+# information_schema
+#
+create database information_schema_test;
+use information_schema_test;
+SELECT * FROM mysql.rds_sql_filter_rules;
+item_id	type	max_concurrency	key_str	node_id
+#	SELECT	0	SELECT~FROM	
+CALL dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	2	2	SELECT~FROM	
+create table t1(a int);
+select * from t1;
+ERROR 70100: Query execution was interrupted
+drop table t1;
+#
+# performance_schema
+#
+create database performance_schema_test;
+use performance_schema_test;
+SELECT * FROM mysql.rds_sql_filter_rules;
+item_id	type	max_concurrency	key_str	node_id
+#	SELECT	0	SELECT~FROM	
+CALL dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	2	3	SELECT~FROM	
+create table t1(a int);
+select * from t1;
+ERROR 70100: Query execution was interrupted
+drop table t1;
+#
+# sys
+#
+create database sys_test;
+use sys_test;
+SELECT * FROM mysql.rds_sql_filter_rules;
+item_id	type	max_concurrency	key_str	node_id
+#	SELECT	0	SELECT~FROM	
+CALL dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	2	4	SELECT~FROM	
+create table t1(a int);
+select * from t1;
+ERROR 70100: Query execution was interrupted
+drop table t1;
+use test;
+CALL delete_one_sql_filter_rule(0);
+SELECT * FROM mysql.rds_sql_filter_rules;
+item_id	type	max_concurrency	key_str	node_id
+CALL dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+drop database mysql_test;
+drop database information_schema_test;
+drop database performance_schema_test;
+drop database sys_test;
+set global rds_sqlfilter_control = default;
+DROP PROCEDURE delete_one_sql_filter_rule;

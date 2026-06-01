@@ -1,0 +1,401 @@
+###################################################################
+# Purpose: Obtain transactions execte times.                      #
+#                                                                 #
+# Include:                                                        #
+#                                                                 #
+#   1. idle transactions                                          #
+#   2. auto-commit(single statement) &                            #
+#      not auto-commit transactions(muilt-statement)              #
+#   3. rollback transaction                                       #
+#   4. DDL/DCL                                                    #
+#                                                                 #
+###################################################################
+
+--source include/have_only_dstore.inc
+--source include/count_sessions.inc
+
+connection default;
+--disable_warnings
+CREATE TABLE IF NOT EXISTS t1 (sno int(11) NOT NULL DEFAULT '0',
+                               name int(11) DEFAULT NULL,
+                               PRIMARY KEY (sno),
+                               UNIQUE KEY idx(name));
+--enable_warnings
+INSERT INTO t1 VALUES (1,2),(2,3),(3,4);
+SELECT * FROM t1;
+--disable_warnings
+CREATE TABLE IF NOT EXISTS t2 (sno int(11) NOT NULL DEFAULT '0',
+                               name int(11) DEFAULT NULL,
+                               PRIMARY KEY (sno),
+                               UNIQUE KEY idx(name));
+--enable_warnings
+INSERT INTO t2 VALUES (1,2),(2,3),(3,4);
+
+--echo # Multi-table delete submission, reset trx_execute_time
+DELETE t1 FROM t1,t2 WHERE t1.sno=t2.sno;
+
+DROP TABLE t1;
+DROP TABLE t2;
+ 
+--echo # note: For the same query execution time is an unstable value,
+--echo # so the value is masked
+CALL mtr.add_suppression("Query Cache is ON, but it is unsafe and retiring in 8.0.*");
+
+--echo #        >   test1: Count the execution time of idle transactions
+--echo #========================================================================
+--disable_result_log
+SHOW FULL PROCESSLIST;
+FLUSH STATUS;
+--enable_result_log
+set @start_time= (select unix_timestamp(now()));
+BEGIN;
+SELECT SLEEP(2);
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @start_time)`
+--echo # Verify the correctness of the query time
+if ($TRX_EXECUTED_TIME >= 2 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL)
+{
+  echo # "Success";
+}
+--disable_result_log
+SHOW FULL PROCESSLIST;
+--enable_result_log
+COMMIT;
+
+--echo # Trx commited, reset TRX_EXECUTED_TIME 0
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+--disable_result_log
+SHOW FULL PROCESSLIST;
+--enable_result_log
+
+--echo #      >    test2: Statistics the execution time of explicitly commmit
+--echo #                  transactions
+--echo #======================================================================
+--disable_warnings
+DROP TABLE IF EXISTS test.t1;
+--enable_warnings
+CREATE TABLE test.t1(id INT PRIMARY KEY,name VARCHAR(20));
+set @start_time= (select unix_timestamp(now()));
+BEGIN;
+INSERT INTO test.t1 value(0,'wuhan');
+SELECT SLEEP(3);
+DELETE FROM test.t1 where id=0;
+INSERT INTO test.t1 value(0,'wuhan');
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @start_time)`
+--echo # Verify the correctness of the query time
+if ($TRX_EXECUTED_TIME >= 3 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL) 
+{
+  echo # "Success";
+}
+--disable_result_log
+SHOW FULL PROCESSLIST;
+--enable_result_log
+
+set @start_time= (select unix_timestamp(now()));
+START TRANSACTION;
+INSERT INTO test.t1 value(1,'zhengzhou');
+SELECT SLEEP(2);
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @start_time)`
+--echo # Verify the correctness of the query time
+if ($TRX_EXECUTED_TIME >= 2 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL)
+{
+  echo # "Success";
+}
+--disable_result_log
+SHOW FULL PROCESSLIST;
+--enable_result_log
+ROLLBACK;
+--echo # Explicit transaction rollback, reset execution time
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+--disable_result_log
+SHOW FULL PROCESSLIST;
+--enable_result_log
+
+--echo #     >  test3: Statistics dml operation execution time
+--echo #====================================================================
+INSERT INTO test.t1 value(2,'hangzhou');
+INSERT INTO test.t1 value(3,'guiyang');
+SELECT COUNT(*) FROM test.t1;
+
+--echo # connect m1
+-- connect(m1,localhost,root,,,$MASTER_MYPORT)
+--send SELECT COUNT(*) FROM test.t1 where SLEEP(1)=0;
+--echo # connect m2
+-- connect(m2,localhost,root,,,$MASTER_MYPORT)
+--send DELETE FROM test.t1 WHERE id=1 AND SLEEP(1)=0;
+
+--connection default
+--disable_result_log
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+SHOW FULL PROCESSLIST;
+--enable_result_log
+
+--connection m2
+reap;
+
+--connection m1
+reap;
+UPDATE test.t1 SET name='guangzhou' WHERE SLEEP(1)=0 AND id=2;
+--echo # end
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+disconnect m1;
+disconnect m2;
+
+--echo # connect default
+--connection default
+
+start transaction;
+UPDATE test.t1 SET name='wentasy' WHERE id = 2;
+--echo # connect m1
+-- connect(m1,localhost,root,,,$MASTER_MYPORT)
+--send UPDATE test.t1 SET name='wentasy' WHERE id = 2;
+connection default;
+
+SELECT SLEEP(2);
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST ORDER BY TRX_EXECUTED_TIME DESC limit 1`
+if ($TRX_EXECUTED_TIME >= 2 and $TRX_EXECUTED_TIME < 1000)
+{
+  echo # Success;
+}
+--disable_result_log
+SHOW FULL PROCESSLIST;
+--enable_result_log
+commit;
+
+#--echo #    >  test4: Verify statistical lock wait time
+#--echo #===============================================================
+#SET AUTOCOMMIT=0;
+#--send UPDATE test.t1 SET name='wentasy' WHERE id = 2;
+#--echo # connect m1
+#connection m1;
+#reap;
+#--send UPDATE test.t1 SET name='wentasy' WHERE id = 2;
+#--echo # connect default
+#connection default;
+#reap;
+#--enable_warnings
+#--disable_result_log
+#SELECT sleep(2);
+#--replace_column 1 #
+#SELECT trx_waited_time FROM information_schema.innodb_trx;
+#COMMIT;
+#connection m1;
+#reap;
+#commit;
+#select sleep(1);
+#SELECT trx_waited_time FROM information_schema.innodb_trx;
+--enable_result_log
+
+--echo #    >  test5: Verify trx execute time of not auto-commit mode
+--echo #===============================================================
+connection default;
+commit;
+disconnect m1;
+
+--echo # set not auto-commit
+set @start_time= (select unix_timestamp(now()));
+set AUTOCOMMIT=0;
+select count(*) from test.t1;
+select sleep(2);
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @start_time)`
+--echo # Verify the correctness of the query time
+if ($TRX_EXECUTED_TIME >= 2 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL)
+{
+  echo # "Success";
+}
+--disable_result_log
+SHOW FULL PROCESSLIST;
+--enable_result_log
+
+UPDATE test.t1 SET name='11111' WHERE id = 2;
+SELECT sleep(1);
+
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @start_time)`
+--echo # Verify the correctness of the query time
+if ($TRX_EXECUTED_TIME >= 3 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL)
+{
+  echo # "Success";
+}
+
+--disable_result_log
+SHOW FULL PROCESSLIST;
+--enable_result_log
+
+--echo # Implicit commit, reset execution time
+begin;
+set @start_time= (select unix_timestamp(now()));
+UPDATE test.t1 SET name='11111' WHERE id = 2;
+SELECT sleep(1);
+
+# nested query
+update test.t1 set name=(
+  select name from (
+    select name from test.t1 where id=0) temp
+  ) where id=2;
+
+SELECT sleep(3);
+--echo # The execution time of the current transaction is 4 seconds
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @start_time)`
+--echo # Verify the correctness of the query time
+if ($TRX_EXECUTED_TIME >= 4 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL)
+{
+  echo # "Success";
+}
+--disable_result_log
+SHOW FULL PROCESSLIST;
+--enable_result_log
+
+--echo # reset 0
+commit;
+
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+
+--echo #    >  test6: Verify the correctness of the execution time of
+--echo #              the rollback transaction
+--echo #===============================================================
+connection default;
+set AUTOCOMMIT=1;
+set @start_time= (select unix_timestamp(now()));
+begin;
+
+UPDATE test.t1 SET name='11111' WHERE id = 2;
+
+SAVEPOINT point1;
+
+SELECT sleep(2);
+
+update test.t1 set name=(
+  select name from (
+    select name from test.t1 where id=0) temp
+  ) where id=2;
+
+SAVEPOINT point2;
+
+SELECT sleep(1);
+
+
+rollback to point1;
+
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @start_time)`
+--echo # Verify the correctness of the query time
+if ($TRX_EXECUTED_TIME >= 3 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL)
+{
+  echo # "Success";
+}
+
+--disable_result_log
+show full processlist;
+--enable_result_log
+
+rollback;
+
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+
+set AUTOCOMMIT=0;
+set @start_time= (select unix_timestamp(now()));
+
+UPDATE test.t1 SET name='11111' WHERE id = 2;
+
+SAVEPOINT point1;
+
+SELECT sleep(2);
+
+update test.t1 set name=(
+  select name from (
+    select name from test.t1 where id=0) temp
+  ) where id=2;
+
+SAVEPOINT point2;
+
+SELECT sleep(1);
+
+
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @start_time)`
+--echo # Verify the correctness of the query time
+if ($TRX_EXECUTED_TIME >= 3 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL)
+{
+  echo # "Success";
+}
+
+--disable_result_log
+show full processlist;
+--enable_result_log
+
+
+rollback to point1;
+
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @start_time)`
+--echo # Verify the correctness of the query time
+if ($TRX_EXECUTED_TIME >= 3 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL)
+{
+  echo # "Success";
+}
+
+--disable_result_log
+show full processlist;
+--enable_result_log
+
+rollback;
+
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+
+--disable_result_log
+show full processlist;
+--enable_result_log
+
+--echo #    >  test7: Verify the correctness of the execution time of
+--echo #              DDL/DCL and single statement trx
+--echo #===============================================================
+--source include/have_debug.inc
+--source include/have_debug_sync.inc
+
+connect (con1,localhost,root,,test,$MASTER_MYPORT,$MASTER_MYSOCK);
+
+--echo # Verify the correctness of the execution time of the single statement
+
+let $QUERY_STAT=select count(*) from t1;
+--source include/show_query_execute_time.inc
+
+--echo # Verify the correctness of the execution time of DDL
+
+let $QUERY_STAT=create database local_disk;
+--source include/show_query_execute_time.inc
+
+let $QUERY_STAT=drop database local_disk;
+--source include/show_query_execute_time.inc
+
+let $QUERY_STAT=create table DDL_TABLE(a int);
+--source include/show_query_execute_time.inc
+
+let QUERY_STAT= alter table DDL_TABLE add b int;
+--source include/show_query_execute_time.inc
+
+SELECT * FROM DDL_TABLE;
+
+let QUERY_STAT= drop table test.t1;
+--source include/show_query_execute_time.inc
+
+--echo # Verify the correctness of the execution time of DCL
+
+let $QUERY_STAT= create user mysqltest_1@localhost;
+--source include/show_query_execute_time.inc
+
+let $QUERY_STAT= grant CREATE TEMPORARY TABLES, LOCK TABLES on mysqltest.* to mysqltest_1@localhost;
+--source include/show_query_execute_time.inc
+
+let $QUERY_STAT= drop user mysqltest_1@localhost;
+--source include/show_query_execute_time.inc
+
+--echo # cleanup
+connection default;
+--disable_warnings
+DROP TABLE IF EXISTS test.DDL_TABLE;
+--enable_warnings
+

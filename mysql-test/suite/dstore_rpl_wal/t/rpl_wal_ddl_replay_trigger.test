@@ -1,0 +1,421 @@
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_setup.inc
+--enable_warnings
+
+# --echo ############################################################
+# --echo 一、 准备工作：创建测试环境。
+# --echo 二、 然后针对 SQLCOM_CREATE_TRIGGER 、SQLCOM_DROP_TRIGGER 执行对应的 ddl 语句 。 
+# --echo 三、 在备机测查看dd信息，保证备机回放元数据的正确性。
+# --echo 四、 执行与trigger相关的sql（insert update delete），执行完后，进行全表扫描，供后面的新主机对比，保证回放功能正确。
+# --echo 五、 执行 switchover 。
+# --echo 六、 新主机进行全表扫描，与第四步进行对比，保证备机回放功能的正确性。
+# --echo 七、 使用回放出的trigger，并对回放出来的trigger进行操作(修改删除)，保证回放出来的ddl可用性和可操作性。
+# --echo ############################################################
+
+--echo ############################################################
+--echo # 一、Create the test environment.
+--echo # 二、Execute the corresponding DDL statements for SQLCOM_CREATE_TRIGGER and SQLCOM_DROP_TRIGGER.
+--echo # 三、Check the DD information on the standby node to ensure correct metadata replay.
+--echo # 四、Execute trigger-related SQL statements (INSERT, UPDATE, DELETE). After execution, perform a full table scan for comparison with the new primary node later, to ensure the correctness of the replay function.
+--echo # 五、Perform a switchover.
+--echo # 六、Perform a full table scan on the new primary node and compare it with the result from Step 4, to ensure the correctness of the standby node replay function.
+--echo # 七、Use the replayed triggers, and perform operations (modify and delete) on them to ensure the availability and operability of the replayed DDL.
+--echo ############################################################
+
+--echo #
+--echo # 一、Create the test environment.
+--echo #
+
+--connection $node1
+CREATE DATABASE IF NOT EXISTS test_trigger_db 
+DEFAULT CHARACTER SET utf8mb4 
+DEFAULT COLLATE utf8mb4_general_ci;
+
+USE test_trigger_db;
+
+CREATE TABLE employees (
+    emp_id INT AUTO_INCREMENT PRIMARY KEY,
+    emp_name VARCHAR(100) NOT NULL,
+    department VARCHAR(50),
+    salary DECIMAL(10, 2),
+    hire_date DATE,
+    last_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE departments (
+    dept_id INT AUTO_INCREMENT PRIMARY KEY,
+    dept_name VARCHAR(50) NOT NULL UNIQUE,
+    location VARCHAR(100),
+    budget DECIMAL(15, 2),
+    created_at TIMESTAMP DEFAULT '2026-01-01 00:00:00'
+);
+
+CREATE TABLE audit_log (
+    log_id INT AUTO_INCREMENT PRIMARY KEY,
+    table_name VARCHAR(64),
+    operation VARCHAR(10),
+    emp_id INT,
+    old_values JSON,
+    new_values JSON,
+    changed_by VARCHAR(100),
+    changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE dept_statistics (
+    dept_id INT,
+    dept_name VARCHAR(50),
+    emp_count INT DEFAULT 0,
+    total_salary DECIMAL(15, 2) DEFAULT 0,
+    avg_salary DECIMAL(10, 2) DEFAULT 0,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (dept_id)
+);
+
+INSERT INTO departments(dept_name, location, budget) VALUES
+('技术部', '北京', 1000000.00),
+('销售部', '上海', 500000.00),
+('人事部', '广州', 300000.00),
+('财务部', '深圳', 400000.00);
+
+--echo # 
+--echo # 二、Execute the corresponding DDL statements for SQLCOM_CREATE_TRIGGER and SQLCOM_DROP_TRIGGER.
+--echo # 
+
+--echo # 
+--echo # 1 SQLCOM_CREATE_TRIGGER
+--echo # 
+
+--echo # 1 Create a BEFORE INSERT trigger - data validation and default value setting
+DELIMITER $$;
+CREATE TRIGGER trg_employees_bi 
+BEFORE INSERT ON employees
+FOR EACH ROW
+BEGIN
+    # 验证部门是否存在
+    IF NEW.department IS NOT NULL THEN
+        IF NOT EXISTS (SELECT 1 FROM departments WHERE dept_name = NEW.department) THEN
+            SIGNAL SQLSTATE '45000' 
+            SET MESSAGE_TEXT = '部门不存在，请先创建部门';
+        END IF;
+    END IF;
+    
+    # 设置默认hire_date为当前日期
+    IF NEW.hire_date IS NULL THEN
+        SET NEW.hire_date = '2026-01-01';
+    END IF;
+    
+    # 记录审计日志
+    INSERT INTO audit_log(table_name, operation, emp_id, new_values, changed_by)
+    VALUES ('employees', 'INSERT', NEW.emp_id, 
+            JSON_OBJECT('emp_name', NEW.emp_name, 'department', NEW.department, 'salary', NEW.salary),
+            CURRENT_USER());
+END$$
+DELIMITER ;$$
+
+--echo # 2. Create an AFTER INSERT trigger - maintain department statistical information
+DELIMITER $$;
+CREATE TRIGGER trg_employees_ai 
+AFTER INSERT ON employees
+FOR EACH ROW
+BEGIN
+    # 更新部门统计信息
+    INSERT INTO dept_statistics (dept_id, dept_name, emp_count, total_salary, avg_salary)
+    SELECT d.dept_id, d.dept_name, 1, NEW.salary, NEW.salary
+    FROM departments d
+    WHERE d.dept_name = NEW.department
+    ON DUPLICATE KEY UPDATE
+        emp_count = emp_count + 1,
+        total_salary = total_salary + NEW.salary,
+        avg_salary = (total_salary + NEW.salary) / (emp_count + 1);
+END$$
+DELIMITER ;$$
+
+--echo # 3 Create a BEFORE UPDATE trigger - data validation and historical record keeping
+DELIMITER $$;
+CREATE TRIGGER trg_employees_bu 
+BEFORE UPDATE ON employees
+FOR EACH ROW
+BEGIN
+    # 验证部门是否存在（如果部门被修改）
+    IF NEW.department IS NOT NULL AND NEW.department != OLD.department THEN
+        IF NOT EXISTS (SELECT 1 FROM departments WHERE dept_name = NEW.department) THEN
+            SIGNAL SQLSTATE '45000' 
+            SET MESSAGE_TEXT = '新部门不存在，请先创建部门';
+        END IF;
+    END IF;
+END$$
+DELIMITER ;$$
+
+
+--echo # 4 Create an AFTER UPDATE trigger - update department statistical information
+DELIMITER $$;
+CREATE TRIGGER trg_employees_au 
+AFTER UPDATE ON employees
+FOR EACH ROW
+BEGIN
+    # 记录审计日志
+    INSERT INTO audit_log(table_name, operation, emp_id, old_values, new_values, changed_by)
+    VALUES ('employees', 'UPDATE', NEW.emp_id, 
+            JSON_OBJECT('emp_name', OLD.emp_name, 'department', OLD.department, 'salary', OLD.salary),
+            JSON_OBJECT('emp_name', NEW.emp_name, 'department', NEW.department, 'salary', NEW.salary),
+            CURRENT_USER());
+    
+    # 如果部门变更，更新统计信息
+    IF NEW.department != OLD.department THEN
+        # 减少旧部门的统计
+        UPDATE dept_statistics ds
+        JOIN departments d ON ds.dept_id = d.dept_id
+        SET ds.emp_count = ds.emp_count - 1,
+            ds.total_salary = ds.total_salary - OLD.salary
+        WHERE d.dept_name = OLD.department;
+        
+        # 删除统计为零的记录
+        DELETE FROM dept_statistics WHERE emp_count <= 0;
+        
+        # 增加新部门的统计
+        INSERT INTO dept_statistics (dept_id, dept_name, emp_count, total_salary, avg_salary)
+        SELECT d.dept_id, d.dept_name, 1, NEW.salary, NEW.salary
+        FROM departments d
+        WHERE d.dept_name = NEW.department
+        ON DUPLICATE KEY UPDATE
+            emp_count = emp_count + 1,
+            total_salary = total_salary + NEW.salary;
+    ELSE
+        # 如果部门未变，只更新薪资统计
+        IF NEW.salary != OLD.salary THEN
+            UPDATE dept_statistics ds
+            JOIN departments d ON ds.dept_id = d.dept_id
+            SET ds.total_salary = ds.total_salary - OLD.salary + NEW.salary
+            WHERE d.dept_name = NEW.department;
+        END IF;
+    END IF;
+    
+    # 重新计算平均工资
+    UPDATE dept_statistics ds
+    SET ds.avg_salary = CASE 
+        WHEN ds.emp_count > 0 THEN ds.total_salary / ds.emp_count
+        ELSE 0
+    END;
+END$$
+DELIMITER ;$$
+
+--echo # 5 Create a BEFORE DELETE trigger - Prevent important data from being deleted
+DELIMITER $$;
+CREATE TRIGGER trg_employees_bd 
+BEFORE DELETE ON employees
+FOR EACH ROW
+BEGIN
+    # 不允许删除特定部门的员工
+    IF OLD.department = '技术部' THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = '技术部员工不允许删除';
+    END IF;
+END$$
+DELIMITER ;$$
+
+--echo # 6 Create an AFTER DELETE trigger - Clean up department statistical information
+DELIMITER $$;
+CREATE TRIGGER trg_employees_ad 
+AFTER DELETE ON employees
+FOR EACH ROW
+BEGIN
+    # 记录审计日志
+    INSERT INTO audit_log(table_name, operation, emp_id, old_values, changed_by)
+    VALUES ('employees', 'DELETE', OLD.emp_id, 
+            JSON_OBJECT('emp_name', OLD.emp_name, 'department', OLD.department, 'salary', OLD.salary),
+            CURRENT_USER());
+    
+    # 更新部门统计信息
+    UPDATE dept_statistics ds
+    JOIN departments d ON ds.dept_id = d.dept_id
+    SET ds.emp_count = ds.emp_count - 1,
+        ds.total_salary = ds.total_salary - OLD.salary
+    WHERE d.dept_name = OLD.department;
+    
+    # 删除统计为零的记录
+    DELETE FROM dept_statistics WHERE emp_count <= 0;
+    
+    # 重新计算平均工资
+    UPDATE dept_statistics ds
+    SET ds.avg_salary = CASE 
+        WHEN ds.emp_count > 0 THEN ds.total_salary / ds.emp_count
+        ELSE 0
+    END;
+END$$
+DELIMITER ;$$
+
+--echo # 7 Create a trigger that will be deleted later
+DELIMITER $$;
+CREATE TRIGGER trg_departments_ai 
+AFTER INSERT ON departments
+FOR EACH ROW
+BEGIN
+    # 为新部门初始化统计信息
+    INSERT INTO dept_statistics(dept_id, dept_name, emp_count, total_salary, avg_salary)
+    VALUES (NEW.dept_id, NEW.dept_name, 0, 0, 0);
+END$$
+DELIMITER ;$$
+
+# TODO 验证级联触发器
+
+--echo #
+--echo # 2 SQLCOM_DROP_TRIGGER
+--echo #
+
+--connection $node1
+USE test_trigger_db;
+DROP TRIGGER IF EXISTS trg_departments_ai;
+
+# 在主机验证Trigger的数量 的内容3  不要所有字段显示，mtr 存在显示不了的情况，但数量是对的
+
+--echo # Query the DDL information of the triggers on the primary node
+SELECT COUNT(*) as deleted_trigger_exists FROM INFORMATION_SCHEMA.TRIGGERS 
+WHERE TRIGGER_SCHEMA = 'test_trigger_db' AND TRIGGER_NAME = 'trg_departments_ai';
+SELECT 
+    TRIGGER_NAME,
+    EVENT_MANIPULATION,
+    EVENT_OBJECT_TABLE,
+    ACTION_TIMING
+FROM INFORMATION_SCHEMA.TRIGGERS 
+WHERE TRIGGER_SCHEMA = 'test_trigger_db'
+ORDER BY TRIGGER_NAME;
+
+--echo #
+--echo # 三、Check the DD on the standby node to ensure the correctness of metadata replay on the standby node.
+--echo #
+
+--sleep 2
+--connection $node2
+--echo # Verify the DDL information of the triggers on the standby node
+SELECT COUNT(*) as deleted_trigger_exists FROM INFORMATION_SCHEMA.TRIGGERS 
+WHERE TRIGGER_SCHEMA = 'test_trigger_db' AND TRIGGER_NAME = 'trg_departments_ai';
+SELECT 
+    TRIGGER_NAME,
+    EVENT_MANIPULATION,
+    EVENT_OBJECT_TABLE,
+    ACTION_TIMING
+FROM INFORMATION_SCHEMA.TRIGGERS 
+WHERE TRIGGER_SCHEMA = 'test_trigger_db'
+ORDER BY TRIGGER_NAME;
+
+--echo #
+--echo # 四、Execute trigger-related SQL statements (INSERT, UPDATE, DELETE). After execution, perform a full table scan for comparison with the new primary node later, to ensure the correctness of the replay function.
+--echo #
+
+--connection $node1
+USE test_trigger_db;
+
+--echo # 1 Insert test data to verify the functionality of the triggers
+INSERT INTO employees(emp_name, department, salary, hire_date) VALUES
+('张三', '技术部', 15000.00, '2020-01-15'),
+('李四', '技术部', 12000.00, '2020-03-20'),
+('王五', '销售部', 8000.00, '2021-05-10'),
+('赵六', '人事部', 10000.00, '2019-11-30'),
+('钱七', '销售部', 9000.00, '2022-02-14');
+
+--echo # 2 Verify the functionality of the triggers
+
+# 尝试插入不存在部门的员工（应该失败）
+--error ER_SIGNAL_EXCEPTION
+INSERT INTO employees(emp_name, department, salary) 
+VALUES ('测试员工', '不存在的部门', 5000.00);
+
+# 插入不带hire_date的员工（触发器应设置默认值）
+INSERT INTO employees(emp_name, department, salary, hire_date) 
+VALUES ('周九', '销售部', 7500.00, NULL);
+
+# 尝试将员工转移到不存在的部门（应该失败）
+--error ER_SIGNAL_EXCEPTION
+UPDATE employees SET department = '不存在的部门' WHERE emp_name = '李四';
+
+# 正常更新员工薪资
+UPDATE employees SET salary = 13000.00 WHERE emp_name = '李四';
+
+# 更新员工部门
+UPDATE employees SET department = '财务部', salary = 11000.00 WHERE emp_name = '赵六';
+
+# 删除技术部员工（应该失败）
+--error ER_SIGNAL_EXCEPTION
+DELETE FROM employees WHERE emp_name = '张三';
+
+# 删除非技术部员工（应该成功）
+DELETE FROM employees WHERE emp_name = '钱七';
+
+--echo # 3 Execute the query for subsequent comparison with the new primary node
+
+SELECT emp_id, emp_name, department, salary, hire_date FROM employees ORDER BY emp_id;
+
+SELECT dept_id, dept_name, location, budget FROM departments ORDER BY dept_id;
+
+SELECT operation, COUNT(*) as count FROM audit_log GROUP BY operation ORDER BY operation;
+
+SELECT dept_id, dept_name, emp_count, total_salary AS total_salary, FORMAT(avg_salary, 2) AS avg_salary
+FROM dept_statistics ORDER BY dept_name;
+
+--echo #
+--echo # 五、Perform a switchover.
+--echo #
+--sleep 2
+--let $old_primary = $node1
+--let $old_standby = $node2
+--let $old_standby_port = $SERVER_MYPORT_2
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_switch.inc
+
+--echo #
+--echo # 六、Perform a full table scan on the new primary node and compare it with the result from Step 4, to ensure the correctness of the standby node replay function.
+--echo #
+
+--connection $node2
+
+SHOW DATABASES LIKE 'test_trigger_db';
+USE test_trigger_db;
+
+SELECT emp_id, emp_name, department, salary, hire_date FROM employees ORDER BY emp_id;
+
+SELECT dept_id, dept_name, location, budget FROM departments ORDER BY dept_id;
+
+SELECT operation, COUNT(*) as count FROM audit_log GROUP BY operation ORDER BY operation;
+
+SELECT dept_id, dept_name, emp_count, total_salary AS total_salary, FORMAT(avg_salary, 2) AS avg_salary
+FROM dept_statistics ORDER BY dept_name;
+
+--echo #
+--echo # 七、Use the replayed triggers, and perform operations (modify and delete) on them to ensure the availability and operability of the replayed DDL.
+--echo #
+
+# 测试INSERT触发器
+INSERT INTO employees(emp_name, department, salary) 
+VALUES ('新主员工', '人事部', 8500.00);
+
+# 测试UPDATE触发器
+UPDATE employees SET salary = salary * 1.1 WHERE emp_name = '王五';
+
+# 测试DELETE触发器（departments表）
+# 先确保部门没有员工
+UPDATE employees SET department = '销售部' WHERE department = '人事部';
+DELETE FROM departments WHERE dept_name = '人事部';
+
+# 查看触发器执行结果
+SELECT emp_id, emp_name, department, salary, hire_date FROM employees ORDER BY emp_id;
+SELECT dept_id, dept_name, location, budget FROM departments ORDER BY dept_id;
+SELECT dept_id, dept_name, emp_count, total_salary AS total_salary, FORMAT(avg_salary, 2) AS avg_salary
+FROM dept_statistics ORDER BY dept_name;
+SELECT log_id, table_name, operation, emp_id, old_values, new_values, changed_by 
+FROM audit_log ORDER BY log_id;
+
+DROP TRIGGER IF EXISTS trg_employees_bi;
+DROP TRIGGER IF EXISTS trg_employees_ai;
+DROP TRIGGER IF EXISTS trg_employees_bu;
+DROP TRIGGER IF EXISTS trg_employees_au;
+DROP TRIGGER IF EXISTS trg_employees_bd;
+DROP TRIGGER IF EXISTS trg_employees_ad;
+--sleep 3
+--connection $node1
+SELECT COUNT(*) as deleted_trigger_exists FROM INFORMATION_SCHEMA.TRIGGERS 
+WHERE TRIGGER_SCHEMA = 'test_trigger_db';
+
+--disable_warnings
+--let $current_standby = $node1
+--let $current_primary = $node2
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_cleanup.inc
+--enable_warnings

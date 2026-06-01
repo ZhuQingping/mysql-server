@@ -1,0 +1,37 @@
+SET @saved_rds_disable_loadable_function = @@global.rds_disable_user_defined_functions;
+
+--echo # Test the default value
+set @@global.rds_disable_user_defined_functions=default;
+select @@global.rds_disable_user_defined_functions;
+
+--error ER_INCORRECT_GLOBAL_LOCAL_VAR
+select @@session.rds_disable_user_defined_functions;
+
+show global variables like 'rds_disable_user_defined_functions';
+select * from performance_schema.global_variables where variable_name='rds_disable_user_defined_functions';
+
+--echo # show that it's writable
+set global rds_disable_user_defined_functions=OFF;
+select @@global.rds_disable_user_defined_functions;
+set global rds_disable_user_defined_functions=ON;
+select @@global.rds_disable_user_defined_functions;
+set global rds_disable_user_defined_functions=0;
+select @@global.rds_disable_user_defined_functions;
+set global rds_disable_user_defined_functions=1;
+select @@global.rds_disable_user_defined_functions;
+
+--echo # incorrect types
+--error ER_WRONG_TYPE_FOR_VAR
+set global rds_disable_user_defined_functions=1.1;
+--error ER_WRONG_TYPE_FOR_VAR
+set global rds_disable_user_defined_functions=1e1;
+
+--echo # incorrect values
+--error ER_WRONG_VALUE_FOR_VAR
+set global rds_disable_user_defined_functions=5;
+--error ER_WRONG_VALUE_FOR_VAR
+set global rds_disable_user_defined_functions=-3;
+--error ER_WRONG_VALUE_FOR_VAR
+set global rds_disable_user_defined_functions="foo";
+
+SET GLOBAL rds_disable_user_defined_functions = @saved_rds_disable_loadable_function;

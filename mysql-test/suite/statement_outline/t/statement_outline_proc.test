@@ -1,0 +1,342 @@
+# ==== Purpose ====
+#
+# Verify the basic structure of statement outline (systemtable/storage procedure) works properly 
+#
+# ==== Implementation ====
+# 0. see the dbms_outln.X proc APIs by calling dbms_admin.show_native_procedure();
+# 1. Verify mysql.outline table structure.
+# 2. Verify privileges
+# 3. Check storage precedure APIs of dbms_outln 
+# 4. test injecting wrong input to system table
+# 5. test effectiveness of outlines
+# 6. test the effectiveness of persist outline rules after restart
+# 7. test the empty check for preview_outline procedure
+--disable_ps_protocol
+--source include/not_asan.inc # we have restart
+call mtr.add_suppression("mysql.outline");
+call mtr.add_suppression("Statement outline");
+call mtr.add_suppression("Column count of mysql.* is wrong");
+call mtr.add_suppression("Error in applying outline, cause: some records are invalid");
+
+connection default;
+call dbms_admin.show_native_procedure();
+CREATE DATABASE outline_db;
+CREATE TABLE outline_db.t1(id int auto_increment primary key,
+                           col1 int,
+                           col2 varchar(100),
+                           key ind_1(col1),
+                           key ind_2(col2)) engine = Dstore;
+
+CREATE TABLE outline_db.t2(id int auto_increment primary key,
+                           col1 int,
+                           col2 varchar(100),
+                           key ind_1(col1),
+                           key ind_2(col2)) engine = Dstore;
+
+insert into outline_db.t1 values(1, 2, 'xpchild');
+insert into outline_db.t2 values(1, 2, 'xpchild');
+
+CREATE user 'u0'@'%';
+grant all privileges on *.* to 'u0'@'%';
+
+CREATE user 'u1'@'%';
+grant all privileges on outline_db.* to 'u1'@'%';
+grant all privileges on mysql.* to 'u1'@'%';
+
+connect(con_u0, localhost, u0,,);
+connect(con_u1, localhost, u1,,);
+connect(con_root,localhost, root,,);
+connect(conn_rdsAdmin, 127.0.0.1, rdsAdmin,,test);
+
+#-----------------------------------------------------------
+# 1. check the outline TABLE structure
+#-----------------------------------------------------------
+connection con_u1;
+SHOW CREATE TABLE mysql.outline;
+
+#-----------------------------------------------------------
+# 2. check privileges
+#-----------------------------------------------------------
+connection con_u1;
+--error ER_OUTLINE_PRIVILEGE_REQUIRED
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1', '',
+                                  "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+--error ER_OUTLINE_PRIVILEGE_REQUIRED
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, "/*+ SET_VAR(optimizer_switch = 'mrr_cost_based=off') SET_VAR(max_heap_table_size = 1G) */",
+                                      "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+--error ER_OUTLINE_PRIVILEGE_REQUIRED
+call dbms_outln.flush_outline();
+
+--error ER_OUTLINE_PRIVILEGE_REQUIRED
+call dbms_outln.del_outline(1);
+
+call dbms_outln.preview_outline('outline_db',
+                                "select * from t1 where col1 = 2 and col2 = 'xxx'");
+call dbms_outln.show_outline();
+
+# user who has SUPER_PRIV can execute dbms_outln add/del/flush proc.
+connection con_u0;
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1', '',
+                                  "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, "/*+ SET_VAR(optimizer_switch = 'mrr_cost_based=off') SET_VAR(max_heap_table_size = 1G) */",
+                                      "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+call dbms_outln.flush_outline();
+
+call dbms_outln.del_outline(1);
+
+call dbms_outln.preview_outline('outline_db',
+                                "select * from t1 where col1 = 2 and col2 = 'xxx'");
+--replace_column 1 #
+call dbms_outln.show_outline();
+
+# use who name is root can execute dbms_outln add/del/flush proc.
+connection con_root;
+truncate TABLE mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1', '',
+                                  "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, "/*+ SET_VAR(optimizer_switch = 'mrr_cost_based=off') SET_VAR(max_heap_table_size = 1G) */",
+                                      "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+--replace_column 1 #
+call dbms_outln.show_outline();
+
+call dbms_outln.preview_outline('outline_db',
+                                "select * from t1 where col1 = 2 and col2 = 'xxx'");
+call dbms_outln.del_outline(1);
+
+--replace_column 1 #
+call dbms_outln.show_outline();
+
+#-----------------------------------------------------------
+# 3. check outline add index proc
+#-----------------------------------------------------------
+
+connection con_root;
+truncate TABLE mysql.outline;
+call dbms_outln.flush_outline();
+--error ER_SP_WRONG_NO_OF_ARGS
+call dbms_outln.add_index_outline('outline_db', 1, 'USE INDEX', 'ind_1', '',
+                                  "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+--error ER_NATIVE_PROC_PARAMETER_MISMATCH
+call dbms_outln.add_index_outline('outline_db', 2, 0, 'USE INDEX', 'ind_1', '',
+                                  "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+--error ER_OUTLINE_INVALID
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE xxx', 'ind_1', '',
+                                  "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+--error ER_OUTLINE_INVALID
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1', 'FOR
+                                  ORDER', "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+--error ER_OUTLINE_DIGEST_MISMATCH
+call dbms_outln.add_index_outline('outline_db', 'a7558f4dd3dd0713428fbd60beda118f35ed9c447ce58b2bb9239539fab76',
+                                  0, 'USE INDEX', 'ind_1, ind_2', 'FOR ORDER BY', "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+--error ER_STATEMENT_DIGEST_PARSE
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1', 'FOR
+                                  ORDER', "select * t1 where col1 = 2 and col2 = 'xpchild'");
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1, ind_2',
+                                  'FOR ORDER BY', "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+--replace_column 1 #
+call dbms_outln.show_outline();
+
+--replace_column 1 #
+select * from mysql.outline;
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+call dbms_outln.show_outline();
+
+#-----------------------------------------------------------
+# 4. check outline add optimizer proc
+#-----------------------------------------------------------
+
+--error ER_SP_WRONG_NO_OF_ARGS
+call dbms_outln.add_optimizer_outline('outline_db', 1, 'OPTIMIZER', 'ind_1', '',
+                                      "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+--error ER_SP_WRONG_NO_OF_ARGS
+call dbms_outln.add_optimizer_outline('outline_db', 2, 0, 'OPTIMIZER', 'ind_1', '',
+                                      "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+--error ER_OUTLINE_OPTIMIZER_HINT_PARSE
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ EXECUTION_TIME(1000) */',
+                                      "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ MAX_EXECUTION_TIME(1000) */',
+                                      "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+--replace_column 1 #
+call dbms_outln.show_outline();
+
+--replace_column 1 #
+select * from mysql.outline;
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+#-----------------------------------------------------------
+# 5. test TABLE structure error
+#-----------------------------------------------------------
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1, ind_2',
+                                  'FOR ORDER BY', "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ MAX_EXECUTION_TIME(1000) */',
+                                      "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+alter TABLE mysql.outline add col1 int;
+
+--error ER_CANNOT_LOAD_FROM_TABLE_V2
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1, ind_2',
+                                  'FOR ORDER BY', "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+--error ER_CANNOT_LOAD_FROM_TABLE_V2
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ MAX_EXECUTION_TIME(1000) */',
+                                      "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+--error ER_CANNOT_LOAD_FROM_TABLE_V2
+call dbms_outln.flush_outline();
+
+--error ER_CANNOT_LOAD_FROM_TABLE_V2
+call dbms_outln.del_outline(11111);
+
+call dbms_outln.show_outline();
+
+use outline_db;
+explain select * from t1 where col1 = 2 and col2 = 'xpchild';
+
+alter TABLE mysql.outline drop column col1;
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+#-----------------------------------------------------------
+# 6. del warning
+#-----------------------------------------------------------
+call dbms_outln.del_outline(123456);
+
+#-----------------------------------------------------------
+# 7. test flush warning
+#-----------------------------------------------------------
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1, ind_2',
+                                  'FOR ORDER BY', "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ MAX_EXECUTION_TIME(1000) */',
+                                      "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+--replace_column 1 #
+call dbms_outln.show_outline();
+
+connection conn_rdsAdmin;
+update mysql.outline set  hint ='xxxx' where type ='OPTIMIZER';
+connection con_root;
+
+call dbms_outln.flush_outline();
+
+use outline_db;
+explain select * from t1 where col1 = 2 and col2 = 'xpchild';
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+#-----------------------------------------------------------
+# 8. test query trim
+#-----------------------------------------------------------
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_2',
+                                  '', "select * from t1 where col1 = 1 and col2='xpchild'");
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_2',
+                                  '', "select * from t2 where col1 = 1 and col2='xpchild';");
+explain select * from t1 where col1 = 1 and col2='xpchild';
+explain select * from t2 where col1 = 1 and col2='xpchild';
+
+
+DELIMITER $;
+explain select * from t1 where col1 = 1 and col2='xpchild';$
+explain select * from t2 where col1 = 1 and col2='xpchild';$
+DELIMITER ;$
+
+--replace_column 1 #
+call dbms_outln.show_outline();
+
+call dbms_outln.preview_outline("outline_db", "select * from t2 where col1 = 1 and col2='xpchild'");
+call dbms_outln.preview_outline("outline_db", "select * from t2 where col1 = 1 and col2='xpchild';");
+call dbms_outln.preview_outline("outline_db", "select * from t2 where col1 = 1 and col2='xpchild';;;");
+
+#-----------------------------------------------------------
+# 9. test explain format
+#-----------------------------------------------------------
+
+CALL dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1', '',
+				 "select * from t1 where t1.col1 =1 and t1.col2 ='xpchild'");
+CALL dbms_outln.preview_outline('outline_db', "select * from t1 where t1.col1 =1 and t1.col2 ='xpchild'");
+
+use outline_db;
+EXPLAIN SELECT * FROM t1 WHERE t1.col1 =2 AND t1.col2 ='xpchild';
+EXPLAIN FORMAT = JSON SELECT * FROM t1 WHERE t1.col1 =2 AND t1.col2 ='xpchild';
+EXPLAIN FORMAT = TRADITIONAL SELECT * FROM t1 WHERE t1.col1 =2 AND t1.col2 ='xpchild';
+EXPLAIN FORMAT = 'JsOn' SELECT * FROM t1 WHERE t1.col1 =2 AND t1.col2 ='xpchild';
+EXPLAIN FORMAT = 'TrAdItIoNaL' SELECT * FROM t1 WHERE t1.col1 =2 AND t1.col2 ='xpchild';
+
+truncate TABLE mysql.outline;
+call dbms_outln.flush_outline();
+
+#-----------------------------------------------------------
+# 9. test whether rules are persist after restart mysqld
+#-----------------------------------------------------------
+CALL dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1', '',
+				 "select * from t1 where t1.col1 =1 and t1.col2 ='xpchild'");
+SELECT * FROM mysql.outline;
+use outline_db;
+EXPLAIN SELECT * FROM t1 WHERE t1.col1 =2 AND t1.col2 ='xpchild';
+--source include/restart_mysqld.inc
+SELECT * FROM mysql.outline;
+use outline_db;
+EXPLAIN SELECT * FROM t1 WHERE t1.col1 =2 AND t1.col2 ='xpchild';
+truncate TABLE mysql.outline;
+call dbms_outln.flush_outline();
+
+#-----------------------------------------------------------
+# 10. BUG2024011504018 test empty input for outline 
+#-----------------------------------------------------------
+use outline_db;
+--error ER_OUTLINE_PREVIEW_INVALID
+call dbms_outln.preview_outline("outline_db", "");
+--error ER_OUTLINE_PREVIEW_INVALID
+call dbms_outln.preview_outline("outline_db", "  ");
+--error ER_OUTLINE_PREVIEW_INVALID
+call dbms_outln.preview_outline("", "");
+--error ER_OUTLINE_PREVIEW_INVALID
+call dbms_outln.preview_outline(' ', '');
+--error ER_OUTLINE_PREVIEW_INVALID
+call dbms_outln.preview_outline(' ', ' ');
+
+connection con_root;
+drop DATABASE outline_db;
+
+drop user 'u0'@'%';
+drop user 'u1'@'%';
+
+connection default;
+disconnect con_u0;
+disconnect con_u1;
+disconnect con_root;
+disconnect conn_rdsAdmin;
+
+--enable_ps_protocol

@@ -1,0 +1,113 @@
+--source include/not_have_only_dstore.inc
+#
+# Test for recycle func of case_sensitive instance
+#
+
+let $MYSQLD_BASE_DIR = `select @@basedir`;
+
+--echo # Original lower_case_table_names=0
+SELECT @@lower_case_table_names;
+
+--echo # Stop the MTR default mysqld since it's lower_case_table_names=0
+--source include/shutdown_mysqld.inc
+
+--echo #
+--echo # Initialize a temporary database that uses lower_case_table_names=0.
+--echo #
+--write_file $MYSQL_TMP_DIR/boot.sql
+CREATE DATABASE test;
+EOF
+
+let $MYSQL_DATA_DIR = $MYSQL_TMP_DIR/data;
+--mkdir $MYSQL_DATA_DIR
+
+let NEW_CMD = $MYSQLD --no-defaults --initialize-insecure --lc_messages_dir=$MYSQL_SHAREDIR --basedir=$MYSQLD_BASE_DIR --datadir=$MYSQL_DATA_DIR --init-file=$MYSQL_TMP_DIR/boot.sql --dstore_tenant_config=$MYSQL_DSTORE_TENANT_CONFIG_FILE --console --lower_case_table_names=0 </dev/null>>$MYSQL_TMP_DIR/bootstrap.log 2>&1;
+--exec $NEW_CMD
+
+--echo #
+--echo # Start the DB server with the lower_case_table_names=0
+--echo #
+
+--replace_result $MYSQL_DATA_DIR MYSQL_DATA_DIR
+--let $restart_parameters="restart: --datadir=$MYSQL_DATA_DIR --lower_case_table_names=0"
+--source include/start_mysqld.inc
+
+--echo # New lower_case_table_names=0
+select @@lower_case_table_names;
+
+connect (root, 127.0.0.1, root,,);
+
+# connect root
+connection root;
+set rds_recycle_bin_mode=on;
+set global rds_recycle_bin_mode=ON;
+create database db_recycle;
+
+use db_recycle;
+create table t0(id int);
+drop table t0;
+let $t0_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+--replace_result $t0_name_in_recyclebin t0
+--error ER_BAD_DB_ERROR
+eval call dbms_recyclebin.restore_table('$t0_name_in_recyclebin', 'DB_RECYCLE', "t0");
+--replace_result $t0_name_in_recyclebin t0
+eval call dbms_recyclebin.restore_table('$t0_name_in_recyclebin', 'db_recycle', "t0");
+
+drop table t0;
+--error ER_RECYBIN_NO_MATCH
+eval call dbms_recyclebin.restore_db('DB_RECYCLE');
+--error ER_RECYBIN_NO_MATCH
+eval call dbms_recyclebin.restore_db('DB_RECYCLE', 'db_recycle');
+--error ER_BAD_DB_ERROR
+eval call dbms_recyclebin.restore_db('db_recycle', 'DB_RECYCLE');
+call dbms_recyclebin.restore_db('db_recycle', 'db_recycle');
+drop table t0;
+call dbms_recyclebin.restore_db('db_recycle');
+
+drop table t0;
+create database DB_RECYCLE;
+use DB_RECYCLE;
+create table T0(id int);
+drop table T0;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+call dbms_recyclebin.restore_db('DB_RECYCLE');
+show tables;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+drop table T0;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+call dbms_recyclebin.restore_db('db_recycle');
+show tables;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+use db_recycle;
+drop table t0;
+call dbms_recyclebin.restore_db('DB_RECYCLE', 'db_recycle');
+call dbms_recyclebin.restore_db('db_recycle', 'DB_RECYCLE');
+show tables;
+use DB_RECYCLE;
+show tables;
+
+connection default;
+set global rds_recycle_bin_mode=OFF;
+drop database db_recycle;
+drop database DB_RECYCLE;
+drop database __recyclebin__;
+CREATE DATABASE IF NOT EXISTS __recyclebin__ DEFAULT CHARACTER SET utf8mb4;
+
+--echo #
+--echo # Cleanup
+--echo #
+--let $restart_parameters= restart:
+--source include/restart_mysqld.inc
+
+SELECT @@lower_case_table_names;
+
+--force-rmdir $MYSQL_DATA_DIR
+--remove_file $MYSQL_TMP_DIR/boot.sql

@@ -1,0 +1,313 @@
+--source include/have_debug_sync.inc
+--source include/have_only_dstore.inc
+
+SET DEBUG_SYNC = 'RESET';
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+connect (con3,localhost,root,,);
+
+connection default;
+
+call mtr.add_suppression("The row log file size.*");
+call mtr.add_suppression("Append row log item fail*");
+call mtr.add_suppression("Row log dml for index fail*");
+
+SHOW VARIABLES LIKE "dstore_row_log_buffer_size";
+
+CREATE DATABASE IF NOT EXISTS db1;
+use db1;
+
+CREATE TABLE t1 (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(110),
+    age INT,
+    email VARCHAR(110)
+);
+
+delimiter //;
+CREATE PROCEDURE insert_fixed_length_records(
+    IN n INT, 
+    IN name_len INT, 
+    IN email_len INT
+)
+BEGIN
+    DECLARE i INT DEFAULT 0;
+    DECLARE fixed_name VARCHAR(110);
+    DECLARE fixed_email VARCHAR(110);
+    
+    SET fixed_name = REPEAT('a', LEAST(name_len, 110));
+    SET fixed_email = REPEAT('b', LEAST(email_len, 110));
+
+    WHILE i < n DO
+        INSERT INTO t1 (name, age, email)
+        VALUES (fixed_name, FLOOR(RAND() * 100), fixed_email);
+        SET i = i + 1;
+    END WHILE;
+END //
+delimiter ;//
+
+call db1.insert_fixed_length_records(10,1,1);
+
+--echo ##################################################################
+--echo # 1. Test without dml                                            #
+--echo ##################################################################
+# Online create indexes with other ddl options witch can use inplace algorithm;
+# Query the count(*) using the new index.
+
+ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+
+--echo ##################################################################
+--echo # 2. Test with dml                                               #
+--echo ##################################################################
+# Online create indexes with other ddl options witch can use inplace algorithm;
+# Performs DML to insert an index tuple into the row log block(without writing row log to the file);
+# Apply row log;
+# Query the count(*) using the new index.
+
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+--send ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;
+connection con1;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+call db1.insert_fixed_length_records(1,1,1);
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+connection default;
+reap;
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+
+--echo ##################################################################
+--echo # 3. Test with dml                                               #
+--echo ##################################################################
+# Online create indexes with other ddl options witch can use inplace algorithm;
+# Performs DML to insert 9 index tuples into the row log block(without writing row log to the file);
+# Apply row log;
+# Query the count(*) using the new index.
+
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+--send ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;
+connection con1;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+call db1.insert_fixed_length_records(512,9,9);
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+connection default;
+reap;
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+
+--echo ##################################################################
+--echo # 4. Test with dml(exactly fills one block)                      #
+--echo ##################################################################
+# Online create indexes with other ddl options witch can use inplace algorithm;
+# Performs DML to fill up one row log block, and the last index tuple is complete;
+# Apply row log;
+# Query the count(*) using the new index.
+
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+--send ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;
+connection con1;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+call db1.insert_fixed_length_records(511,1,102);
+call db1.insert_fixed_length_records(1,1,98);
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+connection default;
+reap;
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+
+--echo ##################################################################
+--echo # 5. Test with dml(exactly fills one block)                      #
+--echo ##################################################################
+# Online create indexes with other ddl options witch can use inplace algorithm;
+# Performs DML to fill up one row log block, and the last index tuple is complete;
+# Performs DML to write an index tuple to the second block.
+# Apply row log;
+# Query the count(*) using the new index.
+
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+--send ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;
+connection con1;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+call db1.insert_fixed_length_records(511,1,102);
+call db1.insert_fixed_length_records(1,1,98);
+call db1.insert_fixed_length_records(1,1,1);
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+connection default;
+reap;
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+
+--echo ##################################################################
+--echo # 6. Test with dml(need merge)                                   #
+--echo ##################################################################
+# Online create indexes with other ddl options witch can use inplace algorithm;
+# Performs DML to fill up one row log block, and the last index tuple is only partially filled;
+# Apply row log;
+# Query the count(*) using the new index.
+
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+--send ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;
+connection con1;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+call db1.insert_fixed_length_records(512,9,98);
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+connection default;
+reap;
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+
+--echo ##################################################################
+--echo # 7. Test with dml(exactly fills two block)                      #
+--echo ##################################################################
+# Online create indexes with other ddl options witch can use inplace algorithm;
+# Performs DML to fill up first row log block, and the last index tuple is complete;
+# Performs DML to fill up second row log block, and the last index tuple is complete;
+# Apply row log;
+# Query the count(*) using the new index.
+
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+--send ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;
+connection con1;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+call db1.insert_fixed_length_records(511,1,102);
+call db1.insert_fixed_length_records(1,1,98);
+call db1.insert_fixed_length_records(511,1,102);
+call db1.insert_fixed_length_records(1,1,98);
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+connection default;
+reap;
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+
+--echo ##################################################################
+--echo # 8. Test with dml(need merge)                                   #
+--echo ##################################################################
+# Online create indexes with other ddl options witch can use inplace algorithm;
+# Performs DML to fill up first row log block, and the last index tuple is complete;
+# Performs DML to fill up second row log blocks, and the last index tuple is only partially filled;
+# Apply row log;
+# Query the count(*) using the new index.
+
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+--send ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;
+connection con1;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+call db1.insert_fixed_length_records(511,1,102);
+call db1.insert_fixed_length_records(1,1,98);
+call db1.insert_fixed_length_records(512,9,98);
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+connection default;
+reap;
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+
+--echo ##################################################################
+--echo # 9. Test with dml(need merge)                                   #
+--echo ##################################################################
+# Online create indexes with other ddl options witch can use inplace algorithm;
+# Performs DML to fill up first row log block, and the last index tuple is only partially filled;
+# Performs DML to fill up second row log blocks, and the last index tuple is only partially filled;
+# Apply row log;
+# Query the count(*) using the new index.
+
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+--send ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;
+connection con1;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+call db1.insert_fixed_length_records(512,9,98);
+call db1.insert_fixed_length_records(512,9,98);
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+connection default;
+reap;
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+
+--echo ##################################################################
+--echo # 10. Test with concurrent dml                                   #
+--echo ##################################################################
+# Online create indexes with other ddl options witch can use inplace algorithm;
+# Performs DML to insert an index tuple into the row log block, and wait after obtaining the block pointer;
+# Connect another conection, and performs DML to insert an index tuple into same row log block;
+# Signal dml_continue;
+# Apply row log;
+# Query the count(*) using the new index.
+
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+--send ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;
+connection con1;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+SET DEBUG_SYNC = 'dstore_row_log_append_after_get_blockptr SIGNAL dml_waiting WAIT_FOR dml_continue';
+--send call db1.insert_fixed_length_records(1,9,98);
+connection con2;
+--send call db1.insert_fixed_length_records(1,9,98);
+connection con3;
+SET DEBUG_SYNC = 'now SIGNAL dml_continue';
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+connection con1;
+reap;
+connection con2;
+reap;
+connection default;
+reap;
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+
+--echo ##################################################################
+--echo # 11. Test with dml                                              #
+--echo ##################################################################
+# Set dstore_row_log_file_max_size = dstore_row_log_buffer_size + 1
+# The maximum size of the row log file can exactly accommodate one block.
+# Online create indexes with other ddl options witch can use inplace algorithm;
+# Performs DML to fill up first row log block, and the last index tuple is only partially filled;
+# Apply row log;
+# Query the count(*) using the new index.
+
+SET GLOBAL dstore_row_log_file_max_size = 65537;
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL row_log_init_finished WAIT_FOR ddl_continue';
+--send ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;
+connection con1;
+SET DEBUG_SYNC = "now WAIT_FOR row_log_init_finished";
+call db1.insert_fixed_length_records(512,9,98);
+--replace_column 1 #
+select * from INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS;
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+connection default;
+reap;
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+
+--echo ##################################################################
+--echo # 12. Test with dml                                              #
+--echo ##################################################################
+# Set dstore_row_log_file_max_size = dstore_row_log_buffer_size.
+# The maximum size of the row log file cannot accommodate one block.
+# Online create indexes with other ddl options witch can use inplace algorithm;
+# Performs DML to fill up first row log block, and the last index tuple is only partially filled;
+# Apply row log;
+# Query the count(*) using the new index.
+
+SET GLOBAL dstore_row_log_file_max_size = 65536;
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+--send ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;
+connection con1;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+--sleep 1
+call db1.insert_fixed_length_records(511,1,102);
+call db1.insert_fixed_length_records(1,1,98);
+--send call db1.insert_fixed_length_records(1,1,98);
+connection con2;
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+connection con1;
+reap;
+connection default;
+--error ER_DSTORE_ONLINE_LOG_TOO_BIG
+reap;
+SHOW CREATE TABLE db1.t1;
+SELECT COUNT(*) FROM db1.t1;
+
+SET GLOBAL dstore_row_log_file_max_size = default;
+drop database db1;
+--disconnect con1
+--disconnect con2
+--disconnect con3

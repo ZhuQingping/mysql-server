@@ -1,0 +1,148 @@
+call mtr.add_suppression("failed to get backup MDL");
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("prepare for backup fail after backup control file");
+call mtr.add_suppression("start full local backup fail, pdb id 17, flag 0");
+call mtr.add_suppression("Local backup: failed to do full backup for dstore");
+create database full_backup_ddl;
+use full_backup_ddl;
+create table t1(i int) engine=Dstore;
+set global rds_local_backup_lock_optimize=off;
+set global debug='+d,full_lb_thd_wait_after_get_mdl';
+call rds_backup.start_full_local_backup(0);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+set session lock_wait_timeout=1;
+alter table t1 add column j int;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `i` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+alter table t1 add column j int;
+set global debug='-d,full_lb_thd_wait_after_get_mdl';
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Success
+set global rds_local_backup_lock_optimize=on;
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `i` int DEFAULT NULL,
+  `j` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `i` int DEFAULT NULL,
+  `j` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SET DEBUG_SYNC='mysql_rm_table_after_lock_table_names SIGNAL run_backup_lock WAIT_FOR continue_dropping_table';
+DROP TABLE t1;
+SET DEBUG_SYNC='now WAIT_FOR run_backup_lock';
+set @origin_value = @@rds_local_backup_lock_timeout;
+set global rds_local_backup_lock_timeout=1;
+call rds_backup.start_full_local_backup(0);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" not found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" not found
+Pattern ""controlFileRunningStatus": "Completed"" not found
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+SET DEBUG_SYNC='now SIGNAL continue_dropping_table';
+Pattern "failed to get backup MDL" found
+show tables;
+Tables_in_full_backup_ddl
+call rds_backup.start_full_local_backup(0);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Success
+set global rds_local_backup_lock_timeout=@origin_value;
+create table t1(s varchar(100)) engine=dstore;
+set global debug='+d,full_lb_thd_wait_before_get_mdl';
+call rds_backup.start_full_local_backup(0);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+DROP PROCEDURE IF EXISTS load_data;
+CALL load_data('t1','s',300000);
+alter table t1 add column j int;
+insert into t1 values('abc', 123);
+set global debug='-d,full_lb_thd_wait_before_get_mdl';
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `s` varchar(100) DEFAULT NULL,
+  `j` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+select count(*) from t1;
+count(*)
+300001
+select * from t1 where s='abc' and j=123;
+s	j
+abc	123
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Success
+insert into t1 values('abc', 123);
+select count(*) from t1;
+count(*)
+300002
+select * from t1 where s='abc' and j=123;
+s	j
+abc	123
+abc	123
+# restart: --dstore_open_restore_mode=on
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `s` varchar(100) DEFAULT NULL,
+  `j` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+select count(*) from t1;
+count(*)
+300001
+select * from t1 where s='abc' and j=123;
+s	j
+abc	123
+insert into t1 values('def', 456);
+alter table t1 add column k int;
+insert into t1 values('ghi', 789, 123);
+select * from t1 where s in ('abc', 'def', 'ghi') order by s;
+s	j	k
+abc	123	NULL
+def	456	NULL
+ghi	789	123
+drop database full_backup_ddl;

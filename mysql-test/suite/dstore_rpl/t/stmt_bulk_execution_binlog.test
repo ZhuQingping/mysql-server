@@ -1,0 +1,18 @@
+--source include/not_group_replication_plugin.inc
+--source include/no_valgrind_without_big.inc
+
+SET @old_general_log= @@global.general_log;
+SET @old_slow_query_log= @@global.slow_query_log;
+
+# need to have the dynamic loading turned on for the client plugin tests
+--source include/have_plugin_auth.inc
+
+--let $LOG_DIR= $MYSQLTEST_VARDIR/log
+
+--exec echo "$MYSQL_CLIENT_TEST" > $LOG_DIR/mysql_client_test.out.log 2>&1
+--exec $MYSQL_CLIENT_TEST --getopt-ll-test=25600M $PLUGIN_AUTH_CLIENT_OPT stmt_bulk_test_binlog_format >> $LOG_DIR/mysql_client_test.out.log 2>&1
+
+--echo Succeed to test stmt_bulk_test_binlog_format
+
+SET @@global.general_log = @old_general_log;
+SET @@global.slow_query_log = @old_slow_query_log;

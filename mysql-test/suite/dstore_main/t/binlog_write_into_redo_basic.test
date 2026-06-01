@@ -1,0 +1,44 @@
+# ==== Purpose ====
+#
+# Verify that binlog write into wal includes the following scenarios.
+# 1. binlog write into wal and read them out correct.
+# 2. sync_binlog = 1000 and show master status result is correct.
+#
+
+--source include/have_binlog_format_row.inc
+--source include/have_only_dstore.inc
+reset master;
+create table t1 (x int, y int);
+--sleep 3
+--let $keep_gtid_events= 1
+--source include/show_binlog_events.inc
+
+insert into t1 values(1,1);
+insert into t1 values(1,2);
+--sleep 3
+--source include/show_binlog_events.inc
+
+update t1 set x = 2;
+update t1 set x = 3 where y = 1;
+--sleep 3
+--source include/show_binlog_events.inc
+
+delete from t1 where y = 1;
+delete from t1;
+--sleep 3
+--source include/show_binlog_events.inc
+--let $master_uuid= `SELECT @@GLOBAL.SERVER_UUID`
+--replace_result $master_uuid MASTER_UUID
+show master status;
+
+set global sync_binlog = 1000;
+insert into t1 values(3,2);
+insert into t1 values(4,2);
+--sleep 3
+--replace_result $master_uuid MASTER_UUID
+show master status;
+
+--source include/show_binlog_events.inc
+
+set global sync_binlog = 1;
+drop table t1;

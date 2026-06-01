@@ -1,0 +1,135 @@
+let $MYSQLD_DATADIR= `select @@datadir`;
+let $log_file=$MYSQLD_DATADIR/test_audit.log;
+ 
+SET GLOBAL audit_log_flush=ON;
+--remove_file $log_file
+SET GLOBAL audit_log_flush=ON;
+
+### Test the username with the binary character set. The expected 
+### result in audit log should be unreadable character
+set character_set_client = binary;
+CREATE USER '测试账号'@'%' IDENTIFIED BY 'my_password';
+GRANT SELECT, UPDATE, DELETE ON *.* TO '测试账号'@'%';
+ALTER USER '测试账号'@'%' IDENTIFIED BY 'my_password2';
+DROP USER '测试账号';
+ 
+### test the create user statement without password because the 
+### logic of rewriting statements in code is different from pervious one.
+CREATE USER '测试账号1'@'%';
+DROP USER '测试账号1';
+ 
+### test for other languages
+CREATE USER 'ฐา'@'%' IDENTIFIED BY 'my_password';
+GRANT SELECT, UPDATE, DELETE ON *.* TO 'ฐา'@'%';
+DROP USER 'ฐา';
+
+### Test the username with the utf8mb4 character set. The expected 
+### result in audit log should be normal character
+set character_set_client = utf8mb4;
+CREATE USER '测试账号'@'%' IDENTIFIED BY 'my_password';
+GRANT SELECT, UPDATE, DELETE ON *.* TO '测试账号'@'%';
+ALTER USER '测试账号'@'%' IDENTIFIED BY 'my_password2';
+DROP USER '测试账号';
+ 
+CREATE USER '测试账号1'@'%';
+DROP USER '测试账号1';
+ 
+CREATE USER 'ฐา'@'%' IDENTIFIED BY 'my_password';
+GRANT SELECT, UPDATE, DELETE ON *.* TO 'ฐา'@'%';
+DROP USER 'ฐา';
+ 
+### Test the username with the utf8mb3 character set. The expected 
+### result in audit log should be normal character
+set character_set_client = utf8mb3;
+CREATE USER '测试账号'@'%' IDENTIFIED BY 'my_password';
+GRANT SELECT, UPDATE, DELETE ON *.* TO '测试账号'@'%';
+ALTER USER '测试账号'@'%' IDENTIFIED BY 'my_password2';
+DROP USER '测试账号';
+ 
+CREATE USER '测试账号1'@'%';
+DROP USER '测试账号1';
+ 
+CREATE USER 'ฐา'@'%' IDENTIFIED BY 'my_password';
+GRANT SELECT, UPDATE, DELETE ON *.* TO 'ฐา'@'%';
+DROP USER 'ฐา';
+
+SET GLOBAL audit_log_csv2_escape = ON;
+### Test the username with the utf8mb4 character set. The expected 
+### result in audit log should be normal character
+set character_set_client = utf8mb4;
+CREATE USER '测试账号'@'%' IDENTIFIED BY 'my_password';
+GRANT SELECT, UPDATE, DELETE ON *.* TO '测试账号'@'%';
+ALTER USER '测试账号'@'%' IDENTIFIED BY 'my_password2';
+DROP USER '测试账号';
+ 
+CREATE USER '测试账号1'@'%';
+DROP USER '测试账号1';
+ 
+CREATE USER 'ฐา'@'%' IDENTIFIED BY 'my_password';
+GRANT SELECT, UPDATE, DELETE ON *.* TO 'ฐา'@'%';
+DROP USER 'ฐา';
+
+### test for other SQL that will rewrite
+create tablE `测试表1` (c1 int);
+inserT into `测试表1` values (1), (2), (3);
+create tablE `测试表2` select * from `测试表1`;
+drop tablE `测试表1`;
+drop tablE `测试表2`;
+
+### Test the username with the utf8mb3 character set. The expected 
+### result in audit log should be normal character
+set character_set_client = utf8mb3;
+CREATE USER '测试账号'@'%' IDENTIFIED BY 'my_password';
+GRANT SELECT, UPDATE, DELETE ON *.* TO '测试账号'@'%';
+ALTER USER '测试账号'@'%' IDENTIFIED BY 'my_password2';
+DROP USER '测试账号';
+ 
+CREATE USER '测试账号1'@'%';
+DROP USER '测试账号1';
+ 
+CREATE USER 'ฐา'@'%' IDENTIFIED BY 'my_password';
+GRANT SELECT, UPDATE, DELETE ON *.* TO 'ฐา'@'%';
+DROP USER 'ฐา';
+
+### test for other SQL that will rewrite
+create tablE `测试表1` (c1 int);
+inserT into `测试表1` values (1), (2), (3);
+create tablE `测试表2` select * from `测试表1`;
+drop tablE `测试表1`;
+drop tablE `测试表2`;
+
+--source audit_log_echo_csv2.inc
+
+### Test for the CSV format audit_log
+--disable_result_log
+--let $restart_parameters=restart:--audit-log-format=CSV
+--source include/restart_mysqld.inc
+--enable_result_log
+
+SET GLOBAL audit_log_flush=ON;
+--remove_file $log_file
+SET GLOBAL audit_log_flush=ON;
+
+### Test the username with the utf8mb3 character set. The expected 
+### result in audit log should be normal character
+set character_set_client = utf8mb3;
+CREATE USER '测试账号'@'%' IDENTIFIED BY 'my_password';
+GRANT SELECT, UPDATE, DELETE ON *.* TO '测试账号'@'%';
+ALTER USER '测试账号'@'%' IDENTIFIED BY 'my_password2';
+DROP USER '测试账号';
+ 
+CREATE USER '测试账号1'@'%';
+DROP USER '测试账号1';
+
+CREATE USER 'ฐา'@'%' IDENTIFIED BY 'my_password';
+GRANT SELECT, UPDATE, DELETE ON *.* TO 'ฐา'@'%';
+DROP USER 'ฐา';
+
+### test for other SQL that will rewrite
+create tablE `测试表1` (c1 int);
+inserT into `测试表1` values (1), (2), (3);
+create tablE `测试表2` select * from `测试表1`;
+drop tablE `测试表1`;
+drop tablE `测试表2`;
+
+--source audit_log_echo.inc

@@ -1,0 +1,441 @@
+show global variables like 'rds_permission_control';
+Variable_name	Value
+rds_permission_control	ON
+show global variables like 'rds_internal_schema_ddl_control';
+Variable_name	Value
+rds_internal_schema_ddl_control	ON
+show global variables like 'rds_reserved_users';
+Variable_name	Value
+rds_reserved_users	reserved_user1,reserved_user2,reserved_user3
+CREATE USER 'root1'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, REFERENCES, INDEX, ALTER, SHOW DATABASES,
+CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW,
+CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER ON *.* TO 'root1'@'%' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+CREATE USER 'super_user'@'%' IDENTIFIED BY '123456';
+GRANT SUPER ON *.* TO 'super_user'@'%' WITH GRANT OPTION;
+Warnings:
+Warning	1287	The SUPER privilege identifier is deprecated
+GRANT ALL PRIVILEGES ON *.* TO 'super_user'@'%';
+FLUSH PRIVILEGES;
+# connect root1
+DROP DATABASE mysql;
+ERROR 42000: Access denied for user 'root1'@'localhost' to database 'mysql'
+DROP DATABASE sys;
+ERROR 42000: Access denied for user 'root1'@'localhost' to database 'sys'
+DROP DATABASE information_schema;
+ERROR 42000: Access denied for user 'root1'@'localhost' to database 'information_schema'
+DROP DATABASE performance_schema;
+ERROR 42000: Access denied for user 'root1'@'localhost' to database 'performance_schema'
+use mysql;
+CREATE TABLE t1 (a int, b int);
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+CREATE TABLE user_backup select * from user;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+CREATE TEMPORARY TABLE db_backup select * from db;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+CREATE EVENT myevent
+ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 1 HOUR
+DO
+UPDATE mysql.base_user SET user = test_user1;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+CREATE PROCEDURE pc_i_tt_5_suc (IN p_trans_id INTEGER, IN p_stmt_id INTEGER) BEGIN END|
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+CREATE FUNCTION fc_i_tt_5_suc (p_trans_id INTEGER, p_stmt_id INTEGER) RETURNS VARCHAR(64)
+BEGIN
+DECLARE in_stmt_id INTEGER;
+SELECT max(stmt_id) INTO in_stmt_id FROM tt_5 WHERE trans_id= p_trans_id;
+SELECT COALESCE(greatest(in_stmt_id + 1, p_stmt_id), 1) INTO in_stmt_id;
+INSERT INTO tt_5(trans_id, stmt_id) VALUES (p_trans_id, in_stmt_id);
+INSERT INTO tt_5(trans_id, stmt_id) VALUES (p_trans_id, in_stmt_id + 1);
+RETURN "fc_i_tt_5_suc";
+END|
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+CREATE TRIGGER tr_i_tt_3_to_nt_3 AFTER INSERT ON user FOR EACH ROW BEGIN END|
+ERROR HY000: Triggers can not be created on system tables
+CREATE INDEX index_name ON db (db);
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+CREATE VIEW v_today (today) AS SELECT CURRENT_DATE;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+RENAME TABLE mysql.user TO user2;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+TRUNCATE TABLE user;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+use sys;
+CREATE TABLE t1 (a int, b int);
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+CREATE TABLE user_backup select * from user;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+CREATE TEMPORARY TABLE db_backup select * from db;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+CREATE EVENT myevent
+ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 1 HOUR
+DO
+UPDATE mysql.base_user SET user = test_user1;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+CREATE PROCEDURE pc_i_tt_5_suc (IN p_trans_id INTEGER, IN p_stmt_id INTEGER) BEGIN END|
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+CREATE FUNCTION fc_i_tt_5_suc (p_trans_id INTEGER, p_stmt_id INTEGER) RETURNS VARCHAR(64)
+BEGIN
+DECLARE in_stmt_id INTEGER;
+SELECT max(stmt_id) INTO in_stmt_id FROM tt_5 WHERE trans_id= p_trans_id;
+SELECT COALESCE(greatest(in_stmt_id + 1, p_stmt_id), 1) INTO in_stmt_id;
+INSERT INTO tt_5(trans_id, stmt_id) VALUES (p_trans_id, in_stmt_id);
+INSERT INTO tt_5(trans_id, stmt_id) VALUES (p_trans_id, in_stmt_id + 1);
+RETURN "fc_i_tt_5_suc";
+END|
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+CREATE TRIGGER tr_i_tt_3_to_nt_3 AFTER INSERT ON user FOR EACH ROW BEGIN END|
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+CREATE INDEX index_name ON sys.sys_config (value);
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+CREATE VIEW v_today (today) AS SELECT CURRENT_DATE;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+RENAME TABLE sys_config TO sys.sys_config2;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+TRUNCATE TABLE sys_config;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+# connect root
+SET GLOBAL rds_permission_control = OFF;
+# connect root1 
+# test mysql db
+use mysql;
+CREATE TABLE t1 (a int PRIMARY KEY, b int);
+CREATE TABLE user_backup select * from user;
+CREATE TEMPORARY TABLE db_backup select * from db;
+ALTER TABLE t1 ENGINE = InnoDB;
+ALTER TABLE t1 RENAME COLUMN b TO c;
+RENAME TABLE t1 to t2;
+TRUNCATE TABLE t2;
+CREATE EVENT myevent
+ON SCHEDULE
+EVERY 6 HOUR
+COMMENT 'A sample comment.'
+    DO
+UPDATE myschema.mytable SET mycol = mycol + 1;
+ALTER EVENT myevent
+ON SCHEDULE
+EVERY 12 HOUR
+STARTS CURRENT_TIMESTAMP + INTERVAL 4 HOUR;
+CREATE FUNCTION f() RETURNS INT return 1;
+ALTER FUNCTION f comment "atomic DDL on routine";
+CREATE PROCEDURE p() SELECT 1;
+ALTER PROCEDURE p comment "atomic DDL on routine";
+create view v1 as select * from user;
+alter view v1 as select * from db;
+# test sys db
+use sys;
+CREATE TABLE t1 (a int PRIMARY KEY, b int);
+CREATE TABLE sys_config1 select * from sys_config;
+CREATE TEMPORARY TABLE sys_config2 select * from sys_config;
+ALTER TABLE t1 ENGINE = InnoDB;
+ALTER TABLE t1 RENAME COLUMN b TO c;
+RENAME TABLE t1 to t2;
+TRUNCATE TABLE t2;
+CREATE EVENT myevent
+ON SCHEDULE
+EVERY 6 HOUR
+COMMENT 'A sample comment.'
+    DO
+UPDATE myschema.mytable SET mycol = mycol + 1;
+ALTER EVENT myevent
+ON SCHEDULE
+EVERY 12 HOUR
+STARTS CURRENT_TIMESTAMP + INTERVAL 4 HOUR;
+CREATE FUNCTION f() RETURNS INT return 1;
+ALTER FUNCTION f comment "atomic DDL on routine";
+CREATE PROCEDURE p() SELECT 1;
+ALTER PROCEDURE p comment "atomic DDL on routine";
+create view v1 as select * from mysql.user;
+alter view v1 as select * from mysql.db;
+# connect root
+SET GLOBAL rds_permission_control = ON;
+# connect root1
+# test mysql db
+use mysql;
+ALTER TABLE t2 ENGINE = InnoDB;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+ALTER TABLE t2 RENAME COLUMN c TO b;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+DROP INDEX `PRIMARY` ON t2;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+drop table t2;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+ALTER EVENT myevent
+ON SCHEDULE
+EVERY 12 HOUR
+STARTS CURRENT_TIMESTAMP + INTERVAL 4 HOUR;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+DROP EVENT myevent;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+ALTER FUNCTION f comment "not allowed alter internal db";
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+ALTER PROCEDURE p comment "not allowed alter internal db";
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+DROP PROCEDURE p;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+alter view v1 as select * from user;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+DROP VIEW v1;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'mysql'
+# test sys db
+use sys;
+ALTER TABLE t2 ENGINE = InnoDB;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+ALTER TABLE t2 RENAME COLUMN c TO b;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+DROP INDEX `PRIMARY` ON t2;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+DROP TABLE t2;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+ALTER EVENT myevent
+ON SCHEDULE
+EVERY 12 HOUR
+STARTS CURRENT_TIMESTAMP + INTERVAL 4 HOUR;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+DROP EVENT myevent;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+ALTER FUNCTION f comment "atomic DDL on routine";
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+DROP FUNCTION f;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+ALTER PROCEDURE p comment "atomic DDL on routine";
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+DROP PROCEDURE p;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+alter view v1 as select * from mysql.user;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+DROP VIEW v1;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'sys'
+# connect root
+SET GLOBAL rds_permission_control = OFF;
+# connect root1 
+# test mysql db
+use mysql;
+DROP INDEX `PRIMARY` ON t2;
+DROP TABLE IF EXISTS t2;
+DROP TABLE  user_backup;
+DROP EVENT myevent;
+DROP FUNCTION f;
+DROP PROCEDURE p;
+DROP VIEW v1;
+# test sys db
+use sys;
+DROP INDEX `PRIMARY` ON t2;
+DROP TABLE IF EXISTS t2;
+DROP TABLE  sys_config1;
+DROP EVENT myevent;
+DROP FUNCTION f;
+DROP PROCEDURE p;
+DROP VIEW v1;
+# connect root
+SET GLOBAL rds_permission_control = ON;
+# connect super 
+# test mysql db
+use mysql;
+CREATE TABLE t1 (a int PRIMARY KEY, b int);
+CREATE TABLE user_backup select * from user;
+CREATE TEMPORARY TABLE db_backup select * from db;
+ALTER TABLE t1 ENGINE = InnoDB;
+ALTER TABLE t1 RENAME COLUMN b TO c;
+RENAME TABLE t1 to t2;
+TRUNCATE TABLE t2;
+CREATE EVENT myevent
+ON SCHEDULE
+EVERY 6 HOUR
+COMMENT 'A sample comment.'
+    DO
+UPDATE myschema.mytable SET mycol = mycol + 1;
+ALTER EVENT myevent
+ON SCHEDULE
+EVERY 12 HOUR
+STARTS CURRENT_TIMESTAMP + INTERVAL 4 HOUR;
+CREATE FUNCTION f() RETURNS INT return 1;
+ALTER FUNCTION f comment "atomic DDL on routine";
+CREATE PROCEDURE p() SELECT 1;
+ALTER PROCEDURE p comment "atomic DDL on routine";
+create view v1 as select * from user;
+alter view v1 as select * from db;
+# test sys db
+use sys;
+CREATE TABLE t1 (a int PRIMARY KEY, b int);
+CREATE TABLE sys_config1 select * from sys_config;
+CREATE TEMPORARY TABLE sys_config2 select * from sys_config;
+ALTER TABLE t1 ENGINE = InnoDB;
+ALTER TABLE t1 RENAME COLUMN b TO c;
+RENAME TABLE t1 to t2;
+TRUNCATE TABLE t2;
+CREATE EVENT myevent
+ON SCHEDULE
+EVERY 6 HOUR
+COMMENT 'A sample comment.'
+    DO
+UPDATE myschema.mytable SET mycol = mycol + 1;
+ALTER EVENT myevent
+ON SCHEDULE
+EVERY 12 HOUR
+STARTS CURRENT_TIMESTAMP + INTERVAL 4 HOUR;
+CREATE FUNCTION f() RETURNS INT return 1;
+ALTER FUNCTION f comment "atomic DDL on routine";
+CREATE PROCEDURE p() SELECT 1;
+ALTER PROCEDURE p comment "atomic DDL on routine";
+create view v1 as select * from mysql.user;
+alter view v1 as select * from mysql.db;
+# test mysql db
+use mysql;
+DROP INDEX `PRIMARY` ON t2;
+DROP TABLE IF EXISTS t2;
+DROP TABLE user_backup;
+DROP EVENT myevent;
+DROP FUNCTION f;
+DROP PROCEDURE p;
+DROP VIEW v1;
+# test sys db
+use sys;
+DROP INDEX `PRIMARY` ON t2;
+DROP TABLE IF EXISTS t2;
+DROP TABLE sys_config1;
+DROP EVENT myevent;
+DROP FUNCTION f;
+DROP PROCEDURE p;
+DROP VIEW v1;
+CREATE USER 'reserved_user1'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, REFERENCES, INDEX, ALTER, SHOW DATABASES,
+CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW,
+CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER ON *.* TO 'reserved_user1'@'%' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+# connect reserved_user1
+# test mysql db
+use mysql;
+CREATE TABLE t1 (a int PRIMARY KEY, b int);
+CREATE TABLE user_backup select * from user;
+CREATE TEMPORARY TABLE db_backup select * from db;
+ALTER TABLE t1 ENGINE = InnoDB;
+ALTER TABLE t1 RENAME COLUMN b TO c;
+RENAME TABLE t1 to t2;
+TRUNCATE TABLE t2;
+CREATE EVENT myevent
+ON SCHEDULE
+EVERY 6 HOUR
+COMMENT 'A sample comment.'
+    DO
+UPDATE myschema.mytable SET mycol = mycol + 1;
+ALTER EVENT myevent
+ON SCHEDULE
+EVERY 12 HOUR
+STARTS CURRENT_TIMESTAMP + INTERVAL 4 HOUR;
+CREATE FUNCTION f() RETURNS INT return 1;
+ALTER FUNCTION f comment "atomic DDL on routine";
+CREATE PROCEDURE p() SELECT 1;
+ALTER PROCEDURE p comment "atomic DDL on routine";
+create view v1 as select * from user;
+alter view v1 as select * from db;
+# test sys db
+use sys;
+CREATE TABLE t1 (a int PRIMARY KEY, b int);
+CREATE TABLE sys_config1 select * from sys_config;
+CREATE TEMPORARY TABLE sys_config2 select * from sys_config;
+ALTER TABLE t1 ENGINE = InnoDB;
+ALTER TABLE t1 RENAME COLUMN b TO c;
+RENAME TABLE t1 to t2;
+TRUNCATE TABLE t2;
+CREATE EVENT myevent
+ON SCHEDULE
+EVERY 6 HOUR
+COMMENT 'A sample comment.'
+    DO
+UPDATE myschema.mytable SET mycol = mycol + 1;
+ALTER EVENT myevent
+ON SCHEDULE
+EVERY 12 HOUR
+STARTS CURRENT_TIMESTAMP + INTERVAL 4 HOUR;
+CREATE FUNCTION f() RETURNS INT return 1;
+ALTER FUNCTION f comment "atomic DDL on routine";
+CREATE PROCEDURE p() SELECT 1;
+ALTER PROCEDURE p comment "atomic DDL on routine";
+create view v1 as select * from mysql.user;
+alter view v1 as select * from mysql.db;
+# test mysql db
+use mysql;
+DROP INDEX `PRIMARY` ON t2;
+DROP TABLE IF EXISTS t2;
+DROP TABLE user_backup;
+DROP EVENT myevent;
+DROP FUNCTION f;
+DROP PROCEDURE p;
+DROP VIEW v1;
+# test sys db
+use sys;
+DROP INDEX `PRIMARY` ON t2;
+DROP TABLE IF EXISTS t2;
+DROP TABLE sys_config1;
+DROP EVENT myevent;
+DROP FUNCTION f;
+DROP PROCEDURE p;
+DROP VIEW v1;
+CREATE USER 'normal_user'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, CREATE USER ON *.* TO 'normal_user'@'%' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+# connect normal_user
+CREATE USER 'normal_user2'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, CREATE USER ON *.* TO 'normal_user2'@'%';
+FLUSH PRIVILEGES;
+SELECT user,host,Select_priv,Insert_priv,Update_priv,Delete_priv,Create_priv,Drop_priv FROM mysql.user WHERE user = 'normal_user2';
+user	normal_user2
+host	%
+Select_priv	Y
+Insert_priv	Y
+Update_priv	Y
+Delete_priv	Y
+Create_priv	Y
+Drop_priv	Y
+REVOKE SELECT ON *.* FROM 'normal_user2'@'%';
+SELECT user,host,Select_priv FROM mysql.user WHERE user = 'normal_user2';
+user	host	Select_priv
+normal_user2	%	N
+USE mysql;
+DROP TABLE IF EXISTS db1;
+CREATE TABLE db1 SELECT * FROM db;
+DROP TABLE IF EXISTS user1;
+CREATE TABLE user1 SELECT * FROM user;
+set global rds_internal_schema_dml_control=OFF;
+# connect root1
+DELETE FROM mysql.user1 where user='root1';
+USE mysql;
+DELETE mysql.db1, mysql.user1 FROM mysql.user1 INNER JOIN mysql.db1 where user1.User = db1.user;
+UPDATE mysql.db1 set host='localhost' where user ='root1';
+UPDATE sys.sys_config set value='ON' where variable ='diagnostics.allow_i_s_TABLEs';
+USE mysql;
+UPDATE mysql.db1, mysql.user1 set user1.host='localhost' where user1.user = db1.user;
+INSERT INTO mysql.user1(user, host, ssl_cipher, x509_issuer, x509_subject, authentication_string)
+VALUES ('u2', 'h', '', '', '','123456');
+INSERT INTO mysql.user1 select * FROM mysql.user where Super_priv='T';
+INSERT INTO sys.sys_config SELECT * FROM sys.sys_config where value='T';
+REPLACE INTO mysql.user1(user, host, ssl_cipher, x509_issuer, x509_subject, authentication_string)
+VALUES ('u2', 'h', '', '', '','*46ABF58B20022A84DF7B2E8B1AC8219C8DA71553');
+REPLACE INTO mysql.user1 select * FROM mysql.user  where Super_priv='T';
+REPLACE INTO sys.sys_config select * FROM sys.sys_config where value='T';
+set global rds_internal_schema_dml_control=ON;
+# connect root1
+USE performance_schema;
+CREATE TABLE t1(a int);
+ERROR 42000: Access denied for user 'root1'@'%' to database 'performance_schema'
+TRUNCATE TABLE events_statements_summary_by_host_by_event_name;
+DROP TABLE socket_summary_by_instance;
+ERROR 42000: DROP command denied to user 'root1'@'localhost' for table 'socket_summary_by_instance'
+USE information_schema;
+CREATE TABLE t1(a int);
+ERROR 42000: Access denied for user 'root1'@'%' to database 'information_schema'
+DROP TABLE t1;
+ERROR 42000: Access denied for user 'root1'@'%' to database 'information_schema'
+USE performance_schema;
+CREATE TABLE t1(a int);
+ERROR 42000: Access denied for user 'root'@'localhost' to database 'performance_schema'
+DROP TABLE events_statements_summary_by_host_by_event_name;
+ERROR 42000: DROP command denied to user 'root'@'localhost' for table 'events_statements_summary_by_host_by_event_name'
+USE information_schema;
+CREATE TABLE t1(a int);
+ERROR 42000: Access denied for user 'root'@'localhost' to database 'information_schema'
+DROP TABLE t1;
+ERROR 42000: Access denied for user 'root'@'localhost' to database 'information_schema'
+DROP USER super_user ,root1, normal_user, normal_user2;

@@ -1,0 +1,84 @@
+call mtr.add_suppression("Local backup\: wal archiver is running");
+call mtr.add_suppression("failed to start wal archiver");
+call mtr.add_suppression("log archive path not configured");
+call mtr.add_suppression("start wal archive fail for pdb");
+call mtr.add_suppression("cannot access full backup directory");
+call mtr.add_suppression("cannot access log archive directory");
+call mtr.add_suppression("cannot access backup meta directory. Start wal archive failed");
+call mtr.add_suppression("full backup found binlog is not enabled");
+# restart: --rds_log_archive_path=
+call rds_backup.start_log_archive();
+ERROR HY000: Local backup: log archive path should be configured
+# restart
+call rds_backup.start_log_archive();
+ERROR HY000: Local backup: failed to start wal archiver
+create database full_backup_archive_restore;
+use full_backup_archive_restore;
+create table t1(s varchar(100)) engine=Dstore;
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1000
+set @origin_bak_path = @@rds_full_local_backup_path;
+call rds_backup.start_full_local_backup(0);
+ERROR HY000: Local backup: cannot access full backup directory
+set global rds_full_local_backup_path=@origin_bak_path;
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+call rds_backup.stop_full_local_backup();
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+set @origin_arch_path = @@rds_log_archive_path;
+call rds_backup.start_log_archive();
+ERROR HY000: Local backup: cannot access log archive directory
+set global rds_log_archive_path=@origin_arch_path;
+set @origin_meta_path = @@dstore_local_backup_meta_path;
+call rds_backup.start_log_archive();
+ERROR HY000: Local backup: failed to start wal archiver
+set global dstore_local_backup_meta_path=@origin_meta_path;
+call rds_backup.start_log_archive();
+call rds_backup.start_log_archive();
+ERROR HY000: Local backup: wal archiver is already running
+===============
+Load the data
+===============
+===============
+Load the data
+===============
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+2500
+call rds_backup.stop_log_archive();
+call rds_backup.stop_log_archive();
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+2800
+# restart: --dstore_open_restore_mode=on
+select count(*) from t1;
+count(*)
+2500
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+2550
+drop database full_backup_archive_restore;

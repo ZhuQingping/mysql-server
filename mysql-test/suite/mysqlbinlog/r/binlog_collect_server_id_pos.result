@@ -1,0 +1,36 @@
+SET @old_binlog_format=@@binlog_format;
+SET GLOBAL binlog_format='row';
+SET SESSION binlog_format='row';
+RESET MASTER;
+mysql-bin.000001
+DROP DATABASE IF EXISTS testdb;
+CREATE DATABASE testdb;
+USE testdb;
+create table t1(id int);
+CREATE PROCEDURE `sbtest`()
+BEGIN
+DECLARE i INT;
+DECLARE tmp INT;
+SET i = 0;
+WHILE i<20 DO
+SET @csql =CONCAT('insert into t1 values(',i,');');
+SET i = i+1;
+PREPARE create_stmt FROM @csql;
+EXECUTE create_stmt;
+END WHILE;
+END$$
+call sbtest;
+set global server_id=20;
+call sbtest;
+set global server_id=30;
+call sbtest;
+set global server_id=1;
+mysql-bin.000001
+mysql-bin.000001.srvids
+0
+1
+20
+30
+1
+SET GLOBAL binlog_format = @old_binlog_format;
+DROP DATABASE testdb;

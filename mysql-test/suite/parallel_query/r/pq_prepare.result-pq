@@ -1,0 +1,2855 @@
+create table test.t(a int, b int);
+insert into test.t values(1,1), (1,1);
+explain format=tree select
+subq_1.c1 as c0,
+subq_1.c2  as c2
+from
+(
+select
+pi() as c1,
+pi() as c2
+from
+test.t
+) as subq_1
+group by 1,2
+order by 1,2;
+EXPLAIN
+-> Group (no aggregates)  (cost=0.55 rows=1.41)
+    -> Gather: 4 workers, parallel scan on t  (cost=0.35 rows=2)
+        -> Group (no aggregates)  (cost=0.35 rows=0.5)
+            -> Parallel table scan on t  (cost=0.3 rows=0.5)
+
+select
+subq_1.c1 as c0,
+subq_1.c2  as c2
+from
+(
+select
+pi() as c1,
+pi() as c2
+from
+test.t
+) as subq_1
+group by 1,2
+order by 1,2;
+c0	c2
+3.141593	3.141593
+drop table t;
+#when resolving the item in group_list/order_list/having, we traverse
+#the fields to find the last equal item to resolve it.
+create table t1 (a bit(1));
+insert into t1 values(B'0'),(B'1');
+explain select bin(a) from t1 group by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select conv(`test`.`t1`.`a`,10,2) AS `bin(a)` from `test`.`t1` group by `test`.`t1`.`a`
+select bin(a) from t1 group by a;
+bin(a)
+0
+1
+drop table t1;
+#BUG2021072200588: group is resolved to error item
+CREATE TABLE `t4` (
+`c_id` int(253) unsigned zerofill NOT NULL,
+`c_d_id` int(253) unsigned zerofill NOT NULL,
+`c_w_id` int(253) unsigned zerofill NOT NULL,
+`c_first` varchar(253) DEFAULT NULL,
+`c_middle` char(253) DEFAULT NULL,
+`c_last` varchar(253) DEFAULT NULL,
+`c_street_1` varchar(253) DEFAULT NULL,
+`c_street_2` varchar(253) DEFAULT NULL,
+`c_city` varchar(253) DEFAULT NULL,
+`c_state` char(253) DEFAULT NULL,
+`c_zip` char(23) DEFAULT NULL,
+`c_phone` char(238) DEFAULT NULL,
+`c_since` timestamp NOT NULL DEFAULT '1970-01-01 08:00:01',
+`c_credit` char(253) DEFAULT NULL,
+`c_credit_lim` decimal(62,2) DEFAULT NULL,
+`c_discount` decimal(62,4) DEFAULT NULL,
+`c_balance` decimal(62,2) DEFAULT NULL,
+`c_ytd_payment` decimal(62,2) DEFAULT NULL,
+`c_payment_cnt` int(253) unsigned zerofill DEFAULT NULL,
+`c_delivery_cnt` int(253) unsigned zerofill DEFAULT NULL,
+`c_data` varchar(253) DEFAULT NULL,
+PRIMARY KEY (`c_w_id`,`c_d_id`,`c_id`),
+KEY `Customer_100W_key` (`c_w_id`,`c_d_id`,`c_last`,`c_first`),
+KEY `ndx_c_id` (`c_id`) USING BTREE,
+KEY `ndx_c_d_id` (`c_d_id`) USING BTREE,
+KEY `ndx_c_w_id` (`c_w_id`) USING BTREE,
+KEY `ndx_c_first` (`c_first`) USING BTREE,
+KEY `ndx_c_middle` (`c_middle`) USING BTREE,
+KEY `ndx_c_last` (`c_last`) USING BTREE,
+KEY `ndx_c_street_1` (`c_street_1`) USING BTREE,
+KEY `ndx_c_street_2` (`c_street_2`) USING BTREE,
+KEY `ndx_c_city` (`c_city`) USING BTREE,
+KEY `ndx_c_state` (`c_state`) USING BTREE,
+KEY `ndx_c_zip` (`c_zip`) USING BTREE,
+KEY `ndx_c_phone` (`c_phone`) USING BTREE,
+KEY `ndx_c_since` (`c_since`) USING BTREE,
+KEY `ndx_c_credit` (`c_credit`) USING BTREE,
+KEY `ndx_c_credit_lim` (`c_credit_lim`) USING BTREE,
+KEY `ndx_c_discount` (`c_discount`) USING BTREE,
+KEY `ndx_c_balance` (`c_balance`) USING BTREE,
+KEY `ndx_c_ytd_payment` (`c_ytd_payment`) USING BTREE,
+KEY `ndx_c_payment_cnt` (`c_payment_cnt`) USING BTREE,
+KEY `ndx_c_delivery_cnt` (`c_delivery_cnt`) USING BTREE,
+KEY `ndx_c_data` (`c_data`) USING BTREE,
+KEY `ndx_4_5_6` (`c_first`,`c_middle`,`c_last`) USING BTREE,
+KEY `ndx_7_8` (`c_street_1`,`c_street_2`) USING BTREE,
+KEY `ndx_9_10_11_12` (`c_city`,`c_state`,`c_zip`,`c_phone`) USING BTREE,
+KEY `ndx_13_14` (`c_since`,`c_credit`) USING BTREE,
+KEY `ndx_15_16_17_18` (`c_credit_lim`,`c_discount`,`c_balance`,`c_ytd_payment`) USING BTREE,
+KEY `ndx_19_20_21` (`c_payment_cnt`,`c_delivery_cnt`,`c_data`) USING BTREE,
+KEY `ndx_4_7_9_13_15_19` (`c_first`,`c_street_1`,`c_city`,`c_since`,`c_credit_lim`,`c_payment_cnt`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+Warnings:
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+explain format=tree select
+subq_0.c0 AS c0, subq_0.c6 AS c1, subq_0.c3 AS c2, subq_0.c2 AS c3
+FROM (
+SELECT ref_0.c_discount AS c0, ref_0.c_credit_lim AS c1, 26 AS c2, ref_0.c_credit AS c3, ref_0.c_balance AS c4
+, pi() AS c5, ref_0.c_city AS c6, ref_0.c_since AS c7, ref_0.c_id AS c8
+FROM t4 ref_0
+WHERE ref_0.c_w_id IS NOT NULL
+OR (false
+AND false)
+) subq_0
+WHERE subq_0.c0 IS NOT NULL
+GROUP BY 1, 2, 3, 4
+ORDER BY 1, 2, 3, 4;
+EXPLAIN
+-> Sort: subq_0.c0, subq_0.c1, subq_0.c2
+    -> Table scan on <temporary>  (...)
+        -> Temporary table with deduplication  (...)
+            -> Gather: 4 workers, parallel scan on ref_0  (...)
+                -> Table scan on <temporary>  (...)
+                    -> Temporary table with deduplication  (...)
+                        -> Parallel index range scan on ref_0 using ndx_c_discount over (NULL < c_discount), with index condition: (ref_0.c_discount is not null)  (...)
+
+select
+subq_0.c0 AS c0, subq_0.c6 AS c1, subq_0.c3 AS c2, subq_0.c2 AS c3
+FROM (
+SELECT ref_0.c_discount AS c0, ref_0.c_credit_lim AS c1, 26 AS c2, ref_0.c_credit AS c3, ref_0.c_balance AS c4
+, pi() AS c5, ref_0.c_city AS c6, ref_0.c_since AS c7, ref_0.c_id AS c8
+FROM t4 ref_0
+WHERE ref_0.c_w_id IS NOT NULL
+OR (false
+AND false)
+) subq_0
+WHERE subq_0.c0 IS NOT NULL
+GROUP BY 1, 2, 3, 4
+ORDER BY 1, 2, 3, 4;
+c0	c1	c2	c3
+DROP table t4;
+#Item_sum is wrapped into Item_rollup_sum_switcher and we can't find the ref item
+#in field_list.
+CREATE TABLE `t2` (
+`b` int DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+insert into t2 values (1), (3), (2), (0), (1), (2), (1);
+analyze table t2;
+Table	Op	Msg_type	Msg_text
+test.t2	analyze	status	OK
+explain select sum(b+2) as SUM from t2 group by b having SUM > 3;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	7	100.00	Parallel execute (4 workers, test.t2)
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	7	100.00	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select sum((`test`.`t2`.`b` + 2)) AS `SUM` from `test`.`t2` group by `test`.`t2`.`b` having (`SUM` > 3)
+select sum(b+2) as SUM from t2 group by b having SUM > 3;
+SUM
+9
+5
+8
+explain select sum(b)/count(b) as AVG from t2 group by b having AVG > 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	7	100.00	Parallel execute (4 workers, test.t2)
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	7	100.00	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select (sum(`<temporary>`.`b`) / count(`<temporary>`.`b`)) AS `AVG` from `test`.`t2` group by `test`.`t2`.`b` having (`AVG` > 1)
+select sum(b)/count(b) as AVG from t2 group by b having AVG > 1;
+AVG
+3.0000
+2.0000
+explain SELECT b, COUNT(*) AS c FROM t2 GROUP BY b WITH ROLLUP HAVING c;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	7	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select rollup_group_item(`test`.`t2`.`b`,0) AS `b`,rollup_sum_switcher(count(0)) AS `c` from `test`.`t2` group by `test`.`t2`.`b` with rollup having (0 <> `c`)
+DROP table t2;
+set @saved_sql_mode = @@sql_mode;
+set sql_mode = '';
+DROP TABLE IF EXISTS `t0`;
+Warnings:
+Note	1051	Unknown table 'test.t0'
+CREATE TABLE `t0` (
+`c_id` int(11) NOT NULL,
+`c_d_id` int(11) NOT NULL,
+`c_w_id` int(11) NOT NULL,
+`c_first` varchar(16) DEFAULT NULL,
+`c_middle` char(2) DEFAULT NULL,
+`c_last` varchar(16) DEFAULT NULL,
+`c_street_1` varchar(20) DEFAULT NULL,
+`c_street_2` varchar(20) DEFAULT NULL,
+`c_city` varchar(20) DEFAULT NULL,
+`c_state` char(2) DEFAULT NULL,
+`c_zip` char(9) DEFAULT NULL,
+`c_phone` char(16) DEFAULT NULL,
+`c_since` timestamp NOT NULL DEFAULT '1970-01-01 08:00:01',
+`c_credit` char(2) DEFAULT NULL,
+`c_credit_lim` decimal(12,2) DEFAULT NULL,
+`c_discount` decimal(4,4) DEFAULT NULL,
+`c_balance` decimal(12,2) DEFAULT NULL,
+`c_ytd_payment` decimal(12,2) DEFAULT NULL,
+`c_payment_cnt` int(11) DEFAULT NULL,
+`c_delivery_cnt` int(11) DEFAULT NULL,
+`c_data` varchar(500) DEFAULT NULL,
+PRIMARY KEY (`c_w_id`,`c_d_id`,`c_id`),
+KEY `Customer_100W_key` (`c_w_id`,`c_d_id`,`c_last`,`c_first`),
+KEY `ndx_c_id` (`c_id`) USING BTREE,
+KEY `ndx_c_d_id` (`c_d_id`) USING BTREE,
+KEY `ndx_c_w_id` (`c_w_id`) USING BTREE,
+KEY `ndx_c_first` (`c_first`) USING BTREE,
+KEY `ndx_c_middle` (`c_middle`) USING BTREE,
+KEY `ndx_c_last` (`c_last`) USING BTREE,
+KEY `ndx_c_street_1` (`c_street_1`) USING BTREE,
+KEY `ndx_c_street_2` (`c_street_2`) USING BTREE,
+KEY `ndx_c_city` (`c_city`) USING BTREE,
+KEY `ndx_c_state` (`c_state`) USING BTREE,
+KEY `ndx_c_zip` (`c_zip`) USING BTREE,
+KEY `ndx_c_phone` (`c_phone`) USING BTREE,
+KEY `ndx_c_since` (`c_since`) USING BTREE,
+KEY `ndx_c_credit` (`c_credit`) USING BTREE,
+KEY `ndx_c_credit_lim` (`c_credit_lim`) USING BTREE,
+KEY `ndx_c_discount` (`c_discount`) USING BTREE,
+KEY `ndx_c_balance` (`c_balance`) USING BTREE,
+KEY `ndx_c_ytd_payment` (`c_ytd_payment`) USING BTREE,
+KEY `ndx_c_payment_cnt` (`c_payment_cnt`) USING BTREE,
+KEY `ndx_c_delivery_cnt` (`c_delivery_cnt`) USING BTREE,
+KEY `ndx_c_data` (`c_data`) USING BTREE,
+KEY `ndx_4_5_6` (`c_first`,`c_middle`,`c_last`) USING BTREE,
+KEY `ndx_7_8` (`c_street_1`,`c_street_2`) USING BTREE,
+KEY `ndx_9_10_11_12` (`c_city`,`c_state`,`c_zip`,`c_phone`) USING BTREE,
+KEY `ndx_13_14` (`c_since`,`c_credit`) USING BTREE,
+KEY `ndx_15_16_17_18` (`c_credit_lim`,`c_discount`,`c_balance`,`c_ytd_payment`) USING BTREE,
+KEY `ndx_19_20_21` (`c_payment_cnt`,`c_delivery_cnt`,`c_data`) USING BTREE,
+KEY `ndx_4_7_9_13_15_19` (`c_first`,`c_street_1`,`c_city`,`c_since`,`c_credit_lim`,`c_payment_cnt`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+DROP TABLE IF EXISTS `t1`;
+Warnings:
+Note	1051	Unknown table 'test.t1'
+CREATE TABLE `t1` (
+`c_id` int(11) NOT NULL,
+`c_d_id` int(11) NOT NULL,
+`c_w_id` int(11) NOT NULL,
+`c_first` varchar(16) DEFAULT NULL,
+`c_middle` char(2) DEFAULT NULL,
+`c_last` varchar(16) DEFAULT NULL,
+`c_street_1` varchar(20) DEFAULT NULL,
+`c_street_2` varchar(20) DEFAULT NULL,
+`c_city` varchar(20) DEFAULT NULL,
+`c_state` char(2) DEFAULT NULL,
+`c_zip` char(9) DEFAULT NULL,
+`c_phone` char(16) DEFAULT NULL,
+`c_since` timestamp NOT NULL DEFAULT '1970-01-01 08:00:01',
+`c_credit` char(2) DEFAULT NULL,
+`c_credit_lim` decimal(12,2) DEFAULT NULL,
+`c_discount` decimal(4,4) DEFAULT NULL,
+`c_balance` decimal(12,2) DEFAULT NULL,
+`c_ytd_payment` decimal(12,2) DEFAULT NULL,
+`c_payment_cnt` int(11) DEFAULT NULL,
+`c_delivery_cnt` int(11) DEFAULT NULL,
+`c_data` varchar(500) DEFAULT NULL,
+PRIMARY KEY (`c_w_id`,`c_d_id`,`c_id`),
+KEY `Customer_100W_key` (`c_w_id`,`c_d_id`,`c_last`,`c_first`),
+KEY `ndx_c_id` (`c_id`) USING BTREE,
+KEY `ndx_c_d_id` (`c_d_id`) USING BTREE,
+KEY `ndx_c_w_id` (`c_w_id`) USING BTREE,
+KEY `ndx_c_first` (`c_first`) USING BTREE,
+KEY `ndx_c_middle` (`c_middle`) USING BTREE,
+KEY `ndx_c_last` (`c_last`) USING BTREE,
+KEY `ndx_c_street_1` (`c_street_1`) USING BTREE,
+KEY `ndx_c_street_2` (`c_street_2`) USING BTREE,
+KEY `ndx_c_city` (`c_city`) USING BTREE,
+KEY `ndx_c_state` (`c_state`) USING BTREE,
+KEY `ndx_c_zip` (`c_zip`) USING BTREE,
+KEY `ndx_c_phone` (`c_phone`) USING BTREE,
+KEY `ndx_c_since` (`c_since`) USING BTREE,
+KEY `ndx_c_credit` (`c_credit`) USING BTREE,
+KEY `ndx_c_credit_lim` (`c_credit_lim`) USING BTREE,
+KEY `ndx_c_discount` (`c_discount`) USING BTREE,
+KEY `ndx_c_balance` (`c_balance`) USING BTREE,
+KEY `ndx_c_ytd_payment` (`c_ytd_payment`) USING BTREE,
+KEY `ndx_c_payment_cnt` (`c_payment_cnt`) USING BTREE,
+KEY `ndx_c_delivery_cnt` (`c_delivery_cnt`) USING BTREE,
+KEY `ndx_c_data` (`c_data`) USING BTREE,
+KEY `ndx_4_5_6` (`c_first`,`c_middle`,`c_last`) USING BTREE,
+KEY `ndx_7_8` (`c_street_1`,`c_street_2`) USING BTREE,
+KEY `ndx_9_10_11_12` (`c_city`,`c_state`,`c_zip`,`c_phone`) USING BTREE,
+KEY `ndx_13_14` (`c_since`,`c_credit`) USING BTREE,
+KEY `ndx_15_16_17_18` (`c_credit_lim`,`c_discount`,`c_balance`,`c_ytd_payment`) USING BTREE,
+KEY `ndx_19_20_21` (`c_payment_cnt`,`c_delivery_cnt`,`c_data`) USING BTREE,
+KEY `ndx_4_7_9_13_15_19` (`c_first`,`c_street_1`,`c_city`,`c_since`,`c_credit_lim`,`c_payment_cnt`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+DROP TABLE IF EXISTS `t10`;
+Warnings:
+Note	1051	Unknown table 'test.t10'
+CREATE TABLE `t10` (
+`C_BIT` bit(1) DEFAULT NULL,
+`C_ID` int(11) NOT NULL,
+`C_D_ID` int(11) NOT NULL,
+`C_W_ID` bigint(20) NOT NULL,
+`C_DOUBLE` double DEFAULT NULL,
+`C_DECIMAL` decimal(10,0) DEFAULT NULL,
+`C_FIRST` varchar(64) DEFAULT NULL,
+`C_MIDDLE` char(2) DEFAULT NULL,
+`C_LAST` varchar(64) DEFAULT NULL,
+`C_STREET_1` varchar(20) DEFAULT NULL,
+`C_STREET_2` varchar(20) DEFAULT NULL,
+`C_CITY` varchar(64) DEFAULT NULL,
+`C_STATE` char(2) DEFAULT NULL,
+`C_ZIP` char(9) DEFAULT NULL,
+`C_PHONE` char(16) DEFAULT NULL,
+`C_SINCE` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+`C_CREDIT` char(2) DEFAULT NULL,
+`C_CREDIT_LIM` decimal(12,2) DEFAULT NULL,
+`C_DISCOUNT` decimal(4,4) DEFAULT NULL,
+`C_BALANCE` decimal(12,2) DEFAULT NULL,
+`C_YTD_PAYMENT` double DEFAULT NULL,
+`C_PAYMENT_CNT` float DEFAULT NULL,
+`C_DELIVERY_CNT` tinyint(1) DEFAULT NULL,
+`C_END` date DEFAULT NULL,
+`C_VCHAR` varchar(9000) DEFAULT NULL,
+PRIMARY KEY (`C_ID`,`C_D_ID`,`C_W_ID`),
+KEY `ndx_C_BIT` (`C_BIT`) USING BTREE,
+KEY `ndx_C_ID` (`C_ID`) USING BTREE,
+KEY `ndx_C_D_ID` (`C_D_ID`) USING BTREE,
+KEY `ndx_C_W_ID` (`C_W_ID`) USING BTREE,
+KEY `ndx_C_DOUBLE` (`C_DOUBLE`) USING BTREE,
+KEY `ndx_C_DECIMAL` (`C_DECIMAL`) USING BTREE,
+KEY `ndx_C_FIRST` (`C_FIRST`) USING BTREE,
+KEY `ndx_C_MIDDLE` (`C_MIDDLE`) USING BTREE,
+KEY `ndx_C_LAST` (`C_LAST`) USING BTREE,
+KEY `ndx_C_STREET_1` (`C_STREET_1`) USING BTREE,
+KEY `ndx_C_STREET_2` (`C_STREET_2`) USING BTREE,
+KEY `ndx_C_CITY` (`C_CITY`) USING BTREE,
+KEY `ndx_C_STATE` (`C_STATE`) USING BTREE,
+KEY `ndx_C_ZIP` (`C_ZIP`) USING BTREE,
+KEY `ndx_C_PHONE` (`C_PHONE`) USING BTREE,
+KEY `ndx_C_SINCE` (`C_SINCE`) USING BTREE,
+KEY `ndx_C_CREDIT` (`C_CREDIT`) USING BTREE,
+KEY `ndx_C_CREDIT_LIM` (`C_CREDIT_LIM`) USING BTREE,
+KEY `ndx_C_DISCOUNT` (`C_DISCOUNT`) USING BTREE,
+KEY `ndx_C_BALANCE` (`C_BALANCE`) USING BTREE,
+KEY `ndx_C_YTD_PAYMENT` (`C_YTD_PAYMENT`) USING BTREE,
+KEY `ndx_C_PAYMENT_CNT` (`C_PAYMENT_CNT`) USING BTREE,
+KEY `ndx_C_DELIVERY_CNT` (`C_DELIVERY_CNT`) USING BTREE,
+KEY `ndx_C_END` (`C_END`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+DROP TABLE IF EXISTS `t11`;
+Warnings:
+Note	1051	Unknown table 'test.t11'
+CREATE TABLE `t11` (
+`C_ID` int(11) NOT NULL DEFAULT '99' COMMENT 'string',
+`C_D_ID` int(11) DEFAULT NULL,
+`C_W_ID` bigint(20) DEFAULT NULL,
+`C_DOUBLE` double DEFAULT NULL,
+`C_DECIMAL` decimal(10,0) DEFAULT NULL,
+`C_FIRST` varchar(64) DEFAULT NULL,
+`C_MIDDLE` char(2) DEFAULT NULL,
+`C_LAST` varchar(64) DEFAULT NULL,
+`C_STREET_1` varchar(20) DEFAULT NULL,
+`C_STREET_2` varchar(20) DEFAULT NULL,
+`C_CITY` varchar(64) DEFAULT NULL,
+`C_STATE` char(2) DEFAULT NULL,
+`C_ZIP` char(9) DEFAULT NULL,
+`C_PHONE` char(16) DEFAULT NULL,
+`C_SINCE` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+`C_CREDIT` char(2) DEFAULT NULL,
+`C_CREDIT_LIM` decimal(12,2) DEFAULT NULL,
+`C_DISCOUNT` decimal(4,4) DEFAULT NULL,
+`C_BALANCE` decimal(12,2) DEFAULT NULL,
+`C_YTD_PAYMENT` double DEFAULT NULL,
+`C_PAYMENT_CNT` float DEFAULT NULL,
+`C_DELIVERY_CNT` tinyint(1) DEFAULT NULL,
+`C_END` date DEFAULT NULL,
+`C_VCHAR` varchar(1000) DEFAULT NULL,
+PRIMARY KEY (`C_ID` DESC),
+UNIQUE KEY `C_ID` (`C_ID`),
+UNIQUE KEY `C_ID_2` (`C_ID`) COMMENT 'string',
+KEY `index_CREATE_TABLE_PART_HASH_029_taurus` (`C_ID` DESC) USING BTREE,
+KEY `ndx_C_ID` (`C_ID`) USING BTREE,
+KEY `ndx_C_D_ID` (`C_D_ID`) USING BTREE,
+KEY `ndx_C_W_ID` (`C_W_ID`) USING BTREE,
+KEY `ndx_C_DOUBLE` (`C_DOUBLE`) USING BTREE,
+KEY `ndx_C_DECIMAL` (`C_DECIMAL`) USING BTREE,
+KEY `ndx_C_FIRST` (`C_FIRST`) USING BTREE,
+KEY `ndx_C_MIDDLE` (`C_MIDDLE`) USING BTREE,
+KEY `ndx_C_LAST` (`C_LAST`) USING BTREE,
+KEY `ndx_C_STREET_1` (`C_STREET_1`) USING BTREE,
+KEY `ndx_C_STREET_2` (`C_STREET_2`) USING BTREE,
+KEY `ndx_C_CITY` (`C_CITY`) USING BTREE,
+KEY `ndx_C_STATE` (`C_STATE`) USING BTREE,
+KEY `ndx_C_ZIP` (`C_ZIP`) USING BTREE,
+KEY `ndx_C_PHONE` (`C_PHONE`) USING BTREE,
+KEY `ndx_C_SINCE` (`C_SINCE`) USING BTREE,
+KEY `ndx_C_CREDIT` (`C_CREDIT`) USING BTREE,
+KEY `ndx_C_CREDIT_LIM` (`C_CREDIT_LIM`) USING BTREE,
+KEY `ndx_C_DISCOUNT` (`C_DISCOUNT`) USING BTREE,
+KEY `ndx_C_BALANCE` (`C_BALANCE`) USING BTREE,
+KEY `ndx_C_YTD_PAYMENT` (`C_YTD_PAYMENT`) USING BTREE,
+KEY `ndx_C_PAYMENT_CNT` (`C_PAYMENT_CNT`) USING BTREE,
+KEY `ndx_C_DELIVERY_CNT` (`C_DELIVERY_CNT`) USING BTREE,
+KEY `ndx_C_END` (`C_END`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 MAX_ROWS=99 AVG_ROW_LENGTH=8 PACK_KEYS=1 DELAY_KEY_WRITE=1 CONNECTION='connect_string';
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	3719	'utf8' is currently an alias for the character set UTF8MB3, but will be an alias for UTF8MB4 in a future release. Please consider using UTF8MB4 in order to be unambiguous.
+Warning	1831	Duplicate index 'C_ID_2' defined on the table 'test.t11'. This is deprecated and will be disallowed in a future release.
+DROP TABLE IF EXISTS `t12`;
+Warnings:
+Note	1051	Unknown table 'test.t12'
+CREATE TABLE `t12` (
+`C_ID` int(11) NOT NULL DEFAULT '99',
+`C_D_ID` int(11) NOT NULL,
+`C_W_ID` bigint(20) NOT NULL,
+`C_DOUBLE` double DEFAULT NULL,
+`C_DECIMAL` decimal(10,0) DEFAULT NULL,
+`C_FIRST` varchar(64) DEFAULT NULL,
+`C_MIDDLE` char(2) DEFAULT NULL,
+`C_LAST` varchar(64) DEFAULT NULL,
+`C_STREET_1` varchar(20) DEFAULT NULL,
+`C_STREET_2` varchar(20) DEFAULT NULL,
+`C_CITY` varchar(64) DEFAULT NULL,
+`C_STATE` char(2) DEFAULT NULL,
+`C_ZIP` char(9) DEFAULT NULL,
+`C_PHONE` char(16) DEFAULT NULL,
+`C_SINCE` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+`C_CREDIT` char(2) DEFAULT NULL,
+`C_CREDIT_LIM` decimal(12,2) DEFAULT NULL,
+`C_DISCOUNT` decimal(4,4) DEFAULT NULL,
+`C_BALANCE` decimal(12,2) DEFAULT NULL,
+`C_YTD_PAYMENT` double DEFAULT NULL,
+`C_PAYMENT_CNT` float DEFAULT NULL,
+`C_DELIVERY_CNT` tinyint(1) DEFAULT NULL,
+`C_END` date DEFAULT NULL,
+`C_VCHAR` varchar(1000) DEFAULT NULL,
+PRIMARY KEY (`C_ID`,`C_D_ID`),
+UNIQUE KEY `UNIQUE_index_CREATE_TABLE_PART_RANGE_029_taurus` (`C_ID`,`C_D_ID`,`C_W_ID`) USING BTREE COMMENT 'string',
+KEY `C_ID` (`C_ID`) USING BTREE,
+KEY `ndx_C_ID` (`C_ID`) USING BTREE,
+KEY `ndx_C_D_ID` (`C_D_ID`) USING BTREE,
+KEY `ndx_C_W_ID` (`C_W_ID`) USING BTREE,
+KEY `ndx_C_DOUBLE` (`C_DOUBLE`) USING BTREE,
+KEY `ndx_C_DECIMAL` (`C_DECIMAL`) USING BTREE,
+KEY `ndx_C_FIRST` (`C_FIRST`) USING BTREE,
+KEY `ndx_C_MIDDLE` (`C_MIDDLE`) USING BTREE,
+KEY `ndx_C_LAST` (`C_LAST`) USING BTREE,
+KEY `ndx_C_STREET_1` (`C_STREET_1`) USING BTREE,
+KEY `ndx_C_STREET_2` (`C_STREET_2`) USING BTREE,
+KEY `ndx_C_CITY` (`C_CITY`) USING BTREE,
+KEY `ndx_C_STATE` (`C_STATE`) USING BTREE,
+KEY `ndx_C_ZIP` (`C_ZIP`) USING BTREE,
+KEY `ndx_C_PHONE` (`C_PHONE`) USING BTREE,
+KEY `ndx_C_SINCE` (`C_SINCE`) USING BTREE,
+KEY `ndx_C_CREDIT` (`C_CREDIT`) USING BTREE,
+KEY `ndx_C_CREDIT_LIM` (`C_CREDIT_LIM`) USING BTREE,
+KEY `ndx_C_DISCOUNT` (`C_DISCOUNT`) USING BTREE,
+KEY `ndx_C_BALANCE` (`C_BALANCE`) USING BTREE,
+KEY `ndx_C_YTD_PAYMENT` (`C_YTD_PAYMENT`) USING BTREE,
+KEY `ndx_C_PAYMENT_CNT` (`C_PAYMENT_CNT`) USING BTREE,
+KEY `ndx_C_DELIVERY_CNT` (`C_DELIVERY_CNT`) USING BTREE,
+KEY `ndx_C_END` (`C_END`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci MIN_ROWS=99 MAX_ROWS=99 AVG_ROW_LENGTH=8 STATS_SAMPLE_PAGES=10 CHECKSUM=1 ROW_FORMAT=REDUNDANT;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1831	Duplicate index 'ndx_C_ID' defined on the table 'test.t12'. This is deprecated and will be disallowed in a future release.
+DROP TABLE IF EXISTS `t2`;
+Warnings:
+Note	1051	Unknown table 'test.t2'
+CREATE TABLE `t2` (
+`id_col` int(11) NOT NULL AUTO_INCREMENT,
+`tinyint_col` tinyint(4) DEFAULT NULL,
+`bool_col` tinyint(1) DEFAULT NULL,
+`smallint_col` smallint(6) DEFAULT NULL,
+`mediumint_col` mediumint(9) DEFAULT NULL,
+`int_col` int(11) DEFAULT NULL,
+`bigint_col` bigint(20) DEFAULT NULL,
+`decimal_col` decimal(25,5) DEFAULT NULL,
+`float_col` float DEFAULT NULL,
+`double_col` double DEFAULT NULL,
+`date_col` date DEFAULT NULL,
+`datetime_col` datetime(6) DEFAULT NULL,
+`timestamp_col` timestamp(6) NULL DEFAULT NULL,
+`time_col` time(6) DEFAULT NULL,
+`year_col` year(4) DEFAULT NULL,
+`char_col` char(4) CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL,
+`varchar_col` varchar(255) CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL,
+`binary_col` binary(11) DEFAULT NULL,
+`varbinary_col` varbinary(255) DEFAULT NULL,
+PRIMARY KEY (`id_col`)
+) ENGINE=InnoDB AUTO_INCREMENT=10010 DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1287	'YEAR(4)' is deprecated and will be removed in a future release. Please use YEAR instead
+Warning	3719	'utf8' is currently an alias for the character set UTF8MB3, but will be an alias for UTF8MB4 in a future release. Please consider using UTF8MB4 in order to be unambiguous.
+Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
+Warning	3719	'utf8' is currently an alias for the character set UTF8MB3, but will be an alias for UTF8MB4 in a future release. Please consider using UTF8MB4 in order to be unambiguous.
+Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
+Warning	3719	'utf8' is currently an alias for the character set UTF8MB3, but will be an alias for UTF8MB4 in a future release. Please consider using UTF8MB4 in order to be unambiguous.
+Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
+Warnings:
+Warning	1264	Out of range value for column 'timestamp_col' at row 1
+Warning	1264	Out of range value for column 'timestamp_col' at row 2
+Warning	1264	Out of range value for column 'timestamp_col' at row 3
+Warning	1264	Out of range value for column 'timestamp_col' at row 4
+Warning	1264	Out of range value for column 'timestamp_col' at row 5
+DROP TABLE IF EXISTS `t4`;
+Warnings:
+Note	1051	Unknown table 'test.t4'
+CREATE TABLE `t4` (
+`c_id` int(253) unsigned zerofill NOT NULL,
+`c_d_id` int(253) unsigned zerofill NOT NULL,
+`c_w_id` int(253) unsigned zerofill NOT NULL,
+`c_first` varchar(253) DEFAULT NULL,
+`c_middle` char(253) DEFAULT NULL,
+`c_last` varchar(253) DEFAULT NULL,
+`c_street_1` varchar(253) DEFAULT NULL,
+`c_street_2` varchar(253) DEFAULT NULL,
+`c_city` varchar(253) DEFAULT NULL,
+`c_state` char(253) DEFAULT NULL,
+`c_zip` char(23) DEFAULT NULL,
+`c_phone` char(238) DEFAULT NULL,
+`c_since` timestamp NOT NULL DEFAULT '1970-01-01 08:00:01',
+`c_credit` char(253) DEFAULT NULL,
+`c_credit_lim` decimal(62,2) DEFAULT NULL,
+`c_discount` decimal(62,4) DEFAULT NULL,
+`c_balance` decimal(62,2) DEFAULT NULL,
+`c_ytd_payment` decimal(62,2) DEFAULT NULL,
+`c_payment_cnt` int(253) unsigned zerofill DEFAULT NULL,
+`c_delivery_cnt` int(253) unsigned zerofill DEFAULT NULL,
+`c_data` varchar(253) DEFAULT NULL,
+PRIMARY KEY (`c_w_id`,`c_d_id`,`c_id`),
+KEY `Customer_100W_key` (`c_w_id`,`c_d_id`,`c_last`,`c_first`),
+KEY `ndx_c_id` (`c_id`) USING BTREE,
+KEY `ndx_c_d_id` (`c_d_id`) USING BTREE,
+KEY `ndx_c_w_id` (`c_w_id`) USING BTREE,
+KEY `ndx_c_first` (`c_first`) USING BTREE,
+KEY `ndx_c_middle` (`c_middle`) USING BTREE,
+KEY `ndx_c_last` (`c_last`) USING BTREE,
+KEY `ndx_c_street_1` (`c_street_1`) USING BTREE,
+KEY `ndx_c_street_2` (`c_street_2`) USING BTREE,
+KEY `ndx_c_city` (`c_city`) USING BTREE,
+KEY `ndx_c_state` (`c_state`) USING BTREE,
+KEY `ndx_c_zip` (`c_zip`) USING BTREE,
+KEY `ndx_c_phone` (`c_phone`) USING BTREE,
+KEY `ndx_c_since` (`c_since`) USING BTREE,
+KEY `ndx_c_credit` (`c_credit`) USING BTREE,
+KEY `ndx_c_credit_lim` (`c_credit_lim`) USING BTREE,
+KEY `ndx_c_discount` (`c_discount`) USING BTREE,
+KEY `ndx_c_balance` (`c_balance`) USING BTREE,
+KEY `ndx_c_ytd_payment` (`c_ytd_payment`) USING BTREE,
+KEY `ndx_c_payment_cnt` (`c_payment_cnt`) USING BTREE,
+KEY `ndx_c_delivery_cnt` (`c_delivery_cnt`) USING BTREE,
+KEY `ndx_c_data` (`c_data`) USING BTREE,
+KEY `ndx_4_5_6` (`c_first`,`c_middle`,`c_last`) USING BTREE,
+KEY `ndx_7_8` (`c_street_1`,`c_street_2`) USING BTREE,
+KEY `ndx_9_10_11_12` (`c_city`,`c_state`,`c_zip`,`c_phone`) USING BTREE,
+KEY `ndx_13_14` (`c_since`,`c_credit`) USING BTREE,
+KEY `ndx_15_16_17_18` (`c_credit_lim`,`c_discount`,`c_balance`,`c_ytd_payment`) USING BTREE,
+KEY `ndx_19_20_21` (`c_payment_cnt`,`c_delivery_cnt`,`c_data`) USING BTREE,
+KEY `ndx_4_7_9_13_15_19` (`c_first`,`c_street_1`,`c_city`,`c_since`,`c_credit_lim`,`c_payment_cnt`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+Warnings:
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+DROP TABLE IF EXISTS `t5`;
+Warnings:
+Note	1051	Unknown table 'test.t5'
+CREATE TABLE `t5` (
+`c_id` int(255) unsigned zerofill NOT NULL,
+`c_d_id` int(255) unsigned zerofill NOT NULL,
+`c_w_id` int(255) unsigned zerofill NOT NULL,
+`c_first` varchar(255) DEFAULT NULL,
+`c_middle` char(255) DEFAULT NULL,
+`c_last` varchar(255) DEFAULT NULL,
+`c_street_1` varchar(255) DEFAULT NULL,
+`c_street_2` varchar(255) DEFAULT NULL,
+`c_city` varchar(249) DEFAULT NULL,
+`c_state` char(255) DEFAULT NULL,
+`c_zip` char(23) DEFAULT NULL,
+`c_phone` char(238) DEFAULT NULL,
+`c_since` timestamp NOT NULL DEFAULT '1970-01-01 08:00:01',
+`c_credit` char(255) DEFAULT NULL,
+`c_credit_lim` decimal(62,2) DEFAULT NULL,
+`c_discount` decimal(62,4) DEFAULT NULL,
+`c_balance` decimal(62,2) DEFAULT NULL,
+`c_ytd_payment` decimal(62,2) DEFAULT NULL,
+`c_payment_cnt` int(255) unsigned zerofill DEFAULT NULL,
+`c_delivery_cnt` int(255) unsigned zerofill DEFAULT NULL,
+`c_data` varchar(255) DEFAULT NULL,
+PRIMARY KEY (`c_w_id`,`c_d_id`,`c_id`),
+KEY `Customer_100W_key` (`c_w_id`,`c_d_id`,`c_last`,`c_first`),
+KEY `ndx_c_id` (`c_id`) USING BTREE,
+KEY `ndx_c_d_id` (`c_d_id`) USING BTREE,
+KEY `ndx_c_w_id` (`c_w_id`) USING BTREE,
+KEY `ndx_c_first` (`c_first`) USING BTREE,
+KEY `ndx_c_middle` (`c_middle`) USING BTREE,
+KEY `ndx_c_last` (`c_last`) USING BTREE,
+KEY `ndx_c_street_1` (`c_street_1`) USING BTREE,
+KEY `ndx_c_street_2` (`c_street_2`) USING BTREE,
+KEY `ndx_c_city` (`c_city`) USING BTREE,
+KEY `ndx_c_state` (`c_state`) USING BTREE,
+KEY `ndx_c_zip` (`c_zip`) USING BTREE,
+KEY `ndx_c_phone` (`c_phone`) USING BTREE,
+KEY `ndx_c_since` (`c_since`) USING BTREE,
+KEY `ndx_c_credit` (`c_credit`) USING BTREE,
+KEY `ndx_c_credit_lim` (`c_credit_lim`) USING BTREE,
+KEY `ndx_c_discount` (`c_discount`) USING BTREE,
+KEY `ndx_c_balance` (`c_balance`) USING BTREE,
+KEY `ndx_c_ytd_payment` (`c_ytd_payment`) USING BTREE,
+KEY `ndx_c_payment_cnt` (`c_payment_cnt`) USING BTREE,
+KEY `ndx_c_delivery_cnt` (`c_delivery_cnt`) USING BTREE,
+KEY `ndx_c_data` (`c_data`) USING BTREE,
+KEY `ndx_4_5_6` (`c_first`,`c_middle`,`c_last`) USING BTREE,
+KEY `ndx_7_8` (`c_street_1`,`c_street_2`) USING BTREE,
+KEY `ndx_9_10_11_12` (`c_city`,`c_state`,`c_zip`,`c_phone`) USING BTREE,
+KEY `ndx_13_14` (`c_since`,`c_credit`) USING BTREE,
+KEY `ndx_15_16_17_18` (`c_credit_lim`,`c_discount`,`c_balance`,`c_ytd_payment`) USING BTREE,
+KEY `ndx_19_20_21` (`c_payment_cnt`,`c_delivery_cnt`,`c_data`) USING BTREE,
+KEY `ndx_4_7_9_13_15_19` (`c_first`,`c_street_1`,`c_city`,`c_since`,`c_credit_lim`,`c_payment_cnt`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+Warnings:
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+analyze tables t0, t1, t10, t11, t12, t2, t4, t5;
+Table	Op	Msg_type	Msg_text
+test.t0	analyze	status	OK
+test.t1	analyze	status	OK
+test.t10	analyze	status	OK
+test.t11	analyze	status	OK
+test.t12	analyze	status	OK
+test.t2	analyze	status	OK
+test.t4	analyze	status	OK
+test.t5	analyze	status	OK
+#item in group_list or order_list is resolved to aliased item as the
+#eq() method cannot distinguish the aliased item
+explain format=tree select
+pi() as c0
+from
+(select
+pi() as c1
+from
+t11 as ref_0
+inner join t5 as ref_1
+inner join t2 as ref_2
+on (ref_1.c_d_id = ref_2.id_col )
+on (ref_2.float_col is not NULL)
+) as subq_0
+right join t11 as ref_3
+on (((ref_3.C_W_ID is NULL))
+and ((ref_3.C_PAYMENT_CNT is not NULL)
+or (((subtime(
+cast(null as char),
+ref_3.C_SINCE) is not NULL)
+and (subq_0.c1 is not NULL)))))
+where subq_0.c1 is NULL
+group by 1
+order by 1;
+EXPLAIN
+-> Group (no aggregates)  (...)
+    -> Gather: 4 workers, parallel scan on ref_3  (...)
+        -> Group (no aggregates)  (...)
+            -> Filter: (pi() is null)  (...)
+                -> Nested loop left join  (...)
+                    -> Parallel table scan on ref_3  (...)
+                    -> Nested loop inner join  (...)
+                        -> Nested loop inner join  (...)
+                            -> Filter: ((ref_3.C_W_ID is null) and ((ref_3.C_PAYMENT_CNT is not null) or ((subtime(<cache>(cast(NULL as char charset utf8mb4)),ref_3.C_SINCE) is not null) and (pi() is not null))))  (...)
+                                -> Index scan on ref_0 using ndx_C_DELIVERY_CNT  (...)
+                            -> Index scan on ref_1 using ndx_c_id  (...)
+                        -> Result cache : cache keys(ref_1.c_d_id, ref_3.C_PAYMENT_CNT, ref_3.C_SINCE, ref_3.C_W_ID)  (...)
+                            -> Filter: ((ref_2.float_col is not null) and (ref_1.c_d_id = ref_2.id_col))  (...)
+                                -> Single-row index lookup on ref_2 using PRIMARY (id_col=ref_1.c_d_id)  (...)
+
+select
+pi() as c0
+from
+(select
+pi() as c1
+from
+t11 as ref_0
+inner join t5 as ref_1
+inner join t2 as ref_2
+on (ref_1.c_d_id = ref_2.id_col )
+on (ref_2.float_col is not NULL)
+) as subq_0
+right join t11 as ref_3
+on (((ref_3.C_W_ID is NULL))
+and ((ref_3.C_PAYMENT_CNT is not NULL)
+or (((subtime(
+cast(null as char),
+ref_3.C_SINCE) is not NULL)
+and (subq_0.c1 is not NULL)))))
+where subq_0.c1 is NULL
+group by 1
+order by 1;
+c0
+3.141593
+explain format=tree select
+subq_0.c2 as c1,
+subq_0.c2 as c2,
+case when false then subq_0.c1 else subq_0.c1 end as c3
+from
+(select
+ref_0.C_STREET_2 as c1,
+ref_0.C_BIT as c2
+from
+t10 as ref_0
+) as subq_0
+group by 1,2,3
+order by 1,2,3;
+EXPLAIN
+-> Sort: subq_0.c2, c3
+    -> Table scan on <temporary>  (...)
+        -> Temporary table with deduplication  (...)
+            -> Gather: 4 workers, parallel scan on ref_0  (...)
+                -> Table scan on <temporary>  (...)
+                    -> Temporary table with deduplication  (...)
+                        -> Parallel table scan on ref_0  (...)
+
+select
+subq_0.c2 as c1,
+subq_0.c2 as c2,
+case when false then subq_0.c1 else subq_0.c1 end as c3
+from
+(select
+ref_0.C_STREET_2 as c1,
+ref_0.C_BIT as c2
+from
+t10 as ref_0
+) as subq_0
+group by 1,2,3
+order by 1,2,3;
+c1	c2	c3
+NULL	NULL	NULL
+explain format=tree select
+cast(nullif(rtrim(subq_7.c2), subq_0.c5) as char) as c0,
+subq_7.c4 as c2
+from
+(select
+ref_0.c_last as c5
+from
+t5 as ref_0
+) as subq_0
+left join (select
+2 as c2,
+case when (true)
+or (((((true)
+or (ref_1.C_END is not NULL))
+and (((((EXISTS (
+select
+ref_2.c_street_1 as c0
+from
+t4 as ref_15
+where (ref_2.c_zip is NULL)
+))
+or (true)
+and false)))
+or (ref_2.c_data is NULL))))) then ref_2.c_credit else ref_2.c_credit end
+as c4
+from
+t10 as ref_1
+left join t4 as ref_2
+on (false)
+inner join t12 as ref_3
+on false
+where (((ref_1.C_CREDIT is NULL)
+or (ref_2.c_credit is not NULL)))
+and (ref_1.C_PHONE is NULL)
+) as subq_7
+on true
+;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on ref_0  (...)
+    -> Parallel index scan on ref_0 using ndx_c_last  (...)
+
+Warnings:
+Note	1276	Field or reference 'test.ref_2.c_street_1' of SELECT #4 was resolved in SELECT #3
+Note	1276	Field or reference 'test.ref_2.c_zip' of SELECT #4 was resolved in SELECT #3
+select
+cast(nullif(rtrim(subq_7.c2), subq_0.c5) as char) as c0,
+subq_7.c4 as c2
+from
+(select
+ref_0.c_last as c5
+from
+t5 as ref_0
+) as subq_0
+left join (select
+2 as c2,
+case when (true)
+or (((((true)
+or (ref_1.C_END is not NULL))
+and (((((EXISTS (
+select
+ref_2.c_street_1 as c0
+from
+t4 as ref_15
+where (ref_2.c_zip is NULL)
+))
+or (true)
+and false)))
+or (ref_2.c_data is NULL))))) then ref_2.c_credit else ref_2.c_credit end
+as c4
+from
+t10 as ref_1
+left join t4 as ref_2
+on (false)
+inner join t12 as ref_3
+on false
+where (((ref_1.C_CREDIT is NULL)
+or (ref_2.c_credit is not NULL)))
+and (ref_1.C_PHONE is NULL)
+) as subq_7
+on true
+;
+c0	c2
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+NULL	NULL
+#Item_view_ref's first_inner_table is not correctly found due to the table_name
+#alias.
+explain format=tree select
+count(*)
+from
+(select
+1 as c2,
+ref_0.c_middle as c9
+from
+t4 as ref_0
+) as subq_0
+right join t4 as ref_1
+on (subq_0.c9 = ref_1.c_credit )
+where subq_0.c2 is not NULL;
+EXPLAIN
+-> Aggregate: count(`<temporary>`.`count(*)`)  (...)
+    -> Gather: 4 workers, parallel scan on ref_1  (...)
+        -> Aggregate: count(`<temporary>`.`count(*)`)  (...)
+            -> Filter: (1 is not null)  (...)
+                -> Nested loop left join  (...)
+                    -> Parallel index scan on ref_1 using ndx_c_credit  (...)
+                    -> Result cache : cache keys(ref_1.c_credit)  (...)
+                        -> Covering index lookup on ref_0 using ndx_c_middle (c_middle=ref_1.c_credit)  (...)
+
+select
+count(*)
+from
+(select
+1 as c2,
+ref_0.c_middle as c9
+from
+t4 as ref_0
+) as subq_0
+right join t4 as ref_1
+on (subq_0.c9 = ref_1.c_credit )
+where subq_0.c2 is not NULL;
+count(*)
+0
+explain format=tree select
+count(1)
+from
+t5 as ref_0
+left join t0 as ref_1
+inner join t0 as ref_2
+on (true)
+right join t4 as ref_4
+on (ref_2.c_street_2 is NULL)
+right join (select
+ref_5.c_last as c0,
+1 as c2,
+46 as c4
+from
+t5 as ref_5
+) as subq_4
+on true
+on false
+where ((subq_4.c4 is not NULL)) ;
+EXPLAIN
+-> Aggregate: count(`<temporary>`.`count(1)`)  (...)
+    -> Gather: 4 workers, parallel scan on ref_0  (...)
+        -> Aggregate: count(`<temporary>`.`count(1)`)  (...)
+            -> Filter: (46 is not null)  (...)
+                -> Nested loop left join  (...)
+                    -> Parallel index scan on ref_0 using ndx_c_id  (...)
+                    -> Nested loop left join  (...)
+                        -> Zero rows (Impossible filter)  (...)
+                        -> Nested loop left join  (...)
+                            -> Index scan on ref_4 using ndx_c_id  (...)
+                            -> Nested loop inner join  (...)
+                                -> Filter: (ref_2.c_street_2 is null)  (...)
+                                    -> Covering index lookup on ref_2 using ndx_c_street_2 (c_street_2=NULL)  (...)
+                                -> Index scan on ref_1 using ndx_c_discount  (...)
+
+select
+count(1)
+from
+t5 as ref_0
+left join t0 as ref_1
+inner join t0 as ref_2
+on (true)
+right join t4 as ref_4
+on (ref_2.c_street_2 is NULL)
+right join (select
+ref_5.c_last as c0,
+1 as c2,
+46 as c4
+from
+t5 as ref_5
+) as subq_4
+on true
+on false
+where ((subq_4.c4 is not NULL)) ;
+count(1)
+0
+explain format=tree select
+subq_5.c5 as c3,
+case when subq_5.c11 is NULL then subq_5.c11 else subq_5.c11 end
+as c7,
+subq_5.c3 as c11
+from
+(select
+3 as c3,
+case when ((true)
+or ((((ref_12.C_PAYMENT_CNT is not NULL)
+and (((((((true)
+or EXISTS (
+select
+1 as c0
+from
+t12 as ref_26
+where false
+))
+and (true))
+and (false))))))))) then 1 else 2 end as c5,
+2 as c11
+from
+t2 as ref_0
+left join t0 as ref_1
+on (true)
+inner join t12 as ref_12
+left join t2 as ref_13
+on (ref_12.C_YTD_PAYMENT is NULL)
+on (true)
+) as subq_5,
+lateral (select
+subq_5.c11 as c5
+from
+t1 as ref_28
+where true
+) as subq_6
+where true
+group by 1,2,3;
+EXPLAIN
+-> Table scan on <temporary>  (...)
+    -> Temporary table with deduplication  (...)
+        -> Gather: 4 workers, parallel scan on ref_28, subq_5  (...)
+            -> Table scan on <temporary>  (...)
+                -> Temporary table with deduplication  (...)
+                    -> Inner hash join, hash table shared by worker threads (no condition)  (...)
+                        -> Parallel table scan on subq_5  (...)
+                            -> Materialize  (...)
+                                -> Gather: 4 workers, parallel scan on ref_1, ref_0  (...)
+                                    -> Left hash join, hash table shared by worker threads (no condition)  (...)
+                                        -> Left hash join, one hash table per worker (no condition), extra conditions: (ref_12.C_YTD_PAYMENT is null)  (...)
+                                            -> Inner hash join, one hash table per worker (no condition)  (...)
+                                                -> Parallel index scan on ref_0 using PRIMARY  (...)
+                                                -> Hash
+                                                    -> Table scan on ref_12  (...)
+                                            -> Hash
+                                                -> Index scan on ref_13 using PRIMARY  (...)
+                                        -> Hash
+                                            -> Parallel index scan on ref_1 using ndx_c_discount  (...)
+                                -> Select #3 (subquery in projection; run only once)
+                                    -> Zero rows (Impossible WHERE)  (...)
+                        -> Hash
+                            -> Parallel index scan on ref_28 using ndx_c_discount  (...)
+
+Warnings:
+Note	1276	Field or reference 'subq_5.c11' of SELECT #4 was resolved in SELECT #1
+#The BIT field in field_list that makes leader and worker create
+#different tmp table structure
+explain format=tree select
+subq_0.c4 as c4,
+subq_0.c4 as c7
+from
+(select
+ref_0.C_BIT as c4
+from
+t10 as ref_0
+where (ref_0.C_YTD_PAYMENT is not NULL)
+) as subq_0
+left join (select
+ref_3.C_FIRST as c0
+from
+t12 as ref_1
+inner join t2 as ref_2
+right join t10 as ref_3
+on (ref_2.id_col = ref_3.C_ID )
+on true
+where false
+) as subq_1
+on (false)
+group by 1,2;
+EXPLAIN
+-> Table scan on <temporary>  (...)
+    -> Temporary table with deduplication  (...)
+        -> Gather: 4 workers, parallel scan on ref_0  (...)
+            -> Table scan on <temporary>  (...)
+                -> Temporary table with deduplication  (...)
+                    -> Nested loop left join  (...)
+                        -> Parallel index range scan on ref_0 using ndx_C_YTD_PAYMENT over (NULL < C_YTD_PAYMENT), with index condition: (ref_0.C_YTD_PAYMENT is not null)  (...)
+                        -> Nested loop left join  (...)
+                            -> Nested loop inner join  (...)
+                                -> Zero rows (Impossible filter)  (...)
+                                -> Index scan on ref_3 using ndx_C_BIT  (...)
+                            -> Result cache : cache keys(ref_0.C_BIT, ref_0.C_YTD_PAYMENT, ref_3.C_ID)  (...)
+                                -> Single-row covering index lookup on ref_2 using PRIMARY (id_col=ref_3.C_ID)  (...)
+
+select
+subq_0.c4 as c4,
+subq_0.c4 as c7
+from
+(select
+ref_0.C_BIT as c4
+from
+t10 as ref_0
+where (ref_0.C_YTD_PAYMENT is not NULL)
+) as subq_0
+left join (select
+ref_3.C_FIRST as c0
+from
+t12 as ref_1
+inner join t2 as ref_2
+right join t10 as ref_3
+on (ref_2.id_col = ref_3.C_ID )
+on true
+where false
+) as subq_1
+on (false)
+group by 1,2;
+c4	c7
+#used_table_cache is leader and worker is not same.
+explain format=tree select
+subq_2.c12 as c0,
+subq_2.c5 as c1
+from
+(select
+ref_2.bool_col as c5,
+acos(ref_2.id_col) as c12
+from
+(select
+1 as c0
+from
+t11 as ref_1
+where ref_1.C_CREDIT is NULL
+) as subq_1
+inner join t2 as ref_2
+on (subq_1.c0 = ref_2.id_col )
+) as subq_2
+group by 1,2;
+EXPLAIN
+-> Group (no aggregates)  (...)
+    -> Gather: 4 workers, parallel scan on ref_1  (...)
+        -> Group (no aggregates)  (...)
+            -> Filter: (ref_1.C_CREDIT is null)  (...)
+                -> Parallel covering index lookup on ref_1 using ndx_C_CREDIT (C_CREDIT=NULL)  (...)
+
+select
+subq_2.c12 as c0,
+subq_2.c5 as c1
+from
+(select
+ref_2.bool_col as c5,
+acos(ref_2.id_col) as c12
+from
+(select
+1 as c0
+from
+t11 as ref_1
+where ref_1.C_CREDIT is NULL
+) as subq_1
+inner join t2 as ref_2
+on (subq_1.c0 = ref_2.id_col )
+) as subq_2
+group by 1,2;
+c0	c1
+0	1
+#Item's used_table_cache in leader is optimized to zero after prepare, making
+#leader skips to build the field in tmp table. While worker has cloned the
+#value in prepare phase and thus needs to create field in tmp table. Finally,
+#leader and worker generate different tmp table.
+explain format=tree select
+subq_2.c12 as c0,
+subq_2.c5 as c1
+from
+(select
+ref_2.bool_col as c5,
+abs(ref_2.id_col) as c12
+from
+(select
+1 as c0
+from
+t11 as ref_1
+where ref_1.C_CREDIT is NULL
+) as subq_1
+inner join t2 as ref_2
+on (subq_1.c0 = ref_2.id_col )
+) as subq_2
+group by 1,2;
+EXPLAIN
+-> Group (no aggregates)  (...)
+    -> Gather: 4 workers, parallel scan on ref_1  (...)
+        -> Group (no aggregates)  (...)
+            -> Filter: (ref_1.C_CREDIT is null)  (...)
+                -> Parallel covering index lookup on ref_1 using ndx_C_CREDIT (C_CREDIT=NULL)  (...)
+
+select
+subq_2.c12 as c0,
+subq_2.c5 as c1
+from
+(select
+ref_2.bool_col as c5,
+abs(ref_2.id_col) as c12
+from
+(select
+1 as c0
+from
+t11 as ref_1
+where ref_1.C_CREDIT is NULL
+) as subq_1
+inner join t2 as ref_2
+on (subq_1.c0 = ref_2.id_col )
+) as subq_2
+group by 1,2;
+c0	c1
+1	1
+create view t0_sub_1 as select c_id as c_d_id, c_d_id as c_id, case when c_w_id/2=0 then 1 else 2 end as c_w_id, c_middle, c_street_1, c_credit  from t0 force index(PRIMARY) where c_id = 1 or c_d_id=2 or c_w_id=3;
+create view t0_sub_union as (select c_id as c_d_id, c_d_id as c_id, case when c_w_id/2=0 then 1 else 2 end as c_w_id, c_middle, c_street_1, c_credit  from t0 force index(PRIMARY) UNION select * from t0_sub_1);
+create view tx_cmplx_001 as select
+subq_0.c2 as c1,
+subq_0.c9 as c2
+from
+(select
+1 as c2,
+ref_0.c_middle as c9
+from
+t4 as ref_0
+) as subq_0
+right join t4 as ref_1
+on (subq_0.c9 = ref_1.c_credit )
+where subq_0.c2 is not NULL;
+create view tx_cmplx_002 as select     subq_0.c4 as c0,    subq_0.c2 as c1,    pi() as c2,    subq_0.c5 as c3,    cast(nullif(case when pi() is NULL then pi() else pi() end       ,     subq_0.c1) as char) as c4,    subq_0.c1 as c5,    pi() as c6,    pi() as c7,    subq_0.c6 as c8,    subq_0.c4 as c9 from    (select           pi() as c0,          pi() as c1,          ref_1.C_BALANCE as c2,          pi() as c3,          41 as c4,          ref_1.C_STREET_2 as c5,          ref_0.C_MIDDLE as c6       from          t12 as ref_0           inner join t12 as ref_1           on ((ref_0.C_CREDIT_LIM is not NULL)                and (true))       where ref_1.C_STATE is not NULL       ) as subq_0 where (true)    or (true)  group by 1,2,3,4,5,6,7,8,9,10 order by 1,2,3,4,5,6,7,8,9,10;
+create view tx_cmplx_003 as select subq_1.c1 as c0, subq_1.c0 as c1, subq_1.c0 as c2, subq_1.c0 as c3, subq_1.c0 as c4, subq_1.c0 as c5, subq_1.c1 as c6, subq_1.c1 as c7, subq_1.c0 as c8, subq_1.c1 as c9, subq_1.c0 as c10, subq_1.c0 as c11 from (select pi() as c0, subq_0.c1 as c1 from t10 as ref_0 left join (select ref_1.c_ytd_payment as c0, pi() as c1, ref_1.c_discount as c2 from t4 as ref_1 where ref_1.c_first is NULL ) as subq_0 on (subq_0.c0 is not NULL) where true ) as subq_1 where true group by 1,2,3,4,5,6,7,8,9,10,11,12 order by 1,2,3,4,5,6,7,8,9,10,11,12;
+create view tx_cmplx_004 as select
+subq_0.c2 as c1,
+subq_0.c2 as c2,
+case when false then subq_0.c1 else subq_0.c1 end as c3
+from
+(select
+ref_0.C_STREET_2 as c1,
+ref_0.C_BIT as c2
+from
+t10 as ref_0
+) as subq_0
+group by 1,2,3
+order by 1,2,3;
+create view tx_cmplx_005 as select
+cast(nullif(rtrim(subq_7.c2), subq_0.c5) as char) as c0,
+subq_7.c4 as c1
+from
+(select
+ref_0.c_last as c5
+from
+t5 as ref_0
+) as subq_0
+left join (select
+2 as c2,
+case when (true)
+or (((((true)
+or (ref_1.C_END is not NULL))
+and (((((EXISTS (
+select
+ref_2.c_street_1 as c0
+from
+t4 as ref_15
+where (ref_2.c_zip is NULL)
+))
+or (true)
+and false)))
+or (ref_2.c_data is NULL))))) then ref_2.c_credit else ref_2.c_credit end
+as c4
+from
+t10 as ref_1
+left join t4 as ref_2
+on (false)
+inner join t12 as ref_3
+on false
+where (((ref_1.C_CREDIT is NULL)
+or (ref_2.c_credit is not NULL)))
+and (ref_1.C_PHONE is NULL)
+) as subq_7
+on true;
+create view tx_cmplx_006 as select
+subq_0.c4 as c1,
+subq_0.c4 as c2
+from
+(select
+ref_0.C_BIT as c4
+from
+t10 as ref_0
+where (ref_0.C_YTD_PAYMENT is not NULL)
+) as subq_0
+left join (select
+ref_3.C_FIRST as c0
+from
+t12 as ref_1
+inner join t2 as ref_2
+right join t10 as ref_3
+on (ref_2.id_col = ref_3.C_ID )
+on true
+where false
+) as subq_1
+on (false)
+group by 1,2;
+#BUG2021080502707: when view is included into lateral dependent subquery,
+#the first_inner_table in Item_view_ref may be referred to the table in
+#the lateral query, thus we should disable this view in parallel query.
+analyze tables t0, t1, t10, t11, t12, t2, t4, t5;
+Table	Op	Msg_type	Msg_text
+test.t0	analyze	status	OK
+test.t1	analyze	status	OK
+test.t10	analyze	status	OK
+test.t11	analyze	status	OK
+test.t12	analyze	status	OK
+test.t2	analyze	status	OK
+test.t4	analyze	status	OK
+test.t5	analyze	status	OK
+explain format=tree select
+ref_0.c_w_id as c0
+from
+t0_sub_1 as ref_0
+inner join t4 as ref_1
+where (EXISTS (
+select
+ref_1.c_street_1 as c0
+from
+tx_cmplx_006 as ref_11,
+lateral (select
+ref_0.c_d_id as c0
+from
+(SELECT 1 AS c1, ref_0.c_middle AS c2
+FROM t4 ref_1
+LEFT JOIN t4 ON ref_0.c_middle = ref_1.c_credit
+WHERE 1 IS NOT NULL) as ref_12
+where (ref_12.c2 is NULL)
+) as subq_3)
+)
+or (ref_1.c_credit_lim is not NULL) limit 10;
+EXPLAIN
+-> Limit: 10 row(s)  (...)
+    -> Gather: 4 workers, parallel scan on ref_1, t0  (...)
+        -> Limit: 10 row(s)  (...)
+            -> Filter: (exists(select #2) or (ref_1.c_credit_lim is not null))  (...)
+                -> Inner hash join, hash table shared by worker threads (no condition)  (...)
+                    -> Filter: ((t0.c_id = 1) or (t0.c_d_id = 2) or (t0.c_w_id = 3))  (...)
+                        -> Parallel table scan on t0  (...)
+                    -> Hash
+                        -> Parallel index scan on ref_1 using ndx_4_7_9_13_15_19  (...)
+                -> Select #2 (subquery in condition; dependent)
+                    -> Result cache : cache keys(ref_1.c_street_1, t0.c_middle)
+                        -> Limit: 1 row(s)  (...)
+                            -> Inner hash join, one hash table per worker (no condition)  (...)
+                                -> Table scan on ref_11  (...)
+                                    -> Materialize  (...)
+                                        -> Table scan on <temporary>  (...)
+                                            -> Temporary table with deduplication  (...)
+                                                -> Gather: 4 workers, parallel scan on ref_0  (...)
+                                                    -> Table scan on <temporary>  (...)
+                                                        -> Temporary table with deduplication  (...)
+                                                            -> Nested loop left join  (...)
+                                                                -> Parallel index range scan on ref_0 using ndx_C_YTD_PAYMENT over (NULL < C_YTD_PAYMENT), with index condition: (ref_0.C_YTD_PAYMENT is not null)  (...)
+                                                                -> Nested loop left join  (...)
+                                                                    -> Nested loop inner join  (...)
+                                                                        -> Zero rows (Impossible filter)  (...)
+                                                                        -> Index scan on ref_3 using ndx_C_BIT  (...)
+                                                                    -> Result cache : cache keys(ref_0.C_BIT, ref_0.C_YTD_PAYMENT, ref_3.C_ID)  (...)
+                                                                        -> Single-row covering index lookup on ref_2 using PRIMARY (id_col=ref_3.C_ID)  (...)
+                                -> Hash
+                                    -> Left hash join, one hash table per worker (no condition), extra conditions: (t0.c_middle = ref_1.c_credit)  (...)
+                                        -> Filter: (t0.c_middle is null)  (...)
+                                            -> Index scan on ref_1 using ndx_c_credit  (...)
+                                        -> Hash
+                                            -> Index scan on t4 using ndx_c_id  (...)
+
+Warnings:
+Note	1276	Field or reference 'ref_0.c_middle' of SELECT #4 was resolved in SELECT #1
+Note	1276	Field or reference 'ref_0.c_middle' of SELECT #4 was resolved in SELECT #1
+Note	1276	Field or reference 'ref_0.c_d_id' of SELECT #3 was resolved in SELECT #1
+Note	1276	Field or reference 'test.ref_1.c_street_1' of SELECT #2 was resolved in SELECT #1
+select
+ref_0.c_w_id as c0
+from
+t0_sub_1 as ref_0
+inner join t4 as ref_1
+where (EXISTS (
+select
+ref_1.c_street_1 as c0
+from
+tx_cmplx_006 as ref_11,
+lateral (select
+ref_0.c_d_id as c0
+from
+(SELECT 1 AS c1, ref_0.c_middle AS c2
+FROM t4 ref_1
+LEFT JOIN t4 ON ref_0.c_middle = ref_1.c_credit
+WHERE 1 IS NOT NULL) as ref_12
+where (ref_12.c2 is NULL)
+) as subq_3)
+)
+or (ref_1.c_credit_lim is not NULL) limit 10;
+CREATE TABLE t0_range_partition (
+c_id int NOT NULL,
+c_d_id int NOT NULL,
+c_w_id int NOT NULL,
+c_first varchar(16) DEFAULT NULL,
+c_middle char(2) DEFAULT NULL,
+c_last varchar(16) DEFAULT NULL,
+c_street_1 varchar(20) DEFAULT NULL,
+c_street_2 varchar(20) DEFAULT NULL,
+c_city varchar(20) DEFAULT NULL,
+c_state char(2) DEFAULT NULL,
+c_zip char(9) DEFAULT NULL,
+c_phone char(16) DEFAULT NULL,
+c_since timestamp NOT NULL DEFAULT '1970-01-01 16:00:01',
+c_credit char(2) DEFAULT NULL,
+c_credit_lim decimal(12,2) DEFAULT NULL,
+c_discount decimal(4,4) DEFAULT NULL,
+c_balance decimal(12,2) DEFAULT NULL,
+c_ytd_payment decimal(12,2) DEFAULT NULL,
+c_payment_cnt int DEFAULT NULL,
+c_delivery_cnt int DEFAULT NULL,
+c_data varchar(500) DEFAULT NULL,
+PRIMARY KEY (c_w_id,c_d_id,c_id),
+KEY Customer_100W_key (c_w_id,c_d_id,c_last,c_first),
+KEY ndx_c_id (c_id) USING BTREE,
+KEY ndx_c_d_id (c_d_id) USING BTREE,
+KEY ndx_c_w_id (c_w_id) USING BTREE,
+KEY ndx_c_first (c_first) USING BTREE,
+KEY ndx_c_middle (c_middle) USING BTREE,
+KEY ndx_c_last (c_last) USING BTREE,
+KEY ndx_c_street_1 (c_street_1) USING BTREE,
+KEY ndx_c_street_2 (c_street_2) USING BTREE,
+KEY ndx_c_city (c_city) USING BTREE,
+KEY ndx_c_state (c_state) USING BTREE,
+KEY ndx_c_zip (c_zip) USING BTREE,
+KEY ndx_c_phone (c_phone) USING BTREE,
+KEY ndx_c_since (c_since) USING BTREE,
+KEY ndx_c_credit (c_credit) USING BTREE,
+KEY ndx_c_credit_lim (c_credit_lim) USING BTREE,
+KEY ndx_c_discount (c_discount) USING BTREE,
+KEY ndx_c_balance (c_balance) USING BTREE,
+KEY ndx_c_ytd_payment (c_ytd_payment) USING BTREE,
+KEY ndx_c_payment_cnt (c_payment_cnt) USING BTREE,
+KEY ndx_c_delivery_cnt (c_delivery_cnt) USING BTREE,
+KEY ndx_c_data (c_data) USING BTREE,
+KEY ndx_4_5_6 (c_first,c_middle,c_last) USING BTREE,
+KEY ndx_7_8 (c_street_1,c_street_2) USING BTREE,
+KEY ndx_9_10_11_12 (c_city,c_state,c_zip,c_phone) USING BTREE,
+KEY ndx_13_14 (c_since,c_credit) USING BTREE,
+KEY ndx_15_16_17_18 (c_credit_lim,c_discount,c_balance,c_ytd_payment) USING BTREE,
+KEY ndx_19_20_21 (c_payment_cnt,c_delivery_cnt,c_data) USING BTREE,
+KEY ndx_4_7_9_13_15_19 (c_first,c_street_1,c_city,c_since,c_credit_lim,c_payment_cnt) USING BTREE
+) partition by range(c_d_id)
+(
+partition p1 values less than (15),
+partition p2 values less than (30),
+partition p3 values less than (50),
+partition p4 values less than maxvalue
+);
+insert into t0_range_partition select * from t0;
+CREATE TABLE t0_list_partition (
+c_id int NOT NULL,
+c_d_id int NOT NULL,
+c_w_id int NOT NULL,
+c_first varchar(16) DEFAULT NULL,
+c_middle char(2) DEFAULT NULL,
+c_last varchar(16) DEFAULT NULL,
+c_street_1 varchar(20) DEFAULT NULL,
+c_street_2 varchar(20) DEFAULT NULL,
+c_city varchar(20) DEFAULT NULL,
+c_state char(2) DEFAULT NULL,
+c_zip char(9) DEFAULT NULL,
+c_phone char(16) DEFAULT NULL,
+c_since timestamp NOT NULL DEFAULT '1970-01-01 16:00:01',
+c_credit char(2) DEFAULT NULL,
+c_credit_lim decimal(12,2) DEFAULT NULL,
+c_discount decimal(4,4) DEFAULT NULL,
+c_balance decimal(12,2) DEFAULT NULL,
+c_ytd_payment decimal(12,2) DEFAULT NULL,
+c_payment_cnt int DEFAULT NULL,
+c_delivery_cnt int DEFAULT NULL,
+c_data varchar(500) DEFAULT NULL,
+PRIMARY KEY (c_w_id,c_d_id,c_id),
+KEY Customer_100W_key (c_w_id,c_d_id,c_last,c_first),
+KEY ndx_c_id (c_id) USING BTREE,
+KEY ndx_c_d_id (c_d_id) USING BTREE,
+KEY ndx_c_w_id (c_w_id) USING BTREE,
+KEY ndx_c_first (c_first) USING BTREE,
+KEY ndx_c_middle (c_middle) USING BTREE,
+KEY ndx_c_last (c_last) USING BTREE,
+KEY ndx_c_street_1 (c_street_1) USING BTREE,
+KEY ndx_c_street_2 (c_street_2) USING BTREE,
+KEY ndx_c_city (c_city) USING BTREE,
+KEY ndx_c_state (c_state) USING BTREE,
+KEY ndx_c_zip (c_zip) USING BTREE,
+KEY ndx_c_phone (c_phone) USING BTREE,
+KEY ndx_c_since (c_since) USING BTREE,
+KEY ndx_c_credit (c_credit) USING BTREE,
+KEY ndx_c_credit_lim (c_credit_lim) USING BTREE,
+KEY ndx_c_discount (c_discount) USING BTREE,
+KEY ndx_c_balance (c_balance) USING BTREE,
+KEY ndx_c_ytd_payment (c_ytd_payment) USING BTREE,
+KEY ndx_c_payment_cnt (c_payment_cnt) USING BTREE,
+KEY ndx_c_delivery_cnt (c_delivery_cnt) USING BTREE,
+KEY ndx_c_data (c_data) USING BTREE,
+KEY ndx_4_5_6 (c_first,c_middle,c_last) USING BTREE,
+KEY ndx_7_8 (c_street_1,c_street_2) USING BTREE,
+KEY ndx_9_10_11_12 (c_city,c_state,c_zip,c_phone) USING BTREE,
+KEY ndx_13_14 (c_since,c_credit) USING BTREE,
+KEY ndx_15_16_17_18 (c_credit_lim,c_discount,c_balance,c_ytd_payment) USING BTREE,
+KEY ndx_19_20_21 (c_payment_cnt,c_delivery_cnt,c_data) USING BTREE,
+KEY ndx_4_7_9_13_15_19 (c_first,c_street_1,c_city,c_since,c_credit_lim,c_payment_cnt) USING BTREE
+) partition by list(c_w_id)
+(
+partition p1 values in (0,1,2),
+partition p2 values in (3,4,5),
+partition p3 values in (6,7,8),
+partition p4 values in (9)
+);
+insert into t0_list_partition select * from t0;
+CREATE TABLE t0_hash_partition (
+c_id int NOT NULL,
+c_d_id int NOT NULL,
+c_w_id int NOT NULL,
+c_first varchar(16) DEFAULT NULL,
+c_middle char(2) DEFAULT NULL,
+c_last varchar(16) DEFAULT NULL,
+c_street_1 varchar(20) DEFAULT NULL,
+c_street_2 varchar(20) DEFAULT NULL,
+c_city varchar(20) DEFAULT NULL,
+c_state char(2) DEFAULT NULL,
+c_zip char(9) DEFAULT NULL,
+c_phone char(16) DEFAULT NULL,
+c_since timestamp NOT NULL DEFAULT '1970-01-01 16:00:01',
+c_credit char(2) DEFAULT NULL,
+c_credit_lim decimal(12,2) DEFAULT NULL,
+c_discount decimal(4,4) DEFAULT NULL,
+c_balance decimal(12,2) DEFAULT NULL,
+c_ytd_payment decimal(12,2) DEFAULT NULL,
+c_payment_cnt int DEFAULT NULL,
+c_delivery_cnt int DEFAULT NULL,
+c_data varchar(500) DEFAULT NULL,
+PRIMARY KEY (c_w_id,c_d_id,c_id),
+KEY Customer_100W_key (c_w_id,c_d_id,c_last,c_first),
+KEY ndx_c_id (c_id) USING BTREE,
+KEY ndx_c_d_id (c_d_id) USING BTREE,
+KEY ndx_c_w_id (c_w_id) USING BTREE,
+KEY ndx_c_first (c_first) USING BTREE,
+KEY ndx_c_middle (c_middle) USING BTREE,
+KEY ndx_c_last (c_last) USING BTREE,
+KEY ndx_c_street_1 (c_street_1) USING BTREE,
+KEY ndx_c_street_2 (c_street_2) USING BTREE,
+KEY ndx_c_city (c_city) USING BTREE,
+KEY ndx_c_state (c_state) USING BTREE,
+KEY ndx_c_zip (c_zip) USING BTREE,
+KEY ndx_c_phone (c_phone) USING BTREE,
+KEY ndx_c_since (c_since) USING BTREE,
+KEY ndx_c_credit (c_credit) USING BTREE,
+KEY ndx_c_credit_lim (c_credit_lim) USING BTREE,
+KEY ndx_c_discount (c_discount) USING BTREE,
+KEY ndx_c_balance (c_balance) USING BTREE,
+KEY ndx_c_ytd_payment (c_ytd_payment) USING BTREE,
+KEY ndx_c_payment_cnt (c_payment_cnt) USING BTREE,
+KEY ndx_c_delivery_cnt (c_delivery_cnt) USING BTREE,
+KEY ndx_c_data (c_data) USING BTREE,
+KEY ndx_4_5_6 (c_first,c_middle,c_last) USING BTREE,
+KEY ndx_7_8 (c_street_1,c_street_2) USING BTREE,
+KEY ndx_9_10_11_12 (c_city,c_state,c_zip,c_phone) USING BTREE,
+KEY ndx_13_14 (c_since,c_credit) USING BTREE,
+KEY ndx_15_16_17_18 (c_credit_lim,c_discount,c_balance,c_ytd_payment) USING BTREE,
+KEY ndx_19_20_21 (c_payment_cnt,c_delivery_cnt,c_data) USING BTREE,
+KEY ndx_4_7_9_13_15_19 (c_first,c_street_1,c_city,c_since,c_credit_lim,c_payment_cnt) USING BTREE
+) partition by hash(c_w_id) partitions 10;
+insert into t0_hash_partition select * from t0;
+CREATE TABLE t0_linear_hash_partition (
+c_id int NOT NULL,
+c_d_id int NOT NULL,
+c_w_id int NOT NULL,
+c_first varchar(16) DEFAULT NULL,
+c_middle char(2) DEFAULT NULL,
+c_last varchar(16) DEFAULT NULL,
+c_street_1 varchar(20) DEFAULT NULL,
+c_street_2 varchar(20) DEFAULT NULL,
+c_city varchar(20) DEFAULT NULL,
+c_state char(2) DEFAULT NULL,
+c_zip char(9) DEFAULT NULL,
+c_phone char(16) DEFAULT NULL,
+c_since timestamp NOT NULL DEFAULT '1970-01-01 16:00:01',
+c_credit char(2) DEFAULT NULL,
+c_credit_lim decimal(12,2) DEFAULT NULL,
+c_discount decimal(4,4) DEFAULT NULL,
+c_balance decimal(12,2) DEFAULT NULL,
+c_ytd_payment decimal(12,2) DEFAULT NULL,
+c_payment_cnt int DEFAULT NULL,
+c_delivery_cnt int DEFAULT NULL,
+c_data varchar(500) DEFAULT NULL,
+PRIMARY KEY (c_w_id,c_d_id,c_id),
+KEY Customer_100W_key (c_w_id,c_d_id,c_last,c_first),
+KEY ndx_c_id (c_id) USING BTREE,
+KEY ndx_c_d_id (c_d_id) USING BTREE,
+KEY ndx_c_w_id (c_w_id) USING BTREE,
+KEY ndx_c_first (c_first) USING BTREE,
+KEY ndx_c_middle (c_middle) USING BTREE,
+KEY ndx_c_last (c_last) USING BTREE,
+KEY ndx_c_street_1 (c_street_1) USING BTREE,
+KEY ndx_c_street_2 (c_street_2) USING BTREE,
+KEY ndx_c_city (c_city) USING BTREE,
+KEY ndx_c_state (c_state) USING BTREE,
+KEY ndx_c_zip (c_zip) USING BTREE,
+KEY ndx_c_phone (c_phone) USING BTREE,
+KEY ndx_c_since (c_since) USING BTREE,
+KEY ndx_c_credit (c_credit) USING BTREE,
+KEY ndx_c_credit_lim (c_credit_lim) USING BTREE,
+KEY ndx_c_discount (c_discount) USING BTREE,
+KEY ndx_c_balance (c_balance) USING BTREE,
+KEY ndx_c_ytd_payment (c_ytd_payment) USING BTREE,
+KEY ndx_c_payment_cnt (c_payment_cnt) USING BTREE,
+KEY ndx_c_delivery_cnt (c_delivery_cnt) USING BTREE,
+KEY ndx_c_data (c_data) USING BTREE,
+KEY ndx_4_5_6 (c_first,c_middle,c_last) USING BTREE,
+KEY ndx_7_8 (c_street_1,c_street_2) USING BTREE,
+KEY ndx_9_10_11_12 (c_city,c_state,c_zip,c_phone) USING BTREE,
+KEY ndx_13_14 (c_since,c_credit) USING BTREE,
+KEY ndx_15_16_17_18 (c_credit_lim,c_discount,c_balance,c_ytd_payment) USING BTREE,
+KEY ndx_19_20_21 (c_payment_cnt,c_delivery_cnt,c_data) USING BTREE,
+KEY ndx_4_7_9_13_15_19 (c_first,c_street_1,c_city,c_since,c_credit_lim,c_payment_cnt) USING BTREE
+) partition by linear hash(c_w_id) partitions 10;
+insert into t0_linear_hash_partition select * from t0;
+CREATE TABLE t0_key_partition (
+c_id int NOT NULL,
+c_d_id int NOT NULL,
+c_w_id int NOT NULL,
+c_first varchar(16) DEFAULT NULL,
+c_middle char(2) DEFAULT NULL,
+c_last varchar(16) DEFAULT NULL,
+c_street_1 varchar(20) DEFAULT NULL,
+c_street_2 varchar(20) DEFAULT NULL,
+c_city varchar(20) DEFAULT NULL,
+c_state char(2) DEFAULT NULL,
+c_zip char(9) DEFAULT NULL,
+c_phone char(16) DEFAULT NULL,
+c_since timestamp NOT NULL DEFAULT '1970-01-01 16:00:01',
+c_credit char(2) DEFAULT NULL,
+c_credit_lim decimal(12,2) DEFAULT NULL,
+c_discount decimal(4,4) DEFAULT NULL,
+c_balance decimal(12,2) DEFAULT NULL,
+c_ytd_payment decimal(12,2) DEFAULT NULL,
+c_payment_cnt int DEFAULT NULL,
+c_delivery_cnt int DEFAULT NULL,
+c_data varchar(500) DEFAULT NULL,
+PRIMARY KEY (c_w_id,c_d_id,c_id),
+KEY Customer_100W_key (c_w_id,c_d_id,c_last,c_first),
+KEY ndx_c_id (c_id) USING BTREE,
+KEY ndx_c_d_id (c_d_id) USING BTREE,
+KEY ndx_c_w_id (c_w_id) USING BTREE,
+KEY ndx_c_first (c_first) USING BTREE,
+KEY ndx_c_middle (c_middle) USING BTREE,
+KEY ndx_c_last (c_last) USING BTREE,
+KEY ndx_c_street_1 (c_street_1) USING BTREE,
+KEY ndx_c_street_2 (c_street_2) USING BTREE,
+KEY ndx_c_city (c_city) USING BTREE,
+KEY ndx_c_state (c_state) USING BTREE,
+KEY ndx_c_zip (c_zip) USING BTREE,
+KEY ndx_c_phone (c_phone) USING BTREE,
+KEY ndx_c_since (c_since) USING BTREE,
+KEY ndx_c_credit (c_credit) USING BTREE,
+KEY ndx_c_credit_lim (c_credit_lim) USING BTREE,
+KEY ndx_c_discount (c_discount) USING BTREE,
+KEY ndx_c_balance (c_balance) USING BTREE,
+KEY ndx_c_ytd_payment (c_ytd_payment) USING BTREE,
+KEY ndx_c_payment_cnt (c_payment_cnt) USING BTREE,
+KEY ndx_c_delivery_cnt (c_delivery_cnt) USING BTREE,
+KEY ndx_c_data (c_data) USING BTREE,
+KEY ndx_4_5_6 (c_first,c_middle,c_last) USING BTREE,
+KEY ndx_7_8 (c_street_1,c_street_2) USING BTREE,
+KEY ndx_9_10_11_12 (c_city,c_state,c_zip,c_phone) USING BTREE,
+KEY ndx_13_14 (c_since,c_credit) USING BTREE,
+KEY ndx_15_16_17_18 (c_credit_lim,c_discount,c_balance,c_ytd_payment) USING BTREE,
+KEY ndx_19_20_21 (c_payment_cnt,c_delivery_cnt,c_data) USING BTREE,
+KEY ndx_4_7_9_13_15_19 (c_first,c_street_1,c_city,c_since,c_credit_lim,c_payment_cnt) USING BTREE
+) partition by key(c_w_id) partitions 10;
+insert into t0_key_partition select * from t0;
+CREATE TABLE t0_range_key_subpartition (
+c_id int NOT NULL,
+c_d_id int NOT NULL,
+c_w_id int NOT NULL,
+c_first varchar(16) DEFAULT NULL,
+c_middle char(2) DEFAULT NULL,
+c_last varchar(16) DEFAULT NULL,
+c_street_1 varchar(20) DEFAULT NULL,
+c_street_2 varchar(20) DEFAULT NULL,
+c_city varchar(20) DEFAULT NULL,
+c_state char(2) DEFAULT NULL,
+c_zip char(9) DEFAULT NULL,
+c_phone char(16) DEFAULT NULL,
+c_since timestamp NOT NULL DEFAULT '1970-01-01 16:00:01',
+c_credit char(2) DEFAULT NULL,
+c_credit_lim decimal(12,2) DEFAULT NULL,
+c_discount decimal(4,4) DEFAULT NULL,
+c_balance decimal(12,2) DEFAULT NULL,
+c_ytd_payment decimal(12,2) DEFAULT NULL,
+c_payment_cnt int DEFAULT NULL,
+c_delivery_cnt int DEFAULT NULL,
+c_data varchar(500) DEFAULT NULL,
+PRIMARY KEY (c_w_id,c_d_id,c_id),
+KEY Customer_100W_key (c_w_id,c_d_id,c_last,c_first),
+KEY ndx_c_id (c_id) USING BTREE,
+KEY ndx_c_d_id (c_d_id) USING BTREE,
+KEY ndx_c_w_id (c_w_id) USING BTREE,
+KEY ndx_c_first (c_first) USING BTREE,
+KEY ndx_c_middle (c_middle) USING BTREE,
+KEY ndx_c_last (c_last) USING BTREE,
+KEY ndx_c_street_1 (c_street_1) USING BTREE,
+KEY ndx_c_street_2 (c_street_2) USING BTREE,
+KEY ndx_c_city (c_city) USING BTREE,
+KEY ndx_c_state (c_state) USING BTREE,
+KEY ndx_c_zip (c_zip) USING BTREE,
+KEY ndx_c_phone (c_phone) USING BTREE,
+KEY ndx_c_since (c_since) USING BTREE,
+KEY ndx_c_credit (c_credit) USING BTREE,
+KEY ndx_c_credit_lim (c_credit_lim) USING BTREE,
+KEY ndx_c_discount (c_discount) USING BTREE,
+KEY ndx_c_balance (c_balance) USING BTREE,
+KEY ndx_c_ytd_payment (c_ytd_payment) USING BTREE,
+KEY ndx_c_payment_cnt (c_payment_cnt) USING BTREE,
+KEY ndx_c_delivery_cnt (c_delivery_cnt) USING BTREE,
+KEY ndx_c_data (c_data) USING BTREE,
+KEY ndx_4_5_6 (c_first,c_middle,c_last) USING BTREE,
+KEY ndx_7_8 (c_street_1,c_street_2) USING BTREE,
+KEY ndx_9_10_11_12 (c_city,c_state,c_zip,c_phone) USING BTREE,
+KEY ndx_13_14 (c_since,c_credit) USING BTREE,
+KEY ndx_15_16_17_18 (c_credit_lim,c_discount,c_balance,c_ytd_payment) USING BTREE,
+KEY ndx_19_20_21 (c_payment_cnt,c_delivery_cnt,c_data) USING BTREE,
+KEY ndx_4_7_9_13_15_19 (c_first,c_street_1,c_city,c_since,c_credit_lim,c_payment_cnt) USING BTREE
+) partition by range(c_d_id)
+subpartition by key(c_w_id) subpartitions 10
+(
+partition p1 values less than (15),
+partition p2 values less than (30),
+partition p3 values less than (50),
+partition p4 values less than maxvalue
+);
+insert into t0_range_key_subpartition select * from t0;
+CREATE TABLE t0_hash_partition_p1 (
+c_id int NOT NULL,
+c_d_id int NOT NULL,
+c_w_id int NOT NULL,
+c_first varchar(16) DEFAULT NULL,
+c_middle char(2) DEFAULT NULL,
+c_last varchar(16) DEFAULT NULL,
+c_street_1 varchar(20) DEFAULT NULL,
+c_street_2 varchar(20) DEFAULT NULL,
+c_city varchar(20) DEFAULT NULL,
+c_state char(2) DEFAULT NULL,
+c_zip char(9) DEFAULT NULL,
+c_phone char(16) DEFAULT NULL,
+c_since timestamp NOT NULL DEFAULT '1970-01-01 16:00:01',
+c_credit char(2) DEFAULT NULL,
+c_credit_lim decimal(12,2) DEFAULT NULL,
+c_discount decimal(4,4) DEFAULT NULL,
+c_balance decimal(12,2) DEFAULT NULL,
+c_ytd_payment decimal(12,2) DEFAULT NULL,
+c_payment_cnt int DEFAULT NULL,
+c_delivery_cnt int DEFAULT NULL,
+c_data varchar(500) DEFAULT NULL,
+PRIMARY KEY (c_w_id,c_d_id,c_id),
+KEY Customer_100W_key (c_w_id,c_d_id,c_last,c_first),
+KEY ndx_c_id (c_id) USING BTREE,
+KEY ndx_c_d_id (c_d_id) USING BTREE,
+KEY ndx_c_w_id (c_w_id) USING BTREE,
+KEY ndx_c_first (c_first) USING BTREE,
+KEY ndx_c_middle (c_middle) USING BTREE,
+KEY ndx_c_last (c_last) USING BTREE,
+KEY ndx_c_street_1 (c_street_1) USING BTREE,
+KEY ndx_c_street_2 (c_street_2) USING BTREE,
+KEY ndx_c_city (c_city) USING BTREE,
+KEY ndx_c_state (c_state) USING BTREE,
+KEY ndx_c_zip (c_zip) USING BTREE,
+KEY ndx_c_phone (c_phone) USING BTREE,
+KEY ndx_c_since (c_since) USING BTREE,
+KEY ndx_c_credit (c_credit) USING BTREE,
+KEY ndx_c_credit_lim (c_credit_lim) USING BTREE,
+KEY ndx_c_discount (c_discount) USING BTREE,
+KEY ndx_c_balance (c_balance) USING BTREE,
+KEY ndx_c_ytd_payment (c_ytd_payment) USING BTREE,
+KEY ndx_c_payment_cnt (c_payment_cnt) USING BTREE,
+KEY ndx_c_delivery_cnt (c_delivery_cnt) USING BTREE,
+KEY ndx_c_data (c_data) USING BTREE,
+KEY ndx_4_5_6 (c_first,c_middle,c_last) USING BTREE,
+KEY ndx_7_8 (c_street_1,c_street_2) USING BTREE,
+KEY ndx_9_10_11_12 (c_city,c_state,c_zip,c_phone) USING BTREE,
+KEY ndx_13_14 (c_since,c_credit) USING BTREE,
+KEY ndx_15_16_17_18 (c_credit_lim,c_discount,c_balance,c_ytd_payment) USING BTREE,
+KEY ndx_19_20_21 (c_payment_cnt,c_delivery_cnt,c_data) USING BTREE,
+KEY ndx_4_7_9_13_15_19 (c_first,c_street_1,c_city,c_since,c_credit_lim,c_payment_cnt) USING BTREE
+) partition by hash(c_id) partitions 1;
+insert into t0_hash_partition_p1 select * from t0;
+ANALYZE TABLE t0_range_partition, t0_list_partition, t0_hash_partition, t0_linear_hash_partition, t0_key_partition, t0_range_key_subpartition, t0_hash_partition_p1;
+Table	Op	Msg_type	Msg_text
+test.t0_range_partition	analyze	status	OK
+test.t0_list_partition	analyze	status	OK
+test.t0_hash_partition	analyze	status	OK
+test.t0_linear_hash_partition	analyze	status	OK
+test.t0_key_partition	analyze	status	OK
+test.t0_range_key_subpartition	analyze	status	OK
+test.t0_hash_partition_p1	analyze	status	OK
+create view t0_range_key_subpartition_sub_view as select * from t0_range_key_subpartition where c_d_id < 15 and c_w_id=2 union all select * from t0_range_key_subpartition where c_d_id > 15 and c_d_id<30 and c_w_id=1 union all select * from t0_range_key_subpartition where c_d_id > 30 and  c_d_id<50 and c_w_id=1;
+create view t0_hash_partition_p1_view  as select * from t0_hash_partition_p1;
+create view t0_partition_sub_view_mixed_001 as select * from t0_range_partition where c_d_id <15 Union all select * from t0_list_partition where c_w_id in (0,2) union all select * from t0_key_partition where c_w_id = 4 union all select * from t0_linear_hash_partition where c_w_id = 5 union select * from t0_hash_partition where c_w_id =8;
+#BUG2021081001512: the view query is located into one outer query that is optimized to
+#produce zero-result, then we have not set the shared structure of view, leading to
+#the coredump when creating access path.
+explain format=tree select
+ref_12.c_delivery_cnt AS c0
+FROM   (SELECT sub_1.id as c13
+FROM   t0_sub_1 AS ref_0
+LEFT JOIN  (select 1 from t0_sub_1 inner join t0_sub_union as ref_1 on (false)) AS sub_1(id)
+ON ( false )
+WHERE  ref_0.c_id IS NOT NULL) AS subq_0
+LEFT JOIN (SELECT ref_2.c_credit AS c0
+FROM   t0_hash_partition_p1 AS ref_2
+LEFT JOIN t0_hash_partition_p1 AS ref_3
+ON ( Pi() IS NOT NULL )) AS subq_2
+LEFT JOIN t0_sub_union AS ref_11
+RIGHT JOIN t0_hash_partition_p1 AS ref_12
+ON ( ( ( true )
+AND ( ref_12.c_discount IS NULL ) )
+AND ( false ) )
+ON ( true )
+ON ( ( ref_11.c_street_1 IS NOT NULL )
+AND ( ref_11.c_w_id IS NULL ) )
+WHERE  ( subq_0.c13 IS NULL )
+GROUP  BY 1
+ORDER  BY 1;
+EXPLAIN
+-> Sort: ref_12.c_delivery_cnt
+    -> Table scan on <temporary>  (...)
+        -> Temporary table with deduplication  (...)
+            -> Nested loop left join  (...)
+                -> Filter: (1 is null)  (...)
+                    -> Nested loop left join  (...)
+                        -> Filter: ((t0.c_id = 1) or (t0.c_d_id = 2) or (t0.c_w_id = 3))  (...)
+                            -> Index scan on t0 using PRIMARY  (...)
+                        -> Nested loop inner join  (...)
+                            -> Zero rows (Impossible filter)  (...)
+                            -> Table scan on ref_1  (...)
+                                -> Union materialize with deduplication  (...)
+                                    -> Gather: 4 workers, parallel scan on t0  (...)
+                                        -> Parallel table scan on t0  (...)
+                                    -> Gather: 4 workers, parallel scan on t0  (...)
+                                        -> Filter: ((t0.c_id = 1) or (t0.c_d_id = 2) or (t0.c_w_id = 3))  (...)
+                                            -> Parallel table scan on t0  (...)
+                -> Nested loop inner join  (...)
+                    -> Nested loop left join  (...)
+                        -> Nested loop inner join  (...)
+                            -> Zero rows (Impossible filter)  (...)
+                            -> Index scan on ref_2 using ndx_c_discount  (...)
+                        -> Index scan on ref_3 using ndx_c_discount  (...)
+                    -> Table scan on ref_11  (...)
+                        -> Union materialize with deduplication  (...)
+                            -> Gather: 4 workers, parallel scan on t0  (...)
+                                -> Parallel table scan on t0  (...)
+                            -> Gather: 4 workers, parallel scan on t0  (...)
+                                -> Filter: ((t0.c_id = 1) or (t0.c_d_id = 2) or (t0.c_w_id = 3))  (...)
+                                    -> Parallel table scan on t0  (...)
+
+select
+ref_12.c_delivery_cnt AS c0
+FROM   (SELECT sub_1.id as c13
+FROM   t0_sub_1 AS ref_0
+LEFT JOIN  (select 1 from t0_sub_1 inner join t0_sub_union as ref_1 on (false)) AS sub_1(id)
+ON ( false )
+WHERE  ref_0.c_id IS NOT NULL) AS subq_0
+LEFT JOIN (SELECT ref_2.c_credit AS c0
+FROM   t0_hash_partition_p1 AS ref_2
+LEFT JOIN t0_hash_partition_p1 AS ref_3
+ON ( Pi() IS NOT NULL )) AS subq_2
+LEFT JOIN t0_sub_union AS ref_11
+RIGHT JOIN t0_hash_partition_p1 AS ref_12
+ON ( ( ( true )
+AND ( ref_12.c_discount IS NULL ) )
+AND ( false ) )
+ON ( true )
+ON ( ( ref_11.c_street_1 IS NOT NULL )
+AND ( ref_11.c_w_id IS NULL ) )
+WHERE  ( subq_0.c13 IS NULL )
+GROUP  BY 1
+ORDER  BY 1;
+c0
+NULL
+#BUG2021080901230: reset NULL row flag will lead hash join read
+#uncorrect data which should be a NULL-complemented row after
+#re-fill hash table.
+SET @save_join_buffer_size = @@join_buffer_size;
+SET @@join_buffer_size = 16384;
+EXPLAIN FORMAT=tree SELECT /*+ JOIN_ORDER(ref_4, t0) */ ref_6.c0 AS c1, ref_5.c_since AS c3 FROM t5 AS ref_4 RIGHT JOIN t0 AS ref_5 RIGHT JOIN tx_cmplx_005 AS ref_6 ON (ref_5.c_city = ref_6.c0) ON (true) INNER JOIN t0_sub_1 AS ref_15 ON (true) LIMIT 47486, 3;
+EXPLAIN
+-> Limit/Offset: 3/47486 row(s)  (...)
+    -> Gather: 4 workers, parallel scan on ref_0, t0  (...)
+        -> Limit: 47489 row(s)  (...)
+            -> Inner hash join, hash table shared by worker threads (no condition)  (...)
+                -> Filter: ((t0.c_id = 1) or (t0.c_d_id = 2) or (t0.c_w_id = 3))  (...)
+                    -> Parallel index scan on t0 using PRIMARY  (...)
+                -> Hash
+                    -> Left hash join, one hash table per worker (no condition)  (...)
+                        -> Nested loop left join  (...)
+                            -> Parallel index scan on ref_0 using ndx_c_last  (...)
+                            -> Index lookup on ref_5 using ndx_c_city (c_city=cast(nullif(<cache>(rtrim(subq_7.c2)),ref_0.c_last) as char charset utf8mb4)), with index condition: <if>(is_not_null_compl(ref_5), (ref_5.c_city = cast(nullif(<cache>(rtrim(subq_7.c2)),ref_0.c_last) as char charset utf8mb4)), true)  (...)
+                        -> Hash
+                            -> Index scan on ref_4 using ndx_c_id  (...)
+
+Warnings:
+Note	1276	Field or reference 'test.ref_2.c_street_1' of SELECT #4 was resolved in SELECT #3
+Note	1276	Field or reference 'test.ref_2.c_zip' of SELECT #4 was resolved in SELECT #3
+SELECT /*+ JOIN_ORDER(ref_4, t0) */ ref_6.c0 AS c1, ref_5.c_since AS c3 FROM t5 AS ref_4 RIGHT JOIN t0 AS ref_5 RIGHT JOIN tx_cmplx_005 AS ref_6 ON (ref_5.c_city = ref_6.c0) ON (true) INNER JOIN t0_sub_1 AS ref_15 ON (true) LIMIT 47486, 3;
+c1	c3
+NULL	NULL
+NULL	NULL
+NULL	NULL
+SET @@join_buffer_size= @save_join_buffer_size;
+#BUG2021080601522: reset NULL row flag will lead hash join core
+#in storing row ID which should be a NULL-complemented row after
+#re-fill hash table;
+EXPLAIN FORMAT=tree select  
+subq_0.c2 as c0, 
+subq_1.c2 as c1, 
+subq_1.c2 as c2, 
+subq_2.c0 as c3
+from 
+(select  
+ref_0.C_MIDDLE as c0, 
+ref_1.c_middle as c1, 
+ref_0.C_PHONE as c2
+from 
+t10 as ref_0
+inner join t0_sub_1 as ref_1
+on (false)
+where false
+) as subq_0
+right join (select  
+ref_2.c_d_id as c0, 
+ref_2.c_street_2 as c1, 
+ref_2.c_id as c2
+from 
+t0 as ref_2
+) as subq_1
+on (subq_1.c2 is not NULL)
+right join (select  
+lpad(
+ref_4.c_middle,
+log2(
+locate(
+ref_4.c_middle,
+ref_4.c_street_1)),
+ref_4.c_middle) as c0
+from 
+t5 as ref_4
+inner join tx_cmplx_003 as ref_5
+on (ref_5.c6 is not NULL)
+where ref_4.c_state is NULL
+) as subq_2
+on (EXISTS (
+select  
+subq_2.c0 as c0, 
+pi() as c1, 
+ref_6.c_w_id as c2, 
+subq_0.c1 as c3
+from 
+t0_sub_union as ref_6
+where ref_6.c_middle is NULL
+))
+where EXISTS (
+select  
+ref_17.C_END as c0
+from 
+tx_cmplx_005 as ref_12
+right join t5 as ref_13
+right join tx_cmplx_004 as ref_14
+on (ref_13.c_city = ref_14.c3 )
+inner join tx_cmplx_004 as ref_15
+left join t12 as ref_16
+on (true)
+on (true)
+on (ref_16.C_STREET_2 is not NULL)
+right join t12 as ref_17
+right join t0_sub_1 as ref_18
+on (true)
+on (ref_12.c1 = ref_18.c_street_1 )
+where (EXISTS (
+select  
+ref_15.c2 as c0, 
+ref_15.c3 as c1, 
+pi() as c2, 
+subq_1.c1 as c3
+from 
+t0 as ref_19
+inner join tx_cmplx_005 as ref_20
+on (false)
+left join tx_cmplx_001 as ref_21
+on (false)
+inner join t5 as ref_22
+on ((ref_20.c1 is NULL) and (ref_21.c2 is NULL))
+where (mod(
+ref_17.C_PAYMENT_CNT,
+ref_19.c_d_id) is not NULL)
+)) 
+or (ref_16.C_SINCE is NULL)
+)
+group by 1,2,3,4
+order by 1,2,3,4;
+EXPLAIN
+-> Sort row IDs: c0, c1, c3
+    -> Table scan on <temporary>  (...)
+        -> Temporary table with deduplication  (...)
+            -> Remove duplicate (ref_4, ref_5, ref_2, <subquery5>, ref_0, t0) rows using temporary table (weedout)  (...)
+                -> Filter: (exists(select #7) or (ref_16.C_SINCE is null))  (...)
+                    -> Nested loop left join  (...)
+                        -> Left hash join, one hash table per worker (no condition)  (...)
+                            -> Nested loop left join  (...)
+                                -> Inner hash join, one hash table per worker (no condition)  (...)
+                                    -> Filter: ((t0.c_id = 1) or (t0.c_d_id = 2) or (t0.c_w_id = 3))  (...)
+                                        -> Table scan on t0  (...)
+                                    -> Hash
+                                        -> Inner hash join, one hash table per worker (no condition)  (...)
+                                            -> Table scan on ref_5  (...)
+                                                -> Materialize  (...)
+                                                    -> Sort: subq_1.c0
+                                                        -> Table scan on <temporary>  (...)
+                                                            -> Temporary table with deduplication  (...)
+                                                                -> Gather: 4 workers, parallel scan on ref_1, ref_0  (...)
+                                                                    -> Table scan on <temporary>  (...)
+                                                                        -> Temporary table with deduplication  (...)
+                                                                            -> Left hash join, hash table shared by worker threads (no condition)  (...)
+                                                                                -> Parallel index scan on ref_0 using ndx_C_BIT  (...)
+                                                                                -> Hash
+                                                                                    -> Filter: ((ref_1.c_ytd_payment is not null) and (ref_1.c_first is null))  (...)
+                                                                                        -> Parallel table scan on ref_1  (...)
+                                            -> Hash
+                                                -> Index lookup on ref_4 using ndx_c_state (c_state=NULL), with index condition: (ref_4.c_state is null)  (...)
+                                -> Nested loop inner join  (...)
+                                    -> Nested loop inner join  (...)
+                                        -> Nested loop left join  (...)
+                                            -> Nested loop inner join  (...)
+                                                -> Nested loop inner join  (...)
+                                                    -> Filter: (subq_7.c4 = t0.c_street_1)  (...)
+                                                        -> Table scan on subq_7  (...)
+                                                            -> Materialize  (...)
+                                                                -> Zero rows (Impossible WHERE)  (...)
+                                                    -> Index range scan on ref_16 using ndx_C_STREET_2 over (NULL < C_STREET_2), with index condition: <if>(is_not_null_compl(subq_7..ref_0), (ref_16.C_STREET_2 is not null), true)  (...)
+                                                -> Table scan on ref_14  (...)
+                                                    -> Materialize  (...)
+                                                        -> Sort: subq_0.c2, `(case when false then ref_0.C_STREET_2 else ref_0.C_STREET_2 end)`
+                                                            -> Table scan on <temporary>  (...)
+                                                                -> Temporary table with deduplication  (...)
+                                                                    -> Gather: 4 workers, parallel scan on ref_0  (...)
+                                                                        -> Table scan on <temporary>  (...)
+                                                                            -> Temporary table with deduplication  (...)
+                                                                                -> Parallel table scan on ref_0  (...)
+                                            -> Filter: (ref_13.c_city = ref_14.c3)  (...)
+                                                -> Covering index lookup on ref_13 using ndx_c_city (c_city=ref_14.c3)  (...)
+                                        -> Table scan on ref_15  (...)
+                                            -> Materialize  (...)
+                                                -> Sort: subq_0.c2, `(case when false then ref_0.C_STREET_2 else ref_0.C_STREET_2 end)`
+                                                    -> Table scan on <temporary>  (...)
+                                                        -> Temporary table with deduplication  (...)
+                                                            -> Gather: 4 workers, parallel scan on ref_0  (...)
+                                                                -> Table scan on <temporary>  (...)
+                                                                    -> Temporary table with deduplication  (...)
+                                                                        -> Parallel table scan on ref_0  (...)
+                                    -> Index scan on ref_0 using ndx_c_id  (...)
+                            -> Hash
+                                -> Table scan on ref_17  (...)
+                        -> Nested loop left join  (...)
+                            -> Nested loop inner join  (...)
+                                -> Index scan on ref_2 using ndx_c_street_2  (...)
+                                -> Constant row from <subquery5>  (...)
+                                    -> Materialize with deduplication  (...)
+                                        -> Filter: (ref_6.c_middle is null)  (...)
+                                            -> Index lookup on ref_6 using <auto_key1> (c_middle=NULL)  (...)
+                                                -> Union materialize with deduplication  (...)
+                                                    -> Gather: 4 workers, parallel scan on t0  (...)
+                                                        -> Parallel table scan on t0  (...)
+                                                    -> Gather: 4 workers, parallel scan on t0  (...)
+                                                        -> Filter: ((t0.c_id = 1) or (t0.c_d_id = 2) or (t0.c_w_id = 3))  (...)
+                                                            -> Parallel table scan on t0  (...)
+                            -> Nested loop inner join  (...)
+                                -> Zero rows (Impossible filter)  (...)
+                                -> Table scan on t0  (...)
+                    -> Select #7 (subquery in condition; dependent)
+                        -> Zero rows (Impossible WHERE)  (...)
+
+select  
+subq_0.c2 as c0, 
+subq_1.c2 as c1, 
+subq_1.c2 as c2, 
+subq_2.c0 as c3
+from 
+(select  
+ref_0.C_MIDDLE as c0, 
+ref_1.c_middle as c1, 
+ref_0.C_PHONE as c2
+from 
+t10 as ref_0
+inner join t0_sub_1 as ref_1
+on (false)
+where false
+) as subq_0
+right join (select  
+ref_2.c_d_id as c0, 
+ref_2.c_street_2 as c1, 
+ref_2.c_id as c2
+from 
+t0 as ref_2
+) as subq_1
+on (subq_1.c2 is not NULL)
+right join (select  
+lpad(
+ref_4.c_middle,
+log2(
+locate(
+ref_4.c_middle,
+ref_4.c_street_1)),
+ref_4.c_middle) as c0
+from 
+t5 as ref_4
+inner join tx_cmplx_003 as ref_5
+on (ref_5.c6 is not NULL)
+where ref_4.c_state is NULL
+) as subq_2
+on (EXISTS (
+select  
+subq_2.c0 as c0, 
+pi() as c1, 
+ref_6.c_w_id as c2, 
+subq_0.c1 as c3
+from 
+t0_sub_union as ref_6
+where ref_6.c_middle is NULL
+))
+where EXISTS (
+select  
+ref_17.C_END as c0
+from 
+tx_cmplx_005 as ref_12
+right join t5 as ref_13
+right join tx_cmplx_004 as ref_14
+on (ref_13.c_city = ref_14.c3 )
+inner join tx_cmplx_004 as ref_15
+left join t12 as ref_16
+on (true)
+on (true)
+on (ref_16.C_STREET_2 is not NULL)
+right join t12 as ref_17
+right join t0_sub_1 as ref_18
+on (true)
+on (ref_12.c1 = ref_18.c_street_1 )
+where (EXISTS (
+select  
+ref_15.c2 as c0, 
+ref_15.c3 as c1, 
+pi() as c2, 
+subq_1.c1 as c3
+from 
+t0 as ref_19
+inner join tx_cmplx_005 as ref_20
+on (false)
+left join tx_cmplx_001 as ref_21
+on (false)
+inner join t5 as ref_22
+on ((ref_20.c1 is NULL) and (ref_21.c2 is NULL))
+where (mod(
+ref_17.C_PAYMENT_CNT,
+ref_19.c_d_id) is not NULL)
+)) 
+or (ref_16.C_SINCE is NULL)
+)
+group by 1,2,3,4
+order by 1,2,3,4;
+c0	c1	c2	c3
+NULL	1	1	NULL
+NULL	2	2	NULL
+NULL	3	3	NULL
+NULL	4	4	NULL
+NULL	5	5	NULL
+NULL	6	6	NULL
+NULL	7	7	NULL
+NULL	8	8	NULL
+NULL	9	9	NULL
+NULL	9937	9937	NULL
+NULL	10102	10102	NULL
+NULL	12751	12751	NULL
+NULL	14235	14235	NULL
+NULL	15219	15219	NULL
+NULL	18033	18033	NULL
+NULL	18578	18578	NULL
+NULL	19090	19090	NULL
+NULL	24356	24356	NULL
+NULL	36676	36676	NULL
+NULL	38112	38112	NULL
+NULL	41278	41278	NULL
+NULL	44967	44967	NULL
+NULL	49181	49181	NULL
+NULL	49558	49558	NULL
+NULL	54472	54472	NULL
+NULL	55246	55246	NULL
+NULL	58675	58675	NULL
+NULL	58964	58964	NULL
+NULL	59016	59016	NULL
+NULL	60543	60543	NULL
+NULL	63169	63169	NULL
+NULL	69707	69707	NULL
+NULL	70027	70027	NULL
+NULL	72340	72340	NULL
+NULL	74367	74367	NULL
+NULL	77492	77492	NULL
+NULL	77872	77872	NULL
+NULL	79749	79749	NULL
+NULL	81380	81380	NULL
+NULL	82472	82472	NULL
+NULL	83878	83878	NULL
+NULL	84508	84508	NULL
+NULL	92380	92380	NULL
+NULL	95469	95469	NULL
+NULL	96376	96376	NULL
+NULL	96913	96913	NULL
+NULL	97094	97094	NULL
+NULL	98564	98564	NULL
+NULL	100482	100482	NULL
+NULL	102436	102436	NULL
+NULL	103796	103796	NULL
+NULL	103811	103811	NULL
+NULL	104035	104035	NULL
+NULL	104556	104556	NULL
+NULL	106841	106841	NULL
+NULL	107190	107190	NULL
+NULL	107331	107331	NULL
+NULL	108879	108879	NULL
+NULL	114385	114385	NULL
+NULL	115085	115085	NULL
+NULL	117759	117759	NULL
+NULL	118001	118001	NULL
+NULL	118016	118016	NULL
+NULL	123812	123812	NULL
+NULL	128430	128430	NULL
+NULL	129126	129126	NULL
+NULL	131053	131053	NULL
+NULL	132193	132193	NULL
+NULL	134160	134160	NULL
+NULL	134250	134250	NULL
+NULL	135194	135194	NULL
+NULL	137174	137174	NULL
+NULL	138148	138148	NULL
+NULL	138261	138261	NULL
+NULL	138547	138547	NULL
+NULL	138969	138969	NULL
+NULL	141054	141054	NULL
+NULL	144292	144292	NULL
+NULL	144763	144763	NULL
+NULL	149608	149608	NULL
+NULL	150642	150642	NULL
+NULL	151617	151617	NULL
+NULL	152310	152310	NULL
+NULL	154163	154163	NULL
+NULL	163021	163021	NULL
+NULL	163617	163617	NULL
+NULL	166747	166747	NULL
+NULL	167038	167038	NULL
+NULL	168375	168375	NULL
+NULL	169725	169725	NULL
+NULL	171187	171187	NULL
+NULL	172410	172410	NULL
+NULL	173677	173677	NULL
+NULL	176005	176005	NULL
+NULL	178451	178451	NULL
+NULL	180674	180674	NULL
+NULL	181206	181206	NULL
+NULL	190241	190241	NULL
+NULL	200399	200399	NULL
+NULL	202211	202211	NULL
+NULL	209202	209202	NULL
+NULL	209747	209747	NULL
+NULL	209753	209753	NULL
+NULL	210737	210737	NULL
+NULL	212282	212282	NULL
+NULL	212555	212555	NULL
+NULL	214603	214603	NULL
+NULL	215638	215638	NULL
+NULL	221330	221330	NULL
+NULL	223926	223926	NULL
+NULL	224358	224358	NULL
+NULL	227091	227091	NULL
+NULL	227440	227440	NULL
+NULL	228007	228007	NULL
+NULL	229116	229116	NULL
+NULL	229269	229269	NULL
+NULL	230498	230498	NULL
+NULL	235458	235458	NULL
+NULL	236732	236732	NULL
+NULL	238954	238954	NULL
+NULL	245163	245163	NULL
+NULL	249245	249245	NULL
+NULL	250530	250530	NULL
+NULL	252570	252570	NULL
+NULL	258167	258167	NULL
+NULL	258657	258657	NULL
+NULL	262976	262976	NULL
+NULL	263337	263337	NULL
+NULL	263399	263399	NULL
+NULL	264472	264472	NULL
+NULL	267639	267639	NULL
+NULL	269908	269908	NULL
+NULL	271114	271114	NULL
+NULL	271376	271376	NULL
+NULL	272039	272039	NULL
+NULL	280628	280628	NULL
+NULL	281959	281959	NULL
+NULL	282423	282423	NULL
+NULL	282792	282792	NULL
+NULL	283264	283264	NULL
+NULL	284859	284859	NULL
+NULL	284960	284960	NULL
+NULL	286262	286262	NULL
+NULL	290191	290191	NULL
+NULL	292572	292572	NULL
+NULL	293188	293188	NULL
+NULL	293837	293837	NULL
+NULL	294062	294062	NULL
+NULL	294342	294342	NULL
+NULL	295633	295633	NULL
+NULL	296646	296646	NULL
+NULL	300295	300295	NULL
+NULL	302087	302087	NULL
+NULL	303806	303806	NULL
+NULL	307536	307536	NULL
+NULL	310770	310770	NULL
+NULL	311105	311105	NULL
+NULL	311212	311212	NULL
+NULL	311643	311643	NULL
+NULL	317616	317616	NULL
+NULL	318405	318405	NULL
+NULL	318599	318599	NULL
+NULL	318903	318903	NULL
+NULL	318925	318925	NULL
+NULL	321446	321446	NULL
+NULL	324021	324021	NULL
+NULL	324127	324127	NULL
+NULL	326740	326740	NULL
+NULL	331964	331964	NULL
+NULL	332314	332314	NULL
+NULL	332880	332880	NULL
+NULL	335721	335721	NULL
+NULL	336378	336378	NULL
+NULL	336834	336834	NULL
+NULL	339028	339028	NULL
+NULL	342915	342915	NULL
+NULL	343011	343011	NULL
+NULL	345468	345468	NULL
+NULL	350765	350765	NULL
+NULL	350821	350821	NULL
+NULL	362418	362418	NULL
+NULL	364108	364108	NULL
+NULL	365186	365186	NULL
+NULL	366489	366489	NULL
+NULL	367725	367725	NULL
+NULL	369841	369841	NULL
+NULL	375190	375190	NULL
+NULL	375293	375293	NULL
+NULL	376155	376155	NULL
+NULL	377243	377243	NULL
+NULL	378541	378541	NULL
+NULL	382204	382204	NULL
+NULL	383530	383530	NULL
+NULL	384966	384966	NULL
+NULL	388087	388087	NULL
+NULL	390527	390527	NULL
+NULL	391446	391446	NULL
+NULL	397139	397139	NULL
+NULL	397646	397646	NULL
+NULL	398868	398868	NULL
+NULL	401365	401365	NULL
+NULL	402370	402370	NULL
+NULL	403448	403448	NULL
+NULL	408128	408128	NULL
+NULL	409118	409118	NULL
+NULL	409756	409756	NULL
+NULL	410086	410086	NULL
+NULL	411978	411978	NULL
+NULL	417469	417469	NULL
+NULL	420880	420880	NULL
+NULL	420910	420910	NULL
+NULL	425602	425602	NULL
+NULL	431207	431207	NULL
+NULL	432866	432866	NULL
+NULL	433626	433626	NULL
+NULL	433946	433946	NULL
+NULL	443598	443598	NULL
+NULL	449176	449176	NULL
+NULL	451104	451104	NULL
+NULL	455305	455305	NULL
+NULL	460081	460081	NULL
+NULL	460422	460422	NULL
+NULL	461316	461316	NULL
+NULL	462913	462913	NULL
+NULL	463888	463888	NULL
+NULL	463894	463894	NULL
+NULL	470274	470274	NULL
+NULL	473831	473831	NULL
+NULL	475151	475151	NULL
+NULL	476444	476444	NULL
+NULL	476623	476623	NULL
+NULL	479390	479390	NULL
+NULL	480003	480003	NULL
+NULL	481061	481061	NULL
+NULL	481956	481956	NULL
+NULL	482677	482677	NULL
+NULL	485272	485272	NULL
+NULL	493333	493333	NULL
+NULL	494540	494540	NULL
+NULL	497967	497967	NULL
+NULL	501242	501242	NULL
+NULL	501467	501467	NULL
+NULL	502420	502420	NULL
+NULL	507416	507416	NULL
+NULL	507926	507926	NULL
+NULL	509123	509123	NULL
+NULL	509441	509441	NULL
+NULL	510847	510847	NULL
+NULL	512808	512808	NULL
+NULL	515270	515270	NULL
+NULL	515412	515412	NULL
+NULL	515665	515665	NULL
+NULL	516494	516494	NULL
+NULL	517461	517461	NULL
+NULL	517496	517496	NULL
+NULL	518681	518681	NULL
+NULL	519136	519136	NULL
+NULL	519286	519286	NULL
+NULL	521805	521805	NULL
+NULL	522216	522216	NULL
+NULL	525902	525902	NULL
+NULL	525981	525981	NULL
+NULL	528792	528792	NULL
+NULL	528794	528794	NULL
+NULL	533268	533268	NULL
+NULL	533511	533511	NULL
+NULL	533960	533960	NULL
+NULL	539597	539597	NULL
+NULL	539919	539919	NULL
+NULL	542459	542459	NULL
+NULL	542686	542686	NULL
+NULL	547733	547733	NULL
+NULL	550949	550949	NULL
+NULL	554545	554545	NULL
+NULL	554650	554650	NULL
+NULL	555795	555795	NULL
+NULL	555990	555990	NULL
+NULL	558186	558186	NULL
+NULL	560164	560164	NULL
+NULL	561149	561149	NULL
+NULL	563538	563538	NULL
+NULL	570904	570904	NULL
+NULL	571535	571535	NULL
+NULL	573909	573909	NULL
+NULL	574160	574160	NULL
+NULL	574322	574322	NULL
+NULL	579743	579743	NULL
+NULL	583290	583290	NULL
+NULL	583311	583311	NULL
+NULL	586735	586735	NULL
+NULL	586786	586786	NULL
+NULL	587231	587231	NULL
+NULL	587378	587378	NULL
+NULL	591678	591678	NULL
+NULL	594172	594172	NULL
+NULL	595566	595566	NULL
+NULL	596010	596010	NULL
+NULL	597096	597096	NULL
+NULL	598479	598479	NULL
+NULL	599621	599621	NULL
+NULL	599771	599771	NULL
+NULL	606763	606763	NULL
+NULL	607075	607075	NULL
+NULL	608108	608108	NULL
+NULL	608136	608136	NULL
+NULL	609735	609735	NULL
+NULL	609893	609893	NULL
+NULL	612409	612409	NULL
+NULL	615272	615272	NULL
+NULL	616648	616648	NULL
+NULL	618578	618578	NULL
+NULL	620922	620922	NULL
+NULL	624531	624531	NULL
+NULL	625069	625069	NULL
+NULL	628533	628533	NULL
+NULL	630854	630854	NULL
+NULL	631820	631820	NULL
+NULL	632757	632757	NULL
+NULL	635422	635422	NULL
+NULL	638279	638279	NULL
+NULL	639988	639988	NULL
+NULL	640551	640551	NULL
+NULL	642891	642891	NULL
+NULL	644981	644981	NULL
+NULL	646599	646599	NULL
+NULL	647075	647075	NULL
+NULL	649906	649906	NULL
+NULL	651412	651412	NULL
+NULL	653262	653262	NULL
+NULL	654893	654893	NULL
+NULL	655513	655513	NULL
+NULL	656883	656883	NULL
+NULL	658617	658617	NULL
+NULL	669838	669838	NULL
+NULL	675997	675997	NULL
+NULL	679111	679111	NULL
+NULL	679689	679689	NULL
+NULL	680762	680762	NULL
+NULL	683392	683392	NULL
+NULL	684730	684730	NULL
+NULL	689765	689765	NULL
+NULL	692786	692786	NULL
+NULL	694881	694881	NULL
+NULL	695226	695226	NULL
+NULL	699834	699834	NULL
+NULL	700709	700709	NULL
+NULL	708724	708724	NULL
+NULL	712127	712127	NULL
+NULL	712438	712438	NULL
+NULL	717431	717431	NULL
+NULL	721330	721330	NULL
+NULL	721395	721395	NULL
+NULL	722233	722233	NULL
+NULL	722409	722409	NULL
+NULL	724241	724241	NULL
+NULL	724707	724707	NULL
+NULL	726647	726647	NULL
+NULL	729467	729467	NULL
+NULL	730732	730732	NULL
+NULL	732985	732985	NULL
+NULL	735745	735745	NULL
+NULL	736597	736597	NULL
+NULL	737143	737143	NULL
+NULL	737924	737924	NULL
+NULL	740612	740612	NULL
+NULL	741687	741687	NULL
+NULL	743030	743030	NULL
+NULL	743801	743801	NULL
+NULL	751961	751961	NULL
+NULL	754432	754432	NULL
+NULL	755079	755079	NULL
+NULL	755480	755480	NULL
+NULL	757846	757846	NULL
+NULL	760184	760184	NULL
+NULL	762828	762828	NULL
+NULL	764094	764094	NULL
+NULL	766023	766023	NULL
+NULL	766593	766593	NULL
+NULL	767226	767226	NULL
+NULL	769324	769324	NULL
+NULL	769446	769446	NULL
+NULL	770732	770732	NULL
+NULL	771649	771649	NULL
+NULL	778959	778959	NULL
+NULL	784177	784177	NULL
+NULL	784713	784713	NULL
+NULL	785831	785831	NULL
+NULL	786968	786968	NULL
+NULL	788205	788205	NULL
+NULL	788697	788697	NULL
+NULL	789004	789004	NULL
+NULL	789277	789277	NULL
+NULL	789771	789771	NULL
+NULL	791948	791948	NULL
+NULL	795788	795788	NULL
+NULL	798323	798323	NULL
+NULL	798590	798590	NULL
+NULL	799804	799804	NULL
+NULL	801060	801060	NULL
+NULL	803380	803380	NULL
+NULL	803568	803568	NULL
+NULL	803968	803968	NULL
+NULL	805445	805445	NULL
+NULL	808138	808138	NULL
+NULL	809547	809547	NULL
+NULL	812522	812522	NULL
+NULL	813557	813557	NULL
+NULL	814432	814432	NULL
+NULL	814436	814436	NULL
+NULL	815907	815907	NULL
+NULL	816817	816817	NULL
+NULL	817015	817015	NULL
+NULL	817523	817523	NULL
+NULL	824343	824343	NULL
+NULL	828538	828538	NULL
+NULL	831874	831874	NULL
+NULL	834630	834630	NULL
+NULL	836724	836724	NULL
+NULL	838213	838213	NULL
+NULL	839506	839506	NULL
+NULL	840491	840491	NULL
+NULL	844658	844658	NULL
+NULL	851807	851807	NULL
+NULL	854686	854686	NULL
+NULL	860000	860000	NULL
+NULL	862354	862354	NULL
+NULL	869999	869999	NULL
+NULL	870337	870337	NULL
+NULL	870407	870407	NULL
+NULL	872037	872037	NULL
+NULL	873427	873427	NULL
+NULL	877294	877294	NULL
+NULL	884097	884097	NULL
+NULL	886849	886849	NULL
+NULL	887292	887292	NULL
+NULL	888322	888322	NULL
+NULL	889247	889247	NULL
+NULL	901714	901714	NULL
+NULL	902686	902686	NULL
+NULL	905249	905249	NULL
+NULL	907879	907879	NULL
+NULL	908693	908693	NULL
+NULL	910534	910534	NULL
+NULL	913982	913982	NULL
+NULL	914789	914789	NULL
+NULL	915303	915303	NULL
+NULL	915928	915928	NULL
+NULL	917342	917342	NULL
+NULL	917615	917615	NULL
+NULL	919362	919362	NULL
+NULL	920538	920538	NULL
+NULL	924084	924084	NULL
+NULL	924192	924192	NULL
+NULL	924903	924903	NULL
+NULL	925090	925090	NULL
+NULL	928057	928057	NULL
+NULL	928680	928680	NULL
+NULL	933980	933980	NULL
+NULL	938099	938099	NULL
+NULL	938473	938473	NULL
+NULL	943157	943157	NULL
+NULL	943958	943958	NULL
+NULL	947783	947783	NULL
+NULL	951971	951971	NULL
+NULL	953044	953044	NULL
+NULL	954564	954564	NULL
+NULL	959075	959075	NULL
+NULL	959564	959564	NULL
+NULL	962878	962878	NULL
+NULL	962982	962982	NULL
+NULL	963928	963928	NULL
+NULL	964545	964545	NULL
+NULL	965228	965228	NULL
+NULL	966516	966516	NULL
+NULL	967306	967306	NULL
+NULL	974266	974266	NULL
+NULL	974939	974939	NULL
+NULL	976352	976352	NULL
+NULL	977653	977653	NULL
+NULL	980222	980222	NULL
+NULL	982543	982543	NULL
+NULL	983698	983698	NULL
+NULL	985923	985923	NULL
+NULL	993159	993159	NULL
+NULL	993215	993215	NULL
+NULL	994075	994075	NULL
+NULL	995426	995426	NULL
+NULL	996094	996094	NULL
+NULL	996757	996757	NULL
+NULL	997110	997110	NULL
+NULL	999016	999016	NULL
+NULL	999138	999138	NULL
+set @opt_sw_save= @@optimizer_switch;
+set optimizer_switch = 'derived_merge=off';
+BUG2022022401743: table subq_0 contains two columns c1 and c2, while
+we alias subq_0.c2 as c1. When the query contains group by c2, PQ worker
+resolves to error column.
+EXPLAIN FORMAT=tree SELECT
+subq_0.c2 AS c1,
+subq_0.c2 AS c2,
+(CASE
+WHEN false THEN subq_0.c1
+ELSE subq_0.c1
+end ) AS c3
+FROM (SELECT ref_0.c_street_2 AS c1,
+ref_0.c_bit AS c2
+FROM   t10 ref_0) subq_0
+GROUP BY
+subq_0.c2,
+subq_0.c2,
+(CASE
+WHEN false THEN subq_0.c1
+ELSE subq_0.c1
+end)
+ORDER BY
+subq_0.c2,
+subq_0.c2,
+(CASE
+WHEN false THEN subq_0.c1
+ELSE subq_0.c1
+end);
+EXPLAIN
+-> Sort: subq_0.c2, c3
+    -> Table scan on <temporary>  (...)
+        -> Temporary table with deduplication  (...)
+            -> Gather: 4 workers, parallel scan on subq_0  (...)
+                -> Table scan on <temporary>  (...)
+                    -> Temporary table with deduplication  (...)
+                        -> Parallel table scan on subq_0  (...)
+                            -> Materialize  (...)
+                                -> Gather: 4 workers, parallel scan on ref_0  (...)
+                                    -> Parallel table scan on ref_0  (...)
+
+SELECT
+subq_0.c2 AS c1,
+subq_0.c2 AS c2,
+(CASE
+WHEN false THEN subq_0.c1
+ELSE subq_0.c1
+end ) AS c3
+FROM (SELECT ref_0.c_street_2 AS c1,
+ref_0.c_bit AS c2
+FROM   t10 ref_0) subq_0
+GROUP BY
+subq_0.c2,
+subq_0.c2,
+(CASE
+WHEN false THEN subq_0.c1
+ELSE subq_0.c1
+end)
+ORDER BY
+subq_0.c2,
+subq_0.c2,
+(CASE
+WHEN false THEN subq_0.c1
+ELSE subq_0.c1
+end);
+c1	c2	c3
+NULL	NULL	NULL
+EXPLAIN FORMAT=tree select
+40 as c0
+from
+(select
+ref_0.c1 as c0,
+ref_2.c3 as c1,
+pi() as c2
+from
+tx_cmplx_004 as ref_0
+inner join t1 as ref_1
+right join tx_cmplx_004 as ref_2
+on (true)
+on ((((ref_1.c_first is NULL)
+and (ref_2.c3 is NULL))
+and ((ref_2.c2 is not NULL)
+or (false)))
+or (true))
+where (pi() is not NULL)
+and (ref_0.c1 is NULL)
+) as subq_0
+where true
+group by 1
+order by 1;
+EXPLAIN
+-> Group (no aggregates)
+    -> Gather: 4 workers, parallel scan on subq_0
+        -> Group (no aggregates)  (...)
+            -> Parallel table scan on subq_0  (...)
+                -> Materialize  (...)
+                    -> Gather: 4 workers, parallel scan on ref_1, ref_0
+                        -> Left hash join, hash table shared by worker threads (no condition)  (...)
+                            -> Inner hash join, one hash table per worker (no condition)  (...)
+                                -> Table scan on ref_2  (...)
+                                    -> Materialize  (...)
+                                        -> Sort: subq_0.c2, c3
+                                            -> Table scan on <temporary>  (...)
+                                                -> Temporary table with deduplication  (...)
+                                                    -> Gather: 4 workers, parallel scan on subq_0  (...)
+                                                        -> Table scan on <temporary>  (...)
+                                                            -> Temporary table with deduplication  (...)
+                                                                -> Parallel table scan on subq_0  (...)
+                                                                    -> Materialize  (...)
+                                                                        -> Gather: 4 workers, parallel scan on ref_0  (...)
+                                                                            -> Parallel table scan on ref_0  (...)
+                                -> Hash
+                                    -> Parallel table scan on ref_0  (...)
+                                        -> Materialize  (...)
+                                            -> Sort: subq_0.c2, c3
+                                                -> Table scan on <temporary>  (...)
+                                                    -> Temporary table with deduplication  (...)
+                                                        -> Gather: 4 workers, parallel scan on subq_0  (...)
+                                                            -> Table scan on <temporary>  (...)
+                                                                -> Temporary table with deduplication  (...)
+                                                                    -> Parallel table scan on subq_0  (...)
+                                                                        -> Materialize  (...)
+                                                                            -> Gather: 4 workers, parallel scan on ref_0  (...)
+                                                                                -> Filter: (ref_0.C_BIT is null)  (...)
+                                                                                    -> Parallel table scan on ref_0  (...)
+                            -> Hash
+                                -> Parallel index scan on ref_1 using ndx_c_first  (...)
+
+select
+40 as c0
+from
+(select
+ref_0.c1 as c0,
+ref_2.c3 as c1,
+pi() as c2
+from
+tx_cmplx_004 as ref_0
+inner join t1 as ref_1
+right join tx_cmplx_004 as ref_2
+on (true)
+on ((((ref_1.c_first is NULL)
+and (ref_2.c3 is NULL))
+and ((ref_2.c2 is not NULL)
+or (false)))
+or (true))
+where (pi() is not NULL)
+and (ref_0.c1 is NULL)
+) as subq_0
+where true
+group by 1
+order by 1;
+c0
+40
+DROP tables t0, t1, t10, t11, t12, t2, t4, t5;
+DROP VIEW tx_cmplx_001, tx_cmplx_002, tx_cmplx_003, tx_cmplx_004, tx_cmplx_005, tx_cmplx_006;
+DROP VIEW t0_sub_1, t0_sub_union;
+DROP tables t0_range_partition, t0_list_partition, t0_hash_partition, t0_linear_hash_partition, t0_key_partition;
+DROP tables t0_range_key_subpartition, t0_hash_partition_p1;
+DROP VIEW t0_range_key_subpartition_sub_view, t0_hash_partition_p1_view, t0_partition_sub_view_mixed_001;
+set sql_mode = @saved_sql_mode;
+set optimizer_switch = @opt_sw_save;

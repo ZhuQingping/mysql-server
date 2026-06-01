@@ -1,0 +1,26 @@
+--source include/have_only_dstore.inc
+ 
+--echo # 
+--echo # pq do not support dstore table.
+--echo # 
+set force_parallel_execute=on;
+set parallel_cost_threshold=0;
+set parallel_rows_threshold=0;
+set parallel_tuple_cost=0;
+set parallel_setup_cost=0;
+set optimizer_trace="enabled=on";
+ 
+create table t1(a int, b int)engine=dstore;
+insert into t1 values(1,1),(2,2),(3,3);
+show create table t1;
+explain select * from t1 where a > 1;
+select * from t1 where a > 1;
+SELECT query, json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+drop table t1;
+
+set force_parallel_execute=default;
+set parallel_cost_threshold=default;
+set parallel_rows_threshold=default;
+set parallel_tuple_cost=default;
+set parallel_setup_cost=default;
+set optimizer_trace="enabled=off";

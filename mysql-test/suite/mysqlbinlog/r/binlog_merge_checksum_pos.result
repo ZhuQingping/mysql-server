@@ -1,0 +1,23 @@
+SET @old_binlog_format=@@binlog_format;
+SET GLOBAL binlog_format='row';
+SET SESSION binlog_format='row';
+SET @old_binlog_checksum=@@binlog_checksum;
+RESET MASTER;
+
+DROP DATABASE IF EXISTS mergedb;
+CREATE DATABASE mergedb;
+USE mergedb;
+create table t1(id int);
+insert into t1 values(1);
+show variables like "binlog_checksum";
+Variable_name	Value
+binlog_checksum	CRC32
+flush logs;
+set global binlog_checksum=NONE;
+show variables like "binlog_checksum";
+Variable_name	Value
+binlog_checksum	NONE
+insert into t1 values(2);
+set global binlog_checksum=@old_binlog_checksum;
+SET GLOBAL binlog_format=@old_binlog_format;
+DROP DATABASE mergedb;

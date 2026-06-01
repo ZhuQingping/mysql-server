@@ -1,0 +1,394 @@
+From 0b9de0fc8c87412f399c2761ff39a189216288d1 Mon Sep 17 00:00:00 2001
+From: zhuqingping <zhuqingping1@contributor>
+
+Date: Fri, 13 Feb 2026 16:10:57 +0800
+Subject: [PATCH] BUGFIX: PQ Crash in pq_clone_sj_mat_exec for PQ
+ with Semi Join
+
+Issue:
+------
+Parallel Query crashes in scenarios combining PQ, semi-join, and a failed pq_clone operation.
+The failure occurs when processing the following query:
+SELECT b FROM t1 WHERE ((b MEMBER OF ((NOT(99)))) = ANY (SELECT a FROM t0)) IS NOT TRUE;
+
+Stack Trace:
+-> Sql_cmd_dml::execute
+--> Sql_cmd_dml::execute_inner
+---> OptimizeForMysqlOrCreateHermesQuery
+----> SELECT_LEX_UNIT::optimize
+-----> make_pq_unit_plan
+------> make_pq_leader_plan
+-------> make_pq_gather_operator
+--------> pq_dup_tabs
+---------> pq_clone_sj_mat_exec
+
+Analysis:
+---------
+PQ does not support cloning Item_func_member_of. This causes the clone of NESTED_JOIN::sj_outer_exprs
+to fail in Semijoin_mat_exec::pq_clone. The function pq_clone() returns nullptr to indicate a clone
+failure, but the caller does not check this return value. Consequently, a nullptr is erroneously pushed
+into the new NESTED_JOIN::sj_outer_exprs list, leading to a null pointer dereference during subsequent
+refix_fields operations.
+
+Solution:
+---------
+In Semijoin_mat_exec::pq_clone, we must check the return value of all member variable clone operations.
+If any clone fails, the function should return nullptr immediately. The upper-layer logic will then
+automatically fall back to a serial execution flow, preventing the crash.
+
+Note:
+-----
+Checked all the all the places that call pq_clone()/pq_copy()/pq_copy_from(), fix the code that do not
+check return value.
+
+Add nodiscard attribute for pq_clone()/pq_copy(), update compiler that the return value of pq_clone()/pq_copy()
+should not be ignored.
+---
+ .../parallel_query/r/pq_bugfix.result-pq      | 48 +++++++++++++++++++
+ .../suite/parallel_query/t/pq_bugfix.test     | 33 +++++++++++++
+ sql/item.h                                    |  5 +-
+ sql/parallel_query/pq_clone.cc                | 15 +++---
+ sql/parallel_query/pq_clone_item.cc           |  9 ++--
+ sql/sql_class.h                               |  2 +-
+ sql/sql_executor.h                            |  2 +-
+ sql/sql_opt_exec_shared.h                     |  2 +-
+ sql/sql_select.h                              |  2 +-
+ sql/system_variables.h                        |  2 +-
+ sql/table.h                                   |  4 +-
+ 11 files changed, 103 insertions(+), 21 deletions(-)
+
+diff --git a/mysql-test/suite/parallel_query/r/pq_bugfix.result-pq b/mysql-test/suite/parallel_query/r/pq_bugfix.result-pq
+index 584bf5d70df..eb2f542271d 100644
+--- a/mysql-test/suite/parallel_query/r/pq_bugfix.result-pq
++++ b/mysql-test/suite/parallel_query/r/pq_bugfix.result-pq
+@@ -1,3 +1,4 @@
++CALL mtr.add_suppression(".*deep copy method is not implemented, will not use parallel query.*");
+ CREATE TABLE `A` (
+ `id_col` int NOT NULL DEFAULT '0'
+ );
+@@ -2512,4 +2513,51 @@ LENGTH(CONCAT(MIN(b64)))
+ 8
+ #Cleanup
+ DROP TABLE t_bit;
++#
++# BUGFIX: mysqld crash in function pq_clone_sj_mat_exec for pq_clone fail scenario
++#
++CREATE TABLE t0(a INT);
++INSERT INTO t0 VALUES(0),(1),(2);
++CREATE TABLE t1(b INT, c INT);
++INSERT INTO t1 VALUES(0,0),(1,1),(2,2);
++ANALYZE TABLE t0,t1;
++Table	Op	Msg_type	Msg_text
++test.t0	analyze	status	OK
++test.t1	analyze	status	OK
++EXPLAIN SELECT last_insert_id(a) FROM t0;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t0)
++1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select last_insert_id(`test`.`t0`.`a`) AS `last_insert_id(a)` from `test`.`t0`
++SELECT last_insert_id(a) FROM t0;
++last_insert_id(a)
++0
++1
++2
++EXPLAIN FORMAT=TREE SELECT b FROM t1 WHERE ((b MEMBER OF ((NOT(99)))) = ANY (SELECT a FROM t0)) IS NOT TRUE;
++EXPLAIN
++-> Hash antijoin, one hash table per worker (t1.b member of (<cache>((0 = 99))) = t0.a)  (cost=1.7 rows=9)
++    -> Table scan on t1  (cost=0.55 rows=3)
++    -> Hash
++        -> Table scan on t0  (cost=0.55 rows=3)
++
++SELECT b FROM t1 WHERE ((b MEMBER OF ((NOT(99)))) = ANY (SELECT a FROM t0)) IS NOT TRUE;
++ERROR 22032: Invalid data type for JSON data in argument 2 to function member of; a JSON string or JSON type is required.
++SET @optimizer_switch_saved = @@optimizer_switch;
++SET optimizer_switch='loosescan=off,firstmatch=off,duplicateweedout=off';
++EXPLAIN FORMAT=TREE SELECT b FROM t1 WHERE ((b MEMBER OF ((NOT(99)))) = ANY (SELECT a FROM t0)) IS NOT TRUE;
++EXPLAIN
++-> Nested loop antijoin  (cost=1.15 rows=3)
++    -> Table scan on t1  (cost=0.55 rows=3)
++    -> Filter: (t1.b member of (<cache>((0 = 99))) = `<subquery2>`.a)  (cost=0.133..0.133 rows=1)
++        -> Single-row index lookup on <subquery2> using <auto_distinct_key> (a=t1.b member of (<cache>((0 = 99))))  (cost=0.983..0.983 rows=1)
++            -> Materialize with deduplication  (cost=0.85..0.85 rows=3)
++                -> Filter: (t0.a is not null)  (cost=0.55 rows=3)
++                    -> Table scan on t0  (cost=0.55 rows=3)
++
++SELECT b FROM t1 WHERE ((b MEMBER OF ((NOT(99)))) = ANY (SELECT a FROM t0)) IS NOT TRUE;
++ERROR 22032: Invalid data type for JSON data in argument 2 to function member of; a JSON string or JSON type is required.
++SET @@optimizer_switch = @optimizer_switch_saved;
++DROP TABLE t0,t1;
+ # restart: 
+diff --git a/mysql-test/suite/parallel_query/t/pq_bugfix.test b/mysql-test/suite/parallel_query/t/pq_bugfix.test
+index 7528df01b9e..346b2261147 100644
+--- a/mysql-test/suite/parallel_query/t/pq_bugfix.test
++++ b/mysql-test/suite/parallel_query/t/pq_bugfix.test
+@@ -2,6 +2,8 @@
+ --source include/elide_costs.inc
+ --source include/have_debug.inc
+ 
++CALL mtr.add_suppression(".*deep copy method is not implemented, will not use parallel query.*");
++
+ # to preserve plans:
+ --source include/turn_off_join_elimination.inc
+ 
+@@ -1675,5 +1677,36 @@ SELECT LENGTH(CONCAT(MIN(b64))) FROM t_bit GROUP BY id;
+ --echo #Cleanup
+ DROP TABLE t_bit;
+ 
++--echo #
++--echo # BUGFIX: mysqld crash in function pq_clone_sj_mat_exec for pq_clone fail scenario
++--echo #
++CREATE TABLE t0(a INT);
++INSERT INTO t0 VALUES(0),(1),(2);
++CREATE TABLE t1(b INT, c INT);
++INSERT INTO t1 VALUES(0,0),(1,1),(2,2);
++ANALYZE TABLE t0,t1;
++
++# Cover Item_func_last_insert_id::pq_clone function
++EXPLAIN SELECT last_insert_id(a) FROM t0;
++SELECT last_insert_id(a) FROM t0;
++
++# PQ not support following query due to Item_func_member_of do not implement pq_clone function
++let query=SELECT b FROM t1 WHERE ((b MEMBER OF ((NOT(99)))) = ANY (SELECT a FROM t0)) IS NOT TRUE;
++
++eval EXPLAIN FORMAT=TREE $query;
++--error ER_INVALID_TYPE_FOR_JSON
++eval $query;
++
++SET @optimizer_switch_saved = @@optimizer_switch;
++# Turn off loosescan, firstmatch and duplicateweedout, optimizer choose materialization handler semi-join
++SET optimizer_switch='loosescan=off,firstmatch=off,duplicateweedout=off';
++# Crash for this query without this mr.
++eval EXPLAIN FORMAT=TREE $query;
++--error ER_INVALID_TYPE_FOR_JSON
++eval $query;
++
++SET @@optimizer_switch = @optimizer_switch_saved;
++DROP TABLE t0,t1;
++
+ --let $restart_parameters="restart: "
+ --source include/restart_mysqld.inc
+diff --git a/sql/item.h b/sql/item.h
+index aa88716cb9b..ab0065b2f67 100644
+--- a/sql/item.h
++++ b/sql/item.h
+@@ -908,9 +908,10 @@ class Item : public Parse_tree_node {
+   /// Item_field::pq_can_resolve_in() for details.
+   Item *cloned_origin_item{nullptr};
+ 
+-  virtual Item *pq_clone(THD *thd, Query_block *select);
++  [[nodiscard]] virtual Item *pq_clone(THD *thd, Query_block *select);
+ 
+-  virtual bool pq_copy_from(THD *thd, Query_block *select, Item *item);
++  [[nodiscard]] virtual bool pq_copy_from(THD *thd, Query_block *select,
++                                          Item *item);
+ 
+   virtual size_t pq_extra_len(bool) { return 0; }
+ 
+diff --git a/sql/parallel_query/pq_clone.cc b/sql/parallel_query/pq_clone.cc
+index 8fdd9d1bef8..1f3a99266f0 100644
+--- a/sql/parallel_query/pq_clone.cc
++++ b/sql/parallel_query/pq_clone.cc
+@@ -435,7 +435,7 @@ static bool pq_set_table_ref(THD *thd, JOIN *cloned_join, QEP_TAB *tab,
+     // done here.
+     tbl = new (thd->pq_mem_root) Table_ref();
+     if (!tbl) return true;
+-    tbl->pq_copy(thd, orig_tbl);
++    if (tbl->pq_copy(thd, orig_tbl)) return true;
+     tbl->query_block = select;
+     tbl->table = tab->table();
+     tbl->table->pos_in_table_list = tbl;
+@@ -575,7 +575,7 @@ bool pq_dup_tabs(JOIN *join, JOIN *top_orig, bool gather) {
+ 
+         Table_ref *orig_tbl = orig_tab->table_ref;
+         if (!orig_tbl) continue;
+-        tab->pq_copy(join->thd, orig_tab);
++        if (tab->pq_copy(join->thd, orig_tab)) return true;
+ 
+         // set sj-mat-exec structure
+         if (orig_tab->sj_mat_exec()) {
+@@ -591,7 +591,8 @@ bool pq_dup_tabs(JOIN *join, JOIN *top_orig, bool gather) {
+           assert(tab->table() != orig_tbl->table);
+           memcpy(tab->table()->record[0], orig_tbl->table->record[0],
+                  tab->table()->s->reclength);
+-          tab->table()->pq_copy(join->thd, select, orig_tab->table());
++          if (tab->table()->pq_copy(join->thd, select, orig_tab->table()))
++            return true;
+           // In many cases, PQ won't set table's read_set by item::fix_field().
+           // For example,
+           // scenario 1: For BKA & outer join, fields would be
+@@ -1575,11 +1576,13 @@ Semijoin_mat_exec *Semijoin_mat_exec::pq_clone(THD *thd, Query_block *select) {
+   nj->used_tables = orig_nj->used_tables;
+   for (Item *it : orig_nj->sj_inner_exprs) {
+     Item *it1 = it->pq_clone(thd, select);
++    if (!it1) return nullptr;
+     nj->sj_inner_exprs.push_back(it1);
+   }
+ 
+   for (Item *it : orig_nj->sj_outer_exprs) {
+     Item *it1 = it->pq_clone(thd, select);
++    if (!it1) return nullptr;
+     nj->sj_outer_exprs.push_back(it1);
+   }
+ 
+@@ -1613,7 +1616,7 @@ Semijoin_mat_exec *Semijoin_mat_exec::pq_clone(THD *thd, Query_block *select) {
+   return sj_mat_exec;
+ }
+ 
+-bool System_variables::pq_copy_from(struct System_variables orig) {
++void System_variables::pq_copy_from(struct System_variables orig) {
+   // keep them sorted for readability
+   big_tables = orig.big_tables;
+   collation_connection = orig.collation_connection;
+@@ -1647,7 +1650,6 @@ bool System_variables::pq_copy_from(struct System_variables orig) {
+   partial_result_cache_min_hit_ratio = orig.partial_result_cache_min_hit_ratio;
+   partial_result_cache_check_hit_ratio_frequency =
+       orig.partial_result_cache_check_hit_ratio_frequency;
+-  return false;
+ }
+ 
+ bool System_status_var::pq_merge_status(
+@@ -1672,7 +1674,7 @@ bool System_status_var::pq_merge_status(
+   return false;
+ }
+ 
+-bool THD::pq_copy_from(THD *thd) {
++void THD::pq_copy_from(THD *thd) {
+   variables.pq_copy_from(thd->variables);
+   start_time = thd->start_time;
+   user_time = thd->user_time;
+@@ -1696,7 +1698,6 @@ bool THD::pq_copy_from(THD *thd) {
+     lex->is_explain_analyze = thd->lex->is_explain_analyze;
+   }
+   current_stmt_binlog_format = thd->current_stmt_binlog_format;
+-  return false;
+ }
+ 
+ bool THD::pq_merge_status(THD *thd) {
+diff --git a/sql/parallel_query/pq_clone_item.cc b/sql/parallel_query/pq_clone_item.cc
+index bd499fe1f88..51e834349bf 100644
+--- a/sql/parallel_query/pq_clone_item.cc
++++ b/sql/parallel_query/pq_clone_item.cc
+@@ -1282,6 +1282,7 @@ bool Item_equal::pq_copy_from(THD *thd, Query_block *select, Item *item) {
+         }
+         if (orig_item->m_const_arg != nullptr) {
+           m_const_arg = orig_item->m_const_arg->pq_clone(thd, select);
++          if (m_const_arg == nullptr) return true;
+         }
+         // item_equal has been optimized away so shouldn't resolved again
+         if (!fields.elements) {
+@@ -1545,14 +1546,11 @@ bool Item_func_interval::pq_copy_from(THD *thd, Query_block *select,
+ Item *Item_func_last_insert_id::pq_clone(THD *thd, Query_block *select) {
+   return pq_def::pq_clone_template<Item_func_last_insert_id>(
+       thd, select, this, ([this, thd, select](Item *&new_item) {
+-        Item *item_arg = nullptr;
+-        if (arg_count == 1) {
+-          item_arg = args[0]->pq_clone(thd, select);
+-        }
+-
+         if (arg_count == 0) {
+           new_item = new (thd->pq_mem_root) Item_func_last_insert_id(POS());
+         } else if (arg_count == 1) {
++          Item *item_arg = args[0]->pq_clone(thd, select);
++          if (item_arg == nullptr) return true;
+           new_item =
+               new (thd->pq_mem_root) Item_func_last_insert_id(POS(), item_arg);
+         }
+@@ -3114,6 +3112,7 @@ Item *Item_sum_count::pq_clone(THD *thd, Query_block *select) {
+   if (!has_with_distinct()) {
+     assert(arg_count == 1);
+     Item *arg = args[0]->pq_clone(thd, select);
++    if (arg == nullptr) return nullptr;
+     new_item = new (thd->pq_mem_root) Item_sum_count(POS(), arg, nullptr);
+   } else {
+     PT_item_list *list = new (thd->pq_mem_root) PT_item_list();
+diff --git a/sql/sql_class.h b/sql/sql_class.h
+index 167884e2405..c7fb15a9485 100644
+--- a/sql/sql_class.h
++++ b/sql/sql_class.h
+@@ -1252,7 +1252,7 @@ class THD : public MDL_context_owner,
+   /** reset pq-releated status */
+   bool pq_status_reset();
+   /** copy property from other thd */
+-  bool pq_copy_from(THD *thd);
++  void pq_copy_from(THD *thd);
+   /** check whether pq clone status is PQ_PREPARE or PQ_OPTIMIZE. */
+   bool is_in_pq_phase() {
+     return clone_phase == THD::PQ_PREPARE || clone_phase == THD::PQ_OPTIMIZE;
+diff --git a/sql/sql_executor.h b/sql/sql_executor.h
+index b67f4c8dc28..e1f58c05f4d 100644
+--- a/sql/sql_executor.h
++++ b/sql/sql_executor.h
+@@ -371,7 +371,7 @@ class QEP_TAB : public QEP_shared_owner {
+ 
+   bool pfs_batch_update(const JOIN *join) const;
+ 
+-  bool pq_copy(THD *thd, QEP_TAB *qep_tab);
++  [[nodiscard]] bool pq_copy(THD *thd, QEP_TAB *qep_tab);
+ 
+   bool pushdown_aggregate();
+ 
+diff --git a/sql/sql_opt_exec_shared.h b/sql/sql_opt_exec_shared.h
+index e932902f1bf..40b4692d833 100644
+--- a/sql/sql_opt_exec_shared.h
++++ b/sql/sql_opt_exec_shared.h
+@@ -175,7 +175,7 @@ struct Index_lookup {
+   }
+ 
+   // For plan cache, not for PQ
+-  bool pq_copy(JOIN *join, Index_lookup *ref, QEP_TAB *qep_tab);
++  [[nodiscard]] bool pq_copy(JOIN *join, Index_lookup *ref, QEP_TAB *qep_tab);
+ };
+ 
+ struct CACHE_FIELD;
+diff --git a/sql/sql_select.h b/sql/sql_select.h
+index 8af56949af9..aeb2cc90635 100644
+--- a/sql/sql_select.h
++++ b/sql/sql_select.h
+@@ -585,7 +585,7 @@ struct POSITION {
+     prefix_rowcount *= filter_effect;
+   }
+ 
+-  bool pq_copy(THD *thd, QEP_TAB *orig_tab);
++  [[nodiscard]] bool pq_copy(THD *thd, QEP_TAB *orig_tab);
+ 
+   void set_suffix_lateral_deps(table_map deps) { m_suffix_lateral_deps = deps; }
+ 
+diff --git a/sql/system_variables.h b/sql/system_variables.h
+index 5c9d46093c7..199143a5c03 100644
+--- a/sql/system_variables.h
++++ b/sql/system_variables.h
+@@ -582,7 +582,7 @@ struct System_variables {
+ 
+   ulong parallel_batch_max_mem_size;
+ 
+-  bool pq_copy_from(System_variables leader);
++  void pq_copy_from(System_variables leader);
+ 
+   /// 'True' <=> the user wants us to cache a plan, and to use a cached plan.
+   bool rds_plan_cache;
+diff --git a/sql/table.h b/sql/table.h
+index ca9d126ff21..59c0d63bf96 100644
+--- a/sql/table.h
++++ b/sql/table.h
+@@ -1747,7 +1747,7 @@ struct TABLE {
+   Sql_table_check_constraint_list *table_check_constraint_list{nullptr};
+ 
+   /** copy table property from orig table */
+-  bool pq_copy(THD *thd, void *select, TABLE *orig);
++  [[nodiscard]] bool pq_copy(THD *thd, void *select, TABLE *orig);
+ 
+   // Temp table created for shared leader's records
+   bool pq_shared_table{false};
+@@ -3570,7 +3570,7 @@ class Table_ref {
+ 
+   bool is_derived_unfinished_materialization() const;
+ 
+-  bool pq_copy(THD *thd, Table_ref *tbl_list);
++  [[nodiscard]] bool pq_copy(THD *thd, Table_ref *tbl_list);
+ 
+  private:
+   /**
+-- 
+2.23.0
+

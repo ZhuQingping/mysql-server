@@ -1,0 +1,20 @@
+RESET MASTER;
+CREATE TABLE t1(c1 INT);
+SET @@GLOBAL.DEBUG= '+d, simulate_binlog_is_closed';
+INSERT INTO t1 VALUES(1);
+#
+# Check that the above transaction is committed successfully.
+#
+SELECT * FROM t1 ORDER BY t1.c1;
+c1
+1
+SET @@GLOBAL.DEBUG= '-d, simulate_binlog_is_closed';
+INSERT INTO t1 VALUES(2);
+#
+# Check that the following transaction is committed successfully.
+#
+SELECT * FROM t1 ORDER BY t1.c1;
+c1
+1
+2
+DROP TABLE t1;

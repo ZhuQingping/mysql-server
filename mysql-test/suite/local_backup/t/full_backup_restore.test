@@ -1,0 +1,109 @@
+#
+# Basic test for full local backup and restore
+#
+
+--source include/have_debug.inc
+call mtr.add_suppression("previous full backup is running");
+call mtr.add_suppression("full backup found binlog is not enabled");
+
+# 1. prepare some data
+create database full_backup_restore;
+use full_backup_restore;
+create table t1(s varchar(100)) engine=Dstore;
+
+# insert 1000 records
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 100
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+show status like 'Rds_local_backup_last_full_backup_status';
+
+# 2. Create full backups
+set global debug='+d,full_lb_thd_wait_before_exit';
+--let $full_backup_flag = 0
+--source suite/local_backup/include/start_full_backup.inc
+# Will report error if start again
+--error ER_DA_LOCAL_BACKUP_ERROR
+call rds_backup.start_full_local_backup(0);
+set global debug='-d,full_lb_thd_wait_before_exit';
+
+--source suite/local_backup/include/wait_full_backup.inc
+--source suite/local_backup/include/stop_full_backup.inc
+# It's OK to stop again
+--source suite/local_backup/include/stop_full_backup.inc
+show status like 'Rds_local_backup_last_full_backup_status';
+
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $i = 900
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+--let $full_backup_flag = 0
+--source suite/local_backup/include/start_full_backup.inc
+
+--source suite/local_backup/include/wait_full_backup.inc
+--source suite/local_backup/include/stop_full_backup.inc
+show status like 'Rds_local_backup_last_full_backup_status';
+
+# 3. Add more data
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $i = 123
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+# 4. Restore
+--let $MYSQL_BASEDIR = `SELECT @@basedir`
+--let $MYSQLD_DATADIR = `SELECT @@datadir`
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+# Restore using full backup
+# Remove data and copy backup files
+
+--exec rm -rf $MYSQLD_DATADIR/#mysql_dstore/gs_pdb/PDB_17/*
+
+--exec ls $MYSQLTEST_VARDIR/full_local_backup/20* -d | tail -n 1 > $MYSQLTEST_VARDIR/1.txt
+
+--exec rm -rf $MYSQLD_DATADIR/ibdata1 $MYSQLD_DATADIR/mysql.ibd $MYSQLD_DATADIR/sys $MYSQLD_DATADIR/undo_00* $MYSQLD_DATADIR/#innodb_redo $MYSQLD_DATADIR/performance_schema $MYSQLD_DATADIR/mtr $MYSQLD_DATADIR/mysql $MYSQLD_DATADIR/test
+--exec cp -r `cat $MYSQLTEST_VARDIR/1.txt`/* $MYSQLD_DATADIR/ -f
+
+
+--exec rm -f $MYSQLTEST_VARDIR/1.txt
+--exec $MYSQL_BASEDIR/bin/backup_monitor $MYSQLTEST_VARDIR/local_backup_meta -l | grep '\"timePoint\"' | tail -n 1 | awk "{print \$2}" | sed "s/.\$//" > $MYSQLTEST_VARDIR/1.txt
+--disable_result_log
+--exec $MYSQL_BASEDIR/bin/backup_monitor $MYSQLTEST_VARDIR/local_backup_meta -t `cat $MYSQLTEST_VARDIR/1.txt`
+--enable_result_log
+--exec rm -f $MYSQLTEST_VARDIR/1.txt
+--exec mv $MYSQLTEST_VARDIR/local_backup_meta/RestoreMeta_* $MYSQLTEST_VARDIR/local_backup_restore_meta/RestoreMeta_RestoreMeta -f
+
+--let $restart_parameters = "restart: --dstore_open_restore_mode=on"
+--source include/start_mysqld.inc
+
+# 5. Verify data. Data added in step 3 is not present
+select count(*) from t1;
+# insert after resotre
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $i = 300
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+drop database full_backup_restore;
+
+--source suite/local_backup/include/clean_backup.inc

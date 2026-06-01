@@ -1,0 +1,160 @@
+call mtr.add_suppression(".*Out of memory in Audit Log.*");
+call mtr.add_suppression(".*Attempting backtrace.*");
+# FE2022112400392: Oversized SQL statements can be recorded in audit logs.
+# ------------------------------Case 1----------------------------------------------
+# > System Variable:
+# > audit_log_format = CSV2, audit_log_csv2_escape = OFF,
+# > audit_log_csv2_truncation = OFF, audit_log_csv2_old_separated_format = ON;
+# > When the memory application for audit logs fails, mysqld crashes.
+# 1.1 Set variable value.
+SET @@global.audit_log_csv2_escape = OFF;
+SELECT @@global.audit_log_csv2_escape;
+@@global.audit_log_csv2_escape
+0
+SET @@global.audit_log_csv2_truncation = OFF;
+SELECT @@global.audit_log_csv2_truncation;
+@@global.audit_log_csv2_truncation
+0
+SET @@global.audit_log_csv2_old_separated_format = ON;
+SELECT @@global.audit_log_csv2_old_separated_format;
+@@global.audit_log_csv2_old_separated_format
+1
+# 1.2 Actively crash.
+DROP TABLE IF EXISTS `employee_tb`;
+SET debug = "+d, simulate_audit_log_buffer_malloc_fail";
+CREATE TABLE IF NOT EXISTS `employee_tb`(`employee_id` INT UNSIGNED AUTO_INCREMENT,`employee_name` VARCHAR(100) NOT
+NULL,`employee_title` VARCHAR(100) NOT NULL,`birthdate` VARCHAR(100) NOT NULL,PRIMARY KEY (`employee_id`))ENGINE=InnoDB
+DEFAULT CHARSET=utf8mb4;
+# 1.3 Checking error log.
+Pattern "Out of memory in Audit Log" found
+# 1.4 Restart the server.
+"restarting after crash"
+# ------------------------------Case 2----------------------------------------------
+# > System Variable:
+# > audit_log_format = CSV2, audit_log_csv2_escape = OFF,
+# > audit_log_csv2_truncation = OFF, audit_log_csv2_old_separated_format = OFF;
+# > When the memory application for audit logs fails, mysqld crashes.
+# 2.1 Set variable value.
+SET @@global.audit_log_csv2_escape = OFF;
+SELECT @@global.audit_log_csv2_escape;
+@@global.audit_log_csv2_escape
+0
+SET @@global.audit_log_csv2_truncation = OFF;
+SELECT @@global.audit_log_csv2_truncation;
+@@global.audit_log_csv2_truncation
+0
+SET @@global.audit_log_csv2_old_separated_format = OFF;
+SELECT @@global.audit_log_csv2_old_separated_format;
+@@global.audit_log_csv2_old_separated_format
+0
+# 2.2 Actively crash again.
+DROP TABLE IF EXISTS `employee_tb`;
+SET debug = "+d, simulate_audit_malloc_fail";
+CREATE TABLE IF NOT EXISTS `employee_tb`(`employee_id` INT UNSIGNED AUTO_INCREMENT,`employee_name` VARCHAR(100) NOT
+NULL,`employee_title` VARCHAR(100) NOT NULL,`birthdate` VARCHAR(100) NOT NULL,PRIMARY KEY (`employee_id`))ENGINE=InnoDB
+DEFAULT CHARSET=utf8mb4;
+# 2.3 Restart the server.
+"restarting after crash"
+# ------------------------------Case 3----------------------------------------------
+# > System Variable:
+# > audit_log_format = CSV2, audit_log_csv2_escape = OFF,
+# > audit_log_csv2_truncation = ON, audit_log_csv2_old_separated_format = ON;
+# > When the memory application for audit logs fails, the program truncates SQL statements and outputs audit log.
+# 3.1 Set variable value.
+SET NAMES utf8mb4;
+SET @@global.audit_log_csv2_escape = OFF;
+SELECT @@global.audit_log_csv2_escape;
+@@global.audit_log_csv2_escape
+0
+SET @@global.audit_log_csv2_truncation = ON;
+SELECT @@global.audit_log_csv2_truncation;
+@@global.audit_log_csv2_truncation
+1
+SET @@global.audit_log_csv2_old_separated_format = ON;
+SELECT @@global.audit_log_csv2_old_separated_format;
+@@global.audit_log_csv2_old_separated_format
+1
+# 3.2 Create table and insert data.
+SET debug = "+d, simulate_audit_log_buffer_malloc_fail";
+DROP TABLE IF EXISTS `employee_tb`;
+CREATE TABLE IF NOT EXISTS `employee_tb`(`employee_id` INT UNSIGNED AUTO_INCREMENT,`employee_name` VARCHAR(100) NOT
+NULL,`employee_title` VARCHAR(100) NOT NULL,`birthdate` VARCHAR(100) NOT NULL,PRIMARY KEY (`employee_id`))ENGINE=InnoDB
+DEFAULT CHARSET=utf8mb4;
+INSERT INTO `employee_tb` (`employee_name`, `employee_title`, `birthdate`) VALUES
+("Zhang San", "General Director", "2020-01-01"),("Love Dollar Lisi", "Product Manager", "2020-01-02"),
+("Dadao Wangwu", "Entrance Guard", "2020-01-03"),("Hen Nanchi", "Main Cook", "2020-01-04"),
+("Shangdaren Kongyiji", "Student", "2020-01-05"),("Abudurezeke Aosiman", "Test Engineer", "2020-01-06"),
+("Li Si", "Chief", "2020-01-07"),("Jiandao Wangmazi", "Product Manager", "2020-01-08"),
+("Zhu Zhu", "Entrance Guard", "2020-01-09"),("Doge Du", "Cook", "2020-01-10"),("Xunger", "Student", "2020-01-11"),
+("Shaonian Runtu", "Test Engineer", "2020-01-12"),("James Solos", "General Director", "2020-01-13"),
+("Zhao Si", "General Director", "2020-01-14"),("Liu Jiannan", "Chief", "2020-01-15"),("Lao Yu", "Cook", "2020-01-16"),
+("James Cameron", "Director", "2020-01-17"),("Wu Shifu", "Entrance Guard", "2020-01-18");
+INSERT INTO `employee_tb` (`employee_name`, `employee_title`, `birthdate`) VALUES("张三", "总监", "2020-01-01"),
+("みやざきはやお", "アニメーション監督", "2020-01-02"),("Путин", "Президент", "2020-01-03"),
+("Macron", "Politicien", "2020-01-04"),("박근혜", "감옥에 갇히다", "2020-01-05"),
+("Немар да Силва", "Хөлбөмбөгийн", "2020-01-07"),("รถขุดวังราลง", "กษัตริย์", "2020-01-08"),
+("王灣", "門衛", "2020-01-09"),("ဒေါ်အောင်ဆန်းစုကြည်", "ကျော်ကြားသူ", "2020-01-10"),("طالبان", "kongbu", "2020-01-11"),
+("Bosc d'auró vermell", "Guàrdia de seguretat", "2020-01-12"),("ආරක්ෂක නිලධාරියා", "අධ්යක්ෂක", "2020-01-13"),
+("柳建南", "花匠", "2020-01-15"),("食事の時は握手", "料理人", "2020-01-16"),("James Cameron", "导演", "2020-01-17"),
+("マスター·ウー", "電気技師", "2020-01-18");
+SET debug = "-d, simulate_audit_log_buffer_malloc_fail";
+# 3.3 Checking audit log.
+"Cam" is the truncated position.
+Pattern "Cam"" found
+"අධ්යක්ෂ" is the truncated position.
+Pattern "අධ්යක්ෂ" found
+# 3.4 Checking error log.
+Pattern "Audit Log: The new memory required" found
+# 3.5 Restart the server.
+"restarting mysqld server."
+# ------------------------------Case 4----------------------------------------------
+# > System Variable:
+# > audit_log_format = CSV2, audit_log_csv2_escape = OFF,
+# > audit_log_csv2_truncation = ON, audit_log_csv2_old_separated_format = OFF;
+# > When the memory application for audit logs fails, the program truncates SQL statements and outputs audit log.
+# 4.1 Set variable value and delete log files.
+SET NAMES utf8mb4;
+SET @@global.audit_log_csv2_escape = OFF;
+SELECT @@global.audit_log_csv2_escape;
+@@global.audit_log_csv2_escape
+0
+SET @@global.audit_log_csv2_truncation = ON;
+SELECT @@global.audit_log_csv2_truncation;
+@@global.audit_log_csv2_truncation
+1
+SET @@global.audit_log_csv2_old_separated_format = OFF;
+SELECT @@global.audit_log_csv2_old_separated_format;
+@@global.audit_log_csv2_old_separated_format
+0
+# 4.2 Create table and insert data.
+SET debug = "+d, simulate_audit_malloc_fail";
+DROP TABLE IF EXISTS `employee_tb`;
+CREATE TABLE IF NOT EXISTS `employee_tb`(`employee_id` INT UNSIGNED AUTO_INCREMENT,`employee_name` VARCHAR(100) NOT
+NULL,`employee_title` VARCHAR(100) NOT NULL,`birthdate` VARCHAR(100) NOT NULL,PRIMARY KEY (`employee_id`))ENGINE=InnoDB
+DEFAULT CHARSET=utf8mb4;
+INSERT INTO `employee_tb` (`employee_name`, `employee_title`, `birthdate`) VALUES
+("Zhang San", "General Director", "2020-01-01"),("Love Dollar Lisi", "Product Manager", "2020-01-02"),
+("Dadao Wangwu", "Entrance Guard", "2020-01-03"),("Hen Nanchi", "Main Cook", "2020-01-04"),
+("Shangdaren Kongyiji", "Student", "2020-01-05"),("Abudurezeke Aosiman", "Test Engineer", "2020-01-06"),
+("Li Si", "Chief", "2020-01-07"),("Jiandao Wangmazi", "Product Manager", "2020-01-08"),
+("Zhu Zhu", "Entrance Guard", "2020-01-09"),("Doge Du", "Cook", "2020-01-10"),("Xunger", "Student", "2020-01-11"),
+("Shaonian Runtu", "Test Engineer", "2020-01-12"),("James Solos", "General Director", "2020-01-13"),
+("Zhao Si", "General Director", "2020-01-14"),("Liu Jiannan", "Chief", "2020-01-15"),("Lao Yu", "Cook", "2020-01-16"),
+("James Cameron", "Director", "2020-01-17"),("Wu Shifu", "Thomas Guard", "2020-01-18");
+INSERT INTO `employee_tb` (`employee_name`, `employee_title`, `birthdate`) VALUES("张三", "总监", "2020-01-01"),
+("みやざきはやお", "アニメーション監督", "2020-01-02"),("Путин", "Президент", "2020-01-03"),
+("Macron", "Politicien", "2020-01-04"),("박근혜", "감옥에 갇히다", "2020-01-05"),
+("Немар да Силва", "Хөлбөмбөгийн", "2020-01-07"),("รถขุดวังราลง", "กษัตริย์", "2020-01-08"),
+("王灣", "門衛", "2020-01-09"),("ဒေါ်အောင်ဆန်းစုကြည်", "ကျော်ကြားသူ", "2020-01-10"),("طالبان", "kongbu", "2020-01-11"),
+("Bosc d'auró vermell", "Guàrdia de seguretat", "2020-01-12"),("ආරක්ෂක නිලධාරියා", "අධ්යක්ෂක", "2020-01-13"),
+("柳建南", "花匠", "2020-01-15"),("食事の時は握手", "料理人", "2020-01-16"),("James Cameron", "导演", "2020-01-17"),
+("マスター·ウー", "電気技師", "2020-01-18");
+SET debug = "-d, simulate_audit_malloc_fail";
+# 4.3 Checking audit log.
+"Dir" is the truncated position.
+Pattern "Dir"" found
+"අධ්යක්ෂක" is the truncated position.
+Pattern "අධ්යක්ෂක" found
+# 4.4 Clean up.
+DROP TABLE IF EXISTS `employee_tb`;
+# restart

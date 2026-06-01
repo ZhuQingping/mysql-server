@@ -1,0 +1,24 @@
+#######################################################################################
+# BUG2021060500608:                                                                   #
+#                                                                                     #
+# Problem:                                                                            #
+# --------                                                                            #
+# The thd->trx_executed_time is not reset when attachable transaction conmmited.Cause #
+# the trx_executed_time field of the processlist table to continue to grow without    #
+# new transactions.                                                                   #
+#                                                                                     #
+#######################################################################################
+
+flush privileges;
+
+sleep 2;
+
+--let $assert_text= Verify that trx_executed_time is 0 after flush privileges.
+--let $assert_cond= [select max(trx_executed_time) MAX from information_schema.processlist, MAX, 1] = 0;
+--source include/assert.inc
+
+# DEBUG
+--disable_result_log
+show full processlist;
+select * from information_schema.processlist;
+--enable_result_log

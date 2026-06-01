@@ -1,0 +1,3828 @@
+CREATE TABLE t1(a int, b int);
+INSERT INTO t1 VALUES(1,2),(2,3),(2,3),(2,3),(2,4),(3,1);
+CREATE TABLE t2(a int, b int);
+INSERT INTO t2 VALUES(1,3),(2,4),(3,4);
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t1;
+"test caching of IN(subquery) using IN-to-EXISTS"
+SET @old_optimizer_switch = @@optimizer_switch;
+SET optimizer_switch='semijoin=off,partial_result_cache=on';
+SET rds_partial_result_cache_cost_threshold = 0;
+EXPLAIN format=tree SELECT * FROM t1 WHERE t1.a in (SELECT b FROM t2 WHERE t2.b > t1.b GROUP BY b);
+EXPLAIN
+-> Filter: <in_optimizer>(t1.a,<exists>(select #2))
+    -> Table scan on t1
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(t1.a, t1.b)
+            -> Limit: 1 row(s)
+                -> Filter: ((t2.b > t1.b) and (<cache>(t1.a) = t2.b))
+                    -> Table scan on t2
+
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+SELECT * FROM t1 WHERE t1.a in (SELECT b FROM t2 WHERE t2.b > t1.b GROUP BY b) ORDER BY a;
+a	b
+3	1
+EXPLAIN ANALYZE format=tree SELECT * FROM t1 WHERE t1.a in (SELECT b FROM t2 WHERE t2.b > t1.b GROUP BY b) ORDER BY a;
+EXPLAIN
+-> Sort: t1.a 
+    -> Filter: <in_optimizer>(t1.a,<exists>(select #2)) 
+        -> Table scan on t1 
+        -> Select #2 (subquery in condition; dependent)
+            -> Result cache : cache keys(t1.a, t1.b) (Cache Hits: 2, Cache Misses: 4, Cache Evictions: 0, Cache Overflows: 0, Memory Usage: # )  (actual time=# loops=6)
+                -> Limit: 1 row(s) 
+                    -> Filter: ((t2.b > t1.b) and (<cache>(t1.a) = t2.b)) 
+                        -> Table scan on t2 
+
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+"test of uncorrelated subquery using IN-to-EXISTS (correlation only in the left argument of IN),"
+"the left argument is injected in the subquery's WHERE, so subquery becomes correlated,
+"so PTRC is used".
+EXPLAIN format=tree SELECT * FROM t1 WHERE t1.a in (SELECT /*+subquery(intoexists)*/ b FROM t2 GROUP BY b);
+EXPLAIN
+-> Filter: <in_optimizer>(t1.a,<exists>(select #2))
+    -> Table scan on t1
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(t1.a)
+            -> Limit: 1 row(s)
+                -> Filter: (<cache>(t1.a) = t2.b)
+                    -> Table scan on t2
+
+"same test with materialization: subquery remains non-correlated => no PTRC"
+EXPLAIN format=tree SELECT * FROM t1 WHERE t1.a in (SELECT /*+subquery(materialization)*/ b FROM t2 GROUP BY b);
+EXPLAIN
+-> Filter: <in_optimizer>(t1.a,t1.a in (select #2))
+    -> Table scan on t1
+    -> Select #2 (subquery in condition; run only once)
+        -> Filter: ((t1.a = `<materialized_subquery>`.b))
+            -> Limit: 1 row(s)
+                -> Index lookup on <materialized_subquery> using <auto_distinct_key> (b=t1.a)
+                    -> Materialize with deduplication
+                        -> Table scan on t2
+
+"subquery with aggregation inside"
+EXPLAIN format=tree SELECT * FROM t1 WHERE t1.a in (SELECT 0.2 * avg(a) FROM t2 WHERE t2.b > t1.b GROUP BY a);
+EXPLAIN
+-> Filter: <in_optimizer>(t1.a,<exists>(select #2))
+    -> Table scan on t1
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(t1.a, t1.b)
+            -> Limit: 1 row(s)
+                -> Filter: (<cache>(t1.a) = <ref_null_helper>((0.2 * avg(t2.a))))
+                    -> Table scan on <temporary>
+                        -> Aggregate using temporary table
+                            -> Filter: (t2.b > t1.b)
+                                -> Table scan on t2
+
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+SELECT * FROM t1 WHERE t1.a in (SELECT 0.2 * avg(a) FROM t2 WHERE t2.b > t1.b GROUP BY a);
+a	b
+"test caching of scalar subquery"
+EXPLAIN format=tree SELECT * FROM t1 WHERE t1.a = (SELECT max(a) FROM t2 WHERE t2.b > t1.b);
+EXPLAIN
+-> Filter: (t1.a = (select #2))
+    -> Table scan on t1
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(t1.b)
+            -> Aggregate: max(t2.a)
+                -> Filter: (t2.b > t1.b)
+                    -> Table scan on t2
+
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+SELECT * FROM t1 WHERE t1.a = (SELECT max(a) FROM t2 WHERE t2.b > t1.b);
+a	b
+3	1
+EXPLAIN format=tree SELECT * FROM t1 WHERE t1.a in (SELECT b FROM t2 WHERE t2.b > t1.b union SELECT a FROM t2 WHERE t2.b > t1.b) ORDER BY 1;
+EXPLAIN
+-> Sort: t1.a
+    -> Filter: <in_optimizer>(t1.a,<exists>(select #2))
+        -> Table scan on t1
+        -> Select #2 (subquery in condition; dependent)
+            -> Result cache : cache keys(t1.a, t1.b)
+                -> Limit: 1 row(s)
+                    -> Table scan on <union temporary>
+                        -> Union materialize with deduplication
+                            -> Limit table size: 1 unique row(s)
+                                -> Limit: 1 row(s)
+                                    -> Filter: ((t2.b > t1.b) and (<cache>(t1.a) = t2.b))
+                                        -> Table scan on t2
+                            -> Limit table size: 1 unique row(s)
+                                -> Limit: 1 row(s)
+                                    -> Filter: ((t2.b > t1.b) and (<cache>(t1.a) = t2.a))
+                                        -> Table scan on t2
+
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.t1.b' of SELECT #3 was resolved in SELECT #1
+SELECT * FROM t1 WHERE t1.a in (SELECT b FROM t2 WHERE t2.b > t1.b union SELECT a FROM t2 WHERE t2.b > t1.b) ORDER BY 1;
+a	b
+1	2
+2	3
+2	3
+2	3
+3	1
+EXPLAIN FORMAT=TREE SELECT * FROM t1 as tt WHERE tt.a in (SELECT a FROM t2 as tt1 WHERE tt1.b in (SELECT t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+EXPLAIN
+-> Filter: <in_optimizer>(tt.a,<exists>(select #2))
+    -> Table scan on tt
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(tt.a, tt.b)
+            -> Limit: 1 row(s)
+                -> Filter: (<in_optimizer>(tt1.b,<exists>(select #3)) and (<cache>(tt.a) = tt1.a))
+                    -> Table scan on tt1
+                    -> Select #3 (subquery in condition; dependent)
+                        -> Result cache : cache keys(tt.b, tt1.b)
+                            -> Limit: 1 row(s)
+                                -> Inner hash join (t2.a = t1.a)
+                                    -> Table scan on t2
+                                    -> Hash
+                                        -> Filter: ((t1.b = tt.b) and (<cache>(tt1.b) = t1.b))
+                                            -> Table scan on t1
+
+Warnings:
+Note	1276	Field or reference 'test.tt.b' of SELECT #3 was resolved in SELECT #1
+SELECT * FROM t1 as tt WHERE tt.a in (SELECT a FROM t2 as tt1 WHERE tt1.b in (SELECT t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+a	b
+1	2
+2	3
+2	3
+2	3
+2	4
+3	1
+"test cost"
+ALTER TABLE t1 ADD index idx(a);
+EXPLAIN format=tree SELECT * FROM t1 WHERE t1.a in (SELECT b FROM t2 WHERE t2.b > t1.b GROUP BY b);
+EXPLAIN
+-> Filter: <in_optimizer>(t1.a,<exists>(select #2))
+    -> Table scan on t1
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(t1.a, t1.b)
+            -> Limit: 1 row(s)
+                -> Filter: ((t2.b > t1.b) and (<cache>(t1.a) = t2.b))
+                    -> Table scan on t2
+
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+ALTER TABLE t1 ADD index idx1(a, b);
+EXPLAIN format=tree SELECT * FROM t1 WHERE t1.a in (SELECT b FROM t2 WHERE t2.b > t1.b GROUP BY b);
+EXPLAIN
+-> Filter: <in_optimizer>(t1.a,<exists>(select #2))
+    -> Index scan on t1 using idx1
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(t1.a, t1.b)
+            -> Limit: 1 row(s)
+                -> Filter: ((t2.b > t1.b) and (<cache>(t1.a) = t2.b))
+                    -> Table scan on t2
+
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+"block PTRC if aggregation if it happens in the outer query"
+EXPLAIN FORMAT=TREE SELECT a, COUNT(t1.b) FROM t1 GROUP BY a ORDER BY (SELECT SUM(t1.b) FROM t2 LIMIT 1);
+EXPLAIN
+-> Sort: (select #2)
+    -> Stream results
+        -> Group aggregate: sum(t1.b), count(t1.b)
+            -> Index scan on t1 using idx1
+-> Select #2 (subquery in projection; dependent)
+    -> Limit: 1 row(s)
+        -> Table scan on t2
+
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+EXPLAIN FORMAT=TREE SELECT a, (SELECT SUM(t1.b) FROM t2 LIMIT 1) FROM t1 GROUP BY a;
+EXPLAIN
+-> Group aggregate: sum(t1.b)
+    -> Index scan on t1 using idx1
+-> Select #2 (subquery in projection; dependent)
+    -> Limit: 1 row(s)
+        -> Table scan on t2
+
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+"but allow PTRC if aggregation happens in the subquery"
+EXPLAIN FORMAT=TREE SELECT a FROM t1 ORDER BY (SELECT SUM(t1.b+t2.b) FROM t2 LIMIT 1);
+EXPLAIN
+-> Sort: (select #2)
+    -> Index scan on t1 using idx1
+-> Select #2 (subquery in projection; dependent)
+    -> Result cache : cache keys(t1.b)
+        -> Limit: 1 row(s)
+            -> Aggregate: sum((t1.b + t2.b))
+                -> Table scan on t2
+
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+"test memory"
+SET rds_partial_result_cache_max_mem_size=64*1024;
+SELECT * FROM t1 WHERE t1.a = (SELECT max(a) FROM t2 WHERE t2.b > t1.b);
+a	b
+3	1
+SET debug="+d,ptrc_init_row_buffer_fail";
+SELECT * FROM t1 WHERE t1.a = (SELECT max(a) FROM t2 WHERE t2.b > t1.b);
+a	b
+3	1
+SET rds_partial_result_cache_max_mem_size=default;
+SET debug="-d,ptrc_init_row_buffer_fail";
+SET rds_partial_result_cache_max_mem_size=default;
+SET debug="+d,ptrc_initrowlbuffer_reserver_space_fail";
+SET OPTIMIZER_TRACE='enabled=on';
+# Turning PQ off, otherwise we don't see the allocation failure in the optimizer trace.
+SELECT /*+ NO_PQ */ * FROM t1 WHERE t1.a = (SELECT max(a) FROM t2 WHERE t2.b > t1.b);
+a	b
+3	1
+SELECT * FROM information_schema.optimizer_trace;
+QUERY	TRACE	MISSING_BYTES_BEYOND_MAX_MEM_SIZE	INSUFFICIENT_PRIVILEGES
+SELECT /*+ NO_PQ */ * FROM t1 WHERE t1.a = (SELECT max(a) FROM t2 WHERE t2.b > t1.b)	{
+  "steps": [
+    {
+      "join_preparation": {
+        "select#": 1,
+        "steps": [
+          {
+            "join_preparation": {
+              "select#": 2,
+              "steps": [
+                {
+                  "expanded_query": "/* select#2 */ select max(`t2`.`a`) from `t2` where (`t2`.`b` > `t1`.`b`)"
+                }
+              ]
+            }
+          },
+          {
+            "expanded_query": "/* select#1 */ select /*+ NO_PQ(@`select#1`) */ `t1`.`a` AS `a`,`t1`.`b` AS `b` from `t1` where (`t1`.`a` = (/* select#2 */ select max(`t2`.`a`) from `t2` where (`t2`.`b` > `t1`.`b`)))"
+          }
+        ]
+      }
+    },
+    {
+      "join_optimization": {
+        "select#": 1,
+        "steps": [
+          {
+            "condition_processing": {
+              "condition": "WHERE",
+              "original_condition": "(`t1`.`a` = (/* select#2 */ select max(`t2`.`a`) from `t2` where (`t2`.`b` > `t1`.`b`)))",
+              "steps": [
+                {
+                  "transformation": "equality_propagation",
+                  "subselect_evaluation": [
+                  ],
+                  "resulting_condition": "(`t1`.`a` = (/* select#2 */ select max(`t2`.`a`) from `t2` where (`t2`.`b` > `t1`.`b`)))"
+                },
+                {
+                  "transformation": "constant_propagation",
+                  "subselect_evaluation": [
+                  ],
+                  "resulting_condition": "(`t1`.`a` = (/* select#2 */ select max(`t2`.`a`) from `t2` where (`t2`.`b` > `t1`.`b`)))"
+                },
+                {
+                  "transformation": "trivial_condition_removal",
+                  "subselect_evaluation": [
+                  ],
+                  "resulting_condition": "(`t1`.`a` = (/* select#2 */ select max(`t2`.`a`) from `t2` where (`t2`.`b` > `t1`.`b`)))"
+                }
+              ]
+            }
+          },
+          {
+            "substitute_generated_columns": {
+            }
+          },
+          {
+            "table_dependencies": [
+              {
+                "table": "`t1`",
+                "row_may_be_null": false,
+                "map_bit": 0,
+                "depends_on_map_bits": [
+                ]
+              }
+            ]
+          },
+          {
+            "ref_optimizer_key_uses": [
+            ]
+          },
+          {
+            "rows_estimation": [
+              {
+                "table": "`t1`",
+                "range_analysis": {
+                  "table_scan": {
+                    "rows": 6,
+                    #
+                  },
+                  "potential_range_indexes": [
+                    {
+                      "index": "idx",
+                      "usable": true,
+                      "key_parts": [
+                        "a"
+                      ]
+                    },
+                    {
+                      "index": "idx1",
+                      "usable": true,
+                      "key_parts": [
+                        "a",
+                        "b"
+                      ]
+                    }
+                  ],
+                  "best_covering_index_scan": {
+                    "index": "idx1",
+                    #
+                    "chosen": true
+                  },
+                  "setup_range_conditions": [
+                  ],
+                  "group_index_range": {
+                    "chosen": false,
+                    "cause": "not_group_by_or_distinct"
+                  },
+                  "skip_scan_range": {
+                    "chosen": false,
+                    "cause": "disjuntive_predicate_present"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "considered_execution_plans": [
+              {
+                "plan_prefix": [
+                ],
+                "table": "`t1`",
+                "best_access_path": {
+                  "considered_access_paths": [
+                    {
+                      "rows_to_scan": 6,
+                      "access_type": "scan",
+                      "resulting_rows": 6,
+                      #
+                      "chosen": true
+                    }
+                  ]
+                },
+                "condition_filtering_pct": 100,
+                "rows_for_plan": 6,
+                "cost_for_plan": 0.85,
+                "chosen": true
+              }
+            ]
+          },
+          {
+            "attaching_conditions_to_tables": {
+              "original_condition": "(`t1`.`a` = (/* select#2 */ select max(`t2`.`a`) from `t2` where (`t2`.`b` > `t1`.`b`)))",
+              "attached_conditions_computation": [
+              ],
+              "attached_conditions_summary": [
+                {
+                  "table": "`t1`",
+                  "attached": "(`t1`.`a` = (/* select#2 */ select max(`t2`.`a`) from `t2` where (`t2`.`b` > `t1`.`b`)))"
+                }
+              ]
+            }
+          },
+          {
+            "finalizing_table_conditions": [
+              {
+                "table": "`t1`",
+                "original_table_condition": "(`t1`.`a` = (/* select#2 */ select max(`t2`.`a`) from `t2` where (`t2`.`b` > `t1`.`b`)))",
+                "final_table_condition   ": "(`t1`.`a` = (/* select#2 */ select max(`t2`.`a`) from `t2` where (`t2`.`b` > `t1`.`b`)))"
+              }
+            ]
+          },
+          {
+            "refine_plan": [
+              {
+                "table": "`t1`"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "join_optimization": {
+        "select#": 2,
+        "steps": [
+          {
+            "condition_processing": {
+              "condition": "WHERE",
+              "original_condition": "(`t2`.`b` > `t1`.`b`)",
+              "steps": [
+                {
+                  "transformation": "equality_propagation",
+                  "resulting_condition": "(`t2`.`b` > `t1`.`b`)"
+                },
+                {
+                  "transformation": "constant_propagation",
+                  "resulting_condition": "(`t2`.`b` > `t1`.`b`)"
+                },
+                {
+                  "transformation": "trivial_condition_removal",
+                  "resulting_condition": "(`t2`.`b` > `t1`.`b`)"
+                }
+              ]
+            }
+          },
+          {
+            "substitute_generated_columns": {
+            }
+          },
+          {
+            "table_dependencies": [
+              {
+                "table": "`t2`",
+                "row_may_be_null": false,
+                "map_bit": 0,
+                "depends_on_map_bits": [
+                ]
+              }
+            ]
+          },
+          {
+            "ref_optimizer_key_uses": [
+            ]
+          },
+          {
+            "rows_estimation": [
+              {
+                "table": "`t2`",
+                "table_scan": {
+                  "rows": 12,
+                  #
+                }
+              }
+            ]
+          },
+          {
+            "considered_execution_plans": [
+              {
+                "plan_prefix": [
+                ],
+                "table": "`t2`",
+                "best_access_path": {
+                  "considered_access_paths": [
+                    {
+                      "rows_to_scan": 12,
+                      "filtering_effect": [
+                      ],
+                      "final_filtering_effect": 1,
+                      "access_type": "scan",
+                      "resulting_rows": 12,
+                      #
+                      "chosen": true
+                    }
+                  ]
+                },
+                "condition_filtering_pct": 33.33,
+                "rows_for_plan": 3.9996,
+                "cost_for_plan": 1.45,
+                "chosen": true
+              }
+            ]
+          },
+          {
+            "attaching_conditions_to_tables": {
+              "original_condition": "(`t2`.`b` > `t1`.`b`)",
+              "attached_conditions_computation": [
+              ],
+              "attached_conditions_summary": [
+                {
+                  "table": "`t2`",
+                  "attached": "(`t2`.`b` > `t1`.`b`)"
+                }
+              ]
+            }
+          },
+          {
+            "optimizing_distinct_group_by_order_by": {
+            }
+          },
+          {
+            "finalizing_table_conditions": [
+              {
+                "table": "`t2`",
+                "original_table_condition": "(`t2`.`b` > `t1`.`b`)",
+                "final_table_condition   ": "(`t2`.`b` > `t1`.`b`)"
+              }
+            ]
+          },
+          {
+            "refine_plan": [
+              {
+                "table": "`t2`"
+              }
+            ]
+          },
+          {
+            "considering_tmp_tables": [
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "not_apply_pq_plan": {
+        "select#": 2,
+        "chosen": false,
+        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+      }
+    },
+    {
+      "partial_result_cache": {
+        "caching_result_of": "subquery",
+        "distinct_rows":#
+        "estimate_rows": 6,
+        #
+        "chosen": true
+      }
+    },
+    {
+      "not_apply_pq_plan": {
+        "select#": 1,
+        "chosen": false,
+        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+      }
+    },
+    {
+      "join_execution": {
+        "select#": 1,
+        "steps": [
+          {
+            "subselect_execution": {
+              "select#": 2,
+              "steps": [
+                {
+                  "join_execution": {
+                    "select#": 2,
+                    "steps": [
+                      {
+                        "partial_result_cache": {
+                          "disabled": true,
+                          "cause": "InitRowBuffer failed because of ER_OUTOFMEMORY"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "subselect_execution": {
+              "select#": 2,
+              "steps": [
+                {
+                  "join_execution": {
+                    "select#": 2,
+                    "steps": [
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "subselect_execution": {
+              "select#": 2,
+              "steps": [
+                {
+                  "join_execution": {
+                    "select#": 2,
+                    "steps": [
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "subselect_execution": {
+              "select#": 2,
+              "steps": [
+                {
+                  "join_execution": {
+                    "select#": 2,
+                    "steps": [
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "subselect_execution": {
+              "select#": 2,
+              "steps": [
+                {
+                  "join_execution": {
+                    "select#": 2,
+                    "steps": [
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "subselect_execution": {
+              "select#": 2,
+              "steps": [
+                {
+                  "join_execution": {
+                    "select#": 2,
+                    "steps": [
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}	0	0
+SET OPTIMIZER_TRACE='enabled=off';
+SET debug="-d,ptrc_initrowlbuffer_reserver_space_fail";
+"test_lru"
+SET debug="+d,allocate_failure_when_storerow";
+SELECT * FROM t1 WHERE t1.a in (SELECT b FROM t2 WHERE t2.b > t1.b GROUP BY b) ORDER BY a;
+a	b
+3	1
+SET debug="-d,allocate_failure_when_storerow";
+SET debug='+d,ptrc_sim_allocate_failure_during_cache';
+ALTER TABLE t2 ADD index idx1(a);
+EXPLAIN FORMAT=TREE SELECT * FROM t1, t2 WHERE t1.a = t2.a ORDER BY 1,2;
+EXPLAIN
+-> Nested loop inner join
+    -> Filter: (t1.a is not null)
+        -> Index scan on t1 using idx1
+    -> Result cache : cache keys(t1.a, t1.b)
+        -> Index lookup on t2 using idx1 (a=t1.a)
+
+SELECT * FROM t1, t2 WHERE t1.a = t2.a ORDER BY 1,2,3,4;
+a	b	a	b
+1	2	1	2
+1	2	1	3
+1	2	1	3
+2	3	2	3
+2	3	2	3
+2	3	2	3
+2	3	2	3
+2	3	2	3
+2	3	2	3
+2	3	2	3
+2	3	2	3
+2	3	2	3
+2	3	2	4
+2	3	2	4
+2	3	2	4
+2	3	2	4
+2	3	2	4
+2	3	2	4
+2	3	2	4
+2	3	2	4
+2	3	2	4
+2	4	2	3
+2	4	2	3
+2	4	2	3
+2	4	2	4
+2	4	2	4
+2	4	2	4
+3	1	3	1
+3	1	3	4
+3	1	3	4
+ALTER TABLE t2 DROP index idx1;
+SET debug="-d,ptrc_sim_allocate_failure_during_cache";
+SET rds_partial_result_cache_cost_threshold = 1;
+SELECT * FROM t1, t2 WHERE t1.a = t2.a ORDER BY 1,2,3,4;
+a	b	a	b
+1	2	1	2
+1	2	1	3
+1	2	1	3
+2	3	2	3
+2	3	2	3
+2	3	2	3
+2	3	2	3
+2	3	2	3
+2	3	2	3
+2	3	2	3
+2	3	2	3
+2	3	2	3
+2	3	2	4
+2	3	2	4
+2	3	2	4
+2	3	2	4
+2	3	2	4
+2	3	2	4
+2	3	2	4
+2	3	2	4
+2	3	2	4
+2	4	2	3
+2	4	2	3
+2	4	2	3
+2	4	2	4
+2	4	2	4
+2	4	2	4
+3	1	3	1
+3	1	3	4
+3	1	3	4
+"test hint"
+SET optimizer_switch = 'partial_result_cache=off';
+"force subquery ptrc"
+EXPLAIN FORMAT=TREE SELECT /*+prc_subquery(@sub1) */ * FROM t1 as tt WHERE tt.a in (SELECT /*+ qb_name(sub1) */ a FROM t2 as tt1 WHERE tt1.b in (SELECT t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+EXPLAIN
+-> Filter: <in_optimizer>(tt.a,<exists>(select #2))
+    -> Index scan on tt using idx1
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(tt.a, tt.b)
+            -> Limit: 1 row(s)
+                -> Filter: (<in_optimizer>(tt1.b,<exists>(select #3)) and (<cache>(tt.a) = tt1.a))
+                    -> Table scan on tt1
+                    -> Select #3 (subquery in condition; dependent)
+                        -> Limit: 1 row(s)
+                            -> Inner hash join (t2.a = t1.a)
+                                -> Table scan on t2
+                                -> Hash
+                                    -> Filter: ((t1.b = tt.b) and (<cache>(tt1.b) = t1.b))
+                                        -> Index scan on t1 using idx1
+
+Warnings:
+Note	1276	Field or reference 'test.tt.b' of SELECT #3 was resolved in SELECT #1
+"hint is useless because it's about top query which is not a subquery (can't have any cache)"
+EXPLAIN FORMAT=TREE SELECT /*+prc_subquery() */ * FROM t1 as tt WHERE tt.a in (SELECT a FROM t2 as tt1 WHERE tt1.b in (SELECT /*+ prc_join(t1,t2) */ t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+EXPLAIN
+-> Filter: <in_optimizer>(tt.a,<exists>(select #2))
+    -> Index scan on tt using idx1
+    -> Select #2 (subquery in condition; dependent)
+        -> Limit: 1 row(s)
+            -> Filter: (<in_optimizer>(tt1.b,<exists>(select #3)) and (<cache>(tt.a) = tt1.a))
+                -> Table scan on tt1
+                -> Select #3 (subquery in condition; dependent)
+                    -> Limit: 1 row(s)
+                        -> Inner hash join (t2.a = t1.a)
+                            -> Table scan on t2
+                            -> Hash
+                                -> Filter: ((t1.b = tt.b) and (<cache>(tt1.b) = t1.b))
+                                    -> Index scan on t1 using idx1
+
+Warnings:
+Note	1276	Field or reference 'test.tt.b' of SELECT #3 was resolved in SELECT #1
+"hint works because it's about subquery"
+EXPLAIN FORMAT=TREE SELECT /*+prc_subquery() */ * FROM t1 as tt WHERE tt.a in (SELECT /*+prc_subquery() */a FROM t2 as tt1 WHERE tt1.b in (SELECT /*+ prc_join(t1,t2) */ t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+EXPLAIN
+-> Filter: <in_optimizer>(tt.a,<exists>(select #2))
+    -> Index scan on tt using idx1
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(tt.a, tt.b)
+            -> Limit: 1 row(s)
+                -> Filter: (<in_optimizer>(tt1.b,<exists>(select #3)) and (<cache>(tt.a) = tt1.a))
+                    -> Table scan on tt1
+                    -> Select #3 (subquery in condition; dependent)
+                        -> Limit: 1 row(s)
+                            -> Inner hash join (t2.a = t1.a)
+                                -> Table scan on t2
+                                -> Hash
+                                    -> Filter: ((t1.b = tt.b) and (<cache>(tt1.b) = t1.b))
+                                        -> Index scan on t1 using idx1
+
+Warnings:
+Note	1276	Field or reference 'test.tt.b' of SELECT #3 was resolved in SELECT #1
+"hint about subquery cannot mention tables (a warning is issued for that)"
+EXPLAIN FORMAT=TREE SELECT * FROM t1 as tt WHERE tt.a in (SELECT /*+prc_subquery(tt1) */a FROM t2 as tt1 WHERE tt1.b in (SELECT /*+ prc_join(t1,t2) */ t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+EXPLAIN
+-> Filter: <in_optimizer>(tt.a,<exists>(select #2))
+    -> Index scan on tt using idx1
+    -> Select #2 (subquery in condition; dependent)
+        -> Limit: 1 row(s)
+            -> Filter: (<in_optimizer>(tt1.b,<exists>(select #3)) and (<cache>(tt.a) = tt1.a))
+                -> Table scan on tt1
+                -> Select #3 (subquery in condition; dependent)
+                    -> Limit: 1 row(s)
+                        -> Inner hash join (t2.a = t1.a)
+                            -> Table scan on t2
+                            -> Hash
+                                -> Filter: ((t1.b = tt.b) and (<cache>(tt1.b) = t1.b))
+                                    -> Index scan on t1 using idx1
+
+Warnings:
+Note	1276	Field or reference 'test.tt.b' of SELECT #3 was resolved in SELECT #1
+Warning	3614	Invalid number of arguments for hint PRC_SUBQUERY
+SET optimizer_switch = 'partial_result_cache=on';
+SET rds_partial_result_cache_cost_threshold = 0;
+"hint is useless"
+EXPLAIN FORMAT=TREE SELECT /*+no_prc_subquery() */ * FROM t1 as tt WHERE tt.a in (SELECT a FROM t2 as tt1 WHERE tt1.b in (SELECT t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+EXPLAIN
+-> Filter: <in_optimizer>(tt.a,<exists>(select #2))
+    -> Index scan on tt using idx1
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(tt.a, tt.b)
+            -> Limit: 1 row(s)
+                -> Filter: (<in_optimizer>(tt1.b,<exists>(select #3)) and (<cache>(tt.a) = tt1.a))
+                    -> Table scan on tt1
+                    -> Select #3 (subquery in condition; dependent)
+                        -> Result cache : cache keys(tt.b, tt1.b)
+                            -> Limit: 1 row(s)
+                                -> Inner hash join (t2.a = t1.a)
+                                    -> Table scan on t2
+                                    -> Hash
+                                        -> Filter: ((t1.b = tt.b) and (<cache>(tt1.b) = t1.b))
+                                            -> Index scan on t1 using idx1
+
+Warnings:
+Note	1276	Field or reference 'test.tt.b' of SELECT #3 was resolved in SELECT #1
+"force no ptrc for inner subquery"
+EXPLAIN FORMAT=TREE SELECT /*+no_prc_subquery(@sub1) */ * FROM t1 as tt WHERE tt.a in (SELECT /*+ qb_name(sub1) */ a FROM t2 as tt1 WHERE tt1.b in (SELECT t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+EXPLAIN
+-> Filter: <in_optimizer>(tt.a,<exists>(select #2))
+    -> Index scan on tt using idx1
+    -> Select #2 (subquery in condition; dependent)
+        -> Limit: 1 row(s)
+            -> Filter: (<in_optimizer>(tt1.b,<exists>(select #3)) and (<cache>(tt.a) = tt1.a))
+                -> Table scan on tt1
+                -> Select #3 (subquery in condition; dependent)
+                    -> Result cache : cache keys(tt.b, tt1.b)
+                        -> Limit: 1 row(s)
+                            -> Inner hash join (t2.a = t1.a)
+                                -> Table scan on t2
+                                -> Hash
+                                    -> Filter: ((t1.b = tt.b) and (<cache>(tt1.b) = t1.b))
+                                        -> Index scan on t1 using idx1
+
+Warnings:
+Note	1276	Field or reference 'test.tt.b' of SELECT #3 was resolved in SELECT #1
+"force no ptrc in subquery"
+EXPLAIN FORMAT=TREE SELECT /*+prc_subquery(@sub1) prc_subquery(@sub1) */ * FROM t1 as tt WHERE tt.a in (SELECT /*+ qb_name(sub1) */ a FROM t2 as tt1 WHERE tt1.b in (SELECT /*+ no_prc_subuqery(t2) */ t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+EXPLAIN
+-> Filter: <in_optimizer>(tt.a,<exists>(select #2))
+    -> Index scan on tt using idx1
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(tt.a, tt.b)
+            -> Limit: 1 row(s)
+                -> Filter: (<in_optimizer>(tt1.b,<exists>(select #3)) and (<cache>(tt.a) = tt1.a))
+                    -> Table scan on tt1
+                    -> Select #3 (subquery in condition; dependent)
+                        -> Result cache : cache keys(tt.b, tt1.b)
+                            -> Limit: 1 row(s)
+                                -> Inner hash join (t2.a = t1.a)
+                                    -> Table scan on t2
+                                    -> Hash
+                                        -> Filter: ((t1.b = tt.b) and (<cache>(tt1.b) = t1.b))
+                                            -> Index scan on t1 using idx1
+
+Warnings:
+Warning	1064	Optimizer hint syntax error near 'no_prc_subuqery(t2) */ t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b))' at line 1
+Warning	3126	Hint PRC_SUBQUERY(@`sub1` ) is ignored as conflicting/duplicated
+Note	1276	Field or reference 'test.tt.b' of SELECT #3 was resolved in SELECT #1
+"conflict hint"
+EXPLAIN FORMAT=TREE SELECT /*+no_prc_subquery(@sub1) prc_subquery(@sub1) */ * FROM t1 as tt WHERE 
+tt.a in (SELECT /*+ qb_name(sub1) */ a FROM t2 as tt1 WHERE tt1.b in (SELECT /*+ no_prc_join(t2) */ t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+EXPLAIN
+-> Filter: <in_optimizer>(tt.a,<exists>(select #2))
+    -> Index scan on tt using idx1
+    -> Select #2 (subquery in condition; dependent)
+        -> Limit: 1 row(s)
+            -> Filter: (<in_optimizer>(tt1.b,<exists>(select #3)) and (<cache>(tt.a) = tt1.a))
+                -> Table scan on tt1
+                -> Select #3 (subquery in condition; dependent)
+                    -> Result cache : cache keys(tt.b, tt1.b)
+                        -> Limit: 1 row(s)
+                            -> Inner hash join (t2.a = t1.a)
+                                -> Table scan on t2
+                                -> Hash
+                                    -> Filter: ((t1.b = tt.b) and (<cache>(tt1.b) = t1.b))
+                                        -> Index scan on t1 using idx1
+
+Warnings:
+Warning	3126	Hint PRC_SUBQUERY(@`sub1` ) is ignored as conflicting/duplicated
+Note	1276	Field or reference 'test.tt.b' of SELECT #3 was resolved in SELECT #1
+"Show that hints are printed in the transformed query below EXPLAIN (see the Note 1003 in output)"
+EXPLAIN FORMAT=TRADITIONAL SELECT /*+no_prc_subquery(@sub1) */ * FROM t1 as tt WHERE 
+tt.a in (SELECT /*+ qb_name(sub1) */ a FROM t2 as tt1 WHERE tt1.b in (SELECT /*+ no_prc_join(t2) */ t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	tt	NULL	index	NULL	idx1	10	NULL	6	100.00	Using where; Using index
+2	DEPENDENT SUBQUERY	tt1	NULL	ALL	NULL	NULL	NULL	NULL	12	10.00	Using where
+3	DEPENDENT SUBQUERY	t1	NULL	index	idx,idx1	idx1	10	NULL	6	16.67	Using where; Using index
+3	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	12	10.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1276	Field or reference 'test.tt.b' of SELECT #3 was resolved in SELECT #1
+Note	1003	/* select#1 */ select /*+ NO_PRC_JOIN(@`select#3`) NO_PRC_SUBQUERY(@`sub1`) */ `test`.`tt`.`a` AS `a`,`test`.`tt`.`b` AS `b` from `test`.`t1` `tt` where <in_optimizer>(`test`.`tt`.`a`,<exists>(/* select#2 */ select /*+ QB_NAME(`sub1`) */ `test`.`tt1`.`a` from `test`.`t2` `tt1` where (<in_optimizer>(`test`.`tt1`.`b`,<exists>(/* select#3 */ select `test`.`t1`.`b` from `test`.`t1` join `test`.`t2` where ((`test`.`t2`.`a` = `test`.`t1`.`a`) and (`test`.`t1`.`b` = `test`.`tt`.`b`) and (<cache>(`test`.`tt1`.`b`) = `test`.`t1`.`b`)))) and (<cache>(`test`.`tt`.`a`) = `test`.`tt1`.`a`))))
+ALTER TABLE t1 DROP INDEX idx;
+ALTER TABLE t1 ADD INDEX idx(b);
+SET rds_partial_result_cache_cost_threshold = 1;
+"no ptrc for NLJ"
+EXPLAIN FORMAT=TREE SELECT * FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+EXPLAIN
+-> Nested loop inner join
+    -> Filter: (t2.b is not null)
+        -> Table scan on t2
+    -> Filter: (t1.a > t2.a)
+        -> Index lookup on t1 using idx (b=t2.b)
+
+"only all tables are in hint, ptrc for NLJ will be forced"
+EXPLAIN FORMAT=TREE SELECT /*+ prc_join(t2) */ * FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+EXPLAIN
+-> Nested loop inner join
+    -> Filter: (t2.b is not null)
+        -> Table scan on t2
+    -> Filter: (t1.a > t2.a)
+        -> Index lookup on t1 using idx (b=t2.b)
+
+EXPLAIN FORMAT=TREE SELECT /*+ prc_join(t1) */ * FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+EXPLAIN
+-> Nested loop inner join
+    -> Filter: (t2.b is not null)
+        -> Table scan on t2
+    -> Result cache : cache keys(t2.a, t2.b)
+        -> Filter: (t1.a > t2.a)
+            -> Index lookup on t1 using idx (b=t2.b)
+
+EXPLAIN FORMAT=TREE SELECT /*+ prc_join(t1,t2) */ * FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+EXPLAIN
+-> Nested loop inner join
+    -> Filter: (t2.b is not null)
+        -> Table scan on t2
+    -> Result cache : cache keys(t2.a, t2.b)
+        -> Filter: (t1.a > t2.a)
+            -> Index lookup on t1 using idx (b=t2.b)
+
+EXPLAIN FORMAT=TREE SELECT /*+ prc_join() */ * FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+EXPLAIN
+-> Nested loop inner join
+    -> Filter: (t2.b is not null)
+        -> Table scan on t2
+    -> Result cache : cache keys(t2.a, t2.b)
+        -> Filter: (t1.a > t2.a)
+            -> Index lookup on t1 using idx (b=t2.b)
+
+SET rds_partial_result_cache_cost_threshold = 0;
+"ptrc for NLJ"
+EXPLAIN FORMAT=TREE SELECT * FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+EXPLAIN
+-> Nested loop inner join
+    -> Filter: (t2.b is not null)
+        -> Table scan on t2
+    -> Result cache : cache keys(t2.a, t2.b)
+        -> Filter: (t1.a > t2.a)
+            -> Index lookup on t1 using idx (b=t2.b)
+
+"no use if hint on outer tables"
+EXPLAIN FORMAT=TREE SELECT /*+ no_prc_join(t2) */ * FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+EXPLAIN
+-> Nested loop inner join
+    -> Filter: (t2.b is not null)
+        -> Table scan on t2
+    -> Result cache : cache keys(t2.a, t2.b)
+        -> Filter: (t1.a > t2.a)
+            -> Index lookup on t1 using idx (b=t2.b)
+
+"no ptrc for NLJ"
+EXPLAIN FORMAT=TREE SELECT /*+ no_prc_join(t1) */ * FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+EXPLAIN
+-> Nested loop inner join
+    -> Filter: (t2.b is not null)
+        -> Table scan on t2
+    -> Filter: (t1.a > t2.a)
+        -> Index lookup on t1 using idx (b=t2.b)
+
+EXPLAIN FORMAT=TREE SELECT /*+ no_prc_join() */ * FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+EXPLAIN
+-> Nested loop inner join
+    -> Filter: (t2.b is not null)
+        -> Table scan on t2
+    -> Filter: (t1.a > t2.a)
+        -> Index lookup on t1 using idx (b=t2.b)
+
+"test rand" 
+"no PTRC for join if WHERE contains random functions, because the NL join's might be random then"
+EXPLAIN FORMAT=TREE SELECT * FROM t1, t2 WHERE t1.b = t2.b AND t1.a + RAND()=t2.a;
+EXPLAIN
+-> Nested loop inner join
+    -> Filter: (t2.b is not null)
+        -> Table scan on t2
+    -> Filter: ((t1.a + rand()) = t2.a)
+        -> Index lookup on t1 using idx (b=t2.b)
+
+ALTER TABLE t1 DROP INDEX idx;
+EXPLAIN FORMAT=TREE SELECT * FROM t1, t2 WHERE t1.b = t2.b AND t1.a = t2.a AND t2.a = RAND();
+EXPLAIN
+-> Nested loop inner join
+    -> Filter: ((t2.a is not null) and (t2.b is not null))
+        -> Table scan on t2
+    -> Filter: (t2.a = rand())
+        -> Covering index lookup on t1 using idx1 (a=t2.a, b=t2.b)
+
+"no PTRC for subquery if left argument of IN is random"
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE t1.a + RAND() in (SELECT t1.b FROM t2 WHERE t1.a=t2.b GROUP BY t1.b);
+EXPLAIN
+-> Filter: <in_optimizer>((t1.a + rand()),<exists>(select #2))
+    -> Index scan on t1 using idx1
+    -> Select #2 (subquery in condition; dependent)
+        -> Limit: 1 row(s)
+            -> Filter: ((t1.a = t2.b) and (<cache>((t1.a + rand())) = t1.b))
+                -> Table scan on t2
+
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+"can use PTRC, as no part of the subquery is random (the top query's WHERE has an random part which is unrelated to the subquery)"
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE t1.a in (SELECT t1.b FROM t2 WHERE t1.a=t2.b GROUP BY t1.b) and t1.a = RAND();
+EXPLAIN
+-> Filter: (<in_optimizer>(t1.a,<exists>(select #2)) and (t1.a = rand()))
+    -> Index scan on t1 using idx1
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(t1.a, t1.b)
+            -> Limit: 1 row(s)
+                -> Filter: ((t1.a = t2.b) and (<cache>(t1.a) = t1.b))
+                    -> Table scan on t2
+
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+CREATE PROCEDURE proc() BEGIN
+SELECT t1.a FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+SELECT t1.a FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+END $$
+CALL proc();
+a
+2
+2
+2
+2
+2
+2
+a
+2
+2
+2
+2
+2
+2
+CREATE FUNCTION func() RETURNS INT DETERMINISTIC BEGIN
+DECLARE co INT;
+DECLARE s INT;
+SELECT count(*) INTO co FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+SELECT sum(t1.a) INTO s FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+RETURN co + s;
+END $$
+SELECT func() FROM t1;
+func()
+18
+18
+18
+18
+18
+18
+DROP PROCEDURE proc;
+DROP FUNCTION func;
+DROP TABLE t1;
+CREATE TABLE t1 (a INT, b INT);
+INSERT INTO t1 VALUES (1,1),(2,1),(3,2),(4,2),(5,3),(6,3);
+explain format=tree SELECT (SELECT SUM(t1_outer.a) FROM t1 AS t1_inner LIMIT 1)
+FROM t1 AS t1_outer GROUP BY t1_outer.b;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Table scan on t1_outer
+    -> Select #2 (subquery in projection; dependent)
+        -> Limit: 1 row(s)
+            -> Table scan on t1_inner
+
+Warnings:
+Note	1276	Field or reference 'test.t1_outer.a' of SELECT #2 was resolved in SELECT #1
+SELECT (SELECT SUM(t1_outer.a) FROM t1 AS t1_inner LIMIT 1)
+FROM t1 AS t1_outer GROUP BY t1_outer.b;
+(SELECT SUM(t1_outer.a) FROM t1 AS t1_inner LIMIT 1)
+3
+7
+11
+DROP TABLE t1;
+CREATE TABLE t1 (a INT primary key, b INT);
+ALTER TABLE t1 ADD index idx(b);
+INSERT INTO t1 VALUES(1,3), (2,3);
+SET OPTIMIZER_TRACE='enabled=on';
+EXPLAIN format=tree
+SELECT /*+ join_prefix(t2,t3) join_prefix(t4,t5) */ t2.a
+FROM t1 AS t2,
+t1 AS t3,
+LATERAL
+(SELECT t4.*
+FROM t1 AS t4,
+t1 AS t5
+WHERE t4.b < t5.b) AS tt
+WHERE t2.b > t3.b and 
+t3.a in (SELECT b FROM t1 AS t6 WHERE t6.b > t3.b GROUP BY b);
+EXPLAIN
+-> Nested loop inner join
+    -> Inner hash join (no condition)
+        -> Index scan on t4 using idx
+        -> Hash
+            -> Nested loop inner join
+                -> Index scan on t2 using idx
+                -> Result cache : cache keys(t2.a, t2.b)
+                    -> Filter: ((t2.b > t3.b) and <in_optimizer>(t3.a,<exists>(select #3)))
+                        -> Index range scan on t3 (re-planned for each iteration)
+                        -> Select #3 (subquery in condition; dependent)
+                            -> Result cache : cache keys(t3.a, t3.b)
+                                -> Limit: 1 row(s)
+                                    -> Filter: (t6.b > t3.b)
+                                        -> Covering index lookup on t6 using idx (b=<cache>(t3.a))
+    -> Result cache : cache keys(t2.a, t2.b, t3.a, t3.b, t4.b)
+        -> Filter: (t4.b < t5.b)
+            -> Index range scan on t5 (re-planned for each iteration)
+
+Warnings:
+Warning	3126	Hint JOIN_PREFIX( `t4`,`t5`) is ignored as conflicting/duplicated
+Note	1276	Field or reference 'test.t3.b' of SELECT #3 was resolved in SELECT #1
+SELECT * FROM information_schema.optimizer_trace;
+QUERY	TRACE	MISSING_BYTES_BEYOND_MAX_MEM_SIZE	INSUFFICIENT_PRIVILEGES
+EXPLAIN format=tree
+SELECT /*+ join_prefix(t2,t3) join_prefix(t4,t5) */ t2.a
+FROM t1 AS t2,
+t1 AS t3,
+LATERAL
+(SELECT t4.*
+FROM t1 AS t4,
+t1 AS t5
+WHERE t4.b < t5.b) AS tt
+WHERE t2.b > t3.b and 
+t3.a in (SELECT b FROM t1 AS t6 WHERE t6.b > t3.b GROUP BY b)	{
+  "steps": [
+    {
+      "join_preparation": {
+        "select#": 1,
+        "steps": [
+          {
+            "join_preparation": {
+              "select#": 2,
+              "steps": [
+                {
+                  "expanded_query": "/* select#2 */ select `t4`.`a` AS `a`,`t4`.`b` AS `b` from `t1` `t4` join `t1` `t5` where (`t4`.`b` < `t5`.`b`)"
+                }
+              ]
+            }
+          },
+          {
+            "derived": {
+              "table": "`` `tt`",
+              "select#": 2,
+              "merged": true
+            }
+          },
+          {
+            "join_preparation": {
+              "select#": 3,
+              "steps": [
+                {
+                  "transformations_to_subquery": [
+                    "removed_grouping"
+                  ]
+                },
+                {
+                  "expanded_query": "/* select#3 */ select `t6`.`b` from `t1` `t6` where (`t6`.`b` > `t3`.`b`)"
+                },
+                {
+                  "transformation": {
+                    "select#": 3,
+                    "from": "IN (SELECT)",
+                    "to": "EXISTS (CORRELATED SELECT)",
+                    "chosen": true,
+                    "evaluating_constant_where_conditions": [
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "expanded_query": "/* select#1 */ select /*+ JOIN_PREFIX(@`select#1` `t2`,`t3`) */ `t2`.`a` AS `a` from `t1` `t2` join `t1` `t3` join (`t1` `t4` join `t1` `t5`) on((`t4`.`b` < `t5`.`b`)) where ((`t2`.`b` > `t3`.`b`) and <in_optimizer>(`t3`.`a`,<exists>(/* select#3 */ select `t6`.`b` from `t1` `t6` where ((`t6`.`b` > `t3`.`b`) and (<cache>(`t3`.`a`) = `t6`.`b`)))))"
+          },
+          {
+            "transformations_to_nested_joins": {
+              "transformations": [
+                "JOIN_condition_to_WHERE",
+                "parenthesis_removal"
+              ],
+              "expanded_query": "/* select#1 */ select /*+ JOIN_PREFIX(@`select#1` `t2`,`t3`) */ `t2`.`a` AS `a` from `t1` `t2` join `t1` `t3` join `t1` `t4` join `t1` `t5` where ((`t2`.`b` > `t3`.`b`) and <in_optimizer>(`t3`.`a`,<exists>(/* select#3 */ select `t6`.`b` from `t1` `t6` where ((`t6`.`b` > `t3`.`b`) and (<cache>(`t3`.`a`) = `t6`.`b`)))) and (`t4`.`b` < `t5`.`b`))"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "join_optimization": {
+        "select#": 1,
+        "steps": [
+          {
+            "condition_processing": {
+              "condition": "WHERE",
+              "original_condition": "((`t2`.`b` > `t3`.`b`) and <in_optimizer>(`t3`.`a`,<exists>(/* select#3 */ select `t6`.`b` from `t1` `t6` where ((`t6`.`b` > `t3`.`b`) and (<cache>(`t3`.`a`) = `t6`.`b`)))) and (`t4`.`b` < `t5`.`b`))",
+              "steps": [
+                {
+                  "transformation": "equality_propagation",
+                  "subselect_evaluation": [
+                  ],
+                  "resulting_condition": "((`t2`.`b` > `t3`.`b`) and <in_optimizer>(`t3`.`a`,<exists>(/* select#3 */ select `t6`.`b` from `t1` `t6` where ((`t6`.`b` > `t3`.`b`) and (<cache>(`t3`.`a`) = `t6`.`b`)))) and (`t4`.`b` < `t5`.`b`))"
+                },
+                {
+                  "transformation": "constant_propagation",
+                  "subselect_evaluation": [
+                  ],
+                  "resulting_condition": "((`t2`.`b` > `t3`.`b`) and <in_optimizer>(`t3`.`a`,<exists>(/* select#3 */ select `t6`.`b` from `t1` `t6` where ((`t6`.`b` > `t3`.`b`) and (<cache>(`t3`.`a`) = `t6`.`b`)))) and (`t4`.`b` < `t5`.`b`))"
+                },
+                {
+                  "transformation": "trivial_condition_removal",
+                  "subselect_evaluation": [
+                  ],
+                  "resulting_condition": "((`t2`.`b` > `t3`.`b`) and <in_optimizer>(`t3`.`a`,<exists>(/* select#3 */ select `t6`.`b` from `t1` `t6` where ((`t6`.`b` > `t3`.`b`) and (<cache>(`t3`.`a`) = `t6`.`b`)))) and (`t4`.`b` < `t5`.`b`))"
+                }
+              ]
+            }
+          },
+          {
+            "substitute_generated_columns": {
+            }
+          },
+          {
+            "table_dependencies": [
+              {
+                "table": "`t1` `t2`",
+                "row_may_be_null": false,
+                "map_bit": 0,
+                "depends_on_map_bits": [
+                ]
+              },
+              {
+                "table": "`t1` `t3`",
+                "row_may_be_null": false,
+                "map_bit": 1,
+                "depends_on_map_bits": [
+                ]
+              },
+              {
+                "table": "`t1` `t4`",
+                "row_may_be_null": false,
+                "map_bit": 2,
+                "depends_on_map_bits": [
+                ]
+              },
+              {
+                "table": "`t1` `t5`",
+                "row_may_be_null": false,
+                "map_bit": 3,
+                "depends_on_map_bits": [
+                ]
+              }
+            ]
+          },
+          {
+            "ref_optimizer_key_uses": [
+            ]
+          },
+          {
+            "rows_estimation": [
+              {
+                "table": "`t1` `t2`",
+                "table_scan": {
+                  "rows": 2,
+                  #
+                }
+              },
+              {
+                "table": "`t1` `t3`",
+                "table_scan": {
+                  "rows": 2,
+                  #
+                }
+              },
+              {
+                "table": "`t1` `t4`",
+                "table_scan": {
+                  "rows": 2,
+                  #
+                }
+              },
+              {
+                "table": "`t1` `t5`",
+                "table_scan": {
+                  "rows": 2,
+                  #
+                }
+              }
+            ]
+          },
+          {
+            "considered_execution_plans": [
+              {
+                "plan_prefix": [
+                ],
+                "table": "`t1` `t2`",
+                "best_access_path": {
+                  "considered_access_paths": [
+                    {
+                      "rows_to_scan": 2,
+                      "filtering_effect": [
+                      ],
+                      "final_filtering_effect": 1,
+                      "access_type": "scan",
+                      "resulting_rows": 2,
+                      #
+                      "chosen": true
+                    }
+                  ]
+                },
+                "condition_filtering_pct": 100,
+                "rows_for_plan": 2,
+                "cost_for_plan": 0.45,
+                "rest_of_plan": [
+                  {
+                    "plan_prefix": [
+                      "`t1` `t2`"
+                    ],
+                    "table": "`t1` `t3`",
+                    "best_access_path": {
+                      "considered_access_paths": [
+                        {
+                          "rows_to_scan": 2,
+                          "filtering_effect": [
+                          ],
+                          "final_filtering_effect": 1,
+                          "access_type": "scan",
+                          "using_join_cache": true,
+                          "buffers_needed": 1,
+                          "resulting_rows": 2,
+                          #
+                          "chosen": true
+                        }
+                      ]
+                    },
+                    "condition_filtering_pct": 50,
+                    "rows_for_plan": 2,
+                    "cost_for_plan": 1.10002,
+                    "rest_of_plan": [
+                      {
+                        "plan_prefix": [
+                          "`t1` `t2`",
+                          "`t1` `t3`"
+                        ],
+                        "table": "`t1` `t4`",
+                        "best_access_path": {
+                          "considered_access_paths": [
+                            {
+                              "rows_to_scan": 2,
+                              "filtering_effect": [
+                              ],
+                              "final_filtering_effect": 1,
+                              "access_type": "scan",
+                              "using_join_cache": true,
+                              "buffers_needed": 1,
+                              "resulting_rows": 2,
+                              #
+                              "chosen": true
+                            }
+                          ]
+                        },
+                        "condition_filtering_pct": 100,
+                        "rows_for_plan": 4,
+                        "cost_for_plan": 1.75005,
+                        "rest_of_plan": [
+                          {
+                            "plan_prefix": [
+                              "`t1` `t2`",
+                              "`t1` `t3`",
+                              "`t1` `t4`"
+                            ],
+                            "table": "`t1` `t5`",
+                            "best_access_path": {
+                              "considered_access_paths": [
+                                {
+                                  "rows_to_scan": 2,
+                                  "filtering_effect": [
+                                  ],
+                                  "final_filtering_effect": 1,
+                                  "access_type": "scan",
+                                  "using_join_cache": true,
+                                  "buffers_needed": 1,
+                                  "resulting_rows": 2,
+                                  #
+                                  "chosen": true
+                                }
+                              ]
+                            },
+                            "condition_filtering_pct": 50,
+                            "rows_for_plan": 4,
+                            "cost_for_plan": 2.80014,
+                            "chosen": true
+                          }
+                        ]
+                      },
+                      {
+                        "plan_prefix": [
+                          "`t1` `t2`",
+                          "`t1` `t3`"
+                        ],
+                        "table": "`t1` `t5`",
+                        "best_access_path": {
+                          "considered_access_paths": [
+                            {
+                              "rows_to_scan": 2,
+                              "filtering_effect": [
+                              ],
+                              "final_filtering_effect": 1,
+                              "access_type": "scan",
+                              "using_join_cache": true,
+                              "buffers_needed": 1,
+                              "resulting_rows": 2,
+                              #
+                              "chosen": true
+                            }
+                          ]
+                        },
+                        "condition_filtering_pct": 100,
+                        "rows_for_plan": 4,
+                        "cost_for_plan": 1.75005,
+                        "rest_of_plan": [
+                          {
+                            "plan_prefix": [
+                              "`t1` `t2`",
+                              "`t1` `t3`",
+                              "`t1` `t5`"
+                            ],
+                            "table": "`t1` `t4`",
+                            "best_access_path": {
+                              "considered_access_paths": [
+                                {
+                                  "rows_to_scan": 2,
+                                  "filtering_effect": [
+                                  ],
+                                  "final_filtering_effect": 1,
+                                  "access_type": "scan",
+                                  "using_join_cache": true,
+                                  "buffers_needed": 1,
+                                  "resulting_rows": 2,
+                                  #
+                                  "chosen": true
+                                }
+                              ]
+                            },
+                            "condition_filtering_pct": 50,
+                            "rows_for_plan": 4,
+                            "cost_for_plan": 2.80014,
+                            "pruned_by_cost": true
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "attaching_conditions_to_tables": {
+              "original_condition": "((`t2`.`b` > `t3`.`b`) and <in_optimizer>(`t3`.`a`,<exists>(/* select#3 */ select `t6`.`b` from `t1` `t6` where ((`t6`.`b` > `t3`.`b`) and (<cache>(`t3`.`a`) = `t6`.`b`)))) and (`t4`.`b` < `t5`.`b`))",
+              "attached_conditions_computation": [
+                {
+                  "table": "`t1` `t3`",
+                  "rechecking_index_usage": {
+                    "recheck_reason": "not_first_table",
+                    "range_analysis": {
+                      "table_scan": {
+                        "rows": 2,
+                        #
+                      },
+                      "potential_range_indexes": [
+                        {
+                          "index": "PRIMARY",
+                          "usable": false,
+                          "cause": "not_applicable"
+                        },
+                        {
+                          "index": "idx",
+                          "usable": true,
+                          "key_parts": [
+                            "b",
+                            "a"
+                          ]
+                        }
+                      ],
+                      "best_covering_index_scan": {
+                        "index": "idx",
+                        #
+                        "chosen": true
+                      },
+                      "setup_range_conditions": [
+                      ],
+                      "group_index_range": {
+                        "chosen": false,
+                        "cause": "not_single_table"
+                      },
+                      "skip_scan_range": {
+                        "chosen": false,
+                        "cause": "not_single_table"
+                      },
+                      "analyzing_range_alternatives": {
+                        "range_scan_alternatives": [
+                          {
+                            "index": "idx",
+                            "chosen": false,
+                            "cause": "depends_on_unread_values"
+                          }
+                        ],
+                        "analyzing_roworder_intersect": {
+                          "usable": false,
+                          "cause": "too_few_roworder_scans"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "table": "`t1` `t5`",
+                  "rechecking_index_usage": {
+                    "recheck_reason": "not_first_table",
+                    "range_analysis": {
+                      "table_scan": {
+                        "rows": 2,
+                        #
+                      },
+                      "potential_range_indexes": [
+                        {
+                          "index": "PRIMARY",
+                          "usable": false,
+                          "cause": "not_applicable"
+                        },
+                        {
+                          "index": "idx",
+                          "usable": true,
+                          "key_parts": [
+                            "b",
+                            "a"
+                          ]
+                        }
+                      ],
+                      "best_covering_index_scan": {
+                        "index": "idx",
+                        #
+                        "chosen": true
+                      },
+                      "setup_range_conditions": [
+                      ],
+                      "group_index_range": {
+                        "chosen": false,
+                        "cause": "not_single_table"
+                      },
+                      "skip_scan_range": {
+                        "chosen": false,
+                        "cause": "not_single_table"
+                      },
+                      "analyzing_range_alternatives": {
+                        "range_scan_alternatives": [
+                          {
+                            "index": "idx",
+                            "chosen": false,
+                            "cause": "depends_on_unread_values"
+                          }
+                        ],
+                        "analyzing_roworder_intersect": {
+                          "usable": false,
+                          "cause": "too_few_roworder_scans"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "attached_conditions_summary": [
+                {
+                  "table": "`t1` `t2`",
+                  "attached": null
+                },
+                {
+                  "table": "`t1` `t3`",
+                  "attached": "((`t2`.`b` > `t3`.`b`) and <in_optimizer>(`t3`.`a`,<exists>(/* select#3 */ select `t6`.`b` from `t1` `t6` where ((`t6`.`b` > `t3`.`b`) and (<cache>(`t3`.`a`) = `t6`.`b`)))))"
+                },
+                {
+                  "table": "`t1` `t4`",
+                  "attached": null
+                },
+                {
+                  "table": "`t1` `t5`",
+                  "attached": "(`t4`.`b` < `t5`.`b`)"
+                }
+              ]
+            }
+          },
+          {
+            "finalizing_table_conditions": [
+              {
+                "table": "`t1` `t3`",
+                "original_table_condition": "((`t2`.`b` > `t3`.`b`) and <in_optimizer>(`t3`.`a`,<exists>(/* select#3 */ select `t6`.`b` from `t1` `t6` where ((`t6`.`b` > `t3`.`b`) and (<cache>(`t3`.`a`) = `t6`.`b`)))))",
+                "final_table_condition   ": "((`t2`.`b` > `t3`.`b`) and <in_optimizer>(`t3`.`a`,<exists>(/* select#3 */ select `t6`.`b` from `t1` `t6` where ((`t6`.`b` > `t3`.`b`) and (<cache>(`t3`.`a`) = `t6`.`b`)))))"
+              },
+              {
+                "table": "`t1` `t5`",
+                "original_table_condition": "(`t4`.`b` < `t5`.`b`)",
+                "final_table_condition   ": "(`t4`.`b` < `t5`.`b`)"
+              }
+            ]
+          },
+          {
+            "refine_plan": [
+              {
+                "table": "`t1` `t2`"
+              },
+              {
+                "table": "`t1` `t3`"
+              },
+              {
+                "table": "`t1` `t4`"
+              },
+              {
+                "table": "`t1` `t5`"
+              }
+            ]
+          },
+          {
+            "partial_result_cache": {
+              "caching_result_of": "nested_loop_join",
+              "plan_prefix": [
+                "`t1` `t2`"
+              ],
+              "right_tables": [
+                "`t1` `t3`"
+              ],
+              "distinct_rows":#
+              "estimate_rows": 2,
+              #
+              "chosen": true
+            }
+          },
+          {
+            "partial_result_cache": {
+              "caching_result_of": "nested_loop_join",
+              "plan_prefix": [
+                "`t1` `t2`",
+                "`t1` `t3`",
+                "`t1` `t4`"
+              ],
+              "right_tables": [
+                "`t1` `t5`"
+              ],
+              "distinct_rows":#
+              "estimate_rows": 4,
+              #
+              "chosen": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "join_optimization": {
+        "select#": 3,
+        "steps": [
+          {
+            "condition_processing": {
+              "condition": "WHERE",
+              "original_condition": "((`t6`.`b` > `t3`.`b`) and (<cache>(`t3`.`a`) = `t6`.`b`))",
+              "steps": [
+                {
+                  "transformation": "equality_propagation",
+                  "resulting_condition": "((`t6`.`b` > `t3`.`b`) and (<cache>(`t3`.`a`) = `t6`.`b`))"
+                },
+                {
+                  "transformation": "constant_propagation",
+                  "resulting_condition": "((`t6`.`b` > `t3`.`b`) and (<cache>(`t3`.`a`) = `t6`.`b`))"
+                },
+                {
+                  "transformation": "trivial_condition_removal",
+                  "resulting_condition": "((`t6`.`b` > `t3`.`b`) and (<cache>(`t3`.`a`) = `t6`.`b`))"
+                }
+              ]
+            }
+          },
+          {
+            "substitute_generated_columns": {
+            }
+          },
+          {
+            "table_dependencies": [
+              {
+                "table": "`t1` `t6`",
+                "row_may_be_null": false,
+                "map_bit": 0,
+                "depends_on_map_bits": [
+                ]
+              }
+            ]
+          },
+          {
+            "ref_optimizer_key_uses": [
+              {
+                "table": "`t1` `t6`",
+                "field": "b",
+                "equals": "<cache>(`t3`.`a`)",
+                "null_rejecting": true
+              }
+            ]
+          },
+          {
+            "rows_estimation": [
+              {
+                "table": "`t1` `t6`",
+                "table_scan": {
+                  "rows": 2,
+                  #
+                }
+              }
+            ]
+          },
+          {
+            "considered_execution_plans": [
+              {
+                "plan_prefix": [
+                ],
+                "table": "`t1` `t6`",
+                "best_access_path": {
+                  "considered_access_paths": [
+                    {
+                      "access_type": "ref",
+                      "index": "idx",
+                      "rows": 2,
+                      #
+                      "chosen": true
+                    },
+                    {
+                      "access_type": "scan",
+                      "chosen": false,
+                      "cause": "covering_index_better_than_full_scan"
+                    }
+                  ]
+                },
+                "condition_filtering_pct": 100,
+                "rows_for_plan": 2,
+                "cost_for_plan": 0.450274,
+                "chosen": true
+              }
+            ]
+          },
+          {
+            "transformation": {
+              "select#": 3,
+              "from": "IN (SELECT)",
+              "to": "materialization",
+              "possible": false,
+              "cause": "correlated"
+            }
+          },
+          {
+            "attaching_conditions_to_tables": {
+              "original_condition": "((`t6`.`b` > `t3`.`b`) and (<cache>(`t3`.`a`) = `t6`.`b`))",
+              "attached_conditions_computation": [
+              ],
+              "attached_conditions_summary": [
+                {
+                  "table": "`t1` `t6`",
+                  "attached": "((`t6`.`b` > `t3`.`b`) and (<cache>(`t3`.`a`) = `t6`.`b`))"
+                }
+              ]
+            }
+          },
+          {
+            "finalizing_table_conditions": [
+              {
+                "table": "`t1` `t6`",
+                "original_table_condition": "((`t6`.`b` > `t3`.`b`) and (<cache>(`t3`.`a`) = `t6`.`b`))",
+                "final_table_condition   ": "(`t6`.`b` > `t3`.`b`)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "not_apply_pq_plan": {
+        "select#": 3,
+        "chosen": false,
+        "reason": "Query with IN/ANY/ALL/SOME clause may transform to subquery which pq does not support."
+      }
+    },
+    {
+      "partial_result_cache": {
+        "caching_result_of": "subquery",
+        "distinct_rows":#
+        "estimate_rows": 4,
+        #
+        "chosen": true
+      }
+    },
+    {
+      "not_apply_pq_plan": {
+        "select#": 1,
+        "chosen": false,
+        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+      }
+    }
+  ]
+}	0	0
+SET OPTIMIZER_TRACE='enabled=off';
+EXPLAIN format=tree
+SELECT /*+ join_prefix(t2,t3) join_prefix(t4,t5) */ t2.a
+FROM t1 AS t2,
+t1 AS t3,
+LATERAL
+(SELECT t4.*
+FROM t1 AS t4,
+t1 AS t5
+WHERE t4.b < t5.b) AS tt
+WHERE t2.b > t3.b;
+EXPLAIN
+-> Nested loop inner join
+    -> Inner hash join (no condition)
+        -> Index scan on t4 using idx
+        -> Hash
+            -> Nested loop inner join
+                -> Index scan on t2 using idx
+                -> Result cache : cache keys(t2.a, t2.b)
+                    -> Filter: (t2.b > t3.b)
+                        -> Index range scan on t3 (re-planned for each iteration)
+    -> Result cache : cache keys(t2.a, t2.b, t3.b, t4.b)
+        -> Filter: (t4.b < t5.b)
+            -> Index range scan on t5 (re-planned for each iteration)
+
+Warnings:
+Warning	3126	Hint JOIN_PREFIX( `t4`,`t5`) is ignored as conflicting/duplicated
+SELECT /*+ join_prefix(t2,t3) join_prefix(t4,t5) */ t2.a
+FROM t1 AS t2,
+t1 AS t3,
+LATERAL
+(SELECT t4.*
+FROM t1 AS t4,
+t1 AS t5
+WHERE t4.b < t5.b) AS tt
+WHERE t2.b > t3.b;
+a
+Warnings:
+Warning	3126	Hint JOIN_PREFIX( `t4`,`t5`) is ignored as conflicting/duplicated
+SET optimizer_switch='materialization=off';
+EXPLAIN FORMAT=TREE SELECT b FROM t1 WHERE (1+(SELECT t1.a FROM t1 as t2 LIMIT 1))
+IN(SELECT t3.b FROM t1 as t3) ORDER BY 1;
+EXPLAIN
+-> Filter: <in_optimizer>((1 + (select #2)),<exists>(select #3))
+    -> Index scan on t1 using idx
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(t1.a)
+            -> Limit: 1 row(s)
+                -> Index scan on t2 using idx
+    -> Select #3 (subquery in condition; dependent)
+        -> Result cache : cache keys(t1.a)
+            -> Limit: 1 row(s)
+                -> Filter: (<cache>((1 + (select #2))) = t3.b)
+                    -> Covering index lookup on t3 using idx (b=<cache>((1 + (select #2))))
+                        -> Select #2 (subquery in reference key of index access; dependent)
+                            -> Result cache : cache keys(t1.a)
+                                -> Limit: 1 row(s)
+                                    -> Index scan on t2 using idx
+                    -> Select #2 (subquery in condition; dependent)
+                        -> Result cache : cache keys(t1.a)
+                            -> Limit: 1 row(s)
+                                -> Index scan on t2 using idx
+
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+SELECT b FROM t1 WHERE (1+(SELECT t1.a FROM t1 as t2 LIMIT 1)) IN
+(SELECT t3.b FROM t1 as t3) ORDER BY 1;
+b
+3
+SET rds_partial_result_cache_cost_threshold = 1;
+EXPLAIN FORMAT=TREE SELECT b FROM t1 WHERE (1+(SELECT t1.a FROM t1 as t2 LIMIT 1))
+IN(SELECT t3.b FROM t1 as t3) ORDER BY 1;
+EXPLAIN
+-> Filter: <in_optimizer>((1 + (select #2)),<exists>(select #3))
+    -> Index scan on t1 using idx
+    -> Select #2 (subquery in condition; dependent)
+        -> Limit: 1 row(s)
+            -> Index scan on t2 using idx
+    -> Select #3 (subquery in condition; dependent)
+        -> Limit: 1 row(s)
+            -> Filter: (<cache>((1 + (select #2))) = t3.b)
+                -> Covering index lookup on t3 using idx (b=<cache>((1 + (select #2))))
+                    -> Select #2 (subquery in reference key of index access; dependent)
+                        -> Limit: 1 row(s)
+                            -> Index scan on t2 using idx
+                -> Select #2 (subquery in condition; dependent)
+                    -> Limit: 1 row(s)
+                        -> Index scan on t2 using idx
+
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+SELECT b FROM t1 WHERE (1+(SELECT t1.a FROM t1 as t2 LIMIT 1)) IN
+(SELECT t3.b FROM t1 as t3) ORDER BY 1;
+b
+3
+DROP TABLE t1;
+DROP TABLE t2;
+CREATE TABLE t1(a int, b int);
+INSERT INTO t1 VALUES(1,3),(3,4);
+CREATE TABLE t2 AS SELECT * FROM t1;
+INSERT INTO t2 SELECT * FROM t2;
+ALTER TABLE t2 ADD INDEX idx(b);
+INSERT INTO t2 SELECT * FROM t2;
+SET @save_optimizer_switch = @@optimizer_switch;
+SET optimizer_switch='semijoin=on,firstmatch=off,loosescan=off,materialization=off,mrr=off,index_condition_pushdown=off,derived_merge=off,hash_join=off';
+SET rds_partial_result_cache_cost_threshold = 0;
+EXPLAIN FORMAT=TREE SELECT * FROM t2 WHERE t2.b IN (SELECT t1.a FROM t1, t2 AS t3 WHERE t1.b>t3.b);
+EXPLAIN
+-> Remove duplicate t2 rows using temporary table (weedout)
+    -> Nested loop inner join
+        -> Nested loop inner join
+            -> Filter: (t1.a is not null)
+                -> Table scan on t1
+            -> Result cache : cache keys(t1.a, t1.b)
+                -> Index lookup on t2 using idx (b=t1.a)
+        -> Result cache : cache keys(t1.a, t1.b, t2.a, t2.b)
+            -> Filter: (t1.b > t3.b)
+                -> Index range scan on t3 (re-planned for each iteration)
+
+SELECT * FROM t2 WHERE t2.b IN (SELECT t1.a FROM t1, t2 AS t3 WHERE t1.b>t3.b);
+a	b
+1	3
+1	3
+1	3
+1	3
+SET rds_partial_result_cache_cost_threshold = 1;
+SELECT * FROM t2 WHERE t2.b IN (SELECT t1.a FROM t1, t2 AS t3 WHERE t1.b>t3.b);
+a	b
+1	3
+1	3
+1	3
+1	3
+BUG2022042401814: Weedout gives an incorrect result because of PTRC
+Following test case tries to simulate PTRC is disabled during execution
+when hit ratio is too lower. Here we set check frequency to low value to
+make hit ratio be checked with fewer records reading.
+SET rds_partial_result_cache_cost_threshold = 0;
+SET @old_threshold = @@rds_partial_result_cache_hit_ratio_frequency;
+SET rds_partial_result_cache_hit_ratio_frequency = 4;
+SELECT * FROM t2 WHERE t2.b IN (SELECT t1.a FROM t1, t2 AS t3 WHERE t1.b>t3.b);
+a	b
+1	3
+1	3
+1	3
+1	3
+SET rds_partial_result_cache_hit_ratio_frequency = @old_threshold;
+SET optimizer_switch = @save_optimizer_switch;
+DROP TABLE t1, t2;
+BUG2022042401814: Weedout gives an incorrect result because of PTRC
+Another weedout case which can check weedout can give a bad result if
+PTRC doesn't cache rowid.
+CREATE TABLE t(a int);
+INSERT INTO t VALUES (1),(2);
+CREATE TABLE t1(a int);
+INSERT INTO t1 VALUES (1),(2),(3);
+INSERT INTO t1 VALUES (1),(2),(3);
+SET @save_optimizer_switch = @@optimizer_switch;
+SET optimizer_switch='semijoin=on,partial_result_cache=on',rds_partial_result_cache_cost_threshold = 0;
+EXPLAIN format=tree select /*+ join_order(t1@s,t2@s,t) no_bnl() */ t.a from    t where t.a in (select /*+ no_semijoin(materialization,firstmatch,loosescan) qb_name(s) no_bnl() */ t1.a from t1, t1 as t2 where t1.a=t2.a) ;
+EXPLAIN
+-> Remove duplicate t rows using temporary table (weedout)
+    -> Nested loop inner join
+        -> Nested loop inner join
+            -> Table scan on t1
+            -> Result cache : cache keys(t1.a)
+                -> Filter: (t2.a = t1.a)
+                    -> Table scan on t2
+        -> Result cache : cache keys(t1.a, t2.a)
+            -> Filter: (t.a = t1.a)
+                -> Table scan on t
+
+select /*+ join_order(t1@s,t2@s,t) no_bnl() */ t.a from    t where t.a in (select /*+ no_semijoin(materialization,firstmatch,loosescan) qb_name(s) no_bnl() */ t1.a from t1, t1 as t2 where t1.a=t2.a) ;
+a
+1
+2
+SET optimizer_switch='partial_result_cache=off';
+select /*+ join_order(t1@s,t2@s,t) no_bnl() */ t.a from    t where t.a in (select /*+ no_semijoin(materialization,firstmatch,loosescan) qb_name(s) no_bnl() */ t1.a from t1, t1 as t2 where t1.a=t2.a) ;
+a
+1
+2
+DROP TABLE t1,t;
+SET optimizer_switch = @save_optimizer_switch;
+"When a free slot is reused from the LRU, we make sure that this slot is big enough for the data to insert; we test it here by having rows of bigger and bigger size"
+CREATE TABLE t1(a varchar(1000));
+INSERT INTO t1 SELECT REPEAT("b", 2);
+INSERT INTO t1 SELECT REPEAT("a", 2);
+CREATE TABLE t2(a varchar(1000));
+INSERT INTO t2 SELECT REPEAT("a", 1);
+INSERT INTO t2 SELECT REPEAT("a", LENGTH(a) + 1) FROM t2;
+INSERT INTO t2 SELECT REPEAT("a", LENGTH(a) + 2) FROM t2;
+INSERT INTO t2 SELECT REPEAT("a", LENGTH(a) + 4) FROM t2;
+INSERT INTO t2 SELECT REPEAT("a", LENGTH(a) + 8) FROM t2;
+SET optimizer_switch='semijoin=off,partial_result_cache=on';
+SET rds_partial_result_cache_cost_threshold = 0;
+SET debug="+d,allocate_failure_when_storerow";
+analyze table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+analyze table t2;
+Table	Op	Msg_type	Msg_text
+test.t2	analyze	status	OK
+EXPLAIN FORMAT=tree SELECT /*+ NO_BNL(t2) */ * FROM t1, t2;
+EXPLAIN
+-> Nested loop inner join
+    -> Table scan on t1
+    -> Result cache : cache keys(t1.a)
+        -> Table scan on t2
+
+SELECT /*+ NO_BNL(t2) */ * FROM t1, t2;
+a	a
+bb	a
+bb	aa
+bb	aaa
+bb	aaaa
+bb	aaaaa
+bb	aaaaaa
+bb	aaaaaaa
+bb	aaaaaaaa
+bb	aaaaaaaaa
+bb	aaaaaaaaaa
+bb	aaaaaaaaaaa
+bb	aaaaaaaaaaaa
+bb	aaaaaaaaaaaaa
+bb	aaaaaaaaaaaaaa
+bb	aaaaaaaaaaaaaaa
+bb	aaaaaaaaaaaaaaaa
+aa	a
+aa	aa
+aa	aaa
+aa	aaaa
+aa	aaaaa
+aa	aaaaaa
+aa	aaaaaaa
+aa	aaaaaaaa
+aa	aaaaaaaaa
+aa	aaaaaaaaaa
+aa	aaaaaaaaaaa
+aa	aaaaaaaaaaaa
+aa	aaaaaaaaaaaaa
+aa	aaaaaaaaaaaaaa
+aa	aaaaaaaaaaaaaaa
+aa	aaaaaaaaaaaaaaaa
+SET debug="-d,allocate_failure_when_storerow";
+DROP TABLE t1, t2;
+"test cache keys without matching any rows: show that there are hits even when cached join result is empty"
+CREATE TABLE t1(a int, b int);
+INSERT INTO t1 VALUES(1,2),(2,3),(2,3),(2,3);
+CREATE TABLE t2(a int, b int);
+INSERT INTO t2 VALUES(1,3),(3,4);
+EXPLAIN ANALYZE FORMAT=tree SELECT /*+ NO_BNL() */ * FROM t1 STRAIGHT_JOIN t2 WHERE t1.a = t2.a ORDER BY t1.a;
+EXPLAIN
+-> Nested loop inner join 
+    -> Sort: t1.a 
+        -> Table scan on t1 
+    -> Result cache : cache keys(t1.a, t1.b) (Cache Hits: 2, Cache Misses: 2, Cache Evictions: 0, Cache Overflows: 0, Memory Usage: # ) 
+        -> Filter: (t2.a = t1.a) 
+            -> Table scan on t2 
+
+SELECT /*+ NO_BNL() */ * FROM t1 STRAIGHT_JOIN t2 WHERE t1.a = t2.a ORDER BY t1.a;
+a	b	a	b
+1	2	1	3
+SELECT /*+ NO_PRC_JOIN() */ * FROM t1 STRAIGHT_JOIN t2 WHERE t1.a = t2.a ORDER BY t1.a;
+a	b	a	b
+1	2	1	3
+"Verify that Item_in_subselect::was_null is properly stored in the cache as it"
+" is necessary for when the subquery's inner value is NULL. We use NOT IN to"
+" trigger the use of was_null"
+SET rds_partial_result_cache_cost_threshold = 1;
+CREATE TABLE c (
+col_int_nokey INTEGER NOT NULL,
+col_int_key INTEGER GENERATED ALWAYS AS 
+(col_int_nokey + col_int_nokey) VIRTUAL,
+col_varchar_nokey VARCHAR(1) NOT NULL,
+col_varchar_key VARCHAR(2) GENERATED ALWAYS AS
+(CONCAT(col_varchar_nokey, col_varchar_nokey)),
+KEY (col_int_key),
+KEY (col_int_key, col_varchar_key)
+) ;
+INSERT INTO c (
+col_int_nokey,
+col_varchar_nokey
+) VALUES (8,'m');
+CREATE TABLE cc (
+col_int_nokey INTEGER,
+col_int_key INTEGER GENERATED ALWAYS AS
+(col_int_nokey + col_int_nokey) VIRTUAL,
+col_varchar_nokey VARCHAR(1),
+col_varchar_key VARCHAR(2) GENERATED ALWAYS AS
+(CONCAT(col_varchar_nokey, col_varchar_nokey)),
+KEY (col_int_key),
+KEY (col_varchar_key),
+KEY (col_int_key, col_varchar_key),
+KEY (col_int_key, col_int_nokey),
+KEY (col_varchar_key, col_varchar_nokey)
+);
+INSERT INTO cc (
+col_int_nokey,
+col_varchar_nokey
+) VALUES (8,'e'),(NULL,NULL),(8,'p');
+EXPLAIN FORMAT=tree SELECT alias2 . col_int_key , alias1 . col_int_nokey , alias2 . col_varchar_key AS field1 FROM ( cc AS alias1 , cc AS alias2 ) WHERE ( alias2 . col_int_key , alias1 . col_int_nokey ) NOT IN ( SELECT /*+prc_subquery() */ SQ1_alias2 . col_int_nokey AS SQ1_field1 , SQ1_alias1 . col_int_key AS SQ1_field2 FROM ( cc AS SQ1_alias1 , c AS SQ1_alias2 ) GROUP BY SQ1_field1 , SQ1_field2 );
+EXPLAIN
+-> Filter: <in_optimizer>((alias2.col_int_key,alias1.col_int_nokey),<exists>(select #2) is false)
+    -> Inner hash join (no condition)
+        -> Index scan on alias2 using col_int_key_2
+        -> Hash
+            -> Index scan on alias1 using col_int_key_3
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(alias1.col_int_nokey, alias2.col_int_key)
+            -> Limit: 1 row(s)
+                -> Filter: (<if>(outer_field_is_not_null, <is_not_null_test>(SQ1_alias2.col_int_nokey), true) and <if>(outer_field_is_not_null, <is_not_null_test>(SQ1_alias1.col_int_key), true))
+                    -> Nested loop inner join
+                        -> Filter: <if>(outer_field_is_not_null, ((<cache>(alias2.col_int_key) = SQ1_alias2.col_int_nokey) or <cache>((SQ1_alias2.col_int_nokey is null))), true)
+                            -> Table scan on SQ1_alias2
+                        -> Filter: <if>(outer_field_is_not_null, ((<cache>(alias1.col_int_nokey) = SQ1_alias1.col_int_key) or (SQ1_alias1.col_int_key is null)), true)
+                            -> Alternative plans for IN subquery: Index lookup unless col_int_key IS NULL
+                                -> Covering index lookup on SQ1_alias1 using col_int_key (col_int_key=<cache>(alias1.col_int_nokey) or NULL)
+                                -> Table scan on SQ1_alias1
+
+SELECT alias2 . col_int_key , alias1 . col_int_nokey , alias2 . col_varchar_key AS field1 FROM ( cc AS alias1 , cc AS alias2 ) WHERE ( alias2 . col_int_key , alias1 . col_int_nokey ) NOT IN ( SELECT /*+prc_subquery() */ SQ1_alias2 . col_int_nokey AS SQ1_field1 , SQ1_alias1 . col_int_key AS SQ1_field2 FROM ( cc AS SQ1_alias1 , c AS SQ1_alias2 ) GROUP BY SQ1_field1 , SQ1_field2 );
+col_int_key	col_int_nokey	field1
+16	8	ee
+16	8	ee
+16	NULL	ee
+16	8	pp
+16	8	pp
+16	NULL	pp
+SELECT alias2 . col_int_key , alias1 . col_int_nokey , alias2 . col_varchar_key AS field1 FROM ( cc AS alias1 , cc AS alias2 ) WHERE ( alias2 . col_int_key , alias1 . col_int_nokey ) NOT IN ( SELECT SQ1_alias2 . col_int_nokey AS SQ1_field1 , SQ1_alias1 . col_int_key AS SQ1_field2 FROM ( cc AS SQ1_alias1 , c AS SQ1_alias2 ) GROUP BY SQ1_field1 , SQ1_field2 );
+col_int_key	col_int_nokey	field1
+16	8	ee
+16	8	ee
+16	NULL	ee
+16	8	pp
+16	8	pp
+16	NULL	pp
+EXPLAIN FORMAT=tree SELECT alias2 . col_int_key , alias1 . col_int_nokey , alias2 . col_varchar_key AS field1 FROM ( cc AS alias1 , cc AS alias2 ) WHERE NOT(alias2.col_int_key >= ANY(SELECT /*+prc_subquery() */ SQ1_alias2 . col_int_nokey AS SQ1_field1 FROM ( cc AS SQ1_alias1 , c AS SQ1_alias2 ) WHERE SQ1_alias1.col_int_key = alias1.col_int_key GROUP BY SQ1_field1));
+EXPLAIN
+-> Filter: <not>(<in_optimizer>(alias2.col_int_key,<exists>(select #2)))
+    -> Inner hash join (no condition)
+        -> Index scan on alias2 using col_int_key_2
+        -> Hash
+            -> Index scan on alias1 using col_int_key_3
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(alias1.col_int_key, alias2.col_int_key)
+            -> Limit: 1 row(s)
+                -> Nested loop inner join
+                    -> Filter: <if>(outer_field_is_not_null, (<cache>(alias2.col_int_key) >= SQ1_alias2.col_int_nokey), true)
+                        -> Table scan on SQ1_alias2
+                    -> Covering index lookup on SQ1_alias1 using col_int_key (col_int_key=alias1.col_int_key)
+
+Warnings:
+Note	1276	Field or reference 'test.alias1.col_int_key' of SELECT #2 was resolved in SELECT #1
+SELECT alias2 . col_int_key , alias1 . col_int_nokey , alias2 . col_varchar_key AS field1 FROM ( cc AS alias1 , cc AS alias2 ) WHERE NOT(alias2.col_int_key >= ANY(SELECT /*+prc_subquery() */ SQ1_alias2 . col_int_nokey AS SQ1_field1 FROM ( cc AS SQ1_alias1 , c AS SQ1_alias2 ) WHERE SQ1_alias1.col_int_key = alias1.col_int_key GROUP BY SQ1_field1));
+col_int_key	col_int_nokey	field1
+NULL	NULL	NULL
+16	NULL	ee
+16	NULL	pp
+SELECT alias2 . col_int_key , alias1 . col_int_nokey , alias2 . col_varchar_key AS field1 FROM ( cc AS alias1 , cc AS alias2 ) WHERE NOT(alias2.col_int_key >= ANY(SELECT SQ1_alias2 . col_int_nokey AS SQ1_field1 FROM ( cc AS SQ1_alias1 , c AS SQ1_alias2 ) WHERE SQ1_alias1.col_int_key = alias1.col_int_key GROUP BY SQ1_field1));
+col_int_key	col_int_nokey	field1
+NULL	NULL	NULL
+16	NULL	ee
+16	NULL	pp
+DROP TABLE c, cc;
+"bug that cache keys are not found correctly"
+SET rds_partial_result_cache_cost_threshold = 1;
+DROP TABLE t1;
+CREATE TABLE t1 ( 
+pk int(11) NOT NULL AUTO_INCREMENT,
+col_int_key int(11) NOT NULL,
+col_varchar_key varchar(1) NOT NULL,
+col_varchar_nokey varchar(1) NOT NULL,
+PRIMARY KEY (pk),
+KEY col_int_key (col_int_key),
+KEY col_varchar_key (col_varchar_key,col_int_key)
+);
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO t1 VALUES (1,0,'j','j'),(2,8,'v','v'),
+(3,1,'c','c'),(4,8,'m','m'),(5,9,'d','d');
+CREATE VIEW v1 AS SELECT * FROM t1;
+SELECT alias2.col_varchar_nokey FROM v1 AS alias1 RIGHT JOIN t1 AS alias2 ON 1 WHERE alias2.col_varchar_key IN ( SELECT sq2_alias1.col_varchar_nokey FROM v1 AS sq2_alias1  WHERE sq2_alias1.pk != alias1.col_int_key AND sq2_alias1.col_varchar_key > alias1.col_varchar_key );
+col_varchar_nokey
+j
+v
+v
+v
+v
+m
+m
+m
+d
+EXPLAIN FORMAT=TREE SELECT alias2.col_varchar_nokey FROM v1 AS alias1 RIGHT JOIN t1 AS alias2 ON 1 WHERE alias2.col_varchar_key IN ( SELECT /*+prc_subquery()*/ sq2_alias1.col_varchar_nokey FROM v1 AS sq2_alias1  WHERE sq2_alias1.pk != alias1.col_int_key AND sq2_alias1.col_varchar_key > alias1.col_varchar_key );
+EXPLAIN
+-> Filter: <in_optimizer>(alias2.col_varchar_key,<exists>(select #2))
+    -> Left hash join (no condition)
+        -> Table scan on alias2
+        -> Hash
+            -> Index scan on t1 using col_varchar_key
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(alias2.col_varchar_key, t1.col_int_key, t1.col_varchar_key)
+            -> Limit: 1 row(s)
+                -> Filter: ((t1.pk <> t1.col_int_key) and (t1.col_varchar_key > t1.col_varchar_key) and (<cache>(alias2.col_varchar_key) = t1.col_varchar_nokey))
+                    -> Table scan on t1
+
+Warnings:
+Note	1276	Field or reference 'alias1.col_int_key' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'alias1.col_varchar_key' of SELECT #2 was resolved in SELECT #1
+SELECT alias2.col_varchar_nokey FROM v1 AS alias1 RIGHT JOIN t1 AS alias2 ON 1 WHERE alias2.col_varchar_key IN ( SELECT /*+prc_subquery()*/ sq2_alias1.col_varchar_nokey FROM v1 AS sq2_alias1  WHERE sq2_alias1.pk != alias1.col_int_key AND sq2_alias1.col_varchar_key > alias1.col_varchar_key );
+col_varchar_nokey
+j
+v
+v
+v
+v
+m
+m
+m
+d
+DROP VIEW v1;
+CREATE VIEW v1 AS SELECT (pk+0) as pk,(col_int_key+0) as col_int_key,concat(col_varchar_key,"") as col_varchar_key,concat(col_varchar_nokey,"") as col_varchar_nokey FROM t1;
+EXPLAIN FORMAT=TREE SELECT alias2.col_varchar_nokey FROM v1 AS alias1 RIGHT JOIN t1 AS alias2 ON 1 WHERE alias2.col_varchar_key IN ( SELECT /*+prc_subquery()*/ sq2_alias1.col_varchar_nokey FROM v1 AS sq2_alias1  WHERE sq2_alias1.pk != alias1.col_int_key AND sq2_alias1.col_varchar_key > alias1.col_varchar_key );
+EXPLAIN
+-> Filter: <in_optimizer>(alias2.col_varchar_key,<exists>(select #2))
+    -> Left hash join (no condition)
+        -> Table scan on alias2
+        -> Hash
+            -> Index scan on t1 using col_varchar_key
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(alias2.col_varchar_key, t1.col_int_key, t1.col_varchar_key)
+            -> Limit: 1 row(s)
+                -> Filter: (((t1.pk + 0) <> (t1.col_int_key + 0)) and (concat(t1.col_varchar_key,'') > concat(t1.col_varchar_key,'')) and (<cache>(alias2.col_varchar_key) = concat(t1.col_varchar_nokey,'')))
+                    -> Table scan on t1
+
+Warnings:
+Note	1276	Field or reference 'alias1.col_int_key' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'alias1.col_varchar_key' of SELECT #2 was resolved in SELECT #1
+SELECT alias2.col_varchar_nokey FROM v1 AS alias1 RIGHT JOIN t1 AS alias2 ON 1 WHERE alias2.col_varchar_key IN ( SELECT /*+prc_subquery()*/ sq2_alias1.col_varchar_nokey FROM v1 AS sq2_alias1  WHERE sq2_alias1.pk != alias1.col_int_key AND sq2_alias1.col_varchar_key > alias1.col_varchar_key );
+col_varchar_nokey
+j
+v
+v
+v
+v
+m
+m
+m
+d
+DROP VIEW v1;
+DROP TABLE t1, t2;
+CREATE TABLE t1(a double, b int);
+INSERT INTO t1 VALUES(-1.7976931348623157e308,2), (3,4);
+SET optimizer_switch = 'semijoin=off,materialization=off';
+SET rds_partial_result_cache_cost_threshold = 0;
+SELECT degrees(ref_1.a) AS c1 FROM t1 AS ref_1;
+ERROR 22003: DOUBLE value is out of range in 'degrees(`test`.`ref_1`.`a`)'
+EXPLAIN FORMAT=TREE SELECT * FROM t1 AS ref_1 WHERE (EXISTS (SELECT degrees(ref_1.a) AS c1 FROM t1 AS ref_2));
+EXPLAIN
+-> Filter: exists(select #2)
+    -> Table scan on ref_1
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(ref_1.a)
+            -> Limit: 1 row(s)
+                -> Table scan on ref_2
+
+Warnings:
+Note	1276	Field or reference 'test.ref_1.a' of SELECT #2 was resolved in SELECT #1
+SELECT * FROM t1 AS ref_1 WHERE (EXISTS (SELECT degrees(ref_1.a) AS c1 FROM t1 AS ref_2));
+a	b
+-1.7976931348623157e308	2
+3	4
+EXPLAIN FORMAT=TREE SELECT * FROM t1 AS ref_1 WHERE (NOT EXISTS (SELECT degrees(ref_1.a) AS c1 FROM t1 AS ref_2));
+EXPLAIN
+-> Filter: exists(select #2) is false
+    -> Table scan on ref_1
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(ref_1.a)
+            -> Limit: 1 row(s)
+                -> Table scan on ref_2
+
+Warnings:
+Note	1276	Field or reference 'test.ref_1.a' of SELECT #2 was resolved in SELECT #1
+SELECT * FROM t1 AS ref_1 WHERE (NOT EXISTS (SELECT degrees(ref_1.a) AS c1 FROM t1 AS ref_2));
+a	b
+SET rds_partial_result_cache_cost_threshold = 1;
+SELECT * FROM t1 AS ref_1 WHERE (b IN (SELECT degrees(ref_2.a) AS c1 FROM t1 AS ref_2));
+ERROR 22003: DOUBLE value is out of range in 'degrees(`test`.`ref_2`.`a`)'
+SET rds_partial_result_cache_cost_threshold = 0;
+SELECT * FROM t1 AS ref_1 WHERE (b IN (SELECT degrees(ref_2.a) AS c1 FROM t1 AS ref_2));
+ERROR 22003: DOUBLE value is out of range in 'degrees(`test`.`ref_2`.`a`)'
+EXPLAIN FORMAT=TREE SELECT * FROM t1 AS ref_1 WHERE (b IN (SELECT 4 AS c1 FROM t1 AS ref_2));
+EXPLAIN
+-> Filter: <in_optimizer>(ref_1.b,<exists>(select #2))
+    -> Table scan on ref_1
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(ref_1.b)
+            -> Limit: 1 row(s)
+                -> Filter: (<cache>(ref_1.b) = 4)
+                    -> Table scan on ref_2
+
+SELECT * FROM t1 AS ref_1 WHERE (b IN (SELECT 4 AS c1 FROM t1 AS ref_2));
+a	b
+3	4
+EXPLAIN FORMAT=TREE SELECT * FROM t1 AS ref_1 WHERE (b NOT IN (SELECT 4 AS c1 FROM t1 AS ref_2));
+EXPLAIN
+-> Filter: <in_optimizer>(ref_1.b,<exists>(select #2) is false)
+    -> Table scan on ref_1
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(ref_1.b)
+            -> Limit: 1 row(s)
+                -> Filter: <if>(outer_field_is_not_null, (<cache>(ref_1.b) = 4), true)
+                    -> Table scan on ref_2
+
+SELECT * FROM t1 AS ref_1 WHERE (b NOT IN (SELECT 4 AS c1 FROM t1 AS ref_2));
+a	b
+-1.7976931348623157e308	2
+SET rds_partial_result_cache_cost_threshold = 1;
+SELECT * FROM t1 AS ref_1 WHERE (b = ANY (SELECT degrees(ref_2.a) AS c1 FROM t1 AS ref_2 WHERE a = ref_1.a));
+ERROR 22003: DOUBLE value is out of range in 'degrees(`test`.`ref_2`.`a`)'
+SET rds_partial_result_cache_cost_threshold = 0;
+SELECT * FROM t1 AS ref_1 WHERE (b = ANY (SELECT degrees(ref_2.a) AS c1 FROM t1 AS ref_2 WHERE a = ref_1.a));
+ERROR 22003: DOUBLE value is out of range in 'degrees(`test`.`ref_2`.`a`)'
+EXPLAIN FORMAT=TREE SELECT * FROM t1 AS ref_1 WHERE (b = ANY (SELECT b AS c1 FROM t1 AS ref_2 WHERE a = ref_1.a));
+EXPLAIN
+-> Filter: <in_optimizer>(ref_1.b,<exists>(select #2))
+    -> Table scan on ref_1
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(ref_1.a, ref_1.b)
+            -> Limit: 1 row(s)
+                -> Filter: ((ref_2.a = ref_1.a) and (<cache>(ref_1.b) = ref_2.b))
+                    -> Table scan on ref_2
+
+Warnings:
+Note	1276	Field or reference 'test.ref_1.a' of SELECT #2 was resolved in SELECT #1
+SELECT * FROM t1 AS ref_1 WHERE (b = ANY (SELECT b AS c1 FROM t1 AS ref_2 WHERE a = ref_1.a));
+a	b
+-1.7976931348623157e308	2
+3	4
+SET rds_partial_result_cache_cost_threshold = 1;
+SELECT * FROM t1 AS ref_1 WHERE (b > ALL (SELECT degrees(ref_2.a) AS c1 FROM t1 AS ref_2 WHERE a = ref_1.a));
+ERROR 22003: DOUBLE value is out of range in 'degrees(`test`.`ref_2`.`a`)'
+SET rds_partial_result_cache_cost_threshold = 0;
+SELECT * FROM t1 AS ref_1 WHERE (b > ALL (SELECT degrees(ref_2.a) AS c1 FROM t1 AS ref_2 WHERE a = ref_1.a));
+ERROR 22003: DOUBLE value is out of range in 'degrees(`test`.`ref_2`.`a`)'
+explain format=tree SELECT * FROM t1 AS ref_1 WHERE (b > ALL (SELECT b AS c1 FROM t1 AS ref_2 WHERE a = ref_1.a));
+EXPLAIN
+-> Filter: <not>(<in_optimizer>(ref_1.b,<exists>(select #2)))  (cost=0.45 rows=2)
+    -> Table scan on ref_1  (cost=0.45 rows=2)
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(ref_1.a, ref_1.b)
+            -> Limit: 1 row(s)  (cost=0.35 rows=1)
+                -> Filter: <if>(outer_field_is_not_null, <is_not_null_test>(ref_2.b), true)  (cost=0.35 rows=1)
+                    -> Filter: ((ref_2.a = ref_1.a) and <if>(outer_field_is_not_null, ((<cache>(ref_1.b) <= ref_2.b) or (ref_2.b is null)), true))  (cost=0.35 rows=1)
+                        -> Table scan on ref_2  (cost=0.35 rows=2)
+
+Warnings:
+Note	1276	Field or reference 'test.ref_1.a' of SELECT #2 was resolved in SELECT #1
+SELECT * FROM t1 AS ref_1 WHERE (b > ALL (SELECT b AS c1 FROM t1 AS ref_2 WHERE a = ref_1.a));
+a	b
+DROP TABLE t1;
+SET optimizer_switch=@old_optimizer_switch;
+SET rds_partial_result_cache_cost_threshold = 0;
+CREATE TABLE t1 (a INT, b INT);
+CREATE TABLE t2 (a INT);
+INSERT INTO t1 VALUES (1,10), (2,20), (3,30), (4,40);
+INSERT INTO t2 VALUES (2), (3), (4), (5);
+SET optimizer_switch='semijoin=off';
+EXPLAIN FORMAT=TREE SELECT 1 FROM t1 WHERE EXISTS (SELECT a FROM t2 WHERE t2.a = t1.b
+GROUP BY a);
+EXPLAIN
+-> Filter: exists(select #2)
+    -> Table scan on t1
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(t1.b)
+            -> Limit: 1 row(s)
+                -> Filter: (t2.a = t1.b)
+                    -> Table scan on t2
+
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+SET debug='+d,fail_alloc_saved_res_items';
+SELECT 1 FROM t1 WHERE EXISTS (SELECT a FROM t2 WHERE t2.a = t1.b
+GROUP BY a);
+1
+SET debug='-d,fail_alloc_saved_res_items';
+SET debug='+d,fail_alloc_cached_res_fields';
+SELECT 1 FROM t1 WHERE EXISTS (SELECT a FROM t2 WHERE t2.a = t1.b
+GROUP BY a);
+1
+SET debug='-d,fail_alloc_cached_res_fields';
+SET optimizer_switch=@old_optimizer_switch;
+DROP TABLE t1, t2;
+SET rds_partial_result_cache_cost_threshold = 0;
+CREATE TABLE t1 (a INT, b INT, INDEX a(a,b));
+CREATE TABLE t2 (a INT, INDEX a(a));
+CREATE TABLE t3 (a INT, b INT, INDEX a(a));
+INSERT INTO t1 VALUES (1,10), (2,20), (3,30), (4,40);
+INSERT INTO t2 VALUES (2), (3), (4), (5);
+ANALYZE TABLE t1,t2,t3;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+test.t3	analyze	status	OK
+"Verify that weedout can work for materialized table which is not initialized by PTRC"
+EXPLAIN FORMAT=TREE SELECT 1 FROM (SELECT t1.a FROM t1 LEFT JOIN t2 ON (EXISTS (
+SELECT /*+NO_BNL()*/ t3.b FROM t3 LEFT JOIN (SELECT b FROM t2 WHERE false
+GROUP BY b) AS tt ON t3.a = t2.a and t3.b = t1.b))) AS aaa;
+EXPLAIN
+-> Remove duplicate (t1, t2) rows using temporary table (weedout)
+    -> Nested loop left join
+        -> Invalidate materialized tables (row from t1)
+            -> Index scan on t1 using a
+        -> Result cache : cache keys(t1.b)
+            -> Nested loop left join
+                -> Nested loop inner join
+                    -> Table scan on t3
+                    -> Result cache : cache keys(t1.b, t3.a, t3.b)
+                        -> Index scan on t2 using a
+                -> Result cache : cache keys(t1.b, t2.a, t3.a, t3.b)
+                    -> Filter: ((t3.a = t2.a) and (t3.b = t1.b))
+                        -> Table scan on tt
+                            -> Materialize (invalidate on row from t1)
+                                -> Zero rows (Impossible WHERE)
+
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #4 was resolved in SELECT #2
+Note	1276	Field or reference 'test.t2.a' of SELECT #3 was resolved in SELECT #2
+Note	1276	Field or reference 'test.t1.b' of SELECT #3 was resolved in SELECT #2
+SELECT 1 FROM (SELECT t1.a FROM t1 LEFT JOIN t2 ON (EXISTS (
+SELECT /*+NO_BNL()*/ t3.b FROM t3 LEFT JOIN (SELECT b FROM t2 WHERE false
+GROUP BY b) AS tt ON t3.a = t2.a and t3.b = t1.b))) AS aaa;
+1
+1
+1
+1
+1
+"Verify with valgrind that the access by PTRC to columns of empty tables is not cacheing random data"
+EXPLAIN FORMAT=TREE SELECT 1 FROM (SELECT t1.a FROM t1 LEFT JOIN t2 ON (EXISTS (
+SELECT /*+NO_BNL()*/ t3.a FROM t3 straight_join t2 on t3.a = t2.a))) AS aaa;
+EXPLAIN
+-> Nested loop left join
+    -> Index scan on t1 using a
+    -> Nested loop inner join
+        -> Constant row from <subquery3>
+            -> Materialize with deduplication
+                -> Nested loop inner join
+                    -> Index scan on t3 using a
+                    -> Result cache : cache keys(<subquery3>.1, t3.a)
+                        -> Covering index lookup on t2 using a (a=t3.a)
+        -> Result cache : cache keys(<subquery3>.1)
+            -> Index scan on t2 using a
+
+SELECT 1 FROM (SELECT t1.a FROM t1 LEFT JOIN t2 ON (EXISTS (
+SELECT /*+NO_BNL()*/ t3.a FROM t3 straight_join t2 on t3.a = t2.a))) AS aaa;
+1
+1
+1
+1
+1
+DROP TABLE t1, t2, t3;
+CREATE TABLE t0 (
+c_id int NOT NULL,
+c_d_id int NOT NULL,
+c_w_id int NOT NULL,
+c_first varchar(16) DEFAULT NULL,
+c_middle char(2) DEFAULT NULL,
+c_last varchar(16) DEFAULT NULL,
+c_street_1 varchar(20) DEFAULT NULL,
+c_street_2 varchar(20) DEFAULT NULL,
+c_city varchar(20) DEFAULT NULL,
+c_state char(2) DEFAULT NULL,
+c_zip char(9) DEFAULT NULL,
+c_phone char(16) DEFAULT NULL,
+c_since timestamp NOT NULL DEFAULT '1970-01-01 08:00:01',
+c_credit char(2) DEFAULT NULL,
+c_credit_lim decimal(12,2) DEFAULT NULL,
+c_discount decimal(4,4) DEFAULT NULL,
+c_balance decimal(12,2) DEFAULT NULL,
+c_ytd_payment decimal(12,2) DEFAULT NULL,
+c_payment_cnt int DEFAULT NULL,
+c_delivery_cnt int DEFAULT NULL,
+c_data varchar(500) DEFAULT NULL,
+PRIMARY KEY (c_w_id,c_d_id,c_id),
+KEY Customer_100W_key (c_w_id,c_d_id,c_last,c_first),
+KEY ndx_c_id (c_id) USING BTREE,
+KEY ndx_c_d_id (c_d_id) USING BTREE,
+KEY ndx_c_w_id (c_w_id) USING BTREE,
+KEY ndx_c_first (c_first) USING BTREE,
+KEY ndx_c_middle (c_middle) USING BTREE,
+KEY ndx_c_last (c_last) USING BTREE,
+KEY ndx_c_street_1 (c_street_1) USING BTREE,
+KEY ndx_c_street_2 (c_street_2) USING BTREE,
+KEY ndx_c_city (c_city) USING BTREE,
+KEY ndx_c_state (c_state) USING BTREE,
+KEY ndx_c_zip (c_zip) USING BTREE,
+KEY ndx_c_phone (c_phone) USING BTREE,
+KEY ndx_c_since (c_since) USING BTREE,
+KEY ndx_c_credit (c_credit) USING BTREE,
+KEY ndx_c_credit_lim (c_credit_lim) USING BTREE,
+KEY ndx_c_discount (c_discount) USING BTREE,
+KEY ndx_c_balance (c_balance) USING BTREE,
+KEY ndx_c_ytd_payment (c_ytd_payment) USING BTREE,
+KEY ndx_c_payment_cnt (c_payment_cnt) USING BTREE,
+KEY ndx_c_delivery_cnt (c_delivery_cnt) USING BTREE,
+KEY ndx_c_data (c_data) USING BTREE,
+KEY ndx_4_5_6 (c_first,c_middle,c_last) USING BTREE,
+KEY ndx_7_8 (c_street_1,c_street_2) USING BTREE,
+KEY ndx_9_10_11_12 (c_city,c_state,c_zip,c_phone) USING BTREE,
+KEY ndx_13_14 (c_since,c_credit) USING BTREE,
+KEY ndx_15_16_17_18 (c_credit_lim,c_discount,c_balance,c_ytd_payment) USING BTREE,
+KEY ndx_19_20_21 (c_payment_cnt,c_delivery_cnt,c_data) USING BTREE,
+KEY ndx_4_7_9_13_15_19 (c_first,c_street_1,c_city,c_since,c_credit_lim,c_payment_cnt) USING BTREE
+);
+INSERT INTO t0 VALUES (1,0,0,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'1970-01-01 08:00:01',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+SELECT ref_0.c_w_id as c2, ref_0.c_phone as c3
+FROM t0 AS ref_0
+RIGHT JOIN
+(SELECT ref_1.C_W_ID AS c13,
+ref_1.c_w_id AS c15
+FROM t0 AS ref_1
+WHERE TRUE ) AS subq_0 ON ((((FALSE)
+AND (((TRUE)
+OR (EXISTS
+(SELECT ref_0.c_credit AS c0
+FROM t0 AS ref_8
+WHERE TRUE )
+OR (ref_0.c_street_1 IS NOT NULL))
+AND (subq_0.c13 IS NULL))
+OR (subq_0.c15 IS NULL)))
+OR (TRUE))
+AND (FALSE));
+c2	c3
+NULL	NULL
+DROP TABLE t0;
+"Const table should not do any reset on its record for PTRC."
+SET SQL_MODE='';
+SET rds_partial_result_cache_cost_threshold = 0;
+CREATE TABLE `t1` ( `id` mediumint(9) NOT NULL auto_increment, `taskid` bigint(20) NOT NULL default '0', `dbid` int(11) NOT NULL default '0', `create_date` datetime NOT NULL default '0000-00-00 00:00:00', `last_update` datetime NOT NULL default '0000-00-00 00:00:00', PRIMARY KEY  (`id`)) AUTO_INCREMENT=3;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO `t1` (`id`, `taskid`, `dbid`, `create_date`,`last_update`) VALUES (1, 1, 15, '2003-09-29 10:31:36', '2003-09-29 10:31:36'), (2, 1, 21, now(), now());
+CREATE TABLE `t2` (`db_id` int(11) NOT NULL auto_increment,`name` varchar(200) NOT NULL default '',`primary_uid` smallint(6) NOT NULL default '0',`secondary_uid` smallint(6) NOT NULL default '0',PRIMARY KEY  (`db_id`),UNIQUE KEY `name_2` (`name`),FULLTEXT KEY `name` (`name`)) AUTO_INCREMENT=2147483647;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO `t2` (`db_id`, `name`, `primary_uid`, `secondary_uid`) VALUES (18, 'Not Set 1', 0, 0),(19, 'Valid', 1, 2),(20, 'Valid 2', 1, 2),(21, 'Should Not Return', 1, 2),(26, 'Not Set 2', 0, 0),(-1, 'ALL DB\'S', 0, 0);
+CREATE TABLE `t3` (`taskgenid` mediumint(9) NOT NULL auto_increment,`dbid` int(11) NOT NULL default '0',`taskid` int(11) NOT NULL default '0',`mon` tinyint(4) NOT NULL default '1',`tues` tinyint(4) NOT NULL default '1',`wed` tinyint(4) NOT NULL default '1',`thur` tinyint(4) NOT NULL default '1',`fri` tinyint(4) NOT NULL default '1',`sat` tinyint(4) NOT NULL default '0',`sun` tinyint(4) NOT NULL default '0',`how_often` smallint(6) NOT NULL default '1',`userid` smallint(6) NOT NULL default '0',`active` tinyint(4) NOT NULL default '1',PRIMARY KEY  (`taskgenid`)) AUTO_INCREMENT=2;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO `t3` (`taskgenid`, `dbid`, `taskid`, `mon`, `tues`,`wed`, `thur`, `fri`, `sat`, `sun`, `how_often`, `userid`, `active`) VALUES (1,-1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 1);
+CREATE TABLE `t4` (`task_id` smallint(6) NOT NULL default '0',`description` varchar(200) NOT NULL default '');
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO `t4` (`task_id`, `description`) VALUES (1, 'Daily Check List'),(2, 'Weekly Status');
+EXPLAIN FORMAT=TREE select  dbid, name, (date_format(now() , '%Y-%m-%d') - INTERVAL how_often DAY) >= ifnull((SELECT date_format(max(create_date),'%Y-%m-%d') FROM t1 WHERE dbid = b.db_id AND taskid = a.taskgenid), '1950-01-01') from t3 a, t2 b, t4  WHERE dbid = - 1 AND primary_uid = '1' AND t4.task_id = taskid AND a.taskgenid=1;
+EXPLAIN
+-> Inner hash join (no condition)
+    -> Filter: (b.primary_uid = 1)
+        -> Table scan on b
+    -> Hash
+        -> Filter: (t4.task_id = '1')
+            -> Table scan on t4
+-> Select #2 (subquery in projection; dependent)
+    -> Result cache : cache keys(a.taskgenid, b.db_id)
+        -> Aggregate: max(t1.create_date)
+            -> Filter: ((t1.taskid = '1') and (t1.dbid = b.db_id))
+                -> Table scan on t1
+
+Warnings:
+Note	1276	Field or reference 'test.b.db_id' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.a.taskgenid' of SELECT #2 was resolved in SELECT #1
+select  dbid, name, (date_format(now() , '%Y-%m-%d') - INTERVAL how_often DAY) >= ifnull((SELECT date_format(max(create_date),'%Y-%m-%d') FROM t1 WHERE dbid = b.db_id AND taskid = a.taskgenid), '1950-01-01') from t3 a, t2 b, t4  WHERE dbid = - 1 AND primary_uid = '1' AND t4.task_id = taskid AND a.taskgenid=1;
+dbid	name	(date_format(now() , '%Y-%m-%d') - INTERVAL how_often DAY) >= ifnull((SELECT date_format(max(create_date),'%Y-%m-%d') FROM t1 WHERE dbid = b.db_id AND taskid = a.taskgenid), '1950-01-01')
+-1	Should Not Return	0
+-1	Valid	1
+-1	Valid 2	1
+DROP TABLE t1,t2,t3,t4;
+"BUG2022052800364: When explain analyze on empty table, ptrc might cause a crash"
+SET optimizer_switch='semijoin=off,partial_result_cache=on';
+SET rds_partial_result_cache_cost_threshold = 0;
+CREATE TABLE t1(a INT, b INT);
+CREATE TABLE t2(b INT, c INT);
+CREATE TABLE t3(c INT, d INT);
+EXPLAIN ANALYZE
+SELECT *
+FROM t1
+WHERE t1.a IN
+(SELECT a FROM t2, t3
+WHERE t2.b = t1.b
+AND t2. c > t3.d);
+EXPLAIN
+-> Filter: <in_optimizer>(t1.a,<exists>(select #2)) 
+    -> Table scan on t1 
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(t1.a, t1.b) (Cache Hits: 0, Cache Misses: 0, Cache Evictions: 0, Cache Overflows: 0, Memory Usage: # )  (never executed)
+            -> Limit: 1 row(s) 
+                -> Filter: (t2.c > t3.d) 
+                    -> Inner hash join (no condition) 
+                        -> Table scan on t3 
+                        -> Hash
+                            -> Filter: ((t2.b = t1.b) and (<cache>(t1.a) = t1.a)) 
+                                -> Table scan on t2 
+
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+DROP TABLE t1,t2,t3;
+"Test the optimizer_trace output of ptrc"
+CREATE TABLE t (i INTEGER PRIMARY KEY AUTO_INCREMENT, j INTEGER, KEY(j)) ENGINE=InnoDB;
+INSERT INTO t VALUES (NULL, NULL);
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+SET optimizer_trace="enabled=on";
+SELECT t1.i AS a, (SELECT t2.i FROM t t2 WHERE t1.j = t2.j ORDER BY j DESC, i DESC LIMIT 1) AS b FROM t t1 limit 1;
+a	b
+1	NULL
+SELECT * FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+QUERY	TRACE	MISSING_BYTES_BEYOND_MAX_MEM_SIZE	INSUFFICIENT_PRIVILEGES
+SELECT t1.i AS a, (SELECT t2.i FROM t t2 WHERE t1.j = t2.j ORDER BY j DESC, i DESC LIMIT 1) AS b FROM t t1 limit 1	{
+  "steps": [
+    {
+      "join_preparation": {
+        "select#": 1,
+        "steps": [
+          {
+            "join_preparation": {
+              "select#": 2,
+              "steps": [
+                {
+                  "expanded_query": "/* select#2 */ select `t2`.`i` from `t` `t2` where (`t1`.`j` = `t2`.`j`) order by `t2`.`j` desc,`t2`.`i` desc limit 1"
+                }
+              ]
+            }
+          },
+          {
+            "expanded_query": "/* select#1 */ select `t1`.`i` AS `a`,(/* select#2 */ select `t2`.`i` from `t` `t2` where (`t1`.`j` = `t2`.`j`) order by `t2`.`j` desc,`t2`.`i` desc limit 1) AS `b` from `t` `t1` limit 1"
+          }
+        ]
+      }
+    },
+    {
+      "join_optimization": {
+        "select#": 1,
+        "steps": [
+          {
+            "table_dependencies": [
+              {
+                "table": "`t` `t1`",
+                "row_may_be_null": false,
+                "map_bit": 0,
+                "depends_on_map_bits": [
+                ]
+              }
+            ]
+          },
+          {
+            "rows_estimation": [
+              {
+                "table": "`t` `t1`",
+                "table_scan": {
+                  "rows": 4096,
+                  "cost": 2
+                }
+              }
+            ]
+          },
+          {
+            "considered_execution_plans": [
+              {
+                "plan_prefix": [
+                ],
+                "table": "`t` `t1`",
+                "best_access_path": {
+                  "considered_access_paths": [
+                    {
+                      "rows_to_scan": 4096,
+                      "access_type": "scan",
+                      "resulting_rows": 4096,
+                      "cost": 411.6,
+                      "chosen": true
+                    }
+                  ]
+                },
+                "condition_filtering_pct": 100,
+                "rows_for_plan": 4096,
+                "cost_for_plan": 411.6,
+                "chosen": true
+              }
+            ]
+          },
+          {
+            "attaching_conditions_to_tables": {
+              "original_condition": null,
+              "attached_conditions_computation": [
+              ],
+              "attached_conditions_summary": [
+                {
+                  "table": "`t` `t1`",
+                  "attached": null
+                }
+              ]
+            }
+          },
+          {
+            "finalizing_table_conditions": [
+            ]
+          },
+          {
+            "refine_plan": [
+              {
+                "table": "`t` `t1`"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "join_optimization": {
+        "select#": 2,
+        "steps": [
+          {
+            "condition_processing": {
+              "condition": "WHERE",
+              "original_condition": "(`t1`.`j` = `t2`.`j`)",
+              "steps": [
+                {
+                  "transformation": "equality_propagation",
+                  "resulting_condition": "(`t1`.`j` = `t2`.`j`)"
+                },
+                {
+                  "transformation": "constant_propagation",
+                  "resulting_condition": "(`t1`.`j` = `t2`.`j`)"
+                },
+                {
+                  "transformation": "trivial_condition_removal",
+                  "resulting_condition": "(`t1`.`j` = `t2`.`j`)"
+                }
+              ]
+            }
+          },
+          {
+            "substitute_generated_columns": {
+            }
+          },
+          {
+            "table_dependencies": [
+              {
+                "table": "`t` `t2`",
+                "row_may_be_null": false,
+                "map_bit": 0,
+                "depends_on_map_bits": [
+                ]
+              }
+            ]
+          },
+          {
+            "ref_optimizer_key_uses": [
+              {
+                "table": "`t` `t2`",
+                "field": "j",
+                "equals": "`t1`.`j`",
+                "null_rejecting": true
+              }
+            ]
+          },
+          {
+            "rows_estimation": [
+              {
+                "table": "`t` `t2`",
+                "table_scan": {
+                  "rows": 4096,
+                  "cost": 2
+                }
+              }
+            ]
+          },
+          {
+            "considered_execution_plans": [
+              {
+                "plan_prefix": [
+                ],
+                "table": "`t` `t2`",
+                "best_access_path": {
+                  "considered_access_paths": [
+                    {
+                      "access_type": "ref",
+                      "index": "j",
+                      "rows": 4096,
+                      "cost": 410.974,
+                      "chosen": true
+                    },
+                    {
+                      "access_type": "scan",
+                      "chosen": false,
+                      "cause": "covering_index_better_than_full_scan"
+                    }
+                  ]
+                },
+                "condition_filtering_pct": 100,
+                "rows_for_plan": 4096,
+                "cost_for_plan": 410.974,
+                "chosen": true
+              }
+            ]
+          },
+          {
+            "attaching_conditions_to_tables": {
+              "original_condition": "(`t1`.`j` = `t2`.`j`)",
+              "attached_conditions_computation": [
+              ],
+              "attached_conditions_summary": [
+                {
+                  "table": "`t` `t2`",
+                  "attached": "(`t1`.`j` = `t2`.`j`)"
+                }
+              ]
+            }
+          },
+          {
+            "optimizing_distinct_group_by_order_by": {
+              "simplifying_order_by": {
+                "original_clause": "`t2`.`j` desc,`t2`.`i` desc",
+                "items": [
+                  {
+                    "item": "`t2`.`j`"
+                  },
+                  {
+                    "item": "`t2`.`i`"
+                  }
+                ],
+                "resulting_clause_is_simple": true,
+                "resulting_clause": "`t2`.`j` desc,`t2`.`i` desc"
+              }
+            }
+          },
+          {
+            "reconsidering_access_paths_for_index_ordering": {
+              "clause": "ORDER BY",
+              "steps": [
+              ],
+              "index_order_summary": {
+                "table": "`t` `t2`",
+                "index_provides_order": true,
+                "order_direction": "desc",
+                "index": "j",
+                "plan_changed": true,
+                "access_type": "ref"
+              }
+            }
+          },
+          {
+            "finalizing_table_conditions": [
+              {
+                "table": "`t` `t2`",
+                "original_table_condition": "(`t1`.`j` = `t2`.`j`)",
+                "final_table_condition   ": null
+              }
+            ]
+          },
+          {
+            "refine_plan": [
+              {
+                "table": "`t` `t2`"
+              }
+            ]
+          },
+          {
+            "considering_tmp_tables": [
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "not_apply_pq_plan": {
+        "select#": 2,
+        "chosen": false,
+        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+      }
+    },
+    {
+      "partial_result_cache": {
+        "caching_result_of": "subquery",
+        "distinct_rows": 1,
+        "estimate_rows": 4096,
+        "estimate_distinct_val_ratio": 0.999756,
+        "chosen": true
+      }
+    },
+    {
+      "not_apply_pq_plan": {
+        "select#": 1,
+        "chosen": false,
+        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+      }
+    },
+    {
+      "join_execution": {
+        "select#": 1,
+        "steps": [
+          {
+            "subselect_execution": {
+              "select#": 2,
+              "steps": [
+                {
+                  "join_execution": {
+                    "select#": 2,
+                    "steps": [
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}	0	0
+SET optimizer_trace="enabled=off";
+DROP TABLE t;
+"Test the LRU eviction mechanism"
+create table t1(a int, b varchar(1000), index(a));
+insert into t1 values(1,repeat('a',1000));
+insert into t1 values(1,repeat('b',980));
+insert into t1 values(2,repeat('c',960));
+insert into t1 values(2,repeat('d',940));
+insert into t1 values(3,repeat('e',920));
+insert into t1 values(3,repeat('e',920));
+insert into t1 values(2,repeat('c',960));
+insert into t1 values(3,repeat('f',900));
+insert into t1 values(3,repeat('g',880));
+insert into t1 values(3,repeat('h',860));
+create table t2(a int, b varchar(1000), index(a));
+insert into t2 values(1,repeat('A',1000));
+insert into t2 values(1,repeat('B',980));
+insert into t2 values(2,repeat('C',960));
+insert into t2 values(2,repeat('D',940));
+insert into t2 values(3,repeat('E',920));
+insert into t2 values(3,repeat('E',920));
+insert into t2 values(2,repeat('C',960));
+insert into t2 values(3,repeat('F',900));
+insert into t2 values(3,repeat('G',880));
+insert into t2 values(3,repeat('G',860));
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t1 SELECT * FROM t1;
+set @old_partial_result_cache_max_mem_size=@@rds_partial_result_cache_max_mem_size;
+set rds_partial_result_cache_max_mem_size = 65*1024;
+explain format=tree select/*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a;
+EXPLAIN
+-> Nested loop inner join
+    -> Filter: (t1.a is not null)
+        -> Table scan on t1
+    -> Result cache : cache keys(t1.a, t1.b)
+        -> Index lookup on t2 using a (a=t1.a)
+
+explain analyze select/*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a;
+EXPLAIN
+-> Nested loop inner join 
+    -> Filter: (t1.a is not null) 
+        -> Table scan on t1 
+    -> Result cache : cache keys(t1.a, t1.b) (Cache Hits: 16, Cache Misses: 32, Cache Evictions: 4, Cache Overflows: 0, Memory Usage: # ) 
+        -> Index lookup on t2 using a (a=t1.a) 
+
+select /*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a order by 1,2,3,4;
+a	length(t1.b)	a	length(t2.b)
+1	980	1	980
+1	980	1	980
+1	980	1	980
+1	980	1	980
+1	980	1	1000
+1	980	1	1000
+1	980	1	1000
+1	980	1	1000
+1	1000	1	980
+1	1000	1	980
+1	1000	1	980
+1	1000	1	980
+1	1000	1	1000
+1	1000	1	1000
+1	1000	1	1000
+1	1000	1	1000
+2	940	2	940
+2	940	2	940
+2	940	2	940
+2	940	2	940
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+3	860	3	860
+3	860	3	860
+3	860	3	860
+3	860	3	860
+3	860	3	880
+3	860	3	880
+3	860	3	880
+3	860	3	880
+3	860	3	900
+3	860	3	900
+3	860	3	900
+3	860	3	900
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	880	3	860
+3	880	3	860
+3	880	3	860
+3	880	3	860
+3	880	3	880
+3	880	3	880
+3	880	3	880
+3	880	3	880
+3	880	3	900
+3	880	3	900
+3	880	3	900
+3	880	3	900
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	900	3	860
+3	900	3	860
+3	900	3	860
+3	900	3	860
+3	900	3	880
+3	900	3	880
+3	900	3	880
+3	900	3	880
+3	900	3	900
+3	900	3	900
+3	900	3	900
+3	900	3	900
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+select /*+ no_prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a order by 1,2,3,4;
+a	length(t1.b)	a	length(t2.b)
+1	980	1	980
+1	980	1	980
+1	980	1	980
+1	980	1	980
+1	980	1	1000
+1	980	1	1000
+1	980	1	1000
+1	980	1	1000
+1	1000	1	980
+1	1000	1	980
+1	1000	1	980
+1	1000	1	980
+1	1000	1	1000
+1	1000	1	1000
+1	1000	1	1000
+1	1000	1	1000
+2	940	2	940
+2	940	2	940
+2	940	2	940
+2	940	2	940
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+3	860	3	860
+3	860	3	860
+3	860	3	860
+3	860	3	860
+3	860	3	880
+3	860	3	880
+3	860	3	880
+3	860	3	880
+3	860	3	900
+3	860	3	900
+3	860	3	900
+3	860	3	900
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	880	3	860
+3	880	3	860
+3	880	3	860
+3	880	3	860
+3	880	3	880
+3	880	3	880
+3	880	3	880
+3	880	3	880
+3	880	3	900
+3	880	3	900
+3	880	3	900
+3	880	3	900
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	900	3	860
+3	900	3	860
+3	900	3	860
+3	900	3	860
+3	900	3	880
+3	900	3	880
+3	900	3	880
+3	900	3	880
+3	900	3	900
+3	900	3	900
+3	900	3	900
+3	900	3	900
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+SET SESSION DEBUG='+d,key_pair_key_null_pointer_injection';
+explain analyze select/*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a;
+EXPLAIN
+-> Nested loop inner join 
+    -> Filter: (t1.a is not null) 
+        -> Table scan on t1 
+    -> Result cache : cache keys(t1.a, t1.b) (Cache Hits: 0, Cache Misses: 31, Cache Evictions: 0, Cache Overflows: 1, Memory Usage: # ) 
+        -> Index lookup on t2 using a (a=t1.a) 
+
+SET SESSION DEBUG='-d,key_pair_key_null_pointer_injection';
+set rds_partial_result_cache_max_mem_size=@old_partial_result_cache_max_mem_size;
+DROP TABLE t1,t2;
+create table t1(a int, b varchar(1000), index(a));
+insert into t1 values(1,repeat('a',1000));
+insert into t1 values(1,repeat('b',980));
+insert into t1 values(2,repeat('c',960));
+insert into t1 values(2,repeat('d',940));
+insert into t1 values(3,repeat('e',920));
+insert into t1 values(3,repeat('e',920));
+insert into t1 values(2,repeat('c',960));
+insert into t1 values(3,repeat('f',900));
+insert into t1 values(3,repeat('g',880));
+insert into t1 values(3,repeat('h',860));
+create table t2(a int, b varchar(1000), index(a));
+insert into t2 values(1,repeat('A',1000));
+insert into t2 values(1,repeat('B',980));
+insert into t2 values(2,repeat('C',960));
+insert into t2 values(2,repeat('D',940));
+insert into t2 values(3,repeat('E',920));
+insert into t2 values(3,repeat('E',920));
+insert into t2 values(2,repeat('C',960));
+insert into t2 values(3,repeat('F',900));
+insert into t2 values(3,repeat('G',880));
+insert into t2 values(3,repeat('G',860));
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t1;
+set @old_partial_result_cache_max_mem_size=@@rds_partial_result_cache_max_mem_size;
+set rds_partial_result_cache_max_mem_size=1024*64;
+explain format=tree select/*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a;
+EXPLAIN
+-> Nested loop inner join
+    -> Filter: (t1.a is not null)
+        -> Table scan on t1
+    -> Result cache : cache keys(t1.a, t1.b)
+        -> Index lookup on t2 using a (a=t1.a)
+
+explain analyze select/*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a;
+EXPLAIN
+-> Nested loop inner join 
+    -> Filter: (t1.a is not null) 
+        -> Table scan on t1 
+    -> Result cache : cache keys(t1.a, t1.b) (Cache Hits: 0, Cache Misses: 33, Cache Evictions: 6, Cache Overflows: 0, Memory Usage: # ) 
+        -> Index lookup on t2 using a (a=t1.a) 
+
+select /*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a order by 1,2,3,4;
+a	length(t1.b)	a	length(t2.b)
+1	980	1	980
+1	980	1	980
+1	980	1	980
+1	980	1	1000
+1	980	1	1000
+1	980	1	1000
+1	1000	1	980
+1	1000	1	980
+1	1000	1	980
+1	1000	1	1000
+1	1000	1	1000
+1	1000	1	1000
+2	940	2	940
+2	940	2	940
+2	940	2	940
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+3	860	3	860
+3	860	3	860
+3	860	3	860
+3	860	3	880
+3	860	3	880
+3	860	3	880
+3	860	3	900
+3	860	3	900
+3	860	3	900
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	880	3	860
+3	880	3	860
+3	880	3	860
+3	880	3	880
+3	880	3	880
+3	880	3	880
+3	880	3	900
+3	880	3	900
+3	880	3	900
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	900	3	860
+3	900	3	860
+3	900	3	860
+3	900	3	880
+3	900	3	880
+3	900	3	880
+3	900	3	900
+3	900	3	900
+3	900	3	900
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+select /*+ no_prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a order by 1,2,3,4;
+a	length(t1.b)	a	length(t2.b)
+1	980	1	980
+1	980	1	980
+1	980	1	980
+1	980	1	1000
+1	980	1	1000
+1	980	1	1000
+1	1000	1	980
+1	1000	1	980
+1	1000	1	980
+1	1000	1	1000
+1	1000	1	1000
+1	1000	1	1000
+2	940	2	940
+2	940	2	940
+2	940	2	940
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	940	2	960
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	940
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+2	960	2	960
+3	860	3	860
+3	860	3	860
+3	860	3	860
+3	860	3	880
+3	860	3	880
+3	860	3	880
+3	860	3	900
+3	860	3	900
+3	860	3	900
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	860	3	920
+3	880	3	860
+3	880	3	860
+3	880	3	860
+3	880	3	880
+3	880	3	880
+3	880	3	880
+3	880	3	900
+3	880	3	900
+3	880	3	900
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	880	3	920
+3	900	3	860
+3	900	3	860
+3	900	3	860
+3	900	3	880
+3	900	3	880
+3	900	3	880
+3	900	3	900
+3	900	3	900
+3	900	3	900
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	900	3	920
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	860
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	880
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	900
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+3	920	3	920
+set rds_partial_result_cache_max_mem_size=@old_partial_result_cache_max_mem_size;
+DROP TABLE t1,t2;
+"Testing the scenario of NULL-complemented rows"
+CREATE TABLE departments (
+dept_id INT PRIMARY KEY,
+dept_name VARCHAR(50) NOT NULL
+);
+CREATE TABLE employees (
+emp_id INT PRIMARY KEY,
+emp_name VARCHAR(50) NOT NULL,
+dept_id INT,
+salary DECIMAL(10,2),
+FOREIGN KEY (dept_id) REFERENCES departments(dept_id)
+);
+INSERT INTO departments VALUES (1, 'Human Resources');
+INSERT INTO departments VALUES (2, 'Information Technology');
+INSERT INTO departments VALUES (3, 'Marketing');
+INSERT INTO employees VALUES (101, 'Charles', 1, 8000.00);
+INSERT INTO employees VALUES (102, 'David', 1, 7500.00);
+INSERT INTO employees VALUES (103, 'William', 2, 9000.00);
+explain analyze SELECT /*+ prc_join() */ d.dept_id, d.dept_name, AVG(e.salary) AS avg_salary, COUNT(e.emp_id) AS employee_count FROM departments d LEFT JOIN employees e ON d.dept_id = e.dept_id GROUP BY d.dept_id, d.dept_name;
+EXPLAIN
+-> Table scan on <temporary>  (actual time=# loops=1)
+    -> Aggregate using temporary table  (actual time=# loops=1)
+        -> Nested loop left join 
+            -> Table scan on d 
+            -> Result cache : cache keys(d.dept_id, d.dept_name) (Cache Hits: 0, Cache Misses: 4, Cache Evictions: 0, Cache Overflows: 0, Memory Usage: # ) 
+                -> Index lookup on e using dept_id (dept_id=d.dept_id) 
+
+SELECT /*+ prc_join() */ d.dept_id, d.dept_name, AVG(e.salary) AS avg_salary, COUNT(e.emp_id) AS employee_count FROM departments d LEFT JOIN employees e ON d.dept_id = e.dept_id GROUP BY d.dept_id, d.dept_name;
+dept_id	dept_name	avg_salary	employee_count
+1	Human Resources	7750.000000	2
+2	Information Technology	9000.000000	1
+3	Marketing	NULL	0
+SELECT /*+ no_prc_join() */ d.dept_id, d.dept_name, AVG(e.salary) AS avg_salary, COUNT(e.emp_id) AS employee_count FROM departments d LEFT JOIN employees e ON d.dept_id = e.dept_id GROUP BY d.dept_id, d.dept_name;
+dept_id	dept_name	avg_salary	employee_count
+1	Human Resources	7750.000000	2
+2	Information Technology	9000.000000	1
+3	Marketing	NULL	0
+DROP TABLE departments, employees;
+CREATE TABLE t1 (
+id int(11),
+ticket int(11),
+KEY ti (id),
+KEY tit (ticket)
+) engine=innodb charset utf8mb4;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO t1 VALUES (2,3),(1,2),(1,1),(2,2),(1,2),(2,5);
+CREATE TABLE t2 (
+ticket int(11),
+inhalt varchar(50),
+KEY tig (ticket),
+FULLTEXT INDEX tix (inhalt)
+) ENGINE=InnoDB CHARSET utf8mb4;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO t2 VALUES (1,'foo'),(2,'bar'),(3,'foobar'),(1,'Doobar'),(2,'obar');
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t1;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t1;
+explain analyze select /*+ prc_join() */ ticket2.id FROM t2 as ttxt,t2 INNER JOIN t1 as ticket2 ON ticket2.id = t2.ticket WHERE ticket2.id = ticket2.ticket and match(ttxt.inhalt) against ('foobar');
+EXPLAIN
+-> Nested loop inner join 
+    -> Nested loop inner join 
+        -> Filter: (match ttxt.inhalt against ('foobar')) 
+            -> Full-text index search on ttxt using tix (inhalt='foobar') 
+        -> Filter: (ticket2.ticket = ticket2.id) 
+            -> Index range scan on ticket2 using ti over (NULL < id), with index condition: (ticket2.id is not null) 
+    -> Result cache : cache keys(ticket2.id, ticket2.ticket) (Cache Hits: 102, Cache Misses: 34, Cache Evictions: 0, Cache Overflows: 0, Memory Usage: # ) 
+        -> Covering index lookup on t2 using tig (ticket=ticket2.id) 
+
+drop table t1,t2;
+create table t1 (a int, b int, c int, key(a desc, b asc, c desc));
+create table t2 (d int, key(d asc));
+explain format=tree select * from t2, t1 force index(`a`) having c < 3 order by a, b limit 10;
+EXPLAIN
+-> Limit: 10 row(s)  (...)
+    -> Nested loop inner join  (...)
+        -> Sort: t1.a, t1.b  (...)
+            -> Filter: (t1.c < 3)  (...)
+                -> Index scan on t1 using a  (...)
+        -> Result cache : cache keys(t1.a, t1.b, t1.c)  (...)
+            -> Index scan on t2 using d  (...)
+
+select * from t2, t1 force index(`a`) having c < 3 order by a, b limit 10;
+d	a	b	c
+1	1	1	2
+2	1	1	2
+3	1	1	2
+4	1	1	2
+5	1	1	2
+1	1	1	2
+2	1	1	2
+3	1	1	2
+4	1	1	2
+5	1	1	2
+drop table t1;
+drop table t2;
+create table t(a int, b int);
+insert into t values(1,10),(2,20);
+create table tt (f1 int, f2 int, KEY f1 (f1));
+insert into tt values (1,10),(2,20),(3,30),(4,40);
+create table t2(a int, key(a), b int);
+set optimizer_switch="block_nested_loop=off";
+explain format=tree SELECT t1.* , ( SELECT count(*) FROM t t2 LEFT JOIN t t3 ON t3.a > t2.a - t1.a ) FROM t t1;
+EXPLAIN
+-> Table scan on t1 
+-> Select #2 (subquery in projection; dependent)
+    -> Result cache : cache keys(t1.a)
+        -> Aggregate: count(0) 
+            -> Nested loop left join 
+                -> Table scan on t2 
+                -> Result cache : cache keys(t1.a, t2.a) 
+                    -> Filter: (t3.a > (t2.a - t1.a)) 
+                        -> Table scan on t3 
+
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+SELECT t1.* , ( SELECT count(*) FROM t t2 LEFT JOIN t t3 ON t3.a > t2.a - t1.a ) FROM t t1;
+a	b	( SELECT count(*) FROM t t2 LEFT JOIN t t3 ON t3.a > t2.a - t1.a )
+1	10	3
+2	20	4
+explain format=tree select t1.*, (select count(*)
+from (t t2 join t t3)
+left join (t t4 LEFT JOIN (t t5 JOIN t t6) ON t4.a>t5.a-t1.a) on t3.a>t2.a-t1.a)
+from t t1;
+EXPLAIN
+-> Table scan on t1 
+-> Select #2 (subquery in projection; dependent)
+    -> Result cache : cache keys(t1.a)
+        -> Aggregate: count(0) 
+            -> Nested loop left join 
+                -> Nested loop inner join 
+                    -> Table scan on t2 
+                    -> Result cache : cache keys(t1.a, t2.a) 
+                        -> Table scan on t3 
+                -> Result cache : cache keys(t1.a, t2.a, t3.a) 
+                    -> Nested loop left join 
+                        -> Filter: (t3.a > (t2.a - t1.a)) 
+                            -> Table scan on t4 
+                        -> Result cache : cache keys(t1.a, t2.a, t3.a, t4.a) 
+                            -> Nested loop inner join 
+                                -> Filter: (t4.a > (t5.a - t1.a)) 
+                                    -> Table scan on t5 
+                                -> Result cache : cache keys(t1.a, t2.a, t3.a, t4.a, t5.a) 
+                                    -> Table scan on t6 
+
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+select t1.*, (select count(*)
+from (t t2 join t t3)
+left join (t t4 LEFT JOIN (t t5 JOIN t t6) ON t4.a>t5.a-t1.a) on t3.a>t2.a-t1.a)
+from t t1;
+a	b	(select count(*)
+from (t t2 join t t3)
+left join (t t4 LEFT JOIN (t t5 JOIN t t6) ON t4.a>t5.a-t1.a) on t3.a>t2.a-t1.a)
+1	10	19
+2	20	32
+set optimizer_switch=default;
+explain format=tree SELECT t11.* , ( SELECT max(t1.f1) FROM tt t1 WHERE NOT EXISTS ( SELECT * FROM tt t2 JOIN tt t3 ON t2.f1 < NULL WHERE t1.f1 = t2.f1 AND t1.f1 < t11.a ) ) FROM t t11;
+EXPLAIN
+-> Table scan on t11 
+-> Select #2 (subquery in projection; dependent)
+    -> Result cache : cache keys(t11.a)
+        -> Aggregate: max(t1.f1) 
+            -> Nested loop antijoin 
+                -> Index scan on t1 using f1 
+                -> Result cache : cache keys(t1.f1, t11.a) 
+                    -> Nested loop inner join 
+                        -> Filter: ((t1.f1 < t11.a) and (t1.f1 < NULL)) 
+                            -> Covering index lookup on t2 using f1 (f1=t1.f1) 
+                        -> Result cache : cache keys(t1.f1, t11.a, t2.f1) 
+                            -> Index scan on t3 using f1 
+
+Warnings:
+Note	1276	Field or reference 'test.t1.f1' of SELECT #3 was resolved in SELECT #2
+Note	1276	Field or reference 'test.t1.f1' of SELECT #3 was resolved in SELECT #2
+Note	1276	Field or reference 'test.t11.a' of SELECT #3 was resolved in SELECT #1
+SELECT t11.* , ( SELECT max(t1.f1) FROM tt t1 WHERE NOT EXISTS ( SELECT * FROM tt t2 JOIN tt t3 ON t2.f1 < NULL WHERE t1.f1 = t2.f1 AND t1.f1 < t11.a ) ) FROM t t11;
+a	b	( SELECT max(t1.f1) FROM tt t1 WHERE NOT EXISTS ( SELECT * FROM tt t2 JOIN tt t3 ON t2.f1 < NULL WHERE t1.f1 = t2.f1 AND t1.f1 < t11.a ) )
+1	10	4
+2	20	4
+explain format=tree select (select t3.b from (t2 as t5 left join (t2 as t3 force index (a) left join t2 as t4 on true) on t3.a=t_.a)) from t2 as t_;
+EXPLAIN
+-> Index scan on t_ using a 
+-> Select #2 (subquery in projection; dependent)
+    -> Result cache : cache keys(t_.a)
+        -> Nested loop left join 
+            -> Index scan on t5 using a 
+            -> Result cache : cache keys(t_.a) 
+                -> Nested loop left join 
+                    -> Index lookup on t3 using a (a=t_.a) 
+                    -> Result cache : cache keys(t3.a, t3.b, t_.a) 
+                        -> Index scan on t4 using a 
+
+Warnings:
+Note	1276	Field or reference 'test.t_.a' of SELECT #2 was resolved in SELECT #1
+select (select t3.b from (t2 as t5 left join (t2 as t3 force index (a) left join t2 as t4 on true) on t3.a=t_.a)) from t2 as t_;
+(select t3.b from (t2 as t5 left join (t2 as t3 force index (a) left join t2 as t4 on true) on t3.a=t_.a))
+drop table t, tt, t2;

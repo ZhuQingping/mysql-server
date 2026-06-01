@@ -1,0 +1,62 @@
+--source include/have_only_dstore.inc
+--source include/not_group_replication_plugin.inc
+--source include/no_valgrind_without_big.inc
+--source include/have_binlog_format_row.inc
+--source include/master-slave.inc
+
+if (`SELECT @@default_storage_engine="dstore"`)
+{
+# DStore does not yet support MEDIUMTEXT and the like
+--let $BLOB_OPT = '--skip-long-blob-tests'
+}
+
+connection master;
+SET @old_general_log= @@global.general_log;
+SET @old_slow_query_log= @@global.slow_query_log;
+
+# need to have the dynamic loading turned on for the client plugin tests
+--source include/have_plugin_auth.inc
+
+--let $LOG_DIR= $MYSQLTEST_VARDIR/log
+
+--echo General test
+
+--exec echo "$MYSQL_CLIENT_TEST" > $LOG_DIR/mysql_client_test.out.log 2>&1
+--exec $MYSQL_CLIENT_TEST --getopt-ll-test=25600M $PLUGIN_AUTH_CLIENT_OPT $BLOB_OPT >> $LOG_DIR/mysql_client_test.out.log 2>&1
+
+--source include/sync_slave_sql_with_master.inc
+
+connection master;
+
+--echo Verify that replica has the correct data: stmt_bulk_test_basic_dml
+--exec echo "$MYSQL_CLIENT_TEST" > $LOG_DIR/mysql_client_test.out.log 2>&1
+--exec $MYSQL_CLIENT_TEST --getopt-ll-test=25600M $PLUGIN_AUTH_CLIENT_OPT --skip-result-clean-for-bulk-test stmt_bulk_test_basic_dml >> $LOG_DIR/mysql_client_test.out.log 2>&1
+
+--source include/sync_slave_sql_with_master.inc
+
+connection slave;
+SELECT * FROM bulk_test.tbl ORDER BY b;
+
+connection master;
+SELECT * FROM bulk_test.tbl ORDER BY b;
+
+--echo Verify that replica has the correct data: stmt_bulk_test_multi_update
+--exec echo "$MYSQL_CLIENT_TEST" > $LOG_DIR/mysql_client_test.out.log 2>&1
+--exec $MYSQL_CLIENT_TEST --getopt-ll-test=25600M $PLUGIN_AUTH_CLIENT_OPT --skip-result-clean-for-bulk-test stmt_bulk_test_multi_update >> $LOG_DIR/mysql_client_test.out.log 2>&1
+
+--source include/sync_slave_sql_with_master.inc
+
+connection slave;
+SELECT * FROM bulk_test.tbl ORDER BY b;
+
+connection master;
+SELECT * FROM bulk_test.tbl ORDER BY b;
+
+--source include/sync_slave_sql_with_master.inc
+connection master;
+DROP DATABASE bulk_test;
+
+SET @@global.general_log = @old_general_log;
+SET @@global.slow_query_log = @old_slow_query_log;
+
+--source include/rpl_end.inc

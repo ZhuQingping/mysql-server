@@ -1,0 +1,37 @@
+#
+# Test 1. When the background statistic thread hold the MDL read lock, we cannot do DDL
+#
+CREATE TABLE 中文表 (c1 int);
+SET GLOBAL DEBUG='+d,bg_stat_after_get_table_wait';
+insert into 中文表 values (1);
+insert into 中文表 values (2);
+insert into 中文表 values (3);
+SET GLOBAL DEBUG='-d,bg_stat_after_get_table_wait';
+ALTER TABLE 中文表 add column c2 int;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+SET DEBUG_SYNC = 'now SIGNAL resume_bg_stat_sig';
+SET DEBUG_SYNC= 'RESET';
+#
+# Test 2. When we are doing ddl, we cannot do background statistic
+#
+SET GLOBAL DEBUG='+d,bg_stat_after_get_table_name_wait';
+insert into 中文表 values (4);
+insert into 中文表 values (5);
+insert into 中文表 values (6);
+SET GLOBAL DEBUG='-d,bg_stat_after_get_table_name_wait';
+SET DEBUG_SYNC = 'before_get_refcnt SIGNAL resume_bg_stat_sig WAIT_FOR c1';
+ALTER TABLE 中文表 add column c2 int;;
+include/assert_grep.inc [bg statistic thread should wait mdl lock fail]
+SET DEBUG_SYNC = 'now SIGNAL c1';
+SELECT * FROM 中文表;
+c1	c2
+1	NULL
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+#
+# Clean up
+#
+DROP TABLE 中文表;

@@ -1,0 +1,38 @@
+--source include/not_have_only_dstore.inc
+--source ../include/basic_prepare.inc
+
+--echo #
+--echo # prepare the conn
+--echo #
+connect(conn1, 127.0.0.1, test1, 123456);
+
+--echo #
+--echo # Case 1: If other connection hold the backup lock, a timeout error is returned when rds_recycle_bin_mode is set.
+--echo #
+
+connection default;
+drop database __recyclebin__;
+
+connection conn1;
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+set rds_recycle_bin_mode = ON;
+
+connection default;
+lock instance for backup;
+show databases;
+
+connection conn1;
+--error ER_LOCK_WAIT_TIMEOUT
+set rds_recycle_bin_mode = ON;
+
+connection default;
+unlock instance;
+set rds_recycle_bin_mode = ON;
+
+connection conn1;
+set rds_recycle_bin_mode = ON;
+show databases;
+
+disconnect conn1;
+
+--source ../include/basic_cleanup.inc

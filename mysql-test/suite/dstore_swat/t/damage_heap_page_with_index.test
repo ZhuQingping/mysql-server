@@ -1,0 +1,102 @@
+--source include/have_debug.inc
+
+call mtr.add_suppression("Hit swat damage page when fetch tuple");
+call mtr.add_suppression("FetchTuple fail");
+call mtr.add_suppression("Got error 10004 when reading table");
+call mtr.add_suppression("DML statements fail to be executed in Dstore");
+call mtr.add_suppression("swat hit damage page when lock tuple in ReadFullRow");
+call mtr.add_suppression("Attempting backtrace");
+
+--let $MYSQL_BASEDIR = `SELECT @@basedir`
+--let $MYSQLD_DATADIR = `SELECT @@datadir`
+
+create database damage_heap_page_index;
+use damage_heap_page_index;
+
+# table with index
+create table t1(i int, s varchar(100), primary key(i)) engine=Dstore;
+insert into t1 values(1, 'abc');
+
+--let $SCHEMA_OF_DSTORE_TABLE = damage_heap_page_index
+--let $NAME_OF_DSTORE_TABLE = t1
+--source suite/dstore_swat/include/get_table_segment_id.inc
+# segment id in var: $TABLE_SEG_FILE_ID $TABLE_SEG_BLOCK_ID
+
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+# make damage page
+--disable_query_log
+--disable_result_log
+--exec $MYSQL_BASEDIR/bin/damagepage -f $TABLE_SEG_FILE_ID -b $TABLE_SEG_BLOCK_ID -p $MYSQLD_DATADIR/#mysql_dstore/gs_pdb/PDB_17 -t 1
+--enable_result_log
+--enable_query_log
+
+--let $restart_parameters= restart
+--source include/start_mysqld.inc
+
+# should panic when hit damage page
+--source include/expect_crash.inc
+--error 2013
+select * from t1;
+
+# restart using damage page manager
+--let $restart_parameters= restart: --dstore_enable_damage_page_manager=on --dstore_report_error_on_damage_page=on
+--source include/start_mysqld.inc
+
+--error 8022
+select * from t1 where i = 1;
+select * from t1 where i = 2;
+--error 8022
+update t1 set s='xyz' where i = 1;
+update t1 set s='xyz' where i = 2;
+--error 8022
+delete from t1 where i = 1;
+delete from t1 where i = 2;
+insert into t1 values(10, 'xyz');
+
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+# restart ignore damage page
+--let $restart_parameters= restart: --dstore_enable_damage_page_manager=on
+--source include/start_mysqld.inc
+
+select * from t1 where i = 1;
+select * from t1 where i != 1;
+select * from t1 order by i;
+
+update t1 set s='xyz' where i = 1;
+update t1 set s='abcxyz' where i != 1;
+select * from t1 order by i;
+
+insert into t1 values(100, 'xyz');
+select * from t1 order by i;
+
+delete from t1 where i = 1;
+delete from t1 where i != 1;
+select * from t1 order by i;
+
+# to reinit damage pages
+drop table t1;
+create table t1(s varchar(100)) engine=Dstore;
+# insert 10000 records
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 10000
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+drop database damage_heap_page_index;
+
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+--exec rm $MYSQLD_DATADIR/#mysql_dstore/gs_pdb/PDB_17/damage_page_mgr.meta
+
+--let $restart_parameters= restart
+--source include/start_mysqld.inc

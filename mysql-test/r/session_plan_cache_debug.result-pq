@@ -1,0 +1,318 @@
+# restart
+set rds_plan_cache=ON;
+"test optimizer trace for plan cache"
+flush status;
+show session status like "cached_plan%";
+Variable_name	Value
+Cached_plan_count	0
+Cached_plan_hits	0
+Cached_plan_invalidations	0
+create table t1(a int, b int);
+insert into t1 values(1,2),(3,4);
+prepare stmt from 'select * from t1 where a > ?';
+set @a = 1;
+set optimizer_trace='enabled=on';
+execute stmt using @a;
+a	b
+3	4
+show session status like "cached_plan%";
+Variable_name	Value
+Cached_plan_count	1
+Cached_plan_hits	0
+Cached_plan_invalidations	0
+execute stmt using @a;
+a	b
+3	4
+show session status like "cached_plan%";
+Variable_name	Value
+Cached_plan_count	1
+Cached_plan_hits	1
+Cached_plan_invalidations	0
+set debug='+d,apply_cached_plan_fail';
+execute stmt using @a;
+a	b
+3	4
+select * from information_schema.optimizer_trace;
+QUERY	TRACE	MISSING_BYTES_BEYOND_MAX_MEM_SIZE	INSUFFICIENT_PRIVILEGES
+select * from t1 where a > 1	{
+  "steps": [
+    {
+      "statement_parameters": [
+        "LONGLONG"
+      ]
+    },
+    {
+      "apply_cached_plan": {
+        "used": false,
+        "cause": "Error happened during apply cached plan",
+        "invalidate_cached_plan": {
+          "invalidate": true
+        }
+      }
+    },
+    {
+      "join_optimization": {
+        "select#": 1,
+        "steps": [
+          {
+            "condition_processing": {
+              "condition": "WHERE",
+              "original_condition": "(`t1`.`a` > 1)",
+              "steps": [
+                {
+                  "transformation": "equality_propagation",
+                  "resulting_condition": "(`t1`.`a` > 1)"
+                },
+                {
+                  "transformation": "constant_propagation",
+                  "resulting_condition": "(`t1`.`a` > 1)"
+                },
+                {
+                  "transformation": "trivial_condition_removal",
+                  "resulting_condition": "(`t1`.`a` > 1)"
+                }
+              ]
+            }
+          },
+          {
+            "substitute_generated_columns": {
+            }
+          },
+          {
+            "table_dependencies": [
+              {
+                "table": "`t1`",
+                "row_may_be_null": false,
+                "map_bit": 0,
+                "depends_on_map_bits": [
+                ]
+              }
+            ]
+          },
+          {
+            "ref_optimizer_key_uses": [
+            ]
+          },
+          {
+            "rows_estimation": [
+              {
+                "table": "`t1`",
+                "table_scan": {
+                  "rows": 2,
+                
+                }
+              }
+            ]
+          },
+          {
+            "considered_execution_plans": [
+              {
+                "plan_prefix": [
+                ],
+                "table": "`t1`",
+                "best_access_path": {
+                  "considered_access_paths": [
+                    {
+                      "rows_to_scan": 2,
+                      "access_type": "scan",
+                      "resulting_rows": 2,
+                    
+                      "chosen": true
+                    }
+                  ]
+                },
+                "condition_filtering_pct": 100,
+                "rows_for_plan": 2,
+              
+                "chosen": true
+              }
+            ]
+          },
+          {
+            "attaching_conditions_to_tables": {
+              "original_condition": "(`t1`.`a` > 1)",
+              "attached_conditions_computation": [
+              ],
+              "attached_conditions_summary": [
+                {
+                  "table": "`t1`",
+                  "attached": "(`t1`.`a` > 1)"
+                }
+              ]
+            }
+          },
+          {
+            "finalizing_table_conditions": [
+              {
+                "table": "`t1`",
+                "original_table_condition": "(`t1`.`a` > 1)",
+                "final_table_condition   ": "(`t1`.`a` > 1)"
+              }
+            ]
+          },
+          {
+            "refine_plan": [
+              {
+                "table": "`t1`"
+              }
+            ]
+          },
+          {
+            "cache_plan": {
+              "cached": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "not_apply_pq_plan": {
+        "select#": 1,
+        "chosen": false,
+        "reason": "Query is store procedure or trigger or prepare statement or attachable transaction or serializable with locking reads."
+      }
+    },
+    {
+      "join_execution": {
+        "select#": 1,
+        "steps": [
+        ]
+      }
+    }
+  ]
+}	0	0
+show session status like "cached_plan%";
+Variable_name	Value
+Cached_plan_count	1
+Cached_plan_hits	1
+Cached_plan_invalidations	1
+set optimizer_trace='enabled=off';
+drop table t1;
+set debug='-d,apply_cached_plan_fail';
+# BUG2025031715722 : mysqld crash, keyword:plan_cache::exec_cached_plan.
+CREATE TABLE `sbtest` (
+`id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+`k` int(10) UNSIGNED NOT NULL DEFAULT '0',
+`c` char(120) NOT NULL DEFAULT '',
+`pad` char(60) NOT NULL DEFAULT '',
+PRIMARY KEY (`id`),
+KEY `k` (`k`)
+) engine=innodb;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+CREATE PROCEDURE InsertRandomData()
+BEGIN
+DECLARE i INT DEFAULT 1;
+DECLARE random_value INT;
+DECLARE repeated_values_count INT DEFAULT 200;
+SET @@session.rand_seed1 = 12345;
+SET @@session.rand_seed2 = 67890;
+WHILE i <= 1000 DO
+IF i <= repeated_values_count THEN
+SET random_value = FLOOR(1 + (RAND() * 100));
+ELSE
+SET random_value = FLOOR(101 + (RAND() * 900));
+END IF;
+INSERT INTO sbtest (`k`, `c`, `pad`)
+VALUES (i, CONCAT('value_', random_value), CONCAT('pad_', i));
+SET i = i + 1;
+END WHILE;
+END|
+CALL InsertRandomData();
+PREPARE stmt FROM 'SELECT DISTINCT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY c';
+SET @n = 10;
+SET @m = 15;
+EXECUTE stmt USING @n, @m;
+c
+value_100
+value_13
+value_35
+value_76
+value_77
+value_88
+EXECUTE stmt USING @n, @m;
+c
+value_100
+value_13
+value_35
+value_76
+value_77
+value_88
+SET debug= "+d,plan_cache_debug_test_quick_select_fail";
+EXECUTE stmt USING @n, @m;
+c
+value_100
+value_13
+value_35
+value_76
+value_77
+value_88
+SET debug="-d,plan_cache_debug_test_quick_select_fail";
+DROP PROCEDURE InsertRandomData;
+DEALLOCATE PREPARE stmt;
+PREPARE stmt FROM 'SELECT DISTINCT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY c';
+SET session debug="+d,pq_dup_tabs_for_plan_cache_error0";
+flush status;
+EXECUTE stmt USING @n, @m;
+c
+value_100
+value_13
+value_35
+value_76
+value_77
+value_88
+EXECUTE stmt USING @n, @m;
+c
+value_100
+value_13
+value_35
+value_76
+value_77
+value_88
+EXECUTE stmt USING @n, @m;
+c
+value_100
+value_13
+value_35
+value_76
+value_77
+value_88
+show session status like "cached_plan%";
+Variable_name	Value
+Cached_plan_count	0
+Cached_plan_hits	0
+Cached_plan_invalidations	2
+SET session debug="-d,pq_dup_tabs_for_plan_cache_error0";
+PREPARE stmt FROM 'SELECT DISTINCT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY c';
+EXECUTE stmt USING @n, @m;
+c
+value_100
+value_13
+value_35
+value_76
+value_77
+value_88
+EXECUTE stmt USING @n, @m;
+c
+value_100
+value_13
+value_35
+value_76
+value_77
+value_88
+EXECUTE stmt USING @n, @m;
+c
+value_100
+value_13
+value_35
+value_76
+value_77
+value_88
+show session status like "cached_plan%";
+Variable_name	Value
+Cached_plan_count	1
+Cached_plan_hits	2
+Cached_plan_invalidations	2
+DEALLOCATE PREPARE stmt;
+DROP TABLE sbtest;

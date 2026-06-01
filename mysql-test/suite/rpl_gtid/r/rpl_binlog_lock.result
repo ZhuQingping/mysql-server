@@ -1,0 +1,68 @@
+include/master-slave.inc
+Warnings:
+Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
+[connection master]
+#
+# DDL relaylog replaying can be blocked by 'lock binlog for backup' on slave
+#
+# LOCK BINLOG FOR BACKUP on the slave
+[connection slave]
+LOCK BINLOG FOR BACKUP;
+# Execute DDL on the master
+[connection master]
+CREATE TABLE t1 (c1 INT) ENGINE=InnoDB;
+# Expect that DDL relaylog replaying is waiting for binlog Lock, so count(*)=1 is true.
+SELECT count(*)=1 FROM information_schema.processlist where STATE = 'Waiting for binlog lock';
+count(*)=1
+1
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+UNLOCK BINLOG;
+# Expect that DDL relaylog replaying finished, so count(*)=0 is true.
+SELECT count(*)=0 FROM information_schema.processlist where STATE = 'Waiting for binlog lock';
+count(*)=0
+1
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+#--------------------------------------------------------------------
+# DML relaylog replaying can be blocked by 'lock binlog for backup' on slave
+#
+# LOCK BINLOG FOR BACKUP on the slave
+LOCK BINLOG FOR BACKUP;
+# Execute DML on the master
+INSERT INTO t1 values(1);
+# Expect that DML relaylog replaying is waiting for binlog Lock, so count(*)=1 is true.
+SELECT count(*)=1 FROM information_schema.processlist where STATE = 'Waiting for binlog lock';
+count(*)=1
+1
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+UNLOCK BINLOG;
+# Expect that DML relaylog replaying finished, so count(*)=0 is true.
+SELECT count(*)=0 FROM information_schema.processlist where STATE = 'Waiting for binlog lock';
+count(*)=0
+1
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+# --------------------------------------------------------------------
+# SHOW SLAVE STATUS can't be blocked by 'lock binlog for backup' on slave.
+#
+# LOCK BINLOG FOR BACKUP on the slave
+LOCK BINLOG FOR BACKUP;
+# Execute SHOW SLAVE STATUS on the slave1
+[connection slave1]
+SHOW SLAVE STATUS;
+# Expect that no thread is waiting for binlog Lock, so count(*)=0 is true.
+SELECT count(*)=0 FROM information_schema.processlist where STATE = 'Waiting for binlog lock';
+count(*)=0
+1
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+UNLOCK BINLOG;
+#
+# Cleanup
+#
+[connection master]
+DROP TABLE t1;
+include/rpl_end.inc

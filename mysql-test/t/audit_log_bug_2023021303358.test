@@ -1,0 +1,44 @@
+--source include/have_debug.inc
+
+--echo # BUG2023021303358: When innodb_force_recovery=1 and then install the audit log
+--echo # plugin, the database crashes.
+# This is a test case for the bugfix: BUG2023021303358.
+# Related design documents and details are available at the following link:
+# https://clouddevops.huawei.com/#/product/my/workbench/bug/2230806
+# Simulate multiple null pointer exceptions. It is expected that no crash occurs.
+# innodb_force_recovery is always 1.
+--echo
+
+--echo # ------------------------------Case 1----------------------------------------------
+SET debug = "+d, simulate_audit_account_map_nullptr";
+--error ER_DA_PLUGIN_INSTALL_ERROR
+INSTALL PLUGIN audit_log SONAME 'audit_log.so';
+--echo # The mysqld process is normal, and the PLUGINS table does not contain the audit_log plugin information.
+SELECT * FROM INFORMATION_SCHEMA.PLUGINS WHERE `PLUGIN_NAME`='audit_log';
+SET debug = "-d, simulate_audit_account_map_nullptr";
+--echo
+
+--echo # ------------------------------Case 2----------------------------------------------
+SET debug = "+d, simulate_audit_database_map_nullptr";
+--error ER_DA_PLUGIN_INSTALL_ERROR
+INSTALL PLUGIN audit_log SONAME 'audit_log.so';
+--echo # The mysqld process is normal, and the PLUGINS table does not contain the audit_log plugin information.
+SELECT * FROM INFORMATION_SCHEMA.PLUGINS WHERE `PLUGIN_NAME`='audit_log';
+SET debug = "-d, simulate_audit_database_map_nullptr";
+--echo
+
+--echo # ------------------------------Case 3----------------------------------------------
+SET debug = "+d, simulate_audit_command_map_nullptr";
+--error ER_DA_PLUGIN_INSTALL_ERROR
+INSTALL PLUGIN audit_log SONAME 'audit_log.so';
+--echo # The mysqld process is normal, and the PLUGINS table does not contain the audit_log plugin information.
+SELECT * FROM INFORMATION_SCHEMA.PLUGINS WHERE `PLUGIN_NAME`='audit_log';
+SET debug = "-d, simulate_audit_command_map_nullptr";
+
+--let $restart_parameters="restart: --innodb_force_recovery=0"
+--source include/restart_mysqld.inc
+
+call mtr.add_suppression("Skip updating information_schema metadata in InnoDB read-only mode.");
+call mtr.add_suppression("Skip re-populating collations and character sets tables in InnoDB read-only mode.");
+call mtr.add_suppression("Skipped updating resource group metadata in InnoDB read only mode.");
+call mtr.add_suppression("innodb_force_recovery is on. We do not allow database modifications by the user. Shut down mysqld and edit my.cnf to set innodb_force_recovery=0");

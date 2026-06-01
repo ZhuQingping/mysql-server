@@ -1,0 +1,86 @@
+# Test local socket connection using per thread
+
+# Save the initial number of concurrent sessions
+--source include/count_sessions.inc
+
+SET @global_rds_local_socket_using_per_thread =  @@global.rds_local_socket_using_per_thread;
+SET @global_threadpool_enabled =  @@global.threadpool_enabled;
+
+--echo # Test 1: when threadpool enable, rds_local_socket_using_per_thread
+--echo #         controls whether local socket connection to use per thread.
+set global threadpool_enabled=ON;
+show variables like 'threadpool_enabled';
+show variables like 'rds_local_socket_using_per_thread';
+
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+connect(socket_conn1,localhost,root,,);
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+connect(tcp_conn1,127.0.0.1,root,,,$MASTER_MYPORT);
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+connection default;
+set global rds_local_socket_using_per_thread=ON;
+
+connect(socket_conn2,localhost,root,,);
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+connect(tcp_conn2,127.0.0.1,root,,,$MASTER_MYPORT);
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+--echo # Test 2: when threadpool disable, normal connection and socket connection
+--echo #         can connect success.
+connection default;
+set global threadpool_enabled=OFF;
+
+connect(socket_conn3,localhost,root,,);
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+connect(tcp_conn3,127.0.0.1,root,,,$MASTER_MYPORT);
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+connection default;
+set global rds_local_socket_using_per_thread=OFF;
+
+connect(socket_conn4,localhost,root,,);
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+connect(tcp_conn4,127.0.0.1,root,,,$MASTER_MYPORT);
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+connection default;
+set global threadpool_enabled=ON;
+connect(tcp_conn5,127.0.0.1,root,,,$MASTER_MYPORT);
+disconnect tcp_conn5;
+
+connection default;
+set global threadpool_enabled=OFF;
+connect(tcp_conn5,127.0.0.1,root,,,$MASTER_MYPORT);
+disconnect tcp_conn5;
+--echo # Cleanup
+
+connection default;
+SET @@global.rds_local_socket_using_per_thread = @global_rds_local_socket_using_per_thread;
+SET @@global.threadpool_enabled = @global_threadpool_enabled;
+disconnect socket_conn1;
+disconnect socket_conn2;
+disconnect socket_conn3;
+disconnect socket_conn4;
+disconnect tcp_conn1;
+disconnect tcp_conn2;
+disconnect tcp_conn3;
+disconnect tcp_conn4;
+
+# Wait till we reached the initial number of concurrent sessions
+--source include/wait_until_count_sessions.inc
+

@@ -1,0 +1,135 @@
+CREATE PROCEDURE delete_one_sql_filter_rule(IN offset_value INT)
+begin
+declare my_var BIGINT default 1;
+select item_id into my_var from mysql.rds_sql_filter_rules limit offset_value,1;
+call dbms_sqlfilter.delete_sql_filter(my_var);
+end |
+#  ------------------------------------------
+# Test add_sql_filter interface
+# dbms_sqlfilter.add_sql_filter(
+#     type ENUM('SELECT', 'UPDATE', 'DELETE', 'INSERT'),
+#     max_concurrency INT UNSIGNED,
+#     key_str VARCHAR(1024),
+#     node_id VARCHAR(64));
+#  ------------------------------------------
+#
+# test dbms_sqlfilter.add_sql_filter type
+#
+call dbms_sqlfilter.add_sql_filter(1, 1, "select~t","");
+ERROR HY000: Incorrect parameters (pos is 1) to native procedure 'dbms_sqlfilter.add_sql_filter.
+call dbms_sqlfilter.add_sql_filter(2, 1, "select~t","");
+ERROR HY000: Incorrect parameters (pos is 1) to native procedure 'dbms_sqlfilter.add_sql_filter.
+call dbms_sqlfilter.add_sql_filter("abc", 1, "select~t","");
+ERROR HY000: Statement sqlfilter is not valid when add sql filter since the type is not any of select, update, delete, or insert.
+call dbms_sqlfilter.add_sql_filter("alter", 1, "alter~t","");
+ERROR HY000: Statement sqlfilter is not valid when add sql filter since the type is not any of select, update, delete, or insert.
+call dbms_sqlfilter.add_sql_filter("select", 1, "select~t","");
+call dbms_sqlfilter.add_sql_filter("update", 1, "update~t","");
+call dbms_sqlfilter.add_sql_filter("delete", 1, "delete~t","");
+call dbms_sqlfilter.add_sql_filter("insert", 1, "insert~t","");
+call dbms_sqlfilter.add_sql_filter("replace", 1, "replace~t","");
+ERROR HY000: Statement sqlfilter is not valid when add sql filter since the type is not any of select, update, delete, or insert.
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	1	2	0	select~t	
+#	UPDATE	0	1	2	0	update~t	
+#	DELETE	0	1	2	0	delete~t	
+#	INSERT	0	1	2	0	insert~t	
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#
+# test dbms_sqlfilter.add_sql_filter max_concurrency
+#
+call dbms_sqlfilter.add_sql_filter("select", -1, "select~t","");
+ERROR HY000: Statement sqlfilter is not valid when add sql filter since the max_concurrency is out of range, the valid range is [0, 1000000000].
+call dbms_sqlfilter.add_sql_filter("select", 1000000001, "select~t","");
+ERROR HY000: Statement sqlfilter is not valid when add sql filter since the max_concurrency is out of range, the valid range is [0, 1000000000].
+call dbms_sqlfilter.add_sql_filter("select", 1000000000, "select~t","");
+call dbms_sqlfilter.add_sql_filter("select", 0, "select~t","");
+call dbms_sqlfilter.add_sql_filter("select", 10, "select~t","");
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	10	2	0	select~t	
+#	SELECT	0	0	2	0	select~t	
+#	SELECT	0	1000000000	2	0	select~t	
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#
+# test dbms_sqlfilter.add_sql_filter key_str
+# test key_str char_length > 1024, please see mtr sql_filter.sqlfilter_bugfix, add chinese test
+# test keywords number: [2, 128], please see mtr sql_filter.qlfilter_basic
+#
+call dbms_sqlfilter.add_sql_filter("select", 10, 1,"");
+ERROR HY000: Incorrect parameters (pos is 3) to native procedure 'dbms_sqlfilter.add_sql_filter.
+call dbms_sqlfilter.add_sql_filter("select", 10, '',"");
+ERROR HY000: Statement sqlfilter is not valid when add sql filter since the key_str's char length is out of range or collation is incompatible, the valid range is [1, 1024].
+call dbms_sqlfilter.add_sql_filter("select", 10, 'a~b~c',"");
+ERROR HY000: Statement sqlfilter is not valid when add sql filter since the header of key_str is not same with sql filter type.
+call dbms_sqlfilter.add_sql_filter("select", 10, 'insert~a~b~c',"");
+ERROR HY000: Statement sqlfilter is not valid when add sql filter since the header of key_str is not same with sql filter type.
+call dbms_sqlfilter.add_sql_filter("update", 10, 'iNsert~a~b~c',"");
+ERROR HY000: Statement sqlfilter is not valid when add sql filter since the header of key_str is not same with sql filter type.
+call dbms_sqlfilter.add_sql_filter("insert", 10, 'Select~a~b~c',"");
+ERROR HY000: Statement sqlfilter is not valid when add sql filter since the header of key_str is not same with sql filter type.
+call dbms_sqlfilter.add_sql_filter("delete", 10, 'insert~a~b~c',"");
+ERROR HY000: Statement sqlfilter is not valid when add sql filter since the header of key_str is not same with sql filter type.
+call dbms_sqlfilter.add_sql_filter("select", 10, 'update~a~b~c',"");
+ERROR HY000: Statement sqlfilter is not valid when add sql filter since the header of key_str is not same with sql filter type.
+call dbms_sqlfilter.add_sql_filter("select", 10, 'delete~a~b~c',"");
+ERROR HY000: Statement sqlfilter is not valid when add sql filter since the header of key_str is not same with sql filter type.
+call dbms_sqlfilter.add_sql_filter("select", 10, '~select~a~b~c~',"");
+ERROR HY000: Statement sqlfilter is not valid when add sql filter since the header of key_str is not same with sql filter type.
+call dbms_sqlfilter.add_sql_filter("select", 10, 'select~a~b~c~',"");
+ERROR HY000: Statement sqlfilter is not valid when add sql filter since rule contain illegal empty key.
+select char_length("select~xxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库ddddddddddxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddxxxxxxxxxxx数xxdddddxxxxxxxxx");
+char_length("select~xxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库ddddddddddxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+1024
+select length("select~xxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库ddddddddddxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddxxxxxxxxxxx数xxdddddxxxxxxxxx");
+length("select~xxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库ddddddddddxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+1038
+call dbms_sqlfilter.add_sql_filter("select",0,"select~xxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库ddddddddddxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddxxxxxxxxxxx数xxdddddxxxxxxxxx","");
+call dbms_sqlfilter.add_sql_filter("select", 10, 'select ~ \r a~  \n b ~ c\n\t',"");
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	10	4	0	select ~  a~  
+ b ~ c
+		
+#	SELECT	0	0	2	0	select~xxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库ddddddddddxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddxxxxxxxxxxx数xxdddddxxxxxxxxx	
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#
+# test dbms_sqlfilter.add_sql_filter node_id
+#
+call dbms_sqlfilter.add_sql_filter("select", 10, 'select~t',12);
+ERROR HY000: Incorrect parameters (pos is 4) to native procedure 'dbms_sqlfilter.add_sql_filter.
+select char_length("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+char_length("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+37
+call dbms_sqlfilter.add_sql_filter("select", 10, 'select~t',"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+ERROR HY000: Statement sqlfilter is not valid when add sql filter since Parameter node_id's char length is invalid or collation is incompatible, range[0, 36].
+call dbms_sqlfilter.add_sql_filter("select", 10, 'select~t',"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+select char_length("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库");
+char_length("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库")
+36
+call dbms_sqlfilter.add_sql_filter("select", 10, 'select~t',"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库");
+call dbms_sqlfilter.add_sql_filter("select", 10, 'select~t',"");
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	10	2	0	select~t	
+#	SELECT	0	10	2	0	select~t	xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库
+#	SELECT	0	10	2	0	select~t	xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+DROP PROCEDURE delete_one_sql_filter_rule;

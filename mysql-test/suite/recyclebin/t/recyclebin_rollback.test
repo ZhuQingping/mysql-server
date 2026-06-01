@@ -1,0 +1,81 @@
+--source include/not_have_only_dstore.inc
+#
+# Test for recycle func of recyclebin
+#
+
+--disable_query_log
+call mtr.add_suppression("\\[ERROR\\] .* create new thd");
+call mtr.add_suppression("\\[ERROR\\] .* create new thread");
+call mtr.add_suppression("\\[Warning\\] .* table doesn't exist or has been recycled.");
+
+--echo # Connect to master
+connection default;
+create database db_recycle;
+
+set global rds_recycle_bin_mode=ON;
+set rds_recycle_bin_mode=ON;
+
+use db_recycle;
+create table t1(id int);
+rename table t1 to t2;
+rename table t2 to t1;
+SET SESSION debug="+d,recyclebin_check_acquire_table_failed";
+drop table t1;
+SET SESSION debug="-d,recyclebin_check_acquire_table_failed";
+
+create table t1(id int);
+SET SESSION debug="+d,recyclebin_check_support_recyclebin";
+--error ER_RECYBIN_CHECK_FAILED
+eval drop table t1;
+SET SESSION debug="-d,recyclebin_check_support_recyclebin";
+
+SET SESSION debug="+d,recyclebin_recycle_database_alloc_fail_01";
+--error ER_RECYBIN_DROP_TABLE_FAILED
+eval drop database db_recycle;
+SET SESSION debug="-d,recyclebin_recycle_database_alloc_fail_01";
+
+drop table t1;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+SET SESSION debug="+d,recyclebin_restore_alloc_fail_01";
+--replace_result $t1_name_in_recyclebin t1
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+eval call dbms_recyclebin.restore_table('$t1_name_in_recyclebin');
+SET SESSION debug="-d,recyclebin_restore_alloc_fail_01";
+SET SESSION debug="+d,recyclebin_restore_alloc_fail_02";
+--replace_result $t1_name_in_recyclebin t1
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+eval call dbms_recyclebin.restore_table('$t1_name_in_recyclebin');
+SET SESSION debug="-d,recyclebin_restore_alloc_fail_02";
+SET SESSION debug="+d,recyclebin_copy_with_cs_fail_02";
+--replace_result $t1_name_in_recyclebin t1
+--error ER_NATIVE_PROC_PARAMETER_MISMATCH
+eval call dbms_recyclebin.restore_table('$t1_name_in_recyclebin');
+SET SESSION debug="-d,recyclebin_copy_with_cs_fail_02";
+SET SESSION debug="+d,recyclebin_copy_with_cs_fail_03";
+--replace_result $t1_name_in_recyclebin t1
+--error ER_NATIVE_PROC_PARAMETER_MISMATCH
+eval call dbms_recyclebin.restore_table('$t1_name_in_recyclebin', 'db_recycle', 't1');
+SET SESSION debug="-d,recyclebin_copy_with_cs_fail_03";
+SET SESSION debug="+d,recyclebin_copy_with_cs_fail_04";
+--replace_result $t1_name_in_recyclebin t1
+--error ER_NATIVE_PROC_PARAMETER_MISMATCH
+eval call dbms_recyclebin.restore_table('$t1_name_in_recyclebin', 'db_recycle', 't1');
+SET SESSION debug="-d,recyclebin_copy_with_cs_fail_04";
+
+SET SESSION debug="+d,recyclebin_restore_db_fail_after_commit";
+--replace_result $t1_name_in_recyclebin t1
+--error ER_UNKNOWN_ERROR
+eval call dbms_recyclebin.restore_db('db_recycle', 'db_recycle');
+--error ER_NATIVE_PROC_PARAMETER_MISMATCH
+eval call dbms_recyclebin.restore_db('db_recycle', '');
+SET SESSION debug="-d,recyclebin_restore_db_fail_after_commit";
+
+show tables;
+
+set global rds_recycle_bin_mode=OFF;
+set rds_recycle_bin_mode=OFF;
+drop database db_recycle;

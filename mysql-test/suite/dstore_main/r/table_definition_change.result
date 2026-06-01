@@ -1,0 +1,279 @@
+########################################
+### Test 1. Test for doing full scan on a no primary key table
+########################################
+### Connection A: Start a active transaction
+CREATE TABLE t2 (c1 char(10), c2 char(10));
+INSERT INTO t2 VALUES ("r1c1", "r1c2");
+SELECT * FROM t2;
+c1	c2
+r1c1	r1c2
+CREATE TABLE t1 (c1 char(10), c2 char(10));
+INSERT INTO t1 VALUES ("r1c1", "r1c2");
+SELECT * FROM t1;
+c1	c2
+r1c1	r1c2
+BEGIN;
+SELECT * FROM t2;
+c1	c2
+r1c1	r1c2
+### Connection B: Change table t1 definition
+ALTER TABLE t1 ADD COLUMN c3 char(10) DEFAULT "c3_def",ALGORITHM=COPY;
+UPDATE t1 SET c1 = "r1c11";
+SELECT * FROM t1;
+c1	c2	c3
+r1c11	r1c2	c3_def
+### Connection A: Query on t1 results the ER_TABLE_DEF_CHANGED
+SELECT * FROM t1;
+ERROR HY000: Table definition has changed, please retry transaction
+SELECT * FROM t1;
+ERROR HY000: Table definition has changed, please retry transaction
+COMMIT;
+### The result should be normal
+SELECT * FROM t1;
+c1	c2	c3
+r1c11	r1c2	c3_def
+########################################
+### Test 2. Test for doing full scan on a table with primary key
+########################################
+DROP TABLE t1, t2;
+### Connection A: Start a active transaction
+CREATE TABLE t2 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t2 VALUES ("r1c1", "r1c2");
+SELECT * FROM t2;
+c1	c2
+r1c1	r1c2
+CREATE TABLE t1 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t1 VALUES ("r1c1", "r1c2");
+SELECT * FROM t1;
+c1	c2
+r1c1	r1c2
+BEGIN;
+SELECT * FROM t2;
+c1	c2
+r1c1	r1c2
+### Connection B: Change table t1 definition
+ALTER TABLE t1 ADD COLUMN c3 char(10) DEFAULT "c3_def",ALGORITHM=COPY;
+UPDATE t1 SET c1 = "r1c11";
+SELECT * FROM t1;
+c1	c2	c3
+r1c11	r1c2	c3_def
+### Connection A: Query on t1 results the ER_TABLE_DEF_CHANGED
+SELECT * FROM t1;
+ERROR HY000: Table definition has changed, please retry transaction
+SELECT * FROM t1;
+ERROR HY000: Table definition has changed, please retry transaction
+COMMIT;
+### The result should be normal
+SELECT * FROM t1;
+c1	c2	c3
+r1c11	r1c2	c3_def
+########################################
+### Test 3. Test for doing index scan on a table with primary key and secondary index
+########################################
+DROP TABLE t1, t2;
+### Connection A: Start a active transaction
+CREATE TABLE t2 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t2 VALUES ("r1c1", "r1c2");
+SELECT * FROM t2 force index(key_2) where c2 = 'r1c2';
+c1	c2
+r1c1	r1c2
+CREATE TABLE t1 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t1 VALUES ("r1c1", "r1c2");
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+c1	c2
+r1c1	r1c2
+BEGIN;
+SELECT * FROM t2 force index(key_2) where c2 = 'r1c2';
+c1	c2
+r1c1	r1c2
+### Connection B: Change table t1 definition
+ALTER TABLE t1 ADD COLUMN c3 char(10) DEFAULT "c3_def",ALGORITHM=COPY;
+UPDATE t1 SET c1 = "r1c11";
+SELECT * FROM t1;
+c1	c2	c3
+r1c11	r1c2	c3_def
+### Connection A: Query on t1 results the ER_TABLE_DEF_CHANGED
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+ERROR HY000: Table definition has changed, please retry transaction
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+ERROR HY000: Table definition has changed, please retry transaction
+COMMIT;
+### The result should be normal
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+c1	c2	c3
+r1c11	r1c2	c3_def
+########################################
+### Test 4. Test for drop a key and add it back
+########################################
+DROP TABLE t1, t2;
+### Connection A: Start a active transaction
+CREATE TABLE t2 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t2 VALUES ("r1c1", "r1c2");
+SELECT * FROM t2 force index(key_2) where c2 = 'r1c2';
+c1	c2
+r1c1	r1c2
+CREATE TABLE t1 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t1 VALUES ("r1c1", "r1c2");
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+c1	c2
+r1c1	r1c2
+BEGIN;
+SELECT * FROM t2 force index(key_2) where c2 = 'r1c2';
+c1	c2
+r1c1	r1c2
+### Connection B: Change table t1 definition
+ALTER TABLE t1 DROP INDEX key_2;
+ALTER TABLE t1 ADD INDEX key_2(c2);
+UPDATE t1 SET c1 = "r1c11";
+SELECT * FROM t1;
+c1	c2
+r1c11	r1c2
+### Connection A: Query on t1 results the ER_TABLE_DEF_CHANGED
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+ERROR HY000: Table definition has changed, please retry transaction
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+ERROR HY000: Table definition has changed, please retry transaction
+COMMIT;
+### The result should be normal
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+c1	c2
+r1c11	r1c2
+########################################
+### Test 5. Test for doing full scan on a no primary key table (instant DDL)
+########################################
+DROP TABLE t1, t2;
+### Connection A: Start a active transaction
+CREATE TABLE t2 (c1 char(10), c2 char(10));
+INSERT INTO t2 VALUES ("r1c1", "r1c2");
+SELECT * FROM t2;
+c1	c2
+r1c1	r1c2
+CREATE TABLE t1 (c1 char(10), c2 char(10));
+INSERT INTO t1 VALUES ("r1c1", "r1c2");
+SELECT * FROM t1;
+c1	c2
+r1c1	r1c2
+BEGIN;
+SELECT * FROM t2;
+c1	c2
+r1c1	r1c2
+### Connection B: Change table t1 definition
+ALTER TABLE t1 ADD COLUMN c3 char(10) DEFAULT "c3_def",ALGORITHM=INSTANT;
+UPDATE t1 SET c1 = "r1c11";
+SELECT * FROM t1;
+c1	c2	c3
+r1c11	r1c2	c3_def
+### Connection A: Query on t1 results the ER_TABLE_DEF_CHANGED
+SELECT * FROM t1;
+ERROR HY000: Table definition has changed, please retry transaction
+SELECT * FROM t1;
+ERROR HY000: Table definition has changed, please retry transaction
+COMMIT;
+### The result should be normal
+SELECT * FROM t1;
+c1	c2	c3
+r1c11	r1c2	c3_def
+########################################
+### Test 6. Test for doing full scan on a table with primary key (instant DDL)
+########################################
+DROP TABLE t1, t2;
+### Connection A: Start a active transaction
+CREATE TABLE t2 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t2 VALUES ("r1c1", "r1c2");
+SELECT * FROM t2;
+c1	c2
+r1c1	r1c2
+CREATE TABLE t1 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t1 VALUES ("r1c1", "r1c2");
+SELECT * FROM t1;
+c1	c2
+r1c1	r1c2
+BEGIN;
+SELECT * FROM t2;
+c1	c2
+r1c1	r1c2
+### Connection B: Change table t1 definition
+ALTER TABLE t1 ADD COLUMN c3 char(10) DEFAULT "c3_def",ALGORITHM=INSTANT;
+UPDATE t1 SET c1 = "r1c11";
+SELECT * FROM t1;
+c1	c2	c3
+r1c11	r1c2	c3_def
+### Connection A: Query on t1 results the ER_TABLE_DEF_CHANGED
+SELECT * FROM t1;
+ERROR HY000: Table definition has changed, please retry transaction
+SELECT * FROM t1;
+ERROR HY000: Table definition has changed, please retry transaction
+COMMIT;
+########################################
+### Test 7. Test for doing index scan on a table with primary key and secondary index (instant DDL)
+########################################
+DROP TABLE t1, t2;
+### Connection A: Start a active transaction
+CREATE TABLE t2 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t2 VALUES ("r1c1", "r1c2");
+SELECT * FROM t2 force index(key_2) where c2 = 'r1c2';
+c1	c2
+r1c1	r1c2
+CREATE TABLE t1 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t1 VALUES ("r1c1", "r1c2");
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+c1	c2
+r1c1	r1c2
+BEGIN;
+SELECT * FROM t2 force index(key_2) where c2 = 'r1c2';
+c1	c2
+r1c1	r1c2
+### Connection B: Change table t1 definition
+ALTER TABLE t1 ADD COLUMN c3 char(10) DEFAULT "c3_def",ALGORITHM=INSTANT;
+UPDATE t1 SET c1 = "r1c11";
+SELECT * FROM t1;
+c1	c2	c3
+r1c11	r1c2	c3_def
+### Connection A: Query on t1 results the ER_TABLE_DEF_CHANGED
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+ERROR HY000: Table definition has changed, please retry transaction
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+ERROR HY000: Table definition has changed, please retry transaction
+COMMIT;
+### The result should be normal
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+c1	c2	c3
+r1c11	r1c2	c3_def
+### The result should be normal
+SELECT * FROM t1;
+c1	c2	c3
+r1c11	r1c2	c3_def
+########################################
+### Test 7. Test for truncate table
+########################################
+DROP TABLE t1, t2;
+### Connection A: Start a active transaction
+CREATE TABLE t2 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t2 VALUES ("r1c1", "r1c2");
+SELECT * FROM t2 force index(key_2) where c2 = 'r1c2';
+c1	c2
+r1c1	r1c2
+CREATE TABLE t1 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t1 VALUES ("r1c1", "r1c2");
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+c1	c2
+r1c1	r1c2
+BEGIN;
+SELECT * FROM t2 force index(key_2) where c2 = 'r1c2';
+c1	c2
+r1c1	r1c2
+### Connection B: Truncate table
+Truncate table t1;
+### Connection A: Query on t1 results the ER_TABLE_DEF_CHANGED
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+ERROR HY000: Table definition has changed, please retry transaction
+SELECT * FROM t1;
+ERROR HY000: Table definition has changed, please retry transaction
+COMMIT;
+### The result should be normal
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+c1	c2
+### The result should be normal
+SELECT * FROM t1;
+c1	c2
+DROP TABLE t1, t2;

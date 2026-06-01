@@ -1,0 +1,101 @@
+sql/item_subselect.h
+^class Item_exists_subselect : public Item_subselect \{$
+^\};$
+class Item_exists_subselect : public Item_subselect {
+  typedef Item_subselect super;
+
+ protected:
+  /// value of this item (boolean: exists/not-exists)
+  bool value{false};
+
+ public:
+  /// Priority of this predicate in the convert-to-semi-join-nest process.
+  int sj_convert_priority{0};
+  /// Execution strategy chosen for this Item
+  Subquery_strategy strategy{Subquery_strategy::UNSPECIFIED};
+  /// Used by the transformation to derived table
+  enum_condition_context outer_condition_context{enum_condition_context::ANDS};
+
+  /**
+    Used by subquery optimizations to keep track about where this subquery
+    predicate is located, and whether it is a candidate for transformation.
+      (Table_ref*) 1 - the predicate is an AND-part of the WHERE
+      join nest pointer    - the predicate is an AND-part of ON expression
+                             of a join nest
+      NULL                 - for all other locations. It also means that the
+                             predicate is not a candidate for transformation.
+    See also THD::emb_on_expr_nest.
+
+    As for the second case above (the join nest pointer), note that this value
+    may change if scalar subqueries are transformed to derived tables,
+    cf. transform_scalar_subqueries_to_join_with_derived, due to the need to
+    build new join nests. The change is performed in Query_block::nest_derived.
+  */
+  Table_ref *embedding_join_nest{nullptr};
+
+  Item_exists_subselect(Query_block *select);
+
+  Item_exists_subselect() : Item_subselect() {}
+
+  explicit Item_exists_subselect(const POS &pos) : super(pos) {}
+
+  void notify_removal() override { strategy = Subquery_strategy::DELETED; }
+
+  bool select_transformer(THD *, Query_block *) override {
+    strategy = Subquery_strategy::SUBQ_EXISTS;
+    return false;
+  }
+  subs_type substype() const override { return EXISTS_SUBS; }
+  bool is_bool_func() const override { return true; }
+  void reset() override { value = false; }
+
+  enum Item_result result_type() const override { return INT_RESULT; }
+  /*
+    The item is
+    ([NOT] IN/EXISTS) [ IS [NOT] TRUE|FALSE ]
+  */
+  enum Bool_test value_transform = BOOL_IDENTITY;
+  bool with_is_op() const {
+    switch (value_transform) {
+      case BOOL_IS_TRUE:
+      case BOOL_IS_FALSE:
+      case BOOL_NOT_TRUE:
+      case BOOL_NOT_FALSE:
+        return true;
+      default:
+        return false;
+    }
+  }
+  /// True if the IS TRUE/FALSE wasn't explicit in the query
+  bool implicit_is_op = false;
+  Item *truth_transformer(THD *, enum Bool_test test) override;
+  bool translate(bool &null_v, bool v);
+  void apply_is_true() override {
+    bool had_is = with_is_op();
+    truth_transformer(nullptr, BOOL_IS_TRUE);
+    if (!had_is && value_transform == BOOL_IS_TRUE)
+      implicit_is_op = true;  // needn't be written by EXPLAIN
+  }
+  /// True if the Item has decided that it can do antijoin
+  bool can_do_aj = false;
+  bool choose_semijoin_or_antijoin();
+  longlong val_int() override;
+  double val_real() override;
+  String *val_str(String *) override;
+  my_decimal *val_decimal(my_decimal *) override;
+  bool val_bool() override;
+  bool get_date(MYSQL_TIME *ltime, my_time_flags_t fuzzydate) override {
+    return get_date_from_int(ltime, fuzzydate);
+  }
+  bool get_time(MYSQL_TIME *ltime) override { return get_time_from_int(ltime); }
+  bool resolve_type(THD *thd) override;
+  void print(const THD *thd, String *str,
+             enum_query_type query_type) const override;
+  Item *pq_clone(THD *thd, Query_block *) override;
+  bool pq_copy_from(THD *thd, Query_block *select, Item *item) override;
+  void pq_share_value(const Item_exists_subselect *origin) {
+    value = origin->value;
+  }
+
+  friend class Query_result_exists_subquery;
+};

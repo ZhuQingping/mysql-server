@@ -1,0 +1,62 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+--source include/restart_mysqld.inc
+
+connect(con1, localhost, root,,);
+connection default;
+
+create database pq_test;
+use pq_test;
+
+CREATE TABLE `t2` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `a` int(11) DEFAULT NULL,
+  `b` int(11) DEFAULT NULL,
+  `c` varchar(100) DEFAULT NULL,
+  `d` varchar(100) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_abc` (`a`,`b`,`c`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+--disable_query_log
+ let $loop=8192;
+ while($loop)
+ {
+  eval insert into pq_test.t2(a,b,c,d) values(1, 2, 'abcabcabcabc','cbacbacbacba');
+  dec $loop;
+ }
+--enable_query_log
+ANALYZE TABLE t2;
+
+SET debug_sync = "pq_init_01 WAIT_FOR deleted";
+--disable_result_log
+send select /*+PQ(1)*/ * from t2 order by id desc;
+
+connection con1;
+use pq_test;
+select sleep(5);
+delete from t2 where id > 8000;
+select sleep(100);
+SET debug_sync = "now SIGNAL deleted";
+
+connection default;
+reap;
+--enable_result_log
+
+--disable_result_log
+SET debug_sync = "pq_init_01 WAIT_FOR deleted";
+send select /*+PQ(1)*/ * from t2 order by id desc;
+
+connection con1;
+use pq_test;
+select sleep(50);
+SET debug_sync = "now SIGNAL deleted";
+
+connection default;
+reap;
+--enable_result_log
+
+disconnect con1;
+drop table t2;
+drop database pq_test;
+

@@ -1,0 +1,440 @@
+# ==== Purpose ====
+#
+# A basic test to verify the new variable rds_ddl_lock_wait_timeout
+# can force DDL to abort in specified timeout seconds, but DML etc.
+# won't be affected. And if lock_wait_timeout is specified too,
+# the smaller will take effect for DDL.
+#
+--source include/count_sessions.inc
+
+let $lock_wait_timeout_orig=`select @@lock_wait_timeout`;
+let $innodb_lock_wait_timeout_orig=`select @@innodb_lock_wait_timeout`;
+let $ddl_lock_wait_timeout_orig=`select @@rds_ddl_lock_wait_timeout`;
+
+--echo # prepare data
+CREATE TABLE t1 (
+    id INT,
+    year INT
+);
+
+INSERT INTO t1 VALUES (1, 1991), (2, 1992), (3, 1993);
+
+
+--echo #
+--echo # Scenario 1: With only lock_wait_timeout, DMLs will be blocked
+--echo #             for 5 seconds as setting.
+--echo #
+SET GLOBAL lock_wait_timeout=5;
+connect(conn1,localhost,root,,);
+connect(conn2,localhost,root,,);
+connect(conn3,localhost,root,,);
+
+
+--echo # conn1: A select to block DDL
+connection conn1;
+START TRANSACTION;
+SELECT * FROM t1;
+
+
+--echo # conn2: DDL
+connection conn2;
+
+# Set the SESSION timeout longer to verify the last SESSION 
+SET SESSION lock_wait_timeout=8;
+
+--let conn2_start = `SELECT unix_timestamp(now())`
+--send
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+
+
+--echo # conn3: DML has to wait for 5 seconds
+connection conn3;
+# Wait until the above DDL is blocked
+let $wait_condition=
+    select count(*) = 1 from information_schema.processlist
+    where state = "Waiting for table metadata lock" and
+          info = "ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT ''";
+--source include/wait_condition.inc
+
+--let conn3_start = `SELECT unix_timestamp(now())`
+
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t1 VALUES (4, 2004);
+
+--let conn3_end = `SELECT unix_timestamp(now())`
+--let r = `select ("$conn3_end" - "$conn3_start") >= 5`
+--echo # conn3 waited for 5 seconds: $r
+
+
+--echo # conn2: DDL
+connection conn2;
+--error ER_LOCK_WAIT_TIMEOUT
+--reap
+
+--let conn2_end = `SELECT unix_timestamp(now())`
+--let r = `select ("$conn2_end" - "$conn2_start") >= 8`
+--echo # conn2 waited for 8 seconds: $r
+
+SHOW CREATE TABLE t1;
+disconnect conn2;
+
+
+--echo # conn3: select from conn3 now should work
+connection conn3;
+--echo # 3 rows expected
+SELECT * FROM t1;
+disconnect conn3;
+
+
+--echo # conn1: commit
+connection conn1;
+COMMIT;
+--echo # 3 rows expected
+SELECT * FROM t1;
+disconnect conn1;
+
+
+
+--echo #
+--echo # Scenario 2: By setting rds_ddl_lock_wait_timeout, DDL can timeout
+--echo #             and exit earlier
+--echo #
+connect(conn1,localhost,root,,);
+connect(conn2,localhost,root,,);
+connect(conn3,localhost,root,,);
+
+
+--echo # conn1: a select to block DDL
+connection conn1;
+START TRANSACTION;
+SELECT * FROM t1;
+
+
+--echo # conn2: DDL
+connection conn2;
+
+# We expect the DDL can timeout earlier and the DML won't timeout
+SET SESSION rds_ddl_lock_wait_timeout=3;
+
+--let conn2_start = `SELECT unix_timestamp(now())`
+--send
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+
+
+--echo # conn3: DML only waits for 3s
+connection conn3;
+# Wait until the above DDL is blocked
+let $wait_condition=
+    select count(*) = 1 from information_schema.processlist
+    where state = "Waiting for table metadata lock" and
+          info = "ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT ''";
+--source include/wait_condition.inc
+
+START TRANSACTION;
+--send
+INSERT INTO t1 VALUES(4, 2004);
+
+
+--echo # conn2: DDL
+connection conn2;
+--error ER_LOCK_WAIT_TIMEOUT
+--reap
+
+--let conn2_end = `SELECT unix_timestamp(now())`
+--let r = `select ("$conn2_end" - "$conn2_start") >= 3`
+--echo # conn2 waited for 3 seconds: $r
+
+SHOW CREATE TABLE t1;
+
+--echo # Expect to be 3
+SELECT @@session.rds_ddl_lock_wait_timeout;
+--echo # Expect to be 5
+SELECT @@session.lock_wait_timeout;
+
+disconnect conn2;
+
+
+--echo # conn3: Verify that it succeeded
+connection conn3;
+--reap
+--echo # 4 rows expected
+SELECT * FROM t1;
+ROLLBACK;
+disconnect conn3;
+
+
+--echo # conn1: commit
+connection conn1;
+COMMIT;
+--echo # 3 rows expected
+SELECT * FROM t1;
+disconnect conn1;
+
+connection default;
+
+
+--echo #
+--echo # Scenario 3: By setting rds_ddl_lock_wait_timeout, DDL can timeout
+--echo #             and exit earlier, but this setting won't affect the
+--echo #             following DMLs from the same session, etc.
+--echo #
+SET GLOBAL lock_wait_timeout=5;
+SET GLOBAL innodb_lock_wait_timeout=5;
+connect(conn1,localhost,root,,);
+connect(conn2,localhost,root,,);
+connect(conn3,localhost,root,,);
+
+
+--echo # conn1: a trx to block DDL
+connection conn1;
+START TRANSACTION;
+INSERT INTO t1 VALUES(11, 2001);
+
+
+--echo # conn2: DDL
+connection conn2;
+
+# We expect the DDL can timeout earlier and the DML won't timeout
+SET SESSION rds_ddl_lock_wait_timeout=3;
+
+--let conn2_start = `SELECT unix_timestamp(now())`
+--send
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+
+
+--echo # conn3: DML only waits for 3s
+connection conn3;
+# Wait until the above DDL is blocked
+let $wait_condition=
+    select count(*) = 1 from information_schema.processlist
+    where state = "Waiting for table metadata lock" and
+          info = "ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT ''";
+--source include/wait_condition.inc
+
+START TRANSACTION;
+--send
+INSERT INTO t1 VALUES(12, 2002);
+
+
+--echo # conn2: DDL
+connection conn2;
+--error ER_LOCK_WAIT_TIMEOUT
+--reap
+
+--let conn2_end = `SELECT unix_timestamp(now())`
+--let r = `select ("$conn2_end" - "$conn2_start") >= 3`
+--echo # conn2 waited for 3 seconds: $r
+
+SHOW CREATE TABLE t1;
+
+
+--echo # conn3: Verify that it succeeded
+connection conn3;
+--reap
+--echo # 4 rows are expected
+SELECT * FROM t1;
+ROLLBACK;
+disconnect conn3;
+
+
+--echo # conn2: Verify that following DML will timeout according
+--echo #        to the innodb_lock_wait_timeout rather than the
+--echo #        rds_ddl_lock_wait_timeout
+--echo # conn2: Verify the follow-up statements
+connection conn2;
+
+--let conn2_start = `SELECT unix_timestamp(now())`
+--error ER_LOCK_WAIT_TIMEOUT
+DELETE FROM t1 WHERE id = 11;
+--echo # This verifies that the timeout is innodb_lock_wait_timeout 5s rather
+--echo # than the rds_ddl_lock_wait_timeout 3s
+--echo # conn2 waited for 5 seconds: $r
+--let conn2_end = `SELECT unix_timestamp(now())`
+--let r = `select ("$conn2_end" - "$conn2_start") >= 5`
+
+--echo # Reset the session lock_wait_timeout and innodb_lock_wait_timeout
+--echo # to bigger value 20 and 10 seconds.
+--echo # Let's try another DDL, then it will timeout in about 3 seconds
+--echo # rather than 10 seconds.
+SET SESSION lock_wait_timeout = 20;
+SET SESSION innodb_lock_wait_timeout = 10;
+
+--let conn2_start = `SELECT unix_timestamp(now())`
+--error ER_LOCK_WAIT_TIMEOUT
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+--let conn2_end = `SELECT unix_timestamp(now())`
+--echo # This verifies that the timeout is the rds_ddl_lock_wait_timeout,
+--echo # rather than the lock_wait_timeout
+--let r = `select ("$conn2_end" - "$conn2_start") >= 3`
+--echo # conn2 waited for 3 seconds: $r
+--let r = `select ("$conn2_end" - "$conn2_start") < 10`
+--echo # conn2 waited for less than 10 seconds: $r
+
+--echo # Do again the DML, it has to timeout in 10 seconds now
+--echo # according to the lock_wait_timeout
+--let conn2_start = `SELECT unix_timestamp(now())`
+--error ER_LOCK_WAIT_TIMEOUT
+DELETE FROM t1 WHERE id = 11;
+# This verifies that the timeout is innodb_lock_wait_timeout rather than
+# the rds_ddl_lock_wait_timeout or lock_wait_timeout
+--let conn2_end = `SELECT unix_timestamp(now())`
+--let r = `select ("$conn2_end" - "$conn2_start") >= 10`
+--echo # conn2 waited for 10 seconds: $r
+--let r = `select ("$conn2_end" - "$conn2_start") < 20`
+--echo # conn2 waited for less than 20 seconds: $r
+
+
+disconnect conn2;
+
+
+--echo # conn1: rollback
+connection conn1;
+ROLLBACK;
+--echo # 3 rows are expected
+SELECT * FROM t1;
+disconnect conn1;
+
+
+
+--echo #
+--echo # Scenario 4: Test the DDL timeout from different sessions, and
+--echo #             restricted by GLOBAL or SESSION timeout, etc.
+--echo #
+# Set the DDL timeout to be smaller than normal timeout
+connection default;
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=3;
+connect(conn1,localhost,root,,);
+connect(conn2,localhost,root,,);
+
+
+--echo # conn1: a trx to block DDL
+connection conn1;
+START TRANSACTION;
+SELECT * FROM t1 WHERE id <= 3 FOR UPDATE;
+
+
+--echo # conn2: DDL
+connection conn2;
+
+--echo # First DDL should follow the global DDL timeout 3s
+--let conn2_start = `SELECT unix_timestamp(now())`
+--error ER_LOCK_WAIT_TIMEOUT
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+--let conn2_end = `SELECT unix_timestamp(now())`
+--let r = `select ("$conn2_end" - "$conn2_start") >= 3`
+--echo # conn2 waited for 3 seconds: $r
+--let r = `select ("$conn2_end" - "$conn2_start") < 10`
+--echo # conn2 waited for less than 10 seconds: $r
+
+--echo # Second DDL should follow the SESSION timeout 5s'
+SET SESSION rds_ddl_lock_wait_timeout = 5;
+--let conn2_start = `SELECT unix_timestamp(now())`
+--error ER_LOCK_WAIT_TIMEOUT
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+--let conn2_end = `SELECT unix_timestamp(now())`
+--let r = `select ("$conn2_end" - "$conn2_start") >= 5`
+--echo # conn2 waited for 5 seconds: $r
+--let r = `select ("$conn2_end" - "$conn2_start") < 10`
+--echo # conn2 waited for less than 10 seconds: $r
+
+--echo # Invalidate the session DDL timeout, it should follow the
+--echo # min of two lock wait timeouts, which is 10s for now
+SET SESSION rds_ddl_lock_wait_timeout = 31536000;
+--let conn2_start = `SELECT unix_timestamp(now())`
+--error ER_LOCK_WAIT_TIMEOUT
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+--let conn2_end = `SELECT unix_timestamp(now())`
+--let r = `select ("$conn2_end" - "$conn2_start") >= 10`
+--echo # conn2 waited for 10 seconds: $r
+--let r = `select ("$conn2_end" - "$conn2_start") < 15`
+--echo # conn2 waited for less than 15 seconds: $r
+
+
+connect(conn3,localhost,root,,);
+--echo # conn3: it should follow the global 3s timeout
+connection conn3;
+SHOW GLOBAL VARIABLES LIKE '%ddl_lock_wait_timeout%';
+SHOW SESSION VARIABLES LIKE '%ddl_lock_wait_timeout%';
+--let conn3_start = `SELECT unix_timestamp(now())`
+--error ER_LOCK_WAIT_TIMEOUT
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+--let conn3_end = `SELECT unix_timestamp(now())`
+--let r = `select ("$conn3_end" - "$conn3_start") >= 3`
+--echo # conn3 waited for 3 seconds: $r
+--let r = `select ("$conn3_end" - "$conn3_start") < 10`
+--echo # conn3 waited for less than 10 seconds: $r
+
+
+--echo # Verify that when one DDL is waiting for DML
+--echo # to finish, the other DDL on the same table has
+--echo # to wait for the first DDL. They will timeout
+--echo # separately, or proceed if the DML finishes
+
+
+--echo # conn2 DDL to wait for DML
+connection conn2;
+SET SESSION lock_wait_timeout=10;
+SET SESSION rds_ddl_lock_wait_timeout=5;
+
+--let conn2_start = `SELECT unix_timestamp(now())`
+--send
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+
+
+--echo # conn3 new DDL to wait for DDL/DML
+connection conn3;
+SET SESSION lock_wait_timeout=25;
+SET SESSION rds_ddl_lock_wait_timeout=20;
+
+--let conn3_start = `SELECT unix_timestamp(now())`
+--send
+ALTER TABLE t1 ADD COLUMN comment CHAR(20) DEFAULT '';
+
+
+--echo # conn2 verify it timeout
+connection conn2;
+--error ER_LOCK_WAIT_TIMEOUT
+--reap
+--let conn2_end = `SELECT unix_timestamp(now())`
+--let r = `select ("$conn2_end" - "$conn2_start") >= 5`
+--echo # conn2 waited for 5 seconds: $r
+--let r = `select ("$conn2_end" - "$conn2_start") < 10`
+--echo # conn2 waited for less than 10 seconds: $r
+
+disconnect conn2;
+
+
+--echo # conn1 finish the DML
+connection conn1;
+--echo # sleep 8 seconds to check if the last DDL will be blocked too
+sleep 8;
+ROLLBACK;
+disconnect conn1;
+
+
+--echo # conn3 DDL should succeed
+connection conn3;
+--reap
+--let conn3_end = `SELECT unix_timestamp(now())`
+--let r = `select ("$conn3_end" - "$conn3_start") >= 13`
+--echo # conn3 waited for 13 seconds: $r
+--let r = `select ("$conn3_end" - "$conn3_start") < 18`
+--echo # conn3 waited for less than 18 seconds: $r
+
+SHOW CREATE TABLE t1;
+--echo # 3 rows expected, with 2 columns
+SELECT * FROM t1;
+
+disconnect conn3;
+
+
+--echo # teardown
+connection default;
+DROP TABLE t1;
+
+eval SET GLOBAL lock_wait_timeout = $lock_wait_timeout_orig;
+eval SET GLOBAL rds_ddl_lock_wait_timeout = $ddl_lock_wait_timeout_orig;
+eval SET GLOBAL innodb_lock_wait_timeout = $innodb_lock_wait_timeout_orig;
+
+--source include/wait_until_count_sessions.inc

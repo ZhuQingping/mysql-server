@@ -1,0 +1,28 @@
+call mtr.add_suppression("full backup found binlog is not enabled");
+
+--source suite/local_backup/include/prepare_for_backup.inc
+
+CREATE DATABASE db1;
+USE db1;
+CREATE TABLE t1(a int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+
+# Full local backup.
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+
+# Wal archive.
+--source suite/local_backup/include/start_log_archive.inc
+
+INSERT INTO t1 VALUES(2);
+SELECT * FROM t1 order by a;
+--sleep 3
+
+--source suite/local_backup/include/stop_log_archive.inc
+
+# Drop database db1.
+DROP DATABASE db1;
+
+--source suite/local_backup/include/clean_backup.inc

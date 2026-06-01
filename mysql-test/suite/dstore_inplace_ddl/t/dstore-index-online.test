@@ -1,0 +1,1257 @@
+# ==== Purpose ====
+#
+# Verify online create index for Taurus on Dstore
+#
+# ==== References ====
+#
+# FE2025072500119 Support inplace create index for Taurus on Dstore
+# FE2025111200338 Support online create index for Taurus on Dstore
+#
+
+
+--source include/have_debug_sync.inc
+--source include/have_only_dstore.inc
+call mtr.add_suppression("Inplace prepare create index fail, index name: .*");
+
+CREATE TABLE t1 (c1 INT PRIMARY KEY, c2 INT, c3 TEXT)
+ENGINE=Dstore STATS_PERSISTENT=0;
+INSERT INTO t1 VALUES (1,1,''), (2,2,''), (3,3,''), (4,4,''), (5,5,'');
+
+SET DEBUG_SYNC = 'RESET';
+SET DEBUG_SYNC = 'write_row_noreplace SIGNAL have_handle WAIT_FOR go_ahead';
+--send
+INSERT INTO t1 VALUES(1,2,3);
+
+connect (con1,localhost,root,,);
+connection con1;
+
+# This should block at the end because of the INSERT in connection default
+# is holding a metadata lock.
+SET DEBUG_SYNC = 'now WAIT_FOR have_handle';
+SET lock_wait_timeout = 1;
+--error ER_LOCK_WAIT_TIMEOUT
+ALTER TABLE t1 ADD UNIQUE INDEX(c2);
+SET DEBUG_SYNC = 'now SIGNAL go_ahead';
+
+connection default;
+--error ER_DUP_ENTRY
+reap;
+
+call mtr.add_suppression("CdeInplacePrepareCreateIndex fail! key name = .*");
+call mtr.add_suppression("cde_tuple_desc::build_index_tuple_desc fail! index_tuple_desc is nullptr");
+call mtr.add_suppression("Dstore inplace alter table fail due to out of resources, error code.*");
+connection con1;
+SET SESSION DEBUG = '+d,dstore_OOM_prepare_inplace_alter';
+--error ER_OUT_OF_RESOURCES
+ALTER TABLE t1 ADD UNIQUE INDEX(c2);
+SET SESSION DEBUG = '-d,dstore_OOM_prepare_inplace_alter';
+SET SESSION DEBUG = '+d,dstore_OOM_inplace_alter';
+SET SESSION DEBUG = '+d,dstore_build_index_fail';
+--error ER_OUT_OF_RESOURCES
+CREATE UNIQUE INDEX c2 ON t1(c2);
+SET SESSION DEBUG = '-d,dstore_OOM_inplace_alter';
+SET SESSION DEBUG = '-d,dstore_build_index_fail';
+CREATE UNIQUE INDEX c2 ON t1(c2);
+DROP INDEX c2 ON t1;
+
+DROP TABLE t1;
+#BUG2025120522105
+CREATE TABLE tt_49 (ipkey INT AUTO_INCREMENT, v1 VARCHAR(19), i2 INT, c3 CHAR(30), g4  CHAR(6) AS  (CONCAT(SUBSTRING(i2,1,2),SUBSTRING(c3,1,4))),  PRIMARY KEY(ipkey), INDEX tt_49i0(v1, g4 DESC, i2 DESC, ipkey, c3 ASC) , INDEX tt_49i1(c3, g4, ipkey) , INDEX tt_49i2(ipkey, g4, v1, i2, c3 DESC)  ) ENGINE=dstore;
+ALTER TABLE tt_49 RENAME COLUMN ipkey To ipkey_rename, LOCK=EXCLUSIVE, ALGORITHM=DEFAULT;
+ALTER TABLE tt_49 MODIFY COLUMN  i2 INT(16), LOCK=EXCLUSIVE;
+ALTER TABLE tt_49 ADD INDEX tt_49120(i2 ASC) , LOCK=SHARED, ALGORITHM=inplace;
+INSERT INTO tt_49  ( ipkey_rename ,v1 ,i2 ,c3 ,g4 ) VALUES( NULL, 'ys4ewPX', 6663, 'WaRIBCCU5', default ) ;
+ALTER TABLE tt_49 MODIFY COLUMN  i2 INT(11), LOCK=SHARED, ALGORITHM=inplace;
+ALTER TABLE tt_49 MODIFY COLUMN  v1 VARCHAR(29), LOCK=DEFAULT, ALGORITHM=instant;
+SELECT * FROM tt_49 force index(tt_49i2) WHERE ipkey_rename > 0;
+DROP TABLE tt_49;
+#BUG2025120834503
+CREATE TABLE t1(c2 VARBINARY (12), UNIQUE(c2));
+CREATE TABLE IF NOT EXISTS t3 (c1 INT4 UNSIGNED NULL, c2 INT4 UNSIGNED NULL, c3 VARBINARY (12) NULL, FOREIGN KEY (c3) REFERENCES t1(c2));
+ALTER TABLE t1 RENAME COLUMN c2 TO c1, ALGORITHM=inplace;
+drop table t3,t1;
+#BUG2026012335538
+CREATE TABLE tt_1(lbN130 longblob, cN22 char(23) DEFAULT NULL, vN240 varchar(20) DEFAULT NULL, gN248 varchar(10) GENERATED ALWAYS AS (concat(substr(`cN22`,1,2),substr(`vN240`,1,4),substr(`cN22`,1,4))) VIRTUAL, cN113 char(16) DEFAULT NULL, KEY `tt_1614` (`cN113` DESC,`cN22` DESC,`vN240`,`gN248`));
+INSERT INTO tt_1 VALUES ('2DDVyZy5iNp6VUB8k5nuzRu0i59FSeQxVyQYFXDvH0Mhg8feJlZteBbYhbihn7VDn98TAX98saeUkX8F2MyYPwmm3dEpzaGpmNVdd1aOq7HRG2KY63cHKlwi2H4oUlA5RzdotrxFry5JXfYL9bnKZjmjZR6gANJMNuOmgH0A6IwLzK3XqmVk99xLAlDYZqgi1WXPRy0CUyfmOvB5abU3wIVM8jzU4z49Vamd4eug2piRicjYDVSqt25hD',NULL,NULL,DEFAULT,NULL);
+ALTER TABLE tt_1 DROP COLUMN gN248, LOCK=SHARED, ALGORITHM=INPLACE;
+drop table tt_1;
+#BUG2026012244070
+CREATE TABLE `tt_94` (
+  `v0` varchar(9) DEFAULT NULL,
+  `v1_rename` varchar(16) DEFAULT NULL,
+  `f2_rename` float DEFAULT NULL,
+  `iN55` int DEFAULT NULL,
+  `gN227` varchar(9) GENERATED ALWAYS AS (concat(substr(`iN55`,1,5),substr(`v0`,1,4))) VIRTUAL,
+  `tN190` tinyint(1) DEFAULT NULL,
+  `iN105` int DEFAULT NULL,
+  `iN58` int DEFAULT NULL,
+  `vN133_rename` varchar(19) DEFAULT NULL,
+  `iN265` int DEFAULT NULL,
+  `iN101` int DEFAULT NULL,
+  `iN157` int DEFAULT NULL,
+  `gN84` varchar(18) GENERATED ALWAYS AS (concat(substr(`v0`,1,7),substr(`iN105`,1,3),substr(`iN105`,1,6),`tN190`,`tN190`)) VIRTUAL,
+  `vN22` varchar(15) DEFAULT NULL,
+  `vN193` varchar(15) DEFAULT NULL,
+  `gN64` varchar(22) GENERATED ALWAYS AS (concat(`tN190`,substr(`vN193`,1,6),substr(`v1_rename`,1,7),substr(`v0`,1,8))) STORED,
+  KEY `tt_94i0` (`v0` DESC),
+  KEY `tt_94i1` (`v0`,`v1_rename` DESC,`f2_rename`),
+  KEY `tt_94359` (`f2_rename`),
+  KEY `tt_94105` (`f2_rename` DESC,`v1_rename`,`v0` DESC),
+  KEY `tt_94134` (`v1_rename`,`f2_rename`),
+  KEY `tt_94688` (`f2_rename` DESC),
+  KEY `tt_94831` (`f2_rename` DESC),
+  KEY `tt_94818` (`v1_rename` DESC,`v0`),
+  KEY `tt_9410` (`tN190`),
+  KEY `tt_94899` (`iN105`,`v1_rename`,`iN58` DESC,`v0`,`iN55`,`tN190`),
+  KEY `tt_94325` (`iN265` DESC,`v1_rename`),
+  KEY `tt_94417` (`vN133_rename`,`v0` DESC),
+  KEY `tt_94843` (`v1_rename`,`f2_rename`,`iN105`,`iN265`,`iN157`,`iN58` DESC),
+  KEY `tt_94363` (`v0` DESC,`vN22`,`f2_rename`,`v1_rename` DESC,`iN157` DESC,`iN58` DESC),
+  KEY `tt_94796` (`v1_rename` DESC,`gN227` DESC),
+  KEY `tt_94884` (`v0` DESC,`v1_rename` DESC,`f2_rename`,`gN227`,`iN55`,`tN190`),
+  KEY `tt_94876` (`v0` DESC,`tN190` DESC,`gN227` DESC,`v1_rename`,`iN58`,`f2_rename`),
+  KEY `tt_9443` (`iN58` DESC,`iN55`,`tN190`,`v0` DESC,`v1_rename` DESC,`iN105` DESC,`gN227` DESC,`f2_rename` DESC),
+  KEY `tt_94580` (`gN227` DESC),
+  KEY `tt_94472` (`v0`,`tN190`,`vN133_rename` DESC,`iN58` DESC,`gN227`,`v1_rename`),
+  KEY `tt_9461` (`tN190` DESC,`iN58`,`f2_rename` DESC,`iN105` DESC,`vN133_rename` DESC,`v0`,`iN55`,`v1_rename`,`gN227` DESC),
+  KEY `tt_94432` (`v0`,`v1_rename`,`gN227`,`vN133_rename` DESC),
+  KEY `tt_94779` (`v1_rename` DESC,`iN105`,`iN58` DESC,`vN133_rename`,`f2_rename`,`gN227`,`tN190`,`iN55`),
+  KEY `tt_94695` (`tN190` DESC,`gN84`,`iN157`,`iN58`),
+  KEY `tt_94298` (`gN227`,`tN190`,`iN157`,`f2_rename` DESC,`gN84`,`iN58` DESC,`v1_rename` DESC,`vN22`,`iN101` DESC,`vN133_rename`),
+  KEY `tt_94689` (`vN22` DESC,`iN265`,`iN101`,`gN227`,`iN58`)
+) ENGINE=Dstore;
+ALTER TABLE tt_94 DROP COLUMN gN84, LOCK=SHARED, ALGORITHM=INPLACE;
+DROP TABLE tt_94;
+CREATE TABLE `tt_83` (
+  `ipkey` int NOT NULL,
+  `d1` double DEFAULT NULL,
+  `f2` float DEFAULT NULL,
+  `gN275_rename` varchar(10) GENERATED ALWAYS AS (concat(`ipkey`)) VIRTUAL,
+  `gN61` char(6) GENERATED ALWAYS AS (concat(substr(`d1`,1,2),substr(`ipkey`,1,4))) VIRTUAL,
+  `gN40` char(6) GENERATED ALWAYS AS (concat(substr(`d1`,1,2),substr(`ipkey`,1,2),substr(`ipkey`,1,1),substr(`ipkey`,1,1))) VIRTUAL,
+  PRIMARY KEY (`ipkey`),
+  KEY `tt_83i0` (`d1`,`f2`,`ipkey`),
+  KEY `tt_83939_rename` (`d1`),
+  KEY `tt_83314` (`ipkey`,`f2`,`d1`),
+  KEY `tt_830` (`ipkey`,`d1`),
+  KEY `tt_8328` (`d1` DESC,`ipkey`),
+  KEY `tt_83573` (`ipkey`,`f2`),
+  KEY `tt_83979_rename` (`ipkey`),
+  KEY `tt_83662` (`d1`),
+  KEY `tt_83238` (`d1`),
+  KEY `tt_83582` (`d1`,`f2` DESC),
+  KEY `tt_83330_rename` (`f2`),
+  KEY `tt_83968` (`f2`),
+  KEY `tt_83756` (`gN275_rename`,`d1` DESC,`ipkey`),
+  KEY `tt_83118` (`f2`,`gN275_rename`,`ipkey` DESC),
+  KEY `tt_83401` (`f2`,`d1`,`ipkey`,`gN275_rename`),
+  KEY `tt_8333` (`gN275_rename`,`f2`),
+  KEY `tt_83706` (`gN275_rename` DESC,`d1`),
+  KEY `tt_83417` (`gN275_rename` DESC,`d1` DESC),
+  KEY `tt_83814` (`f2`,`gN275_rename`,`d1`),
+  KEY `tt_83991` (`ipkey`,`f2` DESC,`d1`,`gN61`),
+  KEY `tt_8342` (`ipkey`,`gN40`,`gN61` DESC,`gN275_rename`),
+  KEY `tt_83973` (`f2`,`gN61`,`ipkey`,`gN275_rename` DESC,`d1`),
+  KEY `tt_83909` (`gN275_rename` DESC,`f2`,`d1`,`gN61`),
+  KEY `tt_83877` (`gN61`),
+  KEY `tt_83514` (`d1`,`ipkey`,`gN61`,`f2`,`gN275_rename`)
+) ENGINE=Dstore;
+INSERT INTO `tt_83` (`ipkey`, `d1`, `f2`) VALUES (242639,0,0),(197623,0,0),(107177,0,0),(325030,0,0),(273908,0,0),(365851,0,0),(273040,0,0),(265431,0,0);
+ALTER TABLE tt_83 DROP COLUMN gN275_rename, LOCK=SHARED, ALGORITHM=inplace;
+drop table tt_83;
+--disconnect con1
+
+
+--echo ##################################################################
+--echo # 1. Test with dml commit                                        #
+--echo ##################################################################
+# Online create indexes with other ddl options witch can use inplace algorithm;
+# Perform DML with small tuple and linked tuple;
+# Rollback transactions and check data and verify resource residues.
+
+--connection default
+CREATE TABLESPACE tb1 ENGINE=DSTORE;
+--source ../include/reset_test_table.inc
+
+--connect (conn1,localhost,root,,)
+--connection conn1
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR dml_done';
+
+--send
+ALTER TABLE employees
+    # 1. Rename index
+    RENAME INDEX idx_name TO idx_name_new,
+    # 2. Rename column
+    CHANGE COLUMN created_at created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    # 3. Drop index
+	DROP PRIMARY KEY,
+    DROP INDEX idx_status_created,
+    # 4. Recreate the deleted index and add a comment to cover Alter_inplace_info::ALTER_INDEX_COMMENT branch.
+    ADD INDEX idx_status_created (status, created_ts) COMMENT 'Recreated Index',
+    # 5. Creat primary/secondary/prefix/virtual/composite indexes
+    ADD PRIMARY KEY (employee_id, name),
+    ADD INDEX idx_email_created_brief (email(30), created_ts, brief_description(30)),
+	ADD UNIQUE INDEX idx_unique_email (email),
+    ADD INDEX idx_name_gender_age (name, gender, age_group),
+    ADD INDEX idx_credit_score (credit_score DESC),
+    ALGORITHM = INPLACE, LOCK=NONE;
+
+--connect (conn2,localhost,root,,)
+--connection conn2
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+SET GLOBAL debug="+d,not_compress_for_lob";
+
+# Insert a small tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, created_at) VALUES
+('U006', 'D002', 'C001', 'U001','sunba', 'sunba@example.com', 28, '2024-07-20 14:45:00');
+# Insert a linked tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U007', 'D002', 'C001', 'U001', 'wuming', 'wuming@example.com', 25, 'M', 1, 750, '2024-08-20 15:45:00', repeat('B', 14000));
+# Update a small tuple into a small tuple, cover another page update
+UPDATE employees SET email = 'zhangsan_new@example.com', brief_description = repeat('I am zhangsan', 600), j = JSON_QUOTE(repeat('A', 3000)) WHERE employee_id = 'U001';
+# Update a small tuple , cover lob another page update
+UPDATE employees SET email = 'ZhangSan_new@example.com' WHERE employee_id = 'U001';
+UPDATE employees SET j = JSON_QUOTE(repeat('A', 6000)) WHERE employee_id = 'U001';
+# Update a small tuple into a linked tuple
+UPDATE employees SET brief_description = repeat('I am zhangsan', 1000) WHERE employee_id = 'U001';
+# Update a linked tuple into a small tupe
+UPDATE employees SET brief_description = repeat('I am zhangsan', 10) WHERE employee_id = 'U001';
+# Update a linked tuple into a smaller linked tuple
+UPDATE employees SET brief_description = repeat('A', 9000) WHERE employee_id = 'U002';
+# Update a linked tuple into a same size linked tuple
+UPDATE employees SET age = 37 WHERE employee_id = 'U002';
+# Update a linked tuple into a bigger linked tuple
+UPDATE employees SET brief_description = repeat('A', 23000) WHERE employee_id = 'U002';
+# Insert a linked tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U008', 'D002', 'C001', 'U001', 'zhangyue', 'zhangyue@example.com', 25, 'M', 1, 750, '2024-08-20 15:45:00', repeat('C', 14000));
+# Delete a small tuple
+DELETE FROM employees WHERE employee_id = 'U003';
+# Delete a linked tuple
+DELETE FROM employees WHERE employee_id = 'U005';
+
+SELECT table_name,index_name,status,replayed_row_log_items,total_row_log_items FROM INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS ORDER BY index_name;
+
+SET GLOBAL debug="-d,not_compress_for_lob";
+SET DEBUG_SYNC = 'now SIGNAL dml_done';
+
+--connection conn1
+--reap
+SELECT table_name,index_name,status,replayed_row_log_items,total_row_log_items FROM INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS;
+
+# Online create indexes finished, check table definition.
+SHOW CREATE TABLE employees;
+
+# Check table data and created indexes.
+SELECT employee_id, name, email, age, gender
+	, status, credit_score, created_ts, age_group
+	, CHAR_LENGTH(brief_description)
+FROM employees IGNORE INDEX (PRIMARY)
+ORDER BY employee_id;
+
+SELECT employee_id, name
+FROM employees FORCE INDEX (PRIMARY);
+
+SELECT status, created_ts
+FROM employees FORCE INDEX (idx_status_created);
+
+SELECT email, created_ts
+FROM employees FORCE INDEX (idx_email_created_brief)
+WHERE email IS NOT NULL;
+
+SELECT name, gender
+FROM employees FORCE INDEX (idx_name_gender_age);
+
+SELECT credit_score
+FROM employees FORCE INDEX (idx_credit_score);
+
+--disconnect conn1
+--disconnect conn2
+
+
+--echo ##################################################################
+--echo # 2. Test with dml rollback                                      #
+--echo ##################################################################
+# Online create indexes with other ddl options witch can use inplace algorithm;
+# Perform DML with small tuple and linked tuple;
+# Rollback transactions and check data and verify resource residues.
+
+--connection default
+--source ../include/reset_test_table.inc
+
+--connect (conn1,localhost,root,,)
+--connection conn1
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR dml_done';
+
+--send
+ALTER TABLE employees
+    # 1. Rename index
+    RENAME INDEX idx_name TO idx_name_new,
+    # 2. Rename column
+    CHANGE COLUMN created_at created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    # 3. Drop index
+	DROP PRIMARY KEY,
+    DROP INDEX idx_status_created,
+    # 4. Recreate the deleted index and add a comment to cover Alter_inplace_info::ALTER_INDEX_COMMENT branch.
+    ADD INDEX idx_status_created (status, created_ts) COMMENT 'Recreated Index',
+    # 5. Creat primary/secondary/prefix/virtual/composite indexes
+    ADD PRIMARY KEY (employee_id, name),
+    ADD INDEX idx_email_created_brief (email(30), created_ts, brief_description(30)),
+	ADD UNIQUE INDEX idx_unique_email (email),
+    ADD INDEX idx_name_gender_age (name, gender, age_group),
+    ADD INDEX idx_credit_score (credit_score DESC),
+    ALGORITHM = INPLACE, LOCK=NONE;
+
+--connect (conn2,localhost,root,,)
+--connection conn2
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+SET GLOBAL debug="+d,not_compress_for_lob";
+
+BEGIN;
+# Insert a small tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, created_at) VALUES
+('U006', 'D002', 'C001', 'U001','sunba', 'sunba@example.com', 28, '2024-07-20 14:45:00');
+# Insert a linked tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U007', 'D002', 'C001', 'U001', 'wuming', 'wuming@example.com', 25, 'M', 1, 750, '2024-08-20 15:45:00', repeat('B', 14000));
+# Update a small tuple into a small tuple, cover another page update
+UPDATE employees SET email = 'zhangsan_new@example.com', brief_description = repeat('I am zhangsan', 600), j = JSON_QUOTE(repeat('A', 3000)) WHERE employee_id = 'U001';
+# Update a small tuple , cover lob another page update
+UPDATE employees SET email = 'ZhangSan_new@example.com' WHERE employee_id = 'U001';
+UPDATE employees SET j = JSON_QUOTE(repeat('A', 6000)) WHERE employee_id = 'U001';
+# Update a small tuple into a linked tuple
+UPDATE employees SET brief_description = repeat('I am zhangsan', 1000) WHERE employee_id = 'U001';
+# Update a linked tuple into a small tupe
+UPDATE employees SET brief_description = repeat('I am zhangsan', 10) WHERE employee_id = 'U001';
+# Update a linked tuple into a smaller linked tuple
+UPDATE employees SET brief_description = repeat('A', 9000) WHERE employee_id = 'U002';
+# Update a linked tuple into a same size linked tuple
+UPDATE employees SET age = 37 WHERE employee_id = 'U002';
+# Update a linked tuple into a bigger linked tuple
+UPDATE employees SET brief_description = repeat('A', 23000) WHERE employee_id = 'U002';
+# Insert a linked tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U008', 'D002', 'C001', 'U001', 'zhangyue', 'zhangyue@example.com', 25, 'M', 1, 750, '2024-08-20 15:45:00', repeat('C', 14000));
+# Delete a small tuple
+DELETE FROM employees WHERE employee_id = 'U003';
+# Delete a linked tuple
+DELETE FROM employees WHERE employee_id = 'U005';
+ROLLBACK;
+
+SELECT table_name,index_name,status,replayed_row_log_items,total_row_log_items FROM INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS ORDER BY index_name;
+
+SET GLOBAL debug="-d,not_compress_for_lob";
+SET DEBUG_SYNC = 'now SIGNAL dml_done';
+
+--connection conn1
+--reap
+SELECT table_name,index_name,status,replayed_row_log_items,total_row_log_items FROM INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS;
+
+# Online create indexes finished, check table definition.
+SHOW CREATE TABLE employees;
+
+# Check table data and created indexes.
+SELECT employee_id, name, email, age, gender
+	, status, credit_score, created_ts, age_group
+	, CHAR_LENGTH(brief_description)
+FROM employees IGNORE INDEX (PRIMARY)
+ORDER BY employee_id;
+
+SELECT employee_id, name
+FROM employees FORCE INDEX (PRIMARY);
+
+SELECT status, created_ts
+FROM employees FORCE INDEX (idx_status_created);
+
+SELECT email, created_ts
+FROM employees FORCE INDEX (idx_email_created_brief)
+WHERE email IS NOT NULL;
+
+SELECT name, gender
+FROM employees FORCE INDEX (idx_name_gender_age);
+
+SELECT credit_score
+FROM employees FORCE INDEX (idx_credit_score);
+
+--disconnect conn1
+--disconnect conn2
+
+--echo ##################################################################
+--echo # 3. Test with reboot and dml rollback(Verify tableId is valid)  #
+--echo ##################################################################
+# Online create indexes with other ddl options witch can use inplace algorithm;
+# Perform DML with small tuple and linked tuple;
+# Rollback transactions and check data and verify resource residues.
+
+--connection default
+--source ../include/reset_test_table.inc
+
+--let $restart_parameters = restart:
+--source include/restart_mysqld.inc
+
+--connect (conn1,localhost,root,,)
+--connection conn1
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR dml_done';
+
+--send
+ALTER TABLE employees
+    # 1. Rename index
+    RENAME INDEX idx_name TO idx_name_new,
+    # 2. Rename column
+    CHANGE COLUMN created_at created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    # 3. Drop index
+	DROP PRIMARY KEY,
+    DROP INDEX idx_status_created,
+    # 4. Recreate the deleted index and add a comment to cover Alter_inplace_info::ALTER_INDEX_COMMENT branch.
+    ADD INDEX idx_status_created (status, created_ts) COMMENT 'Recreated Index',
+    # 5. Creat primary/secondary/prefix/virtual/composite indexes
+    ADD PRIMARY KEY (employee_id, name),
+    ADD INDEX idx_email_created_brief (email(30), created_ts, brief_description(30)),
+	ADD UNIQUE INDEX idx_unique_email (email),
+    ADD INDEX idx_name_gender_age (name, gender, age_group),
+    ADD INDEX idx_credit_score (credit_score DESC),
+    ALGORITHM = INPLACE, LOCK=NONE;
+
+--connect (conn2,localhost,root,,)
+--connection conn2
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+SET GLOBAL debug="+d,not_compress_for_lob";
+
+BEGIN;
+# Insert a small tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, created_at) VALUES
+('U006', 'D002', 'C001', 'U001','sunba', 'sunba@example.com', 28, '2024-07-20 14:45:00');
+# Insert a linked tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U007', 'D002', 'C001', 'U001', 'wuming', 'wuming@example.com', 25, 'M', 1, 750, '2024-08-20 15:45:00', repeat('B', 14000));
+# Update a small tuple into a small tuple, cover another page update
+UPDATE employees SET email = 'zhangsan_new@example.com', brief_description = repeat('I am zhangsan', 600), j = JSON_QUOTE(repeat('A', 3000)) WHERE employee_id = 'U001';
+# Update a small tuple , cover lob another page update
+UPDATE employees SET email = 'ZhangSan_new@example.com' WHERE employee_id = 'U001';
+UPDATE employees SET j = JSON_QUOTE(repeat('A', 6000)) WHERE employee_id = 'U001';
+# Update a small tuple into a linked tuple
+UPDATE employees SET brief_description = repeat('I am zhangsan', 1000) WHERE employee_id = 'U001';
+# Update a linked tuple into a small tupe
+UPDATE employees SET brief_description = repeat('I am zhangsan', 10) WHERE employee_id = 'U001';
+# Update a linked tuple into a smaller linked tuple
+UPDATE employees SET brief_description = repeat('A', 9000) WHERE employee_id = 'U002';
+# Update a linked tuple into a same size linked tuple
+UPDATE employees SET age = 37 WHERE employee_id = 'U002';
+# Update a linked tuple into a bigger linked tuple
+UPDATE employees SET brief_description = repeat('A', 23000) WHERE employee_id = 'U002';
+# Insert a linked tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U008', 'D002', 'C001', 'U001', 'zhangyue', 'zhangyue@example.com', 25, 'M', 1, 750, '2024-08-20 15:45:00', repeat('C', 14000));
+# Delete a small tuple
+DELETE FROM employees WHERE employee_id = 'U003';
+# Delete a linked tuple
+DELETE FROM employees WHERE employee_id = 'U005';
+ROLLBACK;
+
+SELECT table_name,index_name,status,replayed_row_log_items,total_row_log_items FROM INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS ORDER BY index_name;
+
+SET GLOBAL debug="-d,not_compress_for_lob";
+SET DEBUG_SYNC = 'now SIGNAL dml_done';
+
+--connection conn1
+--reap
+SELECT table_name,index_name,status,replayed_row_log_items,total_row_log_items FROM INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS;
+
+# Online create indexes finished, check table definition.
+SHOW CREATE TABLE employees;
+
+# Check table data and created indexes.
+SELECT employee_id, name, email, age, gender
+	, status, credit_score, created_ts, age_group
+	, CHAR_LENGTH(brief_description)
+FROM employees IGNORE INDEX (PRIMARY)
+ORDER BY employee_id;
+
+SELECT employee_id, name
+FROM employees FORCE INDEX (PRIMARY);
+
+SELECT status, created_ts
+FROM employees FORCE INDEX (idx_status_created);
+
+SELECT email, created_ts
+FROM employees FORCE INDEX (idx_email_created_brief)
+WHERE email IS NOT NULL;
+
+SELECT name, gender
+FROM employees FORCE INDEX (idx_name_gender_age);
+
+SELECT credit_score
+FROM employees FORCE INDEX (idx_credit_score);
+
+--disconnect conn1
+--disconnect conn2
+
+--echo ##################################################################
+--echo # 4. Test with dml commit and rollback                           #
+--echo ##################################################################
+# Online create indexes with other ddl options witch can use inplace algorithm
+# Perform DML with small tuple and linked tuple;
+# Commit/rollback transactions and check data and verify resource residues.
+
+--connection default
+--source ../include/reset_test_table.inc
+
+--connect (conn1,localhost,root,,)
+--connection conn1
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR dml_done';
+
+--send
+ALTER TABLE employees
+    # 1. Rename index
+    RENAME INDEX idx_name TO idx_name_new,
+    # 2. Rename column
+    CHANGE COLUMN created_at created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    # 3. Drop index
+	DROP PRIMARY KEY,
+    DROP INDEX idx_status_created,
+    # 4. Recreate the deleted index and add a comment to cover Alter_inplace_info::ALTER_INDEX_COMMENT branch.
+    ADD INDEX idx_status_created (status, created_ts) COMMENT 'Recreated Index',
+    # 5. Creat primary/secondary/prefix/virtual/composite indexes
+    ADD PRIMARY KEY (employee_id, name),
+    ADD INDEX idx_email_created_brief (email(30), created_ts, brief_description(30)),
+	ADD UNIQUE INDEX idx_unique_email (email),
+    ADD INDEX idx_name_gender_age (name, gender, age_group),
+    ADD INDEX idx_credit_score (credit_score DESC),
+    ALGORITHM = INPLACE, LOCK=NONE;
+
+--connect (conn2,localhost,root,,)
+--connection conn2
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+SET GLOBAL debug="+d,not_compress_for_lob";
+
+# Insert a small tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, created_at) VALUES
+('U006', 'D002', 'C001', 'U001','sunba', 'sunba@example.com', 28, '2024-07-20 14:45:00');
+# Insert a linked tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U007', 'D002', 'C001', 'U001', 'wuming', 'wuming@example.com', 25, 'M', 1, 750, '2024-08-20 15:45:00', repeat('B', 14000));
+
+BEGIN;
+# Update a small tuple into a small tuple, cover another page update
+UPDATE employees SET email = 'zhangsan_new@example.com', brief_description = repeat('I am zhangsan', 600) WHERE employee_id = 'U001';
+# Update a small tuple , cover lob another page update
+UPDATE employees SET email = 'ZhangSan_new@example.com' WHERE employee_id = 'U001';
+UPDATE employees SET j = JSON_QUOTE(repeat('A', 6000)) WHERE employee_id = 'U001';
+# Update a small tuple into a linked tuple
+UPDATE employees SET brief_description = repeat('I am zhangsan', 1000) WHERE employee_id = 'U001';
+# Update a linked tuple into a small tupe
+UPDATE employees SET brief_description = repeat('I am zhangsan', 10) WHERE employee_id = 'U001';
+# Update a linked tuple into a smaller linked tuple
+UPDATE employees SET brief_description = repeat('A', 9000) WHERE employee_id = 'U002';
+# Update a linked tuple into a same size linked tuple
+UPDATE employees SET age = 37 WHERE employee_id = 'U002';
+# Update a linked tuple into a bigger linked tuple
+UPDATE employees SET brief_description = repeat('A', 23000) WHERE employee_id = 'U002';
+# Insert a linked tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U008', 'D002', 'C001', 'U001', 'zhangyue', 'zhangyue@example.com', 25, 'M', 1, 750, '2024-08-20 15:45:00', repeat('C', 14000));
+# Delete a small tuple
+DELETE FROM employees WHERE employee_id = 'U003';
+# Delete a linked tuple
+DELETE FROM employees WHERE employee_id = 'U005';
+ROLLBACK;
+
+SELECT table_name,index_name,status,replayed_row_log_items,total_row_log_items FROM INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS ORDER BY index_name;
+
+SET GLOBAL debug="-d,not_compress_for_lob";
+SET DEBUG_SYNC = 'now SIGNAL dml_done';
+
+--connection conn1
+--reap
+SELECT table_name,index_name,status,replayed_row_log_items,total_row_log_items FROM INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS;
+
+# Online create indexes finished, check table definition.
+SHOW CREATE TABLE employees;
+
+# Check table data and created indexes.
+SELECT employee_id, name, email, age, gender
+	, status, credit_score, created_ts, age_group
+	, CHAR_LENGTH(brief_description)
+FROM employees IGNORE INDEX (PRIMARY)
+ORDER BY employee_id;
+
+SELECT employee_id, name
+FROM employees FORCE INDEX (PRIMARY);
+
+SELECT status, created_ts
+FROM employees FORCE INDEX (idx_status_created);
+
+SELECT email, created_ts
+FROM employees FORCE INDEX (idx_email_created_brief)
+WHERE email IS NOT NULL;
+
+SELECT name, gender
+FROM employees FORCE INDEX (idx_name_gender_age);
+
+SELECT credit_score
+FROM employees FORCE INDEX (idx_credit_score);
+
+--disconnect conn1
+--disconnect conn2
+
+--echo ##################################################################
+--echo # 5. Test with dml triggered by foreign key and commit           #
+--echo ##################################################################
+# Online create indexes with other ddl options witch can use inplace algorithm;
+# Perform DML triggered by cascade foreign key with small tuple and linked tuple;
+# Commit transactions check data and verify resource residues.
+
+--connection default
+--source ../include/reset_test_table.inc
+
+--connect (conn1,localhost,root,,)
+--connection conn1
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR dml_done';
+
+--send
+ALTER TABLE employees
+    # 1. Rename index
+    RENAME INDEX idx_name TO idx_name_new,
+    # 2. Rename column
+    CHANGE COLUMN created_at created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    # 3. Drop index
+	DROP PRIMARY KEY,
+    DROP INDEX idx_status_created,
+    # 4. Recreate the deleted index and add a comment to cover Alter_inplace_info::ALTER_INDEX_COMMENT branch.
+    ADD INDEX idx_status_created (status, created_ts) COMMENT 'Recreated Index',
+    # 5. Creat primary/secondary/prefix/virtual/composite indexes
+    ADD PRIMARY KEY (employee_id, name),
+    ADD INDEX idx_email_created_brief (email(30), created_ts, brief_description(30)),
+	ADD UNIQUE INDEX idx_unique_email (email),
+    ADD INDEX idx_name_gender_age (name, gender, age_group),
+    ADD INDEX idx_credit_score (credit_score DESC),
+    ALGORITHM = INPLACE, LOCK=NONE;
+
+--connect (conn2,localhost,root,,)
+--connection conn2
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+SET GLOBAL debug="+d,not_compress_for_lob";
+
+# Insert a small tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, created_at) VALUES
+('U006', 'D002', 'C001', 'U001','sunba', 'sunba@example.com', 28, '2024-07-20 14:45:00');
+# Insert a linked tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U007', 'D002', 'C001', 'U001', 'wuming', 'wuming@example.com', 25, 'M', 1, 750, '2024-08-20 15:45:00', repeat('B', 14000));
+
+# CASCADE update on same table is forbidden, so we only test delete.
+# Delete small and linked tuples by self table CASCADE delete
+DELETE FROM employees WHERE employee_id='U002';
+
+# Insert a linked tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U008', 'D002', 'C001', 'U001', 'zhangyue', 'zhangyue@example.com', 25, 'M', 1, 750, '2024-08-20 15:45:00', repeat('C', 14000));
+# Update small and linked tuples by other table CASCADE update
+UPDATE departments SET department_id='D001_new' WHERE department_id = 'D001';
+# Delete small and linked tuples by other table CASCADE Delete
+DELETE FROM departments WHERE department_id = 'D002';
+
+SELECT table_name,index_name,status,replayed_row_log_items,total_row_log_items FROM INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS ORDER BY index_name;
+
+SET GLOBAL debug="-d,not_compress_for_lob";
+SET DEBUG_SYNC = 'now SIGNAL dml_done';
+
+--connection conn1
+--reap
+SELECT table_name,index_name,status,replayed_row_log_items,total_row_log_items FROM INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS;
+
+# Online create indexes finished, check table definition.
+SHOW CREATE TABLE employees;
+
+# Check table data and created indexes.
+SELECT employee_id, name, email, age, gender
+	, status, credit_score, created_ts, age_group
+	, CHAR_LENGTH(brief_description)
+FROM employees IGNORE INDEX (PRIMARY)
+ORDER BY employee_id;
+
+SELECT employee_id, name
+FROM employees FORCE INDEX (PRIMARY);
+
+SELECT status, created_ts
+FROM employees FORCE INDEX (idx_status_created);
+
+SELECT email, created_ts
+FROM employees FORCE INDEX (idx_email_created_brief)
+WHERE email IS NOT NULL;
+
+SELECT name, gender
+FROM employees FORCE INDEX (idx_name_gender_age);
+
+SELECT credit_score
+FROM employees FORCE INDEX (idx_credit_score);
+
+--disconnect conn1
+--disconnect conn2
+
+
+--echo ##################################################################
+--echo # 6. Test with dml triggered by foreign key and rollback         #
+--echo ##################################################################
+# Online create indexes with other ddl options witch can use inplace algorithm;
+# Perform DML triggered by cascade foreign key with small tuple and linked tuple;
+# Rollback transactions check data and verify resource residues.
+
+--connection default
+--source ../include/reset_test_table.inc
+
+--connect (conn1,localhost,root,,)
+--connection conn1
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR dml_done';
+
+--send
+ALTER TABLE employees
+    # 1. Rename index
+    RENAME INDEX idx_name TO idx_name_new,
+    # 2. Rename column
+    CHANGE COLUMN created_at created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    # 3. Drop index
+	DROP PRIMARY KEY,
+    DROP INDEX idx_status_created,
+    # 4. Recreate the deleted index and add a comment to cover Alter_inplace_info::ALTER_INDEX_COMMENT branch.
+    ADD INDEX idx_status_created (status, created_ts) COMMENT 'Recreated Index',
+    # 5. Creat primary/secondary/prefix/virtual/composite indexes
+    ADD PRIMARY KEY (employee_id, name),
+    ADD INDEX idx_email_created_brief (email(30), created_ts, brief_description(30)),
+	ADD UNIQUE INDEX idx_unique_email (email),
+    ADD INDEX idx_name_gender_age (name, gender, age_group),
+    ADD INDEX idx_credit_score (credit_score DESC),
+    ALGORITHM = INPLACE, LOCK=NONE;
+
+--connect (conn2,localhost,root,,)
+--connection conn2
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+SET GLOBAL debug="+d,not_compress_for_lob";
+
+BEGIN;
+# Insert a small tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, created_at) VALUES
+('U006', 'D002', 'C001', 'U001','sunba', 'sunba@example.com', 28, '2024-07-20 14:45:00');
+# Insert a linked tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U007', 'D002', 'C001', 'U001', 'wuming', 'wuming@example.com', 25, 'M', 1, 750, '2024-08-20 15:45:00', repeat('B', 14000));
+
+# CASCADE update on same table is forbidden, so we only test delete.
+# Delete small and linked tuples by self table CASCADE delete
+DELETE FROM employees WHERE employee_id='U002';
+
+# Insert a linked tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U008', 'D002', 'C001', 'U001', 'zhangyue', 'zhangyue@example.com', 25, 'M', 1, 750, '2024-08-20 15:45:00', repeat('C', 14000));
+# Update small and linked tuples by other table CASCADE update
+UPDATE departments SET department_id='D001_new' WHERE department_id = 'D001';
+# Delete small and linked tuples by other table CASCADE Delete
+DELETE FROM departments WHERE department_id = 'D002';
+ROLLBACK;
+
+SELECT table_name,index_name,status,replayed_row_log_items,total_row_log_items FROM INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS ORDER BY index_name;
+
+SET GLOBAL debug="-d,not_compress_for_lob";
+SET DEBUG_SYNC = 'now SIGNAL dml_done';
+
+--connection conn1
+--reap
+SELECT table_name,index_name,status,replayed_row_log_items,total_row_log_items FROM INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS;
+
+# Online create indexes finished, check table definition.
+SHOW CREATE TABLE employees;
+
+# Check table data and created indexes.
+SELECT employee_id, name, email, age, gender
+	, status, credit_score, created_ts, age_group
+	, CHAR_LENGTH(brief_description)
+FROM employees IGNORE INDEX (PRIMARY)
+ORDER BY employee_id;
+
+SELECT employee_id, name
+FROM employees FORCE INDEX (PRIMARY);
+
+SELECT status, created_ts
+FROM employees FORCE INDEX (idx_status_created);
+
+SELECT email, created_ts
+FROM employees FORCE INDEX (idx_email_created_brief)
+WHERE email IS NOT NULL;
+
+SELECT name, gender
+FROM employees FORCE INDEX (idx_name_gender_age);
+
+SELECT credit_score
+FROM employees FORCE INDEX (idx_credit_score);
+
+--disconnect conn1
+--disconnect conn2
+
+
+--echo ##################################################################
+--echo # 7. Test with dml triggered by foreign key, commit and rollback #
+--echo ##################################################################
+# Online create indexes with other ddl options witch can use inplace algorithm;
+# Perform DML triggered by cascade foreign key with small tuple and linked tuple;
+# Commit/rollback transactions check data and verify resource residues.
+
+--connection default
+--source ../include/reset_test_table.inc
+
+--connect (conn1,localhost,root,,)
+--connection conn1
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR dml_done';
+
+--send
+ALTER TABLE employees
+    # 1. Rename index
+    RENAME INDEX idx_name TO idx_name_new,
+    # 2. Rename column
+    CHANGE COLUMN created_at created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    # 3. Drop index
+	DROP PRIMARY KEY,
+    DROP INDEX idx_status_created,
+    # 4. Recreate the deleted index and add a comment to cover Alter_inplace_info::ALTER_INDEX_COMMENT branch.
+    ADD INDEX idx_status_created (status, created_ts) COMMENT 'Recreated Index',
+    # 5. Creat primary/secondary/prefix/virtual/composite indexes
+    ADD PRIMARY KEY (employee_id, name),
+    ADD INDEX idx_email_created_brief (email(30), created_ts, brief_description(30)),
+	ADD UNIQUE INDEX idx_unique_email (email),
+    ADD INDEX idx_name_gender_age (name, gender, age_group),
+    ADD INDEX idx_credit_score (credit_score DESC),
+    ALGORITHM = INPLACE, LOCK=NONE;
+
+--connect (conn2,localhost,root,,)
+--connection conn2
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+SET GLOBAL debug="+d,not_compress_for_lob";
+
+# Insert a small tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, created_at) VALUES
+('U006', 'D002', 'C001', 'U001','sunba', 'sunba@example.com', 28, '2024-07-20 14:45:00');
+# Insert a linked tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U007', 'D002', 'C001', 'U001', 'wuming', 'wuming@example.com', 25, 'M', 1, 750, '2024-08-20 15:45:00', repeat('B', 14000));
+
+# CASCADE update on same table is forbidden, so we only test delete.
+# Delete small and linked tuples by self table CASCADE delete
+DELETE FROM employees WHERE employee_id='U002';
+
+BEGIN;
+# Insert a linked tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U008', 'D002', 'C001', 'U001', 'zhangyue', 'zhangyue@example.com', 25, 'M', 1, 750, '2024-08-20 15:45:00', repeat('C', 14000));
+# Update small and linked tuples by other table CASCADE update
+UPDATE departments SET department_id='D001_new' WHERE department_id = 'D001';
+# Delete small and linked tuples by other table CASCADE Delete
+DELETE FROM departments WHERE department_id = 'D002';
+ROLLBACK;
+
+SELECT table_name,index_name,status,replayed_row_log_items,total_row_log_items FROM INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS ORDER BY index_name;
+
+SET GLOBAL debug="-d,not_compress_for_lob";
+SET DEBUG_SYNC = 'now SIGNAL dml_done';
+
+--connection conn1
+--reap
+SELECT table_name,index_name,status,replayed_row_log_items,total_row_log_items FROM INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS;
+
+# Online create indexes finished, check table definition.
+SHOW CREATE TABLE employees;
+
+# Check table data and created indexes.
+SELECT employee_id, name, email, age, gender
+	, status, credit_score, created_ts, age_group
+	, CHAR_LENGTH(brief_description)
+FROM employees IGNORE INDEX (PRIMARY)
+ORDER BY employee_id;
+
+SELECT employee_id, name
+FROM employees FORCE INDEX (PRIMARY);
+
+SELECT status, created_ts
+FROM employees FORCE INDEX (idx_status_created);
+
+SELECT email, created_ts
+FROM employees FORCE INDEX (idx_email_created_brief)
+WHERE email IS NOT NULL;
+
+SELECT name, gender
+FROM employees FORCE INDEX (idx_name_gender_age);
+
+SELECT credit_score
+FROM employees FORCE INDEX (idx_credit_score);
+
+--disconnect conn1
+--disconnect conn2
+
+--echo ##################################################################
+--echo # 8. Online create index duplicate error with dml-commit         #
+--echo ##################################################################
+--connection default
+
+call mtr.add_suppression("\\[DSTORE\\] Apply row log *");
+call mtr.add_suppression("\\[DSTORE\\] Merged row log *");
+
+--connect (conn1,localhost,root,,)
+--connection conn1
+CREATE TABLE t1 (c1 INT, c2 INT, c3 INT, c4 VARCHAR(100)) ENGINE=DSTORE;
+
+delimiter //;
+CREATE PROCEDURE InsertIncrementalData(
+    IN n INT,
+    IN start INT,
+    IN m INT
+)
+BEGIN
+    DECLARE i INT DEFAULT 0;
+    WHILE i < n DO
+        INSERT INTO t1 (c1, c2, c3, c4)
+        VALUES (
+            start + i,
+            start + i,
+            start + i,
+            REPEAT('a', m)
+        );
+        SET i = i + 1;
+    END WHILE;
+END //
+delimiter ;//
+
+CALL InsertIncrementalData(100, 1, 100);
+
+SET DEBUG_SYNC = 'dstore_after_one_rowlog_replay_thread_created SIGNAL start_logging WAIT_FOR dml_done';
+--send
+ALTER TABLE t1
+    ADD UNIQUE INDEX idx_c1 (c1),
+    ADD UNIQUE INDEX idx_c2 (c2),
+    ADD UNIQUE INDEX idx_c3 (c3),
+    ADD INDEX idx_c4 (c4),
+    ALGORITHM = INPLACE, LOCK=NONE;
+
+--connect (conn2,localhost,root,,)
+--connection conn2
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+
+INSERT INTO t1 VALUES (1001,1001,1001,'a'), (1,1003,1003,'b'), (1002,1002,1002,'c');
+CALL InsertIncrementalData(3000, 2001, 100);
+
+SET DEBUG_SYNC = 'now SIGNAL dml_done';
+--connection conn1
+--error ER_DUP_ENTRY
+--reap
+SELECT count(*) FROM t1;
+SHOW CREATE TABLE t1;
+DROP TABLE t1;
+
+--connection conn1
+CREATE TABLE t1 (c1 INT, c2 INT, c3 INT, c4 VARCHAR(100)) ENGINE=DSTORE;
+CALL InsertIncrementalData(100, 1, 100);
+
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR dml_done';
+--send
+ALTER TABLE t1
+    ADD UNIQUE INDEX idx_c1 (c1),
+    ADD UNIQUE INDEX idx_c2 (c2),
+    ADD UNIQUE INDEX idx_c3 (c3),
+    ADD INDEX idx_c4 (c4),
+    ALGORITHM = INPLACE, LOCK=NONE;
+
+--connection conn2
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+
+INSERT INTO t1 VALUES (1001,1001,1001,'a'), (1,1003,1003,'b'), (1002,1002,1002,'c');
+CALL InsertIncrementalData(3000, 2001, 100);
+
+SET DEBUG_SYNC = 'now SIGNAL dml_done';
+--connection conn1
+--error ER_DUP_ENTRY
+--reap
+SELECT count(*) FROM t1;
+SHOW CREATE TABLE t1;
+DROP TABLE t1;
+DROP PROCEDURE InsertIncrementalData;
+SET debug_sync = 'RESET';
+
+--connection default
+--disconnect conn1
+--disconnect conn2
+
+--echo ##################################################################
+--echo # 9. Online create index duplicate error with dml-rollback       #
+--echo ##################################################################
+--connection default
+--source ../include/reset_test_table.inc
+
+call mtr.add_suppression("\\[DSTORE\\] Apply row log *");
+call mtr.add_suppression("\\[DSTORE\\] Merged row log *");
+
+--connect (conn1,localhost,root,,)
+--connection conn1
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR dml_done';
+
+--send
+ALTER TABLE employees
+    # 1. Rename index
+    RENAME INDEX idx_name TO idx_name_new,
+    # 2. Rename column
+    CHANGE COLUMN created_at created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    # 3. Drop index
+	DROP PRIMARY KEY,
+    DROP INDEX idx_status_created,
+    # 4. Recreate the deleted index and add a comment to cover Alter_inplace_info::ALTER_INDEX_COMMENT branch.
+    ADD INDEX idx_status_created (status, created_ts) COMMENT 'Recreated Index',
+    # 5. Creat primary/secondary/prefix/virtual/composite indexes
+    ADD PRIMARY KEY (employee_id, name),
+    ADD INDEX idx_email_created_brief (email(30), created_ts, brief_description(30)),
+	ADD UNIQUE INDEX idx_unique_email (email),
+    ADD INDEX idx_name_gender_age (name, gender, age_group),
+    ADD INDEX idx_credit_score (credit_score DESC),
+    ALGORITHM = INPLACE, LOCK=NONE;
+
+--connect (conn2,localhost,root,,)
+--connection conn2
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+SET GLOBAL debug="+d,not_compress_for_lob";
+
+# Insert a small tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, created_at) VALUES
+('U006', 'D002', 'C001', 'U001','sunba', 'sunba@example.com', 28, '2024-07-20 14:45:00');
+
+BEGIN;
+# Insert a linked tuple with duplicate email column
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U007', 'D002', 'C001', 'U001', 'wuming', 'sunba@example.com', 25, 'M', 1, 750, '2024-08-20 15:45:00', repeat('B', 14000));
+ROLLBACK;
+
+SELECT table_name,index_name,status,replayed_row_log_items,total_row_log_items FROM INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS ORDER BY index_name;
+
+SET GLOBAL debug="-d,not_compress_for_lob";
+SET DEBUG_SYNC = 'now SIGNAL dml_done';
+
+--connection conn1
+--error ER_DUP_ENTRY
+--reap
+SELECT table_name,index_name,status,replayed_row_log_items,total_row_log_items FROM INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS;
+
+--disconnect conn1
+--disconnect conn2
+
+--echo ###################################################################
+--echo # 10. Online create functional index with dml commit and rollback #
+--echo ###################################################################
+--connection default
+--source ../include/reset_test_table.inc
+
+call mtr.add_suppression("\\[DSTORE\\] Apply row log *");
+call mtr.add_suppression("\\[DSTORE\\] Merged row log *");
+
+--connect (conn1,localhost,root,,)
+--connection conn1
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR dml_done';
+
+--send
+ALTER TABLE employees
+    # 1. Drop index
+    DROP INDEX idx_status_created,
+    # 2. Recreate the deleted index.
+    ADD INDEX idx_status_created (status, created_at),
+    # 3. Creat secondary/prefix/virtual/functional/composite indexes
+    ADD INDEX idx_email_created_brief (email(30), created_at, brief_description(30)),
+    ADD INDEX idx_name_gender_age (name, gender, age_group),
+    ADD INDEX idx_credit_score (credit_score DESC),
+    ADD INDEX idx_func ((CONCAT(employee_id, department_id))),
+    ALGORITHM = INPLACE, LOCK=NONE;
+
+--connect (conn2,localhost,root,,)
+--connection conn2
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+SET GLOBAL debug="+d,not_compress_for_lob";
+
+# Insert a small tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, created_at) VALUES
+('U006', 'D002', 'C001', 'U001','sunba', 'sunba@example.com', 28, '2024-07-20 14:45:00');
+# Insert a linked tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U007', 'D002', 'C001', 'U001', 'wuming', 'wuming@example.com', 25, 'M', 1, 750, '2024-08-20 15:45:00', repeat('B', 14000));
+
+BEGIN;
+# Update a small tuple into a small tuple, cover another page update
+UPDATE employees SET email = 'zhangsan_new@example.com', brief_description = repeat('I am zhangsan', 600) WHERE employee_id = 'U001';
+# Update a small tuple , cover lob another page update
+UPDATE employees SET email = 'ZhangSan_new@example.com' WHERE employee_id = 'U001';
+UPDATE employees SET j = JSON_QUOTE(repeat('A', 6000)) WHERE employee_id = 'U001';
+# Update a small tuple into a linked tuple
+UPDATE employees SET brief_description = repeat('I am zhangsan', 1000) WHERE employee_id = 'U001';
+# Update a linked tuple into a small tupe
+UPDATE employees SET brief_description = repeat('I am zhangsan', 10) WHERE employee_id = 'U001';
+# Update a linked tuple into a smaller linked tuple
+UPDATE employees SET brief_description = repeat('A', 9000) WHERE employee_id = 'U002';
+# Update a linked tuple into a same size linked tuple
+UPDATE employees SET age = 37 WHERE employee_id = 'U002';
+# Update a linked tuple into a bigger linked tuple
+UPDATE employees SET brief_description = repeat('A', 23000) WHERE employee_id = 'U002';
+# Insert a linked tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U008', 'D002', 'C001', 'U001', 'zhangyue', 'zhangyue@example.com', 25, 'M', 1, 750, '2024-08-20 15:45:00', repeat('C', 14000));
+# Delete a small tuple
+DELETE FROM employees WHERE employee_id = 'U003';
+# Delete a linked tuple
+DELETE FROM employees WHERE employee_id = 'U005';
+ROLLBACK;
+
+# CASCADE update on same table is forbidden, so we only test delete.
+# Delete small and linked tuples by self table CASCADE delete
+DELETE FROM employees WHERE employee_id='U002';
+
+BEGIN;
+# Insert a linked tuple
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U008', 'D002', 'C001', 'U001', 'zhangyue', 'zhangyue@example.com', 25, 'M', 1, 750, '2024-08-20 15:45:00', repeat('C', 14000));
+# Update small and linked tuples by other table CASCADE update
+UPDATE departments SET department_id='D001_new' WHERE department_id = 'D001';
+# Delete small and linked tuples by other table CASCADE Delete
+DELETE FROM departments WHERE department_id = 'D002';
+ROLLBACK;
+
+SELECT table_name,index_name,status,replayed_row_log_items,total_row_log_items FROM INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS ORDER BY index_name;
+
+SET GLOBAL debug="-d,not_compress_for_lob";
+SET DEBUG_SYNC = 'now SIGNAL dml_done';
+
+--connection conn1
+--reap
+SELECT table_name,index_name,status,replayed_row_log_items,total_row_log_items FROM INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS;
+
+# Online create indexes finished, check table definition.
+SHOW CREATE TABLE employees;
+
+# Check table data and created indexes.
+SELECT employee_id, name, email, age, gender
+	, status, credit_score, created_at, age_group
+	, CHAR_LENGTH(brief_description)
+FROM employees IGNORE INDEX (PRIMARY)
+ORDER BY employee_id;
+
+SELECT status, created_at
+FROM employees FORCE INDEX (idx_status_created);
+
+SELECT email, created_at
+FROM employees FORCE INDEX (idx_email_created_brief)
+WHERE email IS NOT NULL;
+
+SELECT name, gender
+FROM employees FORCE INDEX (idx_name_gender_age);
+
+SELECT credit_score
+FROM employees FORCE INDEX (idx_credit_score);
+
+SELECT CONCAT(employee_id, department_id), employee_id, department_id
+FROM employees FORCE INDEX (idx_func)
+ORDER BY CONCAT(employee_id, department_id);
+
+--disconnect conn1
+--disconnect conn2
+
+--connection default
+DROP TABLE employees;
+DROP TABLE countrys;
+DROP TABLE departments;
+
+
+--echo ##################################################################
+--echo # 11. Test create index scene that not support online yet        #
+--echo ##################################################################
+# Online creating index on auto increment column is not supported.
+CREATE TABLE t1 (c1 INT NOT NULL) ENGINE=DSTORE;
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
+ALTER TABLE t1 ADD COLUMN id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, ADD UNIQUE KEY (id), ALGORITHM=INPLACE, LOCK=NONE;
+DROP TABLE t1;
+
+# Online creating functional index based on lob/json column is not supported.
+CREATE TABLE t1(i INT PRIMARY KEY, j JSON) ENGINE=DSTORE;
+INSERT INTO t1 VALUES (1,'"2019-1-1"'),(2,'"2019-01-01"'),(3,CAST(DATE'2019-1-1' AS JSON));
+INSERT INTO t1(i)values(4);
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
+ALTER TABLE t1 ADD INDEX idx1((CAST(j->'$' AS DATE))), ALGORITHM = INPLACE, LOCK=NONE;
+DROP TABLE t1;
+
+# Online creating index on virtual column based on lob/json column is not supported.
+CREATE TABLE t1(i INT PRIMARY KEY, j JSON, j_date DATE AS (CAST(j->>'$' AS DATE)) VIRTUAL ) ENGINE=DSTORE;
+INSERT INTO t1 (i,j) VALUES (1,'"2019-1-1"'),(2,'"2019-01-01"'),(3,CAST(DATE'2019-1-1' AS JSON));
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
+ALTER TABLE t1 ADD INDEX idx1(j_date), ALGORITHM = INPLACE, LOCK=NONE;
+DROP TABLE t1;
+
+--echo ##################################################################
+--echo # 12. Test rollback upon failure of DML during online DDL        #
+--echo ##################################################################
+--connection default
+SET debug_sync = 'RESET';
+--source ../include/reset_test_table.inc
+
+call mtr.add_suppression("\\[DSTORE\\] Apply row log *");
+call mtr.add_suppression("\\[DSTORE\\] Merged row log *");
+
+--connect (conn1,localhost,root,,)
+--connection conn1
+ALTER TABLE employees
+DROP FOREIGN KEY employees_fk_1;
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR dml_done';
+
+--send
+ALTER TABLE employees
+    # 1. Rename index
+    RENAME INDEX idx_name TO idx_name_new,
+    # 2. Rename column
+    CHANGE COLUMN created_at created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    # 3. Drop index
+	DROP PRIMARY KEY,
+    DROP INDEX idx_status_created,
+    # 4. Recreate the deleted index and add a comment to cover Alter_inplace_info::ALTER_INDEX_COMMENT branch.
+    ADD INDEX idx_status_created (status, created_ts) COMMENT 'Recreated Index',
+    # 5. Creat primary/secondary/prefix/virtual column/single-columncomposite indexes
+    ADD PRIMARY KEY (employee_id, name),
+    #ADD INDEX idx_email_created_brief (email(30), created_ts, brief_description(30)),
+	ADD INDEX idx_email_created_brief (email, created_ts),
+	ADD UNIQUE INDEX idx_unique_email (email),
+    #ADD INDEX idx_name_gender_age (name, gender, age_group),
+	ADD INDEX idx_name_gender_age (name, gender),
+    ADD INDEX idx_credit_score (credit_score DESC),
+    ALGORITHM = INPLACE, LOCK=NONE;
+
+--connect (conn2,localhost,root,,)
+--connection conn2
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+
+--error ER_DUP_ENTRY
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U006', 'D001', 'C001', 'U001', 'zhangsan', 'zhangsan1@example.com', 25, 'M', 1, 750, '2023-01-15 13:30:00', repeat('I am zhangsan', 30)),
+('U007', 'D001', 'C001', 'U002', 'lisi', 'lisi1@example.com', 30, 'M', 1, 800, '2023-06-15 10:30:00', repeat('A', 60000)),
+('U008', 'D001', 'C002', 'U003', 'wangwu', 'wangwu1@example.com', 17, 'F', 1, 650, '2023-07-20 14:45:00', repeat('I am wangwu', 60)),
+('U009', 'D002', 'C001', 'U004', 'zhaoliu', 'zhaoliu1@example.com', 45, 'M', 0, 550, '2023-08-10 09:15:00', repeat('Make zhaoliu great again!', 60)),
+('U008', 'D002', 'C001', 'U005', 'zhaoliu', 'zhaoliu1@example.com', 45, 'M', 0, 550, '2023-08-10 09:15:00', repeat('Make zhaoliu great again!', 60)),
+('U010', 'D002', 'C002', 'U006', 'qianqi', 'qianqi1@example.com', 60, 'F', 2, 900, '2023-09-05 16:20:00', repeat('waaaaagh!', 5000));
+
+INSERT INTO employees (employee_id, department_id, country_id, boss_id, name, email, age, gender, status, credit_score, created_at, brief_description) VALUES
+('U006', 'D001', 'C001', 'U001', 'zhangsan', 'zhangsan2@example.com', 25, 'M', 1, 750, '2023-01-15 13:30:00', repeat('I am zhangsan', 30)),
+('U007', 'D001', 'C001', 'U002', 'lisi', 'lisi2@example.com', 30, 'M', 1, 800, '2023-06-15 10:30:00', repeat('A', 60000)),
+('U008', 'D001', 'C002', 'U003', 'wangwu', 'wangwu2@example.com', 17, 'F', 1, 650, '2023-07-20 14:45:00', repeat('I am wangwu', 60)),
+('U009', 'D002', 'C001', 'U004', 'zhaosi', 'zhaosi2@example.com', 45, 'M', 0, 550, '2023-08-10 09:15:00', repeat('Make zhaoliu great again!', 60)),
+('U0010', 'D002', 'C001', 'U005', 'zhaoliu', 'zhaoliu2@example.com', 45, 'M', 0, 550, '2023-08-10 09:15:00', repeat('Make zhaoliu great again!', 60)),
+('U0011', 'D002', 'C002', 'U006', 'qianqi', 'qianqi2@example.com', 60, 'F', 2, 900, '2023-09-05 16:20:00', repeat('waaaaagh!', 5000));
+
+--error ER_DUP_ENTRY
+UPDATE employees SET employee_id = 'U012' WHERE employee_id IN ('U001', 'U002', 'U003');
+
+SET DEBUG_SYNC = 'now SIGNAL dml_done';
+--connection conn1
+--reap
+
+--connection default
+DROP TABLE employees;
+DROP TABLE countrys;
+DROP TABLE departments;
+--disconnect conn1
+--disconnect conn2
+DROP TABLESPACE tb1;

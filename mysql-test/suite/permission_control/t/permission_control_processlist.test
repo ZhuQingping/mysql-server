@@ -1,0 +1,150 @@
+# ==== Purpose ====
+#
+# The test case is used to test the whether Users (non-built-in user and non-super user)
+# can see the information from built-in user and super user when doing show processlist
+# or directly select from information_schema.processlist:
+#  - Users (non-built-in user and non-super user) can't get information from built-in 
+#    users when doing 'show processlist' or select from information_schema.processlist
+#    while rds_process_list_control is ON
+#  - Built-in users or users with super privilege will not be restricted no matter
+#    rds_process_list_control is ON or OFF
+#  - While rds_permission_control is OFF, Users (non-built-in user and non-super user)
+#    will not be restricted no matter rds_process_list_control is ON or OFF
+#
+# ==== Implementation ====
+#
+# 1. prepare some reserved users and some ordinary users
+# 2. SET rds_process_list_control=ON, appoint some built-in users and users connect 
+#    and execute sql, then let ordinary user perform show processlist(also select 
+#    from information_schema.processlist)
+# 3. appoint ordinary user connect and execute sql, then let built-in user and user 
+#    with super privilege perform show processlist(also select from 
+#    information_schema.processlist) 
+# 4. SET rds_permission_control=OFF, do step 2 again
+#
+
+--source include/count_sessions.inc
+SET @default_rds_permission_control = @@GLOBAL.rds_permission_control;
+SET @default_rds_process_list_control = @@GLOBAL.rds_process_list_control;
+SHOW GLOBAL VARIABLES LIKE 'rds_permission_control';
+SHOW GLOBAL VARIABLES LIKE 'rds_process_list_control';
+SHOW GLOBAL VARIABLES LIKE 'rds_reserved_users';
+connection default;
+
+# create user root1, who has the same permissions as root in the production environment
+CREATE USER 'root1'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, REFERENCES, INDEX, ALTER, SHOW DATABASES, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER ON *.* TO 'root1'@'%' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+
+# create super user super_user
+CREATE USER 'super_user'@'%' IDENTIFIED BY '123456';
+GRANT SUPER ON *.* TO 'super_user'@'%' WITH GRANT OPTION;
+GRANT ALL PRIVILEGES ON *.* TO 'super_user'@'%';
+FLUSH PRIVILEGES;
+
+
+#        > test 1: Users (non-built-in user and non-super user) can't get
+#                  information from built-in user when doing show processlist 
+#                  or select from information_schema.processlist while both
+#                  rds_permission_control and rds_process_list_control are ON
+#----------------------------------------------------------------------------------
+
+# prepare reserved user
+connection default;
+CREATE USER 'reserved_user1'@'%' IDENTIFIED BY 're123456';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, REFERENCES, INDEX, ALTER, SHOW DATABASES, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER ON *.* TO 'reserved_user1'@'%' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+
+--echo # connect reserved_user1
+connect(conn3,localhost,reserved_user1,re123456,);
+
+--echo # connect root1, test show processlist
+connect(conn1,localhost,root1,123456,);
+--replace_column 1 # 3 # 4 # 6 #
+SHOW PROCESSLIST;
+
+--echo # test select from information_schema.processlist
+--send SELECT USER FROM information_schema.processlist ORDER BY USER DESC
+--reap
+
+#        > test 2: SUPER user and reserved user can get information from 
+#                  built-in user when doing show processlist or select
+#                  from information_schema.processlist no matter 
+#                  rds_process_list_control is ON or OFF
+#----------------------------------------------------------------------------------
+
+--echo # connect reserved_user1
+disconnect conn3;
+connect(conn3,localhost,reserved_user1,re123456,);
+
+--echo # test show processlist
+--replace_column 1 # 3 # 4 # 6 #
+SHOW PROCESSLIST;
+
+--echo # test select from information_schema.processlist
+--send SELECT USER FROM information_schema.processlist ORDER BY USER DESC
+--reap
+
+--echo # connect super
+connect(conn2,localhost,super_user,123456,);
+
+--echo # test show processlist
+--replace_column 1 # 3 # 4 # 6 #
+SHOW PROCESSLIST;
+
+--echo # test select from information_schema.processlist
+--send SELECT USER FROM information_schema.processlist ORDER BY USER DESC
+--reap
+
+#        > test 3: Users (non-built-in user and non-super user) can 
+#                  get information from built-in user when doing show
+#                  processlist or select from information_schema.processlist
+#                  while rds_process_list_control is OFF
+#----------------------------------------------------------------------------------
+
+connection default;
+SET @@GLOBAL.rds_process_list_control = 'OFF';
+
+--echo # test show processlist
+disconnect conn1;
+connect(conn1,localhost,root1,123456,);
+--replace_column 1 # 3 # 4 # 6 #
+SHOW PROCESSLIST;
+
+--echo # test select from information_schema.processlist
+--send SELECT USER FROM information_schema.processlist ORDER BY USER DESC
+--reap
+
+#        > test 4: Users (non-built-in user and non-super user) can
+#                  get information from built-in user when doing show
+#                  processlist or select from information_schema.processlist
+#                  while rds_permission_control is OFF (no matter now
+#                  rds_process_list_control is ON or OFF)
+#----------------------------------------------------------------------------------
+
+connection default;
+SET @@GLOBAL.rds_permission_control = 'OFF';
+SET @@GLOBAL.rds_process_list_control = 'ON';
+
+--echo # test show processlist
+disconnect conn1;
+connect(conn1,localhost,root1,123456,);
+--replace_column 1 # 3 # 4 # 6 #
+SHOW PROCESSLIST;
+
+--echo # test select from information_schema.processlist
+--send SELECT USER FROM information_schema.processlist ORDER BY USER DESC
+--reap
+
+# end
+--disable_warnings
+connection default;
+SET @@GLOBAL.rds_permission_control = @default_rds_permission_control;
+SET @@GLOBAL.rds_process_list_control = @default_rds_process_list_control;
+disconnect conn1;
+disconnect conn2;
+disconnect conn3;
+DROP USER super_user, root1, reserved_user1;
+--enable_warnings
+--source include/wait_until_count_sessions.inc
+source include/force_restart.inc;

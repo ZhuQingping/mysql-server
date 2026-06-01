@@ -1,0 +1,83 @@
+call mtr.add_suppression("dstore_local_backup_meta_path is not configured");
+call mtr.add_suppression("dstore_restore_meta_path is not configured");
+call mtr.add_suppression("Local backup: failed to do full backup for dstore");
+call mtr.add_suppression("Local backup: failed to start wal archiver");
+call mtr.add_suppression("boot dstore failed, ret=-1");
+call mtr.add_suppression("Plugin 'Dstore' init function returned error.");
+call mtr.add_suppression("Plugin 'Dstore' registration as a STORAGE ENGINE failed.");
+call mtr.add_suppression("Unknown/unsupported storage engine: Dstore");
+call mtr.add_suppression("Aborting");
+call mtr.add_suppression("Local backup: cannot access full backup directory");
+call mtr.add_suppression("Local backup: cannot access log archive directory");
+call mtr.add_suppression("cannot access backup meta directory. Start full local backup failed");
+call mtr.add_suppression("cannot access backup meta directory. Start wal archive failed");
+call mtr.add_suppression("RestoreMeta_RestoreMeta fail when create is 0 and read only is 1, errno is 2");
+call mtr.add_suppression("RestoreMeta_RestoreMeta fail when read last local backup point");
+call mtr.add_suppression("read latest local backup point fail for cmd 4");
+call mtr.add_suppression("Failed to set recovery start plsn for restore");
+call mtr.add_suppression("Prepare full backup mkdir ");
+call mtr.add_suppression("failed to prepare directory for full backup");
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("fail");
+# restart: --dstore_local_backup_meta_path= --dstore_can_do_wal_archive=on
+Pattern "dstore_local_backup_meta_path is not configured. Cannot set plsn for wal archive" found
+call rds_backup.start_full_local_backup(0);
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" not found
+Pattern ""tablespaceRunningStatus": "Completed"" not found
+Pattern ""walRunningStatus": "Completed"" not found
+Pattern ""controlFileRunningStatus": "Completed"" not found
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+Pattern "dstore_local_backup_meta_path is not configured. Start full local backup failed" found
+call rds_backup.start_log_archive();
+ERROR HY000: Local backup: failed to start wal archiver
+Pattern "dstore_local_backup_meta_path is not configured. Start wal archive failed" found
+Pattern "dstore_restore_meta_path is not configured. Cannot set recovery start plsn for restore" found
+call rds_backup.start_full_local_backup(0);
+ERROR HY000: Local backup: cannot access full backup directory
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	None
+call rds_backup.start_log_archive();
+ERROR HY000: Local backup: cannot access log archive directory
+call rds_backup.start_full_local_backup(0);
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" not found
+Pattern ""tablespaceRunningStatus": "Completed"" not found
+Pattern ""walRunningStatus": "Completed"" not found
+Pattern ""controlFileRunningStatus": "Completed"" not found
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+Pattern "cannot access backup meta directory. Start full local backup failed" found
+call rds_backup.start_log_archive();
+ERROR HY000: Local backup: failed to start wal archiver
+Pattern "cannot access backup meta directory. Start wal archive failed" found
+# restart
+set dstore_open_restore_mode=on;
+ERROR HY000: Variable 'dstore_open_restore_mode' is a read only variable
+set global dstore_open_restore_mode=on;
+ERROR HY000: Variable 'dstore_open_restore_mode' is a read only variable
+set dstore_can_do_wal_archive=on;
+ERROR HY000: Variable 'dstore_can_do_wal_archive' is a read only variable
+set global dstore_can_do_wal_archive=on;
+ERROR HY000: Variable 'dstore_can_do_wal_archive' is a read only variable
+set global debug='+d,PrepareFullLocalBackupDir_mkdir_fail';
+call rds_backup.start_full_local_backup(0);
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" not found
+Pattern ""tablespaceRunningStatus": "Completed"" not found
+Pattern ""walRunningStatus": "Completed"" not found
+Pattern ""controlFileRunningStatus": "Completed"" not found
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+set global debug='-d,PrepareFullLocalBackupDir_mkdir_fail';

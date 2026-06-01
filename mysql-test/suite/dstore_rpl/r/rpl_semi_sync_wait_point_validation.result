@@ -1,0 +1,37 @@
+include/master-slave.inc
+Warnings:
+Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
+[connection master]
+==== Setup ====
+call mtr.add_suppression(" Setting to rpl_semi_sync_source_wait_point to");
+INSTALL PLUGIN rpl_semi_sync_source SONAME 'SEMISYNC_SOURCE_PLUGIN';;
+include/sync_slave_sql_with_master.inc
+==== Test R1: Setting to rpl_semi_sync_source_wait_point to AFTER_COMMIT automatically disabled rds_binlog_skip_run_after_commit_hook. ====
+SET @@global.rpl_semi_sync_source_wait_point = 'AFTER_COMMIT';
+show variables like 'rds_binlog_skip_run_after_commit_hook';
+Variable_name	Value
+rds_binlog_skip_run_after_commit_hook	OFF
+include/rpl_restart_server.inc [server_number=1 parameters: --rpl_semi_sync_source_wait_point=AFTER_COMMIT]
+show variables like 'rpl_semi_sync_source_wait_point';
+Variable_name	Value
+rpl_semi_sync_source_wait_point	AFTER_COMMIT
+show variables like 'rds_binlog_skip_run_after_commit_hook';
+Variable_name	Value
+rds_binlog_skip_run_after_commit_hook	OFF
+==== Test R2: Setting to rpl_semi_sync_source_wait_point to AFTER_SYNC automatically enabled rds_binlog_skip_run_after_commit_hook.====
+SET @@global.rpl_semi_sync_source_wait_point = 'AFTER_SYNC';
+show variables like 'rds_binlog_skip_run_after_commit_hook';
+Variable_name	Value
+rds_binlog_skip_run_after_commit_hook	ON
+include/rpl_restart_server.inc [server_number=1 parameters: --rpl_semi_sync_source_wait_point=AFTER_SYNC]
+show variables like 'rpl_semi_sync_source_wait_point';
+Variable_name	Value
+rpl_semi_sync_source_wait_point	AFTER_SYNC
+show variables like 'rds_binlog_skip_run_after_commit_hook';
+Variable_name	Value
+rds_binlog_skip_run_after_commit_hook	ON
+include/start_slave.inc
+==== Clean up ====
+UNINSTALL PLUGIN rpl_semi_sync_source;;
+include/rpl_end.inc

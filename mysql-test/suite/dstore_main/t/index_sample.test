@@ -1,0 +1,107 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+
+# test dstore_enable_index_sample off
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+# restart disable index sample
+--let $restart_parameters= restart: --dstore_enable_index_sample=off
+--source include/start_mysqld.inc
+
+SELECT @@global.dstore_enable_index_sample;
+use test;
+create table t1(c1 int, c2 int, index(c1), index(c2)) engine=Dstore;
+
+select stat_value from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1' and stat_name = 'n_diff_pfx01';
+select count(1) as result from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+analyze table t1;
+select cardinality from information_schema.statistics where table_schema = 'test' and table_name = 't1';
+insert into t1 values(1, 1),(2, 2),(3, 3),(4, 4),(5, 5),(6, 6);
+analyze table t1;
+select cardinality from information_schema.statistics where table_schema = 'test' and table_name = 't1';
+drop table t1;
+
+# test dstore_enable_index_sample on
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+# restart enable index sample
+--let $restart_parameters= restart: --dstore_enable_index_sample=on
+--source include/start_mysqld.inc
+SELECT @@global.dstore_enable_index_sample;
+show variables like "dstore_stats_persistent_index_sample_pages";
+
+create table t1(c1 int, c2 int, index(c1), index(c2)) engine=Dstore;
+insert into t1 values(1, 1),(2, 2),(3, 3),(4, 4),(5, 5),(6, 6);
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+create table t2(c1 int, c2 int, index(c1, c2)) engine=Dstore;
+insert into t2 values(1, 1),(2, 2),(3, 3),(4, 4),(5, 5),(6, 6);
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+
+analyze table t1;
+select cardinality from information_schema.statistics where table_schema = 'test' and table_name = 't1';
+select stat_value from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1' and stat_name = 'n_diff_pfx01';
+analyze table t2;
+select cardinality from information_schema.statistics where table_schema = 'test' and table_name = 't2';
+select stat_value from mysql.dstore_index_stats where database_name = 'test' and table_name = 't2' and stat_name = 'n_diff_pfx01';
+select stat_value from mysql.dstore_index_stats where database_name = 'test' and table_name = 't2' and stat_name = 'n_diff_pfx02';
+drop table t1;
+drop table t2;
+
+# insert all same key and analyze
+create table t3(a int, b char(10));
+create index index_t3 on t3(a);
+
+--delimiter $$
+CREATE PROCEDURE Insert40KRows()
+BEGIN
+    DECLARE i INT DEFAULT 1;
+    START TRANSACTION;
+    WHILE i <= 40000 DO
+        INSERT INTO t3 (a, b) VALUES (1, 'a');
+        SET i = i + 1;
+    END WHILE;
+    COMMIT;
+END$$
+--delimiter ;
+CALL Insert40KRows();
+DROP PROCEDURE Insert40KRows;
+
+analyze table t3;
+select cardinality from information_schema.statistics where table_schema = 'test' and table_name = 't3';
+select stat_value from mysql.dstore_index_stats where database_name = 'test' and table_name = 't3' and stat_name = 'n_diff_pfx01';
+
+--delimiter $$
+CREATE PROCEDURE Insert40KRows()
+BEGIN
+    DECLARE i INT DEFAULT 1;
+    START TRANSACTION;
+    WHILE i <= 40000 DO
+        INSERT INTO t3 (a, b) VALUES (2, 'a');
+        SET i = i + 1;
+    END WHILE;
+    COMMIT;
+END$$
+--delimiter ;
+CALL Insert40KRows();
+DROP PROCEDURE Insert40KRows;
+
+analyze table t3;
+select cardinality from information_schema.statistics where table_schema = 'test' and table_name = 't3';
+select stat_value from mysql.dstore_index_stats where database_name = 'test' and table_name = 't3' and stat_name = 'n_diff_pfx01';
+drop table t3;

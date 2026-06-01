@@ -1,0 +1,174 @@
+CREATE PROCEDURE delete_one_sql_filter_rule(IN offset_value INT)
+begin
+declare my_var BIGINT default 1;
+select item_id into my_var from mysql.rds_sql_filter_rules limit offset_value,1;
+call dbms_sqlfilter.delete_sql_filter(my_var);
+end |
+select * from mysql.rds_sql_filter_rules;
+item_id	type	max_concurrency	key_str	node_id
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t~id~between","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t~id~between~in","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t~id~in","");
+call dbms_sqlfilter.add_sql_filter('UPDATE',20,"update~t","");
+select * from mysql.rds_sql_filter_rules;
+item_id	type	max_concurrency	key_str	node_id
+#	SELECT	0	select~t~id~between	
+#	SELECT	0	select~t~id~between~in	
+#	SELECT	0	select~t~id~in	
+#	UPDATE	20	update~t	
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	4	0	select~t~id~in	
+#	SELECT	0	0	5	0	select~t~id~between~in	
+#	SELECT	0	0	4	0	select~t~id~between	
+#	UPDATE	0	20	2	0	update~t	
+call delete_one_sql_filter_rule(1);
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	4	0	select~t~id~in	
+#	SELECT	0	0	4	0	select~t~id~between	
+#	UPDATE	0	20	2	0	update~t	
+select * from mysql.rds_sql_filter_rules;
+item_id	type	max_concurrency	key_str	node_id
+#	SELECT	0	select~t~id~between	
+#	SELECT	0	select~t~id~in	
+#	UPDATE	20	update~t	
+call dbms_sqlfilter.delete_sql_filter(999999);
+Warnings:
+Warning	8017	Statement sqlfilter 999999 is not found in table
+Warning	8017	Statement sqlfilter 999999 is not found in cache
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	4	0	select~t~id~in	
+#	SELECT	0	0	4	0	select~t~id~between	
+#	UPDATE	0	20	2	0	update~t	
+select * from mysql.rds_sql_filter_rules;
+item_id	type	max_concurrency	key_str	node_id
+#	SELECT	0	select~t~id~between	
+#	SELECT	0	select~t~id~in	
+#	UPDATE	20	update~t	
+set global rds_sqlfilter_control=ON;
+create table t (
+id int primary key auto_increment,
+year_col year DEFAULT NULL,
+KEY `ndx_year_col` (`year_col` DESC)
+);
+select * from t where id between 0 and 11;
+ERROR 70100: Query execution was interrupted
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	4	0	select~t~id~in	
+#	SELECT	0	0	4	1	select~t~id~between	
+#	UPDATE	0	20	2	0	update~t	
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	4	0	select~t~id~in	
+#	SELECT	0	0	4	0	select~t~id~between	
+#	UPDATE	0	20	2	0	update~t	
+SET GLOBAL rds_node_id="";
+SET GLOBAL rds_node_id=NULL;
+ERROR 42000: Variable 'rds_node_id' can't be set to the value of 'NULL'
+SET GLOBAL rds_node_id = "abc34567890123dfe78901234567890123456中ta@";
+ERROR 42000: Variable 'rds_node_id' can't be set to the value of 'abc34567890123dfe78901234567890123456中ta@'
+SET GLOBAL rds_node_id = "abc34567890123dfe7890123456789012345";
+SET GLOBAL rds_node_id = "abc34567890123dfe7890";
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t~id~or","abc34567890123dfe7890");
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	4	0	select~t~id~or	abc34567890123dfe7890
+#	SELECT	0	0	4	0	select~t~id~in	
+#	SELECT	0	0	4	0	select~t~id~between	
+#	UPDATE	0	20	2	0	update~t	
+select * from t where id in (1, 2);
+ERROR 70100: Query execution was interrupted
+select * from t where id = 10 or id = 15;
+ERROR 70100: Query execution was interrupted
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t~id~<=","abc34567890123dfe7890123456789012345");
+select * from t where id <= 10;
+id	year_col
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	4	0	select~t~id~<=	abc34567890123dfe7890123456789012345
+#	SELECT	0	0	4	1	select~t~id~or	abc34567890123dfe7890
+#	SELECT	0	0	4	1	select~t~id~in	
+#	SELECT	0	0	4	0	select~t~id~between	
+#	UPDATE	0	20	2	0	update~t	
+# restart:
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	4	0	select~t~id~<=	abc34567890123dfe7890123456789012345
+#	SELECT	0	0	4	0	select~t~id~or	abc34567890123dfe7890
+#	SELECT	0	0	4	0	select~t~id~in	
+#	SELECT	0	0	4	0	select~t~id~between	
+#	UPDATE	0	20	2	0	update~t	
+select * from mysql.rds_sql_filter_rules;
+item_id	type	max_concurrency	key_str	node_id
+#	SELECT	0	select~t~id~between	
+#	SELECT	0	select~t~id~in	
+#	UPDATE	20	update~t	
+#	SELECT	0	select~t~id~or	abc34567890123dfe7890
+#	SELECT	0	select~t~id~<=	abc34567890123dfe7890123456789012345
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+select * from mysql.rds_sql_filter_rules;
+item_id	type	max_concurrency	key_str	node_id
+SET GLOBAL rds_node_id = "def34567890123dfe7890123456789012345";
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t~id~or~>=","def34567890123dfe7890123456789012345");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t~id~in","abc34567890123dfe7890123456789012345");
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	4	0	select~t~id~in	abc34567890123dfe7890123456789012345
+#	SELECT	0	0	5	0	select~t~id~or~>=	def34567890123dfe7890123456789012345
+select * from mysql.rds_sql_filter_rules;
+item_id	type	max_concurrency	key_str	node_id
+#	SELECT	0	select~t~id~or~>=	def34567890123dfe7890123456789012345
+#	SELECT	0	select~t~id~in	abc34567890123dfe7890123456789012345
+SET GLOBAL rds_sqlfilter_control=ON;
+select * from t where id in (1, 2);
+id	year_col
+select * from t where id = 1 or id >= 5;
+ERROR 70100: Query execution was interrupted
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	4	0	select~t~id~in	abc34567890123dfe7890123456789012345
+#	SELECT	0	0	5	1	select~t~id~or~>=	def34567890123dfe7890123456789012345
+call dbms_sqlfilter.update_sql_filter(#, 'SELECT', 0, "select~t~id~in", "def34567890123dfe7890123456789012345");
+call dbms_sqlfilter.update_sql_filter(#, 'SELECT', 0, "select~t~id~or~>=","abc34567890123dfe7890123456789012345");
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	4	0	select~t~id~in	def34567890123dfe7890123456789012345
+#	SELECT	0	0	5	1	select~t~id~or~>=	abc34567890123dfe7890123456789012345
+select * from t where id in (1, 2);
+ERROR 70100: Query execution was interrupted
+select * from t where id = 1 or id >= 5;
+id	year_col
+call dbms_sqlfilter.update_sql_filter(#, 'SELECT', 10, "select~t~id~in", "def34567890123dfe7890123456789012345");
+select * from t where id in (1, 2);
+id	year_col
+call dbms_sqlfilter.update_sql_filter(#, 'SELECT', 0, "select~t~id~in~<", "def34567890123dfe7890123456789012345");
+select * from t where id in (1, 2);
+id	year_col
+select * from t where id in (1, 2) or id < 10;
+ERROR 70100: Query execution was interrupted
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	5	1	select~t~id~in~<	def34567890123dfe7890123456789012345
+#	SELECT	0	0	5	1	select~t~id~or~>=	abc34567890123dfe7890123456789012345
+select * from mysql.rds_sql_filter_rules;
+item_id	type	max_concurrency	key_str	node_id
+#	SELECT	0	select~t~id~or~>=	abc34567890123dfe7890123456789012345
+#	SELECT	0	select~t~id~in~<	def34567890123dfe7890123456789012345
+call dbms_sqlfilter.update_sql_filter(999999, 'SELECT', 0, "select~t~id~or~>=", "");
+Warnings:
+Warning	8017	Statement sqlfilter 999999 is not found in cache
+Warning	8017	Statement sqlfilter 999999 is not found in table
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+SET GLOBAL rds_node_id = default;
+SET GLOBAL rds_sqlfilter_control= default;
+DROP TABLE t;
+DROP PROCEDURE delete_one_sql_filter_rule;

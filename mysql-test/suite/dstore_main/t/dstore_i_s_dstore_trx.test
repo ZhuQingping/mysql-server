@@ -1,0 +1,98 @@
+DESCRIBE INFORMATION_SCHEMA.DSTORE_TRX;
+
+# To avoid query dstore_trx get histogram update info
+SET @dstore_use_histogram_auto_update_saved=@@dstore_use_histogram_auto_update;
+SET GLOBAL dstore_use_histogram_auto_update=off;
+
+SET @orig_optimizer_switch = @@optimizer_switch;
+set optimizer_switch='engine_condition_pushdown=on';
+
+-- disable_warnings
+DROP TABLE IF EXISTS t1;
+-- enable_warnings
+
+CREATE TABLE t1 (
+  c01 INT,
+  c02 INT,
+  PRIMARY KEY (c01)
+) ENGINE=DSTORE;
+
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
+START TRANSACTION;
+INSERT INTO t1 VALUES (1,2),(2,4);
+--replace_column 1 # 2 # 3 # 5 #
+SELECT * FROM INFORMATION_SCHEMA.DSTORE_TRX;
+#let $conn_id=`SELECT SESSION_ID FROM INFORMATION_SCHEMA.DSTORE_TRX`;
+SELECT SESSION_ID INTO @conn_id FROM INFORMATION_SCHEMA.DSTORE_TRX;
+SELECT CONNECTION_ID() INTO @cur_conn_id;
+SELECT IF(@conn_id = @cur_conn_id, 'same', 'different') AS RESULT;
+--echo $RESULT
+# SELECT WITH SESSION_ID CONDITION
+--replace_column 1 # 2 # 3 # 5 #
+SELECT STATE,ISOLATION_LEVEL,IS_AUTONOMOUS,TRX_QUERY FROM INFORMATION_SCHEMA.DSTORE_TRX WHERE SESSION_ID=@cur_conn_id;
+# INVALID SESSION_ID
+SELECT STATE,ISOLATION_LEVEL,IS_AUTONOMOUS,TRX_QUERY FROM INFORMATION_SCHEMA.DSTORE_TRX WHERE SESSION_ID=@cur_conn_id+100;
+
+# CONDITION OS_THREAD_ID
+SELECT OS_THREAD_ID INTO @tid FROM INFORMATION_SCHEMA.DSTORE_TRX;
+SELECT * FROM INFORMATION_SCHEMA.DSTORE_TRX WHERE OS_THREAD_ID=0;
+SELECT * FROM INFORMATION_SCHEMA.DSTORE_TRX WHERE OS_THREAD_ID=-1;
+--replace_column 1 # 2 # 3 # 5 #
+SELECT * FROM INFORMATION_SCHEMA.DSTORE_TRX WHERE OS_THREAD_ID=@tid;
+SELECT * FROM INFORMATION_SCHEMA.DSTORE_TRX WHERE OS_THREAD_ID=@tid+100;
+
+# DISABLE CONDTION_PUSHDOWN AND TEST AGAIN
+set optimizer_switch='engine_condition_pushdown=off';
+--replace_column 1 # 2 # 3 # 5 #
+SELECT * FROM INFORMATION_SCHEMA.DSTORE_TRX WHERE OS_THREAD_ID=@tid;
+SELECT * FROM INFORMATION_SCHEMA.DSTORE_TRX WHERE OS_THREAD_ID=@tid+100;
+
+set optimizer_switch='engine_condition_pushdown=on';
+
+COMMIT;
+
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+INSERT INTO t1 VALUES (3,6);
+SELECT STATE,ISOLATION_LEVEL,IS_AUTONOMOUS,TRX_QUERY FROM INFORMATION_SCHEMA.DSTORE_TRX;
+ROLLBACK;
+
+--connect (block_trx,localhost,root,,)
+
+--connection default
+#SET autocommit=0;
+BEGIN;
+INSERT INTO t1 VALUES (4,8);
+SELECT * FROM t1 FOR UPDATE;
+
+--connection block_trx
+BEGIN;
+--send UPDATE t1 SET c02=3 where c01=1
+
+--connect (trx_show,localhost,root,,)
+SELECT STATE,ISOLATION_LEVEL,IS_AUTONOMOUS,TRX_QUERY FROM INFORMATION_SCHEMA.DSTORE_TRX ORDER BY TRX_QUERY;
+
+-- connection default
+COMMIT;
+SELECT SLEEP(5);
+
+#--connection block_trx
+#ROLLBACK;
+
+--connection default
+
+SELECT STATE,ISOLATION_LEVEL,IS_AUTONOMOUS,TRX_QUERY FROM INFORMATION_SCHEMA.DSTORE_TRX;
+
+--disconnect block_trx
+--disconnect trx_show
+
+--connection default
+
+DROP TABLE t1;
+--connection default
+
+--replace_column 2 A              
+SHOW GLOBAL STATUS LIKE '%dstore%';
+
+SET GLOBAL dstore_use_histogram_auto_update=@dstore_use_histogram_auto_update_saved;
+SET optimizer_switch=@orig_optimizer_switch;

@@ -1,0 +1,22 @@
+--source include/have_nodebug.inc
+--source include/have_only_dstore.inc
+
+# The default dataset is TPCC with 10 warehouses.
+# We set dstore_buffer to 2GB, not all data in buffer pool.
+# Currently only run tpcc test for Dstore table
+
+call mtr.add_suppression("'NO_ZERO_DATE', 'NO_ZERO_IN_DATE' and 'ERROR_FOR_DIVISION_BY_ZERO' sql modes should be used with strict mode");
+
+SELECT @@dstore_buffer;
+SELECT @@sql_mode;
+SELECT @@performance_schema;
+SELECT @@threadpool_schedule_mode;
+
+# Prepare tpc-c table and data for test
+--source suite/pgo/include/tpcc_prepare.inc
+
+# Run OLAP test cases
+--source suite/pgo/include/tpcc_run.inc
+
+# Cleanup
+--source suite/pgo/include/tpcc_cleanup.inc

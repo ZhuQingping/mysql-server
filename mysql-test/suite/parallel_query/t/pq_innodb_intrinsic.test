@@ -1,0 +1,83 @@
+--source include/pq_test.inc
+
+CREATE TABLE `lineitem` (
+  `l_orderkey` int NOT NULL,
+  `l_partkey` int NOT NULL,
+  `l_suppkey` int NOT NULL,
+  `l_linenumber` int NOT NULL,
+  `l_quantity` decimal(15,2) NOT NULL,
+  `l_extendedprice` decimal(15,2) NOT NULL,
+  `l_discount` decimal(15,2) NOT NULL,
+  `l_tax` decimal(15,2) NOT NULL,
+  `l_returnflag` char(1) NOT NULL,
+  `l_linestatus` char(1) NOT NULL,
+  `l_shipdate` date NOT NULL,
+  `l_commitdate` date NOT NULL,
+  `l_receiptdate` date NOT NULL,
+  `l_shipinstruct` char(25) NOT NULL,
+  `l_shipmode` char(10) NOT NULL,
+  `l_comment` varchar(44) NOT NULL,
+  PRIMARY KEY (`l_orderkey`,`l_linenumber`),
+  KEY `lineitem_fk2` (`l_partkey`,`l_suppkey`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+--echo copy file
+--copy_file $MYSQLTEST_VARDIR/std_data/pq_lineitem.zip $MYSQL_TMP_DIR/pq_lineitem.zip
+--echo # Check that the file exists in the working folder
+--file_exists $MYSQL_TMP_DIR/pq_lineitem.zip
+--echo # Unzip the contents
+--exec unzip -qo $MYSQL_TMP_DIR/pq_lineitem.zip -d $MYSQL_TMP_DIR
+
+--echo # Load data into table
+--let $infile=$MYSQL_TMP_DIR/pq_lineitem.tbl
+--replace_result $MYSQL_TMP_DIR MYSQL_TMP_DIR
+--eval LOAD DATA INFILE '$infile' INTO TABLE lineitem;
+
+--echo BUG2022022800026: PQ innodb intrinsic table crash when the node
+--echo pointer in father page has a wrong son page no than expected one.
+
+SET @saved_big_tables = @@big_tables;
+SET @@big_tables=on;
+let query = SELECT
+	l_suppkey, SUM(l_extendedprice * ( 1 - l_discount )) AS s
+	FROM   lineitem
+	WHERE  l_shipdate >= DATE '1997-07-01'
+	       AND l_shipdate < DATE '1997-07-01' + interval '6' month
+	GROUP  BY l_suppkey ORDER BY l_suppkey LIMIT 50;
+
+--replace_regex /cost=[0-9]+.[0-9]+/cost=#.#/ /rows=[0-9]+/rows=##/
+eval EXPLAIN FORMAT=tree $query;
+eval $query;
+
+--echo # Remove copied files
+--file_exists $MYSQL_TMP_DIR/pq_lineitem.zip
+--remove_file $MYSQL_TMP_DIR/pq_lineitem.zip
+--remove_file $MYSQL_TMP_DIR/pq_lineitem.tbl
+
+#   BUG2023042803516: test assert failure during nestloop join on intrinsic table.
+#   In nestloop join, if pq_worker has finished reading the first outer table's record,
+# it didn't restore the PQ_Ctx_intrinsic's `start_read`.
+#   For the first nestedloop round, the `row_search_no_mvcc`'s mode is:
+#     1. PAGE_CUR_GE: first record(fetch from index search)
+#     2. PAGE_CUR_UNSUPP: second record(fetch from cursor move), but DB_END_OF_INDEX.
+#   For the second nestedloop round, the `row_search_no_mvcc`'s mode should be the same as
+# the first round, but `m_prebuilt->pq_ctx`'s `start_read` is still false, so it passed
+# PAGE_CUR_UNSUPP to `row_search_no_mvcc` and access invalid cached information, which finally
+# results a assertion failure.
+
+CREATE TABLE t0 (c0 INT);
+OPTIMIZE TABLE t0;
+INSERT INTO t0(c0) VALUES (1),(1);
+ANALYZE LOCAL TABLE t0 DROP HISTOGRAM ON c0;
+ANALYZE TABLE t0;
+let $query = SELECT /*+NO_MERGE(c)*/ 1 FROM t0 JOIN (SELECT t0.c0 FROM t0) c USING (c0);
+eval explain $query;
+eval $query;
+set rds_partial_result_cache_cost_threshold = 0;
+eval $query;
+set rds_partial_result_cache_cost_threshold = default;
+
+# clean test env
+SET @@big_tables = @saved_big_tables;
+drop table lineitem;
+DROP TABLE t0;

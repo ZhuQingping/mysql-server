@@ -1,0 +1,70 @@
+--source include/have_only_dstore.inc
+
+SET GLOBAL TRANSACTION ISOLATION LEVEL READ COMMITTED;
+-- source suite/dstore_main/include/trx_isolation_basic.inc
+
+SET GLOBAL TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+-- source suite/dstore_main/include/trx_isolation_basic.inc
+
+#BUG2025051328867
+CREATE TABLE IF NOT EXISTS TB_TEST1(ID INT, EMPLOYEE_ID INT, NAME VARCHAR(10), AGE INT, ID_CARD BIGINT,PHONE_NUMBER BIGINT, PRIMARY KEY(ID, EMPLOYEE_ID, ID_CARD, PHONE_NUMBER));
+INSERT INTO TB_TEST1 VALUES(1,1001,'ZHANGSAN',25,610001,10086),(2,1002,'LISI',25,610002,10086),(3,1003,'WANGWU',25,610003,10086);
+START TRANSACTION WITH CONSISTENT SNAPSHOT;
+UPDATE TB_TEST1 SET AGE=18 WHERE ID%3=0;
+SELECT COUNT(*) FROM TB_TEST1 WHERE AGE != 18;
+DROP TABLE TB_TEST1;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+START TRANSACTION WITH CONSISTENT SNAPSHOT;
+
+#US2025061100387
+--disable_warnings
+drop table if exists test;
+--enable_warnings
+
+--echo # Establish connection thr1 (user=root)
+connect (thr1,localhost,root,,);
+--echo # Establish connection thr2 (user=root)
+connect (thr2,localhost,root,,);
+
+--echo # Switching to connection 'default'.
+connection default;
+create table test(a int primary key, b int);
+insert into test value(1,10);
+
+--echo # Switching to connection 'thr1'.
+connection thr1;
+
+SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+begin;
+SELECT * FROM test WHERE a = 1;
+
+--echo # Switching to connection 'thr2'.
+connection thr2;
+
+SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+begin;
+SELECT * FROM test WHERE a = 1;
+commit;
+
+--echo # Switching to connection 'thr1'.
+connection thr1;
+
+commit;
+
+connection default;
+drop table test;
+
+#BUG202603124819
+CREATE TABLE t2(i INT NOT NULL PRIMARY KEY);
+INSERT INTO t2 VALUES (1);
+set autocommit=0;
+lock table t2 write;
+--error ER_DUP_ENTRY
+INSERT INTO t2 VALUES (3),(1),(2),(5),(4),(7),(6);
+unlock tables;
+commit;
+set autocommit=1;
+select * from t2;
+select * from t2 ignore index(primary);
+
+drop table t2;

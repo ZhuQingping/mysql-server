@@ -1,0 +1,38 @@
+include/master-slave.inc
+Warnings:
+Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
+[connection master]
+SET @old_general_log= @@global.general_log;
+SET @old_slow_query_log= @@global.slow_query_log;
+General test
+include/sync_slave_sql_with_master.inc
+Verify that replica has the correct data: stmt_bulk_test_basic_dml
+include/sync_slave_sql_with_master.inc
+SELECT * FROM bulk_test.tbl ORDER BY b;
+a	b
+26	Frank
+SELECT * FROM bulk_test.tbl ORDER BY b;
+a	b
+26	Frank
+Verify that replica has the correct data: stmt_bulk_test_multi_update
+include/sync_slave_sql_with_master.inc
+SELECT * FROM bulk_test.tbl ORDER BY b;
+a	b
+1	Alice
+4	Bob
+6	Charlie
+4	David
+5	Eve
+SELECT * FROM bulk_test.tbl ORDER BY b;
+a	b
+1	Alice
+4	Bob
+6	Charlie
+4	David
+5	Eve
+include/sync_slave_sql_with_master.inc
+DROP DATABASE bulk_test;
+SET @@global.general_log = @old_general_log;
+SET @@global.slow_query_log = @old_slow_query_log;
+include/rpl_end.inc

@@ -1,0 +1,588 @@
+From cf357619b8eb35c707d7233438fc8b64c1bd34b3 Mon Sep 17 00:00:00 2001
+From: qinwei <jean.qinwei@contributor>
+
+
+Date: Thu, 18 Sep 2025 21:24:28 +0800
+Subject: [PATCH] BUGFIX Use sysbench PGO/LTO optimize InnoDB storage
+ engine
+
+Issue:
+------
+Currently PGO/LTO compilation optimization only train the Dstore table,
+do not train InnoDB table.
+
+Solution:
+---------
+Add sysbench PGO/LTO test cases for InnoDB storage engine.
+
+
+cherry-pick merge request: BUGFIX Use sysbench PGO/LTO optimize InnoDB storage engine
+
+840ab911cbb0971e52683fcc2ab1e75d592fe178
+
+This cherry-pick merge request !4919
+---
+ BUILD/build.sh                                |   8 +-
+ .../suite/pgo/include/sysbench_prepare.inc    |   2 +-
+ mysql-test/suite/pgo/my.cnf                   | 127 +++++++-----------
+ .../suite/pgo/r/mysql_client_test.result      |   5 +
+ .../pgo/r/sysbench_oltp_rw_dstore.result      |  34 +++++
+ ....result => sysbench_oltp_rw_innodb.result} |  18 ++-
+ mysql-test/suite/pgo/r/tpcc_oltp.result       |   4 +
+ .../suite/pgo/t/mysql_client_test-master.opt  |   5 +
+ mysql-test/suite/pgo/t/mysql_client_test.cnf  |   2 +
+ mysql-test/suite/pgo/t/mysql_client_test.test |  30 +++++
+ .../pgo/t/sysbench_oltp_rw_dstore-master.opt  |   3 +
+ .../suite/pgo/t/sysbench_oltp_rw_dstore.test  |  66 +++++++++
+ .../pgo/t/sysbench_oltp_rw_innodb-master.opt  |   3 +
+ ...p_rw.test => sysbench_oltp_rw_innodb.test} |   4 +
+ mysql-test/suite/pgo/t/tpcc_oltp-master.opt   |   4 +
+ mysql-test/suite/pgo/t/tpcc_oltp.test         |   5 +
+ 16 files changed, 236 insertions(+), 84 deletions(-)
+ create mode 100644 mysql-test/suite/pgo/r/mysql_client_test.result
+ create mode 100644 mysql-test/suite/pgo/r/sysbench_oltp_rw_dstore.result
+ rename mysql-test/suite/pgo/r/{sysbench_oltp_rw.result => sysbench_oltp_rw_innodb.result} (53%)
+ create mode 100644 mysql-test/suite/pgo/t/mysql_client_test-master.opt
+ create mode 100644 mysql-test/suite/pgo/t/mysql_client_test.cnf
+ create mode 100644 mysql-test/suite/pgo/t/mysql_client_test.test
+ create mode 100644 mysql-test/suite/pgo/t/sysbench_oltp_rw_dstore-master.opt
+ create mode 100644 mysql-test/suite/pgo/t/sysbench_oltp_rw_dstore.test
+ create mode 100644 mysql-test/suite/pgo/t/sysbench_oltp_rw_innodb-master.opt
+ rename mysql-test/suite/pgo/t/{sysbench_oltp_rw.test => sysbench_oltp_rw_innodb.test} (93%)
+ create mode 100644 mysql-test/suite/pgo/t/tpcc_oltp-master.opt
+
+diff --git a/BUILD/build.sh b/BUILD/build.sh
+index 64634762b26..9423d7653a0 100755
+--- a/BUILD/build.sh
++++ b/BUILD/build.sh
+@@ -416,12 +416,12 @@ do_pgo_training()
+         # become a mess.
+         if [ -n "$BUILD_PGO_SYSBENCH" ]
+         then
+-            $mtr --suite=pgo --parallel=1 --nowarnings --testcase-timeout=300 sysbench_oltp_rw || die "$mtr $?"
++            $mtr --suite=pgo --parallel=1 --testcase-timeout=300 mysql_client_test sysbench_oltp_rw_innodb sysbench_oltp_rw_dstore || die "$mtr $?"
+         fi
+ 
+         if [ -n "$BUILD_PGO_TPCC" ]
+         then
+-            $mtr --suite=pgo --parallel=1 --nowarnings --testcase-timeout=300 tpcc_oltp || die "$mtr $?"
++            $mtr --suite=pgo --parallel=1 --testcase-timeout=300 tpcc_oltp || die "$mtr $?"
+         fi
+         popd >/dev/null
+     fi
+@@ -458,14 +458,14 @@ do_bolt_training()
+ 
+     if [ -n "$BUILD_PGO_SYSBENCH" ]
+     then
+-        $mtr --suite=pgo --parallel=1 --nowarnings --testcase-timeout=300 sysbench_oltp_rw || die "$mtr $?"
++        $mtr --suite=pgo --parallel=1 --testcase-timeout=300 mysql_client_test sysbench_oltp_rw_innodb sysbench_oltp_rw_dstore || die "$mtr $?"
+         mv -f ${DEST_BOLT_DIR}/bolt.instr.profile \
+             ${DEST_BOLT_DIR}/bolt.instr.profile.sysbench_oltp_rw
+     fi
+ 
+     if [ -n "$BUILD_PGO_TPCC" ]
+     then
+-        $mtr --suite=pgo --parallel=1 --nowarnings --testcase-timeout=300 tpcc_oltp || die "$mtr $?"
++        $mtr --suite=pgo --parallel=1 --testcase-timeout=300 tpcc_oltp || die "$mtr $?"
+         mv -f ${DEST_BOLT_DIR}/bolt.instr.profile \
+             ${DEST_BOLT_DIR}/bolt.instr.profile.tpcc_oltp
+     fi
+diff --git a/mysql-test/suite/pgo/include/sysbench_prepare.inc b/mysql-test/suite/pgo/include/sysbench_prepare.inc
+index c84d02bed0d..58f33c03904 100644
+--- a/mysql-test/suite/pgo/include/sysbench_prepare.inc
++++ b/mysql-test/suite/pgo/include/sysbench_prepare.inc
+@@ -26,7 +26,7 @@ while ($tables)
+     k INTEGER DEFAULT '0' NOT NULL,
+     c CHAR(120) DEFAULT '' NOT NULL,
+     pad CHAR(60) DEFAULT '' NOT NULL,
+-    PRIMARY KEY (id)) ENGINE=Dstore;
++    PRIMARY KEY (id));
+   eval INSERT INTO sbtest$tables(id, k, c, pad) VALUES
+     (1, FLOOR(1 + RAND() * 1048576),
+     CONCAT(REPEAT(CONCAT(FLOOR(RAND()*100000000000), '-'), 9), FLOOR(RAND()*100000000000)),
+diff --git a/mysql-test/suite/pgo/my.cnf b/mysql-test/suite/pgo/my.cnf
+index 8ab17fc3bcc..5fd70e361da 100644
+--- a/mysql-test/suite/pgo/my.cnf
++++ b/mysql-test/suite/pgo/my.cnf
+@@ -3,6 +3,7 @@
+ # resource consumption, because resources on build slaves are usually
+ # limited. That is why buffer sizes are left at their default values.
+ 
++!include include/default_mysqld.cnf
+ !include include/default_client.cnf
+ 
+ [mysqld.1]
+@@ -20,52 +21,13 @@ log-bin-trust-function-creators=1
+ # Set innodb-buffer-pool-size and innodb-redo-log-capacity to a lower
+ # value because running tests in parallel, on the ramdisk may consume
+ # excessive memory.
+-innodb-buffer-pool-size=24M
++innodb-buffer-pool-size=128M
+ innodb-redo-log-capacity=10M
+ # MAINTAINER:
+ # the loose- syntax is to make sure the cnf file is also
+ # valid when building without the performance schema.
+ 
+-# Run tests with the performance schema instrumentation
+-loose-enable-performance-schema
+-# Run tests with a small number of instrumented objects
+-# to limit memory consumption with MTR
+-loose-performance-schema-accounts-size=100
+-loose-performance-schema-digests-size=200
+-loose-performance-schema-hosts-size=100
+-loose-performance-schema-users-size=100
+-loose-performance-schema-setup-actors-size=100
+-loose-performance-schema-setup-objects-size=100
+-
+-loose-performance-schema-events-waits-history-size=10
+-loose-performance-schema-events-waits-history-long-size=10000
+-loose-performance-schema-events-stages-history-size=10
+-loose-performance-schema-events-stages-history-long-size=1000
+-loose-performance-schema-events-statements-history-size=10
+-loose-performance-schema-events-statements-history-long-size=1000
+-loose-performance-schema-events-transactions-history-size=10
+-loose-performance-schema-events-transactions-history-long-size=1000
+-loose-performance-schema-session-connect-attrs-size=2048
+-
+-# Enable everything, for maximun code exposure during testing
+-
+-loose-performance-schema-instrument='%=ON'
+-
+-loose-performance-schema-consumer-events-stages-current=ON
+-loose-performance-schema-consumer-events-stages-history=ON
+-loose-performance-schema-consumer-events-stages-history-long=ON
+-loose-performance-schema-consumer-events-statements-cpu=ON
+-loose-performance-schema-consumer-events-statements-current=ON
+-loose-performance-schema-consumer-events-statements-history=ON
+-loose-performance-schema-consumer-events-statements-history-long=ON
+-loose-performance-schema-consumer-events-transactions-current=ON
+-loose-performance-schema-consumer-events-transactions-history=ON
+-loose-performance-schema-consumer-events-transactions-history-long=ON
+-loose-performance-schema-consumer-events-waits-current=ON
+-loose-performance-schema-consumer-events-waits-history=ON
+-loose-performance-schema-consumer-events-waits-history-long=ON
+-loose-performance-schema-consumer-global-instrumentation=ON
+-loose-performance-schema-consumer-thread-instrumentation=ON
++performance_schema=OFF
+ 
+ # Set LOG_ERROR_VERBOSITY to 3 as default for MTR tests. This will
+ # make sure that even note messeges are getting logged in mysqld error
+@@ -73,6 +35,7 @@ loose-performance-schema-consumer-thread-instrumentation=ON
+ # will be useful while debugging an issue as well.
+ log-error-verbosity=3
+ storage_engine_mode=BOTH_STORAGE_ENGINE
++default_storage_engine=InnoDB
+ rds_permission_control=OFF
+ loose-rds_restricted_dynamic_privileges_control=OFF
+ loose-rds_extended_partitions_enabled = ON
+@@ -82,7 +45,6 @@ bind-address=0.0.0.0
+ binlog-ignore-db=information_schema
+ binlog_format=ROW
+ character_set_server=UTF8MB4
+-default_storage_engine=Dstore
+ innodb_stats_include_delete_marked=ON
+ enforce_gtid_consistency=ON
+ expire_logs_days=1
+@@ -130,45 +92,54 @@ innodb_adaptive_hash_index=1
+ 
+ threadpool_enabled=ON
+ threadpool_size=128
++# default storage engine is InnoDB, threadpool use statement mode
++threadpool_schedule_mode=statement
+ 
+ transaction_isolation=READ-COMMITTED
+ table_open_cache=16384
+ table_open_cache_instances=64
+ thread_cache_size=128
+ 
+-dstore_buffer=131072
+-dstore_buffer_lru_partition=256
+-dstore_check_point_timeout=60
+-dstore_maintenance_work_mem=65536
+-dstore_ncores=2770
+-dstore_log_min_messages=7
+-dstore_fold_period=0
+-dstore_fold_level=0
+-dstore_lock_hash_table_size=28160
+-dstore_lock_table_partition_num=16
+-dstore_enable_lazy_lock=false
+-dstore_vfs_tenant_isolation_config_path=null
+-dstore_num_obj_space_mgr_workers=5
+-dstore_prob_of_extension_threshold=1
+-dstore_wal_level=2
+-dstore_recovery_worker_num=1
+-dstore_synchronous_commit=true
+-dstore_wal_file_size=3221225472
+-dstore_wal_buffers=131072
+-dstore_wal_flush_timeout=300
+-dstore_wal_read_buffer_size=536870912
+-dstore_wal_redo_buffer_size=268435456
+-dstore_wal_writer_cpu_bind=48
+-dstore_wal_keep_segments=16
+-dstore_bg_wal_writer_min_bytes=51200
+-dstore_wal_each_write_lenghth_limit=524288
+-dstore_disable_btree_page_recycle=false
+-dstore_deadlock_time_interval=20000
+-dstore_bg_disk_writer_slave_num=1
+-dstore_bg_page_writer_sleep_millisecond=2000
+-dstore_wal_throttling_size=838860800
+-dstore_max_io_capacity_kb=1048576
+-dstore_bulk_read_ring_size=16384
+-dstore_bulk_write_ring_size=2097152
+-dstore_csn_thread_bind_cpu=33
+-dstore_enable_perf_timers=false
++# allow execute load data infile
++loose-rds_load_data_infile_enable=ON
++
++# dstore engine related parameter
++# dstore buffer pool size 512MB
++loose-dstore_buffer=65536
++loose-dstore_buffer_lru_partition=256
++loose-dstore_check_point_timeout=60
++loose-dstore_maintenance_work_mem=65536
++loose-dstore_ncores=2770
++loose-dstore_log_min_messages=7
++loose-dstore_fold_period=0
++loose-dstore_fold_level=0
++loose-dstore_lock_hash_table_size=28160
++loose-dstore_lock_table_partition_num=16
++loose-dstore_enable_lazy_lock=false
++loose-dstore_vfs_tenant_isolation_config_path=null
++loose-dstore_num_obj_space_mgr_workers=5
++loose-dstore_prob_of_extension_threshold=1
++loose-dstore_wal_level=2
++loose-dstore_recovery_worker_num=1
++loose-dstore_synchronous_commit=true
++# dstore_wal_file_size do not allowed to change after initialization
++# loose-dstore_wal_file_size=3221225472
++loose-dstore_wal_buffers=131072
++loose-dstore_wal_flush_timeout=300
++loose-dstore_wal_read_buffer_size=536870912
++loose-dstore_wal_redo_buffer_size=268435456
++loose-dstore_wal_writer_cpu_bind=48
++loose-dstore_wal_keep_segments=16
++loose-dstore_bg_wal_writer_min_bytes=51200
++loose-dstore_wal_each_write_lenghth_limit=524288
++loose-dstore_disable_btree_page_recycle=false
++loose-dstore_deadlock_time_interval=20000
++loose-dstore_bg_disk_writer_slave_num=1
++loose-dstore_bg_page_writer_sleep_millisecond=2000
++loose-dstore_wal_throttling_size=838860800
++loose-dstore_max_io_capacity_kb=1048576
++loose-dstore_bulk_read_ring_size=16384
++loose-dstore_bulk_write_ring_size=2097152
++loose-dstore_csn_thread_bind_cpu=33
++loose-dstore_enable_perf_timers=false
++loose-dstore_perf_level=OFF
+diff --git a/mysql-test/suite/pgo/r/mysql_client_test.result b/mysql-test/suite/pgo/r/mysql_client_test.result
+new file mode 100644
+index 00000000000..edda7980e97
+--- /dev/null
++++ b/mysql-test/suite/pgo/r/mysql_client_test.result
+@@ -0,0 +1,5 @@
++SET @old_general_log= @@global.general_log;
++SET @old_slow_query_log= @@global.slow_query_log;
++ok
++SET @@global.general_log= @old_general_log;
++SET @@global.slow_query_log= @old_slow_query_log;
+diff --git a/mysql-test/suite/pgo/r/sysbench_oltp_rw_dstore.result b/mysql-test/suite/pgo/r/sysbench_oltp_rw_dstore.result
+new file mode 100644
+index 00000000000..148f883c142
+--- /dev/null
++++ b/mysql-test/suite/pgo/r/sysbench_oltp_rw_dstore.result
+@@ -0,0 +1,34 @@
++call mtr.add_suppression("'NO_ZERO_DATE', 'NO_ZERO_IN_DATE' and 'ERROR_FOR_DIVISION_BY_ZERO' sql modes should be used with strict mode");
++SELECT @@innodb_buffer_pool_size;
++@@innodb_buffer_pool_size
++134217728
++SELECT @@dstore_buffer;
++@@dstore_buffer
++65536
++SELECT @@threadpool_schedule_mode;
++@@threadpool_schedule_mode
++transaction
++Table	Op	Msg_type	Msg_text
++test.sbtest1	analyze	status	OK
++SHOW CREATE TABLE sbtest1;
++Table	Create Table
++sbtest1	CREATE TABLE `sbtest1` (
++  `id` int NOT NULL AUTO_INCREMENT,
++  `k` int NOT NULL DEFAULT '0',
++  `c` char(120) NOT NULL DEFAULT '',
++  `pad` char(60) NOT NULL DEFAULT '',
++  PRIMARY KEY (`id`),
++  KEY `k_1` (`k`)
++) ENGINE=Dstore AUTO_INCREMENT=1048577 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++SELECT COUNT(*), MIN(id), MAX(id) FROM sbtest1;
++COUNT(*)	MIN(id)	MAX(id)
++1048576	1	1048576
++CREATE USER root@127.0.0.1;
++GRANT ALL PRIVILEGES ON *.* TO root@127.0.0.1;
++SHOW STATUS LIKE 'Ssl_cipher';
++Variable_name	Value
++Ssl_cipher	SSL_CIPHER
++SHOW STATUS LIKE 'Ssl_cipher';
++Variable_name	Value
++Ssl_cipher	SSL_CIPHER
++DROP USER root@127.0.0.1;
+diff --git a/mysql-test/suite/pgo/r/sysbench_oltp_rw.result b/mysql-test/suite/pgo/r/sysbench_oltp_rw_innodb.result
+similarity index 53%
+rename from mysql-test/suite/pgo/r/sysbench_oltp_rw.result
+rename to mysql-test/suite/pgo/r/sysbench_oltp_rw_innodb.result
+index aa1025a95f4..740a2289c2e 100644
+--- a/mysql-test/suite/pgo/r/sysbench_oltp_rw.result
++++ b/mysql-test/suite/pgo/r/sysbench_oltp_rw_innodb.result
+@@ -1,9 +1,25 @@
+ call mtr.add_suppression("'NO_ZERO_DATE', 'NO_ZERO_IN_DATE' and 'ERROR_FOR_DIVISION_BY_ZERO' sql modes should be used with strict mode");
++SELECT @@innodb_buffer_pool_size;
++@@innodb_buffer_pool_size
++134217728
+ SELECT @@dstore_buffer;
+ @@dstore_buffer
+-131072
++65536
++SELECT @@threadpool_schedule_mode;
++@@threadpool_schedule_mode
++statement
+ Table	Op	Msg_type	Msg_text
+ test.sbtest1	analyze	status	OK
++SHOW CREATE TABLE sbtest1;
++Table	Create Table
++sbtest1	CREATE TABLE `sbtest1` (
++  `id` int NOT NULL AUTO_INCREMENT,
++  `k` int NOT NULL DEFAULT '0',
++  `c` char(120) NOT NULL DEFAULT '',
++  `pad` char(60) NOT NULL DEFAULT '',
++  PRIMARY KEY (`id`),
++  KEY `k_1` (`k`)
++) ENGINE=InnoDB AUTO_INCREMENT=1048577 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ SELECT COUNT(*), MIN(id), MAX(id) FROM sbtest1;
+ COUNT(*)	MIN(id)	MAX(id)
+ 1048576	1	1048576
+diff --git a/mysql-test/suite/pgo/r/tpcc_oltp.result b/mysql-test/suite/pgo/r/tpcc_oltp.result
+index eccd780f7fd..f4e136c43ac 100644
+--- a/mysql-test/suite/pgo/r/tpcc_oltp.result
++++ b/mysql-test/suite/pgo/r/tpcc_oltp.result
+@@ -1,3 +1,4 @@
++call mtr.add_suppression("'NO_ZERO_DATE', 'NO_ZERO_IN_DATE' and 'ERROR_FOR_DIVISION_BY_ZERO' sql modes should be used with strict mode");
+ SELECT @@dstore_buffer;
+ @@dstore_buffer
+ 131072
+@@ -7,6 +8,9 @@ STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION
+ SELECT @@performance_schema;
+ @@performance_schema
+ 0
++SELECT @@threadpool_schedule_mode;
++@@threadpool_schedule_mode
++transaction
+ # load tpcc data
+ # analyze tables
+ # check table
+diff --git a/mysql-test/suite/pgo/t/mysql_client_test-master.opt b/mysql-test/suite/pgo/t/mysql_client_test-master.opt
+new file mode 100644
+index 00000000000..2e7e08ad20d
+--- /dev/null
++++ b/mysql-test/suite/pgo/t/mysql_client_test-master.opt
+@@ -0,0 +1,5 @@
++$PLUGIN_AUTH_OPT
++$PLUGIN_AUTH_LOAD
++--default_storage_engine=InnoDB
++--default_tmp_storage_engine=InnoDB
++--threadpool_schedule_mode=statement
+diff --git a/mysql-test/suite/pgo/t/mysql_client_test.cnf b/mysql-test/suite/pgo/t/mysql_client_test.cnf
+new file mode 100644
+index 00000000000..951a5804fea
+--- /dev/null
++++ b/mysql-test/suite/pgo/t/mysql_client_test.cnf
+@@ -0,0 +1,2 @@
++# Use default setting for mysqld processes
++!include include/default_my.cnf
+diff --git a/mysql-test/suite/pgo/t/mysql_client_test.test b/mysql-test/suite/pgo/t/mysql_client_test.test
+new file mode 100644
+index 00000000000..ccd4919c253
+--- /dev/null
++++ b/mysql-test/suite/pgo/t/mysql_client_test.test
+@@ -0,0 +1,30 @@
++--source include/no_valgrind_without_big.inc
++--source include/force_myisam_default.inc
++--source include/have_myisam.inc
++--source include/not_have_only_dstore.inc
++
++# need to have the dynamic loading turned on for the client plugin tests
++--source include/have_plugin_auth.inc
++
++SET @old_general_log= @@global.general_log;
++SET @old_slow_query_log= @@global.slow_query_log;
++
++#
++# If this test fails with "command "$MYSQL_CLIENT_TEST" failed",
++# you should either run mysql_client_test separately against a running
++# server or run mysql-test-run --debug mysql_client_test and check
++# var/log/mysql_client_test.trace
++
++--exec echo "$MYSQL_CLIENT_TEST" > $MYSQLTEST_VARDIR/log/mysql_client_test.out.log 2>&1
++--exec $MYSQL_CLIENT_TEST --getopt-ll-test=25600M $PLUGIN_AUTH_CLIENT_OPT >> $MYSQLTEST_VARDIR/log/mysql_client_test.out.log 2>&1
++
++# End of 4.1 tests
++echo ok;
++
++SET @@global.general_log= @old_general_log;
++SET @@global.slow_query_log= @old_slow_query_log;
++
++# $MYSQL_CLIENT_TEST leaves unfinished queries in dead sessions =>
++# wait for them to finish
++let $count_sessions= 1;
++--source include/wait_until_count_sessions.inc
+diff --git a/mysql-test/suite/pgo/t/sysbench_oltp_rw_dstore-master.opt b/mysql-test/suite/pgo/t/sysbench_oltp_rw_dstore-master.opt
+new file mode 100644
+index 00000000000..b905b148394
+--- /dev/null
++++ b/mysql-test/suite/pgo/t/sysbench_oltp_rw_dstore-master.opt
+@@ -0,0 +1,3 @@
++--default_storage_engine=Dstore
++--default_tmp_storage_engine=Dstore
++--threadpool_schedule_mode=transaction
+diff --git a/mysql-test/suite/pgo/t/sysbench_oltp_rw_dstore.test b/mysql-test/suite/pgo/t/sysbench_oltp_rw_dstore.test
+new file mode 100644
+index 00000000000..e0c1fc22838
+--- /dev/null
++++ b/mysql-test/suite/pgo/t/sysbench_oltp_rw_dstore.test
+@@ -0,0 +1,66 @@
++--source include/have_nodebug.inc
++--source include/have_openssl.inc
++--source include/have_only_dstore.inc
++
++call mtr.add_suppression("'NO_ZERO_DATE', 'NO_ZERO_IN_DATE' and 'ERROR_FOR_DIVISION_BY_ZERO' sql modes should be used with strict mode");
++
++# The default dataset size with a single sysbench table containing 1M rows is
++# ~400 MB. We deliberately want to run the workload with the default Dstore
++# buffer pool size (512 MB) to run the test fast.
++
++SELECT @@innodb_buffer_pool_size;
++SELECT @@dstore_buffer;
++SELECT @@threadpool_schedule_mode;
++
++--source suite/pgo/include/sysbench_prepare.inc
++
++# Validate the prepared dataset
++SHOW CREATE TABLE sbtest1;
++SELECT COUNT(*), MIN(id), MAX(id) FROM sbtest1;
++
++CREATE USER root@127.0.0.1;
++GRANT ALL PRIVILEGES ON *.* TO root@127.0.0.1;
++
++# Save the initial number of concurrent sessions
++--source include/count_sessions.inc
++
++# Test with a non-SSL connection on a Unix socket
++connect (con0,localhost,root,,,,,);
++connection con0;
++--source suite/pgo/include/sysbench_run.inc
++connection default;
++disconnect con0;
++
++# Test with an SSL connection on a Unix socket
++connect (con0,localhost,root,,,,,SSL);
++connection con0;
++--replace_regex $ALLOWED_CIPHERS_REGEX
++SHOW STATUS LIKE 'Ssl_cipher';
++--source suite/pgo/include/sysbench_run.inc
++connection default;
++disconnect con0;
++
++# Test with a non-SSL connection on a TCP socket
++connect (con0,127.0.0.1,root,,,$MASTER_PORT,,);
++connection con0;
++--source suite/pgo/include/sysbench_run.inc
++connection default;
++disconnect con0;
++
++# Test with an SSL connection on a TCP socket
++connect (con0,127.0.0.1,root,,,$MASTER_PORT,,SSL);
++connection con0;
++--replace_regex $ALLOWED_CIPHERS_REGEX
++SHOW STATUS LIKE 'Ssl_cipher';
++--source suite/pgo/include/sysbench_run.inc
++connection default;
++disconnect con0;
++
++# Cleanup
++--source suite/pgo/include/sysbench_cleanup.inc
++
++# Wait till we reached the initial number of concurrent sessions
++--source include/wait_until_count_sessions.inc
++
++DROP USER root@127.0.0.1;
++
+diff --git a/mysql-test/suite/pgo/t/sysbench_oltp_rw_innodb-master.opt b/mysql-test/suite/pgo/t/sysbench_oltp_rw_innodb-master.opt
+new file mode 100644
+index 00000000000..48c694af2ea
+--- /dev/null
++++ b/mysql-test/suite/pgo/t/sysbench_oltp_rw_innodb-master.opt
+@@ -0,0 +1,3 @@
++--default_storage_engine=InnoDB
++--default_tmp_storage_engine=InnoDB
++--threadpool_schedule_mode=statement
+diff --git a/mysql-test/suite/pgo/t/sysbench_oltp_rw.test b/mysql-test/suite/pgo/t/sysbench_oltp_rw_innodb.test
+similarity index 93%
+rename from mysql-test/suite/pgo/t/sysbench_oltp_rw.test
+rename to mysql-test/suite/pgo/t/sysbench_oltp_rw_innodb.test
+index 6a232247eac..3ca28bf7acf 100644
+--- a/mysql-test/suite/pgo/t/sysbench_oltp_rw.test
++++ b/mysql-test/suite/pgo/t/sysbench_oltp_rw_innodb.test
+@@ -1,5 +1,6 @@
+ --source include/have_nodebug.inc
+ --source include/have_openssl.inc
++--source include/not_have_only_dstore.inc
+ 
+ call mtr.add_suppression("'NO_ZERO_DATE', 'NO_ZERO_IN_DATE' and 'ERROR_FOR_DIVISION_BY_ZERO' sql modes should be used with strict mode");
+ 
+@@ -8,11 +9,14 @@ call mtr.add_suppression("'NO_ZERO_DATE', 'NO_ZERO_IN_DATE' and 'ERROR_FOR_DIVIS
+ # buffer pool size (128 MB) to cover code paths related to both cached and
+ # non-cached data
+ 
++SELECT @@innodb_buffer_pool_size;
+ SELECT @@dstore_buffer;
++SELECT @@threadpool_schedule_mode;
+ 
+ --source suite/pgo/include/sysbench_prepare.inc
+ 
+ # Validate the prepared dataset
++SHOW CREATE TABLE sbtest1;
+ SELECT COUNT(*), MIN(id), MAX(id) FROM sbtest1;
+ 
+ CREATE USER root@127.0.0.1;
+diff --git a/mysql-test/suite/pgo/t/tpcc_oltp-master.opt b/mysql-test/suite/pgo/t/tpcc_oltp-master.opt
+new file mode 100644
+index 00000000000..ebd9b7dae92
+--- /dev/null
++++ b/mysql-test/suite/pgo/t/tpcc_oltp-master.opt
+@@ -0,0 +1,4 @@
++--default_storage_engine=Dstore
++--default_tmp_storage_engine=Dstore
++--threadpool_schedule_mode=transaction
++--dstore_buffer=131072
+diff --git a/mysql-test/suite/pgo/t/tpcc_oltp.test b/mysql-test/suite/pgo/t/tpcc_oltp.test
+index bc0da2cf280..c331bcdcfa0 100644
+--- a/mysql-test/suite/pgo/t/tpcc_oltp.test
++++ b/mysql-test/suite/pgo/t/tpcc_oltp.test
+@@ -1,11 +1,16 @@
+ --source include/have_nodebug.inc
++--source include/have_only_dstore.inc
+ 
+ # The default dataset is TPCC with 10 warehouses.
+ # We set dstore_buffer to 2GB, not all data in buffer pool.
++# Currently only run tpcc test for Dstore table
++
++call mtr.add_suppression("'NO_ZERO_DATE', 'NO_ZERO_IN_DATE' and 'ERROR_FOR_DIVISION_BY_ZERO' sql modes should be used with strict mode");
+ 
+ SELECT @@dstore_buffer;
+ SELECT @@sql_mode;
+ SELECT @@performance_schema;
++SELECT @@threadpool_schedule_mode;
+ 
+ # Prepare tpc-c table and data for test
+ --source suite/pgo/include/tpcc_prepare.inc
+-- 
+2.23.0
+

@@ -1,0 +1,1087 @@
+call mtr.add_suppression("mysql.outline");
+call mtr.add_suppression("Statement outline");
+set @start_opt_outline_enabled= @@global.rds_opt_outline_enabled;
+set global rds_opt_outline_enabled = ON;
+create database outline_db;
+create table outline_db.t1(id int auto_increment primary key,
+col1 int,
+col2 varchar(100),
+key ind_1(col1),
+key ind_2(col2)) engine = Dstore;
+create table outline_db.t2(id int auto_increment primary key,
+col1 int,
+col2 varchar(100),
+key ind_1(col1),
+key ind_2(col2)) engine = Dstore;
+insert into outline_db.t1 values(1, 2, 'xpchild');
+insert into outline_db.t2 values(1, 2, 'xpchild');
+set global rds_opt_outline_enabled = OFF;
+use outline_db;
+select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+1	2	xpchild
+select * from t1 use index() where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+1	2	xpchild
+select * from t1 use index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+1	2	xpchild
+select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+1	2	xpchild
+select * from t1 ignore index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+1	2	xpchild
+select * from t1 use index(ind_1) ignore index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+1	2	xpchild
+select * from t1 use index(ind_1) force index(ind_2) where col1 = 2 and col2 = 'xpchild' order by col1;
+ERROR HY000: Incorrect usage of USE INDEX and FORCE INDEX
+select * from t1 use index(ind_3) where col1 = 2 and col2 = 'xpchild' order by col1;
+ERROR 42000: Key 'ind_3' doesn't exist in table 't1'
+select * from t1 force index(ind_3) where col1 = 2 and col2 = 'xpchild' order by col1;
+ERROR 42000: Key 'ind_3' doesn't exist in table 't1'
+select * from t1 ignore index(ind_3) where col1 = 2 and col2 = 'xpchild' order by col1;
+ERROR 42000: Key 'ind_3' doesn't exist in table 't1'
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+'FOR ORDER BY', "select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1");
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+'', "select * from t1 use index() where col1 = 2 and col2 = 'xpchild' order by col1");
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+'', "select * from t1 use index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+'', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+use outline_db;
+select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+1	2	xpchild
+select * from t1 use index() where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+1	2	xpchild
+select * from t1 use index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+1	2	xpchild
+select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+1	2	xpchild
+select * from t1 ignore index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+1	2	xpchild
+select * from t1 use index(ind_1) ignore index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+1	2	xpchild
+select * from t1 use index(ind_1) force index(ind_2) where col1 = 2 and col2 = 'xpchild' order by col1;
+ERROR HY000: Incorrect usage of USE INDEX and FORCE INDEX
+select * from t1 use index(ind_3) where col1 = 2 and col2 = 'xpchild' order by col1;
+ERROR 42000: Key 'ind_3' doesn't exist in table 't1'
+select * from t1 force index(ind_3) where col1 = 2 and col2 = 'xpchild' order by col1;
+ERROR 42000: Key 'ind_3' doesn't exist in table 't1'
+select * from t1 ignore index(ind_3) where col1 = 2 and col2 = 'xpchild' order by col1;
+ERROR 42000: Key 'ind_3' doesn't exist in table 't1'
+select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild';
+id	id
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+set global rds_opt_outline_enabled = ON;
+use outline_db;
+select * from t2 use index(ind_3) where col1 = 2 and col2 = 'xpchild' order by col1;
+ERROR 42000: Key 'ind_3' doesn't exist in table 't2'
+select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild';
+id	id
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+'FOR ORDER BY', "select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1");
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+'', "select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild'");
+use outline_db;
+select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+1	2	xpchild
+select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild';
+id	id
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_2',
+'FOR ORDER BY', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', '',
+'FOR ORDER BY', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'ind_2',
+'FOR ORDER BY', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+ERROR HY000: Statement outline 0 is not valid when add index outline since Cannot mix USE INDEX and FORCE INDEX
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+'', "select t1.id, t2.id from t1, t2 force index(ind_1) where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild'");
+select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+1	2	xpchild
+explain select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_1,ind_2	ind_1	5	const	1	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t1`.`col1` AS `col1`,`outline_db`.`t1`.`col2` AS `col2` from `outline_db`.`t1` USE INDEX FOR ORDER BY (`ind_2`) USE INDEX FOR ORDER BY () where ((`outline_db`.`t1`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 2)) order by `outline_db`.`t1`.`col1`
+select t1.id, t2.id from t1, t2 force index(ind_1) where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild';
+id	id
+delete from mysql.outline;
+call dbms_outln.flush_outline();
+set optimizer_trace='enabled=on';
+use outline_db;
+select * from t1 use index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+1	2	xpchild
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_2',
+'FOR ORDER BY', "select * from t1 use index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+select * from t1 use index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+1	2	xpchild
+select * from information_schema.optimizer_trace;
+QUERY	TRACE	MISSING_BYTES_BEYOND_MAX_MEM_SIZE	INSUFFICIENT_PRIVILEGES
+select * from t1 use index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1	{
+  "steps": [
+    {
+      "join_preparation": {
+        "select#": 1,
+        "steps": [
+          {
+            "expanded_query": "/* select#1 */ select `t1`.`id` AS `id`,`t1`.`col1` AS `col1`,`t1`.`col2` AS `col2` from `t1` USE INDEX FOR ORDER BY (`ind_2`) where ((`t1`.`col1` = 2) and (`t1`.`col2` = 'xpchild')) order by `t1`.`col1`"
+          }
+        ]
+      }
+    },
+    {
+      "join_optimization": {
+        "select#": 1,
+        "steps": [
+          {
+            "condition_processing": {
+              "condition": "WHERE",
+              "original_condition": "((`t1`.`col1` = 2) and (`t1`.`col2` = 'xpchild'))",
+              "steps": [
+                {
+                  "transformation": "equality_propagation",
+                  "resulting_condition": "(multiple equal(2, `t1`.`col1`) and multiple equal('xpchild', `t1`.`col2`))"
+                },
+                {
+                  "transformation": "constant_propagation",
+                  "resulting_condition": "(multiple equal(2, `t1`.`col1`) and multiple equal('xpchild', `t1`.`col2`))"
+                },
+                {
+                  "transformation": "trivial_condition_removal",
+                  "resulting_condition": "(multiple equal(2, `t1`.`col1`) and multiple equal('xpchild', `t1`.`col2`))"
+                }
+              ]
+            }
+          },
+          {
+            "substitute_generated_columns": {
+            }
+          },
+          {
+            "table_dependencies": [
+              {
+                "table": "`t1` USE INDEX FOR ORDER BY (`ind_2`)",
+                "row_may_be_null": false,
+                "map_bit": 0,
+                "depends_on_map_bits": [
+                ]
+              }
+            ]
+          },
+          {
+            "ref_optimizer_key_uses": [
+              {
+                "table": "`t1` USE INDEX FOR ORDER BY (`ind_2`)",
+                "field": "col1",
+                "equals": "2",
+                "null_rejecting": true
+              },
+              {
+                "table": "`t1` USE INDEX FOR ORDER BY (`ind_2`)",
+                "field": "col2",
+                "equals": "'xpchild'",
+                "null_rejecting": true
+              }
+            ]
+          },
+          {
+            "rows_estimation": [
+              {
+                "table": "`t1` USE INDEX FOR ORDER BY (`ind_2`)",
+                "range_analysis": {
+                  "table_scan": {
+                    "rows": 1,
+                    "cost": 2.45
+                  },
+                  "potential_range_indexes": [
+                    {
+                      "index": "PRIMARY",
+                      "usable": false,
+                      "cause": "not_applicable"
+                    },
+                    {
+                      "index": "ind_1",
+                      "usable": true,
+                      "key_parts": [
+                        "col1"
+                      ]
+                    },
+                    {
+                      "index": "ind_2",
+                      "usable": true,
+                      "key_parts": [
+                        "col2"
+                      ]
+                    }
+                  ],
+                  "setup_range_conditions": [
+                  ],
+                  "group_index_range": {
+                    "chosen": false,
+                    "cause": "not_group_by_or_distinct"
+                  },
+                  "skip_scan_range": {
+                    "potential_skip_scan_indexes": [
+                      {
+                        "index": "ind_1",
+                        "usable": false,
+                        "cause": "query_references_nonkey_column"
+                      },
+                      {
+                        "index": "ind_2",
+                        "usable": false,
+                        "cause": "query_references_nonkey_column"
+                      }
+                    ]
+                  },
+                  "analyzing_range_alternatives": {
+                    "range_scan_alternatives": [
+                      {
+                        "index": "ind_1",
+                        "ranges": [
+                          "col1 = 2"
+                        ],
+                        "index_dives_for_eq_ranges": true,
+                        "rowid_ordered": true,
+                        "using_mrr": false,
+                        "index_only": false,
+                        "in_memory": -1,
+                        "rows": 1,
+                        "cost": 0.61,
+                        "chosen": true
+                      },
+                      {
+                        "index": "ind_2",
+                        "ranges": [
+                          "col2 = 'xpchild'"
+                        ],
+                        "index_dives_for_eq_ranges": true,
+                        "rowid_ordered": true,
+                        "using_mrr": false,
+                        "index_only": false,
+                        "in_memory": -1,
+                        "rows": 1,
+                        "cost": 0.61,
+                        "chosen": false,
+                        "cause": "cost"
+                      }
+                    ],
+                    "analyzing_roworder_intersect": {
+                      "intersecting_indexes": [
+                        {
+                          "index": "ind_1",
+                          "cumulated_total_cost": 0,
+                          "usable": false,
+                          "cause": "does_not_reduce_cost_of_intersect"
+                        },
+                        {
+                          "index": "ind_2",
+                          "cumulated_total_cost": 0,
+                          "usable": false,
+                          "cause": "does_not_reduce_cost_of_intersect"
+                        }
+                      ],
+                      "chosen": false,
+                      "cause": "does_not_increase_selectivity"
+                    }
+                  },
+                  "chosen_range_access_summary": {
+                    "range_access_plan": {
+                      "type": "range_scan",
+                      "index": "ind_1",
+                      "rows": 1,
+                      "ranges": [
+                        "col1 = 2"
+                      ]
+                    },
+                    "rows_for_plan": 1,
+                    "cost_for_plan": 0.61,
+                    "chosen": true
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "considered_execution_plans": [
+              {
+                "plan_prefix": [
+                ],
+                "table": "`t1` USE INDEX FOR ORDER BY (`ind_2`)",
+                "best_access_path": {
+                  "considered_access_paths": [
+                    {
+                      "access_type": "ref",
+                      "index": "ind_1",
+                      "rows": 1,
+                      "cost": 0.35,
+                      "chosen": true
+                    },
+                    {
+                      "access_type": "ref",
+                      "index": "ind_2",
+                      "rows": 1,
+                      "cost": 0.35,
+                      "chosen": false
+                    },
+                    {
+                      "access_type": "range",
+                      "range_details": {
+                        "used_index": "ind_1"
+                      },
+                      "chosen": false,
+                      "cause": "heuristic_index_cheaper"
+                    }
+                  ]
+                },
+                "condition_filtering_pct": 100,
+                "rows_for_plan": 1,
+                "cost_for_plan": 0.35,
+                "chosen": true
+              }
+            ]
+          },
+          {
+            "attaching_conditions_to_tables": {
+              "original_condition": "((`t1`.`col2` = 'xpchild') and (`t1`.`col1` = 2))",
+              "attached_conditions_computation": [
+              ],
+              "attached_conditions_summary": [
+                {
+                  "table": "`t1` USE INDEX FOR ORDER BY (`ind_2`)",
+                  "attached": "((`t1`.`col2` = 'xpchild') and (`t1`.`col1` = 2))"
+                }
+              ]
+            }
+          },
+          {
+            "optimizing_distinct_group_by_order_by": {
+              "simplifying_order_by": {
+                "original_clause": "`t1`.`col1`",
+                "items": [
+                  {
+                    "item": "`t1`.`col1`",
+                    "equals_constant_in_where": true
+                  }
+                ],
+                "resulting_clause_is_simple": true,
+                "resulting_clause": ""
+              }
+            }
+          },
+          {
+            "finalizing_table_conditions": [
+              {
+                "table": "`t1` USE INDEX FOR ORDER BY (`ind_2`)",
+                "original_table_condition": "((`t1`.`col2` = 'xpchild') and (`t1`.`col1` = 2))",
+                "final_table_condition   ": "(`t1`.`col2` = 'xpchild')"
+              }
+            ]
+          },
+          {
+            "refine_plan": [
+              {
+                "table": "`t1` USE INDEX FOR ORDER BY (`ind_2`)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "not_apply_pq_plan": {
+        "select#": 1,
+        "chosen": false,
+        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+      }
+    },
+    {
+      "join_execution": {
+        "select#": 1,
+        "steps": [
+        ]
+      }
+    }
+  ]
+}	0	0
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_3',
+'FOR ORDER BY', "select * from t1 use index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+select * from t1 use index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+1	2	xpchild
+Warnings:
+Warning	8041	Outline apply failed, cause: This is unresolved field for INDEX hint. Skip statement outline.
+Warning	1176	Key 'ind_3' doesn't exist in table 't1'
+select * from information_schema.optimizer_trace;
+QUERY	TRACE	MISSING_BYTES_BEYOND_MAX_MEM_SIZE	INSUFFICIENT_PRIVILEGES
+select * from t1 use index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1	{
+  "steps": [
+    {
+      "join_preparation": {
+        "select#": 1,
+        "steps": [
+          {
+            "index_hint_outline": {
+              "chosen": false,
+              "cause": "Index hints from outline are incorrect."
+            }
+          },
+          {
+            "expanded_query": "/* select#1 */ select `t1`.`id` AS `id`,`t1`.`col1` AS `col1`,`t1`.`col2` AS `col2` from `t1` USE INDEX (`ind_1`) where ((`t1`.`col1` = 2) and (`t1`.`col2` = 'xpchild')) order by `t1`.`col1`"
+          }
+        ]
+      }
+    },
+    {
+      "join_optimization": {
+        "select#": 1,
+        "steps": [
+          {
+            "condition_processing": {
+              "condition": "WHERE",
+              "original_condition": "((`t1`.`col1` = 2) and (`t1`.`col2` = 'xpchild'))",
+              "steps": [
+                {
+                  "transformation": "equality_propagation",
+                  "resulting_condition": "(multiple equal(2, `t1`.`col1`) and multiple equal('xpchild', `t1`.`col2`))"
+                },
+                {
+                  "transformation": "constant_propagation",
+                  "resulting_condition": "(multiple equal(2, `t1`.`col1`) and multiple equal('xpchild', `t1`.`col2`))"
+                },
+                {
+                  "transformation": "trivial_condition_removal",
+                  "resulting_condition": "(multiple equal(2, `t1`.`col1`) and multiple equal('xpchild', `t1`.`col2`))"
+                }
+              ]
+            }
+          },
+          {
+            "substitute_generated_columns": {
+            }
+          },
+          {
+            "table_dependencies": [
+              {
+                "table": "`t1` USE INDEX (`ind_1`)",
+                "row_may_be_null": false,
+                "map_bit": 0,
+                "depends_on_map_bits": [
+                ]
+              }
+            ]
+          },
+          {
+            "ref_optimizer_key_uses": [
+              {
+                "table": "`t1` USE INDEX (`ind_1`)",
+                "field": "col1",
+                "equals": "2",
+                "null_rejecting": true
+              }
+            ]
+          },
+          {
+            "rows_estimation": [
+              {
+                "table": "`t1` USE INDEX (`ind_1`)",
+                "range_analysis": {
+                  "table_scan": {
+                    "rows": 1,
+                    "cost": 2.45
+                  },
+                  "potential_range_indexes": [
+                    {
+                      "index": "PRIMARY",
+                      "usable": false,
+                      "cause": "not_applicable"
+                    },
+                    {
+                      "index": "ind_1",
+                      "usable": true,
+                      "key_parts": [
+                        "col1"
+                      ]
+                    },
+                    {
+                      "index": "ind_2",
+                      "usable": false,
+                      "cause": "not_applicable"
+                    }
+                  ],
+                  "setup_range_conditions": [
+                  ],
+                  "group_index_range": {
+                    "chosen": false,
+                    "cause": "not_group_by_or_distinct"
+                  },
+                  "skip_scan_range": {
+                    "potential_skip_scan_indexes": [
+                      {
+                        "index": "ind_1",
+                        "usable": false,
+                        "cause": "query_references_nonkey_column"
+                      }
+                    ]
+                  },
+                  "analyzing_range_alternatives": {
+                    "range_scan_alternatives": [
+                      {
+                        "index": "ind_1",
+                        "ranges": [
+                          "col1 = 2"
+                        ],
+                        "index_dives_for_eq_ranges": true,
+                        "rowid_ordered": true,
+                        "using_mrr": false,
+                        "index_only": false,
+                        "in_memory": -1,
+                        "rows": 1,
+                        "cost": 0.61,
+                        "chosen": true
+                      }
+                    ],
+                    "analyzing_roworder_intersect": {
+                      "usable": false,
+                      "cause": "too_few_roworder_scans"
+                    }
+                  },
+                  "chosen_range_access_summary": {
+                    "range_access_plan": {
+                      "type": "range_scan",
+                      "index": "ind_1",
+                      "rows": 1,
+                      "ranges": [
+                        "col1 = 2"
+                      ]
+                    },
+                    "rows_for_plan": 1,
+                    "cost_for_plan": 0.61,
+                    "chosen": true
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "considered_execution_plans": [
+              {
+                "plan_prefix": [
+                ],
+                "table": "`t1` USE INDEX (`ind_1`)",
+                "best_access_path": {
+                  "considered_access_paths": [
+                    {
+                      "access_type": "ref",
+                      "index": "ind_1",
+                      "rows": 1,
+                      "cost": 0.35,
+                      "chosen": true
+                    },
+                    {
+                      "access_type": "range",
+                      "range_details": {
+                        "used_index": "ind_1"
+                      },
+                      "chosen": false,
+                      "cause": "heuristic_index_cheaper"
+                    }
+                  ]
+                },
+                "condition_filtering_pct": 100,
+                "rows_for_plan": 1,
+                "cost_for_plan": 0.35,
+                "chosen": true
+              }
+            ]
+          },
+          {
+            "attaching_conditions_to_tables": {
+              "original_condition": "((`t1`.`col2` = 'xpchild') and (`t1`.`col1` = 2))",
+              "attached_conditions_computation": [
+              ],
+              "attached_conditions_summary": [
+                {
+                  "table": "`t1` USE INDEX (`ind_1`)",
+                  "attached": "((`t1`.`col2` = 'xpchild') and (`t1`.`col1` = 2))"
+                }
+              ]
+            }
+          },
+          {
+            "optimizing_distinct_group_by_order_by": {
+              "simplifying_order_by": {
+                "original_clause": "`t1`.`col1`",
+                "items": [
+                  {
+                    "item": "`t1`.`col1`",
+                    "equals_constant_in_where": true
+                  }
+                ],
+                "resulting_clause_is_simple": true,
+                "resulting_clause": ""
+              }
+            }
+          },
+          {
+            "finalizing_table_conditions": [
+              {
+                "table": "`t1` USE INDEX (`ind_1`)",
+                "original_table_condition": "((`t1`.`col2` = 'xpchild') and (`t1`.`col1` = 2))",
+                "final_table_condition   ": "(`t1`.`col2` = 'xpchild')"
+              }
+            ]
+          },
+          {
+            "refine_plan": [
+              {
+                "table": "`t1` USE INDEX (`ind_1`)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "not_apply_pq_plan": {
+        "select#": 1,
+        "chosen": false,
+        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+      }
+    },
+    {
+      "join_execution": {
+        "select#": 1,
+        "steps": [
+        ]
+      }
+    }
+  ]
+}	0	0
+select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+1	2	xpchild
+set optimizer_trace='enabled=off';
+select * from t1 use index(ind_1) force index(ind_2) where col1 = 2 and col2 = 'xpchild' order by col1;
+ERROR HY000: Incorrect usage of USE INDEX and FORCE INDEX
+select * from t1 use index(ind_3) where col1 = 2 and col2 = 'xpchild' order by col1;
+ERROR 42000: Key 'ind_3' doesn't exist in table 't1'
+delete from mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', '',
+'FOR ORDER BY', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+call dbms_outln.preview_outline("outline_db", "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	ccad7ddcb0e1ee0af015dfbeaba988c457992f5702ebf40cb25bdda562a4ea1e	TABLE	t1	1	USE INDEX FOR ORDER BY ()
+explain select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_1,ind_2	ind_1	5	const	1	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t1`.`col1` AS `col1`,`outline_db`.`t1`.`col2` AS `col2` from `outline_db`.`t1` USE INDEX FOR ORDER BY () where ((`outline_db`.`t1`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 2)) order by `outline_db`.`t1`.`col1`
+delete from mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', '',
+'FOR ORDER BY', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+ERROR HY000: Statement outline 0 is not valid when add index outline since Outline index's hint, digest, or scope is invalid
+call dbms_outln.add_index_outline('outline_db', '', 1, 'IGNORE INDEX', '',
+'FOR ORDER BY', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+ERROR HY000: Statement outline 0 is not valid when add index outline since Outline index's hint, digest, or scope is invalid
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_2',
+'', "select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1");
+set optimizer_trace='enabled=on';
+explain select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_2	ind_2	403	const	1	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t1`.`col1` AS `col1`,`outline_db`.`t1`.`col2` AS `col2` from `outline_db`.`t1` USE INDEX (`ind_2`) where ((`outline_db`.`t1`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 2)) order by `outline_db`.`t1`.`col1`
+prepare pre_stmt from 'select * from t1 where col1 = ? and col2 = ? order by col1';
+set @a = 3,@b = 'xpchild';
+execute pre_stmt using @a,@b;
+id	col1	col2
+select * from information_schema.optimizer_trace;
+QUERY	TRACE	MISSING_BYTES_BEYOND_MAX_MEM_SIZE	INSUFFICIENT_PRIVILEGES
+select * from t1 where col1 = 3 and col2 = 'xpchild' order by col1	{
+  "steps": [
+    {
+      "statement_parameters": [
+        "LONGLONG",
+        "VARCHAR"
+      ]
+    },
+    {
+      "join_optimization": {
+        "select#": 1,
+        "steps": [
+          {
+            "condition_processing": {
+              "condition": "WHERE",
+              "original_condition": "((`t1`.`col1` = 3) and (`t1`.`col2` = 'xpchild'))",
+              "steps": [
+                {
+                  "transformation": "equality_propagation",
+                  "resulting_condition": "(multiple equal(3, `t1`.`col1`) and multiple equal('xpchild', `t1`.`col2`))"
+                },
+                {
+                  "transformation": "constant_propagation",
+                  "resulting_condition": "(multiple equal(3, `t1`.`col1`) and multiple equal('xpchild', `t1`.`col2`))"
+                },
+                {
+                  "transformation": "trivial_condition_removal",
+                  "resulting_condition": "(multiple equal(3, `t1`.`col1`) and multiple equal('xpchild', `t1`.`col2`))"
+                }
+              ]
+            }
+          },
+          {
+            "substitute_generated_columns": {
+            }
+          },
+          {
+            "table_dependencies": [
+              {
+                "table": "`t1` USE INDEX (`ind_2`)",
+                "row_may_be_null": false,
+                "map_bit": 0,
+                "depends_on_map_bits": [
+                ]
+              }
+            ]
+          },
+          {
+            "ref_optimizer_key_uses": [
+              {
+                "table": "`t1` USE INDEX (`ind_2`)",
+                "field": "col2",
+                "equals": "'xpchild'",
+                "null_rejecting": true
+              }
+            ]
+          },
+          {
+            "rows_estimation": [
+              {
+                "table": "`t1` USE INDEX (`ind_2`)",
+                "range_analysis": {
+                  "table_scan": {
+                    "rows": 1,
+                    "cost": 2.45
+                  },
+                  "potential_range_indexes": [
+                    {
+                      "index": "PRIMARY",
+                      "usable": false,
+                      "cause": "not_applicable"
+                    },
+                    {
+                      "index": "ind_1",
+                      "usable": false,
+                      "cause": "not_applicable"
+                    },
+                    {
+                      "index": "ind_2",
+                      "usable": true,
+                      "key_parts": [
+                        "col2"
+                      ]
+                    }
+                  ],
+                  "setup_range_conditions": [
+                  ],
+                  "group_index_range": {
+                    "chosen": false,
+                    "cause": "not_group_by_or_distinct"
+                  },
+                  "skip_scan_range": {
+                    "potential_skip_scan_indexes": [
+                      {
+                        "index": "ind_2",
+                        "usable": false,
+                        "cause": "query_references_nonkey_column"
+                      }
+                    ]
+                  },
+                  "analyzing_range_alternatives": {
+                    "range_scan_alternatives": [
+                      {
+                        "index": "ind_2",
+                        "ranges": [
+                          "col2 = 'xpchild'"
+                        ],
+                        "index_dives_for_eq_ranges": true,
+                        "rowid_ordered": true,
+                        "using_mrr": false,
+                        "index_only": false,
+                        "in_memory": -1,
+                        "rows": 1,
+                        "cost": 0.61,
+                        "chosen": true
+                      }
+                    ],
+                    "analyzing_roworder_intersect": {
+                      "usable": false,
+                      "cause": "too_few_roworder_scans"
+                    }
+                  },
+                  "chosen_range_access_summary": {
+                    "range_access_plan": {
+                      "type": "range_scan",
+                      "index": "ind_2",
+                      "rows": 1,
+                      "ranges": [
+                        "col2 = 'xpchild'"
+                      ]
+                    },
+                    "rows_for_plan": 1,
+                    "cost_for_plan": 0.61,
+                    "chosen": true
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "considered_execution_plans": [
+              {
+                "plan_prefix": [
+                ],
+                "table": "`t1` USE INDEX (`ind_2`)",
+                "best_access_path": {
+                  "considered_access_paths": [
+                    {
+                      "access_type": "ref",
+                      "index": "ind_2",
+                      "rows": 1,
+                      "cost": 0.35,
+                      "chosen": true
+                    },
+                    {
+                      "access_type": "range",
+                      "range_details": {
+                        "used_index": "ind_2"
+                      },
+                      "chosen": false,
+                      "cause": "heuristic_index_cheaper"
+                    }
+                  ]
+                },
+                "condition_filtering_pct": 100,
+                "rows_for_plan": 1,
+                "cost_for_plan": 0.35,
+                "chosen": true
+              }
+            ]
+          },
+          {
+            "attaching_conditions_to_tables": {
+              "original_condition": "((`t1`.`col2` = 'xpchild') and (`t1`.`col1` = 3))",
+              "attached_conditions_computation": [
+              ],
+              "attached_conditions_summary": [
+                {
+                  "table": "`t1` USE INDEX (`ind_2`)",
+                  "attached": "((`t1`.`col2` = 'xpchild') and (`t1`.`col1` = 3))"
+                }
+              ]
+            }
+          },
+          {
+            "optimizing_distinct_group_by_order_by": {
+              "simplifying_order_by": {
+                "original_clause": "`t1`.`col1`",
+                "items": [
+                  {
+                    "item": "`t1`.`col1`",
+                    "equals_constant_in_where": true
+                  }
+                ],
+                "resulting_clause_is_simple": true,
+                "resulting_clause": ""
+              }
+            }
+          },
+          {
+            "finalizing_table_conditions": [
+              {
+                "table": "`t1` USE INDEX (`ind_2`)",
+                "original_table_condition": "((`t1`.`col2` = 'xpchild') and (`t1`.`col1` = 3))",
+                "final_table_condition   ": "(`t1`.`col1` = 3)"
+              }
+            ]
+          },
+          {
+            "refine_plan": [
+              {
+                "table": "`t1` USE INDEX (`ind_2`)"
+              }
+            ]
+          },
+          {
+            "cache_plan": {
+              "cached": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "not_apply_pq_plan": {
+        "select#": 1,
+        "chosen": false,
+        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+      }
+    },
+    {
+      "join_execution": {
+        "select#": 1,
+        "steps": [
+        ]
+      }
+    }
+  ]
+}	0	0
+set optimizer_trace='enabled=off';
+delete from mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_2',
+'', "select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1");
+use outline_db;
+explain select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_2	ind_2	403	const	1	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t1`.`col1` AS `col1`,`outline_db`.`t1`.`col2` AS `col2` from `outline_db`.`t1` USE INDEX (`ind_2`) where ((`outline_db`.`t1`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 2)) order by `outline_db`.`t1`.`col1`
+call dbms_outln.preview_outline('outline_db', "select * from t1 where col1 = 2 and col2 ='xpchild' order by col1");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	768ee14da49ea48e9a666810ec97173a71ce5f5bc4d29f14ea43665d6518e890	TABLE	t1	1	USE INDEX (`ind_2`)
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+'FOR ORDER BY', "select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1");
+use outline_db;
+explain select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_2	ind_2	403	const	1	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t1`.`col1` AS `col1`,`outline_db`.`t1`.`col2` AS `col2` from `outline_db`.`t1` USE INDEX (`ind_2`) USE INDEX FOR ORDER BY (`ind_1`) where ((`outline_db`.`t1`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 2)) order by `outline_db`.`t1`.`col1`
+call dbms_outln.preview_outline('outline_db', "select * from t1 where col1 = 2 and col2 ='xpchild' order by col1");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	768ee14da49ea48e9a666810ec97173a71ce5f5bc4d29f14ea43665d6518e890	TABLE	t1	1	USE INDEX (`ind_2`)
+outline_db	768ee14da49ea48e9a666810ec97173a71ce5f5bc4d29f14ea43665d6518e890	TABLE	t1	1	USE INDEX FOR ORDER BY (`ind_1`)
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1 ,ind_2',
+'FOR ORDER BY', "select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1");
+use outline_db;
+explain select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_2	ind_2	403	const	1	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t1`.`col1` AS `col1`,`outline_db`.`t1`.`col2` AS `col2` from `outline_db`.`t1` USE INDEX (`ind_2`) USE INDEX FOR ORDER BY (`ind_1`) USE INDEX FOR ORDER BY (`ind_1`) USE INDEX FOR ORDER BY (`ind_2`) where ((`outline_db`.`t1`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 2)) order by `outline_db`.`t1`.`col1`
+call dbms_outln.preview_outline('outline_db', "select * from t1 where col1 = 2 and col2 ='xpchild' order by col1");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	768ee14da49ea48e9a666810ec97173a71ce5f5bc4d29f14ea43665d6518e890	TABLE	t1	1	USE INDEX (`ind_2`)
+outline_db	768ee14da49ea48e9a666810ec97173a71ce5f5bc4d29f14ea43665d6518e890	TABLE	t1	1	USE INDEX FOR ORDER BY (`ind_1`)
+outline_db	768ee14da49ea48e9a666810ec97173a71ce5f5bc4d29f14ea43665d6518e890	TABLE	t1	1	USE INDEX FOR ORDER BY (`ind_1`)
+outline_db	768ee14da49ea48e9a666810ec97173a71ce5f5bc4d29f14ea43665d6518e890	TABLE	t1	1	USE INDEX FOR ORDER BY (`ind_2`)
+delete from mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+'', "select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild'");
+call dbms_outln.add_index_outline('outline_db', '', 2, 'USE INDEX', 'ind_1',
+'', "select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild'");
+use outline_db;
+explain select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_1	ind_1	5	const	1	100.00	Using where
+1	SIMPLE	t2	NULL	ref	ind_1	ind_1	5	const	1	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t2`.`id` AS `id` from `outline_db`.`t1` USE INDEX (`ind_1`) join `outline_db`.`t2` USE INDEX (`ind_1`) where ((`outline_db`.`t1`.`col2` = 'xpchild') and (`outline_db`.`t2`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 1) and (`outline_db`.`t2`.`col1` = 1))
+call dbms_outln.preview_outline('outline_db', "select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild'");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	3675fe7f4b7d0e75e063634a291b21926f74bc6a1e53b96ba87c33280d21356e	TABLE	t1	1	USE INDEX (`ind_1`)
+outline_db	3675fe7f4b7d0e75e063634a291b21926f74bc6a1e53b96ba87c33280d21356e	TABLE	t2	2	USE INDEX (`ind_1`)
+delete from mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_2',
+'', "select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild'");
+call dbms_outln.add_index_outline('outline_db', '', 2, 'USE INDEX', 'ind_2',
+'', "select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild'");
+use outline_db;
+explain select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_2	ind_2	403	const	1	100.00	Using where
+1	SIMPLE	t2	NULL	ref	ind_2	ind_2	403	const	1	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t2`.`id` AS `id` from `outline_db`.`t1` USE INDEX (`ind_2`) join `outline_db`.`t2` USE INDEX (`ind_2`) where ((`outline_db`.`t1`.`col2` = 'xpchild') and (`outline_db`.`t2`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 1) and (`outline_db`.`t2`.`col1` = 1))
+call dbms_outln.preview_outline('outline_db', "select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild'");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	3675fe7f4b7d0e75e063634a291b21926f74bc6a1e53b96ba87c33280d21356e	TABLE	t1	1	USE INDEX (`ind_2`)
+outline_db	3675fe7f4b7d0e75e063634a291b21926f74bc6a1e53b96ba87c33280d21356e	TABLE	t2	2	USE INDEX (`ind_2`)
+delete from mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+'', "select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild'");
+call dbms_outln.add_index_outline('outline_db', '', 2, 'USE INDEX', 'ind_1',
+'', "select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild'");
+use outline_db;
+explain select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_1	ind_1	5	const	1	100.00	Using where
+1	SIMPLE	t2	NULL	ref	ind_1	ind_1	5	const	1	100.00	Using where; FirstMatch(t1)
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`id` AS `id` from `outline_db`.`t1` USE INDEX (`ind_1`) semi join (`outline_db`.`t2` USE INDEX (`ind_1`)) where ((`outline_db`.`t2`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 1) and (`outline_db`.`t2`.`col1` = 1) and (`outline_db`.`t1`.`col2` = 'xpchild'))
+call dbms_outln.preview_outline("outline_db", "select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 ='xpchild') and col2 = 'xpchild'");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	818a5e790a0b68f23fd5f2822ca90f640e613ada22db2fa565e004110a34702d	TABLE	t1	1	USE INDEX (`ind_1`)
+outline_db	818a5e790a0b68f23fd5f2822ca90f640e613ada22db2fa565e004110a34702d	TABLE	t2	2	USE INDEX (`ind_1`)
+delete from mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_2',
+'', "select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild'");
+call dbms_outln.add_index_outline('outline_db', '', 2, 'USE INDEX', 'ind_2',
+'', "select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild'");
+use outline_db;
+explain select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_2	ind_2	403	const	1	100.00	Using where
+1	SIMPLE	t2	NULL	ref	ind_2	ind_2	403	const	1	100.00	Using where; FirstMatch(t1)
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`id` AS `id` from `outline_db`.`t1` USE INDEX (`ind_2`) semi join (`outline_db`.`t2` USE INDEX (`ind_2`)) where ((`outline_db`.`t2`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 1) and (`outline_db`.`t2`.`col1` = 1) and (`outline_db`.`t1`.`col2` = 'xpchild'))
+call dbms_outln.preview_outline("outline_db", "select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 ='xpchild') and col2 = 'xpchild'");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	818a5e790a0b68f23fd5f2822ca90f640e613ada22db2fa565e004110a34702d	TABLE	t1	1	USE INDEX (`ind_2`)
+outline_db	818a5e790a0b68f23fd5f2822ca90f640e613ada22db2fa565e004110a34702d	TABLE	t2	2	USE INDEX (`ind_2`)
+delete from mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_3',
+'', "select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild'");
+select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild';
+id
+Warnings:
+Warning	8041	Outline apply failed, cause: This is unresolved field for INDEX hint. Skip statement outline.
+Warning	1176	Key 'ind_3' doesn't exist in table 't1'
+delete from mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.add_index_outline('outline_db', '', 3, 'USE INDEX', 'ind_1',
+'', "select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild'");
+select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild';
+id
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+#	outline_db	818a5e790a0b68f23fd5f2822ca90f640e613ada22db2fa565e004110a34702d	USE INDEX		3	ind_1	0	1	SELECT `id` FROM `t1` WHERE `col1` IN ( SELECT `col1` FROM `t2` WHERE `col1` = ? AND `col2` = ? ) AND `col2` = ?
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+drop database outline_db;
+set global rds_opt_outline_enabled = @start_opt_outline_enabled;

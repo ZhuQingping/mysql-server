@@ -1,0 +1,50 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+
+CREATE TABLE t1 (
+c1 INT AUTO_INCREMENT PRIMARY KEY,
+c2 INT,
+c3 INT,
+c4 INT,
+INDEX k2(c2)
+) Engine=InnoDB;
+INSERT INTO t1(c2,c3,c4) VALUES (1, 1, 1);
+INSERT INTO t1(c2,c3,c4) VALUES (2, 2, 2);
+INSERT INTO t1(c2,c3,c4) VALUES (3, 3, 3);
+INSERT INTO t1(c2,c3,c4) VALUES (4, 4, 4);
+INSERT INTO t1(c2,c3,c4) VALUES (5, 5, 5);
+INSERT INTO t1(c2,c3,c4) VALUES (6, 6, 6);
+INSERT INTO t1(c2,c3,c4) VALUES (7, 7, 7);
+INSERT INTO t1(c2,c3,c4) VALUES (8, 8, 8);
+INSERT INTO t1(c2,c3,c4) VALUES (9, 9, 9);
+INSERT INTO t1(c2,c3,c4) VALUES (10, 10, 10);
+
+BEGIN;
+UPDATE t1 SET c2 = c2 * 3 WHERE c1 = 1;
+DELETE FROM t1 WHERE c1 = 6;
+SELECT COUNT(c2) FROM t1;
+
+connect (con1,localhost,root,,);
+BEGIN;
+SELECT COUNT(c2) FROM t1;
+COMMIT;
+
+connection default;
+COMMIT;
+DROP TABLE t1;
+
+## BUG2021031001328: skip ICP during check visibility
+
+CREATE TABLE `t2` (
+  `c0` varchar(500) DEFAULT NULL,
+  `c1` float NOT NULL,
+  `c2` float ,
+  UNIQUE KEY `i0` (`c1`,`c0` DESC)
+);
+insert into t2 values row(1,-1,null);
+
+select ((1 OR t2.c2) AND (((-1) IN (t2.c0)) IS NOT FALSE) AND (t2.c1)) as ref0 from t2;
+EXPLAIN select t2.c0 from t2 where ((1 OR t2.c2) AND (((-1) IN (t2.c0)) IS NOT FALSE) AND (t2.c1));
+select t2.c0 from t2 where ((1 OR t2.c2) AND (((-1) IN (t2.c0)) IS NOT FALSE) AND (t2.c1));
+
+DROP table t2;

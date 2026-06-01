@@ -1,0 +1,166 @@
+# ==== Purpose ====
+# Verify that switchover works with wal based replication.
+# Step1: Start the source and replica based on the GUC configuration;
+# Step2: Establish a source-replica relationship based on wallog;
+# Step3: Perform a source-replica switchover: run demote on node1 and promote on node2.;
+# Step4: Establish a inverted source-replica relationship based on wallog;
+#
+# ==== References ====
+#
+# US2025080500930 Support source-replica switchover
+#
+
+--disable_query_log
+CALL mtr.add_suppression(".*CdePdbDemote fail.*");
+CALL mtr.add_suppression(".*CdePdbPromote fail.*");
+--enable_query_log
+
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_setup.inc
+--enable_warnings
+
+--echo ############################################################
+--echo Test switchover correctness.
+--echo ############################################################
+
+--echo #
+--echo # Perform some modifications on the table.
+--echo #
+--connection $node1
+insert into copy_database.copy_table values (1, 'aaa');
+insert into copy_database.copy_table values (2, 'bbb');
+insert into copy_database.copy_table values (3, 'ccc');
+insert into copy_database.copy_table values (4, 'ddd');
+insert into copy_database.copy_table values (5, 'eee');
+insert into copy_database.copy_table values (6, 'fff');
+insert into copy_database.copy_table values (7, 'ggg');
+insert into copy_database.copy_table values (8, 'hhh');
+--sleep 2
+
+--echo #
+--echo # Demote the source to replica.
+--echo #
+--connection $node1
+SET GLOBAL read_only = ON;
+call rpl_wal.pdb_demote();
+--echo #
+--echo # dstore_enable_standby_role should show as true, indicating that the current node is the replica.
+--echo #
+SHOW VARIABLES LIKE 'server_id';
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+
+--echo #
+--echo # Promote the replica to source.
+--echo #
+--connection $node2
+STOP REPLICA;
+RESET REPLICA ALL FOR CHANNEL 'dstore_wal_replication_channel';
+call rpl_wal.pdb_promote();
+--echo #
+--echo # dstore_enable_standby_role should show as false, indicating that the current node is the source.
+--echo #
+SHOW VARIABLES LIKE 'server_id';
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+
+--echo #
+--echo # The expected error is "Alter pdb status to 'primary' fail."
+--echo #
+--error ER_INTERNAL_ERROR
+call rpl_wal.pdb_promote();
+
+--echo #
+--echo # Test that functionality is normal after demotion to replica and subsequent promotion back to source.
+--echo #
+--connection $node1
+--echo #
+--echo # The expected error is "Alter pdb status to 'standby' fail."
+--echo #
+--error ER_INTERNAL_ERROR
+call rpl_wal.pdb_demote();
+
+--echo #
+--echo # Clean the primary and standby servers.
+--echo #
+
+--connection $node1
+--source include/stop_wal_dump_threads.inc
+
+--echo #
+--echo # Re-establish primary-standby relationship.
+--echo #
+--connection $node1
+--disable_warnings
+--replace_result $SERVER_MYPORT_2 SERVER_MYPORT_2
+--eval CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=$SERVER_MYPORT_2, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL $rpl_channel_name;
+--enable_warnings
+--let $assert_text=Channel name should be $rpl_channel_name
+--let $assert_sql=SELECT CHANNEL_NAME FROM performance_schema.replication_connection_configuration WHERE CHANNEL_NAME = $rpl_channel_name
+--let $assert_cond=COUNT(*) = 1
+--source include/assert.inc
+
+START REPLICA;
+--sleep 1
+--echo #
+--echo # Slave_IO_Running should be ON.
+--echo #
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+
+--echo #
+--echo # Disable read-only mode on the new source.
+--echo #
+--connection $node2
+SET GLOBAL read_only = OFF;
+
+--echo #
+--echo # After the old replica is switched to the new source, the new source can query the data replayed before the switch.
+--echo #
+--connection $node2
+SELECT count(*) FROM copy_database.copy_table;
+insert into copy_database.copy_table values (9, 'iii');
+insert into copy_database.copy_table values (10, 'jjj');
+insert into copy_database.copy_table values (11, 'kkk');
+--sleep 1
+
+--echo #
+--echo # Perform switchover again.
+--echo #
+--connection $node2
+SET GLOBAL read_only = ON;
+call rpl_wal.pdb_demote();
+
+--echo #
+--echo # Promote the replica to source.
+--echo #
+--connection $node1
+STOP REPLICA;
+RESET REPLICA ALL FOR CHANNEL 'dstore_wal_replication_channel';
+call rpl_wal.pdb_promote();
+
+--connection $node2
+--disable_warnings
+--replace_result $SERVER_MYPORT_1 SERVER_MYPORT_1
+--eval CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=$SERVER_MYPORT_1, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL $rpl_channel_name;
+--enable_warnings
+--let $assert_text=Channel name should be $rpl_channel_name
+--let $assert_sql=SELECT CHANNEL_NAME FROM performance_schema.replication_connection_configuration WHERE CHANNEL_NAME = $rpl_channel_name
+--let $assert_cond=COUNT(*) = 1
+--source include/assert.inc
+
+START REPLICA;
+--echo #
+--echo # Slave_IO_Running should be ON.
+--echo #
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+--source include/stop_wal_dump_threads.inc
+
+--echo #
+--echo # Disable read-only mode on the new source.
+--echo #
+--connection $node1
+SET GLOBAL read_only = OFF;
+
+SELECT count(*) FROM copy_database.copy_table;
+
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_cleanup.inc
+--enable_warnings

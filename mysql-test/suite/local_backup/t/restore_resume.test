@@ -1,0 +1,225 @@
+#
+# Test for restore resume
+#
+--source include/have_debug.inc
+
+--source suite/local_backup/include/prepare_for_backup.inc
+
+# 1. prepare some data
+create database restore_resume;
+use restore_resume;
+create table t1(s varchar(100)) engine=dstore;
+
+# insert 1000 records
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 1000
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+# 2. Create a full backup
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+
+# 3. Start log archive
+--source suite/local_backup/include/start_log_archive.inc
+
+# 4. Add more data for log archive
+--source suite/local_backup/include/load_data.inc
+CALL load_data('t1','s',300000);
+
+select count(*) from t1;
+--sleep 3
+
+# 5. Restore. Not using restore resume
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+--let $list_type = wal_archive
+--source suite/local_backup/include/restore_with_script.inc
+
+--let $restart_parameters= restart: --dstore_open_restore_mode=on --dstore_recovery_flush_buf_wal_size_interval=0 --dstore_gap_flush_wal_length=0 --log_error=$MYSQLTEST_VARDIR/log/restore.log
+--source include/start_mysqld_no_echo.inc
+
+# After flush buffer in the end of recovery, flush lsn is reported.
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/log/restore.log
+--let SEARCH_PATTERN=Local backup restore current flushed plsn \d+
+--source include/search_pattern.inc
+
+select count(*) from t1;
+insert into t1 values('a');
+select count(*) from t1;
+
+# 6. Restore. Will flush buffers for serveral times during recovery
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+--let $list_type = wal_archive
+--source suite/local_backup/include/restore_with_script.inc
+
+--exec rm $MYSQLTEST_VARDIR/log/restore.log
+--let $restart_parameters= restart: --dstore_open_restore_mode=on --log_error=$MYSQLTEST_VARDIR/log/restore.log
+--source include/start_mysqld_no_echo.inc
+
+select count(*) from t1;
+insert into t1 values('a');
+select count(*) from t1;
+
+# 7. Restore again. Abort mysqld while restoring and then resume restore.
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+--let $list_type = wal_archive
+--source suite/local_backup/include/restore_with_script.inc
+
+--exec rm $MYSQLTEST_VARDIR/log/restore.log
+--let $mysqld_exec_cmd = $MYSQLD --defaults-file=$MYSQLTEST_VARDIR/my.cnf --defaults-group-suffix=.1 --dstore_restore_meta_path=$MYSQLTEST_VARDIR/local_backup_restore_meta --dstore_open_restore_mode=ON --dstore_recovery_flush_buf_wal_size_interval=1048576 --dstore_gap_flush_wal_length=1048576 --debug="+d,local_backup_restore_suicide" --log_error=$MYSQLTEST_VARDIR/log/restore.log
+--disable_abort_on_error
+--exec $mysqld_exec_cmd --user=`whoami`
+# Abort again
+--exec $mysqld_exec_cmd --user=`whoami`
+--enable_abort_on_error
+
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/log/restore.log
+--let SEARCH_PATTERN=Local backup restore current flushed plsn \d+
+--source include/search_pattern.inc
+
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let SEARCH_PATTERN=Local backup restore current flushed plsn \d+
+--source include/search_pattern.inc
+
+# 8. It's OK to do a normal crash recovery. No effect from resumable restore
+--source include/kill_mysqld.inc
+
+--exec rm $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let $restart_parameters= restart
+--source include/start_mysqld.inc
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let SEARCH_PATTERN=Local backup restore current flushed plsn \d+
+--source include/search_pattern.inc
+
+# 9. It's OK to do restore again. Nothing to recovery.
+--source include/kill_mysqld.inc
+
+--exec rm $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let SEARCH_PATTERN=Local backup restore current flushed plsn \d+
+--source include/search_pattern.inc
+--let SEARCH_PATTERN=Restore use start_recovery_lsn (?<plsn>[1-9]\d+) end_recovery_lsn \k<plsn>
+--source include/search_pattern.inc
+
+select count(*) from t1;
+insert into t1 values('a');
+select count(*) from t1;
+
+# 10. Suicide during dstore_exit_after_restore mode and then resume restore
+--exec ls $MYSQLTEST_VARDIR/full_local_backup/20* -d | tail -n 1 > $MYSQLTEST_VARDIR/bakup_dir.txt
+--exec rm -f $MYSQLTEST_VARDIR/local_backup_meta/RestoreMeta_*
+--exec $MYSQL_BASEDIR/bin/backup_monitor $MYSQLTEST_VARDIR/local_backup_meta -w | grep '\"timePoint\"' | tail -n 1 | awk "{print \$2}" | sed "s/.\$//" > $MYSQLTEST_VARDIR/time_point.txt
+--exec $MYSQL_BASEDIR/bin/backup_monitor $MYSQLTEST_VARDIR/local_backup_meta -t `cat $MYSQLTEST_VARDIR/time_point.txt` > $MYSQLTEST_VARDIR/temp.txt
+--exec mv $MYSQLTEST_VARDIR/local_backup_meta/RestoreMeta_* `cat $MYSQLTEST_VARDIR/bakup_dir.txt`/RestoreMeta_RestoreMeta -f
+--exec cp $MYSQLTEST_VARDIR/wal_archive/* `cat $MYSQLTEST_VARDIR/bakup_dir.txt`/#mysql_dstore/gs_pdb/PDB_17/wal/ -f
+--exec cp $MYSQLD_DATADIR/auto.cnf `cat $MYSQLTEST_VARDIR/bakup_dir.txt`/
+--exec mkdir $MYSQLTEST_VARDIR/dstore_restore_log
+--let $mysqld_exec_cmd = $MYSQLD --defaults-file=$MYSQLTEST_VARDIR/my.cnf --defaults-group-suffix=.1 --datadir=`cat $MYSQLTEST_VARDIR/bakup_dir.txt` --dstore_restore_meta_path=`cat $MYSQLTEST_VARDIR/bakup_dir.txt` --dstore_open_restore_mode=ON --dstore_exit_after_restore=on --dstore_log_path=$MYSQLTEST_VARDIR/dstore_restore_log --log-error=$MYSQLTEST_VARDIR/mysql_dstore_restore.log --dstore_buffer=16384 --debug="+d,local_backup_restore_suicide" --dstore_recovery_flush_buf_wal_size_interval=1048576 --dstore_gap_flush_wal_length=1048576
+
+--disable_abort_on_error
+--exec $mysqld_exec_cmd --user=`whoami`
+--enable_abort_on_error
+
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/mysql_dstore_restore.log
+--let SEARCH_PATTERN=Local backup restore current flushed plsn \d+
+--source include/search_pattern.inc
+--let SEARCH_PATTERN=dstore_exit_after_restore is set. Exit after restore finish
+--source include/search_pattern.inc
+
+# Suicide again
+--exec rm $MYSQLTEST_VARDIR/mysql_dstore_restore.log
+--disable_abort_on_error
+--exec $mysqld_exec_cmd --user=`whoami`
+--enable_abort_on_error
+
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/mysql_dstore_restore.log
+--let SEARCH_PATTERN=Local backup restore current flushed plsn \d+
+--source include/search_pattern.inc
+--let SEARCH_PATTERN=dstore_exit_after_restore is set. Exit after restore finish
+--source include/search_pattern.inc
+
+--exec rm `cat $MYSQLTEST_VARDIR/bakup_dir.txt`/auto.cnf
+
+--source include/kill_mysqld.inc
+
+# Use the backup dir as data dir
+--exec mkdir $MYSQLTEST_VARDIR/data_orig
+--exec mv $MYSQLD_DATADIR/* $MYSQLTEST_VARDIR/data_orig/
+--exec mv `cat $MYSQLTEST_VARDIR/bakup_dir.txt`/* $MYSQLD_DATADIR/
+--exec touch $MYSQLD_DATADIR/ib_buffer_pool
+--exec mkdir $MYSQLD_DATADIR/#mysql_dstore/gs_pdb/test_tenant.vfs.root_pdb
+--exec mkdir $MYSQLD_DATADIR/#mysql_dstore/gs_pdb/test_tenant.vfs.runtime_log
+--exec mkdir $MYSQLD_DATADIR/#mysql_dstore/gs_pdb/test_tenant.vfs.template0
+--exec mkdir $MYSQLD_DATADIR/#mysql_dstore/gs_pdb/test_tenant.vfs.voting_disk
+--exec mv $MYSQLD_DATADIR/RestoreMeta_RestoreMeta $MYSQLTEST_VARDIR/local_backup_restore_meta/
+
+# Resume restore
+--exec rm $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let SEARCH_PATTERN=Local backup restore current flushed plsn \d+
+--source include/search_pattern.inc
+--let SEARCH_PATTERN=Restore use start_recovery_lsn (?<plsn>[1-9]\d+) end_recovery_lsn \k<plsn>
+--source include/search_pattern.inc
+--let SEARCH_PATTERN=Restore use start_recovery_lsn \d+ end_recovery_lsn \d+
+--source include/search_pattern.inc
+
+select count(*) from t1;
+insert into t1 values('a');
+select count(*) from t1;
+
+# 11. Error coverage
+--source include/kill_mysqld.inc
+--exec rm $MYSQLTEST_VARDIR/mysql_dstore_restore.log
+--let $mysqld_exec_cmd = $MYSQLD --defaults-file=$MYSQLTEST_VARDIR/my.cnf --defaults-group-suffix=.1 --datadir=$MYSQLD_DATADIR --dstore_restore_meta_path=$MYSQLTEST_VARDIR/local_backup_restore_meta --dstore_open_restore_mode=ON --dstore_exit_after_restore=on --dstore_log_path=$MYSQLTEST_VARDIR/dstore_restore_log --log-error=$MYSQLTEST_VARDIR/mysql_dstore_restore.log --dstore_buffer=16384 --dstore_recovery_flush_buf_wal_size_interval=1048576 --dstore_gap_flush_wal_length=1048576
+
+--exec $mysqld_exec_cmd --user=`whoami` --debug="+d,restore_update_meta_new_fail"
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/mysql_dstore_restore.log
+--let SEARCH_PATTERN=create restore meta file object fail when update restore start point
+--source include/search_pattern.inc
+
+--exec $mysqld_exec_cmd --user=`whoami` --debug="+d,restore_update_meta_open_fail"
+--let SEARCH_PATTERN=open file .* fail when update restore start point
+--source include/search_pattern.inc
+
+--exec $mysqld_exec_cmd --user=`whoami` --debug="+d,restore_update_meta_read_fail"
+--let SEARCH_PATTERN=read point from .* fail when update restore start point
+--source include/search_pattern.inc
+
+--exec $mysqld_exec_cmd --user=`whoami` --debug="+d,restore_update_meta_write_fail"
+--let SEARCH_PATTERN=write restore start point to restore meta file .* fail
+--source include/search_pattern.inc
+--let SEARCH_PATTERN=failed to write recovery point to restore meta file
+--source include/search_pattern.inc
+--let SEARCH_PATTERN=dstore_exit_after_restore is set. Exit after restore finish
+--source include/search_pattern.inc
+
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+select count(*) from t1;
+insert into t1 values('a');
+select count(*) from t1;
+
+drop database restore_resume;
+
+--source suite/local_backup/include/clean_backup.inc
+--exec rm -rf $MYSQLTEST_VARDIR/bakup_dir.txt $MYSQLTEST_VARDIR/data_orig $MYSQLTEST_VARDIR/dstore_restore_log $MYSQLTEST_VARDIR/mysql_dstore_restore.log $MYSQLTEST_VARDIR/temp.txt $MYSQLTEST_VARDIR/time_point.txt

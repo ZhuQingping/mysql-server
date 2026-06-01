@@ -1,0 +1,25 @@
+# Connect to master
+create database db_recycle;
+set global rds_recycle_bin_mode=ON;
+set rds_recycle_bin_mode=ON;
+use db_recycle;
+create table t1(id int);
+drop table t1;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t1	#	#
+call dbms_recyclebin.restore_table('t1');
+drop table t1;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t1	#	#
+call dbms_recyclebin.restore_table('t1');
+CREATE TABLE p1 (id INT NOT NULL, PRIMARY KEY (id)) ENGINE=INNODB;
+CREATE TABLE c1 (id INT, parent_id INT, INDEX par_ind (parent_id),
+FOREIGN KEY (parent_id) REFERENCES p1(id)) ENGINE=INNODB;
+DROP TABLE p1,c1;
+set rds_recycle_bin_mode=OFF;
+set global rds_recycle_bin_mode=OFF;
+drop database db_recycle;
+drop database __recyclebin__;
+CREATE DATABASE IF NOT EXISTS __recyclebin__ DEFAULT CHARACTER SET utf8mb4;

@@ -1,0 +1,424 @@
+#
+#  DDL CRASH SAFE TEST: ALL DDL TEST PART 01
+#  This test will check whether the server can recovery from different
+#  phases of ALL DDLs without inconsistency between dstore and
+#  innodb. Each DDL will be tested at 3 crash points and recovery
+#  results will be verified.
+#
+CREATE DATABASE test_ddl_crash_comprehensive;
+USE test_ddl_crash_comprehensive;
+#  1. Crash on CREATE TABLE statement.
+#  1.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+CREATE TABLE t_ddl_crash_create_table_01(pk INT PRIMARY KEY, col1 INT);
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify table should not exist after crash before prepare
+SHOW CREATE TABLE t_ddl_crash_create_table_01;
+ERROR 42S02: Table 'test_ddl_crash_comprehensive.t_ddl_crash_create_table_01' doesn't exist
+#  1.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+CREATE TABLE t_ddl_crash_create_table_01(pk INT PRIMARY KEY, col1 INT);
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify table should not exist after crash after prepare but before commit
+SHOW CREATE TABLE t_ddl_crash_create_table_01;
+ERROR 42S02: Table 'test_ddl_crash_comprehensive.t_ddl_crash_create_table_01' doesn't exist
+#  1.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+CREATE TABLE t_ddl_crash_create_table_01(pk INT PRIMARY KEY, col1 INT);
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify table should exist after crash after dstore commit
+SHOW CREATE TABLE t_ddl_crash_create_table_01;
+Table	Create Table
+t_ddl_crash_create_table_01	CREATE TABLE `t_ddl_crash_create_table_01` (
+  `pk` int NOT NULL,
+  `col1` int DEFAULT NULL,
+  PRIMARY KEY (`pk`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+INSERT INTO t_ddl_crash_create_table_01 VALUES(1,2),(2,3),(3,4);
+SELECT * FROM t_ddl_crash_create_table_01;
+pk	col1
+1	2
+2	3
+3	4
+#  2. Crash on CREATE TABLE AS SELECT statement.
+#  2.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+CREATE TABLE t_ddl_crash_ctas AS SELECT * FROM t_ddl_crash_create_table_01;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify CTAS table should not exist
+SHOW CREATE TABLE t_ddl_crash_ctas;
+ERROR 42S02: Table 'test_ddl_crash_comprehensive.t_ddl_crash_ctas' doesn't exist
+#  2.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+CREATE TABLE t_ddl_crash_ctas AS SELECT * FROM t_ddl_crash_create_table_01;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify CTAS table should not exist
+SHOW CREATE TABLE t_ddl_crash_ctas;
+ERROR 42S02: Table 'test_ddl_crash_comprehensive.t_ddl_crash_ctas' doesn't exist
+#  2.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+CREATE TABLE t_ddl_crash_ctas AS SELECT * FROM t_ddl_crash_create_table_01;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify CTAS table should exist with data
+SHOW CREATE TABLE t_ddl_crash_ctas;
+Table	Create Table
+t_ddl_crash_ctas	CREATE TABLE `t_ddl_crash_ctas` (
+  `pk` int NOT NULL,
+  `col1` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SELECT * FROM t_ddl_crash_ctas;
+pk	col1
+1	2
+2	3
+3	4
+#  3. Crash on ALTER TABLE ADD INDEX statement.
+#  3.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+ALTER TABLE t_ddl_crash_create_table_01 ADD INDEX ci(col1);
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify index should not exist
+SHOW CREATE TABLE t_ddl_crash_create_table_01;
+Table	Create Table
+t_ddl_crash_create_table_01	CREATE TABLE `t_ddl_crash_create_table_01` (
+  `pk` int NOT NULL,
+  `col1` int DEFAULT NULL,
+  PRIMARY KEY (`pk`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SELECT COUNT(*) AS index_count FROM INFORMATION_SCHEMA.STATISTICS
+WHERE TABLE_NAME='t_ddl_crash_create_table_01' AND INDEX_NAME='ci';
+index_count
+0
+#  3.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+ALTER TABLE t_ddl_crash_create_table_01 ADD INDEX ci(col1);
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify index should not exist
+SHOW CREATE TABLE t_ddl_crash_create_table_01;
+Table	Create Table
+t_ddl_crash_create_table_01	CREATE TABLE `t_ddl_crash_create_table_01` (
+  `pk` int NOT NULL,
+  `col1` int DEFAULT NULL,
+  PRIMARY KEY (`pk`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SELECT COUNT(*) AS index_count FROM INFORMATION_SCHEMA.STATISTICS
+WHERE TABLE_NAME='t_ddl_crash_create_table_01' AND INDEX_NAME='ci';
+index_count
+0
+#  3.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+ALTER TABLE t_ddl_crash_create_table_01 ADD INDEX ci(col1);
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify index should exist
+SHOW CREATE TABLE t_ddl_crash_create_table_01;
+Table	Create Table
+t_ddl_crash_create_table_01	CREATE TABLE `t_ddl_crash_create_table_01` (
+  `pk` int NOT NULL,
+  `col1` int DEFAULT NULL,
+  PRIMARY KEY (`pk`),
+  KEY `ci` (`col1`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SELECT COUNT(*) AS index_count FROM INFORMATION_SCHEMA.STATISTICS
+WHERE TABLE_NAME='t_ddl_crash_create_table_01' AND INDEX_NAME='ci';
+index_count
+1
+#  4. Crash on ALTER TABLE ADD COLUMN statement.
+#  4.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+ALTER TABLE t_ddl_crash_create_table_01 ADD COLUMN col2 INT AFTER pk;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify column should not exist
+SHOW CREATE TABLE t_ddl_crash_create_table_01;
+Table	Create Table
+t_ddl_crash_create_table_01	CREATE TABLE `t_ddl_crash_create_table_01` (
+  `pk` int NOT NULL,
+  `col1` int DEFAULT NULL,
+  PRIMARY KEY (`pk`),
+  KEY `ci` (`col1`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SELECT COUNT(*) AS column_count FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_NAME='t_ddl_crash_create_table_01' AND COLUMN_NAME='col2';
+column_count
+0
+#  4.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+ALTER TABLE t_ddl_crash_create_table_01 ADD COLUMN col2 INT AFTER pk;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify column should not exist
+SHOW CREATE TABLE t_ddl_crash_create_table_01;
+Table	Create Table
+t_ddl_crash_create_table_01	CREATE TABLE `t_ddl_crash_create_table_01` (
+  `pk` int NOT NULL,
+  `col1` int DEFAULT NULL,
+  PRIMARY KEY (`pk`),
+  KEY `ci` (`col1`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SELECT COUNT(*) AS column_count FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_NAME='t_ddl_crash_create_table_01' AND COLUMN_NAME='col2';
+column_count
+0
+#  4.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+ALTER TABLE t_ddl_crash_create_table_01 ADD COLUMN col2 INT AFTER pk;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify column should exist
+SHOW CREATE TABLE t_ddl_crash_create_table_01;
+Table	Create Table
+t_ddl_crash_create_table_01	CREATE TABLE `t_ddl_crash_create_table_01` (
+  `pk` int NOT NULL,
+  `col2` int DEFAULT NULL,
+  `col1` int DEFAULT NULL,
+  PRIMARY KEY (`pk`),
+  KEY `ci` (`col1`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SELECT COUNT(*) AS column_count FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_NAME='t_ddl_crash_create_table_01' AND COLUMN_NAME='col2';
+column_count
+1
+#  5. Crash on CREATE INDEX statement.
+#  5.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+CREATE INDEX idx_col2 ON t_ddl_crash_create_table_01(col2);
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify index should not exist
+SELECT COUNT(*) AS index_count FROM INFORMATION_SCHEMA.STATISTICS
+WHERE TABLE_NAME='t_ddl_crash_create_table_01' AND INDEX_NAME='idx_col2';
+index_count
+0
+#  5.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+CREATE INDEX idx_col2 ON t_ddl_crash_create_table_01(col2);
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify index should not exist
+SELECT COUNT(*) AS index_count FROM INFORMATION_SCHEMA.STATISTICS
+WHERE TABLE_NAME='t_ddl_crash_create_table_01' AND INDEX_NAME='idx_col2';
+index_count
+0
+#  5.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+CREATE INDEX idx_col2 ON t_ddl_crash_create_table_01(col2);
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify index should exist
+SELECT COUNT(*) AS index_count FROM INFORMATION_SCHEMA.STATISTICS
+WHERE TABLE_NAME='t_ddl_crash_create_table_01' AND INDEX_NAME='idx_col2';
+index_count
+1
+#  6. Crash on DROP INDEX statement.
+#  6.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+DROP INDEX ci ON t_ddl_crash_create_table_01;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify index should still exist
+SELECT COUNT(*) AS index_count FROM INFORMATION_SCHEMA.STATISTICS
+WHERE TABLE_NAME='t_ddl_crash_create_table_01' AND INDEX_NAME='ci';
+index_count
+1
+#  6.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+DROP INDEX ci ON t_ddl_crash_create_table_01;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify index should still exist
+SELECT COUNT(*) AS index_count FROM INFORMATION_SCHEMA.STATISTICS
+WHERE TABLE_NAME='t_ddl_crash_create_table_01' AND INDEX_NAME='ci';
+index_count
+1
+#  6.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+DROP INDEX ci ON t_ddl_crash_create_table_01;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify index should be dropped
+SELECT COUNT(*) AS index_count FROM INFORMATION_SCHEMA.STATISTICS
+WHERE TABLE_NAME='t_ddl_crash_create_table_01' AND INDEX_NAME='ci';
+index_count
+0
+#  7. Crash on RENAME TABLE statement.
+#  7.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+RENAME TABLE t_ddl_crash_create_table_01 TO t_ddl_crash_renamed;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify old table name should still exist
+SHOW CREATE TABLE t_ddl_crash_create_table_01;
+Table	Create Table
+t_ddl_crash_create_table_01	CREATE TABLE `t_ddl_crash_create_table_01` (
+  `pk` int NOT NULL,
+  `col2` int DEFAULT NULL,
+  `col1` int DEFAULT NULL,
+  PRIMARY KEY (`pk`),
+  KEY `idx_col2` (`col2`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SHOW CREATE TABLE t_ddl_crash_renamed;
+ERROR 42S02: Table 'test_ddl_crash_comprehensive.t_ddl_crash_renamed' doesn't exist
+#  7.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+RENAME TABLE t_ddl_crash_create_table_01 TO t_ddl_crash_renamed;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify old table name should still exist
+SHOW CREATE TABLE t_ddl_crash_create_table_01;
+Table	Create Table
+t_ddl_crash_create_table_01	CREATE TABLE `t_ddl_crash_create_table_01` (
+  `pk` int NOT NULL,
+  `col2` int DEFAULT NULL,
+  `col1` int DEFAULT NULL,
+  PRIMARY KEY (`pk`),
+  KEY `idx_col2` (`col2`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SHOW CREATE TABLE t_ddl_crash_renamed;
+ERROR 42S02: Table 'test_ddl_crash_comprehensive.t_ddl_crash_renamed' doesn't exist
+#  7.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+RENAME TABLE t_ddl_crash_create_table_01 TO t_ddl_crash_renamed;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify table should be renamed
+SHOW CREATE TABLE t_ddl_crash_create_table_01;
+ERROR 42S02: Table 'test_ddl_crash_comprehensive.t_ddl_crash_create_table_01' doesn't exist
+SHOW CREATE TABLE t_ddl_crash_renamed;
+Table	Create Table
+t_ddl_crash_renamed	CREATE TABLE `t_ddl_crash_renamed` (
+  `pk` int NOT NULL,
+  `col2` int DEFAULT NULL,
+  `col1` int DEFAULT NULL,
+  PRIMARY KEY (`pk`),
+  KEY `idx_col2` (`col2`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+#  8. Crash on TRUNCATE TABLE statement.
+#  8.1 Crash before InnoDB prepare.
+INSERT INTO t_ddl_crash_renamed VALUES(100, 200, 300);
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+TRUNCATE TABLE t_ddl_crash_renamed;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify table data should not be truncated
+SELECT COUNT(*) AS row_count FROM t_ddl_crash_renamed;
+row_count
+4
+#  8.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+TRUNCATE TABLE t_ddl_crash_renamed;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify table data should not be truncated
+SELECT COUNT(*) AS row_count FROM t_ddl_crash_renamed;
+row_count
+4
+#  8.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+TRUNCATE TABLE t_ddl_crash_renamed;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify table should be truncated
+SELECT COUNT(*) AS row_count FROM t_ddl_crash_renamed;
+row_count
+0
+#  9. Crash on ANALYZE TABLE statement.
+INSERT INTO t_ddl_crash_renamed VALUES(101, 201, 301), (102, 202, 302);
+#  9.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+ANALYZE TABLE t_ddl_crash_renamed;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify analyze completed (should have recovered gracefully)
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='t_ddl_crash_renamed';
+TABLE_NAME
+t_ddl_crash_renamed
+#  9.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+ANALYZE TABLE t_ddl_crash_renamed;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify analyze completed (should have recovered gracefully)
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='t_ddl_crash_renamed';
+TABLE_NAME
+t_ddl_crash_renamed
+#  9.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+ANALYZE TABLE t_ddl_crash_renamed;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify analyze completed (should have recovered gracefully)
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='t_ddl_crash_renamed';
+TABLE_NAME
+t_ddl_crash_renamed
+#  10. Crash on OPTIMIZE TABLE statement: NOT SUPPORTED.
+# Final cleanup and summary
+# Drop remaining objects for complete cleanup
+# Summary: All DDL crash recovery tests completed successfully
+# Each DDL was tested at 3 crash points with proper recovery verification
+# - Before InnoDB prepare: DDL should be rolled back
+# - After InnoDB prepare but before DStore commit: DDL should be rolled back
+# - After DStore commit: DDL should be committed and visible
+SET debug='reset';
+DROP DATABASE test_ddl_crash_comprehensive;

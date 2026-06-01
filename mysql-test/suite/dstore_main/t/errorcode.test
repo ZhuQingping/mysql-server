@@ -1,0 +1,440 @@
+SET @old_default_storage_engine = @@default_storage_engine;
+SET @@default_storage_engine = 'dstore';
+
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+--echo #
+--echo # CDE
+--echo #
+use test;
+
+#
+# error code test for datatype: unsupported data type
+#
+CALL mtr.add_suppression(".*insert dstore heap tuple fail*");
+CALL mtr.add_suppression(".*insert dstore index tuple fail.*");
+CALL mtr.add_suppression(".*insert_index fail.*");
+create table t1 (a int not null);
+SET SESSION DEBUG='+d,field_mysql_to_dstore_injection';
+--error ER_UNSUPPORTED_EXTENSION
+insert into t1 values (1);
+SET SESSION DEBUG='-d,field_mysql_to_dstore_injection';
+
+drop table t1;
+
+--echo #
+--echo # error code test for savepoint
+--echo #
+create table t1 (a int not null auto_increment primary key);
+insert into t1 values (1);
+SET SESSION DEBUG='+d,alloc_mem_fail_injection';
+--error ER_OUT_OF_RESOURCES
+insert into t1 values (2);
+--error ER_OUT_OF_RESOURCES
+update t1 set a=3 where a=1;
+SET SESSION DEBUG='-d,alloc_mem_fail_injection';
+
+CALL mtr.add_suppression(".*release_savepoint fail.*");
+CALL mtr.add_suppression(".*rollback_to_savepoint fail.*");
+CALL mtr.add_suppression(".*create_savepoint fail.*");
+
+START TRANSACTION;
+insert into t1 values (6);
+SAVEPOINT s1;
+
+SET SESSION DEBUG='+d,cde_create_savepoint_injection';
+--error ER_GET_ERRNO
+SAVEPOINT s2;
+SET SESSION DEBUG='-d,cde_create_savepoint_injection';
+
+SET SESSION DEBUG='+d,cde_rbk_savepoint_injection';
+--error ER_ERROR_DURING_ROLLBACK
+ROLLBACK TO SAVEPOINT s1;
+SET SESSION DEBUG='-d,cde_rbk_savepoint_injection';
+
+SET SESSION DEBUG='+d,cde_rel_savepoint_injection';
+--error ER_GET_ERRNO
+RELEASE SAVEPOINT s1;
+SET SESSION DEBUG='-d,cde_rel_savepoint_injection';
+
+COMMIT;
+
+drop table t1;
+
+
+--echo #
+--echo # error code test for lock tuple
+--echo #
+create table t1 (a int not null);
+insert into t1 values (1);
+CALL mtr.add_suppression(".*lock table failed, realTuple is null.*");
+CALL mtr.add_suppression(".*lock newest tuple failed.*");
+SET SESSION DEBUG='+d,cde_lcktuple_updated_injection';
+update t1 set a=3 where a=1;
+SET SESSION DEBUG='-d,cde_lcktuple_updated_injection';
+
+SET SESSION DEBUG='+d,cde_lcktuple_allocid_injection';
+--error ER_LOCK_WAIT_TIMEOUT
+update t1 set a=3 where a=1;
+SET SESSION DEBUG='-d,cde_lcktuple_allocid_injection';
+
+SET SESSION DEBUG='+d,cde_lcktuple_deadlk_injection';
+--error ER_LOCK_DEADLOCK
+update t1 set a=3 where a=1;
+SET SESSION DEBUG='-d,cde_lcktuple_deadlk_injection';
+
+SET SESSION DEBUG='+d,cde_lcktuple_updated_deadlk_injection';
+--error ER_LOCK_DEADLOCK
+update t1 set a=3 where a=1;
+SET SESSION DEBUG='-d,cde_lcktuple_updated_deadlk_injection';
+
+SET SESSION DEBUG='+d,cde_lcktuple_selfmod_injection';
+update t1 set a=3 where a=1;
+SET SESSION DEBUG='-d,cde_lcktuple_selfmod_injection';
+
+SET SESSION DEBUG='+d,cde_lcktuple_invis_injection';
+update t1 set a=3 where a=1;
+SET SESSION DEBUG='-d,cde_lcktuple_invis_injection';
+
+CALL mtr.add_suppression(".*Unrecognized lock failure reason.*");
+SET SESSION DEBUG='+d,cde_lcktuple_otherfail_injection';
+--error ER_GET_ERRNO
+update t1 set a=3 where a=1;
+SET SESSION DEBUG='-d,cde_lcktuple_otherfail_injection';
+
+drop table t1;
+
+--echo #
+--echo # error code test for create/truncate table
+--echo #
+
+create table t1 (a int not null auto_increment primary key);
+SET SESSION DEBUG='+d,cde_truncate_impl_injection';
+--error ER_GET_ERRNO
+truncate table t1;
+SET SESSION DEBUG='-d,cde_truncate_impl_injection';
+
+SET SESSION DEBUG='+d,cde_truncate_impl_exec_injection';
+--error ER_GET_ERRNO
+truncate table t1;
+SET SESSION DEBUG='-d,cde_truncate_impl_exec_injection';
+
+CALL mtr.add_suppression(".*Reconstruct heap segment failed.*");
+CALL mtr.add_suppression(".*Reconstruct lob segment failed.*");
+SET SESSION DEBUG='+d,recon_heap_AllocSeg_injection1';
+--error ER_GET_ERRNO
+truncate table t1;
+SET SESSION DEBUG='-d,recon_heap_AllocSeg_injection1';
+
+SET SESSION DEBUG='+d,recon_heap_AllocSeg_injection2';
+--error ER_GET_ERRNO
+truncate table t1;
+SET SESSION DEBUG='-d,recon_heap_AllocSeg_injection2';
+
+CALL mtr.add_suppression(".*Alloc semgent for index truncate failed.*");
+SET SESSION DEBUG='+d,recon_idx_AllocSeg_injection';
+--error ER_DSTORE_ERR_TABLESPACE_REACH_MAXSIZE
+truncate table t1;
+SET SESSION DEBUG='-d,recon_idx_AllocSeg_injection';
+
+drop table t1;
+
+--echo #
+--echo # error code test for delete row
+--echo #
+
+create table t1 (a int not null);
+insert into t1 values (1);
+delete from t1 where a = 1;
+
+drop table t1;
+
+--echo #
+--echo # error code test for transaction state
+--echo #
+CALL mtr.add_suppression(".*SingleStmTrx commit failed.*");
+CALL mtr.add_suppression(".*commit end trx block step failed.*");
+CALL mtr.add_suppression(".*commit end stmt step failed.*");
+CALL mtr.add_suppression(".*one stmt end failed.*");
+CALL mtr.add_suppression(".*SingleStmTrx rollback failed.*");
+CALL mtr.add_suppression(".*rollback user abort trx block step failed.*");
+CALL mtr.add_suppression(".*rollback abort trx step failed.*");
+CALL mtr.add_suppression(".*one stmt rollback failed.*");
+CALL mtr.add_suppression(".*is out of module bound.*");
+
+create table t1 (a int not null);
+
+SET SESSION DEBUG='+d,cde_singlestmttrx_commit_injection';
+insert into t1 values (1);
+SET SESSION DEBUG='-d,cde_singlestmttrx_commit_injection';
+
+SET SESSION DEBUG='+d,cde_multistmttrx_commit_end_block_injection';
+begin;
+insert into t1 values (1);
+commit;
+SET SESSION DEBUG='-d,cde_multistmttrx_commit_end_block_injection';
+
+SET SESSION DEBUG='+d,cde_multistmttrx_commit_end_stmt_injection';
+begin;
+insert into t1 values (1);
+commit;
+SET SESSION DEBUG='-d,cde_multistmttrx_commit_end_stmt_injection';
+
+SET SESSION DEBUG='+d,cde_multistmttrx_one_stmt_end_injection';
+begin;
+insert into t1 values (1);
+commit;
+SET SESSION DEBUG='-d,cde_multistmttrx_one_stmt_end_injection';
+
+SET SESSION DEBUG='+d,cde_singlestmttrx_rollback_injection,cde_lcktuple_deadlk_injection';
+insert into t1 values (2);
+--error ER_LOCK_DEADLOCK
+delete from t1 where a = 2;
+SET SESSION DEBUG='-d,cde_singlestmttrx_rollback_injection';
+SET SESSION DEBUG='-d,cde_lcktuple_deadlk_injection';
+
+SET SESSION DEBUG='+d,cde_multistmttrx_rollback_user_abort_injection';
+begin;
+insert into t1 values (1);
+rollback;
+SET SESSION DEBUG='-d,cde_multistmttrx_rollback_user_abort_injection';
+
+SET SESSION DEBUG='+d,cde_multistmttrx_rollback_abort_trx_injection';
+begin;
+insert into t1 values (1);
+rollback;
+SET SESSION DEBUG='-d,cde_multistmttrx_rollback_abort_trx_injection';
+
+SET SESSION DEBUG='+d,cde_multistmttrx_one_stmt_rollback_injection,cde_lcktuple_deadlk_injection';
+begin;
+insert into t1 values (2);
+--error ER_LOCK_DEADLOCK
+delete from t1 where a = 2;
+SET SESSION DEBUG='-d,cde_multistmttrx_one_stmt_rollback_injection';
+SET SESSION DEBUG='-d,cde_lcktuple_deadlk_injection';
+
+SET SESSION DEBUG='+d,cde_multistmttrx_one_stmt_rollback_injection,stmt_rollback_injection';
+begin;
+--error ER_GET_ERRNO
+insert into t1 values (1);
+rollback;
+SET SESSION DEBUG='-d,cde_multistmttrx_one_stmt_rollback_injection,stmt_rollback_injection';
+
+SET SESSION DEBUG='+d,StartTrxCommand_injection';
+start transaction with consistent snapshot;
+insert into t1 values (1);
+commit;
+SET SESSION DEBUG='-d,StartTrxCommand_injection';
+
+SET SESSION DEBUG='+d,BeginTrxBlock_injection';
+start transaction with consistent snapshot;
+insert into t1 values (1);
+commit;
+SET SESSION DEBUG='-d,BeginTrxBlock_injection';
+
+SET SESSION DEBUG='+d,CommitTrxCommand_injection';
+start transaction with consistent snapshot;
+insert into t1 values (1);
+commit;
+SET SESSION DEBUG='-d,CommitTrxCommand_injection';
+
+SET SESSION DEBUG='+d,SetSnapShot_injection';
+start transaction with consistent snapshot;
+insert into t1 values (1);
+commit;
+SET SESSION DEBUG='-d,SetSnapShot_injection';
+
+drop table t1;
+--echo # error code test for dstore tuple error
+--echo #
+
+CALL mtr.add_suppression(".*form dstore heap tuple fail.*");
+CALL mtr.add_suppression(".*insert_heap fail.*");
+create table t1 (a int not null);
+SET SESSION DEBUG='+d,FormHeapTuple_injection';
+--error ER_TOO_MANY_FIELDS
+insert into t1 values (1);
+--error ER_DSTORE_ERR_TUPLE_TOO_MANY_COLUMNS
+insert into t1 values (1);
+SET SESSION DEBUG='-d,FormHeapTuple_injection';
+DROP TABLE t1;
+
+--echo #
+--echo # error code test for copy_indexes
+--echo #
+call mtr.add_suppression("Alloc mem fail when clone relation.*");
+call mtr.add_suppression("Clone tupledesc fail when clone relation.*");
+call mtr.add_suppression("Construct relation fail when clone relation.*");
+call mtr.add_suppression("Mem alloc fail when clone relation.*");
+call mtr.add_suppression("Mem alloc fail at CdeGenSessionIndexInfo.*");
+
+create table t1 (a int not null auto_increment primary key);
+
+SET SESSION DEBUG='+d,StorageRelation_Alloc_injection';
+--error ER_OUT_OF_RESOURCES
+insert into t1 values (1);
+SET SESSION DEBUG='-d,StorageRelation_Alloc_injection';
+
+SET SESSION DEBUG='+d,tuple_desc_clone_injection';
+--error ER_OUT_OF_RESOURCES
+insert into t1 values (1);
+SET SESSION DEBUG='-d,tuple_desc_clone_injection';
+
+SET SESSION DEBUG='+d,relation_construct_fail_injection';
+--error ER_OUT_OF_RESOURCES
+insert into t1 values (1);
+SET SESSION DEBUG='-d,relation_construct_fail_injection';
+
+SET SESSION DEBUG='+d,SysClassTupDef_Alloc_injection';
+--error ER_OUT_OF_RESOURCES
+insert into t1 values (1);
+SET SESSION DEBUG='-d,SysClassTupDef_Alloc_injection';
+
+SET SESSION DEBUG='+d,sess_idx_Alloc_injection';
+--error ER_OUT_OF_RESOURCES
+insert into t1 values (1);
+SET SESSION DEBUG='-d,sess_idx_Alloc_injection';
+
+SET SESSION DEBUG='+d,scan_key_cons_injection';
+--error ER_OUT_OF_RESOURCES
+insert into t1 values (1);
+SET SESSION DEBUG='-d,scan_key_cons_injection';
+
+DROP TABLE t1;
+
+--echo #
+--echo # error code test for delete row
+--echo #
+create table t1 (a int not null auto_increment primary key);
+
+insert into t1 values (1);
+SET SESSION DEBUG='+d,cde_dml_update_row_fault_injection';
+--error ER_GET_ERRNO
+delete from t1 where a = 1;
+SET SESSION DEBUG='-d,cde_dml_update_row_fault_injection';
+DROP TABLE t1;
+
+--echo #
+--echo # error code test for update row
+--echo #
+create table t1 (a int not null auto_increment primary key);
+
+insert into t1 values (1);
+SET SESSION DEBUG='+d,cde_dml_update_row_fault_injection';
+--error ER_GET_ERRNO
+update t1 set a = 2 where a = 1;
+SET SESSION DEBUG='-d,cde_dml_update_row_fault_injection';
+DROP TABLE t1;
+
+--echo #
+--echo # error code test for write row
+--echo #
+create table t1 (a int not null auto_increment primary key);
+
+SET SESSION DEBUG='+d,cde_dml_write_row_fault_injection';
+--error ER_GET_ERRNO
+insert into t1 values (1);
+SET SESSION DEBUG='-d,cde_dml_write_row_fault_injection';
+insert into t1 values (1);
+
+#Inject dstore error
+SET SESSION DEBUG='+d,insert_relation_null';
+--error ER_GET_ERRNO
+insert into t1 values (2);
+
+#Insert again should success
+insert into t1 values (2);
+DROP TABLE t1;
+
+--echo #
+--echo # error code test for INDEX_ERROR_FAIL_FOR_HUGE_INDEX_TUPLE
+--echo #
+--error ER_TOO_LONG_KEY
+create table IF NOT EXISTS t1(c1 varchar(2561) primary key, c2 varchar(61456), c3 varchar(1000)) CHARACTER SET latin1;
+create table IF NOT EXISTS t1(c1 varchar(2560) primary key, c2 varchar(61456), c3 varchar(1000)) CHARACTER SET latin1;
+DROP TABLE t1;
+
+--echo #
+--echo # error code test for faultinject in transaction
+--echo #
+SET SESSION DEBUG='+d,AbortTrx_injection';
+create table t_errcode_2 (a int, b LONGBLOB);
+SET SESSION DEBUG='-d,AbortTrx_injection';
+drop table if exists t_errcode_2;
+
+SET autocommit = 0;
+create table t_errcode_3 (a int not null auto_increment primary key);
+START TRANSACTION;
+insert into t_errcode_3 values (1);
+SET SESSION DEBUG='+d,cde_rollback_all_trx_injection';
+#--error ER_ERROR_DURING_ROLLBACK
+ROLLBACK;
+SET SESSION DEBUG='-d,cde_rollback_all_trx_injection';
+drop table if exists t_errcode_3;
+
+SET autocommit = 1;
+
+--echo #
+--echo # error code test for foreign key constraint
+--echo #
+CREATE TABLE t_errcode_10 (
+    c1 INT AUTO_INCREMENT PRIMARY KEY
+);
+
+CREATE TABLE t_errcode_11 (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    fk_id INT,
+    FOREIGN KEY (fk_id) 
+    REFERENCES t_errcode_10(c1) 
+    ON DELETE CASCADE 
+    ON UPDATE CASCADE
+);
+
+--echo #
+--echo # error code test for insert/update/delete savepoint
+--echo #
+CREATE TABLE t1 (id int(10) PRIMARY KEY auto_increment, int_col int UNIQUE);
+SET SESSION DEBUG='+d,alloc_mem_fail_injection';
+--error ER_OUT_OF_RESOURCES
+INSERT INTO t1 (id, int_col) VALUES (1, 10);
+SET SESSION DEBUG='-d,alloc_mem_fail_injection';
+INSERT INTO t1 (id, int_col) VALUES (1, 100);
+SET SESSION DEBUG='+d,alloc_mem_fail_injection';
+--error ER_OUT_OF_RESOURCES
+UPDATE t1 SET int_col = 200 WHERE id = 1;
+--error ER_OUT_OF_RESOURCES
+DELETE FROM t1 WHERE id = 1;
+SET SESSION DEBUG='-d,alloc_mem_fail_injection';
+SELECT * FROM t1;
+DELETE FROM t1;
+
+INSERT INTO t1 (id, int_col) VALUES (1, 10);
+SET SESSION DEBUG='+d,cde_create_savepoint_injection';
+--error ER_GET_ERRNO
+REPLACE INTO t1 VALUES (10, 10);
+SET SESSION DEBUG='-d,cde_create_savepoint_injection';
+SET SESSION DEBUG='+d,cde_rbk_savepoint_injection';
+--error ER_GET_ERRNO
+REPLACE INTO t1 VALUES (10, 10);
+SET SESSION DEBUG='-d,cde_rbk_savepoint_injection';
+SET SESSION DEBUG='+d,cde_rel_savepoint_injection';
+--error ER_GET_ERRNO
+REPLACE INTO t1 VALUES (10, 10);
+SET SESSION DEBUG='-d,cde_rel_savepoint_injection';
+REPLACE INTO t1 VALUES (10,10);
+SELECT * FROM t1;
+
+DROP TABLE t1;
+
+--source include/restart_mysqld.inc
+
+use test;
+SET SESSION DEBUG='+d,copy_indexes_failed_injection';
+insert into t_errcode_10 values (1);
+--error ER_GET_ERRNO
+#select * from t_errcode_10;
+insert into t_errcode_11 values (1, 1);
+SET SESSION DEBUG='-d,copy_indexes_failed_injection';
+
+DROP TABLE if exists t_errcode_11;
+DROP TABLE if exists t_errcode_10;

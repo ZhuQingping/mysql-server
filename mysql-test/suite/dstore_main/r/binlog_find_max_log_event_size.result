@@ -1,0 +1,184 @@
+#
+# Preparatory cleanup.
+#
+DROP DATABASE IF EXISTS db1;
+DROP TABLE IF EXISTS t1;
+# 
+# Delete all existing binary logs.
+#
+RESET MASTER;
+#
+# Enable gtid_mode
+#
+SET GLOBAL enforce_gtid_consistency = ON;
+SET GLOBAL gtid_mode = OFF_PERMISSIVE;
+SET GLOBAL gtid_mode = ON_PERMISSIVE;
+SET GLOBAL gtid_mode = ON;
+#
+# Check the gtid option
+#
+SHOW VARIABLES LIKE 'enforce_gtid_consistency';
+Variable_name	Value
+enforce_gtid_consistency	ON
+SHOW VARIABLES LIKE 'gtid_mode';
+Variable_name	Value
+gtid_mode	ON
+# 
+# Init resource
+#
+create database db1;
+use db1;
+CREATE TABLE t1 (
+data TEXT
+) ENGINE=Dstore;
+# 
+# CASE 1:Test the size of a single transaction's log_event
+#
+RESET MASTER;
+insert into t1 values(repeat('a',200));
+FLUSH LOGS;
+# The proper term is pseudo_replica_mode, but we use this compatibility alias
+# to make the statement usable on server versions 8.0.24 and older.
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+/*!50003 SET @OLD_COMPLETION_TYPE=@@COMPLETION_TYPE,COMPLETION_TYPE=0*/;
+DELIMITER /*!*/;
+SET @@SESSION.GTID_NEXT= 'AUTOMATIC' /* added by mysqlbinlog */ /*!*/;
+DELIMITER ;
+# The max log event size is 238 Byte.
+# End of log file
+/*!50003 SET COMPLETION_TYPE=@OLD_COMPLETION_TYPE*/;
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=0*/;
+#
+# CASE 2:Test the size of log_events for multiple transactions
+#
+RESET MASTER;
+insert into t1 values(repeat('a',10));
+insert into t1 values(repeat('a',10*3));
+insert into t1 values(repeat('a',100*5));
+FLUSH LOGS;
+# The proper term is pseudo_replica_mode, but we use this compatibility alias
+# to make the statement usable on server versions 8.0.24 and older.
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+/*!50003 SET @OLD_COMPLETION_TYPE=@@COMPLETION_TYPE,COMPLETION_TYPE=0*/;
+DELIMITER /*!*/;
+SET @@SESSION.GTID_NEXT= 'AUTOMATIC' /* added by mysqlbinlog */ /*!*/;
+DELIMITER ;
+# The max log event size is 538 Byte.
+# End of log file
+/*!50003 SET COMPLETION_TYPE=@OLD_COMPLETION_TYPE*/;
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=0*/;
+# 
+# case 3:Test to display the largest log_event size in a transaction
+#
+RESET MASTER;
+begin;
+insert into t1 values(repeat('a',100*2));
+insert into t1 values(repeat('a',100*3));
+insert into t1 values(repeat('a',100*4));
+commit;
+FLUSH LOGS;
+# The proper term is pseudo_replica_mode, but we use this compatibility alias
+# to make the statement usable on server versions 8.0.24 and older.
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+/*!50003 SET @OLD_COMPLETION_TYPE=@@COMPLETION_TYPE,COMPLETION_TYPE=0*/;
+DELIMITER /*!*/;
+SET @@SESSION.GTID_NEXT= 'AUTOMATIC' /* added by mysqlbinlog */ /*!*/;
+DELIMITER ;
+# The max log event size is 438 Byte.
+# End of log file
+/*!50003 SET COMPLETION_TYPE=@OLD_COMPLETION_TYPE*/;
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=0*/;
+# 
+# case 4:Test the largest log event in a non-consecutive GTID set.
+#
+RESET MASTER;
+# 
+# Test uuid 2,3:5,6
+#
+INSERT INTO t1 (data) VALUES (REPEAT('a', 100));
+INSERT INTO t1 (data) VALUES (REPEAT('b', 100*2));
+INSERT INTO t1 (data) VALUES (REPEAT('c', 100*3));
+INSERT INTO t1 (data) VALUES (REPEAT('d', 100*4));
+INSERT INTO t1 (data) VALUES (REPEAT('e', 100*5));
+INSERT INTO t1 (data) VALUES (REPEAT('f', 100*6));
+INSERT INTO t1 (data) VALUES (REPEAT('g', 100*7));
+FLUSH LOGS;
+# The proper term is pseudo_replica_mode, but we use this compatibility alias
+# to make the statement usable on server versions 8.0.24 and older.
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+/*!50003 SET @OLD_COMPLETION_TYPE=@@COMPLETION_TYPE,COMPLETION_TYPE=0*/;
+DELIMITER /*!*/;
+SET @@SESSION.GTID_NEXT= 'AUTOMATIC' /* added by mysqlbinlog */ /*!*/;
+DELIMITER ;
+# The max log event size is 638 Byte.
+# End of log file
+/*!50003 SET COMPLETION_TYPE=@OLD_COMPLETION_TYPE*/;
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=0*/;
+#
+# Test uuid 5,6:2,3
+#
+# The proper term is pseudo_replica_mode, but we use this compatibility alias
+# to make the statement usable on server versions 8.0.24 and older.
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+/*!50003 SET @OLD_COMPLETION_TYPE=@@COMPLETION_TYPE,COMPLETION_TYPE=0*/;
+DELIMITER /*!*/;
+SET @@SESSION.GTID_NEXT= 'AUTOMATIC' /* added by mysqlbinlog */ /*!*/;
+DELIMITER ;
+# The max log event size is 638 Byte.
+# End of log file
+/*!50003 SET COMPLETION_TYPE=@OLD_COMPLETION_TYPE*/;
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=0*/;
+#
+# Test uuid 1,5:6
+#
+# The proper term is pseudo_replica_mode, but we use this compatibility alias
+# to make the statement usable on server versions 8.0.24 and older.
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+/*!50003 SET @OLD_COMPLETION_TYPE=@@COMPLETION_TYPE,COMPLETION_TYPE=0*/;
+DELIMITER /*!*/;
+SET @@SESSION.GTID_NEXT= 'AUTOMATIC' /* added by mysqlbinlog */ /*!*/;
+DELIMITER ;
+# The max log event size is 638 Byte.
+# End of log file
+/*!50003 SET COMPLETION_TYPE=@OLD_COMPLETION_TYPE*/;
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=0*/;
+#
+# Test uuid 5:6,1
+#
+# The proper term is pseudo_replica_mode, but we use this compatibility alias
+# to make the statement usable on server versions 8.0.24 and older.
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+/*!50003 SET @OLD_COMPLETION_TYPE=@@COMPLETION_TYPE,COMPLETION_TYPE=0*/;
+DELIMITER /*!*/;
+SET @@SESSION.GTID_NEXT= 'AUTOMATIC' /* added by mysqlbinlog */ /*!*/;
+DELIMITER ;
+# The max log event size is 638 Byte.
+# End of log file
+/*!50003 SET COMPLETION_TYPE=@OLD_COMPLETION_TYPE*/;
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=0*/;
+#
+# Test suite for mysqlbinlog argument validation.
+# This test checks that mysqlbinlog correctly fails and provides
+# a proper error message for various invalid argument combinations.
+#
+# =================================================================
+# Case 5: Test with an invalid GTID set format.
+# Expect: mysqlbinlog fails with an error about a malformed GTID.
+# =================================================================
+# =================================================================
+# Case 6: Test using --find-max-event-size with --raw.
+# Expect: mysqlbinlog fails, stating these options are incompatible.
+# =================================================================
+# =================================================================
+# Case 7: Test using --find-max-event-size with --include-gtids or --exclude-gtids.
+# Expect: mysqlbinlog fails, stating these options are incompatible.
+# =================================================================
+# 
+# Restore and clean resource
+#
+DROP TABLE IF EXISTS t1;
+DROP DATABASE db1;
+SET GLOBAL gtid_mode = ON_PERMISSIVE;
+SET GLOBAL gtid_mode = OFF_PERMISSIVE;
+SET GLOBAL gtid_mode = OFF;
+SET GLOBAL enforce_gtid_consistency = OFF;

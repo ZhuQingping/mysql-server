@@ -1,0 +1,117 @@
+# Define some basic procedure and functions
+CREATE PROCEDURE my_alter()
+BEGIN
+UPDATE t1 SET a = 100 WHERE a = 1;
+ALTER TABLE t1 ADD COLUMN b INT FIRST;
+SHOW CREATE TABLE t1;
+ALTER TABLE t1 DROP COLUMN b;
+UPDATE t1 SET a = 1 WHERE a = 100;
+SHOW CREATE TABLE t1;
+UPDATE t2 SET a = 100 WHERE a = 1;
+ALTER TABLE t2 ADD COLUMN b INT FIRST;
+SHOW CREATE TABLE t2;
+ALTER TABLE t2 DROP COLUMN b;
+UPDATE t2 SET a = 1 WHERE a = 100;
+SHOW CREATE TABLE t2;
+END|
+CREATE PROCEDURE my_alter_high()
+BEGIN
+CALL my_alter();
+END|
+# Prepare data
+CREATE TABLE t1 (a INT);
+INSERT INTO t1 VALUES(1), (2), (3);
+CREATE TABLE t2 (a INT, c INT, UNIQUE KEY(a));
+INSERT INTO t2 VALUES(1, 1), (2, 2), (3, 3);
+#
+# Scenario 1: Verify the DDL in procedure will abort properly
+#             according to DDL timeout value
+#
+# conn1: start a select on t1 to block DDL
+START TRANSACTION;
+SELECT * FROM t1;
+a
+1
+2
+3
+# conn2: start to call a procedure / function which will run DDL
+SET SESSION rds_ddl_lock_wait_timeout = 3;
+SET SESSION lock_wait_timeout = 20;
+SET SESSION innodb_lock_wait_timeout = 10;
+# Verify that this call is blocked by DDL
+CALL my_alter();
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn2 waited for 3 seconds: 1
+# conn2 waited for less than 10 seconds: 1
+# Need to revert the update from sp call
+UPDATE t1 SET a = 1 WHERE a = 100;
+# Verify that nested sp call is blocked by DDL too
+CALL my_alter_high();
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn2 waited for 3 seconds: 1
+# conn2 waited for less than 10 seconds: 1
+# Need to revert the update from sp call
+UPDATE t1 SET a = 1 WHERE a = 100;
+# conn1: rollback
+ROLLBACK;
+# 3 rows are expected
+SELECT * FROM t1;
+a
+1
+2
+3
+#
+# Scenario 2: Verify the DML in procedure will abort properly
+#             according to normal timeout value rather than
+#             the DDL timeout
+#
+# conn1: start a DML on t2 to block DML in sp/function on t2
+START TRANSACTION;
+REPLACE INTO t2 VALUES(1, 11);
+# conn2: start to call a procedure / function which will run DDL
+SET SESSION rds_ddl_lock_wait_timeout = 10;
+SET SESSION lock_wait_timeout = 20;
+SET SESSION innodb_lock_wait_timeout = 3;
+# Verify that this call is blocked by DML on t2
+CALL my_alter();
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `b` int DEFAULT NULL,
+  `a` int DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn2 waited for 3 seconds: 1
+# conn2 waited for less than 10 seconds: 1
+# Verify that nested sp call is blocked by DML on t2 too
+CALL my_alter_high();
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `b` int DEFAULT NULL,
+  `a` int DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn2 waited for 3 seconds: 1
+# conn2 waited for less than 10 seconds: 1
+# conn1: rollback
+ROLLBACK;
+# 3 rows are expected
+SELECT * FROM t1;
+a
+1
+2
+3
+# Teardown
+DROP PROCEDURE my_alter;
+DROP PROCEDURE my_alter_high;
+DROP TABLE t1, t2;
+set global lock_wait_timeout = 31536000;
+set global rds_ddl_lock_wait_timeout = 31536000;
+set global innodb_lock_wait_timeout = 50;

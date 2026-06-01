@@ -1,0 +1,99 @@
+# Test admin port connection using per thread
+--disable_query_log
+call mtr.add_suppression("Failed to initialize TLS for channel: mysql_admin. See below for the description of exact issue");
+call mtr.add_suppression("Failed to set up SSL because of the following SSL library error");
+--enable_query_log
+
+# Save the initial number of concurrent sessions
+--source include/count_sessions.inc
+
+--echo # PREPARE
+--echo # create user without SUPER privileges.
+CREATE USER 'user_without_service_admin'@'%' IDENTIFIED BY '123456';
+GRANT SELECT ON *.* TO 'user_without_service_admin'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'user_without_service_admin'@'%';
+
+--echo # create user with SERVICE_CONN_ADMIN privileges.
+CREATE USER 'user_with_service_admin'@'%' IDENTIFIED BY '123456';
+GRANT SELECT,SERVICE_CONNECTION_ADMIN ON *.* TO 'user_with_service_admin'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'user_with_service_admin'@'%';
+
+SET @global_rds_admin_port_using_per_thread =  @@global.rds_admin_port_using_per_thread;
+SET @global_threadpool_enabled =  @@global.threadpool_enabled;
+
+--echo # Test 1: when threadpool enable, rds_admin_port_using_per_thread
+--echo #         controls whether admin connection to use per thread.
+set global threadpool_enabled=ON;
+show variables like 'threadpool_enabled';
+show variables like 'rds_admin_port_using_per_thread';
+
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+connect(admin_conn1,127.0.0.1,user_with_service_admin,123456,mysql,1501);
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+connect(normal_conn1,127.0.0.1,user_without_service_admin,123456,mysql,1401);
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+connection default;
+set global rds_admin_port_using_per_thread=ON;
+
+connect(admin_conn2,127.0.0.1,user_with_service_admin,123456,mysql,1501);
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+connect(normal_conn2,127.0.0.1,user_without_service_admin,123456,mysql,1401);
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+--echo # Test 2: when threadpool disable, normal connection and admin connection
+--echo #         can connect success.
+connection default;
+set global threadpool_enabled=OFF;
+
+connect(admin_conn3,127.0.0.1,user_with_service_admin,123456,mysql,1501);
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+connect(normal_conn3,127.0.0.1,user_without_service_admin,123456,mysql,1401);
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+connection default;
+set global rds_admin_port_using_per_thread=OFF;
+
+connect(admin_conn4,127.0.0.1,user_with_service_admin,123456,mysql,1501);
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+connect(normal_conn4,127.0.0.1,user_without_service_admin,123456,mysql,1401);
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+--replace_result $MASTER_MYPORT MYSQL_PORT $MASTER_MYSOCK MYSQL_SOCK
+--error 1040
+connect(admin_conn5,127.0.0.1,user_with_service_admin,123456,mysql,1501);
+
+--echo # Cleanup
+
+connection default;
+SET @@global.rds_admin_port_using_per_thread = @global_rds_admin_port_using_per_thread;
+SET @@global.threadpool_enabled = @global_threadpool_enabled;
+disconnect normal_conn1;
+disconnect normal_conn2;
+disconnect normal_conn3;
+disconnect normal_conn4;
+disconnect admin_conn1;
+disconnect admin_conn2;
+disconnect admin_conn3;
+disconnect admin_conn4;
+--disable_warnings
+DROP USER user_without_service_admin, user_with_service_admin;
+--enable_warnings
+
+# Wait till we reached the initial number of concurrent sessions
+--source include/wait_until_count_sessions.inc
+

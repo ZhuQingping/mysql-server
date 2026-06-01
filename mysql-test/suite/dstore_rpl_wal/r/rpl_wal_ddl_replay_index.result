@@ -1,0 +1,501 @@
+############################################################
+Establish a master-replica replication relationship based on physical replication.
+############################################################
+include/master-slave.inc
+[connection master]
+#
+# 1. Initialize the required variables, then disconnect the subsequent master-replica replication connections.
+#
+[connection master]
+[connection slave]
+STOP REPLICA;
+RESET REPLICA ALL;
+#
+# 2. Since physical replication does not support DDL operations at present, execute all required DDL statements first.
+#
+create database copy_database;
+use copy_database;
+CREATE TABLE copy_table (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) engine = dstore;
+#
+# 3. Shutdown the primary and standby instances.
+#
+include/rpl_stop_server.inc [server_number=1]
+include/rpl_stop_server.inc [server_number=2]
+#
+# 4. Copy the data directory of the primary to that of the standby.
+#
+#
+# 5. Start the primary and standby instances with new parameters for establishing a master-replica physical replication relationship.
+#
+include/rpl_start_server.inc [server_number=1]
+include/rpl_start_server.inc [server_number=2]
+#
+# 6. Confirm that the primary and standby servers start with the new data directory.
+#
+include/assert.inc [Database copy_database should exist (only one record)]
+include/assert.inc [Table copy_table should exist in database copy_database (only one record)]
+use copy_database;
+show tables;
+Tables_in_copy_database
+copy_table
+include/assert.inc [Database copy_database should exist (only one record)]
+include/assert.inc [Table copy_table should exist in database copy_database (only one record)]
+use copy_database;
+show tables;
+Tables_in_copy_database
+copy_table
+#
+# 7. Install the plugin on both the primary and standby servers, and establish a master-replica physical replication relationship.
+#
+#
+# Install the primary server's plugin and set enabled_wal to ON.
+#
+INSTALL PLUGIN rpl_semi_sync_source SONAME 'semisync_source.so';
+INSTALL PLUGIN rpl_semi_sync_replica SONAME 'semisync_replica.so';
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 1;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 1;
+SET GLOBAL rds_physical_rpl_sender_packet_size = 1;
+#
+# dstore_enable_standby_role should show as false, indicating that the current node is the source.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	1
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	OFF
+#
+# Install the standby server's plugin and set enabled_wal to ON.
+#
+INSTALL PLUGIN rpl_semi_sync_source SONAME 'semisync_source.so';
+INSTALL PLUGIN rpl_semi_sync_replica SONAME 'semisync_replica.so';
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 1;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 1;
+SET GLOBAL rds_physical_rpl_sender_packet_size = 1;
+#
+# dstore_enable_standby_role should show as true, indicating that the current node is the replica.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	2
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	ON
+#
+# Configure the replica and check whether it is configured correctly.
+#
+STOP REPLICA;
+Warnings:
+Note	3084	Replication thread(s) for channel '' are already stopped.
+RESET REPLICA ALL;
+CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=SERVER_MYPORT_1, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL 'dstore_wal_replication_channel';;
+include/assert.inc [Channel name should be 'dstore_wal_replication_channel']
+Slave_IO_Running should be OFF.
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+OFF
+START REPLICA;
+#
+# Slave_IO_Running should be ON.
+#
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+ON
+############################################################
+一、Set up the test environment.
+二、Then execute the corresponding DDL statements for SQLCOM_CREATE_INDEX and SQLCOM_DROP_INDEX.
+三、Check the DD information on the standby node to ensure correct metadata replay.
+四、Execute queries (using indexes) on the primary node. After execution, perform data comparison for later verification on the new primary node to ensure the replay function works correctly.
+五、Perform a switchover.
+六、Execute data queries and verification on the new primary node, and compare the results with those from Step 4 to verify the correctness of the standby node replay function.
+七、Perform index operations (create new indexes and drop existing indexes) on the new primary node, and verify the correctness of the standby node's metadata replay.
+############################################################
+#
+# 一、Set up the test environment.
+#
+CREATE DATABASE IF NOT EXISTS test_index_db 
+DEFAULT CHARACTER SET utf8mb4 
+DEFAULT COLLATE utf8mb4_general_ci;
+USE test_index_db;
+CREATE TABLE employees_idx (
+emp_id INT AUTO_INCREMENT PRIMARY KEY,
+emp_name VARCHAR(100) NOT NULL,
+department VARCHAR(50),
+salary DECIMAL(10, 2),
+hire_date DATE,
+email VARCHAR(100),
+phone VARCHAR(20),
+address TEXT,
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE departments_idx (
+dept_id INT AUTO_INCREMENT PRIMARY KEY,
+dept_name VARCHAR(50) NOT NULL,
+location VARCHAR(100),
+manager_id INT,
+budget DECIMAL(12, 2),
+established_date DATE
+);
+INSERT INTO departments_idx(dept_name, location, manager_id, budget, established_date) VALUES
+('技术部', '北京', 1, 1000000.00, '2018-01-15'),
+('销售部', '上海', 3, 800000.00, '2018-03-20'),
+('人事部', '广州', 5, 500000.00, '2018-06-10'),
+('财务部', '深圳', 7, 600000.00, '2018-09-25'),
+('市场部', '杭州', 9, 700000.00, '2019-01-30');
+INSERT INTO employees_idx(emp_name, department, salary, hire_date, email, phone) VALUES
+('张三', '技术部', 15000.00, '2020-01-15', 'zhangsan@company.com', '13800138001'),
+('李四', '技术部', 12000.00, '2020-03-20', 'lisi@company.com', '13800138002'),
+('王五', '销售部', 8000.00, '2021-05-10', 'wangwu@company.com', '13800138003'),
+('赵六', '人事部', 10000.00, '2019-11-30', 'zhaoliu@company.com', '13800138004'),
+('钱七', '财务部', 13000.00, '2020-07-15', 'qianqi@company.com', '13800138005'),
+('孙八', '市场部', 9000.00, '2021-02-28', 'sunba@company.com', '13800138006'),
+('周九', '技术部', 16000.00, '2019-08-20', 'zhoujiu@company.com', '13800138007'),
+('吴十', '销售部', 8500.00, '2021-09-15', 'wushi@company.com', '13800138008'),
+('郑十一', '人事部', 11000.00, '2020-04-10', 'zhengshiyi@company.com', '13800138009'),
+('王十二', '财务部', 14000.00, '2019-12-01', 'wangshier@company.com', '13800138010');
+#
+# 二、Then execute the corresponding DDL statements for SQLCOM_CREATE_INDEX and SQLCOM_DROP_INDEX.
+#
+#
+# 1 SQLCOM_CREATE_INDEX
+#
+# Create a normal single-column index (to be deleted later for testing)
+CREATE INDEX idx_department ON employees_idx(department);
+# Create a composite index
+CREATE INDEX idx_department_salary ON employees_idx(department, salary DESC);
+# Create a unique index
+CREATE UNIQUE INDEX idx_email ON employees_idx(email);
+# Create prefix index
+CREATE INDEX idx_emp_name_prefix ON employees_idx(emp_name(4));
+CREATE INDEX idx_location ON departments_idx(location);
+#
+# 2 SQLCOM_DROP_INDEX
+#
+DROP INDEX idx_department ON employees_idx;
+# Query the index data dictionary information on the primary node
+SELECT 
+TABLE_SCHEMA,
+TABLE_NAME,
+INDEX_NAME,
+INDEX_TYPE,
+COLUMN_NAME,
+SEQ_IN_INDEX,
+COLLATION,
+CARDINALITY,
+SUB_PART,
+NULLABLE,
+COMMENT
+FROM INFORMATION_SCHEMA.STATISTICS 
+WHERE TABLE_SCHEMA = 'test_index_db'
+ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX;
+TABLE_SCHEMA	TABLE_NAME	INDEX_NAME	INDEX_TYPE	COLUMN_NAME	SEQ_IN_INDEX	COLLATION	CARDINALITY	SUB_PART	NULLABLE	COMMENT
+test_index_db	departments_idx	idx_location	BTREE	location	1	A	5	NULL	YES	
+test_index_db	departments_idx	PRIMARY	BTREE	dept_id	1	A	5	NULL		
+test_index_db	employees_idx	idx_department_salary	BTREE	department	1	A	5	NULL	YES	
+test_index_db	employees_idx	idx_department_salary	BTREE	salary	2	D	10	NULL	YES	
+test_index_db	employees_idx	idx_email	BTREE	email	1	A	10	NULL	YES	
+test_index_db	employees_idx	idx_emp_name_prefix	BTREE	emp_name	1	A	10	4		
+test_index_db	employees_idx	PRIMARY	BTREE	emp_id	1	A	10	NULL		
+#
+# 三、Check the DD the standby node to ensure the correctness of metadata replay.
+#
+USE test_index_db;
+# Verify the index replay on the standby node
+SELECT 
+TABLE_SCHEMA,
+TABLE_NAME,
+INDEX_NAME,
+INDEX_TYPE,
+COLUMN_NAME,
+SEQ_IN_INDEX,
+COLLATION,
+CARDINALITY,
+SUB_PART,
+NULLABLE,
+COMMENT
+FROM INFORMATION_SCHEMA.STATISTICS 
+WHERE TABLE_SCHEMA = 'test_index_db'
+ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX;
+TABLE_SCHEMA	TABLE_NAME	INDEX_NAME	INDEX_TYPE	COLUMN_NAME	SEQ_IN_INDEX	COLLATION	CARDINALITY	SUB_PART	NULLABLE	COMMENT
+test_index_db	departments_idx	idx_location	BTREE	location	1	A	NULL	NULL	YES	
+test_index_db	departments_idx	PRIMARY	BTREE	dept_id	1	A	0	NULL		
+test_index_db	employees_idx	idx_department_salary	BTREE	department	1	A	NULL	NULL	YES	
+test_index_db	employees_idx	idx_department_salary	BTREE	salary	2	D	NULL	NULL	YES	
+test_index_db	employees_idx	idx_email	BTREE	email	1	A	NULL	NULL	YES	
+test_index_db	employees_idx	idx_emp_name_prefix	BTREE	emp_name	1	A	NULL	4		
+test_index_db	employees_idx	PRIMARY	BTREE	emp_id	1	A	0	NULL		
+SHOW INDEX FROM employees_idx;
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+employees_idx	0	PRIMARY	1	emp_id	A	0	NULL	NULL		BTREE			YES	NULL
+employees_idx	0	idx_email	1	email	A	NULL	NULL	NULL	YES	BTREE			YES	NULL
+employees_idx	1	idx_department_salary	1	department	A	NULL	NULL	NULL	YES	BTREE			YES	NULL
+employees_idx	1	idx_department_salary	2	salary	D	NULL	NULL	NULL	YES	BTREE			YES	NULL
+employees_idx	1	idx_emp_name_prefix	1	emp_name	A	NULL	4	NULL		BTREE			YES	NULL
+SHOW INDEX FROM departments_idx;
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+departments_idx	0	PRIMARY	1	dept_id	A	0	NULL	NULL		BTREE			YES	NULL
+departments_idx	1	idx_location	1	location	A	NULL	NULL	NULL	YES	BTREE			YES	NULL
+#
+# 四、Execute queries (using indexes) on the primary node. After execution, perform data comparison for later verification on the new primary node to ensure the replay function works correctly.
+#
+USE test_index_db;
+# 1 Perform an UPDATE operation using the index
+UPDATE employees_idx SET salary = salary * 1.1 WHERE department = '技术部';
+# 2 Query using the prefix index
+SELECT emp_id, emp_name FROM employees_idx WHERE emp_name LIKE '张%';
+emp_id	emp_name
+1	张三
+# 3 Perform sorting and grouping using the index
+SELECT department, COUNT(*) as emp_count, AVG(salary) as avg_salary 
+FROM employees_idx 
+GROUP BY department 
+ORDER BY department;
+department	emp_count	avg_salary
+人事部	2	10500.000000
+市场部	1	9000.000000
+技术部	3	15766.666667
+财务部	2	13500.000000
+销售部	2	8250.000000
+# 4 Perform a range query using the index
+SELECT emp_name, department, salary FROM employees_idx 
+WHERE salary BETWEEN 10000 AND 15000 
+ORDER BY salary DESC;
+emp_name	department	salary
+王十二	财务部	14000.00
+李四	技术部	13200.00
+钱七	财务部	13000.00
+郑十一	人事部	11000.00
+赵六	人事部	10000.00
+# 5 Perform a multi-table JOIN using the index
+SELECT e.emp_name, e.department, e.salary, d.location, d.budget
+FROM employees_idx e
+JOIN departments_idx d ON e.department = d.dept_name
+WHERE e.salary > 10000 AND d.location = '北京';
+emp_name	department	salary	location	budget
+周九	技术部	17600.00	北京	1000000.00
+张三	技术部	16500.00	北京	1000000.00
+李四	技术部	13200.00	北京	1000000.00
+# 6 Perform data statistics
+SELECT 
+'employees_idx' as table_name,
+COUNT(*) as record_count,
+MAX(emp_id) as max_id
+FROM employees_idx
+UNION ALL
+SELECT 
+'departments_idx',
+COUNT(*),
+MAX(dept_id)
+FROM departments_idx;
+table_name	record_count	max_id
+employees_idx	10	10
+departments_idx	5	5
+# 7 Check the index metadata
+SELECT 
+TABLE_NAME,
+INDEX_NAME,
+COLUMN_NAME,
+SEQ_IN_INDEX,
+CARDINALITY
+FROM INFORMATION_SCHEMA.STATISTICS 
+WHERE TABLE_SCHEMA = 'test_index_db'
+ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX;
+TABLE_NAME	INDEX_NAME	COLUMN_NAME	SEQ_IN_INDEX	CARDINALITY
+departments_idx	idx_location	location	1	5
+departments_idx	PRIMARY	dept_id	1	5
+employees_idx	idx_department_salary	department	1	5
+employees_idx	idx_department_salary	salary	2	10
+employees_idx	idx_email	email	1	10
+employees_idx	idx_emp_name_prefix	emp_name	1	10
+employees_idx	PRIMARY	emp_id	1	10
+#
+# 五、Perform a switchover.
+#
+############################################################
+switchover_1
+############################################################
+# Demote the source to replica.
+SET GLOBAL read_only = ON;
+SET GLOBAL event_scheduler = OFF;
+call rpl_wal.pdb_demote();
+#
+# dstore_enable_standby_role should show as true, indicating that the current node is the replica.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	1
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	ON
+#
+# Promote the replica to source.
+#
+STOP REPLICA;
+RESET REPLICA ALL FOR CHANNEL 'dstore_wal_replication_channel';
+call rpl_wal.pdb_promote();
+#
+# dstore_enable_standby_role should show as false, indicating that the current node is the source.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	2
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	OFF
+#
+# Clean the primary and standby servers.
+#
+include/stop_wal_dump_threads.inc
+#
+# Re-establish primary-standby relationship.
+#
+CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=old_standby_port, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL 'dstore_wal_replication_channel';;
+include/assert.inc [Channel name should be 'dstore_wal_replication_channel']
+START REPLICA;
+#
+# Slave_IO_Running should be ON.
+#
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+ON
+#
+# Disable read-only mode on the new source.
+#
+SET GLOBAL read_only = OFF;
+SET GLOBAL event_scheduler = ON;
+#
+# 六、Execute data queries and verification on the new primary node, and compare the results with those from Step 4 to verify the correctness of the standby node replay function.
+#
+USE test_index_db;
+# 1 Verify the unique index
+INSERT INTO employees_idx(emp_name, department, salary, hire_date, email) 
+VALUES ('新测试用户', '技术部', 11000.00, '2023-02-01', 'lisi@company.com');
+ERROR 23000: Duplicate entry 'lisi@company.com' for key 'employees_idx.idx_email'
+# 2 Query using the prefix index
+SELECT emp_id, emp_name FROM employees_idx WHERE emp_name LIKE '张%';
+emp_id	emp_name
+1	张三
+# 3 Perform sorting and grouping using the index
+SELECT department, COUNT(*) as emp_count, AVG(salary) as avg_salary 
+FROM employees_idx 
+GROUP BY department 
+ORDER BY department;
+department	emp_count	avg_salary
+人事部	2	10500.000000
+市场部	1	9000.000000
+技术部	3	15766.666667
+财务部	2	13500.000000
+销售部	2	8250.000000
+# 4 Perform a range query using the index
+SELECT emp_name, department, salary FROM employees_idx 
+WHERE salary BETWEEN 10000 AND 15000 
+ORDER BY salary DESC;
+emp_name	department	salary
+王十二	财务部	14000.00
+李四	技术部	13200.00
+钱七	财务部	13000.00
+郑十一	人事部	11000.00
+赵六	人事部	10000.00
+# 5 Perform a multi-table JOIN using the index
+SELECT e.emp_name, e.department, e.salary, d.location, d.budget
+FROM employees_idx e
+JOIN departments_idx d ON e.department = d.dept_name
+WHERE e.salary > 10000 AND d.location = '北京';
+emp_name	department	salary	location	budget
+张三	技术部	16500.00	北京	1000000.00
+李四	技术部	13200.00	北京	1000000.00
+周九	技术部	17600.00	北京	1000000.00
+# 6 Perform data statistics
+SELECT 
+'employees_idx' as table_name,
+COUNT(*) as record_count,
+MAX(emp_id) as max_id
+FROM employees_idx
+UNION ALL
+SELECT 
+'departments_idx',
+COUNT(*),
+MAX(dept_id)
+FROM departments_idx;
+table_name	record_count	max_id
+employees_idx	10	10
+departments_idx	5	5
+# 7 Check the index metadata
+SELECT 
+TABLE_NAME,
+INDEX_NAME,
+COLUMN_NAME,
+SEQ_IN_INDEX,
+CARDINALITY
+FROM INFORMATION_SCHEMA.STATISTICS 
+WHERE TABLE_SCHEMA = 'test_index_db'
+ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX;
+TABLE_NAME	INDEX_NAME	COLUMN_NAME	SEQ_IN_INDEX	CARDINALITY
+departments_idx	idx_location	location	1	NULL
+departments_idx	PRIMARY	dept_id	1	0
+employees_idx	idx_department_salary	department	1	NULL
+employees_idx	idx_department_salary	salary	2	NULL
+employees_idx	idx_email	email	1	NULL
+employees_idx	idx_emp_name_prefix	emp_name	1	NULL
+employees_idx	PRIMARY	emp_id	1	0
+#
+# 七、Perform index operations (create new indexes and drop existing indexes) on the new primary node, and verify the correctness of the standby node's metadata replay.
+#
+# 1 Create a new index on the new primary node
+CREATE INDEX idx_salary_hire_date ON employees_idx(salary, hire_date);
+# 2 Drop replayed index on the new primary node
+DROP INDEX idx_location ON departments_idx;
+# 3 Verify the newly created index on the new standby node
+SHOW INDEX FROM employees_idx WHERE Key_name = 'idx_salary_hire_date';
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+employees_idx	1	idx_salary_hire_date	1	salary	A	NULL	NULL	NULL	YES	BTREE			YES	NULL
+employees_idx	1	idx_salary_hire_date	2	hire_date	A	NULL	NULL	NULL	YES	BTREE			YES	NULL
+# 4 Verify the dropped index on the new standby node
+SHOW INDEX FROM departments_idx WHERE Key_name = 'idx_location';
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+############################################################
+# Uninstall the plugins, reset the variables, and restore the original master-replica replication relationship.
+############################################################
+#
+# 1. Shutdown the mysqld instances of the master and replica servers launched with the new data directory.
+#
+STOP REPLICA;
+RESET REPLICA ALL FOR CHANNEL 'dstore_wal_replication_channel';
+include/stop_wal_dump_threads.inc
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 0;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 0;
+UNINSTALL PLUGIN rpl_semi_sync_source;
+UNINSTALL PLUGIN rpl_semi_sync_replica;
+use mtr;
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 0;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 0;
+UNINSTALL PLUGIN rpl_semi_sync_source;
+UNINSTALL PLUGIN rpl_semi_sync_replica;
+use mtr;
+#
+# 2. Shutdown the mysqld instances of the master and replica servers launched with the new data directory.
+#
+include/rpl_stop_server.inc [server_number=1]
+include/rpl_stop_server.inc [server_number=2]
+# Delete the directories of the primary and standby servers.
+#
+# 3. Restart the mysqld instances of the master and replica servers using the configurations from the opt file.
+#
+include/rpl_start_server.inc [server_number=1]
+show databases;
+Database
+__recyclebin__
+copy_database
+information_schema
+mtr
+mysql
+performance_schema
+sys
+test
+drop database copy_database;
+use mtr;
+include/rpl_start_server.inc [server_number=2]
+use mtr;

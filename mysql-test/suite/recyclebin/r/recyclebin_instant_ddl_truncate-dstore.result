@@ -1,0 +1,283 @@
+#
+# instant add columns and truncate
+#
+set global rds_recycle_bin_mode=on;
+set rds_recycle_bin_mode=on;
+create database db1;
+use db1;
+CREATE TABLE tt_1 (ipkey INT AUTO_INCREMENT, d1 DOUBLE, v2 VARCHAR(23), v3 VARCHAR(25), i4 INT(52), v5 VARCHAR(29), t6 BOOL,  PRIMARY KEY(ipkey), INDEX tt_136i0(i4, ipkey DESC) , INDEX tt_136i1(v2 ASC)  ) ENCRYPTION='N' ROW_FORMAT=DYNAMIC ENGINE=Dstore;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1178	The storage engine for the table doesn't support ROW_FORMAT
+ALTER TABLE tt_1 ADD COLUMN  tN49 BOOL, LOCK=DEFAULT, ALGORITHM=INSTANT;
+Warnings:
+Warning	1178	The storage engine for the table doesn't support ROW_FORMAT
+ALTER TABLE tt_1 COMPRESSION= 'zlib';
+Warnings:
+Warning	1178	The storage engine for the table doesn't support ROW_FORMAT
+ALTER TABLE tt_1 ADD COLUMN  tN175 BOOL, LOCK=DEFAULT, ALGORITHM=INSTANT;
+Warnings:
+Warning	1178	The storage engine for the table doesn't support ROW_FORMAT
+ALTER TABLE tt_1 ADD COLUMN  tN273 BOOL, LOCK=DEFAULT, ALGORITHM=INSTANT;
+Warnings:
+Warning	1178	The storage engine for the table doesn't support ROW_FORMAT
+insert into tt_1 values(456961,0,"fVJKfZSsL","OqXVoixf1v0Q","211070","w7iqpB8NtxxiKqxaV35z4x",0,0,1,1);
+check table tt_1;
+Table	Op	Msg_type	Msg_text
+db1.tt_1	check	note	The storage engine for the table doesn't support check
+TRUNCATE TABLE tt_1;
+insert into tt_1 values(456961,0,"fVJKfZSsL","OqXVoixf1v0Q","211070","w7iqpB8NtxxiKqxaV35z4x",0,0,1,1);
+use db1;
+select * from tt_1;
+ipkey	d1	v2	v3	i4	v5	t6	tN49	tN175	tN273
+456961	0	fVJKfZSsL	OqXVoixf1v0Q	211070	w7iqpB8NtxxiKqxaV35z4x	0	0	1	1
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db1	tt_1	#	#
+SELECT instant_cols FROM information_schema.innodb_tables WHERE name='tt_1';
+instant_cols
+check table `tt_1`;
+Table	Op	Msg_type	Msg_text
+db1.tt_1	check	Error	Table 'db1.tt_1' doesn't exist
+db1.tt_1	check	status	Operation failed
+SELECT instant_cols FROM information_schema.innodb_tables WHERE name='tt_1';
+instant_cols
+check table tt_1;
+Table	Op	Msg_type	Msg_text
+db1.tt_1	check	note	The storage engine for the table doesn't support check
+#
+# restart
+#
+# restart:
+set global rds_recycle_bin_mode=on;
+set rds_recycle_bin_mode=on;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db1	tt_1	#	#
+select * from __recyclebin__.`tt_1`;
+ipkey	d1	v2	v3	i4	v5	t6	tN49	tN175	tN273
+456961	0	fVJKfZSsL	OqXVoixf1v0Q	211070	w7iqpB8NtxxiKqxaV35z4x	0	0	1	1
+check table tt_1;
+Table	Op	Msg_type	Msg_text
+db1.tt_1	check	note	The storage engine for the table doesn't support check
+check table __recyclebin__.`tt_1`;
+Table	Op	Msg_type	Msg_text
+__recyclebin__.tt_1	check	note	The storage engine for the table doesn't support check
+call dbms_recyclebin.purge_table('tt_1');
+use db1;
+select * from tt_1;
+ipkey	d1	v2	v3	i4	v5	t6	tN49	tN175	tN273
+456961	0	fVJKfZSsL	OqXVoixf1v0Q	211070	w7iqpB8NtxxiKqxaV35z4x	0	0	1	1
+SELECT instant_cols FROM information_schema.innodb_tables WHERE name like '%tt_1%';
+instant_cols
+check table tt_1;
+Table	Op	Msg_type	Msg_text
+db1.tt_1	check	note	The storage engine for the table doesn't support check
+insert into tt_1 values(456962,0,"fVJKfZSsL","OqXVoixf1v0Q","211070","w7iqpB8NtxxiKqxaV35z4x",0,0,1,1);
+select * from tt_1;
+ipkey	d1	v2	v3	i4	v5	t6	tN49	tN175	tN273
+456961	0	fVJKfZSsL	OqXVoixf1v0Q	211070	w7iqpB8NtxxiKqxaV35z4x	0	0	1	1
+456962	0	fVJKfZSsL	OqXVoixf1v0Q	211070	w7iqpB8NtxxiKqxaV35z4x	0	0	1	1
+check table tt_1;
+Table	Op	Msg_type	Msg_text
+db1.tt_1	check	note	The storage engine for the table doesn't support check
+#
+# restart
+#
+# restart:
+use db1;
+select * from tt_1;
+ipkey	d1	v2	v3	i4	v5	t6	tN49	tN175	tN273
+456961	0	fVJKfZSsL	OqXVoixf1v0Q	211070	w7iqpB8NtxxiKqxaV35z4x	0	0	1	1
+456962	0	fVJKfZSsL	OqXVoixf1v0Q	211070	w7iqpB8NtxxiKqxaV35z4x	0	0	1	1
+SELECT instant_cols FROM information_schema.innodb_tables WHERE name like '%tt_1%';
+instant_cols
+check table tt_1;
+Table	Op	Msg_type	Msg_text
+db1.tt_1	check	note	The storage engine for the table doesn't support check
+set rds_recycle_bin_mode=off;
+truncate table tt_1;
+drop table tt_1;
+set global rds_recycle_bin_mode=on;
+set rds_recycle_bin_mode=on;
+CREATE TABLE tt_25 (f0 FLOAT, i1_rename INT AUTO_INCREMENT, i2 INTEGER, i3 INT, g4_rename  CHAR(8) GENERATED ALWAYS AS (CONCAT(SUBSTRING(i3,1,1),SUBSTRING(i3,1,3),SUBSTRING(i2,1,4))) STORED, iN149 INT, cN12_rename CHAR(14), iN180_rename INTEGER, cN184 CHAR(18), gN114  VARCHAR(11) GENERATED ALWAYS AS (CONCAT(SUBSTRING(f0,1,4),SUBSTRING(cN184,1,6),SUBSTRING(f0,1,1))), vN259_rename VARCHAR(25), iN91_rename INT, vN92_rename VARCHAR(21), gN186  CHAR(10) GENERATED ALWAYS AS (CONCAT(i2)), vN299_rename VARCHAR(18), tN132 BOOL, tN33_rename BOOL, vN95 VARCHAR(26), tN23 BOOL, vN289_rename VARCHAR(13), tN234_rename BOOL, tN10 BOOL, tN203 BOOL, vN136 VARCHAR(19), vN92 VARCHAR(18), iN105 INT, cN22 CHAR(10), gN79_rename  CHAR(5) GENERATED ALWAYS AS (CONCAT(tN234_rename,tN234_rename,SUBSTRING(cN22,1,1),SUBSTRING(iN91_rename,1,1),tN132)), vN68_rename VARCHAR(17), iN181 INT, cN174 CHAR(29), iN163 INT, iN24 INT, vN111 VARCHAR(24), tN273_rename BOOL, tN95 BOOL, iN88_rename INT, iN226 INT, iN23 INT, vN76 VARCHAR(29), iN172 INTEGER, vN230 VARCHAR(14), iN57 INT, vN103 VARCHAR(29), vN106 VARCHAR(26), iN283 INT(64), cN185 CHAR(19), INDEX tt_25i0(f0, i2 DESC, g4_rename) , INDEX tt_25i1(i1_rename DESC, i2, i3, f0 DESC, g4_rename ASC)  ) ROW_FORMAT=COMPRESSED ENGINE=Dstore;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1178	The storage engine for the table doesn't support ROW_FORMAT
+ALTER TABLE tt_25 DROP COLUMN iN163, LOCK=DEFAULT, ALGORITHM=INSTANT;
+Warnings:
+Warning	1178	The storage engine for the table doesn't support ROW_FORMAT
+TRUNCATE TABLE tt_25;
+ALTER TABLE tt_25 ADD COLUMN tN135 BOOL, LOCK=DEFAULT, ALGORITHM=INSTANT;
+Warnings:
+Warning	1178	The storage engine for the table doesn't support ROW_FORMAT
+SHOW CREATE TABLE tt_25;
+Table	Create Table
+tt_25	CREATE TABLE `tt_25` (
+  `f0` float DEFAULT NULL,
+  `i1_rename` int NOT NULL AUTO_INCREMENT,
+  `i2` int DEFAULT NULL,
+  `i3` int DEFAULT NULL,
+  `g4_rename` char(8) GENERATED ALWAYS AS (concat(substr(`i3`,1,1),substr(`i3`,1,3),substr(`i2`,1,4))) STORED,
+  `iN149` int DEFAULT NULL,
+  `cN12_rename` char(14) DEFAULT NULL,
+  `iN180_rename` int DEFAULT NULL,
+  `cN184` char(18) DEFAULT NULL,
+  `gN114` varchar(11) GENERATED ALWAYS AS (concat(substr(`f0`,1,4),substr(`cN184`,1,6),substr(`f0`,1,1))) VIRTUAL,
+  `vN259_rename` varchar(25) DEFAULT NULL,
+  `iN91_rename` int DEFAULT NULL,
+  `vN92_rename` varchar(21) DEFAULT NULL,
+  `gN186` char(10) GENERATED ALWAYS AS (concat(`i2`)) VIRTUAL,
+  `vN299_rename` varchar(18) DEFAULT NULL,
+  `tN132` tinyint(1) DEFAULT NULL,
+  `tN33_rename` tinyint(1) DEFAULT NULL,
+  `vN95` varchar(26) DEFAULT NULL,
+  `tN23` tinyint(1) DEFAULT NULL,
+  `vN289_rename` varchar(13) DEFAULT NULL,
+  `tN234_rename` tinyint(1) DEFAULT NULL,
+  `tN10` tinyint(1) DEFAULT NULL,
+  `tN203` tinyint(1) DEFAULT NULL,
+  `vN136` varchar(19) DEFAULT NULL,
+  `vN92` varchar(18) DEFAULT NULL,
+  `iN105` int DEFAULT NULL,
+  `cN22` char(10) DEFAULT NULL,
+  `gN79_rename` char(5) GENERATED ALWAYS AS (concat(`tN234_rename`,`tN234_rename`,substr(`cN22`,1,1),substr(`iN91_rename`,1,1),`tN132`)) VIRTUAL,
+  `vN68_rename` varchar(17) DEFAULT NULL,
+  `iN181` int DEFAULT NULL,
+  `cN174` char(29) DEFAULT NULL,
+  `iN24` int DEFAULT NULL,
+  `vN111` varchar(24) DEFAULT NULL,
+  `tN273_rename` tinyint(1) DEFAULT NULL,
+  `tN95` tinyint(1) DEFAULT NULL,
+  `iN88_rename` int DEFAULT NULL,
+  `iN226` int DEFAULT NULL,
+  `iN23` int DEFAULT NULL,
+  `vN76` varchar(29) DEFAULT NULL,
+  `iN172` int DEFAULT NULL,
+  `vN230` varchar(14) DEFAULT NULL,
+  `iN57` int DEFAULT NULL,
+  `vN103` varchar(29) DEFAULT NULL,
+  `vN106` varchar(26) DEFAULT NULL,
+  `iN283` int DEFAULT NULL,
+  `cN185` char(19) DEFAULT NULL,
+  `tN135` tinyint(1) DEFAULT NULL,
+  KEY `tt_25i0` (`f0`,`i2` DESC,`g4_rename`),
+  KEY `tt_25i1` (`i1_rename` DESC,`i2`,`i3`,`f0` DESC,`g4_rename`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=COMPRESSED
+CREATE TABLE tt_26 (
+f0 FLOAT,
+iN163 INT,
+iN164 INT
+) ENGINE = Dstore;
+INSERT INTO tt_26
+VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
+ALTER TABLE tt_26
+DROP COLUMN iN163,
+LOCK = DEFAULT,
+ALGORITHM = INSTANT;
+INSERT INTO tt_26
+VALUES (4, 4), (5, 5), (6, 6);
+SHOW CREATE TABLE tt_26;
+Table	Create Table
+tt_26	CREATE TABLE `tt_26` (
+  `f0` float DEFAULT NULL,
+  `iN164` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+TRUNCATE TABLE tt_26;
+SHOW CREATE TABLE tt_26;
+Table	Create Table
+tt_26	CREATE TABLE `tt_26` (
+  `f0` float DEFAULT NULL,
+  `iN164` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SELECT * FROM tt_26;
+f0	iN164
+INSERT INTO tt_26
+VALUES (7, 7), (8, 8), (9, 9);
+SELECT * FROM tt_26;
+f0	iN164
+7	7
+8	8
+9	9
+ALTER TABLE tt_26
+ADD COLUMN tN136 BOOL AFTER f0,
+LOCK = DEFAULT,
+ALGORITHM = INSTANT;
+SHOW CREATE TABLE tt_26;
+Table	Create Table
+tt_26	CREATE TABLE `tt_26` (
+  `f0` float DEFAULT NULL,
+  `tN136` tinyint(1) DEFAULT NULL,
+  `iN164` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SELECT * FROM tt_26;
+f0	tN136	iN164
+7	NULL	7
+8	NULL	8
+9	NULL	9
+INSERT INTO tt_26
+VALUES (10, 10, 10), (11, 11, 11), (12, 12, 12);
+SELECT * FROM tt_26;
+f0	tN136	iN164
+7	NULL	7
+8	NULL	8
+9	NULL	9
+10	10	10
+11	11	11
+12	12	12
+TRUNCATE TABLE tt_26;
+SHOW CREATE TABLE tt_26;
+Table	Create Table
+tt_26	CREATE TABLE `tt_26` (
+  `f0` float DEFAULT NULL,
+  `tN136` tinyint(1) DEFAULT NULL,
+  `iN164` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SELECT * FROM tt_26;
+f0	tN136	iN164
+INSERT INTO tt_26
+VALUES (13, 13, 13), (14, 14, 14), (15, 15, 15);
+SHOW CREATE TABLE tt_26;
+Table	Create Table
+tt_26	CREATE TABLE `tt_26` (
+  `f0` float DEFAULT NULL,
+  `tN136` tinyint(1) DEFAULT NULL,
+  `iN164` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SELECT * FROM tt_26;
+f0	tN136	iN164
+13	13	13
+14	14	14
+15	15	15
+CREATE TABLE tt_28 (
+f0 FLOAT,
+iN163 INT AUTO_INCREMENT PRIMARY KEY,
+iN164 INT
+) ENGINE = InnoDB;
+INSERT INTO tt_28(f0, iN164)
+VALUES (1, 1), (2, 2), (3, 3);
+SELECT * FROM tt_28;
+f0	iN163	iN164
+1	1	1
+2	2	2
+3	3	3
+TRUNCATE TABLE tt_28;
+INSERT INTO tt_28(f0, iN164)
+VALUES (1, 1), (2, 2), (3, 3);
+SELECT * FROM tt_28;
+f0	iN163	iN164
+1	1	1
+2	2	2
+3	3	3
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db1	tt_25	#	#
+__recyclebin__	#	db1	tt_26	#	#
+__recyclebin__	#	db1	tt_26	#	#
+__recyclebin__	#	db1	tt_28	#	#
+DROP TABLE tt_25, tt_26, tt_28;
+drop database db1;
+drop database __recyclebin__;
+create database __recyclebin__ default character set utf8mb4;
+set global rds_recycle_bin_mode=off;
+set rds_recycle_bin_mode=off;

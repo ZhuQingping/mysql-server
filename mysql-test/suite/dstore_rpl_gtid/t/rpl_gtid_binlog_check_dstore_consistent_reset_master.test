@@ -1,0 +1,85 @@
+# ==== Purpose =======
+# Verify that after stopping the primary instance, resetting binary logs on both primary and replica,
+# and then restarting the replica, the system maintains data consistency with:
+#- rds_binlog_dstore_consistent = TRUE(ON)
+#- rds_dstore_missed_gtids = empty
+#- rds_dstore_missed_gtids_on_binlog = empty
+# Additionally, verify that after committing a transaction on the primary and restarting it,
+# the same consistency metrics are maintained, and replication functions normally when
+# START SLAVE is executed on the replica.
+# ==== References ====
+#
+# US2025072201182 Write gtid into wal and recovery read gtid from wal.
+#
+
+--source include/have_only_dstore.inc
+--source include/have_binlog_format_row.inc
+--source include/master-slave.inc
+
+--echo # -----------------------------------------------------------------------
+--echo # Step 1: Initialize Data on Master
+--echo # -----------------------------------------------------------------------
+
+--source include/rpl_connection_master.inc
+CREATE TABLE t(
+  id INT
+) ENGINE=DSTORE;
+
+# Expected: 5 rows are inserted and logged as Row events.
+INSERT INTO t(id) VALUES(1),(2),(3),(4),(5);
+
+# Expected: Sync the initial state to the slave.
+--source include/sync_slave_sql_with_master.inc
+
+--source include/rpl_connection_slave.inc
+--source include/stop_slave.inc
+reset master;
+reset replica;
+
+--source include/rpl_connection_master.inc
+reset master;
+
+--source include/rpl_connection_slave.inc
+--source include/kill_mysqld.inc
+--let $restart_parameters=restart:--skip-replica-start
+--source include/start_mysqld.inc
+--source include/rpl_reconnect.inc
+--source include/rpl_connection_slave.inc
+
+--echo # expect rds_binlog_dstore_consistent is ON.
+show variables like 'rds_binlog_dstore_consistent';
+ 
+--echo # expect rds_dstore_missed_gtids is empty
+show variables like 'rds_dstore_missed_gtids';
+ 
+--echo # expect rds_dstore_missed_gtids_on_binlog is empty.
+ 
+show variables like 'rds_dstore_missed_gtids_on_binlog';
+
+--source include/start_slave.inc
+
+--source include/rpl_connection_master.inc
+INSERT INTO t(id) VALUES(6);
+--source include/kill_mysqld.inc
+--let $restart_parameters=restart
+--source include/start_mysqld.inc
+--source include/rpl_reconnect.inc
+--source include/rpl_connection_master.inc
+
+--echo # expect rds_binlog_dstore_consistent is ON.
+show variables like 'rds_binlog_dstore_consistent';
+ 
+--echo # expect rds_dstore_missed_gtids is empty
+show variables like 'rds_dstore_missed_gtids';
+ 
+--echo # expect rds_dstore_missed_gtids_on_binlog is empty.
+ 
+show variables like 'rds_dstore_missed_gtids_on_binlog';
+--source include/rpl_connection_slave.inc
+--source include/stop_slave.inc
+--source include/start_slave.inc
+
+--source include/rpl_connection_master.inc
+drop table t;
+--source include/sync_slave_sql_with_master.inc
+

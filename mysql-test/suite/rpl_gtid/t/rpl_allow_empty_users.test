@@ -1,0 +1,218 @@
+##### mysql-test\suite\rpl_gtid\t\rpl_allow_empty_users_mixed_or_row.test ######
+#                                                                              #
+# FE2023031300451: Provide a system variable to control the creation of an     #
+# empty user.                                                                  #
+# This is a test case for the US: US2023031300970.                             #
+# Related design documents and details are available at the following link:    #
+# https://clouddevops.huawei.com/workitem/FE2023031300451                      #
+#                                                                              #
+################################################################################
+--source include/master-slave.inc
+
+################################################################################
+--echo #Validate the behavior of the program when creating empty users.        #
+################################################################################
+--source include/rpl_connection_master.inc
+call mtr.add_suppression("Unsafe statement written to the binary log.*");
+--echo #Obtains the current user name.
+--let $cur_user=root
+--echo
+
+--echo #Enable the function of allowing empty users.
+--echo #All accounts with the permission of creating new users can create empty
+--echo #users.
+SET GLOBAL rds_allow_empty_users=ON;
+SET GLOBAL rds_reserved_users='';
+--source include/rpl_connection_slave.inc
+SET GLOBAL rds_allow_empty_users=ON;
+SET GLOBAL rds_reserved_users='';
+--source include/rpl_connection_master.inc
+CREATE USER ''@'10.185.%' IDENTIFIED BY '';
+--source include/sync_slave_sql_with_master.inc
+--echo
+
+--echo #Disable the function of allowing empty users.
+--echo #Only rds reserved accounts can create empty users.
+--source include/rpl_connection_master.inc
+SET GLOBAL rds_allow_empty_users=OFF;
+--source include/rpl_connection_slave.inc
+SET GLOBAL rds_allow_empty_users=OFF;
+--source include/rpl_connection_master.inc
+--error ER_CANNOT_USER
+CREATE USER ''@'10.186.%' IDENTIFIED BY '';
+--echo #Add the current user as rds_reserved_users.
+--eval SET @@global.rds_reserved_users=$cur_user
+--source include/rpl_connection_slave.inc
+--eval SET @@global.rds_reserved_users=$cur_user
+--source include/rpl_connection_master.inc
+CREATE USER ''@'10.186.%' IDENTIFIED BY '';
+--echo
+
+--echo #Verify the synchronization between the source and the replica.
+--source include/sync_slave_sql_with_master.inc
+--let $diff_tables=master:mysql.user, slave:mysql.user
+--source include/diff_tables.inc
+--echo
+
+--echo #Clear the previous data.
+--source include/rpl_connection_master.inc
+DROP USER ''@'10.185.%', ''@'10.186.%';
+--source include/sync_slave_sql_with_master.inc
+--echo
+
+################################################################################
+--echo #Validate the program behavior when renaming another user name to an    #
+--echo #empty user.                                                            #
+################################################################################
+--source include/rpl_connection_master.inc
+--echo #Enable the function of allowing empty users.
+--echo #All accounts with the permission of renaming users can change a user to
+--echo #an empty user.
+SET GLOBAL rds_allow_empty_users=ON;
+SET GLOBAL rds_reserved_users='';
+--source include/rpl_connection_slave.inc
+SET GLOBAL rds_allow_empty_users=ON;
+SET GLOBAL rds_reserved_users='';
+--source include/rpl_connection_master.inc
+CREATE USER 'test1'@'10.185.%' IDENTIFIED BY '';
+RENAME USER 'test1'@'10.185.%' TO ''@'10.185.%';
+--source include/sync_slave_sql_with_master.inc
+--echo
+
+--echo #Disable the function of allowing empty users.
+--echo #Only rds reserved accounts can rename a user to empty users.
+--source include/rpl_connection_master.inc
+SET GLOBAL rds_allow_empty_users=OFF;
+--source include/rpl_connection_slave.inc
+SET GLOBAL rds_allow_empty_users=OFF;
+--source include/rpl_connection_master.inc
+CREATE USER 'test2'@'10.186.%' IDENTIFIED BY '';
+--error ER_CANNOT_USER
+RENAME USER 'test2'@'10.186.%' TO ''@'10.186.%';
+--echo #Add the current user as rds_reserved_users.
+--eval SET @@global.rds_reserved_users=$cur_user
+--source include/rpl_connection_slave.inc
+--eval SET @@global.rds_reserved_users=$cur_user
+--source include/rpl_connection_master.inc
+RENAME USER 'test2'@'10.186.%' TO ''@'10.186.%';
+--echo
+
+--echo #Verify the synchronization between the source and the replica.
+--source include/sync_slave_sql_with_master.inc
+--let $diff_tables=master:mysql.user, slave:mysql.user
+--source include/diff_tables.inc
+--echo
+
+--echo #Clear the previous data.
+--source include/rpl_connection_master.inc
+DROP USER ''@'10.185.%', ''@'10.186.%';
+--source include/sync_slave_sql_with_master.inc
+--echo
+
+################################################################################
+--echo #Validate the program behavior when inserting empty users directly into #
+--echo #the mysql.user table.                                                  #
+################################################################################
+--source include/rpl_connection_master.inc
+--echo #Enable the function of allowing empty users.
+--echo #All accounts with the permission to insert data into the mysql.user
+--echo #table can create empty users.
+SET GLOBAL rds_allow_empty_users=ON;
+SET GLOBAL rds_reserved_users='';
+--source include/rpl_connection_slave.inc
+SET GLOBAL rds_allow_empty_users=ON;
+SET GLOBAL rds_reserved_users='';
+--source include/rpl_connection_master.inc
+--disable_warnings
+INSERT INTO mysql.user(HOST, USER, authentication_string, ssl_cipher,
+x509_issuer, x509_subject) VALUES ('10.185.%', '', '12345678', '', '', '');
+--enable_warnings
+--source include/sync_slave_sql_with_master.inc
+--let $diff_tables=master:mysql.user, slave:mysql.user
+--source include/diff_tables.inc
+--echo
+
+--echo #Disable the function of allowing empty users.
+--echo #All accounts can not insert empty users.
+--source include/rpl_connection_master.inc
+SET GLOBAL rds_allow_empty_users=OFF;
+--source include/rpl_connection_slave.inc
+SET GLOBAL rds_allow_empty_users=OFF;
+--source include/rpl_connection_master.inc
+--error S45000
+INSERT INTO mysql.user(HOST, USER, authentication_string, ssl_cipher,
+x509_issuer, x509_subject) VALUES ('10.186.%', '', '12345678', '', '', '');
+--echo #Add the current user as rds_reserved_users.
+--eval SET @@global.rds_reserved_users=$cur_user
+--source include/rpl_connection_slave.inc
+--eval SET @@global.rds_reserved_users=$cur_user
+--source include/rpl_connection_master.inc
+--echo #Even rds reserved users cannot insert empty users.
+--error S45000
+INSERT INTO mysql.user(HOST, USER, authentication_string, ssl_cipher,
+x509_issuer, x509_subject) VALUES ('10.186.%', '', '12345678', '', '', '');
+--echo
+
+--echo #Clear the previous data.
+--source include/rpl_connection_master.inc
+DROP USER ''@'10.185.%';
+--source include/sync_slave_sql_with_master.inc
+--echo
+
+################################################################################
+--echo #Validate the program behavior when updating to an empty user directly  #
+--echo #in the mysql.user table.                                               #
+################################################################################
+--source include/rpl_connection_master.inc
+--echo #Enable the function of allowing empty users.
+--echo #All accounts with the permission to update the mysql.user table can
+--echo #update a user name to an empty user.
+SET GLOBAL rds_allow_empty_users=ON;
+SET GLOBAL rds_reserved_users='';
+--source include/rpl_connection_slave.inc
+SET GLOBAL rds_allow_empty_users=ON;
+SET GLOBAL rds_reserved_users='';
+--source include/rpl_connection_master.inc
+CREATE USER 'test1'@'10.185.%' IDENTIFIED BY '12345678';
+--disable_warnings
+UPDATE mysql.user SET user='' WHERE user='test1';
+--enable_warnings
+--source include/sync_slave_sql_with_master.inc
+--let $diff_tables=master:mysql.user, slave:mysql.user
+--source include/diff_tables.inc
+--echo
+
+--echo #Disable the function of allowing empty users.
+--echo #ALL accounts can not update a user to an empty user.
+--source include/rpl_connection_master.inc
+SET GLOBAL rds_allow_empty_users=OFF;
+--source include/rpl_connection_slave.inc
+SET GLOBAL rds_allow_empty_users=OFF;
+--source include/rpl_connection_master.inc
+CREATE USER 'test2'@'10.186.%' IDENTIFIED BY '12345678';
+--error S45000
+UPDATE mysql.user SET user='' WHERE user='test2';
+--echo #Add the current user as rds_reserved_users.
+--eval SET @@global.rds_reserved_users=$cur_user
+--source include/rpl_connection_slave.inc
+--eval SET @@global.rds_reserved_users=$cur_user
+--source include/rpl_connection_master.inc
+--echo #Even rds reserved users cannot update others users to empty users.
+--error S45000
+UPDATE mysql.user SET user='' WHERE user='test2';
+--echo
+
+--echo #Clear the previous data.
+--source include/rpl_connection_master.inc
+DROP USER ''@'10.185.%', 'test2'@'10.186.%';
+--source include/sync_slave_sql_with_master.inc
+--echo
+
+--echo #Clear the modification of system variables.
+--source include/rpl_connection_master.inc
+SET GLOBAL rds_allow_empty_users=OFF;
+SET GLOBAL rds_reserved_users='';
+--source include/rpl_connection_slave.inc
+SET GLOBAL rds_allow_empty_users=OFF;
+SET GLOBAL rds_reserved_users='';
+--source include/rpl_end.inc

@@ -1,0 +1,170 @@
+--source include/have_debug.inc
+--source suite/local_backup/include/prepare_for_backup.inc
+
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("Creating tablespace is not allowed when local backup is running");
+call mtr.add_suppression("Dropping tablespace is not allowed when local backup is running");
+
+CREATE DATABASE db1;
+USE db1;
+CREATE TABLE t1(a int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+
+# Test create/drop tablespace & files in the middle of local backup.
+# 1. Create tablespace during local backup running.
+SET GLOBAL debug='+d,lb_pause_after_first_dstore_tbs_data_arrive';
+# full backup.
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+
+INSERT INTO t1 VALUES(2);
+SELECT * FROM t1 order by a;
+--error ER_CREATE_FILEGROUP_FAILED
+CREATE TABLESPACE ts1 MAX_SIZE=41943040;
+#CREATE TABLE t2(a int) ENGINE=Dstore, TABLESPACE=ts1;
+#INSERT INTO t2 VALUES(100);
+#SELECT * FROM t2;
+
+SET GLOBAL debug='-d,lb_pause_after_first_dstore_tbs_data_arrive';
+--source suite/local_backup/include/wait_full_backup.inc
+
+INSERT INTO t1 VALUES(3);
+SELECT * FROM t1 order by a;
+
+--echo # Shut server down.
+--let $shutdown_server_timeout = 300
+--source include/shutdown_mysqld.inc
+
+# Restore with script.
+--source suite/local_backup/include/restore_with_script.inc
+
+--echo # Restart the server.
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+USE db1;
+SELECT * FROM t1 order by a;
+SELECT * FROM information_schema.dstore_tablespaces;
+
+# 2. Drop tablespace during local backup running, before the files are copied.
+CREATE TABLESPACE ts1 MAX_SIZE=41943040;
+CREATE TABLE t2(a int) ENGINE=Dstore, TABLESPACE=ts1;
+INSERT INTO t2 VALUES(100);
+SELECT * FROM t2;
+SET GLOBAL debug='+d,lb_pause_after_first_dstore_tbs_data_arrive';
+# full backup.
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+
+INSERT INTO t1 VALUES(4);
+SELECT * FROM t1 order by a;
+INSERT INTO t2 VALUES(200);
+DROP TABLE t2;
+--error ER_DROP_FILEGROUP_FAILED
+DROP TABLESPACE ts1;
+
+SET GLOBAL debug='-d,lb_pause_after_first_dstore_tbs_data_arrive';
+--source suite/local_backup/include/wait_full_backup.inc
+
+INSERT INTO t1 VALUES(5);
+SELECT * FROM t1 order by a;
+
+--echo # Shut server down.
+--let $shutdown_server_timeout = 300
+--source include/shutdown_mysqld.inc
+
+# Restore with script.
+--source suite/local_backup/include/restore_with_script.inc
+
+--echo # Restart the server.
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+USE db1;
+SELECT * FROM t1 order by a;
+SELECT * FROM information_schema.dstore_tablespaces;
+
+# 3. Drop tablespace during local backup running, after the files are copied.
+CREATE TABLESPACE ts2 MAX_SIZE=41943040;
+CREATE TABLE t3(a int) ENGINE=Dstore, TABLESPACE=ts2;
+INSERT INTO t3 VALUES(100);
+SELECT * FROM t3;
+
+SET GLOBAL debug='+d,lb_pause_before_last_dstore_tbs_data_arrive';
+# full backup.
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+--sleep 30
+
+INSERT INTO t1 VALUES(6);
+SELECT * FROM t1 order by a;
+INSERT INTO t3 VALUES(200);
+DROP TABLE t3;
+--error ER_DROP_FILEGROUP_FAILED
+DROP TABLESPACE ts2;
+
+SET GLOBAL debug='-d,lb_pause_before_last_dstore_tbs_data_arrive';
+--source suite/local_backup/include/wait_full_backup.inc
+
+INSERT INTO t1 VALUES(7);
+SELECT * FROM t1 order by a;
+
+--echo # Shut server down.
+--let $shutdown_server_timeout = 300
+--source include/shutdown_mysqld.inc
+
+# Restore with script.
+--source suite/local_backup/include/restore_with_script.inc
+
+--echo # Restart the server.
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+USE db1;
+SELECT * FROM t1 order by a;
+SELECT * FROM information_schema.dstore_tablespaces;
+
+# 4. Mix create & drop tablespace during local backup running.
+SET GLOBAL debug='+d,lb_pause_before_last_dstore_tbs_data_arrive';
+# full backup.
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+
+INSERT INTO t1 VALUES(8);
+SELECT * FROM t1 order by a;
+--error ER_CREATE_FILEGROUP_FAILED
+CREATE TABLESPACE ts3 MAX_SIZE=41943040;
+#CREATE TABLE t4(a int) ENGINE=Dstore, TABLESPACE=ts3;
+#INSERT INTO t4 VALUES(100);
+#SELECT * FROM t4;
+#DROP TABLE t4;
+#DROP TABLESPACE ts3;
+
+SET GLOBAL debug='-d,lb_pause_before_last_dstore_tbs_data_arrive';
+--source suite/local_backup/include/wait_full_backup.inc
+
+INSERT INTO t1 VALUES(9);
+SELECT * FROM t1 order by a;
+
+--echo # Shut server down.
+--let $shutdown_server_timeout = 300
+--source include/shutdown_mysqld.inc
+
+# Restore with script.
+--source suite/local_backup/include/restore_with_script.inc
+
+--echo # Restart the server.
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+USE db1;
+SELECT * FROM t1 order by a;
+SELECT * FROM information_schema.dstore_tablespaces;
+
+# Drop database db1.
+DROP DATABASE db1;
+DROP TABLESPACE ts1;
+DROP TABLESPACE ts2;
+
+--source suite/local_backup/include/clean_backup.inc

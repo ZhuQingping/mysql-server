@@ -1,0 +1,68 @@
+DESCRIBE INFORMATION_SCHEMA.DSTORE_MEM;
+Field	Type	Null	Key	Default	Extra
+os_thread_id	bigint unsigned	NO			
+root_allocated	bigint unsigned	NO			
+root_used	bigint unsigned	NO			
+longlive_allocated	bigint unsigned	NO			
+longlive_used	bigint unsigned	NO			
+smgr_allocated	bigint unsigned	NO			
+smgr_used	bigint unsigned	NO			
+error_allocated	bigint unsigned	NO			
+error_used	bigint unsigned	NO			
+buffer_allocated	bigint unsigned	NO			
+buffer_used	bigint unsigned	NO			
+transaction_allocated	bigint unsigned	NO			
+transaction_used	bigint unsigned	NO			
+lock_allocated	bigint unsigned	NO			
+lock_used	bigint unsigned	NO			
+query_allocated	bigint unsigned	NO			
+query_used	bigint unsigned	NO			
+stack_allocated	bigint unsigned	NO			
+stack_used	bigint unsigned	NO			
+others_allocated	bigint unsigned	NO			
+others_used	bigint unsigned	NO			
+DROP TABLE IF EXISTS test_dstore_mem;
+CREATE TABLE test_dstore_mem (
+id INT PRIMARY KEY AUTO_INCREMENT,
+data INT,
+info VARCHAR(50)
+) ENGINE=DSTORE;
+DROP PROCEDURE IF EXISTS insert_test_data;
+CREATE PROCEDURE insert_test_data()
+BEGIN
+DECLARE i INT DEFAULT 1;
+DECLARE EXIT HANDLER FOR SQLEXCEPTION ROLLBACK;
+START TRANSACTION;
+WHILE i <= 500 DO
+INSERT INTO test_dstore_mem (data, info) VALUES (i, CONCAT('test_', i));
+SET i = i + 1;
+IF i % 100 = 0 THEN
+COMMIT;
+START TRANSACTION;
+END IF;
+END WHILE;
+COMMIT;
+END |
+DROP PROCEDURE IF EXISTS query_test_data;
+CREATE PROCEDURE query_test_data()
+BEGIN
+DECLARE dummy INT;
+SELECT COUNT(*) INTO dummy FROM test_dstore_mem WHERE data < 100;
+SELECT COUNT(*) INTO dummy FROM test_dstore_mem WHERE data > 400;
+SELECT MAX(data) INTO dummy FROM test_dstore_mem;
+END |
+CALL insert_test_data();
+CALL query_test_data();
+SELECT COUNT(*) AS dstore_mem_row_count FROM INFORMATION_SCHEMA.DSTORE_MEM;
+dstore_mem_row_count
+##
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_MEM WHERE OS_THREAD_ID=0;
+COUNT(*)
+0
+SELECT OS_THREAD_ID into @tid FROM INFORMATION_SCHEMA.DSTORE_MEM LIMIT 1;
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_MEM WHERE OS_THREAD_ID=@tid;
+COUNT(*)
+1
+DROP TABLE test_dstore_mem;
+DROP PROCEDURE insert_test_data;
+DROP PROCEDURE query_test_data;

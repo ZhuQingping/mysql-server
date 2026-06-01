@@ -1,0 +1,381 @@
+--source include/have_only_dstore.inc
+--echo # CDE
+--echo #
+use test;
+--echo # test mysql data types
+
+SET @old_sql_mode= @@sql_mode;
+
+--echo # test signed int
+create table t(a int signed, index k_a(a)) engine=Dstore;
+insert into t values(0), (1), (-1), (0x10000), (-0x10000), (0x7fffffff), (-0x80000000);
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>=0;
+select a from t where a<0;
+drop table t;
+
+--echo # test unsigned int
+create table t(a int unsigned, index k_a(a)) engine=Dstore;
+insert into t values(0), (1), (0x10000), (0x7fffffff), (0xffffffff);
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>=0;
+select a from t where a<0;
+drop table t;
+
+--echo # test signed bigint
+create table t(a bigint signed, index k_a(a)) engine=Dstore;
+insert into t values(0), (1), (-1), (0x7fffffffffffffff), (-0x8000000000000000);
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>=0;
+select a from t where a<0;
+drop table t;
+
+--echo # test signed mediumint
+create table t(a mediumint signed, index k_a(a)) engine=Dstore;
+insert into t values(0), (1), (-1), (0xff), (-0xff), (0x10000), (-0x10000), (0x7fffff), (-0x800000);
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>=0;
+select a from t where a<0;
+drop table t;
+
+--echo # test unsigned mediumint
+create table t(a mediumint unsigned, index k_a(a)) engine=Dstore;
+insert into t values(0), (1), (0xff), (0x100), (0x10000), (0x100000), (0x7fffff), (0xffffff);
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>=0;
+select a from t where a<0;
+drop table t;
+
+SET @@sql_mode = '';
+--echo # test signed tinyint
+create table t(a tinyint signed, index k_a(a)) engine=Dstore;
+insert into t values(0), (1), (-1), (0xff), (-0xff), (0x1000), (-0x1000);
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>=0;
+select a from t where a<0;
+drop table t;
+
+--echo # test unsigned tinyint
+create table t(a tinyint unsigned, index k_a(a)) engine=Dstore;
+insert into t values(0), (1), (-1), (0xff), (-0xff), (0x1000), (-0x1000);
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>=0;
+select a from t where a<0;
+drop table t;
+SET @@sql_mode = @old_sql_mode;
+
+--echo # test signed decimal
+create table t(a decimal(10,4) signed, index k_a(a)) engine=Dstore;
+insert into t values(0), (-0.9), (-9.9), (-9999.99), (-9999.9999), (-999999.9999), (0.9), (9.9), (9999.99), (9999.9999), (999999.9999);
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>=0;
+select a from t where a<0;
+drop table t;
+
+--echo # test unsigned decimal
+create table t(a decimal(10,4) unsigned, index k_a(a)) engine=Dstore;
+insert into t values(0), (0.9), (9.9), (9999.99), (9999.9999), (999999.9999);
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>=0;
+select a from t where a<0;
+drop table t;
+
+--echo # test unsigned float
+create table t(a float unsigned, index k_a(a)) engine=Dstore;
+insert into t values(0), (0.9), (9.9), (9999.99), (9999.9999), (999999.9999);
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>=0;
+select a from t where a<0;
+drop table t;
+
+--echo # test signed float
+create table t(a float signed, index k_a(a)) engine=Dstore;
+insert into t values(0), (-0.9), (-9.9), (-9999.99), (-9999.9999), (-999999.9999), (0.9), (9.9), (9999.99), (9999.9999), (999999.9999);
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>=0;
+select a from t where a<0;
+drop table t;
+
+--echo # test unsigned double
+create table t(a double unsigned, index k_a(a)) engine=Dstore;
+insert into t values(0), (0.9), (9.9), (9999.99), (9999.9999), (999999.9999);
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>=0;
+select a from t where a<0;
+drop table t;
+
+--echo # test signed double
+create table t(a double signed, index k_a(a)) engine=Dstore;
+insert into t values(0), (-0.9), (-9.9), (-9999.99), (-9999.9999), (-999999.9999), (0.9), (9.9), (9999.99), (9999.9999), (999999.9999);
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>=0;
+select a from t where a<0;
+drop table t;
+
+--echo # test signed binary
+create table t (id int primary key, b binary(16));
+insert into t values (1, UNHEX('deadbeefcafebabe0001020304050607'));
+select * from t;
+select binary b from t;
+drop table t;
+
+--echo # test bit(31)
+create table t(a bit(31), index k_a(a)) engine=Dstore;
+insert into t values (0), (1), (0x10000), (0xfffffff), (0x7fffffff);
+select BINARY a from t;
+select MAX(BINARY a) from t;
+select MIN(BINARY a) from t;
+select BINARY a from t where a>=0;
+select BINARY a from t where a<0;
+drop table t;
+
+--echo # test bit(33)
+create table t(a bit(33), index k_a(a)) engine=Dstore;
+insert into t values (0), (1), (0x10000), (0xfffffff), (0x7fffffff), (0xffffffff), (0x1ffffffff);
+select BINARY a from t;
+select MAX(BINARY a) from t;
+select MIN(BINARY a) from t;
+select BINARY a from t where a>=0;
+select BINARY a from t where a<0;
+drop table t;
+
+--echo # test enum (len=1)
+create table t(a ENUM('e1', 'e2', 'e3'), index k_a(a)) engine=Dstore;
+insert into t values ('e1'), ('e3'), ('e2');
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>=0;
+select a from t where a<0;
+drop table t;
+
+--echo # test char(3)
+create table t(a char(3), index k_a(a)) engine=Dstore;
+insert into t values ('a'), ('b'), ('aa'), ('ab'), ('ba'), ('bb');
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>='b';
+select a from t where a<'aa';
+drop table t;
+
+--echo # test char(15)
+create table t(a char(15), index k_a(a)) row_format=redundant engine=Dstore;
+insert into t values ('a'), ('b'), ('aa'), ('ab'), ('ba'), ('bb');
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>='b';
+select a from t where a<'aa';
+drop table t;
+
+--echo # test char(237)
+create table t(a char(237), index k_a(a)) engine=Dstore;
+insert into t values ('a'), ('b'), ('aa'), ('ab'), ('ba'), ('bb');
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>='b';
+select a from t where a<'aa';
+drop table t;
+
+--echo # test varchar(10)
+create table t(a varchar(10), index k_a(a)) engine=Dstore;
+insert into t values ('a'), ('b'), ('aa'), ('ab'), ('ba'), ('bb'), ('aba'), ('aaab');
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>='aa';
+select a from t where a<'bb';
+drop table t;
+
+--echo # test varchar(800)
+create table t(a varchar(800)) engine=Dstore;
+insert into t values ('a'), (REPEAT('abc', 200));
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>='aa';
+select a from t where a<'bb';
+drop table t;
+
+--echo # test varchar(10) multi col index
+create table t(a int, b varchar(10), index k_ab(b,a)) engine=Dstore;
+insert into t values(123456, "abcde");
+select * from t;
+drop table t;
+
+--echo # test set
+create table t(a set('a', 'b', 'c', 'd'), index k_a(a)) engine=Dstore;
+insert into t values ('a,d'), ('a,d,a'), ('a,d,c'), ('c,c,d');
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>='b';
+select a from t where a<'aa';
+drop table t;
+
+--echo # test date
+create table t(a date, index k_a(a)) engine=Dstore;
+insert into t values ('1000-1-1'), ('1998-11-30'), ('1998-12-30'), ('1998-12-31'), ('1999-12-31'), ('2000-01-01'), ('9999-12-31');
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>='1998-12-31';
+select a from t where a<'2024-01-01';
+drop table t;
+
+--echo # test datetime
+create table t(a datetime(6), index k_a(a)) engine=Dstore;
+insert into t values 
+('1000-01-01 00:00:00.000000'), 
+('1998-11-30 00:00:00.000000'), 
+('1998-11-30 00:00:00.100000'), 
+('1998-11-30 00:00:01.000000'), 
+('1998-11-30 00:01:00.000000'), 
+('1998-11-30 10:00:00.000000'), 
+('1998-12-30 12:34:56.114514'), 
+('9999-12-31 23:59:59.499999');
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>='1998-12-31';
+select a from t where a<'2024-01-01';
+drop table t;
+
+--echo # test timestamp
+create table t(a timestamp(6), index k_a(a)) engine=Dstore;
+insert into t values 
+('1971-01-01 00:00:01.000000'), 
+('1998-11-30 00:00:00.000000'), 
+('1998-11-30 00:00:00.100000'), 
+('1998-11-30 00:00:01.000000'), 
+('1998-11-30 00:01:00.000000'), 
+('1998-11-30 10:00:00.000000'), 
+('1998-12-30 12:34:56.114514'), 
+('2038-01-19 03:14:07.499999');
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>='1998-12-31';
+select a from t where a<'2024-01-01';
+drop table t;
+
+--echo # test time
+create table t(a time(6), index k_a(a)) engine=Dstore;
+insert into t values 
+('-838:59:59.000000'), 
+('00:00:00.100000'), 
+('00:00:01.000000'), 
+('00:01:00.000000'), 
+('10:00:00.000000'), 
+('12:34:56.114514'), 
+('838:59:59.000000');
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>='00:01:00.000000';
+select a from t where a<0;
+drop table t;
+
+--echo # test year
+create table t(a year(4), index k_a(a)) engine=Dstore;
+insert into t values (0), (1901), (1999), (2000), (2155);
+select a from t;
+select MAX(a) from t;
+select MIN(a) from t;
+select a from t where a>=1999;
+select a from t where a<2024;
+drop table t;
+
+
+--echo # test compact char with chinese
+create table t(a int key, b char(10), c int, d varchar(50), index(b), index(d)) row_format=compact CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci engine=Dstore;
+insert into t values
+(1,"张三",101,"北京市朝阳区"),
+(2,"李四",202,"上海市浦东新区"),
+(3,"王二",303,"上海市浦东新区"),
+(4,"狗蛋",404,"深圳市南山区"),
+(5,"张三丰",505,"成都市锦江区"),
+(6,"张四",606,"武汉市洪山区"),
+(7,"蔡徐",707,"天津市和平区"),
+(8,"蔡坤",808,"南京市鼓楼区"),
+(9,"王建国",909,"杭州市西湖区"),
+(10,"李世民",1010,"杭州市西湖区");
+
+select * from t;
+select c from t where b>="李";
+select c from t where d>="南京";
+select * from t where d="杭州市西湖区";
+
+drop table t;
+
+--echo # BUG2025090935869 Inconsistent results due to different comparison methods
+CREATE TABLE t1 (
+    value DOUBLE NOT NULL,
+	INDEX idx_value (value) 
+);
+INSERT INTO t1 (value) VALUES (-2.2250738585072014e-308),(0);
+SELECT * FROM t1 where value = -2.2250738585072014e-308;
+DROP TABLE t1;
+
+SET @@sql_mode = @old_sql_mode;
+
+--echo #
+--echo # Updating the values of auto-increment columns of different integer types.
+--echo #
+CREATE TABLE Tiny_1 (a TINYINT NOT NULL AUTO_INCREMENT PRIMARY KEY, b INT);
+INSERT INTO Tiny_1 VALUES(0, 1), (0, 2), (0, 3), (0, 4), (0, 5);
+UPDATE Tiny_1 SET a = a + 10;
+DROP TABLE Tiny_1;
+
+CREATE TABLE TinyUsigned_1 (a TINYINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, b INT);
+INSERT INTO TinyUsigned_1 VALUES(0, 1), (0, 2), (0, 3), (0, 4), (0, 5);
+UPDATE TinyUsigned_1 SET a = a + 10;
+DROP TABLE TinyUsigned_1;
+
+CREATE TABLE Smallint_1 (a SMALLINT NOT NULL AUTO_INCREMENT PRIMARY KEY, b INT);
+INSERT INTO Smallint_1 VALUES(0, 1), (0, 2), (0, 3), (0, 4), (0, 5);
+UPDATE Smallint_1 SET a = a + 10;
+DROP TABLE Smallint_1;
+
+CREATE TABLE SmallintUsigned_1 (a SMALLINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, b INT);
+INSERT INTO SmallintUsigned_1 VALUES(0, 1), (0, 2), (0, 3), (0, 4), (0, 5);
+UPDATE SmallintUsigned_1 SET a = a + 10;
+DROP TABLE SmallintUsigned_1;
+
+CREATE TABLE Mediumint_1 (a MEDIUMINT NOT NULL AUTO_INCREMENT PRIMARY KEY, b INT);
+INSERT INTO Mediumint_1 VALUES(0, 1), (0, 2), (0, 3), (0, 4), (0, 5);
+UPDATE Mediumint_1 SET a = a + 10;
+DROP TABLE Mediumint_1;
+
+CREATE TABLE MediumintUsigned_1 (a MEDIUMINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, b INT);
+INSERT INTO MediumintUsigned_1 VALUES(0, 1), (0, 2), (0, 3), (0, 4), (0, 5);
+UPDATE MediumintUsigned_1 SET a = a + 10;
+DROP TABLE MediumintUsigned_1;

@@ -1,0 +1,89 @@
+#
+# BUG2025071827333: PQ using multi-valued index reports wrong result
+# 1. multi-valued index using PQblockScanIterator test
+#
+CREATE TABLE `cp1` (
+`id` bigint NOT NULL,
+`biz_order_id` varchar(30) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+`biz_type` tinyint NOT NULL,
+`station_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+`operator_id` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+`comment_tags` json DEFAULT NULL,
+`flag` tinyint NOT NULL DEFAULT '0',
+`create_time` datetime DEFAULT NULL,
+PRIMARY KEY (`id`),
+UNIQUE KEY `uk_biz_order_id_biz_type` (`biz_order_id`,`biz_type`),
+KEY `idx_create_time` (`create_time`),
+KEY `idx_tag_name` ((cast(json_extract(`comment_tags`,_utf8mb4'$[*].tagName') as char(50) array))),
+KEY `idx_station_id_operator_id_tag_name` (`station_id`,`operator_id`,(cast(json_extract(`comment_tags`,_utf8mb4'$[*].tagName') as char(50) array)))
+);
+INSERT INTO `cp1` VALUES (1974898914061001027,'05810000031001027',0,'CN320114HW001','058534494','[{\"tagNam\": \".境较差 \", \"secondLdLevelName\": \"站点环境\"}, {\"tagName\": \"占位较多\", \"secondLevelName\": \"占位情况\"}, {\"tagName\": \"信息有误\", \"secondLevelName\": \"站点信息准确\"}, {\"tagName\": \"服务较好\", \"secondLevelName\": \"服务质量\"}, {\"tagName\": \".格很高 \", \"seconddLevelName\": \"支付难度\"}, {\"tagName\": \"价格合理\", \"secondLevelName\": \"支付难度\"}, {\"tagName\": \"找桩较难\", \"secondLevelName\": \"找桩难度\"}, {\"tagName\": \"信息准确\", \"secondLevelName\": \"站点信息准确\"}, {\"tagName\": \".位严重 \", \"seconddLevelName\": \"占位情况\"}, {\"tagName\": \"充电很慢\", \"secondLevelName\": \"充电速度\"}]',0,'2024-12-02 16:23:12');
+INSERT INTO `cp1` VALUES (1974898914061001028,'05810000031001028',0,'CN320114HW001','058534494','[{\"tagNam\": \".境较差 \", \"secondLdLevelName\": \"站点环境\"}, {\"tagName\": \"占位较多\", \"secondLevelName\": \"占位情况\"}, {\"tagName\": \"信息有误\", \"secondLevelName\": \"站点信息准确\"}, {\"tagName\": \"服务较好\", \"secondLevelName\": \"服务质量\"}, {\"tagName\": \".格很高 \", \"seconddLevelName\": \"支付难度\"}, {\"tagName\": \"价格合理\", \"secondLevelName\": \"支付难度\"}, {\"tagName\": \"找桩较难\", \"secondLevelName\": \"找桩难度\"}, {\"tagName\": \"信息准确\", \"secondLevelName\": \"站点信息准确\"}, {\"tagName\": \".位严重 \", \"seconddLevelName\": \"占位情况\"}, {\"tagName\": \"充电很慢\", \"secondLevelName\": \"充电速度\"}]',0,'2024-12-02 16:23:12');
+INSERT INTO `cp1` VALUES (1974898914061001029,'05810000031001029',0,'CN320114HW002','058534494','[{\"tagNam\": \".境较差 \", \"secondLdLevelName\": \"站点环境\"}, {\"tagName\": \"占位较多\", \"secondLevelName\": \"占位情况\"}, {\"tagName\": \"信息有误\", \"secondLevelName\": \"站点信息准确\"}, {\"tagName\": \"服务较好\", \"secondLevelName\": \"服务质量\"}, {\"tagName\": \".格很高 \", \"seconddLevelName\": \"支付难度\"}, {\"tagName\": \"价格合理\", \"secondLevelName\": \"支付难度\"}, {\"tagName\": \"找桩较难\", \"secondLevelName\": \"找桩难度\"}, {\"tagName\": \"信息准确\", \"secondLevelName\": \"站点信息准确\"}, {\"tagName\": \".位严重 \", \"seconddLevelName\": \"占位情况\"}, {\"tagName\": \"充电很慢\", \"secondLevelName\": \"充电速度\"}]',0,'2024-12-02 16:23:12');
+explain select count(*) from cp1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.cp1)
+1	SIMPLE	cp1	NULL	index	NULL	idx_create_time	6	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(*)` from `test`.`cp1`
+select count(*) from cp1;
+count(*)
+3
+explain select count(*) from cp1 force index(idx_station_id_operator_id_tag_name) where station_id = 'CN320114HW001';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	18	100.00	Parallel execute (4 workers, test.cp1)
+1	SIMPLE	cp1	NULL	ref	idx_station_id_operator_id_tag_name	idx_station_id_operator_id_tag_name	1022	const	18	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(*)` from `test`.`cp1` FORCE INDEX (`idx_station_id_operator_id_tag_name`) where (`test`.`cp1`.`station_id` = 'CN320114HW001')
+select count(*) from cp1 force index(idx_station_id_operator_id_tag_name) where station_id = 'CN320114HW001';
+count(*)
+2
+explain select id,station_id from cp1 force index(idx_station_id_operator_id_tag_name) where station_id = 'CN320114HW001';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.cp1)
+1	SIMPLE	cp1	NULL	ref	idx_station_id_operator_id_tag_name	idx_station_id_operator_id_tag_name	1022	const	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`cp1`.`id` AS `id`,`test`.`cp1`.`station_id` AS `station_id` from `test`.`cp1` FORCE INDEX (`idx_station_id_operator_id_tag_name`) where (`test`.`cp1`.`station_id` = 'CN320114HW001')
+select id,station_id from cp1 force index(idx_station_id_operator_id_tag_name) where station_id = 'CN320114HW001';
+id	station_id
+1974898914061001027	CN320114HW001
+1974898914061001028	CN320114HW001
+#
+# 2. multi-valued index using PQRefIterator test
+#
+CREATE TABLE t (
+id int unsigned NOT NULL,
+doc_id int unsigned DEFAULT NULL,
+b int,
+doc json DEFAULT NULL,
+PRIMARY KEY (id),
+KEY mv_id (id,(cast(json_extract(doc,'$.val') as unsigned array))),
+KEY mv_doc_id_b (doc_id,b,(cast(json_extract(doc,'$.val') as unsigned array)))
+);
+INSERT INTO t values (1, 2, 2, '{"val":[1,2,3,4,5]}'), (2, 1, 1, '{"val":[2,3,4,5]}'), (3, 2, 2, '{"val":[2,3,4,5]}'), (4, NULL, NULL, '{"val":[3,4,5]}'), (5, 2, 2, '{"val":[4,5]}');
+EXPLAIN with t0_view(a) as (select 1) select 2 from (select a from t0_view ) as subq_0 inner join t on (subq_0.a = t.doc_id and t.b=1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t)
+1	SIMPLE	<derived3>	NULL	system	NULL	NULL	NULL	NULL	#	#	NULL
+1	SIMPLE	t	NULL	ref	mv_doc_id_b	mv_doc_id_b	10	func,const	#	#	Using where
+3	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	#	#	No tables used
+Warnings:
+Note	1003	with `t0_view` (`a`) as (/* select#3 */ select 1 AS `1`) /* select#1 */ select 2 AS `2` from `test`.`t` where ((`test`.`t`.`b` = 1) and (`t0_view`.`a` = `test`.`t`.`doc_id`))
+with t0_view(a) as (select 1) select 2 from (select a from t0_view ) as subq_0 inner join t on (subq_0.a = t.doc_id and t.b=1);
+2
+2
+EXPLAIN with t0_view(a) as (select 2) select 2 from (select a from t0_view ) as subq_0 inner join t on (subq_0.a = t.doc_id and t.b=2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t)
+1	SIMPLE	<derived3>	NULL	system	NULL	NULL	NULL	NULL	#	#	NULL
+1	SIMPLE	t	NULL	ref	mv_doc_id_b	mv_doc_id_b	10	func,const	#	#	Using where
+3	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	#	#	No tables used
+Warnings:
+Note	1003	with `t0_view` (`a`) as (/* select#3 */ select 2 AS `2`) /* select#1 */ select 2 AS `2` from `test`.`t` where ((`test`.`t`.`b` = 2) and (`t0_view`.`a` = `test`.`t`.`doc_id`))
+with t0_view(a) as (select 2) select 2 from (select a from t0_view ) as subq_0 inner join t on (subq_0.a = t.doc_id and t.b=2);
+2
+2
+2
+2
+DROP TABLE cp1;
+DROP TABLE t;

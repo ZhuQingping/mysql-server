@@ -1,0 +1,272 @@
+# ==== Purpose ====
+#
+# Verify the statement outline attached optimizer hints work as expected, according to community hints types
+# ==== Implementation ====
+#
+# 1. verify Statement Execution Time Optimizer Hints: /*+ MAX_EXECUTION_TIME(XXX) */ only works by select statement.
+# 2. verify Variable-Setting Hint Syntax: SET_VAR hint works and shown in EXPLAIN; like foreign_key_checks/max_heap_table_size/mrr_cost_based,
+# 3. verify Variable-Setting Hint Syntax: SET_VAR /*+ SET_VAR(collation_server = 'utf8mb4') */ cannot be applied in optimizer hint
+# 4. verify conflicting/duplicated SET_VAR optimizer hint can be recoginized and rejected
+# 5. verify Join-Order Optimizer Hints: join_order JOIN_PREFIX JOIN_FIXED_ORDER 
+# 6. Verify Table-Level Optimizer Hints: BNL 
+# 7. verify Index-Level Optimizer Hints: INDEX/NO_INDEX
+# 8. Verify Subquery Optimizer Hints: SEMIJOIN
+# 9. Verify Naming Query Blocks: QB_NAME 
+
+set @start_opt_outline_enabled= @@global.rds_opt_outline_enabled;
+set global rds_opt_outline_enabled = ON;
+
+connect(con_root,localhost, root,,);
+connect(conn_rdsAdmin, 127.0.0.1, rdsAdmin,,test);
+
+connection con_root;
+
+create database outline_db;
+create table outline_db.t1(id int auto_increment primary key,
+                           col1 int,
+                           col2 varchar(100),
+                           key ind_1(col1),
+                           key ind_2(col2)) engine = Dstore;
+
+create table outline_db.t2(id int auto_increment primary key,
+                           col1 int,
+                           col2 varchar(100),
+                           key ind_1(col1),
+                           key ind_2(col2)) engine = Dstore;
+
+insert into outline_db.t1 values(1, 2, 'xpchild');
+insert into outline_db.t2 values(1, 2, 'xpchild');
+
+#-----------------------------------------------------------
+# global optimizer hint
+#-----------------------------------------------------------
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ MAX_EXECUTION_TIME(1000) */',
+                                      "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+use outline_db;
+explain select * from t1 where col1 = 2 and col2 = 'xpchild';
+call dbms_outln.preview_outline("outline_db", "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ MAX_EXECUTION_TIME(1000) */',
+                                      "update t1 set col1 = 1");
+explain update t1 set col1 = 1;
+call dbms_outln.preview_outline("outline_db", "update t1 set col1 = 1");
+
+#
+# MAX_EXECUTION_TIME hint is supported by top-level standalone SELECT statements only
+#
+call dbms_outln.add_optimizer_outline('outline_db', '', 2, '/*+ MAX_EXECUTION_TIME(1000) */',
+                                      "select id from (select * from t2 where col1 = 1 and col2 = 'xpchild') as a");
+call dbms_outln.preview_outline("outline_db", "select id from (select * from t2 where col1 = 1 and col2 = 'xpchild') as a");
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 2, '/*+ MAX_EXECUTION_TIME(1000) */',
+                                      "select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild')");
+call dbms_outln.preview_outline("outline_db", "select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild')");
+explain select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild');
+
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+
+# test set_var
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ SET_VAR(foreign_key_checks=OFF) */',
+                                      "insert into t1 values(123, 123, 'xpchild')");
+
+use outline_db;
+explain insert into t1 values(123, 123, 'xpchild');
+call dbms_outln.preview_outline("outline_db", "insert into t1 values(123, 123,'xpchild')");
+
+# can not set global variables
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, "/*+ SET_VAR(collation_server = 'utf8mb4') */",
+                                      "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+call dbms_outln.preview_outline("outline_db","select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+# multi set_var
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, "/*+ SET_VAR(optimizer_switch = 'mrr_cost_based=off') SET_VAR(max_heap_table_size = 1G) */",
+                                      "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+explain select * from t1 where col1 = 2 and col2 = 'xpchild';
+
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+
+# one var set more than one time
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, "/*+ SET_VAR(optimizer_switch = 'mrr_cost_based=off') */",
+                                      "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, "/*+ SET_VAR(max_heap_table_size = 1G) */",
+                                      "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+explain select * from t1 where col1 = 2 and col2 = 'xpchild';
+
+call dbms_outln.preview_outline("outline_db", "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, "/*+ SET_VAR(max_heap_table_size = 1G) */",
+                                      "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, "/*+ SET_VAR(max_heap_table_size = 3G) */",
+                                      "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+call dbms_outln.preview_outline("outline_db", "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+explain select * from t1 where col1 = 2 and col2 = 'xpchild';
+
+# set wrong var
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, "/*+ SET_VAR(max_size = 1G) */",
+                                      "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+call dbms_outln.preview_outline("outline_db", "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+
+# only for query , not subquery
+call dbms_outln.add_optimizer_outline('outline_db', '', 2, '/*+ SET_VAR(max_heap_table_size = 1G) */', "SELECT * FROM t1 WHERE t1.col1 IN (SELECT  col1 FROM t2)");
+call dbms_outln.preview_outline("outline_db", "SELECT * FROM t1 WHERE t1.col1 IN (SELECT  col1 FROM t2)");
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+#-----------------------------------------------------------
+# query bloack hint
+#-----------------------------------------------------------
+
+create table tt1 (id int not null primary key, name varchar(20));
+create table tt2 (id int not null primary key, name varchar(20));
+insert into tt1 values (1,'tt1');
+insert into tt2 values (1,'tt2');
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+join_order(tt2,tt1)*/','select tt1.*,tt2.* from tt1,tt2 where tt1.id =tt2.id');
+explain select tt1.*,tt2.* from tt1,tt2 where tt1.id =tt2.id;
+call dbms_outln.preview_outline("outline_db", "select tt1.*,tt2.* from tt1,tt2 where tt1.id =tt2.id");
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+JOIN_PREFIX(tt2)*/','select tt1.*,tt2.* from tt1,tt2 where tt1.id =tt2.id');
+explain select tt1.*,tt2.* from tt1,tt2 where tt1.id =tt2.id;
+call dbms_outln.preview_outline("outline_db", "select tt1.*,tt2.* from tt1,tt2 where tt1.id =tt2.id");
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+JOIN_FIXED_ORDER() */','select tt1.*,tt2.* from tt1,tt2 where tt1.id =tt2.id');
+explain select tt1.*,tt2.* from tt1,tt2 where tt1.id =tt2.id;
+call dbms_outln.preview_outline("outline_db", "select tt1.*,tt2.* from tt1,tt2 where tt1.id =tt2.id");
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+#-----------------------------------------------------------
+# multi-table join
+#-----------------------------------------------------------
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ BNL(t1,t2) */',
+                                      "select t1.id, t2.id from t1,t2");
+
+use outline_db;
+explain select t1.id, t2.id from t1,t2;
+call dbms_outln.preview_outline("outline_db", "select t1.id, t2.id from t1,t2");
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ MAX_EXECUTION_TIME(1000) */',
+                                      "select t1.id, t2.id from t1,t2");
+use outline_db;
+explain select t1.id, t2.id from t1,t2;
+call dbms_outln.preview_outline("outline_db", "select t1.id, t2.id from t1,t2");
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+#-----------------------------------------------------------
+# nest-subquery select
+#-----------------------------------------------------------
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 2, '/*+ INDEX_MERGE(t2 ind_1, ind_2) */',
+                                      "select t1.id from t1 where t1.col1 in (select t2.col1 from t2 where t2.col1 = 1 and t2.col2 = 'xpchild')");
+
+use outline_db;
+explain select t1.id from t1 where t1.col1 in (select t2.col1 from t2 where t2.col1 = 1 and t2.col2 = 'xpchild');
+call dbms_outln.preview_outline("outline_db", "select t1.id from t1 where t1.col1 in (select t2.col1 from t2 where t2.col1 = 1 and t2.col2 = 'xpchild')");
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+# subquery query block name
+call dbms_outln.add_optimizer_outline('outline_db', '', 2, ' /*+ QB_NAME(subq1) */', "SELECT * FROM t1 WHERE t1.col1 IN (SELECT  col1 FROM t2)");
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ SEMIJOIN(@subq1 MATERIALIZATION, DUPSWEEDOUT) */ ', "SELECT * FROM t1 WHERE t1.col1 IN (SELECT  col1 FROM t2)");
+use outline_db;
+explain SELECT * FROM t1 WHERE t1.col1 IN (SELECT  col1 FROM t2);
+call dbms_outln.preview_outline("outline_db", "SELECT * FROM t1 WHERE t1.col1 IN (SELECT  col1 FROM t2)");
+explain SELECT /*+ SEMIJOIN(@subq1 MATERIALIZATION, DUPSWEEDOUT) */ * FROM t1 WHERE t1.col1 IN (SELECT /*+ QB_NAME(subq1) */ col1 FROM t2);
+
+# optimizer hint and index hint, ignore index hint
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1', '', "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ NO_INDEX(t1 ind_1) */',"select * from t1 where col1 = 2 and col2 = 'xpchild'");
+call dbms_outln.preview_outline("outline_db", "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+explain select * from t1 where col1 = 2 and col2 = 'xpchild';
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1', '', "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ MAX_EXECUTION_TIME(1000) */', "select * from t1 where col1 = 2 and col2 = 'xpchild'");
+explain select * from t1 where col1 = 2 and col2 = 'xpchild';
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+# PrepareStatement
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 2, '/*+ INDEX_MERGE(t2 ind_1, ind_2) */',
+                                      "select a.id from (select t2.id, t2.col1 from t2 where t2.col1 = 1 and t2.col2 = 'xpchild') as a");
+call dbms_outln.preview_outline("outline_db", "select a.id from (select t2.id, t2.col1 from t2 where t2.col1 = 1 and t2.col2 = 'xpchild') as a");
+
+set optimizer_trace='enabled=on';
+prepare pre_stmt from 'select a.id from (select t2.id, t2.col1 from t2 where t2.col1 = ? and t2.col2 = ?) as a';
+set @a = 3,@b = 'xpchild';
+execute pre_stmt using @a,@b;
+select * from information_schema.optimizer_trace;
+set optimizer_trace='enabled=off';
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+# union test
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ NO_INDEX(t1 ind_1) */', "select id from t1 union select id from t2");
+call dbms_outln.add_optimizer_outline('outline_db', '', 2, '/*+ MAX_EXECUTION_TIME(1000) */', "select id from t1 union select id from t2");
+call dbms_outln.preview_outline("outline_db", "select id from t1 union select id from t2");
+explain select id from t1 union select id from t2;
+explain select /*+ NO_INDEX(t1 ind_1) */ id from t1 union select /*+ MAX_EXECUTION_TIME(1000) */ id from t2;
+drop database outline_db;
+create database outline_db;
+
+use outline_db;
+create table t1 (a int, key ind_1(a)) engine=Dstore;
+create table t2 (a int, key ind_1(a)) engine=Dstore;
+create table t3 (a int, key ind_1(a)) engine=Dstore;
+insert into t1 values (1),(2),(3),(4);
+insert into t2 values (10),(20),(30),(40);
+insert into t3 values (1),(2),(10),(50);
+select a from t3 where t3.a in (select a from t1 where a <= 3 union select * from t2 where a <= 30);
+call dbms_outln.add_optimizer_outline('outline_db', '', 2, '/*+ MAX_EXECUTION_TIME(1000) */', "select a from t3 where t3.a in (select a from t1 where a <= 3 union select * from t2 where a <= 30)");
+call dbms_outln.add_optimizer_outline('outline_db', '', 3, '/*+ INDEX(t2 ind_1) */', "select a from t3 where t3.a in (select a from t1 where a <= 3 union select * from t2 where a <= 30)");
+call dbms_outln.preview_outline('outline_db', "select a from t3 where t3.a in (select a from t1 where a <= 3 union select * from t2 where a <= 30)");
+explain select a from t3 where t3.a in (select a from t1 where a <= 3 union select * from t2 where a <= 30);
+explain select a from t3 where t3.a in (select /*+ MAX_EXECUTION_TIME(1000) */ a from t1 where a <= 3 union select /*+ INDEX(t2 ind_1) */ * from t2 where a <= 30);
+
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+drop database outline_db;
+disconnect conn_rdsAdmin;
+set global rds_opt_outline_enabled = OFF;

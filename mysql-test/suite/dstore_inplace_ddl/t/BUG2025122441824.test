@@ -1,0 +1,121 @@
+# The purpose of this test case is to verify the issue where an insufficient cache size during parallel index 
+# creation leads to Oid disorder in the process of temporary table creation, ultimately triggering the error:
+# "errno = 1030, state = 'HY000': Got error 168 - 'Unknown (generic) error from engine' from storage engine".
+
+DROP DATABASE IF EXISTS sysbench_test;
+CREATE DATABASE sysbench_test; 
+USE sysbench_test;
+
+SET GLOBAL dstore_ddl_buffer_size = 64;
+
+# Create table.
+DELIMITER |;
+CREATE PROCEDURE create_sbtest_tables()
+BEGIN
+    DECLARE table_num INT DEFAULT 1;
+    DECLARE table_name VARCHAR(20);
+    
+    WHILE (table_num <= 4) DO
+        SET table_name = CONCAT('sbtest', table_num);
+        SET @create_sql = CONCAT(
+            'CREATE TABLE ', table_name, '(',
+            'c INT, ',
+            'k CHAR(120), ',
+            'PRIMARY KEY (c) ',
+            ') ENGINE=DSTORE;'
+        );
+        PREPARE stmt FROM @create_sql;
+        EXECUTE stmt;
+        DEALLOCATE PREPARE stmt;
+        SET table_num = table_num + 1;
+    END WHILE;
+END|
+DELIMITER ;|
+
+# Insert data.
+DELIMITER |;
+CREATE PROCEDURE insert_rows(IN BASE INT, IN SIZE INT)
+BEGIN
+    DECLARE i INT DEFAULT BASE;       
+    DECLARE table_num INT DEFAULT 1;          
+    DECLARE table_name VARCHAR(20);         
+    DECLARE batch_size INT DEFAULT 10000;     
+    DECLARE current_batch INT DEFAULT 0;
+
+    WHILE (i <= SIZE) DO
+        START TRANSACTION;
+        SET current_batch = 0;
+        WHILE (i <= SIZE AND current_batch < batch_size) DO
+            SET table_num = 1;
+            WHILE (table_num <= 4) DO
+                SET table_name = CONCAT('sbtest', table_num);
+                SET @insert_sql = CONCAT(
+                    'INSERT IGNORE INTO ', table_name, '(c, k) VALUES (''', i, ''', ''', i, ''')'
+                );
+                PREPARE stmt FROM @insert_sql;
+                EXECUTE stmt;
+                DEALLOCATE PREPARE stmt;
+                
+                SET table_num = table_num + 1; 
+            END WHILE;
+            
+            SET i = i + 1; 
+            SET current_batch = current_batch + 1;
+        END WHILE;
+        COMMIT;
+    END WHILE;
+END|
+DELIMITER ;|
+
+CALL create_sbtest_tables(); 
+CALL insert_rows(1, 20000);
+
+# Parallel creation of indexes.
+CONNECT (con1, localhost, root, , sysbench_test);
+CONNECTION con1;
+--send ALTER TABLE sbtest1 ADD INDEX k_1(k);
+
+CONNECT (con2, localhost, root, , sysbench_test);
+CONNECTION con2;
+--send ALTER TABLE sbtest2 ADD INDEX k_2(k);
+
+CONNECT (con3, localhost, root, , sysbench_test);
+CONNECTION con3;
+--send ALTER TABLE sbtest3 ADD INDEX k_3(k);
+
+CONNECT (con4, localhost, root, , sysbench_test);
+CONNECTION con4;
+--send ALTER TABLE sbtest4 ADD INDEX k_4(k);
+
+CONNECTION con1;
+--reap
+CONNECTION con2;
+--reap
+CONNECTION con3;
+--reap
+CONNECTION con4;
+--reap
+
+SELECT k FROM sbtest1 WHERE c = 1000;
+
+UPDATE sbtest1 SET k = k + 1 WHERE c = 1000;
+UPDATE sbtest2 SET k = k + 1 WHERE c = 1000;
+UPDATE sbtest3 SET k = k + 1 WHERE c = 1000;
+UPDATE sbtest4 SET k = k + 1 WHERE c = 1000;
+
+SELECT k FROM sbtest1 WHERE c = 1000;
+
+CONNECTION default;
+TRUNCATE TABLE sbtest4;
+
+SHOW CREATE TABLE sbtest1;
+
+SET GLOBAL dstore_ddl_buffer_size = 1024;
+
+DISCONNECT con1;
+DISCONNECT con2;
+DISCONNECT con3;
+DISCONNECT con4;
+
+CONNECTION default;
+DROP DATABASE IF EXISTS sysbench_test;

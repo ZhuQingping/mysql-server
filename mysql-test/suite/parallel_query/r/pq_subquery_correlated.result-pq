@@ -1,0 +1,1696 @@
+# This file is to test support for correlated subqueries in PQ
+select 0*(@counter:=variable_value) from performance_schema.global_status where VARIABLE_NAME="PQ_stmt_executed";
+0*(@counter:=variable_value)
+0
+Warnings:
+Warning	1287	Setting user variables within expressions is deprecated and will be removed in a future release. Consider alternatives: 'SET variable=expression, ...', or 'SELECT expression(s) INTO variables(s)'.
+CREATE TABLE t1 (
+a int NOT NULL,
+b char(10) NOT NULL
+);
+CREATE TABLE t2 (
+a int NOT NULL,
+b char(10) NOT NULL
+);
+INSERT INTO t1 values (1, 'a'), (2, 'b'), (3, 'c'), (3, 'c'), (4, 'd'), (5, 'f'), (6, 'e'),(8,'h'),(0,'j');
+INSERT INTO t2 values (3, 'c'), (4, 'd'), (5, 'f'), (6, 'e'), (1, 'a'), (2, 'b'), (7, 'g'),(0,'i');
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+ANALYZE TABLE t2;
+Table	Op	Msg_type	Msg_text
+test.t2	analyze	status	OK
+explain select * from t1 where exists(select * from t2 where t2.b=t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	11.11	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	Start temporary
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	11.11	Using where; End temporary; Using join buffer (hash join)
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` semi join (`test`.`t2`) where (`test`.`t1`.`b` = `test`.`t2`.`b`)
+select * from t1 where exists(select * from t2 where t2.b=t1.b);
+a	b
+1	a
+2	b
+3	c
+3	c
+4	d
+5	f
+6	e
+# As we want to test PQ for subqueries, avoid semijoins by default
+set optimizer_switch="semijoin=off";
+explain select * from t1 where exists(select * from t2 where t2.b=t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	12.50	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where exists(/* select#2 */ select 1 from `test`.`t2` where (`test`.`t2`.`b` = `test`.`t1`.`b`))
+select * from t1 where exists(select * from t2 where t2.b=t1.b);
+a	b
+1	a
+2	b
+3	c
+3	c
+4	d
+5	f
+6	e
+# Test the switch:
+SET @save_pq_support_features_switch = @@pq_support_features_switch;
+set pq_support_features_switch='correlated_subquery=off';
+explain select * from t1 where exists(select * from t2 where t2.b=t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	12.50	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where exists(/* select#2 */ select 1 from `test`.`t2` where (`test`.`t2`.`b` = `test`.`t1`.`b`))
+select * from t1 where exists(select * from t2 where t2.b=t1.b);
+a	b
+1	a
+2	b
+3	c
+3	c
+4	d
+5	f
+6	e
+set pq_support_features_switch=@save_pq_support_features_switch;
+explain select * from t1 where NOT exists(select * from t2 where t2.b=t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	12.50	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where exists(/* select#2 */ select 1 from `test`.`t2` where (`test`.`t2`.`b` = `test`.`t1`.`b`)) is false
+select * from t1 where NOT exists(select * from t2 where t2.b=t1.b);
+a	b
+8	h
+0	j
+explain select t1.b,sum(t1.a) from t1 where NOT exists(select * from t2 where t2.b=t1.b) group by t1.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where; Using temporary
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	12.50	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,sum(`test`.`t1`.`a`) AS `sum(t1.a)` from `test`.`t1` where exists(/* select#2 */ select 1 from `test`.`t2` where (`test`.`t2`.`b` = `test`.`t1`.`b`)) is false group by `test`.`t1`.`b`
+select t1.b,sum(t1.a) from t1 where NOT exists(select * from t2 where t2.b=t1.b) group by t1.b;
+b	sum(t1.a)
+h	8
+j	0
+# Variant of a supported EXISTS: IN and OPERATOR ALL/ANY, are not supported
+explain select * from t1 where t1.b in (select t2.b from t2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where
+2	SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where <in_optimizer>(`test`.`t1`.`b`,`test`.`t1`.`b` in ( <materialize> (/* select#2 */ select `test`.`t2`.`b` from `test`.`t2` where true ), <primary_index_lookup>(`test`.`t1`.`b` in <temporary table> on <auto_distinct_key> where ((`test`.`t1`.`b` = `<materialized_subquery>`.`b`)))))
+explain select * from t1 where t1.b > all (select t2.b from t2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	66.67	Using where
+2	SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where <not>((`test`.`t1`.`b` <= (/* select#2 */ select max(`test`.`t2`.`b`) from `test`.`t2`)))
+explain select * from t1 where t1.b > any (select t2.b from t2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	66.67	Using where
+2	SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where <nop>((`test`.`t1`.`b` > (/* select#2 */ select min(`test`.`t2`.`b`) from `test`.`t2`)))
+explain select * from t1 where t1.b > any (select max(t2.b) from t2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	66.67	Using where
+2	SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where <nop>((`test`.`t1`.`b` > <min>(/* select#2 */ select max(`test`.`t2`.`b`) from `test`.`t2`)))
+# This one has a subquery in the SELECT list which references a column of GROUP BY, does not do PQ because it uses Item_outer_ref internally, which is not clonable.
+explain select t1.b, (select sum(t2.a) from t2 where t2.b=t1.b) from t1 group by t1.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using temporary
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	12.50	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,(/* select#2 */ select sum(`test`.`t2`.`a`) from `test`.`t2` where (`test`.`t2`.`b` = `test`.`t1`.`b`)) AS `(select sum(t2.a) from t2 where t2.b=t1.b)` from `test`.`t1` group by `test`.`t1`.`b`
+select t1.b, (select sum(t2.a) from t2 where t2.b=t1.b) from t1 group by t1.b;
+b	(select sum(t2.a) from t2 where t2.b=t1.b)
+a	1
+b	2
+c	3
+d	4
+f	5
+e	6
+h	NULL
+j	NULL
+# While the next ones, where the subquery is in ORDER BY or HAVING, does PQ.
+explain select t1.b from t1 group by t1.b order by (select sum(t2.a) from t2 where t2.b=t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using temporary; Using filesort
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	12.50	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` group by `test`.`t1`.`b` order by `(select #2)`
+select t1.b from t1 group by t1.b order by (select sum(t2.a) from t2 where t2.b=t1.b);
+b
+h
+j
+a
+b
+c
+d
+f
+e
+explain select t1.b from t1 group by t1.b having (select sum(t2.a) from t2 where t2.b=t1.b)>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using temporary
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	12.50	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` group by `test`.`t1`.`b` having ((/* select#2 */ select sum(`test`.`t2`.`a`) from `test`.`t2` where (`test`.`t2`.`b` = `test`.`t1`.`b`)) > 1)
+select t1.b from t1 group by t1.b having (select sum(t2.a) from t2 where t2.b=t1.b)>1;
+b
+b
+c
+d
+f
+e
+# The previous query had a wrong "run only once" mention for the subquery, because SELECT_LEX::uncacheable was not copied.
+explain format=tree select t1.b from t1 group by t1.b having (select sum(t2.a) from t2 where t2.b=t1.b)>1;
+EXPLAIN
+-> Table scan on <temporary>  (cost=4.42..6.74 rows=9)
+    -> Temporary table with deduplication  (cost=4.12..4.12 rows=9)
+        -> Gather: 4 workers, parallel scan on t1  (cost=0.981..3.23 rows=9)
+            -> Filter: ((select #2) > 1)  (cost=1.82..3.23 rows=2.25)
+                -> Table scan on <temporary>  (cost=1.82..3.23 rows=2.25)
+                    -> Temporary table with deduplication  (cost=0.7..0.7 rows=2.25)
+                        -> Parallel table scan on t1  (cost=0.475 rows=2.25)
+                -> Select #2 (subquery in condition; dependent)
+                    -> Aggregate: sum(t2.a)  (cost=0.45 rows=1)
+                        -> Filter: (t2.b = t1.b)  (cost=0.35 rows=1)
+                            -> Table scan on t2  (cost=0.35 rows=8)
+
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+# This one justifies the change from is_nullable() to is_inner_table_of_outer_join() in pq_check_not_support_tab()
+explain select (select sum(t2.a) from t2 where 0>t2.a-t1.a) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	NULL
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select (/* select#2 */ select sum(`test`.`t2`.`a`) from `test`.`t2` where (0 > (`test`.`t2`.`a` - `test`.`t1`.`a`))) AS `(select sum(t2.a) from t2 where 0>t2.a-t1.a)` from `test`.`t1`
+select (select sum(t2.a) from t2 where 0>t2.a-t1.a) from t1;
+(select sum(t2.a) from t2 where 0>t2.a-t1.a)
+0
+1
+3
+3
+6
+10
+15
+28
+NULL
+# Not supporting LEFT JOIN ON (subq), or anti-join ON (subq).
+# But in inner JOIN and semi-join it's ok.
+explain select * from t1 join t2 on (select t1.a+t2.a from t2 limit 1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t2, test.t1)
+1	PRIMARY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	NULL
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where; Using join buffer (hash join)
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t1` join `test`.`t2` where (0 <> (/* select#2 */ select (`test`.`t1`.`a` + `test`.`t2`.`a`) from `test`.`t2` limit 1))
+set optimizer_switch="semijoin=on";
+explain select * from t1 where t1.a in (select t2.a from t2 where (select t1.a+t2.a from t2 limit 1));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	11.11	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	Start temporary
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	11.11	Using where; End temporary; Using join buffer (hash join)
+3	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #3 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` semi join (`test`.`t2`) where ((`test`.`t1`.`a` = `test`.`t2`.`a`) and (0 <> (/* select#3 */ select (`test`.`t1`.`a` + `test`.`t2`.`a`) from `test`.`t2` limit 1)))
+explain select * from t1 where t1.a not in (select t2.a from t2 where (select t1.a+t2.a from t2 limit 1));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	NULL
+1	PRIMARY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	Using where; Not exists; Using join buffer (hash join)
+3	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #3 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` anti join (`test`.`t2`) on(((`test`.`t2`.`a` = `test`.`t1`.`a`) and (0 <> (/* select#3 */ select (`test`.`t1`.`a` + `test`.`t2`.`a`) from `test`.`t2` limit 1)))) where true
+set optimizer_switch="semijoin=off";
+explain select * from t1 left join t2 on (select t1.a+t2.a from t2 limit 1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	NULL
+1	PRIMARY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	Using where; Using join buffer (hash join)
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t1` left join `test`.`t2` on((0 <> (/* select#2 */ select (`test`.`t1`.`a` + `test`.`t2`.`a`) from `test`.`t2` limit 1))) where true
+# Test PQ+PQ, PQ+noPQ, noPQ+PQ, by introducing a non-supported JSON function
+explain select 1 from t1 where (select t1.a+t2.a from t2 limit 1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select 1 AS `1` from `test`.`t1` where (0 <> (/* select#2 */ select (`test`.`t1`.`a` + `test`.`t2`.`a`) from `test`.`t2` limit 1))
+explain select json_valid('') from t1 where (select t1.a+t2.a from t2 limit 1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select json_valid('') AS `json_valid('')` from `test`.`t1` where (0 <> (/* select#2 */ select (`test`.`t1`.`a` + `test`.`t2`.`a`) from `test`.`t2` limit 1))
+explain select 1 from t1 where (select t1.a+t2.a+json_valid('') from t2 limit 1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select 1 AS `1` from `test`.`t1` where (0 <> (/* select#2 */ select ((`test`.`t1`.`a` + `test`.`t2`.`a`) + json_valid('')) from `test`.`t2` limit 1))
+# Two correlated subqueries
+explain select * from t1 where NOT exists(select * from t2 where t2.b=t1.b) and
+(select count(*) from t2 where t2.b=t1.b)=5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where
+3	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	12.50	Using where
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	12.50	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.t1.b' of SELECT #3 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (exists(/* select#2 */ select 1 from `test`.`t2` where (`test`.`t2`.`b` = `test`.`t1`.`b`)) is false and ((/* select#3 */ select count(0) from `test`.`t2` where (`test`.`t2`.`b` = `test`.`t1`.`b`)) = 5))
+select * from t1 where NOT exists(select * from t2 where t2.b=t1.b) and
+(select count(*) from t2 where t2.b=t1.b)=5;
+a	b
+# A substituted subquery
+explain select * from t1 where (select t1.b from dual);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	88.89	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	88.89	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1249	Select 2 was reduced during optimization
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (0 <> `test`.`t1`.`b`)
+select * from t1 where (select t1.b from dual);
+a	b
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+# Subquery with zero_result_cause, is supported
+explain select * from t1 where (select t1.b from t2 LIMIT 0);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where
+2	DEPENDENT SUBQUERY	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	Zero limit
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (0 <> (/* select#2 */ select `test`.`t1`.`b` from `test`.`t2` limit 0))
+select * from t1 where (select t1.b from t2 LIMIT 0);
+a	b
+# Aggregate in subquery, referencing outer column, is not supported
+# a) when aggregation is computed in the subquery
+explain select * from t1 where (select min(t1.b) from t2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (0 <> (/* select#2 */ select min(`test`.`t1`.`b`) from `test`.`t2`))
+# b) when aggregation is computed in the top query
+explain select (select min(t1.b) from t2 limit 1) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	NULL
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select (/* select#2 */ select min(`test`.`t1`.`b`) from `test`.`t2` limit 1) AS `(select min(t1.b) from t2 limit 1)` from `test`.`t1`
+# Aggregate in subquery, not referencing outer column, is supported
+explain select (select min(t2.b) from t2 where t2.b=t1.a) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	NULL
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	12.50	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select (/* select#2 */ select min(`test`.`t2`.`b`) from `test`.`t2` where (cast(`test`.`t2`.`b` as double) = cast(`test`.`t1`.`a` as double))) AS `(select min(t2.b) from t2 where t2.b=t1.a)` from `test`.`t1`
+select (select min(t2.b) from t2 where t2.b=t1.a) from t1;
+(select min(t2.b) from t2 where t2.b=t1.a)
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+a
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+# Variant with same subquery moved to WHERE
+explain select * from t1 where t1.a>(select min(t2.b) from t2 where t2.b=t1.a);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	12.50	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` > (/* select#2 */ select min(`test`.`t2`.`b`) from `test`.`t2` where (cast(`test`.`t2`.`b` as double) = cast(`test`.`t1`.`a` as double))))
+select * from t1 where t1.a>(select min(t2.b) from t2 where t2.b=t1.a);
+a	b
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+# Same with = instead of >, and AVG instead of MIN
+explain select * from t1 where t1.a=(select avg(t2.b)*3 from t2 where t2.b=t1.a);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	12.50	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` = (/* select#2 */ select (avg(`test`.`t2`.`b`) * 3) from `test`.`t2` where (cast(`test`.`t2`.`b` as double) = cast(`test`.`t1`.`a` as double))))
+select * from t1 where t1.a=(select avg(t2.b)*3 from t2 where t2.b=t1.a);
+a	b
+0	j
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+# Variants
+explain select * from t1 where t1.a=(select avg(t2.b)*3 from t2 where t2.b=t1.a)+5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	11.11	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	11.11	Using where
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	12.50	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` = ((/* select#2 */ select (avg(`test`.`t2`.`b`) * 3) from `test`.`t2` where (cast(`test`.`t2`.`b` as double) = cast(`test`.`t1`.`a` as double))) + 5))
+select * from t1 where t1.a=(select avg(t2.b)*3 from t2 where t2.b=t1.a)+5;
+a	b
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+# User variable in subquery is not supported (it sets the UNCACHEABLE_RAND flag)
+explain select a, (select @xyz from t2 limit 1) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	NULL
+2	UNCACHEABLE SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,(/* select#2 */ select (@`xyz`) from `test`.`t2` limit 1) AS `(select @xyz from t2 limit 1)` from `test`.`t1`
+# Again aggregate in subquery, referencing outer column, but "hidden" into an aliased expression.
+# One subquery without tables, one with tables.
+explain select sum(b) as s, (select 1 having s > 0) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	NULL
+2	DEPENDENT SUBQUERY	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+Warnings:
+Note	1276	Field or reference 's' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select sum(`test`.`t1`.`b`) AS `s`,(/* select#2 */ select 1 having (`s` > 0)) AS `(select 1 having s > 0)` from `test`.`t1`
+select sum(b) as s, (select 1 having s > 0) from t1;
+s	(select 1 having s > 0)
+0	NULL
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+explain select sum(b) as s, (select 1 from t1 t2 having s > 0) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	NULL
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	NULL
+Warnings:
+Note	1276	Field or reference 's' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select sum(`test`.`t1`.`b`) AS `s`,(/* select#2 */ select 1 from `test`.`t1` `t2` having (`s` > 0)) AS `(select 1 from t1 t2 having s > 0)` from `test`.`t1`
+select sum(b) as s, (select 1 from t1 t2 having s > 0) from t1;
+s	(select 1 from t1 t2 having s > 0)
+0	NULL
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+# Test of subquery which is "optimized away"
+# a) because of impossible WHERE
+explain select * from t1 where (select t1.b from t1 t2 where 1=0);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where
+2	DEPENDENT SUBQUERY	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	Impossible WHERE
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (0 <> (/* select#2 */ select `test`.`t1`.`b` from `test`.`t1` `t2` where false))
+select * from t1 where (select t1.b from t1 t2 where 1=0);
+a	b
+# b) or of no tables used
+explain select * from t1 where (select t1.b where 1=1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	88.89	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	88.89	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1249	Select 2 was reduced during optimization
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (0 <> `test`.`t1`.`b`)
+select * from t1 where (select t1.b where 1=1);
+a	b
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+create table t3(a int primary key);
+insert into t3 values(1),(2);
+# c) or of all constant tables
+explain select * from t1 where (select t1.b from t3 where t3.a=2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where
+2	DEPENDENT SUBQUERY	t3	NULL	const	PRIMARY	PRIMARY	4	const	1	100.00	Using index
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (0 <> (/* select#2 */ select `test`.`t1`.`b` from `test`.`t3` where true))
+select * from t1 where (select t1.b from t3 where t3.a=2);
+a	b
+# d) or of aggregate computed during optimization. Actually
+# there is no way to test this, indeed,
+# 'explain select max(t3.a) from t3;'
+# does use "Select tables optimized away", but when it is put into a
+# correlated subquery, not everything can be computed during optimization
+# (due to the outer reference) so the subquery gets AGGR_REGULAR and
+# continues into full-blown optimization. 
+explain select max(t3.a) from t3;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	Select tables optimized away
+Warnings:
+Note	1003	/* select#1 */ select max(`test`.`t3`.`a`) AS `max(t3.a)` from `test`.`t3`
+explain select * from t1 where (select t1.b+max(t3.a) from t3);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where
+2	DEPENDENT SUBQUERY	t3	NULL	index	NULL	PRIMARY	4	NULL	2	100.00	Using index
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (0 <> (/* select#2 */ select (`test`.`t1`.`b` + max(`test`.`t3`.`a`)) from `test`.`t3`))
+drop table t3;
+# EXISTS with OR (which could thus not be semijoin)
+explain select * from t1 where (exists(select * from t2 where t2.b=t1.b) or
+exists(select * from t2 where t2.b=t1.b+1)) and
+exists(select * from t2 where t2.b=t1.b-1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where
+4	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	12.50	Using where
+3	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	12.50	Using where
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	12.50	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.t1.b' of SELECT #3 was resolved in SELECT #1
+Note	1276	Field or reference 'test.t1.b' of SELECT #4 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((exists(/* select#2 */ select 1 from `test`.`t2` where (`test`.`t2`.`b` = `test`.`t1`.`b`)) or exists(/* select#3 */ select 1 from `test`.`t2` where (cast(`test`.`t2`.`b` as double) = (`test`.`t1`.`b` + 1)))) and exists(/* select#4 */ select 1 from `test`.`t2` where (cast(`test`.`t2`.`b` as double) = (`test`.`t1`.`b` - 1))))
+select * from t1 where (exists(select * from t2 where t2.b=t1.b) or
+exists(select * from t2 where t2.b=t1.b+1)) and
+exists(select * from t2 where t2.b=t1.b-1);
+a	b
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+CTE inside subquery, merged then materialized
+explain with cte as (select * from t2)
+select * from t1 where exists(select * from cte where cte.b=t1.b) or
+(select min(a) from cte where cte.b=t1.b+1)>10;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where
+4	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	12.50	Using where
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	12.50	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.t1.b' of SELECT #4 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (exists(/* select#2 */ select 1 from `test`.`t2` where (`test`.`t2`.`b` = `test`.`t1`.`b`)) or ((/* select#4 */ select min(`test`.`t2`.`a`) from `test`.`t2` where (cast(`test`.`t2`.`b` as double) = (`test`.`t1`.`b` + 1))) > 10))
+with cte as (select * from t2)
+select * from t1 where exists(select * from cte where cte.b=t1.b) or
+(select min(a) from cte where cte.b=t1.b+1)>10;
+a	b
+1	a
+2	b
+3	c
+3	c
+4	d
+5	f
+6	e
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+explain with cte as (select * from t2 limit 100)
+select /*+ no_merge() */ *
+from t1 where exists(select * from cte where cte.b=t1.b) or
+(select min(a) from cte where cte.b=t1.b+1)>10;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where
+4	DEPENDENT SUBQUERY	<derived3>	NULL	ALL	NULL	NULL	NULL	NULL	8	12.50	Using where
+2	DEPENDENT SUBQUERY	<derived3>	NULL	ref	<auto_key0>	<auto_key0>	40	test.t1.b	2	100.00	NULL
+3	DERIVED	<gather3>	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	Parallel execute (4 workers, test.t2)
+3	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.t1.b' of SELECT #4 was resolved in SELECT #1
+Note	1003	with `cte` as (/* select#3 */ select `test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t2` limit 100) /* select#1 */ select /*+ NO_MERGE(@`select#1`) */ `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (exists(/* select#2 */ select 1 from `cte` where (`cte`.`b` = `test`.`t1`.`b`)) or ((/* select#4 */ select min(`cte`.`a`) from `cte` where (cast(`cte`.`b` as double) = (`test`.`t1`.`b` + 1))) > 10))
+with cte as (select * from t2 limit 100)
+select /*+ no_merge() */ *
+from t1 where exists(select * from cte where cte.b=t1.b) or
+(select min(a) from cte where cte.b=t1.b+1)>10;
+a	b
+1	a
+2	b
+3	c
+3	c
+4	d
+5	f
+6	e
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'h'
+Warning	1292	Truncated incorrect DOUBLE value: 'c'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'd'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'f'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'e'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'a'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'g'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+Warning	1292	Truncated incorrect DOUBLE value: 'i'
+Warning	1292	Truncated incorrect DOUBLE value: 'j'
+# Tests for various bugs caused by the fact that THD::is_pq_worker()==true does not always mean, anymore, that the execution is split between multiple threads
+explain select a, (select count(b) from t2 where 1=t1.a*0) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	NULL
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,(/* select#2 */ select count(0) from `test`.`t2` where (1 = (`test`.`t1`.`a` * 0))) AS `(select count(b) from t2 where 1=t1.a*0)` from `test`.`t1`
+select a, (select count(b) from t2 where 1=t1.a*0) from t1;
+a	(select count(b) from t2 where 1=t1.a*0)
+1	0
+2	0
+3	0
+3	0
+4	0
+5	0
+6	0
+8	0
+0	0
+explain select a, (select count(b) cc from t2 where 0=t1.a*0 having 0*cc>10) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	NULL
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,(/* select#2 */ select count(0) AS `cc` from `test`.`t2` where (0 = (`test`.`t1`.`a` * 0)) having ((0 * `cc`) > 10)) AS `(select count(b) cc from t2 where 0=t1.a*0 having 0*cc>10)` from `test`.`t1`
+select a, (select count(b) cc from t2 where 0=t1.a*0 having 0*cc>10) from t1;
+a	(select count(b) cc from t2 where 0=t1.a*0 having 0*cc>10)
+1	NULL
+2	NULL
+3	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+8	NULL
+0	NULL
+explain select a, (select count(b) cc from t2 where 0=t1.a*0 having 0*cc<10) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	NULL
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,(/* select#2 */ select count(0) AS `cc` from `test`.`t2` where (0 = (`test`.`t1`.`a` * 0)) having ((0 * `cc`) < 10)) AS `(select count(b) cc from t2 where 0=t1.a*0 having 0*cc<10)` from `test`.`t1`
+select a, (select count(b) cc from t2 where 0=t1.a*0 having 0*cc<10) from t1;
+a	(select count(b) cc from t2 where 0=t1.a*0 having 0*cc<10)
+1	8
+2	8
+3	8
+3	8
+4	8
+5	8
+6	8
+8	8
+0	8
+explain select a from t1 where (select count(b) cc from t2 where 0=t1.a*0 having 0*cc<10)>0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` where ((/* select#2 */ select count(0) AS `cc` from `test`.`t2` where (0 = (`test`.`t1`.`a` * 0)) having ((0 * `cc`) < 10)) > 0)
+select a from t1 where (select count(b) cc from t2 where 0=t1.a*0 having 0*cc<10)>0;
+a
+1
+2
+3
+3
+4
+5
+6
+8
+0
+# Not only scalar, but also row subquery is supported:
+explain select a, (1,2)=(select count(b) cc, max(b) from t2 where 0=t1.a*0 having 0*cc<10) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	NULL
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,((1,2) = (/* select#2 */ select count(0) AS `cc`,max(`test`.`t2`.`b`) from `test`.`t2` where (0 = (`test`.`t1`.`a` * 0)) having ((0 * `cc`) < 10))) AS `(1,2)=(select count(b) cc, max(b) from t2 where 0=t1.a*0 having 0*cc<10)` from `test`.`t1`
+select a, (1,2)=(select count(b) cc, max(b) from t2 where 0=t1.a*0 having 0*cc<10) from t1;
+a	(1,2)=(select count(b) cc, max(b) from t2 where 0=t1.a*0 having 0*cc<10)
+1	0
+2	0
+3	0
+3	0
+4	0
+5	0
+6	0
+8	0
+0	0
+drop table t1,t2;
+set optimizer_switch=default;
+# Bugs found during testing
+CREATE TABLE t0 (c0 INT);
+INSERT INTO t0(c0) VALUES (1);
+# (1) Cannot do PQ: subquery is optimized-away (we decide to skip it, due to always-true OR-ed 2nd condition, choose to do PQ, but later we still look at this subquery and because it is not PQ-compatible (due to window function), we get into trouble. As a failover, we restart without PQ.
+EXPLAIN SELECT 1 FROM t0 JOIN (SELECT 1) x(x) ON x.x = t0.c0 WHERE EXISTS (SELECT (ROW_NUMBER() OVER ()) + t0.c0) OR current_date() IS NOT NULL;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<derived2>	NULL	system	NULL	NULL	NULL	NULL	1	100.00	NULL
+1	PRIMARY	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+3	DEPENDENT SUBQUERY	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+2	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+Warnings:
+Warning	8026	Failed to execute the query using parallel query, the query was restarted without parallel query.
+Note	1276	Field or reference 'test.t0.c0' of SELECT #3 was resolved in SELECT #1
+Note	1003	/* select#1 */ select 1 AS `1` from `test`.`t0` where (`test`.`t0`.`c0` = '1')
+EXPLAIN SELECT 1 FROM t0 JOIN t0 tx ON t0.c0 = t0.c0 WHERE (1, 2) = (SELECT 1, ROW_NUMBER() OVER() + t0.c0) OR DATE '6289-5-28' >= current_date();
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+1	PRIMARY	tx	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using join buffer (hash join)
+2	DEPENDENT SUBQUERY	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+Warnings:
+Warning	8026	Failed to execute the query using parallel query, the query was restarted without parallel query.
+Note	1276	Field or reference 'test.t0.c0' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select 1 AS `1` from `test`.`t0` join `test`.`t0` `tx` where (`test`.`t0`.`c0` = `test`.`t0`.`c0`)
+# (2) Cannot do PQ because ALL(subquery)
+EXPLAIN SELECT 1 WHERE 1 > ALL(SELECT (SELECT 1 FROM t0) FROM (SELECT count(*) OVER () FROM t0) x(x));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	Impossible WHERE
+2	SUBQUERY	<derived4>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+4	DERIVED	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+3	SUBQUERY	<gather3>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t0)
+3	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+Note	1003	/* select#1 */ select 1 AS `1` from DUAL  where false
+# (3) Resolution had trouble to decide that two EXISTS items are equal
+EXPLAIN SELECT CAST(min(c1) AS SIGNED) FROM (SELECT CAST(EXISTS (SELECT 1) AS SIGNED) FROM t0) t1 (c1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t0)
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+3	SUBQUERY	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+Warnings:
+Note	1003	/* select#1 */ select cast(min(`<temporary>`.`min(cast(exists(select #3) as signed))`) as signed) AS `CAST(min(c1) AS SIGNED)` from `test`.`t0`
+# (4) Inconsistency in GROUP BY management, due to constant values
+EXPLAIN SELECT 1 FROM t0 JOIN (SELECT 1) x(x) ON (SELECT 1 FROM (SELECT 1 FROM t0) y(y) GROUP BY y.y, t0.c0, x.x);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<derived2>	NULL	system	NULL	NULL	NULL	NULL	1	100.00	NULL
+1	PRIMARY	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+3	DEPENDENT SUBQUERY	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using temporary
+2	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+Warnings:
+Note	1276	Field or reference 'test.t0.c0' of SELECT #3 was resolved in SELECT #1
+Note	1276	Field or reference 'x.x' of SELECT #3 was resolved in SELECT #1
+Note	1003	/* select#1 */ select 1 AS `1` from `test`.`t0` where (0 <> (/* select#3 */ select 1 from `test`.`t0` group by 1,`test`.`t0`.`c0`))
+# (5) INSERT IGNORE and correlated subquery in PQ: any error in the latter should not stop the whole PQ process, if IGNORE tolerates this particular error.
+DELETE FROM t0;
+CREATE TABLE t1 LIKE t0;
+SET pq_support_features_switch='insert_select=on';
+INSERT INTO t1(c0) VALUES (1),(2);
+explain INSERT INTO t0(c0) (SELECT (SELECT t1.c0 FROM t1 tx) FROM t1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	INSERT	t0	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+2	DEPENDENT SUBQUERY	tx	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t1.c0' of SELECT #2 was resolved in SELECT #1
+Note	1003	insert into `test`.`t0` (`test`.`t0`.`c0`) /* select#1 */ select (/* select#2 */ select `test`.`t1`.`c0` from `test`.`t1` `tx`) AS `(SELECT t1.c0 FROM t1 tx)` from `test`.`t1`
+INSERT INTO t0(c0) (SELECT (SELECT t1.c0 FROM t1 tx) FROM t1);
+ERROR 21000: Subquery returns more than 1 row
+explain INSERT IGNORE INTO t0(c0) (SELECT (SELECT t1.c0 FROM t1 tx) FROM t1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	INSERT	t0	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+2	DEPENDENT SUBQUERY	tx	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t1.c0' of SELECT #2 was resolved in SELECT #1
+Note	1003	insert ignore into `test`.`t0` (`test`.`t0`.`c0`) /* select#1 */ select (/* select#2 */ select `test`.`t1`.`c0` from `test`.`t1` `tx`) AS `(SELECT t1.c0 FROM t1 tx)` from `test`.`t1`
+INSERT IGNORE INTO t0(c0) (SELECT (SELECT t1.c0 FROM t1 tx) FROM t1);
+Warnings:
+Warning	1242	Subquery returns more than 1 row
+Warning	1242	Subquery returns more than 1 row
+SELECT c0 FROM t0 ORDER BY c0;
+c0
+NULL
+NULL
+SET pq_support_features_switch=@save_pq_support_features_switch;
+# (6) Cannot clone an Item which represents a column of VALUES
+explain SELECT 1 FROM t1 JOIN t0 ON t1.c0 = CASE WHEN t1.c0 THEN 1 END WHERE EXISTS (VALUES ROW(t0.c0),ROW(t0.c0));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	Using where
+1	PRIMARY	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where; Using join buffer (hash join)
+2	DEPENDENT SUBQUERY	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+Warnings:
+Note	1276	Field or reference 'test.t0.c0' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.t0.c0' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select 1 AS `1` from `test`.`t1` join `test`.`t0` where (exists(values row(`test`.`t0`.`c0`),row(`test`.`t0`.`c0`)) and (`test`.`t1`.`c0` = (case when `test`.`t1`.`c0` then 1 end)))
+SELECT 1 FROM t1 JOIN t0 ON t1.c0 = CASE WHEN t1.c0 THEN 1 END WHERE EXISTS (VALUES ROW(t0.c0),ROW(t0.c0));
+1
+1
+1
+# But for an uncorrelated subquery, no cloning of the "SELECT list" is done so it does not block PQ:
+explain SELECT 1 FROM t1 JOIN t0 ON t1.c0 = CASE WHEN t1.c0 THEN 1 END WHERE EXISTS (VALUES ROW(123),ROW(456));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	Using where
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Using join buffer (hash join)
+2	SUBQUERY	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+Warnings:
+Note	1003	/* select#1 */ select 1 AS `1` from `test`.`t1` join `test`.`t0` where (`test`.`t1`.`c0` = (case when `test`.`t1`.`c0` then 1 end))
+SELECT 1 FROM t1 JOIN t0 ON t1.c0 = CASE WHEN t1.c0 THEN 1 END WHERE EXISTS (VALUES ROW(123),ROW(456));
+1
+1
+1
+# (7) Misuse of Semijoin_mat_exec::m_pq_shared_info led to assertion failure
+DELETE FROM t1;
+INSERT INTO t1(c0) VALUES (1),(2),(3);
+explain SELECT 1 FROM t1 WHERE EXISTS
+(SELECT /*+ NO_SEMIJOIN() */ 1 FROM t1 tx WHERE t1.c0 IN (SELECT 1 FROM t1 ty STRAIGHT_JOIN (SELECT 1) x(x)));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where
+2	DEPENDENT SUBQUERY	<subquery3>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	4	test.t1.c0	1	100.00	NULL
+2	DEPENDENT SUBQUERY	tx	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using join buffer (hash join)
+3	MATERIALIZED	ty	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+3	MATERIALIZED	<derived4>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using join buffer (hash join)
+4	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+Warnings:
+Note	1276	Field or reference 'test.t1.c0' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select /*+ NO_SEMIJOIN(@`select#2`) */ 1 AS `1` from `test`.`t1` where exists(/* select#2 */ select 1 from `test`.`t1` `tx` semi join (`test`.`t1` `ty` straight_join (/* select#4 */ select 1 AS `1`) `x` (`x`)) where (`test`.`t1`.`c0` = `<subquery3>`.`1`))
+SELECT 1 FROM t1 WHERE EXISTS
+(SELECT /*+ NO_SEMIJOIN() */ 1 FROM t1 tx WHERE t1.c0 IN (SELECT 1 FROM t1 ty STRAIGHT_JOIN (SELECT 1) x(x)));
+1
+1
+DROP TABLE t0, t1;
+# (8) Bug in name resolution for columns of merged views: an outer reference is resolved by PQ code as an inner reference.
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES (1),(2);
+CREATE VIEW v AS SELECT * FROM t1;
+explain SELECT * FROM v vo WHERE (SELECT 1 FROM v WHERE v.a=1 AND vo.a>=2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where
+2	DEPENDENT SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	Using where
+Warnings:
+Note	1276	Field or reference 'vo.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` where (0 <> (/* select#2 */ select 1 from `test`.`t1` where ((`test`.`t1`.`a` = 1) and (`test`.`t1`.`a` >= 2))))
+SELECT * FROM v vo WHERE (SELECT 1 FROM v WHERE v.a=1 AND vo.a>=2);
+a
+2
+DROP VIEW v;
+DROP TABLE t1;
+# (9) Equality propagation used a mix of THD::change_item_tree() and non-recorded change, confusing PQ cloning code, and we got in the subquery: WHERE t1.char_col=t1.char_col AND t2.char_col <=> 'aaaa'. So the subquery returned 'aaaa' instead of NULL.
+# UPDATE: the fix for this case introduced BUG2025041529773; so it has been reverted and, instead, PQ is turned off (in this case where equality and constant propagation swaps the two arguments of the first condition in WHERE).
+CREATE TABLE t1(char_col CHAR(4));
+CREATE TABLE t2(char_col CHAR(4));
+INSERT INTO t1 VALUES('ab');
+INSERT INTO t2 VALUES('aaaa');
+EXPLAIN FORMAT=TREE SELECT (SELECT t2.char_col FROM t2  WHERE t2.char_col = t1.char_col AND t2.char_col <=> 'aaaa' ) AS c2 FROM t1 ;
+EXPLAIN
+-> Table scan on t1  (cost=0.35 rows=1)
+-> Select #2 (subquery in projection; dependent)
+    -> Filter: ((t1.char_col = 'aaaa') and (t2.char_col <=> 'aaaa'))  (cost=0.35 rows=1)
+        -> Table scan on t2  (cost=0.35 rows=1)
+
+Warnings:
+Note	1276	Field or reference 'test.t1.char_col' of SELECT #2 was resolved in SELECT #1
+SELECT (SELECT t2.char_col FROM t2  WHERE t2.char_col = t1.char_col AND t2.char_col <=> 'aaaa' ) AS c2 FROM t1 ;
+c2
+NULL
+DROP TABLE t1,t2;
+# Bug in Community MySQL : after transformation to derived table and merging, table t3 is in the table list of select#5 but has a select_lex pointer == select#2. This in turn poses problems during Item cloning, so we catch this situation early and go to non-PQ execution for select#5 (but not the others). Test query inspired by one in subquery_scalar_to_derived.test.
+CREATE TABLE t1(a INT);
+CREATE TABLE t2(a INT);
+CREATE TABLE t3(c INT);
+set @save_opt_s = @@optimizer_switch;
+set optimizer_switch="subquery_to_derived=on";
+explain SELECT (SELECT SUM(c) + (SELECT a FROM t1) FROM (SELECT  c from t3) t11) AS cnt FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, .derived_1_2, test.t2)
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+1	SIMPLE	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where; Using join buffer (hash join)
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, .derived_2_6, .derived_2_5)
+2	SIMPLE	<derived5>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+2	SIMPLE	<derived6>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where; Using join buffer (hash join)
+6	DERIVED	<gather6>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t1)
+6	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+5	DERIVED	t3	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `derived_1_2`.`SUM(c) + (SELECT a FROM t1)` AS `cnt` from `test`.`t2` left join (/* select#2 */ select (`derived_2_5`.`tmp_aggr_1` + `derived_2_6`.`a`) AS `SUM(c) + (SELECT a FROM t1)` from (/* select#5 */ select sum(`test`.`t3`.`c`) AS `tmp_aggr_1` from `test`.`t3`) `derived_2_5` left join (/* select#6 */ select `test`.`t1`.`a` AS `a` from `test`.`t1`) `derived_2_6` on(true) where true) `derived_1_2` on(true) where true
+SELECT (SELECT SUM(c) + (SELECT a FROM t1) FROM (SELECT  c from t3) t11) AS cnt FROM t2;
+cnt
+set optimizer_switch=@save_opt_s;
+DROP TABLE t1,t2,t3;
+# Test correlated subquery containing derived table having derived condition pushdown
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES (1),(2),(3);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+explain SELECT * FROM t1 WHERE a=(SELECT count(derived.a)+t1.a*0 FROM (SELECT a FROM t1 GROUP BY a) derived WHERE MOD(derived.a,2)=1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where
+2	DEPENDENT SUBQUERY	<derived3>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+3	DERIVED	<gather3>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+3	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where; Using temporary
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` where (`test`.`t1`.`a` = (/* select#2 */ select (count(`derived`.`a`) + (`test`.`t1`.`a` * 0)) from (/* select#3 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` where ((`test`.`t1`.`a` % 2) = 1) group by `test`.`t1`.`a`) `derived`))
+SELECT * FROM t1 WHERE a=(SELECT count(derived.a)+t1.a*0 FROM (SELECT a FROM t1 GROUP BY a) derived WHERE MOD(derived.a,2)=1);
+a
+2
+DROP TABLE t1;
+# BUG2023112700818 Crash in EXPLAIN, PQ plan cloning misses to create ZERO_ROWS path
+CREATE TABLE t1(timestamp_col TIMESTAMP, decimal_col DECIMAL);
+INSERT INTO t1 VALUES('2023-11-20 14:44:15',NULL);
+CREATE TABLE t2 SELECT * FROM t1;
+INSERT INTO t2 SELECT * FROM t1;
+ALTER TABLE t2 ADD INDEX(decimal_col);
+EXPLAIN FORMAT=TREE SELECT timestamp_col, decimal_col FROM t1 A
+HAVING ( SELECT timestamp_col FROM t1 B
+WHERE A.decimal_col >= B.decimal_col AND
+EXISTS (SELECT /*+ NO_SEMIJOIN(FIRSTMATCH) */ timestamp_col FROM t2 C
+WHERE decimal_col > NULL ORDER BY 1 LIMIT 1 ));
+EXPLAIN
+-> Gather: 4 workers, parallel scan on A  (cost=0.275 rows=1)
+    -> Filter: (0 <> (select #2))  (cost=0.275 rows=0.25)
+        -> Parallel table scan on A  (cost=0.275 rows=0.25)
+        -> Select #2 (subquery in condition; dependent)
+            -> Zero rows (Impossible WHERE noticed after reading const tables)  (cost=0..0 rows=0)
+
+Warnings:
+Note	1276	Field or reference 'test.A.decimal_col' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.A.decimal_col' of SELECT #2 was resolved in SELECT #1
+DROP TABLE t1,t2;
+# BUG2023112703423 Correlated subquery on view assertion error
+CREATE TABLE t0 (c0 INT);
+CREATE ALGORITHM = MERGE VIEW v1 (c0) AS (SELECT (SELECT 1 WHERE t0.c0) FROM t0);
+# Should not use PQ
+EXPLAIN SELECT 1 FROM v1 WHERE (SELECT 1 FROM t0 GROUP BY v1.c0, t0.c0);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+4	DEPENDENT SUBQUERY	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+2	DEPENDENT SUBQUERY	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using temporary
+Warnings:
+Note	1276	Field or reference 'test.t0.c0' of SELECT #4 was resolved in SELECT #3
+Note	1276	Field or reference 'v1.c0' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select 1 AS `1` from `test`.`t0` where (0 <> (/* select#2 */ select 1 from `test`.`t0` group by (/* select#4 */ select 1 from DUAL  where (0 <> `test`.`t0`.`c0`)),`test`.`t0`.`c0`))
+SELECT 1 FROM v1 WHERE (SELECT 1 FROM t0 GROUP BY v1.c0, t0.c0);
+1
+# BUG2023120703786 Correlated subquery assertion error
+# Should not use PQ
+SELECT (SELECT 1 FROM t0 HAVING COUNT(*) = tx.c0) FROM t0 tx GROUP BY tx.c0;
+(SELECT 1 FROM t0 HAVING COUNT(*) = tx.c0)
+DROP VIEW v1;
+DROP TABLE t0;
+# BUG2023120802668 The query takes about 9min longer in parallel correlated_subquery is enabled than it is disabled
+CREATE TABLE t0 (c0 INT);
+INSERT INTO t0 VALUES(1);
+ANALYZE TABLE t0;
+Table	Op	Msg_type	Msg_text
+test.t0	analyze	status	OK
+# Only the third query should use PQ. The others do not use a tmp table and thus a PQ worker evaluates the subquery twice (once for sorting, once for sending to the leader), which can be slow.
+EXPLAIN SELECT * FROM t0 ORDER BY (SELECT t1.c0+t0.c0 FROM t0 t1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using filesort
+2	DEPENDENT SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t0.c0' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t0`.`c0` AS `c0` from `test`.`t0` order by (/* select#2 */ select (`test`.`t1`.`c0` + `test`.`t0`.`c0`) from `test`.`t0` `t1`)
+EXPLAIN SELECT * FROM t0 ORDER BY (SELECT t1.c0+t0.c0 FROM t0 t1)+1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using filesort
+2	DEPENDENT SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t0.c0' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t0`.`c0` AS `c0` from `test`.`t0` order by ((/* select#2 */ select (`test`.`t1`.`c0` + `test`.`t0`.`c0`) from `test`.`t0` `t1`) + 1)
+EXPLAIN SELECT (SELECT t1.c0+t0.c0 FROM t0 t1) AS subq, t0.* FROM t0 ORDER BY subq;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t0)
+1	PRIMARY	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using temporary; Using filesort
+2	DEPENDENT SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t0.c0' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select (/* select#2 */ select (`test`.`t1`.`c0` + `test`.`t0`.`c0`) from `test`.`t0` `t1`) AS `subq`,`test`.`t0`.`c0` AS `c0` from `test`.`t0` order by `subq`
+EXPLAIN SELECT (SELECT t1.c0+t0.c0 FROM t0 t1) AS subq, t0.* FROM t0 ORDER BY subq+1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using filesort
+2	DEPENDENT SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t0.c0' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select (/* select#2 */ select (`test`.`t1`.`c0` + `test`.`t0`.`c0`) from `test`.`t0` `t1`) AS `subq`,`test`.`t0`.`c0` AS `c0` from `test`.`t0` order by (`subq` + 1)
+No correlation => evaluations are cheap, can do PQ.
+EXPLAIN SELECT * FROM t0 ORDER BY (SELECT t1.c0+0 FROM t0 t1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+2	SUBQUERY	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t1)
+2	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`c0` AS `c0` from `test`.`t0` order by (/* select#2 */ select (`test`.`t1`.`c0` + 0) from `test`.`t0` `t1`)
+# BUG2023112803072 PQ Fix fields assertion error 2
+SELECT 1
+FROM (SELECT t0.c0 FROM t0 GROUP BY t0.c0) x(x)
+GROUP BY x.x
+HAVING (SELECT 1 FROM t0 JOIN t0 tx ON x.x = tx.c0 JOIN t0 ty ON ty.c0 = x.x);
+1
+1
+DROP TABLE t0;
+BUG2024010800799 explain format=tree query,mysqld crash,KeyWord:pq_dup_tabs(JOIN*, JOIN*, bool)+0x12a
+CREATE TABLE t4 (
+c_id int(253) unsigned zerofill NOT NULL,
+c_d_id int(253) unsigned zerofill NOT NULL,
+c_w_id int(253) unsigned zerofill NOT NULL,
+c_first varchar(253) DEFAULT NULL,
+c_middle char(253) DEFAULT NULL,
+c_last varchar(253) DEFAULT NULL,
+c_street_1 varchar(253) DEFAULT NULL,
+c_street_2 varchar(253) DEFAULT NULL,
+c_city varchar(253) DEFAULT NULL,
+c_state char(253) DEFAULT NULL,
+c_zip char(23) DEFAULT NULL,
+c_phone char(238) DEFAULT NULL,
+c_since timestamp NOT NULL DEFAULT '1970-01-01 16:00:01',
+c_credit char(253) DEFAULT NULL,
+c_credit_lim decimal(62,2) DEFAULT NULL,
+c_discount decimal(62,4) DEFAULT NULL,
+c_balance decimal(62,2) DEFAULT NULL,
+c_ytd_payment decimal(62,2) DEFAULT NULL,
+c_payment_cnt int(253) unsigned zerofill DEFAULT NULL,
+c_delivery_cnt int(253) unsigned zerofill DEFAULT NULL,
+c_data varchar(253) DEFAULT NULL,
+PRIMARY KEY (c_w_id DESC,c_d_id DESC,c_id DESC),
+KEY Customer_100W_key (c_w_id DESC,c_d_id DESC,c_last DESC,c_first DESC),
+KEY ndx_c_id (c_id DESC) USING BTREE,
+KEY ndx_c_d_id (c_d_id DESC) USING BTREE,
+KEY ndx_c_w_id (c_w_id DESC) USING BTREE,
+KEY ndx_c_first (c_first DESC) USING BTREE,
+KEY ndx_c_middle (c_middle DESC) USING BTREE,
+KEY ndx_c_last (c_last DESC) USING BTREE,
+KEY ndx_c_street_1 (c_street_1 DESC) USING BTREE,
+KEY ndx_c_street_2 (c_street_2 DESC) USING BTREE,
+KEY ndx_c_city (c_city DESC) USING BTREE,
+KEY ndx_c_state (c_state DESC) USING BTREE,
+KEY ndx_c_zip (c_zip DESC) USING BTREE,
+KEY ndx_c_phone (c_phone DESC) USING BTREE,
+KEY ndx_c_since (c_since DESC) USING BTREE,
+KEY ndx_c_credit (c_credit DESC) USING BTREE,
+KEY ndx_c_credit_lim (c_credit_lim DESC) USING BTREE,
+KEY ndx_c_discount (c_discount DESC) USING BTREE,
+KEY ndx_c_balance (c_balance DESC) USING BTREE,
+KEY ndx_c_ytd_payment (c_ytd_payment DESC) USING BTREE,
+KEY ndx_c_payment_cnt (c_payment_cnt DESC) USING BTREE,
+KEY ndx_c_delivery_cnt (c_delivery_cnt DESC) USING BTREE,
+KEY ndx_c_data (c_data DESC) USING BTREE,
+KEY ndx_4_5_6 (c_first DESC,c_middle DESC,c_last DESC) USING BTREE,
+KEY ndx_7_8 (c_street_1 DESC,c_street_2 DESC) USING BTREE,
+KEY ndx_9_10_11_12 (c_city DESC,c_state DESC,c_zip DESC,c_phone DESC) USING BTREE,
+KEY ndx_13_14 (c_since DESC,c_credit DESC) USING BTREE,
+KEY ndx_15_16_17_18 (c_credit_lim DESC,c_discount DESC,c_balance DESC,c_ytd_payment DESC) USING BTREE,
+KEY ndx_19_20_21 (c_payment_cnt DESC,c_delivery_cnt DESC,c_data DESC) USING BTREE,
+KEY ndx_4_7_9_13_15_19 (c_first DESC,c_street_1 DESC,c_city DESC,c_since DESC,c_credit_lim DESC,c_payment_cnt DESC) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+Warnings:
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+CREATE TABLE t11 (
+C_ID int NOT NULL DEFAULT '99' COMMENT 'string',
+C_D_ID int DEFAULT NULL,
+C_W_ID bigint DEFAULT NULL,
+C_DOUBLE double DEFAULT NULL,
+C_DECIMAL decimal(10,0) DEFAULT NULL,
+C_FIRST varchar(64) DEFAULT NULL,
+C_MIDDLE char(2) DEFAULT NULL,
+C_LAST varchar(64) DEFAULT NULL,
+C_STREET_1 varchar(20) DEFAULT NULL,
+C_STREET_2 varchar(20) DEFAULT NULL,
+C_CITY varchar(64) DEFAULT NULL,
+C_STATE char(2) DEFAULT NULL,
+C_ZIP char(9) DEFAULT NULL,
+C_PHONE char(16) DEFAULT NULL,
+C_SINCE timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+C_CREDIT char(2) DEFAULT NULL,
+C_CREDIT_LIM decimal(12,2) DEFAULT NULL,
+C_DISCOUNT decimal(4,4) DEFAULT NULL,
+C_BALANCE decimal(12,2) DEFAULT NULL,
+C_YTD_PAYMENT double DEFAULT NULL,
+C_PAYMENT_CNT float DEFAULT NULL,
+C_DELIVERY_CNT tinyint(1) DEFAULT NULL,
+C_END date DEFAULT NULL,
+C_VCHAR varchar(1000) DEFAULT NULL,
+PRIMARY KEY (C_ID DESC),
+UNIQUE KEY C_ID (C_ID),
+UNIQUE KEY C_ID_2 (C_ID) COMMENT 'string',
+KEY index_CREATE_TABLE_PART_HASH_029_taurus (C_ID DESC) USING BTREE,
+KEY ndx_C_ID (C_ID) USING BTREE,
+KEY ndx_C_D_ID (C_D_ID) USING BTREE,
+KEY ndx_C_W_ID (C_W_ID) USING BTREE,
+KEY ndx_C_DOUBLE (C_DOUBLE) USING BTREE,
+KEY ndx_C_DECIMAL (C_DECIMAL) USING BTREE,
+KEY ndx_C_FIRST (C_FIRST) USING BTREE,
+KEY ndx_C_MIDDLE (C_MIDDLE) USING BTREE,
+KEY ndx_C_LAST (C_LAST) USING BTREE,
+KEY ndx_C_STREET_1 (C_STREET_1) USING BTREE,
+KEY ndx_C_STREET_2 (C_STREET_2) USING BTREE,
+KEY ndx_C_CITY (C_CITY) USING BTREE,
+KEY ndx_C_STATE (C_STATE) USING BTREE,
+KEY ndx_C_ZIP (C_ZIP) USING BTREE,
+KEY ndx_C_PHONE (C_PHONE) USING BTREE,
+KEY ndx_C_SINCE (C_SINCE) USING BTREE,
+KEY ndx_C_CREDIT (C_CREDIT) USING BTREE,
+KEY ndx_C_CREDIT_LIM (C_CREDIT_LIM) USING BTREE,
+KEY ndx_C_DISCOUNT (C_DISCOUNT) USING BTREE,
+KEY ndx_C_BALANCE (C_BALANCE) USING BTREE,
+KEY ndx_C_YTD_PAYMENT (C_YTD_PAYMENT) USING BTREE,
+KEY ndx_C_PAYMENT_CNT (C_PAYMENT_CNT) USING BTREE,
+KEY ndx_C_DELIVERY_CNT (C_DELIVERY_CNT) USING BTREE,
+KEY ndx_C_END (C_END) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 MAX_ROWS=99 AVG_ROW_LENGTH=8 PACK_KEYS=1 DELAY_KEY_WRITE=1 CONNECTION='connect_string';
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	3719	'utf8' is currently an alias for the character set UTF8MB3, but will be an alias for UTF8MB4 in a future release. Please consider using UTF8MB4 in order to be unambiguous.
+Warning	1831	Duplicate index 'C_ID_2' defined on the table 'test.t11'. This is deprecated and will be disallowed in a future release.
+SELECT DATABASE() AS c0, ref_0.C_CREDIT_LIM AS c1
+FROM t11 ref_0
+WHERE EXISTS (
+SELECT ref_0.C_FIRST AS c0
+FROM (
+SELECT subq_0.c2 AS c1, subq_0.c9 AS c2
+FROM t4 ref_1
+LEFT JOIN (
+SELECT 1 AS c2, ref_0.c_middle AS c9
+FROM t4 ref_0
+) subq_0
+ON subq_0.c9 = ref_1.c_credit
+WHERE subq_0.c2 IS NOT NULL
+) ref_7
+WHERE false
+)
+OR true;
+c0	c1
+DROP TABLE t4,t11;
+# BUG2024012404354 crash in SELECT_LEX::flatten_subqueries
+CREATE TABLE tbl_1_all_type2index (
+id_col int NOT NULL,
+tinyint_col tinyint DEFAULT NULL,
+bool_col tinyint(1) DEFAULT NULL
+);
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+SELECT if (strcmp(a.tinyint_col, a.id_col), a.tinyint_col, a.id_col)
+FROM tbl_1_all_type2index a join tbl_1_all_type2index
+on(a.id_col,a.bool_col) in (select col1,col2 from
+(SELECT id_col col1, bool_col col2 from tbl_1_all_type2index
+where id_col not in(select id_col from tbl_1_all_type2index)) c);
+if (strcmp(a.tinyint_col, a.id_col), a.tinyint_col, a.id_col)
+DROP TABLE tbl_1_all_type2index;
+#
+# BUG2024020404687 Order by correlated subquery SEGV
+#
+CREATE TABLE t0 (c0 INT);
+# Should not use PQ
+EXPLAIN SELECT c0 FROM
+(
+SELECT tx.tx y FROM
+(SELECT t0.c0 FROM t0) tx(tx)
+ORDER BY (SELECT y FROM t0)
+) tx1(c0)
+ORDER BY c0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t0)
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using filesort
+Warnings:
+Note	1276	Field or reference 'y' of SELECT #4 was resolved in SELECT #2
+Note	1003	/* select#1 */ select `test`.`t0`.`c0` AS `c0` from `test`.`t0` order by `tx1`.`c0`
+SELECT c0 FROM
+(
+SELECT tx.tx y FROM
+(SELECT t0.c0 FROM t0) tx(tx)
+ORDER BY (SELECT y FROM t0)
+) tx1(c0)
+ORDER BY c0;
+c0
+DROP TABLE t0;
+# Note that this does not count _statements_ but rather _query specifications_ i.e. SELECT_LEX_UNITs, which do PQ. So if your statement has a top query and a derived table, and both do PQ, it will count as two.
+select variable_value-@counter from performance_schema.global_status where VARIABLE_NAME="PQ_stmt_executed";
+variable_value-@counter
+90

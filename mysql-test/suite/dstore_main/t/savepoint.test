@@ -1,0 +1,50 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+--echo #
+--echo # CDE
+--echo #
+use test;
+
+# 1.create savepoint name. 
+# if the name has already exist, the new one replace old one.
+# 2.rollback savepoint name.
+# the savepoints after the name become invalid.
+# 3.release savepoint name.
+# the savepoints after the name become invalid.
+
+create table t1(n int);
+
+begin;
+savepoint `my_savepoint`;
+insert into t1 values (7);
+savepoint `savept2`;
+insert into t1 values (3);
+select n from t1;
+savepoint savept3;
+rollback to savepoint savept2;
+--error 1305
+rollback to savepoint savept3;
+rollback to savepoint savept2;
+release savepoint `my_savepoint`;
+select n from t1;
+-- error 1305
+rollback to savepoint `my_savepoint`;
+--error 1305
+rollback to savepoint savept2;
+insert into t1 values (8);
+savepoint sv;
+commit;
+savepoint sv;
+set autocommit=1;
+delete from t1;
+begin;
+insert into t1 values (1);
+savepoint `savept1`;
+insert into t1 values (2);
+savepoint `savept1`;
+insert into t1 values (3);
+rollback to savepoint `savept1`;
+select n from t1;
+commit;
+
+drop table t1;

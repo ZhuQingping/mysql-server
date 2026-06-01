@@ -1,0 +1,527 @@
+set @saved_parallel_cost_threshold = @@parallel_cost_threshold;
+set @saved_parallel_rows_threshold = @@parallel_rows_threshold;
+set @saved_optimizer_trace = @@optimizer_trace;
+set @saved_parallel_fail_retry = @@parallel_fail_retry;
+set @saved_parallel_memory_limit = @@parallel_memory_limit;
+drop table if exists tab_1;
+Warnings:
+Note	1051	Unknown table 'test.tab_1'
+create table tab_1(a int);
+insert into tab_1 values (6),(2),(1);
+SET optimizer_trace="enabled=on";
+set global parallel_cost_threshold = 0;
+set global parallel_rows_threshold = 0;
+# 
+# max pq memory size limit.
+# 
+set global parallel_memory_limit = 1;
+Warnings:
+Warning	1292	Truncated incorrect parallel_memory_limit value: '1'
+select * from tab_1;
+a
+6
+2
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "PQ memory size exceed parallel_memory_limit.", "select#": 1}]
+set global parallel_memory_limit = @saved_parallel_memory_limit;
+# 
+# pq_running_threads
+# 
+set @saved_parallel_max_threads = @@parallel_max_threads;
+set global parallel_max_threads = 2;
+select * from tab_1;
+a
+6
+2
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "The number of remaining idle threads for PQ (parallel_max_threads - number of used threads) is less than parallel_default_dop.", "select#": 1}]
+set global parallel_max_threads = @saved_parallel_max_threads;
+# 
+# parallel_cost_threshold
+set parallel_cost_threshold = 1000;
+select * from tab_1;
+a
+6
+2
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query's cost less than parallel_cost_threshold or query has lateral derived tables or number of fields are more than MAX_FIELDS or rollup state does not support.", "select#": 1}]
+set parallel_cost_threshold = 0;
+# 
+# parallel_rows_threshold
+set parallel_rows_threshold = 1000;
+select * from tab_1;
+a
+6
+2
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "No table meets the conditions for splitting to parallel scanning. Possible table's fetched row less than parallel_rows_threshold or query inclues unsupported scan-type or engine/multiple partitions to scan with partition table/a semi-join inner table/inner_table in BKA or outer join.", "select#": 1}]
+set parallel_rows_threshold = 0;
+# 
+# parallel correlated_subquery
+set optimizer_switch="semijoin=off";
+SET @saved_pq_support_features_switch = @@global.pq_support_features_switch;
+set pq_support_features_switch='correlated_subquery=on';
+explain select * from tab_1 where exists(select * from tab_1 as dt where dt.a = tab_1.a);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.tab_1)
+1	PRIMARY	tab_1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where
+2	DEPENDENT SUBQUERY	dt	NULL	ALL	NULL	NULL	NULL	NULL	3	33.33	Using where
+Warnings:
+Note	1276	Field or reference 'test.tab_1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`tab_1`.`a` AS `a` from `test`.`tab_1` where exists(/* select#2 */ select 1 from `test`.`tab_1` `dt` where (`test`.`dt`.`a` = `test`.`tab_1`.`a`))
+set pq_support_features_switch='correlated_subquery=off';
+explain select * from tab_1 where exists(select * from tab_1 as dt where dt.a = tab_1.a);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	tab_1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where
+2	DEPENDENT SUBQUERY	dt	NULL	ALL	NULL	NULL	NULL	NULL	3	33.33	Using where
+Warnings:
+Note	1276	Field or reference 'test.tab_1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`tab_1`.`a` AS `a` from `test`.`tab_1` where exists(/* select#2 */ select 1 from `test`.`tab_1` `dt` where (`test`.`dt`.`a` = `test`.`tab_1`.`a`))
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has unsupported subquery-type.", "select#": 2}, {"chosen": false, "reason": "Query has unsupported subquery-type.", "select#": 1}]
+set optimizer_switch="semijoin=on";
+set pq_support_features_switch='correlated_subquery=on';
+# 
+# no_pq or pq_dop is 0. (force_parallel_execute/parallel_default_dop)
+set @saved_force_parallel_execute = @@force_parallel_execute;
+set force_parallel_execute = off;
+select * from tab_1;
+a
+6
+2
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Force_parallel_execute is off or parallel_default_dop is zero.", "select#": 1}]
+set force_parallel_execute = @saved_force_parallel_execute;
+set @saved_parallel_default_dop = @@parallel_default_dop;
+set parallel_default_dop = 0;
+select * from tab_1;
+a
+6
+2
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Force_parallel_execute is off or parallel_default_dop is zero.", "select#": 1}]
+set parallel_default_dop = @saved_parallel_default_dop;
+#
+# PQ hint
+create table tab_3 (a int, b text);
+set force_parallel_execute = off;
+select b from tab_3;
+b
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Force_parallel_execute is off or parallel_default_dop is zero.", "select#": 1}]
+select /*+PQ(1) */ b from tab_3;
+b
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has unsupported scenarios including generated column, unsupported data type, unsupported function and so on.", "select#": 1}]
+select /*+PQ(1) */ /*+NO_PQ */ b from tab_3;
+b
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has unsupported scenarios including generated column, unsupported data type, unsupported function and so on.", "select#": 1}]
+select  /*+NO_PQ */ /*+PQ(1) */ b from tab_3;
+b
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Force_parallel_execute is off or parallel_default_dop is zero.", "select#": 1}]
+set force_parallel_execute = on;
+select b from tab_3;
+b
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has unsupported scenarios including generated column, unsupported data type, unsupported function and so on.", "select#": 1}]
+select /*+NO_PQ */ b from tab_3;
+b
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has NO_PQ hint or pq_master_enable is off or PQ is not supported in some scenarios.", "select#": 1}]
+select /*+PQ(1) */ /*+NO_PQ */ b from tab_3;
+b
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has unsupported scenarios including generated column, unsupported data type, unsupported function and so on.", "select#": 1}]
+select  /*+NO_PQ */ /*+PQ(1) */ b from tab_3;
+b
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has NO_PQ hint or pq_master_enable is off or PQ is not supported in some scenarios.", "select#": 1}]
+drop table tab_3;
+#
+# isn't SELECT/INSERT SELECT/REPLACE SELECT command or is explain analyze commnad
+#
+# prepare statement
+prepare stmt from "select * from tab_1";
+execute stmt;
+a
+6
+2
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query is store procedure or trigger or prepare statement or attachable transaction or serializable with locking reads.", "select#": 1}]
+deallocate prepare stmt;
+#
+# procedure
+create procedure p1()
+begin
+select a from tab_1;
+end$$
+call p1();
+a
+6
+2
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query is store procedure or trigger or prepare statement or attachable transaction or serializable with locking reads.", "select#": 1}]
+drop procedure p1;
+#
+# query with SQL_BUFFER_RESULT
+select SQL_BUFFER_RESULT * from tab_1;
+a
+6
+2
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query cached the result set(such as with SQL_BUFFER_RESULT or insert select into the same table) or with rollup or more than one value item of table value constructor or has windows function.", "select#": 1}]
+#
+# query with "with rollup"
+select * from tab_1 group by a with rollup;
+a
+1
+2
+6
+NULL
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query cached the result set(such as with SQL_BUFFER_RESULT or insert select into the same table) or with rollup or more than one value item of table value constructor or has windows function.", "select#": 1}]
+#
+# query has windows functions
+drop table if exists tab_2;
+Warnings:
+Note	1051	Unknown table 'test.tab_2'
+create table tab_2 (a int ,b int);
+insert into tab_2 values (1,100),(1,120),(2,50),(2,90);
+select a,sum(b) over (partition by a ) from tab_2;
+a	sum(b) over (partition by a )
+1	220
+1	220
+2	140
+2	140
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query cached the result set(such as with SQL_BUFFER_RESULT or insert select into the same table) or with rollup or more than one value item of table value constructor or has windows function.", "select#": 1}]
+#
+# has system table
+select 1 from mysql.user limit 1;
+1
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Table list has system table/transactional tmp table/system tmp table or tables have same alias.", "select#": 1}]
+#
+# table lock
+select HIGH_PRIORITY * from tab_1;
+a
+6
+2
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has table function or explicit locking clause.", "select#": 1}]
+select * from tab_1 for update;
+a
+6
+2
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has table function or explicit locking clause.", "select#": 1}]
+#
+# tmp table
+create temporary table tmp_table (a int);
+insert into tmp_table values (1),(2),(3);
+select * from tmp_table;
+a
+1
+2
+3
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Table list has system table/transactional tmp table/system tmp table or tables have same alias.", "select#": 1}]
+drop table tmp_table;
+#
+# partition table
+create table part_tab (a int) 
+partition by range (a)
+(
+partition p0 values less than (10),
+partition p1 values less than (20),
+partition p2 values less than (30),
+partition p3 values less than (40));
+select a from part_tab where a < 10;
+a
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+NULL
+select a from part_tab where a < 40;
+a
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "No table meets the conditions for splitting to parallel scanning. Possible table's fetched row less than parallel_rows_threshold or query inclues unsupported scan-type or engine/multiple partitions to scan with partition table/a semi-join inner table/inner_table in BKA or outer join.", "select#": 1}]
+drop table part_tab;
+#
+# test round function
+select /*+ NO_PQ */ round(a) from tab_1;
+round(a)
+6
+2
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has NO_PQ hint or pq_master_enable is off or PQ is not supported in some scenarios.", "select#": 1}]
+#
+# pq clone condition failed
+CREATE TABLE t0 (c0 INT);
+SELECT 1 WHERE (SELECT 1, 2 FROM t0) NOT IN (SELECT 1, 2 FROM (SELECT DISTINCT 1 FROM t0) x(x));
+1
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Error happened during save properties or pq clone.", "select#": 1}]
+drop table t0;
+#
+# unsupported field data type
+create table datatype_tab (a int , b text, c blob, d json,e geometry);
+select a from datatype_tab;
+a
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+NULL
+select b from datatype_tab;
+b
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has unsupported scenarios including generated column, unsupported data type, unsupported function and so on.", "select#": 1}]
+select c from datatype_tab;
+c
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has unsupported scenarios including generated column, unsupported data type, unsupported function and so on.", "select#": 1}]
+select d from datatype_tab;
+d
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has unsupported scenarios including generated column, unsupported data type, unsupported function and so on.", "select#": 1}]
+select e from datatype_tab;
+e
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has unsupported scenarios including generated column, unsupported data type, unsupported function and so on.", "select#": 1}]
+drop table datatype_tab;
+#
+virtual column
+create table gol_tab(price int, quantity int, total_sales int as (price * quantity) virtual);
+insert into gol_tab(price, quantity) values (10,2),(5,8);
+select * from gol_tab;
+price	quantity	total_sales
+10	2	20
+5	8	40
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has unsupported scenarios including generated column, unsupported data type, unsupported function and so on.", "select#": 1}]
+drop table gol_tab;
+#
+# unsupported function type
+# unsuppored aggregation function
+select BIT_AND(a) from tab_1;
+BIT_AND(a)
+0
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has unsupported scenarios including generated column, unsupported data type, unsupported function and so on.", "select#": 1}]
+#
+# unsuppored function without arg
+select row_count() from tab_1;
+row_count()
+-1
+-1
+-1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has unsupported scenarios including generated column, unsupported data type, unsupported function and so on.", "select#": 1}]
+#
+# unsuppored function with arg
+select a from tab_1 where a > rand(1);
+a
+6
+2
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has unsupported scenarios including generated column, unsupported data type, unsupported function and so on.", "select#": 1}]
+create table match_tab(name varchar(50),info varchar(100));
+insert into match_tab values ("tom","info a"),("jane","info b");
+alter table match_tab add fulltext(name,info);
+Warnings:
+Warning	124	InnoDB rebuilding table to add column FTS_DOC_ID
+select MATCH(name,info) AGAINST('a') from match_tab;
+MATCH(name,info) AGAINST('a')
+0
+0
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has unsupported scenarios including generated column, unsupported data type, unsupported function and so on.", "select#": 1}]
+#
+# clone where condition failed
+select * from match_tab where MATCH(name,info) AGAINST('a');
+name	info
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Error happened during save properties or pq clone.", "select#": 1}]
+drop table match_tab;
+# 
+# unsupported subquery.
+select (select avg(a) from tab_1 where a = A.a) as avgnum from tab_1 as A;
+avgnum
+6.0000
+2.0000
+1.0000
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Subquery will run single-threaded inside the parent query block's worker.", "select#": 2}]
+# 
+# Internal check failed.  const item not support.
+SELECT DISTINCT CAST(x.x AS UNSIGNED) w
+FROM tab_1 JOIN (SELECT count(*)) x(x) ORDER BY w;
+w
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Internal check failed.", "select#": 1}]
+# 
+# error in save tmp table param
+set session debug="";
+set session debug="+d, have_error_in_saving";
+select a from tab_1;
+a
+6
+2
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Error happened during save properties or pq clone.", "select#": 1}]
+set session debug="";
+# 
+# choose pq
+set global parallel_cost_threshold = 0;
+set global parallel_rows_threshold = 0;
+select count(a) as b from tab_1 where a=0;
+b
+0
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+NULL
+#
+# choose pq but make pq leader plan failed. retry without pq.
+# pq_leader_abort1
+set session debug="";
+set session debug="+d, pq_leader_abort1";
+SET parallel_graceful_fallback=off;
+select count(a) as b from tab_1 where a=0;
+b
+0
+Warnings:
+Warning	8026	Failed to execute the query using parallel query, the query was restarted without parallel query.
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Failed to execute the query using parallel query. The query was restarted without parallel query.", "select#": 1}]
+#
+# choose pq but make pq leader plan failed. graceful fallback to serial execute.
+# pq_leader_abort1
+SET parallel_graceful_fallback=on;
+select count(a) as b from tab_1 where a=0;
+b
+0
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+NULL
+SET parallel_graceful_fallback=default;
+#
+# choose pq but make pq leader plan failed. no retry, query execute failed.
+# 
+# pq_leader_abort2
+set session debug="";
+set session debug="+d, pq_leader_abort2";
+select count(a) as b from tab_1 where a=0;
+b
+0
+Warnings:
+Warning	8026	Failed to execute the query using parallel query, the query was restarted without parallel query.
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Failed to execute the query using parallel query. The query was restarted without parallel query.", "select#": 1}]
+set parallel_fail_retry = on;
+drop table tab_1;
+drop table tab_2;
+set session debug="";
+#
+# Parallel query do not support hypergraph optimizer, since hypergraph optimizer
+# doesn't create QEP_TABs, and PQ clones QEP_TABs.
+CREATE TABLE t(a INT);
+INSERT INTO t
+WITH RECURSIVE tt (n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM tt WHERE n < 1000
+)
+SELECT n FROM tt;
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+SET @saved_optimizer_switch = @@optimizer_switch;
+SET optimizer_switch='hypergraph_optimizer=on';
+Warnings:
+Warning	1287	The hypergraph optimizer is highly experimental and is meant for testing only. Do not enable it unless you are a MySQL developer.
+SELECT COUNT(*) FROM t WHERE a % 2 > 0;
+COUNT(*)
+500
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Use hypergraph optimizer, PQ not support yet", "select#": 1}]
+SET optimizer_switch='hypergraph_optimizer=off';
+EXPLAIN SELECT COUNT(*) FROM t WHERE a % 2 > 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1000	100.00	Parallel execute (4 workers, test.t)
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	1000	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `test`.`t` where ((`test`.`t`.`a` % 2) > 0)
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+NULL
+SELECT COUNT(*) FROM t WHERE a % 2 > 0;
+COUNT(*)
+500
+SET optimizer_switch = @saved_optimizer_switch;
+DROP TABLE t;
+set global parallel_cost_threshold = @saved_parallel_cost_threshold;
+set global parallel_rows_threshold = @saved_parallel_rows_threshold;
+set optimizer_trace = @saved_optimizer_trace;
+set parallel_fail_retry = @saved_parallel_fail_retry;
+set global parallel_memory_limit = @saved_parallel_memory_limit;
+SET global pq_support_features_switch = @saved_pq_support_features_switch;

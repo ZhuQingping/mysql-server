@@ -1,0 +1,32 @@
+--source include/have_only_dstore.inc
+
+--echo #
+--echo # Bug Fix: Fix crash on SELECT MIN() with LOCK IN SHARE MODE on partitioned table
+--echo #
+
+CREATE DATABASE IF NOT EXISTS mysql20260304fuzzer30;
+USE mysql20260304fuzzer30;
+
+--echo # 1. Create partitioned table with specific keys
+DROP TABLE IF EXISTS t0;
+CREATE TABLE t0 (
+  c2 binary(255) DEFAULT NULL,
+  c4 datetime NOT NULL,
+  c10 int NOT NULL,
+  PRIMARY KEY (c10, c4),
+  KEY i6 (c4, c2(46))
+) ENGINE=DSTORE DEFAULT CHARSET=utf8mb4
+/*!50100 PARTITION BY LIST ((((`c10` % 9) + 9) % 9))
+(PARTITION a1 VALUES IN (1,4,7),
+ PARTITION a4 VALUES IN (2,9)) */;
+
+--echo # 2. Insert test data into different partitions
+INSERT INTO t0 (c2, c4, c10) VALUES (NULL, '2024-01-01 00:00:00', 4);
+INSERT INTO t0 (c2, c4, c10) VALUES (NULL, '1983-04-28 20:11:44', 2);
+
+--echo # 3. Execute MIN() query with LOCK IN SHARE MODE (Triggering the fix)
+SELECT MIN(t0.c4) AS ref0 FROM t0 LOCK IN SHARE MODE;
+
+--echo # 4. Cleanup
+DROP TABLE t0;
+DROP DATABASE mysql20260304fuzzer30;

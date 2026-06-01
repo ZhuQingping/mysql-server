@@ -1,0 +1,80 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+--source include/have_debug_sync.inc
+
+--echo # The first worker will not fetch any record from "const_table" while the second worker
+--echo # read all records. However, the second worker can see the new inserted value (2) in t1.
+--echo # This is unreasonable and will cause inconsistent read.
+SET @saved_parallel_dop= @@parallel_default_dop;
+SET @save_optimizer_switch= @@optimizer_switch;
+set optimizer_switch='block_nested_loop=off';
+set GLOBAL debug="+d, pq_skip_fetch_ctx";
+SET parallel_default_dop=2;
+
+create table t1 (id int);
+insert into t1 values (0), (1);
+EXPLAIN FORMAT=tree SELECT /*+PQ(const_table) */ t1.id FROM t1 JOIN (VALUES ROW(4), ROW(5), ROW(6), ROW(7)) AS const_table(a) ON TRUE;
+
+connect(con1, localhost, root,,);
+
+# launch 1st-worker, and then wait for launch 2nd-worker
+connection default;
+SET DEBUG_SYNC='pq_launch_worker_1 SIGNAL ready WAIT_FOR insert_data';
+--send SELECT /*+PQ(const_table) */ t1.id FROM t1 JOIN (VALUES ROW(4), ROW(5), ROW(6), ROW(7)) AS const_table(a) ON TRUE
+
+# insert data after the 1st-worker has launched
+connection con1;
+SET DEBUG_SYNC='now WAIT_FOR ready';
+
+--eval INSERT INTO t1 VALUES (2)
+SET DEBUG_SYNC='now SIGNAL insert_data';
+
+connection default;
+--reap
+
+SET GLOBAL debug="-d, pq_skip_fetch_ctx";
+SET parallel_default_dop=@saved_parallel_dop;
+DROP table t1;
+
+--echo # when the outer query of derived table only contains one tmp table,
+--echo # the cloned snapshot may be not freed and thus leading to memory leak.
+CREATE TABLE `t1` ( `master` int(10) unsigned NOT NULL default '0', `map` smallint(6) unsigned NOT NULL default '0', `slave` int(10) unsigned NOT NULL default '0', `access` int(10) unsigned NOT NULL default '0', UNIQUE KEY `access_u` (`master`,`map`,`slave`));
+INSERT INTO `t1` VALUES (1,0,0,700),(1,1,1,400),(1,5,5,400),(1,12,12,400),(1,12,32,400),(4,12,32,400);
+CREATE TABLE `t2` ( `id` int(10) unsigned NOT NULL default '0', `pid` int(10) unsigned NOT NULL default '0', `map` smallint(6) unsigned NOT NULL default '0', `level` tinyint(4) unsigned NOT NULL default '0', `title` varchar(255) default NULL, PRIMARY KEY  (`id`,`pid`,`map`), KEY `level` (`level`), KEY `id` (`id`,`map`)) ;
+INSERT INTO `t2` VALUES (6,5,12,7,'a'),(12,0,0,7,'a'),(12,1,0,7,'a'),(12,5,5,7,'a'),(12,5,12,7,'a');
+ANALYZE TABLE t1;
+ANALYZE TABLE t2;
+let query = SELECT b.ac
+FROM   (SELECT (SELECT a.access
+                FROM   t1 a
+                WHERE  a.map = op.map
+                       AND a.slave = op.pid
+                       AND a.master = 1) ac
+        FROM   t2 op
+        WHERE  op.id = 12
+               AND op.map = 0) b;
+
+eval EXPLAIN FORMAT=tree $query;
+eval $query;
+
+drop tables t1,t2;
+
+--echo # BUG2023021603940 PQ assertion crash during transaction
+SET SESSION FORCE_PARALLEL_EXECUTE = 1;
+SET SESSION PARALLEL_COST_THRESHOLD = 0;
+SET SESSION PARALLEL_ROWS_THRESHOLD = 0;
+SET SESSION OPTIMIZER_SWITCH = 'subquery_to_derived=on';
+CREATE TABLE t0 (c0 BOOLEAN);
+START TRANSACTION;
+DELETE FROM t0;
+SELECT 1 FROM (SELECT 2) t0(c0);
+COMMIT;
+drop table t0;
+SET optimizer_switch=@save_optimizer_switch;
+
+--echo # fix pq crash when pq worker copy read_view
+CREATE TABLE `t1` (`blob_col` blob);
+explain format=tree SELECT /*+ PQ(vtb) no_bnl() */ vtb.id_col FROM (VALUES ROW(1,3,5), ROW(2,4,6) order by 1,2,3 limit 1 offset 1) AS vtb(id_col,int_col,big_int_col) JOIN t1 B on true;
+SELECT /*+ PQ(vtb) no_bnl() */ vtb.id_col FROM (VALUES ROW(1,3,5), ROW(2,4,6) order by 1,2,3 limit 1 offset 1) AS vtb(id_col,int_col,big_int_col) JOIN t1 B on true;
+SELECT /*+ PQ(vtb) no_bnl() */ vtb.id_col FROM (VALUES ROW(1,3,5), ROW(2,4,6) order by 1,2,3 limit 1 offset 1) AS vtb(id_col,int_col,big_int_col) JOIN t1 B on true;
+drop table t1;

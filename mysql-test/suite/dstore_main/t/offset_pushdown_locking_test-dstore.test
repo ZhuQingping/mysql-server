@@ -1,0 +1,129 @@
+--source include/have_only_dstore.inc
+
+if ($PQ_TEST)
+{
+  --skip cannot run in '--pq' option
+}
+
+--echo # -------------------------------
+--echo # -------------------------------
+
+--source include/count_sessions.inc
+
+--echo # Content of the test file:
+
+--echo # Offset pushdown and non-locking read
+
+SET @old_dstore_lock_wait_timeout = @@global.dstore_lock_wait_timeout;
+
+SET @@global.dstore_lock_wait_timeout = 1;
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+
+CREATE TABLE `tv` (
+  `id` int NOT NULL,
+  `c` int NOT NULL,
+  `data` varchar(32) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_tv_c` (`c`)
+);
+
+INSERT INTO tv VALUES (5,5,'row1'), (6,6,'row2'),(7,7,'row3'), (8,8,'row4');
+
+# ICP test
+start transaction;
+SELECT * FROM tv WHERE c > 5  LIMIT 1 OFFSET 1 FOR UPDATE;
+--echo # Check that we don't skip any rows
+
+connection con2;
+START TRANSACTION;
+--error ER_LOCK_WAIT_TIMEOUT
+SELECT * FROM tv WHERE c > 5  LIMIT 1 OFFSET 2 FOR UPDATE;
+
+--error ER_LOCK_WAIT_TIMEOUT
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM tv WHERE c > 5  LIMIT 1 OFFSET 2 FOR UPDATE;
+
+rollback;
+connection con1;
+rollback;
+
+# ICP test
+start transaction;
+SELECT * FROM tv WHERE c > 5  LIMIT 1 OFFSET 1 FOR UPDATE;
+
+connection con2;
+START TRANSACTION;
+update tv set data='row0' where id =5;
+--error ER_LOCK_WAIT_TIMEOUT
+update tv set data='row0' where id =6;
+--error ER_LOCK_WAIT_TIMEOUT
+update tv set data='row0' where id =7;
+update tv set data='row0' where id =8;
+rollback;
+connection con1;
+rollback;
+
+# index only
+start transaction;
+SELECT c FROM tv WHERE c > 5  LIMIT 1 OFFSET 1 FOR UPDATE;
+
+connection con2;
+START TRANSACTION;
+update tv set data='row0' where id =5;
+--error ER_LOCK_WAIT_TIMEOUT
+update tv set data='row0' where id =6;
+--error ER_LOCK_WAIT_TIMEOUT
+update tv set data='row0' where id =7;
+update tv set data='row0' where id =8;
+rollback;
+connection con1;
+rollback;
+
+# table scan test
+start transaction;
+SELECT * FROM tv LIMIT 1 OFFSET 1 FOR UPDATE;
+
+connection con2;
+START TRANSACTION;
+--error ER_LOCK_WAIT_TIMEOUT
+update tv set data='row0' where id =5;
+--error ER_LOCK_WAIT_TIMEOUT
+update tv set data='row0' where id =6;
+update tv set data='row0' where id =7;
+update tv set data='row0' where id =8;
+rollback;
+connection con1;
+rollback;
+
+
+# index scan test
+start transaction;
+SELECT c FROM tv LIMIT 1 OFFSET 1 FOR UPDATE;
+
+connection con2;
+START TRANSACTION;
+--error ER_LOCK_WAIT_TIMEOUT
+update tv set data='row0' where id =5;
+--error ER_LOCK_WAIT_TIMEOUT
+update tv set data='row0' where id =6;
+update tv set data='row0' where id =7;
+update tv set data='row0' where id =8;
+rollback;
+connection con1;
+rollback;
+
+DROP TABLE tv;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+--source include/wait_until_count_sessions.inc
+--echo # Restore orig wait timeout
+--echo # BOTTOM
+show variables LIKE '%dstore_lock_wait_timeout%';
+SET @@global.dstore_lock_wait_timeout = @old_dstore_lock_wait_timeout;
+show variables LIKE '%dstore_lock_wait_timeout%';

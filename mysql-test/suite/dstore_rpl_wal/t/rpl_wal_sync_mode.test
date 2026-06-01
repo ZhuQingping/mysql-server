@@ -1,0 +1,96 @@
+#
+# ==== Purpose ====
+# Test semi-synchronous replication. Test the switching between synchronous and asynchronous modes. 
+# Test partial master semi-synchronous global variables.
+#
+# ==== References ====
+#
+# US2025031800795 Support switching between synchronous replication and asynchronous replication for the source server.
+#
+
+--disable_query_log
+CALL mtr.add_suppression("Wallog replication replica net_flush.*");
+CALL mtr.add_suppression("Wallog replication source failed on net_flush.*");
+CALL mtr.add_suppression("Semi-sync source failed on net_flush.*");
+CALL mtr.add_suppression("Semi-sync replica net_flush.*");
+CALL mtr.add_suppression(".* Timeout waiting for reply of binlog .*");
+CALL mtr.add_suppression(".*Timeout waiting for reply of wallog pos.*");
+CALL mtr.add_suppression(".*Read wallog replication reply type error.*");
+--enable_query_log
+
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_setup.inc
+--enable_warnings
+
+--echo ############################################################
+--echo Perform source-replica switchover.
+--echo ############################################################
+
+--connection $node1
+SET GLOBAL rpl_semi_sync_source_wait_no_replica_wal = 1;
+SET GLOBAL rpl_semi_sync_source_trace_level_wal = 113;
+
+--connection $node2
+SET GLOBAL rpl_semi_sync_replica_trace_level_wal = 113;
+
+--connection $node1
+show status like '%_semi_sync_%';
+
+USE copy_database;
+INSERT INTO copy_database.copy_table VALUES (1, 'Channel Test');
+
+--echo #
+--echo # test synchronous replication to asynchronous replication.
+--echo #
+SET GLOBAL rpl_semi_sync_source_timeout_wal = 1;
+INSERT INTO copy_database.copy_table VALUES (2, 'Channel Test');
+INSERT INTO copy_database.copy_table VALUES (3, 'Channel Test');
+
+SET GLOBAL rpl_semi_sync_source_timeout_wal = 1000;
+SET GLOBAL rpl_semi_sync_source_wait_no_replica_wal = 0;
+SET GLOBAL rpl_semi_sync_source_wait_no_replica = 0;
+
+INSERT INTO copy_database.copy_table VALUES (4, 'Channel Test');
+show variables like '%_semi_sync_%';
+
+set global debug="+d,get_wait_time_error";
+set global debug="+d,test_wait_pos_backtraverse_wal";
+
+sleep 2;
+--connection $node1
+INSERT INTO copy_database.copy_table VALUES (5, 'Channel Test');
+
+--connection $node2
+STOP REPLICA;
+
+--connection $node1
+set global debug="-d,get_wait_time_error";
+set global debug="-d,test_wait_pos_backtraverse_wal";
+set global debug="+d,reply_header_type_error";
+
+--connection $node2
+START REPLICA;
+
+sleep 3;
+--connection $node1
+# SET GLOBAL rpl_semi_sync_source_timeout_wal = 1;
+INSERT INTO copy_database.copy_table VALUES (6, 'Channel Test');
+
+--connection $node2
+STOP REPLICA;
+
+# test rpl_semi_sync_source_enabled_wal = 0 and rpl_semi_sync_replica_enabled_wal = 1
+--connection $node1
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 0;
+set global debug="-d,reply_header_type_error";
+
+--connection $node2
+START REPLICA;
+
+sleep 3;
+--connection $node1
+INSERT INTO copy_database.copy_table VALUES (7, 'Channel Test');
+
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_cleanup.inc
+--enable_warnings

@@ -1,0 +1,168 @@
+# ==== Purpose ====
+#
+# test mysqlbinlog tool option: --get_all_gtids
+# Get gtids of the prev gtid log event and the gtid 
+# log events from a binary log specified by the --get-all-gtids
+#
+--source include/have_log_bin.inc
+--source include/not_have_only_dstore.inc
+
+#--disable_query_log
+--disable_warnings
+DROP DATABASE IF EXISTS mtest;
+CREATE DATABASE mtest;
+USE mtest;
+--enable_warnings
+RESET MASTER;
+
+let $data_dir=query_get_value(SHOW VARIABLES LIKE 'datadir',Value,1);
+let $binlog_name=query_get_value(SHOW MASTER STATUS,File,1);
+FLUSH LOGS;
+
+let uuida= aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa;
+let uuidb= bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb;
+let uuidc= cccccccc-cccc-cccc-cccc-cccccccccccc;
+
+eval SET @@SESSION.GTID_NEXT= '$uuida:1';
+CREATE TABLE test1(id INT);
+eval SET @@SESSION.GTID_NEXT=AUTOMATIC;
+
+let $binlog_name2=query_get_value(SHOW MASTER STATUS,File,1);
+FLUSH LOGS;
+
+eval SET @@SESSION.GTID_NEXT= '$uuidb:1';
+CREATE TABLE test2(id INT);
+eval SET @@SESSION.GTID_NEXT= '$uuidc:1';
+INSERT INTO test1 VALUES(1);
+eval SET @@SESSION.GTID_NEXT=AUTOMATIC;
+
+
+let $binlog_name3=query_get_value(SHOW MASTER STATUS,File,1);
+FLUSH LOGS;
+
+eval SET @@SESSION.GTID_NEXT= '$uuidb:2';
+begin;
+insert into test1 values(1);
+insert into test1 values(2);
+commit;
+eval SET @@SESSION.GTID_NEXT= '$uuidb:3';
+xa start '1';
+insert into  test1 values(3);
+xa end '1';
+xa prepare '1';
+let $binlog_name4=query_get_value(SHOW MASTER STATUS,File,1);
+
+--echo # test empty gtids
+--exec $MYSQL_BINLOG --get-all-gtids $data_dir$binlog_name
+
+--echo # test single gtids
+--exec $MYSQL_BINLOG --get-all-gtids $data_dir$binlog_name2
+
+--echo # test multi gtids
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name3
+
+--echo #test xa prepare;
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name4
+
+eval SET @@SESSION.GTID_NEXT= '$uuidc:2';
+xa commit '1';
+
+--echo #test xa commit;
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name4
+
+eval SET @@SESSION.GTID_NEXT= '$uuidc:3';
+xa start '1';
+insert into  test1 values(3);
+xa end '1';
+xa prepare '1';
+eval SET @@SESSION.GTID_NEXT= '$uuidc:4';
+xa rollback '1';
+
+--echo #test xa rollback;
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name4
+eval SET @@SESSION.GTID_NEXT=AUTOMATIC;
+set sql_log_bin=0;
+create table test3(id int)engine=myisam;
+set sql_log_bin=1;
+eval SET @@SESSION.GTID_NEXT= '$uuidc:5';
+begin;
+insert into test3 values(1);
+commit;
+--echo #test commit;
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name4
+
+eval SET @@SESSION.GTID_NEXT= '$uuidc:6';
+alter table test2 add column b int;
+
+--echo #test alter table;
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name4
+
+eval SET @@SESSION.GTID_NEXT= '$uuidc:7';
+create table t select * from test1;
+--echo #test create table select;
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name4
+
+eval SET @@SESSION.GTID_NEXT= '$uuidc:8';
+OPTIMIZE TABLE t;
+--echo #test OPTIMIZE TABLE;
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name4
+
+eval SET @@SESSION.GTID_NEXT= '$uuidc:9';
+ANALYZE TABLE t;
+--echo #test ANALYZE TABLE;
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name4
+
+eval SET @@SESSION.GTID_NEXT= '$uuidc:10';
+flush engine logs;
+--echo #test flush engine;
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name4
+
+eval SET @@SESSION.GTID_NEXT= '$uuidc:11';
+create user 'test'@'%' identified by 'Hw@123456';
+--echo #test create user;
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name4
+
+eval SET @@SESSION.GTID_NEXT= '$uuidc:12';
+grant all ON *.* TO `test`@`%` WITH GRANT OPTION;
+--echo #test grant;
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name4
+
+eval SET @@SESSION.GTID_NEXT= '$uuidc:13';
+flush privileges;
+--echo #test flush privileges;
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name4
+
+eval SET @@SESSION.GTID_NEXT= '$uuidc:14';
+truncate table t;
+--echo #test truncate table;
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name4
+
+eval SET @@SESSION.GTID_NEXT= '$uuidc:15';
+drop table t;
+--echo #test drop table;
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name4
+
+eval SET @@SESSION.GTID_NEXT=AUTOMATIC;
+FLUSH LOGS;
+
+let $binlog_name5=query_get_value(SHOW MASTER STATUS,File,1);
+eval SET @@SESSION.GTID_NEXT= '$uuidb:4';
+create database test1;
+
+--echo #test create database
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name5
+eval SET @@SESSION.GTID_NEXT= '$uuidb:5';
+insert into test1 values(5);
+eval SET @@SESSION.GTID_NEXT= '$uuidb:6';
+insert into test1 values(6);
+eval SET @@SESSION.GTID_NEXT=AUTOMATIC;
+FLUSH LOGS;
+
+--exec truncate -s 1000 $data_dir$binlog_name5
+--echo #test incomplete binlog
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name5
+
+drop database test1;
+DROP DATABASE mtest;
+drop user test@'%';
+flush privileges;

@@ -1,0 +1,348 @@
+#
+#  DDL CRASH SAFE TEST: ALL DDL TEST PART 02
+#  This test will check whether the server can recovery from different
+#  phases of ALL DDLs without inconsistency between dstore and
+#  innodb. Each DDL will be tested at 3 crash points and recovery
+#  results will be verified.
+#
+CREATE DATABASE test_ddl_crash_comprehensive;
+USE test_ddl_crash_comprehensive;
+CREATE TABLE t_ddl_crash_renamed(pk INT PRIMARY KEY, col1 INT);
+INSERT INTO t_ddl_crash_renamed VALUES (1,2),(2,3),(3,4);
+#  11. Crash on CREATE VIEW statement.
+#  11.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+CREATE VIEW v_ddl_crash AS SELECT * FROM t_ddl_crash_renamed;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify view should not exist
+SELECT COUNT(*) AS view_count FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_NAME='v_ddl_crash';
+view_count
+0
+#  11.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+CREATE VIEW v_ddl_crash AS SELECT * FROM t_ddl_crash_renamed;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify view should not exist
+SELECT COUNT(*) AS view_count FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_NAME='v_ddl_crash';
+view_count
+0
+#  11.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+CREATE VIEW v_ddl_crash AS SELECT * FROM t_ddl_crash_renamed;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify view should exist
+SELECT COUNT(*) AS view_count FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_NAME='v_ddl_crash';
+view_count
+1
+SHOW CREATE VIEW v_ddl_crash;
+View	Create View	character_set_client	collation_connection
+v_ddl_crash	CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `v_ddl_crash` AS select `t_ddl_crash_renamed`.`pk` AS `pk`,`t_ddl_crash_renamed`.`col1` AS `col1` from `t_ddl_crash_renamed`	utf8mb4	utf8mb4_0900_ai_ci
+#  12. Crash on DROP VIEW statement.
+#  12.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+DROP VIEW v_ddl_crash;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify view should still exist
+SELECT COUNT(*) AS view_count FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_NAME='v_ddl_crash';
+view_count
+1
+#  12.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+DROP VIEW v_ddl_crash;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify view should still exist
+SELECT COUNT(*) AS view_count FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_NAME='v_ddl_crash';
+view_count
+1
+#  12.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+DROP VIEW v_ddl_crash;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify view should be dropped
+SELECT COUNT(*) AS view_count FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_NAME='v_ddl_crash';
+view_count
+0
+#  13. Crash on CREATE STORED FUNCTION statement.
+#  13.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+CREATE FUNCTION hello_crash() RETURNS INT DETERMINISTIC RETURN 1;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify function should not exist
+SELECT COUNT(*) AS function_count FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_NAME='hello_crash' AND ROUTINE_TYPE='FUNCTION';
+function_count
+0
+#  13.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+CREATE FUNCTION hello_crash() RETURNS INT DETERMINISTIC RETURN 1;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify function should not exist
+SELECT COUNT(*) AS function_count FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_NAME='hello_crash' AND ROUTINE_TYPE='FUNCTION';
+function_count
+0
+#  13.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+CREATE FUNCTION hello_crash() RETURNS INT DETERMINISTIC RETURN 1;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify function should exist
+SELECT COUNT(*) AS function_count FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_NAME='hello_crash' AND ROUTINE_TYPE='FUNCTION';
+function_count
+1
+SELECT hello_crash();
+hello_crash()
+1
+#  14. Crash on ALTER FUNCTION statement.
+#  14.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+ALTER FUNCTION hello_crash COMMENT 'crash test modified';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify function comment should not be changed
+SELECT ROUTINE_COMMENT FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_NAME='hello_crash';
+ROUTINE_COMMENT
+
+#  14.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+ALTER FUNCTION hello_crash COMMENT 'crash test modified';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify function comment should not be changed
+SELECT ROUTINE_COMMENT FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_NAME='hello_crash';
+ROUTINE_COMMENT
+
+#  14.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+ALTER FUNCTION hello_crash COMMENT 'crash test modified';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify function comment should be changed
+SELECT ROUTINE_COMMENT FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_NAME='hello_crash';
+ROUTINE_COMMENT
+crash test modified
+#  15. Crash on CREATE PROCEDURE statement.
+#  15.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+CREATE PROCEDURE p_crash() SELECT 1;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify procedure should not exist
+SELECT COUNT(*) AS procedure_count FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_NAME='p_crash' AND ROUTINE_TYPE='PROCEDURE';
+procedure_count
+0
+#  15.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+CREATE PROCEDURE p_crash() SELECT 1;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify procedure should not exist
+SELECT COUNT(*) AS procedure_count FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_NAME='p_crash' AND ROUTINE_TYPE='PROCEDURE';
+procedure_count
+0
+#  15.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+CREATE PROCEDURE p_crash() SELECT 1;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify procedure should exist
+SELECT COUNT(*) AS procedure_count FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_NAME='p_crash' AND ROUTINE_TYPE='PROCEDURE';
+procedure_count
+1
+CALL p_crash();
+1
+1
+#  16. Crash on ALTER PROCEDURE statement.
+#  16.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+ALTER PROCEDURE p_crash COMMENT 'crash test modified';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify procedure comment should not be changed
+SELECT ROUTINE_COMMENT FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_NAME='p_crash';
+ROUTINE_COMMENT
+
+#  16.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+ALTER PROCEDURE p_crash COMMENT 'crash test modified';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify procedure comment should not be changed
+SELECT ROUTINE_COMMENT FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_NAME='p_crash';
+ROUTINE_COMMENT
+
+#  16.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+ALTER PROCEDURE p_crash COMMENT 'crash test modified';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify procedure comment should be changed
+SELECT ROUTINE_COMMENT FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_NAME='p_crash';
+ROUTINE_COMMENT
+crash test modified
+#  17. Crash on CREATE TRIGGER statement.
+#  17.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+CREATE TRIGGER tr_crash BEFORE INSERT ON t_ddl_crash_renamed FOR EACH ROW SET NEW.pk = NEW.pk + 100;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify trigger should not exist
+SELECT COUNT(*) AS trigger_count FROM INFORMATION_SCHEMA.TRIGGERS WHERE TRIGGER_NAME='tr_crash';
+trigger_count
+0
+#  17.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+CREATE TRIGGER tr_crash BEFORE INSERT ON t_ddl_crash_renamed FOR EACH ROW SET NEW.pk = NEW.pk + 100;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify trigger should not exist
+SELECT COUNT(*) AS trigger_count FROM INFORMATION_SCHEMA.TRIGGERS WHERE TRIGGER_NAME='tr_crash';
+trigger_count
+0
+#  17.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+CREATE TRIGGER tr_crash BEFORE INSERT ON t_ddl_crash_renamed FOR EACH ROW SET NEW.pk = NEW.pk + 100;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify trigger should exist and work
+SELECT COUNT(*) AS trigger_count FROM INFORMATION_SCHEMA.TRIGGERS WHERE TRIGGER_NAME='tr_crash';
+trigger_count
+1
+INSERT INTO t_ddl_crash_renamed VALUES(50, 60);
+SELECT * FROM t_ddl_crash_renamed WHERE pk >= 100;
+pk	col1
+150	60
+#  18. Crash on CREATE EVENT statement.
+#  18.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+CREATE EVENT e_crash ON SCHEDULE EVERY 1 DAY DO DELETE FROM t_ddl_crash_renamed WHERE pk > 1000;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify event should not exist
+SELECT COUNT(*) AS event_count FROM INFORMATION_SCHEMA.EVENTS WHERE EVENT_NAME='e_crash';
+event_count
+0
+#  18.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+CREATE EVENT e_crash ON SCHEDULE EVERY 1 DAY DO DELETE FROM t_ddl_crash_renamed WHERE pk > 1000;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify event should not exist
+SELECT COUNT(*) AS event_count FROM INFORMATION_SCHEMA.EVENTS WHERE EVENT_NAME='e_crash';
+event_count
+0
+#  18.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+CREATE EVENT e_crash ON SCHEDULE EVERY 1 DAY DO DELETE FROM t_ddl_crash_renamed WHERE pk > 1000;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify event should exist
+SELECT COUNT(*) AS event_count FROM INFORMATION_SCHEMA.EVENTS WHERE EVENT_NAME='e_crash';
+event_count
+1
+SELECT EVENT_NAME, STATUS FROM INFORMATION_SCHEMA.EVENTS WHERE EVENT_NAME='e_crash';
+EVENT_NAME	STATUS
+e_crash	ENABLED
+#  19. Crash on ALTER EVENT statement.
+#  19.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+ALTER EVENT e_crash DISABLE;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify event status should not be changed
+SELECT STATUS FROM INFORMATION_SCHEMA.EVENTS WHERE EVENT_NAME='e_crash';
+STATUS
+ENABLED
+#  19.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+ALTER EVENT e_crash DISABLE;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify event status should not be changed
+SELECT STATUS FROM INFORMATION_SCHEMA.EVENTS WHERE EVENT_NAME='e_crash';
+STATUS
+ENABLED
+#  19.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+ALTER EVENT e_crash DISABLE;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify event should be disabled
+SELECT STATUS FROM INFORMATION_SCHEMA.EVENTS WHERE EVENT_NAME='e_crash';
+STATUS
+DISABLED
+# Final cleanup and summary
+# Drop remaining objects for complete cleanup
+# Summary: All DDL crash recovery tests completed successfully
+# Each DDL was tested at 3 crash points with proper recovery verification
+# - Before InnoDB prepare: DDL should be rolled back
+# - After InnoDB prepare but before DStore commit: DDL should be rolled back
+# - After DStore commit: DDL should be committed and visible
+SET debug='reset';
+DROP DATABASE test_ddl_crash_comprehensive;

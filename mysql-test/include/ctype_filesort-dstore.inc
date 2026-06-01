@@ -1,0 +1,1 @@
+--source include/have_only_dstore.inc

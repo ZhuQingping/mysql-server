@@ -1,0 +1,205 @@
+From 2728779036c95c1b6c4eba98f18f544e5f8d0edf Mon Sep 17 00:00:00 2001
+From: Guilhem Bichot <guilhem.bichot@contributor>
+
+Date: Wed, 13 Aug 2025 15:47:17 +0200
+Subject: [PATCH] after enable rds_plan_cache, using the
+ sysbench range query model(select_random_ranges.lua), the performance
+ fluctuates sharply and the performance decreases by 5% to 25%
+
+This is not guaranteed to fix this bug. What this fixes is an
+observation that the plan cache, for cases where the table is constant
+and accessed through an index, does not use the fact that the index is
+covering (unlike in the non-cached execution, it reads the index *and
+then the full row*). But as it was a loss of efficiency it may be the
+cause for the slowdown bug.
+
+Explanation of the problem:
+- the table is involved in a query 'SELECT id FROM sbtest
+WHERE id=?' which only needs column 'id' which is indexed.
+- the optimizer recognizes that this is a constant table and reads it
+in join_read_const_table() during optimization.
+- this function turns on key-only reading (TABLE::set_keyread(true)),
+does the reading (calls read_const()) then turns key-only reading
+off (probably with the intention to "clean up after itself").
+- so when optimization later reaches the moment to cache the plan, it
+properly caches the value of TABLE::key_read into Exec_context, but
+this value is 'false'.
+- Execution finishes. A next execution starts, the cached plan is
+applied, TABLE::key_read is restored from Exec_context, where it is
+false. read_const() is called and does not do index-only reading.
+
+Fix: plan cache must do the same turn-key-read-on-and-off around
+read_const() as join_read_const_table() does in non-cached execution.
+This logic is moved into a function.
+
+As EXPLAIN cannot be trusted (in this bug's case, it did report 'Using
+index', see its logic by grep-ing for covering_keys in opt_explain.cc
+: it tests more than TABLE::key_read), the mtr test rather makes sure
+that an index-only read is done in Dstore.
+---
+ mysql-test/r/session_plan_cache_debug.result | 26 +++++++++++++
+ mysql-test/t/session_plan_cache_debug.test   | 16 ++++++++
+ sql/sql_executor.cc                          | 40 +++++++++++++++-----
+ sql/sql_executor.h                           |  1 +
+ sql/sql_plan_cache.cc                        |  2 +-
+ storage/dstore/dml/cde_dml.cc                |  1 +
+ 6 files changed, 75 insertions(+), 11 deletions(-)
+
+diff --git a/mysql-test/r/session_plan_cache_debug.result b/mysql-test/r/session_plan_cache_debug.result
+index c2cb19fcf97..83f9e2326f7 100644
+--- a/mysql-test/r/session_plan_cache_debug.result
++++ b/mysql-test/r/session_plan_cache_debug.result
+@@ -301,4 +301,30 @@ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
+ DEALLOCATE PREPARE stmt;
++#
++# BUGFIX after enable rds_plan_cache, using the sysbench range query model(select_random_ranges.lua), the performance fluctuates sharply and the performance decreases by 5% to 25%
++#
++alter table sbtest engine=dstore;
++set debug='+d,dstore_must_read_only_index';
++explain SELECT id FROM sbtest WHERE id=100;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	sbtest	NULL	const	PRIMARY	PRIMARY	4	const	1	100.00	Using index
++Warnings:
++Note	1003	/* select#1 */ select '100' AS `id` from `test`.`sbtest` where true
++prepare s from 'SELECT id FROM sbtest WHERE id=?';
++set @a=100;
++execute s using @a;
++id
++100
++execute s using @a;
++id
++100
++execute s using @a;
++id
++100
++show session status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	1
++Cached_plan_hits	4
++set debug='-d,dstore_must_read_only_index';
+ DROP TABLE sbtest;
+diff --git a/mysql-test/t/session_plan_cache_debug.test b/mysql-test/t/session_plan_cache_debug.test
+index 2a676f56675..dc275c182a1 100644
+--- a/mysql-test/t/session_plan_cache_debug.test
++++ b/mysql-test/t/session_plan_cache_debug.test
+@@ -105,4 +105,20 @@ EXECUTE stmt USING @n, @m;
+ show session status like "cached_plan%";
+ DEALLOCATE PREPARE stmt;
+ 
++--echo #
++--echo # BUGFIX after enable rds_plan_cache, using the sysbench range query model(select_random_ranges.lua), the performance fluctuates sharply and the performance decreases by 5% to 25%
++--echo #
++
++# Even though EXPLAIN reports 'Using index', the actual reading of the constant table read the full row. Make sure this does not happen anymore:
++alter table sbtest engine=dstore;
++set debug='+d,dstore_must_read_only_index';
++explain SELECT id FROM sbtest WHERE id=100;
++prepare s from 'SELECT id FROM sbtest WHERE id=?';
++set @a=100;
++execute s using @a;
++execute s using @a;
++execute s using @a;
++show session status like "cached_plan%";
++set debug='-d,dstore_must_read_only_index';
++
+ DROP TABLE sbtest;
+diff --git a/sql/sql_executor.cc b/sql/sql_executor.cc
+index 91667d8347b..f365163d34d 100644
+--- a/sql/sql_executor.cc
++++ b/sql/sql_executor.cc
+@@ -3667,16 +3667,8 @@ int join_read_const_table(JOIN_TAB *tab, POSITION *pos) {
+ 
+   if (tab->type() == JT_SYSTEM)
+     error = read_system(table);
+-  else {
+-    if (!table->key_read && table->covering_keys.is_set(tab->ref().key) &&
+-        !table->no_keyread &&
+-        (int)table->reginfo.lock_type <= (int)TL_READ_HIGH_PRIORITY) {
+-      table->set_keyread(true);
+-      tab->set_index(tab->ref().key);
+-    }
+-    error = read_const(table, &tab->ref());
+-    table->set_keyread(false);
+-  }
++  else
++    error = read_const_maybe_key_read(tab);
+ 
+   if (error) {
+     // Promote error to fatal if an actual error was reported
+@@ -3758,6 +3750,34 @@ int read_system(TABLE *table) {
+   return table->has_row() ? 0 : -1;
+ }
+ 
++/**
++   This is a wrapper around read_const() ; it encapsulates logic which used to
++   be in join_read_const_table() around its call to read_const(). As this
++   logic (which is: enable index read then disable it) is also needed for plan
++   cache, it is now in a function.
++
++   @param qs_owner  JOIN_TAB or QEP_TAB pointer, depending on the execution
++   stage.
++
++   @returns same error code as read_const().
++*/
++int read_const_maybe_key_read(QEP_shared_owner *qs_owner) {
++  auto table = qs_owner->table();
++  auto ref = &qs_owner->ref();
++
++  if (!table->key_read && table->covering_keys.is_set(ref->key) &&
++      !table->no_keyread &&
++      (int)table->reginfo.lock_type <= (int)TL_READ_HIGH_PRIORITY) {
++    table->set_keyread(true);
++    qs_owner->set_index(ref->key);
++  }
++
++  auto rc = read_const(table, ref);
++  table->set_keyread(false);
++  return rc;
++}
++
++/// @See also read_const_maybe_key_read().
+ int read_const(TABLE *table, Index_lookup *ref) {
+   int error;
+   DBUG_TRACE;
+diff --git a/sql/sql_executor.h b/sql/sql_executor.h
+index 28c42d57b46..7bf2786c999 100644
+--- a/sql/sql_executor.h
++++ b/sql/sql_executor.h
+@@ -257,6 +257,7 @@ bool check_unique_constraint(TABLE *table);
+ ulonglong unique_hash(const Field *field, ulonglong *hash);
+ int read_system(TABLE *table);
+ int read_const(TABLE *table, Index_lookup *ref);
++int read_const_maybe_key_read(QEP_shared_owner *qs_owner);
+ 
+ class QEP_TAB : public QEP_shared_owner {
+  public:
+diff --git a/sql/sql_plan_cache.cc b/sql/sql_plan_cache.cc
+index cb63b81b965..692d75a02a0 100644
+--- a/sql/sql_plan_cache.cc
++++ b/sql/sql_plan_cache.cc
+@@ -2291,7 +2291,7 @@ static int reinit_qep_tab_properties(QEP_TAB *qt) {
+       // detected the change in metadata version number and invalidated the
+       // plan.
+       if (qt->replace_cache_key()) return 1;
+-      int status = read_const(qt->table(), &qt->ref());
++      int status = read_const_maybe_key_read(qt);
+       if (status == 0) status = evaluate_const_cond(thd, where_cond);
+       if (status == -1) join->zero_result_cause = "Impossible WHERE";
+       return status;
+diff --git a/storage/dstore/dml/cde_dml.cc b/storage/dstore/dml/cde_dml.cc
+index 4d811457b00..163d627bf02 100644
+--- a/storage/dstore/dml/cde_dml.cc
++++ b/storage/dstore/dml/cde_dml.cc
+@@ -1235,6 +1235,7 @@ int cde_dml_api::ReadRecordFromIndex(cde_isolation_level_t isolationLevel,
+   if (dstoreHandler->read_just_key) {
+     ret = ReadIndexOnly(buf, table, ha, dstoreHandler, indexScanHandler);
+   } else {
++    DBUG_EXECUTE_IF("dstore_must_read_only_index", { assert(false); });
+     ret = ReadFullRow(isolationLevel, buf, table, ha, dstoreHandler,
+                       indexScanHandler, blobMemRoot);
+   }
+-- 
+2.23.0
+

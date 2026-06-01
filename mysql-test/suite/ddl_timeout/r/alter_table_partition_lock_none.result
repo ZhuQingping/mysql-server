@@ -1,0 +1,654 @@
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with two rows
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+alter table t1 LOCK=NONE, ALGORITHM=INPLACE, ADD PARTITION (PARTITION p4 VALUES LESS THAN (4000));
+# conn3: DMLs
+insert into t1 (name) values ('foo');
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-25
+1	desk organiser	2003-10-15
+update t1 set purchased='1992-1-1' where name like 'foo';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-01
+1	desk organiser	2003-10-15
+delete from t1 where purchased='1992-1-1';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+#
+# teardown
+#
+drop table t1;
+drop table if exists t2;
+Warnings:
+Note	1051	Unknown table 'test.t2'
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with two rows
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+alter table t1 LOCK=NONE, ALGORITHM=INPLACE, DROP PARTITION p1;
+# conn3: DMLs
+insert into t1 (name) values ('foo');
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-25
+1	desk organiser	2003-10-15
+update t1 set purchased='1992-1-1' where name like 'foo';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-01
+1	desk organiser	2003-10-15
+delete from t1 where purchased='1992-1-1';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+#
+# teardown
+#
+drop table t1;
+drop table if exists t2;
+Warnings:
+Note	1051	Unknown table 'test.t2'
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with two rows
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+alter table t1 LOCK=NONE, ALGORITHM=INPLACE, TRUNCATE PARTITION p1;
+# conn3: DMLs
+insert into t1 (name) values ('foo');
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-25
+1	desk organiser	2003-10-15
+update t1 set purchased='1992-1-1' where name like 'foo';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-01
+1	desk organiser	2003-10-15
+delete from t1 where purchased='1992-1-1';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+#
+# teardown
+#
+drop table t1;
+drop table if exists t2;
+Warnings:
+Note	1051	Unknown table 'test.t2'
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with two rows
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t2;
+id	name	purchased
+# conn2: DDL
+alter table t2 ALGORITHM=INPLACE, COALESCE PARTITION 2;
+# conn3: DMLs
+insert into t2 (name) values ('foo');
+select * from t2;
+id	name	purchased
+1	foo	1992-01-25
+update t2 set purchased='1992-1-1' where name like 'foo';
+select * from t2;
+id	name	purchased
+1	foo	1992-01-01
+delete from t2 where purchased='1992-1-1';
+select * from t2;
+id	name	purchased
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t2;
+id	name	purchased
+#
+# teardown
+#
+drop table t1;
+drop table if exists t2;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with two rows
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+alter table t1 ALGORITHM=INPLACE, REORGANIZE PARTITION p2,p3 INTO (PARTITION p9 VALUES LESS THAN (2005));
+# conn3: DMLs
+insert into t1 (name) values ('foo');
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-25
+1	desk organiser	2003-10-15
+update t1 set purchased='1992-1-1' where name like 'foo';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-01
+1	desk organiser	2003-10-15
+delete from t1 where purchased='1992-1-1';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+#
+# teardown
+#
+drop table t1;
+drop table if exists t2;
+Warnings:
+Note	1051	Unknown table 'test.t2'
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with two rows
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+alter table t1 LOCK=NONE, ALGORITHM=INPLACE, EXCHANGE PARTITION p1 WITH TABLE t2;
+# conn3: DMLs
+insert into t1 (name) values ('foo');
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-25
+1	desk organiser	2003-10-15
+update t1 set purchased='1992-1-1' where name like 'foo';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-01
+1	desk organiser	2003-10-15
+delete from t1 where purchased='1992-1-1';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+#
+# teardown
+#
+drop table t1;
+drop table if exists t2;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with two rows
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+alter table t1 LOCK=NONE, ALGORITHM=INPLACE, ANALYZE PARTITION p1;
+# conn3: DMLs
+Timeout in wait_condition.inc for select count(*) = 1 from information_schema.processlist where state = "Waiting for table metadata lock" and info = "alter table t1 LOCK=NONE, ALGORITHM=INPLACE, ANALYZE PARTITION p1";
+insert into t1 (name) values ('foo');
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-25
+1	desk organiser	2003-10-15
+update t1 set purchased='1992-1-1' where name like 'foo';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-01
+1	desk organiser	2003-10-15
+delete from t1 where purchased='1992-1-1';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+#
+# teardown
+#
+drop table t1;
+drop table if exists t2;
+Warnings:
+Note	1051	Unknown table 'test.t2'
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with two rows
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+alter table t1 LOCK=NONE, ALGORITHM=INPLACE, CHECK PARTITION p1;
+# conn3: DMLs
+Timeout in wait_condition.inc for select count(*) = 1 from information_schema.processlist where state = "Waiting for table metadata lock" and info = "alter table t1 LOCK=NONE, ALGORITHM=INPLACE, CHECK PARTITION p1";
+insert into t1 (name) values ('foo');
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-25
+1	desk organiser	2003-10-15
+update t1 set purchased='1992-1-1' where name like 'foo';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-01
+1	desk organiser	2003-10-15
+delete from t1 where purchased='1992-1-1';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+Table	Op	Msg_type	Msg_text
+test.t1	check	status	OK
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+#
+# teardown
+#
+drop table t1;
+drop table if exists t2;
+Warnings:
+Note	1051	Unknown table 'test.t2'
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with two rows
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+alter table t1 LOCK=NONE, ALGORITHM=INPLACE, OPTIMIZE PARTITION p1;
+# conn3: DMLs
+insert into t1 (name) values ('foo');
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-25
+1	desk organiser	2003-10-15
+update t1 set purchased='1992-1-1' where name like 'foo';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-01
+1	desk organiser	2003-10-15
+delete from t1 where purchased='1992-1-1';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+Table	Op	Msg_type	Msg_text
+test.t1	optimize	Error	Lock wait timeout exceeded; try restarting transaction
+test.t1	optimize	status	Operation failed
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+#
+# teardown
+#
+drop table t1;
+drop table if exists t2;
+Warnings:
+Note	1051	Unknown table 'test.t2'
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with two rows
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+alter table t1 ALGORITHM=INPLACE, REBUILD PARTITION p1;
+# conn3: DMLs
+insert into t1 (name) values ('foo');
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-25
+1	desk organiser	2003-10-15
+update t1 set purchased='1992-1-1' where name like 'foo';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-01
+1	desk organiser	2003-10-15
+delete from t1 where purchased='1992-1-1';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+#
+# teardown
+#
+drop table t1;
+drop table if exists t2;
+Warnings:
+Note	1051	Unknown table 'test.t2'
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with two rows
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+alter table t1 LOCK=NONE, ALGORITHM=INPLACE, REPAIR PARTITION p1;
+# conn3: DMLs
+insert into t1 (name) values ('foo');
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-25
+1	desk organiser	2003-10-15
+update t1 set purchased='1992-1-1' where name like 'foo';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-01
+1	desk organiser	2003-10-15
+delete from t1 where purchased='1992-1-1';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+Table	Op	Msg_type	Msg_text
+test.t1	repair	Error	Lock wait timeout exceeded; try restarting transaction
+test.t1	repair	status	Operation failed
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+#
+# teardown
+#
+drop table t1;
+drop table if exists t2;
+Warnings:
+Note	1051	Unknown table 'test.t2'
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with two rows
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+alter table t1 REMOVE PARTITIONING;
+# conn3: DMLs
+insert into t1 (name) values ('foo');
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-25
+1	desk organiser	2003-10-15
+update t1 set purchased='1992-1-1' where name like 'foo';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+3	foo	1992-01-01
+1	desk organiser	2003-10-15
+delete from t1 where purchased='1992-1-1';
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+id	name	purchased
+2	CD player	1993-11-05
+1	desk organiser	2003-10-15
+#
+# teardown
+#
+drop table t1;
+drop table if exists t2;
+Warnings:
+Note	1051	Unknown table 'test.t2'
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;

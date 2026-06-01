@@ -1,0 +1,81 @@
+# ==== Purpose ====
+#  
+# Verify that we can turn off rds_purge_binary_logs_asynchronously
+# successfully and then turn on it successfully after the
+# binlog purge thread went away unusually.
+#
+# ==== References ====
+#
+# US2023121500746  Decouple binlog purge and transaction commit
+#
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+--source include/have_binlog_format_row.inc
+--source include/force_restart.inc
+
+call mtr.add_suppression('Failed to create binlog purge thread');
+RESET MASTER;
+
+--echo #
+--echo # Expect that the status of binlog purge thread is 'NOT_CREATED'
+--echo #
+SELECT @@GLOBAL.rds_binlog_purge_thread_status;
+
+SET GLOBAL debug="+d,simulate_create_purge_thread_failure";
+--echo # 
+--echo # Simulate that the binlog purge thread went away unusually.
+--echo # Expect that the status of binlog purge thread is 'INITIALIZING'
+--echo # and rds_purge_binary_logs_asynchronously is turned on after
+--echo # setting rds_purge_binary_logs_asynchronously to true.
+--echo #
+SET GLOBAL rds_purge_binary_logs_asynchronously= true;
+SELECT @@GLOBAL.rds_binlog_purge_thread_status;
+SELECT @@GLOBAL.rds_purge_binary_logs_asynchronously;
+
+SET GLOBAL debug="-d,simulate_create_purge_thread_failure";
+
+CREATE TABLE t1(c1 TEXT);
+
+--echo #
+--echo # Expect that the status of binlog purge thread is 'RESET'
+--echo # after rotating binlog.
+--echo #
+INSERT INTO t1 VALUES (REPEAT('a',4096));
+SELECT @@GLOBAL.rds_binlog_purge_thread_status;
+
+--echo #
+--echo # Expect that the stable status of binlog purge thread is 'RESET'
+--echo # and rds_purge_binary_logs_asynchronously is turned off after
+--echo # setting rds_purge_binary_logs_asynchronously to false.
+--echo # Which means we can turn off rds_purge_binary_logs_asynchronously
+--echo # successfully after the binlog purge thread went away unusually.
+--echo #
+SET GLOBAL rds_purge_binary_logs_asynchronously= false;
+SELECT @@GLOBAL.rds_binlog_purge_thread_status;
+SELECT @@GLOBAL.rds_purge_binary_logs_asynchronously;
+
+--echo #
+--echo # Expect that the status of binlog purge thread is always
+--echo # 'RESET' after rotating binlog even more than
+--echo # 60 times.
+--echo #
+--let $i = 1
+while ($i < 66) {
+  INSERT INTO t1 VALUES (REPEAT('a',4096));
+  SELECT @@GLOBAL.rds_binlog_purge_thread_status;
+  --inc $i
+}
+
+--echo #
+--echo # Expect that the status of binlog purge thread is 'SLEEPING' and
+--echo # rds_purge_binary_logs_asynchronously is turned on after setting
+--echo # rds_purge_binary_logs_asynchronously to true. Which means we
+--echo # can turn on rds_purge_binary_logs_asynchronously successfully
+--echo # after the binlog purge thread went away unusually.
+--echo #
+SET GLOBAL rds_purge_binary_logs_asynchronously= true;
+--sleep 2
+SELECT @@GLOBAL.rds_binlog_purge_thread_status;
+SELECT @@GLOBAL.rds_purge_binary_logs_asynchronously;
+
+DROP TABLE t1;

@@ -1,0 +1,30 @@
+#
+#  Test whether DDL recovery can work normally with active DML transaction.
+#
+# 1. The follow test will crash before this patch.
+CREATE DATABASE test_active_dml_ddl;
+USE test_active_dml_ddl;
+CREATE TABLE T( i int);
+BEGIN;
+INSERT INTO T values (9);
+ALTER TABLE T ADD COLUMN col1 INT DEFAULT 888;
+SELECT * FROM T;
+i	col1
+9	888
+# 2. Test the DDL can recovery normally after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+ALTER TABLE T ADD COLUMN col2 INT DEFAULT 999;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+SHOW CREATE TABLE T;
+Table	Create Table
+T	CREATE TABLE `T` (
+  `i` int DEFAULT NULL,
+  `col1` int DEFAULT '888',
+  `col2` int DEFAULT '999'
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SELECT * FROM T;
+i	col1	col2
+9	888	999
+DROP DATABASE test_active_dml_ddl;

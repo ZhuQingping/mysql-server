@@ -1,0 +1,68 @@
+create database pq_test;
+use pq_test;
+DROP TABLE IF EXISTS t1, t2;
+CREATE TABLE t1(a int);
+CREATE TABLE t2(a int);
+INSERT INTO t1 VALUES (1),(2);
+INSERT INTO t2 VALUES (2),(3);
+EXPLAIN FORMAT=tree SELECT * FROM t1 UNION SELECT * FROM t2;
+EXPLAIN
+-> Table scan on <union temporary>  (cost=1.64..3.55 rows=4)
+    -> Union materialize with deduplication  (cost=1..1 rows=4)
+        -> Gather: 4 workers, parallel scan on t1  (cost=0.3 rows=2)
+            -> Parallel table scan on t1  (cost=0.3 rows=0.5)
+        -> Gather: 4 workers, parallel scan on t2  (cost=0.3 rows=2)
+            -> Parallel table scan on t2  (cost=0.3 rows=0.5)
+
+SELECT * FROM t1 UNION SELECT * FROM t2;
+a
+1
+2
+3
+EXPLAIN FORMAT=tree SELECT * FROM t1 UNION ALL SELECT * FROM t2;
+EXPLAIN
+-> Append  (cost=0.6 rows=4)
+    -> Stream results  (cost=0.3 rows=2)
+        -> Gather: 4 workers, parallel scan on t1  (cost=0.3 rows=2)
+            -> Parallel table scan on t1  (cost=0.3 rows=0.5)
+    -> Stream results  (cost=0.3 rows=2)
+        -> Gather: 4 workers, parallel scan on t2  (cost=0.3 rows=2)
+            -> Parallel table scan on t2  (cost=0.3 rows=0.5)
+
+SELECT * FROM t1 UNION ALL SELECT * FROM t2;
+a
+1
+2
+2
+3
+drop table t1,t2;
+create table t1(a int);
+alter table t1 add index idx1(a);
+insert into t1 values (1), (2), (2), (3), (1), (4);
+create table t2(b int);
+alter table t2 add index idx2(b);
+insert into t2 values (2), (0), (1), (0), (2), (4), (5);
+ANALYZE table t1, t2;
+Table	Op	Msg_type	Msg_text
+pq_test.t1	analyze	status	OK
+pq_test.t2	analyze	status	OK
+EXPLAIN SELECT `a`, COUNT(*) FROM `t1` GROUP BY `a` UNION SELECT `b`, COUNT(*) FROM `t2` GROUP BY `b`;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Parallel execute (4 workers, pq_test.t1)
+1	SIMPLE	t1	NULL	index	idx1	idx1	5	NULL	6	100.00	Using index
+2	UNION	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	7	100.00	Parallel execute (4 workers, pq_test.t2)
+2	SIMPLE	t2	NULL	index	idx2	idx2	5	NULL	7	100.00	Using index
+3	UNION RESULT	<union1,2>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t1`.`a` AS `a`,count(0) AS `COUNT(*)` from `pq_test`.`t1` group by `pq_test`.`t1`.`a` union /* select#2 */ select `pq_test`.`t2`.`b` AS `b`,count(0) AS `COUNT(*)` from `pq_test`.`t2` group by `pq_test`.`t2`.`b`
+SELECT `a`, COUNT(*) FROM `t1` GROUP BY `a` UNION SELECT `b`, COUNT(*) FROM `t2` GROUP BY `b`;
+a	COUNT(*)
+1	2
+2	2
+3	1
+4	1
+0	2
+1	1
+5	1
+DROP table t1, t2;
+drop database pq_test;

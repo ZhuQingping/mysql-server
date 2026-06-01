@@ -1,0 +1,42 @@
+--source suite/local_backup/include/prepare_for_backup.inc
+
+call mtr.add_suppression("full backup found binlog is not enabled");
+
+CREATE DATABASE big_innodb_file;
+USE big_innodb_file;
+CREATE TABLE t1(i int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+
+CREATE TABLE t2(i int) ENGINE=Innodb;
+INSERT INTO t2 VALUES(2);
+SELECT * FROM t2;
+
+# Make ibd file of t2 larger than 4GB
+--exec dd if=/dev/urandom of=$MYSQLD_DATADIR/big_innodb_file/t2.ibd bs=1M count=4150 conv=notrunc oflag=append
+--exec ls -l $MYSQLD_DATADIR/big_innodb_file/t2.ibd | awk "{print \$5}"
+
+# full backup.
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+
+--echo # Shut server down.
+--let $shutdown_server_timeout = 300
+--source include/shutdown_mysqld.inc
+
+# Restore with script.
+--source suite/local_backup/include/restore_with_script.inc
+
+--echo # Restart the server.
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+--exec ls -l $MYSQLD_DATADIR/big_innodb_file/t2.ibd | awk "{print \$5}"
+
+USE big_innodb_file;
+SELECT * FROM t1;
+SELECT * FROM t2;
+DROP DATABASE big_innodb_file;
+
+--source suite/local_backup/include/clean_backup.inc

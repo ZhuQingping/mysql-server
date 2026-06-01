@@ -1,0 +1,57 @@
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("failed to copy backup meta json data to buffer");
+call mtr.add_suppression("write full local backup meta json with status fail");
+call mtr.add_suppression("create full local backup meta json file fail");
+call mtr.add_suppression("write full local backup meta json fail");
+call mtr.add_suppression("failed to write full backup meta json");
+CREATE DATABASE db1;
+USE db1;
+CREATE TABLE t1(a int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+a
+1
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+Pattern ""checkResult": "Success"" found
+Pattern ""checkResult": "Success"" not found
+SET GLOBAL dstore_meta_json_crc = OFF;
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+Pattern ""checkResult": "Success"" not found
+SET GLOBAL dstore_meta_json_crc = ON;
+SET GLOBAL debug='+d,meta_json_data_copy_fail';
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" not found
+Pattern ""tablespaceRunningStatus": "Completed"" not found
+Pattern ""walRunningStatus": "Completed"" not found
+Pattern ""controlFileRunningStatus": "Completed"" not found
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+SET GLOBAL debug='-d,meta_json_data_copy_fail';
+DROP DATABASE db1;

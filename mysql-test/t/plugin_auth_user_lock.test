@@ -1,0 +1,53 @@
+#
+# Test account lock / unlock of the proxy and proxied users
+#
+
+--disable_query_log
+call mtr.add_suppression("\\[TAURUS-DEBUG\\]Access denied for user 'empl_external'@'localhost'. Account is locked\\.");
+--enable_query_log
+
+--source include/have_plugin_auth.inc
+--source include/count_sessions.inc
+SET @save_log_error_verbosity= @@global.log_error_verbosity;
+SET GLOBAL rds_conn_log_error_verbosity=1;
+SET GLOBAL log_error_verbosity=2;
+
+--echo # Create proxy and proxied users
+CREATE USER 'empl_external'@'localhost' IDENTIFIED WITH test_plugin_server AS 'employee';
+CREATE USER 'employee'@'localhost' IDENTIFIED BY 'passkey';
+GRANT PROXY ON 'employee'@'localhost' TO 'empl_external'@'localhost';
+
+--echo # Lock proxied user - proxy user login should work
+connection default;
+ALTER USER employee@localhost ACCOUNT LOCK;
+--connect(employee_con, localhost, empl_external, employee)
+SELECT USER(), CURRENT_USER();
+disconnect employee_con;
+
+--echo # Lock proxy user - login should fail
+connection default;
+ALTER USER empl_external@localhost ACCOUNT LOCK;
+--replace_result $MASTER_MYSOCK MASTER_SOCKET $MASTER_MYPORT MASTER_PORT
+--error ER_ACCOUNT_HAS_BEEN_LOCKED
+--connect(employee_con, localhost, empl_external, employee)
+
+--echo # Unlocking proxied user should not change anything - login should fail
+connection default;
+ALTER USER employee@localhost ACCOUNT UNLOCK;
+--replace_result $MASTER_MYSOCK MASTER_SOCKET $MASTER_MYPORT MASTER_PORT
+--error ER_ACCOUNT_HAS_BEEN_LOCKED
+--connect(employee_con, localhost, empl_external, employee)
+
+--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let $assert_text= Check that there is 'Account is locked' in error log.
+--let $assert_select= \[Warning\] \[[^]]*\] \[[^]]*\] \[TAURUS-DEBUG\].*Account is locked.*
+--let $assert_text= Check that there is 'Account is locked' in error log.
+--let $assert_match= Account is locked
+--source include/assert_grep.inc
+
+#Cleanup
+DROP USER 'empl_external'@'localhost', 'employee'@'localhost';
+SET GLOBAL rds_conn_log_error_verbosity=0;
+SET GLOBAL log_error_verbosity= @save_log_error_verbosity;
+
+--source include/wait_until_count_sessions.inc

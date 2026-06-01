@@ -1,0 +1,144 @@
+#
+# Test for wal archive disjoin
+#
+call mtr.add_suppression("start wal archive fail for pdb");
+call mtr.add_suppression("failed to start wal archiver");
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("wal archive disjoin, lsnPoint");
+call mtr.add_suppression("write wal archive meta for disjoin fail");
+call mtr.add_suppression("failed to alloc time point in ShowTimePointFrom");
+call mtr.add_suppression("the child file is disjoined and not last parent point when show time point from wal archive child meta offset");
+call mtr.add_suppression("show time point from wal archive child meta offset fail");
+
+--source suite/local_backup/include/prepare_for_backup.inc
+--source include/have_debug.inc
+
+# 1. prepare some data
+create database wal_archive_disjoin;
+use wal_archive_disjoin;
+create table t1(s varchar(100)) engine=Dstore;
+
+# insert 1000 records
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 1000
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+# 2. Create a full backup
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+
+# 3. Start log archive
+--source suite/local_backup/include/start_log_archive.inc
+
+# 4. Add more data for log archive
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $i = 500
+--source include/Load_data.inc
+--sleep 3
+--let $i = 500
+--source include/Load_data.inc
+--sleep 3
+--let $i = 500
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+--sleep 3
+
+# 5. Stop log archive
+--source suite/local_backup/include/stop_log_archive.inc
+
+# 6. Add more data to make first wal file full
+--source suite/local_backup/include/load_data.inc
+CALL load_data('t1','s',600000);
+--exec ls -l $MYSQLD_DATADIR/#mysql_dstore/gs_pdb/PDB_17/wal/00000002_00000000_0000000000000000 | awk "{print \$5}"
+
+# 7. Restart without set dstore_can_do_wal_archive
+--let $shutdown_server_timeout= 300
+--let $restart_parameters= restart: --dstore_can_do_wal_archive=off --dstore_wal_keep_segments=0
+--source include/restart_mysqld.inc
+
+# First wal file should be recycled
+insert into t1 values('aaa');
+--sleep 10
+--disable_abort_on_error
+--exec ls $MYSQLD_DATADIR/#mysql_dstore/gs_pdb/PDB_17/wal/00000002_00000000_0000000000000000
+--enable_abort_on_error
+
+# 8. Restart set dstore_can_do_wal_archive
+--let $shutdown_server_timeout= 300
+--let $restart_parameters= restart: --dstore_can_do_wal_archive=on --dstore_wal_keep_segments=0
+--source include/restart_mysqld.inc
+
+# 9. Start log archive
+# should fail due to disjoin
+--error ER_DA_LOCAL_BACKUP_ERROR
+call rds_backup.start_log_archive();
+set global debug='+d,write_wal_archive_disjoin_meta_fail';
+--error ER_DA_LOCAL_BACKUP_ERROR
+call rds_backup.start_log_archive();
+set global debug='-d,write_wal_archive_disjoin_meta_fail';
+set global debug='+d,wal_archive_disjoin_extra_inject';
+--error ER_DA_LOCAL_BACKUP_ERROR
+call rds_backup.start_log_archive();
+set global debug='-d,wal_archive_disjoin_extra_inject';
+
+# 10. Do full backup and then log archive again
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+show status like 'Rds_local_backup_last_full_backup_status';
+select count(*) from t1;
+
+--source suite/local_backup/include/start_log_archive.inc
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $i = 500
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+--sleep 3
+
+# 11. Restart set dstore_can_do_wal_archive
+--let $shutdown_server_timeout= 300
+--let $restart_parameters= restart: --dstore_can_do_wal_archive=on --dstore_wal_keep_segments=0
+--source include/restart_mysqld.inc
+
+--source suite/local_backup/include/start_log_archive.inc
+select count(*) from t1;
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $i = 500
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+--sleep 3
+
+# 11. Restore
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+--let $list_type = wal_archive
+--source suite/local_backup/include/restore_with_script.inc
+
+--let $restart_parameters= restart: --dstore_open_restore_mode=on --dstore_wal_keep_segments=0
+--source include/start_mysqld.inc
+
+select count(*) from t1;
+
+drop database wal_archive_disjoin;
+
+--source suite/local_backup/include/clean_backup.inc

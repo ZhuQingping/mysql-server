@@ -1,0 +1,49 @@
+RESET MASTER;
+
+# Crash after writing trx's gtid into wal.
+
+set session debug ="+d, crash_write_gtid_after_log";
+set session gtid_next = '9b11f58f-612a-11f0-a4de-0242ac110007:1';
+CREATE TABLE t1(a INT);
+ERROR HY000: Lost connection to MySQL server during query
+
+# Restart the master server
+
+
+# Except that the table t1 is created.
+
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+a
+1
+#
+# Expect that rds_binlog_dstore_consistent is on, which indicates
+# that the gtid set between binlog and dstore is consistent.
+#
+show variables like 'rds_binlog_dstore_consistent';
+Variable_name	Value
+rds_binlog_dstore_consistent	ON
+#
+# Expect that rds_dstore_missed_gtids is empty.
+#
+show variables like 'rds_dstore_missed_gtids';
+Variable_name	Value
+rds_dstore_missed_gtids	
+#
+# Expect that rds_dstore_missed_gtids_on_binlog is empty.
+#
+show variables like 'rds_dstore_missed_gtids_on_binlog';
+Variable_name	Value
+rds_dstore_missed_gtids_on_binlog	
+#
+# Expect that replication_optimize_for_static_plugin_config is on.
+#
+show variables like 'replication_optimize_for_static_plugin_config';
+Variable_name	Value
+replication_optimize_for_static_plugin_config	OFF
+DROP TABLE t1;

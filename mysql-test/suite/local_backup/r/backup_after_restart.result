@@ -1,0 +1,75 @@
+call mtr.add_suppression("full backup found binlog is not enabled");
+create database backup_after_restart;
+use backup_after_restart;
+create table t1(s varchar(100)) engine=Dstore;
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1000
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+# Kill the server
+# restart
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1100
+# restart: --dstore_open_restore_mode=on
+select count(*) from t1;
+count(*)
+1000
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+call rds_backup.start_log_archive();
+===============
+Load the data
+===============
+===============
+Load the data
+===============
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1600
+# Kill the server
+# restart: --dstore_can_do_wal_archive=on
+call rds_backup.start_log_archive();
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1650
+# restart: --dstore_open_restore_mode=on
+select count(*) from t1;
+count(*)
+1650
+drop database backup_after_restart;

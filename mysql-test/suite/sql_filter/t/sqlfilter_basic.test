@@ -1,0 +1,1066 @@
+# --------------------------------------------------------------------
+# Test point: Basic functions of sql filter
+# --------------------------------------------------------------------
+--source include/force_restart.inc
+--source ../include/sqlfilter_prepare.inc
+
+CALL mtr.add_suppression("sql filter rules was set exceeding the max length");
+
+CREATE USER 'rds'@'localhost' IDENTIFIED BY '123456';
+GRANT ALL PRIVILEGES ON *.* TO 'rds'@'localhost' WITH GRANT OPTION;
+GRANT ALL PRIVILEGES ON *.* TO 'rdsAdmin'@'localhost' WITH GRANT OPTION;
+
+connection default;
+SET @old_rds_sqlfilter_case_sensitive=@@global.rds_sqlfilter_case_sensitive;
+SET @old_rds_sqlfilter_control=@@global.rds_sqlfilter_control;
+SET @old_rds_sqlfilter_sys_table_control=@@global.rds_sqlfilter_sys_table_control;
+
+--disable_warnings
+DROP TABLE IF EXISTS t1,t2;
+--enable_warnings
+CREATE TABLE t1 (iddd INT, name VARCHAR(20));
+INSERT INTO t1 VALUES (1,"a"),(2,"b"),(4,"d");
+CREATE TABLE t2 (idd int, name VARCHAR(20));
+INSERT INTO t2 VALUES (1,"a"),(2,"b");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+connect(conn_rdsAdmin, 127.0.0.1, rdsAdmin);
+--echo #----invalid format: wrong delimiter----
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('UPDATE',1,"UPDATE~t1~","");
+--error ER_SP_WRONG_NO_OF_ARGS
+call dbms_sqlfilter.add_sql_filter('SELECT',1,0,"SELECT~t1","");
+--error ER_NATIVE_PROC_PARAMETER_MISMATCH
+call dbms_sqlfilter.add_sql_filter('SELECT',1.1,"SELECT~tt~aa","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~from~t1","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"t1~aa","");
+call dbms_sqlfilter.add_sql_filter('SELECT',1,"SELECT~t2","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('SELECT',-1,"SELECT~from~t1~aaa","");
+# call dbms_sqlfilter.add_sql_filter('DELETE',1,"DELETE","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('DELETE',1,"DELETE~","");
+--error ER_SP_WRONG_NO_OF_ARGS
+call dbms_sqlfilter.add_sql_filter('SELECT',"","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~*~from~t1","");
+call dbms_sqlfilter.add_sql_filter('SELECT',1,"SELECT~.t1","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--echo #--- invalid format: wrong filter type -----
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"UPDATE~t1","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('UPDATE',0,"SELECT~t1","");
+call dbms_sqlfilter.add_sql_filter('UPDATE',1,"UPDATE~t1","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('UPDATE',0,"DELETE~t2","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('DELETE',0,"DELETE~","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('DELETE',1,"SELECT~t1","");
+call dbms_sqlfilter.add_sql_filter('UPDATE',0,"UPDATE~from~a.a","");
+call dbms_sqlfilter.add_sql_filter('UPDATE',1,"UPDATE~from~t1~bb","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--echo cleanup sql filter rules
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--echo #---invalid format: wrong number of args ----
+--error ER_SP_WRONG_NO_OF_ARGS
+call dbms_sqlfilter.add_sql_filter('SELECT',"SELECT~t1","");
+--error ER_SP_WRONG_NO_OF_ARGS
+call dbms_sqlfilter.add_sql_filter('UPDATE',"UPDATE~t1","");
+--error ER_SP_WRONG_NO_OF_ARGS
+call dbms_sqlfilter.add_sql_filter('DELETE',"DELETE~from~t1","");
+--error ER_SP_WRONG_NO_OF_ARGS
+call dbms_sqlfilter.add_sql_filter('SELECT',1,1,1,"SELECT~t1","");
+--error ER_SP_WRONG_NO_OF_ARGS
+call dbms_sqlfilter.add_sql_filter('SELECT',0,1,"SELECT~t1","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--echo #---invalid format: wrong header ----
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('SELECT',1,"t1","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('SELECT',1,"~t1","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('SELECT',1,"1","");
+--error ER_SP_WRONG_NO_OF_ARGS
+call dbms_sqlfilter.add_sql_filter('SELECT',"UPDATE~t1","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('SELECT',1,"DELETE~t1","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('UPDATE',1,"DELETE~t1","");
+
+--echo #---- add sql filter rules (case sensitive)------
+SET GLOBAL rds_sqlfilter_case_sensitive=on;
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~FROM~t1~WHERE~iddd","");
+call dbms_sqlfilter.add_sql_filter('UPDATE',0,"UPDATE~t1","");
+call dbms_sqlfilter.add_sql_filter('DELETE',0,"DELETE~FROM~t1","");
+
+connect(conn0, 127.0.0.1, rds,123456,test);
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+SELECT * FROM t2 WHERE name = "a";
+--error ER_QUERY_INTERRUPTED
+SELECT * FROM t1 WHERE iddd > 1;
+update t1 SET name="aa" WHERE iddd=1;
+--error ER_QUERY_INTERRUPTED
+UPDATE t1 SET name="a" WHERE iddd=1;
+select * from t1 WHERE iddd=1;
+delete FROM t1 WHERE iddd > 5;
+select * from t1 WHERE iddd=1;
+--error ER_QUERY_INTERRUPTED
+DELETE FROM t1 WHERE iddd > 0;
+select * from t1 WHERE iddd=1;
+
+--echo #---- add sql filter rules (not case sensitive) ------
+SET GLOBAL rds_sqlfilter_case_sensitive=off;
+SHOW VARIABLES LIKE "rds_sqlfilter_case_sensitive";
+SELECT * FROM t2 WHERE name = "a";
+--error ER_QUERY_INTERRUPTED
+select* FROM t1 WHERE iddd > 1;
+--error ER_QUERY_INTERRUPTED
+update t1 SET name="aa" WHERE iddd=1;
+select * from t1;
+--error ER_QUERY_INTERRUPTED
+UPDATE t1 SET name="a" WHERE iddd=1;
+select * from t1;
+--error ER_QUERY_INTERRUPTED
+delete FROM t1 WHERE iddd > 5;
+select * from t1;
+--error ER_QUERY_INTERRUPTED
+DELETE FROM t1 WHERE iddd > 5;
+select * from t1;
+SET GLOBAL rds_sqlfilter_case_sensitive=on;
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+SET GLOBAL rds_sqlfilter_control=off;
+SELECT * FROM t1 WHERE iddd > 1 AND name = "a";
+SELECT * FROM t1 WHERE iddd > 1;
+UPDATE t1 SET name="a" WHERE iddd=1;
+DELETE FROM t1 WHERE iddd > 5;
+
+--echo #---- reset sql filter rules (valid format) ------
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+
+call dbms_sqlfilter.add_sql_filter('DELETE',0,"DELETE~FROM~t1","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+connection conn0;
+SET GLOBAL rds_sqlfilter_control=on;
+SELECT * FROM t1 WHERE iddd > 1 AND name = "a";
+SELECT * FROM t1 WHERE iddd > 1;
+UPDATE t1 SET name="a" WHERE iddd=1;
+--error ER_QUERY_INTERRUPTED
+DELETE FROM t1 WHERE iddd > 5;
+
+--echo #--- BUG2022061001252: trim space character ----
+call dbms_sqlfilter.add_sql_filter('SELECT',  1  ,"select~from~t1","");
+call dbms_sqlfilter.add_sql_filter('SELECT', 1,"select~from~ t1~where ","");
+call dbms_sqlfilter.add_sql_filter('SELECT',1  ,"select~from   ~ t3","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~from  t4","");
+call dbms_sqlfilter.add_sql_filter('DELETE',  1,"delete~t1","");
+call dbms_sqlfilter.add_sql_filter('DELETE', 1  ,"delete~t2","");
+call dbms_sqlfilter.add_sql_filter('DELETE', 2 ,"delete~from t3","");
+call dbms_sqlfilter.add_sql_filter('UPDATE', 1,"update~t1","");
+call dbms_sqlfilter.add_sql_filter('UPDATE', 1," update~t2~where~id ","");
+call dbms_sqlfilter.add_sql_filter('UPDATE',1 ," update ~t3 where ","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--echo #--- BUG2022061100342: update variables when the rule is illegal ---
+connection conn0;
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('DELETE',10,"SELECT~from~hwsql_new_feature_sql_filter_001~where","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('UPDATE',10,"SELECT~FROM~hwsql_new_feature_sql_filter_001~WHErE","");
+--error ER_NATIVE_PROC_PARAMETER_MISMATCH
+call dbms_sqlfilter.add_sql_filter('SELECT', 1.1,"select~from~t1","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+
+--echo #--- BUG2022061100383: the header of one rule must be uppercase characters
+--echo #--- when rds_sqlfilter_case_sensitive is on
+connection conn0;
+call dbms_sqlfilter.add_sql_filter('SELECT', 10,"SELEcT~FROM~hwsql_new_feature_sql_filter_001~WHErE","");
+call dbms_sqlfilter.add_sql_filter('UPDATE', 0,"upDATE~t1","");
+call dbms_sqlfilter.add_sql_filter('DELETE', 0,"Delete~from~t1~WHere","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+UPDATE t1 SET name="a" WHERE iddd=1;
+SET GLOBAL rds_sqlfilter_case_sensitive=off;
+--error ER_QUERY_INTERRUPTED
+UPDATE t1 SET name="a" WHERE iddd > 5;
+
+--echo #--- FE2022120900392: Enhanced SQL filter ----
+--echo # supports Special characters
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+create table tmp1 (id int);
+create table tmp2 (id int);
+
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~\n","");
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~\nfrom~tmp1","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select ~from\ntmp2","");
+--error ER_QUERY_INTERRUPTED
+select * from tmp1;
+select * from tmp2;
+--error ER_QUERY_INTERRUPTED
+select * from
+tmp2;
+
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('UPDATE', 0,"update~tmp1~\r~where","");
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('UPDATE',0,"update~tmp1~\rwhere","");
+call dbms_sqlfilter.add_sql_filter('UPDATE',0,"update ~tmp2 \r where","");
+--error ER_QUERY_INTERRUPTED
+update tmp1 set id = 1 where id = 0;
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('DELETE',0,"delete~tmp1","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('DELETE',0," delete~from~tmp2~\t","");
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('DELETE',0,"delete~from~tmp1~\twhere","");
+call dbms_sqlfilter.add_sql_filter('DELETE',0,"delete ~from~tmp2 \t where","");
+--error ER_QUERY_INTERRUPTED
+delete from tmp1 where id = 1;
+--error ER_QUERY_INTERRUPTED
+delete from tmp1        where id = 1;
+delete from tmp2 where id = 1;
+--error ER_QUERY_INTERRUPTED
+delete from tmp2 	 where id = 1;
+
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~tmp1~ where","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0," select~a~ tmp1 ","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('INSERT',0,"insert~   ~into ~tmp1","");
+call dbms_sqlfilter.add_sql_filter('INSERT',0," insert~into~ tmp2 ","");
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('INSERT',0,"insert~into \n~tmp1","");
+call dbms_sqlfilter.add_sql_filter('INSERT',0," insert~into  \ntmp2 ","");
+--error ER_QUERY_INTERRUPTED
+insert into tmp1 values(1);
+--error ER_QUERY_INTERRUPTED
+insert into tmp1 
+values(1);
+insert into tmp2 values(1);
+--error ER_QUERY_INTERRUPTED
+insert into  
+tmp1 values(2);
+
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+drop table tmp1;
+drop table tmp2;
+
+--echo #----------- test collection ------
+SELECT @@collation_server;
+SET @old_collection_connection = @@collation_connection;
+SET collation_connection='gb18030_bin';
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t1~ where","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--error ER_QUERY_INTERRUPTED
+select * FROM t1 where iddd > 1 AND name = "a";
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t1~华为","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t","id华为id");
+
+--echo #-------- test for 中文空格字符 --------
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+SET collation_connection= @old_collection_connection ;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~ t1~ where","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--error ER_QUERY_INTERRUPTED
+select * FROM t1 where iddd > 1 AND name = "a";
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t1~华为~where","");
+select * FROM t1 where iddd > 1 AND name = "华为";
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+
+show variables like '%coll%';
+
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t1~where~华为","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--error ER_QUERY_INTERRUPTED
+select * FROM t1 where iddd > 1 AND name = "华为";
+
+select * from t2 where idd > 1;
+
+--echo #----------- prepare statement -----------
+connection conn_rdsAdmin;
+SET GLOBAL rds_sqlfilter_case_sensitive=on;
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',1,"SELECT~UNION~ALL","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+CREATE TABLE `mesi` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `uuid` VARCHAR(36) NOT NULL,
+  `batch_id` VARCHAR(36) NOT NULL,
+  `platform_id` int(10) NOT NULL,
+  `channel_id` int(10) DEFAULT NULL,
+  `template_id` int(10) NOT NULL,
+  `title` VARCHAR(64) DEFAULT NULL,
+  `send_at` timestamp NULL DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  `deleted_at` timestamp NULL DEFAULT NULL,
+  `sort` int(9) unsigned NOT NULL DEFAULT '0',
+  PRIMARY KEY (`id`) USING BTREE,
+  KEY `idx_batch_id` (`batch_id`) USING BTREE,
+  KEY `idx_send_at` (`send_at`),
+  KEY `idx_uuid` (`uuid`)
+) AUTO_INCREMENT=1;
+PREPARE select_stmt FROM 'SELECT uuid, send_at FROM ((SELECT id, uuid, send_at FROM `mesi` WHERE platform_id = 1 AND channel_id = 17 AND `deleted_at` IS NULL ) UNION ALL ( SELECT id, uuid, send_at FROM `mesi` WHERE platform_id = 1 AND channel_id = 17 AND `deleted_at` IS NULL ) UNION ALL ( SELECT id, uuid, send_at FROM `mesi` WHERE platform_id = 1 AND channel_id = 17 AND `deleted_at` IS NULL ) UNION ALL ( SELECT id, uuid, send_at FROM `mesi` WHERE platform_id = 1 AND channel_id = 17 AND `deleted_at` IS NULL )) tb WHERE 1 = 1 ORDER BY send_at desc';
+EXECUTE select_stmt;
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~UNION~ALL","");
+
+connection conn0;
+PREPARE select_stmt FROM 'SELECT uuid, send_at FROM ((SELECT id, uuid, send_at FROM `mesi` WHERE platform_id = 1 AND channel_id = 17 AND `deleted_at` IS NULL ) UNION ALL ( SELECT id, uuid, send_at FROM `mesi` WHERE platform_id = 1 AND channel_id = 17 AND `deleted_at` IS NULL ) UNION ALL ( SELECT id, uuid, send_at FROM `mesi` WHERE platform_id = 1 AND channel_id = 17 AND `deleted_at` IS NULL ) UNION ALL ( SELECT id, uuid, send_at FROM `mesi` WHERE platform_id = 1 AND channel_id = 17 AND `deleted_at` IS NULL )) tb WHERE 1 = 1 ORDER BY send_at desc';
+--error ER_QUERY_INTERRUPTED
+EXECUTE select_stmt;
+
+call dbms_sqlfilter.add_sql_filter('UPDATE',0,"UPDATE~mesi","");
+PREPARE update_stmt FROM 'UPDATE mesi set id = 0 where sort = 9';
+--error ER_QUERY_INTERRUPTED
+EXECUTE update_stmt;
+
+call dbms_sqlfilter.add_sql_filter('DELETE',0,"DELETE~mesi","");
+PREPARE delete_stmt FROM 'DELETE from mesi where id = 0';
+--error ER_QUERY_INTERRUPTED
+EXECUTE delete_stmt;
+
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+DROP PREPARE select_stmt;
+DROP PREPARE update_stmt;
+DROP PREPARE delete_stmt;
+DROP table mesi;
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+
+--echo #--- BUG2022113002221: sql filter key word match issue ----
+SET GLOBAL rds_sqlfilter_case_sensitive=off;
+CREATE TABLE tt1(a int, b int);
+INSERT INTO tt1 VALUES(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10);
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~count~FROM~SELECT~t1~a~FROM~tt1~AS~t1~JOIN~tt1~AS~t2~ON~t1~a~t2~b~JOIN~tt1~AS~t3~ON~t2~a~t3~b~a","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--error ER_QUERY_INTERRUPTED
+SELECT count(*) FROM (SELECT t1.a FROM tt1 AS t1 JOIN tt1 AS t2 ON t1.a != t2.b JOIN tt1 AS t3 ON t2.a != t3.b) a;
+
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~select~select~select","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+SELECT count(*) FROM (SELECT t1.a FROM tt1 AS t1 JOIN (SELECT * FROM tt1) AS t2 ON t1.a = t2.b) a;
+--error ER_QUERY_INTERRUPTED
+SELECT count(*) FROM (SELECT t2.a FROM (SELECT t1.a AS a FROM (SELECT a FROM tt1) t1) t2) t3;
+
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~format","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT /*+ SET_VAR(optimizer_switch='engine_condition_pushdown=off') */ a, b FROM tt1 WHERE a=1;
+
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~analyze","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*//
+EXPLAIN ANALYZE SELECT /*+ SET_VAR(optimizer_switch='engine_condition_pushdown=off') */ a, b FROM tt1 WHERE a=1;
+
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~from~left~where~m","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+SELECT count(*) AS num FROM tt1 AS t1 LEFT JOIN tt1 AS t2 ON t1.a = t2.b WHERE t1.b < 2;
+
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~from~left~where~b","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--error ER_QUERY_INTERRUPTED
+SELECT count(*) AS num FROM tt1 AS t1 LEFT JOIN tt1 AS t2 ON t1.a = t2.b WHERE t1.b < 2;
+
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~999","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~999~9","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~999~99","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~long_item_string_test_here","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+SELECT * FROM tt1;
+SELECT count(*) as a99 FROM tt1 LIMIT 99;
+--error ER_QUERY_INTERRUPTED
+SELECT count(*) as a99 FROM tt1 LIMIT 999;
+--error ER_QUERY_INTERRUPTED
+SELECT count(*) as a99 FROM tt1 LIMIT 9999;
+--error ER_QUERY_INTERRUPTED
+SELECT count(*) as a99 FROM tt1 LIMIT 9,999;
+--error ER_QUERY_INTERRUPTED
+SELECT count(*) as a999 FROM tt1 LIMIT 9,99;
+--error ER_QUERY_INTERRUPTED
+SELECT count(*) as a9 FROM tt1 LIMIT 9999;
+--error ER_QUERY_INTERRUPTED
+select count(*) as a9 FROM tt1 LIMIT 99999;
+--error ER_QUERY_INTERRUPTED
+select count(*) as a9 FROM tt1 LIMIT 99988;
+--error ER_QUERY_INTERRUPTED
+select count(*) as a9 FROM tt1 LIMIT 88999;
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.show_sql_filter();
+
+DROP TABLE tt1;
+SET GLOBAL rds_sqlfilter_case_sensitive=on;
+
+--echo #----------- store proceduce -----------
+--echo # queries inside procedures or functions will not be affected.
+connection conn0;
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~SELECT~ORDER~BY","");
+CREATE TABLE t_encrypt(c2 INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                       c3 CHAR(255) Default 'No text',
+                       c4 JSON ,
+                       c5 INT,
+                       c6 INT,
+                       KEY idx2 (c6)
+                       );
+DELIMITER |;
+CREATE PROCEDURE read_t_encrypt()
+begin
+        declare i int default 1;
+        while (i <= 5) DO
+                SELECT * FROM (SELECT * FROM t_encrypt ORDER BY RAND() LIMIT 1) AS A WHERE A.c2 < 0 ;
+                SET i = i + 1;
+        end while;
+end|
+DELIMITER ;|
+CALL read_t_encrypt();
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~SELECT~ORDER~BY","");
+CALL read_t_encrypt();
+DROP table t_encrypt;
+DROP procedure read_t_encrypt;
+
+--echo #----------- trigger -----------
+call dbms_sqlfilter.add_sql_filter('UPDATE',10,"UPDATE~tmpp1~name","");
+call dbms_sqlfilter.add_sql_filter('UPDATE',0,"UPDATE~tmpp2~name","");
+--disable_warnings
+CREATE TABLE tmpp1 (id int, name VARCHAR(128)) default charset='utf8';
+CREATE TABLE tmpp2 (fid int, name VARCHAR(128)) default charset='utf8';
+INSERT INTO tmpp1 values(1, '触发器');
+INSERT INTO tmpp2 values(1, '测试');
+
+DELIMITER $;
+DROP trigger if exists tmpp1_update$
+CREATE trigger tmpp1_update
+after UPDATE on tmpp1
+for each row
+begin
+    UPDATE tmpp2 SET name=new.name WHERE fid=new.id;
+end$
+DELIMITER ;$
+
+SELECT * FROM tmpp1;
+SELECT * FROM tmpp2;
+UPDATE tmpp1 SET name='iu.com' WHERE id=1;
+SELECT * FROM tmpp1;
+SELECT * FROM tmpp2;
+--enable_warnings
+
+DROP table tmpp1;
+DROP table tmpp2;
+
+--echo #-----------The object of SQL filter is system database. ----
+connection conn0;
+SET GLOBAL rds_sqlfilter_control=on;
+--echo 1.rds_sqlfilter_sys_table_control is off
+set global rds_sqlfilter_sys_table_control = off;
+
+create table tmp1 (a int);
+insert into tmp1 values (1);
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~FROM~mysql","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~FROM~sys","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~FROM~information_schema","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~FROM~performance_schema","");
+SELECT 1 FROM information_schema.tables LIMIT 1;
+SELECT 1 FROM tmp1,information_schema.tables LIMIT 1;
+SELECT 1 FROM information_schema.tables,tmp1 LIMIT 1;
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--echo 2.rds_sqlfilter_sys_table_control is on
+set GLOBAL rds_sqlfilter_sys_table_control = on;
+--error ER_QUERY_INTERRUPTED
+SELECT 1 FROM information_schema.tables LIMIT 1;
+--error ER_QUERY_INTERRUPTED
+SELECT 1 FROM tmp1,information_schema.tables LIMIT 1;
+--error ER_QUERY_INTERRUPTED
+SELECT 1 FROM information_schema.tables,tmp1 LIMIT 1;
+
+SET @old_rds_sqlfilter_sys_table_control=@@global.rds_sqlfilter_sys_table_control;
+drop table tmp1;
+--echo #-----sql filter permission -----
+connection conn_rdsAdmin;
+SET GLOBAL rds_sqlfilter_control=off;
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.show_sql_filter();
+
+CREATE USER 'user1'@'localhost' identified by '123456';
+CREATE USER 'user2'@'localhost' identified by '123456';
+GRANT ALL PRIVILEGES ON test.* to user1@localhost;
+GRANT ALL PRIVILEGES ON test.* to user2@localhost;
+connect (user1,localhost,user1,123456);
+connect (user2,localhost,user2,123456);
+
+connection user1;
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+SET GLOBAL rds_sqlfilter_control=on;
+SHOW VARIABLES LIKE "rds_sqlfilter_control";
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select|from|t1|where","");
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"update|t1|where","");
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"delete|from|t1|where","");
+
+connection user2;
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT|from|t11|where","");
+
+connection conn_rdsAdmin;
+SET GLOBAL rds_sqlfilter_control=on;
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~from~t1~where","");
+connection conn0;
+SELECT * FROM t1 WHERE iddd > 1;
+connection user1;
+use test;
+SELECT * FROM t1 WHERE iddd > 1;
+connection conn0;
+DROP USER user1@localhost;
+DROP USER user2@localhost;
+
+--echo # rdsAdmin@localhost has privileges to update/insert/delete sql filter table,
+--echo # flush sql filter, call sql filter procedure API, select sql filter.
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~FROM~t1~WHERE~iddd","");
+call dbms_sqlfilter.add_sql_filter('UPDATE',0,"UPDATE~t1","");
+call dbms_sqlfilter.add_sql_filter('DELETE',0,"DELETE~FROM~t1","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter(); 
+
+connection conn0;
+SELECT * FROM t2 WHERE idd > 1 AND name = "a";
+--error ER_QUERY_INTERRUPTED
+SELECT * FROM t1 WHERE iddd > 1;
+update t1 SET name="aa" WHERE iddd=1;
+--error ER_QUERY_INTERRUPTED
+UPDATE t1 SET name="a" WHERE iddd=1;
+SELECT * FROM t1 where iddd = 1;
+INSERT INTO t1 VALUES (6,"d");
+SELECT * FROM t1 where iddd = 6;
+--error ER_QUERY_INTERRUPTED
+DELETE FROM t1 WHERE iddd = 6;
+SELECT * FROM t1 where iddd = 6;
+
+--echo #----cleanup ----------
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.show_sql_filter();
+DROP table t1, t2;
+DROP user rds@localhost;
+
+# check boundary scenarios
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('SELECT',1,"select~~lineitem","");
+
+delete from mysql.rds_sql_filter_rules; 
+call dbms_sqlfilter.flush_sql_filter();
+
+--echo #key words for each sql filter rule <= 128
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~update~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~update~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and","");
+call dbms_sqlfilter.add_sql_filter('UPDATE',0,"update~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~update~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~update~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and","");
+call dbms_sqlfilter.add_sql_filter('DELETE',0,"delete~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~update~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~update~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+# rule include 129 key words
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~update~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~update~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and","");
+# rule include 129 key words
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('UPDATE',0,"update~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~update~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~update~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and","");
+# rule include 129 key words
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('DELETE',0,"delete~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~update~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~update~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and","");
+# rule include 228 key words
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('SELECT',1,"SELECT~FROM~t1~where~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1~a~1","");
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.show_sql_filter();
+
+# sql filter string include space
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"sele ct~1","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('UPDATE',0,"up d ate~1","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('DELETE',0,"de l e te~1","");
+SET GLOBAL rds_sqlfilter_control = ON;
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+SET GLOBAL rds_sqlfilter_case_sensitive = OFF;
+SET GLOBAL rds_sqlfilter_control = OFF;
+# test the impact on root user
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection default;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t1","");
+SET GLOBAL rds_sqlfilter_affect_admin_user = default;
+CREATE TABLE t1(c1 INT PRIMARY KEY, c2 INT);
+INSERT INTO t1 VALUES(1,1);
+SELECT * FROM t1;
+SET GLOBAL rds_sqlfilter_affect_admin_user = OFF;
+SELECT * FROM t1;
+SET GLOBAL rds_sqlfilter_control = ON;
+SET GLOBAL rds_sqlfilter_affect_admin_user = ON;
+--error ER_QUERY_INTERRUPTED
+SELECT * FROM t1;
+SET GLOBAL rds_sqlfilter_affect_admin_user = OFF;
+SELECT * FROM t1;
+CREATE TABLE t2(c1 INT PRIMARY KEY, c2 INT);
+INSERT INTO t2 VALUES(1,1);
+SET GLOBAL rds_sqlfilter_affect_admin_user = ON;
+SELECT * FROM t2;
+SET GLOBAL rds_sqlfilter_affect_admin_user = OFF;
+SELECT * FROM t2;
+SET GLOBAL rds_sqlfilter_control = OFF;
+SELECT * FROM t2;
+SET GLOBAL rds_sqlfilter_affect_admin_user = ON;
+SELECT * FROM t2;
+SET GLOBAL rds_sqlfilter_control = ON;
+connection conn0;
+--error ER_QUERY_INTERRUPTED
+SELECT * FROM t1;
+SELECT * FROM t2;
+connection default;
+SET GLOBAL rds_sqlfilter_affect_admin_user = OFF;
+connection conn0;
+--error ER_QUERY_INTERRUPTED
+SELECT * FROM t1;
+SELECT * FROM t2;
+# cleanup
+SET GLOBAL rds_sqlfilter_affect_admin_user = default;
+SET GLOBAL rds_sqlfilter_control = default;
+SET GLOBAL rds_sqlfilter_case_sensitive = default;
+DROP TABLE t1;
+DROP TABLE t2;
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection default;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.show_sql_filter();
+
+--echo #---- case: drop sql filter rules (invalid format) ------
+CALL dbms_sqlfilter.add_sql_filter('SELECT', 0, "SELECT~FROM~t1~WHERE~iddd","");
+--replace_column 1 #
+select * from mysql.rds_sql_filter_rules;
+
+--error ER_SP_WRONG_NO_OF_ARGS
+CALL dbms_sqlfilter.delete_sql_filter(1,1);
+
+--error ER_NATIVE_PROC_PARAMETER_MISMATCH
+CALL dbms_sqlfilter.delete_sql_filter("1");
+
+--replace_column 1 #
+select * from mysql.rds_sql_filter_rules;
+CALL delete_one_sql_filter_rule(0);
+
+--echo #---- case: flush sql filter rules ------
+SET GLOBAL rds_sqlfilter_control=on;
+CREATE TABLE t1 (iddd INT, name VARCHAR(20));
+INSERT INTO t1 VALUES (1,"a"),(2,"b"),(4,"d");
+CREATE TABLE t2 (idd int, name VARCHAR(20));
+INSERT INTO t2 VALUES (1,"a"),(2,"b");
+CREATE TABLE t3 (iddd INT, name VARCHAR(20));
+
+connection conn_rdsAdmin;
+--replace_column 1 #
+SELECT * FROM mysql.rds_sql_filter_rules;
+SELECT * FROM t1 WHERE iddd > 1;
+
+--echo "Add Rules"
+insert into mysql.rds_sql_filter_rules(type, max_concurrency, key_str) values('SELECT', 0, 'SELECT~FROM~t1~WHERE~iddd');
+insert into mysql.rds_sql_filter_rules(type, max_concurrency, key_str) values('UPDATE', 0, 'UPDATE~t1');
+insert into mysql.rds_sql_filter_rules(type, max_concurrency, key_str) values('DELETE', 0, 'DELETE~FROM~t1');
+insert into mysql.rds_sql_filter_rules(type, max_concurrency, key_str) values('INSERT', 0, 'INSERT~INTO~t1~VALUES');
+insert into mysql.rds_sql_filter_rules(type, max_concurrency, key_str) values('INSERT', 0, 'INSERT~INTO~t3~SELECT');
+--replace_column 1 #
+SELECT * FROM mysql.rds_sql_filter_rules;
+
+--echo "dbms_sqlfilter.flush_sql_filter"
+CALL dbms_sqlfilter.flush_sql_filter();
+--replace_column 1 #
+CALL dbms_sqlfilter.show_sql_filter();
+
+--echo "Verify Effect"
+SET GLOBAL rds_sqlfilter_case_sensitive=on;
+connection conn0;
+SELECT * FROM t2 WHERE idd > 1 AND name = "a";
+--error ER_QUERY_INTERRUPTED
+SELECT * FROM t1 WHERE iddd > 1;
+update t1 SET name="aa" WHERE iddd=1;
+--error ER_QUERY_INTERRUPTED
+UPDATE t1 SET name="a" WHERE iddd=1;
+SELECT * FROM t1 where iddd = 1;
+
+--error ER_QUERY_INTERRUPTED
+INSERT INTO t1 VALUES (6,"d");
+INSERT INTO t1 values (6,"d");
+SELECT * FROM t1 where iddd > 5;
+--error ER_QUERY_INTERRUPTED
+DELETE FROM t1 WHERE iddd > 5;
+SELECT * FROM t1 where iddd > 5;
+delete FROM t1 WHERE iddd > 5;
+SELECT * FROM t1 where iddd > 5;
+--error ER_QUERY_INTERRUPTED
+INSERT INTO t3 SELECT * FROM t1;
+INSERT INTO t3 select * FROM t1;
+TRUNCATE TABLE t3;
+
+SET GLOBAL rds_sqlfilter_control=off;
+--replace_column 1 #
+SELECT * FROM mysql.rds_sql_filter_rules;
+SELECT * FROM t1 WHERE iddd > 1 AND name = "a";
+SELECT * FROM t1 WHERE iddd > 1;
+UPDATE t1 SET name="a" WHERE iddd=1;
+DELETE FROM t1 WHERE iddd > 5;
+INSERT INTO t3 select * FROM t1;
+TRUNCATE TABLE t3;
+SET GLOBAL rds_sqlfilter_case_sensitive=default;
+
+--replace_column 1 #
+SELECT * FROM mysql.rds_sql_filter_rules;
+
+--echo #---- case: drop sql filter rules (valid format) ------
+--replace_column 1 #
+SELECT * FROM mysql.rds_sql_filter_rules;
+connection conn_rdsAdmin;
+CALL delete_one_sql_filter_rule(0);
+CALL delete_one_sql_filter_rule(0);
+CALL delete_one_sql_filter_rule(0);
+CALL delete_one_sql_filter_rule(0);
+CALL delete_one_sql_filter_rule(0);
+CALL delete_one_sql_filter_rule(0);
+
+connection conn0;
+SET GLOBAL rds_sqlfilter_control=on;
+SELECT * FROM t1 WHERE iddd > 1 AND name = "a";
+SELECT * FROM t1 WHERE iddd > 1;
+UPDATE t1 SET name="a" WHERE iddd=1;
+DELETE FROM t1 WHERE iddd > 5;
+
+INSERT INTO t3 SELECT * FROM t1;
+TRUNCATE TABLE t3;
+
+--echo # Test common user without super priv don't has privilege
+--echo # to call sql filter procedure API, flush sql filter,
+--echo # has privilege to select sql filter table and call show_sql_filter().
+
+connection conn_rdsAdmin;
+CREATE USER 'cuser'@'%' IDENTIFIED BY '123456';
+GRANT ALL PRIVILEGES ON *.* to 'cuser'@'%';
+UPDATE mysql.user SET Super_priv='N' WHERE User='cuser';
+FLUSH PRIVILEGES;
+# success
+CALL dbms_sqlfilter.add_sql_filter("SELECT",0,"SELECT~FROM~tab1","");
+CALL dbms_sqlfilter.add_sql_filter("DELETE", 0,"DELETE~FROM~t1","");
+
+connect (conn5, localhost, cuser, 123456);
+connection conn5;
+--replace_column 1 #
+SELECT * FROM mysql.rds_sql_filter_rules;
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+CALL dbms_sqlfilter.add_sql_filter("SELECT",0,"SELECT~FROM~tab1","");
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+CALL dbms_sqlfilter.add_sql_filter("UPDATE",0,"UPDATE~t1","");
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+CALL dbms_sqlfilter.add_sql_filter("delete", 0,"delete~from~t1","");
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+CALL dbms_sqlfilter.add_sql_filter("insert", 0,"insert~into~t1~values","");
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+CALL dbms_sqlfilter.add_sql_filter("insert", 0,"insert~into~t1~select","");
+--replace_column 1 #
+SELECT * FROM mysql.rds_sql_filter_rules;
+
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+eval call dbms_sqlfilter.delete_sql_filter(1);
+--replace_column 1 #
+SELECT * FROM mysql.rds_sql_filter_rules;
+
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+call dbms_sqlfilter.flush_sql_filter();
+
+--replace_column 1 #
+SELECT * FROM mysql.rds_sql_filter_rules;
+--error ER_DBACCESS_DENIED_ERROR
+insert into mysql.rds_sql_filter_rules(type, max_concurrency, key_str) values('SELECT', 0, 'SELECT~FROM~t1~WHERE~iddd');
+--error ER_DBACCESS_DENIED_ERROR
+insert into mysql.rds_sql_filter_rules(type, max_concurrency, key_str) values('UPDATE', 0, 'UPDATE~t1');
+--error ER_DBACCESS_DENIED_ERROR
+insert into mysql.rds_sql_filter_rules(type, max_concurrency, key_str) values('DELETE', 0, 'DELETE~FROM~t1');
+--error ER_DBACCESS_DENIED_ERROR
+insert into mysql.rds_sql_filter_rules(type, max_concurrency, key_str) values('INSERT', 0, 'INSERT~INTO~t1~VALUES');
+--error ER_DBACCESS_DENIED_ERROR
+insert into mysql.rds_sql_filter_rules(type, max_concurrency, key_str) values('INSERT', 0, 'INSERT~INTO~t1~SELECT');
+--replace_column 1 #
+SELECT * FROM mysql.rds_sql_filter_rules;
+--error ER_DBACCESS_DENIED_ERROR
+update mysql.rds_sql_filter_rules set max_concurrency = 1 where key_str = 'DELETE~FROM~t1';
+--replace_column 1 #
+SELECT * FROM mysql.rds_sql_filter_rules;
+--error ER_DBACCESS_DENIED_ERROR
+delete from mysql.rds_sql_filter_rules;
+--replace_column 1 #
+SELECT * FROM mysql.rds_sql_filter_rules;
+
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+connection default;
+
+--echo #----------- case: sql_mode -----------
+connection conn0;
+SET GLOBAL rds_sqlfilter_control=on;
+connection conn_rdsAdmin;
+CREATE TABLE tab1(id INT);
+INSERT INTO tab1 VALUES(1);
+--disable_warnings
+SET SQL_MODE='';
+INSERT INTO mysql.rds_sql_filter_rules VALUES(100,'',0,'SELECT~FROM~tab1','');
+--enable_warnings
+connection conn0;
+--replace_column 1 #
+SELECT * FROM mysql.rds_sql_filter_rules;
+SELECT * FROM tab1;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.show_sql_filter();
+SELECT * FROM tab1;
+
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+connection conn0;
+
+--echo #----------- case: rds_reserved_user -------
+CREATE TABLE tab2(id INT);
+INSERT INTO tab2 VALUES(1);
+connection conn_rdsAdmin;
+#--- rdsAdmin is rds rereserved user. The SQL filter should not be effective.
+CALL dbms_sqlfilter.add_sql_filter("SELECT",0,"SELECT~FROM~tab2","");
+SELECT * FROM tab2;
+connection conn0;
+--error ER_QUERY_INTERRUPTED
+SELECT * FROM tab2;
+connection conn_rdsAdmin;
+SELECT * FROM tab2;
+insert into mysql.rds_sql_filter_rules (type, max_concurrency, key_str) values ('DELETE', 0, 'DELETE~t1');
+create user 'rdsBackup'@'localhost' identified by '123456';
+create user 'rdsMetric'@'localhost' identified by '123456';
+create user 'rdsRepl'@'localhost' identified by '123456';
+GRANT ALL PRIVILEGES ON *.* TO 'rdsBackup'@'localhost' WITH GRANT OPTION;
+GRANT ALL PRIVILEGES ON *.* TO 'rdsMetric'@'localhost' WITH GRANT OPTION;
+GRANT ALL PRIVILEGES ON *.* TO 'rdsRepl'@'localhost' WITH GRANT OPTION;
+connect (conn7, 127.0.0.1, rdsBackup, 123456, test);
+SELECT * FROM tab2;
+--error ER_SIGNAL_EXCEPTION
+insert into mysql.rds_sql_filter_rules (type, max_concurrency, key_str) values ('DELETE', 0, 'DELETE~t666');
+connect (conn8, 127.0.0.1, rdsMetric, 123456, test);
+SELECT * FROM tab2;
+--error ER_SIGNAL_EXCEPTION
+insert into mysql.rds_sql_filter_rules (type, max_concurrency, key_str) values ('DELETE', 0, 'DELETE~t666');
+connect (conn9, 127.0.0.1, rdsRepl, 123456, test);
+SELECT * FROM tab2;
+--error ER_SIGNAL_EXCEPTION
+insert into mysql.rds_sql_filter_rules (type, max_concurrency, key_str) values ('DELETE', 0, 'DELETE~t666');
+connection conn_rdsAdmin;
+--replace_column 1 #
+select * from mysql.rds_sql_filter_rules;
+insert into mysql.rds_sql_filter_rules (type, max_concurrency, key_str) values ('DELETE', 0, 'DELETE~t666');
+delete from mysql.rds_sql_filter_rules where key_str = 'DELETE~t666';
+
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+
+--echo #--------- case: force restart while lists have loaded in memory ----
+connection conn_rdsAdmin;
+SET GLOBAL rds_sqlfilter_control = ON;
+
+CALL dbms_sqlfilter.add_sql_filter("SELECT",0,"SELECT~FROM~t1~WHERE~iddd","");
+CALL dbms_sqlfilter.add_sql_filter("UPDATE",0,"UPDATE~t1","");
+CALL dbms_sqlfilter.add_sql_filter("DELETE",0,"DELETE~FROM~t1","");
+CALL dbms_sqlfilter.add_sql_filter("INSERT",0,"INSERT~INTO~t1~VALUES","");
+CALL dbms_sqlfilter.add_sql_filter("INSERT",0,"INSERT~SELECT","");
+
+CREATE TABLE t4 (iddd INT, name VARCHAR(20));
+
+connection conn0;
+--error ER_QUERY_INTERRUPTED
+INSERT INTO t1 VALUES (6, 'e');
+--error ER_QUERY_INTERRUPTED
+INSERT INTO t4 SELECT * FROM t1;
+--error ER_QUERY_INTERRUPTED
+DELETE FROM t1 WHERE iddd > 5;
+
+connection default;
+--source include/kill_and_restart_mysqld.inc
+
+SET GLOBAL rds_sqlfilter_control = ON;
+--replace_column 1 #
+select * from mysql.rds_sql_filter_rules;
+--replace_column 1 #
+CALL dbms_sqlfilter.show_sql_filter();
+
+--error ER_QUERY_INTERRUPTED
+DELETE FROM t1 WHERE iddd > 5;
+--replace_column 1 #
+CALL dbms_sqlfilter.show_sql_filter();
+
+DROP TABLE t4;
+
+connect(conn_rdsAdmin2, 127.0.0.1, rdsAdmin);
+delete from mysql.rds_sql_filter_rules;
+CALL dbms_sqlfilter.flush_sql_filter();
+
+##--------- cleanup -----------
+call dbms_sqlfilter.show_sql_filter();
+SET GLOBAL rds_sqlfilter_case_sensitive=default;
+SET GLOBAL rds_sqlfilter_control=default;
+drop table t1, t2, t3, tab1, tab2;
+
+DROP USER 'cuser'@'%';
+
+--source ../include/sqlfilter_cleanup.inc

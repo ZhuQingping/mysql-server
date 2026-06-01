@@ -1,0 +1,158 @@
+--echo # Parallel Insert Select and Auto-increment 
+--echo # Placed in mysql-test/t/ because there should not be a diff between pq and non-pq
+
+--echo # case 1: Inserted-into table is very large from the start
+--echo # INSERT SELECT works on an already large table
+--echo # a) without ORDER BY
+SET @saved_pq_support_features_switch = @@session.pq_support_features_switch;
+set pq_support_features_switch='insert_select=on';
+
+CREATE TABLE t1 (
+	c1 BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+	c2 BIGINT,
+	c3 VARCHAR(2048),
+	INDEX idx1(c2)) Engine=InnoDB;
+
+INSERT INTO t1(c2, c3) VALUES
+	(1, REPEAT('a', 1024)),
+	(2, REPEAT('b', 1024)),
+	(3, REPEAT('c', 1024)),
+	(4, REPEAT('d', 1024)),
+    (5, REPEAT('a', 1024)),
+	(6, REPEAT('b', 1024)),
+	(7, REPEAT('c', 1024)),
+	(8, REPEAT('d', 1024)),
+    (9, REPEAT('a', 1024)),
+	(10, REPEAT('b', 1024)),
+	(11, REPEAT('c', 1024)),
+	(12, REPEAT('d', 1024)),
+    (13, REPEAT('a', 1024)),
+	(14, REPEAT('b', 1024)),
+	(15, REPEAT('c', 1024)),
+	(16, REPEAT('d', 1024)),
+    (17, REPEAT('a', 1024)),
+	(18, REPEAT('b', 1024)),
+	(19, REPEAT('c', 1024)),
+	(20, REPEAT('d', 1024)),
+    (21, REPEAT('a', 1024)),
+	(22, REPEAT('b', 1024)),
+	(23, REPEAT('c', 1024)),
+	(24, REPEAT('d', 1024)),
+    (25, REPEAT('a', 1024)),
+	(26, REPEAT('b', 1024)),
+	(27, REPEAT('c', 1024)),
+	(28, REPEAT('d', 1024)),
+    (29, REPEAT('a', 1024)),
+	(30, REPEAT('b', 1024)),
+	(31, REPEAT('c', 1024)),
+	(32, REPEAT('d', 1024)),
+    (33, REPEAT('a', 1024)),
+	(34, REPEAT('b', 1024)),
+	(35, REPEAT('c', 1024)),
+	(36, REPEAT('d', 1024)),
+    (37, REPEAT('a', 1024)),
+	(38, REPEAT('b', 1024)),
+	(39, REPEAT('c', 1024)),
+	(40, REPEAT('d', 1024)),
+    (41, REPEAT('a', 1024)),
+	(42, REPEAT('b', 1024)),
+	(43, REPEAT('c', 1024)),
+	(44, REPEAT('d', 1024)),
+    (45, REPEAT('a', 1024)),
+	(46, REPEAT('b', 1024)),
+	(47, REPEAT('c', 1024)),
+	(48, REPEAT('d', 1024)),
+    (49, REPEAT('a', 1024)),
+	(50, REPEAT('b', 1024)),
+	(51, REPEAT('c', 1024)),
+	(52, REPEAT('d', 1024)),
+    (53, REPEAT('a', 1024)),
+	(54, REPEAT('b', 1024)),
+	(55, REPEAT('c', 1024)),
+	(56, REPEAT('d', 1024)),
+    (57, REPEAT('a', 1024)),
+	(58, REPEAT('b', 1024)),
+	(59, REPEAT('d', 1024)),
+	(60, REPEAT('d', 1024)),
+	(61, REPEAT('d', 1024)),
+	(62, REPEAT('d', 1024)),
+	(63, REPEAT('d', 1024)),
+	(64, REPEAT('d', 1024));
+
+start transaction;
+INSERT INTO t1(c2, c3) SELECT  c2+100,c3 FROM t1;
+INSERT INTO t1(c2, c3) SELECT  c2+200,c3 FROM t1;
+
+#SELECT c1, c2 FROM t1;
+--echo # without ORDER BY  on c1 in  INSERT INTO SELECT, 
+--echo # SELECT c1,c2 from t1 will return different values with and without pq
+--echo # but:
+--echo # the MIN and MAX value of the auto-increment counter should be the same 
+--echo # there should be as many rows with and without pq 
+--echo # The non auto-increment columns should be the same
+
+select min(c1),max(c1),count(c1) from t1;
+select c2 from t1 order by c2;
+rollback;
+--echo # case 1 
+--echo # b) with ORDER BY
+
+
+INSERT INTO t1(c2, c3) SELECT  c2+100,c3 FROM t1 ORDER BY c1;
+INSERT INTO t1(c2, c3) SELECT  c2+200,c3 FROM t1 ORDER BY c1;
+
+SELECT c1, c2 FROM t1;
+
+DROP TABLE  t1;
+
+
+--echo # case 2: As opposed to case 1, the inserted-into table is not large from the start,
+--echo # the successive INSERT SELECT will make it large. 
+--echo # a) without ORDER BY 
+
+CREATE TABLE t1 (
+	c1 BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+	c2 BIGINT,
+	c3 VARCHAR(2048),
+	INDEX idx1(c2)) Engine=InnoDB;
+
+
+INSERT INTO t1(c2, c3) VALUES
+	(1, REPEAT('a', 1024)),
+	(2, REPEAT('b', 1024)),
+	(3, REPEAT('c', 1024)),
+	(4, REPEAT('d', 1024));
+
+start transaction;	
+
+INSERT INTO t1(c2, c3) SELECT  c2,c3 FROM t1;
+INSERT INTO t1(c2, c3) SELECT  c2,c3 FROM t1;
+INSERT INTO t1(c2, c3) SELECT  c2,c3 FROM t1;
+INSERT INTO t1(c2, c3) SELECT  c2,c3 FROM t1;
+INSERT INTO t1(c2, c3) SELECT  c2,c3 FROM t1;
+
+--echo # without ORDER BY  on c1 in  INSERT INTO SELECT,
+--echo # SELECT c1,c2 from t1 will return different values with and without pq
+--echo # but:
+--echo # the MIN and MAX value of the auto-increment counter should be the same 
+--echo # there should be as many rows with and without pq 
+--echo # The non auto-increment columns should be the same
+
+select min(c1),max(c1),count(c1) from t1;
+select c2 from t1 order by c2;
+rollback;
+
+--echo # case 2
+--echo # b) with ORDER BY 
+
+
+INSERT INTO t1(c2, c3) SELECT  c2,c3 FROM t1 ORDER BY c1;
+INSERT INTO t1(c2, c3) SELECT  c2,c3 FROM t1 ORDER BY c1;
+INSERT INTO t1(c2, c3) SELECT  c2,c3 FROM t1 ORDER BY c1;
+INSERT INTO t1(c2, c3) SELECT  c2,c3 FROM t1 ORDER BY c1;
+INSERT INTO t1(c2, c3) SELECT  c2,c3 FROM t1 ORDER BY c1;
+
+select c1,c2 from t1;
+
+SET pq_support_features_switch = @saved_pq_support_features_switch;
+drop table t1;

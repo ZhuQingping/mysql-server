@@ -1,0 +1,107 @@
+From 20b5993337ef0f532d1be4eec57c225b330a7311 Mon Sep 17 00:00:00 2001
+From: Roy Lyseng <roy.lyseng@contributor>
+
+Date: Wed, 12 Jun 2024 15:22:04 +0200
+Subject: [PATCH] BUGFIX decrease the memory footprint of session
+ plan cache.
+
+While testing a build having -DWITH_VALGRIND=1, with ./mtr
+session_plan_cache --valgrind --debug, I hit a MySQL-Community-version
+bug.
+
+Here is first the description of this bug, next I will discuss why I
+back-port the fix.
+
+       Commit SHA in github: ee8115bac6789581f05a3a02cd8e15a9092912e8
+       By Roy Lyseng <roy.lyseng@oracle.com>
+       Date: Wed, 12 Jun 2024 15:22:04 +0200
+
+       Bug#36458177: Mysqld failure THD::rollback_item_tree_changes()
+
+       The problem is a stack-use-after-return for a recorded item address,
+       detected when item changes are rolled back after query optimization
+       and execution. Notice that the problem is suppressed during MTR runs
+       of an ASAN build when the --sanitize option is used.
+
+       The problem occurs in function remove_eq_conds() when calling
+       remove_eq_conds() recursively. The replaced item is returned in local
+       variable new_item. However, remove_eq_conds() may call fold_condition()
+       which may record its changes using THD::change_item_tree(), which will
+       then record the address of new_item, which is obviously invalid after
+       returning from the function. remove_eq_conds() does not need to record
+       addresses because it operates on a copy of the condition structure
+       (the AND/OR-tree), which need no rollback after optimization.
+
+       The solution to the problem is to replace the item pointer directly in
+       the list object that contains it, instead of using a local variable and
+       calling li.replace() explicitly.
+
+       Change-Id: I223acda5df955317e432ad4596b031f91bfea723
+
+So when running the test I got this Valgrind error:
+
+==1987856== Invalid write of size 8
+==1987856==    at 0x3B54CAE: THD::rollback_item_tree_changes() (sql_class.cc:2043)
+==1987856==    by 0x3C71C6F: mysql_execute_command(THD*, bool) (sql_parse.cc:5470)
+==1987856==    by 0x3CD1792: Prepared_statement::execute(THD*, String*, bool) (sql_prepare.cc:3978)
+==1987856==    by 0x3CCFAF4: Prepared_statement::execute_loop(THD*, String*, bool) (sql_prepare.cc:3365)
+
+The problem for us is that, this wrong-pointer-THD-change-list caused
+subsequent errors in the plan cache code, when the application of a
+cached plan came to the place "// Replay the Item tree changes" in
+sql_plan_cache.cc, which reads THD::change_list: :
+
+==1987856== Invalid read of size 8
+==1987856==    at 0x3CA816B: plan_cache::apply_cached_plan(JOIN*) (sql_plan_cache.cc:2733)
+==1987856==    by 0x3CA738C: plan_cache::apply_cached_plan_if_suitable(THD*, Query_block*, Opt_trace_object&) (sql_plan_cache.cc:2481)
+==1987856==    by 0x3CA781E: plan_cache::exec_cached_plan(Query_block*) (sql_plan_cache.cc:2545)
+==1987856==    by 0x3D17366: Query_block::optimize(THD*, bool) (sql_select.cc:1999)
+==1987856==    by 0x3DD318B: Query_expression::optimize(THD*, TABLE*, bool, bool) (sql_union.cc:1010)
+==1987856==    by 0x3D14D9D: Sql_cmd_dml::execute_inner(THD*) (sql_select.cc:999)
+==1987856==    by 0x3D141E6: Sql_cmd_dml::execute(THD*) (sql_select.cc:785)
+==1987856==    by 0x3C70D95: mysql_execute_command(THD*, bool) (sql_parse.cc:5235)
+==1987856==    by 0x3CD1792: Prepared_statement::execute(THD*, String*, bool) (sql_prepare.cc:3978)
+==1987856==    by 0x3CCFAF4: Prepared_statement::execute_loop(THD*, String*, bool) (sql_prepare.cc:3365)
+
+It is a good idea to back-port this patch, otherwise the risk is that
+testing of plan cache, or a customer, hits a crash, with a stack trace
+involving plan cache, and plan cache gets blamed for this.
+---
+ sql/sql_optimizer.cc | 18 ++++++++++++------
+ 1 file changed, 12 insertions(+), 6 deletions(-)
+
+diff --git a/sql/sql_optimizer.cc b/sql/sql_optimizer.cc
+index 48dc8d71eb7..cf23bd395a3 100644
+--- a/sql/sql_optimizer.cc
++++ b/sql/sql_optimizer.cc
+@@ -10854,15 +10854,21 @@ bool remove_eq_conds(THD *thd, Item *cond, Item **retcond,
+     bool should_fix_fields = false;
+     *cond_value = Item::COND_UNDEF;
+     Item *item;
+-    while ((item = li++)) {
+-      Item *new_item;
++    while ((item = li++) != nullptr) {
++      Item **item_ptr = li.ref();
+       Item::cond_result tmp_cond_value;
+-      if (remove_eq_conds(thd, item, &new_item, &tmp_cond_value)) return true;
++      /*
++        Notice that remove_eq_conds() may call fold_condition(), which may
++        call THD::change_item_tree(), which may record the address of the
++        existing item. Passing item_ptr ensures the address persists as long as
++        optimization is valid.
++      */
++      if (remove_eq_conds(thd, item, item_ptr, &tmp_cond_value)) return true;
+ 
+-      if (new_item == nullptr)
++      if (*item_ptr == nullptr) {
+         li.remove();
+-      else if (item != new_item) {
+-        (void)li.replace(new_item);
++      } else if (*item_ptr != item) {
++        // Pointer to item was replaced in-place
+         should_fix_fields = true;
+       }
+       if (*cond_value == Item::COND_UNDEF) *cond_value = tmp_cond_value;
+-- 
+2.23.0
+

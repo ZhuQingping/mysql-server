@@ -1,0 +1,47 @@
+From 0d5893eb28a5739c7e8a9b059a8b64051e501ea2 Mon Sep 17 00:00:00 2001
+From: kuangxiangbin <kuangxiangbin@contributor>
+
+
+Date: Tue, 29 Jul 2025 16:09:59 +0800
+Subject: [PATCH] BUGFIX fix unstable oma.log mtr.
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Issue:
+------
+When the contents of the oma.log are printed,
+mysqld prints also.
+
+Solution:
+---------
+Filter out mysqld，not print out
+---
+ mysql-test/t/oma_log.test | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/mysql-test/t/oma_log.test b/mysql-test/t/oma_log.test
+index ccd52d1d932..ba782d086d4 100644
+--- a/mysql-test/t/oma_log.test
++++ b/mysql-test/t/oma_log.test
+@@ -258,7 +258,7 @@ let OMA_LOG= `SELECT @@global.rds_oma_log_file`;
+    while (<FILE>) {
+      my $line = $_;
+  
+-     if ($line !~ m/^(# Query_time|# Time|Tcp port|# User)|(Source distribution)/) {
++     if ($line !~ m/^(# Query_time|# Time|Tcp port|# User)|(Source distribution|mysqld)/) {
+        #$line =~ s/Thread_id: \d* Schema:/Thread_id: 0 Schema:/;
+        #$line =~ m/(Rows_sent.*) Start.*/;
+        print "$line";
+@@ -296,7 +296,7 @@ let OMA_LOG= `SELECT @@global.rds_oma_log_file`;
+    while (<FILE>) {
+      my $line = $_;
+  
+-     if ($line !~ m/^(# Query_time|# Time|Tcp port|# User)|(Source distribution)/) {
++     if ($line !~ m/^(# Query_time|# Time|Tcp port|# User)|(Source distribution|mysqld)/) {
+        print "$line";
+      }
+    }
+-- 
+2.23.0
+

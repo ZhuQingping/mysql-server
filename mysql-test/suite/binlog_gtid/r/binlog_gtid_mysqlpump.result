@@ -1,0 +1,36 @@
+==== Initialize ====
+CREATE TABLE t1 (a INT);
+FLUSH LOGS;
+PURGE BINARY LOGS TO '<CURRENT_BINLOG>';
+INSERT INTO t1 VALUES (1);
+FLUSH LOGS;
+INSERT INTO t1 VALUES (2);
+==== pump and restore ====
+# pump
+DROP TABLE t1;
+RESET MASTER;
+# restore
+SET GLOBAL rds_permission_control = ON;
+SET GLOBAL rds_permission_control = 0;
+==== Verify after restoring from pump ====
+include/assert.inc [GTID_EXECUTED should equal master GTID_EXECUTED after pump restored]
+include/assert.inc [GTID_PURGED should equal master GTID_EXECUTED after pump restored]
+# restart
+include/assert.inc [GTID_EXECUTED should equal master GTID_EXECUTED after server restarted]
+include/assert.inc [GTID_PURGED should equal master GTID_EXECUTED after server restarted]
+==== Clean up ====
+DROP TABLE t1;
+SET GLOBAL rds_permission_control = ON;
+SET NAMES utf8;
+Warnings:
+Warning	3719	'utf8' is currently an alias for the character set UTF8MB3, but will be an alias for UTF8MB4 in a future release. Please consider using UTF8MB4 in order to be unambiguous.
+use mysql;
+SET SQL_MODE='ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION';
+drop trigger if exists mysql.block_outline_insert;
+drop trigger if exists mysql.block_outline_update;
+drop trigger if exists mysql.block_outline_delete;
+create definer='rdsAdmin'@'localhost' trigger block_outline_insert before insert on outline for each row BEGIN DECLARE user_name varchar(255); DECLARE mecessage varchar(255); select user() into user_name; IF user_name != 'rdsAdmin@localhost' THEN set mecessage = concat('Access denied for user ''',user_name,''' to table ''mysql.outline''.'); SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = mecessage; END IF; END$$
+create definer='rdsAdmin'@'localhost' trigger block_outline_update before update on outline for each row BEGIN DECLARE user_name varchar(255); DECLARE mecessage varchar(255); select user() into user_name; IF user_name != 'rdsAdmin@localhost' THEN set mecessage = concat('Access denied for user ''',user_name,''' to table ''mysql.outline''.'); SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = mecessage; END IF; END$$
+create definer='rdsAdmin'@'localhost' trigger block_outline_delete before delete on outline for each row BEGIN DECLARE user_name varchar(255); DECLARE mecessage varchar(255); select user() into user_name; IF user_name != 'rdsAdmin@localhost' THEN set mecessage = concat('Access denied for user ''',user_name,''' to table ''mysql.outline''.'); SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = mecessage; END IF; END$$
+SET SQL_MODE=default;
+SET GLOBAL rds_permission_control = 0;

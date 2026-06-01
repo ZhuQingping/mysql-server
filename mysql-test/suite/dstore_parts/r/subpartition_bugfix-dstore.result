@@ -1,0 +1,764 @@
+SET @saved_rds_extended_partitions_enabled=@@rds_extended_partitions_enabled;
+SET global rds_extended_partitions_enabled = true;
+# BUG2023112403065
+CREATE TABLE t0 (
+a int DEFAULT NULL,
+b int  DEFAULT NULL
+) PARTITION BY RANGE (a)
+SUBPARTITION BY RANGE (b)
+(PARTITION p0 VALUES LESS THAN (floor(5.0))
+(SUBPARTITION q1 VALUES LESS THAN (2),
+SUBPARTITION q2 VALUES LESS THAN (5)),
+PARTITION p1 VALUES LESS THAN (10)
+(SUBPARTITION q3 VALUES LESS THAN (7),
+SUBPARTITION q4 VALUES LESS THAN (10)),
+PARTITION p2 VALUES LESS THAN (15)
+(SUBPARTITION q5 VALUES LESS THAN (12),
+SUBPARTITION q6 VALUES LESS THAN (15)),
+PARTITION p3 VALUES LESS THAN (20)
+(SUBPARTITION q7 VALUES LESS THAN (17),
+SUBPARTITION q8 VALUES LESS THAN (20)));
+explain select * from t0 where b > 30;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where; Using pushed condition (`test`.`t0`.`b` > 30)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a`,`test`.`t0`.`b` AS `b` from `test`.`t0` where (`test`.`t0`.`b` > 30)
+explain select * from t0 where b < 30;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	p0_q1,p0_q2,p1_q3,p1_q4,p2_q5,p2_q6,p3_q7,p3_q8	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where; Using pushed condition (`test`.`t0`.`b` < 30)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a`,`test`.`t0`.`b` AS `b` from `test`.`t0` where (`test`.`t0`.`b` < 30)
+explain select * from t0 where b < 13;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	p0_q1,p0_q2,p1_q3,p1_q4,p2_q5,p2_q6,p3_q7	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where; Using pushed condition (`test`.`t0`.`b` < 13)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a`,`test`.`t0`.`b` AS `b` from `test`.`t0` where (`test`.`t0`.`b` < 13)
+explain select * from t0 where a > 30;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where; Using pushed condition (`test`.`t0`.`a` > 30)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a`,`test`.`t0`.`b` AS `b` from `test`.`t0` where (`test`.`t0`.`a` > 30)
+drop table t0;
+CREATE TABLE t0 (
+a int DEFAULT NULL,
+b int  DEFAULT NULL
+) PARTITION BY LIST (a)
+SUBPARTITION BY LIST (b)
+(PARTITION p0 VALUES IN (floor(5.0))
+(SUBPARTITION q1 VALUES IN (2),
+SUBPARTITION q2 VALUES IN (5)),
+PARTITION p1 VALUES IN (10)
+(SUBPARTITION q3 VALUES IN (7),
+SUBPARTITION q4 VALUES IN (10)),
+PARTITION p2 VALUES IN (15)
+(SUBPARTITION q5 VALUES IN (12),
+SUBPARTITION q6 VALUES IN (15)),
+PARTITION p3 VALUES IN (20)
+(SUBPARTITION q7 VALUES IN (17),
+SUBPARTITION q8 VALUES IN (20)));
+explain select * from t0 where b > 30;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where; Using pushed condition (`test`.`t0`.`b` > 30)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a`,`test`.`t0`.`b` AS `b` from `test`.`t0` where (`test`.`t0`.`b` > 30)
+explain select * from t0 where b < 30;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	p0_q1,p0_q2,p1_q3,p1_q4,p2_q5,p2_q6,p3_q7,p3_q8	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where; Using pushed condition (`test`.`t0`.`b` < 30)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a`,`test`.`t0`.`b` AS `b` from `test`.`t0` where (`test`.`t0`.`b` < 30)
+explain select * from t0 where b < 13;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	p0_q1,p0_q2,p1_q3,p1_q4,p2_q5	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where; Using pushed condition (`test`.`t0`.`b` < 13)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a`,`test`.`t0`.`b` AS `b` from `test`.`t0` where (`test`.`t0`.`b` < 13)
+explain select * from t0 where a > 30;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where; Using pushed condition (`test`.`t0`.`a` > 30)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a`,`test`.`t0`.`b` AS `b` from `test`.`t0` where (`test`.`t0`.`a` > 30)
+drop table t0;
+# BUG2023112403408
+CREATE TABLE t1 (
+id_col int unsigned NOT NULL,
+smallint_col smallint unsigned NOT NULL,
+year_col year NOT NULL
+) PARTITION BY RANGE (smallint_col) SUBPARTITION BY LIST (year_col) (
+PARTITION smalldata VALUES LESS THAN (10) (
+SUBPARTITION p0_2023 VALUES in (2023),
+SUBPARTITION p1_2022 VALUES in (2022)
+),
+PARTITION mediumdata VALUES LESS THAN (50) (
+SUBPARTITION p3_2023 VALUES in (2023),
+SUBPARTITION p4_2022 VALUES in (2022)
+));
+INSERT INTO t1 VALUES (1,2,2022);
+SELECT * FROM t1;
+id_col	smallint_col	year_col
+1	2	2022
+ALTER TABLE t1 REBUILD PARTITION ALL;
+SELECT * FROM t1;
+id_col	smallint_col	year_col
+1	2	2022
+DROP TABLE t1;
+#
+# BUG2023120200366
+#
+CREATE TABLE t1 (
+tinyint_col tinyint,
+int_col int
+) PARTITION BY LIST COLUMNS(tinyint_col)
+SUBPARTITION BY LIST COLUMNS(int_col)
+(PARTITION p1 VALUES IN (0)
+(SUBPARTITION p1sp0 VALUES IN (0)),
+PARTITION p2 VALUES IN (10)
+(SUBPARTITION p2sp0 VALUES IN (0)));
+explain SELECT int_col FROM t1 where int_col = 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where; Using pushed condition (`test`.`t1`.`int_col` = 0)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`int_col` AS `int_col` from `test`.`t1` where (`test`.`t1`.`int_col` = 0)
+SELECT int_col FROM t1 where int_col = 0;
+int_col
+explain SELECT int_col FROM t1 where int_col = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where; Using pushed condition (`test`.`t1`.`int_col` = 1)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`int_col` AS `int_col` from `test`.`t1` where (`test`.`t1`.`int_col` = 1)
+SELECT int_col FROM t1 where int_col = 1;
+int_col
+drop table t1;
+create table t1(id int, decimal_col decimal(20,2) NOT NULL)
+partition by range(CEILING(decimal_col))
+(partition p1 values less than(1));
+ERROR HY000: The PARTITION function returns the wrong type
+create table t1(id int, decimal_col decimal(20,2) NOT NULL, c2 int)
+partition by range(c2) subpartition by range(CEILING(decimal_col))
+(partition p1 values less than(1)
+(subpartition sp1 values less than(1)));
+ERROR HY000: The SUBPARTITION function returns the wrong type
+#
+# BUG2023120603314 mysqld crasded when opening table about extented partition tables if rds_extended_partitions_enabled disabled.
+#
+CREATE TABLE sales_hash_hash
+(
+dept_no     INT,
+part_no     INT,
+country     varchar(20),
+date        DATE,
+amount      INT
+)
+PARTITION BY HASH(month(date))
+SUBPARTITION BY HASH(TO_DAYS(date)) (
+PARTITION m0 (
+SUBPARTITION d0,
+SUBPARTITION d1
+),
+PARTITION m1 (
+SUBPARTITION d2,
+SUBPARTITION d3
+),
+PARTITION m2 (
+SUBPARTITION d4,
+SUBPARTITION d5
+)
+);
+insert into sales_hash_hash values(1,1,'af','2021-01-01',1);
+insert into sales_hash_hash values(1,1,'af','2021-02-01',1);
+insert into sales_hash_hash values(1,1,'af','2021-03-01',1);
+insert into sales_hash_hash values(1,1,'af','2021-04-01',1);
+insert into sales_hash_hash values(1,1,'af','2021-05-01',1);
+create table test1 like sales_hash_hash;
+alter table test1 remove partitioning;
+insert into test1 select * from sales_hash_hash;
+SET global rds_extended_partitions_enabled = OFF;
+select * from sales_hash_hash;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+insert into sales_hash_hash values(1,1,'af','2021-01-01',1);
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+update sales_hash_hash set dept_no = dept_no + 1;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+delete from sales_hash_hash where dept_no = 1;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+insert into test1 select * from sales_hash_hash;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+create table test2 like sales_hash_hash;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+create table test2 as select * from sales_hash_hash;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+CREATE TABLE test2 (
+id_col int NOT NULL,
+int_col int NOT NULL,
+char_col char(8) NOT NULL,
+varchar_col varchar(255) NOT NULL
+) PARTITION BY LIST (id_col % 4) SUBPARTITION BY LIST COLUMNS(char_col,int_col,varchar_col)
+(
+PARTITION p0 VALUES in (0)(
+SUBPARTITION sub0 VALUES in (('aa', 0, 'aa'),('ab', 100, 'ab'),('ab', 131, 'ab')),
+SUBPARTITION sub1 VALUES in (('aaa2', 2147483647, 'bbba2'))
+),
+PARTITION p1 VALUES in (1)(
+SUBPARTITION sub2 VALUES in (('aa', 1, 'aa'),('ab', 100, 'ab'),('ab', 131, 'ab')),
+SUBPARTITION sub3 VALUES in (('aaa2', 2147483647, 'bbba2'))
+),
+PARTITION p2 VALUES in (2)(
+SUBPARTITION sub4 VALUES in (('aa', 2, 'aa'),('ab', 100, 'ab'),('ab', 131, 'ab')),
+SUBPARTITION sub5 VALUES in (('aaa2', 2147483647, 'bbba2'))
+),
+PARTITION p3 VALUES in (3)(
+SUBPARTITION sub6 VALUES in (('aa', 3, 'aa'),('ab', 100, 'ab'),('ab', 131, 'ab')),
+SUBPARTITION sub7 VALUES in (('aaa2', 2147483647, 'bbba2'))
+)
+);
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+alter table test1 partition by hash(dept_no) subpartition by hash(part_no);
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+alter table test1 partition by hash(dept_no);
+show create table test1;
+Table	Create Table
+test1	CREATE TABLE `test1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`dept_no`) */
+select * from test1;
+dept_no	part_no	country	date	amount
+1	1	af	2021-03-01	1
+1	1	af	2021-01-01	1
+1	1	af	2021-04-01	1
+1	1	af	2021-05-01	1
+1	1	af	2021-02-01	1
+alter table test1 remove partitioning;
+show create table test1;
+Table	Create Table
+test1	CREATE TABLE `test1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+select * from test1;
+dept_no	part_no	country	date	amount
+1	1	af	2021-03-01	1
+1	1	af	2021-01-01	1
+1	1	af	2021-04-01	1
+1	1	af	2021-05-01	1
+1	1	af	2021-02-01	1
+set global rds_extended_partitions_enabled=ON;
+select * from sales_hash_hash;
+dept_no	part_no	country	date	amount
+1	1	af	2021-03-01	1
+1	1	af	2021-01-01	1
+1	1	af	2021-04-01	1
+1	1	af	2021-05-01	1
+1	1	af	2021-02-01	1
+select * from sales_hash_hash partition(m2);
+dept_no	part_no	country	date	amount
+1	1	af	2021-05-01	1
+1	1	af	2021-02-01	1
+set global rds_extended_partitions_enabled=OFF;
+alter table sales_hash_hash optimize partition m2;
+Table	Op	Msg_type	Msg_text
+test.sales_hash_hash	optimize	Error	It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+test.sales_hash_hash	optimize	status	Operation failed
+set global rds_extended_partitions_enabled=ON;
+select * from sales_hash_hash;
+dept_no	part_no	country	date	amount
+1	1	af	2021-03-01	1
+1	1	af	2021-01-01	1
+1	1	af	2021-04-01	1
+1	1	af	2021-05-01	1
+1	1	af	2021-02-01	1
+select * from sales_hash_hash partition(m2);
+dept_no	part_no	country	date	amount
+1	1	af	2021-05-01	1
+1	1	af	2021-02-01	1
+set global rds_extended_partitions_enabled=OFF;
+alter table sales_hash_hash analyze partition m2;
+Table	Op	Msg_type	Msg_text
+test.sales_hash_hash	analyze	Error	It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+test.sales_hash_hash	analyze	status	Operation failed
+set global rds_extended_partitions_enabled=ON;
+select * from sales_hash_hash;
+dept_no	part_no	country	date	amount
+1	1	af	2021-03-01	1
+1	1	af	2021-01-01	1
+1	1	af	2021-04-01	1
+1	1	af	2021-05-01	1
+1	1	af	2021-02-01	1
+select * from sales_hash_hash partition(m2);
+dept_no	part_no	country	date	amount
+1	1	af	2021-05-01	1
+1	1	af	2021-02-01	1
+set global rds_extended_partitions_enabled=OFF;
+alter table sales_hash_hash truncate partition m2;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+set global rds_extended_partitions_enabled=ON;
+select * from sales_hash_hash;
+dept_no	part_no	country	date	amount
+1	1	af	2021-03-01	1
+1	1	af	2021-01-01	1
+1	1	af	2021-04-01	1
+1	1	af	2021-05-01	1
+1	1	af	2021-02-01	1
+select * from sales_hash_hash partition(m2);
+dept_no	part_no	country	date	amount
+1	1	af	2021-05-01	1
+1	1	af	2021-02-01	1
+set global rds_extended_partitions_enabled=OFF;
+alter table sales_hash_hash remove partitioning;
+set global rds_extended_partitions_enabled=ON;
+select * from sales_hash_hash;
+dept_no	part_no	country	date	amount
+1	1	af	2021-03-01	1
+1	1	af	2021-01-01	1
+1	1	af	2021-04-01	1
+1	1	af	2021-05-01	1
+1	1	af	2021-02-01	1
+set global rds_extended_partitions_enabled=OFF;
+SET global rds_extended_partitions_enabled = ON;
+alter table sales_hash_hash PARTITION BY HASH(month(date))
+SUBPARTITION BY HASH(TO_DAYS(date)) (
+PARTITION m0 (
+SUBPARTITION d0,
+SUBPARTITION d1
+),
+PARTITION m1 (
+SUBPARTITION d2,
+SUBPARTITION d3
+),
+PARTITION m2 (
+SUBPARTITION d4,
+SUBPARTITION d5
+)
+);
+select * from sales_hash_hash;
+dept_no	part_no	country	date	amount
+1	1	af	2021-03-01	1
+1	1	af	2021-01-01	1
+1	1	af	2021-04-01	1
+1	1	af	2021-05-01	1
+1	1	af	2021-02-01	1
+SET global rds_extended_partitions_enabled = OFF;
+alter table sales_hash_hash add partition (partition m3 (
+SUBPARTITION d6,
+SUBPARTITION d7
+));
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+alter table sales_hash_hash rebuild partition all;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+alter table sales_hash_hash repair partition m1;
+Table	Op	Msg_type	Msg_text
+test.sales_hash_hash	repair	Error	It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+test.sales_hash_hash	repair	status	Operation failed
+alter table sales_hash_hash check partition m1;
+Table	Op	Msg_type	Msg_text
+test.sales_hash_hash	check	Error	It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+test.sales_hash_hash	check	status	Operation failed
+delete from test1;
+alter table sales_hash_hash exchange partition d2 with table test1;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+alter table sales_hash_hash reorganize partition m1,m2 into
+(
+partition m1 (
+SUBPARTITION d0,
+SUBPARTITION d1
+)
+);
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+alter table sales_hash_hash coalesce partition 2;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+alter table sales_hash_hash add column c1 int;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+alter table sales_hash_hash drop column id_col;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+alter table sales_hash_hash add key key_1(id_col);
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+SET global rds_extended_partitions_enabled = ON;
+alter table sales_hash_hash PARTITION BY list(dept_no) SUBPARTITION BY list(part_no) (
+PARTITION m0 values in (1,2) (
+SUBPARTITION d0 values in (1,2),
+SUBPARTITION d1 values in (3,4)
+),
+PARTITION m1 values in (3,4) (
+SUBPARTITION d2 values in (1,2),
+SUBPARTITION d3 values in (3,4)
+),
+PARTITION m2 values in (5, 6) (
+SUBPARTITION d4 values in (1,2),
+SUBPARTITION d5 values in (3,4)
+)
+);
+select * from sales_hash_hash;
+dept_no	part_no	country	date	amount
+1	1	af	2021-03-01	1
+1	1	af	2021-01-01	1
+1	1	af	2021-04-01	1
+1	1	af	2021-05-01	1
+1	1	af	2021-02-01	1
+SET global rds_extended_partitions_enabled = OFF;
+alter table sales_hash_hash drop partition m2;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+drop table sales_hash_hash;
+drop table test1;
+SET global rds_extended_partitions_enabled = ON;
+create table t1(id int, c1 int, c2 int) partition by hash(c1) subpartition by hash(c2);
+insert into t1 values(1,1,1),(2,2,2),(3,3,3),(4,4,4);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `id` int DEFAULT NULL,
+  `c1` int DEFAULT NULL,
+  `c2` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`c1`)
+SUBPARTITION BY HASH (`c2`) */
+# Kill the server
+# restart: --rds_extended_partitions_enabled=OFF
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `id` int DEFAULT NULL,
+  `c1` int DEFAULT NULL,
+  `c2` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`c1`)
+SUBPARTITION BY HASH (`c2`) */
+select * from t1;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+alter table t1 remove partitioning;
+select * from t1;
+id	c1	c2
+1	1	1
+2	2	2
+3	3	3
+4	4	4
+drop table t1;
+# BUG about partition prunning
+SET global rds_extended_partitions_enabled = ON;
+create table t1 (a int, b int, c int, d int)
+partition by list (a + b) subpartition by list (c + d)
+(
+partition p0 values in (1,4,5) (
+subpartition p0sp0 values in (1,5,6),
+subpartition p0sp1 values in (2,3)
+),
+partition p1 values in (2,3,7,8) (
+subpartition p1sp0 values in (1),
+subpartition p1sp1 values in (2,3,6,7,8)
+)
+);
+explain select * from t1 where a in (6,7) and b = 1 and c = 1 and d = 9;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`d` = 9) and (`test`.`t1`.`c` = 1) and (`test`.`t1`.`b` = 1))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c`,`test`.`t1`.`d` AS `d` from `test`.`t1` where ((`test`.`t1`.`d` = 9) and (`test`.`t1`.`c` = 1) and (`test`.`t1`.`b` = 1) and (`test`.`t1`.`a` in (6,7)))
+drop table t1;
+# BUG There is an error in processing NULL value of list type subpartition.
+SET global rds_extended_partitions_enabled = ON;
+create table t1(id int, a int) partition by list(id) subpartition by list(a) (
+partition p1 values in (1) (
+subpartition sp1 values in (1),
+subpartition sp2 values in (2)
+),
+partition p2 values in (2) (
+subpartition sp3 values in (1),
+subpartition sp4 values in (null)
+),
+partition p3 values in (3) (
+subpartition sp5 values in (2),
+subpartition sp6 values in (1)
+)
+);
+explain select * from t1 where a is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p2_sp4	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a` from `test`.`t1` where (`test`.`t1`.`a` is null)
+alter table t1 partition by list(id) subpartition by list(a) (
+partition p1 values in (1) (
+subpartition sp1 values in (null),
+subpartition sp2 values in (2)
+),
+partition p2 values in (2) (
+subpartition sp3 values in (1),
+subpartition sp4 values in (2)
+),
+partition p3 values in (3) (
+subpartition sp5 values in (2),
+subpartition sp6 values in (null)
+)
+);
+explain select * from t1 where a is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_sp1,p3_sp6	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a` from `test`.`t1` where (`test`.`t1`.`a` is null)
+drop table t1;
+# BUG : rds_extended_partitions_enabled = off bugs
+# 1.use database(rds_extended_partitions_enabled off)
+# 2.set rds_extended_partitions_enabled to on and execute query
+set global rds_extended_partitions_enabled = on;
+CREATE DATABASE test1;
+USE test1;
+show variables like 'rds_extended_partitions_enabled';
+Variable_name	Value
+rds_extended_partitions_enabled	ON
+create table tab_list_list_col (a int, b int)
+partition by list (a)
+subpartition by list columns(b) (
+partition p0 values in (0) (
+subpartition sub1 values in (1990),
+subpartition sub2 values in (1992)),
+partition p1 values in (1) (
+subpartition sub3 values in (2000),
+subpartition sub4 values in (2002)));
+create table tab_list_range_col (a int, b int)
+partition by list (a)
+subpartition by range columns(b) (
+partition p0 values in (0) (
+subpartition sub1 values less than (1991),
+subpartition sub2 values less than MAXVALUE),
+partition p1 values in (1) (
+subpartition sub3 values less than (2001),
+subpartition sub4 values less than MAXVALUE));
+insert into tab_list_list_col values (0,1990),(0,1992),(1,2000),(1,2002);
+select a from tab_list_list_col where b >1990;
+a
+0
+1
+1
+insert into tab_list_range_col values (0,1990),(0,1992),(1,2000),(1,2002);
+select a from tab_list_range_col where b >1990;
+a
+0
+1
+1
+set global rds_extended_partitions_enabled = off;
+USE test1;
+show variables like 'rds_extended_partitions_enabled';
+Variable_name	Value
+rds_extended_partitions_enabled	OFF
+select a from tab_list_list_col where b >1990;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+select a from tab_list_range_col where b >1990;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+set global rds_extended_partitions_enabled = on;
+show variables like 'rds_extended_partitions_enabled';
+Variable_name	Value
+rds_extended_partitions_enabled	ON
+select a from tab_list_list_col where b >1990;
+a
+0
+1
+1
+select a from tab_list_range_col where b >1990;
+a
+0
+1
+1
+drop table tab_list_list_col;
+drop table tab_list_range_col;
+# 1.use database(rds_extended_partitions_enabled on)
+# 2.set rds_extended_partitions_enabled to off and execute query
+USE test1;
+show variables like 'rds_extended_partitions_enabled';
+Variable_name	Value
+rds_extended_partitions_enabled	ON
+create table tab_list_list_col (a int, b int)
+partition by list (a)
+subpartition by list columns(b) (
+partition p0 values in (0) (
+subpartition sub1 values in (1990),
+subpartition sub2 values in (1992)),
+partition p1 values in (1) (
+subpartition sub3 values in (2000),
+subpartition sub4 values in (2002)));
+insert into tab_list_list_col values (0,1990),(0,1992),(1,2000),(1,2002);
+select a from tab_list_list_col where b >1990;
+a
+0
+1
+1
+set global rds_extended_partitions_enabled = off;
+show variables like 'rds_extended_partitions_enabled';
+Variable_name	Value
+rds_extended_partitions_enabled	OFF
+select a from tab_list_list_col where b >1990;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+create table tab_list_range_col (a int, b int)
+partition by list (a)
+subpartition by range columns(b) (
+partition p0 values in (0) (
+subpartition sub1 values less than (1991),
+subpartition sub2 values less than MAXVALUE),
+partition p1 values in (1) (
+subpartition sub3 values less than (2001),
+subpartition sub4 values less than MAXVALUE));
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+drop table tab_list_list_col;
+set global rds_extended_partitions_enabled = on;
+# 1.use database(rds_extended_partitions_enabled on)
+# 2.flush tables
+# 3.set rds_extended_partitions_enabled to off and execute query
+use test1;
+show variables like 'rds_extended_partitions_enabled';
+Variable_name	Value
+rds_extended_partitions_enabled	ON
+create table tab_list_list_col (a int, b int)
+partition by list (a)
+subpartition by list columns(b) (
+partition p0 values in (0) (
+subpartition sub1 values in (1990),
+subpartition sub2 values in (1992)),
+partition p1 values in (1) (
+subpartition sub3 values in (2000),
+subpartition sub4 values in (2002)));
+insert into tab_list_list_col values (0,1990),(0,1992),(1,2000),(1,2002);
+select a from tab_list_list_col where b >1990;
+a
+0
+1
+1
+flush tables;
+set global rds_extended_partitions_enabled = off;
+show variables like 'rds_extended_partitions_enabled';
+Variable_name	Value
+rds_extended_partitions_enabled	OFF
+select a from tab_list_list_col where b >1990;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+show tables;
+Tables_in_test1
+tab_list_list_col
+insert into tab_list_list_col values (0,1990);
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+drop table tab_list_list_col;
+create table tab_list_list_col (a int, b int)
+partition by list (a)
+subpartition by list columns(b) (
+partition p0 values in (0) (
+subpartition sub1 values in (1990),
+subpartition sub2 values in (1992)),
+partition p1 values in (1) (
+subpartition sub3 values in (2000),
+subpartition sub4 values in (2002)));
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+DROP DATABASE test1;
+#
+# BUG2026031944861 : subpartition typs is list or range and not define part_def and mysql will crashed.
+#
+use test;
+set global rds_extended_partitions_enabled = off;
+create table t1 (
+i_id     integer not null,
+i_name   varchar(24),
+i_price  decimal(5,2),
+i_data   varchar(50),
+i_im_id  integer
+)
+PARTITION BY HASH (i_id) SUBPARTITION BY RANGE (i_price) SUBPARTITIONS 3;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+create table t1 (
+i_id     integer not null,
+i_name   varchar(24),
+i_price  decimal(5,2),
+i_data   varchar(50),
+i_im_id  integer
+)
+PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3;
+ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+set global rds_extended_partitions_enabled = on;
+create table t1 (
+i_id     integer not null,
+i_name   varchar(24),
+i_price  decimal(5,2),
+i_data   varchar(50),
+i_im_id  integer
+)
+PARTITION BY HASH (i_id) SUBPARTITION BY RANGE (i_price) SUBPARTITIONS 3;
+ERROR HY000: For RANGE partitions each partition must be defined
+create table t1 (
+i_id     integer not null,
+i_name   varchar(24),
+i_price  decimal(5,2),
+i_data   varchar(50),
+i_im_id  integer
+)
+PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3;
+ERROR HY000: For LIST partitions each partition must be defined
+create table t1 (
+i_id     integer not null,
+i_name   varchar(24),
+i_price  decimal(5,2),
+i_data   varchar(50),
+i_im_id  integer
+)
+PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3 (
+partition p0,
+partition p1
+);
+ERROR HY000: For LIST partitions each partition must be defined
+set debug = "+d, no_partitions_for_range";
+create table t1 (
+i_id     integer not null,
+i_name   varchar(24),
+i_price  decimal(5,2),
+i_data   varchar(50),
+i_im_id  integer
+) partition by range (i_id) (
+partition p1 values less than (10),
+partition p2 values less than (20)
+);
+ERROR HY000: For RANGE partitions each partition must be defined
+create table t1 (
+i_id     integer not null,
+i_name   varchar(24),
+i_price  decimal(5,2),
+i_data   varchar(50),
+i_im_id  integer
+) partition by list (i_id) (
+partition p1 values in (1,2,3,4,5),
+partition p2 values in (6,7,8,9)
+);
+ERROR HY000: For LIST partitions each partition must be defined
+create table t3 (
+id int not null,
+store_id int not null
+) partition by hash (store_id) subpartition by range(id)
+(
+partition p0 (
+subpartition q1 values less than (4),
+subpartition q2 values less than (10)
+),
+partition p1 (
+subpartition q3 values less than (15),
+subpartition q4 values less than (20)
+)
+);
+ERROR HY000: For RANGE partitions each partition must be defined
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by hash (dept_no)
+subpartition by list (part_no)
+(
+partition p0 (
+subpartition p0partno0 values in (1, 2),
+subpartition p0partno1 values in (3, 4)
+),
+partition p1 (
+subpartition p1partno0 values in (1, 2),
+subpartition p1partno2 values in (3, 4)
+)
+);
+ERROR HY000: For LIST partitions each partition must be defined
+set debug = "";
+SET global rds_extended_partitions_enabled = default;

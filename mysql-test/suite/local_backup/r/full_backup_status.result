@@ -1,0 +1,121 @@
+call mtr.add_suppression("start full local backup fail");
+call mtr.add_suppression("failed to do full backup for dstore");
+call mtr.add_suppression("Cannot start local backup: change buffer is not disabled");
+call mtr.add_suppression("failed to do full backup for innodb");
+call mtr.add_suppression("full backup found binlog is not enabled");
+CREATE DATABASE db1;
+USE db1;
+CREATE TABLE t1(a int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+a
+1
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+Pattern ""checkResult": "Success"" found
+Pattern ""timePoint": 0" found
+Pattern ""lsnPoint": 0" found
+Pattern ""startRecoveryLsn": 0" found
+Pattern ""nonDstoreRunningStatus": "In progress"" found
+Pattern ""tablespaceRunningStatus": "In progress"" found
+Pattern ""walRunningStatus": "In progress"" found
+Pattern ""controlFileRunningStatus": "In progress"" found
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""checkResult": "Success"" found
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+SHOW STATUS LIKE 'Dstore_local_backup_full_backup_status';
+SET GLOBAL dstore_local_backup_progress_size_interval = 2097152;
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+call rds_backup.stop_full_local_backup();
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""checkResult": "Success"" found
+Pattern ""timePoint": -1" found
+Pattern ""lsnPoint": -1" found
+Pattern ""startRecoveryLsn": -1" found
+Pattern "RunningStatus": "Aborted"" found
+Pattern "ErrorMessage": "" found
+SHOW STATUS LIKE 'Dstore_local_backup_full_backup_status';
+SET GLOBAL dstore_local_backup_progress_size_interval = 20971520;
+SET GLOBAL innodb_change_buffering=all;
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""checkResult": "Success"" found
+Pattern ""nonDstoreRunningStatus": "Completed"" not found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+SET GLOBAL innodb_change_buffering=none;
+SHOW STATUS LIKE 'Dstore_local_backup_full_backup_status';
+call rds_backup.start_log_archive();
+INSERT INTO t1 VALUES(2);
+SELECT * FROM t1 order by a;
+a
+1
+2
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+Pattern ""checkResult": "Success"" found
+Pattern ""timePoint": 0" found
+Pattern ""lsnPoint": 0" found
+Pattern ""startRecoveryLsn": 0" found
+Pattern ""nonDstoreRunningStatus": "In progress"" found
+Pattern ""tablespaceRunningStatus": "In progress"" found
+Pattern ""walRunningStatus": "In progress"" found
+Pattern ""controlFileRunningStatus": "In progress"" found
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""checkResult": "Success"" found
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+SHOW STATUS LIKE 'Dstore_local_backup_full_backup_status';
+call rds_backup.stop_log_archive();
+SET GLOBAL dstore_local_backup_progress_size_interval = 2097152;
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+Pattern ""checkResult": "Success"" found
+Pattern ""timePoint": 0" found
+Pattern ""lsnPoint": 0" found
+Pattern ""startRecoveryLsn": 0" found
+Pattern ""nonDstoreRunningStatus": "In progress"" found
+Pattern ""tablespaceRunningStatus": "In progress"" found
+Pattern ""walRunningStatus": "In progress"" found
+Pattern ""controlFileRunningStatus": "In progress"" found
+SET GLOBAL dstore_local_backup_progress_size_interval = 20971520000;
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""checkResult": "Success"" found
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+SHOW STATUS LIKE 'Dstore_local_backup_full_backup_status';
+SET GLOBAL dstore_local_backup_progress_size_interval = 20971520;
+DROP DATABASE db1;

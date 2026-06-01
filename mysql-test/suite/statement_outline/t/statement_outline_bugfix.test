@@ -1,0 +1,82 @@
+--echo # BUG2025031918454
+# only rdsAdmin could update mysql.outline table.
+# for example "insert into mysql.outline", "update mysql.outline", "delete from mysql.outline"
+
+create user 'user1'@'%';
+CREATE user 'user2'@'%';
+grant all privileges on *.* to 'user2'@'%';
+
+connect(con_u1, localhost, user1,,);
+connect(con_u2, localhost, user2,,);
+connect(con_root,localhost, root,,);
+connect(conn_rdsAdmin, 127.0.0.1, rdsAdmin,,test);
+
+# common user could only use "dbms_outln.show_outline()"
+# and common user could not update mysql.outline.
+--echo connection user1
+connection con_u1;
+--error ER_OUTLINE_PRIVILEGE_REQUIRED
+call dbms_outln.add_optimizer_outline('','',1,'/*+MAX_EXECUTION_TIME(1000) */','select a from  t1  where a>6');
+call dbms_outln.show_outline();
+--error ER_TABLEACCESS_DENIED_ERROR
+insert into mysql.outline values (2,'testdb','test_digest','digest_test','OPTIMIZER','','N',2,'hint_text');
+--error ER_TABLEACCESS_DENIED_ERROR
+update mysql.outline set Schema_name = 'test_database' where id = 2;
+--error ER_TABLEACCESS_DENIED_ERROR
+delete from mysql.outline where id = 2;
+
+--echo connection user2
+connection con_u2;
+# rule 1
+call dbms_outln.add_optimizer_outline('','',1,'/*+MAX_EXECUTION_TIME(1000) */','select a from  t1  where a>6');
+call dbms_outln.show_outline();
+use mysql;
+--error ER_SIGNAL_EXCEPTION
+insert into mysql.outline values (2,'testdb','test_digest','digest_test','OPTIMIZER','','N',2,'hint_text');
+--error ER_SIGNAL_EXCEPTION
+update mysql.outline set Schema_name = 'test_database' where id = 1;
+--error ER_SIGNAL_EXCEPTION
+delete from mysql.outline where id = 1;
+call dbms_outln.del_outline(1);
+call dbms_outln.show_outline();
+
+--echo connection root
+connection con_root;
+# rule 2
+call dbms_outln.add_optimizer_outline('','',1,'/*+MAX_EXECUTION_TIME(1000) */','select a from  t1  where a>6');
+call dbms_outln.show_outline();
+use mysql;
+--error ER_SIGNAL_EXCEPTION
+insert into mysql.outline values (3,'testdb','test_digest','digest_test','OPTIMIZER','','N',2,'hint_text');
+--error ER_SIGNAL_EXCEPTION
+update mysql.outline set Schema_name = 'test_database' where id = 2;
+--error ER_SIGNAL_EXCEPTION
+delete from mysql.outline where id = 2;
+call dbms_outln.del_outline(2);
+call dbms_outln.show_outline();
+
+--echo connection rdsAdmin
+connection conn_rdsAdmin;
+select user();
+# rule 3
+call dbms_outln.add_optimizer_outline('','',1,'/*+MAX_EXECUTION_TIME(1000) */','select a from  t1  where a>6');
+call dbms_outln.show_outline();
+use mysql;
+# rule 4
+insert into mysql.outline values (4,'testdb','test_digest','digest_test','OPTIMIZER','','N',2,'hint_text');
+select * from mysql.outline;
+update mysql.outline set Schema_name = 'test_database' where id = 4;
+select * from mysql.outline;
+delete from mysql.outline where id = 4;
+select * from mysql.outline;
+call dbms_outln.del_outline(3);
+call dbms_outln.show_outline();
+
+connection default;
+drop user 'user1'@'%';
+drop user 'user2'@'%';
+
+disconnect con_u1;
+disconnect con_u2;
+disconnect con_root;
+disconnect conn_rdsAdmin;

@@ -1,0 +1,16 @@
+--source include/have_only_dstore.inc
+CALL mtr.add_suppression("insert dstore index tuple fail");
+CALL mtr.add_suppression("insert_index fail");
+
+# ER_STACK_OVERRUN_NEED_MORE does not currenly work well with TSan
+--source include/not_tsan.inc
+
+--source include/no_valgrind_without_big.inc
+# 
+# Run subquery_nomat_nosj.test with BKA enabled 
+#
+set optimizer_switch='batched_key_access=on,mrr_cost_based=off';
+
+--source suite/dstore_main/t/subquery_nomat_nosj-dstore.test
+
+set optimizer_switch=default;

@@ -1,0 +1,93 @@
+--source include/have_debug.inc
+#--source include/not_have_only_dstore.inc
+
+# Test for subpartition defination
+--error ER_PARSE_ERROR
+create table t1 (a int)
+partition by list (a) subpartition by hash (a)
+( partition p0 values in (1) (subpartition sp11),
+  partition p1 values in (2) );
+
+--error ER_PARSE_ERROR
+create table t1 (a int)
+partition by list (a) subpartition by hash (a) subpartitions 3
+( partition p0 values in (1) (subpartition sp11));
+
+--error ER_PARSE_ERROR
+create table t1 (a int)
+partition by list (a) subpartition by hash (a)
+( partition p0 values in (1) (subpartition sp11,subpartition sp12),
+  partition p0 values in (1) (subpartition sp21));
+
+--error ER_PARSE_ERROR
+create table t1 (a int)
+partition by list (a) subpartition by hash (a)
+( partition p0 values in (1) ,
+  partition p1 values in (2) (subpartition sp21,subpartition sp22));
+
+--error ER_PARSE_ERROR
+create table t1 (a int)
+partition by list (a) subpartition by hash (a) subpartitions 1
+( partition p0 values in (1) ,
+  partition p1 values in (2) (subpartition sp11));
+
+create table t1 (a int)
+partition by list (a) subpartition by hash (a)
+( partition p0 values in (1) (subpartition sp11,subpartition sp12));
+
+alter table t1 add partition (
+  partition p1 values in (2)
+);
+
+--error ER_MULTIPLE_DEF_CONST_IN_LIST_PART_ERROR
+alter table t1 reorganize partition p0 into (
+  partition p0 values in (1,2)
+);
+
+show create table t1;
+
+--error ER_PARSE_ERROR
+alter table t1 add partition (
+  partition p2 values in (3) (subpartition sp21,subpartition sp22),
+  partition p3 values in (4)
+);
+
+drop table t1;
+
+create table t1 (a int) partition by list (a) (
+  partition p0 values in (1)
+);
+
+--error ER_PARSE_ERROR
+alter table t1 add partition (
+  partition p2 values in (3) (subpartition sp21,subpartition sp22),
+  partition p3 values in (4)
+);
+
+drop table t1;
+
+set debug='+d,generate_partition_by_syntax_failed';
+--error ER_INTERNAL_ERROR
+create table t1 (a int) partition by list (a) (
+  partition p0 values in (1)
+);
+
+SET @saved_rds_extended_partitions_enabled=@@rds_extended_partitions_enabled;
+set global rds_extended_partitions_enabled = ON;
+--error ER_INTERNAL_ERROR
+create table t1 (a int, b int)
+partition by list (a) subpartition by list (a)
+( partition p0 values in (1) (subpartition sp01 values in (1)),
+  partition p1 values in (2) (subpartition sp11 values in (2)));
+set debug='';
+
+create table t1 (a int, b int)
+partition by list (a) subpartition by list (a)
+( partition p0 values in (1) (subpartition sp01 values in (1)),
+  partition p1 values in (2) (subpartition sp11 values in (2)));
+set debug='+d,generate_partition_by_syntax_failed';
+--error ER_INTERNAL_ERROR
+show create table t1;
+set debug='';
+drop table t1;
+set global rds_extended_partitions_enabled = @saved_rds_extended_partitions_enabled;

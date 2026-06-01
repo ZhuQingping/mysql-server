@@ -1,0 +1,262 @@
+From b42b72aba8535d530018e674ce0e8db081922cdd Mon Sep 17 00:00:00 2001
+From: Guilhem Bichot <guilhem.bichot@contributor>
+
+
+Date: Mon, 17 Nov 2025 19:05:44 +0100
+Subject: [PATCH] =?UTF-8?q?BUGFIX=20When=20100=20SQLsmith=20serv?=
+ =?UTF-8?q?ices=20are=20executed,=20mysqld=20crashes=EF=BC=9AJOIN::attach?=
+ =?UTF-8?q?=5Fjoin=5Fcondition=5Fto=5Fnest?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Bug in LEFT JOIN elimination ( FEATURE ).
+
+Consider
+SELECT t3.* FROM t1 LEFT JOIN t2 ON ... LEFT JOIN t3 ON COND;
+and we are eliminating t2. This implies that COND does not depend on
+t2.
+
+However, an artificial dependency "t3 depends on t2" may be declared
+by simplify_joins() (look for "If join condition contains no reference
+to outer tables" in such function), for example if COND is just a
+constant TRUE ; the goal being to ensure that t3 is read before t2.
+This dependency, if we leave it in place, can have bad consequences:
+the optimizer may think that t3 can never be read, because it's
+waiting for t2 to be read (according to the dependency), but t2 will
+not be read as it's eliminated; or if the optimizer rather ignores
+this dependency (because t2 is not part of JOIN_TABs), it may put t3
+before t1, preventing correct execution of "t1 LEFT JOIN t3". So we
+need to replace in t3->dep_tables the map of t2 with the map of t1.
+More generally: replace the map of the removed table with the map of
+the table right before the removed one.
+
+Without the code fix, the test crashed in sql_optimizer.cc,
+JOIN::make_outerjoin_info(): Assertion
+`outer_join_nest->nested_join->first_nested != NO_PLAN_IDX' failed.
+---
+ mysql-test/include/join_elimination.inc       | 38 ++++++++++++++
+ mysql-test/r/join_elimination.result          | 52 +++++++++++++++++++
+ .../r/join_elimination-dstore.result          | 52 +++++++++++++++++++
+ sql/sql_join_elimination.cc                   | 39 ++++++++++++++
+ 4 files changed, 181 insertions(+)
+
+diff --git a/mysql-test/include/join_elimination.inc b/mysql-test/include/join_elimination.inc
+index 7f6ea40f766..f325eb86cf4 100644
+--- a/mysql-test/include/join_elimination.inc
++++ b/mysql-test/include/join_elimination.inc
+@@ -982,3 +982,41 @@ eval $query;
+ DROP TABLE t3,t4;
+ 
+ DROP TABLE t1,t2;
++
++--echo # BUGFIX When 100 SQLsmith services are concurrently
++--echo # executed, mysqld crashes：JOIN::attach_join_condition_to_nest
++
++CREATE TABLE t1 (a INT);
++CREATE TABLE t2 LIKE t1;
++--echo # We need a few rows in t2 for the optimizer to pick a wrong order of tables
++--echo # (ref_15-ref_0-ref_5 without the code fix)
++INSERT INTO t2 VALUES(1);
++INSERT INTO t2 SELECT * FROM t2;
++INSERT INTO t2 SELECT * FROM t2;
++INSERT INTO t2 SELECT * FROM t2;
++INSERT INTO t2 SELECT * FROM t2;
++INSERT INTO t2 SELECT * FROM t2;
++ANALYZE TABLE t1,t2;
++
++let $query=
++SELECT DISTINCT  
++ref_0.*
++FROM
++t1 AS ref_15
++LEFT JOIN
++(
++     (t2 AS ref_5
++      LEFT JOIN t1 AS ref_6
++      ON TRUE)
++   
++     LEFT JOIN
++   
++     t1 AS ref_0
++     ON TRUE
++) 
++ON TRUE;
++eval EXPLAIN $query;
++eval $query;
++DROP TABLE t1,t2;
++
++
+diff --git a/mysql-test/r/join_elimination.result b/mysql-test/r/join_elimination.result
+index dd5f246b1ae..405f5cb92dc 100644
+--- a/mysql-test/r/join_elimination.result
++++ b/mysql-test/r/join_elimination.result
+@@ -2347,3 +2347,55 @@ INSERT INTO t3 VALUES((SELECT t4.a FROM t4 LEFT JOIN t4 AS t5 ON t4.a=t5.a ORDER
+ ERROR 23000: Column 'a' cannot be null
+ DROP TABLE t3,t4;
+ DROP TABLE t1,t2;
++# BUGFIX When 100 SQLsmith services are concurrently
++# executed, mysqld crashes：JOIN::attach_join_condition_to_nest
++CREATE TABLE t1 (a INT);
++CREATE TABLE t2 LIKE t1;
++# We need a few rows in t2 for the optimizer to pick a wrong order of tables
++# (ref_15-ref_0-ref_5 without the code fix)
++INSERT INTO t2 VALUES(1);
++INSERT INTO t2 SELECT * FROM t2;
++INSERT INTO t2 SELECT * FROM t2;
++INSERT INTO t2 SELECT * FROM t2;
++INSERT INTO t2 SELECT * FROM t2;
++INSERT INTO t2 SELECT * FROM t2;
++ANALYZE TABLE t1,t2;
++Table	Op	Msg_type	Msg_text
++test.t1	analyze	status	OK
++test.t2	analyze	status	OK
++EXPLAIN SELECT DISTINCT  
++ref_0.*
++FROM
++t1 AS ref_15
++LEFT JOIN
++(
++(t2 AS ref_5
++LEFT JOIN t1 AS ref_6
++ON TRUE)
++LEFT JOIN
++t1 AS ref_0
++ON TRUE
++) 
++ON TRUE;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	ref_15	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using temporary
++1	SIMPLE	ref_5	NULL	ALL	NULL	NULL	NULL	NULL	32	100.00	Using where; Using join buffer (hash join)
++1	SIMPLE	ref_0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (hash join)
++Warnings:
++Note	1003	/* select#1 */ select distinct `test`.`ref_0`.`a` AS `a` from `test`.`t1` `ref_15` left join (`test`.`t2` `ref_5` left join `test`.`t1` `ref_0` on(true)) on(true) where true
++SELECT DISTINCT  
++ref_0.*
++FROM
++t1 AS ref_15
++LEFT JOIN
++(
++(t2 AS ref_5
++LEFT JOIN t1 AS ref_6
++ON TRUE)
++LEFT JOIN
++t1 AS ref_0
++ON TRUE
++) 
++ON TRUE;
++a
++DROP TABLE t1,t2;
+diff --git a/mysql-test/suite/dstore_main/r/join_elimination-dstore.result b/mysql-test/suite/dstore_main/r/join_elimination-dstore.result
+index 82edb686c07..689700f814b 100644
+--- a/mysql-test/suite/dstore_main/r/join_elimination-dstore.result
++++ b/mysql-test/suite/dstore_main/r/join_elimination-dstore.result
+@@ -2347,3 +2347,55 @@ INSERT INTO t3 VALUES((SELECT t4.a FROM t4 LEFT JOIN t4 AS t5 ON t4.a=t5.a ORDER
+ ERROR 23000: Column 'a' cannot be null
+ DROP TABLE t3,t4;
+ DROP TABLE t1,t2;
++# BUGFIX When 100 SQLsmith services are concurrently
++# executed, mysqld crashes：JOIN::attach_join_condition_to_nest
++CREATE TABLE t1 (a INT);
++CREATE TABLE t2 LIKE t1;
++# We need a few rows in t2 for the optimizer to pick a wrong order of tables
++# (ref_15-ref_0-ref_5 without the code fix)
++INSERT INTO t2 VALUES(1);
++INSERT INTO t2 SELECT * FROM t2;
++INSERT INTO t2 SELECT * FROM t2;
++INSERT INTO t2 SELECT * FROM t2;
++INSERT INTO t2 SELECT * FROM t2;
++INSERT INTO t2 SELECT * FROM t2;
++ANALYZE TABLE t1,t2;
++Table	Op	Msg_type	Msg_text
++test.t1	analyze	status	OK
++test.t2	analyze	status	OK
++EXPLAIN SELECT DISTINCT  
++ref_0.*
++FROM
++t1 AS ref_15
++LEFT JOIN
++(
++(t2 AS ref_5
++LEFT JOIN t1 AS ref_6
++ON TRUE)
++LEFT JOIN
++t1 AS ref_0
++ON TRUE
++) 
++ON TRUE;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	ref_15	NULL	ALL	NULL	NULL	NULL	NULL	0	0.00	Using temporary
++1	SIMPLE	ref_5	NULL	ALL	NULL	NULL	NULL	NULL	32	100.00	Using where; Using join buffer (hash join)
++1	SIMPLE	ref_0	NULL	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where; Using join buffer (hash join)
++Warnings:
++Note	1003	/* select#1 */ select distinct `test`.`ref_0`.`a` AS `a` from `test`.`t1` `ref_15` left join (`test`.`t2` `ref_5` left join `test`.`t1` `ref_0` on(true)) on(true) where true
++SELECT DISTINCT  
++ref_0.*
++FROM
++t1 AS ref_15
++LEFT JOIN
++(
++(t2 AS ref_5
++LEFT JOIN t1 AS ref_6
++ON TRUE)
++LEFT JOIN
++t1 AS ref_0
++ON TRUE
++) 
++ON TRUE;
++a
++DROP TABLE t1,t2;
+diff --git a/sql/sql_join_elimination.cc b/sql/sql_join_elimination.cc
+index 997563be182..0cf6f316ea6 100644
+--- a/sql/sql_join_elimination.cc
++++ b/sql/sql_join_elimination.cc
+@@ -939,6 +939,45 @@ void Query_block::do_join_elimination_for_list(
+           ++sj_list_it;
+       }
+ 
++      if (li != tables->begin()) {
++        /* Remember that the 'tables' list is in reverse order of FROM. So we
++        come here if our current table is not the last table in the
++        order of FROM.
++
++        Consider
++        SELECT DISTINCT t3.*
++          FROM t1 LEFT JOIN t2 ON ... LEFT JOIN t3 ON COND;
++        and COND does not depend on t2 so we are eliminating t2.
++
++        However, an artificial dependency "t3 depends on t2" may be declared
++        by simplify_joins() (look for "If join condition contains no reference
++        to outer tables" in such function), for example if COND is just a
++        constant TRUE ; the goal being to ensure that t3 is read after t2.
++        This dependency, if we leave it in place, can have bad consequences:
++        the optimizer may think that t3 can never be read, because it's
++        waiting for t2 to be read (according to the dependency), but t2 will
++        not be read as it's eliminated; or if the optimizer rather ignores
++        this dependency (because t2 is not part of JOIN_TABs), it may put t3
++        before t1, preventing correct execution of "t1 LEFT JOIN t3". So we
++        need to replace in t3->dep_tables the map of t2 with the map of t1.
++        More generally: replace the map of the removed table with the map of
++        the table right before the removed one.
++
++        prev_table is the next table in the order of FROM. */
++        Table_ref *prev_table = *(li - 1);
++        if (prev_table->dep_tables & weak_tables) {
++          /* Yes there is a problematic reference, so replace the bits. Cannot
++          first in the order of FROM, as the removed table is on the right
++          side of a LEFT JOIN. */
++          assert(li != tables->end());
++          Table_ref *next_table = *(li + 1);
++          prev_table->dep_tables &= ~weak_tables;
++          prev_table->dep_tables |= (next_table->nested_join != nullptr)
++                                        ? next_table->nested_join->used_tables
++                                        : next_table->map();
++        }
++      }
++
+       /* Imagine we have
+       t1 LEFT JOIN t2 ON cond_with_subq,
+       and we are currently
+-- 
+2.23.0
+

@@ -1,0 +1,1154 @@
+#
+# Bug#22469130: FOREIGN KEY ON DELETE CASCADE NOT ALLOWED
+#               WHEN A VIRTUAL INDEX EXISTS.
+# UPDATE CASCADE
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL, fld2 INT AS (fld1) VIRTUAL NOT NULL, KEY(fld2),
+FOREIGN KEY(fld1) REFERENCES t1(fld1) ON UPDATE CASCADE);
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2 VALUES(1, DEFAULT);
+UPDATE t1 SET fld1= 2;
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld2	x	x	x	x	x
+SELECT fld2 FROM t2;
+fld2
+2
+EXPLAIN SELECT * FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	ALL	x	NULL	x	x	x	x	x
+SELECT * FROM t2;
+fld1	fld2
+2	2
+EXPLAIN SELECT fld1 FROM t2 WHERE fld2=2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	ref	x	fld2	x	x	x	x	x
+SELECT fld1 FROM t2 WHERE fld2=2;
+fld1
+2
+DROP TABLE t2, t1;
+# UPDATE SET NULL
+CREATE TABLE t1(fld1 INT NOT NULL, fld2 INT NOT NULL PRIMARY KEY,
+KEY(fld1));
+CREATE TABLE t2(fld1 INT, fld2 INT AS (fld1) VIRTUAL, KEY(fld2),
+FOREIGN KEY(fld1) REFERENCES t1(fld1) ON UPDATE SET NULL);
+INSERT INTO t1 VALUES(1, 2);
+INSERT INTO t2 VALUES(1, DEFAULT);
+UPDATE t1 SET fld1= 2;
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld2	x	x	x	x	x
+SELECT fld2 FROM t2;
+fld2
+NULL
+SELECT * FROM t2;
+fld1	fld2
+NULL	NULL
+DROP TABLE t2, t1;
+# DELETE CASCADE
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT, fld2 INT AS (fld1) VIRTUAL, KEY(fld2),
+FOREIGN KEY(fld1) REFERENCES t1(fld1) ON DELETE CASCADE);
+INSERT INTO t1 VALUES(1);
+INSERT INTO t1 VALUES(2);
+INSERT INTO t2 VALUES(1, DEFAULT);
+INSERT INTO t2 VALUES(2, DEFAULT);
+DELETE FROM t1 WHERE fld1= 1;
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld2	x	x	x	x	x
+SELECT fld2 FROM t2;
+fld2
+2
+SELECT * FROM t2;
+fld1	fld2
+2	2
+DROP TABLE t2, t1;
+# DELETE SET NULL
+CREATE TABLE t1(fld1 INT NOT NULL, fld2 INT NOT NULL PRIMARY KEY, KEY(fld1));
+CREATE TABLE t2(fld1 INT, fld2 INT AS (fld1) VIRTUAL, KEY(fld2),
+FOREIGN KEY(fld1) REFERENCES t1(fld1) ON DELETE SET NULL);
+INSERT INTO t1 VALUES(1, 1);
+INSERT INTO t1 VALUES(2, 2);
+INSERT INTO t2 VALUES(1, DEFAULT);
+INSERT INTO t2 VALUES(2, DEFAULT);
+DELETE FROM t1 WHERE fld1= 1;
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld2	x	x	x	x	x
+SELECT fld2 FROM t2;
+fld2
+2
+NULL
+SELECT * FROM t2;
+fld1	fld2
+2	2
+NULL	NULL
+DROP TABLE t2, t1;
+# VIRTUAL INDEX CONTAINS FK CONSTRAINT COLUMN
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL, fld2 INT, fld3 INT AS (fld2) VIRTUAL,
+KEY(fld3, fld1),
+FOREIGN KEY(fld1) REFERENCES t1(fld1) ON UPDATE CASCADE);
+INSERT INTO t1(fld1) VALUES(1);
+INSERT INTO t2(fld1, fld2) VALUES(1, 3);
+UPDATE t1 SET fld1= 2;
+SELECT fld3, fld1 FROM t2;
+fld3	fld1
+3	2
+EXPLAIN SELECT fld3, fld1 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld3	x	x	x	x	x
+SELECT * FROM t2;
+fld1	fld2	fld3
+2	3	3
+DROP TABLE t2, t1;
+# Multiple level of VIRTUAL columns.
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL, fld2 INT AS (fld1) VIRTUAL,
+fld3 INT AS (fld2) VIRTUAL, KEY(fld3), KEY(fld2),
+FOREIGN KEY(fld1) REFERENCES t1(fld1) ON UPDATE CASCADE);
+INSERT INTO t1(fld1) VALUES(1);
+INSERT INTO t2(fld1) VALUES(1);
+UPDATE t1 SET fld1= 2;
+SELECT fld2 FROM t2;
+fld2
+2
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld2	x	x	x	x	x
+SELECT fld3 FROM t2;
+fld3
+2
+EXPLAIN SELECT fld3 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld3	x	x	x	x	x
+SELECT * FROM t2;
+fld1	fld2	fld3
+2	2	2
+DROP TABLE t2, t1;
+# Drop the VIRTUAL INDEX using alter copy ALGORITHM
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL, fld2 INT AS (fld1) VIRTUAL, KEY vk(fld2),
+KEY(fld1), FOREIGN KEY(fld1) REFERENCES t1(fld1)
+ON UPDATE CASCADE);
+INSERT INTO t1(fld1) VALUES(1);
+INSERT INTO t2(fld1) VALUES(1);
+UPDATE t1 SET fld1= 2;
+SELECT fld2, fld1 FROM t2;
+fld2	fld1
+2	2
+EXPLAIN SELECT fld2, fld1 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	ALL	x	NULL	x	x	x	x	x
+ALTER TABLE t2 DROP INDEX vk, ALGORITHM= COPY;
+UPDATE t1 SET fld1= 3;
+SELECT fld2, fld1 FROM t2;
+fld2	fld1
+3	3
+EXPLAIN SELECT fld2, fld1 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	ALL	x	NULL	x	x	x	x	x
+DROP TABLE t2, t1;
+# Drop the VIRTUAL INDEX using COPY alter ALGORITHM
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL, fld2 INT AS (fld1) VIRTUAL,
+KEY vk(fld2), KEY(fld1), FOREIGN KEY(fld1) REFERENCES t1(fld1)
+ON UPDATE CASCADE);
+INSERT INTO t1(fld1) VALUES(1);
+INSERT INTO t2(fld1) VALUES(1);
+UPDATE t1 SET fld1= 2;
+SELECT fld2, fld1 FROM t2;
+fld2	fld1
+2	2
+EXPLAIN SELECT fld2, fld1 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	ALL	x	NULL	x	x	x	x	x
+ALTER TABLE t2 DROP INDEX vk, ALGORITHM= COPY;
+UPDATE t1 SET fld1= 3;
+SELECT fld2, fld1 FROM t2;
+fld2	fld1
+3	3
+EXPLAIN SELECT fld2, fld1 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	ALL	x	NULL	x	x	x	x	x
+DROP TABLE t2, t1;
+# Add the VIRTUAL INDEX using COPY alter ALGORITHM
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL, fld2 INT AS (fld1) VIRTUAL,
+KEY(fld1), FOREIGN KEY(fld1) REFERENCES t1(fld1)
+ON UPDATE CASCADE);
+INSERT INTO t1(fld1) VALUES(1);
+INSERT INTO t2(fld1) VALUES(1);
+UPDATE t1 SET fld1= 2;
+SELECT fld2, fld1 FROM t2;
+fld2	fld1
+2	2
+ALTER TABLE t2 ADD INDEX vk(fld2), ALGORITHM= COPY;
+UPDATE t1 SET fld1= 3;
+SELECT fld2, fld1 FROM t2;
+fld2	fld1
+3	3
+EXPLAIN SELECT fld2, fld1 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	ALL	x	NULL	x	x	x	x	x
+DROP TABLE t2, t1;
+# Add the VIRTUAL INDEX using COPY alter ALGORITHM
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL,fld2 INT AS (fld1) VIRTUAL,
+KEY(fld1), FOREIGN KEY(fld1) REFERENCES t1(fld1)
+ON UPDATE CASCADE);
+INSERT INTO t1(fld1) VALUES(1);
+INSERT INTO t2(fld1) VALUES(1);
+UPDATE t1 SET fld1= 2;
+SELECT fld2, fld1 FROM t2;
+fld2	fld1
+2	2
+ALTER TABLE t2 ADD INDEX vk(fld2), ALGORITHM= COPY;
+UPDATE t1 SET fld1= 3;
+SELECT fld2, fld1 FROM t2;
+fld2	fld1
+3	3
+EXPLAIN SELECT fld2, fld1 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	ALL	x	NULL	x	x	x	x	x
+DROP TABLE t2, t1;
+# Drop the VIRTUAL INDEX contains fk constraint column
+# using alter copy ALGORITHM
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL, fld2 INT NOT NULL,
+fld3 INT AS (fld2) VIRTUAL, KEY vk(fld3, fld1),
+KEY(fld1), FOREIGN KEY(fld1) REFERENCES t1(fld1)
+ON UPDATE CASCADE);
+INSERT INTO t1(fld1) VALUES(1);
+INSERT INTO t2(fld1, fld2) VALUES(1, 2);
+UPDATE t1 SET fld1= 2;
+EXPLAIN SELECT fld3, fld1 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	vk	x	x	x	x	x
+SELECT fld3, fld1 FROM t2;
+fld3	fld1
+2	2
+ALTER TABLE t2 DROP INDEX vk, ALGORITHM= COPY;
+UPDATE t1 SET fld1= 3;
+SELECT fld3, fld1 FROM t2;
+fld3	fld1
+2	3
+EXPLAIN SELECT fld3, fld1 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	ALL	x	NULL	x	x	x	x	x
+DROP TABLE t2, t1;
+# Drop the VIRTUAL INDEX which contains fk constraint column
+# using COPY alter operation
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL, fld2 INT NOT NULL,
+fld3 INT AS (fld2) VIRTUAL, KEY vk(fld3, fld1),
+KEY(fld1), FOREIGN KEY(fld1) REFERENCES t1(fld1)
+ON UPDATE CASCADE);
+INSERT INTO t1(fld1) VALUES(1);
+INSERT INTO t2(fld1, fld2) VALUES(1, 2);
+UPDATE t1 SET fld1= 2;
+EXPLAIN SELECT fld3, fld1 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	vk	x	x	x	x	x
+SELECT fld3, fld1 FROM t2;
+fld3	fld1
+2	2
+alter TABLE t2 DROP INDEX vk, ALGORITHM= COPY;
+UPDATE t1 SET fld1= 3;
+SELECT fld3, fld1 FROM t2;
+fld3	fld1
+2	3
+EXPLAIN SELECT fld3, fld1 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	ALL	x	NULL	x	x	x	x	x
+DROP TABLE t2, t1;
+# Add the VIRTUAL INDEX contains fk constraint column
+# using copy alter operatiON
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL, fld2 INT NOT NULL,
+fld3 INT AS (fld2) VIRTUAL, KEY(fld1),
+FOREIGN KEY(fld1) REFERENCES t1(fld1) ON UPDATE CASCADE);
+INSERT INTO t1(fld1) VALUES(1);
+INSERT INTO t2(fld1, fld2) VALUES(1, 2);
+UPDATE t1 SET fld1= 2;
+SELECT fld3, fld1 FROM t2;
+fld3	fld1
+2	2
+alter TABLE t2 ADD INDEX vk(fld3, fld1), ALGORITHM= COPY;
+UPDATE t1 SET fld1= 3;
+SELECT fld3, fld1 FROM t2;
+fld3	fld1
+2	3
+EXPLAIN SELECT fld3, fld1 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	vk	x	x	x	x	x
+DROP TABLE t2, t1;
+# Cascading UPDATEs and DELETEs for the multiple
+# fk dependent TABLEs
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL, fld2 INT AS (fld1) VIRTUAL,
+KEY(fld1), KEY(fld2, fld1),
+FOREIGN KEY(fld1) REFERENCES t1(fld1) ON UPDATE CASCADE);
+CREATE TABLE t3(fld1 INT NOT NULL, fld2 INT AS (fld1) VIRTUAL,
+KEY(fld2, fld1),
+FOREIGN KEY(fld1) REFERENCES t2(fld1) ON UPDATE CASCADE);
+INSERT INTO t1 VALUES(1), (2);
+INSERT INTO t2(fld1) VALUES(1), (2);
+INSERT INTO t3(fld1) VALUES(1), (2);
+UPDATE t1 SET fld1= 4 WHERE fld1= 1;
+EXPLAIN SELECT fld2, fld1 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld2	x	x	x	x	x
+SELECT fld2, fld1 FROM t2;
+fld2	fld1
+2	2
+4	4
+EXPLAIN SELECT fld2, fld1 FROM t3;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t3	x	index	x	fld2	x	x	x	x	x
+SELECT fld2, fld1 FROM t3;
+fld2	fld1
+2	2
+4	4
+DROP TABLE t3, t2, t1;
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL, fld2 INT NOT NULL,
+fld3 INT AS (fld2) VIRTUAL, KEY(fld3, fld1), KEY(fld1),
+FOREIGN KEY(fld1) REFERENCES t1(fld1) ON UPDATE CASCADE);
+CREATE TABLE t3(fld1 INT NOT NULL, fld2 INT NOT NULL,
+fld3 INT AS (fld2) VIRTUAL, KEY(fld3, fld1),
+FOREIGN KEY(fld1) REFERENCES t2(fld1) ON UPDATE CASCADE);
+INSERT INTO t1 VALUES(1), (2);
+INSERT INTO t2 VALUES(1, 1, DEFAULT), (2, 2, default);
+INSERT INTO t3 VALUES(1, 1, DEFAULT), (2, 2, default);
+UPDATE t1 SET fld1= 4 WHERE fld1= 1;
+EXPLAIN SELECT fld3, fld1 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld3	x	x	x	x	x
+SELECT fld3, fld1 FROM t2;
+fld3	fld1
+1	4
+2	2
+EXPLAIN SELECT fld3, fld1 FROM t3;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t3	x	index	x	fld3	x	x	x	x	x
+SELECT fld3, fld1 FROM t3;
+fld3	fld1
+1	4
+2	2
+DROP TABLE t3, t2, t1;
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL, fld2 INT AS (fld1) VIRTUAL,
+KEY(fld1), KEY(fld2, fld1),
+FOREIGN KEY(fld1) REFERENCES t1(fld1) ON DELETE CASCADE);
+CREATE TABLE t3(fld1 INT NOT NULL, fld2 INT AS (fld1) VIRTUAL,
+KEY(fld2, fld1), FOREIGN KEY(fld1) REFERENCES t2(fld1)
+ON DELETE CASCADE);
+INSERT INTO t1 VALUES(1), (2);
+INSERT INTO t2(fld1) VALUES(1), (2);
+INSERT INTO t3(fld1) VALUES(1), (2);
+DELETE FROM t1 WHERE fld1= 1;
+EXPLAIN SELECT fld2, fld1 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld2	x	x	x	x	x
+SELECT fld2, fld1 FROM t2;
+fld2	fld1
+2	2
+EXPLAIN SELECT fld2, fld1 FROM t3;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t3	x	index	x	fld2	x	x	x	x	x
+SELECT fld2, fld1 FROM t3;
+fld2	fld1
+2	2
+DROP TABLE t3, t2, t1;
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL, fld2 INT NOT NULL,
+fld3 INT AS (fld2) VIRTUAL,
+KEY(fld3, fld1), KEY(fld1),
+FOREIGN KEY(fld1) REFERENCES t1(fld1)
+ON DELETE CASCADE);
+CREATE TABLE t3(fld1 INT NOT NULL, fld2 INT NOT NULL,
+fld3 INT AS (fld2) VIRTUAL, KEY(fld3, fld1),
+FOREIGN KEY(fld1) REFERENCES t2(fld1)
+ON DELETE CASCADE);
+INSERT INTO t1 VALUES(1), (2);
+INSERT INTO t2 VALUES(1, 1, DEFAULT), (2, 2, default);
+INSERT INTO t3 VALUES(1, 1, DEFAULT), (2, 2, default);
+DELETE FROM t1 WHERE fld1= 1;
+EXPLAIN SELECT fld3, fld1 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld3	x	x	x	x	x
+SELECT fld3, fld1 FROM t2;
+fld3	fld1
+2	2
+EXPLAIN SELECT fld3, fld1 FROM t3;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t3	x	index	x	fld3	x	x	x	x	x
+SELECT fld3, fld1 FROM t3;
+fld3	fld1
+2	2
+DROP TABLE t3, t2, t1;
+# RENAME TABLE
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL,
+fld2 INT AS (fld1) VIRTUAL,
+KEY(fld2, fld1),
+FOREIGN KEY(fld1) REFERENCES t1(fld1)
+ON DELETE CASCADE);
+INSERT INTO t1 VALUES(1), (2);
+INSERT INTO t2 VALUES(1, DEFAULT), (2, default);
+RENAME TABLE t2 to t3;
+DELETE FROM t1 WHERE fld1= 1;
+EXPLAIN SELECT fld2, fld1 FROM t3;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t3	x	index	x	fld2	x	x	x	x	x
+SELECT fld2, fld1 FROM t3;
+fld2	fld1
+2	2
+DROP TABLE t3, t1;
+# FOREIGN_KEY_CHECKS disabled DURING COPY ALTER
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL,
+fld2 INT AS (fld1) VIRTUAL,
+FOREIGN KEY(fld1) REFERENCES t1(fld1)
+ON UPDATE CASCADE);
+INSERT INTO t1 VALUES(1), (2);
+INSERT INTO t2 VALUES(1, DEFAULT), (2, default);
+SET foreign_key_checks = 0;
+ALTER TABLE t2 ADD INDEX vk(fld2), ALGORITHM=COPY;
+SET foreign_key_checks = 1;
+UPDATE t1 SET fld1= 3 WHERE fld1= 2;
+SELECT fld2 FROM t2;
+fld2
+1
+3
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	vk	x	x	x	x	x
+DROP TABLE t2, t1;
+# GENERATED COLUMN COMPUTATION FAILS when SQL_MODE
+# is set to ERROR_FOR_DIVISION_BY_ZERO
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL,
+fld2 INT AS (100/fld1) VIRTUAL,
+KEY(fld2),
+FOREIGN KEY(fld1) REFERENCES t1(fld1)
+ON UPDATE CASCADE);
+INSERT INTO t1 VALUES(1), (2);
+INSERT INTO t2 VALUES(1, DEFAULT), (2, default);
+UPDATE t1 SET fld1= 0 WHERE fld1= 2;
+ERROR 22012: Division by 0
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld2	x	x	x	x	x
+SELECT fld2 FROM t2;
+fld2
+100
+50
+DROP TABLE t2, t1;
+# CHANGE SQL_MODE and try the ERROR_FOR_DIVISION_BY_ZERO
+SET sql_mode = STRICT_ALL_TABLES;
+Warnings:
+Warning	3135	'NO_ZERO_DATE', 'NO_ZERO_IN_DATE' and 'ERROR_FOR_DIVISION_BY_ZERO' sql modes should be used with strict mode. They will be merged with strict mode in a future release.
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL,
+fld2 INT AS (100/fld1) VIRTUAL,
+KEY(fld2),
+FOREIGN KEY(fld1) REFERENCES t1(fld1)
+ON UPDATE CASCADE);
+INSERT INTO t1 VALUES(1), (2);
+INSERT INTO t2 VALUES(1, DEFAULT), (2, default);
+UPDATE t1 SET fld1= 0 WHERE fld1= 2;
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld2	x	x	x	x	x
+SELECT fld2 FROM t2;
+fld2
+100
+NULL
+SELECT * FROM t2;
+fld1	fld2
+1	100
+0	NULL
+DROP TABLE t2, t1;
+SET sql_mode = default;
+# ADD FOREIGN CONSTRAINT USING COPY
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL,
+fld2 INT AS (fld1) VIRTUAL, KEY(fld2));
+ALTER TABLE t2 ADD FOREIGN KEY (fld1)
+REFERENCES t1(fld1) ON UPDATE CASCADE,
+ALGORITHM=copy;
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2 VALUES(1, DEFAULT);
+UPDATE t1 SET fld1= 2;
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld2	x	x	x	x	x
+SELECT fld2 FROM t2;
+fld2
+2
+SELECT * FROM t2;
+fld1	fld2
+2	2
+DROP TABLE t2, t1;
+# ADD FOREIGN CONSTRAINT USING COPY
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL,
+fld2 INT AS (fld1) VIRTUAL, KEY(fld2));
+SET foreign_key_checks = 0;
+ALTER TABLE t2 ADD FOREIGN KEY (fld1)
+REFERENCES t1(fld1) ON UPDATE CASCADE,
+ALGORITHM=COPY;
+SET foreign_key_checks = 1;
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2 VALUES(1, DEFAULT);
+UPDATE t1 SET fld1= 2;
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld2	x	x	x	x	x
+SELECT fld2 FROM t2;
+fld2
+2
+SELECT * FROM t2;
+fld1	fld2
+2	2
+DROP TABLE t2, t1;
+# DROP FOREIGN CONSTRAINT USING COPY
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL,
+fld2 INT AS (fld1) VIRTUAL, KEY(fld2),
+CONSTRAINT fidx FOREIGN KEY (fld1) REFERENCES t1(fld1)
+ON UPDATE CASCADE);
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2 VALUES(1, DEFAULT);
+ALTER TABLE t2 DROP FOREIGN KEY fidx, ALGORITHM=COPY;
+UPDATE t1 SET fld1= 2;
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld2	x	x	x	x	x
+SELECT fld2 FROM t2;
+fld2
+1
+SELECT * FROM t2;
+fld1	fld2
+1	1
+DROP TABLE t2, t1;
+# DROP FOREIGN CONSTRAINT USING COPY
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL,
+fld2 INT AS (fld1) VIRTUAL, KEY(fld2),
+CONSTRAINT fidx FOREIGN KEY (fld1) REFERENCES t1(fld1)
+ON UPDATE CASCADE);
+SET foreign_key_checks = 0;
+ALTER TABLE t2 DROP FOREIGN KEY fidx, ALGORITHM=COPY;
+SET foreign_key_checks = 1;
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2 VALUES(1, DEFAULT);
+UPDATE t1 SET fld1= 2;
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld2	x	x	x	x	x
+SELECT fld2 FROM t2;
+fld2
+1
+SELECT * FROM t2;
+fld1	fld2
+1	1
+DROP TABLE t2, t1;
+# ADD VC INDEX and ADD FK IN SAME COPY ALTER
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL,
+fld2 INT AS (fld1) VIRTUAL);
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2 VALUES(1, DEFAULT);
+ALTER TABLE t2 ADD INDEX(fld2), ADD FOREIGN KEY (fld1) REFERENCES t1(fld1)
+ON UPDATE CASCADE, ALGORITHM=copy;
+UPDATE t1 SET fld1= 2;
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld2	x	x	x	x	x
+SELECT fld2 FROM t2;
+fld2
+2
+SELECT * FROM t2;
+fld1	fld2
+2	2
+DROP TABLE t2, t1;
+# ADD VC INDEX and ADD FK IN SAME COPY ALTER
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL,
+fld2 INT AS (fld1) VIRTUAL);
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2 VALUES(1, DEFAULT);
+SET foreign_key_checks = 0;
+ALTER TABLE t2 ADD INDEX(fld2), ADD FOREIGN KEY (fld1) REFERENCES t1(fld1)
+ON UPDATE CASCADE, ALGORITHM=COPY;
+SET foreign_key_checks = 1;
+UPDATE t1 SET fld1= 2;
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld2	x	x	x	x	x
+SELECT fld2 FROM t2;
+fld2
+2
+SELECT * FROM t2;
+fld1	fld2
+2	2
+DROP TABLE t2, t1;
+# ADD VC INDEX and DROP FK IN SAME COPY ALTER
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL,
+fld2 INT AS (fld1) VIRTUAL,
+CONSTRAINT fidx FOREIGN KEY(fld1) REFERENCES t1(fld1)
+ON UPDATE CASCADE);
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2 VALUES(1, DEFAULT);
+ALTER TABLE t2 ADD INDEX(fld2), DROP FOREIGN KEY fidx, ALGORITHM=copy;
+UPDATE t1 SET fld1= 2;
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld2	x	x	x	x	x
+SELECT fld2 FROM t2;
+fld2
+1
+SELECT * FROM t2;
+fld1	fld2
+1	1
+DROP TABLE t2, t1;
+# ADD VC INDEX and DROP FK IN SAME COPY ALTER
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL,
+fld2 INT AS (fld1) VIRTUAL,
+CONSTRAINT fidx FOREIGN KEY(fld1) REFERENCES t1(fld1)
+ON UPDATE CASCADE);
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2 VALUES(1, DEFAULT);
+SET foreign_key_checks = 0;
+ALTER TABLE t2 ADD INDEX(fld2), DROP FOREIGN KEY fidx, ALGORITHM=COPY;
+SET foreign_key_checks = 1;
+UPDATE t1 SET fld1= 2;
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	index	x	fld2	x	x	x	x	x
+SELECT fld2 FROM t2;
+fld2
+1
+SELECT * FROM t2;
+fld1	fld2
+1	1
+DROP TABLE t2, t1;
+# DROP VC INDEX and ADD FK IN SAME COPY ALTER
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL,
+fld2 INT AS (fld1) VIRTUAL,
+KEY idx(fld2));
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2 VALUES(1, DEFAULT);
+ALTER TABLE t2 DROP INDEX idx, ADD FOREIGN KEY (fld1) REFERENCES t1(fld1)
+ON UPDATE CASCADE, ALGORITHM=COPY;
+UPDATE t1 SET fld1= 2;
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	ALL	x	NULL	x	x	x	x	x
+SELECT fld2 FROM t2;
+fld2
+2
+SELECT * FROM t2;
+fld1	fld2
+2	2
+DROP TABLE t2, t1;
+# DROP VC INDEX and ADD FK IN SAME COPY ALTER
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL,
+fld2 INT AS (fld1) VIRTUAL,
+KEY idx(fld2));
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2 VALUES(1, DEFAULT);
+SET foreign_key_checks = 0;
+ALTER TABLE t2 DROP INDEX idx, ADD FOREIGN KEY (fld1) REFERENCES t1(fld1)
+ON UPDATE CASCADE, ALGORITHM=COPY;
+SET foreign_key_checks = 1;
+UPDATE t1 SET fld1= 2;
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	ALL	x	NULL	x	x	x	x	x
+SELECT fld2 FROM t2;
+fld2
+2
+SELECT * FROM t2;
+fld1	fld2
+2	2
+DROP TABLE t2, t1;
+# DROP VC INDEX and DROP FK IN SAME COPY ALTER
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL,
+fld2 INT AS (fld1) VIRTUAL,
+KEY idx(fld2),
+CONSTRAINT fidx FOREIGN KEY(fld1) REFERENCES t1(fld1)
+ON UPDATE CASCADE);
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2 VALUES(1, DEFAULT);
+ALTER TABLE t2 DROP KEY idx, DROP FOREIGN KEY fidx, ALGORITHM=COPY;
+UPDATE t1 SET fld1= 2;
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	ALL	x	NULL	x	x	x	x	x
+SELECT fld2 FROM t2;
+fld2
+1
+SELECT * FROM t2;
+fld1	fld2
+1	1
+DROP TABLE t2, t1;
+# DROP VC INDEX and DROP FK IN SAME COPY ALTER
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL,
+fld2 INT AS (fld1) VIRTUAL,
+KEY idx(fld2),
+CONSTRAINT fidx FOREIGN KEY(fld1) REFERENCES t1(fld1)
+ON UPDATE CASCADE);
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2 VALUES(1, DEFAULT);
+SET foreign_key_checks = 0;
+ALTER TABLE t2 DROP KEY idx, DROP FOREIGN KEY fidx, ALGORITHM=COPY;
+SET foreign_key_checks = 1;
+UPDATE t1 SET fld1= 2;
+EXPLAIN SELECT fld2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+x	x	t2	x	ALL	x	NULL	x	x	x	x	x
+SELECT fld2 FROM t2;
+fld2
+1
+SELECT * FROM t2;
+fld1	fld2
+1	1
+DROP TABLE t2, t1;
+CREATE TABLE t1 (f1 INT NOT NULL PRIMARY KEY)ENGINE=DSTORE;
+CREATE TABLE t2 (f1 INT NOT NULL, f2 INT AS (f1) VIRTUAL,
+KEY (f1, f2), FOREIGN KEY(f1) REFERENCES t1(f1))ENGINE=DSTORE;
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2(f1) VALUES(1);
+EXPLAIN SELECT f1, f2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	index	NULL	f1	9	NULL	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`f1` AS `f1`,`test`.`t2`.`f2` AS `f2` from `test`.`t2`
+SELECT f1, f2 FROM t2;
+f1	f2
+1	1
+INSERT INTO t2(f1) VALUES(2);
+ERROR 23000: Cannot add or update a child row: a foreign key constraint fails (`test`.`t2`, CONSTRAINT `t2_fk_1` FOREIGN KEY (`f1`) REFERENCES `t1` (`f1`))
+DROP TABLE t2, t1;
+CREATE TABLE t1 (f1 INT NOT NULL PRIMARY KEY)ENGINE=DSTORE;
+CREATE TABLE t2 (f1 INT NOT NULL, f2 INT AS (f1) VIRTUAL,
+KEY (f1, f2), FOREIGN KEY(f1) REFERENCES t1(f1)
+ON UPDATE CASCADE)ENGINE=DSTORE;
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2(f1) VALUES(1);
+EXPLAIN SELECT f1, f2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	index	NULL	f1	9	NULL	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`f1` AS `f1`,`test`.`t2`.`f2` AS `f2` from `test`.`t2`
+SELECT f1, f2 FROM t2;
+f1	f2
+1	1
+UPDATE t1 SET f1 = 2 WHERE f1 = 1;
+EXPLAIN SELECT f1, f2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	index	NULL	f1	9	NULL	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`f1` AS `f1`,`test`.`t2`.`f2` AS `f2` from `test`.`t2`
+SELECT f1, f2 FROM t2;
+f1	f2
+2	2
+DROP TABLE t2, t1;
+CREATE TABLE t1 (f1 INT NOT NULL PRIMARY KEY)ENGINE=DSTORE;
+CREATE TABLE t2 (f1 INT NOT NULL, f2 INT AS (f1) VIRTUAL,
+KEY (f1, f2))ENGINE=DSTORE;
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2(f1) VALUES(1);
+SET FOREIGN_KEY_CHECKS = 0;
+ALTER TABLE t2 ADD FOREIGN KEY (f1) REFERENCES t1(f1)
+ON UPDATE CASCADE, ALGORITHM=COPY;
+SET FOREIGN_KEY_CHECKS = 1;
+UPDATE t1 SET f1 = 3;
+EXPLAIN SELECT f1, f2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	index	NULL	f1	9	NULL	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`f1` AS `f1`,`test`.`t2`.`f2` AS `f2` from `test`.`t2`
+SELECT f1, f2 FROM t2;
+f1	f2
+3	3
+DROP TABLE t2, t1;
+CREATE TABLE t1 (f1 INT NOT NULL PRIMARY KEY)ENGINE=DSTORE;
+CREATE TABLE t2 (f1 INT NOT NULL, f2 INT AS (f1) VIRTUAL,
+KEY (f1, f2))ENGINE=DSTORE;
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2(f1) VALUES(1);
+ALTER TABLE t2 ADD FOREIGN KEY (f1) REFERENCES t1(f1)
+ON UPDATE CASCADE, ALGORITHM=COPY;
+UPDATE t1 SET f1 = 3;
+EXPLAIN SELECT f1, f2 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	index	NULL	f1	9	NULL	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`f1` AS `f1`,`test`.`t2`.`f2` AS `f2` from `test`.`t2`
+SELECT f1, f2 FROM t2;
+f1	f2
+3	3
+DROP TABLE t2, t1;
+CREATE TABLE t1(f1 INT NOT NULL, PRIMARY KEY(f1))ENGINE=DSTORE;
+CREATE TABLE t2(f1 INT NOT NULL, f2 INT AS (1) VIRTUAL,
+f3 INT AS (2) VIRTUAL,
+FOREIGN KEY idx (f1) REFERENCES t1(f1) ON UPDATE CASCADE,
+KEY idx1 (f2, f1, f3))ENGINE=DSTORE;
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2(f1) VALUES(1);
+ALTER TABLE t2 DROP COLUMN f2, ALGORITHM=COPY;
+UPDATE t1 SET f1 = 3;
+EXPLAIN SELECT f1, f3 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	index	NULL	idx1	9	NULL	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`f1` AS `f1`,`test`.`t2`.`f3` AS `f3` from `test`.`t2`
+SELECT f1, f3 FROM t2;
+f1	f3
+3	2
+DROP TABLE t2, t1;
+CREATE TABLE t1(f1 INT NOT NULL, PRIMARY KEY(f1))ENGINE=DSTORE;
+CREATE TABLE t2(f1 INT NOT NULL, f2 INT AS (1) VIRTUAL,
+f3 INT AS (2) VIRTUAL,
+FOREIGN KEY idx (f1) REFERENCES t1(f1) ON UPDATE CASCADE,
+KEY idx1 (f2, f1, f3))ENGINE=DSTORE;
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2(f1) VALUES(1);
+ALTER TABLE t2 DROP COLUMN f2, ALGORITHM=COPY;
+UPDATE t1 SET f1 = 3;
+EXPLAIN SELECT f1, f3 FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	index	NULL	idx1	9	NULL	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`f1` AS `f1`,`test`.`t2`.`f3` AS `f3` from `test`.`t2`
+SELECT f1, f3 FROM t2;
+f1	f3
+3	2
+DROP TABLE t2, t1;
+#
+# Bug#32124113 MYSQL CRASH FOR GENERATED COLUMN DELETE WITH FOREIGN KEY
+#
+CREATE TABLE `emails` (
+`id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+PRIMARY KEY (`id`)
+) ENGINE=DSTORE DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+ROW_FORMAT=DYNAMIC;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1178	The storage engine for the table doesn't support ROW_FORMAT
+CREATE TABLE `email_stats` (
+`id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+`email_id` int(10) unsigned DEFAULT NULL,
+`date_sent` datetime NOT NULL,
+`generated_sent_date` date GENERATED ALWAYS AS
+(concat(year(`date_sent`),'-',lpad(month(`date_sent`),2,'0'),
+'-',lpad(dayofmonth(`date_sent`),2,'0'))) VIRTUAL,
+PRIMARY KEY (`id`),
+KEY `IDX_ES1` (`email_id`),
+KEY `mautic_generated_sent_date_email_id`
+(`generated_sent_date`,`email_id`),
+CONSTRAINT `FK_ES1` FOREIGN KEY (`email_id`) REFERENCES
+`emails` (`id`) ON DELETE SET NULL
+) ENGINE=DSTORE DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+ROW_FORMAT=DYNAMIC;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1178	The storage engine for the table doesn't support ROW_FORMAT
+CREATE TABLE `emails_metadata` (
+`email_id` int(10) unsigned NOT NULL,
+PRIMARY KEY (`email_id`),
+CONSTRAINT `FK_EM1` FOREIGN KEY (`email_id`) REFERENCES
+`emails` (`id`) ON DELETE CASCADE
+) ENGINE=DSTORE DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+ROW_FORMAT=DYNAMIC;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1178	The storage engine for the table doesn't support ROW_FORMAT
+INSERT INTO `emails` VALUES (1);
+INSERT INTO `email_stats` (`id`, `email_id`,  `date_sent`) VALUES
+(1,1,'2020-10-22 13:32:41');
+INSERT INTO `emails_metadata` VALUES (1);
+DELETE FROM `emails`;
+DROP TABLE `email_stats`;
+DROP TABLE `emails_metadata`;
+DROP TABLE `emails`;
+CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t2(fld1 INT NOT NULL, fld3 INT AS (fld2) VIRTUAL, fld2 INT NOT NULL, KEY(fld1), FOREIGN KEY(fld1) REFERENCES t1(fld1) ON DELETE CASCADE);
+insert into t1 values(20);
+insert into t2 values(20, default, 20);
+delete from t1 limit 1;
+select count(*) from t2;
+count(*)
+0
+drop table t2;
+drop table t1;
+create table t1(id int, bool_col tinyint,key(bool_col));
+create table t2(id int, c_gen int as (id*2) virtual,bool_col tinyint,c_decimal decimal(25,5),foreign key(bool_col) references t1(bool_col) on update cascade);
+insert into t1 values(1,0);
+insert into t2(id,bool_col,c_decimal) values(1,0,56.8765);
+update t1 set bool_col=-41;
+select * from t2;
+id	c_gen	bool_col	c_decimal
+1	2	-41	56.87650
+select * from t1 where bool_col=-41;
+id	bool_col
+1	-41
+select * from t1;
+id	bool_col
+1	-41
+drop table t2;
+drop table t1;
+create table t1(c_char char(4),c_varchar varchar(200),c3 set('111','222','333'),key(c_char),key(c_varchar));
+create table t2(c_char char(4),c_varchar varchar(200),c3 set('111','222','333'),key(c_char),key(c_varchar));
+create table t3(c_char char(4),c_varchar varchar(200),c3 set('111','222','333'),key(c_char),key(c_varchar));
+alter table t1 add column c_generate set('111','222','333') as (c3) virtual after c_char;
+alter table t2 add column c_generate char(4) as (c_char) virtual after c_char;
+insert into t1 (c_char,c_varchar,c3) values('aabb','bbbbbbbbcd','222'),('aabb','bbbbbbbbbb','333'),('aabb','ab','333');
+insert into t2 (c_char,c_varchar,c3) values('aabb','bbbbbbbbcd','222'),('aabb','bbbbbbbbbb','333'),('aabb','ab','333');
+insert into t3 (c_char,c_varchar,c3) values('aabb','bbbbbbbbcd','222'),('aabb','bbbbbbbbbb','333'),('aabb','ab','333');
+alter table t2 add foreign key (c_char) references t1(c_char) on delete cascade on update set null;
+alter table t3 add foreign key (c_char) references t2(c_char) on delete cascade on update cascade;
+delete from t1 limit 1;
+select count(*) from t2;
+count(*)
+0
+select count(*) from t3;
+count(*)
+0
+drop table t3,t2,t1;
+create table t1(c1 date,c2 year,c3 int,c_char char(4),c_varchar varchar(200),key(c2),key(c_char));
+create table t2(c1 date,c2 year,c3 int,c_char char(4),c_varchar varchar(200),key(c2),key(c_char));
+create table t3(c1 date,c2 year,c3 int,c_char char(4),c_varchar varchar(200),key(c2),key(c_char));
+alter table t1 add column c_generate varchar(200) as (c_varchar) virtual first;
+alter table t2 add column c_generate year as (c2) virtual first;
+insert into t1 (c1,c2,c3,c_char,c_varchar) values('1998-11-03',2121,1247785296,'aacd','bbbbbbbbbaa'),('1995-09-02',2001,1449557321,'aacd','ab'),('2020-01-01',2050,639896377,'aabb','');
+insert into t2 (c1,c2,c3,c_char,c_varchar) values('1998-11-03',2121,1247785296,'aacd','bbbbbbbbbaa'),('1995-09-02',2001,1449557321,'aacd','ab'),('2020-01-01',2050,639896377,'aabb','');
+insert into t3 (c1,c2,c3,c_char,c_varchar) values('1998-11-03',2121,1247785296,'aacd','bbbbbbbbbaa'),('1995-09-02',2001,1449557321,'aacd','ab'),('2020-01-01',2050,639896377,'aabb','');
+alter table t2 add foreign key (c_char) references t1(c_char) on delete set null on update set null;
+alter table t3 add foreign key (c2) references t2(c2) on delete set null on update cascade;
+delete from t1 limit 1;
+select c_char from t2 order by c_char;
+c_char
+NULL
+NULL
+aabb
+drop table t3,t2,t1;
+create table t1(c_char char(4),c2 varbinary(200),c3 set('111','222','333'),c_varchar varchar(200),c5 double);
+create table t2(c_char char(4),c2 varbinary(200),c3 set('111','222','333'),c_varchar varchar(200),c5 double);
+alter table t1 add index(c5);
+alter table t1 add index(c2);
+alter table t2 add index(c5);
+alter table t2 add index(c2);
+alter table t1 add column c_generate char(4)  as (c_char) virtual first;
+alter table t2 add column c_generate varbinary(200) as (c2) virtual;
+alter table t1 add index(c_generate);
+alter table t2 add index(c_generate);
+insert into t1 (c_char,c2,c3,c_varchar,c5) values('aabb','a',NULL,'bbbbbbbbcd',-1.7976931348623157e+308);
+insert into t2 (c_char,c2,c3,c_varchar,c5) values('aabb','a',NULL,'bbbbbbbbcd',-1.7976931348623157e+308);
+alter table t2 add foreign key (c5) references t1(c5) on delete cascade on update cascade;
+delete from t1 limit 1;
+select count(*) from t2;
+count(*)
+0
+drop table t2,t1;
+create table t1(c_char char(4),c2 varchar(200),c3 set('111','222','333'),c_varchar varchar(200),c5 double);
+create table t2(c_char char(4),c2 varchar(200),c3 set('111','222','333'),c_varchar varchar(200),c5 double);
+alter table t1 add index(c5);
+alter table t1 add index(c2);
+alter table t2 add index(c5);
+alter table t2 add index(c2);
+alter table t1 add column c_generate varchar(200)  as (c_varchar) virtual first;
+alter table t2 add column c_generate varchar(200) as (c2) virtual;
+alter table t1 add index(c_generate);
+alter table t2 add index(c_generate);
+insert into t1 (c_char,c2,c3,c_varchar,c5) values('aabb',repeat('a', 200),NULL,repeat('a', 200),-1.7976931348623157e+308);
+insert into t2 (c_char,c2,c3,c_varchar,c5) values('aabb',repeat('a', 200),NULL,repeat('a', 200),-1.7976931348623157e+308);
+alter table t2 add foreign key (c5) references t1(c5) on delete cascade on update cascade;
+delete from t1 limit 1;
+select count(*) from t2;
+count(*)
+0
+drop table t2,t1;
+create table a (decimal_col binary(11) default 'ccc2\0\0\0\0\0\0\0', index(decimal_col));
+create table b (decimal_col binary(11) default 'ccc2\0\0\0\0\0\0\0', blob_col blob, c_generate_if varchar(200) generated always as (if((blob_col is null),decimal_col,blob_col)) virtual, foreign key(decimal_col) references a(decimal_col) on delete cascade, key c_generate_if (c_generate_if));
+insert into a values ('aaaa');
+insert into b values ('aaaa', 'bbbbb', default);
+delete from a limit 1;
+select count(*) from b;
+count(*)
+0
+drop table b,a;
+#
+# Bug#BUG2025102129104: [virtual column index]mysqld coredump while executing a delete query in a table that
+#                       contains a virtual column and several virtual column indexes
+CREATE TABLE `t1` (
+`c_char` char(4) CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci DEFAULT NULL,
+`c2` bigint DEFAULT NULL,
+`c_varchar` varchar(200) CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci NOT NULL,
+`c_generate` varchar(200) CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci GENERATED ALWAYS AS (`c_varchar`) VIRTUAL,
+PRIMARY KEY (`c_varchar`),
+UNIQUE KEY `c2` (`c2`),
+UNIQUE KEY `vindex5` (`c_generate`),
+KEY `c2_2` (`c2`),
+KEY `c2_3` (`c2`,`c_varchar`,`c_char`),
+KEY `c_char` (`c_char`(2)),
+KEY `c_varchar` (`c_varchar`(5)),
+KEY `vindex1` (`c_generate`),
+KEY `vindex7` (`c_generate`,`c_char`)
+) ENGINE=Dstore;
+Warnings:
+Warning	1287	'utf8mb3' is deprecated and will be removed in a future release. Please use utf8mb4 instead
+Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
+Warning	1287	'utf8mb3' is deprecated and will be removed in a future release. Please use utf8mb4 instead
+Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
+Warning	1287	'utf8mb3' is deprecated and will be removed in a future release. Please use utf8mb4 instead
+Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
+INSERT INTO `t1` (`c_char`, `c2`, `c_varchar`) VALUES ('',79,'bbbbbbbbbb'),('aabb',NULL,'bbba2'),(NULL,92,'ab');
+CREATE TABLE `t2` (
+`c_char` char(4) CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci DEFAULT NULL,
+`c2` bigint NOT NULL,
+`c_varchar` varchar(200) CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci DEFAULT NULL,
+`c_generate` char(4) CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci GENERATED ALWAYS AS (`c_char`) VIRTUAL,
+PRIMARY KEY (`c2`),
+UNIQUE KEY `c2` (`c2`),
+UNIQUE KEY `vindex6` (`c_generate` DESC),
+KEY `c_varchar` (`c_varchar`),
+KEY `c_varchar_2` (`c_varchar`,`c2`,`c_char`),
+KEY `c_char` (`c_char`(2)),
+KEY `c_varchar_3` (`c_varchar`(5)),
+KEY `vindex2` (`c_generate` DESC),
+KEY `vindex8` (`c_varchar`,`c_generate` DESC),
+CONSTRAINT `t2_fk_1` FOREIGN KEY (`c_varchar`) REFERENCES `t1` (`c_varchar`) ON DELETE SET NULL
+) ENGINE=Dstore;
+Warnings:
+Warning	1287	'utf8mb3' is deprecated and will be removed in a future release. Please use utf8mb4 instead
+Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
+Warning	1287	'utf8mb3' is deprecated and will be removed in a future release. Please use utf8mb4 instead
+Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
+Warning	1287	'utf8mb3' is deprecated and will be removed in a future release. Please use utf8mb4 instead
+Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
+INSERT INTO `t2` (`c_char`, `c2`, `c_varchar`) VALUES ('',79,'bbbbbbbbbb'),('aabb',0,'bbba2'),(NULL,92,'ab');
+DELETE FROM t1 LIMIT 1;
+DROP TABLE t1,t2;
+DROP TABLE IF EXISTS `t0`;
+CREATE TABLE `t0` (
+`c0` varchar(200) DEFAULT NULL,
+`c1` varchar(200) DEFAULT NULL,
+`c2` varchar(200) DEFAULT NULL,
+`c3` varchar(200) DEFAULT NULL,
+`vc4` varchar(200) GENERATED ALWAYS AS (cast(`c1` as char(30) charset utf8mb4)) VIRTUAL,
+`c5` varchar(200) DEFAULT NULL COMMENT 'asdf',
+`vc6` varchar(200) GENERATED ALWAYS AS (cast(`vc4` as char(30) charset utf8mb4)) VIRTUAL,
+`c7` varchar(200) DEFAULT NULL COMMENT 'asdf',
+`vc8` varchar(200) GENERATED ALWAYS AS (cast(`c5` as char(30) charset utf8mb4)) VIRTUAL,
+`c9` varchar(200) DEFAULT NULL,
+UNIQUE KEY `c0` (`c0`),
+UNIQUE KEY `c1` (`c1`),
+UNIQUE KEY `c2` (`c2`),
+UNIQUE KEY `c3` (`c3`),
+UNIQUE KEY `c5` (`c5`),
+UNIQUE KEY `c7` (`c7`),
+UNIQUE KEY `c9` (`c9`),
+UNIQUE KEY `i4` (`c5`(4)),
+UNIQUE KEY `i3` (`vc4`(3) DESC,`vc6`,`c5`(4),`c3`(3)),
+KEY `i2` (`c7`(4),`c3`(2),`c5` DESC,`vc6`(4))
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO `t0` (`c0`, `c1`, `c2`, `c3`, `c5`, `c7`, `c9`) VALUES (NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,'000000000',NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,'外键测试0',NULL,NULL,NULL,NULL,NULL),(NULL,NULL,'test-foreign-key\0',NULL,'test-foreign-key',NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,'10000',NULL,NULL);
+DROP TABLE IF EXISTS `t1`;
+CREATE TABLE `t1` (
+`c0` varchar(200) DEFAULT NULL COMMENT 'asdf',
+`c1` varchar(200) DEFAULT NULL COMMENT 'asdf',
+`c2` varchar(200)  DEFAULT NULL,
+`c3` varchar(200) DEFAULT NULL,
+`vc4` varchar(200) GENERATED ALWAYS AS (cast(`c2` as char(30) charset utf8mb4)) VIRTUAL,
+`vc5` varchar(200) GENERATED ALWAYS AS (cast(`c2` as char(30) charset utf8mb4)) VIRTUAL,
+`c6` varchar(200) DEFAULT NULL COMMENT 'asdf',
+`c7` varchar(200) DEFAULT NULL,
+`c8` varchar(200) DEFAULT NULL,
+`vc9` varchar(200) GENERATED ALWAYS AS (cast(`c0` as char(30) charset utf8mb4)) VIRTUAL,
+UNIQUE KEY `c0` (`c0`),
+UNIQUE KEY `c1` (`c1`),
+UNIQUE KEY `c2` (`c2`),
+UNIQUE KEY `c3` (`c3`),
+UNIQUE KEY `c6` (`c6`),
+UNIQUE KEY `c7` (`c7`),
+UNIQUE KEY `c8` (`c8`),
+UNIQUE KEY `i0` (`c2`),
+UNIQUE KEY `i1` (`vc9`),
+UNIQUE KEY `i5` (`vc5`,`c1`(2) DESC),
+KEY `i6` (`c1`(2) DESC,`c7` DESC,`vc9`(2)),
+CONSTRAINT `t1_fk_1` FOREIGN KEY (`c2`) REFERENCES `t0` (`c1`),
+CONSTRAINT `t1_fk_2` FOREIGN KEY (`c7`) REFERENCES `t0` (`c7`) ON UPDATE CASCADE
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO `t1` (`c0`, `c1`, `c2`, `c3`, `c6`, `c7`, `c8`) VALUES (NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,'外键测试0',NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,'NULL',NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,'外键测试',NULL,NULL,NULL,NULL,NULL);
+UPDATE t0 SET c7=0.5774362853432936;
+ERROR 23000: Duplicate entry '0.5774362853432936' for key 't0.c7'
+drop table t1;
+drop table t0;
+create table t1(c1 time(6) default null, c_varchar varchar(255) default null, c_char char(4) default null, key c_char(c_char), key c_varchar(c_varchar(237)), key c1(c1));
+create table t2(c1 time(6) default null, c_varchar varchar(255) default null, c_char char(4) default null, key c_char(c_char), key c_varchar(c_varchar(237)), key c1(c1));
+insert into t1 values('00:00:00.000000','ab','aabb'),('07:59:59.000000','ab','aacd'),('08:59:59.000000','bbbbbbbbbaa','aacd');
+insert into t2 values('00:00:00.000000','ab','aabb'),('07:59:59.000000','ab','aacd'),('08:59:59.000000','bbbbbbbbbaa','aacd');
+alter table t2 add foreign key (c_char) references t1(c_char) on delete cascade on update cascade;
+create index i7 on t2((100));
+update t1 set c_char='ffff';
+select c_char from t2;
+c_char
+ffff
+ffff
+ffff
+drop table t2,t1;
+SET character_set_results = NULL;
+SET autocommit=1;
+SET sql_mode='NO_ENGINE_SUBSTITUTION,STRICT_TRANS_TABLES';
+CREATE TABLE IF NOT EXISTS t0(c0 INT  UNIQUE KEY COLUMN_FORMAT DEFAULT, c1 FLOAT  UNIQUE VISIBLE, c2 DOUBLE  UNIQUE KEY COMMENT 'asdf'  INVISIBLE, c3 BOOL  UNIQUE KEY VISIBLE, c4 DATE  STORAGE DISK PRIMARY KEY COLUMN_FORMAT FIXED  COMMENT 'asdf' , vc5 DATETIME  generated always as (COALESCE(CAST(c3 AS UNSIGNED), 0)) virtual VISIBLE, c6 TIME  UNIQUE STORAGE DISK VISIBLE, c7 YEAR   COMMENT 'asdf'  STORAGE DISK  COLUMN_FORMAT DEFAULT VISIBLE, vc8 TIMESTAMP  generated always as (COALESCE(CAST(c2 AS UNSIGNED), 0)) stored INVISIBLE, vc9 VARCHAR(500)  generated always as (COALESCE(CAST(c3 AS CHAR(30)), 'default')) stored VISIBLE);
+CREATE TABLE IF NOT EXISTS t1(c0 INT  NULL COLUMN_FORMAT DEFAULT VISIBLE, c1 FLOAT  UNIQUE KEY STORAGE DISK COLUMN_FORMAT FIXED NULL  VISIBLE, c2 DOUBLE  UNIQUE KEY COLUMN_FORMAT DYNAMIC VISIBLE, c3 BOOL  COMMENT 'asdf'  VISIBLE, c4 DATE  COMMENT 'asdf' , c5 DATETIME  UNIQUE KEY VISIBLE, vc6 TIME  generated always as (COALESCE(c0, 0) * 2) stored VISIBLE, c7 YEAR  COMMENT 'asdf'  NULL  VISIBLE, c8 TIMESTAMP  COLUMN_FORMAT FIXED VISIBLE, vc9 VARCHAR(500)  generated always as (COALESCE(CAST(c0 AS CHAR(30)), 'default')) stored INVISIBLE, vc10 DECIMAL(10,2)  generated always as (COALESCE(c2, 0) - 1) virtual VISIBLE , foreign key(c4) references t0(c4) on delete cascade);
+CREATE INDEX i0 ON t1(vc10) ALGORITHM COPY;
+SET SESSION sql_auto_is_null = ON;
+set sql_mode='ONLY_FULL_GROUP_BY';
+CREATE INDEX i1 ON t0(c1);
+REPLACE DELAYED INTO t0(c1) VALUES(7.824419E-4), (NULL), (-181646.4), (9.597066E-4), (9.74085E-4), (94459.94), (2.71828), (6.2692326E8);
+REPLACE LOW_PRIORITY INTO t0(c4) VALUES('1978-10-28'), ('2059-03-15'), ('2006-05-02'), ('1997-07-15'), ('1939-07-27'), ('1964-01-29'), ('1987-05-05'), (NULL);
+UPDATE t0 SET c3='2022-02-14 05:15:01', c0="1121575403", c2=2020 WHERE CAST(("测,!,试") LIKE (NULL) AS SIGNED);
+REPLACE INTO t0(c6, c7, c4, c0, c1, c2, c3) VALUES('01:10:55', 2001, '2015-04-01', 65535, -311436.53, -1.0, 10), ('02:30:15', 2023, '2043-04-09', 512, 1.0, NULL, NULL), ('08:08:45', 1901, '2038-01-19', NULL, -426319.66, 2.8858620726469855E11, 123456789), (NULL, NULL, NULL, -123456789, 8.6368505E-5, 1.3653404223311816E11, -2147483647), (CURRENT_TIME, 1951, '1941-09-17', 100000, NULL, NULL, 100000), ('20:58:02', 2090, NULL, NULL, 279147.7, -1.0, -2147483647), ('06:54:16', NULL, '1951-04-26', -2147483647, 226731.0, 1.5507736072064194E-7, -2147483647), ('23:59:59', 1969, NULL, -128, NULL, NULL, NULL);
+UPDATE t1 SET c3=2032, c0=DEFAULT, c2='', c4='2031-02-18', c1=DEFAULT, c7=0.3372585564364097 WHERE 633287523;
+REPLACE DELAYED INTO t0(c6, c4, c2, c3, c0, c1, c7) VALUES('12:16:03', '1914-06-14', 4.540624482104856E-7, -999999, 1000000, NULL, 1960), (NULL, '1000-01-01', 4.3947716257e7, NULL, NULL, 457366.0, 2098), (NULL, '2023-00-01', -4.982739339031711E8, 128, -2147483647, 6.2673075E8, NULL), ('16:59:10', '2023-12-31', 5.028985291804766E11, -123456789, 2147483646, 9.861741E-4, 1952), ('19:27:52', '1913-09-22', 7.706934024615854E11, 999999, 60, 3.14159, 1948), ('00:00:01', '2098-02-27', -3.099426068048203E8, 100000, NULL, 236183.56, NULL), ('00:00:00', '9999-12-31', NULL, 42, 255, 4.2392453E-4, 2023), ('05:49:13', '2001-12-02', NULL, NULL, 65535, 3.38839008E8, 0);
+UPDATE t1 SET c3=DEFAULT, c4=DEFAULT, c8="1990-05-07", c5=DEFAULT, c1='1970-01-01 00:00:01', c7=NULL;
+REPLACE DELAYED INTO t0(c1, c3, c0) VALUES(57768.625, 255, 10000), (3.63841344E8, 2147483646, NULL), (205111.31, NULL, 10000), (3.14159, NULL, 1057386), (-238375.25, 255, 254), (6.8347336E-4, 1024, NULL), (6.3396032E8, 3, 2147483646), (6.0062617E-4, 127, -2147483648);
+REPLACE INTO t0(c7, c4, c3, c0, c2, c1) VALUES(1920, NULL, NULL, 1000000, NULL, -414046.6), (1915, '2023-01-32', -2147483647, 255, 4.9E-324, 9.685661E-4), (0, '2023-01-32', NULL, NULL, -1.702071344893481E8, 381207.56), (1928, '1947-02-17', 256, 1057386, NULL, 114258.56), (2124, '0000-00-00', 127, -2147483647, NULL, 339183.12), (NULL, NULL, 8192, NULL, 8.667283441722061E-7, NULL), (NULL, '1959-09-06', 65534, NULL, 9.808640598013215E-7, 6.5273165E8), (1934, NULL, 256, 65536, NULL, 263739.7);
+UPDATE t1 SET c7=DEFAULT, c2="k", c0=1044811234, c4=t1.c1, c1=NULL, c3="2000-01-01", c5=t1.c3, c8=-674432754;
+REPLACE INTO t0(c6) VALUES('06:01:03'), ('23:59:59'), ('22:51:26.473446'), ('10:51:47'), (NULL), ('23:59:59'), ('838:59:59'), ('838:59:59');
+REPLACE INTO t0(c2) VALUES(2.1153724008473996E11), (1.9594960620383298E8), (2.762624603571446E8), (-6.416401173248142E7), (3.407961223842565E-7), (3.7858851029e-6), (1.5601540859289348E8), (8.324070315089993E-8);
+CREATE UNIQUE INDEX i2 ON t1((DATE_FORMAT('在', -518774197))) ALGORITHM DEFAULT;
+DELETE LOW_PRIORITY QUICK FROM t0 WHERE t0.c0;
+REPLACE INTO t0(c6, c2) VALUES('838:59:59', 1.738648250294681E-7), ('10:28:30', -1.723452771041947E8), ('17:38:39', 3.8780387470e-8), (LOCALTIME, 7.0575118553e8), ('02:12:52', 2.718281828459045), ('00:00:00', -3.146444824187281E8), ('01:17:02', NULL), ('838:59:59', 9.3781465424e-2);
+SET SESSION optimizer_switch = 'index_merge=on,index_merge_sort_union=on,index_merge_intersection=off,engine_condition_pushdown=on,index_condition_pushdown=off,mrr=off,mrr_cost_based=on,block_nested_loop=off,batched_key_access=on,materialization=off,semijoin=off,loosescan=off,firstmatch=on,duplicateweedout=off,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=off,hash_join=on,subquery_to_derived=off,prefer_ordering_index=off,derived_condition_pushdown=on,offset_pushdown=on,nlj_distinct_optimize=on,partial_result_cache=off,left_join_elimination=off,dstore_enable_indexscan=on';
+REPLACE INTO t1(c8) VALUES(NULL), ('1970-01-01 00:00:01'), ('2033-02-22 18:48:20'), (NULL), (NULL), ('1997-08-28 19:06:39'), (NULL), (LOCALTIME);
+REPLACE INTO t0(c1) VALUES(-340138.38), (1.0), (NULL), (6.556028E-4), (5.15884832E8), (NULL), (2.8789276E-4), (3.14159);
+REPLACE LOW_PRIORITY INTO t1(c2) VALUES(4.4227618840467116E-7), (-1.683504136271199E8), (3.1028194971e9), (2.718281828459045), (2.0467391933e7), (NULL), (1.0889341033e-1), (NULL);
+REPLACE LOW_PRIORITY INTO t0(c7, c0, c2, c1, c4, c3) VALUES(2012, 2048, 7.732903471694705E11, NULL, '2021-08-15', 60), (1970, 1, 4.6199265137e-6, NULL, '2023-01-32', 255), (0, 2048, NULL, -436780.28, '1918-04-17', 255), (0000, -2147483648, 3.2026193963e-8, 3.86525088E8, NULL, 1024), (2155, 127, 1.1245938023377132E8, NULL, '1900-01-01', 0), (2043, 2, 4.598153485898402E8, -469476.7, NULL, 256), (2153, 60, 6.6740601805e-2, 4.26264768E8, '0000-00-00', 2147483646), (2000, NULL, NULL, 96825.625, '0000-00-00', 2147483646);
+REPLACE INTO t0(c7, c4, c1, c2, c6, c3, c0) VALUES(2104, '1980-03-30', NULL, NULL, '13:27:30.361171', -1, 1024), (NULL, '1970-01-01', 0.0, -4.1519456855302536E8, '838:59:59', 8192, 9999), (NULL, '2023-13-01', -117351.59, 1.9062548501e-7, '21:45:45', 100, -999999), (1966, '2084-01-24', 419396.25, NULL, NULL, 10000, 128), (NULL, '2031-06-01', 9.85609E-4, 2.793464581107462E-7, LOCALTIME, 2147483647, 256), (1970, NULL, NULL, -1.8419934443660438E7, NULL, -2147483647, -1), (2109, '1992-08-27', -498557.38, -4.179035081445723E8, '15:49:33', 65534, 127), (NULL, '2035-02-05', 355888.75, -3.807631503237804E8, NULL, NULL, -2147483647);
+REPLACE LOW_PRIORITY INTO t1(c7, c8, c1, c2, c0) VALUES(1992, '2027-05-05 17:12:53', 9.3182771E8, NULL, -2147483647), (2008, NOW(), -486243.78, 4.42282370427175E11, 65536), (1912, '1970-01-01 00:00:00', NULL, -1.0, NULL), (1949, NULL, -381412.03, 4.981098312296836E-7, 256), (0, NULL, 7.964307E-4, NULL, 256), (NULL, '1970-01-01 00:00:01', -114629.03, 5.325173513356513E-7, 127), (NULL, '1970-10-16 11:13:29', 6.1660755E-4, 8.077493853988721E-7, NULL), (2023, NOW(), 8.9037424E-4, 0.9451161850e3, NULL);
+REPLACE LOW_PRIORITY INTO t0(c2, c6) VALUES(1.871889434861796E8, '21:54:22.215230'), (8.051177124126434E7, '21:13:25'), (9.307055576622037E11, NULL), (NULL, CURTIME()), (4.8442637452857495E11, NULL), (9.6725269784e1, '20:22:47'), (2.718281828459045, '12:00:00'), (NULL, CURRENT_TIME);
+REPLACE LOW_PRIORITY INTO t1(c1, c8, c2, c3, c7, c0, c5) VALUES(NULL, '2023-12-31 23:59:59', 6.0479297545e-7, 2147483647, 2073, 1, NULL), (6.7854342E8, '1970-01-01 00:00:00', 2.3850947914e3, NULL, 1906, 127, '1900-01-01 00:00:00'), (3.14159, '1970-01-01 00:00:00', -2.4709423705449042E8, 9999, NULL, 999999, '2025-12-30 12:43:39.845040'), (NULL, '1975-03-23 07:09:09', 2.4354361370443866E11, 9999, 2155, 10000, '2074-01-10 21:17:17'), (7.7950687E-4, '2025-12-14 20:58:03.558113', 1.5334990270e-6, 2147483647, 0, NULL, NULL), (472078.25, NULL, 0.0, NULL, NULL, 127, '1900-01-01 00:00:00'), (489152.5, '1977-03-01 10:19:25', 6.99079329684257E11, 2147483646, 0000, -123456789, '0000-00-00 00:00:00'), (13421.0, NULL, -4.1829966173653734E8, 42, 2022, -2147483647, NULL);
+UPDATE t1 SET c0=(t1.c7) NOT IN (('') XOR (t1.c7)), c3=NULL, c7="1986-03-08";
+SET SESSION query_prealloc_size = 3394470097929832240;
+UPDATE t1 SET c8=((t1.vc6) IN (t1.c7)) IS TRUE, c5=DEFAULT, c7=DEFAULT, c1=DEFAULT, c0='292269055-12-03 00:47:04', c2=DEFAULT, c3=DEFAULT, c4='1445440139';
+UPDATE t0 SET c3=DEFAULT, c4=DEFAULT, c1=DEFAULT, c6=NULL WHERE DATE_FORMAT(226397890, "2005-06-09 18:21:20");
+REPLACE INTO t1(c3, c0, c1, c5) VALUES(256, 1057386, NULL, NULL), (256, 100000, 2.7413626E-4, NULL), (128, NULL, 9.5300173E8, '2032-11-01 03:32:29'), (3, 100000, -219254.31, '0000-00-00 00:00:00'), (65534, 42, NULL, '2026-01-04 14:07:04.672231'), (NULL, NULL, 360058.75, '2026-01-04 02:11:02.249516'), (256, 127, 3.14159, NULL), (65534, 254, -253485.03, NULL);
+SET SESSION show_create_table_verbosity = ON;
+REPLACE LOW_PRIORITY INTO t0(c2) VALUES(NULL), (NULL), (0.0), (NULL), (5.568981680764517E-8), (4.6313697776e3), (1.9061365816717327E8), (1.4730427975919812E11);
+drop table t0,t1;

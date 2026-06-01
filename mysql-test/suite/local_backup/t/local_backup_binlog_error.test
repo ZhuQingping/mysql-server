@@ -1,0 +1,185 @@
+#
+# Basic test for full local backup and archive restore
+#
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+call mtr.add_suppression("failed to create full backup thread");
+call mtr.add_suppression("failed to mkdir for full backup");
+call mtr.add_suppression("failed to get backup MDL");
+call mtr.add_suppression("failed to fetch schemas from DD");
+call mtr.add_suppression("failed to copy schema directory");
+call mtr.add_suppression("full backup path not configured");
+call mtr.add_suppression("Cannot start local backup: change buffer is not disabled");
+call mtr.add_suppression("failed to do full backup for innodb");
+call mtr.add_suppression("failed to do full backup for dstore");
+call mtr.add_suppression("start full local backup fail");
+call mtr.add_suppression("new LocalBackupFile object fail when add local backup file");
+call mtr.add_suppression("add local backup file fail when write full local backup meta");
+call mtr.add_suppression("write full local backup meta fail");
+call mtr.add_suppression("Local backup: failed to");
+call mtr.add_suppression("Local backup: stop dstore full backup failed");
+call mtr.add_suppression("Local backup: stop innodb full backup failed");
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("Local backup: full backup failed to");
+call mtr.add_suppression("LocalBackup get binlog point fail");
+call mtr.add_suppression("Local backup: full backup would need");
+call mtr.add_suppression("Local backup: full backup found");
+call mtr.add_suppression("add local backup binlog meta file fail");
+call mtr.add_suppression("finish full local binlog logic");
+call mtr.add_suppression("full backup failed, the backup binlog lock was acquired unexpected");
+
+--source suite/local_backup/include/prepare_for_backup.inc
+
+# prepare some data
+create database local_backup_error;
+use local_backup_error;
+create table t1(s varchar(100)) engine=Dstore;
+
+# insert 1000 records
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 1000
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+--let $skip_check_meta_json=1
+
+--echo # check binlog lock failed for full backup
+set global debug='+d,full_lb_binlog_check_fail';
+--error ER_DA_LOCAL_BACKUP_ERROR
+call rds_backup.start_full_local_backup(0);
+set global debug='-d,full_lb_binlog_check_fail';
+
+--echo # get binlog lock failed when get binlog point
+set global debug='+d,full_lb_binlog_lock_failed';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+set global debug='-d,full_lb_binlog_lock_failed';
+
+
+--echo # get binlog lock failed, lock already acqured 
+set global debug='+d,full_lb_binlog_lock_already';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+set global debug='-d,full_lb_binlog_lock_already';
+
+--echo # binlog rotate failed when get binlog point
+set global debug='+d,full_lb_binlog_rotate_failed';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+set global debug='-d,full_lb_binlog_rotate_failed';
+
+
+--echo # gtid parse failed when get binlog point
+set global debug='+d,full_lb_gtid_parse_failed';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+show status like 'Rds_local_backup_last_full_backup_status';
+set global debug='-d,full_lb_gtid_parse_failed';
+
+--echo # check binlog closed failed 
+set global debug='+d,full_lb_binlog_closed';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+show status like 'Rds_local_backup_last_full_backup_status';
+set global debug='-d,full_lb_binlog_closed';
+
+--echo # open old binlog closed failed 
+set global debug='+d,full_lb_open_old_binlog_fail';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+show status like 'Rds_local_backup_last_full_backup_status';
+set global debug='-d,full_lb_open_old_binlog_fail';
+
+--echo # open target binlog closed failed 
+set global debug='+d,full_lb_open_new_binlog_fail';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+show status like 'Rds_local_backup_last_full_backup_status';
+set global debug='-d,full_lb_open_new_binlog_fail';
+--exec rm -rf $MYSQLTEST_VARDIR/full_local_backup/*
+
+--echo # read old binlog closed failed 
+set global debug='+d,full_lb_binlog_read_fail';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+show status like 'Rds_local_backup_last_full_backup_status';
+set global debug='-d,full_lb_binlog_read_fail';
+--exec rm -rf $MYSQLTEST_VARDIR/full_local_backup/*
+
+--echo # write new binlog closed failed 
+set global debug='+d,full_lb_binlog_write_fail';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+set global debug='-d,full_lb_binlog_write_fail';
+--exec rm -rf $MYSQLTEST_VARDIR/full_local_backup/*
+
+--echo # sync new binlog failed
+set global debug='+d,full_lb_binlog_sync_fail';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+set global debug='-d,full_lb_binlog_sync_fail';
+--exec rm -rf $MYSQLTEST_VARDIR/full_local_backup/*
+
+--echo # get binlog index filename failed
+set global debug='+d,full_lb_get_binlog_index_fail';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+set global debug='-d,full_lb_get_binlog_index_fail';
+--exec rm -rf $MYSQLTEST_VARDIR/full_local_backup/*
+
+--echo # open binlog index file failed 
+set global debug='+d,full_lb_open_binlog_index_fail';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+set global debug='-d,full_lb_open_binlog_index_fail';
+--exec rm -rf $MYSQLTEST_VARDIR/full_local_backup/*
+
+--echo # write binlog index file failed 
+set global debug='+d,full_lb_write_binlog_index_fail';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+set global debug='-d,full_lb_write_binlog_index_fail';
+--exec rm -rf $MYSQLTEST_VARDIR/full_local_backup/*
+
+--echo # write binlog index file failed 
+set global debug='+d,full_lb_binlog_open_meta_failed';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+set global debug='-d,full_lb_binlog_open_meta_failed';
+--exec rm -rf $MYSQLTEST_VARDIR/full_local_backup/*
+
+# Do backup normal
+--let $full_backup_flag = 0
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+
+# Restore
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+--let $list_type = full_backup
+--source suite/local_backup/include/restore_with_script.inc
+
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+# Verify data
+select count(*) from t1;
+# insert after resotre
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $i = 50
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+drop database local_backup_error;
+
+--source suite/local_backup/include/clean_backup.inc

@@ -1,0 +1,259 @@
+use test;
+# 
+# 1. JSON generation column test.
+# 
+CREATE TABLE t (
+j JSON,
+stored_gc JSON GENERATED ALWAYS AS (JSON_EXTRACT(j, '$[0]')) STORED,
+virtual_gc JSON GENERATED ALWAYS AS (JSON_EXTRACT(j, '$[1]')) VIRTUAL
+);
+INSERT INTO t(j) VALUES
+(JSON_ARRAY(1, 2)),
+(JSON_ARRAY(2, 1)),
+(JSON_ARRAY(10, 10)),
+(JSON_ARRAY(5));
+SELECT * FROM t ORDER BY stored_gc;
+j	stored_gc	virtual_gc
+[1, 2]	1	2
+[2, 1]	2	1
+[5]	5	NULL
+[10, 10]	10	10
+SELECT * FROM t ORDER BY virtual_gc;
+j	stored_gc	virtual_gc
+[5]	5	NULL
+[2, 1]	2	1
+[1, 2]	1	2
+[10, 10]	10	10
+UPDATE t
+SET j = JSON_ARRAY(100, 200)
+WHERE stored_gc = JSON_EXTRACT(j, '$[0]') AND virtual_gc = JSON_EXTRACT(j, '$[1]')
+LIMIT 1;
+SELECT * FROM t ORDER BY stored_gc;
+j	stored_gc	virtual_gc
+[2, 1]	2	1
+[5]	5	NULL
+[10, 10]	10	10
+[100, 200]	100	200
+UPDATE t
+SET j = JSON_ARRAY(50, 50)
+WHERE stored_gc = JSON_EXTRACT(j, '$[0]') AND virtual_gc = JSON_EXTRACT(j, '$[1]')
+LIMIT 1;
+SELECT * FROM t ORDER BY virtual_gc;
+j	stored_gc	virtual_gc
+[5]	5	NULL
+[2, 1]	2	1
+[10, 10]	10	10
+[50, 50]	50	50
+UPDATE t
+SET j = JSON_ARRAY(
+JSON_UNQUOTE(JSON_EXTRACT(j, '$[0]')) * 2, 
+JSON_UNQUOTE(JSON_EXTRACT(j, '$[1]'))
+);
+SELECT * FROM t ORDER BY stored_gc;
+j	stored_gc	virtual_gc
+[4.0, "1"]	4.0	"1"
+[10.0, null]	10.0	null
+[20.0, "10"]	20.0	"10"
+[100.0, "50"]	100.0	"50"
+SELECT * FROM t ORDER BY virtual_gc;
+j	stored_gc	virtual_gc
+[10.0, null]	10.0	null
+[4.0, "1"]	4.0	"1"
+[20.0, "10"]	20.0	"10"
+[100.0, "50"]	100.0	"50"
+drop table t;
+# 
+# 2. JSON column exceeds length limit.
+# 
+SET @@global.max_allowed_packet = 1073741824;
+CREATE TABLE t1 (i INT, j JSON) CHARSET utf8mb4;
+INSERT INTO t1 VALUES (1, '{"a": 2}');
+INSERT INTO t1 VALUES (100, CONCAT('{"',REPEAT('a',65535),'":"',REPEAT('a',1069547497),'"}'));
+ERROR 42000: The storage engine for the table doesn't support the data length of 1069613057 bytes for JSON column. Maximum supported length is 1069547496 bytes.
+UPDATE t1 SET j = CONCAT('{"', REPEAT('a', 64 * 1024 - 1), '":123}') WHERE i = 1;
+drop table t1;
+set @@global.max_allowed_packet=default;
+# 
+# 3. The persistence of json column.
+# 
+CREATE TABLE json_test (
+id INT AUTO_INCREMENT PRIMARY KEY,
+json_col JSON
+) engine=Dstore;
+INSERT INTO json_test (json_col) VALUES (NULL);
+INSERT INTO json_test (json_col) VALUES ('{"a": 2}');
+INSERT INTO json_test (json_col) VALUES ('[1,2]');
+INSERT INTO json_test (json_col) VALUES ('{"a":"b", "c":"d","ab":"abc", "bc": ["x", "y"]}');
+INSERT INTO json_test (json_col) VALUES ('["here", ["I", "am"], "!!!"]');
+INSERT INTO json_test (json_col) VALUES ('"scalar string"');
+INSERT INTO json_test (json_col) VALUES ('true');
+INSERT INTO json_test (json_col) VALUES ('false');
+INSERT INTO json_test (json_col) VALUES ('null');
+INSERT INTO json_test (json_col) VALUES ('-1');
+INSERT INTO json_test (json_col) VALUES (CAST(CAST(1 AS UNSIGNED) AS JSON));
+SELECT * FROM json_test;
+id	json_col
+1	NULL
+2	{"a": 2}
+3	[1, 2]
+4	{"a": "b", "c": "d", "ab": "abc", "bc": ["x", "y"]}
+5	["here", ["I", "am"], "!!!"]
+6	"scalar string"
+7	true
+8	false
+9	null
+10	-1
+11	1
+# restart
+SELECT * FROM json_test;
+id	json_col
+1	NULL
+2	{"a": 2}
+3	[1, 2]
+4	{"a": "b", "c": "d", "ab": "abc", "bc": ["x", "y"]}
+5	["here", ["I", "am"], "!!!"]
+6	"scalar string"
+7	true
+8	false
+9	null
+10	-1
+11	1
+ALTER TABLE json_test ADD COLUMN json_col2 JSON, ALGORITHM=INSTANT;
+ERROR HY000: BLOB Column can't be added with ALGORITHM=INSTANT. Try ALGORITHM=INPLACE/COPY.
+ALTER TABLE json_test ADD COLUMN json_col2 JSON, ALGORITHM=INPLACE;
+ALTER TABLE json_test ADD COLUMN json_col3 JSON, ALGORITHM=COPY;
+show create table json_test;
+Table	Create Table
+json_test	CREATE TABLE `json_test` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `json_col` json DEFAULT NULL,
+  `json_col2` json DEFAULT NULL,
+  `json_col3` json DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=Dstore AUTO_INCREMENT=12 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+# restart
+SELECT * FROM json_test;
+id	json_col	json_col2	json_col3
+1	NULL	NULL	NULL
+2	{"a": 2}	NULL	NULL
+3	[1, 2]	NULL	NULL
+4	{"a": "b", "c": "d", "ab": "abc", "bc": ["x", "y"]}	NULL	NULL
+5	["here", ["I", "am"], "!!!"]	NULL	NULL
+6	"scalar string"	NULL	NULL
+7	true	NULL	NULL
+8	false	NULL	NULL
+9	null	NULL	NULL
+10	-1	NULL	NULL
+11	1	NULL	NULL
+ALTER TABLE json_test ADD COLUMN (varchar_col VARCHAR(255));
+show create table json_test;
+Table	Create Table
+json_test	CREATE TABLE `json_test` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `json_col` json DEFAULT NULL,
+  `json_col2` json DEFAULT NULL,
+  `json_col3` json DEFAULT NULL,
+  `varchar_col` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=Dstore AUTO_INCREMENT=12 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+# restart
+SELECT * FROM json_test;
+id	json_col	json_col2	json_col3	varchar_col
+1	NULL	NULL	NULL	NULL
+2	{"a": 2}	NULL	NULL	NULL
+3	[1, 2]	NULL	NULL	NULL
+4	{"a": "b", "c": "d", "ab": "abc", "bc": ["x", "y"]}	NULL	NULL	NULL
+5	["here", ["I", "am"], "!!!"]	NULL	NULL	NULL
+6	"scalar string"	NULL	NULL	NULL
+7	true	NULL	NULL	NULL
+8	false	NULL	NULL	NULL
+9	null	NULL	NULL	NULL
+10	-1	NULL	NULL	NULL
+11	1	NULL	NULL	NULL
+ALTER TABLE json_test MODIFY COLUMN json_col2 BLOB;
+show create table json_test;
+Table	Create Table
+json_test	CREATE TABLE `json_test` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `json_col` json DEFAULT NULL,
+  `json_col2` blob,
+  `json_col3` json DEFAULT NULL,
+  `varchar_col` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=Dstore AUTO_INCREMENT=12 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+# restart
+SELECT * FROM json_test;
+id	json_col	json_col2	json_col3	varchar_col
+1	NULL	NULL	NULL	NULL
+2	{"a": 2}	NULL	NULL	NULL
+3	[1, 2]	NULL	NULL	NULL
+4	{"a": "b", "c": "d", "ab": "abc", "bc": ["x", "y"]}	NULL	NULL	NULL
+5	["here", ["I", "am"], "!!!"]	NULL	NULL	NULL
+6	"scalar string"	NULL	NULL	NULL
+7	true	NULL	NULL	NULL
+8	false	NULL	NULL	NULL
+9	null	NULL	NULL	NULL
+10	-1	NULL	NULL	NULL
+11	1	NULL	NULL	NULL
+ALTER TABLE json_test DROP COLUMN json_col2;
+show create table json_test;
+Table	Create Table
+json_test	CREATE TABLE `json_test` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `json_col` json DEFAULT NULL,
+  `json_col3` json DEFAULT NULL,
+  `varchar_col` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=Dstore AUTO_INCREMENT=12 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+# restart
+SELECT * FROM json_test;
+id	json_col	json_col3	varchar_col
+1	NULL	NULL	NULL
+2	{"a": 2}	NULL	NULL
+3	[1, 2]	NULL	NULL
+4	{"a": "b", "c": "d", "ab": "abc", "bc": ["x", "y"]}	NULL	NULL
+5	["here", ["I", "am"], "!!!"]	NULL	NULL
+6	"scalar string"	NULL	NULL
+7	true	NULL	NULL
+8	false	NULL	NULL
+9	null	NULL	NULL
+10	-1	NULL	NULL
+11	1	NULL	NULL
+show create table json_test;
+Table	Create Table
+json_test	CREATE TABLE `json_test` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `json_col` json DEFAULT NULL,
+  `json_col3` json DEFAULT NULL,
+  `varchar_col` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=Dstore AUTO_INCREMENT=12 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+RENAME TABLE json_test TO json_test_new;
+# restart
+SELECT * FROM json_test_new;
+id	json_col	json_col3	varchar_col
+1	NULL	NULL	NULL
+2	{"a": 2}	NULL	NULL
+3	[1, 2]	NULL	NULL
+4	{"a": "b", "c": "d", "ab": "abc", "bc": ["x", "y"]}	NULL	NULL
+5	["here", ["I", "am"], "!!!"]	NULL	NULL
+6	"scalar string"	NULL	NULL
+7	true	NULL	NULL
+8	false	NULL	NULL
+9	null	NULL	NULL
+10	-1	NULL	NULL
+11	1	NULL	NULL
+CREATE TABLE json_test_new2 LIKE json_test_new;
+# restart
+SELECT * FROM json_test_new2;
+id	json_col	json_col3	varchar_col
+TRUNCATE TABLE json_test_new2;
+# restart
+SELECT * FROM json_test_new2;
+id	json_col	json_col3	varchar_col
+DROP TABLE json_test_new2;
+# restart
+show tables;
+Tables_in_test
+json_test_new
+DROP TABLE json_test_new;

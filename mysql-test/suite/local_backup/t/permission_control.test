@@ -1,0 +1,54 @@
+--source suite/local_backup/include/prepare_for_backup.inc
+
+call mtr.add_suppression("full backup found binlog is not enabled");
+
+CREATE DATABASE db1;
+USE db1;
+CREATE TABLE t1(a int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+
+# Create user test with no SUPER privilege.
+CREATE USER test;
+GRANT SELECT ON *.* TO test;
+--connect(conn1,localhost,test,,db1)
+--echo # Connect to conn1
+connection conn1;
+
+# Use user test with no SUPER privilege to execute local backup commands.
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+CALL rds_backup.start_full_local_backup(1);
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+CALL rds_backup.start_full_local_backup(0);
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+CALL rds_backup.stop_full_local_backup();
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+CALL rds_backup.start_log_archive();
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+CALL rds_backup.stop_log_archive();
+
+# Grant SUPER privilege to user test.
+--echo # Connect to default
+connection default;
+GRANT SUPER ON *.* TO test;
+--disconnect conn1
+--connect(conn1,localhost,test,,db1)
+--echo # Connect to conn1
+connection conn1;
+
+# Use user test with SUPER privilege to execute local backup commands.
+CALL rds_backup.start_full_local_backup(1);
+--source suite/local_backup/include/wait_full_backup.inc
+CALL rds_backup.start_full_local_backup(0);
+CALL rds_backup.stop_full_local_backup();
+CALL rds_backup.start_log_archive();
+CALL rds_backup.stop_log_archive();
+
+# Drop database db1 and disconnect conn1.
+--echo # Connect to default
+connection default;
+DROP DATABASE db1;
+--disconnect conn1
+DROP USER test;
+
+--source suite/local_backup/include/clean_backup.inc

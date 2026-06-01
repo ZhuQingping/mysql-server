@@ -1,0 +1,105 @@
+--source include/pq_test.inc
+--source ../include/pq_divide_derived_setup.inc
+
+# Temptable engine used for derived table
+
+# Full table scan of derived table
+
+eval explain $query_full;
+eval $query_full;
+
+# Ref access: due to Temptable index specificities, not supported in PQ
+
+eval explain $query_ref;
+eval $query_ref;
+
+show status like "Created_tmp_disk_tables";
+
+# MEMORY engine: not divided (engine is too old, no implementation)
+
+set internal_tmp_mem_storage_engine=MEMORY;
+eval explain $query_full;
+set internal_tmp_mem_storage_engine=default;
+
+# InnoDB intrinsic
+
+set big_tables = 1;
+
+eval explain $query_full;
+eval $query_full;
+eval explain $query_ref;
+eval $query_ref;
+
+# correlated ref access
+
+create table t0(id int);
+insert t0 values(33),(-1);
+let $query_ref = select /*+ pq(derived) */ sum(prod) from
+t0 straight_join
+(select t1.id*t2.id as prod from t1, t1 as t2) as derived
+where derived.prod=t0.id;
+
+eval explain $query_ref;
+eval $query_ref;
+
+show status like "Created_tmp_disk_tables";
+
+drop table t0;
+
+# Two CTEs => two intrinsic tables, joined by the workers.
+
+with qn1 as (select id, col2 from t1),
+     qn2 as (select id, col2 from t1)
+select /*+ no_bnl() */ count(*) from qn1, qn2;
+
+drop table t1;
+
+# Test of writes to an intrinsic table (used to crash): after
+# materialization of 'qn', a worker reads a row from it and writes a
+# row to the group-by temporary table of the outer query, which write
+# triggers a preliminary read: the worker should not use the rec_cache of 'qn'.
+
+create table t1(a int not null, b int not null, c int);
+insert into t1 values(1,2,3),(2,3,4);
+check table t1;
+
+with qn as (select a, sum(b) as s from t1 group by a) select s from qn group by a;
+
+drop table t1;
+
+--echo # BUG2023032203662 PQ SEGV with big tables
+
+CREATE TABLE t0 (c0 INT);
+CREATE TABLE t1 (c1 INT);
+SET SESSION BIG_TABLES = 1; # use InnoDB for tmp table
+let $query = SELECT 1 FROM (SELECT 1 FROM t0 GROUP BY t0.c0) x(x) JOIN t1 ON t1.c1 = 1 GROUP BY t1.c1;
+
+--echo # Hash join with 't1' as build input and the materialized tmp
+--echo # table 'x' as probe input. The build input is empty. So the probe input
+--echo # will not be read by the worker; this used to crash then because the
+--echo # worker calls ha_innobase::pq_worker_scan_end which was not robust
+--echo # against a non-opened table (now it is).
+
+--replace_regex /cost=[0-9\.]+/cost=***/  /rows=[0-9\.]+/rows=***/
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+SET SESSION BIG_TABLES = DEFAULT;
+
+--echo # BUG2023080801757 assertion failure on reversed_access for derived table
+
+let $query=
+SELECT 1 FROM ((SELECT pi() FROM t0) LIMIT 0 OFFSET 2) y(z) JOIN (SELECT 1) x(z) USING (z)
+  ORDER BY y.z DESC;
+
+--echo # With Temptable engine, no PQ on top level, as such table cannot be divided if not doing a full table scan
+--replace_regex /cost=[0-9\.]+/cost=***/  /rows=[0-9\.]+/rows=***/
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+--echo # With InnoDB engine, PQ
+SET SESSION BIG_TABLES = 1;
+--replace_regex /cost=[0-9\.]+/cost=***/  /rows=[0-9\.]+/rows=***/
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+SET SESSION BIG_TABLES = DEFAULT;
+
+drop database pq_test;

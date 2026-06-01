@@ -1,0 +1,35 @@
+# ==== Purpose =======
+# Verify the following two scenarios:
+# Scenario 1: If the directory exists and is empty, executing create database will succeed.
+# Scenario 2: If the directory exists and is not empty, executing create database will fail.
+# ==== References ====
+#
+# BUG2026020328008 schema directory EXISTS cause fail
+#
+
+# Test for CREATE DATABASE with empty directory cleanup
+
+# Test 1: If the directory exists and is empty, executing create database will succeed.
+CREATE DATABASE testdb1;
+DROP DATABASE testdb1;
+--echo # Recreate empty directory manually
+--let $MYSQLD_DATADIR = `SELECT @@datadir`
+--mkdir $MYSQLD_DATADIR/testdb1
+CREATE DATABASE testdb1;
+DROP DATABASE testdb1;
+
+# Test 2: If the directory exists and is not empty, executing create database will fail.
+--echo # Recreate directory manually
+--mkdir $MYSQLD_DATADIR/testdb1
+
+--echo # Create a file in the directory
+--write_file $MYSQLD_DATADIR/testdb1/extra_file.txt
+This is an extra file in the directory
+EOF
+
+--error ER_SCHEMA_DIR_EXISTS
+CREATE DATABASE testdb1;
+
+--echo # Cleanup: remove the extra file and directory
+--remove_file $MYSQLD_DATADIR/testdb1/extra_file.txt
+--rmdir $MYSQLD_DATADIR/testdb1

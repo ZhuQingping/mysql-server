@@ -1,0 +1,39 @@
+---
+vars:
+  service_name: TaurusDB-Kernel
+  app_name: "DBS-{service_name}"
+  group: dbs
+  owner: dbs
+
+
+xbuild: 1.0.0
+name: {app_name}
+version: 2.0.6.3
+platform: noarch
+
+prometheus:
+  manifest: {PROJECT_ROOT}/.build_config/{service_name}/manifest.yml
+  scripts:
+    - {PROJECT_ROOT}/.build_config/{service_name}/action/*
+
+schema: {PROJECT_ROOT}/.build_config/{service_name}/vars/main.yml
+
+rpms:
+  - name: "{app_name}-src"
+    arch: noarch
+    dest_direction: {PACKAGE_ROOT}/repo
+    def_attr:
+      group: {group}
+      owner: {owner}
+    file_list:
+      - source_file: {PROJECT_ROOT}/v*.tar.gz
+        install_path: /opt/dbs/{service_name}/
+  - name: "{app_name}-config"
+    arch: noarch
+    dest_direction: {PACKAGE_ROOT}/config
+    def_attr:
+      group: {group}
+      owner: {owner}
+    file_list:
+      - source_file: {PROJECT_ROOT}/{service_name}/config/obs_upload_ak_sk
+        install_path: /opt/cloud/{service_name}

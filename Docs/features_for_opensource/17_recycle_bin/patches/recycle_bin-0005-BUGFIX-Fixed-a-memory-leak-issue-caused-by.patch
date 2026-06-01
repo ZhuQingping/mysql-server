@@ -1,0 +1,40 @@
+From f908a9dd2246d28795a7c80a139347a0035a6fdd Mon Sep 17 00:00:00 2001
+From: wanghan <wanghan58@contributor>
+
+
+Date: Wed, 8 Apr 2026 21:46:05 +0800
+Subject: [PATCH] BUGFIX Fixed a memory leak issue caused by truncate
+ when the recycle bin is enabled
+
+Issue:
+--------
+When the recycle bin is enabled, memory leakage occurs when the TRUNCATE
+statement is executed on a table with the instant drop column.
+
+Analysis:
+--------
+The memory of the dropped column is not released by recycle_bin_remove.
+
+Solution:
+--------
+Released the memory of the dropped column in recycle_bin_remove.
+---
+ sql/dd/collection.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/sql/dd/collection.cc b/sql/dd/collection.cc
+index 745983724ee..0be76865320 100644
+--- a/sql/dd/collection.cc
++++ b/sql/dd/collection.cc
+@@ -117,7 +117,7 @@ void Collection<T>::recycle_bin_remove(
+     deleted columns in m_removed_items. */
+     m_items.erase(std::remove(m_items.begin(), m_items.end(), item),
+                   m_items.end());
+-
++    delete item;
+     renumerate_items();
+   }
+ }
+-- 
+2.23.0
+

@@ -1,0 +1,30 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+
+--echo #  Test innodb prepare redo log can flush normally during DDL execution.
+
+create database test_ddl_durability;
+use test_ddl_durability;
+create table t1(pk int primary key, c1 int, c2 int, key ci(c1));
+insert into t1 values (1,2,3),(2,3,4),(3,4,5);
+
+--echo # suspend master thread to stop backgroud redo flush.
+set global debug='d, ib_pause_master_thread';
+
+--echo # hope 10s is ok
+--sleep 10
+--echo # pause backgroud redo flush.
+set global innodb_flush_log_at_timeout=2700;
+
+set session debug='d, crash_afer_dstore_commit_done';
+--source include/expect_crash.inc
+--error 2013
+optimize table t1;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+
+--echo # Before this patch, the following drop table will crash.
+drop database test_ddl_durability;
+
+--source include/force_restart.inc

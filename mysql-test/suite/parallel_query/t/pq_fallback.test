@@ -1,0 +1,207 @@
+--source include/pq_test.inc
+
+# This test collects queries where the setup of PQ fails, and a graceful fallback to the serial plan is done.
+select @@parallel_graceful_fallback;
+
+# group by
+create table t1(a int primary key, b varchar(10), c decimal(5,2), d double);
+insert into t1 values (1, 'The', '3.14', '3.14');
+insert into t1 values (2, 'quick', '4.25', '3.14');
+insert into t1 values (3, 'brown', '5.36', '3.14');
+insert into t1 values (4, 'fox', '6.47', '3.14');
+insert into t1 values (5, 'jumps', '3.14', '6.28');
+insert into t1 values (6, 'over', '4.25', '6.28');
+insert into t1 values (7, 'the', '5.36', '6.28');
+insert into t1 values (8, 'lazy', '6.47', '6.28');
+insert into t1 values (9, 'dog', '7.58', '6.28');
+
+## sum/min/max/avg/count ##
+select c,sum(a) from t1 group by(c);
+explain select c,sum(a) from t1 group by(c);
+select c,avg(a) from t1 group by(c);
+explain select c,avg(a) from t1 group by(c);
+select count(*) from t1 group by(c);
+explain select count(*) from t1 group by(c);
+select c,max(d) from t1 group by(c);
+explain select c,max(d) from t1 group by(c);
+select c,min(d) from t1 group by(c);
+explain select c,min(d) from t1 group by(c);
+
+## optimized with key
+SELECT * FROM t1 GROUP BY a ORDER BY c;
+explain SELECT * FROM t1 GROUP BY a ORDER BY c;
+
+## having normal item
+SELECT c FROM t1 GROUP BY c HAVING c > 4 ORDER by c Limit 10;
+
+## having item func
+EXPLAIN SELECT c FROM t1 GROUP BY c HAVING (ROUND(c) % 3) > 1 ORDER by c Limit 10;
+SELECT c FROM t1 GROUP BY c HAVING (ROUND(c) % 3) > 1 ORDER by c Limit 10;
+
+## having aggr
+EXPLAIN SELECT c, sum(d) from t1 GROUP BY c, d HAVING sum(d) > 10 ORDER BY c, d LIMIT 10;
+SELECT c, sum(d) from t1 GROUP BY c, d HAVING sum(d) > 10 ORDER BY c, d LIMIT 10;
+
+## mutil-col
+SELECT c AS col1, d AS col2, SUM(c) AS col3 FROM t1 GROUP BY 1, 2;
+EXPLAIN SELECT c AS col1, d AS col2, SUM(c) AS col3 FROM t1 GROUP BY 1, 2;
+
+# order by
+## asc/desc sorting
+select a, b, c, d from t1 order by c desc, d asc;
+EXPLAIN select a, b, c, d from t1 order by c desc, d asc;
+
+## optimized-order-by
+select * from t1 order by a;
+EXPLAIN select * from t1 order by a;
+select * from t1 order by a desc;
+EXPLAIN select * from t1 order by a desc;
+
+## order by 'expression'
+select * from t1 order by d + a * c;
+EXPLAIN select * from t1 order by d + a * c;
+
+## orderd-aggregation
+select avg(d), c from t1 group by c order by avg(d);
+EXPLAIN select avg(d), c from t1 group by c order by avg(d);
+
+## distinct order by
+select distinct substring(b,2,2) as s from t1 having s like "%e" order by s limit 2;
+EXPLAIN select distinct substring(b,2,2) as s from t1 having s like "e%" order by s limit 2;
+
+DROP TABLE t1;
+
+# scalar uncorrelated subquery
+create table t1 (id int, a int);
+create table t2 (b int);
+insert into t1 values (1, 1), (2, 1), (0, 2), (1, 3), (3, 3), (0, 2);
+insert into t2 values (1), (3), (2), (0), (1), (2), (1);
+
+analyze table t1, t2;
+## scalar subquery in field list
+explain select id, (select avg(b) from t2) as t from t1;
+select id, (select avg(b) from t2) as t from t1;
+
+## scalar subquery in group-by
+explain select sum(t1.a) from t1, t2 group by (select avg(t1.id) from t1) + t1.a;
+select sum(t1.a) from t1, t2 group by (select avg(t1.id) from t1) + t1.a;
+
+## scalar subquery in order-by
+explain select t1.a from t1 order by (select avg(t1.id) from t1) + t1.a;
+select t1.a from t1 order by (select avg(t1.id) from t1) + t1.a;
+
+## scalar subquery in where condition
+explain select * from t1 where a > (select avg(b) from t2);
+select * from t1 where a > (select avg(b) from t2);
+
+## scalar subquery in aggregation
+explain select id, sum((select avg(b) from t2)) as t from t1 group by id order by id;
+select id, sum((select avg(b) from t2)) as t from t1 group by id order by id;
+
+## scalar subquery in having
+explain SELECT SUM(a), (SELECT SUM(b) FROM t2) AS scalar FROM t1 HAVING SUM(a) > scalar;
+SELECT SUM(a), (SELECT SUM(b) FROM t2) AS scalar FROM t1 HAVING SUM(a) > scalar;
+
+DROP tables t1, t2;
+
+# Hash-join
+CREATE TABLE t (i INTEGER);
+INSERT INTO t VALUES (1), (2), (3);
+ANALYZE TABLE t;
+
+## parallel-oblivious hash join
+let $query = SELECT /*+ PQ(t 2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+## parallel-aware hash join
+let $query = SELECT /*+ PQ(t2 2) */ * FROM t
+  JOIN t t2 ON t.i = t2.i
+  JOIN t t3 on t2.i = t3.i
+  ORDER BY t.i, t2.i, t3.i;
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+DROP TABLE t;
+
+## Parallel semi hash join
+CREATE TABLE t1 (i INTEGER);
+CREATE TABLE t2 (i INTEGER);
+INSERT INTO t1 VALUES (1), (2);
+INSERT INTO t2 VALUES (1), (1);
+ANALYZE TABLE t1, t2;
+
+### Parallel-oblivious semi hash join
+set session parallel_rows_threshold = 100;
+let $query = SELECT /*+PQ(t1)*/ * FROM t1 WHERE (t1.i) IN (SELECT t2.i FROM t2);
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+### Parallel-aware semi hash join
+set session parallel_rows_threshold = 0;
+let $query = SELECT * FROM t1 WHERE (t1.i) IN (SELECT t2.i FROM t2);
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+DROP TABLE t1, t2;
+
+set @saved_threshold = @@parallel_rows_threshold;
+## Parallel anti hash join
+CREATE TABLE t1 (f1 INTEGER PRIMARY KEY);
+INSERT INTO t1 VALUES (1), (2), (3);
+CREATE TABLE t2 (f1 INTEGER NOT NULL);
+INSERT INTO t2 VALUES (1), (2), (3), (4);
+ANALYZE TABLE t1, t2;
+
+### Parallel-oblivious anti hash join
+set session parallel_rows_threshold = 100;
+let $query = SELECT /*+PQ(t1)*/ * FROM t1 LEFT JOIN t2 USING (f1) WHERE t2.f1 IS NULL;
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+### Parallel-aware anti hash join
+set session parallel_rows_threshold = 0;
+let $query = SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t2.f1 IS NULL;
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+DROP TABLE t1, t2;
+
+## Parallel-oblivious outer hash join
+CREATE TABLE t1 (col1 INTEGER);
+CREATE TABLE t2 (col1 INTEGER);
+INSERT INTO t1 VALUES (1), (2);
+INSERT INTO t2 VALUES (1);
+ANALYZE TABLE t1, t2;
+
+### Parallel-oblivious outer hash join
+set session parallel_rows_threshold = 100;
+let $query = SELECT /*+PQ(t1)*/ * FROM t1 LEFT JOIN t2 ON t1.col1 = t2.col1;
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+### Parallel-aware outer hash join
+set session parallel_rows_threshold = 0;
+let $query = SELECT * FROM t1 LEFT JOIN t2 ON t1.col1 = t2.col1;
+eval EXPLAIN FORMAT=tree $query;
+--sorted_result
+eval $query;
+
+set session parallel_rows_threshold = @saved_threshold;
+DROP TABLE t1, t2;
+
+# uncorrelated subquery
+--source pq_subquery.test
+
+# correlated subquery
+--source pq_subquery_correlated.test
+
+# view
+--source pq_derived_view.test

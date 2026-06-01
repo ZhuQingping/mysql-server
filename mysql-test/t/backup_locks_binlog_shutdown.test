@@ -1,0 +1,40 @@
+# Create database and table for test.
+CREATE DATABASE db1;
+USE db1;
+CREATE TABLE t1(a int);
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+
+# 1. Test shutdown when lock binlog and lock table both exist.
+# Lock binlog for backup.
+LOCK BINLOG FOR BACKUP;
+
+# Lock table t1 read.
+LOCK TABLE t1 READ;
+
+--echo # Shut server down.
+--let $shutdown_server_timeout = 300
+--source include/shutdown_mysqld.inc
+
+--echo # Restart the server.
+--source include/start_mysqld.inc
+
+USE db1;
+SELECT * FROM t1 order by a;
+
+# 2. Test shutdown when only lock table exist, lock binlog does not exist.
+# Lock table t1 read.
+LOCK TABLE t1 READ;
+
+--echo # Shut server down.
+--let $shutdown_server_timeout = 300
+--source include/shutdown_mysqld.inc
+
+--echo # Restart the server.
+--source include/start_mysqld.inc
+
+USE db1;
+SELECT * FROM t1 order by a;
+
+# Drop database db1.
+DROP DATABASE db1;

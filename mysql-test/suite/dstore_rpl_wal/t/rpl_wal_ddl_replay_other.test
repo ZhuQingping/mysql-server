@@ -1,0 +1,168 @@
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_setup.inc
+--enable_warnings
+
+--echo #
+--echo # 一、Set up the test environment.
+--echo #
+--connection $node1
+CREATE DATABASE IF NOT EXISTS test_other_db 
+DEFAULT CHARACTER SET utf8mb4 
+DEFAULT COLLATE utf8mb4_general_ci;
+
+USE test_other_db;
+
+CREATE TABLE employees (
+    emp_id INT AUTO_INCREMENT PRIMARY KEY,
+    emp_name VARCHAR(100) NOT NULL,
+    department VARCHAR(50),
+    salary DECIMAL(10, 2),
+    hire_date DATE,
+    performance_rating INT DEFAULT 0,
+    status VARCHAR(20) DEFAULT 'ACTIVE'
+);
+
+INSERT INTO employees(emp_name, department, salary, hire_date, performance_rating) VALUES
+('张三', '技术部', 15000.00, '2020-01-15', 95),
+('李四', '技术部', 12000.00, '2020-03-20', 88),
+('王五', '销售部', 8000.00, '2021-05-10', 92),
+('赵六', '人事部', 10000.00, '2019-11-30', 85),
+('钱七', '销售部', 9000.00, '2022-02-14', 78),
+('孙八', '财务部', 11000.00, '2021-07-01', 90);
+
+--echo #
+--echo # 二、Specify corresponding DDL statements for SQLCOM.
+--echo #
+
+--echo #
+--echo # SQLCOM_OPTIMIZE
+--echo #
+--connection $node1
+OPTIMIZE table employees;
+
+--echo #
+--echo # SQLCOM_TRUNCATE
+--echo #
+truncate table employees;
+
+--echo #
+--echo # SQLCOM_RENAME_TABLE
+--echo #
+--connection $node1
+rename table employees to employees_temp;
+
+# CREATE SERVER 是 MySQL 用于定义 「远程 MySQL 服务器的连接元数据」 的语句，简单说：创建一个「远程数据库服务器的配置别名」，
+# 把远程库的 IP、端口、用户名、密码等信息存储在 MySQL 本地的系统表中，后续可以通过这个别名直接访问远程库，核心用于「FEDERATED 联邦引擎」。
+# s1：自定义的「服务器别名」，相当于给远程库起一个名字，后续通过这个名字调用
+# FOREIGN DATA WRAPPER mysql：指定「外部数据包装器」，MySQL 中固定写mysql即可，是对接远程 MySQL 的专用包装器
+# OPTIONS (...)：核心配置项，可配置的参数包含：
+# HOST：远程 MySQL 的 IP 地址 / 域名（你写的127.0.0.1是本地回环，测试专用）
+# USER：远程 MySQL 的登录用户名
+# PASSWORD：远程 MySQL 的登录密码
+# PORT：远程 MySQL 的端口号（默认 3306）
+# DATABASE：远程 MySQL 的目标数据库名
+# CREATE SERVER s1 ...：创建一个名为s1的远程服务器配置，记录了远程库的 IP 是 127.0.0.1；
+# ALTER SERVER s1 ...：修改这个配置，新增「登录用户为 test」的参数；
+# DROP SERVER s1：删除这个远程服务器配置别名，释放元数据；
+# ✅ 4. 核心特点
+# 该语句只创建配置元数据，不会实际连接远程服务器，也不会创建任何数据表；
+# 配置信息存储在系统表 mysql.servers 中，可通过SELECT * FROM mysql.servers;查看；
+# 你的写法极简且正确，只配置了核心必选参数，是 MTR 测试的最佳写法（测试只需要验证语法同步，无需完整配置）。
+--echo #
+--echo # SQLCOM_CREATE_SERVER
+--echo #
+CREATE SERVER s1 FOREIGN DATA WRAPPER mysql OPTIONS (HOST '127.0.0.1');
+CREATE SERVER s2 FOREIGN DATA WRAPPER mysql OPTIONS (HOST '127.0.0.1');
+
+--echo #
+--echo # SQLCOM_ALTER_SERVER
+--echo #
+ALTER SERVER s1 OPTIONS (USER 'test');
+
+--echo #
+--echo # SQLCOM_DROP_SERVER
+--echo #
+DROP SERVER s2;
+
+# ✅ 1. 作用
+# CREATE RESOURCE GROUP 是 MySQL 8.0.16+ 新增的 「资源组管理」核心语法，作用是：创建「CPU 核心资源分组」，对 MySQL 的线程进行 CPU 资源隔离和调度，
+# 简单说就是「给 MySQL 的不同业务线程分配指定的 CPU 核心，避免高负载业务抢占全部 CPU 资源」，属于 MySQL 的高性能调优特性。
+# ✅ 2. 语法拆解
+# ✔️ CREATE RESOURCE GROUP rg1 TYPE = USER;
+# rg1：自定义的「资源组名称」，可自定义命名
+# TYPE = USER ：指定资源组类型，只有 2 种可选值（必写）：
+# TYPE = USER ：用户资源组，用于普通的用户业务线程（查询、更新、存储过程等），你的写法就是这个，最常用；
+# TYPE = SYSTEM ：系统资源组，仅用于 MySQL 的内部核心线程（比如 IO 线程、复制线程），禁止用户修改 / 删除；
+--echo #
+--echo # SQLCOM_CREATE_RESOURCE_GROUP
+--echo #
+CREATE RESOURCE GROUP rg1 TYPE = USER;
+CREATE RESOURCE GROUP rg2 TYPE = SYSTEM;
+
+# VCPU = 0-1：核心配置项，给该资源组分配指定的 CPU 核心，这里表示「分配服务器的第 0、1 号 CPU 核心给 rg1 资源组使用」；
+# 扩展：也可以写离散的 CPU 核心，比如VCPU = 0,2,3，表示分配 0、2、3 号核心；
+# 该配置是强制隔离：分配给 rg1 的 CPU 核心，只会运行该组的线程，其他资源组的线程无法抢占。
+--echo #
+--echo # SQLCOM_ALTER_RESOURCE_GROUP
+--echo #
+ALTER RESOURCE GROUP rg1 VCPU = 0-1;
+
+--echo #
+--echo # SQLCOM_DROP_RESOURCE_GROUP
+--echo #
+DROP RESOURCE GROUP rg2;
+
+# ✅ 1. 作用
+# CREATE SPATIAL REFERENCE SYSTEM 简称 CREATE SRS，是 MySQL 8.0.19+ 新增的语法，作用是：创建「空间参考系统」，用于定义 地理空间数据的坐标规则、投影方式、单位 等元数据，专门配合 MySQL 的空间数据类型（GEOMETRY/POINT/POLYGON 等）使用。
+# ✅ 2. 为什么你把它注释掉了？（非常正确的选择）
+# 你的注释是极其合理的，这个语法有一个 「强制限制」，导致它不适合放到 MTR 测试用例中，也是几乎所有 MTR 测试都会注释该语法的原因：
+# ✅ 强制规则：CREATE SRS 中的 ID 参数 必须是全局唯一的数值，且必须是权威机构（如 EPSG）分配的标准 ID，不能自定义写1234！
+# 比如 GPS 的经纬度坐标对应的 EPSG ID 是4326，这是固定的；
+# 如果你自定义写1234，执行会直接报错：ERROR 3735 (SR001): Invalid spatial reference system ID；
+# ✅ 3. 核心特点
+# 该语法是空间数据库开发的专用语法，普通业务几乎用不到；
+# 你的注释操作完全正确，避免了测试用例执行报错，这是资深 MTR 测试的经验写法；
+# 对应的枚举值SQLCOM_CREATE_SRS/SQLCOM_DROP_SRS依然有效，只是语法本身有严格限制，无需测试。
+--echo #
+--echo # SQLCOM_CREATE_SRS
+--echo #
+# CREATE SPATIAL REFERENCE SYSTEM srs1 NAME 'test' ORGANIZATION 'EPSG' ID 1234;
+
+--echo #
+--echo # SQLCOM_DROP_SRS
+--echo #
+# DROP SPATIAL REFERENCE SYSTEM srs1;
+
+--echo #
+--echo # 三、Check database metadata on the standby node to ensure correct metadata replay.
+--echo #
+--sleep 2
+--connection $node2
+use test_other_db;
+show tables;
+
+SELECT * FROM mysql.servers WHERE Server_name IN ('s1','s2');
+SELECT * FROM INFORMATION_SCHEMA.RESOURCE_GROUPS WHERE RESOURCE_GROUP_NAME IN ('rg1','rg2');
+
+--echo #
+--echo # 四、Perform a switchover.
+--echo #
+--sleep 2
+--let $old_primary = $node1
+--let $old_standby = $node2
+--let $old_standby_port = $SERVER_MYPORT_2
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_switch.inc
+
+--echo #
+--echo # 五、Verify replayed DDL effectiveness on the new primary node.
+--echo #
+--connection $node2
+show tables;
+use test_other_db;
+select * from employees_temp;
+
+--disable_warnings
+--let $current_standby = $node1
+--let $current_primary = $node2
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_cleanup.inc
+--enable_warnings

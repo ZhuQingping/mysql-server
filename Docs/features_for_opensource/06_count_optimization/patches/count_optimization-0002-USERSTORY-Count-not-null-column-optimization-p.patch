@@ -1,0 +1,1799 @@
+From 53191dcfb87a5957b5caea36af3c5a565e4bc9aa Mon Sep 17 00:00:00 2001
+From: zhuqingping <zhuqingping1@contributor>
+
+
+Date: Fri, 4 Jul 2025 11:58:13 +0800
+Subject: [PATCH] USERSTORY Count not null column optimization [post-fix]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Since count(not_null_null) to count(0) optimization which would
+remove the dependency on 'column' and thus allow for more covering
+indexes. This feature belongs to one specific optimization strategies,
+so we remove independent parameters 'rds_simplify_count_not_null' and
+add it into 'optimizer_switch'.
+
+Add more test cases(include prepared statement, stored procedure) for
+count not null column optimization feature.
+
+Fix compile error for gcc 11 environment, error message as follows:
+```
+devtoolset-11/root/usr/include/c++/11/bits/stl_map.h: In instantiation of ‘class std::map<Item*, Item*, std::less<Item*>, Mem_root_allocator<std::pair<const Item*, Item*> > >’:
+mysql/sql/sql_plan_cache.h:84:7:   required from here
+devtoolset-11/root/usr/include/c++/11/bits/stl_map.h:123:71: error: static assertion failed: std::map must have the same value_type as its allocator
+  123 |       static_assert(is_same<typename _Alloc::value_type, value_type>::value,
+      |                                                                       ^~~~~
+devtoolset-11/root/usr/include/c++/11/bits/stl_map.h:123:71: note: ‘std::integral_constant<bool, false>::value’ evaluates to false
+make[2]: *** [sql/CMakeFiles/sql_main.dir/mysqld.cc.o] Error 1
+```
+---
+ mysql-test/include/explain_non_select.inc     |   6 +-
+ mysql-test/include/skip_scan_test-dstore.inc  |   6 +-
+ mysql-test/include/skip_scan_test.inc         |   6 +-
+ mysql-test/r/all_persisted_variables.result   |   8 +-
+ mysql-test/r/heap_btree.result                |   6 +-
+ mysql-test/r/heap_hash.result                 |   6 +-
+ mysql-test/r/index_merge_myisam.result        |  18 +-
+ mysql-test/r/invisible_indexes.result         |   6 +-
+ .../myisam_explain_json_non_select_all.result |   6 +-
+ ...myisam_explain_json_non_select_none.result |   6 +-
+ .../r/myisam_explain_non_select_all.result    |   6 +-
+ .../r/myisam_explain_non_select_none.result   |   6 +-
+ mysql-test/r/mysqld--help-notwin.result       |   9 +-
+ mysql-test/r/opt_hints_set_var.result         |   6 +-
+ mysql-test/r/optimizer_switch.result          |  23 +-
+ mysql-test/r/persisted_variables_bugs.result  |   8 +-
+ mysql-test/r/skip_scan.result                 |   6 +-
+ mysql-test/r/skip_scan_myisam.result          |   6 +-
+ mysql-test/r/subquery_antijoin.result         |   4 +-
+ .../r/mysqld--help-notwin-dstore.result       |   9 +-
+ .../r/opt_hints_set_var-dstore.result         |   6 +-
+ .../r/optimizer_switch-dstore.result          |  18 +-
+ .../r/simplify_count_not_null.result          | 324 ++++++++++++++++--
+ .../dstore_main/r/skip_scan-dstore.result     |   6 +-
+ .../r/subquery_antijoin-dstore.result         |   4 +-
+ .../t/simplify_count_not_null.test            | 149 ++++++--
+ mysql-test/suite/sys_vars/r/all_vars.result   |   2 -
+ mysql-test/t/all_persisted_variables.test     |   2 +-
+ mysql-test/t/heap_btree.test                  |   6 +-
+ mysql-test/t/heap_hash.test                   |   6 +-
+ mysql-test/t/optimizer_switch.test            |   5 +-
+ sql/item_sum.cc                               |   5 +-
+ sql/sql_const.h                               |   8 +-
+ sql/sql_plan_cache.h                          |   2 +-
+ sql/sys_vars.cc                               |  11 +-
+ sql/system_variables.h                        |   4 -
+ 36 files changed, 522 insertions(+), 193 deletions(-)
+
+diff --git a/mysql-test/include/explain_non_select.inc b/mysql-test/include/explain_non_select.inc
+index 5912d2680c0..cc44171046a 100644
+--- a/mysql-test/include/explain_non_select.inc
++++ b/mysql-test/include/explain_non_select.inc
+@@ -746,8 +746,8 @@ DROP TABLE t1,t2;
+ CREATE TABLE t1 (c1 INT KEY);
+ CREATE TABLE t2 (c2 INT);
+ CREATE TABLE t3 (c3 INT);
+-set @old_simplify_count=@@rds_simplify_count_not_null;
+-set rds_simplify_count_not_null=0;
++set @save_optimizer_switch=@@optimizer_switch;
++set optimizer_switch='simplify_count_not_null=off';
+ EXPLAIN UPDATE t3 SET c3 = (
+   SELECT COUNT(d1.c1)
+     FROM (
+@@ -756,7 +756,7 @@ EXPLAIN UPDATE t3 SET c3 = (
+         JOIN t1 AS a12 ON a12.c1 = a11.c1
+     ) d1
+ ); 
+-set rds_simplify_count_not_null=@old_simplify_count;
++set optimizer_switch=@save_optimizer_switch;
+ 
+ DROP TABLE t1, t2, t3;
+ 
+diff --git a/mysql-test/include/skip_scan_test-dstore.inc b/mysql-test/include/skip_scan_test-dstore.inc
+index 59b0f835b5e..8074aeea279 100644
+--- a/mysql-test/include/skip_scan_test-dstore.inc
++++ b/mysql-test/include/skip_scan_test-dstore.inc
+@@ -89,12 +89,12 @@
+ 
+ # Testing aggregate functions.
+ 
+-set @old_simplify_count=@@rds_simplify_count_not_null;
+-set rds_simplify_count_not_null=0;
++set @save_optimizer_switch=@@optimizer_switch;
++set optimizer_switch='simplify_count_not_null=off';
+ --let $query = SELECT count(a), count(b), count(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3
+ --let $hint_query = SELECT /*+ SKIP_SCAN(t) */ count(a), count(b), count(c) FROM t WHERE a = 5 AND c > 10 AND d < 3
+ --source include/skip_scan_query.inc
+-set rds_simplify_count_not_null=@old_simplify_count;
++set optimizer_switch=@save_optimizer_switch;
+ 
+ --let $query = SELECT min(a), max(b), min(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3
+ --let $hint_query = SELECT /*+ SKIP_SCAN(t) */ min(a), max(b), min(c) FROM t WHERE a = 5 AND c > 10 AND d < 3
+diff --git a/mysql-test/include/skip_scan_test.inc b/mysql-test/include/skip_scan_test.inc
+index 43b5005244d..3be47404836 100644
+--- a/mysql-test/include/skip_scan_test.inc
++++ b/mysql-test/include/skip_scan_test.inc
+@@ -89,12 +89,12 @@
+ 
+ # Testing aggregate functions.
+ 
+-set @old_simplify_count=@@rds_simplify_count_not_null;
+-set rds_simplify_count_not_null=0;
++set @save_optimizer_switch=@@optimizer_switch;
++set optimizer_switch='simplify_count_not_null=off';
+ --let $query = SELECT count(a), count(b), count(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3
+ --let $hint_query = SELECT /*+ SKIP_SCAN(t) */ count(a), count(b), count(c) FROM t WHERE a = 5 AND c > 10 AND d < 3
+ --source include/skip_scan_query.inc
+-set rds_simplify_count_not_null=@old_simplify_count;
++set optimizer_switch=@save_optimizer_switch;
+ 
+ --let $query = SELECT min(a), max(b), min(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3
+ --let $hint_query = SELECT /*+ SKIP_SCAN(t) */ min(a), max(b), min(c) FROM t WHERE a = 5 AND c > 10 AND d < 3
+diff --git a/mysql-test/r/all_persisted_variables.result b/mysql-test/r/all_persisted_variables.result
+index fc69409bfec..1ffed07c968 100644
+--- a/mysql-test/r/all_persisted_variables.result
++++ b/mysql-test/r/all_persisted_variables.result
+@@ -40,7 +40,7 @@ include/assert.inc [Expect 500+ variables in the table. Due to open Bugs, we are
+ 
+ # Test SET PERSIST
+ 
+-include/assert.inc [Expect 481 persisted variables in the table.]
++include/assert.inc [Expect 480 persisted variables in the table.]
+ 
+ ************************************************************
+ * 3. Restart server, it must preserve the persisted variable
+@@ -48,9 +48,9 @@ include/assert.inc [Expect 481 persisted variables in the table.]
+ ************************************************************
+ # restart
+ 
+-include/assert.inc [Expect 481 persisted variables in persisted_variables table.]
+-include/assert.inc [Expect 481 persisted variables shown as PERSISTED in variables_info table.]
+-include/assert.inc [Expect 481 persisted variables with matching peristed and global values.]
++include/assert.inc [Expect 480 persisted variables in persisted_variables table.]
++include/assert.inc [Expect 480 persisted variables shown as PERSISTED in variables_info table.]
++include/assert.inc [Expect 480 persisted variables with matching peristed and global values.]
+ 
+ ************************************************************
+ * 4. Test RESET PERSIST IF EXISTS. Verify persisted variable
+diff --git a/mysql-test/r/heap_btree.result b/mysql-test/r/heap_btree.result
+index a8b710ca293..c35827d5897 100644
+--- a/mysql-test/r/heap_btree.result
++++ b/mysql-test/r/heap_btree.result
+@@ -342,8 +342,8 @@ c1 INT NOT NULL,
+ c2 INT NOT NULL,
+ UNIQUE KEY USING BTREE (c2,c1)) ENGINE = MEMORY;
+ INSERT INTO t1(c1,c2) VALUES (5,1), (4,1), (3,5), (2,3), (1,3);
+-set @old_simplify_count=@@rds_simplify_count_not_null;
+-set rds_simplify_count_not_null=0;
++set @save_optimizer_switch=@@optimizer_switch;
++set optimizer_switch='simplify_count_not_null=off';
+ EXPLAIN SELECT c2, COUNT(c1) FROM t1 GROUP BY c2;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	index	c2	c2	8	NULL	5	100.00	NULL
+@@ -354,5 +354,5 @@ c2	COUNT(c1)
+ 1	2
+ 3	2
+ 5	1
+-set rds_simplify_count_not_null=@old_simplify_count;
++set optimizer_switch=@save_optimizer_switch;
+ DROP TABLE t1;
+diff --git a/mysql-test/r/heap_hash.result b/mysql-test/r/heap_hash.result
+index 94e10ec69d5..158bb3bf076 100644
+--- a/mysql-test/r/heap_hash.result
++++ b/mysql-test/r/heap_hash.result
+@@ -464,8 +464,8 @@ c1 INT NOT NULL,
+ c2 INT NOT NULL,
+ UNIQUE KEY USING HASH (c2,c1)) ENGINE = MEMORY;
+ INSERT INTO t1(c1,c2) VALUES (5,1), (4,1), (3,5), (2,3), (1,3);
+-set @old_simplify_count=@@rds_simplify_count_not_null;
+-set rds_simplify_count_not_null=0;
++set @save_optimizer_switch=@@optimizer_switch;
++set optimizer_switch='simplify_count_not_null=off';
+ EXPLAIN SELECT c2, COUNT(c1) FROM t1 GROUP BY c2;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	ALL	c2	NULL	NULL	NULL	5	100.00	Using temporary
+@@ -476,7 +476,7 @@ c2	COUNT(c1)
+ 1	2
+ 3	2
+ 5	1
+-set rds_simplify_count_not_null=@old_simplify_count;
++set optimizer_switch=@save_optimizer_switch;
+ DROP TABLE t1;
+ #
+ # Bug#29527115 MYSQL USES COMPOSITE HASH INDEX WHEN NOT POSSIBLE AND RETURNS WRONG RESULT.
+diff --git a/mysql-test/r/index_merge_myisam.result b/mysql-test/r/index_merge_myisam.result
+index e389369d477..2d7f050309b 100644
+--- a/mysql-test/r/index_merge_myisam.result
++++ b/mysql-test/r/index_merge_myisam.result
+@@ -2108,19 +2108,19 @@ SET sql_mode = default;
+ #
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='index_merge=off,index_merge_union=off';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=off,index_merge_union=off,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=off,index_merge_union=off,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='index_merge_union=on';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=off,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=off,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='default,index_merge_sort_union=off';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=off,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=off,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch=4;
+ set optimizer_switch=NULL;
+ ERROR 42000: Variable 'optimizer_switch' can't be set to the value of 'NULL'
+@@ -2146,21 +2146,21 @@ set optimizer_switch=default;
+ set optimizer_switch='index_merge=off,index_merge_union=off,default';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=off,index_merge_union=off,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=off,index_merge_union=off,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch=default;
+ select @@global.optimizer_switch;
+ @@global.optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set @@global.optimizer_switch=default;
+ select @@global.optimizer_switch;
+ @@global.optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ #
+ # Check index_merge's @@optimizer_switch flags
+ #
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ create table t0 (a int);
+ insert into t0 values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+ create table t1 (a int, b int, c int, filler char(100), 
+@@ -2304,5 +2304,5 @@ Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`t
+ set optimizer_switch=default;
+ show variables like 'optimizer_switch';
+ Variable_name	Value
+-optimizer_switch	index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++optimizer_switch	index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ drop table t0, t1;
+diff --git a/mysql-test/r/invisible_indexes.result b/mysql-test/r/invisible_indexes.result
+index 67ef257000f..52ed41b826a 100644
+--- a/mysql-test/r/invisible_indexes.result
++++ b/mysql-test/r/invisible_indexes.result
+@@ -526,7 +526,7 @@ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1`
+ SELECT @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ EXPLAIN SELECT a FROM t1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	X	100.00	NULL
+@@ -540,7 +540,7 @@ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1`
+ SELECT @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ EXPLAIN SELECT a FROM t1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	X	100.00	NULL
+@@ -548,7 +548,7 @@ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1`
+ SELECT @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=on,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=on,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ SET @@optimizer_switch='use_invisible_indexes=off';
+ EXPLAIN SELECT a FROM t1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+diff --git a/mysql-test/r/myisam_explain_json_non_select_all.result b/mysql-test/r/myisam_explain_json_non_select_all.result
+index d02f7815e0f..67a8a4819a5 100644
+--- a/mysql-test/r/myisam_explain_json_non_select_all.result
++++ b/mysql-test/r/myisam_explain_json_non_select_all.result
+@@ -7936,8 +7936,8 @@ DROP TABLE t1,t2;
+ CREATE TABLE t1 (c1 INT KEY);
+ CREATE TABLE t2 (c2 INT);
+ CREATE TABLE t3 (c3 INT);
+-set @old_simplify_count=@@rds_simplify_count_not_null;
+-set rds_simplify_count_not_null=0;
++set @save_optimizer_switch=@@optimizer_switch;
++set optimizer_switch='simplify_count_not_null=off';
+ EXPLAIN UPDATE t3 SET c3 = (
+ SELECT COUNT(d1.c1)
+ FROM (
+@@ -7952,7 +7952,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 3	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+ Warnings:
+ Note	1003	update `test`.`t3` set `test`.`t3`.`c3` = (/* select#2 */ select count(NULL) from (/* select#3 */ select NULL AS `c1` from `test`.`t1` `a11` straight_join `test`.`t2` `a21` join `test`.`t1` `a12` where multiple equal(NULL, NULL, NULL)) `d1`)
+-set rds_simplify_count_not_null=@old_simplify_count;
++set optimizer_switch=@save_optimizer_switch;
+ DROP TABLE t1, t2, t3;
+ #71
+ CREATE TABLE t1 (c1 INT NOT NULL, c2 INT NOT NULL, INDEX i1(c1));
+diff --git a/mysql-test/r/myisam_explain_json_non_select_none.result b/mysql-test/r/myisam_explain_json_non_select_none.result
+index 5f3935f0115..e427689d029 100644
+--- a/mysql-test/r/myisam_explain_json_non_select_none.result
++++ b/mysql-test/r/myisam_explain_json_non_select_none.result
+@@ -7955,8 +7955,8 @@ DROP TABLE t1,t2;
+ CREATE TABLE t1 (c1 INT KEY);
+ CREATE TABLE t2 (c2 INT);
+ CREATE TABLE t3 (c3 INT);
+-set @old_simplify_count=@@rds_simplify_count_not_null;
+-set rds_simplify_count_not_null=0;
++set @save_optimizer_switch=@@optimizer_switch;
++set optimizer_switch='simplify_count_not_null=off';
+ EXPLAIN UPDATE t3 SET c3 = (
+ SELECT COUNT(d1.c1)
+ FROM (
+@@ -7971,7 +7971,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 3	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+ Warnings:
+ Note	1003	update `test`.`t3` set `test`.`t3`.`c3` = (/* select#2 */ select count(NULL) from (/* select#3 */ select NULL AS `c1` from `test`.`t1` `a11` straight_join `test`.`t2` `a21` join `test`.`t1` `a12` where multiple equal(NULL, NULL, NULL)) `d1`)
+-set rds_simplify_count_not_null=@old_simplify_count;
++set optimizer_switch=@save_optimizer_switch;
+ DROP TABLE t1, t2, t3;
+ #71
+ CREATE TABLE t1 (c1 INT NOT NULL, c2 INT NOT NULL, INDEX i1(c1));
+diff --git a/mysql-test/r/myisam_explain_non_select_all.result b/mysql-test/r/myisam_explain_non_select_all.result
+index 617c14677f3..ddf854afe4d 100644
+--- a/mysql-test/r/myisam_explain_non_select_all.result
++++ b/mysql-test/r/myisam_explain_non_select_all.result
+@@ -2399,8 +2399,8 @@ DROP TABLE t1,t2;
+ CREATE TABLE t1 (c1 INT KEY);
+ CREATE TABLE t2 (c2 INT);
+ CREATE TABLE t3 (c3 INT);
+-set @old_simplify_count=@@rds_simplify_count_not_null;
+-set rds_simplify_count_not_null=0;
++set @save_optimizer_switch=@@optimizer_switch;
++set optimizer_switch='simplify_count_not_null=off';
+ EXPLAIN UPDATE t3 SET c3 = (
+ SELECT COUNT(d1.c1)
+ FROM (
+@@ -2415,7 +2415,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 3	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+ Warnings:
+ Note	1003	update `test`.`t3` set `test`.`t3`.`c3` = (/* select#2 */ select count(NULL) from (/* select#3 */ select NULL AS `c1` from `test`.`t1` `a11` straight_join `test`.`t2` `a21` join `test`.`t1` `a12` where multiple equal(NULL, NULL, NULL)) `d1`)
+-set rds_simplify_count_not_null=@old_simplify_count;
++set optimizer_switch=@save_optimizer_switch;
+ DROP TABLE t1, t2, t3;
+ #71
+ CREATE TABLE t1 (c1 INT NOT NULL, c2 INT NOT NULL, INDEX i1(c1));
+diff --git a/mysql-test/r/myisam_explain_non_select_none.result b/mysql-test/r/myisam_explain_non_select_none.result
+index c882cef7f9f..5ef9db636e6 100644
+--- a/mysql-test/r/myisam_explain_non_select_none.result
++++ b/mysql-test/r/myisam_explain_non_select_none.result
+@@ -2396,8 +2396,8 @@ DROP TABLE t1,t2;
+ CREATE TABLE t1 (c1 INT KEY);
+ CREATE TABLE t2 (c2 INT);
+ CREATE TABLE t3 (c3 INT);
+-set @old_simplify_count=@@rds_simplify_count_not_null;
+-set rds_simplify_count_not_null=0;
++set @save_optimizer_switch=@@optimizer_switch;
++set optimizer_switch='simplify_count_not_null=off';
+ EXPLAIN UPDATE t3 SET c3 = (
+ SELECT COUNT(d1.c1)
+ FROM (
+@@ -2412,7 +2412,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 3	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+ Warnings:
+ Note	1003	update `test`.`t3` set `test`.`t3`.`c3` = (/* select#2 */ select count(NULL) from (/* select#3 */ select NULL AS `c1` from `test`.`t1` `a11` straight_join `test`.`t2` `a21` join `test`.`t1` `a12` where multiple equal(NULL, NULL, NULL)) `d1`)
+-set rds_simplify_count_not_null=@old_simplify_count;
++set optimizer_switch=@save_optimizer_switch;
+ DROP TABLE t1, t2, t3;
+ #71
+ CREATE TABLE t1 (c1 INT NOT NULL, c2 INT NOT NULL, INDEX i1(c1));
+diff --git a/mysql-test/r/mysqld--help-notwin.result b/mysql-test/r/mysqld--help-notwin.result
+index e6ab9aab127..a07bff8dfee 100644
+--- a/mysql-test/r/mysqld--help-notwin.result
++++ b/mysql-test/r/mysqld--help-notwin.result
+@@ -1301,12 +1301,6 @@ The following options may be given as the first argument:
+  If the number of rows in the table is changed more than
+  this fraction, cached plan will be invalidated. A value
+  of 0 means the cached plan is always valid.
+- --rds-simplify-count-not-null 
+- Replace COUNT(column) with COUNT(*) if they are
+- equivalent. This may eliminate the need for 'column'
+- during execution, opening more possibilities for access
+- methods.
+- (Defaults to on; use --skip-rds-simplify-count-not-null to disable.)
+  --rds-use-ddl-info-replay 
+  Enable replay ddl info for restore and replication
+  process based on physical replication.
+@@ -2202,7 +2196,7 @@ old-style-user-limits FALSE
+ optimizer-max-subgraph-pairs 100000
+ optimizer-prune-level 1
+ optimizer-search-depth 62
+-optimizer-switch index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++optimizer-switch index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ optimizer-trace 
+ optimizer-trace-features greedy_search=on,range_optimizer=on,dynamic_range=on,repeated_subselect=on
+ optimizer-trace-limit 1
+@@ -2298,7 +2292,6 @@ rds-local-socket-using-per-thread FALSE
+ rds-log-archive-path 
+ rds-plan-cache TRUE
+ rds-plan-cache-allow-change-ratio 0.2
+-rds-simplify-count-not-null TRUE
+ rds-use-ddl-info-replay FALSE
+ rds-write-binlog-into-redo FALSE
+ rds-write-ddl-info-into-redo FALSE
+diff --git a/mysql-test/r/opt_hints_set_var.result b/mysql-test/r/opt_hints_set_var.result
+index bc4bc8b5a31..a7735f1b3e9 100644
+--- a/mysql-test/r/opt_hints_set_var.result
++++ b/mysql-test/r/opt_hints_set_var.result
+@@ -509,11 +509,11 @@ set optimizer_switch=default;
+ DROP TABLE t1;
+ CALL test_hint("SET_VAR(optimizer_switch='mrr=off')", "optimizer_switch");
+ VARIABLE_VALUE
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ VARIABLE_VALUE
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=off,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=off,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ VARIABLE_VALUE
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ CALL test_hint("SET_VAR(range_alloc_block_size=8192)", "range_alloc_block_size");
+ VARIABLE_VALUE
+ 4096
+diff --git a/mysql-test/r/optimizer_switch.result b/mysql-test/r/optimizer_switch.result
+index c0058993d3a..8d6e9281918 100644
+--- a/mysql-test/r/optimizer_switch.result
++++ b/mysql-test/r/optimizer_switch.result
+@@ -3,47 +3,52 @@ BUG#37120 optimizer_switch allowable values not according to specification
+ 
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='default';
+ set optimizer_switch='materialization=off';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='default';
+ set optimizer_switch='semijoin=off';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=off,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=off,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='default';
+ set optimizer_switch='loosescan=off';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=off,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=off,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='default';
+ set optimizer_switch='semijoin=off,materialization=off';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=off,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=off,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='default';
+ set optimizer_switch='materialization=off,semijoin=off';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=off,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=off,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='default';
+ set optimizer_switch='semijoin=off,materialization=off,loosescan=off';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=off,loosescan=off,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=off,loosescan=off,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='default';
+ set optimizer_switch='semijoin=off,loosescan=off';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=off,loosescan=off,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=off,loosescan=off,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='default';
+ set optimizer_switch='materialization=off,loosescan=off';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=on,loosescan=off,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=on,loosescan=off,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
++set optimizer_switch='default';
++set optimizer_switch='simplify_count_not_null=off';
++select @@optimizer_switch;
++@@optimizer_switch
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=off
+ set optimizer_switch='default';
+ create table t1 (a1 char(8), a2 char(8));
+ create table t2 (b1 char(8), b2 char(8));
+diff --git a/mysql-test/r/persisted_variables_bugs.result b/mysql-test/r/persisted_variables_bugs.result
+index 531cb36fe16..b5d6ce95768 100644
+--- a/mysql-test/r/persisted_variables_bugs.result
++++ b/mysql-test/r/persisted_variables_bugs.result
+@@ -176,7 +176,7 @@ SELECT @@global.optimizer_trace_offset;
+ -1
+ SELECT @@global.optimizer_switch;
+ @@global.optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ SELECT @@global.enforce_gtid_consistency;
+ @@global.enforce_gtid_consistency
+ OFF
+@@ -195,7 +195,7 @@ VARIABLE_NAME	VARIABLE_VALUE
+ binlog_cache_size	32768
+ collation_database	utf8mb4_0900_ai_ci
+ enforce_gtid_consistency	0
+-optimizer_switch	index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++optimizer_switch	index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ optimizer_trace_offset	-1
+ sql_mode	ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION
+ # Restart server
+@@ -211,7 +211,7 @@ SELECT @@global.optimizer_trace_offset;
+ -1
+ SELECT @@global.optimizer_switch;
+ @@global.optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ SELECT @@global.enforce_gtid_consistency;
+ @@global.enforce_gtid_consistency
+ OFF
+@@ -223,7 +223,7 @@ VARIABLE_NAME	VARIABLE_VALUE
+ binlog_cache_size	32768
+ collation_database	utf8mb4_0900_ai_ci
+ enforce_gtid_consistency	0
+-optimizer_switch	index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++optimizer_switch	index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ optimizer_trace_offset	-1
+ sql_mode	ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION
+ # Cleanup
+diff --git a/mysql-test/r/skip_scan.result b/mysql-test/r/skip_scan.result
+index b4fe51549ad..8415a898301 100644
+--- a/mysql-test/r/skip_scan.result
++++ b/mysql-test/r/skip_scan.result
+@@ -891,8 +891,8 @@ Handler_read_prev	0
+ Handler_read_rnd	0
+ Handler_read_rnd_next	0
+ include/diff_tables.inc [test.hint_skip_scan, test.no_skip_scan]
+-set @old_simplify_count=@@rds_simplify_count_not_null;
+-set rds_simplify_count_not_null=0;
++set @save_optimizer_switch=@@optimizer_switch;
++set optimizer_switch='simplify_count_not_null=off';
+ set optimizer_switch = 'skip_scan=on';
+ EXPLAIN SELECT count(a), count(b), count(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+@@ -945,7 +945,7 @@ Handler_read_prev	0
+ Handler_read_rnd	0
+ Handler_read_rnd_next	0
+ include/diff_tables.inc [test.hint_skip_scan, test.no_skip_scan]
+-set rds_simplify_count_not_null=@old_simplify_count;
++set optimizer_switch=@save_optimizer_switch;
+ set optimizer_switch = 'skip_scan=on';
+ EXPLAIN SELECT min(a), max(b), min(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+diff --git a/mysql-test/r/skip_scan_myisam.result b/mysql-test/r/skip_scan_myisam.result
+index 43c5718db53..e4723e39202 100644
+--- a/mysql-test/r/skip_scan_myisam.result
++++ b/mysql-test/r/skip_scan_myisam.result
+@@ -891,8 +891,8 @@ Handler_read_prev	0
+ Handler_read_rnd	0
+ Handler_read_rnd_next	0
+ include/diff_tables.inc [test.hint_skip_scan, test.no_skip_scan]
+-set @old_simplify_count=@@rds_simplify_count_not_null;
+-set rds_simplify_count_not_null=0;
++set @save_optimizer_switch=@@optimizer_switch;
++set optimizer_switch='simplify_count_not_null=off';
+ set optimizer_switch = 'skip_scan=on';
+ EXPLAIN SELECT count(a), count(b), count(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+@@ -945,7 +945,7 @@ Handler_read_prev	0
+ Handler_read_rnd	0
+ Handler_read_rnd_next	0
+ include/diff_tables.inc [test.hint_skip_scan, test.no_skip_scan]
+-set rds_simplify_count_not_null=@old_simplify_count;
++set optimizer_switch=@save_optimizer_switch;
+ set optimizer_switch = 'skip_scan=on';
+ EXPLAIN SELECT min(a), max(b), min(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+diff --git a/mysql-test/r/subquery_antijoin.result b/mysql-test/r/subquery_antijoin.result
+index 31cf410088f..12fdc1c17de 100644
+--- a/mysql-test/r/subquery_antijoin.result
++++ b/mysql-test/r/subquery_antijoin.result
+@@ -27,7 +27,7 @@ test.t2	analyze	status	OK
+ set optimizer_switch="firstmatch=on,materialization=off";
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ EXPLAIN SELECT 1 as a FROM dual
+ WHERE NOT EXISTS (SELECT * FROM t1 AS it);
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+@@ -162,7 +162,7 @@ pk
+ set optimizer_switch="firstmatch=off,materialization=on";
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=off,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=off,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ EXPLAIN SELECT 1 as a FROM dual
+ WHERE NOT EXISTS (SELECT * FROM t1 AS it);
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+diff --git a/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result b/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
+index e6ab9aab127..a07bff8dfee 100644
+--- a/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
++++ b/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
+@@ -1301,12 +1301,6 @@ The following options may be given as the first argument:
+  If the number of rows in the table is changed more than
+  this fraction, cached plan will be invalidated. A value
+  of 0 means the cached plan is always valid.
+- --rds-simplify-count-not-null 
+- Replace COUNT(column) with COUNT(*) if they are
+- equivalent. This may eliminate the need for 'column'
+- during execution, opening more possibilities for access
+- methods.
+- (Defaults to on; use --skip-rds-simplify-count-not-null to disable.)
+  --rds-use-ddl-info-replay 
+  Enable replay ddl info for restore and replication
+  process based on physical replication.
+@@ -2202,7 +2196,7 @@ old-style-user-limits FALSE
+ optimizer-max-subgraph-pairs 100000
+ optimizer-prune-level 1
+ optimizer-search-depth 62
+-optimizer-switch index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++optimizer-switch index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ optimizer-trace 
+ optimizer-trace-features greedy_search=on,range_optimizer=on,dynamic_range=on,repeated_subselect=on
+ optimizer-trace-limit 1
+@@ -2298,7 +2292,6 @@ rds-local-socket-using-per-thread FALSE
+ rds-log-archive-path 
+ rds-plan-cache TRUE
+ rds-plan-cache-allow-change-ratio 0.2
+-rds-simplify-count-not-null TRUE
+ rds-use-ddl-info-replay FALSE
+ rds-write-binlog-into-redo FALSE
+ rds-write-ddl-info-into-redo FALSE
+diff --git a/mysql-test/suite/dstore_main/r/opt_hints_set_var-dstore.result b/mysql-test/suite/dstore_main/r/opt_hints_set_var-dstore.result
+index c215f07d49f..0eb556656af 100644
+--- a/mysql-test/suite/dstore_main/r/opt_hints_set_var-dstore.result
++++ b/mysql-test/suite/dstore_main/r/opt_hints_set_var-dstore.result
+@@ -505,11 +505,11 @@ set optimizer_switch=default;
+ DROP TABLE t1;
+ CALL test_hint("SET_VAR(optimizer_switch='mrr=off')", "optimizer_switch");
+ VARIABLE_VALUE
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ VARIABLE_VALUE
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=off,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=off,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ VARIABLE_VALUE
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ CALL test_hint("SET_VAR(range_alloc_block_size=8192)", "range_alloc_block_size");
+ VARIABLE_VALUE
+ 4096
+diff --git a/mysql-test/suite/dstore_main/r/optimizer_switch-dstore.result b/mysql-test/suite/dstore_main/r/optimizer_switch-dstore.result
+index 10ed2ef0d76..fabda345fc8 100644
+--- a/mysql-test/suite/dstore_main/r/optimizer_switch-dstore.result
++++ b/mysql-test/suite/dstore_main/r/optimizer_switch-dstore.result
+@@ -3,47 +3,47 @@ BUG#37120 optimizer_switch allowable values not according to specification
+ 
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='default';
+ set optimizer_switch='materialization=off';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='default';
+ set optimizer_switch='semijoin=off';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=off,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=off,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='default';
+ set optimizer_switch='loosescan=off';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=off,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=off,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='default';
+ set optimizer_switch='semijoin=off,materialization=off';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=off,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=off,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='default';
+ set optimizer_switch='materialization=off,semijoin=off';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=off,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=off,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='default';
+ set optimizer_switch='semijoin=off,materialization=off,loosescan=off';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=off,loosescan=off,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=off,loosescan=off,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='default';
+ set optimizer_switch='semijoin=off,loosescan=off';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=off,loosescan=off,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=off,loosescan=off,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='default';
+ set optimizer_switch='materialization=off,loosescan=off';
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=on,loosescan=off,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=on,loosescan=off,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ set optimizer_switch='default';
+ create table t1 (a1 char(8), a2 char(8));
+ create table t2 (b1 char(8), b2 char(8));
+diff --git a/mysql-test/suite/dstore_main/r/simplify_count_not_null.result b/mysql-test/suite/dstore_main/r/simplify_count_not_null.result
+index 31d60758b10..b542402f0ec 100644
+--- a/mysql-test/suite/dstore_main/r/simplify_count_not_null.result
++++ b/mysql-test/suite/dstore_main/r/simplify_count_not_null.result
+@@ -20,9 +20,9 @@ create view v1 as select a,a+1 as c,b from t1;
+ # - the "using index", which appears for most queries. Those for which it does not appear, have a good reason:
+ # even after the simplification to count(0) there remains reasons why the index on 'b' is not enough (see comments
+ # further down).
+-set rds_simplify_count_not_null=1-1;
+-select @@rds_simplify_count_not_null;
+-@@rds_simplify_count_not_null
++set optimizer_switch='simplify_count_not_null=off';
++select @@optimizer_switch like '%simplify_count_not_null=on%' as simplify_count_not_null;
++simplify_count_not_null
+ 0
+ # Optimal case, using index only
+ explain select count(*) from t1 where b>1;
+@@ -42,12 +42,18 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+ Warnings:
+ Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++select count(a) from t1 where b>1;
++count(a)
++4
+ # we see the rewriting is done, and only on "count(a)". But as "count(distinct a)" is used, not "using index".
+ explain select count(a), count(distinct a), count(b), sum(a), count(a+1) from t1 where b>1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+ Warnings:
+ Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)`,count(distinct `test`.`t1`.`a`) AS `count(distinct a)`,count(`test`.`t1`.`b`) AS `count(b)`,sum(`test`.`t1`.`a`) AS `sum(a)`,count((`test`.`t1`.`a` + 1)) AS `count(a+1)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++select count(a), count(distinct a), count(b), sum(a), count(a+1) from t1 where b>1;
++count(a)	count(distinct a)	count(b)	sum(a)	count(a+1)
++4	4	4	18	4
+ # these two show the difference between inner join and left join: on the right side of the latter, columns become nullable.
+ explain select count(t1.a), count(t2.a) from t1, t1 as t2 where t1.b>1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+@@ -55,13 +61,25 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using join buffer (hash join)
+ Warnings:
+ Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(t1.a)`,count(`test`.`t2`.`a`) AS `count(t2.a)` from `test`.`t1` join `test`.`t1` `t2` where (`test`.`t1`.`b` > 1)
++select count(t1.a), count(t2.a) from t1, t1 as t2 where t1.b>1;
++count(t1.a)	count(t2.a)
++24	24
+ explain select count(t1.a), count(t2.a) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+ 1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where; Using join buffer (hash join)
+ Warnings:
+ Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(t1.a)`,count(`test`.`t2`.`a`) AS `count(t2.a)` from `test`.`t1` left join `test`.`t1` `t2` on((`test`.`t1`.`b` >= 3)) where (`test`.`t1`.`b` > 1)
++select count(t1.a), count(t2.a) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
++count(t1.a)	count(t2.a)
++19	18
+ # see the difference between the counts
++explain select count(t1.a), count(t2.a), count(*) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
++1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where; Using join buffer (hash join)
++Warnings:
++Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(t1.a)`,count(`test`.`t2`.`a`) AS `count(t2.a)`,count(0) AS `count(*)` from `test`.`t1` left join `test`.`t1` `t2` on((`test`.`t1`.`b` >= 3)) where (`test`.`t1`.`b` > 1)
+ select count(t1.a), count(t2.a), count(*) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
+ count(t1.a)	count(t2.a)	count(*)
+ 19	18	19
+@@ -73,12 +91,18 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 1	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using join buffer (hash join)
+ Warnings:
+ Note	1003	/* select#1 */ select count(`test`.`t2`.`a`) AS `count(t2.a)`,count(`test`.`t1`.`a`) AS `count(t1.a)`,count(`test`.`t3`.`a`) AS `count(t3.a)` from `test`.`t1` left join (`test`.`t1` `t2` join `test`.`t1` `t3`) on((`test`.`t1`.`b` >= 3)) where (`test`.`t1`.`b` > 1)
++select count(t2.a), count(t1.a), count(t3.a) from t1 left join (t1 as t2, t1 as t3) on t1.b>=3 where t1.b>1;
++count(t2.a)	count(t1.a)	count(t3.a)
++108	109	108
+ # the feature works on merged views' columns too
+ explain select count(a), count(c), count(b) from v1 where b>1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+ Warnings:
+ Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)`,count((`test`.`t1`.`a` + 1)) AS `count(c)`,count(`test`.`t1`.`b`) AS `count(b)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++select count(a), count(c), count(b) from v1 where b>1;
++count(a)	count(c)	count(b)
++4	4	4
+ # and also if the view is materialized: the tmp table's have proper (non-)nullability so we can use this information, and rewrite. No "using index" though, which is understandable: MySQL has not created any index on the tmp table.
+ explain select /*+ no_merge() */ count(a), count(c), count(b) from v1 where b>1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+@@ -86,25 +110,39 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 2	DERIVED	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+ Warnings:
+ Note	1003	/* select#1 */ select /*+ NO_MERGE(@`select#1`) */ count(`test`.`v1`.`a`) AS `count(a)`,count(`test`.`v1`.`c`) AS `count(c)`,count(`test`.`v1`.`b`) AS `count(b)` from `test`.`v1`
++select /*+ no_merge() */ count(a), count(c), count(b) from v1 where b>1;
++count(a)	count(c)	count(b)
++4	4	4
+ # same, with derived tables
+ explain select count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+ Warnings:
+ Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)`,count((`test`.`t1`.`a` + 1)) AS `count(c)`,count(`test`.`t1`.`b`) AS `count(b)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++select count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
++count(a)	count(c)	count(b)
++4	4	4
+ explain select /*+ no_merge() */ count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	NULL
+ 2	DERIVED	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+ Warnings:
+ Note	1003	/* select#1 */ select /*+ NO_MERGE(@`select#1`) */ count(`dt`.`a`) AS `count(a)`,count(`dt`.`c`) AS `count(c)`,count(`dt`.`b`) AS `count(b)` from (/* select#2 */ select `test`.`t1`.`a` AS `a`,(`test`.`t1`.`a` + 1) AS `c`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 1)) `dt`
++select /*+ no_merge() */ count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
++count(a)	count(c)	count(b)
++4	4	4
+ # GROUP BY
+ explain select b, count(a) from t1 where b>1 group by b;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b`
++select b, count(a) from t1 where b>1 group by b;
++b	count(a)
++2	1
++3	3
+ # outer reference. Here the feature brings nothing, because in the subquery ext.a is a constant, so even without any rewriting we have "using index" in the subquery. Alas we do not have "using index" in the top query (see comment in Item_sum_count::fix_fields() for an explanation).
++# However, note that the rewriting happens *after* deciding of where aggregation happens, so we get an error here (aggregation in top query), while we do not get an error if the user has written count(0) (aggregation in subquery), and each time this is proper behaviour.
+ explain select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	NULL
+@@ -112,9 +150,14 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ Warnings:
+ Note	1276	Field or reference 'test.ext.a' of SELECT #2 was resolved in SELECT #1
+ Note	1003	/* select#1 */ select (/* select#2 */ select count(`test`.`ext`.`a`) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1)
+-# However, note that the rewriting happens *after* deciding of where aggregation happens, so we get an error here (aggregation in top query), while we do not get an error if the user has written count(0) (aggregation in subquery), and each time this is proper behaviour.
+ select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
+ ERROR 21000: Subquery returns more than 1 row
++explain select (select count(0) from t1 where t1.b>1) from t1 as ext where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	Using index
++2	SUBQUERY	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1003	/* select#1 */ select (/* select#2 */ select count(0) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(0) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1)
+ select (select count(0) from t1 where t1.b>1) from t1 as ext where b>1;
+ (select count(0) from t1 where t1.b>1)
+ 4
+@@ -145,6 +188,8 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ Warnings:
+ Note	1276	Field or reference 'test.ext.a' of SELECT #2 was resolved in SELECT #1
+ Note	1003	/* select#1 */ select (/* select#2 */ select count(`test`.`ext`.`a`) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1) group by `test`.`ext`.`b`
++select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
++ERROR 21000: Subquery returns more than 1 row
+ explain select b,(select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	NULL
+@@ -152,28 +197,46 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ Warnings:
+ Note	1276	Field or reference 'test.ext.a' of SELECT #2 was resolved in SELECT #1
+ Note	1003	/* select#1 */ select `test`.`ext`.`b` AS `b`,(/* select#2 */ select count(`test`.`ext`.`a`) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1) group by `test`.`ext`.`b`
++select b,(select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
++ERROR 21000: Subquery returns more than 1 row
+ # HAVING
+ explain select b from t1 where b>1 group by b having count(a)>0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(`test`.`t1`.`a`) > 0)
++select b from t1 where b>1 group by b having count(a)>0;
++b
++2
++3
+ explain select b, count(a) from t1 where b>1 group by b having count(a)>0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(`test`.`t1`.`a`) > 0)
++select b, count(a) from t1 where b>1 group by b having count(a)>0;
++b	count(a)
++2	1
++3	3
+ # HAVING and merged view
+ explain select b from v1 where b>1 group by b having count(a)>0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(`test`.`t1`.`a`) > 0)
++select b from v1 where b>1 group by b having count(a)>0;
++b
++2
++3
+ explain select b, count(a) from v1 where b>1 group by b having count(a)>0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(`test`.`t1`.`a`) > 0)
++select b, count(a) from v1 where b>1 group by b having count(a)>0;
++b	count(a)
++2	1
++3	3
+ # ROLLUP
+ # Rewritten, but cannot use index only, as we group by 'a'
+ explain select count(a) from t1 where b>1 group by a;
+@@ -181,6 +244,12 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using temporary
+ Warnings:
+ Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`a`
++select count(a) from t1 where b>1 group by a;
++count(a)
++1
++1
++1
++1
+ explain select count(a) from t1 where b>1 group by a with rollup;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using filesort
+@@ -212,22 +281,28 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ Warnings:
+ Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+ Note	1003	/* select#1 */ select count(0) OVER ()  AS `count(*) over()` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++select count(*) over() from t1 where b>1;
++count(*) over()
++4
++4
++4
++4
+ # A window function is computed on the output of ROLLUP, and ROLLUP makes 'a' nullable; as explained in the code, the feature is disabled.
+-explain select a, count(a) over() from t1 group by a with rollup;
++explain select a, count(a) over(), count(0) over() from t1 group by a with rollup;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using temporary; Using filesort
+ Warnings:
+ Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+-Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,count(`a`) OVER ()  AS `count(a) over()` from `test`.`t1` group by `test`.`t1`.`a` with rollup
+-select a, count(a) over() from t1 group by a with rollup;
+-a	count(a) over()
+-1	6
+-2	6
+-3	6
+-4	6
+-5	6
+-8	6
+-NULL	6
++Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,count(`a`) OVER ()  AS `count(a) over()`,count(0) OVER ()  AS `count(0) over()` from `test`.`t1` group by `test`.`t1`.`a` with rollup
++select a, count(a) over(), count(0) over() from t1 group by a with rollup;
++a	count(a) over()	count(0) over()
++1	6	7
++2	6	7
++3	6	7
++4	6	7
++5	6	7
++8	6	7
++NULL	6	7
+ # compare to no-ROLLUP:
+ explain select a, count(a) over() from t1 group by a;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+@@ -243,9 +318,63 @@ a	count(a) over()
+ 5	6
+ 8	6
+ 4	6
+-set rds_simplify_count_not_null=1-0;
+-select @@rds_simplify_count_not_null;
+-@@rds_simplify_count_not_null
++# prepare statement
++prepare s1 from "explain select count(a) from t1 where b>?";
++prepare s2 from "select count(a) from t1 where b>?";
++set @b=1;
++execute s1 using @b;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index condition
++Warnings:
++Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++execute s2 using @b;
++count(a)
++4
++set @b=2;
++execute s1 using @b;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index condition
++Warnings:
++Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 2)
++execute s2 using @b;
++count(a)
++3
++set @b=3;
++execute s1 using @b;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index condition
++Warnings:
++Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 3)
++execute s2 using @b;
++count(a)
++0
++deallocate prepare s1;
++deallocate prepare s2;
++# store procedure
++create procedure p1(in arg int)
++begin
++explain select count(a) from t1 where b>arg;
++select count(a) from t1 where b>arg;
++end|
++call p1(1);
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index condition
++count(a)
++4
++call p1(2);
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using index condition
++count(a)
++3
++call p1(3);
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	1	100.00	Using index condition
++count(a)
++0
++drop procedure p1;
++set optimizer_switch='simplify_count_not_null=on';
++select @@optimizer_switch like '%simplify_count_not_null=on%' as simplify_count_not_null;
++simplify_count_not_null
+ 1
+ # Optimal case, using index only
+ explain select count(*) from t1 where b>1;
+@@ -265,12 +394,18 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+ Warnings:
+ Note	1003	/* select#1 */ select count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++select count(a) from t1 where b>1;
++count(a)
++4
+ # we see the rewriting is done, and only on "count(a)". But as "count(distinct a)" is used, not "using index".
+ explain select count(a), count(distinct a), count(b), sum(a), count(a+1) from t1 where b>1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+ Warnings:
+ Note	1003	/* select#1 */ select count(0) AS `count(a)`,count(distinct `test`.`t1`.`a`) AS `count(distinct a)`,count(`test`.`t1`.`b`) AS `count(b)`,sum(`test`.`t1`.`a`) AS `sum(a)`,count((`test`.`t1`.`a` + 1)) AS `count(a+1)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++select count(a), count(distinct a), count(b), sum(a), count(a+1) from t1 where b>1;
++count(a)	count(distinct a)	count(b)	sum(a)	count(a+1)
++4	4	4	18	4
+ # these two show the difference between inner join and left join: on the right side of the latter, columns become nullable.
+ explain select count(t1.a), count(t2.a) from t1, t1 as t2 where t1.b>1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+@@ -278,13 +413,25 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 1	SIMPLE	t2	NULL	index	NULL	b	5	NULL	6	100.00	Using index; Using join buffer (hash join)
+ Warnings:
+ Note	1003	/* select#1 */ select count(0) AS `count(t1.a)`,count(0) AS `count(t2.a)` from `test`.`t1` join `test`.`t1` `t2` where (`test`.`t1`.`b` > 1)
++select count(t1.a), count(t2.a) from t1, t1 as t2 where t1.b>1;
++count(t1.a)	count(t2.a)
++24	24
+ explain select count(t1.a), count(t2.a) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+ 1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where; Using join buffer (hash join)
+ Warnings:
+ Note	1003	/* select#1 */ select count(0) AS `count(t1.a)`,count(`test`.`t2`.`a`) AS `count(t2.a)` from `test`.`t1` left join `test`.`t1` `t2` on((`test`.`t1`.`b` >= 3)) where (`test`.`t1`.`b` > 1)
++select count(t1.a), count(t2.a) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
++count(t1.a)	count(t2.a)
++19	18
+ # see the difference between the counts
++explain select count(t1.a), count(t2.a), count(*) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where; Using join buffer (hash join)
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(t1.a)`,count(`test`.`t2`.`a`) AS `count(t2.a)`,count(0) AS `count(*)` from `test`.`t1` left join `test`.`t1` `t2` on((`test`.`t1`.`b` >= 3)) where (`test`.`t1`.`b` > 1)
+ select count(t1.a), count(t2.a), count(*) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
+ count(t1.a)	count(t2.a)	count(*)
+ 19	18	19
+@@ -296,12 +443,18 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 1	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using join buffer (hash join)
+ Warnings:
+ Note	1003	/* select#1 */ select count(`test`.`t2`.`a`) AS `count(t2.a)`,count(0) AS `count(t1.a)`,count(`test`.`t3`.`a`) AS `count(t3.a)` from `test`.`t1` left join (`test`.`t1` `t2` join `test`.`t1` `t3`) on((`test`.`t1`.`b` >= 3)) where (`test`.`t1`.`b` > 1)
++select count(t2.a), count(t1.a), count(t3.a) from t1 left join (t1 as t2, t1 as t3) on t1.b>=3 where t1.b>1;
++count(t2.a)	count(t1.a)	count(t3.a)
++108	109	108
+ # the feature works on merged views' columns too
+ explain select count(a), count(c), count(b) from v1 where b>1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+ Warnings:
+ Note	1003	/* select#1 */ select count(0) AS `count(a)`,count(0) AS `count(c)`,count(`test`.`t1`.`b`) AS `count(b)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++select count(a), count(c), count(b) from v1 where b>1;
++count(a)	count(c)	count(b)
++4	4	4
+ # and also if the view is materialized: the tmp table's have proper (non-)nullability so we can use this information, and rewrite. No "using index" though, which is understandable: MySQL has not created any index on the tmp table.
+ explain select /*+ no_merge() */ count(a), count(c), count(b) from v1 where b>1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+@@ -309,25 +462,39 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 2	DERIVED	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+ Warnings:
+ Note	1003	/* select#1 */ select /*+ NO_MERGE(@`select#1`) */ count(0) AS `count(a)`,count(0) AS `count(c)`,count(`test`.`v1`.`b`) AS `count(b)` from `test`.`v1`
++select /*+ no_merge() */ count(a), count(c), count(b) from v1 where b>1;
++count(a)	count(c)	count(b)
++4	4	4
+ # same, with derived tables
+ explain select count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+ Warnings:
+ Note	1003	/* select#1 */ select count(0) AS `count(a)`,count(0) AS `count(c)`,count(`test`.`t1`.`b`) AS `count(b)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++select count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
++count(a)	count(c)	count(b)
++4	4	4
+ explain select /*+ no_merge() */ count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	NULL
+ 2	DERIVED	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+ Warnings:
+ Note	1003	/* select#1 */ select /*+ NO_MERGE(@`select#1`) */ count(0) AS `count(a)`,count(0) AS `count(c)`,count(`dt`.`b`) AS `count(b)` from (/* select#2 */ select `test`.`t1`.`a` AS `a`,(`test`.`t1`.`a` + 1) AS `c`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 1)) `dt`
++select /*+ no_merge() */ count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
++count(a)	count(c)	count(b)
++4	4	4
+ # GROUP BY
+ explain select b, count(a) from t1 where b>1 group by b;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b`
++select b, count(a) from t1 where b>1 group by b;
++b	count(a)
++2	1
++3	3
+ # outer reference. Here the feature brings nothing, because in the subquery ext.a is a constant, so even without any rewriting we have "using index" in the subquery. Alas we do not have "using index" in the top query (see comment in Item_sum_count::fix_fields() for an explanation).
++# However, note that the rewriting happens *after* deciding of where aggregation happens, so we get an error here (aggregation in top query), while we do not get an error if the user has written count(0) (aggregation in subquery), and each time this is proper behaviour.
+ explain select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	Using index
+@@ -335,9 +502,14 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ Warnings:
+ Note	1276	Field or reference 'test.ext.a' of SELECT #2 was resolved in SELECT #1
+ Note	1003	/* select#1 */ select (/* select#2 */ select count(0) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1)
+-# However, note that the rewriting happens *after* deciding of where aggregation happens, so we get an error here (aggregation in top query), while we do not get an error if the user has written count(0) (aggregation in subquery), and each time this is proper behaviour.
+ select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
+ ERROR 21000: Subquery returns more than 1 row
++explain select (select count(0) from t1 where t1.b>1) from t1 as ext where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	Using index
++2	SUBQUERY	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1003	/* select#1 */ select (/* select#2 */ select count(0) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(0) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1)
+ select (select count(0) from t1 where t1.b>1) from t1 as ext where b>1;
+ (select count(0) from t1 where t1.b>1)
+ 4
+@@ -368,6 +540,8 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ Warnings:
+ Note	1276	Field or reference 'test.ext.a' of SELECT #2 was resolved in SELECT #1
+ Note	1003	/* select#1 */ select (/* select#2 */ select count(0) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1) group by `test`.`ext`.`b`
++select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
++ERROR 21000: Subquery returns more than 1 row
+ explain select b,(select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	NULL
+@@ -375,28 +549,46 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ Warnings:
+ Note	1276	Field or reference 'test.ext.a' of SELECT #2 was resolved in SELECT #1
+ Note	1003	/* select#1 */ select `test`.`ext`.`b` AS `b`,(/* select#2 */ select count(0) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1) group by `test`.`ext`.`b`
++select b,(select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
++ERROR 21000: Subquery returns more than 1 row
+ # HAVING
+ explain select b from t1 where b>1 group by b having count(a)>0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(0) > 0)
++select b from t1 where b>1 group by b having count(a)>0;
++b
++2
++3
+ explain select b, count(a) from t1 where b>1 group by b having count(a)>0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(0) > 0)
++select b, count(a) from t1 where b>1 group by b having count(a)>0;
++b	count(a)
++2	1
++3	3
+ # HAVING and merged view
+ explain select b from v1 where b>1 group by b having count(a)>0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(0) > 0)
++select b from v1 where b>1 group by b having count(a)>0;
++b
++2
++3
+ explain select b, count(a) from v1 where b>1 group by b having count(a)>0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(0) > 0)
++select b, count(a) from v1 where b>1 group by b having count(a)>0;
++b	count(a)
++2	1
++3	3
+ # ROLLUP
+ # Rewritten, but cannot use index only, as we group by 'a'
+ explain select count(a) from t1 where b>1 group by a;
+@@ -404,6 +596,12 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using temporary
+ Warnings:
+ Note	1003	/* select#1 */ select count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`a`
++select count(a) from t1 where b>1 group by a;
++count(a)
++1
++1
++1
++1
+ explain select count(a) from t1 where b>1 group by a with rollup;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using filesort
+@@ -435,22 +633,28 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ Warnings:
+ Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+ Note	1003	/* select#1 */ select count(0) OVER ()  AS `count(*) over()` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++select count(*) over() from t1 where b>1;
++count(*) over()
++4
++4
++4
++4
+ # A window function is computed on the output of ROLLUP, and ROLLUP makes 'a' nullable; as explained in the code, the feature is disabled.
+-explain select a, count(a) over() from t1 group by a with rollup;
++explain select a, count(a) over(), count(0) over() from t1 group by a with rollup;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using temporary; Using filesort
+ Warnings:
+ Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+-Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,count(`a`) OVER ()  AS `count(a) over()` from `test`.`t1` group by `test`.`t1`.`a` with rollup
+-select a, count(a) over() from t1 group by a with rollup;
+-a	count(a) over()
+-1	6
+-2	6
+-3	6
+-4	6
+-5	6
+-8	6
+-NULL	6
++Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,count(`a`) OVER ()  AS `count(a) over()`,count(0) OVER ()  AS `count(0) over()` from `test`.`t1` group by `test`.`t1`.`a` with rollup
++select a, count(a) over(), count(0) over() from t1 group by a with rollup;
++a	count(a) over()	count(0) over()
++1	6	7
++2	6	7
++3	6	7
++4	6	7
++5	6	7
++8	6	7
++NULL	6	7
+ # compare to no-ROLLUP:
+ explain select a, count(a) over() from t1 group by a;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+@@ -466,8 +670,62 @@ a	count(a) over()
+ 5	6
+ 8	6
+ 4	6
+-select @@rds_simplify_count_not_null;
+-@@rds_simplify_count_not_null
++# prepare statement
++prepare s1 from "explain select count(a) from t1 where b>?";
++prepare s2 from "select count(a) from t1 where b>?";
++set @b=1;
++execute s1 using @b;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using where; Using index
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++execute s2 using @b;
++count(a)
++4
++set @b=2;
++execute s1 using @b;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using where; Using index
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 2)
++execute s2 using @b;
++count(a)
++3
++set @b=3;
++execute s1 using @b;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using where; Using index
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 3)
++execute s2 using @b;
++count(a)
++0
++deallocate prepare s1;
++deallocate prepare s2;
++# store procedure
++create procedure p1(in arg int)
++begin
++explain select count(a) from t1 where b>arg;
++select count(a) from t1 where b>arg;
++end|
++call p1(1);
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using where; Using index
++count(a)
++4
++call p1(2);
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using where; Using index
++count(a)
++3
++call p1(3);
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	1	100.00	Using where; Using index
++count(a)
++0
++drop procedure p1;
++select @@optimizer_switch like '%simplify_count_not_null=on%' as simplify_count_not_null;
++simplify_count_not_null
+ 1
+ prepare s from 'explain select count(a) from t1 where b>1';
+ execute s;
+@@ -483,4 +741,4 @@ Note	1003	/* select#1 */ select count(0) AS `count(a)` from `test`.`t1` where (`
+ drop prepare s;
+ drop view v1;
+ drop table t1;
+-set rds_simplify_count_not_null=default;
++set optimizer_switch=default;
+diff --git a/mysql-test/suite/dstore_main/r/skip_scan-dstore.result b/mysql-test/suite/dstore_main/r/skip_scan-dstore.result
+index 112c5319c1d..c975d25905e 100644
+--- a/mysql-test/suite/dstore_main/r/skip_scan-dstore.result
++++ b/mysql-test/suite/dstore_main/r/skip_scan-dstore.result
+@@ -895,8 +895,8 @@ Handler_read_prev	0
+ Handler_read_rnd	0
+ Handler_read_rnd_next	0
+ include/diff_tables.inc [test.hint_skip_scan, test.no_skip_scan]
+-set @old_simplify_count=@@rds_simplify_count_not_null;
+-set rds_simplify_count_not_null=0;
++set @save_optimizer_switch=@@optimizer_switch;
++set optimizer_switch='simplify_count_not_null=off';
+ set optimizer_switch = 'skip_scan=on';
+ EXPLAIN SELECT count(a), count(b), count(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+@@ -949,7 +949,7 @@ Handler_read_prev	0
+ Handler_read_rnd	0
+ Handler_read_rnd_next	0
+ include/diff_tables.inc [test.hint_skip_scan, test.no_skip_scan]
+-set rds_simplify_count_not_null=@old_simplify_count;
++set optimizer_switch=@save_optimizer_switch;
+ set optimizer_switch = 'skip_scan=on';
+ EXPLAIN SELECT min(a), max(b), min(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+diff --git a/mysql-test/suite/dstore_main/r/subquery_antijoin-dstore.result b/mysql-test/suite/dstore_main/r/subquery_antijoin-dstore.result
+index 0da0c46468c..c407505d406 100644
+--- a/mysql-test/suite/dstore_main/r/subquery_antijoin-dstore.result
++++ b/mysql-test/suite/dstore_main/r/subquery_antijoin-dstore.result
+@@ -36,7 +36,7 @@ test.t2	analyze	status	OK
+ set optimizer_switch="firstmatch=on,materialization=off";
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=off,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ EXPLAIN SELECT 1 as a FROM dual
+ WHERE NOT EXISTS (SELECT * FROM t1 AS it);
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+@@ -171,7 +171,7 @@ pk
+ set optimizer_switch="firstmatch=off,materialization=on";
+ select @@optimizer_switch;
+ @@optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=off,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=off,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on
+ EXPLAIN SELECT 1 as a FROM dual
+ WHERE NOT EXISTS (SELECT * FROM t1 AS it);
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+diff --git a/mysql-test/suite/dstore_main/t/simplify_count_not_null.test b/mysql-test/suite/dstore_main/t/simplify_count_not_null.test
+index 57c0fdcd181..8af3301ea53 100644
+--- a/mysql-test/suite/dstore_main/t/simplify_count_not_null.test
++++ b/mysql-test/suite/dstore_main/t/simplify_count_not_null.test
+@@ -22,8 +22,17 @@ while ($c)
+ 
+ dec $c;
+ 
+-eval set rds_simplify_count_not_null=1-$c;
+-select @@rds_simplify_count_not_null;
++# Turn off simplify_count_not_null feature
++if ($c == 1) {
++set optimizer_switch='simplify_count_not_null=off';
++select @@optimizer_switch like '%simplify_count_not_null=on%' as simplify_count_not_null;
++}
++
++# Turn on simplify_count_not_null feature
++if($c == 0) {
++set optimizer_switch='simplify_count_not_null=on';
++select @@optimizer_switch like '%simplify_count_not_null=on%' as simplify_count_not_null;
++}
+ 
+ --echo # Optimal case, using index only
+ explain select count(*) from t1 where b>1;
+@@ -32,44 +41,68 @@ explain select count(*) from t1 where b>1;
+ explain select count(0) from t1 where b>1;
+ 
+ --echo # this demonstrates the basic case for the feature: without/with the feature, a covering index is used or not.
+-explain select count(a) from t1 where b>1;
++let $query=select count(a) from t1 where b>1;
++eval explain $query;
++eval $query;
+ 
+ --echo # we see the rewriting is done, and only on "count(a)". But as "count(distinct a)" is used, not "using index".
+-explain select count(a), count(distinct a), count(b), sum(a), count(a+1) from t1 where b>1;
++let $query=select count(a), count(distinct a), count(b), sum(a), count(a+1) from t1 where b>1;
++eval explain $query;
++eval $query;
+ 
+ --echo # these two show the difference between inner join and left join: on the right side of the latter, columns become nullable.
+-explain select count(t1.a), count(t2.a) from t1, t1 as t2 where t1.b>1;
++let $query=select count(t1.a), count(t2.a) from t1, t1 as t2 where t1.b>1;
++eval explain $query;
++eval $query;
++
++let $query=select count(t1.a), count(t2.a) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
++eval explain $query;
++eval $query;
+ 
+-explain select count(t1.a), count(t2.a) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
+ --echo # see the difference between the counts
+-select count(t1.a), count(t2.a), count(*) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
++let $query=select count(t1.a), count(t2.a), count(*) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
++eval explain $query;
++eval $query;
+ 
+ --echo # a slightly more complicated case
+-explain select count(t2.a), count(t1.a), count(t3.a) from t1 left join (t1 as t2, t1 as t3) on t1.b>=3 where t1.b>1;
++let $query=select count(t2.a), count(t1.a), count(t3.a) from t1 left join (t1 as t2, t1 as t3) on t1.b>=3 where t1.b>1;
++eval explain $query;
++eval $query;
+ 
+ --echo # the feature works on merged views' columns too
+-explain select count(a), count(c), count(b) from v1 where b>1;
++let $query=select count(a), count(c), count(b) from v1 where b>1;
++eval explain $query;
++eval $query;
+ 
+ --echo # and also if the view is materialized: the tmp table's have proper (non-)nullability so we can use this information, and rewrite. No "using index" though, which is understandable: MySQL has not created any index on the tmp table.
+-explain select /*+ no_merge() */ count(a), count(c), count(b) from v1 where b>1;
++let $query=select /*+ no_merge() */ count(a), count(c), count(b) from v1 where b>1;
++eval explain $query;
++eval $query;
+ 
+ --echo # same, with derived tables
+-explain select count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
++let $query=select count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
++eval explain $query;
++eval $query;
+ 
+-explain select /*+ no_merge() */ count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
++let $query=select /*+ no_merge() */ count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
++eval explain $query;
++eval $query;
+ 
+ --echo # GROUP BY
+-
+-explain select b, count(a) from t1 where b>1 group by b;
++let $query=select b, count(a) from t1 where b>1 group by b;
++eval explain $query;
++eval $query;
+ 
+ --echo # outer reference. Here the feature brings nothing, because in the subquery ext.a is a constant, so even without any rewriting we have "using index" in the subquery. Alas we do not have "using index" in the top query (see comment in Item_sum_count::fix_fields() for an explanation).
+-
+-explain select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
+-
+ --echo # However, note that the rewriting happens *after* deciding of where aggregation happens, so we get an error here (aggregation in top query), while we do not get an error if the user has written count(0) (aggregation in subquery), and each time this is proper behaviour.
++let $query=select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
++eval explain $query;
+ --error ER_SUBQUERY_NO_1_ROW
+-select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
+-select (select count(0) from t1 where t1.b>1) from t1 as ext where b>1;
++eval $query;
++
++let $query=select (select count(0) from t1 where t1.b>1) from t1 as ext where b>1;
++eval explain $query;
++eval $query;
+ 
+ --echo # As a consequence, such rewriting must not be done while creating a view (but it can be done when reading from this view), otherwise, the query's meaning would change.
+ create view v2 as select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
+@@ -85,43 +118,91 @@ set optimizer_trace=default;
+ drop view v2;
+ 
+ --echo # GROUP BY and outer reference
++let $query=select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
++eval explain $query;
++--error ER_SUBQUERY_NO_1_ROW
++eval $query;
+ 
+-explain select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
+-explain select b,(select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
++let $query=select b,(select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
++eval explain $query;
++--error ER_SUBQUERY_NO_1_ROW
++eval $query;
+ 
+ --echo # HAVING
++let $query=select b from t1 where b>1 group by b having count(a)>0;
++eval explain $query;
++eval $query;
+ 
+-explain select b from t1 where b>1 group by b having count(a)>0;
+-explain select b, count(a) from t1 where b>1 group by b having count(a)>0;
++let $query=select b, count(a) from t1 where b>1 group by b having count(a)>0;
++eval explain $query;
++eval $query;
+ 
+ --echo # HAVING and merged view
++let $query=select b from v1 where b>1 group by b having count(a)>0;
++eval explain $query;
++eval $query;
+ 
+-explain select b from v1 where b>1 group by b having count(a)>0;
+-explain select b, count(a) from v1 where b>1 group by b having count(a)>0;
++let $query=select b, count(a) from v1 where b>1 group by b having count(a)>0;
++eval explain $query;
++eval $query;
+ 
+ --echo # ROLLUP
+-
+ --echo # Rewritten, but cannot use index only, as we group by 'a'
+-explain select count(a) from t1 where b>1 group by a;
+-explain select count(a) from t1 where b>1 group by a with rollup;
+-select count(a) from t1 where b>1 group by a with rollup;
++let $query=select count(a) from t1 where b>1 group by a;
++eval explain $query;
++eval $query;
+ 
+---echo # COUNT as window function: the feature works too
++let $query=select count(a) from t1 where b>1 group by a with rollup;
++eval explain $query;
++eval $query;
+ 
++--echo # COUNT as window function: the feature works too
+ explain select count(a) over() from t1 where b>1;
+ select count(a) over() from t1 where b>1;
+ explain select count(*) over() from t1 where b>1;
++select count(*) over() from t1 where b>1;
++
+ --echo # A window function is computed on the output of ROLLUP, and ROLLUP makes 'a' nullable; as explained in the code, the feature is disabled.
+-explain select a, count(a) over() from t1 group by a with rollup;
+-select a, count(a) over() from t1 group by a with rollup;
++explain select a, count(a) over(), count(0) over() from t1 group by a with rollup;
++select a, count(a) over(), count(0) over() from t1 group by a with rollup;
++
+ --echo # compare to no-ROLLUP:
+ explain select a, count(a) over() from t1 group by a;
+ select a, count(a) over() from t1 group by a;
+ 
++--echo # prepare statement
++prepare s1 from "explain select count(a) from t1 where b>?";
++prepare s2 from "select count(a) from t1 where b>?";
++set @b=1;
++execute s1 using @b;
++execute s2 using @b;
++set @b=2;
++execute s1 using @b;
++execute s2 using @b;
++set @b=3;
++execute s1 using @b;
++execute s2 using @b;
++# cleanup
++deallocate prepare s1;
++deallocate prepare s2;
++
++--echo # store procedure
++delimiter |;
++create procedure p1(in arg int)
++begin
++  explain select count(a) from t1 where b>arg;
++  select count(a) from t1 where b>arg;
++end|
++delimiter ;|
++call p1(1);
++call p1(2);
++call p1(3);
++# cleanup
++drop procedure p1;
+ }
+ 
+ # As we change arguments of COUNT, verify that it is a permanent transformation
+-select @@rds_simplify_count_not_null;
++select @@optimizer_switch like '%simplify_count_not_null=on%' as simplify_count_not_null;
+ prepare s from 'explain select count(a) from t1 where b>1';
+ execute s;
+ execute s;
+@@ -129,4 +210,4 @@ drop prepare s;
+ 
+ drop view v1;
+ drop table t1;
+-set rds_simplify_count_not_null=default;
++set optimizer_switch=default;
+diff --git a/mysql-test/suite/sys_vars/r/all_vars.result b/mysql-test/suite/sys_vars/r/all_vars.result
+index 93eb43f7535..0233b98d7ec 100644
+--- a/mysql-test/suite/sys_vars/r/all_vars.result
++++ b/mysql-test/suite/sys_vars/r/all_vars.result
+@@ -205,8 +205,6 @@ rds_plan_cache
+ rds_plan_cache
+ rds_plan_cache_allow_change_ratio
+ rds_plan_cache_allow_change_ratio
+-rds_simplify_count_not_null
+-rds_simplify_count_not_null
+ rds_use_ddl_info_replay
+ rds_use_ddl_info_replay
+ rds_write_binlog_into_redo
+diff --git a/mysql-test/t/all_persisted_variables.test b/mysql-test/t/all_persisted_variables.test
+index e735d12caf1..a8e517ae974 100644
+--- a/mysql-test/t/all_persisted_variables.test
++++ b/mysql-test/t/all_persisted_variables.test
+@@ -41,7 +41,7 @@ call mtr.add_suppression("\\[Warning\\] .*MY-\\d+.* Changing innodb_extend_and_i
+ call mtr.add_suppression("Failed to initialize TLS for channel: mysql_main");
+ 
+ let $total_global_vars=`SELECT COUNT(*) FROM performance_schema.global_variables where variable_name NOT LIKE 'ndb_%' AND variable_name NOT LIKE 'debug_%'`;
+-let $total_persistent_vars=481;
++let $total_persistent_vars=480;
+ 
+ --echo ***************************************************************
+ --echo * 0. Verify that variables present in performance_schema.global
+diff --git a/mysql-test/t/heap_btree.test b/mysql-test/t/heap_btree.test
+index 5e50fcf0e0d..d88cd3cf84e 100644
+--- a/mysql-test/t/heap_btree.test
++++ b/mysql-test/t/heap_btree.test
+@@ -258,10 +258,10 @@ CREATE TABLE t1(
+ 
+ INSERT INTO t1(c1,c2) VALUES (5,1), (4,1), (3,5), (2,3), (1,3);
+ 
+-set @old_simplify_count=@@rds_simplify_count_not_null;
+-set rds_simplify_count_not_null=0;
++set @save_optimizer_switch=@@optimizer_switch;
++set optimizer_switch='simplify_count_not_null=off';
+ EXPLAIN SELECT c2, COUNT(c1) FROM t1 GROUP BY c2;
+ SELECT c2, COUNT(c1) FROM t1 GROUP BY c2;
+-set rds_simplify_count_not_null=@old_simplify_count;
++set optimizer_switch=@save_optimizer_switch;
+ 
+ DROP TABLE t1;
+diff --git a/mysql-test/t/heap_hash.test b/mysql-test/t/heap_hash.test
+index f7029c6ae97..08b7b825267 100644
+--- a/mysql-test/t/heap_hash.test
++++ b/mysql-test/t/heap_hash.test
+@@ -321,12 +321,12 @@ CREATE TABLE t1(
+ 
+ INSERT INTO t1(c1,c2) VALUES (5,1), (4,1), (3,5), (2,3), (1,3);
+ 
+-set @old_simplify_count=@@rds_simplify_count_not_null;
+-set rds_simplify_count_not_null=0;
++set @save_optimizer_switch=@@optimizer_switch;
++set optimizer_switch='simplify_count_not_null=off';
+ EXPLAIN SELECT c2, COUNT(c1) FROM t1 GROUP BY c2;
+ --sorted_result
+ SELECT c2, COUNT(c1) FROM t1 GROUP BY c2;
+-set rds_simplify_count_not_null=@old_simplify_count;
++set optimizer_switch=@save_optimizer_switch;
+ DROP TABLE t1;
+ 
+ --echo #
+diff --git a/mysql-test/t/optimizer_switch.test b/mysql-test/t/optimizer_switch.test
+index 85ce3686a92..4e42f5a6f89 100644
+--- a/mysql-test/t/optimizer_switch.test
++++ b/mysql-test/t/optimizer_switch.test
+@@ -42,8 +42,11 @@ select @@optimizer_switch;
+ set optimizer_switch='default';
+ set optimizer_switch='materialization=off,loosescan=off';
+ select @@optimizer_switch; 
+-set optimizer_switch='default';
+ 
++set optimizer_switch='default';
++set optimizer_switch='simplify_count_not_null=off';
++select @@optimizer_switch;
++set optimizer_switch='default';
+ 
+ # test re-optimization/re-execution with different execution methods
+ # prepare once, exec with different modes
+diff --git a/sql/item_sum.cc b/sql/item_sum.cc
+index 2c800af995e..4eb3b9f4771 100644
+--- a/sql/item_sum.cc
++++ b/sql/item_sum.cc
+@@ -1414,8 +1414,9 @@ bool Item_sum_num::fix_fields(THD *thd, Item **ref) {
+ 
+   set_nullable(false);
+ 
+-  if (thd->variables.rds_simplify_count_not_null && sum_func() == COUNT_FUNC &&
+-      arg_count == 1 && args[0]->type() == FIELD_ITEM &&
++  if (thd->optimizer_switch_flag(OPTIMIZER_SWITCH_SIMPLIFY_COUNT_NOT_NULL) &&
++      sum_func() == COUNT_FUNC && arg_count == 1 &&
++      args[0]->type() == FIELD_ITEM &&
+       !(m_is_window_function && query_block->olap != UNSPECIFIED_OLAP_TYPE) &&
+       !thd->lex->is_view_context_analysis()) {
+     /* We have COUNT(column), we can maybe convert it to COUNT(*) which would
+diff --git a/sql/sql_const.h b/sql/sql_const.h
+index 941b89242aa..a4a5b1ece06 100644
+--- a/sql/sql_const.h
++++ b/sql/sql_const.h
+@@ -224,7 +224,13 @@ constexpr const uint64_t OPTIMIZER_SWITCH_DERIVED_CONDITION_PUSHDOWN{1ULL
+                                                                      << 25};
+ constexpr const uint64_t OPTIMIZER_SWITCH_DSTORE_USE_HISTOGRAM_RANGE_ESTIMATION{
+     1ULL << 26};
+-constexpr const uint64_t OPTIMIZER_SWITCH_LAST{1ULL << 27};
++/**
++   Replace COUNT(column) with COUNT(*) if they are equivalent. This may
++   eliminate the need for 'column' during execution, opening more
++   possibilities for access methods.
++*/
++constexpr const uint64_t OPTIMIZER_SWITCH_SIMPLIFY_COUNT_NOT_NULL{1ULL << 27};
++constexpr const uint64_t OPTIMIZER_SWITCH_LAST{1ULL << 28};
+ 
+ enum SHOW_COMP_OPTION { SHOW_OPTION_YES, SHOW_OPTION_NO, SHOW_OPTION_DISABLED };
+ 
+diff --git a/sql/sql_plan_cache.h b/sql/sql_plan_cache.h
+index c35ca7c5516..8801fe0d51f 100644
+--- a/sql/sql_plan_cache.h
++++ b/sql/sql_plan_cache.h
+@@ -79,7 +79,7 @@ struct Exec_context {
+   Item *tab_condition{nullptr};
+   int quick_type;
+ 
+-  using allocator_for_map = Mem_root_allocator<std::pair<const Item *, Item *>>;
++  using allocator_for_map = Mem_root_allocator<std::pair<Item *const, Item *>>;
+   std::map<Item *, Item *, std::less<Item *>, allocator_for_map>
+       transient_items;
+   using allocator_for_vector = Mem_root_allocator<std::pair<Item **, Item *>>;
+diff --git a/sql/sys_vars.cc b/sql/sys_vars.cc
+index df1cac7b32e..22930745754 100644
+--- a/sql/sys_vars.cc
++++ b/sql/sys_vars.cc
+@@ -211,7 +211,8 @@ static constexpr const unsigned long long OPTIMIZER_SWITCH_DEFAULT{
+     OPTIMIZER_SKIP_SCAN | OPTIMIZER_SWITCH_HASH_JOIN |
+     OPTIMIZER_SWITCH_PREFER_ORDERING_INDEX |
+     OPTIMIZER_SWITCH_DERIVED_CONDITION_PUSHDOWN |
+-    OPTIMIZER_SWITCH_DSTORE_USE_HISTOGRAM_RANGE_ESTIMATION};
++    OPTIMIZER_SWITCH_DSTORE_USE_HISTOGRAM_RANGE_ESTIMATION |
++    OPTIMIZER_SWITCH_SIMPLIFY_COUNT_NOT_NULL};
+ 
+ static constexpr const unsigned long MYSQLD_NET_RETRY_COUNT{10};
+ 
+@@ -3489,6 +3490,7 @@ static const char *optimizer_switch_names[] = {
+     "hypergraph_optimizer",  // Deliberately not documented below.
+     "derived_condition_pushdown",
+     "dstore_use_histogram_range_estimation",
++    "simplify_count_not_null",
+     "default",
+     NullS};
+ static Sys_var_flagset Sys_optimizer_switch(
+@@ -7800,13 +7802,6 @@ static Sys_var_bool Sys_var_rds_empty_redundant_check_in_range_scan(
+     SESSION_VAR(rds_empty_redundant_check_in_range_scan), CMD_LINE(OPT_ARG),
+     DEFAULT(true));
+ 
+-static Sys_var_bool Sys_var_rds_simplify_count_not_null(
+-    "rds_simplify_count_not_null",
+-    "Replace COUNT(column) with COUNT(*) if they are equivalent. This may"
+-    " eliminate the need for 'column' during execution, opening more"
+-    " possibilities for access methods.",
+-    SESSION_VAR(rds_simplify_count_not_null), CMD_LINE(OPT_ARG), DEFAULT(true));
+-
+ static Sys_var_ulong Sys_rds_admin_max_connections(
+     "rds_admin_max_connections",
+     "The number of simultaneous clients allowed through admin port",
+diff --git a/sql/system_variables.h b/sql/system_variables.h
+index 4396dad3340..d13d4a29267 100644
+--- a/sql/system_variables.h
++++ b/sql/system_variables.h
+@@ -314,10 +314,6 @@ struct System_variables {
+   // When true, a redundant condition (meaning that it is enforced by the range
+   // access method anyway) in the WHERE clause is removed
+   bool rds_empty_redundant_check_in_range_scan;
+-  /// When true, COUNT(column) is replaced with COUNT(*) if possible. This may
+-  // eliminate the need for 'column' during execution, opening more
+-  // possibilities for access methods.
+-  bool rds_simplify_count_not_null;
+ 
+   plugin_ref table_plugin;
+   plugin_ref temp_table_plugin;
+-- 
+2.23.0
+

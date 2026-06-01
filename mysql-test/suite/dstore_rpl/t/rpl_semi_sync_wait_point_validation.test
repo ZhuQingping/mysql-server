@@ -1,0 +1,55 @@
+# ==== Purpose ====
+#
+#  Test Coordinated configuration of rds_binlog_skip_run_after_commit_hook
+#  and rpl_semi_sync_source_wait_point.
+# ==== References ====
+#
+# BUG2026031728564 AFTER_COMMIT is not supported for rpl_semi_sync_source_wait_point when rds_binlog_skip_run_after_commit_hook is enabled.
+#
+
+--source include/have_only_dstore.inc
+--source include/have_binlog_format_row.inc
+--source include/master-slave.inc
+
+--echo ==== Setup ====
+call mtr.add_suppression(" Setting to rpl_semi_sync_source_wait_point to");
+# Install semisync plugins
+--replace_result $SEMISYNC_SOURCE_PLUGIN SEMISYNC_SOURCE_PLUGIN
+--eval INSTALL PLUGIN rpl_semi_sync_source SONAME '$SEMISYNC_SOURCE_PLUGIN';
+
+--source include/sync_slave_sql_with_master.inc
+
+--echo ==== Test R1: Setting to rpl_semi_sync_source_wait_point to AFTER_COMMIT automatically disabled rds_binlog_skip_run_after_commit_hook. ====
+
+--connection master
+SET @@global.rpl_semi_sync_source_wait_point = 'AFTER_COMMIT';
+
+show variables like 'rds_binlog_skip_run_after_commit_hook';
+
+--let $rpl_server_number= 1
+--let $rpl_server_parameters= --rpl_semi_sync_source_wait_point=AFTER_COMMIT
+--source include/rpl_restart_server.inc
+show variables like 'rpl_semi_sync_source_wait_point';
+show variables like 'rds_binlog_skip_run_after_commit_hook';
+
+--echo ==== Test R2: Setting to rpl_semi_sync_source_wait_point to AFTER_SYNC automatically enabled rds_binlog_skip_run_after_commit_hook.====
+
+--connection master
+SET @@global.rpl_semi_sync_source_wait_point = 'AFTER_SYNC';
+
+show variables like 'rds_binlog_skip_run_after_commit_hook';
+
+--let $rpl_server_number= 1
+--let $rpl_server_parameters= --rpl_semi_sync_source_wait_point=AFTER_SYNC
+--source include/rpl_restart_server.inc
+show variables like 'rpl_semi_sync_source_wait_point';
+show variables like 'rds_binlog_skip_run_after_commit_hook';
+
+--connection slave
+--source include/start_slave.inc
+
+--echo ==== Clean up ====
+--connection master
+--eval UNINSTALL PLUGIN rpl_semi_sync_source;
+
+--source include/rpl_end.inc

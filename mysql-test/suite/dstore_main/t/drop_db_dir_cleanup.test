@@ -1,0 +1,64 @@
+# ==== Purpose =======
+# Verify the following two scenarios:
+# Scenario 1: If the directory exists and is empty, executing drop database will succeed.
+# Scenario 2: If the directory exists and is not empty, executing drop database will fail.
+# ==== References ====
+#
+# BUG2026020328008 schema directory EXISTS cause fail
+#
+
+--echo # ========================================================
+--echo # Scenario 1: Empty directory - should succeed
+--echo # ========================================================
+
+--echo # Create database
+CREATE DATABASE test_scenario1;
+
+--echo # Drop database (directory should be empty after this)
+DROP DATABASE test_scenario1;
+
+--echo # Verify database is dropped
+--let assert_text= Database test_scenario1 should not exist after DROP
+--let assert_cond= [SELECT COUNT(*) FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME="test_scenario1"] = 0
+--source include/assert.inc
+
+--echo # Recreate empty directory manually
+--let $MYSQLD_DATADIR = `SELECT @@datadir`
+--mkdir $MYSQLD_DATADIR/test_scenario1
+
+--echo # Drop database again with empty directory - should succeed
+DROP DATABASE test_scenario1;
+
+--echo # Verify directory is removed
+--let assert_text= Database test_scenario1 should not exist after dropping empty directory
+--let assert_cond= [SELECT COUNT(*) FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME="test_scenario1"] = 0
+--source include/assert.inc
+
+
+--echo # ========================================================
+--echo # Scenario 2: Non-empty directory - should fail
+--echo # ========================================================
+
+--echo # Recreate directory manually
+--mkdir $MYSQLD_DATADIR/test_scenario2
+
+--echo # Create a file in the directory
+--write_file $MYSQLD_DATADIR/test_scenario2/extra_file.txt
+This is an extra file in the directory
+EOF
+
+--echo # Try to drop database with non-empty directory - should fail
+--replace_result \\ /
+--error ER_SCHEMA_DIR_UNKNOWN
+DROP DATABASE test_scenario2;
+
+--echo # Cleanup: remove the extra file and directory
+--remove_file $MYSQLD_DATADIR/test_scenario2/extra_file.txt
+--rmdir $MYSQLD_DATADIR/test_scenario2
+
+--echo # ========================================================
+--echo # Cleanup
+--echo # ========================================================
+
+DROP DATABASE IF EXISTS test_scenario1;
+DROP DATABASE IF EXISTS test_scenario2;

@@ -1,0 +1,126 @@
+SET @default_rds_permission_control = @@GLOBAL.rds_permission_control;
+SET @default_rds_process_list_control = @@GLOBAL.rds_process_list_control;
+SHOW GLOBAL VARIABLES LIKE 'rds_permission_control';
+Variable_name	Value
+rds_permission_control	ON
+SHOW GLOBAL VARIABLES LIKE 'rds_process_list_control';
+Variable_name	Value
+rds_process_list_control	ON
+SHOW GLOBAL VARIABLES LIKE 'rds_reserved_users';
+Variable_name	Value
+rds_reserved_users	reserved_user1
+CREATE USER 'root1'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, REFERENCES, INDEX, ALTER, SHOW DATABASES, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER ON *.* TO 'root1'@'%' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+CREATE USER 'super_user'@'%' IDENTIFIED BY '123456';
+GRANT SUPER ON *.* TO 'super_user'@'%' WITH GRANT OPTION;
+Warnings:
+Warning	1287	The SUPER privilege identifier is deprecated
+GRANT ALL PRIVILEGES ON *.* TO 'super_user'@'%';
+FLUSH PRIVILEGES;
+CREATE USER 'reserved_user1'@'%' IDENTIFIED BY 're123456';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, REFERENCES, INDEX, ALTER, SHOW DATABASES, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER ON *.* TO 'reserved_user1'@'%' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+# connect reserved_user1
+# connect root1, test show processlist
+SHOW PROCESSLIST;
+Id	User	Host	db	Command	Time	State	Info	Trx_executed_time
+#	event_scheduler	#	#	Daemon	#	Waiting on empty queue	NULL	0
+#	root	#	#	Sleep	#		NULL	0
+#	root1	#	#	Query	#	init	SHOW PROCESSLIST	0
+Warnings:
+#	1287	#
+# test select from information_schema.processlist
+SELECT USER FROM information_schema.processlist ORDER BY USER DESC;
+USER
+root1
+root
+event_scheduler
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+# connect reserved_user1
+# test show processlist
+SHOW PROCESSLIST;
+Id	User	Host	db	Command	Time	State	Info	Trx_executed_time
+#	event_scheduler	#	#	Daemon	#	Waiting on empty queue	NULL	0
+#	root	#	#	Sleep	#		NULL	0
+#	root1	#	#	Sleep	#		NULL	0
+#	reserved_user1	#	#	Query	#	init	SHOW PROCESSLIST	0
+Warnings:
+#	1287	#
+# test select from information_schema.processlist
+SELECT USER FROM information_schema.processlist ORDER BY USER DESC;
+USER
+root1
+root
+reserved_user1
+event_scheduler
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+# connect super
+# test show processlist
+SHOW PROCESSLIST;
+Id	User	Host	db	Command	Time	State	Info	Trx_executed_time
+#	event_scheduler	#	#	Daemon	#	Waiting on empty queue	NULL	0
+#	root	#	#	Sleep	#		NULL	0
+#	root1	#	#	Sleep	#		NULL	0
+#	reserved_user1	#	#	Sleep	#		NULL	0
+#	super_user	#	#	Query	#	init	SHOW PROCESSLIST	0
+Warnings:
+#	1287	#
+# test select from information_schema.processlist
+SELECT USER FROM information_schema.processlist ORDER BY USER DESC;
+USER
+super_user
+root1
+root
+reserved_user1
+event_scheduler
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+SET @@GLOBAL.rds_process_list_control = 'OFF';
+# test show processlist
+SHOW PROCESSLIST;
+Id	User	Host	db	Command	Time	State	Info	Trx_executed_time
+#	event_scheduler	#	#	Daemon	#	Waiting on empty queue	NULL	0
+#	root	#	#	Sleep	#		NULL	0
+#	root1	#	#	Killed	#	NULL	NULL	0
+#	reserved_user1	#	#	Sleep	#		NULL	0
+#	super_user	#	#	Sleep	#		NULL	0
+#	root1	#	#	Query	#	init	SHOW PROCESSLIST	0
+Warnings:
+#	1287	#
+# test select from information_schema.processlist
+SELECT USER FROM information_schema.processlist ORDER BY USER DESC;
+USER
+super_user
+root1
+root
+reserved_user1
+event_scheduler
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+SET @@GLOBAL.rds_permission_control = 'OFF';
+SET @@GLOBAL.rds_process_list_control = 'ON';
+# test show processlist
+SHOW PROCESSLIST;
+Id	User	Host	db	Command	Time	State	Info	Trx_executed_time
+#	event_scheduler	#	#	Daemon	#	Waiting on empty queue	NULL	0
+#	root	#	#	Sleep	#		NULL	0
+#	super_user	#	#	Sleep	#		NULL	0
+#	root1	#	#	Killed	#	NULL	NULL	0
+#	root1	#	#	Query	#	init	SHOW PROCESSLIST	0
+Warnings:
+#	1287	#
+# test select from information_schema.processlist
+SELECT USER FROM information_schema.processlist ORDER BY USER DESC;
+USER
+super_user
+root1
+root
+event_scheduler
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+SET @@GLOBAL.rds_permission_control = @default_rds_permission_control;
+SET @@GLOBAL.rds_process_list_control = @default_rds_process_list_control;
+DROP USER super_user, root1, reserved_user1;

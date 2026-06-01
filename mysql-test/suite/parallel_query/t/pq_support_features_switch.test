@@ -1,0 +1,267 @@
+--source include/pq_test.inc
+
+set @saved_force_parallel_execute = @@force_parallel_execute;
+set @saved_parallel_cost_threshold = @@parallel_cost_threshold;
+set @saved_parallel_rows_threshold = @@parallel_cost_threshold;
+set @saved_sql_mode = @@sql_mode;
+
+--echo # 1. variables test
+
+## force_parallel_execute variable
+
+set force_parallel_execute = off;
+show variables like 'force_parallel_execute';
+set force_parallel_execute = on;
+show variables like 'force_parallel_execute';
+--error ER_WRONG_VALUE_FOR_VAR
+set force_parallel_execute = auto;
+show variables like 'force_parallel_execute';
+
+--error ER_WRONG_VALUE_FOR_VAR
+set force_parallel_execute = 'true';
+set force_parallel_execute = true;
+show variables like 'force_parallel_execute';
+set force_parallel_execute = false;
+show variables like 'force_parallel_execute';
+
+set force_parallel_execute = 0;
+show variables like 'force_parallel_execute';
+set force_parallel_execute = 1;
+show variables like 'force_parallel_execute';
+--error ER_WRONG_VALUE_FOR_VAR
+set force_parallel_execute = 2;
+
+set global force_parallel_execute = off;
+show variables like 'force_parallel_execute';
+set global force_parallel_execute = on;
+show variables like 'force_parallel_execute';
+--error ER_WRONG_VALUE_FOR_VAR
+set global force_parallel_execute = auto;
+show variables like 'force_parallel_execute';
+
+set global force_parallel_execute = default;
+show global variables like 'force_parallel_execute';
+
+# HINT
+select /*+ set_var(force_parallel_execute=on) */ @@force_parallel_execute;
+select /*+ set_var(force_parallel_execute=off) */ @@force_parallel_execute;
+SET @saved_pq_support_features_switch = @@global.pq_support_features_switch;
+## pq_support_features_switch variable
+
+set pq_support_features_switch = default;
+show variables like '%pq_support_features_switch%';
+
+set pq_support_features_switch = 'simple_aggregate=on';
+show variables like '%pq_support_features_switch%';
+set pq_support_features_switch = 'simple_aggregate=off';
+show variables like '%pq_support_features_switch%';
+set pq_support_features_switch = 'simple_aggregate=default';
+show variables like '%pq_support_features_switch%';
+
+set global pq_support_features_switch = 'simple_aggregate=on';
+show global variables like '%pq_support_features_switch%';
+set global pq_support_features_switch = 'simple_aggregate=off';
+show global variables like '%pq_support_features_switch%';
+set global pq_support_features_switch = 'simple_aggregate=default';
+show global variables like '%pq_support_features_switch%';
+
+set pq_support_features_switch = 'correlated_subquery=on';
+show variables like '%pq_support_features_switch%';
+set pq_support_features_switch = 'correlated_subquery=off';
+show variables like '%pq_support_features_switch%';
+set pq_support_features_switch = 'correlated_subquery=default';
+show variables like '%pq_support_features_switch%';
+
+set global pq_support_features_switch = 'correlated_subquery=on';
+show global variables like '%pq_support_features_switch%';
+set global pq_support_features_switch = 'correlated_subquery=off';
+show global variables like '%pq_support_features_switch%';
+set global pq_support_features_switch = 'correlated_subquery=default';
+show global variables like '%pq_support_features_switch%';
+
+set pq_support_features_switch = 'hash_join_spill_to_disk=on';
+show variables like '%pq_support_features_switch%';
+set pq_support_features_switch = 'hash_join_spill_to_disk=off';
+show variables like '%pq_support_features_switch%';
+set pq_support_features_switch = 'hash_join_spill_to_disk=default';
+show variables like '%pq_support_features_switch%';
+
+set global pq_support_features_switch = 'hash_join_spill_to_disk=on';
+show global variables like '%pq_support_features_switch%';
+set global pq_support_features_switch = 'hash_join_spill_to_disk=off';
+show global variables like '%pq_support_features_switch%';
+set global pq_support_features_switch = 'hash_join_spill_to_disk=default';
+show global variables like '%pq_support_features_switch%';
+
+set pq_support_features_switch = 'insert_select=on';
+show variables like '%pq_support_features_switch%';
+set pq_support_features_switch = 'insert_select=off';
+show variables like '%pq_support_features_switch%';
+set pq_support_features_switch = 'insert_select=default';
+show variables like '%pq_support_features_switch%';
+
+set global pq_support_features_switch = 'insert_select=on';
+show global variables like '%pq_support_features_switch%';
+set global pq_support_features_switch = 'insert_select=off';
+show global variables like '%pq_support_features_switch%';
+set global pq_support_features_switch = 'insert_select=default';
+show global variables like '%pq_support_features_switch%';
+
+
+# HINT
+select /*+ set_var(pq_support_features_switch='simple_aggregate=on') */ @@pq_support_features_switch;
+select /*+ set_var(pq_support_features_switch='simple_aggregate=off') */ @@pq_support_features_switch;
+
+select /*+ set_var(pq_support_features_switch='count_distinct=on') */ @@pq_support_features_switch;
+select /*+ set_var(pq_support_features_switch='correlated_subquery=on') */ @@pq_support_features_switch;
+select /*+ set_var(pq_support_features_switch='hash_join_spill_to_disk=on') */ @@pq_support_features_switch;
+select /*+ set_var(pq_support_features_switch='insert_select=on') */ @@pq_support_features_switch;
+
+set pq_support_features_switch = 0;
+show variables like '%pq_support_features_switch%';
+set pq_support_features_switch = 1;
+show variables like '%pq_support_features_switch%';
+set pq_support_features_switch = 31;
+show variables like '%pq_support_features_switch%';
+
+--error ER_WRONG_VALUE_FOR_VAR
+set pq_support_features_switch = 'simple_agg=on';
+
+--echo # 2. Test simple_aggregate optimization in pq_support_features_switch
+
+set session parallel_cost_threshold = 0;
+set session parallel_rows_threshold = 0;
+
+# 2.1. force_parallel_execute is set to off
+
+set session force_parallel_execute = off;
+--source suite/parallel_query/include/pq_support_aggregate_query.inc
+
+# 2.2. force_parallel_execute is set to on
+
+set session force_parallel_execute = on;
+--source suite/parallel_query/include/pq_support_aggregate_query.inc
+
+# 2.3. test simple_aggregate
+
+# 2.3.1 pq_support_features_switch is set to simple_aggregate=off;
+
+set session pq_support_features_switch='simple_aggregate=off';
+--source suite/parallel_query/include/pq_support_aggregate_query.inc
+
+# 2.3.2 pq_support_features_switch is set to simple_aggregate=on;
+
+set session pq_support_features_switch='simple_aggregate=on';
+--source suite/parallel_query/include/pq_support_aggregate_query.inc
+
+# optimizer_trace
+create table t1(a int primary key, b varchar(10), c decimal(5,2));
+create table t2(a int primary key, b varchar(10), c decimal(5,2));
+
+analyze table t1;
+analyze table t2;
+
+set optimizer_trace = 'enabled=on';
+explain select a from t1 having a > 3 order by a limit 10;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+explain select count(*) from t1 group by(b);
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+explain select count(*) from t1 join t2 on t1.a = t2.a;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+explain select sum(distinct t1.a) from t1;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+set optimizer_trace = 'enabled=off';
+drop table t1,t2;
+
+# 5. enable ndp + pq for COUNT(*) in taurus
+
+--echo # 3. Test simple_aggregate optimization in pq_support_features_switch
+
+set session sql_mode = '';
+drop table if exists tb_pq_optimize_001;
+create table tb_pq_optimize_001(id int, varchar_col varchar(255), blob_col blob, date_col date, text_col text, json_col json, bit_col bit);
+insert into tb_pq_optimize_001 values (1, 'abcd', 'aaa', '2024-09-10', 'text type', '{\"key2\": 2}', 0x0), (2, 'wwwwwwwww', 'bbbbbbbbb', '2024-09-13', '*%^GGHJJ', '{\"key\": 1, \"key2\": 2}', 0xff), (3, 'aaaaaaaaaa', 'ccccccccccc', '2024-09-15','123mbhj', '{\"key2\": 2}', 0x11), (4, 'abababa', 'ddddddddddd', '2024-09-16', 'abcdabcd', '{\"key1\": 1}', 0x55), (5, 'dfghjkl', 'eeeeeeeeeeeeee', '2024-09-18', 'aaa', '{\"key1\": 1}', 0x1010);
+analyze table tb_pq_optimize_001;
+
+# 3.1 No constraints or limits.
+set session force_parallel_execute=ON;
+set session pq_support_features_switch='simple_aggregate=on,count_distinct=on';
+show variables like "%force_parallel_execute%";
+show variables like "%pq_support_features_switch%";
+
+explain select id, date_col from tb_pq_optimize_001;
+explain select count(id) from tb_pq_optimize_001;
+explain select count(distinct date_col) from tb_pq_optimize_001;
+
+# 3.2 The count_distinct scenario does not use PQ.
+set session force_parallel_execute=ON;
+set session pq_support_features_switch='simple_aggregate=on,count_distinct=off';
+show variables like "%force_parallel_execute%";
+show variables like "%pq_support_features_switch%";
+
+explain select id, date_col from tb_pq_optimize_001;
+explain select count(id) from tb_pq_optimize_001;
+explain select count(distinct date_col) from tb_pq_optimize_001;
+
+# 3.3 The simple_aggregate scenario does not use PQ.
+set session force_parallel_execute=ON;
+set session pq_support_features_switch='simple_aggregate=off,count_distinct=on';
+show variables like "%force_parallel_execute%";
+show variables like "%pq_support_features_switch%";
+
+explain select id, date_col from tb_pq_optimize_001;
+explain select count(id) from tb_pq_optimize_001;
+explain select count(distinct date_col) from tb_pq_optimize_001;
+
+# 3.4 simple_aggregate and count_distinct do not use PQ.
+set session force_parallel_execute=ON;
+set session pq_support_features_switch='simple_aggregate=off,count_distinct=off';
+show variables like "%force_parallel_execute%";
+show variables like "%pq_support_features_switch%";
+
+explain select id, date_col from tb_pq_optimize_001;
+explain select count(id) from tb_pq_optimize_001;
+explain select count(distinct date_col) from tb_pq_optimize_001;
+
+# 3.5 Only simple_aggregate and count_distinct use PQ.
+set session pq_support_features_switch='simple_aggregate=on,count_distinct=on';
+
+explain select id, date_col from tb_pq_optimize_001;
+explain select count(id) from tb_pq_optimize_001;
+explain select count(distinct date_col) from tb_pq_optimize_001;
+
+# 3.6 Only simple_aggregate use PQ.
+set session pq_support_features_switch='simple_aggregate=on,count_distinct=off';
+
+explain select id, date_col from tb_pq_optimize_001;
+explain select count(id) from tb_pq_optimize_001;
+explain select count(distinct date_col) from tb_pq_optimize_001;
+
+# 3.7 Only count_distinct use PQ.
+set session pq_support_features_switch='simple_aggregate=off,count_distinct=on';
+
+explain select id, date_col from tb_pq_optimize_001;
+explain select count(id) from tb_pq_optimize_001;
+explain select count(distinct date_col) from tb_pq_optimize_001;
+
+# 3.8 simple_aggregate and count_distinct do not use PQ.
+set session pq_support_features_switch='simple_aggregate=off,count_distinct=off';
+
+explain select id, date_col from tb_pq_optimize_001;
+explain select count(id) from tb_pq_optimize_001;
+explain select count(distinct date_col) from tb_pq_optimize_001;
+
+drop table if exists tb_pq_optimize_001;
+
+# Reset
+set global force_parallel_execute = @saved_force_parallel_execute;
+SET pq_support_features_switch = @saved_pq_support_features_switch;
+SET global pq_support_features_switch = @saved_pq_support_features_switch;
+set session parallel_cost_threshold = @saved_parallel_cost_threshold;
+set session parallel_rows_threshold = @saved_parallel_rows_threshold;
+set session sql_mode = @saved_sql_mode;
+#set session pq_group_having = @saved_pq_group_having;

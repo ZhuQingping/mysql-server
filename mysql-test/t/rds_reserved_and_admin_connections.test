@@ -1,0 +1,396 @@
+# Test for connections to database as user rds_reserved_user and other user
+# with connection privileges(SUPER, CONNECTION_ADMIN, SERVICE_CONNECTION_ADMIN).
+#   
+# Mainly test the separate connection limit for the reserved user and the separate
+# connection limit for the admin port connection.
+--source include/count_sessions.inc
+
+--disable_query_log
+CALL mtr.add_suppression("Failed to initialize TLS for channel: mysql_admin");
+CALL mtr.add_suppression("Failed to set up SSL because of the following SSL library error");
+--enable_query_log
+
+--echo # PREPARE
+call mtr.add_suppression("Too many connections*");
+call mtr.add_suppression("The SUPER privilege identifier is deprecated");
+--echo # rds reserved user without SUPER privileges.
+CREATE USER 'reserved_user_without_super'@'%' IDENTIFIED BY '123456';
+GRANT SELECT ON *.* TO 'reserved_user_without_super'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'reserved_user_without_super'@'%';
+
+--echo # rds reserved user with SUPER privileges, although SUPER has been deprecated.
+CREATE USER 'reserved_user_with_super'@'%' IDENTIFIED BY '123456';
+--disable_warnings
+GRANT SELECT, SUPER ON *.* TO 'reserved_user_with_super'@'%' WITH GRANT OPTION;
+--enable_warnings
+SHOW GRANTS FOR 'reserved_user_with_super'@'%';
+
+--echo # rds reserved user with CONN_ADMIN privileges.
+CREATE USER 'reserved_user_with_conn_admin'@'%' IDENTIFIED BY '123456';
+GRANT SELECT,CONNECTION_ADMIN ON *.* TO 'reserved_user_with_conn_admin'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'reserved_user_with_conn_admin'@'%';
+
+--echo # rds reserved user with SERVICE_CONN_ADMIN privileges.
+CREATE USER 'reserved_user_with_service_admin'@'%' IDENTIFIED BY '123456';
+GRANT SELECT,SERVICE_CONNECTION_ADMIN ON *.* TO 'reserved_user_with_service_admin'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'reserved_user_with_service_admin'@'%';
+
+--echo # mysql user with SUPER privileges, although SUPER has been deprecated.
+CREATE USER 'normal_user_with_super'@'%' IDENTIFIED BY '123456';
+--disable_warnings
+GRANT SELECT, SUPER ON *.* TO 'normal_user_with_super'@'%' WITH GRANT OPTION;
+--enable_warnings
+SHOW GRANTS FOR 'normal_user_with_super'@'%';
+
+--echo # mysql user without SUPER privileges.
+CREATE USER 'normal_user_without_super'@'%' IDENTIFIED BY '123456';
+GRANT SELECT ON *.* TO 'normal_user_without_super'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'normal_user_without_super'@'%';
+
+--echo # mysql user with dynamic CONNECTION_ADMIN privileges.
+CREATE USER 'normal_user_with_conn_admin'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, CONNECTION_ADMIN ON *.* TO 'normal_user_with_conn_admin'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'normal_user_with_conn_admin'@'%';
+
+--echo # mysql user with dynamic SERVICE_CONNECTION_ADMIN  privileges.
+CREATE USER 'normal_user_with_service_admin'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, SERVICE_CONNECTION_ADMIN ON *.* TO 'normal_user_with_service_admin'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'normal_user_with_service_admin'@'%';
+FLUSH PRIVILEGES;
+
+show variables like 'rds_reserved_users';
+show variables like 'rds_reserved_connections';
+show variables like 'max_connections';
+
+--echo #
+--echo # Prepare 1: The reserved user without SUPER can connect to the database.
+--echo #
+connect(res_conn1,127.0.0.1,reserved_user_without_super,123456,mysql,1401);
+
+--echo #
+--echo # Prepare 2: The reserved user with SUPER can connect to the database.
+--echo #
+connect(res_conn2,127.0.0.1,reserved_user_with_super,123456,mysql,1401);
+
+--echo #
+--echo # Prepare 3: The reserved user with CONNECTION_ADMIN can connect to the database.
+--echo #
+connect(res_conn3,127.0.0.1,reserved_user_with_conn_admin,123456,mysql,1401);
+
+--echo #
+--echo # Prepare 4: The reserved user with SERVICE_CONNECTION_ADMIN can connect to the database through master port.
+--echo #
+connect(res_conn4,127.0.0.1,reserved_user_with_service_admin,123456,mysql,1401);
+
+--echo #
+--echo # Prepare 5: The reserved user with SERVICE_CONNECTION_ADMIN can connect to the database through admin port.
+--echo #
+connect(res_admin_conn1,127.0.0.1,reserved_user_with_service_admin,123456,mysql,1501);
+
+--echo #
+--echo # Prepare 6: The non-reserved user without SUPER can connect to the database.
+--echo #
+connect(nor_conn1,127.0.0.1,normal_user_without_super,123456,mysql,1401);
+
+--echo #
+--echo # Prepare 7: The non-reserved user with SUPER can connect to the database.
+--echo #
+connect(nor_conn2,127.0.0.1,normal_user_with_super,123456,mysql,1401);
+
+--echo #
+--echo # Prepare 8: The non-reserved user with CONNECTION_ADMIN can connect to the database.
+--echo #
+connect(nor_conn3,127.0.0.1,normal_user_with_conn_admin,123456,mysql,1401);
+
+--echo #
+--echo # Prepare 9: The non-reserved user with SERVICE_CONNECTION_ADMIN can connect to the database through master port.
+--echo #
+connect(nor_conn4,127.0.0.1,normal_user_with_service_admin,123456,mysql,1401);
+
+--echo #
+--echo # Prepare 10: The non-reserved user with SERVICE_CONNECTION_ADMIN can connect to the database through admin port.
+--echo #
+connect(nor_admin_conn1,127.0.0.1,normal_user_with_service_admin,123456,mysql,1501);
+connection default;
+select count(*) from information_schema.PROCESSLIST where user in ('root','normal_user_with_super','normal_user_without_super','normal_user_with_conn_admin','normal_user_with_service_admin');
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user_with_super','reserved_user_without_super','reserved_user_with_conn_admin','reserved_user_with_service_admin');
+show global status like "Admin_threads_connected";
+
+--echo ## NOTE: Now, there are 2 admin connections, 4 reserved connections and 4 + 1(default) mysql's defined connections, following will begin our test.
+let $origin_error_conn= query_get_value(SHOW STATUS LIKE 'Connection_errors_max_connections', Value, 1);
+--echo # BEGIN TEST
+--echo $origin_error_conn
+
+let $status_var= Threads_connected;
+let $status_var_value= 11;
+source include/wait_for_status_var.inc;
+
+--echo #
+--echo # Test 1: When the rds_admin_max_connections resource is consumed, it does not allowed the
+--echo #         connections from the admin port, even if you have other advanced permissions or you
+--echo #         are reserved user.
+--echo #
+
+# About error ER_CON_COUNT_ERROR:
+# - this error is associated with SQLSTATE 08004,
+#   and returned from 2 places in the server code.
+# - which path returns the error is not predictable,
+#   as it depends on the server load and thread scheduling
+# - one path returns a SQLSTATE of 08004
+# - another path returns no SQLSTATE at all,
+#   and then the client sets a default value of HY000 for SQLSTATE
+#
+# Testing for error ER_CON_COUNT_ERROR alone causes this to
+# be printed in the result file:
+# - ERROR 08004: Too many connections
+# which in turn causes spurious test failures.
+#
+# To work around this, this scripts expect to see either
+# the error number ER_CON_COUNT_ERROR (it always does)
+# or the error number 9999 (it never does, this error does not exist).
+# The exact error number and SQLSTATE is not printed in the result file,
+# makig this test robust for both cases:
+# - ERROR 08004: Too many connections
+# - ERROR HY000: Too many connections
+
+# Test for advanced permissions
+--disable_query_log
+--error ER_CON_COUNT_ERROR, 9999
+connect(nor_admin_conn2,127.0.0.1,normal_user_with_super,123456,mysql,1501);
+--error ER_CON_COUNT_ERROR, 9999
+connect(nor_admin_conn2,127.0.0.1,normal_user_with_conn_admin,123456,mysql,1501);
+--error ER_CON_COUNT_ERROR, 9999
+connect(nor_admin_conn2,127.0.0.1,normal_user_with_service_admin,123456,mysql,1501);
+--enable_query_log
+
+# Test for reserved user
+--disable_query_log
+--error ER_CON_COUNT_ERROR, 9999
+connect(res_admin_conn2,127.0.0.1,reserved_user_without_super,123456,mysql,1501);
+--error ER_CON_COUNT_ERROR, 9999
+connect(res_admin_conn2,127.0.0.1,reserved_user_with_super,123456,mysql,1501);
+--error ER_CON_COUNT_ERROR, 9999
+connect(res_admin_conn2,127.0.0.1,reserved_user_with_conn_admin,123456,mysql,1501);
+--error ER_CON_COUNT_ERROR, 9999
+connect(res_admin_conn2,127.0.0.1,reserved_user_with_service_admin,123456,mysql,1501);
+--enable_query_log
+
+--let $assert_text= connection_errors_max_connection was error changed.
+--let $assert_cond= [SHOW STATUS LIKE "Connection_errors_max_connections", Value, 1] = ($origin_error_conn + 7)
+--source include/assert.inc
+
+connection default;
+
+let $status_var= Threads_connected;
+let $status_var_value= 11;
+source include/wait_for_status_var.inc;
+
+--echo #
+--echo # Test 2: When the rds_reserved_connections resource is consumed, it does not allowed the
+--echo #         reserved user to login in, even if you have other advanced Permissions.
+--echo #
+
+--disable_query_log
+--error ER_CON_COUNT_ERROR, 9999
+connect(res_conn5,127.0.0.1,reserved_user_with_super,123456,mysql,1401);
+--error ER_CON_COUNT_ERROR, 9999
+connect(res_conn5,127.0.0.1,reserved_user_with_conn_admin,123456,mysql,1401);
+--error ER_CON_COUNT_ERROR, 9999
+connect(res_conn5,127.0.0.1,reserved_user_with_service_admin,123456,mysql,1401);
+--enable_query_log
+
+--let $assert_text= connection_errors_max_connection was error changed.
+--let $assert_cond= [SHOW STATUS LIKE "Connection_errors_max_connections", Value, 1] = ($origin_error_conn + 10)
+--source include/assert.inc
+
+connection default;
+
+let $status_var= Threads_connected;
+let $status_var_value= 11;
+source include/wait_for_status_var.inc;
+
+--echo #
+--echo # Test 3: When the max_connections resource is consumed, it only allows one more
+--echo #         normal user(with super or CONNECTION_ADMIN) to login in.
+--echo #
+
+--echo # test CONNECTION_ADMIN user can login in database when max_connection is reached.
+connect(nor_conn5,127.0.0.1,normal_user_with_conn_admin,123456,mysql,1401);
+connection default;
+select count(*) from information_schema.PROCESSLIST where user in ('root','normal_user_with_super','normal_user_without_super','normal_user_with_conn_admin','normal_user_with_service_admin');
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user_with_super','reserved_user_without_super','reserved_user_with_conn_admin','reserved_user_with_service_admin');
+
+--disable_query_log
+--error ER_CON_COUNT_ERROR, 9999
+connect(nor_conn6,127.0.0.1,normal_user_with_conn_admin,123456,mysql,1401);
+--enable_query_log
+
+--let $assert_text= connection_errors_max_connection was error changed.
+--let $assert_cond= [SHOW STATUS LIKE "Connection_errors_max_connections", Value, 1] = ($origin_error_conn + 11)
+--source include/assert.inc
+
+connection default;
+let $status_var= Threads_connected;
+let $status_var_value= 12; 
+source include/wait_for_status_var.inc;
+
+disconnect nor_conn5;
+connection default;
+let $status_var= Threads_connected;
+let $status_var_value= 11; 
+source include/wait_for_status_var.inc;
+
+--echo #test SUPER user can login in database when max_connection is reached.
+connect(nor_conn5,127.0.0.1,normal_user_with_super,123456,mysql,1401);
+connection default;
+select count(*) from information_schema.PROCESSLIST where user in ('root','normal_user_with_super','normal_user_without_super','normal_user_with_conn_admin','normal_user_with_service_admin');
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user_with_super','reserved_user_without_super','reserved_user_with_conn_admin','reserved_user_with_service_admin');
+
+--disable_query_log
+--error ER_CON_COUNT_ERROR, 9999
+connect(nor_conn6,127.0.0.1,normal_user_with_super,123456,mysql,1401);
+--enable_query_log
+
+--let $assert_text= connection_errors_max_connection was error changed.
+--let $assert_cond= [SHOW STATUS LIKE "Connection_errors_max_connections", Value, 1] = ($origin_error_conn + 12)
+--source include/assert.inc
+
+connection default;
+let $status_var= Threads_connected;
+let $status_var_value= 12;
+source include/wait_for_status_var.inc;
+
+--echo #
+--echo # Test 4: When the max_connections resource is consumed, the connection number of
+--echo #         the reserved user does not affect the non-reserved user. and it does not
+--echo #         affect the reserved user login in,
+--echo #
+disconnect res_conn1;
+let $status_var= Threads_connected;
+let $status_var_value= 11;
+source include/wait_for_status_var.inc;
+
+--disable_query_log
+--error ER_CON_COUNT_ERROR, 9999
+connect(nor_conn6,127.0.0.1,normal_user_with_super,123456,mysql,1401);
+--error ER_CON_COUNT_ERROR, 9999
+connect(nor_conn6,127.0.0.1,normal_user_with_conn_admin,123456,mysql,1401);
+--enable_query_log
+
+--let $assert_text= connection_errors_max_connection was error changed.
+--let $assert_cond= [SHOW STATUS LIKE "Connection_errors_max_connections", Value, 1] = ($origin_error_conn + 14)
+--source include/assert.inc
+
+connect(res_conn1,127.0.0.1,reserved_user_without_super,123456,mysql,1401);
+let $status_var= Threads_connected;
+let $status_var_value= 12;
+source include/wait_for_status_var.inc;
+
+--echo #
+--echo # Test 5: When the max_connections resource and reserved connection are consumed,
+--echo #         it does not affect the admin port connection.
+--echo #
+disconnect res_admin_conn1;
+let $status_var= Threads_connected;
+let $status_var_value= 11;
+source include/wait_for_status_var.inc;
+
+# check Admin_threads_connected status
+show global status like "Admin_threads_connected";
+
+# max_connections is consumed
+--disable_query_log
+--error ER_CON_COUNT_ERROR, 9999
+connect(nor_conn6,127.0.0.1,normal_user_with_super,123456,mysql,1401);
+--error ER_CON_COUNT_ERROR, 9999
+connect(nor_conn6,127.0.0.1,normal_user_with_conn_admin,123456,mysql,1401);
+--enable_query_log
+
+# reserved connection is consumed
+--disable_query_log
+--error ER_CON_COUNT_ERROR, 9999
+connect(res_conn5,127.0.0.1,reserved_user_with_super,123456,mysql,1401);
+--error ER_CON_COUNT_ERROR, 9999
+connect(res_conn5,127.0.0.1,reserved_user_with_conn_admin,123456,mysql,1401);
+--enable_query_log
+
+# admin connection number is controlled by rds_admin_max_connections
+connect(res_admin_conn1,127.0.0.1,reserved_user_with_service_admin,123456,mysql,1501);
+let $status_var= Threads_connected;
+let $status_var_value= 12;
+source include/wait_for_status_var.inc;
+show global status like "Admin_threads_connected";
+--disable_query_log
+--error ER_CON_COUNT_ERROR, 9999
+connect(nor_admin_conn2,127.0.0.1,normal_user_with_service_admin,123456,mysql,1501);
+--error ER_CON_COUNT_ERROR, 9999
+connect(res_admin_conn2,127.0.0.1,reserved_user_with_service_admin,123456,mysql,1501);
+--enable_query_log
+
+--let $assert_text= connection_errors_max_connection was error changed.
+--let $assert_cond= [SHOW STATUS LIKE "Connection_errors_max_connections", Value, 1] = ($origin_error_conn + 20)
+--source include/assert.inc
+
+--echo #
+--echo # Test 6: When the max_connections and rds_reserved_connections are consumed,
+--echo #         Admin connection will not affact reserved and non-reserved user connection.
+--echo #
+disconnect nor_admin_conn1;
+let $status_var= Threads_connected;
+let $status_var_value= 11;
+source include/wait_for_status_var.inc;
+
+--disable_query_log
+--error ER_CON_COUNT_ERROR, 9999
+connect(nor_conn6,127.0.0.1,normal_user_with_service_admin,123456,mysql,1401);
+--error ER_CON_COUNT_ERROR, 9999
+connect(res_conn5,127.0.0.1,reserved_user_with_service_admin,123456,mysql,1401);
+--enable_query_log
+
+connect(nor_admin_conn1,127.0.0.1,normal_user_with_service_admin,123456,mysql,1501);
+let $status_var= Threads_connected;
+let $status_var_value= 12;
+source include/wait_for_status_var.inc;
+
+connection default;
+select count(*) from information_schema.PROCESSLIST where user in ('root','normal_user_with_super','normal_user_without_super','normal_user_with_conn_admin','normal_user_with_service_admin');
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user_with_super','reserved_user_without_super','reserved_user_with_conn_admin','reserved_user_with_service_admin');
+
+--echo # Now, all connections have been used out.
+--disable_query_log
+--error ER_CON_COUNT_ERROR, 9999
+connect(res_conn5,127.0.0.1,reserved_user_without_super,123456,mysql,1401);
+--error ER_CON_COUNT_ERROR, 9999
+connect(nor_conn6,127.0.0.1,normal_user_with_super,123456,mysql,1401);
+--error ER_CON_COUNT_ERROR, 9999
+connect(nor_conn6,127.0.0.1,normal_user_with_conn_admin,123456,mysql,1401);
+--enable_query_log
+
+--let $assert_text= connection_errors_max_connection was error changed.
+--let $assert_cond= [SHOW STATUS LIKE "Connection_errors_max_connections", Value, 1] = ($origin_error_conn + 25)
+--source include/assert.inc
+
+connection default;
+
+select count(*) from information_schema.PROCESSLIST where user in ('root','normal_user_with_super','normal_user_without_super','normal_user_with_conn_admin','normal_user_with_service_admin');
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user_with_super','reserved_user_without_super','reserved_user_with_conn_admin','reserved_user_with_service_admin');
+
+--echo # Cleanup
+
+connection default;
+disconnect res_conn1;
+disconnect res_conn2;
+disconnect res_conn3;
+disconnect res_conn4;
+disconnect res_admin_conn1;
+disconnect nor_conn1;
+disconnect nor_conn2;
+disconnect nor_conn3;
+disconnect nor_conn4;
+disconnect nor_conn5;
+disconnect nor_admin_conn1;
+--disable_warnings
+DROP USER reserved_user_with_super,reserved_user_without_super,reserved_user_with_conn_admin,reserved_user_with_service_admin;
+DROP USER normal_user_with_super,normal_user_without_super,normal_user_with_conn_admin,normal_user_with_service_admin;
+--enable_warnings
+--source include/wait_until_count_sessions.inc

@@ -1,0 +1,62 @@
+drop table if exists t0, t1, t2, t3, t4, t5, t6;
+Warnings:
+Note	1051	Unknown table 'test.t0'
+Note	1051	Unknown table 'test.t1'
+Note	1051	Unknown table 'test.t2'
+Note	1051	Unknown table 'test.t3'
+Note	1051	Unknown table 'test.t4'
+Note	1051	Unknown table 'test.t5'
+Note	1051	Unknown table 'test.t6'
+create table t0(id int, a int) engine=Dstore;
+create table t1(id int, x int, foreign key(id) references t0(id)) engine=Dstore;
+ERROR HY000: Failed to add the foreign key constraint. Missing index for constraint 't1_fk_1' in the referenced table 't0'
+create index id_key on t0(id);
+create table t1(id int, x int, foreign key(id) references t0(id)) engine=Dstore;
+create table t2(id int, x int, foreign key(id) references t0(id) match full) engine=Dstore;
+create table t3(id int, x int, foreign key(id) references t0(id) on delete cascade) engine=Dstore;
+create table t4(id int, x int, foreign key(id) references t0(id) on update cascade) engine=Dstore;
+create table t5(id int, x int, foreign key(id) references t0(id) on delete set null on update cascade) engine=Dstore;
+create table t6(id int, x int, foreign key(id) references t0(id) match simple on delete set null) engine=Dstore;
+drop table if exists t0, t1, t2, t3, t4, t5, t6;
+create table t0(id int, a int, b int, key id_key(id), key a_key(a), key b_key(b)) engine=Dstore;
+create table t1(id int, x int, y int, foreign key f_key(x, y) references t0(a, b)) engine=Dstore;
+ERROR HY000: Failed to add the foreign key constraint. Missing index for constraint 't1_fk_1' in the referenced table 't0'
+create index ab_key on t0(a, b);
+create table t1(id int, x int, y int, foreign key f_key(x, y) references t0(a, b)) engine=Dstore;
+drop table if exists t00;
+Warnings:
+Note	1051	Unknown table 'test.t00'
+drop table if exists t11;
+Warnings:
+Note	1051	Unknown table 'test.t11'
+rename table t0 to t00;
+rename table t1 to t11;
+drop index ab_key on t00;
+ERROR HY000: Cannot drop index 'ab_key': needed in a foreign key constraint
+drop index f_key on t11;
+ERROR HY000: Cannot drop index 'f_key': needed in a foreign key constraint
+drop table t00;
+ERROR HY000: Cannot drop table 't00' referenced by a foreign key constraint 't11_fk_1' on table 't11'.
+drop table t11;
+drop table t00;
+create table t0(id int primary key, name char(20)) engine=Dstore;
+create table t1(id int primary key, a int, b int, key a_key(a), key b_key(b), 
+foreign key id_f_key(id) references t0(id)) engine=Dstore;
+create table t2(id int primary key, x int, y int, z int, key x_key(x), key y_key(y),
+foreign key id_f_key(id) references t1(id),
+foreign key x_f_key(x) references t1(a),
+foreign key y_f_key(y) references t1(b)) engine=Dstore;
+create table t3(name char(10), foreign key(name) references t0(id)) engine=Dstore;
+ERROR HY000: Referencing column 'name' and referenced column 'id' in foreign key constraint 't3_fk_1' are incompatible.
+create table employee(id int primary key auto_increment, name char(100), manager_id int,
+foreign key f_key(manager_id) references employee(id)) engine=Dstore;
+drop table employee;
+drop table if exists t0, t1, t2;
+create table t0(t0_id1 int not null, t0_id2 int, a int, primary key(t0_id1, t0_id2), key(t0_id2)) engine=Dstore;
+create table t1(t1_id1 int not null, t1_id2 int, t1_id3 int, x int, primary key(t1_id1, t1_id2, t1_id3)) engine=Dstore;
+create table t2(t2_id1 int, t2_id2 int, t2_id3 int, i int) engine=Dstore;
+alter table t1 add constraint t1_f_key foreign key(t1_id1, t1_id2) references t0(t0_id1, t0_id2), algorithm=copy;
+alter table t2 add constraint t2_f_key foreign key(t2_id3, t2_id2) references t1(t1_id1, t1_id2), algorithm=copy;
+alter table t2 add constraint t2_f_key2 foreign key(t2_id1) references t0(t0_id1), algorithm=copy;
+alter table t2 add constraint t2_f_key3 foreign key(t2_id2) references t0(t0_id2), algorithm=copy;
+drop table if exists t0, t1, t2;

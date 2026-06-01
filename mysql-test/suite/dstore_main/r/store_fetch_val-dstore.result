@@ -1,0 +1,108 @@
+DROP TABLE IF EXISTS t1, t2;
+#
+# 1. Integer type boundary testing (signed/unsigned)
+#
+CREATE TABLE t1 (
+ti TINYINT,
+ti_u TINYINT UNSIGNED,
+si SMALLINT,
+si_u SMALLINT UNSIGNED,
+mi MEDIUMINT,
+mi_u MEDIUMINT UNSIGNED,
+i INT,
+i_u INT UNSIGNED,
+bi BIGINT,
+bi_u BIGINT UNSIGNED
+) ENGINE=Dstore;
+Insert boundary values, minimum value && maximum value
+INSERT INTO t1 VALUES 
+(-128, 0, -32768, 0, -8388608, 0, -2147483648, 0, -9223372036854775808, 0),
+(127, 255, 32767, 65535, 8388607, 16777215, 2147483647, 4294967295, 9223372036854775807, 18446744073709551615);
+Verify stored values
+SELECT * FROM t1;
+ti	ti_u	si	si_u	mi	mi_u	i	i_u	bi	bi_u
+-128	0	-32768	0	-8388608	0	-2147483648	0	-9223372036854775808	0
+127	255	32767	65535	8388607	16777215	2147483647	4294967295	9223372036854775807	18446744073709551615
+Update boundary values
+UPDATE t1 SET 
+ti = ti + 1, 
+ti_u = ti_u + 1,
+si = si + 1,
+si_u = si_u + 1,
+mi = mi + 1,
+mi_u = mi_u + 1,
+i = i + 1,
+i_u = i_u + 1,
+bi = bi + 1,
+bi_u = bi_u + 1
+WHERE ti = 127;
+ERROR 22003: Out of range value for column 'ti' at row 2
+Verify updated value (should trigger out of bounds behavior)
+SELECT * FROM t1;
+ti	ti_u	si	si_u	mi	mi_u	i	i_u	bi	bi_u
+-128	0	-32768	0	-8388608	0	-2147483648	0	-9223372036854775808	0
+127	255	32767	65535	8388607	16777215	2147483647	4294967295	9223372036854775807	18446744073709551615
+#
+# 2. Floating-point type precision and boundary testing
+#
+CREATE TABLE t2 (
+f1 FLOAT,
+f2 FLOAT UNSIGNED,
+d1 DOUBLE,
+d2 DOUBLE UNSIGNED
+) ENGINE=Dstore;
+Warnings:
+Warning	1681	UNSIGNED for decimal and floating point data types is deprecated and support for it will be removed in a future release.
+Warning	1681	UNSIGNED for decimal and floating point data types is deprecated and support for it will be removed in a future release.
+1, Insert floating point special values, Minimum negative value && Maximum positive value && zero value && Minimum positive value && Maximum negative value
+INSERT INTO t2 VALUES 
+(-3.402823466E+38, 0, -1.7976931348623157E+308, 0),
+(3.402823466E+38, 3.402823466E+38, 1.7976931348623157E+308, 1.7976931348623157E+308),
+(0.0, 0.0, 0.0, 0.0),
+(1.175494351E-38, 1.175494351E-38, 2.2250738585072014E-308, 2.2250738585072014E-308),
+(-1.175494351E-38, 0, -2.2250738585072014E-308, 0);
+2, Verify floating point precision (using hexadecimal exact comparison)
+SELECT * FROM t2;
+f1	f2	d1	d2
+-3.40282e38	0	-1.7976931348623157e308	0
+3.40282e38	3.40282e38	1.7976931348623157e308	1.7976931348623157e308
+0	0	0	0
+1.17549e-38	1.17549e-38	2.2250738585072014e-308	2.2250738585072014e-308
+-1.17549e-38	0	-2.2250738585072014e-308	0
+3, Test accuracy loss scenarios
+INSERT INTO t2 VALUES (123456789.123, 123456789.123, 123456789012345.123, 123456789012345.123);
+SELECT * FROM t2 WHERE f1 > 0 AND d1 > 0;
+f1	f2	d1	d2
+3.40282e38	3.40282e38	1.7976931348623157e308	1.7976931348623157e308
+1.17549e-38	1.17549e-38	2.2250738585072014e-308	2.2250738585072014e-308
+123457000	123457000	123456789012345.12	123456789012345.12
+#
+# 1. DECIMAL precision test
+#
+ALTER TABLE t2 ADD (
+dc1 DECIMAL(65,30),
+dc2 DECIMAL(65,30) UNSIGNED
+);
+Warnings:
+Warning	1681	UNSIGNED for decimal and floating point data types is deprecated and support for it will be removed in a future release.
+2, Insert DECIMAL extremes
+INSERT INTO t2 (dc1, dc2) VALUES (
+'-99999999999999999999999999999999999.999999999999999999999999999999',
+'99999999999999999999999999999999999.999999999999999999999999999999'
+);
+3, Verify accurate storage
+SELECT dc1, dc2 FROM t2 WHERE dc1 IS NOT NULL;
+dc1	dc2
+-99999999999999999999999999999999999.999999999999999999999999999999	99999999999999999999999999999999999.999999999999999999999999999999
+1, Test arithmetic precision
+UPDATE t2 SET 
+dc1 = dc1 / 3,
+dc2 = dc2 / 3 
+WHERE dc1 < 0;
+SELECT dc1, dc2 FROM t2 WHERE dc1 LIKE '%-%';
+dc1	dc2
+-33333333333333333333333333333333333.333333333333333333333333333333	33333333333333333333333333333333333.333333333333333333333333333333
+#
+# 5. clean
+#
+DROP TABLE t1, t2;

@@ -1,0 +1,135 @@
+--source ../include/sqlfilter_prepare.inc
+
+--source include/have_debug.inc
+--echo #  ------------------------------------------
+--echo # Test add_sql_filter interface
+--echo # dbms_sqlfilter.add_sql_filter(
+--echo #     type ENUM('SELECT', 'UPDATE', 'DELETE', 'INSERT'),
+--echo #     max_concurrency INT UNSIGNED,
+--echo #     key_str VARCHAR(1024),
+--echo #     node_id VARCHAR(64));
+--echo #  ------------------------------------------
+
+--echo #
+--echo # test dbms_sqlfilter.add_sql_filter type
+--echo #
+--error ER_NATIVE_PROC_PARAMETER_MISMATCH
+call dbms_sqlfilter.add_sql_filter(1, 1, "select~t","");
+
+--error ER_NATIVE_PROC_PARAMETER_MISMATCH
+call dbms_sqlfilter.add_sql_filter(2, 1, "select~t","");
+
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter("abc", 1, "select~t","");
+
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter("alter", 1, "alter~t","");
+
+call dbms_sqlfilter.add_sql_filter("select", 1, "select~t","");
+call dbms_sqlfilter.add_sql_filter("update", 1, "update~t","");
+call dbms_sqlfilter.add_sql_filter("delete", 1, "delete~t","");
+call dbms_sqlfilter.add_sql_filter("insert", 1, "insert~t","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter("replace", 1, "replace~t","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call dbms_sqlfilter.show_sql_filter();
+
+--echo #
+--echo # test dbms_sqlfilter.add_sql_filter max_concurrency
+--echo #
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter("select", -1, "select~t","");
+
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter("select", 1000000001, "select~t","");
+
+call dbms_sqlfilter.add_sql_filter("select", 1000000000, "select~t","");
+
+call dbms_sqlfilter.add_sql_filter("select", 0, "select~t","");
+
+call dbms_sqlfilter.add_sql_filter("select", 10, "select~t","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call dbms_sqlfilter.show_sql_filter();
+
+--echo #
+--echo # test dbms_sqlfilter.add_sql_filter key_str
+--echo # test key_str char_length > 1024, please see mtr sql_filter.sqlfilter_bugfix, add chinese test
+--echo # test keywords number: [2, 128], please see mtr sql_filter.qlfilter_basic
+--echo #
+--error ER_NATIVE_PROC_PARAMETER_MISMATCH
+call dbms_sqlfilter.add_sql_filter("select", 10, 1,"");
+
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter("select", 10, '',"");
+
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter("select", 10, 'a~b~c',"");
+
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter("select", 10, 'insert~a~b~c',"");
+
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter("update", 10, 'iNsert~a~b~c',"");
+
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter("insert", 10, 'Select~a~b~c',"");
+
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter("delete", 10, 'insert~a~b~c',"");
+
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter("select", 10, 'update~a~b~c',"");
+
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter("select", 10, 'delete~a~b~c',"");
+
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter("select", 10, '~select~a~b~c~',"");
+
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter("select", 10, 'select~a~b~c~',"");
+
+select char_length("select~xxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库ddddddddddxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddxxxxxxxxxxx数xxdddddxxxxxxxxx");
+select length("select~xxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库ddddddddddxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddxxxxxxxxxxx数xxdddddxxxxxxxxx");
+
+call dbms_sqlfilter.add_sql_filter("select",0,"select~xxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库ddddddddddxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddxxxxxxxxxxx数xxdddddxxxxxxxxx","");
+
+call dbms_sqlfilter.add_sql_filter("select", 10, 'select ~ \r a~  \n b ~ c\n\t',"");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call dbms_sqlfilter.show_sql_filter();
+
+--echo #
+--echo # test dbms_sqlfilter.add_sql_filter node_id
+--echo #
+--error ER_NATIVE_PROC_PARAMETER_MISMATCH
+call dbms_sqlfilter.add_sql_filter("select", 10, 'select~t',12);
+
+select char_length("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter("select", 10, 'select~t',"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+
+call dbms_sqlfilter.add_sql_filter("select", 10, 'select~t',"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+
+select char_length("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库");
+call dbms_sqlfilter.add_sql_filter("select", 10, 'select~t',"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库");
+
+call dbms_sqlfilter.add_sql_filter("select", 10, 'select~t',"");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call dbms_sqlfilter.show_sql_filter();
+--source ../include/sqlfilter_cleanup.inc

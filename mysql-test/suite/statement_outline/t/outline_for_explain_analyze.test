@@ -1,0 +1,51 @@
+# Support explain analyze [format = tree] for statment outline
+
+--source include/elide_costs.inc
+
+set @save_opt_outline_enabled = @@global.rds_opt_outline_enabled;
+set global rds_opt_outline_enabled=on;
+
+create database outline_db;
+use outline_db;
+create table t1(c1 int auto_increment primary key, c2 int, c3 varchar(100), key idx_2(c2), key idx_2_3(c2,c3));
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', 'select c2 from t1 where c2 = 2');
+
+--let $query = select c2 from t1 where c2 = 2
+
+--replace_column 10 # 11 #
+--eval explain $query
+
+--replace_regex / *\(cost=(\d+\.\d+\.\.)?\d+\.\d+\ rows=\d+\)//
+--eval explain format = tree $query
+
+--replace_regex / *\(cost=(\d+\.\d+\.\.)?\d+\.\d+\ rows=\d+\)//
+--eval explain format = "tree" $query
+
+--eval explain format = json $query
+--eval explain format = 'json' $query
+
+--replace_column 10 # 11 #
+--eval explain format = traditional $query
+
+--replace_column 10 # 11 #
+--eval explain format = 'traditional' $query
+
+--replace_regex $elide_costs_and_time
+--eval explain analyze $query
+
+--skip_if_hypergraph   # Different query plan.
+--replace_regex $elide_costs_and_time
+--eval explain analyze format = tree $query
+
+--skip_if_hypergraph   # Different query plan.
+--replace_regex $elide_costs_and_time
+--eval explain analyze format = 'tree' $query
+
+--error ER_NOT_SUPPORTED_YET
+--eval explain analyze format = json $query
+
+--error ER_NOT_SUPPORTED_YET
+--eval explain analyze format = traditional $query
+
+drop database outline_db;
+set global rds_opt_outline_enabled=@save_opt_outline_enabled;

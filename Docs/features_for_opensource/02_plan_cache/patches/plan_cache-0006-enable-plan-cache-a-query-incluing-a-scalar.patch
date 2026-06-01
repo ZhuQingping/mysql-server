@@ -1,0 +1,212 @@
+From b6ae57df07bd0d74b4b309dfe9e81e54930e77ec Mon Sep 17 00:00:00 2001
+From: Guilhem Bichot <guilhem.bichot@contributor>
+
+Date: Thu, 7 Aug 2025 14:34:59 +0200
+Subject: [PATCH] enable plan_cache, a query incluing a scalar
+ subquery in select filed, and in the where clause contains a condition
+ judgment as length(BLOB)<?, the query will return a wrong result set after
+ using cached plan for several times.
+
+This is to fix the "other scenario" in the bug report, which
+experienced a wrong order.
+
+The 'reverse' oroperty of the index scanning got lost: it was not
+recorded while caching the plan. Now we record it and restore it when
+applying the plan.
+
+While at it, we add yet another check that test_quick_select()
+selected the same access path as it did originally: on top of
+comparing the type of range access and also the chosen index, we also
+compare the number of columns which will be read from the index.
+---
+ mysql-test/include/session_plan_cache.inc     | 32 +++++++++++++++
+ mysql-test/r/session_plan_cache.result        | 39 +++++++++++++++++++
+ .../dstore_main/r/session_plan_cache.result   | 39 +++++++++++++++++++
+ sql/sql_plan_cache.cc                         | 13 +++++++
+ sql/sql_plan_cache.h                          |  2 +
+ 5 files changed, 125 insertions(+)
+
+diff --git a/mysql-test/include/session_plan_cache.inc b/mysql-test/include/session_plan_cache.inc
+index d6bb0216022..abddaa44004 100644
+--- a/mysql-test/include/session_plan_cache.inc
++++ b/mysql-test/include/session_plan_cache.inc
+@@ -1712,4 +1712,36 @@ SHOW STATUS LIKE '%Cached_plan%';
+ DROP PREPARE stmt1;
+ DROP TABLE t_general_test;
+ 
++--echo # Second problem in BUGFIX ('reverse' property of index access was lost)
++
++CREATE TABLE tbl_1_all_type2index_desc (
++  id_col INT NOT NULL AUTO_INCREMENT,
++  bool_col TINYINT(1) DEFAULT NULL,
++  bigint_col BIGINT NOT NULL,
++  varchar_col VARCHAR(255)  DEFAULT NULL,
++  UNIQUE KEY (id_col DESC),
++  KEY ndx_bigint_varchar_col (bigint_col DESC, varchar_col(4) DESC)
++) AUTO_INCREMENT=114 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
++
++INSERT INTO tbl_1_all_type2index_desc VALUES 
++  (66 ,0, 9223372036854775807,'bbba2'),
++  (103,0, 13                 ,NULL   );
++
++PREPARE stmt FROM "WITH A AS (SELECT bool_col, bigint_col 
++	     	  	      FROM tbl_1_all_type2index_desc AS A 
++			      WHERE A.bool_col = ? and A.bigint_col > ?
++			      ORDER BY 1,2) 
++                   SELECT * FROM A";
++
++set @col1='1';
++set @col2=300;
++EXECUTE stmt USING @col1,@col2;
++set @col1='0';set @col2=-1000;
++EXECUTE stmt USING @col1,@col2;
++EXECUTE stmt USING @col1,@col2;
++SHOW STATUS LIKE '%Cached_plan%';
++
++DROP PREPARE stmt;
++DROP TABLE tbl_1_all_type2index_desc;
++
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/mysql-test/r/session_plan_cache.result b/mysql-test/r/session_plan_cache.result
+index fae7a969871..4c87c8ae164 100644
+--- a/mysql-test/r/session_plan_cache.result
++++ b/mysql-test/r/session_plan_cache.result
+@@ -3391,4 +3391,43 @@ Cached_plan_count	4
+ Cached_plan_hits	20
+ DROP PREPARE stmt1;
+ DROP TABLE t_general_test;
++# Second problem in BUGFIX ('reverse' property of index access was lost)
++CREATE TABLE tbl_1_all_type2index_desc (
++id_col INT NOT NULL AUTO_INCREMENT,
++bool_col TINYINT(1) DEFAULT NULL,
++bigint_col BIGINT NOT NULL,
++varchar_col VARCHAR(255)  DEFAULT NULL,
++UNIQUE KEY (id_col DESC),
++KEY ndx_bigint_varchar_col (bigint_col DESC, varchar_col(4) DESC)
++) AUTO_INCREMENT=114 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
++Warnings:
++Warning	1681	Integer display width is deprecated and will be removed in a future release.
++INSERT INTO tbl_1_all_type2index_desc VALUES 
++(66 ,0, 9223372036854775807,'bbba2'),
++(103,0, 13                 ,NULL   );
++PREPARE stmt FROM "WITH A AS (SELECT bool_col, bigint_col 
++	     	  	      FROM tbl_1_all_type2index_desc AS A 
++			      WHERE A.bool_col = ? and A.bigint_col > ?
++			      ORDER BY 1,2) 
++                   SELECT * FROM A";
++set @col1='1';
++set @col2=300;
++EXECUTE stmt USING @col1,@col2;
++bool_col	bigint_col
++set @col1='0';
++set @col2=-1000;
++EXECUTE stmt USING @col1,@col2;
++bool_col	bigint_col
++0	13
++0	9223372036854775807
++EXECUTE stmt USING @col1,@col2;
++bool_col	bigint_col
++0	13
++0	9223372036854775807
++SHOW STATUS LIKE '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	1
++Cached_plan_hits	22
++DROP PREPARE stmt;
++DROP TABLE tbl_1_all_type2index_desc;
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/mysql-test/suite/dstore_main/r/session_plan_cache.result b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+index 39ed8310430..724b77dd012 100644
+--- a/mysql-test/suite/dstore_main/r/session_plan_cache.result
++++ b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+@@ -3223,4 +3223,43 @@ Cached_plan_count	4
+ Cached_plan_hits	20
+ DROP PREPARE stmt1;
+ DROP TABLE t_general_test;
++# Second problem in BUGFIX ('reverse' property of index access was lost)
++CREATE TABLE tbl_1_all_type2index_desc (
++id_col INT NOT NULL AUTO_INCREMENT,
++bool_col TINYINT(1) DEFAULT NULL,
++bigint_col BIGINT NOT NULL,
++varchar_col VARCHAR(255)  DEFAULT NULL,
++UNIQUE KEY (id_col DESC),
++KEY ndx_bigint_varchar_col (bigint_col DESC, varchar_col(4) DESC)
++) AUTO_INCREMENT=114 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
++Warnings:
++Warning	1681	Integer display width is deprecated and will be removed in a future release.
++INSERT INTO tbl_1_all_type2index_desc VALUES 
++(66 ,0, 9223372036854775807,'bbba2'),
++(103,0, 13                 ,NULL   );
++PREPARE stmt FROM "WITH A AS (SELECT bool_col, bigint_col 
++	     	  	      FROM tbl_1_all_type2index_desc AS A 
++			      WHERE A.bool_col = ? and A.bigint_col > ?
++			      ORDER BY 1,2) 
++                   SELECT * FROM A";
++set @col1='1';
++set @col2=300;
++EXECUTE stmt USING @col1,@col2;
++bool_col	bigint_col
++set @col1='0';
++set @col2=-1000;
++EXECUTE stmt USING @col1,@col2;
++bool_col	bigint_col
++0	13
++0	9223372036854775807
++EXECUTE stmt USING @col1,@col2;
++bool_col	bigint_col
++0	13
++0	9223372036854775807
++SHOW STATUS LIKE '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	1
++Cached_plan_hits	22
++DROP PREPARE stmt;
++DROP TABLE tbl_1_all_type2index_desc;
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/sql/sql_plan_cache.cc b/sql/sql_plan_cache.cc
+index b009cc51e1c..0b6f7e3295f 100644
+--- a/sql/sql_plan_cache.cc
++++ b/sql/sql_plan_cache.cc
+@@ -1886,6 +1886,10 @@ bool Exec_context::fill(THD *thd, JOIN *join, QEP_TAB *cached_qep_tab) {
+     quick_keys_map.merge(get_quick_key_map(quick));
+     cached_qep_tab->table_ref->opt_hints_table->index_merge.get_key_map()
+         ->merge(quick_keys_map);
++    if (quick->type == AccessPath::INDEX_RANGE_SCAN) {
++      index_range_scan_is_reverse = quick->index_range_scan().reverse;
++    }
++    quick_used_key_parts = get_used_key_parts(quick);
+ #ifdef PLAN_CACHE_TAURUS
+     // PLAN_CACHE_PORT this "quick" has never been created, no need to delete
+     delete quick;  // it's not needed anymore.
+@@ -2290,6 +2294,15 @@ static int reinit_qep_tab_properties(QEP_TAB *qt) {
+       if (qck && qck->type == join->plan_cache_exec_context->quick_type) {
+         Key_map new_key_map [[maybe_unused]] = get_quick_key_map(qck);
+         assert(new_key_map == join->plan_cache_exec_context->quick_keys_map);
++        if (qck->type == AccessPath::INDEX_RANGE_SCAN) {
++          if (join->plan_cache_exec_context->index_range_scan_is_reverse) {
++            bool ret = make_reverse(get_used_key_parts(qck), qck);
++            if (ret) return 1;
++          }
++        }
++        if (join->plan_cache_exec_context->quick_used_key_parts !=
++            get_used_key_parts(qck))
++          return 1;
+         qt->set_range_scan(qck);
+         qt->set_type(calc_join_type(qck));
+       } else
+diff --git a/sql/sql_plan_cache.h b/sql/sql_plan_cache.h
+index 8801fe0d51f..778825c39a8 100644
+--- a/sql/sql_plan_cache.h
++++ b/sql/sql_plan_cache.h
+@@ -59,6 +59,8 @@ struct Exec_context {
+       OPTIMIZER_SWITCH_HYPERGRAPH_OPTIMIZER;
+ 
+   Key_map quick_keys_map{0};
++  bool index_range_scan_is_reverse{false};
++  uint quick_used_key_parts{0};
+   Temp_table_param *tmp_table_param{nullptr};
+   ulonglong optimizer_switch{0};
+   const CHARSET_INFO *character_set_client;
+-- 
+2.23.0
+

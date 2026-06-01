@@ -1,0 +1,160 @@
+drop table if exists t1,t2;
+select 0<=>0,0.0<=>0.0,0E0=0E0,"A"<=>"A",NULL<=>NULL;
+0<=>0	0.0<=>0.0	0E0=0E0	"A"<=>"A"	NULL<=>NULL
+1	1	1	1	1
+select 1<=>0,0<=>NULL,NULL<=>0;
+1<=>0	0<=>NULL	NULL<=>0
+0	0	0
+select 1.0<=>0.0,0.0<=>NULL,NULL<=>0.0;
+1.0<=>0.0	0.0<=>NULL	NULL<=>0.0
+0	0	0
+select "A"<=>"B","A"<=>NULL,NULL<=>"A";
+"A"<=>"B"	"A"<=>NULL	NULL<=>"A"
+0	0	0
+select 0<=>0.0, 0.0<=>0E0, 0E0<=>"0", 10.0<=>1E1, 10<=>10.0, 10<=>1E1;
+0<=>0.0	0.0<=>0E0	0E0<=>"0"	10.0<=>1E1	10<=>10.0	10<=>1E1
+1	1	1	1	1	1
+select 1.0<=>0E1,10<=>NULL,NULL<=>0.0, NULL<=>0E0;
+1.0<=>0E1	10<=>NULL	NULL<=>0.0	NULL<=>0E0
+0	0	0	0
+create table t1 (id int, value int);
+create table t2 (id int, value int);
+insert into t1 values (1,null);
+insert into t2 values (1,null);
+select t1.*, t2.*, t1.value<=>t2.value from t1, t2 where t1.id=t2.id and t1.id=1;
+id	value	id	value	t1.value<=>t2.value
+1	NULL	1	NULL	1
+select * from t1 where id <=>id;
+id	value
+1	NULL
+select * from t1 where value <=> value;
+id	value
+1	NULL
+select * from t1 where id <=> value or value<=>id;
+id	value
+drop table t1,t2;
+create table t1 (a bigint unsigned);
+insert into t1 values (4828532208463511553);
+select * from t1 where a = '4828532208463511553';
+a
+4828532208463511553
+select * from t1 where a in ('4828532208463511553');
+a
+4828532208463511553
+drop table t1;
+# 33790919: Null-safe compare works incorrectly with TIMESTAMP in trigger
+CREATE TABLE t1(id INT, ts TIMESTAMP NULL DEFAULT NULL);
+INSERT INTO t1 VALUES (1, "2022-01-01"), (2, NULL), (NULL, "2022-01-01");
+CREATE TRIGGER tr_bi_check_uniqueness_with_nulls
+BEFORE INSERT ON t1 FOR EACH ROW
+BEGIN
+IF EXISTS (SELECT * FROM t1 WHERE t1.id <=> NEW.id AND t1.ts <=> NEW.ts) THEN
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Duplicated values not allowed.';
+END IF;
+END
+//
+INSERT INTO t1 VALUES (1,'2022-01-01');
+ERROR 45000: Duplicated values not allowed.
+INSERT INTO t1 VALUES (2, NULL);
+ERROR 45000: Duplicated values not allowed.
+INSERT INTO t1 VALUES (NULL,'2022-01-01');
+ERROR 45000: Duplicated values not allowed.
+SELECT * FROM t1;
+id	ts
+1	2022-01-01 00:00:00
+2	NULL
+NULL	2022-01-01 00:00:00
+DROP TABLE t1;
+DROP TABLE IF EXISTS `tb1`;
+CREATE TABLE `tb1` (`double_col` double DEFAULT NULL, `bit_col` bit(8) DEFAULT b'0');
+DROP TABLE IF EXISTS `tb2`;
+CREATE TABLE `tb2` (`double_col` double DEFAULT NULL, `bit_col` bit(8) DEFAULT b'0');
+DROP TABLE IF EXISTS `tb3`;
+CREATE TABLE `tb3` (`double_col` double DEFAULT NULL, `bit_col` bit(8) DEFAULT b'0');
+insert into tb1(bit_col) values(0x00),(0xFF),(0xF0),(0xAA),(0x99);
+insert into tb2(bit_col) values(0x00),(0xFF),(0xF0),(0xAA),(0x99);
+insert into tb3(bit_col) values(0x00),(0xFF),(0xF0),(0xAA),(0x99);
+SELECT HEX(bit_col), double_col FROM (SELECT B.bit_col, B.double_col FROM tb1 A JOIN tb2 B GROUP BY 1,2
+HAVING (B.double_col, B.bit_col) <=>
+(SELECT double_col, bit_col FROM tb3 D WHERE D.bit_col NOT BETWEEN true AND D.double_col OR B.bit_col > D.double_col ORDER BY 1,2  LIMIT 1)
+ORDER BY 1,2) AS subquery;
+HEX(bit_col)	double_col
+0	NULL
+EXPLAIN SELECT B.bit_col, B.double_col FROM tb1 A JOIN tb2 B GROUP BY 1,2
+HAVING (B.double_col, B.bit_col) <=>
+(SELECT double_col, bit_col FROM tb3 D WHERE D.bit_col NOT BETWEEN true AND D.double_col OR B.bit_col > D.double_col ORDER BY 1,2  LIMIT 1)
+ORDER BY 1,2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.A)
+1	PRIMARY	A	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using temporary; Using filesort
+1	PRIMARY	B	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using join buffer (hash join)
+2	DEPENDENT SUBQUERY	D	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using filesort
+Warnings:
+Note	1276	Field or reference 'test.B.bit_col' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.B.bit_col' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`B`.`bit_col` AS `bit_col`,`test`.`B`.`double_col` AS `double_col` from `test`.`tb1` `A` join `test`.`tb2` `B` group by `test`.`B`.`bit_col`,`test`.`B`.`double_col` having ((`test`.`B`.`double_col`,`test`.`B`.`bit_col`) <=> (/* select#2 */ select `test`.`D`.`double_col`,`test`.`D`.`bit_col` from `test`.`tb3` `D` where ((`test`.`D`.`bit_col` not between true and `test`.`D`.`double_col`) or (`test`.`B`.`bit_col` > `test`.`D`.`double_col`)) order by `test`.`D`.`double_col`,`test`.`D`.`bit_col` limit 1)) order by `test`.`B`.`bit_col`,`test`.`B`.`double_col`
+DROP TABLE tb1;
+DROP TABLE tb2;
+DROP TABLE tb3;
+DROP TABLE IF EXISTS `ta`;
+CREATE TABLE `ta` (
+`time_col` time(6) DEFAULT NULL,
+`datetime_col` datetime(6) DEFAULT NULL
+);
+INSERT INTO `ta` VALUES ('08:59:59.000000', '2001-05-09 00:00:00.000000');
+INSERT INTO `ta` VALUES ('10:59:59.000000', '2001-02-01 00:00:00.000000');
+INSERT INTO `ta` VALUES (NULL, '1995-09-02 13:20:00.000000');
+INSERT INTO `ta` VALUES (NULL, '1992-03-04 12:20:00.000000');
+INSERT INTO `ta` VALUES (NULL, '2008-10-02 13:20:00.000000');
+DROP TABLE IF EXISTS `tb`;
+CREATE TABLE `tb` (
+`time_col` time(6) DEFAULT NULL,
+`datetime_col` datetime(6) DEFAULT NULL
+);
+INSERT INTO `tb` VALUES (NULL, '2008-10-02 13:20:00.000000');
+INSERT INTO `tb` VALUES ('09:09:59.000000', '2001-03-02 00:00:00.000000');
+INSERT INTO `tb` VALUES ('24:59:59.000000', '1000-01-01 00:00:00.000000');
+INSERT INTO `tb` VALUES ('03:59:59.000000', '2012-11-09 00:00:00.000000');
+DROP TABLE IF EXISTS `tc`;
+CREATE TABLE `tc` (
+`time_col` time(6) DEFAULT NULL,
+`datetime_col` datetime(6) DEFAULT NULL
+);
+INSERT INTO `tc` VALUES (NULL, '1992-03-04 12:20:00.000000');
+INSERT INTO `tc` VALUES (NULL, '1995-09-02 13:20:00.000000');
+INSERT INTO `tc` VALUES (NULL, '1997-09-02 13:20:00.000000');
+INSERT INTO `tc` VALUES (NULL, '1998-09-02 13:20:00.000000');
+INSERT INTO `tc` VALUES (NULL, '1999-09-02 13:20:00.000000');
+INSERT INTO `tc` VALUES (NULL, '2008-10-02 13:20:00.000000');
+INSERT INTO `tc` VALUES ('08:59:59.000000', '2001-05-09 00:00:00.000000');
+INSERT INTO `tc` VALUES ('10:59:59.000000', '2001-02-01 00:00:00.000000');
+INSERT INTO `tc` VALUES ('20:59:59.000000', '2001-04-06 00:00:00.000000');
+INSERT INTO `tc` VALUES ('23:23:59.000000', '2001-01-01 00:00:00.000000');
+SELECT A.time_col as c1, A.datetime_col as c2, B.datetime_col as c4,
+((A.time_col, A.datetime_col) <=> (SELECT time_col, datetime_col FROM tc D WHERE B.datetime_col > D.datetime_col ORDER BY 1,2  LIMIT 1 OFFSET 5)) AS t
+FROM ta A , tb B GROUP BY 1,2,3
+HAVING (A.time_col, A.datetime_col) <=> (SELECT time_col, datetime_col FROM tc D WHERE B.datetime_col > D.datetime_col ORDER BY 1,2  LIMIT 1 OFFSET 5)
+ORDER BY 1,2,3 LIMIT 10;
+c1	c2	c4	t
+NULL	2008-10-02 13:20:00.000000	2012-11-09 00:00:00.000000	1
+08:59:59.000000	2001-05-09 00:00:00.000000	2008-10-02 13:20:00.000000	1
+10:59:59.000000	2001-02-01 00:00:00.000000	2001-03-02 00:00:00.000000	1
+EXPLAIN SELECT A.time_col as c1, A.datetime_col as c4, B.time_col as c4, B.datetime_col as c4 FROM ta A LEFT JOIN tb B ON B.time_col IS NOT UNKNOWN
+WHERE A.datetime_col IN ('2012-11-09 00:00:00.000000','2001-04-06 00:00:00.000000') XOR B.time_col NOT BETWEEN '02:59:59.000000' AND B.datetime_col
+GROUP BY 1,2,3,4
+HAVING (A.time_col, A.datetime_col) <=> (SELECT time_col, datetime_col FROM tc D WHERE A.time_col > D.time_col OR B.datetime_col > D.datetime_col ORDER BY 1  LIMIT 1 OFFSET 5)
+ORDER BY 1,2,3,4 LIMIT 10;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.B, test.A)
+1	PRIMARY	B	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using temporary; Using filesort
+1	PRIMARY	A	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using join buffer (hash join)
+2	DEPENDENT SUBQUERY	D	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using filesort
+Warnings:
+Note	1276	Field or reference 'test.A.time_col' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.A.time_col' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.B.datetime_col' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.B.datetime_col' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`A`.`time_col` AS `c1`,`test`.`A`.`datetime_col` AS `c4`,`test`.`B`.`time_col` AS `c4`,`test`.`B`.`datetime_col` AS `c4` from `test`.`ta` `A` join `test`.`tb` `B` where (((`test`.`A`.`datetime_col` in ('2012-11-09 00:00:00.000000','2001-04-06 00:00:00.000000')) xor (`test`.`B`.`time_col` not between '02:59:59.000000' and `test`.`B`.`datetime_col`)) and (`test`.`B`.`time_col` is not null)) group by `test`.`A`.`time_col`,`test`.`A`.`datetime_col`,`test`.`B`.`time_col`,`test`.`B`.`datetime_col` having ((`test`.`A`.`time_col`,`test`.`A`.`datetime_col`) <=> (/* select#2 */ select `test`.`D`.`time_col`,`test`.`D`.`datetime_col` from `test`.`tc` `D` where ((`test`.`A`.`time_col` > `test`.`D`.`time_col`) or (`test`.`B`.`datetime_col` > `test`.`D`.`datetime_col`)) order by `test`.`D`.`time_col` limit 5,1)) order by `test`.`A`.`time_col`,`test`.`A`.`datetime_col`,`test`.`B`.`time_col`,`test`.`B`.`datetime_col` limit 10
+DROP TABLE ta;
+DROP TABLE tb;
+DROP TABLE tc;

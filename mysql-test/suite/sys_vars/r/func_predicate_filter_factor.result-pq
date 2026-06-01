@@ -1,0 +1,311 @@
+#
+# Variable name : func_predicate_filter_factor
+# Scope         : Global & Session
+#
+# Global - default
+SELECT @@global.func_predicate_filter_factor;
+@@global.func_predicate_filter_factor
+
+# Session - default
+SELECT @@session.func_predicate_filter_factor;
+@@session.func_predicate_filter_factor
+
+
+# via performance_schema.global_variables
+SELECT * FROM performance_schema.global_variables WHERE VARIABLE_NAME LIKE 'func_predicate_filter_factor%' ORDER BY VARIABLE_NAME;
+VARIABLE_NAME	VARIABLE_VALUE
+func_predicate_filter_factor	
+# via performance_schema.session_variables
+SELECT * FROM performance_schema.session_variables WHERE VARIABLE_NAME LIKE 'func_predicate_filter_factor%' ORDER BY VARIABLE_NAME;
+VARIABLE_NAME	VARIABLE_VALUE
+func_predicate_filter_factor	
+CREATE TABLE t0(a int);
+INSERT INTO t0 VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+CREATE TABLE t1(id int, name varchar(100));
+INSERT INTO t1 SELECT a.a, concat("test_", b.a) FROM t0 AS a, t0 AS b;
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') = 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where (locate('taurus',`test`.`t1`.`name`) = 0)
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') >= 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where (locate('taurus',`test`.`t1`.`name`) >= 0)
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') > 0 AND length(name) > 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where ((locate('taurus',`test`.`t1`.`name`) > 0) and (length(`test`.`t1`.`name`) > 1))
+SET @global_saved_tmp =  @@global.func_predicate_filter_factor;
+
+# Altering global variable's value
+SET @@global.func_predicate_filter_factor='instr, Length';
+SELECT @@global.func_predicate_filter_factor;
+@@global.func_predicate_filter_factor
+instr, Length
+SELECT @@session.func_predicate_filter_factor;
+@@session.func_predicate_filter_factor
+
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') > 0 AND length(name) > 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where ((locate('taurus',`test`.`t1`.`name`) > 0) and (length(`test`.`t1`.`name`) > 1))
+
+# Altering session variable's value
+SET @@session.func_predicate_filter_factor='length';
+SELECT @@global.func_predicate_filter_factor;
+@@global.func_predicate_filter_factor
+instr, Length
+SELECT @@session.func_predicate_filter_factor;
+@@session.func_predicate_filter_factor
+length
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') > 0 AND length(name) > 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where ((locate('taurus',`test`.`t1`.`name`) > 0) and (length(`test`.`t1`.`name`) > 1))
+# Variables' values in a new session.
+# Global - expect "instr, Length"
+SELECT @@global.func_predicate_filter_factor;
+@@global.func_predicate_filter_factor
+instr, Length
+
+# Session - expect "instr, Length"
+SELECT @@session.func_predicate_filter_factor;
+@@session.func_predicate_filter_factor
+instr, Length
+
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') = 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	10.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	10.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where (locate('taurus',`test`.`t1`.`name`) = 0)
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') <=> 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	10.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	10.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where (locate('taurus',`test`.`t1`.`name`) <=> 0)
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') != 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	90.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	90.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where (locate('taurus',`test`.`t1`.`name`) <> 0)
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') <> 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	90.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	90.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where (locate('taurus',`test`.`t1`.`name`) <> 0)
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') > 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where (locate('taurus',`test`.`t1`.`name`) > 0)
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') >= 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where (locate('taurus',`test`.`t1`.`name`) >= 0)
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') < 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where (locate('taurus',`test`.`t1`.`name`) < 0)
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') <= 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where (locate('taurus',`test`.`t1`.`name`) <= 0)
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') > 0 AND length(name) > 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	11.11	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	11.11	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where ((locate('taurus',`test`.`t1`.`name`) > 0) and (length(`test`.`t1`.`name`) > 1))
+EXPLAIN SELECT * FROM t1 WHERE length(name) = id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	10.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	10.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where (length(`test`.`t1`.`name`) = `test`.`t1`.`id`)
+EXPLAIN SELECT * FROM t1 WHERE length(name) = abs(id);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	10.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	10.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where (length(`test`.`t1`.`name`) = abs(`test`.`t1`.`id`))
+EXPLAIN SELECT * FROM t1 WHERE length(name) = (SELECT max(id) FROM t1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	10.00	Using where
+2	SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where (length(`test`.`t1`.`name`) = (/* select#2 */ select max(`test`.`t1`.`id`) from `test`.`t1`))
+EXPLAIN SELECT * FROM t1 WHERE abs(length(name)) = 6;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where (abs(length(`test`.`t1`.`name`)) = 6)
+# Switching to the default connection.
+SELECT @@global.func_predicate_filter_factor;
+@@global.func_predicate_filter_factor
+instr, Length
+SELECT @@session.func_predicate_filter_factor;
+@@session.func_predicate_filter_factor
+length
+
+# Test if DEFAULT is working as expected.
+SET @@global.func_predicate_filter_factor = DEFAULT;
+SELECT @@global.func_predicate_filter_factor;
+@@global.func_predicate_filter_factor
+
+SELECT @@session.func_predicate_filter_factor;
+@@session.func_predicate_filter_factor
+length
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') > 0 AND length(name) > 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where ((locate('taurus',`test`.`t1`.`name`) > 0) and (length(`test`.`t1`.`name`) > 1))
+SET @@session.func_predicate_filter_factor = 'instr';
+SELECT @@global.func_predicate_filter_factor;
+@@global.func_predicate_filter_factor
+
+SELECT @@session.func_predicate_filter_factor;
+@@session.func_predicate_filter_factor
+instr
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') > 0 AND length(name) > 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where ((locate('taurus',`test`.`t1`.`name`) > 0) and (length(`test`.`t1`.`name`) > 1))
+# Variables' values in a new session (con2).
+SELECT @@global.func_predicate_filter_factor;
+@@global.func_predicate_filter_factor
+
+SELECT @@session.func_predicate_filter_factor;
+@@session.func_predicate_filter_factor
+
+
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') > 0 AND length(name) > 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where ((locate('taurus',`test`.`t1`.`name`) > 0) and (length(`test`.`t1`.`name`) > 1))
+# Altering session should not affect global.
+SET @@session.func_predicate_filter_factor = 'length';
+SELECT @@global.func_predicate_filter_factor;
+@@global.func_predicate_filter_factor
+
+SELECT @@session.func_predicate_filter_factor;
+@@session.func_predicate_filter_factor
+length
+
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') > 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where (locate('taurus',`test`.`t1`.`name`) > 0)
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') > 0 AND length(name) > 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where ((locate('taurus',`test`.`t1`.`name`) > 0) and (length(`test`.`t1`.`name`) > 1))
+# Variables' values in a new session (con3).
+# Altering global should not affect session.
+SET @@global.func_predicate_filter_factor = '*';
+SELECT @@global.func_predicate_filter_factor;
+@@global.func_predicate_filter_factor
+*
+SELECT @@session.func_predicate_filter_factor;
+@@session.func_predicate_filter_factor
+
+
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') > 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where (locate('taurus',`test`.`t1`.`name`) > 0)
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') > 0 AND length(name) > 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where ((locate('taurus',`test`.`t1`.`name`) > 0) and (length(`test`.`t1`.`name`) > 1))
+# Variables' values in a new session (con4).
+# Altering global should not affect session.
+SELECT @@global.func_predicate_filter_factor;
+@@global.func_predicate_filter_factor
+*
+SELECT @@session.func_predicate_filter_factor;
+@@session.func_predicate_filter_factor
+*
+
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') > 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where (locate('taurus',`test`.`t1`.`name`) > 0)
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') > 0 AND length(name) > 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	11.11	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	11.11	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where ((locate('taurus',`test`.`t1`.`name`) > 0) and (length(`test`.`t1`.`name`) > 1))
+# Switching to the default connection.
+SELECT @@global.func_predicate_filter_factor;
+@@global.func_predicate_filter_factor
+*
+SELECT @@session.func_predicate_filter_factor;
+@@session.func_predicate_filter_factor
+instr
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') > 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where (locate('taurus',`test`.`t1`.`name`) > 0)
+EXPLAIN SELECT * FROM t1 WHERE instr(name, 'taurus') > 0 AND length(name) > 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	100	33.33	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name` from `test`.`t1` where ((locate('taurus',`test`.`t1`.`name`) > 0) and (length(`test`.`t1`.`name`) > 1))
+# Testing NULL
+SET @@global.func_predicate_filter_factor = NULL;
+SET @@session.func_predicate_filter_factor = NULL;
+# Global - expect ''
+SELECT @@global.func_predicate_filter_factor;
+@@global.func_predicate_filter_factor
+NULL
+# Session - expect ''
+SELECT @@session.func_predicate_filter_factor;
+@@session.func_predicate_filter_factor
+NULL
+# Restoring the original values.
+SET @@global.func_predicate_filter_factor = @global_saved_tmp;
+DROP TABLE t0;
+DROP TABLE t1;
+# End of tests.

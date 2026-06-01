@@ -1,0 +1,49 @@
+--source include/have_debug.inc
+--source include/have_debug_sync.inc
+
+--source include/restart_mysqld.inc
+
+let $count_sessions= 1;
+--source include/wait_until_count_sessions.inc
+
+SHOW STATUS LIKE 'Threadpool_idle_threads';
+SHOW STATUS LIKE 'Threadpool_active_threads';
+
+--connect (con1,localhost,root,,)
+SELECT 1;
+
+--connect (con2,localhost,root,,)
+SET DEBUG_SYNC= 'before_execute_sql_command SIGNAL con2 WAIT_FOR con2_continue';
+send SELECT 1;
+connection default;
+SET DEBUG_SYNC= 'now WAIT_FOR con2';
+
+--connect (con3,localhost,root,,)
+SET DEBUG_SYNC= 'before_execute_sql_command SIGNAL con3 WAIT_FOR con3_continue';
+send SELECT 1;
+connection default;
+SET DEBUG_SYNC= 'now WAIT_FOR con3';
+
+--connect (con4,localhost,root,,)
+SELECT 1;
+
+let $wait_condition= SELECT 1 FROM performance_schema.global_status
+    WHERE variable_name = 'Threadpool_idle_threads' AND variable_value = 2;
+--source include/wait_condition.inc
+SHOW STATUS LIKE 'Threadpool_idle_threads';
+SHOW STATUS LIKE 'Threadpool_active_threads';
+
+SET DEBUG_SYNC= 'now SIGNAL con2_continue';
+SET DEBUG_SYNC= 'now SIGNAL con3_continue';
+
+disconnect con1;
+connection con2;
+reap;
+disconnect con2;
+connection con3;
+reap;
+disconnect con3;
+disconnect con4;
+connection default;
+
+--source include/wait_until_count_sessions.inc

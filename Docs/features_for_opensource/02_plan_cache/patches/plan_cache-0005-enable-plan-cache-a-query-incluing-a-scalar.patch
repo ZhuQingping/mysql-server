@@ -1,0 +1,417 @@
+From 577811071583aa0943000d5119bd30c3a1fbbcc8 Mon Sep 17 00:00:00 2001
+From: Guilhem Bichot <guilhem.bichot@contributor>
+
+Date: Wed, 6 Aug 2025 12:14:55 +0200
+Subject: [PATCH] enable plan_cache, a query incluing a scalar
+ subquery in select filed, and in the where clause contains a condition
+ judgment as length(BLOB)<?, the query will return a wrong result set after
+ using cached plan for several times.
+
+This bug report contains two different problems. One of wrong
+rows (fixed here), one of lost order (fixed in a next commit).
+
+The query has WHERE and HAVING.
+
+first execution:
+- the WHERE is duplicated (copy_andor_structure); it is a 2-argument
+AND
+- it ends up into QEP_TAB::condition()
+- plan is cached: duplicates QEP_TAB::condition() (let's name the
+resulting condition (Item*) as COND_CACHE)
+- JOIN::add_having_as_tmp_table_cond() changes QEP_TAB::condition():
+it adds the HAVING condition to it, which (as a side effect of
+fix_fields on the new AND) empties the old AND Item
+(look for 'clear()' in the patch). QEP_TAB::condition() is now a
+3-arg AND in a different Item_cond_and. COND_CACHE is still
+non-empty.
+
+second execution:
+- cached plan is applied: QEP_TAB::condition() is set to be
+COND_CACHE (AND of 2 args)
+- JOIN::add_having_as_tmp_table_cond changes QEP_TAB::condition(), so
+empties COND_CACHE
+
+third execution:
+- cached plan is applied: QEP_TAB::condition() is set to be COND_CACHE (empty)
+- so one part of conditions got lost.
+
+This is a bug specific of the 3rd execution.
+
+Fix: due to the fact that, even when using a cached plan, some
+destructive transformations are done by parts of the
+optimizer (JOIN::add_having_as_tmp_table_cond() here): when applying
+the cached plan, do copy_andor_structure() to preserve COND_CACHE for
+next executions.
+---
+ mysql-test/include/session_plan_cache.inc     | 64 ++++++++++++++
+ mysql-test/r/session_plan_cache.result        | 83 +++++++++++++++++++
+ .../dstore_main/r/session_plan_cache.result   | 83 +++++++++++++++++++
+ sql/sql_plan_cache.cc                         | 49 ++++++++---
+ 4 files changed, 268 insertions(+), 11 deletions(-)
+
+diff --git a/mysql-test/include/session_plan_cache.inc b/mysql-test/include/session_plan_cache.inc
+index a92f7de4104..d6bb0216022 100644
+--- a/mysql-test/include/session_plan_cache.inc
++++ b/mysql-test/include/session_plan_cache.inc
+@@ -1648,4 +1648,68 @@ show status like '%Cached_plan%';
+ DROP PREPARE stmt1;
+ DROP TABLE t_general_test_pk;
+ 
++--echo #
++--echo # BUGFIX [plan cache][wrong result] enable plan_cache, a
++--echo # query incluing a scalar subquery in select filed, and in the where
++--echo # clause contains a condition judgment as length(BLOB)<?, the query
++--echo # will return a wrong result set after using cached plan for several
++--echo # times.
++--echo #
++
++CREATE TABLE t_general_test (
++  id INT DEFAULT NULL,
++  name VARCHAR(255) DEFAULT NULL,
++  text BLOB,
++  tex TEXT,
++  sex ENUM('boy','girl','secret') DEFAULT 'secret'
++) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
++
++INSERT INTO t_general_test VALUES
++(1,'abc',   _binary 'abc',NULL,'secret'),
++(2,'abc',   _binary 'abc',NULL,'secret'),
++(3,'abc',   _binary 'abc',NULL,'secret'),
++(100,NULL,  _binary 'aaaaaaaaaaaaaaaaaaaaaaaa',NULL,'secret'),
++(101,NULL,  _binary 'aaaaaaaaaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',NULL,'secret'),
++(NULL,NULL, _binary 'textsefwefwef','fwgfwergwegf','boy'),
++(NULL,NULL, NULL,NULL,'boy'),
++(0,'NULL',  _binary 'textsefwefwef','fwgfwergwegf','boy'),
++(0,'NULL',  '','','girl'),
++(1,'abc',   _binary 'abc',NULL,'secret'),
++(2,'abc',   _binary 'abc',NULL,'secret'),
++(3,'abc',   _binary 'abc',NULL,'secret'),
++(100,NULL , _binary 'aaaaaaaaaaaaaaaaaaaaaaaa',NULL,'secret'),
++(101,NULL , _binary 'aaaaaaaaaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',NULL,'secret'),
++(NULL,NULL, _binary 'textsefwefwef','fwgfwergwegf','boy'),
++(NULL,NULL, NULL,NULL,'boy'),
++(0,'NULL' , _binary 'textsefwefwef','fwgfwergwegf','boy'),
++(0,'NULL' , '','','girl'),
++(255,'NULL',_binary 'textsefwefwef','fwgfwergwegf','boy'),
++(100,'NULL','','','girl'),
++(255,'NULL',_binary 'textsefwefwef','fwgfwergwegf','boy'),
++(100,'NULL','','','girl');
++
++set @sql_text='SELECT sex,
++	              name,
++		      LENGTH(text),
++		      LENGTH(tex),
++		      id,
++		      (SELECT AVG(id) FROM t_general_test) AS total_avg_id,
++                      id - (SELECT AVG(id) FROM t_general_test) AS id_diff_total
++               FROM t_general_test
++	       WHERE sex IS NOT NULL AND LENGTH(text) < ?
++	       HAVING id > (SELECT AVG(id) FROM t_general_test)
++	       ORDER BY sex DESC, id DESC';
++
++set @val1=30;
++
++SELECT @@rds_plan_cache;
++PREPARE stmt1 FROM @sql_text;
++EXECUTE stmt1 USING @val1;
++EXECUTE stmt1 USING @val1;
++EXECUTE stmt1 USING @val1;
++SHOW STATUS LIKE '%Cached_plan%';
++
++DROP PREPARE stmt1;
++DROP TABLE t_general_test;
++
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/mysql-test/r/session_plan_cache.result b/mysql-test/r/session_plan_cache.result
+index 0859b5faa6b..fae7a969871 100644
+--- a/mysql-test/r/session_plan_cache.result
++++ b/mysql-test/r/session_plan_cache.result
+@@ -3308,4 +3308,87 @@ Cached_plan_count	1
+ Cached_plan_hits	12
+ DROP PREPARE stmt1;
+ DROP TABLE t_general_test_pk;
++#
++# BUGFIX [plan cache][wrong result] enable plan_cache, a
++# query incluing a scalar subquery in select filed, and in the where
++# clause contains a condition judgment as length(BLOB)<?, the query
++# will return a wrong result set after using cached plan for several
++# times.
++#
++CREATE TABLE t_general_test (
++id INT DEFAULT NULL,
++name VARCHAR(255) DEFAULT NULL,
++text BLOB,
++tex TEXT,
++sex ENUM('boy','girl','secret') DEFAULT 'secret'
++) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
++INSERT INTO t_general_test VALUES
++(1,'abc',   _binary 'abc',NULL,'secret'),
++(2,'abc',   _binary 'abc',NULL,'secret'),
++(3,'abc',   _binary 'abc',NULL,'secret'),
++(100,NULL,  _binary 'aaaaaaaaaaaaaaaaaaaaaaaa',NULL,'secret'),
++(101,NULL,  _binary 'aaaaaaaaaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',NULL,'secret'),
++(NULL,NULL, _binary 'textsefwefwef','fwgfwergwegf','boy'),
++(NULL,NULL, NULL,NULL,'boy'),
++(0,'NULL',  _binary 'textsefwefwef','fwgfwergwegf','boy'),
++(0,'NULL',  '','','girl'),
++(1,'abc',   _binary 'abc',NULL,'secret'),
++(2,'abc',   _binary 'abc',NULL,'secret'),
++(3,'abc',   _binary 'abc',NULL,'secret'),
++(100,NULL , _binary 'aaaaaaaaaaaaaaaaaaaaaaaa',NULL,'secret'),
++(101,NULL , _binary 'aaaaaaaaaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',NULL,'secret'),
++(NULL,NULL, _binary 'textsefwefwef','fwgfwergwegf','boy'),
++(NULL,NULL, NULL,NULL,'boy'),
++(0,'NULL' , _binary 'textsefwefwef','fwgfwergwegf','boy'),
++(0,'NULL' , '','','girl'),
++(255,'NULL',_binary 'textsefwefwef','fwgfwergwegf','boy'),
++(100,'NULL','','','girl'),
++(255,'NULL',_binary 'textsefwefwef','fwgfwergwegf','boy'),
++(100,'NULL','','','girl');
++set @sql_text='SELECT sex,
++	              name,
++		      LENGTH(text),
++		      LENGTH(tex),
++		      id,
++		      (SELECT AVG(id) FROM t_general_test) AS total_avg_id,
++                      id - (SELECT AVG(id) FROM t_general_test) AS id_diff_total
++               FROM t_general_test
++	       WHERE sex IS NOT NULL AND LENGTH(text) < ?
++	       HAVING id > (SELECT AVG(id) FROM t_general_test)
++	       ORDER BY sex DESC, id DESC';
++set @val1=30;
++SELECT @@rds_plan_cache;
++@@rds_plan_cache
++1
++PREPARE stmt1 FROM @sql_text;
++EXECUTE stmt1 USING @val1;
++sex	name	LENGTH(text)	LENGTH(tex)	id	total_avg_id	id_diff_total
++secret	NULL	24	NULL	100	62.4444	37.5556
++secret	NULL	24	NULL	100	62.4444	37.5556
++girl	NULL	0	0	100	62.4444	37.5556
++girl	NULL	0	0	100	62.4444	37.5556
++boy	NULL	13	12	255	62.4444	192.5556
++boy	NULL	13	12	255	62.4444	192.5556
++EXECUTE stmt1 USING @val1;
++sex	name	LENGTH(text)	LENGTH(tex)	id	total_avg_id	id_diff_total
++secret	NULL	24	NULL	100	62.4444	37.5556
++secret	NULL	24	NULL	100	62.4444	37.5556
++girl	NULL	0	0	100	62.4444	37.5556
++girl	NULL	0	0	100	62.4444	37.5556
++boy	NULL	13	12	255	62.4444	192.5556
++boy	NULL	13	12	255	62.4444	192.5556
++EXECUTE stmt1 USING @val1;
++sex	name	LENGTH(text)	LENGTH(tex)	id	total_avg_id	id_diff_total
++secret	NULL	24	NULL	100	62.4444	37.5556
++secret	NULL	24	NULL	100	62.4444	37.5556
++girl	NULL	0	0	100	62.4444	37.5556
++girl	NULL	0	0	100	62.4444	37.5556
++boy	NULL	13	12	255	62.4444	192.5556
++boy	NULL	13	12	255	62.4444	192.5556
++SHOW STATUS LIKE '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	4
++Cached_plan_hits	20
++DROP PREPARE stmt1;
++DROP TABLE t_general_test;
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/mysql-test/suite/dstore_main/r/session_plan_cache.result b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+index b531f1e1c91..39ed8310430 100644
+--- a/mysql-test/suite/dstore_main/r/session_plan_cache.result
++++ b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+@@ -3140,4 +3140,87 @@ Cached_plan_count	1
+ Cached_plan_hits	12
+ DROP PREPARE stmt1;
+ DROP TABLE t_general_test_pk;
++#
++# BUGFIX [plan cache][wrong result] enable plan_cache, a
++# query incluing a scalar subquery in select filed, and in the where
++# clause contains a condition judgment as length(BLOB)<?, the query
++# will return a wrong result set after using cached plan for several
++# times.
++#
++CREATE TABLE t_general_test (
++id INT DEFAULT NULL,
++name VARCHAR(255) DEFAULT NULL,
++text BLOB,
++tex TEXT,
++sex ENUM('boy','girl','secret') DEFAULT 'secret'
++) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
++INSERT INTO t_general_test VALUES
++(1,'abc',   _binary 'abc',NULL,'secret'),
++(2,'abc',   _binary 'abc',NULL,'secret'),
++(3,'abc',   _binary 'abc',NULL,'secret'),
++(100,NULL,  _binary 'aaaaaaaaaaaaaaaaaaaaaaaa',NULL,'secret'),
++(101,NULL,  _binary 'aaaaaaaaaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',NULL,'secret'),
++(NULL,NULL, _binary 'textsefwefwef','fwgfwergwegf','boy'),
++(NULL,NULL, NULL,NULL,'boy'),
++(0,'NULL',  _binary 'textsefwefwef','fwgfwergwegf','boy'),
++(0,'NULL',  '','','girl'),
++(1,'abc',   _binary 'abc',NULL,'secret'),
++(2,'abc',   _binary 'abc',NULL,'secret'),
++(3,'abc',   _binary 'abc',NULL,'secret'),
++(100,NULL , _binary 'aaaaaaaaaaaaaaaaaaaaaaaa',NULL,'secret'),
++(101,NULL , _binary 'aaaaaaaaaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',NULL,'secret'),
++(NULL,NULL, _binary 'textsefwefwef','fwgfwergwegf','boy'),
++(NULL,NULL, NULL,NULL,'boy'),
++(0,'NULL' , _binary 'textsefwefwef','fwgfwergwegf','boy'),
++(0,'NULL' , '','','girl'),
++(255,'NULL',_binary 'textsefwefwef','fwgfwergwegf','boy'),
++(100,'NULL','','','girl'),
++(255,'NULL',_binary 'textsefwefwef','fwgfwergwegf','boy'),
++(100,'NULL','','','girl');
++set @sql_text='SELECT sex,
++	              name,
++		      LENGTH(text),
++		      LENGTH(tex),
++		      id,
++		      (SELECT AVG(id) FROM t_general_test) AS total_avg_id,
++                      id - (SELECT AVG(id) FROM t_general_test) AS id_diff_total
++               FROM t_general_test
++	       WHERE sex IS NOT NULL AND LENGTH(text) < ?
++	       HAVING id > (SELECT AVG(id) FROM t_general_test)
++	       ORDER BY sex DESC, id DESC';
++set @val1=30;
++SELECT @@rds_plan_cache;
++@@rds_plan_cache
++1
++PREPARE stmt1 FROM @sql_text;
++EXECUTE stmt1 USING @val1;
++sex	name	LENGTH(text)	LENGTH(tex)	id	total_avg_id	id_diff_total
++secret	NULL	24	NULL	100	62.4444	37.5556
++secret	NULL	24	NULL	100	62.4444	37.5556
++girl	NULL	0	0	100	62.4444	37.5556
++girl	NULL	0	0	100	62.4444	37.5556
++boy	NULL	13	12	255	62.4444	192.5556
++boy	NULL	13	12	255	62.4444	192.5556
++EXECUTE stmt1 USING @val1;
++sex	name	LENGTH(text)	LENGTH(tex)	id	total_avg_id	id_diff_total
++secret	NULL	24	NULL	100	62.4444	37.5556
++secret	NULL	24	NULL	100	62.4444	37.5556
++girl	NULL	0	0	100	62.4444	37.5556
++girl	NULL	0	0	100	62.4444	37.5556
++boy	NULL	13	12	255	62.4444	192.5556
++boy	NULL	13	12	255	62.4444	192.5556
++EXECUTE stmt1 USING @val1;
++sex	name	LENGTH(text)	LENGTH(tex)	id	total_avg_id	id_diff_total
++secret	NULL	24	NULL	100	62.4444	37.5556
++secret	NULL	24	NULL	100	62.4444	37.5556
++girl	NULL	0	0	100	62.4444	37.5556
++girl	NULL	0	0	100	62.4444	37.5556
++boy	NULL	13	12	255	62.4444	192.5556
++boy	NULL	13	12	255	62.4444	192.5556
++SHOW STATUS LIKE '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	4
++Cached_plan_hits	20
++DROP PREPARE stmt1;
++DROP TABLE t_general_test;
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/sql/sql_plan_cache.cc b/sql/sql_plan_cache.cc
+index 48c741f12a3..b009cc51e1c 100644
+--- a/sql/sql_plan_cache.cc
++++ b/sql/sql_plan_cache.cc
+@@ -1334,14 +1334,40 @@ Item *clone_if_transient(THD *thd, Item *i) {
+   return c;
+ }
+ 
+-// PLAN_CACHE_PORT this is needed in the new plan cache implementation, where
+-// we sometimes re-use the permanent items instead of cloning everything.
+-static inline void get_item_and_refresh(Item *&dst, Item *src) {
++/**
++ PLAN_CACHE_PORT this is needed in the new plan cache implementation, where
++ we sometimes re-use the permanent items instead of cloning everything.
++
++ This function stores 'src' into 'dst' and refreshes 'used_tables'. Also, for
++ a condition, it makes a copy of the AND-OR structure ; because the condition
++ may be modified later in the process (*) so we need the modification to be done
++ on a copy, so the original is preserved for the next execution.
++
++ (*) details: after we have applied the cached plan, make_tmp_tables_info()
++ runs. Which calls JOIN::add_having_as_tmp_table_cond(). This function may
++ move HAVING into the QEP_TAB's condition, like this: qep_tab condition =
++ qep_tab condition AND having condition. If before this, qep_tab condition was
++ an AND then we now have qep_tab condition = (A AND B) AND having condition.
++ then Item_cond::fix_fields() on this new AND will dissolve the nested AND:
++ qep_tab condition = A AND B AND having condition. And this dissolving has
++ the side effect that the old AND Item_cond_and becomes empty (in
++ cond->list.clear() in Item_cond::fix_fields()). If we didn't make a copy
++ here, then this would make the cached condition empty, so a next execution
++ (next applying of the cached plan) would be wrong.
++
++ @param dst store the new item here
++ @param src source item
++ @param is_cond if true, this is used as condition.
++*/
++static inline void get_item_and_refresh(Item *&dst, Item *src, bool is_cond) {
++  dst = src;
++  if (!src) return;
++  if (is_cond) dst = dst->copy_andor_structure(current_thd);
+   // It is important to update Item-s after we rolled forward
+   // Exec_context::new_change_list, so they know they are constant (e.g. due
+   // to rolling forward a constant propagation in an argument). You may search
+   // for "update_used_tables" in session_plan_cache.test for an example.
+-  if ((dst = src)) src->update_used_tables();
++  dst->update_used_tables();
+ }
+ 
+ /**
+@@ -1368,7 +1394,7 @@ bool QEP_TAB::replace_cache_key() {
+     keyuse = &position()->key[part_no];
+     bool maybe_null = keyinfo->key_part[part_no].null_bit;
+ 
+-    get_item_and_refresh(keyuse->val, keyuse->val);
++    get_item_and_refresh(keyuse->val, keyuse->val, false);
+ 
+     store_key *s_key =
+         get_store_key(thd,
+@@ -2125,7 +2151,8 @@ static int reinit_qep_tab_properties(QEP_TAB *qt) {
+     if (qep_cond->refix_fields(thd, &qep_cond)) return true;
+   }
+ #endif
+-  get_item_and_refresh(qep_cond, join->plan_cache_exec_context->tab_condition);
++  get_item_and_refresh(qep_cond, join->plan_cache_exec_context->tab_condition,
++                       true);
+   qt->set_condition(qep_cond);
+   // PLAN_CACHE_PORT This line below was introduced in Taurus by
+   // "BUGFIX Fix the crash caused by the interaction between
+@@ -2133,7 +2160,7 @@ static int reinit_qep_tab_properties(QEP_TAB *qt) {
+   // is included here. The NDP-specific mtr test is not, however.
+   qt->reset_condition_as_pushed_to_sort();
+   Item *where_cond = nullptr;
+-  get_item_and_refresh(where_cond, join->select_lex->where_cond());
++  get_item_and_refresh(where_cond, join->select_lex->where_cond(), true);
+   // Approximate number of found rows to read them, ndp need this information
+   // Only one matching row for JT_SYSTEM or JT_CONST, otherwise use file->stats
+   ha_rows read_rows = 1;
+@@ -2383,7 +2410,7 @@ static bool refix_table(JOIN *join, TABLE *table) {
+   // applying the plan, we do not clone any Item: clones, if they are needed,
+   // were already made during plan caching, and they were made long-lived.
+   get_item_and_refresh(table->file->pushed_idx_cond,
+-                       join->plan_cache_exec_context->pushed_idx_cond);
++                       join->plan_cache_exec_context->pushed_idx_cond, true);
+   if (join->plan_cache_exec_context->key_read) table->set_keyread(true);
+ 
+   return false;
+@@ -2619,7 +2646,7 @@ static bool apply_cached_plan(JOIN *join) {
+ 
+   for (auto list : {join->group_list.order, join->order.order}) {
+     for (auto group = list; group; group = group->next) {
+-      get_item_and_refresh(*group->item, *group->item);
++      get_item_and_refresh(*group->item, *group->item, false);
+     }
+   }
+ 
+@@ -2651,8 +2678,8 @@ static bool apply_cached_plan(JOIN *join) {
+   }
+ #endif
+ 
+-  get_item_and_refresh(join->where_cond, context->where_cond);
+-  get_item_and_refresh(join->having_cond, context->having_cond);
++  get_item_and_refresh(join->where_cond, context->where_cond, true);
++  get_item_and_refresh(join->having_cond, context->having_cond, true);
+ 
+   set_ready(sl);
+   count_field_types(sl, &join->tmp_table_param, *join->fields, false, false);
+-- 
+2.23.0
+

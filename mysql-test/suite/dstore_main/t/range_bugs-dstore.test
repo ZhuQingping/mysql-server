@@ -1,0 +1,18 @@
+--source include/have_only_dstore.inc
+# BUG2025031334647 range optimizer scanning too many index cells in TPC-C
+
+set default_storage_engine=Dstore;
+create table t1 (a int primary key, b int);
+insert into t1 values (100,100);
+create table t2 (a int, key(a) );
+insert into t2 values (101),(102),(103),(104);
+
+analyze table t1,t2;
+
+explain format=tree select * from t1, t2 where t1.a=100 and t2.a>=t1.b-20 and t2.a<t1.b;
+select * from t1, t2 where t1.a=100 and t2.a>=t1.b-20 and t2.a<t1.b;
+
+# Similar case, but within an ON condition of a LEFT JOIN
+explain format=tree select * from (t1, t1 as t3) left join t2 on t2.a>=t1.b-20 and t2.a<t1.b where t1.a=100;
+
+drop table t1,t2;

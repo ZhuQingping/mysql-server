@@ -1,0 +1,126 @@
+#
+# Test for restore dstore on backup dir
+#
+
+call mtr.add_suppression("full backup found binlog is not enabled");
+
+--source suite/local_backup/include/prepare_for_backup.inc
+
+# 1. prepare some data
+create database dstore_pre_restore;
+use dstore_pre_restore;
+create table t1(s varchar(100)) engine=Dstore;
+
+# insert 1000 records
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 1000
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+# 2. Create a full backup
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+
+# 3. Start log archive
+--source suite/local_backup/include/start_log_archive.inc
+
+# 4. Add more data for log archive
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $i = 500
+--source include/Load_data.inc
+--sleep 3
+--let $i = 500
+--source include/Load_data.inc
+--sleep 3
+--let $i = 500
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+--sleep 3
+
+# 5. Stop log archive
+--source suite/local_backup/include/stop_log_archive.inc
+
+# 6. Add more data
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 300
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+# 7. Restore
+# Restore on backup and exit after dstore recovery finish
+--exec ls $MYSQLTEST_VARDIR/full_local_backup/20* -d | tail -n 1 > $MYSQLTEST_VARDIR/bakup_dir.txt
+--exec $MYSQL_BASEDIR/bin/backup_monitor $MYSQLTEST_VARDIR/local_backup_meta -w | grep '\"timePoint\"' | tail -n 1 | awk "{print \$2}" | sed "s/.\$//" > $MYSQLTEST_VARDIR/time_point.txt
+--exec $MYSQL_BASEDIR/bin/backup_monitor $MYSQLTEST_VARDIR/local_backup_meta -t `cat $MYSQLTEST_VARDIR/time_point.txt` > $MYSQLTEST_VARDIR/temp.txt
+--exec mv $MYSQLTEST_VARDIR/local_backup_meta/RestoreMeta_* `cat $MYSQLTEST_VARDIR/bakup_dir.txt`/RestoreMeta_RestoreMeta -f
+--exec cp $MYSQLTEST_VARDIR/wal_archive/* `cat $MYSQLTEST_VARDIR/bakup_dir.txt`/#mysql_dstore/gs_pdb/PDB_17/wal/ -f
+--exec cp $MYSQLD_DATADIR/auto.cnf `cat $MYSQLTEST_VARDIR/bakup_dir.txt`/
+--exec mkdir $MYSQLTEST_VARDIR/dstore_restore_log
+--let $mysqld_exec_cmd = $MYSQLD --defaults-file=$MYSQLTEST_VARDIR/my.cnf --defaults-group-suffix=.1 --datadir=`cat $MYSQLTEST_VARDIR/bakup_dir.txt` --dstore_restore_meta_path=`cat $MYSQLTEST_VARDIR/bakup_dir.txt` --dstore_open_restore_mode=ON --dstore_exit_after_restore=on --dstore_log_path=$MYSQLTEST_VARDIR/dstore_restore_log --log-error=$MYSQLTEST_VARDIR/mysql_dstore_restore.log --dstore_buffer=16384
+
+--exec $mysqld_exec_cmd --user=`whoami`
+--exec rm `cat $MYSQLTEST_VARDIR/bakup_dir.txt`/auto.cnf
+
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/mysql_dstore_restore.log
+--let SEARCH_PATTERN=dstore_exit_after_restore is set. Exit after restore finish
+--source include/search_pattern.inc
+
+# Origin mysqld is still normal
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 100
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+# Use the backup dir as data dir
+--exec mkdir $MYSQLTEST_VARDIR/data_orig
+--exec mv $MYSQLD_DATADIR/* $MYSQLTEST_VARDIR/data_orig/
+--exec mv `cat $MYSQLTEST_VARDIR/bakup_dir.txt`/* $MYSQLD_DATADIR/
+--exec touch $MYSQLD_DATADIR/ib_buffer_pool
+--exec mkdir $MYSQLD_DATADIR/#mysql_dstore/gs_pdb/test_tenant.vfs.root_pdb
+--exec mkdir $MYSQLD_DATADIR/#mysql_dstore/gs_pdb/test_tenant.vfs.runtime_log
+--exec mkdir $MYSQLD_DATADIR/#mysql_dstore/gs_pdb/test_tenant.vfs.template0
+--exec mkdir $MYSQLD_DATADIR/#mysql_dstore/gs_pdb/test_tenant.vfs.voting_disk
+--exec mv $MYSQLD_DATADIR/RestoreMeta_RestoreMeta $MYSQLTEST_VARDIR/local_backup_restore_meta/
+
+# It's ok to use restore mode
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld_no_echo.inc
+
+# 8. Verify data. Data added in step 6 is not present
+select count(*) from t1;
+# insert after resotre
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $i = 50
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+drop database dstore_pre_restore;
+
+--source suite/local_backup/include/clean_backup.inc
+--exec rm -rf $MYSQLTEST_VARDIR/bakup_dir.txt $MYSQLTEST_VARDIR/data_orig $MYSQLTEST_VARDIR/dstore_restore_log $MYSQLTEST_VARDIR/mysql_dstore_restore.log $MYSQLTEST_VARDIR/temp.txt $MYSQLTEST_VARDIR/time_point.txt

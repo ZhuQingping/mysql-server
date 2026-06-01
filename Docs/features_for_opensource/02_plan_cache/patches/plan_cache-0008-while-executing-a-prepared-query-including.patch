@@ -1,0 +1,232 @@
+From 060d032e42709e03f95c6301d73ec10ed0e82dab Mon Sep 17 00:00:00 2001
+From: Guilhem Bichot <guilhem.bichot@contributor>
+
+Date: Fri, 8 Aug 2025 14:11:55 +0200
+Subject: [PATCH] while executing a prepared query including
+ "order by int, tinytext", the second time using cached plan, mysqld will
+ coredump.
+
+When a plan is cached, QEP_TABs for tmp tables are allocated into this plan
+(e.g. tmp table for GROUP BY). They remain empty, because the intention
+that when the plan is applied, make_tmp_tables_info() will fill them.
+However, when the plan is applied a second time, this 'filling' needs to be
+cleared, so that make_tmp_tables_info() can run properly again. Overall, it
+means we have to re-run the constructor.
+
+In the bug's case, the symptom was that we got a condition, created by
+JOIN::add_having_as_tmp_table_cond(), containing short-lived Items,
+attached to the tmp table; when the tmp table got reused (second use
+of the cached plan), this condition got reused, freed Items were
+referenced. With the fix, the tmp table gets an empty condition, which
+is properly recreated by JOIN::add_having_as_tmp_table_cond().
+---
+ mysql-test/include/session_plan_cache.inc     | 31 +++++++++++++++
+ mysql-test/r/session_plan_cache.result        | 36 +++++++++++++++++
+ .../dstore_main/r/session_plan_cache.result   | 36 +++++++++++++++++
+ sql/sql_executor.h                            |  2 +
+ sql/sql_plan_cache.cc                         | 39 +++++++++++++++++++
+ 5 files changed, 144 insertions(+)
+
+diff --git a/mysql-test/include/session_plan_cache.inc b/mysql-test/include/session_plan_cache.inc
+index 03c8d4ce760..aaa1c28e6c5 100644
+--- a/mysql-test/include/session_plan_cache.inc
++++ b/mysql-test/include/session_plan_cache.inc
+@@ -1860,4 +1860,35 @@ DROP PREPARE stmt_explain;
+ SHOW STATUS LIKE '%Cached_plan%';
+ DROP TABLE tbl_1_all_type2index_desc;
+ 
++--echo #
++--echo # BUGFIX while executing a prepared query including "order by int, tinytext", the second time using cached plan, mysqld will coredump.
++--echo #
++
++CREATE TABLE tbtest_part (
++  id int NOT NULL,
++  tinyint_field tinyint DEFAULT NULL,
++  smallint_field smallint DEFAULT NULL,
++  bigint_field bigint DEFAULT NULL,
++  float_field float DEFAULT NULL,
++  datetime_field datetime DEFAULT NULL,
++  timestamp_field timestamp NULL DEFAULT NULL,
++  char_field char(8) DEFAULT NULL,
++  varchar_field varchar(10) DEFAULT NULL,
++  text_field tinytext,
++  PRIMARY KEY (id),
++  UNIQUE KEY idx_uni (id,tinyint_field,smallint_field,bigint_field),
++  KEY idx_f (char_field,varchar_field),
++  KEY idx_n (float_field),
++  KEY idx_d (datetime_field,timestamp_field)
++) DEFAULT CHARSET=latin1;
++ 
++PREPARE stmt0 FROM 'SELECT HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BUFFER_RESULT SQL_NO_CACHE id,tinyint_field,smallint_field,bigint_field,float_field,datetime_field,timestamp_field,char_field,varchar_field,text_field FROM tbtest_part as t1 WHERE (id=67401 or id=67501 or id=67601 or id=67701 or id=67801 or id=67901 or id=68001 or id=68101) GROUP BY id,text_field HAVING datetime_field like \'2018-08-08 00:00:00\' OR MAX(smallint_field) ORDER BY id,text_field LIMIT 2200000 OFFSET 0';
++
++EXECUTE stmt0;
++EXECUTE stmt0;
++EXECUTE stmt0;
++EXECUTE stmt0;
++SHOW STATUS LIKE '%Cached_plan%';
++DEALLOCATE PREPARE stmt0;
++
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/mysql-test/r/session_plan_cache.result b/mysql-test/r/session_plan_cache.result
+index 9fa123ea4cc..dbf64fae718 100644
+--- a/mysql-test/r/session_plan_cache.result
++++ b/mysql-test/r/session_plan_cache.result
+@@ -3517,4 +3517,40 @@ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	22
+ DROP TABLE tbl_1_all_type2index_desc;
++#
++# BUGFIX while executing a prepared query including "order by int, tinytext", the second time using cached plan, mysqld will coredump.
++#
++CREATE TABLE tbtest_part (
++id int NOT NULL,
++tinyint_field tinyint DEFAULT NULL,
++smallint_field smallint DEFAULT NULL,
++bigint_field bigint DEFAULT NULL,
++float_field float DEFAULT NULL,
++datetime_field datetime DEFAULT NULL,
++timestamp_field timestamp NULL DEFAULT NULL,
++char_field char(8) DEFAULT NULL,
++varchar_field varchar(10) DEFAULT NULL,
++text_field tinytext,
++PRIMARY KEY (id),
++UNIQUE KEY idx_uni (id,tinyint_field,smallint_field,bigint_field),
++KEY idx_f (char_field,varchar_field),
++KEY idx_n (float_field),
++KEY idx_d (datetime_field,timestamp_field)
++) DEFAULT CHARSET=latin1;
++PREPARE stmt0 FROM 'SELECT HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BUFFER_RESULT SQL_NO_CACHE id,tinyint_field,smallint_field,bigint_field,float_field,datetime_field,timestamp_field,char_field,varchar_field,text_field FROM tbtest_part as t1 WHERE (id=67401 or id=67501 or id=67601 or id=67701 or id=67801 or id=67901 or id=68001 or id=68101) GROUP BY id,text_field HAVING datetime_field like \'2018-08-08 00:00:00\' OR MAX(smallint_field) ORDER BY id,text_field LIMIT 2200000 OFFSET 0';
++Warnings:
++Warning	1681	'SQL_NO_CACHE' is deprecated and will be removed in a future release.
++EXECUTE stmt0;
++id	tinyint_field	smallint_field	bigint_field	float_field	datetime_field	timestamp_field	char_field	varchar_field	text_field
++EXECUTE stmt0;
++id	tinyint_field	smallint_field	bigint_field	float_field	datetime_field	timestamp_field	char_field	varchar_field	text_field
++EXECUTE stmt0;
++id	tinyint_field	smallint_field	bigint_field	float_field	datetime_field	timestamp_field	char_field	varchar_field	text_field
++EXECUTE stmt0;
++id	tinyint_field	smallint_field	bigint_field	float_field	datetime_field	timestamp_field	char_field	varchar_field	text_field
++SHOW STATUS LIKE '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	1
++Cached_plan_hits	25
++DEALLOCATE PREPARE stmt0;
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/mysql-test/suite/dstore_main/r/session_plan_cache.result b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+index 961bd198108..341204992d4 100644
+--- a/mysql-test/suite/dstore_main/r/session_plan_cache.result
++++ b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+@@ -3395,4 +3395,40 @@ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	22
+ DROP TABLE tbl_1_all_type2index_desc;
++#
++# BUGFIX while executing a prepared query including "order by int, tinytext", the second time using cached plan, mysqld will coredump.
++#
++CREATE TABLE tbtest_part (
++id int NOT NULL,
++tinyint_field tinyint DEFAULT NULL,
++smallint_field smallint DEFAULT NULL,
++bigint_field bigint DEFAULT NULL,
++float_field float DEFAULT NULL,
++datetime_field datetime DEFAULT NULL,
++timestamp_field timestamp NULL DEFAULT NULL,
++char_field char(8) DEFAULT NULL,
++varchar_field varchar(10) DEFAULT NULL,
++text_field tinytext,
++PRIMARY KEY (id),
++UNIQUE KEY idx_uni (id,tinyint_field,smallint_field,bigint_field),
++KEY idx_f (char_field,varchar_field),
++KEY idx_n (float_field),
++KEY idx_d (datetime_field,timestamp_field)
++) DEFAULT CHARSET=latin1;
++PREPARE stmt0 FROM 'SELECT HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BUFFER_RESULT SQL_NO_CACHE id,tinyint_field,smallint_field,bigint_field,float_field,datetime_field,timestamp_field,char_field,varchar_field,text_field FROM tbtest_part as t1 WHERE (id=67401 or id=67501 or id=67601 or id=67701 or id=67801 or id=67901 or id=68001 or id=68101) GROUP BY id,text_field HAVING datetime_field like \'2018-08-08 00:00:00\' OR MAX(smallint_field) ORDER BY id,text_field LIMIT 2200000 OFFSET 0';
++Warnings:
++Warning	1681	'SQL_NO_CACHE' is deprecated and will be removed in a future release.
++EXECUTE stmt0;
++id	tinyint_field	smallint_field	bigint_field	float_field	datetime_field	timestamp_field	char_field	varchar_field	text_field
++EXECUTE stmt0;
++id	tinyint_field	smallint_field	bigint_field	float_field	datetime_field	timestamp_field	char_field	varchar_field	text_field
++EXECUTE stmt0;
++id	tinyint_field	smallint_field	bigint_field	float_field	datetime_field	timestamp_field	char_field	varchar_field	text_field
++EXECUTE stmt0;
++id	tinyint_field	smallint_field	bigint_field	float_field	datetime_field	timestamp_field	char_field	varchar_field	text_field
++SHOW STATUS LIKE '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	1
++Cached_plan_hits	25
++DEALLOCATE PREPARE stmt0;
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/sql/sql_executor.h b/sql/sql_executor.h
+index 4b6aa1ec965..28c42d57b46 100644
+--- a/sql/sql_executor.h
++++ b/sql/sql_executor.h
+@@ -285,6 +285,8 @@ class QEP_TAB : public QEP_shared_owner {
+ 
+   bool replace_cache_key();
+ 
++  void rerun_constructor_for_tmp_table();
++
+   // Getters and setters
+ 
+   Item *condition_optim() const { return m_condition_optim; }
+diff --git a/sql/sql_plan_cache.cc b/sql/sql_plan_cache.cc
+index 6ec40570469..b0d818bdcf8 100644
+--- a/sql/sql_plan_cache.cc
++++ b/sql/sql_plan_cache.cc
+@@ -1473,6 +1473,38 @@ bool JOIN::shallow_clone(JOIN *orig) {
+   return false;
+ }
+ 
++/**
++   When a plan is cached, QEP_TABs for tmp tables are allocated into this plan
++   (e.g. tmp table for GROUP BY). They remain empty, because the intention
++   that when the plan is applied, make_tmp_tables_info() will fill them.
++   However, when the plan is applied a second time, this 'filling' needs to be
++   cleared, so that make_tmp_tables_info() can run properly again. Overall, it
++   means we have to re-run the constructor.
++
++   Note that at the end of the first execution of the cached plan,
++   QEP_TAB::cleanup() has been called on this QEP_TAB. All that remains after
++   that in QEP_TAB, is dangling pointers like condition(), integer or boolean
++   members describing plan details... Thus this function's job is to clear
++   these.
++ */
++void QEP_TAB::rerun_constructor_for_tmp_table() {
++  // This function is only for optimizer-internal tmp tables
++  assert(table_ref == nullptr);
++  auto save_join = join();  // save ptr before losing it
++  auto save_idx = idx();
++  // Using placement-new to overwrite existing object with empty object.
++  auto *new_qs = new (m_qs) QEP_shared;
++  assert(new_qs == m_qs);
++  auto new_tab [[maybe_unused]] = new (this) QEP_TAB;
++  assert(new_tab == this);
++  set_qs(new_qs);
++  set_join(save_join);
++  set_idx(save_idx);
++  // The primary motivation for this function is to clear the short-lived
++  // condition created by JOIN::add_having_as_tmp_table_cond(); so:
++  assert(condition() == nullptr);
++}
++
+ /////////////////// End of dependencies
+ 
+ namespace plan_cache {
+@@ -2537,6 +2569,13 @@ bool exec_cached_plan(SELECT_LEX *sl) {
+     if (status > 0) return true;
+   }
+ 
++  // Now handle the other QEP_TABs - that of optimizer-internal tmp tables
++  for (uint i = 0; i < join->tables; ++i) {
++    QEP_TAB *qep_tab = &join->qep_tab[i];
++    if (qep_tab->table_ref == nullptr)
++      qep_tab->rerun_constructor_for_tmp_table();
++  }
++
+   // PLAN_CACHE_PORT clone_if_transient() does not clone Item_param, then no
+   // need to bother below. Item_param-s created by the calls to pq_clone() in
+   // the lines above, may be clones of clones (see comment in
+-- 
+2.23.0
+

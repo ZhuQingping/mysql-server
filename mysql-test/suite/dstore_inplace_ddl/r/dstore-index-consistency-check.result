@@ -1,0 +1,70 @@
+SET @dstore_online_ddl_check_data_mode_saved= @@dstore_online_ddl_check_data_mode;
+CREATE TABLE t1 (c1 int, c2 int);
+INSERT INTO t1 VALUES (1, 2), (3, 1), (2, 3);
+Test 1. Mode 1: check online after index build (i.e. BuildParallel)
+SET GLOBAL dstore_online_ddl_check_data_mode = 1;
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR dml_done';
+ALTER TABLE t1 ADD INDEX keyc1(c1);;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+INSERT INTO t1 VALUES (4, 8);
+DELETE FROM t1 WHERE c1 = 4;
+SET DEBUG_SYNC = 'now SIGNAL dml_done';
+include/assert_grep.inc ["Only 1 time data consistency check is founded in error log."]
+Test 2. Mode 2: check online after all row log is applied (i.e. Commit stage)
+SET GLOBAL dstore_online_ddl_check_data_mode = 2;
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR dml_done';
+ALTER TABLE t1 ADD INDEX keyc2(c2);;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+INSERT INTO t1 VALUES (4, 6);
+SET DEBUG_SYNC = 'now SIGNAL dml_done';
+include/assert_grep.inc ["Only 1 time data consistency check is founded in error log."]
+Test 3. Mode 3: check data consistency in all stage of mode 1 and 2.
+SET GLOBAL dstore_online_ddl_check_data_mode = 3;
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR dml_done';
+ALTER TABLE t1 ADD INDEX keyc1c2(c1, c2);;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+INSERT INTO t1 VALUES (4, 6);
+SET DEBUG_SYNC = 'now SIGNAL dml_done';
+include/assert_grep.inc ["Two times data consistency check is founded in error log."]
+Test 4. Mode 4: Not check data consistency
+SET GLOBAL dstore_online_ddl_check_data_mode = 0;
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR dml_done';
+ALTER TABLE t1 ADD INDEX keyc2c1(c2, c1);;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+INSERT INTO t1 VALUES (4, 6);
+SET DEBUG_SYNC = 'now SIGNAL dml_done';
+include/assert_grep.inc ["Two times data consistency check is founded in error log."]
+Test 5. If error occur, we do not check data consistency
+SET GLOBAL dstore_online_ddl_check_data_mode = 3;
+CREATE TABLE t2 (c1 int, c2 int);
+INSERT INTO t2 VALUES (1, 1), (1, 1), (1, 1);
+ALTER TABLE t2 ADD UNIQUE INDEX keyc2c1(c2, c1);
+ERROR 23000: Duplicate entry '1-1' for key 't2.keyc2c1'
+include/assert_grep.inc ["Two times data consistency check is founded in error log."]
+DROP TABLE t2;
+Test 6. Test data consistency check fail.
+SET GLOBAL dstore_online_ddl_check_data_mode = 1;
+SET GLOBAL DEBUG = "+d, mock_data_compare_fail";
+ALTER TABLE t1 ADD INDEX wrongkey(c1);
+ERROR HY000: Got error 168 - 'Check data consistency fail.' from storage engine
+SET GLOBAL DEBUG = "-d, mock_data_compare_fail";
+SET GLOBAL dstore_online_ddl_check_data_mode = 2;
+SET GLOBAL DEBUG = "+d, mock_data_compare_fail";
+ALTER TABLE t1 ADD INDEX wrongkey(c1);
+ERROR HY000: Got error 168 - 'Check data consistency fail.' from storage engine
+SET GLOBAL DEBUG = "-d, mock_data_compare_fail";
+# Clean Env
+DROP TABLE t1;
+SET GLOBAL dstore_online_ddl_check_data_mode = @dstore_online_ddl_check_data_mode_saved;
+Test 7. Test Incremental data check fail when 
+SET GLOBAL dstore_online_ddl_check_data_mode = 4;
+CREATE TABLE t1 (c1 int, c2 int);
+INSERT INTO t1 VALUES (1, 2), (3, 1), (2, 3);
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR dml_done';
+SET GLOBAL DEBUG = "+d, mock_data_compare_fail";
+ALTER TABLE t1 ADD INDEX wrongkey(c1);;
+INSERT INTO t1 VALUES (4, 5), (6, 7);
+SET DEBUG_SYNC = 'now SIGNAL dml_done';
+ERROR HY000: Got error 168 - 'Check data consistency fail.' from storage engine
+SET GLOBAL DEBUG = "-d, mock_data_compare_fail";
+DROP TABLE t1;

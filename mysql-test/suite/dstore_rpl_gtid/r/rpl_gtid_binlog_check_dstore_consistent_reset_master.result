@@ -1,0 +1,62 @@
+include/master-slave.inc
+Warnings:
+Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
+[connection master]
+# -----------------------------------------------------------------------
+# Step 1: Initialize Data on Master
+# -----------------------------------------------------------------------
+[connection master]
+CREATE TABLE t(
+id INT
+) ENGINE=DSTORE;
+INSERT INTO t(id) VALUES(1),(2),(3),(4),(5);
+include/sync_slave_sql_with_master.inc
+[connection slave]
+include/stop_slave.inc
+reset master;
+reset replica;
+[connection master]
+reset master;
+[connection slave]
+# Kill the server
+# restart:--skip-replica-start
+include/rpl_reconnect.inc
+[connection slave]
+# expect rds_binlog_dstore_consistent is ON.
+show variables like 'rds_binlog_dstore_consistent';
+Variable_name	Value
+rds_binlog_dstore_consistent	ON
+# expect rds_dstore_missed_gtids is empty
+show variables like 'rds_dstore_missed_gtids';
+Variable_name	Value
+rds_dstore_missed_gtids	
+# expect rds_dstore_missed_gtids_on_binlog is empty.
+show variables like 'rds_dstore_missed_gtids_on_binlog';
+Variable_name	Value
+rds_dstore_missed_gtids_on_binlog	
+include/start_slave.inc
+[connection master]
+INSERT INTO t(id) VALUES(6);
+# Kill the server
+# restart
+include/rpl_reconnect.inc
+[connection master]
+# expect rds_binlog_dstore_consistent is ON.
+show variables like 'rds_binlog_dstore_consistent';
+Variable_name	Value
+rds_binlog_dstore_consistent	ON
+# expect rds_dstore_missed_gtids is empty
+show variables like 'rds_dstore_missed_gtids';
+Variable_name	Value
+rds_dstore_missed_gtids	
+# expect rds_dstore_missed_gtids_on_binlog is empty.
+show variables like 'rds_dstore_missed_gtids_on_binlog';
+Variable_name	Value
+rds_dstore_missed_gtids_on_binlog	
+[connection slave]
+include/stop_slave.inc
+include/start_slave.inc
+[connection master]
+drop table t;
+include/sync_slave_sql_with_master.inc

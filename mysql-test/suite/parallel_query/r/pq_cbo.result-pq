@@ -1,0 +1,470 @@
+SET @save_optimizer_switch= @@optimizer_switch;
+SET @save_force_parallel_execute= @@force_parallel_execute;
+SET @save_op_over_pq_offset_threshold= @@op_over_pq_offset_threshold;
+SET @save_parallel_setup_cost= @@parallel_setup_cost;
+SET @save_parallel_tuple_cost= @@parallel_tuple_cost;
+SET @saved_pq_support_features_switch = @@session.pq_support_features_switch;
+CREATE TABLE `active_baby` (
+`id` int NOT NULL AUTO_INCREMENT,
+`baby_id` int NOT NULL DEFAULT '0',
+`common_baby_id` int NOT NULL DEFAULT '0',
+`come_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+`create_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+`update_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+PRIMARY KEY (`id`),
+UNIQUE KEY `uni_baby_id` (`baby_id`),
+KEY `idx_come_time` (`come_time`)
+) ENGINE=InnoDB AUTO_INCREMENT=1751716381 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+SET force_parallel_execute=0;
+explain format=tree SELECT id, baby_id, common_baby_id, come_time, create_at, update_at FROM active_baby WHERE id>1741726385 AND id<=1791716381 ORDER BY id ASC LIMIT 1000,200;
+EXPLAIN
+-> Limit/Offset: 200/1000 row(s), with offset pushdown  (...)
+    -> Index range scan on active_baby using PRIMARY over (1741726385 < id <= 1791716381)  (...)
+
+explain format=tree SELECT id, baby_id, common_baby_id, come_time, create_at, update_at FROM active_baby WHERE id>1741726385 AND id<=1791716381 ORDER BY id ASC LIMIT 999,200;
+EXPLAIN
+-> Limit/Offset: 200/999 row(s), with offset pushdown  (...)
+    -> Index range scan on active_baby using PRIMARY over (1741726385 < id <= 1791716381)  (...)
+
+SET force_parallel_execute=1;
+explain format=tree SELECT id, baby_id, common_baby_id, come_time, create_at, update_at FROM active_baby WHERE id>1741726385 AND id<=1791716381 ORDER BY id ASC LIMIT 1000,200;
+EXPLAIN
+-> Limit/Offset: 200/1000 row(s), with offset pushdown  (...)
+    -> Index range scan on active_baby using PRIMARY over (1741726385 < id <= 1791716381)  (...)
+
+explain format=tree SELECT id, baby_id, common_baby_id, come_time, create_at, update_at FROM active_baby WHERE id>1741726385 AND id<=1791716381 ORDER BY id ASC LIMIT 999,200;
+EXPLAIN
+-> Limit/Offset: 200/999 row(s)  (...)
+    -> Gather: 4 workers, parallel scan on active_baby  (...)
+        -> Limit: 1199 row(s)  (...)
+            -> Parallel index range scan on active_baby using PRIMARY over (1741726385 < id <= 1791716381)  (...)
+
+CREATE PROCEDURE InsertActiveBabyRecords()
+BEGIN
+DECLARE i INT DEFAULT 1;
+WHILE i <= 2000 DO
+INSERT INTO `active_baby` (`baby_id`, `common_baby_id`, `come_time`, `create_at`, `update_at`)
+VALUES (i, i, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+SET i = i + 1;
+END WHILE;
+END //
+CALL InsertActiveBabyRecords();
+explain format=tree SELECT id, baby_id, common_baby_id, come_time, create_at, update_at FROM active_baby WHERE id>1741726385 AND id<=1791716381 ORDER BY id ASC LIMIT 999,1000;
+EXPLAIN
+-> Limit/Offset: 1000/999 row(s)  (...)
+    -> Gather: 4 workers, parallel scan on active_baby  (...)
+        -> Limit: 1999 row(s)  (...)
+            -> Parallel index range scan on active_baby using PRIMARY over (1741726385 < id <= 1791716381)  (...)
+
+explain format=tree SELECT id, baby_id, common_baby_id, come_time, create_at, update_at FROM active_baby WHERE id>1741726385 AND id<=1791716381 ORDER BY id ASC LIMIT 1,1999;
+EXPLAIN
+-> Limit/Offset: 1999/1 row(s)  (...)
+    -> Gather: 4 workers, parallel scan on active_baby  (...)
+        -> Limit: 2000 row(s)  (...)
+            -> Parallel index range scan on active_baby using PRIMARY over (1741726385 < id <= 1791716381)  (...)
+
+explain format=tree SELECT id, baby_id, common_baby_id, come_time, create_at, update_at FROM active_baby WHERE id>1741726385 AND id<=1791716381 ORDER BY id ASC LIMIT 10,99;
+EXPLAIN
+-> Limit/Offset: 99/10 row(s)  (...)
+    -> Gather: 4 workers, parallel scan on active_baby  (...)
+        -> Limit: 109 row(s)  (...)
+            -> Parallel index range scan on active_baby using PRIMARY over (1741726385 < id <= 1791716381)  (...)
+
+explain format=tree SELECT id, baby_id, common_baby_id, come_time, create_at, update_at FROM active_baby WHERE id>1741726385 AND id<=1791716381 ORDER BY id ASC LIMIT 1,1;
+EXPLAIN
+-> Limit/Offset: 1/1 row(s)  (...)
+    -> Gather: 4 workers, parallel scan on active_baby  (...)
+        -> Limit: 2 row(s)  (...)
+            -> Parallel index range scan on active_baby using PRIMARY over (1741726385 < id <= 1791716381)  (...)
+
+SET parallel_setup_cost=1.0;
+SET parallel_tuple_cost=1.5;
+SET optimizer_trace="enabled=on";
+explain format=tree SELECT id, baby_id, common_baby_id, come_time, create_at, update_at FROM active_baby WHERE id>1741726385 AND id<=1791716381 ORDER BY id ASC LIMIT 999,1000;
+EXPLAIN
+-> Limit/Offset: 1000/999 row(s)  (...)
+    -> Index range scan on active_baby using PRIMARY over (1741726385 < id <= 1791716381)  (...)
+
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "The cost of the parallel query execution plan is higher than that of the serial query execution plan.", "select#": 1}]
+explain format=tree SELECT id, baby_id, common_baby_id, come_time, create_at, update_at FROM active_baby WHERE id>1741726385 AND id<=1791716381 ORDER BY id ASC LIMIT 1,1999;
+EXPLAIN
+-> Limit/Offset: 1999/1 row(s)  (...)
+    -> Index range scan on active_baby using PRIMARY over (1741726385 < id <= 1791716381)  (...)
+
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "The cost of the parallel query execution plan is higher than that of the serial query execution plan.", "select#": 1}]
+explain format=tree SELECT id, baby_id, common_baby_id, come_time, create_at, update_at FROM active_baby WHERE id>1741726385 AND id<=1791716381 ORDER BY id ASC LIMIT 10,99;
+EXPLAIN
+-> Limit/Offset: 99/10 row(s)  (...)
+    -> Index range scan on active_baby using PRIMARY over (1741726385 < id <= 1791716381)  (...)
+
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "The cost of the parallel query execution plan is higher than that of the serial query execution plan.", "select#": 1}]
+explain format=tree SELECT id, baby_id, common_baby_id, come_time, create_at, update_at FROM active_baby WHERE id>1741726385 AND id<=1791716381 ORDER BY id ASC LIMIT 1,1;
+EXPLAIN
+-> Limit/Offset: 1/1 row(s)  (...)
+    -> Gather: 4 workers, parallel scan on active_baby  (...)
+        -> Limit: 2 row(s)  (...)
+            -> Parallel index range scan on active_baby using PRIMARY over (1741726385 < id <= 1791716381)  (...)
+
+SET optimizer_trace="enabled=off";
+CREATE TABLE `tbl_1_all_type2index` (
+`id_col` int NOT NULL AUTO_INCREMENT,
+`bool_col` tinyint(1) DEFAULT NULL,
+`mediumint_col` mediumint DEFAULT NULL,
+`int_col` int DEFAULT NULL,
+`binary_col` binary(11) DEFAULT NULL,
+`enum_col` enum('aaa','bbb','ccc') CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL,
+PRIMARY KEY (`id_col`),
+KEY `ndx_id_int_col` (`id_col`,`int_col`)
+) ENGINE=InnoDB AUTO_INCREMENT=114 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+CREATE TABLE `tbl_3_all_type2index` (
+`id_col` int NOT NULL DEFAULT '0',
+`bool_col` tinyint(1) DEFAULT NULL,
+`mediumint_col` mediumint DEFAULT NULL,
+`int_col` int DEFAULT NULL,
+`binary_col` binary(11) DEFAULT NULL,
+`enum_col` enum('aaa','bbb','ccc') CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL,
+KEY `ndx_id_mediumint_col` (`id_col`,`mediumint_col`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+CREATE TABLE `multi_tbl_3_all_type2index` (
+`id_col` int NOT NULL DEFAULT '0',
+`bool_col` tinyint(1) DEFAULT NULL,
+`mediumint_col` mediumint DEFAULT NULL,
+`int_col` int DEFAULT NULL,
+`binary_col` binary(11) DEFAULT NULL,
+`enum_col` enum('aaa','bbb','ccc') CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL,
+KEY `ndx_id_mediumint_col` (`id_col`,`mediumint_col`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+CREATE PROCEDURE InsertRecordsIntoTable(IN tableName VARCHAR(255), IN recordCount INT)
+BEGIN
+DECLARE i INT DEFAULT 1;
+DECLARE stmt VARCHAR(1024);
+DECLARE table_name VARCHAR(255);
+SET table_name = tableName;
+WHILE i <= recordCount DO
+SET @stmt = CONCAT('INSERT INTO ', table_name, 
+' (id_col, bool_col, mediumint_col, int_col, binary_col, enum_col) VALUES (',
+i, ', ', i % 2, ', ', i * 100, ', ', i * 1000, ', ',
+'CAST(CONCAT("bin", LPAD(', i, ', 8, "0")) AS BINARY(11)), ',
+'CASE WHEN ', i, ' % 3 = 1 THEN "aaa" WHEN ', i, ' % 3 = 2 THEN "bbb" ELSE "ccc" END)');
+PREPARE stmt FROM @stmt;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+SET i = i + 1;
+END WHILE;
+END //
+CALL InsertRecordsIntoTable('tbl_1_all_type2index', 13);
+CALL InsertRecordsIntoTable('multi_tbl_3_all_type2index', 20);
+CALL InsertRecordsIntoTable('tbl_3_all_type2index', 1000);
+SET optimizer_trace="enabled=on";
+EXPLAIN FORMAT = tree WITH cte1 AS (
+SELECT /*+no_bnl()*/ *
+FROM tbl_1_all_type2index
+WHERE tbl_1_all_type2index.int_col <= 99
+), 
+cte2 AS (
+SELECT /*+no_bnl()*/ c1.binary_col, c1.bool_col, B.enum_col
+FROM tbl_3_all_type2index B
+JOIN multi_tbl_3_all_type2index
+JOIN cte1 c1 ON c1.binary_col = B.binary_col
+)
+SELECT /*+no_bnl()*/ *
+FROM cte2
+ORDER BY 1, 2, 3;
+EXPLAIN
+-> Sort: binary_col, bool_col, enum_col
+    -> Stream results  (...)
+        -> Nested loop inner join  (...)
+            -> Nested loop inner join  (...)
+                -> Filter: (tbl_1_all_type2index.int_col <= 99)  (...)
+                    -> Table scan on tbl_1_all_type2index  (...)
+                -> Index scan on multi_tbl_3_all_type2index using ndx_id_mediumint_col  (...)
+            -> Filter: (B.binary_col = tbl_1_all_type2index.binary_col)  (...)
+                -> Table scan on B  (...)
+
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "The cost of the parallel query execution plan is higher than that of the serial query execution plan.", "select#": 1}]
+SET optimizer_trace="enabled=off";
+SET parallel_setup_cost=0.0;
+SET parallel_tuple_cost=0.0;
+EXPLAIN FORMAT = tree WITH cte1 AS (
+SELECT /*+no_bnl()*/ *
+FROM tbl_1_all_type2index
+WHERE tbl_1_all_type2index.int_col <= 99
+), 
+cte2 AS (
+SELECT /*+no_bnl()*/ c1.binary_col, c1.bool_col, B.enum_col
+FROM tbl_3_all_type2index B
+JOIN multi_tbl_3_all_type2index
+JOIN cte1 c1 ON c1.binary_col = B.binary_col
+)
+SELECT /*+no_bnl()*/ *
+FROM cte2
+ORDER BY 1, 2, 3;
+EXPLAIN
+-> Sort: cte2.binary_col, cte2.bool_col, cte2.enum_col
+    -> Stream results  (...)
+        -> Gather: 4 workers, parallel scan on B  (...)
+            -> Table scan on <temporary>  (...)
+                -> Temporary table  (...)
+                    -> Nested loop inner join  (...)
+                        -> Nested loop inner join  (...)
+                            -> Filter: (tbl_1_all_type2index.int_col <= 99)  (...)
+                                -> Table scan on tbl_1_all_type2index  (...)
+                            -> Index scan on multi_tbl_3_all_type2index using ndx_id_mediumint_col  (...)
+                        -> Filter: (B.binary_col = tbl_1_all_type2index.binary_col)  (...)
+                            -> Parallel table scan on B  (...)
+
+set pq_support_features_switch='hash_join_spill_to_disk=on';
+EXPLAIN FORMAT = tree WITH cte1 AS (
+SELECT *
+FROM tbl_1_all_type2index
+WHERE tbl_1_all_type2index.int_col <= 99
+), 
+cte2 AS (
+SELECT c1.binary_col, c1.bool_col, B.enum_col
+FROM tbl_3_all_type2index B
+JOIN multi_tbl_3_all_type2index
+JOIN cte1 c1 ON c1.binary_col = B.binary_col
+)
+SELECT *
+FROM cte2
+ORDER BY 1, 2, 3;
+EXPLAIN
+-> Sort: cte2.binary_col, cte2.bool_col, cte2.enum_col
+    -> Stream results  (...)
+        -> Gather: 4 workers, parallel scan on multi_tbl_3_all_type2index, B  (...)
+            -> Table scan on <temporary>  (...)
+                -> Temporary table  (...)
+                    -> Inner hash join, hash table shared by worker threads (B.binary_col = tbl_1_all_type2index.binary_col)  (...)
+                        -> Parallel table scan on B  (...)
+                        -> Hash
+                            -> Inner hash join, one hash table per worker (no condition)  (...)
+                                -> Parallel index scan on multi_tbl_3_all_type2index using ndx_id_mediumint_col  (...)
+                                -> Hash
+                                    -> Filter: (tbl_1_all_type2index.int_col <= 99)  (...)
+                                        -> Table scan on tbl_1_all_type2index  (...)
+
+SET parallel_setup_cost=1.0;
+SET parallel_tuple_cost=1.5;
+SET optimizer_trace="enabled=on";
+EXPLAIN FORMAT = tree WITH cte1 AS (
+SELECT *
+FROM tbl_1_all_type2index
+WHERE tbl_1_all_type2index.int_col <= 99
+), 
+cte2 AS (
+SELECT c1.binary_col, c1.bool_col, B.enum_col
+FROM tbl_3_all_type2index B
+JOIN multi_tbl_3_all_type2index
+JOIN cte1 c1 ON c1.binary_col = B.binary_col
+)
+SELECT *
+FROM cte2
+ORDER BY 1, 2, 3;
+EXPLAIN
+-> Sort: binary_col, bool_col, enum_col
+    -> Stream results  (...)
+        -> Inner hash join (B.binary_col = tbl_1_all_type2index.binary_col)  (...)
+            -> Table scan on B  (...)
+            -> Hash
+                -> Inner hash join (no condition)  (...)
+                    -> Index scan on multi_tbl_3_all_type2index using ndx_id_mediumint_col  (...)
+                    -> Hash
+                        -> Filter: (tbl_1_all_type2index.int_col <= 99)  (...)
+                            -> Table scan on tbl_1_all_type2index  (...)
+
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "The cost of the parallel query execution plan is higher than that of the serial query execution plan.", "select#": 1}]
+SET optimizer_trace="enabled=off";
+DROP PROCEDURE InsertActiveBabyRecords;
+DROP PROCEDURE InsertRecordsIntoTable;
+DROP TABLE active_baby;
+DROP TABLE tbl_1_all_type2index;
+DROP TABLE tbl_3_all_type2index;
+DROP TABLE multi_tbl_3_all_type2index;
+CREATE TABLE t1 (v1 int, v2 int);
+INSERT INTO t1 (v1, v2) VALUES (12, 0);
+SET parallel_setup_cost=1000;
+SELECT v2 AS col1, v2 AS col2, SUM(v1) AS col3 FROM t1 GROUP BY 1, 2;
+col1	col2	col3
+0	0	12
+DROP TABLE t1;
+SET parallel_setup_cost=1000.0,parallel_tuple_cost=1.5;
+CREATE TABLE t1 (
+pk int NOT NULL AUTO_INCREMENT,
+col_varchar varchar(1),
+col_varchar_key varchar(1),
+PRIMARY KEY (pk),
+KEY idx_CC_col_varchar_key (col_varchar_key)
+);
+INSERT INTO t1 VALUES (1,'n','X'),(2,'Y','8'),(3,'R','l');
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+EXPLAIN FORMAT=tree SELECT
+t1.col_varchar_key AS field1
+FROM
+(t1, t1 as alias1)
+WHERE
+NOT
+EXISTS(
+SELECT
+alias2.col_varchar_key
+FROM
+t1 AS alias2
+WHERE
+alias2.col_varchar_key >= t1.col_varchar
+)
+GROUP BY
+field1;
+EXPLAIN
+-> Table scan on <temporary>  (cost=1048..1051 rows=27)
+    -> Temporary table with deduplication  (cost=1048..1048 rows=27)
+        -> Gather: 4 workers, parallel scan on t1  (cost=40.7..1045 rows=27)
+            -> Table scan on <temporary>  (cost=2.41..4.6 rows=6.75)
+                -> Temporary table with deduplication  (cost=2.03..2.03 rows=6.75)
+                    -> Inner hash join, one hash table per worker (no condition)  (cost=1.35 rows=6.75)
+                        -> Index scan on alias1 using idx_CC_col_varchar_key  (cost=0.183 rows=3)
+                        -> Hash
+                            -> Nested loop antijoin  (cost=0.613 rows=2.25)
+                                -> Parallel table scan on t1  (cost=0.325 rows=0.75)
+                                -> Filter: (alias2.col_varchar_key >= t1.col_varchar)  (cost=0.55 rows=3)
+                                    -> Index range scan on alias2 (re-planned for each iteration)  (cost=0.55 rows=3)
+
+Warnings:
+Note	1276	Field or reference 'test.t1.col_varchar' of SELECT #2 was resolved in SELECT #1
+SELECT
+t1.col_varchar_key AS field1
+FROM
+(t1, t1 as alias1)
+WHERE
+NOT
+EXISTS(
+SELECT
+alias2.col_varchar_key
+FROM
+t1 AS alias2
+WHERE
+alias2.col_varchar_key >= t1.col_varchar
+)
+GROUP BY
+field1;
+field1
+8
+DROP TABLE t1;
+CREATE TABLE t1 (
+a INTEGER NOT NULL
+);
+INSERT INTO t1 VALUES (2),(2);
+CREATE TABLE t2 (
+b INTEGER
+);
+INSERT INTO t2 VALUES (2),(11),(11);
+CREATE TABLE t3 (
+b INTEGER,
+pk INTEGER,
+KEY b_key (b)
+);
+INSERT INTO t3 VALUES (2,5);
+CREATE TABLE t4 (
+pk INTEGER NOT NULL
+);
+INSERT INTO t4 VALUES (5),(7);
+ANALYZE TABLE t1,t2,t3,t4;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+test.t3	analyze	status	OK
+test.t4	analyze	status	OK
+EXPLAIN FORMAT=TREE SELECT *
+FROM t1
+JOIN t2 ON t1.a = t2.b
+WHERE t2.b IN (
+SELECT t3.b
+FROM t3 JOIN t4 ON t3.pk = t4.pk
+);
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1, t2  (cost=1004 rows=2)
+    -> Inner hash join, hash table shared by worker threads (t2.b = t1.a)  (cost=1.06 rows=0.5)
+        -> Parallel table scan on t2  (cost=0.138 rows=0.75)
+        -> Hash
+            -> Nested loop inner join  (cost=0.85 rows=0.5)
+                -> Parallel table scan on t1  (cost=0.3 rows=0.5)
+                -> Nested loop semijoin with duplicate removal on b_key  (cost=1 rows=1)
+                    -> Index lookup on t3 using b_key (b=t1.a)  (cost=0.3 rows=1)
+                    -> Filter: (t4.pk = t3.pk)  (cost=0.3 rows=1)
+                        -> Table scan on t4  (cost=0.3 rows=2)
+
+SELECT *
+FROM t1
+JOIN t2 ON t1.a = t2.b
+WHERE t2.b IN (
+SELECT t3.b
+FROM t3 JOIN t4 ON t3.pk = t4.pk
+);
+a	b
+2	2
+2	2
+DROP TABLE t1, t2, t3, t4;
+SET optimizer_switch="materialization=off,firstmatch=off";
+CREATE TABLE t1 (i BIGINT);
+CREATE TABLE t2 (i BIGINT);
+INSERT INTO t1 VALUES (1), (2), (3);
+INSERT INTO t2 VALUES (2), (3);
+ANALYZE TABLE t1, t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+EXPLAIN FORMAT=tree SELECT * FROM t2 WHERE (t2.i) IN (SELECT t1.i FROM t1);
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=1004 rows=2)
+    -> Remove duplicate t2 rows using temporary table (weedout)  (cost=0.513 rows=0.5)
+        -> Inner hash join, one hash table per worker (t1.i = t2.i)  (cost=0.513 rows=0.5)
+            -> Table scan on t1  (cost=0.175 rows=3)
+            -> Hash
+                -> Parallel table scan on t2  (cost=0.3 rows=0.5)
+
+SELECT * FROM t2 WHERE (t2.i) IN (SELECT t1.i FROM t1);
+i
+2
+3
+DROP TABLE t1, t2;
+SET optimizer_switch = DEFAULT;
+set optimizer_switch='firstmatch=off,materialization=off,duplicateweedout=off,loosescan=on';
+CREATE TABLE t1 ( i INTEGER, PRIMARY KEY (i) );
+CREATE TABLE t2 ( i INTEGER, INDEX i1 (i) );
+INSERT INTO t1 VALUES (2), (3), (4), (5);
+INSERT INTO t2 VALUES (1), (2), (3), (4);
+ANALYZE TABLE t1, t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+EXPLAIN format=tree SELECT * FROM t1 WHERE t1.i IN (SELECT t2.i FROM t2);
+EXPLAIN
+-> Nested loop inner join  (cost=2.05 rows=4)
+    -> Remove duplicates from input sorted on i1  (cost=0.651 rows=4)
+        -> Filter: (t2.i is not null)  (cost=0.651 rows=4)
+            -> Index scan on t2 using i1  (cost=0.651 rows=4)
+    -> Single-row covering index lookup on t1 using PRIMARY (i=t2.i)  (cost=1.1 rows=1)
+
+SELECT * FROM t1 WHERE t1.i IN (SELECT t2.i FROM t2);
+i
+2
+3
+4
+DROP TABLE t1, t2;
+SET optimizer_switch = DEFAULT;
+SET optimizer_switch=@save_optimizer_switch;
+SET force_parallel_execute=@save_force_parallel_execute;
+SET op_over_pq_offset_threshold=@save_op_over_pq_offset_threshold;
+SET parallel_setup_cost=@save_parallel_setup_cost;
+SET parallel_tuple_cost=@save_parallel_tuple_cost;
+SET pq_support_features_switch = @saved_pq_support_features_switch;

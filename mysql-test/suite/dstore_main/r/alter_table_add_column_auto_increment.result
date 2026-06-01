@@ -1,0 +1,23 @@
+CALL mtr.add_suppression("If the table contains data, adding an auto-increment column may lead to inconsistencies between primary and replica node.");
+create table t(i int);
+#expect 1 warnings
+alter table t modify column `i` int not null auto_increment, add primary key (`i`);
+Warnings:
+Warning	8051	If the table contains data, adding an auto-increment column may lead to inconsistencies between primary and replica node.
+Pattern "If the table contains data, adding an auto-increment column may lead to inconsistencies between primary and replica node." found
+#expect 0 warnings
+alter table t add id int;
+#expect 0 warnings
+alter table t modify column id bigint;
+create table t1(i int);
+#expect 0 warnings
+alter table t1 add id int primary key;
+create table t2(i int);
+#expect 1 warnings
+alter table t2 add id int auto_increment primary key;
+Warnings:
+Warning	8051	If the table contains data, adding an auto-increment column may lead to inconsistencies between primary and replica node.
+Pattern "If the table contains data, adding an auto-increment column may lead to inconsistencies between primary and replica node." found
+drop table t;
+drop table t1;
+drop table t2;

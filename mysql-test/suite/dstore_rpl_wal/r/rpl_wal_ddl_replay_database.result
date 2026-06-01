@@ -1,0 +1,364 @@
+############################################################
+Establish a master-replica replication relationship based on physical replication.
+############################################################
+include/master-slave.inc
+[connection master]
+#
+# 1. Initialize the required variables, then disconnect the subsequent master-replica replication connections.
+#
+[connection master]
+[connection slave]
+STOP REPLICA;
+RESET REPLICA ALL;
+#
+# 2. Since physical replication does not support DDL operations at present, execute all required DDL statements first.
+#
+create database copy_database;
+use copy_database;
+CREATE TABLE copy_table (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) engine = dstore;
+#
+# 3. Shutdown the primary and standby instances.
+#
+include/rpl_stop_server.inc [server_number=1]
+include/rpl_stop_server.inc [server_number=2]
+#
+# 4. Copy the data directory of the primary to that of the standby.
+#
+#
+# 5. Start the primary and standby instances with new parameters for establishing a master-replica physical replication relationship.
+#
+include/rpl_start_server.inc [server_number=1]
+include/rpl_start_server.inc [server_number=2]
+#
+# 6. Confirm that the primary and standby servers start with the new data directory.
+#
+include/assert.inc [Database copy_database should exist (only one record)]
+include/assert.inc [Table copy_table should exist in database copy_database (only one record)]
+use copy_database;
+show tables;
+Tables_in_copy_database
+copy_table
+include/assert.inc [Database copy_database should exist (only one record)]
+include/assert.inc [Table copy_table should exist in database copy_database (only one record)]
+use copy_database;
+show tables;
+Tables_in_copy_database
+copy_table
+#
+# 7. Install the plugin on both the primary and standby servers, and establish a master-replica physical replication relationship.
+#
+#
+# Install the primary server's plugin and set enabled_wal to ON.
+#
+INSTALL PLUGIN rpl_semi_sync_source SONAME 'semisync_source.so';
+INSTALL PLUGIN rpl_semi_sync_replica SONAME 'semisync_replica.so';
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 1;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 1;
+SET GLOBAL rds_physical_rpl_sender_packet_size = 1;
+#
+# dstore_enable_standby_role should show as false, indicating that the current node is the source.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	1
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	OFF
+#
+# Install the standby server's plugin and set enabled_wal to ON.
+#
+INSTALL PLUGIN rpl_semi_sync_source SONAME 'semisync_source.so';
+INSTALL PLUGIN rpl_semi_sync_replica SONAME 'semisync_replica.so';
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 1;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 1;
+SET GLOBAL rds_physical_rpl_sender_packet_size = 1;
+#
+# dstore_enable_standby_role should show as true, indicating that the current node is the replica.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	2
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	ON
+#
+# Configure the replica and check whether it is configured correctly.
+#
+STOP REPLICA;
+Warnings:
+Note	3084	Replication thread(s) for channel '' are already stopped.
+RESET REPLICA ALL;
+CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=SERVER_MYPORT_1, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL 'dstore_wal_replication_channel';;
+include/assert.inc [Channel name should be 'dstore_wal_replication_channel']
+Slave_IO_Running should be OFF.
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+OFF
+START REPLICA;
+#
+# Slave_IO_Running should be ON.
+#
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+ON
+############################# Test Database #############################
+一. Execute the corresponding DDL statements for SQLCOM_CREATE_DB, SQLCOM_DROP_DB, and SQLCOM_ALTER_DB.
+二、Check the DD information on the standby node to ensure correct metadata replay.
+三、Execute CREATE TABLE and DML statements in the database. After execution, perform a full table scan for comparison with the new primary node later, to ensure the replay function works correctly.
+四、Perform a switchover.
+五、Perform a full table scan on the tables in the database on the new primary node, and compare the results with those from Step 4, to verify the correctness of the standby node replay function.
+六、Use the replayed database on the new primary node and perform operations (modification and deletion) on it, to ensure the replayed DDL results are available and operable.
+#######################################################################
+#
+# 一、Execute the corresponding DDL statements for SQLCOM_CREATE_DB, SQLCOM_DROP_DB, and SQLCOM_ALTER_DB.
+#
+#
+# 1 SQLCOM_CREATE_DB
+#
+CREATE DATABASE IF NOT EXISTS test_create_db_demo_1 
+DEFAULT CHARACTER SET utf8mb4 
+DEFAULT COLLATE utf8mb4_general_ci;
+CREATE DATABASE IF NOT EXISTS test_create_db_demo_2 
+DEFAULT CHARACTER SET utf8mb4 
+DEFAULT COLLATE utf8mb4_bin;
+CREATE DATABASE IF NOT EXISTS test_create_db_demo_delete 
+DEFAULT CHARACTER SET utf8mb4 
+DEFAULT COLLATE utf8mb4_bin;
+#
+# 2 SQLCOM_ALTER_DB
+#
+ALTER DATABASE test_create_db_demo_1 
+DEFAULT CHARACTER SET utf8mb4 
+DEFAULT COLLATE utf8mb4_bin;
+#
+# 3 SQLCOM_DROP_DB
+#
+DROP DATABASE IF EXISTS test_create_db_demo_delete;
+#
+# 二、Check the DD information on the standby node to ensure correct metadata replay.
+#
+---------------------
+SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME 
+FROM INFORMATION_SCHEMA.SCHEMATA 
+WHERE SCHEMA_NAME = 'test_create_db_demo_1';
+SCHEMA_NAME	DEFAULT_CHARACTER_SET_NAME	DEFAULT_COLLATION_NAME
+test_create_db_demo_1	utf8mb4	utf8mb4_bin
+SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME 
+FROM INFORMATION_SCHEMA.SCHEMATA 
+WHERE SCHEMA_NAME = 'test_create_db_demo_2';
+SCHEMA_NAME	DEFAULT_CHARACTER_SET_NAME	DEFAULT_COLLATION_NAME
+test_create_db_demo_2	utf8mb4	utf8mb4_bin
+SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME 
+FROM INFORMATION_SCHEMA.SCHEMATA 
+WHERE SCHEMA_NAME = 'test_create_db_demo_delete';
+SCHEMA_NAME	DEFAULT_CHARACTER_SET_NAME	DEFAULT_COLLATION_NAME
+#
+# 三、Execute CREATE TABLE and DML statements in the database. After execution, perform a full table scan for comparison with the new primary node later, to ensure the replay function works correctly.
+#
+USE test_create_db_demo_1;
+CREATE TABLE IF NOT EXISTS t_user (
+id INT PRIMARY KEY AUTO_INCREMENT,
+name VARCHAR(50) NOT NULL,
+create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+) DEFAULT CHARSET=utf8mb4;
+INSERT INTO t_user(name) VALUES ('xiaoli');
+INSERT INTO t_user(name) VALUES ('qifenzhu');
+SELECT id, name from t_user;
+id	name
+1	xiaoli
+2	qifenzhu
+---------------------
+# Verify whether the table exists
+SELECT TABLE_NAME, TABLE_TYPE, ENGINE, TABLE_COLLATION 
+FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'test_create_db_demo_1' AND TABLE_NAME = 't_user';
+TABLE_NAME	TABLE_TYPE	ENGINE	TABLE_COLLATION
+t_user	BASE TABLE	Dstore	utf8mb4_0900_ai_ci
+# Verify column information
+SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA
+FROM INFORMATION_SCHEMA.COLUMNS 
+WHERE TABLE_SCHEMA = 'test_create_db_demo_1' AND TABLE_NAME = 't_user'
+ORDER BY ORDINAL_POSITION;
+COLUMN_NAME	COLUMN_TYPE	IS_NULLABLE	COLUMN_DEFAULT	EXTRA
+id	int	NO	NULL	auto_increment
+name	varchar(50)	NO	NULL	
+create_time	datetime	YES	CURRENT_TIMESTAMP	DEFAULT_GENERATED
+# 保证插入trace表和回放ddl语句是否为原子操作
+SET GLOBAL debug="+d,ddl_replay_after_insert_trace_core";
+CREATE TABLE IF NOT EXISTS t_user_temp (
+id INT PRIMARY KEY AUTO_INCREMENT,
+name VARCHAR(50) NOT NULL,
+create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+) DEFAULT CHARSET=utf8mb4;
+select sleep(4);
+Got one of the listed errors
+include/rpl_start_server.inc [server_number=2]
+SELECT @@global.debug AS node2_debug_after_restart;
+node2_debug_after_restart
+
+---------------------
+CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=SERVER_MYPORT_1, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL 'dstore_wal_replication_channel';;
+include/assert.inc [Channel name should be 'dstore_wal_replication_channel']
+Slave_IO_Running should be OFF.
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+OFF
+START REPLICA;
+Slave_IO_Running should be ON.
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+ON
+# Verify whether the table exists
+SELECT TABLE_NAME, TABLE_TYPE, ENGINE, TABLE_COLLATION 
+FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'test_create_db_demo_1' AND TABLE_NAME = 't_user_temp';
+TABLE_NAME	TABLE_TYPE	ENGINE	TABLE_COLLATION
+t_user_temp	BASE TABLE	Dstore	utf8mb4_0900_ai_ci
+#
+# 四、Perform a switchover.
+#
+############################################################
+switchover_1
+############################################################
+# Demote the source to replica.
+SET GLOBAL read_only = ON;
+SET GLOBAL event_scheduler = OFF;
+call rpl_wal.pdb_demote();
+#
+# dstore_enable_standby_role should show as true, indicating that the current node is the replica.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	1
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	ON
+#
+# Promote the replica to source.
+#
+STOP REPLICA;
+RESET REPLICA ALL FOR CHANNEL 'dstore_wal_replication_channel';
+call rpl_wal.pdb_promote();
+#
+# dstore_enable_standby_role should show as false, indicating that the current node is the source.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	2
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	OFF
+#
+# Clean the primary and standby servers.
+#
+include/stop_wal_dump_threads.inc
+#
+# Re-establish primary-standby relationship.
+#
+CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=old_standby_port, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL 'dstore_wal_replication_channel';;
+include/assert.inc [Channel name should be 'dstore_wal_replication_channel']
+START REPLICA;
+#
+# Slave_IO_Running should be ON.
+#
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+ON
+#
+# Disable read-only mode on the new source.
+#
+SET GLOBAL read_only = OFF;
+SET GLOBAL event_scheduler = ON;
+#
+# 五、Perform a full table scan on the tables in the database on the new primary node, and compare the results with those from Step 4, to verify the correctness of the standby node replay function.
+#
+show databases;
+Database
+__recyclebin__
+copy_database
+information_schema
+mtr
+mysql
+performance_schema
+sys
+test
+test_create_db_demo_1
+test_create_db_demo_2
+USE test_create_db_demo_1;
+SELECT id, name from t_user;
+id	name
+1	xiaoli
+2	qifenzhu
+#
+# 六、Use the replayed database on the new primary node and perform operations (modification and deletion) on it, to ensure the replayed DDL results are available and operable.
+#
+USE test_create_db_demo_1;
+CREATE TABLE IF NOT EXISTS t_user_2 (
+id INT PRIMARY KEY AUTO_INCREMENT,
+name VARCHAR(50) NOT NULL,
+create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO t_user(name) VALUES ('qifenzhuxiaoli');
+SELECT id, name FROM test_create_db_demo_1.t_user WHERE name = 'qifenzhuxiaoli';
+id	name
+3	qifenzhuxiaoli
+---------------------
+SELECT TABLE_NAME, TABLE_TYPE, ENGINE 
+FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'test_create_db_demo_1' AND TABLE_NAME = 't_user_2';
+TABLE_NAME	TABLE_TYPE	ENGINE
+t_user_2	BASE TABLE	Dstore
+SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE
+FROM INFORMATION_SCHEMA.COLUMNS 
+WHERE TABLE_SCHEMA = 'test_create_db_demo_1' AND TABLE_NAME = 't_user_2'
+ORDER BY ORDINAL_POSITION;
+COLUMN_NAME	COLUMN_TYPE	IS_NULLABLE
+id	int	NO
+name	varchar(50)	NO
+create_time	datetime	YES
+############################################################
+# Uninstall the plugins, reset the variables, and restore the original master-replica replication relationship.
+############################################################
+#
+# 1. Shutdown the mysqld instances of the master and replica servers launched with the new data directory.
+#
+STOP REPLICA;
+RESET REPLICA ALL FOR CHANNEL 'dstore_wal_replication_channel';
+include/stop_wal_dump_threads.inc
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 0;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 0;
+UNINSTALL PLUGIN rpl_semi_sync_source;
+UNINSTALL PLUGIN rpl_semi_sync_replica;
+use mtr;
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 0;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 0;
+UNINSTALL PLUGIN rpl_semi_sync_source;
+UNINSTALL PLUGIN rpl_semi_sync_replica;
+use mtr;
+#
+# 2. Shutdown the mysqld instances of the master and replica servers launched with the new data directory.
+#
+include/rpl_stop_server.inc [server_number=1]
+include/rpl_stop_server.inc [server_number=2]
+# Delete the directories of the primary and standby servers.
+#
+# 3. Restart the mysqld instances of the master and replica servers using the configurations from the opt file.
+#
+include/rpl_start_server.inc [server_number=1]
+show databases;
+Database
+__recyclebin__
+copy_database
+information_schema
+mtr
+mysql
+performance_schema
+sys
+test
+drop database copy_database;
+use mtr;
+include/rpl_start_server.inc [server_number=2]
+use mtr;

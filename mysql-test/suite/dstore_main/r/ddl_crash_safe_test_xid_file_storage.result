@@ -1,0 +1,30 @@
+#
+#  Test XID file storage can work normally when server restart during
+#  recovery.
+#
+CREATE TABLE t_ddl_crash_create_table_01(pk INT PRIMARY KEY, col1 INT);
+INSERT INTO t_ddl_crash_create_table_01 VALUES (1,2),(2,3),(3,4);
+#  1. Crash on CREATE TABLE statement.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+ALTER TABLE t_ddl_crash_create_table_01 ADD COLUMN col2 INT AFTER pk;
+ERROR HY000: Lost connection to MySQL server during query
+#  2. Restart the server and make the server crash after DStore
+#     recover done.
+#  3. Restart the server again and check table.
+# restart:
+ALTER TABLE t_ddl_crash_create_table_01 ADD COLUMN col2 CHAR(128) DEFAULT '123456789101112';
+ERROR 42S21: Duplicate column name 'col2'
+# 4. Before this patch, the following DROP would crash and the above
+#    ALTER TABLE would succeed.
+DROP TABLE t_ddl_crash_create_table_01;
+# 5. Other condition tests(mainly for code coverage)
+CREATE TABLE t_ddl_crash_create_table_01(pk INT PRIMARY KEY, col1 INT);
+INSERT INTO t_ddl_crash_create_table_01 VALUES (1,2),(2,3),(3,4);
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+ALTER TABLE t_ddl_crash_create_table_01 ADD COLUMN col2 INT AFTER pk;
+ERROR HY000: Lost connection to MySQL server during query
+# restart:
+DROP TABLE t_ddl_crash_create_table_01;
+# restart:

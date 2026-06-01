@@ -1,0 +1,44 @@
+SET @saved_rds_disable_loadable_function = @@global.rds_disable_user_defined_functions;
+# Test the default value
+set @@global.rds_disable_user_defined_functions=default;
+select @@global.rds_disable_user_defined_functions;
+@@global.rds_disable_user_defined_functions
+0
+select @@session.rds_disable_user_defined_functions;
+ERROR HY000: Variable 'rds_disable_user_defined_functions' is a GLOBAL variable
+show global variables like 'rds_disable_user_defined_functions';
+Variable_name	Value
+rds_disable_user_defined_functions	OFF
+select * from performance_schema.global_variables where variable_name='rds_disable_user_defined_functions';
+VARIABLE_NAME	VARIABLE_VALUE
+rds_disable_user_defined_functions	OFF
+# show that it's writable
+set global rds_disable_user_defined_functions=OFF;
+select @@global.rds_disable_user_defined_functions;
+@@global.rds_disable_user_defined_functions
+0
+set global rds_disable_user_defined_functions=ON;
+select @@global.rds_disable_user_defined_functions;
+@@global.rds_disable_user_defined_functions
+1
+set global rds_disable_user_defined_functions=0;
+select @@global.rds_disable_user_defined_functions;
+@@global.rds_disable_user_defined_functions
+0
+set global rds_disable_user_defined_functions=1;
+select @@global.rds_disable_user_defined_functions;
+@@global.rds_disable_user_defined_functions
+1
+# incorrect types
+set global rds_disable_user_defined_functions=1.1;
+ERROR 42000: Incorrect argument type to variable 'rds_disable_user_defined_functions'
+set global rds_disable_user_defined_functions=1e1;
+ERROR 42000: Incorrect argument type to variable 'rds_disable_user_defined_functions'
+# incorrect values
+set global rds_disable_user_defined_functions=5;
+ERROR 42000: Variable 'rds_disable_user_defined_functions' can't be set to the value of '5'
+set global rds_disable_user_defined_functions=-3;
+ERROR 42000: Variable 'rds_disable_user_defined_functions' can't be set to the value of '-3'
+set global rds_disable_user_defined_functions="foo";
+ERROR 42000: Variable 'rds_disable_user_defined_functions' can't be set to the value of 'foo'
+SET GLOBAL rds_disable_user_defined_functions = @saved_rds_disable_loadable_function;

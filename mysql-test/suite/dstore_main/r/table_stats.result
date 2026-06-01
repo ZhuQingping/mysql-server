@@ -1,0 +1,186 @@
+# ###################################################################
+# Test TABLE STATUS information for Dstore table
+# ###################################################################
+CREATE TABLE t1 (
+a int not NULL,
+b VARCHAR(1024) not NULL,
+c blob,
+PRIMARY KEY (a)
+) ENGINE=Dstore, STATS_SAMPLE_PAGES=500;
+CREATE PROCEDURE insert_table(IN n int)
+BEGIN
+DECLARE i INT DEFAULT 1;
+START TRANSACTION;
+WHILE (i <= n ) DO
+INSERT INTO t1 (a, b, c) VALUES (i,REPEAT('Dstore',150),REPEAT('A',3000));
+SET i=i+1;
+END WHILE;
+COMMIT;
+END ||
+# 1 Test Empty table, do not gererate record in mysql.dstore_table_stats
+SELECT COUNT(*) FROM t1;
+COUNT(*)
+0
+SHOW TABLE STATUS LIKE 't1';
+Name	Engine	Version	Row_format	Rows	Avg_row_length	Data_length	Max_data_length	Index_length	Data_free	Auto_increment	Create_time	Update_time	Check_time	Collation	Checksum	Create_options	Comment
+t1	Dstore	10	Redundant	0	0	8192	0	#	0	NULL	#	NULL	NULL	utf8mb4_0900_ai_ci	NULL	stats_sample_pages=500	
+SELECT TABLE_NAME,TABLE_TYPE,ENGINE,TABLE_ROWS,AVG_ROW_LENGTH,DATA_LENGTH,MAX_DATA_LENGTH,DATA_FREE FROM information_schema.tables WHERE table_name='t1';
+TABLE_NAME	TABLE_TYPE	ENGINE	TABLE_ROWS	AVG_ROW_LENGTH	DATA_LENGTH	MAX_DATA_LENGTH	DATA_FREE
+t1	BASE TABLE	Dstore	0	0	8192	0	0
+SELECT table_name,table_rows,avg_row_length,data_length,max_data_length,data_free FROM mysql.table_stats WHERE table_name='t1';
+table_name	table_rows	avg_row_length	data_length	max_data_length	data_free
+t1	0	0	8192	0	0
+SELECT table_name,n_rows,heap_table_pages,heap_table_free_pages,heap_table_lob_pages FROM mysql.dstore_table_stats WHERE table_name='t1';
+table_name	n_rows	heap_table_pages	heap_table_free_pages	heap_table_lob_pages
+t1	0	1	0	0
+# 2 Test insert 2 records in heap table
+CALL insert_table(2);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SELECT COUNT(*) FROM t1;
+COUNT(*)
+2
+SHOW TABLE STATUS LIKE 't1';
+Name	Engine	Version	Row_format	Rows	Avg_row_length	Data_length	Max_data_length	Index_length	Data_free	Auto_increment	Create_time	Update_time	Check_time	Collation	Checksum	Create_options	Comment
+t1	Dstore	10	Redundant	2	40960	81920	0	#	32768	NULL	#	NULL	NULL	utf8mb4_0900_ai_ci	NULL	stats_sample_pages=500	
+SELECT TABLE_NAME,TABLE_TYPE,ENGINE,TABLE_ROWS,AVG_ROW_LENGTH,DATA_LENGTH,MAX_DATA_LENGTH,DATA_FREE FROM information_schema.tables WHERE table_name='t1';
+TABLE_NAME	TABLE_TYPE	ENGINE	TABLE_ROWS	AVG_ROW_LENGTH	DATA_LENGTH	MAX_DATA_LENGTH	DATA_FREE
+t1	BASE TABLE	Dstore	2	40960	81920	0	32768
+SELECT table_name,table_rows,avg_row_length,data_length,max_data_length,data_free FROM mysql.table_stats WHERE table_name='t1';
+table_name	table_rows	avg_row_length	data_length	max_data_length	data_free
+t1	2	40960	81920	0	32768
+SELECT table_name,n_rows,heap_table_pages,heap_table_free_pages,heap_table_lob_pages FROM mysql.dstore_table_stats WHERE table_name='t1';
+table_name	n_rows	heap_table_pages	heap_table_free_pages	heap_table_lob_pages
+t1	2	5	4	5
+# 3 Test insert 100 records in heap table
+TRUNCATE TABLE t1;
+CALL insert_table(100);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SELECT COUNT(*) FROM t1;
+COUNT(*)
+100
+SHOW TABLE STATUS LIKE 't1';
+Name	Engine	Version	Row_format	Rows	Avg_row_length	Data_length	Max_data_length	Index_length	Data_free	Auto_increment	Create_time	Update_time	Check_time	Collation	Checksum	Create_options	Comment
+t1	Dstore	10	Redundant	100	1966	196608	0	#	16384	NULL	#	NULL	NULL	utf8mb4_0900_ai_ci	NULL	stats_sample_pages=500	
+SELECT TABLE_NAME,TABLE_TYPE,ENGINE,TABLE_ROWS,AVG_ROW_LENGTH,DATA_LENGTH,MAX_DATA_LENGTH,DATA_FREE FROM information_schema.tables WHERE table_name='t1';
+TABLE_NAME	TABLE_TYPE	ENGINE	TABLE_ROWS	AVG_ROW_LENGTH	DATA_LENGTH	MAX_DATA_LENGTH	DATA_FREE
+t1	BASE TABLE	Dstore	100	1966	196608	0	16384
+SELECT table_name,table_rows,avg_row_length,data_length,max_data_length,data_free FROM mysql.table_stats WHERE table_name='t1';
+table_name	table_rows	avg_row_length	data_length	max_data_length	data_free
+t1	100	1966	196608	0	16384
+SELECT table_name,n_rows,heap_table_pages,heap_table_free_pages,heap_table_lob_pages FROM mysql.dstore_table_stats WHERE table_name='t1';
+table_name	n_rows	heap_table_pages	heap_table_free_pages	heap_table_lob_pages
+t1	100	19	2	5
+# 4 Test insert 1000 records in heap table
+TRUNCATE TABLE t1;
+CALL insert_table(1000);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SELECT COUNT(*) FROM t1;
+COUNT(*)
+1000
+SHOW TABLE STATUS LIKE 't1';
+Name	Engine	Version	Row_format	Rows	Avg_row_length	Data_length	Max_data_length	Index_length	Data_free	Auto_increment	Create_time	Update_time	Check_time	Collation	Checksum	Create_options	Comment
+t1	Dstore	10	Redundant	1000	2039	2039808	0	#	573440	NULL	#	NULL	NULL	utf8mb4_0900_ai_ci	NULL	stats_sample_pages=500	
+SELECT TABLE_NAME,TABLE_TYPE,ENGINE,TABLE_ROWS,AVG_ROW_LENGTH,DATA_LENGTH,MAX_DATA_LENGTH,DATA_FREE FROM information_schema.tables WHERE table_name='t1';
+TABLE_NAME	TABLE_TYPE	ENGINE	TABLE_ROWS	AVG_ROW_LENGTH	DATA_LENGTH	MAX_DATA_LENGTH	DATA_FREE
+t1	BASE TABLE	Dstore	1000	2039	2039808	0	573440
+SELECT table_name,table_rows,avg_row_length,data_length,max_data_length,data_free FROM mysql.table_stats WHERE table_name='t1';
+table_name	table_rows	avg_row_length	data_length	max_data_length	data_free
+t1	1000	2039	2039808	0	573440
+SELECT table_name,n_rows,heap_table_pages,heap_table_free_pages,heap_table_lob_pages FROM mysql.dstore_table_stats WHERE table_name='t1';
+table_name	n_rows	heap_table_pages	heap_table_free_pages	heap_table_lob_pages
+t1	1000	237	70	12
+# 5 Test insert 1000 records + remove 990 records in heap table
+DELETE FROM t1 LIMIT 990;
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SELECT COUNT(*) FROM t1;
+COUNT(*)
+10
+SHOW TABLE STATUS LIKE 't1';
+Name	Engine	Version	Row_format	Rows	Avg_row_length	Data_length	Max_data_length	Index_length	Data_free	Auto_increment	Create_time	Update_time	Check_time	Collation	Checksum	Create_options	Comment
+t1	Dstore	10	Redundant	10	203980	2039808	0	#	1925120	NULL	#	NULL	NULL	utf8mb4_0900_ai_ci	NULL	stats_sample_pages=500	
+SELECT TABLE_NAME,TABLE_TYPE,ENGINE,TABLE_ROWS,AVG_ROW_LENGTH,DATA_LENGTH,MAX_DATA_LENGTH,DATA_FREE FROM information_schema.tables WHERE table_name='t1';
+TABLE_NAME	TABLE_TYPE	ENGINE	TABLE_ROWS	AVG_ROW_LENGTH	DATA_LENGTH	MAX_DATA_LENGTH	DATA_FREE
+t1	BASE TABLE	Dstore	10	203980	2039808	0	1925120
+SELECT table_name,table_rows,avg_row_length,data_length,max_data_length,data_free FROM mysql.table_stats WHERE table_name='t1';
+table_name	table_rows	avg_row_length	data_length	max_data_length	data_free
+t1	10	203980	2039808	0	1925120
+SELECT table_name,n_rows,heap_table_pages,heap_table_free_pages,heap_table_lob_pages FROM mysql.dstore_table_stats WHERE table_name='t1';
+table_name	n_rows	heap_table_pages	heap_table_free_pages	heap_table_lob_pages
+t1	10	237	235	12
+# 6 Test heap table stats after restart
+# restart;
+SELECT COUNT(*) FROM t1;
+COUNT(*)
+10
+SHOW TABLE STATUS LIKE 't1';
+Name	Engine	Version	Row_format	Rows	Avg_row_length	Data_length	Max_data_length	Index_length	Data_free	Auto_increment	Create_time	Update_time	Check_time	Collation	Checksum	Create_options	Comment
+t1	Dstore	10	Redundant	10	203980	2039808	0	#	1925120	NULL	#	NULL	NULL	utf8mb4_0900_ai_ci	NULL	stats_sample_pages=500	
+SELECT TABLE_NAME,TABLE_TYPE,ENGINE,TABLE_ROWS,AVG_ROW_LENGTH,DATA_LENGTH,MAX_DATA_LENGTH,DATA_FREE FROM information_schema.tables WHERE table_name='t1';
+TABLE_NAME	TABLE_TYPE	ENGINE	TABLE_ROWS	AVG_ROW_LENGTH	DATA_LENGTH	MAX_DATA_LENGTH	DATA_FREE
+t1	BASE TABLE	Dstore	10	203980	2039808	0	1925120
+SELECT table_name,table_rows,avg_row_length,data_length,max_data_length,data_free FROM mysql.table_stats WHERE table_name='t1';
+table_name	table_rows	avg_row_length	data_length	max_data_length	data_free
+t1	10	203980	2039808	0	1925120
+SELECT table_name,n_rows,heap_table_pages,heap_table_free_pages,heap_table_lob_pages FROM mysql.dstore_table_stats WHERE table_name='t1';
+table_name	n_rows	heap_table_pages	heap_table_free_pages	heap_table_lob_pages
+t1	10	237	235	12
+# 7 Test heap table size larger than stats_sample_pages
+DROP TABLE t1;
+CREATE TABLE t1 (
+a int not NULL,
+b VARCHAR(1024) not NULL,
+c blob,
+PRIMARY KEY (a)
+) ENGINE=Dstore, STATS_SAMPLE_PAGES=100;
+CALL insert_table(1000);
+DELETE FROM t1 LIMIT 990;
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SELECT COUNT(*) FROM t1;
+COUNT(*)
+10
+SELECT TABLE_NAME,TABLE_TYPE,ENGINE,DATA_LENGTH,DATA_FREE>(DATA_LENGTH-DATA_FREE) FROM information_schema.tables WHERE table_name='t1';
+TABLE_NAME	TABLE_TYPE	ENGINE	DATA_LENGTH	DATA_FREE>(DATA_LENGTH-DATA_FREE)
+t1	BASE TABLE	Dstore	2039808	1
+SELECT table_name,heap_table_pages,heap_table_free_pages>(heap_table_pages-heap_table_free_pages) FROM mysql.dstore_table_stats WHERE table_name='t1';
+table_name	heap_table_pages	heap_table_free_pages>(heap_table_pages-heap_table_free_pages)
+t1	237	1
+DROP TABLE t1;
+DROP PROCEDURE insert_table;
+#
+# BUG2026031741987: [Partition Table] When an SQLancer service that contains partition table operations is executed,
+#                   the instance is abnormal. The error keyword is "CdeDdOpenTableOne&:HaCdepartShare::openOneTablePart".
+# increase test coverage
+CREATE PROCEDURE insert_table(IN n int)
+BEGIN
+DECLARE i INT DEFAULT 1;
+START TRANSACTION;
+WHILE (i <= n ) DO
+INSERT INTO t1 (a, b, c) VALUES (i,REPEAT('Dstore',150),REPEAT('A',3000));
+SET i=i+1;
+END WHILE;
+COMMIT;
+END ||
+CREATE TABLE t1 (
+a int not NULL,
+b VARCHAR(1024) not NULL,
+c blob,
+PRIMARY KEY (a)
+) ENGINE=Dstore, STATS_SAMPLE_PAGES=100;
+CALL insert_table(1000);
+SET SESSION DEBUG='+d,info_impl_null_dict_table';
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	Unable to write table statistics to DD tables
+SET SESSION DEBUG='-d,info_impl_null_dict_table';
+DROP TABLE t1;
+DROP PROCEDURE insert_table;

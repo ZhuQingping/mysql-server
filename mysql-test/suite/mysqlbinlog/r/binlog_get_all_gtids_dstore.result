@@ -1,0 +1,41 @@
+DROP DATABASE IF EXISTS mtest;
+CREATE DATABASE mtest;
+USE mtest;
+RESET MASTER;
+FLUSH LOGS;
+SET @@SESSION.GTID_NEXT= 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1';
+CREATE TABLE test1(id INT);
+SET @@SESSION.GTID_NEXT=AUTOMATIC;
+FLUSH LOGS;
+SET @@SESSION.GTID_NEXT= 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1';
+CREATE TABLE test2(id INT);
+SET @@SESSION.GTID_NEXT= 'cccccccc-cccc-cccc-cccc-cccccccccccc:1';
+INSERT INTO test1 VALUES(1);
+SET @@SESSION.GTID_NEXT=AUTOMATIC;
+FLUSH LOGS;
+# test empty gtids
+
+# test single gtids
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1
+# test multi gtids
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1
+SET @@SESSION.GTID_NEXT= 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:2';
+create database test1;
+#test ddl 
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1-2,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1
+SET @@SESSION.GTID_NEXT= 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:3';
+insert into test1 values(5);
+SET @@SESSION.GTID_NEXT= 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:4';
+insert into test1 values(6);
+SET @@SESSION.GTID_NEXT=AUTOMATIC;
+FLUSH LOGS;
+#test incomplete binlog
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1-3,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1
+drop database test1;
+DROP DATABASE mtest;

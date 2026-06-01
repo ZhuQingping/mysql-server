@@ -1,0 +1,26 @@
+call mtr.add_suppression("LocalBackup fetch gtid is not enabled");
+create database local_backup_binlog;
+use local_backup_binlog;
+create table t1(s varchar(100)) engine=Dstore;
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1000
+# Restart with rds_local_backup_fetch_gtid=off 
+# restart: --rds_local_backup_fetch_gtid=off
+select @@rds_local_backup_fetch_gtid;
+@@rds_local_backup_fetch_gtid
+0
+call rds_backup.start_full_local_backup(0);
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+# Restart with rds_local_backup_fetch_gtid=on
+# Kill the server
+# restart
+select @@rds_local_backup_fetch_gtid;
+@@rds_local_backup_fetch_gtid
+1
+drop database local_backup_binlog;

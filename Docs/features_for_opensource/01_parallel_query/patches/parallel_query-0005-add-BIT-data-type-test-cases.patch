@@ -1,0 +1,514 @@
+From e0c08b8be24e0f40352015e035761f9bf3aecbc7 Mon Sep 17 00:00:00 2001
+From: wangyunhua <wangyunhua3@contributor>
+
+Date: Tue, 30 Dec 2025 11:52:06 +0000
+Subject: [PATCH] Add test cases for BIT data type in parallel
+ query.
+
+Issue:
+------
+previous commit bab327372c54ce0a005616ab9ee8ae22c1393450  removes parts of the
+BIT-specific handling logic in parallel query, including forced Item::MARKER_BIT
+marking for hidden BIT items.
+
+Solution:
+--------
+Add new MTR test cases to cover BIT aggregates, expressions, and GROUP BY scenarios,
+and to ensure consistent results between parallel and serial execution.
+---
+ .../parallel_query/r/pq_bugfix.result-pq      | 338 ++++++++++++++++++
+ .../suite/parallel_query/t/pq_bugfix.test     | 132 +++++++
+ 2 files changed, 470 insertions(+)
+
+diff --git a/mysql-test/suite/parallel_query/r/pq_bugfix.result-pq b/mysql-test/suite/parallel_query/r/pq_bugfix.result-pq
+index 33ce7f1e371..584bf5d70df 100644
+--- a/mysql-test/suite/parallel_query/r/pq_bugfix.result-pq
++++ b/mysql-test/suite/parallel_query/r/pq_bugfix.result-pq
+@@ -2174,4 +2174,342 @@ uninstall plugin audit_log;
+ Warnings:
+ Warning	1620	Plugin is busy and will be uninstalled on shutdown
+ drop table t1, t2, t3;
++#
++# Test BIT data type in parallel queries
++#
++DROP TABLE IF EXISTS t_bit;
++CREATE TABLE t_bit (
++id   INT,
++b1   BIT(1),
++b2   BIT(2),
++b7   BIT(7),
++b8   BIT(8),
++b9   BIT(9),
++b16  BIT(16),
++b32  BIT(32),
++b64  BIT(64),
++KEY(id)
++);
++INSERT INTO t_bit VALUES
++(1, b'0', b'00', b'0000000', b'00000000', b'000000000', b'0000000000000000', b'00000000000000000000000000000000', b'0000000000000000000000000000000000000000000000000000000000000000'),
++(1, b'1', b'01', b'0000001', b'00000001', b'000000001', b'0000000000000001', b'00000000000000000000000000000001', b'0000000000000000000000000000000000000000000000000000000000000001'),
++(1, b'0', b'10', b'0111111', b'11111110', b'111111110', b'1111111111111110', b'11111111111111111111111111111110', b'1111111111111111111111111111111111111111111111111111111111111110'),
++(1, b'1', b'11', b'1111111', b'11111111', b'111111111', b'1111111111111111', b'11111111111111111111111111111111', b'1111111111111111111111111111111111111111111111111111111111111111'),
++(2, b'0', b'00', b'0000000', b'00000000', b'000000000', b'0000000000000000', b'00000000000000000000000000000000', b'0000000000000000000000000000000000000000000000000000000000000000'),
++(2, b'1', b'01', b'1000000', b'00000001', b'000000001', b'1000000000000001', b'10101010101010101010101010101010', b'1010101010101010101010101010101010101010101010101010101010101010'),
++(2, b'0', b'10', b'0111110', b'11111100', b'111111100', b'1111111111111100', b'11111111111111111111111111111100', b'1111111111111111111111111111111111111111111111111111111111111100'),
++(2, b'1', b'11', b'1111111', b'11111111', b'111111111', b'1111111111111111', b'11111111111111111111111111111111', b'1111111111111111111111111111111111111111111111111111111111111111'),
++(3, b'0', b'01', b'0000001', b'00000001', b'000000001', b'0000000000000001', b'00000000000000000000000000000001', b'0000000000000000000000000000000000000000000000000000000000000001'),
++(3, b'1', b'10', b'1111110', b'11111110', b'111111110', b'1111111111111110', b'11111111111111111111111111111110', b'1111111111111111111111111111111111111111111111111111111111111110'),
++(3, b'0', b'11', b'0111111', b'11111111', b'111111111', b'1111111111111111', b'11111111111111111111111111111111', b'1111111111111111111111111111111111111111111111111111111111111111'),
++(3, b'1', b'00', b'0000000', b'00000000', b'000000000', b'0000000000000000', b'00000000000000000000000000000000', b'0000000000000000000000000000000000000000000000000000000000000000');
++ANALYZE TABLE t_bit;
++Table	Op	Msg_type	Msg_text
++test.t_bit	analyze	status	OK
++#1. Original reported case: multiple hidden BIT aggregates
++EXPLAIN SELECT HEX(CONCAT(MIN(b1))), HEX(CONCAT(MIN(b9))), HEX(CONCAT(MIN(b64))) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select hex(concat(min(`<temporary>`.`MIN(b1)`))) AS `HEX(CONCAT(MIN(b1)))`,hex(concat(min(`<temporary>`.`MIN(b9)`))) AS `HEX(CONCAT(MIN(b9)))`,hex(concat(min(`<temporary>`.`MIN(b64)`))) AS `HEX(CONCAT(MIN(b64)))` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT HEX(CONCAT(MIN(b1))), HEX(CONCAT(MIN(b9))), HEX(CONCAT(MIN(b64))) FROM t_bit GROUP BY id;
++HEX(CONCAT(MIN(b1)))	HEX(CONCAT(MIN(b9)))	HEX(CONCAT(MIN(b64)))
++00	0000	0000000000000000
++00	0000	0000000000000000
++00	0000	0000000000000000
++#2. Single BIT aggregate + GROUP BY
++EXPLAIN SELECT HEX(MIN(b1)) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select hex(min(`<temporary>`.`MIN(b1)`)) AS `HEX(MIN(b1))` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT HEX(MIN(b1)) FROM t_bit GROUP BY id;
++HEX(MIN(b1))
++0
++0
++0
++EXPLAIN SELECT HEX(MAX(b8)) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select hex(max(`<temporary>`.`MAX(b8)`)) AS `HEX(MAX(b8))` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT HEX(MAX(b8)) FROM t_bit GROUP BY id;
++HEX(MAX(b8))
++FF
++FF
++FF
++EXPLAIN SELECT HEX(MIN(b64)) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select hex(min(`<temporary>`.`MIN(b64)`)) AS `HEX(MIN(b64))` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT HEX(MIN(b64)) FROM t_bit GROUP BY id;
++HEX(MIN(b64))
++0
++0
++0
++#3. Mixed BIT widths in one query
++EXPLAIN SELECT HEX(MIN(b2)), HEX(MAX(b7)), HEX(AVG(b8)), HEX(MIN(b9)), HEX(MAX(b16)), HEX(AVG(b32)), HEX(MIN(b64)) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select hex(min(`<temporary>`.`MIN(b2)`)) AS `HEX(MIN(b2))`,hex(max(`<temporary>`.`MAX(b7)`)) AS `HEX(MAX(b7))`,hex(avg(`<temporary>`.`AVG(b8)`)) AS `HEX(AVG(b8))`,hex(min(`<temporary>`.`MIN(b9)`)) AS `HEX(MIN(b9))`,hex(max(`<temporary>`.`MAX(b16)`)) AS `HEX(MAX(b16))`,hex(avg(`<temporary>`.`AVG(b32)`)) AS `HEX(AVG(b32))`,hex(min(`<temporary>`.`MIN(b64)`)) AS `HEX(MIN(b64))` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT HEX(MIN(b2)), HEX(MAX(b7)), HEX(AVG(b8)), HEX(MIN(b9)), HEX(MAX(b16)), HEX(AVG(b32)), HEX(MIN(b64)) FROM t_bit GROUP BY id;
++HEX(MIN(b2))	HEX(MAX(b7))	HEX(AVG(b8))	HEX(MIN(b9))	HEX(MAX(b16))	HEX(AVG(b32))	HEX(MIN(b64))
++0	7F	80	0	FFFF	0
++0	7F	7F	0	FFFF	AAAAAAA9	0
++0	7E	80	0	FFFF	0
++#4. GROUP BY key hidden, BIT only in aggregate
++EXPLAIN SELECT COUNT(*), HEX(AVG(b1)) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `COUNT(*)`,hex(avg(`<temporary>`.`AVG(b1)`)) AS `HEX(AVG(b1))` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT COUNT(*), HEX(AVG(b1)) FROM t_bit GROUP BY id;
++COUNT(*)	HEX(AVG(b1))
++4	0
++4	0
++4	0
++#5. ORDER BY hidden BIT column
++EXPLAIN SELECT id FROM t_bit ORDER BY b9;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Using filesort
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t_bit`.`id` AS `id` from `test`.`t_bit` order by `test`.`t_bit`.`b9`
++SELECT id FROM t_bit ORDER BY b9;
++id
++1
++2
++3
++1
++2
++3
++2
++1
++3
++1
++2
++3
++EXPLAIN SELECT id FROM t_bit ORDER BY b64, id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Using filesort
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t_bit`.`id` AS `id` from `test`.`t_bit` order by `test`.`t_bit`.`b64`,`test`.`t_bit`.`id`
++SELECT id FROM t_bit ORDER BY b64, id;
++id
++1
++2
++3
++1
++3
++2
++2
++1
++3
++1
++2
++3
++#6. HAVING with BIT aggregate
++EXPLAIN SELECT id FROM t_bit GROUP BY id HAVING MIN(b1) = b'1';
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t_bit`.`id` AS `id` from `test`.`t_bit` group by `test`.`t_bit`.`id` having (min(`<temporary>`.`min(t_bit.b1)`) = 0x01)
++SELECT id FROM t_bit GROUP BY id HAVING MIN(b1) = b'1';
++id
++EXPLAIN SELECT id FROM t_bit GROUP BY id HAVING MIN(b9) <> b'0';
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t_bit`.`id` AS `id` from `test`.`t_bit` group by `test`.`t_bit`.`id` having (min(`<temporary>`.`min(t_bit.b9)`) <> 0x00)
++SELECT id FROM t_bit GROUP BY id HAVING MIN(b9) <> b'0';
++id
++#7. DISTINCT + BIT aggregate
++EXPLAIN SELECT DISTINCT HEX(MIN(b8)) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	ALL	id	NULL	NULL	NULL	12	100.00	Using temporary
++Warnings:
++Note	1003	/* select#1 */ select distinct hex(min(`<temporary>`.`b8`)) AS `HEX(MIN(b8))` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT DISTINCT HEX(MIN(b8)) FROM t_bit GROUP BY id;
++HEX(MIN(b8))
++0
++EXPLAIN SELECT DISTINCT HEX(MIN(b64)) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	ALL	id	NULL	NULL	NULL	12	100.00	Using temporary
++Warnings:
++Note	1003	/* select#1 */ select distinct hex(min(`<temporary>`.`b64`)) AS `HEX(MIN(b64))` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT DISTINCT HEX(MIN(b64)) FROM t_bit GROUP BY id;
++HEX(MIN(b64))
++0
++#8. Subquery with BIT aggregate (const_for_execution path)
++EXPLAIN SELECT (SELECT HEX(MIN(b1)) FROM t_bit) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	t_bit	NULL	range	id	id	5	NULL	4	100.00	Using index for group-by
++2	SUBQUERY	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++2	SIMPLE	t_bit	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select (/* select#2 */ select hex(min(`<temporary>`.`MIN(b1)`)) from `test`.`t_bit`) AS `(SELECT HEX(MIN(b1)) FROM t_bit)` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT (SELECT HEX(MIN(b1)) FROM t_bit) FROM t_bit GROUP BY id;
++(SELECT HEX(MIN(b1)) FROM t_bit)
++0
++0
++0
++EXPLAIN SELECT (SELECT HEX(MIN(b64)) FROM t_bit) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	t_bit	NULL	range	id	id	5	NULL	4	100.00	Using index for group-by
++2	SUBQUERY	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++2	SIMPLE	t_bit	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select (/* select#2 */ select hex(min(`<temporary>`.`MIN(b64)`)) from `test`.`t_bit`) AS `(SELECT HEX(MIN(b64)) FROM t_bit)` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT (SELECT HEX(MIN(b64)) FROM t_bit) FROM t_bit GROUP BY id;
++(SELECT HEX(MIN(b64)) FROM t_bit)
++0
++0
++0
++#9. BIT in expression inside aggregate
++EXPLAIN SELECT HEX(CONCAT(MIN(b1 & b'1'))) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select hex(concat(min(`<temporary>`.`MIN(b1 & b'1')`))) AS `HEX(CONCAT(MIN(b1 & b'1')))` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT HEX(CONCAT(MIN(b1 & b'1'))) FROM t_bit GROUP BY id;
++HEX(CONCAT(MIN(b1 & b'1')))
++30
++30
++30
++EXPLAIN SELECT HEX(CONCAT(MIN(b9 | b'1'))) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select hex(concat(min(`<temporary>`.`MIN(b9 | b'1')`))) AS `HEX(CONCAT(MIN(b9 | b'1')))` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT HEX(CONCAT(MIN(b9 | b'1'))) FROM t_bit GROUP BY id;
++HEX(CONCAT(MIN(b9 | b'1')))
++31
++31
++31
++#10. BIT aggregate family
++EXPLAIN SELECT HEX(BIT_AND(b8)), HEX(BIT_OR(b8)), HEX(BIT_XOR(b8)) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select hex(bit_and(`test`.`t_bit`.`b8`)) AS `HEX(BIT_AND(b8))`,hex(bit_or(`test`.`t_bit`.`b8`)) AS `HEX(BIT_OR(b8))`,hex(bit_xor(`test`.`t_bit`.`b8`)) AS `HEX(BIT_XOR(b8))` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT HEX(BIT_AND(b8)), HEX(BIT_OR(b8)), HEX(BIT_XOR(b8)) FROM t_bit GROUP BY id;
++HEX(BIT_AND(b8))	HEX(BIT_OR(b8))	HEX(BIT_XOR(b8))
++0	FF	0
++0	FF	2
++0	FF	0
++EXPLAIN SELECT HEX(BIT_AND(b64)), HEX(BIT_OR(b64)), HEX(BIT_XOR(b64)) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select hex(bit_and(`test`.`t_bit`.`b64`)) AS `HEX(BIT_AND(b64))`,hex(bit_or(`test`.`t_bit`.`b64`)) AS `HEX(BIT_OR(b64))`,hex(bit_xor(`test`.`t_bit`.`b64`)) AS `HEX(BIT_XOR(b64))` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT HEX(BIT_AND(b64)), HEX(BIT_OR(b64)), HEX(BIT_XOR(b64)) FROM t_bit GROUP BY id;
++HEX(BIT_AND(b64))	HEX(BIT_OR(b64))	HEX(BIT_XOR(b64))
++0	FFFFFFFFFFFFFFFF	0
++0	FFFFFFFFFFFFFFFF	AAAAAAAAAAAAAAA9
++0	FFFFFFFFFFFFFFFF	0
++#11. ORDER BY + LIMIT
++EXPLAIN SELECT HEX(MIN(b9)) FROM t_bit GROUP BY id ORDER BY id LIMIT 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	4	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select hex(min(`<temporary>`.`MIN(b9)`)) AS `HEX(MIN(b9))` from `test`.`t_bit` group by `test`.`t_bit`.`id` order by `test`.`t_bit`.`id` limit 1
++SELECT HEX(MIN(b9)) FROM t_bit GROUP BY id ORDER BY id LIMIT 1;
++HEX(MIN(b9))
++0
++EXPLAIN SELECT HEX(MIN(b64)) FROM t_bit GROUP BY id ORDER BY id DESC LIMIT 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	4	100.00	Backward index scan
++Warnings:
++Note	1003	/* select#1 */ select hex(min(`<temporary>`.`MIN(b64)`)) AS `HEX(MIN(b64))` from `test`.`t_bit` group by `test`.`t_bit`.`id` desc order by `test`.`t_bit`.`id` desc limit 1
++SELECT HEX(MIN(b64)) FROM t_bit GROUP BY id ORDER BY id DESC LIMIT 1;
++HEX(MIN(b64))
++0
++#12. Multiple aggregates sharing same hidden BIT field
++EXPLAIN SELECT HEX(MIN(b1)), HEX(MAX(b1)), HEX(BIT_OR(b1)) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select hex(min(`test`.`t_bit`.`b1`)) AS `HEX(MIN(b1))`,hex(max(`test`.`t_bit`.`b1`)) AS `HEX(MAX(b1))`,hex(bit_or(`test`.`t_bit`.`b1`)) AS `HEX(BIT_OR(b1))` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT HEX(MIN(b1)), HEX(MAX(b1)), HEX(BIT_OR(b1)) FROM t_bit GROUP BY id;
++HEX(MIN(b1))	HEX(MAX(b1))	HEX(BIT_OR(b1))
++0	1	1
++0	1	1
++0	1	1
++#13. CAST / CONCAT interaction with BIT
++EXPLAIN SELECT HEX(CONCAT(CAST(MIN(b8) AS BINARY))) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select hex(concat(cast(min(`<temporary>`.`min(t_bit.b8)`) as char charset binary))) AS `HEX(CONCAT(CAST(MIN(b8) AS BINARY)))` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT HEX(CONCAT(CAST(MIN(b8) AS BINARY))) FROM t_bit GROUP BY id;
++HEX(CONCAT(CAST(MIN(b8) AS BINARY)))
++00
++00
++00
++EXPLAIN SELECT HEX(CONCAT(MIN(b16), MIN(b8))) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select hex(concat(min(`<temporary>`.`MIN(b16)`),min(`<temporary>`.`MIN(b8)`))) AS `HEX(CONCAT(MIN(b16), MIN(b8)))` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT HEX(CONCAT(MIN(b16), MIN(b8))) FROM t_bit GROUP BY id;
++HEX(CONCAT(MIN(b16), MIN(b8)))
++000000
++000000
++000000
++#14. Nested expression depth stress
++EXPLAIN SELECT HEX(CONCAT(CONCAT(MIN(b1)))), HEX(CONCAT(CONCAT(MIN(b64)))) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select hex(concat(concat(min(`<temporary>`.`MIN(b1)`)))) AS `HEX(CONCAT(CONCAT(MIN(b1))))`,hex(concat(concat(min(`<temporary>`.`MIN(b64)`)))) AS `HEX(CONCAT(CONCAT(MIN(b64))))` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT HEX(CONCAT(CONCAT(MIN(b1)))), HEX(CONCAT(CONCAT(MIN(b64)))) FROM t_bit GROUP BY id;
++HEX(CONCAT(CONCAT(MIN(b1))))	HEX(CONCAT(CONCAT(MIN(b64))))
++00	0000000000000000
++00	0000000000000000
++00	0000000000000000
++#15. LENGTH check to detect BIT->LONG regression
++EXPLAIN SELECT LENGTH(CONCAT(MIN(b1))) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select length(concat(min(`<temporary>`.`MIN(b1)`))) AS `LENGTH(CONCAT(MIN(b1)))` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT LENGTH(CONCAT(MIN(b1))) FROM t_bit GROUP BY id;
++LENGTH(CONCAT(MIN(b1)))
++1
++1
++1
++EXPLAIN SELECT LENGTH(CONCAT(MIN(b64))) FROM t_bit GROUP BY id;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	12	100.00	Parallel execute (4 workers, test.t_bit)
++1	SIMPLE	t_bit	NULL	index	id	id	5	NULL	12	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select length(concat(min(`<temporary>`.`MIN(b64)`))) AS `LENGTH(CONCAT(MIN(b64)))` from `test`.`t_bit` group by `test`.`t_bit`.`id`
++SELECT LENGTH(CONCAT(MIN(b64))) FROM t_bit GROUP BY id;
++LENGTH(CONCAT(MIN(b64)))
++8
++8
++8
++#Cleanup
++DROP TABLE t_bit;
+ # restart: 
+diff --git a/mysql-test/suite/parallel_query/t/pq_bugfix.test b/mysql-test/suite/parallel_query/t/pq_bugfix.test
+index 6b54f6ffc6f..7528df01b9e 100644
+--- a/mysql-test/suite/parallel_query/t/pq_bugfix.test
++++ b/mysql-test/suite/parallel_query/t/pq_bugfix.test
+@@ -1543,5 +1543,137 @@ set debug='-d, parallelscaniter_error';
+ uninstall plugin audit_log;
+ drop table t1, t2, t3;
+ 
++--echo #
++--echo # Test BIT data type in parallel queries
++--echo #
++--disable_warnings
++DROP TABLE IF EXISTS t_bit;
++--enable_warnings
++
++CREATE TABLE t_bit (
++  id   INT,
++  b1   BIT(1),
++  b2   BIT(2),
++  b7   BIT(7),
++  b8   BIT(8),
++  b9   BIT(9),
++  b16  BIT(16),
++  b32  BIT(32),
++  b64  BIT(64),
++  KEY(id)
++);
++
++INSERT INTO t_bit VALUES
++(1, b'0', b'00', b'0000000', b'00000000', b'000000000', b'0000000000000000', b'00000000000000000000000000000000', b'0000000000000000000000000000000000000000000000000000000000000000'),
++(1, b'1', b'01', b'0000001', b'00000001', b'000000001', b'0000000000000001', b'00000000000000000000000000000001', b'0000000000000000000000000000000000000000000000000000000000000001'),
++(1, b'0', b'10', b'0111111', b'11111110', b'111111110', b'1111111111111110', b'11111111111111111111111111111110', b'1111111111111111111111111111111111111111111111111111111111111110'),
++(1, b'1', b'11', b'1111111', b'11111111', b'111111111', b'1111111111111111', b'11111111111111111111111111111111', b'1111111111111111111111111111111111111111111111111111111111111111'),
++(2, b'0', b'00', b'0000000', b'00000000', b'000000000', b'0000000000000000', b'00000000000000000000000000000000', b'0000000000000000000000000000000000000000000000000000000000000000'),
++(2, b'1', b'01', b'1000000', b'00000001', b'000000001', b'1000000000000001', b'10101010101010101010101010101010', b'1010101010101010101010101010101010101010101010101010101010101010'),
++(2, b'0', b'10', b'0111110', b'11111100', b'111111100', b'1111111111111100', b'11111111111111111111111111111100', b'1111111111111111111111111111111111111111111111111111111111111100'),
++(2, b'1', b'11', b'1111111', b'11111111', b'111111111', b'1111111111111111', b'11111111111111111111111111111111', b'1111111111111111111111111111111111111111111111111111111111111111'),
++(3, b'0', b'01', b'0000001', b'00000001', b'000000001', b'0000000000000001', b'00000000000000000000000000000001', b'0000000000000000000000000000000000000000000000000000000000000001'),
++(3, b'1', b'10', b'1111110', b'11111110', b'111111110', b'1111111111111110', b'11111111111111111111111111111110', b'1111111111111111111111111111111111111111111111111111111111111110'),
++(3, b'0', b'11', b'0111111', b'11111111', b'111111111', b'1111111111111111', b'11111111111111111111111111111111', b'1111111111111111111111111111111111111111111111111111111111111111'),
++(3, b'1', b'00', b'0000000', b'00000000', b'000000000', b'0000000000000000', b'00000000000000000000000000000000', b'0000000000000000000000000000000000000000000000000000000000000000');
++
++ANALYZE TABLE t_bit;
++
++--echo #1. Original reported case: multiple hidden BIT aggregates
++EXPLAIN SELECT HEX(CONCAT(MIN(b1))), HEX(CONCAT(MIN(b9))), HEX(CONCAT(MIN(b64))) FROM t_bit GROUP BY id;
++SELECT HEX(CONCAT(MIN(b1))), HEX(CONCAT(MIN(b9))), HEX(CONCAT(MIN(b64))) FROM t_bit GROUP BY id;
++
++--echo #2. Single BIT aggregate + GROUP BY
++EXPLAIN SELECT HEX(MIN(b1)) FROM t_bit GROUP BY id;
++SELECT HEX(MIN(b1)) FROM t_bit GROUP BY id;
++
++EXPLAIN SELECT HEX(MAX(b8)) FROM t_bit GROUP BY id;
++SELECT HEX(MAX(b8)) FROM t_bit GROUP BY id;
++
++EXPLAIN SELECT HEX(MIN(b64)) FROM t_bit GROUP BY id;
++SELECT HEX(MIN(b64)) FROM t_bit GROUP BY id;
++
++--echo #3. Mixed BIT widths in one query
++EXPLAIN SELECT HEX(MIN(b2)), HEX(MAX(b7)), HEX(AVG(b8)), HEX(MIN(b9)), HEX(MAX(b16)), HEX(AVG(b32)), HEX(MIN(b64)) FROM t_bit GROUP BY id;
++SELECT HEX(MIN(b2)), HEX(MAX(b7)), HEX(AVG(b8)), HEX(MIN(b9)), HEX(MAX(b16)), HEX(AVG(b32)), HEX(MIN(b64)) FROM t_bit GROUP BY id;
++
++--echo #4. GROUP BY key hidden, BIT only in aggregate
++EXPLAIN SELECT COUNT(*), HEX(AVG(b1)) FROM t_bit GROUP BY id;
++SELECT COUNT(*), HEX(AVG(b1)) FROM t_bit GROUP BY id;
++
++--echo #5. ORDER BY hidden BIT column
++EXPLAIN SELECT id FROM t_bit ORDER BY b9;
++SELECT id FROM t_bit ORDER BY b9;
++
++EXPLAIN SELECT id FROM t_bit ORDER BY b64, id;
++SELECT id FROM t_bit ORDER BY b64, id;
++
++--echo #6. HAVING with BIT aggregate
++EXPLAIN SELECT id FROM t_bit GROUP BY id HAVING MIN(b1) = b'1';
++SELECT id FROM t_bit GROUP BY id HAVING MIN(b1) = b'1';
++
++EXPLAIN SELECT id FROM t_bit GROUP BY id HAVING MIN(b9) <> b'0';
++SELECT id FROM t_bit GROUP BY id HAVING MIN(b9) <> b'0';
++
++--echo #7. DISTINCT + BIT aggregate
++EXPLAIN SELECT DISTINCT HEX(MIN(b8)) FROM t_bit GROUP BY id;
++SELECT DISTINCT HEX(MIN(b8)) FROM t_bit GROUP BY id;
++
++EXPLAIN SELECT DISTINCT HEX(MIN(b64)) FROM t_bit GROUP BY id;
++SELECT DISTINCT HEX(MIN(b64)) FROM t_bit GROUP BY id;
++
++--echo #8. Subquery with BIT aggregate (const_for_execution path)
++EXPLAIN SELECT (SELECT HEX(MIN(b1)) FROM t_bit) FROM t_bit GROUP BY id;
++SELECT (SELECT HEX(MIN(b1)) FROM t_bit) FROM t_bit GROUP BY id;
++
++EXPLAIN SELECT (SELECT HEX(MIN(b64)) FROM t_bit) FROM t_bit GROUP BY id;
++SELECT (SELECT HEX(MIN(b64)) FROM t_bit) FROM t_bit GROUP BY id;
++
++--echo #9. BIT in expression inside aggregate
++EXPLAIN SELECT HEX(CONCAT(MIN(b1 & b'1'))) FROM t_bit GROUP BY id;
++SELECT HEX(CONCAT(MIN(b1 & b'1'))) FROM t_bit GROUP BY id;
++
++EXPLAIN SELECT HEX(CONCAT(MIN(b9 | b'1'))) FROM t_bit GROUP BY id;
++SELECT HEX(CONCAT(MIN(b9 | b'1'))) FROM t_bit GROUP BY id;
++
++--echo #10. BIT aggregate family
++EXPLAIN SELECT HEX(BIT_AND(b8)), HEX(BIT_OR(b8)), HEX(BIT_XOR(b8)) FROM t_bit GROUP BY id;
++SELECT HEX(BIT_AND(b8)), HEX(BIT_OR(b8)), HEX(BIT_XOR(b8)) FROM t_bit GROUP BY id;
++
++EXPLAIN SELECT HEX(BIT_AND(b64)), HEX(BIT_OR(b64)), HEX(BIT_XOR(b64)) FROM t_bit GROUP BY id;
++SELECT HEX(BIT_AND(b64)), HEX(BIT_OR(b64)), HEX(BIT_XOR(b64)) FROM t_bit GROUP BY id;
++
++--echo #11. ORDER BY + LIMIT
++EXPLAIN SELECT HEX(MIN(b9)) FROM t_bit GROUP BY id ORDER BY id LIMIT 1;
++SELECT HEX(MIN(b9)) FROM t_bit GROUP BY id ORDER BY id LIMIT 1;
++
++EXPLAIN SELECT HEX(MIN(b64)) FROM t_bit GROUP BY id ORDER BY id DESC LIMIT 1;
++SELECT HEX(MIN(b64)) FROM t_bit GROUP BY id ORDER BY id DESC LIMIT 1;
++
++--echo #12. Multiple aggregates sharing same hidden BIT field
++EXPLAIN SELECT HEX(MIN(b1)), HEX(MAX(b1)), HEX(BIT_OR(b1)) FROM t_bit GROUP BY id;
++SELECT HEX(MIN(b1)), HEX(MAX(b1)), HEX(BIT_OR(b1)) FROM t_bit GROUP BY id;
++
++--echo #13. CAST / CONCAT interaction with BIT
++EXPLAIN SELECT HEX(CONCAT(CAST(MIN(b8) AS BINARY))) FROM t_bit GROUP BY id;
++SELECT HEX(CONCAT(CAST(MIN(b8) AS BINARY))) FROM t_bit GROUP BY id;
++
++EXPLAIN SELECT HEX(CONCAT(MIN(b16), MIN(b8))) FROM t_bit GROUP BY id;
++SELECT HEX(CONCAT(MIN(b16), MIN(b8))) FROM t_bit GROUP BY id;
++
++--echo #14. Nested expression depth stress
++EXPLAIN SELECT HEX(CONCAT(CONCAT(MIN(b1)))), HEX(CONCAT(CONCAT(MIN(b64)))) FROM t_bit GROUP BY id;
++SELECT HEX(CONCAT(CONCAT(MIN(b1)))), HEX(CONCAT(CONCAT(MIN(b64)))) FROM t_bit GROUP BY id;
++
++--echo #15. LENGTH check to detect BIT->LONG regression
++EXPLAIN SELECT LENGTH(CONCAT(MIN(b1))) FROM t_bit GROUP BY id;
++SELECT LENGTH(CONCAT(MIN(b1))) FROM t_bit GROUP BY id;
++
++EXPLAIN SELECT LENGTH(CONCAT(MIN(b64))) FROM t_bit GROUP BY id;
++SELECT LENGTH(CONCAT(MIN(b64))) FROM t_bit GROUP BY id;
++
++--echo #Cleanup
++DROP TABLE t_bit;
++
+ --let $restart_parameters="restart: "
+ --source include/restart_mysqld.inc
+-- 
+2.23.0
+

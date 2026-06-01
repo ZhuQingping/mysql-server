@@ -1,0 +1,38 @@
+--source include/have_udf.inc
+
+SET @rds_disable_user_defined_functions_saved = @@global.rds_disable_user_defined_functions;
+
+SET global rds_disable_user_defined_functions=ON;
+--echo #
+--echo # Disable CREATE FUNCTION Statement for Loadable Functions
+--echo # CREATE [AGGREGATE] FUNCTION [IF NOT EXISTS] function_name
+--echo #   RETURNS {STRING|INTEGER|REAL|DECIMAL}
+--echo #   SONAME shared_library_name
+--echo #
+--replace_result $UDF_EXAMPLE_LIB UDF_EXAMPLE_LIB
+--error ER_DISABLE_USER_DEFINED_FUNCTIONS
+eval CREATE FUNCTION metaphon RETURNS STRING SONAME "$UDF_EXAMPLE_LIB";
+
+--replace_result $UDF_EXAMPLE_LIB UDF_EXAMPLE_LIB
+--error ER_DISABLE_USER_DEFINED_FUNCTIONS
+eval CREATE FUNCTION myfunc_double RETURNS REAL SONAME "$UDF_EXAMPLE_LIB";
+
+--replace_result $UDF_EXAMPLE_LIB UDF_EXAMPLE_LIB
+--error ER_DISABLE_USER_DEFINED_FUNCTIONS
+eval CREATE FUNCTION myfunc_decimal RETURNS DECIMAL SONAME "$UDF_EXAMPLE_LIB";
+
+--replace_result $UDF_EXAMPLE_LIB UDF_EXAMPLE_LIB
+--error ER_DISABLE_USER_DEFINED_FUNCTIONS
+eval CREATE FUNCTION myfunc_int RETURNS INTEGER SONAME "$UDF_EXAMPLE_LIB";
+
+--replace_result $UDF_EXAMPLE_LIB UDF_EXAMPLE_LIB
+--error ER_DISABLE_USER_DEFINED_FUNCTIONS
+eval CREATE AGGREGATE FUNCTION avgcost
+        RETURNS REAL SONAME "$UDF_EXAMPLE_LIB";
+
+--replace_result $UDF_EXAMPLE_LIB UDF_EXAMPLE_LIB
+--error ER_DISABLE_USER_DEFINED_FUNCTIONS
+CREATE AGGREGATE FUNCTION my_median RETURNS INTEGER
+SONAME "UDF_EXAMPLE_LIB";
+
+set @@global.rds_disable_user_defined_functions = @rds_disable_user_defined_functions_saved;

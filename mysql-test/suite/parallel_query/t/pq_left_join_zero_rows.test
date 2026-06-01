@@ -1,0 +1,283 @@
+--source include/pq_test.inc
+--source include/elide_costs.inc
+
+# test for BUG2021080400863
+SET @old_sql_mode=@@sql_mode;
+SET @old_optimizer_switch=@@optimizer_switch;
+SET sql_mode='';
+# Since this branch do not include ptrc feature, comment following sql command temporarily.
+# SET optimizer_switch='partial_result_cache=off';
+
+CREATE TABLE `t0` (
+  `c_id` int NOT NULL,
+  `c_d_id` int NOT NULL,
+  `c_w_id` int NOT NULL,
+  `c_first` varchar(16) DEFAULT NULL,
+  `c_middle` char(2) DEFAULT NULL,
+  `c_last` varchar(16) DEFAULT NULL,
+  `c_street_1` varchar(20) DEFAULT NULL,
+  `c_street_2` varchar(20) DEFAULT NULL,
+  `c_city` varchar(20) DEFAULT NULL,
+  `c_state` char(2) DEFAULT NULL,
+  `c_zip` char(9) DEFAULT NULL,
+  `c_phone` char(16) DEFAULT NULL,
+  `c_since` timestamp NOT NULL DEFAULT '1970-01-01 08:00:01',
+  `c_credit` char(2) DEFAULT NULL,
+  `c_credit_lim` decimal(12,2) DEFAULT NULL,
+  `c_discount` decimal(4,4) DEFAULT NULL,
+  `c_balance` decimal(12,2) DEFAULT NULL,
+  `c_ytd_payment` decimal(12,2) DEFAULT NULL,
+  `c_payment_cnt` int DEFAULT NULL,
+  `c_delivery_cnt` int DEFAULT NULL,
+  `c_data` varchar(500) DEFAULT NULL,
+  PRIMARY KEY (`c_w_id`,`c_d_id`,`c_id`),
+  KEY `Customer_100W_key` (`c_w_id`,`c_d_id`,`c_last`,`c_first`),
+  KEY `ndx_c_id` (`c_id`) USING BTREE,
+  KEY `ndx_c_d_id` (`c_d_id`) USING BTREE,
+  KEY `ndx_c_w_id` (`c_w_id`) USING BTREE,
+  KEY `ndx_c_first` (`c_first`) USING BTREE,
+  KEY `ndx_c_middle` (`c_middle`) USING BTREE,
+  KEY `ndx_c_last` (`c_last`) USING BTREE,
+  KEY `ndx_c_street_1` (`c_street_1`) USING BTREE,
+  KEY `ndx_c_street_2` (`c_street_2`) USING BTREE,
+  KEY `ndx_c_city` (`c_city`) USING BTREE,
+  KEY `ndx_c_state` (`c_state`) USING BTREE,
+  KEY `ndx_c_zip` (`c_zip`) USING BTREE,
+  KEY `ndx_c_phone` (`c_phone`) USING BTREE,
+  KEY `ndx_c_since` (`c_since`) USING BTREE,
+  KEY `ndx_c_credit` (`c_credit`) USING BTREE,
+  KEY `ndx_c_credit_lim` (`c_credit_lim`) USING BTREE,
+  KEY `ndx_c_discount` (`c_discount`) USING BTREE,
+  KEY `ndx_c_balance` (`c_balance`) USING BTREE,
+  KEY `ndx_c_ytd_payment` (`c_ytd_payment`) USING BTREE,
+  KEY `ndx_c_payment_cnt` (`c_payment_cnt`) USING BTREE,
+  KEY `ndx_c_delivery_cnt` (`c_delivery_cnt`) USING BTREE,
+  KEY `ndx_c_data` (`c_data`) USING BTREE,
+  KEY `ndx_4_5_6` (`c_first`,`c_middle`,`c_last`) USING BTREE,
+  KEY `ndx_7_8` (`c_street_1`,`c_street_2`) USING BTREE,
+  KEY `ndx_9_10_11_12` (`c_city`,`c_state`,`c_zip`,`c_phone`) USING BTREE,
+  KEY `ndx_13_14` (`c_since`,`c_credit`) USING BTREE,
+  KEY `ndx_15_16_17_18` (`c_credit_lim`,`c_discount`,`c_balance`,`c_ytd_payment`) USING BTREE,
+  KEY `ndx_19_20_21` (`c_payment_cnt`,`c_delivery_cnt`,`c_data`) USING BTREE,
+  KEY `ndx_4_7_9_13_15_19` (`c_first`,`c_street_1`,`c_city`,`c_since`,`c_credit_lim`,`c_payment_cnt`) USING BTREE
+);
+
+INSERT INTO `t0` VALUES (1,0,0,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'1970-01-01 08:00:01',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(1,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'1970-01-01 08:00:01',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+
+CREATE TABLE `t1` (
+  `c_id` int NOT NULL,
+  `c_d_id` int NOT NULL,
+  `c_w_id` int NOT NULL,
+  `c_first` varchar(16) DEFAULT NULL,
+  `c_middle` char(2) DEFAULT NULL,
+  `c_last` varchar(16) DEFAULT NULL,
+  `c_street_1` varchar(20) DEFAULT NULL,
+  `c_street_2` varchar(20) DEFAULT NULL,
+  `c_city` varchar(20) DEFAULT NULL,
+  `c_state` char(2) DEFAULT NULL,
+  `c_zip` char(9) DEFAULT NULL,
+  `c_phone` char(16) DEFAULT NULL,
+  `c_since` timestamp NOT NULL DEFAULT '1970-01-01 08:00:01',
+  `c_credit` char(2) DEFAULT NULL,
+  `c_credit_lim` decimal(12,2) DEFAULT NULL,
+  `c_discount` decimal(4,4) DEFAULT NULL,
+  `c_balance` decimal(12,2) DEFAULT NULL,
+  `c_ytd_payment` decimal(12,2) DEFAULT NULL,
+  `c_payment_cnt` int DEFAULT NULL,
+  `c_delivery_cnt` int DEFAULT NULL,
+  `c_data` varchar(500) DEFAULT NULL,
+  PRIMARY KEY (`c_w_id`,`c_d_id`,`c_id`),
+  KEY `Customer_100W_key` (`c_w_id`,`c_d_id`,`c_last`,`c_first`),
+  KEY `ndx_c_id` (`c_id`) USING BTREE,
+  KEY `ndx_c_d_id` (`c_d_id`) USING BTREE,
+  KEY `ndx_c_w_id` (`c_w_id`) USING BTREE,
+  KEY `ndx_c_first` (`c_first`) USING BTREE,
+  KEY `ndx_c_middle` (`c_middle`) USING BTREE,
+  KEY `ndx_c_last` (`c_last`) USING BTREE,
+  KEY `ndx_c_street_1` (`c_street_1`) USING BTREE,
+  KEY `ndx_c_street_2` (`c_street_2`) USING BTREE,
+  KEY `ndx_c_city` (`c_city`) USING BTREE,
+  KEY `ndx_c_state` (`c_state`) USING BTREE,
+  KEY `ndx_c_zip` (`c_zip`) USING BTREE,
+  KEY `ndx_c_phone` (`c_phone`) USING BTREE,
+  KEY `ndx_c_since` (`c_since`) USING BTREE,
+  KEY `ndx_c_credit` (`c_credit`) USING BTREE,
+  KEY `ndx_c_credit_lim` (`c_credit_lim`) USING BTREE,
+  KEY `ndx_c_discount` (`c_discount`) USING BTREE,
+  KEY `ndx_c_balance` (`c_balance`) USING BTREE,
+  KEY `ndx_c_ytd_payment` (`c_ytd_payment`) USING BTREE,
+  KEY `ndx_c_payment_cnt` (`c_payment_cnt`) USING BTREE,
+  KEY `ndx_c_delivery_cnt` (`c_delivery_cnt`) USING BTREE,
+  KEY `ndx_c_data` (`c_data`) USING BTREE,
+  KEY `ndx_4_5_6` (`c_first`,`c_middle`,`c_last`) USING BTREE,
+  KEY `ndx_7_8` (`c_street_1`,`c_street_2`) USING BTREE,
+  KEY `ndx_9_10_11_12` (`c_city`,`c_state`,`c_zip`,`c_phone`) USING BTREE,
+  KEY `ndx_13_14` (`c_since`,`c_credit`) USING BTREE,
+  KEY `ndx_15_16_17_18` (`c_credit_lim`,`c_discount`,`c_balance`,`c_ytd_payment`) USING BTREE,
+  KEY `ndx_19_20_21` (`c_payment_cnt`,`c_delivery_cnt`,`c_data`) USING BTREE,
+  KEY `ndx_4_7_9_13_15_19` (`c_first`,`c_street_1`,`c_city`,`c_since`,`c_credit_lim`,`c_payment_cnt`) USING BTREE
+);
+
+INSERT INTO `t1` VALUES (1,0,0,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'1970-01-01 08:00:01',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(1,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'1970-01-01 08:00:01',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+
+CREATE TABLE `t2` (
+  `id_col` int NOT NULL AUTO_INCREMENT,
+  `tinyint_col` tinyint DEFAULT NULL,
+  `bool_col` tinyint DEFAULT NULL,
+  `smallint_col` smallint DEFAULT NULL,
+  `mediumint_col` mediumint DEFAULT NULL,
+  `int_col` int DEFAULT NULL,
+  `bigint_col` bigint DEFAULT NULL,
+  `decimal_col` decimal(25,5) DEFAULT NULL,
+  `float_col` float DEFAULT NULL,
+  `double_col` double DEFAULT NULL,
+  `date_col` date DEFAULT NULL,
+  `datetime_col` datetime(6) DEFAULT NULL,
+  `timestamp_col` timestamp(6) NULL DEFAULT NULL,
+  `time_col` time(6) DEFAULT NULL,
+  `year_col` year DEFAULT NULL,
+  `char_col` char(4) DEFAULT NULL,
+  `varchar_col` varchar(255) DEFAULT NULL,
+  `binary_col` binary(11) DEFAULT NULL,
+  `varbinary_col` varbinary(255) DEFAULT NULL,
+  PRIMARY KEY (`id_col`)
+);
+
+INSERT INTO `t2` VALUES (1,127,1,-32768,-8388608,-2147483648,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1000-01-01','1000-01-01 00:00:00.000000','1970-01-01 00:00:01.123456','24:59:59.000000',1901,'aaaa','bbbbbbbbbaa',_binary 'cccccccccc1',_binary 'dddddddddd1'),(2,127,1,-32768,-8388608,-2147483648,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1000-01-01','1000-01-01 00:00:00.000000','1970-01-01 00:00:01.123456','24:59:59.000000',1901,'aaaa','bbbbbbbbbaa',_binary 'cccccccccc1',_binary 'dddddddddd1');
+
+CREATE TABLE `t10` (
+  `C_BIT` bit(1) DEFAULT NULL,
+  `C_ID` int NOT NULL,
+  `C_D_ID` int NOT NULL,
+  `C_W_ID` bigint NOT NULL,
+  `C_DOUBLE` double DEFAULT NULL,
+  `C_DECIMAL` decimal(10,0) DEFAULT NULL,
+  `C_FIRST` varchar(64) DEFAULT NULL,
+  `C_MIDDLE` char(2) DEFAULT NULL,
+  `C_LAST` varchar(64) DEFAULT NULL,
+  `C_STREET_1` varchar(20) DEFAULT NULL,
+  `C_STREET_2` varchar(20) DEFAULT NULL,
+  `C_CITY` varchar(64) DEFAULT NULL,
+  `C_STATE` char(2) DEFAULT NULL,
+  `C_ZIP` char(9) DEFAULT NULL,
+  `C_PHONE` char(16) DEFAULT NULL,
+  `C_SINCE` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `C_CREDIT` char(2) DEFAULT NULL,
+  `C_CREDIT_LIM` decimal(12,2) DEFAULT NULL,
+  `C_DISCOUNT` decimal(4,4) DEFAULT NULL,
+  `C_BALANCE` decimal(12,2) DEFAULT NULL,
+  `C_YTD_PAYMENT` double DEFAULT NULL,
+  `C_PAYMENT_CNT` float DEFAULT NULL,
+  `C_DELIVERY_CNT` tinyint DEFAULT NULL,
+  `C_END` date DEFAULT NULL,
+  `C_VCHAR` varchar(9000) DEFAULT NULL,
+  PRIMARY KEY (`C_ID`,`C_D_ID`,`C_W_ID`),
+  KEY `ndx_C_BIT` (`C_BIT`) USING BTREE,
+  KEY `ndx_C_ID` (`C_ID`) USING BTREE,
+  KEY `ndx_C_D_ID` (`C_D_ID`) USING BTREE,
+  KEY `ndx_C_W_ID` (`C_W_ID`) USING BTREE,
+  KEY `ndx_C_DOUBLE` (`C_DOUBLE`) USING BTREE,
+  KEY `ndx_C_DECIMAL` (`C_DECIMAL`) USING BTREE,
+  KEY `ndx_C_FIRST` (`C_FIRST`) USING BTREE,
+  KEY `ndx_C_MIDDLE` (`C_MIDDLE`) USING BTREE,
+  KEY `ndx_C_LAST` (`C_LAST`) USING BTREE,
+  KEY `ndx_C_STREET_1` (`C_STREET_1`) USING BTREE,
+  KEY `ndx_C_STREET_2` (`C_STREET_2`) USING BTREE,
+  KEY `ndx_C_CITY` (`C_CITY`) USING BTREE,
+  KEY `ndx_C_STATE` (`C_STATE`) USING BTREE,
+  KEY `ndx_C_ZIP` (`C_ZIP`) USING BTREE,
+  KEY `ndx_C_PHONE` (`C_PHONE`) USING BTREE,
+  KEY `ndx_C_SINCE` (`C_SINCE`) USING BTREE,
+  KEY `ndx_C_CREDIT` (`C_CREDIT`) USING BTREE,
+  KEY `ndx_C_CREDIT_LIM` (`C_CREDIT_LIM`) USING BTREE,
+  KEY `ndx_C_DISCOUNT` (`C_DISCOUNT`) USING BTREE,
+  KEY `ndx_C_BALANCE` (`C_BALANCE`) USING BTREE,
+  KEY `ndx_C_YTD_PAYMENT` (`C_YTD_PAYMENT`) USING BTREE,
+  KEY `ndx_C_PAYMENT_CNT` (`C_PAYMENT_CNT`) USING BTREE,
+  KEY `ndx_C_DELIVERY_CNT` (`C_DELIVERY_CNT`) USING BTREE,
+  KEY `ndx_C_END` (`C_END`) USING BTREE
+);
+
+INSERT INTO `t10` VALUES (NULL,1,0,0,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'2020-11-05 09:06:42',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,1,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'2020-11-05 09:06:48',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+
+CREATE TABLE `t12` (
+  `C_ID` int NOT NULL DEFAULT '99',
+  `C_D_ID` int NOT NULL,
+  `C_W_ID` bigint NOT NULL,
+  `C_DOUBLE` double DEFAULT NULL,
+  `C_DECIMAL` decimal(10,0) DEFAULT NULL,
+  `C_FIRST` varchar(64) DEFAULT NULL,
+  `C_MIDDLE` char(2) DEFAULT NULL,
+  `C_LAST` varchar(64) DEFAULT NULL,
+  `C_STREET_1` varchar(20) DEFAULT NULL,
+  `C_STREET_2` varchar(20) DEFAULT NULL,
+  `C_CITY` varchar(64) DEFAULT NULL,
+  `C_STATE` char(2) DEFAULT NULL,
+  `C_ZIP` char(9) DEFAULT NULL,
+  `C_PHONE` char(16) DEFAULT NULL,
+  `C_SINCE` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `C_CREDIT` char(2) DEFAULT NULL,
+  `C_CREDIT_LIM` decimal(12,2) DEFAULT NULL,
+  `C_DISCOUNT` decimal(4,4) DEFAULT NULL,
+  `C_BALANCE` decimal(12,2) DEFAULT NULL,
+  `C_YTD_PAYMENT` double DEFAULT NULL,
+  `C_PAYMENT_CNT` float DEFAULT NULL,
+  `C_DELIVERY_CNT` tinyint DEFAULT NULL,
+  `C_END` date DEFAULT NULL,
+  `C_VCHAR` varchar(1000) DEFAULT NULL,
+  PRIMARY KEY (`C_ID`,`C_D_ID`),
+  UNIQUE KEY `UNIQUE_index_CREATE_TABLE_PART_RANGE_029_taurus` (`C_ID`,`C_D_ID`,`C_W_ID`) USING BTREE COMMENT 'string',
+  KEY `C_ID` (`C_ID`) USING BTREE,
+  KEY `ndx_C_D_ID` (`C_D_ID`) USING BTREE,
+  KEY `ndx_C_W_ID` (`C_W_ID`) USING BTREE,
+  KEY `ndx_C_DOUBLE` (`C_DOUBLE`) USING BTREE,
+  KEY `ndx_C_DECIMAL` (`C_DECIMAL`) USING BTREE,
+  KEY `ndx_C_FIRST` (`C_FIRST`) USING BTREE,
+  KEY `ndx_C_MIDDLE` (`C_MIDDLE`) USING BTREE,
+  KEY `ndx_C_LAST` (`C_LAST`) USING BTREE,
+  KEY `ndx_C_STREET_1` (`C_STREET_1`) USING BTREE,
+  KEY `ndx_C_STREET_2` (`C_STREET_2`) USING BTREE,
+  KEY `ndx_C_CITY` (`C_CITY`) USING BTREE,
+  KEY `ndx_C_STATE` (`C_STATE`) USING BTREE,
+  KEY `ndx_C_ZIP` (`C_ZIP`) USING BTREE,
+  KEY `ndx_C_PHONE` (`C_PHONE`) USING BTREE,
+  KEY `ndx_C_SINCE` (`C_SINCE`) USING BTREE,
+  KEY `ndx_C_CREDIT` (`C_CREDIT`) USING BTREE,
+  KEY `ndx_C_CREDIT_LIM` (`C_CREDIT_LIM`) USING BTREE,
+  KEY `ndx_C_DISCOUNT` (`C_DISCOUNT`) USING BTREE,
+  KEY `ndx_C_BALANCE` (`C_BALANCE`) USING BTREE,
+  KEY `ndx_C_YTD_PAYMENT` (`C_YTD_PAYMENT`) USING BTREE,
+  KEY `ndx_C_PAYMENT_CNT` (`C_PAYMENT_CNT`) USING BTREE,
+  KEY `ndx_C_DELIVERY_CNT` (`C_DELIVERY_CNT`) USING BTREE,
+  KEY `ndx_C_END` (`C_END`) USING BTREE
+);
+
+INSERT INTO `t12` VALUES (0,9,9,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'2020-11-05 09:29:49',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(1,0,0,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'2020-11-05 09:29:48',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+ANALYZE TABLE t0,t1,t2,t10,t12;
+
+let $query=
+select  /*+ pq(ref_0) pq(2) */ straight_join ref_8.C_SINCE AS c3 from t10 ref_21 left join (t2 ref_16 left join t1 ref_17 on(false) left join (t12 ref_8 left join (t2 ref_11 join t1 ref_10 left join t12 ref_9 on((ref_9.C_D_ID = ref_10.c_d_id))) on((false)) join t10 ref_7 join t0 ref_14 left join t10 ref_15 on(false)) on((false))) on(false) join t1 ref_0 where true limit 1;
+
+--replace_regex $elide_costs_and_rows
+eval explain format=tree $query;
+eval $query;
+
+drop table t0,t1,t2,t10,t12;
+SET sql_mode=@old_sql_mode;
+SET optimizer_switch=@old_optimizer_switch;
+
+--echo #
+--echo # BUG2023080802023: Debug assertion failure DBUG_ASSERT(!is_null_row) in function FakeSingleRowIterator::SetNullRowFlag
+--echo #
+CREATE TABLE t0 (c0 int DEFAULT NULL);
+let $query=SELECT 1 FROM (SELECT 'a')w(w) LEFT JOIN (SELECT 'b' FROM t0) x(x) ON x.x = w.w JOIN t0 ON t0.c0 = x.x;
+
+--disable_warnings
+--replace_column 10 # 11 #
+eval EXPLAIN $query;
+--replace_regex $elide_costs_and_rows
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+--enable_warnings
+
+DROP TABLE t0;

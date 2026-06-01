@@ -1,0 +1,15 @@
+#
+#  Test case for BUG2025080827905: rollback to savepoint will make IO_CACHE::pos_in_file
+#  be invalid value, and make server crash.
+#
+CREATE DATABASE BUG2025080827905;
+USE BUG2025080827905;
+CREATE TABLE t(pk INT);
+START TRANSACTION;
+DELETE FROM t;
+SAVEPOINT save1;
+INSERT INTO t VALUES(1);
+ROLLBACK TO SAVEPOINT save1;
+# Before this patch, the following commit will make server crash.
+COMMIT;
+DROP DATABASE BUG2025080827905;

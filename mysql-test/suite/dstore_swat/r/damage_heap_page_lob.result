@@ -1,0 +1,43 @@
+call mtr.add_suppression("TupleWithLob is nullptr in rnd_next function, error is 10004");
+call mtr.add_suppression("swat hit damage page when fetch blob filed in seq scan");
+call mtr.add_suppression("Got error 10004 when reading table");
+call mtr.add_suppression("swat hit damage page when fetch blob filed, need to continue to seq scan");
+call mtr.add_suppression("Attempting backtrace");
+create database damage_heap_page_lob;
+use damage_heap_page_lob;
+create table t1(s blob) engine=Dstore;
+insert into t1 values (repeat('a', 30000));
+# restart
+select count(*) from t1;
+ERROR HY000: Lost connection to MySQL server during query
+# restart: --dstore_enable_damage_page_manager=on --dstore_report_error_on_damage_page=on
+select count(*) from t1;
+ERROR HY000: Storage engine Dstore: hit damage page
+update t1 set s='abc' limit 1;
+ERROR HY000: Storage engine Dstore: hit damage page
+delete from t1 limit 1;
+ERROR HY000: Storage engine Dstore: hit damage page
+insert into t1 values('xyz');
+select count(*) from t1;
+ERROR HY000: Storage engine Dstore: hit damage page
+# restart: --dstore_enable_damage_page_manager=on
+select count(*) from t1;
+count(*)
+1
+update t1 set s='abc' limit 1;
+delete from t1 limit 1;
+insert into t1 values('xyz');
+select count(*) from t1;
+count(*)
+1
+drop table t1;
+create table t1(s blob) engine=Dstore;
+insert into t1 values (repeat('a', 30000));
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+select count(*) from t1;
+count(*)
+8
+drop database damage_heap_page_lob;
+# restart

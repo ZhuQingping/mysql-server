@@ -1,0 +1,55 @@
+########################################################################
+# Tests for the audit log plugin
+########################################################################
+--source include/have_debug.inc
+
+let $MYSQLD_DATADIR= `select @@datadir`;
+let MYSQLD_DATADIR= $MYSQLD_DATADIR;
+
+call mtr.add_suppression("Can not close the old audit log file for reopen. errno: 175");
+call mtr.add_suppression("Can not close the old audit log file for rotate. errno: 175");
+
+#BUG Test for flushing log, the audit log plugin may use a binlog file or other file
+# even if the close failed, the file still reopen success
+SET SESSION debug="+d,audit_reopen_close_failed";
+set global audit_log_flush=on;
+SET SESSION debug="-d,audit_reopen_close_failed";
+
+ 
+#BUG Test for rotate log, the audit log plugin may use a binlog file or other file
+# even if the close failed, the file still rotate success
+SET SESSION debug="+d,audit_rotate_close_failed";
+set global audit_log_force_rotate=ON;
+create database test_db;
+--let $test_control_chars=1;
+--move_file $MYSQLD_DATADIR/test_audit.log $MYSQLD_DATADIR/test_audit_json.log
+perl;
+  eval "use JSON qw(decode_json); 1" or exit 0;
+  open my $file, $ENV{'MYSQLD_DATADIR'} . '/test_audit_json.log' or die "Could not open log: $!";
+  my $line_num = 0;
+  
+  # fist line should be "set global audit_log_force_rotate=ON"
+  my $line1 = <$file>;
+  # second line shoulde be "create database test_db"
+  my $line2 = <$file>;
+  
+  my $json = decode_json($line1);
+  my $query = $json->{audit_record}->{sqltext};
+  
+  if ($query ne "set global audit_log_force_rotate=ON") {
+      die "[set global audit_log_force_rotate=ON] not found in audit log"
+  }
+  
+  $json = decode_json($line2);
+  $query = $json->{audit_record}->{sqltext};
+  if ($query ne "create database test_db") {
+      die "[create database test_db] not found in audit log"
+  }
+  
+  close $file;
+EOF
+
+--echo success
+SET SESSION debug="-d,audit_rotate_close_failed";
+drop database test_db;
+

@@ -1,0 +1,229 @@
+# === Purpose ===
+# Step 1 Preparatory cleanup.
+# Step 2 Enable gtid_mode.
+# Step 3 Test the size of a single transaction's log_event.
+# Step 4 Test the size of log_events for multiple transactions.
+# Step 5 Test the largest log event in a non-consecutive GTID set.
+# Step 6 Restore and clean resource.
+#
+
+
+# === References ===
+#
+# US2025072100581 Add find-max-event-size option for Dstore
+#
+
+--source include/have_log_bin.inc
+--source include/have_binlog_format_row.inc
+
+--echo #
+--echo # Preparatory cleanup.
+--echo #
+--disable_warnings
+
+DROP DATABASE IF EXISTS db1;
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+--echo # 
+--echo # Delete all existing binary logs.
+--echo #
+RESET MASTER;
+ 
+--echo #
+--echo # Enable gtid_mode
+--echo #
+
+SET GLOBAL enforce_gtid_consistency = ON;
+
+SET GLOBAL gtid_mode = OFF_PERMISSIVE;
+
+SET GLOBAL gtid_mode = ON_PERMISSIVE;
+
+SET GLOBAL gtid_mode = ON;
+
+--echo #
+--echo # Check the gtid option
+--echo #
+SHOW VARIABLES LIKE 'enforce_gtid_consistency';
+SHOW VARIABLES LIKE 'gtid_mode';
+
+--echo # 
+--echo # Init resource
+--echo #
+create database db1;
+use db1;
+
+CREATE TABLE t1 (
+  data TEXT
+) ENGINE=Dstore;
+
+--echo # 
+--echo # CASE 1:Test the size of a single transaction's log_event
+--echo #
+
+RESET MASTER;
+
+insert into t1 values(repeat('a',200));
+--let $binlog_file= query_get_value(SHOW MASTER STATUS, File, 1)
+
+--let $gtid_target = `SELECT @@GLOBAL.GTID_EXECUTED`
+
+FLUSH LOGS;
+
+let $MYSQLD_DATADIR= `select @@datadir`;
+--replace_result $MYSQLTEST_VARDIR MYSQLTEST_VARDIR
+let $binlog_path= $MYSQLD_DATADIR$binlog_file;
+--exec $MYSQL_BINLOG --find-max-event-size="$gtid_target" $binlog_path
+
+--echo #
+--echo # CASE 2:Test the size of log_events for multiple transactions
+--echo #
+
+RESET MASTER;
+
+insert into t1 values(repeat('a',10));
+insert into t1 values(repeat('a',10*3));
+insert into t1 values(repeat('a',100*5));
+
+--let $binlog_file= query_get_value(SHOW MASTER STATUS, File, 1)
+
+--let $gtid_target = `SELECT @@GLOBAL.GTID_EXECUTED`
+
+FLUSH LOGS;
+
+let $MYSQLD_DATADIR= `select @@datadir`;
+let $binlog_path= $MYSQLD_DATADIR$binlog_file;
+--exec $MYSQL_BINLOG --find-max-event-size="$gtid_target" $binlog_path
+
+
+--echo # 
+--echo # case 3:Test to display the largest log_event size in a transaction
+--echo #
+RESET MASTER;
+
+begin;
+insert into t1 values(repeat('a',100*2));
+
+insert into t1 values(repeat('a',100*3));
+
+insert into t1 values(repeat('a',100*4));
+--let $binlog_file= query_get_value(SHOW MASTER STATUS, File, 1)
+commit;
+FLUSH LOGS;
+
+--let $gtid_target = `SELECT @@GLOBAL.GTID_EXECUTED`
+let $MYSQLD_DATADIR= `select @@datadir`;
+let $binlog_path= $MYSQLD_DATADIR$binlog_file;
+--exec $MYSQL_BINLOG  --find-max-event-size="$gtid_target" $binlog_path
+
+
+--echo # 
+--echo # case 4:Test the largest log event in a non-consecutive GTID set.
+--echo #
+
+RESET MASTER;
+
+--echo # 
+--echo # Test uuid 2,3:5,6
+--echo #
+
+--let $binlog_file= query_get_value(SHOW MASTER STATUS, File, 1)
+# Capture initial state (before any test transactions)
+--let $gtid_state_0 = `SELECT @@GLOBAL.GTID_EXECUTED`
+
+INSERT INTO t1 (data) VALUES (REPEAT('a', 100));
+--let $gtid_state_1 = `SELECT @@GLOBAL.GTID_EXECUTED`
+
+INSERT INTO t1 (data) VALUES (REPEAT('b', 100*2));
+--let $gtid_state_2 = `SELECT @@GLOBAL.GTID_EXECUTED`
+
+INSERT INTO t1 (data) VALUES (REPEAT('c', 100*3));
+--let $gtid_state_3 = `SELECT @@GLOBAL.GTID_EXECUTED`
+
+INSERT INTO t1 (data) VALUES (REPEAT('d', 100*4));
+--let $gtid_state_4 = `SELECT @@GLOBAL.GTID_EXECUTED`
+
+INSERT INTO t1 (data) VALUES (REPEAT('e', 100*5));
+--let $gtid_state_5 = `SELECT @@GLOBAL.GTID_EXECUTED`
+
+INSERT INTO t1 (data) VALUES (REPEAT('f', 100*6));
+--let $gtid_state_6 = `SELECT @@GLOBAL.GTID_EXECUTED`
+
+INSERT INTO t1 (data) VALUES (REPEAT('g', 100*7));
+--let $gtid_state_7 = `SELECT @@GLOBAL.GTID_EXECUTED`
+
+FLUSH LOGS;
+
+# Isolate the GTID set for transactions 2 and 3
+--let $gtid_set_2_3 = `SELECT GTID_SUBTRACT('$gtid_state_3', '$gtid_state_1')`
+
+# Isolate the GTID set for transactions 5 and 6
+--let $gtid_set_5_6 = `SELECT GTID_SUBTRACT('$gtid_state_6', '$gtid_state_4')`
+
+--let $combined_gtid_set = $gtid_set_2_3,$gtid_set_5_6
+
+let $MYSQLD_DATADIR= `select @@datadir`;
+let $binlog_path= $MYSQLD_DATADIR$binlog_file;
+--exec $MYSQL_BINLOG --find-max-event-size="$combined_gtid_set"  $binlog_path
+
+--echo #
+--echo # Test uuid 5,6:2,3
+--echo #
+
+--let $combined_gtid_set = $gtid_set_5_6,$gtid_set_2_3
+--exec $MYSQL_BINLOG --find-max-event-size="$combined_gtid_set"  $binlog_path
+--echo #
+--echo # Test uuid 1,5:6
+--echo #
+--let $combined_gtid_set = $gtid_state_1,$gtid_set_5_6
+--exec $MYSQL_BINLOG --find-max-event-size="$combined_gtid_set"  $binlog_path
+--echo #
+--echo # Test uuid 5:6,1
+--echo #
+--let $combined_gtid_set =$gtid_set_5_6, $gtid_state_1
+--exec $MYSQL_BINLOG --find-max-event-size="$combined_gtid_set"  $binlog_path
+--echo #
+--echo # Test suite for mysqlbinlog argument validation.
+--echo # This test checks that mysqlbinlog correctly fails and provides
+--echo # a proper error message for various invalid argument combinations.
+
+--echo #
+--echo # =================================================================
+--echo # Case 5: Test with an invalid GTID set format.
+--echo # Expect: mysqlbinlog fails with an error about a malformed GTID.
+--echo # =================================================================
+
+--error 1
+--exec $MYSQL_BINLOG --find-max-event-size="NOT_A_VALID_UUID:1-5"  $binlog_path
+
+
+--echo # =================================================================
+--echo # Case 6: Test using --find-max-event-size with --raw.
+--echo # Expect: mysqlbinlog fails, stating these options are incompatible.
+--echo # =================================================================
+
+--error 1
+--exec $MYSQL_BINLOG --raw --read-from-remote-server --stop-never --user=root --host=127.0.0.1 --port=$MASTER_MYPORT --find-max-event-size="$combined_gtid_set" $binlog_path
+
+
+--echo # =================================================================
+--echo # Case 7: Test using --find-max-event-size with --include-gtids or --exclude-gtids.
+--echo # Expect: mysqlbinlog fails, stating these options are incompatible.
+--echo # =================================================================
+
+--error 1
+--exec $MYSQL_BINLOG --find-max-event-size="$gtid_set_5_6" --include-gtids="$gtid_set_5_6"  $binlog_path
+--error 1
+--exec $MYSQL_BINLOG --find-max-event-size="$gtid_set_5_6" --exclude-gtids="$gtid_set_5_6"  $binlog_path
+
+--echo # 
+--echo # Restore and clean resource
+--echo #
+
+DROP TABLE IF EXISTS t1;
+DROP DATABASE db1;
+SET GLOBAL gtid_mode = ON_PERMISSIVE;
+SET GLOBAL gtid_mode = OFF_PERMISSIVE;
+SET GLOBAL gtid_mode = OFF;
+SET GLOBAL enforce_gtid_consistency = OFF;

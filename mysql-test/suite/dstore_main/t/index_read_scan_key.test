@@ -1,0 +1,134 @@
+#
+#  Test scan key info of index read.
+#
+
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+--source include/elide_costs.inc
+
+# prepare table schema and data
+create table t(id int, a int, b int, c int,key(id),key(a ,b ,c)) engine=Dstore;
+--disable_query_log
+insert into t values(0,0,0,0);
+insert into t values(-1,-1,-1,-1);
+insert into t values(-2,-2,-2,-2);
+insert into t values(1,1,1,1);
+insert into t values(2,2,2,2);
+insert into t values(3,3,3,3);
+insert into t values(4,3,4,4);
+insert into t values(5,4,5,5);
+insert into t values(6,4,6,6);
+insert into t values(7,7,7,7);
+insert into t values(8,8,8,8);
+insert into t values(9,8,9,9);
+insert into t values(10,null,null,null);
+insert into t values(11,null,1,1);
+insert into t values(12,null,2,2);
+insert into t values(13,null,3,3);
+insert into t values(14,1,null,1);
+insert into t values(15,2,null,2);
+insert into t values(16,3,null,3);
+insert into t values(17,1,1,null);
+insert into t values(18,2,2,null);
+insert into t values(19,3,3,null);
+insert into t values(20,null,null,1);
+insert into t values(21,null,null,2);
+insert into t values(22,null,null,3);
+--enable_query_log
+analyze table t;
+analyze table t update histogram on id,a,b,c;
+
+--replace_column 7 #
+show index from t;
+
+--echo # test print scan key of indx read
+set debug='+d,print_dstore_scankey_info';
+
+let $query=select * from t force index(a) where a = 3 and b = 3 and c < 5 order by id;
+--replace_column 10 # 11 #
+eval explain $query;
+--replace_regex $elide_metrics
+eval explain format=tree $query;
+--replace_regex $elide_metrics
+eval explain analyze $query;
+eval $query;
+
+--let SEARCH_FILE= $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let SEARCH_PATTERN= ScanKey_IndexScan
+--source include/search_pattern.inc
+
+--echo # test print scan key of rescan
+let $query=select * from t force index(a) where a < 1 or a is null order by a desc,id asc;
+--replace_column 10 # 11 #
+eval explain $query;
+--replace_regex $elide_metrics
+eval explain format=tree $query;
+--replace_regex $elide_metrics
+eval explain analyze $query;
+eval $query;
+
+--let SEARCH_FILE= $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let SEARCH_PATTERN= ScanKey_ScanAgain
+--source include/search_pattern.inc
+
+set debug='-d,print_dstore_scankey_info';
+
+--echo # test index locking read
+let $query=select * from t force index(a) where a < 3 or a is null order by a desc,id asc for update;
+--replace_column 10 # 11 #
+eval explain $query;
+eval $query;
+
+# When inject following error, need to mask the error log
+--disable_query_log
+CALL mtr.add_suppression(".*lock newest tuple failed.*");
+CALL mtr.add_suppression(".*Unrecognized lock failure reason.*");
+--enable_query_log
+
+set debug='+d,cde_lcktuple_updated_injection';
+eval $query;
+set debug='-d,cde_lcktuple_updated_injection';
+
+set debug='+d,cde_lcktuple_allocid_injection';
+--error ER_LOCK_WAIT_TIMEOUT
+eval $query;
+set debug='-d,cde_lcktuple_allocid_injection';
+
+set debug='+d,cde_lcktuple_deadlk_injection';
+--error ER_LOCK_DEADLOCK
+eval $query;
+set debug='-d,cde_lcktuple_deadlk_injection';
+
+set debug='+d,cde_lcktuple_invis_injection';
+eval $query;
+set debug='-d,cde_lcktuple_invis_injection';
+
+set debug='+d,cde_lcktuple_otherfail_injection';
+--error ER_GET_ERRNO
+eval $query;
+set debug='-d,cde_lcktuple_otherfail_injection';
+
+--echo #
+--echo # BUG2025052817129: COUNT(*) scenario choose covering index read
+--echo #
+SET debug='+d,print_dstore_scankey_info';
+
+# Cover index read, no need to go back to heap table
+EXPLAIN SELECT COUNT(0) AS cover_index_read FROM t;
+SELECT COUNT(0) AS cover_index_read FROM t;
+
+# Non cover index read, need to go back to heap table
+EXPLAIN SELECT COUNT(a) AS non_cover_index_read FROM t WHERE id > 50;
+SELECT COUNT(a) AS non_cover_index_read FROM t WHERE id > 50;
+
+SET debug='-d,print_dstore_scankey_info';
+
+--let SEARCH_FILE= $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let SEARCH_PATTERN= Dstore index read info, read only index: 1, SQL Query: SELECT COUNT\(0\) AS cover_index_read FROM t
+--source include/search_pattern.inc
+
+--let SEARCH_PATTERN= Dstore index read info, read only index: 0, SQL Query: SELECT COUNT\(a\) AS non_cover_index_read FROM t WHERE id > 50
+--source include/search_pattern.inc
+
+# cleanup
+drop table t;

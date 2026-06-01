@@ -1,0 +1,28 @@
+SET @old_slow_query_log= @@global.slow_query_log;
+SET @old_log_output= @@global.log_output;
+SET @old_long_query_time= @@long_query_time;
+SET GLOBAL log_output= "TABLE";
+SET GLOBAL slow_query_log= ON;
+SET SESSION long_query_time= 0;
+CREATE TABLE t17059925 (a INT, KEY a(a));
+CREATE TABLE t2 (b INT);
+INSERT INTO t17059925 VALUES (1);
+INSERT INTO t2 VALUES (4), (5), (6);
+TRUNCATE table mysql.slow_log;
+SELECT sleep(0.5) FROM t17059925 UNION ALL SELECT * FROM t17059925 WHERE a= 10 AND a= 20 UNION ALL SELECT * FROM t2;
+sleep(0.5)
+0
+4
+5
+6
+SELECT sql_text, rows_examined FROM mysql.slow_log WHERE (sql_text LIKE '%SELECT%t17059925%'
+       AND sql_text NOT LIKE '%EXPLAIN%') OR sql_text LIKE '%dual%';
+sql_text	rows_examined
+SELECT sleep(0.5) FROM t17059925 UNION ALL SELECT * FROM t17059925 WHERE a= 10 AND a= 20 UNION ALL SELECT * FROM t2	4
+#Cleanup
+DROP TABLE t17059925, t2;
+SET @@global.slow_query_log=@old_slow_query_log;
+SET @@global.log_output=@old_log_output;
+SET @@session.long_query_time=@old_long_query_time;
+TRUNCATE TABLE mysql.slow_log;
+TRUNCATE TABLE mysql.general_log;

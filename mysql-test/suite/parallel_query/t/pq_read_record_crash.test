@@ -1,0 +1,35 @@
+--source include/pq_test.inc
+
+# If div_table has more than 100 columns, clust_offsets in PQ_Ctx::read_record
+# will alloc in memory_heap, but this heap will free before each record read,
+# which will hit a memory trap.
+# need run this test case with --sanitize
+# --echo #
+# --echo BUG2022080501414 crash in PQ_Ctx::read_record
+# --echo #
+
+--let columns=128
+--disable_query_log
+create table BUG2022080501414 (id int primary key);
+while ($columns)
+{
+  --eval alter table BUG2022080501414 add column(column_$columns varchar(32) NOT NULL DEFAULT 'hello world!')
+  dec $columns ;
+}
+
+--let rows=128
+while ($rows)
+{
+  --eval insert into BUG2022080501414 (id) values ($rows)
+  dec $rows ;
+}
+
+--disable_result_log
+select * from BUG2022080501414 order by id;
+--enable_result_log
+--enable_query_log
+
+select count(*) from information_schema.columns where table_name = 'BUG2022080501414';
+select count(*) from BUG2022080501414;
+
+drop table BUG2022080501414;

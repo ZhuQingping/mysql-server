@@ -1,0 +1,55 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+
+create database pq_test;
+use pq_test;
+
+create table t1 (a int, key(a desc));
+insert into t1 values(1),(2),(3),(4),(5),(6),(7);
+
+ANALYZE TABLE t1;
+
+explain select a from t1;
+select a from t1;
+
+explain select * from t1 where a < 4;
+select * from t1 where a < 4;
+
+explain select * from t1 where a < 4 order by a;
+select * from t1 where a < 4 order by a;
+
+explain select * from t1 where a < 4 order by a desc;
+select * from t1 where a < 4 order by a desc;
+
+drop table pq_test.t1;
+
+create table t2(a int not null, b int , primary key(a), key(b));
+insert into t2 values (1,1),(2,2),(3,3),(4,4);
+
+explain select * from t2 where b < 3;
+select * from t2 where b < 3;
+
+explain select * from t2 where b < 3 order by b;
+select * from t2 where b < 3 order by b;
+
+explain select * from t2 where b < 3 order by b desc;
+select * from t2 where b < 3 order by b desc;
+
+drop table pq_test.t2;
+
+# BUG2022091402551
+# For range reverse scan, if end_key is before all records, this
+# range should be skipped.
+
+create table t1 (
+  int_col int NOT NULL,
+  KEY idx_int_col (int_col)
+);
+insert into t1 values(1),(2),(3);
+insert into t1 values(1);
+
+explain select int_col from t1 where int_col not between 0 and 1 order by int_col desc;
+select int_col from t1 where int_col not between 0 and 1 order by int_col desc;
+
+drop table t1;
+drop database pq_test;

@@ -1,0 +1,210 @@
+############################################################
+Establish a master-replica replication relationship based on physical replication.
+############################################################
+include/master-slave.inc
+[connection master]
+#
+# 1. Initialize the required variables, then disconnect the subsequent master-replica replication connections.
+#
+[connection master]
+[connection slave]
+STOP REPLICA;
+RESET REPLICA ALL;
+#
+# 2. Since physical replication does not support DDL operations at present, execute all required DDL statements first.
+#
+create database copy_database;
+use copy_database;
+CREATE TABLE copy_table (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) engine = dstore;
+#
+# 3. Shutdown the primary and standby instances.
+#
+include/rpl_stop_server.inc [server_number=1]
+include/rpl_stop_server.inc [server_number=2]
+#
+# 4. Copy the data directory of the primary to that of the standby.
+#
+#
+# 5. Start the primary and standby instances with new parameters for establishing a master-replica physical replication relationship.
+#
+include/rpl_start_server.inc [server_number=1]
+include/rpl_start_server.inc [server_number=2]
+#
+# 6. Confirm that the primary and standby servers start with the new data directory.
+#
+include/assert.inc [Database copy_database should exist (only one record)]
+include/assert.inc [Table copy_table should exist in database copy_database (only one record)]
+use copy_database;
+show tables;
+Tables_in_copy_database
+copy_table
+include/assert.inc [Database copy_database should exist (only one record)]
+include/assert.inc [Table copy_table should exist in database copy_database (only one record)]
+use copy_database;
+show tables;
+Tables_in_copy_database
+copy_table
+#
+# 7. Install the plugin on both the primary and standby servers, and establish a master-replica physical replication relationship.
+#
+#
+# Install the primary server's plugin and set enabled_wal to ON.
+#
+INSTALL PLUGIN rpl_semi_sync_source SONAME 'semisync_source.so';
+INSTALL PLUGIN rpl_semi_sync_replica SONAME 'semisync_replica.so';
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 1;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 1;
+SET GLOBAL rds_physical_rpl_sender_packet_size = 1;
+#
+# dstore_enable_standby_role should show as false, indicating that the current node is the source.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	1
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	OFF
+#
+# Install the standby server's plugin and set enabled_wal to ON.
+#
+INSTALL PLUGIN rpl_semi_sync_source SONAME 'semisync_source.so';
+INSTALL PLUGIN rpl_semi_sync_replica SONAME 'semisync_replica.so';
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 1;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 1;
+SET GLOBAL rds_physical_rpl_sender_packet_size = 1;
+#
+# dstore_enable_standby_role should show as true, indicating that the current node is the replica.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	2
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	ON
+#
+# Configure the replica and check whether it is configured correctly.
+#
+STOP REPLICA;
+Warnings:
+Note	3084	Replication thread(s) for channel '' are already stopped.
+RESET REPLICA ALL;
+CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=SERVER_MYPORT_1, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL 'dstore_wal_replication_channel';;
+include/assert.inc [Channel name should be 'dstore_wal_replication_channel']
+Slave_IO_Running should be OFF.
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+OFF
+START REPLICA;
+#
+# Slave_IO_Running should be ON.
+#
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+ON
+############################################################
+Execute a simple DML test.
+############################################################
+#
+# 1. Execute some DML operations on the primary.
+#
+#
+# INSERT
+#
+use copy_database;
+insert into copy_table values (1, 'aaa');
+insert into copy_table values (2, 'bbb');
+insert into copy_table values (3, 'ccc');
+insert into copy_table values (4, 'ddd');
+insert into copy_table values (5, 'eee');
+INSERT INTO copy_table (id, data) VALUES (6, 'fff');
+INSERT INTO copy_table (id, data) VALUES (7, 'ggg'), (8, 'hhh'), (9, 'iii');
+INSERT INTO copy_table (id, data) VALUES (10, 'j j 123'), (11, 'k_k_456'), (12, 'l-l-789');
+#
+# UPDATE
+#
+UPDATE copy_table SET data = 'aaa_update' WHERE id = 1;
+UPDATE copy_table SET data = CONCAT(data, '_batch_update') WHERE id BETWEEN 2 AND 4;
+UPDATE copy_table SET data = 'default_data' WHERE id > 10 AND id < 13;
+UPDATE copy_table SET data = UPPER(data) WHERE id = 5;
+UPDATE copy_table SET data = LOWER(data) WHERE id = 6;
+UPDATE copy_table SET data = SUBSTRING(data, 1, 2) WHERE id = 7;
+#
+# DELETE
+#
+DELETE FROM copy_table WHERE id BETWEEN 1 AND 2;
+DELETE FROM copy_table WHERE data LIKE '%_batch_update';
+#
+# Print the results after modification.
+#
+select * from copy_table;
+id	data
+5	EEE
+6	fff
+7	gg
+8	hhh
+9	iii
+10	j j 123
+11	default_data
+12	default_data
+#
+# 2. Promote the replica to master to verify the correctness of replica's log replay, with the expectation of data consistency with the original master.
+#
+STOP REPLICA;
+call rpl_wal.pdb_promote();
+use copy_database;
+select * from copy_table;
+id	data
+5	EEE
+6	fff
+7	gg
+8	hhh
+9	iii
+10	j j 123
+11	default_data
+12	default_data
+############################################################
+# Uninstall the plugins, reset the variables, and restore the original master-replica replication relationship.
+############################################################
+#
+# 1. Shutdown the mysqld instances of the master and replica servers launched with the new data directory.
+#
+STOP REPLICA;
+RESET REPLICA ALL FOR CHANNEL 'dstore_wal_replication_channel';
+include/stop_wal_dump_threads.inc
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 0;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 0;
+UNINSTALL PLUGIN rpl_semi_sync_source;
+UNINSTALL PLUGIN rpl_semi_sync_replica;
+use mtr;
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 0;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 0;
+UNINSTALL PLUGIN rpl_semi_sync_source;
+UNINSTALL PLUGIN rpl_semi_sync_replica;
+use mtr;
+#
+# 2. Shutdown the mysqld instances of the master and replica servers launched with the new data directory.
+#
+include/rpl_stop_server.inc [server_number=1]
+include/rpl_stop_server.inc [server_number=2]
+# Delete the directories of the primary and standby servers.
+#
+# 3. Restart the mysqld instances of the master and replica servers using the configurations from the opt file.
+#
+include/rpl_start_server.inc [server_number=1]
+show databases;
+Database
+__recyclebin__
+copy_database
+information_schema
+mtr
+mysql
+performance_schema
+sys
+test
+drop database copy_database;
+use mtr;
+include/rpl_start_server.inc [server_number=2]
+use mtr;

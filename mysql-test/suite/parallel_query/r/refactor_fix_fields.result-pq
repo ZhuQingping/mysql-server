@@ -1,0 +1,999 @@
+#
+# BUG2023103003201 : The parameter's type of condition in the prepare phase is different from parameter's type after optimize phase.
+# As a result, the comparison function is changed. As a result, the result is incorrect.
+#
+set sql_mode='';
+CREATE TABLE ta (
+timestamp_col timestamp NULL DEFAULT NULL
+);
+CREATE TABLE tb (
+set_col set('111','222','333') DEFAULT NULL
+);
+insert into ta values('0000-00-00 00:00:00');
+insert into tb values('111');
+set parallel_cost_threshold=0;
+set parallel_default_dop=1;
+set parallel_rows_threshold=0;
+set force_parallel_execute = 0;
+EXPLAIN SELECT B.set_col, A.timestamp_col,A.timestamp_col <> B.set_col,A.timestamp_col = '0000-00-00 00:00:00.000000' FROM ta A, tb B where A.timestamp_col <> B.set_col and A.timestamp_col = '0000-00-00 00:00:00.000000';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	A	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+1	SIMPLE	B	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`B`.`set_col` AS `set_col`,`test`.`A`.`timestamp_col` AS `timestamp_col`,(`test`.`A`.`timestamp_col` <> cast(`test`.`B`.`set_col` as datetime(6))) AS `A.timestamp_col <> B.set_col`,(`test`.`A`.`timestamp_col` = '0000-00-00 00:00:00.000000') AS `A.timestamp_col = '0000-00-00 00:00:00.000000'` from `test`.`ta` `A` join `test`.`tb` `B` where ((`test`.`A`.`timestamp_col` = TIMESTAMP'0000-00-00 00:00:00') and ('0000-00-00 00:00:00.000000' <> `test`.`B`.`set_col`))
+SELECT B.set_col, A.timestamp_col,A.timestamp_col <> B.set_col,A.timestamp_col = '0000-00-00 00:00:00.000000' FROM ta A, tb B where A.timestamp_col <> B.set_col and A.timestamp_col = '0000-00-00 00:00:00.000000';
+set_col	timestamp_col	A.timestamp_col <> B.set_col	A.timestamp_col = '0000-00-00 00:00:00.000000'
+Warnings:
+Warning	1292	Incorrect datetime value: '111' for column '0000-00-00 00:00:00.000000' at row 1
+set force_parallel_execute = 1;
+explain SELECT B.set_col, A.timestamp_col,A.timestamp_col <> B.set_col,A.timestamp_col = '0000-00-00 00:00:00.000000' FROM ta A, tb B where A.timestamp_col <> B.set_col and A.timestamp_col = '0000-00-00 00:00:00.000000';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.A)
+1	SIMPLE	A	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+1	SIMPLE	B	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`B`.`set_col` AS `set_col`,`test`.`A`.`timestamp_col` AS `timestamp_col`,(`test`.`A`.`timestamp_col` <> cast(`test`.`B`.`set_col` as datetime(6))) AS `A.timestamp_col <> B.set_col`,(`test`.`A`.`timestamp_col` = '0000-00-00 00:00:00.000000') AS `A.timestamp_col = '0000-00-00 00:00:00.000000'` from `test`.`ta` `A` join `test`.`tb` `B` where ((`test`.`A`.`timestamp_col` = TIMESTAMP'0000-00-00 00:00:00') and ('0000-00-00 00:00:00.000000' <> `test`.`B`.`set_col`))
+SELECT B.set_col, A.timestamp_col,A.timestamp_col <> B.set_col,A.timestamp_col = '0000-00-00 00:00:00.000000' FROM ta A, tb B where A.timestamp_col <> B.set_col and A.timestamp_col = '0000-00-00 00:00:00.000000';
+set_col	timestamp_col	A.timestamp_col <> B.set_col	A.timestamp_col = '0000-00-00 00:00:00.000000'
+Warnings:
+Warning	1292	Incorrect datetime value: '111' for column '0000-00-00 00:00:00.000000' at row 1
+set force_parallel_execute = 0;
+EXPLAIN SELECT B.set_col, A.timestamp_col,A.timestamp_col <=> B.set_col,A.timestamp_col = '0000-00-00 00:00:00.000000' FROM ta A, tb B where A.timestamp_col <=> B.set_col and A.timestamp_col = '0000-00-00 00:00:00.000000';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	A	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+1	SIMPLE	B	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`B`.`set_col` AS `set_col`,`test`.`A`.`timestamp_col` AS `timestamp_col`,(`test`.`A`.`timestamp_col` <=> cast(`test`.`B`.`set_col` as datetime(6))) AS `A.timestamp_col <=> B.set_col`,(`test`.`A`.`timestamp_col` = '0000-00-00 00:00:00.000000') AS `A.timestamp_col = '0000-00-00 00:00:00.000000'` from `test`.`ta` `A` join `test`.`tb` `B` where ((`test`.`A`.`timestamp_col` = TIMESTAMP'0000-00-00 00:00:00') and ('0000-00-00 00:00:00.000000' <=> `test`.`B`.`set_col`))
+SELECT B.set_col, A.timestamp_col,A.timestamp_col <=> B.set_col,A.timestamp_col = '0000-00-00 00:00:00.000000' FROM ta A, tb B where A.timestamp_col <=> B.set_col and A.timestamp_col = '0000-00-00 00:00:00.000000';
+set_col	timestamp_col	A.timestamp_col <=> B.set_col	A.timestamp_col = '0000-00-00 00:00:00.000000'
+111	0000-00-00 00:00:00	1	1
+Warnings:
+Warning	1292	Incorrect datetime value: '111' for column '0000-00-00 00:00:00.000000' at row 1
+Warning	1292	Incorrect datetime value: '111'
+set force_parallel_execute = 1;
+explain SELECT B.set_col, A.timestamp_col,A.timestamp_col <=> B.set_col,A.timestamp_col = '0000-00-00 00:00:00.000000' FROM ta A, tb B where A.timestamp_col <=> B.set_col and A.timestamp_col = '0000-00-00 00:00:00.000000';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.A)
+1	SIMPLE	A	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+1	SIMPLE	B	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`B`.`set_col` AS `set_col`,`test`.`A`.`timestamp_col` AS `timestamp_col`,(`test`.`A`.`timestamp_col` <=> cast(`test`.`B`.`set_col` as datetime(6))) AS `A.timestamp_col <=> B.set_col`,(`test`.`A`.`timestamp_col` = '0000-00-00 00:00:00.000000') AS `A.timestamp_col = '0000-00-00 00:00:00.000000'` from `test`.`ta` `A` join `test`.`tb` `B` where ((`test`.`A`.`timestamp_col` = TIMESTAMP'0000-00-00 00:00:00') and ('0000-00-00 00:00:00.000000' <=> `test`.`B`.`set_col`))
+SELECT B.set_col, A.timestamp_col,A.timestamp_col <=> B.set_col,A.timestamp_col = '0000-00-00 00:00:00.000000' FROM ta A, tb B where A.timestamp_col <=> B.set_col and A.timestamp_col = '0000-00-00 00:00:00.000000';
+set_col	timestamp_col	A.timestamp_col <=> B.set_col	A.timestamp_col = '0000-00-00 00:00:00.000000'
+111	0000-00-00 00:00:00	1	1
+Warnings:
+Warning	1292	Incorrect datetime value: '111' for column '0000-00-00 00:00:00.000000' at row 1
+Warning	1292	Incorrect datetime value: '111'
+set debug='+d,item_cond_refix_fields_error';
+explain SELECT /*+ set_var(parallel_graceful_fallback=off) */ B.set_col, A.timestamp_col,A.timestamp_col <> B.set_col,A.timestamp_col = '0000-00-00 00:00:00.000000' FROM ta A, tb B where A.timestamp_col <> B.set_col and A.timestamp_col = '0000-00-00 00:00:00.000000';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	A	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+1	SIMPLE	B	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using join buffer (hash join)
+Warnings:
+Warning	8026	Failed to execute the query using parallel query, the query was restarted without parallel query.
+Note	1003	/* select#1 */ select /*+ SET_VAR(parallel_graceful_fallback='off') */ `test`.`B`.`set_col` AS `set_col`,`test`.`A`.`timestamp_col` AS `timestamp_col`,(`test`.`A`.`timestamp_col` <> cast(`test`.`B`.`set_col` as datetime(6))) AS `A.timestamp_col <> B.set_col`,(`test`.`A`.`timestamp_col` = '0000-00-00 00:00:00.000000') AS `A.timestamp_col = '0000-00-00 00:00:00.000000'` from `test`.`ta` `A` join `test`.`tb` `B` where ((`test`.`A`.`timestamp_col` = TIMESTAMP'0000-00-00 00:00:00') and ('0000-00-00 00:00:00.000000' <> `test`.`B`.`set_col`))
+SELECT /*+ set_var(parallel_graceful_fallback=off) */ B.set_col, A.timestamp_col,A.timestamp_col <> B.set_col,A.timestamp_col = '0000-00-00 00:00:00.000000' FROM ta A, tb B where A.timestamp_col <> B.set_col and A.timestamp_col = '0000-00-00 00:00:00.000000';
+set_col	timestamp_col	A.timestamp_col <> B.set_col	A.timestamp_col = '0000-00-00 00:00:00.000000'
+Warnings:
+Warning	8026	Failed to execute the query using parallel query, the query was restarted without parallel query.
+Warning	1292	Incorrect datetime value: '111' for column '0000-00-00 00:00:00.000000' at row 1
+explain SELECT /*+ set_var(parallel_graceful_fallback=on) */ B.set_col, A.timestamp_col,A.timestamp_col <> B.set_col,A.timestamp_col = '0000-00-00 00:00:00.000000' FROM ta A, tb B where A.timestamp_col <> B.set_col and A.timestamp_col = '0000-00-00 00:00:00.000000';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	A	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+1	SIMPLE	B	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select /*+ SET_VAR(parallel_graceful_fallback='on') */ `test`.`B`.`set_col` AS `set_col`,`test`.`A`.`timestamp_col` AS `timestamp_col`,(`test`.`A`.`timestamp_col` <> cast(`test`.`B`.`set_col` as datetime(6))) AS `A.timestamp_col <> B.set_col`,(`test`.`A`.`timestamp_col` = '0000-00-00 00:00:00.000000') AS `A.timestamp_col = '0000-00-00 00:00:00.000000'` from `test`.`ta` `A` join `test`.`tb` `B` where ((`test`.`A`.`timestamp_col` = TIMESTAMP'0000-00-00 00:00:00') and ('0000-00-00 00:00:00.000000' <> `test`.`B`.`set_col`))
+SELECT /*+ set_var(parallel_graceful_fallback=on) */ B.set_col, A.timestamp_col,A.timestamp_col <> B.set_col,A.timestamp_col = '0000-00-00 00:00:00.000000' FROM ta A, tb B where A.timestamp_col <> B.set_col and A.timestamp_col = '0000-00-00 00:00:00.000000';
+set_col	timestamp_col	A.timestamp_col <> B.set_col	A.timestamp_col = '0000-00-00 00:00:00.000000'
+Warnings:
+Warning	1292	Incorrect datetime value: '111' for column '0000-00-00 00:00:00.000000' at row 1
+set debug='';
+drop table ta, tb;
+#
+# BUG2023112501709
+#
+create table t1(a int);
+insert into t1 values(1);
+create table t2(a year, key(a));
+insert into t2 values(1912);
+set force_parallel_execute = 0;
+select * from t1 A, t2 B where A.a<B.a and A.a=1;
+a	a
+1	1912
+set force_parallel_execute = 1;
+explain select * from t1 A, t2 B where A.a<B.a and A.a=1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.A)
+1	SIMPLE	A	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+1	SIMPLE	B	NULL	index	a	a	2	NULL	#	#	Using where; Using index; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`A`.`a` AS `a`,`test`.`B`.`a` AS `a` from `test`.`t1` `A` join `test`.`t2` `B` where ((`test`.`A`.`a` = 1) and (1 < `test`.`B`.`a`))
+select * from t1 A, t2 B where A.a<B.a and A.a=1;
+a	a
+1	1912
+drop table t1, t2;
+#
+# BUG2023102501138
+#
+CREATE TABLE tbl_3_all_typeindex (
+id_col int NOT NULL DEFAULT '0',
+timestamp_col timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+binary_col binary(11) DEFAULT NULL,
+KEY `ndx_id_col` (`id_col`),
+KEY `ndx_timestamp_col` (`timestamp_col`),
+KEY `ndx_binary_col` (`binary_col`)
+);
+insert into tbl_3_all_typeindex values(1,'2020-08-01 10:00:00.000000', 'cccccccccc1');
+set force_parallel_execute = 0;
+SELECT binary_col AS c1 FROM tbl_3_all_typeindex B WHERE B.timestamp_col = '2020-08-01 10:00:00.000000' AND B.timestamp_col BETWEEN '2020-01-01 00:00:01.000000' AND B.binary_col;
+c1
+Warnings:
+Warning	1292	Incorrect datetime value: 'cccccccccc1' for column '2020-08-01 10:00:00.000000' at row 1
+set force_parallel_execute = 1;
+explain SELECT binary_col AS c1 FROM tbl_3_all_typeindex B WHERE B.timestamp_col = '2020-08-01 10:00:00.000000' AND B.timestamp_col BETWEEN '2020-01-01 00:00:01.000000' AND B.binary_col;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.B)
+1	SIMPLE	B	NULL	ref	ndx_timestamp_col,ndx_binary_col	ndx_timestamp_col	7	const	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`B`.`binary_col` AS `c1` from `test`.`tbl_3_all_typeindex` `B` where ((`test`.`B`.`timestamp_col` = TIMESTAMP'2020-08-01 10:00:00') and ('2020-08-01 10:00:00.000000' between '2020-01-01 00:00:01.000000' and `test`.`B`.`binary_col`))
+SELECT binary_col AS c1 FROM tbl_3_all_typeindex B WHERE B.timestamp_col = '2020-08-01 10:00:00.000000' AND B.timestamp_col BETWEEN '2020-01-01 00:00:01.000000' AND B.binary_col;
+c1
+Warnings:
+Warning	1292	Incorrect datetime value: 'cccccccccc1' for column '2020-08-01 10:00:00.000000' at row 1
+drop table tbl_3_all_typeindex;
+#
+# BUG2023080801784
+#
+CREATE TABLE t0 (c0 DECIMAL(48), c1 DATE);
+INSERT INTO t0(c0,c1) VALUES (1,DATE '1296-10-3'),(2,DATE '2050-6-22');
+set force_parallel_execute = 1;
+explain SELECT 1 FROM (SELECT CAST('7791-3-21 21:27:26' AS DATETIME) FROM t0) x(x) JOIN (SELECT DISTINCT t0.c1 FROM t0 WHERE CASE WHEN t0.c0 THEN CAST('3857-8-21 12:56:47' AS DATETIME) END > t0.c1) y(y) ON x.x = y.y;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	NULL	NULL	NULL	NULL	NULL	NULL	NULL	#	#	no matching row in const table
+3	DERIVED	<gather3>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t0)
+3	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select 1 AS `1` from `test`.`t0` join (/* select#3 */ select distinct `test`.`t0`.`c1` AS `c1` from `test`.`t0` where ((`test`.`t0`.`c1` = <cache>(cast('7791-3-21 21:27:26' as datetime))) and ((case when `test`.`t0`.`c0` then <cache>(cast('3857-8-21 12:56:47' as datetime)) end) > <cache>(cast('7791-3-21 21:27:26' as datetime))))) `y` (`y`)
+SELECT 1 FROM (SELECT CAST('7791-3-21 21:27:26' AS DATETIME) FROM t0) x(x) JOIN (SELECT DISTINCT t0.c1 FROM t0 WHERE CASE WHEN t0.c0 THEN CAST('3857-8-21 12:56:47' AS DATETIME) END > t0.c1) y(y) ON x.x = y.y;
+1
+drop table t0;
+#
+# BUG2024052100898
+#
+create table t1 (id_col int not null);
+create table t2 (id_col int not null default '0');
+set force_parallel_execute = 1;
+explain select A.id_col from (select C.id_col from t1 as C where C.id_col not in (select id_col from t2 AS D where D.id_col is not null)) A inner join t1 B on A.id_col = B.id_col;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.D, test.C)
+1	SIMPLE	C	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+1	SIMPLE	D	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Not exists; Using join buffer (hash join)
+1	SIMPLE	B	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`C`.`id_col` AS `id_col` from `test`.`t1` `C` anti join (`test`.`t2` `D`) on(((`test`.`D`.`id_col` = `test`.`C`.`id_col`) and (`test`.`C`.`id_col` is not null))) join `test`.`t1` `B` where (`test`.`B`.`id_col` = `test`.`C`.`id_col`)
+select A.id_col from (select C.id_col from t1 as C where C.id_col not in (select id_col from t2 AS D where D.id_col is not null)) A inner join t1 B on A.id_col = B.id_col;
+id_col
+drop table t1,t2;
+#
+# Item_func
+#
+set force_parallel_execute = 1;
+# Item_func_trim
+create table t1 (v varchar(10), c char(10), t text, key(v), key(c), key(t(10)));
+set @space=repeat(' ',10-9);
+set @char=char(ascii('a')+27-1);
+insert into t1 values(concat(@char,@space),concat(@char,@space),concat(@char,@space));
+set @space=repeat(' ',10-10);
+set @char=char(ascii('a')+27-1);
+insert into t1 values(concat(@char,@space),concat(@char,@space),concat(@char,@space));
+select /*+NO_PQ*/  sql_big_result TRIM(v),count(c) from t1 group by TRIM(v);
+TRIM(v)	count(c)
+{	2
+explain select /*+PQ(1)*/ sql_big_result TRIM(v),count(c) from t1 group by TRIM(v);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	v	NULL	NULL	NULL	#	#	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select /*+ PQ(@`select#1`) */ sql_big_result trim(`test`.`t1`.`v`) AS `TRIM(v)`,count(`test`.`t1`.`c`) AS `count(c)` from `test`.`t1` group by `TRIM(v)`
+select /*+PQ(1)*/ sql_big_result TRIM(v),count(c) from t1 group by TRIM(v);
+TRIM(v)	count(c)
+{	2
+drop table t1;
+# Item_func_numhybrid.
+CREATE TABLE t(id INT PRIMARY KEY,
+c1 INT, c2 INT, key(c2)) engine=InnoDB;
+INSERT INTO t(id, c1, c2) VALUES(1, 2, 3), (2, 3, 4), (3, 3, 4), (4, 3, 4);
+set force_parallel_execute = 1;
+explain SELECT (t1.id + 1) as c FROM t t1 INNER JOIN t t2 ON t1.id= 1 GROUP BY c;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t2)
+1	SIMPLE	t1	NULL	const	PRIMARY	PRIMARY	4	const	#	#	Using index
+1	SIMPLE	t2	NULL	index	NULL	c2	5	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select (`test`.`t1`.`id` + 1) AS `c` from `test`.`t` `t1` join `test`.`t` `t2` where true group by `c`
+drop table t;
+# Item_func_format
+create table t1 (col1 int, col2 decimal(60,30));
+insert into t1 values(1,1234567890.12345);
+select format(col2,7) from t1;
+format(col2,7)
+1,234,567,890.1234500
+drop table t1;
+# Item_func_in
+CREATE TABLE t1(n DECIMAL(39,19) NOT NULL, KEY(n));
+INSERT INTO t1 SET n=0;
+SELECT 1 FROM t1 WHERE n NOT IN(NULL, NULL);
+1
+DROP TABLE t1;
+CREATE TABLE t1(a char(24), b INT, c INT UNSIGNED, d DECIMAL(12,2), e REAL);
+INSERT INTO t1 VALUES('iynfj', 1, 1, 1, 1);
+INSERT INTO t1 VALUES('innfj', 2, 2, 2, 2);
+set debug='+d,cmp_item_row_clone_error';
+EXPLAIN SELECT SUM( DISTINCT e ) FROM t1 GROUP BY b,c,d HAVING (b,c,d) IN
+((AVG( 1 ), 1 + c, 1 + d), (AVG( 1 ), 2 + c, 2 + d));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select sum(distinct `test`.`t1`.`e`) AS `SUM( DISTINCT e )` from `test`.`t1` group by `test`.`t1`.`b`,`test`.`t1`.`c`,`test`.`t1`.`d` having ((`test`.`t1`.`b`,`test`.`t1`.`c`,`test`.`t1`.`d`) in ((avg(1),(1 + `test`.`t1`.`c`),(1 + `test`.`t1`.`d`)),(avg(1),(2 + `test`.`t1`.`c`),(2 + `test`.`t1`.`d`))))
+SELECT SUM( DISTINCT e ) FROM t1 GROUP BY b,c,d HAVING (b,c,d) IN
+((AVG( 1 ), 1 + c, 1 + d), (AVG( 1 ), 2 + c, 2 + d));
+SUM( DISTINCT e )
+set debug='-d,cmp_item_row_clone_error';
+DROP TABLE t1;
+# Item_func_monthname
+CREATE TABLE t1 (a DATE);
+INSERT INTO t1 VALUES
+('2006-01-01'),('2006-02-01'),('2006-03-01'),
+('2006-04-01'),('2006-05-01'),('2006-06-01'),
+('2006-07-01'),('2006-08-01'),('2006-09-01'),
+('2006-10-01'),('2006-11-01'),('2006-12-01');
+SELECT a, date_format(a,'%b') as abmon, monthname(a) as mon FROM t1 ORDER BY a;
+a	abmon	mon
+2006-01-01	Jan	January
+2006-02-01	Feb	February
+2006-03-01	Mar	March
+2006-04-01	Apr	April
+2006-05-01	May	May
+2006-06-01	Jun	June
+2006-07-01	Jul	July
+2006-08-01	Aug	August
+2006-09-01	Sep	September
+2006-10-01	Oct	October
+2006-11-01	Nov	November
+2006-12-01	Dec	December
+DROP TABLE t1;
+# Item_func_rand
+create table t1 (grp int, a bigint unsigned, c char(10) not null);
+insert into t1 values (1,1,"a");
+insert into t1 values (2,2,"b");
+insert into t1 values (2,3,"c");
+insert into t1 values (3,4,"E");
+insert into t1 values (3,5,"C");
+insert into t1 values (3,6,"D");
+select a from t1 where rand() < 1;
+a
+1
+2
+3
+4
+5
+6
+DROP TABLE t1;
+# Item_func_if
+CREATE TABLE t1 (st varchar(255) NOT NULL, u int(11) NOT NULL);
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO t1 VALUES ('a',1),('A',1),('aa',1),('AA',1),('a',1),('aaa',0),('BBB',0);
+select if(1,st,st) s from t1 order by s;
+s
+a
+A
+a
+aa
+AA
+aaa
+BBB
+DROP TABLE t1;
+# Item_func_case
+CREATE TABLE t1 (a INT, b INT);
+INSERT INTO t1 VALUES (1,1),(2,1),(3,2),(4,2),(5,3),(6,3);
+SELECT CASE WHEN AVG(a)>=0 THEN 'Positive' ELSE 'Negative' END FROM t1 GROUP BY b;
+CASE WHEN AVG(a)>=0 THEN 'Positive' ELSE 'Negative' END
+Positive
+Positive
+Positive
+DROP TABLE t1;
+CREATE TABLE t0 (c0 INT);
+EXPLAIN SELECT CASE 1 WHEN 1 THEN sec_to_time(t0.c0) END FROM t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (1 workers, test.t0)
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select (case 1 when 1 then sec_to_time(`test`.`t0`.`c0`) end) AS `CASE 1 WHEN 1 THEN sec_to_time(t0.c0) END` from `test`.`t0`
+SET DEBUG='+d,item_func_case_copy_error';
+EXPLAIN SELECT /*+ set_var(parallel_graceful_fallback=off) */ CASE 1 WHEN 1 THEN sec_to_time(t0.c0) END FROM t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Warning	8026	Failed to execute the query using parallel query, the query was restarted without parallel query.
+Note	1003	/* select#1 */ select /*+ SET_VAR(parallel_graceful_fallback='off') */ (case 1 when 1 then sec_to_time(`test`.`t0`.`c0`) end) AS `CASE 1 WHEN 1 THEN sec_to_time(t0.c0) END` from `test`.`t0`
+EXPLAIN SELECT /*+ set_var(parallel_graceful_fallback=on) */ CASE 1 WHEN 1 THEN sec_to_time(t0.c0) END FROM t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select /*+ SET_VAR(parallel_graceful_fallback='on') */ (case 1 when 1 then sec_to_time(`test`.`t0`.`c0`) end) AS `CASE 1 WHEN 1 THEN sec_to_time(t0.c0) END` from `test`.`t0`
+SET DEBUG='';
+DROP TABLE t0;
+# Item_func_min_max
+CREATE TABLE t1 (d varchar(6), k int);
+INSERT INTO t1 VALUES (NULL, 2);
+SELECT GREATEST(d,d) FROM t1 WHERE k=2;
+GREATEST(d,d)
+NULL
+DROP TABLE t1;
+CREATE TABLE t1 (dt2 DATETIME(2), t3 TIME(3), d DATE, ts TIMESTAMP(6), ref int AUTO_INCREMENT, PRIMARY KEY(ref));
+INSERT INTO t1(dt2,t3,d,ts) VALUES ('2001-01-01 00:00:00.12', '00:00:00.567', '2002-01-01', '2001-01-01 00:00:00.12');
+explain select LEAST(date(NULL), cast('101010' as date),'101210') from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select least(cast(NULL as date),cast('101010' as date),'101210') AS `LEAST(date(NULL), cast('101010' as date),'101210')` from `test`.`t1`
+select LEAST(date(NULL), cast('101010' as date),'101210') from t1;
+LEAST(date(NULL), cast('101010' as date),'101210')
+NULL
+drop table t1;
+# Item_typecast_decimal 
+create table t1 (ff double);
+insert into t1 values (2.2);
+select ff, cast(ff as decimal) from t1;
+ff	cast(ff as decimal)
+2.2	2
+# Item_typecast_real
+select ff, cast(ff as double) from t1;
+ff	cast(ff as double)
+2.2	2.2
+drop table t1;
+# Item_func_dayname
+CREATE TABLE t1(c1 DATE NOT NULL);
+INSERT INTO t1 VALUES('1000-01-01'),('1999-12-31'),('2000-01-01'),('2006-12-25'),('2008-02-29');
+SELECT DAYNAME(c1) FROM t1;
+DAYNAME(c1)
+Wednesday
+Friday
+Saturday
+Monday
+Friday
+drop table t1;
+# Issue1 : Item_func_ifnull
+CREATE TABLE t1 (a INT NOT NULL, b SMALLINT);
+INSERT INTO t1 VALUES (12,12);
+INSERT INTO t1 VALUES (13, 12);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+explain SELECT DISTINCT IFNULL(MAX(b),0) AS mx FROM t1 GROUP BY a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select distinct ifnull(max(`<temporary>`.`b`),0) AS `mx` from `test`.`t1` group by `test`.`t1`.`a`
+SELECT DISTINCT IFNULL(MAX(b),0) AS mx FROM t1 GROUP BY a;
+mx
+12
+drop table t1;
+# Item_sum
+create table t1 (
+period    int not null,
+name      char(32) not null,
+companynr int not null,
+price     double(11,0),
+price2     double(11,0),
+key (period),
+key (name)
+);
+Warnings:
+Warning	1681	Specifying number of digits for floating point data types is deprecated and will be removed in a future release.
+Warning	1681	Specifying number of digits for floating point data types is deprecated and will be removed in a future release.
+explain select count(price) + count(price) as avg from t1 having avg > 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select (count(`<temporary>`.`count(t1.price)`) + count(`<temporary>`.`count(t1.price)`)) AS `avg` from `test`.`t1` having (`avg` > 1)
+select count(price) + count(price) as avg from t1 having avg > 1;
+avg
+drop table t1;
+# in_vector
+CREATE TABLE tbl_1_all_type2index (
+id_col int NOT NULL AUTO_INCREMENT,
+bool_col tinyint(1) DEFAULT NULL,
+smallint_col smallint DEFAULT NULL,
+PRIMARY KEY (`id_col`)
+);
+CREATE TABLE tbl_1_all_type2index_desc (
+id_col int NOT NULL AUTO_INCREMENT,
+bool_col tinyint(1) DEFAULT NULL,
+smallint_col smallint DEFAULT NULL,
+PRIMARY KEY (`id_col`)
+);
+insert into tbl_1_all_type2index(bool_col, smallint_col) values(0,1),(0,1),(0,1);
+insert into tbl_1_all_type2index_desc(bool_col, smallint_col) values(0,1),(0,1),(0,1);
+explain SELECT 1 FROM tbl_1_all_type2index B RIGHT JOIN tbl_1_all_type2index_desc C ON ((C.smallint_col, B.bool_col) IN  ((CAST(1 AS TIME),'0'),(CAST(32767 AS TIME),'1'),(CAST(-32768 AS TIME),'2'),(CAST(NULL AS TIME),NULL))) limit 10;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.B, test.C)
+1	SIMPLE	C	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+1	SIMPLE	B	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using join buffer (hash join)
+Warnings:
+Warning	1292	Truncated incorrect time value: '32767'
+Warning	1292	Truncated incorrect time value: '-32768'
+Warning	1292	Truncated incorrect time value: '32767'
+Warning	1292	Truncated incorrect time value: '-32768'
+Note	1003	/* select#1 */ select 1 AS `1` from `test`.`tbl_1_all_type2index_desc` `C` left join `test`.`tbl_1_all_type2index` `B` on(((`test`.`C`.`smallint_col`,`test`.`B`.`bool_col`) in ((cast(1 as time),'0'),(cast(32767 as time),'1'),(cast(-(32768) as time),'2'),(cast(NULL as time),NULL)))) where true limit 10
+SELECT 1 FROM tbl_1_all_type2index B RIGHT JOIN tbl_1_all_type2index_desc C ON ((C.smallint_col, B.bool_col) IN  ((CAST(1 AS TIME),'0'),(CAST(32767 AS TIME),'1'),(CAST(-32768 AS TIME),'2'),(CAST(NULL AS TIME),NULL))) limit 10;
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+Warnings:
+Warning	1292	Truncated incorrect time value: '32767'
+Warning	1292	Truncated incorrect time value: '-32768'
+Warning	1292	Truncated incorrect time value: '32767'
+Warning	1292	Truncated incorrect time value: '-32768'
+Warning	1292	Truncated incorrect time value: '32767'
+Warning	1292	Truncated incorrect time value: '-32768'
+Warning	1292	Truncated incorrect time value: '32767'
+Warning	1292	Truncated incorrect time value: '-32768'
+drop table tbl_1_all_type2index, tbl_1_all_type2index_desc;
+create table t1 (
+id_col int not null auto_increment,
+b_col tinyint(1),
+sint_col smallint default 0,
+c_col varchar(24) default "hello",
+dec_col decimal(10,8) NOT NULL DEFAULT '3.14159200',
+dou_col double not null default '2.8',
+PRIMARY KEY (`id_col`)
+);
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+insert into t1(b_col, sint_col, c_col, dec_col, dou_col) values(1, 1, 'a', 1.1, 1.2), (2, 2, 'b', 2.1, 2.2), (3, 3, 'c', 3.1, 3.2), (4, 4, 'd', 4.1, 4.2);
+explain select sint_col from t1 where sint_col in (1,2,5,6,7,8);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`sint_col` AS `sint_col` from `test`.`t1` where (`test`.`t1`.`sint_col` in (1,2,5,6,7,8))
+select sint_col from t1 where sint_col in (1,2,5,6,7,8);
+sint_col
+1
+2
+explain select c_col from t1 where c_col in ('a','b','c',"fes","fes");
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`c_col` AS `c_col` from `test`.`t1` where (`test`.`t1`.`c_col` in ('a','b','c','fes','fes'))
+select c_col from t1 where c_col in ('a','b','c',"fes","fes");
+c_col
+a
+b
+c
+explain select dec_col from t1 where dec_col in (1.1, 1.231, 12.12, 12.13131);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dec_col` AS `dec_col` from `test`.`t1` where (`test`.`t1`.`dec_col` in (1.1,1.231,12.12,12.13131))
+select dec_col from t1 where dec_col in (1.1, 1.231, 12.12, 12.13131);
+dec_col
+1.10000000
+explain select dou_col from t1 where dou_col in (1.1, 1.231, 12.12, 12.13131);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dou_col` AS `dou_col` from `test`.`t1` where (`test`.`t1`.`dou_col` in (1.1,1.231,12.12,12.13131))
+select dou_col from t1 where dec_col in (1.1, 1.231, 12.12, 12.13131);
+dou_col
+1.2
+drop table t1;
+# Item_func_from_unixtime
+CREATE TABLE t (a TIME);
+CREATE TABLE s (b INT);
+INSERT INTO t VALUES('11:11:11.1111'),('22:22:22.2222');
+INSERT INTO t VALUES('11:11:11.1111'),('22:22:22.2222');
+INSERT INTO t VALUES('11:11:11.1111'),('22:22:22.2222');
+INSERT INTO s VALUES(1),(2),(3),(4);
+EXPLAIN SELECT 1 FROM t WHERE NOT EXISTS
+(
+SELECT 1 FROM s
+WHERE a=FROM_UNIXTIME(1536999178)
+);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t)
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+1	SIMPLE	<subquery2>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	8	test.t.a	#	#	Using where; Not exists
+2	MATERIALIZED	s	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1276	Field or reference 'test.t.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select 1 AS `1` from `test`.`t` anti join (`test`.`s`) on((`test`.`t`.`a` = '11:12:58')) where true
+SELECT 1 FROM t WHERE NOT EXISTS
+(
+SELECT 1 FROM s
+WHERE a=FROM_UNIXTIME(1536999178)
+);
+1
+1
+1
+1
+1
+1
+1
+DROP TABLE t,s;
+# Item_func_at_time_zone
+create table t(ts0 TIMESTAMP primary key, ts1 TIMESTAMP(1), ts2 TIMESTAMP(3), ts3 TIMESTAMP(6));
+insert into t values ("2002-01-10 12:23:34.1234567", "2002-01-10 12:23:34.1234567", "2002-01-10 12:23:34.1234567", "2002-01-10 12:23:34.1234567");
+insert into t values ("1997-10-12 22:33:11", "1997-10-12 22:33:11", "1997-10-12 22:33:11", "1997-10-12 22:33:11");
+explain SELECT cast(ts0 AT TIME ZONE '+00:00' as datetime) from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t)
+1	SIMPLE	t	NULL	index	NULL	PRIMARY	4	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select cast(time_zone(`test`.`t`.`ts0`) as datetime) AS `cast(ts0 AT TIME ZONE '+00:00' as datetime)` from `test`.`t`
+SELECT cast(ts0 AT TIME ZONE '+00:00' as datetime) from t;
+cast(ts0 AT TIME ZONE '+00:00' as datetime)
+1997-10-12 19:33:11
+2002-01-10 09:23:34
+drop table t;
+# Item_date_add_interval
+create table t1 (a int, b varchar(10));
+insert into t1 values (1, '2001-01-01'),(2, '2002-02-02');
+explain select '2007-01-01' + interval a day from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select ('2007-01-01' + interval `test`.`t1`.`a` day) AS `'2007-01-01' + interval a day` from `test`.`t1`
+select '2007-01-01' + interval a day from t1;
+'2007-01-01' + interval a day
+2007-01-02
+2007-01-03
+explain select b + interval a day from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select (`test`.`t1`.`b` + interval `test`.`t1`.`a` day) AS `b + interval a day` from `test`.`t1`
+select b + interval a day from t1;
+b + interval a day
+2001-01-02
+2002-02-04
+drop table t1;
+# Item_func_regexp
+create table t1 (
+subject char(10),
+pattern char(10)
+);
+explain select regexp_instr( subject, pattern ) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select regexp_instr(`test`.`t1`.`subject`,`test`.`t1`.`pattern`) AS `regexp_instr( subject, pattern )` from `test`.`t1`
+select regexp_instr( subject, pattern ) from t1;
+regexp_instr( subject, pattern )
+drop table t1;
+create table t1 ( a char ( 10 ), b char ( 10 ) );
+insert into t1 values( NULL, 'abc' );
+insert into t1 values( 'def', NULL );
+explain select a, b, regexp_like( a, b ) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,regexp_like(`test`.`t1`.`a`,`test`.`t1`.`b`) AS `regexp_like( a, b )` from `test`.`t1`
+select a, b, regexp_like( a, b ) from t1;
+a	b	regexp_like( a, b )
+NULL	abc	NULL
+def	NULL	NULL
+drop table t1;
+# Item_name_const
+create table t1 (a int);
+insert into t1 values (1),(2),(3);
+explain select NAME_CONST('flag',1)    * MAX(a) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select (NAME_CONST('flag',1) * max(`<temporary>`.`max(t1.a)`)) AS `NAME_CONST('flag',1)    * MAX(a)` from `test`.`t1`
+select NAME_CONST('flag',1)    * MAX(a) from t1;
+NAME_CONST('flag',1)    * MAX(a)
+3
+select NAME_CONST('flag',1.5)  * MAX(a) from t1;
+NAME_CONST('flag',1.5)  * MAX(a)
+4.5
+select NAME_CONST('flag',-1)   * MAX(a) from t1;
+NAME_CONST('flag',-1)   * MAX(a)
+-3
+select NAME_CONST('flag',-1.5) * MAX(a) from t1;
+NAME_CONST('flag',-1.5) * MAX(a)
+-4.5
+set debug='+d,name_const_refix_error';
+set parallel_fail_retry=OFF;
+select /*+ set_var(parallel_graceful_fallback=off) */ NAME_CONST('flag',-1.5) * MAX(a) from t1;
+ERROR HY000: Failed to parallel execute. this SQL is not supported.
+set parallel_fail_retry=ON;
+select /*+ set_var(parallel_graceful_fallback=off) */ NAME_CONST('flag',-1.5) * MAX(a) from t1;
+NAME_CONST('flag',-1.5) * MAX(a)
+-4.5
+Warnings:
+Warning	8026	Failed to execute the query using parallel query, the query was restarted without parallel query.
+select /*+ set_var(parallel_graceful_fallback=on) */ NAME_CONST('flag',-1.5) * MAX(a) from t1;
+NAME_CONST('flag',-1.5) * MAX(a)
+-4.5
+set debug='-d,name_const_refix_error';
+drop table t1;
+# Item_default_value
+create table t1(str varchar(10) default 'def',strnull varchar(10),intg int default '10',rel double default '3.14');
+insert into t1 values ('','',0,0.0);
+analyze table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+explain select default(str), default(strnull), default(intg), default(rel) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select default(`test`.`t1`.`str`) AS `default(str)`,default(`test`.`t1`.`strnull`) AS `default(strnull)`,default(`test`.`t1`.`intg`) AS `default(intg)`,default(`test`.`t1`.`rel`) AS `default(rel)` from `test`.`t1`
+select default(str), default(strnull), default(intg), default(rel) from t1;
+default(str)	default(strnull)	default(intg)	default(rel)
+def	NULL	10	3.14
+drop table t1;
+# Item_func_like
+create table t2(a int, key(a));
+insert into t2 values (1),(2);
+create table t1(b int, primary key(b));
+insert into t1 values (0),(254);
+explain select 1 from t2 where a like
+(select  EXPORT_SET(1, b, b, b, b) from t1 LIMIT 1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t2)
+1	SIMPLE	t2	NULL	index	a	a	5	NULL	#	#	Using where; Using index
+2	SUBQUERY	t1	NULL	index	NULL	PRIMARY	4	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select 1 AS `1` from `test`.`t2` where (`test`.`t2`.`a` like (/* select#2 */ select export_set(1,`test`.`t1`.`b`,`test`.`t1`.`b`,`test`.`t1`.`b`,`test`.`t1`.`b`) from `test`.`t1` limit 1))
+select 1 from t2 where a like
+(select  EXPORT_SET(1, b, b, b, b) from t1 LIMIT 1);
+1
+set debug='+d,item_func_like_refix_error';
+select /*+ set_var(parallel_graceful_fallback=off) */ 1 from t2 where a like
+(select  EXPORT_SET(1, b, b, b, b) from t1 LIMIT 1);
+1
+Warnings:
+Warning	8026	Failed to execute the query using parallel query, the query was restarted without parallel query.
+select /*+ set_var(parallel_graceful_fallback=on) */ 1 from t2 where a like
+(select  EXPORT_SET(1, b, b, b, b) from t1 LIMIT 1);
+1
+set debug='-d,item_func_like_refix_error';
+drop table t1, t2;
+# Item_func_field
+create table t1 (id int auto_increment primary key,aika varchar(40),aikakentta  timestamp);
+insert into t1 (aika) values ('Keskiviikko');
+insert into t1 (aika) values ('Tiistai');
+insert into t1 (aika) values ('Maanantai');
+insert into t1 (aika) values ('Sunnuntai');
+explain select FIELD(SUBSTRING(t1.aika,1,2),'Ma','Ti','Ke','To','Pe','La','Su') as test from t1 order by test;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select field(substr(`test`.`t1`.`aika`,1,2),'Ma','Ti','Ke','To','Pe','La','Su') AS `test` from `test`.`t1` order by `test`
+select FIELD(SUBSTRING(t1.aika,1,2),'Ma','Ti','Ke','To','Pe','La','Su') as test from t1 order by test;
+test
+1
+2
+3
+7
+drop table t1;
+# Item_func_find_in_set
+create table t1 (
+access_id int not null default '0',
+name varchar(20) default null,
+`rank` int not null default '0',
+key idx (access_id)
+);
+create table t2 (
+faq_group_id int not null default '0',
+faq_id int not null default '0',
+access_id int default null,
+unique key idx1 (faq_id),
+key idx2 (faq_group_id,faq_id)
+);
+insert into t1 values (1,'Everyone',2),(2,'Help',3),(3,'Technical Support',1),(4,'Chat User',4);
+insert into t2 values (261,265,1),(490,494,1);
+analyze table t1,t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+explain select t2.faq_id
+from t1 inner join t2 ignore index (idx1)
+on (t1.access_id = t2.access_id)
+left join t2 t
+on (t.faq_group_id = t2.faq_group_id and
+find_in_set(t.access_id, '1,4') < find_in_set(t2.access_id, '1,4'))
+where
+t2.access_id in (1,4) and t.access_id is null and t2.faq_id in (265);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t2)
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+1	SIMPLE	t1	NULL	ref	idx	idx	4	test.t2.access_id	#	#	Using index
+1	SIMPLE	t	NULL	ref	idx2	idx2	4	test.t2.faq_group_id	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`faq_id` AS `faq_id` from `test`.`t1` join `test`.`t2` IGNORE INDEX (`idx1`) left join `test`.`t2` `t` on(((`test`.`t`.`faq_group_id` = `test`.`t2`.`faq_group_id`) and (find_in_set(`test`.`t`.`access_id`,'1,4') < find_in_set(`test`.`t2`.`access_id`,'1,4')))) where ((`test`.`t1`.`access_id` = `test`.`t2`.`access_id`) and (`test`.`t2`.`faq_id` = 265) and (`test`.`t2`.`access_id` in (1,4)) and (`test`.`t`.`access_id` is null))
+select t2.faq_id
+from t1 inner join t2 ignore index (idx1)
+on (t1.access_id = t2.access_id)
+left join t2 t
+on (t.faq_group_id = t2.faq_group_id and
+find_in_set(t.access_id, '1,4') < find_in_set(t2.access_id, '1,4'))
+where
+t2.access_id in (1,4) and t.access_id is null and t2.faq_id in (265);
+faq_id
+265
+drop table t1,t2;
+# Item_func_soundex
+create table t1 (id integer, a varchar(100) character set utf8 collate utf8_unicode_ci);
+Warnings:
+Warning	3719	'utf8' is currently an alias for the character set UTF8MB3, but will be an alias for UTF8MB4 in a future release. Please consider using UTF8MB4 in order to be unambiguous.
+Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
+insert into t1 values (1, 'Test');
+explain select * from t1 where soundex(a) = soundex('Test');
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a` from `test`.`t1` where (soundex(`test`.`t1`.`a`) = <cache>(convert(soundex('Test') using utf8mb3)))
+select * from t1 where soundex(a) = soundex('Test');
+id	a
+1	Test
+select * from t1 where soundex(a) = soundex('TEST');
+id	a
+1	Test
+select * from t1 where soundex(a) = soundex('test');
+id	a
+1	Test
+drop table t1;
+# Issue2 : cmp.clone must be called in Item_bool_func2::refix_fields and not in pq clone.
+CREATE TABLE t1 (
+a int NOT NULL,
+b char(10) NOT NULL
+);
+CREATE TABLE t2 (
+a int NOT NULL,
+b char(10) NOT NULL
+);
+INSERT INTO t1 values (1, 'a'), (2, 'b'), (3, 'c'), (3, 'c'), (4, 'd'), (5, 'f'), (6, 'e'),(8,'h'),(0,'j');
+INSERT INTO t2 values (3, 'c'), (4, 'd'), (5, 'f'), (6, 'e'), (1, 'a'), (2, 'b'), (7, 'g'),(0,'i');
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+ANALYZE TABLE t2;
+Table	Op	Msg_type	Msg_text
+test.t2	analyze	status	OK
+SET @saved_pq_support_features_switch = @@session.pq_support_features_switch;
+set pq_support_features_switch='correlated_subquery=on';
+explain select a, (1,2)=(select count(b) cc, max(b) from t2 where 0=t1.a*0 having 0*cc<10) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,((1,2) = (/* select#2 */ select count(0) AS `cc`,max(`test`.`t2`.`b`) from `test`.`t2` where (0 = (`test`.`t1`.`a` * 0)) having ((0 * `cc`) < 10))) AS `(1,2)=(select count(b) cc, max(b) from t2 where 0=t1.a*0 having 0*cc<10)` from `test`.`t1`
+select a, (1,2)=(select count(b) cc, max(b) from t2 where 0=t1.a*0 having 0*cc<10) from t1;
+a	(1,2)=(select count(b) cc, max(b) from t2 where 0=t1.a*0 having 0*cc<10)
+1	0
+2	0
+3	0
+3	0
+4	0
+5	0
+6	0
+8	0
+0	0
+set debug='+d,arg_comparator_clone_error';
+explain select /*+ set_var(parallel_graceful_fallback=off) */ a, (1,2)=(select count(b) cc, max(b) from t2 where 0=t1.a*0 having 0*cc<10) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Warning	8026	Failed to execute the query using parallel query, the query was restarted without parallel query.
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select /*+ SET_VAR(parallel_graceful_fallback='off') */ `test`.`t1`.`a` AS `a`,((1,2) = (/* select#2 */ select count(0) AS `cc`,max(`test`.`t2`.`b`) from `test`.`t2` where (0 = (`test`.`t1`.`a` * 0)) having ((0 * `cc`) < 10))) AS `(1,2)=(select count(b) cc, max(b) from t2 where 0=t1.a*0 having 0*cc<10)` from `test`.`t1`
+select /*+ set_var(parallel_graceful_fallback=off) */ a, (1,2)=(select count(b) cc, max(b) from t2 where 0=t1.a*0 having 0*cc<10) from t1;
+a	(1,2)=(select count(b) cc, max(b) from t2 where 0=t1.a*0 having 0*cc<10)
+1	0
+2	0
+3	0
+3	0
+4	0
+5	0
+6	0
+8	0
+0	0
+Warnings:
+Warning	8026	Failed to execute the query using parallel query, the query was restarted without parallel query.
+explain select /*+ set_var(parallel_graceful_fallback=on) */ a, (1,2)=(select count(b) cc, max(b) from t2 where 0=t1.a*0 having 0*cc<10) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	NULL
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select /*+ SET_VAR(parallel_graceful_fallback='on') */ `test`.`t1`.`a` AS `a`,((1,2) = (/* select#2 */ select count(0) AS `cc`,max(`test`.`t2`.`b`) from `test`.`t2` where (0 = (`test`.`t1`.`a` * 0)) having ((0 * `cc`) < 10))) AS `(1,2)=(select count(b) cc, max(b) from t2 where 0=t1.a*0 having 0*cc<10)` from `test`.`t1`
+select /*+ set_var(parallel_graceful_fallback=on) */ a, (1,2)=(select count(b) cc, max(b) from t2 where 0=t1.a*0 having 0*cc<10) from t1;
+a	(1,2)=(select count(b) cc, max(b) from t2 where 0=t1.a*0 having 0*cc<10)
+1	0
+2	0
+3	0
+3	0
+4	0
+5	0
+6	0
+8	0
+0	0
+set debug='';
+drop table t1,t2;
+# Item_subselect
+CREATE TABLE a (col_varchar_key varchar(1));
+SET optimizer_switch='subquery_to_derived=off';
+SELECT table1.col_varchar_key
+FROM ( SELECT sub1_t2.*
+FROM (a
+JOIN
+(a AS sub1_t2)
+ON sub1_t2.col_varchar_key IN (SELECT col_varchar_key FROM a))
+WHERE EXISTS (SELECT sub2_t1.col_varchar_key
+FROM a AS sub2_t1))  AS table1
+JOIN
+(a AS table2
+JOIN
+a
+ON 1 >= (SELECT MIN( col_varchar_key) FROM a))
+ON true;
+col_varchar_key
+EXPLAIN SELECT table1.col_varchar_key
+FROM ( SELECT sub1_t2.*
+FROM (a
+JOIN
+(a AS sub1_t2)
+ON sub1_t2.col_varchar_key IN (SELECT col_varchar_key FROM a))
+WHERE EXISTS (SELECT sub2_t1.col_varchar_key
+FROM a AS sub2_t1))  AS table1
+JOIN
+(a AS table2
+JOIN
+a
+ON 1 >= (SELECT MIN( col_varchar_key) FROM a))
+ON true;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	NULL	NULL	NULL	NULL	NULL	NULL	NULL	#	#	Impossible WHERE
+5	SUBQUERY	<gather5>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.a)
+5	SIMPLE	a	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`sub1_t2`.`col_varchar_key` AS `col_varchar_key` from `test`.`a` join `test`.`a` `sub1_t2` semi join (`test`.`a`) semi join (`test`.`a` `sub2_t1`) join `test`.`a` `table2` join `test`.`a` where false
+SET optimizer_switch='subquery_to_derived=on';
+SELECT table1.col_varchar_key
+FROM ( SELECT sub1_t2.*
+FROM (a
+JOIN
+(a AS sub1_t2)
+ON sub1_t2.col_varchar_key IN (SELECT col_varchar_key FROM a))
+WHERE EXISTS (SELECT sub2_t1.col_varchar_key
+FROM a AS sub2_t1))  AS table1
+JOIN
+(a AS table2
+JOIN
+a
+ON 1 >= (SELECT MIN( col_varchar_key) FROM a))
+ON true;
+col_varchar_key
+EXPLAIN SELECT table1.col_varchar_key
+FROM ( SELECT sub1_t2.*
+FROM (a
+JOIN
+(a AS sub1_t2)
+ON sub1_t2.col_varchar_key IN (SELECT col_varchar_key FROM a))
+WHERE EXISTS (SELECT sub2_t1.col_varchar_key
+FROM a AS sub2_t1))  AS table1
+JOIN
+(a AS table2
+JOIN
+a
+ON 1 >= (SELECT MIN( col_varchar_key) FROM a))
+ON true;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	a	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+1	PRIMARY	sub1_t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using join buffer (hash join)
+1	PRIMARY	sub2_t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	FirstMatch(sub1_t2); Using join buffer (hash join)
+1	PRIMARY	a	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; FirstMatch(sub2_t1); Using join buffer (hash join)
+1	PRIMARY	table2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using join buffer (hash join)
+1	PRIMARY	a	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using join buffer (hash join)
+1	PRIMARY	<derived5>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using join buffer (hash join)
+5	DERIVED	<gather5>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.a)
+5	SIMPLE	a	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`sub1_t2`.`col_varchar_key` AS `col_varchar_key` from `test`.`a` join `test`.`a` `sub1_t2` semi join (`test`.`a`) semi join (`test`.`a` `sub2_t1`) join `test`.`a` `table2` join (/* select#5 */ select min(`test`.`a`.`col_varchar_key`) AS `MIN( col_varchar_key)` from `test`.`a` having (1 >= min(`<temporary>`.`MIN( col_varchar_key)`))) `derived_1_5` join `test`.`a` where (`test`.`a`.`col_varchar_key` = `test`.`sub1_t2`.`col_varchar_key`)
+drop table a;
+# Test : cmp_item
+create table t1 (a char(5), b char(5));
+insert into t1 values (NULL,'aaa'), ('aaa','aaa');
+explain select * from t1 where (a,b) in (('aaa','aaa'), ('aaa','bbb'));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a`,`test`.`t1`.`b`) in (('aaa','aaa'),('aaa','bbb')))
+select * from t1 where (a,b) in (('aaa','aaa'), ('aaa','bbb'));
+a	b
+aaa	aaa
+drop table t1;
+create table t1 (a time, key(a));
+insert into t1 values (),(),(),(),(),(),(),(),(),();
+explain select a from t1 where a not in (a,a,a) group by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	index	a	a	4	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` where (`test`.`t1`.`a` not in (`test`.`t1`.`a`,`test`.`t1`.`a`,`test`.`t1`.`a`)) group by `test`.`t1`.`a`
+select a from t1 where a not in (a,a,a) group by a;
+a
+drop table t1;
+# Test : Arg_comparator::clone
+create table t1 (field DATE);
+insert into t1 values ('2006-11-06');
+explain select * from t1 where CAST(field as DATETIME) < '2006-11-06 04:08:36.0';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`field` AS `field` from `test`.`t1` where (cast(`test`.`t1`.`field` as datetime) < '2006-11-06 04:08:36.0')
+select * from t1 where CAST(field as DATETIME) < '2006-11-06 04:08:36.0';
+field
+2006-11-06
+explain select * from t1 where CAST(field as DATE) < '2006-11-06 04:08:36.0';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`field` AS `field` from `test`.`t1` where (cast(`test`.`t1`.`field` as date) < '2006-11-06 04:08:36.0')
+select * from t1 where CAST(field as DATE) < '2006-11-06 04:08:36.0';
+field
+2006-11-06
+drop table t1;
+# Test: statement_digest func
+create table t1(id int, name char(10));
+insert into t1 values(3, 'aaa');
+explain select statement_digest('select * from t1') from t1 where id = 3;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select statement_digest('select * from t1') AS `statement_digest('select * from t1')` from `test`.`t1` where (`test`.`t1`.`id` = 3)
+select statement_digest('select * from t1') from t1 where id = 3;
+statement_digest('select * from t1')
+533c0a9cf0cf92d2c26e7fe8821735eb4a72c409aaca24f9f281d137427bfa9a
+drop table t1;
+set sql_mode=default;
+set parallel_cost_threshold=default;
+set parallel_default_dop=default;
+set parallel_rows_threshold=default;
+set force_parallel_execute=default;
+set optimizer_switch=default;
+set pq_support_features_switch = @saved_pq_support_features_switch;
+set parallel_fail_retry=default;

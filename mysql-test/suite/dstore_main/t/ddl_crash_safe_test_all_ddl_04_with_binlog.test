@@ -1,0 +1,485 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+--source include/big_test.inc
+
+--echo #
+--echo #  DDL CRASH SAFE TEST: ALL DDL TEST PART 04
+--echo #  This test will check whether the server can recovery from different
+--echo #  phases of ALL DDLs without inconsistency between dstore and
+--echo #  innodb. Each DDL will be tested at 3 crash points and recovery
+--echo #  results will be verified.
+--echo #
+
+CREATE DATABASE test_ddl_crash_comprehensive;
+USE test_ddl_crash_comprehensive;
+
+CREATE USER 'testuser_crash'@'localhost' IDENTIFIED BY 'password';
+
+--echo #  30. Crash on CREATE ROLE statement.
+--echo #  30.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE ROLE 'role_crash';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify role should not exist
+SELECT COUNT(*) AS role_count FROM mysql.user WHERE USER='role_crash';
+
+--echo #  30.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE ROLE 'role_crash';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify role should not exist
+SELECT COUNT(*) AS role_count FROM mysql.user WHERE USER='role_crash';
+
+--echo #  30.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+CREATE ROLE 'role_crash';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify role should exist
+SELECT COUNT(*) AS role_count FROM mysql.user WHERE USER='role_crash';
+SELECT USER FROM mysql.user WHERE USER='role_crash';
+
+--echo #  31. Crash on GRANT statement.
+--echo #  31.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+GRANT SELECT ON test_ddl_crash_comprehensive.* TO 'role_crash';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify grant should not exist
+SELECT COUNT(*) AS grant_count FROM mysql.db WHERE User='role_crash' AND Db='test_ddl_crash_comprehensive';
+
+--echo #  31.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+GRANT SELECT ON test_ddl_crash_comprehensive.* TO 'role_crash';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify grant should not exist
+SELECT COUNT(*) AS grant_count FROM mysql.db WHERE User='role_crash' AND Db='test_ddl_crash_comprehensive';
+
+--echo #  31.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+GRANT SELECT ON test_ddl_crash_comprehensive.* TO 'role_crash';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify grant should exist
+SELECT COUNT(*) AS grant_count FROM mysql.db WHERE User='role_crash' AND Db='test_ddl_crash_comprehensive';
+
+--echo #  32. Crash on GRANT ROLE statement.
+--echo #  32.1 Crash before InnoDB prepare.
+ALTER USER 'testuser_crash'@'localhost' ACCOUNT UNLOCK;
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+GRANT 'role_crash' TO 'testuser_crash'@'localhost';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify role grant should not exist
+SELECT COUNT(*) AS role_edge_count FROM mysql.role_edges WHERE FROM_USER='role_crash';
+
+--echo #  32.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+GRANT 'role_crash' TO 'testuser_crash'@'localhost';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify role grant should not exist
+SELECT COUNT(*) AS role_edge_count FROM mysql.role_edges WHERE FROM_USER='role_crash';
+
+--echo #  32.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+GRANT 'role_crash' TO 'testuser_crash'@'localhost';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify role grant should exist
+SELECT COUNT(*) AS role_edge_count FROM mysql.role_edges WHERE FROM_USER='role_crash';
+SELECT TO_USER FROM mysql.role_edges WHERE FROM_USER='role_crash';
+
+--echo #  33. Crash on REVOKE statement.
+--echo #  33.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+REVOKE SELECT ON test_ddl_crash_comprehensive.* FROM 'role_crash';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify grant should still exist
+SELECT COUNT(*) AS grant_count FROM mysql.db WHERE User='role_crash' AND Db='test_ddl_crash_comprehensive';
+
+--echo #  33.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+REVOKE SELECT ON test_ddl_crash_comprehensive.* FROM 'role_crash';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify grant should still exist
+SELECT COUNT(*) AS grant_count FROM mysql.db WHERE User='role_crash' AND Db='test_ddl_crash_comprehensive';
+
+--echo #  33.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+REVOKE SELECT ON test_ddl_crash_comprehensive.* FROM 'role_crash';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify grant should be revoked
+SELECT COUNT(*) AS grant_count FROM mysql.db WHERE User='role_crash' AND Db='test_ddl_crash_comprehensive';
+
+--echo #  34. Crash on REVOKE ROLE statement.
+--echo #  34.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+REVOKE 'role_crash' FROM 'testuser_crash'@'localhost';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify role grant should still exist
+SELECT COUNT(*) AS role_edge_count FROM mysql.role_edges WHERE FROM_USER='role_crash';
+
+--echo #  34.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+REVOKE 'role_crash' FROM 'testuser_crash'@'localhost';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify role grant should still exist
+SELECT COUNT(*) AS role_edge_count FROM mysql.role_edges WHERE FROM_USER='role_crash';
+
+--echo #  34.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+REVOKE 'role_crash' FROM 'testuser_crash'@'localhost';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify role grant should be revoked
+SELECT COUNT(*) AS role_edge_count FROM mysql.role_edges WHERE FROM_USER='role_crash';
+
+--echo #  35. Crash on RENAME USER statement.
+--echo #  35.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+RENAME USER 'testuser_crash'@'localhost' TO 'newuser_crash'@'localhost';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify old user name should still exist
+SELECT COUNT(*) AS old_user_count FROM mysql.user WHERE USER='testuser_crash';
+SELECT COUNT(*) AS new_user_count FROM mysql.user WHERE USER='newuser_crash';
+
+--echo #  35.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+RENAME USER 'testuser_crash'@'localhost' TO 'newuser_crash'@'localhost';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify old user name should still exist
+SELECT COUNT(*) AS old_user_count FROM mysql.user WHERE USER='testuser_crash';
+SELECT COUNT(*) AS new_user_count FROM mysql.user WHERE USER='newuser_crash';
+
+--echo #  35.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+RENAME USER 'testuser_crash'@'localhost' TO 'newuser_crash'@'localhost';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify user should be renamed
+SELECT COUNT(*) AS old_user_count FROM mysql.user WHERE USER='testuser_crash';
+SELECT COUNT(*) AS new_user_count FROM mysql.user WHERE USER='newuser_crash';
+SELECT USER FROM mysql.user WHERE USER LIKE '%user_crash';
+
+--echo #  36. Crash on CREATE DATABASE statement.
+--let $MYSQLD_DATADIR= `select @@datadir`
+--echo #  36.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE DATABASE db_crash_test;
+
+# From MySQL Reference Manual: DROP DATABASE is atomic if all tables use a storage
+# engine which supports atomic DDL. The statement either drops all objects successfully
+# or is rolled back. You should be aware that removal of the database directory from
+# the file system occurs last and is not part of the atomic operation; thus, if removal
+# of the database directory fails due to a file system error or server halt, the DROP
+# DATABASE transaction is not rolled back.
+--rmdir $MYSQLD_DATADIR/db_crash_test
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify database should not exist
+SELECT COUNT(*) AS db_count FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='db_crash_test';
+
+--echo #  36.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE DATABASE db_crash_test;
+
+--rmdir $MYSQLD_DATADIR/db_crash_test
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify database should not exist
+SELECT COUNT(*) AS db_count FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='db_crash_test';
+
+--echo #  36.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+CREATE DATABASE db_crash_test;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify database should exist
+SELECT COUNT(*) AS db_count FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='db_crash_test';
+SHOW DATABASES LIKE 'db_crash_test';
+
+--echo #  37. Crash on ALTER DATABASE statement.
+--echo #  37.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+ALTER DATABASE db_crash_test CHARACTER SET = latin1;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify database charset should not be changed
+SELECT DEFAULT_CHARACTER_SET_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='db_crash_test';
+
+--echo #  37.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+ALTER DATABASE db_crash_test CHARACTER SET = latin1;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify database charset should not be changed
+SELECT DEFAULT_CHARACTER_SET_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='db_crash_test';
+
+--echo #  37.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+ALTER DATABASE db_crash_test CHARACTER SET = latin1;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify database charset should be changed
+SELECT DEFAULT_CHARACTER_SET_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='db_crash_test';
+
+CREATE TABLE t_ddl_crash_ctas(pk INT PRIMARY KEY, col1 INT);
+
+--echo #  38. Crash on DROP TABLE statement.
+--echo #  38.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+DROP TABLE t_ddl_crash_ctas;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify table should still exist
+SELECT COUNT(*) AS table_count FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='t_ddl_crash_ctas';
+SHOW CREATE TABLE t_ddl_crash_ctas;
+
+--echo #  38.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+DROP TABLE t_ddl_crash_ctas;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify table should still exist
+SELECT COUNT(*) AS table_count FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='t_ddl_crash_ctas';
+SHOW CREATE TABLE t_ddl_crash_ctas;
+
+--echo #  38.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+DROP TABLE t_ddl_crash_ctas;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify table should be dropped
+SELECT COUNT(*) AS table_count FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='t_ddl_crash_ctas';
+--error ER_NO_SUCH_TABLE
+SHOW CREATE TABLE t_ddl_crash_ctas;
+
+--echo #  39. Crash on DROP DATABASE statement.
+--echo #  39.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+DROP DATABASE db_crash_test;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify database should still exist
+SELECT COUNT(*) AS db_count FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='db_crash_test';
+
+--echo #  39.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+DROP DATABASE db_crash_test;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify database should still exist
+SELECT COUNT(*) AS db_count FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='db_crash_test';
+
+--echo #  39.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+DROP DATABASE db_crash_test;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify database should be dropped
+SELECT COUNT(*) AS db_count FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='db_crash_test';
+
+--echo # Final cleanup and summary
+--echo # Drop remaining objects for complete cleanup
+DROP USER 'newuser_crash'@'localhost';
+DROP ROLE 'role_crash';
+
+--echo # Summary: All DDL crash recovery tests completed successfully
+--echo # Each DDL was tested at 3 crash points with proper recovery verification
+--echo # - Before InnoDB prepare: DDL should be rolled back
+--echo # - After InnoDB prepare but before DStore commit: DDL should be rolled back
+--echo # - After DStore commit: DDL should be committed and visible
+
+SET debug='reset';
+DROP DATABASE test_ddl_crash_comprehensive;

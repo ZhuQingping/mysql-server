@@ -1,0 +1,28 @@
+
+
+let $MYSQLD_DATADIR= `select @@datadir`;
+let MYSQLD_DATADIR= $MYSQLD_DATADIR;
+
+#the rotate size is big enough thus it will not rotate automatic
+set global audit_log_force_rotate=ON;
+set global audit_log_force_rotate=ON;
+set global audit_log_force_rotate=ON;
+set global audit_log_force_rotate=ON;
+set global audit_log_force_rotate=ON;
+
+
+perl;
+  eval "use JSON qw(decode_json); 1" or exit 0;
+  my @files = glob ($ENV{'MYSQLD_DATADIR'} . "/test_audit.log.[0-9][0-9]");
+  foreach (@files) {
+    open my $file, $_ or die "Could not open log: $!";
+    while (my $line = <$file>) {
+        decode_json($line);
+    }
+    close $file;
+  }
+  die "Rotation doesn't work!" unless scalar(@files) > 1
+EOF
+--remove_files_wildcard $MYSQLD_DATADIR test_audit.log*
+
+--echo success

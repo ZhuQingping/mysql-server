@@ -1,0 +1,52 @@
+# ==== Purpose ====
+#
+# Verify that rds_internal_schema_dml_control is a global variable.
+# It is writable and the variable type is bool.
+# 
+# ==== Implementation ====
+#
+# 1. SELECT rds_internal_schema_dml_control in both global and session way 
+# 2. SET @@global.rds_internal_schema_ddl_control = 'ON' and also SET
+#    @@global.rds_internal_schema_ddl_control = 'OFF'
+# 3. SET @@global.rds_internal_schema_dml_control into some wrong type values
+#
+
+SET @start_global_value = @@global.rds_internal_schema_dml_control;
+
+#
+# exists as global only
+#
+--replace_column 1 #
+SELECT @@global.rds_internal_schema_dml_control;
+--error ER_INCORRECT_GLOBAL_LOCAL_VAR
+SELECT @@session.rds_internal_schema_dml_control;
+--replace_column 2 #
+SHOW GLOBAL VARIABLES LIKE 'rds_internal_schema_dml_control';
+--replace_column 2 #
+SHOW SESSION VARIABLES LIKE 'rds_internal_schema_dml_control';
+
+#
+# show that it's writable
+#
+SET GLOBAL rds_internal_schema_dml_control='OFF';
+SELECT @@global.rds_internal_schema_dml_control;
+--error ER_GLOBAL_VARIABLE
+SET SESSION rds_internal_schema_dml_control='OFF';
+
+#
+# incorrect types and values
+#
+--Error ER_WRONG_VALUE_FOR_VAR
+SET GLOBAL rds_internal_schema_dml_control=-1;
+--Error ER_WRONG_TYPE_FOR_VAR
+SET GLOBAL rds_internal_schema_dml_control=1.1;
+--error ER_WRONG_TYPE_FOR_VAR
+SET GLOBAL rds_internal_schema_dml_control=1e2;
+--error ER_WRONG_VALUE_FOR_VAR
+SET GLOBAL rds_internal_schema_dml_control='foo';
+--error ER_WRONG_VALUE_FOR_VAR
+SET GLOBAL rds_internal_schema_dml_control=128;
+--error ER_WRONG_VALUE_FOR_VAR
+SET GLOBAL rds_internal_schema_dml_control=100000;
+
+SET @@global.rds_internal_schema_dml_control = @start_global_value;

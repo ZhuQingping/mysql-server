@@ -1,0 +1,876 @@
+CALL mtr.add_suppression(".*insert dstore index tuple fail.*");
+CALL mtr.add_suppression(".*insert_index fail.*");
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+drop table if exists t;
+# Establish connection thr1 (user=root)
+# Establish connection thr2 (user=root)
+# Switching to connection 'default'.
+create table t (
+id int not null primary key, a int
+) ENGINE=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+# Switching to connection 'thr1'.
+set autocommit=0;
+begin;
+insert into t values(1,1);
+# Switching to connection 'thr2'.
+set autocommit=0;
+begin;
+# thr2 hang here
+replace into t values(1,2);
+# Switching to connection 'thr1'.
+select * from t;
+id	a
+1	1
+commit;
+# Switching to connection 'thr2'.
+select * from t;
+id	a
+1	2
+select * from t for update;
+id	a
+1	2
+commit;
+# clean
+drop table t;
+# Establish connection thr3 (user=root)
+
+#case1: insert select first, then delete
+
+drop table if exists old_table;
+create table old_table (
+id int primary key,
+a int
+) engine=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+insert into old_table values (1,1);
+drop table if exists new_table;
+create table new_table like old_table;
+alter table new_table add column b int;
+#View data
+select * from old_table order by id;
+id	a
+1	1
+select * from new_table order by id;
+id	a	b
+#Create delete trigger
+drop trigger if exists pt_osc_delete;
+create trigger pt_osc_delete
+after delete on old_table
+for each row
+begin
+declare continue handler for 1146 begin end;
+delete ignore from new_table
+where new_table.id <=> old.id;
+end $$
+#Execute concurrent DML operations
+set debug_sync='before_lock_tuple wait_for proceed';
+delete from old_table where id = 1;;
+#Simulate execution tool operation
+insert low_priority ignore into `new_table` (`id`, `a`) select `id`, `a` from `old_table` lock in share mode;
+set debug_sync='now signal proceed';
+#Verify data consistency
+select * from old_table order by id;
+id	a
+select * from new_table order by id;
+id	a	b
+# clean
+drop table old_table;
+drop table new_table;
+
+# case2: delete first, then insert select 
+
+drop table if exists old_table;
+create table old_table (
+id int primary key,
+a int
+) engine=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+insert into old_table values (1,1);
+drop table if exists new_table;
+create table new_table like old_table;
+alter table new_table add column b int;
+#View data
+select * from old_table order by id;
+id	a
+1	1
+select * from new_table order by id;
+id	a	b
+#Create delete trigger
+drop trigger if exists pt_osc_delete;
+create trigger pt_osc_delete
+after delete on old_table
+for each row
+begin
+declare continue handler for 1146 begin end;
+delete ignore from new_table
+where new_table.id <=> old.id;
+end $$
+#Execute concurrent DML operations
+set debug_sync='before_lock_tuple wait_for proceed';
+insert low_priority ignore into `new_table` (`id`, `a`) select `id`, `a` from `old_table` lock in share mode;;
+#Simulate execution tool operation
+delete from old_table where id = 1;
+set debug_sync='now signal proceed';
+#Verify data consistency
+select * from old_table order by id;
+id	a
+select * from new_table order by id;
+id	a	b
+# clean
+drop table old_table;
+drop table new_table;
+
+# case3: insert select first, then update primary key or unique key
+
+drop table if exists old_table;
+create table old_table (
+id int primary key,
+a int
+) engine=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+insert into old_table values (1,1);
+drop table if exists new_table;
+create table new_table like old_table;
+alter table new_table add column b int;
+#View data
+select * from old_table order by id;
+id	a
+1	1
+select * from new_table order by id;
+id	a	b
+#Create update trigger
+drop trigger if exists pt_osc_update;
+create trigger pt_osc_update
+after update on old_table
+for each row
+begin
+declare continue handler for 1146 begin end;
+delete ignore from new_table
+where !(old.id <=> new.id) and new_table.id <=> old.id;
+replace into new_table (id, a) values (new.id, new.a);
+end $$
+Warnings:
+Warning	1287	'!' is deprecated and will be removed in a future release. Please use NOT instead
+#Execute concurrent DML operations
+set debug_sync='before_lock_tuple wait_for proceed';
+update old_table set id=2 where id=1;;
+#Simulate execution tool operation
+insert low_priority ignore into `new_table` (`id`, `a`) select `id`, `a` from `old_table` lock in share mode;
+set debug_sync='now signal proceed';
+#Verify data consistency
+select * from old_table order by id;
+id	a
+2	1
+select * from new_table order by id;
+id	a	b
+2	1	NULL
+# clean
+drop table old_table;
+drop table new_table;
+
+# case4: update primary key or unique key first, then  insert select
+
+drop table if exists old_table;
+create table old_table (
+id int primary key,
+a int
+) engine=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+insert into old_table values (1,1);
+drop table if exists new_table;
+create table new_table like old_table;
+alter table new_table add column b int;
+
+#View data
+
+select * from old_table order by id;
+id	a
+1	1
+select * from new_table order by id;
+id	a	b
+
+#Create update trigger
+
+drop trigger if exists pt_osc_update;
+create trigger pt_osc_update
+after update on old_table
+for each row
+begin
+declare continue handler for 1146 begin end;
+delete ignore from new_table
+where !(old.id <=> new.id) and new_table.id <=> old.id;
+replace into new_table (id, a) values (new.id, new.a);
+end $$
+Warnings:
+Warning	1287	'!' is deprecated and will be removed in a future release. Please use NOT instead
+
+#Simulate execution tool operation
+
+set debug_sync='before_lock_tuple wait_for proceed';
+insert low_priority ignore into `new_table` (`id`, `a`) select `id`, `a` from `old_table` lock in share mode;;
+
+#Execute concurrent DML operations
+
+update old_table set id=2 where id=1;
+set debug_sync='now signal proceed';
+
+##Verify data consistency
+
+Warnings:
+Warning	1062	Duplicate entry '2' for key 'new_table.PRIMARY'
+select * from old_table order by id;
+id	a
+2	1
+select * from new_table order by id;
+id	a	b
+2	1	NULL
+
+# clean
+
+drop table old_table;
+drop table new_table;
+
+# case5: insert select first, then update not primary key or unique key
+
+drop table if exists old_table;
+create table old_table (
+id int primary key,
+a int
+) engine=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+insert into old_table values (1,1);
+drop table if exists new_table;
+create table new_table like old_table;
+alter table new_table add column b int;
+#View data
+select * from old_table order by id;
+id	a
+1	1
+select * from new_table order by id;
+id	a	b
+#Create update trigger
+drop trigger if exists pt_osc_update;
+create trigger pt_osc_update
+after update on old_table
+for each row
+begin
+declare continue handler for 1146 begin end;
+delete ignore from new_table
+where !(old.id <=> new.id) and new_table.id <=> old.id;
+replace into new_table (id, a) values (new.id, new.a);
+end $$
+Warnings:
+Warning	1287	'!' is deprecated and will be removed in a future release. Please use NOT instead
+#Execute concurrent DML operations
+set debug_sync='before_lock_tuple wait_for proceed';
+update old_table set a=2 where id=1;;
+#Simulate execution tool operation
+insert low_priority ignore into `new_table` (`id`, `a`) select `id`, `a` from `old_table` lock in share mode;
+set debug_sync='now signal proceed';
+#Verify data consistency
+select * from old_table order by id;
+id	a
+1	2
+select * from new_table order by id;
+id	a	b
+1	2	NULL
+# clean
+drop table old_table;
+drop table new_table;
+
+# case6: update not primary key and unique key first, then  insert select
+
+drop table if exists old_table;
+create table old_table (
+id int primary key,
+a int
+) engine=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+insert into old_table values (1,1);
+drop table if exists new_table;
+create table new_table like old_table;
+alter table new_table add column b int;
+
+#View data
+
+select * from old_table order by id;
+id	a
+1	1
+select * from new_table order by id;
+id	a	b
+
+#Create update trigger
+
+drop trigger if exists pt_osc_update;
+create trigger pt_osc_update
+after update on old_table
+for each row
+begin
+declare continue handler for 1146 begin end;
+delete ignore from new_table
+where !(old.id <=> new.id) and new_table.id <=> old.id;
+replace into new_table (id, a) values (new.id, new.a);
+end $$
+Warnings:
+Warning	1287	'!' is deprecated and will be removed in a future release. Please use NOT instead
+
+#Simulate execution tool operation
+
+set debug_sync='before_lock_tuple wait_for proceed';
+insert low_priority ignore into `new_table` (`id`, `a`) select `id`, `a` from `old_table` lock in share mode;;
+
+#Execute concurrent DML operations
+
+update old_table set a=2 where id=1;
+set debug_sync='now signal proceed';
+
+##Verify data consistency
+
+Warnings:
+Warning	1062	Duplicate entry '1' for key 'new_table.PRIMARY'
+select * from old_table order by id;
+id	a
+1	2
+select * from new_table order by id;
+id	a	b
+1	2	NULL
+
+# clean
+
+drop table old_table;
+drop table new_table;
+
+# case7: insert select first, then insert
+
+drop table if exists old_table;
+create table old_table (
+id int primary key,
+a int
+) engine=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+insert into old_table values (1,1);
+drop table if exists new_table;
+create table new_table like old_table;
+alter table new_table add column b int;
+#View data
+select * from old_table order by id;
+id	a
+1	1
+select * from new_table order by id;
+id	a	b
+#Create insert trigger
+drop trigger if exists pt_osc_insert;
+create trigger pt_osc_insert
+after insert on old_table
+for each row
+begin
+declare continue handler for 1146 begin end;
+replace into new_table (id, a) values (new.id, new.a);
+end $$
+#Execute concurrent DML operations
+set debug_sync='before_lock_tuple wait_for proceed';
+insert old_table values(2,2);;
+#Simulate execution tool operation
+insert low_priority ignore into `new_table` (`id`, `a`) select `id`, `a` from `old_table` lock in share mode;
+Warnings:
+Warning	1062	Duplicate entry '2' for key 'new_table.PRIMARY'
+set debug_sync='now signal proceed';
+#Verify data consistency
+select * from old_table order by id;
+id	a
+1	1
+2	2
+select * from new_table order by id;
+id	a	b
+1	1	NULL
+2	2	NULL
+# clean
+drop table old_table;
+drop table new_table;
+
+# case8: insert first, then insert select
+
+drop table if exists old_table;
+create table old_table (
+id int primary key,
+a int
+) engine=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+insert into old_table values (1,1);
+drop table if exists new_table;
+create table new_table like old_table;
+alter table new_table add column b int;
+
+#View data
+
+select * from old_table order by id;
+id	a
+1	1
+select * from new_table order by id;
+id	a	b
+
+#Create update trigger
+
+drop trigger if exists pt_osc_insert;
+create trigger pt_osc_insert
+after insert on old_table
+for each row
+begin
+declare continue handler for 1146 begin end;
+replace into new_table (id, a) values (new.id, new.a);
+end $$
+
+#Simulate execution tool operation
+
+set debug_sync='before_lock_tuple wait_for proceed';
+insert low_priority ignore into `new_table` (`id`, `a`) select `id`, `a` from `old_table` lock in share mode;;
+
+#Execute concurrent DML operations
+
+insert old_table values(2,2);
+set debug_sync='now signal proceed';
+
+##Verify data consistency
+
+select * from old_table order by id;
+id	a
+1	1
+2	2
+select * from new_table order by id;
+id	a	b
+1	1	NULL
+2	2	NULL
+
+# clean
+
+drop table old_table;
+drop table new_table;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+drop table if exists t;
+# Establish connection thr1 (user=root)
+# Establish connection thr2 (user=root)
+# Switching to connection 'default'.
+create table t (
+id int not null primary key, a int
+) ENGINE=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+# Switching to connection 'thr1'.
+set autocommit=0;
+begin;
+insert into t values(1,1);
+# Switching to connection 'thr2'.
+set autocommit=0;
+begin;
+# thr2 hang here
+replace into t values(1,2);
+# Switching to connection 'thr1'.
+select * from t;
+id	a
+1	1
+commit;
+# Switching to connection 'thr2'.
+select * from t;
+id	a
+1	2
+select * from t for update;
+id	a
+1	2
+commit;
+# clean
+drop table t;
+# Establish connection thr3 (user=root)
+
+#case1: insert select first, then delete
+
+drop table if exists old_table;
+create table old_table (
+id int primary key,
+a int
+) engine=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+insert into old_table values (1,1);
+drop table if exists new_table;
+create table new_table like old_table;
+alter table new_table add column b int;
+#View data
+select * from old_table order by id;
+id	a
+1	1
+select * from new_table order by id;
+id	a	b
+#Create delete trigger
+drop trigger if exists pt_osc_delete;
+create trigger pt_osc_delete
+after delete on old_table
+for each row
+begin
+declare continue handler for 1146 begin end;
+delete ignore from new_table
+where new_table.id <=> old.id;
+end $$
+#Execute concurrent DML operations
+set debug_sync='before_lock_tuple wait_for proceed';
+delete from old_table where id = 1;;
+#Simulate execution tool operation
+insert low_priority ignore into `new_table` (`id`, `a`) select `id`, `a` from `old_table` lock in share mode;
+set debug_sync='now signal proceed';
+#Verify data consistency
+select * from old_table order by id;
+id	a
+select * from new_table order by id;
+id	a	b
+# clean
+drop table old_table;
+drop table new_table;
+
+# case2: delete first, then insert select 
+
+drop table if exists old_table;
+create table old_table (
+id int primary key,
+a int
+) engine=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+insert into old_table values (1,1);
+drop table if exists new_table;
+create table new_table like old_table;
+alter table new_table add column b int;
+#View data
+select * from old_table order by id;
+id	a
+1	1
+select * from new_table order by id;
+id	a	b
+#Create delete trigger
+drop trigger if exists pt_osc_delete;
+create trigger pt_osc_delete
+after delete on old_table
+for each row
+begin
+declare continue handler for 1146 begin end;
+delete ignore from new_table
+where new_table.id <=> old.id;
+end $$
+#Execute concurrent DML operations
+set debug_sync='before_lock_tuple wait_for proceed';
+insert low_priority ignore into `new_table` (`id`, `a`) select `id`, `a` from `old_table` lock in share mode;;
+#Simulate execution tool operation
+delete from old_table where id = 1;
+set debug_sync='now signal proceed';
+#Verify data consistency
+select * from old_table order by id;
+id	a
+select * from new_table order by id;
+id	a	b
+# clean
+drop table old_table;
+drop table new_table;
+
+# case3: insert select first, then update primary key or unique key
+
+drop table if exists old_table;
+create table old_table (
+id int primary key,
+a int
+) engine=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+insert into old_table values (1,1);
+drop table if exists new_table;
+create table new_table like old_table;
+alter table new_table add column b int;
+#View data
+select * from old_table order by id;
+id	a
+1	1
+select * from new_table order by id;
+id	a	b
+#Create update trigger
+drop trigger if exists pt_osc_update;
+create trigger pt_osc_update
+after update on old_table
+for each row
+begin
+declare continue handler for 1146 begin end;
+delete ignore from new_table
+where !(old.id <=> new.id) and new_table.id <=> old.id;
+replace into new_table (id, a) values (new.id, new.a);
+end $$
+Warnings:
+Warning	1287	'!' is deprecated and will be removed in a future release. Please use NOT instead
+#Execute concurrent DML operations
+set debug_sync='before_lock_tuple wait_for proceed';
+update old_table set id=2 where id=1;;
+#Simulate execution tool operation
+insert low_priority ignore into `new_table` (`id`, `a`) select `id`, `a` from `old_table` lock in share mode;
+Warnings:
+Warning	1062	Duplicate entry '2' for key 'new_table.PRIMARY'
+set debug_sync='now signal proceed';
+#Verify data consistency
+select * from old_table order by id;
+id	a
+2	1
+select * from new_table order by id;
+id	a	b
+2	1	NULL
+# clean
+drop table old_table;
+drop table new_table;
+
+# case4: update primary key or unique key first, then  insert select
+
+drop table if exists old_table;
+create table old_table (
+id int primary key,
+a int
+) engine=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+insert into old_table values (1,1);
+drop table if exists new_table;
+create table new_table like old_table;
+alter table new_table add column b int;
+
+#View data
+
+select * from old_table order by id;
+id	a
+1	1
+select * from new_table order by id;
+id	a	b
+
+#Create update trigger
+
+drop trigger if exists pt_osc_update;
+create trigger pt_osc_update
+after update on old_table
+for each row
+begin
+declare continue handler for 1146 begin end;
+delete ignore from new_table
+where !(old.id <=> new.id) and new_table.id <=> old.id;
+replace into new_table (id, a) values (new.id, new.a);
+end $$
+Warnings:
+Warning	1287	'!' is deprecated and will be removed in a future release. Please use NOT instead
+
+#Simulate execution tool operation
+
+set debug_sync='before_lock_tuple wait_for proceed';
+insert low_priority ignore into `new_table` (`id`, `a`) select `id`, `a` from `old_table` lock in share mode;;
+
+#Execute concurrent DML operations
+
+update old_table set id=2 where id=1;
+set debug_sync='now signal proceed';
+
+##Verify data consistency
+
+select * from old_table order by id;
+id	a
+2	1
+select * from new_table order by id;
+id	a	b
+2	1	NULL
+
+# clean
+
+drop table old_table;
+drop table new_table;
+
+# case5: insert select first, then update not primary key or unique key
+
+drop table if exists old_table;
+create table old_table (
+id int primary key,
+a int
+) engine=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+insert into old_table values (1,1);
+drop table if exists new_table;
+create table new_table like old_table;
+alter table new_table add column b int;
+#View data
+select * from old_table order by id;
+id	a
+1	1
+select * from new_table order by id;
+id	a	b
+#Create update trigger
+drop trigger if exists pt_osc_update;
+create trigger pt_osc_update
+after update on old_table
+for each row
+begin
+declare continue handler for 1146 begin end;
+delete ignore from new_table
+where !(old.id <=> new.id) and new_table.id <=> old.id;
+replace into new_table (id, a) values (new.id, new.a);
+end $$
+Warnings:
+Warning	1287	'!' is deprecated and will be removed in a future release. Please use NOT instead
+#Execute concurrent DML operations
+set debug_sync='before_lock_tuple wait_for proceed';
+update old_table set a=2 where id=1;;
+#Simulate execution tool operation
+insert low_priority ignore into `new_table` (`id`, `a`) select `id`, `a` from `old_table` lock in share mode;
+Warnings:
+Warning	1062	Duplicate entry '1' for key 'new_table.PRIMARY'
+set debug_sync='now signal proceed';
+#Verify data consistency
+select * from old_table order by id;
+id	a
+1	2
+select * from new_table order by id;
+id	a	b
+1	2	NULL
+# clean
+drop table old_table;
+drop table new_table;
+
+# case6: update not primary key and unique key first, then  insert select
+
+drop table if exists old_table;
+create table old_table (
+id int primary key,
+a int
+) engine=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+insert into old_table values (1,1);
+drop table if exists new_table;
+create table new_table like old_table;
+alter table new_table add column b int;
+
+#View data
+
+select * from old_table order by id;
+id	a
+1	1
+select * from new_table order by id;
+id	a	b
+
+#Create update trigger
+
+drop trigger if exists pt_osc_update;
+create trigger pt_osc_update
+after update on old_table
+for each row
+begin
+declare continue handler for 1146 begin end;
+delete ignore from new_table
+where !(old.id <=> new.id) and new_table.id <=> old.id;
+replace into new_table (id, a) values (new.id, new.a);
+end $$
+Warnings:
+Warning	1287	'!' is deprecated and will be removed in a future release. Please use NOT instead
+
+#Simulate execution tool operation
+
+set debug_sync='before_lock_tuple wait_for proceed';
+insert low_priority ignore into `new_table` (`id`, `a`) select `id`, `a` from `old_table` lock in share mode;;
+
+#Execute concurrent DML operations
+
+update old_table set a=2 where id=1;
+set debug_sync='now signal proceed';
+
+##Verify data consistency
+
+select * from old_table order by id;
+id	a
+1	2
+select * from new_table order by id;
+id	a	b
+1	2	NULL
+
+# clean
+
+drop table old_table;
+drop table new_table;
+
+# case7: insert select first, then insert
+
+drop table if exists old_table;
+create table old_table (
+id int primary key,
+a int
+) engine=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+insert into old_table values (1,1);
+drop table if exists new_table;
+create table new_table like old_table;
+alter table new_table add column b int;
+#View data
+select * from old_table order by id;
+id	a
+1	1
+select * from new_table order by id;
+id	a	b
+#Create insert trigger
+drop trigger if exists pt_osc_insert;
+create trigger pt_osc_insert
+after insert on old_table
+for each row
+begin
+declare continue handler for 1146 begin end;
+replace into new_table (id, a) values (new.id, new.a);
+end $$
+#Execute concurrent DML operations
+set debug_sync='before_lock_tuple wait_for proceed';
+insert old_table values(2,2);;
+#Simulate execution tool operation
+insert low_priority ignore into `new_table` (`id`, `a`) select `id`, `a` from `old_table` lock in share mode;
+Warnings:
+Warning	1062	Duplicate entry '2' for key 'new_table.PRIMARY'
+set debug_sync='now signal proceed';
+#Verify data consistency
+select * from old_table order by id;
+id	a
+1	1
+2	2
+select * from new_table order by id;
+id	a	b
+1	1	NULL
+2	2	NULL
+# clean
+drop table old_table;
+drop table new_table;
+
+# case8: insert first, then insert select
+
+drop table if exists old_table;
+create table old_table (
+id int primary key,
+a int
+) engine=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+insert into old_table values (1,1);
+drop table if exists new_table;
+create table new_table like old_table;
+alter table new_table add column b int;
+
+#View data
+
+select * from old_table order by id;
+id	a
+1	1
+select * from new_table order by id;
+id	a	b
+
+#Create update trigger
+
+drop trigger if exists pt_osc_insert;
+create trigger pt_osc_insert
+after insert on old_table
+for each row
+begin
+declare continue handler for 1146 begin end;
+replace into new_table (id, a) values (new.id, new.a);
+end $$
+
+#Simulate execution tool operation
+
+set debug_sync='before_lock_tuple wait_for proceed';
+insert low_priority ignore into `new_table` (`id`, `a`) select `id`, `a` from `old_table` lock in share mode;;
+
+#Execute concurrent DML operations
+
+insert old_table values(2,2);
+set debug_sync='now signal proceed';
+
+##Verify data consistency
+
+select * from old_table order by id;
+id	a
+1	1
+2	2
+select * from new_table order by id;
+id	a	b
+1	1	NULL
+2	2	NULL
+
+# clean
+
+drop table old_table;
+drop table new_table;

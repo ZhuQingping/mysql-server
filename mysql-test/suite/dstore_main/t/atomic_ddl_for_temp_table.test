@@ -1,0 +1,27 @@
+# ==== Purpose ====
+#
+# This testcases used to ensure the temporary table does not record ddl log
+#
+--source include/have_dstore.inc
+CREATE TEMPORARY TABLE temp_table_t1 (c1 int);
+INSERT INTO temp_table_t1 VALUES (1), (2), (3);
+
+CREATE TABLE normal_table_t1 (c1 int);
+INSERT INTO normal_table_t1 VALUES (1), (2), (3);
+
+# In previous version, if truncate table fail, the ddl log record of type REMOVE_CACHE_LOG
+# will be left in mysql.dstore_ddl_log table. Then, it will be replay by other DDL statement
+# in the post ddl stage.
+--echo Inject error to make truncate temp table fail.
+SET DEBUG = "+d, cde_truncate_impl_exec_injection";
+
+--error 1030
+TRUNCATE TABLE temp_table_t1;
+SET DEBUG = "-d, cde_truncate_impl_exec_injection";
+
+ALTER TABLE normal_table_t1 ADD UNIQUE(c1);
+
+# Clean environment
+TRUNCATE TABLE normal_table_t1;
+DROP TABLE normal_table_t1;
+DROP TABLE temp_table_t1;

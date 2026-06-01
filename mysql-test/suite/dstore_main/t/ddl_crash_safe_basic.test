@@ -1,0 +1,158 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+
+--echo #
+--echo #  This test will check whether the server can recovery from different
+--echo #  phases of some BASIC DDLs without inconsistency between dstore and
+--echo #  innodb.
+--echo #
+
+CREATE DATABASE test_ddl_crash_basic;
+USE test_ddl_crash_basic;
+
+--echo #  1. Crash on CREATE TABLE statement.
+--echo #  1.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE TABLE t_ddl_crash_create_table_01(pk INT PRIMARY KEY, col1 INT);
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+
+--echo #  1.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE TABLE t_ddl_crash_create_table_01(pk INT PRIMARY KEY, col1 INT);
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+
+--echo #  1.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+CREATE TABLE t_ddl_crash_create_table_01(pk INT PRIMARY KEY, col1 INT);
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+
+SHOW CREATE TABLE t_ddl_crash_create_table_01;
+
+INSERT INTO t_ddl_crash_create_table_01 VALUES(1,2),(2,3),(3,4);
+SELECT * FROM t_ddl_crash_create_table_01;
+
+--echo #  2. Crash on ALTER TABLE ADD INDEX statement.
+--echo #  2.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+ALTER TABLE t_ddl_crash_create_table_01 ADD INDEX ci(col1);
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+
+--echo #  2.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+ALTER TABLE t_ddl_crash_create_table_01 ADD INDEX ci(col1);
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+
+--echo #  2.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+ALTER TABLE t_ddl_crash_create_table_01 ADD INDEX ci(col1);
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+
+SHOW CREATE TABLE t_ddl_crash_create_table_01;
+
+INSERT INTO t_ddl_crash_create_table_01 VALUES(4,5),(5,6),(6,7);
+SELECT * FROM t_ddl_crash_create_table_01;
+
+--echo #  3. Crash on ALTER TABLE ADD COLUMN statement.
+--echo #  3.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+ALTER TABLE t_ddl_crash_create_table_01 ADD COLUMN col2 INT AFTER pk;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+
+--echo #  3.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+ALTER TABLE t_ddl_crash_create_table_01 ADD COLUMN col2 INT AFTER pk;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+
+--echo #  3.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+ALTER TABLE t_ddl_crash_create_table_01 ADD COLUMN col2 INT AFTER pk;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+
+SHOW CREATE TABLE t_ddl_crash_create_table_01;
+
+INSERT INTO t_ddl_crash_create_table_01 VALUES(8,9,10),(10,11,12),(12,13,14);
+SELECT * FROM t_ddl_crash_create_table_01;
+
+--echo #  4. Test DDL in PROCEDURE can work normally.
+create table t1(pk int primary key);
+create table t2(pk int primary key);
+insert into t1 values(1);
+insert into t2 values(1);
+--delimiter $$
+CREATE DEFINER=root@localhost PROCEDURE check_ddl()
+BEGIN
+TRUNCATE t1;
+SET debug='reset';
+SET debug='d, check_ddl_info_written_state';
+TRUNCATE t2;
+END$$
+call check_ddl()$$
+--delimiter ;
+
+--echo #  5. Test non-DDL transaction commit error.
+SET debug='reset';
+SET debug='d, test_error_during_commit';
+--error ER_ERROR_DURING_COMMIT
+SELECT * FROM t_ddl_crash_create_table_01;
+--source include/restart_mysqld.inc
+
+SET debug='reset';
+
+--echo # 6. Test multi-table optimize;
+create table t3(pk int primary key);
+create table t4(pk int primary key);
+OPTIMIZE TABLE t3,t4;
+
+--let SEARCH_FILE= $MYSQLTEST_VARDIR/log/mysqld.1.err
+--echo # 7. Test password will be obfuscated in error log.
+create user 'root'@'8.8.8.8' identified with 'mysql_native_password' by 'Abc1234cbA';
+drop user 'root'@'8.8.8.8';
+--let SEARCH_PATTERN= Abc1234cbA
+--source include/search_pattern.inc
+
+DROP DATABASE test_ddl_crash_basic;

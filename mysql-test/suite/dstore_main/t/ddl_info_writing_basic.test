@@ -1,0 +1,250 @@
+# ==== Purpose ====
+#
+# Verify if the ddl_info can be successfully written into redo
+# and the query with ddl_info comments can be replayed.
+# TODO: future-proofing code for DD IN InnoDB, to have better simulation
+# when DD replay in crash recovery and replication process is ready.
+#
+# ==== References ====
+#
+# US2025031001018 DD In InnoDB--adaptation on SQL layer
+# 
+# ==== Implementation ====
+#
+# 1. enable rds_write_binlog_into_redo and rds_dstore_write_ddl_info_into_redo in the file ddl_info_exceed_max.cnf.
+# 2. execute different kind of DDL statements and expect return ok with ddl info written in redo.
+# 3. simulate the ddl_info replay by directly executing the ddl_info string, expect return ok.
+
+--source include/have_only_dstore.inc
+
+DROP TABLE IF EXISTS test_db.t1;
+
+CREATE DATABASE IF NOT EXISTS test_db;
+USE test_db;
+
+# 0. SQLCOM_CREATE_TABLE
+CREATE TABLE t1 (id INT, name VARCHAR(20), mylob BLOB);
+## create with select
+create table t_select charset utf8mb4 select if(1, 9223372036854775808, 1) i,case when 1 then 9223372036854775808 else 1 end c,coalesce(9223372036854775808, 1);  
+
+# 1. SQLCOM_CREATE_INDEX
+CREATE INDEX idx_id ON t1(id);
+
+# 2. SQLCOM_ALTER_TABLE
+ALTER TABLE t1 ADD COLUMN age INT;
+
+# 3. SQLCOM_ALTER_DB
+ALTER DATABASE test_db CHARACTER SET = utf8mb4;
+
+# 4. SQLCOM_DROP_INDEX
+DROP INDEX idx_id ON t1;
+
+# 5. SQLCOM_TRUNCATE
+TRUNCATE TABLE t1;
+
+# 6. SQLCOM_RENAME_TABLE
+RENAME TABLE t1 TO t2;
+
+# 7. SQLCOM_DROP_TABLE
+DROP TABLE t2;
+
+# 8. SQLCOM_CREATE_VIEW
+CREATE VIEW v1 AS SELECT 1 AS col;
+
+# 9. SQLCOM_DROP_VIEW
+DROP VIEW v1;
+
+# 10. SQLCOM_CREATE_FUNCTION (UDF)
+CREATE FUNCTION hello() RETURNS INT DETERMINISTIC RETURN 1;
+
+# 11. SQLCOM_DROP_FUNCTION
+DROP FUNCTION hello;
+
+# 12. SQLCOM_CREATE_PROCEDURE
+DELIMITER |;
+CREATE PROCEDURE p1() BEGIN SELECT 1; END|
+DELIMITER ;|
+
+# 13. SQLCOM_ALTER_PROCEDURE
+ALTER PROCEDURE p1 COMMENT 'modified';
+
+# 14. SQLCOM_DROP_PROCEDURE
+DROP PROCEDURE p1;
+
+# 15. SQLCOM_CREATE_TRIGGER
+CREATE TABLE t3 (id INT);
+CREATE TRIGGER tr1 BEFORE INSERT ON t3 FOR EACH ROW SET NEW.id = 0;
+
+# 16. SQLCOM_DROP_TRIGGER
+DROP TRIGGER tr1;
+
+# 17. SQLCOM_ANALYZE
+ANALYZE TABLE t3;
+
+# 18. SQLCOM_OPTIMIZE
+OPTIMIZE TABLE t3;
+
+# 19. SQLCOM_CREATE_EVENT
+CREATE EVENT e1 ON SCHEDULE EVERY 1 DAY DO DELETE FROM t3;
+
+# 20. SQLCOM_ALTER_EVENT
+ALTER EVENT e1 DISABLE;
+
+# 21. SQLCOM_DROP_EVENT
+DROP EVENT e1;
+
+# 22. SQLCOM_CREATE_SERVER
+CREATE SERVER s1 FOREIGN DATA WRAPPER mysql OPTIONS (HOST '127.0.0.1');
+
+# 23. SQLCOM_ALTER_SERVER
+ALTER SERVER s1 OPTIONS (USER 'test');
+
+# 24. SQLCOM_DROP_SERVER
+DROP SERVER s1;
+
+# 25. SQLCOM_CREATE_RESOURCE_GROUP
+CREATE RESOURCE GROUP rg1 TYPE = USER;
+
+# 26. SQLCOM_ALTER_RESOURCE_GROUP
+ALTER RESOURCE GROUP rg1 VCPU = 0-1;
+
+# 27. SQLCOM_DROP_RESOURCE_GROUP
+DROP RESOURCE GROUP rg1;
+
+# 28. SQLCOM_CREATE_SRS
+# CREATE SPATIAL REFERENCE SYSTEM srs1 NAME 'test' ORGANIZATION 'EPSG' ID 1234;
+
+# 29. SQLCOM_DROP_SRS
+# DROP SPATIAL REFERENCE SYSTEM srs1;
+
+# 用户权限相关操作
+# 30. SQLCOM_CREATE_USER
+CREATE USER 'testuser'@'localhost' IDENTIFIED BY 'password';
+
+# 31. SQLCOM_ALTER_USER
+ALTER USER 'testuser'@'localhost' IDENTIFIED BY 'new_password';
+
+# 32. SQLCOM_RENAME_USER
+RENAME USER 'testuser'@'localhost' TO 'newuser'@'localhost';
+
+# 33. SQLCOM_SET_PASSWORD
+SET PASSWORD FOR 'newuser'@'localhost' = 'pass';
+
+# 34. SQLCOM_CREATE_ROLE
+CREATE ROLE 'role1';
+
+# 35. SQLCOM_GRANT
+GRANT SELECT ON test_db.* TO 'role1';
+
+# 36. SQLCOM_GRANT_ROLE
+GRANT 'role1' TO 'newuser'@'localhost';
+
+# 37. SQLCOM_ALTER_USER_DEFAULT_ROLE
+ALTER USER 'newuser'@'localhost' DEFAULT ROLE 'role1';
+
+# 38. SQLCOM_REVOKE_ROLE
+REVOKE 'role1' FROM 'newuser'@'localhost';
+
+# 39. SQLCOM_REVOKE
+REVOKE SELECT ON test_db.* FROM 'role1';
+
+# 40. SQLCOM_DROP_ROLE
+DROP ROLE 'role1';
+
+# 41. SQLCOM_DROP_USER
+DROP USER 'newuser'@'localhost';
+
+# 42. SQLCOM_ALTER_TABLESPACE
+# CREATE TABLESPACE ts1 ADD DATAFILE 'ts1.ibd' ENGINE=InnoDB;
+# ALTER TABLESPACE ts1 DROP DATAFILE 'ts1.ibd' ENGINE=InnoDB;
+
+# 43. SQLCOM_ALTER_INSTANCE
+# ALTER INSTANCE ROTATE INNODB MASTER KEY;
+
+
+DROP DATABASE test_db;
+
+
+# simulate the ddl info replaying
+USE test; DROP TABLE IF EXISTS test_db.t1 /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */;
+CREATE DATABASE IF NOT EXISTS test_db;
+USE test_db; DROP TABLE IF EXISTS `t1` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `t1` (  `id` int DEFAULT NULL,  `name` varchar(20) DEFAULT NULL,  `mylob` blob) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=16384;relblknum=131;relfileid=5121;rellobblknum=139;rellobfileid=5121;' */;
+USE test_db; DROP TABLE IF EXISTS `t_select` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `t_select` (  `i` decimal(19,0) NOT NULL DEFAULT '0',  `c` decimal(19,0) NOT NULL DEFAULT '0',  `coalesce(9223372036854775808, 1)` decimal(19,0) NOT NULL DEFAULT '0') ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=16385;relblknum=147;relfileid=5121;' */;
+USE test_db; DROP TABLE IF EXISTS `t1` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `t1` (  `id` int DEFAULT NULL,  `name` varchar(20) DEFAULT NULL,  `mylob` blob,  KEY `idx_id` (`id`) /*!80041 dstore_ddl_comment 'indexrelid=16387;relblknum=171;relfileid=5121;' */) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=16386;relblknum=155;relfileid=5121;rellobblknum=163;rellobfileid=5121;' */;
+USE test_db; ALTER TABLE t1 ADD COLUMN age INT;
+ALTER DATABASE test_db CHARACTER SET = utf8mb4;
+USE test_db; DROP TABLE IF EXISTS `t1` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `t1` (  `id` int DEFAULT NULL,  `name` varchar(20) DEFAULT NULL,  `mylob` blob,  `age` int DEFAULT NULL) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=16388;relblknum=131;relfileid=5121;rellobblknum=139;rellobfileid=5121;' */;
+USE test_db; DROP TABLE IF EXISTS `t1` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `t1` (  `id` int DEFAULT NULL,  `name` varchar(20) DEFAULT NULL,  `mylob` blob,  `age` int DEFAULT NULL) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=16388;relblknum=155;relfileid=5121;rellobblknum=163;rellobfileid=5121;' */;
+USE test_db; RENAME TABLE t1 TO t2;
+USE test_db; DROP TABLE IF EXISTS test_db.t2 /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */;
+USE test_db; CREATE VIEW v1 AS SELECT 1 AS col;
+USE test_db; DROP VIEW v1;
+USE test_db; CREATE FUNCTION hello() RETURNS INT DETERMINISTIC RETURN 1;
+USE test_db; DROP FUNCTION hello;
+USE test_db; DELIMITER |; CREATE PROCEDURE p1() BEGIN SELECT 1; END| DELIMITER ;|
+USE test_db; ALTER PROCEDURE p1 COMMENT 'modified';
+USE test_db; DROP PROCEDURE p1;
+USE test_db; DROP TABLE IF EXISTS `t3` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `t3` (  `id` int DEFAULT NULL) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=16389;relblknum=131;relfileid=5121;' */;
+USE test_db; CREATE TRIGGER tr1 BEFORE INSERT ON t3 FOR EACH ROW SET NEW.id = 0;
+USE test_db; DROP TRIGGER tr1;
+USE test_db; ANALYZE TABLE t3;
+USE test_db; OPTIMIZE TABLE t3;
+USE test_db; CREATE EVENT e1 ON SCHEDULE EVERY 1 DAY DO DELETE FROM t3;
+USE test_db; ALTER EVENT e1 DISABLE;
+USE test_db; DROP EVENT e1;
+USE test_db; CREATE USER 'testuser'@'localhost' IDENTIFIED BY 'password';
+USE test_db; ALTER USER 'testuser'@'localhost' IDENTIFIED BY 'new_password';
+USE test_db; RENAME USER 'testuser'@'localhost' TO 'newuser'@'localhost';
+USE test_db; SET PASSWORD FOR 'newuser'@'localhost' = 'pass';
+USE test_db; CREATE ROLE 'role1';
+USE test_db; GRANT SELECT ON test_db.* TO 'role1';
+USE test_db; GRANT 'role1' TO 'newuser'@'localhost';
+USE test_db; ALTER USER 'newuser'@'localhost' DEFAULT ROLE 'role1';
+USE test_db; REVOKE 'role1' FROM 'newuser'@'localhost';
+USE test_db; REVOKE SELECT ON test_db.* FROM 'role1';
+USE test_db; DROP ROLE 'role1';
+USE test_db; DROP USER 'newuser'@'localhost';
+DROP DATABASE test_db /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */;
+
+# verify that DSTORE_DDL_COMMENT is non-reserved keywords
+
+CREATE DATABASE IF NOT EXISTS test2;
+USE test2;
+
+create table dstore_ddl_comment(id int) engine=Dstore;
+create table t4(dstore_ddl_comment int) engine=Dstore;
+create table t5(id int, key DSTORE_DDL_COMMENT(id)) engine=Dstore;
+
+DROP TABLE dstore_ddl_comment, t4, t5;
+DROP DATABASE test2;
+
+# verify ddl info for different kind of create table stmt
+CREATE DATABASE IF NOT EXISTS test3;
+USE test3;
+
+CREATE TABLE IF NOT EXISTS parent_table (
+    id INT PRIMARY KEY
+) ENGINE=Dstore;
+
+CREATE TABLE test_table (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    data VARCHAR(100) NOT SECONDARY,
+    stored_col VARCHAR(100) GENERATED ALWAYS AS (CONCAT(data, '_stored')) STORED,
+    virtual_col VARCHAR(100) GENERATED ALWAYS AS (CONCAT(data, '_virtual')) VIRTUAL,
+    ts_col TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    col_fixed INT COLUMN_FORMAT FIXED,
+    col_dynamic VARCHAR(255) COLUMN_FORMAT DYNAMIC,
+    col_invisible INT INVISIBLE,
+    engine_attr_col INT 
+        SECONDARY_ENGINE_ATTRIBUTE='{"secondary":"example"}',
+    parent_id INT,
+    CONSTRAINT chk_data_length CHECK (CHAR_LENGTH(data) BETWEEN 1 AND 100) NOT ENFORCED,
+    UNIQUE KEY unique_stored (stored_col),
+    FOREIGN KEY (parent_id) REFERENCES parent_table(id)
+) ENGINE=Dstore AUTO_INCREMENT=115 
+SECONDARY_ENGINE_ATTRIBUTE='{"secondary":"table_attribute"}'
+ROW_FORMAT=DYNAMIC;
+
+DROP TABLE parent_table, test_table;
+
+DROP DATABASE test3;

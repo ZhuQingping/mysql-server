@@ -1,0 +1,694 @@
+call mtr.add_suppression("mysql.outline");
+call mtr.add_suppression("Statement outline");
+set global rds_opt_outline_enabled = on;
+create database outline_db;
+create table outline_db.t1(c1 int auto_increment primary key,
+c2 int,
+c3 varchar(100),
+key idx_2(c2),
+key idx_2_3(c2,c3)) engine = Dstore;
+insert into outline_db.t1 values(1, 1, 'test_1');
+insert into outline_db.t1 values(2, 2, 'test_2');
+insert into outline_db.t1 values(3, 3, 'test_3');
+create view outline_db.v_t1 as select * from outline_db.t1;
+============================================================================
+# Start of test variable rds_hint_work_for_view
+#
+SELECT @@global.rds_hint_work_for_view;
+@@global.rds_hint_work_for_view
+1
+SET GLOBAL rds_hint_work_for_view=off;
+SELECT @@global.rds_hint_work_for_view;
+@@global.rds_hint_work_for_view
+0
+SET rds_hint_work_for_view=on;
+ERROR HY000: Variable 'rds_hint_work_for_view' is a GLOBAL variable and should be set with SET GLOBAL
+SET SESSION rds_hint_work_for_view=on;
+ERROR HY000: Variable 'rds_hint_work_for_view' is a GLOBAL variable and should be set with SET GLOBAL
+SET LOCAL rds_hint_work_for_view=on;
+ERROR HY000: Variable 'rds_hint_work_for_view' is a GLOBAL variable and should be set with SET GLOBAL
+SELECT @@local.rds_hint_work_for_view;
+ERROR HY000: Variable 'rds_hint_work_for_view' is a GLOBAL variable
+SELECT @@session.rds_hint_work_for_view;
+ERROR HY000: Variable 'rds_hint_work_for_view' is a GLOBAL variable
+SET GLOBAL rds_hint_work_for_view=default;
+SELECT @@rds_hint_work_for_view;
+@@rds_hint_work_for_view
+1
+# End of test variable rds_hint_work_for_view
+============================================================================
+# Start of test index hint on view when rds_hint_work_for_view=0
+#
+set global rds_hint_work_for_view=0;
+use outline_db;
+truncate table performance_schema.table_io_waits_summary_by_index_usage;
+select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+INDEX_NAME	count_star	count_read	count_fetch
+idx_2_3	0	0	0
+explain select c2 from t1 where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c2` = 2)
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select c2 from t1 where c2 = 2");
+explain select c2 from t1 where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) FORCE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c2` = 2)
+explain analyze select c2 from t1 where c2 = 2;
+EXPLAIN
+-> Covering index lookup on t1 using idx_2_3 (c2=2)  (rows=1) (actual rows=1 loops=1)
+
+select c2 from t1 where c2 = 2;
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+2	outline_db	b9d564e840967163df24d31c56b259ea45fc5bc743c72774c846ab1856a1c7b9	FORCE INDEX		1	idx_2_3	3	0	SELECT `c2` FROM `t1` WHERE `c2` = ?
+1	outline_db	b9d564e840967163df24d31c56b259ea45fc5bc743c72774c846ab1856a1c7b9	FORCE INDEX		1	idx_2_3	16	0	SELECT `c2` FROM `t1` WHERE `c2` = ?
+select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+INDEX_NAME	count_star	count_read	count_fetch
+idx_2_3	2	2	2
+explain select c2,c3 from t1 where c3 = 'test_2';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	idx_2_3	idx_2_3	408	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t1`.`c3` AS `c3` from `outline_db`.`t1` where (`outline_db`.`t1`.`c3` = 'test_2')
+call dbms_outln.add_index_outline('outline_db', '', 1, 'IGNORE INDEX', 'idx_2_3', '', "select c2,c3 from t1 where c3 = 'test_2'");
+explain select c2,c3 from t1 where c3 = 'test_2';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`outline_db`.`t1`.`c3` = 'test_2')
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t1`.`c3` AS `c3` from `outline_db`.`t1` IGNORE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c3` = 'test_2')
+explain analyze select c2,c3 from t1 where c3 = 'test_2';
+EXPLAIN
+-> Filter: (t1.c3 = 'test_2')  (rows=1) (actual rows=1 loops=1)
+    -> Table scan on t1  (rows=3) (actual rows=1 loops=1)
+
+select c2,c3 from t1 where c3 = 'test_2';
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+2	outline_db	b9d564e840967163df24d31c56b259ea45fc5bc743c72774c846ab1856a1c7b9	FORCE INDEX		1	idx_2_3	3	0	SELECT `c2` FROM `t1` WHERE `c2` = ?
+1	outline_db	b9d564e840967163df24d31c56b259ea45fc5bc743c72774c846ab1856a1c7b9	FORCE INDEX		1	idx_2_3	16	0	SELECT `c2` FROM `t1` WHERE `c2` = ?
+3	outline_db	823009be6091259f72122c3cf6ff6f36ec3e406994785977ce5e594348061432	IGNORE INDEX		1	idx_2_3	3	0	SELECT `c2` , `c3` FROM `t1` WHERE `c3` = ?
+select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+INDEX_NAME	count_star	count_read	count_fetch
+idx_2_3	2	2	2
+explain select c2 from v_t1 where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2,idx_2_3	idx_2	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` where (`outline_db`.`t1`.`c2` = 2)
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select c2 from v_t1 where c2 = 2");
+explain select c2 from v_t1 where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c2` = 2)
+explain analyze select c2 from v_t1 where c2 = 2;
+EXPLAIN
+-> Covering index lookup on t1 using idx_2_3 (c2=2)  (rows=1) (actual rows=1 loops=1)
+
+explain select c2 from v_t1 force index(idx_2_3) where c2 = 2;
+ERROR 42000: Key 'idx_2_3' doesn't exist in table 'v_t1'
+explain analyze select c2 from v_t1 force index(idx_2_3) where c2 = 2;
+ERROR 42000: Key 'idx_2_3' doesn't exist in table 'v_t1'
+select c2 from v_t1 where c2 = 2;
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+2	outline_db	b9d564e840967163df24d31c56b259ea45fc5bc743c72774c846ab1856a1c7b9	FORCE INDEX		1	idx_2_3	3	0	SELECT `c2` FROM `t1` WHERE `c2` = ?
+1	outline_db	b9d564e840967163df24d31c56b259ea45fc5bc743c72774c846ab1856a1c7b9	FORCE INDEX		1	idx_2_3	16	0	SELECT `c2` FROM `t1` WHERE `c2` = ?
+4	outline_db	9e2c772814ac7d519756ac140fe237100ee998d5ed184c612d5dc63964c57d1a	FORCE INDEX		1	idx_2_3	6	0	SELECT `c2` FROM `v_t1` WHERE `c2` = ?
+3	outline_db	823009be6091259f72122c3cf6ff6f36ec3e406994785977ce5e594348061432	IGNORE INDEX		1	idx_2_3	3	0	SELECT `c2` , `c3` FROM `t1` WHERE `c3` = ?
+select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+INDEX_NAME	count_star	count_read	count_fetch
+idx_2_3	4	4	4
+explain select c2,c3 from v_t1 where c3 = 'test_2';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	idx_2_3	idx_2_3	408	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t1`.`c3` AS `c3` from `outline_db`.`t1` where (`outline_db`.`t1`.`c3` = 'test_2')
+call dbms_outln.add_index_outline('outline_db', '', 1, 'IGNORE INDEX', 'idx_2_3', '', "select c2,c3 from v_t1 where c3 = 'test_2'");
+explain select c2,c3 from v_t1 where c3 = 'test_2';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`outline_db`.`t1`.`c3` = 'test_2')
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t1`.`c3` AS `c3` from `outline_db`.`t1` IGNORE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c3` = 'test_2')
+explain analyze select c2,c3 from v_t1 where c3 = 'test_2';
+EXPLAIN
+-> Filter: (t1.c3 = 'test_2')  (rows=1) (actual rows=1 loops=1)
+    -> Table scan on t1  (rows=3) (actual rows=1 loops=1)
+
+explain select c2,c3 from v_t1 ignore index(idx_2_3) where c3 = 'test_2';
+ERROR 42000: Key 'idx_2_3' doesn't exist in table 'v_t1'
+explain analyze select c2,c3 from v_t1 ignore index(idx_2_3) where c3 = 'test_2';
+ERROR 42000: Key 'idx_2_3' doesn't exist in table 'v_t1'
+select c2,c3 from v_t1 where c3 = 'test_2';
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+2	outline_db	b9d564e840967163df24d31c56b259ea45fc5bc743c72774c846ab1856a1c7b9	FORCE INDEX		1	idx_2_3	3	0	SELECT `c2` FROM `t1` WHERE `c2` = ?
+1	outline_db	b9d564e840967163df24d31c56b259ea45fc5bc743c72774c846ab1856a1c7b9	FORCE INDEX		1	idx_2_3	16	0	SELECT `c2` FROM `t1` WHERE `c2` = ?
+4	outline_db	9e2c772814ac7d519756ac140fe237100ee998d5ed184c612d5dc63964c57d1a	FORCE INDEX		1	idx_2_3	6	0	SELECT `c2` FROM `v_t1` WHERE `c2` = ?
+3	outline_db	823009be6091259f72122c3cf6ff6f36ec3e406994785977ce5e594348061432	IGNORE INDEX		1	idx_2_3	3	0	SELECT `c2` , `c3` FROM `t1` WHERE `c3` = ?
+5	outline_db	853c44ac7962b757fec624ebd47a373fa43a26f58cd24c81c9c0e6b2db6db6a7	IGNORE INDEX		1	idx_2_3	6	0	SELECT `c2` , `c3` FROM `v_t1` WHERE `c3` = ?
+select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+INDEX_NAME	count_star	count_read	count_fetch
+idx_2_3	4	4	4
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+============================================================================
+# Start of test index hint on view when rds_hint_work_for_view=1
+#
+set global rds_hint_work_for_view=1;
+use outline_db;
+truncate table performance_schema.table_io_waits_summary_by_index_usage;
+select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+INDEX_NAME	count_star	count_read	count_fetch
+idx_2_3	0	0	0
+explain select c2 from t1 where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2,idx_2_3	idx_2	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` where (`outline_db`.`t1`.`c2` = 2)
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select c2 from t1 where c2 = 2");
+explain select c2 from t1 where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c2` = 2)
+explain analyze select c2 from t1 where c2 = 2;
+EXPLAIN
+-> Covering index lookup on t1 using idx_2_3 (c2=2)  (rows=1) (actual rows=1 loops=1)
+
+select c2 from t1 where c2 = 2;
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+1	outline_db	b9d564e840967163df24d31c56b259ea45fc5bc743c72774c846ab1856a1c7b9	FORCE INDEX		1	idx_2_3	3	0	SELECT `c2` FROM `t1` WHERE `c2` = ?
+select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+INDEX_NAME	count_star	count_read	count_fetch
+idx_2_3	2	2	2
+explain select c2,c3 from t1 where c3 = 'test_2';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	idx_2_3	idx_2_3	408	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t1`.`c3` AS `c3` from `outline_db`.`t1` where (`outline_db`.`t1`.`c3` = 'test_2')
+call dbms_outln.add_index_outline('outline_db', '', 1, 'IGNORE INDEX', 'idx_2_3', '', "select c2,c3 from t1 where c3 = 'test_2'");
+explain select c2,c3 from t1 where c3 = 'test_2';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`outline_db`.`t1`.`c3` = 'test_2')
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t1`.`c3` AS `c3` from `outline_db`.`t1` IGNORE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c3` = 'test_2')
+explain analyze select c2,c3 from t1 where c3 = 'test_2';
+EXPLAIN
+-> Filter: (t1.c3 = 'test_2')  (rows=1) (actual rows=1 loops=1)
+    -> Table scan on t1  (rows=3) (actual rows=1 loops=1)
+
+select c2,c3 from t1 where c3 = 'test_2';
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+1	outline_db	b9d564e840967163df24d31c56b259ea45fc5bc743c72774c846ab1856a1c7b9	FORCE INDEX		1	idx_2_3	3	0	SELECT `c2` FROM `t1` WHERE `c2` = ?
+2	outline_db	823009be6091259f72122c3cf6ff6f36ec3e406994785977ce5e594348061432	IGNORE INDEX		1	idx_2_3	3	0	SELECT `c2` , `c3` FROM `t1` WHERE `c3` = ?
+select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+INDEX_NAME	count_star	count_read	count_fetch
+idx_2_3	2	2	2
+explain select c2 from v_t1 where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2,idx_2_3	idx_2	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` where (`outline_db`.`t1`.`c2` = 2)
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select c2 from v_t1 where c2 = 2");
+explain select c2 from v_t1 where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) FORCE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c2` = 2)
+explain analyze select c2 from v_t1 where c2 = 2;
+EXPLAIN
+-> Covering index lookup on t1 using idx_2_3 (c2=2)  (rows=1) (actual rows=1 loops=1)
+
+explain select c2 from v_t1 force index(idx_2_3) where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c2` = 2)
+explain analyze select c2 from v_t1 force index(idx_2_3) where c2 = 2;
+EXPLAIN
+-> Covering index lookup on t1 using idx_2_3 (c2=2)  (rows=1) (actual rows=1 loops=1)
+
+select c2 from v_t1 where c2 = 2;
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+1	outline_db	b9d564e840967163df24d31c56b259ea45fc5bc743c72774c846ab1856a1c7b9	FORCE INDEX		1	idx_2_3	3	0	SELECT `c2` FROM `t1` WHERE `c2` = ?
+3	outline_db	9e2c772814ac7d519756ac140fe237100ee998d5ed184c612d5dc63964c57d1a	FORCE INDEX		1	idx_2_3	6	0	SELECT `c2` FROM `v_t1` WHERE `c2` = ?
+2	outline_db	823009be6091259f72122c3cf6ff6f36ec3e406994785977ce5e594348061432	IGNORE INDEX		1	idx_2_3	3	0	SELECT `c2` , `c3` FROM `t1` WHERE `c3` = ?
+select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+INDEX_NAME	count_star	count_read	count_fetch
+idx_2_3	5	5	5
+explain select c2,c3 from v_t1 where c3 = 'test_2';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	idx_2_3	idx_2_3	408	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t1`.`c3` AS `c3` from `outline_db`.`t1` where (`outline_db`.`t1`.`c3` = 'test_2')
+call dbms_outln.add_index_outline('outline_db', '', 1, 'IGNORE INDEX', 'idx_2_3', '', "select c2,c3 from v_t1 where c3 = 'test_2'");
+explain select c2,c3 from v_t1 where c3 = 'test_2';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`outline_db`.`t1`.`c3` = 'test_2')
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t1`.`c3` AS `c3` from `outline_db`.`t1` IGNORE INDEX (`idx_2_3`) IGNORE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c3` = 'test_2')
+explain analyze select c2,c3 from v_t1 where c3 = 'test_2';
+EXPLAIN
+-> Filter: (t1.c3 = 'test_2')  (rows=1) (actual rows=1 loops=1)
+    -> Table scan on t1  (rows=3) (actual rows=1 loops=1)
+
+explain select c2,c3 from v_t1 ignore index(idx_2_3) where c3 = 'test_2';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`outline_db`.`t1`.`c3` = 'test_2')
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t1`.`c3` AS `c3` from `outline_db`.`t1` IGNORE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c3` = 'test_2')
+explain analyze select c2,c3 from v_t1 ignore index(idx_2_3) where c3 = 'test_2';
+EXPLAIN
+-> Filter: (t1.c3 = 'test_2')  (rows=1) (actual rows=1 loops=1)
+    -> Table scan on t1  (rows=3) (actual rows=1 loops=1)
+
+select c2,c3 from v_t1 where c3 = 'test_2';
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+1	outline_db	b9d564e840967163df24d31c56b259ea45fc5bc743c72774c846ab1856a1c7b9	FORCE INDEX		1	idx_2_3	3	0	SELECT `c2` FROM `t1` WHERE `c2` = ?
+3	outline_db	9e2c772814ac7d519756ac140fe237100ee998d5ed184c612d5dc63964c57d1a	FORCE INDEX		1	idx_2_3	6	0	SELECT `c2` FROM `v_t1` WHERE `c2` = ?
+2	outline_db	823009be6091259f72122c3cf6ff6f36ec3e406994785977ce5e594348061432	IGNORE INDEX		1	idx_2_3	3	0	SELECT `c2` , `c3` FROM `t1` WHERE `c3` = ?
+4	outline_db	853c44ac7962b757fec624ebd47a373fa43a26f58cd24c81c9c0e6b2db6db6a7	IGNORE INDEX		1	idx_2_3	6	0	SELECT `c2` , `c3` FROM `v_t1` WHERE `c3` = ?
+select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+INDEX_NAME	count_star	count_read	count_fetch
+idx_2_3	5	5	5
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+# End of test index hint on view
+============================================================================
+# Start of test prepare/execute, preview, control combination, multiple coverages
+#
+use outline_db;
+truncate table performance_schema.table_io_waits_summary_by_index_usage;
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select c2 from v_t1 where c2 = 2");
+call dbms_outln.preview_outline('outline_db', "select c2 from v_t1 where c2 = 2");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	9e2c772814ac7d519756ac140fe237100ee998d5ed184c612d5dc63964c57d1a	TABLE	v_t1	1	FORCE INDEX (`idx_2_3`)
+call dbms_outln.add_index_outline('outline_db', '', 1, 'IGNORE INDEX', 'idx_2_3', '', "select c2,c3 from v_t1 where c3 = 'test_2'");
+call dbms_outln.preview_outline('outline_db', "select c2,c3 from v_t1 where c3 = 'test_2'");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	853c44ac7962b757fec624ebd47a373fa43a26f58cd24c81c9c0e6b2db6db6a7	TABLE	v_t1	1	IGNORE INDEX (`idx_2_3`)
+PREPARE stmt1 FROM 'select c2 from v_t1 where c2 = ?';
+set @a=2;
+PREPARE stmt2 FROM 'select c2,c3 from v_t1 where c3 = ?';
+set @b="test_2";
+EXECUTE stmt1 USING @a;
+EXECUTE stmt2 USING @b;
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+1	outline_db	9e2c772814ac7d519756ac140fe237100ee998d5ed184c612d5dc63964c57d1a	FORCE INDEX		1	idx_2_3	3	0	SELECT `c2` FROM `v_t1` WHERE `c2` = ?
+2	outline_db	853c44ac7962b757fec624ebd47a373fa43a26f58cd24c81c9c0e6b2db6db6a7	IGNORE INDEX		1	idx_2_3	3	0	SELECT `c2` , `c3` FROM `v_t1` WHERE `c3` = ?
+select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+INDEX_NAME	count_star	count_read	count_fetch
+idx_2_3	1	1	1
+explain select c2, avg(c1) from v_t1 group by c2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	idx_2,idx_2_3	idx_2	5	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,avg(`outline_db`.`t1`.`c1`) AS `avg(c1)` from `outline_db`.`t1` group by `outline_db`.`t1`.`c2`
+explain select c2, avg(c1) from v_t1 force index for group by(idx_2_3) group by c2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	idx_2,idx_2_3	idx_2_3	408	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,avg(`outline_db`.`t1`.`c1`) AS `avg(c1)` from `outline_db`.`t1` FORCE INDEX FOR GROUP BY (`idx_2_3`) group by `outline_db`.`t1`.`c2`
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', 'FOR GROUP BY', "select c2, avg(c1) from v_t1 group by c2");
+explain select c2, avg(c1) from v_t1 group by c2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	idx_2,idx_2_3	idx_2_3	408	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,avg(`outline_db`.`t1`.`c1`) AS `avg(c1)` from `outline_db`.`t1` FORCE INDEX FOR GROUP BY (`idx_2_3`) FORCE INDEX FOR GROUP BY (`idx_2_3`) group by `outline_db`.`t1`.`c2`
+PREPARE stmt3 from 'select c2, avg(c1) from v_t1 group by c2';
+EXECUTE stmt3;
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+1	outline_db	9e2c772814ac7d519756ac140fe237100ee998d5ed184c612d5dc63964c57d1a	FORCE INDEX		1	idx_2_3	3	0	SELECT `c2` FROM `v_t1` WHERE `c2` = ?
+2	outline_db	853c44ac7962b757fec624ebd47a373fa43a26f58cd24c81c9c0e6b2db6db6a7	IGNORE INDEX		1	idx_2_3	3	0	SELECT `c2` , `c3` FROM `v_t1` WHERE `c3` = ?
+3	outline_db	acfb7d5b1ed6f7d8698bc63da0a2f323c1f1303d5141d1ba919ecdda904c0ddf	FORCE INDEX	FOR GROUP BY	1	idx_2_3	4	0	SELECT `c2` , AVG ( `c1` ) FROM `v_t1` GROUP BY `c2`
+select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+INDEX_NAME	count_star	count_read	count_fetch
+idx_2_3	4	4	4
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+truncate table performance_schema.table_io_waits_summary_by_index_usage;
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select c2 from v_t1 where c2 = 2");
+select @@global.rds_opt_outline_enabled;
+@@global.rds_opt_outline_enabled
+1
+select @@global.rds_hint_work_for_view;
+@@global.rds_hint_work_for_view
+1
+set global rds_opt_outline_enabled=off;
+explain select c2 from v_t1 where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2,idx_2_3	idx_2	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` where (`outline_db`.`t1`.`c2` = 2)
+explain select c2 from v_t1 force index(idx_2_3) where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c2` = 2)
+set global rds_hint_work_for_view=off;
+explain select c2 from v_t1 where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2,idx_2_3	idx_2	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` where (`outline_db`.`t1`.`c2` = 2)
+explain select c2 from v_t1 force index(idx_2_3) where c2 = 2;
+ERROR 42000: Key 'idx_2_3' doesn't exist in table 'v_t1'
+set global rds_opt_outline_enabled=on;
+explain select c2 from v_t1 where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c2` = 2)
+explain select c2 from v_t1 force index(idx_2_3) where c2 = 2;
+ERROR 42000: Key 'idx_2_3' doesn't exist in table 'v_t1'
+select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+INDEX_NAME	count_star	count_read	count_fetch
+idx_2_3	0	0	0
+set global rds_hint_work_for_view=on;
+create view v_t1_force as select * from t1 force index(idx_2_3);
+explain select c2 from v_t1_force where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c2` = 2)
+explain select c2 from v_t1_force force index(idx_2) where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2,idx_2_3	idx_2	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) FORCE INDEX (`idx_2`) where (`outline_db`.`t1`.`c2` = 2)
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2', '', "select c2 from v_t1_force where c2 = 2");
+explain select c2 from v_t1_force where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2	idx_2	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` FORCE INDEX (`idx_2`) FORCE INDEX (`idx_2`) where (`outline_db`.`t1`.`c2` = 2)
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select outline_db.t1.c1 AS c1,outline_db.t1.c2 AS c2,outline_db.t1.c3 AS c3 from outline_db.t1");
+explain select c2 from v_t1 where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) FORCE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c2` = 2)
+# End of test prepare/execute, preview, control combination, multiple coverages
+============================================================================
+# Start of test view derived from multiple tables/views and optimizer hint
+#
+use outline_db;
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+create table t2(c11 int auto_increment primary key, c22 int, c33 int, key idx_22(c22), key idx_22_33(c22,c33)) engine=Dstore;
+insert into t2 values(1, 11, 111);
+insert into t2 values(2, 22, 222);
+insert into t2 values(3, 33, 333);
+create view v_t1_t2 as select * from t1 join t2 on t1.c1 = t2.c11;
+explain select c2,c22 from v_t1_t2 where c2=2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	PRIMARY,idx_2,idx_2_3	idx_2	5	const	#	#	NULL
+1	SIMPLE	t2	NULL	eq_ref	PRIMARY	PRIMARY	4	outline_db.t1.c1	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t2`.`c22` AS `c22` from `outline_db`.`t1` join `outline_db`.`t2` where ((`outline_db`.`t2`.`c11` = `outline_db`.`t1`.`c1`) and (`outline_db`.`t1`.`c2` = 2))
+explain select c2,c22 from v_t1_t2 force index(idx_2_3) where c2=2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	PRIMARY,idx_2,idx_2_3	idx_2	5	const	#	#	NULL
+1	SIMPLE	t2	NULL	eq_ref	PRIMARY	PRIMARY	4	outline_db.t1.c1	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t2`.`c22` AS `c22` from `outline_db`.`t1` join `outline_db`.`t2` where ((`outline_db`.`t2`.`c11` = `outline_db`.`t1`.`c1`) and (`outline_db`.`t1`.`c2` = 2))
+explain select c2,c22 from v_t1_t2 force index(idx_22_33) where c2=2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	PRIMARY,idx_2,idx_2_3	idx_2	5	const	#	#	NULL
+1	SIMPLE	t2	NULL	eq_ref	PRIMARY	PRIMARY	4	outline_db.t1.c1	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t2`.`c22` AS `c22` from `outline_db`.`t1` join `outline_db`.`t2` where ((`outline_db`.`t2`.`c11` = `outline_db`.`t1`.`c1`) and (`outline_db`.`t1`.`c2` = 2))
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select c2,c22 from v_t1_t2 where c2=2");
+explain select c2,c22 from v_t1_t2 where c2=2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	NULL
+1	SIMPLE	t2	NULL	eq_ref	PRIMARY	PRIMARY	4	outline_db.t1.c1	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t2`.`c22` AS `c22` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) join `outline_db`.`t2` where ((`outline_db`.`t2`.`c11` = `outline_db`.`t1`.`c1`) and (`outline_db`.`t1`.`c2` = 2))
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_22_33', '', "select c2,c22 from v_t1_t2 where c2=2");
+explain select c2,c22 from v_t1_t2 where c2=2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	PRIMARY,idx_2,idx_2_3	idx_2	5	const	#	#	NULL
+1	SIMPLE	t2	NULL	eq_ref	PRIMARY	PRIMARY	4	outline_db.t1.c1	#	#	NULL
+Warnings:
+Warning	8041	Outline apply failed, cause: This is unresolved field for INDEX hint. Skip statement outline.
+Warning	1176	Key 'idx_22_33' doesn't exist in table 't1'
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t2`.`c22` AS `c22` from `outline_db`.`t1` join `outline_db`.`t2` where ((`outline_db`.`t2`.`c11` = `outline_db`.`t1`.`c1`) and (`outline_db`.`t1`.`c2` = 2))
+drop view v_t1_t2;
+create view v_t1_t2 as select c22,(select c2 from t1) from t2;
+explain select * from v_t1_t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t2	NULL	index	NULL	idx_22	5	NULL	#	#	Using index
+3	SUBQUERY	t1	NULL	index	NULL	idx_2	5	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t2`.`c22` AS `c22`,(/* select#3 */ select `outline_db`.`t1`.`c2` from `outline_db`.`t1`) AS `(select c2 from t1)` from `outline_db`.`t2`
+explain select * from v_t1_t2 force index(idx_2_3);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t2	NULL	index	NULL	idx_22	5	NULL	#	#	Using index
+3	SUBQUERY	t1	NULL	index	NULL	idx_2	5	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t2`.`c22` AS `c22`,(/* select#3 */ select `outline_db`.`t1`.`c2` from `outline_db`.`t1`) AS `(select c2 from t1)` from `outline_db`.`t2`
+explain select * from v_t1_t2 force index(idx_22_33);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t2	NULL	index	NULL	idx_22	5	NULL	#	#	Using index
+3	SUBQUERY	t1	NULL	index	NULL	idx_2	5	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t2`.`c22` AS `c22`,(/* select#3 */ select `outline_db`.`t1`.`c2` from `outline_db`.`t1`) AS `(select c2 from t1)` from `outline_db`.`t2`
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select * from v_t1_t2");
+explain select * from v_t1_t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t2	NULL	index	NULL	idx_22	5	NULL	#	#	Using index
+3	SUBQUERY	t1	NULL	index	NULL	idx_2_3	408	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t2`.`c22` AS `c22`,(/* select#3 */ select `outline_db`.`t1`.`c2` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`)) AS `(select c2 from t1)` from `outline_db`.`t2`
+drop view v_t1_t2;
+create algorithm=merge view v_t1_t2 as select c22,(select c2 from t1) from t2;
+explain select * from v_t1_t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t2	NULL	index	NULL	idx_22	5	NULL	#	#	Using index
+3	SUBQUERY	t1	NULL	index	NULL	idx_2_3	408	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t2`.`c22` AS `c22`,(/* select#3 */ select `outline_db`.`t1`.`c2` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`)) AS `(select c2 from t1)` from `outline_db`.`t2`
+explain select * from v_t1_t2 force index(idx_2_3);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t2	NULL	index	NULL	idx_22	5	NULL	#	#	Using index
+3	SUBQUERY	t1	NULL	index	NULL	idx_2	5	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t2`.`c22` AS `c22`,(/* select#3 */ select `outline_db`.`t1`.`c2` from `outline_db`.`t1`) AS `(select c2 from t1)` from `outline_db`.`t2`
+explain select * from v_t1_t2 force index(idx_22_33);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t2	NULL	index	NULL	idx_22	5	NULL	#	#	Using index
+3	SUBQUERY	t1	NULL	index	NULL	idx_2	5	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t2`.`c22` AS `c22`,(/* select#3 */ select `outline_db`.`t1`.`c2` from `outline_db`.`t1`) AS `(select c2 from t1)` from `outline_db`.`t2`
+drop view v_t1_t2;
+create view v_t2 as select * from t2;
+create view v_v_t1_t2 as select * from v_t1 join v_t2 on v_t1.c1 = v_t2.c11;
+explain select c2,c22 from v_v_t1_t2 where c2=2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	PRIMARY,idx_2,idx_2_3	idx_2	5	const	#	#	NULL
+1	SIMPLE	t2	NULL	eq_ref	PRIMARY	PRIMARY	4	outline_db.t1.c1	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t2`.`c22` AS `c22` from `outline_db`.`t1` join `outline_db`.`t2` where ((`outline_db`.`t2`.`c11` = `outline_db`.`t1`.`c1`) and (`outline_db`.`t1`.`c2` = 2))
+explain select c2,c22 from v_v_t1_t2 force index(idx_2_3) where c2=2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	PRIMARY,idx_2,idx_2_3	idx_2	5	const	#	#	NULL
+1	SIMPLE	t2	NULL	eq_ref	PRIMARY	PRIMARY	4	outline_db.t1.c1	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t2`.`c22` AS `c22` from `outline_db`.`t1` join `outline_db`.`t2` where ((`outline_db`.`t2`.`c11` = `outline_db`.`t1`.`c1`) and (`outline_db`.`t1`.`c2` = 2))
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select c2,c22 from v_v_t1_t2 where c2=2");
+explain select c2,c22 from v_v_t1_t2 where c2=2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	NULL
+1	SIMPLE	t2	NULL	eq_ref	PRIMARY	PRIMARY	4	outline_db.t1.c1	#	#	NULL
+Warnings:
+Warning	8041	Outline apply failed, cause: This is unresolved field for INDEX hint. Skip statement outline.
+Warning	1176	Key 'idx_2_3' doesn't exist in table 't2'
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t2`.`c22` AS `c22` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) FORCE INDEX (`idx_2_3`) join `outline_db`.`t2` where ((`outline_db`.`t2`.`c11` = `outline_db`.`t1`.`c1`) and (`outline_db`.`t1`.`c2` = 2))
+drop view v_v_t1_t2;
+create view v_v_t1_t2 as select c22,(select c2 from v_t1) from v_t2;
+explain select * from v_v_t1_t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t2	NULL	index	NULL	idx_22	5	NULL	#	#	Using index
+3	SUBQUERY	t1	NULL	index	NULL	idx_2	5	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t2`.`c22` AS `c22`,(/* select#3 */ select `outline_db`.`t1`.`c2` from `outline_db`.`t1`) AS `(select c2 from v_t1)` from `outline_db`.`t2`
+explain select * from v_v_t1_t2 force index(idx_2_3);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t2	NULL	index	NULL	idx_22	5	NULL	#	#	Using index
+3	SUBQUERY	t1	NULL	index	NULL	idx_2	5	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t2`.`c22` AS `c22`,(/* select#3 */ select `outline_db`.`t1`.`c2` from `outline_db`.`t1`) AS `(select c2 from v_t1)` from `outline_db`.`t2`
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select * from v_v_t1_t2");
+explain select * from v_v_t1_t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t2	NULL	index	NULL	idx_22	5	NULL	#	#	Using index
+3	SUBQUERY	t1	NULL	index	NULL	idx_2_3	408	NULL	#	#	Using index
+Warnings:
+Warning	8041	Outline apply failed, cause: This is unresolved field for INDEX hint. Skip statement outline.
+Warning	1176	Key 'idx_2_3' doesn't exist in table 't2'
+Note	1003	/* select#1 */ select `outline_db`.`t2`.`c22` AS `c22`,(/* select#3 */ select `outline_db`.`t1`.`c2` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) FORCE INDEX (`idx_2_3`)) AS `(select c2 from v_t1)` from `outline_db`.`t2`
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+2	outline_db	045d7928262a5e35395d0bdffaefae49b1ed16c54d4d6a5a62ffd5fdf1de7311	FORCE INDEX		1	idx_22_33	2	0	SELECT `c2` , `c22` FROM `v_t1_t2` WHERE `c2` = ?
+1	outline_db	045d7928262a5e35395d0bdffaefae49b1ed16c54d4d6a5a62ffd5fdf1de7311	FORCE INDEX		1	idx_2_3	4	0	SELECT `c2` , `c22` FROM `v_t1_t2` WHERE `c2` = ?
+3	outline_db	8745d1315ce01688b7621821e2ddfccfb17b7242ebcc4848fd8c25422dba06ba	FORCE INDEX		1	idx_2_3	4	0	SELECT * FROM `v_t1_t2`
+4	outline_db	55b6da7acedfc29ef00119aa4bab3a4276ba55d29e05a174a35dda5fa952eece	FORCE INDEX		1	idx_2_3	4	0	SELECT `c2` , `c22` FROM `v_v_t1_t2` WHERE `c2` = ?
+5	outline_db	4bc72f7999dbb5c780e1baa0fa1565c73c8fb94901f0edf247792df421c9f06e	FORCE INDEX		1	idx_2_3	4	0	SELECT * FROM `v_v_t1_t2`
+drop view v_v_t1_t2;
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+explain select c2 from v_t1 where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2,idx_2_3	idx_2	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` where (`outline_db`.`t1`.`c2` = 2)
+explain select /*+ INDEX(v_t1 idx_2_3) */ c2 from v_t1 where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2,idx_2_3	idx_2	5	const	#	#	Using index
+Warnings:
+Warning	3128	Unresolved name `v_t1`@`select#1` `idx_2_3` for INDEX hint
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` where (`outline_db`.`t1`.`c2` = 2)
+explain select c2,c3 from v_t1 where c3 = 'test_2';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	idx_2_3	idx_2_3	408	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t1`.`c3` AS `c3` from `outline_db`.`t1` where (`outline_db`.`t1`.`c3` = 'test_2')
+explain select /*+ NO_INDEX(v_t1 idx_2_3) */ c2,c3 from v_t1 where c3 = 'test_2';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	idx_2_3	idx_2_3	408	NULL	#	#	Using where; Using index
+Warnings:
+Warning	3128	Unresolved name `v_t1`@`select#1` `idx_2_3` for NO_INDEX hint
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t1`.`c3` AS `c3` from `outline_db`.`t1` where (`outline_db`.`t1`.`c3` = 'test_2')
+call dbms_outln.add_optimizer_outline("outline_db", '', 1, '/*+ INDEX(v_t1 idx_2_3) */', "select c2 from v_t1 where c2 = 2");
+call dbms_outln.add_optimizer_outline("outline_db", '', 1, '/*+ NO_INDEX(v_t1 idx_2_3) */', "select c2,c3 from v_t1 where c3 = 'test_2'");
+explain select c2 from v_t1 where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2,idx_2_3	idx_2	5	const	#	#	Using index
+Warnings:
+Warning	3128	Unresolved name `v_t1`@`select#1` `idx_2_3` for INDEX hint
+Warning	3128	Unresolved name `v_t1`@`select#1` for INDEX hint
+Warning	3128	Unresolved name `v_t1`@`select#1` `idx_2_3` for INDEX hint
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` where (`outline_db`.`t1`.`c2` = 2)
+explain select c2,c3 from v_t1 where c3 = 'test_2';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	idx_2_3	idx_2_3	408	NULL	#	#	Using where; Using index
+Warnings:
+Warning	3128	Unresolved name `v_t1`@`select#1` `idx_2_3` for NO_INDEX hint
+Warning	3128	Unresolved name `v_t1`@`select#1` for NO_INDEX hint
+Warning	3128	Unresolved name `v_t1`@`select#1` `idx_2_3` for NO_INDEX hint
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t1`.`c3` AS `c3` from `outline_db`.`t1` where (`outline_db`.`t1`.`c3` = 'test_2')
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+1	outline_db	9e2c772814ac7d519756ac140fe237100ee998d5ed184c612d5dc63964c57d1a	OPTIMIZER		1	/*+ INDEX(v_t1 idx_2_3) */	2	0	SELECT `c2` FROM `v_t1` WHERE `c2` = ?
+2	outline_db	853c44ac7962b757fec624ebd47a373fa43a26f58cd24c81c9c0e6b2db6db6a7	OPTIMIZER		1	/*+ NO_INDEX(v_t1 idx_2_3) */	2	0	SELECT `c2` , `c3` FROM `v_t1` WHERE `c3` = ?
+# End of test view derived from multiple tables
+============================================================================
+# Start of test multiple combinations between views(Multi-table join, non-correlation subquery, correlation subquery, nested view)
+#
+use outline_db;
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+explain select v_t1.c1,v_t1.c2,v_t1.c3,v_t2.c11,v_t2.c22,v_t2.c33 from v_t1 force index(idx_2_3) LEFT JOIN v_t2 ON v_t1.c1=v_t2.c11 where v_t1.c2=3 and v_t2.c33 < '12';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	NULL
+1	SIMPLE	t2	NULL	eq_ref	PRIMARY	PRIMARY	4	outline_db.t1.c1	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c1` AS `c1`,`outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t1`.`c3` AS `c3`,`outline_db`.`t2`.`c11` AS `c11`,`outline_db`.`t2`.`c22` AS `c22`,`outline_db`.`t2`.`c33` AS `c33` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) join `outline_db`.`t2` where ((`outline_db`.`t2`.`c11` = `outline_db`.`t1`.`c1`) and (`outline_db`.`t1`.`c2` = 3) and (`outline_db`.`t2`.`c33` < 12))
+explain select v_t1.c1,v_t1.c2,v_t1.c3,v_t2.c11,v_t2.c22,v_t2.c33 from v_t1 force index(idx_2_3) LEFT JOIN v_t2 force index(idx_22_33) ON v_t1.c1=v_t2.c11 where v_t1.c2=3 and v_t2.c33 < '12';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	NULL
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c1` AS `c1`,`outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t1`.`c3` AS `c3`,`outline_db`.`t2`.`c11` AS `c11`,`outline_db`.`t2`.`c22` AS `c22`,`outline_db`.`t2`.`c33` AS `c33` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) join `outline_db`.`t2` FORCE INDEX (`idx_22_33`) where ((`outline_db`.`t2`.`c11` = `outline_db`.`t1`.`c1`) and (`outline_db`.`t1`.`c2` = 3) and (`outline_db`.`t2`.`c33` < 12))
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select v_t1.c1,v_t1.c2,v_t1.c3,v_t2.c11,v_t2.c22,v_t2.c33 from v_t1 LEFT JOIN v_t2 ON v_t1.c1=v_t2.c11 where v_t1.c2=3 and v_t2.c33 < '12'");
+call dbms_outln.add_index_outline('outline_db', '', 2, 'FORCE INDEX', 'idx_22_33', '', "select v_t1.c1,v_t1.c2,v_t1.c3,v_t2.c11,v_t2.c22,v_t2.c33 from v_t1 LEFT JOIN v_t2 ON v_t1.c1=v_t2.c11 where v_t1.c2=3 and v_t2.c33 < '12'");
+explain select v_t1.c1,v_t1.c2,v_t1.c3,v_t2.c11,v_t2.c22,v_t2.c33 from v_t1 LEFT JOIN v_t2 ON v_t1.c1=v_t2.c11 where v_t1.c2=3 and v_t2.c33 < 12;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	NULL
+1	SIMPLE	t2	NULL	eq_ref	PRIMARY	PRIMARY	4	outline_db.t1.c1	#	#	Using where
+Warnings:
+Warning	8041	Outline apply failed, cause: This is unresolved field for INDEX hint. Skip statement outline.
+Warning	1176	Key 'idx_2_3' doesn't exist in table 't2'
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c1` AS `c1`,`outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t1`.`c3` AS `c3`,`outline_db`.`t2`.`c11` AS `c11`,`outline_db`.`t2`.`c22` AS `c22`,`outline_db`.`t2`.`c33` AS `c33` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) FORCE INDEX (`idx_2_3`) join `outline_db`.`t2` where ((`outline_db`.`t2`.`c11` = `outline_db`.`t1`.`c1`) and (`outline_db`.`t1`.`c2` = 3) and (`outline_db`.`t2`.`c33` < 12))
+explain select avg(v_t1.c2), (select avg(v_t2.c22) from v_t2) from v_t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	index	NULL	idx_2	5	NULL	#	#	Using index
+2	SUBQUERY	t2	NULL	index	NULL	idx_22	5	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select avg(`outline_db`.`t1`.`c2`) AS `avg(v_t1.c2)`,(/* select#2 */ select avg(`outline_db`.`t2`.`c22`) from `outline_db`.`t2`) AS `(select avg(v_t2.c22) from v_t2)` from `outline_db`.`t1`
+explain select avg(v_t1.c2), (select avg(v_t2.c22) from v_t2 force index(idx_22_33)) from v_t1 force index(idx_2_3);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	index	NULL	idx_2_3	408	NULL	#	#	Using index
+2	SUBQUERY	t2	NULL	index	NULL	idx_22_33	10	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select avg(`outline_db`.`t1`.`c2`) AS `avg(v_t1.c2)`,(/* select#2 */ select avg(`outline_db`.`t2`.`c22`) from `outline_db`.`t2` FORCE INDEX (`idx_22_33`)) AS `(select avg(v_t2.c22) from v_t2 force index(idx_22_33))` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`)
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_22_33', '', "select avg(v_t1.c2), (select avg(v_t2.c22) from v_t2) from v_t1");
+call dbms_outln.add_index_outline('outline_db', '', 2, 'FORCE INDEX', 'idx_2_3', '', "select avg(v_t1.c2), (select avg(v_t2.c22) from v_t2) from v_t1");
+explain select avg(v_t1.c2), (select avg(v_t2.c22) from v_t2) from v_t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	index	NULL	idx_2	5	NULL	#	#	Using index
+2	SUBQUERY	t2	NULL	index	NULL	idx_22_33	10	NULL	#	#	Using index
+Warnings:
+Warning	8041	Outline apply failed, cause: This is unresolved field for INDEX hint. Skip statement outline.
+Warning	1176	Key 'idx_22_33' doesn't exist in table 't1'
+Note	1003	/* select#1 */ select avg(`outline_db`.`t1`.`c2`) AS `avg(v_t1.c2)`,(/* select#2 */ select avg(`outline_db`.`t2`.`c22`) from `outline_db`.`t2` FORCE INDEX (`idx_22_33`) FORCE INDEX (`idx_22_33`)) AS `(select avg(v_t2.c22) from v_t2)` from `outline_db`.`t1`
+explain select v_t1.c1,v_t1.c2,v_t1.c3 from v_t1 force index(idx_2_3) where exists (select c1, c2, c3 from v_t2 force index(idx_22_33) where c3 > v_t1.c1) and v_t1.c2=2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	Using where
+1	SIMPLE	t2	NULL	index	NULL	idx_22_33	10	NULL	#	#	Using index; FirstMatch(t1); Using join buffer (hash join)
+Warnings:
+Note	1276	Field or reference 'c1' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'c2' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'c3' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'c3' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'v_t1.c1' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c1` AS `c1`,`outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t1`.`c3` AS `c3` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) semi join (`outline_db`.`t2` FORCE INDEX (`idx_22_33`)) where ((`outline_db`.`t1`.`c2` = 2) and (cast(`outline_db`.`t1`.`c3` as double) > cast(`outline_db`.`t1`.`c1` as double)))
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select v_t1.c1,v_t1.c2,v_t1.c3 from v_t1 where exists (select c1, c2, c3 from v_t2 where c3 > v_t1.c1) and v_t1.c2=2");
+call dbms_outln.add_index_outline('outline_db', '', 2, 'FORCE INDEX', 'idx_22_33', '', "select v_t1.c1,v_t1.c2,v_t1.c3 from v_t1 where exists (select c1, c2, c3 from v_t2 where c3 > v_t1.c1) and v_t1.c2=2");
+explain select v_t1.c1,v_t1.c2,v_t1.c3 from v_t1 where exists (select c1, c2, c3 from v_t2 where c3 > v_t1.c1) and v_t1.c2=2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	Using where
+1	SIMPLE	t2	NULL	index	NULL	PRIMARY	4	NULL	#	#	Using index; FirstMatch(t1); Using join buffer (hash join)
+Warnings:
+Warning	8041	Outline apply failed, cause: This is unresolved field for INDEX hint. Skip statement outline.
+Warning	1176	Key 'idx_2_3' doesn't exist in table 't2'
+Note	1276	Field or reference 'c1' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'c2' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'c3' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'c3' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'v_t1.c1' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c1` AS `c1`,`outline_db`.`t1`.`c2` AS `c2`,`outline_db`.`t1`.`c3` AS `c3` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) FORCE INDEX (`idx_2_3`) semi join (`outline_db`.`t2`) where ((`outline_db`.`t1`.`c2` = 2) and (cast(`outline_db`.`t1`.`c3` as double) > cast(`outline_db`.`t1`.`c1` as double)))
+create view v_v_t1 as select * from v_t1;
+explain select c2, avg(c1) from v_v_t1 group by c2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	idx_2,idx_2_3	idx_2	5	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,avg(`outline_db`.`t1`.`c1`) AS `avg(c1)` from `outline_db`.`t1` group by `outline_db`.`t1`.`c2`
+explain select c2, avg(c1) from v_v_t1 force index for group by(idx_2_3) group by c2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	idx_2,idx_2_3	idx_2_3	408	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,avg(`outline_db`.`t1`.`c1`) AS `avg(c1)` from `outline_db`.`t1` FORCE INDEX FOR GROUP BY (`idx_2_3`) group by `outline_db`.`t1`.`c2`
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', 'FOR GROUP BY', "select c2, avg(c1) from v_v_t1 group by c2");
+explain select c2, avg(c1) from v_v_t1 group by c2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	idx_2,idx_2_3	idx_2_3	408	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2`,avg(`outline_db`.`t1`.`c1`) AS `avg(c1)` from `outline_db`.`t1` FORCE INDEX FOR GROUP BY (`idx_2_3`) FORCE INDEX FOR GROUP BY (`idx_2_3`) FORCE INDEX FOR GROUP BY (`idx_2_3`) group by `outline_db`.`t1`.`c2`
+# End of test multiple combinations between views
+============================================================================
+drop database outline_db;
+truncate table mysql.outline;
+set global rds_opt_outline_enabled = default;
+set global rds_hint_work_for_view = default;

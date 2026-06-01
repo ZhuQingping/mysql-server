@@ -1,0 +1,139 @@
+From c8da08353b4f9811e1cb39ceff8c1c1caa485e39 Mon Sep 17 00:00:00 2001
+From: Tor Didriksen <tor.didriksen@oracle.com>
+Date: Thu, 24 Jul 2025 14:16:07 +0200
+Subject: [PATCH] US2026033100141 Bug#38235429 Add unit test for
+ my_print_stacktrace
+
+Add unit test for my_print_stacktrace, for easier testing of the 3rd
+party libbacktrace library.
+
+For the 8.0 patch: ensure that mysys/mysys_objlib actually is built
+with libbacktrace.
+
+Change-Id: Ic7e6b7472ad29ab3ade39ab63a7ee2e48ba3b25a
+(cherry picked from commit 7295c654e0a1da79d5f57d80dc00ece5e271365b)
+(cherry picked from commit d6b994ef53805d1e7aab3cefa2fdd2c87578e094)
+---
+ mysys/CMakeLists.txt                 | 12 +++----
+ unittest/gunit/CMakeLists.txt        | 11 ++++++
+ unittest/gunit/mysys_stacktrace-t.cc | 50 ++++++++++++++++++++++++++++
+ 3 files changed, 66 insertions(+), 7 deletions(-)
+ create mode 100644 unittest/gunit/mysys_stacktrace-t.cc
+
+diff --git a/mysys/CMakeLists.txt b/mysys/CMakeLists.txt
+index 554bfde1f19..647a056f58a 100644
+--- a/mysys/CMakeLists.txt
++++ b/mysys/CMakeLists.txt
+@@ -182,19 +182,12 @@ IF(FREEBSD)
+   ADD_COMPILE_FLAGS(stacktrace.cc COMPILE_FLAGS ${LIBUNWIND_CFLAGS})
+ ENDIF()
+ 
+-IF(WITH_EXT_BACKTRACE)
+-  SET(BACKTRACE_LIBRARIES ext::backtrace)
+-ELSE()
+-  UNSET(BACKTRACE_LIBRARIES)
+-ENDIF()
+-
+ ADD_CONVENIENCE_LIBRARY(mysys ${MYSYS_SOURCES}
+   LINK_LIBRARIES
+   mytime
+   strings
+   ext::zlib
+   ext::zstd
+-  ${BACKTRACE_LIBRARIES}
+   ${LIBNSL}
+   ${LIBM}
+   ${LIBRT}
+@@ -203,6 +196,11 @@ ADD_CONVENIENCE_LIBRARY(mysys ${MYSYS_SOURCES}
+   ${SSL_LIBRARIES}
+   )
+ 
++IF(WITH_EXT_BACKTRACE)
++  TARGET_LINK_LIBRARIES(mysys ext::backtrace)
++  TARGET_LINK_LIBRARIES(mysys_objlib ext::backtrace)
++ENDIF()
++
+ # For targets that link with mysys, and are independent of other targets.
+ IF(TARGET copy_openssl_dlls)
+   ADD_DEPENDENCIES(mysys copy_openssl_dlls)
+diff --git a/unittest/gunit/CMakeLists.txt b/unittest/gunit/CMakeLists.txt
+index 82360038365..fd652aebc07 100644
+--- a/unittest/gunit/CMakeLists.txt
++++ b/unittest/gunit/CMakeLists.txt
+@@ -383,6 +383,17 @@ FOREACH(test ${TESTS})
+     )
+ ENDFOREACH()
+ 
++# Disable by default, since it dumps a stack trace.
++# We don't want ppl to think there was a segfault or something.
++# See also the mtr test main.print_stacktrace
++MYSQL_ADD_EXECUTABLE(mysys_stacktrace-t mysys_stacktrace-t.cc
++  COMPILE_DEFINITIONS ${DISABLE_PSI_DEFINITIONS}
++  ENABLE_EXPORTS
++  EXCLUDE_FROM_ALL
++  LINK_LIBRARIES sqlgunitlib gunit_small
++  SKIP_INSTALL
++)
++
+ # See comments about __builtin_memcmp in the source file.
+ IF(HAVE_NO_BUILTIN_MEMCMP)
+   ADD_COMPILE_FLAGS(
+diff --git a/unittest/gunit/mysys_stacktrace-t.cc b/unittest/gunit/mysys_stacktrace-t.cc
+new file mode 100644
+index 00000000000..5d813c1d5c7
+--- /dev/null
++++ b/unittest/gunit/mysys_stacktrace-t.cc
+@@ -0,0 +1,50 @@
++/* Copyright (c) 2025, Oracle and/or its affiliates.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License, version 2.0,
++   as published by the Free Software Foundation.
++
++   This program is designed to work with certain software (including
++   but not limited to OpenSSL) that is licensed under separate terms,
++   as designated in a particular file or component or in included license
++   documentation.  The authors of MySQL hereby grant you an additional
++   permission to link the program and your derivative works with the
++   separately licensed software that they have either included with
++   the program or referenced in the documentation.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License, version 2.0, for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
++
++#include <gtest/gtest.h>
++#include <stdio.h>
++#include <sys/types.h>
++
++#include "my_compiler.h"
++#include "my_inttypes.h"
++#include "my_stacktrace.h"
++#include "my_sys.h"
++#include "scope_guard.h"
++
++#ifdef HAVE_STACKTRACE
++
++NO_INLINE
++int function_one(const uchar *stack_bottom, const char *s) {
++  fprintf(stderr, "%s", s);
++  auto guard = create_scope_guard(
++      [&]() { my_print_stacktrace(stack_bottom, my_thread_stack_size); });
++  return 1;
++}
++
++TEST(Mysys, StackTrace) {
++  uchar buf[1000]{};
++  int ret = function_one(buf, "hello\n");
++  EXPECT_EQ(1, ret);
++}
++
++#endif  // HAVE_STACKTRACE
+-- 
+2.23.0
+

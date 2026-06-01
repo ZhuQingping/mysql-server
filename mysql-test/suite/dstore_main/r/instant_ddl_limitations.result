@@ -1,0 +1,66 @@
+#
+# Scenario 1:
+# Create a small table and adding spatial types with not null should fail
+#
+#
+# Scenario 6:
+# INSTANT ADD/DROP column with key
+#
+CREATE TABLE t1 (c1 INT, c2 INT);
+ALTER TABLE t1 ADD COLUMN c3 INT KEY, ALGORITHM=INSTANT;
+ERROR 0A000: ALGORITHM=INSTANT is not supported for this operation. Try ALGORITHM=COPY/INPLACE.
+DROP TABLE t1;
+CREATE TABLE t1 (c1 INT KEY, c2 INT);
+ALTER TABLE t1 DROP COLUMN c1, ALGORITHM=INSTANT;
+ERROR 0A000: ALGORITHM=INSTANT is not supported for this operation. Try ALGORITHM=COPY/INPLACE.
+ALTER TABLE t1 DROP COLUMN c1, ADD PRIMARY KEY (c2), ALGORITHM=INSTANT;
+ERROR 0A000: ALGORITHM=INSTANT is not supported for this operation. Try ALGORITHM=COPY/INPLACE.
+DROP TABLE t1;
+CREATE TABLE t1 (c1 INT KEY, c2 INT);
+ALTER TABLE t1 ADD COLUMN c3 INT UNIQUE KEY, ALGORITHM=INSTANT;
+ERROR 0A000: ALGORITHM=INSTANT is not supported for this operation. Try ALGORITHM=COPY/INPLACE.
+ALTER TABLE t1 ADD COLUMN c3 INT, ADD INDEX idx (c3), ALGORITHM=INSTANT;
+ERROR 0A000: ALGORITHM=INSTANT is not supported for this operation. Try ALGORITHM=COPY/INPLACE.
+DROP TABLE t1;
+CREATE TABLE t1 (c1 INT KEY, c2 INT, INDEX idx(c2));
+ALTER TABLE t1 DROP COLUMN c2, ALGORITHM=INSTANT;
+ERROR 0A000: ALGORITHM=INSTANT is not supported for this operation. Try ALGORITHM=COPY/INPLACE.
+DROP TABLE t1;
+#
+# Scenario 7:
+# Maximum row versions (MAX_ROW_VERSION is 16)
+#
+CREATE TABLE t1 (c1 int);
+# INSTANT ADD COLUMNS to table to make it reach the maximum versions
+# Table TOTAL_ROW_VERSIONS should be 16 (MAX)
+# An INSTANT ADD COLUMN should result in error now.
+ALTER TABLE t1 ADD COLUMN c19 INT, ALGORITHM=INSTANT;
+ERROR HY000: Maximum row versions reached for table ./test/t1. No more columns can be added or dropped instantly. Please use COPY/INPLACE.
+# ADD COLUMN shall fall back to INPLACE if ALGORITHM not given explicitly
+ALTER TABLE t1 ADD COLUMN c19 INT;
+# Table would have been rebuilt
+DROP TABLE t1;
+CREATE TABLE t1 (c1 int);
+INSERT INTO t1(c1) VALUES(1);
+SELECT * FROM t1;
+c1
+1
+# INSTANT ADD COLUMNS to table to make it reach the maximum versions
+# An INSTANT DROP COLUMN should result in error now.
+ALTER TABLE t1 DROP COLUMN c18, ALGORITHM=INSTANT;
+ERROR HY000: Maximum row versions reached for table ./test/t1. No more columns can be added or dropped instantly. Please use COPY/INPLACE.
+INSERT INTO t1(c1) VALUES(2);
+SELECT * FROM t1;
+c1	c2	c3	c4	c5	c6	c7	c8	c9	c10	c11	c12	c13	c14	c15	c16	c17	c18
+1	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+2	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+# DROP COLUMN shall fall back to INPLACE if ALGORITHM not given explicitly
+ALTER TABLE t1 DROP COLUMN c18;
+INSERT INTO t1(c1) VALUES(3);
+SELECT * FROM t1;
+c1	c2	c3	c4	c5	c6	c7	c8	c9	c10	c11	c12	c13	c14	c15	c16	c17
+1	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+2	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+3	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+# Table would have been rebuilt
+DROP TABLE t1;

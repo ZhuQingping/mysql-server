@@ -1,0 +1,1078 @@
+#Run TPC-H test
+# Step 1, prepare tpch tables
+# Step 1-1, create tables
+# Step 1-2, load data
+# Step 1-3, add secondary index
+# Step 1-4, analyze tables
+# Step 1-5, check table
+SHOW CREATE TABLE customer;
+Table	Create Table
+customer	CREATE TABLE `customer` (
+  `C_CUSTKEY` int NOT NULL,
+  `C_NAME` varchar(25) NOT NULL,
+  `C_ADDRESS` varchar(40) NOT NULL,
+  `C_NATIONKEY` int NOT NULL,
+  `C_PHONE` char(15) NOT NULL,
+  `C_ACCTBAL` decimal(15,2) NOT NULL,
+  `C_MKTSEGMENT` char(10) NOT NULL,
+  `C_COMMENT` varchar(117) NOT NULL,
+  PRIMARY KEY (`C_CUSTKEY`),
+  KEY `customer_fk1` (`C_NATIONKEY`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SHOW CREATE TABLE orders;
+Table	Create Table
+orders	CREATE TABLE `orders` (
+  `O_ORDERKEY` bigint NOT NULL,
+  `O_CUSTKEY` int NOT NULL,
+  `O_ORDERSTATUS` char(1) NOT NULL,
+  `O_TOTALPRICE` decimal(15,2) NOT NULL,
+  `O_ORDERDATE` date NOT NULL,
+  `O_ORDERPRIORITY` char(15) NOT NULL,
+  `O_CLERK` char(15) NOT NULL,
+  `O_SHIPPRIORITY` int NOT NULL,
+  `O_COMMENT` varchar(79) NOT NULL,
+  PRIMARY KEY (`O_ORDERKEY`),
+  KEY `orders_fk1` (`O_CUSTKEY`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SHOW CREATE TABLE lineitem;
+Table	Create Table
+lineitem	CREATE TABLE `lineitem` (
+  `L_ORDERKEY` bigint NOT NULL,
+  `L_PARTKEY` int NOT NULL,
+  `L_SUPPKEY` int NOT NULL,
+  `L_LINENUMBER` int NOT NULL,
+  `L_QUANTITY` decimal(15,2) NOT NULL,
+  `L_EXTENDEDPRICE` decimal(15,2) NOT NULL,
+  `L_DISCOUNT` decimal(15,2) NOT NULL,
+  `L_TAX` decimal(15,2) NOT NULL,
+  `L_RETURNFLAG` char(1) NOT NULL,
+  `L_LINESTATUS` char(1) NOT NULL,
+  `L_SHIPDATE` date NOT NULL,
+  `L_COMMITDATE` date NOT NULL,
+  `L_RECEIPTDATE` date NOT NULL,
+  `L_SHIPINSTRUCT` char(25) NOT NULL,
+  `L_SHIPMODE` char(10) NOT NULL,
+  `L_COMMENT` varchar(44) NOT NULL,
+  PRIMARY KEY (`L_ORDERKEY`,`L_LINENUMBER`),
+  KEY `lineitem_fk1` (`L_ORDERKEY`),
+  KEY `lineitem_fk2` (`L_PARTKEY`,`L_SUPPKEY`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SHOW CREATE TABLE nation;
+Table	Create Table
+nation	CREATE TABLE `nation` (
+  `N_NATIONKEY` int NOT NULL,
+  `N_NAME` char(25) NOT NULL,
+  `N_REGIONKEY` int NOT NULL,
+  `N_COMMENT` varchar(152) DEFAULT NULL,
+  PRIMARY KEY (`N_NATIONKEY`),
+  KEY `region_fk` (`N_REGIONKEY`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SHOW CREATE TABLE partsupp;
+Table	Create Table
+partsupp	CREATE TABLE `partsupp` (
+  `PS_PARTKEY` int NOT NULL,
+  `PS_SUPPKEY` int NOT NULL,
+  `PS_AVAILQTY` int NOT NULL,
+  `PS_SUPPLYCOST` decimal(15,2) NOT NULL,
+  `PS_COMMENT` varchar(199) NOT NULL,
+  PRIMARY KEY (`PS_PARTKEY`,`PS_SUPPKEY`),
+  KEY `partsupp_fk1` (`PS_SUPPKEY`),
+  KEY `partsupp_fk2` (`PS_PARTKEY`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SHOW CREATE TABLE part;
+Table	Create Table
+part	CREATE TABLE `part` (
+  `P_PARTKEY` int NOT NULL,
+  `P_NAME` varchar(55) NOT NULL,
+  `P_MFGR` char(25) NOT NULL,
+  `P_BRAND` char(10) NOT NULL,
+  `P_TYPE` varchar(25) NOT NULL,
+  `P_SIZE` int NOT NULL,
+  `P_CONTAINER` char(10) NOT NULL,
+  `P_RETAILPRICE` decimal(15,2) NOT NULL,
+  `P_COMMENT` varchar(23) NOT NULL,
+  PRIMARY KEY (`P_PARTKEY`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SHOW CREATE TABLE region;
+Table	Create Table
+region	CREATE TABLE `region` (
+  `R_REGIONKEY` int NOT NULL,
+  `R_NAME` char(25) NOT NULL,
+  `R_COMMENT` varchar(152) DEFAULT NULL,
+  PRIMARY KEY (`R_REGIONKEY`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SHOW CREATE TABLE supplier;
+Table	Create Table
+supplier	CREATE TABLE `supplier` (
+  `S_SUPPKEY` int NOT NULL,
+  `S_NAME` char(25) NOT NULL,
+  `S_ADDRESS` varchar(40) NOT NULL,
+  `S_NATIONKEY` int NOT NULL,
+  `S_PHONE` char(15) NOT NULL,
+  `S_ACCTBAL` decimal(15,2) NOT NULL,
+  `S_COMMENT` varchar(101) NOT NULL,
+  PRIMARY KEY (`S_SUPPKEY`),
+  KEY `supplier_fk1` (`S_NATIONKEY`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SELECT COUNT(*) FROM customer;
+COUNT(*)
+1500
+SELECT COUNT(*) FROM orders;
+COUNT(*)
+15000
+SELECT COUNT(*) FROM lineitem;
+COUNT(*)
+60175
+SELECT COUNT(*) FROM nation;
+COUNT(*)
+25
+SELECT COUNT(*) FROM partsupp;
+COUNT(*)
+8000
+SELECT COUNT(*) FROM part;
+COUNT(*)
+2000
+SELECT COUNT(*) FROM region;
+COUNT(*)
+5
+SELECT COUNT(*) FROM supplier;
+COUNT(*)
+100
+#Run TPC-H Query 1
+EXPLAIN
+-> Sort: lineitem.L_RETURNFLAG, lineitem.L_LINESTATUS
+    -> Table scan on <temporary>
+        -> Aggregate using temporary table
+            -> Gather: 1 workers, parallel scan on lineitem  (cost=*** rows=***)
+                -> Table scan on <temporary>
+                    -> Aggregate using temporary table
+                        -> Filter: (lineitem.L_SHIPDATE <= <cache>(('1998-12-01' - interval '119' day)))  (cost=*** rows=***)
+                            -> Parallel table scan on lineitem  (cost=*** rows=***)
+
+EXPLAIN
+-> Sort: lineitem.L_RETURNFLAG, lineitem.L_LINESTATUS  (actual time=*** rows=*** loops=***)
+    -> Table scan on <temporary>  (actual time=*** rows=*** loops=***)
+        -> Aggregate using temporary table  (actual time=*** rows=*** loops=***)
+            -> Gather: 1 workers, parallel scan on lineitem  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                -> Table scan on <temporary>  (actual time=*** rows=*** loops=***)
+                    -> Aggregate using temporary table  (actual time=*** rows=*** loops=***)
+                        -> Filter: (lineitem.L_SHIPDATE <= <cache>(('1998-12-01' - interval '119' day)))  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                            -> Parallel table scan on lineitem  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+
+l_returnflag	l_linestatus	sum_qty	sum_base_price	sum_disc_price	sum_charge	avg_qty	avg_price	avg_disc	count_order
+A	F	380456.00	532348211.65	505822441.4861	526165934.000839	25.575155	35785.709307	0.050081	14876
+N	F	8971.00	12384801.37	11798257.2080	12282485.056933	25.778736	35588.509684	0.047759	348
+N	O	727384.00	1019824403.66	969174631.9957	1008022104.640581	25.450805	35683.149183	0.049914	28580
+R	F	381449.00	534594445.35	507996454.4067	528524219.358903	25.597168	35874.006533	0.049828	14902
+#Run TPC-H Query 2
+EXPLAIN
+-> Limit: 5 row(s)
+    -> Sort: supplier.S_ACCTBAL DESC, nation.N_NAME, supplier.S_NAME, part.P_PARTKEY, limit input to 5 row(s) per chunk
+        -> Stream results  (cost=*** rows=***)
+            -> Gather: 1 workers, parallel scan on region, part  (cost=*** rows=***)
+                -> Limit: 5 row(s)  (cost=*** rows=***)
+                    -> Sort: supplier.S_ACCTBAL DESC, nation.N_NAME, supplier.S_NAME, part.P_PARTKEY, limit input to 5 row(s) per chunk  (cost=*** rows=***)
+                        -> Stream results  (cost=*** rows=***)
+                            -> Nested loop inner join  (cost=*** rows=***)
+                                -> Nested loop inner join  (cost=*** rows=***)
+                                    -> Nested loop inner join  (cost=*** rows=***)
+                                        -> Inner hash join, hash table shared by worker threads (no condition)  (cost=*** rows=***)
+                                            -> Filter: ((part.P_SIZE = 19) and (part.P_TYPE like '%NICKEL'))  (cost=*** rows=***)
+                                                -> Parallel table scan on part  (cost=*** rows=***)
+                                            -> Hash
+                                                -> Filter: (region.R_NAME = 'EUROPE')  (cost=*** rows=***)
+                                                    -> Parallel table scan on region  (cost=*** rows=***)
+                                        -> Filter: (partsupp.PS_SUPPLYCOST = (select #2))  (cost=*** rows=***)
+                                            -> Index lookup on partsupp using PRIMARY (PS_PARTKEY=part.P_PARTKEY)  (cost=*** rows=***)
+                                            -> Select #2 (subquery in condition; dependent)
+                                                -> Aggregate: min(partsupp.PS_SUPPLYCOST)  (cost=*** rows=***)
+                                                    -> Nested loop inner join  (cost=*** rows=***)
+                                                        -> Nested loop inner join  (cost=*** rows=***)
+                                                            -> Nested loop inner join  (cost=*** rows=***)
+                                                                -> Filter: (region.R_NAME = 'EUROPE')  (cost=*** rows=***)
+                                                                    -> Table scan on region  (cost=*** rows=***)
+                                                                -> Index lookup on partsupp using PRIMARY (PS_PARTKEY=part.P_PARTKEY)  (cost=*** rows=***)
+                                                            -> Single-row index lookup on supplier using PRIMARY (S_SUPPKEY=partsupp.PS_SUPPKEY)  (cost=*** rows=***)
+                                                        -> Filter: (nation.N_REGIONKEY = region.R_REGIONKEY)  (cost=*** rows=***)
+                                                            -> Single-row index lookup on nation using PRIMARY (N_NATIONKEY=supplier.S_NATIONKEY)  (cost=*** rows=***)
+                                    -> Single-row index lookup on supplier using PRIMARY (S_SUPPKEY=partsupp.PS_SUPPKEY)  (cost=*** rows=***)
+                                -> Filter: (nation.N_REGIONKEY = region.R_REGIONKEY)  (cost=*** rows=***)
+                                    -> Single-row index lookup on nation using PRIMARY (N_NATIONKEY=supplier.S_NATIONKEY)  (cost=*** rows=***)
+
+EXPLAIN
+-> Limit: 5 row(s)  (actual time=*** rows=*** loops=***)
+    -> Sort: supplier.S_ACCTBAL DESC, nation.N_NAME, supplier.S_NAME, part.P_PARTKEY, limit input to 5 row(s) per chunk  (actual time=*** rows=*** loops=***)
+        -> Stream results  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+            -> Gather: 1 workers, parallel scan on region, part  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                -> Limit: 5 row(s)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                    -> Sort: supplier.S_ACCTBAL DESC, nation.N_NAME, supplier.S_NAME, part.P_PARTKEY, limit input to 5 row(s) per chunk  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                        -> Stream results  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                            -> Nested loop inner join  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                -> Nested loop inner join  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                    -> Nested loop inner join  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                        -> Inner hash join, hash table shared by worker threads (no condition)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                            -> Filter: ((part.P_SIZE = 19) and (part.P_TYPE like '%NICKEL'))  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                -> Parallel table scan on part  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                            -> Hash
+                                                -> Filter: (region.R_NAME = 'EUROPE')  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                    -> Parallel table scan on region  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                        -> Filter: (partsupp.PS_SUPPLYCOST = (select #2))  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                            -> Index lookup on partsupp using PRIMARY (PS_PARTKEY=part.P_PARTKEY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                            -> Select #2 (subquery in condition; dependent)
+                                                -> Aggregate: min(partsupp.PS_SUPPLYCOST)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                    -> Nested loop inner join  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                        -> Nested loop inner join  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                            -> Nested loop inner join  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                                -> Filter: (region.R_NAME = 'EUROPE')  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                                    -> Table scan on region  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                                -> Index lookup on partsupp using PRIMARY (PS_PARTKEY=part.P_PARTKEY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                            -> Single-row index lookup on supplier using PRIMARY (S_SUPPKEY=partsupp.PS_SUPPKEY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                        -> Filter: (nation.N_REGIONKEY = region.R_REGIONKEY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                            -> Single-row index lookup on nation using PRIMARY (N_NATIONKEY=supplier.S_NATIONKEY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                    -> Single-row index lookup on supplier using PRIMARY (S_SUPPKEY=partsupp.PS_SUPPKEY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                -> Filter: (nation.N_REGIONKEY = region.R_REGIONKEY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                    -> Single-row index lookup on nation using PRIMARY (N_NATIONKEY=supplier.S_NATIONKEY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+
+s_acctbal	s_name	n_name	p_partkey	p_mfgr	s_address	s_phone	s_comment
+9508.37	Supplier#000000070	FRANCE	215	Manufacturer#5	INWNH2w,OOWgNDq0BRCcBwOMQc6PdFDc4	16-821-608-1166	ests sleep quickly express ideas. ironic ideas haggle about the final T
+4186.95	Supplier#000000077	GERMANY	976	Manufacturer#5	wVtcr0uH3CyrSiWMLsqnB09Syo,UuZxPMeBghlY	17-281-345-4863	the slyly final asymptotes. blithely pending theodoli
+4186.95	Supplier#000000077	GERMANY	1276	Manufacturer#1	wVtcr0uH3CyrSiWMLsqnB09Syo,UuZxPMeBghlY	17-281-345-4863	the slyly final asymptotes. blithely pending theodoli
+1883.37	Supplier#000000086	ROMANIA	133	Manufacturer#1	J1fgg5QaqnN	29-903-665-7065	cajole furiously special, final requests: furiously spec
+287.16	Supplier#000000052	ROMANIA	1240	Manufacturer#2	WCk XCHYzBA1dvJDSol4ZJQQcQN,	29-974-934-4713	dolites are slyly against the furiously regular packages. ironic, final deposits cajole quickly
+#Run TPC-H Query 11
+EXPLAIN
+-> Limit: 5 row(s)
+    -> Sort: value DESC
+        -> Filter: (sum(tmp_field) > (select #2))
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Gather: 1 workers, parallel scan on partsupp  (cost=*** rows=***)
+                        -> Table scan on <temporary>
+                            -> Aggregate using temporary table
+                                -> Nested loop inner join  (cost=*** rows=***)
+                                    -> Nested loop inner join  (cost=*** rows=***)
+                                        -> Filter: (nation.N_NAME = 'RUSSIA')  (cost=*** rows=***)
+                                            -> Table scan on nation  (cost=*** rows=***)
+                                        -> Covering index lookup on supplier using supplier_fk1 (S_NATIONKEY=nation.N_NATIONKEY)  (cost=*** rows=***)
+                                    -> Parallel index lookup on partsupp using partsupp_fk1 (PS_SUPPKEY=supplier.S_SUPPKEY)  (cost=*** rows=***)
+            -> Select #2 (subquery in condition; run only once)
+                -> Aggregate: sum(`<temporary>`.`sum((partsupp.PS_SUPPLYCOST * partsupp.PS_AVAILQTY))`)  (cost=*** rows=***)
+                    -> Gather: 1 workers, parallel scan on partsupp  (cost=*** rows=***)
+                        -> Aggregate: sum(`<temporary>`.`sum((partsupp.PS_SUPPLYCOST * partsupp.PS_AVAILQTY))`)  (cost=*** rows=***)
+                            -> Nested loop inner join  (cost=*** rows=***)
+                                -> Nested loop inner join  (cost=*** rows=***)
+                                    -> Filter: (nation.N_NAME = 'RUSSIA')  (cost=*** rows=***)
+                                        -> Table scan on nation  (cost=*** rows=***)
+                                    -> Covering index lookup on supplier using supplier_fk1 (S_NATIONKEY=nation.N_NATIONKEY)  (cost=*** rows=***)
+                                -> Parallel index lookup on partsupp using partsupp_fk1 (PS_SUPPKEY=supplier.S_SUPPKEY)  (cost=*** rows=***)
+
+EXPLAIN
+-> Limit: 5 row(s)  (actual time=*** rows=*** loops=***)
+    -> Sort: `value` DESC  (actual time=*** rows=*** loops=***)
+        -> Filter: (`sum(tmp_field)` > (select #2))  (actual time=*** rows=*** loops=***)
+            -> Table scan on <temporary>  (actual time=*** rows=*** loops=***)
+                -> Aggregate using temporary table  (actual time=*** rows=*** loops=***)
+                    -> Gather: 1 workers, parallel scan on partsupp  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                        -> Table scan on <temporary>  (actual time=*** rows=*** loops=***)
+                            -> Aggregate using temporary table  (actual time=*** rows=*** loops=***)
+                                -> Nested loop inner join  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                    -> Nested loop inner join  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                        -> Filter: (nation.N_NAME = 'RUSSIA')  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                            -> Table scan on nation  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                        -> Covering index lookup on supplier using supplier_fk1 (S_NATIONKEY=nation.N_NATIONKEY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                    -> Parallel index lookup on partsupp using partsupp_fk1 (PS_SUPPKEY=supplier.S_SUPPKEY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+            -> Select #2 (subquery in condition; run only once)
+                -> Aggregate: sum(`<temporary>`.`sum((partsupp.PS_SUPPLYCOST * partsupp.PS_AVAILQTY))`)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                    -> Gather: 1 workers, parallel scan on partsupp  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                        -> Aggregate: sum(`<temporary>`.`sum((partsupp.PS_SUPPLYCOST * partsupp.PS_AVAILQTY))`)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                            -> Nested loop inner join  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                -> Nested loop inner join  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                    -> Filter: (nation.N_NAME = 'RUSSIA')  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                        -> Table scan on nation  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                    -> Covering index lookup on supplier using supplier_fk1 (S_NATIONKEY=nation.N_NATIONKEY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                -> Parallel index lookup on partsupp using partsupp_fk1 (PS_SUPPKEY=supplier.S_SUPPKEY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+
+ps_partkey	value
+189	11056671.77
+163	10450144.73
+1535	8981725.95
+1402	8953779.12
+146	8547518.19
+#Run TPC-H Query 13
+EXPLAIN
+-> Limit: 5 row(s)
+    -> Sort: custdist DESC, c_orders.c_count DESC, limit input to 5 row(s) per chunk
+        -> Table scan on <temporary>
+            -> Aggregate using temporary table
+                -> Gather: 1 workers, parallel scan on c_orders  (cost=*** rows=***)
+                    -> Table scan on <temporary>
+                        -> Aggregate using temporary table
+                            -> Parallel table scan on c_orders  (cost=*** rows=***)
+                                -> Materialize  (cost=*** rows=***)
+                                    -> Group aggregate: count(`<temporary>`.c_count)  (cost=*** rows=***)
+                                        -> Gather: 1 workers, parallel scan on customer  (cost=*** rows=***)
+                                            -> Group aggregate: count(`<temporary>`.c_count)  (cost=*** rows=***)
+                                                -> Nested loop left join  (cost=*** rows=***)
+                                                    -> Parallel index scan on customer using PRIMARY  (cost=*** rows=***)
+                                                    -> Filter: (not((orders.O_COMMENT like '%unusual%accounts%')))  (cost=*** rows=***)
+                                                        -> Index lookup on orders using orders_fk1 (O_CUSTKEY=customer.C_CUSTKEY)  (cost=*** rows=***)
+
+EXPLAIN
+-> Limit: 5 row(s)  (actual time=*** rows=*** loops=***)
+    -> Sort: custdist DESC, c_orders.c_count DESC, limit input to 5 row(s) per chunk  (actual time=*** rows=*** loops=***)
+        -> Table scan on <temporary>  (actual time=*** rows=*** loops=***)
+            -> Aggregate using temporary table  (actual time=*** rows=*** loops=***)
+                -> Gather: 1 workers, parallel scan on c_orders  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                    -> Table scan on <temporary>  (actual time=*** rows=*** loops=***)
+                        -> Aggregate using temporary table  (actual time=*** rows=*** loops=***)
+                            -> Parallel table scan on c_orders  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                -> Materialize  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                    -> Group aggregate: count(`<temporary>`.c_count)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                        -> Gather: 1 workers, parallel scan on customer  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                            -> Group aggregate: count(`<temporary>`.c_count)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                -> Nested loop left join  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                    -> Parallel index scan on customer using PRIMARY  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                    -> Filter: (not((orders.O_COMMENT like '%unusual%accounts%')))  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                        -> Index lookup on orders using orders_fk1 (O_CUSTKEY=customer.C_CUSTKEY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+
+c_count	custdist
+0	500
+10	70
+11	66
+14	60
+12	60
+#Run TPC-H Query 15 by view
+EXPLAIN
+-> Sort: supplier.S_SUPPKEY
+    -> Stream results  (cost=*** rows=***)
+        -> Gather: 1 workers, parallel scan on revenue0  (cost=*** rows=***)
+            -> Table scan on <temporary>  (cost=*** rows=***)
+                -> Temporary table  (cost=*** rows=***)
+                    -> Nested loop inner join  (cost=*** rows=***)
+                        -> Filter: (revenue0.total_revenue = (select #2))  (cost=*** rows=***)
+                            -> Parallel table scan on revenue0  (cost=*** rows=***)
+                                -> Materialize  (cost=*** rows=***)
+                                    -> Table scan on <temporary>
+                                        -> Aggregate using temporary table
+                                            -> Gather: 1 workers, parallel scan on lineitem  (cost=*** rows=***)
+                                                -> Table scan on <temporary>
+                                                    -> Aggregate using temporary table
+                                                        -> Filter: ((lineitem.L_SHIPDATE >= DATE'1993-04-01') and (lineitem.L_SHIPDATE < <cache>((DATE'1993-04-01' + interval '3' month))))  (cost=*** rows=***)
+                                                            -> Parallel table scan on lineitem  (cost=*** rows=***)
+                            -> Select #2 (subquery in condition; run only once)
+                                -> Aggregate: max(`<temporary>`.`max(total_revenue)`)  (cost=*** rows=***)
+                                    -> Gather: 1 workers, parallel scan on revenue0  (cost=*** rows=***)
+                                        -> Aggregate: max(`<temporary>`.`max(total_revenue)`)  (cost=*** rows=***)
+                                            -> Parallel table scan on revenue0  (cost=*** rows=***)
+                                                -> Materialize  (cost=*** rows=***)
+                                                    -> Table scan on <temporary>
+                                                        -> Aggregate using temporary table
+                                                            -> Gather: 1 workers, parallel scan on lineitem  (cost=*** rows=***)
+                                                                -> Table scan on <temporary>
+                                                                    -> Aggregate using temporary table
+                                                                        -> Filter: ((lineitem.L_SHIPDATE >= DATE'1993-04-01') and (lineitem.L_SHIPDATE < <cache>((DATE'1993-04-01' + interval '3' month))))  (cost=*** rows=***)
+                                                                            -> Parallel table scan on lineitem  (cost=*** rows=***)
+                        -> Single-row index lookup on supplier using PRIMARY (S_SUPPKEY=revenue0.supplier_no)  (cost=*** rows=***)
+
+EXPLAIN
+-> Sort: supplier.S_SUPPKEY  (actual time=*** rows=*** loops=***)
+    -> Stream results  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+        -> Gather: 1 workers, parallel scan on revenue0  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+            -> Table scan on <temporary>  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                -> Temporary table  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                    -> Nested loop inner join  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                        -> Filter: (revenue0.total_revenue = (select #2))  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                            -> Parallel table scan on revenue0  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                -> Materialize  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                    -> Table scan on <temporary>  (actual time=*** rows=*** loops=***)
+                                        -> Aggregate using temporary table  (actual time=*** rows=*** loops=***)
+                                            -> Gather: 1 workers, parallel scan on lineitem  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                -> Table scan on <temporary>  (actual time=*** rows=*** loops=***)
+                                                    -> Aggregate using temporary table  (actual time=*** rows=*** loops=***)
+                                                        -> Filter: ((lineitem.L_SHIPDATE >= DATE'1993-04-01') and (lineitem.L_SHIPDATE < <cache>((DATE'1993-04-01' + interval '3' month))))  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                            -> Parallel table scan on lineitem  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                            -> Select #2 (subquery in condition; run only once)
+                                -> Aggregate: max(`<temporary>`.`max(total_revenue)`)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                    -> Gather: 1 workers, parallel scan on revenue0  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                        -> Aggregate: max(`<temporary>`.`max(total_revenue)`)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                            -> Parallel table scan on revenue0  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                -> Materialize  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                    -> Table scan on <temporary>  (actual time=*** rows=*** loops=***)
+                                                        -> Aggregate using temporary table  (actual time=*** rows=*** loops=***)
+                                                            -> Gather: 1 workers, parallel scan on lineitem  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                                -> Table scan on <temporary>  (actual time=*** rows=*** loops=***)
+                                                                    -> Aggregate using temporary table  (actual time=*** rows=*** loops=***)
+                                                                        -> Filter: ((lineitem.L_SHIPDATE >= DATE'1993-04-01') and (lineitem.L_SHIPDATE < <cache>((DATE'1993-04-01' + interval '3' month))))  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                                            -> Parallel table scan on lineitem  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                        -> Single-row index lookup on supplier using PRIMARY (S_SUPPKEY=revenue0.supplier_no)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+
+s_suppkey	s_name	s_address	s_phone	total_revenue
+19	Supplier#000000019	edZT3es,nBFD8lBXTGeTl	34-278-310-2731	1296536.7082
+#Run TPC-H Query 15 by CTE
+EXPLAIN
+-> Sort: supplier.S_SUPPKEY
+    -> Stream results  (cost=*** rows=***)
+        -> Gather: 1 workers, parallel scan on revenue  (cost=*** rows=***)
+            -> Table scan on <temporary>  (cost=*** rows=***)
+                -> Temporary table  (cost=*** rows=***)
+                    -> Nested loop inner join  (cost=*** rows=***)
+                        -> Filter: (revenue.total_revenue = (select #3))  (cost=*** rows=***)
+                            -> Parallel table scan on revenue  (cost=*** rows=***)
+                                -> Materialize CTE revenue  (cost=*** rows=***)
+                                    -> Table scan on <temporary>
+                                        -> Aggregate using temporary table
+                                            -> Gather: 1 workers, parallel scan on lineitem  (cost=*** rows=***)
+                                                -> Table scan on <temporary>
+                                                    -> Aggregate using temporary table
+                                                        -> Filter: ((lineitem.L_SHIPDATE >= DATE'1993-02-01') and (lineitem.L_SHIPDATE < <cache>(('1993-02-01' + interval '90' day))))  (cost=*** rows=***)
+                                                            -> Parallel table scan on lineitem  (cost=*** rows=***)
+                            -> Select #3 (subquery in condition; run only once)
+                                -> Aggregate: max(`<temporary>`.`max(total_revenue)`)  (cost=*** rows=***)
+                                    -> Gather: 1 workers, parallel scan on revenue  (cost=*** rows=***)
+                                        -> Aggregate: max(`<temporary>`.`max(total_revenue)`)  (cost=*** rows=***)
+                                            -> Parallel table scan on revenue  (cost=*** rows=***)
+                                                -> Materialize CTE revenue  (cost=*** rows=***)
+                                                    -> Table scan on <temporary>
+                                                        -> Aggregate using temporary table
+                                                            -> Gather: 1 workers, parallel scan on lineitem  (cost=*** rows=***)
+                                                                -> Table scan on <temporary>
+                                                                    -> Aggregate using temporary table
+                                                                        -> Filter: ((lineitem.L_SHIPDATE >= DATE'1993-02-01') and (lineitem.L_SHIPDATE < <cache>(('1993-02-01' + interval '90' day))))  (cost=*** rows=***)
+                                                                            -> Parallel table scan on lineitem  (cost=*** rows=***)
+                        -> Single-row index lookup on supplier using PRIMARY (S_SUPPKEY=revenue.supplier_no)  (cost=*** rows=***)
+
+EXPLAIN
+-> Sort: supplier.S_SUPPKEY  (actual time=*** rows=*** loops=***)
+    -> Stream results  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+        -> Gather: 1 workers, parallel scan on revenue  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+            -> Table scan on <temporary>  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                -> Temporary table  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                    -> Nested loop inner join  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                        -> Filter: (revenue.total_revenue = (select #3))  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                            -> Parallel table scan on revenue  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                -> Materialize CTE revenue if needed  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                    -> Table scan on <temporary>  (actual time=*** rows=*** loops=***)
+                                        -> Aggregate using temporary table  (actual time=*** rows=*** loops=***)
+                                            -> Gather: 1 workers, parallel scan on lineitem  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                -> Table scan on <temporary>  (actual time=*** rows=*** loops=***)
+                                                    -> Aggregate using temporary table  (actual time=*** rows=*** loops=***)
+                                                        -> Filter: ((lineitem.L_SHIPDATE >= DATE'1993-02-01') and (lineitem.L_SHIPDATE < <cache>(('1993-02-01' + interval '90' day))))  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                            -> Parallel table scan on lineitem  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                            -> Select #3 (subquery in condition; run only once)
+                                -> Aggregate: max(`<temporary>`.`max(total_revenue)`)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                    -> Gather: 1 workers, parallel scan on revenue  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                        -> Aggregate: max(`<temporary>`.`max(total_revenue)`)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                            -> Parallel table scan on revenue  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                -> Materialize CTE revenue if needed (query plan printed elsewhere)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                        -> Single-row index lookup on supplier using PRIMARY (S_SUPPKEY=revenue.supplier_no)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+
+s_suppkey	s_name	s_address	s_phone	total_revenue
+66	Supplier#000000066	qYdruFJQJYYiKvnNVmYfCVydVB8bcW,AW,U6SOV3	33-300-836-9529	1159763.6508
+#Run TPC-H Query 17
+EXPLAIN
+-> Aggregate: sum(`<temporary>`.`sum(lineitem.L_EXTENDEDPRICE)`)  (cost=*** rows=***)
+    -> Gather: 1 workers, parallel scan on part  (cost=*** rows=***)
+        -> Aggregate: sum(`<temporary>`.`sum(lineitem.L_EXTENDEDPRICE)`)  (cost=*** rows=***)
+            -> Nested loop inner join  (cost=*** rows=***)
+                -> Filter: ((part.P_CONTAINER = 'WRAP PACK') and (part.P_BRAND = 'Brand#15'))  (cost=*** rows=***)
+                    -> Parallel table scan on part  (cost=*** rows=***)
+                -> Filter: (lineitem.L_QUANTITY < (select #2))  (cost=*** rows=***)
+                    -> Index lookup on lineitem using lineitem_fk2 (L_PARTKEY=part.P_PARTKEY)  (cost=*** rows=***)
+                    -> Select #2 (subquery in condition; dependent)
+                        -> Result cache : cache keys(part.P_PARTKEY)
+                            -> Aggregate: avg(lineitem.L_QUANTITY)  (cost=*** rows=***)
+                                -> Index lookup on lineitem using lineitem_fk2 (L_PARTKEY=part.P_PARTKEY)  (cost=*** rows=***)
+
+EXPLAIN
+-> Aggregate: sum(`<temporary>`.`sum(lineitem.L_EXTENDEDPRICE)`)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+    -> Gather: 1 workers, parallel scan on part  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+        -> Aggregate: sum(`<temporary>`.`sum(lineitem.L_EXTENDEDPRICE)`)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+            -> Nested loop inner join  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                -> Filter: ((part.P_CONTAINER = 'WRAP PACK') and (part.P_BRAND = 'Brand#15'))  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                    -> Parallel table scan on part  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                -> Filter: (lineitem.L_QUANTITY < (select #2))  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                    -> Index lookup on lineitem using lineitem_fk2 (L_PARTKEY=part.P_PARTKEY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                    -> Select #2 (subquery in condition; dependent)
+                        -> Result cache : cache keys(part.P_PARTKEY) (Cache Hits: 0, Cache Misses: 0, Cache Evictions: 0, Cache Overflows: 0, Memory Usage: 0 )  (actual time=*** rows=*** loops=***)
+                            -> Aggregate: avg(lineitem.L_QUANTITY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                -> Index lookup on lineitem using lineitem_fk2 (L_PARTKEY=part.P_PARTKEY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+
+avg_yearly
+2367.818571
+#Run TPC-H Query 20
+EXPLAIN
+-> Limit: 5 row(s)
+    -> Sort: supplier.S_NAME, limit input to 5 row(s) per chunk
+        -> Stream results  (cost=*** rows=***)
+            -> Gather: 1 workers, parallel scan on supplier  (cost=*** rows=***)
+                -> Limit: 5 row(s)  (cost=*** rows=***)
+                    -> Sort: supplier.S_NAME, limit input to 5 row(s) per chunk  (cost=*** rows=***)
+                        -> Stream results  (cost=*** rows=***)
+                            -> Nested loop inner join  (cost=*** rows=***)
+                                -> Nested loop inner join  (cost=*** rows=***)
+                                    -> Filter: (nation.N_NAME = 'MOZAMBIQUE')  (cost=*** rows=***)
+                                        -> Table scan on nation  (cost=*** rows=***)
+                                    -> Parallel index lookup on supplier using supplier_fk1 (S_NATIONKEY=nation.N_NATIONKEY)  (cost=*** rows=***)
+                                -> Single-row index lookup on <subquery2> using <auto_distinct_key> (ps_suppkey=supplier.S_SUPPKEY)  (cost=*** rows=***)
+                                    -> Materialize with deduplication  (cost=*** rows=***)
+                                        -> Nested loop inner join  (cost=*** rows=***)
+                                            -> Filter: (part.P_NAME like 'lime%')  (cost=*** rows=***)
+                                                -> Table scan on part  (cost=*** rows=***)
+                                            -> Filter: (partsupp.PS_AVAILQTY > (select #4))  (cost=*** rows=***)
+                                                -> Index lookup on partsupp using PRIMARY (PS_PARTKEY=part.P_PARTKEY)  (cost=*** rows=***)
+                                                -> Select #4 (subquery in condition; dependent)
+                                                    -> Aggregate: sum(lineitem.L_QUANTITY)  (cost=*** rows=***)
+                                                        -> Filter: ((lineitem.L_SHIPDATE >= DATE'1994-01-01') and (lineitem.L_SHIPDATE < <cache>(('1994-01-01' + interval '1' year))))  (cost=*** rows=***)
+                                                            -> Index lookup on lineitem using lineitem_fk2 (L_PARTKEY=partsupp.PS_PARTKEY, L_SUPPKEY=partsupp.PS_SUPPKEY)  (cost=*** rows=***)
+
+EXPLAIN
+-> Limit: 5 row(s)  (actual time=*** rows=*** loops=***)
+    -> Sort: supplier.S_NAME, limit input to 5 row(s) per chunk  (actual time=*** rows=*** loops=***)
+        -> Stream results  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+            -> Gather: 1 workers, parallel scan on supplier  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                -> Limit: 5 row(s)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                    -> Sort: supplier.S_NAME, limit input to 5 row(s) per chunk  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                        -> Stream results  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                            -> Nested loop inner join  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                -> Nested loop inner join  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                    -> Filter: (nation.N_NAME = 'MOZAMBIQUE')  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                        -> Table scan on nation  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                    -> Parallel index lookup on supplier using supplier_fk1 (S_NATIONKEY=nation.N_NATIONKEY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                -> Single-row index lookup on <subquery2> using <auto_distinct_key> (ps_suppkey=supplier.S_SUPPKEY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                    -> Materialize with deduplication  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                        -> Nested loop inner join  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                            -> Filter: (part.P_NAME like 'lime%')  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                -> Table scan on part  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                            -> Filter: (partsupp.PS_AVAILQTY > (select #4))  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                -> Index lookup on partsupp using PRIMARY (PS_PARTKEY=part.P_PARTKEY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                -> Select #4 (subquery in condition; dependent)
+                                                    -> Aggregate: sum(lineitem.L_QUANTITY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                        -> Filter: ((lineitem.L_SHIPDATE >= DATE'1994-01-01') and (lineitem.L_SHIPDATE < <cache>(('1994-01-01' + interval '1' year))))  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                                                            -> Index lookup on lineitem using lineitem_fk2 (L_PARTKEY=partsupp.PS_PARTKEY, L_SUPPKEY=partsupp.PS_SUPPKEY)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+
+s_name	s_address
+Supplier#000000073	HBZA1NHvrswQCxTTjg 5XrfSOGgMRKNCe2ovE
+# BUG2024110728662
+# Q2
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.region, test.part)
+1	PRIMARY	region	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	Using where; Using temporary; Using filesort
+1	PRIMARY	part	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	Using where; Using join buffer (hash join)
+1	PRIMARY	partsupp	NULL	ref	PRIMARY,partsupp_fk1,partsupp_fk2	PRIMARY	4	test.part.P_PARTKEY	#	#	Using where
+1	PRIMARY	supplier	NULL	eq_ref	PRIMARY,supplier_fk1	PRIMARY	4	test.partsupp.PS_SUPPKEY	#	#	NULL
+1	PRIMARY	nation	NULL	eq_ref	PRIMARY,region_fk	PRIMARY	4	test.supplier.S_NATIONKEY	#	#	Using where
+2	DEPENDENT SUBQUERY	region	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	Using where
+2	DEPENDENT SUBQUERY	partsupp	NULL	ref	PRIMARY,partsupp_fk1,partsupp_fk2	PRIMARY	4	test.part.P_PARTKEY	#	#	NULL
+2	DEPENDENT SUBQUERY	supplier	NULL	eq_ref	PRIMARY,supplier_fk1	PRIMARY	4	test.partsupp.PS_SUPPKEY	#	#	NULL
+2	DEPENDENT SUBQUERY	nation	NULL	eq_ref	PRIMARY,region_fk	PRIMARY	4	test.supplier.S_NATIONKEY	#	#	Using where
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.region, test.part)
+1	PRIMARY	region	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	Using where; Using temporary; Using filesort
+1	PRIMARY	part	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	Using where; Using join buffer (hash join)
+1	PRIMARY	partsupp	NULL	ref	PRIMARY,partsupp_fk1,partsupp_fk2	PRIMARY	4	test.part.P_PARTKEY	#	#	Using where
+1	PRIMARY	supplier	NULL	eq_ref	PRIMARY,supplier_fk1	PRIMARY	4	test.partsupp.PS_SUPPKEY	#	#	NULL
+1	PRIMARY	nation	NULL	eq_ref	PRIMARY,region_fk	PRIMARY	4	test.supplier.S_NATIONKEY	#	#	Using where
+2	DEPENDENT SUBQUERY	region	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	Using where
+2	DEPENDENT SUBQUERY	partsupp	NULL	ref	PRIMARY,partsupp_fk1,partsupp_fk2	PRIMARY	4	test.part.P_PARTKEY	#	#	NULL
+2	DEPENDENT SUBQUERY	supplier	NULL	eq_ref	PRIMARY,supplier_fk1	PRIMARY	4	test.partsupp.PS_SUPPKEY	#	#	NULL
+2	DEPENDENT SUBQUERY	nation	NULL	eq_ref	PRIMARY,region_fk	PRIMARY	4	test.supplier.S_NATIONKEY	#	#	Using where
+# Q17
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.part)
+1	PRIMARY	part	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	Using where
+1	PRIMARY	lineitem	NULL	ref	lineitem_fk2	lineitem_fk2	4	test.part.P_PARTKEY	#	#	Using where
+2	DEPENDENT SUBQUERY	lineitem	NULL	ref	lineitem_fk2	lineitem_fk2	4	test.part.P_PARTKEY	#	#	NULL
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.part)
+1	PRIMARY	part	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	Using where
+1	PRIMARY	lineitem	NULL	ref	lineitem_fk2	lineitem_fk2	4	test.part.P_PARTKEY	#	#	Using where
+2	DEPENDENT SUBQUERY	lineitem	NULL	ref	lineitem_fk2	lineitem_fk2	4	test.part.P_PARTKEY	#	#	NULL
+# Q20
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.nation)
+1	PRIMARY	nation	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	Using where; Using temporary; Using filesort
+1	PRIMARY	supplier	NULL	ref	PRIMARY,supplier_fk1	supplier_fk1	4	test.nation.N_NATIONKEY	#	#	NULL
+1	PRIMARY	<subquery2>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	4	test.supplier.S_SUPPKEY	#	#	NULL
+2	MATERIALIZED	part	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	Using where
+2	MATERIALIZED	partsupp	NULL	ref	PRIMARY,partsupp_fk1,partsupp_fk2	PRIMARY	4	test.part.P_PARTKEY	#	#	Using where
+4	DEPENDENT SUBQUERY	lineitem	NULL	ref	lineitem_fk2	lineitem_fk2	8	test.partsupp.PS_PARTKEY,test.partsupp.PS_SUPPKEY	#	#	Using where
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (1 workers, test.nation)
+1	PRIMARY	nation	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	Using where; Using temporary; Using filesort
+1	PRIMARY	supplier	NULL	ref	PRIMARY,supplier_fk1	supplier_fk1	4	test.nation.N_NATIONKEY	#	#	NULL
+1	PRIMARY	<subquery2>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	4	test.supplier.S_SUPPKEY	#	#	NULL
+2	MATERIALIZED	part	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	Using where
+2	MATERIALIZED	partsupp	NULL	ref	PRIMARY,partsupp_fk1,partsupp_fk2	PRIMARY	4	test.part.P_PARTKEY	#	#	Using where
+4	DEPENDENT SUBQUERY	lineitem	NULL	ref	lineitem_fk2	lineitem_fk2	8	test.partsupp.PS_PARTKEY,test.partsupp.PS_SUPPKEY	#	#	Using where
+#TPC-H test finished
+#Parallel Index Scan + Ref Access Subquery
+create table t1 (a int , b int , c int , index(a,b,c));
+insert into t1 values (1,100,1),(2,200,1),(3,300,1),(4,10,2),(5,20,2),(6,30,2),(7,110,3),(8,120,3),(9,130,3),(9,131,1);
+create table t2 (a int , b int , c int , index(a,b,c));
+insert into t2 values (1,110,1),(2,210,1),(4,20,2),(5,30,2),(7,130,3),(8,140,3);
+analyze table t1,t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+explain format=tree select * from t1 where a = (select max(a) from t1 where a > 2) limit 1 offset 1;
+EXPLAIN
+-> Limit/Offset: 1/1 row(s)  (...)
+    -> Gather: 1 workers, parallel scan on t1  (...)
+        -> Limit: 2 row(s)  (...)
+            -> Parallel covering index lookup on t1 using a (a=(select #2))  (...)
+                -> Select #2 (subquery in reference key of index access; run only once)
+                    -> Rows fetched before execution  (...)
+
+explain analyze select * from t1 where a = (select max(a) from t1 where a > 2) limit 1 offset 1;
+EXPLAIN
+-> Limit/Offset: 1/1 row(s)  (...) (actual rows loops)
+    -> Gather: 1 workers, parallel scan on t1  (...) (actual rows loops)
+        -> Limit: 2 row(s)  (...) (actual rows loops)
+            -> Parallel covering index lookup on t1 using a (a=(select #2))  (...) (actual rows loops)
+                -> Select #2 (subquery in reference key of index access; run only once)
+                    -> Rows fetched before execution  (...) (actual rows loops)
+
+explain format=tree select * from t2 where a = (select max(a) from t1 where t1.a > t2.a) limit 1 offset 1;
+EXPLAIN
+-> Limit/Offset: 1/1 row(s)  (...)
+    -> Gather: 1 workers, parallel scan on t2  (...)
+        -> Limit: 2 row(s)  (...)
+            -> Filter: (t2.a = (select #2))  (...)
+                -> Parallel index scan on t2 using a  (...)
+                -> Select #2 (subquery in condition; dependent)
+                    -> Aggregate: max(t1.a)  (...)
+                        -> Filter: (t1.a > t2.a)  (...)
+                            -> Index range scan on t1 (re-planned for each iteration)  (...)
+
+Warnings:
+Note	1276	Field or reference 'test.t2.a' of SELECT #2 was resolved in SELECT #1
+explain analyze select * from t2 where a = (select max(a) from t1 where t1.a > t2.a) limit 1 offset 1;
+EXPLAIN
+-> Limit/Offset: 1/1 row(s)  (...) (actual rows loops)
+    -> Gather: 1 workers, parallel scan on t2  (...) (actual rows loops)
+        -> Limit: 2 row(s)  (...) (actual rows loops)
+            -> Filter: (t2.a = (select #2))  (...) (actual rows loops)
+                -> Parallel index scan on t2 using a  (...) (actual rows loops)
+                -> Select #2 (subquery in condition; dependent)
+                    -> Aggregate: max(t1.a)  (...) (actual rows loops)
+                        -> Filter: (t1.a > t2.a)  (...) (actual rows loops)
+                            -> Index range scan on t1 (re-planned for each iteration)  (...) (actual rows loops)
+
+Warnings:
+Note	1276	Field or reference 'test.t2.a' of SELECT #2 was resolved in SELECT #1
+drop table t1,t2;
+# 2 Stage Parallel + Non-Dependent Subquery
+create table t1 (id int, a int);
+create table t2 (b int);
+insert into t1 values (1, 1), (2, 1), (0, 2), (1, 3), (3, 3), (0, 2);
+insert into t2 values (1), (3), (2), (0), (1), (2), (1);
+analyze table t1, t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+explain format=tree select * from t1 where t1.a = (select max(b) from t2);
+EXPLAIN
+-> Gather: 1 workers, parallel scan on t1  (cost=*** rows=***)
+    -> Filter: (t1.a = (select #2))  (cost=*** rows=***)
+        -> Parallel table scan on t1  (cost=*** rows=***)
+        -> Select #2 (subquery in condition; run only once)
+            -> Aggregate: max(`<temporary>`.`max(b)`)  (cost=*** rows=***)
+                -> Gather: 1 workers, parallel scan on t2  (cost=*** rows=***)
+                    -> Aggregate: max(`<temporary>`.`max(b)`)  (cost=*** rows=***)
+                        -> Parallel table scan on t2  (cost=*** rows=***)
+
+explain analyze select * from t1 where t1.a = (select max(b) from t2);
+EXPLAIN
+-> Gather: 1 workers, parallel scan on t1  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+    -> Filter: (t1.a = (select #2))  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+        -> Parallel table scan on t1  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+        -> Select #2 (subquery in condition; run only once)
+            -> Aggregate: max(`<temporary>`.`max(b)`)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                -> Gather: 1 workers, parallel scan on t2  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                    -> Aggregate: max(`<temporary>`.`max(b)`)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                        -> Parallel table scan on t2  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+
+#Parallel Index Scan + Ref Access Non-Dependent Subquery
+alter table t1 add index (a);
+explain format=tree select * from t1 where t1.a = (select max(b) from t2);
+EXPLAIN
+-> Gather: 1 workers, parallel scan on t1  (cost=*** rows=***)
+    -> Parallel index lookup on t1 using a (a=(select #2))  (cost=*** rows=***)
+        -> Select #2 (subquery in reference key of index access; run only once)
+            -> Aggregate: max(`<temporary>`.`max(b)`)  (cost=*** rows=***)
+                -> Gather: 1 workers, parallel scan on t2  (cost=*** rows=***)
+                    -> Aggregate: max(`<temporary>`.`max(b)`)  (cost=*** rows=***)
+                        -> Parallel table scan on t2  (cost=*** rows=***)
+
+explain analyze select * from t1 where t1.a = (select max(b) from t2);
+EXPLAIN
+-> Gather: 1 workers, parallel scan on t1  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+    -> Parallel index lookup on t1 using a (a=(select #2))  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+        -> Select #2 (subquery in reference key of index access; run only once)
+            -> Aggregate: max(`<temporary>`.`max(b)`)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                -> Gather: 1 workers, parallel scan on t2  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                    -> Aggregate: max(`<temporary>`.`max(b)`)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                        -> Parallel table scan on t2  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+
+drop table t1,t2;
+create table t1 (a int primary key, b int);
+alter table t1 add index idx(b);
+insert into t1 values(1,3), (2,3);
+analyze table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+# Index lookup(REF) + dependent subquery in reference key of index access
+explain format=tree select b from t1 where (1+(select t1.a from t1 as t2 limit 1)) in (select t3.b from t1 as t3) order by 1;
+EXPLAIN
+-> Gather: 1 workers, parallel scan on t1  (cost=*** rows=***)
+    -> Nested loop semijoin  (cost=*** rows=***)
+        -> Parallel index scan on t1 using idx  (cost=*** rows=***)
+        -> Filter: ((1 + (select #2)) = t3.b)  (cost=*** rows=***)
+            -> Covering index lookup on t3 using idx (b=(1 + (select #2)))  (cost=*** rows=***)
+                -> Select #2 (subquery in reference key of index access; dependent)
+                    -> Limit: 1 row(s)  (cost=*** rows=***)
+                        -> Index scan on t2 using idx  (cost=*** rows=***)
+            -> Select #2 (subquery in condition; dependent)
+                -> Limit: 1 row(s)  (cost=*** rows=***)
+                    -> Index scan on t2 using idx  (cost=*** rows=***)
+
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+explain analyze select b from t1 where (1+(select t1.a from t1 as t2 limit 1)) in (select t3.b from t1 as t3) order by 1;
+EXPLAIN
+-> Gather: 1 workers, parallel scan on t1  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+    -> Nested loop semijoin  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+        -> Parallel index scan on t1 using idx  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+        -> Filter: ((1 + (select #2)) = t3.b)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+            -> Covering index lookup on t3 using idx (b=(1 + (select #2)))  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                -> Select #2 (subquery in reference key of index access; dependent)
+                    -> Limit: 1 row(s)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                        -> Index scan on t2 using idx  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+            -> Select #2 (subquery in condition; dependent)
+                -> Limit: 1 row(s)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                    -> Index scan on t2 using idx  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+# Single-row index lookup(EQ_REF) + dependent subquery in reference key of index access
+explain format=tree select b from t1 where (1+(select t1.a from t1 as t2 limit 1)) in (select t3.a from t1 as t3)order by 1;
+EXPLAIN
+-> Gather: 1 workers, parallel scan on t1  (cost=*** rows=***)
+    -> Nested loop inner join  (cost=*** rows=***)
+        -> Parallel index scan on t1 using idx  (cost=*** rows=***)
+        -> Filter: ((1 + (select #2)) = t3.a)  (cost=*** rows=***)
+            -> Single-row covering index lookup on t3 using PRIMARY (a=(1 + (select #2)))  (cost=*** rows=***)
+                -> Select #2 (subquery in reference key of index access; dependent)
+                    -> Limit: 1 row(s)  (cost=*** rows=***)
+                        -> Index scan on t2 using idx  (cost=*** rows=***)
+            -> Select #2 (subquery in condition; dependent)
+                -> Limit: 1 row(s)  (cost=*** rows=***)
+                    -> Index scan on t2 using idx  (cost=*** rows=***)
+
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+explain analyze select b from t1 where (1+(select t1.a from t1 as t2 limit 1)) in (select t3.a from t1 as t3)order by 1;
+EXPLAIN
+-> Gather: 1 workers, parallel scan on t1  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+    -> Nested loop inner join  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+        -> Parallel index scan on t1 using idx  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+        -> Filter: ((1 + (select #2)) = t3.a)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+            -> Single-row covering index lookup on t3 using PRIMARY (a=(1 + (select #2)))  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                -> Select #2 (subquery in reference key of index access; dependent)
+                    -> Limit: 1 row(s)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                        -> Index scan on t2 using idx  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+            -> Select #2 (subquery in condition; dependent)
+                -> Limit: 1 row(s)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                    -> Index scan on t2 using idx  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+drop table t1;
+# Parallel table scan + Non-dependent subquery
+create table t1(a int);
+insert into t1 values(1),(2);
+analyze table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+explain format=tree with qn(a) as (select 1 from t1 limit 2)
+select * from qn where qn.a=(select * from qn qn1 limit 1);
+EXPLAIN
+-> Covering index lookup on qn using <auto_key0> (a=(select #3))  (cost=*** rows=***)
+    -> Materialize CTE qn if needed  (cost=*** rows=***)
+        -> Limit: 2 row(s)  (cost=*** rows=***)
+            -> Gather: 1 workers, parallel scan on t1  (cost=*** rows=***)
+                -> Limit: 2 row(s)  (cost=*** rows=***)
+                    -> Parallel table scan on t1  (cost=*** rows=***)
+        -> Select #3 (subquery in reference key of index access; run only once)
+            -> Limit: 1 row(s)  (cost=*** rows=***)
+                -> Gather: 1 workers, parallel scan on qn1  (cost=*** rows=***)
+                    -> Limit: 1 row(s)  (cost=*** rows=***)
+                        -> Parallel table scan on qn1  (cost=*** rows=***)
+                            -> Materialize CTE qn  (cost=*** rows=***)
+                                -> Limit: 2 row(s)  (cost=*** rows=***)
+                                    -> Gather: 1 workers, parallel scan on t1  (cost=*** rows=***)
+                                        -> Limit: 2 row(s)  (cost=*** rows=***)
+                                            -> Parallel table scan on t1  (cost=*** rows=***)
+
+explain analyze with qn(a) as (select 1 from t1 limit 2)
+select * from qn where qn.a=(select * from qn qn1 limit 1);
+EXPLAIN
+-> Covering index lookup on qn using <auto_key0> (a=(select #3))  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+    -> Materialize CTE qn if needed  (cost=*** rows=***) (never executed)
+        -> Limit: 2 row(s)  (cost=*** rows=***) (never executed)
+            -> Gather: 1 workers, parallel scan on t1  (cost=*** rows=***) (never executed)
+                -> Limit: 2 row(s)  (cost=*** rows=***) (never executed)
+                    -> Parallel table scan on t1  (cost=*** rows=***) (never executed)
+        -> Select #3 (subquery in reference key of index access; run only once)
+            -> Limit: 1 row(s)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                -> Gather: 1 workers, parallel scan on qn1  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                    -> Limit: 1 row(s)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                        -> Parallel table scan on qn1  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+                            -> Materialize CTE qn if needed (query plan printed elsewhere)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+
+drop table t1;
+# Parallel table scan + Dependent subquery in select list
+create table t1(a int);
+insert into t1 values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+analyze table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+explain format=tree select a, (select count(*) from t1 as inner_t1 where inner_t1.a < t1.a) from t1;
+EXPLAIN
+-> Gather: 1 workers, parallel scan on t1  (cost=*** rows=***)
+    -> Parallel table scan on t1  (cost=*** rows=***)
+-> Select #2 (subquery in projection; dependent)
+    -> Aggregate: count(0)  (cost=*** rows=***)
+        -> Filter: (inner_t1.a < t1.a)  (cost=*** rows=***)
+            -> Table scan on inner_t1  (cost=*** rows=***)
+
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+explain analyze select a, (select count(*) from t1 as inner_t1 where inner_t1.a < t1.a) from t1;
+EXPLAIN
+-> Gather: 1 workers, parallel scan on t1  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+    -> Parallel table scan on t1  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+-> Select #2 (subquery in projection; dependent)
+    -> Aggregate: count(0)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+        -> Filter: (inner_t1.a < t1.a)  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+            -> Table scan on inner_t1  (cost=*** rows=***) (actual time=*** rows=*** loops=***)
+
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+select a, (select count(*) from t1 as inner_t1 where inner_t1.a < t1.a) from t1;
+a	(select count(*) from t1 as inner_t1 where inner_t1.a < t1.a)
+0	0
+1	1
+2	2
+3	3
+4	4
+5	5
+6	6
+7	7
+8	8
+9	9
+drop table t1;
+# Parallel index range scan
+create table t1 (
+int_col int NOT NULL,
+KEY idx_int_col (int_col)
+);
+insert into t1 values(1),(2),(3);
+insert into t1 values(1);
+analyze table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+explain analyze select int_col from t1 where int_col not between 0 and 1 order by int_col;
+EXPLAIN
+-> Gather: 1 workers, parallel scan on t1  (...) (actual rows loops)
+    -> Filter: (t1.int_col not between 0 and 1)  (...) (actual rows loops)
+        -> Parallel covering index range scan on t1 using idx_int_col over (int_col < 0) OR (1 < int_col)  (...) (actual rows loops)
+
+explain analyze select int_col from t1 where int_col not between 0 and 1 order by int_col desc;
+EXPLAIN
+-> Gather: 1 workers, parallel scan on t1  (...) (actual rows loops)
+    -> Filter: (t1.int_col not between 0 and 1)  (...) (actual rows loops)
+        -> Parallel covering index range scan on t1 using idx_int_col over (int_col < 0) OR (1 < int_col) (reverse)  (...) (actual rows loops)
+
+drop table t1;
+# In FindShareMaterializeNode function, path->iterator wolud be nullptr
+CREATE TABLE t1 (
+id_col int NOT NULL DEFAULT 0,
+int_col int DEFAULT NULL,
+set_col set('111','222','333') DEFAULT NULL,
+KEY ndx_id_col (id_col)
+);
+CREATE TABLE t2 (
+id_col int NOT NULL AUTO_INCREMENT,
+tinyint_col tinyint DEFAULT NULL,
+bool_col tinyint(1) DEFAULT NULL,
+PRIMARY KEY (id_col DESC)
+);
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+CREATE VIEW view_t2 AS select id_col AS id_col, tinyint_col AS tinyint_col, bool_col AS bool_col from t2;
+explain analyze
+select col1
+from
+(
+select b.col1, b.col2, b.col3, SUM(b.col4) col4
+from
+(
+select
+set_col col1, id_col col2, int_col col3, id_col col4
+from
+t1
+group by 1, 2, 3 order by 1, 2, 3, 4
+) b
+left join view_t2 c on b.col2 is null
+where
+b.col3 in (65, 'NULL', 2147483647, 101, 99, -2147483648, 67, 22, 76, 131)
+group by 1, 2, 3 order by 1, 2, 3, 4
+) a;
+EXPLAIN
+-> Gather: 1 workers, parallel scan on a  (actual rows loops)
+    -> Parallel table scan on a  (...) (actual rows loops)
+        -> Materialize  (...) (actual rows loops)
+            -> Sort: b.col1, b.col2, b.col3, col4  (actual rows loops)
+                -> Table scan on <temporary>  (actual rows loops)
+                    -> Aggregate using temporary table  (actual rows loops)
+                        -> Gather: 1 workers, parallel scan on b  (...) (actual rows loops)
+                            -> Table scan on <temporary>  (actual rows loops)
+                                -> Aggregate using temporary table  (actual rows loops)
+                                    -> Left hash join, one hash table per worker (no condition)  (...) (actual rows loops)
+                                        -> Parallel table scan on b  (...) (actual rows loops)
+                                            -> Materialize  (...) (actual rows loops)
+                                                -> Sort: t1.set_col, t1.id_col, t1.int_col  (actual rows loops)
+                                                    -> Table scan on <temporary>  (...) (actual rows loops)
+                                                        -> Temporary table with deduplication  (...) (actual rows loops)
+                                                            -> Gather: 1 workers, parallel scan on t1  (...) (actual rows loops)
+                                                                -> Table scan on <temporary>  (...) (actual rows loops)
+                                                                    -> Temporary table with deduplication  (...) (actual rows loops)
+                                                                        -> Filter: (t1.int_col in (65,'NULL',2147483647,101,99,<cache>(-(2147483648)),67,22,76,131))  (...) (actual rows loops)
+                                                                            -> Parallel table scan on t1  (...) (actual rows loops)
+                                        -> Hash
+                                            -> Zero rows (Impossible filter)  (...) (actual rows loops)
+
+drop table t1, t2;
+drop view view_t2;
+# table->file->pushed_idx_cond is not nullptr when path'type is AccessPath::PQ_REF_SCAN.
+CREATE TABLE t1 (
+decimal_col decimal(25,5) DEFAULT NULL,
+float_col float DEFAULT NULL,
+time_col time(6) DEFAULT NULL,
+binary_col binary(11) DEFAULT NULL,
+KEY ndx_decimal_col (decimal_col DESC),
+KEY ndx_float_col (float_col DESC),
+KEY ndx_time_col (time_col DESC),
+KEY ndx_binary_col (binary_col DESC)
+);
+explain analyze
+SELECT
+col1,
+col2,
+ifnull(col2, col3) as col3
+FROM (SELECT 1) b
+join (
+SELECT
+time_col col1,
+decimal_col col2,
+float_col col3,
+COUNT(binary_col) col4
+FROM t1 GROUP BY 1,2,3
+HAVING
+time_col in (
+'12:00:00.000000', '06:59:59.000000',
+'07:59:59.000000', 'NULL', '01:59:59.000000',
+'04:59:59.000000', '20:59:59.000000',
+'09:09:59.000000', '05:59:59.000000',
+'08:59:59.000000'
+      )
+order by 1,2,3,4
+) a on a.col2 is null;
+EXPLAIN
+-> Gather: 1 workers, parallel scan on a  (actual rows loops)
+    -> Parallel table scan on a  (...) (actual rows loops)
+        -> Materialize  (...) (actual rows loops)
+            -> Sort: t1.time_col, t1.decimal_col, t1.float_col, col4  (actual rows loops)
+                -> Table scan on <temporary>  (actual rows loops)
+                    -> Aggregate using temporary table  (actual rows loops)
+                        -> Gather: 1 workers, parallel scan on t1  (...) (actual rows loops)
+                            -> Filter: (t1.time_col in ('12:00:00.000000','06:59:59.000000','07:59:59.000000','NULL','01:59:59.000000','04:59:59.000000','20:59:59.000000','09:09:59.000000','05:59:59.000000','08:59:59.000000'))  (actual rows loops)
+                                -> Table scan on <temporary>  (actual rows loops)
+                                    -> Aggregate using temporary table  (actual rows loops)
+                                        -> Parallel index lookup on t1 using ndx_decimal_col (decimal_col=NULL), with index condition: (t1.decimal_col is null)  (...) (actual rows loops)
+
+Warnings:
+Warning	1292	Incorrect time value: 'NULL' for column 'time_col' at row 1
+drop table t1;
+# MaterializeIterator
+create table t1(
+set_col set('111','222','333') DEFAULT NULL
+);
+insert into t1 values('111'),('222'),('333'),(NULL),
+('111'),('222'),('333'),(NULL),('111'),('222'),('333'),(NULL),
+('111'),('222'),('333'),(NULL);
+CREATE TABLE t2(
+tinyint_col tinyint DEFAULT NULL,
+date_col date DEFAULT NULL,
+set_col set('111','222','333') DEFAULT NULL,
+KEY ndx_tinyint_col(tinyint_col DESC),
+KEY ndx_date_col(date_col DESC)
+);
+insert into t2 values
+(0,'1998-10-03','111'),(0,'1998-10-03','222'),(0,'1998-10-03','333'),(0,'1998-10-03',NULL),
+(16,'1998-10-03','111'),(16,'1998-10-03','222'),(16,'1998-10-03','333'),(16,'1998-10-03',NULL),
+(32,'1998-10-03','111'),(32,'1998-10-03','222'),(32,'1998-10-03','333'),(32,'1998-10-03',NULL);
+explain analyze select 1 from t1 where
+set_col IN (
+WITH CTE1 (c1, c2) AS(
+select set_col, tinyint_col from t2 where t2.date_col <> '1998-09-02' order by 1, 2 limit 101
+),
+CTE2 AS (
+select
+*
+from
+(
+select set_col, date_col from t2
+UNION ALL
+select set_col, date_col from t2 order by 1 desc, 2 limit 1000
+) dt
+inner join CTE1 a ON dt.set_col = a.c1
+)
+select
+set_col
+from
+CTE2
+);
+EXPLAIN
+-> Gather: 1 workers, parallel scan on t1  (...) (actual rows loops)
+    -> Nested loop inner join  (...) (actual rows loops)
+        -> Filter: (t1.set_col is not null)  (...) (actual rows loops)
+            -> Parallel table scan on t1  (...) (actual rows loops)
+        -> Filter: (t1.set_col = `<subquery2>`.set_col)  (...) (actual rows loops)
+            -> Single-row index lookup on <subquery2> using <auto_distinct_key> (set_col=t1.set_col)  (...) (actual rows loops)
+                -> Materialize with deduplication  (...) (actual rows loops)
+                    -> Filter: (dt.set_col is not null)  (...) (actual rows loops)
+                        -> Nested loop inner join  (...) (actual rows loops)
+                            -> Filter: (a.c1 is not null)  (...) (actual rows loops)
+                                -> Table scan on a  (...) (never executed)
+                                    -> Materialize CTE CTE1  (...) (actual rows loops)
+                                        -> Limit: 101 row(s)  (...) (actual rows loops)
+                                            -> Gather: 1 workers, parallel scan on t2  (...) (actual rows loops)
+                                                -> Limit: 101 row(s)  (...) (actual rows loops)
+                                                    -> Sort: t2.set_col, t2.tinyint_col, limit input to 101 row(s) per chunk  (...) (actual rows loops)
+                                                        -> Filter: (t2.date_col <> DATE'1998-09-02')  (...) (actual rows loops)
+                                                            -> Parallel table scan on t2  (...) (actual rows loops)
+                            -> Filter: (dt.set_col = a.c1)  (...) (actual rows loops)
+                                -> Index lookup on dt using <auto_key0> (set_col=a.c1)  (...) (never executed)
+                                    -> Materialize  (...) (actual rows loops)
+                                        -> Limit: 1000 row(s)  (...) (actual rows loops)
+                                            -> Sort: set_col DESC, date_col, limit input to 1000 row(s) per chunk  (...) (actual rows loops)
+                                                -> Table scan on <union temporary>  (...) (actual rows loops)
+                                                    -> Union all materialize  (...) (actual rows loops)
+                                                        -> Gather: 1 workers, parallel scan on t2  (...) (actual rows loops)
+                                                            -> Parallel table scan on t2  (...) (actual rows loops)
+                                                        -> Gather: 1 workers, parallel scan on t2  (...) (actual rows loops)
+                                                            -> Parallel table scan on t2  (...) (actual rows loops)
+
+drop table t1,t2;

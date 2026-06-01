@@ -1,0 +1,72 @@
+--source include/have_only_dstore.inc
+call mtr.add_suppression("Create index storage relation fail for index: .* of table .* fail due to build index fail.");
+call mtr.add_suppression("CreateIndexStorRel fail! new_index_rel is nullptr");
+call mtr.add_suppression("create_index fail! new_index is nullptr");
+call mtr.add_suppression("cde_create_table_info.create_table fail! name = .*");
+call mtr.add_suppression("Reconstruct index:PRIMARY of table:.* fail due to build index fail.");
+
+# This test aims at testing the behaviour of interruptting the CREATE TABLE
+# and TRUNCATE TABLE statement.
+
+connect (a,localhost,root,,);
+connect (b,localhost,root,,);
+
+--echo ########################################
+--echo #Test1. Test for interruption during CREATE TABLE
+--echo ########################################
+connection a;
+--let $ID= `select connection_id()`
+--echo waiting for interrupt signal
+set debug_sync = "InterruptCreateTable WAIT_FOR CreateContinue";
+
+--send CREATE TABLE `t1` (`id` int NOT NULL, PRIMARY KEY (`id`)) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+connection b;
+--sleep 5
+--replace_result $ID #
+eval KILL QUERY $ID;
+--echo notify create table to continue
+set debug_sync = "now SIGNAL CreateContinue";
+
+connection a;
+--error ER_QUERY_INTERRUPTED
+--reap
+
+--echo Verify create table fail 
+--error ER_NO_SUCH_TABLE
+SELECT * FROM t1;
+
+--echo ########################################
+--echo #Test2. Test for interruption during TRUNCATE TABLE
+--echo ########################################
+CREATE TABLE `t1` (
+  `id` int NOT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+INSERT INTO t1 values (1), (2), (3);
+SELECT * from t1;
+
+--echo waiting for interrupt signal
+set debug_sync = "InterruptTruncateTable WAIT_FOR TruncateContinue";
+--send TRUNCATE TABLE t1;
+
+connection b;
+--sleep 5
+--replace_result $ID #
+eval KILL QUERY $ID;
+--echo notify create table to continue
+set debug_sync = "now SIGNAL TruncateContinue";
+
+connection a;
+--error ER_QUERY_INTERRUPTED
+--reap
+SELECT * from t1;
+
+--echo Test for normal behaviour
+TRUNCATE TABLE t1;
+SELECT * from t1;
+
+DROP TABLE t1;
+disconnect a;
+disconnect b;

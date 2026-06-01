@@ -1,0 +1,38 @@
+--source include/have_only_innodb.inc
+--source include/not_windows.inc
+
+SET @rds_in_predicate_conversion_threshold_backup = @@global.rds_in_predicate_conversion_threshold;
+
+# exists as global only
+--replace_column 1 #
+select @@global.rds_in_predicate_conversion_threshold;
+
+select @@session.rds_in_predicate_conversion_threshold;
+--replace_column 2 #
+show global variables like 'rds_in_predicate_conversion_threshold';
+--replace_column 2 #
+show session variables like 'rds_in_predicate_conversion_threshold';
+--replace_column 2 #
+select * from performance_schema.global_variables where variable_name='rds_in_predicate_conversion_threshold';
+--replace_column 2 #
+select * from performance_schema.session_variables where variable_name='rds_in_predicate_conversion_threshold';
+--replace_column 2 #
+
+# show that it's writable
+set global rds_in_predicate_conversion_threshold=1;
+select @@global.rds_in_predicate_conversion_threshold;
+set global rds_in_predicate_conversion_threshold=128;
+select @@global.rds_in_predicate_conversion_threshold;
+set session rds_in_predicate_conversion_threshold=1;
+
+# incorrect types
+--error ER_WRONG_TYPE_FOR_VAR
+set global rds_in_predicate_conversion_threshold=1.1;
+--error ER_WRONG_TYPE_FOR_VAR
+set global rds_in_predicate_conversion_threshold=1e1;
+--error ER_WRONG_TYPE_FOR_VAR
+set global rds_in_predicate_conversion_threshold="foo";
+
+set global rds_in_predicate_conversion_threshold=-1;
+
+SET @@global.rds_in_predicate_conversion_threshold = @rds_in_predicate_conversion_threshold_backup;

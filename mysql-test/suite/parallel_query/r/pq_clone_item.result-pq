@@ -1,0 +1,1119 @@
+# BUG2022040102546: the pq_clone method of Item_func_coalesce is error
+# when its arguments contain aggregation. This is due to the argument
+# Item_aggregate_ref is firstly cloned and then reassigned.
+create table t1(a int, b int);
+insert into t1 values (1, 2), (2, 1), (2, 2), (3, 1), (0, 0);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+EXPLAIN SELECT COALESCE( SUM(a * b), 0) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select coalesce(sum(`<temporary>`.`sum((t1.a * t1.b))`),0) AS `COALESCE( SUM(a * b), 0)` from `test`.`t1`
+SELECT COALESCE( SUM(a * b), 0) from t1;
+COALESCE( SUM(a * b), 0)
+11
+# BUG2023021403474: PQ supports icu_version() function
+SET @saved_optimize_trace=@@optimizer_switch;
+SET SESSION OPTIMIZER_SWITCH = 'subquery_to_derived=on';
+EXPLAIN SELECT icu_version(), 1 FROM (VALUES ROW(1)) t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, .t0)
+1	SIMPLE	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+2	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+Warnings:
+Note	1003	/* select#1 */ select icu_version() AS `icu_version()`,1 AS `1` from (values row(1)) `t0`
+SELECT icu_version(), 1 FROM (VALUES ROW(1)) t0;
+icu_version()	1
+73.1	1
+SET SESSION OPTIMIZER_SWITCH = @saved_optimize_trace;
+# BUG2023021503243: PQ disable and support some functions
+# PQ not supports row_count()
+EXPLAIN SELECT a, row_count() from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,row_count() AS `row_count()` from `test`.`t1`
+SELECT a, row_count() from t1;
+a	row_count()
+1	#
+2	#
+2	#
+3	#
+0	#
+# PQ not supports USER()
+explain select USER() from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select user() AS `USER()` from `test`.`t1`
+select USER() from t1;
+USER()
+root@localhost
+root@localhost
+root@localhost
+root@localhost
+root@localhost
+# PQ not supports CURRENT_USER()
+explain select CURRENT_USER() from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select current_user() AS `CURRENT_USER()` from `test`.`t1`
+select CURRENT_USER() from t1;
+CURRENT_USER()
+root@localhost
+root@localhost
+root@localhost
+root@localhost
+root@localhost
+# PQ not supports SESSION_USER()
+explain select SESSION_USER() from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select user() AS `SESSION_USER()` from `test`.`t1`
+select SESSION_USER() from t1;
+SESSION_USER()
+root@localhost
+root@localhost
+root@localhost
+root@localhost
+root@localhost
+# PQ not supports SYSTEM_USER()
+explain select SYSTEM_USER() from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select user() AS `SYSTEM_USER()` from `test`.`t1`
+select SYSTEM_USER() from t1;
+SYSTEM_USER()
+root@localhost
+root@localhost
+root@localhost
+root@localhost
+root@localhost
+# BUG2022092200579: PQ supports or not supports some functions
+# PQ supports utc_timestamp
+EXPLAIN SELECT a, utc_timestamp() from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,utc_timestamp() AS `utc_timestamp()` from `test`.`t1`
+SELECT a, utc_timestamp() from t1;
+a	utc_timestamp()
+1	#
+2	#
+2	#
+3	#
+0	#
+# PQ supports sysdate when --sysdate-is-now is off
+EXPLAIN SELECT a, sysdate() from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,sysdate() AS `sysdate()` from `test`.`t1`
+SELECT a, sysdate() from t1;
+a	sysdate()
+1	#
+2	#
+2	#
+3	#
+0	#
+# PQ supports uuid_short
+EXPLAIN SELECT a, uuid_short() from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,uuid_short() AS `uuid_short()` from `test`.`t1`
+SELECT a, uuid_short() from t1;
+a	uuid_short()
+1	#
+2	#
+2	#
+3	#
+0	#
+# PQ not supports ps_thread_id()
+EXPLAIN SELECT a, ps_thread_id(connection_id()) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,ps_thread_id(connection_id()) AS `ps_thread_id(connection_id())` from `test`.`t1`
+SELECT a, ps_thread_id(connection_id()) from t1;
+a	ps_thread_id(connection_id())
+1	#
+2	#
+2	#
+3	#
+0	#
+# PQ not supports ps_current_thread_id()
+EXPLAIN SELECT a, ps_current_thread_id() from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,ps_current_thread_id() AS `ps_current_thread_id()` from `test`.`t1`
+SELECT a, ps_current_thread_id() from t1;
+a	ps_current_thread_id()
+1	#
+2	#
+2	#
+3	#
+0	#
+# PQ not supports row_count
+EXPLAIN SELECT a, row_count() from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,row_count() AS `row_count()` from `test`.`t1`
+SELECT a, row_count() from t1;
+a	row_count()
+1	#
+2	#
+2	#
+3	#
+0	#
+drop table t1;
+#
+# BUG2023021402624: PQ not supports current_role()
+#
+CREATE TABLE t1 (c0 INT);
+CREATE TABLE t2 LIKE t1;
+EXPLAIN SELECT 1 FROM t2 NATURAL JOIN t1 WHERE interval(5, 2, current_role()) = 4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	Impossible WHERE
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'NONE'
+Note	1003	/* select#1 */ select 1 AS `1` from `test`.`t2` join `test`.`t1` where false
+SELECT 1 FROM t2 NATURAL JOIN t1 WHERE interval(5, 2, current_role()) = 4;
+1
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'NONE'
+EXPLAIN SELECT 1 FROM t2 NATURAL JOIN t1 WHERE interval(5, 2, 6) = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t2)
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select 1 AS `1` from `test`.`t2` join `test`.`t1` where (`test`.`t1`.`c0` = `test`.`t2`.`c0`)
+SELECT 1 FROM t2 NATURAL JOIN t1 WHERE interval(5, 2, 6) = 1;
+1
+EXPLAIN select current_role() from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select current_role() AS `current_role()` from `test`.`t1`
+select current_role() from t1;
+current_role()
+EXPLAIN SELECT interval(5, 2, current_role()) FROM t2 NATURAL JOIN t1 WHERE true;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select interval(5,2,current_role()) AS `interval(5, 2, current_role())` from `test`.`t2` join `test`.`t1` where (`test`.`t1`.`c0` = `test`.`t2`.`c0`)
+SELECT interval(5, 2, current_role()) FROM t2 NATURAL JOIN t1 WHERE true;
+interval(5, 2, current_role())
+drop table t1;
+drop table t2;
+# PTI_literal_underscore_charset_bin_num
+CREATE TABLE t1 (id INT PRIMARY KEY, username VARCHAR(50), password_hash BINARY(32));
+INSERT INTO t1 (id, username, password_hash) VALUES
+(1, 'alice', _binary 0xE3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855),
+(2, 'bob', UNHEX(SHA2('bobspassword', 256))),
+(3, 'charlie', UNHEX(SHA2('password123', 256)));
+EXPLAIN SELECT _binary 'abc', id, username, HEX(password_hash) AS password_hash_hex, LENGTH(password_hash) AS hash_length FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select _binary'abc' AS `abc`,`test`.`t1`.`id` AS `id`,`test`.`t1`.`username` AS `username`,hex(`test`.`t1`.`password_hash`) AS `password_hash_hex`,length(`test`.`t1`.`password_hash`) AS `hash_length` from `test`.`t1`
+DROP TABLE t1;
+# Item_static_string_func
+CREATE TABLE t1 (id INT, val VARCHAR(100));
+INSERT INTO t1 VALUES (1, 'test'), (2, 'other');
+EXPLAIN SELECT id, VERSION() AS mysql_version FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,version() AS `mysql_version` from `test`.`t1`
+SELECT id, VERSION() AS mysql_version FROM t1;
+id	mysql_version
+1	#
+2	#
+DROP TABLE t1;
+# Item_func_is_ipv6
+CREATE TABLE network_devices (
+device_id INT PRIMARY KEY AUTO_INCREMENT,
+device_name VARCHAR(100),
+ip_address VARCHAR(45),
+device_type VARCHAR(50),
+last_seen DATETIME
+);
+INSERT INTO network_devices (device_name, ip_address, device_type) VALUES
+('Router-1', '2001:db8::1', 'router'),
+('Server-1', 'fe80::250:56ff:fe96:5d3f', 'server'),
+('Switch-1', '192.168.1.1', 'switch'),           -- IPv4
+('Firewall-1', '2001:db8:85a3::8a2e:370:7334', 'firewall'),
+('Invalid-Device', 'not.an.ip.address', 'unknown');
+EXPLAIN SELECT
+device_id,
+device_name,
+ip_address,
+device_type,
+CASE
+WHEN IS_IPV6(ip_address) = 1 THEN 'IPv6'
+        ELSE 'IPv4 or Invalid'
+    END AS ip_version
+FROM network_devices
+WHERE IS_IPV6(ip_address) = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.network_devices)
+1	SIMPLE	network_devices	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`network_devices`.`device_id` AS `device_id`,`test`.`network_devices`.`device_name` AS `device_name`,`test`.`network_devices`.`ip_address` AS `ip_address`,`test`.`network_devices`.`device_type` AS `device_type`,(case when (is_ipv6(`test`.`network_devices`.`ip_address`) = 1) then 'IPv6' else 'IPv4 or Invalid' end) AS `ip_version` from `test`.`network_devices` where (is_ipv6(`test`.`network_devices`.`ip_address`) = 1)
+DROP TABLE network_devices;
+# Item_func_is_ipv4
+CREATE TABLE network_configurations (
+config_id INT PRIMARY KEY AUTO_INCREMENT,
+device_name VARCHAR(100),
+ip_address VARCHAR(15),
+subnet_mask VARCHAR(15),
+gateway VARCHAR(15),
+dns_server VARCHAR(15),
+config_status ENUM('VALID', 'INVALID', 'PENDING')
+);
+INSERT INTO network_configurations (device_name, ip_address, subnet_mask, gateway, dns_server) VALUES
+('Router-01', '192.168.1.1', '255.255.255.0', '192.168.1.254', '8.8.8.8'),
+('Server-01', '10.0.0.100', '255.255.0.0', '10.0.0.1', '10.0.0.53'),
+('Switch-01', '172.16.0.1', '255.255.255.240', '172.16.0.14', '1.1.1.1'),
+('Invalid-01', '300.400.500.600', '255.255.255.0', '192.168.1.1', '8.8.8.8'),
+('Partial-01', '192.168.1', '255.255.255.0', '192.168.1.1', '8.168.1.1');
+EXPLAIN SELECT
+config_id,
+device_name,
+ip_address,
+subnet_mask,
+gateway,
+dns_server,
+CASE
+WHEN IS_IPV4(ip_address) = 1
+AND IS_IPV4(subnet_mask) = 1
+AND IS_IPV4(gateway) = 1
+AND IS_IPV4(dns_server) = 1
+THEN 'VALID'
+        ELSE 'INVALID'
+    END AS validation_result,
+CONCAT_WS(', ',
+CASE WHEN IS_IPV4(ip_address) = 0 THEN 'IP地址无效' END,
+CASE WHEN IS_IPV4(subnet_mask) = 0 THEN '子网掩码无效' END,
+CASE WHEN IS_IPV4(gateway) = 0 THEN '网关无效' END,
+CASE WHEN IS_IPV4(dns_server) = 0 THEN 'DNS服务器无效' END
+) AS error_details
+FROM network_configurations;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.network_configurations)
+1	SIMPLE	network_configurations	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`network_configurations`.`config_id` AS `config_id`,`test`.`network_configurations`.`device_name` AS `device_name`,`test`.`network_configurations`.`ip_address` AS `ip_address`,`test`.`network_configurations`.`subnet_mask` AS `subnet_mask`,`test`.`network_configurations`.`gateway` AS `gateway`,`test`.`network_configurations`.`dns_server` AS `dns_server`,(case when ((is_ipv4(`test`.`network_configurations`.`ip_address`) = 1) and (is_ipv4(`test`.`network_configurations`.`subnet_mask`) = 1) and (is_ipv4(`test`.`network_configurations`.`gateway`) = 1) and (is_ipv4(`test`.`network_configurations`.`dns_server`) = 1)) then 'VALID' else 'INVALID' end) AS `validation_result`,concat_ws(', ',(case when (is_ipv4(`test`.`network_configurations`.`ip_address`) = 0) then 'IP地址无效' end),(case when (is_ipv4(`test`.`network_configurations`.`subnet_mask`) = 0) then '子网掩码无效' end),(case when (is_ipv4(`test`.`network_configurations`.`gateway`) = 0) then '网关无效' end),(case when (is_ipv4(`test`.`network_configurations`.`dns_server`) = 0) then 'DNS服务器无效' end)) AS `error_details` from `test`.`network_configurations`
+DROP TABLE network_configurations;
+# Item_func_gtid_subset
+CREATE TABLE gtid_sets (
+id INT PRIMARY KEY AUTO_INCREMENT,
+set_name VARCHAR(50) NOT NULL,
+gtid_string VARCHAR(500) NOT NULL,
+server_uuid CHAR(36),
+created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+INDEX idx_created_at (created_at)
+);
+INSERT INTO gtid_sets (set_name, gtid_string, server_uuid) VALUES
+('full_set_1', '3E11FA47-71CA-11E1-9E33-C80AA9429562:1-100', UUID()),
+('full_set_2', '3E11FA47-71CA-11E1-9E33-C80AA9429562:1-100:200-300', UUID()),
+('partial_set_1', '3E11FA47-71CA-11E1-9E33-C80AA9429562:1-50', UUID()),
+('partial_set_2', '3E11FA47-71CA-11E1-9E33-C80AA9429562:51-100', UUID()),
+('partial_set_3', '3E11FA47-71CA-11E1-9E33-C80AA9429562:10-20:30-40', UUID()),
+('empty_set', '', UUID()),
+('multi_uuid_set', '3E11FA47-71CA-11E1-9E33-C80AA9429562:1-50,4E11FA47-71CA-11E1-9E33-C80AA9429562:1-30', UUID()),
+('gap_set', '3E11FA47-71CA-11E1-9E33-C80AA9429562:1-10:20-30:40-50', UUID());
+EXPLAIN SELECT GTID_SUBSET('', gtid_string) AS is_subset FROM gtid_sets WHERE set_name = 'full_set_1';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.gtid_sets)
+1	SIMPLE	gtid_sets	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select gtid_subset('',`test`.`gtid_sets`.`gtid_string`) AS `is_subset` from `test`.`gtid_sets` where (`test`.`gtid_sets`.`set_name` = 'full_set_1')
+EXPLAIN SELECT GTID_SUBTRACT(gtid_string, '') AS missing_in_source FROM gtid_sets WHERE set_name = 'full_set_1';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	gtid_sets	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select gtid_subtract(`test`.`gtid_sets`.`gtid_string`,'') AS `missing_in_source` from `test`.`gtid_sets` where (`test`.`gtid_sets`.`set_name` = 'full_set_1')
+DROP TABLE gtid_sets;
+# Item_func_sign
+CREATE TABLE stock_prices (
+symbol VARCHAR(10),
+trade_date DATE,
+open_price DECIMAL(10,2),
+close_price DECIMAL(10,2),
+volume BIGINT
+);
+INSERT INTO stock_prices VALUES
+('AAPL', '2024-01-01', 150.00, 152.50, 1000000),
+('AAPL', '2024-01-02', 152.50, 151.75, 950000),
+('AAPL', '2024-01-03', 151.75, 153.25, 1100000),
+('GOOGL', '2024-01-01', 2800.00, 2795.50, 500000),
+('GOOGL', '2024-01-02', 2795.50, 2810.25, 550000),
+('GOOGL', '2024-01-03', 2810.25, 2805.00, 520000);
+EXPLAIN SELECT
+symbol,
+trade_date,
+open_price,
+close_price,
+close_price - open_price AS price_change,
+SIGN(close_price - open_price) AS change_direction,
+volume
+FROM stock_prices ORDER BY symbol, trade_date;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.stock_prices)
+1	SIMPLE	stock_prices	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`stock_prices`.`symbol` AS `symbol`,`test`.`stock_prices`.`trade_date` AS `trade_date`,`test`.`stock_prices`.`open_price` AS `open_price`,`test`.`stock_prices`.`close_price` AS `close_price`,(`test`.`stock_prices`.`close_price` - `test`.`stock_prices`.`open_price`) AS `price_change`,sign((`test`.`stock_prices`.`close_price` - `test`.`stock_prices`.`open_price`)) AS `change_direction`,`test`.`stock_prices`.`volume` AS `volume` from `test`.`stock_prices` order by `test`.`stock_prices`.`symbol`,`test`.`stock_prices`.`trade_date`
+DROP TABLE stock_prices;
+# Item_func_degrees
+CREATE TABLE geographic_points (
+point_id INT PRIMARY KEY AUTO_INCREMENT,
+point_name VARCHAR(100),
+latitude DECIMAL(10,8),
+longitude DECIMAL(11,8),
+altitude DECIMAL(8,2)
+);
+INSERT INTO geographic_points (point_name, latitude, longitude, altitude) VALUES
+('北京天安门', 39.9075000, 116.3972300, 44.0),
+('上海东方明珠', 31.2396900, 121.4997200, 468.0),
+('广州塔', 23.1063900, 113.3244400, 600.0),
+('纽约自由女神', 40.6892470, -74.0445020, 93.0),
+('巴黎埃菲尔铁塔', 48.8583700, 2.2944810, 324.0);
+EXPLAIN SELECT
+p1.point_name AS from_point,
+p2.point_name AS to_point,
+DEGREES(ACOS(
+SIN(RADIANS(p1.latitude)) * SIN(RADIANS(p2.latitude)) +
+COS(RADIANS(p1.latitude)) * COS(RADIANS(p2.latitude)) *
+COS(RADIANS(p2.longitude - p1.longitude))
+)) * 111.319 AS distance_km_approx
+FROM geographic_points p1
+CROSS JOIN geographic_points p2
+WHERE p1.point_name = '北京天安门'
+  AND p2.point_name = '上海东方明珠';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.p1)
+1	SIMPLE	p1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+1	SIMPLE	p2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`p1`.`point_name` AS `from_point`,`test`.`p2`.`point_name` AS `to_point`,(degrees(acos(((sin(radians(`test`.`p1`.`latitude`)) * sin(radians(`test`.`p2`.`latitude`))) + ((cos(radians(`test`.`p1`.`latitude`)) * cos(radians(`test`.`p2`.`latitude`))) * cos(radians((`test`.`p2`.`longitude` - `test`.`p1`.`longitude`))))))) * 111.319) AS `distance_km_approx` from `test`.`geographic_points` `p1` join `test`.`geographic_points` `p2` where ((`test`.`p2`.`point_name` = '上海东方明珠') and (`test`.`p1`.`point_name` = '北京天安门'))
+DROP TABLE geographic_points;
+# PTI_in_sum_expr
+CREATE TABLE inventory (
+product_id INT,
+warehouse_id INT,
+quantity INT,
+last_restock DATE
+);
+explain SELECT product_id, warehouse_id, quantity
+FROM inventory
+WHERE (warehouse_id, quantity) IN (
+SELECT warehouse_id, AVG(quantity)
+FROM inventory
+GROUP BY warehouse_id
+HAVING AVG(quantity) > 50
+);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	inventory	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+2	DEPENDENT SUBQUERY	inventory	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select `test`.`inventory`.`product_id` AS `product_id`,`test`.`inventory`.`warehouse_id` AS `warehouse_id`,`test`.`inventory`.`quantity` AS `quantity` from `test`.`inventory` where <in_optimizer>((`test`.`inventory`.`warehouse_id`,`test`.`inventory`.`quantity`),<exists>(/* select#2 */ select `test`.`inventory`.`warehouse_id`,avg(`test`.`inventory`.`quantity`) from `test`.`inventory` group by `test`.`inventory`.`warehouse_id` having ((avg(`test`.`inventory`.`quantity`) > 50) and ((<cache>(`test`.`inventory`.`warehouse_id`) = `test`.`inventory`.`warehouse_id`) or (`test`.`inventory`.`warehouse_id` is null)) and ((<cache>(`test`.`inventory`.`quantity`) = avg(`test`.`inventory`.`quantity`)) or (avg(`test`.`inventory`.`quantity`) is null)) and <is_not_null_test>(`test`.`inventory`.`warehouse_id`) and <is_not_null_test>(avg(`test`.`inventory`.`quantity`)))))
+DROP TABLE inventory;
+# Item_func_last_day & Item_typecast_year
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+date_string VARCHAR(10),
+event_date DATE,
+value DECIMAL(10,2)
+);
+INSERT INTO t1 VALUES
+(1, '2024-01-15', '2024-01-15', 100.50),
+(2, '2023-12-01', '2024-01-31', 200.75),
+(3, 'invalid', '2024-02-28', 150.25),
+(4, '2025-06-30', '2024-03-31', 300.00);
+EXPLAIN SELECT
+id,
+date_string,
+CASE
+WHEN CAST(date_string AS YEAR) IS NOT NULL
+THEN CAST(date_string AS YEAR)
+ELSE NULL
+END AS extracted_year,
+event_date,
+LAST_DAY(event_date) AS month_end,
+value,
+CASE
+WHEN event_date = LAST_DAY(event_date)
+THEN 'YES'
+        ELSE 'NO'
+    END AS is_month_end
+FROM t1 ORDER BY id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`date_string` AS `date_string`,(case when (cast_as_year(`test`.`t1`.`date_string`) is not null) then cast_as_year(`test`.`t1`.`date_string`) else NULL end) AS `extracted_year`,`test`.`t1`.`event_date` AS `event_date`,last_day(`test`.`t1`.`event_date`) AS `month_end`,`test`.`t1`.`value` AS `value`,(case when (`test`.`t1`.`event_date` = last_day(`test`.`t1`.`event_date`)) then 'YES' else 'NO' end) AS `is_month_end` from `test`.`t1` order by `test`.`t1`.`id`
+DROP TABLE t1;
+# Item_func_regexp_substr
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+raw_text VARCHAR(255)
+);
+INSERT INTO t1 VALUES
+(1, 'Order #12345: Amount $199.99'),
+(2, 'User: john_doe123, Email: john@example.com'),
+(3, 'Phone: (555) 123-4567, Fax: 555-987-6543'),
+(4, 'IP Address: 192.168.1.1, Port: 8080'),
+(5, 'No special patterns here'),
+(6, 'Multiple emails: alice@test.com and bob@work.org');
+EXPLAIN SELECT
+id,
+raw_text,
+REGEXP_SUBSTR(raw_text, '#\\d+') AS order_number_raw,
+REGEXP_SUBSTR(raw_text, '\\d+', 1, 1) AS first_number,
+REGEXP_SUBSTR(raw_text, '\\d+', 1, 2) AS second_number
+FROM t1 WHERE REGEXP_SUBSTR(raw_text, '#\\d+') IS NOT NULL;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`raw_text` AS `raw_text`,regexp_substr(`test`.`t1`.`raw_text`,'#\\d+') AS `order_number_raw`,regexp_substr(`test`.`t1`.`raw_text`,'\\d+',1,1) AS `first_number`,regexp_substr(`test`.`t1`.`raw_text`,'\\d+',1,2) AS `second_number` from `test`.`t1` where (regexp_substr(`test`.`t1`.`raw_text`,'#\\d+') is not null)
+DROP TABLE t1;
+# PTI_text_literal_underscore_charset&PTI_text_literal_nchar_string
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+ascii_text VARCHAR(100),
+unicode_text VARCHAR(100) CHARACTER SET utf8mb4,
+binary_text VARBINARY(100)
+);
+INSERT INTO t1 VALUES
+(1, 'Regular ASCII text', N'Unicode: 测试中文', _binary '48656C6C6F'),
+(2, 'Hello World', _utf8 'UTF8 encoded', _binary '42696E617279'),
+(3, 'Test', _latin1 'Latin1 Text', _binary '44617461');
+Warnings:
+Warning	3720	NATIONAL/NCHAR/NVARCHAR implies the character set UTF8MB3, which will be replaced by UTF8MB4 in a future release. Please consider using CHAR(x) CHARACTER SET UTF8MB4 in order to be unambiguous.
+Warning	3719	'utf8' is currently an alias for the character set UTF8MB3, but will be an alias for UTF8MB4 in a future release. Please consider using UTF8MB4 in order to be unambiguous.
+EXPLAIN SELECT
+id,
+ascii_text,
+CHARSET(ascii_text) AS ascii_charset,
+unicode_text,
+CHARSET(unicode_text) AS unicode_charset,
+binary_text,
+HEX(binary_text) AS binary_hex,
+_binary 'TEST' AS underscore_binary,
+_utf8 'TEST' AS underscore_utf8,
+_latin1 'TEST' AS underscore_latin1,
+N'测试' AS nchar_chinese
+FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Warning	3719	'utf8' is currently an alias for the character set UTF8MB3, but will be an alias for UTF8MB4 in a future release. Please consider using UTF8MB4 in order to be unambiguous.
+Warning	3720	NATIONAL/NCHAR/NVARCHAR implies the character set UTF8MB3, which will be replaced by UTF8MB4 in a future release. Please consider using CHAR(x) CHARACTER SET UTF8MB4 in order to be unambiguous.
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`ascii_text` AS `ascii_text`,charset(`test`.`t1`.`ascii_text`) AS `ascii_charset`,`test`.`t1`.`unicode_text` AS `unicode_text`,charset(`test`.`t1`.`unicode_text`) AS `unicode_charset`,`test`.`t1`.`binary_text` AS `binary_text`,hex(`test`.`t1`.`binary_text`) AS `binary_hex`,_binary'TEST' AS `underscore_binary`,_utf8mb3'TEST' AS `underscore_utf8`,_latin1'TEST' AS `underscore_latin1`,'测试' AS `nchar_chinese` from `test`.`t1`
+DROP TABLE t1;
+# PTI_variable_aux_set_var & Item_func_get_user_var
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+name VARCHAR(50),
+department VARCHAR(50),
+salary DECIMAL(10,2)
+);
+INSERT INTO t1 VALUES
+(1, 'Alice', 'IT', 60000),
+(2, 'Bob', 'HR', 55000),
+(3, 'Charlie', 'IT', 65000),
+(4, 'David', 'Sales', 70000),
+(5, 'Eve', 'IT', 62000);
+SET @min_salary = 60000;
+EXPLAIN SELECT
+id,
+name,
+department,
+salary
+FROM t1 WHERE salary >= @min_salary;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`name` AS `name`,`test`.`t1`.`department` AS `department`,`test`.`t1`.`salary` AS `salary` from `test`.`t1` where (`test`.`t1`.`salary` >= <cache>((@`min_salary`)))
+DROP TABLE t1;
+# Item_func_connection_id
+CREATE TABLE t1 (
+log_id INT AUTO_INCREMENT PRIMARY KEY,
+connection_id BIGINT,
+query_text varchar(100),
+execution_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO t1 (connection_id, query_text)
+VALUES
+(CONNECTION_ID(), 'Test query 1'),
+(CONNECTION_ID(), 'Test query 2'),
+(CONNECTION_ID(), 'Test query 3');
+EXPLAIN SELECT
+log_id,
+connection_id,
+query_text
+FROM t1 WHERE connection_id = CONNECTION_ID() ORDER BY log_id DESC;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	#	#	Using where; Backward index scan
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`log_id` AS `log_id`,`test`.`t1`.`connection_id` AS `connection_id`,`test`.`t1`.`query_text` AS `query_text` from `test`.`t1` where (`test`.`t1`.`connection_id` = <cache>(connection_id())) order by `test`.`t1`.`log_id` desc
+DROP TABLE t1;
+# Item_func_unix_timestamp & Item_func_found_rows & Item_func_connection_id
+CREATE TABLE t1 (
+monitor_id INT AUTO_INCREMENT PRIMARY KEY,
+connection_id BIGINT,
+username VARCHAR(100),
+action_time INT UNSIGNED,
+query_text TEXT,
+rows_found INT,
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+INDEX idx_username_time (username, action_time)
+);
+INSERT INTO t1 (connection_id, username, action_time, query_text, rows_found) VALUES
+(1001, 'admin@localhost', UNIX_TIMESTAMP('2024-01-22 09:00:00'), 'SELECT * FROM users', 150),
+(1002, 'user1@localhost', UNIX_TIMESTAMP('2024-01-22 09:15:00'), 'SELECT * FROM orders', 75),
+(1003, CURRENT_USER(), UNIX_TIMESTAMP('2024-01-22 09:30:00'), 'SELECT * FROM products', 200),
+(1004, 'admin@localhost', UNIX_TIMESTAMP(), 'INSERT INTO logs VALUES (...)', 1),
+(CONNECTION_ID(), 'test@localhost', UNIX_TIMESTAMP('2024-01-22 10:00:00'), 'TEST QUERY', 0);
+SELECT SQL_CALC_FOUND_ROWS
+FROM_UNIXTIME(action_time) AS action_datetime,
+action_time AS unix_timestamp,
+rows_found,
+UNIX_TIMESTAMP() - action_time AS seconds_ago,
+CASE
+WHEN connection_id = CONNECTION_ID() THEN 'My Connection'
+        ELSE 'Other User'
+    END AS activity_owner
+FROM t1
+WHERE action_time > UNIX_TIMESTAMP() - 86400
+ORDER BY action_time DESC LIMIT 10;
+SELECT FOUND_ROWS();
+DROP TABLE t1;
+# Item_func_benchmark
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+value INT,
+text_value VARCHAR(100)
+);
+EXPLAIN SELECT
+BENCHMARK(50000,
+CASE
+WHEN id % 2 = 0 THEN 'Even'
+            ELSE 'Odd'
+        END
+) AS case_performance
+FROM t1  LIMIT 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select benchmark(50000,(case when ((`test`.`t1`.`id` % 2) = 0) then 'Even' else 'Odd' end)) AS `case_performance` from `test`.`t1` limit 1
+DROP TABLE t1;
+# Item_func_random_bytes
+CREATE TABLE t1(id INT);
+EXPLAIN SELECT * FROM t1 WHERE id > random_bytes(16);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id` from `test`.`t1` where (cast(`test`.`t1`.`id` as double) > cast(random_bytes(16) as double))
+DROP TABLE t1;
+# Item_func_current_user
+explain select count(*) = 0 from information_schema.processlist where db='events_test' and command = 'Connect' and user=current_user();
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	processlist	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select (count(0) = 0) AS `count(*) = 0` from `information_schema`.`PROCESSLIST` `processlist` where ((`processlist`.`DB` = 'events_test') and (`processlist`.`COMMAND` = 'Connect') and (`processlist`.`USER` = <cache>(current_user())))
+# Item_func_is_uuid
+CREATE TABLE uuid_test (
+id INT PRIMARY KEY AUTO_INCREMENT,
+uuid_col VARCHAR(64),
+description VARCHAR(100)
+);
+INSERT INTO uuid_test (uuid_col, description) VALUES
+('6ccd780c-baba-1026-9564-5b8c656024db', 'valid uuid1'),
+('12345678-1234-1234-1234-123456789abc', 'valid uuid2'),
+('invalid-uuid', 'invalid uuid wrong format'),
+('6ccd780c-baba-1026-9564', 'invalid uuid too short'),
+('6ccd780c-baba-1026-9564-5b8c656024db-extra', 'invalid uuid too long'),
+(NULL, 'empty value'),
+('6CCD780C-BABA-1026-9564-5B8C656024DB', 'valid uuid'),
+('6ccd780c-baba-1026-9564-5b8c656024dx', 'invalid uuid incorrect char');
+explain SELECT
+id,
+uuid_col,
+description,
+IS_UUID(uuid_col) AS is_valid_uuid,
+CASE
+WHEN IS_UUID(uuid_col) = 1 THEN 'valid uuid'
+        WHEN IS_UUID(uuid_col) = 0 THEN 'invalid uuid'
+        ELSE 'empty value'
+    END AS uuid_status FROM uuid_test;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.uuid_test)
+1	SIMPLE	uuid_test	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`uuid_test`.`id` AS `id`,`test`.`uuid_test`.`uuid_col` AS `uuid_col`,`test`.`uuid_test`.`description` AS `description`,is_uuid(`test`.`uuid_test`.`uuid_col`) AS `is_valid_uuid`,(case when (is_uuid(`test`.`uuid_test`.`uuid_col`) = 1) then 'valid uuid' when (is_uuid(`test`.`uuid_test`.`uuid_col`) = 0) then 'invalid uuid' else 'empty value' end) AS `uuid_status` from `test`.`uuid_test`
+SELECT
+id,
+uuid_col,
+description,
+IS_UUID(uuid_col) AS is_valid_uuid,
+CASE
+WHEN IS_UUID(uuid_col) = 1 THEN 'valid uuid'
+        WHEN IS_UUID(uuid_col) = 0 THEN 'invalid uuid'
+        ELSE 'empty value'
+    END AS uuid_status FROM uuid_test;
+id	uuid_col	description	is_valid_uuid	uuid_status
+1	6ccd780c-baba-1026-9564-5b8c656024db	valid uuid1	1	valid uuid
+2	12345678-1234-1234-1234-123456789abc	valid uuid2	1	valid uuid
+3	invalid-uuid	invalid uuid wrong format	0	invalid uuid
+4	6ccd780c-baba-1026-9564	invalid uuid too short	0	invalid uuid
+5	6ccd780c-baba-1026-9564-5b8c656024db-extra	invalid uuid too long	0	invalid uuid
+6	NULL	empty value	NULL	empty value
+7	6CCD780C-BABA-1026-9564-5B8C656024DB	valid uuid	1	valid uuid
+8	6ccd780c-baba-1026-9564-5b8c656024dx	invalid uuid incorrect char	0	invalid uuid
+DROP TABLE uuid_test;
+Item_func_validate_password_strength
+CREATE TABLE user_passwords (
+id INT PRIMARY KEY AUTO_INCREMENT,
+username VARCHAR(50),
+password VARCHAR(100),
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO user_passwords (username, password) VALUES
+('user1', '123456'),
+('user2', 'Abc123'),
+('user3', 'Abc@123456');
+explain SELECT
+username,
+password,
+VALIDATE_PASSWORD_STRENGTH(password) AS strength_score,
+'Need to change' AS suggestion
+FROM user_passwords WHERE VALIDATE_PASSWORD_STRENGTH(password) <= 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.user_passwords)
+1	SIMPLE	user_passwords	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`user_passwords`.`username` AS `username`,`test`.`user_passwords`.`password` AS `password`,validate_password_strength(`test`.`user_passwords`.`password`) AS `strength_score`,'Need to change' AS `suggestion` from `test`.`user_passwords` where (validate_password_strength(`test`.`user_passwords`.`password`) <= 1)
+SELECT
+username,
+password,
+VALIDATE_PASSWORD_STRENGTH(password) AS strength_score,
+'Need to change' AS suggestion
+FROM user_passwords WHERE VALIDATE_PASSWORD_STRENGTH(password) <= 1;
+username	password	strength_score	suggestion
+user1	123456	0	Need to change
+user2	Abc123	0	Need to change
+user3	Abc@123456	0	Need to change
+DROP TABLE user_passwords;
+# Item_cache_row
+CREATE TABLE employees (
+id INT PRIMARY KEY,
+name VARCHAR(50),
+salary DECIMAL(10,2),
+department_id INT,
+hire_date DATE
+);
+CREATE TABLE departments (
+id INT PRIMARY KEY,
+dept_name VARCHAR(50),
+location VARCHAR(50)
+);
+CREATE TABLE salaries (
+id INT PRIMARY KEY AUTO_INCREMENT,
+employee_id INT,
+year YEAR,
+amount DECIMAL(10,2)
+);
+INSERT INTO departments VALUES
+(1, 'Sales', 'New York'),
+(2, 'IT', 'San Francisco'),
+(3, 'HR', 'Chicago');
+INSERT INTO employees VALUES
+(1, 'John Doe', 75000, 1, '2020-01-15'),
+(2, 'Jane Smith', 85000, 2, '2019-03-20'),
+(3, 'Bob Johnson', 65000, 1, '2021-06-10'),
+(4, 'Alice Brown', 95000, 2, '2018-11-05'),
+(5, 'Charlie Wilson', 55000, 3, '2022-02-28');
+INSERT INTO salaries (employee_id, year, amount) VALUES
+(1, 2023, 75000),(1, 2024, 78000),(2, 2023, 85000),(2, 2024, 88000),
+(3, 2023, 65000),(3, 2024, 67000),(4, 2023, 95000),(4, 2024, 98000),
+(5, 2023, 55000),(5, 2024, 57000);
+explain SELECT
+e.name,
+e.salary,
+(SELECT dept_name FROM departments d WHERE d.id = e.department_id) AS department_name,
+(SELECT location FROM departments d WHERE d.id = e.department_id) AS department_location
+FROM employees e
+WHERE e.salary > 60000;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.e)
+1	PRIMARY	e	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+3	DEPENDENT SUBQUERY	d	NULL	eq_ref	PRIMARY	PRIMARY	4	test.e.department_id	#	#	NULL
+2	DEPENDENT SUBQUERY	d	NULL	eq_ref	PRIMARY	PRIMARY	4	test.e.department_id	#	#	NULL
+Warnings:
+Note	1276	Field or reference 'test.e.department_id' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.e.department_id' of SELECT #3 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`e`.`name` AS `name`,`test`.`e`.`salary` AS `salary`,(/* select#2 */ select `test`.`d`.`dept_name` from `test`.`departments` `d` where (`test`.`d`.`id` = `test`.`e`.`department_id`)) AS `department_name`,(/* select#3 */ select `test`.`d`.`location` from `test`.`departments` `d` where (`test`.`d`.`id` = `test`.`e`.`department_id`)) AS `department_location` from `test`.`employees` `e` where (`test`.`e`.`salary` > 60000.00)
+DROP TABLE employees, departments, salaries;
+PTI_literal_underscore_charset_hex_num
+CREATE TABLE test_charset (
+id INT,
+content VARCHAR(100)
+);
+INSERT INTO test_charset VALUES (1, _utf8mb4 0xE4B8ADE59BBD),(2, _utf8 0xE4B8ADE59BBD),(3, _latin1 0x48656C6C6F);
+Warnings:
+Warning	3719	'utf8' is currently an alias for the character set UTF8MB3, but will be an alias for UTF8MB4 in a future release. Please consider using UTF8MB4 in order to be unambiguous.
+SELECT * FROM test_charset WHERE content = _utf8mb4 0xE4B8ADE59BBD;
+id	content
+1	中国
+2	中国
+DROP TABLE test_charset;
+# Item_func_bit_xor
+CREATE TABLE t1 (id INT, a INT, b INT);
+INSERT INTO t1 VALUES (1, 5, 3), (2, 12, 7), (3, 15, 15), (4, 0, 255), (5, 85, 170);
+explain SELECT id,a,b, a ^ b AS xor_result FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,(`test`.`t1`.`a` ^ `test`.`t1`.`b`) AS `xor_result` from `test`.`t1`
+explain SELECT id,a,b, b >> 1 AS id_right_shift_1 FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,(`test`.`t1`.`b` >> 1) AS `id_right_shift_1` from `test`.`t1`
+explain SELECT id,a,b, ~b FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,~(`test`.`t1`.`b`) AS `~b` from `test`.`t1`
+explain SELECT id,a,BIT_COUNT(b) from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,bit_count(`test`.`t1`.`b`) AS `BIT_COUNT(b)` from `test`.`t1`
+DROP TABLE t1;
+# Item_func_like & Item_func_ascii
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+filename VARCHAR(100),
+description VARCHAR(100)
+);
+INSERT INTO t1 VALUES
+(1, 'discount_100%.txt', 'file with percent sign'),
+(2, 'sale_50%_off.log', 'file with percent and underscore'),
+(3, 'normal_file.csv', 'normal file name');
+explain SELECT * FROM t1 WHERE filename LIKE '%\%%' ESCAPE '\\';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`filename` AS `filename`,`test`.`t1`.`description` AS `description` from `test`.`t1` where (`test`.`t1`.`filename` like '%\\%%' escape '\\')
+explain SELECT id, ASCII(filename) AS ascii_char from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,ascii(`test`.`t1`.`filename`) AS `ascii_char` from `test`.`t1`
+explain SELECT id, char_length(filename) AS len from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,char_length(`test`.`t1`.`filename`) AS `len` from `test`.`t1`
+DROP TABLE t1;
+# Item_func_coercibility
+CREATE TABLE coercibility_test (
+id INT PRIMARY KEY,
+col_utf8 VARCHAR(50) CHARACTER SET utf8mb4,
+col_latin1 VARCHAR(50) CHARACTER SET latin1,
+col_ascii VARCHAR(50) CHARACTER SET ascii,
+col_binary VARBINARY(50)
+);
+INSERT INTO coercibility_test VALUES
+(1, 'Hello', 'Hello', 'Hello', 'Hello'),
+(2, 'Test', 'Test', 'Test', 'Test'),
+(3, 'café', 'café', 'cafe', 'café'),
+(4, '你好', 'Nihao', 'nihao', 'nihao');
+explain SELECT * FROM coercibility_test WHERE COERCIBILITY(col_utf8) <= 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.coercibility_test)
+1	SIMPLE	coercibility_test	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`coercibility_test`.`id` AS `id`,`test`.`coercibility_test`.`col_utf8` AS `col_utf8`,`test`.`coercibility_test`.`col_latin1` AS `col_latin1`,`test`.`coercibility_test`.`col_ascii` AS `col_ascii`,`test`.`coercibility_test`.`col_binary` AS `col_binary` from `test`.`coercibility_test` where (coercibility(`test`.`coercibility_test`.`col_utf8`) <= 2)
+SELECT * FROM coercibility_test WHERE COERCIBILITY(col_utf8) <= 2;
+id	col_utf8	col_latin1	col_ascii	col_binary
+1	Hello	Hello	Hello	Hello
+2	Test	Test	Test	Test
+3	café	café	cafe	café
+4	你好	Nihao	nihao	nihao
+DROP TABLE coercibility_test;
+# Item_func_crc32
+CREATE TABLE crc32_test (
+id INT PRIMARY KEY AUTO_INCREMENT,
+username VARCHAR(50),
+email VARCHAR(100),
+filename VARCHAR(100)
+);
+INSERT INTO crc32_test (username, email, filename) VALUES
+('john_doe', 'john@example.com', 'report.pdf'),
+('jane_smith', 'jane@example.com', 'document.docx'),
+('john_doe', 'john.doe@test.com', 'report_final.pdf');
+explain SELECT * FROM crc32_test WHERE CRC32(filename) = CRC32('report.pdf') AND username = 'john_doe';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.crc32_test)
+1	SIMPLE	crc32_test	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`crc32_test`.`id` AS `id`,`test`.`crc32_test`.`username` AS `username`,`test`.`crc32_test`.`email` AS `email`,`test`.`crc32_test`.`filename` AS `filename` from `test`.`crc32_test` where ((`test`.`crc32_test`.`username` = 'john_doe') and (crc32(`test`.`crc32_test`.`filename`) = 763913458))
+SELECT * FROM crc32_test WHERE CRC32(filename) = CRC32('report.pdf') AND username = 'john_doe';
+id	username	email	filename
+1	john_doe	john@example.com	report.pdf
+DROP TABLE crc32_test;
+# Item_func_dayofyear
+CREATE TABLE dayofyear_test (
+id INT PRIMARY KEY AUTO_INCREMENT,
+event_name VARCHAR(100),
+event_date DATE,
+created_at DATETIME,
+start_time TIMESTAMP
+);
+INSERT INTO dayofyear_test (event_name, event_date, created_at, start_time) VALUES
+('New Year Party', '2024-01-01', '2024-01-01 20:00:00', '2024-01-01 20:00:00'),
+('Valentine Day', '2024-02-14', '2024-02-14 09:00:00', '2024-02-14 09:00:00'),
+('Spring Equinox', '2024-03-20', '2024-03-20 12:00:00', '2024-03-20 12:00:00');
+explain SELECT * FROM dayofyear_test WHERE DAYOFYEAR(event_date) IN (1, 100, 200, 300);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.dayofyear_test)
+1	SIMPLE	dayofyear_test	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`dayofyear_test`.`id` AS `id`,`test`.`dayofyear_test`.`event_name` AS `event_name`,`test`.`dayofyear_test`.`event_date` AS `event_date`,`test`.`dayofyear_test`.`created_at` AS `created_at`,`test`.`dayofyear_test`.`start_time` AS `start_time` from `test`.`dayofyear_test` where (dayofyear(`test`.`dayofyear_test`.`event_date`) in (1,100,200,300))
+SELECT * FROM dayofyear_test WHERE DAYOFYEAR(event_date) IN (1, 100, 200, 300);
+id	event_name	event_date	created_at	start_time
+1	New Year Party	2024-01-01	2024-01-01 20:00:00	2024-01-01 20:00:00
+DROP TABLE dayofyear_test;
+#
+CREATE TABLE ip_address_test (
+id INT PRIMARY KEY AUTO_INCREMENT,
+ip_string VARCHAR(15),
+ip_int INT UNSIGNED,
+hostname VARCHAR(100)
+);
+INSERT INTO ip_address_test (ip_string, hostname) VALUES
+('192.168.1.1', 'router.local'),
+('10.0.0.1', 'gateway'),
+('172.16.0.100', 'server1'),
+('8.8.8.8', 'google-dns'),
+('127.0.0.1', 'localhost'),
+('192.168.0.255', 'broadcast'),
+('0.0.0.0', 'any');
+explain SELECT * FROM ip_address_test WHERE ip_int = INET_ATON('192.168.1.1');
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	7	14.29	Parallel execute (4 workers, test.ip_address_test)
+1	SIMPLE	ip_address_test	NULL	ALL	NULL	NULL	NULL	NULL	7	14.29	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`ip_address_test`.`id` AS `id`,`test`.`ip_address_test`.`ip_string` AS `ip_string`,`test`.`ip_address_test`.`ip_int` AS `ip_int`,`test`.`ip_address_test`.`hostname` AS `hostname` from `test`.`ip_address_test` where (`test`.`ip_address_test`.`ip_int` = <cache>(inet_aton('192.168.1.1')))
+DROP TABLE ip_address_test;
+# Item_func_second/Item_func_week/Item_func_yearweek/Item_func_minute
+CREATE TABLE system_logs (
+log_id INT PRIMARY KEY AUTO_INCREMENT,
+log_message VARCHAR(200),
+log_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+user_id INT
+);
+INSERT INTO system_logs (log_message, log_time, user_id) VALUES
+('User login', '2024-01-15 09:15:30', 101),
+('File uploaded', '2024-01-15 09:30:45', 102),
+('Report generated', '2024-01-15 14:20:15', 101),
+('System backup', '2024-01-16 02:00:00', 103),
+('Error occurred', '2024-01-16 11:45:20', 102),
+('Data exported', '2024-01-17 16:30:10', 101);
+explain SELECT
+log_id,
+log_message,
+log_time,
+SECOND(log_time) AS seconds,
+MINUTE(log_time) AS minutes,
+HOUR(log_time) AS hour,
+WEEK(log_time) AS week_number,
+YEARWEEK(log_time) AS yearweek,
+CONCAT(
+'Week ', WEEK(log_time),
+', Hour ', HOUR(log_time),
+':', LPAD(MINUTE(log_time), 2, '0')
+) AS time_info
+FROM system_logs;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.system_logs)
+1	SIMPLE	system_logs	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`system_logs`.`log_id` AS `log_id`,`test`.`system_logs`.`log_message` AS `log_message`,`test`.`system_logs`.`log_time` AS `log_time`,second(`test`.`system_logs`.`log_time`) AS `seconds`,minute(`test`.`system_logs`.`log_time`) AS `minutes`,hour(`test`.`system_logs`.`log_time`) AS `hour`,week(`test`.`system_logs`.`log_time`,0) AS `week_number`,yearweek(`test`.`system_logs`.`log_time`,0) AS `yearweek`,concat('Week ',week(`test`.`system_logs`.`log_time`,0),', Hour ',hour(`test`.`system_logs`.`log_time`),':',lpad(minute(`test`.`system_logs`.`log_time`),2,'0')) AS `time_info` from `test`.`system_logs`
+explain SELECT
+YEARWEEK(log_time) AS year_week,
+COUNT(*) AS logs_count
+FROM system_logs GROUP BY YEARWEEK(log_time) ORDER BY year_week;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.system_logs)
+1	SIMPLE	system_logs	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using temporary; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select yearweek(`test`.`system_logs`.`log_time`,0) AS `year_week`,count(0) AS `logs_count` from `test`.`system_logs` group by `year_week` order by `year_week`
+DROP TABLE system_logs;
+# Test with Item about math
+CREATE TABLE math_time_test (
+id INT PRIMARY KEY AUTO_INCREMENT,
+value DOUBLE,
+angle_radians DOUBLE,
+angle_degrees DOUBLE,
+event_date DATE,
+log_value DOUBLE,
+description VARCHAR(100)
+);
+INSERT INTO math_time_test (value, angle_radians, angle_degrees, event_date, log_value, description) VALUES
+(1.0, 0.785398, 45.0, '2024-01-15', 2.71828, 'First quarter, 45 degrees'),
+(2.0, 1.570796, 90.0, '2024-04-15', 7.38906, 'Second quarter, 90 degrees'),
+(3.0, 3.141593, 180.0, '2024-07-15', 20.0855, 'Third quarter, 180 degrees'),
+(4.0, 4.712389, 270.0, '2024-10-15', 54.5982, 'Fourth quarter, 270 degrees'),
+(0.5, 0.523599, 30.0, '2024-02-29', 1.64872, 'Leap day, 30 degrees'),
+(10.0, 0.0, 0.0, '2024-12-31', 22026.5, 'Year end, 0 degrees'),
+(0.0, 1.047198, 60.0, '2024-06-15', 1.0, 'Mid year, 60 degrees'),
+(0.707107, 0.785398, 45.0, '2024-03-20', 2.02811, 'Spring equinox'),
+(-1.0, -0.785398, -45.0, '2024-11-11', 0.367879, 'Negative angle');
+explain SELECT
+id,
+description,
+event_date,
+QUARTER(event_date) AS quarter,
+angle_degrees,
+TAN(RADIANS(angle_degrees)) AS tangent,
+COT(RADIANS(angle_degrees)) AS cotangent,
+value,
+LN(ABS(value) + 1) AS safe_log,
+LOG10(ABS(value) + 1) AS safe_log10,
+CASE
+WHEN value BETWEEN -1 AND 1 THEN DEGREES(ASIN(value))
+ELSE NULL
+END AS arcsin_degrees,
+EXP(value) AS exponential,
+EXP(LN(ABS(value) + 1)) AS exp_ln_combo
+FROM math_time_test;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.math_time_test)
+1	SIMPLE	math_time_test	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`math_time_test`.`id` AS `id`,`test`.`math_time_test`.`description` AS `description`,`test`.`math_time_test`.`event_date` AS `event_date`,quarter(`test`.`math_time_test`.`event_date`) AS `quarter`,`test`.`math_time_test`.`angle_degrees` AS `angle_degrees`,tan(radians(`test`.`math_time_test`.`angle_degrees`)) AS `tangent`,cot(radians(`test`.`math_time_test`.`angle_degrees`)) AS `cotangent`,`test`.`math_time_test`.`value` AS `value`,ln((abs(`test`.`math_time_test`.`value`) + 1)) AS `safe_log`,log10((abs(`test`.`math_time_test`.`value`) + 1)) AS `safe_log10`,(case when (`test`.`math_time_test`.`value` between -(1) and 1) then degrees(asin(`test`.`math_time_test`.`value`)) else NULL end) AS `arcsin_degrees`,exp(`test`.`math_time_test`.`value`) AS `exponential`,exp(ln((abs(`test`.`math_time_test`.`value`) + 1))) AS `exp_ln_combo` from `test`.`math_time_test`
+explain SELECT * FROM math_time_test
+WHERE QUARTER(event_date) = 2
+AND TAN(RADIANS(angle_degrees)) > 0
+AND LOG10(ABS(value) + 1) < 0.5
+AND EXP(value) < 100;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.math_time_test)
+1	SIMPLE	math_time_test	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`math_time_test`.`id` AS `id`,`test`.`math_time_test`.`value` AS `value`,`test`.`math_time_test`.`angle_radians` AS `angle_radians`,`test`.`math_time_test`.`angle_degrees` AS `angle_degrees`,`test`.`math_time_test`.`event_date` AS `event_date`,`test`.`math_time_test`.`log_value` AS `log_value`,`test`.`math_time_test`.`description` AS `description` from `test`.`math_time_test` where ((quarter(`test`.`math_time_test`.`event_date`) = 2) and (tan(radians(`test`.`math_time_test`.`angle_degrees`)) > 0) and (log10((abs(`test`.`math_time_test`.`value`) + 1)) < 0.5) and (exp(`test`.`math_time_test`.`value`) < 100))
+explain SELECT * FROM math_time_test where ATAN2(angle_radians, angle_degrees) > 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.math_time_test)
+1	SIMPLE	math_time_test	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`math_time_test`.`id` AS `id`,`test`.`math_time_test`.`value` AS `value`,`test`.`math_time_test`.`angle_radians` AS `angle_radians`,`test`.`math_time_test`.`angle_degrees` AS `angle_degrees`,`test`.`math_time_test`.`event_date` AS `event_date`,`test`.`math_time_test`.`log_value` AS `log_value`,`test`.`math_time_test`.`description` AS `description` from `test`.`math_time_test` where (atan(`test`.`math_time_test`.`angle_radians`,`test`.`math_time_test`.`angle_degrees`) > 0)
+DROP TABLE math_time_test;
+# Item_func_aes_decrypt&Item_func_aes_encrypt
+CREATE TABLE users_secure (
+user_id INT PRIMARY KEY AUTO_INCREMENT,
+username VARCHAR(50) UNIQUE,
+encrypted_email VARBINARY(255),
+encrypted_phone VARBINARY(255),
+encryption_key VARCHAR(64),
+iv VARBINARY(16),
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO users_secure (username, encryption_key, iv) VALUES
+('john_doe', 'my_secure_key_2024!', RANDOM_BYTES(16)),
+('jane_smith', 'my_secure_key_2024!', RANDOM_BYTES(16)),
+('admin_user', 'admin_key_special', RANDOM_BYTES(16)),
+('test_user', 'my_secure_key_2024!', RANDOM_BYTES(16));
+explain SELECT
+user_id,
+username,
+CAST(AES_DECRYPT(encrypted_email, encryption_key, iv) AS CHAR) AS decrypted_email
+FROM users_secure
+WHERE encrypted_email = AES_ENCRYPT('john_doe@example.com', encryption_key, iv);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	5	20.00	Parallel execute (4 workers, test.users_secure)
+1	SIMPLE	users_secure	NULL	ALL	NULL	NULL	NULL	NULL	5	20.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`users_secure`.`user_id` AS `user_id`,`test`.`users_secure`.`username` AS `username`,cast(aes_decrypt(`test`.`users_secure`.`encrypted_email`,`test`.`users_secure`.`encryption_key`,`test`.`users_secure`.`iv`) as char charset utf8mb4) AS `decrypted_email` from `test`.`users_secure` where (`test`.`users_secure`.`encrypted_email` = aes_encrypt('john_doe@example.com',`test`.`users_secure`.`encryption_key`,`test`.`users_secure`.`iv`))
+explain SELECT
+user_id,
+username
+FROM users_secure
+WHERE encrypted_email IN (
+AES_ENCRYPT('john_doe@example.com', encryption_key, iv),
+AES_ENCRYPT('jane_smith@example.com', encryption_key, iv)
+);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	5	40.00	Parallel execute (4 workers, test.users_secure)
+1	SIMPLE	users_secure	NULL	ALL	NULL	NULL	NULL	NULL	5	40.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`users_secure`.`user_id` AS `user_id`,`test`.`users_secure`.`username` AS `username` from `test`.`users_secure` where (`test`.`users_secure`.`encrypted_email` in (aes_encrypt('john_doe@example.com',`test`.`users_secure`.`encryption_key`,`test`.`users_secure`.`iv`),aes_encrypt('jane_smith@example.com',`test`.`users_secure`.`encryption_key`,`test`.`users_secure`.`iv`)))
+DROP TABLE users_secure;
+CREATE TABLE user_data_processed (
+user_id INT PRIMARY KEY AUTO_INCREMENT,
+username VARCHAR(50),
+full_name VARCHAR(100),
+encoded_bio VARCHAR(200),
+profile_collation VARCHAR(50),
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO user_data_processed (username, full_name, encoded_bio, profile_collation) VALUES
+('john_doe', 'John Doe', 'QSBzb2Z0d2FyZSBlbmdpbmVlciB3aG8gbG92ZXMgZGF0YWJhc2Vz', 'utf8mb4_general_ci'),
+('jane_tech', 'Jane Smith', 'RGF0YSBzY2llbnRpc3Qgc3BlY2lhbGl6aW5nIGluIEFJIGFuZCBNTA==', 'utf8mb4_bin'),
+('admin_user', 'Admin User', 'U3lzdGVtIGFkbWluaXN0cmF0b3Igd2l0aCBmdWxsIHByaXZpbGVnZXM=', 'utf8mb4_unicode_ci');
+explain SELECT
+user_id,
+username,
+full_name,
+ORD(full_name) AS name_first_char_code,
+LOCATE(' ', full_name) AS space_position_in_name,
+profile_collation,
+COLLATION(full_name) AS name_collation,
+LAST_INSERT_ID() AS last_inserted_user_id
+FROM user_data_processed;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.user_data_processed)
+1	SIMPLE	user_data_processed	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`user_data_processed`.`user_id` AS `user_id`,`test`.`user_data_processed`.`username` AS `username`,`test`.`user_data_processed`.`full_name` AS `full_name`,ord(`test`.`user_data_processed`.`full_name`) AS `name_first_char_code`,locate(' ',`test`.`user_data_processed`.`full_name`) AS `space_position_in_name`,`test`.`user_data_processed`.`profile_collation` AS `profile_collation`,collation(`test`.`user_data_processed`.`full_name`) AS `name_collation`,last_insert_id() AS `last_inserted_user_id` from `test`.`user_data_processed`
+explain SELECT FROM_BASE64('SGVsbG8=') FROM user_data_processed;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.user_data_processed)
+1	SIMPLE	user_data_processed	NULL	index	NULL	PRIMARY	4	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select from_base64('SGVsbG8=') AS `FROM_BASE64('SGVsbG8=')` from `test`.`user_data_processed`
+DROP TABLE user_data_processed;

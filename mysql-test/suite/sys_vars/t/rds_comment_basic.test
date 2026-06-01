@@ -1,0 +1,37 @@
+SET @saved_rds_sync_comment = @@global.rds_sync_comment;
+
+# Test the default value
+set @@global.rds_sync_comment=default;
+select @@global.rds_sync_comment;
+
+--error ER_INCORRECT_GLOBAL_LOCAL_VAR
+select @@session.rds_sync_comment;
+
+show global variables like 'rds_sync_comment';
+select * from performance_schema.global_variables where variable_name='rds_sync_comment';
+
+# show that it's writable
+set global rds_sync_comment=OFF;
+select @@global.rds_sync_comment;
+set global rds_sync_comment=ON;
+select @@global.rds_sync_comment;
+set global rds_sync_comment=0;
+select @@global.rds_sync_comment;
+set global rds_sync_comment=1;
+select @@global.rds_sync_comment;
+
+# incorrect types
+--error ER_WRONG_TYPE_FOR_VAR
+set global rds_sync_comment=1.1;
+--error ER_WRONG_TYPE_FOR_VAR
+set global rds_sync_comment=1e1;
+
+# incorrect values
+--error ER_WRONG_VALUE_FOR_VAR
+set global rds_sync_comment=5;
+--error ER_WRONG_VALUE_FOR_VAR
+set global rds_sync_comment=-3;
+--error ER_WRONG_VALUE_FOR_VAR
+set global rds_sync_comment="foo";
+
+SET GLOBAL rds_sync_comment = @saved_rds_sync_comment;

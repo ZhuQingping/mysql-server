@@ -1,0 +1,297 @@
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_setup.inc
+--enable_warnings
+
+# --echo ############################################################
+# --echo 一、准备工作：创建测试环境
+# --echo 二、然后针对 SQLCOM_CREATE_INDEX、SQLCOM_DROP_INDEX 执行对应的DDL语句
+# --echo 三、在备机测查看dd信息，保证备机回放元数据的正确性
+# --echo 四、在主机执行查询（利用索引），执行完后，进行数据对比，供后面的新主机对比，保证回放功能正确
+# --echo 五、执行 switchover
+# --echo 六、新主机进行数据查询和验证，与第四步进行对比，保证备机回放功能的正确性
+# --echo 七、在新主机上对索引进行操作（创建新的索引、删除索引），并验证备机回放的正确性
+# --echo ############################################################
+
+--echo ############################################################
+--echo 一、Set up the test environment.
+--echo 二、Then execute the corresponding DDL statements for SQLCOM_CREATE_INDEX and SQLCOM_DROP_INDEX.
+--echo 三、Check the DD information on the standby node to ensure correct metadata replay.
+--echo 四、Execute queries (using indexes) on the primary node. After execution, perform data comparison for later verification on the new primary node to ensure the replay function works correctly.
+--echo 五、Perform a switchover.
+--echo 六、Execute data queries and verification on the new primary node, and compare the results with those from Step 4 to verify the correctness of the standby node replay function.
+--echo 七、Perform index operations (create new indexes and drop existing indexes) on the new primary node, and verify the correctness of the standby node's metadata replay.
+--echo ############################################################
+
+--echo #
+--echo # 一、Set up the test environment.
+--echo #
+
+--connection $node1
+CREATE DATABASE IF NOT EXISTS test_index_db 
+DEFAULT CHARACTER SET utf8mb4 
+DEFAULT COLLATE utf8mb4_general_ci;
+
+USE test_index_db;
+
+CREATE TABLE employees_idx (
+    emp_id INT AUTO_INCREMENT PRIMARY KEY,
+    emp_name VARCHAR(100) NOT NULL,
+    department VARCHAR(50),
+    salary DECIMAL(10, 2),
+    hire_date DATE,
+    email VARCHAR(100),
+    phone VARCHAR(20),
+    address TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE departments_idx (
+    dept_id INT AUTO_INCREMENT PRIMARY KEY,
+    dept_name VARCHAR(50) NOT NULL,
+    location VARCHAR(100),
+    manager_id INT,
+    budget DECIMAL(12, 2),
+    established_date DATE
+);
+
+INSERT INTO departments_idx(dept_name, location, manager_id, budget, established_date) VALUES
+('技术部', '北京', 1, 1000000.00, '2018-01-15'),
+('销售部', '上海', 3, 800000.00, '2018-03-20'),
+('人事部', '广州', 5, 500000.00, '2018-06-10'),
+('财务部', '深圳', 7, 600000.00, '2018-09-25'),
+('市场部', '杭州', 9, 700000.00, '2019-01-30');
+
+INSERT INTO employees_idx(emp_name, department, salary, hire_date, email, phone) VALUES
+('张三', '技术部', 15000.00, '2020-01-15', 'zhangsan@company.com', '13800138001'),
+('李四', '技术部', 12000.00, '2020-03-20', 'lisi@company.com', '13800138002'),
+('王五', '销售部', 8000.00, '2021-05-10', 'wangwu@company.com', '13800138003'),
+('赵六', '人事部', 10000.00, '2019-11-30', 'zhaoliu@company.com', '13800138004'),
+('钱七', '财务部', 13000.00, '2020-07-15', 'qianqi@company.com', '13800138005'),
+('孙八', '市场部', 9000.00, '2021-02-28', 'sunba@company.com', '13800138006'),
+('周九', '技术部', 16000.00, '2019-08-20', 'zhoujiu@company.com', '13800138007'),
+('吴十', '销售部', 8500.00, '2021-09-15', 'wushi@company.com', '13800138008'),
+('郑十一', '人事部', 11000.00, '2020-04-10', 'zhengshiyi@company.com', '13800138009'),
+('王十二', '财务部', 14000.00, '2019-12-01', 'wangshier@company.com', '13800138010');
+
+--echo #
+--echo # 二、Then execute the corresponding DDL statements for SQLCOM_CREATE_INDEX and SQLCOM_DROP_INDEX.
+--echo #
+
+--echo #
+--echo # 1 SQLCOM_CREATE_INDEX
+--echo #
+--echo # Create a normal single-column index (to be deleted later for testing)
+CREATE INDEX idx_department ON employees_idx(department);
+
+--echo # Create a composite index
+CREATE INDEX idx_department_salary ON employees_idx(department, salary DESC);
+
+--echo # Create a unique index
+CREATE UNIQUE INDEX idx_email ON employees_idx(email);
+
+--echo # Create prefix index
+CREATE INDEX idx_emp_name_prefix ON employees_idx(emp_name(4));
+
+CREATE INDEX idx_location ON departments_idx(location);
+
+# 创建全文索引（dstore好像不支持）
+
+--echo #
+--echo # 2 SQLCOM_DROP_INDEX
+--echo #
+DROP INDEX idx_department ON employees_idx;
+
+--echo # Query the index data dictionary information on the primary node
+SELECT 
+    TABLE_SCHEMA,
+    TABLE_NAME,
+    INDEX_NAME,
+    INDEX_TYPE,
+    COLUMN_NAME,
+    SEQ_IN_INDEX,
+    COLLATION,
+    CARDINALITY,
+    SUB_PART,
+    NULLABLE,
+    COMMENT
+FROM INFORMATION_SCHEMA.STATISTICS 
+WHERE TABLE_SCHEMA = 'test_index_db'
+ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX;
+
+--echo #
+--echo # 三、Check the DD the standby node to ensure the correctness of metadata replay.
+--echo #
+
+--sleep 2
+--connection $node2
+USE test_index_db;
+
+--echo # Verify the index replay on the standby node
+SELECT 
+    TABLE_SCHEMA,
+    TABLE_NAME,
+    INDEX_NAME,
+    INDEX_TYPE,
+    COLUMN_NAME,
+    SEQ_IN_INDEX,
+    COLLATION,
+    CARDINALITY,
+    SUB_PART,
+    NULLABLE,
+    COMMENT
+FROM INFORMATION_SCHEMA.STATISTICS 
+WHERE TABLE_SCHEMA = 'test_index_db'
+ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX;
+
+# show 表的索引
+SHOW INDEX FROM employees_idx;
+SHOW INDEX FROM departments_idx;
+
+--echo #
+--echo # 四、Execute queries (using indexes) on the primary node. After execution, perform data comparison for later verification on the new primary node to ensure the replay function works correctly.
+--echo #
+
+--connection $node1
+USE test_index_db;
+
+# EXPLAIN 是 MySQL 的执行计划分析关键字，语法规则：EXPLAIN + 任何SELECT查询语句，作用是：
+# 执行这条语句不会真正查询数据，而是让 MySQL 解析器返回「这条 SELECT 语句的执行计划」 —— 
+# 也就是告诉我们：MySQL 打算怎么执行这条查询、走什么索引、怎么关联表、扫描多少行数据等核心信息。
+# EXPLAIN SELECT * FROM employees_idx WHERE department = '技术部';
+
+--echo # 1 Perform an UPDATE operation using the index
+UPDATE employees_idx SET salary = salary * 1.1 WHERE department = '技术部';
+
+--echo # 2 Query using the prefix index
+SELECT emp_id, emp_name FROM employees_idx WHERE emp_name LIKE '张%';
+
+--echo # 3 Perform sorting and grouping using the index
+SELECT department, COUNT(*) as emp_count, AVG(salary) as avg_salary 
+FROM employees_idx 
+GROUP BY department 
+ORDER BY department;
+
+--echo # 4 Perform a range query using the index
+SELECT emp_name, department, salary FROM employees_idx 
+WHERE salary BETWEEN 10000 AND 15000 
+ORDER BY salary DESC;
+
+--echo # 5 Perform a multi-table JOIN using the index
+SELECT e.emp_name, e.department, e.salary, d.location, d.budget
+FROM employees_idx e
+JOIN departments_idx d ON e.department = d.dept_name
+WHERE e.salary > 10000 AND d.location = '北京';
+
+--echo # 6 Perform data statistics
+SELECT 
+    'employees_idx' as table_name,
+    COUNT(*) as record_count,
+    MAX(emp_id) as max_id
+FROM employees_idx
+UNION ALL
+SELECT 
+    'departments_idx',
+    COUNT(*),
+    MAX(dept_id)
+FROM departments_idx;
+
+--echo # 7 Check the index metadata
+SELECT 
+    TABLE_NAME,
+    INDEX_NAME,
+    COLUMN_NAME,
+    SEQ_IN_INDEX,
+    CARDINALITY
+FROM INFORMATION_SCHEMA.STATISTICS 
+WHERE TABLE_SCHEMA = 'test_index_db'
+ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX;
+
+--echo #
+--echo # 五、Perform a switchover.
+--echo #
+--sleep 2
+--let $old_primary = $node1
+--let $old_standby = $node2
+--let $old_standby_port = $SERVER_MYPORT_2
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_switch.inc
+
+--echo #
+--echo # 六、Execute data queries and verification on the new primary node, and compare the results with those from Step 4 to verify the correctness of the standby node replay function.
+--echo #
+
+--connection $node2
+USE test_index_db;
+
+--echo # 1 Verify the unique index
+--error ER_DUP_ENTRY
+INSERT INTO employees_idx(emp_name, department, salary, hire_date, email) 
+VALUES ('新测试用户', '技术部', 11000.00, '2023-02-01', 'lisi@company.com');
+
+--echo # 2 Query using the prefix index
+SELECT emp_id, emp_name FROM employees_idx WHERE emp_name LIKE '张%';
+
+--echo # 3 Perform sorting and grouping using the index
+SELECT department, COUNT(*) as emp_count, AVG(salary) as avg_salary 
+FROM employees_idx 
+GROUP BY department 
+ORDER BY department;
+
+--echo # 4 Perform a range query using the index
+SELECT emp_name, department, salary FROM employees_idx 
+WHERE salary BETWEEN 10000 AND 15000 
+ORDER BY salary DESC;
+
+--echo # 5 Perform a multi-table JOIN using the index
+SELECT e.emp_name, e.department, e.salary, d.location, d.budget
+FROM employees_idx e
+JOIN departments_idx d ON e.department = d.dept_name
+WHERE e.salary > 10000 AND d.location = '北京';
+
+--echo # 6 Perform data statistics
+SELECT 
+    'employees_idx' as table_name,
+    COUNT(*) as record_count,
+    MAX(emp_id) as max_id
+FROM employees_idx
+UNION ALL
+SELECT 
+    'departments_idx',
+    COUNT(*),
+    MAX(dept_id)
+FROM departments_idx;
+
+--echo # 7 Check the index metadata
+SELECT 
+    TABLE_NAME,
+    INDEX_NAME,
+    COLUMN_NAME,
+    SEQ_IN_INDEX,
+    CARDINALITY
+FROM INFORMATION_SCHEMA.STATISTICS 
+WHERE TABLE_SCHEMA = 'test_index_db'
+ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX;
+
+--echo #
+--echo # 七、Perform index operations (create new indexes and drop existing indexes) on the new primary node, and verify the correctness of the standby node's metadata replay.
+--echo #
+
+--echo # 1 Create a new index on the new primary node
+CREATE INDEX idx_salary_hire_date ON employees_idx(salary, hire_date);
+
+--echo # 2 Drop replayed index on the new primary node
+DROP INDEX idx_location ON departments_idx;
+
+--connection $node1
+--sleep 2
+
+--echo # 3 Verify the newly created index on the new standby node
+SHOW INDEX FROM employees_idx WHERE Key_name = 'idx_salary_hire_date';
+
+--echo # 4 Verify the dropped index on the new standby node
+SHOW INDEX FROM departments_idx WHERE Key_name = 'idx_location';
+
+--disable_warnings
+--let $current_standby = $node1
+--let $current_primary = $node2
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_cleanup.inc
+--enable_warnings

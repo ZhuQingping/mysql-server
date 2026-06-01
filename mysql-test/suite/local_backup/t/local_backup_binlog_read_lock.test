@@ -1,0 +1,59 @@
+# ==== Purpose ====
+# 
+#  1. Verify taht full local backup is compatiable with global read lock
+# 
+#  ==== Implementation ====
+# 
+#  1. prepare some data, create test table t1 and data;
+#  2. add global read lock 
+#  4. run full bakcup 
+# 
+#  ==== References ====
+#  Full local backup feature
+# 
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+
+--source suite/local_backup/include/prepare_for_backup.inc
+
+--echo #
+--echo # prepare some data
+--echo # 
+create database local_backup_db;
+use local_backup_db;
+create table t1(s varchar(100)) engine=Dstore;
+
+# insert 100 records
+--disable_query_log
+--disable_result_log
+--let $i= 0
+while ($i != 100) {
+  INSERT INTO t1 values ('aaaa');
+  --inc $i
+}
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+--let $skip_check_meta_json=1
+
+--echo #
+--echo # Case 1. check global read lock and backup on same thd
+--echo #
+FLUSH TABLES WITH READ LOCK;
+
+--echo #
+--echo # default connection run local_backup
+--echo #
+call rds_backup.start_full_local_backup(0);
+--sleep 2
+
+--source suite/local_backup/include/wait_full_backup.inc
+
+--exec rm -rf $MYSQLTEST_VARDIR/full_local_backup/*
+
+UNLOCK TABLES;
+
+drop database local_backup_db;
+
+--source suite/local_backup/include/clean_backup.inc

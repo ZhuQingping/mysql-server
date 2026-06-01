@@ -1,0 +1,184 @@
+--source include/have_only_dstore.inc
+
+# ==== TEST CASE 1: Persistent Stats - Commit Updates Statistics ====
+# Purpose: Verify that in persistent stats mode, table statistics are automatically
+#          updated after transaction commit (with background recalculation)
+
+--source include/count_sessions.inc
+--let $old_persistent = `SELECT @@GLOBAL.dstore_stats_persistent`
+--let $old_auto_recalc = `SELECT @@GLOBAL.dstore_stats_auto_recalc`
+SET GLOBAL dstore_stats_persistent = ON;
+SET GLOBAL dstore_stats_auto_recalc = ON;
+SET SESSION cte_max_recursion_depth = 10000;
+
+CREATE TABLE t (id INT) ENGINE=Dstore;
+
+--echo # Initial statistics (should show 0 row)
+ANALYZE TABLE t;
+explain select * from t;
+BEGIN;
+--echo # subtrx Inserting 30,000 rows (batch insert)
+SAVEPOINT subtxn1;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM nums WHERE n < 10000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM nums WHERE n < 10000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM nums WHERE n < 10000
+)
+SELECT n FROM nums;
+RELEASE SAVEPOINT subtxn1;
+--echo # Statistics during transaction (should show 30000 row), because have not recalc
+
+--disable_query_log
+--disable_result_log
+analyze table t;
+--enable_result_log
+--enable_query_log
+
+SELECT SLEEP(10);
+--replace_column 10 X
+explain select * from t;
+--echo # Commit transaction
+COMMIT;
+--replace_column 10 X
+explain select * from t;
+--echo # Wait for background stats recalculation (persistent mode)
+SELECT SLEEP(15);
+--echo # Statistics after background update (should show != 30,000 rows)
+--replace_column 10 X
+explain select * from t;
+DROP TABLE t;
+--eval SET GLOBAL dstore_stats_persistent = $old_persistent
+--eval SET GLOBAL dstore_stats_auto_recalc = $old_auto_recalc
+
+
+
+# ==== TEST CASE 2: Persistent Stats - Commit Updates(subtrx rollback) Statistics ====
+# Purpose: Verify that in persistent stats mode, table statistics are automatically
+#          updated after transaction commit (with background recalculation)
+CREATE TABLE t (id INT) ENGINE=Dstore;
+--echo # Initial statistics (should show 0 row)
+ANALYZE TABLE t;
+explain select * from t;
+BEGIN;
+--echo # main trx 1,000 rows (insert)
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM nums WHERE n < 1000
+)
+SELECT n FROM nums;
+--echo # subtrx Inserting 30,000 rows (batch insert)
+SAVEPOINT subtxn2;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM nums WHERE n < 10000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM nums WHERE n < 10000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM nums WHERE n < 10000
+)
+SELECT n FROM nums;
+ROLLBACK TO SAVEPOINT subtxn2;
+--echo # Statistics during transaction (should show 31000 row), because have not recalc
+
+--disable_query_log
+--disable_result_log
+analyze table t;
+--enable_result_log
+--enable_query_log
+
+SELECT SLEEP(10);
+explain select * from t;
+--echo # Commit transaction
+COMMIT;
+explain select * from t;
+--echo # Wait for background stats recalculation (persistent mode)
+SELECT SLEEP(15);
+--echo # Statistics after background update (should show ~= 1,000 rows) because subtrx rollback. main trx commit
+explain select * from t;
+DROP TABLE t;
+--eval SET GLOBAL dstore_stats_persistent = $old_persistent
+--eval SET GLOBAL dstore_stats_auto_recalc = $old_auto_recalc
+
+
+
+
+# ==== TEST CASE 3: Rollback - Statistics Remain Unchanged (Persistent Mode) ====
+# Purpose: Verify that rolled back transactions don't affect table statistics
+--let $old_persistent = `SELECT @@GLOBAL.dstore_stats_persistent`
+SET GLOBAL dstore_stats_persistent = ON;
+CREATE TABLE t (id INT) ENGINE=Dstore;
+ANALYZE TABLE t;
+explain select * from t;
+BEGIN;
+--echo # Insert 3,000 rows
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM nums WHERE n < 1000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM nums WHERE n < 1000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM nums WHERE n < 1000
+)
+SELECT n FROM nums;
+SAVEPOINT subtxn3;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM nums WHERE n < 1000
+)
+SELECT n FROM nums;
+RELEASE SAVEPOINT subtxn3;
+--echo # Statistics during transaction (should be unchanged)
+explain select * from t;
+--echo # Rollback transaction
+ROLLBACK;
+SELECT SLEEP(1);
+explain select * from t;
+--echo # Wait to ensure background update occurs
+SELECT SLEEP(15);
+--echo # Statistics after background update (should show == 0 rows), because rollback main trx
+explain select * from t;
+DROP TABLE t;
+--eval SET GLOBAL dstore_stats_persistent = $old_persistent

@@ -1,0 +1,531 @@
+set global dstore_use_histogram_auto_update=off;
+use test;
+create table t1(c1 int, c2 int, index(c1), index(c2)) engine=Dstore;
+insert into t1 values(1, 1),(2, 2),(3, 3),(4, 4),(5, 5),(6, 6);
+Timeout in wait_condition.inc for SELECT COUNT(*) = 0 FROM INFORMATION_SCHEMA.COLUMNS c LEFT JOIN INFORMATION_SCHEMA.COLUMN_STATISTICS cs ON cs.SCHEMA_NAME = c.TABLE_SCHEMA AND cs.TABLE_NAME = c.TABLE_NAME AND cs.COLUMN_NAME = c.COLUMN_NAME WHERE c.TABLE_SCHEMA = "test" and c.TABLE_NAME = "t1" and c.COLUMN_NAME in ( "c1", "c2" ) AND UNIX_TIMESTAMP(IFNULL(HISTOGRAM->>'$."last-updated"', 0)) <= 0.000000;
+select count(1) as result from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+result
+0
+analyze table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+select cardinality from information_schema.statistics where table_schema = 'test' and table_name = 't1';
+CARDINALITY
+6
+6
+drop table t1;
+set global dstore_use_histogram_auto_update=on;
+create table t1(c1 int, c2 int, index(c1), index(c2)) engine=Dstore;
+insert into t1 values(1, 1),(2, 2),(3, 3),(4, 4),(5, 5),(6, 6);
+analyze table t1 update histogram on c1, c2;
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'c1'.
+test.t1	histogram	status	Histogram statistics created for column 'c2'.
+create table t2(c1 int, c2 int) engine=Dstore;
+insert into t2 values(1, 1),(2, 2),(3, 3),(4, 4),(5, 5),(6, 6);
+select count(1) as result from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+result
+2
+select count(1) as result from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't2';
+result
+0
+analyze table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+select cardinality from information_schema.statistics where table_schema = 'test' and table_name = 't1';
+CARDINALITY
+6
+6
+analyze table t2;
+Table	Op	Msg_type	Msg_text
+test.t2	analyze	status	OK
+select cardinality from information_schema.statistics where table_schema = 'test' and table_name = 't2';
+CARDINALITY
+drop table t1;
+drop table t2;
+create database `test``.123`;
+use `test``.123`;
+create table t1(c1 int, c2 int, c3 int, index(c1), index(c2), index(c3)) engine=Dstore;
+insert into t1 values(1, 1, 1),(2, 2, 2),(3, 3, 3),(4, 4, 4),(5, 5, 5),(6, 6, 6);
+analyze table t1 update histogram on c1, c2, c3;
+Table	Op	Msg_type	Msg_text
+test`.123.t1	histogram	status	Histogram statistics created for column 'c1'.
+test`.123.t1	histogram	status	Histogram statistics created for column 'c2'.
+test`.123.t1	histogram	status	Histogram statistics created for column 'c3'.
+create table `t2``.123`(`c1.1` int, `c2``` int, c3 int, index(`c1.1`), index(`c2```), index(c3)) engine=Dstore;
+insert into `t2``.123` values(1, 1, 1),(2, 2, 2),(3, 3, 3),(4, 4, 4),(5, 5, 5),(6, 6, 6);
+analyze table `t2``.123` update histogram on `c1.1`, `c2```, c3;
+Table	Op	Msg_type	Msg_text
+test`.123.t2`.123	histogram	status	Histogram statistics created for column 'c1.1'.
+test`.123.t2`.123	histogram	status	Histogram statistics created for column 'c2`'.
+test`.123.t2`.123	histogram	status	Histogram statistics created for column 'c3'.
+create table t3(c1 int, index(c1)) engine=Dstore;
+insert into t3 values(1),(2),(3),(4),(5),(6);
+analyze table t3 update histogram on c1;
+Table	Op	Msg_type	Msg_text
+test`.123.t3	histogram	status	Histogram statistics created for column 'c1'.
+select count(1) as result from information_schema.column_statistics where SCHEMA_NAME = 'test`.123';
+result
+7
+analyze table t1;
+Table	Op	Msg_type	Msg_text
+test`.123.t1	analyze	status	OK
+select cardinality from information_schema.statistics where table_schema = 'test`.123' and table_name = 't1';
+CARDINALITY
+6
+6
+6
+analyze table `t2``.123`;
+Table	Op	Msg_type	Msg_text
+test`.123.t2`.123	analyze	status	OK
+select cardinality from information_schema.statistics where table_schema = 'test`.123' and table_name = 't2`.123';
+CARDINALITY
+6
+6
+6
+analyze table t3;
+Table	Op	Msg_type	Msg_text
+test`.123.t3	analyze	status	OK
+select cardinality from information_schema.statistics where table_schema = 'test`.123' and table_name = 't3';
+CARDINALITY
+6
+drop table t1, `t2``.123`, t3;
+drop database `test``.123`;
+use test;
+create table t1(c1 int, c2 int, c3 int, index(c1), index(c2), index(c3)) engine=Dstore;
+insert into t1 values(1, 1, 1),(1, 1, 2),(1, 1, 3),(1, 2, 1),(1, 2, 2),(1, 2, 3),(1, 3, 1),(1, 3, 2),(1, 3, 3);
+insert into t1 values(2, 1, 1),(2, 1, 2),(2, 1, 3),(2, 2, 1),(2, 2, 2),(2, 2, 3),(2, 3, 1),(2, 3, 2),(2, 3, 3);
+insert into t1 values(3, 1, 1),(3, 1, 2),(3, 1, 3),(3, 2, 1),(3, 2, 2),(3, 2, 3),(3, 3, 1),(3, 3, 3),(3, 3, 3);
+explain select c1, c2, c3 from t1 where c2 = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	c2	c2	5	const	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`c1` AS `c1`,`test`.`t1`.`c2` AS `c2`,`test`.`t1`.`c3` AS `c3` from `test`.`t1` where (`test`.`t1`.`c2` = 1)
+explain select c1, c2, c3 from t1 where c1 = 3;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	c1	c1	5	const	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`c1` AS `c1`,`test`.`t1`.`c2` AS `c2`,`test`.`t1`.`c3` AS `c3` from `test`.`t1` where (`test`.`t1`.`c1` = 3)
+analyze table t1 update histogram on c1 using data 
+'{"buckets": [[1, 0.35714285714285715], [2, 0.6785714285714286], [3, 1.0]], "data-type": "int", "null-values": 0.0, "collation-id": 8, "last-updated": "2025-03-06 06:30:52.447200", "sampling-rate": 1.0, "histogram-type": "singleton", "number-of-buckets-specified": 10}';
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'c1'.
+explain select * from t1 where c1 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	c1	c1	5	const	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`c1` AS `c1`,`test`.`t1`.`c2` AS `c2`,`test`.`t1`.`c3` AS `c3` from `test`.`t1` where (`test`.`t1`.`c1` = 2)
+drop table t1;
+create table t11(id int, a int, b int, c int, key idx_abc(a,b,c));
+insert into t11 values(1,1,1,1);
+insert into t11 values(2,1,1,2);
+insert into t11 values(3,1,1,3);
+insert into t11 values(4,1,2,1);
+insert into t11 values(5,1,2,2);
+insert into t11 values(6,1,2,3);
+insert into t11 values(7,1,3,1);
+insert into t11 values(8,1,3,2);
+insert into t11 values(9,1,3,3);
+insert into t11 values(10,2,1,1);
+insert into t11 values(11,2,1,2);
+insert into t11 values(12,2,1,3);
+insert into t11 values(13,2,2,1);
+insert into t11 values(14,2,2,2);
+insert into t11 values(15,2,2,3);
+insert into t11 values(16,2,3,1);
+insert into t11 values(17,2,3,2);
+insert into t11 values(18,2,3,3);
+insert into t11 values(19,3,1,1);
+insert into t11 values(20,3,1,2);
+insert into t11 values(21,3,1,3);
+insert into t11 values(22,3,2,1);
+insert into t11 values(23,3,2,2);
+insert into t11 values(24,3,2,3);
+insert into t11 values(25,3,3,1);
+insert into t11 values(26,3,3,2);
+insert into t11 values(27,3,3,3);
+explain select * from t11 where a = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t11	NULL	ref	idx_abc	idx_abc	5	const	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t11`.`id` AS `id`,`test`.`t11`.`a` AS `a`,`test`.`t11`.`b` AS `b`,`test`.`t11`.`c` AS `c` from `test`.`t11` where (`test`.`t11`.`a` = 1)
+explain select * from t11 where a = 1 and b = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t11	NULL	ref	idx_abc	idx_abc	10	const,const	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t11`.`id` AS `id`,`test`.`t11`.`a` AS `a`,`test`.`t11`.`b` AS `b`,`test`.`t11`.`c` AS `c` from `test`.`t11` where ((`test`.`t11`.`b` = 1) and (`test`.`t11`.`a` = 1))
+explain select * from t11 where a = 1 and b = 1 and c = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t11	NULL	ref	idx_abc	idx_abc	15	const,const,const	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t11`.`id` AS `id`,`test`.`t11`.`a` AS `a`,`test`.`t11`.`b` AS `b`,`test`.`t11`.`c` AS `c` from `test`.`t11` where ((`test`.`t11`.`c` = 1) and (`test`.`t11`.`b` = 1) and (`test`.`t11`.`a` = 1))
+delete from t11;
+explain select * from t11 where a = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t11	NULL	ref	idx_abc	idx_abc	5	const	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t11`.`id` AS `id`,`test`.`t11`.`a` AS `a`,`test`.`t11`.`b` AS `b`,`test`.`t11`.`c` AS `c` from `test`.`t11` where (`test`.`t11`.`a` = 1)
+drop table t11;
+create table t1(c1 int primary key, c2 int) engine=Dstore;
+insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6);
+analyze table t1 update histogram on c1;
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'c1'.
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1' and COLUMN_NAME = 'c1';
+count(1)
+1
+alter table t1 add index i_c2(c2);
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1' and COLUMN_NAME = 'c1';
+count(1)
+1
+create table t2(c1 int, c2 int, unique key(c1)) engine=Dstore;
+insert into t2 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6);
+analyze table t2 update histogram on c1;
+Table	Op	Msg_type	Msg_text
+test.t2	histogram	status	Histogram statistics created for column 'c1'.
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't2' and COLUMN_NAME = 'c1';
+count(1)
+1
+alter table t2 add index i_c2(c2);
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't2' and COLUMN_NAME = 'c1';
+count(1)
+1
+drop table t1, t2;
+set sql_mode = '';
+create table t1 (c1 datetime(6), CONSTRAINT `c1` CHECK ((`c1` <> _utf8mb4'00-00-00 00:00:00'))) engine = Dstore;
+use test;
+set sql_mode = '';
+analyze table t1 update histogram on c1;
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'c1'.
+drop table t1;
+set sql_mode = default;
+create table t1(c1 int, c2 int, index(c1), index(c2)) engine=Dstore;
+insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6);
+analyze table t1 update histogram on c1, c2;
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'c1'.
+test.t1	histogram	status	Histogram statistics created for column 'c2'.
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1' and COLUMN_NAME = 'c1';
+count(1)
+1
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1' and COLUMN_NAME = 'c2';
+count(1)
+1
+drop index c1 on t1;
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1' and COLUMN_NAME = 'c1';
+count(1)
+0
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1' and COLUMN_NAME = 'c2';
+count(1)
+1
+alter table t1 drop index c2;
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1' and COLUMN_NAME = 'c2';
+count(1)
+0
+drop table t1;
+create table t2(c1 int, c2 int, key index_c1(c1), key index_c1_c2(c1, c2)) engine=Dstore;
+insert into t2 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6);
+analyze table t2 update histogram on c1, c2;
+Table	Op	Msg_type	Msg_text
+test.t2	histogram	status	Histogram statistics created for column 'c1'.
+test.t2	histogram	status	Histogram statistics created for column 'c2'.
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't2' and COLUMN_NAME = 'c1';
+count(1)
+1
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't2' and COLUMN_NAME = 'c2';
+count(1)
+1
+drop index index_c1_c2 on t2;
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't2' and COLUMN_NAME = 'c1';
+count(1)
+1
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't2' and COLUMN_NAME = 'c2';
+count(1)
+0
+alter table t2 drop index index_c1;
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't2' and COLUMN_NAME = 'c1';
+count(1)
+0
+drop table t2;
+create table t2(c1 int, c2 int, c3 int, key index_c1(c1), key index_c1_c2_c3(c1, c2, c3)) engine=Dstore;
+insert into t2 values(1,1,1),(2,2,2),(3,3,3),(4,4,4),(5,5,5),(6,6,6);
+analyze table t2 update histogram on c1, c2, c3;
+Table	Op	Msg_type	Msg_text
+test.t2	histogram	status	Histogram statistics created for column 'c1'.
+test.t2	histogram	status	Histogram statistics created for column 'c2'.
+test.t2	histogram	status	Histogram statistics created for column 'c3'.
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't2' and COLUMN_NAME = 'c1';
+count(1)
+1
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't2' and COLUMN_NAME = 'c2';
+count(1)
+1
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't2' and COLUMN_NAME = 'c3';
+count(1)
+1
+drop index index_c1 on t2;
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't2' and COLUMN_NAME = 'c1';
+count(1)
+1
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't2' and COLUMN_NAME = 'c2';
+count(1)
+1
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't2' and COLUMN_NAME = 'c3';
+count(1)
+1
+drop table t2;
+create table t1(a int, b int, c int, index(a), index(b), index(c));
+insert into t1 values(1,1,1),(2,2,2),(3,3,3),(4,4,4),(5,5,5),(6,6,6);
+analyze table t1 update histogram on a, b, c;
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'a'.
+test.t1	histogram	status	Histogram statistics created for column 'b'.
+test.t1	histogram	status	Histogram statistics created for column 'c'.
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+count(1)
+3
+alter table t1 drop index a, drop index b, drop index c;
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+count(1)
+0
+drop table t1;
+create table t2(a int, b int, c int, index idx_a(a), index idx_ab(a,b), index idx_abc(a,b,c));
+insert into t2 values(1,1,1),(2,2,2),(3,3,3),(4,4,4),(5,5,5),(6,6,6);
+analyze table t2 update histogram on a, b, c;
+Table	Op	Msg_type	Msg_text
+test.t2	histogram	status	Histogram statistics created for column 'a'.
+test.t2	histogram	status	Histogram statistics created for column 'b'.
+test.t2	histogram	status	Histogram statistics created for column 'c'.
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't2';
+count(1)
+3
+alter table t2 drop index idx_a, drop index idx_ab, drop index idx_abc;
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't2';
+count(1)
+0
+drop table t2;
+create table t1(c1 int, c2 int) engine=Dstore;
+insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10);
+alter table t1 add index index_c1(c1);
+alter table t1 add index index_c1_c2(c1,c2);
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+TABLE_NAME	COLUMN_NAME	JSON_EXTRACT(HISTOGRAM, '$.buckets')
+t1	c1	[[1, 0.1], [2, 0.2], [3, 0.3], [4, 0.4], [5, 0.5], [6, 0.6], [7, 0.7], [8, 0.8], [9, 0.9], [10, 1.0]]
+t1	c2	[[1, 0.1], [2, 0.2], [3, 0.3], [4, 0.4], [5, 0.5], [6, 0.6], [7, 0.7], [8, 0.8], [9, 0.9], [10, 1.0]]
+drop table t1;
+#
+# BUG2025090204090 histogram update together with DDL has deadlock
+#
+create table t1(c1 int, c2 int, index(c1), index(c2)) engine=Dstore;
+insert into t1 values(1, 1),(2, 2),(3, 3),(4, 4),(5, 5),(6, 6);
+use test;
+flush table t1;
+SET DEBUG_SYNC='read_histogram_after_acquire_lock SIGNAL waiting_store_hostogram WAIT_FOR read_histogram_continue TIMEOUT 10';
+alter table t1 add column c3 int;;
+use test;
+SET DEBUG_SYNC='store_histogram_before_write_lock SIGNAL histogram_store WAIT_FOR waiting_store_hostogram TIMEOUT 10';
+analyze table t1 update histogram on c1, c2;;
+SET DEBUG_SYNC='now SIGNAL read_histogram_continue WAIT_FOR histogram_store';
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'c1'.
+test.t1	histogram	status	Histogram statistics created for column 'c2'.
+SET DEBUG_SYNC = 'RESET';
+drop table t1;
+create table t1(c1 int, c2 int, index index_c1(c1), index index_c1_c2(c1,c2)) engine=Innodb;
+insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10);
+analyze table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SELECT count(*) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+count(*)
+0
+alter table t1 engine=Dstore;
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+TABLE_NAME	COLUMN_NAME	JSON_EXTRACT(HISTOGRAM, '$.buckets')
+t1	c1	[[1, 0.1], [2, 0.2], [3, 0.3], [4, 0.4], [5, 0.5], [6, 0.6], [7, 0.7], [8, 0.8], [9, 0.9], [10, 1.0]]
+t1	c2	[[1, 0.1], [2, 0.2], [3, 0.3], [4, 0.4], [5, 0.5], [6, 0.6], [7, 0.7], [8, 0.8], [9, 0.9], [10, 1.0]]
+drop table t1;
+create table t1(c1 int, c2 int, index index_c1(c1), index index_c1_c2(c1,c2)) engine=Dstore;
+insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10);
+analyze table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+optimize table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	optimize	note	Table does not support optimize, doing recreate + analyze instead
+test.t1	optimize	status	OK
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+TABLE_NAME	COLUMN_NAME	JSON_EXTRACT(HISTOGRAM, '$.buckets')
+t1	c1	[[1, 0.1], [2, 0.2], [3, 0.3], [4, 0.4], [5, 0.5], [6, 0.6], [7, 0.7], [8, 0.8], [9, 0.9], [10, 1.0]]
+t1	c2	[[1, 0.1], [2, 0.2], [3, 0.3], [4, 0.4], [5, 0.5], [6, 0.6], [7, 0.7], [8, 0.8], [9, 0.9], [10, 1.0]]
+alter table t1 engine=Dstore;
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+TABLE_NAME	COLUMN_NAME	JSON_EXTRACT(HISTOGRAM, '$.buckets')
+t1	c1	[[1, 0.1], [2, 0.2], [3, 0.3], [4, 0.4], [5, 0.5], [6, 0.6], [7, 0.7], [8, 0.8], [9, 0.9], [10, 1.0]]
+t1	c2	[[1, 0.1], [2, 0.2], [3, 0.3], [4, 0.4], [5, 0.5], [6, 0.6], [7, 0.7], [8, 0.8], [9, 0.9], [10, 1.0]]
+drop table t1;
+create table t1(c1 int, c2 int, key index_c1(c1), key index_c1_c2(c1, c2)) engine=Dstore;
+insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6);
+analyze table t1 update histogram on c1, c2;
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'c1'.
+test.t1	histogram	status	Histogram statistics created for column 'c2'.
+SET DEBUG='+d,simulate_sample_init_new_samplescanctx_failed';
+analyze table t1 update histogram on c1, c2;
+Table	Op	Msg_type	Msg_text
+SET DEBUG='-d,simulate_sample_init_new_samplescanctx_failed';
+SET DEBUG='+d,simulate_sample_init_make_cdesampler_failed';
+analyze table t1 update histogram on c1, c2;
+Table	Op	Msg_type	Msg_text
+SET DEBUG='-d,simulate_sample_init_make_cdesampler_failed';
+drop table t1;
+set global dstore_use_histogram_auto_update=off;
+create table t1(c1 int, c2 int, key index_c1(c1), key index_c2(c2)) engine=Dstore;
+insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6);
+analyze table t1 update histogram on c1;
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'c1'.
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1' and COLUMN_NAME = 'c1';
+count(1)
+1
+drop index index_c1 on t1;
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1' and COLUMN_NAME = 'c1';
+count(1)
+1
+drop table t1;
+#
+# BUG2025052216172 When the histogram is used to estimate the selectivity. 
+#                  the character set of a varchar field must be the same as that of a condition value.
+#
+CREATE TABLE t1 (c1 varchar(100)) engine=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO t1 VALUES ('100993');
+ANALYZE TABLE t1 UPDATE HISTOGRAM ON c1 WITH 100 BUCKETS;
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'c1'.
+EXPLAIN SELECT c1 FROM t1 WHERE c1 >= (COALESCE(-107168132, 'XDXK'));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`c1` >= <cache>(coalesce(-(107168132),'XDXK')))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`c1` AS `c1` from `test`.`t1` where (`test`.`t1`.`c1` >= <cache>(coalesce(-(107168132),'XDXK')))
+DROP TABLE t1;
+set global dstore_use_histogram_auto_update=default;
+#
+# BUG2025102418653 Assertion failure in function "KEY::has_records_per_key" for debug version,
+#                  illegal memory access for release version issue
+#
+CREATE TABLE tt(a INT, b INT, c INT, index(a,b,c))ENGINE=Dstore;
+CREATE TABLE t(a INT);
+INSERT INTO t VALUES(1),(2),(3),(4),(5),(6),(7),(8),(9),(10);
+INSERT INTO tt(a,b,c) SELECT t1.a, t2.a, t3.a FROM t t1, t t2, t t3;
+ANALYZE TABLE tt;
+Table	Op	Msg_type	Msg_text
+test.tt	analyze	status	OK
+SET information_schema_stats_expiry=0;
+SELECT TABLE_NAME, INDEX_NAME,CARDINALITY FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_NAME='tt' ORDER BY 1,2;
+TABLE_NAME	INDEX_NAME	CARDINALITY
+tt	a	10
+tt	a	100
+tt	a	1000
+SET debug='+d,i_s_statistics_invalid_index_column_position';
+SELECT TABLE_NAME, INDEX_NAME,CARDINALITY FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_NAME='tt' ORDER BY 1,2;
+TABLE_NAME	INDEX_NAME	CARDINALITY
+tt	a	NULL
+tt	a	NULL
+tt	a	NULL
+SET debug='-d,i_s_statistics_invalid_index_column_position';
+SELECT TABLE_NAME, INDEX_NAME,CARDINALITY FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_NAME='tt' ORDER BY 1,2;
+TABLE_NAME	INDEX_NAME	CARDINALITY
+tt	a	10
+tt	a	100
+tt	a	1000
+DROP TABLE t,tt;
+SET information_schema_stats_expiry=default;
+#
+# BUG2025110318840 some alter ddl operation like adding/droping index or alter table engine have flushed statistics when
+#                  table option STATS_AUTO_RECALC=0
+#
+use test;
+create table t1(c1 int, c2 int, index index_c1(c1)) engine=Dstore STATS_AUTO_RECALC=0;
+insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6);
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+count(1)
+0
+alter table t1 add index index_c2(c2);
+Timeout in wait_condition.inc for SELECT COUNT(*) = 0 FROM INFORMATION_SCHEMA.COLUMNS c LEFT JOIN INFORMATION_SCHEMA.COLUMN_STATISTICS cs ON cs.SCHEMA_NAME = c.TABLE_SCHEMA AND cs.TABLE_NAME = c.TABLE_NAME AND cs.COLUMN_NAME = c.COLUMN_NAME WHERE c.TABLE_SCHEMA = "test" and c.TABLE_NAME = "t1" and c.COLUMN_NAME in ( "c1", "c2" ) AND UNIX_TIMESTAMP(IFNULL(HISTOGRAM->>'$."last-updated"', 0)) <= 0.000000;
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+count(1)
+0
+alter table t1 drop index index_c2;
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+count(1)
+0
+alter table t1 rename index index_c1 to index_c1_1;
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+count(1)
+0
+alter table t1 engine=dstore;
+Timeout in wait_condition.inc for SELECT COUNT(*) = 0 FROM INFORMATION_SCHEMA.COLUMNS c LEFT JOIN INFORMATION_SCHEMA.COLUMN_STATISTICS cs ON cs.SCHEMA_NAME = c.TABLE_SCHEMA AND cs.TABLE_NAME = c.TABLE_NAME AND cs.COLUMN_NAME = c.COLUMN_NAME WHERE c.TABLE_SCHEMA = "test" and c.TABLE_NAME = "t1" and c.COLUMN_NAME in ( "c1" ) AND UNIX_TIMESTAMP(IFNULL(HISTOGRAM->>'$."last-updated"', 0)) <= 0.000000;
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+count(1)
+0
+optimize table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	optimize	note	Table does not support optimize, doing recreate + analyze instead
+test.t1	optimize	status	OK
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+count(1)
+0
+drop table t1;
+create table t1(c1 int, c2 int, index index_c1(c1)) engine=Innodb STATS_AUTO_RECALC=0;
+insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6);
+alter table t1 engine=dstore;
+select count(1) from information_schema.column_statistics where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+count(1)
+0
+drop table t1;
+create table t1(c1 int, c2 int, index index_c1(c1), index index_c1_c2(c1,c2)) engine=Dstore STATS_AUTO_RECALC=1;
+insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10);
+analyze table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+optimize table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	optimize	note	Table does not support optimize, doing recreate + analyze instead
+test.t1	optimize	status	OK
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+TABLE_NAME	COLUMN_NAME	JSON_EXTRACT(HISTOGRAM, '$.buckets')
+t1	c1	[[1, 0.1], [2, 0.2], [3, 0.3], [4, 0.4], [5, 0.5], [6, 0.6], [7, 0.7], [8, 0.8], [9, 0.9], [10, 1.0]]
+t1	c2	[[1, 0.1], [2, 0.2], [3, 0.3], [4, 0.4], [5, 0.5], [6, 0.6], [7, 0.7], [8, 0.8], [9, 0.9], [10, 1.0]]
+alter table t1 engine=Dstore;
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+TABLE_NAME	COLUMN_NAME	JSON_EXTRACT(HISTOGRAM, '$.buckets')
+t1	c1	[[1, 0.1], [2, 0.2], [3, 0.3], [4, 0.4], [5, 0.5], [6, 0.6], [7, 0.7], [8, 0.8], [9, 0.9], [10, 1.0]]
+t1	c2	[[1, 0.1], [2, 0.2], [3, 0.3], [4, 0.4], [5, 0.5], [6, 0.6], [7, 0.7], [8, 0.8], [9, 0.9], [10, 1.0]]
+alter table t1 drop index index_c1_c2;
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+TABLE_NAME	COLUMN_NAME	JSON_EXTRACT(HISTOGRAM, '$.buckets')
+t1	c1	[[1, 0.1], [2, 0.2], [3, 0.3], [4, 0.4], [5, 0.5], [6, 0.6], [7, 0.7], [8, 0.8], [9, 0.9], [10, 1.0]]
+alter table t1 add index index_c2(c2);
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS where SCHEMA_NAME = 'test' and TABLE_NAME = 't1';
+TABLE_NAME	COLUMN_NAME	JSON_EXTRACT(HISTOGRAM, '$.buckets')
+t1	c1	[[1, 0.1], [2, 0.2], [3, 0.3], [4, 0.4], [5, 0.5], [6, 0.6], [7, 0.7], [8, 0.8], [9, 0.9], [10, 1.0]]
+t1	c2	[[1, 0.1], [2, 0.2], [3, 0.3], [4, 0.4], [5, 0.5], [6, 0.6], [7, 0.7], [8, 0.8], [9, 0.9], [10, 1.0]]
+drop table t1;
+#
+# BUG2026031043747 When using histograms to estimate the filter selectivity of a DECIMAL column in a WHERE clause.
+# if the comparison value is derived from a reproducible condition involving complex calculations.
+# it may result in an invalid value. This can lead to a null pointer when retrieving the condition, causing an error during the comparison process.
+#
+create table t1(c1 decimal(10,0) DEFAULT NULL) engine=dstore;
+insert into t1 values(1.0);
+insert into t1 values(2.0);
+analyze table t1 update histogram on c1;
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'c1'.
+create table t2(c1 timestamp(6) NOT NULL) engine=dstore;
+CREATE VIEW `v0` (`c0`) AS select `t2`.`c1` from `t2` where ((0 <> '2003-08-23 20:51:08') is null) group by `t2`.`c1`;
+select t1.c1 from v0, t1 WHERE (t1.c1) != (LEAST('1', v0.c0));
+c1
+drop table t1,t2;
+drop view v0;

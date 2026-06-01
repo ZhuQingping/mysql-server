@@ -1,0 +1,50 @@
+# ==== Purpose ====
+#
+# This test will check if the optimized delete (delete_all_rows) was
+# used in a set of configurations regardless binary_format as the
+# binary log is disabled.
+#
+# Set set of configurations vary:
+# - Table engine: Dstore
+# - Session binlog_format: ROW, MIXED and STATEMENT
+#
+# ==== Related Bugs and Worklogs ====
+#
+# WL#8313: Set ROW based binary log format by default
+#
+# The testcase requires binary logging disabled.
+--source include/have_only_dstore.inc
+--source include/not_log_bin.inc
+
+CALL mtr.add_suppression('You need to use --log-bin to make --binlog-format work.');
+
+CREATE TABLE t1 (c1 INT) ENGINE=Dstore;
+INSERT INTO t1 VALUES (1), (2), (3);
+SELECT * FROM t1;
+DELETE FROM t1;
+SELECT * FROM t1;
+DROP TABLE t1;
+
+--let $storage_engine=Dstore
+SET binlog_format= 'ROW';
+--echo #
+--echo # Dstore, binlog_format= 'ROW'
+--echo #
+--source include/delete_all_rows.inc
+--echo
+
+SET binlog_format= 'MIXED';
+--echo #
+--echo # Dstore, binlog_format= 'MIXED'
+--echo #
+--source include/delete_all_rows.inc
+--echo
+
+SET binlog_format= 'STATEMENT';
+--echo #
+--echo # Dstore, binlog_format= 'STATEMENT'
+--echo #
+--source include/delete_all_rows.inc
+
+# test sql_log_bin = off
+

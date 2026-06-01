@@ -1,0 +1,24 @@
+# Create user and prepare table
+CREATE USER 'normal_user'@'%' IDENTIFIED BY 'password';
+GRANT ALL PRIVILEGES ON test.* TO 'normal_user'@'%';
+CREATE TABLE tt(a text, b text, c text, d text);
+SET @audit_log_force_rotate_saved = @@audit_log_force_rotate;
+SET GLOBAL debug='+d,audit_log_rotate_pause';
+# Trigger 'audit_log_flush' thread asynchronous rotate audit log
+# Verify that audit log rotate suspended
+select sleep(1);
+sleep(1)
+0
+Pattern "Audit log rotate suspended" found
+SET debug='';
+SET GLOBAL audit_log_force_rotate=ON;
+# Verify that audit log rotate resumed
+select sleep(11);
+sleep(11)
+0
+Pattern "Audit log rotate resumed" found
+# Verify SET GLOBAL audit_log_force_rotate=ON succeed
+SET GLOBAL debug='';
+SET GLOBAL audit_log_force_rotate=@audit_log_force_rotate_saved;
+DROP TABLE tt;
+DROP USER 'normal_user'@'%';

@@ -1,0 +1,68 @@
+--source include/count_sessions.inc
+
+ --disable_query_log
+call mtr.add_suppression("normal disconnect");
+call mtr.add_suppression("User 'root'@'localhost', connection success");
+--enable_query_log
+
+--echo #
+--echo # rds_conn_log_error_verbosity is 0, not record conn normal setup info
+--echo #
+SET GLOBAL rds_conn_log_error_verbosity=0;
+select @@global.rds_conn_log_error_verbosity;
+connect (test_con1, localhost, root,,);
+--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let $assert_only_after=.* \[System\] \[[^]]*\] \[[^]]*\] .* ready for connections
+--let $assert_select=.* \[Warning\] \[[^]]*\] \[[^]]*\] \[GAUSSDB-DEBUG\].*connection success
+--let $assert_text= Check that there is 'no record connection success info' in error log.
+--let $assert_count= 0
+--source include/assert_grep.inc
+ 
+disconnect test_con1;
+ 
+--echo #
+--echo # rds_conn_log_error_verbosity is 1, not record conn normal setup info
+--echo #
+connection default;
+SET GLOBAL rds_conn_log_error_verbosity=1;
+select @@global.rds_conn_log_error_verbosity;
+connect (test_con2, localhost, root,,);
+--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let $assert_only_after=.* \[System\] \[[^]]*\] \[[^]]*\] .* ready for connections
+--let $assert_select=.* \[Warning\] \[[^]]*\] \[[^]]*\] \[GAUSSDB-DEBUG\].*connection success
+--let $assert_text= Check that there is 'not record connection success info' in error log.
+--let $assert_count= 0
+--source include/assert_grep.inc
+ 
+disconnect test_con2;
+ 
+--echo #
+--echo # rds_conn_log_error_verbosity is 2, record conn normal setup info
+--echo #
+connection default;
+SET GLOBAL rds_conn_log_error_verbosity=2;
+select @@global.rds_conn_log_error_verbosity;
+connect (test_con3, localhost, root,,);
+--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let $assert_only_after=.* \[System\] \[[^]]*\] \[[^]]*\] .* ready for connections
+--let $assert_select=.* \[Warning\] \[[^]]*\] \[[^]]*\] \[GAUSSDB-DEBUG\].*connection success
+--let $assert_text= Check that there is 'record connection success info' in error log.
+--let $assert_count= 1
+--source include/assert_grep.inc
+ 
+--echo #
+--echo # normal disconnect
+--echo #
+disconnect test_con3;
+connection default;
+--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let $assert_only_after=.* \[System\] \[[^]]*\] \[[^]]*\] .* ready for connections
+--let $assert_select=.* \[Warning\] \[[^]]*\] \[[^]]*\] \[GAUSSDB-DEBUG\].*normal disconnect.*
+--let $assert_text= Check that there is 'normal disconnect' in error log.
+--let $assert_count= 1
+--source include/assert_grep.inc
+ 
+connection default;
+SET GLOBAL rds_conn_log_error_verbosity=0;
+
+--source include/wait_until_count_sessions.inc

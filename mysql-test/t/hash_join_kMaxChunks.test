@@ -1,0 +1,45 @@
+--disable_query_log
+--disable_result_log
+--exec $MYSQL -uroot test < $MYSQLTEST_VARDIR/std_data/hash_join_kMaxChunks.sql
+analyze table t_classify_product_info;
+analyze table t_classify_personal_di;
+analyze table t_classify_dtrust_cbi_rel;
+--enable_result_log
+--enable_query_log
+set pq_support_features_switch='hash_join_spill_to_disk=off';
+SET @saved_kMaxChunks = @@global.kMaxChunks;
+--echo # kMaxChunks is 32, Created_tmp_files add 64
+SET GLOBAL kMaxChunks = 32;
+--source include/hash_join_kMaxChunks.inc
+
+
+--echo # kMaxChunks is 61, Created_tmp_files add 127
+SET GLOBAL kMaxChunks = 61;
+--source include/hash_join_kMaxChunks.inc
+
+--echo # kMaxChunks is 128, Created_tmp_files add 243
+SET GLOBAL kMaxChunks = 128;
+--source include/hash_join_kMaxChunks.inc
+
+--echo # kMaxChunks is 250, Created_tmp_files add 434
+SET GLOBAL kMaxChunks = 250;
+--source include/hash_join_kMaxChunks.inc
+
+
+--echo # kMaxChunks is 256, Created_tmp_files add 434
+SET GLOBAL kMaxChunks = 256;
+--source include/hash_join_kMaxChunks.inc
+
+--echo # kMaxChunks is 512, Created_tmp_files add 434
+SET GLOBAL kMaxChunks = 512;
+--source include/hash_join_kMaxChunks.inc
+
+--echo # kMaxChunks is 8192, Created_tmp_files add 434
+SET GLOBAL kMaxChunks = 8192;
+--source include/hash_join_kMaxChunks.inc
+
+drop table t_classify_product_info;
+drop table t_classify_personal_di;
+drop table t_classify_dtrust_cbi_rel;
+
+SET GLOBAL kMaxChunks = @saved_kMaxChunks;

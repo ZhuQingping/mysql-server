@@ -1,0 +1,323 @@
+From 99f7c96b7c510f11b18dbc432601e7fa82eab876 Mon Sep 17 00:00:00 2001
+From: zhuqingping <zhuqingping1@contributor>
+
+Date: Sat, 27 Dec 2025 17:26:38 +0800
+Subject: [PATCH] Assert failure in function
+ CDE::SingleStmtTrxCommit for parallel query on Dstore table scenario
+
+Issue:
+------
+For enable parallel query + Dstore table scenario, follow query trigger assertion failure in function "CDE::SingleStmtTrxCommit".
+WITH t1_v AS(SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) SELECT COUNT(*) FROM t1, t1_v WHERE t1.id = t1_v.id;
+
+Table t1 is Dstore table, CDE is resolved with temporary table, pq support temptable as split table,
+but another table t1 for outer query block is Dstore table, and get_instance_storage_engine_type() is
+InnoDB, trigger assertion failure in function "CDE::SingleStmtTrxCommit".
+
+Parallel query do not support Dstore table, currently pq take effect only if get_instance_storage_engine_type()
+is InnoDB. But for some scenario, we may create Dstore table when instance storage engine type is InnoDB.
+
+The reason for crash is function "CDE::SingleStmtTrxCommit" not allowed to execute more than 1 time for one query.
+First time:
+mysql_execute_command
+-> trans_commit_stmt
+--> ha_commit_trans
+---> TC_LOG_DUMMY::commit
+----> trx_coordinator::commit_in_engines
+-----> ha_commit_low
+------> CDE::CdeCommit
+-------> CDE::SingleStmtTrxCommit
+
+Second time, trigger crash:
+mysql_execute_command
+-> LEX::cleanup
+--> Query_expression::cleanup
+---> Query_block::cleanup
+----> JOIN::destroy
+-----> pq_free_gather // parallel query cleanup logic
+------> pq_free_thd
+-------> trans_commit_stmt
+---------> ha_commit_trans
+----------> TC_LOG_DUMMY::commit
+-----------> trx_coordinator::commit_in_engines
+------------> ha_commit_low
+-------------> CDE::CdeCommit
+--------------> CDE::SingleStmtTrxCommit // crash here
+
+Solution:
+---------
+Do not allow parallel query if need to access Dstore table, we add the check in function JOIN::choose_parallel_tables.
+---
+ .../r/pq_not_support_dstore.result-pq         | 147 ++++++++++++++++++
+ .../parallel_insert_select_large_tables.test  |   1 +
+ .../suite/parallel_query/t/pq_audit_log.test  |   1 +
+ .../t/pq_not_support_dstore.test              |  64 ++++++++
+ sql/parallel_query/pq_optimizer.cc            |   9 ++
+ 5 files changed, 222 insertions(+)
+ create mode 100644 mysql-test/suite/parallel_query/r/pq_not_support_dstore.result-pq
+ create mode 100644 mysql-test/suite/parallel_query/t/pq_not_support_dstore.test
+
+diff --git a/mysql-test/suite/parallel_query/r/pq_not_support_dstore.result-pq b/mysql-test/suite/parallel_query/r/pq_not_support_dstore.result-pq
+new file mode 100644
+index 00000000000..5fc5555594f
+--- /dev/null
++++ b/mysql-test/suite/parallel_query/r/pq_not_support_dstore.result-pq
+@@ -0,0 +1,147 @@
++#
++# pq do not support dstore table.
++#
++CREATE TABLE t1(id int PRIMARY KEY, num int default 100) ENGINE=Dstore;
++CREATE TABLE t2(id int PRIMARY KEY, num int default 100) ENGINE=InnoDB;
++CREATE TEMPORARY TABLE tt(id int PRIMARY KEY, num int default 100) ENGINE=Dstore;
++INSERT INTO t1(id) VALUES(1),(2),(3),(4),(5),(6),(7),(8),(9),(10);
++INSERT INTO t2 SELECT * FROM t1;
++INSERT INTO tt SELECT * FROM t1;
++ANALYZE TABLE t1,t2,tt;
++Table	Op	Msg_type	Msg_text
++test.t1	analyze	status	OK
++test.t2	analyze	status	OK
++test.tt	analyze	status	OK
++SET optimizer_trace="enabled=on";
++# (1) CTE choose materialization, PQ support parallel on temptable
++explain WITH t1_v AS(SELECT num, SUM(id) as val FROM t1 GROUP BY num) SELECT val FROM t1_v WHERE num >= 100;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, .t1_v)
++1	SIMPLE	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
++2	DERIVED	t1	NULL	ALL	NULL	NULL	NULL	NULL	10	33.33	Using where; Using pushed condition (`test`.`t1`.`num` >= 100); Using temporary
++Warnings:
++Note	1003	with `t1_v` as (/* select#2 */ select `test`.`t1`.`num` AS `num`,sum(`test`.`t1`.`id`) AS `val` from `test`.`t1` where (`test`.`t1`.`num` >= 100) group by `test`.`t1`.`num`) /* select#1 */ select `t1_v`.`val` AS `val` from `t1_v`
++WITH t1_v AS(SELECT num, SUM(id) as val FROM t1 GROUP BY num) SELECT val FROM t1_v WHERE num >= 100;
++val
++55
++# (2) Derived table choose materialization, PQ support parallel on temptable
++explain SELECT val FROM (SELECT num, SUM(id) as val FROM t1 GROUP BY num) t1_v WHERE num >= 100;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, .t1_v)
++1	SIMPLE	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
++2	DERIVED	t1	NULL	ALL	NULL	NULL	NULL	NULL	10	33.33	Using where; Using pushed condition (`test`.`t1`.`num` >= 100); Using temporary
++Warnings:
++Note	1003	/* select#1 */ select `t1_v`.`val` AS `val` from (/* select#2 */ select `test`.`t1`.`num` AS `num`,sum(`test`.`t1`.`id`) AS `val` from `test`.`t1` where (`test`.`t1`.`num` >= 100) group by `test`.`t1`.`num`) `t1_v`
++SELECT val FROM (SELECT num, SUM(id) as val FROM t1 GROUP BY num) t1_v WHERE num >= 100;
++val
++55
++# (3) CTE choose materialization, but PQ not work due to query block 1 include Dstore table
++explain WITH t1_v AS(SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) SELECT t1_v.num, COUNT(*) FROM t1, t1_v WHERE t1.id = t1_v.id GROUP BY t1_v.num;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Using temporary
++1	PRIMARY	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	t1_v.id	1	100.00	Using index
++2	DERIVED	t1	NULL	ALL	NULL	NULL	NULL	NULL	10	100.00	Using filesort
++Warnings:
++Note	1003	with `t1_v` as (/* select#2 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`num` AS `num` from `test`.`t1` order by `test`.`t1`.`id`,`test`.`t1`.`num` limit 5) /* select#1 */ select `t1_v`.`num` AS `num`,count(0) AS `COUNT(*)` from `test`.`t1` join `t1_v` where (`test`.`t1`.`id` = `t1_v`.`id`) group by `t1_v`.`num`
++SELECT query, json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
++query	json_extract(trace,"$.steps[*].not_apply_pq_plan")
++explain WITH t1_v AS(SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) SELECT t1_v.num, COUNT(*) FROM t1, t1_v WHERE t1.id = t1_v.id GROUP BY t1_v.num	[{"chosen": false, "reason": "Disable PQ if access table is not InnoDB", "select#": 1}]
++WITH t1_v AS(SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) SELECT t1_v.num, COUNT(*) FROM t1, t1_v WHERE t1.id = t1_v.id GROUP BY t1_v.num;
++num	COUNT(*)
++100	5
++# (4) Derived table choose materialization, but PQ not work due to query block 1 include Dstore table.
++explain SELECT t1_v.num, count(*) FROM t1, (SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) t1_v WHERE t1.id = t1_v.id GROUP BY t1_v.num;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Using temporary
++1	PRIMARY	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	t1_v.id	1	100.00	Using index
++2	DERIVED	t1	NULL	ALL	NULL	NULL	NULL	NULL	10	100.00	Using filesort
++Warnings:
++Note	1003	/* select#1 */ select `t1_v`.`num` AS `num`,count(0) AS `count(*)` from `test`.`t1` join (/* select#2 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`num` AS `num` from `test`.`t1` order by `test`.`t1`.`id`,`test`.`t1`.`num` limit 5) `t1_v` where (`test`.`t1`.`id` = `t1_v`.`id`) group by `t1_v`.`num`
++SELECT query, json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
++query	json_extract(trace,"$.steps[*].not_apply_pq_plan")
++explain SELECT t1_v.num, count(*) FROM t1, (SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) t1_v WHERE t1.id = t1_v.id GROUP BY t1_v.num	[{"chosen": false, "reason": "Disable PQ if access table is not InnoDB", "select#": 1}]
++SELECT t1_v.num, count(*) FROM t1, (SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) t1_v WHERE t1.id = t1_v.id GROUP BY t1_v.num;
++num	count(*)
++100	5
++# (5) Derived table choose materialization, PQ support parallel on temptable
++explain SELECT t1_v.num, count(*) FROM (SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) t1_v WHERE t1_v.num >= 100 GROUP BY t1_v.num;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	5	33.33	Parallel execute (4 workers, .t1_v)
++1	SIMPLE	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	5	33.33	Using where; Using temporary
++2	DERIVED	t1	NULL	ALL	NULL	NULL	NULL	NULL	10	100.00	Using filesort
++Warnings:
++Note	1003	/* select#1 */ select `t1_v`.`num` AS `num`,count(0) AS `count(*)` from (/* select#2 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`num` AS `num` from `test`.`t1` order by `test`.`t1`.`id`,`test`.`t1`.`num` limit 5) `t1_v` where (`t1_v`.`num` >= 100) group by `t1_v`.`num`
++SELECT t1_v.num, count(*) FROM (SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) t1_v WHERE t1_v.num >= 100 GROUP BY t1_v.num;
++num	count(*)
++100	5
++# (6) Derived table choose materialization, but PQ not work due to query block 1 include Dstore temporary table.
++explain SELECT t1_v.num, count(*) FROM tt, (SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) t1_v WHERE tt.id = t1_v.id GROUP BY t1_v.num;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Using temporary
++1	PRIMARY	tt	NULL	eq_ref	PRIMARY	PRIMARY	4	t1_v.id	1	100.00	Using index
++2	DERIVED	t1	NULL	ALL	NULL	NULL	NULL	NULL	10	100.00	Using filesort
++Warnings:
++Note	1003	/* select#1 */ select `t1_v`.`num` AS `num`,count(0) AS `count(*)` from `test`.`tt` join (/* select#2 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`num` AS `num` from `test`.`t1` order by `test`.`t1`.`id`,`test`.`t1`.`num` limit 5) `t1_v` where (`test`.`tt`.`id` = `t1_v`.`id`) group by `t1_v`.`num`
++SELECT query, json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
++query	json_extract(trace,"$.steps[*].not_apply_pq_plan")
++explain SELECT t1_v.num, count(*) FROM tt, (SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) t1_v WHERE tt.id = t1_v.id GROUP BY t1_v.num	[{"chosen": false, "reason": "Table list has system table/transactional tmp table/system tmp table or tables have same alias.", "select#": 1}]
++SELECT t1_v.num, count(*) FROM tt, (SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) t1_v WHERE tt.id = t1_v.id GROUP BY t1_v.num;
++num	count(*)
++100	5
++# (7) correlated subqueries, PQ not work due to query block include Dstore table.
++explain SELECT * FROM t1 WHERE NOT EXISTS(SELECT * FROM t2 WHERE t2.num > t1.num + 100) AND
++(SELECT COUNT(*) FROM t2 WHERE t2.num=t1.num)!=5 ORDER BY 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	10	100.00	Using where; Using temporary; Using filesort
++1	PRIMARY	t2	NULL	ALL	NULL	NULL	NULL	NULL	10	100.00	Using where; Not exists; Using join buffer (hash join)
++3	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	10	10.00	Using where
++Warnings:
++Note	1276	Field or reference 'test.t1.num' of SELECT #2 was resolved in SELECT #1
++Note	1276	Field or reference 'test.t1.num' of SELECT #3 was resolved in SELECT #1
++Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`num` AS `num` from `test`.`t1` anti join (`test`.`t2`) on(((`test`.`t2`.`num` > (`test`.`t1`.`num` + 100)))) where ((/* select#3 */ select count(0) from `test`.`t2` where (`test`.`t2`.`num` = `test`.`t1`.`num`)) <> 5) order by `test`.`t1`.`id`
++SELECT query, json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
++query	json_extract(trace,"$.steps[*].not_apply_pq_plan")
++explain SELECT * FROM t1 WHERE NOT EXISTS(SELECT * FROM t2 WHERE t2.num > t1.num + 100) AND
++(SELECT COUNT(*) FROM t2 WHERE t2.num=t1.num)!=5 ORDER BY 1	[{"chosen": false, "reason": "Subquery will run single-threaded inside the parent query block's worker.", "select#": 3}, {"chosen": false, "reason": "Disable PQ if access table is not InnoDB", "select#": 1}]
++SELECT * FROM t1 WHERE NOT EXISTS(SELECT * FROM t2 WHERE t2.num > t1.num + 100) AND
++(SELECT COUNT(*) FROM t2 WHERE t2.num=t1.num)!=5 ORDER BY 1;
++id	num
++1	100
++2	100
++3	100
++4	100
++5	100
++6	100
++7	100
++8	100
++9	100
++10	100
++explain SELECT * FROM t2 WHERE NOT EXISTS(SELECT * FROM t1 WHERE t1.num > t2.num + 100) AND
++(SELECT COUNT(*) FROM t1 WHERE t1.num=t2.num)!=5 ORDER BY 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	t2	NULL	ALL	NULL	NULL	NULL	NULL	10	100.00	Using where; Using temporary; Using filesort
++1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	10	100.00	Using where; Not exists; Using join buffer (hash join)
++3	DEPENDENT SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	10	10.00	Using where
++Warnings:
++Note	1276	Field or reference 'test.t2.num' of SELECT #2 was resolved in SELECT #1
++Note	1276	Field or reference 'test.t2.num' of SELECT #3 was resolved in SELECT #1
++Note	1003	/* select#1 */ select `test`.`t2`.`id` AS `id`,`test`.`t2`.`num` AS `num` from `test`.`t2` anti join (`test`.`t1`) on(((`test`.`t1`.`num` > (`test`.`t2`.`num` + 100)))) where ((/* select#3 */ select count(0) from `test`.`t1` where (`test`.`t1`.`num` = `test`.`t2`.`num`)) <> 5) order by `test`.`t2`.`id`
++SELECT query, json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
++query	json_extract(trace,"$.steps[*].not_apply_pq_plan")
++explain SELECT * FROM t2 WHERE NOT EXISTS(SELECT * FROM t1 WHERE t1.num > t2.num + 100) AND
++(SELECT COUNT(*) FROM t1 WHERE t1.num=t2.num)!=5 ORDER BY 1	[{"chosen": false, "reason": "Disable PQ if access table is not InnoDB", "select#": 3}, {"chosen": false, "reason": "Disable PQ if access table is not InnoDB", "select#": 1}]
++SELECT * FROM t2 WHERE NOT EXISTS(SELECT * FROM t1 WHERE t1.num > t2.num + 100) AND
++(SELECT COUNT(*) FROM t1 WHERE t1.num=t2.num)!=5 ORDER BY 1;
++id	num
++1	100
++2	100
++3	100
++4	100
++5	100
++6	100
++7	100
++8	100
++9	100
++10	100
++DROP TABLE t1,t2,tt;
++SET optimizer_trace="enabled=off";
+diff --git a/mysql-test/suite/parallel_query/t/parallel_insert_select_large_tables.test b/mysql-test/suite/parallel_query/t/parallel_insert_select_large_tables.test
+index c618039984c..6f3b62f1b35 100644
+--- a/mysql-test/suite/parallel_query/t/parallel_insert_select_large_tables.test
++++ b/mysql-test/suite/parallel_query/t/parallel_insert_select_large_tables.test
+@@ -1,3 +1,4 @@
++--source include/pq_test.inc
+ --source include/big_test.inc
+ --source include/count_sessions.inc
+ SET @old_innodb_lock_wait_timeout = @@global.innodb_lock_wait_timeout;
+diff --git a/mysql-test/suite/parallel_query/t/pq_audit_log.test b/mysql-test/suite/parallel_query/t/pq_audit_log.test
+index 5a5e6c44367..18a5675dd39 100644
+--- a/mysql-test/suite/parallel_query/t/pq_audit_log.test
++++ b/mysql-test/suite/parallel_query/t/pq_audit_log.test
+@@ -1,3 +1,4 @@
++--source include/pq_test.inc
+ INSTALL PLUGIN audit_log SONAME 'audit_log.so';
+ 
+ create table t1(id int);
+diff --git a/mysql-test/suite/parallel_query/t/pq_not_support_dstore.test b/mysql-test/suite/parallel_query/t/pq_not_support_dstore.test
+new file mode 100644
+index 00000000000..eac61067faa
+--- /dev/null
++++ b/mysql-test/suite/parallel_query/t/pq_not_support_dstore.test
+@@ -0,0 +1,64 @@
++--source include/pq_test.inc
++
++--echo #
++--echo # pq do not support dstore table.
++--echo #
++CREATE TABLE t1(id int PRIMARY KEY, num int default 100) ENGINE=Dstore;
++CREATE TABLE t2(id int PRIMARY KEY, num int default 100) ENGINE=InnoDB;
++CREATE TEMPORARY TABLE tt(id int PRIMARY KEY, num int default 100) ENGINE=Dstore;
++INSERT INTO t1(id) VALUES(1),(2),(3),(4),(5),(6),(7),(8),(9),(10);
++INSERT INTO t2 SELECT * FROM t1;
++INSERT INTO tt SELECT * FROM t1;
++ANALYZE TABLE t1,t2,tt;
++SET optimizer_trace="enabled=on";
++
++--echo # (1) CTE choose materialization, PQ support parallel on temptable
++let $query=WITH t1_v AS(SELECT num, SUM(id) as val FROM t1 GROUP BY num) SELECT val FROM t1_v WHERE num >= 100;
++eval explain $query;
++eval $query;
++
++--echo # (2) Derived table choose materialization, PQ support parallel on temptable
++let $query=SELECT val FROM (SELECT num, SUM(id) as val FROM t1 GROUP BY num) t1_v WHERE num >= 100;
++eval explain $query;
++eval $query;
++
++--echo # (3) CTE choose materialization, but PQ not work due to query block 1 include Dstore table
++let $query=WITH t1_v AS(SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) SELECT t1_v.num, COUNT(*) FROM t1, t1_v WHERE t1.id = t1_v.id GROUP BY t1_v.num;
++eval explain $query;
++SELECT query, json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
++eval $query;
++
++--echo # (4) Derived table choose materialization, but PQ not work due to query block 1 include Dstore table.
++let $query=SELECT t1_v.num, count(*) FROM t1, (SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) t1_v WHERE t1.id = t1_v.id GROUP BY t1_v.num;
++eval explain $query;
++SELECT query, json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
++eval $query;
++
++--echo # (5) Derived table choose materialization, PQ support parallel on temptable
++let $query=SELECT t1_v.num, count(*) FROM (SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) t1_v WHERE t1_v.num >= 100 GROUP BY t1_v.num;
++eval explain $query;
++eval $query;
++
++--echo # (6) Derived table choose materialization, but PQ not work due to query block 1 include Dstore temporary table.
++let $query=SELECT t1_v.num, count(*) FROM tt, (SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) t1_v WHERE tt.id = t1_v.id GROUP BY t1_v.num;
++eval explain $query;
++SELECT query, json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
++eval $query;
++
++--echo # (7) correlated subqueries, PQ not work due to query block include Dstore table.
++let $query=
++SELECT * FROM t1 WHERE NOT EXISTS(SELECT * FROM t2 WHERE t2.num > t1.num + 100) AND
++(SELECT COUNT(*) FROM t2 WHERE t2.num=t1.num)!=5 ORDER BY 1;
++eval explain $query;
++SELECT query, json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
++eval $query;
++
++let $query=
++SELECT * FROM t2 WHERE NOT EXISTS(SELECT * FROM t1 WHERE t1.num > t2.num + 100) AND
++(SELECT COUNT(*) FROM t1 WHERE t1.num=t2.num)!=5 ORDER BY 1;
++eval explain $query;
++SELECT query, json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
++eval $query;
++
++DROP TABLE t1,t2,tt;
++SET optimizer_trace="enabled=off";
+diff --git a/sql/parallel_query/pq_optimizer.cc b/sql/parallel_query/pq_optimizer.cc
+index 2cd5dfc368a..d472d412e6f 100644
+--- a/sql/parallel_query/pq_optimizer.cc
++++ b/sql/parallel_query/pq_optimizer.cc
+@@ -1307,6 +1307,15 @@ bool JOIN::choose_parallel_tables(bool do_mark) {
+   }
+ 
+   if (qep_tab) {
++    // check whether support table type.
++    for (uint i = 0; i < tables; i++) {
++      TABLE *table = qep_tab[i].table();
++      if (table && table->file->ht->db_type == DB_TYPE_DSTORE) {
++        query_block->pq_unsuite_info = PQUnsuiteInfo::ONLY_SUPPORT_INNODB;
++        return false;
++      }
++    }
++
+     // check whether tables have same ident.
+     for (uint i = 0; i < tables; i++) {
+       Table_ref *tbl = qep_tab[i].table_ref;
+-- 
+2.23.0
+

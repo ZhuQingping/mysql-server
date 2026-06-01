@@ -1,0 +1,75 @@
+--source include/not_have_only_dstore.inc
+#
+# Test for recycle func of recyclebin
+#
+
+--echo # Connect to master
+connection default;
+create database db_recycle;
+
+--echo 1. The rds_recycle_scheduler is turned off. The background thread stops clearing expired files.
+
+set global rds_recycle_bin_mode=ON;
+set rds_recycle_bin_mode=ON;
+set global rds_recycle_scheduler=OFF;
+set global rds_recycle_bin_retention=1;
+use db_recycle;
+create table t1(id int);
+drop table t1;
+--sleep 5
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+--echo 2. The rds_recycle_scheduler is turned on. The background thread starts clearing expired files.
+connection default;
+set global rds_recycle_scheduler_purge_table_print=ON;
+set global rds_recycle_scheduler=ON;
+--sleep 5
+call dbms_recyclebin.show_tables();
+
+create table t1(id int);
+drop table t1;
+--sleep 5
+call dbms_recyclebin.show_tables();
+
+--echo 3. Adjust the value of rds_recycle_bin_retention, the tables in the recycle bin expire based on the latest time.
+connection default;
+set global rds_recycle_bin_retention=10;
+create table t1(id int);
+drop table t1;
+
+set global rds_recycle_bin_retention=60;
+--sleep 10
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+set global rds_recycle_bin_retention=1;
+--sleep 5
+call dbms_recyclebin.show_tables();
+
+--echo 4. The rds_recycle_scheduler is turned off during wait expired. The background thread stops clearing expired files.
+connection default;
+set global rds_recycle_bin_retention=60;
+create table t1(id int);
+drop table t1;
+
+set global rds_recycle_scheduler_purge_table_print=OFF;
+set global rds_recycle_scheduler=OFF;
+set global rds_recycle_bin_retention=10;
+--sleep 10
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+--replace_result $t1_name_in_recyclebin t1
+eval call dbms_recyclebin.purge_table('$t1_name_in_recyclebin');
+
+--echo # Connect to master
+connection default;
+set rds_recycle_bin_mode=ON;
+call dbms_recyclebin.show_tables();
+
+set global rds_recycle_scheduler=OFF;
+set global rds_recycle_bin_retention=30;
+set global rds_recycle_bin_mode=OFF;
+
+drop database db_recycle;

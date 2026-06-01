@@ -1,0 +1,50 @@
+--source include/have_only_dstore.inc
+
+--echo #
+--echo # BUG2025092628138: In subquery scenarios, Dstore performs worse than InnoDB
+--echo #
+
+--echo # For a unique index where all columns are not null, each row is unique,
+--echo # the cardinality of the last column is equal to the number of rows in the table.
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 (
+    col1 INT NOT NULL,
+    col2 INT NOT NULL,
+    col3 INT,
+    UNIQUE KEY uniq_idx (col1, col2)
+);
+INSERT INTO t1 VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300), (4, 40, 400);
+
+ANALYZE TABLE t1 UPDATE HISTOGRAM ON col1, col2;
+ANALYZE TABLE t1;
+SHOW INDEX FROM t1;
+DROP TABLE t1;
+
+--echo # For a composite index, if the value of rec_per_key is less than 1, it will be adjusted to 1.
+CREATE TABLE t1 (
+    col1 INT NOT NULL,
+    col2 INT,
+    col3 INT,
+    UNIQUE KEY uniq_idx (col1, col2)
+);
+INSERT INTO t1 VALUES (1, 10, 100), (2, 20, 200), (3, NULL, 300), (4, NULL, 400);
+
+ANALYZE TABLE t1 UPDATE HISTOGRAM ON col1, col2;
+ANALYZE TABLE t1;
+SHOW INDEX FROM t1;
+DROP TABLE t1;
+
+--echo # For a primary key index, each row in the table is unique, 
+--echo # so the cardinality of the last column equals the total number of rows.
+CREATE TABLE t1 (
+    col1 INT,
+    col2 INT,
+    col3 INT,
+    PRIMARY KEY (col1, col2)
+);
+INSERT INTO t1 VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300), (4, 40, 400), (5, 50, 500);
+
+ANALYZE TABLE t1 UPDATE HISTOGRAM ON col1, col2;
+ANALYZE TABLE t1;
+SHOW INDEX FROM t1;
+DROP TABLE t1;

@@ -1,0 +1,234 @@
+#
+# ==== Purpose ====
+#
+# Test the exception handling of the replica based on physical replication.
+#
+# ==== References ====
+#
+# US2025031800791 Implement the core logic of physical replication for the replica server.
+#
+
+--disable_query_log
+CALL mtr.add_suppression("Read wallog replication reply length error");
+CALL mtr.add_suppression("Wallog replication source failed on net_flush()");
+CALL mtr.add_suppression("Timeout waiting for reply of");
+CALL mtr.add_suppression("Missing magic number for semi-sync packet, packet len:.*");
+CALL mtr.add_suppression("Wallog replication replica send reply failed:.*");
+CALL mtr.add_suppression("Wallog replication replica net_flush()");
+CALL mtr.add_suppression("Replica I/O for channel");
+CALL mtr.add_suppression("Run function");
+CALL mtr.add_suppression("Error on Wallog Dump");
+CALL mtr.add_suppression("Failed on");
+CALL mtr.add_suppression("Error running query");
+CALL mtr.add_suppression("Log entry on source");
+CALL mtr.add_suppression("Stopping replica");
+CALL mtr.add_suppression("A message intended");
+CALL mtr.add_suppression("Storing MySQL user name or password");
+CALL mtr.add_suppression("Manifest file");
+CALL mtr.add_suppression("The syntax");
+CALL mtr.add_suppression("Insecure configuration");
+CALL mtr.add_suppression("No existing UUID");
+CALL mtr.add_suppression("CA certificate");
+CALL mtr.add_suppression("unknown variable");
+CALL mtr.add_suppression("Replica SQL for channel");
+--enable_query_log
+
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_setup.inc
+--enable_warnings
+
+--echo ############################################################
+--echo Test the exception handling of the replica based on physical replication.
+--echo ############################################################
+
+# Test1 stop slave succ
+--connection $node2
+STOP REPLICA FOR CHANNEL 'dstore_wal_replication_channel';
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+# Test2 start slave failed, wrong source verion
+SET GLOBAL debug="+d,unrecognized_source_version";
+START REPLICA;
+--sleep 1
+SET GLOBAL debug="-d,unrecognized_source_version";
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+#Test3 stat slave succ, read error and reconnect succ
+SET GLOBAL debug="+d,get_unix_timestamp.ER_NET_READ_INTERRUPTED";
+START REPLICA;
+--sleep 1
+SET GLOBAL debug="-d,get_unix_timestamp.ER_NET_READ_INTERRUPTED";
+--echo Slave_running, Slave_IO_Running, must be ON, ON in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+STOP REPLICA FOR CHANNEL 'dstore_wal_replication_channel';
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+SET GLOBAL debug="+d,get_unix_timestamp.ER_NOT_NET_ERROR";
+START REPLICA;
+--sleep 1
+SET GLOBAL debug="-d,get_unix_timestamp.ER_NOT_NET_ERROR";
+--echo Slave_running, Slave_IO_Running, must be ON, ON in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+STOP REPLICA FOR CHANNEL 'dstore_wal_replication_channel';
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+SET GLOBAL debug="+d,get_unix_timestamp.ER_SLAVE_KILLED";
+START REPLICA;
+--sleep 1
+SET GLOBAL debug="-d,get_unix_timestamp.ER_SLAVE_KILLED";
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+SET GLOBAL debug="+d,get_source_server_id.ER_NET_READ_INTERRUPTED";
+START REPLICA;
+--sleep 1
+SET GLOBAL debug="-d,get_source_server_id.ER_NET_READ_INTERRUPTED";
+--echo Slave_running, Slave_IO_Running, must be ON, ON in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+STOP REPLICA FOR CHANNEL 'dstore_wal_replication_channel';
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+SET GLOBAL debug="+d,get_source_server_id.ER_NOT_NET_ERROR";
+START REPLICA;
+--sleep 1
+SET GLOBAL debug="-d,get_source_server_id.ER_NOT_NET_ERROR";
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+SET GLOBAL debug="+d,get_source_server_id.ER_SLAVE_KILLED";
+START REPLICA;
+--sleep 1
+SET GLOBAL debug="-d,get_source_server_id.ER_SLAVE_KILLED";
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+SET GLOBAL debug="+d,set_heartbeat_period.ER_NET_READ_INTERRUPTED";
+START REPLICA;
+--sleep 1
+SET GLOBAL debug="-d,set_heartbeat_period.ER_NET_READ_INTERRUPTED";
+--echo Slave_running, Slave_IO_Running, must be ON, ON in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+STOP REPLICA FOR CHANNEL 'dstore_wal_replication_channel';
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+SET GLOBAL debug="+d,set_heartbeat_period.ER_NOT_NET_ERROR";
+START REPLICA;
+--sleep 1
+SET GLOBAL debug="-d,set_heartbeat_period.ER_NOT_NET_ERROR";
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+SET GLOBAL debug="+d,set_heartbeat_period.ER_SLAVE_KILLED";
+START REPLICA;
+--sleep 1
+SET GLOBAL debug="-d,set_heartbeat_period.ER_SLAVE_KILLED";
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+#Test4 start slave failed, init thread failed
+SET GLOBAL debug="+d,simulate_io_replica_error_on_init";
+START REPLICA;
+--sleep 1
+SET GLOBAL debug="-d,simulate_io_replica_error_on_init";
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+#Test5 start slave failed, semisync start failed
+SET GLOBAL debug="+d,rpl_semisync_slave_wal_start_failed";
+START REPLICA;
+--sleep 1
+SET GLOBAL debug="-d,rpl_semisync_slave_wal_start_failed";
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+#Test6 start slave failed, open wal log failed and reconnect succ
+SET GLOBAL debug="+d,rpl_wal_log_open_failed";
+START REPLICA;
+--sleep 1
+SET GLOBAL debug="-d,rpl_wal_log_open_failed";
+--echo Slave_running, Slave_IO_Running, must be ON, ON in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+STOP REPLICA FOR CHANNEL 'dstore_wal_replication_channel';
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+#Test7 read wal log failed
+SET GLOBAL debug="+d,rpl_read_wal_log_failed";
+START REPLICA;
+--sleep 1
+SET GLOBAL debug="-d,rpl_read_wal_log_failed";
+STOP REPLICA FOR CHANNEL 'dstore_wal_replication_channel';
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+#Test8 read wal log failed, read error
+SET GLOBAL debug="+d,rpl_read_wal_log_failed";
+SET GLOBAL debug="+d,rpl_read_wal_read_error";
+START REPLICA;
+--sleep 1
+SET GLOBAL debug="-d,rpl_read_wal_log_failed";
+SET GLOBAL debug="-d,rpl_read_wal_read_error";
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+#Test9 read wal log failed, packet too large
+SET GLOBAL debug="+d,rpl_read_wal_log_failed";
+SET GLOBAL debug="+d,rpl_read_wal_packet_too_large";
+START REPLICA;
+--sleep 1
+SET GLOBAL debug="-d,rpl_read_wal_log_failed";
+SET GLOBAL debug="-d,rpl_read_wal_packet_too_large";
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+#Test10 read wal log failed, out of resources
+SET GLOBAL debug="+d,rpl_read_wal_log_failed";
+SET GLOBAL debug="+d,rpl_read_wal_out_of_resources";
+START REPLICA;
+--sleep 1
+SET GLOBAL debug="-d,rpl_read_wal_log_failed";
+SET GLOBAL debug="-d,rpl_read_wal_out_of_resources";
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+# Test11 missing magic number for semi-sync packet
+SET GLOBAL debug="+d,missing_magic_number";
+START REPLICA;
+--connection master
+USE copy_database;
+INSERT INTO copy_database.copy_table VALUES (1, 'Channel Test');
+--connection slave
+SET GLOBAL debug="-d,missing_magic_number";
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+# Test12 wallog replication replica send reply failed
+SET GLOBAL debug="+d,replica_send_reply_failed";
+START REPLICA;
+--connection master
+USE copy_database;
+INSERT INTO copy_database.copy_table VALUES (2, 'Channel Test');
+--connection slave
+SET GLOBAL debug="-d,replica_send_reply_failed";
+--echo Slave_running, Slave_IO_Running, must be ON, ON in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+# Test13 replica net_flush() reply failed
+SET GLOBAL debug="+d,replica_net_flush_reply_failed";
+--connection master
+USE copy_database;
+INSERT INTO copy_database.copy_table VALUES (3, 'Channel Test');
+--connection slave
+SET GLOBAL debug="-d,replica_net_flush_reply_failed";
+--echo Slave_running, Slave_IO_Running, must be OFF, OFF in three following queries
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_applier_status ras, performance_schema.replication_connection_status rcs;
+
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_cleanup.inc
+--enable_warnings

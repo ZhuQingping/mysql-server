@@ -1,0 +1,64 @@
+--source include/pq_test.inc
+
+--echo #
+--echo # pq do not support dstore table.
+--echo #
+CREATE TABLE t1(id int PRIMARY KEY, num int default 100) ENGINE=Dstore;
+CREATE TABLE t2(id int PRIMARY KEY, num int default 100) ENGINE=InnoDB;
+CREATE TEMPORARY TABLE tt(id int PRIMARY KEY, num int default 100) ENGINE=Dstore;
+INSERT INTO t1(id) VALUES(1),(2),(3),(4),(5),(6),(7),(8),(9),(10);
+INSERT INTO t2 SELECT * FROM t1;
+INSERT INTO tt SELECT * FROM t1;
+ANALYZE TABLE t1,t2,tt;
+SET optimizer_trace="enabled=on";
+
+--echo # (1) CTE choose materialization, PQ support parallel on temptable
+let $query=WITH t1_v AS(SELECT num, SUM(id) as val FROM t1 GROUP BY num) SELECT val FROM t1_v WHERE num >= 100;
+eval explain $query;
+eval $query;
+
+--echo # (2) Derived table choose materialization, PQ support parallel on temptable
+let $query=SELECT val FROM (SELECT num, SUM(id) as val FROM t1 GROUP BY num) t1_v WHERE num >= 100;
+eval explain $query;
+eval $query;
+
+--echo # (3) CTE choose materialization, but PQ not work due to query block 1 include Dstore table
+let $query=WITH t1_v AS(SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) SELECT t1_v.num, COUNT(*) FROM t1, t1_v WHERE t1.id = t1_v.id GROUP BY t1_v.num;
+eval explain $query;
+SELECT query, json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+eval $query;
+
+--echo # (4) Derived table choose materialization, but PQ not work due to query block 1 include Dstore table.
+let $query=SELECT t1_v.num, count(*) FROM t1, (SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) t1_v WHERE t1.id = t1_v.id GROUP BY t1_v.num;
+eval explain $query;
+SELECT query, json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+eval $query;
+
+--echo # (5) Derived table choose materialization, PQ support parallel on temptable
+let $query=SELECT t1_v.num, count(*) FROM (SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) t1_v WHERE t1_v.num >= 100 GROUP BY t1_v.num;
+eval explain $query;
+eval $query;
+
+--echo # (6) Derived table choose materialization, but PQ not work due to query block 1 include Dstore temporary table.
+let $query=SELECT t1_v.num, count(*) FROM tt, (SELECT id, num FROM t1 ORDER BY id,num LIMIT 5) t1_v WHERE tt.id = t1_v.id GROUP BY t1_v.num;
+eval explain $query;
+SELECT query, json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+eval $query;
+
+--echo # (7) correlated subqueries, PQ not work due to query block include Dstore table.
+let $query=
+SELECT * FROM t1 WHERE NOT EXISTS(SELECT * FROM t2 WHERE t2.num > t1.num + 100) AND
+(SELECT COUNT(*) FROM t2 WHERE t2.num=t1.num)!=5 ORDER BY 1;
+eval explain $query;
+SELECT query, json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+eval $query;
+
+let $query=
+SELECT * FROM t2 WHERE NOT EXISTS(SELECT * FROM t1 WHERE t1.num > t2.num + 100) AND
+(SELECT COUNT(*) FROM t1 WHERE t1.num=t2.num)!=5 ORDER BY 1;
+eval explain $query;
+SELECT query, json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+eval $query;
+
+DROP TABLE t1,t2,tt;
+SET optimizer_trace="enabled=off";

@@ -1,0 +1,206 @@
+include/master-slave.inc
+[connection master]
+# restart Master
+include/rpl_restart_server.inc [server_number=1 parameters: --skip-log-bin]
+# stop slave
+include/rpl_stop_server.inc [server_number=2]
+CALL mtr.add_suppression("insert dstore index tuple fail");
+CALL mtr.add_suppression("insert_index fail");
+#
+# 1. prepare some data
+#
+create database full_backup_archive_restore;
+use full_backup_archive_restore;
+create table t1(s varchar(100)) engine=Dstore;
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1000
+#
+# create a base full backup
+#
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+call rds_backup.stop_full_local_backup();
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+#
+# 2. Start log archive
+#
+call rds_backup.start_log_archive();
+show status like 'Rds_local_backup_log_archive_is_running';
+Variable_name	Value
+Rds_local_backup_log_archive_is_running	ON
+#
+#    start bg sysbench
+#
+include/read_file_to_var.inc
+#
+# 3.1 Round 0: Full backup
+#
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+call rds_backup.stop_full_local_backup();
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+#
+#    Add more data
+#
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1300
+#
+# 3.2 Round 0: restore backup
+#
+include/rpl_start_server.inc [server_number=2 parameters: --dstore_open_restore_mode=on --skip-log-bin]
+#
+# 3.3 Round 0: check total rows 
+#
+select count(*) from full_backup_archive_restore.t1;
+count(*)
+1000
+#
+#     stop slave
+#
+include/rpl_stop_server.inc [server_number=2]
+#
+# 3.1 Round 1: Full backup
+#
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+call rds_backup.stop_full_local_backup();
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+#
+#    Add more data
+#
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1600
+#
+# 3.2 Round 1: restore backup
+#
+include/rpl_start_server.inc [server_number=2 parameters: --dstore_open_restore_mode=on --skip-log-bin]
+#
+# 3.3 Round 1: check total rows 
+#
+select count(*) from full_backup_archive_restore.t1;
+count(*)
+1300
+#
+#     stop slave
+#
+include/rpl_stop_server.inc [server_number=2]
+#
+# 3.1 Round 2: Full backup
+#
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+call rds_backup.stop_full_local_backup();
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+#
+#    Add more data
+#
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1900
+#
+# 3.2 Round 2: restore backup
+#
+include/rpl_start_server.inc [server_number=2 parameters: --dstore_open_restore_mode=on --skip-log-bin]
+#
+# 3.3 Round 2: check total rows 
+#
+select count(*) from full_backup_archive_restore.t1;
+count(*)
+1600
+#
+#     stop slave
+#
+include/rpl_stop_server.inc [server_number=2]
+#
+# 3.1 Round 3: Full backup
+#
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+call rds_backup.stop_full_local_backup();
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+#
+#    Add more data
+#
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+2200
+#
+# 3.2 Round 3: restore backup
+#
+include/rpl_start_server.inc [server_number=2 parameters: --dstore_open_restore_mode=on --skip-log-bin]
+#
+# 3.3 Round 3: check total rows 
+#
+select count(*) from full_backup_archive_restore.t1;
+count(*)
+1900
+#
+#     stop slave
+#
+include/rpl_stop_server.inc [server_number=2]
+#
+# 4. stop log archive
+#
+call rds_backup.stop_log_archive();
+show status like 'Rds_local_backup_log_archive_is_running';
+Variable_name	Value
+Rds_local_backup_log_archive_is_running	OFF
+drop database full_backup_archive_restore;
+#
+# 5. start slave to clean
+#
+include/rpl_start_server.inc [server_number=2 parameters: --skip-log-bin]
+include/rpl_end.inc

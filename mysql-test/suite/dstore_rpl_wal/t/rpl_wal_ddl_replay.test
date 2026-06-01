@@ -1,0 +1,510 @@
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_setup.inc
+--enable_warnings
+
+--echo ############################################################
+--echo Execute all SQLCOM corresponding to DDL operations on the primary, and verify whether they have been successfully executed on the replica.
+--echo ############################################################
+
+CALL mtr.add_suppression(".* failed on net_flush().*");
+
+--echo #
+--echo # 1. SQLCOM_CREATE_DB
+--echo #
+--connection $node1
+CREATE DATABASE IF NOT EXISTS tpcc;
+use tpcc;
+
+--echo ---------------------
+--sleep 2
+--connection $node2
+SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = 'tpcc';
+use tpcc;
+
+--echo #
+--echo # 1.1 SQLCOM_ALTER_DB
+--echo #
+--connection $node1
+ALTER DATABASE tpcc CHARACTER SET = utf8mb4;
+
+--echo ---------------------
+--sleep 2
+--connection $node2
+SELECT 
+  SCHEMA_NAME, 
+  DEFAULT_CHARACTER_SET_NAME, 
+  DEFAULT_COLLATION_NAME 
+FROM INFORMATION_SCHEMA.SCHEMATA 
+WHERE SCHEMA_NAME = 'tpcc';
+
+--echo #
+--echo # 2. SQLCOM_CREATE_TABLE
+--echo #
+--connection $node1
+use tpcc;
+CREATE TABLE customer (
+    c_id int NOT NULL,
+    c_d_id tinyint NOT NULL,
+    c_w_id smallint NOT NULL,
+    c_first varchar(16),
+    c_middle char(2),
+    c_last varchar(16),
+    c_street_1 varchar(20),
+    c_street_2 varchar(20),
+    c_city varchar(20),
+    c_state char(2),
+    c_zip char(9),
+    c_phone char(16),
+    c_since datetime,
+    c_credit char(2),
+    c_credit_lim bigint,
+    c_discount decimal(4,2),
+    c_balance decimal(12,2),
+    c_ytd_payment decimal(12,2),
+    c_payment_cnt smallint,
+    c_delivery_cnt smallint,
+    c_data varchar(600),
+    PRIMARY KEY(c_w_id, c_d_id, c_id)
+);
+
+INSERT INTO customer (
+  c_id, c_d_id, c_w_id, c_first, c_middle, c_last,
+  c_street_1, c_street_2, c_city, c_state, c_zip,
+  c_phone, c_since, c_credit, c_credit_lim, c_discount,
+  c_balance, c_ytd_payment, c_payment_cnt, c_delivery_cnt, c_data
+) VALUES
+(1, 1, 1, 'John', 'Do', 'Smith',
+ '123 Main St', 'Apt 101', 'New York', 'NY', '10001',
+ '212-555-0101', '2020-01-15 10:00:00', 'GC', 10000.00, 0.05,
+ 1250.75, 2500.50, 10, 8, 'Customer data for John Smith, NY branch'),
+(2, 1, 1, 'Jane', 'Sm', 'Doe',
+ '456 Oak Ave', 'Suite 202', 'Los Angeles', 'CA', '90001',
+ '213-555-0102', '2020-02-20 11:30:00', 'GC', 15000.00, 0.03,
+ -89.25, 1800.75, 8, 6, 'Customer data for Jane Doe, CA branch'),
+(3, 1, 1, 'Michael', 'Br', 'Brown',
+ '789 Pine Rd', 'Unit 303', 'Chicago', 'IL', '60601',
+ '312-555-0103', '2020-03-10 09:15:00', 'BC', 8000.00, 0.07,
+ 450.50, 900.25, 5, 4, 'Customer data for Michael Brown, IL branch'),
+(4, 1, 1, 'Emily', 'Wi', 'Jones',
+ '321 Cedar Ln', 'Box 404', 'Houston', 'TX', '77001',
+ '713-555-0104', '2020-04-05 14:20:00', 'GC', 12000.00, 0.04,
+ -200.00, 1500.00, 7, 5, 'Customer data for Emily Jones, TX branch'),
+(5, 1, 1, 'David', 'Ta', 'Garcia',
+ '654 Birch Dr', 'Apt 505', 'Phoenix', 'AZ', '85001',
+ '602-555-0105', '2020-05-18 16:45:00', 'BC', 9000.00, 0.06,
+ 875.30, 1750.60, 9, 7, 'Customer data for David Garcia, AZ branch');
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'tpcc' AND TABLE_NAME = 'customer';
+
+--echo #
+--echo # 2.1 SQLCOM_ALTER_TABLE
+--echo #
+--connection $node1
+ALTER TABLE customer 
+ADD COLUMN c_email varchar(64) COMMENT '客户邮箱' AFTER c_phone,
+MODIFY COLUMN c_data varchar(800);
+
+--sleep 1
+--connection $node2
+# DESC tpcc.customer;
+SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, COLUMN_COMMENT, ORDINAL_POSITION
+FROM information_schema.COLUMNS 
+WHERE TABLE_SCHEMA = 'tpcc'
+  AND TABLE_NAME = 'customer'
+  AND COLUMN_NAME IN ('c_email', 'c_data') 
+ORDER BY COLUMN_NAME ASC;
+
+--echo #
+--echo # 3. SQLCOM_CREATE_INDEX
+--echo #
+--connection $node1
+CREATE INDEX idx_customer ON customer (c_w_id, c_d_id, c_last, c_first);
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+# SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS 
+# WHERE TABLE_SCHEMA = 'tpcc' AND TABLE_NAME = 'customer' AND INDEX_NAME = 'idx_customer';
+SHOW INDEX FROM tpcc.customer WHERE Key_name = 'idx_customer';
+
+--echo #
+--echo # 4.0 SQLCOM_CREATE_FUNCTION
+--echo #
+# TODO: SQLCOM_CREATE_FUNCTION, which corresponds to the UDF function, is not supported for the time being.
+# This function is created for subsequent use.
+--connection $node1
+DELIMITER $$;
+CREATE FUNCTION fn_get_customer_balance_abs(
+  p_w_id SMALLINT,
+  p_d_id TINYINT,
+  p_c_id INT
+) RETURNS DECIMAL(12,2)
+DETERMINISTIC
+READS SQL DATA
+BEGIN
+  DECLARE balance_abs DECIMAL(12,2);
+  SELECT ABS(c_balance) INTO balance_abs
+  FROM customer
+  WHERE c_w_id = p_w_id AND c_d_id = p_d_id AND c_id = p_c_id;
+  RETURN balance_abs;
+END$$
+DELIMITER ;$$
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT ROUTINE_NAME, ROUTINE_TYPE 
+FROM INFORMATION_SCHEMA.ROUTINES 
+WHERE ROUTINE_SCHEMA = 'tpcc' AND ROUTINE_NAME = 'fn_get_customer_balance_abs';
+
+--echo #
+--echo # 4.1 SQLCOM_ALTER_FUNCTION
+--echo #
+--connection $node1
+ALTER FUNCTION fn_get_customer_balance_abs COMMENT 'test SQLCOM_ALTER_FUNCTION';
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT SPECIFIC_NAME, ROUTINE_COMMENT FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA='tpcc' 
+AND ROUTINE_NAME='fn_get_customer_balance_abs' AND ROUTINE_COMMENT='test SQLCOM_ALTER_FUNCTION';
+
+--echo #
+--echo # 5. SQLCOM_CREATE_VIEW
+--echo #
+--connection $node1
+CREATE VIEW v_high_value_customers AS
+SELECT c_w_id, c_d_id, c_id, c_first, c_middle, c_last, c_balance
+FROM customer
+WHERE c_balance < -100.00;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT 
+  TABLE_NAME AS view_name,
+  VIEW_DEFINITION AS view_definition,
+  TABLE_SCHEMA AS database_name
+FROM information_schema.VIEWS 
+WHERE TABLE_NAME = 'v_high_value_customers';
+
+--echo #
+--echo # 6. SQLCOM_CREATE_TRIGGER
+--echo #
+--connection $node1
+CREATE TRIGGER tr_customer_insert BEFORE INSERT ON customer FOR EACH ROW SET NEW.c_since = NOW();
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT TRIGGER_NAME FROM INFORMATION_SCHEMA.TRIGGERS WHERE TRIGGER_SCHEMA='tpcc' AND TRIGGER_NAME='tr_customer_insert';
+
+--echo #
+--echo # 7.0 SQLCOM_CREATE_EVENT
+--echo #
+--connection $node1
+# SET GLOBAL event_scheduler = ON;
+
+CREATE EVENT IF NOT EXISTS ev_insert_test_customer
+ON SCHEDULE EVERY 1 MINUTE  -- 执行频率：每分钟一次
+DO
+  INSERT INTO customer (
+    c_id, c_d_id, c_w_id, c_first, c_middle, c_last, c_balance
+  ) VALUES (
+    999, 1, 1, 'test', 'xx', 'user', -50.00  -- 固定测试值
+  );
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT EVENT_NAME, EVENT_SCHEMA, STATUS 
+FROM INFORMATION_SCHEMA.EVENTS 
+WHERE EVENT_SCHEMA = 'tpcc' AND EVENT_NAME = 'ev_insert_test_customer';
+
+--echo #
+--echo # 7.1 SQLCOM_ALTER_EVENT
+--echo #
+--connection $node1
+ALTER EVENT ev_insert_test_customer
+ON SCHEDULE EVERY 1 DAY 
+DO
+  INSERT INTO customer (
+    c_id, c_d_id, c_w_id, c_first, c_middle, c_last, c_balance
+  ) VALUES (
+    999, 1, 1, 'test', 'xx', 'user', -50.00
+  );
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT EVENT_NAME, EVENT_SCHEMA, STATUS, INTERVAL_VALUE 
+FROM INFORMATION_SCHEMA.EVENTS 
+WHERE EVENT_SCHEMA = 'tpcc' AND EVENT_NAME = 'ev_insert_test_customer';
+
+--echo #
+--echo # 8. SQLCOM_CREATE_SRS
+--echo #
+--connection $node1
+# CREATE SPATIAL REFERENCE SYSTEM 1004326 NAME 'WGS 84 (long-lat)' DEFINITION 'GEOGCS["WGS 84",DATUM["World Geodetic System 1984",SPHEROID["WGS 84",6378137,298.257223563,AUTHORITY["EPSG","7030"]],AUTHORITY["EPSG","6326"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.017453292519943278,AUTHORITY["EPSG","9122"]],AXIS["Lon",EAST],AXIS["Lat",NORTH]]' DESCRIPTION 'WGS 84 with coordinate axes swapped to be longitude-latitude instead of latitude-longitude';
+
+--sleep 1
+--connection $node2
+SELECT 
+  SRS_ID, 
+  SRS_NAME, 
+  ORGANIZATION, 
+  ORGANIZATION_COORDSYS_ID, 
+  DEFINITION, 
+  DESCRIPTION 
+FROM INFORMATION_SCHEMA.ST_SPATIAL_REFERENCE_SYSTEMS 
+WHERE SRS_ID = 1004326;
+
+--echo #
+--echo # 9. SQLCOM_DROP_INDEX
+--echo #
+--connection $node1
+DROP INDEX idx_customer ON customer;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SHOW INDEX FROM tpcc.customer WHERE Key_name = 'idx_customer';
+
+--echo #
+--echo # 10. SQLCOM_DROP_VIEW
+--echo #
+--connection $node1
+DROP VIEW IF EXISTS tpcc.v_high_value_customers;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT 
+  TABLE_NAME AS view_name,
+  VIEW_DEFINITION AS view_definition,
+  TABLE_SCHEMA AS database_name
+FROM information_schema.VIEWS 
+WHERE TABLE_NAME = 'v_high_value_customers';
+
+--echo #
+--echo # 11. SQLCOM_DROP_TRIGGER
+--echo #
+--connection $node1
+# DROP TRIGGER IF EXISTS tpcc.tr_customer_insert;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT TRIGGER_NAME FROM INFORMATION_SCHEMA.TRIGGERS WHERE TRIGGER_SCHEMA='tpcc' AND TRIGGER_NAME='tr_customer_insert';
+
+--echo #
+--echo # 12. SQLCOM_DROP_EVENT
+--echo #
+--connection $node1
+DROP EVENT IF EXISTS ev_insert_test_customer;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT EVENT_NAME 
+FROM INFORMATION_SCHEMA.EVENTS 
+WHERE EVENT_SCHEMA = 'tpcc' AND EVENT_NAME = 'ev_insert_test_customer';
+
+--echo #
+--echo # 13. SQLCOM_DROP_FUNCTION
+--echo #
+--connection $node1
+DROP FUNCTION IF EXISTS fn_get_customer_balance_abs;
+
+--sleep 1
+--connection $node2
+SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES 
+WHERE ROUTINE_SCHEMA = 'tpcc' AND ROUTINE_NAME = 'fn_get_customer_balance_abs';
+
+--echo #
+--echo # 14. SQLCOM_DROP_SRS
+--echo #
+--connection $node1
+# DROP SPATIAL REFERENCE SYSTEM 1004326;
+
+--sleep 1
+--connection $node2
+SELECT 
+  SRS_ID, 
+  SRS_NAME, 
+  ORGANIZATION, 
+  ORGANIZATION_COORDSYS_ID, 
+  DEFINITION, 
+  DESCRIPTION 
+FROM INFORMATION_SCHEMA.ST_SPATIAL_REFERENCE_SYSTEMS 
+WHERE SRS_ID = 1004326;
+
+--echo #
+--echo # 15. SQLCOM_OPTIMIZE
+--echo #
+--connection $node1
+OPTIMIZE table customer;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+
+--echo #
+--echo # 16. SQLCOM_TRUNCATE
+--echo #
+--connection $node1
+truncate table customer;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+
+--echo #
+--echo # 17. SQLCOM_RENAME_TABLE
+--echo #
+--connection $node1
+rename table customer to customer_temp;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'tpcc' AND TABLE_NAME = 'customer_temp';
+--connection $node1
+rename table tpcc.customer_temp to tpcc.customer;
+
+--connection $node2
+--sleep 1
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'tpcc' AND TABLE_NAME = 'customer_temp';
+
+--echo #
+--echo # 18. SQLCOM_DROP_TABLE
+--echo #
+--connection $node1
+DROP TABLE IF EXISTS customer;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'tpcc' AND TABLE_NAME = 'customer';
+
+--echo #
+--echo # 19. SQLCOM_DROP_DB
+--echo #
+--connection $node1
+DROP DATABASE IF EXISTS tpcc;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = 'tpcc';
+
+--echo #
+--echo # standby_ddl_already_replayed 
+--echo #
+--connection $node2
+set global debug="+d,standby_ddl_already_replayed";
+--connection $node1
+CREATE DATABASE IF NOT EXISTS tpcc;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = 'tpcc';
+set global debug="-d,standby_ddl_already_replayed";
+
+--echo #
+--echo # DDLCOM_ACL
+--echo #
+--echo #
+--echo # 1.SQLCOM_CREATE_PROCEDURE
+--echo #
+--connection $node1
+use test;
+DELIMITER $$;
+CREATE PROCEDURE test_proc_1()
+BEGIN
+  SELECT 'Hello from replicated procedure!' AS msg;
+END$$
+DELIMITER ;$$
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+use test;
+SELECT ROUTINE_NAME, ROUTINE_TYPE, DEFINER 
+FROM information_schema.ROUTINES 
+WHERE ROUTINE_SCHEMA = DATABASE() 
+  AND ROUTINE_NAME = 'test_proc_1';
+
+--echo #
+--echo # 1.2 SQLCOM_ALTER_PROCEDURE
+--echo #
+--connection $node1
+ALTER PROCEDURE test_proc_1 COMMENT 'updated';
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT SPECIFIC_NAME, ROUTINE_COMMENT FROM INFORMATION_SCHEMA.ROUTINES 
+WHERE ROUTINE_SCHEMA=DATABASE() AND ROUTINE_NAME='test_proc_1';
+
+--echo #
+--echo # 2.SQLCOM_DROP_PROCEDURE
+--echo #
+--connection $node1
+DROP PROCEDURE test_proc_1;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT ROUTINE_NAME, ROUTINE_TYPE, DEFINER 
+FROM information_schema.ROUTINES 
+WHERE ROUTINE_SCHEMA = DATABASE() 
+  AND ROUTINE_NAME = 'test_proc_1';
+
+--echo #
+--echo # 3.SQLCOM_CREATE_SPFUNCTION
+--echo #
+--connection $node1
+DELIMITER $$;
+CREATE FUNCTION test_func_1(x INT) 
+RETURNS INT
+READS SQL DATA
+DETERMINISTIC
+BEGIN
+  RETURN x * 2;
+END$$
+DELIMITER ;$$
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT ROUTINE_NAME, ROUTINE_TYPE, DATA_TYPE 
+FROM information_schema.ROUTINES 
+WHERE ROUTINE_SCHEMA = DATABASE() 
+  AND ROUTINE_NAME = 'test_func_1';
+
+--echo #
+--echo # 4.SQLCOM_DROP_FUNCTION
+--echo #
+--connection $node1
+DROP FUNCTION test_func_1;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT ROUTINE_NAME 
+FROM information_schema.ROUTINES 
+WHERE ROUTINE_SCHEMA = DATABASE() 
+  AND ROUTINE_NAME = 'test_func_1';
+
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_cleanup.inc
+--enable_warnings

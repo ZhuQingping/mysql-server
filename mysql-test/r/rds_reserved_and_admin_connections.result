@@ -1,0 +1,221 @@
+# PREPARE
+call mtr.add_suppression("Too many connections*");
+call mtr.add_suppression("The SUPER privilege identifier is deprecated");
+# rds reserved user without SUPER privileges.
+CREATE USER 'reserved_user_without_super'@'%' IDENTIFIED BY '123456';
+GRANT SELECT ON *.* TO 'reserved_user_without_super'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'reserved_user_without_super'@'%';
+Grants for reserved_user_without_super@%
+GRANT SELECT ON *.* TO `reserved_user_without_super`@`%` WITH GRANT OPTION
+# rds reserved user with SUPER privileges, although SUPER has been deprecated.
+CREATE USER 'reserved_user_with_super'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, SUPER ON *.* TO 'reserved_user_with_super'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'reserved_user_with_super'@'%';
+Grants for reserved_user_with_super@%
+GRANT SELECT, SUPER ON *.* TO `reserved_user_with_super`@`%` WITH GRANT OPTION
+# rds reserved user with CONN_ADMIN privileges.
+CREATE USER 'reserved_user_with_conn_admin'@'%' IDENTIFIED BY '123456';
+GRANT SELECT,CONNECTION_ADMIN ON *.* TO 'reserved_user_with_conn_admin'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'reserved_user_with_conn_admin'@'%';
+Grants for reserved_user_with_conn_admin@%
+GRANT SELECT ON *.* TO `reserved_user_with_conn_admin`@`%` WITH GRANT OPTION
+GRANT CONNECTION_ADMIN ON *.* TO `reserved_user_with_conn_admin`@`%` WITH GRANT OPTION
+# rds reserved user with SERVICE_CONN_ADMIN privileges.
+CREATE USER 'reserved_user_with_service_admin'@'%' IDENTIFIED BY '123456';
+GRANT SELECT,SERVICE_CONNECTION_ADMIN ON *.* TO 'reserved_user_with_service_admin'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'reserved_user_with_service_admin'@'%';
+Grants for reserved_user_with_service_admin@%
+GRANT SELECT ON *.* TO `reserved_user_with_service_admin`@`%` WITH GRANT OPTION
+GRANT SERVICE_CONNECTION_ADMIN ON *.* TO `reserved_user_with_service_admin`@`%` WITH GRANT OPTION
+# mysql user with SUPER privileges, although SUPER has been deprecated.
+CREATE USER 'normal_user_with_super'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, SUPER ON *.* TO 'normal_user_with_super'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'normal_user_with_super'@'%';
+Grants for normal_user_with_super@%
+GRANT SELECT, SUPER ON *.* TO `normal_user_with_super`@`%` WITH GRANT OPTION
+# mysql user without SUPER privileges.
+CREATE USER 'normal_user_without_super'@'%' IDENTIFIED BY '123456';
+GRANT SELECT ON *.* TO 'normal_user_without_super'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'normal_user_without_super'@'%';
+Grants for normal_user_without_super@%
+GRANT SELECT ON *.* TO `normal_user_without_super`@`%` WITH GRANT OPTION
+# mysql user with dynamic CONNECTION_ADMIN privileges.
+CREATE USER 'normal_user_with_conn_admin'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, CONNECTION_ADMIN ON *.* TO 'normal_user_with_conn_admin'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'normal_user_with_conn_admin'@'%';
+Grants for normal_user_with_conn_admin@%
+GRANT SELECT ON *.* TO `normal_user_with_conn_admin`@`%` WITH GRANT OPTION
+GRANT CONNECTION_ADMIN ON *.* TO `normal_user_with_conn_admin`@`%` WITH GRANT OPTION
+# mysql user with dynamic SERVICE_CONNECTION_ADMIN  privileges.
+CREATE USER 'normal_user_with_service_admin'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, SERVICE_CONNECTION_ADMIN ON *.* TO 'normal_user_with_service_admin'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'normal_user_with_service_admin'@'%';
+Grants for normal_user_with_service_admin@%
+GRANT SELECT ON *.* TO `normal_user_with_service_admin`@`%` WITH GRANT OPTION
+GRANT SERVICE_CONNECTION_ADMIN ON *.* TO `normal_user_with_service_admin`@`%` WITH GRANT OPTION
+FLUSH PRIVILEGES;
+show variables like 'rds_reserved_users';
+Variable_name	Value
+rds_reserved_users	reserved_user_with_super,reserved_user_without_super,reserved_user_with_conn_admin,reserved_user_with_service_admin
+show variables like 'rds_reserved_connections';
+Variable_name	Value
+rds_reserved_connections	4
+show variables like 'max_connections';
+Variable_name	Value
+max_connections	5
+#
+# Prepare 1: The reserved user without SUPER can connect to the database.
+#
+#
+# Prepare 2: The reserved user with SUPER can connect to the database.
+#
+#
+# Prepare 3: The reserved user with CONNECTION_ADMIN can connect to the database.
+#
+#
+# Prepare 4: The reserved user with SERVICE_CONNECTION_ADMIN can connect to the database through master port.
+#
+#
+# Prepare 5: The reserved user with SERVICE_CONNECTION_ADMIN can connect to the database through admin port.
+#
+#
+# Prepare 6: The non-reserved user without SUPER can connect to the database.
+#
+#
+# Prepare 7: The non-reserved user with SUPER can connect to the database.
+#
+#
+# Prepare 8: The non-reserved user with CONNECTION_ADMIN can connect to the database.
+#
+#
+# Prepare 9: The non-reserved user with SERVICE_CONNECTION_ADMIN can connect to the database through master port.
+#
+#
+# Prepare 10: The non-reserved user with SERVICE_CONNECTION_ADMIN can connect to the database through admin port.
+#
+select count(*) from information_schema.PROCESSLIST where user in ('root','normal_user_with_super','normal_user_without_super','normal_user_with_conn_admin','normal_user_with_service_admin');
+count(*)
+6
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user_with_super','reserved_user_without_super','reserved_user_with_conn_admin','reserved_user_with_service_admin');
+count(*)
+5
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+show global status like "Admin_threads_connected";
+Variable_name	Value
+Admin_threads_connected	2
+## NOTE: Now, there are 2 admin connections, 4 reserved connections and 4 + 1(default) mysql's defined connections, following will begin our test.
+# BEGIN TEST
+0
+#
+# Test 1: When the rds_admin_max_connections resource is consumed, it does not allowed the
+#         connections from the admin port, even if you have other advanced permissions or you
+#         are reserved user.
+#
+Got one of the listed errors
+Got one of the listed errors
+Got one of the listed errors
+Got one of the listed errors
+Got one of the listed errors
+Got one of the listed errors
+Got one of the listed errors
+include/assert.inc [connection_errors_max_connection was error changed.]
+#
+# Test 2: When the rds_reserved_connections resource is consumed, it does not allowed the
+#         reserved user to login in, even if you have other advanced Permissions.
+#
+Got one of the listed errors
+Got one of the listed errors
+Got one of the listed errors
+include/assert.inc [connection_errors_max_connection was error changed.]
+#
+# Test 3: When the max_connections resource is consumed, it only allows one more
+#         normal user(with super or CONNECTION_ADMIN) to login in.
+#
+# test CONNECTION_ADMIN user can login in database when max_connection is reached.
+select count(*) from information_schema.PROCESSLIST where user in ('root','normal_user_with_super','normal_user_without_super','normal_user_with_conn_admin','normal_user_with_service_admin');
+count(*)
+7
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user_with_super','reserved_user_without_super','reserved_user_with_conn_admin','reserved_user_with_service_admin');
+count(*)
+5
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+Got one of the listed errors
+include/assert.inc [connection_errors_max_connection was error changed.]
+#test SUPER user can login in database when max_connection is reached.
+select count(*) from information_schema.PROCESSLIST where user in ('root','normal_user_with_super','normal_user_without_super','normal_user_with_conn_admin','normal_user_with_service_admin');
+count(*)
+7
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user_with_super','reserved_user_without_super','reserved_user_with_conn_admin','reserved_user_with_service_admin');
+count(*)
+5
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+Got one of the listed errors
+include/assert.inc [connection_errors_max_connection was error changed.]
+#
+# Test 4: When the max_connections resource is consumed, the connection number of
+#         the reserved user does not affect the non-reserved user. and it does not
+#         affect the reserved user login in,
+#
+Got one of the listed errors
+Got one of the listed errors
+include/assert.inc [connection_errors_max_connection was error changed.]
+#
+# Test 5: When the max_connections resource and reserved connection are consumed,
+#         it does not affect the admin port connection.
+#
+show global status like "Admin_threads_connected";
+Variable_name	Value
+Admin_threads_connected	1
+Got one of the listed errors
+Got one of the listed errors
+Got one of the listed errors
+Got one of the listed errors
+show global status like "Admin_threads_connected";
+Variable_name	Value
+Admin_threads_connected	2
+Got one of the listed errors
+Got one of the listed errors
+include/assert.inc [connection_errors_max_connection was error changed.]
+#
+# Test 6: When the max_connections and rds_reserved_connections are consumed,
+#         Admin connection will not affact reserved and non-reserved user connection.
+#
+Got one of the listed errors
+Got one of the listed errors
+select count(*) from information_schema.PROCESSLIST where user in ('root','normal_user_with_super','normal_user_without_super','normal_user_with_conn_admin','normal_user_with_service_admin');
+count(*)
+7
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user_with_super','reserved_user_without_super','reserved_user_with_conn_admin','reserved_user_with_service_admin');
+count(*)
+5
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+# Now, all connections have been used out.
+Got one of the listed errors
+Got one of the listed errors
+Got one of the listed errors
+include/assert.inc [connection_errors_max_connection was error changed.]
+select count(*) from information_schema.PROCESSLIST where user in ('root','normal_user_with_super','normal_user_without_super','normal_user_with_conn_admin','normal_user_with_service_admin');
+count(*)
+7
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user_with_super','reserved_user_without_super','reserved_user_with_conn_admin','reserved_user_with_service_admin');
+count(*)
+5
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+# Cleanup
+DROP USER reserved_user_with_super,reserved_user_without_super,reserved_user_with_conn_admin,reserved_user_with_service_admin;
+DROP USER normal_user_with_super,normal_user_without_super,normal_user_with_conn_admin,normal_user_with_service_admin;

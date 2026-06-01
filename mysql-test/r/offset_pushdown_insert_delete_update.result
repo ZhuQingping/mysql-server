@@ -1,0 +1,516 @@
+SET @old_innodb_lock_wait_timeout= @@global.innodb_lock_wait_timeout;
+SET @@global.innodb_lock_wait_timeout = 1;
+# ----------------------
+# ----------------------
+#  MVCC - INSERT/ UPDATE/ DELETE with OFFSET PUSHDOWN
+# For each, we test
+# 1/ INSERT/ UPDATE/ DELETE first in one session then SELECT with OP  in another
+# 2/ SELECT with OP first in one session then INSERT/ UPDATE/ DELETE in another
+# ----------------------
+# ----------------------
+# To keep track of the number of rows skipped by OFFSET pushdown we use:
+# SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+# SELECT query
+# SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+CREATE TABLE t3 (a INT, b INT, INDEX(a,b));
+INSERT INTO t3 VALUES (1, 2), (2, 3), (3, 3), (4, 3);
+# ----------------------
+# ----------------------
+# MVCC INSERT and OFFSET pushdown
+# ----------------------
+# ----------------------
+# Insert in one session, not committed, SELECT query with OP in another session - check that results are consistent
+# session 1: Trx that inserts a new rows
+START TRANSACTION;
+INSERT INTO t3 VALUES (6,6);
+SELECT * FROM t3;
+a	b
+1	2
+2	3
+3	3
+4	3
+6	6
+# session 2: Trx with SELECT query with OP - check that the inserted row is not accounted for
+# neither for the SELECT with and without OFFSET pushdown.
+START TRANSACTION;
+explain format=tree SELECT * FROM t3 WHERE a>1 LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=#.# rows=##)
+    -> Covering index range scan on t3 using a over (1 < a)  (cost=#.# rows=##)
+
+# Both SELECT return the same output! rows skipped differ
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
+a	b
+3	3
+4	3
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+1
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
+a	b
+3	3
+4	3
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+0
+rollback;
+rollback;
+# MVCC Insert and Offset pushdown
+# Select first with OP - insert then
+# session 1: SELECT rows using OP
+START TRANSACTION;
+explain SELECT * FROM t3 WHERE a>1 LIMIT 100 OFFSET 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t3	NULL	range	a	a	5	NULL	3	100.00	Using offset pushdown; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t3`.`a` AS `a`,`test`.`t3`.`b` AS `b` from `test`.`t3` where (`test`.`t3`.`a` > 1) limit 1,100
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
+a	b
+3	3
+4	3
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+1
+# session 2: Insert rows in the table queried by OP
+START TRANSACTION;
+INSERT INTO t3 VALUES (6,6);
+# (6,6) is inserted here
+SELECT * FROM t3;
+a	b
+1	2
+2	3
+3	3
+4	3
+6	6
+# (6,6) is not visible.
+SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
+a	b
+3	3
+4	3
+rollback;
+rollback;
+# ----------------------
+# ----------------------
+# MVCC UPDATE with OFFSET pushdown
+# ----------------------
+# ----------------------
+# session 1: Trx that updates a row
+START TRANSACTION;
+UPDATE t3 SET a = 8 WHERE a = 4;
+SELECT * FROM t3;
+a	b
+1	2
+2	3
+3	3
+8	3
+# session 2: Trx with SELECT query with OP - check that the updated row is not accounted for
+# neither for the SELECT with and without OFFSET pushdown.
+START TRANSACTION;
+# Both output the same rows - rows skipped differ
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
+a	b
+3	3
+4	3
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+1
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
+a	b
+3	3
+4	3
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+0
+rollback;
+rollback;
+# MVCC UPDATE and Offset pushdown
+# Select first with OP - UPDATE then
+# session 1: SELECT rows using OP
+START TRANSACTION;
+explain SELECT * FROM t3 WHERE a>1 LIMIT 100 OFFSET 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t3	NULL	range	a	a	5	NULL	3	100.00	Using offset pushdown; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t3`.`a` AS `a`,`test`.`t3`.`b` AS `b` from `test`.`t3` where (`test`.`t3`.`a` > 1) limit 1,100
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
+a	b
+3	3
+4	3
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+1
+# session 2: Insert rows in the table queried by OP
+UPDATE t3 SET a = 8 WHERE a =4;
+# (8,3) is updated here
+SELECT * FROM t3;
+a	b
+1	2
+2	3
+3	3
+8	3
+# (8,3) is not updated.
+SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
+a	b
+3	3
+4	3
+rollback;
+rollback;
+# ----------------------
+# ----------------------
+# Additional testing for MVCC UPDATE : SELECT first - UPDATE then with VARCHAR
+# ----------------------
+# ----------------------
+CREATE TABLE t4 ( a INT, b VARCHAR(50), INDEX(a));
+INSERT INTO t4 VALUES (1,'apples'),(2,'bananas'), (3,'oranges'),(4,'pears');
+start transaction;
+EXPLAIN format=tree SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 10/1 row(s), with offset pushdown  (cost=1.16 rows=2)
+    -> Index range scan on t4 using a over (2 < a)  (cost=1.16 rows=2)
+
+# Does not inspect clustered record.
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
+a	b
+4	pears
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+1
+start transaction;
+UPDATE t4 SET a = 2 WHERE a > 1;
+UPDATE t4 SET b = ' I really do not like fruits' WHERE a = 2;
+SELECT * FROM t4;
+a	b
+1	apples
+2	 I really do not like fruits
+2	 I really do not like fruits
+2	 I really do not like fruits
+# Inspect clustered record - table unchanged
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
+a	b
+4	pears
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+1
+rollback;
+rollback;
+DROP TABLE t4;
+# ----------------------
+# ----------------------
+# With PK access
+# ----------------------
+# ----------------------
+CREATE TABLE t4 ( a INT, b VARCHAR(50), PRIMARY KEY (a));
+INSERT INTO t4 VALUES (1,'apples'),(2,'bananas'), (3,'oranges'),(4,'pears');
+start transaction;
+EXPLAIN format=tree SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 10/1 row(s), with offset pushdown  (cost=0.91 rows=2)
+    -> Index range scan on t4 using PRIMARY over (2 < a)  (cost=0.91 rows=2)
+
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
+a	b
+4	pears
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+1
+start transaction;
+UPDATE t4 SET a = 5 WHERE a = 1;
+UPDATE t4 SET b = ' I really do not like fruits' WHERE a = 5;
+SELECT * FROM t4;
+a	b
+2	bananas
+3	oranges
+4	pears
+5	 I really do not like fruits
+# table unchanged
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
+a	b
+4	pears
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+1
+rollback;
+rollback;
+DROP TABLE t4;
+# ----------------------
+# ----------------------
+# MVCC DELETE and OFFSET pushdown
+# ----------------------
+# ----------------------
+# Delete row in one session, not committed, SELECT query (including the row to be deleted)
+# with OP in another session - check that results are consistent
+insert into t3 values (3,10),(3,11),(3,12);
+# session 1: Trx that delete a row
+start transaction;
+DELETE FROM  t3  WHERE a > 2;
+SELECT * FROM t3;
+a	b
+1	2
+2	3
+# session 2 : Trx that SELECTs the "to be deleted" row with OP - check that the deleted rows is not accounted for
+# neither for the SELECT with and without OFFSET pushdown.
+explain SELECT * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t3	NULL	ref	a	a	5	const	4	100.00	Using offset pushdown; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t3`.`a` AS `a`,`test`.`t3`.`b` AS `b` from `test`.`t3` where (`test`.`t3`.`a` = 3) limit 1,100
+# They both output the same - rows skipped differ
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN()*/ * FROM t3 WHERE a=3 LIMIT 100 OFFSET 1;
+a	b
+3	10
+3	11
+3	12
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+0
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
+a	b
+3	10
+3	11
+3	12
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+1
+rollback;
+# ----------------------
+# ----------------------
+# SELECT first- DELETE NEXT
+# ----------------------
+# ----------------------
+# session 1: SELECT with OP
+start transaction;
+explain SELECT * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t3	NULL	ref	a	a	5	const	4	100.00	Using offset pushdown; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t3`.`a` AS `a`,`test`.`t3`.`b` AS `b` from `test`.`t3` where (`test`.`t3`.`a` = 3) limit 1,100
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
+a	b
+3	10
+3	11
+3	12
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+1
+# session 2 : DELETE after SELECT with OP
+DELETE FROM  t3  WHERE a > 2;
+# rows are deleted here
+SELECT * FROM t3;
+a	b
+1	2
+2	3
+# rows are not deleted here
+SELECT * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
+a	b
+3	10
+3	11
+3	12
+rollback;
+rollback;
+DROP TABLE t3;
+# ----------------------
+# ----------------------
+# SELECT for UPDATE - INSERT with LOCKING READ
+# ----------------------
+# ----------------------
+CREATE TABLE t1 (
+dummy INT PRIMARY KEY,
+a INT UNIQUE,
+b INT,
+KEY (a)
+) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,1,1),(2,2,2),(3,3,3),(4,4,4),(5,5,5);
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+START TRANSACTION;
+EXPLAIN SELECT * FROM t1 WHERE a < 2 FOR UPDATE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a,a_2	a	5	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dummy` AS `dummy`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` < 2)
+SELECT * FROM t1 WHERE a < 2 FOR UPDATE;
+dummy	a	b
+1	1	1
+START TRANSACTION;
+explain format=tree SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t1  LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=#.# rows=##)
+    -> Table scan on t1  (cost=#.# rows=##)
+
+explain format=tree SELECT * FROM t1  LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=#.# rows=##)
+    -> Table scan on t1  (cost=#.# rows=##)
+
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t1  LIMIT 100 OFFSET 1;
+dummy	a	b
+2	2	2
+3	3	3
+4	4	4
+5	5	5
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+0
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t1  LIMIT 100 OFFSET 1;
+dummy	a	b
+2	2	2
+3	3	3
+4	4	4
+5	5	5
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+1
+ROLLBACK;
+ROLLBACK;
+DROP TABLE t1;
+# SELECT for update
+CREATE TABLE t1 (
+dummy INT PRIMARY KEY,
+a INT UNIQUE,
+b INT,
+KEY (a)
+) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,1,1),(2,2,2),(3,3,3),(4,4,4),(5,5,5);
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+START TRANSACTION;
+EXPLAIN SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t1 WHERE a < 2 LIMIT 100 OFFSET 2 FOR UPDATE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a,a_2	a	5	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select /*+ NO_OFFSET_PUSHDOWN(@`select#1`) */ `test`.`t1`.`dummy` AS `dummy`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` < 2) limit 2,100
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t1 WHERE a < 2 LIMIT 100 OFFSET 2 FOR UPDATE;
+dummy	a	b
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+0
+START TRANSACTION;
+INSERT INTO t1 VALUES (2,2,2);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+ROLLBACK;
+ROLLBACK;
+DROP TABLE t1;
+# SELECT for update with OP activated in for update
+CREATE TABLE t1 (
+dummy INT PRIMARY KEY,
+a INT UNIQUE,
+b INT,
+KEY (a)
+) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,1,1),(2,2,2),(3,3,3),(4,4,4),(5,5,5);
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+START TRANSACTION;
+EXPLAIN SELECT * FROM t1 WHERE a < 2 LIMIT 100 OFFSET 2 FOR UPDATE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a,a_2	a	5	NULL	1	100.00	Using offset pushdown
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dummy` AS `dummy`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` < 2) limit 2,100
+# does not place a lock on the rows skipped by OFFSET pushdown
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t1 WHERE a < 2 LIMIT 100 OFFSET 2 FOR UPDATE;
+dummy	a	b
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+1
+START TRANSACTION;
+# OP is deactivated here
+INSERT INTO t1 VALUES (2,2,2);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+ROLLBACK;
+ROLLBACK;
+DROP TABLE t1;
+# ----------------
+# ----------------
+# Virtual COLUMN - UPDATE
+# ----------------
+# ----------------
+CREATE TABLE tv (
+a INT DEFAULT NULL,
+b INT DEFAULT NULL,
+c INT GENERATED ALWAYS AS ((a + b)) VIRTUAL,
+KEY c (c)
+);
+INSERT INTO tv(a,b) VALUES (1,2),(3,4),(5,6);
+# NON-LOCKING read
+start transaction;
+EXPLAIN format=tree SELECT * FROM tv WHERE c > 5 LIMIT 1 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 1/1 row(s), with offset pushdown  (cost=1.16 rows=1)
+    -> Index range scan on tv using c over (5 < c)  (cost=1.16 rows=2)
+
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM tv WHERE c > 5 LIMIT 1 OFFSET 1;
+a	b	c
+5	6	11
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+1
+start transaction;
+UPDATE tv SET a = 12 WHERE b > 1;
+SELECT * FROM tv;
+a	b	c
+12	2	14
+12	4	16
+12	6	18
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM tv WHERE c > 5 LIMIT 1 OFFSET 1;
+a	b	c
+5	6	11
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+1
+rollback;
+rollback;
+# ----------------
+# ----------------
+# Virtual COLUMN: UPDATE with LOCKING READ
+# ----------------
+# ----------------
+start transaction;
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM tv WHERE c > 5 LIMIT 1 OFFSET 1 FOR UPDATE;
+a	b	c
+5	6	11
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+1
+start transaction;
+UPDATE tv SET a = 15 WHERE b = 2;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE tv SET a = 12 WHERE b > 2;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+SET @save_skippped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM tv WHERE c > 5 LIMIT 1 OFFSET 1;
+a	b	c
+5	6	11
+SELECT variable_value - @save_skippped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skippped_rows
+1
+rollback;
+rollback;
+DROP TABLE tv;
+# Restore orig wait timeout
+SET @@global.innodb_lock_wait_timeout = @old_innodb_lock_wait_timeout;
+DROP TABLE IF EXISTS t1;
+Warnings:
+Note	1051	Unknown table 'test.t1'

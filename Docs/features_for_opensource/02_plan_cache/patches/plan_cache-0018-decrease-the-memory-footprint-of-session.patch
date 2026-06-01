@@ -1,0 +1,91 @@
+From 49ad914fee7d10c49e4611298dbd2ad470ade6d4 Mon Sep 17 00:00:00 2001
+From: Guilhem Bichot <guilhem.bichot@contributor>
+
+Date: Thu, 25 Sep 2025 14:05:03 +0200
+Subject: [PATCH] decrease the memory footprint of session
+ plan cache.
+
+After the previous commit, continued looking for Valgrind errors.
+- One is not a problem (printing in rollback_item_tree_changes)
+
+==1433398== Conditional jump or move depends on uninitialised value(s)
+==1433398==    at 0xDCE9E85: __vfprintf_internal (vfprintf-internal.c:1516)
+==1433398==    by 0x551941E: DbugVfprintf(_IO_FILE*, char const*, __va_list_tag*) (dbug.cc:1348)
+==1433398==    by 0x55193A5: _db_doprnt_(char const*, ...) (dbug.cc:1333)
+==1433398==    by 0x3B54C9D: THD::rollback_item_tree_changes() (sql_class.cc:2040)
+==1433398==    by 0x3C71CA9: mysql_execute_command(THD*, bool) (sql_parse.cc:5470)
+==1433398==    by 0x3CD17EC: Prepared_statement::execute(THD*, String*, bool) (sql_prepare.cc:3978)
+
+and the printing is worth keeping, so I only add a comment to explain it.
+
+- One is a small problem in the printing of an index range scan: a
+String (not std::string), has a buffer which is not 0-terminated, and
+we're doing c_ptr() on it ; see the note about Valgrind in the
+implementation of c_ptr(). To fix it, I pass the length to printf() as
+advised in that note.
+
+==1433398== Conditional jump or move depends on uninitialised value(s)
+==1433398==    at 0x3A6C334: String::c_ptr() (sql_string.h:260)
+==1433398==    by 0x4410CD0: dbug_dump_index_skip_scan(int, bool, AccessPath const*) (index_skip_scan_plan.cc:696)
+==1433398==    by 0x3AC2B21: dbug_dump(AccessPath const*, int, bool) (path_helpers.h:509)
+==1433398==    by 0x3AC0853: print_quick(AccessPath*, Bitmap<64u> const*) (range_optimizer.cc:1887)
+==1433398==    by 0x3ABC864: test_quick_select(THD*, MEM_ROOT*, MEM_ROOT*, Bitmap<64u>, unsigned long, unsigned long, unsigned long long, bool, enum_order, TABLE*, bool, Item*, Bitmap<64u>*, bool, Query_block*, AccessPath**) (range_optimizer.cc:822)
+==1433398==    by 0x3C3D1D5: get_quick_record_count(THD*, JOIN_TAB*, unsigned long long, Item*) (sql_optimizer.cc:6290)
+==1433398==    by 0x3C3C482: JOIN::estimate_rowcount() (sql_optimizer.cc:6017)
+==1433398==    by 0x3C3A806: JOIN::make_join_plan() (sql_optimizer.cc:5426)
+==1433398==    by 0x3C2C9B5: JOIN::optimize(bool) (sql_optimizer.cc:713)
+==1433398==    by 0x3D17418: Query_block::optimize(THD*, bool) (sql_select.cc:2011)
+==1433398==    by 0x3DD31AD: Query_expression::optimize(THD*, TABLE*, bool, bool) (sql_union.cc:1010)
+==1433398==    by 0x3D14DBF: Sql_cmd_dml::execute_inner(THD*) (sql_select.cc:999)
+==1433398==    by 0x3D14208: Sql_cmd_dml::execute(THD*) (sql_select.cc:785)
+==1433398==    by 0x3C70DCF: mysql_execute_command(THD*, bool) (sql_parse.cc:5235)
+==1433398==    by 0x3C735F6: dispatch_sql_command(THD*, Parser_state*) (sql_parse.cc:5897)
+==1433398==    by 0x3C67DE5: dispatch_command(THD*, COM_DATA const*, enum_server_command) (sql_parse.cc:2379)
+---
+ sql/range_optimizer/index_skip_scan_plan.cc | 6 ++++--
+ sql/sql_class.cc                            | 6 ++++++
+ 2 files changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/sql/range_optimizer/index_skip_scan_plan.cc b/sql/range_optimizer/index_skip_scan_plan.cc
+index 6a4f49ce458..2db596ef4ca 100644
+--- a/sql/range_optimizer/index_skip_scan_plan.cc
++++ b/sql/range_optimizer/index_skip_scan_plan.cc
+@@ -686,14 +686,16 @@ void dbug_dump_index_skip_scan(int indent, bool verbose,
+       append_range_all_keyparts(nullptr, &range_result, &range_so_far,
+                                 param->index_range_tree,
+                                 param->index_info->key_part, false);
+-      fprintf(DBUG_FILE, "Prefix ranges: %s\n", range_result.c_ptr());
++      fprintf(DBUG_FILE, "Prefix ranges: %.*s\n",
++              static_cast<int>(range_result.length()), range_result.ptr());
+     }
+ 
+     {
+       range_result.length(0);
+       append_range(&range_result, param->range_key_part, param->min_range_key,
+                    param->max_range_key, param->range_cond_flag);
+-      fprintf(DBUG_FILE, "Range: %s\n", range_result.c_ptr());
++      fprintf(DBUG_FILE, "Range: %.*s\n",
++              static_cast<int>(range_result.length()), range_result.ptr());
+     }
+   }
+ }
+diff --git a/sql/sql_class.cc b/sql/sql_class.cc
+index bbcd290200c..eeef6b39121 100644
+--- a/sql/sql_class.cc
++++ b/sql/sql_class.cc
+@@ -2037,6 +2037,12 @@ void THD::rollback_item_tree_changes() {
+   while ((change = it++)) {
+     if (change->m_cancel) continue;
+ 
++    // Note that this printing may provoke Valgrind errors. Indeed, if
++    // *change->place is a pointer to an object which has later been destroyed
++    // (example: the change was recorded by a transformation by the optimizer,
++    // and it was a change to the m_where_cond of a JOIN, which JOIN has been
++    // disposed of), then printing it is an error ; but restoring this pointer
++    // to its previous value is ok.
+     DBUG_PRINT("info", ("rollback_item_tree_changes "
+                         "place %p curr_value %p old_value %p",
+                         change->place, *change->place, change->old_value));
+-- 
+2.23.0
+

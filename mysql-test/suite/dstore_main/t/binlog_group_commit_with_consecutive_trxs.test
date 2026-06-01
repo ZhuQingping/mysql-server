@@ -1,0 +1,31 @@
+# ==== Purpose ====
+# Verify that the consecutive transactions can be committed
+# successfully with group commit on dstore.
+#
+# ==== References ====
+#
+# US2025030700428 Implement a "BINLOG GROUP COMMIT" with one phase commit
+#
+
+--source include/have_binlog_format_row.inc
+--source include/have_only_dstore.inc
+--source include/have_log_bin.inc
+
+RESET MASTER;
+
+CREATE TABLE t1(c1 INT);
+
+--let $i = 1
+while ($i < 50) {
+  --eval INSERT INTO t1 VALUES ($i);
+  --inc $i
+}
+
+--echo #
+--echo # Check that the consecutive transactions are committed successfully.
+--echo #
+SELECT * FROM t1 ORDER BY t1.c1;
+
+# Cleanup
+DROP TABLE t1;
+

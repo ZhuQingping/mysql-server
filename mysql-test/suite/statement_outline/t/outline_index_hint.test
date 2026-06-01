@@ -1,0 +1,338 @@
+# ==== Purpose ====
+#
+# Verify the statement outline attached index hints work as expected
+# ==== Implementation ====
+#
+# 1. switch disabled, test outline index hint
+# 2. switch enabled, test outline index hint-force/use/ignore
+# 3. test outline index hint and existing index hint non-outline index hint
+# 4. test incorrect input in index hint be rejected by outline
+# 5. test outline index hint in PrepareStatement test
+# 6. multi outline index hint in same table
+# 7. multi table index hint
+# 8. nest subquery index hint
+
+call mtr.add_suppression("mysql.outline");
+call mtr.add_suppression("Statement outline");
+
+set @start_opt_outline_enabled= @@global.rds_opt_outline_enabled;
+set global rds_opt_outline_enabled = ON;
+
+connect(con_root,localhost, root,,);
+connect(conn_rdsAdmin, 127.0.0.1, rdsAdmin,,test);
+
+connection con_root;
+
+create database outline_db;
+create table outline_db.t1(id int auto_increment primary key,
+                           col1 int,
+                           col2 varchar(100),
+                           key ind_1(col1),
+                           key ind_2(col2)) engine = Dstore;
+
+create table outline_db.t2(id int auto_increment primary key,
+                           col1 int,
+                           col2 varchar(100),
+                           key ind_1(col1),
+                           key ind_2(col2)) engine = Dstore;
+
+insert into outline_db.t1 values(1, 2, 'xpchild');
+insert into outline_db.t2 values(1, 2, 'xpchild');
+
+#-----------------------------------------------------------
+# outline disabled, test index hint
+#-----------------------------------------------------------
+
+set global rds_opt_outline_enabled = OFF;
+use outline_db;
+select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1;
+select * from t1 use index() where col1 = 2 and col2 = 'xpchild' order by col1;
+select * from t1 use index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+select * from t1 ignore index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+select * from t1 use index(ind_1) ignore index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+--error ER_WRONG_USAGE
+select * from t1 use index(ind_1) force index(ind_2) where col1 = 2 and col2 = 'xpchild' order by col1;
+--error ER_KEY_DOES_NOT_EXITS
+select * from t1 use index(ind_3) where col1 = 2 and col2 = 'xpchild' order by col1;
+--error ER_KEY_DOES_NOT_EXITS
+select * from t1 force index(ind_3) where col1 = 2 and col2 = 'xpchild' order by col1;
+--error ER_KEY_DOES_NOT_EXITS
+select * from t1 ignore index(ind_3) where col1 = 2 and col2 = 'xpchild' order by col1;
+
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+                                  'FOR ORDER BY', "select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1");
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+                                  '', "select * from t1 use index() where col1 = 2 and col2 = 'xpchild' order by col1");
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+                                  '', "select * from t1 use index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+                                  '', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+
+use outline_db;
+select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1;
+select * from t1 use index() where col1 = 2 and col2 = 'xpchild' order by col1;
+select * from t1 use index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+select * from t1 ignore index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+select * from t1 use index(ind_1) ignore index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+--error ER_WRONG_USAGE
+select * from t1 use index(ind_1) force index(ind_2) where col1 = 2 and col2 = 'xpchild' order by col1;
+--error ER_KEY_DOES_NOT_EXITS
+select * from t1 use index(ind_3) where col1 = 2 and col2 = 'xpchild' order by col1;
+--error ER_KEY_DOES_NOT_EXITS
+select * from t1 force index(ind_3) where col1 = 2 and col2 = 'xpchild' order by col1;
+--error ER_KEY_DOES_NOT_EXITS
+select * from t1 ignore index(ind_3) where col1 = 2 and col2 = 'xpchild' order by col1;
+
+select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild';
+
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+--replace_column 1 #
+call dbms_outln.show_outline();
+
+#-----------------------------------------------------------
+# outline enabled, test index hint
+#-----------------------------------------------------------
+
+set global rds_opt_outline_enabled = ON;
+use outline_db;
+--error ER_KEY_DOES_NOT_EXITS
+select * from t2 use index(ind_3) where col1 = 2 and col2 = 'xpchild' order by col1;
+select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild';
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+                                  'FOR ORDER BY', "select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1");
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+                                  '', "select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild'");
+
+use outline_db;
+select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1;
+select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild';
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_2',
+                                  'FOR ORDER BY', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', '',
+                                  'FOR ORDER BY', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+
+--error ER_OUTLINE_INVALID
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'ind_2',
+                                  'FOR ORDER BY', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+                                  '', "select t1.id, t2.id from t1, t2 force index(ind_1) where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild'");
+
+select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+explain select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+select t1.id, t2.id from t1, t2 force index(ind_1) where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild';
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+#-----------------------------------------------------------
+# test exist index hint and outline rules
+#-----------------------------------------------------------
+
+set optimizer_trace='enabled=on';
+use outline_db;
+
+select * from t1 use index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_2',
+                                  'FOR ORDER BY', "select * from t1 use index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+# use outline hint , ignore index hint from sql
+select * from t1 use index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+
+select * from information_schema.optimizer_trace;
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_3',
+                                  'FOR ORDER BY', "select * from t1 use index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+# report warning, and apply index ind_1
+select * from t1 use index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+
+select * from information_schema.optimizer_trace;
+
+select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1;
+set optimizer_trace='enabled=off';
+
+--error ER_WRONG_USAGE
+select * from t1 use index(ind_1) force index(ind_2) where col1 = 2 and col2 = 'xpchild' order by col1;
+
+--error ER_KEY_DOES_NOT_EXITS
+select * from t1 use index(ind_3) where col1 = 2 and col2 = 'xpchild' order by col1;
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+#-----------------------------------------------------------
+# test index hint list is empty
+#-----------------------------------------------------------
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', '',
+                                  'FOR ORDER BY', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+
+call dbms_outln.preview_outline("outline_db", "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;");
+explain select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+--error ER_OUTLINE_INVALID
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', '',
+                                  'FOR ORDER BY', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+--error ER_OUTLINE_INVALID
+call dbms_outln.add_index_outline('outline_db', '', 1, 'IGNORE INDEX', '',
+                                  'FOR ORDER BY', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+
+#-----------------------------------------------------------
+# PrepareStatement test
+#-----------------------------------------------------------
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_2',
+                                  '', "select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1");
+
+set optimizer_trace='enabled=on';
+explain select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1;
+prepare pre_stmt from 'select * from t1 where col1 = ? and col2 = ? order by col1';
+set @a = 3,@b = 'xpchild';
+execute pre_stmt using @a,@b;
+select * from information_schema.optimizer_trace;
+set optimizer_trace='enabled=off';
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+#-----------------------------------------------------------
+# multi index hint
+#-----------------------------------------------------------
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_2',
+                                  '', "select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1");
+use outline_db;
+explain select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1;
+call dbms_outln.preview_outline('outline_db', "select * from t1 where col1 = 2 and col2 ='xpchild' order by col1");
+
+# second use index hint
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+                                  'FOR ORDER BY', "select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1");
+
+use outline_db;
+explain select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1;
+call dbms_outln.preview_outline('outline_db', "select * from t1 where col1 = 2 and col2 ='xpchild' order by col1");
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1 ,ind_2',
+                                  'FOR ORDER BY', "select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1");
+
+use outline_db;
+explain select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1;
+
+call dbms_outln.preview_outline('outline_db', "select * from t1 where col1 = 2 and col2 ='xpchild' order by col1");
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+#-----------------------------------------------------------
+# multi table index hint
+#-----------------------------------------------------------
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+                                  '', "select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild'");
+
+call dbms_outln.add_index_outline('outline_db', '', 2, 'USE INDEX', 'ind_1',
+                                  '', "select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild'");
+
+use outline_db;
+explain select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild';
+
+call dbms_outln.preview_outline('outline_db', "select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild'");
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_2',
+                                  '', "select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild'");
+
+call dbms_outln.add_index_outline('outline_db', '', 2, 'USE INDEX', 'ind_2',
+                                  '', "select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild'");
+
+use outline_db;
+explain select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild';
+
+call dbms_outln.preview_outline('outline_db', "select t1.id, t2.id from t1, t2 where t1.col1 = t2.col1 and t1.col2 = t2.col2 and t1.col1 = 1 and t1.col2 = 'xpchild'");
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+#-----------------------------------------------------------
+# nest subquery index hint
+#-----------------------------------------------------------
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+                                  '', "select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild'");
+call dbms_outln.add_index_outline('outline_db', '', 2, 'USE INDEX', 'ind_1',
+                                  '', "select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild'");
+use outline_db;
+explain select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild';
+call dbms_outln.preview_outline("outline_db", "select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 ='xpchild') and col2 = 'xpchild'");
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_2',
+                                  '', "select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild'");
+call dbms_outln.add_index_outline('outline_db', '', 2, 'USE INDEX', 'ind_2',
+                                  '', "select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild'");
+use outline_db;
+explain select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild';
+call dbms_outln.preview_outline("outline_db", "select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 ='xpchild') and col2 = 'xpchild'");
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+#-----------------------------------------------------------
+# index hint report error and overflow
+#-----------------------------------------------------------
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_3',
+                                  '', "select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild'");
+
+select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild';
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+call dbms_outln.add_index_outline('outline_db', '', 3, 'USE INDEX', 'ind_1',
+                                  '', "select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild'");
+
+select id from t1 where col1 in (select col1 from t2 where col1 = 1 and col2 = 'xpchild') and col2 = 'xpchild';
+
+--replace_column 1 #
+call dbms_outln.show_outline();
+
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+
+connection default;
+disconnect con_root;
+disconnect conn_rdsAdmin;
+drop database outline_db;
+set global rds_opt_outline_enabled = @start_opt_outline_enabled;

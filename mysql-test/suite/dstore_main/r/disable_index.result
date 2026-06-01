@@ -1,0 +1,192 @@
+SET @optimizer_switch_saved = @@optimizer_switch;
+CREATE TABLE tt (
+a INT,
+b INT,
+c INT,
+INDEX idx_abc(a,b,c)
+) ENGINE=Dstore;
+CREATE TABLE t (
+a INT
+);
+INSERT INTO t VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10);
+INSERT INTO tt(a,b,c) SELECT t1.a, t2.a, t3.a FROM t t1, t t2, t t3;
+ANALYZE TABLE tt UPDATE HISTOGRAM ON a,b,c;
+Table	Op	Msg_type	Msg_text
+test.tt	histogram	status	Histogram statistics created for column 'a'.
+test.tt	histogram	status	Histogram statistics created for column 'b'.
+test.tt	histogram	status	Histogram statistics created for column 'c'.
+ANALYZE TABLE tt;
+Table	Op	Msg_type	Msg_text
+test.tt	analyze	status	OK
+# Enable index scan in Dstore
+SET @@optimizer_switch = 'dstore_enable_indexscan=on';
+EXPLAIN SELECT a, COUNT(*) AS cnt, SUM(b) AS total_b FROM tt GROUP BY a ORDER BY a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tt	NULL	index	idx_abc	idx_abc	15	NULL	1000	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`tt`.`a` AS `a`,count(0) AS `cnt`,sum(`test`.`tt`.`b`) AS `total_b` from `test`.`tt` group by `test`.`tt`.`a` order by `test`.`tt`.`a`
+SELECT a, COUNT(*) AS cnt, SUM(b) AS total_b FROM tt GROUP BY a ORDER BY a;
+a	cnt	total_b
+1	100	550
+2	100	550
+3	100	550
+4	100	550
+5	100	550
+6	100	550
+7	100	550
+8	100	550
+9	100	550
+10	100	550
+EXPLAIN SELECT * FROM tt ORDER BY a, b, c LIMIT 10;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tt	NULL	index	NULL	idx_abc	15	NULL	10	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`tt`.`a` AS `a`,`test`.`tt`.`b` AS `b`,`test`.`tt`.`c` AS `c` from `test`.`tt` order by `test`.`tt`.`a`,`test`.`tt`.`b`,`test`.`tt`.`c` limit 10
+SELECT * FROM tt ORDER BY a, b, c LIMIT 10;
+a	b	c
+1	1	1
+1	1	2
+1	1	3
+1	1	4
+1	1	5
+1	1	6
+1	1	7
+1	1	8
+1	1	9
+1	1	10
+EXPLAIN SELECT COUNT(*) FROM tt;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tt	NULL	index	NULL	idx_abc	15	NULL	1000	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `test`.`tt`
+EXPLAIN SELECT SUM(b),AVG(a) FROM tt;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tt	NULL	index	NULL	idx_abc	15	NULL	1000	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select sum(`test`.`tt`.`b`) AS `SUM(b)`,avg(`test`.`tt`.`a`) AS `AVG(a)` from `test`.`tt`
+EXPLAIN SELECT * FROM tt WHERE a % 2 = 1 AND b % 2 = 1 AND c % 2 = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tt	NULL	index	NULL	idx_abc	15	NULL	1000	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`tt`.`a` AS `a`,`test`.`tt`.`b` AS `b`,`test`.`tt`.`c` AS `c` from `test`.`tt` where (((`test`.`tt`.`a` % 2) = 1) and ((`test`.`tt`.`b` % 2) = 1) and ((`test`.`tt`.`c` % 2) = 1))
+EXPLAIN SELECT * FROM tt FORCE INDEX (idx_abc) WHERE  b % 2 = 1 AND c % 2 = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tt	NULL	index	NULL	idx_abc	15	NULL	1000	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`tt`.`a` AS `a`,`test`.`tt`.`b` AS `b`,`test`.`tt`.`c` AS `c` from `test`.`tt` FORCE INDEX (`idx_abc`) where (((`test`.`tt`.`b` % 2) = 1) and ((`test`.`tt`.`c` % 2) = 1))
+#
+# Disable index scan in Dstore
+# Even when index scan is disabled, queries that can use indexes to avoid sorting
+# (e.g., ORDER BY and GROUP BY aligned with index) will still benefit from the index
+#
+SET @@optimizer_switch = 'dstore_enable_indexscan=off';
+EXPLAIN SELECT a, COUNT(*) AS cnt, SUM(b) AS total_b FROM tt GROUP BY a ORDER BY a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tt	NULL	index	idx_abc	idx_abc	15	NULL	1000	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`tt`.`a` AS `a`,count(0) AS `cnt`,sum(`test`.`tt`.`b`) AS `total_b` from `test`.`tt` group by `test`.`tt`.`a` order by `test`.`tt`.`a`
+SELECT a, COUNT(*) AS cnt, SUM(b) AS total_b FROM tt GROUP BY a ORDER BY a;
+a	cnt	total_b
+1	100	550
+2	100	550
+3	100	550
+4	100	550
+5	100	550
+6	100	550
+7	100	550
+8	100	550
+9	100	550
+10	100	550
+EXPLAIN SELECT * FROM tt ORDER BY a, b, c LIMIT 10;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tt	NULL	index	NULL	idx_abc	15	NULL	10	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`tt`.`a` AS `a`,`test`.`tt`.`b` AS `b`,`test`.`tt`.`c` AS `c` from `test`.`tt` order by `test`.`tt`.`a`,`test`.`tt`.`b`,`test`.`tt`.`c` limit 10
+SELECT * FROM tt ORDER BY a, b, c LIMIT 10;
+a	b	c
+1	1	1
+1	1	2
+1	1	3
+1	1	4
+1	1	5
+1	1	6
+1	1	7
+1	1	8
+1	1	9
+1	1	10
+EXPLAIN SELECT COUNT(*) FROM tt;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tt	NULL	ALL	NULL	NULL	NULL	NULL	1000	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `test`.`tt`
+EXPLAIN SELECT SUM(b),AVG(a) FROM tt;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tt	NULL	ALL	NULL	NULL	NULL	NULL	1000	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select sum(`test`.`tt`.`b`) AS `SUM(b)`,avg(`test`.`tt`.`a`) AS `AVG(a)` from `test`.`tt`
+EXPLAIN SELECT * FROM tt WHERE a % 2 = 1 AND b % 2 = 1 AND c % 2 = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tt	NULL	ALL	NULL	NULL	NULL	NULL	1000	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`tt`.`a` AS `a`,`test`.`tt`.`b` AS `b`,`test`.`tt`.`c` AS `c` from `test`.`tt` where (((`test`.`tt`.`a` % 2) = 1) and ((`test`.`tt`.`b` % 2) = 1) and ((`test`.`tt`.`c` % 2) = 1))
+EXPLAIN SELECT * FROM tt FORCE INDEX (idx_abc) WHERE  b % 2 = 1 AND c % 2 = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tt	NULL	ALL	NULL	NULL	NULL	NULL	1000	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`tt`.`a` AS `a`,`test`.`tt`.`b` AS `b`,`test`.`tt`.`c` AS `c` from `test`.`tt` FORCE INDEX (`idx_abc`) where (((`test`.`tt`.`b` % 2) = 1) and ((`test`.`tt`.`c` % 2) = 1))
+DROP TABLE t;
+DROP TABLE tt;
+#
+# BUG2025121548996
+#
+CREATE TABLE t (
+c1 varbinary(3) NOT NULL,
+c2 double NOT NULL,
+c3 int(10) unsigned zerofill DEFAULT NULL,
+PRIMARY KEY (c1,c2)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+Warnings:
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO t (c1, c2, c3) VALUES
+(0x6B, -9.183, 4),
+(0x38, -9.183, 4),
+(0x53, -9.183, 4),
+(0x51, -9.183, 4),
+(0x52, -9.183, 4),
+(0x77, -9.183, 4),
+(0x36, -9.183, 4),
+(0x36, 58, 1),
+(0x30, -9.183, 7),
+(0x4E, -3.6163668666435744e306, 7),
+(0x6D, -9.183, 0),
+(0x39, 1.7976931348623157e308, 1),
+(0x75, 43.1334, 7),
+(0x65, 68.1563, 4),
+(0x6F, 1.009, NULL),
+(0x61, -18, NULL),
+(0x53, 12.991, NULL),
+(0x62, -26, 1),
+(0x38, 78.1671, 3),
+(0x41, 27, 1),
+(0x4E, 1.009, 0);
+SET @@optimizer_switch = 'loosescan=on';
+SET @@optimizer_switch = 'dstore_enable_indexscan=on';
+SELECT count(*) FROM t WHERE (((c1) IN (SELECT c1 AS ca7 FROM t order by 1 )));
+count(*)
+21
+SET @@optimizer_switch = 'dstore_enable_indexscan=off';
+SELECT count(*) FROM t WHERE (((c1) IN (SELECT c1 AS ca7 FROM t order by 1 )));
+count(*)
+21
+SET @@optimizer_switch = 'loosescan=off';
+SET @@optimizer_switch = 'dstore_enable_indexscan=on';
+SELECT count(*) FROM t WHERE (((c1) IN (SELECT c1 AS ca7 FROM t order by 1 )));
+count(*)
+21
+SET @@optimizer_switch = 'dstore_enable_indexscan=off';
+SELECT count(*) FROM t WHERE (((c1) IN (SELECT c1 AS ca7 FROM t order by 1 )));
+count(*)
+21
+drop table t;
+SET @@optimizer_switch = @optimizer_switch_saved;

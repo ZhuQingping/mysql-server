@@ -1,0 +1,114 @@
+--source include/have_debug.inc
+
+--echo # BUG2023012801236: When innodb_force_recovery=1 and then install the
+--echo # audit log plugin, the database crashes.
+# This is a test case for the bugfix: BUG2023012801236.
+# Related design documents and details are available at the following link:
+# https://clouddevops.huawei.com/#/product/my/workbench/bug/2196909
+# Simulate multiple null pointer exceptions. It is expected that no crash occurs.
+# innodb_force_recovery is always 1.
+--echo
+
+--echo # ----------------------------Case 1.1------------------------------------
+SET debug = "+d, simulate_audit_account_map_nullptr";
+--error ER_DA_PLUGIN_INSTALL_ERROR
+INSTALL PLUGIN audit_log SONAME 'audit_log.so';
+--echo # The mysqld process is normal, and the PLUGINS table does not contain the
+--echo # audit_log plugin information.
+SELECT * FROM INFORMATION_SCHEMA.PLUGINS WHERE `PLUGIN_NAME`='audit_log';
+SET debug = "-d, simulate_audit_account_map_nullptr";
+--echo
+
+--echo # ----------------------------Case 1.2------------------------------------
+SET debug = "+d, simulate_audit_database_map_nullptr";
+--error ER_DA_PLUGIN_INSTALL_ERROR
+INSTALL PLUGIN audit_log SONAME 'audit_log.so';
+--echo # The mysqld process is normal, and the PLUGINS table does not contain the
+--echo # audit_log plugin information.
+SELECT * FROM INFORMATION_SCHEMA.PLUGINS WHERE `PLUGIN_NAME`='audit_log';
+SET debug = "-d, simulate_audit_database_map_nullptr";
+--echo
+
+--echo # ----------------------------Case 1.3------------------------------------
+SET debug = "+d, simulate_audit_command_map_nullptr";
+--error ER_DA_PLUGIN_INSTALL_ERROR
+INSTALL PLUGIN audit_log SONAME 'audit_log.so';
+--echo # The mysqld process is normal, and the PLUGINS table does not contain the
+--echo # audit_log plugin information.
+SELECT * FROM INFORMATION_SCHEMA.PLUGINS WHERE `PLUGIN_NAME`='audit_log';
+SET debug = "-d, simulate_audit_command_map_nullptr";
+--echo
+
+
+--echo # BUG2023052604030: When innodb_force_recovery=1 and System variables
+--echo # related to the audit log are set in the configuration file. Then install
+--echo # the audit log plugin, the database crashes.
+# This is a test case for the bugfix: BUG2023052604030.
+# Related design documents and details are available at the following link:
+# https://clouddevops.huawei.com/#/bug/BUG2023052604030
+# https://jira.percona.com/browse/PS-8797
+--echo
+
+--echo # ----------------------------Case 2.1------------------------------------
+--let $restart_parameters="restart:  --plugin_load='' --innodb_force_recovery=1 --loose_audit_log_exclude_accounts='root@%'"
+--source include/restart_mysqld.inc
+# Mysqld will not crash.
+--error ER_DA_PLUGIN_INSTALL_ERROR 
+INSTALL PLUGIN audit_log SONAME 'audit_log.so';
+--echo
+
+--echo # ----------------------------Case 2.2------------------------------------
+--let $restart_parameters="restart:  --plugin_load='' --innodb_force_recovery=1 --loose_audit_log_include_accounts='root@%'"
+--source include/restart_mysqld.inc
+# Mysqld will not crash.
+--error ER_DA_PLUGIN_INSTALL_ERROR 
+INSTALL PLUGIN audit_log SONAME 'audit_log.so';
+--echo
+
+--echo # ----------------------------Case 2.3------------------------------------
+--let $restart_parameters="restart:  --plugin_load='' --innodb_force_recovery=1 --loose_audit_log_exclude_databases='test'"
+--source include/restart_mysqld.inc
+# Mysqld will not crash.
+--error ER_DA_PLUGIN_INSTALL_ERROR 
+INSTALL PLUGIN audit_log SONAME 'audit_log.so';
+--echo
+
+--echo # ----------------------------Case 2.4------------------------------------
+--let $restart_parameters="restart:  --plugin_load='' --innodb_force_recovery=1 --loose_audit_log_include_databases='test'"
+--source include/restart_mysqld.inc
+# Mysqld will not crash.
+--error ER_DA_PLUGIN_INSTALL_ERROR 
+INSTALL PLUGIN audit_log SONAME 'audit_log.so';
+--echo
+
+--echo # ----------------------------Case 2.5------------------------------------
+--let $restart_parameters="restart:  --plugin_load='' --innodb_force_recovery=1 --loose_audit_log_exclude_commands='create_db'"
+--source include/restart_mysqld.inc
+# Mysqld will not crash.
+--error ER_DA_PLUGIN_INSTALL_ERROR 
+INSTALL PLUGIN audit_log SONAME 'audit_log.so';
+--echo
+
+--echo # ----------------------------Case 2.6------------------------------------
+--let $restart_parameters="restart:  --plugin_load='' --innodb_force_recovery=1 --loose_audit_log_include_commands='create_db'"
+--source include/restart_mysqld.inc
+# Mysqld will not crash.
+--error ER_DA_PLUGIN_INSTALL_ERROR 
+INSTALL PLUGIN audit_log SONAME 'audit_log.so';
+--echo
+
+--echo # ----------------------------Case 2.7------------------------------------
+--let $restart_parameters="restart:  --plugin_load='' --innodb_force_recovery=1 --loose_audit_log_anonymized_ip=192.168.1.2"
+--source include/restart_mysqld.inc
+# Mysqld will not crash.
+--error ER_DA_PLUGIN_INSTALL_ERROR 
+INSTALL PLUGIN audit_log SONAME 'audit_log.so';
+
+--let $restart_parameters="restart: --innodb_force_recovery=0"
+--source include/restart_mysqld.inc
+
+call mtr.add_suppression("Skip updating information_schema metadata in InnoDB read-only mode.");
+call mtr.add_suppression("Skip re-populating collations and character sets tables in InnoDB read-only mode.");
+call mtr.add_suppression("Skipped updating resource group metadata in InnoDB read only mode.");
+call mtr.add_suppression("innodb_force_recovery is on. We do not allow database modifications by the user. Shut down mysqld and edit my.cnf to set innodb_force_recovery=0");
+call mtr.add_suppression("unknown variable 'loose_audit_log");

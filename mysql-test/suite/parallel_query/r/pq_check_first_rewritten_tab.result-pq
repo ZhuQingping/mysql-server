@@ -1,0 +1,88 @@
+create table t1(
+a int NOT NULL,
+b varchar(50)
+) ENGINE=Innodb DEFAULT CHARSET=utf8mb4;
+insert into t1 values (2, 'mysql'), (1, NULL), (0, 'hwsql');
+select * from t1;
+a	b
+2	mysql
+1	NULL
+0	hwsql
+drop table if exists `t1`;
+SET NAMES utf8mb4;
+SET collation_connection='gb18030_chinese_ci';
+CREATE TABLE t1(C VARCHAR(100) CHARACTER SET gb18030, KEY(c(20)));
+INSERT INTO t1 VALUES(0xD2A3CFEBB9ABE8AAB5B1C4EAA3ACD0A1C7C7B3F5BCDEC1CBA3ACD0DBD7CBD3A2B7A2A1A3);
+INSERT INTO t1 VALUES(0xD3F0C9C8C2DABDEDA3ACCCB8D0A6BCE4A1A2E9C9E9D6BBD2B7C9D1CCC3F0A1A3);
+INSERT INTO t1 VALUES(0xB9CAB9FAC9F1D3CEA3ACB6E0C7E9D3A6D0A6CED2A1A2D4E7C9FABBAAB7A2A1A3);
+INSERT INTO t1 VALUES(0xC8CBBCE4C8E7C3CEA3ACD2BBE9D7BBB9F5AABDADD4C2A1A3);
+SELECT c, HEX(c), CONVERT(c USING utf8mb4) FROM t1;
+c	HEX(c)	CONVERT(c USING utf8mb4)
+遥想公瑾当年，小乔初嫁了，雄姿英发。	D2A3CFEBB9ABE8AAB5B1C4EAA3ACD0A1C7C7B3F5BCDEC1CBA3ACD0DBD7CBD3A2B7A2A1A3	遥想公瑾当年，小乔初嫁了，雄姿英发。
+羽扇纶巾，谈笑间、樯橹灰飞烟灭。	D3F0C9C8C2DABDEDA3ACCCB8D0A6BCE4A1A2E9C9E9D6BBD2B7C9D1CCC3F0A1A3	羽扇纶巾，谈笑间、樯橹灰飞烟灭。
+故国神游，多情应笑我、早生华发。	B9CAB9FAC9F1D3CEA3ACB6E0C7E9D3A6D0A6CED2A1A2D4E7C9FABBAAB7A2A1A3	故国神游，多情应笑我、早生华发。
+人间如梦，一樽还酹江月。	C8CBBCE4C8E7C3CEA3ACD2BBE9D7BBB9F5AABDADD4C2A1A3	人间如梦，一樽还酹江月。
+drop table if exists `t1`;
+create table t1 (
+id int,
+a varchar(100),
+b varchar(512),
+c JSON,
+d geometry) Engine = InnoDB DEFAULT CHARSET=utf8mb4;
+insert into t1 values (1, 'hello', 'At the time of granting a lock to a transaction', '{"NAME": "Brett", "email": "brett@xxx.com"}', ST_GeometryFromText('point(108.9498710632 34.2588125935)'));
+insert into t1 values (2, 'Dependencies', 'these dependencies can be quite complex', '{"time":"2015-01-01 13:00:00","ip":"192.168.1.1","result":"fail"}', ST_GeometryFromText('point(108.9465236664 34.2598766768)'));
+insert into t1 values (null, 'At the time of granting', 'the database are equally popular', '{"time":"2015-10-07 06:44:00","ip":"192.168.1.0","result":"success"}', ST_GeometryFromText('point(108.9477252960 34.2590342786)'));
+insert into t1 values (4, 'Not all objects in the database', 'Locks are the most commonly used mechanism', '{"NAME": "Brett", "email": "126@xxx.com"}',null);
+insert into t1 values (6, 'transaction', null, null,  ST_GeometryFromText('point(108.9443349838 34.2595663206)'));
+select id, a, b from t1;
+id	a	b
+1	hello	At the time of granting a lock to a transaction
+2	Dependencies	these dependencies can be quite complex
+NULL	At the time of granting	the database are equally popular
+4	Not all objects in the database	Locks are the most commonly used mechanism
+6	transaction	NULL
+select id, b, c from t1;
+id	b	c
+1	At the time of granting a lock to a transaction	{"NAME": "Brett", "email": "brett@xxx.com"}
+2	these dependencies can be quite complex	{"ip": "192.168.1.1", "time": "2015-01-01 13:00:00", "result": "fail"}
+NULL	the database are equally popular	{"ip": "192.168.1.0", "time": "2015-10-07 06:44:00", "result": "success"}
+4	Locks are the most commonly used mechanism	{"NAME": "Brett", "email": "126@xxx.com"}
+6	NULL	NULL
+select b, ST_AsText(d) from t1;
+b	ST_AsText(d)
+At the time of granting a lock to a transaction	POINT(108.9498710632 34.2588125935)
+these dependencies can be quite complex	POINT(108.9465236664 34.2598766768)
+the database are equally popular	POINT(108.947725296 34.2590342786)
+Locks are the most commonly used mechanism	NULL
+NULL	POINT(108.9443349838 34.2595663206)
+select a, ST_AsText(d) from t1;
+a	ST_AsText(d)
+hello	POINT(108.9498710632 34.2588125935)
+Dependencies	POINT(108.9465236664 34.2598766768)
+At the time of granting	POINT(108.947725296 34.2590342786)
+Not all objects in the database	NULL
+transaction	POINT(108.9443349838 34.2595663206)
+#BUG2021072202240: there is no idle thread for parallel query and thus we disable PQ.
+#However, we have modified field's result_field in check_pq_select_fields and this
+#will lead to core when sending data using field.
+set session debug="+d, no_available_idle_threads";
+explain select * from (select id, a from t1) as sub;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a` from `test`.`t1`
+select * from (select id, a from t1) as sub;
+id	a
+1	hello
+2	Dependencies
+NULL	At the time of granting
+4	Not all objects in the database
+6	transaction
+set session debug="-d, no_available_idle_threads";
+explain select * from (select id, a from t1) as sub;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a` from `test`.`t1`
+drop table t1;

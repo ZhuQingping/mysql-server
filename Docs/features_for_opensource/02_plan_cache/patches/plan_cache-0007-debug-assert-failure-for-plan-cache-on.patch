@@ -1,0 +1,298 @@
+From f8aaa06a88a764ee706501bfc029ec7b5abb310f Mon Sep 17 00:00:00 2001
+From: Guilhem Bichot <guilhem.bichot@contributor>
+
+Date: Thu, 31 Jul 2025 15:28:51 +0200
+Subject: [PATCH] Debug assert failure for plan cache on
+ MySQL Dstore environment
+
+Fixes for failures of mtr: x.prep_stmt_crud_find and gcol.gcol_bugfixes.
+
+1) x.prep_stmt_crud_find:
+when a generated column replaces an expression in the query, and we
+apply the cached plan, we need to add this column to read_set
+again (it was added by get_gc_for_expr() during first optimization,
+but then removed when the first execution ended, during cleanup).
+2) gcol.gcol_bugfixes:
+Item_int_with_ref has a non-safe clone_item(), in the sense that if
+it does not wrap a constant it will cause an
+assertion failure (it could have been better to return 'nullptr' as
+error then). In our bug's case, we had
+WHERE column = ?
+and the '?' got wrapped into Item_int_with_ref during
+optimization (which is a short-lived Item in execution MEMROOT), we
+tried to clone the Item_int_with_ref and because
+Item_param->const_item() is false, the assertion fired. The idea of
+the fix is: even though it had not crashed, plan cache would have been
+disabled a few LOCs later at lines "Check whether Item_param objects
+have been optimized away" (as Item_param becomes invisible to the
+WalkItem in has_same_type_and_item_params()). So the fix is to move
+this check a few lines up, before clone_item() is tried.
+
+While debugging, fixed these other problems:
+3) When porting plan cache to work without PQ, I accidentally made a
+copy of a map instead of a reference, and missed an update to it,
+that could cause double cloning. This was not identified to cause real
+problems, but it was certainly not intended to work like this. So it
+is fixed here.
+4) A call to get_item_and_refresh() had been forgotten, added it for
+safety.
+5) Fixed serious compiler warning in mysql_client_test.cc.
+6) As support for engine-condition-pushdown has recently been added to
+Dstore, I add a mtr test for the combination of this feature and plan
+cache. It works fine apparently (see EXPLAIN).
+---
+ .../collections/innodb_tmp_disabled.def       |  3 -
+ mysql-test/include/session_plan_cache.inc     | 15 +++++
+ mysql-test/r/session_plan_cache.result        | 25 +++++++
+ .../dstore_main/r/session_plan_cache.result   | 25 +++++++
+ sql/sql_plan_cache.cc                         | 67 +++++++++++++------
+ testclients/mysql_client_test.cc              |  2 +-
+ 6 files changed, 112 insertions(+), 25 deletions(-)
+
+diff --git a/mysql-test/collections/innodb_tmp_disabled.def b/mysql-test/collections/innodb_tmp_disabled.def
+index 5cf50470bc8..f1779202c6e 100644
+--- a/mysql-test/collections/innodb_tmp_disabled.def
++++ b/mysql-test/collections/innodb_tmp_disabled.def
+@@ -161,6 +161,3 @@ engines/rr_trx.rr_id_3 : BUG#9999 not support perl parameter
+ engines/rr_trx.init_innodb : BUG#9999 not support perl parameter               
+ engines/rr_trx.rr_sc_sum_total : BUG#9999 not support perl parameter           
+ x.connection_expire : BUG#9999 expect fail, Need To Skip
+-x.prep_stmt_crud_find : BUG#9999 plan cache bug, refer to BUGFIX
+-gcol.gcol_bugfixes : BUG#9999 plan cache bug, refer to BUGFIX
+-
+diff --git a/mysql-test/include/session_plan_cache.inc b/mysql-test/include/session_plan_cache.inc
+index 532ca9428df..00d07eb8d09 100644
+--- a/mysql-test/include/session_plan_cache.inc
++++ b/mysql-test/include/session_plan_cache.inc
+@@ -1578,4 +1578,19 @@ show session status like "cached_plan%";
+ drop prepare s;
+ drop table t1;
+ 
++--echo #
++--echo # Test of plan cache with engine condition pushdown
++--echo #
++
++create table t2 (pk int primary key , a int, b int) ;
++prepare s from "EXPLAIN SELECT * FROM t2 WHERE a = ?";
++set @a=1;
++execute s using @a;
++set @a=2;
++execute s using @a;
++set @a=3;
++execute s using @a;
++drop prepare s;
++drop table t2;
++
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/mysql-test/r/session_plan_cache.result b/mysql-test/r/session_plan_cache.result
+index c3644744e7a..5a8e77e73cd 100644
+--- a/mysql-test/r/session_plan_cache.result
++++ b/mysql-test/r/session_plan_cache.result
+@@ -2793,4 +2793,29 @@ Cached_plan_count	2
+ Cached_plan_hits	6
+ drop prepare s;
+ drop table t1;
++#
++# Test of plan cache with engine condition pushdown
++#
++create table t2 (pk int primary key , a int, b int) ;
++prepare s from "EXPLAIN SELECT * FROM t2 WHERE a = ?";
++set @a=1;
++execute s using @a;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t2`.`pk` AS `pk`,`test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t2` where (`test`.`t2`.`a` = 1)
++set @a=2;
++execute s using @a;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t2`.`pk` AS `pk`,`test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t2` where (`test`.`t2`.`a` = 2)
++set @a=3;
++execute s using @a;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t2`.`pk` AS `pk`,`test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t2` where (`test`.`t2`.`a` = 3)
++drop prepare s;
++drop table t2;
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/mysql-test/suite/dstore_main/r/session_plan_cache.result b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+index f76355e51e0..c0d3c8421d0 100644
+--- a/mysql-test/suite/dstore_main/r/session_plan_cache.result
++++ b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+@@ -2625,4 +2625,29 @@ Cached_plan_count	2
+ Cached_plan_hits	6
+ drop prepare s;
+ drop table t1;
++#
++# Test of plan cache with engine condition pushdown
++#
++create table t2 (pk int primary key , a int, b int) ;
++prepare s from "EXPLAIN SELECT * FROM t2 WHERE a = ?";
++set @a=1;
++execute s using @a;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where; Using pushed condition (`test`.`t2`.`a` = 1)
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t2`.`pk` AS `pk`,`test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t2` where (`test`.`t2`.`a` = 1)
++set @a=2;
++execute s using @a;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where; Using pushed condition (`test`.`t2`.`a` = 2)
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t2`.`pk` AS `pk`,`test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t2` where (`test`.`t2`.`a` = 2)
++set @a=3;
++execute s using @a;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where; Using pushed condition (`test`.`t2`.`a` = 3)
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t2`.`pk` AS `pk`,`test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t2` where (`test`.`t2`.`a` = 3)
++drop prepare s;
++drop table t2;
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/sql/sql_plan_cache.cc b/sql/sql_plan_cache.cc
+index 8798265658d..c4329716b75 100644
+--- a/sql/sql_plan_cache.cc
++++ b/sql/sql_plan_cache.cc
+@@ -1133,7 +1133,7 @@ T *make_cmp_op(THD *thd, Item_func *op) {
+ */
+ Item *clone_if_transient(THD *thd, Item *i) {
+   // transient = short-lived. vs permanent = long-lived.
+-  auto transient_items =
++  auto &transient_items =
+       thd->lex->current_query_block()
+           ->cached_plan->plan_cache_exec_context->transient_items;
+ 
+@@ -1275,9 +1275,8 @@ Item *clone_if_transient(THD *thd, Item *i) {
+     case Item::FIELD_ITEM: {
+       // Could originate from gc_subst_transformer().
+       auto i_field = down_cast<Item_field *>(i);
++      assert(i_field->field->is_gcol());
+       c = new Item_field(i_field->field);
+-      // need a call to mark_column_used() when using the plan later, cf
+-      // get_gc_for_expr(), fix_fields will do that below.
+       break;
+     }
+     default:
+@@ -1307,7 +1306,9 @@ Item *clone_if_transient(THD *thd, Item *i) {
+     }
+   }
+   if (!c) {
+-    // still unknown Item, not able to copy this type
++    // Still unknown Item, not able to copy this type. We have an assertion
++    // here, because we are interested in discovering uncovered types when
++    // testing internally.
+     assert(false);
+     return nullptr;
+   }
+@@ -1329,6 +1330,7 @@ Item *clone_if_transient(THD *thd, Item *i) {
+     if (rc) return nullptr;
+     assert(dummy == c);
+   }
++  transient_items[i] = c;
+   return c;
+ }
+ 
+@@ -1934,6 +1936,31 @@ bool cache_plan(JOIN *orig_join) {
+         set_uncacheable(sl);
+       });
+ 
++  auto some_item_param_are_gone = [thd]() {
++    // Check whether Item_param objects have been optimized away or transformed
++    // into other type. If so, cached plan must be invalidated.
++    I_List_iterator<Item_change_record> it(thd->change_list);
++    Item_change_record *change;
++    while ((change = it++)) {
++      if (!has_same_type_and_item_params(change->old_value,
++                                         change->new_value)) {
++#ifdef PLAN_CACHE_TAURUS
++        set_uncacheable(
++            sl);  // PLAN_CACHE_PORT redundant, because done at "err:"
++#endif
++        return true;
++      }
++    }
++    return false;
++  };
++
++  // We run the check a first time now ; if it fails, it saves us from doing
++  // useless allocations; it also prevents clone_if_transient() from calling
++  // clone_item() on the special case of an Item_int_with_ref wrapping a
++  // (non-constant) Item_param, a case where clone_item() fails with assertion
++  // failure.
++  if (some_item_param_are_gone()) return true;
++
+   // Why do we make a copy of TABLE_LIST, which will not be the one used
+   // during the next execution (the execution which picks up the cached plan)?
+   // Because it serves as "caching storage" for some properties of TABLE_LIST
+@@ -2021,22 +2048,11 @@ bool cache_plan(JOIN *orig_join) {
+                                                 join_local->qep_tab))
+     return true;
+ 
+-  // Check whether Item_param objects have been optimized away or transformed
+-  // into other type. If so, cached plan must be invalidated.
+-  {
+-    I_List_iterator<Item_change_record> it(thd->change_list);
+-    Item_change_record *change;
+-    while ((change = it++)) {
+-      if (!has_same_type_and_item_params(change->old_value,
+-                                         change->new_value)) {
+-#ifdef PLAN_CACHE_TAURUS
+-        set_uncacheable(
+-            sl);  // PLAN_CACHE_PORT redundant, because done at "err:"
+-#endif
+-        return true;
+-      }
+-    }
+-  }
++  // Repeat the check done when the function started, because since then, we
++  // cloned and fixed more Items, which may have changed types again (usually
++  // happens in the fixing of equalities).
++  if (some_item_param_are_gone()) return true;
++
+   // Here we reset m_qs->m_table to be nullptr in order to free such a cached
+   // plan correctly because TABLE::file might be closed when such a cached
+   // plan tries to free itself, such as this cached plan is never hit.
+@@ -2115,7 +2131,8 @@ static int reinit_qep_tab_properties(QEP_TAB *qt) {
+   // features plan cache and NDP" but the line makes sense even without NDP so
+   // is included here. The NDP-specific mtr test is not, however.
+   qt->reset_condition_as_pushed_to_sort();
+-  Item *where_cond = join->select_lex->where_cond();
++  Item *where_cond = nullptr;
++  get_item_and_refresh(where_cond, join->select_lex->where_cond());
+   // Approximate number of found rows to read them, ndp need this information
+   // Only one matching row for JT_SYSTEM or JT_CONST, otherwise use file->stats
+   ha_rows read_rows = 1;
+@@ -2555,6 +2572,14 @@ static bool apply_cached_plan(JOIN *join) {
+     if (*c.first != c.second) {  // skip a no-op
+       thd->change_item_tree(c.first, c.second);
+     }
++    // If it is a generated column created during optimization by
++    // get_gc_for_expr(), it got added to read_set then. Later got
++    // removed from read_set at start of next execution, by
++    // Table_ref::restore_properties(). We need to add it back again.
++    auto i_f = dynamic_cast<Item_field *>(c.second);
++    if (i_f && i_f->field->is_gcol()) {
++      i_f->field->table->mark_column_used(i_f->field, MARK_COLUMNS_READ);
++    }
+   }
+ 
+   join->group_list.clean();
+diff --git a/testclients/mysql_client_test.cc b/testclients/mysql_client_test.cc
+index de1ce6a0bdb..662741ad09c 100644
+--- a/testclients/mysql_client_test.cc
++++ b/testclients/mysql_client_test.cc
+@@ -24854,7 +24854,7 @@ void stmt_bulk_test_mix_bulk_non_bulk() {
+                                   "David", "Eve", "Frank"};
+       unsigned long tmp_name_lengths[6];
+       for (int i = 0; i < 6; ++i) {
+-        name_lengths[i] = strlen(tmp_names[i]);
++        tmp_name_lengths[i] = strlen(tmp_names[i]);
+       }
+ 
+       for (int i = 0; i < 6; ++i) {
+-- 
+2.23.0
+

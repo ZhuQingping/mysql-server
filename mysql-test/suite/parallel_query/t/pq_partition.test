@@ -1,0 +1,275 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+
+create database pq_test;
+use pq_test;
+
+--disable_warnings
+drop table if exists t1;
+--enable_warnings
+
+--echo #
+--echo # case 1: full table scan in partition table
+--echo #
+--echo #
+CREATE TABLE t1 (
+       id MEDIUMINT NOT NULL AUTO_INCREMENT,
+       dt DATE, st VARCHAR(255), uid INT,
+       filler VARCHAR(255), PRIMARY KEY(id, dt)
+);
+INSERT INTO t1 (dt, st, uid, filler) VALUES
+   ('1991-03-14', 'Initial Insert', 200, 'No Data'),
+   ('1991-02-26', 'Initial Insert', 201, 'No Data'),
+   ('1992-03-16', 'Initial Insert', 234, 'No Data'),
+   ('1992-07-02', 'Initial Insert', 287, 'No Data'),
+   ('1991-05-26', 'Initial Insert', 256, 'No Data'),
+   ('1991-04-25', 'Initial Insert', 222, 'No Data'),
+   ('1993-03-12', 'Initial Insert', 267, 'No Data'),
+   ('1993-03-14', 'Initial Insert', 291, 'No Data'),
+   ('1991-12-20', 'Initial Insert', 298, 'No Data'),
+   ('1994-10-31', 'Initial Insert', 220, 'No Data');
+ALTER TABLE t1 PARTITION BY LIST (YEAR(dt)) (
+    PARTITION d1 VALUES IN (1991, 1994),
+    PARTITION d2 VALUES IN (1993),
+    PARTITION d3 VALUES IN (1992, 1995, 1996)
+);
+
+ANALYZE TABLE t1;
+EXPLAIN SELECT * from t1;
+
+SELECT * from t1;
+
+EXPLAIN SELECT * from t1 partition(d1);
+SELECT * from t1 partition(d1);
+
+EXPLAIN SELECT * from t1 partition(d2);
+SELECT * from t1 partition(d2);
+
+EXPLAIN SELECT * from t1 partition(d2,d3);
+SELECT * from t1 partition(d2,d3);
+
+--echo #
+--echo # case 2: range scan in partition table
+--echo #
+--echo #
+ALTER TABLE t1 add index idx_uid(uid);
+EXPLAIN SELECT * from t1 where id > 5;
+SELECT * from t1 where id > 5;
+
+EXPLAIN SELECT * from t1 partition(d1) where id > 5;
+SELECT * from t1 partition(d1) where id > 5;
+
+EXPLAIN SELECT * from t1 partition(d1) where id > 5 or id <= 2;
+SELECT * from t1 partition(d1) where id > 5 or id <= 2;
+
+EXPLAIN SELECT * from t1 where uid > 250;
+SELECT * from t1 where uid > 250;
+
+EXPLAIN SELECT * from t1 partition(d1) where uid > 250;
+SELECT * from t1 partition(d1) where uid > 250;
+
+--echo invalid range
+EXPLAIN SELECT * from t1 where id > 100;
+SELECT * from t1 where id > 100;
+
+EXPLAIN SELECT * from t1 partition(d1) where id > 100;
+SELECT * from t1 partition(d1) where id > 100;
+
+--echo #
+--echo # case 3: ref scan in partition table
+--echo #
+--echo #
+EXPLAIN SELECT * from t1 where id = 5;
+SELECT * from t1 where id = 5;
+
+EXPLAIN SELECT * from t1 partition(d1) where id = 5;
+SELECT * from t1 partition(d1) where id = 5;
+
+EXPLAIN SELECT * from t1 partition(d1) where id = 100;
+SELECT * from t1 partition(d1) where id = 100;
+
+--echo #
+--echo # case 4: depend ref scan in partition table
+--echo #
+--echo #
+drop table t1;
+CREATE TABLE t1(f1 INT, f2 INT);
+INSERT INTO t1 VALUES
+(1,1),(2,2),(3,3);
+
+CREATE TABLE t2(f1 INT NOT NULL, f2 INT NOT NULL, f3 CHAR(200), KEY(f1, f2));
+INSERT INTO t2 VALUES
+(1,1, 'qwerty'),(1,2, 'qwerty'),(1,3, 'qwerty'),
+(2,1, 'qwerty'),(2,2, 'qwerty'),(2,3, 'qwerty'), (2,4, 'qwerty'),(2,5, 'qwerty'),
+(3,1, 'qwerty'),(3,4, 'qwerty'),
+(4,1, 'qwerty'),(4,2, 'qwerty'),(4,3, 'qwerty'), (4,4, 'qwerty'),
+(1,1, 'qwerty'),(1,2, 'qwerty'),(1,3, 'qwerty'),
+(2,1, 'qwerty'),(2,2, 'qwerty'),(2,3, 'qwerty'), (2,4, 'qwerty'),(2,5, 'qwerty'),
+(3,1, 'qwerty'),(3,4, 'qwerty'),
+(4,1, 'qwerty'),(4,2, 'qwerty'),(4,3, 'qwerty'), (4,4, 'qwerty');
+
+alter table t2 partition by list(f1) (partition d1 values in (1,2,3), partition d2 values in (4));
+
+ANALYZE TABLE t1;
+ANALYZE TABLE t2;
+
+explain SELECT /*+NO_PQ*/ t2.f1, t2.f2, t2.f3 FROM t1,t2 partition(d1) WHERE t1.f1=t2.f1 AND t2.f2 BETWEEN t1.f1 and t1.f2 and t2.f2 + 1 >= t1.f1 + 1;
+SELECT /*+NO_PQ*/ t2.f1, t2.f2, t2.f3 FROM t1,t2 partition(d1) WHERE t1.f1=t2.f1 AND t2.f2 BETWEEN t1.f1 and t1.f2 and t2.f2 + 1 >= t1.f1 + 1;
+
+explain SELECT t2.f1, t2.f2, t2.f3 FROM t1,t2 partition(d1) WHERE t1.f1=t2.f1 AND t2.f2 BETWEEN t1.f1 and t1.f2 and t2.f2 + 1 >= t1.f1 + 1;
+SELECT t2.f1, t2.f2, t2.f3 FROM t1,t2 partition(d1) WHERE t1.f1=t2.f1 AND t2.f2 BETWEEN t1.f1 and t1.f2 and t2.f2 + 1 >= t1.f1 + 1;
+
+--echo #
+--echo # case 5: hash partition
+--echo #
+drop table t2;
+CREATE TABLE t2 (
+  `id` int(11) NOT NULL,
+  `user_num` int DEFAULT NULL,
+  `name` varchar(64) NOT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB CHARSET=latin1
+PARTITION BY HASH (id)
+PARTITIONS 2;
+INSERT INTO t2 VALUES (1,8601,'John');
+INSERT INTO t2 VALUES (2,8601,'JS');
+INSERT INTO t2 VALUES (3,8601,'John S');
+INSERT INTO t2 VALUES (4,8601,'John S');
+INSERT INTO t2 VALUES (5,8601,'John S');
+ANALYZE TABLE t2;
+explain select * from t2 partition(p1);
+select * from t2 partition(p1);
+select /*+NO_PQ*/ * from t2 partition(p1);
+
+--echo #
+--echo # case 6: range partition
+--echo #
+--echo #
+DROP TABLE t1;
+CREATE TABLE t1 (
+  a timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  b varchar(10),
+  PRIMARY KEY (a)
+)
+PARTITION BY RANGE (UNIX_TIMESTAMP(a)) (
+ PARTITION p1 VALUES LESS THAN (1199134800),
+ PARTITION pmax VALUES LESS THAN MAXVALUE
+);
+
+INSERT INTO t1 VALUES ('2007-07-29 17:35:48', 'p1');
+INSERT INTO t1 VALUES ('2007-07-30 17:35:48', 'p1');
+INSERT INTO t1 VALUES ('2009-07-14 17:35:55', 'pmax');
+INSERT INTO t1 VALUES ('2009-09-21 17:31:42', 'pmax');
+ANALYZE TABLE t1;
+explain select * from t1 partition(p1);
+select * from t2 partition(p1);
+select /*+NO_PQ*/ * from t2 partition(p1);
+
+--echo #
+--echo # case 7: key partition
+--echo #
+DROP TABLE t1;
+CREATE TABLE t1 (i INT, j INT, PRIMARY KEY (i, j)) PARTITION BY KEY (i) PARTITIONS 2 (PARTITION p0, PARTITION p1);
+INSERT INTO t1 (i, j) VALUES (-1, 1), (1, 1), (2, 2), (-2, 2);
+ANALYZE TABLE t1;
+explain select * from t1 partition(p1);
+select * from t1 partition(p1);
+select /*+NO_PQ*/ * from t1 partition(p1);
+
+--echo #
+--echo # case 8: subpartition
+--echo #
+CREATE TABLE table_part_sub_2(
+id int, value int, name varchar(32), data BLOB, primary key pk(id, value),
+key k1(value)) partition by range (value) subpartition by hash (id)
+( partition Part_1 values less than (101)(
+subpartition Sub_1,
+subpartition sUb_2),
+partition pArt_2 values less than (501)(
+subpartition suB_3 ,
+subpartition SUB_4),
+partition PART_3 values less than MAXVALUE(
+subpartition SUB_5,
+subpartition sub_6));
+
+insert into table_part_sub_2 VALUES(0, 55, "Row - 0", REPEAT('Large Column Data - 0' , 256));
+insert into table_part_sub_2 VALUES(1, 155, "Row - 1", REPEAT('Large Column Data - 1' , 256));
+insert into table_part_sub_2 VALUES(2, 255, "Row - 2", REPEAT('Large Column Data - 2' , 256));
+insert into table_part_sub_2 VALUES(3, 355, "Row - 3", REPEAT('Large Column Data - 3' , 256));
+insert into table_part_sub_2 VALUES(4, 455, "Row - 4", REPEAT('Large Column Data - 4' , 256));
+insert into table_part_sub_2 VALUES(5, 555, "Row - 5", REPEAT('Large Column Data - 5' , 256));
+insert into table_part_sub_2 VALUES(6, 655, "Row - 6", REPEAT('Large Column Data - 6' , 256));
+insert into table_part_sub_2 VALUES(7, 755, "Row - 7", REPEAT('Large Column Data - 7' , 256));
+insert into table_part_sub_2 VALUES(8, 855, "Row - 8", REPEAT('Large Column Data - 8' , 256));
+insert into table_part_sub_2 VALUES(9, 955, "Row - 9", REPEAT('Large Column Data - 9' , 256));
+
+ANALYZE TABLE table_part_sub_2;
+explain select id, value, name from table_part_sub_2 partition (sub_5) order by id;
+select id, value, name from table_part_sub_2 partition (sub_5) order by id;
+select /*+NO_PQ*/ id, value, name from table_part_sub_2 partition (sub_5) order by id;
+
+explain select id, value, name from table_part_sub_2 partition (PART_3) order by id;
+DROP TABLE table_part_sub_2;
+
+--echo #
+--echo # case 9: subquery
+--echo #
+DROP TABLE t1, t2;
+CREATE TABLE `t1` (
+`a` int NOT NULL,
+`b` char(10) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE `t2` (
+`a` int NOT NULL,
+`b` char(10) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+alter table t2 partition by range (a) ( 
+  partition p0 values less than (3), 
+  partition p1 values less than (6), 
+  partition p2 values less than maxvalue
+);
+
+INSERT INTO t1 values (1, 'a'), (2, 'b'), (3, 'c'), (3, 'c'), (4, 'd'), (5, 'f'), (6, 'e');
+INSERT INTO t2 values (3, 'c'), (4, 'd'), (5, 'f'), (6, 'e'), (1, 'a'), (2, 'b');
+INSERT INTO t1 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t1 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t1 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t2 SELECT * FROM t2;
+ANALYZE TABLE t1;
+ANALYZE TABLE t2;
+explain select t1.b from t1 join (select avg(a) from t2 partition(p0) group by a) as sub_2(b) on t1.a = sub_2.b;
+select t1.b from t1 join (select avg(a) from t2 partition(p0) group by a) as sub_2(b) on t1.a = sub_2.b;
+explain select t1.b from t1 join (select (a) from t2 partition(p0) group by a) as sub_2(b) on t1.a = sub_2.b;
+select t1.b from t1 join (select (a) from t2 partition(p0) group by a) as sub_2(b) on t1.a = sub_2.b;
+
+explain select * from t2 partition(p0) join (select a from t1 group by a) as sub_1(b) on t2.a = sub_1.b;
+select * from t2 partition(p0) join (select a from t1 group by a) as sub_1(b) on t2.a = sub_1.b;
+
+## partition table with semi-join materialization
+
+set @saved_optimize_trace=@@optimizer_switch;
+set session optimizer_switch='semijoin=on,materialization=on,loosescan=off,firstmatch=off,duplicateweedout=off,index_condition_pushdown=off,mrr=off';
+
+### materialization lookup
+explain select sum(t2.a) from t2 partition(p0) where t2.a IN (select distinct t1.a from t1 where t1.a > 1);
+select sum(t2.a) from t2 partition(p0) where t2.a IN (select distinct t1.a from t1 where t1.a > 1);
+
+alter table t1 add index key1(a);
+explain select sum(t1.a) from t1 where t1.a IN (select distinct t2.a from t2 partition(p0));
+select sum(t1.a) from t1 where t1.a IN (select distinct t2.a from t2 partition(p0));
+
+drop table pq_test.t1;
+drop table pq_test.t2;
+drop database pq_test;
+
+set session optimizer_switch=@saved_optimize_trace;

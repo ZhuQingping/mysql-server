@@ -1,0 +1,43 @@
+SET @old_binlog_format=@@binlog_format;
+SET GLOBAL binlog_format='row';
+SET SESSION binlog_format='row';
+RESET MASTER;
+
+DROP DATABASE IF EXISTS mergedb;
+CREATE DATABASE mergedb;
+USE mergedb;
+create table t1(id int);
+CREATE PROCEDURE `mergetest`()
+BEGIN
+DECLARE i INT;
+DECLARE tmp INT;
+SET i = 0;
+WHILE i<10 DO
+SET @csql =CONCAT('insert into t1 values(',i,');');
+SET i = i+1;
+PREPARE create_stmt FROM @csql;
+EXECUTE create_stmt;
+END WHILE;
+END$$
+call mergetest;
+FLUSH LOGS;
+call mergetest;
+"original size of the frist file"
+ON.000001
+ON.000002
+ON.000001.merged
+FLUSH LOGS;
+call mergetest;
+"original size of the second file"
+use mergedb;
+select count(*) from t1;
+count(*)
+30
+reset master;
+DROP DATABASE IF EXISTS mergedb;
+use mergedb;
+select count(*) from t1;
+count(*)
+30
+SET GLOBAL binlog_format = @old_binlog_format;
+DROP DATABASE mergedb;

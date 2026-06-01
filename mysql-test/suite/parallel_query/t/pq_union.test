@@ -1,0 +1,38 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+
+create database pq_test;
+use pq_test;
+
+--disable_warnings
+DROP TABLE IF EXISTS t1, t2;
+--enable_warnings
+
+CREATE TABLE t1(a int);
+CREATE TABLE t2(a int);
+INSERT INTO t1 VALUES (1),(2);
+INSERT INTO t2 VALUES (2),(3);
+
+EXPLAIN FORMAT=tree SELECT * FROM t1 UNION SELECT * FROM t2;
+SELECT * FROM t1 UNION SELECT * FROM t2;
+EXPLAIN FORMAT=tree SELECT * FROM t1 UNION ALL SELECT * FROM t2;
+SELECT * FROM t1 UNION ALL SELECT * FROM t2;
+
+drop table t1,t2;
+
+### ISSUE 602
+
+create table t1(a int);
+alter table t1 add index idx1(a);
+insert into t1 values (1), (2), (2), (3), (1), (4);
+
+create table t2(b int);
+alter table t2 add index idx2(b);
+insert into t2 values (2), (0), (1), (0), (2), (4), (5);
+
+ANALYZE table t1, t2;
+EXPLAIN SELECT `a`, COUNT(*) FROM `t1` GROUP BY `a` UNION SELECT `b`, COUNT(*) FROM `t2` GROUP BY `b`;
+SELECT `a`, COUNT(*) FROM `t1` GROUP BY `a` UNION SELECT `b`, COUNT(*) FROM `t2` GROUP BY `b`;
+
+DROP table t1, t2;
+drop database pq_test;

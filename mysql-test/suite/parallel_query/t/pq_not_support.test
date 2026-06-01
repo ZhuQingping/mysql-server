@@ -1,0 +1,61 @@
+# this test case include sql that cannot run parallelly
+
+--source include/pq_test.inc
+
+CREATE TABLE t0 ( col1 INT NOT NULL, col2 INT ) ENGINE=InnoDB;
+insert into t0 values(0,1),(1,2),(2,3);
+CREATE TABLE t1 (col3 DECIMAL(35,0) DEFAULT NULL, col1 INT NOT NULL, col2 INT NOT NULL DEFAULT '0', PRIMARY KEY (col1)) ENGINE=MyISAM;
+REPLACE INTO t1 ( col1,col2) SELECT col1,col2 FROM t0;
+select * from t1;
+
+drop table t0, t1;
+
+#
+# echo BIT_AND is not supported
+#
+CREATE TABLE t(a varbinary(10));
+INSERT INTO t VALUES(0xFF00F0F0), (0xF0F0FF00);
+EXPLAIN SELECT BIT_AND(a) FROM t;
+SELECT BIT_AND(a) FROM t;
+
+DROP TABLE t;
+
+#
+# echo using dynamic range is not supported
+#
+CREATE TABLE t1 (col_int INT, pk INT) ENGINE=InnoDB STATS_PERSISTENT=0;
+INSERT INTO t1 VALUES (-100,1),(1,6);
+
+CREATE TABLE t2 (
+col_int_key INT,
+col_varchar VARCHAR(100) NOT NULL DEFAULT "DEFAULT",
+pk INT NOT NULL,
+PRIMARY KEY (pk),
+KEY (col_int_key)
+) ENGINE=InnoDB STATS_PERSISTENT=0;
+
+INSERT INTO t2 VALUES
+(1,"GOOD",1),(100,"",2),(200,"",3),(300,"",4),(400,"",5),(500,"",8);
+
+EXPLAIN SELECT t1.*,t2.* FROM t1 straight_join t2
+ON t2.col_int_key = t1.col_int WHERE t2.pk < t1.pk;
+
+SELECT /*+PQ(1) */  t1.*,t2.* FROM t1 straight_join t2
+ON t2.col_int_key = t1.col_int WHERE t2.pk < t1.pk;
+
+DROP TABLE t1,t2;
+
+#
+# echo JSON_STORAGE_FREE is not supported
+#
+CREATE TABLE JSON_STORAGE_FREE_001(jcol JSON);
+INSERT INTO JSON_STORAGE_FREE_001 VALUES('{"a": 10, "b": "wxyz", "c": "[true, false]"}');
+SELECT * FROM JSON_STORAGE_FREE_001;
+UPDATE JSON_STORAGE_FREE_001 SET jcol = JSON_SET(jcol, "$.a", 10, "$.b", "wxyz", "$.c", 1);
+SELECT * FROM JSON_STORAGE_FREE_001;
+EXPLAIN SELECT JSON_STORAGE_FREE(NULL) FROM JSON_STORAGE_FREE_001;
+SELECT JSON_STORAGE_FREE(NULL) FROM JSON_STORAGE_FREE_001;
+EXPLAIN SELECT JSON_STORAGE_FREE(jcol) FROM JSON_STORAGE_FREE_001;
+SELECT JSON_STORAGE_FREE(jcol) FROM JSON_STORAGE_FREE_001;
+
+DROP TABLE JSON_STORAGE_FREE_001;

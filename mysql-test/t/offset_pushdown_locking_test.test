@@ -1,0 +1,1660 @@
+--source include/have_only_innodb_real.inc
+--source include/not_pq_test.inc
+
+--echo # -------------------------------
+--echo # -------------------------------
+
+--source include/count_sessions.inc
+
+--echo # Content of the test file:
+
+--echo # Offset pushdown and non-locking read
+
+--echo # SELECT LIMIT OFFSET FOR UPDATE w/ and w/o OP
+
+--echo #  check locking - insert - # of rows skipped
+--echo #  READ COMMITED
+--echo #  LOCK IN SHARE MODE
+--echo #  READ UNCOMMITTED
+--echo #  SKIP LOCKED
+--echo #  NO WAIT
+--echo # SERIALIZABLE
+--echo # FOR UPDATE with serializable - all read rows have an x-lock -> equivalent to FOR UPDATE with RR
+--echo # LOCK IN SHARE MODE with serializable - read rows have a s-lock - no different to LOCK IN SHARE MODE with RR
+
+
+
+--echo # To keep track of the number of rows skipped by offset pushdown we use:
+--echo # SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+--echo # SELECT query
+--echo # SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+--echo # -------------------------------
+--echo # -------------------------------
+
+SET @old_innodb_lock_wait_timeout = @@global.innodb_lock_wait_timeout;
+
+SET @@global.innodb_lock_wait_timeout = 1;
+
+--echo # TOP
+
+--echo # -------------------------------
+
+--echo # SELECT LIMIT OFFSET FOR UPDATE w/ and w/o OP
+--echo # check locking - insert - # of rows skipped
+
+--echo # ------------------------------
+
+--echo # -------------------------------
+
+--echo # Without OP
+
+--echo # -------------------------------
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+
+--echo # Compare locks and count how many rows are skipped
+--echo # template query: SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap WHERE a BETWEEN 15 AND 25 LIMIT 100 OFFSET 2 FOR UPDATE;
+--echo # To check locking status use: SHOW ENGINE INNODB STATUS; with SET GLOBAL innodb_status_output_locks=ON; SET GLOBAL innodb_status_output=ON;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap WHERE a BETWEEN 15 AND 25 LIMIT 100 OFFSET 2 FOR UPDATE;
+--echo # Check that we don't skip any rows
+ SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+connection con2;
+START TRANSACTION;
+--echo # Should go through
+INSERT INTO t_gap VALUES (9);
+INSERT INTO t_gap VALUES (31);
+--echo # next key locking
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (11);
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (29);
+--echo # gap lock
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (18);
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (23);
+
+rollback;
+connection con1;
+rollback;
+DROP TABLE t_gap;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # -------------------------------
+
+--echo # With OP
+
+--echo # -------------------------------
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+
+--echo # Compare locks and count how many rows are skipped
+--echo # Template query: SELECT  * FROM t_gap WHERE a BETWEEN 15 AND 25 LIMIT 100 OFFSET 2 FOR UPDATE;
+--echo # To check locking status use: SHOW ENGINE INNODB STATUS;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap WHERE a BETWEEN 15 AND 25 LIMIT 100 OFFSET 2 FOR UPDATE;
+--echo # Check that we only skip one row
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+connection con2;
+START TRANSACTION;
+--echo # Should go through
+INSERT INTO t_gap VALUES (9);
+INSERT INTO t_gap VALUES (31);
+--echo # next key locking
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (11);
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (29);
+--echo # gap lock
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (18);
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (23);
+
+rollback;
+connection con1;
+rollback;
+DROP TABLE t_gap;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # UPDATE statement  locks and gaps locks
+
+--echo # --------------------
+--echo # Without OP
+--echo # --------------------
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30),(40),(50),(60),(70),(80),(90),(100);
+
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap WHERE a BETWEEN 45 AND 65 LIMIT 100 OFFSET 3 FOR UPDATE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+connection con2;
+START TRANSACTION;
+
+--echo # Record LOCKs
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 200 WHERE a = 50;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 300 WHERE a = 60;
+
+
+--echo # Next key locking
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 67 WHERE a = 10;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 42 WHERE a = 20;
+
+UPDATE t_gap SET a = 200 WHERE a = 40;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 300 WHERE a = 70;
+
+
+--echo # Gap Locks
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 47 WHERE a = 10;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 63 WHERE a = 90;
+
+--echo # No locks outside next key locking
+DELETE FROM t_gap WHERE a=20;
+DELETE FROM t_gap WHERE a=90;
+INSERT INTO t_gap values (75),(85);
+UPDATE t_gap SET a = 85 WHERE a = 80;
+
+
+rollback;
+connection con1;
+rollback;
+DROP TABLE t_gap;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+--echo # --------------------
+--echo # With Offset pushdown
+--echo # --------------------
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30),(40),(50),(60),(70),(80),(90),(100);
+
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap WHERE a BETWEEN 45 AND 65 LIMIT 100 OFFSET 3 FOR UPDATE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+connection con2;
+START TRANSACTION;
+
+--echo # Record LOCKs
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 200 WHERE a = 50;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 300 WHERE a = 60;
+
+
+--echo # Next key locking
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 67 WHERE a = 10;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 42 WHERE a = 20;
+
+
+UPDATE t_gap SET a = 200 WHERE a = 40;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 300 WHERE a = 70;
+
+
+--echo # Gap Locks
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 47 WHERE a = 10;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 63 WHERE a = 90;
+
+--echo # No locks outside next key locking
+DELETE FROM t_gap WHERE a=20;
+DELETE FROM t_gap WHERE a=90;
+INSERT INTO t_gap values (75),(85);
+UPDATE t_gap SET a = 85 WHERE a = 80;
+
+rollback;
+connection con1;
+rollback;
+DROP TABLE t_gap;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # ---------------------------------------------------
+
+--echo # Skipping pk access
+
+--echo # ---------------------------------------------------
+
+
+--echo # ---------------------------------------------------
+
+--echo # WITHOUT  OP
+
+--echo # ---------------------------------------------------
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+CREATE TABLE t1 (b INT, PRIMARY KEY (b));
+INSERT INTO t1 VALUES (1),(2),(3),(4),(5),(7);
+
+connection con1;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */  b FROM t1  WHERE b>2 AND b<5 LIMIT 100 OFFSET 100 FOR UPDATE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+
+connection con2;
+
+start transaction;
+UPDATE t1 SET b = 100 WHERE b = 2;
+rollback;
+start transaction;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t1 SET b = 100 WHERE b = 3;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t1 SET b = 100 WHERE b = 4;
+UPDATE t1 SET b = 100 WHERE b = 5;
+rollback;
+connection con1;
+rollback;
+
+DROP TABLE t1;
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # ---------------------------------------------------
+
+--echo # WITH OP
+
+--echo # ---------------------------------------------------
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+CREATE TABLE t1 (b INT, PRIMARY KEY (b));
+INSERT INTO t1 VALUES (1), (2), (3), (4),(5),(7);
+
+connection con1;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT b FROM t1 WHERE b>2 AND b<5 LIMIT 100 OFFSET 100 FOR UPDATE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+
+connection con2;
+
+start transaction;
+UPDATE t1 SET b = 100 WHERE b = 2;
+rollback;
+start transaction;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t1 SET b = 100 WHERE b = 3;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t1 SET b = 100 WHERE b = 4;
+UPDATE t1 SET b = 100 WHERE b = 5;
+rollback;
+connection con1;
+rollback;
+
+DROP TABLE t1;
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # ---------------------------------------------------
+--echo # ---------------------------------------------------
+
+--echo # SERIALIZABLE
+
+--echo # ---------------------------------------------------
+--echo # ---------------------------------------------------
+
+--echo # -------------------------------
+
+--echo # Without OP
+
+--echo # -------------------------------
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+
+--echo # Compare locks and count how many rows are skipped
+--echo # To check locking status use: SHOW ENGINE INNODB STATUS;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap WHERE a BETWEEN 15 AND 25 LIMIT 100 OFFSET 2 FOR UPDATE;
+--echo # Check that we don't skip any rows
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+START TRANSACTION;
+--echo # Should go through
+INSERT INTO t_gap VALUES (9);
+INSERT INTO t_gap VALUES (31);
+--echo # next key locking
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (11);
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (29);
+--echo # gap lock
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (18);
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (23);
+
+rollback;
+connection con1;
+rollback;
+DROP TABLE t_gap;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # -------------------------------
+
+--echo # With OP
+
+--echo # -------------------------------
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+
+--echo # Compare locks and count how many rows are skipped
+--echo # To check locking status use: SHOW ENGINE INNODB STATUS;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap WHERE a BETWEEN 15 AND 25 LIMIT 100 OFFSET 2 FOR UPDATE;
+--echo # Check that we only skip one row
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+START TRANSACTION;
+--echo # Should go through
+INSERT INTO t_gap VALUES (9);
+INSERT INTO t_gap VALUES (31);
+--echo # next key locking
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (11);
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (29);
+--echo # gap lock
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (18);
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (23);
+
+rollback;
+connection con1;
+rollback;
+DROP TABLE t_gap;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+--echo # ---------------------------------------------------
+--echo # ---------------------------------------------------
+
+--echo #  READ COMMITED
+
+--echo # ---------------------------------------------------
+--echo # ---------------------------------------------------
+
+
+
+--echo # ---------------------------------------------------
+
+
+--echo #  Without OP
+
+--echo # ---------------------------------------------------
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+
+
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ *  FROM t_gap LIMIT 100 OFFSET 50 FOR UPDATE;
+--echo # Check that no rows are skipped
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+--echo # To check locking status use: SHOW ENGINE INNODB STATUS;
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+UPDATE t_gap SET a = 30 WHERE a = 10;
+UPDATE t_gap SET a = 30 WHERE a = 20;
+UPDATE t_gap SET a = 30 WHERE a = 30;
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+rollback;
+connection con1;
+rollback;
+DROP TABLE t_gap;
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # ---------------------------------------------------
+
+--echo # With OP
+
+--echo # ---------------------------------------------------
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+
+
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT *  FROM t_gap LIMIT 100 OFFSET 50 FOR UPDATE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+--echo # To check locking status use: SHOW ENGINE INNODB STATUS;
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+UPDATE t_gap SET a = 30 WHERE a = 10;
+UPDATE t_gap SET a = 30 WHERE a = 20;
+UPDATE t_gap SET a = 30 WHERE a = 30;
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+rollback;
+connection con1;
+rollback;
+DROP TABLE t_gap;
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+
+
+--echo # ---------------------------------------------------
+
+
+--echo # READ COMMITED without OP (bis)
+
+--echo # ---------------------------------------------------
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+
+
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+
+--echo #
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ *  FROM t_gap LIMIT 100 OFFSET 1 FOR UPDATE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+--echo # To check locking status use: SHOW ENGINE INNODB STATUS;
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+UPDATE t_gap SET a = 30 WHERE a = 10;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 30 WHERE a = 20;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 30 WHERE a = 30;
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+rollback;
+connection con1;
+rollback;
+DROP TABLE t_gap;
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # ---------------------------------------------------
+
+--echo # READ COMMITED with OP (bis)
+
+--echo # ---------------------------------------------------
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+
+
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT *  FROM t_gap LIMIT 100 OFFSET 1 FOR UPDATE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+--echo # To check locking status use: SHOW ENGINE INNODB STATUS;
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+UPDATE t_gap SET a = 30 WHERE a = 10;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 30 WHERE a = 20;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 30 WHERE a = 30;
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+rollback;
+connection con1;
+rollback;
+DROP TABLE t_gap;
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+
+--echo # ---------------------------------------------------
+
+--echo #READ COMMITTED:  Skipping pk access- check lock release
+
+--echo # ---------------------------------------------------
+
+
+--echo # ---------------------------------------------------
+
+--echo # WITHOUT  OP
+
+--echo # ---------------------------------------------------
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+CREATE TABLE t1 (b INT, PRIMARY KEY (b));
+INSERT INTO t1 VALUES (1),(2),(3),(4),(5),(7);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */  b FROM t1 LIMIT 100 OFFSET 100 FOR UPDATE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+
+connection con2;
+
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+UPDATE t1 SET b = 100 WHERE b = 3;
+rollback;
+connection con1;
+rollback;
+
+DROP TABLE t1;
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # ---------------------------------------------------
+
+--echo # WITH OP
+
+--echo # ---------------------------------------------------
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+CREATE TABLE t1 (b INT, PRIMARY KEY (b));
+INSERT INTO t1 VALUES (1), (2), (3), (4),(5),(7);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT b FROM t1 LIMIT 100 OFFSET 100 FOR UPDATE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+
+connection con2;
+
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+UPDATE t1 SET b = 100 WHERE b = 3;
+rollback;
+connection con1;
+rollback;
+
+DROP TABLE t1;
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # ---------------------------------------------------
+--echo # ---------------------------------------------------
+
+--echo #  LOCK IN SHARE MODE
+
+--echo # For RR, check that we can read but not update rows
+--echo # For RC, can read, can't write - check what happens for released locks
+
+--echo # ---------------------------------------------------
+--echo # ---------------------------------------------------
+
+
+
+--echo # ---------------------------------------------------
+
+--echo #  For RR, check that we can read but not update rows
+
+--echo # ---------------------------------------------------
+
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+
+--echo # ---------------------------------------------------
+
+--echo # Without OP
+
+--echo # ---------------------------------------------------
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap LIMIT 100 OFFSET 50 LOCK IN SHARE MODE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+connection con2;
+start transaction;
+SELECT * FROM t_gap WHERE a = 10 OR a = 20 OR a = 30;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 100 WHERE a = 10;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 100 WHERE a = 30;
+
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (1);
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (15);
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (25);
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (1000);
+
+rollback;
+connection con1;
+rollback;
+
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # -----------------------------------
+
+--echo # With OP
+
+--echo # -----------------------------------
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap LIMIT 100 OFFSET 50 LOCK IN SHARE MODE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+connection con2;
+start transaction;
+SELECT * FROM t_gap WHERE a = 10 OR a = 20 OR a = 30;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 30 WHERE a = 10;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t_gap SET a = 30 WHERE a = 30;
+
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (1);
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (15);
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (25);
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t_gap VALUES (1000);
+
+rollback;
+connection con1;
+rollback;
+
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+DROP TABLE t_gap;
+
+--echo # ---------------------------------------------------
+
+--echo #  For RC, check that we can slide in the gaps
+
+--echo # ---------------------------------------------------
+
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+
+--echo # ---------------------------------------------------
+
+--echo # Without OP
+
+--echo # ---------------------------------------------------
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap LIMIT 100 OFFSET 50 LOCK IN SHARE MODE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT * FROM t_gap WHERE a = 10 OR a = 20 OR a = 30;
+UPDATE t_gap SET a = 50 WHERE a = 10;
+UPDATE t_gap SET a = 60 WHERE a = 30;
+
+
+INSERT INTO t_gap VALUES (1);
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+INSERT INTO t_gap VALUES (1000);
+
+rollback;
+connection con1;
+rollback;
+
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+--echo # ---------------------------------------------------
+
+--echo # With OP
+
+--echo # ---------------------------------------------------
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap LIMIT 100 OFFSET 50 LOCK IN SHARE MODE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT * FROM t_gap WHERE a = 10 OR a = 20 OR a = 30;
+UPDATE t_gap SET a = 50 WHERE a = 10;
+UPDATE t_gap SET a = 60 WHERE a = 30;
+
+
+INSERT INTO t_gap VALUES (1);
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+INSERT INTO t_gap VALUES (1000);
+
+rollback;
+connection con1;
+rollback;
+
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+
+
+
+--echo # ---------------------------------------------------
+
+--echo #  For RC, LOCK IN SHARED MODE places shared lock on all the read rows, so even if they are not displayed the locks stay in place
+--echo # but we can still insert in the gaps
+--echo # ---------------------------------------------------
+
+--echo # ---------------------------------------------------
+
+--echo # Without OP
+
+--echo # ---------------------------------------------------
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+--echo # how do i check if there is a gap lock? - gap lock is respected
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap LIMIT 100 OFFSET 1 LOCK IN SHARE MODE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+--echo # not released even though it's not output
+UPDATE t_gap SET a = 50 WHERE a = 10;
+
+
+
+INSERT INTO t_gap VALUES (1);
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+INSERT INTO t_gap VALUES (1000);
+
+rollback;
+connection con1;
+rollback;
+
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+--echo # ---------------------------------------------------
+
+--echo # With OP
+
+--echo # ---------------------------------------------------
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap LIMIT 100 OFFSET 1 LOCK IN SHARE MODE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+--echo # not release even though it's not output
+UPDATE t_gap SET a = 50 WHERE a = 10;
+
+INSERT INTO t_gap VALUES (1);
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+INSERT INTO t_gap VALUES (1000);
+
+rollback;
+connection con1;
+rollback;
+
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+
+
+
+--echo # ---------------------------------------------------
+
+--echo # READ UNCOMMITTED
+
+--echo # ---------------------------------------------------
+
+
+--echo # ---------------------------------------------------
+
+--echo # Without OP
+
+--echo # ---------------------------------------------------
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap LIMIT 100 OFFSET 50 FOR UPDATE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+--echo # NO LOCKS placed !
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+SELECT * FROM t_gap WHERE a = 10 OR a = 20 OR a = 30;
+UPDATE t_gap SET a = 50 WHERE a = 10;
+UPDATE t_gap SET a = 60 WHERE a = 30;
+
+
+INSERT INTO t_gap VALUES (1);
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+INSERT INTO t_gap VALUES (1000);
+
+rollback;
+connection con1;
+rollback;
+
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # ---------------------------------------------------
+
+--echo # With OP
+
+--echo # ---------------------------------------------------
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap LIMIT 100 OFFSET 50 FOR UPDATE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+--echo # NO LOCKS placed !
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+SELECT * FROM t_gap WHERE a = 10 OR a = 20 OR a = 30;
+UPDATE t_gap SET a = 50 WHERE a = 10;
+UPDATE t_gap SET a = 60 WHERE a = 30;
+
+
+INSERT INTO t_gap VALUES (1);
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+INSERT INTO t_gap VALUES (1000);
+
+rollback;
+connection con1;
+rollback;
+
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # ---------------------------------------------------
+
+--echo # SKIP LOCKED
+
+--echo # ---------------------------------------------------
+
+
+--echo # ---------------------------------------------------
+
+--echo # Without OP
+
+--echo # ---------------------------------------------------
+
+INSERT INTO t_gap VALUES (40),(50),(60);
+
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap  LIMIT 100 OFFSET 1  FOR UPDATE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+--echo # No output all locked
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap LIMIT 100 OFFSET 1  FOR UPDATE SKIP LOCKED;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+rollback;
+connection con1;
+rollback;
+
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap  WHERE a <15 LIMIT 100 OFFSET 1  FOR UPDATE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+--echo # 10 20 locked, 30 skipped by OFFSET  - rest : output
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap LIMIT 100 OFFSET 1  FOR UPDATE SKIP LOCKED;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+rollback;
+connection con1;
+rollback;
+
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+--echo # ---------------------------------------------------
+
+--echo # With OP
+
+--echo # ---------------------------------------------------
+
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap  LIMIT 100 OFFSET 1  FOR UPDATE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+--echo # No output all locked
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap LIMIT 100 OFFSET 1  FOR UPDATE SKIP LOCKED;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+rollback;
+connection con1;
+rollback;
+
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap  WHERE a < 15 LIMIT 100 OFFSET 1 FOR UPDATE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+--echo # 10 20 locked, 30 skipped by OFFSET  - rest : output
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap LIMIT 100 OFFSET 1  FOR UPDATE SKIP LOCKED;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+rollback;
+connection con1;
+rollback;
+
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # ---------------------------------------------------
+
+--echo # NO WAIT
+
+--echo # ---------------------------------------------------
+--echo # ---------------------------------------------------
+
+--echo # Without OP
+
+--echo # ---------------------------------------------------
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap  LIMIT 100 OFFSET 1 FOR UPDATE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+--echo # No output all locked
+
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+--error ER_LOCK_NOWAIT
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap LIMIT 100 OFFSET 1 FOR UPDATE NOWAIT;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+rollback;
+connection con1;
+rollback;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # ---------------------------------------------------
+
+--echo # With OP
+
+--echo # ---------------------------------------------------
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap  LIMIT 100 OFFSET 1 FOR UPDATE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+--echo # No output all locked
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+--error ER_LOCK_NOWAIT
+SELECT  * FROM t_gap LIMIT 100 OFFSET 1 FOR UPDATE NOWAIT;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+rollback;
+connection con1;
+rollback;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # -------------------------------------------------
+--echo # -------------------------------------------------
+
+
+--echo #  End range check  for OP at supremum (same for locking and non locking reads)
+
+
+--echo # -------------------------------------------------
+--echo # -------------------------------------------------
+SELECT @@transaction_isolation;
+INSERT INTO t_gap SELECT * FROM t_gap;
+INSERT INTO t_gap SELECT * FROM t_gap;
+INSERT INTO t_gap SELECT * FROM t_gap;
+INSERT INTO t_gap SELECT * FROM t_gap;
+INSERT INTO t_gap SELECT * FROM t_gap;
+INSERT INTO t_gap SELECT * FROM t_gap;
+INSERT INTO t_gap SELECT * FROM t_gap;
+INSERT INTO t_gap SELECT * FROM t_gap;
+INSERT INTO t_gap VALUES (5);
+
+--echo # Show status shows we skipped less than 1000 OFFSET rows - stopped by end range check on page supremum.
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t_gap  WHERE a < 8 LIMIT 1 OFFSET 1000;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+--echo # Show status shows we skipped less than 3000 OFFSET rows - stopped by end range check on page supremum
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t_gap  WHERE a < 11 LIMIT 1 OFFSET 3000;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+SET rds_empty_redundant_check_in_range_scan=true;
+
+DROP TABLE t_gap;
+
+--echo # -------------------------------------------------
+--echo # -------------------------------------------------
+
+
+--echo #  End range check  v ICP_OUT_OF_RANGE
+
+
+--echo # -------------------------------------------------
+--echo # -------------------------------------------------
+CREATE TABLE t2 (a INT, b INT, c INT, INDEX(a,b));
+INSERT INTO t2 VALUES (1,10,4),(2,20,5),(3,30,6),(4,40,12),(5,50,13),(6,60,14),(7,70,15);
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+--echo # End of range check does not apply with ICP - stopped by ICP out of range before OFFSET 5000 is reached
+SET rds_empty_redundant_check_in_range_scan = false;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t2 WHERE a = 1 AND b < 11 LIMIT 1 OFFSET 5000;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+--echo # ICP_OUT_OF_RANGE evaluated before systematic end of range check for locking scenario- no need to check end of range if idx_cond==true
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t2 WHERE a = 1 AND b < 11 LIMIT 1 OFFSET 5000 FOR UPDATE;
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+rollback;
+
+
+
+DROP TABLE t2;
+
+--echo # -----------------
+--echo # OP and ICP that hits ICP_NO_MATCH
+--echo # -----------------
+
+--echo # --
+--echo # RR
+--echo # --
+
+
+
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+
+CREATE TABLE t0 (a VARCHAR(10), b INT, c INT, INDEX(a(10),b));
+insert into t0 values ('banama',1,1),('banana',1,1),('banana',2,3),('banana',3,3),('banaoa',3,6),('banapa',4,9),('banaqa',5,12);
+
+explain format=tree SELECT a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1;
+explain format=tree  SELECT /*+ NO_OFFSET_PUSHDOWN() */ a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1;
+--echo # row_search_mvcc hits ICP_NO_MATCH for ('banana',1,1),('banana',2,3) because 1 and 2 are smaller than 3 with and without OP
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1;
+--echo # ('banana',3,3) is skipped by offset pushdown in innodb
+SELECT a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1;
+
+explain format=tree SELECT a,c FROM t0 WHERE a>'banama' AND a<'banaqa' AND b>2 LIMIT 100 offset 1;
+--echo # row_search_mvcc hits ICP_OUT_OF_RANGE for ('banaqa',5,12)
+SELECT a,c FROM t0 WHERE a>'banama' AND a<'banaqa' AND b>2 LIMIT 100 offset 1;
+
+--echo # --
+--echo # OP and ICP that hits ICP_NO_MATCH with LOCKING READ
+--echo # --
+
+--echo # Without OP
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+
+
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1 FOR UPDATE;
+
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+--echo # Next key locking interval is (x,y], we can therefore update the 'banama',1,1
+UPDATE t0 SET a = ' pears' WHERE a = 'banama';
+rollback;
+start transaction;
+--echo # Next key locking interval is (x,y], we cannot therefore insert  right of the 'banama',1,1 row
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t0 values ('banama',2,2);
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 1;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 2;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 3 AND c=3;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t0 SET a = 'apples' WHERE a= 'banaoa' AND b = 3 AND c=6;
+
+rollback;
+connection con1;
+rollback;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+--echo # With OP
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+
+
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+
+SELECT a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1 FOR UPDATE;
+
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+--echo # Next key locking interval is (x,y], we can therefore update the 'banama',1,1
+UPDATE t0 SET a = ' pears' WHERE a = 'banama';
+rollback;
+start transaction;
+--echo # Next key locking interval is (x,y], we cannot therefore insert  right of the 'banama',1,1 row
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t0 values ('banama',2,2);
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 1;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 2;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 3 AND c=3;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t0 SET a = 'apples' WHERE a= 'banaoa' AND b = 3 AND c=6;
+
+rollback;
+connection con1;
+rollback;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+
+
+--echo # --
+--echo # RC
+--echo # --
+
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
+explain format=tree SELECT a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1;
+explain format=tree  SELECT /*+ NO_OFFSET_PUSHDOWN() */ a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1;
+--echo # row_search_mvcc hits ICP_NO_MATCH for ('banana',1,1),('banana',2,3) because 1 and 2 are smaller than 3 with and without OP
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1;
+--echo # ('banana',3,3) is skipped by offset pushdown in innodb
+SELECT a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1;
+
+explain format=tree SELECT a,c FROM t0 WHERE a>'banama' AND a<'banaqa' AND b>2 LIMIT 100 offset 1;
+--echo # row_search_mvcc hits ICP_OUT_OF_RANGE for ('banaqa',5,12)
+SELECT a,c FROM t0 WHERE a>'banama' AND a<'banaqa' AND b>2 LIMIT 100 offset 1;
+
+
+--echo # --
+--echo # RC - OP and ICP that hits ICP_NO_MATCH with LOCKING READ
+--echo # --
+
+--echo # Without OP - Without ICP
+--echo # This test is there to show that ICP does not release the locks in RC for rows that are read and not returned to the client.
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+SET optimizer_switch = 'index_condition_pushdown=off';
+
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1 FOR UPDATE;
+
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+--echo # Next key locking interval is (x,y], we can therefore update the 'banama',1,1
+UPDATE t0 SET a = ' pears' WHERE a = 'banama';
+rollback;
+start transaction;
+INSERT INTO t0 values ('banama',2,2);
+rollback;
+start transaction;
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 1;
+rollback;
+start transaction;
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 2;
+rollback;
+start transaction;
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 3 AND c=3;
+rollback;
+start transaction;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t0 SET a = 'apples' WHERE a= 'banaoa' AND b = 3 AND c=6;
+
+rollback;
+connection con1;
+rollback;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+SET optimizer_switch = 'index_condition_pushdown=on';
+
+
+--echo # Without OP
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1 FOR UPDATE;
+
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+--echo # Next key locking interval is (x,y], we can therefore update the 'banama',1,1
+UPDATE t0 SET a = ' pears' WHERE a = 'banama';
+rollback;
+start transaction;
+--echo # NO Next key locking
+INSERT INTO t0 values ('banama',2,2);
+rollback;
+start transaction;
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 1;
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 2;
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 3 AND c=3;
+rollback;
+start transaction;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t0 SET a = 'apples' WHERE a= 'banaoa' AND b = 3 AND c=6;
+
+rollback;
+connection con1;
+rollback;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+--echo # With OP
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+
+
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+
+SELECT a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1 FOR UPDATE;
+
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+connection con2;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+--echo # Next key locking interval is (x,y], we can therefore update the 'banama',1,1
+UPDATE t0 SET a = ' pears' WHERE a = 'banama';
+rollback;
+start transaction;
+SELECT @@transaction_isolation;
+--echo # Next key locking interval is (x,y], we can therefore update the 'banama',1,1
+UPDATE t0 SET a = ' pears' WHERE a = 'banama';
+rollback;
+start transaction;
+--echo # NO Next key locking
+INSERT INTO t0 values ('banama',2,2);
+rollback;
+start transaction;
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 1;
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 2;
+--echo # Skipped - Not returned lock released
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 3 AND c=3;
+rollback;
+start transaction;
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t0 SET a = 'apples' WHERE a= 'banaoa' AND b = 3 AND c=6;
+
+rollback;
+connection con1;
+rollback;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+
+DROP TABLE t0;
+--source include/wait_until_count_sessions.inc
+--echo # Restore orig wait timeout
+--echo # BOTTOM
+show variables LIKE '%innodb_lock_wait_timeout%';
+SET @@global.innodb_lock_wait_timeout = @old_innodb_lock_wait_timeout;
+show variables LIKE '%innodb_lock_wait_timeout%';
+DROP TABLE if EXISTS t2;

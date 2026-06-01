@@ -1,0 +1,289 @@
+call mtr.add_suppression("Local backup\: wal archiver is running");
+call mtr.add_suppression("failed to start wal archiver");
+call mtr.add_suppression("log archive path not configured");
+call mtr.add_suppression("start wal archive fail for pdb");
+call mtr.add_suppression("Plugin '.*' will be forced to shutdown");
+call mtr.add_suppression("Plugin '.*' has ref_count=[0-9]* after shutdown");
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("The ddl info statement 'create database full_backup_archive_restore' is failed during replaying");
+create database full_backup_archive_restore;
+use full_backup_archive_restore;
+create table t1(s varchar(100)) engine=Dstore;
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+call rds_backup.stop_full_local_backup();
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+show status like "Rds_local_backup_last_full_backup_status";
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Success
+call rds_backup.start_log_archive();
+create database ddl_test2;
+create table ddl_test2.t1 (
+id int primary key auto_increment,
+year_col year DEFAULT NULL,
+KEY `ndx_year_col` (`year_col` DESC)
+) engine=dstore;
+USE ddl_test2;
+CREATE INDEX idx1 ON t1 ((year_col + 2));
+alter table t1 rename column id to tb_id;
+ALTER TABLE t1 RENAME COLUMN tb_id TO mid, ALGORITHM = INPLACE;
+insert into t1(year_col) values(1998);
+ALTER TABLE t1 AUTO_INCREMENT = 1000;
+ALTER TABLE t1 RENAME COLUMN mid TO inc_id, ALGORITHM = INPLACE;
+create database ddl_test3;
+create table ddl_test3.t1(i int,s varchar(1000));
+use ddl_test3;
+insert into t1 values(3,'abcd3');
+alter table t1 add index idx_i(i);
+alter table t1 add index idx_s(s(100));
+select count(*) from t1;
+count(*)
+1024
+create database ddl_test4;
+use ddl_test4;
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+name VARCHAR(50));
+ALTER TABLE t1 ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX idx_name ON t1(name);
+ALTER TABLE t1 ADD INDEX idx_created_at(created_at);
+ALTER TABLE t1 DROP INDEX idx_name;
+CREATE UNIQUE INDEX uni_id ON t1(id);
+ALTER TABLE t1 ADD COLUMN email VARCHAR(100) AFTER name;
+ALTER TABLE t1 MODIFY COLUMN name VARCHAR(100);
+ALTER TABLE t1 CHANGE COLUMN email user_email VARCHAR(120);
+ALTER TABLE t1 DROP COLUMN user_email;
+ALTER TABLE t1 RENAME COLUMN name TO full_name;
+RENAME TABLE t1 TO users;
+OPTIMIZE TABLE users;
+Table	Op	Msg_type	Msg_text
+ddl_test4.users	optimize	note	Table does not support optimize, doing recreate + analyze instead
+ddl_test4.users	optimize	status	OK
+CREATE TABLE tmp (id INT);
+INSERT INTO tmp VALUES (1);
+TRUNCATE TABLE tmp;
+CREATE TABLE users_copy LIKE users;
+CREATE TABLE user_backup AS SELECT * FROM users;
+ALTER TABLE users FORCE;
+CREATE TABLE t2 (id INT, name VARCHAR(50));
+ALTER TABLE t2 ADD PRIMARY KEY (id);
+CREATE TABLE departments (dept_id INT PRIMARY KEY);
+CREATE TABLE employees (
+emp_id INT PRIMARY KEY,
+dept_id INT
+);
+ALTER TABLE employees ADD CONSTRAINT fk_dept
+FOREIGN KEY (dept_id) REFERENCES departments(dept_id);
+ALTER TABLE employees ADD CONSTRAINT chk_id CHECK (emp_id > 0);
+ALTER TABLE employees ALTER COLUMN dept_id SET DEFAULT 0;
+CREATE VIEW v_users AS SELECT * FROM users WITH CHECK OPTION;
+ALTER TABLE users CONVERT TO CHARACTER SET utf8mb4;
+ALTER TABLE users CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+CREATE INDEX idx_fullname ON users(full_name) USING BTREE;
+CREATE VIEW user_view AS SELECT id, full_name FROM users;
+ALTER VIEW user_view AS SELECT id FROM users;
+CREATE PROCEDURE get_user(IN uid INT)
+BEGIN
+SELECT * FROM users WHERE id = uid;
+END|
+ALTER PROCEDURE get_user COMMENT 'Fetch user by ID';
+CREATE FUNCTION user_count() RETURNS INT
+BEGIN
+RETURN (SELECT COUNT(*) FROM users);
+END|
+CREATE TRIGGER before_user_insert
+BEFORE INSERT ON users
+FOR EACH ROW SET NEW.created_at = NOW();
+CREATE EVENT cleanup_temp
+ON SCHEDULE EVERY 1 DAY
+DO TRUNCATE TABLE tmp;
+ALTER EVENT cleanup_temp DISABLE;
+call rds_backup.stop_log_archive();
+# restart: --dstore_open_restore_mode=on --dstore_can_do_wal_archive=on --rds_dstore_support_binlog_check=OFF
+select ddl_info from mysql.ddl_info_replay_trace;
+ddl_info
+create database full_backup_archive_restore
+USE full_backup_archive_restore; DROP TABLE IF EXISTS `t1` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `t1` (  `s` varchar(100) DEFAULT NULL) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+create database ddl_test2
+USE ddl_test2; DROP TABLE IF EXISTS `t1` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `ddl_test2`.`t1` (  `id` int NOT NULL AUTO_INCREMENT,  `year_col` year DEFAULT NULL,  PRIMARY KEY (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `ndx_year_col` (`year_col` DESC) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test2; DROP TABLE IF EXISTS `t1` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `t1` (  `id` int NOT NULL AUTO_INCREMENT,  `year_col` year DEFAULT NULL,  PRIMARY KEY (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `ndx_year_col` (`year_col` DESC) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `idx1` (((`year_col` + 2))) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test2; alter table t1 rename column id to tb_id
+USE ddl_test2; ALTER TABLE t1 RENAME COLUMN tb_id TO mid, ALGORITHM = INPLACE
+USE ddl_test2; DROP TABLE IF EXISTS `t1` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `t1` (  `mid` int NOT NULL AUTO_INCREMENT,  `year_col` year DEFAULT NULL,  PRIMARY KEY (`mid`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `ndx_year_col` (`year_col` DESC) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `idx1` (((`year_col` + 2))) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore AUTO_INCREMENT=1000 /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test2; ALTER TABLE t1 RENAME COLUMN mid TO inc_id, ALGORITHM = INPLACE
+create database ddl_test3
+USE ddl_test3; DROP TABLE IF EXISTS `t1` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `ddl_test3`.`t1` (  `i` int DEFAULT NULL,  `s` varchar(1000) DEFAULT NULL) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test3; DROP TABLE IF EXISTS `t1` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `t1` (  `i` int DEFAULT NULL,  `s` varchar(1000) DEFAULT NULL,  KEY `idx_i` (`i`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test3; DROP TABLE IF EXISTS `t1` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `t1` (  `i` int DEFAULT NULL,  `s` varchar(1000) DEFAULT NULL,  KEY `idx_i` (`i`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `idx_s` (`s`(100)) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+create database ddl_test4
+USE ddl_test4; DROP TABLE IF EXISTS `t1` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `t1` (  `id` int NOT NULL,  `name` varchar(50) DEFAULT NULL,  PRIMARY KEY (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; ALTER TABLE t1 ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+USE ddl_test4; DROP TABLE IF EXISTS `t1` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `t1` (  `id` int NOT NULL,  `name` varchar(50) DEFAULT NULL,  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,  PRIMARY KEY (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `idx_name` (`name`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; DROP TABLE IF EXISTS `t1` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `t1` (  `id` int NOT NULL,  `name` varchar(50) DEFAULT NULL,  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,  PRIMARY KEY (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `idx_name` (`name`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `idx_created_at` (`created_at`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; DROP TABLE IF EXISTS `t1` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `t1` (  `id` int NOT NULL,  `name` varchar(50) DEFAULT NULL,  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,  PRIMARY KEY (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `idx_created_at` (`created_at`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; DROP TABLE IF EXISTS `t1` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `t1` (  `id` int NOT NULL,  `name` varchar(50) DEFAULT NULL,  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,  PRIMARY KEY (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  UNIQUE KEY `uni_id` (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `idx_created_at` (`created_at`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; ALTER TABLE t1 ADD COLUMN email VARCHAR(100) AFTER name
+USE ddl_test4; DROP TABLE IF EXISTS `t1` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `t1` (  `id` int NOT NULL,  `name` varchar(100) DEFAULT NULL,  `email` varchar(100) DEFAULT NULL,  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,  PRIMARY KEY (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  UNIQUE KEY `uni_id` (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `idx_created_at` (`created_at`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; ALTER TABLE t1 CHANGE COLUMN email user_email VARCHAR(120)
+USE ddl_test4; ALTER TABLE t1 DROP COLUMN user_email
+USE ddl_test4; ALTER TABLE t1 RENAME COLUMN name TO full_name
+USE ddl_test4; RENAME TABLE t1 TO users
+USE ddl_test4; DROP TABLE IF EXISTS `users` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `users` (  `id` int NOT NULL,  `full_name` varchar(100) DEFAULT NULL,  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,  PRIMARY KEY (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  UNIQUE KEY `uni_id` (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `idx_created_at` (`created_at`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; DROP TABLE IF EXISTS `tmp` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `tmp` (  `id` int DEFAULT NULL) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; DROP TABLE IF EXISTS `tmp` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `tmp` (  `id` int DEFAULT NULL) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; DROP TABLE IF EXISTS `users_copy` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `users_copy` (  `id` int NOT NULL,  `full_name` varchar(100) DEFAULT NULL,  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,  PRIMARY KEY (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  UNIQUE KEY `uni_id` (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `idx_created_at` (`created_at`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; DROP TABLE IF EXISTS `user_backup` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `user_backup` (  `id` int NOT NULL,  `full_name` varchar(100) DEFAULT NULL,  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; DROP TABLE IF EXISTS `users` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `users` (  `id` int NOT NULL,  `full_name` varchar(100) DEFAULT NULL,  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,  PRIMARY KEY (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  UNIQUE KEY `uni_id` (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `idx_created_at` (`created_at`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; DROP TABLE IF EXISTS `t2` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `t2` (  `id` int DEFAULT NULL,  `name` varchar(50) DEFAULT NULL) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; DROP TABLE IF EXISTS `t2` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `t2` (  `id` int NOT NULL,  `name` varchar(50) DEFAULT NULL,  PRIMARY KEY (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; DROP TABLE IF EXISTS `departments` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `departments` (  `dept_id` int NOT NULL,  PRIMARY KEY (`dept_id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; DROP TABLE IF EXISTS `employees` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `employees` (  `emp_id` int NOT NULL,  `dept_id` int DEFAULT NULL,  PRIMARY KEY (`emp_id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; DROP TABLE IF EXISTS `employees` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `employees` (  `emp_id` int NOT NULL,  `dept_id` int DEFAULT NULL,  PRIMARY KEY (`emp_id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `fk_dept` (`dept_id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,
+  CONSTRAINT `fk_dept` FOREIGN KEY (`dept_id`) REFERENCES `departments` (`dept_id`)) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; DROP TABLE IF EXISTS `employees` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `employees` (  `emp_id` int NOT NULL,  `dept_id` int DEFAULT NULL,  PRIMARY KEY (`emp_id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `fk_dept` (`dept_id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,
+  CONSTRAINT `fk_dept` FOREIGN KEY (`dept_id`) REFERENCES `departments` (`dept_id`),  CONSTRAINT `chk_id` CHECK ((`emp_id` > 0))) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; ALTER TABLE employees ALTER COLUMN dept_id SET DEFAULT 0
+USE ddl_test4; CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `v_users` AS SELECT * FROM users WITH CHECK OPTION
+USE ddl_test4; DROP TABLE IF EXISTS `users` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `users` (  `id` int NOT NULL,  `full_name` varchar(100) DEFAULT NULL,  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,  PRIMARY KEY (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  UNIQUE KEY `uni_id` (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `idx_created_at` (`created_at`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; DROP TABLE IF EXISTS `users` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `users` (  `id` int NOT NULL,  `full_name` varchar(100) COLLATE utf8mb4_bin DEFAULT NULL,  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,  PRIMARY KEY (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  UNIQUE KEY `uni_id` (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `idx_created_at` (`created_at`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; DROP TABLE IF EXISTS `users` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `users` (  `id` int NOT NULL,  `full_name` varchar(100) COLLATE utf8mb4_bin DEFAULT NULL,  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,  PRIMARY KEY (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  UNIQUE KEY `uni_id` (`id`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `idx_created_at` (`created_at`) /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */,  KEY `idx_fullname` (`full_name`) USING BTREE /*!80041 dstore_ddl_comment 'indexrelid=SOME;relblknum=SOME;relfileid=SOME;' */) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+USE ddl_test4; CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `user_view` AS SELECT id, full_name FROM users
+USE ddl_test4; ALTER ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `user_view` AS SELECT id FROM users
+USE ddl_test4; CREATE DEFINER=`root`@`localhost` PROCEDURE `get_user`(IN uid INT)
+BEGIN
+SELECT * FROM users WHERE id = uid;
+END
+USE ddl_test4; ALTER PROCEDURE get_user COMMENT 'Fetch user by ID'
+USE ddl_test4; CREATE DEFINER=`root`@`localhost` FUNCTION `user_count`() RETURNS int
+BEGIN
+RETURN (SELECT COUNT(*) FROM users);
+END
+USE ddl_test4; CREATE DEFINER=`root`@`localhost` TRIGGER before_user_insert
+BEFORE INSERT ON users
+FOR EACH ROW SET NEW.created_at = NOW()
+USE ddl_test4; CREATE DEFINER=`root`@`localhost` EVENT cleanup_temp
+ON SCHEDULE EVERY 1 DAY
+DO TRUNCATE TABLE tmp
+USE ddl_test4; ALTER EVENT cleanup_temp DISABLE
+USE ddl_test4; DROP TABLE IF EXISTS `tmp` /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;' */; CREATE TABLE `tmp` (  `id` int DEFAULT NULL) ENGINE=Dstore /*!80041 dstore_ddl_comment='FOR_DD_REPLAY=1;tablerelid=SOME;relblknum=SOME;relfileid=SOME;' */
+show create table ddl_test2.t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `inc_id` int NOT NULL AUTO_INCREMENT,
+  `year_col` year DEFAULT NULL,
+  PRIMARY KEY (`inc_id`),
+  KEY `ndx_year_col` (`year_col` DESC),
+  KEY `idx1` (((`year_col` + 2)))
+) ENGINE=Dstore AUTO_INCREMENT=1000 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+select * from ddl_test2.t1;
+inc_id	year_col
+1	1998
+use ddl_test3;
+select count(*) from t1;
+count(*)
+1024
+insert into t1 values(4,'abcd4');
+select * from t1 group by 1, 2;
+i	s
+3	abcd3
+4	abcd4
+use ddl_test4;
+show tables;
+Tables_in_ddl_test4
+departments
+employees
+t2
+tmp
+user_backup
+user_view
+users
+users_copy
+v_users
+show create view user_view;
+View	Create View	character_set_client	collation_connection
+user_view	CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `user_view` AS select `users`.`id` AS `id` from `users`	utf8mb4	utf8mb4_0900_ai_ci
+show create function user_count;
+Function	sql_mode	Create Function	character_set_client	collation_connection	Database Collation
+user_count	ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION	CREATE DEFINER=`root`@`localhost` FUNCTION `user_count`() RETURNS int
+BEGIN
+RETURN (SELECT COUNT(*) FROM users);
+END	utf8mb4	utf8mb4_0900_ai_ci	utf8mb4_0900_ai_ci
+SELECT user_count();
+user_count()
+0
+show create procedure get_user;
+Procedure	sql_mode	Create Procedure	character_set_client	collation_connection	Database Collation
+get_user	ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION	CREATE DEFINER=`root`@`localhost` PROCEDURE `get_user`(IN uid INT)
+    COMMENT 'Fetch user by ID'
+BEGIN
+SELECT * FROM users WHERE id = uid;
+END	utf8mb4	utf8mb4_0900_ai_ci	utf8mb4_0900_ai_ci
+SELECT TRIGGER_CATALOG, TRIGGER_SCHEMA, TRIGGER_NAME, ACTION_STATEMENT, DEFINER FROM information_schema.TRIGGERS WHERE TRIGGER_NAME = 'before_user_insert';
+TRIGGER_CATALOG	TRIGGER_SCHEMA	TRIGGER_NAME	ACTION_STATEMENT	DEFINER
+def	ddl_test4	before_user_insert	SET NEW.created_at = NOW()	root@localhost
+SELECT EVENT_CATALOG, EVENT_SCHEMA, EVENT_NAME, EVENT_DEFINITION, STATUS from information_schema.EVENTS WHERE EVENT_SCHEMA = 'ddl_test4';
+EVENT_CATALOG	EVENT_SCHEMA	EVENT_NAME	EVENT_DEFINITION	STATUS
+def	ddl_test4	cleanup_temp	TRUNCATE TABLE tmp	DISABLED
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+call rds_backup.stop_full_local_backup();
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+show status like "Rds_local_backup_last_full_backup_status";
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Success
+call rds_backup.start_log_archive();
+call rds_backup.start_log_archive();
+ERROR HY000: Local backup: wal archiver is already running
+use ddl_test4;
+DROP VIEW user_view;
+DROP VIEW v_users;
+ALTER TABLE employees DROP FOREIGN KEY fk_dept;
+ALTER TABLE t2 DROP PRIMARY KEY;
+DROP PROCEDURE get_user;
+DROP FUNCTION user_count;
+DROP TRIGGER before_user_insert;
+DROP EVENT cleanup_temp;
+DROP TABLE users, users_copy, user_backup, tmp;
+call rds_backup.stop_log_archive();
+call rds_backup.stop_log_archive();
+# restart: --dstore_open_restore_mode=on --dstore_can_do_wal_archive=on --rds_dstore_support_binlog_check=OFF
+use ddl_test4;
+show tables;
+Tables_in_ddl_test4
+departments
+employees
+t2
+SELECT * FROM information_schema.ROUTINES WHERE ROUTINE_TYPE = 'FUNCTION' AND ROUTINE_SCHEMA = 'ddl_test4';
+SPECIFIC_NAME	ROUTINE_CATALOG	ROUTINE_SCHEMA	ROUTINE_NAME	ROUTINE_TYPE	DATA_TYPE	CHARACTER_MAXIMUM_LENGTH	CHARACTER_OCTET_LENGTH	NUMERIC_PRECISION	NUMERIC_SCALE	DATETIME_PRECISION	CHARACTER_SET_NAME	COLLATION_NAME	DTD_IDENTIFIER	ROUTINE_BODY	ROUTINE_DEFINITION	EXTERNAL_NAME	EXTERNAL_LANGUAGE	PARAMETER_STYLE	IS_DETERMINISTIC	SQL_DATA_ACCESS	SQL_PATH	SECURITY_TYPE	CREATED	LAST_ALTERED	SQL_MODE	ROUTINE_COMMENT	DEFINER	CHARACTER_SET_CLIENT	COLLATION_CONNECTION	DATABASE_COLLATION
+SELECT * FROM information_schema.ROUTINES WHERE ROUTINE_TYPE = 'PROCEDURE' AND ROUTINE_SCHEMA = 'ddl_test4';
+SPECIFIC_NAME	ROUTINE_CATALOG	ROUTINE_SCHEMA	ROUTINE_NAME	ROUTINE_TYPE	DATA_TYPE	CHARACTER_MAXIMUM_LENGTH	CHARACTER_OCTET_LENGTH	NUMERIC_PRECISION	NUMERIC_SCALE	DATETIME_PRECISION	CHARACTER_SET_NAME	COLLATION_NAME	DTD_IDENTIFIER	ROUTINE_BODY	ROUTINE_DEFINITION	EXTERNAL_NAME	EXTERNAL_LANGUAGE	PARAMETER_STYLE	IS_DETERMINISTIC	SQL_DATA_ACCESS	SQL_PATH	SECURITY_TYPE	CREATED	LAST_ALTERED	SQL_MODE	ROUTINE_COMMENT	DEFINER	CHARACTER_SET_CLIENT	COLLATION_CONNECTION	DATABASE_COLLATION
+SELECT TRIGGER_CATALOG, TRIGGER_SCHEMA, TRIGGER_NAME, ACTION_STATEMENT, DEFINER FROM information_schema.TRIGGERS WHERE TRIGGER_NAME = 'before_user_insert';
+TRIGGER_CATALOG	TRIGGER_SCHEMA	TRIGGER_NAME	ACTION_STATEMENT	DEFINER
+SELECT EVENT_CATALOG, EVENT_SCHEMA, EVENT_NAME, EVENT_DEFINITION, STATUS from information_schema.EVENTS WHERE EVENT_SCHEMA = 'ddl_test4';
+EVENT_CATALOG	EVENT_SCHEMA	EVENT_NAME	EVENT_DEFINITION	STATUS
+drop database ddl_test2;
+drop database ddl_test3;
+drop database ddl_test4;
+drop database full_backup_archive_restore;

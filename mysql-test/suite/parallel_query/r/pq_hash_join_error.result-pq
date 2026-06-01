@@ -1,0 +1,86 @@
+CREATE TABLE t (i INTEGER);
+INSERT INTO t VALUES (1), (2), (3);
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t, t2  (cost=0.613 rows=3)
+    -> Inner hash join, hash table shared by worker threads (t2.i = t.i)  (cost=0.613 rows=0.75)
+        -> Parallel table scan on t2  (cost=0.0917 rows=0.75)
+        -> Hash
+            -> Parallel table scan on t  (cost=0.325 rows=0.75)
+
+set session debug="+d, pq_worker_abort1";
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+ERROR HY000: Parallel execution error
+set session debug="-d, pq_worker_abort1";
+set session debug="+d, pq_worker_abort2";
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+ERROR HY000: Parallel execution error
+set session debug="-d, pq_worker_abort2";
+set session debug="+d, pq_worker_error1";
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+ERROR HY000: Parallel execution error
+set session debug="-d, pq_worker_error1";
+set session debug="+d, pq_worker_error2";
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+ERROR HY000: Parallel execution error
+set session debug="-d, pq_worker_error2";
+set session debug="+d, pq_worker_error4";
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+ERROR HY000: Parallel execution error
+set session debug="-d, pq_worker_error4";
+set session debug="+d, pq_worker_error5";
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+ERROR HY000: Parallel execution error
+set session debug="-d, pq_worker_error5";
+set session debug="+d, pq_worker_error6";
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+ERROR HY000: Parallel execution error
+set session debug="-d, pq_worker_error6";
+set session debug="+d, pq_worker_error7";
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+ERROR HY000: Parallel execution error
+set session debug="-d, pq_worker_error7";
+set session debug="+d, pq_worker_error8";
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+ERROR HY000: Parallel execution error
+set session debug="-d, pq_worker_error8";
+set session debug="+d, pq_worker_error9";
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+i	i
+1	1
+2	2
+3	3
+set session debug="-d, pq_worker_error9";
+set session debug="+d, pq_worker_error10";
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+ERROR HY000: Parallel execution error
+set session debug="-d, pq_worker_error10";
+DROP TABLE t;
+#
+# BUG2022101401408 When PQ is enabled, execute a 4-table join query with
+#                  aggregate function, and the query with MIN function is
+#                  stuck randomly
+# Create a case where execution of the query is started (Init() is called
+# on the top-level iterator), but an error happens so that Init() is not
+# called on the HashJoinIterator. We want to verify that we do not call
+# ArriveAndDrop() in both HashJoinIterators End() and in the destructor.
+CREATE TABLE t1 (i INTEGER);
+INSERT INTO t1 VALUES (1);
+EXPLAIN FORMAT=tree SELECT /*+ NO_BNL(t3) PQ(t2) */ * FROM t1 JOIN t1 t2 JOIN t1 t3;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1, t2  (cost=0.45 rows=1)
+    -> Nested loop inner join  (cost=0.45 rows=0.25)
+        -> Inner hash join, hash table shared by worker threads (no condition)  (cost=0.363 rows=0.25)
+            -> Parallel table scan on t2  (cost=0.275 rows=0.25)
+            -> Hash
+                -> Parallel table scan on t1  (cost=0.275 rows=0.25)
+        -> Table scan on t3  (cost=0.35 rows=1)
+
+SET SESSION debug="+d, nested_loop_init_error";
+SELECT /*+ NO_BNL(t3) PQ(t2) */ * FROM t1 JOIN t1 t2 JOIN t1 t3;
+ERROR 21000: Subquery returns more than 1 row
+SET SESSION debug="-d, nested_loop_init_error";
+DROP TABLE t1;

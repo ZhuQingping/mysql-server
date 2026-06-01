@@ -1,0 +1,402 @@
+########################################################################
+# Tests for LOCK BINLOG FOR BACKUP
+########################################################################
+--echo #-----------------------------------------------------------------------
+--echo # Test sql_log_bin = 0 and rds_binlog_lock_enable = ON
+--echo #-----------------------------------------------------------------------
+
+--source include/have_innodb.inc
+
+SHOW VARIABLES LIKE 'rds_binlog_lock_enable';
+
+--echo #-----------------------------------------------------------------------
+--echo # Setup
+--echo #-----------------------------------------------------------------------
+
+# Save the initial number of concurrent sessions.
+--source include/count_sessions.inc
+DROP TABLE if exists t_innodb;
+CREATE TABLE t_innodb(a INT NOT NULL, KEY (a)) ENGINE=InnoDB;
+DROP VIEW if exists v_innodb;
+CREATE VIEW v_innodb AS SELECT * FROM t_innodb;
+set session sql_log_bin = 0;
+--echo #-----------------------------------------------------------------------
+--echo # Basic syntax checks
+--echo #-----------------------------------------------------------------------
+
+--error ER_PARSE_ERROR
+LOCK TABLES t_innodb FOR BACKUP;
+--error ER_PARSE_ERROR
+LOCK TABLES t_innodb READ FOR BACKUP;
+--error ER_PARSE_ERROR
+LOCK TABLES t_innodb FOR BACKUP READ;
+--error ER_PARSE_ERROR
+LOCK BINLOG t_innodb FOR BACKUP;
+--error ER_PARSE_ERROR
+LOCK BINLOG t_innodb READ FOR BACKUP;
+--error ER_PARSE_ERROR
+LOCK BINLOG t_innodb FOR BACKUP READ;
+
+LOCK BINLOG FOR BACKUP;
+UNLOCK BINLOG;
+
+--echo #-----------------------------------------------------------------------
+--echo # No backup locks are allowed in stored routines
+--echo #-----------------------------------------------------------------------
+
+delimiter |;
+--error ER_SP_BADSTATEMENT
+CREATE PROCEDURE p2()
+BEGIN
+  LOCK BINLOG FOR BACKUP;
+END|
+
+--error ER_SP_BADSTATEMENT
+CREATE FUNCTION f2() RETURNS INT DETERMINISTIC
+BEGIN
+  LOCK BINLOG FOR BACKUP;
+  RETURN 1;
+END|
+
+delimiter ;|
+
+--echo #-----------------------------------------------------------------------
+--echo # Single-threaded tests
+--echo #-----------------------------------------------------------------------
+
+SET SESSION lock_wait_timeout=1;
+
+FLUSH STATUS;
+
+#
+# Multiple BFB locks in the same connection
+#
+LOCK BINLOG FOR BACKUP;
+LOCK BINLOG FOR BACKUP;
+
+SHOW STATUS LIKE 'Com_lock_binlog_for_backup';
+
+UNLOCK BINLOG;
+SHOW STATUS LIKE 'Com_unlock_binlog';
+
+#
+# LBFB + DML/DDL in the same connection (and binlog disabled)
+#
+LOCK BINLOG FOR BACKUP;
+
+DELETE FROM t_innodb;
+INSERT INTO t_innodb VALUES(0);
+UPDATE t_innodb SET a = 1;
+REPLACE INTO t_innodb VALUES(1);
+SELECT * from t_innodb;
+HANDLER t_innodb OPEN;
+HANDLER t_innodb READ a FIRST;
+HANDLER t_innodb CLOSE;
+
+CREATE TABLE tt_innodb(a INT NOT NULL) ENGINE=InnoDB;
+
+DROP TABLE tt_innodb;
+
+--error ER_BAD_TABLE_ERROR
+DROP TABLE non_existing;
+
+TRUNCATE TABLE t_innodb;
+
+RENAME TABLE t_innodb TO tmp, tmp TO t_innodb;
+
+
+ALTER TABLE t_innodb ADD COLUMN b CHAR(10) NOT NULL;
+ALTER TABLE t_innodb DROP COLUMN b;
+
+ALTER TABLE t_innodb ADD KEY tmp (a);
+ALTER TABLE t_innodb DROP KEY tmp;
+
+CREATE DATABASE test1;
+DROP DATABASE test1;
+
+delimiter |;
+
+CREATE PROCEDURE p1()
+BEGIN
+  SELECT 1;
+END|
+
+DROP PROCEDURE p1|
+
+CREATE FUNCTION f1() RETURNS INT DETERMINISTIC
+BEGIN
+  RETURN 1;
+END|
+
+DROP FUNCTION f1|
+
+delimiter ;|
+
+CREATE VIEW v1 AS SELECT * FROM t_innodb;
+DROP VIEW v1;
+
+INSERT INTO v_innodb VALUES(1);
+
+UNLOCK BINLOG;
+
+#
+# Test that temporary tables are not affected by backup locks
+#
+
+CREATE TEMPORARY TABLE tt_innodb(a INT NOT NULL) ENGINE=InnoDB;
+
+LOCK BINLOG FOR BACKUP;
+
+START TRANSACTION;
+SELECT * FROM tt_innodb;
+INSERT INTO tt_innodb VALUES(6);
+COMMIT;
+
+SELECT * FROM tt_innodb;
+
+DROP TEMPORARY TABLE tt_innodb;
+
+UNLOCK BINLOG;
+
+#
+# test that AUTOCOMMIT updates succeed with a BINLOG lock in the same connection with binlog disabled
+#
+
+#SELECT @@rds_global_sql_log_bin;
+
+LOCK BINLOG FOR BACKUP;
+
+INSERT INTO t_innodb VALUES(1);
+
+UNLOCK BINLOG;
+
+#
+# Log tables
+#
+
+SET @old_general_log = @@general_log;
+SET @old_slow_query_log = @@slow_query_log;
+SET @old_log_output = @@log_output;
+SET @old_long_query_time = @@SESSION.long_query_time;
+
+
+SET SESSION long_query_time = 0;
+SET GLOBAL log_output = 'TABLE';
+SET GLOBAL general_log = ON;
+SET GLOBAL slow_query_log = ON;
+
+LOCK BINLOG FOR BACKUP;
+
+SELECT 1;
+
+UNLOCK BINLOG;
+
+SET SESSION long_query_time = @old_long_query_time;
+SET GLOBAL log_output = @old_log_output;
+SET GLOBAL slow_query_log = @old_slow_query_log;
+SET GLOBAL general_log = @old_general_log;
+
+SET SESSION lock_wait_timeout=default;
+
+
+--echo #-----------------------------------------------------------------------
+--echo # Multi-threaded tests
+--echo #-----------------------------------------------------------------------
+
+SET GLOBAL lock_wait_timeout=1;
+--connect(con1,localhost,root,,)
+#
+# Test that temporary tables are not affected by backup locks
+#
+
+--connection con1
+--echo # connection con1
+CREATE TEMPORARY TABLE tt_innodb(a INT NOT NULL) ENGINE=InnoDB;
+
+--connection default
+--echo # connection default
+LOCK BINLOG FOR BACKUP;
+
+--connection con1
+--echo # connection con1
+
+START TRANSACTION;
+SELECT * FROM tt_innodb;
+INSERT INTO tt_innodb VALUES(6);
+COMMIT;
+
+SELECT * FROM tt_innodb;
+DROP TEMPORARY TABLE tt_innodb;
+
+--connection default
+--echo # connection default
+
+UNLOCK BINLOG;
+
+#
+# LBFB + DML/DDL in another connection (and binlog disabled)
+#
+
+set session sql_log_bin=0;
+LOCK BINLOG FOR BACKUP;
+
+--connection con1
+--echo # connection con1
+
+set session sql_log_bin=0;
+DELETE FROM t_innodb;
+INSERT INTO t_innodb VALUES(0);
+UPDATE t_innodb SET a = 1;
+REPLACE INTO t_innodb VALUES(1);
+SELECT * from t_innodb;
+HANDLER t_innodb OPEN;
+HANDLER t_innodb READ a FIRST;
+HANDLER t_innodb CLOSE;
+
+CREATE TABLE tt_innodb(a INT NOT NULL) ENGINE=InnoDB;
+DROP TABLE tt_innodb;
+--error ER_BAD_TABLE_ERROR
+DROP TABLE non_existing;
+TRUNCATE TABLE t_innodb;
+RENAME TABLE t_innodb TO tmp, tmp TO t_innodb;
+ALTER TABLE t_innodb ADD COLUMN b CHAR(10) NOT NULL;
+ALTER TABLE t_innodb DROP COLUMN b;
+ALTER TABLE t_innodb ADD KEY tmp (a);
+ALTER TABLE t_innodb DROP KEY tmp;
+
+CREATE DATABASE test1;
+DROP DATABASE test1;
+delimiter |;
+
+CREATE PROCEDURE p1()
+BEGIN
+  SELECT 1;
+END|
+
+DROP PROCEDURE p1|
+
+CREATE FUNCTION f1() RETURNS INT DETERMINISTIC
+BEGIN
+  RETURN 1;
+END|
+
+DROP FUNCTION f1|
+
+delimiter ;|
+
+CREATE VIEW v1 AS SELECT * FROM t_innodb;
+DROP VIEW v1;
+
+INSERT INTO v_innodb VALUES(1);
+
+--connection default
+--echo # connection default
+
+UNLOCK BINLOG;
+
+#
+# Log tables
+#
+
+SET @old_general_log = @@general_log;
+SET @old_slow_query_log = @@slow_query_log;
+SET @old_log_output = @@log_output;
+
+SET GLOBAL log_output = 'TABLE';
+SET GLOBAL general_log = ON;
+SET GLOBAL slow_query_log = ON;
+
+--connection con1
+--echo # connection con1
+
+SET @old_long_query_time = @@SESSION.long_query_time;
+SET SESSION long_query_time = 0;
+
+SELECT 1;
+
+--connection default
+--echo # connection default
+
+LOCK BINLOG FOR BACKUP;
+
+SELECT 1;
+
+--connection con1
+--echo # connection con1
+
+SET SESSION long_query_time = @old_long_query_time;
+
+--connection default
+--echo # connection default
+
+UNLOCK BINLOG;
+
+SET GLOBAL log_output = @old_log_output;
+SET GLOBAL slow_query_log = @old_slow_query_log;
+SET GLOBAL general_log = @old_general_log;
+truncate table mysql.general_log;
+truncate table mysql.slow_log;
+
+--disconnect con1
+
+--echo #-----------------------------------------------------------------------
+--echo # Test sql_log_bin = 1 and rds_binlog_lock_enable = OFF
+--echo #-----------------------------------------------------------------------
+#SET global rds_global_sql_log_bin = ON;
+SET PERSIST_ONLY rds_binlog_lock_enable=0;
+
+--echo # Restart server and check if server starts
+--let $restart_parameters=restart:
+--source include/restart_mysqld.inc
+
+connection default;
+SELECT @@global.rds_binlog_lock_enable;
+SELECT * FROM performance_schema.persisted_variables;
+
+SHOW VARIABLES LIKE 'rds_binlog_lock_enable';
+#SHOW VARIABLES LIKE 'rds_global_sql_log_bin';
+
+#
+# test 'lock binlog for backup'  return error, 
+# test 'unlock binlog' succeed
+# test dml/ddl won't acquire IX binlog lock.
+#
+--connect(test,localhost,root,,)
+--connection test
+SET DEBUG_SYNC= "binlog_protection_acquired WAIT_FOR released";
+--send INSERT INTO t_innodb VALUES(5)
+
+--connection default
+--sleep 3
+#select LOCK_STATUS,LOCK_MODE,LOCK_DURATION from information_schema.metadata_lock_info where LOCK_TYPE = 'Binlog lock' order by LOCK_MODE;
+select LOCK_TYPE,LOCK_DURATION,LOCK_STATUS from performance_schema.metadata_locks where OBJECT_TYPE = 'BINLOG' order by LOCK_TYPE;
+SET DEBUG_SYNC= "now SIGNAL released";
+
+--connection test
+--reap
+
+--error ER_BINLOG_LOCK_NOT_ENABLED
+LOCK BINLOG FOR BACKUP;
+#select LOCK_STATUS,LOCK_MODE,LOCK_DURATION from information_schema.metadata_lock_info where LOCK_TYPE = 'Binlog lock' order by LOCK_MODE;
+select LOCK_TYPE,LOCK_DURATION,LOCK_STATUS from performance_schema.metadata_locks where OBJECT_TYPE = 'BINLOG' order by LOCK_TYPE;
+
+UNLOCK BINLOG;
+SELECT * FROM t_innodb;
+
+
+--echo #-----------------------------------------------------------------------
+--echo # Cleanup
+--echo #-----------------------------------------------------------------------
+SET GLOBAL lock_wait_timeout=default;
+#SET GLOBAL rds_global_sql_log_bin=ON;
+set session sql_log_bin = 1;
+
+--disconnect test
+--connection default
+DROP VIEW v_innodb;
+DROP TABLE t_innodb;
+
+RESET PERSIST;
+--echo # Restart server and check if server starts
+--let $restart_parameters=restart:
+--source include/restart_mysqld.inc

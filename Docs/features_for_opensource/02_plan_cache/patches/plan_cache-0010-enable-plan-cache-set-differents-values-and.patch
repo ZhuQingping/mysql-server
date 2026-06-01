@@ -1,0 +1,534 @@
+From cb5f7a27ccbc376614268adffcd7d3d76ca964d2 Mon Sep 17 00:00:00 2001
+From: Guilhem Bichot <guilhem.bichot@contributor>
+
+Date: Wed, 6 Aug 2025 17:03:04 +0200
+Subject: [PATCH] enable plan_cache, set differents values and
+ execute a query which contains conditions of time and timestamp type, the
+ result returned for the second time is wrong.
+
+As you can see in the last two EXPLAIN added to the test in the
+dstore_main suite, the first one and the second one use a different
+index. Due to the very special value of @col2 in the first one, the
+BETWEEN on timestamp_col is actually an equality, whereas in the
+second case, it is a "true" range, and probably this causes different
+cost values, and a different choice of index - but the reasons are
+irrelevant anyway. Note that the first uses ICP, the second does not.
+
+In the bug report, with plan cache on, and without the code fix, we
+saw an ICP in BOTH. Here is what happened.
+
+In the plan cache code, the ICP is cached the first time and
+unconditionally re-applied the second time (however the constant in
+the comparison in the ICP condition in the second case is properly the
+new value of @col2 - that particular point is no issue).
+
+Plan cache does not cache the range scan object (the thing produced by
+test_quick_select()), it only caches the index's number (see
+Exec_context::fill()) and the range scan's type (index merge, etc),
+and when applying the cached plan at the 2nd execution, it applies the
+cached ICP condition, then calls the range optimizer to create a fresh
+range scan, with hints to try to force it to pick the cached type and
+cached index ; if the range optimizer fails to create a range scan
+with these constraints (and it is the case here, probably as the
+range's shape changed?), it invalidates the cached plan and goes back
+to normal optimization. The mistake is that, when invalidating, it
+forgets to clean up the ICP condition which it had applied!
+
+Fix: when we apply the cached plan, including the applying of a cached
+ICP, if we later decide to invalidate the plan after all, cancel ICP.
+While at it, we improve two things:
+- at the cancellation place, also cancel more members (again to undo
+the effects of the failed applying): covering_keys, key_read, and the
+hint for the range optimizer.
+- at the place where we apply ICP: instead of setting table->file
+members directly, now go through the handler API idx_cond_push(); the
+benefit is to make the "cached plan" execution path as identical as
+possible to the "normal" path which calls idx_cond_push() too.
+Likewise, instead of setting these members to "none", call
+cancel_pushed_idx_cond() (like handler::ha_reset()) which takes care
+of resetting one more member and can be overriden in engines.
+---
+ .../collections/disabled-dstore-arm.def       |   1 -
+ mysql-test/collections/disabled-dstore.def    |   1 -
+ mysql-test/include/session_plan_cache.inc     | 116 +++++++++++++++
+ mysql-test/r/session_plan_cache.result        |  87 ++++++++++++
+ .../dstore_main/r/session_plan_cache.result   | 133 ++++++++++++++++++
+ sql/sql_plan_cache.cc                         |  33 ++++-
+ sql/table.h                                   |   3 +
+ 7 files changed, 366 insertions(+), 8 deletions(-)
+
+diff --git a/mysql-test/collections/disabled-dstore-arm.def b/mysql-test/collections/disabled-dstore-arm.def
+index 2f11beeefdf..db56520ab9b 100644
+--- a/mysql-test/collections/disabled-dstore-arm.def
++++ b/mysql-test/collections/disabled-dstore-arm.def
+@@ -213,7 +213,6 @@ dstore_main.select_icp_mrr-dstore : BUG#9999 explain SQL result is unstable, Nee
+ dstore_main.subquery_sj_loosescan-dstore : BUG#9999 explain SQL result is unstable, Need To Skip   
+ dstore_main.select_icp_mrr_bka-dstore : BUG#9999 explain SQL result is unstable, Need To Skip     
+ dstore_main.subquery_sj_loosescan_bka_nobnl-dstore : BUG#9999 explain SQL result is unstable, Need To Skip   
+-dstore_main.session_plan_cache : BUG#9999 explain SQL result is unstable, Need To Skip             
+ dstore_main.subquery_sj_dupsweed_bka_nobnl-dstore : BUG#9999 explain SQL result is unstable, Need To Skip  
+ dstore_main.select_none_bka_nobnl-dstore : BUG#9999 explain SQL result is unstable, Need To Skip   
+ dstore_main.opt_hints-dstore : BUG#9999 explain SQL result is unstable, Need To Skip               
+diff --git a/mysql-test/collections/disabled-dstore.def b/mysql-test/collections/disabled-dstore.def
+index 3f94a621103..de094e4c47f 100644
+--- a/mysql-test/collections/disabled-dstore.def
++++ b/mysql-test/collections/disabled-dstore.def
+@@ -212,7 +212,6 @@ dstore_main.select_icp_mrr-dstore : BUG#9999 explain SQL result is unstable, Nee
+ dstore_main.subquery_sj_loosescan-dstore : BUG#9999 explain SQL result is unstable, Need To Skip   
+ dstore_main.select_icp_mrr_bka-dstore : BUG#9999 explain SQL result is unstable, Need To Skip     
+ dstore_main.subquery_sj_loosescan_bka_nobnl-dstore : BUG#9999 explain SQL result is unstable, Need To Skip   
+-dstore_main.session_plan_cache : BUG#9999 explain SQL result is unstable, Need To Skip             
+ dstore_main.subquery_sj_dupsweed_bka_nobnl-dstore : BUG#9999 explain SQL result is unstable, Need To Skip  
+ dstore_main.select_none_bka_nobnl-dstore : BUG#9999 explain SQL result is unstable, Need To Skip   
+ dstore_main.opt_hints-dstore : BUG#9999 explain SQL result is unstable, Need To Skip               
+diff --git a/mysql-test/include/session_plan_cache.inc b/mysql-test/include/session_plan_cache.inc
+index abddaa44004..03c8d4ce760 100644
+--- a/mysql-test/include/session_plan_cache.inc
++++ b/mysql-test/include/session_plan_cache.inc
+@@ -124,6 +124,14 @@ let $param1 = 'two';
+ let $param2 = 3;
+ let $query=select * from t1 where b = $param1 and c = $param2;
+ # Sometimes it reports intersect(idx,idx1) sometimes intersect(idx1,idx)
++
++--disable_query_log
++--disable_result_log
++analyze table t1 update histogram on b,c;
++analyze table t1;
++--enable_result_log
++--enable_query_log
++ 
+ --replace_column 7 # 8 # 10 # 12 #
+ eval explain $query;
+ let $param1 = ?;
+@@ -1744,4 +1752,112 @@ SHOW STATUS LIKE '%Cached_plan%';
+ DROP PREPARE stmt;
+ DROP TABLE tbl_1_all_type2index_desc;
+ 
++--echo #
++--echo # BUGFIX [plan cache][wrong result] enable plan_cache, set 
++--echo #                  differents values and execute a query which contains
++--echo #                  conditions of time and timestamp type, the result 
++--echo #                  returned for the second time is wrong.
++--echo #
++
++CREATE TABLE tbl_1_all_type2index_desc (
++  id_col int NOT NULL AUTO_INCREMENT,
++  bigint_col bigint NOT NULL,
++  date_col date DEFAULT NULL,
++  timestamp_col timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
++  time_col time(6) DEFAULT NULL,
++  varchar_col varchar(255) CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL,
++  UNIQUE KEY (id_col desc),
++  KEY ndx_timestamp_time_col (timestamp_col desc, time_col desc),
++  KEY ndx_timestamp_varchar_col (timestamp_col desc, varchar_col(4) desc)
++) AUTO_INCREMENT=114 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
++
++INSERT INTO tbl_1_all_type2index_desc VALUES 
++(6, 1,'1998-12-03','2020-01-01 02:00:00.000000','23:23:59.000000','bbbbbbbbbb'),
++(7, 1,'1998-12-03','2020-01-01 02:00:00.000000','23:23:59.000000','bbbbbbbbbb'),
++(8, 1,'1998-12-03','2020-01-01 02:00:00.000000','23:23:59.000000','bbbbbbbbbb'),
++(9, 1,'1998-12-03','2020-01-01 02:00:00.000000','23:23:59.000000','bbbbbbbbbb'),
++(10,1,'1998-12-03','2020-01-01 02:00:00.000000','23:23:59.000000','bbbbbbbbbb'),
++(11,1,'1998-11-03','2020-02-03 02:00:00.000000','10:59:59.000000','bbbbbbbbcd'),
++(12,1,'1998-11-03','2020-02-03 02:00:00.000000','10:59:59.000000','bbbbbbbbcd'),
++(13,1,'1998-11-03','2020-02-03 02:00:00.000000','10:59:59.000000','bbbbbbbbcd'),
++(14,1,'1998-11-03','2020-02-03 02:00:00.000000','10:59:59.000000','bbbbbbbbcd'),
++(15,1,'1998-11-03','2020-02-03 02:00:00.000000','10:59:59.000000','bbbbbbbbcd');
++
++--echo #
++--echo # PS query execution with caching off and on
++--echo #
++set rds_plan_cache=0;
++PREPARE stmt FROM 
++"WITH A AS (SELECT date_col, bigint_col FROM tbl_1_all_type2index_desc A
++            WHERE A.time_col >= ? AND
++	           A.timestamp_col BETWEEN '1995-09-02 12:20:00.000000' AND ?
++		   ORDER BY 1,2)
++ SELECT * FROM A";
++
++set @col1='07:59:59.000000', @col2='1995-09-02 12:20:00.000000';
++EXECUTE stmt USING @col1,@col2;
++set @col1='01:59:59.000000', @col2='2020-03-02 10:00:00.000000';
++EXECUTE stmt USING @col1,@col2;
++
++set rds_plan_cache=1;
++PREPARE stmt FROM 
++"WITH A AS (SELECT date_col, bigint_col FROM tbl_1_all_type2index_desc A
++            WHERE A.time_col >= ? AND
++	           A.timestamp_col BETWEEN '1995-09-02 12:20:00.000000' AND ?
++		   ORDER BY 1,2)
++ SELECT * FROM A";
++
++set @col1='07:59:59.000000', @col2='1995-09-02 12:20:00.000000';
++EXECUTE stmt USING @col1,@col2;
++set @col1='01:59:59.000000', @col2='2020-03-02 10:00:00.000000';
++EXECUTE stmt USING @col1,@col2;
++DROP PREPARE stmt;
++
++# The plans with InnoDB are not stable (they vary randomly, sometimes table scan other times range scan), while with DStore they look stable. So, disabling the EXPLAIN if not DStore.
++
++if ($missing_features)
++{
++--echo #
++--echo # PS EXPLAIN with caching off and on
++--echo #
++set rds_plan_cache=0;
++
++PREPARE stmt_explain FROM 
++"EXPLAIN FORMAT=tree
++ WITH A AS (SELECT date_col, bigint_col FROM tbl_1_all_type2index_desc A
++            WHERE A.time_col >= ? AND
++	           A.timestamp_col BETWEEN '1995-09-02 12:20:00.000000' AND ?
++		   ORDER BY 1,2)
++ SELECT * FROM A";
++
++set @col1='07:59:59.000000', @col2='1995-09-02 12:20:00.000000';
++--replace_regex $elide_costs_and_rows;
++EXECUTE stmt_explain USING @col1,@col2;
++set @col1='01:59:59.000000', @col2='2020-03-02 10:00:00.000000';
++--replace_regex $elide_costs_and_rows;
++EXECUTE stmt_explain USING @col1,@col2;
++
++set rds_plan_cache=1;
++PREPARE stmt_explain FROM 
++"EXPLAIN FORMAT=tree
++ WITH A AS (SELECT date_col, bigint_col FROM tbl_1_all_type2index_desc A
++            WHERE A.time_col >= ? AND
++	           A.timestamp_col BETWEEN '1995-09-02 12:20:00.000000' AND ?
++		   ORDER BY 1,2)
++ SELECT * FROM A";
++
++set @col1='07:59:59.000000', @col2='1995-09-02 12:20:00.000000';
++--replace_regex $elide_costs_and_rows;
++EXECUTE stmt_explain USING @col1,@col2;
++set @col1='01:59:59.000000', @col2='2020-03-02 10:00:00.000000';
++--replace_regex $elide_costs_and_rows;
++EXECUTE stmt_explain USING @col1,@col2;
++
++DROP PREPARE stmt_explain;
++}
++
++--echo # Observe how the whole testcase has not increased the count of cached plan hits: it is because of the invalidation as each time the range optimizer fails to recreate an index range scan identical to the previously cached one, due to the constant hop between point-range and true-range.
++SHOW STATUS LIKE '%Cached_plan%';
++DROP TABLE tbl_1_all_type2index_desc;
++
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/mysql-test/r/session_plan_cache.result b/mysql-test/r/session_plan_cache.result
+index 4c87c8ae164..9fa123ea4cc 100644
+--- a/mysql-test/r/session_plan_cache.result
++++ b/mysql-test/r/session_plan_cache.result
+@@ -3430,4 +3430,91 @@ Cached_plan_count	1
+ Cached_plan_hits	22
+ DROP PREPARE stmt;
+ DROP TABLE tbl_1_all_type2index_desc;
++#
++# BUGFIX [plan cache][wrong result] enable plan_cache, set 
++#                  differents values and execute a query which contains
++#                  conditions of time and timestamp type, the result 
++#                  returned for the second time is wrong.
++#
++CREATE TABLE tbl_1_all_type2index_desc (
++id_col int NOT NULL AUTO_INCREMENT,
++bigint_col bigint NOT NULL,
++date_col date DEFAULT NULL,
++timestamp_col timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
++time_col time(6) DEFAULT NULL,
++varchar_col varchar(255) CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL,
++UNIQUE KEY (id_col desc),
++KEY ndx_timestamp_time_col (timestamp_col desc, time_col desc),
++KEY ndx_timestamp_varchar_col (timestamp_col desc, varchar_col(4) desc)
++) AUTO_INCREMENT=114 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
++Warnings:
++Warning	3719	'utf8' is currently an alias for the character set UTF8MB3, but will be an alias for UTF8MB4 in a future release. Please consider using UTF8MB4 in order to be unambiguous.
++Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
++INSERT INTO tbl_1_all_type2index_desc VALUES 
++(6, 1,'1998-12-03','2020-01-01 02:00:00.000000','23:23:59.000000','bbbbbbbbbb'),
++(7, 1,'1998-12-03','2020-01-01 02:00:00.000000','23:23:59.000000','bbbbbbbbbb'),
++(8, 1,'1998-12-03','2020-01-01 02:00:00.000000','23:23:59.000000','bbbbbbbbbb'),
++(9, 1,'1998-12-03','2020-01-01 02:00:00.000000','23:23:59.000000','bbbbbbbbbb'),
++(10,1,'1998-12-03','2020-01-01 02:00:00.000000','23:23:59.000000','bbbbbbbbbb'),
++(11,1,'1998-11-03','2020-02-03 02:00:00.000000','10:59:59.000000','bbbbbbbbcd'),
++(12,1,'1998-11-03','2020-02-03 02:00:00.000000','10:59:59.000000','bbbbbbbbcd'),
++(13,1,'1998-11-03','2020-02-03 02:00:00.000000','10:59:59.000000','bbbbbbbbcd'),
++(14,1,'1998-11-03','2020-02-03 02:00:00.000000','10:59:59.000000','bbbbbbbbcd'),
++(15,1,'1998-11-03','2020-02-03 02:00:00.000000','10:59:59.000000','bbbbbbbbcd');
++#
++# PS query execution with caching off and on
++#
++set rds_plan_cache=0;
++PREPARE stmt FROM 
++"WITH A AS (SELECT date_col, bigint_col FROM tbl_1_all_type2index_desc A
++            WHERE A.time_col >= ? AND
++	           A.timestamp_col BETWEEN '1995-09-02 12:20:00.000000' AND ?
++		   ORDER BY 1,2)
++ SELECT * FROM A";
++set @col1='07:59:59.000000', @col2='1995-09-02 12:20:00.000000';
++EXECUTE stmt USING @col1,@col2;
++date_col	bigint_col
++set @col1='01:59:59.000000', @col2='2020-03-02 10:00:00.000000';
++EXECUTE stmt USING @col1,@col2;
++date_col	bigint_col
++1998-11-03	1
++1998-11-03	1
++1998-11-03	1
++1998-11-03	1
++1998-11-03	1
++1998-12-03	1
++1998-12-03	1
++1998-12-03	1
++1998-12-03	1
++1998-12-03	1
++set rds_plan_cache=1;
++PREPARE stmt FROM 
++"WITH A AS (SELECT date_col, bigint_col FROM tbl_1_all_type2index_desc A
++            WHERE A.time_col >= ? AND
++	           A.timestamp_col BETWEEN '1995-09-02 12:20:00.000000' AND ?
++		   ORDER BY 1,2)
++ SELECT * FROM A";
++set @col1='07:59:59.000000', @col2='1995-09-02 12:20:00.000000';
++EXECUTE stmt USING @col1,@col2;
++date_col	bigint_col
++set @col1='01:59:59.000000', @col2='2020-03-02 10:00:00.000000';
++EXECUTE stmt USING @col1,@col2;
++date_col	bigint_col
++1998-11-03	1
++1998-11-03	1
++1998-11-03	1
++1998-11-03	1
++1998-11-03	1
++1998-12-03	1
++1998-12-03	1
++1998-12-03	1
++1998-12-03	1
++1998-12-03	1
++DROP PREPARE stmt;
++# Observe how the whole testcase has not increased the count of cached plan hits: it is because of the invalidation as each time the range optimizer fails to recreate an index range scan identical to the previously cached one, due to the constant hop between point-range and true-range.
++SHOW STATUS LIKE '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	0
++Cached_plan_hits	22
++DROP TABLE tbl_1_all_type2index_desc;
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/mysql-test/suite/dstore_main/r/session_plan_cache.result b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+index 724b77dd012..961bd198108 100644
+--- a/mysql-test/suite/dstore_main/r/session_plan_cache.result
++++ b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+@@ -3262,4 +3262,137 @@ Cached_plan_count	1
+ Cached_plan_hits	22
+ DROP PREPARE stmt;
+ DROP TABLE tbl_1_all_type2index_desc;
++#
++# BUGFIX [plan cache][wrong result] enable plan_cache, set 
++#                  differents values and execute a query which contains
++#                  conditions of time and timestamp type, the result 
++#                  returned for the second time is wrong.
++#
++CREATE TABLE tbl_1_all_type2index_desc (
++id_col int NOT NULL AUTO_INCREMENT,
++bigint_col bigint NOT NULL,
++date_col date DEFAULT NULL,
++timestamp_col timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
++time_col time(6) DEFAULT NULL,
++varchar_col varchar(255) CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL,
++UNIQUE KEY (id_col desc),
++KEY ndx_timestamp_time_col (timestamp_col desc, time_col desc),
++KEY ndx_timestamp_varchar_col (timestamp_col desc, varchar_col(4) desc)
++) AUTO_INCREMENT=114 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
++Warnings:
++Warning	3719	'utf8' is currently an alias for the character set UTF8MB3, but will be an alias for UTF8MB4 in a future release. Please consider using UTF8MB4 in order to be unambiguous.
++Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
++INSERT INTO tbl_1_all_type2index_desc VALUES 
++(6, 1,'1998-12-03','2020-01-01 02:00:00.000000','23:23:59.000000','bbbbbbbbbb'),
++(7, 1,'1998-12-03','2020-01-01 02:00:00.000000','23:23:59.000000','bbbbbbbbbb'),
++(8, 1,'1998-12-03','2020-01-01 02:00:00.000000','23:23:59.000000','bbbbbbbbbb'),
++(9, 1,'1998-12-03','2020-01-01 02:00:00.000000','23:23:59.000000','bbbbbbbbbb'),
++(10,1,'1998-12-03','2020-01-01 02:00:00.000000','23:23:59.000000','bbbbbbbbbb'),
++(11,1,'1998-11-03','2020-02-03 02:00:00.000000','10:59:59.000000','bbbbbbbbcd'),
++(12,1,'1998-11-03','2020-02-03 02:00:00.000000','10:59:59.000000','bbbbbbbbcd'),
++(13,1,'1998-11-03','2020-02-03 02:00:00.000000','10:59:59.000000','bbbbbbbbcd'),
++(14,1,'1998-11-03','2020-02-03 02:00:00.000000','10:59:59.000000','bbbbbbbbcd'),
++(15,1,'1998-11-03','2020-02-03 02:00:00.000000','10:59:59.000000','bbbbbbbbcd');
++#
++# PS query execution with caching off and on
++#
++set rds_plan_cache=0;
++PREPARE stmt FROM 
++"WITH A AS (SELECT date_col, bigint_col FROM tbl_1_all_type2index_desc A
++            WHERE A.time_col >= ? AND
++	           A.timestamp_col BETWEEN '1995-09-02 12:20:00.000000' AND ?
++		   ORDER BY 1,2)
++ SELECT * FROM A";
++set @col1='07:59:59.000000', @col2='1995-09-02 12:20:00.000000';
++EXECUTE stmt USING @col1,@col2;
++date_col	bigint_col
++set @col1='01:59:59.000000', @col2='2020-03-02 10:00:00.000000';
++EXECUTE stmt USING @col1,@col2;
++date_col	bigint_col
++1998-11-03	1
++1998-11-03	1
++1998-11-03	1
++1998-11-03	1
++1998-11-03	1
++1998-12-03	1
++1998-12-03	1
++1998-12-03	1
++1998-12-03	1
++1998-12-03	1
++set rds_plan_cache=1;
++PREPARE stmt FROM 
++"WITH A AS (SELECT date_col, bigint_col FROM tbl_1_all_type2index_desc A
++            WHERE A.time_col >= ? AND
++	           A.timestamp_col BETWEEN '1995-09-02 12:20:00.000000' AND ?
++		   ORDER BY 1,2)
++ SELECT * FROM A";
++set @col1='07:59:59.000000', @col2='1995-09-02 12:20:00.000000';
++EXECUTE stmt USING @col1,@col2;
++date_col	bigint_col
++set @col1='01:59:59.000000', @col2='2020-03-02 10:00:00.000000';
++EXECUTE stmt USING @col1,@col2;
++date_col	bigint_col
++1998-11-03	1
++1998-11-03	1
++1998-11-03	1
++1998-11-03	1
++1998-11-03	1
++1998-12-03	1
++1998-12-03	1
++1998-12-03	1
++1998-12-03	1
++1998-12-03	1
++DROP PREPARE stmt;
++#
++# PS EXPLAIN with caching off and on
++#
++set rds_plan_cache=0;
++PREPARE stmt_explain FROM 
++"EXPLAIN FORMAT=tree
++ WITH A AS (SELECT date_col, bigint_col FROM tbl_1_all_type2index_desc A
++            WHERE A.time_col >= ? AND
++	           A.timestamp_col BETWEEN '1995-09-02 12:20:00.000000' AND ?
++		   ORDER BY 1,2)
++ SELECT * FROM A";
++set @col1='07:59:59.000000', @col2='1995-09-02 12:20:00.000000';
++EXECUTE stmt_explain USING @col1,@col2;
++EXPLAIN
++-> Sort: date_col, bigint_col  (...)
++    -> Index range scan on A using ndx_timestamp_time_col over (timestamp_col = '1995-09-02 12:20:00.000000' AND time_col <= '07:59:59.000000'), with index condition: (A.time_col >= '07:59:59.000000')  (...)
++
++set @col1='01:59:59.000000', @col2='2020-03-02 10:00:00.000000';
++EXECUTE stmt_explain USING @col1,@col2;
++EXPLAIN
++-> Sort: date_col, bigint_col  (...)
++    -> Filter: (A.time_col >= '01:59:59.000000')  (...)
++        -> Index range scan on A using ndx_timestamp_varchar_col over ('2020-03-02 10:00:00.000000' <= timestamp_col <= '1995-09-02 12:20:00.000000')  (...)
++
++set rds_plan_cache=1;
++PREPARE stmt_explain FROM 
++"EXPLAIN FORMAT=tree
++ WITH A AS (SELECT date_col, bigint_col FROM tbl_1_all_type2index_desc A
++            WHERE A.time_col >= ? AND
++	           A.timestamp_col BETWEEN '1995-09-02 12:20:00.000000' AND ?
++		   ORDER BY 1,2)
++ SELECT * FROM A";
++set @col1='07:59:59.000000', @col2='1995-09-02 12:20:00.000000';
++EXECUTE stmt_explain USING @col1,@col2;
++EXPLAIN
++-> Sort: date_col, bigint_col  (...)
++    -> Index range scan on A using ndx_timestamp_time_col over (timestamp_col = '1995-09-02 12:20:00.000000' AND time_col <= '07:59:59.000000'), with index condition: (A.time_col >= '07:59:59.000000')  (...)
++
++set @col1='01:59:59.000000', @col2='2020-03-02 10:00:00.000000';
++EXECUTE stmt_explain USING @col1,@col2;
++EXPLAIN
++-> Sort: date_col, bigint_col  (...)
++    -> Filter: (A.time_col >= '01:59:59.000000')  (...)
++        -> Index range scan on A using ndx_timestamp_varchar_col over ('2020-03-02 10:00:00.000000' <= timestamp_col <= '1995-09-02 12:20:00.000000')  (...)
++
++DROP PREPARE stmt_explain;
++# Observe how the whole testcase has not increased the count of cached plan hits: it is because of the invalidation as each time the range optimizer fails to recreate an index range scan identical to the previously cached one, due to the constant hop between point-range and true-range.
++SHOW STATUS LIKE '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	0
++Cached_plan_hits	22
++DROP TABLE tbl_1_all_type2index_desc;
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/sql/sql_plan_cache.cc b/sql/sql_plan_cache.cc
+index 0b6f7e3295f..6ec40570469 100644
+--- a/sql/sql_plan_cache.cc
++++ b/sql/sql_plan_cache.cc
+@@ -1553,7 +1553,7 @@ void invalidate_cached_plan(THD *thd, SELECT_LEX *select) {
+   // invalidation in 3 operates on a plan which has just gone out of
+   // JOIN::destroy(), so we mustn't do it again. While in the situation of "1
+   // cache a plan, 2 try to re-use it once more but see it cannot so
+-  // invalidate it", the invalidation in 3 operates on a plan which has not
++  // invalidate it", the invalidation in 2 operates on a plan which has not
+   // just gone through JOIN::destroy(), so we must do it. Hence this if(),
+   // which interprets "this plan has been used at least once" to "so
+   // invalidation is occurring after a recent call to JOIN::destroy()".
+@@ -2417,13 +2417,23 @@ static bool refix_table(JOIN *join, TABLE *table) {
+   THD *thd = join->thd;  // PLAN_CACHE_PORT: unused
+ #endif
+   table->covering_keys = join->plan_cache_exec_context->covering_keys;
+-  table->file->pushed_idx_cond_keyno =
+-      join->plan_cache_exec_context->pushed_idx_cond_keyno;
+   // PLAN_CACHE_PORT: key difference between original and new impl: when
+   // applying the plan, we do not clone any Item: clones, if they are needed,
+   // were already made during plan caching, and they were made long-lived.
+-  get_item_and_refresh(table->file->pushed_idx_cond,
+-                       join->plan_cache_exec_context->pushed_idx_cond, true);
++  Item *cond;
++  get_item_and_refresh(cond, join->plan_cache_exec_context->pushed_idx_cond,
++                       true);
++  if (cond != nullptr) {
++    auto keyno = join->plan_cache_exec_context->pushed_idx_cond_keyno;
++    auto not_pushed = table->file->idx_cond_push(keyno, cond);
++    // Verify that the engine accepted our request
++    assert(not_pushed == nullptr &&
++           keyno == table->file->pushed_idx_cond_keyno &&
++           cond == table->file->pushed_idx_cond);
++  } else {
++    table->file->cancel_pushed_idx_cond();
++  }
++
+   if (join->plan_cache_exec_context->key_read) table->set_keyread(true);
+ 
+   return false;
+@@ -2473,10 +2483,21 @@ bool exec_cached_plan(SELECT_LEX *sl) {
+   // Now we only support query with one table
+   DBUG_ASSERT(leaf_table_count == 1);
+ 
+-  auto error_guard = create_scope_guard([&trace_plan_cache, sl, thd, join]() {
++  auto hints_table_saved = leaf_tables->opt_hints_table;
++
++  auto error_guard = create_scope_guard([&trace_plan_cache, sl, thd, join,
++                                         leaf_tables, hints_table_saved]() {
+     trace_plan_cache.add("used", false);
+     trace_plan_cache.add_utf8("cause",
+                               "Error happened during apply cached plan");
++    // cancel what refix_table() has done on the table, to return the table to
++    // a state similar to what is expected when JOIN::optimize() starts
++    auto table = leaf_tables->table;
++    table->covering_keys = leaf_tables->get_covering_keys_saved();
++    table->file->cancel_pushed_idx_cond();
++    table->set_keyread(false);
++    // Cancel the hint which was added for the range optimizer
++    leaf_tables->opt_hints_table = hints_table_saved;
+ #ifdef PLAN_CACHE_TAURUS
+     restore_param_snapshot_clones(sl->parent_lex);
+ #endif
+diff --git a/sql/table.h b/sql/table.h
+index e5e751f570a..244b0b8ea7d 100644
+--- a/sql/table.h
++++ b/sql/table.h
+@@ -3998,6 +3998,9 @@ class Table_ref {
+   MY_BITMAP read_set_saved;
+   MY_BITMAP write_set_saved;
+   MY_BITMAP read_set_internal_saved;
++
++ public:
++  Key_map get_covering_keys_saved() const { return covering_keys_saved; }
+ };
+ 
+ /*
+-- 
+2.23.0
+

@@ -1,0 +1,117 @@
+create table t1(a int);
+insert into t1 values(1),(2);
+with qn(a) as (select 1 from t1 limit 2)
+select * from qn where qn.a=(select * from qn qn1 limit 1) union select 2;
+a
+1
+2
+drop table t1;
+#
+# Syntax which wasn't accepted
+#
+create table t1 (i int);
+with cte as (select * from t1) (select * from cte);
+i
+with cte as (select * from t1) (select * from cte) ORDER BY i;
+i
+with cte as (select * from t1) (select * from cte) LIMIT 1;
+i
+with cte as (select * from t1) (select * from cte UNION select * from cte);
+i
+with cte as (select * from t1) (select * from cte UNION select * from cte) ORDER BY i;
+i
+with cte as (select * from t1) (select * from cte UNION select * from cte) LIMIT 1;
+i
+drop table t1;
+#
+# Bug#30026353 NON-DETERMINISTIC CTE REFERENCED TWO TIMES CAN
+# PRODUCE DIFFERENT CONTENT
+#
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(1),(2),(3),(4),(5),(6);
+CREATE TABLE t2 (a INT);
+INSERT INTO t2
+WITH cte AS (SELECT RAND() AS a FROM t1)
+SELECT SUM(c.a) FROM cte c UNION ALL
+SELECT SUM(c2.a) FROM cte c2;
+SELECT * FROM t2 tmp1, t2 tmp2 WHERE tmp1.a<>tmp2.a;
+a	a
+DELETE FROM t2;
+INSERT INTO t2
+WITH cte AS (SELECT * FROM t1 WHERE a>3*RAND())
+SELECT SUM(c.a) FROM cte c
+UNION ALL SELECT SUM(c2.a) FROM cte c2;
+SELECT * FROM t2 tmp1, t2 tmp2 WHERE tmp1.a<>tmp2.a;
+a	a
+DROP TABLE t1,t2;
+#
+# Bug#30796015 INCONSISTENT BEHAVIOUR FOR DELETE ON CTE
+#
+create table t1(a int);
+insert into t1 values(2),(3);
+with t1 as (select * from t1 where a=3) delete from t1;
+ERROR HY000: The target table t1 of the DELETE is not updatable
+with t1 as (select * from t1 where a=3) delete t1.* from t1, t1 as t2;
+ERROR HY000: The target table t1 of the DELETE is not updatable
+with t1 as (select * from t1 where a=3) update t1 set a=2;
+ERROR HY000: The target table t1 of the UPDATE is not updatable
+with t1 as (select * from t1 where a=3) update t1, t1 as t2 set t1.a=2;
+ERROR HY000: The target table t1 of the UPDATE is not updatable
+with t1 as (select 36 as col from t1 where a=3) select * from t1;
+col
+36
+insert into t1 with t1 as (select 36 as col from t1) select * from t1;
+select * from t1;
+a
+2
+3
+36
+36
+create table t1 with t1 as (select 72 as col from t1) select * from t1;
+ERROR 42S01: Table 't1' already exists
+create table t2 with t1 as (select 72 as col from t1) select * from t1;
+select * from t1;
+a
+2
+3
+36
+36
+select * from t2;
+col
+72
+72
+72
+72
+drop table t1,t2;
+# Bug#32678303: Assertion 'table_num_to_node_num[table_num] != -1 failed
+CREATE TABLE t1(a INTEGER);
+SELECT COUNT(sq1_t1.a) AS sq1_field1
+FROM t1 AS sq1_t1 RIGHT JOIN
+t1 AS sq1_t2 LEFT JOIN t1 AS sq1_t3
+ON sq1_t2.a IN
+(WITH cte2 AS
+(SELECT sq1_t1.a AS c_sq1_field1
+FROM t1 AS c_sq1_t1
+)
+SELECT * FROM cte2
+)
+ON sq1_t3.a = sq1_t2.a;
+ERROR 42S22: Unknown column 'sq1_t1.a' in 'field list'
+SELECT (WITH cte1 AS
+(SELECT COUNT(sq1_t1.a) AS sq1_field1
+FROM t1 AS sq1_t1 RIGHT JOIN
+t1 AS sq1_t2 LEFT JOIN t1 AS sq1_t3
+ON sq1_t2.a IN
+(WITH cte2 AS
+(SELECT sq1_t1.a AS c_sq1_field1
+FROM t1 AS c_sq1_t1
+)
+SELECT * FROM cte2
+)
+ON sq1_t3.a = sq1_t2.a
+)
+SELECT * FROM cte1
+) AS field3
+FROM t1 AS table1;
+ERROR 42S22: Unknown column 'sq1_t1.a' in 'field list'
+DROP TABLE t1;

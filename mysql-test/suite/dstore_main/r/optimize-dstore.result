@@ -1,0 +1,53 @@
+CREATE TABLE t0(a int, b varchar(10))ENGINE=Dstore;
+INSERT INTO t0 VALUES (1,'HuaWei'),(2,'Dstore'),(3,'Oracle'),(4,'PolarDB');
+SHOW CREATE TABLE t0;
+Table	Create Table
+t0	CREATE TABLE `t0` (
+  `a` int DEFAULT NULL,
+  `b` varchar(10) DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SELECT * FROM t0 ORDER BY a;
+a	b
+1	HuaWei
+2	Dstore
+3	Oracle
+4	PolarDB
+CREATE TEMPORARY TABLE t1(a int, b varchar(10))ENGINE=Dstore;
+INSERT INTO t1 SELECT * FROM t0;
+SET SESSION debug='+d,skip_dd_table_access_check';
+OPTIMIZE TABLE t0,t1;
+Table	Op	Msg_type	Msg_text
+test.t0	optimize	note	Table does not support optimize, doing recreate + analyze instead
+test.t0	optimize	status	OK
+test.t1	optimize	note	Table does not support optimize, doing recreate + analyze instead
+test.t1	optimize	status	OK
+# After optimize table, table schema keep same
+SHOW CREATE TABLE t0;
+Table	Create Table
+t0	CREATE TABLE `t0` (
+  `a` int DEFAULT NULL,
+  `b` varchar(10) DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TEMPORARY TABLE `t1` (
+  `a` int DEFAULT NULL,
+  `b` varchar(10) DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+# After optimize table, table data keep same
+SELECT * FROM t0 ORDER BY a;
+a	b
+1	HuaWei
+2	Dstore
+3	Oracle
+4	PolarDB
+SELECT * FROM t1 ORDER BY a;
+a	b
+1	HuaWei
+2	Dstore
+3	Oracle
+4	PolarDB
+# After optimize table, table id changed since table was rebuilt
+include/assert.inc [After optimize table, table id changed since table was rebuilt.]
+SET SESSION debug='-d,skip_dd_table_access_check';
+DROP TABLE t0,t1;

@@ -1,0 +1,47 @@
+include/master-slave.inc
+Warnings:
+Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
+[connection master]
+# -----------------------------------------------------------------------
+# Step 1: Initialize Data on Master using InnoDB
+# -----------------------------------------------------------------------
+[connection master]
+CREATE TABLE t(
+id INT, 
+itime TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+) ENGINE=InnoDB;
+INSERT INTO t(id) VALUES(1),(2),(3),(4),(5);
+include/sync_slave_sql_with_master.inc
+# -----------------------------------------------------------------------
+# Step 2: Prepare Slave Binlog for Replay Simulation
+# -----------------------------------------------------------------------
+[connection slave]
+FLUSH LOGS;
+# -----------------------------------------------------------------------
+# Step 3: Generate complex events on Master
+# -----------------------------------------------------------------------
+[connection master]
+CREATE TABLE IF NOT EXISTS t1 ENGINE=InnoDB AS SELECT * FROM t;
+include/sync_slave_sql_with_master.inc
+# -----------------------------------------------------------------------
+# Step 4: Extract Binlog and Attempt Replay (Expecting Failure)
+# -----------------------------------------------------------------------
+[connection slave]
+set sql_log_bin=0;
+DROP TABLE t1;
+set sql_log_bin=1;
+# --- Attempting Replay on Slave (InnoDB) ---
+# --- Verify Replay Failed ---
+SELECT COUNT(*) FROM t1;
+ERROR 42S02: Table 'test.t1' doesn't exist
+# -----------------------------------------------------------------------
+# Step 5: Final Cleanup
+# -----------------------------------------------------------------------
+[connection master]
+DROP TABLE IF EXISTS t, t1;
+include/sync_slave_sql_with_master.inc
+# =======================================================================
+# Result: Success. InnoDB correctly remains restricted.
+# =======================================================================
+include/rpl_end.inc

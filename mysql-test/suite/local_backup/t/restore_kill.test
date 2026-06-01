@@ -1,0 +1,61 @@
+#
+# Test for restore crash
+#
+--source suite/local_backup/include/prepare_for_backup.inc
+call mtr.add_suppression("full backup found binlog is not enabled");
+
+# 1. prepare some data
+create database restore_kill;
+use restore_kill;
+create table t1(s varchar(100)) engine=dstore;
+
+# insert 1000 records
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 1000
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+# 2. Create a full backup
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+
+# 3. Start log archive
+--source suite/local_backup/include/start_log_archive.inc
+
+# 4. Add more data for log archive
+--source suite/local_backup/include/load_data.inc
+CALL load_data('t1','s',300000);
+
+select count(*) from t1;
+--sleep 3
+
+# 5. Restore
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+--let $list_type = wal_archive
+--source suite/local_backup/include/restore_with_script.inc
+
+# 6. Kill mysqld while restoring
+--let $mysqld_exec_cmd = $MYSQLD --defaults-file=$MYSQLTEST_VARDIR/my.cnf --defaults-group-suffix=.1 --dstore_restore_meta_path=$MYSQLTEST_VARDIR/local_backup_restore_meta --dstore_open_restore_mode=ON
+--exec_in_background $mysqld_exec_cmd --user=`whoami`
+--sleep 10
+--exec ps ux | grep "$mysqld_exec_cmd" | grep -v grep | awk "{print \$2}" | xargs kill -9
+
+--sleep 5
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+select count(*) from t1;
+insert into t1 values('a');
+select count(*) from t1;
+
+drop database restore_kill;
+
+--source suite/local_backup/include/clean_backup.inc

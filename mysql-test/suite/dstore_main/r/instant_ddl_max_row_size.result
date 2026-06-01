@@ -1,0 +1,35 @@
+##############################################
+# Test instant ADD/DROP COLUMN for REDUNDANT format
+##############################################
+# ------------------------------------------------------------
+# Create a table with 3 columns. [id, c1, c2]
+# ------------------------------------------------------------
+CREATE TABLE t1(id INT PRIMARY KEY, c1 VARCHAR(4000), c2 VARCHAR(4000)) ROW_FORMAT=REDUNDANT;;
+Warnings:
+Warning	1178	The storage engine for the table doesn't support ROW_FORMAT
+# ------------------------------------------------------------
+# Add a new column. It causes max_row_size > permissible size
+# ------------------------------------------------------------
+ALTER TABLE t1 ADD COLUMN c3 VARCHAR(500) NOT NULL DEFAULT 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd', ALGORITHM=INSTANT;
+Warnings:
+Warning	1178	The storage engine for the table doesn't support ROW_FORMAT
+INSERT INTO t1 (id, c1, c2) VALUES(1, repeat('a', 4), repeat('b', 4));
+SELECT id, LEFT(c1 , 10), LEFT(c2, 10), LEFT(c3, 10) FROM t1 ORDER BY id;
+id	LEFT(c1 , 10)	LEFT(c2, 10)	LEFT(c3, 10)
+1	aaaa	bbbb	dddddddddd
+ALTER TABLE t1 ADD COLUMN c4 INT DEFAULT -2147483648, ALGORITHM=INSTANT;
+Warnings:
+Warning	1178	The storage engine for the table doesn't support ROW_FORMAT
+SELECT id, LEFT(c1 , 10), LEFT(c2, 10), LEFT(c3, 10), c4 FROM t1 ORDER BY id;
+id	LEFT(c1 , 10)	LEFT(c2, 10)	LEFT(c3, 10)	c4
+1	aaaa	bbbb	dddddddddd	-2147483648
+ALTER TABLE t1 DROP COLUMN c4, ALGORITHM=INSTANT;
+Warnings:
+Warning	1178	The storage engine for the table doesn't support ROW_FORMAT
+SELECT id, LEFT(c1 , 10), LEFT(c2, 10), LEFT(c3, 10) FROM t1 ORDER BY id;
+id	LEFT(c1 , 10)	LEFT(c2, 10)	LEFT(c3, 10)
+1	aaaa	bbbb	dddddddddd
+###########
+# CLEANUP #
+###########
+DROP TABLE t1;

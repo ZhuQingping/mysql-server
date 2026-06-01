@@ -1,0 +1,334 @@
+From 1e0934bca756449b4f46e4ae7f6bef405e95295b Mon Sep 17 00:00:00 2001
+From: wangyunhua <wangyunhua3@contributor>
+
+
+Date: Thu, 2 Apr 2026 01:29:03 +0000
+Subject: [PATCH] BUGFIX:Fix drop table failure when recycle bin is
+ enabled.
+
+Issue:
+------
+Recycle bin only checked table name length before, but forgot to check foreign
+key names. If a foreign key name is too long after rename, RENAME TABLE fails,
+which leads to DROP TABLE failure.
+
+Solution:
+--------
+Foreign keys are dropped after rename in recycle flow, so renaming
+them is unnecessary and may fail due to name length limits.Skip FK
+rename to avoid DROP TABLE failure.
+---
+ .../recyclebin/r/recycle_table-dstore.result  | 63 +++++++++++++++++++
+ .../suite/recyclebin/r/recycle_table.result   | 63 +++++++++++++++++++
+ .../recyclebin/t/recycle_table-dstore.test    | 48 ++++++++++++++
+ .../suite/recyclebin/t/recycle_table.test     | 48 ++++++++++++++
+ sql/sql_rename.cc                             |  3 +
+ sql/sql_table.cc                              |  2 +-
+ 6 files changed, 226 insertions(+), 1 deletion(-)
+
+diff --git a/mysql-test/suite/recyclebin/r/recycle_table-dstore.result b/mysql-test/suite/recyclebin/r/recycle_table-dstore.result
+index d55cb566dc6..352c7273d74 100644
+--- a/mysql-test/suite/recyclebin/r/recycle_table-dstore.result
++++ b/mysql-test/suite/recyclebin/r/recycle_table-dstore.result
+@@ -547,6 +547,69 @@ __recyclebin__	#	db_recycle	这是一个表	#	#
+ __recyclebin__	#	db_recycle	这是一张表	#	#
+ drop database __recyclebin__;
+ create database __recyclebin__ default character set utf8mb4;
++------------------------------------------------------
++BUGFIX The table drop fails when the table name is too long and contains foreign keys.
++------------------------------------------------------
++use test;
++create table create_create_create_create_create_create_ddl_test_5 (
++id INT PRIMARY KEY,
++info VARCHAR(20)
++) ENGINE=Dstore;
++create table create_create_create_create_create_ddl_test_10 (
++c_id INT PRIMARY KEY,
++p_id INT,
++FOREIGN KEY (p_id) REFERENCES create_create_create_create_create_create_ddl_test_5(id)
++) ENGINE=Dstore;
++drop table create_create_create_create_create_ddl_test_10;
++call dbms_recyclebin.show_tables();
++SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
++__recyclebin__	#	test	create_create_create_create_create_ddl_test_10	#	#
++create table create_create_create_create_create_ddl_test_10 (
++c_id INT PRIMARY KEY,
++p_id INT,
++CONSTRAINT `create_create_create_create_create_ddl_test_100000_fk_1` FOREIGN KEY (`c_id`) REFERENCES `create_create_create_create_create_create_ddl_test_5` (`id`) ON DELETE CASCADE
++) ENGINE=Dstore;
++drop table create_create_create_create_create_ddl_test_10;
++call dbms_recyclebin.show_tables();
++SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
++__recyclebin__	#	test	create_create_create_create_create_ddl_test_10	#	#
++__recyclebin__	#	test	create_create_create_create_create_ddl_test_10	#	#
++SET SESSION debug="+d,recyclebin_after_rename_before_drop_fk_fail";
++create table create_create_create_create_create_ddl_test_10 (
++c_id INT PRIMARY KEY,
++p_id INT,
++FOREIGN KEY (p_id) REFERENCES create_create_create_create_create_create_ddl_test_5(id)
++) ENGINE=Dstore;
++show create table create_create_create_create_create_ddl_test_10;
++Table	Create Table
++create_create_create_create_create_ddl_test_10	CREATE TABLE `create_create_create_create_create_ddl_test_10` (
++  `c_id` int NOT NULL,
++  `p_id` int DEFAULT NULL,
++  PRIMARY KEY (`c_id`),
++  KEY `p_id` (`p_id`),
++  CONSTRAINT `create_create_create_create_create_ddl_test_10_fk_1` FOREIGN KEY (`p_id`) REFERENCES `create_create_create_create_create_create_ddl_test_5` (`id`)
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++drop table create_create_create_create_create_ddl_test_10;
++ERROR HY000: Failed to recycle table to the recycle bin.
++show create table create_create_create_create_create_ddl_test_10;
++Table	Create Table
++create_create_create_create_create_ddl_test_10	CREATE TABLE `create_create_create_create_create_ddl_test_10` (
++  `c_id` int NOT NULL,
++  `p_id` int DEFAULT NULL,
++  PRIMARY KEY (`c_id`),
++  KEY `p_id` (`p_id`),
++  CONSTRAINT `create_create_create_create_create_ddl_test_10_fk_1` FOREIGN KEY (`p_id`) REFERENCES `create_create_create_create_create_create_ddl_test_5` (`id`)
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++SET SESSION debug="-d,recyclebin_after_rename_before_drop_fk_fail";
++drop table create_create_create_create_create_ddl_test_10;
++call dbms_recyclebin.show_tables();
++SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
++__recyclebin__	#	test	create_create_create_create_create_ddl_test_10	#	#
++__recyclebin__	#	test	create_create_create_create_create_ddl_test_10	#	#
++__recyclebin__	#	test	create_create_create_create_create_ddl_test_10	#	#
++drop table create_create_create_create_create_create_ddl_test_5;
++drop database __recyclebin__;
++create database __recyclebin__ default character set utf8mb4;
+ set rds_recycle_bin_mode=OFF;
+ set global rds_recycle_bin_mode=OFF;
+ drop database db_recycle;
+diff --git a/mysql-test/suite/recyclebin/r/recycle_table.result b/mysql-test/suite/recyclebin/r/recycle_table.result
+index 91e418a1697..eb76fb3e312 100644
+--- a/mysql-test/suite/recyclebin/r/recycle_table.result
++++ b/mysql-test/suite/recyclebin/r/recycle_table.result
+@@ -691,6 +691,69 @@ __recyclebin__	#	db_recycle	这是一个表	#	#
+ __recyclebin__	#	db_recycle	这是一张表	#	#
+ drop database __recyclebin__;
+ create database __recyclebin__ default character set utf8mb4;
++------------------------------------------------------
++BUGFIX The table drop fails when the table name is too long and contains foreign keys.
++------------------------------------------------------
++use test;
++create table create_create_create_create_create_create_ddl_test_5 (
++id INT PRIMARY KEY,
++info VARCHAR(20)
++) ENGINE=InnoDB;
++create table create_create_create_create_create_ddl_test_10 (
++c_id INT PRIMARY KEY,
++p_id INT,
++FOREIGN KEY (p_id) REFERENCES create_create_create_create_create_create_ddl_test_5(id)
++) ENGINE=InnoDB;
++drop table create_create_create_create_create_ddl_test_10;
++call dbms_recyclebin.show_tables();
++SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
++__recyclebin__	#	test	create_create_create_create_create_ddl_test_10	#	#
++create table create_create_create_create_create_ddl_test_10 (
++c_id INT PRIMARY KEY,
++p_id INT,
++CONSTRAINT `create_create_create_create_create_ddl_test_100000_fk_1` FOREIGN KEY (`c_id`) REFERENCES `create_create_create_create_create_create_ddl_test_5` (`id`) ON DELETE CASCADE
++) ENGINE=Innodb;
++drop table create_create_create_create_create_ddl_test_10;
++call dbms_recyclebin.show_tables();
++SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
++__recyclebin__	#	test	create_create_create_create_create_ddl_test_10	#	#
++__recyclebin__	#	test	create_create_create_create_create_ddl_test_10	#	#
++SET SESSION debug="+d,recyclebin_after_rename_before_drop_fk_fail";
++create table create_create_create_create_create_ddl_test_10 (
++c_id INT PRIMARY KEY,
++p_id INT,
++FOREIGN KEY (p_id) REFERENCES create_create_create_create_create_create_ddl_test_5(id)
++) ENGINE=InnoDB;
++show create table create_create_create_create_create_ddl_test_10;
++Table	Create Table
++create_create_create_create_create_ddl_test_10	CREATE TABLE `create_create_create_create_create_ddl_test_10` (
++  `c_id` int NOT NULL,
++  `p_id` int DEFAULT NULL,
++  PRIMARY KEY (`c_id`),
++  KEY `p_id` (`p_id`),
++  CONSTRAINT `create_create_create_create_create_ddl_test_10_ibfk_1` FOREIGN KEY (`p_id`) REFERENCES `create_create_create_create_create_create_ddl_test_5` (`id`)
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++drop table create_create_create_create_create_ddl_test_10;
++ERROR HY000: Failed to recycle table to the recycle bin.
++show create table create_create_create_create_create_ddl_test_10;
++Table	Create Table
++create_create_create_create_create_ddl_test_10	CREATE TABLE `create_create_create_create_create_ddl_test_10` (
++  `c_id` int NOT NULL,
++  `p_id` int DEFAULT NULL,
++  PRIMARY KEY (`c_id`),
++  KEY `p_id` (`p_id`),
++  CONSTRAINT `create_create_create_create_create_ddl_test_10_ibfk_1` FOREIGN KEY (`p_id`) REFERENCES `create_create_create_create_create_create_ddl_test_5` (`id`)
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++SET SESSION debug="-d,recyclebin_after_rename_before_drop_fk_fail";
++drop table create_create_create_create_create_ddl_test_10;
++call dbms_recyclebin.show_tables();
++SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
++__recyclebin__	#	test	create_create_create_create_create_ddl_test_10	#	#
++__recyclebin__	#	test	create_create_create_create_create_ddl_test_10	#	#
++__recyclebin__	#	test	create_create_create_create_create_ddl_test_10	#	#
++drop table create_create_create_create_create_create_ddl_test_5;
++drop database __recyclebin__;
++create database __recyclebin__ default character set utf8mb4;
+ set rds_recycle_bin_mode=OFF;
+ set global rds_recycle_bin_mode=OFF;
+ SET global rds_extended_partitions_enabled = @saved_rds_extended_partitions_enabled;
+diff --git a/mysql-test/suite/recyclebin/t/recycle_table-dstore.test b/mysql-test/suite/recyclebin/t/recycle_table-dstore.test
+index dd5a6718b2e..772dc075ec0 100644
+--- a/mysql-test/suite/recyclebin/t/recycle_table-dstore.test
++++ b/mysql-test/suite/recyclebin/t/recycle_table-dstore.test
+@@ -1,4 +1,5 @@
+ --source include/have_only_dstore.inc
++source include/have_debug.inc;
+ #
+ # Test for recycle func of recyclebin
+ #
+@@ -582,6 +583,53 @@ connection default;
+ drop database __recyclebin__;
+ create database __recyclebin__ default character set utf8mb4;
+ 
++--echo ------------------------------------------------------
++--echo BUGFIX The table drop fails when the table name is too long and contains foreign keys.
++--echo ------------------------------------------------------
++
++use test;
++create table create_create_create_create_create_create_ddl_test_5 (
++    id INT PRIMARY KEY,
++    info VARCHAR(20)
++) ENGINE=Dstore;
++create table create_create_create_create_create_ddl_test_10 (
++    c_id INT PRIMARY KEY,
++    p_id INT,
++    FOREIGN KEY (p_id) REFERENCES create_create_create_create_create_create_ddl_test_5(id)
++) ENGINE=Dstore;
++drop table create_create_create_create_create_ddl_test_10;
++--replace_column 2 # 5 # 6 #
++call dbms_recyclebin.show_tables();
++
++# CONSTRAINT foreign key
++create table create_create_create_create_create_ddl_test_10 (
++    c_id INT PRIMARY KEY,
++    p_id INT,
++    CONSTRAINT `create_create_create_create_create_ddl_test_100000_fk_1` FOREIGN KEY (`c_id`) REFERENCES `create_create_create_create_create_create_ddl_test_5` (`id`) ON DELETE CASCADE
++) ENGINE=Dstore;
++drop table create_create_create_create_create_ddl_test_10;
++--replace_column 2 # 5 # 6 #
++call dbms_recyclebin.show_tables();
++
++SET SESSION debug="+d,recyclebin_after_rename_before_drop_fk_fail";
++create table create_create_create_create_create_ddl_test_10 (
++    c_id INT PRIMARY KEY,
++    p_id INT,
++    FOREIGN KEY (p_id) REFERENCES create_create_create_create_create_create_ddl_test_5(id)
++) ENGINE=Dstore;
++show create table create_create_create_create_create_ddl_test_10;
++--error ER_RECYBIN_DROP_TABLE_FAILED
++drop table create_create_create_create_create_ddl_test_10;
++show create table create_create_create_create_create_ddl_test_10;
++SET SESSION debug="-d,recyclebin_after_rename_before_drop_fk_fail";
++drop table create_create_create_create_create_ddl_test_10;
++--replace_column 2 # 5 # 6 #
++call dbms_recyclebin.show_tables();
++ 
++drop table create_create_create_create_create_create_ddl_test_5;
++drop database __recyclebin__;
++create database __recyclebin__ default character set utf8mb4;
++
+ connection default;
+ set rds_recycle_bin_mode=OFF;
+ set global rds_recycle_bin_mode=OFF;
+diff --git a/mysql-test/suite/recyclebin/t/recycle_table.test b/mysql-test/suite/recyclebin/t/recycle_table.test
+index 68b26b7daf7..dea637eed50 100644
+--- a/mysql-test/suite/recyclebin/t/recycle_table.test
++++ b/mysql-test/suite/recyclebin/t/recycle_table.test
+@@ -1,4 +1,5 @@
+ --source include/not_have_only_dstore.inc
++source include/have_debug.inc;
+ #
+ # Test for recycle func of recyclebin
+ #
+@@ -750,6 +751,53 @@ connection default;
+ drop database __recyclebin__;
+ create database __recyclebin__ default character set utf8mb4;
+ 
++--echo ------------------------------------------------------
++--echo BUGFIX The table drop fails when the table name is too long and contains foreign keys.
++--echo ------------------------------------------------------
++
++use test;
++create table create_create_create_create_create_create_ddl_test_5 (
++    id INT PRIMARY KEY,
++    info VARCHAR(20)
++) ENGINE=InnoDB;
++create table create_create_create_create_create_ddl_test_10 (
++    c_id INT PRIMARY KEY,
++    p_id INT,
++    FOREIGN KEY (p_id) REFERENCES create_create_create_create_create_create_ddl_test_5(id)
++) ENGINE=InnoDB;
++drop table create_create_create_create_create_ddl_test_10;
++--replace_column 2 # 5 # 6 #
++call dbms_recyclebin.show_tables();
++
++# CONSTRAINT foreign key
++create table create_create_create_create_create_ddl_test_10 (
++    c_id INT PRIMARY KEY,
++    p_id INT,
++    CONSTRAINT `create_create_create_create_create_ddl_test_100000_fk_1` FOREIGN KEY (`c_id`) REFERENCES `create_create_create_create_create_create_ddl_test_5` (`id`) ON DELETE CASCADE
++) ENGINE=Innodb;
++drop table create_create_create_create_create_ddl_test_10;
++--replace_column 2 # 5 # 6 #
++call dbms_recyclebin.show_tables();
++
++SET SESSION debug="+d,recyclebin_after_rename_before_drop_fk_fail";
++create table create_create_create_create_create_ddl_test_10 (
++    c_id INT PRIMARY KEY,
++    p_id INT,
++    FOREIGN KEY (p_id) REFERENCES create_create_create_create_create_create_ddl_test_5(id)
++) ENGINE=InnoDB;
++show create table create_create_create_create_create_ddl_test_10;
++--error ER_RECYBIN_DROP_TABLE_FAILED
++drop table create_create_create_create_create_ddl_test_10;
++show create table create_create_create_create_create_ddl_test_10;
++SET SESSION debug="-d,recyclebin_after_rename_before_drop_fk_fail";
++drop table create_create_create_create_create_ddl_test_10;
++--replace_column 2 # 5 # 6 #
++call dbms_recyclebin.show_tables();
++ 
++drop table create_create_create_create_create_create_ddl_test_5;
++drop database __recyclebin__;
++create database __recyclebin__ default character set utf8mb4;
++
+ connection default;
+ set rds_recycle_bin_mode=OFF;
+ set global rds_recycle_bin_mode=OFF;
+diff --git a/sql/sql_rename.cc b/sql/sql_rename.cc
+index 6e676f85e6e..c12286ed95c 100644
+--- a/sql/sql_rename.cc
++++ b/sql/sql_rename.cc
+@@ -828,6 +828,9 @@ static bool do_rename(THD *thd, Table_ref *ren_table, const char *new_db,
+         return true;
+       }
+ 
++      DBUG_EXECUTE_IF("recyclebin_after_rename_before_drop_fk_fail",
++                      { return true; });
++
+       if (thd->recycle_state->is_recycle()) {
+         if (adjust_fk_for_recycle_drop_table(thd, new_db, new_alias, hton,
+                                              fk_invalidator))
+diff --git a/sql/sql_table.cc b/sql/sql_table.cc
+index 03574f76353..426ba4c6752 100644
+--- a/sql/sql_table.cc
++++ b/sql/sql_table.cc
+@@ -10809,7 +10809,7 @@ bool mysql_rename_table(THD *thd, handlerton *base, const char *old_db,
+     Unless suppressed update generated foreign key names
+     (as they have table_name<SE-specific or default suffix>#### format).
+   */
+-  if (!(flags & NO_FK_RENAME) &&
++  if (!(flags & NO_FK_RENAME) && !thd->recycle_state->is_recycle() &&
+       dd::rename_foreign_keys(thd, old_db, old_fk_name, base, new_db,
+                               to_table_def))
+     return true;
+-- 
+2.23.0
+

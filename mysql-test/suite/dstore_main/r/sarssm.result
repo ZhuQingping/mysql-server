@@ -1,0 +1,36 @@
+set global dstore_enable_heap_sarssm=on;
+CREATE TABLE t1 (
+id INT AUTO_INCREMENT PRIMARY KEY,
+c1 CHAR(250) DEFAULT 'a',
+c2 CHAR(250) DEFAULT 'b',
+c3 CHAR(250) DEFAULT 'c',
+c4 CHAR(250) DEFAULT 'd'
+);
+CREATE PROCEDURE fill_data(IN iterations INT)
+BEGIN
+DECLARE i INT DEFAULT 0;
+SET autocommit = 0;
+WHILE i < iterations DO
+INSERT INTO t1 (c1, c2, c3, c4) VALUES 
+(REPEAT('a', 250), REPEAT('b', 250), REPEAT('c', 250), REPEAT('d', 250)),
+(REPEAT('a', 250), REPEAT('b', 250), REPEAT('c', 250), REPEAT('d', 250)),
+(REPEAT('a', 250), REPEAT('b', 250), REPEAT('c', 250), REPEAT('d', 250)),
+(REPEAT('a', 250), REPEAT('b', 250), REPEAT('c', 250), REPEAT('d', 250)),
+(REPEAT('a', 250), REPEAT('b', 250), REPEAT('c', 250), REPEAT('d', 250)),
+(REPEAT('a', 250), REPEAT('b', 250), REPEAT('c', 250), REPEAT('d', 250)),
+(REPEAT('a', 250), REPEAT('b', 250), REPEAT('c', 250), REPEAT('d', 250)),
+(REPEAT('a', 250), REPEAT('b', 250), REPEAT('c', 250), REPEAT('d', 250)),
+(REPEAT('a', 250), REPEAT('b', 250), REPEAT('c', 250), REPEAT('d', 250)),
+(REPEAT('a', 250), REPEAT('b', 250), REPEAT('c', 250), REPEAT('d', 250));
+SET i = i + 1;
+IF (MOD(i, 100) = 0) THEN
+COMMIT;
+END IF;
+END WHILE;
+COMMIT;
+SET autocommit = 1;
+END |
+CALL fill_data(10000);
+SET GLOBAL dstore_enable_heap_sarssm = 0;
+DROP PROCEDURE fill_data;
+DROP TABLE t1;

@@ -1,0 +1,467 @@
+SET @save_transaction_isolation= @@global.transaction_isolation;
+SET GLOBAL TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+# this mtr includes test cases:
+# test-replace into, session1 commit.
+# test-replace into, session1 rollback.
+# test-insert/update conflict.
+# test-update/update conflict.
+# test-insert select.
+drop table if exists test;
+# Establish connection thr1 (user=root)
+# Establish connection thr2 (user=root)
+# test-replace into, session1 commit. 
+# +----------------------------+--------------------------------+
+# | session1                   | session2                       |
+# +----------------------------+--------------------------------+
+# | begin;                     | begin;                         |
+# | insert into t value(1,10); |                                |
+# |                            | replace into t values(1,20);   |
+# |                            | #wait                          |
+# | commit;                    |                                |
+# |                            | #continue                      |
+# |                            | select * from  t;              |
+# |                            | #1,20                          |
+# |                            | commit;                        |
+# |                            | insert into t values(1,50);    |
+# |                            | #error, duplicate              |
+# |                            | insert into t values(2,10);    |
+# |                            | update t set b=30 where a = 1; |
+# |                            | select * from t;               |
+# |                            | #1,30;2,10                     |
+# |                            | update t set b = 50;           |
+# |                            | select * from t;               |
+# |                            | #1,50;2,50                     |
+# |                            | delete from t;                 |
+# |                            | select * from t;               |
+# |                            | #1,50;2,50                     |
+# +----------------------------+--------------------------------+
+# get isolation for thr1.
+select @@transaction_isolation;
+@@transaction_isolation
+SERIALIZABLE
+# get isolation for thr2.
+select @@transaction_isolation;
+@@transaction_isolation
+SERIALIZABLE
+# Switching to connection 'default'.
+create table t(a int primary key, b int);
+# Switching to connection 'thr1'.
+begin;
+insert into t value(1,10);
+# Switching to connection 'thr2'.
+begin;
+replace into t values(1,20);
+# Switching to connection 'thr1'.
+commit;
+# Switching to connection 'thr2'.
+commit;
+select * from  t;
+a	b
+1	20
+# Switching to connection 'thr1'.
+insert into t values(1,50);
+ERROR 23000: Duplicate entry '1' for key 't.PRIMARY'
+insert into t values(2,10);
+update t set b = 30 where a = 1;
+select * from t;
+a	b
+1	30
+2	10
+update t set b = 50;
+select * from t;
+a	b
+1	50
+2	50
+delete from t;
+select * from t;
+a	b
+drop table t;
+# test-replace into, session1 rollback.
+# +----------------------------+--------------------------------+
+# | session1                   | session2                       |
+# +----------------------------+--------------------------------+
+# | begin;                     | begin;                         |
+# | insert into t value(1,10); |                                |
+# |                            | replace into t values(1,20);   |
+# |                            | #wait                          |
+# | rollback;                  |                                |
+# |                            | #continue                      |
+# |                            | select * from  t;              |
+# |                            | #1,20                          |
+# |                            | commit;                        |
+# |                            | insert into t values(1,50);    |
+# |                            | #error, duplicate              |
+# |                            | insert into t values(2,10);    |
+# |                            | update t set b=30 where a = 1; |
+# |                            | select * from t;               |
+# |                            | #1,30;2,10                     |
+# |                            | update t set b = 50;           |
+# |                            | select * from t;               |
+# |                            | #1,50;2,50                     |
+# |                            | delete from t;                 |
+# |                            | select * from t;               |
+# |                            | #1,50;2,50                     |
+# +----------------------------+--------------------------------+
+# get isolation for thr1.
+select @@transaction_isolation;
+@@transaction_isolation
+SERIALIZABLE
+# get isolation for thr2.
+select @@transaction_isolation;
+@@transaction_isolation
+SERIALIZABLE
+# Switching to connection 'default'.
+create table t(a int primary key, b int);
+# Switching to connection 'thr1'.
+begin;
+insert into t value(1,10);
+# Switching to connection 'thr2'.
+begin;
+replace into t values(1,20);
+# Switching to connection 'thr1'.
+rollback;
+# Switching to connection 'thr2'.
+commit;
+select * from  t;
+a	b
+1	20
+# Switching to connection 'thr1'.
+insert into t values(1,50);
+ERROR 23000: Duplicate entry '1' for key 't.PRIMARY'
+insert into t values(2,10);
+update t set b = 30 where a = 1;
+select * from t;
+a	b
+2	10
+1	30
+update t set b = 50;
+select * from t;
+a	b
+2	50
+1	50
+delete from t;
+select * from t;
+a	b
+drop table t;
+# test-insert/update conflict
+# +------------------------------+----------------------------------------------------+
+# | session1                     | session2                                           |
+# +------------------------------+----------------------------------------------------+
+# | begin;                       | begin;                                             |
+# |                              | select * from t where a = 1;                       |
+# | insert into t values(1,'m'); |                                                    |
+# |                              | select * from t where a = 1;                       |
+# |                              | # empty                                            |
+# |                              | select * from t for update where a = 1;            |
+# |                              | # empty                                            |
+# | commit;                      |                                                    |
+# |                              | select * from t where a = 1;                       |
+# |                              | # empty for rr,se and 1,m for rc                   |
+# |                              | select * from t for update where a = 1;            |
+# |                              | # 1,m                                              |
+# +------------------------------+----------------------------------------------------+
+# get isolation for thr1.
+select @@transaction_isolation;
+@@transaction_isolation
+SERIALIZABLE
+# get isolation for thr2.
+select @@transaction_isolation;
+@@transaction_isolation
+SERIALIZABLE
+create table t(a int primary key, b char(10));
+begin;
+select * from t;
+a	b
+# Switching to connection 'thr1'.
+begin;
+insert into t values(1,'m');
+# Switching to connection 'thr2'.
+select * from t where a = 1;
+a	b
+select * from t where a = 1 for update;
+a	b
+# Switching to connection 'thr1'.
+commit;
+# Switching to connection 'thr2'.
+select * from t where a = 1;
+a	b
+select * from t where a = 1 for update;
+a	b
+1	m
+commit;
+select * from t where a = 1;
+a	b
+1	m
+select * from t where a = 1 for update;
+a	b
+1	m
+drop table t;
+# test-update/update conflict
+# +----------------------------------+-----------------------------------------+
+# | session1                         | session2                                |
+# +----------------------------------+-----------------------------------------+
+# | begin;                           | begin;                                  |
+# |                                  | select * from t where a = 1;            |
+# |                                  | #1,m                                    |
+# | update t set b ='x' where a = 1; |                                         |
+# |                                  | update t set b ='y' where a = 1;        |
+# |                                  | #error, rollback                        |
+# | commit;                          |                                         |
+# |                                  | select * from t where a = 1;            |
+# |                                  | #1, a                                   |
+# |                                  | select * from t where a = 1 for update; |
+# |                                  | #1,x                                    |
+# |                                  | commit;                                 |
+# +----------------------------------+-----------------------------------------+
+# get isolation for thr1.
+select @@transaction_isolation;
+@@transaction_isolation
+SERIALIZABLE
+# get isolation for thr2.
+select @@transaction_isolation;
+@@transaction_isolation
+SERIALIZABLE
+create table t(a int primary key, b char(10));
+insert into t values(1,'a');
+begin;
+select * from t where a = 1;
+a	b
+1	a
+# Switching to connection 'thr1'.
+begin;
+update t set b ='x' where a = 1;
+# Switching to connection 'thr2'.
+update t set b ='y' where a = 1;
+# Switching to connection 'thr1'.
+commit;
+# Switching to connection 'thr2'.
+ERROR HY000: Storage engine Dstore: found a changed or deleted row, so can't serialize access for this SERIALIZABLE transaction, rolled the current statement back.
+select * from t where a = 1;
+a	b
+1	a
+select * from t where a = 1 for update;
+a	b
+1	x
+commit;
+select * from t where a = 1;
+a	b
+1	x
+select * from t where a = 1 for update;
+a	b
+1	x
+# Switching to connection 'default'.
+drop table t;
+# test-insert select
+# +----------------------------------+----------------------------------+
+# | session1                         | session2                         |
+# +----------------------------------+----------------------------------+
+# | begin;                           | begin;                           |
+# | insert into t1 select * from t1; |                                  |
+# | select  count(*) from t1;        |                                  |
+# | #4(1)                            |                                  |
+# |                                  | select  count(*) from t1;        |
+# |                                  | #2(2)                            |
+# |                                  | insert into t1 select * from t1; |
+# |                                  | select  count(*) from t1;        |
+# |                                  | #4(3)                            |
+# | select  count(*) from t1;        |                                  |
+# | #4(4)                            |                                  |
+# | commit;                          |                                  |
+# | select  count(*) from t1;        |                                  |
+# | #4(5)                            |                                  |
+# |                                  | select  count(*) from t1;        |
+# |                                  | #rc 6, rr 4(6), se 4(6)          |
+# |                                  | insert into t1 select * from t1; |
+# |                                  | select  count(*) from t1;        |
+# |                                  | #rc 12, rr 8(7), se 8(7)         |
+# | select  count(*) from t1;        |                                  |
+# | #4(8)                            |                                  |
+# |                                  | commit;                          |
+# |                                  | select  count(*) from t1;        |
+# |                                  | #rc 12, rr 10 (9), se 10 (9)     |
+# | select  count(*) from t1;        |                                  |
+# | #rc 12, rr 10 (10), se 10(10)    |                                  |
+# +----------------------------------+----------------------------------+
+# get isolation for thr1.
+select @@transaction_isolation;
+@@transaction_isolation
+SERIALIZABLE
+# get isolation for thr2.
+select @@transaction_isolation;
+@@transaction_isolation
+SERIALIZABLE
+create table t1(a int);
+insert into t1 values(1),(2);
+begin;
+# Switching to connection 'thr1'.
+begin;
+insert into t1 select * from t1;
+# result is 4(1)
+select  count(*) from t1;
+count(*)
+4
+# Switching to connection 'thr2'.
+# result is 2(2)
+select  count(*) from t1;
+count(*)
+2
+insert into t1 select * from t1;
+# result is 4(3)
+select  count(*) from t1;
+count(*)
+4
+# Switching to connection 'thr1'.
+# result is 4(4)
+select  count(*) from t1;
+count(*)
+4
+commit;
+# result is 4(5)
+select  count(*) from t1;
+count(*)
+4
+# Switching to connection 'thr2'.
+# result is rc 6, rr 4 (6), se 4 (6)
+select  count(*) from t1;
+count(*)
+4
+insert into t1 select * from t1;
+# result is rc 12, rr 8(7), se 8(7)
+select  count(*) from t1;
+count(*)
+8
+# Switching to connection 'thr1'.
+# result is 4(8)
+select  count(*) from t1;
+count(*)
+4
+# Switching to connection 'thr2'.
+commit;
+# result is rc 12, rr 10 (9), se 10(9)
+select  count(*) from t1;
+count(*)
+10
+# Switching to connection 'thr2'.
+# result is rc 12, rr 10 (10), se 10(10)
+select  count(*) from t1;
+count(*)
+10
+# Switching to connection 'default'.
+drop table t1;
+# test-rollback when tupled locked changed in serializable
+# +---------------------------------+---------------------------------+
+# | session1                        | session2                        |
+# +---------------------------------+---------------------------------+
+# | begin;                          |                                 |
+# |                                 | begin;                          |
+# | select * from t where a = 1;    |                                 |
+# | #a=1                            | select * from t where a = 1;    |
+# | update t set a = 11 where a =1; |                                 |
+# |                                 | update t set a = 22 where a =1; |
+# |                                 | #wait                           |
+# | commit;                         |                                 |
+# |                                 | #failed,rollback                |
+# +---------------------------------+---------------------------------+
+# +---------------------------------+---------------------------------+
+# | session1                        | session2                        |
+# +---------------------------------+---------------------------------+
+# | begin;                          |                                 |
+# |                                 | begin;                          |
+# | select * from t where a = 1;    |                                 |
+# | #a=1                            | select * from t where a = 1;    |
+# | delete t where a =1;            |                                 |
+# |                                 | update t set a = 22 where a =1; |
+# |                                 | #wait                           |
+# | commit;                         |                                 |
+# |                                 | #failed,rollback                |
+# +---------------------------------+---------------------------------+
+# get isolation for thr1.
+select @@transaction_isolation;
+@@transaction_isolation
+SERIALIZABLE
+# get isolation for thr2.
+select @@transaction_isolation;
+@@transaction_isolation
+SERIALIZABLE
+create table t(a int primary key);
+insert into t values(1),(2);
+begin;
+# Switching to connection 'thr1'.
+begin;
+select * from t where a = 1;
+a
+1
+# Switching to connection 'thr2'.
+begin;
+select * from t where a = 1;
+a
+1
+# Switching to connection 'thr1'.
+update t set a = 11 where a =1;
+# Switching to connection 'thr2'.
+update t set a = 22 where a =1;;
+# Switching to connection 'thr1'.
+commit;
+# Switching to connection 'thr2'.
+ERROR HY000: Storage engine Dstore: found a changed or deleted row, so can't serialize access for this SERIALIZABLE transaction, rolled the current statement back.
+commit;
+# Switching to connection 'default'.
+drop table t;
+SELECT @@TRANSACTION_ISOLATION;
+@@TRANSACTION_ISOLATION
+SERIALIZABLE
+CREATE TABLE t(c0 DOUBLE);
+INSERT IGNORE INTO t(c0) VALUES (0.9931925752187568);
+INSERT INTO t(c0) VALUES (-1.027690859E9);
+INSERT IGNORE INTO t(c0) VALUES (1.703887288E9);
+INSERT INTO t(c0) VALUES (0.28827036489779345);
+INSERT IGNORE INTO t(c0) VALUES (0.2736530260159269);
+INSERT INTO t(c0) VALUES (0.29291070120938634);
+INSERT INTO t(c0) VALUES (0.542275928410573);
+INSERT IGNORE INTO t(c0) VALUES (0.8737219117942141);
+SET TRANSACTION_ISOLATION = 'READ-COMMITTED';
+SELECT @@TRANSACTION_ISOLATION;
+@@TRANSACTION_ISOLATION
+READ-COMMITTED
+BEGIN;
+SET @saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode= '';
+BEGIN;
+SELECT c0 FROM t WHERE 44029174 LOCK IN SHARE MODE;
+c0
+0.9931925752187568
+-1027690859
+1703887288
+0.28827036489779345
+0.2736530260159269
+0.29291070120938634
+0.542275928410573
+0.8737219117942141
+SELECT c0 FROM t WHERE "O|[+lNW]wဪ";
+c0
+SELECT c0 FROM t WHERE (MOD((((c0) / (c0)) ^ (RIGHT((c0), (-1905897474)))), (c0))) / ("o");
+c0
+UPDATE t SET c0=8.05857132E8 WHERE c0;
+UPDATE t SET c0=0.837567142750463 WHERE ("+hNP&a5EB") != ("!");
+COMMIT;
+ERROR HY000: Storage engine Dstore: found a changed or deleted row, so can't serialize access for this SERIALIZABLE transaction, rolled the current statement back.
+UPDATE t SET c0=0.2736530260159269 WHERE (MOD((((c0) / (c0)) ^ (RIGHT((c0), (-1905897474)))), (c0))) / ("o");
+UPDATE t SET c0=-1.027690859E9 WHERE (0.4542707063456142) ^ (((c0)IS NULL) + (0.7409113995651787));
+ROLLBACK;
+SELECT * FROM t;
+c0
+0.837567142750463
+0.837567142750463
+0.837567142750463
+0.837567142750463
+0.837567142750463
+0.837567142750463
+0.837567142750463
+0.837567142750463
+SET SESSION sql_mode= @saved_sql_mode;
+SET TRANSACTION_ISOLATION = 'SERIALIZABLE';
+SELECT @@TRANSACTION_ISOLATION;
+@@TRANSACTION_ISOLATION
+SERIALIZABLE
+DROP TABLE t;
+set @@global.transaction_isolation = @save_transaction_isolation;

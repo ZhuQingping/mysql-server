@@ -1,0 +1,2219 @@
+From 558c15d12e5cf8989983a57aa38baa34342ad1b9 Mon Sep 17 00:00:00 2001
+From: gebinbin <gebinbin@contributor>
+
+
+Date: Mon, 11 Aug 2025 07:41:03 +0800
+Subject: [PATCH] FEATURE add support for temporary table
+
+Issue:
+------
+dstore not support create temporary table statement
+
+Solution:
+---------
+1.add support for temporary table in dstore, mainly focus on
+use different tablespace,heap type,index type while execure ddl operation
+2.dstore temporary table use TmpLocalBufMgr, should add session support
+3.temporary table not record post ddl records, no need persistent statistic record.
+4.temporary table no need lock table, no need lock tuple
+TODO:
+1.temporary table with transaction
+2.update-dstore/in_predicate_to_in_subs_part1-dstore test comment temporary case
+---
+ mysql-test/mysql-test-run.pl                  |   4 +-
+ .../suite/dstore_main/r/alter_table.result    |   8 +-
+ .../suite/dstore_main/r/analyze-dstore.result |   2 +-
+ .../dstore_main/r/constraints-dstore.result   |   8 +-
+ .../r/ctype_gb18030_encoding_cn-dstore.result |   2 +-
+ .../ctype_gb18030_encoding_utf8-dstore.result |   2 +-
+ .../r/disabled_storage_engines-dstore.result  |   2 +-
+ .../r/functional_index-dstore.result          |   6 +-
+ ...n_predicate_to_in_subs_part1-dstore.result |  50 --
+ .../r/information_schema_cs-dstore.result     |   2 +-
+ ...nformation_schema_statistics-dstore.result |   4 +-
+ .../r/invisible_columns-dstore.result         |  10 +-
+ .../r/invisible_columns_cde.result            | 785 ------------------
+ .../r/invisible_indexes-dstore.result         |   4 +-
+ .../r/no_engine_substitution-dstore.result    |   6 +-
+ .../dstore_main/r/show_check_cs-dstore.result |   4 +-
+ .../suite/dstore_main/r/sp-dstore.result      |   6 +-
+ .../dstore_main/r/temp_table-dstore.result    |  21 +-
+ .../suite/dstore_main/r/update-dstore.result  |  11 -
+ .../in_predicate_to_in_subs_part1-dstore.test |  21 -
+ .../dstore_main/t/invisible_columns_cde.test  |   9 -
+ .../suite/dstore_main/t/update-dstore.test    |  15 -
+ mysql-test/t/commit_1innodb.test              |   1 +
+ mysql-test/t/mysqltest.test                   |   1 +
+ storage/dstore/boot/cde_instance.cc           |  13 +
+ storage/dstore/ddl/cde_dd_table.cc            |   6 +-
+ storage/dstore/ddl/cde_ddl.cc                 | 177 ++--
+ storage/dstore/ddl/cde_ddl.h                  |  44 +-
+ storage/dstore/ddl/cde_ddl_log.cc             |   5 +-
+ storage/dstore/ddl/cde_ddl_log.h              |   2 +
+ storage/dstore/ddl/ha_cde_alter.cc            |   7 +-
+ storage/dstore/dict/cde_dict.h                |  10 +
+ storage/dstore/dict/cde_relation.cc           |   2 +-
+ storage/dstore/dml/cde_dml.cc                 |   5 +-
+ storage/dstore/dml/cde_heap.cc                |   6 +
+ storage/dstore/handler/ha_cde.cc              |  31 +-
+ storage/dstore/ut/src/ut_cde_local_backup.cc  |   3 +-
+ 37 files changed, 275 insertions(+), 1020 deletions(-)
+ delete mode 100644 mysql-test/suite/dstore_main/r/invisible_columns_cde.result
+ delete mode 100644 mysql-test/suite/dstore_main/t/invisible_columns_cde.test
+
+diff --git a/mysql-test/mysql-test-run.pl b/mysql-test/mysql-test-run.pl
+index 89185786ec6..c6ebe915601 100755
+--- a/mysql-test/mysql-test-run.pl
++++ b/mysql-test/mysql-test-run.pl
+@@ -1981,9 +1981,7 @@ sub command_line_setup {
+   # Check default engine
+   if ($opt_dstore) {
+     push(@opt_extra_mysqld_opt, "--default_storage_engine=Dstore");
+-    # Currently we use InnoDB as tmp storage engine, because Dstore donot support temporary table.
+-    # We should modify it into Dstore after temporary table is supported.
+-    push(@opt_extra_mysqld_opt, "--default_tmp_storage_engine=InnoDB");
++    push(@opt_extra_mysqld_opt, "--default_tmp_storage_engine=Dstore");
+     push(@opt_extra_mysqld_opt, "--storage_engine_mode=BOTH_STORAGE_ENGINE");
+     # Since histogram statistics auto update has delay, use default value OFF of
+     # dstore_calculate_exact_rows_for_range need to adapt many mtr result files,
+diff --git a/mysql-test/suite/dstore_main/r/alter_table.result b/mysql-test/suite/dstore_main/r/alter_table.result
+index b79acc18c95..b8157ca9607 100644
+--- a/mysql-test/suite/dstore_main/r/alter_table.result
++++ b/mysql-test/suite/dstore_main/r/alter_table.result
+@@ -1040,12 +1040,12 @@ SHOW CREATE TABLE `tt+1`;
+ Table	Create Table
+ tt+1	CREATE TEMPORARY TABLE `tt+1` (
+   `c1` int DEFAULT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ SHOW CREATE TABLE `tt+2`;
+ Table	Create Table
+ tt+2	CREATE TEMPORARY TABLE `tt+2` (
+   `c1` int DEFAULT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ DROP TABLE   `tt+1`, `tt+2`;
+ CREATE TABLE `#sql1` (c1 INT);
+ CREATE TABLE `@0023sql2` (c1 INT);
+@@ -1082,12 +1082,12 @@ SHOW CREATE TABLE `#sql2`;
+ Table	Create Table
+ #sql2	CREATE TEMPORARY TABLE `#sql2` (
+   `c1` int DEFAULT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ SHOW CREATE TABLE `@0023sql1`;
+ Table	Create Table
+ @0023sql1	CREATE TEMPORARY TABLE `@0023sql1` (
+   `c1` int DEFAULT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ DROP TABLE `#sql2`, `@0023sql1`;
+ CREATE TABLE t1 (
+ int_field INTEGER UNSIGNED NOT NULL,
+diff --git a/mysql-test/suite/dstore_main/r/analyze-dstore.result b/mysql-test/suite/dstore_main/r/analyze-dstore.result
+index 4b8a0b9c80f..94b5452cc96 100644
+--- a/mysql-test/suite/dstore_main/r/analyze-dstore.result
++++ b/mysql-test/suite/dstore_main/r/analyze-dstore.result
+@@ -37,7 +37,7 @@ Table	Op	Msg_type	Msg_text
+ test.t1	analyze	status	OK
+ show index from t1;
+ Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+-t1	1	a	1	a	A	5	NULL	NULL	YES	BTREE			YES	NULL
++t1	1	a	1	a	A	NULL	NULL	NULL	YES	BTREE			YES	NULL
+ drop table t1;
+ End of 4.1 tests
+ create table t1(a int);
+diff --git a/mysql-test/suite/dstore_main/r/constraints-dstore.result b/mysql-test/suite/dstore_main/r/constraints-dstore.result
+index 1b690ff47fd..439ab375ec4 100644
+--- a/mysql-test/suite/dstore_main/r/constraints-dstore.result
++++ b/mysql-test/suite/dstore_main/r/constraints-dstore.result
+@@ -262,7 +262,7 @@ tmp	CREATE TEMPORARY TABLE `tmp` (
+   PRIMARY KEY (`f1`),
+   UNIQUE KEY `f2_unique` (`f2`),
+   CONSTRAINT `f2_check` CHECK ((`f2` > 0))
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ ALTER TABLE tmp DROP CONSTRAINT `primary`,
+ DROP CONSTRAINT f2_check,
+ DROP CONSTRAINT f2_unique;
+@@ -271,7 +271,7 @@ Table	Create Table
+ tmp	CREATE TEMPORARY TABLE `tmp` (
+   `f1` int NOT NULL,
+   `f2` int DEFAULT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ DROP TABLE tmp;
+ #-----------------------------------------------------------------------
+ # Test case to verify drop constraint in stored procedures.
+@@ -694,7 +694,7 @@ tmp	CREATE TEMPORARY TABLE `tmp` (
+   PRIMARY KEY (`f1`),
+   UNIQUE KEY `f2_unique` (`f2`),
+   CONSTRAINT `f2_check` CHECK ((`f2` > 0))
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ ALTER TABLE tmp ALTER CONSTRAINT f2_check NOT ENFORCED;
+ SHOW CREATE TABLE tmp;
+ Table	Create Table
+@@ -704,6 +704,6 @@ tmp	CREATE TEMPORARY TABLE `tmp` (
+   PRIMARY KEY (`f1`),
+   UNIQUE KEY `f2_unique` (`f2`),
+   CONSTRAINT `f2_check` CHECK ((`f2` > 0)) /*!80016 NOT ENFORCED */
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ DROP TABLE tmp;
+ DROP TABLE t1, t2;
+diff --git a/mysql-test/suite/dstore_main/r/ctype_gb18030_encoding_cn-dstore.result b/mysql-test/suite/dstore_main/r/ctype_gb18030_encoding_cn-dstore.result
+index ef296f9f1bc..d59653593f9 100644
+--- a/mysql-test/suite/dstore_main/r/ctype_gb18030_encoding_cn-dstore.result
++++ b/mysql-test/suite/dstore_main/r/ctype_gb18030_encoding_cn-dstore.result
+@@ -74,7 +74,7 @@ SHOW CREATE TABLE `
+ Table	Create Table
+ �9�6�9�7�9�8	CREATE TEMPORARY TABLE `�9�6�9�7�9�8` (
+   `�9�5�9�5�9�5` char(1) DEFAULT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=gb18030
++) ENGINE=Dstore DEFAULT CHARSET=gb18030
+ DROP TABLE `����`, `ģʽ`, `�Jແ9�0`, `�9�4�9�4�9�4`, `�9�6�9�7�9�8`;
+ 'Test for ALTER TABLE'
+ CREATE TABLE `����` (`�ֶ�һ` CHAR(5)) DEFAULT CHARSET = gb18030;
+diff --git a/mysql-test/suite/dstore_main/r/ctype_gb18030_encoding_utf8-dstore.result b/mysql-test/suite/dstore_main/r/ctype_gb18030_encoding_utf8-dstore.result
+index adde043f56e..fc9e675e531 100644
+--- a/mysql-test/suite/dstore_main/r/ctype_gb18030_encoding_utf8-dstore.result
++++ b/mysql-test/suite/dstore_main/r/ctype_gb18030_encoding_utf8-dstore.result
+@@ -74,7 +74,7 @@ SHOW CREATE TABLE `㐇㐈㐉`;
+ Table	Create Table
+ 㐇㐈㐉	CREATE TEMPORARY TABLE `㐇㐈㐉` (
+   `㐐㐐㐐` char(1) DEFAULT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ DROP TABLE `表格`, `模式`, `隞嗷㐁`, `㐅㐅㐅`, `㐇㐈㐉`;
+ 'Test for ALTER TABLE'
+ CREATE TABLE `表格` (`字段一` CHAR(5)) DEFAULT CHARSET = utf8mb4;
+diff --git a/mysql-test/suite/dstore_main/r/disabled_storage_engines-dstore.result b/mysql-test/suite/dstore_main/r/disabled_storage_engines-dstore.result
+index 95192baa36d..0ffed63a45a 100644
+--- a/mysql-test/suite/dstore_main/r/disabled_storage_engines-dstore.result
++++ b/mysql-test/suite/dstore_main/r/disabled_storage_engines-dstore.result
+@@ -24,7 +24,7 @@ ERROR HY000: Storage engine MyISAM is disabled (Table creation is disallowed).
+ CREATE TABLE t2 AS SELECT * FROM t1;
+ ERROR HY000: Storage engine Dstore is disabled (Table creation is disallowed).
+ CREATE TEMPORARY TABLE t2 AS SELECT * FROM t1;
+-ERROR HY000: Storage engine InnoDB is disabled (Table creation is disallowed).
++ERROR HY000: Storage engine Dstore is disabled (Table creation is disallowed).
+ ALTER TABLE t1 ENGINE=Dstore;
+ ERROR HY000: Storage engine Dstore is disabled (Table creation is disallowed).
+ ALTER TABLE t1 ENGINE=Dstore;
+diff --git a/mysql-test/suite/dstore_main/r/functional_index-dstore.result b/mysql-test/suite/dstore_main/r/functional_index-dstore.result
+index 2f33473bd8a..600e2d9c740 100644
+--- a/mysql-test/suite/dstore_main/r/functional_index-dstore.result
++++ b/mysql-test/suite/dstore_main/r/functional_index-dstore.result
+@@ -164,7 +164,7 @@ CREATE TEMPORARY TABLE t1(a INT);
+ CREATE INDEX idx ON t1 ((ABS(a)));
+ SHOW KEYS FROM t1;
+ Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+-t1	1	idx	1	NULL	A	0	NULL	NULL	YES	BTREE			YES	abs(`a`)
++t1	1	idx	1	NULL	A	NULL	NULL	NULL	YES	BTREE			YES	abs(`a`)
+ DROP TABLE t1;
+ CREATE TABLE t1 (col1 INT, INDEX ((CONCAT(''))));
+ ERROR HY000: The used storage engine cannot index the expression 'concat(_utf8mb4'')'.
+@@ -740,8 +740,8 @@ CREATE TEMPORARY TABLE t2
+ (UNIQUE i3 TYPE BTREE (c1, (c1 REGEXP c1))) TABLE t1;
+ SHOW INDEXES IN t2;
+ Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+-t2	0	i3	1	c1	A	0	NULL	NULL	YES	BTREE			YES	NULL
+-t2	0	i3	2	NULL	A	0	NULL	NULL	YES	BTREE			YES	regexp_like(`c1`,`c1`)
++t2	0	i3	1	c1	A	NULL	NULL	NULL	YES	BTREE			YES	NULL
++t2	0	i3	2	NULL	A	NULL	NULL	NULL	YES	BTREE			YES	regexp_like(`c1`,`c1`)
+ /* temporary table */
+ DROP TABLE t2;
+ DROP TABLE t1;
+diff --git a/mysql-test/suite/dstore_main/r/in_predicate_to_in_subs_part1-dstore.result b/mysql-test/suite/dstore_main/r/in_predicate_to_in_subs_part1-dstore.result
+index a67cefd5b98..ef787284727 100644
+--- a/mysql-test/suite/dstore_main/r/in_predicate_to_in_subs_part1-dstore.result
++++ b/mysql-test/suite/dstore_main/r/in_predicate_to_in_subs_part1-dstore.result
+@@ -1727,56 +1727,6 @@ a	b	c
+ 2	5	12
+ alter table t1 drop index idx_c;
+ alter table t1 drop column c;
+-# Case 19. Test partition table, temporary table.
+-create temporary table t3 like t1;
+-insert into t3 select * from t1;
+-# Explain and execute query: select * from t3 where (a,b) in ((1,2), (2,3));
+-set @explain = 'traditional,tree';;
+-EXPLAIN select * from t3 where (a,b) in ((1,2), (2,3));;
+-id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t3	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	Using where
+-1	SIMPLE	<in_predicate_2>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	9	test.t3.a,test.t3.b	#	#	IN-list converted
+-Warnings:
+-Note	1003	/* select#1 */ select `test`.`t3`.`a` AS `a`,`test`.`t3`.`b` AS `b` from `test`.`<in_predicate_2>` join `test`.`t3` where ((`test`.`<in_predicate_2>`.`b` = `test`.`t3`.`b`) and (`test`.`<in_predicate_2>`.`a` = `test`.`t3`.`a`))
+-EXPLAIN FORMAT=tree select * from t3 where (a,b) in ((1,2), (2,3));;
+-EXPLAIN
+--> Nested loop inner join  (cost=*** rows=***)
+-    -> Filter: (t3.b is not null)  (cost=*** rows=***)
+-        -> Table scan on t3  (cost=*** rows=***)
+-    -> Single-row index lookup on <in_predicate_2> using <auto_distinct_key> (a=t3.a, b=t3.b)  (cost=*** rows=***)
+-
+-select * from t3 where (a,b) in ((1,2), (2,3));;
+-a	b
+-1	2
+-drop table t3;
+-CREATE TABLE t3 (
+-id int NOT NULL,
+-partition_key int NOT NULL,
+-PRIMARY KEY (`id`,`partition_key`)
+-)
+-PARTITION BY RANGE (partition_key)
+-(PARTITION p0 VALUES LESS THAN (5) ENGINE = InnoDB,
+-PARTITION p1 VALUES LESS THAN (10) ENGINE = InnoDB);
+-insert into t3 values (1,2),(2,9);
+-# Explain and execute query: select * from t3 where (id,partition_key) in ((1,2), (2,3), (2,9));
+-set @explain = 'traditional,tree';;
+-EXPLAIN select * from t3 where (id,partition_key) in ((1,2), (2,3), (2,9));;
+-id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t3	p0,p1	index	PRIMARY	PRIMARY	8	NULL	#	#	Using index
+-1	SIMPLE	<in_predicate_2>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	8	test.t3.id,test.t3.partition_key	#	#	IN-list converted
+-Warnings:
+-Note	1003	/* select#1 */ select `test`.`t3`.`id` AS `id`,`test`.`t3`.`partition_key` AS `partition_key` from `test`.`<in_predicate_2>` join `test`.`t3` where ((`test`.`<in_predicate_2>`.`partition_key` = `test`.`t3`.`partition_key`) and (`test`.`<in_predicate_2>`.`id` = `test`.`t3`.`id`))
+-EXPLAIN FORMAT=tree select * from t3 where (id,partition_key) in ((1,2), (2,3), (2,9));;
+-EXPLAIN
+--> Nested loop inner join  (cost=*** rows=***)
+-    -> Index scan on t3 using PRIMARY  (cost=*** rows=***)
+-    -> Single-row index lookup on <in_predicate_2> using <auto_distinct_key> (id=t3.id, partition_key=t3.partition_key)  (cost=*** rows=***)
+-
+-select * from t3 where (id,partition_key) in ((1,2), (2,3), (2,9));;
+-id	partition_key
+-1	2
+-2	9
+-drop table t3;
+ # Case 20. Test use keys, not in.
+ # Explain and execute query: select * from t2 where (a,b) in ((1,2), (2,3));
+ set @explain = 'traditional,tree';;
+diff --git a/mysql-test/suite/dstore_main/r/information_schema_cs-dstore.result b/mysql-test/suite/dstore_main/r/information_schema_cs-dstore.result
+index 52b66f8d61f..3e6fee86de3 100644
+--- a/mysql-test/suite/dstore_main/r/information_schema_cs-dstore.result
++++ b/mysql-test/suite/dstore_main/r/information_schema_cs-dstore.result
+@@ -1311,7 +1311,7 @@ Field	Type	Null	Key	Default	Extra
+ f1	int	YES	MUL	NULL	NULL
+ show indexes from t1;
+ Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+-t1	1	f1	1	f1	A	0	NULL	NULL	YES	BTREE			YES	NULL
++t1	1	f1	1	f1	A	NULL	NULL	NULL	YES	BTREE			YES	NULL
+ drop table t1;
+ create table t1(f1 binary(32), f2 varbinary(64));
+ select character_maximum_length, character_octet_length
+diff --git a/mysql-test/suite/dstore_main/r/information_schema_statistics-dstore.result b/mysql-test/suite/dstore_main/r/information_schema_statistics-dstore.result
+index fe546e64294..f4c234c4797 100644
+--- a/mysql-test/suite/dstore_main/r/information_schema_statistics-dstore.result
++++ b/mysql-test/suite/dstore_main/r/information_schema_statistics-dstore.result
+@@ -5,8 +5,8 @@ f1	int	YES	UNI	NULL	NULL
+ f2	int	NO	PRI	NULL	NULL
+ SHOW INDEXES FROM t1;
+ Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+-t1	0	PRIMARY	1	f2	A	0	NULL	NULL		BTREE			YES	NULL
+-t1	0	f1	1	f1	A	0	NULL	NULL	YES	BTREE			YES	NULL
++t1	0	PRIMARY	1	f2	A	NULL	NULL	NULL		BTREE			YES	NULL
++t1	0	f1	1	f1	A	NULL	NULL	NULL	YES	BTREE			YES	NULL
+ SELECT * FROM information_schema.tmp_tables_columns;
+ ERROR 42S02: Unknown table 'TMP_TABLES_COLUMNS' in information_schema
+ SELECT * FROM information_schema.tmp_tables_keys;
+diff --git a/mysql-test/suite/dstore_main/r/invisible_columns-dstore.result b/mysql-test/suite/dstore_main/r/invisible_columns-dstore.result
+index 855f55914b7..422f2b93b8f 100644
+--- a/mysql-test/suite/dstore_main/r/invisible_columns-dstore.result
++++ b/mysql-test/suite/dstore_main/r/invisible_columns-dstore.result
+@@ -70,7 +70,7 @@ temp	CREATE TEMPORARY TABLE `temp` (
+   `f3` int DEFAULT NULL /*!80023 INVISIBLE */,
+   `f4` int GENERATED ALWAYS AS ((`f1` + `f2`)) VIRTUAL /*!80023 INVISIBLE */,
+   `f5` int GENERATED ALWAYS AS ((`f1` + `f2`)) STORED /*!80023 INVISIBLE */
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ SHOW COLUMNS FROM temp;
+ Field	Type	Null	Key	Default	Extra
+ f1	int	YES		NULL	NULL
+@@ -643,7 +643,7 @@ SHOW CREATE TABLE t2;
+ Table	Create Table
+ t2	CREATE TEMPORARY TABLE `t2` (
+   `f2` int DEFAULT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ SHOW COLUMNS FROM t2;
+ Field	Type	Null	Key	Default	Extra
+ f2	int	YES		NULL	NULL
+@@ -659,7 +659,7 @@ Table	Create Table
+ t2	CREATE TEMPORARY TABLE `t2` (
+   `f1` int NOT NULL,
+   `f2` int DEFAULT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ SHOW COLUMNS FROM t2;
+ Field	Type	Null	Key	Default	Extra
+ f1	int	NO		NULL	NULL
+@@ -676,7 +676,7 @@ Table	Create Table
+ t2	CREATE TEMPORARY TABLE `t2` (
+   `f1` int DEFAULT NULL /*!80023 INVISIBLE */,
+   `f2` int DEFAULT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ SHOW COLUMNS FROM t2;
+ Field	Type	Null	Key	Default	Extra
+ f1	int	YES		NULL	INVISIBLE
+@@ -800,7 +800,7 @@ Table	Create Table
+ t2	CREATE TEMPORARY TABLE `t2` (
+   `f1` int DEFAULT NULL /*!80023 INVISIBLE */,
+   `f2` int DEFAULT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ SHOW COLUMNS FROM t2;
+ Field	Type	Null	Key	Default	Extra
+ f1	int	YES		NULL	INVISIBLE
+diff --git a/mysql-test/suite/dstore_main/r/invisible_columns_cde.result b/mysql-test/suite/dstore_main/r/invisible_columns_cde.result
+deleted file mode 100644
+index 4f0efb2886b..00000000000
+--- a/mysql-test/suite/dstore_main/r/invisible_columns_cde.result
++++ /dev/null
+@@ -1,785 +0,0 @@
+-#########################################################################
+-# Test cases common to all the storage engines.                         #
+-#########################################################################
+-#------------------------------------------------------------------------
+-# Test case to verify table creation with only INVISIBLE columns.
+-#------------------------------------------------------------------------
+-CREATE TABLE t1 (f1 INT INVISIBLE, f2 INT INVISIBLE);
+-ERROR HY000: A table must have at least one visible column.
+-CREATE TABLE t1 (f1 INT);
+-ALTER TABLE t1 ALTER f1 SET INVISIBLE;
+-ERROR HY000: A table must have at least one visible column.
+-DROP TABLE t1;
+-#------------------------------------------------------------------------
+-# Test case to verify table with INVISIBLE columns.
+-#------------------------------------------------------------------------
+-CREATE TABLE t1 (f1 INT, f2 INT INVISIBLE VISIBLE);
+-SHOW CREATE TABLE t1;
+-Table	Create Table
+-t1	CREATE TABLE `t1` (
+-  `f1` int DEFAULT NULL,
+-  `f2` int DEFAULT NULL
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SHOW COLUMNS FROM t1;
+-Field	Type	Null	Key	Default	Extra
+-f1	int	YES		NULL	
+-f2	int	YES		NULL	
+-DROP TABLE t1;
+-CREATE TABLE t1 (f1 INT, f2 INT VISIBLE, f3 INT INVISIBLE,
+-f4 INT GENERATED ALWAYS AS
+-((`f1` + `f2`)) VIRTUAL INVISIBLE,
+-f5 INT GENERATED ALWAYS AS
+-((`f1` + `f2`)) STORED INVISIBLE);
+-#SHOW CREATE TABLE lists INVISIBLE columns.
+-SHOW CREATE TABLE t1;
+-Table	Create Table
+-t1	CREATE TABLE `t1` (
+-  `f1` int DEFAULT NULL,
+-  `f2` int DEFAULT NULL,
+-  `f3` int DEFAULT NULL /*!80023 INVISIBLE */,
+-  `f4` int GENERATED ALWAYS AS ((`f1` + `f2`)) VIRTUAL /*!80023 INVISIBLE */,
+-  `f5` int GENERATED ALWAYS AS ((`f1` + `f2`)) STORED /*!80023 INVISIBLE */
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-#SHOW COLUMNS FROM lists invisible columns with INVISIBLE value in EXTRA column.
+-SHOW COLUMNS FROM t1;
+-Field	Type	Null	Key	Default	Extra
+-f1	int	YES		NULL	
+-f2	int	YES		NULL	
+-f3	int	YES		NULL	INVISIBLE
+-f4	int	YES		NULL	VIRTUAL GENERATED INVISIBLE
+-f5	int	YES		NULL	STORED GENERATED INVISIBLE
+-# For SE hidden columns INVISIBLE value is not listed in EXTRA column.
+-SHOW EXTENDED COLUMNS FROM t1;
+-Field	Type	Null	Key	Default	Extra
+-f1	int	YES		NULL	
+-f2	int	YES		NULL	
+-f3	int	YES		NULL	INVISIBLE
+-f4	int	YES		NULL	VIRTUAL GENERATED INVISIBLE
+-f5	int	YES		NULL	STORED GENERATED INVISIBLE
+-DROP TABLE t1;
+-CREATE TEMPORARY TABLE temp (f1 INT, f2 INT VISIBLE, f3 INT INVISIBLE,
+-f4 INT GENERATED ALWAYS AS
+-((`f1` + `f2`)) VIRTUAL INVISIBLE,
+-f5 INT GENERATED ALWAYS AS
+-((`f1` + `f2`)) STORED INVISIBLE);
+-SHOW CREATE TABLE temp;
+-Table	Create Table
+-temp	CREATE TEMPORARY TABLE `temp` (
+-  `f1` int DEFAULT NULL,
+-  `f2` int DEFAULT NULL,
+-  `f3` int DEFAULT NULL /*!80023 INVISIBLE */,
+-  `f4` int GENERATED ALWAYS AS ((`f1` + `f2`)) VIRTUAL /*!80023 INVISIBLE */,
+-  `f5` int GENERATED ALWAYS AS ((`f1` + `f2`)) STORED /*!80023 INVISIBLE */
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SHOW COLUMNS FROM temp;
+-Field	Type	Null	Key	Default	Extra
+-f1	int	YES		NULL	NULL
+-f2	int	YES		NULL	NULL
+-f3	int	YES		NULL	INVISIBLE
+-f4	int	YES		NULL	VIRTUAL GENERATED INVISIBLE
+-f5	int	YES		NULL	STORED GENERATED INVISIBLE
+-SHOW EXTENDED COLUMNS FROM temp;
+-Field	Type	Null	Key	Default	Extra
+-f1	int	YES		NULL	NULL
+-f2	int	YES		NULL	NULL
+-f3	int	YES		NULL	INVISIBLE
+-f4	int	YES		NULL	VIRTUAL GENERATED INVISIBLE
+-f5	int	YES		NULL	STORED GENERATED INVISIBLE
+-DROP TABLE temp;
+-#------------------------------------------------------------------------
+-# Test case to verify wildcard expansion in SELECT operation on table
+-# with INVISIBLE columns.
+-#------------------------------------------------------------------------
+-CREATE TABLE t1 (f1 INT, f2 INT INVISIBLE);
+-INSERT INTO t1 (f1, f2) VALUES (1, 2);
+-SELECT * FROM t1;
+-f1
+-1
+-SELECT f1, f2 FROM t1;
+-f1	f2
+-1	2
+-SELECT *, f2 FROM t1;
+-f1	f2
+-1	2
+-SELECT t.f1 FROM (SELECT * FROM t1) AS t;
+-f1
+-1
+-SELECT t.f2 FROM (SELECT * FROM t1) AS t;
+-ERROR 42S22: Unknown column 't.f2' in 'field list'
+-CREATE TABLE t2 (f3 INT, f2 INT INVISIBLE);
+-INSERT INTO t2 (f3, f2) VALUES (5, 2);
+-SELECT t1.*, t2.f2 FROM t1 JOIN t2;
+-f1	f2
+-1	2
+-DROP TABLE t1, t2;
+-#------------------------------------------------------------------------
+-# Test case to verify INSERT and SELECT operations on table with
+-# INVISIBLE columns.
+-#------------------------------------------------------------------------
+-CREATE TABLE t1 (f1 INT, f2 INT VISIBLE, f3 INT INVISIBLE);
+-INSERT INTO t1 VALUES (10, 20);
+-SELECT * FROM t1;
+-f1	f2
+-10	20
+-SELECT f1, f2, f3 FROM t1;
+-f1	f2	f3
+-10	20	NULL
+-DELETE FROM t1;
+-INSERT INTO t1(f1, f2, f3) VALUES (1, 2, 3);
+-SELECT * FROM t1;
+-f1	f2
+-1	2
+-SELECT f1, f2, f3 FROM t1;
+-f1	f2	f3
+-1	2	3
+-DELETE FROM t1;
+-#------------------------------------------------------------------------
+-# Test case to verify INVISIBLE columns with DEFAULT value.
+-#------------------------------------------------------------------------
+-ALTER TABLE t1 ALTER f3 SET DEFAULT 8;
+-SHOW CREATE TABLE t1;
+-Table	Create Table
+-t1	CREATE TABLE `t1` (
+-  `f1` int DEFAULT NULL,
+-  `f2` int DEFAULT NULL,
+-  `f3` int DEFAULT '8' /*!80023 INVISIBLE */
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-INSERT INTO t1 VALUES (10, 20);
+-SELECT * FROM t1;
+-f1	f2
+-10	20
+-SELECT f1, f2, f3 FROM t1;
+-f1	f2	f3
+-10	20	8
+-#------------------------------------------------------------------------
+-# Test case to verify generated INVISIBLE columns.
+-#------------------------------------------------------------------------
+-ALTER TABLE t1 ADD COLUMN f4 INT AS (f1 + f2) INVISIBLE;
+-SHOW CREATE TABLE t1;
+-Table	Create Table
+-t1	CREATE TABLE `t1` (
+-  `f1` int DEFAULT NULL,
+-  `f2` int DEFAULT NULL,
+-  `f3` int DEFAULT '8' /*!80023 INVISIBLE */,
+-  `f4` int GENERATED ALWAYS AS ((`f1` + `f2`)) VIRTUAL /*!80023 INVISIBLE */
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SHOW COLUMNS FROM t1;
+-Field	Type	Null	Key	Default	Extra
+-f1	int	YES		NULL	
+-f2	int	YES		NULL	
+-f3	int	YES		8	INVISIBLE
+-f4	int	YES		NULL	VIRTUAL GENERATED INVISIBLE
+-SELECT * FROM t1;
+-f1	f2
+-10	20
+-SELECT f4 FROM t1;
+-f4
+-30
+-DROP TABLE t1;
+-#------------------------------------------------------------------------
+-# Test case to verify INVISIBLE column update.
+-#------------------------------------------------------------------------
+-CREATE TABLE t1 (f1 INT, f2 INT INVISIBLE DEFAULT 8);
+-INSERT INTO t1(f1, f2) VALUES  (10, 10), (20, 8);
+-SHOW CREATE TABLE t1;
+-Table	Create Table
+-t1	CREATE TABLE `t1` (
+-  `f1` int DEFAULT NULL,
+-  `f2` int DEFAULT '8' /*!80023 INVISIBLE */
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SHOW COLUMNS FROM t1;
+-Field	Type	Null	Key	Default	Extra
+-f1	int	YES		NULL	
+-f2	int	YES		8	INVISIBLE
+-SELECT f1, f2 FROM t1 ORDER BY f1;
+-f1	f2
+-10	10
+-20	8
+-DELETE FROM t1 WHERE f2 = 10;
+-UPDATE t1 SET f2 = 20;
+-SELECT f1, f2 FROM t1;
+-f1	f2
+-20	20
+-DELETE FROM t1;
+-#------------------------------------------------------------------------
+-# Test case to verify Index creation on INVISIBLE column.
+-#------------------------------------------------------------------------
+-INSERT INTO t1 VALUES  (10);
+-ALTER TABLE t1 ADD INDEX idx(f2);
+-SHOW CREATE TABLE t1;
+-Table	Create Table
+-t1	CREATE TABLE `t1` (
+-  `f1` int DEFAULT NULL,
+-  `f2` int DEFAULT '8' /*!80023 INVISIBLE */,
+-  KEY `idx` (`f2`)
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SHOW COLUMNS FROM t1;
+-Field	Type	Null	Key	Default	Extra
+-f1	int	YES		NULL	
+-f2	int	YES	MUL	8	INVISIBLE
+-#------------------------------------------------------------------------
+-# Test case to verify Unique Index creation on INVISIBLE column.
+-#------------------------------------------------------------------------
+-ALTER TABLE t1 DROP INDEX idx, ADD UNIQUE INDEX (f2);
+-SHOW CREATE TABLE t1;
+-Table	Create Table
+-t1	CREATE TABLE `t1` (
+-  `f1` int DEFAULT NULL,
+-  `f2` int DEFAULT '8' /*!80023 INVISIBLE */,
+-  UNIQUE KEY `f2` (`f2`)
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-CALL mtr.add_suppression("insert dstore index tuple fail");
+-CALL mtr.add_suppression("insert_index fail");
+-INSERT INTO t1 VALUES  (10);
+-ERROR 23000: Duplicate entry '8' for key 't1.f2'
+-INSERT INTO t1(f1, f2) VALUES  (10, 10);
+-SELECT f1, f2 FROM t1 ORDER BY f2;
+-f1	f2
+-10	8
+-10	10
+-#------------------------------------------------------------------------
+-# Test case to verify Primary Key creation on INVISIBLE column.
+-#------------------------------------------------------------------------
+-ALTER TABLE t1 DROP INDEX f2, ADD PRIMARY KEY (f2);
+-SHOW CREATE TABLE t1;
+-Table	Create Table
+-t1	CREATE TABLE `t1` (
+-  `f1` int DEFAULT NULL,
+-  `f2` int NOT NULL DEFAULT '8' /*!80023 INVISIBLE */,
+-  PRIMARY KEY (`f2`)
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-INSERT INTO t1 VALUES  (10);
+-ERROR 23000: Duplicate entry '8' for key 't1.PRIMARY'
+-INSERT INTO t1(f1, f2) VALUES  (10, 20);
+-SELECT f1, f2 FROM t1 ORDER BY f2;
+-f1	f2
+-10	8
+-10	10
+-10	20
+-#------------------------------------------------------------------------
+-# Test case to verify INVISIBLE auto_increment column.
+-#------------------------------------------------------------------------
+-ALTER TABLE t1 MODIFY f2 INT INVISIBLE AUTO_INCREMENT;
+-SHOW CREATE TABLE t1;
+-Table	Create Table
+-t1	CREATE TABLE `t1` (
+-  `f1` int DEFAULT NULL,
+-  `f2` int NOT NULL AUTO_INCREMENT /*!80023 INVISIBLE */,
+-  PRIMARY KEY (`f2`)
+-) ENGINE=Dstore AUTO_INCREMENT=21 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-INSERT INTO t1 VALUES  (10);
+-SELECT f1, f2 FROM t1 ORDER BY f2;
+-f1	f2
+-10	8
+-10	10
+-10	20
+-10	21
+-#------------------------------------------------------------------------
+-# Test case to verify Check Constraint on INVISIBLE column.
+-#------------------------------------------------------------------------
+-ALTER TABLE t1 MODIFY f2 INT INVISIBLE, ADD CHECK(f2 < 20000);
+-SHOW CREATE TABLE t1;
+-Table	Create Table
+-t1	CREATE TABLE `t1` (
+-  `f1` int DEFAULT NULL,
+-  `f2` int NOT NULL /*!80023 INVISIBLE */,
+-  PRIMARY KEY (`f2`),
+-  CONSTRAINT `t1_chk_1` CHECK ((`f2` < 20000))
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-INSERT INTO t1(f1, f2) VALUES  (10, 20000);
+-ERROR HY000: Check constraint 't1_chk_1' is violated.
+-SELECT f1, f2 FROM t1 ORDER BY f2;
+-f1	f2
+-10	8
+-10	10
+-10	20
+-10	21
+-DROP TABLE t1;
+-#------------------------------------------------------------------------
+-# Test case to verify column visibility alter using ALTER clause of
+-# ALTER TABLE statement.
+-#------------------------------------------------------------------------
+-CREATE TABLE t1 (f1 INT, f2 INT);
+-INSERT INTO t1 VALUES (10, 90);
+-SHOW CREATE TABLE t1;
+-Table	Create Table
+-t1	CREATE TABLE `t1` (
+-  `f1` int DEFAULT NULL,
+-  `f2` int DEFAULT NULL
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SELECT * FROM t1;
+-f1	f2
+-10	90
+-ALTER TABLE t1 ALTER COLUMN f1 SET INVISIBLE;
+-SHOW CREATE TABLE t1;
+-Table	Create Table
+-t1	CREATE TABLE `t1` (
+-  `f1` int DEFAULT NULL /*!80023 INVISIBLE */,
+-  `f2` int DEFAULT NULL
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SELECT * FROM t1;
+-f2
+-90
+-SELECT f1, f2 FROM t1;
+-f1	f2
+-10	90
+-ALTER TABLE t1 ALTER COLUMN f2 SET INVISIBLE;
+-ERROR HY000: A table must have at least one visible column.
+-ALTER TABLE t1 ALTER COLUMN f1 SET VISIBLE;
+-SHOW CREATE TABLE t1;
+-Table	Create Table
+-t1	CREATE TABLE `t1` (
+-  `f1` int DEFAULT NULL,
+-  `f2` int DEFAULT NULL
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SELECT * FROM t1;
+-f1	f2
+-10	90
+-#------------------------------------------------------------------------
+-# Test case to verify column visibility alter using CHANGE clause of
+-# ALTER TABLE statement.
+-#------------------------------------------------------------------------
+-ALTER TABLE t1 CHANGE f1 f1 INT INVISIBLE;
+-SHOW CREATE TABLE t1;
+-Table	Create Table
+-t1	CREATE TABLE `t1` (
+-  `f1` int DEFAULT NULL /*!80023 INVISIBLE */,
+-  `f2` int DEFAULT NULL
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SELECT * FROM t1;
+-f2
+-90
+-SELECT f1, f2 FROM t1;
+-f1	f2
+-10	90
+-ALTER TABLE t1 CHANGE f2 f2 INT INVISIBLE;
+-ERROR HY000: A table must have at least one visible column.
+-ALTER TABLE t1 CHANGE f1 f1 INT VISIBLE;
+-SHOW CREATE TABLE t1;
+-Table	Create Table
+-t1	CREATE TABLE `t1` (
+-  `f1` int DEFAULT NULL,
+-  `f2` int DEFAULT NULL
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SELECT * FROM t1;
+-f1	f2
+-10	90
+-#------------------------------------------------------------------------
+-# Test case to verify column visibility alter using MODIFY clause of
+-# ALTER TABLE statement.
+-#------------------------------------------------------------------------
+-ALTER TABLE t1 MODIFY f1 INT INVISIBLE;
+-SHOW CREATE TABLE t1;
+-Table	Create Table
+-t1	CREATE TABLE `t1` (
+-  `f1` int DEFAULT NULL /*!80023 INVISIBLE */,
+-  `f2` int DEFAULT NULL
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SELECT * FROM t1;
+-f2
+-90
+-SELECT f1, f2 FROM t1;
+-f1	f2
+-10	90
+-ALTER TABLE t1 MODIFY f2 INT INVISIBLE;
+-ERROR HY000: A table must have at least one visible column.
+-ALTER TABLE t1 MODIFY f1 INT VISIBLE;
+-SHOW CREATE TABLE t1;
+-Table	Create Table
+-t1	CREATE TABLE `t1` (
+-  `f1` int DEFAULT NULL,
+-  `f2` int DEFAULT NULL
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SELECT * FROM t1;
+-f1	f2
+-10	90
+-DROP TABLE t1;
+-#------------------------------------------------------------------------
+-# Test case to verify LOAD DATA.
+-#------------------------------------------------------------------------
+-CREATE TABLE t1(f1 INT INVISIBLE, f2 INT);
+-CREATE TABLE t2(f1 INT, f2 INT);
+-SHOW CREATE TABLE t1;
+-Table	Create Table
+-t1	CREATE TABLE `t1` (
+-  `f1` int DEFAULT NULL /*!80023 INVISIBLE */,
+-  `f2` int DEFAULT NULL
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SHOW CREATE TABLE t2;
+-Table	Create Table
+-t2	CREATE TABLE `t2` (
+-  `f1` int DEFAULT NULL,
+-  `f2` int DEFAULT NULL
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-INSERT INTO t1(f1, f2) VALUES (10, 20), (20, 30);
+-INSERT INTO t2 VALUES (10, 20), (20, 30);
+-SELECT * FROM t1 INTO OUTFILE 'MYSQLTEST_VARDIR/tmp/test1.sql';;
+-DELETE FROM t1;
+-LOAD DATA INFILE 'MYSQLTEST_VARDIR/tmp/test1.sql' INTO TABLE t1;;
+-SELECT * FROM t1 ORDER BY f2;
+-f2
+-20
+-30
+-SELECT f1, f2 FROM t1 ORDER BY f2;
+-f1	f2
+-NULL	20
+-NULL	30
+-DELETE FROM t1;
+-LOAD DATA INFILE 'MYSQLTEST_VARDIR/tmp/test1.sql' INTO TABLE t1 (f1) SET f2 = 10;;
+-SELECT * FROM t1 ORDER BY f2;
+-f2
+-10
+-10
+-SELECT f1, f2 FROM t1 ORDER BY f1;
+-f1	f2
+-20	10
+-30	10
+-#------------------------------------------------------------------------
+-# Test case to verify LOAD DATA from fixed length row.
+-#------------------------------------------------------------------------
+-SELECT * FROM t1 INTO OUTFILE 'MYSQLTEST_VARDIR/tmp/test2.sql' FIELDS TERMINATED BY '' ENCLOSED BY '';;
+-DELETE FROM t1;
+-LOAD DATA INFILE 'MYSQLTEST_VARDIR/tmp/test2.sql' INTO TABLE t1 FIELDS TERMINATED BY '' ENCLOSED BY '';;
+-SELECT * FROM t1;
+-f2
+-10
+-10
+-SELECT f1, f2 FROM t1;
+-f1	f2
+-NULL	10
+-NULL	10
+-DELETE FROM t1;
+-LOAD DATA INFILE 'MYSQLTEST_VARDIR/tmp/test2.sql' INTO TABLE t1 FIELDS TERMINATED BY '' ENCLOSED BY '' (f1) SET f2 = f1 + 10;;
+-SELECT * FROM t1;
+-f2
+-20
+-20
+-SELECT f1, f2 FROM t1;
+-f1	f2
+-10	20
+-10	20
+-#------------------------------------------------------------------------
+-# Test case to verify LOAD DATA in XML format.
+-#------------------------------------------------------------------------
+-DELETE FROM t1;
+-LOAD XML INFILE "MYSQLTEST_VARDIR/tmp/tmp1.xml" INTO TABLE t1 (f1, f2);;
+-SELECT * FROM t1;
+-f2
+-20
+-20
+-SELECT f1, f2 FROM t1;
+-f1	f2
+-10	20
+-10	20
+-ALTER TABLE t1 DROP COLUMN f1;
+-DELETE FROM t1;
+-ALTER TABLE t1 ADD COLUMN f1 INT INVISIBLE;
+-LOAD XML INFILE "MYSQLTEST_VARDIR/tmp/tmp1.xml" INTO TABLE t1;;
+-SELECT * FROM t1;
+-f2
+-20
+-20
+-SELECT f1, f2 FROM t1;
+-f1	f2
+-NULL	20
+-NULL	20
+-DROP TABLE t1, t2;
+-#------------------------------------------------------------------------
+-# Test case to verify view on INVISIBLE column.
+-#------------------------------------------------------------------------
+-CREATE TABLE t1(f1 INT INVISIBLE, f2 INT);
+-INSERT INTO t1(f1, f2) VALUES (10, 20), (30, 40);
+-# View is created with only f2.
+-CREATE VIEW v1 AS SELECT * FROM t1;
+-SHOW CREATE VIEW v1;
+-View	Create View	character_set_client	collation_connection
+-v1	CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `v1` AS select `t1`.`f2` AS `f2` from `t1`	utf8mb4	utf8mb4_0900_ai_ci
+-SHOW COLUMNS FROM v1;
+-Field	Type	Null	Key	Default	Extra
+-f2	int	YES		NULL	
+-SELECT * FROM v1 ORDER BY f2;
+-f2
+-20
+-40
+-# View is created with f1 and f2;
+-CREATE VIEW v2 AS SELECT f1, f2 FROM t1;
+-SHOW CREATE VIEW v2;
+-View	Create View	character_set_client	collation_connection
+-v2	CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `v2` AS select `t1`.`f1` AS `f1`,`t1`.`f2` AS `f2` from `t1`	utf8mb4	utf8mb4_0900_ai_ci
+-# Both columns are listed as VISIBLE.
+-SHOW COLUMNS FROM v2;
+-Field	Type	Null	Key	Default	Extra
+-f1	int	YES		NULL	
+-f2	int	YES		NULL	
+-SELECT * FROM v2 ORDER BY f2;
+-f1	f2
+-10	20
+-30	40
+-# View is created with only f1;
+-CREATE VIEW v3 AS SELECT f1 FROM t1;
+-SHOW CREATE VIEW v3;
+-View	Create View	character_set_client	collation_connection
+-v3	CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `v3` AS select `t1`.`f1` AS `f1` from `t1`	utf8mb4	utf8mb4_0900_ai_ci
+-# Column f1 is listed as VISIBLE.
+-SHOW COLUMNS FROM v3;
+-Field	Type	Null	Key	Default	Extra
+-f1	int	YES		NULL	
+-SELECT * FROM v3 ORDER BY f1;
+-f1
+-10
+-30
+-DROP VIEW v1, v2;
+-#------------------------------------------------------------------------
+-# Test case to verify INFORMATION_SCHEMA.COLUMNS result set.
+-#------------------------------------------------------------------------
+-SELECT TABLE_NAME, COLUMN_NAME, EXTRA FROM INFORMATION_SCHEMA.COLUMNS
+-WHERE TABLE_SCHEMA='test' ORDER BY TABLE_NAME, COLUMN_NAME;
+-TABLE_NAME	COLUMN_NAME	EXTRA
+-t1	f1	INVISIBLE
+-t1	f2	
+-v3	f1	
+-DROP VIEW v3;
+-#------------------------------------------------------------------------
+-# Test case to verify REPLACE operation with INVISIBLE column.
+-#------------------------------------------------------------------------
+-ALTER TABLE t1 ADD PRIMARY KEY (f1);
+-SHOW CREATE TABLE t1;
+-Table	Create Table
+-t1	CREATE TABLE `t1` (
+-  `f1` int NOT NULL /*!80023 INVISIBLE */,
+-  `f2` int DEFAULT NULL,
+-  PRIMARY KEY (`f1`)
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SELECT f1, f2 FROM t1 ORDER BY f2;
+-f1	f2
+-10	20
+-30	40
+-REPLACE INTO t1(f1, f2) VALUE (10, 88);
+-SELECT f1, f2 FROM t1 ORDER BY f2;
+-f1	f2
+-30	40
+-10	88
+-#------------------------------------------------------------------------
+-# Test case to verify INSERT ON DUPLICATE KEY UPDATE operation with
+-# INVISIBLE column.
+-#------------------------------------------------------------------------
+-INSERT INTO t1(f1, f2) VALUES (30, 44) ON DUPLICATE KEY UPDATE f2=88;
+-SELECT f1, f2 FROM t1 ORDER BY f1;
+-f1	f2
+-10	88
+-30	88
+-#------------------------------------------------------------------------
+-# Test case to verify INVISIBLE columns with CREATE TABLE LIKE
+-#------------------------------------------------------------------------
+-CREATE TABLE t2 LIKE t1;
+-SHOW CREATE TABLE t2;
+-Table	Create Table
+-t2	CREATE TABLE `t2` (
+-  `f1` int NOT NULL /*!80023 INVISIBLE */,
+-  `f2` int DEFAULT NULL,
+-  PRIMARY KEY (`f1`)
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SHOW COLUMNS FROM t2;
+-Field	Type	Null	Key	Default	Extra
+-f1	int	NO	PRI	NULL	INVISIBLE
+-f2	int	YES		NULL	
+-DROP TABLE t2;
+-#------------------------------------------------------------------------
+-# Test case to verify INVISIBLE columns with CREATE TABLE ... SELECT
+-#------------------------------------------------------------------------
+-CREATE TABLE t2 SELECT * FROM t1;
+-# Table is created with only f2 column.
+-SHOW CREATE TABLE t2;
+-Table	Create Table
+-t2	CREATE TABLE `t2` (
+-  `f2` int DEFAULT NULL
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SHOW COLUMNS FROM t2;
+-Field	Type	Null	Key	Default	Extra
+-f2	int	YES		NULL	
+-SELECT * FROM t2;
+-f2
+-88
+-88
+-DROP TABLE t2;
+-CREATE TABLE t2 SELECT f1, f2 FROM t1;
+-# Both f1 and f2 are created as VISIBLE columns.
+-SHOW CREATE TABLE t2;
+-Table	Create Table
+-t2	CREATE TABLE `t2` (
+-  `f1` int NOT NULL,
+-  `f2` int DEFAULT NULL
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SHOW COLUMNS FROM t2;
+-Field	Type	Null	Key	Default	Extra
+-f1	int	NO		NULL	
+-f2	int	YES		NULL	
+-SELECT * FROM t2 ORDER BY f1;
+-f1	f2
+-10	88
+-30	88
+-DROP TABLE t2;
+-CREATE TABLE t2(f1 INT INVISIBLE) SELECT f1, f2 FROM t1;
+-# f1 is created as INVISIBLE columns and f2 as VISIBLE columns.
+-SHOW CREATE TABLE t2;
+-Table	Create Table
+-t2	CREATE TABLE `t2` (
+-  `f1` int DEFAULT NULL /*!80023 INVISIBLE */,
+-  `f2` int DEFAULT NULL
+-) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SHOW COLUMNS FROM t2;
+-Field	Type	Null	Key	Default	Extra
+-f1	int	YES		NULL	INVISIBLE
+-f2	int	YES		NULL	
+-SELECT * FROM t2;
+-f2
+-88
+-88
+-DROP TABLE t2;
+-CREATE TEMPORARY TABLE t2 SELECT * FROM t1;
+-# Table is created with only f2 column.
+-SHOW CREATE TABLE t2;
+-Table	Create Table
+-t2	CREATE TEMPORARY TABLE `t2` (
+-  `f2` int DEFAULT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SHOW COLUMNS FROM t2;
+-Field	Type	Null	Key	Default	Extra
+-f2	int	YES		NULL	NULL
+-SELECT * FROM t2;
+-f2
+-88
+-88
+-DROP TABLE t2;
+-CREATE TEMPORARY TABLE t2 SELECT f1, f2 FROM t1;
+-# Both f1 and f2 are created as VISIBLE columns.
+-SHOW CREATE TABLE t2;
+-Table	Create Table
+-t2	CREATE TEMPORARY TABLE `t2` (
+-  `f1` int NOT NULL,
+-  `f2` int DEFAULT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SHOW COLUMNS FROM t2;
+-Field	Type	Null	Key	Default	Extra
+-f1	int	NO		NULL	NULL
+-f2	int	YES		NULL	NULL
+-SELECT * FROM t2 ORDER BY f1;
+-f1	f2
+-10	88
+-30	88
+-DROP TABLE t2;
+-CREATE TEMPORARY TABLE t2(f1 INT INVISIBLE) SELECT f1, f2 FROM t1;
+-# f1 is created as INVISIBLE columns and f2 as VISIBLE columns.
+-SHOW CREATE TABLE t2;
+-Table	Create Table
+-t2	CREATE TEMPORARY TABLE `t2` (
+-  `f1` int DEFAULT NULL /*!80023 INVISIBLE */,
+-  `f2` int DEFAULT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+-SHOW COLUMNS FROM t2;
+-Field	Type	Null	Key	Default	Extra
+-f1	int	YES		NULL	INVISIBLE
+-f2	int	YES		NULL	NULL
+-SELECT * FROM t2;
+-f2
+-88
+-88
+-DROP TABLE t2;
+-DROP TABLE t1;
+-#------------------------------------------------------------------------
+-# Test case to verify table and column privileges on INVISIBLE columns.
+-#------------------------------------------------------------------------
+-CREATE USER user1@localhost;
+-CREATE DATABASE db1;
+-USE db1;
+-CREATE TABLE t1(f1 INT DEFAULT 10, f2 INT);
+-INSERT INTO t1(f2) VALUES(1);
+-GRANT SELECT(f2) ON db1.t1 TO user1@localhost;
+-# user1 has SELECT privilege on only column f2;
+-connect  con1, localhost, user1, , db1;
+-SELECT * FROM t1;
+-ERROR 42000: SELECT command denied to user 'user1'@'localhost' for column 'f1' in table 't1'
+-# Make t1.f1 invisible.
+-connection default;
+-ALTER TABLE t1 ALTER COLUMN f1 SET INVISIBLE;
+-# 'SELECT *' works as only column f2 is listed.
+-connection con1;
+-SELECT * FROM t1;
+-f2
+-1
+-SELECT f1 FROM t1;
+-ERROR 42000: SELECT command denied to user 'user1'@'localhost' for column 'f1' in table 't1'
+-connection default;
+-REVOKE ALL ON db1.t1 FROM user1@localhost;
+-# user1 does not have any privilges on t1 table.
+-connection con1;
+-INSERT INTO t1 VALUES(2);
+-ERROR 42000: INSERT command denied to user 'user1'@'localhost' for table 't1'
+-INSERT INTO t1(f1) VALUES (11);
+-ERROR 42000: INSERT command denied to user 'user1'@'localhost' for table 't1'
+-# Table privilege INSERT is granted to user1.
+-connection default;
+-GRANT INSERT ON db1.t1 TO user1@localhost;
+-connection con1;
+-INSERT INTO t1 VALUES(2);
+-INSERT INTO t1(f1) VALUES (11);
+-# ALL privileges are REVOKED from user1.
+-connection default;
+-REVOKE ALL ON db1.t1 FROM user1@localhost;
+-connection con1;
+-INSERT INTO t1 VALUES(3);
+-ERROR 42000: INSERT command denied to user 'user1'@'localhost' for table 't1'
+-INSERT INTO t1(f1) VALUES (12);
+-ERROR 42000: INSERT command denied to user 'user1'@'localhost' for table 't1'
+-# INSERT on t1.f1 column and SELECT on t1.f1, t1.f2 columns are granted to user1
+-connection default;
+-GRANT INSERT(f1), SELECT(f1, f2) ON db1.t1 TO user1@localhost;
+-connection con1;
+-INSERT INTO t1 VALUES(3);
+-ERROR 42000: INSERT command denied to user 'user1'@'localhost' for table 't1'
+-INSERT INTO t1(f1) VALUES (12);
+-connection default;
+-disconnect con1;
+-USE test;
+-DROP DATABASE db1;
+-DROP USER user1@localhost;
+-#------------------------------------------------------------------------
+-# Test case to verify natural join with invisible columns.
+-#------------------------------------------------------------------------
+-CREATE TABLE t1(a INT, b INT INVISIBLE);
+-CREATE TABLE t2(c INT, b INT INVISIBLE);
+-INSERT INTO t1(b) VALUES (1), (2), (3);
+-INSERT INTO t2(b) VALUES (1), (2), (3);
+-SELECT * FROM t1 JOIN t2;
+-a	c
+-NULL	NULL
+-NULL	NULL
+-NULL	NULL
+-NULL	NULL
+-NULL	NULL
+-NULL	NULL
+-NULL	NULL
+-NULL	NULL
+-NULL	NULL
+-SELECT * FROM t1 JOIN t2 WHERE (t1.b = t2.b);
+-a	c
+-NULL	NULL
+-NULL	NULL
+-NULL	NULL
+-SELECT * FROM t1 JOIN t2 ON (t1.b = t2.b);
+-a	c
+-NULL	NULL
+-NULL	NULL
+-NULL	NULL
+-SELECT * FROM t1 JOIN t2 USING(b) ORDER BY (b);
+-b	a	c
+-1	NULL	NULL
+-2	NULL	NULL
+-3	NULL	NULL
+-DROP TABLE t1, t2;
+-#------------------------------------------------------------------------
+-# Test case to verify my_row_id name usage for invisible columns.
+-#------------------------------------------------------------------------
+-CREATE TABLE t1(a INT, my_row_id INT);
+-CREATE TABLE t2(a INT, my_row_id INT INVISIBLE);
+-DROP TABLE t1, t2;
+diff --git a/mysql-test/suite/dstore_main/r/invisible_indexes-dstore.result b/mysql-test/suite/dstore_main/r/invisible_indexes-dstore.result
+index 3e82abd0343..2ce39e69b7d 100644
+--- a/mysql-test/suite/dstore_main/r/invisible_indexes-dstore.result
++++ b/mysql-test/suite/dstore_main/r/invisible_indexes-dstore.result
+@@ -285,10 +285,10 @@ DROP TABLE t1, t2;
+ CREATE TEMPORARY TABLE t1 ( a INT, KEY (a) INVISIBLE );
+ SHOW INDEXES FROM t1;
+ Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+-t1	1	a	1	a	A	0	NULL	NULL	YES	BTREE			NO	NULL
++t1	1	a	1	a	A	NULL	NULL	NULL	YES	BTREE			NO	NULL
+ EXPLAIN SELECT a FROM t1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
++1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	0	0.00	NULL
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1`
+ DROP TABLE t1;
+diff --git a/mysql-test/suite/dstore_main/r/no_engine_substitution-dstore.result b/mysql-test/suite/dstore_main/r/no_engine_substitution-dstore.result
+index 2b2f3a06264..85abb6fc7f1 100644
+--- a/mysql-test/suite/dstore_main/r/no_engine_substitution-dstore.result
++++ b/mysql-test/suite/dstore_main/r/no_engine_substitution-dstore.result
+@@ -99,12 +99,12 @@ t3	CREATE TABLE `t3` (
+ CREATE TEMPORARY TABLE t4(c1 INT) ENGINE= MyISAM;
+ Warnings:
+ Warning	3161	Storage engine MyISAM is disabled (Table creation is disallowed).
+-Warning	1266	Using storage engine InnoDB for table 't4'
++Warning	1266	Using storage engine Dstore for table 't4'
+ SHOW CREATE TABLE t4;
+ Table	Create Table
+ t4	CREATE TEMPORARY TABLE `t4` (
+   `c1` int DEFAULT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ CREATE TABLE t5 (c1 INT) ENGINE= ARCHIVE;
+ # ALTER TABLE ... ENGINE reports a warning and the table is not altered.
+ ALTER TABLE t5 ENGINE= MyISAM;
+@@ -171,7 +171,7 @@ tt1	CREATE TEMPORARY TABLE `tt1` (
+   `NAME` varchar(64) NOT NULL,
+   `ENABLED` enum('YES','NO') NOT NULL,
+   PRIMARY KEY (`NAME`)
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ DROP TABLE tt1;
+ SET default_tmp_storage_engine=MYISAM;
+ CREATE TEMPORARY TABLE tt1(c1 INT);
+diff --git a/mysql-test/suite/dstore_main/r/show_check_cs-dstore.result b/mysql-test/suite/dstore_main/r/show_check_cs-dstore.result
+index e056cbf6afa..2f358a4efd9 100644
+--- a/mysql-test/suite/dstore_main/r/show_check_cs-dstore.result
++++ b/mysql-test/suite/dstore_main/r/show_check_cs-dstore.result
+@@ -178,13 +178,13 @@ show create table t1;
+ Table	Create Table
+ t1	CREATE TEMPORARY TABLE `t1` (
+   `a` int NOT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ alter table t1 rename t2;
+ show create table t2;
+ Table	Create Table
+ t2	CREATE TEMPORARY TABLE `t2` (
+   `a` int NOT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ drop table t2;
+ create table t1 (
+ test_set set( 'val1', 'val2', 'val3' ) not null default '',
+diff --git a/mysql-test/suite/dstore_main/r/sp-dstore.result b/mysql-test/suite/dstore_main/r/sp-dstore.result
+index 69bf458dc91..dd0439ff312 100644
+--- a/mysql-test/suite/dstore_main/r/sp-dstore.result
++++ b/mysql-test/suite/dstore_main/r/sp-dstore.result
+@@ -3629,17 +3629,17 @@ call bug12589_1()|
+ Table	Create Table
+ tm1	CREATE TEMPORARY TABLE `tm1` (
+   `spv1` decimal(3,3) DEFAULT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ call bug12589_2()|
+ Table	Create Table
+ tm1	CREATE TEMPORARY TABLE `tm1` (
+   `spv1` decimal(6,3) DEFAULT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ call bug12589_3()|
+ Table	Create Table
+ tm1	CREATE TEMPORARY TABLE `tm1` (
+   `spv1` decimal(6,3) DEFAULT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ drop procedure bug12589_1|
+ drop procedure bug12589_2|
+ drop procedure bug12589_3|
+diff --git a/mysql-test/suite/dstore_main/r/temp_table-dstore.result b/mysql-test/suite/dstore_main/r/temp_table-dstore.result
+index 266e4df2fb2..4fca2849cd2 100644
+--- a/mysql-test/suite/dstore_main/r/temp_table-dstore.result
++++ b/mysql-test/suite/dstore_main/r/temp_table-dstore.result
+@@ -93,7 +93,7 @@ show create table v1;
+ Table	Create Table
+ v1	CREATE TEMPORARY TABLE `v1` (
+   `A` varchar(19) NOT NULL DEFAULT ''
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ show create view v1;
+ View	Create View	character_set_client	collation_connection
+ v1	CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `v1` AS select 'This is view' AS `A`	utf8mb4	utf8mb4_0900_ai_ci
+@@ -231,9 +231,9 @@ INSERT INTO t2 VALUES (11), (12), (13);
+ INSERT INTO t3 VALUES (101), (102), (103);
+ CHECK TABLE t1, t2, t3;
+ Table	Op	Msg_type	Msg_text
+-test.t1	check	status	OK
+-test.t2	check	status	OK
+-test.t3	check	status	OK
++test.t1	check	note	The storage engine for the table doesn't support check
++test.t2	check	note	The storage engine for the table doesn't support check
++test.t3	check	note	The storage engine for the table doesn't support check
+ INSERT INTO t1 VALUES (1), (2), (3);
+ INSERT INTO t2 VALUES (11), (12), (13);
+ INSERT INTO t3 VALUES (101), (102), (103);
+@@ -247,12 +247,9 @@ INSERT INTO t2 VALUES (11), (12), (13);
+ INSERT INTO t3 VALUES (101), (102), (103);
+ OPTIMIZE TABLE t1, t2, t3;
+ Table	Op	Msg_type	Msg_text
+-test.t1	optimize	note	Table does not support optimize, doing recreate + analyze instead
+-test.t1	optimize	status	OK
+-test.t2	optimize	note	Table does not support optimize, doing recreate + analyze instead
+-test.t2	optimize	status	OK
+-test.t3	optimize	note	Table does not support optimize, doing recreate + analyze instead
+-test.t3	optimize	status	OK
++test.t1	optimize	note	The storage engine for the table doesn't support optimize
++test.t2	optimize	note	The storage engine for the table doesn't support optimize
++test.t3	optimize	note	The storage engine for the table doesn't support optimize
+ INSERT INTO t1 VALUES (1), (2), (3);
+ INSERT INTO t2 VALUES (11), (12), (13);
+ INSERT INTO t3 VALUES (101), (102), (103);
+@@ -394,7 +391,7 @@ SHOW CREATE TABLE tt1;
+ Table	Create Table
+ tt1	CREATE TEMPORARY TABLE `tt1` (
+   `c1` int DEFAULT NULL
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ DROP TABLE tt1;
+ CREATE TEMPORARY TABLE tt1 LIKE performance_schema.setup_consumers;
+ SHOW CREATE TABLE tt1;
+@@ -403,6 +400,6 @@ tt1	CREATE TEMPORARY TABLE `tt1` (
+   `NAME` varchar(64) NOT NULL,
+   `ENABLED` enum('YES','NO') NOT NULL,
+   PRIMARY KEY (`NAME`)
+-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ DROP TABLE tt1;
+ SET default_tmp_storage_engine=Dstore;
+diff --git a/mysql-test/suite/dstore_main/r/update-dstore.result b/mysql-test/suite/dstore_main/r/update-dstore.result
+index d8c6118f2c2..06f3e3e169f 100644
+--- a/mysql-test/suite/dstore_main/r/update-dstore.result
++++ b/mysql-test/suite/dstore_main/r/update-dstore.result
+@@ -488,17 +488,6 @@ DROP TABLE t1;
+ DROP FUNCTION f1;
+ End of 5.0 tests
+ #
+-# Bug #47919 assert in open_table during ALTER temporary table
+-#
+-CREATE TABLE t1 (f1 INTEGER AUTO_INCREMENT, PRIMARY KEY (f1));
+-CREATE TEMPORARY TABLE t2 LIKE t1;
+-INSERT INTO t1 VALUES (1);
+-INSERT INTO t2 VALUES (1);
+-ALTER TABLE t2 COMMENT = 'ABC';
+-UPDATE t2, t1 SET t2.f1 = 2, t1.f1 = 9;
+-ALTER TABLE t2 COMMENT = 'DEF';
+-DROP TABLE t1, t2;
+-#
+ # Bug#50545: Single table UPDATE IGNORE crashes on join view in
+ # sql_safe_updates mode.
+ #
+diff --git a/mysql-test/suite/dstore_main/t/in_predicate_to_in_subs_part1-dstore.test b/mysql-test/suite/dstore_main/t/in_predicate_to_in_subs_part1-dstore.test
+index c1d2626cebe..de37f17e3d7 100644
+--- a/mysql-test/suite/dstore_main/t/in_predicate_to_in_subs_part1-dstore.test
++++ b/mysql-test/suite/dstore_main/t/in_predicate_to_in_subs_part1-dstore.test
+@@ -272,27 +272,6 @@ alter table t1 add index idx_c(c);
+ alter table t1 drop index idx_c;
+ alter table t1 drop column c;
+ 
+-
+---echo # Case 19. Test partition table, temporary table.
+-create temporary table t3 like t1;
+-insert into t3 select * from t1;
+---let $query = select * from t3 where (a,b) in ((1,2), (2,3));
+---source include/explain_and_query.inc
+-drop table t3;
+-CREATE TABLE t3 (
+-  id int NOT NULL,
+-  partition_key int NOT NULL,
+-  PRIMARY KEY (`id`,`partition_key`)
+-)
+-PARTITION BY RANGE (partition_key)
+-(PARTITION p0 VALUES LESS THAN (5) ENGINE = InnoDB,
+- PARTITION p1 VALUES LESS THAN (10) ENGINE = InnoDB);
+-insert into t3 values (1,2),(2,9);
+---let $query = select * from t3 where (id,partition_key) in ((1,2), (2,3), (2,9));
+---source include/explain_and_query.inc
+-drop table t3;
+-
+-
+ --echo # Case 20. Test use keys, not in.
+ --let $query = select * from t2 where (a,b) in ((1,2), (2,3));
+ --source include/explain_and_query.inc
+diff --git a/mysql-test/suite/dstore_main/t/invisible_columns_cde.test b/mysql-test/suite/dstore_main/t/invisible_columns_cde.test
+deleted file mode 100644
+index 1cc9b6da75f..00000000000
+--- a/mysql-test/suite/dstore_main/t/invisible_columns_cde.test
++++ /dev/null
+@@ -1,9 +0,0 @@
+-################################################################################
+-# WL10905 - Support for INVISIBLE columns.                                     #
+-################################################################################
+-
+---source include/have_only_dstore.inc
+---echo #########################################################################
+---echo # Test cases common to all the storage engines.                         #
+---echo #########################################################################
+---source include/invisible_columns_cde.inc
+diff --git a/mysql-test/suite/dstore_main/t/update-dstore.test b/mysql-test/suite/dstore_main/t/update-dstore.test
+index 3d0c229d2bd..12a490de3f1 100644
+--- a/mysql-test/suite/dstore_main/t/update-dstore.test
++++ b/mysql-test/suite/dstore_main/t/update-dstore.test
+@@ -397,21 +397,6 @@ DROP FUNCTION f1;
+ 
+ --echo End of 5.0 tests
+ 
+---echo #
+---echo # Bug #47919 assert in open_table during ALTER temporary table
+---echo #
+-
+-CREATE TABLE t1 (f1 INTEGER AUTO_INCREMENT, PRIMARY KEY (f1));
+-CREATE TEMPORARY TABLE t2 LIKE t1;
+-INSERT INTO t1 VALUES (1);
+-INSERT INTO t2 VALUES (1);
+-
+-ALTER TABLE t2 COMMENT = 'ABC';
+-UPDATE t2, t1 SET t2.f1 = 2, t1.f1 = 9;
+-ALTER TABLE t2 COMMENT = 'DEF';
+-
+-DROP TABLE t1, t2;
+-
+ --echo #
+ --echo # Bug#50545: Single table UPDATE IGNORE crashes on join view in
+ --echo # sql_safe_updates mode.
+diff --git a/mysql-test/t/commit_1innodb.test b/mysql-test/t/commit_1innodb.test
+index f9ade5a771f..fc902b58162 100644
+--- a/mysql-test/t/commit_1innodb.test
++++ b/mysql-test/t/commit_1innodb.test
+@@ -1,3 +1,4 @@
++-- source include/not_have_only_dstore.inc
+ --source include/not_hypergraph.inc  # Does not use ha_delete_all_rows().
+ -- source include/force_binlog_format_statement.inc
+ 
+diff --git a/mysql-test/t/mysqltest.test b/mysql-test/t/mysqltest.test
+index 1b40a64db49..9b5dfd44706 100644
+--- a/mysql-test/t/mysqltest.test
++++ b/mysql-test/t/mysqltest.test
+@@ -10,6 +10,7 @@
+ echo $mysql_errno before test;
+ echo $mysql_errname before test;
+ 
++-- source include/not_have_only_dstore.inc
+ -- source include/have_log_bin.inc
+ 
+ # This test uses chmod, can't be run with root permissions
+diff --git a/storage/dstore/boot/cde_instance.cc b/storage/dstore/boot/cde_instance.cc
+index 4214cffa47d..e219004e9fa 100644
+--- a/storage/dstore/boot/cde_instance.cc
++++ b/storage/dstore/boot/cde_instance.cc
+@@ -508,11 +508,24 @@ void CdeConstructSession(cde_session_t *&cdeSessionRef) {
+   // assign the current thread context, maybe used in binlog group commit.
+   cdeSessionRef->dstore_thrd =
+       ThreadContextInterface::GetCurrentThreadContext();
++
++  if (!cdeSessionRef->dstore_session) {
++    cdeSessionRef->dstore_session =
++        DSTORE::CreateStorageSession(my_thread_self(), 128);
++    cdeSessionRef->dstore_thrd->AttachSessionToThread(
++        cdeSessionRef->dstore_session);
++  }
+ }
+ 
+ int CdeDestorySession(cde_session_t *&cdeSessionRef) {
+   CDE_ASSERT(g_store_instance != nullptr);
+ 
++  if (cdeSessionRef->dstore_session) {
++    DSTORE::CleanUpSession(cdeSessionRef->dstore_session);
++    cdeSessionRef->dstore_session = nullptr;
++    cdeSessionRef->dstore_thrd->DetachSessionFromThread();
++  }
++
+   delete cdeSessionRef;
+   cdeSessionRef = nullptr;
+ 
+diff --git a/storage/dstore/ddl/cde_dd_table.cc b/storage/dstore/ddl/cde_dd_table.cc
+index 533cf2bbae0..3fb6913d219 100644
+--- a/storage/dstore/ddl/cde_dd_table.cc
++++ b/storage/dstore/ddl/cde_dd_table.cc
+@@ -520,7 +520,8 @@ int CdeDdFillDictIndex(const dd::Table *dd_table, const TABLE *form_table,
+     dict_index->fillfactor = DstoreParseFillfactor(key->comment.str, nullptr);
+     auto ff =
+         dict_index->fillfactor ? dict_index->fillfactor : g_defaultFillfactor;
+-    StorageRelation new_index_rel = CdeCreateTableInfo::CreateIndexStorRel(
++    CdeCreateTableInfo tableInfo;
++    StorageRelation new_index_rel = tableInfo.CreateIndexStorRel(
+         dict_table->dstore_relation, dict_table->attrFull, index_oid,
+         segment_id, key, index_cols, &key_infos, true, ff);
+     if (new_index_rel == nullptr) {
+@@ -621,7 +622,8 @@ cde_dict_t *CdeDdFillDictTable(const dd::Table *dd_table,
+ 
+   DSTORE::TupleDesc attrFull = nullptr;
+ 
+-  StorageRelation storRel = CdeCreateTableInfo::CreateHeapStorRel(
++  CdeCreateTableInfo tableInfo;
++  StorageRelation storRel = tableInfo.CreateHeapStorRel(
+       relOid, segmentId, lobSegmentId, form_table, ff, dd_table, dictCols,
+       forReplay, (dict_table->m_vColCount > 0) ? &attrFull : nullptr);
+ 
+diff --git a/storage/dstore/ddl/cde_ddl.cc b/storage/dstore/ddl/cde_ddl.cc
+index 1258e83f12e..619413bf6ef 100644
+--- a/storage/dstore/ddl/cde_ddl.cc
++++ b/storage/dstore/ddl/cde_ddl.cc
+@@ -70,6 +70,27 @@ void cde_index_def::destroy_from_cache() {
+   }
+ }
+ 
++static void CdeDropSegmentOnDictTable(cde_dict_t *table) {
++  DSTORE::PageId segmentId = {table->dstore_relation->rel->relfileid,
++                              table->dstore_relation->rel->relblknum};
++  CdeAllocSegmentWrapper::Drop(segmentId,
++                               DSTORE::SegmentType::HEAP_TEMP_SEGMENT_TYPE,
++                               CDE_TMP_TABLE_SPACE_ID);
++  if (table->dstore_relation->attr->tdhaslob) {
++    segmentId = {table->dstore_relation->rel->rellobfileid,
++                 table->dstore_relation->rel->rellobblknum};
++    CdeAllocSegmentWrapper::Drop(segmentId,
++                                 DSTORE::SegmentType::HEAP_TEMP_SEGMENT_TYPE,
++                                 CDE_TMP_TABLE_SPACE_ID);
++  }
++  for (auto index : table->index_dict_vec) {
++    segmentId = {index->rel->rel->relfileid, index->rel->rel->relblknum};
++    CdeAllocSegmentWrapper::Drop(segmentId,
++                                 DSTORE::SegmentType::INDEX_TEMP_SEGMENT_TYPE,
++                                 CDE_TMP_TABLE_SPACE_ID);
++  }
++}
++
+ static bool CdeDropSegmentOnDdObj(THD *thd, const dd::Table *ddTableDef) {
+   bool ret = CDE_SUCC;
+   PageId heapSegmentId;
+@@ -159,6 +180,7 @@ int CdeCreateTable(THD *thd, const char *name, TABLE *form,
+                   name);
+     return ret;
+   }
++
+   ret = info.CreateTable();
+   if (ret != 0) {
+     CDE_LOG_ERROR("cde_create_table_info.create_table fail! name = %s", name);
+@@ -176,8 +198,19 @@ int CdeCreateTable(THD *thd, const char *name, TABLE *form,
+ }
+ 
+ bool CdeDropTable(THD *thd, const char *name, const dd::Table *tableDef) {
+-  DictSysRemoveTable(name, true);
+-  bool ret = CdeDropSegmentOnDdObj(thd, tableDef);
++  bool ret = CDE_OK;
++  if (!tableDef->is_persistent()) {
++    cde_dict_t *tbl = DictSysGetTable(name);
++    if (!tbl) return ret;
++    {
++      DictTableRefGuard dictRefGuard(tbl);
++      CdeDropSegmentOnDictTable(tbl);
++    }
++    DictSysRemoveTable(name, true);
++  } else {
++    DictSysRemoveTable(name, true);
++    ret = CdeDropSegmentOnDdObj(thd, tableDef);
++  }
+   CDE_LOG_DEBUG("Delete table %s %s.", name,
+                 ret == CDE_SUCC ? "success" : "fail");
+   return ret;
+@@ -198,6 +231,10 @@ int32_t CdeTruncateTable(THD *thd, const char *name, dd::Table *tableDef) {
+ 
+   cde_dict_t *dictTable = DictSysGetTable(name);
+   if (dictTable == nullptr) {
++    if (!tableDef->table().is_persistent()) {
++      return 0;
++    }
++
+     dictTable = CdeDdOpenTableOnDdObj(thd, name, tableDef);
+     if (dictTable == nullptr) {
+       return HA_ERR_NO_SUCH_TABLE;
+@@ -503,6 +540,11 @@ int CdeCreateTableInfo::PrepareCreateTable(const char *name) {
+     return CDE_ERROR;
+   }
+ 
++  if (m_create_info->options & HA_LEX_CREATE_TMP_TABLE) {
++    m_isTmpTable = true;
++    m_tableSpaceId = CDE_TMP_TABLE_SPACE_ID;
++  }
++
+   char norm_name[FN_REFLEN] = {'\0'};
+   int ret = NormalizeTableName(norm_name, name);
+   // todo: use norm_name
+@@ -517,7 +559,7 @@ DSTORE::SysClassTupDef *CdeCreateTableInfo::CreateSysRelTuple(
+   CDE_ASSERT(tupDef != nullptr);
+   // not use dstore table name, relation->relname.data
+   tupDef->relnamespace = 11;  // todo: ?
+-  tupDef->reltablespace = CDE_TABLE_SPACE_ID;
++  tupDef->reltablespace = m_tableSpaceId;
+   tupDef->reltype = DSTORE_INVALID_OID;
+   tupDef->reloftype = DSTORE_INVALID_OID;
+   tupDef->relowner = 10;
+@@ -531,7 +573,8 @@ DSTORE::SysClassTupDef *CdeCreateTableInfo::CreateSysRelTuple(
+   tupDef->relcudescidx = DSTORE_INVALID_OID;
+   tupDef->relhasindex = false;
+   tupDef->relisshared = false;
+-  tupDef->relpersistence = SYS_RELPERSISTENCE_PERMANENT;
++  tupDef->relpersistence = m_isTmpTable ? DSTORE::SYS_RELPERSISTENCE_GLOBAL_TEMP
++                                        : SYS_RELPERSISTENCE_PERMANENT;
+   tupDef->relkind = relkind;
+   tupDef->relnatts = colNum;
+   tupDef->relchecks = 0;
+@@ -661,9 +704,9 @@ StorageRelation CdeCreateTableInfo::CreateIndexStorRel(
+   bool forReplay =
+       (rds_use_ddl_info_replay && (key->flags & HA_USES_DSTORE_DDL_COMMENT));
+   if (!forReplay) {
+-    ret =
+-        indexStorRel->Construct(DSTORE::g_defaultPdbId, indexOid, classTuple,
+-                                indexTupleDesc, fillfactor, CDE_TABLE_SPACE_ID);
++    ret = indexStorRel->Construct(DSTORE::g_defaultPdbId, indexOid, classTuple,
++                                  indexTupleDesc, fillfactor, m_tableSpaceId,
++                                  true);
+     CDE_ASSERT(ret == DSTORE_SUCC);
+   } else {
+     indexStorRel->attr = indexTupleDesc;
+@@ -799,7 +842,7 @@ StorageRelation CdeCreateTableInfo::CreateIndexStorRel(
+   /* TODO need to use cde_dict_index_t::fillfactor once support inplace DDL. */
+   RetStatus ret = indexStorRel->Construct(
+       DSTORE::g_defaultPdbId, indexOid, classTuple, indexTupleDesc,
+-      g_defaultFillfactor, CDE_TABLE_SPACE_ID);
++      g_defaultFillfactor, m_tableSpaceId, true);
+   CDE_ASSERT(ret == DSTORE_SUCC);
+   indexStorRel->rel = classTuple;
+   indexStorRel->index = CdeCreateIndexInfo(indexDef, indexStorRel);
+@@ -834,7 +877,8 @@ cde_dict_index_t *CdeCreateTableInfo::CreateCdeDictIndex(
+         SystableInterface::GetNewObjectId(DSTORE::g_defaultPdbId, false, false);
+ 
+     /* The index_rel and heap_rel use the same tablespace. */
+-    segmentId = CdeAllocSegmentWrapper::Alloc(SegmentType::INDEX_SEGMENT_TYPE);
++    segmentId = CdeAllocSegmentWrapper::Alloc(
++        ChooseIndexSegmentType(m_isTmpTable), m_tableSpaceId);
+     if (segmentId == DSTORE::INVALID_PAGE_ID) {
+       CDE_LOG_ERROR_WITH_DSTORE_ERROR("Alloc index segment failed.");
+       return nullptr;
+@@ -989,7 +1033,7 @@ DSTORE::StorageRelation CdeCreateTableInfo::CreateHeapStorRel(
+   if (!forReplay) {
+     RetStatus ret =
+         storRel->Construct(DSTORE::g_defaultPdbId, tableOid, classTuple, attr,
+-                           fillfactor, CDE_TABLE_SPACE_ID);
++                           fillfactor, m_tableSpaceId, true);
+     CDE_ASSERT(ret == DSTORE_SUCC);
+   } else {
+     storRel->attr = attr;
+@@ -1103,7 +1147,8 @@ int CdeCreateTableInfo::CreateTable() {
+   } else {
+     heapOid =
+         SystableInterface::GetNewObjectId(DSTORE::g_defaultPdbId, false, false);
+-    segmentId = CdeAllocSegmentWrapper::Alloc(SegmentType::HEAP_SEGMENT_TYPE);
++    segmentId = CdeAllocSegmentWrapper::Alloc(
++        ChooseHeapSegmentType(m_isTmpTable), m_tableSpaceId);
+     if (segmentId == DSTORE::INVALID_PAGE_ID) {
+       CDE_LOG_ERROR_WITH_DSTORE_ERROR("Alloc heap segment failed.");
+       return HA_ERR_GENERIC;
+@@ -1111,8 +1156,8 @@ int CdeCreateTableInfo::CreateTable() {
+     CDE_LOG_DEBUG("alloc fileId:%d, blockId:%d, rel_oid:%d for table:%s",
+                   segmentId.m_fileId, segmentId.m_blockId, heapOid, m_name);
+     if (hasLob) {
+-      lobSegmentId =
+-          CdeAllocSegmentWrapper::Alloc(SegmentType::HEAP_SEGMENT_TYPE);
++      lobSegmentId = CdeAllocSegmentWrapper::Alloc(
++          ChooseHeapSegmentType(m_isTmpTable), m_tableSpaceId);
+       if (lobSegmentId == DSTORE::INVALID_PAGE_ID) {
+         CDE_LOG_ERROR_WITH_DSTORE_ERROR("Alloc lob segment failed.");
+         return HA_ERR_GENERIC;
+@@ -1188,6 +1233,9 @@ int CdeCreateTableInfo::CreateTable() {
+     ret = dict->add_index_dict(dictIndex);
+     CDE_ASSERT(ret == CDE_OK);
+   }
++  if (m_isTmpTable) {
++    dict->flags |= DICT_TABLE_TEMPORARY;
++  }
+   m_dict = dict.get();
+   InitializeAutoinc();
+   cde_dict_t *dictPtr = dict.get();
+@@ -1197,6 +1245,10 @@ int CdeCreateTableInfo::CreateTable() {
+   /* Under the protection of MDL-exclusive lock, no */
+   CDE_ASSERT(existPtr == nullptr);
+   DictTableRefGuard dictRefGuard(dictPtr);
++  if (m_isTmpTable) {
++    return ret;
++  }
++
+   if (CdeDdlLog::GetInstance().LogRemoveCache(m_thd, m_name) == CDE_FAIL) {
+     dictRefGuard.Release();
+     DictSysRemoveTable(m_name, false);
+@@ -1212,9 +1264,13 @@ int CdeCreateTableInfo::CreateTable() {
+ 
+ static void set_table_flags_from_create_info(
+     cde_dict_t *table, const HA_CREATE_INFO *create_info) {
+-  table->set_stats_persistent(
+-      create_info->table_options & HA_OPTION_STATS_PERSISTENT,
+-      create_info->table_options & HA_OPTION_NO_STATS_PERSISTENT);
++  if (table->is_temporary()) {
++    table->set_stats_persistent(false, true);
++  } else {
++    table->set_stats_persistent(
++        create_info->table_options & HA_OPTION_STATS_PERSISTENT,
++        create_info->table_options & HA_OPTION_NO_STATS_PERSISTENT);
++  }
+ 
+   table->set_stats_auto_recalc(
+       create_info->table_options & HA_STATS_AUTO_RECALC_ON,
+@@ -1224,7 +1280,9 @@ static void set_table_flags_from_create_info(
+ }
+ 
+ int CdeCreateTableInfo::CreateTableUpdateDict() {
+-  UpdateDataDictionaryInfo(m_dd_tab, m_heapStorRel, m_indexStorRels);
++  if (!m_isTmpTable) {
++    UpdateDataDictionaryInfo(m_dd_tab, m_heapStorRel, m_indexStorRels);
++  }
+   set_table_flags_from_create_info(m_dict, m_create_info);
+ 
+   if (!CdeIsMysqlTmpTableName(m_name) && !CdeIsDdlLogTableName(m_name) &&
+@@ -1245,9 +1303,13 @@ bool CdeTruncate::ReconstructHeapRelation(cde_dict_t *dictTable) {
+   DSTORE::PageId oldSegmentId = {tupDef->relfileid, tupDef->relblknum};
+   DSTORE::PageId oldLobSegmentId = {tupDef->rellobfileid, tupDef->rellobblknum};
+   DSTORE::PageId lobSegmentId = DSTORE::INVALID_PAGE_ID;
++  DSTORE::TablespaceId tableSpaceId =
++      dictTable->is_temporary() ? CDE_TMP_TABLE_SPACE_ID : CDE_TABLE_SPACE_ID;
++  DSTORE::SegmentType segmentType =
++      ChooseHeapSegmentType(dictTable->is_temporary());
+   /* Alloc for a new segment. */
+   DSTORE::PageId segmentId =
+-      CdeAllocSegmentWrapper::Alloc(SegmentType::HEAP_SEGMENT_TYPE);
++      CdeAllocSegmentWrapper::Alloc(segmentType, tableSpaceId);
+   DBUG_EXECUTE_IF("recon_heap_AllocSeg_injection1",
+                   { segmentId = DSTORE::INVALID_PAGE_ID; });
+   if (unlikely(segmentId == DSTORE::INVALID_PAGE_ID)) {
+@@ -1259,8 +1321,7 @@ bool CdeTruncate::ReconstructHeapRelation(cde_dict_t *dictTable) {
+     oldLobSegmentId.m_blockId = DSTORE::DSTORE_MAX_BLOCK_NUMBER;
+   });
+   if (oldLobSegmentId.IsValid()) {
+-    lobSegmentId =
+-        CdeAllocSegmentWrapper::Alloc(SegmentType::HEAP_SEGMENT_TYPE);
++    lobSegmentId = CdeAllocSegmentWrapper::Alloc(segmentType, tableSpaceId);
+     DBUG_EXECUTE_IF("recon_heap_AllocSeg_injection2",
+                     { lobSegmentId = DSTORE::INVALID_PAGE_ID; });
+     if (unlikely(lobSegmentId == DSTORE::INVALID_PAGE_ID)) {
+@@ -1272,17 +1333,20 @@ bool CdeTruncate::ReconstructHeapRelation(cde_dict_t *dictTable) {
+   SetSegmemtInfo(tupDef, segmentId, lobSegmentId);
+ 
+   /* Drop old segment_ids by post_ddl. */
+-  bool ret = CdeDdlLog::GetInstance().LogDropSegment(
+-      current_thd, oldSegmentId, SegmentType::HEAP_SEGMENT_TYPE, false);
+-  if (ret == CDE_SUCC && oldLobSegmentId.IsValid()) {
+-    ret = CdeDdlLog::GetInstance().LogDropSegment(
+-        current_thd, oldLobSegmentId, SegmentType::HEAP_SEGMENT_TYPE, false);
+-  }
+-  if (ret != CDE_SUCC) {
+-    CDE_LOG_ERROR(
+-        "Reconstruct heap of table:%s fail due to LogDropSegment fail.",
+-        dictTable->name.c_str());
+-    return CDE_FAIL;
++  if (!dictTable->is_temporary()) {
++    CDE_ASSERT(segmentType == SegmentType::HEAP_SEGMENT_TYPE);
++    bool ret = CdeDdlLog::GetInstance().LogDropSegment(
++        current_thd, oldSegmentId, segmentType, false);
++    if (ret == CDE_SUCC && oldLobSegmentId.IsValid()) {
++      ret = CdeDdlLog::GetInstance().LogDropSegment(
++          current_thd, oldLobSegmentId, segmentType, false);
++    }
++    if (ret != CDE_SUCC) {
++      CDE_LOG_ERROR(
++          "Reconstruct heap of table:%s fail due to LogDropSegment fail.",
++          dictTable->name.c_str());
++      return CDE_FAIL;
++    }
+   }
+ 
+   auto fillfactor = IsValidFillfactor(dictTable->fillfactor)
+@@ -1293,7 +1357,7 @@ bool CdeTruncate::ReconstructHeapRelation(cde_dict_t *dictTable) {
+   /* Reconstruct StorageRelation of heap. */
+   RetStatus retStatus =
+       heapRelation->Construct(DSTORE::g_defaultPdbId, rel_oid, tupDef, attr,
+-                              fillfactor, CDE_TABLE_SPACE_ID);
++                              fillfactor, tableSpaceId, true);
+   CDE_ASSERT(retStatus == DSTORE_SUCC);
+   heapRelation->rel = tupDef;
+   heapRelation->indexInfo = nullptr;
+@@ -1305,6 +1369,10 @@ bool CdeTruncate::ReconstructHeapRelation(cde_dict_t *dictTable) {
+ bool CdeTruncate::ReconstructIndexRelation(
+     cde_dict_t *dictTable,
+     std::vector<DSTORE::StorageRelation> &indexStorRels) {
++  DSTORE::TablespaceId tableSpaceId =
++      dictTable->is_temporary() ? CDE_TMP_TABLE_SPACE_ID : CDE_TABLE_SPACE_ID;
++  DSTORE::SegmentType segmentType =
++      ChooseIndexSegmentType(dictTable->is_temporary());
+   for (auto eachIndex : dictTable->index_dict_vec) {
+     Oid indexOid = eachIndex->rel->relOid;
+     StorageRelation indexRelation = eachIndex->rel;
+@@ -1313,8 +1381,7 @@ bool CdeTruncate::ReconstructIndexRelation(
+     PageId oldSegmentId = {tupDef->relfileid, tupDef->relblknum};
+ 
+     /* Obtains the segment ID of the index table. */
+-    PageId segmentId =
+-        CdeAllocSegmentWrapper::Alloc(SegmentType::INDEX_SEGMENT_TYPE);
++    PageId segmentId = CdeAllocSegmentWrapper::Alloc(segmentType, tableSpaceId);
+     DBUG_EXECUTE_IF("recon_idx_AllocSeg_injection",
+                     { segmentId = DSTORE::INVALID_PAGE_ID; });
+     if (segmentId == DSTORE::INVALID_PAGE_ID) {
+@@ -1326,13 +1393,16 @@ bool CdeTruncate::ReconstructIndexRelation(
+     /* Update the data dictionary table. */
+     SetSegmemtInfo(tupDef, segmentId, DSTORE::INVALID_PAGE_ID);
+     /* Drop old segments by post_ddl. */
+-    bool retVal = CdeDdlLog::GetInstance().LogDropSegment(
+-        current_thd, oldSegmentId, SegmentType::INDEX_SEGMENT_TYPE, false);
+-    if (retVal != CDE_SUCC) {
+-      CDE_LOG_ERROR(
+-          "Reconstruct index:%s of table:%s fail due to LogDropSegment fail.",
+-          eachIndex->name.c_str(), dictTable->name.c_str());
+-      return CDE_FAIL;
++    if (!dictTable->is_temporary()) {
++      CDE_ASSERT(segmentType == SegmentType::INDEX_SEGMENT_TYPE);
++      bool retVal = CdeDdlLog::GetInstance().LogDropSegment(
++          current_thd, oldSegmentId, segmentType, false);
++      if (retVal != CDE_SUCC) {
++        CDE_LOG_ERROR(
++            "Reconstruct index:%s of table:%s fail due to LogDropSegment fail.",
++            eachIndex->name.c_str(), dictTable->name.c_str());
++        return CDE_FAIL;
++      }
+     }
+ 
+     DEBUG_SYNC(current_thd, "InterruptTruncateTable");
+@@ -1344,7 +1414,7 @@ bool CdeTruncate::ReconstructIndexRelation(
+     /* Reconstruct StorageRelation of each index */
+     RetStatus ret =
+         indexRelation->Construct(DSTORE::g_defaultPdbId, indexOid, tupDef, attr,
+-                                 fillfactor, CDE_TABLE_SPACE_ID);
++                                 fillfactor, tableSpaceId, true);
+     indexRelation->rel = tupDef;
+ 
+     /* build index btreeSmg */
+@@ -1386,7 +1456,10 @@ bool CdeTruncate::DoTruncate(dd::Table *ddTable, cde_dict_t *dictTable) {
+   all the handlers to a table before truncating - thus it is safe to use
+   rd_storage_relation directly here. When we implement global relation cache
+   we will take storage relation from that cache anyways. */
+-  UpdateDataDictionaryInfo(ddTable, dictTable->dstore_relation, indexStorRels);
++  if (!dictTable->is_temporary()) {
++    UpdateDataDictionaryInfo(ddTable, dictTable->dstore_relation,
++                             indexStorRels);
++  }
+   dictTable->UnMarkBgStatQuit();
+ 
+   (void)CdeDictTableStatsUpdate(dictTable, EMPTY_TABLE, current_thd);
+@@ -1397,13 +1470,16 @@ bool CdeTruncate::DoTruncate(dd::Table *ddTable, cde_dict_t *dictTable) {
+   return CDE_SUCC;
+ }
+ 
+-DSTORE::PageId CdeAllocSegmentWrapper::Alloc(DSTORE::SegmentType type) {
++DSTORE::PageId CdeAllocSegmentWrapper::Alloc(
++    DSTORE::SegmentType type, DSTORE::TablespaceId tableSpaceId) {
+   CDE_ASSERT(m_allocAlloc == true);
+   DSTORE::PageId segmentId = TableSpace_Interface::AllocSegment(
+-      DSTORE::g_defaultPdbId, CDE_TABLE_SPACE_ID, type);
+-  if (unlikely(segmentId == DSTORE::INVALID_PAGE_ID)) {
++      DSTORE::g_defaultPdbId, tableSpaceId, type);
++  if (unlikely(segmentId == DSTORE::INVALID_PAGE_ID) ||
++      (tableSpaceId == CDE_TMP_TABLE_SPACE_ID)) {
+     return segmentId;
+   }
++
+   bool writeLogFail = false;
+   bool ret = CdeDdlLog::GetInstance().LogDropSegment(current_thd, segmentId,
+                                                      type, true, &writeLogFail);
+@@ -1416,7 +1492,7 @@ DSTORE::PageId CdeAllocSegmentWrapper::Alloc(DSTORE::SegmentType type) {
+           "Drop the newly allocated segment due to write log fail, id:[%hu,%u] "
+           "type:%hhu.",
+           segmentId.m_fileId, segmentId.m_blockId, static_cast<uint8_t>(type));
+-      CdeAllocSegmentWrapper::Drop(segmentId, type);
++      CdeAllocSegmentWrapper::Drop(segmentId, type, tableSpaceId);
+     }
+     return DSTORE::INVALID_PAGE_ID;
+   }
+@@ -1424,10 +1500,11 @@ DSTORE::PageId CdeAllocSegmentWrapper::Alloc(DSTORE::SegmentType type) {
+ }
+ 
+ void CdeAllocSegmentWrapper::Drop(const DSTORE::PageId &segmentId,
+-                                  DSTORE::SegmentType type) {
++                                  DSTORE::SegmentType type,
++                                  DSTORE::TablespaceId tableSpaceId) {
+   DSTORE::RetStatus ret = TableSpace_Interface::DropSegment(
+-      DSTORE::g_defaultPdbId, CDE_TABLE_SPACE_ID, type, segmentId);
+-  if (ret == DSTORE_FAIL) {
++      DSTORE::g_defaultPdbId, tableSpaceId, type, segmentId);
++  if (ret == DSTORE::DSTORE_FAIL) {
+     CDE_LOG_WARN(
+         "Drop segment fail and it may cause leak, id:[%hu,%u] type:%hhu.",
+         segmentId.m_fileId, segmentId.m_blockId, static_cast<uint8_t>(type));
+diff --git a/storage/dstore/ddl/cde_ddl.h b/storage/dstore/ddl/cde_ddl.h
+index 520bd6e1b9f..f689ccaed4e 100644
+--- a/storage/dstore/ddl/cde_ddl.h
++++ b/storage/dstore/ddl/cde_ddl.h
+@@ -12,6 +12,7 @@
+ #include "table/dstore_table_interface.h"
+ 
+ #include "cde_tuple.h"
++#include "ddl/cde_ddl_log.h"
+ #include "dict/cde_dict.h"
+ #include "sql/table.h"
+ 
+@@ -134,7 +135,7 @@ DSTORE::IndexBuildInfo CreateIndexBuildInfo(DSTORE::StorageRelation heapStorRel,
+ 
+ class CdeCreateTableInfo {
+  public:
+-  CdeCreateTableInfo() = delete;
++  CdeCreateTableInfo() = default;
+ 
+   /**
+   construction
+@@ -212,7 +213,7 @@ class CdeCreateTableInfo {
+ 
+   @return cde_dict_index_t
+   */
+-  static DSTORE::StorageRelation CreateIndexStorRel(
++  DSTORE::StorageRelation CreateIndexStorRel(
+       DSTORE::StorageRelation heapStorRel, DSTORE::TupleDesc fullAttr,
+       DSTORE::Oid indexOid, DSTORE::PageId segmentId, const KEY *key,
+       uint32_t *indexCols, DSTORE::ScanKey *keyInfos, bool isRecovry,
+@@ -230,7 +231,7 @@ class CdeCreateTableInfo {
+ 
+   @return cde_dict_index_t
+   */
+-  static DSTORE::StorageRelation CreateIndexStorRel(
++  DSTORE::StorageRelation CreateIndexStorRel(
+       DSTORE::StorageRelation heapStorRel, DSTORE::TupleDesc fullAttr,
+       DSTORE::Oid indexOid, DSTORE::PageId segmentId,
+       const cde_index_def *indexDef, uint32_t *indexCols,
+@@ -245,9 +246,9 @@ class CdeCreateTableInfo {
+ 
+   @return SysClassTupDef
+   */
+-  static DSTORE::SysClassTupDef *CreateSysRelTuple(char relkind, int16_t colNum,
+-                                                   DSTORE::PageId segmentId,
+-                                                   DSTORE::PageId lobSegmentId);
++  DSTORE::SysClassTupDef *CreateSysRelTuple(char relkind, int16_t colNum,
++                                            DSTORE::PageId segmentId,
++                                            DSTORE::PageId lobSegmentId);
+   /**
+   Create dstore index info.
+ 
+@@ -298,7 +299,7 @@ class CdeCreateTableInfo {
+   @return storage relation.
+   */
+ 
+-  static DSTORE::StorageRelation CreateHeapStorRel(
++  DSTORE::StorageRelation CreateHeapStorRel(
+       DSTORE::Oid tableOid, DSTORE::PageId segmentId,
+       DSTORE::PageId lobSegmentId, const TABLE *table, const int32_t fillfactor,
+       const dd::Table *ddTable = nullptr, DictCol *dictCols = nullptr,
+@@ -336,6 +337,8 @@ class CdeCreateTableInfo {
+   DSTORE::StorageRelation m_heapStorRel;
+   std::vector<DSTORE::StorageRelation> m_indexStorRels;
+   cde_dict_t *m_dict;
++  bool m_isTmpTable = false;
++  DSTORE::TablespaceId m_tableSpaceId = CDE_TABLE_SPACE_ID;
+ };
+ 
+ class CdeTruncate {
+@@ -364,8 +367,10 @@ class CdeAllocSegmentWrapper {
+ 
+  public:
+   static void AllowAlloc() { m_allocAlloc = true; }
+-  static DSTORE::PageId Alloc(DSTORE::SegmentType type);
+-  static void Drop(const DSTORE::PageId &segmentId, DSTORE::SegmentType type);
++  static DSTORE::PageId Alloc(DSTORE::SegmentType type,
++                              DSTORE::TablespaceId tableSpaceId);
++  static void Drop(const DSTORE::PageId &segmentId, DSTORE::SegmentType type,
++                   DSTORE::TablespaceId tableSpaceId);
+ };
+ 
+ /**
+@@ -418,5 +423,26 @@ inline bool IsValidFillfactor(int32_t val) { return (val >= 10 && val <= 100); }
+ */
+ bool CheckIsInterrupted();
+ 
++/**
++  Choose which type heap segment created
++  @param[bool]  isTempTable  fillfactor value
++  @return HEAP_TEMP_SEGMENT_TYPE if temporary table, otherwise
++  HEAP_SEGMENT_TYPE.
++*/
++inline DSTORE::SegmentType ChooseHeapSegmentType(bool isTempTable) {
++  return (isTempTable ? DSTORE::SegmentType::HEAP_TEMP_SEGMENT_TYPE
++                      : DSTORE::SegmentType::HEAP_SEGMENT_TYPE);
++}
++
++/**
++  Choose which type index segment created
++  @param[bool]  isTempTable  fillfactor value
++  @return INDEX_TEMP_SEGMENT_TYPE if temporary table, otherwise
++  INDEX_SEGMENT_TYPE.
++*/
++inline DSTORE::SegmentType ChooseIndexSegmentType(bool isTempTable) {
++  return (isTempTable ? DSTORE::SegmentType::INDEX_TEMP_SEGMENT_TYPE
++                      : DSTORE::SegmentType::INDEX_SEGMENT_TYPE);
++}
+ } /* namespace CDE */
+ #endif
+diff --git a/storage/dstore/ddl/cde_ddl_log.cc b/storage/dstore/ddl/cde_ddl_log.cc
+index b690d1c4a13..6c68929a898 100644
+--- a/storage/dstore/ddl/cde_ddl_log.cc
++++ b/storage/dstore/ddl/cde_ddl_log.cc
+@@ -410,7 +410,7 @@ bool CdeDdlLog::LogDropSegment(THD *thd, const DSTORE::PageId &segmentId,
+                                DSTORE::SegmentType segmentType, bool isCreate,
+                                bool *writeLogFail) {
+   if (g_enableAtomicDdl == false && isCreate == false) {
+-    CdeAllocSegmentWrapper::Drop(segmentId, segmentType);
++    CdeAllocSegmentWrapper::Drop(segmentId, segmentType, CDE_TABLE_SPACE_ID);
+     return CDE_SUCC;
+   }
+   uint64_t threadId = 0;
+@@ -741,7 +741,8 @@ void CdeDdlLog::ReplayDropSegmentLog(session_rel_info &relationInfo,
+   CDE_ASSERT(ret == CDE_SUCC);
+   tempTrxGuard.commit(__func__);
+   CdeAllocSegmentWrapper::Drop(
+-      segmentId, static_cast<DSTORE::SegmentType>(record.m_segmentType));
++      segmentId, static_cast<DSTORE::SegmentType>(record.m_segmentType),
++      CDE_TABLE_SPACE_ID);
+   DEBUG_SYNC(current_thd, "cde_replay_drop_segment_hang_before_commit");
+   if (g_printDdlLog) {
+     CDE_LOG_SYSTEM("Replay DDL log success, record:[%s].",
+diff --git a/storage/dstore/ddl/cde_ddl_log.h b/storage/dstore/ddl/cde_ddl_log.h
+index 0fe4df956cf..21c3508a112 100644
+--- a/storage/dstore/ddl/cde_ddl_log.h
++++ b/storage/dstore/ddl/cde_ddl_log.h
+@@ -34,6 +34,8 @@ struct session_rel_info;
+ 
+ constexpr DSTORE::TablespaceId CDE_TABLE_SPACE_ID =
+     static_cast<DSTORE::TablespaceId>(DSTORE::TBS_ID::DEFAULT_TABLE_SPACE_ID);
++constexpr DSTORE::TablespaceId CDE_TMP_TABLE_SPACE_ID =
++    static_cast<DSTORE::TablespaceId>(DSTORE::TBS_ID::TEMP_TABLE_SPACE_ID);
+ 
+ extern bool g_enableAtomicDdl;
+ extern bool g_printDdlLog;
+diff --git a/storage/dstore/ddl/ha_cde_alter.cc b/storage/dstore/ddl/ha_cde_alter.cc
+index 7255a737577..6cd2ec70d78 100644
+--- a/storage/dstore/ddl/ha_cde_alter.cc
++++ b/storage/dstore/ddl/ha_cde_alter.cc
+@@ -129,8 +129,8 @@ cde_dict_index_t *CdeRowMergeCreateIndex(const cde_index_def *index_def,
+       SystableInterface::GetNewObjectId(DSTORE::g_defaultPdbId, false, false);
+ 
+   /* The index_rel and heap_rel use the same tablespace. */
+-  PageId segment_id =
+-      CdeAllocSegmentWrapper::Alloc(SegmentType::INDEX_SEGMENT_TYPE);
++  PageId segment_id = CdeAllocSegmentWrapper::Alloc(
++      SegmentType::INDEX_SEGMENT_TYPE, CDE_TABLE_SPACE_ID);
+   uint32_t *index_cols = static_cast<uint32_t *>(CdeZalloc(
+       sizeof(uint32_t) *
+       index_def->n_fields));  // get index column vector,
+@@ -145,7 +145,8 @@ cde_dict_index_t *CdeRowMergeCreateIndex(const cde_index_def *index_def,
+   CDE_ASSERT(rec_per_keys != nullptr);
+ 
+   ScanKey key_infos;
+-  StorageRelation new_index_rel = CdeCreateTableInfo::CreateIndexStorRel(
++  CdeCreateTableInfo tableInfo;
++  StorageRelation new_index_rel = tableInfo.CreateIndexStorRel(
+       rd_storage_relation, fullAttr, index_oid, segment_id, index_def,
+       index_cols, &key_infos);
+   CDE_ASSERT(new_index_rel != nullptr);
+diff --git a/storage/dstore/dict/cde_dict.h b/storage/dstore/dict/cde_dict.h
+index 06db4adb255..a8391e27849 100644
+--- a/storage/dstore/dict/cde_dict.h
++++ b/storage/dstore/dict/cde_dict.h
+@@ -263,6 +263,9 @@ constexpr uint16_t BG_STAT_IDLE = 0;
+ constexpr uint16_t BG_STAT_WORKING = (1 << 0);
+ constexpr uint16_t BG_STAT_QUIT = (1 << 1);
+ 
++/** TEMPORARY; true for tables from CREATE TEMPORARY TABLE. */
++constexpr uint32_t DICT_TABLE_TEMPORARY = 1;
++
+ /**
+ Initialize the dict sys object. This should be called once at startup.
+ */
+@@ -378,6 +381,10 @@ struct cde_dict_t {
+   /** Number of generated virtual columns */
+   uint32_t m_vColCount{0};
+ 
++  /** Stores information about:
++  1 whether the table has been created using CREATE TEMPORARY TABLE*/
++  uint32_t flags{0};
++
+   cde_dict_t() : cde_dict_t(nullptr) {}
+   cde_dict_t(DSTORE::StorageRelationData *rel)
+       : ref_count(1),
+@@ -582,6 +589,9 @@ struct cde_dict_t {
+ 
+     return fieldIdx - count;
+   }
++
++  /** Determine if this is a temporary table. */
++  bool is_temporary() const { return (flags & DICT_TABLE_TEMPORARY); }
+ };
+ 
+ class DictSys {
+diff --git a/storage/dstore/dict/cde_relation.cc b/storage/dstore/dict/cde_relation.cc
+index 490563f11d3..eced0d97ab7 100644
+--- a/storage/dstore/dict/cde_relation.cc
++++ b/storage/dstore/dict/cde_relation.cc
+@@ -139,7 +139,7 @@ int64_t cde_relation::clone(StorageRelation src_rel, MEM_ROOT *mem,
+   auto ff = IsValidFillfactor(fillfactor) ? fillfactor : g_defaultFillfactor;
+   RetStatus ret = relation->Construct(
+       DSTORE::g_defaultPdbId, src_rel->relOid, src_rel->rel, relation->attr, ff,
+-      static_cast<DSTORE::TablespaceId>(src_rel->rel->reltablespace));
++      static_cast<DSTORE::TablespaceId>(src_rel->rel->reltablespace), true);
+   DBUG_EXECUTE_IF("relation_construct_fail_injection",
+                   { ret = DSTORE::DSTORE_FAIL; });
+   if (ret != DSTORE_SUCC) {
+diff --git a/storage/dstore/dml/cde_dml.cc b/storage/dstore/dml/cde_dml.cc
+index 163d627bf02..e1f0ddf9906 100644
+--- a/storage/dstore/dml/cde_dml.cc
++++ b/storage/dstore/dml/cde_dml.cc
+@@ -1214,7 +1214,10 @@ int cde_dml_api::ReadFullRow(cde_isolation_level_t isolationLevel, uchar *buf,
+     /** FetchTuple() will create space and copy tuple to resTuple,
+     so need to call DstorePfree(resTuple).
+     the same as in ha_cde::index_read */
+-    TupleInterface::DestroyTuple(tuple, CdeFreeMemForDtuple);
++    if ((dstore_handler->select_lock_type != LOCK_NONE) &&
++        !dstore_handler->table_handler->is_temporary()) {
++      TupleInterface::DestroyTuple(tuple, CdeFreeMemForDtuple);
++    }
+     if (tupleWithLob != nullptr &&
+         tupleWithLob->m_head.tupleInfo.val.isExternalMem) {
+       TupleInterface::DestroyTuple(tupleWithLob, CdeFreeMemForDtuple);
+diff --git a/storage/dstore/dml/cde_heap.cc b/storage/dstore/dml/cde_heap.cc
+index 82887ea2e84..2b72ef6b262 100644
+--- a/storage/dstore/dml/cde_heap.cc
++++ b/storage/dstore/dml/cde_heap.cc
+@@ -1472,6 +1472,12 @@ static int CdeLockNewestTuple(DSTORE::Snapshot scanSnapshot,
+ int CdeLockTuple(cde_isolation_level_t isoLevel, DSTORE::Snapshot scanSnapshot,
+                  DSTORE::StorageRelation relation, ItemPointer ctid,
+                  DSTORE::HeapTuple **tuple) {
++  // temporary table not lock tuple
++  if (relation->rel->relpersistence == DSTORE::SYS_RELPERSISTENCE_GLOBAL_TEMP ||
++      relation->rel->relpersistence == DSTORE::SYS_RELPERSISTENCE_TEMP) {
++    return CDE_OK;
++  }
++
+   ItemPointerData oldctid = *ctid;
+   DEBUG_SYNC(current_thd, "before_lock_tuple");
+   int result =
+diff --git a/storage/dstore/handler/ha_cde.cc b/storage/dstore/handler/ha_cde.cc
+index 7cfc87f7c9c..0adf9f69ef9 100644
+--- a/storage/dstore/handler/ha_cde.cc
++++ b/storage/dstore/handler/ha_cde.cc
+@@ -55,6 +55,7 @@
+ #include "my_sqlcommand.h"
+ #include "m_ctype.h"
+ #include "sql/ddl_info.h"
++#include "dd/types/table.h"
+ 
+ #include "common/cde_def.h"
+ #include "common/cde_diagnose.h"
+@@ -350,6 +351,12 @@ static void CdeRegisterTrx(THD *thd) /* in: MySQL thd (connection) object */
+ 
+ int CdeLockTable(lock_mode mode, DSTORE::StorageRelation relation,
+                  bool dontWait) {
++  // temporary table not lock table
++  if (relation->rel->relpersistence == DSTORE::SYS_RELPERSISTENCE_GLOBAL_TEMP ||
++      relation->rel->relpersistence == DSTORE::SYS_RELPERSISTENCE_TEMP) {
++    return DSTORE::DSTORE_SUCC;
++  }
++
+   LockInterface::TableLockContext context;
+   context.dbId = DSTORE::g_defaultPdbId;
+   context.partId = 0;
+@@ -596,8 +603,7 @@ static int CdeInit(void *p) {
+     of the secondary index do not store the primary key values.
+   */
+ 
+-  cde_hton->flags = HTON_TEMPORARY_NOT_SUPPORTED | HTON_NO_PARTITION |
+-                    HTON_SUPPORTS_SECONDARY_ENGINE |
++  cde_hton->flags = HTON_NO_PARTITION | HTON_SUPPORTS_SECONDARY_ENGINE |
+                     HTON_SUPPORTS_FOREIGN_KEYS | HTON_SUPPORTS_ATOMIC_DDL |
+                     HTON_CAN_RECREATE;
+ 
+@@ -2146,12 +2152,6 @@ int ha_cde::create(const char *name, TABLE *form, HA_CREATE_INFO *create_info,
+       dstore_enable_perf_timers);
+   int ret = CDE_OK;
+   THD *thd = ha_thd();
+-
+-  if (create_info->options & HA_LEX_CREATE_TMP_TABLE) {
+-    // todo: support HA_LEX_CREATE_TMP_TABLE
+-    return HA_ERR_UNSUPPORTED;
+-  }
+-
+   if (create_info->key_block_size != 0) {
+     push_warning_printf(current_thd, Sql_condition::SL_WARNING,
+                         ER_ILLEGAL_HA_CREATE_OPTION,
+@@ -3200,9 +3200,10 @@ func_exit:
+    * but while select_lock_type NOT LOCK_NOE, it will call LockUnchangedTuple
+    * cause our needRetTup set true and memory will allocated in
+    * LockUnchangedTuple->DoLock->CopyTuple, need free by ourself asap
+-   *
++   * temporary table not call LockUnchangedTuple, so can't free
+    */
+-  if (m_dstore->select_lock_type != LOCK_NONE && (0 == error) && tuple) {
++  if (m_dstore->select_lock_type != LOCK_NONE && (0 == error) && tuple &&
++      !m_dstore->table_handler->is_temporary()) {
+     TupleInterface::DestroyTuple(tuple, CdeFreeMemForDtuple);
+   }
+ 
+@@ -4365,7 +4366,9 @@ int ha_cde::rename_table(const char *from, const char *to,
+ int ha_cde::delete_table(const char *name, const dd::Table *table_def) {
+   // to make sure init dstore session
+   THD *thd = ha_thd();
+-  CdeTrxStartIfNotStarted(thd, true);
++  if (table_def != nullptr && table_def->is_persistent()) {
++    CdeTrxStartIfNotStarted(thd, true);
++  }
+ 
+   if (thd->for_ddl_info_replay) {
+     DictSysRemoveTable(name, false);
+@@ -4601,7 +4604,11 @@ int ha_cde::reset() {
+  * already exists, we simply return. If the table does not exist, we add it to
+  * the list of modified tables.
+  */
+-void AddModTables(THD *thd, uint64_t oid, std::string name) {
++void AddModTables(THD *thd, uint64_t oid, const std::string &name) {
++  if (CdeIsMysqlTmpTableName(name.c_str())) {
++    return;
++  }
++
+   cde_trxinfo_t *trx = CdeGetTrxinfo(thd);
+   for (const auto &table : trx->m_modTables) {
+     if (table.first == oid) {
+diff --git a/storage/dstore/ut/src/ut_cde_local_backup.cc b/storage/dstore/ut/src/ut_cde_local_backup.cc
+index ad078987f41..edb5ada91c1 100644
+--- a/storage/dstore/ut/src/ut_cde_local_backup.cc
++++ b/storage/dstore/ut/src/ut_cde_local_backup.cc
+@@ -244,7 +244,8 @@ class test_cde_local_backup : public CDETEST {
+   cde_dict_t *buildCdeDictTable(Oid oid, const char *name, PageId segmentId) {
+     cde_dict_t *dict_table = new cde_dict_t();
+     ut_mysql_table *form = new ut_mysql_table(123456, name);
+-    StorageRelation heap_rel = CdeCreateTableInfo::CreateHeapStorRel(
++    CdeCreateTableInfo tableInfo;
++    StorageRelation heap_rel = tableInfo.CreateHeapStorRel(
+         oid, segmentId, INVALID_PAGE_ID, form, g_defaultFillfactor);
+     EXPECT_NE(heap_rel, nullptr);
+     dict_table->dstore_relation = heap_rel;
+-- 
+2.23.0
+

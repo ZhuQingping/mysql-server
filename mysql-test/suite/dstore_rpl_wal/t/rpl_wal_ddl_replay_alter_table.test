@@ -1,0 +1,330 @@
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_setup.inc
+--enable_warnings
+
+--echo #
+--echo # SQLCOM_ALTER_TABLE
+--echo #
+
+--echo # 0 Create the database and tables needed for testing SQLCOM_ALTER_TABLE
+--connection $node1
+CREATE DATABASE IF NOT EXISTS test_alter_db;
+USE test_alter_db;
+
+CREATE TABLE test_alter_table (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(50),
+    age INT,
+    email VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO test_alter_table (name, age, email) VALUES
+('Alice', 25, 'alice@example.com'),
+('Bob', 30, 'bob@example.com'),
+('Charlie', 35, 'charlie@example.com');
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+USE test_alter_db;
+SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT
+FROM INFORMATION_SCHEMA.COLUMNS 
+WHERE TABLE_SCHEMA = 'test_alter_db' AND TABLE_NAME = 'test_alter_table'
+ORDER BY COLUMN_NAME;
+
+--echo # 1 Add a column to the table.
+--connection $node1
+USE test_alter_db;
+ALTER TABLE test_alter_table 
+ADD COLUMN phone VARCHAR(20) AFTER email,
+ADD COLUMN status ENUM('active', 'inactive') DEFAULT 'active';
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+--echo # Verify on the standby whether the column addition was successful.
+USE test_alter_db;
+SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT 
+FROM INFORMATION_SCHEMA.COLUMNS 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+  AND TABLE_NAME = 'test_alter_table'
+  AND COLUMN_NAME IN ('phone', 'status');
+
+--echo # 2 Modify the column definition of the table.
+--connection $node1
+USE test_alter_db;
+ALTER TABLE test_alter_table 
+MODIFY COLUMN name VARCHAR(100) NOT NULL,
+MODIFY COLUMN age TINYINT UNSIGNED,
+CHANGE COLUMN email email_address VARCHAR(150);
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+--echo # Verify column definition modification
+USE test_alter_db;
+DESC test_alter_table;
+
+--echo #
+--echo # 3 Drop column
+--echo #
+--connection $node1
+USE test_alter_db;
+ALTER TABLE test_alter_table 
+DROP COLUMN phone;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+USE test_alter_db;
+SELECT COLUMN_NAME 
+FROM INFORMATION_SCHEMA.COLUMNS 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+  AND TABLE_NAME = 'test_alter_table'
+  AND COLUMN_NAME = 'phone';
+
+--echo #
+--echo # 4 Add index
+--echo #
+--connection $node1
+USE test_alter_db;
+ALTER TABLE test_alter_table 
+ADD INDEX idx_name (name),
+ADD UNIQUE INDEX idx_unique_email (email_address),
+ADD INDEX idx_age_status (age, status);
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+USE test_alter_db;
+SHOW INDEX FROM test_alter_table;
+SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME 
+FROM INFORMATION_SCHEMA.STATISTICS 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+  AND TABLE_NAME = 'test_alter_table'
+ORDER BY INDEX_NAME, SEQ_IN_INDEX;
+
+--echo #
+--echo # 5 Drop index
+--echo #
+--connection $node1
+USE test_alter_db;
+ALTER TABLE test_alter_table 
+DROP INDEX idx_age_status;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+USE test_alter_db;
+SELECT INDEX_NAME 
+FROM INFORMATION_SCHEMA.STATISTICS 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+  AND TABLE_NAME = 'test_alter_table'
+  AND INDEX_NAME = 'idx_age_status';
+
+--echo #
+--echo # 6 Rename table
+--echo #
+--connection $node1
+USE test_alter_db;
+ALTER TABLE test_alter_table RENAME TO test_renamed_table;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+USE test_alter_db;
+# Verify that the old table name does not exist.
+SELECT TABLE_NAME 
+FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+  AND TABLE_NAME = 'test_alter_table';
+
+# Verify that the new table name exists.
+SELECT TABLE_NAME 
+FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+  AND TABLE_NAME = 'test_renamed_table';
+
+--echo #
+--echo # 7 Alter table options.
+--echo #
+# 问题 : AUTO_INCREMENT 在物理备机通过上面的查询 显示为null。  但是主机是正常值。 
+# 结论 ：物理备机需要持久化到dd的自增值已经持久化完成了，是在创建表的时候。 上面的alter，物理备机会先drop表，在create就会初始化自增值。 物理备机没问题。
+# 但是每次执行上面的select，其实是要通过ha_cde::open获取的。 因为 备机的 ha_cde::open 不能搞到正确的自增值。 没法调用查询接口。 返回为null。
+# 这个select 视图，优先从mysql.table_stats中读取统计信息，如果没读到，才会去open table。mysql.table_stats只包含系统表的统计信息，而没有普通表的统计信息。
+--connection $node1
+USE test_alter_db;
+ALTER TABLE test_renamed_table 
+COMMENT = 'This is a test table after multiple ALTER operations',
+AUTO_INCREMENT = 100;
+SELECT TABLE_NAME, ENGINE, ROW_FORMAT, TABLE_COMMENT, AUTO_INCREMENT 
+FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+  AND TABLE_NAME = 'test_renamed_table';
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+USE test_alter_db;
+SELECT TABLE_NAME, ENGINE, ROW_FORMAT, TABLE_COMMENT, AUTO_INCREMENT 
+FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+  AND TABLE_NAME = 'test_renamed_table';
+
+--echo #
+--echo # 8 Add foreign key constraint.
+--echo #
+--connection $node1
+USE test_alter_db;
+
+CREATE TABLE departments (
+    dept_id INT PRIMARY KEY AUTO_INCREMENT,
+    dept_name VARCHAR(100) NOT NULL
+);
+
+INSERT INTO departments (dept_name) VALUES ('Engineering'), ('Sales'), ('HR');
+
+# Add department ID column and create foreign key.
+ALTER TABLE test_renamed_table 
+ADD COLUMN dept_id INT,
+ADD CONSTRAINT fk_dept_id 
+    FOREIGN KEY (dept_id) 
+    REFERENCES departments(dept_id)
+    ON DELETE SET NULL
+    ON UPDATE CASCADE;
+
+UPDATE test_renamed_table SET dept_id = 1 WHERE id = 1;
+UPDATE test_renamed_table SET dept_id = 2 WHERE id = 2;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+USE test_alter_db;
+# View foreign key information
+SELECT 
+    CONSTRAINT_NAME,
+    TABLE_NAME,
+    COLUMN_NAME,
+    REFERENCED_TABLE_NAME,
+    REFERENCED_COLUMN_NAME
+    # DELETE_RULE,
+    # UPDATE_RULE
+FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+WHERE TABLE_SCHEMA = 'test_alter_db'
+  AND TABLE_NAME = 'test_renamed_table'
+  AND REFERENCED_TABLE_NAME IS NOT NULL;
+
+--echo #
+--echo # 9 Alter column order.
+--echo #
+--connection $node1
+USE test_alter_db;
+ALTER TABLE test_renamed_table 
+MODIFY COLUMN email_address VARCHAR(150) AFTER name,
+MODIFY COLUMN status ENUM('active', 'inactive') DEFAULT 'active' FIRST;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+USE test_alter_db;
+SELECT 
+    COLUMN_NAME,
+    ORDINAL_POSITION,
+    DATA_TYPE,
+    IS_NULLABLE,
+    COLUMN_DEFAULT
+FROM INFORMATION_SCHEMA.COLUMNS 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+  AND TABLE_NAME = 'test_renamed_table'
+ORDER BY ORDINAL_POSITION;
+
+--echo #
+--echo # 10 Combined multiple operations in a single ALTER.
+--echo #
+--connection $node1
+USE test_alter_db;
+ALTER TABLE test_renamed_table
+ADD COLUMN middle_name VARCHAR(50),
+ADD INDEX idx_created_at (created_at);
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+
+SELECT COLUMN_NAME 
+FROM INFORMATION_SCHEMA.COLUMNS 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+  AND TABLE_NAME = 'test_renamed_table'
+  AND COLUMN_NAME = 'middle_name';
+
+SELECT 
+    INDEX_NAME,
+    INDEX_TYPE,
+    NON_UNIQUE
+FROM INFORMATION_SCHEMA.STATISTICS 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+  AND TABLE_NAME = 'test_renamed_table'
+  AND INDEX_NAME = 'idx_created_at';
+
+# TODO 11 禁用和启用键
+
+--echo # select trace表错误情况
+--sleep 2
+--connection $node2
+SET GLOBAL debug="+d,ddl_replay_select_trace_error";
+
+--connection $node1
+CREATE TABLE IF NOT EXISTS t_user_temp_2 (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  name VARCHAR(50) NOT NULL,
+  create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+) DEFAULT CHARSET=utf8mb4;
+
+--connection $node2
+--error CR_SERVER_LOST, CR_SERVER_GONE_ERROR
+select sleep(4);
+
+--let $rpl_server_number = 2
+--let $rpl_omit_print_server_parameters=1
+--let $rpl_server_parameters = --datadir=$MY_SLAVE_DATADIR --log-error=$log_error2 --loose-storage_engine_mode=ONLY_DSTORE --default_storage_engine=Dstore --default_tmp_storage_engine=Dstore --disabled-storage-engines=InnoDB,MyISAM,MEMORY,MRG_MYISAM,CSV --transaction-isolation=READ-COMMITTED
+--source include/rpl_start_server.inc
+
+SELECT @@global.debug AS node2_debug_after_restart;
+
+--echo ---------------------
+--sleep 2
+--connection $node2
+--disable_warnings
+--replace_result $SERVER_MYPORT_1 SERVER_MYPORT_1
+--let $rpl_channel_name = 'dstore_wal_replication_channel'
+--eval CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=$SERVER_MYPORT_1, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL $rpl_channel_name;
+--enable_warnings
+--let $assert_text=Channel name should be $rpl_channel_name
+--let $assert_sql=SELECT CHANNEL_NAME FROM performance_schema.replication_connection_configuration WHERE CHANNEL_NAME = $rpl_channel_name
+--let $assert_cond=COUNT(*) = 1
+--source include/assert.inc
+
+--echo Slave_IO_Running should be OFF.
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+
+START REPLICA;
+
+--sleep 2
+--echo Slave_IO_Running should be ON.
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+
+--echo # Verify whether the table exists
+SELECT TABLE_NAME, TABLE_TYPE, ENGINE, TABLE_COLLATION 
+FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'test_alter_db' AND TABLE_NAME = 't_user_temp_2';
+
+--echo # Expect found 1 times
+--let PRINT_HIT_TIMES = 1
+--let SEARCH_FILE=$MY_SLAVE_DATADIR/$log_error2.err
+--let SEARCH_PATTERN=The server aborts because it failed to query the max DDL query trace lsn.*
+--source include/search_pattern.inc
+
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_cleanup.inc
+--enable_warnings

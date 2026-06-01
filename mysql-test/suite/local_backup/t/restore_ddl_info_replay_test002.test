@@ -1,0 +1,312 @@
+#
+# Test the DDL info replay in archive restore process, including
+# scenarios involving multiple archive backups and restore mysqld.
+#
+
+call mtr.add_suppression("Local backup\: wal archiver is running");
+call mtr.add_suppression("failed to start wal archiver");
+call mtr.add_suppression("log archive path not configured");
+call mtr.add_suppression("start wal archive fail for pdb");
+call mtr.add_suppression("Plugin '.*' will be forced to shutdown");
+call mtr.add_suppression("Plugin '.*' has ref_count=[0-9]* after shutdown");
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("The ddl info statement 'create database full_backup_archive_restore' is failed during replaying");
+
+--source suite/local_backup/include/prepare_for_backup.inc
+
+# 1. prepare some data: DDL operations before full backup
+create database full_backup_archive_restore;
+use full_backup_archive_restore;
+create table t1(s varchar(100)) engine=Dstore;
+--sleep 3
+
+# 2. Create a full backup
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+
+--source suite/local_backup/include/wait_full_backup.inc
+--source suite/local_backup/include/stop_full_backup.inc
+
+show status like "Rds_local_backup_last_full_backup_status";
+
+# 3. Start log archive
+--source suite/local_backup/include/start_log_archive.inc
+
+# 4. various basic DDL operations for log archive
+create database ddl_test2;
+create table ddl_test2.t1 (
+    id int primary key auto_increment,
+    year_col year DEFAULT NULL,
+    KEY `ndx_year_col` (`year_col` DESC)
+) engine=dstore;
+
+USE ddl_test2;
+
+CREATE INDEX idx1 ON t1 ((year_col + 2));
+alter table t1 rename column id to tb_id;
+
+##  Prepare in-place ALTER for table
+ALTER TABLE t1 RENAME COLUMN tb_id TO mid, ALGORITHM = INPLACE;
+insert into t1(year_col) values(1998);
+ALTER TABLE t1 AUTO_INCREMENT = 1000;
+ALTER TABLE t1 RENAME COLUMN mid TO inc_id, ALGORITHM = INPLACE;
+
+create database ddl_test3;
+
+create table ddl_test3.t1(i int,s varchar(1000));
+use ddl_test3;
+
+insert into t1 values(3,'abcd3');
+
+--let $i = 10
+--disable_query_log
+--disable_result_log
+while ($i) {
+eval insert into t1 select * from t1;
+dec $i;
+}
+--enable_result_log
+--enable_query_log
+
+alter table t1 add index idx_i(i);
+alter table t1 add index idx_s(s(100));
+select count(*) from t1;
+
+## more DDL operations test
+create database ddl_test4;
+use ddl_test4;
+
+## CREATE TABLE
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  name VARCHAR(50));
+
+## ALTER TABLE ADD COLUMN
+ALTER TABLE t1 ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+## CREATE INDEX
+CREATE INDEX idx_name ON t1(name);
+
+## ALTER TABLE ADD INDEX
+ALTER TABLE t1 ADD INDEX idx_created_at(created_at);
+
+## ALTER TABLE DROP INDEX
+ALTER TABLE t1 DROP INDEX idx_name;
+
+## CREATE UNIQUE INDEX
+CREATE UNIQUE INDEX uni_id ON t1(id);
+
+## ALTER TABLE ADD COLUMN AFTER
+ALTER TABLE t1 ADD COLUMN email VARCHAR(100) AFTER name;
+
+## ALTER TABLE MODIFY COLUMN
+ALTER TABLE t1 MODIFY COLUMN name VARCHAR(100);
+
+## ALTER TABLE CHANGE COLUMN
+ALTER TABLE t1 CHANGE COLUMN email user_email VARCHAR(120);
+
+## ALTER TABLE DROP COLUMN
+ALTER TABLE t1 DROP COLUMN user_email;
+
+## ALTER TABLE RENAME COLUMN
+ALTER TABLE t1 RENAME COLUMN name TO full_name;
+
+## RENAME TABLE
+RENAME TABLE t1 TO users;
+
+## SQLCOM_OPTIMIZE
+OPTIMIZE TABLE users;
+
+## TRUNCATE TABLE
+CREATE TABLE tmp (id INT);
+INSERT INTO tmp VALUES (1);
+TRUNCATE TABLE tmp;
+
+## CREATE TABLE LIKE
+CREATE TABLE users_copy LIKE users;
+
+## CREATE TABLE AS SELECT
+CREATE TABLE user_backup AS SELECT * FROM users;
+
+## ALTER TABLE ... FORCE
+ALTER TABLE users FORCE;
+
+## CREATE TEMPORARY TABLE  (convert to innodb engine)
+## CREATE TEMPORARY TABLE temp_users (id INT);
+
+## ALTER TABLE ADD PRIMARY KEY
+CREATE TABLE t2 (id INT, name VARCHAR(50));
+ALTER TABLE t2 ADD PRIMARY KEY (id);
+
+## ALTER TABLE ADD FOREIGN KEY
+CREATE TABLE departments (dept_id INT PRIMARY KEY);
+CREATE TABLE employees (
+  emp_id INT PRIMARY KEY,
+  dept_id INT
+);
+ALTER TABLE employees ADD CONSTRAINT fk_dept
+FOREIGN KEY (dept_id) REFERENCES departments(dept_id);
+
+## ALTER TABLE ADD CHECK
+ALTER TABLE employees ADD CONSTRAINT chk_id CHECK (emp_id > 0);
+
+## ALTER TABLE ALTER COLUMN SET DEFAULT
+ALTER TABLE employees ALTER COLUMN dept_id SET DEFAULT 0;
+
+## CREATE TABLE WITH CHECK OPTION (VIEW)
+CREATE VIEW v_users AS SELECT * FROM users WITH CHECK OPTION;
+
+## ALTER TABLE CHARACTER SET
+ALTER TABLE users CONVERT TO CHARACTER SET utf8mb4;
+
+## ALTER TABLE COLLATE
+ALTER TABLE users CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+
+## CREATE INDEX USING BTREE
+CREATE INDEX idx_fullname ON users(full_name) USING BTREE;
+
+## CREATE FULLTEXT INDEX
+## ALTER TABLE users ADD FULLTEXT ft_idx (full_name);
+
+## CREATE VIEW
+CREATE VIEW user_view AS SELECT id, full_name FROM users;
+
+## ALTER VIEW
+ALTER VIEW user_view AS SELECT id FROM users;
+
+## CREATE PROCEDURE
+DELIMITER |;
+CREATE PROCEDURE get_user(IN uid INT)
+BEGIN
+  SELECT * FROM users WHERE id = uid;
+END|
+DELIMITER ;|
+
+## ALTER PROCEDURE
+ALTER PROCEDURE get_user COMMENT 'Fetch user by ID';
+
+## CREATE FUNCTION
+DELIMITER |;
+CREATE FUNCTION user_count() RETURNS INT
+BEGIN
+  RETURN (SELECT COUNT(*) FROM users);
+END|
+DELIMITER ;|
+
+## CREATE TRIGGER
+CREATE TRIGGER before_user_insert
+BEFORE INSERT ON users
+FOR EACH ROW SET NEW.created_at = NOW();
+
+## CREATE EVENT
+CREATE EVENT cleanup_temp
+ON SCHEDULE EVERY 1 DAY
+DO TRUNCATE TABLE tmp;
+
+## ALTER EVENT
+ALTER EVENT cleanup_temp DISABLE;
+
+--sleep 3
+
+# 5. Stop log archive
+--source suite/local_backup/include/stop_log_archive.inc
+
+# 6. Restore
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+--let $list_type = wal_archive
+--source suite/local_backup/include/restore_with_script.inc
+
+--let $restart_parameters= restart: --dstore_open_restore_mode=on --dstore_can_do_wal_archive=on --rds_dstore_support_binlog_check=OFF
+--source include/start_mysqld.inc
+
+# 7. Verify data. DDL in step 4 should be replayed.
+--replace_regex /tablerelid=[0-9]+/tablerelid=SOME/ /relblknum=[0-9]+/relblknum=SOME/ /relfileid=[0-9]+/relfileid=SOME/ /indexrelid=[0-9]+/indexrelid=SOME/ /rellobfileid=[0-9]+/rellobfileid=SOME/ /rellobblknum=[0-9]+/rellobblknum=SOME/
+select ddl_info from mysql.ddl_info_replay_trace;
+show create table ddl_test2.t1;
+select * from ddl_test2.t1;
+
+use ddl_test3;
+select count(*) from t1;
+insert into t1 values(4,'abcd4');
+select * from t1 group by 1, 2;
+
+use ddl_test4;
+show tables;
+show create view user_view;
+show create function user_count;
+SELECT user_count();
+show create procedure get_user;
+SELECT TRIGGER_CATALOG, TRIGGER_SCHEMA, TRIGGER_NAME, ACTION_STATEMENT, DEFINER FROM information_schema.TRIGGERS WHERE TRIGGER_NAME = 'before_user_insert';
+SELECT EVENT_CATALOG, EVENT_SCHEMA, EVENT_NAME, EVENT_DEFINITION, STATUS from information_schema.EVENTS WHERE EVENT_SCHEMA = 'ddl_test4';
+
+# 8. archive again
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+--source suite/local_backup/include/stop_full_backup.inc
+show status like "Rds_local_backup_last_full_backup_status";
+
+--source suite/local_backup/include/start_log_archive.inc
+# should report error when start again
+--error ER_DA_LOCAL_BACKUP_ERROR
+call rds_backup.start_log_archive();
+
+use ddl_test4;
+## DROP VIEW
+DROP VIEW user_view;
+DROP VIEW v_users;
+
+## ALTER TABLE DROP FOREIGN KEY
+ALTER TABLE employees DROP FOREIGN KEY fk_dept;
+
+## ALTER TABLE DROP PRIMARY KEY
+ALTER TABLE t2 DROP PRIMARY KEY;
+
+## DROP PROCEDURE
+DROP PROCEDURE get_user;
+
+## DROP FUNCTION
+DROP FUNCTION user_count;
+
+## DROP TRIGGER
+DROP TRIGGER before_user_insert;
+
+## DROP EVENT
+DROP EVENT cleanup_temp;
+
+## DROP TABLE
+DROP TABLE users, users_copy, user_backup, tmp;
+
+--sleep 3
+## Stop log archive
+--source suite/local_backup/include/stop_log_archive.inc
+# It's OK to stop again
+--source suite/local_backup/include/stop_log_archive.inc
+
+## Restore again
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+--let $list_type = wal_archive
+--source suite/local_backup/include/restore_with_script.inc
+
+--let $restart_parameters= restart: --dstore_open_restore_mode=on --dstore_can_do_wal_archive=on --rds_dstore_support_binlog_check=OFF
+--source include/start_mysqld.inc
+
+# 9. check data
+use ddl_test4;
+show tables;
+SELECT * FROM information_schema.ROUTINES WHERE ROUTINE_TYPE = 'FUNCTION' AND ROUTINE_SCHEMA = 'ddl_test4';
+SELECT * FROM information_schema.ROUTINES WHERE ROUTINE_TYPE = 'PROCEDURE' AND ROUTINE_SCHEMA = 'ddl_test4';
+SELECT TRIGGER_CATALOG, TRIGGER_SCHEMA, TRIGGER_NAME, ACTION_STATEMENT, DEFINER FROM information_schema.TRIGGERS WHERE TRIGGER_NAME = 'before_user_insert';
+SELECT EVENT_CATALOG, EVENT_SCHEMA, EVENT_NAME, EVENT_DEFINITION, STATUS from information_schema.EVENTS WHERE EVENT_SCHEMA = 'ddl_test4';
+
+# 10. cleanup
+drop database ddl_test2;
+drop database ddl_test3;
+drop database ddl_test4;
+drop database full_backup_archive_restore;
+
+--source suite/local_backup/include/clean_backup.inc

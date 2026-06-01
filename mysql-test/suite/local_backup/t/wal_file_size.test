@@ -1,0 +1,80 @@
+call mtr.add_suppression("full backup found binlog is not enabled");
+
+--source suite/local_backup/include/prepare_for_backup.inc
+--let $backup_config_py = $MYSQLTEST_VARDIR/backup_config.py
+--exec sed -i 's#"wal_file_size": "134217728"#"wal_file_size": "134742016"#g' $backup_config_py
+
+CREATE DATABASE db1;
+USE db1;
+create table t1(s varchar(100)) engine=Dstore;
+
+# insert 1000 records
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 1000
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+# Test full local backup & wal archive when dstore_wal_file_size is not 128M.
+# Full local backup.
+call rds_backup.start_full_local_backup(1);
+--source suite/local_backup/include/wait_full_backup.inc
+show status like 'Rds_local_backup_last_full_backup_status';
+
+# Add more data to make first wal file full
+--source suite/local_backup/include/load_data.inc
+CALL load_data('t1','s',600000);
+--exec ls -l $MYSQLD_DATADIR/#mysql_dstore/gs_pdb/PDB_17/wal/00000002_00000000_0000000000000000 | awk "{print \$5}"
+select count(*) from t1;
+
+# Wal archive.
+call rds_backup.start_log_archive();
+--sleep 3
+# insert 500 records
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 500
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+--sleep 3
+--source suite/local_backup/include/stop_log_archive.inc
+
+# insert 300 records
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 300
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+--echo # Shut server down.
+--let $shutdown_server_timeout = 300
+--source include/shutdown_mysqld.inc
+
+# Restore with script.
+--let $list_type = wal_archive
+--source suite/local_backup/include/restore_with_script.inc
+
+--echo # Restart the server.
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+USE db1;
+select count(*) from t1;
+
+# Drop database db1.
+DROP DATABASE db1;
+
+--exec sed -i 's#"wal_file_size": "134742016"#"wal_file_size": "134217728"#g' $backup_config_py
+--source suite/local_backup/include/clean_backup.inc

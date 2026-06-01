@@ -1,0 +1,30 @@
+# ==== Purpose =======
+# Verify that gtids_in_wal_store_file.data.bk is exist it also running normal.
+# ==== References ====
+#
+# US2025072201182 Write gtid into wal and recovery read gtid from wal.
+#
+
+--source include/have_binlog_format_row.inc
+--source include/have_only_dstore.inc
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+call mtr.add_suppression("rds_dstore_missed_gtids is");
+RESET MASTER;
+
+--source include/restart_mysqld.inc
+
+--echo # expect rds_binlog_dstore_consistent is ON.
+show variables like 'rds_binlog_dstore_consistent';
+
+--echo # expect rds_dstore_missed_gtids is empty
+show variables like 'rds_dstore_missed_gtids';
+
+--echo # expect rds_dstore_missed_gtids_on_binlog is empty.
+
+show variables like 'rds_dstore_missed_gtids_on_binlog';
+
+set global rds_binlog_dstore_consistent=on;
+
+--source include/restart_mysqld.inc
+

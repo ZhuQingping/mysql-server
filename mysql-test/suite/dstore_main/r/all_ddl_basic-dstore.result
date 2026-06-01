@@ -1,0 +1,77 @@
+create table DATATYPE_DEFAULT_015 (f1 float default (f2),f2 float default(rand()));
+ERROR HY000: Default value expression of column 'f1' cannot refer to a column defined after it if that column is a generated column or has an expression as default value.
+create database ddl_test0;
+USE ddl_test0;
+ALTER DATABASE ddl_test0 CHARACTER SET = utf8mb4;
+CREATE TABLE t1 (
+id INT primary key auto_increment,
+name VARCHAR(20),
+mylob BLOB);
+INSERT INTO t1 (name, mylob) VALUES ('User1', NULL),('User2', 0x010203),('User3', 0xFFD8FFE0);
+CREATE TABLE t_select CHARSET = utf8mb4 AS SELECT if(1, 9223372036854775808, 1) AS i, CASE WHEN 1 THEN 9223372036854775808 ELSE 1 END AS c, coalesce(9223372036854775808, 1);
+DROP TABLE t_select;
+CREATE INDEX idx1 ON t1(id);
+CREATE INDEX idx2 ON t1(name);
+ALTER TABLE t1 ADD COLUMN age INT;
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+ddl_test0.t1	analyze	status	OK
+OPTIMIZE TABLE atomic_ddl_department;
+Table	Op	Msg_type	Msg_text
+ddl_test0.atomic_ddl_department	optimize	Error	Table 'ddl_test0.atomic_ddl_department' doesn't exist
+ddl_test0.atomic_ddl_department	optimize	status	Operation failed
+TRUNCATE TABLE t1;
+RENAME TABLE t1 TO t2;
+RENAME TABLE t2 TO t1;
+DROP INDEX idx1 ON t1;
+DROP INDEX idx2 ON t1;
+CREATE VIEW v1 AS SELECT 1 AS col;
+CREATE VIEW v2 AS SELECT * FROM t1;
+DROP VIEW v1;
+DROP VIEW v2;
+CREATE FUNCTION metaphon RETURNS STRING SONAME 'udf_example.so';
+CREATE FUNCTION hello() RETURNS INT DETERMINISTIC RETURN 1;
+ALTER FUNCTION hello COMMENT 'modified';
+DROP FUNCTION hello;
+DROP FUNCTION metaphon;
+CREATE PROCEDURE p1() BEGIN SELECT 1; END|
+ALTER PROCEDURE p1 COMMENT 'modified';
+DROP PROCEDURE p1;
+CREATE TRIGGER tr1 BEFORE INSERT ON t1 FOR EACH ROW SET NEW.id = 0;
+DROP TRIGGER tr1;
+CREATE EVENT e1 ON SCHEDULE EVERY 1 DAY DO DELETE FROM t1;
+ALTER EVENT e1 DISABLE;
+DROP EVENT e1;
+CREATE SERVER s1 FOREIGN DATA WRAPPER mysql OPTIONS (HOST '127.0.0.1');
+ALTER SERVER s1 OPTIONS (USER 'test');
+DROP SERVER s1;
+CREATE RESOURCE GROUP rg1 TYPE = USER;
+ALTER RESOURCE GROUP rg1 VCPU = 0-1;
+DROP RESOURCE GROUP rg1;
+CREATE USER 'testuser'@'localhost' IDENTIFIED BY 'password';
+ALTER USER 'testuser'@'localhost' IDENTIFIED BY 'new_password';
+RENAME USER 'testuser'@'localhost' TO 'newuser'@'localhost';
+RENAME USER 'newuser'@'localhost' TO 'testuser'@'localhost';
+SET PASSWORD FOR 'testuser'@'localhost' = 'pass';
+CREATE ROLE 'role1';
+CREATE ROLE 'role2';
+GRANT 'role1' TO 'testuser'@'localhost';
+GRANT 'role2' TO 'testuser'@'localhost';
+GRANT SELECT ON ddl_test1.* TO 'role1';
+GRANT INSERT ON ddl_test1.* TO 'role1';
+GRANT UPDATE ON ddl_test1.* TO 'role1';
+GRANT DELETE ON ddl_test1.* TO 'role1';
+GRANT SELECT ON ddl_test1.* TO 'role2';
+ALTER USER 'testuser'@'localhost' DEFAULT ROLE 'role1';
+REVOKE SELECT ON ddl_test1.* FROM 'role1';
+REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'role1';
+REVOKE 'role1' FROM 'testuser'@'localhost';
+REVOKE 'role2' FROM 'testuser'@'localhost';
+DROP ROLE 'role1';
+DROP ROLE 'role2';
+DROP USER 'testuser'@'localhost';
+CREATE SPATIAL REFERENCE SYSTEM 1004326 NAME 'WGS 84 (long-lat)' DEFINITION 'GEOGCS["WGS 84",DATUM["World Geodetic System 1984",SPHEROID["WGS 84",6378137,298.257223563,AUTHORITY["EPSG","7030"]],AUTHORITY["EPSG","6326"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.017453292519943278,AUTHORITY["EPSG","9122"]],AXIS["Lon",EAST],AXIS["Lat",NORTH]]' DESCRIPTION 'WGS 84 with coordinate axes swapped to be longitude-latitude instead of latitude-longitude';
+DROP SPATIAL REFERENCE SYSTEM 1004326;
+CREATE TABLESPACE ts_1 ENGINE = InnoDB;
+DROP TABLESPACE ts_1;
+drop database ddl_test0;

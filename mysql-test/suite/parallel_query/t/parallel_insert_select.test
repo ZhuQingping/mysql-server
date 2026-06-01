@@ -1,0 +1,826 @@
+--source include/pq_test.inc
+--source include/count_sessions.inc
+--source include/elide_costs.inc
+SET @old_innodb_lock_wait_timeout = @@global.innodb_lock_wait_timeout;
+
+SET @@global.innodb_lock_wait_timeout = 1;
+
+--echo # -----------------------
+
+--echo # basic testing 
+
+--echo # ----------------------
+SET @saved_pq_support_features_switch = @@global.pq_support_features_switch;
+set pq_support_features_switch='insert_select=on';
+
+create table t0 (a int);
+create table t1 (a int);
+insert into t0 values (1),(2),(3);
+insert into t1 values (1),(2),(3);
+
+--echo # FOR UPDATE and LOCK IN SHARE MODE disable parallel insert select
+--echo # To run in parallel, INSERT SELECT needs not to acquire row locks on the selected from table
+--echo # because there is no locking logic in PQ and FOR UPDATE and LOCK IN SHARE MODE explicitely 
+--echo # require row locks. 
+
+explain format=tree insert into t1 select * from t0;
+explain format=tree insert into t1 select * from t0 FOR UPDATE;
+explain format=tree insert into t1 select * from t0 LOCK IN SHARE MODE;
+
+drop table t0;
+
+--echo # SELECT ON PK 
+alter table t1 add primary key(a);
+
+create table t2 ( a int);
+
+--replace_regex $elide_costs_and_rows
+explain format=tree insert into t2 select * from t1; 
+insert into t2 select * from t1; 
+select * from t2;
+
+drop table t2;
+
+--echo # SELECT ON 2nd index
+
+alter table t1 drop primary key;
+alter table t1 add index(a);
+
+create table t2 ( a int);
+
+--replace_regex $elide_costs_and_rows
+explain format=tree insert into t2 select * from t1; 
+insert into t2 select * from t1; 
+select * from t2;
+
+drop table t2;
+
+--echo # Doubles the number of rows everytime we apply the same insert select statement 
+alter table t1 drop index a;
+
+start transaction;
+insert into t1 select * from t1;
+select count(*) from t1;
+insert into t1 select * from t1;
+select count(*) from t1;
+insert into t1 select * from t1;
+select count(*) from t1;
+rollback;
+--echo # Insert into itself
+
+--replace_regex $elide_costs_and_rows
+explain format=tree insert into t1 select * from t1; 
+start transaction;
+insert into t1 select * from t1; 
+select * from t1;
+rollback;
+
+alter table t1 add primary key(a);
+start transaction;
+--replace_regex $elide_costs_and_rows
+explain format=tree insert into t1 select a+10 from t1; 
+insert into t1 select a+10 from t1; 
+select * from t1;
+rollback;
+
+alter table t1 drop primary key;
+alter table t1 add index(a);
+
+--replace_regex $elide_costs_and_rows
+explain format=tree insert into t1 select a+10 from t1; 
+insert into t1 select a+10 from t1; 
+select * from t1;
+
+
+
+drop table t1;
+
+--echo # ON DUPLICATE KEY UPDATE
+
+CREATE TABLE t1 (
+	c2 INT, c4 INT,
+	c3 VARCHAR(2048), index(c2)) Engine=InnoDB;
+
+INSERT INTO t1(c2,  c4,c3) VALUES
+	(1,1, REPEAT('a', 1024)),
+	(2,1, REPEAT('b', 1024)),
+	(3,1, REPEAT('c', 1024)),
+	(4,1, REPEAT('d', 1024)),
+    (5,1, REPEAT('a', 1024));
+
+
+create table t2( a int, b int, UNIQUE(a));
+insert into t2 values (1,1),(2,2),(3,3);
+
+--echo # Non clustered scan 
+--replace_regex $elide_costs_and_rows
+explain format=tree insert into t2 select c2,c2 from t1 where c2>4 on DUPLICATE KEY UPDATE b=b+100;
+insert into t2 select c2,c2 from t1 where c2>4 on DUPLICATE KEY UPDATE b=b+100;
+
+--echo # Clustered index scan 
+truncate table t2;
+insert into t2 values (1,1),(2,2),(3,3);
+insert into t2 select c2,c2 from t1 ON DUPLICATE KEY UPDATE b = b +100;
+
+
+--echo # ON DUPLICATE KEY UPDATE - INSERT into itself
+drop table  t1,t2;
+
+
+CREATE TABLE t1 (
+	c2 INT, c4 INT,
+	c3 VARCHAR(2048), UNIQUE(c2)) Engine=InnoDB;
+
+INSERT INTO t1(c2,  c4,c3) VALUES
+	(1,1, REPEAT('a', 1024)),
+	(2,1, REPEAT('b', 1024)),
+	(3,1, REPEAT('c', 1024)),
+	(4,1, REPEAT('d', 1024)),
+    (5,1, REPEAT('a', 1024));
+
+
+SET GLOBAL pq_support_features_switch='insert_select=off';
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+update t1 set c4=10;
+connection con2;
+--echo # Using connection con2
+--error ER_LOCK_WAIT_TIMEOUT
+insert into t1 select * from t1 on duplicate key update c4= values(c4)+1;
+connection con1;
+--echo # Using connection con1
+rollback;
+connection default;
+--echo # Using connection default
+disconnect con1;
+disconnect con2;
+
+
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+--send update t1 set c4=10;
+connection con2;
+--echo # Using connection con2
+--error ER_LOCK_WAIT_TIMEOUT
+insert into t1 select * from t1 on duplicate key update c4= values(c4)+1;
+connection con1;
+--echo # Using connection con1
+--reap
+rollback;
+connection default;
+--echo # Using connection default
+disconnect con1;
+disconnect con2;
+
+SET GLOBAL pq_support_features_switch='insert_select=on';
+
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+update t1 set c4=10;
+connection con2;
+--echo # Using connection con2
+--error ER_LOCK_WAIT_TIMEOUT
+insert into t1 select * from t1 on duplicate key update c4= values(c4)+1;
+connection con1;
+--echo # Using connection con1
+rollback;
+connection default;
+--echo # Using connection default
+disconnect con1;
+disconnect con2;
+
+
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+--send update t1 set c4=10;
+connection con2;
+--echo # Using connection con2
+--error ER_LOCK_WAIT_TIMEOUT
+insert into t1 select * from t1 on duplicate key update c4= values(c4)+1;
+connection con1;
+--echo # Using connection con1
+--reap
+rollback;
+connection default;
+--echo # Using connection default
+disconnect con1;
+disconnect con2;
+
+
+--echo # Corner case: UPDATE clause with default from select from table
+
+SET pq_support_features_switch='insert_select=on';
+drop table  t1;
+
+create table t1 (a int unique);
+create table t2 (b int default 10);
+insert into t1 (a) values (1);
+insert into t2 (b) values (1);
+
+start transaction;
+--replace_regex $elide_costs_and_rows
+explain format=tree insert into t1 (a) select b from t2 on duplicate key update a=default(b);
+insert into t1 (a) select b from t2 on duplicate key update a=default(b);
+select * from t1;
+rollback;
+
+SET pq_support_features_switch='insert_select=off';
+
+--replace_regex $elide_costs_and_rows
+explain format=tree insert into t1 (a) select b from t2 on duplicate key update a=default(b);
+insert into t1 (a) select b from t2 on duplicate key update a=default(b);
+select * from t1;
+
+drop table t1,t2;
+
+
+--echo # -------------
+--echo # Parallel insert select with concurrent DML
+--echo # A: INSERT B: UPDATE C: DELETE
+--echo # --------------------
+--echo # A 
+--echo # Parallel Insert into select with concurrent INSERT 
+--echo # 1: with parallel insert 2: without 
+--echo # They behave the same.
+--echo # ---------------------
+
+--echo # 1
+
+SET GLOBAL pq_support_features_switch='insert_select=on';
+
+
+create table t1 (a int);
+create table t2 (b int);
+insert into t1 values (1),(3),(5);
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+INSERT INTO t2 SELECT a from t1;
+
+connection con2;
+--echo # Using connection con2
+--send INSERT INTO t1 values(85);
+connection con1;
+--echo # Using connection con1
+commit;
+connection con2;
+--echo # Using connection con2
+--reap
+connection default;
+--echo # Using connection default
+disconnect con1;
+disconnect con2;
+
+select * from t1;
+select * from t2;
+drop table t1,t2;
+
+
+--echo # 2
+
+SET GLOBAL pq_support_features_switch='insert_select=off';
+
+
+create table t1 (a int);
+create table t2 (b int);
+insert into t1 values (1),(3),(5);
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+INSERT INTO t2 SELECT a from t1;
+
+connection con2;
+--echo # Using connection con2
+--send INSERT INTO t1 values(85);
+connection con1;
+--echo # Using connection con1
+commit;
+connection con2;
+--echo # Using connection con2
+--reap
+connection default;
+--echo # Using connection default
+disconnect con1;
+disconnect con2;
+
+select * from t1;
+select * from t2;
+drop table t1,t2;
+
+
+
+--echo # --------------------
+--echo # B
+--echo # Parallel Insert into select with concurrent UPDATE
+--echo # 1: with parallel insert 2: without 
+--echo # They behave the same.
+--echo # ---------------------
+
+--echo # 1
+
+SET GLOBAL pq_support_features_switch='insert_select=on';
+
+
+create table t1 (a int);
+create table t2 (b int);
+insert into t1 values (1),(3),(5);
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+INSERT INTO t2 SELECT a from t1;
+
+connection con2;
+--echo # Using connection con2
+--send UPDATE t1 SET a = 85 where a=5;
+connection con1;
+--echo # Using connection con1
+commit;
+connection con2;
+--echo # Using connection con2
+--reap
+connection default;
+--echo # Using connection default
+disconnect con1;
+disconnect con2;
+
+select * from t1;
+select * from t2;
+drop table t1,t2;
+
+
+
+--echo # 2
+
+SET GLOBAL pq_support_features_switch='insert_select=off';
+
+
+create table t1 (a int);
+create table t2 (b int);
+insert into t1 values (1),(3),(5);
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+INSERT INTO t2 SELECT a from t1;
+
+connection con2;
+--echo # Using connection con2
+--send UPDATE t1 SET a = 85 where a=5;
+connection con1;
+--echo # Using connection con1
+commit;
+connection con2;
+--echo # Using connection con2
+--reap
+connection default;
+--echo # Using connection default
+disconnect con1;
+disconnect con2;
+
+select * from t1;
+select * from t2;
+drop table t1,t2;
+
+
+
+--echo # --------------------
+--echo # C
+--echo # Parallel Insert into select with concurrent DELETE
+--echo # 1: with parallel insert 2: without 
+--echo # They behave the same.
+--echo # ---------------------
+
+--echo # 1
+
+SET GLOBAL pq_support_features_switch='insert_select=on';
+
+create table t1 (a int);
+create table t2 (b int);
+insert into t1 values (1),(3),(5);
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+INSERT INTO t2 SELECT a from t1;
+
+connection con2;
+--echo # Using connection con2
+--send DELETE FROM  t1 where a=5;
+connection con1;
+--echo # Using connection con1
+commit;
+connection con2;
+--echo # Using connection con2
+--reap
+connection default;
+--echo # Using connection default
+disconnect con1;
+disconnect con2;
+
+select * from t1;
+select * from t2;
+drop table t1,t2;
+
+
+--echo # 2
+
+SET GLOBAL pq_support_features_switch='insert_select=off';
+
+create table t1 (a int);
+create table t2 (b int);
+insert into t1 values (1),(3),(5);
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+INSERT INTO t2 SELECT a from t1;
+
+connection con2;
+--echo # Using connection con2
+--send DELETE FROM  t1 where a=5;
+connection con1;
+--echo # Using connection con1
+commit;
+connection con2;
+--echo # Using connection con2
+--reap
+connection default;
+--echo # Using connection default
+disconnect con1;
+disconnect con2;
+
+select * from t1;
+select * from t2;
+drop table t1,t2;
+
+
+
+
+
+--echo # A/ INSERTING INTO table t1 with UNIQUE INDEX from t2 
+--echo # Locks from inserted-into table prevent the insert 
+
+--echo # 1/a
+
+SET GLOBAL pq_support_features_switch='insert_select=on';
+
+CREATE TABLE t1(a INT,  UNIQUE KEY(a)); 
+CREATE TABLE t2(a int);
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+INSERT INTO t2 values (2),(7),(30),(40),(50); 
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+INSERT INTO t1 values (50);
+connection con2;
+--echo # Using connection con2
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t1 select * from t2;
+connection con1;
+--echo # Using connection con1
+rollback;
+connection default;
+--echo # Using connection default
+disconnect con1;
+disconnect con2;
+
+--echo # 1/b/ 
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+INSERT INTO t1 values (50);
+connection con2;
+--echo # Using connection con2
+--send INSERT INTO t1 select * from t2;
+connection con1;
+--echo # Using connection con1
+commit;
+connection con2;
+--echo # Using connection con2
+--error ER_DUP_ENTRY
+--reap
+connection default;
+--echo # Using connection default
+disconnect con1;
+disconnect con2;
+
+drop table t1,t2;
+
+--echo # 2/a (same as 1/a but without parallel insert select)
+
+SET GLOBAL pq_support_features_switch='insert_select=off';
+
+CREATE TABLE t1(a INT,  UNIQUE KEY(a)); 
+CREATE TABLE t2(a int);
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+INSERT INTO t2 values (2),(7),(30),(40),(50); 
+
+
+
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+INSERT INTO t1 values (50);
+connection con2;
+--echo # Using connection con2
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t1 select * from t2;
+connection con1;
+--echo # Using connection con1
+rollback;
+connection default;
+--echo # Using connection default
+disconnect con1;
+disconnect con2;
+
+
+
+--echo # 2/b (same as 1/b but without parallel insert select)
+
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+INSERT INTO t1 values (50);
+connection con2;
+--echo # Using connection con2
+--send INSERT INTO t1 select * from t2;
+connection con1;
+--echo # Using connection con1
+commit;
+connection con2;
+--echo # Using connection con2
+--error ER_DUP_ENTRY
+--reap
+connection default;
+--echo # Using connection default
+disconnect con1;
+disconnect con2;
+
+drop table t1,t2;
+
+--echo # B/ INSERTING INTO table t1 into itself with UNIQUE INDEX 
+--echo # Locks from inserted-into table prevent the insert 
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+SET GLOBAL pq_support_features_switch='insert_select=on';
+
+CREATE TABLE t1(a INT,  UNIQUE KEY(a)); 
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+INSERT INTO t1 values (85);
+connection con2;
+--echo # Using connection con2
+--send INSERT INTO t1 SELECT a + 50 from t1;
+
+connection con1;
+--echo # Using connection con1
+commit;
+connection con2;
+--echo # Using connection con2
+--error ER_DUP_ENTRY
+--reap
+connection default;
+--echo # Using connection default
+disconnect con1;
+disconnect con2;
+
+select * from t1;
+drop table t1;
+
+
+SET GLOBAL pq_support_features_switch='insert_select=off';
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+
+
+CREATE TABLE t1(a INT,  UNIQUE KEY(a)); 
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+INSERT INTO t1 values (85);
+connection con2;
+--echo # Using connection con2
+--send INSERT INTO t1 SELECT a + 50 from t1;
+
+connection con1;
+--echo # Using connection con1
+commit;
+connection con2;
+--echo # Using connection con2
+--error ER_DUP_ENTRY
+--reap
+connection default;
+--echo # Using connection default
+disconnect con1;
+disconnect con2;
+
+select * from t1;
+
+--echo # -------------------------
+--echo # session one calls 'INSERT ... SELECT a + 50 ...' to the same table, 
+--echo # Session two tries to inserts 85
+--echo # Session two insert fails because of the duplicate key error.
+--echo # --------------------------
+
+
+
+SET GLOBAL pq_support_features_switch='insert_select=off';
+
+drop table t1;
+CREATE TABLE t1(a INT,  UNIQUE KEY(a)); 
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+INSERT INTO t1 SELECT a + 50 from t1;
+
+connection con2;
+--echo # Using connection con2
+--send INSERT INTO t1 values(85);
+connection con1;
+--echo # Using connection con1
+commit;
+connection con2;
+--echo # Using connection con2
+--error ER_DUP_ENTRY
+--reap
+connection default;
+--echo # Using connection default
+disconnect con1;
+disconnect con2;
+
+
+
+
+SET GLOBAL pq_support_features_switch='insert_select=on';
+
+drop table t1;
+CREATE TABLE t1(a INT,  UNIQUE KEY(a)); 
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+INSERT INTO t1 SELECT a + 50 from t1;
+
+connection con2;
+--echo # Using connection con2
+--send INSERT INTO t1 values(85);
+connection con1;
+--echo # Using connection con1
+commit;
+connection con2;
+--echo # Using connection con2
+--error ER_DUP_ENTRY
+--reap
+connection default;
+--echo # Using connection default
+disconnect con1;
+disconnect con2;
+drop table t1;
+
+--echo INSERT IGNORE
+CREATE TABLE t0(c0 INT);
+CREATE TABLE t1(c0 INT);
+INSERT INTO t1(c0) VALUES (1);
+CREATE TABLE t2(c0 INT);
+INSERT INTO t2(c0) VALUES (1),(2);
+INSERT IGNORE INTO t1(c0) SELECT (SELECT 1 FROM t2) FROM t0;
+drop table t0,t1,t2;
+
+--echo INSERT IGNORE locks are released
+
+CREATE TABLE t1(a INT); 
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+CREATE TABLE t2 (a int);
+SET GLOBAL pq_support_features_switch='insert_select=on';
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+INSERT INTO t1 values (100);
+connection con2;
+--echo # Using connection con2
+start transaction;
+INSERT IGNORE INTO t2 select * from t1;
+select * from t2;
+commit;
+--echo # Using connection con1
+connection con1;
+
+commit;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+
+drop table t1;
+drop table t2; 
+
+--echo # The first table in the table_list in the non-parallel-query JOIN represents the inserted-into table
+--echo # this had to be handled properly in pq code. 
+CREATE TABLE t0(c0 INT);
+CREATE TABLE t1(c0 INT);
+
+set pq_support_features_switch='insert_select=on';
+explain format=tree INSERT INTO t0 (SELECT (tx.c0) FROM t0 tx);
+INSERT INTO t0 (SELECT (tx.c0) FROM t0 tx);
+
+--echo # Insert into itself + aggregates is not enabled
+--echo # PQ does not know how to handle the additional temporary table in conjunction with an
+--echo # aggregation.
+
+explain format=tree INSERT INTO t0 SELECT max(c0) FROM t0;
+explain format=tree INSERT INTO t0 SELECT min(c0) FROM t0;
+explain format=tree INSERT INTO t0 SELECT sum(c0) FROM t0;
+
+--echo # SQL_BUFFER_RESULT with aggregation is also disabled for the same reason 
+--echo # as insert into itself with aggregation
+
+explain format=tree INSERT INTO t1 SELECT SQL_BUFFER_RESULT max(c0) FROM t0;
+explain format=tree INSERT INTO t1 SELECT SQL_BUFFER_RESULT min(c0) FROM t0;
+explain format=tree INSERT INTO t1 SELECT SQL_BUFFER_RESULT sum(c0) FROM t0;
+
+drop table t0,t1;
+
+SET @@global.innodb_lock_wait_timeout = @old_innodb_lock_wait_timeout;
+SET global pq_support_features_switch = @saved_pq_support_features_switch;
+--source include/wait_until_count_sessions.inc
+

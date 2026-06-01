@@ -1,0 +1,547 @@
+############################################################
+Establish a master-replica replication relationship based on physical replication.
+############################################################
+include/master-slave.inc
+[connection master]
+#
+# 1. Initialize the required variables, then disconnect the subsequent master-replica replication connections.
+#
+[connection master]
+[connection slave]
+STOP REPLICA;
+RESET REPLICA ALL;
+#
+# 2. Since physical replication does not support DDL operations at present, execute all required DDL statements first.
+#
+create database copy_database;
+use copy_database;
+CREATE TABLE copy_table (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) engine = dstore;
+#
+# 3. Shutdown the primary and standby instances.
+#
+include/rpl_stop_server.inc [server_number=1]
+include/rpl_stop_server.inc [server_number=2]
+#
+# 4. Copy the data directory of the primary to that of the standby.
+#
+#
+# 5. Start the primary and standby instances with new parameters for establishing a master-replica physical replication relationship.
+#
+include/rpl_start_server.inc [server_number=1]
+include/rpl_start_server.inc [server_number=2]
+#
+# 6. Confirm that the primary and standby servers start with the new data directory.
+#
+include/assert.inc [Database copy_database should exist (only one record)]
+include/assert.inc [Table copy_table should exist in database copy_database (only one record)]
+use copy_database;
+show tables;
+Tables_in_copy_database
+copy_table
+include/assert.inc [Database copy_database should exist (only one record)]
+include/assert.inc [Table copy_table should exist in database copy_database (only one record)]
+use copy_database;
+show tables;
+Tables_in_copy_database
+copy_table
+#
+# 7. Install the plugin on both the primary and standby servers, and establish a master-replica physical replication relationship.
+#
+#
+# Install the primary server's plugin and set enabled_wal to ON.
+#
+INSTALL PLUGIN rpl_semi_sync_source SONAME 'semisync_source.so';
+INSTALL PLUGIN rpl_semi_sync_replica SONAME 'semisync_replica.so';
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 1;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 1;
+SET GLOBAL rds_physical_rpl_sender_packet_size = 1;
+#
+# dstore_enable_standby_role should show as false, indicating that the current node is the source.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	1
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	OFF
+#
+# Install the standby server's plugin and set enabled_wal to ON.
+#
+INSTALL PLUGIN rpl_semi_sync_source SONAME 'semisync_source.so';
+INSTALL PLUGIN rpl_semi_sync_replica SONAME 'semisync_replica.so';
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 1;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 1;
+SET GLOBAL rds_physical_rpl_sender_packet_size = 1;
+#
+# dstore_enable_standby_role should show as true, indicating that the current node is the replica.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	2
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	ON
+#
+# Configure the replica and check whether it is configured correctly.
+#
+STOP REPLICA;
+Warnings:
+Note	3084	Replication thread(s) for channel '' are already stopped.
+RESET REPLICA ALL;
+CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=SERVER_MYPORT_1, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL 'dstore_wal_replication_channel';;
+include/assert.inc [Channel name should be 'dstore_wal_replication_channel']
+Slave_IO_Running should be OFF.
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+OFF
+START REPLICA;
+#
+# Slave_IO_Running should be ON.
+#
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+ON
+############################################################
+一、Set up the test environment.
+二、Execute the corresponding DDL statements for SQLCOM_DROP_PROCEDURE, SQLCOM_CREATE_PROCEDURE, and SQLCOM_ALTER_PROCEDURE.
+三、Check the DD information on the standby node to ensure correct metadata replay.
+四、Invoke the procedures. After execution, perform a full table scan for later comparison on the new primary node to ensure the replay function works correctly.
+五、Perform a switchover.
+六、Perform a full table scan on the new primary node and compare the results with those from Step 4 to verify the correctness of the standby node replay function.
+七、Use the replayed procedures and perform operations (alter and drop) on them to ensure the availability and operability of the replayed DDL results.
+############################################################
+#
+# 一、Set up the test environment.
+#
+CREATE DATABASE IF NOT EXISTS test_procedure_db 
+DEFAULT CHARACTER SET utf8mb4 
+DEFAULT COLLATE utf8mb4_general_ci;
+USE test_procedure_db;
+CREATE TABLE employees (
+emp_id INT AUTO_INCREMENT PRIMARY KEY,
+emp_name VARCHAR(100) NOT NULL,
+department VARCHAR(50),
+salary DECIMAL(10, 2),
+hire_date DATE,
+performance_rating INT DEFAULT 0,
+status VARCHAR(20) DEFAULT 'ACTIVE'
+);
+CREATE TABLE departments (
+dept_id INT AUTO_INCREMENT PRIMARY KEY,
+dept_name VARCHAR(50) NOT NULL UNIQUE,
+location VARCHAR(100),
+budget DECIMAL(15, 2)
+);
+CREATE TABLE salary_history (
+history_id INT AUTO_INCREMENT PRIMARY KEY,
+emp_id INT,
+old_salary DECIMAL(10, 2),
+new_salary DECIMAL(10, 2),
+change_reason VARCHAR(200),
+changed_by VARCHAR(100),
+changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO departments(dept_name, location, budget) VALUES
+('技术部', '北京', 1000000.00),
+('销售部', '上海', 500000.00),
+('人事部', '广州', 300000.00),
+('财务部', '深圳', 400000.00);
+INSERT INTO employees(emp_name, department, salary, hire_date, performance_rating) VALUES
+('张三', '技术部', 15000.00, '2020-01-15', 95),
+('李四', '技术部', 12000.00, '2020-03-20', 88),
+('王五', '销售部', 8000.00, '2021-05-10', 92),
+('赵六', '人事部', 10000.00, '2019-11-30', 85),
+('钱七', '销售部', 9000.00, '2022-02-14', 78),
+('孙八', '财务部', 11000.00, '2021-07-01', 90);
+#
+# 二、Execute the corresponding DDL statements for SQLCOM_DROP_PROCEDURE, SQLCOM_CREATE_PROCEDURE, and SQLCOM_ALTER_PROCEDURE.
+#
+#
+# 1 SQLCOM_CREATE_PROCEDURE
+#
+# Create a stored procedure with an INOUT parameter: Adjust the salary
+CREATE PROCEDURE sp_adjust_salary(
+INOUT emp_id_param INT,
+IN adjustment_percentage DECIMAL(5, 2),
+OUT old_salary DECIMAL(10, 2),
+OUT new_salary DECIMAL(10, 2),
+OUT adjustment_amount DECIMAL(10, 2)
+)
+MODIFIES SQL DATA
+BEGIN
+-- 获取当前薪资
+SELECT salary INTO old_salary
+FROM employees 
+WHERE emp_id = emp_id_param;
+-- 计算新薪资
+SET adjustment_amount = old_salary * (adjustment_percentage / 100);
+SET new_salary = old_salary + adjustment_amount;
+-- 更新薪资
+UPDATE employees 
+SET salary = new_salary
+WHERE emp_id = emp_id_param;
+-- 记录薪资历史
+INSERT INTO salary_history(emp_id, old_salary, new_salary, change_reason, changed_by)
+VALUES (emp_id_param, old_salary, new_salary, 
+CONCAT('调薪比例: ', adjustment_percentage, '%'), 
+CURRENT_USER());
+END$$
+# Create a stored procedure with complex logic: Annual performance evaluation and salary adjustment
+CREATE PROCEDURE sp_perform_annual_review(
+IN dept_name_param VARCHAR(50),
+IN base_increase_rate DECIMAL(5, 2),
+IN high_perf_bonus_rate DECIMAL(5, 2)
+)
+MODIFIES SQL DATA
+COMMENT '执行年度评估并调整薪资'
+BEGIN
+DECLARE done INT DEFAULT 0;
+DECLARE v_emp_id INT;
+DECLARE v_salary DECIMAL(10, 2);
+DECLARE v_performance_rating INT;
+DECLARE v_new_salary DECIMAL(10, 2);
+DECLARE v_adjustment DECIMAL(10, 2);
+DECLARE v_old_salary DECIMAL(10, 2);
+-- 声明游标：获取部门内所有员工
+DECLARE emp_cursor CURSOR FOR
+SELECT emp_id, salary, performance_rating
+FROM employees 
+WHERE department = dept_name_param;
+-- 声明异常处理
+DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = 1;
+-- 打开游标
+OPEN emp_cursor;
+emp_loop: LOOP
+FETCH emp_cursor INTO v_emp_id, v_salary, v_performance_rating;
+IF done = 1 THEN
+LEAVE emp_loop;
+END IF;
+-- 计算调整金额
+SET v_old_salary = v_salary;
+SET v_adjustment = v_salary * (base_increase_rate / 100);
+-- 高绩效额外奖励
+IF v_performance_rating >= 90 THEN
+SET v_adjustment = v_adjustment + (v_salary * (high_perf_bonus_rate / 100));
+END IF;
+SET v_new_salary = v_old_salary + v_adjustment;
+-- 更新员工薪资
+UPDATE employees 
+SET salary = v_new_salary
+WHERE emp_id = v_emp_id;
+-- 记录历史
+INSERT INTO salary_history(emp_id, old_salary, new_salary, change_reason, changed_by)
+VALUES (v_emp_id, v_old_salary, v_new_salary,
+CONCAT('年度评估调薪, 绩效分: ', v_performance_rating),
+CURRENT_USER());
+END LOOP;
+CLOSE emp_cursor;
+-- 输出结果
+SELECT 
+dept_name_param AS department,
+base_increase_rate AS base_rate,
+high_perf_bonus_rate AS bonus_rate,
+'年度评估完成' AS status;
+END$$
+# Create a test stored procedure to be dropped
+CREATE PROCEDURE sp_test_for_deletion()
+BEGIN
+SELECT 'This procedure will be deleted' AS message;
+END$$
+#
+# 2 SQLCOM_ALTER_PROCEDURE
+#
+ALTER PROCEDURE sp_adjust_salary
+SQL SECURITY INVOKER
+COMMENT '调整员工薪资（修改为INVOKER安全模式）';
+ALTER PROCEDURE sp_perform_annual_review
+COMMENT '年度评估调薪过程（已更新注释）'
+SQL SECURITY INVOKER;
+#
+# 3 SQLCOM_DROP_PROCEDURE
+#
+DROP PROCEDURE IF EXISTS sp_test_for_deletion;
+# View the stored procedure metadata on the primary node
+SELECT 
+ROUTINE_NAME,
+ROUTINE_TYPE,
+DATA_TYPE,
+IS_DETERMINISTIC,
+SQL_DATA_ACCESS,
+SECURITY_TYPE,
+ROUTINE_COMMENT
+# CREATED,
+# LAST_ALTERED
+FROM INFORMATION_SCHEMA.ROUTINES 
+WHERE ROUTINE_SCHEMA = 'test_procedure_db'
+  AND ROUTINE_TYPE = 'PROCEDURE'
+ORDER BY ROUTINE_NAME;
+ROUTINE_NAME	ROUTINE_TYPE	DATA_TYPE	IS_DETERMINISTIC	SQL_DATA_ACCESS	SECURITY_TYPE	ROUTINE_COMMENT
+sp_adjust_salary	PROCEDURE		NO	MODIFIES SQL DATA	INVOKER	调整员工薪资（修改为INVOKER安全模式）
+sp_perform_annual_review	PROCEDURE		NO	MODIFIES SQL DATA	INVOKER	年度评估调薪过程（已更新注释）
+#
+# 三、Check the DD information on the standby node to ensure correct metadata replay.
+#
+USE test_procedure_db;
+# View the stored procedure metadata on the standby node
+SELECT 
+ROUTINE_NAME,
+ROUTINE_TYPE,
+DATA_TYPE,
+IS_DETERMINISTIC,
+SQL_DATA_ACCESS,
+SECURITY_TYPE,
+ROUTINE_COMMENT
+# CREATED,
+# LAST_ALTERED
+FROM INFORMATION_SCHEMA.ROUTINES 
+WHERE ROUTINE_SCHEMA = 'test_procedure_db'
+  AND ROUTINE_TYPE = 'PROCEDURE'
+ORDER BY ROUTINE_NAME;
+ROUTINE_NAME	ROUTINE_TYPE	DATA_TYPE	IS_DETERMINISTIC	SQL_DATA_ACCESS	SECURITY_TYPE	ROUTINE_COMMENT
+sp_adjust_salary	PROCEDURE		NO	MODIFIES SQL DATA	INVOKER	调整员工薪资（修改为INVOKER安全模式）
+sp_perform_annual_review	PROCEDURE		NO	MODIFIES SQL DATA	INVOKER	年度评估调薪过程（已更新注释）
+# View the stored procedure parameter information
+SELECT 
+SPECIFIC_NAME,
+PARAMETER_NAME,
+ORDINAL_POSITION,
+PARAMETER_MODE,
+DATA_TYPE,
+CHARACTER_MAXIMUM_LENGTH,
+NUMERIC_PRECISION,
+NUMERIC_SCALE
+FROM INFORMATION_SCHEMA.PARAMETERS 
+WHERE SPECIFIC_SCHEMA = 'test_procedure_db'
+ORDER BY SPECIFIC_NAME, ORDINAL_POSITION;
+SPECIFIC_NAME	PARAMETER_NAME	ORDINAL_POSITION	PARAMETER_MODE	DATA_TYPE	CHARACTER_MAXIMUM_LENGTH	NUMERIC_PRECISION	NUMERIC_SCALE
+sp_adjust_salary	emp_id_param	1	INOUT	int	NULL	10	0
+sp_adjust_salary	adjustment_percentage	2	IN	decimal	NULL	5	2
+sp_adjust_salary	old_salary	3	OUT	decimal	NULL	10	2
+sp_adjust_salary	new_salary	4	OUT	decimal	NULL	10	2
+sp_adjust_salary	adjustment_amount	5	OUT	decimal	NULL	10	2
+sp_perform_annual_review	dept_name_param	1	IN	varchar	50	NULL	NULL
+sp_perform_annual_review	base_increase_rate	2	IN	decimal	NULL	5	2
+sp_perform_annual_review	high_perf_bonus_rate	3	IN	decimal	NULL	5	2
+#
+# 四、Invoke the procedures. After execution, perform a full table scan for later comparison on the new primary node to ensure the replay function works correctly.
+#
+USE test_procedure_db;
+# 1 Call the stored procedure with INOUT parameters
+SET @emp_id = 1;
+SET @adjustment_percent = 10.00;
+CALL sp_adjust_salary(@emp_id, @adjustment_percent, @old_salary, @new_salary, @adjust_amount);
+SELECT 
+@emp_id AS employee_id,
+@old_salary AS old_salary,
+@new_salary AS new_salary,
+@adjust_amount AS adjustment_amount,
+@adjustment_percent AS adjustment_percent;
+employee_id	old_salary	new_salary	adjustment_amount	adjustment_percent
+1	15000.00	16500.00	1500.00	10.00
+# 2 Call complex stored procedure to perform annual evaluation
+CALL sp_perform_annual_review('技术部', 5.00, 3.00);
+department	base_rate	bonus_rate	status
+技术部	5.00	3.00	年度评估完成
+# 3 Record the current data status (for comparison with the new primary node)
+SELECT 
+emp_id,
+emp_name,
+department,
+salary,
+performance_rating
+FROM employees
+ORDER BY emp_id;
+emp_id	emp_name	department	salary	performance_rating
+1	张三	技术部	17820.00	95
+2	李四	技术部	12600.00	88
+3	王五	销售部	8000.00	92
+4	赵六	人事部	10000.00	85
+5	钱七	销售部	9000.00	78
+6	孙八	财务部	11000.00	90
+SELECT 
+emp_id,
+old_salary,
+new_salary,
+change_reason,
+changed_by
+# changed_at
+FROM salary_history
+ORDER BY history_id;
+emp_id	old_salary	new_salary	change_reason	changed_by
+1	15000.00	16500.00	调薪比例: 10.00%	root@localhost
+1	16500.00	17820.00	年度评估调薪, 绩效分: 95	root@localhost
+2	12000.00	12600.00	年度评估调薪, 绩效分: 88	root@localhost
+#
+# 五、Perform a switchover.
+#
+############################################################
+switchover_1
+############################################################
+# Demote the source to replica.
+SET GLOBAL read_only = ON;
+SET GLOBAL event_scheduler = OFF;
+call rpl_wal.pdb_demote();
+#
+# dstore_enable_standby_role should show as true, indicating that the current node is the replica.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	1
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	ON
+#
+# Promote the replica to source.
+#
+STOP REPLICA;
+RESET REPLICA ALL FOR CHANNEL 'dstore_wal_replication_channel';
+call rpl_wal.pdb_promote();
+#
+# dstore_enable_standby_role should show as false, indicating that the current node is the source.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	2
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	OFF
+#
+# Clean the primary and standby servers.
+#
+include/stop_wal_dump_threads.inc
+#
+# Re-establish primary-standby relationship.
+#
+CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=old_standby_port, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL 'dstore_wal_replication_channel';;
+include/assert.inc [Channel name should be 'dstore_wal_replication_channel']
+START REPLICA;
+#
+# Slave_IO_Running should be ON.
+#
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+ON
+#
+# Disable read-only mode on the new source.
+#
+SET GLOBAL read_only = OFF;
+SET GLOBAL event_scheduler = ON;
+#
+# 六、Perform a full table scan on the new primary node and compare the results with those from Step 4 to verify the correctness of the standby node replay function.
+#
+USE test_procedure_db;
+# 1 Verify the stored procedure with INOUT parameters
+SET @emp_id = 2;
+SET @adjustment_percent = 8.50;
+CALL sp_adjust_salary(@emp_id, @adjustment_percent, @old_salary, @new_salary, @adjust_amount);
+SELECT 
+@emp_id AS employee_id,
+@old_salary AS old_salary,
+@new_salary AS new_salary,
+@adjust_amount AS adjustment_amount,
+@adjustment_percent AS adjustment_percent;
+employee_id	old_salary	new_salary	adjustment_amount	adjustment_percent
+2	12600.00	13671.00	1071.00	8.50
+# 2. Verify the complex stored procedure
+CALL sp_perform_annual_review('销售部', 4.50, 2.50);
+department	base_rate	bonus_rate	status
+销售部	4.50	2.50	年度评估完成
+# 3 Verify the consistency of the data tables
+SELECT 
+emp_id,
+emp_name,
+department,
+salary,
+performance_rating
+FROM employees
+ORDER BY emp_id;
+emp_id	emp_name	department	salary	performance_rating
+1	张三	技术部	17820.00	95
+2	李四	技术部	13671.00	88
+3	王五	销售部	8560.00	92
+4	赵六	人事部	10000.00	85
+5	钱七	销售部	9405.00	78
+6	孙八	财务部	11000.00	90
+SELECT 
+emp_id,
+old_salary,
+new_salary,
+change_reason,
+changed_by
+# changed_at
+FROM salary_history
+ORDER BY history_id;
+emp_id	old_salary	new_salary	change_reason	changed_by
+1	15000.00	16500.00	调薪比例: 10.00%	root@localhost
+1	16500.00	17820.00	年度评估调薪, 绩效分: 95	root@localhost
+2	12000.00	12600.00	年度评估调薪, 绩效分: 88	root@localhost
+2	12600.00	13671.00	调薪比例: 8.50%	root@localhost
+3	8000.00	8560.00	年度评估调薪, 绩效分: 92	root@localhost
+5	9000.00	9405.00	年度评估调薪, 绩效分: 78	root@localhost
+#
+# 七、Use the replayed procedures and perform operations (alter and drop) on them to ensure the availability and operability of the replayed DDL results.
+#
+# Perform operations on the replayed procedures
+ALTER PROCEDURE sp_adjust_salary
+COMMENT '调整员工薪资（在新主上再次修改注释）';
+DROP PROCEDURE IF EXISTS sp_perform_annual_review;
+# 2 Verify whether the new standby node has synchronized the modifications
+SELECT 
+ROUTINE_NAME,
+ROUTINE_TYPE,
+SECURITY_TYPE,
+ROUTINE_COMMENT
+# CREATED,
+# LAST_ALTERED
+FROM INFORMATION_SCHEMA.ROUTINES 
+WHERE ROUTINE_SCHEMA = 'test_procedure_db'
+  AND ROUTINE_TYPE = 'PROCEDURE'
+ORDER BY ROUTINE_NAME;
+ROUTINE_NAME	ROUTINE_TYPE	SECURITY_TYPE	ROUTINE_COMMENT
+sp_adjust_salary	PROCEDURE	INVOKER	调整员工薪资（在新主上再次修改注释）
+############################################################
+# Uninstall the plugins, reset the variables, and restore the original master-replica replication relationship.
+############################################################
+#
+# 1. Shutdown the mysqld instances of the master and replica servers launched with the new data directory.
+#
+STOP REPLICA;
+RESET REPLICA ALL FOR CHANNEL 'dstore_wal_replication_channel';
+include/stop_wal_dump_threads.inc
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 0;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 0;
+UNINSTALL PLUGIN rpl_semi_sync_source;
+UNINSTALL PLUGIN rpl_semi_sync_replica;
+use mtr;
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 0;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 0;
+UNINSTALL PLUGIN rpl_semi_sync_source;
+UNINSTALL PLUGIN rpl_semi_sync_replica;
+use mtr;
+#
+# 2. Shutdown the mysqld instances of the master and replica servers launched with the new data directory.
+#
+include/rpl_stop_server.inc [server_number=1]
+include/rpl_stop_server.inc [server_number=2]
+# Delete the directories of the primary and standby servers.
+#
+# 3. Restart the mysqld instances of the master and replica servers using the configurations from the opt file.
+#
+include/rpl_start_server.inc [server_number=1]
+show databases;
+Database
+__recyclebin__
+copy_database
+information_schema
+mtr
+mysql
+performance_schema
+sys
+test
+drop database copy_database;
+use mtr;
+include/rpl_start_server.inc [server_number=2]
+use mtr;

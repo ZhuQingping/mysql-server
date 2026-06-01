@@ -1,0 +1,43 @@
+create database local_backup_binlog_lock;
+use local_backup_binlog_lock;
+create table t1(s varchar(100)) engine=Dstore;
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1000
+#
+# Case 1. check full local backup lock block DML
+#
+SET GLOBAL DEBUG="+d,full_lb_wait_binlog_lock";
+call rds_backup.start_full_local_backup(0);
+#
+# conn1 would lock wait timeout 
+#
+SET SESSION DEBUG_SYNC = "now WAIT_FOR signal.full_lb_binlog_lock_acquired";
+#
+# conn1 continue after wait for debug_sync acqurired
+#
+SET SESSION lock_wait_timeout = 1;
+INSERT INTO local_backup_binlog_lock.t1 VALUES('new_connect');
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+SET SESSION DEBUG_SYNC = "now SIGNAL signal.full_lb_test_end";
+SET GLOBAL DEBUG="-d,full_lb_wait_binlog_lock";
+SET SESSION DEBUG_SYNC="RESET";
+#
+# conn1 continue after full_lb_test_end
+#
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+#
+# Case 2. check full local backup with read only
+#
+set global read_only = 1;
+call rds_backup.start_full_local_backup(0);
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+set global read_only = 0;
+drop database local_backup_binlog_lock;

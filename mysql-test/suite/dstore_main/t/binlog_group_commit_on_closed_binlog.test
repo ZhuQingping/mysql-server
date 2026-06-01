@@ -1,0 +1,34 @@
+# ==== Purpose ====
+# Simulate the binlog is closed while committing a tranction, verify that
+# the transaction and following transaction are committed successfully.
+#
+# ==== References ====
+#
+# US2025030700428 Implement a "BINLOG GROUP COMMIT" with one phase commit
+#
+
+--source include/have_binlog_format_row.inc
+--source include/have_only_dstore.inc
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+
+RESET MASTER;
+
+CREATE TABLE t1(c1 INT);
+
+SET @@GLOBAL.DEBUG= '+d, simulate_binlog_is_closed';
+INSERT INTO t1 VALUES(1);
+--echo #
+--echo # Check that the above transaction is committed successfully.
+--echo #
+SELECT * FROM t1 ORDER BY t1.c1;
+SET @@GLOBAL.DEBUG= '-d, simulate_binlog_is_closed';
+
+INSERT INTO t1 VALUES(2);
+--echo #
+--echo # Check that the following transaction is committed successfully.
+--echo #
+SELECT * FROM t1 ORDER BY t1.c1;
+
+# Cleanup
+DROP TABLE t1;

@@ -1,0 +1,85 @@
+# Stop the MTR default mysqld.
+#
+# Initialize a temporary database that uses lower_case_table_names=1.
+#
+#
+# Start the DB server with the lower_case_table_names=1
+#
+# restart: --datadir=MYSQL_DATA_DIR --lower_case_table_names=1
+# New lower_case_table_names=1
+select @@lower_case_table_names;
+@@lower_case_table_names
+1
+set rds_recycle_bin_mode=on;
+create database DB1;
+show databases;
+Database
+__recyclebin__
+db1
+information_schema
+mysql
+performance_schema
+sys
+test
+use DB1;
+create table TABLE_T1(id int);
+drop table TABLE_T1;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db1	table_t1	#	#
+SET SESSION debug="+d,recyclebin_restore_alloc_fail_03";
+call dbms_recyclebin.restore_table('table_t1', "DB1", "TABLE_T1");
+ERROR HY000: Recycle table failed : memory allocation failed.
+SET SESSION debug="-d,recyclebin_restore_alloc_fail_03";
+SET SESSION debug="+d,recyclebin_restore_alloc_fail_04";
+call dbms_recyclebin.restore_table('table_t1', "DB1", "TABLE_T1");
+ERROR HY000: Recycle table failed : memory allocation failed.
+SET SESSION debug="-d,recyclebin_restore_alloc_fail_04";
+call dbms_recyclebin.restore_table('table_t1', "DB1", "TABLE_T1");
+show tables;
+Tables_in_db1
+table_t1
+drop table table_t1;
+call dbms_recyclebin.restore_table('table_t1');
+show tables;
+Tables_in_db1
+table_t1
+drop table table_t1;
+call dbms_recyclebin.restore_table('table_t1', "db1", "table_t1");
+show tables;
+Tables_in_db1
+table_t1
+drop table table_t1;
+call dbms_recyclebin.restore_table('table_t1', "db1", "TABLE_T1");
+show tables;
+Tables_in_db1
+table_t1
+drop table table_t1;
+call dbms_recyclebin.restore_table('table_t1', "DB1", "table_t1");
+show tables;
+Tables_in_db1
+table_t1
+drop table TABLE_T1;
+call dbms_recyclebin.restore_db("db1");
+drop table TABLE_T1;
+call dbms_recyclebin.restore_db("DB1");
+drop table TABLE_T1;
+call dbms_recyclebin.restore_db("db1", "db1");
+drop table TABLE_T1;
+call dbms_recyclebin.restore_db("db1", "DB1");
+drop table TABLE_T1;
+call dbms_recyclebin.restore_db("DB1", "db1");
+show tables;
+Tables_in_db1
+table_t1
+drop database DB1;
+call dbms_recyclebin.purge_table('table_t1');
+drop database __recyclebin__;
+create database __recyclebin__ default character set utf8mb4;
+#
+# Cleanup
+#
+# restart:
+SELECT @@lower_case_table_names;
+@@lower_case_table_names
+0

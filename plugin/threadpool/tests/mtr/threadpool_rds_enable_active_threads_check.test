@@ -1,0 +1,31 @@
+call mtr.add_suppression("Threadpool could create additional thread to handle queries");
+--disable_abort_on_error
+SET GLOBAL threadpool_enable_active_threads_check = OFF;
+SHOW GLOBAL VARIABLES LIKE "threadpool_enable_active_threads_check";
+--connect(con1,localhost,root,,)
+--connect(con2,localhost,root,,)
+--connect(con3,localhost,root,,)
+--connection con1
+--send SELECT SLEEP(3)
+--sleep 1
+--connection con2
+--send SELECT SLEEP(1)
+--connection con3
+SHOW GLOBAL STATUS LIKE "Threadpool_active_threads";
+--connection con1
+--reap
+--connection con2
+--reap
+
+SET GLOBAL threadpool_enable_active_threads_check = ON;
+SHOW GLOBAL VARIABLES LIKE "threadpool_enable_active_threads_check";
+--connection con1
+--send SELECT SLEEP(3)
+--sleep 1
+--connection con2
+--send SELECT SLEEP(1)
+--connection con1
+--reap
+--connection con2
+--reap
+SHOW GLOBAL STATUS LIKE "Threadpool_active_threads";

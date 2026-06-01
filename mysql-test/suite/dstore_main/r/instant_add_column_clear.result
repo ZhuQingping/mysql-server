@@ -1,0 +1,44 @@
+##############################################
+# Test instant ADD COLUMN for REDUNDANT format
+##############################################
+#
+# Scenario 1:
+# Create a normal table, rebuild and truncate will clear the instant
+# information
+#
+CREATE TABLE t1 (a INT NOT NULL AUTO_INCREMENT PRIMARY KEY, b INT) ROW_FORMAT=REDUNDANT;
+Warnings:
+Warning	1178	The storage engine for the table doesn't support ROW_FORMAT
+INSERT INTO t1 VALUES(0, 1), (0, 2), (0, 3), (0, 4), (0, 5);
+ALTER TABLE t1 ADD COLUMN c1 INT DEFAULT 10;
+CHECK TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	check	note	The storage engine for the table doesn't support check
+ALTER TABLE t1 ADD COLUMN c2 INT DEFAULT 20, ADD KEY(c2);
+CHECK TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	check	note	The storage engine for the table doesn't support check
+INSERT INTO t1(a, b) VALUES(0, 1), (0, 2), (0, 3), (0, 4), (0, 5);
+ALTER TABLE t1 ADD COLUMN c3 INT DEFAULT 10;
+CHECK TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	check	note	The storage engine for the table doesn't support check
+TRUNCATE TABLE t1;
+CHECK TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	check	note	The storage engine for the table doesn't support check
+CHECK TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	check	note	The storage engine for the table doesn't support check
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int NOT NULL AUTO_INCREMENT,
+  `b` int DEFAULT NULL,
+  `c1` int DEFAULT '10',
+  `c2` int DEFAULT '20',
+  `c3` int DEFAULT '10',
+  PRIMARY KEY (`a`),
+  KEY `c2` (`c2`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=REDUNDANT
+DROP TABLE t1;

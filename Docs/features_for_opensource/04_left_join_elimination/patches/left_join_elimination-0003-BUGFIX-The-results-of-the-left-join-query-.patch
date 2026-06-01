@@ -1,0 +1,557 @@
+From 52683f8144a0823e0f5de3857d0e299f25603a8b Mon Sep 17 00:00:00 2001
+From: Guilhem Bichot <guilhem.bichot@contributor>
+
+
+Date: Sat, 22 Nov 2025 12:35:53 +0100
+Subject: [PATCH] BUGFIX The results of the left join query are
+ inconsistent.
+
+A problem with DEFAULT(column).
+
+https://dev.mysql.com/doc/refman/8.0/en/miscellaneous-functions.html#function_default
+
+Considering:
+CREATE TABLE t0 (c1 TINYINT);
+INSERT INTO t0 VALUES(0),(1);
+CREATE TABLE t98 (c3 DECIMAL(10,0) NOT NULL DEFAULT '1317787993');
+(necessary details: declared NOT NULL and with a default).
+
+We expect DEFAULT(t98.c3) to return 1317787993.
+This is generally the case, but not for:
+
+SELECT DEFAULT(t98.c3) FROM t0 LEFT JOIN t98 ON TRUE;
+
+In Item_default_value::fix_fields(), we make a Field and point it to
+the default value (s->default_values). During execution, we have
+NULL-complementing for t98, so we fill table->record[0] with NULLs and
+call t98->set_nullable(); then we evaluate DEFAULT, which calls
+Item_field::send(), which tests Field:is_null() which returns true
+because, when the field is not nullable (like here),
+table->is_nullable() is used ;
+
+Field::is_null() {
+    if (is_nullable()) return (m_null_ptr[row_offset] & null_bit);
+    if (is_tmp_nullable()) return m_is_tmp_null;
+    return table->has_null_row();
+}
+
+(if the field had been nullable, the first if() would trigger, and as
+m_null_ptr points into the default values, which are not NULL,
+is_null() would have returned false; we can say that DEFAULT is
+isolated from the current row of the table by having a different
+record pointer, but alas not totally isolated as both share the
+'table' pointer and thus share the value if table->has_null_row()).
+
+So the SELECT returns NULL. We can say this is a bug in MySQL, I filed
+it at filed https://bugs.mysql.com/bug.php?id=119453 "DEFAULT(column)
+returns wrong result when column is to the right of left join"
+(If the field had been nullable, the SELECT would have returned
+1317787993.)
+
+Let's now add GROUP BY 1 to our query:
+SELECT DEFAULT(t98.c3) FROM t0 LEFT JOIN t98 ON TRUE GROUP BY 1;
+
+Then left join elimination is tried on this query ;
+Item_default_value::used_tables() is always 0 (which is actually
+sensible as it's not really a reference: DEFAULT is not going to need
+any row of the table, only return a default found in the table's
+definition), so this reference goes unnoticed when we wonder if we can
+eliminate the table, so we do elimination.
+
+The consequence of elimination is a crash. Two things happen:
+- there is no LEFT JOIN anymore, so there is no NULL-complementing:
+Item_default_value has value 1317787993 (a good thing).
+- during elimination we do: bitmap_clear_all(tl->table->read_set). The
+intention is the following: if it turns out that some reference to
+this eliminated table had remained somewhere unnoticed, when a read of
+any column is tried from that reference it should trigger a failure of
+the assertion which checks that the column is marked in read_set
+(ASSERT_COLUMN_MARKED_FOR_READ). However, this breaks for our query:
+this Item's evaluation, because the item is not NULL anymore,
+continues into Field_new_decimal::val_decimal() which has this
+assertion (in Item_default_value::fix_fields() the column was added to
+read_set but join elimination cleared it afterwards). The assertion
+fires.
+
+If I remove the bitmap_clear_all() there is no more crash. But still,
+the query with elimination and without do not return the same thing
+(1317787993 vs NULL) because the value of DEFAULT is different.
+
+If we fix it, then we run the risk that future tests by QA, for any
+feature, will spot different-result queries when using DEFAULT, and
+will require manual inspection by QA to verify that this is because of
+our bugfix and not a new problem.
+
+The proposed solution is instead to avoid the problem: if a query
+contains DEFAULT, do not do elimination. We can do it in several more
+or less fine-grained ways.
+
+1. Detect if there is DEFAULT applied to a column of a weak-side
+table, by walking the entire query block, as a last check before doing
+elimination.
+
+2. Add a bool property to Query_block, 'bool
+m_has_items_forbidding_left_join_elimination', and set it to true in
+Item_default_value::fix_fields(); also propagate this property when
+merging a Query_block into a parent (like: view merging, semi-join,
+etc). Do not do elimination if this bool is true.
+
+3. Variant of 2: instead of a bool, let it be a map of the table
+referenced by DEFAULT; if several DEFAULTs are used, the map is the
+union. Do not do elimination for tables in this map.
+
+4. Improve the computation of used_tables() inside the logic of
+elimination: like is already done for aggregate and window functions,
+do not use their "deceiving" used_tables(), instead use
+argument->used_tables(); this would allow us to say "this table is
+actually referenced so do not eliminate it". But, we do not have
+information saying "this Item contains a DEFAULT", unlike in the case
+of aggregates where we have has_aggregation(), and this would be
+necessary in the lambda of CompileItem().
+
+5. Change the code of Item_default_value::used_tables() to return the
+argument's used_tables() instead of 0. This makes sense for our
+problem, but not in general: as said earlier, DEFAULT does not depend
+on the current row, at least in its definition (we saw it does depend
+on NULL-complementing, but this is a bug). Very long ago, it did
+return the argument's used_tables(), then was changed to return 0;
+changing it back thus sounds risky.
+
+1 is a bit costly (full walk). If we then find no DEFAULT, we gain a
+lot of execution time thanks to the elimination, which will compensate
+the costly walk; if we find a DEFAULT, we have paid the cost and get
+no gain. OTOH, DEFAULT in a SELECT query sounds quite improbable in a
+real-life customer query.
+
+3 is fast, OTOH it grows Query_block by 8 bytes.
+
+2 is fast, grows Query_block by 1 byte, or actually by 0 byte as we
+can re-use bit 1<<6 in active_options(), but is coarse-grained, more
+than 3 as it blocks elimination for _all_ tables.
+
+4 is not possible, as we saw.
+
+5 is not well-grounded in logic, and risks changing behaviour for
+other queries.
+
+The chosen solution is 2. If more problematic items are found in
+further testing, the flag can be renamed to a more generic name.
+---
+ mysql-test/include/join_elimination.inc       | 58 ++++++++++++++
+ mysql-test/r/join_elimination.result          | 75 ++++++++++++++++++
+ .../r/join_elimination-dstore.result          | 75 ++++++++++++++++++
+ sql/item.cc                                   |  4 +
+ sql/query_options.h                           |  8 +-
+ sql/sql_join_elimination.cc                   | 78 ++++++++++++++++++-
+ sql/sql_resolver.cc                           |  4 +
+ 7 files changed, 294 insertions(+), 8 deletions(-)
+
+diff --git a/mysql-test/include/join_elimination.inc b/mysql-test/include/join_elimination.inc
+index 721cbc699e0..c3b80467527 100644
+--- a/mysql-test/include/join_elimination.inc
++++ b/mysql-test/include/join_elimination.inc
+@@ -1036,4 +1036,62 @@ eval $query;
+ 
+ DROP TABLE t1,t2;
+ 
++--echo #
++--echo # BUGFIX The results of the left join query are inconsistent.
++--echo #
++
++CREATE TABLE t0 (c1 TINYINT DEFAULT '-45');
++INSERT INTO t0 VALUES(0),(1);
++CREATE TABLE t98 (c3 DECIMAL(10,0) NOT NULL DEFAULT '1317787993');
++
++--echo # The returned value, NULL, is a bug in MySQL, due to
++--echo # NULL-complementing of t98 :
++--echo # https://bugs.mysql.com/bug.php?id=119453 , result should be 1317787993.
++
++let $query=
++SELECT DEFAULT(t98.c3) FROM t0 LEFT JOIN t98 ON TRUE;
++eval EXPLAIN $query;
++eval $query;
++
++--echo # Elimination is here disabled because there is DEFAULT(X)
++--echo # where X is a column of a table on the right side of a left join.
++let $query=
++SELECT DEFAULT(t98.c3) FROM t0 LEFT JOIN t98 ON TRUE GROUP BY 1;
++eval EXPLAIN $query;
++eval $query;
++
++--echo # Elimination is not disabled because there is DEFAULT(X)
++--echo # where X is a column of a table _not_ on the right side of a left join.
++let $query=
++SELECT DEFAULT(t0.c1) FROM t0 LEFT JOIN t98 ON TRUE GROUP BY 1;
++eval EXPLAIN $query;
++eval $query;
++
++--echo # This query is not respecting GROUP BY's standard rules, but
++--echo # has deterministic result.
++SET SQL_MODE=0;
++
++--echo # Elimination is disabled. Given that DEFAULT evaluates to NULL (bug
++--echo # above), the fourth expression in GROUP BY takes two values: NULL and
++--echo # 1. Note that if we did elimination, there would be no
++--echo # NULL-complementing, DEFAULT would evaluate to 1317787993, the fourth
++--echo # expression in GROUP BY would take only one value: 1.
++ 
++let $query=
++SELECT t0.c1 FROM t0 NATURAL LEFT JOIN t98 GROUP BY '[', (((NOT (((-140958305)OR('2LE冑W.'))))) IS NULL), NULL, ((((t0.c1)OR(DEFAULT(t98.c3)))) IS NOT NULL), PI();
++eval EXPLAIN $query;
++eval $query;
++
++--echo # The same within a merged derived table and a merged semi-join, to
++--echo # verify that information about the presence of DEFAULT propagates
++--echo # through both. We cannot have GROUP BY in the derived table, or it
++--echo # would not be merged. See in EXPLAIN that there is no elimination.
++
++let $query=
++SELECT * FROM t0 AS t1 WHERE 1 IN (SELECT * FROM (SELECT t0.c1 FROM t0 NATURAL LEFT JOIN t98 WHERE ((((t0.c1)OR(DEFAULT(t98.c3)))) IS NOT NULL)) AS derived);
++eval EXPLAIN $query;
++eval $query;
++
++SET SQL_MODE=DEFAULT;
+ 
++DROP TABLE t0,t98;
+diff --git a/mysql-test/r/join_elimination.result b/mysql-test/r/join_elimination.result
+index 8c4608ed58b..522dd249347 100644
+--- a/mysql-test/r/join_elimination.result
++++ b/mysql-test/r/join_elimination.result
+@@ -2426,3 +2426,78 @@ INNER JOIN t1 t5 ON FALSE)
+ GROUP BY 1;
+ a
+ DROP TABLE t1,t2;
++#
++# BUGFIX The results of the left join query are inconsistent.
++#
++CREATE TABLE t0 (c1 TINYINT DEFAULT '-45');
++INSERT INTO t0 VALUES(0),(1);
++CREATE TABLE t98 (c3 DECIMAL(10,0) NOT NULL DEFAULT '1317787993');
++# The returned value, NULL, is a bug in MySQL, due to
++# NULL-complementing of t98 :
++# https://bugs.mysql.com/bug.php?id=119453 , result should be 1317787993.
++EXPLAIN SELECT DEFAULT(t98.c3) FROM t0 LEFT JOIN t98 ON TRUE;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
++1	SIMPLE	t98	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (hash join)
++Warnings:
++Note	1003	/* select#1 */ select default(`test`.`t98`.`c3`) AS `DEFAULT(t98.c3)` from `test`.`t0` left join `test`.`t98` on(true) where true
++SELECT DEFAULT(t98.c3) FROM t0 LEFT JOIN t98 ON TRUE;
++DEFAULT(t98.c3)
++NULL
++NULL
++# Elimination is here disabled because there is DEFAULT(X)
++# where X is a column of a table on the right side of a left join.
++EXPLAIN SELECT DEFAULT(t98.c3) FROM t0 LEFT JOIN t98 ON TRUE GROUP BY 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
++1	SIMPLE	t98	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (hash join)
++Warnings:
++Note	1003	/* select#1 */ select default(`test`.`t98`.`c3`) AS `DEFAULT(t98.c3)` from `test`.`t0` left join `test`.`t98` on(true) where true group by default(`test`.`t98`.`c3`)
++SELECT DEFAULT(t98.c3) FROM t0 LEFT JOIN t98 ON TRUE GROUP BY 1;
++DEFAULT(t98.c3)
++NULL
++# Elimination is not disabled because there is DEFAULT(X)
++# where X is a column of a table _not_ on the right side of a left join.
++EXPLAIN SELECT DEFAULT(t0.c1) FROM t0 LEFT JOIN t98 ON TRUE GROUP BY 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select default(`test`.`t0`.`c1`) AS `DEFAULT(t0.c1)` from `test`.`t0` group by default(`test`.`t0`.`c1`)
++SELECT DEFAULT(t0.c1) FROM t0 LEFT JOIN t98 ON TRUE GROUP BY 1;
++DEFAULT(t0.c1)
++-45
++# This query is not respecting GROUP BY's standard rules, but
++# has deterministic result.
++SET SQL_MODE=0;
++# Elimination is disabled. Given that DEFAULT evaluates to NULL (bug
++# above), the fourth expression in GROUP BY takes two values: NULL and
++# 1. Note that if we did elimination, there would be no
++# NULL-complementing, DEFAULT would evaluate to 1317787993, the fourth
++# expression in GROUP BY would take only one value: 1.
++EXPLAIN SELECT t0.c1 FROM t0 NATURAL LEFT JOIN t98 GROUP BY '[', (((NOT (((-140958305)OR('2LE冑W.'))))) IS NULL), NULL, ((((t0.c1)OR(DEFAULT(t98.c3)))) IS NOT NULL), PI();
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Using temporary
++1	SIMPLE	t98	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (hash join)
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t0`.`c1` AS `c1` from `test`.`t0` left join `test`.`t98` on(true) where true group by '[',(((0 = -(140958305)) and (0 = '2LE冑W.')) is null),NULL,(((0 <> `test`.`t0`.`c1`) or (0 <> default(`test`.`t98`.`c3`))) is not null)
++SELECT t0.c1 FROM t0 NATURAL LEFT JOIN t98 GROUP BY '[', (((NOT (((-140958305)OR('2LE冑W.'))))) IS NULL), NULL, ((((t0.c1)OR(DEFAULT(t98.c3)))) IS NOT NULL), PI();
++c1
++0
++1
++# The same within a merged derived table and a merged semi-join, to
++# verify that information about the presence of DEFAULT propagates
++# through both. We cannot have GROUP BY in the derived table, or it
++# would not be merged. See in EXPLAIN that there is no elimination.
++EXPLAIN SELECT * FROM t0 AS t1 WHERE 1 IN (SELECT * FROM (SELECT t0.c1 FROM t0 NATURAL LEFT JOIN t98 WHERE ((((t0.c1)OR(DEFAULT(t98.c3)))) IS NOT NULL)) AS derived);
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	Using where
++1	SIMPLE	t98	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; FirstMatch
++1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Using join buffer (hash join)
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`c1` AS `c1` from `test`.`t0` `t1` semi join (`test`.`t0` left join `test`.`t98` on(true)) where (`test`.`t0`.`c1` = 1)
++SELECT * FROM t0 AS t1 WHERE 1 IN (SELECT * FROM (SELECT t0.c1 FROM t0 NATURAL LEFT JOIN t98 WHERE ((((t0.c1)OR(DEFAULT(t98.c3)))) IS NOT NULL)) AS derived);
++c1
++0
++1
++SET SQL_MODE=DEFAULT;
++DROP TABLE t0,t98;
+diff --git a/mysql-test/suite/dstore_main/r/join_elimination-dstore.result b/mysql-test/suite/dstore_main/r/join_elimination-dstore.result
+index 823a7abe47a..ba27d29e040 100644
+--- a/mysql-test/suite/dstore_main/r/join_elimination-dstore.result
++++ b/mysql-test/suite/dstore_main/r/join_elimination-dstore.result
+@@ -2426,3 +2426,78 @@ INNER JOIN t1 t5 ON FALSE)
+ GROUP BY 1;
+ a
+ DROP TABLE t1,t2;
++#
++# BUGFIX The results of the left join query are inconsistent.
++#
++CREATE TABLE t0 (c1 TINYINT DEFAULT '-45');
++INSERT INTO t0 VALUES(0),(1);
++CREATE TABLE t98 (c3 DECIMAL(10,0) NOT NULL DEFAULT '1317787993');
++# The returned value, NULL, is a bug in MySQL, due to
++# NULL-complementing of t98 :
++# https://bugs.mysql.com/bug.php?id=119453 , result should be 1317787993.
++EXPLAIN SELECT DEFAULT(t98.c3) FROM t0 LEFT JOIN t98 ON TRUE;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
++1	SIMPLE	t98	NULL	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where; Using join buffer (hash join)
++Warnings:
++Note	1003	/* select#1 */ select default(`test`.`t98`.`c3`) AS `DEFAULT(t98.c3)` from `test`.`t0` left join `test`.`t98` on(true) where true
++SELECT DEFAULT(t98.c3) FROM t0 LEFT JOIN t98 ON TRUE;
++DEFAULT(t98.c3)
++NULL
++NULL
++# Elimination is here disabled because there is DEFAULT(X)
++# where X is a column of a table on the right side of a left join.
++EXPLAIN SELECT DEFAULT(t98.c3) FROM t0 LEFT JOIN t98 ON TRUE GROUP BY 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
++1	SIMPLE	t98	NULL	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where; Using join buffer (hash join)
++Warnings:
++Note	1003	/* select#1 */ select default(`test`.`t98`.`c3`) AS `DEFAULT(t98.c3)` from `test`.`t0` left join `test`.`t98` on(true) where true group by default(`test`.`t98`.`c3`)
++SELECT DEFAULT(t98.c3) FROM t0 LEFT JOIN t98 ON TRUE GROUP BY 1;
++DEFAULT(t98.c3)
++NULL
++# Elimination is not disabled because there is DEFAULT(X)
++# where X is a column of a table _not_ on the right side of a left join.
++EXPLAIN SELECT DEFAULT(t0.c1) FROM t0 LEFT JOIN t98 ON TRUE GROUP BY 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select default(`test`.`t0`.`c1`) AS `DEFAULT(t0.c1)` from `test`.`t0` group by default(`test`.`t0`.`c1`)
++SELECT DEFAULT(t0.c1) FROM t0 LEFT JOIN t98 ON TRUE GROUP BY 1;
++DEFAULT(t0.c1)
++-45
++# This query is not respecting GROUP BY's standard rules, but
++# has deterministic result.
++SET SQL_MODE=0;
++# Elimination is disabled. Given that DEFAULT evaluates to NULL (bug
++# above), the fourth expression in GROUP BY takes two values: NULL and
++# 1. Note that if we did elimination, there would be no
++# NULL-complementing, DEFAULT would evaluate to 1317787993, the fourth
++# expression in GROUP BY would take only one value: 1.
++EXPLAIN SELECT t0.c1 FROM t0 NATURAL LEFT JOIN t98 GROUP BY '[', (((NOT (((-140958305)OR('2LE冑W.'))))) IS NULL), NULL, ((((t0.c1)OR(DEFAULT(t98.c3)))) IS NOT NULL), PI();
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Using temporary
++1	SIMPLE	t98	NULL	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where; Using join buffer (hash join)
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t0`.`c1` AS `c1` from `test`.`t0` left join `test`.`t98` on(true) where true group by '[',(((0 = -(140958305)) and (0 = '2LE冑W.')) is null),NULL,(((0 <> `test`.`t0`.`c1`) or (0 <> default(`test`.`t98`.`c3`))) is not null)
++SELECT t0.c1 FROM t0 NATURAL LEFT JOIN t98 GROUP BY '[', (((NOT (((-140958305)OR('2LE冑W.'))))) IS NULL), NULL, ((((t0.c1)OR(DEFAULT(t98.c3)))) IS NOT NULL), PI();
++c1
++0
++1
++# The same within a merged derived table and a merged semi-join, to
++# verify that information about the presence of DEFAULT propagates
++# through both. We cannot have GROUP BY in the derived table, or it
++# would not be merged. See in EXPLAIN that there is no elimination.
++EXPLAIN SELECT * FROM t0 AS t1 WHERE 1 IN (SELECT * FROM (SELECT t0.c1 FROM t0 NATURAL LEFT JOIN t98 WHERE ((((t0.c1)OR(DEFAULT(t98.c3)))) IS NOT NULL)) AS derived);
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	Using where
++1	SIMPLE	t98	NULL	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where; FirstMatch
++1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Using join buffer (hash join)
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`c1` AS `c1` from `test`.`t0` `t1` semi join (`test`.`t0` left join `test`.`t98` on(true)) where (`test`.`t0`.`c1` = 1)
++SELECT * FROM t0 AS t1 WHERE 1 IN (SELECT * FROM (SELECT t0.c1 FROM t0 NATURAL LEFT JOIN t98 WHERE ((((t0.c1)OR(DEFAULT(t98.c3)))) IS NOT NULL)) AS derived);
++c1
++0
++1
++SET SQL_MODE=DEFAULT;
++DROP TABLE t0,t98;
+diff --git a/sql/item.cc b/sql/item.cc
+index 5223adf44fa..0fe993e8efa 100644
+--- a/sql/item.cc
++++ b/sql/item.cc
+@@ -8941,6 +8941,10 @@ bool Item_default_value::fix_fields(THD *thd, Item **) {
+   // Always allow a "read" from the default value.
+   field->table->mark_column_used(field, MARK_COLUMNS_READ);
+ 
++  if (table_ref != nullptr && table_ref->query_block != nullptr &&
++      field->table->is_nullable())
++    table_ref->query_block->add_base_options(OPTION_DEFAULT_WEAK_COLUMN);
++
+   return false;
+ }
+ 
+diff --git a/sql/query_options.h b/sql/query_options.h
+index 34d6178dfa7..1ca701475a5 100644
+--- a/sql/query_options.h
++++ b/sql/query_options.h
+@@ -54,10 +54,10 @@
+ // Free slot, used to be SELECT_DESCRIBE: (1ULL << 2)
+ #define SELECT_SMALL_RESULT (1ULL << 3)  // SELECT, user
+ #define SELECT_BIG_RESULT (1ULL << 4)    // SELECT, user
+-#define OPTION_FOUND_ROWS \
+-  (1ULL << 5)                             // SELECT, user
+-                                          // 1ULL << 6 is free
+-#define SELECT_NO_JOIN_CACHE (1ULL << 7)  // intern
++#define OPTION_FOUND_ROWS (1ULL << 5)    // SELECT, user
++// In MySQL Community version, this bit is said to be free so we re-use it
++#define OPTION_DEFAULT_WEAK_COLUMN (1ULL << 6)  // SELECT, intern
++#define SELECT_NO_JOIN_CACHE (1ULL << 7)        // intern
+ /** always the opposite of OPTION_NOT_AUTOCOMMIT except when in fix_autocommit()
+  */
+ #define OPTION_AUTOCOMMIT (1ULL << 8)          // THD, user
+diff --git a/sql/sql_join_elimination.cc b/sql/sql_join_elimination.cc
+index 0cf6f316ea6..a8bfeebdc8a 100644
+--- a/sql/sql_join_elimination.cc
++++ b/sql/sql_join_elimination.cc
+@@ -150,8 +150,10 @@
+   BY or DISTINCT or within semi- and anti-joins or certain sub-queries. The
+   eliminated table is removed from Query_block's m_table_nest (so that the
+   rewritten query printed by EXPLAIN does not show it) and leaf_tables (so
+-  that JOIN::optimize() ignores it), and not removed from Query_block's
+-  m_table_list (for cleanup-related reasons, see further down).
++  that JOIN::optimize() ignores it), but not removed from Query_block's
++  m_table_list (for cleanup-related reasons, see further down), and not
++  removed from LEX::query_tables (which implies that they will be opened at
++  the next execution, if in a prepared statement).
+ 
+   @section IMPLEMENTATION_CALL_ORDER Order of calls in the implementation
+ 
+@@ -223,6 +225,71 @@
+   update any nested_join's maps; so, not impossible but significant work, and
+   risky as our changes can extend to the whole query.
+ 
++  @section IMPLEMENTATION_DEFAULT Solving the problem of DEFAULT(column).
++
++  https://dev.mysql.com/doc/refman/8.0/en/miscellaneous-functions.html#function_default
++
++  Considering:
++  CREATE TABLE t0 (c1 TINYINT);
++  INSERT INTO t0 VALUES(0),(1);
++  CREATE TABLE t98 (c3 DECIMAL(10,0) NOT NULL DEFAULT '1317787993');
++  (necessary details: declared NOT NULL and with a default).
++
++  We expect DEFAULT(t98.c3) to return 1317787993.
++  This is generally the case, but not for:
++
++  SELECT DEFAULT(t98.c3) FROM t0 LEFT JOIN t98 ON TRUE;
++
++  In Item_default_value::fix_fields(), we make a Field and point it to
++  the default value (s->default_values). During execution, we have
++  NULL-complementing for t98, so we fill table->record[0] with NULLs and
++  call t98->set_nullable(); then we evaluate DEFAULT, which calls
++  Item_field::send(), which tests Field:is_null() which returns true
++  because, when the field is not nullable (like here),
++  table->is_nullable() is used :
++
++  Field::is_null() {
++      if (is_nullable()) return (m_null_ptr[row_offset] & null_bit);
++      if (is_tmp_nullable()) return m_is_tmp_null;
++      return table->has_null_row();  <- HERE
++  }
++
++  (if the field had been nullable, the first if() would trigger, and as
++  m_null_ptr points into the default values, which are not NULL,
++  is_null() would have returned false). We can say that DEFAULT is
++  isolated from the current row of the table by having a different
++  record pointer, but alas not totally isolated as both share the
++  'table' pointer and thus share the value of table->has_null_row().
++
++  So the SELECT returns NULL. This is a bug in MySQL, which we filed as
++  https://bugs.mysql.com/bug.php?id=119453 . (If the field had been nullable,
++  the SELECT would have returned 1317787993.)
++
++  Let's now add GROUP BY 1 to our query:
++  SELECT DEFAULT(t98.c3) FROM t0 LEFT JOIN t98 ON TRUE GROUP BY 1;
++
++  Then left join elimination is tried on this query ;
++  Item_default_value::used_tables() is always 0 (which is actually sensible as
++  it's not really a reference: DEFAULT is not going to need any row of the
++  table, only return a default found in the table's definition), so this
++  reference is ignored when we wonder if we can eliminate the table, so we do
++  elimination, and during elimination we do:
++  bitmap_clear_all(tl->table->read_set). However, this breaks for our query:
++  this Item's evaluation, because the item is not NULL-complemented anymore,
++  continues into Field_new_decimal::val_decimal() which has
++  ASSERT_COLUMN_MARKED_FOR_READ (in Item_default_value::fix_fields() the
++  column was added to read_set but join elimination cleared it afterwards).
++  The assertion fires.
++
++  If we removed the read_set clearing, Item_default_value would return
++  1317787993.
++
++  Because we would like to keep our read_set-clearing, and we prefer to not
++  have a result difference between without- and with-elimination, and fixing
++  the MySQL bug is not doable with short and clean code, we chose to avoid the
++  problem: if a query contains DEFAULT(X) where X is a column of a table on
++  the right side of a left join, we do not do elimination.
++
+   @section INNER_JOIN_ELIMINATION Principle of inner join elimination
+ 
+   As explained in the previous paragraphs, the key point which makes left join
+@@ -584,6 +651,9 @@ void Query_block::do_join_elimination(THD *thd) {
+     }
+   }
+ 
++  // See IMPLEMENTATION_DEFAULT in the Doxygen comment at file's top.
++  if (active_options() & OPTION_DEFAULT_WEAK_COLUMN) return;
++
+   assert(outer_join != 0);
+   /* There will be multiple recursive calls to do_join_elimination_for_list()
+   possibly. Each of them will be on a different join nest, and want to compute
+@@ -896,7 +966,7 @@ void Query_block::do_join_elimination_for_list(
+     if (can_eliminate) {
+       /* Scan leaf_tables and remove from it the tables which have a bit in
+       weak_tables. Correct leaf_table_count. */
+-      bool removed_a_table = false;
++      bool removed_a_table [[maybe_unused]] = false;
+       Table_ref *prev_tl = nullptr;
+       for (auto tl = leaf_tables; tl; tl = tl->next_leaf) {
+         if (tl->map() & weak_tables) {
+@@ -967,7 +1037,7 @@ void Query_block::do_join_elimination_for_list(
+         Table_ref *prev_table = *(li - 1);
+         if (prev_table->dep_tables & weak_tables) {
+           /* Yes there is a problematic reference, so replace the bits. Cannot
+-          first in the order of FROM, as the removed table is on the right
++          be first in the order of FROM, as the removed table is on the right
+           side of a LEFT JOIN. */
+           assert(li != tables->end());
+           Table_ref *next_table = *(li + 1);
+diff --git a/sql/sql_resolver.cc b/sql/sql_resolver.cc
+index 738ab1cb600..917c6976d6d 100644
+--- a/sql/sql_resolver.cc
++++ b/sql/sql_resolver.cc
+@@ -3270,6 +3270,8 @@ bool Query_block::convert_subquery_to_semijoin(
+ 
+   if (subq_query_block->active_options() & OPTION_SCHEMA_TABLE)
+     add_base_options(OPTION_SCHEMA_TABLE);
++  if (subq_query_block->active_options() & OPTION_DEFAULT_WEAK_COLUMN)
++    add_base_options(OPTION_DEFAULT_WEAK_COLUMN);
+ 
+   if (outer_join) propagate_nullability(&sj_nest->nested_join->m_tables, true);
+ 
+@@ -3606,6 +3608,8 @@ bool Query_block::merge_derived(THD *thd, Table_ref *derived_table) {
+   // @todo: Add to BASE options instead
+   if (derived_query_block->active_options() & OPTION_SCHEMA_TABLE)
+     add_base_options(OPTION_SCHEMA_TABLE);
++  if (derived_query_block->active_options() & OPTION_DEFAULT_WEAK_COLUMN)
++    add_base_options(OPTION_DEFAULT_WEAK_COLUMN);
+ 
+   // Propagate nullability for derived tables within outer joins:
+   if (derived_table->is_inner_table_of_outer_join())
+-- 
+2.23.0
+

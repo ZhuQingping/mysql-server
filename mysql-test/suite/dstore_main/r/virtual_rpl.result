@@ -1,0 +1,88 @@
+include/master-slave.inc
+Warnings:
+Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
+[connection master]
+#
+# BUG2025061129397: Unknown (generic) error from engine' from storage engine, Error_code: 1030;
+#                   Last_Error: Coordinator stopped because there were error(s) in the worker(s).
+#
+# master
+CREATE TABLE `multi_tbl_3_all_type2index` (
+`int_col` INT DEFAULT NULL,
+`time_col` TIME(6) DEFAULT NULL,
+INDEX `ndx_int_time_col` ((`int_col` * 10))
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO multi_tbl_3_all_type2index (int_col, time_col) VALUES (1, '23:59:59.000000');
+SELECT * FROM multi_tbl_3_all_type2index;
+int_col	time_col
+1	23:59:59.000000
+# slave
+SELECT * FROM multi_tbl_3_all_type2index;
+int_col	time_col
+1	23:59:59.000000
+# master
+DELETE FROM multi_tbl_3_all_type2index;
+SELECT * FROM multi_tbl_3_all_type2index;
+int_col	time_col
+# slave
+SELECT * FROM multi_tbl_3_all_type2index;
+int_col	time_col
+# master
+DROP TABLE multi_tbl_3_all_type2index;
+#
+# BUG2025092430438
+#
+create table t1(c_char char(4),c2 varbinary(255),c3 set('111','222','333'),c_varchar varchar(255),c5 double,c6 TIMESTAMP);
+create table t2(c_char char(4),c2 varbinary(255),c3 set('111','222','333'),c_varchar varchar(255),c5 double,c6 INT);
+alter table t1 add index(c5);
+alter table t1 add index(c2);
+alter table t2 add index(c5);
+alter table t2 add index(c2);
+alter table t1 add column c_generate char(4)  as (c_char) virtual first;
+alter table t1 add column c6_generate TIMESTAMP  as (c6) virtual first;
+alter table t2 add column c_generate varbinary(255) as (c2) virtual;
+alter table t2 add column c6_generate INT as (c6) virtual first;
+alter table t1 add index(c_generate);
+alter table t1 add index(c6_generate);
+alter table t2 add index(c_generate);
+alter table t2 add index(c6_generate);
+insert into t1 (c_char,c2,c3,c_varchar,c5,c6) values('aabb','a',NULL,'bbbbbbbbcd',-1.7976931348623157e+308, '2024-12-31 23:59:59');
+insert into t2 (c_char,c2,c3,c_varchar,c5,c6) values('aabb','a',NULL,'bbbbbbbbcd',-1.7976931348623157e+308, 1);
+# master
+update t1 set c_char='ccdd';
+update t1 set c6='2024-12-31 00:00:00';
+update t2 set c2='b';
+update t2 set c6=2;
+select * from t1;
+c6_generate	c_generate	c_char	c2	c3	c_varchar	c5	c6
+2024-12-31 00:00:00	ccdd	ccdd	a	NULL	bbbbbbbbcd	-1.7976931348623157e308	2024-12-31 00:00:00
+select * from t2;
+c6_generate	c_char	c2	c3	c_varchar	c5	c6	c_generate
+2	aabb	b	NULL	bbbbbbbbcd	-1.7976931348623157e308	2	b
+# slave
+SELECT * FROM t1;
+c6_generate	c_generate	c_char	c2	c3	c_varchar	c5	c6
+2024-12-31 00:00:00	ccdd	ccdd	a	NULL	bbbbbbbbcd	-1.7976931348623157e308	2024-12-31 00:00:00
+SELECT * FROM t2;
+c6_generate	c_char	c2	c3	c_varchar	c5	c6	c_generate
+2	aabb	b	NULL	bbbbbbbbcd	-1.7976931348623157e308	2	b
+# master
+DROP TABLE t2,t1;
+#
+# BUG2025092916883: master-replica binlog replication. Delete table with expression index on master,
+#                   the replication is interrupted, Error_code: 1030; handler error HA_ERR_GENERIC.
+# 
+CREATE TABLE `multi_tbl_3_all_type2index` (
+`int_col` int DEFAULT NULL,
+`time_col` time(6) DEFAULT NULL,
+KEY `ndx_int_time_col` ((((`int_col` * 10) + `time_col`)),`time_col`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO multi_tbl_3_all_type2index (int_col, time_col) VALUES (1, '24:59:59.000000');
+DELETE FROM multi_tbl_3_all_type2index;
+# slave
+SELECT * FROM multi_tbl_3_all_type2index;
+int_col	time_col
+# master
+DROP TABLE multi_tbl_3_all_type2index;
+include/rpl_end.inc

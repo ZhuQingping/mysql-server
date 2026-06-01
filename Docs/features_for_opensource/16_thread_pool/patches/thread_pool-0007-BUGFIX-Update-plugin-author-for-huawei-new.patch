@@ -1,0 +1,92 @@
+From 5704a73548f0d7c965cd8b334fdd2039cf47d757 Mon Sep 17 00:00:00 2001
+From: zhuqingping <zhuqingping1@contributor>
+
+
+Date: Thu, 4 Sep 2025 20:43:46 +0800
+Subject: [PATCH] BUGFIX Update plugin author for huawei new added
+ plugins
+
+Issue:
+------
+Huawei new add several plugins, like: Dstore, threadpool, etc.
+But the plugin author not correct, still use Oracle's information.
+
+Solution:
+---------
+Correct author info to 'Huawei Technologies Co. Ltd' for new added plugins.
+---
+ include/mysql/plugin.h                 | 2 +-
+ mysql-test/r/huawei_add_plugins.result | 7 +++++++
+ mysql-test/t/huawei_add_plugins.test   | 5 +++++
+ plugin/threadpool/threadpool_plugin.cc | 2 +-
+ storage/dstore/handler/ha_cde.cc       | 2 +-
+ 5 files changed, 15 insertions(+), 3 deletions(-)
+ create mode 100644 mysql-test/r/huawei_add_plugins.result
+ create mode 100644 mysql-test/t/huawei_add_plugins.test
+
+diff --git a/include/mysql/plugin.h b/include/mysql/plugin.h
+index cd5b53a250b..60c82a0baf8 100644
+--- a/include/mysql/plugin.h
++++ b/include/mysql/plugin.h
+@@ -134,7 +134,7 @@ struct MYSQL_XID {
+ #define PLUGIN_LICENSE_BSD_STRING "BSD"
+ 
+ #define PLUGIN_AUTHOR_ORACLE "Oracle Corporation"
+-#define PLUGIN_AUTHOR_HUAWEI "Huawei"
++#define PLUGIN_AUTHOR_HUAWEI "Huawei Technologies Co. Ltd"
+ 
+ /*
+   Macros for beginning and ending plugin declarations.  Between
+diff --git a/mysql-test/r/huawei_add_plugins.result b/mysql-test/r/huawei_add_plugins.result
+new file mode 100644
+index 00000000000..fbc0781f4bb
+--- /dev/null
++++ b/mysql-test/r/huawei_add_plugins.result
+@@ -0,0 +1,7 @@
++select * from information_schema.plugins where plugin_name like '%dstore%' or plugin_name in ('audit_log','threadpool') order by plugin_name;
++PLUGIN_NAME	PLUGIN_VERSION	PLUGIN_STATUS	PLUGIN_TYPE	PLUGIN_TYPE_VERSION	PLUGIN_LIBRARY	PLUGIN_LIBRARY_VERSION	PLUGIN_AUTHOR	PLUGIN_DESCRIPTION	PLUGIN_LICENSE	LOAD_OPTION
++Dstore	0.1	ACTIVE	STORAGE ENGINE	80041.0	NULL	NULL	Huawei Technologies Co. Ltd	Dstore storage engine	GPL	ON
++DSTORE_BUFFER_POOL_STATS	0.1	ACTIVE	INFORMATION SCHEMA	80041.0	NULL	NULL	Huawei Technologies Co. Ltd	DStore bufferpool statistic infomation	GPL	ON
++DSTORE_LOCKS	0.1	ACTIVE	INFORMATION SCHEMA	80041.0	NULL	NULL	Huawei Technologies Co. Ltd	DStore locks	GPL	ON
++DSTORE_TRX	0.1	ACTIVE	INFORMATION SCHEMA	80041.0	NULL	NULL	Huawei Technologies Co. Ltd	DStore transactions	GPL	ON
++threadpool	0.1	ACTIVE	DAEMON	80041.0	NULL	NULL	Huawei Technologies Co. Ltd	Thread pool from Percona 8.0 and enhanced	GPL	ON
+diff --git a/mysql-test/t/huawei_add_plugins.test b/mysql-test/t/huawei_add_plugins.test
+new file mode 100644
+index 00000000000..20e6e31036d
+--- /dev/null
++++ b/mysql-test/t/huawei_add_plugins.test
+@@ -0,0 +1,5 @@
++# The test case to identify new added plugins
++
++# Display huawei new added plugins
++select * from information_schema.plugins where plugin_name like '%dstore%' or plugin_name in ('audit_log','threadpool') order by plugin_name;
++
+diff --git a/plugin/threadpool/threadpool_plugin.cc b/plugin/threadpool/threadpool_plugin.cc
+index 18255e93523..309dd8f5ec9 100644
+--- a/plugin/threadpool/threadpool_plugin.cc
++++ b/plugin/threadpool/threadpool_plugin.cc
+@@ -710,7 +710,7 @@ mysql_declare_plugin(threadpool){
+     MYSQL_DAEMON_PLUGIN,           /* type                            */
+     &threadpool_plugin_info,       /* descriptor                      */
+     "threadpool",                  /* name                            */
+-    "Huawei Technologies Co. Ltd", /* author                          */
++    PLUGIN_AUTHOR_HUAWEI,     /* author */
+     "Thread pool from Percona 8.0 and enhanced", /* description        */
+     PLUGIN_LICENSE_GPL,       /* plugin license                  */
+     threadpool_plugin_init,   /* init function (when loaded)     */
+diff --git a/storage/dstore/handler/ha_cde.cc b/storage/dstore/handler/ha_cde.cc
+index 34fac55ca7f..bf7ad26b38b 100644
+--- a/storage/dstore/handler/ha_cde.cc
++++ b/storage/dstore/handler/ha_cde.cc
+@@ -6346,7 +6346,7 @@ mysql_declare_plugin(cde){
+     MYSQL_STORAGE_ENGINE_PLUGIN,
+     &CDE::cde_storage_engine,
+     DSTORE_ENGINE_NAME,
+-    PLUGIN_AUTHOR_ORACLE,
++    PLUGIN_AUTHOR_HUAWEI,
+     "Dstore storage engine",
+     PLUGIN_LICENSE_GPL,
+     CDE::CdeInit,   /* Plugin Init */
+-- 
+2.23.0
+

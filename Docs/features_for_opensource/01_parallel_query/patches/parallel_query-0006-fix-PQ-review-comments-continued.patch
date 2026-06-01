@@ -1,0 +1,641 @@
+From ed4274c30ff090f711131a75d41a6ad69a6a5786 Mon Sep 17 00:00:00 2001
+From: wangjin <wangjin53@contributor>
+
+Date: Thu, 25 Dec 2025 15:07:58 +0800
+Subject: [PATCH] fix PQ review comments
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Issue:
+Address the review comments raised in merge request 'Support Parallel Query for
+InnoDB storage engine', list blow:
+'but there can be more "nested" cases like : FROM (t1 JOIN t2) LEFT JOIN
+(t3 LEFT JOIN (t4 JOIN t5) ON ...) ON COND . For such query,
+orig->m_current_table_nest is a tree: a list of Table_ref, but each Table_ref
+has a NESTED_JOIN sub-object inside, which itself contains a list of Table_ref,
+etc... The duplication code here puts in select->m_current_table_nest only the
+tree-leaf Table_ref (the base tables), not the Table_ref-s which have
+NESTED_JOINs.'
+
+Fix:
+When generate the PTRC key for the worker, no longer fully clone all the
+SELECT/JOIN‑related information that the logic depends on. Instead, we locate
+the corresponding cloned Table_ref based on the information in the original
+plan and then generate the cloned PTRC key from that.
+
+TABLE::read_set_internal is a new bitmap introduced in the MySQL community
+version between 8.0.22 and 8.0.41. Since the PQ code was originally based on
+8.0.22, it was not updated accordingly. In the make_key_cols_tables function,
+we rely on the TABLE::read_set_internal bitmap to determine whether the
+outer-table fields of a nestloop join are ptrc keys. Therefore, we need to add
+the corresponding handling in Item_field::refix_fields and pq_dup_tabs,
+following the logic used for TABLE::read_set.
+
+Also added some 'const' to indicate we don't change a source set.
+
+Also, replaced a test of !is_union() with is_simple(); in MySQL 8.0.22
+the two were equivalent, but since we upgraded to 8.0.41, which
+supports INTERSECT and EXCEPT, they now differ; without this little
+code change, the function subquery_suite_for_parallel_query() excluded
+UNIONs but suddenly allowed INTERSECT and EXCEPT, which it should
+not.
+---
+ mysql-test/r/join.result                      |  12 --
+ mysql-test/r/join.result-pq                   |  12 --
+ .../r/refactor_fix_fields.result-pq           |   4 -
+ .../suite/ptrc/r/partial_result_cache.result  | 103 +++++++++++++++++
+ .../ptrc/r/partial_result_cache.result-pq     | 107 ++++++++++++++++++
+ mysql-test/suite/ptrc/r/ptrc_bugs.result-pq   |  37 +++---
+ .../suite/ptrc/t/partial_result_cache.test    |  45 +++++++-
+ mysql-test/t/join.test                        |   5 -
+ sql/item_subselect.cc                         |  64 ++++++++++-
+ sql/parallel_query/pq_clone.cc                |  28 +----
+ sql/parallel_query/pq_refix_fields_item.cc    |   1 +
+ sql/partial_result_cache.cc                   |   2 +-
+ sql/sql_union.cc                              |   2 +-
+ 13 files changed, 340 insertions(+), 82 deletions(-)
+
+diff --git a/mysql-test/r/join.result b/mysql-test/r/join.result
+index 2826551d183..70ad40bb83f 100644
+--- a/mysql-test/r/join.result
++++ b/mysql-test/r/join.result
+@@ -1840,18 +1840,6 @@ from t t2
+ left join t t3 on t3.a>t2.a-t1.a)
+ 1	10	3
+ 2	20	4
+-set rds_partial_result_cache_cost_threshold=0;
+-set optimizer_switch="partial_result_cache=on";
+-select t1.*, (select count(*)
+-from t t2
+-left join t t3 on t3.a>t2.a-t1.a)
+-from t t1;
+-a	b	(select count(*)
+-from t t2
+-left join t t3 on t3.a>t2.a-t1.a)
+-1	10	3
+-2	20	4
+-set rds_partial_result_cache_cost_threshold=default;
+ explain format=tree select t1.a, (select count(*)
+ from t t2
+ left join t t3 on t3.a>t2.a-t1.a)
+diff --git a/mysql-test/r/join.result-pq b/mysql-test/r/join.result-pq
+index ddbe3d91ca1..561178341bd 100644
+--- a/mysql-test/r/join.result-pq
++++ b/mysql-test/r/join.result-pq
+@@ -1861,18 +1861,6 @@ from t t2
+ left join t t3 on t3.a>t2.a-t1.a)
+ 1	10	3
+ 2	20	4
+-set rds_partial_result_cache_cost_threshold=0;
+-set optimizer_switch="partial_result_cache=on";
+-select t1.*, (select count(*)
+-from t t2
+-left join t t3 on t3.a>t2.a-t1.a)
+-from t t1;
+-a	b	(select count(*)
+-from t t2
+-left join t t3 on t3.a>t2.a-t1.a)
+-1	10	3
+-2	20	4
+-set rds_partial_result_cache_cost_threshold=default;
+ explain format=tree select t1.a, (select count(*)
+ from t t2
+ left join t t3 on t3.a>t2.a-t1.a)
+diff --git a/mysql-test/suite/parallel_query/r/refactor_fix_fields.result-pq b/mysql-test/suite/parallel_query/r/refactor_fix_fields.result-pq
+index 9856332896a..aacec74437c 100644
+--- a/mysql-test/suite/parallel_query/r/refactor_fix_fields.result-pq
++++ b/mysql-test/suite/parallel_query/r/refactor_fix_fields.result-pq
+@@ -450,10 +450,6 @@ Warning	1292	Truncated incorrect time value: '32767'
+ Warning	1292	Truncated incorrect time value: '-32768'
+ Warning	1292	Truncated incorrect time value: '32767'
+ Warning	1292	Truncated incorrect time value: '-32768'
+-Warning	1292	Truncated incorrect time value: '32767'
+-Warning	1292	Truncated incorrect time value: '-32768'
+-Warning	1292	Truncated incorrect time value: '32767'
+-Warning	1292	Truncated incorrect time value: '-32768'
+ drop table tbl_1_all_type2index, tbl_1_all_type2index_desc;
+ create table t1 (
+ id_col int not null auto_increment,
+diff --git a/mysql-test/suite/ptrc/r/partial_result_cache.result b/mysql-test/suite/ptrc/r/partial_result_cache.result
+index 31a46697562..5814b8d862f 100644
+--- a/mysql-test/suite/ptrc/r/partial_result_cache.result
++++ b/mysql-test/suite/ptrc/r/partial_result_cache.result
+@@ -3723,3 +3723,106 @@ d	a	b	c
+ 5	1	1	2
+ drop table t1;
+ drop table t2;
++create table t(a int, b int);
++insert into t values(1,10),(2,20);
++create table tt (f1 int, f2 int, KEY f1 (f1));
++insert into tt values (1,10),(2,20),(3,30),(4,40);
++create table t2(a int, key(a), b int);
++set optimizer_switch="block_nested_loop=off";
++explain format=tree SELECT t1.* , ( SELECT count(*) FROM t t2 LEFT JOIN t t3 ON t3.a > t2.a - t1.a ) FROM t t1;
++EXPLAIN
++-> Table scan on t1 
++-> Select #2 (subquery in projection; dependent)
++    -> Result cache : cache keys(t1.a)
++        -> Aggregate: count(0) 
++            -> Nested loop left join 
++                -> Table scan on t2 
++                -> Result cache : cache keys(t1.a, t2.a) 
++                    -> Filter: (t3.a > (t2.a - t1.a)) 
++                        -> Table scan on t3 
++
++Warnings:
++Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
++SELECT t1.* , ( SELECT count(*) FROM t t2 LEFT JOIN t t3 ON t3.a > t2.a - t1.a ) FROM t t1;
++a	b	( SELECT count(*) FROM t t2 LEFT JOIN t t3 ON t3.a > t2.a - t1.a )
++1	10	3
++2	20	4
++explain format=tree select t1.*, (select count(*)
++from (t t2 join t t3)
++left join (t t4 LEFT JOIN (t t5 JOIN t t6) ON t4.a>t5.a-t1.a) on t3.a>t2.a-t1.a)
++from t t1;
++EXPLAIN
++-> Table scan on t1 
++-> Select #2 (subquery in projection; dependent)
++    -> Result cache : cache keys(t1.a)
++        -> Aggregate: count(0) 
++            -> Nested loop left join 
++                -> Nested loop inner join 
++                    -> Table scan on t2 
++                    -> Result cache : cache keys(t1.a, t2.a) 
++                        -> Table scan on t3 
++                -> Result cache : cache keys(t1.a, t2.a, t3.a) 
++                    -> Nested loop left join 
++                        -> Filter: (t3.a > (t2.a - t1.a)) 
++                            -> Table scan on t4 
++                        -> Result cache : cache keys(t1.a, t2.a, t3.a, t4.a) 
++                            -> Nested loop inner join 
++                                -> Filter: (t4.a > (t5.a - t1.a)) 
++                                    -> Table scan on t5 
++                                -> Result cache : cache keys(t1.a, t2.a, t3.a, t4.a, t5.a) 
++                                    -> Table scan on t6 
++
++Warnings:
++Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
++Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
++select t1.*, (select count(*)
++from (t t2 join t t3)
++left join (t t4 LEFT JOIN (t t5 JOIN t t6) ON t4.a>t5.a-t1.a) on t3.a>t2.a-t1.a)
++from t t1;
++a	b	(select count(*)
++from (t t2 join t t3)
++left join (t t4 LEFT JOIN (t t5 JOIN t t6) ON t4.a>t5.a-t1.a) on t3.a>t2.a-t1.a)
++1	10	19
++2	20	32
++set optimizer_switch=default;
++explain format=tree SELECT t11.* , ( SELECT max(t1.f1) FROM tt t1 WHERE NOT EXISTS ( SELECT * FROM tt t2 JOIN tt t3 ON t2.f1 < NULL WHERE t1.f1 = t2.f1 AND t1.f1 < t11.a ) ) FROM t t11;
++EXPLAIN
++-> Table scan on t11 
++-> Select #2 (subquery in projection; dependent)
++    -> Result cache : cache keys(t11.a)
++        -> Aggregate: max(t1.f1) 
++            -> Nested loop antijoin 
++                -> Index scan on t1 using f1 
++                -> Result cache : cache keys(t1.f1, t11.a) 
++                    -> Nested loop inner join 
++                        -> Filter: ((t1.f1 < t11.a) and (t1.f1 < NULL)) 
++                            -> Covering index lookup on t2 using f1 (f1=t1.f1) 
++                        -> Result cache : cache keys(t1.f1, t11.a, t2.f1) 
++                            -> Index scan on t3 using f1 
++
++Warnings:
++Note	1276	Field or reference 'test.t1.f1' of SELECT #3 was resolved in SELECT #2
++Note	1276	Field or reference 'test.t1.f1' of SELECT #3 was resolved in SELECT #2
++Note	1276	Field or reference 'test.t11.a' of SELECT #3 was resolved in SELECT #1
++SELECT t11.* , ( SELECT max(t1.f1) FROM tt t1 WHERE NOT EXISTS ( SELECT * FROM tt t2 JOIN tt t3 ON t2.f1 < NULL WHERE t1.f1 = t2.f1 AND t1.f1 < t11.a ) ) FROM t t11;
++a	b	( SELECT max(t1.f1) FROM tt t1 WHERE NOT EXISTS ( SELECT * FROM tt t2 JOIN tt t3 ON t2.f1 < NULL WHERE t1.f1 = t2.f1 AND t1.f1 < t11.a ) )
++1	10	4
++2	20	4
++explain format=tree select (select t3.b from (t2 as t5 left join (t2 as t3 force index (a) left join t2 as t4 on true) on t3.a=t_.a)) from t2 as t_;
++EXPLAIN
++-> Index scan on t_ using a 
++-> Select #2 (subquery in projection; dependent)
++    -> Result cache : cache keys(t_.a)
++        -> Nested loop left join 
++            -> Index scan on t5 using a 
++            -> Result cache : cache keys(t_.a) 
++                -> Nested loop left join 
++                    -> Index lookup on t3 using a (a=t_.a) 
++                    -> Result cache : cache keys(t3.a, t3.b, t_.a) 
++                        -> Index scan on t4 using a 
++
++Warnings:
++Note	1276	Field or reference 'test.t_.a' of SELECT #2 was resolved in SELECT #1
++select (select t3.b from (t2 as t5 left join (t2 as t3 force index (a) left join t2 as t4 on true) on t3.a=t_.a)) from t2 as t_;
++(select t3.b from (t2 as t5 left join (t2 as t3 force index (a) left join t2 as t4 on true) on t3.a=t_.a))
++drop table t, tt, t2;
+diff --git a/mysql-test/suite/ptrc/r/partial_result_cache.result-pq b/mysql-test/suite/ptrc/r/partial_result_cache.result-pq
+index fcc1b11be7d..9eb05e1a36b 100644
+--- a/mysql-test/suite/ptrc/r/partial_result_cache.result-pq
++++ b/mysql-test/suite/ptrc/r/partial_result_cache.result-pq
+@@ -3744,3 +3744,110 @@ d	a	b	c
+ 5	1	1	2
+ drop table t1;
+ drop table t2;
++create table t(a int, b int);
++insert into t values(1,10),(2,20);
++create table tt (f1 int, f2 int, KEY f1 (f1));
++insert into tt values (1,10),(2,20),(3,30),(4,40);
++create table t2(a int, key(a), b int);
++set optimizer_switch="block_nested_loop=off";
++explain format=tree SELECT t1.* , ( SELECT count(*) FROM t t2 LEFT JOIN t t3 ON t3.a > t2.a - t1.a ) FROM t t1;
++EXPLAIN
++-> Gather: 4 workers, parallel scan on t1 
++    -> Parallel table scan on t1 
++-> Select #2 (subquery in projection; dependent)
++    -> Result cache : cache keys(t1.a)
++        -> Aggregate: count(0) 
++            -> Nested loop left join 
++                -> Table scan on t2 
++                -> Result cache : cache keys(t1.a, t2.a) 
++                    -> Filter: (t3.a > (t2.a - t1.a)) 
++                        -> Table scan on t3 
++
++Warnings:
++Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
++SELECT t1.* , ( SELECT count(*) FROM t t2 LEFT JOIN t t3 ON t3.a > t2.a - t1.a ) FROM t t1;
++a	b	( SELECT count(*) FROM t t2 LEFT JOIN t t3 ON t3.a > t2.a - t1.a )
++1	10	3
++2	20	4
++explain format=tree select t1.*, (select count(*)
++from (t t2 join t t3)
++left join (t t4 LEFT JOIN (t t5 JOIN t t6) ON t4.a>t5.a-t1.a) on t3.a>t2.a-t1.a)
++from t t1;
++EXPLAIN
++-> Gather: 4 workers, parallel scan on t1 
++    -> Parallel table scan on t1 
++-> Select #2 (subquery in projection; dependent)
++    -> Result cache : cache keys(t1.a)
++        -> Aggregate: count(0) 
++            -> Nested loop left join 
++                -> Nested loop inner join 
++                    -> Table scan on t2 
++                    -> Result cache : cache keys(t1.a, t2.a) 
++                        -> Table scan on t3 
++                -> Result cache : cache keys(t1.a, t2.a, t3.a) 
++                    -> Nested loop left join 
++                        -> Filter: (t3.a > (t2.a - t1.a)) 
++                            -> Table scan on t4 
++                        -> Result cache : cache keys(t1.a, t2.a, t3.a, t4.a) 
++                            -> Nested loop inner join 
++                                -> Filter: (t4.a > (t5.a - t1.a)) 
++                                    -> Table scan on t5 
++                                -> Result cache : cache keys(t1.a, t2.a, t3.a, t4.a, t5.a) 
++                                    -> Table scan on t6 
++
++Warnings:
++Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
++Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
++select t1.*, (select count(*)
++from (t t2 join t t3)
++left join (t t4 LEFT JOIN (t t5 JOIN t t6) ON t4.a>t5.a-t1.a) on t3.a>t2.a-t1.a)
++from t t1;
++a	b	(select count(*)
++from (t t2 join t t3)
++left join (t t4 LEFT JOIN (t t5 JOIN t t6) ON t4.a>t5.a-t1.a) on t3.a>t2.a-t1.a)
++1	10	19
++2	20	32
++set optimizer_switch=default;
++explain format=tree SELECT t11.* , ( SELECT max(t1.f1) FROM tt t1 WHERE NOT EXISTS ( SELECT * FROM tt t2 JOIN tt t3 ON t2.f1 < NULL WHERE t1.f1 = t2.f1 AND t1.f1 < t11.a ) ) FROM t t11;
++EXPLAIN
++-> Gather: 4 workers, parallel scan on t11 
++    -> Parallel table scan on t11 
++-> Select #2 (subquery in projection; dependent)
++    -> Result cache : cache keys(t11.a)
++        -> Aggregate: max(t1.f1) 
++            -> Nested loop antijoin 
++                -> Index scan on t1 using f1 
++                -> Result cache : cache keys(t1.f1, t11.a) 
++                    -> Nested loop inner join 
++                        -> Filter: ((t1.f1 < t11.a) and (t1.f1 < NULL)) 
++                            -> Covering index lookup on t2 using f1 (f1=t1.f1) 
++                        -> Result cache : cache keys(t1.f1, t11.a, t2.f1) 
++                            -> Index scan on t3 using f1 
++
++Warnings:
++Note	1276	Field or reference 'test.t1.f1' of SELECT #3 was resolved in SELECT #2
++Note	1276	Field or reference 'test.t1.f1' of SELECT #3 was resolved in SELECT #2
++Note	1276	Field or reference 'test.t11.a' of SELECT #3 was resolved in SELECT #1
++SELECT t11.* , ( SELECT max(t1.f1) FROM tt t1 WHERE NOT EXISTS ( SELECT * FROM tt t2 JOIN tt t3 ON t2.f1 < NULL WHERE t1.f1 = t2.f1 AND t1.f1 < t11.a ) ) FROM t t11;
++a	b	( SELECT max(t1.f1) FROM tt t1 WHERE NOT EXISTS ( SELECT * FROM tt t2 JOIN tt t3 ON t2.f1 < NULL WHERE t1.f1 = t2.f1 AND t1.f1 < t11.a ) )
++1	10	4
++2	20	4
++explain format=tree select (select t3.b from (t2 as t5 left join (t2 as t3 force index (a) left join t2 as t4 on true) on t3.a=t_.a)) from t2 as t_;
++EXPLAIN
++-> Gather: 4 workers, parallel scan on t_ 
++    -> Parallel index scan on t_ using a 
++-> Select #2 (subquery in projection; dependent)
++    -> Result cache : cache keys(t_.a)
++        -> Nested loop left join 
++            -> Index scan on t5 using a 
++            -> Result cache : cache keys(t_.a) 
++                -> Nested loop left join 
++                    -> Index lookup on t3 using a (a=t_.a) 
++                    -> Result cache : cache keys(t3.a, t3.b, t_.a) 
++                        -> Index scan on t4 using a 
++
++Warnings:
++Note	1276	Field or reference 'test.t_.a' of SELECT #2 was resolved in SELECT #1
++select (select t3.b from (t2 as t5 left join (t2 as t3 force index (a) left join t2 as t4 on true) on t3.a=t_.a)) from t2 as t_;
++(select t3.b from (t2 as t5 left join (t2 as t3 force index (a) left join t2 as t4 on true) on t3.a=t_.a))
++drop table t, tt, t2;
+diff --git a/mysql-test/suite/ptrc/r/ptrc_bugs.result-pq b/mysql-test/suite/ptrc/r/ptrc_bugs.result-pq
+index 2924879476b..6c50131122b 100644
+--- a/mysql-test/suite/ptrc/r/ptrc_bugs.result-pq
++++ b/mysql-test/suite/ptrc/r/ptrc_bugs.result-pq
+@@ -206,24 +206,25 @@ EXPLAIN
+ -> Gather: 4 workers, parallel scan on ref_0
+     -> Nested loop inner join
+         -> Parallel index scan on ref_0 using ndx_C_BIT
+-        -> Constant row from <subquery3>
+-            -> Materialize with deduplication
+-                -> Inner hash join, one hash table per worker (no condition)
+-                    -> Table scan on ref_2
+-                        -> Materialize
+-                            -> Table scan on <temporary>
+-                                -> Temporary table with deduplication
+-                                    -> Gather: 4 workers, parallel scan on ref_0
+-                                        -> Table scan on <temporary>
+-                                            -> Temporary table with deduplication
+-                                                -> Left hash join, one hash table per worker (no condition)
+-                                                    -> Filter: (ref_0.C_BIT is null)
+-                                                        -> Parallel index range scan on ref_0 using ndx_C_YTD_PAYMENT over (NULL < C_YTD_PAYMENT), with index condition: (ref_0.C_YTD_PAYMENT is not null)
+-                                                    -> Hash
+-                                                        -> Zero rows (Impossible filter)
+-                    -> Hash
+-                        -> Filter: ((t0.c_id = 1) or (t0.c_d_id = 2) or (t0.c_w_id = 3))
+-                            -> Index scan on t0 using PRIMARY
++        -> Result cache : cache keys(ref_0.C_D_ID)
++            -> Constant row from <subquery3>
++                -> Materialize with deduplication
++                    -> Inner hash join, one hash table per worker (no condition)
++                        -> Table scan on ref_2
++                            -> Materialize
++                                -> Table scan on <temporary>
++                                    -> Temporary table with deduplication
++                                        -> Gather: 4 workers, parallel scan on ref_0
++                                            -> Table scan on <temporary>
++                                                -> Temporary table with deduplication
++                                                    -> Left hash join, one hash table per worker (no condition)
++                                                        -> Filter: (ref_0.C_BIT is null)
++                                                            -> Parallel index range scan on ref_0 using ndx_C_YTD_PAYMENT over (NULL < C_YTD_PAYMENT), with index condition: (ref_0.C_YTD_PAYMENT is not null)
++                                                        -> Hash
++                                                            -> Zero rows (Impossible filter)
++                        -> Hash
++                            -> Filter: ((t0.c_id = 1) or (t0.c_d_id = 2) or (t0.c_w_id = 3))
++                                -> Index scan on t0 using PRIMARY
+ 
+ Warnings:
+ Note	1276	Field or reference 'test.ref_0.C_D_ID' of SELECT #3 was resolved in SELECT #2
+diff --git a/mysql-test/suite/ptrc/t/partial_result_cache.test b/mysql-test/suite/ptrc/t/partial_result_cache.test
+index c40fed8f10f..d57b7c12e9e 100644
+--- a/mysql-test/suite/ptrc/t/partial_result_cache.test
++++ b/mysql-test/suite/ptrc/t/partial_result_cache.test
+@@ -818,4 +818,47 @@ select * from t2, t1 force index(`a`) having c < 3 order by a, b limit 10;
+ --eval $query
+ 
+ drop table t1;
+-drop table t2;
+\ No newline at end of file
++drop table t2;
++
++create table t(a int, b int);
++insert into t values(1,10),(2,20);
++
++create table tt (f1 int, f2 int, KEY f1 (f1));
++insert into tt values (1,10),(2,20),(3,30),(4,40);
++
++create table t2(a int, key(a), b int);
++
++set optimizer_switch="block_nested_loop=off";
++ 
++let query1 = SELECT t1.* , ( SELECT count(*) FROM t t2 LEFT JOIN t t3 ON t3.a > t2.a - t1.a ) FROM t t1;
++ 
++let query2=
++ select t1.*, (select count(*)
++               from (t t2 join t t3)
++               left join (t t4 LEFT JOIN (t t5 JOIN t t6) ON t4.a>t5.a-t1.a) on t3.a>t2.a-t1.a)
++ from t t1;
++
++let query3=
++ SELECT t11.* , ( SELECT max(t1.f1) FROM tt t1 WHERE NOT EXISTS ( SELECT * FROM tt t2 JOIN tt t3 ON t2.f1 < NULL WHERE t1.f1 = t2.f1 AND t1.f1 < t11.a ) ) FROM t t11;
++
++let query4=  select (select t3.b from (t2 as t5 left join (t2 as t3 force index (a) left join t2 as t4 on true) on t3.a=t_.a)) from t2 as t_;
++
++--replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*//
++eval explain format=tree $query1;
++eval $query1;
++
++--replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*//
++eval explain format=tree $query2;
++eval $query2;
++
++set optimizer_switch=default;
++
++--replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*//
++eval explain format=tree $query3;
++eval $query3;
++
++--replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*//
++eval explain format=tree $query4;
++eval $query4;
++
++drop table t, tt, t2;
+\ No newline at end of file
+diff --git a/mysql-test/t/join.test b/mysql-test/t/join.test
+index 74a510753f5..c9162c5e6e5 100644
+--- a/mysql-test/t/join.test
++++ b/mysql-test/t/join.test
+@@ -1309,11 +1309,6 @@ let query=
+ eval explain format=tree $query;
+ eval $query;
+ 
+-set rds_partial_result_cache_cost_threshold=0;
+-set optimizer_switch="partial_result_cache=on";
+-eval $query;
+-set rds_partial_result_cache_cost_threshold=default;
+-
+ # let the reference be in GROUP BY, to test "odd" Items_ref:
+ let query=
+  select t1.a, (select count(*)
+diff --git a/sql/item_subselect.cc b/sql/item_subselect.cc
+index 114ab8c30ac..96d43d85754 100644
+--- a/sql/item_subselect.cc
++++ b/sql/item_subselect.cc
+@@ -74,7 +74,8 @@
+ #include "sql/opt_explain_format.h"
+ #include "sql/opt_trace.h"  // OPT_TRACE_TRANSFORM
+ #include "sql/opt_trace_context.h"
+-#include "sql/parse_tree_nodes.h"  // PT_subquery
++#include "sql/parse_tree_nodes.h"      // PT_subquery
++#include "sql/partial_result_cache.h"  // PathParameters
+ #include "sql/query_options.h"
+ #include "sql/query_result.h"
+ #include "sql/sql_class.h"  // THD
+@@ -885,8 +886,67 @@ void Item_subselect::update_used_tables() {
+   used_tables_cache = m_subquery_used_tables;
+ }
+ 
+-void Item_subselect::get_item_params(const THD *,
++void Item_subselect::get_item_params(const THD *thd,
+                                      Dependent_item_params *params) {
++  if (unit->first_query_block()->pq_is_clone_of() != nullptr) {
++    if (const auto *orig_AccessPath = unit->first_query_block()
++                                          ->pq_is_clone_of()
++                                          ->master_query_expression()
++                                          ->root_access_path();
++        orig_AccessPath->type == AccessPath::PARTIAL_RESULT_CACHE) {
++      /* We have here a special code path to set up PTRC for a cloned subquery
++      (either in PQ leader or worker). The normal code path uses
++      Query_block::walk(), which is rather intended for the resolution stage,
++      and thus walks the Query_block, including "ON" conditions of Table_ref-s
++      (including that of join nests), instead of walking Item-s in
++      AccessPath-s (which it should do, as PTRC is set up as the last stage of
++      optimization, where access paths are available). In the non-PQ case,
++      this is not really a problem, as all Item-s used in AccessPath-s are
++      also present in the Query_block. In the PQ case, however, this is a
++      problem: the leader's and workers' cloned Query_block-s do not include a
++      full tree of join nests, only the leaf tables (see pq_dup_select()). As
++      a consequence, some "ON" conditions are not present in clones and thus
++      Query_block::walk() misses some PTRC keys. We have considered a solution
++      where pq_dup_select() clones the full tree, but it means "a lot of
++      cloning just for the sake of possibly setting up PTRC later". The
++      alternative, chosen solution is that we consult the PTRC of the original
++      query block, and copy its PTRC keys. In code, do not be confused: there
++      is pack_rows::Table, TABLE and Table_ref. */
++
++      for (const auto &orig_Table :
++           orig_AccessPath->ptrc().param->key_tables->tables()) {
++        const auto *orig_TABLE = orig_Table.table;
++        const auto *orig_Table_ref = orig_TABLE->pos_in_table_list;
++        const auto *orig_query_block = orig_Table_ref->query_block;
++        /* Find the clone of the original table, in our (leader's or worker's)
++        context. Unfortunately we cannot use
++        orig_query_block->pq_last_clone(), because this Query_block is outer
++        to our Item and thus pq_unlink_clone() has possibly run on it already.
++        @todo In the end, we should store a map of original tables to their
++        clones, in the Gather operator ; it would make this loop unnecessary
++        and would be very useful if we want to clone AccessPath-s one day
++        (that is, not clone QEP_TAB-s anymore). */
++        auto *clone_of_Table_ref = thd->lex->query_tables;
++        for (; clone_of_Table_ref != nullptr;
++             clone_of_Table_ref = clone_of_Table_ref->next_global) {
++          if (clone_of_Table_ref->tableno() == orig_Table_ref->tableno() &&
++              clone_of_Table_ref->query_block->select_number ==
++                  orig_query_block->select_number)
++            break;
++        }
++        assert(clone_of_Table_ref != nullptr);
++        auto *clone_of_TABLE = clone_of_Table_ref->table;
++        assert(clone_of_TABLE != nullptr);
++        for (const auto &orig_Column : orig_Table.columns) {
++          // PTRC key was column #N in original table => Is column #N in clone
++          params->parameters.emplace(
++              clone_of_TABLE->field[orig_Column.field->field_index()]);
++        }
++      }
++    }
++    return;
++  }
++
+   /*
+     We are looking into this subquery for an outer reference. The test on
+     nest_level is necessary in case of deep nesting:
+diff --git a/sql/parallel_query/pq_clone.cc b/sql/parallel_query/pq_clone.cc
+index 27b016f67fb..c2b9f369fa6 100644
+--- a/sql/parallel_query/pq_clone.cc
++++ b/sql/parallel_query/pq_clone.cc
+@@ -605,6 +605,8 @@ bool pq_dup_tabs(JOIN *join, JOIN *top_orig, bool gather) {
+           // There may be a lot of these scenarios. So here need copy original
+           // table's read_set directly.
+           bitmap_copy(tab->table()->read_set, orig_tab->table()->read_set);
++          bitmap_copy(&tab->table()->read_set_internal,
++                      &orig_tab->table()->read_set_internal);
+         }
+ #ifndef NDEBUG
+         else {
+@@ -673,23 +675,6 @@ bool pq_dup_tabs(JOIN *join, JOIN *top_orig, bool gather) {
+             tab->set_condition(cond);
+             tab->set_condition_optim();
+           }
+-
+-          /**
+-             Clone conditions in tab->table_ref->join_cond(). In certain
+-            scenarios (For example: PTRC checks whether the JOIN condition of a
+-            subquery contains outer-reference fields.), the worker execution
+-            plan needs to traverse Table_ref::join_cond() through the
+-            'Query_block::walk' -> 'walk_join_condition' flow.
+-          */
+-          if (orig_tab->table_ref) {
+-            Item *join_cond = orig_tab->table_ref->join_cond();
+-            if (join_cond) {
+-              Item *dup_cond =
+-                  pq_dup_condition(join->thd, select, join_cond, gather);
+-              if (!dup_cond) return true;
+-              tab->table_ref->set_join_cond(dup_cond);
+-            }
+-          }
+         }
+ 
+         /*
+@@ -1216,15 +1201,6 @@ static Query_block *pq_dup_select(THD *thd, Query_block *top_orig) {
+       it->table->reginfo.not_exists_optimize =
+           tbl_list->table->reginfo.not_exists_optimize;
+       it->set_tableno(tbl_list->tableno());
+-      // Assign select->m_current_table_nest based on the mapping between
+-      // m_current_table_nest and leaf_tables in the original query block.
+-      for (const Table_ref *orig_table : *orig->m_current_table_nest) {
+-        if (orig_table == tbl_list) {
+-          select->m_current_table_nest->push_back(it);
+-          break;
+-        }
+-      }
+-
+       last_it = it;
+       it = it->next_leaf;
+       last_it->next_name_resolution_table = it;
+diff --git a/sql/parallel_query/pq_refix_fields_item.cc b/sql/parallel_query/pq_refix_fields_item.cc
+index 57b08dcf5b8..be01d3cf787 100644
+--- a/sql/parallel_query/pq_refix_fields_item.cc
++++ b/sql/parallel_query/pq_refix_fields_item.cc
+@@ -176,6 +176,7 @@ bool Item_field::refix_fields(THD *thd, Item **reference) {
+     if (thd->mark_used_columns == MARK_COLUMNS_READ) {
+       current_bitmap = table->read_set;
+       other_bitmap = table->write_set;
++      bitmap_set_bit(&table->read_set_internal, field->field_index());
+     } else {
+       current_bitmap = table->write_set;
+       other_bitmap = table->read_set;
+diff --git a/sql/partial_result_cache.cc b/sql/partial_result_cache.cc
+index 49b8f61cb72..8a6adfc6269 100644
+--- a/sql/partial_result_cache.cc
++++ b/sql/partial_result_cache.cc
+@@ -112,7 +112,7 @@ class PtrcMemRoot {
+   THD *m_thd;
+ };
+ 
+-static bool fill_table_collection(std::set<Field *> *cols,
++static bool fill_table_collection(const std::set<Field *> *cols,
+                                   std::set<pack_rows::Table *> *tables) {
+   THD *thd = current_thd;
+   // In the list 'cols', two columns may belong to the same TABLE, but we
+diff --git a/sql/sql_union.cc b/sql/sql_union.cc
+index 5cc5ae2b629..15325e4a567 100644
+--- a/sql/sql_union.cc
++++ b/sql/sql_union.cc
+@@ -2369,7 +2369,7 @@ PQSubqueryExecution Query_expression::subquery_suite_for_parallel_query()
+   }
+   if ((item->substype() == Item_subselect::EXISTS_SUBS ||
+        item->substype() == Item_subselect::SINGLEROW_SUBS) &&
+-      !is_union()) {
++      is_simple()) {
+     if (uncacheable == UNCACHEABLE_DEPENDENT &&
+         first_query_block()->m_suite_for_pq &&
+         current_thd->pq_support_features_switch_flag(
+-- 
+2.23.0
+

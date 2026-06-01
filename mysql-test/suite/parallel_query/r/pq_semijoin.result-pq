@@ -1,0 +1,241 @@
+show variables like 'optimizer_switch';
+Variable_name	Value
+optimizer_switch	index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on,offset_pushdown=on,nlj_distinct_optimize=on,partial_result_cache=on,left_join_elimination=on,dstore_enable_indexscan=on,aggregate_pushdown=on
+CREATE TABLE `country` (
+`code` int DEFAULT NULL,
+`name` varchar(255) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+CREATE TABLE `city` (
+`country` int DEFAULT NULL,
+`name` varchar(255) DEFAULT NULL,
+`pop` int DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+insert into country values(1,'china');
+insert into country values(2,'usa');
+insert into city values(1,'beijing',1000);
+insert into city values(1,'shanghai',1000);
+insert into city values(2,'new york',1000);
+explain SELECT /*+ SEMIJOIN(@subq1 FIRSTMATCH) */ *
+FROM country
+WHERE country.code IN (
+SELECT /*+ QB_NAME(subq1) */ city.country
+FROM city
+WHERE city.pop > 100
+);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, test.city, test.country)
+1	SIMPLE	country	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+1	SIMPLE	city	NULL	ALL	NULL	NULL	NULL	NULL	3	33.33	Using where; FirstMatch(country); Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select /*+ SEMIJOIN(@`subq1` FIRSTMATCH) */ `test`.`country`.`code` AS `code`,`test`.`country`.`name` AS `name` from `test`.`country` semi join (`test`.`city`) where ((`test`.`city`.`country` = `test`.`country`.`code`) and (`test`.`city`.`pop` > 100))
+SELECT /*+ SEMIJOIN(@subq1 FIRSTMATCH) */ *
+FROM country
+WHERE country.code IN (
+SELECT /*+ QB_NAME(subq1) */ city.country
+FROM city
+WHERE city.pop > 100
+);
+code	name
+1	china
+2	usa
+alter table city add index index_country(country);
+alter table country add index index_code (code);
+explain SELECT /*+ SEMIJOIN(LOOSESCAN) */ *
+FROM country
+WHERE country.code IN (
+SELECT city.country
+FROM city
+);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	Parallel execute (4 workers, test.country)
+1	SIMPLE	city	NULL	index	index_country	index_country	5	NULL	3	66.67	Using index; LooseScan
+1	SIMPLE	country	NULL	ALL	index_code	NULL	NULL	NULL	2	50.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select /*+ SEMIJOIN(@`select#1` LOOSESCAN) */ `test`.`country`.`code` AS `code`,`test`.`country`.`name` AS `name` from `test`.`country` semi join (`test`.`city`) where (`test`.`country`.`code` = `test`.`city`.`country`)
+SELECT /*+ SEMIJOIN(LOOSESCAN) */ *
+FROM country
+WHERE country.code IN (
+SELECT city.country
+FROM city
+);
+code	name
+1	china
+2	usa
+EXPLAIN SELECT * from country ref_0 WHERE EXISTS (SELECT * from country ref_1 limit 1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, test.ref_0)
+1	SIMPLE	ref_1	NULL	index	NULL	index_code	5	NULL	2	100.00	Using index; FirstMatch
+1	SIMPLE	ref_0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`ref_0`.`code` AS `code`,`test`.`ref_0`.`name` AS `name` from `test`.`country` `ref_0` semi join (`test`.`country` `ref_1`) where true
+SELECT * from country ref_0 WHERE EXISTS (SELECT * from country ref_1 limit 1);
+code	name
+1	china
+2	usa
+drop table country, city;
+#
+# BUG2022080902008 Assertion failures with PQ + correlated derived table
+#
+CREATE TABLE t0 (c_payment_cnt INT);
+CREATE TABLE t5 (c_delivery_cnt INT);
+EXPLAIN FORMAT=TREE SELECT ref_0.c_payment_cnt FROM t0 ref_0 JOIN t5 ref_1
+WHERE EXISTS(SELECT 3 FROM(SELECT 0 WHERE ref_1.c_delivery_cnt AND 0) subq_2) ORDER BY 1;
+EXPLAIN
+-> Sort: ref_0.c_payment_cnt
+    -> Stream results  (...)
+        -> Hash semijoin (no condition)  (...)
+            -> Inner hash join (no condition)  (...)
+                -> Table scan on ref_1  (...)
+                -> Hash
+                    -> Table scan on ref_0  (...)
+            -> Hash
+                -> Limit: 1 row(s)  (...)
+                    -> Table scan on subq_2  (...)
+                        -> Materialize  (...)
+                            -> Zero rows (Impossible WHERE)  (...)
+
+Warnings:
+Note	1276	Field or reference 'test.ref_1.c_delivery_cnt' of SELECT #3 was resolved in SELECT #1
+SELECT ref_0.c_payment_cnt FROM t0 ref_0 JOIN t5 ref_1
+WHERE EXISTS(SELECT 3 FROM(SELECT 0 WHERE ref_1.c_delivery_cnt AND 0) subq_2) ORDER BY 1;
+c_payment_cnt
+DROP TABLE t0,t5;
+#
+# BUG2022081903526 Segmentation fault in MaterializeIterator::Init with PQ + semijoin + IS NULL
+#
+CREATE TABLE t12 (c_id int);
+INSERT INTO t12 VALUES (0),(1);
+CREATE TABLE t4 (c_zip char(23) DEFAULT NULL, c_since timestamp NOT NULL);
+CREATE TABLE t5 (c_id int);
+ANALYZE TABLE t12,t5,t4;
+Table	Op	Msg_type	Msg_text
+test.t12	analyze	status	OK
+test.t5	analyze	status	OK
+test.t4	analyze	status	OK
+EXPLAIN FORMAT=TREE SELECT
+/*+ JOIN_ORDER(t12,t4,ref_8) */
+1 FROM t12 LEFT JOIN t5 ref_8
+ON EXISTS(SELECT /*+ SEMIJOIN(MATERIALIZATION) */ c_zip FROM t4 WHERE c_since IS NULL);
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t12  (...)
+    -> Nested loop left join  (...)
+        -> Parallel table scan on t12  (...)
+        -> Nested loop inner join  (...)
+            -> Zero rows (Impossible filter)  (...)
+            -> Table scan on ref_8  (...)
+
+SELECT
+/*+ JOIN_ORDER(t12,t4,ref_8) */
+1 FROM t12 LEFT JOIN t5 ref_8
+ON EXISTS(SELECT /*+ SEMIJOIN(MATERIALIZATION) */ c_zip FROM t4 WHERE c_since IS NULL);
+1
+1
+1
+DROP TABLE t12,t4,t5;
+#
+# BUG2022112102841 Assertion failure in MaterializeIterator::Init()
+#
+CREATE TABLE t1 (i INTEGER);
+INSERT INTO t1 VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9), (10);
+CREATE VIEW my_view AS SELECT 1 AS i;
+SET parallel_default_dop=1;
+SET optimizer_switch="block_nested_loop=off";
+SET SESSION FORCE_PARALLEL_EXECUTE = 0;
+EXPLAIN FORMAT=tree SELECT 1
+FROM (
+SELECT 1
+FROM t1 AS ref_1
+RIGHT JOIN my_view AS ref_2 ON (
+EXISTS (
+SELECT 1 FROM t1 AS ref_3 WHERE ref_2.i IS NULL
+)
+AND ref_2.i IS NOT NULL
+),
+(SELECT 1 FROM t1 AS ref_4) AS subq_1
+) AS subq_2;
+EXPLAIN
+-> Nested loop inner join  (cost=13.6 rows=100)
+    -> Nested loop left join  (cost=1.1 rows=10)
+        -> Rows fetched before execution  (cost=0..0 rows=1)
+        -> Nested loop inner join  (cost=1.25 rows=10)
+            -> Zero rows (Impossible filter)  (cost=0.002..0.002 rows=1)
+            -> Table scan on ref_1  (cost=1.25 rows=10)
+    -> Table scan on ref_4  (cost=0.35 rows=10)
+
+Warnings:
+Note	1276	Field or reference 'test.ref_2.i' of SELECT #3 was resolved in SELECT #2
+SELECT 1
+FROM (
+SELECT 1
+FROM t1 AS ref_1
+RIGHT JOIN my_view AS ref_2 ON (
+EXISTS (
+SELECT 1 FROM t1 AS ref_3 WHERE ref_2.i IS NULL
+)
+AND ref_2.i IS NOT NULL
+),
+(SELECT 1 FROM t1 AS ref_4) AS subq_1
+) AS subq_2;
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+SET SESSION FORCE_PARALLEL_EXECUTE = 1;
+EXPLAIN FORMAT=tree SELECT 1
+FROM (
+SELECT 1
+FROM t1 AS ref_1
+RIGHT JOIN my_view AS ref_2 ON (
+EXISTS (
+SELECT 1 FROM t1 AS ref_3 WHERE ref_2.i IS NULL
+)
+AND ref_2.i IS NOT NULL
+),
+(SELECT 1 FROM t1 AS ref_4) AS subq_1
+) AS subq_2;
+EXPLAIN
+-> Gather: 1 workers, parallel scan on ref_4  (cost=13.6 rows=100)
+    -> Nested loop inner join  (cost=13.6 rows=100)
+        -> Nested loop left join  (cost=1.1 rows=10)
+            -> Rows fetched before execution  (cost=0..0 rows=1)
+            -> Nested loop inner join  (cost=1.25 rows=10)
+                -> Zero rows (Impossible filter)  (cost=0.002..0.002 rows=1)
+                -> Table scan on ref_1  (cost=1.25 rows=10)
+        -> Parallel table scan on ref_4  (cost=0.35 rows=10)
+
+Warnings:
+Note	1276	Field or reference 'test.ref_2.i' of SELECT #3 was resolved in SELECT #2
+SELECT 1
+FROM (
+SELECT 1
+FROM t1 AS ref_1
+RIGHT JOIN my_view AS ref_2 ON (
+EXISTS (
+SELECT 1 FROM t1 AS ref_3 WHERE ref_2.i IS NULL
+)
+AND ref_2.i IS NOT NULL
+),
+(SELECT 1 FROM t1 AS ref_4) AS subq_1
+) AS subq_2;
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+SET parallel_default_dop = DEFAULT;
+SET optimizer_switch = DEFAULT;
+DROP VIEW my_view;
+DROP TABLE t1;

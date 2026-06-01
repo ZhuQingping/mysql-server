@@ -1,0 +1,45 @@
+# add partition for RANGE/LIST, it is prohibited using NO_WRITE_TO_BINLOG
+create table t1(id int, col1 int, col2 int) partition by list(col1) (
+partition p1 values in (1,2),
+partition p2 values in (3,4)
+);
+alter table t1 add partition NO_WRITE_TO_BINLOG (
+partition p3 values in (5,6)
+);
+ERROR HY000: It is not allowed to shut off binlog on this command
+alter table t1 partition by hash(col1) subpartition by list(col2) (
+partition p1 (
+subpartition sp1 values in (1)
+)
+);
+alter table t1 add partition NO_WRITE_TO_BINLOG (
+partition p2 (
+subpartition sp2 values in (2)
+)
+);
+ERROR HY000: It is not allowed to shut off binlog on this command
+drop table t1;
+# Test: Sub_partition::clone return nullptr
+set @saved_rds_extended_partitions_enabled=@@rds_extended_partitions_enabled;
+set global rds_extended_partitions_enabled = true;
+create table t1(id int, col1 int, col2 int) partition by list(col1) subpartition by list(col2) (
+partition p1 values in (1,2) (
+subpartition sp1 values in (1,2),
+subpartition sp2 values in (3,4)
+),
+partition p2 values in (3,4) (
+subpartition sp3 values in (1,2),
+subpartition sp4 values in (3,4)
+)
+);
+set session debug='+d,sub_partition_clone_failed';
+alter table t1 add partition (
+partition p1 values in (5,6) (
+subpartition sp5 values in(1,2),
+subpartition sp6 values in (3,4)
+)
+);
+ERROR HY001: Out of memory; restart server and try again (needed 40 bytes)
+set session debug='-d,sub_partition_clone_failed';
+drop table t1;
+set global rds_extended_partitions_enabled = @saved_rds_extended_partitions_enabled;

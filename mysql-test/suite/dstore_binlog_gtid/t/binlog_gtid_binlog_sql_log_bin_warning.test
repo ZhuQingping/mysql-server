@@ -1,0 +1,56 @@
+# ==== Purpose ====
+#  
+# Verify that logs are recorded when sql_log_bin is OFF. 
+# And when sql_log_bin is set to OFF, SQL statements are written into error log as warnings.
+#
+# ==== References ====
+#
+# BUG2025120450235 Add logging and warnings for SQL_LOG_BIN changes
+#
+
+--source include/have_binlog_format_row.inc
+--source include/have_debug.inc
+RESET MASTER;
+
+# Logs are recorded when sql_log_bin is modified.
+call mtr.add_suppression("User rdstest SET SQL_LOG_BIN*");
+call mtr.add_suppression(".*which causes inconsistence between master and slave.");
+
+CREATE USER 'rdstest'@'%';
+GRANT ALL ON *.* TO rdstest;
+
+--connect(conn1,localhost,rdstest)
+
+CREATE TABLE t1 (c1 INT) ENGINE=InnoDB;
+
+# When sql_log_bin is set to OFF, client will recieve a warning
+--let SEARCH_FILE= $MYSQLTEST_VARDIR/log/mysqld.1.err
+
+# MTR does not support remote user to login. In this scenario,
+# simulate remote user login.
+SET SESSION DEBUG='+d,mock_host_is_remote';
+
+# --warning WARN_SQL_LOG_BIN_OFF
+SET SESSION SQL_LOG_BIN=OFF;
+
+--let SEARCH_PATTERN=User rdstest SET SQL_LOG_BIN=OFF, which may causes inconsistence between master and slave.
+--source include/search_pattern.inc
+
+INSERT INTO t1 VALUES(1);
+
+# Binlog events not recorded when sql_log_bin is set to OFF.
+--source include/show_binlog_events.inc
+
+SET SESSION SQL_LOG_BIN=ON;
+
+--let SEARCH_PATTERN=User rdstest SET SQL_LOG_BIN=ON.
+--source include/search_pattern.inc
+
+INSERT INTO t1 VALUES(2);
+
+# Binlog events recorded when sql_log_bin is set to ON.
+--source include/show_binlog_events.inc
+
+# Cleanup
+DROP USER 'rdstest'@'%';
+DROP TABLE t1;

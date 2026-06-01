@@ -1,0 +1,59 @@
+# ==== Purpose ====
+# Step1: Generate two binary logs by executing FLUSH LOGS;
+# Step2: Execute four transactions and write them into binlog.000003;
+# Step3: Generate two binary logs by executing FLUSH LOGS again;
+# Step4: Restart mysqld with debug='+d,simulate_exeucted_gtids_as_missed_gtids';
+#        Expect that the rds_dstore_missed_gtids_on_binlog is ./binlog.000003. 
+ 
+#
+# ==== References ====
+#
+# US2025072200854 Find and set log located by dstore missed gtids
+#
+ 
+--source include/have_binlog_format_row.inc
+--source include/have_only_dstore.inc
+--source include/have_log_bin.inc
+
+--disable_query_log
+call mtr.add_suppression("rds_dstore_missed_gtids is ");
+--enable_query_log
+
+RESET MASTER;
+FLUSH LOGS;
+FLUSH LOGS;
+ 
+CREATE TABLE t1(c1 INT);
+ 
+--let $i = 1
+while ($i < 4) {
+  --eval INSERT INTO t1 VALUES ($i);
+  --inc $i
+}
+ 
+FLUSH LOGS;
+FLUSH LOGS;
+ 
+--echo # 
+--echo # Restart mysqld.
+--echo #
+--source include/restart_mysqld.inc
+--echo #
+--echo # Expect that the rds_dstore_missed_gtids_on_binlog is ./binlog.000003.
+--echo #
+SELECT @@GLOBAL.rds_dstore_missed_gtids_on_binlog;
+ 
+DROP TABLE t1;
+ 
+--echo # 
+--echo # Make gtid_executed be empty.
+--echo #
+RESET MASTER;
+SELECT @@GLOBAL.GTID_EXECUTED;
+ 
+--echo # 
+--echo # Restart mysqld with dstore_missed_gtids is empty, expect
+--echo # that rds_dstore_missed_gtids_on_binlog is empty.
+--echo #
+--source include/restart_mysqld.inc
+SELECT @@GLOBAL.rds_dstore_missed_gtids_on_binlog;

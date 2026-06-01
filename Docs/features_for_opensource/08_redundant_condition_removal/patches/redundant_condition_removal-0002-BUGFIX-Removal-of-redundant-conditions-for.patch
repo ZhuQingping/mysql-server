@@ -1,0 +1,823 @@
+From 07d56cc6acb856281724bdef0b8833aaec710024 Mon Sep 17 00:00:00 2001
+From: zhuqingping <zhuqingping1@contributor>
+
+
+Date: Tue, 12 Aug 2025 00:33:41 +0800
+Subject: [PATCH] BUGFIX Removal of redundant conditions for range
+ scan [post-fix]
+
+Issue:
+-------
+USERSTORY Removal of redundant conditions, forget back port one bug-fix.
+<internal-url-removed>
+
+Solution:
+---------
+Consider this scenario, WHERE condition is: c=3 OR c>2.
+The range optimizer may build a single range c>2, which
+has no max value. So when we process c=3 in function
+"reduce_cond_for_table", we should not compare 3 with
+the min and max of the range.
+---
+ mysql-test/r/compress.result                  |  4 +--
+ mysql-test/r/index_merge_innodb.result        |  4 +--
+ mysql-test/r/index_merge_myisam.result        |  2 +-
+ .../innodb_explain_json_non_select_all.result | 28 +++++++----------
+ ...innodb_explain_json_non_select_none.result | 30 ++++++++-----------
+ .../r/innodb_explain_non_select_all.result    |  3 ++
+ .../r/innodb_explain_non_select_none.result   |  3 ++
+ mysql-test/r/negation_elimination.result      |  2 +-
+ mysql-test/r/order_by_all.result              |  2 +-
+ mysql-test/r/order_by_none.result             |  2 +-
+ mysql-test/r/range_all.result                 |  2 +-
+ mysql-test/r/range_mrr.result                 |  2 +-
+ mysql-test/r/range_mrr_cost.result            |  2 +-
+ mysql-test/r/range_none.result                |  2 +-
+ mysql-test/r/select_all.result                |  2 +-
+ mysql-test/r/select_all_bka.result            |  2 +-
+ mysql-test/r/select_all_bka_nobnl.result      |  2 +-
+ mysql-test/r/select_none.result               |  2 +-
+ mysql-test/r/select_none_bka.result           |  2 +-
+ mysql-test/r/select_none_bka_nobnl.result     |  2 +-
+ mysql-test/r/ssl.result                       |  2 +-
+ mysql-test/r/ssl_compress.result              |  2 +-
+ .../dstore_main/r/composite_index_read.result | 14 ++++-----
+ .../dstore_main/r/index_read_scan_key.result  |  8 ++---
+ ..._explain_json_non_select_all-dstore.result | 16 +++++-----
+ .../r/negation_elimination-dstore.result      |  2 +-
+ .../dstore_main/r/order_by_all-dstore.result  |  2 +-
+ .../suite/dstore_main/r/ssl-dstore.result     |  2 +-
+ .../dstore_main/r/ssl_compress-dstore.result  |  2 +-
+ .../suite/innodb/r/multi_value_basic.result   |  2 +-
+ sql/sql_optimizer.cc                          | 15 ++++++++++
+ 31 files changed, 88 insertions(+), 79 deletions(-)
+
+diff --git a/mysql-test/r/compress.result b/mysql-test/r/compress.result
+index 3b4892fb24e..69bbde585c7 100644
+--- a/mysql-test/r/compress.result
++++ b/mysql-test/r/compress.result
+@@ -1498,7 +1498,7 @@ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where (`test`.`t4`.`companynr` > 0)
+ explain select companynr,companyname from t4 left join t2 using (companynr) where companynr > 0 or companynr < 0 or companynr > 0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	#	#	NULL
++1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	#	#	Using where
+ 1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using join buffer (hash join)
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where ((`test`.`t4`.`companynr` > 0) or (`test`.`t4`.`companynr` > 0))
+@@ -3762,7 +3762,7 @@ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where (`test`.`t4`.`companynr` > 0)
+ explain select companynr,companyname from t4 left join t2 using (companynr) where companynr > 0 or companynr < 0 or companynr > 0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	#	#	NULL
++1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	#	#	Using where
+ 1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using join buffer (hash join)
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where ((`test`.`t4`.`companynr` > 0) or (`test`.`t4`.`companynr` > 0))
+diff --git a/mysql-test/r/index_merge_innodb.result b/mysql-test/r/index_merge_innodb.result
+index 4725defd42a..675caabdcd5 100644
+--- a/mysql-test/r/index_merge_innodb.result
++++ b/mysql-test/r/index_merge_innodb.result
+@@ -393,7 +393,7 @@ Note	1003	/* select#1 */ select `test`.`t0`.`key1` AS `key1`,`test`.`t0`.`key2`
+ explain select * from t0,t1 where t0.key1 < 3 and
+ (t1.key1 = t0.key1 or t1.key8 = t0.key1);
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t0	NULL	range	i1	i1	4	NULL	#	100.00	Using index condition
++1	SIMPLE	t0	NULL	range	i1	i1	4	NULL	#	100.00	NULL
+ 1	SIMPLE	t1	NULL	ALL	i1,i8	NULL	NULL	NULL	#	0.20	Range checked for each record (index map: 0x81)
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t0`.`key1` AS `key1`,`test`.`t0`.`key2` AS `key2`,`test`.`t0`.`key3` AS `key3`,`test`.`t0`.`key4` AS `key4`,`test`.`t0`.`key5` AS `key5`,`test`.`t0`.`key6` AS `key6`,`test`.`t0`.`key7` AS `key7`,`test`.`t0`.`key8` AS `key8`,`test`.`t1`.`key1` AS `key1`,`test`.`t1`.`key2` AS `key2`,`test`.`t1`.`key3` AS `key3`,`test`.`t1`.`key4` AS `key4`,`test`.`t1`.`key5` AS `key5`,`test`.`t1`.`key6` AS `key6`,`test`.`t1`.`key7` AS `key7`,`test`.`t1`.`key8` AS `key8` from `test`.`t0` join `test`.`t1` where ((`test`.`t0`.`key1` < 3) and ((`test`.`t1`.`key1` = `test`.`t0`.`key1`) or (`test`.`t1`.`key8` = `test`.`t0`.`key1`)))
+@@ -1001,7 +1001,7 @@ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`st_a` AS `st_a`,`test`.`t1`.`swt1a` AS `swt1a`,`test`.`t1`.`swt2a` AS `swt2a`,`test`.`t1`.`st_b` AS `st_b`,`test`.`t1`.`swt1b` AS `swt1b`,`test`.`t1`.`swt2b` AS `swt2b`,`test`.`t1`.`key1` AS `key1`,`test`.`t1`.`key2` AS `key2`,`test`.`t1`.`key3` AS `key3`,`test`.`t1`.`key4` AS `key4`,`test`.`t1`.`filler1` AS `filler1`,`test`.`t1`.`filler2` AS `filler2`,`test`.`t1`.`filler3` AS `filler3`,`test`.`t1`.`filler4` AS `filler4`,`test`.`t1`.`filler5` AS `filler5`,`test`.`t1`.`filler6` AS `filler6` from `test`.`t1` where ((`test`.`t1`.`swt2a` = 1) and (`test`.`t1`.`swt1a` = 1) and (`test`.`t1`.`st_a` = 1))
+ explain select * from t1 where st_b=1 and swt1b=1 and swt2b=1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t1	NULL	range	stb_swt1a_2b,stb_swt1b,st_b	stb_swt1b	8	NULL	4000	10.00	Using index condition; Using where; Using MRR
++1	SIMPLE	t1	NULL	range	stb_swt1a_2b,stb_swt1b,st_b	stb_swt1b	8	NULL	4000	10.00	Using where; Using MRR
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`st_a` AS `st_a`,`test`.`t1`.`swt1a` AS `swt1a`,`test`.`t1`.`swt2a` AS `swt2a`,`test`.`t1`.`st_b` AS `st_b`,`test`.`t1`.`swt1b` AS `swt1b`,`test`.`t1`.`swt2b` AS `swt2b`,`test`.`t1`.`key1` AS `key1`,`test`.`t1`.`key2` AS `key2`,`test`.`t1`.`key3` AS `key3`,`test`.`t1`.`key4` AS `key4`,`test`.`t1`.`filler1` AS `filler1`,`test`.`t1`.`filler2` AS `filler2`,`test`.`t1`.`filler3` AS `filler3`,`test`.`t1`.`filler4` AS `filler4`,`test`.`t1`.`filler5` AS `filler5`,`test`.`t1`.`filler6` AS `filler6` from `test`.`t1` where ((`test`.`t1`.`swt2b` = 1) and (`test`.`t1`.`swt1b` = 1) and (`test`.`t1`.`st_b` = 1))
+ explain select * from t1 where st_a=1 and swt1a=1 and swt2a=1 and st_b=1 and swt1b=1 and swt2b=1;
+diff --git a/mysql-test/r/index_merge_myisam.result b/mysql-test/r/index_merge_myisam.result
+index b11661cf60a..78566580323 100644
+--- a/mysql-test/r/index_merge_myisam.result
++++ b/mysql-test/r/index_merge_myisam.result
+@@ -108,7 +108,7 @@ Note	1003	/* select#1 */ select `test`.`t0`.`key1` AS `key1`,`test`.`t0`.`key2`
+ #    verify fallback to "range" if there is only one non-confluent condition
+ explain select * from t0 where key2 = 45 or key1 <=> null;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t0	NULL	range	i1,i2	i2	4	NULL	1	100.00	NULL
++1	SIMPLE	t0	NULL	range	i1,i2	i2	4	NULL	1	100.00	Using where
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t0`.`key1` AS `key1`,`test`.`t0`.`key2` AS `key2`,`test`.`t0`.`key3` AS `key3`,`test`.`t0`.`key4` AS `key4`,`test`.`t0`.`key5` AS `key5`,`test`.`t0`.`key6` AS `key6`,`test`.`t0`.`key7` AS `key7`,`test`.`t0`.`key8` AS `key8` from `test`.`t0` where ((`test`.`t0`.`key2` = 45) or (`test`.`t0`.`key1` <=> NULL))
+ explain select * from t0 where key2 = 45 or key1 is not null;
+diff --git a/mysql-test/r/innodb_explain_json_non_select_all.result b/mysql-test/r/innodb_explain_json_non_select_all.result
+index 420010371ae..bdb5eb45ea4 100644
+--- a/mysql-test/r/innodb_explain_json_non_select_all.result
++++ b/mysql-test/r/innodb_explain_json_non_select_all.result
+@@ -1767,7 +1767,6 @@ EXPLAIN
+       "rows_examined_per_scan": 1,
+       "rows_produced_per_join": 1,
+       "filtered": "100.00",
+-      "index_condition": "(`test`.`t1`.`a` < 3)",
+       "using_MRR": true,
+       "cost_info": {
+         "read_cost": "0.60",
+@@ -3617,8 +3616,7 @@ EXPLAIN
+         "used_columns": [
+           "a",
+           "i"
+-        ] /* used_columns */,
+-        "attached_condition": "((`test`.`t1`.`i` > 10) and (`test`.`t1`.`i` <= 18))"
++        ] /* used_columns */
+       } /* table */
+     } /* ordering_operation */
+   } /* query_block */
+@@ -4354,8 +4352,7 @@ EXPLAIN
+         "used_columns": [
+           "a",
+           "i"
+-        ] /* used_columns */,
+-        "attached_condition": "((`test`.`t2`.`i` > 10) and (`test`.`t2`.`i` <= 18))"
++        ] /* used_columns */
+       } /* table */
+     } /* ordering_operation */
+   } /* query_block */
+@@ -4657,8 +4654,7 @@ EXPLAIN
+         "used_columns": [
+           "a",
+           "i"
+-        ] /* used_columns */,
+-        "attached_condition": "((`test`.`t2`.`i` > 10) and (`test`.`t2`.`i` <= 18))"
++        ] /* used_columns */
+       } /* table */
+     } /* ordering_operation */
+   } /* query_block */
+@@ -5398,8 +5394,7 @@ EXPLAIN
+         "used_columns": [
+           "a",
+           "i"
+-        ] /* used_columns */,
+-        "attached_condition": "((`test`.`t2`.`i` > 10) and (`test`.`t2`.`i` <= 18))"
++        ] /* used_columns */
+       } /* table */
+     } /* ordering_operation */
+   } /* query_block */
+@@ -5917,8 +5912,7 @@ EXPLAIN
+       } /* cost_info */,
+       "used_columns": [
+         "a"
+-      ] /* used_columns */,
+-      "attached_condition": "(`test`.`t1`.`a` > 34)"
++      ] /* used_columns */
+     } /* table */
+   } /* query_block */
+ }
+@@ -6815,8 +6809,7 @@ EXPLAIN
+       } /* cost_info */,
+       "used_columns": [
+         "a"
+-      ] /* used_columns */,
+-      "attached_condition": "(`test`.`t1`.`a` < 4)"
++      ] /* used_columns */
+     } /* table */
+   } /* query_block */
+ }
+@@ -8096,6 +8089,8 @@ DROP TABLE t1,t2;
+ CREATE TABLE t1 (c1 INT KEY);
+ CREATE TABLE t2 (c2 INT);
+ CREATE TABLE t3 (c3 INT);
++set @save_optimizer_switch=@@optimizer_switch;
++set optimizer_switch='simplify_count_not_null=off';
+ EXPLAIN UPDATE t3 SET c3 = (
+ SELECT COUNT(d1.c1)
+ FROM (
+@@ -8112,6 +8107,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 3	DERIVED	a12	NULL	eq_ref	PRIMARY	PRIMARY	4	test.a11.c1	1	100.00	Using index
+ Warnings:
+ Note	1003	update `test`.`t3` set `test`.`t3`.`c3` = (/* select#2 */ select count(`d1`.`c1`) from (/* select#3 */ select `test`.`a11`.`c1` AS `c1` from `test`.`t1` `a11` straight_join `test`.`t2` `a21` join `test`.`t1` `a12` where ((`test`.`a21`.`c2` = `test`.`a11`.`c1`) and (`test`.`a12`.`c1` = `test`.`a11`.`c1`))) `d1`)
++set optimizer_switch=@save_optimizer_switch;
+ DROP TABLE t1, t2, t3;
+ #71
+ CREATE TABLE t1 (c1 INT NOT NULL, c2 INT NOT NULL, INDEX i1(c1));
+@@ -8216,8 +8212,7 @@ EXPLAIN
+       } /* cost_info */,
+       "used_columns": [
+         "a"
+-      ] /* used_columns */,
+-      "attached_condition": "(`test`.`t1`.`a` > 10)"
++      ] /* used_columns */
+     } /* table */
+   } /* query_block */
+ }
+@@ -8315,8 +8310,7 @@ EXPLAIN
+         } /* cost_info */,
+         "used_columns": [
+           "a"
+-        ] /* used_columns */,
+-        "attached_condition": "(`test`.`t1`.`a` > 10)"
++        ] /* used_columns */
+       } /* table */
+     } /* ordering_operation */
+   } /* query_block */
+diff --git a/mysql-test/r/innodb_explain_json_non_select_none.result b/mysql-test/r/innodb_explain_json_non_select_none.result
+index 775037aaf54..9a47d8aeb03 100644
+--- a/mysql-test/r/innodb_explain_json_non_select_none.result
++++ b/mysql-test/r/innodb_explain_json_non_select_none.result
+@@ -1782,8 +1782,7 @@ EXPLAIN
+       "used_columns": [
+         "a",
+         "b"
+-      ] /* used_columns */,
+-      "attached_condition": "(`test`.`t1`.`a` < 3)"
++      ] /* used_columns */
+     } /* table */
+   } /* query_block */
+ }
+@@ -3605,8 +3604,7 @@ EXPLAIN
+         "used_columns": [
+           "a",
+           "i"
+-        ] /* used_columns */,
+-        "attached_condition": "((`test`.`t1`.`i` > 10) and (`test`.`t1`.`i` <= 18))"
++        ] /* used_columns */
+       } /* table */
+     } /* ordering_operation */
+   } /* query_block */
+@@ -4342,8 +4340,7 @@ EXPLAIN
+         "used_columns": [
+           "a",
+           "i"
+-        ] /* used_columns */,
+-        "attached_condition": "((`test`.`t2`.`i` > 10) and (`test`.`t2`.`i` <= 18))"
++        ] /* used_columns */
+       } /* table */
+     } /* ordering_operation */
+   } /* query_block */
+@@ -4645,8 +4642,7 @@ EXPLAIN
+         "used_columns": [
+           "a",
+           "i"
+-        ] /* used_columns */,
+-        "attached_condition": "((`test`.`t2`.`i` > 10) and (`test`.`t2`.`i` <= 18))"
++        ] /* used_columns */
+       } /* table */
+     } /* ordering_operation */
+   } /* query_block */
+@@ -5386,8 +5382,7 @@ EXPLAIN
+         "used_columns": [
+           "a",
+           "i"
+-        ] /* used_columns */,
+-        "attached_condition": "((`test`.`t2`.`i` > 10) and (`test`.`t2`.`i` <= 18))"
++        ] /* used_columns */
+       } /* table */
+     } /* ordering_operation */
+   } /* query_block */
+@@ -5905,8 +5900,7 @@ EXPLAIN
+       } /* cost_info */,
+       "used_columns": [
+         "a"
+-      ] /* used_columns */,
+-      "attached_condition": "(`test`.`t1`.`a` > 34)"
++      ] /* used_columns */
+     } /* table */
+   } /* query_block */
+ }
+@@ -6803,8 +6797,7 @@ EXPLAIN
+       } /* cost_info */,
+       "used_columns": [
+         "a"
+-      ] /* used_columns */,
+-      "attached_condition": "(`test`.`t1`.`a` < 4)"
++      ] /* used_columns */
+     } /* table */
+   } /* query_block */
+ }
+@@ -8117,6 +8110,8 @@ DROP TABLE t1,t2;
+ CREATE TABLE t1 (c1 INT KEY);
+ CREATE TABLE t2 (c2 INT);
+ CREATE TABLE t3 (c3 INT);
++set @save_optimizer_switch=@@optimizer_switch;
++set optimizer_switch='simplify_count_not_null=off';
+ EXPLAIN UPDATE t3 SET c3 = (
+ SELECT COUNT(d1.c1)
+ FROM (
+@@ -8133,6 +8128,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 3	DERIVED	a12	NULL	eq_ref	PRIMARY	PRIMARY	4	test.a11.c1	1	100.00	Using index
+ Warnings:
+ Note	1003	update `test`.`t3` set `test`.`t3`.`c3` = (/* select#2 */ select count(`d1`.`c1`) from (/* select#3 */ select `test`.`a11`.`c1` AS `c1` from `test`.`t1` `a11` straight_join `test`.`t2` `a21` join `test`.`t1` `a12` where ((`test`.`a21`.`c2` = `test`.`a11`.`c1`) and (`test`.`a12`.`c1` = `test`.`a11`.`c1`))) `d1`)
++set optimizer_switch=@save_optimizer_switch;
+ DROP TABLE t1, t2, t3;
+ #71
+ CREATE TABLE t1 (c1 INT NOT NULL, c2 INT NOT NULL, INDEX i1(c1));
+@@ -8237,8 +8233,7 @@ EXPLAIN
+       } /* cost_info */,
+       "used_columns": [
+         "a"
+-      ] /* used_columns */,
+-      "attached_condition": "(`test`.`t1`.`a` > 10)"
++      ] /* used_columns */
+     } /* table */
+   } /* query_block */
+ }
+@@ -8336,8 +8331,7 @@ EXPLAIN
+         } /* cost_info */,
+         "used_columns": [
+           "a"
+-        ] /* used_columns */,
+-        "attached_condition": "(`test`.`t1`.`a` > 10)"
++        ] /* used_columns */
+       } /* table */
+     } /* ordering_operation */
+   } /* query_block */
+diff --git a/mysql-test/r/innodb_explain_non_select_all.result b/mysql-test/r/innodb_explain_non_select_all.result
+index ff4b80bf296..a067c759605 100644
+--- a/mysql-test/r/innodb_explain_non_select_all.result
++++ b/mysql-test/r/innodb_explain_non_select_all.result
+@@ -2473,6 +2473,8 @@ DROP TABLE t1,t2;
+ CREATE TABLE t1 (c1 INT KEY);
+ CREATE TABLE t2 (c2 INT);
+ CREATE TABLE t3 (c3 INT);
++set @save_optimizer_switch=@@optimizer_switch;
++set optimizer_switch='simplify_count_not_null=off';
+ EXPLAIN UPDATE t3 SET c3 = (
+ SELECT COUNT(d1.c1)
+ FROM (
+@@ -2489,6 +2491,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 3	DERIVED	a12	NULL	eq_ref	PRIMARY	PRIMARY	4	test.a11.c1	1	100.00	Using index
+ Warnings:
+ Note	1003	update `test`.`t3` set `test`.`t3`.`c3` = (/* select#2 */ select count(`d1`.`c1`) from (/* select#3 */ select `test`.`a11`.`c1` AS `c1` from `test`.`t1` `a11` straight_join `test`.`t2` `a21` join `test`.`t1` `a12` where ((`test`.`a21`.`c2` = `test`.`a11`.`c1`) and (`test`.`a12`.`c1` = `test`.`a11`.`c1`))) `d1`)
++set optimizer_switch=@save_optimizer_switch;
+ DROP TABLE t1, t2, t3;
+ #71
+ CREATE TABLE t1 (c1 INT NOT NULL, c2 INT NOT NULL, INDEX i1(c1));
+diff --git a/mysql-test/r/innodb_explain_non_select_none.result b/mysql-test/r/innodb_explain_non_select_none.result
+index 01b28f91877..2875ddeef24 100644
+--- a/mysql-test/r/innodb_explain_non_select_none.result
++++ b/mysql-test/r/innodb_explain_non_select_none.result
+@@ -2470,6 +2470,8 @@ DROP TABLE t1,t2;
+ CREATE TABLE t1 (c1 INT KEY);
+ CREATE TABLE t2 (c2 INT);
+ CREATE TABLE t3 (c3 INT);
++set @save_optimizer_switch=@@optimizer_switch;
++set optimizer_switch='simplify_count_not_null=off';
+ EXPLAIN UPDATE t3 SET c3 = (
+ SELECT COUNT(d1.c1)
+ FROM (
+@@ -2486,6 +2488,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 3	DERIVED	a12	NULL	eq_ref	PRIMARY	PRIMARY	4	test.a11.c1	1	100.00	Using index
+ Warnings:
+ Note	1003	update `test`.`t3` set `test`.`t3`.`c3` = (/* select#2 */ select count(`d1`.`c1`) from (/* select#3 */ select `test`.`a11`.`c1` AS `c1` from `test`.`t1` `a11` straight_join `test`.`t2` `a21` join `test`.`t1` `a12` where ((`test`.`a21`.`c2` = `test`.`a11`.`c1`) and (`test`.`a12`.`c1` = `test`.`a11`.`c1`))) `d1`)
++set optimizer_switch=@save_optimizer_switch;
+ DROP TABLE t1, t2, t3;
+ #71
+ CREATE TABLE t1 (c1 INT NOT NULL, c2 INT NOT NULL, INDEX i1(c1));
+diff --git a/mysql-test/r/negation_elimination.result b/mysql-test/r/negation_elimination.result
+index fc869a4fb02..b42e8cc7a5f 100644
+--- a/mysql-test/r/negation_elimination.result
++++ b/mysql-test/r/negation_elimination.result
+@@ -391,7 +391,7 @@ a
+ 19
+ explain select * from t1 where not((a < 5 and a < 10) and (not(a > 16) or a > 17));
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t1	NULL	range	a	a	5	NULL	15	100.00	Using index
++1	SIMPLE	t1	NULL	range	a	a	5	NULL	15	100.00	Using where; Using index
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` where ((`test`.`t1`.`a` >= 5) or (`test`.`t1`.`a` >= 10) or ((`test`.`t1`.`a` > 16) and (`test`.`t1`.`a` <= 17)))
+ select * from t1 where not((a < 5 and a < 10) and (not(a > 16) or a > 17));
+diff --git a/mysql-test/r/order_by_all.result b/mysql-test/r/order_by_all.result
+index 1706a5773f7..5febe1f31e2 100644
+--- a/mysql-test/r/order_by_all.result
++++ b/mysql-test/r/order_by_all.result
+@@ -3282,7 +3282,7 @@ OR view_t1.pk BETWEEN 1 AND 7
+ ORDER BY t2.i1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t2	NULL	system	NULL	NULL	NULL	NULL	0	0.00	const row not found
+-1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	2	100.00	Using index
++1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	2	100.00	Using where; Using index
+ Warnings:
+ Note	1003	/* select#1 */ select distinct NULL AS `i1`,`test`.`t1`.`pk` AS `pk` from `test`.`t1` where (((`test`.`t1`.`pk` <= 204) and (NULL <> 3)) or (`test`.`t1`.`pk` between 1 and 7)) order by NULL
+ SELECT DISTINCT t2.i1, view_t1.pk
+diff --git a/mysql-test/r/order_by_none.result b/mysql-test/r/order_by_none.result
+index cab548df480..c5a2dc11bf5 100644
+--- a/mysql-test/r/order_by_none.result
++++ b/mysql-test/r/order_by_none.result
+@@ -3282,7 +3282,7 @@ OR view_t1.pk BETWEEN 1 AND 7
+ ORDER BY t2.i1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t2	NULL	system	NULL	NULL	NULL	NULL	0	0.00	const row not found
+-1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	2	100.00	Using index
++1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	2	100.00	Using where; Using index
+ Warnings:
+ Note	1003	/* select#1 */ select distinct NULL AS `i1`,`test`.`t1`.`pk` AS `pk` from `test`.`t1` where (((`test`.`t1`.`pk` <= 204) and (NULL <> 3)) or (`test`.`t1`.`pk` between 1 and 7)) order by NULL
+ SELECT DISTINCT t2.i1, view_t1.pk
+diff --git a/mysql-test/r/range_all.result b/mysql-test/r/range_all.result
+index a8d3690cbf0..d0f40f11681 100644
+--- a/mysql-test/r/range_all.result
++++ b/mysql-test/r/range_all.result
+@@ -1457,7 +1457,7 @@ SELECT * FROM t1 WHERE
+ 3 <= a AND a <= 5 OR 
+ 3 <= a;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t1	NULL	range	a	a	5	NULL	2	100.00	Using index
++1	SIMPLE	t1	NULL	range	a	a	5	NULL	2	100.00	Using where; Using index
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (((3 <= `test`.`t1`.`a`) and (`test`.`t1`.`a` <= 5)) or (3 <= `test`.`t1`.`a`))
+ SELECT * FROM t2 WHERE
+diff --git a/mysql-test/r/range_mrr.result b/mysql-test/r/range_mrr.result
+index 179532f85ec..fa0924f6d73 100644
+--- a/mysql-test/r/range_mrr.result
++++ b/mysql-test/r/range_mrr.result
+@@ -1457,7 +1457,7 @@ SELECT * FROM t1 WHERE
+ 3 <= a AND a <= 5 OR 
+ 3 <= a;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t1	NULL	range	a	a	5	NULL	2	100.00	Using index
++1	SIMPLE	t1	NULL	range	a	a	5	NULL	2	100.00	Using where; Using index
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (((3 <= `test`.`t1`.`a`) and (`test`.`t1`.`a` <= 5)) or (3 <= `test`.`t1`.`a`))
+ SELECT * FROM t2 WHERE
+diff --git a/mysql-test/r/range_mrr_cost.result b/mysql-test/r/range_mrr_cost.result
+index 2dd816006bf..37776c0a361 100644
+--- a/mysql-test/r/range_mrr_cost.result
++++ b/mysql-test/r/range_mrr_cost.result
+@@ -1457,7 +1457,7 @@ SELECT * FROM t1 WHERE
+ 3 <= a AND a <= 5 OR 
+ 3 <= a;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t1	NULL	range	a	a	5	NULL	2	100.00	Using index
++1	SIMPLE	t1	NULL	range	a	a	5	NULL	2	100.00	Using where; Using index
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (((3 <= `test`.`t1`.`a`) and (`test`.`t1`.`a` <= 5)) or (3 <= `test`.`t1`.`a`))
+ SELECT * FROM t2 WHERE
+diff --git a/mysql-test/r/range_none.result b/mysql-test/r/range_none.result
+index b79b47e3198..56de33bc9b8 100644
+--- a/mysql-test/r/range_none.result
++++ b/mysql-test/r/range_none.result
+@@ -1456,7 +1456,7 @@ SELECT * FROM t1 WHERE
+ 3 <= a AND a <= 5 OR 
+ 3 <= a;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t1	NULL	range	a	a	5	NULL	2	100.00	Using index
++1	SIMPLE	t1	NULL	range	a	a	5	NULL	2	100.00	Using where; Using index
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (((3 <= `test`.`t1`.`a`) and (`test`.`t1`.`a` <= 5)) or (3 <= `test`.`t1`.`a`))
+ SELECT * FROM t2 WHERE
+diff --git a/mysql-test/r/select_all.result b/mysql-test/r/select_all.result
+index f797258f4a2..4f92dd8c536 100644
+--- a/mysql-test/r/select_all.result
++++ b/mysql-test/r/select_all.result
+@@ -1509,7 +1509,7 @@ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where (`test`.`t4`.`companynr` > 0)
+ explain select companynr,companyname from t4 left join t2 using (companynr) where companynr > 0 or companynr < 0 or companynr > 0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	11	100.00	NULL
++1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	11	100.00	Using where
+ 1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	1199	100.00	Using where; Using join buffer (hash join)
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where ((`test`.`t4`.`companynr` > 0) or (`test`.`t4`.`companynr` > 0))
+diff --git a/mysql-test/r/select_all_bka.result b/mysql-test/r/select_all_bka.result
+index b0b5b5224a4..e3ea158a4a8 100644
+--- a/mysql-test/r/select_all_bka.result
++++ b/mysql-test/r/select_all_bka.result
+@@ -1510,7 +1510,7 @@ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where (`test`.`t4`.`companynr` > 0)
+ explain select companynr,companyname from t4 left join t2 using (companynr) where companynr > 0 or companynr < 0 or companynr > 0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	11	100.00	NULL
++1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	11	100.00	Using where
+ 1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	1199	100.00	Using where; Using join buffer (hash join)
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where ((`test`.`t4`.`companynr` > 0) or (`test`.`t4`.`companynr` > 0))
+diff --git a/mysql-test/r/select_all_bka_nobnl.result b/mysql-test/r/select_all_bka_nobnl.result
+index 4c68cf5d9df..f221516cf95 100644
+--- a/mysql-test/r/select_all_bka_nobnl.result
++++ b/mysql-test/r/select_all_bka_nobnl.result
+@@ -1510,7 +1510,7 @@ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where (`test`.`t4`.`companynr` > 0)
+ explain select companynr,companyname from t4 left join t2 using (companynr) where companynr > 0 or companynr < 0 or companynr > 0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	11	100.00	NULL
++1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	11	100.00	Using where
+ 1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	1199	100.00	Using where
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where ((`test`.`t4`.`companynr` > 0) or (`test`.`t4`.`companynr` > 0))
+diff --git a/mysql-test/r/select_none.result b/mysql-test/r/select_none.result
+index 10783c71de5..7232af995d6 100644
+--- a/mysql-test/r/select_none.result
++++ b/mysql-test/r/select_none.result
+@@ -1508,7 +1508,7 @@ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where (`test`.`t4`.`companynr` > 0)
+ explain select companynr,companyname from t4 left join t2 using (companynr) where companynr > 0 or companynr < 0 or companynr > 0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	11	100.00	NULL
++1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	11	100.00	Using where
+ 1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	1199	100.00	Using where; Using join buffer (hash join)
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where ((`test`.`t4`.`companynr` > 0) or (`test`.`t4`.`companynr` > 0))
+diff --git a/mysql-test/r/select_none_bka.result b/mysql-test/r/select_none_bka.result
+index 1c291b111bf..92eb84694c7 100644
+--- a/mysql-test/r/select_none_bka.result
++++ b/mysql-test/r/select_none_bka.result
+@@ -1509,7 +1509,7 @@ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where (`test`.`t4`.`companynr` > 0)
+ explain select companynr,companyname from t4 left join t2 using (companynr) where companynr > 0 or companynr < 0 or companynr > 0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	11	100.00	NULL
++1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	11	100.00	Using where
+ 1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	1199	100.00	Using where; Using join buffer (hash join)
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where ((`test`.`t4`.`companynr` > 0) or (`test`.`t4`.`companynr` > 0))
+diff --git a/mysql-test/r/select_none_bka_nobnl.result b/mysql-test/r/select_none_bka_nobnl.result
+index b65f8452334..6f172d9f29b 100644
+--- a/mysql-test/r/select_none_bka_nobnl.result
++++ b/mysql-test/r/select_none_bka_nobnl.result
+@@ -1509,7 +1509,7 @@ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where (`test`.`t4`.`companynr` > 0)
+ explain select companynr,companyname from t4 left join t2 using (companynr) where companynr > 0 or companynr < 0 or companynr > 0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	11	100.00	NULL
++1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	11	100.00	Using where
+ 1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	1199	100.00	Using where
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where ((`test`.`t4`.`companynr` > 0) or (`test`.`t4`.`companynr` > 0))
+diff --git a/mysql-test/r/ssl.result b/mysql-test/r/ssl.result
+index d464a515c4f..7ded6f67d6e 100644
+--- a/mysql-test/r/ssl.result
++++ b/mysql-test/r/ssl.result
+@@ -1502,7 +1502,7 @@ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where (`test`.`t4`.`companynr` > 0)
+ explain select companynr,companyname from t4 left join t2 using (companynr) where companynr > 0 or companynr < 0 or companynr > 0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	#	#	NULL
++1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	#	#	Using where
+ 1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using join buffer (hash join)
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where ((`test`.`t4`.`companynr` > 0) or (`test`.`t4`.`companynr` > 0))
+diff --git a/mysql-test/r/ssl_compress.result b/mysql-test/r/ssl_compress.result
+index ce582e89cd8..4a1476c41bc 100644
+--- a/mysql-test/r/ssl_compress.result
++++ b/mysql-test/r/ssl_compress.result
+@@ -1499,7 +1499,7 @@ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where (`test`.`t4`.`companynr` > 0)
+ explain select companynr,companyname from t4 left join t2 using (companynr) where companynr > 0 or companynr < 0 or companynr > 0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	#	#	NULL
++1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	#	#	Using where
+ 1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using join buffer (hash join)
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where ((`test`.`t4`.`companynr` > 0) or (`test`.`t4`.`companynr` > 0))
+diff --git a/mysql-test/suite/dstore_main/r/composite_index_read.result b/mysql-test/suite/dstore_main/r/composite_index_read.result
+index 8983fc1ec76..2ae15d1aeb3 100644
+--- a/mysql-test/suite/dstore_main/r/composite_index_read.result
++++ b/mysql-test/suite/dstore_main/r/composite_index_read.result
+@@ -1042,17 +1042,17 @@ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`b` = 2) and (`test`.`t`.`a` = 2) and (`test`.`t`.`c` is null)) order by `test`.`t`.`id`
+ explain select * from t force index(a) where a < 4 or a is null order by id;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t	NULL	range	a	a	5	NULL	20	100.00	Using filesort
++1	SIMPLE	t	NULL	range	a	a	5	NULL	20	100.00	Using where; Using filesort
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` < 4) or (`test`.`t`.`a` is null)) order by `test`.`t`.`id`
+ explain select * from t force index(a) where a = 2 and (b < 4 or b is null) order by id;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t	NULL	range	a	a	10	NULL	3	100.00	Using filesort
++1	SIMPLE	t	NULL	range	a	a	10	NULL	3	100.00	Using where; Using filesort
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` = 2) and ((`test`.`t`.`b` < 4) or (`test`.`t`.`b` is null))) order by `test`.`t`.`id`
+ explain select * from t force index(a) where a = 2 and b = 2 and (c < 4 or c is null) order by id;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t	NULL	range	a	a	15	NULL	2	100.00	Using filesort
++1	SIMPLE	t	NULL	range	a	a	15	NULL	2	100.00	Using where; Using filesort
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`b` = 2) and (`test`.`t`.`a` = 2) and ((`test`.`t`.`c` < 4) or (`test`.`t`.`c` is null))) order by `test`.`t`.`id`
+ explain select * from t force index(a) where a is not null or a is null order by id;
+@@ -1202,17 +1202,17 @@ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`b` = 2) and (`test`.`t1`.`a` = 2) and (`test`.`t1`.`c` is null)) order by `test`.`t1`.`id`
+ explain select * from t1 force index(a) where a < 4 or a is null order by id;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t1	NULL	range	a	a	5	NULL	20	100.00	Using filesort
++1	SIMPLE	t1	NULL	range	a	a	5	NULL	20	100.00	Using where; Using filesort
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`a` < 4) or (`test`.`t1`.`a` is null)) order by `test`.`t1`.`id`
+ explain select * from t1 force index(a) where a = 2 and (b < 4 or b is null) order by id;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t1	NULL	range	a	a	10	NULL	3	100.00	Using filesort
++1	SIMPLE	t1	NULL	range	a	a	10	NULL	3	100.00	Using where; Using filesort
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`a` = 2) and ((`test`.`t1`.`b` < 4) or (`test`.`t1`.`b` is null))) order by `test`.`t1`.`id`
+ explain select * from t1 force index(a) where a = 2 and b = 2 and (c < 4 or c is null) order by id;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t1	NULL	range	a	a	15	NULL	2	100.00	Using filesort
++1	SIMPLE	t1	NULL	range	a	a	15	NULL	2	100.00	Using where; Using filesort
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`b` = 2) and (`test`.`t1`.`a` = 2) and ((`test`.`t1`.`c` < 4) or (`test`.`t1`.`c` is null))) order by `test`.`t1`.`id`
+ explain select * from t1 force index(a) where a is not null or a is null order by id;
+@@ -1422,7 +1422,7 @@ Table	Op	Msg_type	Msg_text
+ test.t1	analyze	status	OK
+ EXPLAIN SELECT * FROM t1 WHERE a < 10 or (a IS NULL);
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t1	NULL	range	a	a	5	NULL	3	100.00	NULL
++1	SIMPLE	t1	NULL	range	a	a	5	NULL	3	100.00	Using where
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` < 10) or (`test`.`t1`.`a` is null))
+ SELECT * FROM t1 WHERE a < 10 or (a IS NULL);
+diff --git a/mysql-test/suite/dstore_main/r/index_read_scan_key.result b/mysql-test/suite/dstore_main/r/index_read_scan_key.result
+index 7b23cb7efce..467bd747cab 100644
+--- a/mysql-test/suite/dstore_main/r/index_read_scan_key.result
++++ b/mysql-test/suite/dstore_main/r/index_read_scan_key.result
+@@ -38,18 +38,18 @@ Pattern "ScanKey_IndexScan" found
+ # test print scan key of rescan
+ explain select * from t force index(a) where a < 1 or a is null order by a desc,id asc;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t	NULL	range	a	a	5	NULL	#	#	Using filesort
++1	SIMPLE	t	NULL	range	a	a	5	NULL	#	#	Using index condition; Using filesort
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` < 1) or (`test`.`t`.`a` is null)) order by `test`.`t`.`a` desc,`test`.`t`.`id`
+ explain format=tree select * from t force index(a) where a < 1 or a is null order by a desc,id asc;
+ EXPLAIN
+ -> Sort: t.a DESC, t.id
+-    -> Index range scan on t using a over (NULL <= a < 1)
++    -> Index range scan on t using a over (NULL <= a < 1), with index condition: ((t.a < 1) or (t.a is null))
+ 
+ explain analyze select * from t force index(a) where a < 1 or a is null order by a desc,id asc;
+ EXPLAIN
+ -> Sort: t.a DESC, t.id
+-    -> Index range scan on t using a over (NULL <= a < 1)
++    -> Index range scan on t using a over (NULL <= a < 1), with index condition: ((t.a < 1) or (t.a is null))
+ 
+ select * from t force index(a) where a < 1 or a is null order by a desc,id asc;
+ id	a	b	c
+@@ -68,7 +68,7 @@ set debug='-d,print_dstore_scankey_info';
+ # test index locking read
+ explain select * from t force index(a) where a < 3 or a is null order by a desc,id asc for update;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t	NULL	range	a	a	5	NULL	#	#	Using filesort
++1	SIMPLE	t	NULL	range	a	a	5	NULL	#	#	Using index condition; Using filesort
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` < 3) or (`test`.`t`.`a` is null)) order by `test`.`t`.`a` desc,`test`.`t`.`id`
+ select * from t force index(a) where a < 3 or a is null order by a desc,id asc for update;
+diff --git a/mysql-test/suite/dstore_main/r/innodb_explain_json_non_select_all-dstore.result b/mysql-test/suite/dstore_main/r/innodb_explain_json_non_select_all-dstore.result
+index 711444f567b..f096ca3fc8d 100644
+--- a/mysql-test/suite/dstore_main/r/innodb_explain_json_non_select_all-dstore.result
++++ b/mysql-test/suite/dstore_main/r/innodb_explain_json_non_select_all-dstore.result
+@@ -2761,7 +2761,7 @@ EXPLAIN
+   "query_block": {
+     "select_id": 1,
+     "cost_info": {
+-      "query_cost": "5.67"
++      "query_cost": "7.67"
+     } /* cost_info */,
+     "nested_loop": [
+       {
+@@ -2773,9 +2773,9 @@ EXPLAIN
+           "rows_produced_per_join": 5,
+           "filtered": "100.00",
+           "cost_info": {
+-            "read_cost": "1.00",
++            "read_cost": "3.00",
+             "eval_cost": "0.50",
+-            "prefix_cost": "1.50",
++            "prefix_cost": "3.50",
+             "data_read_per_join": "40"
+           } /* cost_info */,
+           "used_columns": [
+@@ -2794,7 +2794,7 @@ EXPLAIN
+           "cost_info": {
+             "read_cost": "3.33",
+             "eval_cost": "0.50",
+-            "prefix_cost": "5.67",
++            "prefix_cost": "7.67",
+             "data_read_per_join": "240"
+           } /* cost_info */,
+           "used_columns": [
+@@ -2817,7 +2817,7 @@ EXPLAIN
+   "query_block": {
+     "select_id": 1,
+     "cost_info": {
+-      "query_cost": "5.67"
++      "query_cost": "7.67"
+     } /* cost_info */,
+     "nested_loop": [
+       {
+@@ -2828,9 +2828,9 @@ EXPLAIN
+           "rows_produced_per_join": 5,
+           "filtered": "100.00",
+           "cost_info": {
+-            "read_cost": "1.00",
++            "read_cost": "3.00",
+             "eval_cost": "0.50",
+-            "prefix_cost": "1.50",
++            "prefix_cost": "3.50",
+             "data_read_per_join": "40"
+           } /* cost_info */,
+           "used_columns": [
+@@ -2850,7 +2850,7 @@ EXPLAIN
+           "cost_info": {
+             "read_cost": "3.33",
+             "eval_cost": "0.50",
+-            "prefix_cost": "5.67",
++            "prefix_cost": "7.67",
+             "data_read_per_join": "240"
+           } /* cost_info */,
+           "used_columns": [
+diff --git a/mysql-test/suite/dstore_main/r/negation_elimination-dstore.result b/mysql-test/suite/dstore_main/r/negation_elimination-dstore.result
+index 106ab56845c..6286c66cd99 100644
+--- a/mysql-test/suite/dstore_main/r/negation_elimination-dstore.result
++++ b/mysql-test/suite/dstore_main/r/negation_elimination-dstore.result
+@@ -394,7 +394,7 @@ a
+ 19
+ explain select * from t1 where not((a < 5 and a < 10) and (not(a > 16) or a > 17));
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t1	NULL	range	a	a	5	NULL	15	100.00	Using index
++1	SIMPLE	t1	NULL	range	a	a	5	NULL	15	100.00	Using where; Using index
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` where ((`test`.`t1`.`a` >= 5) or (`test`.`t1`.`a` >= 10) or ((`test`.`t1`.`a` > 16) and (`test`.`t1`.`a` <= 17)))
+ select * from t1 where not((a < 5 and a < 10) and (not(a > 16) or a > 17));
+diff --git a/mysql-test/suite/dstore_main/r/order_by_all-dstore.result b/mysql-test/suite/dstore_main/r/order_by_all-dstore.result
+index aab8a45e17e..ce3fd56bbd9 100644
+--- a/mysql-test/suite/dstore_main/r/order_by_all-dstore.result
++++ b/mysql-test/suite/dstore_main/r/order_by_all-dstore.result
+@@ -3311,7 +3311,7 @@ OR view_t1.pk BETWEEN 1 AND 7
+ ORDER BY t2.i1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t2	NULL	system	NULL	NULL	NULL	NULL	0	0.00	const row not found
+-1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	2	100.00	Using index
++1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	2	100.00	Using where; Using index
+ Warnings:
+ Note	1003	/* select#1 */ select distinct NULL AS `i1`,`test`.`t1`.`pk` AS `pk` from `test`.`t1` where (((`test`.`t1`.`pk` <= 204) and (NULL <> 3)) or (`test`.`t1`.`pk` between 1 and 7)) order by NULL
+ SELECT DISTINCT t2.i1, view_t1.pk
+diff --git a/mysql-test/suite/dstore_main/r/ssl-dstore.result b/mysql-test/suite/dstore_main/r/ssl-dstore.result
+index 0831aea1d52..4d3430f0c81 100644
+--- a/mysql-test/suite/dstore_main/r/ssl-dstore.result
++++ b/mysql-test/suite/dstore_main/r/ssl-dstore.result
+@@ -1496,7 +1496,7 @@ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where (`test`.`t4`.`companynr` > 0)
+ explain select companynr,companyname from t4 left join t2 using (companynr) where companynr > 0 or companynr < 0 or companynr > 0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	#	#	NULL
++1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	#	#	Using index condition
+ 1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using join buffer (hash join)
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where ((`test`.`t4`.`companynr` > 0) or (`test`.`t4`.`companynr` > 0))
+diff --git a/mysql-test/suite/dstore_main/r/ssl_compress-dstore.result b/mysql-test/suite/dstore_main/r/ssl_compress-dstore.result
+index 30167963b07..ca6be650867 100644
+--- a/mysql-test/suite/dstore_main/r/ssl_compress-dstore.result
++++ b/mysql-test/suite/dstore_main/r/ssl_compress-dstore.result
+@@ -1493,7 +1493,7 @@ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where (`test`.`t4`.`companynr` > 0)
+ explain select companynr,companyname from t4 left join t2 using (companynr) where companynr > 0 or companynr < 0 or companynr > 0;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	#	#	NULL
++1	SIMPLE	t4	NULL	range	PRIMARY	PRIMARY	1	NULL	#	#	Using index condition
+ 1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using join buffer (hash join)
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t4`.`companynr` AS `companynr`,`test`.`t4`.`companyname` AS `companyname` from `test`.`t4` left join `test`.`t2` on((`test`.`t2`.`companynr` = `test`.`t4`.`companynr`)) where ((`test`.`t4`.`companynr` > 0) or (`test`.`t4`.`companynr` > 0))
+diff --git a/mysql-test/suite/innodb/r/multi_value_basic.result b/mysql-test/suite/innodb/r/multi_value_basic.result
+index 5f95e1b44b1..b117764094f 100644
+--- a/mysql-test/suite/innodb/r/multi_value_basic.result
++++ b/mysql-test/suite/innodb/r/multi_value_basic.result
+@@ -1186,7 +1186,7 @@ id	doc_id	doc
+ 5	2	{"val": [4, 5]}
+ EXPLAIN SELECT * FROM t FORCE INDEX (mv_doc_id) WHERE doc_id < 2 OR doc_id IS NULL;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	t	NULL	range	mv_doc_id	mv_doc_id	5	NULL	1	100.00	NULL
++1	SIMPLE	t	NULL	range	mv_doc_id	mv_doc_id	5	NULL	1	100.00	Using where
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`doc_id` AS `doc_id`,`test`.`t`.`doc` AS `doc` from `test`.`t` FORCE INDEX (`mv_doc_id`) where ((`test`.`t`.`doc_id` < 2) or (`test`.`t`.`doc_id` is null))
+ SELECT * FROM t FORCE INDEX (mv_doc_id) WHERE doc_id < 2 OR doc_id IS NULL;
+diff --git a/sql/sql_optimizer.cc b/sql/sql_optimizer.cc
+index 203b93f2e21..48dc8d71eb7 100644
+--- a/sql/sql_optimizer.cc
++++ b/sql/sql_optimizer.cc
+@@ -62,6 +62,7 @@
+ #include "mysql/udf_registration_types.h"
+ #include "mysql_com.h"
+ #include "mysqld_error.h"
++#include "scope_guard.h"
+ #include "sql/check_stack.h"
+ #include "sql/current_thd.h"
+ #include "sql/debug_sync.h"  // DEBUG_SYNC
+@@ -9136,6 +9137,20 @@ static bool reduce_cond_for_table(THD *thd, Item *cond, table_map null_extended,
+           return false;
+       }
+     } else {  // Or list
++      // deactivate removal of redundant conditions for OR clauses, it creates
++      // problems when the range condition is not of the same form as
++      // the operator's. Consider, for example, that WHERE is: c=3
++      // OR c>2. The range optimizer may build a single range
++      // c>2, which has no max value. So when we process c=3
++      // here, intending to compare 3 with the min and max of the
++      // range, we cannot.
++      auto stored_variable =
++          thd->variables.rds_empty_redundant_check_in_range_scan;
++      thd->variables.rds_empty_redundant_check_in_range_scan = false;
++      auto cleanup_guard = create_scope_guard([thd, stored_variable] {
++        thd->variables.rds_empty_redundant_check_in_range_scan =
++            stored_variable;
++      });
+       Item *item;
+       while ((item = li++)) {
+         Item *upd_item;
+-- 
+2.23.0
+

@@ -1,0 +1,105 @@
+--source include/pq_test.inc
+
+set @old_force_parallel_execute = @@force_parallel_execute;
+
+CREATE TABLE `store_sales` (
+  `ss_sold_date_sk` int DEFAULT NULL,
+  `ss_item_sk` int NOT NULL,
+  `ss_store_sk` int DEFAULT NULL,
+  `ss_ticket_number` int NOT NULL,
+  `ss_ext_sales_price` decimal(7,2) DEFAULT NULL,
+  PRIMARY KEY (`ss_item_sk`,`ss_ticket_number`)
+) ENGINE=InnoDB;
+
+CREATE TABLE `store_returns` (
+ `sr_returned_date_sk` int DEFAULT NULL,
+ `sr_item_sk` int NOT NULL,
+ `sr_store_sk` int DEFAULT NULL,
+ `sr_ticket_number` int NOT NULL,
+ PRIMARY KEY (`sr_item_sk`,`sr_ticket_number`)
+) ENGINE=InnoDB;
+
+CREATE TABLE `date_dim` (
+ `d_date_sk` int NOT NULL,
+ `d_date_id` char(16) NOT NULL,
+ `d_date` date DEFAULT NULL,
+ PRIMARY KEY (`d_date_sk`)
+) ENGINE=InnoDB;
+
+CREATE TABLE `store` (
+  `s_store_sk` int NOT NULL,
+  `s_store_id` char(16) NOT NULL,
+  PRIMARY KEY (`s_store_sk`)
+) ENGINE=InnoDB;
+
+set force_parallel_execute=0;
+explain
+with ssr as
+ (select /*+ JOIN_SUFFIX(store) */
+        s_store_id,
+        sum(sales_price) as sales
+ from
+  ( select  ss_store_sk as store_sk,
+            ss_sold_date_sk  as date_sk,
+            ss_ext_sales_price as sales_price
+    from store_sales
+    union all
+    select sr_store_sk as store_sk,
+           sr_returned_date_sk as date_sk,
+           cast(0 as decimal(7,2)) as sales_price
+    from store_returns
+   ) salesreturns,
+     date_dim,
+     store
+ where date_sk = d_date_sk
+       and d_date between cast('2001-08-04' as date)
+                  and date_add(cast('2001-08-04' as date), interval 14 day)
+       and store_sk = s_store_sk
+ group by s_store_id)
+ select
+        id
+ from
+ (select
+        s_store_id as id
+ from   ssr
+ ) x;
+
+
+set force_parallel_execute=1;
+explain
+with ssr as
+ (select /*+ JOIN_SUFFIX(store) */
+        s_store_id,
+        sum(sales_price) as sales
+ from
+  ( select  ss_store_sk as store_sk,
+            ss_sold_date_sk  as date_sk,
+            ss_ext_sales_price as sales_price
+    from store_sales
+    union all
+    select sr_store_sk as store_sk,
+           sr_returned_date_sk as date_sk,
+           cast(0 as decimal(7,2)) as sales_price
+    from store_returns
+   ) salesreturns,
+     date_dim,
+     store
+ where date_sk = d_date_sk
+       and d_date between cast('2001-08-04' as date)
+                  and date_add(cast('2001-08-04' as date), interval 14 day)
+       and store_sk = s_store_sk
+ group by s_store_id)
+ select
+        id
+ from
+ (select
+        s_store_id as id
+ from   ssr
+ ) x;
+
+set force_parallel_execute = @old_force_parallel_execute;
+
+drop table store_sales;
+drop table store_returns;
+drop table date_dim;
+drop table store;

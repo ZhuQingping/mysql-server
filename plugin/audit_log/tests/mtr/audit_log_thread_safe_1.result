@@ -1,0 +1,18 @@
+# Create user and prepare table
+CREATE USER 'normal_user'@'%' IDENTIFIED BY 'password';
+GRANT ALL PRIVILEGES ON test.* TO 'normal_user'@'%';
+CREATE TABLE tt(a text, b text, c text, d text);
+SET GLOBAL debug='+d,audit_log_rotate_pause';
+# Trigger 'audit_log_flush' thread asynchronous rotate audit log
+# Verify that audit log rotate suspended
+select sleep(1);
+sleep(1)
+0
+Pattern "Audit log rotate suspended" found
+# Crash occur since close audit log failed
+SET debug='';
+SET GLOBAL audit_log_force_rotate=ON;
+ERROR HY000: Lost connection to MySQL server during query
+# Restart the master server
+DROP TABLE tt;
+DROP USER 'normal_user'@'%';

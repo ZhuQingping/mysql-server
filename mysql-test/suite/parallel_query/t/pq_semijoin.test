@@ -1,0 +1,153 @@
+--source include/pq_test.inc
+--source include/elide_costs.inc
+
+show variables like 'optimizer_switch';
+
+CREATE TABLE `country` (
+  `code` int DEFAULT NULL,
+  `name` varchar(255) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE `city` (
+  `country` int DEFAULT NULL,
+  `name` varchar(255) DEFAULT NULL,
+  `pop` int DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+insert into country values(1,'china');
+insert into country values(2,'usa');
+insert into city values(1,'beijing',1000);
+insert into city values(1,'shanghai',1000);
+insert into city values(2,'new york',1000);
+
+explain SELECT /*+ SEMIJOIN(@subq1 FIRSTMATCH) */ *
+FROM country
+WHERE country.code IN (
+        SELECT /*+ QB_NAME(subq1) */ city.country
+        FROM city
+        WHERE city.pop > 100
+);
+
+SELECT /*+ SEMIJOIN(@subq1 FIRSTMATCH) */ *
+FROM country
+WHERE country.code IN (
+        SELECT /*+ QB_NAME(subq1) */ city.country
+        FROM city
+        WHERE city.pop > 100
+);
+
+#explain SELECT /*+ SEMIJOIN(@subq1 DUPSWEEDOUT) */ *
+#FROM country
+#WHERE country.code IN (
+#       SELECT /*+ QB_NAME(subq1) */ city.country
+#       FROM city
+#       WHERE city.pop > 100
+#);
+#
+#SELECT /*+ SEMIJOIN(@subq1 DUPSWEEDOUT) */ *
+#FROM country
+#WHERE country.code IN (
+#       SELECT /*+ QB_NAME(subq1) */ city.country
+#       FROM city
+#       WHERE city.pop > 100
+#);
+
+alter table city add index index_country(country);
+alter table country add index index_code (code);
+
+explain SELECT /*+ SEMIJOIN(LOOSESCAN) */ *
+FROM country
+WHERE country.code IN (
+        SELECT city.country
+        FROM city
+);
+
+SELECT /*+ SEMIJOIN(LOOSESCAN) */ *
+FROM country
+WHERE country.code IN (
+        SELECT city.country
+        FROM city
+);
+
+EXPLAIN SELECT * from country ref_0 WHERE EXISTS (SELECT * from country ref_1 limit 1);
+SELECT * from country ref_0 WHERE EXISTS (SELECT * from country ref_1 limit 1);
+drop table country, city;
+
+--echo #
+--echo # BUG2022080902008 Assertion failures with PQ + correlated derived table
+--echo #
+
+CREATE TABLE t0 (c_payment_cnt INT);
+CREATE TABLE t5 (c_delivery_cnt INT);
+
+let $query=
+SELECT ref_0.c_payment_cnt FROM t0 ref_0 JOIN t5 ref_1
+  WHERE EXISTS(SELECT 3 FROM(SELECT 0 WHERE ref_1.c_delivery_cnt AND 0) subq_2) ORDER BY 1;
+
+--replace_regex $elide_costs_and_rows
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+DROP TABLE t0,t5;
+
+--echo #
+--echo # BUG2022081903526 Segmentation fault in MaterializeIterator::Init with PQ + semijoin + IS NULL
+--echo #
+
+CREATE TABLE t12 (c_id int);
+INSERT INTO t12 VALUES (0),(1);
+
+CREATE TABLE t4 (c_zip char(23) DEFAULT NULL, c_since timestamp NOT NULL);
+
+CREATE TABLE t5 (c_id int);
+
+ANALYZE TABLE t12,t5,t4;
+
+let $query=
+SELECT
+ /*+ JOIN_ORDER(t12,t4,ref_8) */
+1 FROM t12 LEFT JOIN t5 ref_8
+           ON EXISTS(SELECT /*+ SEMIJOIN(MATERIALIZATION) */ c_zip FROM t4 WHERE c_since IS NULL);
+
+--replace_regex $elide_costs_and_rows
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+
+DROP TABLE t12,t4,t5;
+
+--echo #
+--echo # BUG2022112102841 Assertion failure in MaterializeIterator::Init()
+--echo #
+CREATE TABLE t1 (i INTEGER);
+INSERT INTO t1 VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9), (10);
+
+CREATE VIEW my_view AS SELECT 1 AS i;
+
+SET parallel_default_dop=1;
+SET optimizer_switch="block_nested_loop=off";
+
+let $query = SELECT 1
+FROM (
+  SELECT 1
+  FROM t1 AS ref_1
+  RIGHT JOIN my_view AS ref_2 ON (
+    EXISTS (
+      SELECT 1 FROM t1 AS ref_3 WHERE ref_2.i IS NULL
+    )
+    AND ref_2.i IS NOT NULL
+  ),
+  (SELECT 1 FROM t1 AS ref_4) AS subq_1
+) AS subq_2;
+
+SET SESSION FORCE_PARALLEL_EXECUTE = 0;
+eval EXPLAIN FORMAT=tree $query;
+eval $query;
+
+SET SESSION FORCE_PARALLEL_EXECUTE = 1;
+eval EXPLAIN FORMAT=tree $query;
+eval $query;
+
+SET parallel_default_dop = DEFAULT;
+SET optimizer_switch = DEFAULT;
+
+DROP VIEW my_view;
+DROP TABLE t1;

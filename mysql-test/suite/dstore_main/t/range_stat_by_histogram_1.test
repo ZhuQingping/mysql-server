@@ -1,0 +1,966 @@
+#
+#  Test case for Histogram based records_in_range.
+#
+#  Part 00: Check the value convert correctness
+#  We will test the different value of ALL types, and check whether it
+#  is passed correctly to Histogram module.
+#
+
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+--source include/big_test.inc
+
+--disable_result_log
+--let error_log= $MYSQLTEST_VARDIR/tmp/test.err
+--let restart_parameters="restart: --log-error=$error_log"
+--source include/restart_mysqld.inc
+--enable_result_log
+
+--echo # 0. Prepare test data
+--disable_warnings
+DROP DATABASE IF EXISTS test_data_types;
+CREATE DATABASE test_data_types;
+USE test_data_types;
+--enable_warnings
+
+CREATE TABLE all_data_types (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'Auto increment primary key',
+
+    -- Signed Numeric Types
+    c01 TINYINT COMMENT 'Small integer (-128 to 127)',
+    c02 SMALLINT COMMENT 'Short integer (-32768 to 32767)',
+    c03 MEDIUMINT COMMENT 'Medium integer (-8388608 to 8388607)',
+    c04 INT COMMENT 'Standard integer (-2147483648 to 2147483647)',
+    c05 BIGINT COMMENT 'Big integer (-9223372036854775808 to 9223372036854775807)',
+
+    -- Unsigned Numeric Types
+    c01u TINYINT UNSIGNED COMMENT 'Unsigned small integer (0 to 255)',
+    c02u SMALLINT UNSIGNED COMMENT 'Unsigned short integer (0 to 65535)',
+    c03u MEDIUMINT UNSIGNED COMMENT 'Unsigned medium integer (0 to 16777215)',
+    c04u INT UNSIGNED COMMENT 'Unsigned standard integer (0 to 4294967295)',
+    c05u BIGINT UNSIGNED COMMENT 'Unsigned big integer (0 to 18446744073709551615)',
+
+    -- Decimal Types
+    c06 DECIMAL(10,2) COMMENT 'Fixed-point number (signed)',
+    c06u DECIMAL(10,2) UNSIGNED COMMENT 'Fixed-point number (unsigned)',
+
+    -- Other Numeric Types
+    c07 FLOAT COMMENT 'Single-precision floating point',
+    c08 DOUBLE COMMENT 'Double-precision floating point',
+    c09 BIT(8) COMMENT 'Bit field (1-64 bits)',
+
+    -- String Types
+    c10 CHAR(50) COMMENT 'Fixed-length string',
+    c11 VARCHAR(1000) COMMENT 'Variable-length string',
+
+    -- Binary Types
+    c12 BINARY(50) COMMENT 'Fixed-length binary string',
+    c13 VARBINARY(1000) COMMENT 'Variable-length binary string',
+
+    -- Date and Time Types
+    c14 DATE COMMENT 'Date (YYYY-MM-DD)',
+    c15 TIME COMMENT 'Time (HH:MM:SS)',
+    c16 DATETIME COMMENT 'Date and time (YYYY-MM-DD HH:MM:SS)',
+    c17 TIMESTAMP COMMENT 'Timestamp',
+    c18 YEAR COMMENT 'Year',
+
+    -- Enumeration and Set Types
+    c19 ENUM('small','medium','large') COMMENT 'Enumeration type',
+    c20 SET('red','green','blue') COMMENT 'Set type',
+
+    -- Add indexes
+    INDEX idx_c01 (c01),
+    INDEX idx_c02 (c02),
+    INDEX idx_c03 (c03),
+    INDEX idx_c04 (c04),
+    INDEX idx_c05 (c05),
+
+    INDEX idx_c01u (c01u),
+    INDEX idx_c02u (c02u),
+    INDEX idx_c03u (c03u),
+    INDEX idx_c04u (c04u),
+    INDEX idx_c05u (c05u),
+
+    INDEX idx_c06 (c06),
+    INDEX idx_c06u (c06u),
+
+    INDEX idx_c07 (c07),
+    INDEX idx_c08 (c08),
+    INDEX idx_c09 (c09),
+
+    INDEX idx_c10 (c10),
+    # The index field length cannot exceed 950 bytes,
+    # which corresponds to 237 characters for a single UTF8MB4 variable-length column.
+    INDEX idx_c11 (c11(127)),
+
+    INDEX idx_c12 (c12),
+    # The index field length cannot exceed 950 bytes,
+    # which corresponds to 237 characters for a single UTF8MB4 variable-length column.
+    INDEX idx_c13 (c13(127)),
+
+    INDEX idx_c14 (c14),
+    INDEX idx_c15 (c15),
+    INDEX idx_c16 (c16),
+    INDEX idx_c17 (c17),
+    INDEX idx_c18 (c18),
+
+    INDEX idx_c19 (c19),
+    INDEX idx_c20 (c20)
+
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--disable_query_log
+--DELIMITER //
+
+CREATE PROCEDURE generate_random_data()
+BEGIN
+    DECLARE i INT DEFAULT 1;
+
+    -- Create a temporary table to store random strings for better performance
+    CREATE TEMPORARY TABLE IF NOT EXISTS temp_random_strings (
+        str VARCHAR(1000)
+    );
+
+    -- Pre-generate random strings
+    WHILE i <= 100 DO
+        INSERT INTO temp_random_strings VALUES (
+            CONCAT(
+                'STR_',
+                SUBSTRING(MD5(RAND()), 1, 30)
+            )
+        );
+        SET i = i + 1;
+    END WHILE;
+
+    -- Reset counter
+    SET i = 1;
+
+    -- Generate 100 random records
+    WHILE i <= 100 DO
+        INSERT INTO all_data_types (
+            -- Signed Numeric Types
+            c01, c02, c03, c04, c05,
+
+            -- Unsigned Numeric Types
+            c01u, c02u, c03u, c04u, c05u,
+
+            -- Decimal Types
+            c06, c06u,
+
+            -- Other Numeric Types
+            c07, c08, c09,
+
+            -- String Types
+            c10, c11,
+
+            -- Binary Types
+            c12, c13,
+
+            -- Date and Time Types
+            c14, c15, c16, c17, c18,
+
+            -- Enumeration and Set Types
+            c19, c20
+        )
+        VALUES (
+            -- Generate random signed integers within their respective ranges
+            FLOOR(-128 + RAND() * 256),                  -- c01 TINYINT: -128 to 127
+            FLOOR(-32768 + RAND() * 65536),             -- c02 SMALLINT: -32768 to 32767
+            FLOOR(-8388608 + RAND() * 16777216),        -- c03 MEDIUMINT: -8388608 to 8388607
+            FLOOR(-2147483648 + RAND() * 4294967296),   -- c04 INT: -2147483648 to 2147483647
+            FLOOR(-9223372036854775808 + RAND() * 18446744073709551615), -- c05 BIGINT
+
+            -- Generate random unsigned integers within their respective ranges
+            FLOOR(RAND() * 256),                        -- c01u TINYINT: 0 to 255
+            FLOOR(RAND() * 65536),                      -- c02u SMALLINT: 0 to 65535
+            FLOOR(RAND() * 16777216),                   -- c03u MEDIUMINT: 0 to 16777215
+            FLOOR(RAND() * 4294967296),                 -- c04u INT: 0 to 4294967295
+            FLOOR(RAND() * 18446744073709551615),       -- c05u BIGINT: 0 to 18446744073709551615
+
+            -- Generate random decimal numbers with 2 decimal places
+            ROUND(RAND() * 10000, 2),                   -- c06 DECIMAL(10,2)
+            ROUND(RAND() * 10000, 2),                   -- c06u DECIMAL(10,2) UNSIGNED
+
+            -- Generate random floating point numbers
+            RAND() * 100,                               -- c07 FLOAT
+            RAND() * 100,                               -- c08 DOUBLE
+            b'10101010',                                -- c09 BIT(8)
+
+            -- Generate random strings
+            LEFT(UUID(), 50),                           -- c10 CHAR(50)
+            (SELECT str FROM temp_random_strings LIMIT 1), -- c11 VARCHAR(1000)
+
+            -- Generate random binary data using MD5 and SHA1
+            UNHEX(MD5(i)),                              -- c12 BINARY(50)
+            UNHEX(SHA1(i)),                             -- c13 VARBINARY(1000)
+
+            -- Generate random dates and times within reasonable ranges
+            DATE_ADD('2020-01-01',
+                INTERVAL FLOOR(RAND() * 1825) DAY),     -- c14 DATE: 2020-2025
+            TIME_FORMAT(SEC_TO_TIME(FLOOR(RAND() * 86400)),
+                '%H:%i:%s'),                            -- c15 TIME: 00:00:00-23:59:59
+            DATE_ADD('2020-01-01 00:00:00',
+                INTERVAL FLOOR(RAND() * 157680000) SECOND), -- c16 DATETIME
+            FROM_UNIXTIME(UNIX_TIMESTAMP('2020-01-01') +
+                FLOOR(RAND() * 157680000)),             -- c17 TIMESTAMP
+            1970 + FLOOR(RAND() * 54),                  -- c18 YEAR: 1970-2024
+
+            -- Randomly select from enumeration and set values
+            ELT(1 + FLOOR(RAND() * 3), 'small', 'medium', 'large'), -- c19 ENUM
+            ELT(1 + FLOOR(RAND() * 3), 'red', 'green', 'blue')      -- c20 SET
+        );
+
+        SET i = i + 1;
+    END WHILE;
+
+    -- Clean up temporary table
+    DROP TEMPORARY TABLE IF EXISTS temp_random_strings;
+END //
+
+--DELIMITER ;
+--enable_query_log
+
+CALL generate_random_data();
+
+--disable_warnings
+ANALYZE TABLE all_data_types UPDATE HISTOGRAM ON
+    c01, c02, c03, c04, c05,
+    c01u, c02u, c03u, c04u, c05u,
+    c06, c06u, c07, c08, c09,
+    c10, c11, c12, c13,
+    c14, c15, c16, c17, c18,
+    c19, c20
+WITH 100 BUCKETS;
+--enable_warnings
+
+SET session debug='+d,print_histgram_recived_values';
+
+SELECT @@session.time_zone INTO @save_tz;
+--echo # use the UTC time to get a stable result.
+SET @@session.time_zone = '+00:00';
+
+--echo # 1. Test with different value and check the convert result.
+--echo #    We will typically test for MIN+1, MAX-1, 0, and a random value.
+
+--let $count_num= 1
+
+# c01
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c01 >= -127
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: -127.*
+--let SEARCH_FILE= $error_log
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c01 >= 126
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 126.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c01 >= 0
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 0.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c01 >= 123
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 123.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c02
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c02 >= -32767
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: -32767.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c02 >= 32766
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 32766.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c02 >= 0
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 0.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c02 >= 12345
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 12345.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c03
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c03 >= -8388607
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: -8388607.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c03 >= 8388606
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 8388606.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c03 >= 0
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 0.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c03 >= 1234567
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 1234567.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c04
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c04 >= -2147483647
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: -2147483647.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c04 >= 2147483646
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 2147483646.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c04 >= 0
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 0.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c04 >= 123456789
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 123456789.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c05
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c05 >= -9223372036854775807
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: -9223372036854775807.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c05 >= 9223372036854775806
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 9223372036854775806.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c05 >= 0
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 0.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c05 >= 123456789012345
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 123456789012345.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c01u
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c01u >= 1
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 1.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c01u >= 254
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 254.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c01u >= 128
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 128.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c01u >= 200
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 200.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c02u
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c02u >= 1
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 1.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c02u >= 65534
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 65534.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c02u >= 32768
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 32768.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c02u >= 60000
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 60000.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c03u
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c03u >= 1
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 1.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c03u >= 16777214
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 16777214.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c03u >= 8388608
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 8388608.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c03u >= 15000000
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 15000000.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c04u
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c04u >= 1
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 1.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c04u >= 4294967294
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 4294967294.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c04u >= 2147483648
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 2147483648.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c04u >= 4000000000
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 4000000000.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c05u
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c05u >= 1
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 1.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c05u >= 18446744073709551614
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 18446744073709551614.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c05u >= 9223372036854775808
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 9223372036854775808.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c05u >= 18000000000000000000
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 18000000000000000000.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c06
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c06 >= -9999999.99
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: -9999999.99.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c06 >= 9999999.99
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 9999999.99.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c06 >= 0.00
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 0.00.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c06 >= 1234.56
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 1234.56.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c06u
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c06u >= 1.00
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 1.00.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c06u >= 9999999.99
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 9999999.99.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c06u >= 5000.00
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 5000.00.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c06u >= 8888.88
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 8888.88.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c07
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c07 >= -3.402823466E+38
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: -3402823466.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c07 >= 3.402823466E+38
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 3402823466.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c07 >= 0.0
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 0.0.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c07 >= 123.456
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 123.456.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c08
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c08 >= -1.7976931348623157E+308
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: -17976931348623157.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c08 >= 1.7976931348623157E+308
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 17976931348623157.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c08 >= 0.0
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 0.0.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c08 >= 12345.6789
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 12345.6789.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c09
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c09 >= b'00000000'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 0.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c09 >= b'11111111'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 255.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c09 >= b'10101010'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 170.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c09 >= b'01010101'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 85.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c10
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c10 >= ''
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: .*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c10 >= 'TEST'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: TEST.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c10 >= 'A%'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: A.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c11
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c11 >= ''
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: .*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c11 >= 'LONG_TEXT'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: LONG_TEXT.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c11 >= 'STR_%'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: STR.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c12
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c12 >= UNHEX('00')
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: .*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c12 >= UNHEX('FF')
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: [\xFF].*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c12 >= UNHEX('AA')
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: [\xAA].*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c13
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c13 >= UNHEX('00')
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: .*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c13 >= UNHEX('FF')
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: [\xFF].*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c13 >= UNHEX('AA')
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: [\xAA].*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c14
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c14 >= '2020-01-01'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 2020-01-01.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c14 >= '2025-12-31'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 2025-12-31.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c14 >= '2022-01-01'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 2022-01-01.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c14 >= '2023-01-01'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 2023-01-01.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c15
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c15 >= '00:00:00'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 00:00:00.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c15 >= '23:59:59'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 23:59:59.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c15 >= '12:00:00'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 12:00:00.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c15 >= '09:00:00'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 09:00:00.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c16
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c16 >= '2020-01-01 00:00:00'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 2020-01-01 00:00:00.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c16 >= '2025-12-31 23:59:59'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 2025-12-31 23:59:59.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c16 >= '2022-01-01 00:00:00'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 2022-01-01 00:00:00.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c16 >= '2023-01-01 00:00:00'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 2023-01-01 00:00:00.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c17
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c17 >= '2020-01-01 00:00:00'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 2020-01-01 00:00:00.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c17 >= '2025-12-31 23:59:59'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 2025-12-31 23:59:59.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c17 >= '2022-01-01 00:00:00'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 2022-01-01 00:00:00.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c17 >= '2023-01-01 00:00:00'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 2023-01-01 00:00:00.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c18
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c18 >= 1970
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 1970.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c18 >= 2024
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 2024.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c18 >= 2000
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 2000.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c18 >= 2020
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 2020.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c19
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c19 = 'small'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 1.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c19 = 'medium'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 2.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c19 = 'large'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 3.*
+--source include/search_pattern.inc
+--inc $count_num
+
+# c20
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c20 = 'red'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 1.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c20 = 'green'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 2.*
+--source include/search_pattern.inc
+--inc $count_num
+
+--disable_result_log
+--eval SELECT COUNT($count_num) FROM all_data_types WHERE c20 = 'blue'
+--enable_result_log
+--let SEARCH_PATTERN= COUNT\($count_num.*Histogram received values: 4.*
+--source include/search_pattern.inc
+--inc $count_num
+
+DROP DATABASE test_data_types;
+--remove_file $error_log
+SET @@session.time_zone=@save_tz;
+
+--disable_result_log
+--source include/restart_mysqld.inc
+--enable_result_log

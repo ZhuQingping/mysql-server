@@ -1,0 +1,48 @@
+create table t1 (id int);
+create table t2 (id int);
+SET @old_slow_query_log_file= @@global.slow_query_log_file;
+SET @old_long_query_time= @@global.long_query_time;
+SET @old_slow_query_log= @@global.slow_query_log;
+SET GLOBAL slow_query_log_file= '.../my_slow.log';
+SET GLOBAL long_query_time=0;
+SET GLOBAL slow_query_log=on;
+# select statement
+select * from t1;
+id
+Occurrences of 'PQ_executed: 1' in the input file: 1
+SET long_query_time=10;
+select * from t1;
+id
+Occurrences of 'PQ_executed' in the input file: 1
+SET long_query_time=0;
+select CURRENT_USER() from t1;
+CURRENT_USER()
+Occurrences of 'PQ_executed: 0' in the input file: 1
+SET long_query_time=10;
+select CURRENT_USER() from t1;
+CURRENT_USER()
+Occurrences of 'PQ_executed' in the input file: 2
+SET long_query_time=0;
+select * from t1;
+id
+Occurrences of 'PQ_executed: 1' in the input file: 2
+# insert select statement
+insert into t2 select * from t1;
+Occurrences of 'PQ_executed: 1' in the input file: 3
+# replace select statement
+replace into t2 select * from t1;
+Occurrences of 'PQ_executed: 1' in the input file: 4
+# insert statement
+insert into t1 values(1);
+Occurrences of 'PQ_executed' in the input file: 5
+# update statement
+update t1 set id = 2;
+Occurrences of 'PQ_executed' in the input file: 5
+# delete statement
+delete from t1;
+Occurrences of 'PQ_executed' in the input file: 5
+SET GLOBAL slow_query_log_file= @old_slow_query_log_file;
+SET GLOBAL long_query_time= @old_long_query_time;
+SET GLOBAL slow_query_log= @old_slow_query_log;
+drop table t1;
+drop table t2;

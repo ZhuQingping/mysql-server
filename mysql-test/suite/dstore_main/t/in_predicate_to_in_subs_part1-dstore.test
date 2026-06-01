@@ -1,0 +1,545 @@
+--source include/have_only_dstore.inc
+
+# The aim of this testcase is to test in predicate transform to in subselect
+#
+# case 0, Test sys vars.
+# case 1, Simple query with (not) in predicate, args[0] is a single item.
+# case 2, Simple query with (not) in predicate, args[0] is a item row.
+# case 3, Simple query with (not) in predicate, args contains non-constant item.
+# case 4, Duplicate value in in predicate.
+# case 5, Simulate all kinds of error handling.
+# case 6, Test transform only execute in where and having clause.
+# case 7, Simple query with more than one in predicate.
+# case 8, Union (all) with in predicate.
+# case 9, CTE with in predicate.
+# case 10, Derived table (subquery) with in predicate.
+# case 11, Create view with in predicate.
+# case 12, Test query already exists semijoin.
+# case 13, Test item type cast(NULL value).
+# case 14, Test opt_trace.
+# case 15, Test dummy error handler.
+# case 16, Test prepared stmt, Stored procedure,trigger.
+# case 17, Test insert_select, replace_select.
+# case 18, Test generated column.
+# case 19, Test partition table, temporary table.
+# case 20, Test use keys, not in.
+# case 21, Const field in arg list.
+# case 22, Test type holder.
+# case 23, Test rollback if execute fails.
+# case 24, re-prepare when type is not compatible.
+# case 25, re-prepare when fill tmp table fail.
+#
+
+source include/have_debug.inc;
+set optimizer_trace_max_mem_size = 1024 * 1024;
+
+create table t1 (a int primary key not null, b int);
+create table t2 (a int, b int);
+insert into t1 values (1,2), (4,6), (9,7), (3,1), (2,5), (7,8);
+insert into t2 select * from t1;
+analyze table t1,t2;
+--let explain='traditional,tree'
+
+--echo # Case 0. Simple query with in predicate, args[0] is a single item.
+set rds_in_predicate_conversion_threshold = 0;
+--let $query = select * from t1 where a in (1,2);
+--source include/explain_and_query.inc
+set rds_in_predicate_conversion_threshold = 1;
+--let $query = select * from t1 where a in (1,2);
+--source include/explain_and_query.inc
+
+set rds_in_predicate_conversion_threshold = 5;
+--let $query = select * from t1 where a in (1,2,3,4,5);
+--source include/explain_and_query.inc
+
+set rds_in_predicate_conversion_threshold = 6;
+--let $query = select * from t1 where a in (1,2,3,4,5);
+--source include/explain_and_query.inc
+
+set rds_in_predicate_conversion_threshold = 6;
+--let $query = select * from t1 where (a,b) in ((1,2),(2,3),(3,4));
+--source include/explain_and_query.inc
+
+set rds_in_predicate_conversion_threshold = 7;
+--let $query = select * from t1 where (a,b) in ((1,2),(2,3),(3,4));
+--source include/explain_and_query.inc
+set rds_in_predicate_conversion_threshold = 2;
+
+--echo # Case 1. Simple query with in predicate, args[0] is a single item.
+--let $query = select * from t1 where a in (1,2);
+--source include/explain_and_query.inc
+--let $query = select * from t2 where a in (1,2);
+--source include/explain_and_query.inc
+
+--echo # Simple query with not in predicate, args[0] is a single item.
+--let $query = select * from t1 where a not in (1,2);
+--source include/explain_and_query.inc
+--let $query = select * from t2 where a not in (1,2);
+--source include/explain_and_query.inc
+
+
+--echo # Case 2. Simple query with in predicate, args[0] is a item row.
+--let $query = select * from t1 where (a,b) in ((1,2), (2,5));
+--source include/explain_and_query.inc
+
+--echo # Simple query with not in predicate, args[0] is a item row.
+--let $query = select * from t1 where (a,b) not in ((1,2), (2,5));
+--source include/explain_and_query.inc
+
+
+--echo # Case 3. Simple query with (not) in predicate, args contains non-constant item.
+--let $query = select * from t1 where (a,b) in ((1,now()), (2,5));
+--source include/explain_and_query.inc
+
+
+--echo # Case 4. Duplicate value in in predicate.
+--let $query = select * from t1 where a in (1,1,1,2,3,4,5,6,7,8);
+--source include/explain_and_query.inc
+
+--let $query = select * from t1 where (a,b) in ((1,2),(1,2),(2,3),(2,5));
+--source include/explain_and_query.inc
+
+
+--echo # Case 5. Simulate create tmp table failed.
+--let $explain_backup= $explain
+--let $query = select * from t1 where a in (1,2);
+--let $explain="traditional,opt_trace"
+SET DEBUG='+d,simulate_in_predicate_to_in_sub_create_tmp_table_failed';
+--source include/explain_and_query.inc
+SET DEBUG='';
+
+--echo # Simulate fix Item_in_subs failed.
+--let $query = select * from t1 where a in (1,2);
+SET DEBUG='+d,simulate_in_predicate_to_in_subs_fix_in_subs_failed';
+--source include/explain_and_query.inc
+SET DEBUG='-d,simulate_in_predicate_to_in_subs_fix_in_subs_failed';
+--let $explain= $explain_backup
+
+
+--echo # Case 6. Test transform only execute in where and having clause.
+--let $query = select a in (1,2) from t1;
+--source include/explain_and_query.inc
+--let $query = select a in (1,2) from t1 where a in (1,3);
+--source include/explain_and_query.inc
+--let $query = select sum(a) from t1 having sum(a) in (2,4,6);
+--source include/explain_and_query.inc
+
+
+--echo # Case 7. Simple query with more than one in predicate.
+alter table t1 add index idx_b(b);
+--let $query = select * from t1 where a in(1,2) and b in(2,3);
+--source include/explain_and_query.inc
+
+--let $query = select * from t1 where a in(1,2) or b in(2,3);
+--source include/explain_and_query.inc
+alter table t1 drop index idx_b;
+
+--echo # Case 8. Union (all) with in predicate.
+--let $query = select * from t1 where a in (1,2) union select * from t1 where (a,b) in ((1,2),(2,3));
+--source include/explain_and_query.inc
+--let $query = select * from t1 where a in (1,2) union all select * from t1 where (a,b) in ((1,2),(2,3));
+--source include/explain_and_query.inc
+
+
+--echo # Case 9. CTE with in predicate.
+--let $query = with test_cte (a, b) as (select * from t1 where (a,b) in ((1,2),(2,3))) select * from test_cte where a in (1,3,5);
+--source include/explain_and_query.inc
+
+
+--echo # Case 10. Derived table (subquery) with in predicate.
+SET @optimizer_switch_backup= @@session.optimizer_switch;
+set optimizer_switch = 'derived_merge=off';
+--let $query = select * from (select * from t1 where (a,b) in ((1,2),(2,3))) derived_table where a in(1,2);
+--source include/explain_and_query.inc
+set @@session.optimizer_switch=@optimizer_switch_backup;
+
+--let $query = select (select a from t1 where (a,b) in ((1,2),(2,3))) from t1 where a in(1,2);
+--source include/explain_and_query.inc
+
+--let $query = select * from t1 where a in ((select max(a) from t1 where a in (1,3,5,7,9)), 2, 3);
+--source include/explain_and_query.inc
+
+--let $query = select * from t1 where a in (2, 3) and b in (select max(a) from t1 where a in (1,3,5,7,9) group by a);
+--source include/explain_and_query.inc
+
+--let $query = select sum(a), sum(b) from t1 group by a having sum(a) in (1,2,3) and sum(b) in (select max(b) from t1 where b in (1,3,5,7,9) group by b);
+--source include/explain_and_query.inc
+
+SET @@session.optimizer_switch= @optimizer_switch_backup;
+--let $query = select (select a from t1 where (a,b) in ((1,2),(2,3))) from t1 where a in(1,2);
+--source include/explain_and_query.inc
+
+--echo # Case 11. Create view with in predicate.
+create view v as select * from t1 where a in (1,2,3,4,5);
+--let $query = select * from v where b in (2,3,4,5,6);
+--source include/explain_and_query.inc
+drop view v;
+create table t3 as select * from t1 where a in (1,2,3,4,5);
+select * from t3;
+drop table t3;
+
+
+--echo # Case 12. Test query already exists semijoin.
+--let $query = select * from t1 where a in(1,2,3,4,5) and exists(select b from t1 where b > 5);
+--source include/explain_and_query.inc
+SET DEBUG='+d,simulate_in_predicate_to_in_subs_fix_in_subs_failed';
+--source include/explain_and_query.inc
+SET DEBUG='';
+
+
+--echo # Case 13. Test item type cast(NULL value).
+--echo # Null can't store in tmp table.
+--let $query = select * from t1 where a in(1,2,3,4,5,NULL);
+--source include/explain_and_query.inc
+
+--let $query = select * from t1 where a in (1, '2', "34", 4.00);
+--source include/explain_and_query.inc
+
+--echo # Out of range
+--let $query = select * from t1 where a in (-1.7976931348623157E+309, -2.2250738585072014E-308, 2.2250738585072014E-309, 1.7976931348623157E+308);
+--error ER_ILLEGAL_VALUE_FOR_TYPE
+--eval $query
+
+
+--echo # Case 14. Test opt_trace.
+--let $explain="traditional,opt_trace"
+--let $query = select * from t1 where (a,b) in ((1,2),(2,3));
+--source include/explain_and_query.inc
+--let $explain= $explain_backup
+
+
+--echo # Case 15. Test dummy error handler.
+set debug='+d,simulate_in_predicate_to_in_sub_oom';
+--let $query = select * from t1 where (a,b) in ((1,2),(2,3));
+--source include/explain_and_query.inc
+set debug='-d,simulate_in_predicate_to_in_sub_oom';
+
+
+--echo # Case 16. Test prepared stmt, Stored procedure,trigger.
+prepare stmt from "select * from t1 where a in (1,2)";
+prepare explain_stmt from "explain select * from t1 where a in (1,2)";
+execute stmt;
+execute explain_stmt;
+deallocate prepare stmt;
+deallocate prepare explain_stmt;
+
+DELIMITER $$;
+CREATE PROCEDURE transform_in_sp()
+BEGIN
+  EXPLAIN SELECT * FROM t1 WHERE (a,b) IN ((1,2),(2,3));
+  SELECT * FROM t1 WHERE (a,b) IN ((1,2),(2,3));
+END $$
+
+DELIMITER ;$$
+call transform_in_sp();
+
+DROP PROCEDURE transform_in_sp;
+
+create table t3 like t1;
+DELIMITER $$;
+CREATE TRIGGER before_t1_insert
+  BEFORE INSERT ON t1
+  FOR EACH ROW
+BEGIN
+   INSERT INTO t3 SELECT * FROM t1 WHERE (a,b) IN ((1,2),(2,3));
+END $$
+DELIMITER ;$$
+
+insert into t1 values (99,99);
+select * from t3;
+drop table t3;
+DROP TRIGGER before_t1_insert;
+
+
+--echo # Case 17. Test insert_select, replace_select.
+create table t3 like t1;
+--let $query = insert into t3 select * from t1 where (a,b) in ((1,2), (2,3));
+--source include/explain_and_query.inc
+select * from t3;
+update t3 set b = 999;
+select * from t3;
+--let $query = replace into t3 select * from t1 where (a,b) in ((1,2), (2,3));
+--source include/explain_and_query.inc
+select * from t3;
+drop table t3;
+
+
+--echo # Case 18. Test generated column.
+alter table t1 add column c int generated always as (a + 10);
+alter table t1 add index idx_c(c);
+--let $query = select * from t1 where c in (11,12);
+--source include/explain_and_query.inc
+alter table t1 drop index idx_c;
+alter table t1 drop column c;
+
+--echo # Case 20. Test use keys, not in.
+--let $query = select * from t2 where (a,b) in ((1,2), (2,3));
+--source include/explain_and_query.inc
+
+alter table t2 add index idx_b(b);
+--let $query = select * from t2 where (a,b) in ((1,2), (2,3));
+--source include/explain_and_query.inc
+alter table t2 drop index idx_b;
+
+alter table t2 add index idx_a(a);
+--let $query = select * from t2 where (a,b) in ((1,2), (2,3));
+--source include/explain_and_query.inc
+alter table t2 drop index idx_a;
+
+alter table t2 add index idx_ab(a,b);
+--let $query = select * from t2 where b in (1,2);
+--source include/explain_and_query.inc
+alter table t2 drop index idx_ab;
+
+--let $query = select * from t2 where a not in (1,2);
+--source include/explain_and_query.inc
+
+
+--echo # Case 21. Const field in arg list.
+--let $query = select * from t1 where (a,1,b) in ((1,1,2), (2,2,3));
+--source include/explain_and_query.inc
+
+
+--echo # case 22, Test type holder.
+--let $query = select * from t1 where (a,b) in ((1.23, 2.45), (2.56, 5.66), (1,2));
+--source include/explain_and_query.inc
+
+
+--echo # case 23, Test rollback if execute fails.
+--let $query = select * from t1 where (a,b) in ((1,2),(2,3));
+SET DEBUG='+d,simulate_in_predicate_to_in_sub_create_tmp_table_failed';
+--source include/explain_and_query.inc
+
+prepare stmt from "select * from t1 where a in (1,2)";
+prepare explain_stmt from "explain select * from t1 where a in (1,2)";
+execute stmt;
+execute explain_stmt;
+deallocate prepare stmt;
+deallocate prepare explain_stmt;
+SET DEBUG='-d,simulate_in_predicate_to_in_sub_create_tmp_table_failed';
+
+
+--echo # case 24, re-prepare when type is not compatible.
+prepare stmt from "select * from t1 where a in (1,2,?)";
+prepare explain_stmt from "explain select * from t1 where a in (1,2,?)";
+set @var=3.123;
+execute stmt using @var;
+execute explain_stmt using @var;
+deallocate prepare stmt;
+deallocate prepare explain_stmt;
+
+--echo # case 25, re-prepare when fill tmp table fail.
+SET DEBUG='+d,simulate_in_predicate_to_in_sub_fill_tmp_table_failed';
+prepare stmt from "select * from t1 where a in (1,2,?)";
+prepare explain_stmt from "explain select * from t1 where a in (1,2,?)";
+set @var=3.123;
+execute stmt using @var;
+execute explain_stmt using @var;
+deallocate prepare stmt;
+deallocate prepare explain_stmt;
+SET DEBUG='-d,simulate_in_predicate_to_in_sub_fill_tmp_table_failed';
+
+drop table t1;
+drop table t2;
+
+--echo #
+--echo # BUG2023051902473: View is not supported
+--echo #
+CREATE TABLE t1(a int, b int);
+INSERT INTO t1 VALUES(1,2),(2,3);
+ALTER TABLE t1 ADD INDEX idx(a);
+CREATE VIEW v1 AS SELECT * FROM t1;
+EXPLAIN SELECT * FROM v1 WHERE a IN (1, 2);
+SELECT * FROM v1 WHERE a IN (1, 2);
+DROP VIEW v1;
+DROP TABLE t1;
+
+
+# dstore now do not support fulltext key
+#--echo #
+#--echo # BUG2023051901651: Full text index causes an incorrect result 
+#--echo #
+#CREATE TABLE t2(a text, b blob, fulltext key idx(a));
+#INSERT INTO t2 VALUES('praesentium aut dolor expedita dolor.', 'no value'),
+#       ('harum aliquid sit!', 'no_value');
+#EXPLAIN
+#SELECT a
+#FROM t2
+#WHERE a in ('praesentium aut dolor expedita dolor.',
+#                        'harum aliquid sit!');
+#SELECT a
+#FROM t2
+#WHERE a in ('praesentium aut dolor expedita dolor.',
+#                        'harum aliquid sit!');
+#DROP TABLE t2;
+
+--echo #
+--echo # BUG2023052402386: Conversion fails if previous conversion failed
+--echo #
+CREATE TABLE tb1 (id_col int NOT NULL AUTO_INCREMENT, PRIMARY key(id_col));
+INSERT INTO tb1 VALUES(1);
+
+EXPLAIN
+SELECT *
+FROM tb1
+WHERE id_col in (-9999999999999999999999999999999999999999999999999999999999999999.9, 1);
+# Fail to convert IN-list into subquery because of type conversion
+EXPLAIN
+SELECT *
+FROM tb1
+WHERE id_col in (-99999999999999999999999999999999999999999999999999999999999999999.9, 1);
+EXPLAIN
+SELECT *
+FROM tb1
+WHERE id_col in (-9999999999999999999999999999999999999999999999999999999999999999.9, 1);
+SET DEBUG='+d,simulate_in_predicate_to_in_sub_fill_tmp_table_failed';
+prepare stmt from "select * from tb1 where id_col in (1,2)";
+execute stmt;
+SET DEBUG='-d,simulate_in_predicate_to_in_sub_fill_tmp_table_failed';
+prepare stmt from "explain select * from tb1 where id_col in (1,2)";
+execute stmt;
+DROP TABLE tb1;
+
+--echo #
+--echo # BUG2023052901120: Hint is invalid for IN-list conversion
+--echo #
+set rds_in_predicate_conversion_threshold = 0;
+CREATE TABLE t1(a INT, b INT, key(a));
+INSERT INTO t1 VALUES(1,2),(3,4);
+EXPLAIN SELECT * FROM t1 WHERE a IN (1, 2);
+EXPLAIN SELECT /*+ SET_VAR(rds_in_predicate_conversion_threshold = 1) */ * FROM t1 WHERE a IN (1, 2);
+DROP TABLE t1;
+
+--echo #
+--echo # BUG2023060201559: Differnt type causes In-list conversion to have a mismatched result
+--echo #
+CREATE TABLE t1(varbinary_col varbinary(255) DEFAULT NULL, decimal_col decimal(25,5) DEFAULT NULL,
+                 KEY vb(varbinary_col), KEY dec_key(decimal_col)); 
+INSERT INTO t1 VALUES(binary 'dddddddddd1', null), (binary 'eeeeeeeeeee1', null);
+--let $query = select decimal_col from t1 where decimal_col in (-99999999999999999999.9999,-3.40282e38);
+--source include/explain_and_query.inc
+--let $query = select count(*) from t1 where varbinary_col in ('1', 0);
+--source include/explain_and_query.inc
+DROP TABLE t1;
+
+--echo #
+--echo # BUG2023060602873: Result mismatch after in-list conversion
+--echo #
+CREATE TABLE test6 (
+                        b3 blob,
+                        gen_3 varchar(3) GENERATED ALWAYS AS (left(b3,3)) STORED,
+                        KEY key_3 (gen_3)
+                     );
+INSERT INTO test6 (b3) VALUES (_binary '00158124837-54289467866-63898207856-kjihgfedcba-2785532715900158124837-54289467866-63898207856-kjihgfedcba'),
+       (_binary 'h01857915357-17612134148-88720199355-96890455862-95815779431');
+SELECT gen_3 FROM test6 WHERE gen_3 IN ('h01',1);
+DROP TABLE test6;
+
+# dstore now do not support fulltext key
+#--echo #
+#--echo # BUG2023060801377: In-list conversion cause a performance regression for fulltext index
+#--echo #
+#CREATE TABLE t1(c_text text, fulltext key full_text(c_text));
+#INSERT INTO t1 VALUES('aa'),('bb');
+#--let $query = SELECT * FROM t1 WHERE c_text in ('aa', 'bb');
+#--source include/explain_and_query.inc
+#DROP TABLE t1;
+
+--echo #
+--echo # BUG2025090201272: the in predicate `t.c0 IN (..., NULL, ...)  is is [not] null/unknown` lead to incorrect results
+--echo #
+CREATE TABLE `t` (`c0` varchar(32) DEFAULT NULL, KEY `i0` (`c0`));
+INSERT INTO `t` VALUES ('12');
+
+CREATE TABLE `t_temp` (`c0` varchar(32) DEFAULT NULL, KEY `i0` (`c0`));
+INSERT INTO `t_temp` VALUES ('-1706708328'),(NULL);
+
+set rds_in_predicate_conversion_threshold=0;
+SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS UNKNOWN;
+SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NULL;
+SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NOT UNKNOWN;
+SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NOT NULL;
+
+set rds_in_predicate_conversion_threshold=1;
+--let $query = SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS UNKNOWN;
+--source include/explain_and_query.inc
+--let $query = SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NULL;
+--source include/explain_and_query.inc
+--let $query = SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NOT UNKNOWN;
+--source include/explain_and_query.inc
+--let $query = SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NOT NULL;
+--source include/explain_and_query.inc
+
+DROP TABLE t;
+DROP TABLE t_temp;
+
+--echo #
+--echo # BUG2025091100137: IN-LIST subquery incorrectly use `ref` access instead of `ref_or_null` access
+--echo #
+CREATE TABLE `t2` (`c1` varchar(500) DEFAULT NULL,`c6` varchar(237) DEFAULT NULL,index idx_c6(c6));
+insert into t2 values("","");
+ 
+CREATE TABLE `t_tmp` (`c6` varchar(237) DEFAULT "", KEY `id_c6` (`c6`));
+insert into t_tmp values(NULL),("0.6798096730298574");
+ 
+--let $query = SELECT /*+ SET_VAR(rds_in_predicate_conversion_threshold=1) */ t2.c6,t2.c1 FROM t2 WHERE (t2.c6 NOT IN (t2.c1)) IN (t2.c6 IN (NULL, "0.6798096730298574"));
+--source include/explain_and_query.inc
+--let $query = SELECT t2.c6,t2.c1 FROM t2 WHERE (t2.c6 NOT IN (t2.c1)) IN (t2.c6 IN (select * from t_tmp));
+--source include/explain_and_query.inc
+ 
+DROP TABLE t2;
+DROP TABLE t_tmp;
+
+--echo #
+--echo # BUG2025120324811: IN-LIST query of enum field in condition has invalid enum value incorrectly in sql_mode = ''.
+--echo #
+create table t1(`enum_col` enum('aaa','bbb','ccc') not null, index index_c1(`enum_col`));
+set sql_mode = '';
+--disable_warnings
+insert into t1 values('aaa'),('bbb'),('ccc'),('xxx'),('kkk');
+set rds_in_predicate_conversion_threshold=0;
+--let $query = select * from t1 where enum_col in ('bbb', 'ccc', 'false', 'true')
+--source include/explain_and_query.inc
+--let $query = select * from t1 where enum_col in ('bbb', 'ccc', null)
+--source include/explain_and_query.inc
+set rds_in_predicate_conversion_threshold=1;
+--let $query = select * from t1 where enum_col in ('bbb', 'ccc', 'false', 'true')
+--source include/explain_and_query.inc
+--let $query = select * from t1 where enum_col in ('bbb', 'ccc', null)
+--source include/explain_and_query.inc
+--let $query = select * from t1 where enum_col in ('bbb', 'ccc')
+--source include/explain_and_query.inc
+drop table t1;
+
+create table t1(`enum_col1` enum('aaa','bbb','ccc') not null, `enum_col2` enum('ddd','eee','fff') not null, index index_c1(`enum_col1`), index index_c2(`enum_col2`));
+insert into t1 values('aaa', 'ddd'), ('bbb', 'eee'), ('ccc', 'fff'), ('kkk', 'eee');
+set rds_in_predicate_conversion_threshold=0;
+--let $query = select * from t1 where (enum_col1, enum_col2) in (('aaa', 'ddd'), ('bbb', 'eee'), ('xxx', 'eee'))
+--source include/explain_and_query.inc
+set rds_in_predicate_conversion_threshold=1;
+--let $query = select * from t1 where (enum_col1, enum_col2) in (('aaa', 'ddd'), ('bbb', 'eee'), ('xxx', 'eee'))
+--source include/explain_and_query.inc
+--let $query = select * from t1 where (enum_col1, enum_col2) in (('aaa', 'ddd'), ('bbb', 'eee'))
+--source include/explain_and_query.inc
+drop table t1;
+
+create table t1(`enum_col1` enum('aaa','bbb','ccc') not null, c2 int not null, index index_c1(`enum_col1`), index index_c2(c2));
+insert into t1 values('aaa', 1), ('bbb', 2), ('ccc', 3), ('kkk', 4);
+set rds_in_predicate_conversion_threshold=0;
+--let $query = select * from t1 where (enum_col1, c2) in (('aaa', 1), ('bbb', 2), ('xxx', 4))
+--source include/explain_and_query.inc
+set rds_in_predicate_conversion_threshold=1;
+--let $query = select * from t1 where (enum_col1, c2) in (('aaa', 1), ('bbb', 2), ('xxx', 4))
+--source include/explain_and_query.inc
+--let $query = select * from t1 where (enum_col1, c2) in (('aaa', 1), ('bbb', 2))
+--source include/explain_and_query.inc
+drop table t1;
+--enable_warnings
+
+set rds_in_predicate_conversion_threshold=default;
+set optimizer_trace_max_mem_size=default;
+set sql_mode = default;
+
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+--source include/start_mysqld.inc

@@ -1,0 +1,29 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+
+SET dstore_ddl_threads = 4;
+select @@dstore_ddl_threads;
+create table t1 (a int not null, key(a));
+insert into t1 values (1);
+CALL mtr.add_suppression(".*CdeZalloc fail.*");
+CALL mtr.add_suppression(".*can't open table:.*");
+CALL mtr.add_suppression(".*CdeZalloc attr_cols fail.*");
+CALL mtr.add_suppression(".*CdeDdFillDictIndex fail.*");
+SET SESSION DEBUG='+d,stat_n_sample_size_alloc_fail';
+--error ER_NO_SUCH_TABLE
+ALTER TABLE t1 ADD COLUMN d VARCHAR(100) NOT NULL DEFAULT '';
+SET SESSION DEBUG='-d,stat_n_sample_size_alloc_fail';
+
+SET SESSION DEBUG='+d,cde_dd_fill_index_attr_cols_alloc_fail';
+--error ER_NO_SUCH_TABLE
+ALTER TABLE t1 ADD COLUMN d VARCHAR(100) NOT NULL DEFAULT '';
+SET SESSION DEBUG='-d,cde_dd_fill_index_attr_cols_alloc_fail';
+
+SET SESSION DEBUG='+d,cde_create_index_stor_rel_fail';
+--error ER_NO_SUCH_TABLE
+ALTER TABLE t1 ADD COLUMN d VARCHAR(100) NOT NULL DEFAULT '';
+SET SESSION DEBUG='-d,cde_create_index_stor_rel_fail';
+
+select * from t1;
+
+drop table t1;

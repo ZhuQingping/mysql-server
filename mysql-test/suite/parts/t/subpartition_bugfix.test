@@ -1,0 +1,666 @@
+--source include/have_debug.inc
+--source include/not_have_only_dstore.inc
+
+SET @saved_rds_extended_partitions_enabled=@@rds_extended_partitions_enabled;
+SET global rds_extended_partitions_enabled = true;
+
+--echo # BUG2023112403065
+--disable_warnings
+CREATE TABLE t0 (
+  a int DEFAULT NULL,
+  b int  DEFAULT NULL
+) PARTITION BY RANGE (a)
+SUBPARTITION BY RANGE (b)
+(PARTITION p0 VALUES LESS THAN (floor(5.0))
+ (SUBPARTITION q1 VALUES LESS THAN (2),
+  SUBPARTITION q2 VALUES LESS THAN (5)),
+ PARTITION p1 VALUES LESS THAN (10)
+ (SUBPARTITION q3 VALUES LESS THAN (7),
+  SUBPARTITION q4 VALUES LESS THAN (10)),
+ PARTITION p2 VALUES LESS THAN (15)
+ (SUBPARTITION q5 VALUES LESS THAN (12),
+  SUBPARTITION q6 VALUES LESS THAN (15)),
+ PARTITION p3 VALUES LESS THAN (20)
+ (SUBPARTITION q7 VALUES LESS THAN (17),
+  SUBPARTITION q8 VALUES LESS THAN (20)));
+--enable_warnings
+
+explain select * from t0 where b > 30;
+explain select * from t0 where b < 30;
+explain select * from t0 where b < 13;
+explain select * from t0 where a > 30;
+drop table t0;
+
+--disable_warnings
+CREATE TABLE t0 (
+  a int DEFAULT NULL,
+  b int  DEFAULT NULL
+) PARTITION BY LIST (a)
+SUBPARTITION BY LIST (b)
+(PARTITION p0 VALUES IN (floor(5.0))
+ (SUBPARTITION q1 VALUES IN (2),
+  SUBPARTITION q2 VALUES IN (5)),
+ PARTITION p1 VALUES IN (10)
+ (SUBPARTITION q3 VALUES IN (7),
+  SUBPARTITION q4 VALUES IN (10)),
+ PARTITION p2 VALUES IN (15)
+ (SUBPARTITION q5 VALUES IN (12),
+  SUBPARTITION q6 VALUES IN (15)),
+ PARTITION p3 VALUES IN (20)
+ (SUBPARTITION q7 VALUES IN (17),
+  SUBPARTITION q8 VALUES IN (20)));
+--enable_warnings
+
+explain select * from t0 where b > 30;
+explain select * from t0 where b < 30;
+explain select * from t0 where b < 13;
+explain select * from t0 where a > 30;
+drop table t0;
+
+--echo # BUG2023112403408
+CREATE TABLE t1 (
+  id_col int unsigned NOT NULL,
+  smallint_col smallint unsigned NOT NULL,
+  year_col year NOT NULL
+) PARTITION BY RANGE (smallint_col) SUBPARTITION BY LIST (year_col) (
+PARTITION smalldata VALUES LESS THAN (10) (
+  SUBPARTITION p0_2023 VALUES in (2023),
+  SUBPARTITION p1_2022 VALUES in (2022)
+),
+PARTITION mediumdata VALUES LESS THAN (50) (
+  SUBPARTITION p3_2023 VALUES in (2023),
+  SUBPARTITION p4_2022 VALUES in (2022)
+));
+INSERT INTO t1 VALUES (1,2,2022);
+SELECT * FROM t1;
+ALTER TABLE t1 REBUILD PARTITION ALL;
+SELECT * FROM t1;
+DROP TABLE t1;
+
+--echo #
+--echo # BUG2023120200366
+--echo #
+
+CREATE TABLE t1 (
+  tinyint_col tinyint,
+  int_col int
+) PARTITION BY LIST COLUMNS(tinyint_col)
+SUBPARTITION BY LIST COLUMNS(int_col)
+ (PARTITION p1 VALUES IN (0)
+ (SUBPARTITION p1sp0 VALUES IN (0)),
+ PARTITION p2 VALUES IN (10)
+ (SUBPARTITION p2sp0 VALUES IN (0)));
+
+explain SELECT int_col FROM t1 where int_col = 0;
+SELECT int_col FROM t1 where int_col = 0;
+explain SELECT int_col FROM t1 where int_col = 1;
+SELECT int_col FROM t1 where int_col = 1;
+drop table t1;
+
+--error ER_PARTITION_FUNC_NOT_ALLOWED_ERROR
+create table t1(id int, decimal_col decimal(20,2) NOT NULL)
+  partition by range(CEILING(decimal_col))
+  (partition p1 values less than(1));
+
+--error ER_PARTITION_FUNC_NOT_ALLOWED_ERROR
+create table t1(id int, decimal_col decimal(20,2) NOT NULL, c2 int)
+  partition by range(c2) subpartition by range(CEILING(decimal_col))
+  (partition p1 values less than(1)
+    (subpartition sp1 values less than(1)));
+
+--echo #
+--echo # BUG2023120603314 mysqld crasded when opening table about extented partition tables if rds_extended_partitions_enabled disabled.
+--echo #
+
+CREATE TABLE sales_hash_hash
+(
+  dept_no     INT,
+  part_no     INT,
+  country     varchar(20),
+  date        DATE,
+  amount      INT
+)
+PARTITION BY HASH(month(date))
+SUBPARTITION BY HASH(TO_DAYS(date)) (
+PARTITION m0 (
+       SUBPARTITION d0,
+       SUBPARTITION d1
+   ),
+PARTITION m1 (
+       SUBPARTITION d2,
+       SUBPARTITION d3
+   ),
+PARTITION m2 (
+       SUBPARTITION d4,
+       SUBPARTITION d5
+       )
+   );
+insert into sales_hash_hash values(1,1,'af','2021-01-01',1);
+insert into sales_hash_hash values(1,1,'af','2021-02-01',1);
+insert into sales_hash_hash values(1,1,'af','2021-03-01',1);
+insert into sales_hash_hash values(1,1,'af','2021-04-01',1);
+insert into sales_hash_hash values(1,1,'af','2021-05-01',1);
+create table test1 like sales_hash_hash;
+alter table test1 remove partitioning;
+insert into test1 select * from sales_hash_hash;
+
+SET global rds_extended_partitions_enabled = OFF;
+
+# DML
+
+--error ER_PARTITION_SUBPARTITION_ERROR
+select * from sales_hash_hash;
+
+--error ER_PARTITION_SUBPARTITION_ERROR
+insert into sales_hash_hash values(1,1,'af','2021-01-01',1);
+
+--error ER_PARTITION_SUBPARTITION_ERROR
+update sales_hash_hash set dept_no = dept_no + 1;
+
+--error ER_PARTITION_SUBPARTITION_ERROR
+delete from sales_hash_hash where dept_no = 1;
+
+--error ER_PARTITION_SUBPARTITION_ERROR
+insert into test1 select * from sales_hash_hash;
+
+# DDL
+
+--error ER_PARTITION_SUBPARTITION_ERROR
+create table test2 like sales_hash_hash;
+--error ER_PARTITION_SUBPARTITION_ERROR
+create table test2 as select * from sales_hash_hash;
+
+--error ER_PARTITION_SUBPARTITION_ERROR
+CREATE TABLE test2 (
+  id_col int NOT NULL,
+  int_col int NOT NULL,
+  char_col char(8) NOT NULL,
+  varchar_col varchar(255) NOT NULL
+) PARTITION BY LIST (id_col % 4) SUBPARTITION BY LIST COLUMNS(char_col,int_col,varchar_col)
+(
+   PARTITION p0 VALUES in (0)(
+    SUBPARTITION sub0 VALUES in (('aa', 0, 'aa'),('ab', 100, 'ab'),('ab', 131, 'ab')),
+    SUBPARTITION sub1 VALUES in (('aaa2', 2147483647, 'bbba2'))
+   ),
+   PARTITION p1 VALUES in (1)(
+    SUBPARTITION sub2 VALUES in (('aa', 1, 'aa'),('ab', 100, 'ab'),('ab', 131, 'ab')),
+    SUBPARTITION sub3 VALUES in (('aaa2', 2147483647, 'bbba2'))
+   ),
+   PARTITION p2 VALUES in (2)(
+    SUBPARTITION sub4 VALUES in (('aa', 2, 'aa'),('ab', 100, 'ab'),('ab', 131, 'ab')),
+    SUBPARTITION sub5 VALUES in (('aaa2', 2147483647, 'bbba2'))
+   ),
+   PARTITION p3 VALUES in (3)(
+    SUBPARTITION sub6 VALUES in (('aa', 3, 'aa'),('ab', 100, 'ab'),('ab', 131, 'ab')),
+    SUBPARTITION sub7 VALUES in (('aaa2', 2147483647, 'bbba2'))
+   )
+);
+--error ER_PARTITION_SUBPARTITION_ERROR
+alter table test1 partition by hash(dept_no) subpartition by hash(part_no);
+
+alter table test1 partition by hash(dept_no);
+show create table test1;
+select * from test1;
+alter table test1 remove partitioning;
+show create table test1;
+select * from test1;
+
+# optimize partition / analyze partition / remove partitioning / truncate partition :  allowed
+
+set global rds_extended_partitions_enabled=ON;
+select * from sales_hash_hash;
+select * from sales_hash_hash partition(m2);
+set global rds_extended_partitions_enabled=OFF;
+
+alter table sales_hash_hash optimize partition m2;
+set global rds_extended_partitions_enabled=ON;
+select * from sales_hash_hash;
+select * from sales_hash_hash partition(m2);
+set global rds_extended_partitions_enabled=OFF;
+
+alter table sales_hash_hash analyze partition m2;
+set global rds_extended_partitions_enabled=ON;
+select * from sales_hash_hash;
+select * from sales_hash_hash partition(m2);
+set global rds_extended_partitions_enabled=OFF;
+
+--error ER_PARTITION_SUBPARTITION_ERROR
+alter table sales_hash_hash truncate partition m2;
+set global rds_extended_partitions_enabled=ON;
+select * from sales_hash_hash;
+select * from sales_hash_hash partition(m2);
+set global rds_extended_partitions_enabled=OFF;
+
+alter table sales_hash_hash remove partitioning;
+set global rds_extended_partitions_enabled=ON;
+select * from sales_hash_hash;
+set global rds_extended_partitions_enabled=OFF;
+
+# other DDL : not allowed
+
+SET global rds_extended_partitions_enabled = ON;
+alter table sales_hash_hash PARTITION BY HASH(month(date))
+SUBPARTITION BY HASH(TO_DAYS(date)) (
+PARTITION m0 (
+       SUBPARTITION d0,
+       SUBPARTITION d1
+   ),
+PARTITION m1 (
+       SUBPARTITION d2,
+       SUBPARTITION d3
+   ),
+PARTITION m2 (
+       SUBPARTITION d4,
+       SUBPARTITION d5
+       )
+   );
+select * from sales_hash_hash;
+SET global rds_extended_partitions_enabled = OFF;
+
+--error ER_PARTITION_SUBPARTITION_ERROR
+alter table sales_hash_hash add partition (partition m3 (
+  SUBPARTITION d6,
+  SUBPARTITION d7
+));
+
+--error ER_PARTITION_SUBPARTITION_ERROR
+alter table sales_hash_hash rebuild partition all;
+
+alter table sales_hash_hash repair partition m1;
+
+alter table sales_hash_hash check partition m1;
+
+delete from test1;
+--error ER_PARTITION_SUBPARTITION_ERROR
+alter table sales_hash_hash exchange partition d2 with table test1;
+
+--error ER_PARTITION_SUBPARTITION_ERROR
+alter table sales_hash_hash reorganize partition m1,m2 into
+(
+  partition m1 (
+       SUBPARTITION d0,
+       SUBPARTITION d1
+   )
+);
+
+--error ER_PARTITION_SUBPARTITION_ERROR
+alter table sales_hash_hash coalesce partition 2;
+
+--error ER_PARTITION_SUBPARTITION_ERROR
+alter table sales_hash_hash add column c1 int;
+
+--error ER_PARTITION_SUBPARTITION_ERROR
+alter table sales_hash_hash drop column id_col;
+
+--error ER_PARTITION_SUBPARTITION_ERROR
+alter table sales_hash_hash add key key_1(id_col);
+
+SET global rds_extended_partitions_enabled = ON;
+alter table sales_hash_hash PARTITION BY list(dept_no) SUBPARTITION BY list(part_no) (
+PARTITION m0 values in (1,2) (
+       SUBPARTITION d0 values in (1,2),
+       SUBPARTITION d1 values in (3,4)
+   ),
+PARTITION m1 values in (3,4) (
+       SUBPARTITION d2 values in (1,2),
+       SUBPARTITION d3 values in (3,4)
+   ),
+PARTITION m2 values in (5, 6) (
+       SUBPARTITION d4 values in (1,2),
+       SUBPARTITION d5 values in (3,4)
+       )
+   );
+select * from sales_hash_hash;
+SET global rds_extended_partitions_enabled = OFF;
+
+--error ER_PARTITION_SUBPARTITION_ERROR
+alter table sales_hash_hash drop partition m2;
+
+drop table sales_hash_hash;
+drop table test1;
+
+# restart
+
+SET global rds_extended_partitions_enabled = ON;
+
+create table t1(id int, c1 int, c2 int) partition by hash(c1) subpartition by hash(c2);
+insert into t1 values(1,1,1),(2,2,2),(3,3,3),(4,4,4);
+show create table t1;
+
+--source include/kill_mysqld.inc
+let $restart_parameters = "restart: --rds_extended_partitions_enabled=OFF";
+--source include/start_mysqld.inc
+
+show create table t1;
+--error ER_PARTITION_SUBPARTITION_ERROR
+select * from t1;
+
+alter table t1 remove partitioning;
+select * from t1;
+drop table t1;
+
+--echo # BUG about partition prunning
+# 1. part_info->get_part_iter_for_interval = nullptr and sub_part_info->get_part_iter_for_interval = nullptr
+# 2. All query conditions are equal query.
+# 3. have more than one key parts
+
+SET global rds_extended_partitions_enabled = ON;
+
+create table t1 (a int, b int, c int, d int)
+partition by list (a + b) subpartition by list (c + d)
+(
+  partition p0 values in (1,4,5) (
+    subpartition p0sp0 values in (1,5,6),
+    subpartition p0sp1 values in (2,3)
+  ),
+  partition p1 values in (2,3,7,8) (
+    subpartition p1sp0 values in (1),
+    subpartition p1sp1 values in (2,3,6,7,8)
+  )
+);
+--replace_column 10 # 11 #
+explain select * from t1 where a in (6,7) and b = 1 and c = 1 and d = 9;
+drop table t1;
+
+--echo # BUG There is an error in processing NULL value of list type subpartition.
+SET global rds_extended_partitions_enabled = ON;
+ 
+create table t1(id int, a int) partition by list(id) subpartition by list(a) (
+  partition p1 values in (1) (
+    subpartition sp1 values in (1),
+    subpartition sp2 values in (2)
+  ),
+  partition p2 values in (2) (
+    subpartition sp3 values in (1),
+    subpartition sp4 values in (null)
+  ),
+  partition p3 values in (3) (
+    subpartition sp5 values in (2),
+    subpartition sp6 values in (1)
+  )
+);
+explain select * from t1 where a is null;
+ 
+alter table t1 partition by list(id) subpartition by list(a) (
+  partition p1 values in (1) (
+    subpartition sp1 values in (null),
+    subpartition sp2 values in (2)
+  ),
+  partition p2 values in (2) (
+    subpartition sp3 values in (1),
+    subpartition sp4 values in (2)
+  ),
+  partition p3 values in (3) (
+    subpartition sp5 values in (2),
+    subpartition sp6 values in (null)
+  )
+);
+explain select * from t1 where a is null;
+drop table t1;
+
+--echo # BUG : rds_extended_partitions_enabled = off bugs
+
+--echo # 1.use database(rds_extended_partitions_enabled off)
+--echo # 2.set rds_extended_partitions_enabled to on and execute query
+
+set global rds_extended_partitions_enabled = on;
+ 
+--connect(con1,localhost,root)
+--connection con1
+ 
+CREATE DATABASE test1;
+USE test1;
+show variables like 'rds_extended_partitions_enabled';
+create table tab_list_list_col (a int, b int)
+partition by list (a)
+subpartition by list columns(b) (
+partition p0 values in (0) (
+subpartition sub1 values in (1990),
+subpartition sub2 values in (1992)),
+partition p1 values in (1) (
+subpartition sub3 values in (2000),
+subpartition sub4 values in (2002)));
+ 
+create table tab_list_range_col (a int, b int)
+partition by list (a)
+subpartition by range columns(b) (
+partition p0 values in (0) (
+subpartition sub1 values less than (1991),
+subpartition sub2 values less than MAXVALUE),
+partition p1 values in (1) (
+subpartition sub3 values less than (2001),
+subpartition sub4 values less than MAXVALUE));
+ 
+insert into tab_list_list_col values (0,1990),(0,1992),(1,2000),(1,2002);
+select a from tab_list_list_col where b >1990;
+insert into tab_list_range_col values (0,1990),(0,1992),(1,2000),(1,2002);
+select a from tab_list_range_col where b >1990;
+ 
+set global rds_extended_partitions_enabled = off;
+ 
+--connection default
+USE test1;
+show variables like 'rds_extended_partitions_enabled';
+--error ER_PARTITION_SUBPARTITION_ERROR
+select a from tab_list_list_col where b >1990;
+--error ER_PARTITION_SUBPARTITION_ERROR
+select a from tab_list_range_col where b >1990;
+ 
+set global rds_extended_partitions_enabled = on;
+show variables like 'rds_extended_partitions_enabled';
+select a from tab_list_list_col where b >1990;
+select a from tab_list_range_col where b >1990;
+ 
+drop table tab_list_list_col;
+drop table tab_list_range_col;
+ 
+--echo # 1.use database(rds_extended_partitions_enabled on)
+--echo # 2.set rds_extended_partitions_enabled to off and execute query
+ 
+--connection con1
+USE test1;
+show variables like 'rds_extended_partitions_enabled';
+create table tab_list_list_col (a int, b int)
+partition by list (a)
+subpartition by list columns(b) (
+partition p0 values in (0) (
+subpartition sub1 values in (1990),
+subpartition sub2 values in (1992)),
+partition p1 values in (1) (
+subpartition sub3 values in (2000),
+subpartition sub4 values in (2002)));
+ 
+insert into tab_list_list_col values (0,1990),(0,1992),(1,2000),(1,2002);
+select a from tab_list_list_col where b >1990;
+ 
+set global rds_extended_partitions_enabled = off;
+show variables like 'rds_extended_partitions_enabled';
+--error ER_PARTITION_SUBPARTITION_ERROR
+select a from tab_list_list_col where b >1990;
+--error ER_PARTITION_SUBPARTITION_ERROR
+create table tab_list_range_col (a int, b int)
+partition by list (a)
+subpartition by range columns(b) (
+partition p0 values in (0) (
+subpartition sub1 values less than (1991),
+subpartition sub2 values less than MAXVALUE),
+partition p1 values in (1) (
+subpartition sub3 values less than (2001),
+subpartition sub4 values less than MAXVALUE));
+ 
+drop table tab_list_list_col;
+set global rds_extended_partitions_enabled = on;
+ 
+--echo # 1.use database(rds_extended_partitions_enabled on)
+--echo # 2.flush tables
+--echo # 3.set rds_extended_partitions_enabled to off and execute query
+ 
+--connection default
+use test1;
+show variables like 'rds_extended_partitions_enabled';
+create table tab_list_list_col (a int, b int)
+partition by list (a)
+subpartition by list columns(b) (
+partition p0 values in (0) (
+subpartition sub1 values in (1990),
+subpartition sub2 values in (1992)),
+partition p1 values in (1) (
+subpartition sub3 values in (2000),
+subpartition sub4 values in (2002)));
+ 
+insert into tab_list_list_col values (0,1990),(0,1992),(1,2000),(1,2002);
+select a from tab_list_list_col where b >1990;
+ 
+flush tables;
+set global rds_extended_partitions_enabled = off;
+show variables like 'rds_extended_partitions_enabled';
+--error ER_PARTITION_SUBPARTITION_ERROR
+select a from tab_list_list_col where b >1990;
+show tables;
+--error ER_PARTITION_SUBPARTITION_ERROR
+insert into tab_list_list_col values (0,1990);
+drop table tab_list_list_col;
+ 
+--error ER_PARTITION_SUBPARTITION_ERROR
+create table tab_list_list_col (a int, b int)
+partition by list (a)
+subpartition by list columns(b) (
+partition p0 values in (0) (
+subpartition sub1 values in (1990),
+subpartition sub2 values in (1992)),
+partition p1 values in (1) (
+subpartition sub3 values in (2000),
+subpartition sub4 values in (2002)));
+ 
+--disconnect con1
+DROP DATABASE test1;
+
+--echo #
+--echo # BUG2026031944861 : subpartition typs is list or range and not define part_def and mysql will crashed.
+--echo #
+
+use test;
+set global rds_extended_partitions_enabled = off;
+
+--error ER_PARTITION_SUBPARTITION_ERROR
+create table t1 (
+  i_id     integer not null,
+  i_name   varchar(24),
+  i_price  decimal(5,2),
+  i_data   varchar(50),
+  i_im_id  integer
+)
+PARTITION BY HASH (i_id) SUBPARTITION BY RANGE (i_price) SUBPARTITIONS 3;
+
+--error ER_PARTITION_SUBPARTITION_ERROR
+create table t1 (
+  i_id     integer not null,
+  i_name   varchar(24),
+  i_price  decimal(5,2),
+  i_data   varchar(50),
+  i_im_id  integer
+)
+PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3;
+
+set global rds_extended_partitions_enabled = on;
+
+--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
+create table t1 (
+  i_id     integer not null,
+  i_name   varchar(24),
+  i_price  decimal(5,2),
+  i_data   varchar(50),
+  i_im_id  integer
+)
+PARTITION BY HASH (i_id) SUBPARTITION BY RANGE (i_price) SUBPARTITIONS 3;
+
+--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
+create table t1 (
+  i_id     integer not null,
+  i_name   varchar(24),
+  i_price  decimal(5,2),
+  i_data   varchar(50),
+  i_im_id  integer
+)
+PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3;
+
+--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
+create table t1 (
+  i_id     integer not null,
+  i_name   varchar(24),
+  i_price  decimal(5,2),
+  i_data   varchar(50),
+  i_im_id  integer
+)
+PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3 (
+  partition p0,
+  partition p1
+);
+
+set debug = "+d, no_partitions_for_range";
+--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
+create table t1 (
+  i_id     integer not null,
+  i_name   varchar(24),
+  i_price  decimal(5,2),
+  i_data   varchar(50),
+  i_im_id  integer
+) partition by range (i_id) (
+  partition p1 values less than (10),
+  partition p2 values less than (20)
+);
+
+--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
+create table t1 (
+  i_id     integer not null,
+  i_name   varchar(24),
+  i_price  decimal(5,2),
+  i_data   varchar(50),
+  i_im_id  integer
+) partition by list (i_id) (
+  partition p1 values in (1,2,3,4,5),
+  partition p2 values in (6,7,8,9)
+);
+
+--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
+create table t3 (
+  id int not null,
+  store_id int not null
+) partition by hash (store_id) subpartition by range(id)
+(
+  partition p0 (
+    subpartition q1 values less than (4),
+    subpartition q2 values less than (10)
+      ),
+  partition p1 (
+    subpartition q3 values less than (15),
+    subpartition q4 values less than (20)
+  )
+);
+
+--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by hash (dept_no)
+subpartition by list (part_no)
+(
+  partition p0 (
+    subpartition p0partno0 values in (1, 2),
+    subpartition p0partno1 values in (3, 4)
+  ),
+  partition p1 (
+    subpartition p1partno0 values in (1, 2),
+    subpartition p1partno2 values in (3, 4)
+  )
+);
+
+set debug = "";
+
+#reset
+SET global rds_extended_partitions_enabled = default;

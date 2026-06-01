@@ -1,0 +1,48 @@
+#-------------------------------------------------------------
+#
+#    Conditions:
+#          1.log-bin=mysql-bin(binlog function is turned on)
+#          2.binlog format in mixed,then in statement,then in row
+#    Actions:
+#          execute  the command 'mysqlbinlog --truncate xxx/binlog_name',
+#          xxx/binlog_name is with the full path.
+#    Expection:
+#           the new  binlog is created in datadir
+#
+#-------------------------------------------------------------
+
+#--disable_query_log
+--disable_warnings
+
+let $i=3;
+SET @old_binlog_format=@@binlog_format;
+
+while ($i)
+{
+  if ($i == 3)
+  { 
+    SET GLOBAL binlog_format='MIXED';
+    SET SESSION binlog_format='MIXED';
+  }
+
+  if ($i == 2)
+  { 
+    SET GLOBAL binlog_format='STATEMENT';
+    SET SESSION binlog_format='STATEMENT';
+  }
+
+  if ($i == 1)
+  { 
+    SET GLOBAL binlog_format='ROW';
+    SET SESSION binlog_format='ROW';
+  }
+
+  SHOW  VARIABLES LIKE "binlog_format";
+  dec $i;
+
+--source suite/mysqlbinlog/include/binlog_create_tmpbinlog_dir_check_1.inc
+
+}
+
+SET GLOBAL binlog_format = @old_binlog_format;
+--enable_warnings

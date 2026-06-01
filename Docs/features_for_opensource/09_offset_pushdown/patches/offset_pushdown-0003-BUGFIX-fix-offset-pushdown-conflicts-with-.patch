@@ -1,0 +1,203 @@
+From b85d7ab78a5d021b12a6eaf3139ede4d08812a11 Mon Sep 17 00:00:00 2001
+From: songliyong <songliyong@contributor>
+
+
+Date: Thu, 20 Nov 2025 19:11:06 +0800
+Subject: [PATCH] BUGFIX fix offset pushdown conflicts with mrr issue
+
+Issue:
+----------
+MRR will sort the rows, so we will get different
+result with and without offset pushdown.
+
+Solution:
+----------
+disable offset pushdown when ds-mrr is working.
+---
+ mysql-test/r/offset_pushdown.result           | 26 +++++++++++++++++++
+ .../r/offset_pushdown-dstore.result           | 26 +++++++++++++++++++
+ .../dstore_main/t/offset_pushdown-dstore.test | 25 ++++++++++++++++++
+ mysql-test/t/offset_pushdown.test             | 25 ++++++++++++++++++
+ sql/sql_select.cc                             |  4 ++-
+ storage/dstore/handler/ha_cde.cc              |  2 ++
+ storage/innobase/handler/ha_innodb.cc         |  2 ++
+ 7 files changed, 109 insertions(+), 1 deletion(-)
+
+diff --git a/mysql-test/r/offset_pushdown.result b/mysql-test/r/offset_pushdown.result
+index 5d89dd7bf20..e3f5c492ab8 100644
+--- a/mysql-test/r/offset_pushdown.result
++++ b/mysql-test/r/offset_pushdown.result
+@@ -1212,3 +1212,29 @@ yval VARCHAR(100) PATH "$.y"
+ xval	yval
+ 3	7
+ SET SESSION BIG_TABLES =default;
++CREATE TABLE employees (
++id INT PRIMARY KEY AUTO_INCREMENT,
++name VARCHAR(100),
++department_id INT,
++salary DECIMAL(10,2),
++INDEX idx_department_id (department_id)
++);
++INSERT INTO employees (name, department_id, salary) VALUES
++('John', 10, 5000.00),
++('Jane', 20, 6000.00),
++('Bob', 10, 7000.00),
++('Alice', 30, 8000.00),
++('Tom', 20, 9000.00);
++SET @orig_optimizer_switch = @@optimizer_switch;
++SET optimizer_switch = 'mrr=on,mrr_cost_based=off';
++EXPLAIN  SELECT * FROM employees  WHERE department_id <30 limit 2 offset 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	employees	NULL	range	idx_department_id	idx_department_id	5	NULL	4	100.00	Using MRR
++Warnings:
++Note	1003	/* select#1 */ select `test`.`employees`.`id` AS `id`,`test`.`employees`.`name` AS `name`,`test`.`employees`.`department_id` AS `department_id`,`test`.`employees`.`salary` AS `salary` from `test`.`employees` where (`test`.`employees`.`department_id` < 30) limit 1,2
++SELECT * FROM employees  WHERE department_id < 30 limit 2 offset 1;
++id	name	department_id	salary
++2	Jane	20	6000.00
++3	Bob	10	7000.00
++SET optimizer_switch = @orig_optimizer_switch;
++DROP table employees;
+diff --git a/mysql-test/suite/dstore_main/r/offset_pushdown-dstore.result b/mysql-test/suite/dstore_main/r/offset_pushdown-dstore.result
+index c7717a9f03a..826f4b1c94c 100644
+--- a/mysql-test/suite/dstore_main/r/offset_pushdown-dstore.result
++++ b/mysql-test/suite/dstore_main/r/offset_pushdown-dstore.result
+@@ -1208,3 +1208,29 @@ yval VARCHAR(100) PATH "$.y"
+ xval	yval
+ 3	7
+ SET SESSION BIG_TABLES =default;
++CREATE TABLE employees (
++id INT PRIMARY KEY AUTO_INCREMENT,
++name VARCHAR(100),
++department_id INT,
++salary DECIMAL(10,2),
++INDEX idx_department_id (department_id)
++);
++INSERT INTO employees (name, department_id, salary) VALUES
++('John', 10, 5000.00),
++('Jane', 20, 6000.00),
++('Bob', 10, 7000.00),
++('Alice', 30, 8000.00),
++('Tom', 20, 9000.00);
++SET @orig_optimizer_switch = @@optimizer_switch;
++SET optimizer_switch = 'mrr=on,mrr_cost_based=off';
++EXPLAIN  SELECT * FROM employees  WHERE department_id <30 limit 2 offset 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	employees	NULL	range	idx_department_id	idx_department_id	5	NULL	4	100.00	Using MRR
++Warnings:
++Note	1003	/* select#1 */ select `test`.`employees`.`id` AS `id`,`test`.`employees`.`name` AS `name`,`test`.`employees`.`department_id` AS `department_id`,`test`.`employees`.`salary` AS `salary` from `test`.`employees` where (`test`.`employees`.`department_id` < 30) limit 1,2
++SELECT * FROM employees  WHERE department_id < 30 limit 2 offset 1;
++id	name	department_id	salary
++2	Jane	20	6000.00
++3	Bob	10	7000.00
++SET optimizer_switch = @orig_optimizer_switch;
++DROP table employees;
+diff --git a/mysql-test/suite/dstore_main/t/offset_pushdown-dstore.test b/mysql-test/suite/dstore_main/t/offset_pushdown-dstore.test
+index 1f371e837ab..642c9629b39 100644
+--- a/mysql-test/suite/dstore_main/t/offset_pushdown-dstore.test
++++ b/mysql-test/suite/dstore_main/t/offset_pushdown-dstore.test
+@@ -624,3 +624,28 @@ explain format=tree SELECT *
+          )
+        ) AS  jt LIMIT 1 OFFSET 1;
+ SET SESSION BIG_TABLES =default;
++
++# conflict with MRR
++CREATE TABLE employees (
++    id INT PRIMARY KEY AUTO_INCREMENT,
++    name VARCHAR(100),
++    department_id INT,
++    salary DECIMAL(10,2),
++    INDEX idx_department_id (department_id)
++);
++
++
++INSERT INTO employees (name, department_id, salary) VALUES
++('John', 10, 5000.00),
++('Jane', 20, 6000.00),
++('Bob', 10, 7000.00),
++('Alice', 30, 8000.00),
++('Tom', 20, 9000.00);
++
++SET @orig_optimizer_switch = @@optimizer_switch;
++
++SET optimizer_switch = 'mrr=on,mrr_cost_based=off';
++EXPLAIN  SELECT * FROM employees  WHERE department_id <30 limit 2 offset 1;
++SELECT * FROM employees  WHERE department_id < 30 limit 2 offset 1;
++SET optimizer_switch = @orig_optimizer_switch;
++DROP table employees;
+diff --git a/mysql-test/t/offset_pushdown.test b/mysql-test/t/offset_pushdown.test
+index c482ff93db2..3ab6baa4f48 100644
+--- a/mysql-test/t/offset_pushdown.test
++++ b/mysql-test/t/offset_pushdown.test
+@@ -626,3 +626,28 @@ explain format=tree SELECT *
+          )
+        ) AS  jt LIMIT 1 OFFSET 1;
+ SET SESSION BIG_TABLES =default;
++
++# conflict with MRR
++CREATE TABLE employees (
++    id INT PRIMARY KEY AUTO_INCREMENT,
++    name VARCHAR(100),
++    department_id INT,
++    salary DECIMAL(10,2),
++    INDEX idx_department_id (department_id)
++);
++
++
++INSERT INTO employees (name, department_id, salary) VALUES
++('John', 10, 5000.00),
++('Jane', 20, 6000.00),
++('Bob', 10, 7000.00),
++('Alice', 30, 8000.00),
++('Tom', 20, 9000.00);
++
++SET @orig_optimizer_switch = @@optimizer_switch;
++
++SET optimizer_switch = 'mrr=on,mrr_cost_based=off';
++EXPLAIN  SELECT * FROM employees  WHERE department_id <30 limit 2 offset 1;
++SELECT * FROM employees  WHERE department_id < 30 limit 2 offset 1;
++SET optimizer_switch = @orig_optimizer_switch;
++DROP table employees;
+diff --git a/sql/sql_select.cc b/sql/sql_select.cc
+index 5d4f3bcbf38..41ee4eba22e 100644
+--- a/sql/sql_select.cc
++++ b/sql/sql_select.cc
+@@ -3550,7 +3550,9 @@ void JOIN::offset_pushdown() {
+     if (!select_distinct && !grouped && !group_optimized_away &&
+         !implicit_grouping &&
+         !(range_scan_ap &&
+-          !(range_scan_ap->type == AccessPath::INDEX_RANGE_SCAN)) &&
++          !(range_scan_ap->type == AccessPath::INDEX_RANGE_SCAN &&
++            range_scan_ap->index_range_scan().mrr_flags &
++                HA_MRR_USE_DEFAULT_IMPL)) &&
+         !(tbl->part_info && !(tbl->part_info->num_partitions_used() == 1)) &&
+         !(tab->table_ref->is_view_or_derived() ||
+           tab->table_ref->is_table_function() ||
+diff --git a/storage/dstore/handler/ha_cde.cc b/storage/dstore/handler/ha_cde.cc
+index 371282df8a1..68911a0fa5e 100644
+--- a/storage/dstore/handler/ha_cde.cc
++++ b/storage/dstore/handler/ha_cde.cc
+@@ -3258,6 +3258,8 @@ handler *ha_cde::clone(const char *name, MEM_ROOT *mem_root) {
+   if (new_handler != nullptr) {
+     CDE_ASSERT(new_handler->m_dstore != nullptr);
+     new_handler->m_dstore->select_lock_type = m_dstore->select_lock_type;
++    new_handler->m_pushed_offset = m_pushed_offset;
++    new_handler->m_scanned_offset = m_scanned_offset;
+   }
+   return new_handler;
+ }
+diff --git a/storage/innobase/handler/ha_innodb.cc b/storage/innobase/handler/ha_innodb.cc
+index 63dceb97fb5..5a49fad549c 100644
+--- a/storage/innobase/handler/ha_innodb.cc
++++ b/storage/innobase/handler/ha_innodb.cc
+@@ -7702,6 +7702,8 @@ handler *ha_innobase::clone(const char *name,   /*!< in: table name */
+     assert(new_handler->m_prebuilt != nullptr);
+ 
+     new_handler->m_prebuilt->select_lock_type = m_prebuilt->select_lock_type;
++    new_handler->m_pushed_offset = m_pushed_offset;
++    new_handler->m_scanned_offset = m_scanned_offset;
+   }
+ 
+   return new_handler;
+-- 
+2.23.0
+

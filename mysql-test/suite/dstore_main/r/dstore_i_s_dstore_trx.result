@@ -1,0 +1,106 @@
+DESCRIBE INFORMATION_SCHEMA.DSTORE_TRX;
+Field	Type	Null	Key	Default	Extra
+session_id	bigint unsigned	NO			
+os_thread_id	bigint unsigned	NO			
+xid	bigint unsigned	NO			
+state	varchar(10)	NO			
+trx_duration	bigint unsigned	NO			
+isolation_level	varchar(32)	NO			
+is_autonomous	int	NO			
+trx_query	varchar(512)	YES			
+SET @dstore_use_histogram_auto_update_saved=@@dstore_use_histogram_auto_update;
+SET GLOBAL dstore_use_histogram_auto_update=off;
+SET @orig_optimizer_switch = @@optimizer_switch;
+set optimizer_switch='engine_condition_pushdown=on';
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 (
+c01 INT,
+c02 INT,
+PRIMARY KEY (c01)
+) ENGINE=DSTORE;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+START TRANSACTION;
+INSERT INTO t1 VALUES (1,2),(2,4);
+SELECT * FROM INFORMATION_SCHEMA.DSTORE_TRX;
+session_id	os_thread_id	xid	state	trx_duration	isolation_level	is_autonomous	trx_query
+#	#	#	INPROGR	#	READ_COMMITTED	0	SELECT * FROM INFORMATION_SCHEMA.DSTORE_TRX
+SELECT SESSION_ID INTO @conn_id FROM INFORMATION_SCHEMA.DSTORE_TRX;
+SELECT CONNECTION_ID() INTO @cur_conn_id;
+SELECT IF(@conn_id = @cur_conn_id, 'same', 'different') AS RESULT;
+RESULT
+same
+
+SELECT STATE,ISOLATION_LEVEL,IS_AUTONOMOUS,TRX_QUERY FROM INFORMATION_SCHEMA.DSTORE_TRX WHERE SESSION_ID=@cur_conn_id;
+STATE	ISOLATION_LEVEL	IS_AUTONOMOUS	TRX_QUERY
+#	#	#	SELECT STATE,ISOLATION_LEVEL,IS_AUTONOMOUS,TRX_QUERY FROM INFORMATION_SCHEMA.DSTORE_TRX WHERE SESSION_ID=@cur_conn_id
+SELECT STATE,ISOLATION_LEVEL,IS_AUTONOMOUS,TRX_QUERY FROM INFORMATION_SCHEMA.DSTORE_TRX WHERE SESSION_ID=@cur_conn_id+100;
+STATE	ISOLATION_LEVEL	IS_AUTONOMOUS	TRX_QUERY
+SELECT OS_THREAD_ID INTO @tid FROM INFORMATION_SCHEMA.DSTORE_TRX;
+SELECT * FROM INFORMATION_SCHEMA.DSTORE_TRX WHERE OS_THREAD_ID=0;
+session_id	os_thread_id	xid	state	trx_duration	isolation_level	is_autonomous	trx_query
+SELECT * FROM INFORMATION_SCHEMA.DSTORE_TRX WHERE OS_THREAD_ID=-1;
+session_id	os_thread_id	xid	state	trx_duration	isolation_level	is_autonomous	trx_query
+SELECT * FROM INFORMATION_SCHEMA.DSTORE_TRX WHERE OS_THREAD_ID=@tid;
+session_id	os_thread_id	xid	state	trx_duration	isolation_level	is_autonomous	trx_query
+#	#	#	INPROGR	#	READ_COMMITTED	0	SELECT * FROM INFORMATION_SCHEMA.DSTORE_TRX WHERE OS_THREAD_ID=@tid
+SELECT * FROM INFORMATION_SCHEMA.DSTORE_TRX WHERE OS_THREAD_ID=@tid+100;
+session_id	os_thread_id	xid	state	trx_duration	isolation_level	is_autonomous	trx_query
+set optimizer_switch='engine_condition_pushdown=off';
+SELECT * FROM INFORMATION_SCHEMA.DSTORE_TRX WHERE OS_THREAD_ID=@tid;
+session_id	os_thread_id	xid	state	trx_duration	isolation_level	is_autonomous	trx_query
+#	#	#	INPROGR	#	READ_COMMITTED	0	SELECT * FROM INFORMATION_SCHEMA.DSTORE_TRX WHERE OS_THREAD_ID=@tid
+SELECT * FROM INFORMATION_SCHEMA.DSTORE_TRX WHERE OS_THREAD_ID=@tid+100;
+session_id	os_thread_id	xid	state	trx_duration	isolation_level	is_autonomous	trx_query
+set optimizer_switch='engine_condition_pushdown=on';
+COMMIT;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+INSERT INTO t1 VALUES (3,6);
+SELECT STATE,ISOLATION_LEVEL,IS_AUTONOMOUS,TRX_QUERY FROM INFORMATION_SCHEMA.DSTORE_TRX;
+STATE	ISOLATION_LEVEL	IS_AUTONOMOUS	TRX_QUERY
+ROLLBACK;
+BEGIN;
+INSERT INTO t1 VALUES (4,8);
+SELECT * FROM t1 FOR UPDATE;
+c01	c02
+1	2
+2	4
+3	6
+4	8
+BEGIN;
+UPDATE t1 SET c02=3 where c01=1;
+SELECT STATE,ISOLATION_LEVEL,IS_AUTONOMOUS,TRX_QUERY FROM INFORMATION_SCHEMA.DSTORE_TRX ORDER BY TRX_QUERY;
+STATE	ISOLATION_LEVEL	IS_AUTONOMOUS	TRX_QUERY
+INPROGR	TRANSACTION_SNAPSHOT	0	NULL
+INPROGR	TRANSACTION_SNAPSHOT	0	UPDATE t1 SET c02=3 where c01=1
+COMMIT;
+SELECT SLEEP(5);
+SLEEP(5)
+0
+SELECT STATE,ISOLATION_LEVEL,IS_AUTONOMOUS,TRX_QUERY FROM INFORMATION_SCHEMA.DSTORE_TRX;
+STATE	ISOLATION_LEVEL	IS_AUTONOMOUS	TRX_QUERY
+INPROGR	TRANSACTION_SNAPSHOT	0	NULL
+DROP TABLE t1;
+SHOW GLOBAL STATUS LIKE '%dstore%';
+Variable_name	Value
+Dstore_local_backup_full_backup_status	A
+Dstore_dirty_page_cnt	A
+Dstore_page_flush_cnt	A
+Dstore_page_get_cnt	A
+Dstore_page_hit_cnt	A
+Dstore_cr_buffer_get_cnt	A
+Dstore_cr_buffer_hit_cnt	A
+Dstore_max_flushed_finish_plsn	A
+Dstore_max_appended_plsn	A
+Dstore_max_written_to_file_plsn	A
+Dstore_recovery_plsn_for_dirty_page	A
+Dstore_recovery_plsn_for_taurus	A
+Dstore_archive_plsn	A
+Dstore_backedUp_plsn	A
+Dstore_physical_standby_flushed_plsn	A
+Dstore_binlog_max_sync_plsn	A
+Dstore_wal_ckpt_timestamp	A
+Dstore_wal_ckpt_disk_recovery_plsn	A
+Dstore_lwlock_blocked_count	A
+Dstore_double_write_init_normal	A
+SET GLOBAL dstore_use_histogram_auto_update=@dstore_use_histogram_auto_update_saved;
+SET optimizer_switch=@orig_optimizer_switch;

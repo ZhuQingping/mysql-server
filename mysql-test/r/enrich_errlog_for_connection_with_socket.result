@@ -1,0 +1,51 @@
+SET @start_event_scheduler= @@global.event_scheduler;
+set global event_scheduler=off;
+## Test rds_conn_log_error_verbosity variable.
+SET GLOBAL rds_conn_log_error_verbosity=1;
+select @@global.rds_conn_log_error_verbosity;
+@@global.rds_conn_log_error_verbosity
+1
+SET GLOBAL rds_conn_log_error_verbosity=0;
+select @@global.rds_conn_log_error_verbosity;
+@@global.rds_conn_log_error_verbosity
+0
+## If rds_conn_log_error_verbosity=0, error log has not errmsg.
+SET @start_value= @@global.wait_timeout;
+SET GLOBAL rds_conn_log_error_verbosity=0;
+SET @start_time= UNIX_TIMESTAMP();
+connect (test_con1, localhost, root,,);
+SELECT @@session.wait_timeout = @@global.wait_timeout AS 'Expect 1';
+Expect 1
+1
+SET @@session.wait_timeout = <session_value>;
+connect (test_con2, localhost, root,,);
+SET @@session.wait_timeout = <session_value> - 1;
+connection default;
+wait until connections ready
+SELECT info FROM information_schema.processlist;
+info
+SELECT info FROM information_schema.processlist
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+## If rds_conn_log_error_verbosity=1, error log contains "Test socket errno: 110, socket errmsg: Connection timed out."
+SET @start_value= @@global.wait_timeout;
+SET GLOBAL rds_conn_log_error_verbosity=1;
+SET @start_time= UNIX_TIMESTAMP();
+connect (test_con3, localhost, root,,);
+SELECT @@session.wait_timeout = @@global.wait_timeout AS 'Expect 1';
+Expect 1
+1
+SET @@session.wait_timeout = <session_value>;
+connect (test_con4, localhost, root,,);
+SET @@session.wait_timeout = <session_value> - 1;
+connection default;
+wait until connections ready
+SELECT info FROM information_schema.processlist;
+info
+SELECT info FROM information_schema.processlist
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+include/assert_grep.inc [Check that there is 'socket errno: 110, socket errmsg: Connection timed out.(ETIMEDOUT)' in error log.]
+SET @@global.wait_timeout = @start_value;
+SET GLOBAL rds_conn_log_error_verbosity=0;
+SET GLOBAL event_scheduler= @start_event_scheduler;

@@ -1,0 +1,64 @@
+--source include/have_only_dstore.inc
+
+--echo #
+--echo # Test 1. When the background statistic thread hold the MDL read lock, we cannot do DDL
+--echo #
+connect (con1, localhost, root,,);
+connect (con2, localhost, root,,);
+
+connection con1;
+CREATE TABLE 中文表 (c1 int);
+
+SET GLOBAL DEBUG='+d,bg_stat_after_get_table_wait';
+insert into 中文表 values (1);
+insert into 中文表 values (2);
+insert into 中文表 values (3);
+--sleep 5
+SET GLOBAL DEBUG='-d,bg_stat_after_get_table_wait';
+
+connection con2;
+
+# As the background stat threads hold the MDL lock, at here it will report lock wait timeout
+--ERROR ER_LOCK_WAIT_TIMEOUT
+ALTER TABLE 中文表 add column c2 int;
+SET DEBUG_SYNC = 'now SIGNAL resume_bg_stat_sig';
+SET DEBUG_SYNC= 'RESET';
+
+--echo #
+--echo # Test 2. When we are doing ddl, we cannot do background statistic
+--echo #
+connection con1;
+
+SET GLOBAL DEBUG='+d,bg_stat_after_get_table_name_wait';
+insert into 中文表 values (4);
+insert into 中文表 values (5);
+insert into 中文表 values (6);
+--sleep 5
+SET GLOBAL DEBUG='-d,bg_stat_after_get_table_name_wait';
+
+connection con2;
+
+# As the background stat threads hold the MDL lock, at here it will report lock wait timeout
+SET DEBUG_SYNC = 'before_get_refcnt SIGNAL resume_bg_stat_sig WAIT_FOR c1';
+--send ALTER TABLE 中文表 add column c2 int;
+
+connection con1;
+--sleep 5
+let $log_error_= `SELECT @@GLOBAL.log_error`;
+--let $assert_text=bg statistic thread should wait mdl lock fail
+--let $assert_file=$log_error_
+--let $assert_select=bg_stat_service get MDL lock fail for table-.*
+--let $assert_count=1
+--source include/assert_grep.inc
+SET DEBUG_SYNC = 'now SIGNAL c1';
+
+connection con2;
+--reap
+SELECT * FROM 中文表;
+
+--echo #
+--echo # Clean up
+--echo #
+DROP TABLE 中文表;
+disconnect con1;
+disconnect con2;

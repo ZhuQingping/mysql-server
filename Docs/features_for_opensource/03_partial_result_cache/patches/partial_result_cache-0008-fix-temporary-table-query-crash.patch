@@ -1,0 +1,237 @@
+From b9b14efbac6ead0c3db0a581c981e4dfc09c9776 Mon Sep 17 00:00:00 2001
+From: gebinbin <gebinbin@contributor>
+
+Date: Mon, 5 Jan 2026 10:01:42 +0800
+Subject: [PATCH] fix temporary table query crash
+
+Issue:
+---------
+[internal-git-removed]
+add tuple==nullptr condition is wrong, it makes temporary query return too early and make some cases
+crash or hang when combine with ptrc.
+
+Solution:
+---------
+optimize judge condition and add test cases ensure.Meanwhile add more temporary judge,
+Optimization and unification are required in the internal temporary tables.
+---
+ .../dstore_main/r/temp_table-dstore.result    | 45 +++++++++++++++++++
+ .../dstore_main/t/temp_table-dstore.test      | 32 +++++++++++++
+ storage/dstore/dml/cde_dml.cc                 | 10 +++--
+ storage/dstore/dml/cde_heap.cc                |  6 ---
+ storage/dstore/dml/cde_heap.h                 | 15 -------
+ storage/dstore/handler/ha_cde.cc              |  6 ++-
+ 6 files changed, 87 insertions(+), 27 deletions(-)
+
+diff --git a/mysql-test/suite/dstore_main/r/temp_table-dstore.result b/mysql-test/suite/dstore_main/r/temp_table-dstore.result
+index efe6816dabc..b5362b63480 100644
+--- a/mysql-test/suite/dstore_main/r/temp_table-dstore.result
++++ b/mysql-test/suite/dstore_main/r/temp_table-dstore.result
+@@ -425,3 +425,48 @@ id1	id2
+ 1	1
+ 2	2
+ drop table t1;
++set sql_mode='';
++CREATE TABLE `t0` (
++`c0` int /*!50606 STORAGE DISK */ DEFAULT NULL /*!80023 INVISIBLE */,
++`c1` float /*!50606 COLUMN_FORMAT DYNAMIC */ DEFAULT NULL,
++`c2` double /*!50606 STORAGE MEMORY */ DEFAULT NULL COMMENT 'asdf',
++`vc3` tinyint(1) GENERATED ALWAYS AS ((coalesce(`c1`,0) + 1)) VIRTUAL /*!80023 INVISIBLE */,
++`vc4` date GENERATED ALWAYS AS ((coalesce(`c1`,0) - 1)) STORED,
++`vc5` datetime GENERATED ALWAYS AS ((coalesce(`c0`,0) - 1)) STORED,
++`c6` time /*!50606 STORAGE MEMORY */ DEFAULT NULL /*!80023 INVISIBLE */ COMMENT 'asdf',
++`vc7` year GENERATED ALWAYS AS (coalesce(`c0`,0)) STORED,
++`c8` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP /*!80023 INVISIBLE */,
++`vc9` varchar(500) GENERATED ALWAYS AS (coalesce(cast(`c0` as char(30) charset utf8mb4),_utf8mb4'default')) STORED,
++UNIQUE KEY `i1` ((_utf8mb4'2004-02-17 00:33:28')) USING BTREE,
++UNIQUE KEY `i2` ((_utf8mb4'1970-01-01 01:00:00'),(-(1755512592))),
++UNIQUE KEY `i5` ((_utf8mb4'T_')) /*!80000 INVISIBLE */,
++UNIQUE KEY `c0` (`c0`),
++UNIQUE KEY `c1` (`c1`),
++UNIQUE KEY `i3` (`vc4`) /*!80000 INVISIBLE */,
++UNIQUE KEY `i4` (`vc7`,`c2` DESC,`c6` DESC),
++UNIQUE KEY `i7` (`c1` DESC,`c2`,`vc7`) USING BTREE,
++UNIQUE KEY `i8` (`vc7`,`c6` DESC) USING BTREE,
++KEY `i0` (`vc5`) /*!80000 INVISIBLE */,
++KEY `i6` (`c6`)
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
++Warnings:
++Warning	1681	Integer display width is deprecated and will be removed in a future release.
++INSERT INTO `t0` (`c0`, `c1`, `c2`, `c6`, `c8`) VALUES (255,NULL,NULL,NULL,'2025-12-26 08:26:36');
++Warnings:
++Warning	1264	Out of range value for column 'vc4' at row 1
++Warning	1265	Data truncated for column 'vc5' at row 1
++Warning	1264	Out of range value for column 'vc7' at row 1
++CREATE TEMPORARY TABLE t0_temp LIKE t0;
++INSERT INTO t0_temp (c0, c1, c2, c6, c8) SELECT c0, c1, c2, c6, c8 FROM t0;
++Warnings:
++Warning	1264	Out of range value for column 'vc4' at row 1
++Warning	1265	Data truncated for column 'vc5' at row 1
++Warning	1264	Out of range value for column 'vc7' at row 1
++SELECT ALL COUNT(DISTINCT t0_temp.vc7) AS ref0 FROM t0_temp WHERE t0_temp.vc7;
++ref0
++0
++SELECT ALL COUNT(DISTINCT t0_temp.vc7) AS ref0 FROM t0_temp WHERE t0_temp.vc7 FOR SHARE;
++ref0
++0
++set sql_mode=default;
++drop table t0;
+diff --git a/mysql-test/suite/dstore_main/t/temp_table-dstore.test b/mysql-test/suite/dstore_main/t/temp_table-dstore.test
+index b10a88d73f4..e46bbb34f98 100644
+--- a/mysql-test/suite/dstore_main/t/temp_table-dstore.test
++++ b/mysql-test/suite/dstore_main/t/temp_table-dstore.test
+@@ -456,3 +456,35 @@ insert into t1 values(1,1),(2,2);
+ alter table t1 order by id1,id2;
+ select * from t1;
+ drop table t1;
++#BUGFIX
++set sql_mode='';
++CREATE TABLE `t0` (
++`c0` int /*!50606 STORAGE DISK */ DEFAULT NULL /*!80023 INVISIBLE */,
++`c1` float /*!50606 COLUMN_FORMAT DYNAMIC */ DEFAULT NULL,
++`c2` double /*!50606 STORAGE MEMORY */ DEFAULT NULL COMMENT 'asdf',
++`vc3` tinyint(1) GENERATED ALWAYS AS ((coalesce(`c1`,0) + 1)) VIRTUAL /*!80023 INVISIBLE */,
++`vc4` date GENERATED ALWAYS AS ((coalesce(`c1`,0) - 1)) STORED,
++`vc5` datetime GENERATED ALWAYS AS ((coalesce(`c0`,0) - 1)) STORED,
++`c6` time /*!50606 STORAGE MEMORY */ DEFAULT NULL /*!80023 INVISIBLE */ COMMENT 'asdf',
++`vc7` year GENERATED ALWAYS AS (coalesce(`c0`,0)) STORED,
++`c8` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP /*!80023 INVISIBLE */,
++`vc9` varchar(500) GENERATED ALWAYS AS (coalesce(cast(`c0` as char(30) charset utf8mb4),_utf8mb4'default')) STORED,
++UNIQUE KEY `i1` ((_utf8mb4'2004-02-17 00:33:28')) USING BTREE,
++UNIQUE KEY `i2` ((_utf8mb4'1970-01-01 01:00:00'),(-(1755512592))),
++UNIQUE KEY `i5` ((_utf8mb4'T_')) /*!80000 INVISIBLE */,
++UNIQUE KEY `c0` (`c0`),
++UNIQUE KEY `c1` (`c1`),
++UNIQUE KEY `i3` (`vc4`) /*!80000 INVISIBLE */,
++UNIQUE KEY `i4` (`vc7`,`c2` DESC,`c6` DESC),
++UNIQUE KEY `i7` (`c1` DESC,`c2`,`vc7`) USING BTREE,
++UNIQUE KEY `i8` (`vc7`,`c6` DESC) USING BTREE,
++KEY `i0` (`vc5`) /*!80000 INVISIBLE */,
++KEY `i6` (`c6`)
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
++INSERT INTO `t0` (`c0`, `c1`, `c2`, `c6`, `c8`) VALUES (255,NULL,NULL,NULL,'2025-12-26 08:26:36');
++CREATE TEMPORARY TABLE t0_temp LIKE t0;
++INSERT INTO t0_temp (c0, c1, c2, c6, c8) SELECT c0, c1, c2, c6, c8 FROM t0;
++SELECT ALL COUNT(DISTINCT t0_temp.vc7) AS ref0 FROM t0_temp WHERE t0_temp.vc7;
++SELECT ALL COUNT(DISTINCT t0_temp.vc7) AS ref0 FROM t0_temp WHERE t0_temp.vc7 FOR SHARE;
++set sql_mode=default;
++drop table t0;
+diff --git a/storage/dstore/dml/cde_dml.cc b/storage/dstore/dml/cde_dml.cc
+index 8ec1e5c5374..722cc29f40c 100644
+--- a/storage/dstore/dml/cde_dml.cc
++++ b/storage/dstore/dml/cde_dml.cc
+@@ -1020,7 +1020,8 @@ int cde_dml_api::ReadIndexOnly(cde_isolation_level_t isolationLevel, uchar *buf,
+     dstoreHandler->dstore_heap_ctid = itup->GetHeapCtid();
+ 
+     /* handle locking read */
+-    if (dstoreHandler->select_lock_type != LOCK_NONE) {
++    if (dstoreHandler->select_lock_type != LOCK_NONE &&
++        !dstoreHandler->table_handler->is_temporary()) {
+       if (dstoreHandler->sql_stat_start) {
+         if (CdeLockTable(
+                 dstoreHandler->select_lock_type == LOCK_S ? LOCK_IS : LOCK_IX,
+@@ -1040,8 +1041,7 @@ int cde_dml_api::ReadIndexOnly(cde_isolation_level_t isolationLevel, uchar *buf,
+       int error = CdeLockTuple(isolationLevel, snapShotData,
+                                dstoreHandler->rel_info->rd_storage_releation,
+                                &ctid, &tuple, needWait);
+-      if (error != CDE_OK || tuple == nullptr) {
+-        TupleInterface::DestroyTuple(tuple, CdeFreeMemForDtuple);
++      if (error != CDE_OK) {
+         if (error == HA_ERR_RECORD_DELETED) {
+           continue;
+         }
+@@ -1053,6 +1053,7 @@ int cde_dml_api::ReadIndexOnly(cde_isolation_level_t isolationLevel, uchar *buf,
+         return error;
+       }
+ 
++      CDE_ASSERT(tuple != nullptr);
+       TupleInterface::DestroyTuple(tuple, CdeFreeMemForDtuple);
+       tuple = nullptr;
+     }
+@@ -1189,7 +1190,7 @@ int cde_dml_api::ReadFullRow(cde_isolation_level_t isolationLevel, uchar *buf,
+       int error = CdeLockTuple(isolationLevel, snapShotData,
+                                dstore_handler->rel_info->rd_storage_releation,
+                                extremeCtid, &tuple, needWait);
+-      if (error != CDE_OK || tuple == nullptr) {
++      if (error != CDE_OK) {
+         TupleInterface::DestroyTuple(tuple, CdeFreeMemForDtuple);
+         tuple = nullptr;
+         if (error == HA_ERR_RECORD_DELETED) {
+@@ -1210,6 +1211,7 @@ int cde_dml_api::ReadFullRow(cde_isolation_level_t isolationLevel, uchar *buf,
+         return error;
+       }
+ 
++      CDE_ASSERT(tuple != nullptr);
+       if (ha->skip_row_for_offset_pushdown()) {
+         ha->increment_scanned_offset();
+         TupleInterface::DestroyTuple(tuple, CdeFreeMemForDtuple);
+diff --git a/storage/dstore/dml/cde_heap.cc b/storage/dstore/dml/cde_heap.cc
+index db95e6ff8af..bcac721132e 100644
+--- a/storage/dstore/dml/cde_heap.cc
++++ b/storage/dstore/dml/cde_heap.cc
+@@ -1632,12 +1632,6 @@ static int CdeLockNewestTuple(DSTORE::Snapshot scanSnapshot,
+ int CdeLockTuple(cde_isolation_level_t isoLevel, DSTORE::Snapshot scanSnapshot,
+                  DSTORE::StorageRelation relation, ItemPointer ctid,
+                  DSTORE::HeapTuple **tuple, bool needWait) {
+-  // temporary table not lock tuple
+-  if (relation->rel->relpersistence == DSTORE::SYS_RELPERSISTENCE_GLOBAL_TEMP ||
+-      relation->rel->relpersistence == DSTORE::SYS_RELPERSISTENCE_TEMP) {
+-    return CDE_OK;
+-  }
+-
+   ItemPointerData oldctid = *ctid;
+   DEBUG_SYNC(current_thd, "before_lock_tuple");
+   int result = CdeLockUnchangedTuple(scanSnapshot, relation, ctid, tuple,
+diff --git a/storage/dstore/dml/cde_heap.h b/storage/dstore/dml/cde_heap.h
+index 8fe603be2d6..231311192e8 100644
+--- a/storage/dstore/dml/cde_heap.h
++++ b/storage/dstore/dml/cde_heap.h
+@@ -180,21 +180,6 @@ Determines the attribute alignment based on the given type.
+  */
+ char CdeGetAttAlign(Oid type, const DSTORE::TypeCache *typeCache);
+ 
+-/**
+-Lock the tuple by relation's ctid and return tuple.
+-
+-@param[in]      scanSnapshot   snapshot used in current scan
+-@param[in]      relation       dstore table handler
+-@param[in]      ctid           id of the tuple to lock
+-@param[out]     tuple          the locked tuple
+-@param[in]      needWait       if we need to wait when the tuple is locked
+-
+-@return CDE_OK or error code.
+-*/
+-int CdeLockTuple(DSTORE::Snapshot scanSnapshot,
+-                 DSTORE::StorageRelation relation, DSTORE::ItemPointer ctid,
+-                 DSTORE::HeapTuple **tuple, bool needWait = true);
+-
+ /**
+ Convert a row in the MySQL format to a row in the Dstore format.
+ 
+diff --git a/storage/dstore/handler/ha_cde.cc b/storage/dstore/handler/ha_cde.cc
+index 09cb8d6bd58..20efa2f84aa 100644
+--- a/storage/dstore/handler/ha_cde.cc
++++ b/storage/dstore/handler/ha_cde.cc
+@@ -3580,7 +3580,8 @@ int ha_cde::rnd_next(
+     // select ... from my_table lock in share mode/for update (without where
+     // condition)
+     int lock_table_ret;
+-    if (m_dstore->sql_stat_start && m_dstore->select_lock_type != LOCK_NONE) {
++    if (m_dstore->sql_stat_start && m_dstore->select_lock_type != LOCK_NONE &&
++        !m_dstore->table_handler->is_temporary()) {
+       lock_table_ret =
+           CdeLockTable(m_dstore->select_lock_type == LOCK_S ? LOCK_IS : LOCK_IX,
+                        m_dstore->rel_info->rd_storage_releation);
+@@ -3592,7 +3593,8 @@ int ha_cde::rnd_next(
+       m_dstore->sql_stat_start = false;
+     }
+ 
+-    if (m_dstore->select_lock_type != LOCK_NONE) {
++    if (m_dstore->select_lock_type != LOCK_NONE &&
++        !m_dstore->table_handler->is_temporary()) {
+       cde_isolation_level_t isolationLevel =
+           CdeTrxMapIsolationLevel(ha_thd()->tx_isolation);
+       bool needWait = m_dstore->select_mode == SELECT_ORDINARY ? true : false;
+-- 
+2.23.0
+

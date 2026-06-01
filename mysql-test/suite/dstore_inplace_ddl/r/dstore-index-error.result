@@ -1,0 +1,67 @@
+CREATE TABLE t1 (c1 int, c2 char);
+INSERT INTO t1 VALUES (1, '1'), (2, '2'), (3, '3'), (4, '4');
+ALTER TABLE t1 ADD INDEX keyc1(c1);
+ALTER TABLE t1 ADD INDEX keyc2(c2);
+SET DEBUG = "+d, inplace_rename_index_error";
+ALTER TABLE t1 DROP INDEX keyc1, RENAME INDEX keyc2 TO keyc2_bak;
+ERROR 42000: Key 'keyc2' doesn't exist in table './test/t1'
+SET DEBUG = "-d, inplace_rename_index_error";
+ALTER TABLE t1 DROP INDEX keyc1, RENAME INDEX keyc2 TO keyc2_bak;
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `c1` int DEFAULT NULL,
+  `c2` char(1) DEFAULT NULL,
+  KEY `keyc2_bak` (`c2`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+DROP TABLE t1;
+SET GLOBAL dstore_stats_persistent = OFF;
+CREATE TABLE t1 (c1 int, c2 char);
+INSERT INTO t1 VALUES (1, '1'), (2, '2'), (3, '3'), (4, '4');
+ALTER TABLE t1 ADD INDEX key2(c1);
+ALTER TABLE t1 DROP INDEX key2;
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SET GLOBAL dstore_stats_persistent = ON;
+DROP TABLE t1;
+call mtr.add_suppression("Dstore inplace alter table fail due to out of resources, error code.*");
+call mtr.add_suppression("Dstore inplace alter table fail due to tuple sort error, error code.*");
+call mtr.add_suppression("Dstore inplace alter table fail due to caculate expression value, error code.*");
+call mtr.add_suppression("Dstore inplace alter table fail, error code is.*");
+CREATE TABLE t1 (c1 int, c2 char);
+INSERT INTO t1 VALUES (1, '1'), (2, '2'), (3, '3'), (4, '4');
+SET DEBUG = '+d,dstore_build_index_fail';
+SET DEBUG = "+d,dstore_inplace_tuple_sort_err";
+SET DEBUG = "+d,dstore_inplace_tuple_sort_err";
+ALTER TABLE t1 ADD INDEX key2(c1);
+ERROR HY000: Inplace alter table fail when sorting tuple, dstore error code is: 38654705665, check error log for detail.
+SET DEBUG = "-d,dstore_inplace_tuple_sort_err";
+SET DEBUG = "+d,dstore_inplace_get_expr_val_err";
+ALTER TABLE t1 ADD INDEX key2(c1);
+ERROR HY000: Inplace alter table fail when getting expression val, dstore error code is: 38654705665, check error log for detail.
+SET DEBUG = "-d,dstore_inplace_get_expr_val_err";
+SET DEBUG = "+d,dstore_inplace_out_of_resource_err";
+ALTER TABLE t1 ADD INDEX key2(c1);
+ERROR HY000: Out of memory; check if mysqld or some other process uses all available memory; if not, you may have to use 'ulimit' to allow mysqld to use more memory or you can add more swap space
+SET DEBUG = "-d,dstore_inplace_out_of_resource_err";
+SET DEBUG = "+d,dstore_inplace_generic_err";
+ALTER TABLE t1 ADD INDEX key2(c1);
+ERROR HY000: Inplace alter table fail , dstore error code is: 38654705665, check error log for detail.
+SET DEBUG = "-d,dstore_inplace_generic_err";
+DROP TABLE t1;
+call mtr.add_suppression("insert dstore heap tuple fail");
+call mtr.add_suppression("Heap insert failed at WriteRecordToTable.*");
+call mtr.add_suppression("Log DDL failed, record.*");
+call mtr.add_suppression("Log drop segment fail.*");
+call mtr.add_suppression("Drop the newly allocated segment due to write log fail.*");
+call mtr.add_suppression("Alloc index segment failed.*");
+call mtr.add_suppression("Inplace prepare create index fail, index name: key2");
+CREATE TABLE t1 (c1 int, c2 char);
+INSERT INTO t1 VALUES (1, '1'), (2, '2'), (3, '3'), (4, '4');
+SET DEBUG_SYNC = "WaitInterruptBeforeAllocSeg SIGNAL BeginKill WAIT_FOR c1";
+ALTER TABLE t1 ADD INDEX key2(c1);;
+SET DEBUG_SYNC = "now WAIT_FOR BeginKill";
+KILL QUERY ID;
+ERROR 70100: Query execution was interrupted
+DROP TABLE t1;

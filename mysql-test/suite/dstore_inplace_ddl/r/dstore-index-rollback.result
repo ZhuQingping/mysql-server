@@ -1,0 +1,126 @@
+call mtr.add_suppression("Abort apply row log for new index");
+CREATE TABLE t1 (id INT) engine=Dstore;
+INSERT INTO t1 VALUES(1),(1);
+SET DEBUG_SYNC='rollback_inplace_alter_before SIGNAL query WAIT_FOR continue1';
+ALTER TABLE t1 ADD UNIQUE INDEX i1(id), ALGORITHM=INPLACE;
+SET DEBUG_SYNC='now WAIT_FOR query';
+SELECT * FROM t1;
+id
+1
+1
+SET DEBUG_SYNC='now SIGNAL continue1';
+ERROR 23000: Duplicate entry '1' for key 't1.i1'
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `id` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ALTER TABLE t1 ADD INDEX i1(id), ALGORITHM=INPLACE;
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `id` int DEFAULT NULL,
+  KEY `i1` (`id`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1 FORCE INDEX(i1);
+id
+1
+1
+1
+DROP TABLE t1;
+SET DEBUG_SYNC='RESET';
+CREATE TABLE t1 (c1 INT, c2 INT, c3 INT) engine=Dstore;
+INSERT INTO t1 VALUES(1,1,1),(2,1,2);
+SET DEBUG_SYNC='rollback_inplace_alter_before SIGNAL query WAIT_FOR continue1';
+ALTER TABLE t1 ADD UNIQUE INDEX i1(c1), ADD UNIQUE INDEX i2(c2), ADD INDEX i3(c3), ALGORITHM=INPLACE;
+SET DEBUG_SYNC='now WAIT_FOR query';
+SELECT * FROM t1;
+c1	c2	c3
+1	1	1
+2	1	2
+SET DEBUG_SYNC='now SIGNAL continue1';
+ERROR 23000: Duplicate entry '1' for key 't1.i2'
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `c1` int DEFAULT NULL,
+  `c2` int DEFAULT NULL,
+  `c3` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+ALTER TABLE t1 ADD INDEX i1(c1), ALGORITHM=INPLACE;
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `c1` int DEFAULT NULL,
+  `c2` int DEFAULT NULL,
+  `c3` int DEFAULT NULL,
+  KEY `i1` (`c1`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+INSERT INTO t1 VALUES(1,1,1);
+SELECT c1 FROM t1 FORCE INDEX(i1);
+c1
+1
+1
+2
+DROP TABLE t1;
+SET DEBUG_SYNC='RESET';
+CREATE TABLE t1 (id INT) engine=Dstore;
+INSERT INTO t1 VALUES(1),(1);
+SET DEBUG_SYNC='rollback_inplace_alter_before SIGNAL query WAIT_FOR continue1';
+ALTER TABLE t1 ADD UNIQUE INDEX i1(id), ALGORITHM=INPLACE;
+SET DEBUG_SYNC='now WAIT_FOR query';
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SET DEBUG_SYNC='now SIGNAL continue1';
+ERROR 23000: Duplicate entry '1' for key 't1.i1'
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `id` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+TRUNCATE TABLE t1;
+DROP TABLE t1;
+SET DEBUG_SYNC='RESET';
+CALL mtr.add_suppression("Generate dstore alter ddl info failed!");
+CREATE TABLE t1 (pk INT PRIMARY KEY, col INT, key(col));
+SET debug='reset';
+SET debug='d, dstore_alter_set_ddl_sql_error';
+ALTER TABLE t1 DROP INDEX col, ALGORITHM=INPLACE;
+ERROR HY000: Invalid DDL info size: 0 bytes. Size must be greater than zero and cannot exceed the maximum limit of 64509 bytes.
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `pk` int NOT NULL,
+  `col` int DEFAULT NULL,
+  PRIMARY KEY (`pk`),
+  KEY `col` (`col`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+INSERT INTO t1 VALUES (4,5),(5,6);
+TRUNCATE TABLE t1;
+SET debug='reset';
+DROP TABLE t1;
+CREATE TABLE t1 (pk INT PRIMARY KEY, col1 INT, col2 INT);
+INSERT INTO t1 VALUES(1,1,1),(2,2,2);
+SET debug='reset';
+SET debug='d, dstore_alter_set_ddl_sql_error';
+ALTER TABLE t1 ADD INDEX idx1(col1), ADD INDEX idx2(col2), ALGORITHM=INPLACE;
+ERROR HY000: Invalid DDL info size: 0 bytes. Size must be greater than zero and cannot exceed the maximum limit of 64509 bytes.
+CREATE TABLE t2 (c1 int, c2 int)ENGINE=DSTORE;
+INSERT INTO t2 VALUES(1,1);
+INSERT INTO t1 VALUES(3,3,3);
+SET debug='reset';
+DROP TABLE t1,t2;
+CREATE TABLE tt_50 (ipkey INT, i1 INT AUTO_INCREMENT,  PRIMARY KEY(ipkey), 
+INDEX tt_50i0(i1 DESC) , INDEX tt_50i1(i1, ipkey ASC)) ENCRYPTION='N' ENGINE=Dstore;
+SET debug='reset';
+SET debug='d, dstore_alter_set_ddl_sql_error';
+ALTER TABLE tt_50 RENAME INDEX tt_50i0 To tt_50i0_rename, LOCK=SHARED, ALGORITHM=INPLACE;
+ERROR HY000: Invalid DDL info size: 0 bytes. Size must be greater than zero and cannot exceed the maximum limit of 64509 bytes.
+ANALYZE TABLE tt_50 UPDATE HISTOGRAM ON `ipkey`,`i1`;
+Table	Op	Msg_type	Msg_text
+test.tt_50	histogram	status	Histogram statistics created for column 'i1'.
+test.tt_50	histogram	status	Histogram statistics created for column 'ipkey'.
+SET debug='reset';
+drop table tt_50;

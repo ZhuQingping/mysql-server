@@ -1,0 +1,106 @@
+#-------------------------------------------------------------
+#
+#    Conditions:
+#          1. log-bin=mysql-bin(binlog function is turned on)
+#          2. binlog format in row
+#          3. gtid_mode=ON
+#          4. multi mysqlbin.000001 mysqlbin.00000x
+#    Actions:
+#          execute  the command 'mysqlbinlog --merge mysqlbin.000001 mysqlbin.000002
+#          to merge binlog files that have the same FD event.
+#
+#-------------------------------------------------------------
+--disable_warnings
+
+SET @old_binlog_format=@@binlog_format;
+SET GLOBAL binlog_format='row';
+SET SESSION binlog_format='row';
+
+RESET MASTER;
+let $tmp=query_get_value(SHOW VARIABLES LIKE 'datadir',Value,1);
+let $binlog_name1=query_get_value(SHOW MASTER STATUS,File,1);
+--echo $binlog_name
+
+DROP DATABASE IF EXISTS mergedb;
+CREATE DATABASE mergedb;
+
+#------------------------ Test execution --------------------------------------------
+
+USE mergedb;
+create table t1(id int);
+DELIMITER $$;
+CREATE PROCEDURE `mergetest`()
+BEGIN
+DECLARE i INT;
+DECLARE tmp INT;
+SET i = 0;
+WHILE i<10 DO
+SET @csql =CONCAT('insert into t1 values(',i,');');
+SET i = i+1;
+PREPARE create_stmt FROM @csql;
+EXECUTE create_stmt;
+END WHILE;
+END$$
+DELIMITER ;$$
+call mergetest;
+
+FLUSH LOGS;
+call mergetest;
+let $binlog_name2=query_get_value(SHOW MASTER STATUS,File,1);
+
+--echo "original size of the frist file"
+--exec size0=`wc -c $tmp$binlog_name1 | cut -f 1 -d ' '`
+
+show variables like "gtid_mode";
+--let $master_executed_gtid_set= query_get_value(SHOW MASTER STATUS, Executed_Gtid_Set, 1)
+
+--echo $binlog_name1
+--echo $binlog_name2
+--echo $binlog_name1.merged
+--exec $MYSQL_BINLOG --merge --force-if-open $tmp/$binlog_name1 $tmp/$binlog_name2  -r /dev/null
+--exec size1=`wc -c $tmp$binlog_name1.merged | cut -f 1 -d ' '`
+
+--exec rm -rf $tmp/$binlog_name1.merged
+
+FLUSH LOGS;
+call mergetest;
+--echo "original size of the second file"
+--exec size2=`wc -c $tmp$binlog_name2 | cut -f 1 -d ' '`
+
+let $binlog_name3=query_get_value(SHOW MASTER STATUS,File,1);
+--exec $MYSQL_BINLOG --merge $tmp/$binlog_name1 $tmp/$binlog_name1 $tmp/$binlog_name2 -r /dev/null
+--exec size3=`wc -c $tmp$binlog_name1.merged | cut -f 1 -d ' '`
+--exec rm -rf $tmp/$binlog_name1.merged
+
+#---- only parameter merge ------#
+--exec $MYSQL_BINLOG --merge --force-if-open $tmp/$binlog_name1 $tmp/$binlog_name2 $tmp/$binlog_name3 -r /dev/null
+--exec size4=`wc -c $tmp$binlog_name1.merged | cut -f 1 -d ' '`
+--exec rm -rf $tmp/$binlog_name1.merged
+
+#---- parameter merge and merged-file------#
+--exec $MYSQL_BINLOG --merged-file=$tmp/out_merged.000001 --merge --force-if-open $tmp/$binlog_name1 $tmp/$binlog_name2 $tmp/$binlog_name3 -r /dev/null
+--exec size5=`wc -c $tmp/out_merged.000001 | cut -f 1 -d ' '`
+--exec rm -rf $tmp/out_merged.000001
+
+#---- parameter merge, merged-file and merge-dir ------#
+--exec $MYSQL_BINLOG --merged-file=$tmp/out_merged.000002 --merge-dir=$tmp --merge --force-if-open $binlog_name1 $binlog_name2 $binlog_name3 -r /dev/null
+--exec size6=`wc -c $tmp/out_merged.000002 | cut -f 1 -d ' '`
+
+#---- check -----#
+use mergedb;
+select count(*) from t1;
+reset master;
+
+DROP DATABASE IF EXISTS mergedb;
+--exec $MYSQL_BINLOG $tmp/out_merged.000002 > $tmp/tmp1.sql
+--exec $MYSQL -e "source $tmp/tmp1.sql;"
+
+use mergedb;
+select count(*) from t1;
+--exec rm -rf $tmp/tmp1.sql
+--exec rm -rf $tmp/out_merged.000002
+
+#------------------------ Clean up the environment-----------------------------
+SET GLOBAL binlog_format = @old_binlog_format;
+DROP DATABASE mergedb;
+--enable_warnings

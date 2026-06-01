@@ -1,0 +1,35 @@
+#
+# Test Dstore table optimize operation
+#
+--source include/have_debug.inc
+--source include/have_only_dstore.inc
+
+CREATE TABLE t0(a int, b varchar(10))ENGINE=Dstore;
+INSERT INTO t0 VALUES (1,'HuaWei'),(2,'Dstore'),(3,'Oracle'),(4,'PolarDB');
+SHOW CREATE TABLE t0;
+SELECT * FROM t0 ORDER BY a;
+
+CREATE TEMPORARY TABLE t1(a int, b varchar(10))ENGINE=Dstore;
+INSERT INTO t1 SELECT * FROM t0;
+
+SET SESSION debug='+d,skip_dd_table_access_check';
+--let $table_id_old = `SELECT id FROM mysql.tables WHERE name='t0'`
+OPTIMIZE TABLE t0,t1;
+
+--echo # After optimize table, table schema keep same
+SHOW CREATE TABLE t0;
+SHOW CREATE TABLE t1;
+
+--echo # After optimize table, table data keep same
+SELECT * FROM t0 ORDER BY a;
+SELECT * FROM t1 ORDER BY a;
+
+--echo # After optimize table, table id changed since table was rebuilt
+--let $table_id_new = `SELECT id FROM mysql.tables WHERE name='t0'`
+--let $assert_text = After optimize table, table id changed since table was rebuilt.
+--let $assert_cond = [SELECT $table_id_new > $table_id_old] = 1
+--source include/assert.inc
+
+# cleanup
+SET SESSION debug='-d,skip_dd_table_access_check';
+DROP TABLE t0,t1;

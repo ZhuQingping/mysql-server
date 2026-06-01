@@ -1,0 +1,737 @@
+set @saved_parallel_cost_threshold = @@parallel_cost_threshold;
+set @saved_parallel_rows_threshold = @@parallel_rows_threshold;
+set @saved_optimizer_trace = @@optimizer_trace;
+set @saved_parallel_max_threads = @@parallel_max_threads;
+set @saved_sql_mode = @@sql_mode;
+SET optimizer_trace="enabled=on";
+set global parallel_cost_threshold = 0;
+set global parallel_rows_threshold = 0;
+create table tt(
+`a` int NOT NULL,
+PRIMARY KEY (`a`)
+);
+insert into tt values(1),(2),(3),(4),(5);
+# BUG2024082306950
+set parallel_rows_threshold=10;
+select * from tt;
+a
+1
+2
+3
+4
+5
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "No table meets the conditions for splitting to parallel scanning. Possible table's fetched row less than parallel_rows_threshold or query inclues unsupported scan-type or engine/multiple partitions to scan with partition table/a semi-join inner table/inner_table in BKA or outer join.", "select#": 1}]
+set parallel_rows_threshold=0;
+set parallel_cost_threshold=10;
+select * from tt;
+a
+1
+2
+3
+4
+5
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query's cost less than parallel_cost_threshold or query has lateral derived tables or number of fields are more than MAX_FIELDS or rollup state does not support.", "select#": 1}]
+set parallel_cost_threshold=0;
+# BUG2024082308390
+select count(a) from tt;
+count(a)
+5
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+NULL
+select /*+ NO_PQ */ count(a) from tt;
+count(a)
+5
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has NO_PQ hint or pq_master_enable is off or PQ is not supported in some scenarios.", "select#": 1}]
+drop table tt;
+# BUG2024083008038
+create table tt(date_col date);
+insert into tt values("2024-08-20"),("2024-08-25");
+select date_col from tt where date_col not in (select date_col from tt where date_col > "2000-01-01");
+date_col
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query with IN/ANY/ALL/SOME clause may transform to subquery which pq does not support.", "select#": 2}, {"chosen": false, "reason": "Error happened during save properties or pq clone.", "select#": 1}]
+WITH RECURSIVE dates (date_col) AS (   SELECT MIN(date_col) FROM tt   UNION ALL   SELECT date_col + INTERVAL 1 DAY FROM dates   WHERE date_col + INTERVAL 1 DAY <= (SELECT MAX(date_col) FROM tt) ) SELECT * FROM dates;
+date_col
+2024-08-20
+2024-08-21
+2024-08-22
+2024-08-23
+2024-08-24
+2024-08-25
+SELECT trace FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+trace
+{
+  "steps": [
+    {
+      "join_preparation": {
+        "select#": 1,
+        "steps": [
+          {
+            "join_preparation": {
+              "select#": 2,
+              "steps": [
+                {
+                  "expanded_query": "/* select#2 */ select min(`tt`.`date_col`) AS `MIN(date_col)` from `tt`"
+                }
+              ]
+            }
+          },
+          {
+            "derived": {
+              "table": "`dates`",
+              "select#": 2,
+              "materialized": true
+            }
+          },
+          {
+            "join_preparation": {
+              "select#": 3,
+              "steps": [
+                {
+                  "join_preparation": {
+                    "select#": 5,
+                    "steps": [
+                      {
+                        "expanded_query": "/* select#5 */ select max(`tt`.`date_col`) from `tt`"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "expanded_query": "/* select#3 */ select (`dates`.`date_col` + interval 1 day) AS `date_col + INTERVAL 1 DAY` from `dates` where ((`dates`.`date_col` + interval 1 day) <= (/* select#5 */ select max(`tt`.`date_col`) from `tt`))"
+                }
+              ]
+            }
+          },
+          {
+            "expanded_query": "/* select#1 */ select `dates`.`date_col` AS `date_col` from `dates`"
+          }
+        ]
+      }
+    },
+    {
+      "join_optimization": {
+        "select#": 1,
+        "steps": [
+          {
+            "join_optimization": {
+              "select#": 2,
+              "steps": [
+                {
+                  "table_dependencies": [
+                    {
+                      "table": "`tt`",
+                      "row_may_be_null": false,
+                      "map_bit": 0,
+                      "depends_on_map_bits": [
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "rows_estimation": [
+                    {
+                      "table": "`tt`",
+                      "table_scan": {
+                        "rows": 2,
+                        "cost": 0.25
+                      }
+                    }
+                  ]
+                },
+                {
+                  "considered_execution_plans": [
+                    {
+                      "plan_prefix": [
+                      ],
+                      "table": "`tt`",
+                      "best_access_path": {
+                        "considered_access_paths": [
+                          {
+                            "rows_to_scan": 2,
+                            "access_type": "scan",
+                            "resulting_rows": 2,
+                            "cost": 0.45,
+                            "chosen": true
+                          }
+                        ]
+                      },
+                      "condition_filtering_pct": 100,
+                      "rows_for_plan": 2,
+                      "cost_for_plan": 0.45,
+                      "chosen": true
+                    }
+                  ]
+                },
+                {
+                  "attaching_conditions_to_tables": {
+                    "original_condition": null,
+                    "attached_conditions_computation": [
+                    ],
+                    "attached_conditions_summary": [
+                      {
+                        "table": "`tt`",
+                        "attached": null
+                      }
+                    ]
+                  }
+                },
+                {
+                  "optimizing_distinct_group_by_order_by": {
+                  }
+                },
+                {
+                  "finalizing_table_conditions": [
+                  ]
+                },
+                {
+                  "refine_plan": [
+                    {
+                      "table": "`tt`"
+                    }
+                  ]
+                },
+                {
+                  "considering_tmp_tables": [
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "join_optimization": {
+              "select#": 3,
+              "steps": [
+                {
+                  "condition_processing": {
+                    "condition": "WHERE",
+                    "original_condition": "((`dates`.`date_col` + interval 1 day) <= (/* select#5 */ select max(`tt`.`date_col`) from `tt`))",
+                    "steps": [
+                      {
+                        "transformation": "equality_propagation",
+                        "subselect_evaluation": [
+                        ],
+                        "resulting_condition": "((`dates`.`date_col` + interval 1 day) <= (/* select#5 */ select max(`tt`.`date_col`) from `tt`))"
+                      },
+                      {
+                        "transformation": "constant_propagation",
+                        "subselect_evaluation": [
+                        ],
+                        "resulting_condition": "((`dates`.`date_col` + interval 1 day) <= (/* select#5 */ select max(`tt`.`date_col`) from `tt`))"
+                      },
+                      {
+                        "transformation": "trivial_condition_removal",
+                        "subselect_evaluation": [
+                        ],
+                        "resulting_condition": "((`dates`.`date_col` + interval 1 day) <= (/* select#5 */ select max(`tt`.`date_col`) from `tt`))"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "substitute_generated_columns": {
+                  }
+                },
+                {
+                  "table_dependencies": [
+                    {
+                      "table": "`dates`",
+                      "row_may_be_null": false,
+                      "map_bit": 0,
+                      "depends_on_map_bits": [
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "ref_optimizer_key_uses": [
+                  ]
+                },
+                {
+                  "rows_estimation": [
+                    {
+                      "table": "`dates`",
+                      "table_scan": {
+                        "rows": 2,
+                        "cost": 2.525
+                      }
+                    }
+                  ]
+                },
+                {
+                  "considered_execution_plans": [
+                    {
+                      "plan_prefix": [
+                      ],
+                      "table": "`dates`",
+                      "best_access_path": {
+                        "considered_access_paths": [
+                          {
+                            "rows_to_scan": 2,
+                            "filtering_effect": [
+                            ],
+                            "final_filtering_effect": 1,
+                            "access_type": "scan",
+                            "resulting_rows": 2,
+                            "cost": 2.725,
+                            "chosen": true
+                          }
+                        ]
+                      },
+                      "condition_filtering_pct": 100,
+                      "rows_for_plan": 2,
+                      "cost_for_plan": 2.725,
+                      "chosen": true
+                    }
+                  ]
+                },
+                {
+                  "attaching_conditions_to_tables": {
+                    "original_condition": "((`dates`.`date_col` + interval 1 day) <= (/* select#5 */ select max(`tt`.`date_col`) from `tt`))",
+                    "attached_conditions_computation": [
+                    ],
+                    "attached_conditions_summary": [
+                      {
+                        "table": "`dates`",
+                        "attached": "((`dates`.`date_col` + interval 1 day) <= (/* select#5 */ select max(`tt`.`date_col`) from `tt`))"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "finalizing_table_conditions": [
+                    {
+                      "table": "`dates`",
+                      "original_table_condition": "((`dates`.`date_col` + interval 1 day) <= (/* select#5 */ select max(`tt`.`date_col`) from `tt`))",
+                      "final_table_condition   ": "((`dates`.`date_col` + interval 1 day) <= (/* select#5 */ select max(`tt`.`date_col`) from `tt`))"
+                    }
+                  ]
+                },
+                {
+                  "refine_plan": [
+                    {
+                      "table": "`dates`"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "join_optimization": {
+              "select#": 5,
+              "steps": [
+                {
+                  "table_dependencies": [
+                    {
+                      "table": "`tt`",
+                      "row_may_be_null": false,
+                      "map_bit": 0,
+                      "depends_on_map_bits": [
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "rows_estimation": [
+                    {
+                      "table": "`tt`",
+                      "table_scan": {
+                        "rows": 2,
+                        "cost": 0.25
+                      }
+                    }
+                  ]
+                },
+                {
+                  "considered_execution_plans": [
+                    {
+                      "plan_prefix": [
+                      ],
+                      "table": "`tt`",
+                      "best_access_path": {
+                        "considered_access_paths": [
+                          {
+                            "rows_to_scan": 2,
+                            "access_type": "scan",
+                            "resulting_rows": 2,
+                            "cost": 0.45,
+                            "chosen": true
+                          }
+                        ]
+                      },
+                      "condition_filtering_pct": 100,
+                      "rows_for_plan": 2,
+                      "cost_for_plan": 0.45,
+                      "chosen": true
+                    }
+                  ]
+                },
+                {
+                  "attaching_conditions_to_tables": {
+                    "original_condition": null,
+                    "attached_conditions_computation": [
+                    ],
+                    "attached_conditions_summary": [
+                      {
+                        "table": "`tt`",
+                        "attached": null
+                      }
+                    ]
+                  }
+                },
+                {
+                  "optimizing_distinct_group_by_order_by": {
+                  }
+                },
+                {
+                  "finalizing_table_conditions": [
+                  ]
+                },
+                {
+                  "refine_plan": [
+                    {
+                      "table": "`tt`"
+                    }
+                  ]
+                },
+                {
+                  "considering_tmp_tables": [
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "make_parallel_query_plan": {
+              "select#": 5,
+              "detail": [
+                {
+                  "table": "`tt`",
+                  "degree of parallel": 4,
+                  "merge_sort": true,
+                  "unknown_key_1": {
+                    "considering_tmp_tables": [
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "not_apply_pq_plan": {
+              "select#": 2,
+              "chosen": false,
+              "reason": "Query has unsupported subquery-type."
+            }
+          },
+          {
+            "not_apply_pq_plan": {
+              "select#": 3,
+              "chosen": false,
+              "reason": "Query has unsupported subquery-type."
+            }
+          },
+          {
+            "table_dependencies": [
+              {
+                "table": "`dates`",
+                "row_may_be_null": false,
+                "map_bit": 0,
+                "depends_on_map_bits": [
+                ]
+              }
+            ]
+          },
+          {
+            "rows_estimation": [
+              {
+                "table": "`dates`",
+                "table_scan": {
+                  "rows": 3,
+                  "cost": 2.5375
+                }
+              }
+            ]
+          },
+          {
+            "considered_execution_plans": [
+              {
+                "plan_prefix": [
+                ],
+                "table": "`dates`",
+                "best_access_path": {
+                  "considered_access_paths": [
+                    {
+                      "rows_to_scan": 3,
+                      "access_type": "scan",
+                      "resulting_rows": 3,
+                      "cost": 2.8375,
+                      "chosen": true
+                    }
+                  ]
+                },
+                "condition_filtering_pct": 100,
+                "rows_for_plan": 3,
+                "cost_for_plan": 2.8375,
+                "chosen": true
+              }
+            ]
+          },
+          {
+            "attaching_conditions_to_tables": {
+              "original_condition": null,
+              "attached_conditions_computation": [
+              ],
+              "attached_conditions_summary": [
+                {
+                  "table": "`dates`",
+                  "attached": null
+                }
+              ]
+            }
+          },
+          {
+            "finalizing_table_conditions": [
+            ]
+          },
+          {
+            "refine_plan": [
+              {
+                "table": "`dates`"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "make_parallel_query_plan": {
+        "select#": 1,
+        "detail": [
+          {
+            "table": "`dates`",
+            "degree of parallel": 4,
+            "merge_sort": true
+          }
+        ]
+      }
+    },
+    {
+      "join_execution": {
+        "select#": 1,
+        "steps": [
+          {
+            "creating_tmp_table": {
+              "tmp_table_info": {
+                "table": "`dates`",
+                "in_plan_at_position": 0,
+                "columns": 1,
+                "row_length": 4,
+                "key_length": 0,
+                "unique_constraint": false,
+                "makes_grouped_rows": false,
+                "cannot_insert_duplicates": false,
+                "location": "TempTable"
+              }
+            }
+          },
+          {
+            "materialize": {
+              "select#": 2,
+              "steps": [
+              ]
+            }
+          },
+          {
+            "materialize": {
+              "select#": 3,
+              "steps": [
+                {
+                  "subselect_execution": {
+                    "select#": 5,
+                    "steps": [
+                      {
+                        "join_execution": {
+                          "select#": 5,
+                          "steps": [
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "subselect_execution": {
+                    "select#": 5,
+                    "steps": [
+                    ]
+                  }
+                },
+                {
+                  "subselect_execution": {
+                    "select#": 5,
+                    "steps": [
+                    ]
+                  }
+                },
+                {
+                  "subselect_execution": {
+                    "select#": 5,
+                    "steps": [
+                    ]
+                  }
+                },
+                {
+                  "subselect_execution": {
+                    "select#": 5,
+                    "steps": [
+                    ]
+                  }
+                },
+                {
+                  "subselect_execution": {
+                    "select#": 5,
+                    "steps": [
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "materialize": {
+              "select#": 3,
+              "steps": [
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
+set global parallel_max_threads = 0;
+SELECT * FROM tt;
+date_col
+2024-08-20
+2024-08-25
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "The number of remaining idle threads for PQ (parallel_max_threads - number of used threads) is less than parallel_default_dop.", "select#": 1}]
+set global parallel_max_threads = @saved_parallel_max_threads;
+drop table tt;
+# BUG2024082705769
+CREATE TABLE t(c VARCHAR(10), i INT);
+INSERT INTO t VALUES ('key', 3), ('key', 4), ('key', 5);
+set sql_mode = '';
+SELECT c,JSON_ARRAYAGG(i) FROM t;
+c	JSON_ARRAYAGG(i)
+key	[3, 4, 5]
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query does not comply with the ONLY_FULL_GROUP_BY rule which is required by PQ.", "select#": 1}]
+set sql_mode = @saved_sql_mode;
+drop table t;
+# BUG2024082706626
+create table tt(id int, varchar_col varchar(255), blob_col blob);
+select compress(varchar_col) from tt;
+compress(varchar_col)
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has unsupported scenarios including generated column, unsupported data type, unsupported function and so on.", "select#": 1}]
+select uncompress(varchar_col) from tt;
+uncompress(varchar_col)
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has unsupported scenarios including generated column, unsupported data type, unsupported function and so on.", "select#": 1}]
+select binary(varchar_col) from tt;
+binary(varchar_col)
+Warnings:
+Warning	1287	'BINARY expr' is deprecated and will be removed in a future release. Please use CAST instead
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has unsupported scenarios including generated column, unsupported data type, unsupported function and so on.", "select#": 1}]
+select id, convert(blob_col , CHAR CHARACTER SET utf8) from tt;
+id	convert(blob_col , CHAR CHARACTER SET utf8)
+Warnings:
+Warning	3719	'utf8' is currently an alias for the character set UTF8MB3, but will be an alias for UTF8MB4 in a future release. Please consider using UTF8MB4 in order to be unambiguous.
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has unsupported scenarios including generated column, unsupported data type, unsupported function and so on.", "select#": 1}]
+select id, STATEMENT_DIGEST_TEXT('select id from tt where id=5') from tt where id=5;
+id	STATEMENT_DIGEST_TEXT('select id from tt where id=5')
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has unsupported scenarios including generated column, unsupported data type, unsupported function and so on.", "select#": 1}]
+drop table tt;
+# BUG2025030518630
+CREATE TABLE t0 (c0 INT);
+INSERT INTO t0(c0) VALUES (1);
+SELECT c0 FROM (SELECT t0.c0 FROM t0 tx JOIN t0 GROUP BY t0.c0 WITH ROLLUP) t0(c0) ORDER BY c0;
+c0
+NULL
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has NO_PQ hint or pq_master_enable is off or PQ is not supported in some scenarios.", "select#": 1}]
+SELECT json_extract(trace,"$.steps[*].join_optimization.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].join_optimization.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query cached the result set(such as with SQL_BUFFER_RESULT or insert select into the same table) or with rollup or more than one value item of table value constructor or has windows function.", "select#": 2}]
+create table t1 (a int , b int);
+insert into t1 values (1,3),(4,6);
+select SQL_BUFFER_RESULT * from t1;
+a	b
+1	3
+4	6
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query cached the result set(such as with SQL_BUFFER_RESULT or insert select into the same table) or with rollup or more than one value item of table value constructor or has windows function.", "select#": 1}]
+# no_pq hint
+select/*+ no_pq */ SQL_BUFFER_RESULT * from t1;
+a	b
+1	3
+4	6
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has NO_PQ hint or pq_master_enable is off or PQ is not supported in some scenarios.", "select#": 1}]
+SELECT/*+ no_pq */ c0 FROM (SELECT t0.c0 FROM t0 tx JOIN t0 GROUP BY t0.c0 WITH ROLLUP) t0(c0) ORDER BY c0;
+c0
+NULL
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has NO_PQ hint or pq_master_enable is off or PQ is not supported in some scenarios.", "select#": 1}]
+SELECT json_extract(trace,"$.steps[*].join_optimization.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].join_optimization.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has NO_PQ hint or pq_master_enable is off or PQ is not supported in some scenarios.", "select#": 2}]
+select SQL_BUFFER_RESULT * from t1;
+a	b
+1	3
+4	6
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query cached the result set(such as with SQL_BUFFER_RESULT or insert select into the same table) or with rollup or more than one value item of table value constructor or has windows function.", "select#": 1}]
+SELECT c0 FROM (SELECT t0.c0 FROM t0 tx JOIN t0 GROUP BY t0.c0 WITH ROLLUP) t0(c0) ORDER BY c0;
+c0
+NULL
+1
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query has NO_PQ hint or pq_master_enable is off or PQ is not supported in some scenarios.", "select#": 1}]
+SELECT json_extract(trace,"$.steps[*].join_optimization.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+json_extract(trace,"$.steps[*].join_optimization.steps[*].not_apply_pq_plan")
+[{"chosen": false, "reason": "Query cached the result set(such as with SQL_BUFFER_RESULT or insert select into the same table) or with rollup or more than one value item of table value constructor or has windows function.", "select#": 2}]
+drop table t0;
+drop table t1;
+set global parallel_cost_threshold = @saved_parallel_cost_threshold;
+set global parallel_rows_threshold = @saved_parallel_rows_threshold;
+set optimizer_trace = @saved_optimizer_trace;

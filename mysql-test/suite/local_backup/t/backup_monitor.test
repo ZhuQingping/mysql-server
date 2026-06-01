@@ -1,0 +1,86 @@
+--source include/have_debug.inc
+--source suite/local_backup/include/prepare_for_backup.inc
+
+call mtr.add_suppression("full backup found binlog is not enabled");
+
+CREATE DATABASE db1;
+USE db1;
+CREATE TABLE t1(a int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+
+# full backup.
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+
+INSERT INTO t1 VALUES(2);
+SELECT * FROM t1 order by a;
+
+# wal archive.
+--source suite/local_backup/include/start_log_archive.inc
+
+INSERT INTO t1 VALUES(3);
+SELECT * FROM t1 order by a;
+#--let $gtid_executed_before= `SELECT @@GLOBAL.GTID_EXECUTED`
+
+--sleep 3
+
+--source suite/local_backup/include/stop_log_archive.inc
+
+--disable_result_log
+--disable_query_log
+
+# Test for local backup status.
+SHOW STATUS LIKE 'Dstore_local_backup_full_backup_status';
+
+# Test for backup monitor.
+--let $bm = $MYSQL_BASEDIR/bin/backup_monitor
+--let $meta_path = $MYSQLTEST_VARDIR/local_backup_meta
+--error 1
+--exec $bm
+--exec $bm -h
+--exec $bm -v
+--error 1
+--exec $bm -s
+--exec $bm $meta_path -l
+--exec $bm $meta_path -l -p0
+--exec $bm $meta_path -l -d bm.txt
+--exec $bm $meta_path -l -o -15
+--exec $bm $meta_path -w
+--error 1
+--exec $bm $meta_path -w -o
+--error 1
+--exec $bm $meta_path -w -a a
+--exec $bm $meta_path -t 0
+--exec $bm $meta_path -t 0 -r $meta_path
+--exec $bm $meta_path -t 0 -s 3221225472
+--error 1
+--exec $bm $meta_path -t 0 -s 8192
+--error 1
+--exec $bm $meta_path -t 0 -s 3221225473
+--exec $bm $meta_path -j
+--exec $bm $MYSQLTEST_VARDIR/full_local_backup -j
+--exec $bm $meta_path/a -t 0
+--exec $bm $meta_path/a -l
+--exec $bm $meta_path/a -w
+
+## Test for binlog 
+--exec $bm $meta_path -b
+
+--error 1
+--exec $bm $meta_path --debug=d,bm_tmp_file_fail -l -d bm.txt
+--exec rm -rf ./bm.txt
+
+--echo # inject error with read_meta_json_fail 
+--exec ls $MYSQLTEST_VARDIR/full_local_backup/* -trd | tail -n 1 > $MYSQLTEST_VARDIR/bakup_dir.txt
+--exec $bm `cat $MYSQLTEST_VARDIR/bakup_dir.txt` -j --debug=d,read_meta_json_fail
+--exec rm -rf $MYSQLTEST_VARDIR/bakup_dir.txt
+
+--enable_query_log
+--enable_result_log
+
+# Drop database db1.
+DROP DATABASE db1;
+
+--source suite/local_backup/include/clean_backup.inc

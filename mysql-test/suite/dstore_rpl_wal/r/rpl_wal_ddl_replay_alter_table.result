@@ -1,0 +1,426 @@
+############################################################
+Establish a master-replica replication relationship based on physical replication.
+############################################################
+include/master-slave.inc
+[connection master]
+#
+# 1. Initialize the required variables, then disconnect the subsequent master-replica replication connections.
+#
+[connection master]
+[connection slave]
+STOP REPLICA;
+RESET REPLICA ALL;
+#
+# 2. Since physical replication does not support DDL operations at present, execute all required DDL statements first.
+#
+create database copy_database;
+use copy_database;
+CREATE TABLE copy_table (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) engine = dstore;
+#
+# 3. Shutdown the primary and standby instances.
+#
+include/rpl_stop_server.inc [server_number=1]
+include/rpl_stop_server.inc [server_number=2]
+#
+# 4. Copy the data directory of the primary to that of the standby.
+#
+#
+# 5. Start the primary and standby instances with new parameters for establishing a master-replica physical replication relationship.
+#
+include/rpl_start_server.inc [server_number=1]
+include/rpl_start_server.inc [server_number=2]
+#
+# 6. Confirm that the primary and standby servers start with the new data directory.
+#
+include/assert.inc [Database copy_database should exist (only one record)]
+include/assert.inc [Table copy_table should exist in database copy_database (only one record)]
+use copy_database;
+show tables;
+Tables_in_copy_database
+copy_table
+include/assert.inc [Database copy_database should exist (only one record)]
+include/assert.inc [Table copy_table should exist in database copy_database (only one record)]
+use copy_database;
+show tables;
+Tables_in_copy_database
+copy_table
+#
+# 7. Install the plugin on both the primary and standby servers, and establish a master-replica physical replication relationship.
+#
+#
+# Install the primary server's plugin and set enabled_wal to ON.
+#
+INSTALL PLUGIN rpl_semi_sync_source SONAME 'semisync_source.so';
+INSTALL PLUGIN rpl_semi_sync_replica SONAME 'semisync_replica.so';
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 1;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 1;
+SET GLOBAL rds_physical_rpl_sender_packet_size = 1;
+#
+# dstore_enable_standby_role should show as false, indicating that the current node is the source.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	1
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	OFF
+#
+# Install the standby server's plugin and set enabled_wal to ON.
+#
+INSTALL PLUGIN rpl_semi_sync_source SONAME 'semisync_source.so';
+INSTALL PLUGIN rpl_semi_sync_replica SONAME 'semisync_replica.so';
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 1;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 1;
+SET GLOBAL rds_physical_rpl_sender_packet_size = 1;
+#
+# dstore_enable_standby_role should show as true, indicating that the current node is the replica.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	2
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	ON
+#
+# Configure the replica and check whether it is configured correctly.
+#
+STOP REPLICA;
+Warnings:
+Note	3084	Replication thread(s) for channel '' are already stopped.
+RESET REPLICA ALL;
+CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=SERVER_MYPORT_1, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL 'dstore_wal_replication_channel';;
+include/assert.inc [Channel name should be 'dstore_wal_replication_channel']
+Slave_IO_Running should be OFF.
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+OFF
+START REPLICA;
+#
+# Slave_IO_Running should be ON.
+#
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+ON
+#
+# SQLCOM_ALTER_TABLE
+#
+# 0 Create the database and tables needed for testing SQLCOM_ALTER_TABLE
+CREATE DATABASE IF NOT EXISTS test_alter_db;
+USE test_alter_db;
+CREATE TABLE test_alter_table (
+id INT PRIMARY KEY AUTO_INCREMENT,
+name VARCHAR(50),
+age INT,
+email VARCHAR(100),
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO test_alter_table (name, age, email) VALUES
+('Alice', 25, 'alice@example.com'),
+('Bob', 30, 'bob@example.com'),
+('Charlie', 35, 'charlie@example.com');
+---------------------
+USE test_alter_db;
+SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT
+FROM INFORMATION_SCHEMA.COLUMNS 
+WHERE TABLE_SCHEMA = 'test_alter_db' AND TABLE_NAME = 'test_alter_table'
+ORDER BY COLUMN_NAME;
+COLUMN_NAME	DATA_TYPE	IS_NULLABLE	COLUMN_KEY	COLUMN_DEFAULT
+age	int	YES		NULL
+created_at	timestamp	YES		CURRENT_TIMESTAMP
+email	varchar	YES		NULL
+id	int	NO	PRI	NULL
+name	varchar	YES		NULL
+# 1 Add a column to the table.
+USE test_alter_db;
+ALTER TABLE test_alter_table 
+ADD COLUMN phone VARCHAR(20) AFTER email,
+ADD COLUMN status ENUM('active', 'inactive') DEFAULT 'active';
+---------------------
+# Verify on the standby whether the column addition was successful.
+USE test_alter_db;
+SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT 
+FROM INFORMATION_SCHEMA.COLUMNS 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+AND TABLE_NAME = 'test_alter_table'
+  AND COLUMN_NAME IN ('phone', 'status');
+COLUMN_NAME	DATA_TYPE	IS_NULLABLE	COLUMN_DEFAULT
+phone	varchar	YES	NULL
+status	enum	YES	active
+# 2 Modify the column definition of the table.
+USE test_alter_db;
+ALTER TABLE test_alter_table 
+MODIFY COLUMN name VARCHAR(100) NOT NULL,
+MODIFY COLUMN age TINYINT UNSIGNED,
+CHANGE COLUMN email email_address VARCHAR(150);
+---------------------
+# Verify column definition modification
+USE test_alter_db;
+DESC test_alter_table;
+Field	Type	Null	Key	Default	Extra
+id	int	NO	PRI	NULL	auto_increment
+name	varchar(100)	NO		NULL	
+age	tinyint unsigned	YES		NULL	
+email_address	varchar(150)	YES		NULL	
+phone	varchar(20)	YES		NULL	
+created_at	timestamp	YES		CURRENT_TIMESTAMP	DEFAULT_GENERATED
+status	enum('active','inactive')	YES		active	
+#
+# 3 Drop column
+#
+USE test_alter_db;
+ALTER TABLE test_alter_table 
+DROP COLUMN phone;
+---------------------
+USE test_alter_db;
+SELECT COLUMN_NAME 
+FROM INFORMATION_SCHEMA.COLUMNS 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+AND TABLE_NAME = 'test_alter_table'
+  AND COLUMN_NAME = 'phone';
+COLUMN_NAME
+#
+# 4 Add index
+#
+USE test_alter_db;
+ALTER TABLE test_alter_table 
+ADD INDEX idx_name (name),
+ADD UNIQUE INDEX idx_unique_email (email_address),
+ADD INDEX idx_age_status (age, status);
+---------------------
+USE test_alter_db;
+SHOW INDEX FROM test_alter_table;
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+test_alter_table	0	PRIMARY	1	id	A	0	NULL	NULL		BTREE			YES	NULL
+test_alter_table	0	idx_unique_email	1	email_address	A	NULL	NULL	NULL	YES	BTREE			YES	NULL
+test_alter_table	1	idx_name	1	name	A	NULL	NULL	NULL		BTREE			YES	NULL
+test_alter_table	1	idx_age_status	1	age	A	NULL	NULL	NULL	YES	BTREE			YES	NULL
+test_alter_table	1	idx_age_status	2	status	A	NULL	NULL	NULL	YES	BTREE			YES	NULL
+SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME 
+FROM INFORMATION_SCHEMA.STATISTICS 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+AND TABLE_NAME = 'test_alter_table'
+ORDER BY INDEX_NAME, SEQ_IN_INDEX;
+INDEX_NAME	NON_UNIQUE	SEQ_IN_INDEX	COLUMN_NAME
+idx_age_status	1	1	age
+idx_age_status	1	2	status
+idx_name	1	1	name
+idx_unique_email	0	1	email_address
+PRIMARY	0	1	id
+#
+# 5 Drop index
+#
+USE test_alter_db;
+ALTER TABLE test_alter_table 
+DROP INDEX idx_age_status;
+---------------------
+USE test_alter_db;
+SELECT INDEX_NAME 
+FROM INFORMATION_SCHEMA.STATISTICS 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+AND TABLE_NAME = 'test_alter_table'
+  AND INDEX_NAME = 'idx_age_status';
+INDEX_NAME
+#
+# 6 Rename table
+#
+USE test_alter_db;
+ALTER TABLE test_alter_table RENAME TO test_renamed_table;
+---------------------
+USE test_alter_db;
+SELECT TABLE_NAME 
+FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+AND TABLE_NAME = 'test_alter_table';
+TABLE_NAME
+SELECT TABLE_NAME 
+FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+AND TABLE_NAME = 'test_renamed_table';
+TABLE_NAME
+test_renamed_table
+#
+# 7 Alter table options.
+#
+USE test_alter_db;
+ALTER TABLE test_renamed_table 
+COMMENT = 'This is a test table after multiple ALTER operations',
+AUTO_INCREMENT = 100;
+SELECT TABLE_NAME, ENGINE, ROW_FORMAT, TABLE_COMMENT, AUTO_INCREMENT 
+FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+AND TABLE_NAME = 'test_renamed_table';
+TABLE_NAME	ENGINE	ROW_FORMAT	TABLE_COMMENT	AUTO_INCREMENT
+test_renamed_table	Dstore	Redundant	This is a test table after multiple ALTER operations	100
+---------------------
+USE test_alter_db;
+SELECT TABLE_NAME, ENGINE, ROW_FORMAT, TABLE_COMMENT, AUTO_INCREMENT 
+FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+AND TABLE_NAME = 'test_renamed_table';
+TABLE_NAME	ENGINE	ROW_FORMAT	TABLE_COMMENT	AUTO_INCREMENT
+test_renamed_table	Dstore	Redundant	This is a test table after multiple ALTER operations	NULL
+#
+# 8 Add foreign key constraint.
+#
+USE test_alter_db;
+CREATE TABLE departments (
+dept_id INT PRIMARY KEY AUTO_INCREMENT,
+dept_name VARCHAR(100) NOT NULL
+);
+INSERT INTO departments (dept_name) VALUES ('Engineering'), ('Sales'), ('HR');
+ALTER TABLE test_renamed_table 
+ADD COLUMN dept_id INT,
+ADD CONSTRAINT fk_dept_id 
+FOREIGN KEY (dept_id) 
+REFERENCES departments(dept_id)
+ON DELETE SET NULL
+ON UPDATE CASCADE;
+UPDATE test_renamed_table SET dept_id = 1 WHERE id = 1;
+UPDATE test_renamed_table SET dept_id = 2 WHERE id = 2;
+---------------------
+USE test_alter_db;
+SELECT 
+CONSTRAINT_NAME,
+TABLE_NAME,
+COLUMN_NAME,
+REFERENCED_TABLE_NAME,
+REFERENCED_COLUMN_NAME
+# DELETE_RULE,
+# UPDATE_RULE
+FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+WHERE TABLE_SCHEMA = 'test_alter_db'
+  AND TABLE_NAME = 'test_renamed_table'
+  AND REFERENCED_TABLE_NAME IS NOT NULL;
+CONSTRAINT_NAME	TABLE_NAME	COLUMN_NAME	REFERENCED_TABLE_NAME	REFERENCED_COLUMN_NAME
+fk_dept_id	test_renamed_table	dept_id	departments	dept_id
+#
+# 9 Alter column order.
+#
+USE test_alter_db;
+ALTER TABLE test_renamed_table 
+MODIFY COLUMN email_address VARCHAR(150) AFTER name,
+MODIFY COLUMN status ENUM('active', 'inactive') DEFAULT 'active' FIRST;
+---------------------
+USE test_alter_db;
+SELECT 
+COLUMN_NAME,
+ORDINAL_POSITION,
+DATA_TYPE,
+IS_NULLABLE,
+COLUMN_DEFAULT
+FROM INFORMATION_SCHEMA.COLUMNS 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+AND TABLE_NAME = 'test_renamed_table'
+ORDER BY ORDINAL_POSITION;
+COLUMN_NAME	ORDINAL_POSITION	DATA_TYPE	IS_NULLABLE	COLUMN_DEFAULT
+status	1	enum	YES	active
+id	2	int	NO	NULL
+name	3	varchar	NO	NULL
+email_address	4	varchar	YES	NULL
+age	5	tinyint	YES	NULL
+created_at	6	timestamp	YES	CURRENT_TIMESTAMP
+dept_id	7	int	YES	NULL
+#
+# 10 Combined multiple operations in a single ALTER.
+#
+USE test_alter_db;
+ALTER TABLE test_renamed_table
+ADD COLUMN middle_name VARCHAR(50),
+ADD INDEX idx_created_at (created_at);
+---------------------
+SELECT COLUMN_NAME 
+FROM INFORMATION_SCHEMA.COLUMNS 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+AND TABLE_NAME = 'test_renamed_table'
+  AND COLUMN_NAME = 'middle_name';
+COLUMN_NAME
+middle_name
+SELECT 
+INDEX_NAME,
+INDEX_TYPE,
+NON_UNIQUE
+FROM INFORMATION_SCHEMA.STATISTICS 
+WHERE TABLE_SCHEMA = 'test_alter_db' 
+AND TABLE_NAME = 'test_renamed_table'
+  AND INDEX_NAME = 'idx_created_at';
+INDEX_NAME	INDEX_TYPE	NON_UNIQUE
+idx_created_at	BTREE	1
+# select trace表错误情况
+SET GLOBAL debug="+d,ddl_replay_select_trace_error";
+CREATE TABLE IF NOT EXISTS t_user_temp_2 (
+id INT PRIMARY KEY AUTO_INCREMENT,
+name VARCHAR(50) NOT NULL,
+create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+) DEFAULT CHARSET=utf8mb4;
+select sleep(4);
+Got one of the listed errors
+include/rpl_start_server.inc [server_number=2]
+SELECT @@global.debug AS node2_debug_after_restart;
+node2_debug_after_restart
+
+---------------------
+CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=SERVER_MYPORT_1, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL 'dstore_wal_replication_channel';;
+include/assert.inc [Channel name should be 'dstore_wal_replication_channel']
+Slave_IO_Running should be OFF.
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+OFF
+START REPLICA;
+Slave_IO_Running should be ON.
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+ON
+# Verify whether the table exists
+SELECT TABLE_NAME, TABLE_TYPE, ENGINE, TABLE_COLLATION 
+FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'test_alter_db' AND TABLE_NAME = 't_user_temp_2';
+TABLE_NAME	TABLE_TYPE	ENGINE	TABLE_COLLATION
+t_user_temp_2	BASE TABLE	Dstore	utf8mb4_0900_ai_ci
+# Expect found 1 times
+Pattern "The server aborts because it failed to query the max DDL query trace lsn.*" found 1 times
+############################################################
+# Uninstall the plugins, reset the variables, and restore the original master-replica replication relationship.
+############################################################
+#
+# 1. Shutdown the mysqld instances of the master and replica servers launched with the new data directory.
+#
+STOP REPLICA;
+RESET REPLICA ALL FOR CHANNEL 'dstore_wal_replication_channel';
+include/stop_wal_dump_threads.inc
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 0;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 0;
+UNINSTALL PLUGIN rpl_semi_sync_source;
+UNINSTALL PLUGIN rpl_semi_sync_replica;
+use mtr;
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 0;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 0;
+UNINSTALL PLUGIN rpl_semi_sync_source;
+UNINSTALL PLUGIN rpl_semi_sync_replica;
+use mtr;
+#
+# 2. Shutdown the mysqld instances of the master and replica servers launched with the new data directory.
+#
+include/rpl_stop_server.inc [server_number=1]
+include/rpl_stop_server.inc [server_number=2]
+# Delete the directories of the primary and standby servers.
+#
+# 3. Restart the mysqld instances of the master and replica servers using the configurations from the opt file.
+#
+include/rpl_start_server.inc [server_number=1]
+show databases;
+Database
+__recyclebin__
+copy_database
+information_schema
+mtr
+mysql
+performance_schema
+sys
+test
+drop database copy_database;
+use mtr;
+include/rpl_start_server.inc [server_number=2]
+use mtr;

@@ -1,0 +1,152 @@
+--source include/have_only_dstore.inc
+--echo #
+--echo # CDE
+--echo #
+use test;
+
+create table t53(id int, a int, b int, c CHAR(120),key(id),key(a),key(a,b)) engine=Dstore;
+insert into t53 values(1,1,1,1);
+insert into t53 values(2,2,2,2);
+insert into t53 values(3,3,3,3);
+insert into t53 values(4,4,4,4);
+insert into t53 values(5,5,5,5);
+insert into t53 values(6,6,6,6);
+insert into t53 values(7,7,7,7);
+insert into t53 values(8,8,8,8);
+insert into t53 values(9,9,9,9);
+--replace_column 7 #
+show index from t53;
+set optimizer_switch="index_condition_pushdown=off";
+--sleep 1
+#test index read for CDE table
+select count(*) from t53;
+select a from t53 where id >= 1;
+select * from t53 where a < 3;
+select * from t53 where b >= 3;
+select a from t53 where a >=1;
+select a from t53 where id > 1;
+#test index read for CDE table
+select * from t53 where a >= 1;
+select * from t53 where a < 3;
+select * from t53 where b >= 3;
+select a from t53 where a >=1;
+#shoud go through index_last
+select max(id) from t53 where id>1;
+select max(id) from t53 where id < 5;
+select count(*) from t53 where id > 1 and id < 5;
+select * from t53 where a > 1 and id < 9;
+select * from t53 where a > 1 or id < 8;
+select count(*) from t53 where a > 1 or id < 8;
+--replace_column 10 #
+explain select * from t53 force index(a_2) where a=2 and b=2;
+#should  go through handler::ha_index_last->ha_cde::index_last  and index_prev
+select * from t53 where id>4  order by id  desc;
+--replace_column 10 #
+explain select * from t53 where id>4  order by id  desc;
+select * from t53 force index(a_2) where a=2 and b=2;
+drop table t53;
+
+# table name testcase
+# innodb not support this name
+create table `@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#`(i int) engine=Dstore;
+create table `开始打发生的发生的防守打法四大分三大的说法发斯蒂芬是的法定富士达阿帆撒旦法撒旦法啊德`(i int) engine=Dstore;
+--error 1059
+create table `!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!`(i int) engine=Dstore;
+create table `!!!`(i int) engine=Dstore;
+
+--error 1064
+create table 表-测试(id int) engine=Dstore;
+create table `表-测试`(id int) engine=Dstore;
+
+create table `表_table123`(id int) engine=Dstore;
+
+--error 1064
+create table select(id int) engine=Dstore;
+create table `table@special#char`(id int) engine=Dstore;
+
+drop table if exists `@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#`;
+drop table if exists `开始打发生的发生的防守打法四大分三大的说法发斯蒂芬是的法定富士达阿帆撒旦法撒旦法啊德`;
+drop table if exists `!!!`;
+drop table if exists `表-测试`;
+drop table if exists `表_table123`;
+drop table if exists `table@special#char`;
+
+
+# column name testcase
+create table t0(`@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#` int) engine=Dstore;
+create table t1(`开始打发生的发生的防守打法四大分三大的说法发斯蒂芬是的法定富士达阿帆撒旦法撒旦法啊德` int) engine=Dstore;
+--error 1059
+create table t2(`!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!` int) engine=Dstore;
+create table t2(`!!!` int) engine=Dstore;
+--error 1064
+create table t3(列-测试 int) engine=Dstore;
+create table t3(`列-测试` int) engine=Dstore;
+create table t4(`列_column123` int) engine=Dstore;
+--error 1064
+create table t5(select int) engine=Dstore;
+create table t5(`table@special#char` int) engine=Dstore;
+drop table if exists t0, t1, t2, t3, t4, t5;
+
+# index name testcase
+create table t0(id int, key `@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#`(id)) engine=Dstore;
+create table t1(id int, key `开始打发生的发生的防守打法四大分三大的说法发斯蒂芬是的法定富士达阿帆撒旦法撒旦法啊德`(id)) engine=Dstore;
+--error 1059
+create table t2(id int, key `!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!`(id)) engine=Dstore;
+create table t2(id int, key `!!!`(id)) engine=Dstore;
+--error 1064
+create table t3(id int, key 列-测试(id)) engine=Dstore;
+create table t3(id int, key `列-测试`(id)) engine=Dstore;
+create table t4(id int, key `列_column123`(id)) engine=Dstore;
+--error 1064
+create table t5(id int, key select(id)) engine=Dstore;
+create table t5(id int, key `table@special#char`(id)) engine=Dstore;
+drop table if exists t0, t1, t2, t3, t4, t5;
+
+create table table_column_limit(id int) engine=Dstore;
+DELIMITER |;
+
+# Procedure to add enough columns to a table such that it reaches the maximum
+# number of columns allowed on a table
+CREATE PROCEDURE add_columns(table_name varchar(50), algorithm varchar(10))
+    BEGIN
+    DECLARE i INT DEFAULT 1;
+    SET @sql_text = CONCAT('ALTER TABLE ', table_name, ' ');
+    while (i < 1664) do
+        SET @sql_text = CONCAT(@sql_text, ' ADD COLUMN ', CONCAT('col_', i), ' INTEGER NULL DEFAULT NULL,');
+        set i = i + 1;
+    end while;
+    SET @sql_text = CONCAT(@sql_text, 'ALGORITHM=', algorithm);
+    PREPARE stmt FROM @sql_text;
+    EXECUTE stmt;
+    DEALLOCATE PREPARE stmt;
+END |
+DELIMITER ;|
+
+call add_columns('table_column_limit', 'COPY');
+--error ER_TOO_MANY_FIELDS
+ALTER TABLE table_column_limit ADD I_VJ278 INTEGER NULL DEFAULT NULL, ALGORITHM=COPY;
+drop table table_column_limit;
+DROP PROCEDURE add_columns;
+--error ER_TABLESPACE_MISSING_WITH_NAME
+CREATE TABLE t2 (i INTEGER) TABLESPACE tttt;
+call mtr.add_suppression("Alloc heap segment failed*");
+call mtr.add_suppression("Alloc lob segment failed*");
+call mtr.add_suppression("cde_create_table_info.create_table fail! *");
+SET DEBUG = '+d,create_table_alloc_failed_cause_full_tablespace';
+--error ER_DSTORE_ERR_TABLESPACE_REACH_MAXSIZE
+CREATE TABLE t2 (i INTEGER);
+SET DEBUG = '-d,create_table_alloc_failed_cause_full_tablespace';
+SET DEBUG = '+d,create_table_alloc_blob_failed_cause_full_tablespace';
+--error ER_DSTORE_ERR_TABLESPACE_REACH_MAXSIZE
+CREATE TABLE t2 (i blob);
+SET DEBUG = '-d,create_table_alloc_blob_failed_cause_full_tablespace';
+SET DEBUG = '+d,create_cde_dict_index_full_tablespace';
+--error ER_DSTORE_ERR_TABLESPACE_REACH_MAXSIZE
+CREATE TABLE t2 (i INTEGER, key(i));
+SET DEBUG = '-d,create_cde_dict_index_full_tablespace';
+CREATE TABLE t2 (i INTEGER, key(i));
+SET DEBUG = '+d,create_cde_dict_index_full_tablespace';
+--error ER_DSTORE_ERR_TABLESPACE_REACH_MAXSIZE 
+alter table t2 add column j INTEGER, add index(j);
+SET DEBUG = '-d,create_cde_dict_index_full_tablespace';
+drop table t2;

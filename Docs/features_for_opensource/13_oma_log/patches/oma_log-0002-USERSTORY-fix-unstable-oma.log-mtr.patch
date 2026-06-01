@@ -1,0 +1,71 @@
+From d4d6cf393caefbe73dba3e7efb7dada243040929 Mon Sep 17 00:00:00 2001
+From: kuangxiangbin <kuangxiangbin@contributor>
+
+
+Date: Fri, 11 Jul 2025 10:52:15 +0800
+Subject: [PATCH] USERSTORY fix unstable oma.log mtr.
+
+Issue:
+------
+Because the paths in different environments are different,
+do not modify rds_oma_log_file.
+
+Solution:
+---------
+Because the paths in different environments are different,
+do not modify rds_oma_log_file.
+---
+ mysql-test/r/oma_log.result | 7 -------
+ mysql-test/t/oma_log.test   | 8 +-------
+ 2 files changed, 1 insertion(+), 14 deletions(-)
+
+diff --git a/mysql-test/r/oma_log.result b/mysql-test/r/oma_log.result
+index 23ccd49e58d..55312cd79ca 100644
+--- a/mysql-test/r/oma_log.result
++++ b/mysql-test/r/oma_log.result
+@@ -11,13 +11,6 @@ SET GLOBAL rds_oma_log = ON;
+ show variables like 'rds_oma_log';
+ Variable_name	Value
+ rds_oma_log	ON
+-show variables like 'rds_oma_log_file';
+-Variable_name	Value
+-rds_oma_log_file	/home/ci/install/mysql/mysql-test/var/mysqld.1/data/localhost-oma.log
+-SET GLOBAL rds_oma_log_file = '/home/ci/install/mysql/mysql-test/var/mysqld.1/data//oma.log';
+-show variables like 'rds_oma_log_file';
+-Variable_name	Value
+-rds_oma_log_file	/home/ci/install/mysql/mysql-test/var/mysqld.1/data//oma.log
+ #
+ # Test 2: Test record read_only and super_read_only log
+ #
+diff --git a/mysql-test/t/oma_log.test b/mysql-test/t/oma_log.test
+index 5a2f4a08c6f..ccd52d1d932 100644
+--- a/mysql-test/t/oma_log.test
++++ b/mysql-test/t/oma_log.test
+@@ -13,11 +13,6 @@ show variables like 'rds_oma_log';
+ SET GLOBAL rds_oma_log = ON;
+ show variables like 'rds_oma_log';
+ 
+-show variables like 'rds_oma_log_file';
+--- let $OMA_TEST_DIR= `select @@datadir`
+-eval SET GLOBAL rds_oma_log_file = '$OMA_TEST_DIR/oma.log';
+-show variables like 'rds_oma_log_file';
+-
+ #
+ # Test 2: Test record read_only and super_read_only log
+ #
+@@ -277,11 +272,10 @@ EOF
+ --echo # dump content of OMA log end.
+ --echo
+  
+---remove_file $OMA_TEST_DIR/oma.log
+- 
+ --echo
+ --echo #Test log output while switch off..
+ --echo
++-- let $OMA_TEST_DIR= `select @@datadir`
+ --replace_result $OMA_TEST_DIR ...
+ eval SET GLOBAL rds_oma_log_file= '$OMA_TEST_DIR/my_oma_empty.log';
+ SET GLOBAL rds_oma_log = OFF;
+-- 
+2.23.0
+

@@ -1,0 +1,481 @@
+CREATE TABLE t1 (pk int(11)) ENGINE=InnoDB;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO t1 VALUES (1);
+CREATE TABLE t2 (pk int(11)) ENGINE=InnoDB;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO t2 VALUES (1), (2), (3);
+ANALYZE TABLE t1, t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+CREATE VIEW v1 AS SELECT DISTINCT pk FROM t1;
+explain SELECT pk FROM t2  WHERE pk IN ( SELECT * FROM v1 );
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t2)
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where
+1	SIMPLE	<derived3>	NULL	ref	<auto_key0>	<auto_key0>	5	test.t2.pk	2	100.00	Using index; FirstMatch(t2)
+3	DERIVED	<gather3>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t1)
+3	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`pk` AS `pk` from `test`.`t2` semi join (`test`.`v1`) where (`test`.`v1`.`pk` = `test`.`t2`.`pk`)
+SELECT pk FROM t2  WHERE pk IN ( SELECT * FROM v1 );
+pk
+1
+drop table t1, t2;
+drop view v1;
+CREATE TABLE t1 (
+c1 varchar(10) DEFAULT NULL,
+c2 datetime DEFAULT NULL,
+c3 varchar(255) DEFAULT NULL,
+c4 varchar(255) DEFAULT NULL,
+pk int NOT NULL,
+c5 varchar(255) DEFAULT NULL,
+c6 date DEFAULT NULL,
+c7 int DEFAULT NULL,
+c8 date DEFAULT NULL,
+c9 varchar(255) DEFAULT NULL,
+c10 int DEFAULT NULL,
+c11 varchar(10) DEFAULT NULL,
+c12 varchar(10) DEFAULT NULL,
+c13 datetime DEFAULT NULL,
+PRIMARY KEY (pk),
+KEY k5 (c5)
+) engine=innodb;
+INSERT INTO t1 VALUES
+('gjnhugwevl','1000-01-01 00:00:00','m','UJVFB',2,'j','1000-01-01',208797696,'1000-01-01','LRNWI',NULL,'look','ISVAL','2001-03-02 00:00:00'),
+('nhugwevltb','1000-01-01 00:00:00','m','h',3,'can\'t','2004-06-07',2052784128,'2000-12-19','r',NULL,'ugwevltbgy','something','1000-01-01 00:00:00');
+CREATE TABLE t2 (
+c1 varchar(255) DEFAULT NULL,
+c2 varchar(10) DEFAULT NULL,
+c3 int DEFAULT NULL,
+c4 datetime DEFAULT NULL,
+c5 varchar(10) DEFAULT NULL,
+c6 varchar(255) DEFAULT NULL,
+c7 varchar(255) DEFAULT NULL,
+c8 varchar(255) DEFAULT NULL,
+c9 varchar(10) DEFAULT NULL,
+c10 datetime DEFAULT NULL,
+pk int NOT NULL,
+c11 date DEFAULT NULL,
+c12 int DEFAULT NULL,
+PRIMARY KEY (pk)
+) engine=innodb;
+INSERT INTO t2 VALUES
+('be','njhqcbglns',NULL,'2002-07-20 19:40:02','YHBGN','go','NSPET','j','MKFNT','2007-08-25 14:41:26',1,'2002-04-21',6),
+('b','glnspcqnog',2,'1000-01-01 00:00:00','YEJTV','on','z','PPPCH','YRXFT','1000-01-01 00:00:00',4,'2003-07-25',0),
+('c','qnogpabsxs',6,'1000-01-01 00:00:00','nogpabsxsr','b','we','og','e','2000-11-01 15:48:07',7,'1000-01-01',3),
+('OFZJT','was',6,'2007-01-14 21:01:33','as','was','r','a','but','2009-01-20 17:58:56',9,'2005-02-14',7),
+('d','bsxsrumtna',9,'1000-01-01 00:00:00','would','he','o','VESLR','sxsrumtnab','2007-09-25 12:13:37',10,'2005-02-11',772472832);
+SELECT field4
+FROM (SELECT alias1.c1 AS field4
+FROM t1 AS alias1 RIGHT JOIN t2 AS alias2
+ON alias1.pk = alias2.c12
+ORDER BY field4
+) as dt;
+field4
+NULL
+NULL
+NULL
+NULL
+nhugwevltb
+drop table t1, t2;
+CREATE TABLE t1(a INT);
+CREATE TABLE t2(a INT);
+INSERT INTO t1 VALUES (1),(2),(3),(4);
+INSERT INTO t2 VALUES (1),(2);
+CREATE TABLE t0 AS SELECT * FROM t1;
+CREATE TABLE t3(a INT, b INT);
+INSERT INTO t3 VALUES (1,3), (2,3);
+ANALYZE TABLE t1, t2, t0, t3;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+test.t0	analyze	status	OK
+test.t3	analyze	status	OK
+EXPLAIN SELECT * FROM t1 WHERE t1.a > (SELECT COUNT(a) AS cnt FROM t2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	4	33.33	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	4	33.33	Using where
+2	SUBQUERY	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, test.t2)
+2	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` where (`test`.`t1`.`a` > (/* select#2 */ select count(`test`.`t2`.`a`) AS `cnt` from `test`.`t2`))
+SELECT * FROM t1 WHERE t1.a > (SELECT COUNT(a) AS cnt FROM t2);
+a
+3
+4
+DROP table t0, t1, t2, t3;
+CREATE TABLE t1 (c11 int);
+INSERT INTO t1 VALUES (1);
+EXPLAIN SELECT * FROM (SELECT (1) alias1, (SELECT alias1) alias2 FROM t1) X ;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1249	Select 3 was reduced during optimization
+Note	1003	/* select#1 */ select 1 AS `alias1`,`alias1` AS `alias2` from `test`.`t1`
+SELECT * FROM (SELECT (1) alias1, (SELECT alias1) alias2 FROM t1) X ;
+alias1	alias2
+1	1
+EXPLAIN SELECT alias2 FROM (SELECT (1) alias1, (SELECT alias1) alias2 FROM t1) X ;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1249	Select 3 was reduced during optimization
+Note	1003	/* select#1 */ select `alias1` AS `alias2` from `test`.`t1`
+SELECT alias2 FROM (SELECT (1) alias1, (SELECT alias1) alias2 FROM t1) X ;
+alias2
+1
+DROP table t1;
+CREATE TABLE small (
+id INTEGER not null,
+PRIMARY KEY (id)
+);
+CREATE TABLE big (
+id INTEGER not null,
+PRIMARY KEY (id)
+);
+INSERT INTO small VALUES (1), (2);
+INSERT INTO big VALUES (1), (2), (3), (4);
+CREATE VIEW small_view AS
+SELECT *, IF (id % 2 = 1, 1, 0) AS is_odd
+FROM small;
+CREATE VIEW big_view AS
+SELECT big.*, small_view.id AS small_id, small_view.is_odd
+FROM big LEFT JOIN small_view ON small_view.id = big.id;
+EXPLAIN SELECT * FROM big_view;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	Parallel execute (4 workers, test.big)
+1	SIMPLE	big	NULL	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+1	SIMPLE	small	NULL	eq_ref	PRIMARY	PRIMARY	4	test.big.id	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`big`.`id` AS `id`,`test`.`small`.`id` AS `small_id`,if(((`test`.`small`.`id` % 2) = 1),1,0) AS `is_odd` from `test`.`big` left join (`test`.`small`) on((`test`.`small`.`id` = `test`.`big`.`id`)) where true
+SELECT * FROM big_view;
+id	small_id	is_odd
+1	1	1
+2	2	0
+3	NULL	NULL
+4	NULL	NULL
+select `big`.`id`,`small`.`id` AS `small_id`, if(((`small`.`id` % 2) = 1), 1, 0) AS `is_odd` from `big` left join `small` on `small`.`id` = `big`.`id`;
+id	small_id	is_odd
+1	1	1
+2	2	0
+3	NULL	0
+4	NULL	0
+DROP table small, big;
+DROP view small_view, big_view;
+CREATE TABLE t1 (id INT);
+CREATE TABLE t2 (id INT);
+INSERT INTO t1 VALUES (1), (2);
+INSERT INTO t2 VALUES (1);
+EXPLAIN SELECT *
+FROM (SELECT id
+FROM t1) AS a
+LEFT JOIN
+(SELECT id, 2 AS tall
+FROM t2) AS b
+ON a.id = b.id
+WHERE b.tall IS NOT NULL;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, test.t2, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t2`.`id` AS `id`,2 AS `tall` from `test`.`t1` left join (`test`.`t2`) on((`test`.`t2`.`id` = `test`.`t1`.`id`)) where (2 is not null)
+SELECT *
+FROM (SELECT id
+FROM t1) AS a
+LEFT JOIN
+(SELECT id, 2 AS tall
+FROM t2) AS b
+ON a.id = b.id
+WHERE b.tall IS NOT NULL;
+id	id	tall
+1	1	2
+DROP table t1, t2;
+CREATE TABLE employees (
+ID INT PRIMARY KEY,
+NAME VARCHAR(100),
+MANAGER_ID INT,
+INDEX (MANAGER_ID),
+FOREIGN KEY (MANAGER_ID) REFERENCES employees(ID)
+);
+INSERT INTO employees VALUES
+(333, "Yasmina", NULL),
+(198, "John", 333),
+(692, "Tarek", 333),
+(29, "Pedro", 198),
+(4610, "Sarah", 29),
+(72, "Pierre", 29),
+(123, "Adil", 692);
+ANALYZE TABLE employees;
+Table	Op	Msg_type	Msg_text
+test.employees	analyze	status	OK
+SET @save_big_tables = @@big_tables;
+SET big_tables = 1;
+EXPLAIN FORMAT=tree WITH RECURSIVE employees_extended(ID, NAME, PATH)
+AS
+(
+SELECT ID, NAME, CAST(ID AS CHAR(200))
+FROM employees
+WHERE MANAGER_ID IS NULL
+UNION ALL
+SELECT S.ID, S.NAME, CONCAT(M.PATH, ",", S.ID)
+FROM employees_extended M STRAIGHT_JOIN employees S ON M.ID=S.MANAGER_ID
+),
+JOHN_ID AS (SELECT ID FROM employees WHERE NAME='John')
+SELECT e.* FROM employees_extended e, JOHN_ID
+WHERE FIND_IN_SET(JOHN_ID.ID,
+PATH)
+AND e.ID<>JOHN_ID.ID;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on employees  (...)
+    -> Filter: ((0 <> find_in_set(employees.ID,e.`PATH`)) and (e.ID <> employees.ID))  (...)
+        -> Inner hash join, one hash table per worker (no condition)  (...)
+            -> Table scan on e  (...)
+                -> Materialize recursive CTE employees_extended  (...)
+                    -> Index lookup on employees using MANAGER_ID (MANAGER_ID=NULL), with index condition: (employees.MANAGER_ID is null)  (...)
+                    -> Repeat until convergence
+                        -> Nested loop inner join  (...)
+                            -> Filter: (M.ID is not null)  (...)
+                                -> Scan new records on M  (...)
+                            -> Index lookup on S using MANAGER_ID (MANAGER_ID=M.ID)  (...)
+            -> Hash
+                -> Filter: (employees.`NAME` = 'John')  (...)
+                    -> Parallel table scan on employees  (...)
+
+WITH RECURSIVE employees_extended(ID, NAME, PATH)
+AS
+(
+SELECT ID, NAME, CAST(ID AS CHAR(200))
+FROM employees
+WHERE MANAGER_ID IS NULL
+UNION ALL
+SELECT S.ID, S.NAME, CONCAT(M.PATH, ",", S.ID)
+FROM employees_extended M STRAIGHT_JOIN employees S ON M.ID=S.MANAGER_ID
+),
+JOHN_ID AS (SELECT ID FROM employees WHERE NAME='John')
+SELECT e.* FROM employees_extended e, JOHN_ID
+WHERE FIND_IN_SET(JOHN_ID.ID,
+PATH)
+AND e.ID<>JOHN_ID.ID;
+ID	NAME	PATH
+29	Pedro	333,198,29
+72	Pierre	333,198,29,72
+4610	Sarah	333,198,29,4610
+SET @@big_tables = @save_big_tables;
+DROP table employees;
+#The first_inner_table of Item_view_ref is one derived table. While the previous
+#function "find_table_in_local_list" only checks the NO_TMP_TABLE, which leads to
+#find first_inner_table failed.
+SET @save_optimizer_switch = @@optimizer_switch;
+SET optimizer_switch='subquery_to_derived=on,block_nested_loop=off';
+CREATE TABLE t1(a INT);
+CREATE TABLE t2(a INT);
+INSERT INTO t1 VALUES (1),(2),(3),(4);
+INSERT INTO t2 VALUES (1),(2);
+CREATE TABLE t0 AS SELECT * FROM t1;
+CREATE TABLE t3(a INT, b INT);
+INSERT INTO t3 VALUES (1,3), (2,3);
+ANALYZE TABLE t1, t2, t0, t3;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+test.t0	analyze	status	OK
+test.t3	analyze	status	OK
+EXPLAIN FORMAT=tree SELECT /*+NO_BNL()*/ (t2.a + derived_1_0.sum_plus_cnt) AS cnt
+FROM t2
+LEFT JOIN (SELECT (derived_2_0.tmp_aggr_1 + derived_2_1.count_a) AS sum_plus_cnt
+FROM (SELECT STRAIGHT_JOIN SUM(t1.a) AS tmp_aggr_1 from t1) derived_2_0
+LEFT JOIN (SELECT COUNT(t1.a) AS count_a from t1) derived_2_1
+ON TRUE) derived_1_0
+ON TRUE;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (...)
+    -> Nested loop left join  (...)
+        -> Parallel table scan on t2  (...)
+        -> Nested loop left join  (...)
+            -> Table scan on derived_2_0  (...)
+                -> Materialize  (...)
+                    -> Aggregate: sum(`<temporary>`.tmp_aggr_1)  (...)
+                        -> Gather: 4 workers, parallel scan on t1  (...)
+                            -> Aggregate: sum(`<temporary>`.tmp_aggr_1)  (...)
+                                -> Parallel table scan on t1  (...)
+            -> Table scan on derived_2_1  (...)
+                -> Materialize  (...)
+                    -> Aggregate: count(`<temporary>`.count_a)  (...)
+                        -> Gather: 4 workers, parallel scan on t1  (...)
+                            -> Aggregate: count(`<temporary>`.count_a)  (...)
+                                -> Parallel table scan on t1  (...)
+
+SELECT /*+NO_BNL()*/ (t2.a + derived_1_0.sum_plus_cnt) AS cnt
+FROM t2
+LEFT JOIN (SELECT (derived_2_0.tmp_aggr_1 + derived_2_1.count_a) AS sum_plus_cnt
+FROM (SELECT STRAIGHT_JOIN SUM(t1.a) AS tmp_aggr_1 from t1) derived_2_0
+LEFT JOIN (SELECT COUNT(t1.a) AS count_a from t1) derived_2_1
+ON TRUE) derived_1_0
+ON TRUE;
+cnt
+15
+16
+DROP TABLE t0, t1, t2, t3;
+SET @@optimizer_switch=@save_optimizer_switch;
+BUG20211111900485 mysqld coredump while running hybrid query test model
+CREATE TABLE `t1` (
+`C_KEY` int NOT NULL AUTO_INCREMENT,
+`C_TIME` time DEFAULT NULL,
+`C_DATETIME` datetime DEFAULT NULL,
+`C_TIMESTAMP` timestamp NULL DEFAULT NULL,
+`C_INT_ID` int DEFAULT NULL,
+`C_UINT_ID` int unsigned DEFAULT NULL,
+`C_BIGINT_ID` bigint DEFAULT NULL,
+`C_UBIGINT_ID` bigint unsigned DEFAULT NULL,
+`C_TINYINT_ID` tinyint DEFAULT NULL,
+`C_UTINYINT_ID` tinyint unsigned DEFAULT NULL,
+`C_SMAILLINT_ID` smallint DEFAULT NULL,
+`C_USMALLINT_ID` smallint unsigned DEFAULT NULL,
+`C_MEDIUMINT_ID` mediumint DEFAULT NULL,
+`C_UMEDIUMINT_ID` mediumint unsigned DEFAULT NULL,
+`C_DOUBLE` double DEFAULT NULL,
+`C_DECIMAL` decimal(65,30) DEFAULT NULL,
+`C_UDECIMAL` decimal(65,30) DEFAULT NULL,
+`C_CHARTWO` char(2) DEFAULT NULL,
+`C_VARCHARTWN` varchar(20) NOT NULL,
+`C_VARCHARS` varchar(64) NOT NULL,
+`C_NUMERIC` decimal(28,10) DEFAULT NULL,
+`C_REAL` double NOT NULL,
+`C_FLOAT` float NOT NULL,
+`C_BOOLEAN` tinyint NOT NULL,
+`C_DATE` date NOT NULL,
+`C_VCHAR` varchar(1000) DEFAULT NULL,
+`C_TEXT` text,
+`C_BLOB` blob,
+`C_TINYTEXT` tinytext,
+`C_MEDIUMBLOB` mediumblob,
+`C_LONGBLOB` longblob,
+`C_PART_ID` int DEFAULT NULL,
+PRIMARY KEY (`C_KEY`)
+);
+create view v1 as select * from t1;
+explain format=tree select /*+ no_merge(v1) */  C_VARCHARTWN from v1 order by C_VARCHARTWN limit 5;
+EXPLAIN
+-> Limit: 5 row(s)  (...)
+    -> Gather: 4 workers, parallel scan on v1  (...)
+        -> Limit: 5 row(s)  (...)
+            -> Sort row IDs: v1.C_VARCHARTWN, limit input to 5 row(s) per chunk  (...)
+                -> Parallel table scan on v1  (...)
+                    -> Materialize  (...)
+                        -> Table scan on t1  (...)
+
+select /*+ no_merge(v1) */  C_VARCHARTWN from v1 order by C_VARCHARTWN limit 5;
+C_VARCHARTWN
+drop view v1;
+drop table t1;
+CREATE TABLE `t1` (
+`a` int DEFAULT NULL,
+`b` varchar(10) DEFAULT NULL,
+`c` int DEFAULT NULL
+);
+CREATE SQL SECURITY DEFINER VIEW `v1` AS select 1 AS `c0`,1 AS `c1`;
+CREATE SQL SECURITY DEFINER VIEW `v2` AS select 1 AS `c_d_id`,1 AS `c_id`,1 AS `c_w_id`,1 AS `c_middle`,1 AS `c_street_1`,1 AS `c_credit`;
+explain
+select
+1 as c3
+from
+(select
+mod((select 1 from test.v1 order by 1 limit 1), ref_1.c_id)
+as c2
+from
+test.v1 as ref_0
+join
+test.v2 as ref_1
+join test.t1 as ref_2
+on (true)
+on (ref_0.c1 = ref_1.c_credit )
+) as subq_0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, .subq_0)
+1	SIMPLE	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.ref_2)
+2	SIMPLE	<derived5>	NULL	system	NULL	NULL	NULL	NULL	1	100.00	NULL
+2	SIMPLE	<derived6>	NULL	system	NULL	NULL	NULL	NULL	1	100.00	NULL
+2	SIMPLE	ref_2	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+6	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+5	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+3	SUBQUERY	<derived4>	NULL	system	NULL	NULL	NULL	NULL	1	100.00	NULL
+4	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+Warnings:
+Note	1003	/* select#1 */ select 1 AS `c3` from (/* select#2 */ select ((/* select#3 */ select 1 from dual order by '' limit 1) % `test`.`ref_1`.`c_id`) AS `c2` from `test`.`t1` `ref_2` where true) `subq_0`
+drop table t1;
+drop view v1,v2;
+CREATE TABLE t0 (c1 INT);
+explain SELECT 1 FROM (SELECT 1 FROM t0) t1(c1) GROUP BY c1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select 1 AS `1` from `test`.`t0` group by 1
+SELECT 1 FROM (SELECT 1 FROM t0) t1(c1) GROUP BY c1;
+1
+explain SELECT 1 FROM (SELECT 2 FROM (SELECT DISTINCT 1 FROM t0) t0) t1(c1) GROUP BY c1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<derived3>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+3	DERIVED	<gather3>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t0)
+3	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select 1 AS `1` from (/* select#3 */ select distinct 1 AS `1` from `test`.`t0`) `t0` group by 2
+SELECT 1 FROM (SELECT 2 FROM (SELECT DISTINCT 1 FROM t0) t0) t1(c1) GROUP BY c1;
+1
+drop table t0;
+CREATE TABLE t0 (c0 INT);
+CREATE TABLE t1 (c0 INT);
+SET SESSION FORCE_PARALLEL_EXECUTE = 1;
+SET SESSION PARALLEL_COST_THRESHOLD = 0;
+SET SESSION PARALLEL_ROWS_THRESHOLD = 0;
+SELECT 1 FROM t0 JOIN (SELECT 1 FROM t1) x(x) ON t0.c0 = 1 GROUP BY t0.c0, x.x;
+1
+drop table t0;
+drop table t1;
+CREATE TABLE t1 (c0 INT, c1 VARCHAR(187));
+insert into t1 values(1,"aa");
+SELECT 1 FROM (SELECT count(*) = t1.c1 FROM t1 GROUP BY t1.c1) z(z) WHERE z.z IS TRUE;
+1
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'aa'
+SELECT 1 FROM (SELECT count(*) FROM t1 GROUP BY t1.c1) z(z) WHERE z.z IS TRUE;
+1
+1
+SELECT 1 FROM (SELECT count(*) = 1, sum(1) = 0 FROM t1 GROUP BY t1.c1) z(z,y) WHERE z.z IS TRUE;
+1
+1
+SELECT 1 FROM (SELECT count(*) = 1 as a, sum(1) = 0 as b FROM t1 GROUP BY t1.c1) z(z,y) WHERE z.y IS false;
+1
+1
+drop table t1;
+CREATE TABLE t1(b int);
+insert into t1 values(1), (2);
+insert into t1 select b from t1;
+insert into t1 select b from t1;
+insert into t1 select b from t1;
+explain format=tree select /*+ no_merge()*/ 1 from (select b from t1 ) as v where b+0<2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on v  (cost=2.41..4.8 rows=16)
+    -> Parallel table scan on v  (cost=2.89..4.8 rows=4)
+        -> Materialize  (cost=2.25..2.25 rows=16)
+            -> Gather: 4 workers, parallel scan on t1  (cost=0.65 rows=16)
+                -> Filter: ((t1.b + 0) < 2)  (cost=0.65 rows=4)
+                    -> Parallel table scan on t1  (cost=0.65 rows=4)
+
+select /*+ no_merge()*/ 1 from (select b from t1 ) as v where b+0<2;
+1
+1
+1
+1
+1
+1
+1
+1
+1
+drop table t1;

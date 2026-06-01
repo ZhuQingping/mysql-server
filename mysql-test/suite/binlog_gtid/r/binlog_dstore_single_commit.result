@@ -1,0 +1,37 @@
+include/save_sysvars.inc [
+"GLOBAL.binlog_order_commits",
+"GLOBAL.binlog_error_action",
+"GLOBAL.binlog_group_commit_sync_delay"
+]
+CALL mtr.add_suppression(".*An error occurred during sync stage of the commit. 'binlog_error_action' is set to 'IGNORE_ERROR'.*");
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) ENGINE=DStore;
+SET SESSION debug = "+d,force_rotate";
+SET GLOBAL binlog_group_commit_sync_delay = 1;
+BEGIN;
+INSERT INTO test.t1 VALUES (1, 'Testing gropu-commit with just 1 thread');
+INSERT INTO test.t1 VALUES (2, 'Testing again group-commit with just 1 thread');
+INSERT INTO test.t1 VALUES (3, 'Testing for the last time group-commit with just 1 thread');
+UPDATE test.t1 SET data = 'Testing group-commit with just 1 thread' WHERE id = 1;
+DELETE FROM test.t1 WHERE id = 2;
+COMMIT;
+SET SESSION debug = "";
+SET SESSION debug = "+d,force_update_binlog_end_pos_after_sync,force_run_after_commit_hooks";
+BEGIN;
+INSERT INTO test.t1 VALUES (2, 'Testing again group-commit with just 1 thread');
+COMMIT;
+SET SESSION debug = "";
+SET SESSION debug = "+d,simulate_binlog_is_closed";
+BEGIN;
+DELETE FROM test.t1 WHERE id = 2;
+COMMIT;
+SET SESSION debug = "";
+SET GLOBAL binlog_error_action = IGNORE_ERROR;
+SET SESSION debug = "+d,after_flush_simulate_error";
+BEGIN;
+UPDATE test.t1 SET data = 'Now really testing for the last time with just 1 thread' WHERE id = 3;
+COMMIT;
+include/restore_sysvars.inc
+DROP TABLE t1;

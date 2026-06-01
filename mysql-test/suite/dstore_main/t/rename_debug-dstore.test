@@ -1,0 +1,56 @@
+--source include/have_only_dstore.inc
+
+--source include/have_debug.inc
+--source include/have_debug_sync.inc
+# Some parts of the test require enabled binary log.
+--source include/have_log_bin.inc
+
+--echo #
+--echo # Bug#22653180:ASSERT DD::CACHE::SHARED_MULTI_MAP<T>::
+--echo # PUT(CONST K*, CONST T*, DD::CACHE::CACHE
+--echo #
+
+CREATE TABLE t1(i int);
+--echo # Force rename_table to fail after update has been applied to dd cache
+SET SESSION debug="+d,abort_rename_after_update";
+
+--echo # rename table will fail with dummy error
+# error 156 - The table already existed in storage engine
+#--error ER_ERROR_ON_WRITE
+#RENAME TABLE t1 to t2;
+
+SET SESSION debug="-d,abort_rename_after_update";
+
+SELECT * FROM t1;
+
+DROP TABLE t1;
+
+
+--echo #
+--echo # Part of test coverage for WL#9826 "Allow RENAME TABLES under
+--echo # LOCK TABLES" which needs debug build and debug_sync facility.
+--echo #
+--echo # The main part of coverage for this WL resides in rename.test.
+--echo # This file only contains subtests which require debug/debug_sync
+--echo # facilities, hence their odd numbering.
+
+--enable_connect_log
+SET @old_lock_wait_timeout= @@lock_wait_timeout;
+connect (con1, localhost, root,,);
+SET @old_lock_wait_timeout= @@lock_wait_timeout;
+connection default;
+
+--echo #
+--echo # 1) Requirements on table locking for tables renamed and
+--echo #    target table names.
+--echo #
+--echo #
+--echo # 1.2) Locking of target table.
+
+
+--echo # Clean-up.
+connection con1;
+disconnect con1;
+--source include/wait_until_disconnected.inc
+connection default;
+--disable_connect_log

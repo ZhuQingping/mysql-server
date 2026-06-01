@@ -1,0 +1,51 @@
+call mtr.add_suppression("previous full backup is running");
+call mtr.add_suppression("full backup found binlog is not enabled");
+create database consistency_check;
+use consistency_check;
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	None
+call rds_backup.start_full_local_backup(0);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Success
+# restart: --dstore_open_restore_mode=on
+# Check data consistency with DDL operation
+COUNT(*)
+3
+COUNT(*)
+1
+COUNT(*)
+2
+COUNT(*)
+2
+# Check data consistency with DML operation
+COUNT(*)
+0
+COUNT(*)
+0
+COUNT(*)
+0
+COUNT(*)
+0
+COUNT(*)
+0
+COUNT(*)
+0
+COUNT(*)
+0
+COUNT(*)
+0
+COUNT(*)
+0
+drop database consistency_check;

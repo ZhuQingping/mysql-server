@@ -1,0 +1,276 @@
+From cca19c65133ed279469d0c719a566d1b7dad4d46 Mon Sep 17 00:00:00 2001
+From: Guilhem Bichot <guilhem.bichot@contributor>
+
+
+Date: Wed, 12 Mar 2025 11:16:52 +0100
+Subject: [PATCH] BUGFIX
+
+Fix for a bug: range optimizer scanning too many index cells in TPC-C
+
+select * from t1, t2 where t1.a=100 and t2.a>=t1.b-20 and t2.a<t1.b;
+
+(see the added test) we have a constant table t1 and a range condition
+on t2 involving values from t1.
+
+The bug's symptom was that the range scan was set up as:
+ -> Covering index range scan on t2 using a over (NULL < a < 100)
+
+So it was lacking the left bound (80). Even though the upper filter
+made sure to test t2.a>80, thus the result was correct, it means the
+entire range (-inf,100) was scanned by the access method. Which is a
+waste, and made a big speed difference in transaction "stocklevel" of
+some variant of TPC-C (BenchmarkSQL). After fixing, it goes from 140k
+tpmc to 730k.
+
+Here is the problem's cause. After discovering that t1 is constant, we
+update the sargables (used by the range optimizer) by checking if
+their right-hand side is now constant. We properly saw that in the
+sargable t2.a<t1.b the right side is constant, but missed that in the
+sargable t2.a>=t1.b-20 the right side is also constant: this is
+because the_minus_item->const_item() is now out of date.
+
+The fix is to refresh this value. After that we get:
+ -> Covering index range scan on t2 using a over (80 <= a < 100)
+
+For reference: the tpc-c query:
+
+explain format=tree
+SELECT count(*) AS low_stock FROM (
+  SELECT s_w_id, s_i_id, s_quantity FROM stock1
+  WHERE s_w_id = '23' AND s_quantity < '18' AND s_i_id IN (
+    SELECT ol_i_id FROM district1 JOIN order_line1 ON
+    ol_w_id = d_w_id AND ol_d_id = d_id AND ol_o_id >= d_next_o_id - 20 AND ol_o_id < d_next_o_id
+    WHERE d_w_id = '23' AND d_id = '3' )
+) AS L;
+
+Original plan:
+
+ -> Aggregate: count(0)  (cost=75545 rows=1)
+    -> Remove duplicate stock1 rows using temporary table (weedout)  (cost=73659 rows=18865)
+        -> Nested loop inner join  (cost=73659 rows=18865)
+            -> Filter: ((order_line1.ol_d_id = '3') and (order_line1.ol_w_id = '23') and (order_line1.ol_o_id >= <cache>(('3001' - 20))) and (order_line1.ol_o_id < '3001') and (order_line1.ol_i_id is not null))  (cost=11399 rows=56602)
+                -> Index range scan on order_line1 using PRIMARY over (ol_w_id = 23 AND ol_d_id = 3 AND ol_o_id < 3001)  (cost=11399 rows=56602)
+            -> Filter: (stock1.s_quantity < 18)  (cost=1 rows=0.333)
+                -> Single-row index lookup on stock1 using PRIMARY (s_w_id=23, s_i_id=order_line1.ol_i_id)  (cost=1 rows=1)
+
+After the fix (notice the cost&rows numbers decrease):
+                -> Index range scan on order_line1 using PRIMARY over (ol_w_id = 23 AND ol_d_id = 3 AND 2981 <= ol_o_id < 3001)  (cost=43.1 rows=209)
+
+Regarding updates to result files: currently these tests just fail in
+this mysql+dstore branch, like this:
+
+CURRENT_TEST: main.join_outer
+mysqltest: At line 423: Query 'CREATE TABLE t1 (
+id int(11) DEFAULT '0' NOT NULL,
+name tinytext DEFAULT '' NOT NULL,
+UNIQUE id (id)
+)' failed.
+
+and this is not related to my code change. So what I have done, in
+order to have good testing of my optimizer-related change, is to apply
+my patch on vanilla 8.0.41, run the main&innodb&opt_trace suites, and
+then these were the failing tests. I studied the failures, they are ok
+changes (MySQL is able to optimize more as it sees more constant
+items), and I'm recording them identically in this mysql+dstore
+branch.
+---
+ mysql-test/mtr_schedule_ci_default       |  1 +
+ mysql-test/r/join_outer.result           |  4 ++--
+ mysql-test/r/join_outer_bka.result       |  4 ++--
+ mysql-test/r/join_outer_bka_nobnl.result |  4 ++--
+ mysql-test/r/order_by_all.result         |  2 +-
+ mysql-test/r/order_by_icp_mrr.result     |  2 +-
+ mysql-test/r/order_by_none.result        |  2 +-
+ mysql-test/r/range_bugs.result           | 25 ++++++++++++++++++++++++
+ mysql-test/t/range_bugs.test             | 17 ++++++++++++++++
+ sql/sql_optimizer.cc                     | 18 +++++++++++++++--
+ 10 files changed, 68 insertions(+), 11 deletions(-)
+ create mode 100644 mysql-test/r/range_bugs.result
+ create mode 100644 mysql-test/t/range_bugs.test
+
+diff --git a/mysql-test/mtr_schedule_ci_default b/mysql-test/mtr_schedule_ci_default
+index 737530e3e9d..aabd2417c88 100644
+--- a/mysql-test/mtr_schedule_ci_default
++++ b/mysql-test/mtr_schedule_ci_default
+@@ -561,6 +561,7 @@ main.ps_grant
+ main.ps_not_windows
+ main.query_attributes
+ main.query_expression_big
++main.range_bugs
+ main.read_only_innodb
+ main.read_only_persisted_plugin_variables
+ main.read_only_persisted_variables
+diff --git a/mysql-test/r/join_outer.result b/mysql-test/r/join_outer.result
+index 918ad33270f..01c82ad5ec0 100644
+--- a/mysql-test/r/join_outer.result
++++ b/mysql-test/r/join_outer.result
+@@ -1424,9 +1424,9 @@ test.t2	analyze	status	OK
+ EXPLAIN SELECT * FROM t1 LEFT JOIN t2 ON e<>0 WHERE c=1 AND d IS NULL;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	const	PRIMARY	PRIMARY	4	const	1	100.00	NULL
+-1	SIMPLE	t2	NULL	index	NULL	PRIMARY	4	NULL	3	33.33	Using where; Not exists; Using index
++1	SIMPLE	t2	NULL	const	NULL	NULL	NULL	NULL	1	100.00	Impossible ON condition
+ Warnings:
+-Note	1003	/* select#1 */ select '1' AS `c`,'0' AS `e`,`test`.`t2`.`d` AS `d` from `test`.`t1` left join `test`.`t2` on(('0' <> 0)) where ((`test`.`t2`.`d` is null))
++Note	1003	/* select#1 */ select '1' AS `c`,'0' AS `e`,`test`.`t2`.`d` AS `d` from `test`.`t1` left join `test`.`t2` on(('0' <> 0)) where true
+ SELECT * FROM t1 LEFT JOIN t2 ON e<>0 WHERE c=1 AND d IS NULL;
+ c	e	d
+ 1	0	NULL
+diff --git a/mysql-test/r/join_outer_bka.result b/mysql-test/r/join_outer_bka.result
+index 7ba8d0ae7b0..613734b9bdb 100644
+--- a/mysql-test/r/join_outer_bka.result
++++ b/mysql-test/r/join_outer_bka.result
+@@ -1425,9 +1425,9 @@ test.t2	analyze	status	OK
+ EXPLAIN SELECT * FROM t1 LEFT JOIN t2 ON e<>0 WHERE c=1 AND d IS NULL;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	const	PRIMARY	PRIMARY	4	const	1	100.00	NULL
+-1	SIMPLE	t2	NULL	index	NULL	PRIMARY	4	NULL	3	33.33	Using where; Not exists; Using index
++1	SIMPLE	t2	NULL	const	NULL	NULL	NULL	NULL	1	100.00	Impossible ON condition
+ Warnings:
+-Note	1003	/* select#1 */ select '1' AS `c`,'0' AS `e`,`test`.`t2`.`d` AS `d` from `test`.`t1` left join `test`.`t2` on(('0' <> 0)) where ((`test`.`t2`.`d` is null))
++Note	1003	/* select#1 */ select '1' AS `c`,'0' AS `e`,`test`.`t2`.`d` AS `d` from `test`.`t1` left join `test`.`t2` on(('0' <> 0)) where true
+ SELECT * FROM t1 LEFT JOIN t2 ON e<>0 WHERE c=1 AND d IS NULL;
+ c	e	d
+ 1	0	NULL
+diff --git a/mysql-test/r/join_outer_bka_nobnl.result b/mysql-test/r/join_outer_bka_nobnl.result
+index 9770bd2f13a..de2f3cabd46 100644
+--- a/mysql-test/r/join_outer_bka_nobnl.result
++++ b/mysql-test/r/join_outer_bka_nobnl.result
+@@ -1425,9 +1425,9 @@ test.t2	analyze	status	OK
+ EXPLAIN SELECT * FROM t1 LEFT JOIN t2 ON e<>0 WHERE c=1 AND d IS NULL;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	const	PRIMARY	PRIMARY	4	const	1	100.00	NULL
+-1	SIMPLE	t2	NULL	index	NULL	PRIMARY	4	NULL	3	33.33	Using where; Not exists; Using index
++1	SIMPLE	t2	NULL	const	NULL	NULL	NULL	NULL	1	100.00	Impossible ON condition
+ Warnings:
+-Note	1003	/* select#1 */ select '1' AS `c`,'0' AS `e`,`test`.`t2`.`d` AS `d` from `test`.`t1` left join `test`.`t2` on(('0' <> 0)) where ((`test`.`t2`.`d` is null))
++Note	1003	/* select#1 */ select '1' AS `c`,'0' AS `e`,`test`.`t2`.`d` AS `d` from `test`.`t1` left join `test`.`t2` on(('0' <> 0)) where true
+ SELECT * FROM t1 LEFT JOIN t2 ON e<>0 WHERE c=1 AND d IS NULL;
+ c	e	d
+ 1	0	NULL
+diff --git a/mysql-test/r/order_by_all.result b/mysql-test/r/order_by_all.result
+index 65baed96ed0..2739b397069 100644
+--- a/mysql-test/r/order_by_all.result
++++ b/mysql-test/r/order_by_all.result
+@@ -3282,7 +3282,7 @@ OR view_t1.pk BETWEEN 1 AND 7
+ ORDER BY t2.i1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t2	NULL	system	NULL	NULL	NULL	NULL	0	0.00	const row not found
+-1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using where; Using index
++1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	2	100.00	Using where; Using index
+ Warnings:
+ Note	1003	/* select#1 */ select distinct NULL AS `i1`,`test`.`t1`.`pk` AS `pk` from `test`.`t1` where (((`test`.`t1`.`pk` <= 204) and (NULL <> 3)) or (`test`.`t1`.`pk` between 1 and 7)) order by NULL
+ SELECT DISTINCT t2.i1, view_t1.pk
+diff --git a/mysql-test/r/order_by_icp_mrr.result b/mysql-test/r/order_by_icp_mrr.result
+index c78a9db915d..34f070a2082 100644
+--- a/mysql-test/r/order_by_icp_mrr.result
++++ b/mysql-test/r/order_by_icp_mrr.result
+@@ -3282,7 +3282,7 @@ OR view_t1.pk BETWEEN 1 AND 7
+ ORDER BY t2.i1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t2	NULL	system	NULL	NULL	NULL	NULL	0	0.00	const row not found
+-1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using where; Using index
++1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	2	100.00	Using where; Using index
+ Warnings:
+ Note	1003	/* select#1 */ select distinct NULL AS `i1`,`test`.`t1`.`pk` AS `pk` from `test`.`t1` where (((`test`.`t1`.`pk` <= 204) and (NULL <> 3)) or (`test`.`t1`.`pk` between 1 and 7)) order by NULL
+ SELECT DISTINCT t2.i1, view_t1.pk
+diff --git a/mysql-test/r/order_by_none.result b/mysql-test/r/order_by_none.result
+index 4d0bc07372c..065f8620d8a 100644
+--- a/mysql-test/r/order_by_none.result
++++ b/mysql-test/r/order_by_none.result
+@@ -3282,7 +3282,7 @@ OR view_t1.pk BETWEEN 1 AND 7
+ ORDER BY t2.i1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t2	NULL	system	NULL	NULL	NULL	NULL	0	0.00	const row not found
+-1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using where; Using index
++1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	2	100.00	Using where; Using index
+ Warnings:
+ Note	1003	/* select#1 */ select distinct NULL AS `i1`,`test`.`t1`.`pk` AS `pk` from `test`.`t1` where (((`test`.`t1`.`pk` <= 204) and (NULL <> 3)) or (`test`.`t1`.`pk` between 1 and 7)) order by NULL
+ SELECT DISTINCT t2.i1, view_t1.pk
+diff --git a/mysql-test/r/range_bugs.result b/mysql-test/r/range_bugs.result
+new file mode 100644
+index 00000000000..7749a73ea81
+--- /dev/null
++++ b/mysql-test/r/range_bugs.result
+@@ -0,0 +1,25 @@
++set default_storage_engine=innodb;
++create table t1 (a int primary key, b int);
++insert into t1 values (100,100);
++create table t2 (a int, key(a) );
++insert into t2 values (101),(102),(103),(104);
++analyze table t1,t2;
++Table	Op	Msg_type	Msg_text
++test.t1	analyze	status	OK
++test.t2	analyze	status	OK
++explain format=tree select * from t1, t2 where t1.a=100 and t2.a>=t1.b-20 and t2.a<t1.b;
++EXPLAIN
++-> Filter: ((t2.a >= <cache>(('100' - 20))) and (t2.a < '100'))  (cost=0.46 rows=1)
++    -> Covering index range scan on t2 using a over (80 <= a < 100)  (cost=0.46 rows=1)
++
++select * from t1, t2 where t1.a=100 and t2.a>=t1.b-20 and t2.a<t1.b;
++a	b	a
++explain format=tree select * from (t1, t1 as t3) left join t2 on t2.a>=t1.b-20 and t2.a<t1.b where t1.a=100;
++EXPLAIN
++-> Left hash join (no condition)  (cost=0.92 rows=1)
++    -> Table scan on t3  (cost=0.35 rows=1)
++    -> Hash
++        -> Filter: ((t2.a >= <cache>(('100' - 20))) and (t2.a < '100'))  (cost=0.46 rows=1)
++            -> Covering index range scan on t2 using a over (80 <= a < 100)  (cost=0.46 rows=1)
++
++drop table t1,t2;
+diff --git a/mysql-test/t/range_bugs.test b/mysql-test/t/range_bugs.test
+new file mode 100644
+index 00000000000..47e2465dc11
+--- /dev/null
++++ b/mysql-test/t/range_bugs.test
+@@ -0,0 +1,17 @@
++# BUGFIX range optimizer scanning too many index cells in TPC-C
++
++set default_storage_engine=innodb;
++create table t1 (a int primary key, b int);
++insert into t1 values (100,100);
++create table t2 (a int, key(a) );
++insert into t2 values (101),(102),(103),(104);
++
++analyze table t1,t2;
++
++explain format=tree select * from t1, t2 where t1.a=100 and t2.a>=t1.b-20 and t2.a<t1.b;
++select * from t1, t2 where t1.a=100 and t2.a>=t1.b-20 and t2.a<t1.b;
++
++# Similar case, but within an ON condition of a LEFT JOIN
++explain format=tree select * from (t1, t1 as t3) left join t2 on t2.a>=t1.b-20 and t2.a<t1.b where t1.a=100;
++
++drop table t1,t2;
+\ No newline at end of file
+diff --git a/sql/sql_optimizer.cc b/sql/sql_optimizer.cc
+index f7584027275..ac977923250 100644
+--- a/sql/sql_optimizer.cc
++++ b/sql/sql_optimizer.cc
+@@ -5365,8 +5365,22 @@ bool JOIN::make_join_plan() {
+     // Detect tables that are functionally dependent on const values.
+     if (extract_func_dependent_tables()) return true;
+   }
+-  // Possibly able to create more sargable predicates from const rows.
+-  if (const_tables && sargables) update_sargable_from_const(sargables);
++
++  if (const_tables) {
++    // Some items inside conditions may now become constants, if they only
++    // depend on columns of constant tables.
++    if (where_cond && (where_cond->used_tables() & const_table_map)) {
++      where_cond->update_used_tables();
++    }
++    for (uint i = const_tables; i < primary_tables; ++i) {
++      auto cond = join_tab[i].join_cond();
++      if (cond && (cond->used_tables() & const_table_map)) {
++        cond->update_used_tables();
++      }
++    }
++    // Possibly able to create more sargable predicates from const rows.
++    if (sargables) update_sargable_from_const(sargables);
++  }
+ 
+   // Make a first estimate of the fanout for each table in the query block.
+   if (estimate_rowcount()) return true;
+-- 
+2.23.0
+

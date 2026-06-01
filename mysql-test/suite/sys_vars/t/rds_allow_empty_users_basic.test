@@ -1,0 +1,118 @@
+######### mysql-test\suite\sys_vars\t\rds_allow_empty_users_basic.test #########
+#                                                                              #
+# Variable Name: rds_allow_empty_users                                         #
+# Scope: GLOBAL                                                                #
+# Access Type: Dynamic                                                         #
+# Data Type: BOOLEAN                                                           #
+# Default Value: ON                                                            #
+# Valid Values: ON, OFF                                                        #
+#                                                                              #
+################################################################################
+
+################################################################################
+--echo #Saving initial value of rds_allow_empty_users in a temporary variable. #
+################################################################################
+SET @start_value = @@global.rds_allow_empty_users;
+SELECT @start_value;
+
+################################################################################
+--echo #Verify default value of variable.                                      #
+################################################################################
+SET @@global.rds_allow_empty_users = DEFAULT;
+SELECT @@global.rds_allow_empty_users = 1;
+
+################################################################################
+--echo #Change the value of rds_allow_empty_users to a valid value.            #
+################################################################################
+SET @@global.rds_allow_empty_users = ON;
+SELECT @@global.rds_allow_empty_users;
+SET @@global.rds_allow_empty_users = OFF;
+SELECT @@global.rds_allow_empty_users;
+
+################################################################################
+--echo #Change the value of rds_allow_empty_users by an invalid scope.         #
+################################################################################
+--Error ER_GLOBAL_VARIABLE
+SET @@session.rds_allow_empty_users = ON;
+--Error ER_GLOBAL_VARIABLE
+SET @@session.rds_allow_empty_users = OFF;
+
+################################################################################
+--echo #Change the value of rds_allow_empty_users to an invalid value.         #
+################################################################################
+--Error ER_WRONG_VALUE_FOR_VAR
+SET @@global.rds_allow_empty_users = 2;
+--Error ER_WRONG_VALUE_FOR_VAR
+SET @@global.rds_allow_empty_users = -1;
+--Error ER_WRONG_VALUE_FOR_VAR
+SET @@global.rds_allow_empty_users = TRUEF;
+--Error ER_WRONG_VALUE_FOR_VAR
+SET @@global.rds_allow_empty_users = TRUE_F;
+--Error ER_WRONG_VALUE_FOR_VAR
+SET @@global.rds_allow_empty_users = FALSE0;
+--Error ER_WRONG_VALUE_FOR_VAR
+SET @@global.rds_allow_empty_users = OON;
+--Error ER_WRONG_VALUE_FOR_VAR
+SET @@global.rds_allow_empty_users = ONN;
+--Error ER_WRONG_VALUE_FOR_VAR
+SET @@global.rds_allow_empty_users = OOFF;
+--Error ER_WRONG_VALUE_FOR_VAR
+SET @@global.rds_allow_empty_users = 0FF;
+--Error ER_WRONG_VALUE_FOR_VAR
+SET @@global.rds_allow_empty_users = ' ';
+--Error ER_WRONG_VALUE_FOR_VAR
+SET @@global.rds_allow_empty_users = " ";
+--Error ER_WRONG_VALUE_FOR_VAR
+SET @@global.rds_allow_empty_users = '';
+
+################################################################################
+--echo #Check if the value in GLOBAL Tables matches values in variable.        #
+################################################################################
+SELECT IF(@@global.rds_allow_empty_users, "ON", "OFF") = VARIABLE_VALUE
+FROM performance_schema.global_variables
+WHERE VARIABLE_NAME='rds_allow_empty_users';
+
+################################################################################
+--echo #Check if 0 and 1 values can be used on variable.                       #
+################################################################################
+SET @@global.rds_allow_empty_users = 0;
+SELECT @@global.rds_allow_empty_users;
+SET @@global.rds_allow_empty_users = 1;
+SELECT @@global.rds_allow_empty_users;
+
+################################################################################
+--echo #Check if TRUE and FALSE values can be used on variable.                #
+################################################################################
+SET @@global.rds_allow_empty_users = TRUE;
+SELECT @@global.rds_allow_empty_users;
+SET @@global.rds_allow_empty_users = FALSE;
+SELECT @@global.rds_allow_empty_users;
+
+################################################################################
+--echo #Check if accessing variable with GLOBAL and without SCOPE points to the#
+--echo #same global variable.                                                  #
+################################################################################
+SET @@global.rds_allow_empty_users = ON;
+SELECT @@rds_allow_empty_users = @@global.rds_allow_empty_users;
+
+################################################################################
+--echo #Check if rds_allow_empty_users can be accessed without @@ sign.        #
+################################################################################
+--Error ER_GLOBAL_VARIABLE
+SET rds_allow_empty_users = ON;
+--Error ER_PARSE_ERROR
+SET local.rds_allow_empty_users = OFF;
+--Error ER_UNKNOWN_TABLE
+SELECT local.rds_allow_empty_users;
+--Error ER_PARSE_ERROR
+SET global.rds_allow_empty_users = ON;
+--Error ER_UNKNOWN_TABLE
+SELECT global.rds_allow_empty_users;
+--Error ER_INCORRECT_GLOBAL_LOCAL_VAR
+SELECT rds_allow_empty_users = @@session.rds_allow_empty_users;
+
+################################################################################
+--echo #Restore initial value.                                                 #
+################################################################################
+SET @@global.rds_allow_empty_users = @start_value;
+SELECT @@global.rds_allow_empty_users;

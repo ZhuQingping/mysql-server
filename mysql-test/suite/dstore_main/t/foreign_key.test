@@ -1,0 +1,986 @@
+#
+# Test syntax of foreign keys
+#
+
+--disable_query_log
+call mtr.add_suppression("cde_create_table_info.create_table fail! name = *");
+call mtr.add_suppression("Dictionary_client acquire failed for table.*");
+--enable_query_log
+SET @saved_binlog_format= @@SESSION.binlog_format;
+
+#
+# Bug#34455 (Ambiguous foreign keys syntax is accepted)
+#
+
+--disable_warnings
+drop table if exists t_34455;
+--enable_warnings
+
+# 2 match clauses, illegal
+--error ER_PARSE_ERROR
+create table t_34455 (
+  a int not null,
+  foreign key (a) references t3 (a) match full match partial);
+
+# match after on delete, illegal
+--error ER_PARSE_ERROR
+create table t_34455 (
+  a int not null,
+  foreign key (a) references t3 (a) on delete set default match full);
+
+# match after on update, illegal
+--error ER_PARSE_ERROR
+create table t_34455 (
+  a int not null,
+  foreign key (a) references t3 (a) on update set default match full);
+
+# 2 on delete clauses, illegal
+--error ER_PARSE_ERROR
+create table t_34455 (
+  a int not null,
+  foreign key (a) references t3 (a)
+  on delete set default on delete set default);
+
+# 2 on update clauses, illegal
+--error ER_PARSE_ERROR
+create table t_34455 (
+  a int not null,
+  foreign key (a) references t3 (a)
+  on update set default on update set default);
+
+create table t_34455 (a int not null);
+
+# 2 match clauses, illegal
+--error ER_PARSE_ERROR
+alter table t_34455
+  add foreign key (a) references t3 (a) match full match partial);
+
+# match after on delete, illegal
+--error ER_PARSE_ERROR
+alter table t_34455
+  add foreign key (a) references t3 (a) on delete set default match full);
+
+# match after on update, illegal
+--error ER_PARSE_ERROR
+alter table t_34455
+  add foreign key (a) references t3 (a) on update set default match full);
+
+# 2 on delete clauses, illegal
+--error ER_PARSE_ERROR
+alter table t_34455
+  add foreign key (a) references t3 (a)
+  on delete set default on delete set default);
+
+# 2 on update clauses, illegal
+--error ER_PARSE_ERROR
+alter table t_34455
+  add foreign key (a) references t3 (a)
+  on update set default on update set default);
+
+drop table t_34455;
+
+--echo #
+--echo # WL#6929: Move FOREIGN KEY constraints to the global data dictionary
+--echo #
+
+--echo # Extra coverage of @@foreign_key_checks
+--echo #
+
+SET @@foreign_key_checks= 0;
+CREATE TABLE t1(a INT PRIMARY KEY, b INT, FOREIGN KEY (b) REFERENCES non(a));
+
+ALTER TABLE t1 ADD FOREIGN KEY (b) REFERENCES non(a);
+DROP TABLE t1;
+
+CREATE TABLE t1(a INT PRIMARY KEY);
+CREATE TABLE t2(a INT PRIMARY KEY, b INT, FOREIGN KEY (b) REFERENCES t1(a));
+DROP TABLE t1;
+DROP TABLE t2;
+
+SET @@foreign_key_checks= 1;
+--error ER_FK_CANNOT_OPEN_PARENT
+CREATE TABLE t1(a INT PRIMARY KEY, b INT, FOREIGN KEY (b) REFERENCES non(a));
+# Works, but no FK created
+CREATE TABLE t1(a INT PRIMARY KEY, b INT REFERENCES non(a));
+SHOW CREATE TABLE t1;
+--error ER_FK_CANNOT_OPEN_PARENT
+ALTER TABLE t1 ADD FOREIGN KEY (b) REFERENCES non(a);
+DROP TABLE t1;
+
+CREATE TABLE t1(a INT PRIMARY KEY);
+CREATE TABLE t2(a INT PRIMARY KEY, b INT, FOREIGN KEY (b) REFERENCES t1(a));
+--error ER_FK_CANNOT_DROP_PARENT
+DROP TABLE t1;
+DROP TABLE t2, t1;
+
+SET @@foreign_key_checks= DEFAULT;
+
+--echo # Test coverage of identifier length related to foreign keys.
+--echo #
+
+CREATE TABLE t1(a INT PRIMARY KEY);
+
+# Exactly 64 chars
+CREATE TABLE t2(a INT PRIMARY KEY, b INT);
+ALTER TABLE t2 ADD CONSTRAINT
+name567890123456789012345678901234567890123456789012345678901234
+FOREIGN KEY
+name567890123456789012345678901234567890123456789012345678901234
+(b) REFERENCES t1(a);
+SHOW CREATE TABLE t2;
+SELECT CONSTRAINT_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE REFERENCED_TABLE_NAME = 't1';
+DROP TABLE t2;
+
+# 65 chars - too long
+CREATE TABLE t2(a INT PRIMARY KEY, b INT);
+--error ER_TOO_LONG_IDENT
+ALTER TABLE t2 ADD FOREIGN KEY
+name5678901234567890123456789012345678901234567890123456789012345
+(b) REFERENCES t1(a);
+--error ER_TOO_LONG_IDENT
+ALTER TABLE t2 ADD CONSTRAINT
+name5678901234567890123456789012345678901234567890123456789012345
+FOREIGN KEY (b) REFERENCES t1(a);
+DROP TABLE t2;
+
+# 65 chars - too long, now with pre-existing index on b
+CREATE TABLE t2(a INT PRIMARY KEY, b INT UNIQUE);
+--error ER_TOO_LONG_IDENT
+ALTER TABLE t2 ADD FOREIGN KEY
+name5678901234567890123456789012345678901234567890123456789012345
+(b) REFERENCES t1(a);
+--error ER_TOO_LONG_IDENT
+ALTER TABLE t2 ADD CONSTRAINT
+name5678901234567890123456789012345678901234567890123456789012345
+FOREIGN KEY (b) REFERENCES t1(a);
+DROP TABLE t2;
+
+DROP TABLE t1;
+
+--error ER_TOO_LONG_IDENT
+CREATE TABLE t1(a INT PRIMARY KEY, b INT,
+FOREIGN KEY(b) REFERENCES name5678901234567890123456789012345678901234567890123456789012345.t2(a));
+--error ER_WRONG_TABLE_NAME
+CREATE TABLE t1(a INT PRIMARY KEY, b INT,
+FOREIGN KEY(b) REFERENCES name5678901234567890123456789012345678901234567890123456789012345(a));
+--error ER_WRONG_COLUMN_NAME
+CREATE TABLE t1(a INT PRIMARY KEY, b INT,
+FOREIGN KEY(b) REFERENCES t2(name5678901234567890123456789012345678901234567890123456789012345));
+
+SET @@foreign_key_checks= 0;
+
+--error ER_TOO_LONG_IDENT
+CREATE TABLE t1(a INT PRIMARY KEY, b INT,
+FOREIGN KEY(b) REFERENCES name5678901234567890123456789012345678901234567890123456789012345.t2(a));
+--error ER_WRONG_TABLE_NAME
+CREATE TABLE t1(a INT PRIMARY KEY, b INT,
+FOREIGN KEY(b) REFERENCES name5678901234567890123456789012345678901234567890123456789012345(a));
+--error ER_WRONG_COLUMN_NAME
+CREATE TABLE t1(a INT PRIMARY KEY, b INT,
+FOREIGN KEY(b) REFERENCES t2(name5678901234567890123456789012345678901234567890123456789012345));
+
+SET @@foreign_key_checks= DEFAULT;
+
+--echo #
+--echo # Bug#24666169: I_S.TABLE_CONSTRAINTS.CONSTRAINT_NAME IS NOT UPDATED
+--echo #               AFTER RENAME TABLE
+--echo #
+
+SET @@foreign_key_checks= 1;
+
+--echo #
+--echo # Tests for FK name behavior.
+
+CREATE TABLE t1(c1 INT PRIMARY KEY);
+CREATE TABLE t2(c1 INT, FOREIGN KEY (c1) REFERENCES t1(c1));
+
+ALTER TABLE t2 RENAME TO t3;
+SHOW CREATE TABLE t3;
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO t3 VALUES(1);
+
+ALTER TABLE t3 RENAME TO t4, ALGORITHM= INPLACE;
+SHOW CREATE TABLE t4;
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO t4 VALUES(1);
+
+# TODO: COPY does not work properly, see Bug#25467454
+ALTER TABLE t4 RENAME TO t5; #, ALGORITHM= COPY;
+SHOW CREATE TABLE t5;
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO t5 VALUES(1);
+
+RENAME TABLE t5 to t6;
+SHOW CREATE TABLE t6;
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO t6 VALUES(1);
+
+DROP TABLE t6, t1;
+
+--echo #
+--echo # Tests of FK name generation
+
+CREATE TABLE t1(a INT PRIMARY KEY);
+CREATE TABLE t2(a INT, b INT, FOREIGN KEY(a) REFERENCES t1(a));
+SELECT constraint_name FROM information_schema.referential_constraints
+  WHERE table_name = 't2' ORDER BY constraint_name;
+SELECT constraint_name FROM information_schema.table_constraints
+  WHERE table_name = 't2' ORDER BY constraint_name;
+
+--echo # Add FK
+ALTER TABLE t2 ADD FOREIGN KEY(b) REFERENCES t1(a);
+SELECT constraint_name FROM information_schema.referential_constraints
+  WHERE table_name = 't2' ORDER BY constraint_name;
+SELECT constraint_name FROM information_schema.table_constraints
+  WHERE table_name = 't2' ORDER BY constraint_name;
+
+--echo # Remove first FK and add a new FK.
+ALTER TABLE t2 DROP FOREIGN KEY t2_fk_1;
+ALTER TABLE t2 ADD FOREIGN KEY(a) REFERENCES t1(a);
+SELECT constraint_name FROM information_schema.referential_constraints
+  WHERE table_name = 't2' ORDER BY constraint_name;
+SELECT constraint_name FROM information_schema.table_constraints
+  WHERE table_name = 't2' ORDER BY constraint_name;
+
+--echo # Rename table in different ways.
+ALTER TABLE t2 RENAME TO t3;
+SELECT constraint_name FROM information_schema.referential_constraints
+  WHERE table_name = 't3' ORDER BY constraint_name;
+SELECT constraint_name FROM information_schema.table_constraints
+  WHERE table_name = 't3' ORDER BY constraint_name;
+ALTER TABLE t3 RENAME TO t4, ALGORITHM= INPLACE;
+SELECT constraint_name FROM information_schema.referential_constraints
+  WHERE table_name = 't4' ORDER BY constraint_name;
+SELECT constraint_name FROM information_schema.table_constraints
+  WHERE table_name = 't4' ORDER BY constraint_name;
+# COPY does not work properly, see Bug#25467454
+ALTER TABLE t4 RENAME TO t5; #, ALGORITHM= COPY;
+SELECT constraint_name FROM information_schema.referential_constraints
+  WHERE table_name = 't5' ORDER BY constraint_name;
+SELECT constraint_name FROM information_schema.table_constraints
+  WHERE table_name = 't5' ORDER BY constraint_name;
+RENAME TABLE t5 TO t6;
+SELECT constraint_name FROM information_schema.referential_constraints
+  WHERE table_name = 't6' ORDER BY constraint_name;
+SELECT constraint_name FROM information_schema.table_constraints
+  WHERE table_name = 't6' ORDER BY constraint_name;
+
+--echo # Simulate dump+restore and test rename
+DROP TABLE t6;
+CREATE TABLE `t6` (
+  `a` int(11) DEFAULT NULL,
+  `b` int(11) DEFAULT NULL,
+  KEY `b` (`b`),
+  KEY `a` (`a`),
+  CONSTRAINT `t6_fk_2` FOREIGN KEY (`b`) REFERENCES `t1` (`a`),
+  CONSTRAINT `t6_fk_3` FOREIGN KEY (`a`) REFERENCES `t1` (`a`)
+) ENGINE=Dstore DEFAULT CHARSET=latin1;
+SELECT constraint_name FROM information_schema.referential_constraints
+  WHERE table_name = 't6' ORDER BY constraint_name;
+SELECT constraint_name FROM information_schema.table_constraints
+  WHERE table_name = 't6' ORDER BY constraint_name;
+RENAME TABLE t6 TO t2;
+SELECT constraint_name FROM information_schema.referential_constraints
+  WHERE table_name = 't2' ORDER BY constraint_name;
+SELECT constraint_name FROM information_schema.table_constraints
+  WHERE table_name = 't2' ORDER BY constraint_name;
+
+--echo # Remove all FKs and add one back
+ALTER TABLE t2 DROP FOREIGN KEY t2_fk_2, DROP FOREIGN KEY t2_fk_3;
+ALTER TABLE t2 ADD FOREIGN KEY(a) REFERENCES t1(a);
+SELECT constraint_name FROM information_schema.referential_constraints
+  WHERE table_name = 't2' ORDER BY constraint_name;
+SELECT constraint_name FROM information_schema.table_constraints
+  WHERE table_name = 't2' ORDER BY constraint_name;
+
+--echo # Add a foreign key with close to generated name
+ALTER TABLE t2 ADD CONSTRAINT t3_fk_2 FOREIGN KEY(b) REFERENCES t1(a);
+SELECT constraint_name FROM information_schema.referential_constraints
+  WHERE table_name = 't2' ORDER BY constraint_name;
+SELECT constraint_name FROM information_schema.table_constraints
+  WHERE table_name = 't2' ORDER BY constraint_name;
+
+--echo # Then rename so that the given name now matches a generated name
+RENAME TABLE t2 TO t3;
+SELECT constraint_name FROM information_schema.referential_constraints
+  WHERE table_name = 't3' ORDER BY constraint_name;
+SELECT constraint_name FROM information_schema.table_constraints
+  WHERE table_name = 't3' ORDER BY constraint_name;
+
+--echo # Finally rename it again. The given name is now seen as generated and renamed.
+RENAME TABLE t3 TO t4;
+SELECT constraint_name FROM information_schema.referential_constraints
+  WHERE table_name = 't4' ORDER BY constraint_name;
+SELECT constraint_name FROM information_schema.table_constraints
+  WHERE table_name = 't4' ORDER BY constraint_name;
+DROP TABLE t4;
+
+--echo # Make a foreign key with given name matching a generated name
+CREATE TABLE t2(a INT, b INT);
+ALTER TABLE t2 ADD CONSTRAINT t2_fk_1 FOREIGN KEY(a) REFERENCES t1(a);
+# Then add a new FK with generated name
+ALTER TABLE t2 ADD FOREIGN KEY(b) REFERENCES t1(a);
+SELECT constraint_name FROM information_schema.referential_constraints
+  WHERE table_name = 't2' ORDER BY constraint_name;
+SELECT constraint_name FROM information_schema.table_constraints
+  WHERE table_name = 't2' ORDER BY constraint_name;
+DROP TABLE t2;
+
+--echo # Test FK name case sensitivity
+CREATE TABLE t2(a INT, b INT);
+ALTER TABLE t2 ADD CONSTRAINT FK FOREIGN KEY(a) REFERENCES t1(a);
+SELECT constraint_name FROM information_schema.referential_constraints
+  WHERE table_name = 't2' ORDER BY constraint_name;
+SELECT constraint_name FROM information_schema.table_constraints
+  WHERE table_name = 't2' ORDER BY constraint_name;
+
+--error ER_DUP_KEYNAME
+ALTER TABLE t2 ADD CONSTRAINT fk FOREIGN KEY(b) REFERENCES t1(a);
+ALTER TABLE t2 DROP FOREIGN KEY FK;
+
+--echo # Name matching generated name, but different case.
+ALTER TABLE t2 ADD CONSTRAINT T2_FK_1 FOREIGN KEY(a) REFERENCES t1(a);
+--error ER_FK_DUP_NAME
+ALTER TABLE t2 ADD FOREIGN KEY(b) REFERENCES t1(a);
+ALTER TABLE t2 DROP FOREIGN KEY T2_FK_1;
+DROP TABLE t2;
+
+--echo # Check long FK generated names due to long table names.
+CREATE TABLE t2 (a INT, FOREIGN KEY (a) REFERENCES t1(a));
+RENAME TABLE t2 TO t12345678901234567890123456789012345678901234567890123456;
+SELECT constraint_name FROM information_schema.referential_constraints
+  WHERE table_name = 't12345678901234567890123456789012345678901234567890123456'
+  ORDER BY constraint_name;
+SELECT constraint_name FROM information_schema.table_constraints
+  WHERE table_name = 't12345678901234567890123456789012345678901234567890123456'
+  ORDER BY constraint_name;
+DROP TABLE t12345678901234567890123456789012345678901234567890123456;
+CREATE TABLE t123456789012345678901234567890123456789012345678901234567890123(
+  a INT, CONSTRAINT fk FOREIGN KEY (a) REFERENCES t1(a));
+DROP TABLE t123456789012345678901234567890123456789012345678901234567890123;
+
+DROP TABLE t1;
+
+--echo # FK Referencing virtual column
+CREATE TABLE t1(a INT PRIMARY KEY,
+                b INT GENERATED ALWAYS AS (a+1) VIRTUAL UNIQUE);
+--error ER_FK_CANNOT_USE_VIRTUAL_COLUMN
+CREATE TABLE t2(a INT, FOREIGN KEY (a) REFERENCES t1(b));
+CREATE TABLE t2(a INT);
+--error ER_FK_CANNOT_USE_VIRTUAL_COLUMN
+ALTER TABLE t2 ADD FOREIGN KEY(a) REFERENCES t1(b);
+DROP TABLE t1, t2;
+
+--echo # FK on generated stored column
+CREATE TABLE t1(a INT PRIMARY KEY);
+CREATE TABLE t2(a INT, b INT GENERATED ALWAYS AS (a+1) STORED UNIQUE);
+
+CREATE TABLE t3(a INT, b INT GENERATED ALWAYS AS (a+1) STORED UNIQUE,
+                FOREIGN KEY (b) REFERENCES t1(a));
+ALTER TABLE t2 ADD FOREIGN KEY(b) REFERENCES t1(a);
+ALTER TABLE t2 DROP FOREIGN KEY t2_fk_1;
+DROP TABLE t3;
+
+--error ER_WRONG_FK_OPTION_FOR_GENERATED_COLUMN
+CREATE TABLE t3(a INT, b INT GENERATED ALWAYS AS (a+1) STORED UNIQUE,
+                FOREIGN KEY (b) REFERENCES t1(a) ON UPDATE CASCADE);
+--error ER_WRONG_FK_OPTION_FOR_GENERATED_COLUMN
+ALTER TABLE t2 ADD FOREIGN KEY(b) REFERENCES t1(a) ON UPDATE CASCADE;
+
+--error ER_WRONG_FK_OPTION_FOR_GENERATED_COLUMN
+CREATE TABLE t3(a INT, b INT GENERATED ALWAYS AS (a+1) STORED UNIQUE,
+                FOREIGN KEY (b) REFERENCES t1(a) ON DELETE SET NULL);
+--error ER_WRONG_FK_OPTION_FOR_GENERATED_COLUMN
+ALTER TABLE t2 ADD FOREIGN KEY(b) REFERENCES t1(a) ON DELETE SET NULL;
+
+--error ER_WRONG_FK_OPTION_FOR_GENERATED_COLUMN
+CREATE TABLE t3(a INT, b INT GENERATED ALWAYS AS (a+1) STORED UNIQUE,
+                FOREIGN KEY (b) REFERENCES t1(a) ON UPDATE SET NULL);
+--error ER_WRONG_FK_OPTION_FOR_GENERATED_COLUMN
+ALTER TABLE t2 ADD FOREIGN KEY(b) REFERENCES t1(a) ON UPDATE SET NULL;
+
+--echo # FK on Base column of generated stored column.
+CREATE TABLE t3(a INT, b INT GENERATED ALWAYS AS (a+1) STORED UNIQUE,
+                FOREIGN KEY (a) REFERENCES t1(a));
+ALTER TABLE t2 ADD FOREIGN KEY(a) REFERENCES t1(a);
+ALTER TABLE t2 DROP FOREIGN KEY t2_fk_1;
+DROP TABLE t3;
+
+--disable_query_log
+call mtr.add_suppression("Foreign key constraint on the base column of a stored generated column cannot use CASCADE, SET NULL, or SET DEFAULT as ON UPDATE or ON DELETE referential actions, table name *");
+--enable_query_log
+
+--error ER_CANNOT_ADD_FOREIGN
+CREATE TABLE t3(a INT, b INT GENERATED ALWAYS AS (a+1) STORED UNIQUE,
+                FOREIGN KEY (a) REFERENCES t1(a) ON UPDATE CASCADE);
+--error ER_CANNOT_ADD_FOREIGN
+ALTER TABLE t2 ADD FOREIGN KEY(a) REFERENCES t1(a) ON UPDATE CASCADE;
+
+--error ER_CANNOT_ADD_FOREIGN
+CREATE TABLE t3(a INT, b INT GENERATED ALWAYS AS (a+1) STORED UNIQUE,
+                FOREIGN KEY (a) REFERENCES t1(a) ON DELETE SET NULL);
+--error ER_CANNOT_ADD_FOREIGN
+ALTER TABLE t2 ADD FOREIGN KEY(a) REFERENCES t1(a) ON DELETE SET NULL;
+
+--error ER_CANNOT_ADD_FOREIGN
+CREATE TABLE t3(a INT, b INT GENERATED ALWAYS AS (a+1) STORED UNIQUE,
+                FOREIGN KEY (a) REFERENCES t1(a) ON UPDATE SET NULL);
+--error ER_CANNOT_ADD_FOREIGN
+ALTER TABLE t2 ADD FOREIGN KEY(a) REFERENCES t1(a) ON UPDATE SET NULL;
+
+DROP TABLE t2, t1;
+
+--echo # FK on virtual column not supported.
+CREATE TABLE t1(a INT PRIMARY KEY);
+
+--error ER_FK_CANNOT_USE_VIRTUAL_COLUMN
+CREATE TABLE t2(a INT, b INT GENERATED ALWAYS AS (a+1) VIRTUAL UNIQUE,
+                FOREIGN KEY(b) REFERENCES t1(a));
+
+CREATE TABLE t2(a INT, b INT GENERATED ALWAYS AS (a+1) VIRTUAL UNIQUE);
+--error ER_FK_CANNOT_USE_VIRTUAL_COLUMN
+ALTER TABLE t2 ADD FOREIGN KEY (b) REFERENCES t1(a);
+DROP TABLE t2;
+
+CREATE TABLE t2(a INT, b INT, FOREIGN KEY(b) REFERENCES t1(a));
+--error ER_UNSUPPORTED_ACTION_ON_GENERATED_COLUMN
+ALTER TABLE t2 MODIFY COLUMN b INT GENERATED ALWAYS AS (a+1) VIRTUAL;
+
+DROP TABLE t2, t1;
+
+--echo # Trying to drop columns used in multi-column FKs.
+CREATE TABLE t1(a INT PRIMARY KEY, b INT, INDEX(a, b));
+
+CREATE TABLE t2(a INT, b INT, FOREIGN KEY(a, b) REFERENCES t1(a, b));
+--error ER_FK_COLUMN_CANNOT_DROP
+ALTER TABLE t2 DROP COLUMN a;
+--error ER_FK_COLUMN_CANNOT_DROP
+ALTER TABLE t2 DROP COLUMN b;
+DROP TABLE t2;
+
+--echo # Use explicitly named index to check where index name is != column name.
+CREATE TABLE t2(a INT, b INT, INDEX idx(a, b),
+                FOREIGN KEY(a, b) REFERENCES t1(a, b));
+--error ER_FK_COLUMN_CANNOT_DROP
+ALTER TABLE t2 DROP COLUMN a;
+--error ER_FK_COLUMN_CANNOT_DROP
+ALTER TABLE t2 DROP COLUMN b;
+DROP TABLE t2, t1;
+
+--echo # Index with prefix cannot be used for supporting FK.
+CREATE TABLE t1 (PK VARCHAR(100) PRIMARY KEY);
+CREATE TABLE t2 (FK VARCHAR(100), FOREIGN KEY(FK) REFERENCES t1 (PK), KEY(FK));
+--error ER_DROP_INDEX_FK
+ALTER TABLE t2 DROP INDEX FK, ADD INDEX FK2(FK(10));
+DROP TABLE t2, t1;
+
+# Combinations of foreign key on base columns for virtual columns,
+# together with index on this virtual columns is not yet supported.
+# Temporarily disabling it. Will be enabled once supprot is in place.
+
+--echo # Bug#25817660: Combination of virtual index, foreign key and trigger
+--echo #               result in assert failure
+
+#CREATE TABLE t1(fld1 INT NOT NULL PRIMARY KEY);
+#CREATE TRIGGER t1_bi BEFORE INSERT ON t1 FOR EACH ROW SET @a:=0;
+#CREATE TABLE t2(fld1 INT NOT NULL, fld2 INT AS (fld1) VIRTUAL, KEY(fld2),
+#		FOREIGN KEY(fld1) REFERENCES t1(fld1) ON UPDATE CASCADE);
+
+#INSERT INTO t1 VALUES(1);
+#INSERT INTO t2 VALUES(1, DEFAULT);
+
+#UPDATE t1 SET fld1= 2;
+
+#SELECT * FROM t1;
+#SELECT * FROM t2;
+
+#--echo # The same test but with server restart before UPDATE.
+#--echo # Triggers different code path in InnoDB which was not
+#--echo # covered by original fix for the bug.
+
+#--source include/restart_mysqld.inc
+#UPDATE t1 SET fld1= 3;
+
+#SELECT * FROM t1;
+#SELECT * FROM t2;
+
+#DROP TABLE t2;
+#DROP TABLE t1;
+
+
+--echo #
+--echo # Bug#20021917: WORK AROUND FOR CHARSET CONVERSION WITH FKS CAN
+--echo # RESULT IN WRONG DATA
+--echo #
+
+CREATE TABLE t1 (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) UNIQUE);
+
+CREATE TABLE t2 (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100), fname VARCHAR(100), FOREIGN KEY (fname) REFERENCES t1 (name) ON UPDATE CASCADE ON DELETE CASCADE);
+
+SHOW CREATE TABLE t1;
+SHOW CREATE TABLE t2;
+
+--error ER_FK_INCOMPATIBLE_COLUMNS
+ALTER TABLE t2 CONVERT TO CHARACTER SET latin1;
+
+SET foreign_key_checks= OFF;
+
+ALTER TABLE t2 CONVERT TO CHARACTER SET latin1;
+
+SET foreign_key_checks= ON;
+SHOW CREATE TABLE t1;
+SHOW CREATE TABLE t2;
+
+INSERT INTO t1(name) VALUES ('test1');
+INSERT INTO t2(name, fname) VALUES ('test1', 'test1');
+UPDATE t1 SET name=CONCAT('St', UNHEX('C3A5') ,'le') WHERE name = 'test1';
+
+--echo # Should not get any rows here
+SELECT t1.name, t2.fname FROM t1, t2 WHERE t1.name <> t2.fname;
+
+DROP TABLE t2;
+DROP TABLE t1;
+
+
+--echo #
+--echo # WL#6049: Meta-data locking for FOREIGN KEY tables
+--echo #
+--echo # Test case to check MDL on tables related by FK constraints.
+--echo #
+
+--enable_connect_log
+CREATE TABLE grandparent (gpf1 INT PRIMARY KEY, gpf2 INT);
+
+INSERT INTO grandparent VALUES (1,10), (2,20);
+ 
+CREATE TABLE parent (
+  pf1 INT PRIMARY KEY, pf2 INT, sleep_dummy INT,
+  CONSTRAINT pc1 FOREIGN KEY (pf2) REFERENCES grandparent (gpf1)
+  ON DELETE NO ACTION ON UPDATE NO ACTION);
+
+INSERT INTO parent VALUES (1,1,0), (2,2,0);
+
+CREATE TABLE child (
+  cf1 INT PRIMARY KEY, cf2 INT,
+  CONSTRAINT cc1 FOREIGN KEY (cf2) REFERENCES parent (pf1)
+  ON DELETE NO ACTION ON UPDATE NO ACTION);
+
+INSERT INTO child VALUES (1,1), (2,2);
+
+--connect (con_A,localhost,root,,test)
+--let $conA=`SELECT CONNECTION_ID()`
+SET @@session.lock_wait_timeout= 1;
+--send UPDATE parent SET pf2= 2, sleep_dummy= SLEEP(2)
+
+--connection default
+--replace_result $conA <conA>
+--eval set @conA_id = $conA
+let $wait_condition=
+  SELECT COUNT(*) = 1
+    FROM information_schema.processlist
+    WHERE id = @conA_id AND state LIKE 'user sleep';
+--echo # Waiting for connection A to start udpate
+--source include/wait_condition.inc
+
+SET @@session.lock_wait_timeout= 1;
+
+--echo # Updates not invoving the FK related column should succeed
+UPDATE grandparent SET gpf2= 4;
+UPDATE grandparent SET gpf2= 100 * gpf1;
+
+--echo # DDL on child will have conflicting locks.
+--error ER_LOCK_WAIT_TIMEOUT
+ALTER TABLE child ADD COLUMN (i INT);
+SET @@session.lock_wait_timeout= DEFAULT;
+
+--connection con_A
+--reap
+--disconnect con_A
+--source include/wait_until_disconnected.inc
+
+--connection default
+--disable_connect_log
+
+DROP TABLE child;
+DROP TABLE parent;
+DROP TABLE grandparent;
+
+
+--echo #
+--echo # Systemic test coverage for metadata locks related to foreign
+--echo # keys acquired by various DDL statements.
+--echo #
+--echo # Also provides coverage for data-dictionary cache invalidation
+--echo # and cases when we fail to acquire necessary locks.
+
+--enable_connect_log
+SET @old_lock_wait_timeout= @@lock_wait_timeout;
+connect (con1, localhost, root,,);
+connect (con2, localhost, root,,);
+SET @old_lock_wait_timeout= @@lock_wait_timeout;
+connection default;
+
+--echo #
+--echo # 1) CREATE TABLE
+--echo #
+
+--echo # 1.1) CREATE TABLE must acquire X lock on parent table
+--echo #      (if table doesn't exist).
+CREATE TABLE parent (pk INT PRIMARY KEY);
+
+connection con1;
+BEGIN;
+SELECT * FROM parent;
+
+connection default;
+--send CREATE TABLE child (fk INT, FOREIGN KEY (fk) REFERENCES parent(pk));
+
+connection con1;
+--echo # Wait until CREATE TABLE is blocked by con1 and then resume it.
+let $wait_condition=
+  SELECT COUNT(*) = 1 FROM information_schema.processlist
+  WHERE state = "Waiting for table metadata lock" AND
+        info LIKE "CREATE TABLE child%";
+--source include/wait_condition.inc
+COMMIT;
+
+connection default;
+--echo # Reap CREATE TABLE
+--reap
+
+--echo # 1.2) CREATE TABLE for existing table should not acquire X lock
+--echo #      parent table
+connection con1;
+BEGIN;
+SELECT * FROM parent;
+
+connection default;
+CREATE TABLE IF NOT EXISTS child (fk INT, FOREIGN KEY (fk) REFERENCES parent(pk));
+
+connection con1;
+COMMIT;
+
+connection default;
+DROP TABLE child;
+
+--echo # 1.3) CREATE TABLE which acquires lock on parent table and fails
+--echo #      due to lock timeout.
+connection con1;
+BEGIN;
+SELECT * FROM parent;
+
+connection default;
+SET @@lock_wait_timeout= 1;
+--error ER_LOCK_WAIT_TIMEOUT
+CREATE TABLE child (fk INT, FOREIGN KEY (fk) REFERENCES parent(pk));
+SET @@lock_wait_timeout= @old_lock_wait_timeout;
+
+connection con1;
+COMMIT;
+
+connection default;
+DROP TABLE parent;
+
+--echo # 1.4) CREATE TABLE which adds parent to orphan child must acquire X
+--echo #      on child table.
+
+SET FOREIGN_KEY_CHECKS=0;
+CREATE TABLE child (fk INT, FOREIGN KEY (fk) REFERENCES parent(pk));
+SET FOREIGN_KEY_CHECKS=1;
+
+connection con1;
+BEGIN;
+SELECT * FROM child;
+
+connection default;
+--send CREATE TABLE parent (pk INT PRIMARY KEY);
+
+connection con1;
+--echo # Wait until CREATE TABLE is blocked by con1 and then resume it.
+let $wait_condition=
+  SELECT COUNT(*) = 1 FROM information_schema.processlist
+  WHERE state = "Waiting for table metadata lock" AND
+        info LIKE "CREATE TABLE parent%";
+--source include/wait_condition.inc
+COMMIT;
+
+connection default;
+--echo # Reap CREATE TABLE
+--reap
+
+--echo # 1.5) CREATE TABLE for existing table must not acquire X lock
+--echo #      on child table
+connection con1;
+BEGIN;
+SELECT * FROM child;
+
+connection default;
+CREATE TABLE IF NOT EXISTS parent (pk INT PRIMARY KEY);
+
+connection con1;
+COMMIT;
+
+connection default;
+SET FOREIGN_KEY_CHECKS=0;
+DROP TABLE parent;
+SET FOREIGN_KEY_CHECKS=1;
+
+--echo # 1.6) CREATE TABLE which acquires lock on child table and fails
+--echo #      due to lock timeout.
+connection con1;
+BEGIN;
+SELECT * FROM child;
+
+connection default;
+SET @@lock_wait_timeout= 1;
+--error ER_LOCK_WAIT_TIMEOUT
+CREATE TABLE parent (pk INT PRIMARY KEY);
+SET @@lock_wait_timeout= @old_lock_wait_timeout;
+
+connection con1;
+COMMIT;
+
+connection default;
+DROP TABLE child;
+
+--echo # 1.7) CREATE TABLE which adds FK should invalidate entries
+--echo #      in TC/TDC and DD caches for the parent table.
+CREATE TABLE parent (pk INT PRIMARY KEY);
+SELECT * FROM parent;
+
+connection con1;
+CREATE TABLE child (fk INT, FOREIGN KEY (fk) REFERENCES parent(pk) ON DELETE CASCADE);
+
+connection default;
+LOCK TABLE parent WRITE;
+
+connection con1;
+--echo # The above LOCK TABLE should have noticed new table definition
+--echo # and acquired SNRW lock on child table.
+--send SELECT * FROM child;
+
+connection default;
+--echo # Wait until SELECT is blocked by default connection and then resume it.
+let $wait_condition=
+  SELECT COUNT(*) = 1 FROM information_schema.processlist
+  WHERE state = "Waiting for table metadata lock" AND
+        info LIKE "SELECT * FROM child";
+--source include/wait_condition.inc
+UNLOCK TABLES;
+
+connection con1;
+--echo # Reap SELECT
+--reap
+
+connection default;
+DROP TABLES child, parent;
+
+
+--echo #
+--echo # 2) CREATE TABLE ... LIKE
+--echo #
+
+--echo # 2.1) CREATE TABLE ... LIKE doesn't copy foreign keys
+--echo #      so it should not any locks on FK parent tables.
+CREATE TABLE parent (pk INT PRIMARY KEY);
+CREATE TABLE child (fk INT, FOREIGN KEY (fk) REFERENCES parent(pk));
+
+connection con1;
+LOCK TABLES parent WRITE;
+
+connection default;
+CREATE TABLE child2 LIKE child;
+
+connection con1;
+UNLOCK TABLES;
+
+connection default;
+
+--echo # 2.2) CREATE TABLE LIKE which adds parent to orphan child must
+--echo #      acquire X on child table.
+SET FOREIGN_KEY_CHECKS=0;
+DROP TABLES child2, parent;
+SET FOREIGN_KEY_CHECKS=1;
+CREATE TABLE parent_source (pk INT PRIMARY KEY);
+
+connection con1;
+BEGIN;
+SELECT * FROM child;
+
+connection default;
+--send CREATE TABLE parent LIKE parent_source;
+
+connection con1;
+--echo # Wait until CREATE TABLE is blocked by con1 and then resume it.
+let $wait_condition=
+  SELECT COUNT(*) = 1 FROM information_schema.processlist
+  WHERE state = "Waiting for table metadata lock" AND
+        info LIKE "CREATE TABLE parent%";
+--source include/wait_condition.inc
+COMMIT;
+
+connection default;
+--echo # Reap CREATE TABLE
+--reap
+
+--echo # 2.3) CREATE TABLE LIKE for existing table must not acquire X lock
+--echo #      on child table
+connection con1;
+BEGIN;
+SELECT * FROM child;
+
+connection default;
+CREATE TABLE IF NOT EXISTS parent LIKE parent_source;
+
+connection con1;
+COMMIT;
+
+connection default;
+SET FOREIGN_KEY_CHECKS=0;
+DROP TABLE parent;
+SET FOREIGN_KEY_CHECKS=1;
+
+--echo # 2.4) CREATE TABLE LIKE which acquires lock on child table and fails
+--echo #      due to lock timeout.
+connection con1;
+BEGIN;
+SELECT * FROM child;
+
+connection default;
+SET @@lock_wait_timeout= 1;
+--error ER_LOCK_WAIT_TIMEOUT
+CREATE TABLE IF NOT EXISTS parent LIKE parent_source;
+SET @@lock_wait_timeout= @old_lock_wait_timeout;
+
+connection con1;
+COMMIT;
+
+connection default;
+DROP TABLE child, parent_source;
+
+
+--echo #
+--echo # 3) CREATE TABLE ... SELECT
+--echo #
+
+--echo # 3.1) CREATE TABLE ... SELECT must start by acquiring SU lock on parent
+--echo #      table (if table doesn't exist).
+CREATE TABLE parent (pk INT PRIMARY KEY);
+CREATE TABLE source (fk INT);
+INSERT INTO source VALUES (NULL);
+
+connection con1;
+BEGIN;
+SELECT * FROM source FOR UPDATE;
+
+connection default;
+SET @saved_binlog_format= @@SESSION.binlog_format;
+SET @@SESSION.binlog_format=STATEMENT;
+--send CREATE TABLE child (fk INT, FOREIGN KEY (fk) REFERENCES parent(pk)) SELECT fk FROM source;
+
+connection con1;
+--echo # Wait until CREATE TABLE is blocked by con1 because of row locks.
+let $wait_condition=
+  SELECT COUNT(*) = 1 FROM information_schema.processlist
+  WHERE state = "System lock" AND
+        info LIKE "CREATE TABLE child%";
+--source include/wait_condition.inc
+
+--echo # Demonstrate that CREATE TABLE holds SU lock on parent
+--echo # which allows DML but not DDL.
+INSERT INTO parent VALUES (1);
+
+connection con2;
+SET @@lock_wait_timeout= 1;
+--error ER_LOCK_WAIT_TIMEOUT
+ALTER TABLE parent ADD COLUMN a INT;
+SET @@lock_wait_timeout= @old_lock_wait_timeout;
+
+connection con1;
+--echo # Resume CREATE TABLE.
+COMMIT;
+
+connection default;
+--echo # Reap CREATE TABLE
+--reap
+SET SESSION binlog_format= @saved_binlog_format;
+
+DROP TABLES child, source;
+
+--echo # 3.2) CREATE TABLE ... SELECT should upgrade SU lock on parent to X
+--echo #      before commit (i.e eventually X lock should be acquired).
+connection con1;
+BEGIN;
+SELECT * FROM parent;
+
+connection default;
+SET @@SESSION.binlog_format=STATEMENT;
+--send CREATE TABLE child (fk INT, FOREIGN KEY (fk) REFERENCES parent(pk)) SELECT NULL AS fk;
+
+connection con1;
+--echo # Wait until CREATE TABLE is blocked by con1 and then resume it.
+let $wait_condition=
+  SELECT COUNT(*) = 1 FROM information_schema.processlist
+  WHERE state = "Waiting for table metadata lock" AND
+        info LIKE "CREATE TABLE child%";
+--source include/wait_condition.inc
+COMMIT;
+
+connection default;
+--echo # Reap CREATE TABLE
+--reap
+SET SESSION binlog_format= @saved_binlog_format;
+
+--echo # 3.3) CREATE TABLE ... SELECT for existing table should not acquire
+--echo #      any locks on parent table.
+connection con1;
+CREATE TABLE parent2 (pk INT PRIMARY KEY);
+LOCK TABLE parent2 WRITE;
+
+connection default;
+SET @@SESSION.binlog_format=STATEMENT;
+CREATE TABLE IF NOT EXISTS child (fk INT, FOREIGN KEY (fk) REFERENCES parent2(pk)) SELECT NULL AS fk;
+SET SESSION binlog_format= @saved_binlog_format;
+
+connection con1;
+UNLOCK TABLES;
+
+connection default;
+DROP TABLE child;
+DROP TABLE parent2;
+
+--echo # 3.4) CREATE TABLE ... SELECT which tries to acquire SU lock on parent
+--echo #      table and fails due to lock timeout.
+connection con1;
+LOCK TABLE parent WRITE;
+
+connection default;
+SET @@lock_wait_timeout= 1;
+SET @@SESSION.binlog_format=STATEMENT;
+--error ER_LOCK_WAIT_TIMEOUT
+CREATE TABLE child (fk INT, FOREIGN KEY (fk) REFERENCES parent(pk)) SELECT NULL AS fk;
+SET SESSION binlog_format= @saved_binlog_format;
+SET @@lock_wait_timeout= @old_lock_wait_timeout;
+
+connection con1;
+UNLOCK TABLES;
+
+
+--echo # 3.5) CREATE TABLE ... SELECT which tries to upgrade to X lock on
+--echo #      parent table and fails due to lock timeout.
+BEGIN;
+SELECT * FROM parent;
+
+connection default;
+SET @@lock_wait_timeout= 1;
+SET @@SESSION.binlog_format=STATEMENT;
+--error ER_LOCK_WAIT_TIMEOUT
+CREATE TABLE child (fk INT, FOREIGN KEY (fk) REFERENCES parent(pk)) SELECT NULL AS fk;
+SET SESSION binlog_format= @saved_binlog_format;
+SET @@lock_wait_timeout= @old_lock_wait_timeout;
+
+connection con1;
+COMMIT;
+
+connection default;
+DROP TABLE parent;

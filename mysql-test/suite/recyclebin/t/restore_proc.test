@@ -1,0 +1,265 @@
+--source include/not_have_only_dstore.inc
+#
+# Test for restore func of recyclebin
+#
+
+--echo # Connect to master
+connection default;
+set global rds_recycle_bin_mode=ON;
+
+create database db_recycle;
+create database db_recycle_2;
+
+create user normal_1@'%' identified by 'pass';
+create user normal_2@'%' identified by 'pass';
+create user normal_3@'%' identified by 'pass';
+create user normal_4@'%' identified by 'pass';
+create user normal_5@'%' identified by 'pass';
+
+grant all on db_recycle.* to normal_1@'%' ;
+grant all on __recyclebin__.* to normal_1@'%' ;
+
+grant select on db_recycle.* to normal_2@'%' ;
+grant all on db_recycle_2.* to normal_2@'%' ;
+grant select on __recyclebin__.* to normal_2@'%' ;
+
+grant select on db_recycle.* to normal_3@'%' ;
+grant select on db_recycle_2.* to normal_3@'%' ;
+grant all on __recyclebin__.* to normal_3@'%' ;
+
+grant select on db_recycle.* to normal_4@'%' ;
+grant all on db_recycle_2.* to normal_4@'%' ;
+grant select,alter,drop on __recyclebin__.* to normal_4@'%' ;
+
+grant select on db_recycle.* to normal_5@'%' ;
+grant select,insert,create on db_recycle_2.* to normal_5@'%' ;
+grant all on __recyclebin__.* to normal_5@'%' ;
+
+connect(m_normal_1, 127.0.0.1, normal_1, pass, db_recycle, $SERVER_MYPORT_1);
+connect(m_normal_2, 127.0.0.1, normal_2, pass, db_recycle, $SERVER_MYPORT_1);
+connect(m_normal_3, 127.0.0.1, normal_3, pass, db_recycle, $SERVER_MYPORT_1);
+connect(m_normal_4, 127.0.0.1, normal_4, pass, db_recycle, $SERVER_MYPORT_1);
+connect(m_normal_5, 127.0.0.1, normal_5, pass, db_recycle, $SERVER_MYPORT_1);
+
+--echo ------------------------------------------------------
+--echo 1. Normal
+--echo    -- Restore the table after drop;
+--echo ------------------------------------------------------
+
+connection m_normal_1;
+
+use db_recycle;
+create table t1(id int);
+drop table t1;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+show grants;
+--replace_result $t1_name_in_recyclebin t1
+eval call dbms_recyclebin.restore_table('$t1_name_in_recyclebin');
+show tables;
+
+drop table t1;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+--replace_result $t1_name_in_recyclebin t1
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+eval call dbms_recyclebin.restore_table('$t1_name_in_recyclebin', '__recyclebin__', 't2');
+
+--replace_result $t1_name_in_recyclebin t1
+eval call dbms_recyclebin.restore_table('$t1_name_in_recyclebin', 'db_recycle', 't2');
+show tables;
+
+--echo # Connect to master
+connection default;
+set rds_recycle_bin_mode=OFF;
+drop table db_recycle.t2;
+
+--echo ------------------------------------------------------
+--echo 2. DB and Table check
+--echo    -- The origin table must exists and the dest table must not exists;
+--echo ------------------------------------------------------
+
+connection m_normal_1;
+use db_recycle;
+create table t1(id int);
+drop table t1;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+--error ER_NATIVE_PROC_PARAMETER_MISMATCH
+eval call dbms_recyclebin.restore_table("", "", "");
+--error ER_NATIVE_PROC_PARAMETER_MISMATCH
+eval call dbms_recyclebin.restore_table("__innodb_table_not_exist", "", "new_table");
+--error ER_NATIVE_PROC_PARAMETER_MISMATCH
+eval call dbms_recyclebin.restore_table("__innodb_table_not_exist", "new_db", "");
+
+# new table has been existed
+create table t1(id int);
+--replace_result $t1_name_in_recyclebin t1
+--error ER_TABLE_EXISTS_ERROR
+eval call dbms_recyclebin.restore_table('$t1_name_in_recyclebin');
+
+# donot has priviledge on new table
+--replace_result $t1_name_in_recyclebin t1
+--error ER_TABLEACCESS_DENIED_ERROR
+eval call dbms_recyclebin.restore_table('$t1_name_in_recyclebin', 'db_recycle_2', 't1');
+
+show tables;
+
+--replace_result $t1_name_in_recyclebin t1
+eval call dbms_recyclebin.purge_table('$t1_name_in_recyclebin');
+
+connection default;
+set rds_recycle_bin_mode=OFF;
+drop table db_recycle.t1;
+
+--echo ------------------------------------------------------
+--echo 3. Privileges
+--echo    -- Restore table need ALTER_ACL | DROP_ACL of origin table and
+--echo       INSERT_ACL | CREATE_ACL of dest table;
+--echo ------------------------------------------------------
+
+connection m_normal_1;
+use db_recycle;
+create table t1(id int);
+create table t2(id int);
+drop table t1;
+drop table t2;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+# Donot has INSERT_ACL | CREATE_ACL of dest table 
+--replace_result $t1_name_in_recyclebin t1
+--error ER_TABLEACCESS_DENIED_ERROR
+eval call dbms_recyclebin.restore_table("$t1_name_in_recyclebin", "db_recycle_2", "t1");
+
+connection m_normal_2;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+# Donot has ALTER_ACL | DROP_ACL of origin table
+--replace_result $t1_name_in_recyclebin t1
+--error ER_TABLEACCESS_DENIED_ERROR
+eval call dbms_recyclebin.restore_table("$t1_name_in_recyclebin", "db_recycle_2", "t1");
+
+connection m_normal_3;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+# Donot has INSERT_ACL | CREATE_ACL of dest table
+--replace_result $t1_name_in_recyclebin t1
+--error ER_TABLEACCESS_DENIED_ERROR
+eval call dbms_recyclebin.restore_table("$t1_name_in_recyclebin", "db_recycle_2", "t2");
+
+connection m_normal_4;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t2_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 2);
+--replace_result $t2_name_in_recyclebin t2
+eval call dbms_recyclebin.restore_table("$t2_name_in_recyclebin", "db_recycle_2", "t1");
+
+connection m_normal_5;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+--replace_result $t1_name_in_recyclebin t1
+eval call dbms_recyclebin.restore_table("$t1_name_in_recyclebin", "db_recycle_2", "t2");
+
+connection default;
+use db_recycle_2;
+show tables;
+set rds_recycle_bin_mode=OFF;
+drop table t1;
+drop table t2;
+
+--echo ------------------------------------------------------
+--echo 4. Rename table in __recyclebin__ directly
+--echo ------------------------------------------------------
+
+connection m_normal_1;
+use db_recycle;
+create table t1(id int);
+drop table t1;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+show grants;
+use __recyclebin__;
+# Rename table in __recyclebin__ directly
+--replace_result $t1_name_in_recyclebin t1
+--error ER_DBACCESS_DENIED_ERROR
+eval rename table `$t1_name_in_recyclebin` to db_recycle.t1;
+
+# Rename table in __recyclebin__ directly
+--replace_result $t1_name_in_recyclebin t1
+--error ER_DBACCESS_DENIED_ERROR
+eval rename table `$t1_name_in_recyclebin` to db_recycle.t2;
+
+--replace_result $t1_name_in_recyclebin t1
+eval call dbms_recyclebin.purge_table('$t1_name_in_recyclebin');
+
+--echo ------------------------------------------------------
+--echo 5. Foreign key
+--echo ------------------------------------------------------
+
+connection m_normal_1;
+use db_recycle;
+
+CREATE TABLE p1 (
+    id INT NOT NULL,
+    PRIMARY KEY (id)
+) ENGINE=INNODB;
+
+CREATE TABLE c1 (
+    id INT,
+    parent_id INT,
+    INDEX par_ind (parent_id),
+    FOREIGN KEY (parent_id)
+        REFERENCES p1(id)
+        ON DELETE CASCADE
+) ENGINE=INNODB;
+
+drop table c1;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $c1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+--replace_result $c1_name_in_recyclebin c1
+eval call dbms_recyclebin.restore_table('$c1_name_in_recyclebin');
+show create table c1;
+
+--echo # Connect to master
+connection default;
+set rds_recycle_bin_mode=OFF;
+use db_recycle;
+drop table p1;
+drop table c1;
+
+--echo ------------------------------------------------------
+--echo ** Clean up **
+--echo ------------------------------------------------------
+
+connection default;
+set global rds_recycle_bin_mode=OFF;
+drop database db_recycle;
+drop database db_recycle_2;
+drop user normal_1@'%';
+drop user normal_2@'%';
+drop user normal_3@'%';
+drop user normal_4@'%';
+drop user normal_5@'%';
+
+disconnect m_normal_1;
+disconnect m_normal_2;
+disconnect m_normal_3;
+disconnect m_normal_4;
+disconnect m_normal_5;

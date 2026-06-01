@@ -1,0 +1,297 @@
+SET @saved_rds_extended_partitions_enabled=@@rds_extended_partitions_enabled;
+SET global rds_extended_partitions_enabled = true;
+#
+# BUG2023112803703: Multiple MAXVALUEs are not allowed
+#
+CREATE TABLE t0 (
+a int,
+b int
+)
+PARTITION BY RANGE (a)
+SUBPARTITION BY RANGE (b)
+(PARTITION p0 VALUES LESS THAN (10)
+(SUBPARTITION q1 VALUES LESS THAN (5),
+SUBPARTITION q2 VALUES LESS THAN (MAXVALUE)),
+PARTITION p3 VALUES LESS THAN (20)
+(SUBPARTITION q7 VALUES LESS THAN (10),
+SUBPARTITION q8 VALUES LESS THAN (MAXVALUE)));
+INSERT INTO t0 VALUES(1,2),(3,5),(15, 20);
+SELECT * FROM t0 ORDER BY 1;
+a	b
+1	2
+3	5
+15	20
+DROP TABLE t0;
+CREATE TABLE t1 (
+a int DEFAULT NULL,
+b int  DEFAULT NULL
+)
+PARTITION BY RANGE (a)
+(PARTITION p1 VALUES LESS THAN(10),
+PARTITION p2 VALUES LESS THAN(MAXVALUE),
+PARTITION p3 VALUES LESS THAN (20));
+ERROR HY000: MAXVALUE can only be used in last partition definition
+CREATE TABLE t1 (
+a int DEFAULT NULL,
+b int  DEFAULT NULL
+)
+PARTITION BY RANGE (a)
+(PARTITION p1 VALUES LESS THAN(10),
+PARTITION p2 VALUES LESS THAN(MAXVALUE),
+PARTITION p3 VALUES LESS THAN (MAXVALUE));
+ERROR HY000: MAXVALUE can only be used in last partition definition
+CREATE TABLE t0 (
+a int DEFAULT NULL,
+b int  DEFAULT NULL
+)
+PARTITION BY RANGE (a)
+SUBPARTITION BY RANGE (b)
+(PARTITION p0 VALUES LESS THAN (10)
+(SUBPARTITION q1 VALUES LESS THAN (MAXVALUE),
+SUBPARTITION q2 VALUES LESS THAN (30)),
+PARTITION p3 VALUES LESS THAN (20)
+(SUBPARTITION q7 VALUES LESS THAN (10),
+SUBPARTITION q8 VALUES LESS THAN (MAXVALUE)));
+ERROR HY000: MAXVALUE can only be used in last partition definition
+CREATE TABLE t0 (
+a int DEFAULT NULL,
+b int  DEFAULT NULL
+)
+PARTITION BY RANGE (a)
+SUBPARTITION BY RANGE (b)
+(PARTITION p0 VALUES LESS THAN (10)
+(SUBPARTITION q1 VALUES LESS THAN (MAXVALUE),
+SUBPARTITION q2 VALUES LESS THAN (MAXVALUE)),
+PARTITION p3 VALUES LESS THAN (20)
+(SUBPARTITION q7 VALUES LESS THAN (10),
+SUBPARTITION q8 VALUES LESS THAN (MAXVALUE)));
+ERROR HY000: MAXVALUE can only be used in last partition definition
+CREATE TABLE t1(id int, a int, b int) PARTITION BY range(a)
+SUBPARTITION BY RANGE(b) (
+PARTITION p1 VALUES LESS THAN(9) (SUBPARTITION p1_sp1 VALUES LESS THAN(9), SUBPARTITION p1_sp2 VALUES LESS THAN(MAXVALUE)),
+PARTITION p2 VALUES LESS THAN(19) (SUBPARTITION p2_sp1 VALUES LESS THAN(10),SUBPARTITION p2_sp2 VALUES LESS THAN(20)));
+INSERT INTO t1 VALUES(1,11,21);
+ERROR HY000: Table has no partition for value 11
+INSERT INTO t1 VALUES(1,8,21);
+DROP TABLE t1;
+#
+# BUG2023120800329: Prune partitions on list columns-range columns is incorrect
+#
+CREATE TABLE t1 (
+int_col int,
+date_col date,
+varchar_col varchar(255),
+char_col char(4)
+)PARTITION BY LIST COLUMNS(varchar_col,int_col)
+SUBPARTITION BY RANGE COLUMNS(char_col,date_col)
+(
+PARTITION p0 VALUES in ((NULL,NULL))(
+SUBPARTITION sub1 VALUES LESS THAN('aabb',MAXVALUE),
+SUBPARTITION sub2 VALUES LESS THAN('aacd',MAXVALUE),
+SUBPARTITION sub3 VALUES LESS THAN('ab',MAXVALUE)
+),
+PARTITION p1 VALUES in (('ab',84))(
+SUBPARTITION sub4 VALUES LESS THAN('aabb',MAXVALUE),
+SUBPARTITION sub5 VALUES LESS THAN('aacd',MAXVALUE),
+SUBPARTITION sub6 VALUES LESS THAN('ab',MAXVALUE)
+),
+PARTITION p2 VALUES in (('bbbbbbbbbb', 121))(
+SUBPARTITION sub7 VALUES LESS THAN('aabb',MAXVALUE),
+SUBPARTITION sub8 VALUES LESS THAN('aacd',MAXVALUE),
+SUBPARTITION sub9 VALUES LESS THAN('ab',MAXVALUE)
+),
+PARTITION p3 VALUES in (('bbba2', 2147483647))(
+SUBPARTITION sub10 VALUES LESS THAN('aabb',MAXVALUE),
+SUBPARTITION sub11 VALUES LESS THAN('aacd',MAXVALUE),
+SUBPARTITION sub12 VALUES LESS THAN('ab',MAXVALUE)
+)
+);
+INSERT INTO t1 VALUES(121,'1998-01-03','bbbbbbbbbb','aabb');
+EXPLAIN SELECT * FROM t1 WHERE char_col IN ('aabb','aacd') AND date_col IN ('1998-01-03');
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_sub1,p0_sub2,p1_sub4,p1_sub5,p2_sub7,p2_sub8,p3_sub10,p3_sub11	ALL	NULL	NULL	NULL	NULL	1	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`int_col` AS `int_col`,`test`.`t1`.`date_col` AS `date_col`,`test`.`t1`.`varchar_col` AS `varchar_col`,`test`.`t1`.`char_col` AS `char_col` from `test`.`t1` where ((`test`.`t1`.`date_col` = DATE'1998-01-03') and (`test`.`t1`.`char_col` in ('aabb','aacd')))
+SELECT * FROM t1 WHERE char_col IN ('aabb','aacd') AND date_col IN ('1998-01-03');
+int_col	date_col	varchar_col	char_col
+121	1998-01-03	bbbbbbbbbb	aabb
+CREATE TABLE t2 AS SELECT * FROM t1;
+SELECT * FROM t2 WHERE char_col IN ('aabb','aacd') AND date_col IN ('1998-01-03');
+int_col	date_col	varchar_col	char_col
+121	1998-01-03	bbbbbbbbbb	aabb
+DROP TABLE t1, t2;
+CREATE TABLE tbl_1 (
+id_col int NOT NULL,
+int_col int NOT NULL,
+char_col char(8) NOT NULL,
+varchar_col varchar(255) NOT NULL
+) PARTITION BY LIST (id_col % 4) SUBPARTITION BY LIST COLUMNS(char_col,int_col,varchar_col) (
+PARTITION p0 VALUES in (0)(
+SUBPARTITION sub0 VALUES in (('ab', 84, 'ab'),('ab', 100, 'ab'),('ab', 131, 'ab')),
+SUBPARTITION sub1 VALUES in (('aaa2', 2147483647, 'bbba2'),('aacd', 101, 'bbbbbbbbcd'),('aaaa', -2147483648, 'bbbbbbbbbaa'),('aabb', 121, 'bbbbbbbbbb'),('aabb', 15, 'bbbbbbbbbb'),('aabb', 22, 'bbbbbbbbbb'),('aabb', 39, 'bbbbbbbbbb'),('aabb', 43, 'bbbbbbbbbb'),('aabb', 58, 'bbbbbbbbbb'),('aabb', 65, 'bbbbbbbbbb'),('aabb', 76, 'bbbbbbbbbb'),('aabb', 80, 'bbbbbbbbbb'),('aabb', 99, 'bbbbbbbbbb'),('aabb', 100, 'bbbbbbbbbb'))
+),
+PARTITION p1 VALUES in (1)(
+SUBPARTITION sub2 VALUES in (('ab', 84, 'ab'),('ab', 100, 'ab'),('ab', 131, 'ab')),
+SUBPARTITION sub3 VALUES in (('aaa2', 2147483647, 'bbba2'),('aacd', 101, 'bbbbbbbbcd'),('aaaa', -2147483648, 'bbbbbbbbbaa'),('aabb', 121, 'bbbbbbbbbb'),('aabb', 15, 'bbbbbbbbbb'),('aabb', 22, 'bbbbbbbbbb'),('aabb', 39, 'bbbbbbbbbb'),('aabb', 43, 'bbbbbbbbbb'),('aabb', 58, 'bbbbbbbbbb'),('aabb', 65, 'bbbbbbbbbb'),('aabb', 76, 'bbbbbbbbbb'),('aabb', 80, 'bbbbbbbbbb'),('aabb', 99, 'bbbbbbbbbb'),('aabb', 100, 'bbbbbbbbbb'))
+),
+PARTITION p2 VALUES in (2)(
+SUBPARTITION sub4 VALUES in (('ab', 84, 'ab'),('ab', 100, 'ab'),('ab', 131, 'ab')),
+SUBPARTITION sub5 VALUES in (('aaa2', 2147483647, 'bbba2'),('aacd', 101, 'bbbbbbbbcd'),('aaaa', -2147483648, 'bbbbbbbbbaa'),('aabb', 121, 'bbbbbbbbbb'),('aabb', 15, 'bbbbbbbbbb'),('aabb', 22, 'bbbbbbbbbb'),('aabb', 39, 'bbbbbbbbbb'),('aabb', 43, 'bbbbbbbbbb'),('aabb', 58, 'bbbbbbbbbb'),('aabb', 65, 'bbbbbbbbbb'),('aabb', 76, 'bbbbbbbbbb'),('aabb', 80, 'bbbbbbbbbb'),('aabb', 99, 'bbbbbbbbbb'),('aabb', 100, 'bbbbbbbbbb'))
+),
+PARTITION p3 VALUES in (3)(
+SUBPARTITION sub6 VALUES in (('ab', 84, 'ab'),('ab', 100, 'ab'),('ab', 131, 'ab')),
+SUBPARTITION sub7 VALUES in (('aaa2', 2147483647, 'bbba2'),('aacd', 101, 'bbbbbbbbcd'),('aaaa', -2147483648, 'bbbbbbbbbaa'),('aabb', 121, 'bbbbbbbbbb'),('aabb', 15, 'bbbbbbbbbb'),('aabb', 22, 'bbbbbbbbbb'),('aabb', 39, 'bbbbbbbbbb'),('aabb', 43, 'bbbbbbbbbb'),('aabb', 58, 'bbbbbbbbbb'),('aabb', 65, 'bbbbbbbbbb'),('aabb', 76, 'bbbbbbbbbb'),('aabb', 80, 'bbbbbbbbbb'),('aabb', 99, 'bbbbbbbbbb'),('aabb', 100, 'bbbbbbbbbb'))
+)
+);
+EXPLAIN SELECT id_col FROM tbl_1 WHERE char_col IN ('aaa2') and id_col IN (66,68,95);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tbl_1	p0_sub1,p2_sub5,p3_sub7	ALL	NULL	NULL	NULL	NULL	1	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`tbl_1`.`id_col` AS `id_col` from `test`.`tbl_1` where ((`test`.`tbl_1`.`char_col` = 'aaa2') and (`test`.`tbl_1`.`id_col` in (66,68,95)))
+DROP TABLE tbl_1;
+#
+# BUG2024082007281: alter table .. algorithm=inplace with list columns - range columns subpartition table failed.
+#
+CREATE TABLE t1 (
+int_col int DEFAULT NULL,
+date_col date DEFAULT NULL,
+char_col char(4) NOT NULL,
+varchar_col varchar(255) DEFAULT NULL,
+tinytext_col tinytext,
+longblob_col longblob,
+json_col json DEFAULT NULL
+) PARTITION BY LIST COLUMNS(varchar_col,int_col)
+SUBPARTITION BY RANGE COLUMNS(char_col,date_col)
+(
+PARTITION p0 VALUES in ((NULL,NULL))(
+SUBPARTITION sub1 VALUES LESS THAN('aabb',MAXVALUE)
+)
+);
+ALTER TABLE t1 DROP tinytext_col,algorithm=inplace;
+DROP TABLE t1;
+CREATE TABLE t1 (
+int_col int DEFAULT NULL,
+date_col date DEFAULT NULL,
+char_col char(4) NOT NULL,
+varchar_col varchar(255) DEFAULT NULL,
+tinytext_col tinytext,
+longblob_col longblob,
+json_col json DEFAULT NULL
+) PARTITION BY LIST COLUMNS(varchar_col,int_col)
+SUBPARTITION BY KEY(char_col,date_col)
+(
+PARTITION p0 VALUES in ((NULL,NULL))
+);
+ALTER TABLE t1 DROP tinytext_col,algorithm=inplace;
+DROP TABLE t1;
+CREATE TABLE t1 (
+int_col int DEFAULT NULL,
+date_col date DEFAULT NULL,
+char_col char(4) NOT NULL,
+varchar_col varchar(255) DEFAULT NULL,
+tinytext_col tinytext,
+longblob_col longblob,
+json_col json DEFAULT NULL
+) PARTITION BY KEY(char_col,date_col);
+ALTER TABLE t1 DROP tinytext_col,algorithm=inplace;
+DROP TABLE t1;
+#
+#BUG2025072128186
+#For a partitioned table with a secondary partition type of RANGE COLUMNS,
+#when the WHERE clause of a query includes the use of the IN predicate on the
+#subpartition key and the IN predicate contains more than one value,
+#partition pruning is incorrect.
+#
+CREATE TABLE `biz_operation_log` (
+`id` varchar(50)  NOT NULL,
+`addr_id` varchar(50)  DEFAULT NULL ,
+`addr_code` varchar(50)  DEFAULT NULL,
+`company_id` varchar(50)  NOT NULL ,
+`tent_id` varchar(11)  NOT NULL ,
+`crt_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+PRIMARY KEY (`id`,`crt_time`,`tent_id`,`company_id`),
+KEY `addr_id` (`addr_id`) USING BTREE,
+KEY `addr_code` (`addr_code`) USING BTREE,
+KEY `idx_tentid_crttime_companyid` (`tent_id`,`crt_time`,`company_id`) USING BTREE
+) PARTITION BY RANGE  COLUMNS(crt_time)
+SUBPARTITION BY RANGE  COLUMNS(tent_id,company_id)
+(PARTITION p2024 VALUES LESS THAN ('2024-01-01')
+(SUBPARTITION p_2024_p248_100001001002001 VALUES LESS THAN ('248','100001001002002'),
+SUBPARTITION p_2024_p248_100001001002005 VALUES LESS THAN ('248','100001001002006'),
+SUBPARTITION p_2024_p248_100001001003001 VALUES LESS THAN ('248','100001001003002'),
+SUBPARTITION p_2024_p248_100001001003002 VALUES LESS THAN ('248','100001001003003'),
+SUBPARTITION p_2024_p248_100001001003003 VALUES LESS THAN ('248','100001001003004'),
+SUBPARTITION p_2024_p248_100001001004001 VALUES LESS THAN ('248','100001001004002'),
+SUBPARTITION p_2024_p249_100002001001 VALUES LESS THAN ('249','100002001002'),
+SUBPARTITION p_2024_p_max VALUES LESS THAN (MAXVALUE,MAXVALUE)),
+PARTITION p2025 VALUES LESS THAN ('2025-01-01')
+(SUBPARTITION p_2025_p248_100001001002001 VALUES LESS THAN ('248','100001001002002'),
+SUBPARTITION p_2025_p248_100001001002005 VALUES LESS THAN ('248','100001001002006'),
+SUBPARTITION p_2025_p248_100001001003001 VALUES LESS THAN ('248','100001001003002'),
+SUBPARTITION p_2025_p248_100001001003002 VALUES LESS THAN ('248','100001001003003'),
+SUBPARTITION p_2025_p248_100001001003003 VALUES LESS THAN ('248','100001001003004'),
+SUBPARTITION p_2025_p248_100001001004001 VALUES LESS THAN ('248','100001001004002'),
+SUBPARTITION p_2025_p249_100002001001 VALUES LESS THAN ('249','100002001002'),
+SUBPARTITION p_2025_p_max VALUES LESS THAN (MAXVALUE,MAXVALUE)),
+PARTITION p2026 VALUES LESS THAN ('2026-01-01')
+(SUBPARTITION p_2026_p248_100001001002001 VALUES LESS THAN ('248','100001001002002'),
+SUBPARTITION p_2026_p248_100001001002005 VALUES LESS THAN ('248','100001001002006'),
+SUBPARTITION p_2026_p248_100001001003001 VALUES LESS THAN ('248','100001001003002'),
+SUBPARTITION p_2026_p248_100001001003002 VALUES LESS THAN ('248','100001001003003'),
+SUBPARTITION p_2026_p248_100001001003003 VALUES LESS THAN ('248','100001001003004'),
+SUBPARTITION p_2026_p248_100001001004001 VALUES LESS THAN ('248','100001001004002'),
+SUBPARTITION p_2026_p249_100002001001 VALUES LESS THAN ('249','100002001002'),
+SUBPARTITION p_2026_p_max VALUES LESS THAN (MAXVALUE,MAXVALUE)),
+PARTITION pmax VALUES LESS THAN (MAXVALUE)
+(SUBPARTITION p_max_p248_100001001002001 VALUES LESS THAN ('248','100001001002002'),
+SUBPARTITION p_max_p248_100001001002005 VALUES LESS THAN ('248','100001001002006'),
+SUBPARTITION p_max_p248_100001001003001 VALUES LESS THAN ('248','100001001003002'),
+SUBPARTITION p_max_p248_100001001003002 VALUES LESS THAN ('248','100001001003003'),
+SUBPARTITION p_max_p248_100001001003003 VALUES LESS THAN ('248','100001001003004'),
+SUBPARTITION p_max_p248_100001001004001 VALUES LESS THAN ('248','100001001004002'),
+SUBPARTITION p_max_p249_100002001001 VALUES LESS THAN ('249','100002001002'),
+SUBPARTITION p_max_p_max VALUES LESS THAN (MAXVALUE,MAXVALUE)));
+EXPLAIN
+SELECT count(0)FROM  biz_operation_log log
+WHERE log.crt_time >= '2024-04-09 09:16:06' AND
+log.crt_time <= '2024-07-08 09:16:06' AND
+log.company_id in ('100001001003001', '100001001003002', '100001001003003') AND
+log.tent_id = '248';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	log	p2025_p_2025_p248_100001001003001,p2025_p_2025_p248_100001001003002,p2025_p_2025_p248_100001001003003	index	PRIMARY,addr_id,addr_code,idx_tentid_crttime_companyid	addr_id	203	NULL	1	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(0)` from `test`.`biz_operation_log` `log` where ((`test`.`log`.`tent_id` = '248') and (`test`.`log`.`crt_time` >= TIMESTAMP'2024-04-09 09:16:06') and (`test`.`log`.`crt_time` <= TIMESTAMP'2024-07-08 09:16:06') and (`test`.`log`.`company_id` in ('100001001003001','100001001003002','100001001003003')))
+EXPLAIN
+SELECT count(0)FROM  biz_operation_log log
+WHERE log.company_id in ('100001001003001', '100001001003002', '100001001003003') AND
+log.tent_id = '248';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	log	p2024_p_2024_p248_100001001003001,p2024_p_2024_p248_100001001003002,p2024_p_2024_p248_100001001003003,p2025_p_2025_p248_100001001003001,p2025_p_2025_p248_100001001003002,p2025_p_2025_p248_100001001003003,p2026_p_2026_p248_100001001003001,p2026_p_2026_p248_100001001003002,p2026_p_2026_p248_100001001003003,pmax_p_max_p248_100001001003001,pmax_p_max_p248_100001001003002,pmax_p_max_p248_100001001003003	ref	PRIMARY,addr_id,addr_code,idx_tentid_crttime_companyid	idx_tentid_crttime_companyid	46	const	1	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(0)` from `test`.`biz_operation_log` `log` where ((`test`.`log`.`tent_id` = '248') and (`test`.`log`.`company_id` in ('100001001003001','100001001003002','100001001003003')))
+EXPLAIN
+SELECT count(0)FROM  biz_operation_log log
+WHERE log.company_id in ('100001001003002', '100001001003001', '100001001003003') AND
+log.tent_id = '248';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	log	p2024_p_2024_p248_100001001003001,p2024_p_2024_p248_100001001003002,p2024_p_2024_p248_100001001003003,p2025_p_2025_p248_100001001003001,p2025_p_2025_p248_100001001003002,p2025_p_2025_p248_100001001003003,p2026_p_2026_p248_100001001003001,p2026_p_2026_p248_100001001003002,p2026_p_2026_p248_100001001003003,pmax_p_max_p248_100001001003001,pmax_p_max_p248_100001001003002,pmax_p_max_p248_100001001003003	ref	PRIMARY,addr_id,addr_code,idx_tentid_crttime_companyid	idx_tentid_crttime_companyid	46	const	1	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(0)` from `test`.`biz_operation_log` `log` where ((`test`.`log`.`tent_id` = '248') and (`test`.`log`.`company_id` in ('100001001003002','100001001003001','100001001003003')))
+EXPLAIN
+SELECT count(0)FROM  biz_operation_log log
+WHERE log.company_id in ('100001001003003', '100001001003002', '100001001003001') AND
+log.tent_id = '248';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	log	p2024_p_2024_p248_100001001003001,p2024_p_2024_p248_100001001003002,p2024_p_2024_p248_100001001003003,p2025_p_2025_p248_100001001003001,p2025_p_2025_p248_100001001003002,p2025_p_2025_p248_100001001003003,p2026_p_2026_p248_100001001003001,p2026_p_2026_p248_100001001003002,p2026_p_2026_p248_100001001003003,pmax_p_max_p248_100001001003001,pmax_p_max_p248_100001001003002,pmax_p_max_p248_100001001003003	ref	PRIMARY,addr_id,addr_code,idx_tentid_crttime_companyid	idx_tentid_crttime_companyid	46	const	1	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(0)` from `test`.`biz_operation_log` `log` where ((`test`.`log`.`tent_id` = '248') and (`test`.`log`.`company_id` in ('100001001003003','100001001003002','100001001003001')))
+EXPLAIN
+SELECT count(0)FROM  biz_operation_log log
+WHERE log.company_id in ('100001001003002', '100001001003001') AND
+log.tent_id = '248';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	log	p2024_p_2024_p248_100001001003001,p2024_p_2024_p248_100001001003002,p2025_p_2025_p248_100001001003001,p2025_p_2025_p248_100001001003002,p2026_p_2026_p248_100001001003001,p2026_p_2026_p248_100001001003002,pmax_p_max_p248_100001001003001,pmax_p_max_p248_100001001003002	ref	PRIMARY,addr_id,addr_code,idx_tentid_crttime_companyid	idx_tentid_crttime_companyid	46	const	1	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(0)` from `test`.`biz_operation_log` `log` where ((`test`.`log`.`tent_id` = '248') and (`test`.`log`.`company_id` in ('100001001003002','100001001003001')))
+DROP TABLE biz_operation_log;
+SET global rds_extended_partitions_enabled = @saved_rds_extended_partitions_enabled;

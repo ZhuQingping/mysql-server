@@ -1,0 +1,203 @@
+SET DEBUG_SYNC = 'RESET';
+call mtr.add_suppression("The row log file size.*");
+call mtr.add_suppression("Append row log item fail*");
+call mtr.add_suppression("Row log dml for index fail*");
+SHOW VARIABLES LIKE "dstore_row_log_buffer_size";
+Variable_name	Value
+dstore_row_log_buffer_size	65536
+CREATE DATABASE IF NOT EXISTS db1;
+use db1;
+CREATE TABLE t1 (
+id INT AUTO_INCREMENT PRIMARY KEY,
+name VARCHAR(110),
+age INT,
+email VARCHAR(110)
+);
+CREATE PROCEDURE insert_fixed_length_records(
+IN n INT, 
+IN name_len INT, 
+IN email_len INT
+)
+BEGIN
+DECLARE i INT DEFAULT 0;
+DECLARE fixed_name VARCHAR(110);
+DECLARE fixed_email VARCHAR(110);
+SET fixed_name = REPEAT('a', LEAST(name_len, 110));
+SET fixed_email = REPEAT('b', LEAST(email_len, 110));
+WHILE i < n DO
+INSERT INTO t1 (name, age, email)
+VALUES (fixed_name, FLOOR(RAND() * 100), fixed_email);
+SET i = i + 1;
+END WHILE;
+END //
+call db1.insert_fixed_length_records(10,1,1);
+##################################################################
+# 1. Test without dml                                            #
+##################################################################
+ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+COUNT(*)
+10
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+##################################################################
+# 2. Test with dml                                               #
+##################################################################
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+call db1.insert_fixed_length_records(1,1,1);
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+COUNT(*)
+11
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+##################################################################
+# 3. Test with dml                                               #
+##################################################################
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+call db1.insert_fixed_length_records(512,9,9);
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+COUNT(*)
+523
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+##################################################################
+# 4. Test with dml(exactly fills one block)                      #
+##################################################################
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+call db1.insert_fixed_length_records(511,1,102);
+call db1.insert_fixed_length_records(1,1,98);
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+COUNT(*)
+1035
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+##################################################################
+# 5. Test with dml(exactly fills one block)                      #
+##################################################################
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+call db1.insert_fixed_length_records(511,1,102);
+call db1.insert_fixed_length_records(1,1,98);
+call db1.insert_fixed_length_records(1,1,1);
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+COUNT(*)
+1548
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+##################################################################
+# 6. Test with dml(need merge)                                   #
+##################################################################
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+call db1.insert_fixed_length_records(512,9,98);
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+COUNT(*)
+2060
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+##################################################################
+# 7. Test with dml(exactly fills two block)                      #
+##################################################################
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+call db1.insert_fixed_length_records(511,1,102);
+call db1.insert_fixed_length_records(1,1,98);
+call db1.insert_fixed_length_records(511,1,102);
+call db1.insert_fixed_length_records(1,1,98);
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+COUNT(*)
+3084
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+##################################################################
+# 8. Test with dml(need merge)                                   #
+##################################################################
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+call db1.insert_fixed_length_records(511,1,102);
+call db1.insert_fixed_length_records(1,1,98);
+call db1.insert_fixed_length_records(512,9,98);
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+COUNT(*)
+4108
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+##################################################################
+# 9. Test with dml(need merge)                                   #
+##################################################################
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+call db1.insert_fixed_length_records(512,9,98);
+call db1.insert_fixed_length_records(512,9,98);
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+COUNT(*)
+5132
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+##################################################################
+# 10. Test with concurrent dml                                   #
+##################################################################
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+SET DEBUG_SYNC = 'dstore_row_log_append_after_get_blockptr SIGNAL dml_waiting WAIT_FOR dml_continue';
+call db1.insert_fixed_length_records(1,9,98);;
+call db1.insert_fixed_length_records(1,9,98);;
+SET DEBUG_SYNC = 'now SIGNAL dml_continue';
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+COUNT(*)
+5134
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+##################################################################
+# 11. Test with dml                                              #
+##################################################################
+SET GLOBAL dstore_row_log_file_max_size = 65537;
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL row_log_init_finished WAIT_FOR ddl_continue';
+ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;;
+SET DEBUG_SYNC = "now WAIT_FOR row_log_init_finished";
+call db1.insert_fixed_length_records(512,9,98);
+select * from INFORMATION_SCHEMA.DSTORE_ONLINE_DDL_PROGRESS;
+THREAD_ID	TABLE_NAME	INDEX_NAME	STATUS	REPLAYED_ROW_LOG_ITEMS	TOTAL_ROW_LOG_ITEMS
+#	./db1/t1	idx_name_email	Creating index	0	512
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+SELECT COUNT(*) FROM db1.t1 FORCE INDEX (idx_name_email);
+COUNT(*)
+5646
+ALTER TABLE db1.t1 DROP INDEX idx_name_email;
+##################################################################
+# 12. Test with dml                                              #
+##################################################################
+SET GLOBAL dstore_row_log_file_max_size = 65536;
+SET DEBUG_SYNC = 'dstore_row_log_replay_before SIGNAL start_logging WAIT_FOR ddl_continue';
+ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+call db1.insert_fixed_length_records(511,1,102);
+call db1.insert_fixed_length_records(1,1,98);
+call db1.insert_fixed_length_records(1,1,98);;
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+ERROR HY000: Creating index 'idx_name_email' required more than 'dstore_row_log_file_max_size' bytes of modification log. Please try again.
+SHOW CREATE TABLE db1.t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(110) DEFAULT NULL,
+  `age` int DEFAULT NULL,
+  `email` varchar(110) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=Dstore AUTO_INCREMENT=6160 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SELECT COUNT(*) FROM db1.t1;
+COUNT(*)
+6159
+SET GLOBAL dstore_row_log_file_max_size = default;
+drop database db1;

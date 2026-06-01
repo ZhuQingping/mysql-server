@@ -1,0 +1,742 @@
+DROP DATABASE IF EXISTS test_cond_table;
+CREATE DATABASE test_cond_table;
+USE test_cond_table;
+CREATE TABLE test_cond_table (
+id BIGINT AUTO_INCREMENT PRIMARY KEY,
+c1 INT NOT NULL,
+c2 INT,
+c3 INT,
+INDEX idx_c1 (c1),
+INDEX idx_c2 (c2),
+INDEX idx_c3 (c3),
+INDEX idx_c1_c2_c3 (c1, c2, c3)
+) ENGINE=Dstore;
+CALL insert_combinations();
+ANALYZE TABLE test_cond_table
+UPDATE HISTOGRAM ON c1, c2, c3
+WITH 100 BUCKETS;
+Table	Op	Msg_type	Msg_text
+test_cond_table.test_cond_table	histogram	status	Histogram statistics created for column 'c1'.
+test_cond_table.test_cond_table	histogram	status	Histogram statistics created for column 'c2'.
+test_cond_table.test_cond_table	histogram	status	Histogram statistics created for column 'c3'.
+# 1. Test NULL condition.
+SELECT COUNT(1) FROM test_cond_table WHERE c2 IS NULL;
+COUNT(1)
+10
+# 2. Test NOT NULL condition.
+SELECT COUNT(1) FROM test_cond_table WHERE c2 IS NOT NULL;
+COUNT(1)
+1000
+# 3. Test GT condition.
+SELECT COUNT(1) FROM test_cond_table WHERE c1 > 5;
+COUNT(1)
+505
+# 4. Test GE condition.
+SELECT COUNT(1) FROM test_cond_table WHERE c1 >= 5;
+COUNT(1)
+606
+# 5. Test LT condition.
+SELECT COUNT(1) FROM test_cond_table WHERE c1 < 5;
+COUNT(1)
+404
+# 6. Test LE condition.
+SELECT COUNT(1) FROM test_cond_table WHERE c1 <= 5;
+COUNT(1)
+505
+# 7. Test COMP condition.
+SELECT COUNT(1) FROM test_cond_table WHERE c1 <= 5 AND c1 > 2;
+COUNT(1)
+303
+SELECT COUNT(1) FROM test_cond_table WHERE c1 < 5 AND c1 > 2;
+COUNT(1)
+202
+SELECT COUNT(1) FROM test_cond_table WHERE c1 < 5 AND c1 >= 2;
+COUNT(1)
+303
+SELECT COUNT(1) FROM test_cond_table WHERE c1 <= 5 AND c1 >= 2;
+COUNT(1)
+404
+# 8. Test NE condition.
+SELECT COUNT(1) FROM test_cond_table WHERE c1 != 5;
+COUNT(1)
+909
+# 9. Test EQ condition.
+SELECT COUNT(1) FROM test_cond_table WHERE c1 = 5;
+COUNT(1)
+101
+# 10. Test BETWEEN condition.
+SELECT COUNT(1) FROM test_cond_table WHERE c1 BETWEEN 2 and 6;
+COUNT(1)
+505
+# 11. Test not BETWEEN condition.
+SELECT COUNT(1) FROM test_cond_table WHERE c1 NOT BETWEEN 2 and 6;
+COUNT(1)
+505
+# 12. Test IN condition.
+SELECT COUNT(1) FROM test_cond_table WHERE c1 IN (1,3,5);
+COUNT(1)
+303
+DROP DATABASE test_cond_table;
+DROP DATABASE IF EXISTS multi_column_index;
+CREATE DATABASE multi_column_index;
+USE multi_column_index;
+CREATE TABLE multi_column_index (
+id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+-- TINYINT (-128 to 127 or 0 to 255)
+c01 TINYINT,                    -- Default signed
+c02 TINYINT UNSIGNED,           -- Unsigned
+c03 TINYINT(1),                -- Commonly used for boolean
+c04 TINYINT UNSIGNED ZEROFILL,  -- Zero-fill
+c05 TINYINT NOT NULL DEFAULT 127,      -- Maximum signed value
+c06 TINYINT UNSIGNED NOT NULL DEFAULT 255,  -- Maximum unsigned value
+-- SMALLINT (-32768 to 32767 or 0 to 65535)
+c07 SMALLINT,                   -- Default signed
+c08 SMALLINT UNSIGNED,          -- Unsigned
+c09 SMALLINT(4),               -- Display width
+c10 SMALLINT UNSIGNED ZEROFILL, -- Zero-fill
+c11 SMALLINT NOT NULL DEFAULT 32767,    -- Maximum signed value
+c12 SMALLINT UNSIGNED NOT NULL DEFAULT 65535,  -- Maximum unsigned value
+-- MEDIUMINT (-8388608 to 8388607 or 0 to 16777215)
+c13 MEDIUMINT,                  -- Default signed
+c14 MEDIUMINT UNSIGNED,         -- Unsigned
+c15 MEDIUMINT(7),              -- Display width
+c16 MEDIUMINT UNSIGNED ZEROFILL,-- Zero-fill
+c17 MEDIUMINT NOT NULL DEFAULT 8388607,  -- Maximum signed value
+c18 MEDIUMINT UNSIGNED NOT NULL DEFAULT 16777215,  -- Maximum unsigned value
+-- INT (-2147483648 to 2147483647 or 0 to 4294967295)
+c19 INT,                        -- Default signed
+c20 INT UNSIGNED,               -- Unsigned
+c21 INT(9),                    -- Display width
+c22 INT UNSIGNED ZEROFILL,      -- Zero-fill
+c23 INT NOT NULL DEFAULT 2147483647,  -- Maximum signed value
+c24 INT UNSIGNED NOT NULL DEFAULT 4294967295,  -- Maximum unsigned value
+-- BIGINT (-9223372036854775808 to 9223372036854775807 or 0 to 18446744073709551615)
+c25 BIGINT,                     -- Default signed
+c26 BIGINT UNSIGNED,            -- Unsigned
+c27 BIGINT(18),               -- Display width
+c28 BIGINT UNSIGNED ZEROFILL,   -- Zero-fill
+c29 BIGINT NOT NULL DEFAULT 9223372036854775807,  -- Maximum signed value
+c30 BIGINT UNSIGNED NOT NULL DEFAULT 18446744073709551615,  -- Maximum unsigned value
+-- Combined indexes for each integer type group
+INDEX idx_tinyint_combined (c01, c02, c03, c04, c05, c06),
+INDEX idx_smallint_combined (c07, c08, c09, c10, c11, c12),
+INDEX idx_mediumint_combined (c13, c14, c15, c16, c17, c18),
+INDEX idx_int_combined (c19, c20, c21, c22, c23, c24),
+INDEX idx_bigint_combined (c25, c26, c27, c28, c29, c30)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+# Generate test data.
+CALL generate_int_data();
+result
+Successfully inserted 1000 rows
+ANALYZE TABLE multi_column_index
+UPDATE HISTOGRAM ON
+c01, c02, c03, c04, c05, c06,
+c07, c08, c09, c10, c11, c12,
+c13, c14, c15, c16, c17, c18,
+c19, c20, c21, c22, c23, c24,
+c25, c26, c27, c28, c29, c30
+WITH 128 BUCKETS;
+Table	Op	Msg_type	Msg_text
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c01'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c02'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c03'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c04'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c05'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c06'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c07'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c08'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c09'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c10'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c11'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c12'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c13'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c14'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c15'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c16'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c17'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c18'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c19'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c20'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c21'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c22'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c23'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c24'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c25'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c26'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c27'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c28'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c29'.
+multi_column_index.multi_column_index	histogram	status	Histogram statistics created for column 'c30'.
+# Test for composite index.
+# =====================================================
+# Index (c01,c02,c03,c04,c05,c06) - TINYINT related
+# =====================================================
+# Full range query on all columns
+SELECT COUNT(1)
+FROM multi_column_index
+WHERE
+(
+c01 > -128 OR
+(c01 = -128 AND c02 > 0) OR
+(c01 = -128 AND c02 = 0 AND c03 > 0) OR
+(c01 = -128 AND c02 = 0 AND c03 = 0 AND c04 > 0) OR
+(c01 = -128 AND c02 = 0 AND c03 = 0 AND c04 = 0 AND c05 > -128) OR
+(c01 = -128 AND c02 = 0 AND c03 = 0 AND c04 = 0 AND c05 = -128 AND c06 >= 0)
+)
+AND
+(
+c01 < 127 OR
+(c01 = 127 AND c02 < 255) OR
+(c01 = 127 AND c02 = 255 AND c03 < 1) OR
+(c01 = 127 AND c02 = 255 AND c03 = 1 AND c04 < 255) OR
+(c01 = 127 AND c02 = 255 AND c03 = 1 AND c04 = 255 AND c05 < 127) OR
+(c01 = 127 AND c02 = 255 AND c03 = 1 AND c04 = 255 AND c05 = 127 AND c06 <= 255)
+);
+COUNT(1)
+1000
+# =====================================================
+# Index (c07,c08,c09,c10,c11,c12) - SMALLINT related
+# =====================================================
+# Full range query on all columns
+SELECT COUNT(1)
+FROM multi_column_index
+WHERE
+(
+c07 > -32768 OR
+(c07 = -32768 AND c08 > 0) OR
+(c07 = -32768 AND c08 = 0 AND c09 > -32768) OR
+(c07 = -32768 AND c08 = 0 AND c09 = -32768 AND c10 > 0) OR
+(c07 = -32768 AND c08 = 0 AND c09 = -32768 AND c10 = 0 AND c11 > -32768) OR
+(c07 = -32768 AND c08 = 0 AND c09 = -32768 AND c10 = 0 AND c11 = -32768 AND c12 >= 0)
+)
+AND
+(
+c07 < 32767 OR
+(c07 = 32767 AND c08 < 65535) OR
+(c07 = 32767 AND c08 = 65535 AND c09 < 32767) OR
+(c07 = 32767 AND c08 = 65535 AND c09 = 32767 AND c10 < 65535) OR
+(c07 = 32767 AND c08 = 65535 AND c09 = 32767 AND c10 = 65535 AND c11 < 32767) OR
+(c07 = 32767 AND c08 = 65535 AND c09 = 32767 AND c10 = 65535 AND c11 = 32767 AND c12 <= 65535)
+);
+COUNT(1)
+1000
+# =====================================================
+# Index (c13,c14,c15,c16,c17,c18) - MEDIUMINT related
+# =====================================================
+# Full range query on all columns
+SELECT COUNT(1)
+FROM multi_column_index
+WHERE
+(
+c13 > -8388608 OR
+(c13 = -8388608 AND c14 > 0) OR
+(c13 = -8388608 AND c14 = 0 AND c15 > -8388608) OR
+(c13 = -8388608 AND c14 = 0 AND c15 = -8388608 AND c16 > 0) OR
+(c13 = -8388608 AND c14 = 0 AND c15 = -8388608 AND c16 = 0 AND c17 > -8388608) OR
+(c13 = -8388608 AND c14 = 0 AND c15 = -8388608 AND c16 = 0 AND c17 = -8388608 AND c18 >= 0)
+)
+AND
+(
+c13 < 8388607 OR
+(c13 = 8388607 AND c14 < 16777215) OR
+(c13 = 8388607 AND c14 = 16777215 AND c15 < 8388607) OR
+(c13 = 8388607 AND c14 = 16777215 AND c15 = 8388607 AND c16 < 16777215) OR
+(c13 = 8388607 AND c14 = 16777215 AND c15 = 8388607 AND c16 = 16777215 AND c17 < 8388607) OR
+(c13 = 8388607 AND c14 = 16777215 AND c15 = 8388607 AND c16 = 16777215 AND c17 = 8388607 AND c18 <= 16777215)
+);
+COUNT(1)
+1000
+# =====================================================
+# Index (c19,c20,c21,c22,c23,c24) - INT related
+# =====================================================
+# Full range query on all columns
+SELECT COUNT(1)
+FROM multi_column_index
+WHERE
+(
+c19 > -2147483648 OR
+(c19 = -2147483648 AND c20 > 0) OR
+(c19 = -2147483648 AND c20 = 0 AND c21 > -2147483648) OR
+(c19 = -2147483648 AND c20 = 0 AND c21 = -2147483648 AND c22 > 0) OR
+(c19 = -2147483648 AND c20 = 0 AND c21 = -2147483648 AND c22 = 0 AND c23 > -2147483648) OR
+(c19 = -2147483648 AND c20 = 0 AND c21 = -2147483648 AND c22 = 0 AND c23 = -2147483648 AND c24 >= 0)
+)
+AND
+(
+c19 < 2147483647 OR
+(c19 = 2147483647 AND c20 < 4294967295) OR
+(c19 = 2147483647 AND c20 = 4294967295 AND c21 < 2147483647) OR
+(c19 = 2147483647 AND c20 = 4294967295 AND c21 = 2147483647 AND c22 < 4294967295) OR
+(c19 = 2147483647 AND c20 = 4294967295 AND c21 = 2147483647 AND c22 = 4294967295 AND c23 < 2147483647) OR
+(c19 = 2147483647 AND c20 = 4294967295 AND c21 = 2147483647 AND c22 = 4294967295 AND c23 = 2147483647 AND c24 <= 4294967295)
+);
+COUNT(1)
+1000
+# =====================================================
+# Index (c25,c26,c27,c28,c29,c30) - BIGINT related
+# =====================================================
+# Full range query on all columns
+SELECT COUNT(1)
+FROM multi_column_index
+WHERE
+(
+c25 > -9223372036854775808 OR
+(c25 = -9223372036854775808 AND c26 > 0) OR
+(c25 = -9223372036854775808 AND c26 = 0 AND c27 > -9223372036854775808) OR
+(c25 = -9223372036854775808 AND c26 = 0 AND c27 = -9223372036854775808 AND c28 > 0) OR
+(c25 = -9223372036854775808 AND c26 = 0 AND c27 = -9223372036854775808 AND c28 = 0 AND c29 > -9223372036854775808) OR
+(c25 = -9223372036854775808 AND c26 = 0 AND c27 = -9223372036854775808 AND c28 = 0 AND c29 = -9223372036854775808 AND c30 >= 0)
+)
+AND
+(
+c25 < 9223372036854775807 OR
+(c25 = 9223372036854775807 AND c26 < 18446744073709551615) OR
+(c25 = 9223372036854775807 AND c26 = 18446744073709551615 AND c27 < 9223372036854775807) OR
+(c25 = 9223372036854775807 AND c26 = 18446744073709551615 AND c27 = 9223372036854775807 AND c28 < 18446744073709551615) OR
+(c25 = 9223372036854775807 AND c26 = 18446744073709551615 AND c27 = 9223372036854775807 AND c28 = 18446744073709551615 AND c29 < 9223372036854775807) OR
+(c25 = 9223372036854775807 AND c26 = 18446744073709551615 AND c27 = 9223372036854775807 AND c28 = 18446744073709551615 AND c29 = 9223372036854775807 AND c30 <= 18446744073709551615)
+);
+COUNT(1)
+1000
+# =====================================================
+# Test NULL conditon.
+# =====================================================
+#
+CREATE TABLE `test_null_conditon` (
+`a` int DEFAULT NULL,
+`b` int DEFAULT NULL,
+`c` int DEFAULT NULL,
+KEY `a` (`a`,`b`)
+) ENGINE=Dstore;
+INSERT INTO test_null_conditon VALUES(1,1,1),(1,2,3),(2,1,2),(2,2,3),(3,1,2),(4,NULL,3),(5,NULL,4);
+ANALYZE TABLE test_null_conditon UPDATE HISTOGRAM ON a,b WITH 100 BUCKETS;
+Table	Op	Msg_type	Msg_text
+multi_column_index.test_null_conditon	histogram	status	Histogram statistics created for column 'a'.
+multi_column_index.test_null_conditon	histogram	status	Histogram statistics created for column 'b'.
+SET optimizer_switch='dstore_use_histogram_range_estimation=on';
+SELECT COUNT(*) from test_null_conditon where a=2 AND (b < 2 OR b IS NULL);
+COUNT(*)
+1
+SELECT * from test_null_conditon where a=2 AND (b < 2 OR b IS NULL);
+a	b	c
+2	1	2
+SELECT COUNT(*) from test_null_conditon where a IS NULL AND b > 3;
+COUNT(*)
+0
+DROP DATABASE multi_column_index;
+# 0. Prepare test data.
+DROP DATABASE IF EXISTS test_unique_index;
+CREATE DATABASE test_unique_index;
+USE test_unique_index;
+# Create test table with auto-increment PK and unique indexes
+CREATE TABLE test_unique_index (
+id INT AUTO_INCREMENT PRIMARY KEY,
+c1 VARCHAR(20),
+c2 INT,
+UNIQUE KEY idx_c1 (c1),
+UNIQUE KEY idx_c2 (c2),
+KEY idex_c2_c1(c2, c1)
+) ENGINE=Dstore;
+# Create stored procedure for generating random data
+# Execute data generation procedure
+CALL generate_data();
+# Verify row count
+SELECT COUNT(*) FROM test_unique_index;
+COUNT(*)
+1000
+set global dstore_use_histogram_auto_update=off;
+# Create histogram on column c1
+ANALYZE TABLE test_unique_index UPDATE HISTOGRAM ON c1 WITH 100 BUCKETS;
+Table	Op	Msg_type	Msg_text
+test_unique_index.test_unique_index	histogram	status	Histogram statistics created for column 'c1'.
+# Create histogram on column c2
+ANALYZE TABLE test_unique_index UPDATE HISTOGRAM ON c2 WITH 100 BUCKETS;
+Table	Op	Msg_type	Msg_text
+test_unique_index.test_unique_index	histogram	status	Histogram statistics created for column 'c2'.
+# 1. Test range estimation on c1 and c2;
+EXPLAIN FORMAT=JSON SELECT COUNT(*) FROM test_unique_index WHERE c1 > "a000100"
+include/assert.inc [rows_examined should be at least 850]
+EXPLAIN FORMAT=JSON SELECT COUNT(*) FROM test_unique_index WHERE c2 > 500
+include/assert.inc [rows_examined should be at least 450]
+DROP DATABASE test_unique_index;
+DROP DATABASE IF EXISTS test_equal_cond;
+CREATE DATABASE test_equal_cond;
+USE test_equal_cond;
+CREATE TABLE test_equal_cond (
+pk INT PRIMARY KEY,
+i1 INT,
+b1 BIT(8),
+d1 DATE,
+d2 TIME,
+d3 DATETIME,
+d4 TIMESTAMP,
+d5 YEAR,
+s1 CHAR(32),
+s2 VARCHAR(128),
+e ENUM('a','b','c'),
+e2 SET('a','b','c'),
+INDEX idx_i1 (i1),
+INDEX idx_b1 (b1),
+INDEX idx_d1 (d1),
+INDEX idx_d2 (d2),
+INDEX idx_d3 (d3),
+INDEX idx_d4 (d4),
+INDEX idx_d5 (d5),
+INDEX idx_s1 (s1),
+INDEX idx_s2 (s2),
+INDEX idx_e (e),
+INDEX idx_e2 (e2)
+) ENGINE=Dstore;
+INSERT INTO test_equal_cond (pk, i1, b1, d1, d2, d3, d4, d5, s1, s2, e, e2) VALUES
+(1, 100, b'10101010', '2024-01-01', '09:00:00', '2024-01-01 09:00:00', '2024-01-01 09:00:00', 2024, 'test-001', 'varchar-001', 'a', 'a'),
+(2, 200, b'11001100', '2024-01-02', '10:15:00', '2024-01-01 10:15:00', '2024-01-01 10:15:00', 2024, 'test-002', 'varchar-002', 'b', 'a,b'),
+(3, 300, b'11110000', '2024-01-03', '11:30:00', '2024-01-01 11:30:00', '2024-01-01 11:30:00', 2024, 'test-003', 'varchar-003', 'c', 'a,b,c'),
+(4, 400, b'00001111', '2024-01-04', '14:45:00', '2024-01-01 14:45:00', '2024-01-01 14:45:00', 2024, 'test-004', 'varchar-004', 'a', 'b,c'),
+(5, 500, b'10001000', '2024-01-05', '16:20:00', '2024-01-01 16:20:00', '2024-01-01 16:20:00', 2024, 'test-005', 'varchar-005', 'b', 'c'),
+(6, 600, b'10001001', '2024-01-06', '16:40:00', '2024-01-01 16:40:00', '2024-01-01 16:40:00', 2024, '中国', '中国华为', 'c', 'a,c');
+ANALYZE TABLE test_equal_cond
+UPDATE HISTOGRAM ON
+pk, i1, b1, d1, d2, d3, d4, d5, s1, s2, e, e2
+WITH 64 BUCKETS;
+Table	Op	Msg_type	Msg_text
+test_equal_cond.test_equal_cond	histogram	status	Histogram statistics created for column 'b1'.
+test_equal_cond.test_equal_cond	histogram	status	Histogram statistics created for column 'd1'.
+test_equal_cond.test_equal_cond	histogram	status	Histogram statistics created for column 'd2'.
+test_equal_cond.test_equal_cond	histogram	status	Histogram statistics created for column 'd3'.
+test_equal_cond.test_equal_cond	histogram	status	Histogram statistics created for column 'd4'.
+test_equal_cond.test_equal_cond	histogram	status	Histogram statistics created for column 'd5'.
+test_equal_cond.test_equal_cond	histogram	status	Histogram statistics created for column 'e'.
+test_equal_cond.test_equal_cond	histogram	status	Histogram statistics created for column 'e2'.
+test_equal_cond.test_equal_cond	histogram	status	Histogram statistics created for column 'i1'.
+test_equal_cond.test_equal_cond	histogram	status	Histogram statistics created for column 'pk'.
+test_equal_cond.test_equal_cond	histogram	status	Histogram statistics created for column 's1'.
+test_equal_cond.test_equal_cond	histogram	status	Histogram statistics created for column 's2'.
+EXPLAIN SELECT * FROM test_equal_cond WHERE i1 = 200;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	test_equal_cond	NULL	ref	idx_i1	idx_i1	5	const	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test_equal_cond`.`test_equal_cond`.`pk` AS `pk`,`test_equal_cond`.`test_equal_cond`.`i1` AS `i1`,`test_equal_cond`.`test_equal_cond`.`b1` AS `b1`,`test_equal_cond`.`test_equal_cond`.`d1` AS `d1`,`test_equal_cond`.`test_equal_cond`.`d2` AS `d2`,`test_equal_cond`.`test_equal_cond`.`d3` AS `d3`,`test_equal_cond`.`test_equal_cond`.`d4` AS `d4`,`test_equal_cond`.`test_equal_cond`.`d5` AS `d5`,`test_equal_cond`.`test_equal_cond`.`s1` AS `s1`,`test_equal_cond`.`test_equal_cond`.`s2` AS `s2`,`test_equal_cond`.`test_equal_cond`.`e` AS `e`,`test_equal_cond`.`test_equal_cond`.`e2` AS `e2` from `test_equal_cond`.`test_equal_cond` where (`test_equal_cond`.`test_equal_cond`.`i1` = 200)
+EXPLAIN SELECT * FROM test_equal_cond WHERE b1 = b'11001100';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	test_equal_cond	NULL	ref	idx_b1	idx_b1	2	const	1	100.00	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test_equal_cond`.`test_equal_cond`.`pk` AS `pk`,`test_equal_cond`.`test_equal_cond`.`i1` AS `i1`,`test_equal_cond`.`test_equal_cond`.`b1` AS `b1`,`test_equal_cond`.`test_equal_cond`.`d1` AS `d1`,`test_equal_cond`.`test_equal_cond`.`d2` AS `d2`,`test_equal_cond`.`test_equal_cond`.`d3` AS `d3`,`test_equal_cond`.`test_equal_cond`.`d4` AS `d4`,`test_equal_cond`.`test_equal_cond`.`d5` AS `d5`,`test_equal_cond`.`test_equal_cond`.`s1` AS `s1`,`test_equal_cond`.`test_equal_cond`.`s2` AS `s2`,`test_equal_cond`.`test_equal_cond`.`e` AS `e`,`test_equal_cond`.`test_equal_cond`.`e2` AS `e2` from `test_equal_cond`.`test_equal_cond` where (`test_equal_cond`.`test_equal_cond`.`b1` = 0xcc)
+EXPLAIN SELECT * FROM test_equal_cond WHERE d1 = '2024-01-04';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	test_equal_cond	NULL	ref	idx_d1	idx_d1	4	const	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test_equal_cond`.`test_equal_cond`.`pk` AS `pk`,`test_equal_cond`.`test_equal_cond`.`i1` AS `i1`,`test_equal_cond`.`test_equal_cond`.`b1` AS `b1`,`test_equal_cond`.`test_equal_cond`.`d1` AS `d1`,`test_equal_cond`.`test_equal_cond`.`d2` AS `d2`,`test_equal_cond`.`test_equal_cond`.`d3` AS `d3`,`test_equal_cond`.`test_equal_cond`.`d4` AS `d4`,`test_equal_cond`.`test_equal_cond`.`d5` AS `d5`,`test_equal_cond`.`test_equal_cond`.`s1` AS `s1`,`test_equal_cond`.`test_equal_cond`.`s2` AS `s2`,`test_equal_cond`.`test_equal_cond`.`e` AS `e`,`test_equal_cond`.`test_equal_cond`.`e2` AS `e2` from `test_equal_cond`.`test_equal_cond` where (`test_equal_cond`.`test_equal_cond`.`d1` = DATE'2024-01-04')
+EXPLAIN SELECT * FROM test_equal_cond WHERE d2 = '10:15:00';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	test_equal_cond	NULL	ref	idx_d2	idx_d2	4	const	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test_equal_cond`.`test_equal_cond`.`pk` AS `pk`,`test_equal_cond`.`test_equal_cond`.`i1` AS `i1`,`test_equal_cond`.`test_equal_cond`.`b1` AS `b1`,`test_equal_cond`.`test_equal_cond`.`d1` AS `d1`,`test_equal_cond`.`test_equal_cond`.`d2` AS `d2`,`test_equal_cond`.`test_equal_cond`.`d3` AS `d3`,`test_equal_cond`.`test_equal_cond`.`d4` AS `d4`,`test_equal_cond`.`test_equal_cond`.`d5` AS `d5`,`test_equal_cond`.`test_equal_cond`.`s1` AS `s1`,`test_equal_cond`.`test_equal_cond`.`s2` AS `s2`,`test_equal_cond`.`test_equal_cond`.`e` AS `e`,`test_equal_cond`.`test_equal_cond`.`e2` AS `e2` from `test_equal_cond`.`test_equal_cond` where (`test_equal_cond`.`test_equal_cond`.`d2` = TIME'10:15:00')
+EXPLAIN SELECT * FROM test_equal_cond WHERE d3 = '2024-01-01 11:30:00';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	test_equal_cond	NULL	ref	idx_d3	idx_d3	6	const	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test_equal_cond`.`test_equal_cond`.`pk` AS `pk`,`test_equal_cond`.`test_equal_cond`.`i1` AS `i1`,`test_equal_cond`.`test_equal_cond`.`b1` AS `b1`,`test_equal_cond`.`test_equal_cond`.`d1` AS `d1`,`test_equal_cond`.`test_equal_cond`.`d2` AS `d2`,`test_equal_cond`.`test_equal_cond`.`d3` AS `d3`,`test_equal_cond`.`test_equal_cond`.`d4` AS `d4`,`test_equal_cond`.`test_equal_cond`.`d5` AS `d5`,`test_equal_cond`.`test_equal_cond`.`s1` AS `s1`,`test_equal_cond`.`test_equal_cond`.`s2` AS `s2`,`test_equal_cond`.`test_equal_cond`.`e` AS `e`,`test_equal_cond`.`test_equal_cond`.`e2` AS `e2` from `test_equal_cond`.`test_equal_cond` where (`test_equal_cond`.`test_equal_cond`.`d3` = TIMESTAMP'2024-01-01 11:30:00')
+EXPLAIN SELECT * FROM test_equal_cond WHERE d4 = '2024-01-01 14:45:00';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	test_equal_cond	NULL	ref	idx_d4	idx_d4	5	const	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test_equal_cond`.`test_equal_cond`.`pk` AS `pk`,`test_equal_cond`.`test_equal_cond`.`i1` AS `i1`,`test_equal_cond`.`test_equal_cond`.`b1` AS `b1`,`test_equal_cond`.`test_equal_cond`.`d1` AS `d1`,`test_equal_cond`.`test_equal_cond`.`d2` AS `d2`,`test_equal_cond`.`test_equal_cond`.`d3` AS `d3`,`test_equal_cond`.`test_equal_cond`.`d4` AS `d4`,`test_equal_cond`.`test_equal_cond`.`d5` AS `d5`,`test_equal_cond`.`test_equal_cond`.`s1` AS `s1`,`test_equal_cond`.`test_equal_cond`.`s2` AS `s2`,`test_equal_cond`.`test_equal_cond`.`e` AS `e`,`test_equal_cond`.`test_equal_cond`.`e2` AS `e2` from `test_equal_cond`.`test_equal_cond` where (`test_equal_cond`.`test_equal_cond`.`d4` = TIMESTAMP'2024-01-01 14:45:00')
+EXPLAIN SELECT * FROM test_equal_cond WHERE d5 = 2024;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	test_equal_cond	NULL	ref	idx_d5	idx_d5	2	const	6	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test_equal_cond`.`test_equal_cond`.`pk` AS `pk`,`test_equal_cond`.`test_equal_cond`.`i1` AS `i1`,`test_equal_cond`.`test_equal_cond`.`b1` AS `b1`,`test_equal_cond`.`test_equal_cond`.`d1` AS `d1`,`test_equal_cond`.`test_equal_cond`.`d2` AS `d2`,`test_equal_cond`.`test_equal_cond`.`d3` AS `d3`,`test_equal_cond`.`test_equal_cond`.`d4` AS `d4`,`test_equal_cond`.`test_equal_cond`.`d5` AS `d5`,`test_equal_cond`.`test_equal_cond`.`s1` AS `s1`,`test_equal_cond`.`test_equal_cond`.`s2` AS `s2`,`test_equal_cond`.`test_equal_cond`.`e` AS `e`,`test_equal_cond`.`test_equal_cond`.`e2` AS `e2` from `test_equal_cond`.`test_equal_cond` where (`test_equal_cond`.`test_equal_cond`.`d5` = 2024)
+EXPLAIN SELECT * FROM test_equal_cond WHERE s1 = 'test-001';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	test_equal_cond	NULL	ref	idx_s1	idx_s1	129	const	1	100.00	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test_equal_cond`.`test_equal_cond`.`pk` AS `pk`,`test_equal_cond`.`test_equal_cond`.`i1` AS `i1`,`test_equal_cond`.`test_equal_cond`.`b1` AS `b1`,`test_equal_cond`.`test_equal_cond`.`d1` AS `d1`,`test_equal_cond`.`test_equal_cond`.`d2` AS `d2`,`test_equal_cond`.`test_equal_cond`.`d3` AS `d3`,`test_equal_cond`.`test_equal_cond`.`d4` AS `d4`,`test_equal_cond`.`test_equal_cond`.`d5` AS `d5`,`test_equal_cond`.`test_equal_cond`.`s1` AS `s1`,`test_equal_cond`.`test_equal_cond`.`s2` AS `s2`,`test_equal_cond`.`test_equal_cond`.`e` AS `e`,`test_equal_cond`.`test_equal_cond`.`e2` AS `e2` from `test_equal_cond`.`test_equal_cond` where (`test_equal_cond`.`test_equal_cond`.`s1` = 'test-001')
+EXPLAIN SELECT * FROM test_equal_cond WHERE s1 = '中国';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	test_equal_cond	NULL	ref	idx_s1	idx_s1	129	const	1	100.00	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test_equal_cond`.`test_equal_cond`.`pk` AS `pk`,`test_equal_cond`.`test_equal_cond`.`i1` AS `i1`,`test_equal_cond`.`test_equal_cond`.`b1` AS `b1`,`test_equal_cond`.`test_equal_cond`.`d1` AS `d1`,`test_equal_cond`.`test_equal_cond`.`d2` AS `d2`,`test_equal_cond`.`test_equal_cond`.`d3` AS `d3`,`test_equal_cond`.`test_equal_cond`.`d4` AS `d4`,`test_equal_cond`.`test_equal_cond`.`d5` AS `d5`,`test_equal_cond`.`test_equal_cond`.`s1` AS `s1`,`test_equal_cond`.`test_equal_cond`.`s2` AS `s2`,`test_equal_cond`.`test_equal_cond`.`e` AS `e`,`test_equal_cond`.`test_equal_cond`.`e2` AS `e2` from `test_equal_cond`.`test_equal_cond` where (`test_equal_cond`.`test_equal_cond`.`s1` = '中国')
+EXPLAIN SELECT * FROM test_equal_cond WHERE s2 = '中国华为';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	test_equal_cond	NULL	ref	idx_s2	idx_s2	515	const	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test_equal_cond`.`test_equal_cond`.`pk` AS `pk`,`test_equal_cond`.`test_equal_cond`.`i1` AS `i1`,`test_equal_cond`.`test_equal_cond`.`b1` AS `b1`,`test_equal_cond`.`test_equal_cond`.`d1` AS `d1`,`test_equal_cond`.`test_equal_cond`.`d2` AS `d2`,`test_equal_cond`.`test_equal_cond`.`d3` AS `d3`,`test_equal_cond`.`test_equal_cond`.`d4` AS `d4`,`test_equal_cond`.`test_equal_cond`.`d5` AS `d5`,`test_equal_cond`.`test_equal_cond`.`s1` AS `s1`,`test_equal_cond`.`test_equal_cond`.`s2` AS `s2`,`test_equal_cond`.`test_equal_cond`.`e` AS `e`,`test_equal_cond`.`test_equal_cond`.`e2` AS `e2` from `test_equal_cond`.`test_equal_cond` where (`test_equal_cond`.`test_equal_cond`.`s2` = '中国华为')
+EXPLAIN SELECT * FROM test_equal_cond WHERE e = 'b';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	test_equal_cond	NULL	ref	idx_e	idx_e	2	const	2	100.00	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test_equal_cond`.`test_equal_cond`.`pk` AS `pk`,`test_equal_cond`.`test_equal_cond`.`i1` AS `i1`,`test_equal_cond`.`test_equal_cond`.`b1` AS `b1`,`test_equal_cond`.`test_equal_cond`.`d1` AS `d1`,`test_equal_cond`.`test_equal_cond`.`d2` AS `d2`,`test_equal_cond`.`test_equal_cond`.`d3` AS `d3`,`test_equal_cond`.`test_equal_cond`.`d4` AS `d4`,`test_equal_cond`.`test_equal_cond`.`d5` AS `d5`,`test_equal_cond`.`test_equal_cond`.`s1` AS `s1`,`test_equal_cond`.`test_equal_cond`.`s2` AS `s2`,`test_equal_cond`.`test_equal_cond`.`e` AS `e`,`test_equal_cond`.`test_equal_cond`.`e2` AS `e2` from `test_equal_cond`.`test_equal_cond` where (`test_equal_cond`.`test_equal_cond`.`e` = 'b')
+EXPLAIN SELECT * FROM test_equal_cond WHERE e2 = 'a,b';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	test_equal_cond	NULL	ref	idx_e2	idx_e2	2	const	1	100.00	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test_equal_cond`.`test_equal_cond`.`pk` AS `pk`,`test_equal_cond`.`test_equal_cond`.`i1` AS `i1`,`test_equal_cond`.`test_equal_cond`.`b1` AS `b1`,`test_equal_cond`.`test_equal_cond`.`d1` AS `d1`,`test_equal_cond`.`test_equal_cond`.`d2` AS `d2`,`test_equal_cond`.`test_equal_cond`.`d3` AS `d3`,`test_equal_cond`.`test_equal_cond`.`d4` AS `d4`,`test_equal_cond`.`test_equal_cond`.`d5` AS `d5`,`test_equal_cond`.`test_equal_cond`.`s1` AS `s1`,`test_equal_cond`.`test_equal_cond`.`s2` AS `s2`,`test_equal_cond`.`test_equal_cond`.`e` AS `e`,`test_equal_cond`.`test_equal_cond`.`e2` AS `e2` from `test_equal_cond`.`test_equal_cond` where (`test_equal_cond`.`test_equal_cond`.`e2` = 'a,b')
+DROP DATABASE test_equal_cond;
+DROP DATABASE IF EXISTS histogram_test;
+CREATE DATABASE histogram_test;
+USE histogram_test;
+# 0. Prepare data.
+CREATE TABLE test_table (
+id INT AUTO_INCREMENT PRIMARY KEY,
+col1 INT,
+col2 VARCHAR(50),
+col3 DECIMAL(10,2),
+INDEX idx_composite (col1 DESC, col2 DESC, col3 DESC)
+) ENGINE=Dstore;
+INSERT INTO test_table (col1, col2, col3) VALUES
+(10, 'A', 100.50),
+(20, 'B', 200.75),
+(30, 'C', 300.25),
+(40, 'D', 400.00),
+(50, 'E', 500.50),
+(60, 'F', 600.75),
+(70, 'G', 700.25),
+(80, 'H', 800.00),
+(90, 'I', 900.50),
+(100, 'J', 1000.75);
+ANALYZE TABLE test_table UPDATE HISTOGRAM ON col1, col2, col3 WITH 20 BUCKETS;
+Table	Op	Msg_type	Msg_text
+histogram_test.test_table	histogram	status	Histogram statistics created for column 'col1'.
+histogram_test.test_table	histogram	status	Histogram statistics created for column 'col2'.
+histogram_test.test_table	histogram	status	Histogram statistics created for column 'col3'.
+SELECT COUNT(*) FROM test_table;
+COUNT(*)
+10
+# 1. Test range estimate on DESC index.
+SELECT COUNT(*) FROM test_table WHERE col1 IS NOT NULL;
+COUNT(*)
+10
+SELECT COUNT(*) FROM test_table WHERE col1 = 50 AND col2 IS NOT NULL;
+COUNT(*)
+1
+SELECT COUNT(*) FROM test_table WHERE col1 = 50 AND col2 = 'E' AND col3 IS NOT NULL;
+COUNT(*)
+1
+DROP DATABASE histogram_test;
+DROP DATABASE IF EXISTS histogram_test;
+CREATE DATABASE histogram_test;
+USE histogram_test;
+# 0. Prepare data.
+CREATE TABLE `BUG2025041534335` (
+`pk` int NOT NULL,
+`c1` int DEFAULT NULL,
+`c2` int DEFAULT NULL,
+PRIMARY KEY (`pk`),
+KEY `idx` (`c1`,`c2`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO BUG2025041534335 VALUES(1,1,1),(2,1,2),(3,1,3),(4,1,null);
+INSERT INTO BUG2025041534335 VALUES(5,2,1),(6,2,2),(7,2,3),(8,2,null);
+INSERT INTO BUG2025041534335 VALUES(9,3,1),(10,3,2),(11,3,3),(12,3,null);
+ANALYZE TABLE BUG2025041534335 UPDATE HISTOGRAM ON c1, c2 WITH 20 BUCKETS;
+Table	Op	Msg_type	Msg_text
+histogram_test.BUG2025041534335	histogram	status	Histogram statistics created for column 'c1'.
+histogram_test.BUG2025041534335	histogram	status	Histogram statistics created for column 'c2'.
+# 1. The following SQL will lead to crash before this bug is fixed.
+SELECT * FROM BUG2025041534335 WHERE c1 <= 2 AND c2 IS NULL;
+pk	c1	c2
+4	1	NULL
+8	2	NULL
+CREATE TABLE `BUG2025042413770` (
+`pk` int NOT NULL AUTO_INCREMENT PRIMARY KEY,
+`char_col` char(10) DEFAULT NULL,
+KEY `idx_char_col` (char_col)
+) ENGINE=Dstore CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+CREATE PROCEDURE gen_bug2025042413770_data()
+BEGIN
+DECLARE i INT DEFAULT 1;
+DECLARE char_val CHAR(10);
+WHILE i <= 1000 DO
+IF i <= 250 THEN
+SET char_val = 'Taurus';
+ELSEIF i <= 500 THEN
+SET char_val = 'Taurus ';
+ELSEIF i <= 750 THEN
+SET char_val = 'Taurus    ';
+ELSE
+SET char_val = 'TaurusDB04';
+END IF;
+INSERT INTO BUG2025042413770 (char_col) VALUES (char_val);
+SET i = i + 1;
+END WHILE;
+END$$
+CALL gen_bug2025042413770_data();
+set sql_mode="PAD_CHAR_TO_FULL_LENGTH";
+Warnings:
+Warning	3090	Changing sql mode 'PAD_CHAR_TO_FULL_LENGTH' is deprecated. It will be removed in a future release.
+# 1. Test SQL mode PAD_CHAR_TO_FULL_LENGTH
+ANALYZE TABLE BUG2025042413770 UPDATE HISTOGRAM ON char_col WITH 20 BUCKETS;
+Table	Op	Msg_type	Msg_text
+histogram_test.BUG2025042413770	histogram	status	Histogram statistics created for column 'char_col'.
+# 1.1 Test EQUAL conditon with exactly N chars.
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col = "TaurusDB04";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	ref	idx_char_col	idx_char_col	41	const	250	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` = 'TaurusDB04')
+set optimizer_switch="dstore_use_histogram_range_estimation=off";
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col = "TaurusDB04";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	ref	idx_char_col	idx_char_col	41	const	250	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` = 'TaurusDB04')
+# 1.2 Test EQUAL conditon with < N chars(test the effect of padding).
+set optimizer_switch="dstore_use_histogram_range_estimation=on";
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col = "Taurus";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	ref	idx_char_col	idx_char_col	41	const	750	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` = 'Taurus')
+set optimizer_switch="dstore_use_histogram_range_estimation=off";
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col = "Taurus";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	ref	idx_char_col	idx_char_col	41	const	750	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` = 'Taurus')
+# 1.3 Test other conditon with < N chars(test the effect of padding).
+set optimizer_switch="dstore_use_histogram_range_estimation=on";
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col = "Taurus ";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	ref	idx_char_col	idx_char_col	41	const	750	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` = 'Taurus ')
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col = "Taurus    ";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	ref	idx_char_col	idx_char_col	41	const	750	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` = 'Taurus    ')
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col LIKE "Taurus";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	range	idx_char_col	idx_char_col	41	NULL	750	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` like 'Taurus')
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col LIKE "Taurus%";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	index	idx_char_col	idx_char_col	41	NULL	1000	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` like 'Taurus%')
+set optimizer_switch="dstore_use_histogram_range_estimation=off";
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col = "Taurus ";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	ref	idx_char_col	idx_char_col	41	const	750	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` = 'Taurus ')
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col = "Taurus    ";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	ref	idx_char_col	idx_char_col	41	const	750	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` = 'Taurus    ')
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col LIKE "Taurus";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	range	idx_char_col	idx_char_col	41	NULL	750	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` like 'Taurus')
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col LIKE "Taurus%";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	index	idx_char_col	idx_char_col	41	NULL	1000	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` like 'Taurus%')
+set sql_mode="";
+# 2. Test SQL mode not with PAD_CHAR_TO_FULL_LENGTH
+ANALYZE TABLE BUG2025042413770 UPDATE HISTOGRAM ON char_col WITH 20 BUCKETS;
+Table	Op	Msg_type	Msg_text
+histogram_test.BUG2025042413770	histogram	status	Histogram statistics created for column 'char_col'.
+set optimizer_switch="dstore_use_histogram_range_estimation=on";
+# 1.1 Test EQUAL conditon with exactly N chars.
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col = "TaurusDB04";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	ref	idx_char_col	idx_char_col	41	const	250	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` = 'TaurusDB04')
+set optimizer_switch="dstore_use_histogram_range_estimation=off";
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col = "TaurusDB04";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	ref	idx_char_col	idx_char_col	41	const	250	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` = 'TaurusDB04')
+# 1.2 Test EQUAL conditon with < N chars(test the effect of padding).
+set optimizer_switch="dstore_use_histogram_range_estimation=on";
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col = "Taurus";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	ref	idx_char_col	idx_char_col	41	const	750	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` = 'Taurus')
+set optimizer_switch="dstore_use_histogram_range_estimation=off";
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col = "Taurus";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	ref	idx_char_col	idx_char_col	41	const	750	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` = 'Taurus')
+# 1.3 Test other conditon with < N chars(test the effect of padding).
+set optimizer_switch="dstore_use_histogram_range_estimation=on";
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col = "Taurus ";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	ref	idx_char_col	idx_char_col	41	const	750	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` = 'Taurus ')
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col = "Taurus    ";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	ref	idx_char_col	idx_char_col	41	const	750	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` = 'Taurus    ')
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col LIKE "Taurus";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	range	idx_char_col	idx_char_col	41	NULL	750	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` like 'Taurus')
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col LIKE "Taurus%";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	index	idx_char_col	idx_char_col	41	NULL	1000	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` like 'Taurus%')
+set optimizer_switch="dstore_use_histogram_range_estimation=off";
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col = "Taurus ";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	ref	idx_char_col	idx_char_col	41	const	750	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` = 'Taurus ')
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col = "Taurus    ";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	ref	idx_char_col	idx_char_col	41	const	750	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` = 'Taurus    ')
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col LIKE "Taurus";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	range	idx_char_col	idx_char_col	41	NULL	750	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` like 'Taurus')
+EXPLAIN SELECT COUNT(*) FROM BUG2025042413770 WHERE char_col LIKE "Taurus%";
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	BUG2025042413770	NULL	index	idx_char_col	idx_char_col	41	NULL	1000	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `histogram_test`.`BUG2025042413770` where (`histogram_test`.`BUG2025042413770`.`char_col` like 'Taurus%')
+set optimizer_switch="dstore_use_histogram_range_estimation=on";
+SET sql_mode='ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION';
+CREATE TABLE BUG2025051117062 (
+c1 int NOT NULL,
+c2 int NOT NULL,
+PRIMARY KEY (c1 DESC, c2 DESC)
+) ENGINE = dstore;
+INSERT INTO BUG2025051117062(c1,c2) VALUES (1,1),(1,2),(1,3),(2,1),(2,2),(2,3),(3,1),(3,2),(3,3),(4,1),(4,2),(4,3),(5,1),(5,2),(5,3);
+ANALYZE TABLE BUG2025051117062 UPDATE HISTOGRAM ON c1,c2 WITH 20 BUCKETS;
+Table	Op	Msg_type	Msg_text
+histogram_test.BUG2025051117062	histogram	status	Histogram statistics created for column 'c1'.
+histogram_test.BUG2025051117062	histogram	status	Histogram statistics created for column 'c2'.
+# 1. The following SQL will crash before this bug fix.
+SELECT COUNT(*)
+FROM BUG2025051117062
+WHERE c1 = 4 AND c2 <= 2;
+COUNT(*)
+2
+DROP DATABASE histogram_test;
+set global dstore_use_histogram_auto_update=default;

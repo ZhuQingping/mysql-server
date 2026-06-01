@@ -1,0 +1,561 @@
+--source include/have_only_dstore.inc
+
+if ($PQ_TEST)
+{
+  --skip cannot run in '--pq' option
+}
+--source include/count_sessions.inc
+
+SET @old_dstore_lock_wait_timeout= @@global.dstore_lock_wait_timeout;
+
+SET @@global.dstore_lock_wait_timeout = 1;
+
+
+
+
+--echo # ----------------------
+--echo # ----------------------
+
+--echo #  MVCC - INSERT/ UPDATE/ DELETE with OFFSET PUSHDOWN
+
+--echo # For each, we test
+--echo # 1/ INSERT/ UPDATE/ DELETE first in one session then SELECT with OP  in another
+--echo # 2/ SELECT with OP first in one session then INSERT/ UPDATE/ DELETE in another
+
+--echo # ----------------------
+--echo # ----------------------
+
+CREATE TABLE t3 (a INT, b INT, INDEX(a,b));
+INSERT INTO t3 VALUES (1, 2), (2, 3), (3, 3), (4, 3);
+ANALYZE table t3;
+
+--echo # ----------------------
+--echo # ----------------------
+
+--echo # MVCC INSERT and OFFSET pushdown
+
+--echo # ----------------------
+--echo # ----------------------
+
+--echo # Insert in one session, not committed, SELECT query with OP in another session - check that results are consistent
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+
+
+
+-- echo # session 1: Trx that inserts a new rows
+START TRANSACTION;
+INSERT INTO t3 VALUES (6,6);
+SELECT * FROM t3;
+
+--echo # session 2: Trx with SELECT query with OP - check that the inserted row is not accounted for
+--echo # neither for the SELECT with and without OFFSET pushdown.
+connection con2;
+START TRANSACTION;
+--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
+explain format=tree SELECT * FROM t3 WHERE a>1 LIMIT 100 OFFSET 1;
+--echo # Both SELECT return the same output! rows skipped differ
+
+SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
+
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
+
+
+rollback;
+connection con1;
+rollback;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+
+
+--echo # MVCC Insert and Offset pushdown
+--echo # Select first with OP - insert then
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+
+
+-- echo # session 1: SELECT rows using OP
+START TRANSACTION;
+explain SELECT * FROM t3 WHERE a>1 LIMIT 100 OFFSET 1;
+SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
+
+
+
+
+--echo # session 2: Insert rows in the table queried by OP
+connection con2;
+START TRANSACTION;
+INSERT INTO t3 VALUES (6,6);
+--echo # (6,6) is inserted here
+SELECT * FROM t3;
+
+
+connection con1;
+--echo # (6,6) is not visible.
+SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
+rollback;
+connection con2;
+rollback;
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # ----------------------
+--echo # ----------------------
+
+--echo # MVCC UPDATE with OFFSET pushdown
+
+--echo # ----------------------
+--echo # ----------------------
+
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+
+
+-- echo # session 1: Trx that updates a row
+START TRANSACTION;
+UPDATE t3 SET a = 8 WHERE a = 4;
+SELECT * FROM t3;
+
+--echo # session 2: Trx with SELECT query with OP - check that the updated row is not accounted for
+--echo # neither for the SELECT with and without OFFSET pushdown.
+connection con2;
+START TRANSACTION;
+--echo # Both output the same rows - rows skipped differ
+
+SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
+
+rollback;
+connection con1;
+rollback;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+
+
+--echo # MVCC UPDATE and Offset pushdown
+--echo # Select first with OP - UPDATE then
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+
+
+-- echo # session 1: SELECT rows using OP
+START TRANSACTION;
+explain SELECT * FROM t3 WHERE a>1 LIMIT 100 OFFSET 1;
+SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
+
+
+--echo # session 2: Insert rows in the table queried by OP
+connection con2;
+UPDATE t3 SET a = 8 WHERE a =4;
+--echo # (8,3) is updated here
+SELECT * FROM t3;
+
+
+
+connection con1;
+--echo # (8,3) is not updated.
+SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
+rollback;
+connection con2;
+rollback;
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+--echo # ----------------------
+--echo # ----------------------
+
+--echo # Additional testing for MVCC UPDATE : SELECT first - UPDATE then with VARCHAR
+
+--echo # ----------------------
+--echo # ----------------------
+
+CREATE TABLE t4 ( a INT, b VARCHAR(50), INDEX(a));
+INSERT INTO t4 VALUES (1,'apples'),(2,'bananas'), (3,'oranges'),(4,'pears');
+ANALYZE table t4;
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+
+start transaction;
+EXPLAIN format=tree SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
+--echo # Does not inspect clustered record.
+SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
+
+
+connection con2;
+start transaction;
+UPDATE t4 SET a = 2 WHERE a > 1;
+UPDATE t4 SET b = ' I really do not like fruits' WHERE a = 2;
+SELECT * FROM t4;
+
+connection con1;
+--echo # Inspect clustered record - table unchanged
+SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
+
+rollback;
+
+connection con2;
+rollback;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+DROP TABLE t4;
+
+--echo # ----------------------
+--echo # ----------------------
+
+--echo # With PK access
+
+--echo # ----------------------
+--echo # ----------------------
+
+CREATE TABLE t4 ( a INT, b VARCHAR(50), PRIMARY KEY (a));
+INSERT INTO t4 VALUES (1,'apples'),(2,'bananas'), (3,'oranges'),(4,'pears');
+ANALYZE table t4;
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+
+start transaction;
+EXPLAIN format=tree SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
+SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
+
+
+connection con2;
+start transaction;
+UPDATE t4 SET a = 5 WHERE a = 1;
+UPDATE t4 SET b = ' I really do not like fruits' WHERE a = 5;
+SELECT * FROM t4;
+
+connection con1;
+--echo # table unchanged
+SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
+
+rollback;
+
+connection con2;
+rollback;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+DROP TABLE t4;
+
+--echo # ----------------------
+--echo # ----------------------
+
+--echo # MVCC DELETE and OFFSET pushdown
+
+
+--echo # ----------------------
+--echo # ----------------------
+
+--echo # Delete row in one session, not committed, SELECT query (including the row to be deleted)
+--echo # with OP in another session - check that results are consistent
+insert into t3 values (3,10),(3,11),(3,12);
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+
+-- echo # session 1: Trx that delete a row
+start transaction;
+DELETE FROM  t3  WHERE a > 2;
+SELECT * FROM t3;
+
+--echo # session 2 : Trx that SELECTs the "to be deleted" row with OP - check that the deleted rows is not accounted for
+--echo # neither for the SELECT with and without OFFSET pushdown.
+connection con2;
+
+explain SELECT * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
+--echo # They both output the same - rows skipped differ
+SELECT /*+ NO_OFFSET_PUSHDOWN()*/ * FROM t3 WHERE a=3 LIMIT 100 OFFSET 1;
+
+SELECT  * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
+
+connection con1;
+rollback;
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # ----------------------
+--echo # ----------------------
+
+--echo # SELECT first- DELETE NEXT
+
+--echo # ----------------------
+--echo # ----------------------
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+
+-- echo # session 1: SELECT with OP
+start transaction;
+explain SELECT * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
+SELECT * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
+
+
+--echo # session 2 : DELETE after SELECT with OP
+connection con2;
+DELETE FROM  t3  WHERE a > 2;
+--echo # rows are deleted here
+SELECT * FROM t3;
+
+connection con1;
+--echo # rows are not deleted here
+SELECT * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
+rollback;
+connection con2;
+rollback;
+connection default;
+disconnect con1;
+disconnect con2;
+
+DROP TABLE t3;
+
+--echo # ----------------------
+--echo # ----------------------
+
+--echo # SELECT for UPDATE - INSERT with LOCKING READ
+
+--echo # ----------------------
+--echo # ----------------------
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+
+
+
+CREATE TABLE t1 (
+  dummy INT PRIMARY KEY,
+  a INT UNIQUE,
+  b INT,
+  KEY (a)
+);
+
+INSERT INTO t1 VALUES (1,1,1),(2,2,2),(3,3,3),(4,4,4),(5,5,5);
+
+SELECT @@transaction_isolation;
+START TRANSACTION;
+
+EXPLAIN SELECT * FROM t1 WHERE a < 2 FOR UPDATE;
+
+SELECT * FROM t1 WHERE a < 2 FOR UPDATE;
+
+connection con2;
+
+START TRANSACTION;
+--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
+explain format=tree SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t1  LIMIT 100 OFFSET 1;
+--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
+explain format=tree SELECT * FROM t1  LIMIT 100 OFFSET 1;
+
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t1  LIMIT 100 OFFSET 1;
+
+SELECT * FROM t1  LIMIT 100 OFFSET 1;
+
+ROLLBACK;
+
+connection con1;
+
+ROLLBACK;
+DROP TABLE t1;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # SELECT for update
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+
+
+
+CREATE TABLE t1 (
+  dummy INT PRIMARY KEY,
+  a INT UNIQUE,
+  b INT,
+  KEY (a)
+);
+
+INSERT INTO t1 VALUES (2,2,2),(3,3,3),(4,4,4),(5,5,5);
+
+
+
+SELECT @@transaction_isolation;
+START TRANSACTION;
+
+EXPLAIN SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t1 WHERE a < 2 LIMIT 100 OFFSET 2 FOR UPDATE;
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t1 WHERE a < 2 LIMIT 100 OFFSET 2 FOR UPDATE;
+
+connection con2;
+
+
+START TRANSACTION;
+INSERT INTO t1 VALUES (1,1,1);
+ROLLBACK;
+
+connection con1;
+
+ROLLBACK;
+DROP TABLE t1;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # SELECT for update with OP activated in for update
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+
+
+
+CREATE TABLE t1 (
+  dummy INT PRIMARY KEY,
+  a INT UNIQUE,
+  b INT,
+  KEY (a)
+);
+
+INSERT INTO t1 VALUES (1,1,1),(2,2,2),(4,4,4),(5,5,5);
+
+SELECT @@transaction_isolation;
+START TRANSACTION;
+
+EXPLAIN SELECT * FROM t1 WHERE a < 5 LIMIT 100 OFFSET 2 FOR UPDATE;
+--echo # does not place a lock on the rows skipped by OFFSET pushdown
+SELECT * FROM t1 WHERE a < 5 LIMIT 100 OFFSET 2 FOR UPDATE;
+
+
+connection con2;
+
+
+START TRANSACTION;
+--echo # OP is deactivated here
+INSERT INTO t1 VALUES (3,3,3);
+ROLLBACK;
+
+connection con1;
+
+ROLLBACK;
+DROP TABLE t1;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # ----------------
+--echo # ----------------
+
+--echo # Virtual COLUMN - UPDATE
+
+--echo # ----------------
+--echo # ----------------
+
+ CREATE TABLE tv (
+  a INT DEFAULT NULL,
+  b INT DEFAULT NULL,
+  c INT GENERATED ALWAYS AS ((a + b)) VIRTUAL,
+  KEY c (c)
+);
+
+ INSERT INTO tv(a,b) VALUES (1,2),(3,4),(5,6);
+
+--echo # NON-LOCKING read
+
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+start transaction;
+EXPLAIN format=tree SELECT * FROM tv WHERE c > 5 LIMIT 1 OFFSET 1;
+
+SELECT * FROM tv WHERE c > 5 LIMIT 1 OFFSET 1;
+
+
+connection con2;
+start transaction;
+UPDATE tv SET a = 12 WHERE b > 1;
+SELECT * FROM tv;
+
+connection con1;
+SELECT * FROM tv WHERE c > 5 LIMIT 1 OFFSET 1;
+
+rollback;
+
+connection con2;
+rollback;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+--echo # ----------------
+--echo # ----------------
+
+--echo # Virtual COLUMN: UPDATE with LOCKING READ
+
+--echo # ----------------
+--echo # ----------------
+
+
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+
+connection con1;
+SELECT * FROM tv WHERE c > 5 LIMIT 1 OFFSET 1;
+
+rollback;
+
+connection con2;
+rollback;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+DROP TABLE tv;
+--echo # Restore orig wait timeout
+--source include/wait_until_count_sessions.inc
+SET @@global.dstore_lock_wait_timeout = @old_dstore_lock_wait_timeout;
+DROP TABLE IF EXISTS t1;

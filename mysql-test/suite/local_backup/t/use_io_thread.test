@@ -1,0 +1,73 @@
+--source suite/local_backup/include/prepare_for_backup.inc
+
+--source include/have_debug.inc
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("Wait io thread doing io work timeout 1 ms for local backup");
+call mtr.add_suppression("Wait Lb ctrl io result is empty");
+call mtr.add_suppression("Wait Lb write io result is empty");
+call mtr.add_suppression("Wait Lb read io result is empty");
+call mtr.add_suppression("Wait innodb io thread doing io work timeout 1 ms for local backup");
+call mtr.add_suppression("Wait lb innodb io result is empty");
+call mtr.add_suppression("and expect size is");
+call mtr.add_suppression("Local backup");
+call mtr.add_suppression("fail");
+
+CREATE DATABASE db1;
+USE db1;
+CREATE TABLE t1(a int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+
+# Full backup.
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+
+INSERT INTO t1 VALUES(2);
+SELECT * FROM t1 order by a;
+
+# wal archive.
+--source suite/local_backup/include/start_log_archive.inc
+INSERT INTO t1 VALUES(3);
+SELECT * FROM t1 order by a;
+--sleep 3
+--source suite/local_backup/include/stop_log_archive.inc
+
+INSERT INTO t1 VALUES(4);
+SELECT * FROM t1 order by a;
+
+--echo # Shut server down.
+--let $shutdown_server_timeout = 300
+--source include/shutdown_mysqld.inc
+
+# Restore with script.
+--let $list_type = wal_archive
+--source suite/local_backup/include/restore_with_script.inc
+
+--echo # Restart the server.
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+USE db1;
+SELECT * FROM t1 order by a;
+
+SET GLOBAL rds_dstore_lb_local_io_hang_timeout_ms = 0;
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+--let $skip_check_meta_json = 1
+--source suite/local_backup/include/wait_full_backup.inc
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+SET GLOBAL rds_dstore_lb_local_io_hang_timeout_ms = 100000;
+
+SET GLOBAL innodb_lb_local_io_hang_timeout_ms = 0;
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+--let $skip_check_meta_json = 0
+SET GLOBAL innodb_lb_local_io_hang_timeout_ms = 100000;
+
+# Drop database db1.
+DROP DATABASE db1;
+
+--source suite/local_backup/include/clean_backup.inc

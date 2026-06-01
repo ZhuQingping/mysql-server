@@ -1,0 +1,222 @@
+use test;
+# 
+# 1. Create table
+# 
+CREATE TABLE blob_text_test (
+id INT AUTO_INCREMENT PRIMARY KEY,
+tiny_blob_col TINYBLOB,
+tiny_text_col TINYTEXT,
+blob_col BLOB,
+text_col TEXT
+) engine=Dstore;
+CREATE TABLE userscde (
+id INT PRIMARY KEY AUTO_INCREMENT,
+name VARCHAR(50) NOT NULL,
+email VARCHAR(100) UNIQUE NOT NULL
+) engine=Dstore;
+# 
+# 2. Insert data (including some boundary value tests).
+# 
+INSERT INTO blob_text_test (tiny_blob_col, tiny_text_col, blob_col, text_col)
+VALUES
+(NULL, NULL, NULL, NULL),
+('', '', '', ''),
+(UNHEX('48656C6C6F'), 'Hello', UNHEX('776F726C64'), 'world'),
+(REPEAT('A', 255), REPEAT('B', 255), REPEAT('C', 65535), REPEAT('D', 65535));
+INSERT INTO userscde (name, email) VALUES ('Alice', 'alice@example.com');
+# 
+# 3. Restart mysqld.
+# 
+# restart
+SELECT id, LENGTH(tiny_blob_col), LENGTH(tiny_text_col), LENGTH(blob_col), LENGTH(text_col) FROM blob_text_test;
+id	LENGTH(tiny_blob_col)	LENGTH(tiny_text_col)	LENGTH(blob_col)	LENGTH(text_col)
+1	NULL	NULL	NULL	NULL
+2	0	0	0	0
+3	5	5	5	5
+4	255	255	65535	65535
+SELECT * FROM blob_text_test WHERE id = 3;
+id	tiny_blob_col	tiny_text_col	blob_col	text_col
+3	Hello	Hello	world	world
+SELECT * FROM userscde;
+id	name	email
+1	Alice	alice@example.com
+# 
+# 4. Add blob col and restart mysqld.
+# 
+ALTER TABLE blob_text_test ADD COLUMN tiny_blob_col2 TINYBLOB, ALGORITHM=INSTANT;
+ERROR HY000: BLOB Column can't be added with ALGORITHM=INSTANT. Try ALGORITHM=INPLACE/COPY.
+ALTER TABLE blob_text_test ADD COLUMN tiny_blob_col2 TINYBLOB, ALGORITHM=INPLACE;
+ALTER TABLE blob_text_test ADD COLUMN tiny_blob_col3 TINYBLOB, ALGORITHM=COPY;
+ALTER TABLE userscde ADD COLUMN blob_col BLOB;
+INSERT INTO userscde (name, email, blob_col) VALUES ('Bob', 'Bob@example.com', repeat('A', 3000));
+show create table blob_text_test;
+Table	Create Table
+blob_text_test	CREATE TABLE `blob_text_test` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `tiny_blob_col` tinyblob,
+  `tiny_text_col` tinytext,
+  `blob_col` blob,
+  `text_col` text,
+  `tiny_blob_col2` tinyblob,
+  `tiny_blob_col3` tinyblob,
+  PRIMARY KEY (`id`)
+) ENGINE=Dstore AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+# restart
+SELECT id, LENGTH(tiny_blob_col), LENGTH(tiny_text_col), LENGTH(blob_col), LENGTH(text_col) FROM blob_text_test;
+id	LENGTH(tiny_blob_col)	LENGTH(tiny_text_col)	LENGTH(blob_col)	LENGTH(text_col)
+1	NULL	NULL	NULL	NULL
+2	0	0	0	0
+3	5	5	5	5
+4	255	255	65535	65535
+SELECT * FROM blob_text_test WHERE id = 3;
+id	tiny_blob_col	tiny_text_col	blob_col	text_col	tiny_blob_col2	tiny_blob_col3
+3	Hello	Hello	world	world	NULL	NULL
+SELECT id, name, email, LENGTH(blob_col) FROM userscde;
+id	name	email	LENGTH(blob_col)
+1	Alice	alice@example.com	NULL
+2	Bob	Bob@example.com	3000
+# 
+# 5. Add varchar col and restart mysqld.
+# 
+ALTER TABLE blob_text_test ADD COLUMN (varchar_col VARCHAR(255));
+show create table blob_text_test;
+Table	Create Table
+blob_text_test	CREATE TABLE `blob_text_test` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `tiny_blob_col` tinyblob,
+  `tiny_text_col` tinytext,
+  `blob_col` blob,
+  `text_col` text,
+  `tiny_blob_col2` tinyblob,
+  `tiny_blob_col3` tinyblob,
+  `varchar_col` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=Dstore AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+# restart
+SELECT id, LENGTH(tiny_blob_col), LENGTH(tiny_text_col), LENGTH(blob_col), LENGTH(text_col) FROM blob_text_test;
+id	LENGTH(tiny_blob_col)	LENGTH(tiny_text_col)	LENGTH(blob_col)	LENGTH(text_col)
+1	NULL	NULL	NULL	NULL
+2	0	0	0	0
+3	5	5	5	5
+4	255	255	65535	65535
+SELECT * FROM blob_text_test WHERE id = 3;
+id	tiny_blob_col	tiny_text_col	blob_col	text_col	tiny_blob_col2	tiny_blob_col3	varchar_col
+3	Hello	Hello	world	world	NULL	NULL	NULL
+# 
+# 6. Modify blob col and restart mysqld.
+# 
+ALTER TABLE blob_text_test MODIFY COLUMN tiny_blob_col BLOB;
+show create table blob_text_test;
+Table	Create Table
+blob_text_test	CREATE TABLE `blob_text_test` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `tiny_blob_col` blob,
+  `tiny_text_col` tinytext,
+  `blob_col` blob,
+  `text_col` text,
+  `tiny_blob_col2` tinyblob,
+  `tiny_blob_col3` tinyblob,
+  `varchar_col` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=Dstore AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+# restart
+SELECT id, LENGTH(tiny_blob_col), LENGTH(tiny_text_col), LENGTH(blob_col), LENGTH(text_col) FROM blob_text_test;
+id	LENGTH(tiny_blob_col)	LENGTH(tiny_text_col)	LENGTH(blob_col)	LENGTH(text_col)
+1	NULL	NULL	NULL	NULL
+2	0	0	0	0
+3	5	5	5	5
+4	255	255	65535	65535
+SELECT * FROM blob_text_test WHERE id = 3;
+id	tiny_blob_col	tiny_text_col	blob_col	text_col	tiny_blob_col2	tiny_blob_col3	varchar_col
+3	Hello	Hello	world	world	NULL	NULL	NULL
+# 
+# 7. Drop blob col and restart mysqld.
+# 
+ALTER TABLE blob_text_test DROP COLUMN tiny_blob_col;
+ALTER TABLE userscde DROP COLUMN blob_col;
+show create table blob_text_test;
+Table	Create Table
+blob_text_test	CREATE TABLE `blob_text_test` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `tiny_text_col` tinytext,
+  `blob_col` blob,
+  `text_col` text,
+  `tiny_blob_col2` tinyblob,
+  `tiny_blob_col3` tinyblob,
+  `varchar_col` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=Dstore AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+# restart
+SELECT id, LENGTH(tiny_text_col), LENGTH(blob_col), LENGTH(text_col) FROM blob_text_test;
+id	LENGTH(tiny_text_col)	LENGTH(blob_col)	LENGTH(text_col)
+1	NULL	NULL	NULL
+2	0	0	0
+3	5	5	5
+4	255	65535	65535
+SELECT * FROM blob_text_test WHERE id = 3;
+id	tiny_text_col	blob_col	text_col	tiny_blob_col2	tiny_blob_col3	varchar_col
+3	Hello	world	world	NULL	NULL	NULL
+show create table blob_text_test;
+Table	Create Table
+blob_text_test	CREATE TABLE `blob_text_test` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `tiny_text_col` tinytext,
+  `blob_col` blob,
+  `text_col` text,
+  `tiny_blob_col2` tinyblob,
+  `tiny_blob_col3` tinyblob,
+  `varchar_col` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=Dstore AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+show create table userscde;
+Table	Create Table
+userscde	CREATE TABLE `userscde` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(50) NOT NULL,
+  `email` varchar(100) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `email` (`email`)
+) ENGINE=Dstore AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+# 
+# 8. Rename table and restart mysqld.
+# 
+RENAME TABLE blob_text_test TO blob_text_test_new;
+# restart
+SELECT id, LENGTH(tiny_text_col), LENGTH(blob_col), LENGTH(text_col) FROM blob_text_test_new;
+id	LENGTH(tiny_text_col)	LENGTH(blob_col)	LENGTH(text_col)
+1	NULL	NULL	NULL
+2	0	0	0
+3	5	5	5
+4	255	65535	65535
+SELECT * FROM blob_text_test_new WHERE id = 3;
+id	tiny_text_col	blob_col	text_col	tiny_blob_col2	tiny_blob_col3	varchar_col
+3	Hello	world	world	NULL	NULL	NULL
+# 
+# 9. Cretae table like and restart mysqld.
+# 
+CREATE TABLE blob_text_test_new2 LIKE blob_text_test_new;
+# restart
+SELECT id, LENGTH(tiny_text_col), LENGTH(blob_col), LENGTH(text_col) FROM blob_text_test_new2;
+id	LENGTH(tiny_text_col)	LENGTH(blob_col)	LENGTH(text_col)
+SELECT * FROM blob_text_test_new2 WHERE id = 3;
+id	tiny_text_col	blob_col	text_col	tiny_blob_col2	tiny_blob_col3	varchar_col
+# 
+# 10. Truncate table and restart mysqld.
+# 
+TRUNCATE TABLE blob_text_test_new2;
+# restart
+SELECT id, LENGTH(tiny_text_col), LENGTH(blob_col), LENGTH(text_col) FROM blob_text_test_new2;
+id	LENGTH(tiny_text_col)	LENGTH(blob_col)	LENGTH(text_col)
+SELECT * FROM blob_text_test_new2 WHERE id = 3;
+id	tiny_text_col	blob_col	text_col	tiny_blob_col2	tiny_blob_col3	varchar_col
+# 
+# 11. Modify blob col and restart mysqld.
+# 
+DROP TABLE blob_text_test_new2;
+# restart
+show tables;
+Tables_in_test
+blob_text_test_new
+userscde
+DROP TABLE blob_text_test_new;
+DROP TABLE userscde;

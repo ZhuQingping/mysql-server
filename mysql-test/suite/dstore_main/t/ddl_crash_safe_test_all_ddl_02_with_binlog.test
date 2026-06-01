@@ -1,0 +1,428 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+--source include/big_test.inc
+
+--echo #
+--echo #  DDL CRASH SAFE TEST: ALL DDL TEST PART 02
+--echo #  This test will check whether the server can recovery from different
+--echo #  phases of ALL DDLs without inconsistency between dstore and
+--echo #  innodb. Each DDL will be tested at 3 crash points and recovery
+--echo #  results will be verified.
+--echo #
+
+CREATE DATABASE test_ddl_crash_comprehensive;
+USE test_ddl_crash_comprehensive;
+
+CREATE TABLE t_ddl_crash_renamed(pk INT PRIMARY KEY, col1 INT);
+INSERT INTO t_ddl_crash_renamed VALUES (1,2),(2,3),(3,4);
+
+--echo #  11. Crash on CREATE VIEW statement.
+--echo #  11.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE VIEW v_ddl_crash AS SELECT * FROM t_ddl_crash_renamed;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify view should not exist
+SELECT COUNT(*) AS view_count FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_NAME='v_ddl_crash';
+
+--echo #  11.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE VIEW v_ddl_crash AS SELECT * FROM t_ddl_crash_renamed;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify view should not exist
+SELECT COUNT(*) AS view_count FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_NAME='v_ddl_crash';
+
+--echo #  11.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+CREATE VIEW v_ddl_crash AS SELECT * FROM t_ddl_crash_renamed;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify view should exist
+SELECT COUNT(*) AS view_count FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_NAME='v_ddl_crash';
+SHOW CREATE VIEW v_ddl_crash;
+
+--echo #  12. Crash on DROP VIEW statement.
+--echo #  12.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+DROP VIEW v_ddl_crash;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify view should still exist
+SELECT COUNT(*) AS view_count FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_NAME='v_ddl_crash';
+
+--echo #  12.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+DROP VIEW v_ddl_crash;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify view should still exist
+SELECT COUNT(*) AS view_count FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_NAME='v_ddl_crash';
+
+--echo #  12.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+DROP VIEW v_ddl_crash;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify view should be dropped
+SELECT COUNT(*) AS view_count FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_NAME='v_ddl_crash';
+
+--echo #  13. Crash on CREATE STORED FUNCTION statement.
+--echo #  13.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE FUNCTION hello_crash() RETURNS INT DETERMINISTIC RETURN 1;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify function should not exist
+SELECT COUNT(*) AS function_count FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_NAME='hello_crash' AND ROUTINE_TYPE='FUNCTION';
+
+--echo #  13.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE FUNCTION hello_crash() RETURNS INT DETERMINISTIC RETURN 1;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify function should not exist
+SELECT COUNT(*) AS function_count FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_NAME='hello_crash' AND ROUTINE_TYPE='FUNCTION';
+
+--echo #  13.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+CREATE FUNCTION hello_crash() RETURNS INT DETERMINISTIC RETURN 1;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify function should exist
+SELECT COUNT(*) AS function_count FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_NAME='hello_crash' AND ROUTINE_TYPE='FUNCTION';
+SELECT hello_crash();
+
+--echo #  14. Crash on ALTER FUNCTION statement.
+--echo #  14.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+ALTER FUNCTION hello_crash COMMENT 'crash test modified';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify function comment should not be changed
+SELECT ROUTINE_COMMENT FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_NAME='hello_crash';
+
+--echo #  14.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+ALTER FUNCTION hello_crash COMMENT 'crash test modified';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify function comment should not be changed
+SELECT ROUTINE_COMMENT FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_NAME='hello_crash';
+
+--echo #  14.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+ALTER FUNCTION hello_crash COMMENT 'crash test modified';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify function comment should be changed
+SELECT ROUTINE_COMMENT FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_NAME='hello_crash';
+
+--echo #  15. Crash on CREATE PROCEDURE statement.
+--echo #  15.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE PROCEDURE p_crash() SELECT 1;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify procedure should not exist
+SELECT COUNT(*) AS procedure_count FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_NAME='p_crash' AND ROUTINE_TYPE='PROCEDURE';
+
+--echo #  15.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE PROCEDURE p_crash() SELECT 1;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify procedure should not exist
+SELECT COUNT(*) AS procedure_count FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_NAME='p_crash' AND ROUTINE_TYPE='PROCEDURE';
+
+--echo #  15.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+CREATE PROCEDURE p_crash() SELECT 1;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify procedure should exist
+SELECT COUNT(*) AS procedure_count FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_NAME='p_crash' AND ROUTINE_TYPE='PROCEDURE';
+CALL p_crash();
+
+--echo #  16. Crash on ALTER PROCEDURE statement.
+--echo #  16.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+ALTER PROCEDURE p_crash COMMENT 'crash test modified';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify procedure comment should not be changed
+SELECT ROUTINE_COMMENT FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_NAME='p_crash';
+
+--echo #  16.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+ALTER PROCEDURE p_crash COMMENT 'crash test modified';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify procedure comment should not be changed
+SELECT ROUTINE_COMMENT FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_NAME='p_crash';
+
+--echo #  16.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+ALTER PROCEDURE p_crash COMMENT 'crash test modified';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify procedure comment should be changed
+SELECT ROUTINE_COMMENT FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_NAME='p_crash';
+
+--echo #  17. Crash on CREATE TRIGGER statement.
+--echo #  17.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE TRIGGER tr_crash BEFORE INSERT ON t_ddl_crash_renamed FOR EACH ROW SET NEW.pk = NEW.pk + 100;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify trigger should not exist
+SELECT COUNT(*) AS trigger_count FROM INFORMATION_SCHEMA.TRIGGERS WHERE TRIGGER_NAME='tr_crash';
+
+--echo #  17.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE TRIGGER tr_crash BEFORE INSERT ON t_ddl_crash_renamed FOR EACH ROW SET NEW.pk = NEW.pk + 100;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify trigger should not exist
+SELECT COUNT(*) AS trigger_count FROM INFORMATION_SCHEMA.TRIGGERS WHERE TRIGGER_NAME='tr_crash';
+
+--echo #  17.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+CREATE TRIGGER tr_crash BEFORE INSERT ON t_ddl_crash_renamed FOR EACH ROW SET NEW.pk = NEW.pk + 100;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify trigger should exist and work
+SELECT COUNT(*) AS trigger_count FROM INFORMATION_SCHEMA.TRIGGERS WHERE TRIGGER_NAME='tr_crash';
+INSERT INTO t_ddl_crash_renamed VALUES(50, 60);
+SELECT * FROM t_ddl_crash_renamed WHERE pk >= 100;
+
+--echo #  18. Crash on CREATE EVENT statement.
+--echo #  18.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE EVENT e_crash ON SCHEDULE EVERY 1 DAY DO DELETE FROM t_ddl_crash_renamed WHERE pk > 1000;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify event should not exist
+SELECT COUNT(*) AS event_count FROM INFORMATION_SCHEMA.EVENTS WHERE EVENT_NAME='e_crash';
+
+--echo #  18.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE EVENT e_crash ON SCHEDULE EVERY 1 DAY DO DELETE FROM t_ddl_crash_renamed WHERE pk > 1000;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify event should not exist
+SELECT COUNT(*) AS event_count FROM INFORMATION_SCHEMA.EVENTS WHERE EVENT_NAME='e_crash';
+
+--echo #  18.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+CREATE EVENT e_crash ON SCHEDULE EVERY 1 DAY DO DELETE FROM t_ddl_crash_renamed WHERE pk > 1000;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify event should exist
+SELECT COUNT(*) AS event_count FROM INFORMATION_SCHEMA.EVENTS WHERE EVENT_NAME='e_crash';
+SELECT EVENT_NAME, STATUS FROM INFORMATION_SCHEMA.EVENTS WHERE EVENT_NAME='e_crash';
+
+--echo #  19. Crash on ALTER EVENT statement.
+--echo #  19.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+ALTER EVENT e_crash DISABLE;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify event status should not be changed
+SELECT STATUS FROM INFORMATION_SCHEMA.EVENTS WHERE EVENT_NAME='e_crash';
+
+--echo #  19.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+ALTER EVENT e_crash DISABLE;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify event status should not be changed
+SELECT STATUS FROM INFORMATION_SCHEMA.EVENTS WHERE EVENT_NAME='e_crash';
+
+--echo #  19.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+ALTER EVENT e_crash DISABLE;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify event should be disabled
+SELECT STATUS FROM INFORMATION_SCHEMA.EVENTS WHERE EVENT_NAME='e_crash';
+
+--echo # Final cleanup and summary
+--echo # Drop remaining objects for complete cleanup
+
+--echo # Summary: All DDL crash recovery tests completed successfully
+--echo # Each DDL was tested at 3 crash points with proper recovery verification
+--echo # - Before InnoDB prepare: DDL should be rolled back
+--echo # - After InnoDB prepare but before DStore commit: DDL should be rolled back
+--echo # - After DStore commit: DDL should be committed and visible
+
+SET debug='reset';
+DROP DATABASE test_ddl_crash_comprehensive;

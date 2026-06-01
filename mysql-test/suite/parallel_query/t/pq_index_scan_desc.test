@@ -1,0 +1,35 @@
+--source include/pq_test.inc
+
+## BUG2022081800038 in a reverse PQ scan, when splitting a range, sub-ranges were inserted into the global list of ranges at the wrong place, so records were retrieved out of order
+--disable_warnings
+CREATE TABLE `grid_hour_weather` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `grid_id` int DEFAULT NULL,
+  `data` longtext CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+  `published_at` datetime NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `grid_hour_weather_published_at` (`published_at`, data(100))
+) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8;
+
+let $1=50;
+
+--disable_query_log
+while($1)
+{
+  let $2=500;
+  while($2)
+  {
+   eval insert into grid_hour_weather(grid_id, data, published_at) values($1, repeat('a',200), date_add("2022-08-07 00:00:00", interval $1 hour));
+   dec $2;
+ }
+ dec $1;
+}
+--enable_query_log
+
+--replace_regex /[0-9]/#/
+explain select published_at,count(*) from grid_hour_weather where published_at >= '2022-08-07 00:00:00' group by published_at order by published_at desc;
+select published_at,count(*) from grid_hour_weather where published_at >= '2022-08-07 00:00:00' group by published_at order by published_at desc;
+
+--enable_warnings
+drop table grid_hour_weather;
+

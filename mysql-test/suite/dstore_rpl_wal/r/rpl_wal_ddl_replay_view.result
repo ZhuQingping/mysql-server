@@ -1,0 +1,568 @@
+############################################################
+Establish a master-replica replication relationship based on physical replication.
+############################################################
+include/master-slave.inc
+[connection master]
+#
+# 1. Initialize the required variables, then disconnect the subsequent master-replica replication connections.
+#
+[connection master]
+[connection slave]
+STOP REPLICA;
+RESET REPLICA ALL;
+#
+# 2. Since physical replication does not support DDL operations at present, execute all required DDL statements first.
+#
+create database copy_database;
+use copy_database;
+CREATE TABLE copy_table (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) engine = dstore;
+#
+# 3. Shutdown the primary and standby instances.
+#
+include/rpl_stop_server.inc [server_number=1]
+include/rpl_stop_server.inc [server_number=2]
+#
+# 4. Copy the data directory of the primary to that of the standby.
+#
+#
+# 5. Start the primary and standby instances with new parameters for establishing a master-replica physical replication relationship.
+#
+include/rpl_start_server.inc [server_number=1]
+include/rpl_start_server.inc [server_number=2]
+#
+# 6. Confirm that the primary and standby servers start with the new data directory.
+#
+include/assert.inc [Database copy_database should exist (only one record)]
+include/assert.inc [Table copy_table should exist in database copy_database (only one record)]
+use copy_database;
+show tables;
+Tables_in_copy_database
+copy_table
+include/assert.inc [Database copy_database should exist (only one record)]
+include/assert.inc [Table copy_table should exist in database copy_database (only one record)]
+use copy_database;
+show tables;
+Tables_in_copy_database
+copy_table
+#
+# 7. Install the plugin on both the primary and standby servers, and establish a master-replica physical replication relationship.
+#
+#
+# Install the primary server's plugin and set enabled_wal to ON.
+#
+INSTALL PLUGIN rpl_semi_sync_source SONAME 'semisync_source.so';
+INSTALL PLUGIN rpl_semi_sync_replica SONAME 'semisync_replica.so';
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 1;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 1;
+SET GLOBAL rds_physical_rpl_sender_packet_size = 1;
+#
+# dstore_enable_standby_role should show as false, indicating that the current node is the source.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	1
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	OFF
+#
+# Install the standby server's plugin and set enabled_wal to ON.
+#
+INSTALL PLUGIN rpl_semi_sync_source SONAME 'semisync_source.so';
+INSTALL PLUGIN rpl_semi_sync_replica SONAME 'semisync_replica.so';
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 1;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 1;
+SET GLOBAL rds_physical_rpl_sender_packet_size = 1;
+#
+# dstore_enable_standby_role should show as true, indicating that the current node is the replica.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	2
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	ON
+#
+# Configure the replica and check whether it is configured correctly.
+#
+STOP REPLICA;
+Warnings:
+Note	3084	Replication thread(s) for channel '' are already stopped.
+RESET REPLICA ALL;
+CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=SERVER_MYPORT_1, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL 'dstore_wal_replication_channel';;
+include/assert.inc [Channel name should be 'dstore_wal_replication_channel']
+Slave_IO_Running should be OFF.
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+OFF
+START REPLICA;
+#
+# Slave_IO_Running should be ON.
+#
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+ON
+############################################################
+# 一、Create the test environment.
+# 二、Execute the corresponding DDL statements for SQLCOM_CREATE_VIEW, SQLCOM_ALTER_VIEW, and SQLCOM_DROP_VIEW.
+# 三、Check the DD information on the standby node to ensure correct metadata replay.
+# 四、Query using the created views for subsequent comparison with the new primary node to ensure the correctness of the replay function.
+# 五、Perform a switchover.
+# 六、Query using the views created by the original primary node on the new primary node, and compare the results with those from Step 4 to ensure the correctness of the standby node replay function.
+# 七、Modify and delete the replayed views on the new primary node to ensure the availability and operability of the replayed DDL.
+############################################################
+#
+# 一、Create the test environment.
+#
+CREATE DATABASE IF NOT EXISTS test_view_db 
+DEFAULT CHARACTER SET utf8mb4 
+DEFAULT COLLATE utf8mb4_general_ci;
+USE test_view_db;
+CREATE TABLE employees (
+emp_id INT AUTO_INCREMENT PRIMARY KEY,
+emp_name VARCHAR(100) NOT NULL,
+department VARCHAR(50),
+salary DECIMAL(10, 2),
+hire_date DATE,
+status VARCHAR(20) DEFAULT 'ACTIVE'
+);
+CREATE TABLE departments (
+dept_id INT AUTO_INCREMENT PRIMARY KEY,
+dept_name VARCHAR(50) NOT NULL UNIQUE,
+location VARCHAR(100),
+budget DECIMAL(15, 2) DEFAULT 0
+);
+CREATE TABLE projects (
+project_id INT AUTO_INCREMENT PRIMARY KEY,
+project_name VARCHAR(100) NOT NULL,
+manager_id INT,
+department VARCHAR(50),
+budget DECIMAL(15, 2),
+start_date DATE,
+end_date DATE,
+status VARCHAR(20) DEFAULT 'PLANNING',
+FOREIGN KEY (manager_id) REFERENCES employees(emp_id)
+);
+CREATE TABLE employee_projects (
+emp_proj_id INT AUTO_INCREMENT PRIMARY KEY,
+emp_id INT NOT NULL,
+project_id INT NOT NULL,
+role VARCHAR(50),
+hours_assigned INT DEFAULT 0,
+assigned_date DATE DEFAULT (CURDATE()),
+FOREIGN KEY (emp_id) REFERENCES employees(emp_id),
+FOREIGN KEY (project_id) REFERENCES projects(project_id),
+UNIQUE KEY uniq_emp_project (emp_id, project_id)  -- 防止重复分配
+);
+INSERT INTO departments(dept_name, location, budget) VALUES
+('技术部', '北京', 500000.00),
+('销售部', '上海', 300000.00),
+('人事部', '广州', 200000.00),
+('财务部', '深圳', 250000.00);
+INSERT INTO employees(emp_name, department, salary, hire_date) VALUES
+('张三', '技术部', 15000.00, '2020-01-15'),
+('李四', '技术部', 12000.00, '2020-03-20'),
+('王五', '销售部', 8000.00, '2021-05-10'),
+('赵六', '人事部', 10000.00, '2019-11-30'),
+('钱七', '销售部', 9000.00, '2022-02-14'),
+('孙八', '财务部', 11000.00, '2021-07-01');
+INSERT INTO projects(project_name, manager_id, department, budget, start_date, end_date, status) VALUES
+('OA系统开发', 1, '技术部', 100000.00, '2023-01-01', '2023-12-31', 'IN_PROGRESS'),
+('CRM系统优化', 1, '技术部', 80000.00, '2023-03-01', '2023-09-30', 'IN_PROGRESS'),
+('市场推广活动', 3, '销售部', 50000.00, '2023-06-01', '2023-11-30', 'PLANNING'),
+('年度预算编制', 6, '财务部', 120000.00, '2023-02-01', '2023-10-31', 'COMPLETED');
+INSERT INTO employee_projects(emp_id, project_id, role, hours_assigned) VALUES
+(1, 1, '项目经理', 160),
+(2, 1, '后端开发', 120),
+(1, 2, '项目经理', 140),
+(2, 2, '技术顾问', 40),
+(3, 3, '项目经理', 140),
+(5, 3, '市场专员', 100),
+(6, 4, '项目经理', 160),
+(4, 4, '人力资源协调', 90);
+#
+# 二、Execute the corresponding DDL statements for SQLCOM_CREATE_VIEW, SQLCOM_ALTER_VIEW, and SQLCOM_DROP_VIEW.
+#
+#
+# 1 SQLCOM_CREATE_VIEW
+#
+# 1 Create an associated view: Employee and department information
+CREATE VIEW v_emp_dept AS
+SELECT 
+e.emp_id,
+e.emp_name,
+e.department,
+e.salary,
+d.location,
+d.budget
+FROM employees e
+JOIN departments d ON e.department = d.dept_name
+WHERE e.status = 'ACTIVE';
+# 2. Create an aggregate view: Department statistical information
+CREATE VIEW v_dept_stats AS
+SELECT 
+d.dept_name,
+d.location,
+COUNT(e.emp_id) AS employee_count,
+SUM(e.salary) AS total_salary,
+AVG(e.salary) AS avg_salary,
+MIN(e.hire_date) AS earliest_hire,
+MAX(e.hire_date) AS latest_hire
+FROM departments d
+LEFT JOIN employees e ON d.dept_name = e.department AND e.status = 'ACTIVE'
+GROUP BY d.dept_name, d.location;
+# 3 Create a complex view: Employee project participation status
+CREATE VIEW v_emp_project_details AS
+SELECT 
+e.emp_id,
+e.emp_name,
+e.department,
+p.project_name,
+p.status AS project_status,
+ep.role,
+ep.hours_assigned,
+p.start_date,
+p.end_date,
+CASE 
+WHEN CURDATE() BETWEEN p.start_date AND p.end_date THEN '进行中'
+        WHEN CURDATE() > p.end_date THEN '已结束'
+        ELSE '未开始'
+    END AS timeline_status
+FROM employees e
+JOIN employee_projects ep ON e.emp_id = ep.emp_id
+JOIN projects p ON ep.project_id = p.project_id
+WHERE e.status = 'ACTIVE';
+# 4 Create a view with calculated aggregation: Salary analysis
+CREATE VIEW v_salary_analysis AS
+SELECT 
+department,
+COUNT(*) AS emp_count,
+SUM(salary) AS total_salary,
+AVG(salary) AS avg_salary,
+MIN(salary) AS min_salary,
+MAX(salary) AS max_salary,
+(MAX(salary) - MIN(salary)) AS salary_range,
+ROUND((MAX(salary) - MIN(salary)) / AVG(salary) * 100, 2) AS range_percentage
+FROM employees
+WHERE status = 'ACTIVE'
+ GROUP BY department;
+# 5 Create a nested view: A view based on other views
+CREATE VIEW v_nested_view AS
+SELECT 
+v.dept_name,
+v.employee_count,
+v.total_salary,
+ROUND(v.total_salary / NULLIF(v.employee_count, 0), 2) AS per_capita_cost
+FROM v_dept_stats v;
+# 6 Create a view for verifying the delete operation
+CREATE VIEW v_to_delete AS
+SELECT emp_id, emp_name, department, salary, hire_date
+FROM employees
+WHERE status = 'ACTIVE'
+WITH CHECK OPTION;
+#
+# 2 SQLCOM_ALTER_VIEW
+#
+ALTER VIEW v_emp_dept AS
+SELECT 
+e.emp_id,
+e.emp_name,
+e.department,
+e.salary,
+d.location,
+d.budget,
+CASE 
+WHEN e.salary > 10000 THEN '高薪'
+        WHEN e.salary > 8000 THEN '中薪'
+        ELSE '低薪'
+    END AS salary_level
+FROM employees e
+JOIN departments d ON e.department = d.dept_name
+WHERE e.status = 'ACTIVE' AND e.salary > 0;
+ALTER VIEW v_dept_stats AS
+SELECT 
+d.dept_name,
+d.location,
+d.budget,
+COUNT(e.emp_id) AS employee_count,
+SUM(e.salary) AS total_salary,
+AVG(e.salary) AS avg_salary,
+MIN(e.hire_date) AS earliest_hire,
+MAX(e.hire_date) AS latest_hire,
+ROUND(SUM(e.salary) / d.budget * 100, 2) AS salary_budget_ratio
+FROM departments d
+LEFT JOIN employees e ON d.dept_name = e.department AND e.status = 'ACTIVE'
+GROUP BY d.dept_name, d.location, d.budget;
+#
+# 3 SQLCOM_DROP_VIEW
+#
+DROP VIEW IF EXISTS v_to_delete;
+# Check view metadata on the primary node
+SELECT 
+TABLE_NAME,
+CHECK_OPTION,
+IS_UPDATABLE,
+DEFINER,
+SECURITY_TYPE
+FROM INFORMATION_SCHEMA.VIEWS 
+WHERE TABLE_SCHEMA = 'test_view_db'
+ORDER BY TABLE_NAME;
+TABLE_NAME	CHECK_OPTION	IS_UPDATABLE	DEFINER	SECURITY_TYPE
+v_dept_stats	NONE	NO	root@localhost	DEFINER
+v_emp_dept	NONE	YES	root@localhost	DEFINER
+v_emp_project_details	NONE	YES	root@localhost	DEFINER
+v_nested_view	NONE	NO	root@localhost	DEFINER
+v_salary_analysis	NONE	NO	root@localhost	DEFINER
+#
+# 三、Check the DD on the standby node to ensure the correctness of metadata replay on the standby node.
+#
+USE test_view_db;
+# Verify the view replay on the standby node
+SELECT 
+TABLE_NAME,
+CHECK_OPTION,
+IS_UPDATABLE,
+DEFINER,
+SECURITY_TYPE
+FROM INFORMATION_SCHEMA.VIEWS 
+WHERE TABLE_SCHEMA = 'test_view_db'
+ORDER BY TABLE_NAME;
+TABLE_NAME	CHECK_OPTION	IS_UPDATABLE	DEFINER	SECURITY_TYPE
+v_dept_stats	NONE	NO	root@localhost	DEFINER
+v_emp_dept	NONE	YES	root@localhost	DEFINER
+v_emp_project_details	NONE	YES	root@localhost	DEFINER
+v_nested_view	NONE	NO	root@localhost	DEFINER
+v_salary_analysis	NONE	NO	root@localhost	DEFINER
+#
+# 四、Query using the created views for subsequent comparison with the new primary node to ensure the correctness of the replay function.
+#
+USE test_view_db;
+# 1 Query the associated view
+SELECT * FROM v_emp_dept ORDER BY emp_id;
+emp_id	emp_name	department	salary	location	budget	salary_level
+1	张三	技术部	15000.00	北京	500000.00	高薪
+2	李四	技术部	12000.00	北京	500000.00	高薪
+3	王五	销售部	8000.00	上海	300000.00	低薪
+4	赵六	人事部	10000.00	广州	200000.00	中薪
+5	钱七	销售部	9000.00	上海	300000.00	中薪
+6	孙八	财务部	11000.00	深圳	250000.00	高薪
+# 2 Query the aggregate view
+SELECT * FROM v_dept_stats ORDER BY dept_name;
+dept_name	location	budget	employee_count	total_salary	avg_salary	earliest_hire	latest_hire	salary_budget_ratio
+人事部	广州	200000.00	1	10000.00	10000.000000	2019-11-30	2019-11-30	5.00
+技术部	北京	500000.00	2	27000.00	13500.000000	2020-01-15	2020-03-20	5.40
+财务部	深圳	250000.00	1	11000.00	11000.000000	2021-07-01	2021-07-01	4.40
+销售部	上海	300000.00	2	17000.00	8500.000000	2021-05-10	2022-02-14	5.67
+# 3 Perform complex view query
+SELECT * FROM v_emp_project_details ORDER BY emp_id, project_name;
+emp_id	emp_name	department	project_name	project_status	role	hours_assigned	start_date	end_date	timeline_status
+1	张三	技术部	CRM系统优化	IN_PROGRESS	项目经理	140	2023-03-01	2023-09-30	已结束
+1	张三	技术部	OA系统开发	IN_PROGRESS	项目经理	160	2023-01-01	2023-12-31	已结束
+2	李四	技术部	CRM系统优化	IN_PROGRESS	技术顾问	40	2023-03-01	2023-09-30	已结束
+2	李四	技术部	OA系统开发	IN_PROGRESS	后端开发	120	2023-01-01	2023-12-31	已结束
+3	王五	销售部	市场推广活动	PLANNING	项目经理	140	2023-06-01	2023-11-30	已结束
+4	赵六	人事部	年度预算编制	COMPLETED	人力资源协调	90	2023-02-01	2023-10-31	已结束
+5	钱七	销售部	市场推广活动	PLANNING	市场专员	100	2023-06-01	2023-11-30	已结束
+6	孙八	财务部	年度预算编制	COMPLETED	项目经理	160	2023-02-01	2023-10-31	已结束
+# 4 Perform a salary analysis view query
+SELECT * FROM v_salary_analysis ORDER BY department;
+department	emp_count	total_salary	avg_salary	min_salary	max_salary	salary_range	range_percentage
+人事部	1	10000.00	10000.000000	10000.00	10000.00	0.00	0.00
+技术部	2	27000.00	13500.000000	12000.00	15000.00	3000.00	22.22
+财务部	1	11000.00	11000.000000	11000.00	11000.00	0.00	0.00
+销售部	2	17000.00	8500.000000	8000.00	9000.00	1000.00	11.76
+# 5 Verify the nested view
+SELECT * FROM v_nested_view ORDER BY dept_name;
+dept_name	employee_count	total_salary	per_capita_cost
+人事部	1	10000.00	10000.00
+技术部	2	27000.00	13500.00
+财务部	1	11000.00	11000.00
+销售部	2	17000.00	8500.00
+#
+# 五、Perform a switchover.
+#
+############################################################
+switchover_1
+############################################################
+# Demote the source to replica.
+SET GLOBAL read_only = ON;
+SET GLOBAL event_scheduler = OFF;
+call rpl_wal.pdb_demote();
+#
+# dstore_enable_standby_role should show as true, indicating that the current node is the replica.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	1
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	ON
+#
+# Promote the replica to source.
+#
+STOP REPLICA;
+RESET REPLICA ALL FOR CHANNEL 'dstore_wal_replication_channel';
+call rpl_wal.pdb_promote();
+#
+# dstore_enable_standby_role should show as false, indicating that the current node is the source.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	2
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	OFF
+#
+# Clean the primary and standby servers.
+#
+include/stop_wal_dump_threads.inc
+#
+# Re-establish primary-standby relationship.
+#
+CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=old_standby_port, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL 'dstore_wal_replication_channel';;
+include/assert.inc [Channel name should be 'dstore_wal_replication_channel']
+START REPLICA;
+#
+# Slave_IO_Running should be ON.
+#
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+ON
+#
+# Disable read-only mode on the new source.
+#
+SET GLOBAL read_only = OFF;
+SET GLOBAL event_scheduler = ON;
+#
+# 六、Query using the views created by the original primary node on the new primary node, and compare the results with those from Step 4 to ensure the correctness of the standby node replay function.
+#
+USE test_view_db;
+# 1 Query the associated view
+SELECT * FROM v_emp_dept ORDER BY emp_id;
+emp_id	emp_name	department	salary	location	budget	salary_level
+1	张三	技术部	15000.00	北京	500000.00	高薪
+2	李四	技术部	12000.00	北京	500000.00	高薪
+3	王五	销售部	8000.00	上海	300000.00	低薪
+4	赵六	人事部	10000.00	广州	200000.00	中薪
+5	钱七	销售部	9000.00	上海	300000.00	中薪
+6	孙八	财务部	11000.00	深圳	250000.00	高薪
+# 2 Query the aggregate view
+SELECT * FROM v_dept_stats ORDER BY dept_name;
+dept_name	location	budget	employee_count	total_salary	avg_salary	earliest_hire	latest_hire	salary_budget_ratio
+人事部	广州	200000.00	1	10000.00	10000.000000	2019-11-30	2019-11-30	5.00
+技术部	北京	500000.00	2	27000.00	13500.000000	2020-01-15	2020-03-20	5.40
+财务部	深圳	250000.00	1	11000.00	11000.000000	2021-07-01	2021-07-01	4.40
+销售部	上海	300000.00	2	17000.00	8500.000000	2021-05-10	2022-02-14	5.67
+# 3 Perform complex view query
+SELECT * FROM v_emp_project_details ORDER BY emp_id, project_name;
+emp_id	emp_name	department	project_name	project_status	role	hours_assigned	start_date	end_date	timeline_status
+1	张三	技术部	CRM系统优化	IN_PROGRESS	项目经理	140	2023-03-01	2023-09-30	已结束
+1	张三	技术部	OA系统开发	IN_PROGRESS	项目经理	160	2023-01-01	2023-12-31	已结束
+2	李四	技术部	CRM系统优化	IN_PROGRESS	技术顾问	40	2023-03-01	2023-09-30	已结束
+2	李四	技术部	OA系统开发	IN_PROGRESS	后端开发	120	2023-01-01	2023-12-31	已结束
+3	王五	销售部	市场推广活动	PLANNING	项目经理	140	2023-06-01	2023-11-30	已结束
+4	赵六	人事部	年度预算编制	COMPLETED	人力资源协调	90	2023-02-01	2023-10-31	已结束
+5	钱七	销售部	市场推广活动	PLANNING	市场专员	100	2023-06-01	2023-11-30	已结束
+6	孙八	财务部	年度预算编制	COMPLETED	项目经理	160	2023-02-01	2023-10-31	已结束
+# 4 Perform a salary analysis view query
+SELECT * FROM v_salary_analysis ORDER BY department;
+department	emp_count	total_salary	avg_salary	min_salary	max_salary	salary_range	range_percentage
+人事部	1	10000.00	10000.000000	10000.00	10000.00	0.00	0.00
+技术部	2	27000.00	13500.000000	12000.00	15000.00	3000.00	22.22
+财务部	1	11000.00	11000.000000	11000.00	11000.00	0.00	0.00
+销售部	2	17000.00	8500.000000	8000.00	9000.00	1000.00	11.76
+# 5 Verify the nested view
+SELECT * FROM v_nested_view ORDER BY dept_name;
+dept_name	employee_count	total_salary	per_capita_cost
+人事部	1	10000.00	10000.00
+技术部	2	27000.00	13500.00
+财务部	1	11000.00	11000.00
+销售部	2	17000.00	8500.00
+#
+# 七、Modify and delete the replayed views on the new primary node to ensure the availability and operability of the replayed DDL.
+#
+# 1 Perform operations on the replayed views on the new primary node
+ALTER VIEW v_emp_dept
+AS
+SELECT 
+e.emp_id,
+e.emp_name,
+e.department,
+e.salary,
+d.location,
+d.budget,
+CASE 
+WHEN e.salary > 10000 THEN '高薪'
+        WHEN e.salary > 8000 THEN '中薪'
+        ELSE '低薪'
+    END AS salary_level,
+CASE 
+WHEN d.dept_name = '技术部' THEN '技术岗位'
+        WHEN d.dept_name = '销售部' THEN '业务岗位'
+        ELSE '职能岗位'
+    END AS position_type
+FROM employees e
+JOIN departments d ON TRIM(e.department) = TRIM(d.dept_name)  -- 修复：加TRIM防空格，主备一致
+WHERE e.status = 'ACTIVE' AND e.salary > 0;
+DROP VIEW IF EXISTS v_salary_analysis;
+# 2 Verify whether the new standby node has synchronized the modifications
+USE test_view_db;
+SELECT 
+TABLE_NAME,
+CHECK_OPTION,
+IS_UPDATABLE,
+DEFINER,
+SECURITY_TYPE
+FROM INFORMATION_SCHEMA.VIEWS 
+WHERE TABLE_SCHEMA = 'test_view_db'
+ORDER BY TABLE_NAME;
+TABLE_NAME	CHECK_OPTION	IS_UPDATABLE	DEFINER	SECURITY_TYPE
+v_dept_stats	NONE	NO	root@localhost	DEFINER
+v_emp_dept	NONE	YES	root@localhost	DEFINER
+v_emp_project_details	NONE	YES	root@localhost	DEFINER
+v_nested_view	NONE	NO	root@localhost	DEFINER
+############################################################
+# Uninstall the plugins, reset the variables, and restore the original master-replica replication relationship.
+############################################################
+#
+# 1. Shutdown the mysqld instances of the master and replica servers launched with the new data directory.
+#
+STOP REPLICA;
+RESET REPLICA ALL FOR CHANNEL 'dstore_wal_replication_channel';
+include/stop_wal_dump_threads.inc
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 0;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 0;
+UNINSTALL PLUGIN rpl_semi_sync_source;
+UNINSTALL PLUGIN rpl_semi_sync_replica;
+use mtr;
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 0;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 0;
+UNINSTALL PLUGIN rpl_semi_sync_source;
+UNINSTALL PLUGIN rpl_semi_sync_replica;
+use mtr;
+#
+# 2. Shutdown the mysqld instances of the master and replica servers launched with the new data directory.
+#
+include/rpl_stop_server.inc [server_number=1]
+include/rpl_stop_server.inc [server_number=2]
+# Delete the directories of the primary and standby servers.
+#
+# 3. Restart the mysqld instances of the master and replica servers using the configurations from the opt file.
+#
+include/rpl_start_server.inc [server_number=1]
+show databases;
+Database
+__recyclebin__
+copy_database
+information_schema
+mtr
+mysql
+performance_schema
+sys
+test
+drop database copy_database;
+use mtr;
+include/rpl_start_server.inc [server_number=2]
+use mtr;

@@ -1,0 +1,137 @@
+#
+# Check if storage_engine_mode is consistent with:
+# default_storage_engine
+# disabled_storage_engines
+# 
+# storage_engine_mode has 3 states:
+# ONLY_DSTORE, ONLY_INNODB, BOTH_STORAGE_ENGINE
+# For ONLY_DSTORE, it's:
+# --storage_engine_mode=ONLY_DSTORE
+# --default_storage_engine=Dstore
+# --default_tmp_storage_engine=Dstore
+# --disabled_storage_engines=InnoDB, CSV, Memory, MyISAM, MRG_MyISAM, PERFORMANCE_SCHEMA
+# 
+# For ONLY_INNODB, it's:
+# --storage_engine_mode=ONLY_INNODB
+# --default_storage_engine=InnoDB
+# --default_tmp_storage_engine=InnoDB
+# --disabled_storage_engines=Dstore, CSV, Memory, MyISAM, MRG_MyISAM, PERFORMANCE_SCHEMA
+# 
+# For BOTH_STORAGE_ENGINE, it's:
+# --storage_engine_mode=BOTH_STORAGE_ENGINE
+# --disabled_storage_engines=CSV, Memory, MyISAM, MRG_MyISAM, PERFORMANCE_SCHEMA
+#
+# Note:
+# 1. PERFORMANCE_SCHEMA is used by HCSO customer, so we can't check PERFORMANCE_SCHEMA.
+# 2. We don't check default_tmp_storage_engine now. But we can in the future.
+# 3. We don't check if it's BOTH_STORAGE_ENGINE.
+# 4. Control plane can add more args into disabled_storage_engines like ARCHIVE, FEDERATED, BLACKHOLE,
+#    But they are unloaded during compiling.
+#
+# if user try to set default_storage_engine or default_tmp_storage_engine into a inconsistent variable,
+# we push a warning to notify the operation is not successful.
+#
+
+CALL mtr.add_suppression(".*but storage engine mode is .*");
+CALL mtr.add_suppression(".* is set to a disabled storage engine .*");
+CALL mtr.add_suppression(".* is not set as disabled .*");
+CALL mtr.add_suppression(".* For ONLY_DSTORE, disabled storage engines are InnoDB .*");
+CALL mtr.add_suppression(".* Aborting .*");
+
+SELECT PLUGIN_NAME, PLUGIN_AUTHOR FROM information_schema.plugins WHERE PLUGIN_TYPE="STORAGE ENGINE";
+
+--echo # restart failed
+--source include/kill_mysqld.inc
+--error 1
+--exec $MYSQLD_CMD --storage_engine_mode=ONLY_DSTORE --default_storage_engine=Dstore --default_tmp_storage_engine=Dstore --disabled_storage_engines=CSV,Memory,MyISAM,MRG_MyISAM
+
+# Restart server along with Dstore storage engine. PERFORMANCE_SCHEMA is used in debug version.
+--exec echo "restart: --storage_engine_mode=ONLY_DSTORE --default_storage_engine=Dstore --default_tmp_storage_engine=Dstore --disabled_storage_engines=InnoDB,CSV,Memory,MyISAM,MRG_MyISAM --transaction_isolation=READ-COMMITTED" >$MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--enable_reconnect
+--source include/wait_until_connected_again.inc
+
+SHOW VARIABLES LIKE 'storage_engine_mode';
+SHOW VARIABLES LIKE 'disabled_storage_engines';
+SHOW VARIABLES LIKE 'default_tmp_storage_engine';
+SHOW VARIABLES LIKE 'disabled_storage_engines';
+
+--ERROR ER_UNKNOWN_STORAGE_ENGINE
+SET default_storage_engine = ARCHIVE;
+--ERROR ER_UNKNOWN_STORAGE_ENGINE
+SET default_storage_engine = BLACKHOLE;
+--ERROR ER_UNKNOWN_STORAGE_ENGINE
+SET default_storage_engine = FEDERATED;
+
+--disable_warnings
+SET default_storage_engine = InnoDB;
+show warnings;
+
+SET default_tmp_storage_engine = InnoDB;
+show warnings;
+--enable_warnings
+
+--echo # should be Dstore
+SHOW VARIABLES LIKE 'default_storage_engine';
+SHOW VARIABLES LIKE 'default_tmp_storage_engine';
+
+SET default_storage_engine = Dstore;
+SET default_tmp_storage_engine = Dstore;
+
+--ERROR ER_DISABLED_STORAGE_ENGINE
+CREATE TABLE t1 (c1 int) ENGINE=InnoDB;
+
+--ERROR ER_DISABLED_STORAGE_ENGINE
+CREATE TEMPORARY TABLE t1 (c1 int) ENGINE=InnoDB;
+
+--exec echo "wait" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--shutdown_server
+--source include/wait_until_disconnected.inc
+
+# Restart server along with InnoDB storage engine.
+--exec echo "restart: --storage_engine_mode=ONLY_INNODB --default_storage_engine=InnoDB --default_tmp_storage_engine=InnoDB --disabled_storage_engines=Dstore,CSV,Memory,MyISAM,MRG_MyISAM" >$MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--enable_reconnect
+--source include/wait_until_connected_again.inc
+
+SHOW VARIABLES LIKE 'storage_engine_mode';
+SHOW VARIABLES LIKE 'disabled_storage_engines';
+SHOW VARIABLES LIKE 'default_tmp_storage_engine';
+SHOW VARIABLES LIKE 'disabled_storage_engines';
+
+SET default_storage_engine = InnoDB;
+SET default_tmp_storage_engine = InnoDB;
+
+--ERROR ER_DISABLED_STORAGE_ENGINE, ER_UNKNOWN_STORAGE_ENGINE
+CREATE TABLE t1 (c1 int) ENGINE=Dstore;
+
+--ERROR ER_DISABLED_STORAGE_ENGINE, ER_UNKNOWN_STORAGE_ENGINE
+CREATE TEMPORARY TABLE t1 (c1 int) ENGINE=Dstore;
+
+--exec echo "wait" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--shutdown_server
+--source include/wait_until_disconnected.inc
+
+--exec echo "restart: --storage_engine_mode=BOTH_STORAGE_ENGINE --default_storage_engine=Dstore --default_tmp_storage_engine=InnoDB --disabled_storage_engines= " >$MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--enable_reconnect
+--source include/wait_until_connected_again.inc
+
+SHOW VARIABLES LIKE 'storage_engine_mode';
+SHOW VARIABLES LIKE 'disabled_storage_engines';
+SHOW VARIABLES LIKE 'default_tmp_storage_engine';
+SHOW VARIABLES LIKE 'disabled_storage_engines';
+
+SET default_storage_engine = InnoDB;
+SET default_tmp_storage_engine = Dstore;
+
+CREATE TABLE t1(a int) ENGINE=Dstore;
+DROP TABLE t1;
+
+CREATE TABLE t1(a int) ENGINE=InnoDB;
+DROP TABLE t1;
+
+CREATE TEMPORARY TABLE t1 (c1 int) ENGINE=Dstore;
+DROP TABLE t1;
+
+CREATE TEMPORARY TABLE t1 (c1 int) ENGINE=InnoDB;
+DROP TABLE t1;
+
+--source include/restart_mysqld.inc

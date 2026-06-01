@@ -1,0 +1,75 @@
+SET @global_rds_local_socket_using_per_thread =  @@global.rds_local_socket_using_per_thread;
+SET @global_threadpool_enabled =  @@global.threadpool_enabled;
+# Test 1: when threadpool enable, rds_local_socket_using_per_thread
+#         controls whether local socket connection to use per thread.
+set global threadpool_enabled=ON;
+show variables like 'threadpool_enabled';
+Variable_name	Value
+threadpool_enabled	ON
+show variables like 'rds_local_socket_using_per_thread';
+Variable_name	Value
+rds_local_socket_using_per_thread	OFF
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+Variable_name	Value
+Threads_connected	1
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+Variable_name	Value
+Threadpool_active_connections	0
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+Variable_name	Value
+Threads_connected	2
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+Variable_name	Value
+Threadpool_active_connections	1
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+Variable_name	Value
+Threads_connected	3
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+Variable_name	Value
+Threadpool_active_connections	2
+set global rds_local_socket_using_per_thread=ON;
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+Variable_name	Value
+Threads_connected	4
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+Variable_name	Value
+Threadpool_active_connections	2
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+Variable_name	Value
+Threads_connected	5
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+Variable_name	Value
+Threadpool_active_connections	3
+# Test 2: when threadpool disable, normal connection and socket connection
+#         can connect success.
+set global threadpool_enabled=OFF;
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+Variable_name	Value
+Threads_connected	6
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+Variable_name	Value
+Threadpool_active_connections	3
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+Variable_name	Value
+Threads_connected	7
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+Variable_name	Value
+Threadpool_active_connections	3
+set global rds_local_socket_using_per_thread=OFF;
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+Variable_name	Value
+Threads_connected	8
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+Variable_name	Value
+Threadpool_active_connections	3
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+Variable_name	Value
+Threads_connected	9
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+Variable_name	Value
+Threadpool_active_connections	3
+set global threadpool_enabled=ON;
+set global threadpool_enabled=OFF;
+# Cleanup
+SET @@global.rds_local_socket_using_per_thread = @global_rds_local_socket_using_per_thread;
+SET @@global.threadpool_enabled = @global_threadpool_enabled;

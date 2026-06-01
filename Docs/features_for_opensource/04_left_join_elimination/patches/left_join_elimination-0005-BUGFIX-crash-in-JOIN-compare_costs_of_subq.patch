@@ -1,0 +1,473 @@
+From 7b0e639b5c6a61d7b259534d61aa3801634c0615 Mon Sep 17 00:00:00 2001
+From: Guilhem Bichot <guilhem.bichot@contributor>
+
+
+Date: Wed, 18 Mar 2026 17:44:18 +0100
+Subject: [PATCH] BUGFIX crash in
+ JOIN::compare_costs_of_subquery_strategies
+
+Consider:
+
+select count(t1.a) over () from t1 left join t2 on ... group by ...;
+
+t2 can be eliminated by left-join elimination (due to grouping, the
+cardinality remains the same).
+
+Background: please read the comment in existing code "There is
+unfortunately a catch when the item is Item_sum".
+
+Now that you have this background. count() references t1 and t2 (in
+its used_tables, though actually there is only t1 in the argument),
+and in spite of that, we correctly eliminated t2 (we're smart, aren't
+we?), however, after such elimination, count() still references t2 in
+its used_tables.
+
+So, further code in the optimizer can be confused. For example this
+one from calculate_materialization_costs():
+
+for (uint i = 0; i < n_tables; i++) {
+      JOIN_TAB *const tab = join->best_positions[i].table;
+            join->map2table[tab->table_ref->tableno()] = tab;  <<<<<<
+}
+table_map map = 0;
+for (Item *item : VisibleFields(*inner_expr_list)) {
+  map |= item->used_tables();
+}
+map &= ~PSEUDO_TABLE_BITS;
+Table_map_iterator tm_it(map);
+int tableno;
+double rows = 1.0;
+while ((tableno = tm_it.next_bit()) != Table_map_iterator::BITMAP_END)
+  rows *= join->map2table[tableno]->table()->quick_condition_rows; <<<<<<
+
+If you assume our query is actually a subquery, transformed to a
+semijoin, then:
+- the loop over VisibleFields may meet the count()
+- so 'map' will alas contain t2
+- but the map2table array, which has meaningful cells only for tables
+which are part of the subquery at this moment of optimization, does
+not contain t2 (which has been eliminated at resolution stage). We
+access a wrong cell of it, and crash.
+
+The problem is this left-over dependency in count().
+
+The fix is in multiple changes.
+
+- When we decide to eliminate t2, we have to tell count() it does not
+depend on t2 anymore; so we add a call to update_used_tables(). But
+update_used_tables() merely uses all_tables_map(). So we change
+all_tables_map(), so that it excludes eliminated tables (we now
+maintain a map of eliminated table, to this aim). But we also see that
+all_tables_map() turns on the first leaf_table_count bits. Which is
+not correct: after elimination, we have one table
+less (leaf_table_count is down by 1), but there can be a gap in
+maps (maybe the eliminated table was not the one with the maximum
+table number). So we make all_tables_map() uses m_hwm_free_tableno
+too, which allows to avoid the "gap" problem. While at it, we add an
+assertion to consume_tableno() to make sure that we do not re-use maps
+in gaps.
+- With that, we can call update_used_tables() to adjust dependencies
+of count(). At the same time, we collect the adjusted dependencies to
+make sure the eliminated tables are really gone (assertion).
+- So now the maps in used_tables of count() are correct and the crash
+in calculate_materialization_costs() is gone.
+
+There was a final problem. Let's now additionally assume that t1 and
+t2 are references to a recursive CTRE (see the query in mtr). This
+time, the situation is: we have a recursive CTE, referenced multiple
+times by the parent query, and one such reference is eliminated.
+Each reference has a Query_expression. When optimizing the parent
+query, we come to optimizing children query expressions which have not
+yet been optimized: referenced CTEs have already been optimized, but
+not the non-referenced one, so we optimize it, but this call it
+expected to be for subqueries, not CTEs, as it provides an empty
+materialize_destination:
+
+query_expression->optimize(thd,
+  /*materialize_destination=*/nullptr,...
+in sql_select.cc. Which crashes in the call, because a recursive CTE
+must have a non-empty materialize_destination (see
+ // Recursive CTEs expect to see the rows in the result table
+ immediately
+  // after writing them.
+   assert(!is_recursive());
+   in sql_union.cc).
+
+The last fix for this is to skip optimizing derived tables in this
+loop: a referenced derived table has already been optimized (as the
+existing comment says: "Derived tables and const subqueries are
+already optimized"), so if we see a derived table, it's not referenced
+and we do not need to optimize it. This has good side-effects on
+existing mtr tests.
+
+Other similar loops are changed accordingly for consistency.
+---
+ mysql-test/include/join_elimination.inc       | 14 ++++++
+ mysql-test/r/join_elimination.result          | 49 ++++++++++++++++++-
+ mysql-test/r/with_non_recursive_bugs.result   |  1 -
+ .../r/join_elimination-dstore.result          | 49 ++++++++++++++++++-
+ sql/opt_explain.cc                            |  7 ++-
+ sql/sql_join_elimination.cc                   | 45 +++++++++++++++++
+ sql/sql_lex.h                                 | 17 ++++++-
+ sql/sql_optimizer.cc                          |  7 ++-
+ sql/sql_resolver.cc                           | 10 +++-
+ sql/sql_select.cc                             |  9 +++-
+ 10 files changed, 195 insertions(+), 13 deletions(-)
+
+diff --git a/mysql-test/include/join_elimination.inc b/mysql-test/include/join_elimination.inc
+index 6cfe1d80101..c352acb32ab 100644
+--- a/mysql-test/include/join_elimination.inc
++++ b/mysql-test/include/join_elimination.inc
+@@ -1180,4 +1180,18 @@ WITH cte AS (SELECT * FROM t) SELECT /*+ NO_MERGE() */ DISTINCT cte.a FROM cte,
+ eval EXPLAIN $query;
+ eval EXPLAIN FORMAT=TREE $query;
+ eval $query;
++
++--echo #
++--echo # BUGFIX crash in JOIN::compare_costs_of_subquery_strategies
++--echo #
++
++--echo # This testcase which exercises all changes in the bugfix. cte1 is eliminated, COUNT()'s used_tables() still referenced it, so when doing cost calculations for semijoin materialization we expected to be able to access cte1 through map2table. After fixing this, we used to hit an assertion failure in Query_expression::optimize() (assert(!is_recursive())).
++let $query=
++WITH RECURSIVE cte AS (SELECT * FROM t UNION SELECT * FROM cte)
++SELECT * FROM t AS y
++WHERE y.a IN (SELECT /*+ NO_MERGE() SEMIJOIN(MATERIALIZATION) */ DISTINCT COUNT(cte.a) OVER()
++              FROM cte LEFT JOIN cte cte1 ON TRUE, t WHERE cte.a=t.a GROUP BY t.a);
++eval EXPLAIN $query;
++eval EXPLAIN FORMAT=TREE $query;
++eval $query;
+ DROP TABLE t;
+diff --git a/mysql-test/r/join_elimination.result b/mysql-test/r/join_elimination.result
+index c8c62412294..aba30539612 100644
+--- a/mysql-test/r/join_elimination.result
++++ b/mysql-test/r/join_elimination.result
+@@ -465,7 +465,7 @@ a
+ EXPLAIN WITH cte AS (SELECT t4.a FROM t1 AS t4 WHERE t4.b<4 LIMIT 2) SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2 LEFT JOIN cte AS t3 ON TRUE) ON COALESCE(t3.a,1)=1 LEFT JOIN cte ON TRUE;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index
+-2	DERIVED	t4	NULL	ALL	NULL	NULL	NULL	NULL	3	33.33	Using where
++2	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	Not optimized, outer query is empty
+ Warnings:
+ Note	1003	with `cte` as (/* select#2 */ select `test`.`t4`.`a` AS `a` from `test`.`t1` `t4` where (`test`.`t4`.`b` < 4) limit 2) /* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+ EXPLAIN format=tree WITH cte AS (SELECT t4.a FROM t1 AS t4 WHERE t4.b<4 LIMIT 2) SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2 LEFT JOIN cte AS t3 ON TRUE) ON COALESCE(t3.a,1)=1 LEFT JOIN cte ON TRUE;
+@@ -2615,4 +2615,51 @@ EXPLAIN
+ 
+ WITH cte AS (SELECT * FROM t) SELECT /*+ NO_MERGE() */ DISTINCT cte.a FROM cte, t LEFT JOIN cte cte1 ON TRUE WHERE cte.a=t.a;
+ a
++#
++# BUGFIX crash in JOIN::compare_costs_of_subquery_strategies
++#
++# This testcase which exercises all changes in the bugfix. cte1 is eliminated, COUNT()'s used_tables() still referenced it, so when doing cost calculations for semijoin materialization we expected to be able to access cte1 through map2table. After fixing this, we used to hit an assertion failure in Query_expression::optimize() (assert(!is_recursive())).
++EXPLAIN WITH RECURSIVE cte AS (SELECT * FROM t UNION SELECT * FROM cte)
++SELECT * FROM t AS y
++WHERE y.a IN (SELECT /*+ NO_MERGE() SEMIJOIN(MATERIALIZATION) */ DISTINCT COUNT(cte.a) OVER()
++FROM cte LEFT JOIN cte cte1 ON TRUE, t WHERE cte.a=t.a GROUP BY t.a);
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	y	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
++2	SUBQUERY	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using temporary
++2	SUBQUERY	<derived3>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	5	test.t.a	1	100.00	Using index
++3	DERIVED	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
++4	UNION	cte	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Recursive
++6	UNION RESULT	<union3,4>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	Using temporary
++Warnings:
++Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
++Note	1003	with recursive `cte` as (/* select#3 */ select `test`.`t`.`a` AS `a` from `test`.`t` union /* select#4 */ select `cte`.`a` AS `a` from `cte`) /* select#1 */ select /*+ SEMIJOIN(@`select#2` MATERIALIZATION) NO_MERGE(@`select#2`) */ `test`.`y`.`a` AS `a` from `test`.`t` `y` where <in_optimizer>(`test`.`y`.`a`,`test`.`y`.`a` in ( <materialize> (/* select#2 */ select count(`cte`.`a`) OVER ()  from `cte` join `test`.`t` where (`cte`.`a` = `test`.`t`.`a`) group by `test`.`t`.`a` having true ), <primary_index_lookup>(`test`.`y`.`a` in <temporary table> on <auto_distinct_key> where ((`test`.`y`.`a` = `<materialized_subquery>`.`COUNT(cte.a) OVER()`)))))
++EXPLAIN FORMAT=TREE WITH RECURSIVE cte AS (SELECT * FROM t UNION SELECT * FROM cte)
++SELECT * FROM t AS y
++WHERE y.a IN (SELECT /*+ NO_MERGE() SEMIJOIN(MATERIALIZATION) */ DISTINCT COUNT(cte.a) OVER()
++FROM cte LEFT JOIN cte cte1 ON TRUE, t WHERE cte.a=t.a GROUP BY t.a);
++EXPLAIN
++-> Filter: <in_optimizer>(y.a,y.a in (select #2))  (cost=0.35 rows=1)
++    -> Table scan on y  (cost=0.35 rows=1)
++    -> Select #2 (subquery in condition; run only once)
++        -> Filter: ((y.a = `<materialized_subquery>`.`COUNT(cte.a) OVER()`))  (cost=0..0 rows=0)
++            -> Limit: 1 row(s)  (cost=0..0 rows=0)
++                -> Index lookup on <materialized_subquery> using <auto_distinct_key> (COUNT(cte.a) OVER()=y.a)
++                    -> Materialize with deduplication  (cost=0..0 rows=0)
++                        -> Window aggregate with buffering: count(cte.a) OVER () 
++                            -> Table scan on <temporary>  (cost=3.51..3.51 rows=1)
++                                -> Temporary table with deduplication  (cost=1..1 rows=1)
++                                    -> Nested loop inner join  (cost=0.9 rows=1)
++                                        -> Filter: (t.a is not null)  (cost=0.35 rows=1)
++                                            -> Table scan on t  (cost=0.35 rows=1)
++                                        -> Single-row covering index lookup on cte using <auto_distinct_key> (a=t.a)  (cost=3.73..3.73 rows=1)
++                                            -> Materialize recursive CTE cte with deduplication  (cost=3.38..3.38 rows=3)
++                                                -> Table scan on t  (cost=0.35 rows=1)
++                                                -> Repeat until convergence
++                                                    -> Scan new records on cte  (cost=2.73 rows=2)
++
++WITH RECURSIVE cte AS (SELECT * FROM t UNION SELECT * FROM cte)
++SELECT * FROM t AS y
++WHERE y.a IN (SELECT /*+ NO_MERGE() SEMIJOIN(MATERIALIZATION) */ DISTINCT COUNT(cte.a) OVER()
++FROM cte LEFT JOIN cte cte1 ON TRUE, t WHERE cte.a=t.a GROUP BY t.a);
++a
+ DROP TABLE t;
+diff --git a/mysql-test/r/with_non_recursive_bugs.result b/mysql-test/r/with_non_recursive_bugs.result
+index 67f9abdf1ff..de2ec9a8eb2 100644
+--- a/mysql-test/r/with_non_recursive_bugs.result
++++ b/mysql-test/r/with_non_recursive_bugs.result
+@@ -115,7 +115,6 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ Warnings:
+ Warning	1739	Cannot use ref access on index 'col_varchar_key' due to type or collation conversion on field 'col_varchar_key'
+ Warning	1739	Cannot use ref access on index 'col_blob_key' due to type or collation conversion on field 'col_blob_key'
+-Warning	1739	Cannot use ref access on index 'col_varchar_key' due to type or collation conversion on field 'col_varchar_key'
+ Note	1003	with `cte` as (/* select#2 */ select `test`.`alias1`.`col_time_key` AS `field1` from `test`.`cc` `alias1` join `test`.`c` where ((`test`.`c`.`col_varchar_key` >= 'n') and (`test`.`alias1`.`col_varchar_key` = `test`.`c`.`col_blob_key`)) order by `field1` limit 9,1000) delete `test`.`c`, `test`.`c` from `cte` `outrcte` join `test`.`c` `outr2` join `test`.`c` `outr1` where ((`test`.`outr1`.`col_blob_key` <> (/* select#3 */ select distinct `test`.`innr1`.`col_blob` AS `y` from `test`.`bb` `innr1`)) and (`test`.`outr2`.`col_blob` = `outrcte`.`field1`) and multiple equal(`test`.`outr1`.`col_blob_key`, `test`.`outr2`.`col_blob`))
+ DROP VIEW view_c;
+ DROP TABLE bb,cc,c;
+diff --git a/mysql-test/suite/dstore_main/r/join_elimination-dstore.result b/mysql-test/suite/dstore_main/r/join_elimination-dstore.result
+index 95c64e7d1da..c6aab03e095 100644
+--- a/mysql-test/suite/dstore_main/r/join_elimination-dstore.result
++++ b/mysql-test/suite/dstore_main/r/join_elimination-dstore.result
+@@ -465,7 +465,7 @@ a
+ EXPLAIN WITH cte AS (SELECT t4.a FROM t1 AS t4 WHERE t4.b<4 LIMIT 2) SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2 LEFT JOIN cte AS t3 ON TRUE) ON COALESCE(t3.a,1)=1 LEFT JOIN cte ON TRUE;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index
+-2	DERIVED	t4	NULL	ALL	NULL	NULL	NULL	NULL	3	33.33	Using where; Using pushed condition (`test`.`t4`.`b` < 4)
++2	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	Not optimized, outer query is empty
+ Warnings:
+ Note	1003	with `cte` as (/* select#2 */ select `test`.`t4`.`a` AS `a` from `test`.`t1` `t4` where (`test`.`t4`.`b` < 4) limit 2) /* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+ EXPLAIN format=tree WITH cte AS (SELECT t4.a FROM t1 AS t4 WHERE t4.b<4 LIMIT 2) SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2 LEFT JOIN cte AS t3 ON TRUE) ON COALESCE(t3.a,1)=1 LEFT JOIN cte ON TRUE;
+@@ -2615,4 +2615,51 @@ EXPLAIN
+ 
+ WITH cte AS (SELECT * FROM t) SELECT /*+ NO_MERGE() */ DISTINCT cte.a FROM cte, t LEFT JOIN cte cte1 ON TRUE WHERE cte.a=t.a;
+ a
++#
++# BUGFIX crash in JOIN::compare_costs_of_subquery_strategies
++#
++# This testcase which exercises all changes in the bugfix. cte1 is eliminated, COUNT()'s used_tables() still referenced it, so when doing cost calculations for semijoin materialization we expected to be able to access cte1 through map2table. After fixing this, we used to hit an assertion failure in Query_expression::optimize() (assert(!is_recursive())).
++EXPLAIN WITH RECURSIVE cte AS (SELECT * FROM t UNION SELECT * FROM cte)
++SELECT * FROM t AS y
++WHERE y.a IN (SELECT /*+ NO_MERGE() SEMIJOIN(MATERIALIZATION) */ DISTINCT COUNT(cte.a) OVER()
++FROM cte LEFT JOIN cte cte1 ON TRUE, t WHERE cte.a=t.a GROUP BY t.a);
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	y	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
++2	SUBQUERY	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using temporary
++2	SUBQUERY	<derived3>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	5	test.t.a	1	100.00	Using index
++3	DERIVED	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
++4	UNION	cte	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Recursive
++6	UNION RESULT	<union3,4>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	Using temporary
++Warnings:
++Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
++Note	1003	with recursive `cte` as (/* select#3 */ select `test`.`t`.`a` AS `a` from `test`.`t` union /* select#4 */ select `cte`.`a` AS `a` from `cte`) /* select#1 */ select /*+ SEMIJOIN(@`select#2` MATERIALIZATION) NO_MERGE(@`select#2`) */ `test`.`y`.`a` AS `a` from `test`.`t` `y` where <in_optimizer>(`test`.`y`.`a`,`test`.`y`.`a` in ( <materialize> (/* select#2 */ select count(`cte`.`a`) OVER ()  from `cte` join `test`.`t` where (`cte`.`a` = `test`.`t`.`a`) group by `test`.`t`.`a` having true ), <primary_index_lookup>(`test`.`y`.`a` in <temporary table> on <auto_distinct_key> where ((`test`.`y`.`a` = `<materialized_subquery>`.`COUNT(cte.a) OVER()`)))))
++EXPLAIN FORMAT=TREE WITH RECURSIVE cte AS (SELECT * FROM t UNION SELECT * FROM cte)
++SELECT * FROM t AS y
++WHERE y.a IN (SELECT /*+ NO_MERGE() SEMIJOIN(MATERIALIZATION) */ DISTINCT COUNT(cte.a) OVER()
++FROM cte LEFT JOIN cte cte1 ON TRUE, t WHERE cte.a=t.a GROUP BY t.a);
++EXPLAIN
++-> Filter: <in_optimizer>(y.a,y.a in (select #2))  (cost=0.35 rows=1)
++    -> Table scan on y  (cost=0.35 rows=1)
++    -> Select #2 (subquery in condition; run only once)
++        -> Filter: ((y.a = `<materialized_subquery>`.`COUNT(cte.a) OVER()`))  (cost=0..0 rows=0)
++            -> Limit: 1 row(s)  (cost=0..0 rows=0)
++                -> Index lookup on <materialized_subquery> using <auto_distinct_key> (COUNT(cte.a) OVER()=y.a)
++                    -> Materialize with deduplication  (cost=0..0 rows=0)
++                        -> Window aggregate with buffering: count(cte.a) OVER () 
++                            -> Table scan on <temporary>  (cost=3.51..3.51 rows=1)
++                                -> Temporary table with deduplication  (cost=1..1 rows=1)
++                                    -> Nested loop inner join  (cost=0.9 rows=1)
++                                        -> Filter: (t.a is not null)  (cost=0.35 rows=1)
++                                            -> Table scan on t  (cost=0.35 rows=1)
++                                        -> Single-row covering index lookup on cte using <auto_distinct_key> (a=t.a)  (cost=3.73..3.73 rows=1)
++                                            -> Materialize recursive CTE cte with deduplication  (cost=3.38..3.38 rows=3)
++                                                -> Table scan on t  (cost=0.35 rows=1)
++                                                -> Repeat until convergence
++                                                    -> Scan new records on cte  (cost=2.73 rows=2)
++
++WITH RECURSIVE cte AS (SELECT * FROM t UNION SELECT * FROM cte)
++SELECT * FROM t AS y
++WHERE y.a IN (SELECT /*+ NO_MERGE() SEMIJOIN(MATERIALIZATION) */ DISTINCT COUNT(cte.a) OVER()
++FROM cte LEFT JOIN cte cte1 ON TRUE, t WHERE cte.a=t.a GROUP BY t.a);
++a
+ DROP TABLE t;
+diff --git a/sql/opt_explain.cc b/sql/opt_explain.cc
+index 977c5863ba6..f800b741998 100644
+--- a/sql/opt_explain.cc
++++ b/sql/opt_explain.cc
+@@ -2038,8 +2038,11 @@ bool explain_single_table_modification(THD *explain_thd, const THD *query_thd,
+   if (!other && !select->is_empty_query()) {
+     for (Query_expression *unit = select->first_inner_query_expression(); unit;
+          unit = unit->next_query_expression()) {
+-      // Derived tables and const subqueries are already optimized
+-      if (!unit->is_optimized() &&
++      /* Derived tables and const subqueries are already optimized. Unless this
++         is a derived table which has been eliminated by join elimination, in
++         which case we needn't optimize its body. Apart from this exception, we
++         are going to optimize all remaining subqueries here. */
++      if (!unit->is_optimized() && unit->derived_table == nullptr &&
+           unit->optimize(explain_thd, /*materialize_destination=*/nullptr,
+                          /*create_iterators=*/false,
+                          /*finalize_access_paths=*/true))
+diff --git a/sql/sql_join_elimination.cc b/sql/sql_join_elimination.cc
+index 7c1b6116cea..5601244d95a 100644
+--- a/sql/sql_join_elimination.cc
++++ b/sql/sql_join_elimination.cc
+@@ -657,6 +657,8 @@ void Query_block::do_join_elimination(THD *thd) {
+   if (active_options() & OPTION_DEFAULT_WEAK_COLUMN) return;
+ 
+   assert(outer_join != 0);
++  assert(m_eliminated_tables == 0);
++
+   /* There will be multiple recursive calls to do_join_elimination_for_list()
+   possibly. Each of them will be on a different join nest, and want to compute
+   the map of tables referenced from outside of this nest. However, a subset of
+@@ -1120,6 +1122,7 @@ void Query_block::do_join_elimination_for_list(
+         derived table: we would like to detach its query expression. */
+         walk_join_list(table->nested_join->m_tables, table_cleaner);
+       }
++      m_eliminated_tables |= weak_tables;
+       // remove 'table' from the current list, and destroy
+       li = tables->erase(li);
+       // 'li' already points to the next table so we don't advance it
+@@ -1127,4 +1130,46 @@ void Query_block::do_join_elimination_for_list(
+     }
+     ++li;
+   }
++  if ((m_eliminated_tables != 0) && (agg_func_used() || has_windows())) {
++    /* As mentioned earlier above, aggregates and window functions have 'all
++      tables' in their used_tables(), even the eliminated ones. We need to
++      force an update on them; otherwise this will confuse further logic in
++      the optimizer. */
++    auto ut = [](Item *item) -> table_map {
++      table_map ut_map{0};
++      CompileItem(
++          item,
++          // The logic is in the analyzer.
++          [&ut_map](Item *inner_item) {
++            if (inner_item->has_wf() || inner_item->has_aggregation())
++              inner_item->update_used_tables();
++            ut_map |= inner_item->used_tables();
++            /* Why we do not need to reach to arguments. First,
++               update_used_tables() is itself recursive. Second, it has
++               updated the Item_sum's used_tables() so that the eliminated
++               tables are not listed in the map anymore. Which is all we need
++               to ensure - ut_map is only used in the final assertion a bit
++               further. */
++            return false;
++          },
++          // Dummy transformer.
++          [](Item *inner_item) { return inner_item; });
++      return ut_map;
++    };
++    table_map map = 0;
++    /* Aggregates and window functions which reference eliminated tables can
++       exist only in certain clauses (e.g. not in WHERE). */
++    for (Item *item : visible_fields()) map |= ut(item);
++    if (having_cond() != nullptr) map |= ut(having_cond());
++    for (ORDER *order = order_list.first; order != nullptr; order = order->next)
++      map |= ut(*order->item);
++    List_iterator<Window> liw(m_windows);
++    for (Window *w = liw++; w != nullptr; w = liw++)
++      for (auto it : {w->first_partition_by(), w->first_order_by()})
++        if (it != nullptr)
++          for (ORDER *o = it; o != nullptr; o = o->next) map |= ut(*o->item);
++    // If the recalculation of used_tables went fine, eliminated tables should
++    // not be referenced anymore:
++    assert((map & m_eliminated_tables) == 0);
++  }
+ }
+diff --git a/sql/sql_lex.h b/sql/sql_lex.h
+index 8388631508a..3e49d21dd13 100644
+--- a/sql/sql_lex.h
++++ b/sql/sql_lex.h
+@@ -1291,7 +1291,15 @@ class Query_block : public Query_term {
+   }
+ 
+   /// @returns a map of all tables references in the query block
+-  table_map all_tables_map() const { return (1ULL << leaf_table_count) - 1; }
++  table_map all_tables_map() const {
++    /* It is not quite (1ULL<<leaf_table_count) anymore, because of join
++       elimination: we have to take the high water mark, which gives us all
++       maps which have been used in the past, and turn off the maps of
++       eliminated tables. leaf_table_count is left as defensive programming
++       like in get_free_tableno(). */
++    return ((1ULL << std::max(leaf_table_count, m_hwm_free_tableno)) - 1) &
++           ~m_eliminated_tables;
++  }
+ 
+   bool remove_aggregates(THD *thd, Query_block *select);
+ 
+@@ -2143,6 +2151,8 @@ class Query_block : public Query_term {
+   /// greater than leaf_table_count and this. "hwm" stands for "high water
+   // mark": this is the highest tableno which has ever been given.
+   uint m_hwm_free_tableno{0};
++  /// Map of tables eliminated by join elimination
++  table_map m_eliminated_tables{0};
+   /// Number of derived tables and views in this query block.
+   uint derived_table_count{0};
+   /// Number of table functions in this query block
+@@ -2589,7 +2599,10 @@ class Query_block : public Query_term {
+     return m_hwm_free_tableno;
+   }
+   void consume_tableno(uint tableno) {
+-    if (m_hwm_free_tableno <= tableno) m_hwm_free_tableno = tableno + 1;
++    if (m_hwm_free_tableno <= tableno)
++      m_hwm_free_tableno = tableno + 1;
++    else  // Practically, what is consumed is never below the high water mark
++      assert(false);
+   }
+ };
+ 
+diff --git a/sql/sql_optimizer.cc b/sql/sql_optimizer.cc
+index 9e87064daf9..f331ab3aca6 100644
+--- a/sql/sql_optimizer.cc
++++ b/sql/sql_optimizer.cc
+@@ -452,8 +452,11 @@ bool JOIN::optimize(bool finalize_access_paths) {
+     // so that it has cost information to attach to filter nodes.
+     for (Query_expression *unit = query_block->first_inner_query_expression();
+          unit; unit = unit->next_query_expression()) {
+-      // Derived tables and const subqueries are already optimized
+-      if (!unit->is_optimized() &&
++      /* Derived tables and const subqueries are already optimized. Unless this
++         is a derived table which has been eliminated by join elimination, in
++         which case we needn't optimize its body. Apart from this exception, we
++         are going to optimize all remaining subqueries here. */
++      if (!unit->is_optimized() && unit->derived_table == nullptr &&
+           unit->optimize(thd, /*materialize_destination=*/nullptr,
+                          /*create_iterators=*/false,
+                          /*finalize_access_paths=*/false))
+diff --git a/sql/sql_resolver.cc b/sql/sql_resolver.cc
+index a195d877a42..71bac7fb737 100644
+--- a/sql/sql_resolver.cc
++++ b/sql/sql_resolver.cc
+@@ -1297,9 +1297,15 @@ void Query_block::remap_tables(THD *thd) {
+     if (first_query_block_table == tl) tableno = 0;
+     tl->set_tableno(tableno++);
+   }
+-  // As all tables get fresh maps, there is no risk of conflict between old
+-  // and new maps so we can forget about old maps:
++  /* As all tables get fresh maps, there is no risk of conflict between old
++     and new maps so we can forget about old maps. Moreover, we have not yet
++     done join elimination (which happens at the end of the resolution of the
++     top Query_block, so, after all derived-table merging which is the caller
++     here), so there are no gaps in table maps yet, neither in the merged
++     query block nor in this parent one; the renumbering by using consecutive
++     values as is done here, is thus correct. */
+   m_hwm_free_tableno = leaf_table_count;
++  assert(m_eliminated_tables == 0);
+ }
+ 
+ /**
+diff --git a/sql/sql_select.cc b/sql/sql_select.cc
+index d27e80ac429..08aadbd8496 100644
+--- a/sql/sql_select.cc
++++ b/sql/sql_select.cc
+@@ -2032,9 +2032,14 @@ bool Query_block::optimize(THD *thd, bool finalize_access_paths) {
+   for (Query_expression *query_expression = first_inner_query_expression();
+        query_expression;
+        query_expression = query_expression->next_query_expression()) {
+-    // Derived tables and const subqueries are already optimized
++    /* Derived tables and const subqueries are already optimized. Unless this
++       is a derived table which has been eliminated by join elimination, in
++       which case we needn't optimize its body. Apart from this exception, we
++       are going to optimize all remaining subqueries here. */
+     if (!query_expression->is_optimized() &&
+-        query_expression->optimize(thd, /*materialize_destination=*/nullptr,
++        query_expression->derived_table == nullptr &&
++        query_expression->optimize(thd, /*materialize_destination=*/
++                                   nullptr,
+                                    /*create_iterators=*/false,
+                                    /*finalize_access_paths=*/true))
+       return true;
+-- 
+2.23.0
+

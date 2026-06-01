@@ -1,0 +1,1240 @@
+create database pq_test;
+use pq_test;
+drop table if exists t1;
+#
+# case 1: full table scan in partition table
+#
+#
+CREATE TABLE t1 (
+id MEDIUMINT NOT NULL AUTO_INCREMENT,
+dt DATE, st VARCHAR(255), uid INT,
+filler VARCHAR(255), PRIMARY KEY(id, dt)
+);
+INSERT INTO t1 (dt, st, uid, filler) VALUES
+('1991-03-14', 'Initial Insert', 200, 'No Data'),
+('1991-02-26', 'Initial Insert', 201, 'No Data'),
+('1992-03-16', 'Initial Insert', 234, 'No Data'),
+('1992-07-02', 'Initial Insert', 287, 'No Data'),
+('1991-05-26', 'Initial Insert', 256, 'No Data'),
+('1991-04-25', 'Initial Insert', 222, 'No Data'),
+('1993-03-12', 'Initial Insert', 267, 'No Data'),
+('1993-03-14', 'Initial Insert', 291, 'No Data'),
+('1991-12-20', 'Initial Insert', 298, 'No Data'),
+('1994-10-31', 'Initial Insert', 220, 'No Data');
+ALTER TABLE t1 PARTITION BY LIST (YEAR(dt)) (
+PARTITION d1 VALUES IN (1991, 1994),
+PARTITION d2 VALUES IN (1993),
+PARTITION d3 VALUES IN (1992, 1995, 1996)
+);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+pq_test.t1	analyze	status	OK
+EXPLAIN SELECT * from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	d1,d2,d3	ALL	NULL	NULL	NULL	NULL	10	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t1`.`id` AS `id`,`pq_test`.`t1`.`dt` AS `dt`,`pq_test`.`t1`.`st` AS `st`,`pq_test`.`t1`.`uid` AS `uid`,`pq_test`.`t1`.`filler` AS `filler` from `pq_test`.`t1`
+SELECT * from t1;
+id	dt	st	uid	filler
+1	1991-03-14	Initial Insert	200	No Data
+2	1991-02-26	Initial Insert	201	No Data
+5	1991-05-26	Initial Insert	256	No Data
+6	1991-04-25	Initial Insert	222	No Data
+9	1991-12-20	Initial Insert	298	No Data
+10	1994-10-31	Initial Insert	220	No Data
+7	1993-03-12	Initial Insert	267	No Data
+8	1993-03-14	Initial Insert	291	No Data
+3	1992-03-16	Initial Insert	234	No Data
+4	1992-07-02	Initial Insert	287	No Data
+EXPLAIN SELECT * from t1 partition(d1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Parallel execute (4 workers, pq_test.t1)
+1	SIMPLE	t1	d1	ALL	NULL	NULL	NULL	NULL	6	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t1`.`id` AS `id`,`pq_test`.`t1`.`dt` AS `dt`,`pq_test`.`t1`.`st` AS `st`,`pq_test`.`t1`.`uid` AS `uid`,`pq_test`.`t1`.`filler` AS `filler` from `pq_test`.`t1` PARTITION (`d1`)
+SELECT * from t1 partition(d1);
+id	dt	st	uid	filler
+1	1991-03-14	Initial Insert	200	No Data
+2	1991-02-26	Initial Insert	201	No Data
+5	1991-05-26	Initial Insert	256	No Data
+6	1991-04-25	Initial Insert	222	No Data
+9	1991-12-20	Initial Insert	298	No Data
+10	1994-10-31	Initial Insert	220	No Data
+EXPLAIN SELECT * from t1 partition(d2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, pq_test.t1)
+1	SIMPLE	t1	d2	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t1`.`id` AS `id`,`pq_test`.`t1`.`dt` AS `dt`,`pq_test`.`t1`.`st` AS `st`,`pq_test`.`t1`.`uid` AS `uid`,`pq_test`.`t1`.`filler` AS `filler` from `pq_test`.`t1` PARTITION (`d2`)
+SELECT * from t1 partition(d2);
+id	dt	st	uid	filler
+7	1993-03-12	Initial Insert	267	No Data
+8	1993-03-14	Initial Insert	291	No Data
+EXPLAIN SELECT * from t1 partition(d2,d3);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	d2,d3	ALL	NULL	NULL	NULL	NULL	4	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t1`.`id` AS `id`,`pq_test`.`t1`.`dt` AS `dt`,`pq_test`.`t1`.`st` AS `st`,`pq_test`.`t1`.`uid` AS `uid`,`pq_test`.`t1`.`filler` AS `filler` from `pq_test`.`t1` PARTITION (`d2`,`d3`)
+SELECT * from t1 partition(d2,d3);
+id	dt	st	uid	filler
+7	1993-03-12	Initial Insert	267	No Data
+8	1993-03-14	Initial Insert	291	No Data
+3	1992-03-16	Initial Insert	234	No Data
+4	1992-07-02	Initial Insert	287	No Data
+#
+# case 2: range scan in partition table
+#
+#
+ALTER TABLE t1 add index idx_uid(uid);
+EXPLAIN SELECT * from t1 where id > 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	d1,d2,d3	range	PRIMARY	PRIMARY	3	NULL	5	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t1`.`id` AS `id`,`pq_test`.`t1`.`dt` AS `dt`,`pq_test`.`t1`.`st` AS `st`,`pq_test`.`t1`.`uid` AS `uid`,`pq_test`.`t1`.`filler` AS `filler` from `pq_test`.`t1` where (`pq_test`.`t1`.`id` > 5)
+SELECT * from t1 where id > 5;
+id	dt	st	uid	filler
+6	1991-04-25	Initial Insert	222	No Data
+9	1991-12-20	Initial Insert	298	No Data
+10	1994-10-31	Initial Insert	220	No Data
+7	1993-03-12	Initial Insert	267	No Data
+8	1993-03-14	Initial Insert	291	No Data
+EXPLAIN SELECT * from t1 partition(d1) where id > 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, pq_test.t1)
+1	SIMPLE	t1	d1	range	PRIMARY	PRIMARY	3	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t1`.`id` AS `id`,`pq_test`.`t1`.`dt` AS `dt`,`pq_test`.`t1`.`st` AS `st`,`pq_test`.`t1`.`uid` AS `uid`,`pq_test`.`t1`.`filler` AS `filler` from `pq_test`.`t1` PARTITION (`d1`) where (`pq_test`.`t1`.`id` > 5)
+SELECT * from t1 partition(d1) where id > 5;
+id	dt	st	uid	filler
+6	1991-04-25	Initial Insert	222	No Data
+9	1991-12-20	Initial Insert	298	No Data
+10	1994-10-31	Initial Insert	220	No Data
+EXPLAIN SELECT * from t1 partition(d1) where id > 5 or id <= 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Parallel execute (4 workers, pq_test.t1)
+1	SIMPLE	t1	d1	range	PRIMARY	PRIMARY	3	NULL	5	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t1`.`id` AS `id`,`pq_test`.`t1`.`dt` AS `dt`,`pq_test`.`t1`.`st` AS `st`,`pq_test`.`t1`.`uid` AS `uid`,`pq_test`.`t1`.`filler` AS `filler` from `pq_test`.`t1` PARTITION (`d1`) where ((`pq_test`.`t1`.`id` > 5) or (`pq_test`.`t1`.`id` <= 2))
+SELECT * from t1 partition(d1) where id > 5 or id <= 2;
+id	dt	st	uid	filler
+1	1991-03-14	Initial Insert	200	No Data
+2	1991-02-26	Initial Insert	201	No Data
+6	1991-04-25	Initial Insert	222	No Data
+9	1991-12-20	Initial Insert	298	No Data
+10	1994-10-31	Initial Insert	220	No Data
+EXPLAIN SELECT * from t1 where uid > 250;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	d1,d2,d3	range	idx_uid	idx_uid	5	NULL	5	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t1`.`id` AS `id`,`pq_test`.`t1`.`dt` AS `dt`,`pq_test`.`t1`.`st` AS `st`,`pq_test`.`t1`.`uid` AS `uid`,`pq_test`.`t1`.`filler` AS `filler` from `pq_test`.`t1` where (`pq_test`.`t1`.`uid` > 250)
+SELECT * from t1 where uid > 250;
+id	dt	st	uid	filler
+5	1991-05-26	Initial Insert	256	No Data
+9	1991-12-20	Initial Insert	298	No Data
+7	1993-03-12	Initial Insert	267	No Data
+8	1993-03-14	Initial Insert	291	No Data
+4	1992-07-02	Initial Insert	287	No Data
+EXPLAIN SELECT * from t1 partition(d1) where uid > 250;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, pq_test.t1)
+1	SIMPLE	t1	d1	range	idx_uid	idx_uid	5	NULL	2	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t1`.`id` AS `id`,`pq_test`.`t1`.`dt` AS `dt`,`pq_test`.`t1`.`st` AS `st`,`pq_test`.`t1`.`uid` AS `uid`,`pq_test`.`t1`.`filler` AS `filler` from `pq_test`.`t1` PARTITION (`d1`) where (`pq_test`.`t1`.`uid` > 250)
+SELECT * from t1 partition(d1) where uid > 250;
+id	dt	st	uid	filler
+5	1991-05-26	Initial Insert	256	No Data
+9	1991-12-20	Initial Insert	298	No Data
+invalid range
+EXPLAIN SELECT * from t1 where id > 100;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	d1,d2,d3	range	PRIMARY	PRIMARY	3	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t1`.`id` AS `id`,`pq_test`.`t1`.`dt` AS `dt`,`pq_test`.`t1`.`st` AS `st`,`pq_test`.`t1`.`uid` AS `uid`,`pq_test`.`t1`.`filler` AS `filler` from `pq_test`.`t1` where (`pq_test`.`t1`.`id` > 100)
+SELECT * from t1 where id > 100;
+id	dt	st	uid	filler
+EXPLAIN SELECT * from t1 partition(d1) where id > 100;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, pq_test.t1)
+1	SIMPLE	t1	d1	range	PRIMARY	PRIMARY	3	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t1`.`id` AS `id`,`pq_test`.`t1`.`dt` AS `dt`,`pq_test`.`t1`.`st` AS `st`,`pq_test`.`t1`.`uid` AS `uid`,`pq_test`.`t1`.`filler` AS `filler` from `pq_test`.`t1` PARTITION (`d1`) where (`pq_test`.`t1`.`id` > 100)
+SELECT * from t1 partition(d1) where id > 100;
+id	dt	st	uid	filler
+#
+# case 3: ref scan in partition table
+#
+#
+EXPLAIN SELECT * from t1 where id = 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	d1,d2,d3	ref	PRIMARY	PRIMARY	3	const	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t1`.`id` AS `id`,`pq_test`.`t1`.`dt` AS `dt`,`pq_test`.`t1`.`st` AS `st`,`pq_test`.`t1`.`uid` AS `uid`,`pq_test`.`t1`.`filler` AS `filler` from `pq_test`.`t1` where (`pq_test`.`t1`.`id` = 5)
+SELECT * from t1 where id = 5;
+id	dt	st	uid	filler
+5	1991-05-26	Initial Insert	256	No Data
+EXPLAIN SELECT * from t1 partition(d1) where id = 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, pq_test.t1)
+1	SIMPLE	t1	d1	ref	PRIMARY	PRIMARY	3	const	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t1`.`id` AS `id`,`pq_test`.`t1`.`dt` AS `dt`,`pq_test`.`t1`.`st` AS `st`,`pq_test`.`t1`.`uid` AS `uid`,`pq_test`.`t1`.`filler` AS `filler` from `pq_test`.`t1` PARTITION (`d1`) where (`pq_test`.`t1`.`id` = 5)
+SELECT * from t1 partition(d1) where id = 5;
+id	dt	st	uid	filler
+5	1991-05-26	Initial Insert	256	No Data
+EXPLAIN SELECT * from t1 partition(d1) where id = 100;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, pq_test.t1)
+1	SIMPLE	t1	d1	ref	PRIMARY	PRIMARY	3	const	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t1`.`id` AS `id`,`pq_test`.`t1`.`dt` AS `dt`,`pq_test`.`t1`.`st` AS `st`,`pq_test`.`t1`.`uid` AS `uid`,`pq_test`.`t1`.`filler` AS `filler` from `pq_test`.`t1` PARTITION (`d1`) where (`pq_test`.`t1`.`id` = 100)
+SELECT * from t1 partition(d1) where id = 100;
+id	dt	st	uid	filler
+#
+# case 4: depend ref scan in partition table
+#
+#
+drop table t1;
+CREATE TABLE t1(f1 INT, f2 INT);
+INSERT INTO t1 VALUES
+(1,1),(2,2),(3,3);
+CREATE TABLE t2(f1 INT NOT NULL, f2 INT NOT NULL, f3 CHAR(200), KEY(f1, f2));
+INSERT INTO t2 VALUES
+(1,1, 'qwerty'),(1,2, 'qwerty'),(1,3, 'qwerty'),
+(2,1, 'qwerty'),(2,2, 'qwerty'),(2,3, 'qwerty'), (2,4, 'qwerty'),(2,5, 'qwerty'),
+(3,1, 'qwerty'),(3,4, 'qwerty'),
+(4,1, 'qwerty'),(4,2, 'qwerty'),(4,3, 'qwerty'), (4,4, 'qwerty'),
+(1,1, 'qwerty'),(1,2, 'qwerty'),(1,3, 'qwerty'),
+(2,1, 'qwerty'),(2,2, 'qwerty'),(2,3, 'qwerty'), (2,4, 'qwerty'),(2,5, 'qwerty'),
+(3,1, 'qwerty'),(3,4, 'qwerty'),
+(4,1, 'qwerty'),(4,2, 'qwerty'),(4,3, 'qwerty'), (4,4, 'qwerty');
+alter table t2 partition by list(f1) (partition d1 values in (1,2,3), partition d2 values in (4));
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+pq_test.t1	analyze	status	OK
+ANALYZE TABLE t2;
+Table	Op	Msg_type	Msg_text
+pq_test.t2	analyze	status	OK
+explain SELECT /*+NO_PQ*/ t2.f1, t2.f2, t2.f3 FROM t1,t2 partition(d1) WHERE t1.f1=t2.f1 AND t2.f2 BETWEEN t1.f1 and t1.f2 and t2.f2 + 1 >= t1.f1 + 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where
+1	SIMPLE	t2	d1	ref	f1	f1	4	pq_test.t1.f1	6	11.11	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select /*+ NO_PQ(@`select#1`) */ `pq_test`.`t2`.`f1` AS `f1`,`pq_test`.`t2`.`f2` AS `f2`,`pq_test`.`t2`.`f3` AS `f3` from `pq_test`.`t1` join `pq_test`.`t2` PARTITION (`d1`) where ((`pq_test`.`t2`.`f1` = `pq_test`.`t1`.`f1`) and (`pq_test`.`t2`.`f2` between `pq_test`.`t1`.`f1` and `pq_test`.`t1`.`f2`) and ((`pq_test`.`t2`.`f2` + 1) >= (`pq_test`.`t1`.`f1` + 1)))
+SELECT /*+NO_PQ*/ t2.f1, t2.f2, t2.f3 FROM t1,t2 partition(d1) WHERE t1.f1=t2.f1 AND t2.f2 BETWEEN t1.f1 and t1.f2 and t2.f2 + 1 >= t1.f1 + 1;
+f1	f2	f3
+1	1	qwerty
+1	1	qwerty
+2	2	qwerty
+2	2	qwerty
+explain SELECT t2.f1, t2.f2, t2.f3 FROM t1,t2 partition(d1) WHERE t1.f1=t2.f1 AND t2.f2 BETWEEN t1.f1 and t1.f2 and t2.f2 + 1 >= t1.f1 + 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	6	11.11	Parallel execute (4 workers, pq_test.t2)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where
+1	SIMPLE	t2	d1	ref	f1	f1	4	pq_test.t1.f1	6	11.11	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t2`.`f1` AS `f1`,`pq_test`.`t2`.`f2` AS `f2`,`pq_test`.`t2`.`f3` AS `f3` from `pq_test`.`t1` join `pq_test`.`t2` PARTITION (`d1`) where ((`pq_test`.`t2`.`f1` = `pq_test`.`t1`.`f1`) and (`pq_test`.`t2`.`f2` between `pq_test`.`t1`.`f1` and `pq_test`.`t1`.`f2`) and ((`pq_test`.`t2`.`f2` + 1) >= (`pq_test`.`t1`.`f1` + 1)))
+SELECT t2.f1, t2.f2, t2.f3 FROM t1,t2 partition(d1) WHERE t1.f1=t2.f1 AND t2.f2 BETWEEN t1.f1 and t1.f2 and t2.f2 + 1 >= t1.f1 + 1;
+f1	f2	f3
+1	1	qwerty
+1	1	qwerty
+2	2	qwerty
+2	2	qwerty
+#
+# case 5: hash partition
+#
+drop table t2;
+CREATE TABLE t2 (
+`id` int(11) NOT NULL,
+`user_num` int DEFAULT NULL,
+`name` varchar(64) NOT NULL,
+PRIMARY KEY (`id`)
+) ENGINE=InnoDB CHARSET=latin1
+PARTITION BY HASH (id)
+PARTITIONS 2;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO t2 VALUES (1,8601,'John');
+INSERT INTO t2 VALUES (2,8601,'JS');
+INSERT INTO t2 VALUES (3,8601,'John S');
+INSERT INTO t2 VALUES (4,8601,'John S');
+INSERT INTO t2 VALUES (5,8601,'John S');
+ANALYZE TABLE t2;
+Table	Op	Msg_type	Msg_text
+pq_test.t2	analyze	status	OK
+explain select * from t2 partition(p1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, pq_test.t2)
+1	SIMPLE	t2	p1	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t2`.`id` AS `id`,`pq_test`.`t2`.`user_num` AS `user_num`,`pq_test`.`t2`.`name` AS `name` from `pq_test`.`t2` PARTITION (`p1`)
+select * from t2 partition(p1);
+id	user_num	name
+1	8601	John
+3	8601	John S
+5	8601	John S
+select /*+NO_PQ*/ * from t2 partition(p1);
+id	user_num	name
+1	8601	John
+3	8601	John S
+5	8601	John S
+#
+# case 6: range partition
+#
+#
+DROP TABLE t1;
+CREATE TABLE t1 (
+a timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+b varchar(10),
+PRIMARY KEY (a)
+)
+PARTITION BY RANGE (UNIX_TIMESTAMP(a)) (
+PARTITION p1 VALUES LESS THAN (1199134800),
+PARTITION pmax VALUES LESS THAN MAXVALUE
+);
+INSERT INTO t1 VALUES ('2007-07-29 17:35:48', 'p1');
+INSERT INTO t1 VALUES ('2007-07-30 17:35:48', 'p1');
+INSERT INTO t1 VALUES ('2009-07-14 17:35:55', 'pmax');
+INSERT INTO t1 VALUES ('2009-09-21 17:31:42', 'pmax');
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+pq_test.t1	analyze	status	OK
+explain select * from t1 partition(p1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, pq_test.t1)
+1	SIMPLE	t1	p1	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t1`.`a` AS `a`,`pq_test`.`t1`.`b` AS `b` from `pq_test`.`t1` PARTITION (`p1`)
+select * from t2 partition(p1);
+id	user_num	name
+1	8601	John
+3	8601	John S
+5	8601	John S
+select /*+NO_PQ*/ * from t2 partition(p1);
+id	user_num	name
+1	8601	John
+3	8601	John S
+5	8601	John S
+#
+# case 7: key partition
+#
+DROP TABLE t1;
+CREATE TABLE t1 (i INT, j INT, PRIMARY KEY (i, j)) PARTITION BY KEY (i) PARTITIONS 2 (PARTITION p0, PARTITION p1);
+INSERT INTO t1 (i, j) VALUES (-1, 1), (1, 1), (2, 2), (-2, 2);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+pq_test.t1	analyze	status	OK
+explain select * from t1 partition(p1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, pq_test.t1)
+1	SIMPLE	t1	p1	index	NULL	PRIMARY	8	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t1`.`i` AS `i`,`pq_test`.`t1`.`j` AS `j` from `pq_test`.`t1` PARTITION (`p1`)
+select * from t1 partition(p1);
+i	j
+-2	2
+-1	1
+2	2
+select /*+NO_PQ*/ * from t1 partition(p1);
+i	j
+-2	2
+-1	1
+2	2
+#
+# case 8: subpartition
+#
+CREATE TABLE table_part_sub_2(
+id int, value int, name varchar(32), data BLOB, primary key pk(id, value),
+key k1(value)) partition by range (value) subpartition by hash (id)
+( partition Part_1 values less than (101)(
+subpartition Sub_1,
+subpartition sUb_2),
+partition pArt_2 values less than (501)(
+subpartition suB_3 ,
+subpartition SUB_4),
+partition PART_3 values less than MAXVALUE(
+subpartition SUB_5,
+subpartition sub_6));
+insert into table_part_sub_2 VALUES(0, 55, "Row - 0", REPEAT('Large Column Data - 0' , 256));
+insert into table_part_sub_2 VALUES(1, 155, "Row - 1", REPEAT('Large Column Data - 1' , 256));
+insert into table_part_sub_2 VALUES(2, 255, "Row - 2", REPEAT('Large Column Data - 2' , 256));
+insert into table_part_sub_2 VALUES(3, 355, "Row - 3", REPEAT('Large Column Data - 3' , 256));
+insert into table_part_sub_2 VALUES(4, 455, "Row - 4", REPEAT('Large Column Data - 4' , 256));
+insert into table_part_sub_2 VALUES(5, 555, "Row - 5", REPEAT('Large Column Data - 5' , 256));
+insert into table_part_sub_2 VALUES(6, 655, "Row - 6", REPEAT('Large Column Data - 6' , 256));
+insert into table_part_sub_2 VALUES(7, 755, "Row - 7", REPEAT('Large Column Data - 7' , 256));
+insert into table_part_sub_2 VALUES(8, 855, "Row - 8", REPEAT('Large Column Data - 8' , 256));
+insert into table_part_sub_2 VALUES(9, 955, "Row - 9", REPEAT('Large Column Data - 9' , 256));
+ANALYZE TABLE table_part_sub_2;
+Table	Op	Msg_type	Msg_text
+pq_test.table_part_sub_2	analyze	status	OK
+explain select id, value, name from table_part_sub_2 partition (sub_5) order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, pq_test.table_part_sub_2)
+1	SIMPLE	table_part_sub_2	PART_3_SUB_5	index	NULL	PRIMARY	8	NULL	2	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`table_part_sub_2`.`id` AS `id`,`pq_test`.`table_part_sub_2`.`value` AS `value`,`pq_test`.`table_part_sub_2`.`name` AS `name` from `pq_test`.`table_part_sub_2` PARTITION (`sub_5`) order by `pq_test`.`table_part_sub_2`.`id`
+select id, value, name from table_part_sub_2 partition (sub_5) order by id;
+id	value	name
+6	655	Row - 6
+8	855	Row - 8
+select /*+NO_PQ*/ id, value, name from table_part_sub_2 partition (sub_5) order by id;
+id	value	name
+6	655	Row - 6
+8	855	Row - 8
+explain select id, value, name from table_part_sub_2 partition (PART_3) order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	table_part_sub_2	PART_3_SUB_5,PART_3_sub_6	index	NULL	PRIMARY	8	NULL	5	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`table_part_sub_2`.`id` AS `id`,`pq_test`.`table_part_sub_2`.`value` AS `value`,`pq_test`.`table_part_sub_2`.`name` AS `name` from `pq_test`.`table_part_sub_2` PARTITION (`PART_3`) order by `pq_test`.`table_part_sub_2`.`id`
+DROP TABLE table_part_sub_2;
+#
+# case 9: subquery
+#
+DROP TABLE t1, t2;
+CREATE TABLE `t1` (
+`a` int NOT NULL,
+`b` char(10) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+CREATE TABLE `t2` (
+`a` int NOT NULL,
+`b` char(10) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+alter table t2 partition by range (a) ( 
+partition p0 values less than (3), 
+partition p1 values less than (6), 
+partition p2 values less than maxvalue
+);
+INSERT INTO t1 values (1, 'a'), (2, 'b'), (3, 'c'), (3, 'c'), (4, 'd'), (5, 'f'), (6, 'e');
+INSERT INTO t2 values (3, 'c'), (4, 'd'), (5, 'f'), (6, 'e'), (1, 'a'), (2, 'b');
+INSERT INTO t1 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t1 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t1 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t2 SELECT * FROM t2;
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+pq_test.t1	analyze	status	OK
+ANALYZE TABLE t2;
+Table	Op	Msg_type	Msg_text
+pq_test.t2	analyze	status	OK
+explain select t1.b from t1 join (select avg(a) from t2 partition(p0) group by a) as sub_2(b) on t1.a = sub_2.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	664	100.00	Parallel execute (4 workers, pq_test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	664	100.00	NULL
+1	SIMPLE	<derived2>	NULL	ref	<auto_key0>	<auto_key0>	8	pq_test.t1.a	10	100.00	Using where; Using index
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	336	100.00	Parallel execute (4 workers, pq_test.t2)
+2	SIMPLE	t2	p0	ALL	NULL	NULL	NULL	NULL	336	100.00	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t1`.`b` AS `b` from `pq_test`.`t1` join (/* select#2 */ select avg(`pq_test`.`t2`.`a`) AS `avg(a)` from `pq_test`.`t2` PARTITION (`p0`) group by `pq_test`.`t2`.`a`) `sub_2` (`b`) where (`pq_test`.`t1`.`a` = `sub_2`.`b`)
+select t1.b from t1 join (select avg(a) from t2 partition(p0) group by a) as sub_2(b) on t1.a = sub_2.b;
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+explain select t1.b from t1 join (select (a) from t2 partition(p0) group by a) as sub_2(b) on t1.a = sub_2.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	664	100.00	Parallel execute (4 workers, pq_test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	664	100.00	NULL
+1	SIMPLE	<derived2>	NULL	ref	<auto_key0>	<auto_key0>	4	pq_test.t1.a	10	100.00	Using index
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	336	100.00	Parallel execute (4 workers, pq_test.t2)
+2	SIMPLE	t2	p0	ALL	NULL	NULL	NULL	NULL	336	100.00	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t1`.`b` AS `b` from `pq_test`.`t1` join (/* select#2 */ select `pq_test`.`t2`.`a` AS `a` from `pq_test`.`t2` PARTITION (`p0`) group by `pq_test`.`t2`.`a`) `sub_2` (`b`) where (`sub_2`.`b` = `pq_test`.`t1`.`a`)
+select t1.b from t1 join (select (a) from t2 partition(p0) group by a) as sub_2(b) on t1.a = sub_2.b;
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+a
+b
+explain select * from t2 partition(p0) join (select a from t1 group by a) as sub_1(b) on t2.a = sub_1.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	336	100.00	Parallel execute (4 workers, pq_test.t2)
+1	SIMPLE	t2	p0	ALL	NULL	NULL	NULL	NULL	336	100.00	NULL
+1	SIMPLE	<derived2>	NULL	ref	<auto_key0>	<auto_key0>	4	pq_test.t2.a	10	100.00	Using index
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	664	100.00	Parallel execute (4 workers, pq_test.t1)
+2	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	664	100.00	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select `pq_test`.`t2`.`a` AS `a`,`pq_test`.`t2`.`b` AS `b`,`sub_1`.`b` AS `b` from `pq_test`.`t2` PARTITION (`p0`) join (/* select#2 */ select `pq_test`.`t1`.`a` AS `a` from `pq_test`.`t1` group by `pq_test`.`t1`.`a`) `sub_1` (`b`) where (`sub_1`.`b` = `pq_test`.`t2`.`a`)
+select * from t2 partition(p0) join (select a from t1 group by a) as sub_1(b) on t2.a = sub_1.b;
+a	b	b
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+1	a	1
+2	b	2
+set @saved_optimize_trace=@@optimizer_switch;
+set session optimizer_switch='semijoin=on,materialization=on,loosescan=off,firstmatch=off,duplicateweedout=off,index_condition_pushdown=off,mrr=off';
+explain select sum(t2.a) from t2 partition(p0) where t2.a IN (select distinct t1.a from t1 where t1.a > 1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	336	100.00	Parallel execute (4 workers, pq_test.t2)
+1	SIMPLE	t2	p0	ALL	NULL	NULL	NULL	NULL	336	100.00	NULL
+1	SIMPLE	<subquery2>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	4	pq_test.t2.a	1	100.00	NULL
+2	MATERIALIZED	t1	NULL	ALL	NULL	NULL	NULL	NULL	664	33.33	Using where
+Warnings:
+Note	1003	/* select#1 */ select sum(`pq_test`.`t2`.`a`) AS `sum(t2.a)` from `pq_test`.`t2` PARTITION (`p0`) semi join (`pq_test`.`t1`) where ((`<subquery2>`.`a` = `pq_test`.`t2`.`a`) and (`pq_test`.`t1`.`a` > 1))
+select sum(t2.a) from t2 partition(p0) where t2.a IN (select distinct t1.a from t1 where t1.a > 1);
+sum(t2.a)
+336
+alter table t1 add index key1(a);
+explain select sum(t1.a) from t1 where t1.a IN (select distinct t2.a from t2 partition(p0));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	110	100.00	Parallel execute (4 workers, pq_test.t1)
+1	SIMPLE	<subquery2>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	100.00	NULL
+1	SIMPLE	t1	NULL	ref	key1	key1	4	<subquery2>.a	110	100.00	Using index
+2	MATERIALIZED	t2	p0	ALL	NULL	NULL	NULL	NULL	336	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select sum(`pq_test`.`t1`.`a`) AS `sum(t1.a)` from `pq_test`.`t1` semi join (`pq_test`.`t2` PARTITION (`p0`)) where (`pq_test`.`t1`.`a` = `<subquery2>`.`a`)
+select sum(t1.a) from t1 where t1.a IN (select distinct t2.a from t2 partition(p0));
+sum(t1.a)
+312
+drop table pq_test.t1;
+drop table pq_test.t2;
+drop database pq_test;
+set session optimizer_switch=@saved_optimize_trace;

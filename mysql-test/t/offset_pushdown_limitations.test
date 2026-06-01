@@ -1,0 +1,123 @@
+--source include/have_only_innodb_real.inc
+--echo # Cases where Offset pushdown cannot be used:
+
+--echo # To keep track of the number of rows skipped by offset pushdown we use:
+--echo # SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+--echo # SELECT query
+--echo # SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+
+--source include/not_pq_test.inc
+--source include/count_sessions.inc
+
+SET @old_innodb_lock_wait_timeout= @@global.innodb_lock_wait_timeout;
+
+SET @@global.innodb_lock_wait_timeout = 1;
+
+--echo # 1/ Index scan scenarios
+--echo # Exotic scans not compatible with either offset pushing or redundant removal condition
+--echo #( no skip scan or group min max already addressed in main test file.)
+
+--echo # 1/a/  QS_TYPE_ROR_INTERSECT - Using intersect() (grep shows it's always with Using where) - OR clause disable with offset pushdown
+
+--echo # Redundant range condition is not compatible with using intersect
+--echo # the where clause is going to stay - even if there is no where clause
+--echo # which seems unlikely offset pushdown is not compatible with it anyways
+
+CREATE TABLE t1
+(a smallint,
+ b smallint,
+ c smallint,
+ KEY  a (a),
+ KEY  b (b)
+) ENGINE=InnoDB;
+
+INSERT INTO t1 VALUES (1,1,1), (1,1,3),(1,2,7), (2,2,10),(1, 1, 13),(1, 2, 16),(2,1,19);
+ANALYZE TABLE t1;
+--replace_regex /cost=[0-9]+.[0-9]+/cost=#.#/ /rows=[0-9]+/rows=##/
+EXPLAIN format=tree SELECT * FROM t1 WHERE b = 2 AND a = 2 LIMIT 1 OFFSET 1;
+DROP TABLE t1;
+
+--echo # 1/b/ Using union() - OR clause disabled with offset pushdown
+
+--echo # Redundant range condition is not compatible with using union
+--echo # the where clause is going to stay - even if there is no where clause
+--echo # which seems unlikely offset pushdown is not compatible with it anyways (grep shows)
+
+CREATE TABLE t1
+(
+  key1 INT NOT NULL,
+  key2 INT NOT NULL,
+  key3 INT NOT NULL,
+  key4 INT NOT NULL,
+  key5 INT,
+  key6 INT,
+  key7 INT NOT NULL,
+  key8 INT NOT NULL,
+  INDEX i1(key1),
+  INDEX i2(key2),
+  INDEX i3(key3),
+  INDEX i4(key4),
+  INDEX i5(key5),
+  INDEX i6(key6)
+);
+INSERT INTO t1 VALUES ( 1,1,1,1,1,1,1,1),(2,2,2,2,2,2,2,2);
+
+let $i=10;
+SET @d=2;
+while($i)
+{
+  INSERT INTO t1 SELECT key1+@d, key2+@d, key3+@d, key4+@d,
+                            key5+@d, key6+@d, key7+@d, key8+@d FROM t1;
+  SET @d=@d*2;
+  dec $i;
+}
+
+EXPLAIN SELECT * FROM t1 WHERE key1=48 OR key4=2 OR key6=3 LIMIT 1 OFFSET 1;
+DROP TABLE t1;
+
+
+--echo # ------------
+
+--echo # Multi values index and offset pushdown
+
+--echo # The three ways that can  trigger the use of the multivalue index (MEMBER OF() JSON_CONTAINS() JSON_OVERLAPS()) cannot
+--echo # be pushed down by ICP or by rds_empty_redundant_check_in_range_scan
+
+--echo # Multi values index won't be used together with offset pushdown until that changes
+
+--echo # ------------
+
+ CREATE TABLE customers (
+ id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+ modified DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ custinfo JSON
+);
+
+
+ INSERT INTO customers VALUES
+ (NULL, '2022-04-19 10:15:45', '{"user":"Jack","user_id":37,"zipcode":[94582,94536]}'),
+ (NULL, '2022-04-19 10:15:45', '{"user":"Jill","user_id":22,"zipcode":[94568,94507,94582]}'),
+ (NULL, '2022-04-19 10:15:45', '{"user":"Bob","user_id":31,"zipcode":[94477,94507]}'),
+ (NULL, '2022-04-19 10:15:45', '{"user":"Mary","user_id":72,"zipcode":[94536]}'),
+ (NULL, '2022-04-19 10:15:45', '{"user":"Ted","user_id":56,"zipcode":[94507,94582]}');
+
+ --echo # add multi value index
+ ALTER TABLE customers ADD INDEX zips( (CAST(custinfo->'$.zipcode' AS UNSIGNED ARRAY)) );
+
+--echo # Using where stays - no offset pushdown
+--replace_regex /cost=[0-9]+.[0-9]+/cost=#.#/ /rows=[0-9]+/rows=##/
+ EXPLAIN SELECT * FROM customers WHERE 94507 MEMBER OF(custinfo->'$.zipcode') LIMIT 1 OFFSET 1;
+
+--replace_regex /cost=[0-9]+.[0-9]+/cost=#.#/ /rows=[0-9]+/rows=##/
+EXPLAIN format=tree SELECT * FROM customers
+ WHERE JSON_CONTAINS(custinfo->'$.zipcode', CAST('[94507,94582]' AS JSON)) LIMIT 1 OFFSET 1;
+
+--replace_regex /cost=[0-9]+.[0-9]+/cost=#.#/ /rows=[0-9]+/rows=##/
+EXPLAIN format=tree SELECT * FROM customers  WHERE JSON_OVERLAPS(custinfo->'$.zipcode', CAST('[94507,94582]' AS JSON)) LIMIT 1 OFFSET 1;
+
+drop table customers;
+
+# Restore orig wait timeout
+--source include/wait_until_count_sessions.inc
+SET @@global.innodb_lock_wait_timeout= @old_innodb_lock_wait_timeout;
+DROP TABLE IF EXISTS t1;

@@ -1,0 +1,13 @@
+--source include/have_only_dstore.inc
+
+--echo # DStore all parameters managed by my.cnf
+SELECT * FROM performance_schema.global_variables WHERE VARIABLE_NAME LIKE "dstore_%" AND VARIABLE_NAME NOT IN ("dstore_tenant_config", "dstore_log_path");
+
+# Test variable storage_engine_mode read only
+SELECT @@storage_engine_mode;
+--error ER_INCORRECT_GLOBAL_LOCAL_VAR
+SET GLOBAL storage_engine_mode=ONLY_INNODB;
+--error ER_DISABLED_STORAGE_ENGINE
+CREATE TABLE t1(a int, b int)ENGINE=InnoDB;
+CREATE TABLE t1(a int, b int)ENGINE=Dstore;
+DROP TABLE t1;

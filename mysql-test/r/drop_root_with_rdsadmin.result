@@ -1,0 +1,25 @@
+SET SESSION SQL_MODE='ALLOW_INVALID_DATES';
+CREATE TABLE mysql.tmp_backup_tables_priv AS SELECT * FROM mysql.tables_priv;
+CREATE TABLE mysql.tmp_backup_user AS SELECT * FROM mysql.user;
+CREATE TABLE mysql.tmp_backup_proxies_priv AS SELECT * FROM mysql.proxies_priv;
+select count(1) from mysql.user where host='localhost' and user='root';
+count(1)
+1
+drop user 'root'@'localhost';
+Warnings:
+Warning	4005	User 'root'@'localhost' is referenced as a definer account in a stored routine.
+Warning	4005	User 'root'@'localhost' is referenced as a definer account in a trigger.
+select count(1) from mysql.user where host='localhost' and user='root';
+count(1)
+0
+TRUNCATE TABLE mysql.proxies_priv;
+INSERT INTO mysql.proxies_priv (SELECT * FROM mysql.tmp_backup_proxies_priv);
+DROP TABLE mysql.tmp_backup_proxies_priv;
+TRUNCATE TABLE mysql.tables_priv;
+INSERT INTO mysql.tables_priv (SELECT * FROM mysql.tmp_backup_tables_priv);
+DROP TABLE mysql.tmp_backup_tables_priv;
+TRUNCATE TABLE mysql.user;
+INSERT INTO mysql.user (SELECT * FROM mysql.tmp_backup_user);
+DROP TABLE mysql.tmp_backup_user;
+flush privileges;
+GRANT ALL ON *.* TO `root`@`localhost` WITH GRANT OPTION;

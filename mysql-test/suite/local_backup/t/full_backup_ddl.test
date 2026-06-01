@@ -1,0 +1,122 @@
+#
+# Basic test for full local backup and archive restore
+#
+--source include/have_debug.inc
+--source include/have_debug_sync.inc
+
+call mtr.add_suppression("failed to get backup MDL");
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("prepare for backup fail after backup control file");
+call mtr.add_suppression("start full local backup fail, pdb id 17, flag 0");
+call mtr.add_suppression("Local backup: failed to do full backup for dstore");
+
+--source suite/local_backup/include/prepare_for_backup.inc
+
+create database full_backup_ddl;
+use full_backup_ddl;
+create table t1(i int) engine=Dstore;
+
+# DDL timeout while backup running
+set global rds_local_backup_lock_optimize=off;
+set global debug='+d,full_lb_thd_wait_after_get_mdl';
+--let $full_backup_flag = 0
+--source suite/local_backup/include/start_full_backup.inc
+--sleep 3
+
+set session lock_wait_timeout=1;
+--error ER_LOCK_WAIT_TIMEOUT
+alter table t1 add column j int;
+show create table t1;
+
+connect(conn1,localhost,root,,full_backup_ddl);
+connection conn1;
+send alter table t1 add column j int;
+
+connection default;
+set global debug='-d,full_lb_thd_wait_after_get_mdl';
+--source suite/local_backup/include/wait_full_backup.inc
+show status like 'Rds_local_backup_last_full_backup_status';
+set global rds_local_backup_lock_optimize=on;
+
+connection conn1;
+reap;
+show create table t1;
+
+connection default;
+show create table t1;
+
+connection conn1;
+SET DEBUG_SYNC='mysql_rm_table_after_lock_table_names SIGNAL run_backup_lock WAIT_FOR continue_dropping_table';
+send DROP TABLE t1;
+
+connection default;
+SET DEBUG_SYNC='now WAIT_FOR run_backup_lock';
+set @origin_value = @@rds_local_backup_lock_timeout;
+set global rds_local_backup_lock_timeout=1;
+--let $full_backup_flag = 0
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+# should fail due to acquire mdl timeout
+show status like 'Rds_local_backup_last_full_backup_status';
+SET DEBUG_SYNC='now SIGNAL continue_dropping_table';
+
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let SEARCH_PATTERN=failed to get backup MDL
+--source include/search_pattern.inc
+
+connection conn1;
+reap;
+
+connection default;
+show tables;
+
+--let $full_backup_flag = 0
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+show status like 'Rds_local_backup_last_full_backup_status';
+
+set global rds_local_backup_lock_timeout=@origin_value;
+
+# Acquire MDL before backup innodb, DDL change should be in backup
+create table t1(s varchar(100)) engine=dstore;
+
+set global debug='+d,full_lb_thd_wait_before_get_mdl';
+--let $full_backup_flag = 0
+--source suite/local_backup/include/start_full_backup.inc
+
+--source suite/local_backup/include/load_data.inc
+CALL load_data('t1','s',300000);
+alter table t1 add column j int;
+insert into t1 values('abc', 123);
+set global debug='-d,full_lb_thd_wait_before_get_mdl';
+show create table t1;
+select count(*) from t1;
+select * from t1 where s='abc' and j=123;
+
+--source suite/local_backup/include/wait_full_backup.inc
+show status like 'Rds_local_backup_last_full_backup_status';
+insert into t1 values('abc', 123);
+select count(*) from t1;
+select * from t1 where s='abc' and j=123;
+
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+--let $list_type = full_backup
+--source suite/local_backup/include/restore_with_script.inc
+
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+# Cehck DDL change
+show create table t1;
+select count(*) from t1;
+select * from t1 where s='abc' and j=123;
+
+insert into t1 values('def', 456);
+alter table t1 add column k int;
+insert into t1 values('ghi', 789, 123);
+select * from t1 where s in ('abc', 'def', 'ghi') order by s;
+
+drop database full_backup_ddl;
+--source suite/local_backup/include/clean_backup.inc

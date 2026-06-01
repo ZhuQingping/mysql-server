@@ -1,0 +1,549 @@
+###################################################################
+# Purpose: Obtain transactions execte times.                      #
+#                                                                 #
+# Include:                                                        #
+#                                                                 #
+#   1. idle transactions                                          #
+#   2. auto-commit(single statement) &                            #
+#      not auto-commit transactions(muilt-statement)              #
+#   3. rollback transaction                                       #
+#   4. DDL/DCL                                                    #
+#                                                                 #
+###################################################################
+
+--source include/not_have_only_dstore.inc
+--source include/have_innodb_16k.inc
+--source include/count_sessions.inc
+
+--echo # Establish connection con1 (user=root)
+connect(con1,localhost,root,,);
+--echo # Establish connection con2 (user=root)
+connect(con2,localhost,root,,);
+--echo # Establish connection con3 (user=root)
+connect(con3,localhost,root,,);
+
+connection default;
+--disable_warnings
+CREATE TABLE IF NOT EXISTS t1 (sno int(11) NOT NULL DEFAULT '0',
+                               name int(11) DEFAULT NULL,
+                               PRIMARY KEY (sno),
+                               UNIQUE KEY idx(name));
+--enable_warnings
+INSERT INTO t1 VALUES (1,2),(2,3),(3,4);
+SELECT * FROM t1;
+
+--echo ######### deadlock between two trx ########
+--echo # Switch to connection con1
+connection con1;
+BEGIN;
+SELECT * FROM t1 WHERE sno = 1 FOR UPDATE;
+
+--echo # Switch to connection con2
+connection con2;
+BEGIN;
+SELECT * FROM t1 WHERE sno = 2 FOR UPDATE;
+
+--echo # Switch to connection con1
+connection con1;
+--send
+SELECT * FROM t1 WHERE sno = 2 FOR UPDATE;
+--sleep 2
+
+
+--echo # Switch to connection con2
+connection con2;
+select sleep(2);
+--error ER_LOCK_DEADLOCK
+SELECT * FROM t1 WHERE sno = 1 FOR UPDATE;
+--disable_result_log
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+SHOW FULL PROCESSLIST;
+--enable_result_log
+--echo # Implicitly rollback the current transaction, typically
+--echo # after deadlock was discovered.
+ROLLBACK;
+
+disconnect con1;
+disconnect con2;
+disconnect con3;
+--source include/wait_until_disconnected.inc
+connection default;
+--disable_warnings
+CREATE TABLE IF NOT EXISTS t2 (sno int(11) NOT NULL DEFAULT '0',
+                               name int(11) DEFAULT NULL,
+                               PRIMARY KEY (sno),
+                               UNIQUE KEY idx(name));
+--enable_warnings
+INSERT INTO t2 VALUES (1,2),(2,3),(3,4);
+
+--echo # Multi-table delete submission, reset trx_execute_time
+DELETE t1 FROM t1,t2 WHERE t1.sno=t2.sno;
+
+DROP TABLE t1;
+DROP TABLE t2;
+
+--source include/wait_until_count_sessions.inc
+ 
+--echo # note: For the same query execution time is an unstable value,
+--echo # so the value is masked
+CALL mtr.add_suppression("Query Cache is ON, but it is unsafe and retiring in 8.0.*");
+
+--echo #        >   test1: Count the execution time of idle transactions
+--echo #========================================================================
+--disable_result_log
+SHOW FULL PROCESSLIST;
+--enable_result_log
+set @start_time= (select unix_timestamp(now()));
+BEGIN;
+SELECT SLEEP(2);
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @start_time)`
+--echo # Verify the correctness of the query time
+if ($TRX_EXECUTED_TIME >= 2 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL)
+{
+  echo # "Success";
+}
+--disable_result_log
+SHOW FULL PROCESSLIST;
+--enable_result_log
+COMMIT;
+
+--echo # Trx commited, reset TRX_EXECUTED_TIME 0
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+--disable_result_log
+SHOW FULL PROCESSLIST;
+--enable_result_log
+
+--echo #      >    test2: Statistics the execution time of explicitly commmit
+--echo #                  transactions
+--echo #======================================================================
+--disable_warnings
+DROP TABLE IF EXISTS test.t1;
+--enable_warnings
+CREATE TABLE test.t1(id INT PRIMARY KEY,name VARCHAR(20));
+set @start_time= (select unix_timestamp(now()));
+BEGIN;
+INSERT INTO test.t1 value(0,'wuhan');
+SELECT SLEEP(3);
+DELETE FROM test.t1 where id=0;
+INSERT INTO test.t1 value(0,'wuhan');
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @start_time)`
+--echo # Verify the correctness of the query time
+if ($TRX_EXECUTED_TIME >= 3 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL) 
+{
+  echo # "Success";
+}
+--disable_result_log
+SHOW FULL PROCESSLIST;
+--enable_result_log
+
+set @start_time= (select unix_timestamp(now()));
+START TRANSACTION;
+INSERT INTO test.t1 value(1,'zhengzhou');
+SELECT SLEEP(2);
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @start_time)`
+--echo # Verify the correctness of the query time
+if ($TRX_EXECUTED_TIME >= 2 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL)
+{
+  echo # "Success";
+}
+--disable_result_log
+SHOW FULL PROCESSLIST;
+--enable_result_log
+ROLLBACK;
+--echo # Explicit transaction rollback, reset execution time
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+--disable_result_log
+SHOW FULL PROCESSLIST;
+--enable_result_log
+
+--echo #     >  test3: Statistics dml operation execution time
+--echo #====================================================================
+INSERT INTO test.t1 value(2,'hangzhou');
+INSERT INTO test.t1 value(3,'guiyang');
+SELECT COUNT(*) FROM test.t1;
+
+--echo # connect m1
+-- connect(m1,localhost,root,,,$MASTER_MYPORT)
+--send SELECT COUNT(*) FROM test.t1 where SLEEP(1)=0;
+--echo # connect m2
+-- connect(m2,localhost,root,,,$MASTER_MYPORT)
+--send DELETE FROM test.t1 WHERE id=1 AND SLEEP(1)=0;
+
+--connection default
+--disable_result_log
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+SHOW FULL PROCESSLIST;
+--enable_result_log
+
+--connection m2
+reap;
+
+--connection m1
+reap;
+UPDATE test.t1 SET name='guangzhou' WHERE SLEEP(1)=0 AND id=2;
+--echo # end
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+disconnect m1;
+disconnect m2;
+
+--echo # connect default
+--connection default
+
+start transaction;
+UPDATE test.t1 SET name='wentasy' WHERE id = 2;
+--echo # connect m1
+-- connect(m1,localhost,root,,,$MASTER_MYPORT)
+--send UPDATE test.t1 SET name='wentasy' WHERE id = 2;
+connection default;
+
+SELECT SLEEP(2);
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST ORDER BY TRX_EXECUTED_TIME DESC limit 1`
+if ($TRX_EXECUTED_TIME >= 2 and $TRX_EXECUTED_TIME < 1000)
+{
+  echo # Success;
+}
+--disable_result_log
+SHOW FULL PROCESSLIST;
+--enable_result_log
+commit;
+
+#--echo #    >  test4: Verify statistical lock wait time
+#--echo #===============================================================
+#SET AUTOCOMMIT=0;
+#--send UPDATE test.t1 SET name='wentasy' WHERE id = 2;
+#--echo # connect m1
+#connection m1;
+#reap;
+#--send UPDATE test.t1 SET name='wentasy' WHERE id = 2;
+#--echo # connect default
+#connection default;
+#reap;
+#--enable_warnings
+#--disable_result_log
+#SELECT sleep(2);
+#--replace_column 1 #
+#SELECT trx_waited_time FROM information_schema.innodb_trx;
+#COMMIT;
+#connection m1;
+#reap;
+#commit;
+#select sleep(1);
+#SELECT trx_waited_time FROM information_schema.innodb_trx;
+--enable_result_log
+
+--echo #    >  test5: Verify trx execute time of not auto-commit mode
+--echo #===============================================================
+connection default;
+commit;
+disconnect m1;
+
+--echo # set not auto-commit
+set @start_time= (select unix_timestamp(now()));
+set AUTOCOMMIT=0;
+select count(*) from test.t1;
+select sleep(2);
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @start_time)`
+--echo # Verify the correctness of the query time
+if ($TRX_EXECUTED_TIME >= 2 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL)
+{
+  echo # "Success";
+}
+--disable_result_log
+SHOW FULL PROCESSLIST;
+--enable_result_log
+
+UPDATE test.t1 SET name='11111' WHERE id = 2;
+SELECT sleep(1);
+
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @start_time)`
+--echo # Verify the correctness of the query time
+if ($TRX_EXECUTED_TIME >= 3 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL)
+{
+  echo # "Success";
+}
+
+--disable_result_log
+SHOW FULL PROCESSLIST;
+--enable_result_log
+
+--echo # Implicit commit, reset execution time
+begin;
+set @start_time= (select unix_timestamp(now()));
+UPDATE test.t1 SET name='11111' WHERE id = 2;
+SELECT sleep(1);
+
+# nested query
+update test.t1 set name=(
+  select name from (
+    select name from test.t1 where id=0) temp
+  ) where id=2;
+
+SELECT sleep(3);
+--echo # The execution time of the current transaction is 4 seconds
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @start_time)`
+--echo # Verify the correctness of the query time
+if ($TRX_EXECUTED_TIME >= 4 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL)
+{
+  echo # "Success";
+}
+--disable_result_log
+SHOW FULL PROCESSLIST;
+--enable_result_log
+
+--echo # reset 0
+commit;
+
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+
+--echo #    >  test6: Verify the correctness of the execution time of
+--echo #              the rollback transaction
+--echo #===============================================================
+connection default;
+set AUTOCOMMIT=1;
+set @start_time= (select unix_timestamp(now()));
+begin;
+
+UPDATE test.t1 SET name='11111' WHERE id = 2;
+
+SAVEPOINT point1;
+
+SELECT sleep(2);
+
+update test.t1 set name=(
+  select name from (
+    select name from test.t1 where id=0) temp
+  ) where id=2;
+
+SAVEPOINT point2;
+
+SELECT sleep(1);
+
+
+rollback to point1;
+
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @start_time)`
+--echo # Verify the correctness of the query time
+if ($TRX_EXECUTED_TIME >= 3 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL)
+{
+  echo # "Success";
+}
+
+--disable_result_log
+show full processlist;
+--enable_result_log
+
+rollback;
+
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+
+set AUTOCOMMIT=0;
+set @start_time= (select unix_timestamp(now()));
+
+UPDATE test.t1 SET name='11111' WHERE id = 2;
+
+SAVEPOINT point1;
+
+SELECT sleep(2);
+
+update test.t1 set name=(
+  select name from (
+    select name from test.t1 where id=0) temp
+  ) where id=2;
+
+SAVEPOINT point2;
+
+SELECT sleep(1);
+
+
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @start_time)`
+--echo # Verify the correctness of the query time
+if ($TRX_EXECUTED_TIME >= 3 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL)
+{
+  echo # "Success";
+}
+
+--disable_result_log
+show full processlist;
+--enable_result_log
+
+
+rollback to point1;
+
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @start_time)`
+--echo # Verify the correctness of the query time
+if ($TRX_EXECUTED_TIME >= 3 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL)
+{
+  echo # "Success";
+}
+
+--disable_result_log
+show full processlist;
+--enable_result_log
+
+rollback;
+
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+
+--disable_result_log
+show full processlist;
+--enable_result_log
+
+--echo #    >  test7: Verify the correctness of the execution time of
+--echo #              DDL/DCL and single statement trx
+--echo #===============================================================
+--source include/have_debug.inc
+--source include/have_debug_sync.inc
+
+connect (con1,localhost,root,,test,$MASTER_MYPORT,$MASTER_MYSOCK);
+
+--echo # Verify the correctness of the execution time of the single statement
+
+let $QUERY_STAT=select count(*) from t1;
+--source include/show_query_execute_time.inc
+
+--echo # Verify the correctness of the execution time of DDL
+
+let $QUERY_STAT=create database local_disk;
+--source include/show_query_execute_time.inc
+
+let $QUERY_STAT=drop database local_disk;
+--source include/show_query_execute_time.inc
+
+let $QUERY_STAT=create table DDL_TABLE(a int);
+--source include/show_query_execute_time.inc
+
+let QUERY_STAT= alter table DDL_TABLE add b int;
+--source include/show_query_execute_time.inc
+
+SELECT * FROM DDL_TABLE;
+
+let QUERY_STAT= drop table test.t1;
+--source include/show_query_execute_time.inc
+
+--echo # Verify the correctness of the execution time of DCL
+
+let $QUERY_STAT= create user mysqltest_1@localhost;
+--source include/show_query_execute_time.inc
+
+let $QUERY_STAT= grant CREATE TEMPORARY TABLES, LOCK TABLES on mysqltest.* to mysqltest_1@localhost;
+--source include/show_query_execute_time.inc
+
+let $QUERY_STAT= drop user mysqltest_1@localhost;
+--source include/show_query_execute_time.inc
+
+--echo #    >  test8: BUG2023102501147 XA transaction time not ended after commit
+--echo #===============================================================
+connect(conxa1,localhost,root,,);
+connect(conxa2,localhost,root,,);
+connection conxa1;
+set @XA_START_TIME= (select unix_timestamp(now()));
+xa start  "test";
+select sleep (2);
+#SELECT * FROM INFORMATION_SCHEMA.PROCESSLIST;
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST WHERE COMMAND='QUERY'`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @XA_START_TIME)`
+--echo # Verify the correctness of the query time 
+if ($TRX_EXECUTED_TIME >= 2 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL) 
+{
+  echo # "Success";
+}
+xa end "test";
+xa prepare "test";
+connection conxa2;
+SELECT user, command FROM INFORMATION_SCHEMA.PROCESSLIST where TRX_EXECUTED_TIME >= 2;
+connection conxa1;
+xa commit "test";
+connection conxa2;
+SELECT user, command FROM INFORMATION_SCHEMA.PROCESSLIST where TRX_EXECUTED_TIME > 0;
+
+--echo #    >  test9: BUG2023102501147 XA transaction duration when rollback
+--echo #===============================================================
+
+connection conxa1;
+set @XA_START_TIME= (select unix_timestamp(now()));
+xa start  "test";
+select sleep (2);
+#SELECT * FROM INFORMATION_SCHEMA.PROCESSLIST;
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST WHERE COMMAND='QUERY'`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @XA_START_TIME)`
+--echo # Verify the correctness of the query time 
+if ($TRX_EXECUTED_TIME >= 2 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL) 
+{
+  echo # "Success";
+}
+xa end "test";
+xa prepare "test";
+connection conxa2;
+SELECT user, command FROM INFORMATION_SCHEMA.PROCESSLIST where TRX_EXECUTED_TIME >= 2;
+connection conxa1;
+xa rollback "test";
+connection conxa2;
+SELECT user, command FROM INFORMATION_SCHEMA.PROCESSLIST where TRX_EXECUTED_TIME > 0;
+
+--echo #    >  test10: BUG2023102501147 XA transaction duration when commit one phase
+--echo #===============================================================
+connection conxa1;
+set @XA_START_TIME= (select unix_timestamp(now()));
+xa start  "test";
+select sleep (2);
+#SELECT * FROM INFORMATION_SCHEMA.PROCESSLIST;
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST WHERE COMMAND='QUERY'`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @XA_START_TIME)`
+--echo # Verify the correctness of the query time 
+if ($TRX_EXECUTED_TIME >= 2 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL) 
+{
+  echo # "Success";
+}
+xa end "test";
+connection conxa2;
+SELECT user, command FROM INFORMATION_SCHEMA.PROCESSLIST where TRX_EXECUTED_TIME >= 2;
+connection conxa1;
+xa commit "test" ONE PHASE;
+connection conxa2;
+SELECT user, command FROM INFORMATION_SCHEMA.PROCESSLIST where TRX_EXECUTED_TIME > 0;
+
+--echo # cleanup
+connection default;
+--disable_warnings
+DROP TABLE IF EXISTS test.DDL_TABLE;
+--enable_warnings
+
+--echo #    >  test11: BUG2023102501147 XA transaction time not ended after commit
+--echo #    >  Test if the value of TRX_EXECUTED_TIME can be cleared correctly.
+--echo #    >  process_detached_xa_commit(thd) function will fail and TRX_EXECUTED_TIME 
+--echo #    >  should not be clear when we commit a wrong xid.
+--echo #===============================================================
+connection conxa1;
+set @XA_START_TIME= (select unix_timestamp(now()));
+xa start  "test";
+select sleep (2);
+#SELECT * FROM INFORMATION_SCHEMA.PROCESSLIST;
+--let $TRX_EXECUTED_TIME= `SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST WHERE COMMAND='QUERY'`
+--let $TIME_INTERVAL= `(select unix_timestamp(now()) - @XA_START_TIME)`
+--echo # Verify the correctness of the query time 
+if ($TRX_EXECUTED_TIME >= 2 and $TRX_EXECUTED_TIME <= $TIME_INTERVAL) 
+{
+  echo # "Success";
+}
+xa end "test";
+xa prepare "test";
+connection conxa2;
+SELECT user, command FROM INFORMATION_SCHEMA.PROCESSLIST where TRX_EXECUTED_TIME >= 2;
+connection conxa1;
+
+--echo # commit a wrong xid, the value of TRX_EXECUTED_TIME should not be cleared.
+--error ER_XAER_NOTA
+xa commit "test2";
+SELECT user, command FROM INFORMATION_SCHEMA.PROCESSLIST where TRX_EXECUTED_TIME >= 2;
+--echo # commit successfully, the value of TRX_EXECUTED_TIME should be cleared.
+xa commit "test";
+connection conxa2;
+SELECT user, command FROM INFORMATION_SCHEMA.PROCESSLIST where TRX_EXECUTED_TIME > 0;

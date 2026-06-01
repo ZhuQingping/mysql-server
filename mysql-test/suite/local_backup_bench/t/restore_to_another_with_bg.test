@@ -1,0 +1,140 @@
+# ==== Purpose ====
+#
+# 1. Verify local_backup and restore with background dml
+#
+# ==== Implementation ====
+#
+# 1. Prepare test table and data;
+# 2. Run the background sysbench
+# 3. run many rounds for backup and restore database 
+#
+# ==== References ====
+#
+# local_backup feature
+#
+
+--source suite/local_backup_bench/include/prepare_two_for_backup.inc
+#--source include/have_only_dstore.inc
+CALL mtr.add_suppression("insert dstore index tuple fail");
+CALL mtr.add_suppression("insert_index fail");
+call mtr.add_suppression("full backup found binlog is not enabled");
+
+--echo #
+--echo # 1. prepare some data
+--echo #
+--connection master
+create database full_backup_archive_restore;
+use full_backup_archive_restore;
+create table t1(s varchar(100)) engine=Dstore;
+
+# insert 1000 records
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 1000
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+--echo #
+--echo # create a base full backup
+--echo #
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+
+--source suite/local_backup/include/wait_full_backup.inc
+--source suite/local_backup/include/stop_full_backup.inc
+
+--echo #
+--echo # 2. Start log archive
+--echo #
+--source suite/local_backup/include/start_log_archive.inc
+
+--echo #
+--echo #    start bg sysbench
+--echo #
+--let $bg_bench_rows=1000000
+--let $bg_bench_time=180
+--source suite/local_backup_bench/include/start_bg_sysbench.inc
+--sleep 5
+
+--let $round=0
+--let $total_round=4
+while ($round != $total_round) {
+    --echo #
+    --echo # 3.1 Round $round: Full backup
+    --echo #
+    --connection master
+    --let $full_backup_flag = 1
+    --source suite/local_backup/include/start_full_backup.inc
+
+    --source suite/local_backup/include/wait_full_backup.inc
+    --source suite/local_backup/include/stop_full_backup.inc
+
+    --sleep 2
+
+    --echo #
+    --echo #    Add more data
+    --echo #
+    --disable_query_log
+    --disable_result_log
+    SET SESSION autocommit=0;
+    --let $table = t1
+    --let $i = 300
+    --source include/Load_data.inc
+    --enable_result_log
+    --enable_query_log
+    select count(*) from t1;
+
+    --echo #
+    --echo # 3.2 Round $round: restore backup
+    --echo #
+    --let $list_type = wal_archive
+    --source suite/local_backup/include/restore_with_script.inc
+
+    --let $rpl_server_number= 2
+    --let $rpl_server_parameters= --dstore_open_restore_mode=on --skip-log-bin
+    --source include/rpl_start_server.inc
+
+    --echo #
+    --echo # 3.3 Round $round: check total rows 
+    --echo #
+    --connection slave
+    select count(*) from full_backup_archive_restore.t1;
+    --echo #
+    --echo #     stop slave
+    --echo #
+    --let $rpl_server_number= 2
+    --source include/rpl_stop_server.inc
+
+    --let $backup_output_dir=$MYSQLTEST_VARDIR/backup_output
+    --exec test -d $backup_output_dir
+    --exec rm -rf $backup_output_dir/*
+
+    --inc $round
+}
+
+--connection master
+--echo #
+--echo # 4. stop log archive
+--echo #
+--source suite/local_backup/include/stop_log_archive.inc
+
+drop database full_backup_archive_restore;
+
+--source suite/local_backup/include/clean_backup.inc
+
+--echo #
+--echo # 5. start slave to clean
+--echo #
+--let $rpl_server_number= 2
+--let $rpl_server_parameters= --skip-log-bin
+--source include/rpl_start_server.inc
+
+--let $rpl_channel_name=
+--let $rpl_skip_sync= 1
+--let $rpl_skip_delete_channels=1
+--let $rpl_skip_stop_slave= 1
+--source include/rpl_end.inc

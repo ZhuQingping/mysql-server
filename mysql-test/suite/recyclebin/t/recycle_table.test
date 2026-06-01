@@ -1,0 +1,812 @@
+--source include/not_have_only_dstore.inc
+source include/have_debug.inc;
+#
+# Test for recycle func of recyclebin
+#
+
+--echo # Connect to master
+connection default;
+SET @saved_rds_extended_partitions_enabled=@@rds_extended_partitions_enabled;
+SET global rds_extended_partitions_enabled = true;
+set global rds_recycle_bin_mode=ON;
+create database db_recycle;
+create database db_recycle_dropped;
+
+create user normal_1@'%' identified by 'pass';
+create user normal_2@'%' identified by 'pass';
+create user normal_3@'%' identified by 'pass';
+
+grant all on db_recycle.* to normal_1@'%' ;
+grant all on db_recycle_dropped.* to normal_1@'%';
+grant all on __recyclebin__.* to normal_1@'%' ;
+grant create tablespace on *.* to normal_1@'%' ;
+grant SYSTEM_VARIABLES_ADMIN on *.* to normal_1@'%';
+
+grant all on __recyclebin__.* to normal_3@'%' ;
+revoke drop on __recyclebin__.* from normal_3@'%';
+
+connect(m_normal_1, 127.0.0.1, normal_1, pass, db_recycle, $SERVER_MYPORT_1);
+connect(m_normal_2, 127.0.0.1, normal_2, pass, test, $SERVER_MYPORT_1);
+connect(m_normal_3, 127.0.0.1, normal_3, pass, , $SERVER_MYPORT_1);
+
+--echo ------------------------------------------------------
+--echo 1. Privileges
+--echo    -- Still require related privileges if want to
+--echo       show recycle bin db;
+--echo    -- No one can alter db except super_acl user;
+--echo ------------------------------------------------------
+
+--echo 1.1 dbms_recyclebin.purge_table still require db.table privileges;
+
+connection m_normal_1;
+use db_recycle;
+create table t1(id int);
+drop table t1;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+connection m_normal_2;
+--replace_result $t1_name_in_recyclebin t1
+--error ER_TABLEACCESS_DENIED_ERROR
+eval call dbms_recyclebin.purge_table('$t1_name_in_recyclebin');
+
+connection m_normal_3;
+--replace_result $t1_name_in_recyclebin t1
+--error ER_TABLEACCESS_DENIED_ERROR
+eval call dbms_recyclebin.purge_table('$t1_name_in_recyclebin');
+
+connection m_normal_1;
+show grants;
+--replace_result $t1_name_in_recyclebin t1
+eval call dbms_recyclebin.purge_table('$t1_name_in_recyclebin');
+
+--echo ------------------------------------------------------
+--echo 1. Drop table
+--echo    -- Related object:
+--echo       Foreign key:
+--echo       Trigger:
+--echo       View:
+--echo       Constraint:
+--echo    -- Partition table
+--echo    -- multi tables
+--echo ------------------------------------------------------
+
+connection m_normal_1;
+use db_recycle;
+
+CREATE TABLE p1 (
+    id INT NOT NULL,
+    PRIMARY KEY (id)
+) ENGINE=INNODB;
+
+CREATE TABLE c1 (
+    id INT,
+    parent_id INT,
+    INDEX par_ind (parent_id),
+    FOREIGN KEY (parent_id)
+        REFERENCES p1(id)
+        ON DELETE CASCADE
+) ENGINE=INNODB;
+
+create table l1(id int);
+
+delimiter //;
+CREATE TRIGGER tri_1
+  before INSERT ON c1 FOR EACH ROW
+BEGIN
+  INSERT INTO l1 value(1);
+END//
+delimiter  ;//
+
+create view v1 as select * from c1;
+
+--echo 1.1 confirm the trigger, view, foreign key.
+drop table c1;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $c1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+connection default;
+--replace_result $c1_name_in_recyclebin c1
+eval show create table __recyclebin__.`$c1_name_in_recyclebin`;
+
+connection m_normal_1;
+--error ER_TRG_DOES_NOT_EXIST
+show create trigger tri_1;
+
+show create view v1;
+
+--error ER_VIEW_INVALID
+select * from v1;
+
+--replace_result $c1_name_in_recyclebin c1
+eval call dbms_recyclebin.purge_table('$c1_name_in_recyclebin');
+
+# 2.1 Tables which all support
+--echo # Connect to master
+connection m_normal_1;
+use db_recycle;
+CREATE TABLE t1 (
+    id INT NOT NULL,
+    PRIMARY KEY (id)
+) ENGINE=INNODB;
+
+CREATE TABLE t2 (
+    id INT NOT NULL,
+    PRIMARY KEY (id)
+) ENGINE=INNODB;
+
+drop table t1,t2;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+let $t2_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 2);
+--replace_result $t1_name_in_recyclebin t1
+eval call dbms_recyclebin.purge_table('$t1_name_in_recyclebin');
+--replace_result $t2_name_in_recyclebin t2
+eval call dbms_recyclebin.purge_table('$t2_name_in_recyclebin');
+
+# 2.2 Tables which not all support
+CREATE TABLE t1 (
+    id INT NOT NULL,
+    PRIMARY KEY (id)
+) ENGINE=INNODB;
+
+CREATE TEMPORARY TABLE t2 (
+    id INT NOT NULL);
+
+drop table t1,t2;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+--replace_result $t1_name_in_recyclebin t1
+eval call dbms_recyclebin.purge_table('$t1_name_in_recyclebin');
+
+# 3 Partition Table
+CREATE TABLE part_t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+PARTITION BY HASH(to_days(date))
+SUBPARTITION BY LIST(amount)
+(
+  PARTITION dp0 (
+    SUBPARTITION p0 values in (1, 2),
+    SUBPARTITION p1 values in (3, 4),
+    SUBPARTITION p2 values in (5, 6)
+),
+PARTITION dp1
+(
+  SUBPARTITION p3 values in (1, 2),
+  SUBPARTITION p4 values in (3, 4),
+  SUBPARTITION p5 values in (5, 6)
+)
+);
+
+CREATE TABLE part_t2 (
+    sale_date DATE,
+    product_id INT,
+    quantity INT,
+    price DECIMAL(10, 2)
+)
+PARTITION BY RANGE (TO_DAYS(sale_date))
+SUBPARTITION BY HASH (product_id)
+SUBPARTITIONS 4
+(
+    PARTITION p0 VALUES LESS THAN (TO_DAYS('2023-01-01')),
+    PARTITION p1 VALUES LESS THAN (TO_DAYS('2023-07-01')),
+    PARTITION p2 VALUES LESS THAN (TO_DAYS('2024-01-01')),
+    PARTITION p3 VALUES LESS THAN MAXVALUE
+);
+
+CREATE TABLE part_t3 (
+    sale_date DATE NOT NULL,
+    product_id INT,
+    quantity INT,
+    price DECIMAL(10, 2)
+)
+PARTITION BY RANGE (TO_DAYS(sale_date))
+(
+    PARTITION p0 VALUES LESS THAN (TO_DAYS('2023-01-01')),
+    PARTITION p1 VALUES LESS THAN (TO_DAYS('2023-07-01')),
+    PARTITION p2 VALUES LESS THAN (TO_DAYS('2024-01-01')),
+    PARTITION p3 VALUES LESS THAN MAXVALUE
+);
+
+CREATE TABLE t4(id INT);
+
+drop table part_t1,part_t2,part_t3,t4;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+let $t2_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 2);
+let $t3_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 3);
+let $t4_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 4);
+
+--replace_result $t1_name_in_recyclebin part_t2
+eval call dbms_recyclebin.purge_table('$t1_name_in_recyclebin');
+--replace_result $t2_name_in_recyclebin part_t2
+eval call dbms_recyclebin.purge_table('$t2_name_in_recyclebin');
+--replace_result $t3_name_in_recyclebin part_t3
+eval call dbms_recyclebin.purge_table('$t3_name_in_recyclebin');
+--replace_result $t4_name_in_recyclebin t4
+eval call dbms_recyclebin.purge_table('$t4_name_in_recyclebin');
+
+call dbms_recyclebin.show_tables();
+
+--echo # Connect to master
+connection default;
+set rds_recycle_bin_mode=OFF;
+use db_recycle;
+drop table l1;
+drop view v1;
+drop table p1;
+
+--echo ------------------------------------------------------
+--echo 1. Drop parent table
+--echo ------------------------------------------------------
+
+connection m_normal_1;
+use db_recycle;
+
+CREATE TABLE p1 (
+    id INT NOT NULL,
+    PRIMARY KEY (id)
+) ENGINE=INNODB;
+
+CREATE TABLE c1 (
+    id INT,
+    parent_id INT,
+    INDEX par_ind (parent_id),
+    FOREIGN KEY (parent_id)
+        REFERENCES p1(id)
+        ON DELETE CASCADE
+) ENGINE=INNODB;
+
+--echo 1.1  foreign key.
+--error ER_FK_CANNOT_DROP_PARENT
+drop table p1;
+
+set foreign_key_checks=off;
+drop table p1;
+insert into c1 values(1, 2);
+commit;
+show create table c1;
+set foreign_key_checks=on;
+
+call dbms_recyclebin.show_tables();
+
+--echo # Connect to master
+connection default;
+set rds_recycle_bin_mode=OFF;
+drop table db_recycle.c1;
+
+--echo ------------------------------------------------------
+--echo 1. Drop in procedure
+--echo ------------------------------------------------------
+
+connection m_normal_1;
+use db_recycle;
+
+CREATE TABLE p1 (
+    id INT NOT NULL,
+    PRIMARY KEY (id)
+) ENGINE=INNODB;
+
+delimiter //;
+create procedure proc_1()
+begin
+  drop table p1;
+end//
+delimiter ;//
+
+call proc_1();
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+drop procedure proc_1;
+
+--echo ------------------------------------------------------
+--echo 2. Drop database
+--echo ------------------------------------------------------
+
+connection m_normal_1;
+use db_recycle_dropped;
+
+CREATE TABLE p2 (
+    id INT NOT NULL,
+    PRIMARY KEY (id)
+) ENGINE=INNODB;
+
+CREATE TABLE c2 (
+    id INT,
+    parent_id INT,
+    self_id INT,
+    INDEX id_ind (id),
+    INDEX par_ind (parent_id),
+    INDEX sel_ind (self_id),
+    FOREIGN KEY (self_id)
+        REFERENCES c2(id),
+    FOREIGN KEY (parent_id)
+        REFERENCES p2(id)
+        ON DELETE CASCADE
+) ENGINE=INNODB;
+
+create table l2(id int);
+
+delimiter //;
+CREATE TRIGGER tri_1
+  before INSERT ON c2 FOR EACH ROW
+BEGIN
+  INSERT INTO l2 value(1);
+END//
+delimiter  ;//
+
+create view v2 as select * from c2;
+
+drop database db_recycle_dropped;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+create database db_recycle_dropped;
+SET SESSION debug="+d,recyclebin_restore_table_old_db_null";
+--error ER_NATIVE_PROC_PARAMETER_MISMATCH
+eval call dbms_recyclebin.restore_db('db_recycle_dropped');
+SET SESSION debug="-d,recyclebin_restore_table_old_db_null";
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+eval call dbms_recyclebin.restore_db('db_recycle_dropped', '__recyclebin__');
+SET SESSION debug="+d,recyclebin_copy_with_cs_fail_05";
+--error ER_NATIVE_PROC_PARAMETER_MISMATCH
+eval call dbms_recyclebin.restore_db('db_recycle_dropped', 'db_recycle_dropped');
+SET SESSION debug="-d,recyclebin_copy_with_cs_fail_05";
+
+call dbms_recyclebin.restore_db('db_recycle_dropped');
+--error ER_RECYBIN_NO_MATCH
+call dbms_recyclebin.restore_db('db_recycle_dropped_note_exist');
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+set rds_recycle_bin_mode=OFF;
+drop database db_recycle_dropped;
+
+set rds_recycle_bin_mode=ON;
+
+--echo ------------------------------------------------------
+--echo 3. read only
+--echo ------------------------------------------------------
+
+connection m_normal_1;
+use db_recycle;
+
+create table t2 (id int);
+
+drop table t2;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t2_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+connection default;
+set global read_only = on;
+
+connection m_normal_1;
+--replace_result $t2_name_in_recyclebin t2
+--error ER_OPTION_PREVENTS_STATEMENT
+eval call dbms_recyclebin.purge_table('$t2_name_in_recyclebin');
+
+connection default;
+set global read_only = off;
+
+connection m_normal_1;
+--replace_result $t2_name_in_recyclebin t2
+eval call dbms_recyclebin.purge_table('$t2_name_in_recyclebin');
+
+--echo ------------------------------------------------------
+--echo 4. partition table or general tablespace
+--echo ------------------------------------------------------
+
+connection m_normal_1;
+use db_recycle;
+
+CREATE TABLE t3 (
+    firstname VARCHAR(25) NOT NULL,
+    lastname VARCHAR(25) NOT NULL,
+    username VARCHAR(16) NOT NULL,
+    email VARCHAR(35),
+    joined DATE NOT NULL
+)
+PARTITION BY RANGE( YEAR(joined) ) (
+    PARTITION p0 VALUES LESS THAN (1960),
+    PARTITION p1 VALUES LESS THAN (1970),
+    PARTITION p2 VALUES LESS THAN (1980),
+    PARTITION p3 VALUES LESS THAN (1990),
+    PARTITION p4 VALUES LESS THAN MAXVALUE
+);
+
+drop table t3;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t3_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+connection default;
+--replace_result $t3_name_in_recyclebin t3
+eval show create table __recyclebin__.`$t3_name_in_recyclebin`;
+
+connection m_normal_1;
+--replace_result $t3_name_in_recyclebin t3
+eval call dbms_recyclebin.purge_table('$t3_name_in_recyclebin');
+
+CREATE TABLESPACE `ts1` ADD DATAFILE 'ts1.ibd' Engine=InnoDB;
+create table t4(id int) tablespace ts1;
+drop table t4;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+connection m_normal_1;
+drop tablespace ts1;
+
+--echo ------------------------------------------------------
+--echo 5. recycle_bin table exists error
+--echo ------------------------------------------------------
+
+connection m_normal_1;
+use db_recycle;
+
+create table t5(id int);
+drop table t5;
+create table t5(id int);
+drop table t5;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t5_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+let $t5_2_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 2);
+
+connection m_normal_1;
+--replace_result $t5_name_in_recyclebin t5
+eval call dbms_recyclebin.purge_table('$t5_name_in_recyclebin');
+--replace_result $t5_2_name_in_recyclebin t5_2
+eval call dbms_recyclebin.purge_table('$t5_2_name_in_recyclebin');
+
+--echo ------------------------------------------------------
+--echo 5.1 fts table didn't support to be recycled
+--echo ------------------------------------------------------
+
+connection m_normal_1;
+use db_recycle;
+
+CREATE TABLE t1 (
+        id INT UNSIGNED AUTO_INCREMENT NOT NULL PRIMARY KEY,
+        title VARCHAR(200),
+  content TEXT,
+  FULLTEXT INDEX ft_content (content)
+) ENGINE=InnoDB DEFAULT CHARACTER SET gb2312 COLLATE gb2312_chinese_ci;
+
+drop table t1;
+
+call dbms_recyclebin.show_tables();
+
+--echo ------------------------------------------------------
+--echo 6. purge normal table or noexist table
+--echo ------------------------------------------------------
+
+connection default;
+set rds_recycle_bin_mode=ON;
+create table __recyclebin__.no_recycle_table(id int);
+create table __recyclebin__.__innodb_olddb_oldtable_1234(id int);
+create table __recyclebin__.__innodb_olddb_oldtable_1234_(id int);
+create table __recyclebin__.abc(id int);
+create table __recyclebin__.`@@`(id int);
+create table __recyclebin__.`@`(id int);
+create table __recyclebin__.`@123`(id int);
+create table __recyclebin__.`abc@123`(id int);
+create table __recyclebin__.`@1@123`(id int);
+create table __recyclebin__.`1@@123`(id int);
+create table __recyclebin__.`1@2@`(id int);
+create table __recyclebin__.`1@2@ok`(id int);
+create table __recyclebin__.`1@2@123`(id int);
+create table __recyclebin__.`db_recycle@2@123`(id int);
+create table __recyclebin__.`db@recycle@2@123`(id int);
+create table __recyclebin__.`db_recycle@4@FFFFFFFF`(id int);
+create table db_recycle.`db_recycle@3@123`(id int);
+create table db_recycle.`4`(id int);
+rename table db_recycle.`db_recycle@3@123` to __recyclebin__.`@3@123`;
+rename table db_recycle.`4` to __recyclebin__.`db_recycle@4@123`;
+
+use __recyclebin__;
+show tables;
+--replace_column 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+connection m_normal_1;
+set rds_recycle_bin_mode=ON;
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+call dbms_recyclebin.restore_table("no_recycle_table");
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+call dbms_recyclebin.restore_table("__innodb_olddb_oldtable_1234");
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+call dbms_recyclebin.restore_table("abc");
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+call dbms_recyclebin.restore_table("@@");
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+call dbms_recyclebin.restore_table("@");
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+call dbms_recyclebin.restore_table("@123");
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+call dbms_recyclebin.restore_table("__innodb_olddb_oldtable_1234_");
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+call dbms_recyclebin.restore_table("abc@123");
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+call dbms_recyclebin.restore_table("@1@123");
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+call dbms_recyclebin.restore_table("1@2@");
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+call dbms_recyclebin.restore_table("1@2@ok");
+--error ER_TABLEACCESS_DENIED_ERROR
+call dbms_recyclebin.restore_table("1@2@123");
+call dbms_recyclebin.restore_table("1@2@123", "db_recycle", "1");
+call dbms_recyclebin.restore_table("db_recycle@2@123");
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+call dbms_recyclebin.restore_table("db@recycle@2@123");
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+call dbms_recyclebin.restore_table("db_recycle@4@FFFFFFFF");
+
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+call dbms_recyclebin.restore_table("@3@123", "db_recycle", "3");
+call dbms_recyclebin.restore_table("db_recycle@4@123");
+
+show tables;
+--replace_column 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+call dbms_recyclebin.purge_table("no_recycle_table");
+call dbms_recyclebin.purge_table("__innodb_olddb_oldtable_1234");
+call dbms_recyclebin.purge_table("abc");
+call dbms_recyclebin.purge_table("@@");
+call dbms_recyclebin.purge_table("@");
+call dbms_recyclebin.purge_table("@123");
+call dbms_recyclebin.purge_table("__innodb_olddb_oldtable_1234_");
+call dbms_recyclebin.purge_table("abc@123");
+call dbms_recyclebin.purge_table("@1@123");
+call dbms_recyclebin.purge_table("1@2@");
+call dbms_recyclebin.purge_table("1@2@ok");
+call dbms_recyclebin.purge_table("@3@123");
+call dbms_recyclebin.purge_table("db@recycle@2@123");
+call dbms_recyclebin.purge_table("db_recycle@4@FFFFFFFF");
+
+show tables;
+--replace_column 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+call dbms_recyclebin.purge_table("no_exist_table");
+
+SET SESSION debug="+d,recyclebin_slave_purge_table_not_exist";
+call dbms_recyclebin.purge_table("no_exist_table");
+SET SESSION debug="-d,recyclebin_slave_purge_table_not_exist";
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+connection default;
+set rds_recycle_bin_mode=ON;
+drop database __recyclebin__;
+create database __recyclebin__ default character set utf8mb4;
+
+drop table db_recycle.1,db_recycle.2,db_recycle.4;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+create table db_recycle.`4_123`(id int);
+rename table db_recycle.4_123 to __recyclebin__.`db_recycle@4@123`;
+rename table __recyclebin__.`db_recycle@4@123` to db_recycle.4;
+drop table db_recycle.`4`;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+drop database __recyclebin__;
+create database __recyclebin__ default character set utf8mb4;
+
+use __recyclebin__;
+create table `db@tt@1`(id int primary key, num int, num2 int);
+--replace_column 6 #
+call dbms_recyclebin.show_tables();
+
+alter table `db@tt@1` rename to `db2@tt2@2`;
+--replace_column 6 #
+call dbms_recyclebin.show_tables();
+
+alter table `db2@tt2@2` add index `idx1` (`num`);
+--replace_column 6 #
+call dbms_recyclebin.show_tables();
+
+alter table `db2@tt2@2` add key `key2` (`num2`);
+--replace_column 6 #
+call dbms_recyclebin.show_tables();
+
+drop database __recyclebin__;
+create database __recyclebin__ default character set utf8mb4;
+
+use __recyclebin__;
+create TEMPORARY table `db3@tt3@3`(id int, num int, num2 int);
+--replace_column 6 #
+call dbms_recyclebin.show_tables();
+
+alter table `db3@tt3@3` add index `idx1` (`num`);
+--replace_column 6 #
+call dbms_recyclebin.show_tables();
+
+alter table `db3@tt3@3` add key `key2` (`num2`);
+call dbms_recyclebin.show_tables();
+
+drop database __recyclebin__;
+create database __recyclebin__ default character set utf8mb4;
+
+--echo ------------------------------------------------------
+--echo 7. simulate handler rename failed.
+--echo ------------------------------------------------------
+connection m_normal_1;
+use db_recycle;
+
+create table t6(id int);
+insert into t6 values(1);
+commit;
+
+show create table t6;
+select * from t6;
+drop table t6;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t6_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+connection m_normal_1;
+--replace_result $t6_name_in_recyclebin t6
+eval call dbms_recyclebin.purge_table('$t6_name_in_recyclebin');
+
+--echo ------------------------------------------------------
+--echo 8. truncate table.
+--echo ------------------------------------------------------
+
+use db_recycle;
+
+create table t7(id int);
+insert into t7 values(1);
+truncate table t7;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t7_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+connection m_normal_1;
+--replace_result $t7_name_in_recyclebin t7
+eval call dbms_recyclebin.purge_table('$t7_name_in_recyclebin');
+
+CREATE TABLE part_t8 (
+    sale_date DATE NOT NULL,
+    product_id INT,
+    quantity INT,
+    price DECIMAL(10, 2)
+)
+PARTITION BY RANGE (TO_DAYS(sale_date))
+(
+    PARTITION p0 VALUES LESS THAN (TO_DAYS('2023-01-01')),
+    PARTITION p1 VALUES LESS THAN (TO_DAYS('2023-07-01')),
+    PARTITION p2 VALUES LESS THAN (TO_DAYS('2024-01-01')),
+    PARTITION p3 VALUES LESS THAN MAXVALUE
+);
+
+truncate table part_t8;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t8_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+connection m_normal_1;
+--replace_result $t8_name_in_recyclebin t8
+eval call dbms_recyclebin.purge_table('$t8_name_in_recyclebin');
+
+--echo ------------------------------------------------------
+--echo 9. table name with different characters.
+--echo ------------------------------------------------------
+CREATE TABLE `这是一张表` (`id_col` int NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=gbk COMMENT='这是一张表';
+CREATE TABLE `这是一个表` (`id_col` int NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=gbk COMMENT='这是一张表';
+CREATE TABLE `tt是一张有中文字符的表` (`id_col` int NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=gbk COMMENT='这是一张表';
+CREATE TABLE `tt是一张有英文字符的表` (`id_col` int NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=gbk COMMENT='这是一张表';
+CREATE TABLE `tt中αααααααααα` (`id_col` int NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=gbk COMMENT='这是一张表';
+drop table `这是一张表`, `这是一个表`, `tt是一张有中文字符的表`, `tt是一张有英文字符的表`, `tt中αααααααααα`;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+CREATE TABLE `一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四` (`id_col` int NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=gbk COMMENT='这是一张表';
+CREATE TABLE `一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五` (`id_col` int NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=gbk COMMENT='这是一张表';
+CREATE TABLE `01234567890123456789012345678901234567890123` (`id_col` int NOT NULL);
+CREATE TABLE `012345678901234567890123456789012345678901234` (`id_col` int NOT NULL);
+
+drop table `一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四`;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+drop table `一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五`;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+drop table `01234567890123456789012345678901234567890123`;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+drop table `012345678901234567890123456789012345678901234`;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+connection default;
+drop database __recyclebin__;
+create database __recyclebin__ default character set utf8mb4;
+
+--echo ------------------------------------------------------
+--echo BUG2026033140364 The table drop fails when the table name is too long and contains foreign keys.
+--echo ------------------------------------------------------
+
+use test;
+create table create_create_create_create_create_create_ddl_test_5 (
+    id INT PRIMARY KEY,
+    info VARCHAR(20)
+) ENGINE=InnoDB;
+create table create_create_create_create_create_ddl_test_10 (
+    c_id INT PRIMARY KEY,
+    p_id INT,
+    FOREIGN KEY (p_id) REFERENCES create_create_create_create_create_create_ddl_test_5(id)
+) ENGINE=InnoDB;
+drop table create_create_create_create_create_ddl_test_10;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+# CONSTRAINT foreign key
+create table create_create_create_create_create_ddl_test_10 (
+    c_id INT PRIMARY KEY,
+    p_id INT,
+    CONSTRAINT `create_create_create_create_create_ddl_test_100000_fk_1` FOREIGN KEY (`c_id`) REFERENCES `create_create_create_create_create_create_ddl_test_5` (`id`) ON DELETE CASCADE
+) ENGINE=Innodb;
+drop table create_create_create_create_create_ddl_test_10;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+SET SESSION debug="+d,recyclebin_after_rename_before_drop_fk_fail";
+create table create_create_create_create_create_ddl_test_10 (
+    c_id INT PRIMARY KEY,
+    p_id INT,
+    FOREIGN KEY (p_id) REFERENCES create_create_create_create_create_create_ddl_test_5(id)
+) ENGINE=InnoDB;
+show create table create_create_create_create_create_ddl_test_10;
+--error ER_RECYBIN_DROP_TABLE_FAILED
+drop table create_create_create_create_create_ddl_test_10;
+show create table create_create_create_create_create_ddl_test_10;
+SET SESSION debug="-d,recyclebin_after_rename_before_drop_fk_fail";
+drop table create_create_create_create_create_ddl_test_10;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+ 
+drop table create_create_create_create_create_create_ddl_test_5;
+drop database __recyclebin__;
+create database __recyclebin__ default character set utf8mb4;
+
+connection default;
+set rds_recycle_bin_mode=OFF;
+set global rds_recycle_bin_mode=OFF;
+SET global rds_extended_partitions_enabled = @saved_rds_extended_partitions_enabled;
+drop database db_recycle;
+drop user normal_1@'%';
+drop user normal_2@'%';
+drop user normal_3@'%';
+
+disconnect m_normal_1;
+disconnect m_normal_2;
+disconnect m_normal_3;

@@ -1,0 +1,533 @@
+############################################################
+Establish a master-replica replication relationship based on physical replication.
+############################################################
+include/master-slave.inc
+[connection master]
+#
+# 1. Initialize the required variables, then disconnect the subsequent master-replica replication connections.
+#
+[connection master]
+[connection slave]
+STOP REPLICA;
+RESET REPLICA ALL;
+#
+# 2. Since physical replication does not support DDL operations at present, execute all required DDL statements first.
+#
+create database copy_database;
+use copy_database;
+CREATE TABLE copy_table (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) engine = dstore;
+#
+# 3. Shutdown the primary and standby instances.
+#
+include/rpl_stop_server.inc [server_number=1]
+include/rpl_stop_server.inc [server_number=2]
+#
+# 4. Copy the data directory of the primary to that of the standby.
+#
+#
+# 5. Start the primary and standby instances with new parameters for establishing a master-replica physical replication relationship.
+#
+include/rpl_start_server.inc [server_number=1]
+include/rpl_start_server.inc [server_number=2]
+#
+# 6. Confirm that the primary and standby servers start with the new data directory.
+#
+include/assert.inc [Database copy_database should exist (only one record)]
+include/assert.inc [Table copy_table should exist in database copy_database (only one record)]
+use copy_database;
+show tables;
+Tables_in_copy_database
+copy_table
+include/assert.inc [Database copy_database should exist (only one record)]
+include/assert.inc [Table copy_table should exist in database copy_database (only one record)]
+use copy_database;
+show tables;
+Tables_in_copy_database
+copy_table
+#
+# 7. Install the plugin on both the primary and standby servers, and establish a master-replica physical replication relationship.
+#
+#
+# Install the primary server's plugin and set enabled_wal to ON.
+#
+INSTALL PLUGIN rpl_semi_sync_source SONAME 'semisync_source.so';
+INSTALL PLUGIN rpl_semi_sync_replica SONAME 'semisync_replica.so';
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 1;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 1;
+SET GLOBAL rds_physical_rpl_sender_packet_size = 1;
+#
+# dstore_enable_standby_role should show as false, indicating that the current node is the source.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	1
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	OFF
+#
+# Install the standby server's plugin and set enabled_wal to ON.
+#
+INSTALL PLUGIN rpl_semi_sync_source SONAME 'semisync_source.so';
+INSTALL PLUGIN rpl_semi_sync_replica SONAME 'semisync_replica.so';
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 1;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 1;
+SET GLOBAL rds_physical_rpl_sender_packet_size = 1;
+#
+# dstore_enable_standby_role should show as true, indicating that the current node is the replica.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	2
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	ON
+#
+# Configure the replica and check whether it is configured correctly.
+#
+STOP REPLICA;
+Warnings:
+Note	3084	Replication thread(s) for channel '' are already stopped.
+RESET REPLICA ALL;
+CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=SERVER_MYPORT_1, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL 'dstore_wal_replication_channel';;
+include/assert.inc [Channel name should be 'dstore_wal_replication_channel']
+Slave_IO_Running should be OFF.
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+OFF
+START REPLICA;
+#
+# Slave_IO_Running should be ON.
+#
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+ON
+############################################################
+Execute all SQLCOM corresponding to DDL operations on the primary, and verify whether they have been successfully executed on the replica.
+############################################################
+CALL mtr.add_suppression(".* failed on net_flush().*");
+#
+# 1. SQLCOM_CREATE_DB
+#
+CREATE DATABASE IF NOT EXISTS tpcc;
+use tpcc;
+---------------------
+SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = 'tpcc';
+SCHEMA_NAME
+tpcc
+use tpcc;
+#
+# 1.1 SQLCOM_ALTER_DB
+#
+ALTER DATABASE tpcc CHARACTER SET = utf8mb4;
+---------------------
+SELECT 
+SCHEMA_NAME, 
+DEFAULT_CHARACTER_SET_NAME, 
+DEFAULT_COLLATION_NAME 
+FROM INFORMATION_SCHEMA.SCHEMATA 
+WHERE SCHEMA_NAME = 'tpcc';
+SCHEMA_NAME	DEFAULT_CHARACTER_SET_NAME	DEFAULT_COLLATION_NAME
+tpcc	utf8mb4	utf8mb4_0900_ai_ci
+#
+# 2. SQLCOM_CREATE_TABLE
+#
+use tpcc;
+CREATE TABLE customer (
+c_id int NOT NULL,
+c_d_id tinyint NOT NULL,
+c_w_id smallint NOT NULL,
+c_first varchar(16),
+c_middle char(2),
+c_last varchar(16),
+c_street_1 varchar(20),
+c_street_2 varchar(20),
+c_city varchar(20),
+c_state char(2),
+c_zip char(9),
+c_phone char(16),
+c_since datetime,
+c_credit char(2),
+c_credit_lim bigint,
+c_discount decimal(4,2),
+c_balance decimal(12,2),
+c_ytd_payment decimal(12,2),
+c_payment_cnt smallint,
+c_delivery_cnt smallint,
+c_data varchar(600),
+PRIMARY KEY(c_w_id, c_d_id, c_id)
+);
+INSERT INTO customer (
+c_id, c_d_id, c_w_id, c_first, c_middle, c_last,
+c_street_1, c_street_2, c_city, c_state, c_zip,
+c_phone, c_since, c_credit, c_credit_lim, c_discount,
+c_balance, c_ytd_payment, c_payment_cnt, c_delivery_cnt, c_data
+) VALUES
+(1, 1, 1, 'John', 'Do', 'Smith',
+'123 Main St', 'Apt 101', 'New York', 'NY', '10001',
+'212-555-0101', '2020-01-15 10:00:00', 'GC', 10000.00, 0.05,
+1250.75, 2500.50, 10, 8, 'Customer data for John Smith, NY branch'),
+(2, 1, 1, 'Jane', 'Sm', 'Doe',
+'456 Oak Ave', 'Suite 202', 'Los Angeles', 'CA', '90001',
+'213-555-0102', '2020-02-20 11:30:00', 'GC', 15000.00, 0.03,
+-89.25, 1800.75, 8, 6, 'Customer data for Jane Doe, CA branch'),
+(3, 1, 1, 'Michael', 'Br', 'Brown',
+'789 Pine Rd', 'Unit 303', 'Chicago', 'IL', '60601',
+'312-555-0103', '2020-03-10 09:15:00', 'BC', 8000.00, 0.07,
+450.50, 900.25, 5, 4, 'Customer data for Michael Brown, IL branch'),
+(4, 1, 1, 'Emily', 'Wi', 'Jones',
+'321 Cedar Ln', 'Box 404', 'Houston', 'TX', '77001',
+'713-555-0104', '2020-04-05 14:20:00', 'GC', 12000.00, 0.04,
+-200.00, 1500.00, 7, 5, 'Customer data for Emily Jones, TX branch'),
+(5, 1, 1, 'David', 'Ta', 'Garcia',
+'654 Birch Dr', 'Apt 505', 'Phoenix', 'AZ', '85001',
+'602-555-0105', '2020-05-18 16:45:00', 'BC', 9000.00, 0.06,
+875.30, 1750.60, 9, 7, 'Customer data for David Garcia, AZ branch');
+---------------------
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'tpcc' AND TABLE_NAME = 'customer';
+TABLE_NAME
+customer
+#
+# 2.1 SQLCOM_ALTER_TABLE
+#
+ALTER TABLE customer 
+ADD COLUMN c_email varchar(64) COMMENT '客户邮箱' AFTER c_phone,
+MODIFY COLUMN c_data varchar(800);
+SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, COLUMN_COMMENT, ORDINAL_POSITION
+FROM information_schema.COLUMNS 
+WHERE TABLE_SCHEMA = 'tpcc'
+  AND TABLE_NAME = 'customer'
+  AND COLUMN_NAME IN ('c_email', 'c_data') 
+ORDER BY COLUMN_NAME ASC;
+COLUMN_NAME	DATA_TYPE	CHARACTER_MAXIMUM_LENGTH	COLUMN_COMMENT	ORDINAL_POSITION
+c_data	varchar	800		22
+c_email	varchar	64	客户邮箱	13
+#
+# 3. SQLCOM_CREATE_INDEX
+#
+CREATE INDEX idx_customer ON customer (c_w_id, c_d_id, c_last, c_first);
+---------------------
+SHOW INDEX FROM tpcc.customer WHERE Key_name = 'idx_customer';
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+customer	1	idx_customer	1	c_w_id	A	NULL	NULL	NULL		BTREE			YES	NULL
+customer	1	idx_customer	2	c_d_id	A	NULL	NULL	NULL		BTREE			YES	NULL
+customer	1	idx_customer	3	c_last	A	NULL	NULL	NULL	YES	BTREE			YES	NULL
+customer	1	idx_customer	4	c_first	A	NULL	NULL	NULL	YES	BTREE			YES	NULL
+#
+# 4.0 SQLCOM_CREATE_FUNCTION
+#
+CREATE FUNCTION fn_get_customer_balance_abs(
+p_w_id SMALLINT,
+p_d_id TINYINT,
+p_c_id INT
+) RETURNS DECIMAL(12,2)
+DETERMINISTIC
+READS SQL DATA
+BEGIN
+DECLARE balance_abs DECIMAL(12,2);
+SELECT ABS(c_balance) INTO balance_abs
+FROM customer
+WHERE c_w_id = p_w_id AND c_d_id = p_d_id AND c_id = p_c_id;
+RETURN balance_abs;
+END$$
+---------------------
+SELECT ROUTINE_NAME, ROUTINE_TYPE 
+FROM INFORMATION_SCHEMA.ROUTINES 
+WHERE ROUTINE_SCHEMA = 'tpcc' AND ROUTINE_NAME = 'fn_get_customer_balance_abs';
+ROUTINE_NAME	ROUTINE_TYPE
+fn_get_customer_balance_abs	FUNCTION
+#
+# 4.1 SQLCOM_ALTER_FUNCTION
+#
+ALTER FUNCTION fn_get_customer_balance_abs COMMENT 'test SQLCOM_ALTER_FUNCTION';
+---------------------
+SELECT SPECIFIC_NAME, ROUTINE_COMMENT FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA='tpcc' 
+AND ROUTINE_NAME='fn_get_customer_balance_abs' AND ROUTINE_COMMENT='test SQLCOM_ALTER_FUNCTION';
+SPECIFIC_NAME	ROUTINE_COMMENT
+fn_get_customer_balance_abs	test SQLCOM_ALTER_FUNCTION
+#
+# 5. SQLCOM_CREATE_VIEW
+#
+CREATE VIEW v_high_value_customers AS
+SELECT c_w_id, c_d_id, c_id, c_first, c_middle, c_last, c_balance
+FROM customer
+WHERE c_balance < -100.00;
+---------------------
+SELECT 
+TABLE_NAME AS view_name,
+VIEW_DEFINITION AS view_definition,
+TABLE_SCHEMA AS database_name
+FROM information_schema.VIEWS 
+WHERE TABLE_NAME = 'v_high_value_customers';
+view_name	view_definition	database_name
+v_high_value_customers	select `tpcc`.`customer`.`c_w_id` AS `c_w_id`,`tpcc`.`customer`.`c_d_id` AS `c_d_id`,`tpcc`.`customer`.`c_id` AS `c_id`,`tpcc`.`customer`.`c_first` AS `c_first`,`tpcc`.`customer`.`c_middle` AS `c_middle`,`tpcc`.`customer`.`c_last` AS `c_last`,`tpcc`.`customer`.`c_balance` AS `c_balance` from `tpcc`.`customer` where (`tpcc`.`customer`.`c_balance` < -(100.00))	tpcc
+#
+# 6. SQLCOM_CREATE_TRIGGER
+#
+CREATE TRIGGER tr_customer_insert BEFORE INSERT ON customer FOR EACH ROW SET NEW.c_since = NOW();
+---------------------
+SELECT TRIGGER_NAME FROM INFORMATION_SCHEMA.TRIGGERS WHERE TRIGGER_SCHEMA='tpcc' AND TRIGGER_NAME='tr_customer_insert';
+TRIGGER_NAME
+tr_customer_insert
+#
+# 7.0 SQLCOM_CREATE_EVENT
+#
+CREATE EVENT IF NOT EXISTS ev_insert_test_customer
+ON SCHEDULE EVERY 1 MINUTE  -- 执行频率：每分钟一次
+DO
+INSERT INTO customer (
+c_id, c_d_id, c_w_id, c_first, c_middle, c_last, c_balance
+) VALUES (
+999, 1, 1, 'test', 'xx', 'user', -50.00  -- 固定测试值
+);
+---------------------
+SELECT EVENT_NAME, EVENT_SCHEMA, STATUS 
+FROM INFORMATION_SCHEMA.EVENTS 
+WHERE EVENT_SCHEMA = 'tpcc' AND EVENT_NAME = 'ev_insert_test_customer';
+EVENT_NAME	EVENT_SCHEMA	STATUS
+ev_insert_test_customer	tpcc	ENABLED
+#
+# 7.1 SQLCOM_ALTER_EVENT
+#
+ALTER EVENT ev_insert_test_customer
+ON SCHEDULE EVERY 1 DAY 
+DO
+INSERT INTO customer (
+c_id, c_d_id, c_w_id, c_first, c_middle, c_last, c_balance
+) VALUES (
+999, 1, 1, 'test', 'xx', 'user', -50.00
+);
+---------------------
+SELECT EVENT_NAME, EVENT_SCHEMA, STATUS, INTERVAL_VALUE 
+FROM INFORMATION_SCHEMA.EVENTS 
+WHERE EVENT_SCHEMA = 'tpcc' AND EVENT_NAME = 'ev_insert_test_customer';
+EVENT_NAME	EVENT_SCHEMA	STATUS	INTERVAL_VALUE
+ev_insert_test_customer	tpcc	ENABLED	1
+#
+# 8. SQLCOM_CREATE_SRS
+#
+SELECT 
+SRS_ID, 
+SRS_NAME, 
+ORGANIZATION, 
+ORGANIZATION_COORDSYS_ID, 
+DEFINITION, 
+DESCRIPTION 
+FROM INFORMATION_SCHEMA.ST_SPATIAL_REFERENCE_SYSTEMS 
+WHERE SRS_ID = 1004326;
+SRS_ID	SRS_NAME	ORGANIZATION	ORGANIZATION_COORDSYS_ID	DEFINITION	DESCRIPTION
+#
+# 9. SQLCOM_DROP_INDEX
+#
+DROP INDEX idx_customer ON customer;
+---------------------
+SHOW INDEX FROM tpcc.customer WHERE Key_name = 'idx_customer';
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+#
+# 10. SQLCOM_DROP_VIEW
+#
+DROP VIEW IF EXISTS tpcc.v_high_value_customers;
+---------------------
+SELECT 
+TABLE_NAME AS view_name,
+VIEW_DEFINITION AS view_definition,
+TABLE_SCHEMA AS database_name
+FROM information_schema.VIEWS 
+WHERE TABLE_NAME = 'v_high_value_customers';
+view_name	view_definition	database_name
+#
+# 11. SQLCOM_DROP_TRIGGER
+#
+---------------------
+SELECT TRIGGER_NAME FROM INFORMATION_SCHEMA.TRIGGERS WHERE TRIGGER_SCHEMA='tpcc' AND TRIGGER_NAME='tr_customer_insert';
+TRIGGER_NAME
+#
+# 12. SQLCOM_DROP_EVENT
+#
+DROP EVENT IF EXISTS ev_insert_test_customer;
+---------------------
+SELECT EVENT_NAME 
+FROM INFORMATION_SCHEMA.EVENTS 
+WHERE EVENT_SCHEMA = 'tpcc' AND EVENT_NAME = 'ev_insert_test_customer';
+EVENT_NAME
+#
+# 13. SQLCOM_DROP_FUNCTION
+#
+DROP FUNCTION IF EXISTS fn_get_customer_balance_abs;
+SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES 
+WHERE ROUTINE_SCHEMA = 'tpcc' AND ROUTINE_NAME = 'fn_get_customer_balance_abs';
+ROUTINE_NAME
+#
+# 14. SQLCOM_DROP_SRS
+#
+SELECT 
+SRS_ID, 
+SRS_NAME, 
+ORGANIZATION, 
+ORGANIZATION_COORDSYS_ID, 
+DEFINITION, 
+DESCRIPTION 
+FROM INFORMATION_SCHEMA.ST_SPATIAL_REFERENCE_SYSTEMS 
+WHERE SRS_ID = 1004326;
+SRS_ID	SRS_NAME	ORGANIZATION	ORGANIZATION_COORDSYS_ID	DEFINITION	DESCRIPTION
+#
+# 15. SQLCOM_OPTIMIZE
+#
+OPTIMIZE table customer;
+Table	Op	Msg_type	Msg_text
+tpcc.customer	optimize	note	Table does not support optimize, doing recreate + analyze instead
+tpcc.customer	optimize	status	OK
+---------------------
+#
+# 16. SQLCOM_TRUNCATE
+#
+truncate table customer;
+---------------------
+#
+# 17. SQLCOM_RENAME_TABLE
+#
+rename table customer to customer_temp;
+---------------------
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'tpcc' AND TABLE_NAME = 'customer_temp';
+TABLE_NAME
+customer_temp
+rename table tpcc.customer_temp to tpcc.customer;
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'tpcc' AND TABLE_NAME = 'customer_temp';
+TABLE_NAME
+#
+# 18. SQLCOM_DROP_TABLE
+#
+DROP TABLE IF EXISTS customer;
+---------------------
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'tpcc' AND TABLE_NAME = 'customer';
+TABLE_NAME
+#
+# 19. SQLCOM_DROP_DB
+#
+DROP DATABASE IF EXISTS tpcc;
+---------------------
+SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = 'tpcc';
+SCHEMA_NAME
+#
+# standby_ddl_already_replayed 
+#
+set global debug="+d,standby_ddl_already_replayed";
+CREATE DATABASE IF NOT EXISTS tpcc;
+---------------------
+SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = 'tpcc';
+SCHEMA_NAME
+set global debug="-d,standby_ddl_already_replayed";
+#
+# DDLCOM_ACL
+#
+#
+# 1.SQLCOM_CREATE_PROCEDURE
+#
+use test;
+CREATE PROCEDURE test_proc_1()
+BEGIN
+SELECT 'Hello from replicated procedure!' AS msg;
+END$$
+---------------------
+use test;
+SELECT ROUTINE_NAME, ROUTINE_TYPE, DEFINER 
+FROM information_schema.ROUTINES 
+WHERE ROUTINE_SCHEMA = DATABASE() 
+AND ROUTINE_NAME = 'test_proc_1';
+ROUTINE_NAME	ROUTINE_TYPE	DEFINER
+test_proc_1	PROCEDURE	root@localhost
+#
+# 1.2 SQLCOM_ALTER_PROCEDURE
+#
+ALTER PROCEDURE test_proc_1 COMMENT 'updated';
+---------------------
+SELECT SPECIFIC_NAME, ROUTINE_COMMENT FROM INFORMATION_SCHEMA.ROUTINES 
+WHERE ROUTINE_SCHEMA=DATABASE() AND ROUTINE_NAME='test_proc_1';
+SPECIFIC_NAME	ROUTINE_COMMENT
+test_proc_1	updated
+#
+# 2.SQLCOM_DROP_PROCEDURE
+#
+DROP PROCEDURE test_proc_1;
+---------------------
+SELECT ROUTINE_NAME, ROUTINE_TYPE, DEFINER 
+FROM information_schema.ROUTINES 
+WHERE ROUTINE_SCHEMA = DATABASE() 
+AND ROUTINE_NAME = 'test_proc_1';
+ROUTINE_NAME	ROUTINE_TYPE	DEFINER
+#
+# 3.SQLCOM_CREATE_SPFUNCTION
+#
+CREATE FUNCTION test_func_1(x INT) 
+RETURNS INT
+READS SQL DATA
+DETERMINISTIC
+BEGIN
+RETURN x * 2;
+END$$
+---------------------
+SELECT ROUTINE_NAME, ROUTINE_TYPE, DATA_TYPE 
+FROM information_schema.ROUTINES 
+WHERE ROUTINE_SCHEMA = DATABASE() 
+AND ROUTINE_NAME = 'test_func_1';
+ROUTINE_NAME	ROUTINE_TYPE	DATA_TYPE
+test_func_1	FUNCTION	int
+#
+# 4.SQLCOM_DROP_FUNCTION
+#
+DROP FUNCTION test_func_1;
+---------------------
+SELECT ROUTINE_NAME 
+FROM information_schema.ROUTINES 
+WHERE ROUTINE_SCHEMA = DATABASE() 
+AND ROUTINE_NAME = 'test_func_1';
+ROUTINE_NAME
+############################################################
+# Uninstall the plugins, reset the variables, and restore the original master-replica replication relationship.
+############################################################
+#
+# 1. Shutdown the mysqld instances of the master and replica servers launched with the new data directory.
+#
+STOP REPLICA;
+RESET REPLICA ALL FOR CHANNEL 'dstore_wal_replication_channel';
+include/stop_wal_dump_threads.inc
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 0;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 0;
+UNINSTALL PLUGIN rpl_semi_sync_source;
+UNINSTALL PLUGIN rpl_semi_sync_replica;
+use mtr;
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 0;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 0;
+UNINSTALL PLUGIN rpl_semi_sync_source;
+UNINSTALL PLUGIN rpl_semi_sync_replica;
+use mtr;
+#
+# 2. Shutdown the mysqld instances of the master and replica servers launched with the new data directory.
+#
+include/rpl_stop_server.inc [server_number=1]
+include/rpl_stop_server.inc [server_number=2]
+# Delete the directories of the primary and standby servers.
+#
+# 3. Restart the mysqld instances of the master and replica servers using the configurations from the opt file.
+#
+include/rpl_start_server.inc [server_number=1]
+show databases;
+Database
+__recyclebin__
+copy_database
+information_schema
+mtr
+mysql
+performance_schema
+sys
+test
+drop database copy_database;
+use mtr;
+include/rpl_start_server.inc [server_number=2]
+use mtr;

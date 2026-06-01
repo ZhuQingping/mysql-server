@@ -1,0 +1,152 @@
+# ==== Purpose ====
+#
+# Kill related functions that can only be tested in a debugging environment, such as fault injection, etc.
+#
+
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+
+# create user
+connect (root_connection,localhost,root,,test);
+connection root_connection;
+
+create database test_db;
+create table test_db.test_tbl (a int, b int);
+insert into test_db.test_tbl values (0, 1), (2, 3);
+
+create user test_user@localhost;
+grant select on performance_schema.* to test_user@localhost;
+grant select on test_db.* to test_user@localhost;
+grant system_variables_admin on *.* to test_user@localhost;
+grant session_variables_admin on *.* to test_user@localhost;
+flush privileges;
+
+connect (user_connection0, localhost, test_user,,test,,);
+connection user_connection0;
+
+connect (user_connection1, localhost, test_user,,test,,);
+connection user_connection1;
+--disable_reconnect
+
+connect (user_connection2, localhost, test_user,,test,,);
+connection user_connection2;
+--disable_reconnect
+
+--echo #
+--echo # BUG2025040323355
+--echo #
+
+--connection user_connection1
+--disable_reconnect
+# open table
+select count(*) from test_db.test_tbl;
+# Get connection id
+--let $connection_id=`SELECT CONNECTION_ID()`
+--send /* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000)
+
+
+--connection user_connection2
+# Kill query.
+let $wait_condition= SELECT COUNT(processlist_info) FROM performance_schema.threads WHERE processlist_state="User sleep" AND processlist_info LIKE "%KILL QUERY: SELECT SLEEP(1000)%";
+--source include/wait_condition.inc
+--replace_result $connection_id <CONNECTION_ID>
+--eval KILL QUERY $connection_id
+
+--connection user_connection1
+--reap
+select "connection is active after kill query";
+
+--connection user_connection1
+--send /* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000)
+
+--connection user_connection2
+# Kill query.
+let $wait_condition= SELECT COUNT(processlist_info) FROM performance_schema.threads WHERE processlist_state="User sleep" AND processlist_info LIKE "%KILL QUERY: SELECT SLEEP(1000)%";
+--source include/wait_condition.inc
+SET SESSION DEBUG='+d,kill_connection_null_thread_context_injection';
+--replace_result $connection_id <CONNECTION_ID>
+--eval KILL QUERY $connection_id
+
+# kill inactive query
+--connection user_connection0
+--replace_result $connection_id <CONNECTION_ID>
+--eval KILL QUERY $connection_id
+
+--connection user_connection1
+--reap
+select "connection is active after kill query";
+
+--connection user_connection2
+SET SESSION DEBUG='-d,kill_connection_null_thread_context_injection';
+
+--connection user_connection1
+--send /* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000)
+
+--connection user_connection2
+
+# Kill query.
+let $wait_condition= SELECT COUNT(processlist_info) FROM performance_schema.threads WHERE processlist_state="User sleep" AND processlist_info LIKE "%KILL QUERY: SELECT SLEEP(1000)%";
+--source include/wait_condition.inc
+SET SESSION DEBUG='+d,kill_connection_null_thread_core_injection';
+--replace_result $connection_id <CONNECTION_ID>
+--eval KILL QUERY $connection_id
+
+--connection user_connection1
+--reap
+select "connection is active after kill query";
+
+--connection user_connection2
+SET SESSION DEBUG='-d,kill_connection_null_thread_core_injection';
+
+--connection user_connection1
+--send /* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000)
+
+--connection user_connection2
+
+# Kill query.
+let $wait_condition= SELECT COUNT(processlist_info) FROM performance_schema.threads WHERE processlist_state="User sleep" AND processlist_info LIKE "%KILL QUERY: SELECT SLEEP(1000)%";
+--source include/wait_condition.inc
+SET SESSION DEBUG='+d,thd_to_cde_session_null_cde_session_injection';
+--replace_result $connection_id <CONNECTION_ID>
+--eval KILL QUERY $connection_id
+
+
+--connection user_connection1
+--reap
+select "connection is active after kill query";
+
+
+--connection user_connection2
+SET SESSION DEBUG='-d,thd_to_cde_session_null_cde_session_injection';
+
+--connection user_connection1
+--send /* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000)
+ 
+--connection user_connection2
+ 
+# Kill query.
+let $wait_condition= SELECT COUNT(processlist_info) FROM performance_schema.threads WHERE processlist_state="User sleep" AND processlist_info LIKE "%KILL QUERY: SELECT SLEEP(1000)%";
+--source include/wait_condition.inc
+SET SESSION DEBUG='+d,kill_connection_null_thrd_session_injection';
+--replace_result $connection_id <CONNECTION_ID>
+--eval KILL QUERY $connection_id
+ 
+--connection user_connection1
+--reap
+select "connection is active after kill query";
+ 
+--connection user_connection2
+SET SESSION DEBUG='-d,kill_connection_null_thrd_session_injection';
+ 
+--echo #
+--echo # cleanup.
+--echo #
+
+disconnect user_connection1;
+disconnect user_connection2;
+
+connection root_connection;
+use test;
+drop user test_user@localhost;
+drop database test_db;
+disconnect root_connection;

@@ -1,0 +1,107 @@
+# If the mysql client procotol is socket, it will write error msg to error log.
+ 
+--source include/not_threadpool.inc
+--source include/count_sessions.inc
+ 
+--disable_query_log
+call mtr.add_suppression("socket errno: 110, socket errmsg: Connection timed out.");
+call mtr.add_suppression("Client actively closes the connection.");
+--enable_query_log
+ 
+ 
+SET @start_event_scheduler= @@global.event_scheduler;
+set global event_scheduler=off;
+ 
+--echo ## Test rds_conn_log_error_verbosity variable.
+ 
+SET GLOBAL rds_conn_log_error_verbosity=1;
+select @@global.rds_conn_log_error_verbosity;
+SET GLOBAL rds_conn_log_error_verbosity=0;
+select @@global.rds_conn_log_error_verbosity;
+ 
+--echo ## If rds_conn_log_error_verbosity=0, error log has not errmsg.
+ 
+SET @start_value= @@global.wait_timeout;
+SET GLOBAL rds_conn_log_error_verbosity=0;
+ 
+# 1. test of scope session
+ 
+SET @start_time= UNIX_TIMESTAMP();
+--echo connect (test_con1, localhost, root,,);
+connect (test_con1, localhost, root,,);
+connection test_con1;
+ 
+# If not explicitly changed, @@session.wait_timeout equals @@global.wait_timeout.
+SELECT @@session.wait_timeout = @@global.wait_timeout AS 'Expect 1';
+ 
+# Find a small value <> @@global.wait_timeout.
+let $session_value =
+`SELECT IF(@@global.wait_timeout <> 2 OR @@global.wait_timeout IS NULL, 2, 3)`;
+--replace_result $session_value <session_value>
+eval SET @@session.wait_timeout = $session_value;
+ 
+--echo connect (test_con2, localhost, root,,);
+connect (test_con2, localhost, root,,);
+connection test_con2;
+ 
+--replace_result $session_value <session_value>
+eval SET @@session.wait_timeout = $session_value - 1;
+ 
+--echo connection default;
+connection default;
+ 
+--echo wait until connections ready
+let $wait_condition= SELECT COUNT(*) = 1 FROM information_schema.processlist;
+--source include/wait_condition.inc
+SELECT info FROM information_schema.processlist;
+ 
+--source include/wait_until_count_sessions.inc
+ 
+--echo ## If rds_conn_log_error_verbosity=1, error log contains "Test socket errno: 110, socket errmsg: Connection timed out."
+ 
+SET @start_value= @@global.wait_timeout;
+SET GLOBAL rds_conn_log_error_verbosity=1;
+ 
+# 1. test of scope session
+ 
+SET @start_time= UNIX_TIMESTAMP();
+--echo connect (test_con3, localhost, root,,);
+connect (test_con3, localhost, root,,);
+connection test_con3;
+ 
+# If not explicitly changed, @@session.wait_timeout equals @@global.wait_timeout.
+SELECT @@session.wait_timeout = @@global.wait_timeout AS 'Expect 1';
+ 
+# Find a small value <> @@global.wait_timeout.
+let $session_value =
+`SELECT IF(@@global.wait_timeout <> 2 OR @@global.wait_timeout IS NULL, 2, 3)`;
+--replace_result $session_value <session_value>
+eval SET @@session.wait_timeout = $session_value;
+ 
+--echo connect (test_con4, localhost, root,,);
+connect (test_con4, localhost, root,,);
+connection test_con4;
+ 
+--replace_result $session_value <session_value>
+eval SET @@session.wait_timeout = $session_value - 1;
+ 
+--echo connection default;
+connection default;
+ 
+--echo wait until connections ready
+let $wait_condition= SELECT COUNT(*) = 1 FROM information_schema.processlist;
+--source include/wait_condition.inc
+SELECT info FROM information_schema.processlist;
+ 
+--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let $assert_text= Check that there is 'socket errno: 110, socket errmsg: Connection timed out.(ETIMEDOUT)' in error log.
+--let $assert_select= \[Warning\] \[[^]]*\] \[[^]]*\] \[TAURUS-DEBUG\]Reading bytes from a network handler fails. Socket errno: 110, Socket errmsg: Connection timed out.
+--let $assert_only_after = CURRENT_TEST:main.enrich_errlog_for_connection_with_socket
+--let $assert_match= Reading bytes from a network handler fails. Socket errno: 110, Socket errmsg: Connection timed out.
+--source include/assert_grep.inc
+ 
+SET @@global.wait_timeout = @start_value;
+SET GLOBAL rds_conn_log_error_verbosity=0;
+SET GLOBAL event_scheduler= @start_event_scheduler;
+
+--source include/wait_until_count_sessions.inc

@@ -1,0 +1,103 @@
+# ==== Purpose ====
+# Verify BUG2025122725931: Negative Test for InnoDB
+# 1. Ensure that the bypass logic for explicit_defaults_for_timestamp is 
+#    NOT triggered for the InnoDB storage engine.
+# 2. Verify that mysqlbinlog replay still fails on InnoDB if it attempts 
+#    to set this variable within a transaction, even if pseudo_replica_mode=1.
+#
+# ==== Technical Background ====
+# Your patch check: (thd->variables.pseudo_replica_mode && engine == DB_TYPE_DSTORE)
+# For InnoDB, engine == DB_TYPE_DSTORE will be FALSE, so the error 
+# ER_VARIABLE_NOT_SETTABLE_IN_TRANSACTION must still be thrown.
+# ============================================================================
+
+# Ensure we are using InnoDB for this negative test
+--source include/have_innodb.inc
+--source include/have_binlog_format_row.inc
+--source include/master-slave.inc
+--source include/not_have_only_dstore.inc
+
+--echo # -----------------------------------------------------------------------
+--echo # Step 1: Initialize Data on Master using InnoDB
+--echo # -----------------------------------------------------------------------
+
+--source include/rpl_connection_master.inc
+# Expected: Table created with InnoDB.
+CREATE TABLE t(
+  id INT, 
+  itime TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+) ENGINE=InnoDB;
+
+INSERT INTO t(id) VALUES(1),(2),(3),(4),(5);
+
+--source include/sync_slave_sql_with_master.inc
+
+--echo # -----------------------------------------------------------------------
+--echo # Step 2: Prepare Slave Binlog for Replay Simulation
+--echo # -----------------------------------------------------------------------
+
+--source include/rpl_connection_slave.inc
+# Expected: Start a fresh binlog file on Slave.
+FLUSH LOGS;
+
+--echo # -----------------------------------------------------------------------
+--echo # Step 3: Generate complex events on Master
+--echo # -----------------------------------------------------------------------
+
+--source include/rpl_connection_master.inc
+# Expected: CTAS generates row events and session metadata in the binlog.
+CREATE TABLE IF NOT EXISTS t1 ENGINE=InnoDB AS SELECT * FROM t;
+
+--source include/sync_slave_sql_with_master.inc
+
+--echo # -----------------------------------------------------------------------
+--echo # Step 4: Extract Binlog and Attempt Replay (Expecting Failure)
+--echo # -----------------------------------------------------------------------
+
+--source include/rpl_connection_slave.inc
+
+--disable_query_log
+let $binlog_file= query_get_value(SHOW MASTER STATUS, File, 1);
+let $datadir= `SELECT @@datadir`;
+let $out_sql= $MYSQLTEST_VARDIR/tmp/out_sql.sql;
+--enable_query_log
+
+# Expected: Extract SQL using mysqlbinlog.
+--exec $MYSQL_BINLOG --force-if-open $datadir/$binlog_file > $out_sql
+
+# Expected: Clean up Slave state before replay attempt.
+set sql_log_bin=0;
+DROP TABLE t1;
+#RESET MASTER;
+
+set sql_log_bin=1;
+
+--echo # --- Attempting Replay on Slave (InnoDB) ---
+# Expected: Replay should FAIL with error 1 (standard shell error for mysql client failure).
+# Because the engine is InnoDB, the bypass logic returns TRUE (error) when 
+# the script tries to set the variable inside a transaction block.
+--error 1
+--exec $MYSQL --user=root --host=127.0.0.1 --port=$SLAVE_MYPORT < $out_sql
+
+--echo # --- Verify Replay Failed ---
+# Expected: Table t1 should NOT exist because the replay crashed/stopped before creation.
+# Error 1146 is ER_NO_SUCH_TABLE.
+--error 1146
+SELECT COUNT(*) FROM t1;
+
+--echo # -----------------------------------------------------------------------
+--echo # Step 5: Final Cleanup
+--echo # -----------------------------------------------------------------------
+
+--source include/rpl_connection_master.inc
+DROP TABLE IF EXISTS t, t1;
+--source include/sync_slave_sql_with_master.inc
+
+# Expected: Remove temp file.
+--remove_file $out_sql
+
+--echo # =======================================================================
+--echo # Result: Success. InnoDB correctly remains restricted.
+--echo # =======================================================================
+
+--source include/rpl_end.inc

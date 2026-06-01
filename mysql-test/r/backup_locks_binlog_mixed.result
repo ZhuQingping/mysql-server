@@ -1,0 +1,284 @@
+SET @old_binlog_format=@@binlog_format;
+Warnings:
+Warning	1287	'@@binlog_format' is deprecated and will be removed in a future release.
+SET GLOBAL binlog_format='MIXED';
+Warnings:
+Warning	1287	'@@binlog_format' is deprecated and will be removed in a future release.
+SET SESSION binlog_format='MIXED';
+Warnings:
+Warning	1287	'@@binlog_format' is deprecated and will be removed in a future release.
+SELECT @@binlog_format;
+@@binlog_format
+MIXED
+Warnings:
+Warning	1287	'@@binlog_format' is deprecated and will be removed in a future release.
+RESET MASTER;
+SHOW VARIABLES LIKE 'rds_binlog_lock_enable';
+Variable_name	Value
+rds_binlog_lock_enable	ON
+#-----------------------------------------------------------------------
+# Setup
+#-----------------------------------------------------------------------
+CREATE TABLE t_innodb(a INT NOT NULL, KEY (a)) ENGINE=InnoDB;
+CREATE VIEW v_innodb AS SELECT * FROM t_innodb;
+#-----------------------------------------------------------------------
+# Single-threaded tests
+#-----------------------------------------------------------------------
+LOCK BINLOG FOR BACKUP;
+DELETE FROM t_innodb;
+INSERT INTO t_innodb VALUES(0);
+UPDATE t_innodb SET a = 1;
+REPLACE INTO t_innodb VALUES(1);
+SELECT * from t_innodb;
+a
+1
+1
+HANDLER t_innodb OPEN;
+HANDLER t_innodb READ a FIRST;
+a
+1
+HANDLER t_innodb CLOSE;
+CREATE TABLE tt_innodb(a INT NOT NULL) ENGINE=InnoDB;
+DROP TABLE tt_innodb;
+DROP TABLE non_existing;
+ERROR 42S02: Unknown table 'test.non_existing'
+TRUNCATE TABLE t_innodb;
+RENAME TABLE t_innodb TO tmp, tmp TO t_innodb;
+ALTER TABLE t_innodb ADD COLUMN b CHAR(10) NOT NULL;
+ALTER TABLE t_innodb DROP COLUMN b;
+ALTER TABLE t_innodb ADD KEY tmp (a);
+Warnings:
+Warning	1831	Duplicate index 'tmp' defined on the table 'test.t_innodb'. This is deprecated and will be disallowed in a future release.
+ALTER TABLE t_innodb DROP KEY tmp;
+CREATE DATABASE test1;
+DROP DATABASE test1;
+CREATE PROCEDURE p1()
+BEGIN
+SELECT 1;
+END|
+DROP PROCEDURE p1|
+CREATE FUNCTION f1() RETURNS INT DETERMINISTIC
+BEGIN
+RETURN 1;
+END|
+DROP FUNCTION f1|
+CREATE VIEW v1 AS SELECT * FROM t_innodb;
+DROP VIEW v1;
+INSERT INTO v_innodb VALUES(1);
+UNLOCK BINLOG;
+CREATE TEMPORARY TABLE tt_innodb(a INT NOT NULL) ENGINE=InnoDB;
+INSERT INTO tt_innodb VALUES(5);
+LOCK BINLOG FOR BACKUP;
+START TRANSACTION;
+SELECT * FROM tt_innodb;
+a
+5
+INSERT INTO tt_innodb VALUES(6);
+COMMIT;
+SELECT * FROM tt_innodb;
+a
+5
+6
+DROP TEMPORARY TABLE tt_innodb;
+UNLOCK BINLOG;
+SELECT @@log_bin;
+@@log_bin
+1
+LOCK BINLOG FOR BACKUP;
+INSERT INTO t_innodb VALUES(1);
+UNLOCK BINLOG;
+SET @old_general_log = @@general_log;
+SET @old_slow_query_log = @@slow_query_log;
+SET @old_log_output = @@log_output;
+SET @old_long_query_time = @@SESSION.long_query_time;
+SET SESSION long_query_time = 0;
+SET GLOBAL log_output = 'TABLE';
+SET GLOBAL general_log = ON;
+SET GLOBAL slow_query_log = ON;
+LOCK BINLOG FOR BACKUP;
+SELECT 1;
+1
+1
+UNLOCK BINLOG;
+SET SESSION long_query_time = @old_long_query_time;
+SET GLOBAL log_output = @old_log_output;
+SET GLOBAL slow_query_log = @old_slow_query_log;
+SET GLOBAL general_log = @old_general_log;
+#-----------------------------------------------------------------------
+# Multi-threaded tests
+#-----------------------------------------------------------------------
+# connection con1
+CREATE TEMPORARY TABLE tt_innodb(a INT NOT NULL) ENGINE=InnoDB;
+INSERT INTO tt_innodb VALUES(5);
+# connection default
+LOCK BINLOG FOR BACKUP;
+# connection con1
+SET SESSION lock_wait_timeout = 1;
+START TRANSACTION;
+INSERT INTO tt_innodb VALUES(6);
+SELECT * FROM tt_innodb;
+a
+5
+6
+# connection default
+must_be_1
+1
+UNLOCK BINLOG;
+# connection con1
+COMMIT;
+DROP TEMPORARY TABLE tt_innodb;
+# connection default
+LOCK BINLOG FOR BACKUP;
+# connection con1
+SET SESSION lock_wait_timeout = 1;
+INSERT INTO t_innodb VALUES(1);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+SET SESSION lock_wait_timeout = DEFAULT;
+# connection default
+must_be_1
+1
+UNLOCK BINLOG;
+# connection default
+LOCK BINLOG FOR BACKUP;
+# connection con1
+SET SESSION lock_wait_timeout = 1;
+DELETE FROM t_innodb;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO t_innodb VALUES(0);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t_innodb SET a = 2;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+REPLACE INTO t_innodb VALUES(2);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+SELECT * from t_innodb;
+a
+1
+1
+HANDLER t_innodb OPEN;
+HANDLER t_innodb READ a FIRST;
+a
+1
+HANDLER t_innodb CLOSE;
+START TRANSACTION;
+SELECT * from t_innodb;
+a
+1
+1
+DELETE FROM t_innodb;
+INSERT INTO t_innodb VALUES(0);
+UPDATE t_innodb SET a = 1;
+REPLACE INTO t_innodb VALUES(1);
+COMMIT;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+SELECT * FROM t_innodb;
+a
+1
+1
+COMMIT;
+CREATE TABLE tt_innodb(a INT NOT NULL) ENGINE=InnoDB;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+DROP TABLE non_existing;
+ERROR 42S02: Unknown table 'test.non_existing'
+CREATE TABLE t_innodb(a INT NOT NULL) ENGINE=InnoDB;
+ERROR 42S01: Table 't_innodb' already exists
+TRUNCATE TABLE t_innodb;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+RENAME TABLE t_innodb TO tmp, tmp to t_innodb;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+ALTER TABLE t_innodb ADD COLUMN b CHAR(10);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+ALTER TABLE t_innodb ADD KEY (a);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+CREATE DATABASE test1;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+CREATE PROCEDURE p1() SELECT 1;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+CREATE VIEW v1 AS SELECT * FROM t_innodb;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO v_innodb VALUES(1);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# connection default
+must_be_1
+1
+UNLOCK BINLOG;
+# connection con1
+SHOW CREATE TABLE t_innodb;
+Table	Create Table
+t_innodb	CREATE TABLE `t_innodb` (
+  `a` int NOT NULL,
+  KEY `a` (`a`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+DROP TABLE t_innodb;
+CREATE TABLE t_innodb(a INT NOT NULL) ENGINE=InnoDB;
+# connection default
+SET @old_general_log = @@general_log;
+SET @old_slow_query_log = @@slow_query_log;
+SET @old_log_output = @@log_output;
+SET GLOBAL log_output = 'TABLE';
+SET GLOBAL general_log = ON;
+SET GLOBAL slow_query_log = ON;
+LOCK BINLOG FOR BACKUP;
+# connection con1
+SET @old_long_query_time = @@SESSION.long_query_time;
+SET SESSION long_query_time = 0;
+SELECT 1;
+1
+1
+# connection default
+SELECT 1;
+1
+1
+# connection con1
+SET SESSION long_query_time = @old_long_query_time;
+# connection default
+must_be_1
+1
+UNLOCK BINLOG;
+SET GLOBAL log_output = @old_log_output;
+SET GLOBAL slow_query_log = @old_slow_query_log;
+SET GLOBAL general_log = @old_general_log;
+truncate table mysql.general_log;
+truncate table mysql.slow_log;
+# test information_schema, performance_schema and processlist
+# connection con1
+set session lock_wait_timeout = DEFAULT;
+SET DEBUG_SYNC= "binlog_protection_acquired WAIT_FOR released";
+INSERT INTO t_innodb VALUES(5);
+# connection default
+LOCK BINLOG FOR BACKUP;
+# connection con2
+select LOCK_TYPE,LOCK_DURATION,LOCK_STATUS from performance_schema.metadata_locks where OBJECT_TYPE = 'BINLOG' order by LOCK_TYPE;
+LOCK_TYPE	LOCK_DURATION	LOCK_STATUS
+INTENTION_EXCLUSIVE	EXPLICIT	GRANTED
+SHARED	EXPLICIT	PENDING
+select OBJECT_TYPE, OBJECT_SCHEMA,OBJECT_NAME, INDEX_NAME from performance_schema.events_waits_current where OBJECT_TYPE='BINLOG';
+OBJECT_TYPE	OBJECT_SCHEMA	OBJECT_NAME	INDEX_NAME
+BINLOG	NULL	NULL	NULL
+SET DEBUG_SYNC= "now SIGNAL released";
+# connection con1
+# connection default
+# connection con1
+INSERT INTO t_innodb VALUES(6);
+# connection con2
+select LOCK_TYPE,LOCK_DURATION,LOCK_STATUS from performance_schema.metadata_locks where OBJECT_TYPE = 'BINLOG' order by LOCK_TYPE;
+LOCK_TYPE	LOCK_DURATION	LOCK_STATUS
+INTENTION_EXCLUSIVE	EXPLICIT	PENDING
+SHARED	EXPLICIT	GRANTED
+select OBJECT_TYPE, OBJECT_SCHEMA,OBJECT_NAME, INDEX_NAME from performance_schema.events_waits_current where OBJECT_TYPE='BINLOG';
+OBJECT_TYPE	OBJECT_SCHEMA	OBJECT_NAME	INDEX_NAME
+BINLOG	NULL	NULL	NULL
+# connection default
+UNLOCK BINLOG;
+# connection con1
+SELECT * FROM t_innodb;
+a
+5
+6
+#-----------------------------------------------------------------------
+# Cleanup
+#-----------------------------------------------------------------------
+DROP VIEW v_innodb;
+DROP TABLE t_innodb;
+SET GLOBAL binlog_format = @old_binlog_format;
+Warnings:
+Warning	1287	'@@binlog_format' is deprecated and will be removed in a future release.

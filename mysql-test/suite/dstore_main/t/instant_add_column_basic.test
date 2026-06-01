@@ -1,0 +1,132 @@
+--source include/big_test.inc
+
+--echo ##############################################
+--echo # Test instant ADD COLUMN
+--echo ##############################################
+--source suite/dstore_main/include/instant_add_column_basic.inc
+
+--echo #
+--echo # Test cases which don't care about row format start here
+--echo #
+
+--echo #
+--echo # Bug #28040201	ADDING A NEW COLUMN TO A TABLE HAVING A GENRATED COLUMN
+--echo # CRASHES THE SERVER
+--echo #
+
+CREATE TABLE t1 (a TEXT GENERATED ALWAYS AS (lpad(1, 1, 1)) VIRTUAL);
+
+ALTER TABLE t1 ADD COLUMN (b INT);
+
+SHOW CREATE TABLE t1;
+
+DROP TABLE t1;
+
+--echo #
+--echo # Check adding a stored columns(along with virtual columns)
+--echo # after the last stored column of a table with functional index
+--echo # should be fine
+--echo #
+
+CREATE TABLE t1 (col1 INT, col2 INT AS (col1 + col1), INDEX (col2));
+
+INSERT INTO t1(col1) VALUES(10), (20), (30), (40);
+
+ALTER TABLE t1 ADD COLUMN new_col INT, ALGORITHM=INSTANT;
+
+--sorted_result
+SELECT * FROM t1;
+
+ALTER TABLE t1 ADD COLUMN new_col_1 INT, ADD COLUMN new_col_2 INT GENERATED ALWAYS AS (new_col * 3), ALGORITHM=INSTANT;
+
+SHOW CREATE TABLE t1;
+
+CHECK TABLE t1;
+
+DROP TABLE t1;
+
+--echo # Instant add column with functional index.
+
+CREATE TABLE t1(time_col time(6) DEFAULT NULL, id INT, KEY index_time_col ((time_to_sec(time_col))));
+ALTER TABLE t1 ADD COLUMN col1 int,ALGORITHM=INSTANT;
+ALTER TABLE t1 DROP COLUMN id,ALGORITHM=INSTANT;
+DROP TABLE t1;
+
+
+--echo # Bug #33673961: data is incorrect after instant add column
+
+# VALUE FOR CHECKSUM USING ALGORITHM=INSTANT SHOULD BE CONSISTENT WITH ALGORITHM=COPY FOR IDENTICAL TABLES
+
+--let $use_copy=0
+while($use_copy<=1){
+  CREATE TABLE t1 (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, a char(10));
+  INSERT INTO t1 VALUES(1, 'aa');
+  INSERT INTO t1 VALUES(2, 'bb');
+  if ($use_copy == 0) {
+    ALTER TABLE t1 ADD b VARCHAR(20), ALGORITHM=INSTANT;
+  }
+  if ($use_copy == 1) {
+    ALTER TABLE t1 ADD b VARCHAR(20), ALGORITHM=COPY;
+  }
+  INSERT INTO t1 VALUES(3, 'cc', 'dd');
+  let $cs = `CHECKSUM TABLE t1`;
+  if ($use_copy == 1) {
+    if ($cs == $prev_cs) {
+      echo CHECKSUM is same;
+    }
+  }
+  DROP TABLE t1;
+
+  --let $prev_cs=$cs
+  --inc $use_copy
+}
+
+# BUG2025080615701 Add column with instant algorithm will crash when the
+# table contains virtual column.
+
+CREATE TABLE `t1` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `c1` int DEFAULT NULL,
+  `c2` int DEFAULT NULL,
+  `virtual_col` int AS ((`c1` + `c2`)) VIRTUAL,
+  PRIMARY KEY (`id`)
+) ENGINE=Dstore;
+
+ALTER TABLE t1 ADD COLUMN c3 FLOAT DEFAULT NULL;
+ALTER TABLE t1 ADD COLUMN c4 FLOAT DEFAULT -1524051188;
+
+ DROP TABLE t1;
+
+--echo # Add testing for unsigned types.
+CREATE TABLE t1 (a INT NOT NULL AUTO_INCREMENT PRIMARY KEY, b INT);
+INSERT INTO t1 VALUES(0, 1), (0, 2), (0, 3), (0, 4), (0, 5);
+ALTER TABLE t1 ADD COLUMN g1 TINYINT UNSIGNED NOT NULL DEFAULT 10;
+ALTER TABLE t1 ADD COLUMN g2 SMALLINT UNSIGNED NOT NULL DEFAULT 123;
+ALTER TABLE t1 ADD COLUMN g3 INT UNSIGNED NOT NULL DEFAULT 12345;
+ALTER TABLE t1 ADD COLUMN g4 BIGINT UNSIGNED NOT NULL DEFAULT 12345;
+ALTER TABLE t1 ADD COLUMN g5 ENUM('value1', 'value2', 'value3') NOT NULL DEFAULT 'value1';
+ALTER TABLE t1 ADD COLUMN g6 YEAR NOT NULL DEFAULT '2024';
+DROP TABLE t1;
+
+#BUG2025121143469
+CREATE TABLE `test1` (
+`id` int NOT NULL,
+`varchar_col2` varchar(255) DEFAULT NULL,
+`varchar_col8111111111111111111111111111111111111111111111111111%` varchar(255) DEFAULT NULL,
+`varchar_col81111111111111111111111111111111111111111111111111111` varchar(255) DEFAULT NULL,
+`varchar_col3` varchar(255) DEFAULT NULL,
+PRIMARY KEY (`id`));
+insert into test1 values(1, 'aa', 'bb', 'cc', 'dd');
+alter table test1 drop `varchar_col8111111111111111111111111111111111111111111111111111%`, drop `varchar_col81111111111111111111111111111111111111111111111111111`,algorithm=instant;
+select * from test1;
+drop table test1;
+create table t1(c1 int, `!hidden!_dropped_v1_p0_c1` int);
+--error ER_WRONG_COLUMN_NAME
+alter table t1 drop column c1,algorithm=instant;
+drop table t1;
+
+#BUG2026012846991
+CREATE TABLE t1 (c1 INT NOT NULL PRIMARY KEY) engine=dstore;
+ALTER TABLE t1 CHANGE COLUMN c1 C1 INT; 
+ALTER TABLE t1 ADD COLUMN adress char(255) FIRST;
+DROP TABLE t1;

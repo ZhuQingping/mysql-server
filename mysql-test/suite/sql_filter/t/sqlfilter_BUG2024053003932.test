@@ -1,0 +1,95 @@
+--source ../include/sqlfilter_prepare.inc
+
+set global rds_sqlfilter_control = on;
+
+connect(conn_rdsAdmin, 127.0.0.1, rdsAdmin);
+connection conn_rdsAdmin;
+
+use test;
+CALL dbms_sqlfilter.add_sql_filter("SELECT",0,"SELECT~FROM","");
+--replace_column 1 #
+SELECT * FROM mysql.rds_sql_filter_rules;
+--replace_column 1 #
+CALL dbms_sqlfilter.show_sql_filter();
+
+create table t1(a int);
+--error ER_QUERY_INTERRUPTED
+select * from t1;
+drop table t1;
+
+--echo #
+--echo # mysql
+--echo #
+create database mysql_test;
+use mysql_test;
+--replace_column 1 #
+SELECT * FROM mysql.rds_sql_filter_rules;
+--replace_column 1 #
+CALL dbms_sqlfilter.show_sql_filter();
+
+create table t1(a int);
+--error ER_QUERY_INTERRUPTED
+select * from t1;
+drop table t1;
+
+--echo #
+--echo # information_schema
+--echo #
+create database information_schema_test;
+use information_schema_test;
+--replace_column 1 #
+SELECT * FROM mysql.rds_sql_filter_rules;
+--replace_column 1 #
+CALL dbms_sqlfilter.show_sql_filter();
+
+create table t1(a int);
+--error ER_QUERY_INTERRUPTED
+select * from t1;
+drop table t1;
+
+--echo #
+--echo # performance_schema
+--echo #
+create database performance_schema_test;
+use performance_schema_test;
+--replace_column 1 #
+SELECT * FROM mysql.rds_sql_filter_rules;
+--replace_column 1 #
+CALL dbms_sqlfilter.show_sql_filter();
+
+create table t1(a int);
+--error ER_QUERY_INTERRUPTED
+select * from t1;
+drop table t1;
+
+--echo #
+--echo # sys
+--echo #
+create database sys_test;
+use sys_test;
+--replace_column 1 #
+SELECT * FROM mysql.rds_sql_filter_rules;
+--replace_column 1 #
+CALL dbms_sqlfilter.show_sql_filter();
+
+create table t1(a int);
+--error ER_QUERY_INTERRUPTED
+select * from t1;
+drop table t1;
+
+use test;
+CALL delete_one_sql_filter_rule(0);
+--replace_column 1 #
+SELECT * FROM mysql.rds_sql_filter_rules;
+--replace_column 1 #
+CALL dbms_sqlfilter.show_sql_filter();
+
+connection default;
+drop database mysql_test;
+drop database information_schema_test;
+drop database performance_schema_test;
+drop database sys_test;
+
+set global rds_sqlfilter_control = default;
+
+--source ../include/sqlfilter_cleanup.inc

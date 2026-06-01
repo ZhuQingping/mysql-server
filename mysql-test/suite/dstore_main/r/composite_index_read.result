@@ -1,0 +1,1755 @@
+set @optimizer_switch_saved= @@optimizer_switch;
+set optimizer_switch="index_condition_pushdown=off,dstore_use_histogram_range_estimation=off";
+set @dstore_use_histogram_auto_update_saved=@@dstore_use_histogram_auto_update;
+set global dstore_use_histogram_auto_update=off;
+create table t(id int, a int, b int, c int,key(id),key(a ,b ,c)) engine=Dstore;
+insert into t values(0,0,0,0);
+insert into t values(-1,-1,-1,-1);
+insert into t values(-2,-2,-2,-2);
+insert into t values(1,1,1,1);
+insert into t values(2,2,2,2);
+insert into t values(3,3,3,3);
+insert into t values(4,3,4,4);
+insert into t values(5,4,5,5);
+insert into t values(6,4,6,6);
+insert into t values(7,7,7,7);
+insert into t values(8,8,8,8);
+insert into t values(9,8,9,9);
+insert into t values(10,null,null,null);
+insert into t values(11,null,1,1);
+insert into t values(12,null,2,2);
+insert into t values(13,null,3,3);
+insert into t values(14,1,null,1);
+insert into t values(15,2,null,2);
+insert into t values(16,3,null,3);
+insert into t values(17,1,1,null);
+insert into t values(18,2,2,null);
+insert into t values(19,3,3,null);
+insert into t values(20,null,null,1);
+insert into t values(21,null,null,2);
+insert into t values(22,null,null,3);
+analyze table t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+show index from t;
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+t	1	id	1	id	A	#	NULL	NULL	YES	BTREE			YES	NULL
+t	1	a	1	a	A	#	NULL	NULL	YES	BTREE			YES	NULL
+t	1	a	2	b	A	#	NULL	NULL	YES	BTREE			YES	NULL
+t	1	a	3	c	A	#	NULL	NULL	YES	BTREE			YES	NULL
+select * from t force index(a) where a is null order by id;
+id	a	b	c
+10	NULL	NULL	NULL
+11	NULL	1	1
+12	NULL	2	2
+13	NULL	3	3
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+select * from t force index(a) where a is null and b > 2 order by id;
+id	a	b	c
+13	NULL	3	3
+select * from t force index(a) where a is null and b < 2 order by id;
+id	a	b	c
+11	NULL	1	1
+select * from t force index(a) where a is null and b is null order by id;
+id	a	b	c
+10	NULL	NULL	NULL
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+select * from t force index(a) where a is null and b is null and c > 0 order by id;
+id	a	b	c
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+select * from t force index(a) where a is null and b is null and c < 5 order by id;
+id	a	b	c
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+select * from t force index(a) where a is null and b is null and c is null order by id;
+id	a	b	c
+10	NULL	NULL	NULL
+select * from t force index(a) where a = 2 and b is null and c > 0 order by id;
+id	a	b	c
+15	2	NULL	2
+select * from t force index(a) where a = 2 and b = 2 and c is null order by id;
+id	a	b	c
+18	2	2	NULL
+select * from t force index(a) where a < 4 or a is null order by id;
+id	a	b	c
+-2	-2	-2	-2
+-1	-1	-1	-1
+0	0	0	0
+1	1	1	1
+2	2	2	2
+3	3	3	3
+4	3	4	4
+10	NULL	NULL	NULL
+11	NULL	1	1
+12	NULL	2	2
+13	NULL	3	3
+14	1	NULL	1
+15	2	NULL	2
+16	3	NULL	3
+17	1	1	NULL
+18	2	2	NULL
+19	3	3	NULL
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+select * from t force index(a) where a = 2 and (b < 4 or b is null) order by id;
+id	a	b	c
+2	2	2	2
+15	2	NULL	2
+18	2	2	NULL
+select * from t force index(a) where a = 2 and b = 2 and (c < 4 or c is null) order by id;
+id	a	b	c
+2	2	2	2
+18	2	2	NULL
+select * from t force index(a) where a is not null or a is null order by id;
+id	a	b	c
+-2	-2	-2	-2
+-1	-1	-1	-1
+0	0	0	0
+1	1	1	1
+2	2	2	2
+3	3	3	3
+4	3	4	4
+5	4	5	5
+6	4	6	6
+7	7	7	7
+8	8	8	8
+9	8	9	9
+10	NULL	NULL	NULL
+11	NULL	1	1
+12	NULL	2	2
+13	NULL	3	3
+14	1	NULL	1
+15	2	NULL	2
+16	3	NULL	3
+17	1	1	NULL
+18	2	2	NULL
+19	3	3	NULL
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+select * from t force index(a) where a = 3 order by id;
+id	a	b	c
+3	3	3	3
+4	3	4	4
+16	3	NULL	3
+19	3	3	NULL
+select * from t force index(a) where a between 3 and 6 order by id;
+id	a	b	c
+3	3	3	3
+4	3	4	4
+5	4	5	5
+6	4	6	6
+16	3	NULL	3
+19	3	3	NULL
+select * from t force index(a) where a > 6 order by id;
+id	a	b	c
+7	7	7	7
+8	8	8	8
+9	8	9	9
+select * from t force index(a) where a >= 7 order by id;
+id	a	b	c
+7	7	7	7
+8	8	8	8
+9	8	9	9
+select * from t force index(a) where a < 3 order by id;
+id	a	b	c
+-2	-2	-2	-2
+-1	-1	-1	-1
+0	0	0	0
+1	1	1	1
+2	2	2	2
+14	1	NULL	1
+15	2	NULL	2
+17	1	1	NULL
+18	2	2	NULL
+select * from t force index(a) where a >= -1 order by id;
+id	a	b	c
+-1	-1	-1	-1
+0	0	0	0
+1	1	1	1
+2	2	2	2
+3	3	3	3
+4	3	4	4
+5	4	5	5
+6	4	6	6
+7	7	7	7
+8	8	8	8
+9	8	9	9
+14	1	NULL	1
+15	2	NULL	2
+16	3	NULL	3
+17	1	1	NULL
+18	2	2	NULL
+19	3	3	NULL
+select * from t force index(a) where a <= 3 order by id;
+id	a	b	c
+-2	-2	-2	-2
+-1	-1	-1	-1
+0	0	0	0
+1	1	1	1
+2	2	2	2
+3	3	3	3
+4	3	4	4
+14	1	NULL	1
+15	2	NULL	2
+16	3	NULL	3
+17	1	1	NULL
+18	2	2	NULL
+19	3	3	NULL
+select * from t force index(a) where a = 3 and b = 3 order by id;
+id	a	b	c
+3	3	3	3
+19	3	3	NULL
+select * from t force index(a) where a = 3 and b < 4 order by id;
+id	a	b	c
+3	3	3	3
+19	3	3	NULL
+select * from t force index(a) where a = 3 and b <= 4 order by id;
+id	a	b	c
+3	3	3	3
+4	3	4	4
+19	3	3	NULL
+select * from t force index(a) where a = 3 and b > 3 order by id;
+id	a	b	c
+4	3	4	4
+select * from t force index(a) where a = 3 and b >= 3 order by id;
+id	a	b	c
+3	3	3	3
+4	3	4	4
+19	3	3	NULL
+select * from t force index(a) where a = -2 and b < 1 order by id;
+id	a	b	c
+-2	-2	-2	-2
+select * from t force index(a) where a = 3 and b = 3 and c = 3 order by id;
+id	a	b	c
+3	3	3	3
+select * from t force index(a) where a = 3 and b = 3 and c < 5 order by id;
+id	a	b	c
+3	3	3	3
+select * from t force index(a) where a = 3 and b = 3 and c > 2 order by id;
+id	a	b	c
+3	3	3	3
+select * from t force index(a) where a = 3 and b = 3 and c > 5 order by id;
+id	a	b	c
+select * from t force index(a) where a = 3 and b = 3 and c < 2 order by id;
+id	a	b	c
+select * from t force index(a) where a = -2 and b = -2 and c < 1 order by id;
+id	a	b	c
+-2	-2	-2	-2
+select * from t force index(a) where a is null order by a desc;
+id	a	b	c
+10	NULL	NULL	NULL
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+11	NULL	1	1
+12	NULL	2	2
+13	NULL	3	3
+select * from t force index(a) where a is null and b > 2 order by b desc;
+id	a	b	c
+13	NULL	3	3
+select * from t force index(a) where a is null and b < 2 order by b desc;
+id	a	b	c
+11	NULL	1	1
+select * from t force index(a) where a is null and b is null order by b desc;
+id	a	b	c
+10	NULL	NULL	NULL
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+select * from t force index(a) where a is null and b is null and c > 0 order by c desc;
+id	a	b	c
+22	NULL	NULL	3
+21	NULL	NULL	2
+20	NULL	NULL	1
+select * from t force index(a) where a is null and b is null and c < 5 order by c desc;
+id	a	b	c
+22	NULL	NULL	3
+21	NULL	NULL	2
+20	NULL	NULL	1
+select * from t force index(a) where a is null and b is null and c is null order by c desc;
+id	a	b	c
+10	NULL	NULL	NULL
+select * from t force index(a) where a = 2 and b is null and c > 0 order by c desc;
+id	a	b	c
+15	2	NULL	2
+select * from t force index(a) where a = 2 and b = 2 and c is null order by c desc;
+id	a	b	c
+18	2	2	NULL
+select * from t force index(a) where a < 4 or a is null order by a desc;
+id	a	b	c
+4	3	4	4
+3	3	3	3
+19	3	3	NULL
+16	3	NULL	3
+2	2	2	2
+18	2	2	NULL
+15	2	NULL	2
+1	1	1	1
+17	1	1	NULL
+14	1	NULL	1
+0	0	0	0
+-1	-1	-1	-1
+-2	-2	-2	-2
+13	NULL	3	3
+12	NULL	2	2
+11	NULL	1	1
+22	NULL	NULL	3
+21	NULL	NULL	2
+20	NULL	NULL	1
+10	NULL	NULL	NULL
+select * from t force index(a) where a = 2 and (b < 4 or b is null) order by b desc;
+id	a	b	c
+2	2	2	2
+18	2	2	NULL
+15	2	NULL	2
+select * from t force index(a) where a = 2 and b = 2 and (c < 4 or c is null) order by c desc;
+id	a	b	c
+2	2	2	2
+18	2	2	NULL
+select * from t force index(a) where a is not null or a is null order by a desc;
+id	a	b	c
+9	8	9	9
+8	8	8	8
+7	7	7	7
+6	4	6	6
+5	4	5	5
+4	3	4	4
+3	3	3	3
+19	3	3	NULL
+16	3	NULL	3
+2	2	2	2
+18	2	2	NULL
+15	2	NULL	2
+1	1	1	1
+17	1	1	NULL
+14	1	NULL	1
+0	0	0	0
+-1	-1	-1	-1
+-2	-2	-2	-2
+13	NULL	3	3
+12	NULL	2	2
+11	NULL	1	1
+22	NULL	NULL	3
+21	NULL	NULL	2
+20	NULL	NULL	1
+10	NULL	NULL	NULL
+select * from t force index(a) where a = 3 order by a desc;
+id	a	b	c
+16	3	NULL	3
+19	3	3	NULL
+3	3	3	3
+4	3	4	4
+select * from t force index(a) where a between 3 and 6 order by a desc;
+id	a	b	c
+6	4	6	6
+5	4	5	5
+4	3	4	4
+3	3	3	3
+19	3	3	NULL
+16	3	NULL	3
+select * from t force index(a) where a > 6 order by a desc;
+id	a	b	c
+9	8	9	9
+8	8	8	8
+7	7	7	7
+select * from t force index(a) where a >= 7 order by a desc;
+id	a	b	c
+9	8	9	9
+8	8	8	8
+7	7	7	7
+select * from t force index(a) where a < 3 order by a desc;
+id	a	b	c
+2	2	2	2
+18	2	2	NULL
+15	2	NULL	2
+1	1	1	1
+17	1	1	NULL
+14	1	NULL	1
+0	0	0	0
+-1	-1	-1	-1
+-2	-2	-2	-2
+select * from t force index(a) where a >= -1 order by a desc;
+id	a	b	c
+9	8	9	9
+8	8	8	8
+7	7	7	7
+6	4	6	6
+5	4	5	5
+4	3	4	4
+3	3	3	3
+19	3	3	NULL
+16	3	NULL	3
+2	2	2	2
+18	2	2	NULL
+15	2	NULL	2
+1	1	1	1
+17	1	1	NULL
+14	1	NULL	1
+0	0	0	0
+-1	-1	-1	-1
+select * from t force index(a) where a <= 3 order by a desc;
+id	a	b	c
+4	3	4	4
+3	3	3	3
+19	3	3	NULL
+16	3	NULL	3
+2	2	2	2
+18	2	2	NULL
+15	2	NULL	2
+1	1	1	1
+17	1	1	NULL
+14	1	NULL	1
+0	0	0	0
+-1	-1	-1	-1
+-2	-2	-2	-2
+select * from t force index(a) where a = 3 and b = 3 order by b desc;
+id	a	b	c
+19	3	3	NULL
+3	3	3	3
+select * from t force index(a) where a = 3 and b < 4 order by b desc;
+id	a	b	c
+3	3	3	3
+19	3	3	NULL
+select * from t force index(a) where a = 3 and b <= 4 order by b desc;
+id	a	b	c
+4	3	4	4
+3	3	3	3
+19	3	3	NULL
+select * from t force index(a) where a = 3 and b > 3 order by b desc;
+id	a	b	c
+4	3	4	4
+select * from t force index(a) where a = 3 and b >= 3 order by b desc;
+id	a	b	c
+4	3	4	4
+3	3	3	3
+19	3	3	NULL
+select * from t force index(a) where a = -2 and b < 1 order by b desc;
+id	a	b	c
+-2	-2	-2	-2
+select * from t force index(a) where a = 3 and b = 3 and c = 3 order by c desc;
+id	a	b	c
+3	3	3	3
+select * from t force index(a) where a = 3 and b = 3 and c < 5 order by c desc;
+id	a	b	c
+3	3	3	3
+select * from t force index(a) where a = 3 and b = 3 and c > 2 order by c desc;
+id	a	b	c
+3	3	3	3
+select * from t force index(a) where a = 3 and b = 3 and c > 5 order by c desc;
+id	a	b	c
+select * from t force index(a) where a = 3 and b = 3 and c < 2 order by c desc;
+id	a	b	c
+select * from t force index(a) where a = -2 and b = -2 and c < 1 order by c desc;
+id	a	b	c
+-2	-2	-2	-2
+select b from t force index(a) where a = 3 and b = 3;
+b
+3
+3
+select b from t force index(a) where a = 3 and b < 4;
+b
+3
+3
+select b from t force index(a) where a = 3 and b <= 4;
+b
+3
+3
+4
+select b from t force index(a) where a = 3 and b > 3;
+b
+4
+select b from t force index(a) where a = 3 and b >= 3;
+b
+3
+3
+4
+select b from t force index(a) where a = -2 and b < 1;
+b
+-2
+select b from t force index(a) where a is null and b is null;
+b
+NULL
+NULL
+NULL
+NULL
+select b from t force index(a) where a is null and b is null and c > 0;
+b
+NULL
+NULL
+NULL
+select b from t force index(a) where a is null and b is null and c < 5;
+b
+NULL
+NULL
+NULL
+create table t1(id int, a int, b int, c int,key(id),key(a desc,b asc,c desc)) engine=Dstore;
+insert into t1 values(0,0,0,0);
+insert into t1 values(-1,-1,-1,-1);
+insert into t1 values(-2,-2,-2,-2);
+insert into t1 values(1,1,1,1);
+insert into t1 values(2,2,2,2);
+insert into t1 values(3,3,3,3);
+insert into t1 values(4,3,4,4);
+insert into t1 values(5,4,5,5);
+insert into t1 values(6,4,6,6);
+insert into t1 values(7,7,7,7);
+insert into t1 values(8,8,8,8);
+insert into t1 values(9,8,9,9);
+insert into t1 values(10,null,null,null);
+insert into t1 values(11,null,1,1);
+insert into t1 values(12,null,2,2);
+insert into t1 values(13,null,3,3);
+insert into t1 values(14,1,null,1);
+insert into t1 values(15,2,null,2);
+insert into t1 values(16,3,null,3);
+insert into t1 values(17,1,1,null);
+insert into t1 values(18,2,2,null);
+insert into t1 values(19,3,3,null);
+insert into t1 values(20,null,null,1);
+insert into t1 values(21,null,null,2);
+insert into t1 values(22,null,null,3);
+analyze table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+show index from t1;
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+t1	1	id	1	id	A	#	NULL	NULL	YES	BTREE			YES	NULL
+t1	1	a	1	a	D	#	NULL	NULL	YES	BTREE			YES	NULL
+t1	1	a	2	b	A	#	NULL	NULL	YES	BTREE			YES	NULL
+t1	1	a	3	c	D	#	NULL	NULL	YES	BTREE			YES	NULL
+select * from t1 force index(a) where a is null order by id;
+id	a	b	c
+10	NULL	NULL	NULL
+11	NULL	1	1
+12	NULL	2	2
+13	NULL	3	3
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+select * from t1 force index(a) where a is null and b > 2 order by id;
+id	a	b	c
+13	NULL	3	3
+select * from t1 force index(a) where a is null and b < 2 order by id;
+id	a	b	c
+11	NULL	1	1
+select * from t1 force index(a) where a is null and b is null order by id;
+id	a	b	c
+10	NULL	NULL	NULL
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+select * from t1 force index(a) where a is null and b is null and c > 0 order by id;
+id	a	b	c
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+select * from t1 force index(a) where a is null and b is null and c < 5 order by id;
+id	a	b	c
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+select * from t1 force index(a) where a is null and b is null and c is null order by id;
+id	a	b	c
+10	NULL	NULL	NULL
+select * from t1 force index(a) where a = 2 and b is null and c > 0 order by id;
+id	a	b	c
+15	2	NULL	2
+select * from t1 force index(a) where a = 2 and b = 2 and c is null order by id;
+id	a	b	c
+18	2	2	NULL
+select * from t1 force index(a) where a < 4 or a is null order by id;
+id	a	b	c
+-2	-2	-2	-2
+-1	-1	-1	-1
+0	0	0	0
+1	1	1	1
+2	2	2	2
+3	3	3	3
+4	3	4	4
+10	NULL	NULL	NULL
+11	NULL	1	1
+12	NULL	2	2
+13	NULL	3	3
+14	1	NULL	1
+15	2	NULL	2
+16	3	NULL	3
+17	1	1	NULL
+18	2	2	NULL
+19	3	3	NULL
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+select * from t1 force index(a) where a = 2 and (b < 4 or b is null) order by id;
+id	a	b	c
+2	2	2	2
+15	2	NULL	2
+18	2	2	NULL
+select * from t1 force index(a) where a = 2 and b = 2 and (c < 4 or c is null) order by id;
+id	a	b	c
+2	2	2	2
+18	2	2	NULL
+select * from t1 force index(a) where a is not null or a is null order by id;
+id	a	b	c
+-2	-2	-2	-2
+-1	-1	-1	-1
+0	0	0	0
+1	1	1	1
+2	2	2	2
+3	3	3	3
+4	3	4	4
+5	4	5	5
+6	4	6	6
+7	7	7	7
+8	8	8	8
+9	8	9	9
+10	NULL	NULL	NULL
+11	NULL	1	1
+12	NULL	2	2
+13	NULL	3	3
+14	1	NULL	1
+15	2	NULL	2
+16	3	NULL	3
+17	1	1	NULL
+18	2	2	NULL
+19	3	3	NULL
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+select * from t1 force index(a) where a = 3 order by id;
+id	a	b	c
+3	3	3	3
+4	3	4	4
+16	3	NULL	3
+19	3	3	NULL
+select * from t1 force index(a) where a between 3 and 6 order by id;
+id	a	b	c
+3	3	3	3
+4	3	4	4
+5	4	5	5
+6	4	6	6
+16	3	NULL	3
+19	3	3	NULL
+select * from t1 force index(a) where a > 6 order by id;
+id	a	b	c
+7	7	7	7
+8	8	8	8
+9	8	9	9
+select * from t1 force index(a) where a >= 7 order by id;
+id	a	b	c
+7	7	7	7
+8	8	8	8
+9	8	9	9
+select * from t1 force index(a) where a < 3 order by id;
+id	a	b	c
+-2	-2	-2	-2
+-1	-1	-1	-1
+0	0	0	0
+1	1	1	1
+2	2	2	2
+14	1	NULL	1
+15	2	NULL	2
+17	1	1	NULL
+18	2	2	NULL
+select * from t1 force index(a) where a >= -1 order by id;
+id	a	b	c
+-1	-1	-1	-1
+0	0	0	0
+1	1	1	1
+2	2	2	2
+3	3	3	3
+4	3	4	4
+5	4	5	5
+6	4	6	6
+7	7	7	7
+8	8	8	8
+9	8	9	9
+14	1	NULL	1
+15	2	NULL	2
+16	3	NULL	3
+17	1	1	NULL
+18	2	2	NULL
+19	3	3	NULL
+select * from t1 force index(a) where a <= 3 order by id;
+id	a	b	c
+-2	-2	-2	-2
+-1	-1	-1	-1
+0	0	0	0
+1	1	1	1
+2	2	2	2
+3	3	3	3
+4	3	4	4
+14	1	NULL	1
+15	2	NULL	2
+16	3	NULL	3
+17	1	1	NULL
+18	2	2	NULL
+19	3	3	NULL
+select * from t1 force index(a) where a = 3 and b = 3 order by id;
+id	a	b	c
+3	3	3	3
+19	3	3	NULL
+select * from t1 force index(a) where a = 3 and b < 4 order by id;
+id	a	b	c
+3	3	3	3
+19	3	3	NULL
+select * from t1 force index(a) where a = 3 and b <= 4 order by id;
+id	a	b	c
+3	3	3	3
+4	3	4	4
+19	3	3	NULL
+select * from t1 force index(a) where a = 3 and b > 3 order by id;
+id	a	b	c
+4	3	4	4
+select * from t1 force index(a) where a = 3 and b >= 3 order by id;
+id	a	b	c
+3	3	3	3
+4	3	4	4
+19	3	3	NULL
+select * from t1 force index(a) where a = -2 and b < 1 order by id;
+id	a	b	c
+-2	-2	-2	-2
+select * from t1 force index(a) where a = 3 and b = 3 and c = 3 order by id;
+id	a	b	c
+3	3	3	3
+select * from t1 force index(a) where a = 3 and b = 3 and c < 5 order by id;
+id	a	b	c
+3	3	3	3
+select * from t1 force index(a) where a = 3 and b = 3 and c > 2 order by id;
+id	a	b	c
+3	3	3	3
+select * from t1 force index(a) where a = 3 and b = 3 and c > 5 order by id;
+id	a	b	c
+select * from t1 force index(a) where a = 3 and b = 3 and c < 2 order by id;
+id	a	b	c
+select * from t1 force index(a) where a = -2 and b = -2 and c < 1 order by id;
+id	a	b	c
+-2	-2	-2	-2
+select * from t1 force index(a) where a is null order by a;
+id	a	b	c
+22	NULL	NULL	3
+21	NULL	NULL	2
+20	NULL	NULL	1
+10	NULL	NULL	NULL
+11	NULL	1	1
+12	NULL	2	2
+13	NULL	3	3
+select * from t1 force index(a) where a is null and b > 2 order by b;
+id	a	b	c
+13	NULL	3	3
+select * from t1 force index(a) where a is null and b < 2 order by b;
+id	a	b	c
+11	NULL	1	1
+select * from t1 force index(a) where a is null and b is null order by b;
+id	a	b	c
+22	NULL	NULL	3
+21	NULL	NULL	2
+20	NULL	NULL	1
+10	NULL	NULL	NULL
+select * from t1 force index(a) where a is null and b is null and c > 0 order by c;
+id	a	b	c
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+select * from t1 force index(a) where a is null and b is null and c < 5 order by c;
+id	a	b	c
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+select * from t1 force index(a) where a is null and b is null and c is null order by c;
+id	a	b	c
+10	NULL	NULL	NULL
+select * from t1 force index(a) where a = 2 and b is null and c > 0 order by c;
+id	a	b	c
+15	2	NULL	2
+select * from t1 force index(a) where a = 2 and b = 2 and c is null order by c;
+id	a	b	c
+18	2	2	NULL
+select * from t1 force index(a) where a < 4 or a is null order by a;
+id	a	b	c
+13	NULL	3	3
+12	NULL	2	2
+11	NULL	1	1
+10	NULL	NULL	NULL
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+-2	-2	-2	-2
+-1	-1	-1	-1
+0	0	0	0
+17	1	1	NULL
+1	1	1	1
+14	1	NULL	1
+18	2	2	NULL
+2	2	2	2
+15	2	NULL	2
+4	3	4	4
+19	3	3	NULL
+3	3	3	3
+16	3	NULL	3
+select * from t1 force index(a) where a = 2 and (b < 4 or b is null) order by b;
+id	a	b	c
+15	2	NULL	2
+2	2	2	2
+18	2	2	NULL
+select * from t1 force index(a) where a = 2 and b = 2 and (c < 4 or c is null) order by c;
+id	a	b	c
+18	2	2	NULL
+2	2	2	2
+select * from t1 force index(a) where a is not null or a is null order by a;
+id	a	b	c
+13	NULL	3	3
+12	NULL	2	2
+11	NULL	1	1
+10	NULL	NULL	NULL
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+-2	-2	-2	-2
+-1	-1	-1	-1
+0	0	0	0
+17	1	1	NULL
+1	1	1	1
+14	1	NULL	1
+18	2	2	NULL
+2	2	2	2
+15	2	NULL	2
+4	3	4	4
+19	3	3	NULL
+3	3	3	3
+16	3	NULL	3
+6	4	6	6
+5	4	5	5
+7	7	7	7
+9	8	9	9
+8	8	8	8
+select * from t1 force index(a) where a = 3 order by a;
+id	a	b	c
+16	3	NULL	3
+3	3	3	3
+19	3	3	NULL
+4	3	4	4
+select * from t1 force index(a) where a between 3 and 6 order by a;
+id	a	b	c
+4	3	4	4
+19	3	3	NULL
+3	3	3	3
+16	3	NULL	3
+6	4	6	6
+5	4	5	5
+select * from t1 force index(a) where a > 6 order by a;
+id	a	b	c
+7	7	7	7
+9	8	9	9
+8	8	8	8
+select * from t1 force index(a) where a >= 7 order by a;
+id	a	b	c
+7	7	7	7
+9	8	9	9
+8	8	8	8
+select * from t1 force index(a) where a < 3 order by a;
+id	a	b	c
+-2	-2	-2	-2
+-1	-1	-1	-1
+0	0	0	0
+17	1	1	NULL
+1	1	1	1
+14	1	NULL	1
+18	2	2	NULL
+2	2	2	2
+15	2	NULL	2
+select * from t1 force index(a) where a >= -1 order by a;
+id	a	b	c
+-1	-1	-1	-1
+0	0	0	0
+17	1	1	NULL
+1	1	1	1
+14	1	NULL	1
+18	2	2	NULL
+2	2	2	2
+15	2	NULL	2
+4	3	4	4
+19	3	3	NULL
+3	3	3	3
+16	3	NULL	3
+6	4	6	6
+5	4	5	5
+7	7	7	7
+9	8	9	9
+8	8	8	8
+select * from t1 force index(a) where a <= 3 order by a;
+id	a	b	c
+-2	-2	-2	-2
+-1	-1	-1	-1
+0	0	0	0
+17	1	1	NULL
+1	1	1	1
+14	1	NULL	1
+18	2	2	NULL
+2	2	2	2
+15	2	NULL	2
+4	3	4	4
+19	3	3	NULL
+3	3	3	3
+16	3	NULL	3
+select * from t1 force index(a) where a = 3 and b = 3 order by b;
+id	a	b	c
+3	3	3	3
+19	3	3	NULL
+select * from t1 force index(a) where a = 3 and b < 4 order by b;
+id	a	b	c
+3	3	3	3
+19	3	3	NULL
+select * from t1 force index(a) where a = 3 and b <= 4 order by b;
+id	a	b	c
+3	3	3	3
+19	3	3	NULL
+4	3	4	4
+select * from t1 force index(a) where a = 3 and b > 3 order by b;
+id	a	b	c
+4	3	4	4
+select * from t1 force index(a) where a = 3 and b >= 3 order by b;
+id	a	b	c
+3	3	3	3
+19	3	3	NULL
+4	3	4	4
+select * from t1 force index(a) where a = -2 and b < 1 order by b;
+id	a	b	c
+-2	-2	-2	-2
+select * from t1 force index(a) where a = 3 and b = 3 and c = 3 order by c;
+id	a	b	c
+3	3	3	3
+select * from t1 force index(a) where a = 3 and b = 3 and c < 5 order by c;
+id	a	b	c
+3	3	3	3
+select * from t1 force index(a) where a = 3 and b = 3 and c > 2 order by c;
+id	a	b	c
+3	3	3	3
+select * from t1 force index(a) where a = 3 and b = 3 and c > 5 order by c;
+id	a	b	c
+select * from t1 force index(a) where a = 3 and b = 3 and c < 2 order by c;
+id	a	b	c
+select * from t1 force index(a) where a = -2 and b = -2 and c < 1 order by c;
+id	a	b	c
+-2	-2	-2	-2
+select b from t1 force index(a) where a = 3 and b = 3;
+b
+3
+3
+select b from t1 force index(a) where a = 3 and b < 4;
+b
+3
+3
+select b from t1 force index(a) where a = 3 and b <= 4;
+b
+3
+3
+4
+select b from t1 force index(a) where a = 3 and b > 3;
+b
+4
+select b from t1 force index(a) where a = 3 and b >= 3;
+b
+3
+3
+4
+select b from t1 force index(a) where a = -2 and b < 1;
+b
+-2
+select b from t1 force index(a) where a is null and b is null;
+b
+NULL
+NULL
+NULL
+NULL
+select b from t1 force index(a) where a is null and b is null and c > 0;
+b
+NULL
+NULL
+NULL
+select b from t1 force index(a) where a is null and b is null and c < 5;
+b
+NULL
+NULL
+NULL
+create table t2(id int, a int, b char(5), key(id),key(a,b)) engine=Dstore;
+insert into t2 values(1, 1, 'a');
+insert into t2 values(2, 2, 'b');
+insert into t2 values(3, 3, 'c');
+insert into t2 values(4, 4, 'd');
+insert into t2 values(5, 5, 'e');
+analyze table t2;
+Table	Op	Msg_type	Msg_text
+test.t2	analyze	status	OK
+select * from t2 where a = 2 and b = 'b';
+id	a	b
+2	2	b
+select * from t2 where a > 2 and b = 'e';
+id	a	b
+5	5	e
+explain select * from t force index(a) where a is null order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ref	a	a	5	const	7	100.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where (`test`.`t`.`a` is null) order by `test`.`t`.`id`
+explain select * from t force index(a) where a is null and b > 2 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	10	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` is null) and (`test`.`t`.`b` > 2)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a is null and b < 2 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	10	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` is null) and (`test`.`t`.`b` < 2)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a is null and b is null order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ref	a	a	10	const,const	4	100.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` is null) and (`test`.`t`.`b` is null)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a is null and b is null and c > 0 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	15	NULL	3	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` is null) and (`test`.`t`.`b` is null) and (`test`.`t`.`c` > 0)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a is null and b is null and c < 5 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	15	NULL	3	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` is null) and (`test`.`t`.`b` is null) and (`test`.`t`.`c` < 5)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a is null and b is null and c is null order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ref	a	a	15	const,const,const	1	100.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` is null) and (`test`.`t`.`b` is null) and (`test`.`t`.`c` is null)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a = 2 and b is null and c > 0 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	15	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` = 2) and (`test`.`t`.`b` is null) and (`test`.`t`.`c` > 0)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a = 2 and b = 2 and c is null order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ref	a	a	15	const,const,const	1	100.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`b` = 2) and (`test`.`t`.`a` = 2) and (`test`.`t`.`c` is null)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a < 4 or a is null order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	5	NULL	20	100.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` < 4) or (`test`.`t`.`a` is null)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a = 2 and (b < 4 or b is null) order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	10	NULL	3	100.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` = 2) and ((`test`.`t`.`b` < 4) or (`test`.`t`.`b` is null))) order by `test`.`t`.`id`
+explain select * from t force index(a) where a = 2 and b = 2 and (c < 4 or c is null) order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	15	NULL	2	100.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`b` = 2) and (`test`.`t`.`a` = 2) and ((`test`.`t`.`c` < 4) or (`test`.`t`.`c` is null))) order by `test`.`t`.`id`
+explain select * from t force index(a) where a is not null or a is null order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	5	NULL	25	100.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` is not null) or (`test`.`t`.`a` is null)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a = 3 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ref	a	a	5	const	4	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where (`test`.`t`.`a` = 3) order by `test`.`t`.`id`
+explain select * from t force index(a) where a between 3 and 6 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	5	NULL	6	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where (`test`.`t`.`a` between 3 and 6) order by `test`.`t`.`id`
+explain select * from t force index(a) where a > 6 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	5	NULL	3	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where (`test`.`t`.`a` > 6) order by `test`.`t`.`id`
+explain select * from t force index(a) where a >= 7 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	5	NULL	3	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where (`test`.`t`.`a` >= 7) order by `test`.`t`.`id`
+explain select * from t force index(a) where a < 3 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	5	NULL	9	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where (`test`.`t`.`a` < 3) order by `test`.`t`.`id`
+explain select * from t force index(a) where a >= -1 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	5	NULL	17	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where (`test`.`t`.`a` >= -(1)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a <= 3 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	5	NULL	13	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where (`test`.`t`.`a` <= 3) order by `test`.`t`.`id`
+explain select * from t force index(a) where a = 3 and b = 3 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ref	a	a	10	const,const	2	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`b` = 3) and (`test`.`t`.`a` = 3)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a = 3 and b < 4 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	10	NULL	2	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` = 3) and (`test`.`t`.`b` < 4)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a = 3 and b <= 4 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	10	NULL	3	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` = 3) and (`test`.`t`.`b` <= 4)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a = 3 and b > 3 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	10	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` = 3) and (`test`.`t`.`b` > 3)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a = 3 and b >= 3 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	10	NULL	3	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` = 3) and (`test`.`t`.`b` >= 3)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a = -2 and b < 1 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	10	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` = -(2)) and (`test`.`t`.`b` < 1)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a = 3 and b = 3 and c = 3 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ref	a	a	15	const,const,const	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`c` = 3) and (`test`.`t`.`b` = 3) and (`test`.`t`.`a` = 3)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a = 3 and b = 3 and c < 5 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	15	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`b` = 3) and (`test`.`t`.`a` = 3) and (`test`.`t`.`c` < 5)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a = 3 and b = 3 and c > 2 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	15	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`b` = 3) and (`test`.`t`.`a` = 3) and (`test`.`t`.`c` > 2)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a = 3 and b = 3 and c > 5 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	15	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`b` = 3) and (`test`.`t`.`a` = 3) and (`test`.`t`.`c` > 5)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a = 3 and b = 3 and c < 2 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	15	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`b` = 3) and (`test`.`t`.`a` = 3) and (`test`.`t`.`c` < 2)) order by `test`.`t`.`id`
+explain select * from t force index(a) where a = -2 and b = -2 and c < 1 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	15	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`b` = -(2)) and (`test`.`t`.`a` = -(2)) and (`test`.`t`.`c` < 1)) order by `test`.`t`.`id`
+explain select * from t1 force index(a) where a is null order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	a	a	5	const	7	100.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where (`test`.`t1`.`a` is null) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a is null and b > 2 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	10	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`a` is null) and (`test`.`t1`.`b` > 2)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a is null and b < 2 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	10	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`a` is null) and (`test`.`t1`.`b` < 2)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a is null and b is null order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	a	a	10	const,const	4	100.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`a` is null) and (`test`.`t1`.`b` is null)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a is null and b is null and c > 0 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	15	NULL	3	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`a` is null) and (`test`.`t1`.`b` is null) and (`test`.`t1`.`c` > 0)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a is null and b is null and c < 5 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	15	NULL	3	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`a` is null) and (`test`.`t1`.`b` is null) and (`test`.`t1`.`c` < 5)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a is null and b is null and c is null order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	a	a	15	const,const,const	1	100.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`a` is null) and (`test`.`t1`.`b` is null) and (`test`.`t1`.`c` is null)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a = 2 and b is null and c > 0 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	15	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`a` = 2) and (`test`.`t1`.`b` is null) and (`test`.`t1`.`c` > 0)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a = 2 and b = 2 and c is null order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	a	a	15	const,const,const	1	100.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`b` = 2) and (`test`.`t1`.`a` = 2) and (`test`.`t1`.`c` is null)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a < 4 or a is null order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	5	NULL	20	100.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`a` < 4) or (`test`.`t1`.`a` is null)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a = 2 and (b < 4 or b is null) order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	10	NULL	3	100.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`a` = 2) and ((`test`.`t1`.`b` < 4) or (`test`.`t1`.`b` is null))) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a = 2 and b = 2 and (c < 4 or c is null) order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	15	NULL	2	100.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`b` = 2) and (`test`.`t1`.`a` = 2) and ((`test`.`t1`.`c` < 4) or (`test`.`t1`.`c` is null))) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a is not null or a is null order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	5	NULL	25	100.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`a` is not null) or (`test`.`t1`.`a` is null)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a = 3 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	a	a	5	const	4	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where (`test`.`t1`.`a` = 3) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a between 3 and 6 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	5	NULL	6	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where (`test`.`t1`.`a` between 3 and 6) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a > 6 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	5	NULL	3	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where (`test`.`t1`.`a` > 6) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a >= 7 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	5	NULL	3	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where (`test`.`t1`.`a` >= 7) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a < 3 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	5	NULL	9	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where (`test`.`t1`.`a` < 3) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a >= -1 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	5	NULL	17	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where (`test`.`t1`.`a` >= -(1)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a <= 3 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	5	NULL	13	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where (`test`.`t1`.`a` <= 3) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a = 3 and b = 3 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	a	a	10	const,const	2	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`b` = 3) and (`test`.`t1`.`a` = 3)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a = 3 and b < 4 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	10	NULL	2	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`a` = 3) and (`test`.`t1`.`b` < 4)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a = 3 and b <= 4 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	10	NULL	3	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`a` = 3) and (`test`.`t1`.`b` <= 4)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a = 3 and b > 3 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	10	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`a` = 3) and (`test`.`t1`.`b` > 3)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a = 3 and b >= 3 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	10	NULL	3	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`a` = 3) and (`test`.`t1`.`b` >= 3)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a = -2 and b < 1 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	10	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`a` = -(2)) and (`test`.`t1`.`b` < 1)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a = 3 and b = 3 and c = 3 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	a	a	15	const,const,const	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`c` = 3) and (`test`.`t1`.`b` = 3) and (`test`.`t1`.`a` = 3)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a = 3 and b = 3 and c < 5 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	15	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`b` = 3) and (`test`.`t1`.`a` = 3) and (`test`.`t1`.`c` < 5)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a = 3 and b = 3 and c > 2 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	15	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`b` = 3) and (`test`.`t1`.`a` = 3) and (`test`.`t1`.`c` > 2)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a = 3 and b = 3 and c > 5 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	15	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`b` = 3) and (`test`.`t1`.`a` = 3) and (`test`.`t1`.`c` > 5)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a = 3 and b = 3 and c < 2 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	15	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`b` = 3) and (`test`.`t1`.`a` = 3) and (`test`.`t1`.`c` < 2)) order by `test`.`t1`.`id`
+explain select * from t1 force index(a) where a = -2 and b = -2 and c < 1 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	15	NULL	1	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`t1` FORCE INDEX (`a`) where ((`test`.`t1`.`b` = -(2)) and (`test`.`t1`.`a` = -(2)) and (`test`.`t1`.`c` < 1)) order by `test`.`t1`.`id`
+drop table t2;
+drop table t1;
+drop table t;
+#
+# Memory leak for multi-range read in function ha_cde::index_read
+#
+CREATE TABLE t1 (i INT);
+INSERT INTO t1 VALUES (10),(11),(12),(13),(14),(15),(16),(17),(18),(19),
+(20),(21),(22),(23),(24),(25),(26),(27),(28),(29),
+(30),(31),(32),(33),(34),(35);
+CREATE TABLE t2(a INT, b INT, c INT, index(b));
+INSERT INTO t2 (a, b, c) SELECT t1.i, t1.i, t1.i FROM t1, t1 x1, t1 x2;
+ANALYZE TABLE t2;
+Table	Op	Msg_type	Msg_text
+test.t2	analyze	status	OK
+SET optimizer_switch = 'index_condition_pushdown=on';
+EXPLAIN SELECT count(b) FROM t2 WHERE b IN (10,20,30,40,50);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	range	b	b	5	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t2`.`b`) AS `count(b)` from `test`.`t2` where (`test`.`t2`.`b` in (10,20,30,40,50))
+SELECT count(b) FROM t2 WHERE b IN (10,20,30,40,50);
+count(b)
+2028
+EXPLAIN SELECT count(a) FROM t2 WHERE b IN (10,20,30,40,50);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	range	b	b	5	NULL	#	#	Using index condition; Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t2`.`a`) AS `count(a)` from `test`.`t2` where (`test`.`t2`.`b` in (10,20,30,40,50))
+SELECT count(a) FROM t2 WHERE b IN (10,20,30,40,50);
+count(a)
+2028
+SELECT count(a) FROM t2 WHERE b IN (10,20,30,40,50) FOR UPDATE;
+count(a)
+2028
+SET optimizer_switch = 'index_condition_pushdown=off';
+EXPLAIN SELECT count(b) FROM t2 WHERE b IN (10,20,30,40,50);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	range	b	b	5	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t2`.`b`) AS `count(b)` from `test`.`t2` where (`test`.`t2`.`b` in (10,20,30,40,50))
+SELECT count(b) FROM t2 WHERE b IN (10,20,30,40,50);
+count(b)
+2028
+EXPLAIN SELECT count(a) FROM t2 WHERE b IN (10,20,30,40,50);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	range	b	b	5	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t2`.`a`) AS `count(a)` from `test`.`t2` where (`test`.`t2`.`b` in (10,20,30,40,50))
+SELECT count(a) FROM t2 WHERE b IN (10,20,30,40,50);
+count(a)
+2028
+SELECT count(a) FROM t2 WHERE b IN (10,20,30,40,50) FOR UPDATE;
+count(a)
+2028
+DROP TABLE t1, t2;
+#
+# Wrong result for ICP + range scan
+#
+CREATE TABLE t1(id INT DEFAULT 99, VAL INT DEFAULT 88, KEY(val DESC)) ENGINE=Dstore;
+INSERT INTO t1(val) VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SET optimizer_switch = 'index_condition_pushdown=on';
+EXPLAIN SELECT * FROM t1 WHERE val <= 11 AND val NOT BETWEEN 5 and 6;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	VAL	VAL	5	NULL	8	100.00	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`VAL` AS `VAL` from `test`.`t1` where ((`test`.`t1`.`VAL` <= 11) and (`test`.`t1`.`VAL` not between 5 and 6))
+SELECT * FROM t1 WHERE val <= 11 AND val NOT BETWEEN 5 and 6;
+id	VAL
+99	10
+99	9
+99	8
+99	7
+99	4
+99	3
+99	2
+99	1
+SET optimizer_switch = 'index_condition_pushdown=off';
+EXPLAIN SELECT * FROM t1 WHERE val <= 11 AND val NOT BETWEEN 5 and 6;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	VAL	VAL	5	NULL	8	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`VAL` AS `VAL` from `test`.`t1` where ((`test`.`t1`.`VAL` <= 11) and (`test`.`t1`.`VAL` not between 5 and 6))
+SELECT * FROM t1 WHERE val <= 11 AND val NOT BETWEEN 5 and 6;
+id	VAL
+99	10
+99	9
+99	8
+99	7
+99	4
+99	3
+99	2
+99	1
+DROP TABLE t1;
+#
+# BUG2025042927532: Wrong result for range scan + rescan of null column
+#
+CREATE TABLE t1(a INT UNSIGNED, b INT DEFAULT 0, KEY (a))ENGINE=Dstore;
+INSERT INTO t1(a) VALUES(0),(5),(8),(10),(11),(13),(14),(16),(38),(50);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+EXPLAIN SELECT * FROM t1 WHERE a < 10 or (a IS NULL);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	5	NULL	3	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` < 10) or (`test`.`t1`.`a` is null))
+SELECT * FROM t1 WHERE a < 10 or (a IS NULL);
+a	b
+0	0
+5	0
+8	0
+DROP TABLE t1;
+#
+# BUG2025030424589: Wrong result for range scan
+#
+CREATE TABLE t(a INT, b INT, KEY(a, b));
+INSERT INTO t(a, b) VALUES
+( 1, 1), ( 2, 1), ( 3, 1), ( 4, 1), ( 5, 1),
+( 6, 1), ( 7, 1), ( 8, 1), ( 9, 1), (10, 1), 
+(11, 1), (12, 1), (13, 1), (14, 1), (15, 1),
+(16, 1), (17, 1), (18, 1), (19, 1), (20, 1);
+INSERT INTO t SELECT a, 2 FROM t WHERE b = 1;
+INSERT INTO t SELECT a, 3 FROM t WHERE b = 1;
+INSERT INTO t SELECT -1, -1 FROM t;
+CREATE TABLE t1(a INT, b INT, KEY(a DESC, b DESC));
+INSERT INTO t1 SELECT * FROM t;
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+EXPLAIN SELECT * FROM t WHERE 5 <= a AND a < 6 ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	5	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where ((5 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 6)) order by `test`.`t`.`a`,`test`.`t`.`b`
+SELECT * FROM t WHERE 5 <= a AND a < 6 ORDER BY a,b;
+a	b
+5	1
+5	2
+5	3
+EXPLAIN SELECT * FROM t WHERE (5 <= a AND a < 6) OR (15 <= a AND a < 16) ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	5	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where (((5 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 6)) or ((15 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 16))) order by `test`.`t`.`a`,`test`.`t`.`b`
+SELECT * FROM t WHERE (5 <= a AND a < 6) OR (15 <= a AND a < 16) ORDER BY a,b;
+a	b
+5	1
+5	2
+5	3
+15	1
+15	2
+15	3
+EXPLAIN FORMAT=TREE SELECT * FROM t WHERE a = 5 AND b <= 3 ORDER BY a,b;
+EXPLAIN
+-> Covering index range scan on t using a over (a = 5 AND NULL < b <= 3)
+
+SELECT * FROM t WHERE a = 5 AND b <= 3 ORDER BY a,b;
+a	b
+5	1
+5	2
+5	3
+EXPLAIN FORMAT=TREE SELECT * FROM t WHERE a = 5 AND b > 2 ORDER BY a,b;
+EXPLAIN
+-> Covering index range scan on t using a over (a = 5 AND 2 < b)
+
+SELECT * FROM t WHERE a = 5 AND b > 2 ORDER BY a,b;
+a	b
+5	3
+EXPLAIN FORMAT=TREE SELECT * FROM t WHERE a = 5 AND b <= 3 ORDER BY a DESC,b DESC;
+EXPLAIN
+-> Covering index range scan on t using a over (a = 5 AND NULL < b <= 3) (reverse)
+
+SELECT * FROM t WHERE a = 5 AND b <= 3 ORDER BY a DESC,b DESC;
+a	b
+5	3
+5	2
+5	1
+EXPLAIN FORMAT=TREE SELECT * FROM t WHERE a = 5 AND b > 2 and b < 4 ORDER BY a,b;
+EXPLAIN
+-> Covering index range scan on t using a over (a = 5 AND 2 < b < 4)
+
+SELECT * FROM t WHERE a = 5 AND b > 2 and b < 4 ORDER BY a,b;
+a	b
+5	3
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE a=5 AND b > 2 ORDER BY a, b;
+EXPLAIN
+-> Covering index range scan on t1 using a over (a = 5 AND b < 2) (reverse)
+
+SELECT * FROM t1 WHERE a=5 AND b > 2 ORDER BY a, b;
+a	b
+5	3
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE a = 5 AND b > 2 and b < 4 ORDER BY a,b;
+EXPLAIN
+-> Covering index range scan on t1 using a over (a = 5 AND 4 < b < 2) (reverse)
+
+SELECT * FROM t1 WHERE a = 5 AND b > 2 and b < 4 ORDER BY a,b;
+a	b
+5	3
+EXPLAIN SELECT * FROM t WHERE 5 <= a AND a < 8 AND b = 1 ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	10	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where ((`test`.`t`.`b` = 1) and (5 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 8)) order by `test`.`t`.`a`
+SELECT * FROM t WHERE 5 <= a AND a < 8 AND b = 1 ORDER BY a,b;
+a	b
+5	1
+6	1
+7	1
+EXPLAIN SELECT * FROM t WHERE (5 <= a AND a < 6 AND b = 1) OR (15 <= a AND a < 16 AND b = 3) ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	10	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where (((`test`.`t`.`b` = 1) and (5 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 6)) or ((`test`.`t`.`b` = 3) and (15 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 16))) order by `test`.`t`.`a`,`test`.`t`.`b`
+SELECT * FROM t WHERE (5 <= a AND a < 6 AND b = 1) OR (15 <= a AND a < 16 AND b = 3) ORDER BY a,b;
+a	b
+5	1
+15	3
+DROP TABLE t,t1;
+CREATE TABLE t (
+event_date date DEFAULT '1990-01-01' NOT NULL,
+type int DEFAULT '0' NOT NULL,
+event_id int DEFAULT '0' NOT NULL,
+PRIMARY KEY (event_date,type,event_id));
+INSERT INTO t VALUES ('1999-07-10',100100,24), ('1999-07-11',100100,25),
+('1999-07-13',100600,0), ('1999-07-13',100600,4), ('1999-07-13',100600,26),
+('1999-07-14',100600,10), ('1999-07-15',100600,16), ('1999-07-15',100800,45),
+('1999-07-15',101000,47), ('1999-07-16',100800,46), ('1999-07-20',100600,5),
+('1999-07-20',100600,27), ('1999-07-21',100600,11), ('1999-07-22',100600,17),
+('1999-07-23',100100,39), ('1999-07-24',100100,39), ('1999-07-24',100500,40),
+('1999-07-25',100100,39), ('1999-07-27',100600,1), ('1999-07-27',100600,6),
+('1999-07-27',100600,28), ('1999-07-28',100600,12), ('1999-07-29',100500,41),
+('1999-07-29',100600,18), ('1999-07-30',100500,41), ('1999-07-31',100500,41),
+('1999-08-01',100700,34), ('1999-08-03',100600,7), ('1999-08-03',100600,29),
+('1999-08-04',100600,13), ('1999-08-05',100500,42), ('1999-08-05',100600,19),
+('1999-08-06',100500,42), ('1999-08-07',100500,42), ('1999-08-08',100500,42),
+('1999-08-10',100600,2), ('1999-08-10',100600,9), ('1999-08-10',100600,30),
+('1999-08-11',100600,14), ('1999-08-12',100600,20), ('1999-08-17',100500,8),
+('1999-08-17',100600,31), ('1999-08-18',100600,15), ('1999-08-19',100600,22),
+('1999-08-24',100600,3), ('1999-08-24',100600,32), ('1999-08-27',100500,43),
+('1999-08-31',100600,33), ('1999-09-17',100100,37), ('1999-09-18',100100,37),
+('1999-09-19',100100,37), ('2000-12-18',100700,38);
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+EXPLAIN SELECT event_date,type,event_id from t WHERE event_date >= "1999-07-01" AND event_date < "1999-07-15" AND (type=100600 OR type=100100) ORDER BY event_date,type,event_id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	PRIMARY	PRIMARY	7	NULL	1	19.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`event_date` AS `event_date`,`test`.`t`.`type` AS `type`,`test`.`t`.`event_id` AS `event_id` from `test`.`t` where ((`test`.`t`.`event_date` >= DATE'1999-07-01') and (`test`.`t`.`event_date` < DATE'1999-07-15') and ((`test`.`t`.`type` = 100600) or (`test`.`t`.`type` = 100100))) order by `test`.`t`.`event_date`,`test`.`t`.`type`,`test`.`t`.`event_id`
+SELECT event_date,type,event_id from t WHERE event_date >= "1999-07-01" AND event_date < "1999-07-15" AND (type=100600 OR type=100100) ORDER BY event_date,type,event_id;
+event_date	type	event_id
+1999-07-10	100100	24
+1999-07-11	100100	25
+1999-07-13	100600	0
+1999-07-13	100600	4
+1999-07-13	100600	26
+1999-07-14	100600	10
+DROP TABLE t;
+CREATE TABLE t(a int, v varchar(50), c char(50), d int, index(v,d), index(c,d));
+INSERT INTO t VALUES(1,'v1','c1',1),(2,'v2','c2',2),(3,repeat('v',50),repeat('c', 50),3),(4,'huawei','taurusdb',4),(5,'alibaba','polardb',5);
+INSERT INTO t SELECT * FROM t;
+INSERT INTO t SELECT * FROM t;
+INSERT INTO t SELECT * FROM t;
+INSERT INTO t SELECT * FROM t;
+INSERT INTO t SELECT * FROM t;
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+EXPLAIN SELECT COUNT(*) FROM t WHERE v >= 'v1' AND v <= 'v2';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	v	v	203	NULL	#	#	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `test`.`t` where ((`test`.`t`.`v` >= 'v1') and (`test`.`t`.`v` <= 'v2'))
+SELECT COUNT(*) FROM t WHERE v >= 'v1' AND v <= 'v2';
+COUNT(*)
+64
+EXPLAIN SELECT COUNT(*) FROM t WHERE c >= 'c1' AND c <= 'c2';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	c	c	201	NULL	#	#	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `test`.`t` where ((`test`.`t`.`c` >= 'c1') and (`test`.`t`.`c` <= 'c2'))
+SELECT COUNT(*) FROM t WHERE c >= 'c1' AND c <= 'c2';
+COUNT(*)
+64
+EXPLAIN SELECT COUNT(*) FROM t WHERE v = 'v1' AND d <= 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	v	v	208	NULL	#	#	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `test`.`t` where ((`test`.`t`.`v` = 'v1') and (`test`.`t`.`d` <= 2))
+SELECT COUNT(*) FROM t WHERE v = 'v1' AND d <= 2;
+COUNT(*)
+32
+EXPLAIN SELECT COUNT(*) FROM t WHERE c = 'c1' AND d <= 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	c	c	206	NULL	#	#	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `test`.`t` where ((`test`.`t`.`c` = 'c1') and (`test`.`t`.`d` <= 2))
+SELECT COUNT(*) FROM t WHERE c = 'c1' AND d <= 2;
+COUNT(*)
+32
+EXPLAIN SELECT count(*) FROM t WHERE v BETWEEN 'v1' AND 'v2' AND d IN (2,3);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	v	v	208	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(*)` from `test`.`t` where ((`test`.`t`.`v` between 'v1' and 'v2') and (`test`.`t`.`d` in (2,3)))
+SELECT count(*) FROM t WHERE v BETWEEN 'v1' AND 'v2' AND d IN (2,3);
+count(*)
+32
+EXPLAIN SELECT count(*) FROM t WHERE c BETWEEN 'c1' AND 'c2' AND d IN (2,3);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	c	c	206	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(*)` from `test`.`t` where ((`test`.`t`.`c` between 'c1' and 'c2') and (`test`.`t`.`d` in (2,3)))
+SELECT count(*) FROM t WHERE c BETWEEN 'c1' AND 'c2' AND d IN (2,3);
+count(*)
+32
+DROP TABLE t;
+#
+# BUG2025052622844: Wrong result for HA_READ_PREFIX_LAST
+#
+CREATE TABLE t (
+a INT,
+b VARCHAR(50),
+c INT,
+UNIQUE KEY i1 (a, b DESC, c)
+);
+INSERT INTO t VALUES(NULL, NULL, NULL);
+INSERT INTO t VALUES(NULL, 'huawei', 1);
+INSERT INTO t VALUES(NULL, 'cloud', 2);
+INSERT INTO t VALUES(NULL, 'database', 3);
+INSERT INTO t VALUES(NULL, 'gaussdb', 4);
+INSERT INTO t VALUES(NULL, 'mysql', 5);
+INSERT INTO t VALUES(NULL, 'dstore', 6);
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+EXPLAIN SELECT * FROM t WHERE NOT a ORDER BY b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ref	i1	i1	5	const	1	100.00	Backward index scan; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` where (`test`.`t`.`a` = 0) order by `test`.`t`.`b`
+EXPLAIN FORMAT=TREE SELECT * FROM t WHERE NOT a ORDER BY b;
+EXPLAIN
+-> Covering index lookup on t using i1 (a=0) (reverse)  (cost=0.35 rows=1)
+
+SELECT * FROM t WHERE NOT a ORDER BY b;
+a	b	c
+DROP TABLE t;
+#
+# BUG2025060417623: Wrong result for backward index scan
+#
+CREATE TABLE t(a INT, b INT, UNIQUE KEY idx_ab(a,b DESC))ENGINE=Dstore;
+INSERT INTO t VALUES(NULL,NULL),(-2,NULL),(-1,NULL),(3,NULL);
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+EXPLAIN SELECT * FROM t FORCE INDEX(idx_ab) WHERE (NOT a) ORDER BY b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ref	idx_ab	idx_ab	5	const	1	100.00	Backward index scan; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` FORCE INDEX (`idx_ab`) where (`test`.`t`.`a` = 0) order by `test`.`t`.`b`
+SELECT * FROM t FORCE INDEX(idx_ab) WHERE (NOT a) ORDER BY b;
+a	b
+EXPLAIN SELECT * FROM t IGNORE INDEX(idx_ab) WHERE (NOT a) ORDER BY b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	4	25.00	Using where; Using pushed condition (`test`.`t`.`a` = 0); Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` IGNORE INDEX (`idx_ab`) where (`test`.`t`.`a` = 0) order by `test`.`t`.`b`
+SELECT * FROM t IGNORE INDEX(idx_ab) WHERE (NOT a) ORDER BY b;
+a	b
+INSERT INTO t VALUES(0,NULL),(0,0);
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+EXPLAIN SELECT * FROM t FORCE INDEX(idx_ab) WHERE (NOT a) ORDER BY b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ref	idx_ab	idx_ab	5	const	1	100.00	Backward index scan; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` FORCE INDEX (`idx_ab`) where (`test`.`t`.`a` = 0) order by `test`.`t`.`b`
+SELECT * FROM t FORCE INDEX(idx_ab) WHERE (NOT a) ORDER BY b;
+a	b
+0	NULL
+0	0
+EXPLAIN SELECT * FROM t IGNORE INDEX(idx_ab) WHERE (NOT a) ORDER BY b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	6	16.67	Using where; Using pushed condition (`test`.`t`.`a` = 0); Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` IGNORE INDEX (`idx_ab`) where (`test`.`t`.`a` = 0) order by `test`.`t`.`b`
+SELECT * FROM t IGNORE INDEX(idx_ab) WHERE (NOT a) ORDER BY b;
+a	b
+0	NULL
+0	0
+DROP TABLE t;
+CREATE TABLE t(a VARCHAR(10), b INT, UNIQUE KEY idx_ab(a,b DESC))ENGINE=Dstore;
+INSERT INTO t VALUES(NULL,NULL),('huawei',NULL),('amazon',NULL),('tecent',NULL);
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+EXPLAIN SELECT * FROM t FORCE INDEX(idx_ab) WHERE a='' ORDER BY b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ref	idx_ab	idx_ab	43	const	1	100.00	Backward index scan; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` FORCE INDEX (`idx_ab`) where (`test`.`t`.`a` = '') order by `test`.`t`.`b`
+SELECT * FROM t FORCE INDEX(idx_ab) WHERE a='' ORDER BY b;
+a	b
+EXPLAIN SELECT * FROM t IGNORE INDEX(idx_ab) WHERE a='' ORDER BY b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	4	25.00	Using where; Using pushed condition (`test`.`t`.`a` = ''); Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` IGNORE INDEX (`idx_ab`) where (`test`.`t`.`a` = '') order by `test`.`t`.`b`
+SELECT * FROM t IGNORE INDEX(idx_ab) WHERE a='' ORDER BY b;
+a	b
+EXPLAIN SELECT * FROM t FORCE INDEX(idx_ab) WHERE a like 'h%' ORDER BY b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	idx_ab	idx_ab	43	NULL	1	100.00	Using where; Using index; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` FORCE INDEX (`idx_ab`) where (`test`.`t`.`a` like 'h%') order by `test`.`t`.`b`
+SELECT * FROM t FORCE INDEX(idx_ab) WHERE a like 'h%' ORDER BY b;
+a	b
+huawei	NULL
+EXPLAIN SELECT * FROM t IGNORE INDEX(idx_ab) WHERE a like 'h%' ORDER BY b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	4	25.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` IGNORE INDEX (`idx_ab`) where (`test`.`t`.`a` like 'h%') order by `test`.`t`.`b`
+SELECT * FROM t IGNORE INDEX(idx_ab) WHERE a like 'h%' ORDER BY b;
+a	b
+huawei	NULL
+DROP TABLE t;
+SET optimizer_switch=@optimizer_switch_saved;
+SET global dstore_use_histogram_auto_update=@dstore_use_histogram_auto_update_saved;

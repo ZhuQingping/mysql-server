@@ -1,0 +1,248 @@
+--echo #  ------------------------------------------
+--echo # Test update_sql_filter interface
+--echo # dbms_sqlfilter.update_sql_filter(
+--echo #     item_id bigint,
+--echo #     type ENUM('SELECT', 'UPDATE', 'DELETE', 'INSERT'),
+--echo #     max_concurrency INT UNSIGNED,
+--echo #     key_str VARCHAR(1024),
+--echo #     node_id VARCHAR(64));
+--echo #  ------------------------------------------
+
+--source ../include/sqlfilter_prepare.inc
+
+
+connect(conn_rdsAdmin, 127.0.0.1, rdsAdmin);
+
+--echo #----------- case1:  basic functions of update_sql_filter -------
+call dbms_sqlfilter.add_sql_filter('SELECT', 10, "select~from~t", "");
+--let $item_id = `select item_id from mysql.rds_sql_filter_rules where type = 'SELECT' and max_concurrency = 10 and key_str = 'select~from~t'`
+
+##DEBUG : update record is null
+set session debug = '+d,inject_record_is_null';
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+--error ER_SQLFILTER_INVALID
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'SELECT', 20, "SELECT~from~t", "abc34567890123dfe7890123456789012345");
+select node_id from mysql.rds_sql_filter_rules;
+set session debug = '-d,inject_record_is_null';
+
+## update type: should fail
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+--error ER_SQLFILTER_INVALID
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'UPDATE', 10, "select~from~t", "");
+select type from mysql.rds_sql_filter_rules;
+
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+--error ER_SQLFILTER_INVALID
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'INVALID', 10, "select~from~t", "");
+select type from mysql.rds_sql_filter_rules;
+
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+--error ER_SQLFILTER_INVALID
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'REPLACE', 10, "select~from~t", "");
+
+## update max_concur
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'SELECT', 20, "select~from~t", "");
+select max_concurrency from mysql.rds_sql_filter_rules;
+
+### negative value
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+--error ER_SQLFILTER_INVALID
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'SELECT', -1, "select~from~t", "");
+select max_concurrency from mysql.rds_sql_filter_rules;
+
+### out of max boundary
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+--error ER_SQLFILTER_INVALID
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'SELECT', 1000000001, "select~from~t", "");
+select max_concurrency from mysql.rds_sql_filter_rules;
+
+## update key_str
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'SELECT', 20, "SELECT~from~t", "");
+select key_str from mysql.rds_sql_filter_rules;
+
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+--error ER_SQLFILTER_INVALID
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'SELECT', 20, "SELECT~from~t~", "");
+select key_str from mysql.rds_sql_filter_rules;
+
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+--error ER_SQLFILTER_INVALID
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'SELECT', 20, "", "");
+select key_str from mysql.rds_sql_filter_rules;
+
+--let $long_key_num = `select concat("SELECT~", repeat("a~", 127), "a")`
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+--error ER_SQLFILTER_INVALID
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'SELECT', 20, "$long_key_num", "");
+select key_str from mysql.rds_sql_filter_rules;
+
+## update key_str
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+--error ER_SQLFILTER_INVALID
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'update', 20, "update~from~t", "");
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+--error ER_SQLFILTER_INVALID
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'insert', 20, "insert~from~t", "");
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+--error ER_SQLFILTER_INVALID
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'delete', 20, "delete~from~t", "");
+
+### equal 1024
+--let $key_str_1024 = "select~xxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库ddddddddddxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddxxxxxxxxxxx数xxdddddxxxxxxxxx"
+--disable_query_log
+eval select char_length($key_str_1024) as key_str_1024_charlen;
+eval select length($key_str_1024) as key_str_1024_len;
+--enable_query_log
+
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'SELECT', 20, $key_str_1024, "");
+select char_length(key_str) from mysql.rds_sql_filter_rules;
+
+--let $long_key_str = `SELECT CONCAT((select $key_str_1024), 'a')`
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+--error ER_SQLFILTER_INVALID
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'SELECT', 20, "$long_key_str", "");
+select char_length(key_str) from mysql.rds_sql_filter_rules;
+
+## update node_id
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'SELECT', 20, "SELECT~from~t", "abc34567890123dfe7890123456789012345");
+select node_id from mysql.rds_sql_filter_rules;
+
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+--error ER_SQLFILTER_INVALID
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'SELECT', 20, "SELECT~from~t", "abc34567890123dfe7890123456789012345more");
+select node_id from mysql.rds_sql_filter_rules;
+
+call delete_one_sql_filter_rule(0);
+
+SET GLOBAL rds_sqlfilter_control=ON;
+
+--echo #----------- case2:  node_id of update_sql_filter -------
+--let $rds_node_id = "012345678901234567890123456789012345"
+--let $another_node_id="012345678901234567890123456789abcdfg"
+eval CALL dbms_sqlfilter.add_sql_filter('SELECT', 0, "SELECT~FROM~t1~WHERE~iddd", $rds_node_id);
+eval CALL dbms_sqlfilter.add_sql_filter('UPDATE', 0, "UPDATE~t1", $rds_node_id);
+eval CALL dbms_sqlfilter.add_sql_filter('DELETE', 0, "DELETE~FROM~t1", $rds_node_id);
+eval SET GLOBAL rds_node_id = $another_node_id;
+
+CREATE TABLE t1 (iddd INT, name VARCHAR(20));
+INSERT INTO t1 VALUES (1,"a"),(2,"b"),(4,"d");
+CREATE TABLE t2 (idd int, name VARCHAR(20));
+INSERT INTO t2 VALUES (1,"a"),(2,"b");
+
+SELECT * FROM t1 WHERE iddd > 1;
+UPDATE t1 SET name="a" WHERE iddd=1;
+DELETE FROM t1 WHERE iddd > 5;
+
+eval SET GLOBAL rds_node_id = $rds_node_id;
+--error ER_QUERY_INTERRUPTED
+SELECT * FROM t1 WHERE iddd > 1;
+--error ER_QUERY_INTERRUPTED
+UPDATE t1 SET name="a" WHERE iddd=1;
+--error ER_QUERY_INTERRUPTED
+DELETE FROM t1 WHERE iddd > 5;
+
+## update node_id to ""
+--let $item_id1 = `select item_id from mysql.rds_sql_filter_rules where key_str = 'SELECT~FROM~t1~WHERE~iddd'`
+--let $item_id2 = `select item_id from mysql.rds_sql_filter_rules where key_str = 'UPDATE~t1'`
+--let $item_id3 = `select item_id from mysql.rds_sql_filter_rules where key_str = 'DELETE~FROM~t1'`
+
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+eval CALL dbms_sqlfilter.update_sql_filter($item_id1, 'SELECT', 0, "SELECT~FROM~t1~WHERE~iddd", "");
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+eval CALL dbms_sqlfilter.update_sql_filter($item_id2, 'UPDATE', 0, "UPDATE~t1", "");
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+eval CALL dbms_sqlfilter.update_sql_filter($item_id3, 'DELETE', 0, "DELETE~FROM~t1", "");
+
+--error ER_QUERY_INTERRUPTED
+SELECT * FROM t1 WHERE iddd > 1;
+--error ER_QUERY_INTERRUPTED
+UPDATE t1 SET name="a" WHERE iddd=1;
+--error ER_QUERY_INTERRUPTED
+DELETE FROM t1 WHERE iddd > 5;
+
+## sql_filter.rules contains different node_id
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+eval CALL dbms_sqlfilter.update_sql_filter($item_id1, 'SELECT', 0, "SELECT~FROM~t1~WHERE~iddd", $another_node_id);
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+eval CALL dbms_sqlfilter.update_sql_filter($item_id2, 'UPDATE', 0, "UPDATE~t1", $another_node_id);
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+eval CALL dbms_sqlfilter.update_sql_filter($item_id3, 'DELETE', 0, "DELETE~FROM~t1", $another_node_id);
+eval CALL dbms_sqlfilter.add_sql_filter('SELECT', 0, "SELECT~FROM~t1~WHERE~iddd", $rds_node_id);
+eval CALL dbms_sqlfilter.add_sql_filter('UPDATE', 0, "UPDATE~t1", $rds_node_id);
+eval CALL dbms_sqlfilter.add_sql_filter('DELETE', 0, "DELETE~FROM~t1", $rds_node_id);
+--replace_column 1 #
+select * from mysql.rds_sql_filter_rules;
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--error ER_QUERY_INTERRUPTED
+SELECT * FROM t1 WHERE iddd > 1;
+--error ER_QUERY_INTERRUPTED
+UPDATE t1 SET name="a" WHERE iddd=1;
+--error ER_QUERY_INTERRUPTED
+DELETE FROM t1 WHERE iddd > 5;
+eval SET GLOBAL rds_node_id = $another_node_id;
+--error ER_QUERY_INTERRUPTED
+SELECT * FROM t1 WHERE iddd > 1;
+--error ER_QUERY_INTERRUPTED
+UPDATE t1 SET name="a" WHERE iddd=1;
+--error ER_QUERY_INTERRUPTED
+DELETE FROM t1 WHERE iddd > 5;
+
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+call delete_one_sql_filter_rule(3);
+call delete_one_sql_filter_rule(3);
+call delete_one_sql_filter_rule(3);
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+
+--echo #----------- case3: rds_node_id is "" and drop single ----
+SET GLOBAL rds_node_id="";
+CREATE TABLE t3(a INT NOT NULL);
+INSERT INTO t3 values(1);
+CALL dbms_sqlfilter.add_sql_filter('SELECT', 0, "SELECT~FROM~t3", "012345678901234567890123456789012345");
+CALL dbms_sqlfilter.add_sql_filter('SELECT', 1, "SELECT~FROM~t4", "012345678901234567890123456789012345");
+--error ER_QUERY_INTERRUPTED
+SELECT * FROM t3;
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules where max_concurrency = 0;
+call dbms_sqlfilter.flush_sql_filter();
+connection default;
+SELECT * FROM t3;
+call delete_one_sql_filter_rule(0);
+
+--echo #----------- case4: if key_str updated, CUR_CONC/BLOCK_QUERY_NUM will be reset ----
+CALL dbms_sqlfilter.add_sql_filter('SELECT', 0, "SELECT~FROM~t3", "");
+--let $item_id = `select item_id from mysql.rds_sql_filter_rules where key_str = 'SELECT~FROM~t3'`
+
+--error ER_QUERY_INTERRUPTED
+SELECT * FROM t3;
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+# change max_concurrency/node_id, statistics not be reset
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'SELECT', 1, "SELECT~FROM~t3", "012345678901234567890123456789012345");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+# key_str changed, BLOCK_QUERY_NUM is reset to 0
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'SELECT', 1, "SELECT~FROM~t4", "");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+call delete_one_sql_filter_rule(0);
+
+## cleanup
+call dbms_sqlfilter.show_sql_filter();
+SET GLOBAL rds_sqlfilter_control=default;
+SET GLOBAL rds_node_id = default;
+drop table t1, t2, t3;
+--source ../include/sqlfilter_cleanup.inc

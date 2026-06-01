@@ -1,0 +1,68 @@
+--source suite/local_backup/include/have_obs_env.inc
+
+--source suite/local_backup/include/prepare_for_backup.inc
+
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("OBS error occur when get object meta");
+call mtr.add_suppression("OBS get object metadata fail");
+
+CREATE DATABASE db1;
+USE db1;
+CREATE TABLE t1(a int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+
+# full backup.
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+
+--let $status_timeout= 9000
+--let $status_var= Rds_local_backup_full_backup_is_running
+--let $status_var_value= OFF
+--source include/wait_for_status_var.inc
+
+SHOW STATUS LIKE '%local_backup_full_backup_is_running%';
+
+# Test for resumable download for backup_download.
+--disable_result_log
+--disable_query_log
+
+--let $MYSQL_BASEDIR = `SELECT @@basedir`
+--let $prefix_key = `SELECT @@rds_full_local_backup_path`
+--let $bd = $MYSQL_BASEDIR/bin/backup_download
+--exec $bd -p $prefix_key/ -c $MYSQLTEST_VARDIR/backup_download.config -t $MYSQLTEST_VARDIR/download_trace.json -w 4
+
+--exec sed -i 's#"status": 1#"status": 0#g' $MYSQLTEST_VARDIR/download_trace.json
+--exec sed -i 's#"downloaded_length".*#"downloaded_length": 12,#' $MYSQLTEST_VARDIR/download_trace.json
+--exec truncate -s 12 $MYSQLTEST_VARDIR/obs/meta/*
+
+--enable_query_log
+--enable_result_log
+
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/download_trace.json
+--let SEARCH_PATTERN = "status": 0
+--source include/search_pattern.inc
+
+--source suite/local_backup/include/download_from_obs.inc
+
+INSERT INTO t1 VALUES(2);
+SELECT * FROM t1 order by a;
+
+--echo # Shut server down.
+--let $shutdown_server_timeout = 300
+--source include/shutdown_mysqld.inc
+
+# Restore with script.
+--source suite/local_backup/include/restore_with_script.inc
+
+--echo # Restart the server.
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+USE db1;
+SELECT * FROM t1 order by a;
+
+# Drop database db1.
+DROP DATABASE db1;
+
+--source suite/local_backup/include/clean_backup.inc

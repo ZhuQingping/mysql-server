@@ -1,0 +1,242 @@
+From 2b7bdc4ebe3bfcf4c214328707c8766b0985f03a Mon Sep 17 00:00:00 2001
+From: wangjin <wangjin53@contributor>
+
+Date: Tue, 23 Dec 2025 20:13:42 +0800
+Subject: [PATCH] fix PQ review comments
+
+Address the unresolved review comments left over after merging the PQ feature.
+---
+ sql/item.cc                         |  3 --
+ sql/item.h                          | 51 +++++++++++++----------------
+ sql/parallel_query/pq_clone.cc      |  4 +--
+ sql/parallel_query/pq_clone_item.cc | 35 ++++++++++++++++----
+ sql/sql_tmp_table.cc                |  3 ++
+ sql/sql_union.cc                    |  2 +-
+ 6 files changed, 56 insertions(+), 42 deletions(-)
+
+diff --git a/sql/item.cc b/sql/item.cc
+index 3fe40b62176..09b737a1a70 100644
+--- a/sql/item.cc
++++ b/sql/item.cc
+@@ -139,7 +139,6 @@ Item::Item()
+       orig_name(),
+       max_length(0),
+       marker(MARKER_NONE),
+-      saved_marker(MARKER_NONE),
+       cmp_context(INVALID_RESULT),
+       is_parser_item(false),
+       is_expensive_cache(-1),
+@@ -167,7 +166,6 @@ Item::Item(THD *thd, const Item *item)
+       orig_name(item->orig_name),
+       max_length(item->max_length),
+       marker(MARKER_NONE),
+-      saved_marker(MARKER_NONE),
+       cmp_context(item->cmp_context),
+       is_parser_item(false),
+       is_expensive_cache(-1),
+@@ -196,7 +194,6 @@ Item::Item(const POS &)
+       orig_name(),
+       max_length(0),
+       marker(MARKER_NONE),
+-      saved_marker(MARKER_NONE),
+       cmp_context(INVALID_RESULT),
+       is_parser_item(true),
+       is_expensive_cache(-1),
+diff --git a/sql/item.h b/sql/item.h
+index 928c1286a26..c003c39b25b 100644
+--- a/sql/item.h
++++ b/sql/item.h
+@@ -2741,13 +2741,6 @@ class Item : public Parse_tree_node {
+   */
+   virtual bool mark_field_in_map(uchar *arg [[maybe_unused]]) { return false; }
+ 
+-  template <typename T>
+-  inline void swap_var_value(T &v1, T &v2) {
+-    T vv = v1;
+-    v1 = v2;
+-    v2 = vv;
+-  }
+-
+  protected:
+   /**
+     Helper function for mark_field_in_map(uchar *arg).
+@@ -3525,31 +3518,31 @@ class Item : public Parse_tree_node {
+     end - as a following phase may change it.
+   */
+   item_marker marker;
+-  item_marker saved_marker;
+-
+-  /**
+-    After the Query_expression::prepare function invokes
+-    Table_ref::setup_materialized_derived_tmp_table to create the materialize
+-    temporary table for the derived table, it calls prepare_query_term to
+-    recalculate and update the m_nullable attribute of Items involved in set
+-    operations. To ensure that PQ cloning creates temporary tables based on the
+-    original m_nullable values (keeping the null_fields count consistent with
+-    the temporary table corresponding to orig). It is necessary to save and
+-    restore the m_nullable.
+-  */
+-  bool saved_nullable{false};
+-  bool has_saved_derived_info{false};
++  using pq_derived_info_t = struct {
++    item_marker marker{MARKER_NONE};
++    /**
++      After the Query_expression::prepare function invokes
++      Table_ref::setup_materialized_derived_tmp_table to create the materialize
++      temporary table for the derived table, it calls prepare_query_term to
++      recalculate and update the m_nullable attribute of Items involved in set
++      operations. To ensure that PQ cloning creates temporary tables based on
++      the original m_nullable values (keeping the null_fields count consistent
++      with the temporary table corresponding to orig). It is necessary to save
++      and restore the m_nullable.
++    */
++    bool nullable{false};
++  };
++  std::optional<pq_derived_info_t> m_saved_pq_derived_info;
+ 
+-  inline void save_derived_info() {
+-    saved_marker = marker;
+-    saved_nullable = m_nullable;
+-    has_saved_derived_info = true;
++  inline void save_pq_derived_info() {
++    m_saved_pq_derived_info = {marker, m_nullable};
+   }
+ 
+-  inline void swap_derived_info() {
+-    if (!has_saved_derived_info) return;
+-    swap_var_value<item_marker>(marker, saved_marker);
+-    swap_var_value<bool>(m_nullable, saved_nullable);
++  inline void swap_pq_derived_info() {
++    if (m_saved_pq_derived_info.has_value()) {
++      std::swap(marker, m_saved_pq_derived_info->marker);
++      std::swap(m_nullable, m_saved_pq_derived_info->nullable);
++    }
+   }
+ 
+   Item_result cmp_context;  ///< Comparison context
+diff --git a/sql/parallel_query/pq_clone.cc b/sql/parallel_query/pq_clone.cc
+index 27b016f67fb..6df25b108b2 100644
+--- a/sql/parallel_query/pq_clone.cc
++++ b/sql/parallel_query/pq_clone.cc
+@@ -1131,7 +1131,7 @@ static Query_block *pq_dup_select(THD *thd, Query_block *top_orig) {
+         mem_root_deque<Item *> visible_fields(thd->pq_mem_root);
+         for (Item *item : VisibleFields(*derived->get_unit_column_types())) {
+           visible_fields.push_back(item);
+-          item->swap_derived_info();
++          item->swap_pq_derived_info();
+         }
+         TABLE *table = create_tmp_table(
+             thd, &tmp_table_param, visible_fields, nullptr, is_distinct, true,
+@@ -1172,7 +1172,7 @@ static Query_block *pq_dup_select(THD *thd, Query_block *top_orig) {
+         assert(tbl_list->table->file->ht == table->file->ht);
+ 
+         for (auto item : visible_fields) {
+-          item->swap_derived_info();
++          item->swap_pq_derived_info();
+         }
+ 
+         auto model = tbl_list->table->s;
+diff --git a/sql/parallel_query/pq_clone_item.cc b/sql/parallel_query/pq_clone_item.cc
+index 4a36e0df996..bd499fe1f88 100644
+--- a/sql/parallel_query/pq_clone_item.cc
++++ b/sql/parallel_query/pq_clone_item.cc
+@@ -23,6 +23,27 @@
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
+ 
++/** @file sql/parallel_query/pq_clone_item.cc
++
++    @brief
++    This file defines the implementation of T::pq_clone for Item and its
++    subclasses, along with its helper function T::pq_copy_from. To standardize
++    the implementation logic of T::pq_clone and T::pq_copy_from, we provide
++    corresponding template functions.
++
++    The purpose of T::pq_clone is to create a new object of type T based on an
++    existing original T instance. After constructing the new T object,
++    T::pq_clone invokes the new object's pq_copy_from method to copy and assign
++    all necessary member fields.
++
++    The reason we need to define T::pq_copy_from separately, rather than
++    implementing its logic directly inside pq_clone, is that pq_clone must not
++    only copy the member variables of the current type T, but also those of T’s
++    base class, and the base class of that base class, and so on. Therefore, we
++    rely on the virtual function Item::pq_copy_from to ensure that all member
++    variables associated with type T are properly copied.
++*/
++
+ #include "sql/item.h"
+ #include "sql/item_cmpfunc.h"
+ #include "sql/item_geofunc.h"
+@@ -96,9 +117,9 @@ inline bool copy_self_attributes(THD *thd, Query_block *select, Item *clone,
+  * @brief Template function used to implement T::pq_clone.
+  *
+  * This function provides a generic cloning workflow for type T, including type,
+- * checking clone object creation, and attribute copying. The caller injects a
+- * custom item_creator via the PQ_CLONE_DEF macro to define how the clone object
+- * is constructed and initialized.
++ * checking clone object creation, and attribute copying. The
++ * caller(T::pq_clone) injects a custom item_creator to define how the clone
++ * object is constructed and initialized.
+  *
+  * @tparam T           The class type implementing pq_clone.
+  * @tparam ItemCreator A callable (typically a lambda) that creates and
+@@ -131,8 +152,8 @@ Item *pq_clone_template(THD *thd, Query_block *select, T *self,
+  *
+  * This function provides a generic implementation for the pq_copy_from method
+  * of type D, supporting inheritance from base type B.
+- * The item_copier is injected via the PQ_COPY_FROM_DEF macro and encapsulates
+- * the logic for copying data from the original item to the current clone.
++ * The caller (D::pq_copy_from) injects the item_copier, which encapsulates the
++ * logic for copying data from the original item to the current clone.
+  *
+  * @tparam D           The derived class implementing pq_copy_from.
+  * @tparam B           The base class from which pq_copy_from is inherited.
+@@ -165,7 +186,7 @@ bool pq_copy_from_template(D *self, THD *thd, Query_block *select, Item *item,
+  *
+  * This function provides a generic implementation for rebuilding a SUM function
+  * item of type T.
+- * The sum_func_creator is injected via the PQ_REBUILD_SUM_DEF macro and
++ * The caller (T::pq_rebuild_sum_func) injects the sum_func_creator, which
+  * encapsulates the logic for constructing and initializing the new SUM function
+  * item.
+  *
+@@ -204,7 +225,7 @@ T *rebuild_sum_func_template(THD *thd, Query_block *select, T *self,
+  * This function provides a generic cloning mechanism for function-type items
+  * (i.e., subclasses of Item_func).
+  *
+- * The creator is injected via the COPY_FUNC_ITEM macro and is responsible for
++ * The creator is injected via the caller(T::pq_clone) and is responsible for
+  * constructing the clone using the copied arguments. This allows the clone
+  * logic to be customized per subclass while reusing the common cloning
+  * workflow.
+diff --git a/sql/sql_tmp_table.cc b/sql/sql_tmp_table.cc
+index f5118d581a1..25a8d8888b4 100644
+--- a/sql/sql_tmp_table.cc
++++ b/sql/sql_tmp_table.cc
+@@ -894,6 +894,9 @@ void Temp_table_param::pq_copy(Temp_table_param *orig) {
+   @param rows_limit
+   @param table_alias          possible name of the temporary table that can
+                               be used for name resolving; can be "".
++  @param force_disk_table     Enforce using the disk storage engine
++  @param parallel_exec        Create temporary tables for data sending/receiving
++                              between the leader and workers in parallel.
+ 
+   @remark mysql_create_view() checks that views have less than
+           MAX_FIELDS columns.
+diff --git a/sql/sql_union.cc b/sql/sql_union.cc
+index 5cc5ae2b629..b99948670e4 100644
+--- a/sql/sql_union.cc
++++ b/sql/sql_union.cc
+@@ -176,7 +176,7 @@ bool Query_result_union::create_result_table(
+   for (Item *item : VisibleFields(column_types)) {
+     visible_fields.push_back(item);
+     // save derived info for PQ
+-    item->save_derived_info();
++    item->save_pq_derived_info();
+   }
+ 
+   assert(table == nullptr);
+-- 
+2.23.0
+

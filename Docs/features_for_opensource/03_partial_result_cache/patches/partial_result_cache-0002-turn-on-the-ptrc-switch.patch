@@ -1,0 +1,102 @@
+From 1600c3ddd8dbf4605be839062afcc1149e622686 Mon Sep 17 00:00:00 2001
+From: wuwenbin <wuwenbin19@contributor>
+
+Date: Tue, 26 Aug 2025 19:23:56 +0800
+Subject: [PATCH] Turn on the PTRC switch
+
+---
+ mysql-test/mysql-test-run.pl                                | 3 ---
+ mysql-test/r/mysqld--help-notwin.result                     | 2 +-
+ mysql-test/r/persisted_variables_bugs.result                | 6 +++---
+ .../suite/dstore_main/r/mysqld--help-notwin-dstore.result   | 2 +-
+ sql/sys_vars.cc                                             | 3 ++-
+ 5 files changed, 7 insertions(+), 9 deletions(-)
+
+diff --git a/mysql-test/mysql-test-run.pl b/mysql-test/mysql-test-run.pl
+index c6ebe915601..67537731189 100755
+--- a/mysql-test/mysql-test-run.pl
++++ b/mysql-test/mysql-test-run.pl
+@@ -1999,9 +1999,6 @@ sub command_line_setup {
+     push(@opt_extra_mysqld_opt, "--default_tmp_storage_engine=InnoDB");
+     push(@opt_extra_mysqld_opt, "--storage_engine_mode=ONLY_INNODB");
+   }
+-  # Temporarily enabled, and after a round of testing is completed, 
+-  # partial_result_cache will be enabled by default in the kernel.
+-  push(@opt_extra_mysqld_opt, "--optimizer_switch=partial_result_cache=on");
+ 
+   # Find out default storage engine being used(if any)
+   foreach my $arg (@opt_extra_mysqld_opt) {
+diff --git a/mysql-test/r/mysqld--help-notwin.result b/mysql-test/r/mysqld--help-notwin.result
+index 3c6d8f069eb..f67bc211175 100644
+--- a/mysql-test/r/mysqld--help-notwin.result
++++ b/mysql-test/r/mysqld--help-notwin.result
+@@ -2462,7 +2462,7 @@ old-style-user-limits FALSE
+ optimizer-max-subgraph-pairs 100000
+ optimizer-prune-level 1
+ optimizer-search-depth 62
+-optimizer-switch index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on,offset_pushdown=on,nlj_distinct_optimize=on
++optimizer-switch index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on,offset_pushdown=on,nlj_distinct_optimize=on,partial_result_cache=on
+ optimizer-trace 
+ optimizer-trace-features greedy_search=on,range_optimizer=on,dynamic_range=on,repeated_subselect=on
+ optimizer-trace-limit 1
+diff --git a/mysql-test/r/persisted_variables_bugs.result b/mysql-test/r/persisted_variables_bugs.result
+index 10dcfe44bcf..83e35c48953 100644
+--- a/mysql-test/r/persisted_variables_bugs.result
++++ b/mysql-test/r/persisted_variables_bugs.result
+@@ -195,7 +195,7 @@ VARIABLE_NAME	VARIABLE_VALUE
+ binlog_cache_size	32768
+ collation_database	utf8mb4_0900_ai_ci
+ enforce_gtid_consistency	0
+-optimizer_switch	index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on,offset_pushdown=on,nlj_distinct_optimize=on,partial_result_cache=off
++optimizer_switch	index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on,offset_pushdown=on,nlj_distinct_optimize=on,partial_result_cache=on
+ optimizer_trace_offset	-1
+ sql_mode	ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION
+ # Restart server
+@@ -211,7 +211,7 @@ SELECT @@global.optimizer_trace_offset;
+ -1
+ SELECT @@global.optimizer_switch;
+ @@global.optimizer_switch
+-index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on,offset_pushdown=on,nlj_distinct_optimize=on,partial_result_cache=off
++index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on,offset_pushdown=on,nlj_distinct_optimize=on,partial_result_cache=on
+ SELECT @@global.enforce_gtid_consistency;
+ @@global.enforce_gtid_consistency
+ OFF
+@@ -223,7 +223,7 @@ VARIABLE_NAME	VARIABLE_VALUE
+ binlog_cache_size	32768
+ collation_database	utf8mb4_0900_ai_ci
+ enforce_gtid_consistency	0
+-optimizer_switch	index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on,offset_pushdown=on,nlj_distinct_optimize=on,partial_result_cache=off
++optimizer_switch	index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on,offset_pushdown=on,nlj_distinct_optimize=on,partial_result_cache=on
+ optimizer_trace_offset	-1
+ sql_mode	ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION
+ # Cleanup
+diff --git a/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result b/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
+index 3c6d8f069eb..f67bc211175 100644
+--- a/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
++++ b/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
+@@ -2462,7 +2462,7 @@ old-style-user-limits FALSE
+ optimizer-max-subgraph-pairs 100000
+ optimizer-prune-level 1
+ optimizer-search-depth 62
+-optimizer-switch index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on,offset_pushdown=on,nlj_distinct_optimize=on
++optimizer-switch index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,dstore_use_histogram_range_estimation=on,simplify_count_not_null=on,offset_pushdown=on,nlj_distinct_optimize=on,partial_result_cache=on
+ optimizer-trace 
+ optimizer-trace-features greedy_search=on,range_optimizer=on,dynamic_range=on,repeated_subselect=on
+ optimizer-trace-limit 1
+diff --git a/sql/sys_vars.cc b/sql/sys_vars.cc
+index c8ad19a3eeb..c32fe57824a 100644
+--- a/sql/sys_vars.cc
++++ b/sql/sys_vars.cc
+@@ -216,7 +216,8 @@ static constexpr const unsigned long long OPTIMIZER_SWITCH_DEFAULT{
+     OPTIMIZER_SWITCH_DERIVED_CONDITION_PUSHDOWN |
+     OPTIMIZER_SWITCH_DSTORE_USE_HISTOGRAM_RANGE_ESTIMATION |
+     OPTIMIZER_SWITCH_SIMPLIFY_COUNT_NOT_NULL |
+-    OPTIMIZER_SWITCH_OFFSET_PUSHDOWN | OPTIMIZER_SWITCH_NLJ_DISTINCT_OPTIMIZE};
++    OPTIMIZER_SWITCH_OFFSET_PUSHDOWN | OPTIMIZER_SWITCH_NLJ_DISTINCT_OPTIMIZE |
++    OPTIMIZER_SWITCH_PARTIAL_RESULT_CACHE};
+ 
+ static constexpr const unsigned long MYSQLD_NET_RETRY_COUNT{10};
+ 
+-- 
+2.23.0
+

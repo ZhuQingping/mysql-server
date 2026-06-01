@@ -1,0 +1,18 @@
+# This test aims at ensure that we can use single thread to do page read when
+# thread resource is insufficient when doing parallel scan.
+
+--source include/have_debug.inc
+--source include/not_have_dstore.inc
+
+call mtr.add_suppression("Resource not available to create threads for parallel scan. Falling back to single thread mode.");
+create table t1 (c1 int, c2 int, primary key(c1));
+insert into t1 values (1,2);
+insert into t1 values (2,2);
+insert into t1 values (3,2);
+insert into t1 values (4,3);
+set debug = "+d, simulate_no_resources";
+
+Alter table t1 add index idx_1(c2);
+
+Show create table t1;
+DROP TABLE t1;

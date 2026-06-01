@@ -1,0 +1,154 @@
+set default_storage_engine=innodb;
+create table t1 (a int primary key, b int);
+insert into t1 values (100,100);
+create table t2 (a int, key(a) );
+insert into t2 values (101),(102),(103),(104);
+analyze table t1,t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+explain format=tree select * from t1, t2 where t1.a=100 and t2.a>=t1.b-20 and t2.a<t1.b;
+EXPLAIN
+-> Covering index range scan on t2 using a over (80 <= a < 100)  (cost=0.46 rows=1)
+
+select * from t1, t2 where t1.a=100 and t2.a>=t1.b-20 and t2.a<t1.b;
+a	b	a
+explain format=tree select * from (t1, t1 as t3) left join t2 on t2.a>=t1.b-20 and t2.a<t1.b where t1.a=100;
+EXPLAIN
+-> Left hash join (no condition)  (cost=0.92 rows=1)
+    -> Table scan on t3  (cost=0.35 rows=1)
+    -> Hash
+        -> Covering index range scan on t2 using a over (80 <= a < 100)  (cost=0.46 rows=1)
+
+drop table t1,t2;
+CREATE TABLE t0 (c0 INT NOT NULL, c1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t1 (a INT NOT NULL, b INT NOT NULL);
+#
+# BUG2025102514874: Debug assertion failure in function Item_typecast_unsigned::val_int
+#
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON CAST(t0.c0 AS UNSIGNED) WHERE (NOT (t0.c1));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+Warnings:
+Note	1003	/* select#1 */ select NULL AS `c0`,`test`.`t1`.`a` AS `a` from `test`.`t0` left join `test`.`t1` on((0 <> cast(NULL as unsigned))) where multiple equal(0, NULL)
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON CAST(t0.c0 AS UNSIGNED) WHERE (NOT (t0.c1));
+c0	a
+#
+# BUG2025102416592: Debug assertion failure in function Item_typecast_signed::val_int
+#
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON CAST(t0.c0 AS SIGNED) WHERE (NOT (t0.c1));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+Warnings:
+Note	1003	/* select#1 */ select NULL AS `c0`,`test`.`t1`.`a` AS `a` from `test`.`t0` left join `test`.`t1` on((0 <> cast(NULL as signed))) where multiple equal(0, NULL)
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON CAST(t0.c0 AS SIGNED) WHERE (NOT (t0.c1));
+c0	a
+#
+# Debug assertion failure in function Item_func_concat::val_str
+#
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON CONCAT(t0.c0,'') WHERE (NOT (t0.c1));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+Warnings:
+Note	1003	/* select#1 */ select NULL AS `c0`,`test`.`t1`.`a` AS `a` from `test`.`t0` left join `test`.`t1` on((0 <> concat(NULL,''))) where multiple equal(0, NULL)
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON CONCAT(t0.c0,'') WHERE (NOT (t0.c1));
+c0	a
+DROP TABLE t0,t1;
+#
+# BUG2025102514878: Debug assertion failure in function Item::null_return_str
+#
+CREATE TABLE t0 (c0 INT PRIMARY KEY, c1 INT);
+CREATE ALGORITHM=TEMPTABLE VIEW v0(c0) AS select c0 from t0 where false;
+EXPLAIN SELECT v0.c0, t0.c0 FROM v0 LEFT JOIN t0 ON (BINARY(CASE 0 WHEN 1 THEN v0.c0 ELSE v0.c0 END));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+2	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	Impossible WHERE
+Warnings:
+Warning	1287	'BINARY expr' is deprecated and will be removed in a future release. Please use CAST instead
+Note	1003	/* select#1 */ select NULL AS `c0`,`test`.`t0`.`c0` AS `c0` from `test`.`v0` left join `test`.`t0` on((0 <> cast((case 0 when 1 then NULL else NULL end) as char charset binary)))
+SELECT v0.c0 FROM v0 LEFT JOIN t0 ON (BINARY(CASE 0 WHEN 1 THEN v0.c0 ELSE v0.c0 END));
+c0
+Warnings:
+Warning	1287	'BINARY expr' is deprecated and will be removed in a future release. Please use CAST instead
+DROP VIEW v0;
+DROP TABLE t0;
+#
+# Debug assertion failure in function Item_func_json_schema_valid::val_bool
+#
+CREATE TABLE t0 (c0 INT NOT NULL, c1 INT NOT NULL PRIMARY KEY, c2 JSON NOT NULL);
+CREATE TABLE t1 (a INT NOT NULL, b INT NOT NULL);
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON JSON_SCHEMA_VALID('{"type":"object"}',t0.c2) WHERE (NOT (t0.c1));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+Warnings:
+Note	1003	/* select#1 */ select NULL AS `c0`,`test`.`t1`.`a` AS `a` from `test`.`t0` left join `test`.`t1` on(json_schema_valid('{"type":"object"}',NULL)) where multiple equal(0, NULL)
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON JSON_SCHEMA_VALID('{"type":"object"}',t0.c2) WHERE (NOT (t0.c1));
+c0	a
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON JSON_VALUE(t0.c2, '$' RETURNING UNSIGNED) WHERE (NOT (t0.c1));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+Warnings:
+Note	1003	/* select#1 */ select NULL AS `c0`,`test`.`t1`.`a` AS `a` from `test`.`t0` left join `test`.`t1` on((0 <> json_value(NULL, '$' returning unsigned))) where multiple equal(0, NULL)
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON JSON_VALUE(t0.c2, '$' RETURNING UNSIGNED) WHERE (NOT (t0.c1));
+c0	a
+DROP TABLE t0,t1;
+CREATE TABLE t0 (c0 INT NOT NULL, c1 INT NOT NULL PRIMARY KEY, g GEOMETRY NOT NULL);
+CREATE TABLE t1 (a INT NOT NULL, b INT NOT NULL);
+#
+# Debug assertion failure in function Item_func_st_issimple::val_int
+#
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_ISSIMPLE(g) WHERE (NOT (t0.c1));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+Warnings:
+Note	1003	/* select#1 */ select NULL AS `c0`,`test`.`t1`.`a` AS `a` from `test`.`t0` left join `test`.`t1` on(st_issimple(NULL)) where multiple equal(0, NULL)
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_ISSIMPLE(g) WHERE (NOT (t0.c1));
+c0	a
+#
+# Debug assertion failure in function Item_func_isvalid::val_int
+#
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_ISVALID(g) WHERE (NOT (t0.c1));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+Warnings:
+Note	1003	/* select#1 */ select NULL AS `c0`,`test`.`t1`.`a` AS `a` from `test`.`t0` left join `test`.`t1` on(st_isvalid(NULL)) where multiple equal(0, NULL)
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_ISVALID(g) WHERE (NOT (t0.c1));
+c0	a
+#
+# Debug assertion failure in function Item_func_coordinate_observer::val_real
+#
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_LATITUDE(g) WHERE (NOT (t0.c1));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+Warnings:
+Note	1003	/* select#1 */ select NULL AS `c0`,`test`.`t1`.`a` AS `a` from `test`.`t0` left join `test`.`t1` on((0 <> st_latitude(NULL))) where multiple equal(0, NULL)
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_LATITUDE(g) WHERE (NOT (t0.c1));
+c0	a
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_LONGITUDE(g) WHERE (NOT (t0.c1));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+Warnings:
+Note	1003	/* select#1 */ select NULL AS `c0`,`test`.`t1`.`a` AS `a` from `test`.`t0` left join `test`.`t1` on((0 <> st_longitude(NULL))) where multiple equal(0, NULL)
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_LONGITUDE(g) WHERE (NOT (t0.c1));
+c0	a
+#
+# Debug assertion failure in function Item_func_st_srid_observer::val_int
+#
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_SRID(g) WHERE (NOT (t0.c1));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+Warnings:
+Note	1003	/* select#1 */ select NULL AS `c0`,`test`.`t1`.`a` AS `a` from `test`.`t0` left join `test`.`t1` on((0 <> st_srid(NULL))) where multiple equal(0, NULL)
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_SRID(g) WHERE (NOT (t0.c1));
+c0	a
+#
+# Debug assertion failure in function Item_func_st_distance_sphere::val_real
+#
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_DISTANCE_SPHERE(g,1,42) WHERE (NOT (t0.c1));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+Warnings:
+Note	1003	/* select#1 */ select NULL AS `c0`,`test`.`t1`.`a` AS `a` from `test`.`t0` left join `test`.`t1` on((0 <> st_distance_sphere(NULL,1,42))) where multiple equal(0, NULL)
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_DISTANCE_SPHERE(g,1,42) WHERE (NOT (t0.c1));
+c0	a
+DROP TABLE t0,t1;

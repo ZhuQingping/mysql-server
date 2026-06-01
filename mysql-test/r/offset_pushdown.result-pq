@@ -1,0 +1,1363 @@
+# Initialise
+# In EXPLAIN, "Using offset pushdown " indicates whether the feature is activated for a given query
+# optimizer switch offset_pushdown flag defaults to true
+# system variable rds_empty_redundant_check_in_range_scan defaults to true
+# table 1
+CREATE TABLE t1 (a INT , b INT , INDEX(b));
+INSERT INTO t1 VALUES (1, 2), (2, 3), (3, 3), (4, 3);
+analyze TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SET rds_empty_redundant_check_in_range_scan=false;
+# Shows that offset pushdown  works with table scan, later in
+# this file we will show it for index scan, range scan and lookup.
+explain format=tree SELECT * FROM t1 LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=***)
+            -> Parallel table scan on t1  (cost=*** rows=***)
+
+# non-covering index - icp is not disabled
+# ICP is used and removes condition FROM server layer
+# OFFSET pushdow  is therefore active even opt rds_empty_redundant_check_in_range_scan is false.
+explain  SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 2) limit 1,100
+# Also visible in other EXPLAIN formats:
+explain format=tree SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=0.75)
+            -> Parallel index range scan on t1 using b over (2 < b), with index condition: (t1.b > 2)  (cost=*** rows=0.75)
+
+explain format=json SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
+EXPLAIN
+{
+  "query_block": {
+    "select_id": 1,
+    "cost_info": {
+      "query_cost": "1.61"
+    },
+    "parallel_execute": {
+      "divided_table": "t1",
+      "parallel_degree": 4,
+      "table": {
+        "table_name": "t1",
+        "access_type": "range",
+        "possible_keys": [
+          "b"
+        ],
+        "key": "b",
+        "used_key_parts": [
+          "b"
+        ],
+        "key_length": "5",
+        "rows_examined_per_scan": 3,
+        "rows_produced_per_join": 3,
+        "filtered": "100.00",
+        "index_condition": true,
+        "cost_info": {
+          "read_cost": "1.31",
+          "eval_cost": "0.30",
+          "prefix_cost": "1.61",
+          "data_read_per_join": "48"
+        },
+        "used_columns": [
+          "a",
+          "b"
+        ]
+      }
+    }
+  }
+}
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 2) limit 1,100
+# The existing MySQL implementation of ICP is that it is off when the chosen index is covering.
+# covering index => no icp => condition remains at SQL layer => no offset pushdown  without opt rds_empty_redundant_check_in_range_scan
+explain  SELECT b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 2) limit 1,100
+# covering index => no icp => but option rds_empty_redundant_check_in_range_scan active, removes the condition => offset pushdown  happens
+SET rds_empty_redundant_check_in_range_scan = true;
+explain  SELECT b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 2) limit 1,100
+# ORDER BY (asc): condition removed, ORDER BY desc, condition removed; offset pushdown  activated either way
+explain  format=tree SELECT b FROM t1 WHERE b > 2 ORDER BY b DESC LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=0.75)
+            -> Parallel covering index range scan on t1 using b over (2 < b) (reverse)  (cost=*** rows=0.75)
+
+explain  format=tree SELECT b FROM t1 WHERE b > 2 ORDER BY b ASC LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=0.75)
+            -> Parallel covering index range scan on t1 using b over (2 < b)  (cost=*** rows=0.75)
+
+# works whether b OP cond or cond OP b
+explain format=tree SELECT a,b FROM t1 WHERE 2 < b;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+    -> Parallel index range scan on t1 using b over (2 < b)  (cost=*** rows=0.75)
+
+CREATE TABLE t3 (a INT , b INT , INDEX(a,b));
+INSERT INTO t3 VALUES (1, 2),(2, 3),(3, 3),(4, 3);
+analyze TABLE t3;
+Table	Op	Msg_type	Msg_text
+test.t3	analyze	status	OK
+explain format=tree SELECT a,b FROM t3 WHERE a = 2 AND b < 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t3  (cost=*** rows=***)
+    -> Parallel covering index range scan on t3 using a over (a = 2 AND NULL < b < 2)  (cost=*** rows=0.25)
+
+explain format=tree SELECT a,b FROM t3 WHERE 2 = a AND b < 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t3  (cost=*** rows=***)
+    -> Parallel covering index range scan on t3 using a over (a = 2 AND NULL < b < 2)  (cost=*** rows=0.25)
+
+explain format=tree SELECT a,b FROM t3 WHERE 2 = a AND 2 < b;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t3  (cost=*** rows=***)
+    -> Parallel covering index range scan on t3 using a over (a = 2 AND 2 < b)  (cost=*** rows=0.25)
+
+# t3 is re-used to show that a BETWEEN clause can also be emptied by rds_empty_redundant_check_in_range_scan
+# thereby allowing offset pushdown
+SET rds_empty_redundant_check_in_range_scan = false;
+explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND 3;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t3  (cost=*** rows=***)
+    -> Filter: (t3.a between 2 and 3)  (cost=*** rows=0.5)
+        -> Parallel covering index range scan on t3 using a over (2 <= a <= 3)  (cost=*** rows=0.5)
+
+explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND 3 LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t3  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=0.5)
+            -> Filter: (t3.a between 2 and 3)  (cost=*** rows=0.5)
+                -> Parallel covering index range scan on t3 using a over (2 <= a <= 3)  (cost=*** rows=0.5)
+
+CREATE TABLE comp_1a AS SELECT * FROM t3 WHERE a BETWEEN 2 AND 3;
+CREATE TABLE comp_1b AS SELECT * FROM t3 WHERE a BETWEEN 2 AND 3 LIMIT 100 OFFSET 1;
+SET rds_empty_redundant_check_in_range_scan = true;
+explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND 3;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t3  (cost=*** rows=***)
+    -> Parallel covering index range scan on t3 using a over (2 <= a <= 3)  (cost=*** rows=0.5)
+
+explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND 3 LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t3  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=0.5)
+            -> Parallel covering index range scan on t3 using a over (2 <= a <= 3)  (cost=*** rows=0.5)
+
+CREATE TABLE comp_2a AS SELECT * FROM t3 WHERE a BETWEEN 2 AND 3;
+CREATE TABLE comp_2b AS SELECT * FROM t3 WHERE a BETWEEN 2 AND 3 LIMIT 100 OFFSET 1;
+checksum TABLE comp_1a;
+Table	Checksum
+test.comp_1a	3442709342
+checksum TABLE comp_2a;
+Table	Checksum
+test.comp_2a	3442709342
+checksum TABLE comp_1b;
+Table	Checksum
+test.comp_1b	1080478050
+checksum TABLE comp_2b;
+Table	Checksum
+test.comp_2b	1080478050
+DROP TABLE comp_1a, comp_2a, comp_1b, comp_2b;
+# BETWEEN and type conversion
+explain format=tree SELECT * FROM t3 WHERE a BETWEEN "b" AND 5;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t3  (cost=*** rows=***)
+    -> Filter: (t3.a between 'b' and 5)  (cost=*** rows=***)
+        -> Parallel index scan on t3 using a  (cost=*** rows=***)
+
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+SELECT * FROM t3 WHERE a BETWEEN "b" AND 5;
+a	b
+1	2
+2	3
+3	3
+4	3
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+explain format=tree SELECT * FROM t3 WHERE a BETWEEN "2" AND "5";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t3  (cost=*** rows=***)
+    -> Parallel covering index range scan on t3 using a over (2 <= a <= 5)  (cost=*** rows=0.75)
+
+explain format=tree SELECT * FROM t3 WHERE a BETWEEN "2" AND 5;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t3  (cost=*** rows=***)
+    -> Parallel covering index range scan on t3 using a over (2 <= a <= 5)  (cost=*** rows=0.75)
+
+explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND "5";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t3  (cost=*** rows=***)
+    -> Parallel covering index range scan on t3 using a over (2 <= a <= 5)  (cost=*** rows=0.75)
+
+explain format=tree SELECT * FROM t3 WHERE a BETWEEN "2.0" AND "5";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t3  (cost=*** rows=***)
+    -> Parallel covering index range scan on t3 using a over (2 <= a <= 5)  (cost=*** rows=0.75)
+
+explain format=tree SELECT * FROM t3 WHERE a BETWEEN "2" AND "5.0";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t3  (cost=*** rows=***)
+    -> Parallel covering index range scan on t3 using a over (2 <= a <= 5)  (cost=*** rows=0.75)
+
+# Empty IS NULL in WHERE clause
+explain format=tree  SELECT * FROM  t3 WHERE a IS NULL AND b > 5;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t3  (cost=*** rows=***)
+    -> Parallel covering index range scan on t3 using a over (a = NULL AND 5 < b)  (cost=*** rows=0.25)
+
+explain format=tree  SELECT * FROM  t3 WHERE a IS NULL AND b > 5 LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t3  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=0.25)
+            -> Parallel covering index range scan on t3 using a over (a = NULL AND 5 < b)  (cost=*** rows=0.25)
+
+# reset default
+SET rds_empty_redundant_check_in_range_scan = false;
+# Offset pushdown is done for for "index lookup" too, and redundant
+# conditions are removed even if empty_etc is false.
+explain format=tree SELECT * FROM  t3 WHERE a = 12 LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t3  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=0.25)
+            -> Parallel covering index lookup on t3 using a (a=12)  (cost=*** rows=0.25)
+
+explain format=tree SELECT * FROM  t3 WHERE a = 12 AND b = 27 LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t3  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=0.25)
+            -> Parallel covering index lookup on t3 using a (a=12, b=27)  (cost=*** rows=0.25)
+
+DROP TABLE t3;
+# show the results are the same with or without the optimization
+SET optimizer_switch = 'offset_pushdown=on';
+explain SELECT a,b FROM t1 WHERE b>2 LIMIT 100 OFFSET 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 2) limit 1,100
+CREATE TABLE comp_1 AS SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
+SET optimizer_switch = 'offset_pushdown=off';
+explain SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 2) limit 1,100
+CREATE TABLE comp_2 AS SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
+# checksum for comp_1 and comp_2 should give the same output:
+checksum TABLE comp_1;
+Table	Checksum
+test.comp_1	2332723677
+checksum TABLE comp_2;
+Table	Checksum
+test.comp_2	2332723677
+DROP TABLE comp_1,comp_2;
+#reset default
+SET optimizer_switch = 'offset_pushdown=on';
+SET rds_empty_redundant_check_in_range_scan = false;
+# Use with stored procedure
+CREATE PROCEDURE p1(p1 integer, p2 integer)
+begin
+SELECT * FROM t1  WHERE b>2 LIMIT p1 OFFSET p2;
+end //
+CREATE PROCEDURE p2(p1 integer, p2 integer)
+begin
+explain SELECT * FROM t1  WHERE b > 2 LIMIT p1 OFFSET p2;
+end //
+call p2(100,1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using offset pushdown; Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 2) limit p2@1,p1@0
+call p1(100,1);
+a	b
+3	3
+4	3
+DROP PROCEDURE if EXISTS p1;
+DROP PROCEDURE if EXISTS p2;
+# SQL_CALC_FOUND_ROWS disables optimization
+explain SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 2) limit 1,100
+explain SELECT sql_calc_found_rows a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using index condition
+Warnings:
+Warning	1287	SQL_CALC_FOUND_ROWS is deprecated and will be removed in a future release. Consider using two separate queries instead.
+Note	1003	/* select#1 */ select sql_calc_found_rows `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 2) limit 1,100
+SELECT sql_calc_found_rows a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
+a	b
+3	3
+4	3
+Warnings:
+Warning	1287	SQL_CALC_FOUND_ROWS is deprecated and will be removed in a future release. Consider using two separate queries instead.
+SELECT found_rows();
+found_rows()
+3
+Warnings:
+Warning	1287	FOUND_ROWS() is deprecated and will be removed in a future release. Consider using COUNT(*) instead.
+# HAVING does, too
+SELECT b FROM t1 HAVING b = 3;
+b
+3
+3
+3
+explain SELECT b FROM t1 HAVING b = 3 LIMIT 100 OFFSET 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	b	5	NULL	4	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` having (`test`.`t1`.`b` = 3) limit 1,100
+SELECT b FROM t1 HAVING b = 3 LIMIT 100 OFFSET 1;
+b
+3
+3
+# Offset pushdown supports merged derived tables
+SET big_tables = 1;
+# use InnoDB if we materialize
+explain format=tree SELECT  * FROM  (SELECT * FROM t1) d  LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=***)
+            -> Parallel table scan on t1  (cost=*** rows=***)
+
+SELECT  * FROM  (SELECT * FROM t1) d  LIMIT 100 OFFSET 1;
+a	b
+2	3
+3	3
+4	3
+# Offset pushdown doesn't support materialized derived tables
+explain format=tree SELECT /*+ no_merge() */ * FROM  (SELECT * FROM t1) d  LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on d  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=***)
+            -> Parallel table scan on d  (cost=*** rows=***)
+                -> Materialize  (cost=*** rows=***)
+                    -> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+                        -> Parallel table scan on t1  (cost=*** rows=***)
+
+SELECT /*+ no_merge() */ * FROM  (SELECT * FROM t1) d  LIMIT 100 OFFSET 1;
+a	b
+2	3
+3	3
+4	3
+# even if an index is used
+SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3;
+a	b
+2	3
+3	3
+4	3
+explain format=tree SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 1/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on d  (cost=*** rows=***)
+        -> Limit: 2 row(s)  (cost=*** rows=***)
+            -> Parallel index lookup on d using <auto_key0> (b=3)  (cost=*** rows=***)
+                -> Materialize  (cost=*** rows=***)
+                    -> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+                        -> Parallel table scan on t1  (cost=*** rows=***)
+
+SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 0;
+a	b
+2	3
+SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 1;
+a	b
+3	3
+SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 2;
+a	b
+4	3
+SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 3;
+a	b
+SET big_tables = default;
+# Offset pushdown in a correlated subquery which is executed multiple times:
+# check that each result is ok
+explain format=tree SELECT (SELECT b+0*t0.b FROM t1 ORDER BY b LIMIT 1 OFFSET 2) FROM t1 AS t0;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t0  (cost=*** rows=***)
+    -> Parallel index scan on t0 using b  (cost=*** rows=***)
+-> Select #2 (subquery in projection; dependent)
+    -> Result cache : cache keys(t0.b)
+        -> Limit/Offset: 1/2 row(s)  (cost=*** rows=***)
+            -> Index scan on t1 using b  (cost=*** rows=***)
+
+Warnings:
+Note	1276	Field or reference 'test.t0.b' of SELECT #2 was resolved in SELECT #1
+SELECT (SELECT b+0*t0.b FROM t1 ORDER BY b LIMIT 1 OFFSET 2) FROM t1 AS t0;
+(SELECT b+0*t0.b FROM t1 ORDER BY b LIMIT 1 OFFSET 2)
+3
+3
+3
+3
+# prepared statements:
+# check that nothing that is reused is changed
+prepare stmt1 FROM 'SELECT * FROM t1 where b < 4 limit 100 OFFSET 1';
+execute stmt1;
+a	b
+2	3
+3	3
+4	3
+execute stmt1;
+a	b
+2	3
+3	3
+4	3
+execute stmt1;
+a	b
+2	3
+3	3
+4	3
+deallocate prepare stmt1;
+DROP TABLE t1;
+# test
+CREATE TABLE t2(a INT , b INT , INDEX(b));
+INSERT INTO t2 VALUES (1, 2), (2, 3), (3, 3), (4, 3),(5,6),(6,7);
+analyze TABLE t2;
+Table	Op	Msg_type	Msg_text
+test.t2	analyze	status	OK
+# With UNION ALL
+# without overlap
+(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 0) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 0) LIMIT 100 OFFSET 0;
+a	b
+5	6
+6	7
+1	2
+(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 0) LIMIT 100 OFFSET 0;
+a	b
+6	7
+1	2
+(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 0) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 0;
+a	b
+5	6
+6	7
+(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 0;
+a	b
+6	7
+(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 0) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 0) LIMIT 100 OFFSET 1;
+a	b
+6	7
+1	2
+(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 0) LIMIT 100 OFFSET 1;
+a	b
+1	2
+(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 0) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
+a	b
+6	7
+# outer OFFSET does not activate offset pushdown
+# inner OFFSET activates offset pushdown
+(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
+a	b
+explain format=tree (SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Append  (cost=*** rows=***)
+        -> Stream results  (cost=*** rows=***)
+            -> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+                -> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+                    -> Limit: 101 row(s)  (cost=*** rows=0.5)
+                        -> Parallel index range scan on t2 using b over (4 < b), with index condition: (t2.b > 4)  (cost=*** rows=0.5)
+        -> Stream results  (cost=*** rows=***)
+            -> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+                -> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+                    -> Limit: 101 row(s)  (cost=*** rows=0.25)
+                        -> Parallel index range scan on t2 using b over (NULL < b < 3), with index condition: (t2.b < 3)  (cost=*** rows=0.25)
+
+with overlap
+(SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 0) UNION ALL (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 0) LIMIT 100 OFFSET 0;
+a	b
+1	2
+2	3
+3	3
+4	3
+5	6
+1	2
+2	3
+3	3
+4	3
+(SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 0;
+a	b
+2	3
+3	3
+4	3
+5	6
+2	3
+3	3
+4	3
+(SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
+a	b
+3	3
+4	3
+5	6
+2	3
+3	3
+4	3
+explain format=tree (SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Append  (cost=*** rows=***)
+        -> Stream results  (cost=*** rows=***)
+            -> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+                -> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+                    -> Limit: 101 row(s)  (cost=*** rows=1.25)
+                        -> Parallel index range scan on t2 using b over (NULL < b < 7), with index condition: (t2.b < 7)  (cost=*** rows=1.25)
+        -> Stream results  (cost=*** rows=***)
+            -> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+                -> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+                    -> Limit: 101 row(s)  (cost=*** rows=***)
+                        -> Parallel index range scan on t2 using b over (NULL < b < 4), with index condition: (t2.b < 4)  (cost=*** rows=***)
+
+# With UNION
+# Only test with overlap
+(SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 0) UNION (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 0) LIMIT 100 OFFSET 0;
+a	b
+1	2
+2	3
+3	3
+4	3
+5	6
+(SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 0;
+a	b
+2	3
+3	3
+4	3
+5	6
+(SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
+a	b
+3	3
+4	3
+5	6
+# Same behavior as UNION ALL:
+# outer OFFSET does not activate offset pushdown
+# inner OFFSET activates offset pushdown
+explain format=tree (SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Table scan on <union temporary>  (cost=*** rows=***)
+        -> Union materialize with deduplication  (cost=*** rows=***)
+            -> Limit table size: 101 unique row(s)
+                -> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+                    -> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+                        -> Limit: 101 row(s)  (cost=*** rows=1.25)
+                            -> Parallel index range scan on t2 using b over (NULL < b < 7), with index condition: (t2.b < 7)  (cost=*** rows=1.25)
+            -> Limit table size: 101 unique row(s)
+                -> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+                    -> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+                        -> Limit: 101 row(s)  (cost=*** rows=***)
+                            -> Parallel index range scan on t2 using b over (NULL < b < 4), with index condition: (t2.b < 4)  (cost=*** rows=***)
+
+HA_POS_ERROR has to disable offset pushdown  optimisation although the query otherwise satisfies the condition for said optimisation:
+SET optimizer_switch = 'offset_pushdown=off';
+SELECT * FROM t2 WHERE b > 2 LIMIT 18446744073709551615 OFFSET 1;
+a	b
+3	3
+4	3
+5	6
+6	7
+explain format=tree SELECT * FROM t2  WHERE b > 2 LIMIT 18446744073709551615 OFFSET 1;
+EXPLAIN
+-> Offset: 1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+        -> Parallel index range scan on t2 using b over (2 < b), with index condition: (t2.b > 2)  (cost=*** rows=1.25)
+
+SET optimizer_switch = 'offset_pushdown=on';
+SELECT * FROM t2 LIMIT 18446744073709551615 OFFSET 1;
+a	b
+2	3
+3	3
+4	3
+5	6
+6	7
+explain format=tree SELECT * FROM t2  WHERE b > 2 LIMIT 18446744073709551615 OFFSET 1;
+EXPLAIN
+-> Offset: 1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+        -> Parallel index range scan on t2 using b over (2 < b), with index condition: (t2.b > 2)  (cost=*** rows=1.25)
+
+# Fewer calls from sql-layer to handler when the optimization is on:
+SET optimizer_switch = 'offset_pushdown=off';
+flush status;
+SELECT * FROM t2 WHERE b > 2 LIMIT 100 OFFSET 4;
+a	b
+6	7
+show status LIKE 'handler_read%';
+Variable_name	Value
+Handler_read_first	0
+Handler_read_key	1
+Handler_read_last	0
+Handler_read_next	0
+Handler_read_prev	0
+Handler_read_rnd	0
+Handler_read_rnd_next	0
+SET optimizer_switch = 'offset_pushdown=on';
+flush status;
+SELECT * FROM t2 WHERE b > 2 LIMIT 100 OFFSET 4;
+a	b
+6	7
+show status LIKE 'handler_read%';
+Variable_name	Value
+Handler_read_first	0
+Handler_read_key	1
+Handler_read_last	0
+Handler_read_next	0
+Handler_read_prev	0
+Handler_read_rnd	0
+Handler_read_rnd_next	0
+DROP TABLE t2;
+# offset pushdown  with primary key  - feature activated only with rds_empty_redundant_check_in_range_scan
+# which removes the unnecessary SQL layer check of the WHERE clause
+CREATE TABLE test_pk
+(a INT NOT NULL, b  INT NOT NULL, PRIMARY KEY (a));
+INSERT INTO test_pk VALUES (1,0),(2,1),(3,2),(4,3);
+analyze TABLE test_pk;
+Table	Op	Msg_type	Msg_text
+test.test_pk	analyze	status	OK
+SET rds_empty_redundant_check_in_range_scan = false;
+explain  SELECT * FROM test_pk WHERE a > 2 ORDER BY a LIMIT 100 OFFSET 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, test.test_pk)
+1	SIMPLE	test_pk	NULL	range	PRIMARY	PRIMARY	4	NULL	2	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`test_pk`.`a` AS `a`,`test`.`test_pk`.`b` AS `b` from `test`.`test_pk` where (`test`.`test_pk`.`a` > 2) order by `test`.`test_pk`.`a` limit 1,100
+SET rds_empty_redundant_check_in_range_scan = true;
+explain  SELECT * FROM test_pk WHERE a > 2 ORDER BY a LIMIT 100 OFFSET 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, test.test_pk)
+1	SIMPLE	test_pk	NULL	range	PRIMARY	PRIMARY	4	NULL	2	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`test_pk`.`a` AS `a`,`test`.`test_pk`.`b` AS `b` from `test`.`test_pk` where (`test`.`test_pk`.`a` > 2) order by `test`.`test_pk`.`a` limit 1,100
+# Query with only constant tables, makes sure changes to EXPLAIN code don't crash
+# (no pushdown needed):
+explain format=tree SELECT * FROM test_pk WHERE a = 2 LIMIT 100;
+EXPLAIN
+-> Limit: 100 row(s)  (cost=*** rows=***)
+    -> Rows fetched before execution  (cost=*** rows=***)
+
+DROP TABLE test_pk;
+# Empty redundant condition in index range scan: check different data types
+# redundant check removal  extended to real numbers (DOUBLE)
+CREATE TABLE t6(a DOUBLE, b DOUBLE, c DOUBLE , INDEX(a,b,c));
+INSERT INTO t6 VALUES (1,2,6), (2,3,7), (3,3,8), (4,3,12);
+analyze TABLE t6;
+Table	Op	Msg_type	Msg_text
+test.t6	analyze	status	OK
+SET rds_empty_redundant_check_in_range_scan = false;
+explain format=tree SELECT * FROM t6 WHERE a > 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t6  (cost=*** rows=***)
+    -> Filter: (t6.a > 2)  (cost=*** rows=0.5)
+        -> Parallel covering index range scan on t6 using a over (2 < a)  (cost=*** rows=0.5)
+
+explain format=tree SELECT * FROM t6 WHERE a = 2 AND b < 5 AND b > 1;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t6  (cost=*** rows=***)
+    -> Filter: ((t6.a = 2) and (t6.b < 5) and (t6.b > 1))  (cost=*** rows=0.25)
+        -> Parallel covering index range scan on t6 using a over (a = 2 AND 1 < b < 5)  (cost=*** rows=0.25)
+
+SET rds_empty_redundant_check_in_range_scan = true;
+explain format=tree SELECT * FROM t6 WHERE a > 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t6  (cost=*** rows=***)
+    -> Parallel covering index range scan on t6 using a over (2 < a)  (cost=*** rows=0.5)
+
+explain format=tree SELECT * FROM t6 WHERE a = 2 AND b < 5 AND b > 1;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t6  (cost=*** rows=***)
+    -> Parallel covering index range scan on t6 using a over (a = 2 AND 1 < b < 5)  (cost=*** rows=0.25)
+
+DROP TABLE t6;
+# redundant check removal extended to DECIMAL
+CREATE TABLE t6(a DECIMAL, b DECIMAL, c DECIMAL , INDEX(a,b,c));
+INSERT INTO t6 VALUES (1,2,6), (2,3,7), (3,3,8), (4,3,12);
+analyze TABLE t6;
+Table	Op	Msg_type	Msg_text
+test.t6	analyze	status	OK
+SET rds_empty_redundant_check_in_range_scan = false;
+explain format=tree SELECT * FROM t6 WHERE a > 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t6  (cost=*** rows=***)
+    -> Filter: (t6.a > 2)  (cost=*** rows=0.5)
+        -> Parallel covering index range scan on t6 using a over (2 < a)  (cost=*** rows=0.5)
+
+explain format=tree SELECT * FROM t6 WHERE a = 2 AND b < 5 AND b > 1;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t6  (cost=*** rows=***)
+    -> Filter: ((t6.a = 2) and (t6.b < 5) and (t6.b > 1))  (cost=*** rows=0.25)
+        -> Parallel covering index range scan on t6 using a over (a = 2 AND 1 < b < 5)  (cost=*** rows=0.25)
+
+SET rds_empty_redundant_check_in_range_scan = true;
+explain format=tree SELECT * FROM t6 WHERE a > 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t6  (cost=*** rows=***)
+    -> Parallel covering index range scan on t6 using a over (2 < a)  (cost=*** rows=0.5)
+
+explain format=tree SELECT * FROM t6 WHERE a = 2 AND b < 5 AND b > 1;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t6  (cost=*** rows=***)
+    -> Parallel covering index range scan on t6 using a over (a = 2 AND 1 < b < 5)  (cost=*** rows=0.25)
+
+DROP TABLE t6;
+# redundant check removal extended to String
+CREATE TABLE people(zipcode CHAR(10),lastname CHAR(10), firstname CHAR(10),address CHAR(10), INDEX (zipcode, lastname, firstname));
+analyze TABLE people;
+Table	Op	Msg_type	Msg_text
+test.people	analyze	status	OK
+SET rds_empty_redundant_check_in_range_scan = false;
+explain format=tree  SELECT * FROM people WHERE zipcode > '95054';
+EXPLAIN
+-> Gather: 4 workers, parallel scan on people  (cost=*** rows=***)
+    -> Parallel index range scan on people using zipcode over ('95054' < zipcode), with index condition: (people.zipcode > '95054')  (cost=*** rows=0.25)
+
+SET rds_empty_redundant_check_in_range_scan = true;
+explain format=tree  SELECT * FROM people WHERE zipcode > '95054';
+EXPLAIN
+-> Gather: 4 workers, parallel scan on people  (cost=*** rows=***)
+    -> Parallel index range scan on people using zipcode over ('95054' < zipcode)  (cost=*** rows=0.25)
+
+DROP TABLE people;
+# Test skip scan
+CREATE TABLE t1 (f1 INT NOT NULL, f2 INT NOT NULL, PRIMARY KEY(f1, f2));
+INSERT INTO t1 VALUES
+(1,1), (1,2), (1,3), (1,4), (1,5),
+(2,1), (2,2), (2,3), (2,4), (2,5);
+INSERT INTO t1 SELECT f1, f2 + 5 FROM t1;
+INSERT INTO t1 SELECT f1, f2 + 10 FROM t1;
+INSERT INTO t1 SELECT f1, f2 + 20 FROM t1;
+INSERT INTO t1 SELECT f1, f2 + 40 FROM t1;
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+# first test without LIMIT OFFSET
+SET rds_empty_redundant_check_in_range_scan = false;
+EXPLAIN SELECT f1, f2 FROM t1 WHERE f2 > 40;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	8	NULL	53	100.00	Using where; Using index for skip scan
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`f1` AS `f1`,`test`.`t1`.`f2` AS `f2` from `test`.`t1` where (`test`.`t1`.`f2` > 40)
+SET rds_empty_redundant_check_in_range_scan = true;
+EXPLAIN SELECT f1, f2 FROM t1 WHERE f2 > 40;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	8	NULL	53	100.00	Using where; Using index for skip scan
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`f1` AS `f1`,`test`.`t1`.`f2` AS `f2` from `test`.`t1` where (`test`.`t1`.`f2` > 40)
+#redundant conditions in skip scans can be removed
+# test with LIMIT OFFSET
+SET rds_empty_redundant_check_in_range_scan = true;
+EXPLAIN SELECT f1, f2 FROM t1 WHERE f2 > 40 LIMIT 100 OFFSET 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	8	NULL	53	100.00	Using where; Using index for skip scan
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`f1` AS `f1`,`test`.`t1`.`f2` AS `f2` from `test`.`t1` where (`test`.`t1`.`f2` > 40) limit 2,100
+#  but skip scan cannot be used together with offset pushdown
+DROP TABLE if EXISTS t1;
+CREATE TABLE jemp (
+c JSON,
+g INT GENERATED ALWAYS AS (c->"$.id"),
+INDEX i (g)
+);
+INSERT INTO jemp (c) VALUES
+('{"id": "1", "name": "Fred"}'), ('{"id": "2", "name": "Wilma"}'),
+('{"id": "3", "name": "Barney"}'), ('{"id": "4", "name": "Betty"}');
+analyze TABLE jemp;
+Table	Op	Msg_type	Msg_text
+test.jemp	analyze	status	OK
+# without optimization
+SET rds_empty_redundant_check_in_range_scan = false;
+SELECT c->>"$.name" AS name
+FROM jemp WHERE g > 2;
+name
+Barney
+Betty
+EXPLAIN SELECT c->>"$.name" AS name
+FROM jemp WHERE g > 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	jemp	NULL	range	i	i	5	NULL	2	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select json_unquote(json_extract(`test`.`jemp`.`c`,'$.name')) AS `name` from `test`.`jemp` where (`test`.`jemp`.`g` > 2)
+# with optimization
+SET rds_empty_redundant_check_in_range_scan = true;
+SELECT c->>"$.name" AS name
+FROM jemp WHERE g > 2;
+name
+Barney
+Betty
+EXPLAIN SELECT c->>"$.name" AS name
+FROM jemp WHERE g > 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	jemp	NULL	range	i	i	5	NULL	2	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select json_unquote(json_extract(`test`.`jemp`.`c`,'$.name')) AS `name` from `test`.`jemp` where (`test`.`jemp`.`g` > 2)
+# works with offset pushdown
+SELECT c->>"$.name" AS name
+FROM jemp WHERE g > 2 LIMIT 1 OFFSET 1;
+name
+Betty
+EXPLAIN format=tree SELECT c->>"$.name" AS name
+FROM jemp WHERE g > 2;
+EXPLAIN
+-> Index range scan on jemp using i over (2 < g)  (cost=1.16 rows=2)
+
+DROP TABLE if EXISTS jemp;
+# Inspired by the test for Bug #27578340: INCONSISTENT RESULTS FOR SELECTS FROM TABLE WITH CHAR(N) COLUMN
+# AND NO_PAD COLLATION from ctype_uca.test,
+# verify that an inequality condition is kept at SQL layer:
+CREATE TABLE t1 (
+f1 CHAR(20) COLLATE utf8mb4_0900_ai_ci  # A NO PAD collation.
+);
+INSERT INTO t1 VALUES ('ABC  ');
+INSERT INTO t1 VALUES ('XYZ');
+INSERT INTO t1 VALUES ('XYZ ');
+INSERT INTO t1 VALUES ('ABC ');
+CREATE INDEX f1_index ON t1 ( f1 );
+analyze table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+set rds_empty_redundant_check_in_range_scan = on;
+explain format=tree  SELECT CONCAT(f1, '|') FROM t1 WHERE f1 >= 'XYZ ';
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+    -> Filter: (t1.f1 >= 'XYZ ')  (cost=*** rows=0.25)
+        -> Parallel covering index range scan on t1 using f1_index over ('XYZ' < f1)  (cost=*** rows=0.25)
+
+# Now, a PAD SPACE collation, condition is not kept
+ALTER TABLE t1 modify f1 CHAR(20) COLLATE utf8mb4_unicode_ci;
+analyze TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+explain format=tree  SELECT CONCAT(f1, '|') FROM t1 WHERE f1 >= 'XYZ ';
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+    -> Parallel covering index range scan on t1 using f1_index over ('XYZ' <= f1)  (cost=*** rows=0.5)
+
+SET rds_empty_redundant_check_in_range_scan=default;
+DROP TABLE t1;
+# Can remove DATE
+SET rds_empty_redundant_check_in_range_scan = true;
+CREATE TABLE t9(a date);
+ALTER TABLE t9 ADD INDEX (a);
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+analyze TABLE t9;
+Table	Op	Msg_type	Msg_text
+test.t9	analyze	status	OK
+explain format=tree SELECT * FROM t9 WHERE a >= "20211001";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t9  (cost=*** rows=***)
+    -> Parallel covering index range scan on t9 using a over ('2021-10-01' <= a)  (cost=*** rows=0.25)
+
+explain format=tree SELECT * FROM t9 WHERE a >= "2021-10-01";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t9  (cost=*** rows=***)
+    -> Parallel covering index range scan on t9 using a over ('2021-10-01' <= a)  (cost=*** rows=0.25)
+
+# can remove DATETIME
+DROP TABLE if EXISTS t9;
+CREATE TABLE t9(a datetime);
+ALTER TABLE t9 ADD index(a);
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+analyze TABLE t9;
+Table	Op	Msg_type	Msg_text
+test.t9	analyze	status	OK
+explain format=tree SELECT * FROM t9 WHERE a >= "2022-09-07 12:25";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t9  (cost=*** rows=***)
+    -> Parallel covering index range scan on t9 using a over ('2022-09-07 12:25:00' <= a)  (cost=*** rows=0.25)
+
+# can remove TIMESTAMP
+DROP TABLE if EXISTS t9;
+CREATE TABLE t9 (a TIMESTAMP);
+ALTER TABLE t9 ADD INDEX (a);
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+analyze TABLE t9;
+Table	Op	Msg_type	Msg_text
+test.t9	analyze	status	OK
+explain format=tree SELECT * FROM t9 WHERE a >= "2022-09-07 12:25";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t9  (cost=*** rows=***)
+    -> Parallel covering index range scan on t9 using a over ('2022-09-07 12:25:00' <= a)  (cost=*** rows=0.25)
+
+# can remove TIME
+DROP TABLE if EXISTS t9;
+CREATE TABLE t9 (a time);
+ALTER TABLE t9 ADD INDEX (a);
+INSERT INTO t9 VALUES ("1211");
+INSERT INTO t9 VALUES ("1211");
+INSERT INTO t9 VALUES ("1211");
+INSERT INTO t9 VALUES ("1211");
+INSERT INTO t9 VALUES ("1211");
+INSERT INTO t9 VALUES ("1211");
+INSERT INTO t9 VALUES ("1211");
+INSERT INTO t9 VALUES ("1211");
+analyze TABLE t9;
+Table	Op	Msg_type	Msg_text
+test.t9	analyze	status	OK
+explain format=tree SELECT * FROM t9 WHERE a >= "1218";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t9  (cost=*** rows=***)
+    -> Parallel covering index range scan on t9 using a over ('00:12:18' <= a)  (cost=*** rows=0.25)
+
+explain format=tree SELECT * FROM t9 WHERE a >= "12:18";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t9  (cost=*** rows=***)
+    -> Parallel covering index range scan on t9 using a over ('12:18:00' <= a)  (cost=*** rows=0.25)
+
+DROP TABLE IF EXISTS t9;
+# ORDER BY ASC/DESC with INDEX ASC/DESC
+# table t10 has descending index while t11 has normal index
+CREATE TABLE t10 (
+c1 INT, c2 INT,
+INDEX idx4 (c1 DESC, c2 DESC)
+);
+INSERT INTO t10 VALUES (1,2),(3,4),(5,6),(7,8),(9,10);
+CREATE TABLE t11 (
+c1 INT, c2 INT,
+INDEX idx4 (c1 , c2 )
+);
+INSERT INTO t11 VALUES (1,2),(3,4),(5,6),(7,8),(9,10);
+EXPLAIN format=tree SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t10  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=***)
+            -> Parallel covering index range scan on t10 using idx4 over (c1 < 2)  (cost=*** rows=***)
+
+EXPLAIN format=tree SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t11  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=***)
+            -> Parallel covering index range scan on t11 using idx4 over (2 < c1) (reverse)  (cost=*** rows=***)
+
+EXPLAIN format=tree SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t10  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=***)
+            -> Parallel covering index range scan on t10 using idx4 over (c1 < 2) (reverse)  (cost=*** rows=***)
+
+EXPLAIN format=tree SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t11  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=***)
+            -> Parallel covering index range scan on t11 using idx4 over (2 < c1)  (cost=*** rows=***)
+
+SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
+c1	c2
+7	8
+5	6
+3	4
+SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
+c1	c2
+7	8
+5	6
+3	4
+SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
+c1	c2
+5	6
+7	8
+9	10
+SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
+c1	c2
+5	6
+7	8
+9	10
+# Verify that the hint overrules the switch:
+EXPLAIN format=tree SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t11 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t11  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=***)
+            -> Parallel covering index range scan on t11 using idx4 over (2 < c1)  (cost=*** rows=***)
+
+SET optimizer_switch = 'offset_pushdown=off';
+EXPLAIN format=tree SELECT * FROM t11 WHERE c1>2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t11  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=***)
+            -> Parallel covering index range scan on t11 using idx4 over (2 < c1)  (cost=*** rows=***)
+
+EXPLAIN format=tree SELECT /*+ OFFSET_PUSHDOWN() */ * FROM t11 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t11  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=***)
+            -> Parallel covering index range scan on t11 using idx4 over (2 < c1)  (cost=*** rows=***)
+
+SET optimizer_switch='offset_pushdown=on';
+# Verify that in a LEFT JOIN, the range condition is removed or not, correctly.
+# Conditions on left table can be removed:
+EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t11.c1 > 3 WHERE t11.c1 > 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t12, t11  (cost=*** rows=***)
+    -> Left hash join, hash table shared by worker threads (no condition), extra conditions: (t11.c1 > 3)  (cost=*** rows=***)
+        -> Parallel covering index range scan on t11 using idx4 over (2 < c1)  (cost=*** rows=***)
+        -> Hash
+            -> Parallel index scan on t12 using idx4  (cost=*** rows=1.25)
+
+# Condition on right table too, as it's in ON: if the range access has kept only
+# rows of t12 with c1>3, this condition will not need to be checked again.
+EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t12.c1 > 3 WHERE t11.c1 > 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t12, t11  (cost=*** rows=***)
+    -> Left hash join, hash table shared by worker threads (no condition)  (cost=*** rows=***)
+        -> Parallel covering index range scan on t11 using idx4 over (2 < c1)  (cost=*** rows=***)
+        -> Hash
+            -> Parallel covering index range scan on t12 using idx4 over (3 < c1)  (cost=*** rows=0.75)
+
+# These two don't prove much, as the left join is changed to an inner join
+# (as NULL-complemented rows cannot match the WHERE).
+EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t11.c1 > 3 WHERE t12.c1 > 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t11, t12  (cost=*** rows=***)
+    -> Inner hash join, hash table shared by worker threads (no condition)  (cost=*** rows=***)
+        -> Parallel covering index range scan on t12 using idx4 over (2 < c1)  (cost=*** rows=***)
+        -> Hash
+            -> Parallel covering index range scan on t11 using idx4 over (3 < c1)  (cost=*** rows=0.75)
+
+EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t12.c1 > 3 WHERE t12.c1 > 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t12, t11  (cost=*** rows=***)
+    -> Inner hash join, hash table shared by worker threads (no condition)  (cost=*** rows=3.75)
+        -> Parallel index scan on t11 using idx4  (cost=*** rows=1.25)
+        -> Hash
+            -> Filter: (t12.c1 > 2)  (cost=*** rows=0.75)
+                -> Parallel covering index range scan on t12 using idx4 over (3 < c1)  (cost=*** rows=0.75)
+
+# Here the WHERE IS NULL cannot be removed: the range access has kept only
+# rows of t12 with c1 NULL, but there can be other NULL-complemented rows,
+# and then the WHERE must be checked on them too. This case is properly caught
+# by the test: !(func->used_tables() & null_extended) in reduce_cond_for_table().
+EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t12.c1 > 3 WHERE t12.c1 IS NULL;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t12, t11  (cost=*** rows=***)
+    -> Filter: (t12.c1 is null)  (cost=*** rows=***)
+        -> Left hash join, hash table shared by worker threads (no condition)  (cost=*** rows=***)
+            -> Parallel index scan on t11 using idx4  (cost=*** rows=***)
+            -> Hash
+                -> Parallel covering index range scan on t12 using idx4 over (3 < c1)  (cost=*** rows=***)
+
+DROP TABLE t10,t11;
+CREATE TABLE t2 (b INT , key(b));
+INSERT INTO t2 VALUES (1),(1),(2),(2),(3),(3);
+# Check that offset pushdown  is deactivated when DISTINCT is done by doing some grouping
+# inside ORDER BY ( "grouped" is true in if() condition in JOIN::offset_pushdown().)
+explain format=tree SELECT /*+ NO_OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Group (no aggregates)  (cost=*** rows=***)
+        -> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+            -> Limit: 101 row(s)  (cost=*** rows=***)
+                -> Group (no aggregates)  (cost=*** rows=***)
+                    -> Parallel index scan on t2 using b  (cost=*** rows=***)
+
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
+b
+2
+3
+explain  format=tree SELECT /*+ OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Covering index skip scan for deduplication on t2 using b  (cost=*** rows=***)
+
+SELECT /*+ OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
+b
+2
+3
+# Check that offset pushdown  is deactivated when  using index for group-by is used
+# (similarly to the previous test: DISTINCT is done by doing some grouping inside ORDER BY)
+# in that case  "grouped" is true and quick->get_type()=QUICK_SELECT_I::QS_TYPE_GROUP_MIN_MAX
+# in if() condition in JOIN::offset_pushdown()
+analyze TABLE t2;
+Table	Op	Msg_type	Msg_text
+test.t2	analyze	status	OK
+explain  SELECT /*+ NO_OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	range	b	b	5	NULL	4	100.00	Using index for group-by
+Warnings:
+Note	1003	/* select#1 */ select /*+ NO_OFFSET_PUSHDOWN(@`select#1`) */ distinct `test`.`t2`.`b` AS `b` from `test`.`t2` order by `test`.`t2`.`b` limit 1,100
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
+b
+2
+3
+explain  SELECT /*+ OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	range	b	b	5	NULL	4	100.00	Using index for group-by
+Warnings:
+Note	1003	/* select#1 */ select /*+ OFFSET_PUSHDOWN(@`select#1`) */ distinct `test`.`t2`.`b` AS `b` from `test`.`t2` order by `test`.`t2`.`b` limit 1,100
+SELECT /*+ OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
+b
+2
+3
+DROP TABLE t2;
+CREATE TABLE t1 (a INT , b INT , c INT , INDEX(a,b,c));
+INSERT INTO t1 VALUES (1,100,1),(2,200,1),(3,300,1),(4,10,2),(5,20,2),(6,30,2),(7,110,3),(8,120,3),(9,130,3);
+CREATE TABLE t2 (a INT , b INT , c INT , INDEX(a,b,c));
+INSERT INTO t2 VALUES (1,110,1),(2,210,1),(4,20,2),(5,30,2),(7,130,3),(8,140,3);
+# Subqueries
+# Offset pushdown is evaluated for each JOIN object and can therefore be applied to subqueries if a given JOIN object does qualify for OP.
+# Both explain  format=tree and actual query output are given since the feature is activated  -- easier to maintain if outputs are produced
+# Uncorrelated
+# Inner query with LIMIT OFFSET
+explain format=tree SELECT * FROM t1 WHERE a > (SELECT a FROM t1 LIMIT 1 OFFSET 1);
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+    -> Filter: (t1.a > (select #2))  (cost=*** rows=***)
+        -> Parallel covering index range scan on t1 using a over (2 < a)  (cost=*** rows=***)
+        -> Select #2 (subquery in condition; run only once)
+            -> Limit/Offset: 1/1 row(s)  (cost=*** rows=***)
+                -> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+                    -> Limit: 2 row(s)  (cost=*** rows=***)
+                        -> Parallel index scan on t1 using a  (cost=*** rows=***)
+
+SELECT * FROM t1 WHERE a > (SELECT a FROM t1 LIMIT 1 OFFSET 1);
+a	b	c
+3	300	1
+4	10	2
+5	20	2
+6	30	2
+7	110	3
+8	120	3
+9	130	3
+explain format=tree SELECT * FROM t1 WHERE a > (SELECT a FROM t1 WHERE a>2 LIMIT 1 OFFSET 1);
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+    -> Filter: (t1.a > (select #2))  (cost=*** rows=***)
+        -> Parallel covering index range scan on t1 using a over (4 < a)  (cost=*** rows=***)
+        -> Select #2 (subquery in condition; run only once)
+            -> Limit/Offset: 1/1 row(s)  (cost=*** rows=***)
+                -> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+                    -> Limit: 2 row(s)  (cost=*** rows=***)
+                        -> Parallel covering index range scan on t1 using a over (2 < a)  (cost=*** rows=***)
+
+SELECT * FROM t1 WHERE a > (SELECT a FROM t1 WHERE a>2 LIMIT 1 OFFSET 1);
+a	b	c
+5	20	2
+6	30	2
+7	110	3
+8	120	3
+9	130	3
+# Offset pushdown outer query
+# add row for non empty output of following SELECT statement
+INSERT INTO t1 values (9,131,1);
+explain format=tree SELECT * FROM t1 WHERE a = (SELECT max(a) FROM t1 WHERE a > 2) LIMIT 1 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 1/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+        -> Limit: 2 row(s)  (cost=*** rows=***)
+            -> Parallel covering index lookup on t1 using a (a=(select #2))  (cost=*** rows=***)
+                -> Select #2 (subquery in reference key of index access; run only once)
+                    -> Rows fetched before execution  (cost=*** rows=***)
+
+SELECT * FROM t1 WHERE a = (SELECT max(a) FROM t1 WHERE a > 2) LIMIT 1 OFFSET 1;
+a	b	c
+9	131	1
+DELETE FROM t1 WHERE a=9 AND b=131 AND c=3;
+# DOUBLE offset pushdown , both inner and outer queries with LIMIT OFFSET
+# add row for non empty output of following SELECT statement
+INSERT INTO t1 values (4,10,3),(4,10,3),(4,10,3);
+explain format=tree SELECT * FROM t1 WHERE a =(SELECT a FROM t1 WHERE a > 2 LIMIT 1 OFFSET 1) LIMIT 2 OFFSET 3;
+EXPLAIN
+-> Limit/Offset: 2/3 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+        -> Limit: 5 row(s)  (cost=*** rows=***)
+            -> Parallel covering index lookup on t1 using a (a=(select #2))  (cost=*** rows=***)
+                -> Select #2 (subquery in reference key of index access; run only once)
+                    -> Limit/Offset: 1/1 row(s)  (cost=*** rows=***)
+                        -> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+                            -> Limit: 2 row(s)  (cost=*** rows=***)
+                                -> Parallel covering index range scan on t1 using a over (2 < a)  (cost=*** rows=***)
+
+SELECT * FROM t1 WHERE a = (SELECT a FROM t1 WHERE a > 2 LIMIT 1 OFFSET 1) LIMIT 2 OFFSET 3;
+a	b	c
+4	10	3
+DELETE FROM t1 WHERE a=4 AND b=10 AND c=3;
+# Correlated was covered before
+# SHOW that JOIN, SELF JOIN do not trigger offset pushdown
+explain format=tree SELECT * FROM t1 JOIN t2 LIMIT 1 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 1/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t2, t1  (cost=*** rows=***)
+        -> Limit: 2 row(s)  (cost=*** rows=***)
+            -> Inner hash join, hash table shared by worker threads (no condition)  (cost=*** rows=***)
+                -> Parallel index scan on t1 using a  (cost=*** rows=***)
+                -> Hash
+                    -> Parallel index scan on t2 using a  (cost=*** rows=***)
+
+explain format=tree SELECT * FROM t1 T1, t1 T2 LIMIT 2 OFFSET 10;
+EXPLAIN
+-> Limit/Offset: 2/10 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on T1  (cost=*** rows=***)
+        -> Limit: 12 row(s)  (cost=*** rows=***)
+            -> Inner hash join, one hash table per worker (no condition)  (cost=*** rows=***)
+                -> Index scan on T2 using a  (cost=*** rows=***)
+                -> Hash
+                    -> Parallel index scan on T1 using a  (cost=*** rows=***)
+
+# Table function are not compatible with offset pushdown
+explain format=tree SELECT * FROM JSON_TABLE('[{"x":2,"y":"8"},{"x":"3","y":"7"},{"x":"4","y":6}]',"$[1]" COLUMNS(xval VARCHAR(100) PATH "$.x", yval VARCHAR(100) PATH "$.y")) AS jt1 LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)
+    -> Materialize table function
+
+DROP TABLE t1,t2;
+# OFFSET exceeds number of rows: When the offset exceed the number of rows returned by the query without offset, offset pushdown still works
+CREATE TABLE t1 (a INT, b INT , INDEX(a,b));
+INSERT INTO t1 VALUES (1,1),(2,2),(3,4),(8,9);
+EXPLAIN format=tree SELECT * FROM t1 LIMIT 1 OFFSET 5;
+EXPLAIN
+-> Limit/Offset: 1/5 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+        -> Limit: 6 row(s)  (cost=*** rows=***)
+            -> Parallel index scan on t1 using a  (cost=*** rows=***)
+
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t1 LIMIT 1 OFFSET 5;
+a	b
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+DROP TABLE t1;
+#  BUG2023021303672
+# failed on assert
+# Reason: using qep_tab which points to qep_tab[0] instead of qep_tab[const_table]
+# Why: Oversight
+CREATE TABLE t0 (c0 INT);
+CREATE TABLE t2 (c1 INT PRIMARY KEY);
+SELECT 1 FROM t0 LEFT JOIN t2 ON c1 = NULL LIMIT 1 OFFSET 1;
+1
+drop table t0,t2;
+# BUG BUG2023021303643
+# failed on assert:
+# assert(query_expression()->is_simple() || query_block != query_expression()->global_parameters());
+# Reason: materialized table written to disk - materialized tables were filtered by looking at whether it was an innodb table
+# Query was a candidate for offset pushdown even though it should not have been.
+SET SESSION BIG_TABLES = 1;
+explain format=tree   (SELECT 1) UNION (SELECT 1) LIMIT 1 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 1/1 row(s)  (cost=1.2..1.2 rows=1)
+    -> Table scan on <union temporary>  (cost=0.7..1.2 rows=2)
+        -> Union materialize with deduplication  (cost=0.2..0.2 rows=2)
+            -> Limit table size: 2 unique row(s)
+                -> Rows fetched before execution  (cost=0..0 rows=1)
+            -> Limit table size: 2 unique row(s)
+                -> Rows fetched before execution  (cost=0..0 rows=1)
+
+(SELECT 1) UNION (SELECT 1) LIMIT 1 OFFSET 1;
+1
+# Table function
+# Offset pushdown not compatible
+# table functions is an intrinsic table
+# Reads rows using row_search_no_mvcc
+# No support for offset pushdown in row_search_no_mvcc
+explain format=tree SELECT *
+FROM
+JSON_TABLE(
+'[{"x":2,"y":"8"},{"x":"3","y":"7"},{"x":"4","y":6}]',
+"$[*]" COLUMNS(
+xval VARCHAR(100) PATH "$.x",
+yval VARCHAR(100) PATH "$.y"
+         )
+) AS  jt LIMIT 1 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 1/1 row(s)
+    -> Materialize table function
+
+SELECT * FROM JSON_TABLE(
+'[{"x":2,"y":"8"},{"x":"3","y":"7"},{"x":"4","y":6}]',
+"$[*]" COLUMNS(
+xval VARCHAR(100) PATH "$.x",
+yval VARCHAR(100) PATH "$.y"
+         )
+) AS  jt LIMIT 1 OFFSET 1;
+xval	yval
+3	7
+SET SESSION BIG_TABLES =default;
+CREATE TABLE employees (
+id INT PRIMARY KEY AUTO_INCREMENT,
+name VARCHAR(100),
+department_id INT,
+salary DECIMAL(10,2),
+INDEX idx_department_id (department_id)
+);
+INSERT INTO employees (name, department_id, salary) VALUES
+('John', 10, 5000.00),
+('Jane', 20, 6000.00),
+('Bob', 10, 7000.00),
+('Alice', 30, 8000.00),
+('Tom', 20, 9000.00);
+SET @orig_optimizer_switch = @@optimizer_switch;
+SET optimizer_switch = 'mrr=on,mrr_cost_based=off';
+EXPLAIN  SELECT * FROM employees  WHERE department_id <30 limit 2 offset 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	Parallel execute (4 workers, test.employees)
+1	SIMPLE	employees	NULL	range	idx_department_id	idx_department_id	5	NULL	4	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`employees`.`id` AS `id`,`test`.`employees`.`name` AS `name`,`test`.`employees`.`department_id` AS `department_id`,`test`.`employees`.`salary` AS `salary` from `test`.`employees` where (`test`.`employees`.`department_id` < 30) limit 1,2
+SELECT * FROM employees  WHERE department_id < 30 limit 2 offset 1;
+id	name	department_id	salary
+3	Bob	10	7000.00
+2	Jane	20	6000.00
+SET optimizer_switch = @orig_optimizer_switch;
+DROP table employees;

@@ -1,0 +1,127 @@
+#
+# Test for different local backup flag
+#
+
+CALL mtr.add_suppression("Local backup\: wal archiver is running");
+CALL mtr.add_suppression("insert dstore index tuple fail");
+CALL mtr.add_suppression("insert_index fail");
+call mtr.add_suppression("full backup found binlog is not enabled");
+
+--source suite/local_backup/include/prepare_for_backup.inc
+
+--echo #
+--echo # 0. prepare some data
+--echo #
+create database full_backup_archive_restore;
+use full_backup_archive_restore;
+create table t1(s varchar(100)) engine=Dstore;
+
+# insert 1000 records
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 1000
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+--echo #
+--echo # 1. create a full backup with flag 0
+--echo #
+--let $full_backup_flag = 0
+--source suite/local_backup/include/start_full_backup.inc
+
+--source suite/local_backup/include/wait_full_backup.inc
+--source suite/local_backup/include/stop_full_backup.inc
+
+--echo #
+--echo #    add more data
+--echo #
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $i = 500
+--source include/Load_data.inc
+--sleep 3
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+--sleep 3
+
+--echo #
+--echo # 2. create a full backup with flag 1
+--echo #
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+
+--source suite/local_backup/include/wait_full_backup.inc
+--source suite/local_backup/include/stop_full_backup.inc
+
+--echo #
+--echo # 3. start log archive
+--echo #
+--source suite/local_backup/include/start_log_archive.inc
+
+--echo #
+--echo # 4. add more data for log archive
+--echo #
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $i = 500
+--source include/Load_data.inc
+--sleep 3
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+--sleep 3
+
+--echo #
+--echo # 5. stop log archive
+--echo #
+--source suite/local_backup/include/stop_log_archive.inc
+
+--echo #
+--echo # 6. Add more data
+--echo #
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 300
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+--echo #
+--echo # 7. Restore
+--echo #
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+--let $list_type = wal_archive
+--source suite/local_backup/include/restore_with_script.inc
+
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+--echo #
+--echo # 8. Verify data. Data added in step 6 is not present
+--echo #
+select count(*) from t1;
+# insert after resotre
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $i = 50
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+drop database full_backup_archive_restore;
+
+--source suite/local_backup/include/clean_backup.inc

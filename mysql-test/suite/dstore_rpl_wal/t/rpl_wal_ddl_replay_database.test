@@ -1,0 +1,202 @@
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_setup.inc
+--enable_warnings
+
+# --echo #############################测试 database#############################
+# --echo 一、 针对 SQLCOM_CREATE_DB 、 SQLCOM_DROP_DB 、 SQLCOM_ALTER_DB ， 执行对应的 ddl 语句 。 
+# --echo 二、 在备机测查看dd信息，保证备机回放元数据的正确性。
+# --echo 三、 在database中执行create table以及dml。执行完后，进行全表扫描，供后面的新主机对比，保证回放功能正确。
+# --echo 四、 执行 switchover 。
+# --echo 五、 新主机对database中的表进行全表扫描，与第四步进行对比，保证备机回放功能的正确性。
+# --echo 六、 新主机使用回放出的database，并对回放出来的database进行操作(修改删除)，保证回放出来的ddl可用性和可操作性。
+# --echo #######################################################################
+
+--echo ############################# Test Database #############################
+--echo 一. Execute the corresponding DDL statements for SQLCOM_CREATE_DB, SQLCOM_DROP_DB, and SQLCOM_ALTER_DB.
+--echo 二、Check the DD information on the standby node to ensure correct metadata replay.
+--echo 三、Execute CREATE TABLE and DML statements in the database. After execution, perform a full table scan for comparison with the new primary node later, to ensure the replay function works correctly.
+--echo 四、Perform a switchover.
+--echo 五、Perform a full table scan on the tables in the database on the new primary node, and compare the results with those from Step 4, to verify the correctness of the standby node replay function.
+--echo 六、Use the replayed database on the new primary node and perform operations (modification and deletion) on it, to ensure the replayed DDL results are available and operable.
+--echo #######################################################################
+
+--echo #
+--echo # 一、Execute the corresponding DDL statements for SQLCOM_CREATE_DB, SQLCOM_DROP_DB, and SQLCOM_ALTER_DB.
+--echo #
+
+--echo #
+--echo # 1 SQLCOM_CREATE_DB
+--echo #
+--connection $node1
+CREATE DATABASE IF NOT EXISTS test_create_db_demo_1 
+DEFAULT CHARACTER SET utf8mb4 
+DEFAULT COLLATE utf8mb4_general_ci;
+
+CREATE DATABASE IF NOT EXISTS test_create_db_demo_2 
+DEFAULT CHARACTER SET utf8mb4 
+DEFAULT COLLATE utf8mb4_bin;  
+
+CREATE DATABASE IF NOT EXISTS test_create_db_demo_delete 
+DEFAULT CHARACTER SET utf8mb4 
+DEFAULT COLLATE utf8mb4_bin;
+
+--echo #
+--echo # 2 SQLCOM_ALTER_DB
+--echo #
+--connection $node1
+ALTER DATABASE test_create_db_demo_1 
+DEFAULT CHARACTER SET utf8mb4 
+DEFAULT COLLATE utf8mb4_bin;
+
+--echo #
+--echo # 3 SQLCOM_DROP_DB
+--echo #
+--connection $node1
+DROP DATABASE IF EXISTS test_create_db_demo_delete;
+
+--echo #
+--echo # 二、Check the DD information on the standby node to ensure correct metadata replay.
+--echo #
+
+--echo ---------------------
+--sleep 2
+--connection $node2
+
+SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME 
+FROM INFORMATION_SCHEMA.SCHEMATA 
+WHERE SCHEMA_NAME = 'test_create_db_demo_1';
+
+SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME 
+FROM INFORMATION_SCHEMA.SCHEMATA 
+WHERE SCHEMA_NAME = 'test_create_db_demo_2';
+
+SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME 
+FROM INFORMATION_SCHEMA.SCHEMATA 
+WHERE SCHEMA_NAME = 'test_create_db_demo_delete';
+
+--echo #
+--echo # 三、Execute CREATE TABLE and DML statements in the database. After execution, perform a full table scan for comparison with the new primary node later, to ensure the replay function works correctly.
+--echo #
+
+--connection $node1
+USE test_create_db_demo_1;
+
+CREATE TABLE IF NOT EXISTS t_user (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  name VARCHAR(50) NOT NULL,
+  create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+) DEFAULT CHARSET=utf8mb4;
+
+INSERT INTO t_user(name) VALUES ('xiaoli');
+INSERT INTO t_user(name) VALUES ('qifenzhu');
+
+SELECT id, name from t_user;
+
+--echo ---------------------
+--sleep 2
+--connection $node2
+--echo # Verify whether the table exists
+SELECT TABLE_NAME, TABLE_TYPE, ENGINE, TABLE_COLLATION 
+FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'test_create_db_demo_1' AND TABLE_NAME = 't_user';
+
+--echo # Verify column information
+SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA
+FROM INFORMATION_SCHEMA.COLUMNS 
+WHERE TABLE_SCHEMA = 'test_create_db_demo_1' AND TABLE_NAME = 't_user'
+ORDER BY ORDINAL_POSITION;
+
+--echo # 保证插入trace表和回放ddl语句是否为原子操作
+--connection $node2
+SET GLOBAL debug="+d,ddl_replay_after_insert_trace_core";
+
+--connection $node1
+CREATE TABLE IF NOT EXISTS t_user_temp (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  name VARCHAR(50) NOT NULL,
+  create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+) DEFAULT CHARSET=utf8mb4;
+
+--connection $node2
+--error CR_SERVER_LOST, CR_SERVER_GONE_ERROR
+select sleep(4);
+
+--let $rpl_server_number = 2
+--let $rpl_omit_print_server_parameters=1
+--let $rpl_server_parameters = --datadir=$MY_SLAVE_DATADIR --log-error=$log_error2 --loose-storage_engine_mode=ONLY_DSTORE --default_storage_engine=Dstore --default_tmp_storage_engine=Dstore --disabled-storage-engines=InnoDB,MyISAM,MEMORY,MRG_MYISAM,CSV --transaction-isolation=READ-COMMITTED
+--source include/rpl_start_server.inc
+
+SELECT @@global.debug AS node2_debug_after_restart;
+
+--echo ---------------------
+--sleep 2
+--connection $node2
+--disable_warnings
+--replace_result $SERVER_MYPORT_1 SERVER_MYPORT_1
+--let $rpl_channel_name = 'dstore_wal_replication_channel'
+--eval CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=$SERVER_MYPORT_1, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL $rpl_channel_name;
+--enable_warnings
+--let $assert_text=Channel name should be $rpl_channel_name
+--let $assert_sql=SELECT CHANNEL_NAME FROM performance_schema.replication_connection_configuration WHERE CHANNEL_NAME = $rpl_channel_name
+--let $assert_cond=COUNT(*) = 1
+--source include/assert.inc
+
+--echo Slave_IO_Running should be OFF.
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+
+START REPLICA;
+
+--sleep 2
+--echo Slave_IO_Running should be ON.
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+
+--echo # Verify whether the table exists
+SELECT TABLE_NAME, TABLE_TYPE, ENGINE, TABLE_COLLATION 
+FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'test_create_db_demo_1' AND TABLE_NAME = 't_user_temp';
+
+--echo #
+--echo # 四、Perform a switchover.
+--echo #
+--let $old_primary = $node1
+--let $old_standby = $node2
+--let $old_standby_port = $SERVER_MYPORT_2
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_switch.inc
+
+--echo #
+--echo # 五、Perform a full table scan on the tables in the database on the new primary node, and compare the results with those from Step 4, to verify the correctness of the standby node replay function.
+--echo #
+--connection $node2
+show databases;
+USE test_create_db_demo_1;
+SELECT id, name from t_user;
+
+--echo #
+--echo # 六、Use the replayed database on the new primary node and perform operations (modification and deletion) on it, to ensure the replayed DDL results are available and operable.
+--echo #
+--connection $node2
+USE test_create_db_demo_1;
+CREATE TABLE IF NOT EXISTS t_user_2 (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  name VARCHAR(50) NOT NULL,
+  create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO t_user(name) VALUES ('qifenzhuxiaoli');
+SELECT id, name FROM test_create_db_demo_1.t_user WHERE name = 'qifenzhuxiaoli';
+
+--echo ---------------------
+--sleep 2
+--connection $node1
+SELECT TABLE_NAME, TABLE_TYPE, ENGINE 
+FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'test_create_db_demo_1' AND TABLE_NAME = 't_user_2';
+SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE
+FROM INFORMATION_SCHEMA.COLUMNS 
+WHERE TABLE_SCHEMA = 'test_create_db_demo_1' AND TABLE_NAME = 't_user_2'
+ORDER BY ORDINAL_POSITION;
+
+--disable_warnings
+--let $current_standby = $node1
+--let $current_primary = $node2
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_cleanup.inc
+--enable_warnings

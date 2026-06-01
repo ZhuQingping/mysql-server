@@ -1,0 +1,136 @@
+create database pq_test;
+use pq_test;
+create table t1(
+id int primary key auto_increment,
+col1 varchar(100),
+col2 int,
+key idx_col2(col2)
+)engine= innodb;
+show variables like 'force_parallel_execute';
+Variable_name	Value
+force_parallel_execute	ON
+select count(*) from pq_test.t1;
+count(*)
+100
+select * from pq_test.t1 limit 1;
+id	col1	col2
+1	testtesttesttest	100
+select * from pq_test.t1;
+select id, col2 from pq_test.t1 force index(idx_col2);
+SELECT * FROM t1 WHERE id IN (1, 10, 20, 80, 90, 100, 30, 40, 50, 60, 70);
+id	col1	col2
+1	testtesttesttest	100
+10	testtesttesttest	91
+20	testtesttesttest	81
+30	testtesttesttest	71
+40	testtesttesttest	61
+50	testtesttesttest	51
+60	testtesttesttest	41
+70	testtesttesttest	31
+80	testtesttesttest	21
+90	testtesttesttest	11
+100	testtesttesttest	1
+drop table pq_test.t1;
+drop database pq_test;
+use test;
+create table t1( firstname char(20), lastname char(20));
+insert into t1 values ("john","doe"),("John","Doe");
+select * from t1 where firstname='john' and binary 'john' = firstname;
+firstname	lastname
+john	doe
+Warnings:
+Warning	1287	'BINARY expr' is deprecated and will be removed in a future release. Please use CAST instead
+drop table t1;
+"BUG2021031701984"
+CREATE TABLE t0(c0 DECIMAL, c1 BIGINT(185) ZEROFILL) ;
+Warnings:
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT IGNORE INTO t0(c0, c1) VALUES(824912915, "L뼨"), ("8g.췧.^M8", "An.k᭯K'br");
+Warnings:
+Warning	1366	Incorrect integer value: 'L뼨' for column 'c1' at row 1
+Note	1265	Data truncated for column 'c0' at row 2
+Warning	1366	Incorrect integer value: 'An.k᭯K'br' for column 'c1' at row 2
+EXPLAIN SELECT ALL t0.c0 AS ref0 FROM t0 WHERE (NOT ((t0.c1) || ((((NOT (t0.c1))) IN ((t0.c1) NOT IN ("O凌푅2ffjH", t0.c0, NULL))) XOR (('?') != ((t0.c0) XOR (1733129750))))));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	Parallel execute (4 workers, test.t0)
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	Using where
+Warnings:
+Warning	1287	'|| as a synonym for OR' is deprecated and will be removed in a future release. Please use OR instead
+Note	1003	/* select#1 */ select `test`.`t0`.`c0` AS `ref0` from `test`.`t0` where ((`test`.`t0`.`c1` = 0) and ((<cache>((0 = 0)) <> (0 not in ('O凌푅2ffjH',`test`.`t0`.`c0`,NULL))) xor ('?' <> ((0 <> `test`.`t0`.`c0`) xor <cache>((0 <> 1733129750))))))
+SELECT ALL t0.c0 AS ref0 FROM t0 WHERE (NOT ((t0.c1) || ((((NOT (t0.c1))) IN ((t0.c1) NOT IN ("O凌푅2ffjH", t0.c0, NULL))) XOR (('?') != ((t0.c0) XOR (1733129750))))));
+ref0
+824912915
+8
+Warnings:
+Warning	1287	'|| as a synonym for OR' is deprecated and will be removed in a future release. Please use OR instead
+Warning	1292	Truncated incorrect DOUBLE value: 'O凌푅2ffjH'
+Warning	1292	Truncated incorrect DOUBLE value: '?'
+Warning	1292	Truncated incorrect DOUBLE value: 'O凌푅2ffjH'
+DROP TABLE t0;
+"BUG2021031701451"
+CREATE TABLE t0(c0 FLOAT UNIQUE, c1 VARCHAR(500)  NULL) ;
+INSERT INTO t0(c0) VALUES(7.16471724E8);
+INSERT IGNORE INTO t0(c1, c0) VALUES('/.', 1752655962);
+EXPLAIN SELECT ALL t0.c0 AS ref0 FROM t0 WHERE (((1407000304) NOT IN (("-700607847") NOT IN (NULL, t0.c0))) AND (((t0.c1) IN ("", 1796917100)) || (-2.147241605E9))) AND (t0.c0);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t0)
+1	SIMPLE	t0	NULL	range	c0	c0	5	NULL	3	100.00	Using index condition
+Warnings:
+Warning	1287	'|| as a synonym for OR' is deprecated and will be removed in a future release. Please use OR instead
+Note	1003	/* select#1 */ select `test`.`t0`.`c0` AS `ref0` from `test`.`t0` where ((1407000304 <> ('-700607847' not in (NULL,`test`.`t0`.`c0`))) and (0 <> `test`.`t0`.`c0`))
+SELECT ALL t0.c0 AS ref0 FROM t0 WHERE (((1407000304) NOT IN (("-700607847") NOT IN (NULL, t0.c0))) AND (((t0.c1) IN ("", 1796917100)) || (-2.147241605E9))) AND (t0.c0);
+ref0
+Warnings:
+Warning	1287	'|| as a synonym for OR' is deprecated and will be removed in a future release. Please use OR instead
+DROP table t0;
+"BUG2021031602705"
+CREATE TABLE `t2` (
+`c0` mediumint unsigned zerofill DEFAULT NULL,
+UNIQUE KEY `c0` (`c0`)
+);
+Warnings:
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+CREATE TABLE `t3` (
+`c1` double unsigned zerofill DEFAULT NULL
+);
+Warnings:
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	UNSIGNED for decimal and floating point data types is deprecated and support for it will be removed in a future release.
+insert into t2 values row(0);
+insert into t3 values row(0);
+EXPLAIN SELECT ALL t2.c0 AS ref0 FROM t2, t3 WHERE (! (((("") && (CAST(t3.c1 AS SIGNED))) >= (((t2.c0) IN (1670323136, '')) IS NOT TRUE)) OR (t2.c0)));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t3)
+1	SIMPLE	t2	NULL	const	c0	c0	4	const	1	100.00	Using index
+1	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+Warnings:
+Warning	1287	'!' is deprecated and will be removed in a future release. Please use NOT instead
+Warning	1287	'&&' is deprecated and will be removed in a future release. Please use AND instead
+Note	1003	/* select#1 */ select `test`.`t2`.`c0` AS `ref0` from `test`.`t2` join `test`.`t3` where (((<cache>((0 <> '')) and (0 <> cast(`test`.`t3`.`c1` as signed))) < <cache>(((0 in (1670323136,'')) is not true))))
+SELECT ALL t2.c0 AS ref0 FROM t2, t3 WHERE (! (((("") && (CAST(t3.c1 AS SIGNED))) >= (((t2.c0) IN (1670323136, '')) IS NOT TRUE)) OR (t2.c0)));
+ref0
+Warnings:
+Warning	1287	'!' is deprecated and will be removed in a future release. Please use NOT instead
+Warning	1287	'&&' is deprecated and will be removed in a future release. Please use AND instead
+DROP TABLE t2, t3;
+"BUG2021031202198"
+CREATE TABLE `t1` (
+`c1` tinyint unsigned zerofill DEFAULT NULL,
+UNIQUE KEY `i0` (`c1`)
+);
+Warnings:
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+insert into t1 values row(0);
+EXPLAIN SELECT t1.c1 AS ref0 FROM t1 WHERE (NOT (((t1.c1) OR ((IFNULL(t1.c1, t1.c1)) LIKE ((t1.c1) > (t1.c1)))) AND ((((NULL) || (t1.c1)) IS NOT FALSE) IS TRUE)));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	i0	2	NULL	1	100.00	Using where; Using index
+Warnings:
+Warning	1287	'|| as a synonym for OR' is deprecated and will be removed in a future release. Please use OR instead
+Note	1003	/* select#1 */ select `test`.`t1`.`c1` AS `ref0` from `test`.`t1` where ((<cache>((0 <> NULL)) or (0 <> `test`.`t1`.`c1`)) is false)
+SELECT t1.c1 AS ref0 FROM t1 WHERE (NOT (((t1.c1) OR ((IFNULL(t1.c1, t1.c1)) LIKE ((t1.c1) > (t1.c1)))) AND ((((NULL) || (t1.c1)) IS NOT FALSE) IS TRUE)));
+ref0
+Warnings:
+Warning	1287	'|| as a synonym for OR' is deprecated and will be removed in a future release. Please use OR instead
+DROP table t1;

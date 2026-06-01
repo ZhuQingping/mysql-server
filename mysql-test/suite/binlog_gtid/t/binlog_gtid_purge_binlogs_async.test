@@ -1,0 +1,64 @@
+# ==== Purpose ====
+#  
+# Verify that the expired binary logs can be purged asynchronously
+# by a dedicated thread after a binlog rotation triggered by one
+# transaction commit.
+#
+# ==== References ====
+#
+# US2023121500746  Decouple binlog purge and transaction commit
+#
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+--source include/have_binlog_format_row.inc
+
+RESET MASTER;
+
+CREATE TABLE t1(c1 INT);
+--echo #
+--echo # Generate several binlogs by 'FLUSH BINARY LOGS'
+--echo #
+--let $i = 1
+--disable_query_log
+while ($i < 5) {
+  --eval INSERT INTO t1 VALUES ($i);
+  FLUSH BINARY LOGS;
+  --inc $i
+}
+--enable_query_log
+
+--echo #
+--echo # Expect that there are five binary logs before binlog purge
+--echo #
+--source include/show_binary_logs.inc
+
+# Wait a while, so that the above binary logs become expired.
+--sleep 6
+--echo #
+--echo # Expect that the expired binlog.000001, binlog.000002 and
+--echo # binlog.000003 are purged after a binlog rotation triggered
+--echo # by the following transaction commit.
+--echo #
+SET SESSION DEBUG="+d,force_rotate";
+INSERT INTO t1 VALUES (5);
+# Wait a while, so that the dedicated thread has enough time
+# to purge expired binary logs.
+--sleep 3
+--source include/show_binary_logs.inc
+
+# Wait a while, so that the above binary logs become expired.
+--sleep 3
+--echo #
+--echo # Expect that the expired binlog.000004 is purged after a binlog
+--echo # rotation triggered by the following transaction commit.
+--echo #
+INSERT INTO t1 VALUES (6);
+# Wait a while, so that the dedicated thread has enough time
+# to purge expired binary logs.
+--sleep 3
+--source include/show_binary_logs.inc
+
+SET SESSION DEBUG="-d,force_rotate";
+
+# Cleanup
+DROP TABLE t1;

@@ -1,0 +1,33 @@
+# Test remote clone command to replace data directory
+
+let $have_windows = `SELECT CONVERT(@@version_compile_os using latin1) IN ("Win32", "Win64", "Windows")`;
+
+if (!$have_windows) {
+  --source include/have_mysqld_safe.inc
+  --let inst_monitor = 1
+}
+
+--disable_query_log
+CALL mtr.add_suppression("Plugin 'Dstore' init function returned error.");
+CALL mtr.add_suppression("Plugin 'Dstore' registration as a STORAGE ENGINE failed.");
+call mtr.add_suppression("\\[Warning\\] .*MY-\\d+.* Clone removing all user data for provisioning: .*");
+call mtr.add_suppression("\\[ERROR\\] .*MY-\\d+.* Failed to open rds_comment table.*");
+--enable_query_log
+
+--let $HOST = 127.0.0.1
+--let $PORT =`select @@port`
+--let $USER = root
+
+--let clone_remote_replace = 1
+--let clone_inst_number = 2
+
+--disable_query_log
+--let $saved_var=`select @@global.rds_show_hidden_table`
+set global rds_show_hidden_table=ON;
+DROP TABLE IF EXISTS mysql.dstore_ddl_log;
+--eval set global rds_show_hidden_table = $saved_var
+--enable_query_log
+
+# Check the functionality of variable clone_delay_after_data_drop
+--let delay_after_data_drop = 1
+--source local_basic.test

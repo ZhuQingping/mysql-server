@@ -1,0 +1,87 @@
+create table t1 (a int)
+partition by list (a) subpartition by hash (a)
+( partition p0 values in (1) (subpartition sp11),
+partition p1 values in (2) );
+ERROR 42000: Wrong number of subpartitions defined, mismatch with previous setting near ' )' at line 4
+create table t1 (a int)
+partition by list (a) subpartition by hash (a) subpartitions 3
+( partition p0 values in (1) (subpartition sp11));
+ERROR 42000: Wrong number of subpartitions defined, mismatch with previous setting near '(subpartition sp11))' at line 3
+create table t1 (a int)
+partition by list (a) subpartition by hash (a)
+( partition p0 values in (1) (subpartition sp11,subpartition sp12),
+partition p0 values in (1) (subpartition sp21));
+ERROR 42000: Wrong number of subpartitions defined, mismatch with previous setting near '(subpartition sp21))' at line 4
+create table t1 (a int)
+partition by list (a) subpartition by hash (a)
+( partition p0 values in (1) ,
+partition p1 values in (2) (subpartition sp21,subpartition sp22));
+ERROR 42000: Wrong number of subpartitions defined, mismatch with previous setting near 'subpartition sp21,subpartition sp22))' at line 4
+create table t1 (a int)
+partition by list (a) subpartition by hash (a) subpartitions 1
+( partition p0 values in (1) ,
+partition p1 values in (2) (subpartition sp11));
+ERROR 42000: Wrong number of subpartitions defined, mismatch with previous setting near 'subpartition sp11))' at line 4
+create table t1 (a int)
+partition by list (a) subpartition by hash (a)
+( partition p0 values in (1) (subpartition sp11,subpartition sp12));
+alter table t1 add partition (
+partition p1 values in (2)
+);
+alter table t1 reorganize partition p0 into (
+partition p0 values in (1,2)
+);
+ERROR HY000: Multiple definition of same constant in list partitioning
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LIST (`a`)
+SUBPARTITION BY HASH (`a`)
+(PARTITION p0 VALUES IN (1)
+ (SUBPARTITION sp11 ENGINE = Dstore,
+  SUBPARTITION sp12 ENGINE = Dstore),
+ PARTITION p1 VALUES IN (2)
+ (SUBPARTITION p1sp0 ENGINE = Dstore,
+  SUBPARTITION p1sp1 ENGINE = Dstore)) */
+alter table t1 add partition (
+partition p2 values in (3) (subpartition sp21,subpartition sp22),
+partition p3 values in (4)
+);
+ERROR 42000: Wrong number of subpartitions defined, mismatch with previous setting near '
+)' at line 3
+drop table t1;
+create table t1 (a int) partition by list (a) (
+partition p0 values in (1)
+);
+alter table t1 add partition (
+partition p2 values in (3) (subpartition sp21,subpartition sp22),
+partition p3 values in (4)
+);
+ERROR 42000: Wrong number of subpartitions defined, mismatch with previous setting near '
+)' at line 3
+drop table t1;
+set debug='+d,generate_partition_by_syntax_failed';
+create table t1 (a int) partition by list (a) (
+partition p0 values in (1)
+);
+ERROR HY000: Internal error: Failed to generate partition syntax
+SET @saved_rds_extended_partitions_enabled=@@rds_extended_partitions_enabled;
+set global rds_extended_partitions_enabled = ON;
+create table t1 (a int, b int)
+partition by list (a) subpartition by list (a)
+( partition p0 values in (1) (subpartition sp01 values in (1)),
+partition p1 values in (2) (subpartition sp11 values in (2)));
+ERROR HY000: Internal error: Failed to generate partition syntax
+set debug='';
+create table t1 (a int, b int)
+partition by list (a) subpartition by list (a)
+( partition p0 values in (1) (subpartition sp01 values in (1)),
+partition p1 values in (2) (subpartition sp11 values in (2)));
+set debug='+d,generate_partition_by_syntax_failed';
+show create table t1;
+ERROR HY000: Internal error: Failed to generate partition syntax
+set debug='';
+drop table t1;
+set global rds_extended_partitions_enabled = @saved_rds_extended_partitions_enabled;

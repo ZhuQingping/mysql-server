@@ -1,0 +1,65 @@
+--source include/have_debug_sync.inc
+--source include/have_debug.inc
+--source include/have_only_dstore.inc
+
+--echo #
+--echo #  Test XID file storage can work normally when server restart during
+--echo #  recovery.
+--echo #
+
+CREATE TABLE t_ddl_crash_create_table_01(pk INT PRIMARY KEY, col1 INT);
+INSERT INTO t_ddl_crash_create_table_01 VALUES (1,2),(2,3),(3,4);
+--echo #  1. Crash on CREATE TABLE statement.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+ALTER TABLE t_ddl_crash_create_table_01 ADD COLUMN col2 INT AFTER pk;
+
+--source include/wait_until_disconnected.inc
+
+--echo #  2. Restart the server and make the server crash after DStore
+--echo #     recover done.
+--error 137
+--exec $MYSQLD_CMD --debug="d,crash_after_xid_is_written_and_dstore_recover_done"
+
+--echo #  3. Restart the server again and check table.
+--let $restart_parameters = restart:
+--source include/start_mysqld.inc
+--source include/wait_until_connected_again.inc
+--error ER_DUP_FIELDNAME
+ALTER TABLE t_ddl_crash_create_table_01 ADD COLUMN col2 CHAR(128) DEFAULT '123456789101112';
+
+--echo # 4. Before this patch, the following DROP would crash and the above
+--echo #    ALTER TABLE would succeed.
+DROP TABLE t_ddl_crash_create_table_01;
+
+--echo # 5. Other condition tests(mainly for code coverage)
+--let $MYSQLD_DATADIR= `SELECT @@datadir`
+CREATE TABLE t_ddl_crash_create_table_01(pk INT PRIMARY KEY, col1 INT);
+INSERT INTO t_ddl_crash_create_table_01 VALUES (1,2),(2,3),(3,4);
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+ALTER TABLE t_ddl_crash_create_table_01 ADD COLUMN col2 INT AFTER pk;
+--source include/wait_until_disconnected.inc
+--error 137
+--exec $MYSQLD_CMD --debug="d,crash_after_xid_is_written_and_dstore_recover_done"
+--error 137
+--exec $MYSQLD_CMD --rds_dstore_write_ddl_sql_into_redo=off --debug="d,crash_after_xid_is_written_and_dstore_recover_done" >> exec.log
+--error 1
+--exec $MYSQLD_CMD --storage_engine_mode=ONLY_INNODB --debug="d,crash_after_xid_is_written_and_dstore_recover_done"
+--source include/start_mysqld.inc
+--source include/wait_until_connected_again.inc
+
+DROP TABLE t_ddl_crash_create_table_01;
+
+--source include/shutdown_mysqld.inc
+--source include/wait_until_disconnected.inc
+
+--exec touch $MYSQLD_DATADIR/ddl_info_store_file.dat
+
+--source include/start_mysqld.inc
+--source include/wait_until_connected_again.inc
+--source include/force_restart.inc

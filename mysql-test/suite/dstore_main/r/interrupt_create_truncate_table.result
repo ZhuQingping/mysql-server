@@ -1,0 +1,48 @@
+call mtr.add_suppression("Create index storage relation fail for index: .* of table .* fail due to build index fail.");
+call mtr.add_suppression("CreateIndexStorRel fail! new_index_rel is nullptr");
+call mtr.add_suppression("create_index fail! new_index is nullptr");
+call mtr.add_suppression("cde_create_table_info.create_table fail! name = .*");
+call mtr.add_suppression("Reconstruct index:PRIMARY of table:.* fail due to build index fail.");
+########################################
+#Test1. Test for interruption during CREATE TABLE
+########################################
+waiting for interrupt signal
+set debug_sync = "InterruptCreateTable WAIT_FOR CreateContinue";
+CREATE TABLE `t1` (`id` int NOT NULL, PRIMARY KEY (`id`)) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;;
+KILL QUERY #;
+notify create table to continue
+set debug_sync = "now SIGNAL CreateContinue";
+ERROR 70100: Query execution was interrupted
+Verify create table fail 
+SELECT * FROM t1;
+ERROR 42S02: Table 'test.t1' doesn't exist
+########################################
+#Test2. Test for interruption during TRUNCATE TABLE
+########################################
+CREATE TABLE `t1` (
+`id` int NOT NULL,
+PRIMARY KEY (`id`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO t1 values (1), (2), (3);
+SELECT * from t1;
+id
+1
+2
+3
+waiting for interrupt signal
+set debug_sync = "InterruptTruncateTable WAIT_FOR TruncateContinue";
+TRUNCATE TABLE t1;;
+KILL QUERY #;
+notify create table to continue
+set debug_sync = "now SIGNAL TruncateContinue";
+ERROR 70100: Query execution was interrupted
+SELECT * from t1;
+id
+1
+2
+3
+Test for normal behaviour
+TRUNCATE TABLE t1;
+SELECT * from t1;
+id
+DROP TABLE t1;

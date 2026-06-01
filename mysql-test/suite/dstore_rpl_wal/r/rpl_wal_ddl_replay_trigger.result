@@ -1,0 +1,585 @@
+############################################################
+Establish a master-replica replication relationship based on physical replication.
+############################################################
+include/master-slave.inc
+[connection master]
+#
+# 1. Initialize the required variables, then disconnect the subsequent master-replica replication connections.
+#
+[connection master]
+[connection slave]
+STOP REPLICA;
+RESET REPLICA ALL;
+#
+# 2. Since physical replication does not support DDL operations at present, execute all required DDL statements first.
+#
+create database copy_database;
+use copy_database;
+CREATE TABLE copy_table (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) engine = dstore;
+#
+# 3. Shutdown the primary and standby instances.
+#
+include/rpl_stop_server.inc [server_number=1]
+include/rpl_stop_server.inc [server_number=2]
+#
+# 4. Copy the data directory of the primary to that of the standby.
+#
+#
+# 5. Start the primary and standby instances with new parameters for establishing a master-replica physical replication relationship.
+#
+include/rpl_start_server.inc [server_number=1]
+include/rpl_start_server.inc [server_number=2]
+#
+# 6. Confirm that the primary and standby servers start with the new data directory.
+#
+include/assert.inc [Database copy_database should exist (only one record)]
+include/assert.inc [Table copy_table should exist in database copy_database (only one record)]
+use copy_database;
+show tables;
+Tables_in_copy_database
+copy_table
+include/assert.inc [Database copy_database should exist (only one record)]
+include/assert.inc [Table copy_table should exist in database copy_database (only one record)]
+use copy_database;
+show tables;
+Tables_in_copy_database
+copy_table
+#
+# 7. Install the plugin on both the primary and standby servers, and establish a master-replica physical replication relationship.
+#
+#
+# Install the primary server's plugin and set enabled_wal to ON.
+#
+INSTALL PLUGIN rpl_semi_sync_source SONAME 'semisync_source.so';
+INSTALL PLUGIN rpl_semi_sync_replica SONAME 'semisync_replica.so';
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 1;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 1;
+SET GLOBAL rds_physical_rpl_sender_packet_size = 1;
+#
+# dstore_enable_standby_role should show as false, indicating that the current node is the source.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	1
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	OFF
+#
+# Install the standby server's plugin and set enabled_wal to ON.
+#
+INSTALL PLUGIN rpl_semi_sync_source SONAME 'semisync_source.so';
+INSTALL PLUGIN rpl_semi_sync_replica SONAME 'semisync_replica.so';
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 1;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 1;
+SET GLOBAL rds_physical_rpl_sender_packet_size = 1;
+#
+# dstore_enable_standby_role should show as true, indicating that the current node is the replica.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	2
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	ON
+#
+# Configure the replica and check whether it is configured correctly.
+#
+STOP REPLICA;
+Warnings:
+Note	3084	Replication thread(s) for channel '' are already stopped.
+RESET REPLICA ALL;
+CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=SERVER_MYPORT_1, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL 'dstore_wal_replication_channel';;
+include/assert.inc [Channel name should be 'dstore_wal_replication_channel']
+Slave_IO_Running should be OFF.
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+OFF
+START REPLICA;
+#
+# Slave_IO_Running should be ON.
+#
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+ON
+############################################################
+# 一、Create the test environment.
+# 二、Execute the corresponding DDL statements for SQLCOM_CREATE_TRIGGER and SQLCOM_DROP_TRIGGER.
+# 三、Check the DD information on the standby node to ensure correct metadata replay.
+# 四、Execute trigger-related SQL statements (INSERT, UPDATE, DELETE). After execution, perform a full table scan for comparison with the new primary node later, to ensure the correctness of the replay function.
+# 五、Perform a switchover.
+# 六、Perform a full table scan on the new primary node and compare it with the result from Step 4, to ensure the correctness of the standby node replay function.
+# 七、Use the replayed triggers, and perform operations (modify and delete) on them to ensure the availability and operability of the replayed DDL.
+############################################################
+#
+# 一、Create the test environment.
+#
+CREATE DATABASE IF NOT EXISTS test_trigger_db 
+DEFAULT CHARACTER SET utf8mb4 
+DEFAULT COLLATE utf8mb4_general_ci;
+USE test_trigger_db;
+CREATE TABLE employees (
+emp_id INT AUTO_INCREMENT PRIMARY KEY,
+emp_name VARCHAR(100) NOT NULL,
+department VARCHAR(50),
+salary DECIMAL(10, 2),
+hire_date DATE,
+last_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+CREATE TABLE departments (
+dept_id INT AUTO_INCREMENT PRIMARY KEY,
+dept_name VARCHAR(50) NOT NULL UNIQUE,
+location VARCHAR(100),
+budget DECIMAL(15, 2),
+created_at TIMESTAMP DEFAULT '2026-01-01 00:00:00'
+);
+CREATE TABLE audit_log (
+log_id INT AUTO_INCREMENT PRIMARY KEY,
+table_name VARCHAR(64),
+operation VARCHAR(10),
+emp_id INT,
+old_values JSON,
+new_values JSON,
+changed_by VARCHAR(100),
+changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE dept_statistics (
+dept_id INT,
+dept_name VARCHAR(50),
+emp_count INT DEFAULT 0,
+total_salary DECIMAL(15, 2) DEFAULT 0,
+avg_salary DECIMAL(10, 2) DEFAULT 0,
+last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+PRIMARY KEY (dept_id)
+);
+INSERT INTO departments(dept_name, location, budget) VALUES
+('技术部', '北京', 1000000.00),
+('销售部', '上海', 500000.00),
+('人事部', '广州', 300000.00),
+('财务部', '深圳', 400000.00);
+# 
+# 二、Execute the corresponding DDL statements for SQLCOM_CREATE_TRIGGER and SQLCOM_DROP_TRIGGER.
+# 
+# 
+# 1 SQLCOM_CREATE_TRIGGER
+# 
+# 1 Create a BEFORE INSERT trigger - data validation and default value setting
+CREATE TRIGGER trg_employees_bi 
+BEFORE INSERT ON employees
+FOR EACH ROW
+BEGIN
+# 验证部门是否存在
+IF NEW.department IS NOT NULL THEN
+IF NOT EXISTS (SELECT 1 FROM departments WHERE dept_name = NEW.department) THEN
+SIGNAL SQLSTATE '45000' 
+SET MESSAGE_TEXT = '部门不存在，请先创建部门';
+END IF;
+END IF;
+# 设置默认hire_date为当前日期
+IF NEW.hire_date IS NULL THEN
+SET NEW.hire_date = '2026-01-01';
+END IF;
+# 记录审计日志
+INSERT INTO audit_log(table_name, operation, emp_id, new_values, changed_by)
+VALUES ('employees', 'INSERT', NEW.emp_id, 
+JSON_OBJECT('emp_name', NEW.emp_name, 'department', NEW.department, 'salary', NEW.salary),
+CURRENT_USER());
+END$$
+# 2. Create an AFTER INSERT trigger - maintain department statistical information
+CREATE TRIGGER trg_employees_ai 
+AFTER INSERT ON employees
+FOR EACH ROW
+BEGIN
+# 更新部门统计信息
+INSERT INTO dept_statistics (dept_id, dept_name, emp_count, total_salary, avg_salary)
+SELECT d.dept_id, d.dept_name, 1, NEW.salary, NEW.salary
+FROM departments d
+WHERE d.dept_name = NEW.department
+ON DUPLICATE KEY UPDATE
+emp_count = emp_count + 1,
+total_salary = total_salary + NEW.salary,
+avg_salary = (total_salary + NEW.salary) / (emp_count + 1);
+END$$
+# 3 Create a BEFORE UPDATE trigger - data validation and historical record keeping
+CREATE TRIGGER trg_employees_bu 
+BEFORE UPDATE ON employees
+FOR EACH ROW
+BEGIN
+# 验证部门是否存在（如果部门被修改）
+IF NEW.department IS NOT NULL AND NEW.department != OLD.department THEN
+IF NOT EXISTS (SELECT 1 FROM departments WHERE dept_name = NEW.department) THEN
+SIGNAL SQLSTATE '45000' 
+SET MESSAGE_TEXT = '新部门不存在，请先创建部门';
+END IF;
+END IF;
+END$$
+# 4 Create an AFTER UPDATE trigger - update department statistical information
+CREATE TRIGGER trg_employees_au 
+AFTER UPDATE ON employees
+FOR EACH ROW
+BEGIN
+# 记录审计日志
+INSERT INTO audit_log(table_name, operation, emp_id, old_values, new_values, changed_by)
+VALUES ('employees', 'UPDATE', NEW.emp_id, 
+JSON_OBJECT('emp_name', OLD.emp_name, 'department', OLD.department, 'salary', OLD.salary),
+JSON_OBJECT('emp_name', NEW.emp_name, 'department', NEW.department, 'salary', NEW.salary),
+CURRENT_USER());
+# 如果部门变更，更新统计信息
+IF NEW.department != OLD.department THEN
+# 减少旧部门的统计
+UPDATE dept_statistics ds
+JOIN departments d ON ds.dept_id = d.dept_id
+SET ds.emp_count = ds.emp_count - 1,
+ds.total_salary = ds.total_salary - OLD.salary
+WHERE d.dept_name = OLD.department;
+# 删除统计为零的记录
+DELETE FROM dept_statistics WHERE emp_count <= 0;
+# 增加新部门的统计
+INSERT INTO dept_statistics (dept_id, dept_name, emp_count, total_salary, avg_salary)
+SELECT d.dept_id, d.dept_name, 1, NEW.salary, NEW.salary
+FROM departments d
+WHERE d.dept_name = NEW.department
+ON DUPLICATE KEY UPDATE
+emp_count = emp_count + 1,
+total_salary = total_salary + NEW.salary;
+ELSE
+# 如果部门未变，只更新薪资统计
+IF NEW.salary != OLD.salary THEN
+UPDATE dept_statistics ds
+JOIN departments d ON ds.dept_id = d.dept_id
+SET ds.total_salary = ds.total_salary - OLD.salary + NEW.salary
+WHERE d.dept_name = NEW.department;
+END IF;
+END IF;
+# 重新计算平均工资
+UPDATE dept_statistics ds
+SET ds.avg_salary = CASE 
+WHEN ds.emp_count > 0 THEN ds.total_salary / ds.emp_count
+ELSE 0
+END;
+END$$
+# 5 Create a BEFORE DELETE trigger - Prevent important data from being deleted
+CREATE TRIGGER trg_employees_bd 
+BEFORE DELETE ON employees
+FOR EACH ROW
+BEGIN
+# 不允许删除特定部门的员工
+IF OLD.department = '技术部' THEN
+SIGNAL SQLSTATE '45000' 
+SET MESSAGE_TEXT = '技术部员工不允许删除';
+END IF;
+END$$
+# 6 Create an AFTER DELETE trigger - Clean up department statistical information
+CREATE TRIGGER trg_employees_ad 
+AFTER DELETE ON employees
+FOR EACH ROW
+BEGIN
+# 记录审计日志
+INSERT INTO audit_log(table_name, operation, emp_id, old_values, changed_by)
+VALUES ('employees', 'DELETE', OLD.emp_id, 
+JSON_OBJECT('emp_name', OLD.emp_name, 'department', OLD.department, 'salary', OLD.salary),
+CURRENT_USER());
+# 更新部门统计信息
+UPDATE dept_statistics ds
+JOIN departments d ON ds.dept_id = d.dept_id
+SET ds.emp_count = ds.emp_count - 1,
+ds.total_salary = ds.total_salary - OLD.salary
+WHERE d.dept_name = OLD.department;
+# 删除统计为零的记录
+DELETE FROM dept_statistics WHERE emp_count <= 0;
+# 重新计算平均工资
+UPDATE dept_statistics ds
+SET ds.avg_salary = CASE 
+WHEN ds.emp_count > 0 THEN ds.total_salary / ds.emp_count
+ELSE 0
+END;
+END$$
+# 7 Create a trigger that will be deleted later
+CREATE TRIGGER trg_departments_ai 
+AFTER INSERT ON departments
+FOR EACH ROW
+BEGIN
+# 为新部门初始化统计信息
+INSERT INTO dept_statistics(dept_id, dept_name, emp_count, total_salary, avg_salary)
+VALUES (NEW.dept_id, NEW.dept_name, 0, 0, 0);
+END$$
+#
+# 2 SQLCOM_DROP_TRIGGER
+#
+USE test_trigger_db;
+DROP TRIGGER IF EXISTS trg_departments_ai;
+# Query the DDL information of the triggers on the primary node
+SELECT COUNT(*) as deleted_trigger_exists FROM INFORMATION_SCHEMA.TRIGGERS 
+WHERE TRIGGER_SCHEMA = 'test_trigger_db' AND TRIGGER_NAME = 'trg_departments_ai';
+deleted_trigger_exists
+0
+SELECT 
+TRIGGER_NAME,
+EVENT_MANIPULATION,
+EVENT_OBJECT_TABLE,
+ACTION_TIMING
+FROM INFORMATION_SCHEMA.TRIGGERS 
+WHERE TRIGGER_SCHEMA = 'test_trigger_db'
+ORDER BY TRIGGER_NAME;
+TRIGGER_NAME	EVENT_MANIPULATION	EVENT_OBJECT_TABLE	ACTION_TIMING
+trg_employees_ad	DELETE	employees	AFTER
+trg_employees_ai	INSERT	employees	AFTER
+trg_employees_au	UPDATE	employees	AFTER
+trg_employees_bd	DELETE	employees	BEFORE
+trg_employees_bi	INSERT	employees	BEFORE
+trg_employees_bu	UPDATE	employees	BEFORE
+#
+# 三、Check the DD on the standby node to ensure the correctness of metadata replay on the standby node.
+#
+# Verify the DDL information of the triggers on the standby node
+SELECT COUNT(*) as deleted_trigger_exists FROM INFORMATION_SCHEMA.TRIGGERS 
+WHERE TRIGGER_SCHEMA = 'test_trigger_db' AND TRIGGER_NAME = 'trg_departments_ai';
+deleted_trigger_exists
+0
+SELECT 
+TRIGGER_NAME,
+EVENT_MANIPULATION,
+EVENT_OBJECT_TABLE,
+ACTION_TIMING
+FROM INFORMATION_SCHEMA.TRIGGERS 
+WHERE TRIGGER_SCHEMA = 'test_trigger_db'
+ORDER BY TRIGGER_NAME;
+TRIGGER_NAME	EVENT_MANIPULATION	EVENT_OBJECT_TABLE	ACTION_TIMING
+trg_employees_ad	DELETE	employees	AFTER
+trg_employees_ai	INSERT	employees	AFTER
+trg_employees_au	UPDATE	employees	AFTER
+trg_employees_bd	DELETE	employees	BEFORE
+trg_employees_bi	INSERT	employees	BEFORE
+trg_employees_bu	UPDATE	employees	BEFORE
+#
+# 四、Execute trigger-related SQL statements (INSERT, UPDATE, DELETE). After execution, perform a full table scan for comparison with the new primary node later, to ensure the correctness of the replay function.
+#
+USE test_trigger_db;
+# 1 Insert test data to verify the functionality of the triggers
+INSERT INTO employees(emp_name, department, salary, hire_date) VALUES
+('张三', '技术部', 15000.00, '2020-01-15'),
+('李四', '技术部', 12000.00, '2020-03-20'),
+('王五', '销售部', 8000.00, '2021-05-10'),
+('赵六', '人事部', 10000.00, '2019-11-30'),
+('钱七', '销售部', 9000.00, '2022-02-14');
+# 2 Verify the functionality of the triggers
+INSERT INTO employees(emp_name, department, salary) 
+VALUES ('测试员工', '不存在的部门', 5000.00);
+ERROR 45000: 部门不存在，请先创建部门
+INSERT INTO employees(emp_name, department, salary, hire_date) 
+VALUES ('周九', '销售部', 7500.00, NULL);
+UPDATE employees SET department = '不存在的部门' WHERE emp_name = '李四';
+ERROR 45000: 新部门不存在，请先创建部门
+UPDATE employees SET salary = 13000.00 WHERE emp_name = '李四';
+UPDATE employees SET department = '财务部', salary = 11000.00 WHERE emp_name = '赵六';
+DELETE FROM employees WHERE emp_name = '张三';
+ERROR 45000: 技术部员工不允许删除
+DELETE FROM employees WHERE emp_name = '钱七';
+# 3 Execute the query for subsequent comparison with the new primary node
+SELECT emp_id, emp_name, department, salary, hire_date FROM employees ORDER BY emp_id;
+emp_id	emp_name	department	salary	hire_date
+1	张三	技术部	15000.00	2020-01-15
+2	李四	技术部	13000.00	2020-03-20
+3	王五	销售部	8000.00	2021-05-10
+4	赵六	财务部	11000.00	2019-11-30
+6	周九	销售部	7500.00	2026-01-01
+SELECT dept_id, dept_name, location, budget FROM departments ORDER BY dept_id;
+dept_id	dept_name	location	budget
+1	技术部	北京	1000000.00
+2	销售部	上海	500000.00
+3	人事部	广州	300000.00
+4	财务部	深圳	400000.00
+SELECT operation, COUNT(*) as count FROM audit_log GROUP BY operation ORDER BY operation;
+operation	count
+DELETE	1
+INSERT	6
+UPDATE	2
+SELECT dept_id, dept_name, emp_count, total_salary AS total_salary, FORMAT(avg_salary, 2) AS avg_salary
+FROM dept_statistics ORDER BY dept_name;
+dept_id	dept_name	emp_count	total_salary	avg_salary
+1	技术部	2	28000.00	14,000.00
+4	财务部	1	11000.00	11,000.00
+2	销售部	2	15500.00	7,750.00
+#
+# 五、Perform a switchover.
+#
+############################################################
+switchover_1
+############################################################
+# Demote the source to replica.
+SET GLOBAL read_only = ON;
+SET GLOBAL event_scheduler = OFF;
+call rpl_wal.pdb_demote();
+#
+# dstore_enable_standby_role should show as true, indicating that the current node is the replica.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	1
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	ON
+#
+# Promote the replica to source.
+#
+STOP REPLICA;
+RESET REPLICA ALL FOR CHANNEL 'dstore_wal_replication_channel';
+call rpl_wal.pdb_promote();
+#
+# dstore_enable_standby_role should show as false, indicating that the current node is the source.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	2
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	OFF
+#
+# Clean the primary and standby servers.
+#
+include/stop_wal_dump_threads.inc
+#
+# Re-establish primary-standby relationship.
+#
+CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=old_standby_port, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL 'dstore_wal_replication_channel';;
+include/assert.inc [Channel name should be 'dstore_wal_replication_channel']
+START REPLICA;
+#
+# Slave_IO_Running should be ON.
+#
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+ON
+#
+# Disable read-only mode on the new source.
+#
+SET GLOBAL read_only = OFF;
+SET GLOBAL event_scheduler = ON;
+#
+# 六、Perform a full table scan on the new primary node and compare it with the result from Step 4, to ensure the correctness of the standby node replay function.
+#
+SHOW DATABASES LIKE 'test_trigger_db';
+Database (test_trigger_db)
+test_trigger_db
+USE test_trigger_db;
+SELECT emp_id, emp_name, department, salary, hire_date FROM employees ORDER BY emp_id;
+emp_id	emp_name	department	salary	hire_date
+1	张三	技术部	15000.00	2020-01-15
+2	李四	技术部	13000.00	2020-03-20
+3	王五	销售部	8000.00	2021-05-10
+4	赵六	财务部	11000.00	2019-11-30
+6	周九	销售部	7500.00	2026-01-01
+SELECT dept_id, dept_name, location, budget FROM departments ORDER BY dept_id;
+dept_id	dept_name	location	budget
+1	技术部	北京	1000000.00
+2	销售部	上海	500000.00
+3	人事部	广州	300000.00
+4	财务部	深圳	400000.00
+SELECT operation, COUNT(*) as count FROM audit_log GROUP BY operation ORDER BY operation;
+operation	count
+DELETE	1
+INSERT	6
+UPDATE	2
+SELECT dept_id, dept_name, emp_count, total_salary AS total_salary, FORMAT(avg_salary, 2) AS avg_salary
+FROM dept_statistics ORDER BY dept_name;
+dept_id	dept_name	emp_count	total_salary	avg_salary
+1	技术部	2	28000.00	14,000.00
+4	财务部	1	11000.00	11,000.00
+2	销售部	2	15500.00	7,750.00
+#
+# 七、Use the replayed triggers, and perform operations (modify and delete) on them to ensure the availability and operability of the replayed DDL.
+#
+INSERT INTO employees(emp_name, department, salary) 
+VALUES ('新主员工', '人事部', 8500.00);
+UPDATE employees SET salary = salary * 1.1 WHERE emp_name = '王五';
+UPDATE employees SET department = '销售部' WHERE department = '人事部';
+DELETE FROM departments WHERE dept_name = '人事部';
+SELECT emp_id, emp_name, department, salary, hire_date FROM employees ORDER BY emp_id;
+emp_id	emp_name	department	salary	hire_date
+1	张三	技术部	15000.00	2020-01-15
+2	李四	技术部	13000.00	2020-03-20
+3	王五	销售部	8800.00	2021-05-10
+4	赵六	财务部	11000.00	2019-11-30
+6	周九	销售部	7500.00	2026-01-01
+7	新主员工	销售部	8500.00	2026-01-01
+SELECT dept_id, dept_name, location, budget FROM departments ORDER BY dept_id;
+dept_id	dept_name	location	budget
+1	技术部	北京	1000000.00
+2	销售部	上海	500000.00
+4	财务部	深圳	400000.00
+SELECT dept_id, dept_name, emp_count, total_salary AS total_salary, FORMAT(avg_salary, 2) AS avg_salary
+FROM dept_statistics ORDER BY dept_name;
+dept_id	dept_name	emp_count	total_salary	avg_salary
+1	技术部	2	28000.00	14,000.00
+4	财务部	1	11000.00	11,000.00
+2	销售部	3	24800.00	8,266.67
+SELECT log_id, table_name, operation, emp_id, old_values, new_values, changed_by 
+FROM audit_log ORDER BY log_id;
+log_id	table_name	operation	emp_id	old_values	new_values	changed_by
+1	employees	INSERT	0	NULL	{"salary": 15000.00, "emp_name": "张三", "department": "技术部"}	root@localhost
+2	employees	INSERT	0	NULL	{"salary": 12000.00, "emp_name": "李四", "department": "技术部"}	root@localhost
+3	employees	INSERT	0	NULL	{"salary": 8000.00, "emp_name": "王五", "department": "销售部"}	root@localhost
+4	employees	INSERT	0	NULL	{"salary": 10000.00, "emp_name": "赵六", "department": "人事部"}	root@localhost
+5	employees	INSERT	0	NULL	{"salary": 9000.00, "emp_name": "钱七", "department": "销售部"}	root@localhost
+6	employees	INSERT	0	NULL	{"salary": 7500.00, "emp_name": "周九", "department": "销售部"}	root@localhost
+7	employees	UPDATE	2	{"salary": 12000.00, "emp_name": "李四", "department": "技术部"}	{"salary": 13000.00, "emp_name": "李四", "department": "技术部"}	root@localhost
+8	employees	UPDATE	4	{"salary": 10000.00, "emp_name": "赵六", "department": "人事部"}	{"salary": 11000.00, "emp_name": "赵六", "department": "财务部"}	root@localhost
+9	employees	DELETE	5	{"salary": 9000.00, "emp_name": "钱七", "department": "销售部"}	NULL	root@localhost
+10	employees	INSERT	0	NULL	{"salary": 8500.00, "emp_name": "新主员工", "department": "人事部"}	root@localhost
+11	employees	UPDATE	3	{"salary": 8000.00, "emp_name": "王五", "department": "销售部"}	{"salary": 8800.00, "emp_name": "王五", "department": "销售部"}	root@localhost
+12	employees	UPDATE	7	{"salary": 8500.00, "emp_name": "新主员工", "department": "人事部"}	{"salary": 8500.00, "emp_name": "新主员工", "department": "销售部"}	root@localhost
+DROP TRIGGER IF EXISTS trg_employees_bi;
+DROP TRIGGER IF EXISTS trg_employees_ai;
+DROP TRIGGER IF EXISTS trg_employees_bu;
+DROP TRIGGER IF EXISTS trg_employees_au;
+DROP TRIGGER IF EXISTS trg_employees_bd;
+DROP TRIGGER IF EXISTS trg_employees_ad;
+SELECT COUNT(*) as deleted_trigger_exists FROM INFORMATION_SCHEMA.TRIGGERS 
+WHERE TRIGGER_SCHEMA = 'test_trigger_db';
+deleted_trigger_exists
+0
+############################################################
+# Uninstall the plugins, reset the variables, and restore the original master-replica replication relationship.
+############################################################
+#
+# 1. Shutdown the mysqld instances of the master and replica servers launched with the new data directory.
+#
+STOP REPLICA;
+RESET REPLICA ALL FOR CHANNEL 'dstore_wal_replication_channel';
+include/stop_wal_dump_threads.inc
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 0;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 0;
+UNINSTALL PLUGIN rpl_semi_sync_source;
+UNINSTALL PLUGIN rpl_semi_sync_replica;
+use mtr;
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 0;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 0;
+UNINSTALL PLUGIN rpl_semi_sync_source;
+UNINSTALL PLUGIN rpl_semi_sync_replica;
+use mtr;
+#
+# 2. Shutdown the mysqld instances of the master and replica servers launched with the new data directory.
+#
+include/rpl_stop_server.inc [server_number=1]
+include/rpl_stop_server.inc [server_number=2]
+# Delete the directories of the primary and standby servers.
+#
+# 3. Restart the mysqld instances of the master and replica servers using the configurations from the opt file.
+#
+include/rpl_start_server.inc [server_number=1]
+show databases;
+Database
+__recyclebin__
+copy_database
+information_schema
+mtr
+mysql
+performance_schema
+sys
+test
+drop database copy_database;
+use mtr;
+include/rpl_start_server.inc [server_number=2]
+use mtr;

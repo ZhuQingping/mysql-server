@@ -1,0 +1,23 @@
+--source include/have_debug.inc
+--echo # BUG2024022302941 outline hits are incorrect.
+
+set @save_opt_outline_enabled = @@global.rds_opt_outline_enabled;
+set global rds_opt_outline_enabled=ON;
+create table tbl1 (
+  id_col int not null auto_increment,
+  tinyint_col tinyint default null,
+  int_col int default null,
+  bigint_col bigint not null,
+  primary key (`id_col`),
+  key ndx_int_bigint_col ((int_col+tinyint_col), bigint_col)
+);
+call dbms_outln.add_optimizer_outline('test','',1,'/*+MAX_EXECUTION_TIME(1000) */','select id_col from tbl1 where id_col>2');
+flush tables;
+--replace_column 1 #
+call dbms_outln.show_outline();
+select id_col from tbl1 where id_col>2;
+--replace_column 1 #
+call dbms_outln.show_outline();
+
+drop table tbl1;
+set global rds_opt_outline_enabled=@save_opt_outline_enabled;

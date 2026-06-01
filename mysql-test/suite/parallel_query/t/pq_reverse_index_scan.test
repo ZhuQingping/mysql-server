@@ -1,0 +1,195 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+--source include/elide_costs.inc
+
+create table t1 (a int, key(a desc));
+insert into t1 values(1),(2),(3),(4),(5),(6),(7);
+
+ANALYZE TABLE t1;
+
+explain select a from t1;
+select a from t1;
+
+explain select a from t1 order by a;
+select a from t1 order by a;
+
+explain select a from t1 order by a desc;
+select a from t1 order by a desc;
+
+--echo BUG2022050700571: when the thread yields in move_to_prev_block(), then
+--echo move_to_prev_on_page() will crash as the current record is infimum.
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+
+set session debug="+d, move_block_yield";
+SELECT COUNT(*) from t1;
+
+--echo reverse index scan
+--replace_column 9 # 10 #
+explain select /*+PQ(1) */ a from t1 order by a;
+--disable_result_log
+select /*+PQ(1) */ a from t1 order by a;
+--enable_result_log
+
+--echo normal index scan
+--replace_column 9 # 10 #
+explain select /*+PQ(1) */ a from t1 order by a desc;
+--disable_result_log
+select /*+PQ(1) */ a from t1 order by a desc;
+--enable_result_log
+
+set session debug="-d, move_block_yield";
+
+drop table t1;
+
+--echo #
+--echo #BUG2022102503204 Wrong group merge when using a reverse_sorted index
+--echo #
+create table t1 (a int, b int, c int, key(a desc, b asc, c desc));
+create table t2 (d int, key(d asc));
+show create table t1;
+--disable_query_log
+let $i=5;
+while($i)
+{
+    let $j = 5;
+    while($j)
+    {
+        let $k = 5;
+        while($k)
+        {
+            let $l = 5;
+            while($l)
+            {
+                --eval insert into t1 values($k, $j, $i)
+                dec $l;
+            }
+            dec $k;
+        }
+        dec $j;
+    }
+    --eval insert into t2 values($i);
+    dec $i;
+}
+analyze table t1,t2;
+--enable_query_log
+--echo # Test reverse_sorted using index prefix
+let $query=
+select sum(a), a from t1 group by a;
+let $query_nopq=
+select/*+NO_PQ*/ sum(a), a from t1 group by a;
+--replace_regex $elide_costs_and_rows
+--eval explain format=tree $query
+--replace_regex $elide_costs_and_rows
+--eval explain format=tree $query_nopq
+--eval $query
+--eval $query_nopq
+
+--echo # Test reverse_sorted index not using index prefix (use temptable)
+let $query=
+select sum(c), c from t1 group by c;
+let $query_nopq=
+select/*+NO_PQ*/ sum(c), c from t1 group by c;
+--replace_regex $elide_costs_and_rows
+--eval explain format=tree $query
+--replace_regex $elide_costs_and_rows
+--eval explain format=tree $query_nopq
+
+--echo # Test reverse_sorted index with two key_part(prefix of key)
+let $query=
+select sum(a+b), a, b from t1 group by a,b;
+let $query_nopq=
+select/*+NO_PQ*/ sum(a+b), a, b from t1 group by a,b;
+--replace_regex $elide_costs_and_rows
+--eval explain format=tree $query
+--replace_regex $elide_costs_and_rows
+--eval explain format=tree $query_nopq
+--eval $query
+--eval $query_nopq
+
+--echo # Test reverse_sorted index with two key_part(not prefix of key)(use temptable)
+let $query=
+select sum(b+c), b, c from t1 group by b,c;
+let $query_nopq=
+select/*+NO_PQ*/ sum(b+c), b, c from t1 group by b,c;
+--replace_regex $elide_costs_and_rows
+--eval explain format=tree $query
+--replace_regex $elide_costs_and_rows
+--eval explain format=tree $query_nopq
+
+--echo # Test reverse_sorted index with two tables(use temptable)
+let $query=
+select sum(t1.a+t2.d), t1.a, t2.d from t1 join t2 on t1.a = t2.d group by t1.a,t2.d;
+let $query_nopq=
+select/*+NO_PQ*/ sum(t1.a+t2.d), t1.a, t2.d from t1 join t2 on t1.a = t2.d group by t1.a,t2.d;
+--replace_regex $elide_costs_and_rows
+--eval explain format=tree $query
+--replace_regex $elide_costs_and_rows
+--eval explain format=tree $query_nopq
+
+--echo # Test reverse_sorted index using const key parts.
+let $query=
+select sum(t1.a), t1.a, t1.b, t1.c from t1 where t1.a = 1 and t1.b = 2 group by t1.a,t1.b,t1.c;
+let $query_nopq=
+select/*+NO_PQ*/ sum(t1.a), t1.a, t1.b, t1.c from t1 where t1.a = 1 and t1.b = 2 group by t1.a,t1.b,t1.c;
+--replace_regex $elide_costs_and_rows
+--eval explain format=tree $query
+--replace_regex $elide_costs_and_rows
+--eval explain format=tree $query_nopq
+--eval $query
+--eval $query_nopq
+
+create database test1;
+create table test1.t3 like t2;
+insert into test1.t3 select * from t2;
+--echo # Test reverse_sorted index with two tables from different databases(use temptable)
+let $query=
+select sum(t1.a + test1.t3.d), t1.a, test1.t3.d from t1 join test1.t3 on t1.a = test1.t3.d group by t1.a,test1.t3.d;
+let $query_nopq=
+select/*+NO_PQ*/ sum(t1.a + test1.t3.d), t1.a, test1.t3.d from t1 join test1.t3 on t1.a = test1.t3.d group by t1.a,test1.t3.d;
+--replace_regex $elide_costs_and_rows
+--eval explain format=tree $query
+--replace_regex $elide_costs_and_rows
+--eval explain format=tree $query_nopq
+
+drop database test1;
+
+--echo #
+--echo #BUG2022102503168 Wrong result with limit when using a reverse_sorted index
+--echo #
+let $query=
+select * from t2, t1 force index(`a`) having c < 3 order by a, b limit 10;
+let $query_nopq=
+select/*+NO_PQ*/ * from t2, t1 force index(`a`) having c < 3 order by a, b limit 10;
+--replace_regex $elide_costs_and_rows
+--eval explain format=tree $query
+--eval $query
+--replace_regex $elide_costs_and_rows
+--eval explain format=tree $query_nopq
+--eval $query_nopq
+
+drop table t1;
+drop table t2;
+
+--echo #
+--echo #BUG2023033003884 PQ leader plan assertion error
+--echo #
+
+CREATE TABLE t0 (c0 INT, INDEX i0 (c0 DESC));
+CREATE TABLE t1 (c0 INT PRIMARY KEY);
+ANALYZE TABLE t0,t1;
+let $query=
+SELECT 1 FROM t0 LEFT JOIN t1 ON t1.c0 = NULL GROUP BY t0.c0, t1.c0;
+eval EXPLAIN $query;
+eval $query;
+DROP TABLE t0,t1;

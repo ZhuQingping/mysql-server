@@ -1,0 +1,828 @@
+--source include/have_debug.inc
+--source include/elide_costs.inc
+--source include/have_only_dstore.inc
+CREATE TABLE t1(a int, b int);
+INSERT INTO t1 VALUES(1,2),(2,3),(2,3),(2,3),(2,4),(3,1);
+CREATE TABLE t2(a int, b int);
+INSERT INTO t2 VALUES(1,3),(2,4),(3,4);
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t1;
+ANALYZE TABLE t1,t2;
+--echo "test caching of IN(subquery) using IN-to-EXISTS"
+SET @old_optimizer_switch = @@optimizer_switch;
+SET optimizer_switch='semijoin=off,partial_result_cache=on';
+SET rds_partial_result_cache_cost_threshold = 0;
+--replace_regex /  \(cost.*//
+EXPLAIN format=tree SELECT * FROM t1 WHERE t1.a in (SELECT b FROM t2 WHERE t2.b > t1.b GROUP BY b);
+SELECT * FROM t1 WHERE t1.a in (SELECT b FROM t2 WHERE t2.b > t1.b GROUP BY b) ORDER BY a;
+# Memory usage is a different number when using ASAN, so we hide it;
+# however it is verified in memory_used.test.
+--replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*//
+EXPLAIN ANALYZE format=tree SELECT * FROM t1 WHERE t1.a in (SELECT b FROM t2 WHERE t2.b > t1.b GROUP BY b) ORDER BY a;
+
+--echo "test of uncorrelated subquery using IN-to-EXISTS (correlation only in the left argument of IN),"
+--echo "the left argument is injected in the subquery's WHERE, so subquery becomes correlated,
+--echo "so PTRC is used".
+--replace_regex /  \(cost.*//
+EXPLAIN format=tree SELECT * FROM t1 WHERE t1.a in (SELECT /*+subquery(intoexists)*/ b FROM t2 GROUP BY b);
+--echo "same test with materialization: subquery remains non-correlated => no PTRC"
+--replace_regex /  \(cost.*//
+EXPLAIN format=tree SELECT * FROM t1 WHERE t1.a in (SELECT /*+subquery(materialization)*/ b FROM t2 GROUP BY b);
+
+--echo "subquery with aggregation inside"
+--replace_regex /  \(cost.*//
+EXPLAIN format=tree SELECT * FROM t1 WHERE t1.a in (SELECT 0.2 * avg(a) FROM t2 WHERE t2.b > t1.b GROUP BY a);
+SELECT * FROM t1 WHERE t1.a in (SELECT 0.2 * avg(a) FROM t2 WHERE t2.b > t1.b GROUP BY a);
+
+--echo "test caching of scalar subquery"
+--replace_regex /  \(cost.*//
+EXPLAIN format=tree SELECT * FROM t1 WHERE t1.a = (SELECT max(a) FROM t2 WHERE t2.b > t1.b);
+SELECT * FROM t1 WHERE t1.a = (SELECT max(a) FROM t2 WHERE t2.b > t1.b);
+--replace_regex /  \(cost.*//
+EXPLAIN format=tree SELECT * FROM t1 WHERE t1.a in (SELECT b FROM t2 WHERE t2.b > t1.b union SELECT a FROM t2 WHERE t2.b > t1.b) ORDER BY 1;
+SELECT * FROM t1 WHERE t1.a in (SELECT b FROM t2 WHERE t2.b > t1.b union SELECT a FROM t2 WHERE t2.b > t1.b) ORDER BY 1;
+
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT * FROM t1 as tt WHERE tt.a in (SELECT a FROM t2 as tt1 WHERE tt1.b in (SELECT t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+
+SELECT * FROM t1 as tt WHERE tt.a in (SELECT a FROM t2 as tt1 WHERE tt1.b in (SELECT t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+
+--echo "test cost"
+ALTER TABLE t1 ADD index idx(a);
+--replace_regex /  \(cost.*//
+EXPLAIN format=tree SELECT * FROM t1 WHERE t1.a in (SELECT b FROM t2 WHERE t2.b > t1.b GROUP BY b);
+ALTER TABLE t1 ADD index idx1(a, b);
+--replace_regex /  \(cost.*//
+EXPLAIN format=tree SELECT * FROM t1 WHERE t1.a in (SELECT b FROM t2 WHERE t2.b > t1.b GROUP BY b);
+
+--echo "block PTRC if aggregation if it happens in the outer query"
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT a, COUNT(t1.b) FROM t1 GROUP BY a ORDER BY (SELECT SUM(t1.b) FROM t2 LIMIT 1);
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT a, (SELECT SUM(t1.b) FROM t2 LIMIT 1) FROM t1 GROUP BY a;
+--echo "but allow PTRC if aggregation happens in the subquery"
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT a FROM t1 ORDER BY (SELECT SUM(t1.b+t2.b) FROM t2 LIMIT 1);
+
+--echo "test memory"
+SET rds_partial_result_cache_max_mem_size=64*1024;
+SELECT * FROM t1 WHERE t1.a = (SELECT max(a) FROM t2 WHERE t2.b > t1.b);
+SET debug="+d,ptrc_init_row_buffer_fail";
+SELECT * FROM t1 WHERE t1.a = (SELECT max(a) FROM t2 WHERE t2.b > t1.b);
+SET rds_partial_result_cache_max_mem_size=default;
+SET debug="-d,ptrc_init_row_buffer_fail";
+
+SET rds_partial_result_cache_max_mem_size=default;
+SET debug="+d,ptrc_initrowlbuffer_reserver_space_fail";
+SET OPTIMIZER_TRACE='enabled=on';
+--echo # Turning PQ off, otherwise we don't see the allocation failure in the optimizer trace.
+SELECT /*+ NO_PQ */ * FROM t1 WHERE t1.a = (SELECT max(a) FROM t2 WHERE t2.b > t1.b);
+--replace_regex /\"cost\":.*/#/ /\"distinct_rows\":.*/\"distinct_rows\":#/ /\"estimate_distinct.*/#/
+SELECT * FROM information_schema.optimizer_trace;
+SET OPTIMIZER_TRACE='enabled=off';
+SET debug="-d,ptrc_initrowlbuffer_reserver_space_fail";
+
+--echo "test_lru"
+SET debug="+d,allocate_failure_when_storerow";
+SELECT * FROM t1 WHERE t1.a in (SELECT b FROM t2 WHERE t2.b > t1.b GROUP BY b) ORDER BY a;
+SET debug="-d,allocate_failure_when_storerow";
+SET debug='+d,ptrc_sim_allocate_failure_during_cache';
+ALTER TABLE t2 ADD index idx1(a);
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT * FROM t1, t2 WHERE t1.a = t2.a ORDER BY 1,2;
+SELECT * FROM t1, t2 WHERE t1.a = t2.a ORDER BY 1,2,3,4;
+ALTER TABLE t2 DROP index idx1;
+SET debug="-d,ptrc_sim_allocate_failure_during_cache";
+SET rds_partial_result_cache_cost_threshold = 1;
+SELECT * FROM t1, t2 WHERE t1.a = t2.a ORDER BY 1,2,3,4;
+
+--echo "test hint"
+SET optimizer_switch = 'partial_result_cache=off';
+--echo "force subquery ptrc"
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT /*+prc_subquery(@sub1) */ * FROM t1 as tt WHERE tt.a in (SELECT /*+ qb_name(sub1) */ a FROM t2 as tt1 WHERE tt1.b in (SELECT t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+--echo "hint is useless because it's about top query which is not a subquery (can't have any cache)"
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT /*+prc_subquery() */ * FROM t1 as tt WHERE tt.a in (SELECT a FROM t2 as tt1 WHERE tt1.b in (SELECT /*+ prc_join(t1,t2) */ t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+--echo "hint works because it's about subquery"
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT /*+prc_subquery() */ * FROM t1 as tt WHERE tt.a in (SELECT /*+prc_subquery() */a FROM t2 as tt1 WHERE tt1.b in (SELECT /*+ prc_join(t1,t2) */ t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+--echo "hint about subquery cannot mention tables (a warning is issued for that)"
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT * FROM t1 as tt WHERE tt.a in (SELECT /*+prc_subquery(tt1) */a FROM t2 as tt1 WHERE tt1.b in (SELECT /*+ prc_join(t1,t2) */ t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+SET optimizer_switch = 'partial_result_cache=on';
+SET rds_partial_result_cache_cost_threshold = 0;
+--echo "hint is useless"
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT /*+no_prc_subquery() */ * FROM t1 as tt WHERE tt.a in (SELECT a FROM t2 as tt1 WHERE tt1.b in (SELECT t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+--echo "force no ptrc for inner subquery"
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT /*+no_prc_subquery(@sub1) */ * FROM t1 as tt WHERE tt.a in (SELECT /*+ qb_name(sub1) */ a FROM t2 as tt1 WHERE tt1.b in (SELECT t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+--echo "force no ptrc in subquery"
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT /*+prc_subquery(@sub1) prc_subquery(@sub1) */ * FROM t1 as tt WHERE tt.a in (SELECT /*+ qb_name(sub1) */ a FROM t2 as tt1 WHERE tt1.b in (SELECT /*+ no_prc_subuqery(t2) */ t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+--echo "conflict hint"
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT /*+no_prc_subquery(@sub1) prc_subquery(@sub1) */ * FROM t1 as tt WHERE 
+tt.a in (SELECT /*+ qb_name(sub1) */ a FROM t2 as tt1 WHERE tt1.b in (SELECT /*+ no_prc_join(t2) */ t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+--echo "Show that hints are printed in the transformed query below EXPLAIN (see the Note 1003 in output)"
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TRADITIONAL SELECT /*+no_prc_subquery(@sub1) */ * FROM t1 as tt WHERE 
+tt.a in (SELECT /*+ qb_name(sub1) */ a FROM t2 as tt1 WHERE tt1.b in (SELECT /*+ no_prc_join(t2) */ t1.b FROM t1, t2 WHERE t1.a = t2.a AND t1.b = tt.b));
+
+ALTER TABLE t1 DROP INDEX idx;
+ALTER TABLE t1 ADD INDEX idx(b,a);
+SET rds_partial_result_cache_cost_threshold = 1;
+--echo "no ptrc for NLJ"
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT * FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+--echo "only all tables are in hint, ptrc for NLJ will be forced"
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT /*+ prc_join(t2) */ * FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT /*+ prc_join(t1) */ * FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT /*+ prc_join(t1,t2) */ * FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT /*+ prc_join() */ * FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+SET rds_partial_result_cache_cost_threshold = 0;
+--echo "ptrc for NLJ"
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT * FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+--echo "no use if hint on outer tables"
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT /*+ no_prc_join(t2) */ * FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+--echo "no ptrc for NLJ"
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT /*+ no_prc_join(t1) */ * FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT /*+ no_prc_join() */ * FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+--echo "test rand" 
+--echo "no PTRC for join if WHERE contains random functions, because the NL join's might be random then"
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT * FROM t1, t2 WHERE t1.b = t2.b AND t1.a + RAND()=t2.a;
+ALTER TABLE t1 DROP INDEX idx;
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT * FROM t1, t2 WHERE t1.b = t2.b AND t1.a = t2.a AND t2.a = RAND();
+--echo "no PTRC for subquery if left argument of IN is random"
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE t1.a + RAND() in (SELECT t1.b FROM t2 WHERE t1.a=t2.b GROUP BY t1.b);
+--echo "can use PTRC, as no part of the subquery is random (the top query's WHERE has an random part which is unrelated to the subquery)"
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE t1.a in (SELECT t1.b FROM t2 WHERE t1.a=t2.b GROUP BY t1.b) and t1.a = RAND();
+delimiter $$;
+CREATE PROCEDURE proc() BEGIN
+SELECT t1.a FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+SELECT t1.a FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+END $$
+delimiter ;$$
+CALL proc();
+delimiter $$;
+CREATE FUNCTION func() RETURNS INT DETERMINISTIC BEGIN
+DECLARE co INT;
+DECLARE s INT;
+SELECT count(*) INTO co FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+SELECT sum(t1.a) INTO s FROM t1, t2 WHERE t1.a > t2.a AND t1.b = t2.b;
+RETURN co + s;
+END $$
+delimiter ;$$
+SELECT func() FROM t1;
+DROP PROCEDURE proc;
+DROP FUNCTION func;
+#bugs
+DROP TABLE t1;
+CREATE TABLE t1 (a INT, b INT);
+INSERT INTO t1 VALUES (1,1),(2,1),(3,2),(4,2),(5,3),(6,3);
+ANALYZE TABLE t1;
+let $query = 
+SELECT (SELECT SUM(t1_outer.a) FROM t1 AS t1_inner LIMIT 1)
+    FROM t1 AS t1_outer GROUP BY t1_outer.b;
+--replace_regex /  \(cost.*//
+eval explain format=tree $query;
+eval $query;
+DROP TABLE t1;
+
+CREATE TABLE t1 (a INT primary key, b INT);
+ALTER TABLE t1 ADD index idx(b);
+INSERT INTO t1 VALUES(1,3), (2,3);
+ANALYZE TABLE t1;
+SET OPTIMIZER_TRACE='enabled=on';
+--replace_regex /  \(cost.*//
+EXPLAIN format=tree
+SELECT /*+ join_prefix(t2,t3) join_prefix(t4,t5) */ t2.a
+FROM t1 AS t2,
+     t1 AS t3,
+     LATERAL
+  (SELECT t4.*
+   FROM t1 AS t4,
+        t1 AS t5
+   WHERE t4.b < t5.b) AS tt
+WHERE t2.b > t3.b and 
+t3.a in (SELECT b FROM t1 AS t6 WHERE t6.b > t3.b GROUP BY b);
+--replace_regex /\"cost\":.*/#/ /\"distinct_rows\":.*/\"distinct_rows\":#/ /\"estimate_distinct.*/#/
+SELECT * FROM information_schema.optimizer_trace;
+SET OPTIMIZER_TRACE='enabled=off';
+--replace_regex /  \(cost.*//
+EXPLAIN format=tree
+SELECT /*+ join_prefix(t2,t3) join_prefix(t4,t5) */ t2.a
+FROM t1 AS t2,
+     t1 AS t3,
+     LATERAL
+  (SELECT t4.*
+   FROM t1 AS t4,
+        t1 AS t5
+   WHERE t4.b < t5.b) AS tt
+WHERE t2.b > t3.b;
+SELECT /*+ join_prefix(t2,t3) join_prefix(t4,t5) */ t2.a
+FROM t1 AS t2,
+     t1 AS t3,
+     LATERAL
+  (SELECT t4.*
+   FROM t1 AS t4,
+        t1 AS t5
+   WHERE t4.b < t5.b) AS tt
+WHERE t2.b > t3.b;
+SET optimizer_switch='materialization=off';
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT b FROM t1 WHERE (1+(SELECT t1.a FROM t1 as t2 LIMIT 1))
+IN(SELECT t3.b FROM t1 as t3) ORDER BY 1;
+SELECT b FROM t1 WHERE (1+(SELECT t1.a FROM t1 as t2 LIMIT 1)) IN
+(SELECT t3.b FROM t1 as t3) ORDER BY 1;
+SET rds_partial_result_cache_cost_threshold = 1;
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT b FROM t1 WHERE (1+(SELECT t1.a FROM t1 as t2 LIMIT 1))
+IN(SELECT t3.b FROM t1 as t3) ORDER BY 1;
+SELECT b FROM t1 WHERE (1+(SELECT t1.a FROM t1 as t2 LIMIT 1)) IN
+(SELECT t3.b FROM t1 as t3) ORDER BY 1;
+
+DROP TABLE t1;
+DROP TABLE t2;
+CREATE TABLE t1(a int, b int);
+INSERT INTO t1 VALUES(1,3),(3,4);
+CREATE TABLE t2 AS SELECT * FROM t1;
+INSERT INTO t2 SELECT * FROM t2;
+ALTER TABLE t2 ADD INDEX idx(b);
+INSERT INTO t2 SELECT * FROM t2;
+ANALYZE TABLE t1,t2;
+SET @save_optimizer_switch = @@optimizer_switch;
+SET optimizer_switch='semijoin=on,firstmatch=off,loosescan=off,materialization=off,mrr=off,index_condition_pushdown=off,derived_merge=off,hash_join=off';
+SET rds_partial_result_cache_cost_threshold = 0;
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT * FROM t2 WHERE t2.b IN (SELECT t1.a FROM t1, t2 AS t3 WHERE t1.b>t3.b);
+SELECT * FROM t2 WHERE t2.b IN (SELECT t1.a FROM t1, t2 AS t3 WHERE t1.b>t3.b);
+SET rds_partial_result_cache_cost_threshold = 1;
+SELECT * FROM t2 WHERE t2.b IN (SELECT t1.a FROM t1, t2 AS t3 WHERE t1.b>t3.b);
+--echo BUG2022042401814: Weedout gives an incorrect result because of PTRC
+--echo Following test case tries to simulate PTRC is disabled during execution
+--echo when hit ratio is too lower. Here we set check frequency to low value to
+--echo make hit ratio be checked with fewer records reading.
+SET rds_partial_result_cache_cost_threshold = 0;
+SET @old_threshold = @@rds_partial_result_cache_hit_ratio_frequency;
+SET rds_partial_result_cache_hit_ratio_frequency = 4;
+SELECT * FROM t2 WHERE t2.b IN (SELECT t1.a FROM t1, t2 AS t3 WHERE t1.b>t3.b);
+SET rds_partial_result_cache_hit_ratio_frequency = @old_threshold;
+SET optimizer_switch = @save_optimizer_switch;
+DROP TABLE t1, t2;
+--echo BUG2022042401814: Weedout gives an incorrect result because of PTRC
+--echo Another weedout case which can check weedout can give a bad result if
+--echo PTRC doesn't cache rowid.
+CREATE TABLE t(a int);
+INSERT INTO t VALUES (1),(2);
+CREATE TABLE t1(a int);
+INSERT INTO t1 VALUES (1),(2),(3);
+INSERT INTO t1 VALUES (1),(2),(3);
+ANALYZE TABLE t1,t2;
+let $query=
+select /*+ join_order(t1@s,t2@s,t) no_bnl() */ t.a from    t where t.a in (select /*+ no_semijoin(materialization,firstmatch,loosescan) qb_name(s) no_bnl() */ t1.a from t1, t1 as t2 where t1.a=t2.a) ;
+SET @save_optimizer_switch = @@optimizer_switch;
+SET optimizer_switch='semijoin=on,partial_result_cache=on',rds_partial_result_cache_cost_threshold = 0;
+
+--replace_regex /  \(cost.*//
+eval EXPLAIN format=tree $query;
+eval $query;
+SET optimizer_switch='partial_result_cache=off';
+eval $query;
+DROP TABLE t1,t;
+SET optimizer_switch = @save_optimizer_switch;
+
+--echo "When a free slot is reused from the LRU, we make sure that this slot is big enough for the data to insert; we test it here by having rows of bigger and bigger size"
+CREATE TABLE t1(a varchar(1000));
+INSERT INTO t1 SELECT REPEAT("b", 2);
+INSERT INTO t1 SELECT REPEAT("a", 2);
+CREATE TABLE t2(a varchar(1000));
+INSERT INTO t2 SELECT REPEAT("a", 1);
+INSERT INTO t2 SELECT REPEAT("a", LENGTH(a) + 1) FROM t2;
+INSERT INTO t2 SELECT REPEAT("a", LENGTH(a) + 2) FROM t2;
+INSERT INTO t2 SELECT REPEAT("a", LENGTH(a) + 4) FROM t2;
+INSERT INTO t2 SELECT REPEAT("a", LENGTH(a) + 8) FROM t2;
+
+SET optimizer_switch='semijoin=off,partial_result_cache=on';
+SET rds_partial_result_cache_cost_threshold = 0;
+SET debug="+d,allocate_failure_when_storerow";
+analyze table t1;
+analyze table t2;
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=tree SELECT /*+ NO_BNL(t2) */ * FROM t1, t2;
+SELECT /*+ NO_BNL(t2) */ * FROM t1, t2;
+SET debug="-d,allocate_failure_when_storerow";
+DROP TABLE t1, t2;
+
+--echo "test cache keys without matching any rows: show that there are hits even when cached join result is empty"
+CREATE TABLE t1(a int, b int);
+INSERT INTO t1 VALUES(1,2),(2,3),(2,3),(2,3);
+CREATE TABLE t2(a int, b int);
+INSERT INTO t2 VALUES(1,3),(3,4);
+ANALYZE TABLE t1,t2;
+--replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*//
+EXPLAIN ANALYZE FORMAT=tree SELECT /*+ NO_BNL() */ * FROM t1 STRAIGHT_JOIN t2 WHERE t1.a = t2.a ORDER BY t1.a;
+SELECT /*+ NO_BNL() */ * FROM t1 STRAIGHT_JOIN t2 WHERE t1.a = t2.a ORDER BY t1.a;
+SELECT /*+ NO_PRC_JOIN() */ * FROM t1 STRAIGHT_JOIN t2 WHERE t1.a = t2.a ORDER BY t1.a;
+
+--echo "Verify that Item_in_subselect::was_null is properly stored in the cache as it"
+--echo " is necessary for when the subquery's inner value is NULL. We use NOT IN to"
+--echo " trigger the use of was_null"
+SET rds_partial_result_cache_cost_threshold = 1;
+CREATE TABLE c (
+                col_int_nokey INTEGER NOT NULL,
+                col_int_key INTEGER GENERATED ALWAYS AS 
+                (col_int_nokey + col_int_nokey) VIRTUAL,
+                col_varchar_nokey VARCHAR(1) NOT NULL,
+                col_varchar_key VARCHAR(2) GENERATED ALWAYS AS
+                (CONCAT(col_varchar_nokey, col_varchar_nokey)),
+                KEY (col_int_key),
+                KEY (col_int_key, col_varchar_key)
+               ) ;
+INSERT INTO c (
+               col_int_nokey,
+               col_varchar_nokey
+              ) VALUES (8,'m');
+
+CREATE TABLE cc (
+                 col_int_nokey INTEGER,
+                 col_int_key INTEGER GENERATED ALWAYS AS
+                 (col_int_nokey + col_int_nokey) VIRTUAL,
+                 col_varchar_nokey VARCHAR(1),
+                 col_varchar_key VARCHAR(2) GENERATED ALWAYS AS
+                 (CONCAT(col_varchar_nokey, col_varchar_nokey)),
+                 KEY (col_int_key),
+                 KEY (col_varchar_key),
+                 KEY (col_int_key, col_varchar_key),
+                 KEY (col_int_key, col_int_nokey),
+                 KEY (col_varchar_key, col_varchar_nokey)
+                );
+INSERT INTO cc (
+                col_int_nokey,
+                col_varchar_nokey
+               ) VALUES (8,'e'),(NULL,NULL),(8,'p');
+ANALYZE TABLE c,cc;
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=tree SELECT alias2 . col_int_key , alias1 . col_int_nokey , alias2 . col_varchar_key AS field1 FROM ( cc AS alias1 , cc AS alias2 ) WHERE ( alias2 . col_int_key , alias1 . col_int_nokey ) NOT IN ( SELECT /*+prc_subquery() */ SQ1_alias2 . col_int_nokey AS SQ1_field1 , SQ1_alias1 . col_int_key AS SQ1_field2 FROM ( cc AS SQ1_alias1 , c AS SQ1_alias2 ) GROUP BY SQ1_field1 , SQ1_field2 );
+SELECT alias2 . col_int_key , alias1 . col_int_nokey , alias2 . col_varchar_key AS field1 FROM ( cc AS alias1 , cc AS alias2 ) WHERE ( alias2 . col_int_key , alias1 . col_int_nokey ) NOT IN ( SELECT /*+prc_subquery() */ SQ1_alias2 . col_int_nokey AS SQ1_field1 , SQ1_alias1 . col_int_key AS SQ1_field2 FROM ( cc AS SQ1_alias1 , c AS SQ1_alias2 ) GROUP BY SQ1_field1 , SQ1_field2 );
+SELECT alias2 . col_int_key , alias1 . col_int_nokey , alias2 . col_varchar_key AS field1 FROM ( cc AS alias1 , cc AS alias2 ) WHERE ( alias2 . col_int_key , alias1 . col_int_nokey ) NOT IN ( SELECT SQ1_alias2 . col_int_nokey AS SQ1_field1 , SQ1_alias1 . col_int_key AS SQ1_field2 FROM ( cc AS SQ1_alias1 , c AS SQ1_alias2 ) GROUP BY SQ1_field1 , SQ1_field2 );
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=tree SELECT alias2 . col_int_key , alias1 . col_int_nokey , alias2 . col_varchar_key AS field1 FROM ( cc AS alias1 , cc AS alias2 ) WHERE NOT(alias2.col_int_key >= ANY(SELECT /*+prc_subquery() */ SQ1_alias2 . col_int_nokey AS SQ1_field1 FROM ( cc AS SQ1_alias1 , c AS SQ1_alias2 ) WHERE SQ1_alias1.col_int_key = alias1.col_int_key GROUP BY SQ1_field1));
+SELECT alias2 . col_int_key , alias1 . col_int_nokey , alias2 . col_varchar_key AS field1 FROM ( cc AS alias1 , cc AS alias2 ) WHERE NOT(alias2.col_int_key >= ANY(SELECT /*+prc_subquery() */ SQ1_alias2 . col_int_nokey AS SQ1_field1 FROM ( cc AS SQ1_alias1 , c AS SQ1_alias2 ) WHERE SQ1_alias1.col_int_key = alias1.col_int_key GROUP BY SQ1_field1));
+SELECT alias2 . col_int_key , alias1 . col_int_nokey , alias2 . col_varchar_key AS field1 FROM ( cc AS alias1 , cc AS alias2 ) WHERE NOT(alias2.col_int_key >= ANY(SELECT SQ1_alias2 . col_int_nokey AS SQ1_field1 FROM ( cc AS SQ1_alias1 , c AS SQ1_alias2 ) WHERE SQ1_alias1.col_int_key = alias1.col_int_key GROUP BY SQ1_field1));
+DROP TABLE c, cc;
+--echo "bug that cache keys are not found correctly"
+SET rds_partial_result_cache_cost_threshold = 1;
+DROP TABLE t1;
+CREATE TABLE t1 ( 
+                 pk int(11) NOT NULL AUTO_INCREMENT,
+                 col_int_key int(11) NOT NULL,
+                 col_varchar_key varchar(1) NOT NULL,
+                 col_varchar_nokey varchar(1) NOT NULL,
+                 PRIMARY KEY (pk),
+                 KEY col_int_key (col_int_key),
+                 KEY col_varchar_key (col_varchar_key,col_int_key)
+                );
+INSERT INTO t1 VALUES (1,0,'j','j'),(2,8,'v','v'),
+       (3,1,'c','c'),(4,8,'m','m'),(5,9,'d','d');
+ANALYZE TABLE t1;
+CREATE VIEW v1 AS SELECT * FROM t1;
+let $query=
+SELECT alias2.col_varchar_nokey FROM v1 AS alias1 RIGHT JOIN t1 AS alias2 ON 1 WHERE alias2.col_varchar_key IN ( SELECT /*+prc_subquery()*/ sq2_alias1.col_varchar_nokey FROM v1 AS sq2_alias1  WHERE sq2_alias1.pk != alias1.col_int_key AND sq2_alias1.col_varchar_key > alias1.col_varchar_key );
+SELECT alias2.col_varchar_nokey FROM v1 AS alias1 RIGHT JOIN t1 AS alias2 ON 1 WHERE alias2.col_varchar_key IN ( SELECT sq2_alias1.col_varchar_nokey FROM v1 AS sq2_alias1  WHERE sq2_alias1.pk != alias1.col_int_key AND sq2_alias1.col_varchar_key > alias1.col_varchar_key );
+# Show that PTRC is used
+--replace_regex /  \(cost.*//
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+# a more complex view
+DROP VIEW v1;
+CREATE VIEW v1 AS SELECT (pk+0) as pk,(col_int_key+0) as col_int_key,concat(col_varchar_key,"") as col_varchar_key,concat(col_varchar_nokey,"") as col_varchar_nokey FROM t1;
+--replace_regex /  \(cost.*//
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+
+#cleanup
+DROP VIEW v1;
+DROP TABLE t1, t2;
+
+# BUG2021110803154: PTRC introcuded an incorrect result set
+CREATE TABLE t1(a double, b int);
+INSERT INTO t1 VALUES(-1.7976931348623157e308,2), (3,4);
+ANALYZE TABLE t1;
+SET optimizer_switch = 'semijoin=off,materialization=off';
+SET rds_partial_result_cache_cost_threshold = 0;
+--error ER_DATA_OUT_OF_RANGE
+SELECT degrees(ref_1.a) AS c1 FROM t1 AS ref_1;
+let $query = SELECT * FROM t1 AS ref_1 WHERE (EXISTS (SELECT degrees(ref_1.a) AS c1 FROM t1 AS ref_2));
+--replace_regex /  \(cost.*//
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+let $query = SELECT * FROM t1 AS ref_1 WHERE (NOT EXISTS (SELECT degrees(ref_1.a) AS c1 FROM t1 AS ref_2));
+--replace_regex /  \(cost.*//
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+
+SET rds_partial_result_cache_cost_threshold = 1;
+--error ER_DATA_OUT_OF_RANGE
+SELECT * FROM t1 AS ref_1 WHERE (b IN (SELECT degrees(ref_2.a) AS c1 FROM t1 AS ref_2));
+SET rds_partial_result_cache_cost_threshold = 0;
+--error ER_DATA_OUT_OF_RANGE
+SELECT * FROM t1 AS ref_1 WHERE (b IN (SELECT degrees(ref_2.a) AS c1 FROM t1 AS ref_2));
+let $query = SELECT * FROM t1 AS ref_1 WHERE (b IN (SELECT 4 AS c1 FROM t1 AS ref_2));
+--replace_regex /  \(cost.*//
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+let $query = SELECT * FROM t1 AS ref_1 WHERE (b NOT IN (SELECT 4 AS c1 FROM t1 AS ref_2));
+--replace_regex /  \(cost.*//
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+SET rds_partial_result_cache_cost_threshold = 1;
+--error ER_DATA_OUT_OF_RANGE
+SELECT * FROM t1 AS ref_1 WHERE (b = ANY (SELECT degrees(ref_2.a) AS c1 FROM t1 AS ref_2 WHERE a = ref_1.a));
+SET rds_partial_result_cache_cost_threshold = 0;
+--error ER_DATA_OUT_OF_RANGE
+SELECT * FROM t1 AS ref_1 WHERE (b = ANY (SELECT degrees(ref_2.a) AS c1 FROM t1 AS ref_2 WHERE a = ref_1.a));
+let $query = SELECT * FROM t1 AS ref_1 WHERE (b = ANY (SELECT b AS c1 FROM t1 AS ref_2 WHERE a = ref_1.a));
+--replace_regex /  \(cost.*//
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+SET rds_partial_result_cache_cost_threshold = 1;
+--error ER_DATA_OUT_OF_RANGE
+SELECT * FROM t1 AS ref_1 WHERE (b > ALL (SELECT degrees(ref_2.a) AS c1 FROM t1 AS ref_2 WHERE a = ref_1.a));
+SET rds_partial_result_cache_cost_threshold = 0;
+--error ER_DATA_OUT_OF_RANGE
+SELECT * FROM t1 AS ref_1 WHERE (b > ALL (SELECT degrees(ref_2.a) AS c1 FROM t1 AS ref_2 WHERE a = ref_1.a));
+let $query = SELECT * FROM t1 AS ref_1 WHERE (b > ALL (SELECT b AS c1 FROM t1 AS ref_2 WHERE a = ref_1.a));
+eval explain format=tree $query;
+eval $query;
+DROP TABLE t1;
+SET optimizer_switch=@old_optimizer_switch;
+
+# BUG2021110802032: ptrc::PtrcIterator::RestoreCacheItems causes a crash  
+SET rds_partial_result_cache_cost_threshold = 0;
+CREATE TABLE t1 (a INT, b INT);
+CREATE TABLE t2 (a INT);
+INSERT INTO t1 VALUES (1,10), (2,20), (3,30), (4,40);
+INSERT INTO t2 VALUES (2), (3), (4), (5);
+ANALYZE TABLE t1,t2;
+SET optimizer_switch='semijoin=off';
+let $query = SELECT 1 FROM t1 WHERE EXISTS (SELECT a FROM t2 WHERE t2.a = t1.b
+GROUP BY a);
+--replace_regex /  \(cost.*//
+eval EXPLAIN FORMAT=TREE $query;
+SET debug='+d,fail_alloc_saved_res_items';
+eval $query;
+SET debug='-d,fail_alloc_saved_res_items';
+SET debug='+d,fail_alloc_cached_res_fields';
+eval $query;
+SET debug='-d,fail_alloc_cached_res_fields';
+SET optimizer_switch=@old_optimizer_switch;
+DROP TABLE t1, t2;
+
+# BUG2021110500053: hash_join_buffer::StoreFromTableBuffers causes a crash
+SET rds_partial_result_cache_cost_threshold = 0;
+CREATE TABLE t1 (a INT, b INT, INDEX a(a,b));
+CREATE TABLE t2 (a INT, INDEX a(a));
+CREATE TABLE t3 (a INT, b INT, INDEX a(a));
+INSERT INTO t1 VALUES (1,10), (2,20), (3,30), (4,40);
+INSERT INTO t2 VALUES (2), (3), (4), (5);
+ANALYZE TABLE t1,t2,t3;
+
+--echo "Verify that weedout can work for materialized table which is not initialized by PTRC"
+
+# to preserve plans:
+--source include/turn_off_join_elimination.inc
+
+let $query = SELECT 1 FROM (SELECT t1.a FROM t1 LEFT JOIN t2 ON (EXISTS (
+SELECT /*+NO_BNL()*/ t3.b FROM t3 LEFT JOIN (SELECT b FROM t2 WHERE false
+ GROUP BY b) AS tt ON t3.a = t2.a and t3.b = t1.b))) AS aaa;
+--replace_regex /  \(cost.*//
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+
+--source include/restore_opt_switch_after_turn_off_join_elimination.inc
+
+--echo "Verify with valgrind that the access by PTRC to columns of empty tables is not cacheing random data"
+let $query = SELECT 1 FROM (SELECT t1.a FROM t1 LEFT JOIN t2 ON (EXISTS (
+  SELECT /*+NO_BNL()*/ t3.a FROM t3 straight_join t2 on t3.a = t2.a))) AS aaa;
+--replace_regex /  \(cost.*//
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+
+DROP TABLE t1, t2, t3;
+
+# BUG2021111100914: PTRC causes an incorrect result set 
+CREATE TABLE t0 (
+  c_id int NOT NULL,
+  c_d_id int NOT NULL,
+  c_w_id int NOT NULL,
+  c_first varchar(16) DEFAULT NULL,
+  c_middle char(2) DEFAULT NULL,
+  c_last varchar(16) DEFAULT NULL,
+  c_street_1 varchar(20) DEFAULT NULL,
+  c_street_2 varchar(20) DEFAULT NULL,
+  c_city varchar(20) DEFAULT NULL,
+  c_state char(2) DEFAULT NULL,
+  c_zip char(9) DEFAULT NULL,
+  c_phone char(16) DEFAULT NULL,
+  c_since timestamp NOT NULL DEFAULT '1970-01-01 08:00:01',
+  c_credit char(2) DEFAULT NULL,
+  c_credit_lim decimal(12,2) DEFAULT NULL,
+  c_discount decimal(4,4) DEFAULT NULL,
+  c_balance decimal(12,2) DEFAULT NULL,
+  c_ytd_payment decimal(12,2) DEFAULT NULL,
+  c_payment_cnt int DEFAULT NULL,
+  c_delivery_cnt int DEFAULT NULL,
+  c_data varchar(500) DEFAULT NULL,
+  PRIMARY KEY (c_w_id,c_d_id,c_id),
+  KEY Customer_100W_key (c_w_id,c_d_id,c_last,c_first),
+  KEY ndx_c_id (c_id) USING BTREE,
+  KEY ndx_c_d_id (c_d_id) USING BTREE,
+  KEY ndx_c_w_id (c_w_id) USING BTREE,
+  KEY ndx_c_first (c_first) USING BTREE,
+  KEY ndx_c_middle (c_middle) USING BTREE,
+  KEY ndx_c_last (c_last) USING BTREE,
+  KEY ndx_c_street_1 (c_street_1) USING BTREE,
+  KEY ndx_c_street_2 (c_street_2) USING BTREE,
+  KEY ndx_c_city (c_city) USING BTREE,
+  KEY ndx_c_state (c_state) USING BTREE,
+  KEY ndx_c_zip (c_zip) USING BTREE,
+  KEY ndx_c_phone (c_phone) USING BTREE,
+  KEY ndx_c_since (c_since) USING BTREE,
+  KEY ndx_c_credit (c_credit) USING BTREE,
+  KEY ndx_c_credit_lim (c_credit_lim) USING BTREE,
+  KEY ndx_c_discount (c_discount) USING BTREE,
+  KEY ndx_c_balance (c_balance) USING BTREE,
+  KEY ndx_c_ytd_payment (c_ytd_payment) USING BTREE,
+  KEY ndx_c_payment_cnt (c_payment_cnt) USING BTREE,
+  KEY ndx_c_delivery_cnt (c_delivery_cnt) USING BTREE
+);
+INSERT INTO t0 VALUES (1,0,0,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'1970-01-01 08:00:01',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+ANALYZE TABLE t0;
+SELECT ref_0.c_w_id as c2, ref_0.c_phone as c3
+FROM t0 AS ref_0
+RIGHT JOIN
+  (SELECT ref_1.C_W_ID AS c13,
+          ref_1.c_w_id AS c15
+   FROM t0 AS ref_1
+   WHERE TRUE ) AS subq_0 ON ((((FALSE)
+                                AND (((TRUE)
+                                      OR (EXISTS
+                                            (SELECT ref_0.c_credit AS c0
+                                             FROM t0 AS ref_8
+                                             WHERE TRUE )
+                                          OR (ref_0.c_street_1 IS NOT NULL))
+                                      AND (subq_0.c13 IS NULL))
+                                     OR (subq_0.c15 IS NULL)))
+                               OR (TRUE))
+                              AND (FALSE));
+DROP TABLE t0;
+
+--echo "Const table should not do any reset on its record for PTRC."
+SET SQL_MODE='';
+SET rds_partial_result_cache_cost_threshold = 0;
+CREATE TABLE `t1` ( `id` mediumint(9) NOT NULL auto_increment, `taskid` bigint(20) NOT NULL default '0', `dbid` int(11) NOT NULL default '0', `create_date` datetime NOT NULL default '0000-00-00 00:00:00', `last_update` datetime NOT NULL default '0000-00-00 00:00:00', PRIMARY KEY  (`id`)) AUTO_INCREMENT=3;
+INSERT INTO `t1` (`id`, `taskid`, `dbid`, `create_date`,`last_update`) VALUES (1, 1, 15, '2003-09-29 10:31:36', '2003-09-29 10:31:36'), (2, 1, 21, now(), now());
+CREATE TABLE `t2` (`db_id` int(11) NOT NULL auto_increment,`name` varchar(200) NOT NULL default '',`primary_uid` smallint(6) NOT NULL default '0',`secondary_uid` smallint(6) NOT NULL default '0',PRIMARY KEY  (`db_id`),UNIQUE KEY `name_2` (`name`), KEY `name` (`name`)) AUTO_INCREMENT=2147483647;
+INSERT INTO `t2` (`db_id`, `name`, `primary_uid`, `secondary_uid`) VALUES (18, 'Not Set 1', 0, 0),(19, 'Valid', 1, 2),(20, 'Valid 2', 1, 2),(21, 'Should Not Return', 1, 2),(26, 'Not Set 2', 0, 0),(-1, 'ALL DB\'S', 0, 0);
+CREATE TABLE `t3` (`taskgenid` mediumint(9) NOT NULL auto_increment,`dbid` int(11) NOT NULL default '0',`taskid` int(11) NOT NULL default '0',`mon` tinyint(4) NOT NULL default '1',`tues` tinyint(4) NOT NULL default '1',`wed` tinyint(4) NOT NULL default '1',`thur` tinyint(4) NOT NULL default '1',`fri` tinyint(4) NOT NULL default '1',`sat` tinyint(4) NOT NULL default '0',`sun` tinyint(4) NOT NULL default '0',`how_often` smallint(6) NOT NULL default '1',`userid` smallint(6) NOT NULL default '0',`active` tinyint(4) NOT NULL default '1',PRIMARY KEY  (`taskgenid`)) AUTO_INCREMENT=2;
+INSERT INTO `t3` (`taskgenid`, `dbid`, `taskid`, `mon`, `tues`,`wed`, `thur`, `fri`, `sat`, `sun`, `how_often`, `userid`, `active`) VALUES (1,-1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 1);
+CREATE TABLE `t4` (`task_id` smallint(6) NOT NULL default '0',`description` varchar(200) NOT NULL default '');
+INSERT INTO `t4` (`task_id`, `description`) VALUES (1, 'Daily Check List'),(2, 'Weekly Status');
+ANALYZE TABLE t1,t2,t3,t4;
+let $query = select  dbid, name, (date_format(now() , '%Y-%m-%d') - INTERVAL how_often DAY) >= ifnull((SELECT date_format(max(create_date),'%Y-%m-%d') FROM t1 WHERE dbid = b.db_id AND taskid = a.taskgenid), '1950-01-01') from t3 a, t2 b, t4  WHERE dbid = - 1 AND primary_uid = '1' AND t4.task_id = taskid AND a.taskgenid=1;
+--replace_regex /  \(cost.*//
+eval EXPLAIN FORMAT=TREE $query;
+--sorted_result
+eval $query;
+DROP TABLE t1,t2,t3,t4;
+
+--echo "BUG2022052800364: When explain analyze on empty table, ptrc might cause a crash"
+
+SET optimizer_switch='semijoin=off,partial_result_cache=on';
+SET rds_partial_result_cache_cost_threshold = 0;
+CREATE TABLE t1(a INT, b INT);
+CREATE TABLE t2(b INT, c INT);
+CREATE TABLE t3(c INT, d INT);
+ANALYZE TABLE t1,t2,t3;
+--replace_regex 
+--replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*//
+EXPLAIN ANALYZE
+SELECT *
+FROM t1
+WHERE t1.a IN
+    (SELECT a FROM t2, t3
+     WHERE t2.b = t1.b
+       AND t2. c > t3.d);
+DROP TABLE t1,t2,t3;
+
+--echo "Test the optimizer_trace output of ptrc"
+CREATE TABLE t (i INTEGER PRIMARY KEY AUTO_INCREMENT, j INTEGER, KEY(j));
+INSERT INTO t VALUES (NULL, NULL);
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+INSERT INTO t SELECT NULL, NULL FROM t;
+ANALYZE TABLE t;
+
+SET optimizer_trace="enabled=on";
+SELECT t1.i AS a, (SELECT t2.i FROM t t2 WHERE t1.j = t2.j ORDER BY j DESC, i DESC LIMIT 1) AS b FROM t t1 limit 1;
+SELECT * FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+SET optimizer_trace="enabled=off";
+DROP TABLE t;
+
+--echo "Test the LRU eviction mechanism"
+create table t1(a int, b varchar(1000), index(a));
+insert into t1 values(1,repeat('a',1000));
+insert into t1 values(1,repeat('b',980));
+insert into t1 values(2,repeat('c',960));
+insert into t1 values(2,repeat('d',940));
+insert into t1 values(3,repeat('e',920));
+insert into t1 values(3,repeat('e',920));
+insert into t1 values(2,repeat('c',960));
+insert into t1 values(3,repeat('f',900));
+insert into t1 values(3,repeat('g',880));
+insert into t1 values(3,repeat('h',860));
+
+create table t2(a int, b varchar(1000), index(a));
+insert into t2 values(1,repeat('A',1000));
+insert into t2 values(1,repeat('B',980));
+insert into t2 values(2,repeat('C',960));
+insert into t2 values(2,repeat('D',940));
+insert into t2 values(3,repeat('E',920));
+insert into t2 values(3,repeat('E',920));
+insert into t2 values(2,repeat('C',960));
+insert into t2 values(3,repeat('F',900));
+insert into t2 values(3,repeat('G',880));
+insert into t2 values(3,repeat('G',860));
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t1 SELECT * FROM t1;
+ANALYZE TABLE t1;
+ANALYZE TABLE t2;
+set @old_partial_result_cache_max_mem_size=@@rds_partial_result_cache_max_mem_size;
+set rds_partial_result_cache_max_mem_size = 65*1024;
+--replace_regex /  \(cost.*//
+explain format=tree select/*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a;
+--replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*// /Cache Hits: [0-9]+/Cache Hits: # / /Cache Misses: [0-9]+/Cache Misses: # / /Cache Evictions: [0-9]+/Cache Evictions: # / /Cache Overflows: [0-9]+/Cache Overflows: # / / \(cost.*//
+explain analyze select/*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a;
+select /*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a order by 1,2,3,4;
+select /*+ no_prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a order by 1,2,3,4;
+SET SESSION DEBUG='+d,key_pair_key_null_pointer_injection';
+--replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*// /Cache Hits: [0-9]+/Cache Hits: # / /Cache Misses: [0-9]+/Cache Misses: # / /Cache Evictions: [0-9]+/Cache Evictions: # / /Cache Overflows: [0-9]+/Cache Overflows: # / / \(cost.*//
+explain analyze select/*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a;
+SET SESSION DEBUG='-d,key_pair_key_null_pointer_injection';
+set rds_partial_result_cache_max_mem_size=@old_partial_result_cache_max_mem_size;
+DROP TABLE t1,t2;
+
+create table t1(a int, b varchar(1000), index(a));
+insert into t1 values(1,repeat('a',1000));
+insert into t1 values(1,repeat('b',980));
+insert into t1 values(2,repeat('c',960));
+insert into t1 values(2,repeat('d',940));
+insert into t1 values(3,repeat('e',920));
+insert into t1 values(3,repeat('e',920));
+insert into t1 values(2,repeat('c',960));
+insert into t1 values(3,repeat('f',900));
+insert into t1 values(3,repeat('g',880));
+insert into t1 values(3,repeat('h',860));
+
+create table t2(a int, b varchar(1000), index(a));
+insert into t2 values(1,repeat('A',1000));
+insert into t2 values(1,repeat('B',980));
+insert into t2 values(2,repeat('C',960));
+insert into t2 values(2,repeat('D',940));
+insert into t2 values(3,repeat('E',920));
+insert into t2 values(3,repeat('E',920));
+insert into t2 values(2,repeat('C',960));
+insert into t2 values(3,repeat('F',900));
+insert into t2 values(3,repeat('G',880));
+insert into t2 values(3,repeat('G',860));
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t1;
+--disable_result_log
+--disable_query_log
+analyze table t1,t2;
+--enable_result_log
+--enable_query_log
+
+set @old_partial_result_cache_max_mem_size=@@rds_partial_result_cache_max_mem_size;
+set rds_partial_result_cache_max_mem_size=1024*64;
+--replace_regex /  \(cost.*//
+explain format=tree select/*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a;
+--replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*// /Cache Hits: [0-9]+/Cache Hits: # / /Cache Misses: [0-9]+/Cache Misses: # / /Cache Evictions: [0-9]+/Cache Evictions: # / /Cache Overflows: [0-9]+/Cache Overflows: # / / \(cost.*//
+explain analyze select/*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a;
+select /*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a order by 1,2,3,4;
+select /*+ no_prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a order by 1,2,3,4;
+set rds_partial_result_cache_max_mem_size=@old_partial_result_cache_max_mem_size;
+DROP TABLE t1,t2;
+
+--echo "Testing the scenario of NULL-complemented rows"
+CREATE TABLE departments (
+  dept_id INT PRIMARY KEY,
+  dept_name VARCHAR(50) NOT NULL
+);
+
+CREATE TABLE employees (
+  emp_id INT PRIMARY KEY,
+  emp_name VARCHAR(50) NOT NULL,
+  dept_id INT,
+  salary DECIMAL(10,2),
+  FOREIGN KEY (dept_id) REFERENCES departments(dept_id)
+);
+INSERT INTO departments VALUES (1, 'Human Resources');
+INSERT INTO departments VALUES (2, 'Information Technology');
+INSERT INTO departments VALUES (3, 'Marketing');
+
+INSERT INTO employees VALUES (101, 'Charles', 1, 8000.00);
+INSERT INTO employees VALUES (102, 'David', 1, 7500.00);
+INSERT INTO employees VALUES (103, 'William', 2, 9000.00);
+ANALYZE TABLE departments,employees;
+--replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*//
+explain analyze SELECT /*+ prc_join() */ d.dept_id, d.dept_name, AVG(e.salary) AS avg_salary, COUNT(e.emp_id) AS employee_count FROM departments d LEFT JOIN employees e ON d.dept_id = e.dept_id GROUP BY d.dept_id, d.dept_name;
+SELECT /*+ prc_join() */ d.dept_id, d.dept_name, AVG(e.salary) AS avg_salary, COUNT(e.emp_id) AS employee_count FROM departments d LEFT JOIN employees e ON d.dept_id = e.dept_id GROUP BY d.dept_id, d.dept_name;
+SELECT /*+ no_prc_join() */ d.dept_id, d.dept_name, AVG(e.salary) AS avg_salary, COUNT(e.emp_id) AS employee_count FROM departments d LEFT JOIN employees e ON d.dept_id = e.dept_id GROUP BY d.dept_id, d.dept_name;
+DROP TABLE departments, employees;
+
+CREATE TABLE t1 (
+  id int(11),
+  ticket int(11),
+  KEY ti (id),
+  KEY tit (ticket)
+) charset utf8mb4;
+INSERT INTO t1 VALUES (2,3),(1,2),(1,1),(2,2),(1,2),(2,5);
+
+CREATE TABLE t2 (
+  ticket int(11),
+  inhalt varchar(50),
+  KEY tig (ticket),
+  INDEX tix (inhalt)
+) CHARSET utf8mb4;
+INSERT INTO t2 VALUES (1,'foo'),(2,'bar'),(3,'foobar'),(1,'Doobar'),(2,'obar');
+
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t1;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t1;
+ANALYZE TABLE t1;
+ANALYZE TABLE t2;
+--replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*//
+EXPLAIN ANALYZE SELECT /*+ PRC_JOIN() */ ticket2.id FROM t2 ttxt,t2 INNER JOIN t1 ticket2 ON ticket2.id = t2.ticket WHERE ticket2.id = t2.ticket AND ttxt.inhalt LIKE '%foobar%';
+drop table t1,t2;
+
+create table t1 (a int, b int, c int, key(a desc, b asc, c desc));
+create table t2 (d int, key(d asc));
+--disable_query_log
+let $i=5;
+while($i)
+{
+    let $j = 5;
+    while($j)
+    {
+        let $k = 5;
+        while($k)
+        {
+            let $l = 5;
+            while($l)
+            {
+                --eval insert into t1 values($k, $j, $i)
+                dec $l;
+            }
+            dec $k;
+        }
+        dec $j;
+    }
+    --eval insert into t2 values($i);
+    dec $i;
+}
+--enable_query_log
+ANALYZE TABLE t1;
+ANALYZE TABLE t2;
+let $query=
+select * from t2, t1 force index(`a`) having c < 3 order by a, b limit 10;
+--replace_regex $elide_costs_and_rows
+--eval explain format=tree $query
+--eval $query
+
+drop table t1;
+drop table t2;

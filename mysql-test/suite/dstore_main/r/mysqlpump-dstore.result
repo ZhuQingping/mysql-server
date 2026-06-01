@@ -1,0 +1,370 @@
+#
+# WL#7755  mysqlpump: Extend mysqldump functionalities with mysqldump option.
+#
+Create database db1;
+Create database db2;
+CREATE DATABASE db3;
+CREATE DATABASE db1_1gb;
+USE db1;
+CREATE TABLE dt1 (a INT);
+CREATE TABLE dt2 (a INT, b VARCHAR(10), primary key(a));
+CREATE TABLE dt3 (`a"b"` char(2));
+INSERT INTO dt1 VALUES (289), (298), (234), (456), (789);
+INSERT INTO dt2 VALUES (1, "on"), (2, "off"), (10, "pol"), (12, "meg");
+INSERT INTO dt3 VALUES ("1\""), ("\"2");
+CREATE VIEW v1 AS SELECT * FROM dt2;
+CREATE VIEW v2 AS SELECT * FROM dt1;
+CREATE VIEW v3 AS SELECT v1.*,v2.a as X FROM v1,v2;
+CREATE VIEW v11 AS SELECT * FROM v3;
+CREATE TEMPORARY TABLE t14 (id INT);
+CREATE TRIGGER trig1 BEFORE INSERT ON dt1 FOR EACH ROW SET NEW.a = 1;
+CREATE TRIGGER trig2 BEFORE UPDATE ON dt1 FOR EACH ROW SET NEW.a = 999;
+CREATE EVENT ev1 ON SCHEDULE AT '2030-01-01 00:00:00' DO SET @a=5;
+CREATE EVENT ev2 ON SCHEDULE EVERY 5 HOUR DO SELECT 1;
+CREATE PROCEDURE db1t_cache()
+BEGIN
+SET @A= 20;
+SELECT * FROM dt1;
+SELECT * FROM dt1;
+PREPARE x FROM 'SELECT 1';
+SELECT * FROM dt1;
+SELECT * FROM dt1;
+END ;|
+CREATE FUNCTION db1_f1 () RETURNS int
+BEGIN
+SET NAMES 'big5';
+RETURN (SELECT COUNT(*) FROM dt1);
+END ;|
+USE db2;
+CREATE TABLE d2t1 (
+id INTEGER UNSIGNED NOT NULL AUTO_INCREMENT,
+fname VARCHAR(200) NOT NULL,
+lname  VARCHAR(60) ,
+phone VARCHAR(15) DEFAULT NULL,
+created TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+eid tinyint NOT NULL DEFAULT 011,
+PRIMARY KEY (id),
+UNIQUE(id,fname)
+)
+ENGINE = InnoDB;
+INSERT INTO d2t1 VALUES (1, "abc","","283682846",default,11), (2, "ed","adw\5\/fdfiw","wfdf%&$#^dif",default,26);
+INSERT INTO d2t1 (fname) VALUES("wgdugw");
+INSERT INTO d2t1 (fname,lname) VALUES("wgdugw","gdwsjdg");
+INSERT INTO d2t1 (fname,phone) VALUES("wgdugw","+2937280802*");
+ALTER TABLE d2t1 ADD INDEX d2t1_index4 (fname, eid ASC);
+ALTER TABLE d2t1 ADD INDEX d2t1_index5 (eid, fname);
+CREATE TABLE d2t2 (
+id INT PRIMARY KEY AUTO_INCREMENT,
+fname VARCHAR(200) NOT NULL,
+lname  VARCHAR(60) ,
+phone VARCHAR(15) DEFAULT NULL,
+created TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+eid tinyint NOT NULL DEFAULT 011,
+KEY d2t2_index2 (fname,eid),
+KEY d2t2_index3 (Id,eid)
+)
+ENGINE = InnoDB;
+INSERT INTO d2t2 VALUES (1, "abc","","283682846",default,13), (2, "ed","adw\5\/fdfiw","wfdf%&$#^dif",default,26);
+INSERT INTO d2t2 (fname) VALUES("wgdugw");
+INSERT INTO d2t2 (fname,lname) VALUES("wgdugw","gdwsjdg");
+INSERT INTO d2t2 (fname,phone) VALUES("wgdugw","+2937280802*");
+CREATE PROCEDURE d2t_cache()
+BEGIN
+SET @A= 20;
+SELECT * FROM d2t1;
+SELECT * FROM d2t1;
+PREPARE x FROM 'SELECT 1';
+SELECT * FROM d2t1;
+SELECT * FROM d2t1;
+END ;|
+CREATE FUNCTION d2f1 () RETURNS int
+BEGIN
+SET NAMES 'big5';
+RETURN (SELECT COUNT(*) FROM d2t1);
+END ;|
+
+USE db3;
+CREATE TABLE d3t1 (a INT);
+CREATE TABLE d3t2 (a INT, b VARCHAR(10), primary key(a));
+CREATE TABLE d3t3 (`a"b"` char(2));
+ALTER TABLE d3t2 ADD INDEX d3t1_index4 (b ASC);
+INSERT INTO d3t1 VALUES (289), (298), (234), (456), (789);
+INSERT INTO d3t2 VALUES (1, "on"), (2, "off"), (10, "pol"), (12, "meg");
+INSERT INTO d3t3 VALUES ("1\""), ("\"2");
+CREATE TABLE parent (
+id INT NOT NULL,
+PRIMARY KEY (id)
+) ENGINE=INNODB;
+CREATE TABLE child (
+id INT,
+parent_id INT,
+INDEX par_ind (parent_id),
+FOREIGN KEY (parent_id)
+REFERENCES parent(id)
+ON DELETE CASCADE
+) ENGINE=INNODB;
+CREATE TABLE product (
+category INT NOT NULL, id INT NOT NULL,
+price DECIMAL,
+PRIMARY KEY(category, id)
+)   ENGINE=INNODB;
+CREATE TABLE customer (
+id INT NOT NULL,
+PRIMARY KEY (id)
+)   ENGINE=INNODB;
+CREATE TABLE product_order (
+no INT NOT NULL AUTO_INCREMENT,
+product_category INT NOT NULL,
+product_id INT NOT NULL,
+customer_id INT NOT NULL,
+PRIMARY KEY(no),
+INDEX (product_category, product_id),
+INDEX (customer_id),
+FOREIGN KEY (product_category, product_id)
+REFERENCES product(category, id)
+ON UPDATE CASCADE ON DELETE RESTRICT,
+FOREIGN KEY (customer_id)
+REFERENCES customer(id)
+)ENGINE=INNODB;
+CREATE VIEW v1 AS SELECT * FROM d3t2;
+CREATE VIEW v2 AS SELECT * FROM d3t1;
+CREATE VIEW v3 AS SELECT v1.*,v2.a as X FROM v1,v2;
+CREATE VIEW v11 AS SELECT * FROM v3;
+CREATE TEMPORARY TABLE t14 (id INT);
+CREATE TRIGGER trig3 BEFORE INSERT ON d3t1 FOR EACH ROW SET NEW.a = 1;
+CREATE TRIGGER trig4 BEFORE UPDATE ON d3t1 FOR EACH ROW SET NEW.a = 999;
+CREATE EVENT ev3 ON SCHEDULE AT '2030-01-01 00:00:00' DO SET @a=5;
+CREATE EVENT ev4 ON SCHEDULE EVERY 5 HOUR DO SELECT 1;
+CREATE PROCEDURE d3t_cache()
+BEGIN
+SET @A= 20;
+SELECT * FROM d3t1;
+SELECT * FROM d3t1;
+PREPARE x FROM 'SELECT 1';
+SELECT * FROM d3t1;
+SELECT * FROM d3t1;
+END ;|
+CREATE FUNCTION d3f1 () RETURNS int
+BEGIN
+SET NAMES 'big5';
+RETURN (SELECT COUNT(*) FROM d3t1);
+END ;|
+# basic testing
+DROP DATABASE db1;
+DROP DATABASE db2;
+DROP DATABASE db3;
+DROP DATABASE db1_1gb;
+USE db1;
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA='db1' AND TABLE_TYPE= 'BASE TABLE'
+       ORDER BY TABLE_NAME;
+TABLE_NAME
+dt1
+dt2
+dt3
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA='db1' AND TABLE_TYPE= 'VIEW'
+       ORDER BY TABLE_NAME;
+TABLE_NAME
+v1
+v11
+v2
+v3
+SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_SCHEMA='db1' AND ROUTINE_TYPE= 'PROCEDURE'
+       ORDER BY ROUTINE_NAME;
+ROUTINE_NAME
+db1t_cache
+SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_SCHEMA='db1' AND ROUTINE_TYPE= 'FUNCTION'
+       ORDER BY ROUTINE_NAME;
+ROUTINE_NAME
+db1_f1
+SELECT EVENT_NAME FROM INFORMATION_SCHEMA.EVENTS
+WHERE EVENT_SCHEMA='db1' ORDER BY EVENT_NAME;
+EVENT_NAME
+ev1
+ev2
+SELECT TRIGGER_NAME FROM INFORMATION_SCHEMA.TRIGGERS
+WHERE TRIGGER_SCHEMA='db1' ORDER BY TRIGGER_NAME;
+TRIGGER_NAME
+trig1
+trig2
+USE db2;
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA='db2' AND TABLE_TYPE= 'BASE TABLE'
+       ORDER BY TABLE_NAME;
+TABLE_NAME
+d2t1
+d2t2
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA='db2' AND TABLE_TYPE= 'VIEW'
+       ORDER BY TABLE_NAME;
+TABLE_NAME
+SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_SCHEMA='db2' AND ROUTINE_TYPE= 'PROCEDURE'
+       ORDER BY ROUTINE_NAME;
+ROUTINE_NAME
+d2t_cache
+SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_SCHEMA='db2' AND ROUTINE_TYPE= 'FUNCTION'
+       ORDER BY ROUTINE_NAME;
+ROUTINE_NAME
+d2f1
+USE db3;
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA='db3' AND TABLE_TYPE= 'BASE TABLE'
+       ORDER BY TABLE_NAME;
+TABLE_NAME
+child
+customer
+d3t1
+d3t2
+d3t3
+parent
+product
+product_order
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA='db3' AND TABLE_TYPE= 'VIEW'
+       ORDER BY TABLE_NAME;
+TABLE_NAME
+v1
+v11
+v2
+v3
+SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_SCHEMA='db3' AND ROUTINE_TYPE= 'PROCEDURE'
+       ORDER BY ROUTINE_NAME;
+ROUTINE_NAME
+d3t_cache
+SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_SCHEMA='db3' AND ROUTINE_TYPE= 'FUNCTION'
+       ORDER BY ROUTINE_NAME;
+ROUTINE_NAME
+d3f1
+SELECT EVENT_NAME FROM INFORMATION_SCHEMA.EVENTS
+WHERE EVENT_SCHEMA='db3' ORDER BY EVENT_NAME;
+EVENT_NAME
+ev3
+ev4
+SELECT TRIGGER_NAME FROM INFORMATION_SCHEMA.TRIGGERS
+WHERE TRIGGER_SCHEMA='db3' ORDER BY TRIGGER_NAME;
+TRIGGER_NAME
+trig3
+trig4
+USE db1_1gb;
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA='db1_1gb' AND TABLE_TYPE= 'BASE TABLE'
+       ORDER BY TABLE_NAME;
+TABLE_NAME
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA='db1_1gb' AND TABLE_TYPE= 'VIEW'
+       ORDER BY TABLE_NAME;
+TABLE_NAME
+SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_SCHEMA='db1_1gb' AND ROUTINE_TYPE= 'PROCEDURE'
+       ORDER BY ROUTINE_NAME;
+ROUTINE_NAME
+SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_SCHEMA='db1_1gb' AND ROUTINE_TYPE= 'FUNCTION'
+       ORDER BY ROUTINE_NAME;
+ROUTINE_NAME
+SELECT EVENT_NAME FROM INFORMATION_SCHEMA.EVENTS
+WHERE EVENT_SCHEMA='db1_1gb' ORDER BY EVENT_NAME;
+EVENT_NAME
+SELECT TRIGGER_NAME FROM INFORMATION_SCHEMA.TRIGGERS
+WHERE TRIGGER_SCHEMA='db1_1gb' ORDER BY TRIGGER_NAME;
+TRIGGER_NAME
+
+DROP DATABASE db1;
+DROP DATABASE db3;
+DROP DATABASE db1;
+DROP DATABASE db2;
+DROP DATABASE db3;
+DROP DATABASE db1_1gb;
+WARNING: mysqlpump is deprecated and will be removed in a future version. Use mysqldump instead.
+SHOW VARIABLES LIKE "master_info_repository";
+Variable_name	Value
+master_info_repository	TABLE
+SHOW VARIABLES LIKE "relay_log_info_repository";
+Variable_name	Value
+relay_log_info_repository	TABLE
+SET GLOBAL master_info_repository= 'FILE';
+Warnings:
+Warning	1287	'@@master_info_repository' is deprecated and will be removed in a future release.
+SET GLOBAL relay_log_info_repository= 'FILE';
+Warnings:
+Warning	1287	'@@relay_log_info_repository' is deprecated and will be removed in a future release.
+SHOW VARIABLES LIKE "master_info_repository";
+Variable_name	Value
+master_info_repository	FILE
+SHOW VARIABLES LIKE "relay_log_info_repository";
+Variable_name	Value
+relay_log_info_repository	FILE
+Pattern "CREATE TABLE `mysql`.`slave_master_info`" not found
+Pattern "CREATE TABLE `mysql`.`slave_relay_log_info`" not found
+SET GLOBAL master_info_repository= 'TABLE';
+Warnings:
+Warning	1287	'@@master_info_repository' is deprecated and will be removed in a future release.
+SET GLOBAL relay_log_info_repository= 'TABLE';
+Warnings:
+Warning	1287	'@@relay_log_info_repository' is deprecated and will be removed in a future release.
+SHOW VARIABLES LIKE "master_info_repository";
+Variable_name	Value
+master_info_repository	TABLE
+SHOW VARIABLES LIKE "relay_log_info_repository";
+Variable_name	Value
+relay_log_info_repository	TABLE
+#
+# Dump a table that has column statistics
+#
+CREATE SCHEMA column_statistics_dump;
+USE column_statistics_dump;
+CREATE TABLE t1 (col1 INT);
+INSERT INTO t1 VALUES (1), (2);
+ANALYZE TABLE t1 UPDATE HISTOGRAM ON col1 WITH 22 BUCKETS;
+Table	Op	Msg_type	Msg_text
+column_statistics_dump.t1	histogram	status	Histogram statistics created for column 'col1'.
+# Verify that the number of buckets specified (22) is also present in the
+# dump file.
+SELECT schema_name, table_name, column_name,
+JSON_EXTRACT(HISTOGRAM, '$."number-of-buckets-specified"')
+FROM information_schema.COLUMN_STATISTICS;
+SCHEMA_NAME	TABLE_NAME	COLUMN_NAME	JSON_EXTRACT(HISTOGRAM, '$."number-of-buckets-specified"')
+column_statistics_dump	t1	col1	22
+include/assert_grep.inc [Check for ANALYZE TABLE with histogram clause]
+DROP SCHEMA column_statistics_dump;
+#
+# Bug #27096081: MYSQLPUMP VALIDATES ALL DATABASE OBJECTS BY
+#                IGNORING --INCLUDE_DATABASES OPTION
+#
+CREATE DATABASE db1;
+USE db1;
+CREATE TABLE t1(id INT);
+INSERT INTO t1 SELECT 1;
+CREATE VIEW v1 AS SELECT * FROM t1;
+CREATE DATABASE db2;
+USE db2;
+CREATE TABLE t2(id INT);
+INSERT INTO t2 SELECT 1;
+CREATE USER 'u1'@'%' IDENTIFIED BY 'abc';
+GRANT ALL ON *.* TO 'u1'@'%';
+FLUSH PRIVILEGES;
+USE db2;
+CREATE VIEW v2 AS SELECT * FROM t2;
+SHOW CREATE VIEW v2;
+View	Create View	character_set_client	collation_connection
+v2	CREATE ALGORITHM=UNDEFINED DEFINER=`u1`@`%` SQL SECURITY DEFINER VIEW `v2` AS select `t2`.`id` AS `id` from `t2`	utf8mb4	utf8mb4_0900_ai_ci
+DROP USER 'u1'@'%';
+Warnings:
+Warning	4005	User 'u1'@'%' is referenced as a definer account in a view.
+FLUSH PRIVILEGES;
+Pattern "\[ERROR\] \(1449\) The user specified as a definer \('u1'@'%'\) does not exist" found
+CREATE USER 'u1'@'%' IDENTIFIED BY 'abc';
+Warnings:
+Warning	4005	User 'u1'@'%' is referenced as a definer account in a view.
+DROP USER 'u1'@'%';
+Warnings:
+Warning	4005	User 'u1'@'%' is referenced as a definer account in a view.
+DROP DATABASE db1;
+DROP DATABASE db2;

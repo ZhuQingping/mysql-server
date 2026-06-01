@@ -1,0 +1,187 @@
+drop table if exists test;
+# Establish connection thr1 (user=root)
+# Establish connection thr2 (user=root)
+# Switching to connection 'default'.
+create table test (
+id int not null,
+varchar_col varchar(10) not null,
+char_col char(5) not null
+) ENGINE=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+CREATE PROCEDURE insert_table(IN n int)
+BEGIN
+DECLARE i INT DEFAULT 0;
+WHILE(i <= n) DO
+INSERT into test (id, varchar_col, char_col) VALUES (i, "abc", "de"), (i+1, "xy", "uvw");
+set i = i + 2;
+END WHILE;
+END ||
+call insert_table(50);
+drop procedure insert_table;
+# test table scan.
+select * from test;
+id	varchar_col	char_col
+0	abc	de
+1	xy	uvw
+2	abc	de
+3	xy	uvw
+4	abc	de
+5	xy	uvw
+6	abc	de
+7	xy	uvw
+8	abc	de
+9	xy	uvw
+10	abc	de
+11	xy	uvw
+12	abc	de
+13	xy	uvw
+14	abc	de
+15	xy	uvw
+16	abc	de
+17	xy	uvw
+18	abc	de
+19	xy	uvw
+20	abc	de
+21	xy	uvw
+22	abc	de
+23	xy	uvw
+24	abc	de
+25	xy	uvw
+26	abc	de
+27	xy	uvw
+28	abc	de
+29	xy	uvw
+30	abc	de
+31	xy	uvw
+32	abc	de
+33	xy	uvw
+34	abc	de
+35	xy	uvw
+36	abc	de
+37	xy	uvw
+38	abc	de
+39	xy	uvw
+40	abc	de
+41	xy	uvw
+42	abc	de
+43	xy	uvw
+44	abc	de
+45	xy	uvw
+46	abc	de
+47	xy	uvw
+48	abc	de
+49	xy	uvw
+50	abc	de
+51	xy	uvw
+select * from test where varchar_col = "abc";
+id	varchar_col	char_col
+0	abc	de
+2	abc	de
+4	abc	de
+6	abc	de
+8	abc	de
+10	abc	de
+12	abc	de
+14	abc	de
+16	abc	de
+18	abc	de
+20	abc	de
+22	abc	de
+24	abc	de
+26	abc	de
+28	abc	de
+30	abc	de
+32	abc	de
+34	abc	de
+36	abc	de
+38	abc	de
+40	abc	de
+42	abc	de
+44	abc	de
+46	abc	de
+48	abc	de
+50	abc	de
+# Switching to connection 'thr1'.
+set autocommit=0;
+begin;
+select * from test where id = 15;
+id	varchar_col	char_col
+15	xy	uvw
+update test set varchar_col = "efg" where id = 15;
+select * from test where id = 15;
+id	varchar_col	char_col
+15	efg	uvw
+# Switching to connection 'thr2'.
+set autocommit=0;
+begin;
+select * from test where id = 15;
+id	varchar_col	char_col
+15	xy	uvw
+# thr2 hang here
+update test set varchar_col = "efg" where id = 15;
+# Switching to connection 'thr1'.
+commit;
+# Switching to connection 'thr2'.
+select * from test where id = 15;
+id	varchar_col	char_col
+15	xy	uvw
+commit;
+# test lock conflict between delete and update.
+# Switching to connection 'thr1'.
+begin;
+select * from test where id = 25;
+id	varchar_col	char_col
+25	xy	uvw
+delete from test where id = 25;
+select * from test where id = 25;
+id	varchar_col	char_col
+# Switching to connection 'thr2'.
+begin;
+select * from test where id = 25;
+id	varchar_col	char_col
+25	xy	uvw
+# thr2 hang here
+update test set varchar_col = "efghigk" where id = 25;
+# Switching to connection 'thr1'.
+commit;
+# Switching to connection 'thr2'.
+select * from test where id = 25;
+id	varchar_col	char_col
+25	xy	uvw
+commit;
+# test deadlock
+# Switching to default.
+create table testp (
+id int not null primary key, 
+varchar_col varchar(10) not null,
+char_col char(5) not null
+) ENGINE=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+insert into testp values(1,'aaa','bbb');
+insert into testp values(2,'aaa','bbb');
+select * from testp;
+id	varchar_col	char_col
+1	aaa	bbb
+2	aaa	bbb
+# Switching to connection 'thr1'.
+begin;
+update testp set varchar_col = "xxx" where id = 1;
+# Switching to connection 'thr2'.
+begin;
+update testp set varchar_col = "ppp" where id = 2;
+# Switching to connection 'thr1'.
+update testp set varchar_col = "yyy" where id = 2;;
+# Switching to connection 'thr2'
+update testp set varchar_col = "qqq" where id = 1;
+commit;
+select * from testp;
+id	varchar_col	char_col
+1	qqq	bbb
+2	ppp	bbb
+# Switching to connection 'thr1'
+ERROR 40001: Deadlock found when trying to get lock; try restarting transaction
+select * from testp;
+id	varchar_col	char_col
+1	qqq	bbb
+2	ppp	bbb
+# Switching to default.
+drop table test;
+drop table testp;

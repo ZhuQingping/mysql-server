@@ -1,0 +1,30 @@
+--replace_column 2 A              
+show status like "%dstore%";
+
+# -- 1. 首先检查当前dstore_enable_double_write状态
+--let $current_dbwrite = `SELECT @@global.dstore_enable_double_write`
+--echo # [INFO] current dstore_enable_double_write value: $current_dbwrite
+
+# -- 2. 条件判断：如果不是 1 (即未打开)，则执行重启
+if ($current_dbwrite != 1)
+{
+  --echo # [ACTION] dstore_enable_double_write is off, need restart and set --dstore-enable-double-write=ON...
+  --let $restart_parameters = restart: --dstore-enable-double-write=ON
+  --source include/restart_mysqld.inc
+
+  # 重启后再次验证，确保真的开了
+  --let $after_restart = `SELECT @@global.dstore_enable_double_write`
+  if ($after_restart != 1)
+  {
+    --die 严重错误：尝试重启开启 dstore-enable-double-write 失败！
+  }
+}
+
+# -- 3. doublewrite打开情况下，获取dstore_lwlock_blocked_count的值
+--let $current_val= query_get_value(SHOW GLOBAL STATUS LIKE 'dstore_lwlock_blocked_count', Value, 1)
+--echo # dstore_lwlock_blocked_count: $current_val
+if ($current_val != 0)
+{
+  --echo # 错误: 检测到变量 'dstore_lwlock_blocked_count' 值不为0！
+  --die dstore_lwlock_blocked_count值异常.
+}

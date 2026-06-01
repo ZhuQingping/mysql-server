@@ -1,0 +1,22 @@
+--source include/have_only_dstore.inc
+CALL mtr.add_suppression("dstore_wal_file_size_hwt");
+
+show global variables like "dstore_wal_file_size_hwt";
+
+--error ER_INCORRECT_GLOBAL_LOCAL_VAR
+set global dstore_wal_file_size_hwt = 1;
+
+--echo # Shut server down.
+--let $shutdown_server_timeout = 300
+--source include/shutdown_mysqld.inc
+
+--let $mysqld_exec_cmd = $MYSQLD --defaults-file=$MYSQLTEST_VARDIR/my.cnf --defaults-group-suffix=.1 --datadir=$MYSQLD_DATADIR
+--error 1
+--exec $mysqld_exec_cmd --user=`whoami` --dstore_wal_file_size_hwt=1
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let SEARCH_PATTERN=dstore_wal_file_size_hwt
+--source include/search_pattern.inc
+
+--echo # Restart the server.
+--let $restart_parameters= restart: --dstore_wal_file_size_hwt=0
+--source include/start_mysqld.inc

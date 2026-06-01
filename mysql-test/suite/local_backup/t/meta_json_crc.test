@@ -1,0 +1,59 @@
+--source include/have_debug.inc
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("failed to copy backup meta json data to buffer");
+call mtr.add_suppression("write full local backup meta json with status fail");
+call mtr.add_suppression("create full local backup meta json file fail");
+call mtr.add_suppression("write full local backup meta json fail");
+call mtr.add_suppression("failed to write full backup meta json");
+
+--source suite/local_backup/include/prepare_for_backup.inc
+
+CREATE DATABASE db1;
+USE db1;
+CREATE TABLE t1(a int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+
+# 1. Check backup_meta.json crc after the file is created automatically.
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+
+# Check if backup_meta.json crc is matched.
+--source suite/local_backup/include/check_backup_meta_json_crc.inc
+
+# 2. Check backup_meta.json crc after the file is modified by person.
+--exec ls $MYSQLTEST_VARDIR/full_local_backup/* -trd | tail -n 1 > $MYSQLTEST_VARDIR/bakup_dir.txt
+--exec sed -i 's#"fileSize": ""#"fileSize": "123"#g' `cat $MYSQLTEST_VARDIR/bakup_dir.txt`/backup_meta.json
+
+# Check if backup_meta.json crc is matched.
+--source suite/local_backup/include/check_backup_meta_json_crc.inc
+
+# 3. Update parameter dstore_meta_json_crc, then check backup_meta.json crc.
+--exec rm -rf $MYSQLTEST_VARDIR/full_local_backup/*
+SET GLOBAL dstore_meta_json_crc = OFF;
+
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+
+# Check if backup_meta.json crc is matched.
+--source suite/local_backup/include/check_backup_meta_json_crc.inc
+
+SET GLOBAL dstore_meta_json_crc = ON;
+
+# 4. Test backup_meta.json content copy fail.
+SET GLOBAL debug='+d,meta_json_data_copy_fail';
+
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+
+SET GLOBAL debug='-d,meta_json_data_copy_fail';
+
+# Drop database db1.
+DROP DATABASE db1;
+
+--source suite/local_backup/include/clean_backup.inc

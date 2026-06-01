@@ -1,0 +1,71 @@
+# ==== Purpose ====
+#
+# Verify the statement outline not replicated to slave as designed
+# ==== Implementation ====
+#
+# 1. call add outline procedure in master, verify master's system table has outline rules and take effect; 
+# 2. verify slave's system table has no outline rules and does not take effect; 
+
+--source include/have_binlog_format_row.inc
+--source include/have_debug.inc
+--source include/master-slave.inc
+
+--connect (con1,localhost,root,,)
+
+--source include/rpl_connection_master.inc
+
+set @start_opt_outline_enabled= @@global.rds_opt_outline_enabled;
+set global rds_opt_outline_enabled = ON;
+
+connect(con_root,localhost, root,,);
+
+create database outline_db;
+create table outline_db.t1(id int auto_increment primary key,
+                           col1 int,
+                           col2 varchar(100),
+                           key ind_1(col1),
+                           key ind_2(col2)) engine = Dstore;
+
+use outline_db;
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+                                  'FOR ORDER BY', "select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1");
+
+use outline_db;
+select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1;
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_2',
+                                  'FOR ORDER BY', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', '',
+                                  'FOR ORDER BY', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+
+--error ER_OUTLINE_INVALID
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'ind_2',
+                                  'FOR ORDER BY', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+
+
+
+select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+explain select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+call dbms_outln.show_outline();
+--source include/sync_slave_sql_with_master.inc
+
+
+
+#connect slave
+--source include/rpl_connection_slave.inc
+use outline_db;
+call dbms_outln.show_outline();
+
+call dbms_outln.flush_outline();
+
+call dbms_outln.show_outline();
+
+select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+explain select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+
+--source include/rpl_connection_master.inc
+USE outline_db;
+drop table t1;
+drop database outline_db;
+set global rds_opt_outline_enabled = @start_opt_outline_enabled;
+--source include/rpl_end.inc
+

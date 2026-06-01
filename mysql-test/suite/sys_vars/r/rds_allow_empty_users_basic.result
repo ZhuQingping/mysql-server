@@ -1,0 +1,97 @@
+#Saving initial value of rds_allow_empty_users in a temporary variable. #
+SET @start_value = @@global.rds_allow_empty_users;
+SELECT @start_value;
+@start_value
+0
+#Verify default value of variable.                                      #
+SET @@global.rds_allow_empty_users = DEFAULT;
+SELECT @@global.rds_allow_empty_users = 1;
+@@global.rds_allow_empty_users = 1
+0
+#Change the value of rds_allow_empty_users to a valid value.            #
+SET @@global.rds_allow_empty_users = ON;
+SELECT @@global.rds_allow_empty_users;
+@@global.rds_allow_empty_users
+1
+SET @@global.rds_allow_empty_users = OFF;
+SELECT @@global.rds_allow_empty_users;
+@@global.rds_allow_empty_users
+0
+#Change the value of rds_allow_empty_users by an invalid scope.         #
+SET @@session.rds_allow_empty_users = ON;
+ERROR HY000: Variable 'rds_allow_empty_users' is a GLOBAL variable and should be set with SET GLOBAL
+SET @@session.rds_allow_empty_users = OFF;
+ERROR HY000: Variable 'rds_allow_empty_users' is a GLOBAL variable and should be set with SET GLOBAL
+#Change the value of rds_allow_empty_users to an invalid value.         #
+SET @@global.rds_allow_empty_users = 2;
+ERROR 42000: Variable 'rds_allow_empty_users' can't be set to the value of '2'
+SET @@global.rds_allow_empty_users = -1;
+ERROR 42000: Variable 'rds_allow_empty_users' can't be set to the value of '-1'
+SET @@global.rds_allow_empty_users = TRUEF;
+ERROR 42000: Variable 'rds_allow_empty_users' can't be set to the value of 'TRUEF'
+SET @@global.rds_allow_empty_users = TRUE_F;
+ERROR 42000: Variable 'rds_allow_empty_users' can't be set to the value of 'TRUE_F'
+SET @@global.rds_allow_empty_users = FALSE0;
+ERROR 42000: Variable 'rds_allow_empty_users' can't be set to the value of 'FALSE0'
+SET @@global.rds_allow_empty_users = OON;
+ERROR 42000: Variable 'rds_allow_empty_users' can't be set to the value of 'OON'
+SET @@global.rds_allow_empty_users = ONN;
+ERROR 42000: Variable 'rds_allow_empty_users' can't be set to the value of 'ONN'
+SET @@global.rds_allow_empty_users = OOFF;
+ERROR 42000: Variable 'rds_allow_empty_users' can't be set to the value of 'OOFF'
+SET @@global.rds_allow_empty_users = 0FF;
+ERROR 42000: Variable 'rds_allow_empty_users' can't be set to the value of '0FF'
+SET @@global.rds_allow_empty_users = ' ';
+ERROR 42000: Variable 'rds_allow_empty_users' can't be set to the value of ' '
+SET @@global.rds_allow_empty_users = " ";
+ERROR 42000: Variable 'rds_allow_empty_users' can't be set to the value of ' '
+SET @@global.rds_allow_empty_users = '';
+ERROR 42000: Variable 'rds_allow_empty_users' can't be set to the value of ''
+#Check if the value in GLOBAL Tables matches values in variable.        #
+SELECT IF(@@global.rds_allow_empty_users, "ON", "OFF") = VARIABLE_VALUE
+FROM performance_schema.global_variables
+WHERE VARIABLE_NAME='rds_allow_empty_users';
+IF(@@global.rds_allow_empty_users, "ON", "OFF") = VARIABLE_VALUE
+1
+#Check if 0 and 1 values can be used on variable.                       #
+SET @@global.rds_allow_empty_users = 0;
+SELECT @@global.rds_allow_empty_users;
+@@global.rds_allow_empty_users
+0
+SET @@global.rds_allow_empty_users = 1;
+SELECT @@global.rds_allow_empty_users;
+@@global.rds_allow_empty_users
+1
+#Check if TRUE and FALSE values can be used on variable.                #
+SET @@global.rds_allow_empty_users = TRUE;
+SELECT @@global.rds_allow_empty_users;
+@@global.rds_allow_empty_users
+1
+SET @@global.rds_allow_empty_users = FALSE;
+SELECT @@global.rds_allow_empty_users;
+@@global.rds_allow_empty_users
+0
+#Check if accessing variable with GLOBAL and without SCOPE points to the#
+#same global variable.                                                  #
+SET @@global.rds_allow_empty_users = ON;
+SELECT @@rds_allow_empty_users = @@global.rds_allow_empty_users;
+@@rds_allow_empty_users = @@global.rds_allow_empty_users
+1
+#Check if rds_allow_empty_users can be accessed without @@ sign.        #
+SET rds_allow_empty_users = ON;
+ERROR HY000: Variable 'rds_allow_empty_users' is a GLOBAL variable and should be set with SET GLOBAL
+SET local.rds_allow_empty_users = OFF;
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'local.rds_allow_empty_users = OFF' at line 1
+SELECT local.rds_allow_empty_users;
+ERROR 42S02: Unknown table 'local' in field list
+SET global.rds_allow_empty_users = ON;
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'global.rds_allow_empty_users = ON' at line 1
+SELECT global.rds_allow_empty_users;
+ERROR 42S02: Unknown table 'global' in field list
+SELECT rds_allow_empty_users = @@session.rds_allow_empty_users;
+ERROR HY000: Variable 'rds_allow_empty_users' is a GLOBAL variable
+#Restore initial value.                                                 #
+SET @@global.rds_allow_empty_users = @start_value;
+SELECT @@global.rds_allow_empty_users;
+@@global.rds_allow_empty_users
+0

@@ -1,0 +1,30 @@
+
+# ==== Purpose ====
+#  
+# Verify that the status of binlog purge thread is 'EXIT' after turning off
+# rds_purge_binary_logs_asynchronously and the status of binlog purge thread
+# is 'SLEEPING' after turning on rds_purge_binary_logs_asynchronously.
+#
+# ==== References ====
+#
+# US2023121500746  Decouple binlog purge and transaction commit
+#
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+--source include/have_binlog_format_row.inc
+
+--echo #
+--echo # Expect that the status of binlog purge thread is 'EXIT' after
+--echo # setting rds_purge_binary_logs_asynchronously to false.
+--echo #
+SET GLOBAL rds_purge_binary_logs_asynchronously= false;
+SELECT @@GLOBAL.rds_binlog_purge_thread_status;
+
+--echo #
+--echo # Expect that the status of binlog purge thread is 'SLEEPING'
+--echo # after setting rds_purge_binary_logs_asynchronously to true.
+--echo #
+SET GLOBAL rds_purge_binary_logs_asynchronously= true;
+sleep 2;
+SELECT @@GLOBAL.rds_binlog_purge_thread_status;
+

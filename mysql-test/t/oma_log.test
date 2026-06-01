@@ -1,0 +1,350 @@
+--echo #Test Basic function of OMA log.
+ 
+--replace_result $MYSQL_TMP_DIR ...
+eval SET GLOBAL rds_oma_log_file= '$MYSQL_TMP_DIR/my_oma.log';
+
+#
+# Test 1: Test record modify rds_oma_log and rds_oma_log_file log
+#
+-- echo #
+-- echo # Test 1: Test record modify rds_oma_log and rds_oma_log_file log
+-- echo #
+SET timestamp=10;
+SET GLOBAL rds_oma_log = OFF;
+show variables like 'rds_oma_log';
+
+SET GLOBAL rds_oma_log = ON;
+show variables like 'rds_oma_log';
+
+#
+# Test 2: Test record read_only and super_read_only log
+#
+-- echo #
+-- echo # Test 2: Test record read_only and super_read_only log
+-- echo #
+set global read_only = on;
+set global super_read_only = on;
+set global read_only = off;
+set global super_read_only = off;
+
+
+#
+# Test 3: Test record other ddl log
+#
+-- echo #
+-- echo # Test 3: Test record other ddl log
+-- echo #
+ 
+# Simple DDL operations
+ 
+CREATE DATABASE oma_log_test;
+ 
+USE oma_log_test;
+ 
+CREATE TABLE oma_log_test_table_001(c1 int) ENGINE=innodb;
+ 
+ALTER TABLE oma_log_test_table_001 ADD COLUMN (c2 int);
+ 
+CREATE INDEX idx_oma_log_test_c2 ON oma_log_test_table_001 (c2);
+ 
+DROP INDEX idx_oma_log_test_c2 ON oma_log_test_table_001;
+ 
+RENAME TABLE oma_log_test_table_001 TO oma_log_test_table_001_new;
+ 
+INSERT INTO oma_log_test_table_001_new VALUES (1,2);
+ 
+SELECT * FROM oma_log_test_table_001_new;
+ 
+OPTIMIZE TABLE oma_log_test_table_001_new;
+ 
+ANALYZE TABLE oma_log_test_table_001_new;
+TRUNCATE TABLE oma_log_test_table_001_new;
+ 
+CREATE VIEW v_oma_log_test_table_001_new AS SELECT c1, c2 FROM oma_log_test_table_001_new;
+DROP VIEW v_oma_log_test_table_001_new;
+DROP TABLE oma_log_test_table_001_new;
+ 
+CREATE ROLE if not exists 'ROLE_066';
+CREATE ROLE if not exists 'ROLE_SE_066';
+CREATE USER if not exists 'USER_066'@'localhost' IDENTIFIED BY 'dev1pass';
+ 
+GRANT 'ROLE_066' TO 'ROLE_SE_066';
+GRANT 'ROLE_SE_066' TO 'USER_066'@'localhost';
+ 
+REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'ROLE_066';
+ 
+SHOW GRANTS FOR 'USER_066'@'localhost';
+SHOW GRANTS FOR 'ROLE_SE_066';
+SHOW GRANTS FOR 'ROLE_066';
+ 
+REVOKE 'ROLE_066' FROM 'ROLE_SE_066';
+SET PASSWORD FOR 'USER_066'@'localhost'='dev2pass';
+ 
+DROP USER IF EXISTS 'USER_066'@'localhost';
+DROP ROLE IF EXISTS 'ROLE_066';
+DROP ROLE IF EXISTS 'ROLE_SE_066';
+ 
+create user if not exists 'RENAME_USER_024'@'%' identified by 'Baidu+123';
+ALTER USER 'RENAME_USER_024'@'%' IDENTIFIED BY 'Huawei+123';
+create user if not exists 'RENAME_USER_024_02'@'%' identified by 'Baidu+123';
+ALTER USER 'RENAME_USER_024_02'@'%' DEFAULT ROLE ALL;
+ 
+grant select,create tablespace on *.* to 'RENAME_USER_024'@'%';
+grant select,create temporary tables on *.* to 'RENAME_USER_024_02'@'%';
+ 
+RENAME USER 'RENAME_USER_024'@'%' TO RENAME_USER_024_new ,'RENAME_USER_024_02'@'%' TO 'RENAME_USER_024_02_new'@'localhost';
+ 
+drop user 'RENAME_USER_024_new'@'%';
+ 
+drop user 'RENAME_USER_024_02_new'@'localhost';
+ 
+# Test log output about Procedure.
+delimiter //;
+CREATE PROCEDURE oma_test_sp() 
+BEGIN
+CREATE TABLE oma_log_test.p_name (c1 int) engine=innodb;
+DROP TABLE oma_log_test.p_name;
+CREATE USER 'USER_005'@'localhost' IDENTIFIED BY 'dev1pass';
+DROP USER 'USER_005'@'localhost';
+END//
+delimiter ;//
+ 
+CALL oma_test_sp();
+DROP PROCEDURE oma_test_sp;
+ 
+# Test log output with rewrite sql in the procedure.
+delimiter //;
+CREATE PROCEDURE oma_test_sp_2()
+BEGIN
+CREATE TABLE oma_log_test.p_name_2 (c1 int) engine=innodb;
+DROP TABLE oma_log_test.p_name_2;
+CREATE USER if not exists 'USER_006'@'localhost' IDENTIFIED BY 'dev1pass';
+END//
+delimiter ;//
+ALTER PROCEDURE oma_test_sp_2 LANGUAGE SQL;
+ 
+CALL oma_test_sp_2();
+DROP PROCEDURE oma_test_sp_2;
+ 
+DROP USER 'USER_006'@'localhost';
+ 
+# Test log output about Function.
+delimiter //;
+CREATE FUNCTION oma_test_sf() RETURNS INT 
+BEGIN
+RETURN (SELECT 1);
+END;
+//
+delimiter ;//
+ALTER FUNCTION oma_test_sf COMMENT 'just for test';
+DROP FUNCTION oma_test_sf;
+ 
+# Test log output about Trigger.
+CREATE TABLE TABLE_TEST_01 (c1 INT,c2 VARCHAR(100)) engine=InnoDB;
+ 
+# Test log output about Event.
+delimiter //;
+CREATE EVENT oma_test_event ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 1 SECOND DO
+BEGIN
+SET timestamp=10;
+CREATE TABLE oma_log_test.p_name_event (c1 int) engine=innodb;
+END//
+delimiter ;//
+ 
+let $wait_condition=SELECT COUNT(*)=1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'oma_log_test' AND TABLE_NAME = 'p_name_event';
+--source include/wait_condition.inc
+ 
+DROP TABLE oma_log_test.p_name_event;
+SELECT COUNT(*)=1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'oma_log_test' AND TABLE_NAME = 'p_name_event';
+ 
+CREATE EVENT event1 ON SCHEDULE EVERY 10 HOUR DO SELECT 1;
+ALTER EVENT event1 RENAME TO event0;
+DROP EVENT event0;
+ 
+# SQL with syntax ERROR won't be logged.
+-- error 1064
+CRATE TABLE t1;
+ 
+# SQL with ERROR won't logged.
+delimiter //;
+-- error 1422
+CREATE TRIGGER TRIGGER_TEST_01 AFTER INSERT ON TABLE_TEST_01
+FOR EACH ROW
+BEGIN
+CREATE TABLE NEW.c2 (c1 int) engine=innodb;
+END//
+delimiter ;//
+ 
+delimiter //;
+CREATE TRIGGER TRIGGER_TEST_01 BEFORE INSERT ON TABLE_TEST_01
+FOR EACH ROW
+BEGIN
+SET NEW.c2 = '';
+END//
+delimiter ;//
+ 
+DROP TRIGGER TRIGGER_TEST_01;
+ 
+# prepared statement with secret field.
+SET @user_name = 'dave';
+SET @password = 'dave_123';
+SET @s = CONCAT('CREATE USER if not exists ', @user_name, '@localhost  IDENTIFIED BY \'', @password, '\'');
+PREPARE stmt1 FROM @s;
+ 
+SET @s2 = CONCAT('DROP USER ', @user_name, '@localhost');
+PREPARE stmt2 FROM @s2;
+ 
+EXECUTE stmt1;
+EXECUTE stmt2;
+ 
+DEALLOCATE PREPARE stmt1;
+DEALLOCATE PREPARE stmt2;
+ 
+# test tablespace
+CREATE TABLESPACE sample_tablespace engine=innodb; 
+DROP TABLESPACE sample_tablespace;
+ 
+# test server
+CREATE SERVER s FOREIGN DATA WRAPPER mysql OPTIONS (USER 'Remote', HOST '192.168.100.106', DATABASE 'test');
+ALTER SERVER s OPTIONS (USER 'sally');
+DROP SERVER s;
+ 
+# test instance
+ALTER INSTANCE ENABLE INNODB REDO_LOG;
+ 
+# test lock tables, unlock tables
+CREATE TABLE t1(a int, b int) engine=innodb;
+CREATE TABLE t2(a int, b int) engine=innodb;
+INSERT INTO t1 values(1,1),(2,2);
+INSERT INTO t2 values(1,1),(2,2);
+ 
+LOCK TABLES t1 READ;
+UNLOCK TABLES;
+LOCK TABLES t1 READ LOCAL;
+UNLOCK TABLES;
+LOCK TABLES t1 WRITE;
+UNLOCK TABLES;
+LOCK TABLES t1 LOW_PRIORITY WRITE;
+UNLOCK TABLES; 
+LOCK TABLES t1 READ, t2 WRITE;
+UNLOCK TABLES;
+ 
+# test flush tables
+# write into oma log
+FLUSH TABLES WITH READ LOCK;
+UNLOCK TABLES; 
+FLUSH TABLES t1, t2 WITH READ LOCK;
+UNLOCK TABLES; 
+FLUSH TABLES t1, t2 FOR EXPORT;
+UNLOCK TABLES;
+# do not write into oma log
+FLUSH TABLES;
+FLUSH TABLES t1, t2;
+ 
+DROP TABLE t1, t2;
+ALTER DATABASE oma_log_test CHARACTER SET = 'utf8';
+DROP DATABASE oma_log_test;
+
+-- echo #
+-- echo # Test: IDENTIFIED WITH mysql_native_password AS
+-- echo #
+CREATE USER user1 IDENTIFIED WITH mysql_native_password AS '*67092806AE91BFB6BE72DE6C7BE2B7CCA8CFA9DF';
+ 
+ALTER USER user1 IDENTIFIED WITH mysql_native_password AS '*67092806AE91BFB6BE72DE6C7BE2B7CCA8CFA9DF';
+ 
+drop user user1;
+ 
+CREATE USER user1 IDENTIFIED WITH mysql_native_password AS    '*67092806AE91BFB6BE72DE6C7BE2B7CCA8CFA9DF', user2 IDENTIFIED BY '123';
+ 
+ALTER USER user1 IDENTIFIED WITH mysql_native_password AS    '*67092806AE91BFB6BE72DE6C7BE2B7CCA8CFA9DF', user2 IDENTIFIED BY '123';
+ 
+drop user user1;
+drop user user2;
+ 
+CREATE USER user1 IDENTIFIED WITH mysql_native_password AS '*67092806AE91BFB6BE72DE6C7BE2B7CCA8CFA9DF', user2 IDENTIFIED BY '123',user3 IDENTIFIED WITH mysql_native_password AS
+  '*67092806AE91BFB6BE72DE6C7BE2B7CCA8CFA9DF';
+ 
+ALTER USER user1 IDENTIFIED WITH mysql_native_password AS   '*67092806AE91BFB6BE72DE6C7BE2B7CCA8CFA9DF', user2 IDENTIFIED BY '123',user3 IDENTIFIED WITH mysql_native_password AS
+  '*67092806AE91BFB6BE72DE6C7BE2B7CCA8CFA9DF';
+ 
+drop user user1;
+drop user user2;
+drop user user3;
+
+--echo
+--echo # dump content of OMA log.
+--echo
+ 
+let OMA_LOG= `SELECT @@global.rds_oma_log_file`;
+ 
+--perl
+   use strict;
+ 
+   my $file= $ENV{'OMA_LOG'} or die("oma log not set");
+   my $result=0;
+ 
+   open(FILE, "$file") or die("Unable to open $file: $!");
+   while (<FILE>) {
+     my $line = $_;
+ 
+     if ($line !~ m/^(# Query_time|# Time|Tcp port|# User)|(Source distribution|mysqld)/) {
+       #$line =~ s/Thread_id: \d* Schema:/Thread_id: 0 Schema:/;
+       #$line =~ m/(Rows_sent.*) Start.*/;
+       print "$line";
+     }
+   }
+   close(FILE);
+ 
+EOF
+ 
+--echo
+--echo # dump content of OMA log end.
+--echo
+ 
+--echo
+--echo #Test log output while switch off..
+--echo
+-- let $OMA_TEST_DIR= `select @@datadir`
+--replace_result $OMA_TEST_DIR ...
+eval SET GLOBAL rds_oma_log_file= '$OMA_TEST_DIR/my_oma_empty.log';
+SET GLOBAL rds_oma_log = OFF;
+ 
+let OMA_LOG= `SELECT @@global.rds_oma_log_file`;
+ 
+--echo
+--echo # dump content of OMA log.
+--echo
+ 
+--perl
+   use strict;
+ 
+   my $file= $ENV{'OMA_LOG'} or die("oma log not set");
+   my $result=0;
+ 
+   open(FILE, "$file") or die("Unable to open $file: $!");
+   while (<FILE>) {
+     my $line = $_;
+ 
+     if ($line !~ m/^(# Query_time|# Time|Tcp port|# User)|(Source distribution|mysqld)/) {
+       print "$line";
+     }
+   }
+   close(FILE);
+ 
+EOF
+ 
+--echo
+--echo # dump content of OMA log end.
+--echo
+ 
+--remove_file $OMA_TEST_DIR/my_oma_empty.log
+--remove_file $MYSQL_TMP_DIR/my_oma.log
+# cleanup
+--echo
+--echo # restart to reset rds_oma_log_file parameter value
+--source include/restart_mysqld.inc
+
+
+
+
+

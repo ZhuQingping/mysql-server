@@ -1,0 +1,43 @@
+#
+#  Test specify fillfactor of dstore table and index.
+#
+
+--source include/have_debug.inc
+
+--echo #case1: check fillfactor info in comments(mysql.tables.comment and mysql.indexes.comment)
+create table tt1(a int, b int, c int, index idx_a(a) comment 'fillfactor=90', index idx_bc(b,c) comment 'FillFactor=95')engine=Dstore, comment 'FILLFACTOR=80';
+set debug='+d,skip_dd_table_access_check';
+select name,engine,comment from mysql.tables where name='tt1';
+select name,algorithm,options from mysql.indexes where name in ('idx_a','idx_bc');
+truncate table tt1;
+select name,engine,comment from mysql.tables where name='tt1';
+select name,algorithm,comment from mysql.indexes where name in ('idx_a','idx_bc');
+# cleanup
+drop table tt1;
+set debug='-d,skip_dd_table_access_check';
+
+--echo #case2: check fillfactor was specified when call "StorageRelationData::Construct" interface
+
+set debug='+d,cde';
+create table test_fillfactor(a int, b int, c int, index idx_fillfactor_a(a) comment ' fillfactor=88 ')engine=Dstore, comment ' FillFactor=77';
+--let SEARCH_FILE= $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let SEARCH_PATTERN= cde_create_table_info::build_table_rel table 'test_fillfactor' fillfactor is 77
+--source include/search_pattern.inc
+--let SEARCH_PATTERN= cde_create_table_info::build_index_rel index 'idx_fillfactor_a' fillfactor is 88
+--source include/search_pattern.inc
+
+alter table test_fillfactor add index idx_fillfactor_bc(b,c) comment 'index b and c, FILLFACTOR=89';
+--let SEARCH_PATTERN= cde_create_table_info::build_index_rel index 'idx_fillfactor_bc' fillfactor is 89
+--source include/search_pattern.inc
+
+truncate table test_fillfactor;
+--let SEARCH_PATTERN= Reconstruct heap relation of table './test/test_fillfactor' fillfactor is 77
+--source include/search_pattern.inc
+--let SEARCH_PATTERN= Reconstruct index relation of index 'idx_fillfactor_a' fillfactor is 88
+--source include/search_pattern.inc
+--let SEARCH_PATTERN= Reconstruct index relation of index 'idx_fillfactor_bc' fillfactor is 89
+--source include/search_pattern.inc
+
+# cleanup
+drop table test_fillfactor;
+set debug='-d,cde';

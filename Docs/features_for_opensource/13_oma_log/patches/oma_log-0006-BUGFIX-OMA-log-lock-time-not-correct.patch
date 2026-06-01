@@ -1,0 +1,89 @@
+From 475b5e8a0b73dd415239baa3c597dad30a2772dc Mon Sep 17 00:00:00 2001
+From: zhuqingping <zhuqingping1@contributor>
+
+
+Date: Mon, 13 Oct 2025 07:54:11 +0000
+Subject: [PATCH] BUGFIX: OMA log lock time not correct
+
+Issue:
+------
+For DDL query, MySQL On Dstore oma log lock time not correct, Lock_time is
+extremely large numbers, refer to the oma info below:
+```
+User@Host: rdsAdmin[rdsAdmin] @ localhost []  Id:     9
+Query_time: 0.004691  Lock_time: 18444985979186.078125 Rows_sent: 0  Rows_examined: 0
+create database dstore_db;
+```
+
+Analysis:
+---------
+The method for calculating lock time is incorrect, the calculation method for lock time
+is as follows:
+```
+lock_utime = (thd->utime_after_lock - thd->start_utime);
+```
+
+But variable THD::utime_after_lock never initialized, we also found valgrind warning for
+this code, refer to the info below:
+```
+==1987856== Conditional jump or move depends on uninitialised value(s)
+==1987856==    at 0xDCCF094: __printf_fp_l (printf_fp.c:438)
+==1987856==    by 0xDCEA92C: __printf_fp_spec (vfprintf-internal.c:354)
+==1987856==    by 0xDCEA92C: __vfprintf_internal (vfprintf-internal.c:1558)
+==1987856==    by 0xDCF5988: __vsprintf_internal (iovsprintf.c:95)
+==1987856==    by 0xDCD4927: sprintf (sprintf.c:30)
+==1987856==    by 0x436C4AB: File_query_log::write_oma(THD*, unsigned long long, unsigned long long, char const*, unsigned long long, unsigned long long, char const*, unsigned long) (log.cc:925)
+==1987856==    by 0x436E184: Log_to_file_event_handler::log_oma(THD*, unsigned long long, unsigned long long, char const*, unsigned long long, unsigned long long, char const*, unsigned long) (log.cc:1422)
+==1987856==    by 0x436F14D: Query_logger::oma_log_write(THD*, char const*, unsigned long) (log.cc:1640)
+==1987856==    by 0x4370435: log_oma(THD*, bool) (log.cc:2025)
+==1987856==    by 0x3C72317: mysql_execute_command(THD*, bool) (sql_parse.cc:5577)
+```
+
+Solution:
+---------
+This feature port from MySQL(8.0.22), get lock time interface has changed,
+refer to slow log implementation, change to use new interface THD::get_lock_usec
+to calculate lock time.
+---
+ sql/log.cc      | 4 ++--
+ sql/sql_class.h | 4 ----
+ 2 files changed, 2 insertions(+), 6 deletions(-)
+
+diff --git a/sql/log.cc b/sql/log.cc
+index ef420858f46..a7892b27db3 100644
+--- a/sql/log.cc
++++ b/sql/log.cc
+@@ -1599,7 +1599,7 @@ bool Query_logger::oma_log_write(THD *thd, const char *query,
+   ulonglong query_utime, lock_utime;
+   if (thd->start_utime) {
+     query_utime = (current_utime - thd->start_utime);  // Total execution time
+-    lock_utime = (thd->utime_after_lock - thd->start_utime);  // Lock wait time
++    lock_utime = thd->get_lock_usec();                 // Lock wait time
+   } else {
+     query_utime = 0;
+     lock_utime = 0;
+@@ -2759,4 +2759,4 @@ void conn_info_print(ConnectLogType log_type, const char *format, ...) {
+   (void)vsnprintf(buff, sizeof(buff), format, args);
+   va_end(args);
+   LogErr(WARNING_LEVEL, ER_RPL_IO_THREAD_KILLED, debug_info_prefix, buff);
+-}
+\ No newline at end of file
++}
+diff --git a/sql/sql_class.h b/sql/sql_class.h
+index dfc68498ced..4ebf78a3f1a 100644
+--- a/sql/sql_class.h
++++ b/sql/sql_class.h
+@@ -1712,10 +1712,6 @@ class THD : public MDL_context_owner,
+     Query start time, expressed in microseconds.
+   */
+   ulonglong start_utime;
+-  /**
+-    Time after acquiring the lock, expressed in microseconds.
+-  */
+-  ulonglong utime_after_lock;
+ 
+  private:
+   /**
+-- 
+2.23.0
+

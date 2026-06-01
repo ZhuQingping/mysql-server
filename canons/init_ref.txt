@@ -1,0 +1,22 @@
+sql/sql_select.cc
+^bool init_ref\(
+^\}$
+bool init_ref(THD *thd, unsigned keyparts, unsigned length, unsigned keyno,
+              Index_lookup *ref) {
+  ref->key_parts = keyparts;
+  ref->key_length = length;
+  ref->key = keyno;
+  if (!(ref->key_buff = thd->mem_root->ArrayAlloc<uchar>(ALIGN_SIZE(length))) ||
+      !(ref->key_buff2 =
+            thd->mem_root->ArrayAlloc<uchar>(ALIGN_SIZE(length))) ||
+      !(ref->key_copy = thd->mem_root->ArrayAlloc<store_key *>(keyparts)) ||
+      !(ref->items = thd->mem_root->ArrayAlloc<Item *>(keyparts)) ||
+      !(ref->cond_guards = thd->mem_root->ArrayAlloc<bool *>(keyparts))) {
+    return true;
+  }
+  ref->key_err = true;
+  ref->null_rejecting = 0;
+  ref->use_count = 0;
+  ref->disable_cache = false;
+  return false;
+}

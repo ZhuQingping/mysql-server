@@ -1,0 +1,250 @@
+sql/item_subselect.h
+^class Item_subselect : public Item_result_field \{$
+^\};$
+class Item_subselect : public Item_result_field {
+  typedef Item_result_field super;
+
+ private:
+  bool value_assigned; /* value already assigned to subselect */
+  /**
+      Whether or not execution of this subselect has been traced by
+      optimizer tracing already. If optimizer trace option
+      REPEATED_SUBSELECT is disabled, this is used to disable tracing
+      after the first one.
+  */
+  bool traced_before;
+
+ public:
+  /*
+    Used inside Item_subselect::fix_fields() according to this scenario:
+      > Item_subselect::fix_fields
+        > subquery->prepare
+          > query_block->prepare
+            (Here we realize we need to do the rewrite and set
+             substitution= some new Item, eg. Item_in_optimizer )
+          < query_block->prepare
+        < subquery->prepare
+        *ref= substitution;
+      < Item_subselect::fix_fields
+  */
+  Item *substitution;
+
+  /* unit of subquery */
+  Query_expression *unit;
+  /**
+     If !=NO_PLAN_IDX: this Item is in the condition attached to the JOIN_TAB
+     having this index in the parent JOIN.
+  */
+  int in_cond_of_tab;
+
+  // For EXPLAIN.
+  enum enum_engine_type { OTHER_ENGINE, INDEXSUBQUERY_ENGINE, HASH_SJ_ENGINE };
+  enum_engine_type engine_type() const;
+
+  // For EXPLAIN. Only valid if engine_type() == HASH_SJ_ENGINE.
+  const TABLE *get_table() const;
+  const Index_lookup &index_lookup() const;
+  join_type get_join_type() const;
+
+  void create_iterators(THD *thd);
+  virtual AccessPath *root_access_path() const { return nullptr; }
+
+ protected:
+  /**
+    We need this method, because some compilers do not allow 'this'
+    pointer in constructor initialization list, but we need to pass a pointer
+    to subselect Item class to Query_result_interceptor's constructor.
+  */
+  void init(Query_block *select, Query_result_subquery *result);
+
+  /// The inner part of the subquery.
+  unique_ptr_destroy_only<SubqueryWithResult> subquery;
+
+  /// Only relevant for Item_in_subselect; optimized structure used for
+  /// execution in place of running the entire subquery.
+  subselect_indexsubquery_engine *indexsubquery_engine = nullptr;
+
+  /// cache of used tables
+  table_map used_tables_cache;
+  /// allowed number of columns (1 for scalar subqueries)
+  uint max_columns;
+  /// where subquery is placed
+  enum_parsing_context parsing_place;
+  /// work with 'substitution'
+  bool have_to_be_excluded;
+  /**
+     The last clone made of this Item by PQ, and the THD to which the clone
+     was given. This is used to make sure that we don't create too many
+     clones. Consider this query where an Item_subselect is referenced from
+     two places:
+     select * from t1 where (subq)=0;
+
+     The Item for subq is pointed to by both WHERE and t1's
+     QEP_TAB::condition(). As we clone both conditions, we call pq_clone() on
+     this Item twice. But in pq_dup_select() we created one single clone for
+     the Query_expression of the subquery. In the end, without care, we would
+     have two Item_subselect with the same 'unit' member (and, where would
+     unit->item point to?). It can also happen with
+     select (subq) from t1 having (subq)=0;
+     where HAVING will contain Item_ref pointing to 'subq': we still want a
+     single Item_subselect clone.
+
+     With this pair, we ensure that an Item_subselect produces only one clone
+     per leader and worker. If the same thread asks for a clone again, we'll
+     provide it with the clone which it already received.
+  */
+  std::pair<THD *, Item_subselect *> m_pq_last_clone{nullptr, nullptr};
+
+ public:
+  /// cache of used tables, used to identify tables added for IN subquery
+  table_map m_subquery_used_tables{0};
+  /// subquery is transformed
+  bool changed;
+
+  enum subs_type {
+    UNKNOWN_SUBS,
+    SINGLEROW_SUBS,
+    EXISTS_SUBS,
+    IN_SUBS,
+    ALL_SUBS,
+    ANY_SUBS
+  };
+
+  Item_subselect();
+  explicit Item_subselect(const POS &pos);
+
+ private:
+  /// Accumulate properties from underlying query expression
+  void accumulate_properties();
+  /// Accumulate properties from underlying query block
+  void accumulate_properties(Query_block *select);
+  /// Accumulate properties from a selected expression within a query block.
+  void accumulate_expression(Item *item);
+  /// Accumulate properties from a condition or GROUP/ORDER within a query
+  /// block.
+  void accumulate_condition(Item *item);
+
+ public:
+  /// Accumulate used tables
+  void accumulate_used_tables(table_map add_tables) {
+    used_tables_cache |= add_tables;
+    m_subquery_used_tables |= add_tables;
+  }
+
+  virtual subs_type substype() const { return UNKNOWN_SUBS; }
+
+  void cleanup() override;
+  virtual void reset() { null_value = true; }
+  virtual bool select_transformer(THD *thd, Query_block *select) = 0;
+  bool assigned() const { return value_assigned; }
+  void assigned(bool a) { value_assigned = a; }
+  enum Type type() const override;
+  bool is_null() override { return update_null_value() || null_value; }
+  bool fix_fields(THD *thd, Item **ref) override;
+  bool refix_fields(THD *thd, Item **) override;
+  void fix_after_pullout(Query_block *parent_query_block,
+                         Query_block *removed_query_block) override;
+  virtual bool exec(THD *thd);
+  bool resolve_type(THD *) override;
+  table_map used_tables() const override { return used_tables_cache; }
+  table_map not_null_tables() const override { return 0; }
+  Item *get_tmp_table_item(THD *thd) override;
+  void update_used_tables() override;
+  void print(const THD *thd, String *str,
+             enum_query_type query_type) const override;
+
+  void set_indexsubquery_engine(subselect_indexsubquery_engine *eng) {
+    indexsubquery_engine = eng;
+  }
+
+  /*
+    True if this subquery has been already evaluated. Implemented only for
+    single select and union subqueries only.
+  */
+  bool is_evaluated() const;
+  bool is_uncacheable() const;
+
+  /*
+    Used by max/min subquery to initialize value presence registration
+    mechanism. Engine call this method before rexecution query.
+  */
+  virtual void reset_value_registration() {}
+  enum_parsing_context place() { return parsing_place; }
+  bool walk(Item_processor processor, enum_walk walk, uchar *arg) override;
+  bool explain_subquery_checker(uchar **arg) override;
+  bool inform_item_in_cond_of_tab(uchar *arg) override;
+  bool clean_up_after_removal(uchar *arg) override;
+
+  const char *func_name() const override {
+    assert(0);
+    return "subselect";
+  }
+
+  bool check_function_as_value_generator(uchar *args) override {
+    Check_function_as_value_generator_parameters *func_arg =
+        pointer_cast<Check_function_as_value_generator_parameters *>(args);
+    func_arg->err_code = func_arg->get_unnamed_function_error_code();
+    return true;
+  }
+
+  /// argument used by walk method collect_scalar_subqueries ("css")
+  struct Collect_subq_info {
+    ///< accumulated all subq (or aggregates) found
+    std::vector<Item_subselect *> list;
+    Query_block *m_query_block{nullptr};
+    Collect_subq_info(Query_block *owner) : m_query_block(owner) {}
+    bool contains(Query_expression *candidate) {
+      for (auto sq : list) {
+        if (sq->unit == candidate) return true;
+      }
+      return false;
+    }
+  };
+
+  bool collect_subqueries(uchar *) override;
+  Item *replace_item_field(uchar *arg) override;
+  Item *replace_item_view_ref(uchar *arg) override;
+  Item *replace_item(Item_transformer t, uchar *arg);
+  bool pq_copy_from(THD *thd, Query_block *select, Item *item) override;
+  bool eq(const Item *item, bool cmp) const override;
+  /**
+   * When PQ falls back to serial execution, m_pq_last_clone needs to be
+   * restored to its initial value.
+   */
+  bool pq_restore(uchar *) override {
+    m_pq_last_clone = {nullptr, nullptr};
+    return false;
+  }
+
+  /**
+   * Get outer-referenced fields by this subselect. This function will walk
+   * Item_subselect and collect all the outer-referenced fields by itself.
+
+   * @param[in] thd pointer of current session
+   * @param[in,out] params pointer of structure to store expected outer fields
+   */
+  void get_item_params(const THD *, Dependent_item_params *params);
+
+  friend class Query_result_interceptor;
+  friend class Item_in_optimizer;
+  friend bool Item_field::fix_fields(THD *, Item **);
+  friend int Item_field::fix_outer_field(THD *, Field **, Item **);
+  friend bool Item_ref::fix_fields(THD *, Item **);
+  friend void Item_ident::fix_after_pullout(Query_block *parent_query_block,
+                                            Query_block *removed_query_block);
+
+ private:
+  bool subq_opt_away_processor(uchar *arg) override;
+
+ protected:
+  uint unit_cols() const;
+
+  /**
+     Actions which are part of cloning an Item_subselect and which are common
+     to all children classes of Item_subselect.
+     @param thd     THD handler owning 'select'
+     @param select  Query block to contain the clone
+     @returns  the clone
+  */
+  Item_subselect *pq_clone_common(THD *thd, Query_block *select);
+};

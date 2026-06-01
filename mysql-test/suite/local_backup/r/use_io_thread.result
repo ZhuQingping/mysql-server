@@ -1,0 +1,82 @@
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("Wait io thread doing io work timeout 1 ms for local backup");
+call mtr.add_suppression("Wait Lb ctrl io result is empty");
+call mtr.add_suppression("Wait Lb write io result is empty");
+call mtr.add_suppression("Wait Lb read io result is empty");
+call mtr.add_suppression("Wait innodb io thread doing io work timeout 1 ms for local backup");
+call mtr.add_suppression("Wait lb innodb io result is empty");
+call mtr.add_suppression("and expect size is");
+call mtr.add_suppression("Local backup");
+call mtr.add_suppression("fail");
+CREATE DATABASE db1;
+USE db1;
+CREATE TABLE t1(a int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+a
+1
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+INSERT INTO t1 VALUES(2);
+SELECT * FROM t1 order by a;
+a
+1
+2
+call rds_backup.start_log_archive();
+INSERT INTO t1 VALUES(3);
+SELECT * FROM t1 order by a;
+a
+1
+2
+3
+call rds_backup.stop_log_archive();
+INSERT INTO t1 VALUES(4);
+SELECT * FROM t1 order by a;
+a
+1
+2
+3
+4
+# Shut server down.
+# Restart the server.
+# restart: --dstore_open_restore_mode=on
+USE db1;
+SELECT * FROM t1 order by a;
+a
+1
+2
+3
+SET GLOBAL rds_dstore_lb_local_io_hang_timeout_ms = 0;
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+SET GLOBAL rds_dstore_lb_local_io_hang_timeout_ms = 100000;
+SET GLOBAL innodb_lb_local_io_hang_timeout_ms = 0;
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+SET GLOBAL innodb_lb_local_io_hang_timeout_ms = 100000;
+DROP DATABASE db1;

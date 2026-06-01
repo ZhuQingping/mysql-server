@@ -1,0 +1,271 @@
+CREATE TABLE counter(a INT NOT NULL AUTO_INCREMENT PRIMARY KEY);
+SET GLOBAL event_scheduler = OFF;
+CREATE PROCEDURE add_part()
+BEGIN
+DECLARE seq INT;
+DECLARE part_name VARCHAR(10);
+INSERT INTO counter VALUES();
+SELECT max(a) INTO @seq FROM counter;
+SELECT concat('p', @seq) INTO @part_name;
+SET @sql = concat('ALTER TABLE t1 ADD PARTITION (PARTITION ', @part_name,
+' VALUES LESS THAN(', @seq * 1000, '));');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+END|
+CREATE EVENT add_partition ON SCHEDULE EVERY 20 SECOND DO
+BEGIN
+CALL add_part();
+END|
+CREATE PROCEDURE populate_data(IN total INT)
+BEGIN
+DECLARE i INT DEFAULT 1;
+WHILE (i <= total) DO
+INSERT INTO t1 VALUES(i + 100);
+SET i = i + 1;
+SELECT sleep(1);
+END WHILE;
+END|
+# Prepare data
+CREATE TABLE t1 (a INT)
+PARTITION BY RANGE(a) (
+PARTITION p0 VALUES LESS THAN(100),
+PARTITION p1 VALUES LESS THAN(200)
+);
+INSERT INTO t1 VALUES(1), (2), (3);
+INSERT INTO counter VALUES(1);
+SELECT max(a) FROM counter;
+max(a)
+1
+# Event should follow this timeout
+SET GLOBAL rds_ddl_lock_wait_timeout=2;
+SET GLOBAL lock_wait_timeout=10;
+# conn1: start the event
+SET GLOBAL event_scheduler = ON;
+# Start a SELECT to block the DDL
+START TRANSACTION;
+SELECT * FROM t1;
+a
+1
+2
+3
+# conn2: Start the data bulk insert, to verify that it won't
+#        be blocked by DDL due to DDL timeout
+CALL populate_data(100);
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+sleep(1)
+0
+# conn2 waited for 110 seconds: 1
+# conn2: Stop the SELECT and wait for one successful DDL
+ROLLBACK;
+SET GLOBAL event_scheduler = OFF;
+# Expect to see one more partition added if no message printed
+# Expect to read 103(3 + 100) rows
+SELECT count(*) FROM t1;
+count(*)
+103
+DROP PROCEDURE populate_data;
+DROP PROCEDURE add_part;
+DROP EVENT add_partition;
+DROP TABLE counter;
+DROP TABLE t1;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+SET GLOBAL event_scheduler = ON;

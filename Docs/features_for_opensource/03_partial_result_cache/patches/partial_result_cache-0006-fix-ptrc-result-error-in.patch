@@ -1,0 +1,297 @@
+From d053c95e8613b2483603f369eb7cab68886b7c97 Mon Sep 17 00:00:00 2001
+From: wangjin <wangjin53@contributor>
+
+Date: Thu, 4 Dec 2025 20:44:37 +0800
+Subject: [PATCH] fix PTRC result error in
+ parallel_query.pq_reverse_index_scan
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Issue:
+Execute parallel_query.pq_reverse_index_scan; the serial/parallel results are
+inconsistent with those of community version 8.0.41.
+ select * from t2, t1 force index(`a`) having c < 3 order by a, b limit 10;
+ d      a       b       c
+@@ -325,11 +319,11 @@
+ 3      1       1       2
+ 4      1       1       2
+ 5      1       1       2
+-5      1       1       2
+-4      1       1       2
+-3      1       1       2
+-2      1       1       2
+ 1      1       1       2
++2      1       1       2
++3      1       1       2
++4      1       1       2
++5      1       1       2
+
+Analysis:
+It was confirmed to be caused by PTRC. The PQ branch enables PTRC by default,
+and if this feature is disabled the results are consistent with the community
+version.
+The root cause lies in the HashJoinRowBuffer::StoreRow function, where different
+rows with the same key are inserted into the singly linked list corresponding to
+that key from the head. After a ptrc key match, however, rows are read from head
+to tail. This results in rows that were originally later being read first,
+causing the returned row order to differ from the case without ptrc matching. If
+a LIMIT is applied to restrict the number of rows, this may lead to inconsistent
+results.
+
+Fix:
+To ensure that the time complexity of inserting a row in the
+HashJoinRowBuffer::StoreRow function is O(1), the tail node is cached for each
+key, and insertion logic based on the tail node is added to
+HashJoinRowBuffer::StoreRow. In addition, to avoid affecting non‑PTRC scenarios,
+the HashMap definition was not modified; instead, a new HashMap was introduced
+to store the tail node of the linked list corresponding to each key.
+---
+ .../suite/ptrc/r/partial_result_cache.result  | 26 +++++++++
+ .../suite/ptrc/t/partial_result_cache.test    | 36 ++++++++++++
+ sql/iterators/hash_join_buffer.cc             | 56 +++++++++++++++++--
+ sql/iterators/hash_join_buffer.h              | 13 ++++-
+ sql/partial_result_cache.cc                   |  2 +-
+ 5 files changed, 126 insertions(+), 7 deletions(-)
+
+diff --git a/mysql-test/suite/ptrc/r/partial_result_cache.result b/mysql-test/suite/ptrc/r/partial_result_cache.result
+index 13667e19943..780c68d4e8d 100644
+--- a/mysql-test/suite/ptrc/r/partial_result_cache.result
++++ b/mysql-test/suite/ptrc/r/partial_result_cache.result
+@@ -3647,3 +3647,29 @@ EXPLAIN
+         -> Covering index lookup on t2 using tig (ticket=ticket2.id) 
+ 
+ drop table t1,t2;
++create table t1 (a int, b int, c int, key(a desc, b asc, c desc));
++create table t2 (d int, key(d asc));
++explain format=tree select * from t2, t1 force index(`a`) having c < 3 order by a, b limit 10;
++EXPLAIN
++-> Limit: 10 row(s)  (...)
++    -> Nested loop inner join  (...)
++        -> Sort: t1.a, t1.b  (...)
++            -> Filter: (t1.c < 3)  (...)
++                -> Index scan on t1 using a  (...)
++        -> Result cache : cache keys(t1.a, t1.b, t1.c)  (...)
++            -> Index scan on t2 using d  (...)
++
++select * from t2, t1 force index(`a`) having c < 3 order by a, b limit 10;
++d	a	b	c
++1	1	1	2
++2	1	1	2
++3	1	1	2
++4	1	1	2
++5	1	1	2
++1	1	1	2
++2	1	1	2
++3	1	1	2
++4	1	1	2
++5	1	1	2
++drop table t1;
++drop table t2;
+diff --git a/mysql-test/suite/ptrc/t/partial_result_cache.test b/mysql-test/suite/ptrc/t/partial_result_cache.test
+index d95e8121f05..15e638e16d3 100644
+--- a/mysql-test/suite/ptrc/t/partial_result_cache.test
++++ b/mysql-test/suite/ptrc/t/partial_result_cache.test
+@@ -1,5 +1,6 @@
+ --source include/have_debug.inc
+ --source include/not_have_only_dstore.inc
++--source include/elide_costs.inc
+ CREATE TABLE t1(a int, b int);
+ INSERT INTO t1 VALUES(1,2),(2,3),(2,3),(2,3),(2,4),(3,1);
+ CREATE TABLE t2(a int, b int);
+@@ -778,3 +779,38 @@ INSERT INTO t2 SELECT * FROM t1;
+ --replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*//
+ explain analyze select /*+ prc_join() */ ticket2.id FROM t2 as ttxt,t2 INNER JOIN t1 as ticket2 ON ticket2.id = t2.ticket WHERE ticket2.id = ticket2.ticket and match(ttxt.inhalt) against ('foobar');
+ drop table t1,t2;
++
++create table t1 (a int, b int, c int, key(a desc, b asc, c desc));
++create table t2 (d int, key(d asc));
++--disable_query_log
++let $i=5;
++while($i)
++{
++    let $j = 5;
++    while($j)
++    {
++        let $k = 5;
++        while($k)
++        {
++            let $l = 5;
++            while($l)
++            {
++                --eval insert into t1 values($k, $j, $i)
++                dec $l;
++            }
++            dec $k;
++        }
++        dec $j;
++    }
++    --eval insert into t2 values($i);
++    dec $i;
++}
++--enable_query_log
++let $query=
++select * from t2, t1 force index(`a`) having c < 3 order by a, b limit 10;
++--replace_regex $elide_costs_and_rows
++--eval explain format=tree $query
++--eval $query
++
++drop table t1;
++drop table t2;
+\ No newline at end of file
+diff --git a/sql/iterators/hash_join_buffer.cc b/sql/iterators/hash_join_buffer.cc
+index 7da07d423ac..e6772e6e7c4 100644
+--- a/sql/iterators/hash_join_buffer.cc
++++ b/sql/iterators/hash_join_buffer.cc
+@@ -193,7 +193,7 @@ HashJoinRowBuffer::~HashJoinRowBuffer() {
+   if (m_owned_mem_root) delete m_mem_root;
+ }
+ 
+-bool HashJoinRowBuffer::Init() {
++bool HashJoinRowBuffer::Init(bool is_ptrc) {
+   // Reset the unique_ptr, so that the hash map destructors are called
+   // before clearing the MEM_ROOT.
+   if (!m_mem_root) {
+@@ -220,6 +220,15 @@ bool HashJoinRowBuffer::Init() {
+     // cache std::bad_alloc here.
+   }
+ 
++  if (m_all_last_rows != nullptr) m_all_last_rows.reset(nullptr);
++  if (is_ptrc) {
++    m_all_last_rows.reset(new HashMap());
++    if (m_all_last_rows == nullptr) {
++      my_error(ER_OUTOFMEMORY, MYF(ME_FATALERROR), sizeof(*m_all_last_rows));
++      return true;
++    }
++  }
++
+   // NOTE: Will be ignored and re-calculated if there are any blobs in the
+   // table.
+   m_row_size_upper_bound = ComputeRowSizeUpperBound(m_tables);
+@@ -350,6 +359,7 @@ StoreRowResult HashJoinRowBuffer::StoreRow(char *key_data, size_t key_size,
+                                            size_t val_size,
+                                            char *val_store_pos) {
+   ImmutableStringWithLength key{nullptr};
++  bool first_value = true;
+   if (key_store_pos == nullptr) {
+     DBUG_EXECUTE_IF(
+         "ptrc_sim_allocate_failure_during_cache",
+@@ -390,9 +400,8 @@ StoreRowResult HashJoinRowBuffer::StoreRow(char *key_data, size_t key_size,
+     m_last_key_length_stored = key_size;
+   } else {
+     // We already have another element with the same key, so our insert
+-    // failed, Put the new value in the hash bucket, but keep track of
+-    // what the old one was; it will be our “next” pointer.
+-    next_ptr = key_it_and_inserted.first->second;
++    // failed.
++    first_value = false;
+   }
+ 
+   LinkedImmutableString value{nullptr};
+@@ -424,7 +433,43 @@ StoreRowResult HashJoinRowBuffer::StoreRow(char *key_data, size_t key_size,
+ #endif /* NDEBUG */
+   }
+ 
+-  m_last_row_stored = key_it_and_inserted.first->second = value;
++  const auto it = m_all_last_rows->find(
++      Key(pointer_cast<const char *>(key_data), key_size));
++  if (it != m_all_last_rows->end() && !first_value) {
++    LinkedImmutableString tail_row = it->second;
++    assert(tail_row != nullptr);
++    assert(tail_row.DecodeFixed().next == nullptr);
++    char *tail_ptr = const_cast<char *>(tail_row.GetDataPointer());
++    // Set the next pointer of the current tail node to point to the new node
++    // (i.e., value).
++    LinkedImmutableString old_value [[maybe_unused]] =
++        LinkedImmutableString::EncodeFixedHeader(value, &tail_ptr);
++    assert(old_value.GetDataPointer() == tail_row.GetDataPointer());
++  } else {
++    // In theory, entering this branch should only occur when
++    // 'it == m_all_last_rows->end() && first_value', that is, when adding the
++    // first row for a key. If, in extreme cases, this branch is entered,
++    // modifying the head node will not affect functionality, but it will impact
++    // the cache hit rate of ptrc.
++    assert(it == m_all_last_rows->end() && first_value);
++    key_it_and_inserted.first->second = value;
++  }
++
++  std::pair<HashMap::iterator, bool> last_rows_iter_and_inserted;
++  try {
++    last_rows_iter_and_inserted = m_all_last_rows->emplace(key, value);
++  } catch (const std::overflow_error &) {
++    // m_all_last_rows can only potentially trigger a memory exception when
++    // adding a new node. Therefore, at this point the head node is directly set
++    // to null to avoid inconsistency between m_all_last_rows and m_hash_map.
++    key_it_and_inserted.first->second = LinkedImmutableString{nullptr};
++    return StoreRowResult::FATAL_ERROR;
++  }
++  if (!last_rows_iter_and_inserted.second) {
++    last_rows_iter_and_inserted.first->second = value;
++  }
++
++  m_last_row_stored = value;
+   m_last_row_length_stored = val_size;
+ 
+   if (m_mem_root->allocated_size() > m_max_mem_available) {
+@@ -449,6 +494,7 @@ std::optional<LinkedImmutableString> HashJoinRowBuffer::first_row() const {
+ 
+ void HashJoinRowBuffer::erase(Key key) {
+   m_hash_map->erase(key);
++  if (m_all_last_rows != nullptr) m_all_last_rows->erase(key);
+   return;
+ }
+ 
+diff --git a/sql/iterators/hash_join_buffer.h b/sql/iterators/hash_join_buffer.h
+index 13344225c37..825f0609894 100644
+--- a/sql/iterators/hash_join_buffer.h
++++ b/sql/iterators/hash_join_buffer.h
+@@ -140,7 +140,7 @@ class HashJoinRowBuffer {
+   // function can be called multiple times; subsequent calls will only clear the
+   // buffer for existing rows. If no MEM_ROOT was provided at construction
+   // time, one will be allocated here.
+-  bool Init();
++  bool Init(bool is_ptrc = false);
+ 
+   /// Store the row that is currently lying in the tables record buffers.
+   /// The hash map key is extracted from the join conditions that the row buffer
+@@ -159,6 +159,9 @@ class HashJoinRowBuffer {
+   /// This is intended for "Partial Table Result Cache PTRC".
+   /// Store the row consisted of specified key and value.
+   /// Optionally, use specified positions to store key and value.
++  /// To ensure the consistency of the data return order in ptrc, when inserting
++  /// row into the row chain of the same key in the hash table, the insertion is
++  /// performed at the tail rather than at the head.
+   ///
+   /// @param key_data hash map key data
+   /// @param key_length length of key data
+@@ -248,6 +251,14 @@ class HashJoinRowBuffer {
+   // from the caller of the constructor.
+   bool m_owned_mem_root{false};
+ 
++  // Store the tail nodes of the singly linked lists of rows corresponding to
++  // all keys in m_hash_map, which in theory are completely consistent with the
++  // keys of m_hash_map.
++  // This member variable ensures that in the PTRC scenario the algorithmic
++  // complexity of StoreRow is O(1). The reason for not modifying HashMap to add
++  // a value field here is concern about affecting non‑PTRC scenarios.
++  std::unique_ptr<HashMap> m_all_last_rows{nullptr};
++
+   // Fetch the relevant fields from each table, and pack them into m_mem_root
+   // as a LinkedImmutableString where the “next” pointer points to “next_ptr”.
+   // If that does not work (capacity reached), pack into m_overflow_mem_root
+diff --git a/sql/partial_result_cache.cc b/sql/partial_result_cache.cc
+index 7f952d575cb..a00f23e04bb 100644
+--- a/sql/partial_result_cache.cc
++++ b/sql/partial_result_cache.cc
+@@ -866,7 +866,7 @@ bool PtrcIterator::InitRowBuffer() {
+   m_thd->push_internal_handler(&error_handler);
+   bool res = true;
+ 
+-  if (m_row_buffer->Init() || error_handler.is_error_handled()) {
++  if (m_row_buffer->Init(true) || error_handler.is_error_handled()) {
+     goto final;
+   }
+   m_current_row = LinkedImmutableString{nullptr};
+-- 
+2.23.0
+

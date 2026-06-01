@@ -1,0 +1,244 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+--source include/big_test.inc
+
+--echo #
+--echo #  DDL CRASH SAFE TEST: ALL DDL TEST PART 03
+--echo #  This test will check whether the server can recovery from different
+--echo #  phases of ALL DDLs without inconsistency between dstore and
+--echo #  innodb. Each DDL will be tested at 3 crash points and recovery
+--echo #  results will be verified.
+--echo #
+
+CREATE DATABASE test_ddl_crash_comprehensive;
+USE test_ddl_crash_comprehensive;
+
+--echo #  25. Crash on CREATE SERVER statement.
+--echo #  25.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE SERVER s_crash FOREIGN DATA WRAPPER mysql OPTIONS (HOST '127.0.0.1');
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify server should not exist
+SELECT COUNT(*) AS server_count FROM mysql.servers WHERE SERVER_NAME='s_crash';
+
+--echo #  25.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE SERVER s_crash FOREIGN DATA WRAPPER mysql OPTIONS (HOST '127.0.0.1');
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify server should not exist
+SELECT COUNT(*) AS server_count FROM mysql.servers WHERE SERVER_NAME='s_crash';
+
+--echo #  25.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+CREATE SERVER s_crash FOREIGN DATA WRAPPER mysql OPTIONS (HOST '127.0.0.1');
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify server should exist
+SELECT COUNT(*) AS server_count FROM mysql.servers WHERE SERVER_NAME='s_crash';
+SELECT SERVER_NAME, HOST FROM mysql.servers WHERE SERVER_NAME='s_crash';
+
+--echo #  26. Crash on ALTER SERVER statement.
+--echo #  26.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+ALTER SERVER s_crash OPTIONS (USER 'test');
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify server user should not be changed
+SELECT USERNAME FROM mysql.servers WHERE SERVER_NAME='s_crash';
+
+--echo #  26.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+ALTER SERVER s_crash OPTIONS (USER 'test');
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify server user should not be changed
+SELECT USERNAME FROM mysql.servers WHERE SERVER_NAME='s_crash';
+
+--echo #  26.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+ALTER SERVER s_crash OPTIONS (USER 'test');
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify server user should be changed
+SELECT USERNAME FROM mysql.servers WHERE SERVER_NAME='s_crash';
+
+--echo #  27. Crash on DROP SERVER statement.
+--echo #  27.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+DROP SERVER s_crash;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify server should still exist
+SELECT COUNT(*) AS server_count FROM mysql.servers WHERE SERVER_NAME='s_crash';
+
+--echo #  27.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+DROP SERVER s_crash;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify server should still exist
+SELECT COUNT(*) AS server_count FROM mysql.servers WHERE SERVER_NAME='s_crash';
+
+--echo #  27.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+DROP SERVER s_crash;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify server should be dropped
+SELECT COUNT(*) AS server_count FROM mysql.servers WHERE SERVER_NAME='s_crash';
+
+--echo #  28. Crash on CREATE USER statement.
+--echo #  28.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE USER 'testuser_crash'@'localhost' IDENTIFIED BY 'password';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify user should not exist
+SELECT COUNT(*) AS user_count FROM mysql.user WHERE USER='testuser_crash';
+
+--echo #  28.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE USER 'testuser_crash'@'localhost' IDENTIFIED BY 'password';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify user should not exist
+SELECT COUNT(*) AS user_count FROM mysql.user WHERE USER='testuser_crash';
+
+--echo #  28.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+CREATE USER 'testuser_crash'@'localhost' IDENTIFIED BY 'password';
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify user should exist
+SELECT COUNT(*) AS user_count FROM mysql.user WHERE USER='testuser_crash';
+SELECT USER, HOST FROM mysql.user WHERE USER='testuser_crash';
+
+--echo #  29. Crash on ALTER USER statement.
+--echo #  29.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+--source include/expect_crash.inc
+--error 2013
+ALTER USER 'testuser_crash'@'localhost' ACCOUNT LOCK;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify user account should not be locked
+SELECT ACCOUNT_LOCKED FROM mysql.user WHERE USER='testuser_crash';
+
+--echo #  29.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+ALTER USER 'testuser_crash'@'localhost' ACCOUNT LOCK;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify user account should not be locked
+SELECT ACCOUNT_LOCKED FROM mysql.user WHERE USER='testuser_crash';
+
+--echo #  29.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+--source include/expect_crash.inc
+--error 2013
+ALTER USER 'testuser_crash'@'localhost' ACCOUNT LOCK;
+
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld.inc
+USE test_ddl_crash_comprehensive;
+
+--echo # Verify user account should be locked
+SELECT ACCOUNT_LOCKED FROM mysql.user WHERE USER='testuser_crash';
+
+--echo # Final cleanup and summary
+--echo # Drop remaining objects for complete cleanup
+DROP USER 'testuser_crash'@'localhost';
+
+--echo # Summary: All DDL crash recovery tests completed successfully
+--echo # Each DDL was tested at 3 crash points with proper recovery verification
+--echo # - Before InnoDB prepare: DDL should be rolled back
+--echo # - After InnoDB prepare but before DStore commit: DDL should be rolled back
+--echo # - After DStore commit: DDL should be committed and visible
+
+SET debug='reset';
+DROP DATABASE test_ddl_crash_comprehensive;

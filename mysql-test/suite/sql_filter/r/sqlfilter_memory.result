@@ -1,0 +1,133 @@
+CREATE PROCEDURE delete_one_sql_filter_rule(IN offset_value INT)
+begin
+declare my_var BIGINT default 1;
+select item_id into my_var from mysql.rds_sql_filter_rules limit offset_value,1;
+call dbms_sqlfilter.delete_sql_filter(my_var);
+end |
+call dbms_sqlfilter.add_sql_filter('select', 0, "select~t", "92c1c492b3d147c3a354830cf04c361dno07");
+set @before_memory=0;
+set @after_memory=0;
+#
+# test dbms_sqlfilter.add_sql_filter can add memory
+#
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @before_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+call dbms_sqlfilter.add_sql_filter('select', 0, "select~t", "92c1c492b3d147c3a354830cf04c361dno07");
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+select @after_memory - @before_memory;
+@after_memory - @before_memory
+237.000000000000000000000000000000
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @before_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+call  dbms_sqlfilter.add_sql_filter('SELECT', 10, "select~from~t~数据库", "92c1c492b3d147c3a354830cf04c361dno07");
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+select @after_memory - @before_memory;
+@after_memory - @before_memory
+293.000000000000000000000000000000
+#
+# test dbms_sqlfilter.delete_sql_filter can reduce memory
+#
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @before_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+call delete_one_sql_filter_rule(0);
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+select @after_memory - @before_memory;
+@after_memory - @before_memory
+-237.000000000000000000000000000000
+#
+# test dbms_sqlfilter.delete_sql_filter on a nonexisted item_id, memory not change
+#
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @before_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+call dbms_sqlfilter.delete_sql_filter(9999999);
+Warnings:
+Warning	8017	Statement sqlfilter 9999999 is not found in table
+Warning	8017	Statement sqlfilter 9999999 is not found in cache
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+select @after_memory - @before_memory;
+@after_memory - @before_memory
+0.000000000000000000000000000000
+#
+# test dbms_sqlfilter.show_sql_filter, Sql_filter memory not change
+#
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @before_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	10	4	0	select~from~t~数据库	92c1c492b3d147c3a354830cf04c361dno07
+#	SELECT	0	0	2	0	select~t	92c1c492b3d147c3a354830cf04c361dno07
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+select @after_memory - @before_memory;
+@after_memory - @before_memory
+0.000000000000000000000000000000
+#
+# test dbms_sqlfilter.flush_sql_filter, Sql_filter memory not change
+#
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @before_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+call dbms_sqlfilter.flush_sql_filter();
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+select @after_memory - @before_memory;
+@after_memory - @before_memory
+0.000000000000000000000000000000
+#
+# test dbms_sqlfilter.delete_sql_filter, delete all sql filter rules, Sql_filter memory reduce to 0
+#
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @before_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+select @after_memory - @before_memory;
+@after_memory - @before_memory
+-530.000000000000000000000000000000
+select @after_memory;
+@after_memory
+0
+#
+# test the memory increase when a possible largest sqlfilter rule added
+#
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @before_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+long_key_num_length
+1024
+call dbms_sqlfilter.add_sql_filter('update', 1000000000, "update~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefghi", "92c1c492b3d147c3a354830cf04c361dno07");
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+select @after_memory - @before_memory;
+@after_memory - @before_memory
+1294.000000000000000000000000000000
+call delete_one_sql_filter_rule(0);
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+select @after_memory - @before_memory;
+@after_memory - @before_memory
+0.000000000000000000000000000000
+#
+# test dbms_sqlfilter.update_sql_filter, Sql_filter memory can be changed based on key_str length
+#
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @before_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+call dbms_sqlfilter.add_sql_filter('update', 1000000000, "update~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefghi", "92c1c492b3d147c3a354830cf04c361dno07");
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+select @after_memory - @before_memory;
+@after_memory - @before_memory
+1294.000000000000000000000000000000
+call dbms_sqlfilter.update_sql_filter(#, 'update', 1000000000, "update~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefghi", "12b3c492b3d147c3a354830cf04c361dno07");
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+select @after_memory - @before_memory;
+@after_memory - @before_memory
+1294.000000000000000000000000000000
+call dbms_sqlfilter.update_sql_filter(9999999, 'update', 1000000000, "update~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefg~abcdefghi", "12b3c492b3d147c3a354830cf04c361dno07");
+Warnings:
+Warning	8017	Statement sqlfilter 9999999 is not found in cache
+Warning	8017	Statement sqlfilter 9999999 is not found in table
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+select @after_memory - @before_memory;
+@after_memory - @before_memory
+1294.000000000000000000000000000000
+call dbms_sqlfilter.update_sql_filter(#, 'update', 1000000000, "update~t~数据库", "12b3c492b3d147c3a354830cf04c361dno07");
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+select @after_memory - @before_memory;
+@after_memory - @before_memory
+1294.000000000000000000000000000000
+call dbms_sqlfilter.update_sql_filter(#, 'update', 1, "update~t~数据库", "12b3c492b3d147c3a354830cf04c361dno07");
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+select @after_memory - @before_memory;
+@after_memory - @before_memory
+1294.000000000000000000000000000000
+call delete_one_sql_filter_rule(0);
+SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = #;
+select @after_memory - @before_memory;
+@after_memory - @before_memory
+0.000000000000000000000000000000
+DROP PROCEDURE delete_one_sql_filter_rule;

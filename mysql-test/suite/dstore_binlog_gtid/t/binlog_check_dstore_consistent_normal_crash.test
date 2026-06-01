@@ -1,0 +1,45 @@
+# ==== Purpose =======
+# Verify that Execute some transactions, successfully complete crash 
+# recovery, then perform crash recovery again before executing any 
+# transaction. Expect `rds_binlog_dstore_consistent` to be `true`.
+# And restart it again, expect `rds_binlog_dstore_consistent` to be `true`.
+# ==== References ====
+#
+# US2025072201182 Write gtid into wal and recovery read gtid from wal.
+#
+
+--source include/have_binlog_format_row.inc
+--source include/have_only_dstore.inc
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+RESET MASTER;
+CREATE TABLE t (i INT);
+INSERT INTO t VALUES (1);
+INSERT INTO t VALUES (2);
+INSERT INTO t VALUES (3);
+
+--source include/kill_and_restart_mysqld.inc
+
+--echo # expect rds_binlog_dstore_consistent is ON.
+show variables like 'rds_binlog_dstore_consistent';
+
+--echo # expect rds_dstore_missed_gtids is empty
+show variables like 'rds_dstore_missed_gtids';
+
+--echo # expect rds_dstore_missed_gtids_on_binlog is empty.
+
+show variables like 'rds_dstore_missed_gtids_on_binlog';
+
+--source include/kill_and_restart_mysqld.inc
+
+--echo # expect rds_binlog_dstore_consistent is ON.
+show variables like 'rds_binlog_dstore_consistent';
+
+--echo # expect rds_dstore_missed_gtids is empty
+show variables like 'rds_dstore_missed_gtids';
+
+--echo # expect rds_dstore_missed_gtids_on_binlog is empty.
+
+show variables like 'rds_dstore_missed_gtids_on_binlog';
+
+drop table t;

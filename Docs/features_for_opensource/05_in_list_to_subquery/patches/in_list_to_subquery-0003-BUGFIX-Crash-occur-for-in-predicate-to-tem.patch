@@ -1,0 +1,316 @@
+From 4d31398db3d40a5198e05772da5b4248b7fc98c3 Mon Sep 17 00:00:00 2001
+From: zhuqingping <zhuqingping1@contributor>
+
+
+Date: Mon, 8 Sep 2025 17:20:33 +0800
+Subject: [PATCH] BUGFIX Crash occur for in predicate to temp table +
+ PS protocol
+
+Issue:
+------
+Crash occur for following test scenario.
+```
+create table t1(a int, b int, index(b))engine=innodb;
+create table t2(a int, b int)engine=innodb;
+insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10);
+insert into t2 values(11,11),(12,12),(13,13),(14,14),(15,15),(16,16),(17,17),(18,18),(19,19),(10,10);
+set rds_plan_cache=off;
+set rds_in_predicate_conversion_threshold = 1;
+PREPARE stmt0 FROM 'select b from t1 where t1.b != ANY (select b from t2) and t1.b IN (1,2,3)';
+EXECUTE stmt0;
+-- crash here
+EXECUTE stmt0;
+```
+
+Analysis:
+---------
+MySQL do not encounter this crash issue, the reason is that MySQL and Dstore choose different query plan.
+
+MySQL query plan as follows:
+-> Nested loop inner join  (cost=3.89 rows=3)
+    -> Filter: (<nop>(<in_optimizer>(`<in_predicate_3>`.b,<exists>(select #2))) and (`<in_predicate_3>`.b is not null))  (cost=2.84 rows=3)
+        -> Table scan on <in_predicate_3>  (cost=2.84 rows=3)
+        -> Select #2 (subquery in condition; dependent)
+            -> Limit: 1 row(s)  (cost=1.25 rows=1)
+                -> Filter: <if>(outer_field_is_not_null, <is_not_null_test>(t2.b), true)  (cost=1.25 rows=10)
+                    -> Filter: <if>(outer_field_is_not_null, ((<cache>(t1.b) <> t2.b) or (t2.b is null)), true)  (cost=1.25 rows=10)
+                        -> Table scan on t2  (cost=1.25 rows=10)
+    -> Covering index lookup on t1 using b (b=`<in_predicate_3>`.b)  (cost=0.28 rows=1)
+
+Dstore query plan as follows:
+-> Nested loop inner join  (cost=1.65 rows=3) (actual time=1.28..1.61 rows=3 loops=1)
+    -> Filter: (<nop>(<in_optimizer>(`<subquery3>`.b,<exists>(select #2))) and (`<subquery3>`.b is not null))  (cost=2.29..0.6 rows=3) (actual time=1.18..1.32 rows=3 loops=1)
+        -> Table scan on <subquery3>  (cost=3.98..5.67 rows=3) (actual time=0.038..0.0435 rows=3 loops=1)
+            -> Materialize with deduplication  (cost=3.14..3.14 rows=3) (actual time=0.0362..0.0362 rows=3 loops=1)
+                -> Filter: (`<in_predicate_3>`.b is not null)  (cost=2.84 rows=3) (actual time=0.00795..0.0111 rows=3 loops=1)
+                    -> Table scan on <in_predicate_3>  (cost=2.84 rows=3) (actual time=0.00572..0.0081 rows=3 loops=1)
+        -> Select #2 (subquery in condition; dependent)
+            -> Limit: 1 row(s)  (cost=1.25 rows=1) (actual time=0.395..0.395 rows=1 loops=3)
+                -> Filter: <if>(outer_field_is_not_null, <is_not_null_test>(t2.b), true)  (cost=1.25 rows=10) (actual time=0.394..0.394 rows=1 loops=3)
+                    -> Filter: <if>(outer_field_is_not_null, ((<cache>(`<subquery3>`.b) <> t2.b) or (t2.b is null)), true)  (cost=1.25 rows=10) (actual time=0.393..0.393 rows=1 loops=3)
+                        -> Table scan on t2  (cost=1.25 rows=10) (actual time=0.389..0.389 rows=1 loops=3)
+    -> Covering index lookup on t1 using b (b=`<subquery3>`.b)  (cost=0.85 rows=1) (actual time=0.0598..0.0946 rows=1 loops=3)
+
+Issue 1: why MySQL and Dstore choose different query plan?
+In predicate change to temporary table feature similar with manually create temporary table "in_predicate_3" with index on column b,
+and write 1,2,3 3 records into table "in_predicate_3". Then optimizer can choose semi-join for IN List clause.
+
+But during execution, Dstore version find that index b on table "in_predicate_3" is unsable, which leads to the
+differences mentioned above. So why index b on table "in_predicate_3" is unsable for Dstore?
+
+We find out that when the PREPARE statement execution ends, cleanup tmp table resources. Table keys_in_use_for_query
+was cleanup, result in index unusable for following execution. Refer to following code.
+
+```
+951cb510 (Catalin Besleaga      2022-07-20 18:43:31 +0200 2026) static void cleanup_tmp_tables(Table_ref *list) {
+4491eaf7 (Anonymous Reformatter 2018-02-05 11:55:16 +0100 2027)   for (auto tl = list; tl; tl = tl->next_local) {
+4491eaf7 (Anonymous Reformatter 2018-02-05 11:55:16 +0100 2028)     if (tl->merge_underlying_list) {
+4880f977 (Guilhem Bichot        2016-11-29 15:46:27 +0100 2029)       // Find a materialized view inside another view.
+2b1a7a29 (Chaithra Gopalareddy  2021-11-25 11:51:18 +0530 2030)       cleanup_tmp_tables(tl->merge_underlying_list);
+4491eaf7 (Anonymous Reformatter 2018-02-05 11:55:16 +0100 2031)     } else if (tl->is_table_function()) {
+f92e8554 (Evgeny Potemkin       2017-09-22 20:57:44 +0400 2032)       tl->table_function->cleanup();
+f92e8554 (Evgeny Potemkin       2017-09-22 20:57:44 +0400 2033)     }
+4491eaf7 (Anonymous Reformatter 2018-02-05 11:55:16 +0100 2034)     if (tl->table == nullptr) continue;  // Not materialized
+67c3c70e (Roy Lyseng            2020-05-14 05:45:06 +0200 2035)     if ((tl->is_view_or_derived() || tl->is_recursive_reference() ||
+8eb87e12 (z00556596             2023-03-17 16:19:21 +0800 2036)          tl->schema_table || tl->is_table_function()) ||
+8eb87e12 (z00556596             2023-03-17 16:19:21 +0800 2037)         tl->is_transformed_in_predicate()) {
+7b118bc7 (Roy Lyseng            2021-01-08 13:22:05 +0100 2038)       close_tmp_table(tl->table);
+67c3c70e (Roy Lyseng            2020-05-14 05:45:06 +0200 2039)       if (tl->schema_table) {
+67c3c70e (Roy Lyseng            2020-05-14 05:45:06 +0200 2040)         free_tmp_table(tl->table);  // Schema tables are per execution
+67c3c70e (Roy Lyseng            2020-05-14 05:45:06 +0200 2041)         tl->table = nullptr;
+67c3c70e (Roy Lyseng            2020-05-14 05:45:06 +0200 2042)       } else {
+67c3c70e (Roy Lyseng            2020-05-14 05:45:06 +0200 2043)         // Clear indexes added during optimization, keep possible unique index
+a1d235e8 (MITHUN CY             2023-08-10 18:38:19 +0530 2044)         TABLE *t = tl->table;
+a1d235e8 (MITHUN CY             2023-08-10 18:38:19 +0530 2045)         t->s->keys = t->s->is_distinct ? 1 : 0;
+a1d235e8 (MITHUN CY             2023-08-10 18:38:19 +0530 2046)         t->s->first_unused_tmp_key = 0;
+a1d235e8 (MITHUN CY             2023-08-10 18:38:19 +0530 2047)         t->keys_in_use_for_query.clear_all();  // new added code
+a1d235e8 (MITHUN CY             2023-08-10 18:38:19 +0530 2048)         t->keys_in_use_for_group_by.clear_all(); // new added code
+a1d235e8 (MITHUN CY             2023-08-10 18:38:19 +0530 2049)         t->keys_in_use_for_order_by.clear_all(); // new added code
+67c3c70e (Roy Lyseng            2020-05-14 05:45:06 +0200 2050)       }
+67c3c70e (Roy Lyseng            2020-05-14 05:45:06 +0200 2051)     }
+4880f977 (Guilhem Bichot        2016-11-29 15:46:27 +0100 2052)   }
+4880f977 (Guilhem Bichot        2016-11-29 15:46:27 +0100 2053) }
+```
+
+The code for MySQL is based on version 8.0.22, do not include above Line 2047-2049 code, so do not encounter this issue.
+
+Issue 2: If MySQL choose same query plan with Dstore, does MySQL have same issue?
+We do following test on community mysql 8.0.41.
+```
+create table t1(a int, b int, index(b))engine=innodb;
+create table t2(a int, b int)engine=innodb;
+create table in_predicate_3(a int)engine=innodb;
+insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10);
+insert into t2 values(11,11),(12,12),(13,13),(14,14),(15,15),(16,16),(17,17),(18,18),(19,19),(10,10);
+insert into in_predicate_3 values(1),(2),(3);
+PREPARE stmt0 FROM 'select b from t1 where t1.b != ANY (select b from t2) and t1.b IN (select a from in_predicate_3)';
+EXECUTE stmt0;
+-- crash here
+EXECUTE stmt0;
+```
+We encounter same crash issue for above test case. The reason is that heap-use-after-free.
+
+Solution:
+---------
+Issue 1, PS protocol scenario, TABLE::keys_in_use_for_query of temp table was
+cleaned up in function 'cleanup_tmp_tables' during prepare, we need to restore
+the usable key info in function 'fill_transform_tmp_table' during optimization.
+
+Issue 2, it is community issue, PS protocol has memory issue for above test case,
+we do not fix this issue in this patch.
+---
+ .../r/in_predicate_to_in_subs_bugs.result     | 55 +++++++++++++++++++
+ .../r/in_predicate_to_in_subs_part1.result    |  8 +--
+ ...n_predicate_to_in_subs_part1-dstore.result | 11 ++--
+ .../t/in_predicate_to_in_subs_bugs.test       | 25 +++++++++
+ sql/item_cmpfunc.cc                           |  7 +++
+ 5 files changed, 96 insertions(+), 10 deletions(-)
+
+diff --git a/mysql-test/r/in_predicate_to_in_subs_bugs.result b/mysql-test/r/in_predicate_to_in_subs_bugs.result
+index 615a13e0fc7..b0d94a02e58 100644
+--- a/mysql-test/r/in_predicate_to_in_subs_bugs.result
++++ b/mysql-test/r/in_predicate_to_in_subs_bugs.result
+@@ -103,3 +103,58 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ Warnings:
+ Note	1003	/* select#1 */ select `performance_schema`.`global_status`.`VARIABLE_NAME` AS `Variable_name`,`performance_schema`.`global_status`.`VARIABLE_VALUE` AS `Value` from `performance_schema`.`global_status` where (`performance_schema`.`global_status`.`VARIABLE_NAME` in ('Threads_connected','Admin_threads_connected','Resserved_threads_connected'))
+ set debug="";
++#
++# BUGFIX: IN-list conversion causes mysqld crashed for prepare + multiple execution scenario
++#
++create table t1(a int, b int, index(b))engine=innodb;
++create table t2(a int, b int)engine=innodb;
++insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10);
++insert into t2 values(11,11),(12,12),(13,13),(14,14),(15,15),(16,16),(17,17),(18,18),(19,19),(10,10);
++analyze table t1,t2;
++Table	Op	Msg_type	Msg_text
++test.t1	analyze	status	OK
++test.t2	analyze	status	OK
++set rds_in_predicate_conversion_threshold = 1;
++prepare stmt1 from 'explain select b from t1 where t1.b != any (select b from t2) and t1.b IN (1,2,3) order by b';
++prepare stmt2 from 'explain format=tree select b from t1 where t1.b != any (select b from t2) and t1.b IN (1,2,3) order by b';
++prepare stmt3 from 'select b from t1 where t1.b != any (select b from t2) and t1.b IN (1,2,3) order by b';
++execute stmt1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	<in_predicate_3>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted; Using where; Using temporary; Using filesort
++1	PRIMARY	t1	NULL	ref	b	b	5	test.<in_predicate_3>.b	#	#	Using index
++2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`<in_predicate_3>` join `test`.`t1` where ((`test`.`t1`.`b` = `test`.`<in_predicate_3>`.`b`) and <nop>(<in_optimizer>(`test`.`<in_predicate_3>`.`b`,<exists>(/* select#2 */ select `test`.`t2`.`b` from `test`.`t2` where <if>(outer_field_is_not_null, ((<cache>(`test`.`t1`.`b`) <> `test`.`t2`.`b`) or (`test`.`t2`.`b` is null)), true) having <if>(outer_field_is_not_null, <is_not_null_test>(`test`.`t2`.`b`), true))))) order by `test`.`t1`.`b`
++execute stmt2;
++EXPLAIN
++-> Sort: t1.b
++    -> Stream results  (...)
++        -> Nested loop inner join  (...)
++            -> Filter: (<nop>(<in_optimizer>(`<in_predicate_3>`.b,<exists>(select #2))) and (`<in_predicate_3>`.b is not null))  (...)
++                -> Table scan on <in_predicate_3>  (...)
++                -> Select #2 (subquery in condition; dependent)
++                    -> Limit: 1 row(s)  (...)
++                        -> Filter: <if>(outer_field_is_not_null, <is_not_null_test>(t2.b), true)  (...)
++                            -> Filter: <if>(outer_field_is_not_null, ((<cache>(t1.b) <> t2.b) or (t2.b is null)), true)  (...)
++                                -> Table scan on t2  (...)
++            -> Covering index lookup on t1 using b (b=`<in_predicate_3>`.b)  (...)
++
++execute stmt3;
++b
++1
++2
++3
++execute stmt3;
++b
++1
++2
++3
++execute stmt3;
++b
++1
++2
++3
++deallocate prepare stmt1;
++deallocate prepare stmt2;
++deallocate prepare stmt3;
++drop table t1,t2;
+diff --git a/mysql-test/r/in_predicate_to_in_subs_part1.result b/mysql-test/r/in_predicate_to_in_subs_part1.result
+index b157d5059c5..dd2024d2ae1 100644
+--- a/mysql-test/r/in_predicate_to_in_subs_part1.result
++++ b/mysql-test/r/in_predicate_to_in_subs_part1.result
+@@ -1630,9 +1630,9 @@ a	b
+ execute explain_stmt;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	6	100.00	NULL
+-1	SIMPLE	<in_predicate_2>	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	IN-list converted; Using where; FirstMatch(t1); Using join buffer (hash join)
++1	SIMPLE	<in_predicate_2>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	4	test.t1.a	1	100.00	IN-list converted
+ Warnings:
+-Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` semi join (`test`.`<in_predicate_2>`) where (`test`.`<in_predicate_2>`.`a` = `test`.`t1`.`a`)
++Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_2>` join `test`.`t1` where (`test`.`<in_predicate_2>`.`a` = `test`.`t1`.`a`)
+ deallocate prepare stmt;
+ deallocate prepare explain_stmt;
+ CREATE PROCEDURE transform_in_sp()
+@@ -2056,9 +2056,9 @@ prepare stmt from "explain select * from tb1 where id_col in (1,2)";
+ execute stmt;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	tb1	NULL	index	PRIMARY	PRIMARY	4	NULL	1	100.00	Using index
+-1	SIMPLE	<in_predicate_2>	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	IN-list converted; Using where; FirstMatch(tb1); Using join buffer (hash join)
++1	SIMPLE	<in_predicate_2>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	4	test.tb1.id_col	1	100.00	IN-list converted
+ Warnings:
+-Note	1003	/* select#1 */ select `test`.`tb1`.`id_col` AS `id_col` from `test`.`tb1` semi join (`test`.`<in_predicate_2>`) where (`test`.`<in_predicate_2>`.`id_col` = `test`.`tb1`.`id_col`)
++Note	1003	/* select#1 */ select `test`.`tb1`.`id_col` AS `id_col` from `test`.`<in_predicate_2>` join `test`.`tb1` where (`test`.`<in_predicate_2>`.`id_col` = `test`.`tb1`.`id_col`)
+ DROP TABLE tb1;
+ #
+ # BUGFIX: Hint is invalid for IN-list conversion
+diff --git a/mysql-test/suite/dstore_main/r/in_predicate_to_in_subs_part1-dstore.result b/mysql-test/suite/dstore_main/r/in_predicate_to_in_subs_part1-dstore.result
+index 33d7e71481b..333d805838f 100644
+--- a/mysql-test/suite/dstore_main/r/in_predicate_to_in_subs_part1-dstore.result
++++ b/mysql-test/suite/dstore_main/r/in_predicate_to_in_subs_part1-dstore.result
+@@ -1619,11 +1619,10 @@ a	b
+ 2	5
+ execute explain_stmt;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+-1	SIMPLE	<subquery2>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	100.00	NULL
+-1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	<subquery2>.a	1	100.00	NULL
+-2	MATERIALIZED	<in_predicate_2>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	IN-list converted
++1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	2	100.00	IN-list converted
++1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_2>.a	1	100.00	NULL
+ Warnings:
+-Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` semi join (`test`.`<in_predicate_2>`) where (`test`.`t1`.`a` = `<subquery2>`.`a`)
++Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_2>` join `test`.`t1` where (`test`.`t1`.`a` = `test`.`<in_predicate_2>`.`a`)
+ deallocate prepare stmt;
+ deallocate prepare explain_stmt;
+ CREATE PROCEDURE transform_in_sp()
+@@ -1974,9 +1973,9 @@ prepare stmt from "explain select * from tb1 where id_col in (1,2)";
+ execute stmt;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	tb1	NULL	index	PRIMARY	PRIMARY	4	NULL	1	100.00	Using index
+-1	SIMPLE	<in_predicate_2>	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	IN-list converted; Using where; FirstMatch(tb1); Using join buffer (hash join)
++1	SIMPLE	<in_predicate_2>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	4	test.tb1.id_col	1	100.00	IN-list converted
+ Warnings:
+-Note	1003	/* select#1 */ select `test`.`tb1`.`id_col` AS `id_col` from `test`.`tb1` semi join (`test`.`<in_predicate_2>`) where (`test`.`<in_predicate_2>`.`id_col` = `test`.`tb1`.`id_col`)
++Note	1003	/* select#1 */ select `test`.`tb1`.`id_col` AS `id_col` from `test`.`<in_predicate_2>` join `test`.`tb1` where (`test`.`<in_predicate_2>`.`id_col` = `test`.`tb1`.`id_col`)
+ DROP TABLE tb1;
+ #
+ # BUGFIX: Hint is invalid for IN-list conversion
+diff --git a/mysql-test/t/in_predicate_to_in_subs_bugs.test b/mysql-test/t/in_predicate_to_in_subs_bugs.test
+index e60a964038a..599c32f4a01 100644
+--- a/mysql-test/t/in_predicate_to_in_subs_bugs.test
++++ b/mysql-test/t/in_predicate_to_in_subs_bugs.test
+@@ -1,4 +1,5 @@
+ --source include/have_only_innodb.inc
++--source include/elide_costs.inc
+ 
+ --echo #
+ --echo # BUGFIX: IN-list conversion causes an incorrect result
+@@ -89,3 +90,27 @@ disconnect con1;
+ disconnect con2;
+ disconnect con3;
+ disconnect con4;
++
++--echo #
++--echo # BUGFIX: IN-list conversion causes mysqld crashed for prepare + multiple execution scenario
++--echo #
++create table t1(a int, b int, index(b))engine=innodb;
++create table t2(a int, b int)engine=innodb;
++insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10);
++insert into t2 values(11,11),(12,12),(13,13),(14,14),(15,15),(16,16),(17,17),(18,18),(19,19),(10,10);
++analyze table t1,t2;
++set rds_in_predicate_conversion_threshold = 1;
++prepare stmt1 from 'explain select b from t1 where t1.b != any (select b from t2) and t1.b IN (1,2,3) order by b';
++prepare stmt2 from 'explain format=tree select b from t1 where t1.b != any (select b from t2) and t1.b IN (1,2,3) order by b';
++prepare stmt3 from 'select b from t1 where t1.b != any (select b from t2) and t1.b IN (1,2,3) order by b';
++--replace_column 10 # 11 #
++execute stmt1;
++--replace_regex $elide_costs_and_rows
++execute stmt2;
++execute stmt3;
++execute stmt3;
++execute stmt3;
++deallocate prepare stmt1;
++deallocate prepare stmt2;
++deallocate prepare stmt3;
++drop table t1,t2;
+diff --git a/sql/item_cmpfunc.cc b/sql/item_cmpfunc.cc
+index fe336037305..ba13ddd9972 100644
+--- a/sql/item_cmpfunc.cc
++++ b/sql/item_cmpfunc.cc
+@@ -5504,6 +5504,7 @@ bool Item_func_in::fill_transform_tmp_table(THD *thd, TABLE *tmp_table) {
+ 
+   int res = 0;
+   bool is_list_of_rows = args[0]->type() == Item::ROW_ITEM;
++  Key_map usable_index_map(tmp_table->s->usable_indexes(thd));
+ 
+   // Temporary table created might have invisible fields such as hash_field
+   // for blob.
+@@ -5534,6 +5535,12 @@ bool Item_func_in::fill_transform_tmp_table(THD *thd, TABLE *tmp_table) {
+     if (res != 0 && res != HA_ERR_FOUND_DUPP_KEY) goto err;
+   }
+ 
++  // For PS protocol, TABLE::keys_in_use_for_query was cleaned in function
++  // cleanup_tmp_tables, result in index unusable for following execution,
++  // we need to restore the key info from TABLE_SHARE.
++  tmp_table->keys_in_use_for_query = tmp_table->keys_in_use_for_group_by =
++      tmp_table->keys_in_use_for_order_by = usable_index_map;
++
+   return false;
+ 
+ err:
+-- 
+2.23.0
+

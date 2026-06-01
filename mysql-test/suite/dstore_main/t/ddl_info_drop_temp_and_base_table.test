@@ -1,0 +1,126 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+
+--echo #
+--echo # Test case for filtering temporary tables operations during DROP TABLE.
+--echo #
+
+--let $MYSQLD_DATADIR = `SELECT @@datadir`
+--let $debug_file = $MYSQLTEST_VARDIR/tmp/debug_trace.txt
+
+--disable_warnings
+DROP DATABASE IF EXISTS test_temp_db;
+DROP TABLE IF EXISTS t1, t2, t3, t4;
+--enable_warnings
+
+CREATE DATABASE test_temp_db;
+USE test_temp_db;
+
+SET debug='reset';
+--disable_query_log
+--eval SET SESSION debug = 'd,print_ddl_sql_text:o,$debug_file'
+--enable_query_log
+--echo #
+--echo # Scenario 1: Drop multiple temporary tables
+--echo #
+CREATE TEMPORARY TABLE temptb1 (id INT, data VARCHAR(50));
+CREATE TEMPORARY TABLE temptb2 (id INT, data VARCHAR(50));
+CREATE TEMPORARY TABLE temptb3 (id INT, data VARCHAR(50));
+
+INSERT INTO temptb1 VALUES (1, 'temptb1 data');
+INSERT INTO temptb2 VALUES (2, 'temptb2 data');
+INSERT INTO temptb3 VALUES (3, 'temptb3 data');
+
+SELECT * FROM temptb1;
+SELECT * FROM temptb2;
+SELECT * FROM temptb3;
+
+DROP TEMPORARY TABLE temptb1, temptb2, temptb3;
+
+--echo #
+--echo # Scenario 2: Drop multiple base tables
+--echo #
+CREATE TABLE base1 (id INT, data VARCHAR(50));
+CREATE TABLE base2 (id INT, data VARCHAR(50));
+CREATE TABLE base3 (id INT, data VARCHAR(50));
+
+INSERT INTO base1 VALUES (1, 'base1 data');
+INSERT INTO base2 VALUES (2, 'base2 data');
+INSERT INTO base3 VALUES (3, 'base3 data');
+
+SELECT * FROM base1;
+SELECT * FROM base2;
+SELECT * FROM base3;
+
+DROP TABLE base1, base2, base3;
+
+--echo #
+--echo # Scenario 3: Drop multiple mixed tables (different names)
+--echo #
+CREATE TABLE base1 (id INT);
+CREATE TABLE base2 (id INT);
+CREATE TEMPORARY TABLE temptb1 (id INT);
+CREATE TEMPORARY TABLE temptb2 (id INT);
+
+INSERT INTO base1 VALUES (1);
+INSERT INTO base2 VALUES (2);
+INSERT INTO temptb1 VALUES (3);
+INSERT INTO temptb2 VALUES (4);
+
+DROP TABLE base1, base2, temptb1, temptb2;
+
+--echo #
+--echo # Scenario 4: Drop mixed temporary and base tables (same name)
+--echo #
+CREATE TABLE t1 (id INT, type VARCHAR(50));
+INSERT INTO t1 VALUES (1, 'base table');
+
+CREATE TEMPORARY TABLE t1 (id INT, type VARCHAR(50));
+INSERT INTO t1 VALUES (2, 'temporary table');
+
+--echo # Should see temporary table
+SELECT * FROM t1;
+
+DROP TABLE t1;
+
+--echo # Should see base table now
+SELECT * FROM t1;
+
+DROP TABLE t1;
+
+--echo #
+--echo # Scenario 5: Drop mixed temporary and base tables (same name)
+--echo #
+CREATE TABLE t1 (id INT, type VARCHAR(50));
+INSERT INTO t1 VALUES (1, 'base table');
+
+CREATE TEMPORARY TABLE t1 (id INT, type VARCHAR(50));
+INSERT INTO t1 VALUES (2, 'temporary table');
+
+CREATE TABLE t2 (id INT, type VARCHAR(50));
+INSERT INTO t2 VALUES (1, 'base table t2');
+
+--echo # Should see temporary table
+SELECT * FROM t1;
+
+DROP TABLE t1,t2;
+
+--echo # Should see base table now
+SELECT * FROM t1;
+
+DROP TABLE t1;
+
+SET debug='reset';
+
+--echo #
+--echo # Cleanup
+--echo #
+USE test;
+DROP DATABASE test_temp_db;
+
+--let SEARCH_PATTERN= temptb
+--let SEARCH_FILE= $debug_file
+--echo # All temptb* tables should not be written into wal.
+--source include/search_pattern.inc
+
+--remove_file $debug_file

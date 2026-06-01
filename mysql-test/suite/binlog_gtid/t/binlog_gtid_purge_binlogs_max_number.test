@@ -1,0 +1,54 @@
+# ==== Purpose ====
+#  
+# Verify that only 'rds_max_num_of_binary_logs_purged_per_time' expired
+# binary logs are purged asynchronously by a dedicated thread after a
+# binlog rotation triggered by one transaction commit, although there
+# are more expired binary logs.
+#
+# ==== References ====
+#
+# US2023121500746  Decouple binlog purge and transaction commit
+#
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+--source include/have_binlog_format_row.inc
+
+RESET MASTER;
+CREATE TABLE t1(c1 INT);
+--echo #
+--echo # Generate some binlogs by 'FLUSH BINARY LOGS'
+--echo #
+--let $i = 1
+--disable_query_log
+while ($i <= 20) {
+  --eval INSERT INTO t1 VALUES ($i);
+  FLUSH BINARY LOGS;
+  --inc $i
+}
+--enable_query_log
+
+--echo #
+--echo # Expect that there are 21 binary logs before binlog purge
+--echo #
+--source include/show_binary_logs.inc
+
+# Wait a while, so that the above binary logs become expired.
+--sleep 6
+--echo #
+--echo # Expect that the only 10 expired binary logs from binlog.000001 to
+--echo # binlog.000010 are purged asynchronously after a binlog rotation
+--echo # triggered by the following transaction commit(there are 20 expired
+--echo # binary logs), because rds_max_num_of_binary_logs_purged_per_time
+--echo # is set to 10.
+--echo #
+SET SESSION DEBUG="+d,force_rotate";
+INSERT INTO t1 VALUES (2000);
+# Wait a while, so that the dedicated thread has enough time
+# to purge expired binary logs.
+--sleep 3
+--source include/show_binary_logs.inc
+
+SET SESSION DEBUG="-d,force_rotate";
+
+# Cleanup
+DROP TABLE t1;

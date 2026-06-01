@@ -1,0 +1,149 @@
+#
+#  This test will check whether the server can recovery from different
+#  phases of some BASIC DDLs without inconsistency between dstore and
+#  innodb.
+#
+CREATE DATABASE test_ddl_crash_basic;
+USE test_ddl_crash_basic;
+#  1. Crash on CREATE TABLE statement.
+#  1.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+CREATE TABLE t_ddl_crash_create_table_01(pk INT PRIMARY KEY, col1 INT);
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+#  1.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+CREATE TABLE t_ddl_crash_create_table_01(pk INT PRIMARY KEY, col1 INT);
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+#  1.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+CREATE TABLE t_ddl_crash_create_table_01(pk INT PRIMARY KEY, col1 INT);
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+SHOW CREATE TABLE t_ddl_crash_create_table_01;
+Table	Create Table
+t_ddl_crash_create_table_01	CREATE TABLE `t_ddl_crash_create_table_01` (
+  `pk` int NOT NULL,
+  `col1` int DEFAULT NULL,
+  PRIMARY KEY (`pk`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+INSERT INTO t_ddl_crash_create_table_01 VALUES(1,2),(2,3),(3,4);
+SELECT * FROM t_ddl_crash_create_table_01;
+pk	col1
+1	2
+2	3
+3	4
+#  2. Crash on ALTER TABLE ADD INDEX statement.
+#  2.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+ALTER TABLE t_ddl_crash_create_table_01 ADD INDEX ci(col1);
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+#  2.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+ALTER TABLE t_ddl_crash_create_table_01 ADD INDEX ci(col1);
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+#  2.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+ALTER TABLE t_ddl_crash_create_table_01 ADD INDEX ci(col1);
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+SHOW CREATE TABLE t_ddl_crash_create_table_01;
+Table	Create Table
+t_ddl_crash_create_table_01	CREATE TABLE `t_ddl_crash_create_table_01` (
+  `pk` int NOT NULL,
+  `col1` int DEFAULT NULL,
+  PRIMARY KEY (`pk`),
+  KEY `ci` (`col1`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+INSERT INTO t_ddl_crash_create_table_01 VALUES(4,5),(5,6),(6,7);
+SELECT * FROM t_ddl_crash_create_table_01;
+pk	col1
+1	2
+2	3
+3	4
+4	5
+5	6
+6	7
+#  3. Crash on ALTER TABLE ADD COLUMN statement.
+#  3.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+ALTER TABLE t_ddl_crash_create_table_01 ADD COLUMN col2 INT AFTER pk;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+#  3.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+ALTER TABLE t_ddl_crash_create_table_01 ADD COLUMN col2 INT AFTER pk;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+#  3.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+ALTER TABLE t_ddl_crash_create_table_01 ADD COLUMN col2 INT AFTER pk;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+SHOW CREATE TABLE t_ddl_crash_create_table_01;
+Table	Create Table
+t_ddl_crash_create_table_01	CREATE TABLE `t_ddl_crash_create_table_01` (
+  `pk` int NOT NULL,
+  `col2` int DEFAULT NULL,
+  `col1` int DEFAULT NULL,
+  PRIMARY KEY (`pk`),
+  KEY `ci` (`col1`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+INSERT INTO t_ddl_crash_create_table_01 VALUES(8,9,10),(10,11,12),(12,13,14);
+SELECT * FROM t_ddl_crash_create_table_01;
+pk	col2	col1
+1	NULL	2
+2	NULL	3
+3	NULL	4
+4	NULL	5
+5	NULL	6
+6	NULL	7
+8	9	10
+10	11	12
+12	13	14
+#  4. Test DDL in PROCEDURE can work normally.
+create table t1(pk int primary key);
+create table t2(pk int primary key);
+insert into t1 values(1);
+insert into t2 values(1);
+CREATE DEFINER=root@localhost PROCEDURE check_ddl()
+BEGIN
+TRUNCATE t1;
+SET debug='reset';
+SET debug='d, check_ddl_info_written_state';
+TRUNCATE t2;
+END$$
+call check_ddl()$$
+#  5. Test non-DDL transaction commit error.
+SET debug='reset';
+SET debug='d, test_error_during_commit';
+SELECT * FROM t_ddl_crash_create_table_01;
+ERROR HY000: Got error 168 - 'Unknown (generic) error from engine' during COMMIT
+# restart
+SET debug='reset';
+# 6. Test multi-table optimize;
+create table t3(pk int primary key);
+create table t4(pk int primary key);
+OPTIMIZE TABLE t3,t4;
+Table	Op	Msg_type	Msg_text
+test_ddl_crash_basic.t3	optimize	note	Table does not support optimize, doing recreate + analyze instead
+test_ddl_crash_basic.t3	optimize	status	OK
+test_ddl_crash_basic.t4	optimize	note	Table does not support optimize, doing recreate + analyze instead
+test_ddl_crash_basic.t4	optimize	status	OK
+# 7. Test password will be obfuscated in error log.
+create user 'root'@'8.8.8.8' identified with 'mysql_native_password' by 'Abc1234cbA';
+drop user 'root'@'8.8.8.8';
+Pattern "Abc1234cbA" not found
+DROP DATABASE test_ddl_crash_basic;

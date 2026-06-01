@@ -1,0 +1,127 @@
+set @save_opt_outline_enabled = @@global.rds_opt_outline_enabled;
+set global rds_opt_outline_enabled=on;
+create database outline_db;
+use outline_db;
+create table t1(c1 int auto_increment primary key, c2 int, c3 varchar(100), key idx_2(c2), key idx_2_3(c2,c3));
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', 'select c2 from t1 where c2 = 2');
+explain select c2 from t1 where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c2` = 2)
+explain format = tree select c2 from t1 where c2 = 2;
+EXPLAIN
+-> Covering index lookup on t1 using idx_2_3 (c2=2)
+
+explain format = "tree" select c2 from t1 where c2 = 2;
+EXPLAIN
+-> Covering index lookup on t1 using idx_2_3 (c2=2)
+
+explain format = json select c2 from t1 where c2 = 2;
+EXPLAIN
+{
+  "query_block": {
+    "select_id": 1,
+    "cost_info": {
+      "query_cost": "0.35"
+    },
+    "table": {
+      "table_name": "t1",
+      "access_type": "ref",
+      "possible_keys": [
+        "idx_2_3"
+      ],
+      "key": "idx_2_3",
+      "used_key_parts": [
+        "c2"
+      ],
+      "key_length": "5",
+      "ref": [
+        "const"
+      ],
+      "rows_examined_per_scan": 1,
+      "rows_produced_per_join": 1,
+      "filtered": "100.00",
+      "using_index": true,
+      "cost_info": {
+        "read_cost": "0.25",
+        "eval_cost": "0.10",
+        "prefix_cost": "0.35",
+        "data_read_per_join": "416"
+      },
+      "used_columns": [
+        "c2"
+      ]
+    }
+  }
+}
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c2` = 2)
+explain format = 'json' select c2 from t1 where c2 = 2;
+EXPLAIN
+{
+  "query_block": {
+    "select_id": 1,
+    "cost_info": {
+      "query_cost": "0.35"
+    },
+    "table": {
+      "table_name": "t1",
+      "access_type": "ref",
+      "possible_keys": [
+        "idx_2_3"
+      ],
+      "key": "idx_2_3",
+      "used_key_parts": [
+        "c2"
+      ],
+      "key_length": "5",
+      "ref": [
+        "const"
+      ],
+      "rows_examined_per_scan": 1,
+      "rows_produced_per_join": 1,
+      "filtered": "100.00",
+      "using_index": true,
+      "cost_info": {
+        "read_cost": "0.25",
+        "eval_cost": "0.10",
+        "prefix_cost": "0.35",
+        "data_read_per_join": "416"
+      },
+      "used_columns": [
+        "c2"
+      ]
+    }
+  }
+}
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c2` = 2)
+explain format = traditional select c2 from t1 where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c2` = 2)
+explain format = 'traditional' select c2 from t1 where c2 = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx_2_3	idx_2_3	5	const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`c2` AS `c2` from `outline_db`.`t1` FORCE INDEX (`idx_2_3`) where (`outline_db`.`t1`.`c2` = 2)
+explain analyze select c2 from t1 where c2 = 2;
+EXPLAIN
+-> Covering index lookup on t1 using idx_2_3 (c2=2)  (rows=1) (actual rows=0 loops=1)
+
+explain analyze format = tree select c2 from t1 where c2 = 2;
+EXPLAIN
+-> Covering index lookup on t1 using idx_2_3 (c2=2)  (rows=1) (actual rows=0 loops=1)
+
+explain analyze format = 'tree' select c2 from t1 where c2 = 2;
+EXPLAIN
+-> Covering index lookup on t1 using idx_2_3 (c2=2)  (rows=1) (actual rows=0 loops=1)
+
+explain analyze format = json select c2 from t1 where c2 = 2;
+ERROR 42000: This version of MySQL doesn't yet support 'EXPLAIN ANALYZE with JSON format'
+explain analyze format = traditional select c2 from t1 where c2 = 2;
+ERROR 42000: This version of MySQL doesn't yet support 'EXPLAIN ANALYZE with TRADITIONAL format'
+drop database outline_db;
+set global rds_opt_outline_enabled=@save_opt_outline_enabled;

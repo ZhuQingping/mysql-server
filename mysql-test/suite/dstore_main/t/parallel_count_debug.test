@@ -1,0 +1,159 @@
+--source include/have_only_dstore.inc
+--source include/big_test.inc
+--source include/have_debug.inc
+
+--let SEARCH_FILE= $MYSQLTEST_VARDIR/log/mysqld.1.err
+
+CALL mtr.add_suppression("Parallel record counting failed");
+CALL mtr.add_suppression("\[Parallel reader\]");
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+CREATE TABLE t1 (
+  id INT,
+  name VARCHAR(100),
+  age INT NOT NULL
+) ENGINE=DSTORE;
+INSERT INTO t1 VALUES (1, 'Alice', 25), (2, 'Bob', 30), (3, 'Charlie', 35);
+--disable_query_log
+let $i = 10000;
+while ($i)
+{
+  eval INSERT INTO t1 VALUES ($i + 10000, 'Zhang', 25 + ($i % 60));
+  dec $i;
+}
+--enable_query_log
+
+--echo #
+--echo # Test 1: Concurrency Tests
+--echo #
+
+--echo # 1.1 multi session count(*)
+SET SESSION dstore_parallel_read_threads = 4;
+
+--connect (conn2, localhost, root,,)
+SET SESSION dstore_parallel_read_threads = 4;
+--send SELECT COUNT(*) FROM t1
+
+--connect (conn3, localhost, root,,)
+SET SESSION dstore_parallel_read_threads = 4;
+--send SELECT COUNT(*) FROM t1
+
+--connection conn2
+--reap
+
+--connection conn3
+--reap
+
+--connection default
+
+--echo # 1.2 exceed max threads limit
+--connection conn2
+SET DEBUG_SYNC = 'parallel_reader_worker_end SIGNAL worker_ready WAIT_FOR continue_cleanup';
+SET SESSION dstore_parallel_read_threads = 128;
+--send SELECT COUNT(*) FROM t1
+
+--connection default
+SET DEBUG_SYNC = 'now WAIT_FOR worker_ready';
+
+--connection conn3
+SET DEBUG_SYNC = 'parallel_reader_worker_end SIGNAL worker2_ready WAIT_FOR continue_cleanup2';
+SET SESSION dstore_parallel_read_threads = 128;
+--send SELECT COUNT(*) FROM t1
+
+--connection default
+SET DEBUG_SYNC = 'now WAIT_FOR worker2_ready';
+SELECT COUNT(*) FROM t1;
+
+--let SEARCH_PATTERN= parallel threads exhausted
+--source include/search_pattern.inc
+
+SET DEBUG_SYNC = 'now SIGNAL continue_cleanup';
+SET DEBUG_SYNC = 'now SIGNAL continue_cleanup2';
+
+--connection conn2
+--reap
+
+--connection conn3
+--reap
+
+--connection default
+
+--disconnect conn2
+--disconnect conn3
+
+--echo #
+--echo # Test 2: Fault Injection Tests
+--echo #
+
+--echo # 2.1 thread init failed case
+SET SESSION debug = '+d,parallel_reader_init_fail';
+SET SESSION dstore_parallel_read_threads = 4;
+SELECT COUNT(*) FROM t1;
+SET SESSION debug = '-d,parallel_reader_init_fail';
+--let SEARCH_PATTERN= Degrading to
+--source include/search_pattern.inc
+
+--echo # 2.2 callback execution error
+SET SESSION debug = '+d,parallel_reader_callback_error';
+SET SESSION dstore_parallel_read_threads = 1;
+SELECT COUNT(*) FROM t1;
+SET SESSION debug = '-d,parallel_reader_callback_error';
+--let SEARCH_PATTERN= callback execution failed
+--source include/search_pattern.inc
+
+--echo # 2.3 heap scan failed
+SET SESSION debug = '+d,parallel_reader_scan_error';
+SET SESSION dstore_parallel_read_threads = 1;
+SELECT COUNT(*) FROM t1;
+SET SESSION debug = '-d,parallel_reader_scan_error';
+--let SEARCH_PATTERN= heap scan failed due to
+--source include/search_pattern.inc
+
+--echo # 2.4 test kill is valid
+--connect (conn4, localhost, root,,)
+SET SESSION dstore_parallel_read_threads = 8;
+let $conn4_id = `SELECT CONNECTION_ID()`;
+SET DEBUG_SYNC = 'parallel_reader_worker_start SIGNAL kill_start WAIT_FOR kill_end';
+--send SELECT COUNT(*) FROM t1
+
+--connection default
+
+SET DEBUG_SYNC = 'now WAIT_FOR kill_start';
+--disable_query_log
+eval KILL QUERY $conn4_id;
+--enable_query_log
+
+SET DEBUG_SYNC = 'now SIGNAL kill_end';
+
+--connection conn4
+--error ER_QUERY_INTERRUPTED
+--reap
+--disconnect conn4
+--let SEARCH_PATTERN= got THD killed signal and exit now
+--source include/search_pattern.inc
+
+--connection default
+
+--echo # 2.5 test oom error
+SET SESSION dstore_parallel_read_threads = 8;
+SET SESSION debug = '+d,parallel_reader_omm_error';
+--error 1030
+SELECT COUNT(*) FROM t1;
+SET SESSION debug = '-d,parallel_reader_omm_error';
+
+--echo #
+--echo # Test 3: Cleanup
+--echo #
+
+--echo # 3.1 drop all tables
+DROP TABLE t1;
+
+--echo # 3.2 retore parameter value.
+SET GLOBAL dstore_parallel_read_threads = 4;
+SET SESSION dstore_parallel_read_threads = 4;
+
+--echo #
+--echo # Test completed successfully
+--echo #

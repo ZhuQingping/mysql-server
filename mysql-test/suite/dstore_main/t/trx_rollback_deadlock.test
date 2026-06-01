@@ -1,0 +1,176 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+--echo #
+--echo # CDE
+--echo #
+use test;
+
+# test case description:
+# 1.test case for basic rollback which include
+# - ddl rollback
+# - single stmt trx rollback
+# - multi stmt trx rollback
+# - multi stmt trx automatic rollback(like dead lock)
+# - multi stmt trx automatic current sql rollback(like dead lock)
+# - multi stmt trx + ddl commit
+# 2.test case for dead lock
+# - update and update conflict.
+# - insert and update conflict.
+
+CALL mtr.add_suppression("insert dstore index tuple fail");
+CALL mtr.add_suppression("insert_index fail");
+ 
+# ddl rollback test don't support currently.
+# SET SESSION DEBUG='+d,stmt_rollback_injection';
+# --error ER_GET_ERRNO
+# create table t1(n int);
+# --error ER_NO_SUCH_TABLE
+# show create table t1;
+# SET SESSION DEBUG='-d,stmt_rollback_injection';
+ 
+#SET SESSION DEBUG='+d,trx_rollback_injection';
+#--error ER_LOCK_DEADLOCK
+#create table t1(n int);
+#--error ER_NO_SUCH_TABLE
+#show create table t1; 
+#SET SESSION DEBUG='-d,trx_rollback_injection';
+ 
+create table t1(n int);
+ 
+--echo # test-single stmt trx rollback
+insert into t1 values(1);
+SET SESSION DEBUG='+d,stmt_rollback_injection';
+--error ER_GET_ERRNO
+insert into t1 values(2);
+SET SESSION DEBUG='-d,stmt_rollback_injection';
+select * from t1;
+delete from t1;
+ 
+--echo # test-multi stmt trx manual rollback
+insert into t1 values(1);
+begin;
+insert into t1 values(2);
+insert into t1 values(3);
+insert into t1 values(4);
+rollback;
+select * from t1;
+delete from t1;
+ 
+--echo # test-multi stmt trx automatic rollback(like dead lock)
+begin;
+insert into t1 values(1);
+insert into t1 values(2);
+SET SESSION DEBUG='+d,trx_rollback_injection';
+--error ER_LOCK_DEADLOCK
+insert into t1 values(3);
+SET SESSION DEBUG='-d,trx_rollback_injection';
+select * from t1;
+delete from t1;
+ 
+--echo # test-multi stmt trx automatic current sql rollback
+begin;
+insert into t1 values(1);
+insert into t1 values(2);
+SET SESSION DEBUG='+d,stmt_rollback_injection';
+--error ER_GET_ERRNO
+insert into t1 values(3);
+SET SESSION DEBUG='-d,stmt_rollback_injection';
+select * from t1;
+commit;
+select * from t1;
+delete from t1;
+ 
+--echo # test-multi stmt trx + ddl commit
+begin;
+insert into t1 values(1);
+insert into t1 values(2);
+create table t2(n int);
+select * from t1;
+commit;
+select * from t1;
+drop table t2;
+ 
+drop table t1;
+
+--echo # test-dead lock of update and update
+--echo # Establish connection thr1 (user=root)
+connect (thr1,localhost,root,,);
+--echo # Establish connection thr2 (user=root)
+connect (thr2,localhost,root,,);
+let $engine_type=Dstore;
+--echo # Switching to default.
+connection default;
+create table testp (
+    id int not null primary key, 
+    varchar_col varchar(10) not null,
+    char_col char(5) not null
+) ENGINE=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+
+insert into testp values(1,'aaa','bbb');
+insert into testp values(2,'aaa','bbb');
+select * from testp;
+
+--echo # Switching to connection 'thr1'.
+connection thr1;
+begin;
+update testp set varchar_col = "xxx" where id = 1;
+
+--echo # Switching to connection 'thr2'.
+connection thr2;
+begin;
+update testp set varchar_col = "ppp" where id = 2;
+
+--echo # Switching to connection 'thr1'.
+connection thr1;
+--send update testp set varchar_col = "yyy" where id = 2;
+
+# thr2 roolback
+--echo # Switching to connection 'thr2'
+connection thr2;
+update testp set varchar_col = "qqq" where id = 1;
+commit;
+select * from testp;
+
+--echo # Switching to connection 'thr1'
+connection thr1;
+--error ER_LOCK_DEADLOCK
+reap;
+select * from testp;
+delete from testp;
+
+--echo # test-dead lock of insert and update
+insert into testp values(1,'aaa','bbb');
+
+--echo # Switching to connection 'thr1'.
+connection thr1;
+begin;
+insert into testp values(2,'aaa','bbb');
+
+--echo # Switching to connection 'thr2'.
+connection thr2;
+begin;
+update testp set varchar_col = "ppp" where id = 1;
+
+--echo # Switching to connection 'thr1'.
+connection thr1;
+--send update testp set varchar_col = "xxx" where id = 1;
+
+# thr2 roolback
+--echo # Switching to connection 'thr2'
+connection thr2;
+insert into testp values(2,'aaa','bbb');
+commit;
+select * from testp order by id;
+
+--echo # Switching to connection 'thr1'
+connection thr1;
+--error ER_LOCK_DEADLOCK
+reap;
+select * from testp order by id;
+
+# clear before exit.
+--echo # Switching to default.
+connection default;
+disconnect thr1;
+disconnect thr2;
+drop table testp;

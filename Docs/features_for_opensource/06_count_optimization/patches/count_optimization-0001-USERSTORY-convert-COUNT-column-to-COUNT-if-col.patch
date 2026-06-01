@@ -1,0 +1,1425 @@
+From 63c4346880e18bf02268bdfd0097426e8e4cdb6e Mon Sep 17 00:00:00 2001
+From: Guilhem Bichot <guilhem.bichot@contributor>
+
+
+Date: Mon, 26 May 2025 15:00:14 +0200
+Subject: [PATCH] USERSTORY convert COUNT(column) to COUNT(*) if column
+ is not nullable
+
+(= FEATURE)
+
+Example: assuming 'a' is a not nullable column:
+  select count(a) from t1 where b>1;
+is rewritten to
+  select count(0) from t1 where b>1;
+and, as a consequence, an index on 'b' is covering for the query,
+which can speed up execution.
+
+Implementation: when in fix_fields() for COUNT, if we see that the
+optimization might be possible, we let fix_fields() run for the column
+but tell it to not mark the column as used, yet. Next, we check if
+it's nullable; if yes, we finally mark the column as used; if not, we
+replace it with 0, and the nice effect in this case is that
+table->covering_keys remains as it was before fix_fields() for COUNT:
+it's like if 'a' had never been mentioned.
+
+This works too if the column is from a derived table or view.
+
+I didn't try to make it work with COUNT(non-nullable non-column
+expression), like COUNT(a+0), because this is unlikely used and I
+didn't want to open any possibility of bugs.
+
+rds_simplify_count_not_null controls the feature.
+
+Mtr testing: a new test is added; few other tests showed few changes
+in EXPLAIN, I estimated that it was better to keep them unchanged,
+that they didn't bring additional coverage (they are simple queries).
+---
+ mysql-test/include/explain_non_select.inc     |   3 +
+ mysql-test/include/skip_scan_test-dstore.inc  |   4 +
+ mysql-test/include/skip_scan_test.inc         |   4 +
+ mysql-test/r/all_persisted_variables.result   |   8 +-
+ mysql-test/r/group_by.result                  |   2 +-
+ mysql-test/r/heap_btree.result                |   3 +
+ mysql-test/r/heap_hash.result                 |   3 +
+ mysql-test/r/join.result                      |   2 +-
+ .../myisam_explain_json_non_select_all.result |   3 +
+ ...myisam_explain_json_non_select_none.result |   3 +
+ .../r/myisam_explain_non_select_all.result    |   3 +
+ .../r/myisam_explain_non_select_none.result   |   3 +
+ mysql-test/r/mysqld--help-notwin.result       |   7 +
+ mysql-test/r/skip_scan.result                 |   3 +
+ mysql-test/r/skip_scan_myisam.result          |   3 +
+ .../r/subquery_scalar_to_derived.result       |  12 +-
+ .../dstore_main/r/group_by-dstore.result      |   2 +-
+ .../suite/dstore_main/r/join-dstore.result    |   2 +-
+ .../r/mysqld--help-notwin-dstore.result       |   7 +
+ .../r/simplify_count_not_null.result          | 486 ++++++++++++++++++
+ .../dstore_main/r/skip_scan-dstore.result     |   3 +
+ .../subquery_scalar_to_derived-dstore.result  |  12 +-
+ .../t/simplify_count_not_null.test            | 132 +++++
+ .../suite/innodb/r/select_count_perf.result   |   2 +-
+ mysql-test/suite/sys_vars/r/all_vars.result   |   2 +
+ mysql-test/t/all_persisted_variables.test     |   2 +-
+ mysql-test/t/heap_btree.test                  |   3 +
+ mysql-test/t/heap_hash.test                   |   4 +-
+ sql/item_sum.cc                               |  92 +++-
+ sql/sys_vars.cc                               |   7 +
+ sql/system_variables.h                        |   4 +
+ 31 files changed, 790 insertions(+), 36 deletions(-)
+ create mode 100644 mysql-test/suite/dstore_main/r/simplify_count_not_null.result
+ create mode 100644 mysql-test/suite/dstore_main/t/simplify_count_not_null.test
+
+diff --git a/mysql-test/include/explain_non_select.inc b/mysql-test/include/explain_non_select.inc
+index bd936d7359d..5912d2680c0 100644
+--- a/mysql-test/include/explain_non_select.inc
++++ b/mysql-test/include/explain_non_select.inc
+@@ -746,6 +746,8 @@ DROP TABLE t1,t2;
+ CREATE TABLE t1 (c1 INT KEY);
+ CREATE TABLE t2 (c2 INT);
+ CREATE TABLE t3 (c3 INT);
++set @old_simplify_count=@@rds_simplify_count_not_null;
++set rds_simplify_count_not_null=0;
+ EXPLAIN UPDATE t3 SET c3 = (
+   SELECT COUNT(d1.c1)
+     FROM (
+@@ -754,6 +756,7 @@ EXPLAIN UPDATE t3 SET c3 = (
+         JOIN t1 AS a12 ON a12.c1 = a11.c1
+     ) d1
+ ); 
++set rds_simplify_count_not_null=@old_simplify_count;
+ 
+ DROP TABLE t1, t2, t3;
+ 
+diff --git a/mysql-test/include/skip_scan_test-dstore.inc b/mysql-test/include/skip_scan_test-dstore.inc
+index 4474efe80e9..59b0f835b5e 100644
+--- a/mysql-test/include/skip_scan_test-dstore.inc
++++ b/mysql-test/include/skip_scan_test-dstore.inc
+@@ -88,9 +88,13 @@
+ --source include/skip_scan_query.inc
+ 
+ # Testing aggregate functions.
++
++set @old_simplify_count=@@rds_simplify_count_not_null;
++set rds_simplify_count_not_null=0;
+ --let $query = SELECT count(a), count(b), count(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3
+ --let $hint_query = SELECT /*+ SKIP_SCAN(t) */ count(a), count(b), count(c) FROM t WHERE a = 5 AND c > 10 AND d < 3
+ --source include/skip_scan_query.inc
++set rds_simplify_count_not_null=@old_simplify_count;
+ 
+ --let $query = SELECT min(a), max(b), min(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3
+ --let $hint_query = SELECT /*+ SKIP_SCAN(t) */ min(a), max(b), min(c) FROM t WHERE a = 5 AND c > 10 AND d < 3
+diff --git a/mysql-test/include/skip_scan_test.inc b/mysql-test/include/skip_scan_test.inc
+index 67734ef9666..43b5005244d 100644
+--- a/mysql-test/include/skip_scan_test.inc
++++ b/mysql-test/include/skip_scan_test.inc
+@@ -88,9 +88,13 @@
+ --source include/skip_scan_query.inc
+ 
+ # Testing aggregate functions.
++
++set @old_simplify_count=@@rds_simplify_count_not_null;
++set rds_simplify_count_not_null=0;
+ --let $query = SELECT count(a), count(b), count(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3
+ --let $hint_query = SELECT /*+ SKIP_SCAN(t) */ count(a), count(b), count(c) FROM t WHERE a = 5 AND c > 10 AND d < 3
+ --source include/skip_scan_query.inc
++set rds_simplify_count_not_null=@old_simplify_count;
+ 
+ --let $query = SELECT min(a), max(b), min(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3
+ --let $hint_query = SELECT /*+ SKIP_SCAN(t) */ min(a), max(b), min(c) FROM t WHERE a = 5 AND c > 10 AND d < 3
+diff --git a/mysql-test/r/all_persisted_variables.result b/mysql-test/r/all_persisted_variables.result
+index 905b41da83a..db7c98c4ef8 100644
+--- a/mysql-test/r/all_persisted_variables.result
++++ b/mysql-test/r/all_persisted_variables.result
+@@ -40,7 +40,7 @@ include/assert.inc [Expect 500+ variables in the table. Due to open Bugs, we are
+ 
+ # Test SET PERSIST
+ 
+-include/assert.inc [Expect 477 persisted variables in the table.]
++include/assert.inc [Expect 478 persisted variables in the table.]
+ 
+ ************************************************************
+ * 3. Restart server, it must preserve the persisted variable
+@@ -48,9 +48,9 @@ include/assert.inc [Expect 477 persisted variables in the table.]
+ ************************************************************
+ # restart
+ 
+-include/assert.inc [Expect 477 persisted variables in persisted_variables table.]
+-include/assert.inc [Expect 477 persisted variables shown as PERSISTED in variables_info table.]
+-include/assert.inc [Expect 477 persisted variables with matching peristed and global values.]
++include/assert.inc [Expect 478 persisted variables in persisted_variables table.]
++include/assert.inc [Expect 478 persisted variables shown as PERSISTED in variables_info table.]
++include/assert.inc [Expect 478 persisted variables with matching peristed and global values.]
+ 
+ ************************************************************
+ * 4. Test RESET PERSIST IF EXISTS. Verify persisted variable
+diff --git a/mysql-test/r/group_by.result b/mysql-test/r/group_by.result
+index 1d80867dc94..bc384b0339d 100644
+--- a/mysql-test/r/group_by.result
++++ b/mysql-test/r/group_by.result
+@@ -1533,7 +1533,7 @@ explain SELECT COUNT(varchar_key) AS x FROM t1 WHERE pk = 8 having 'foo'='bar';
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	Impossible HAVING
+ Warnings:
+-Note	1003	/* select#1 */ select count(`test`.`t1`.`varchar_key`) AS `x` from `test`.`t1` where multiple equal(8, `test`.`t1`.`pk`) having false
++Note	1003	/* select#1 */ select count(0) AS `x` from `test`.`t1` where multiple equal(8, `test`.`t1`.`pk`) having false
+ SELECT COUNT(varchar_key) AS x FROM t1 WHERE pk = 8 having 'foo'='bar';
+ x
+ drop table t1;
+diff --git a/mysql-test/r/heap_btree.result b/mysql-test/r/heap_btree.result
+index d6997a8dcd9..a8b710ca293 100644
+--- a/mysql-test/r/heap_btree.result
++++ b/mysql-test/r/heap_btree.result
+@@ -342,6 +342,8 @@ c1 INT NOT NULL,
+ c2 INT NOT NULL,
+ UNIQUE KEY USING BTREE (c2,c1)) ENGINE = MEMORY;
+ INSERT INTO t1(c1,c2) VALUES (5,1), (4,1), (3,5), (2,3), (1,3);
++set @old_simplify_count=@@rds_simplify_count_not_null;
++set rds_simplify_count_not_null=0;
+ EXPLAIN SELECT c2, COUNT(c1) FROM t1 GROUP BY c2;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	index	c2	c2	8	NULL	5	100.00	NULL
+@@ -352,4 +354,5 @@ c2	COUNT(c1)
+ 1	2
+ 3	2
+ 5	1
++set rds_simplify_count_not_null=@old_simplify_count;
+ DROP TABLE t1;
+diff --git a/mysql-test/r/heap_hash.result b/mysql-test/r/heap_hash.result
+index d77f30ac2fa..94e10ec69d5 100644
+--- a/mysql-test/r/heap_hash.result
++++ b/mysql-test/r/heap_hash.result
+@@ -464,6 +464,8 @@ c1 INT NOT NULL,
+ c2 INT NOT NULL,
+ UNIQUE KEY USING HASH (c2,c1)) ENGINE = MEMORY;
+ INSERT INTO t1(c1,c2) VALUES (5,1), (4,1), (3,5), (2,3), (1,3);
++set @old_simplify_count=@@rds_simplify_count_not_null;
++set rds_simplify_count_not_null=0;
+ EXPLAIN SELECT c2, COUNT(c1) FROM t1 GROUP BY c2;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	ALL	c2	NULL	NULL	NULL	5	100.00	Using temporary
+@@ -474,6 +476,7 @@ c2	COUNT(c1)
+ 1	2
+ 3	2
+ 5	1
++set rds_simplify_count_not_null=@old_simplify_count;
+ DROP TABLE t1;
+ #
+ # Bug#29527115 MYSQL USES COMPOSITE HASH INDEX WHEN NOT POSSIBLE AND RETURNS WRONG RESULT.
+diff --git a/mysql-test/r/join.result b/mysql-test/r/join.result
+index c92a20f3f75..de22aa8daf9 100644
+--- a/mysql-test/r/join.result
++++ b/mysql-test/r/join.result
+@@ -2465,7 +2465,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 3	DEPENDENT DERIVED	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	33.33	Using where
+ Warnings:
+ Note	1276	Field or reference 'test.x1.b' of SELECT #3 was resolved in SELECT #2
+-Note	1003	/* select#1 */ select `test`.`x3`.`a` AS `a`,`test`.`x3`.`b` AS `b` from `test`.`t1` `x3` semi join (`test`.`t1` `x1` join `test`.`t1` `x2` join lateral (/* select#3 */ select count(`test`.`t1`.`a`) AS `c` from `test`.`t1` where (`test`.`t1`.`b` = `test`.`x1`.`b`)) `d3`) where ((`test`.`x2`.`b` = `test`.`x1`.`b`) and (`test`.`x1`.`b` = `d3`.`c`))
++Note	1003	/* select#1 */ select `test`.`x3`.`a` AS `a`,`test`.`x3`.`b` AS `b` from `test`.`t1` `x3` semi join (`test`.`t1` `x1` join `test`.`t1` `x2` join lateral (/* select#3 */ select count(0) AS `c` from `test`.`t1` where (`test`.`t1`.`b` = `test`.`x1`.`b`)) `d3`) where ((`test`.`x2`.`b` = `test`.`x1`.`b`) and (`test`.`x1`.`b` = `d3`.`c`))
+ DROP TABLE t1;
+ #
+ # Bug #32917482: SIG11 IN FLATTENINNERJOINS|MAKE_JOIN_HYPERGRAPH.CC
+diff --git a/mysql-test/r/myisam_explain_json_non_select_all.result b/mysql-test/r/myisam_explain_json_non_select_all.result
+index 5a7413d6307..d02f7815e0f 100644
+--- a/mysql-test/r/myisam_explain_json_non_select_all.result
++++ b/mysql-test/r/myisam_explain_json_non_select_all.result
+@@ -7936,6 +7936,8 @@ DROP TABLE t1,t2;
+ CREATE TABLE t1 (c1 INT KEY);
+ CREATE TABLE t2 (c2 INT);
+ CREATE TABLE t3 (c3 INT);
++set @old_simplify_count=@@rds_simplify_count_not_null;
++set rds_simplify_count_not_null=0;
+ EXPLAIN UPDATE t3 SET c3 = (
+ SELECT COUNT(d1.c1)
+ FROM (
+@@ -7950,6 +7952,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 3	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+ Warnings:
+ Note	1003	update `test`.`t3` set `test`.`t3`.`c3` = (/* select#2 */ select count(NULL) from (/* select#3 */ select NULL AS `c1` from `test`.`t1` `a11` straight_join `test`.`t2` `a21` join `test`.`t1` `a12` where multiple equal(NULL, NULL, NULL)) `d1`)
++set rds_simplify_count_not_null=@old_simplify_count;
+ DROP TABLE t1, t2, t3;
+ #71
+ CREATE TABLE t1 (c1 INT NOT NULL, c2 INT NOT NULL, INDEX i1(c1));
+diff --git a/mysql-test/r/myisam_explain_json_non_select_none.result b/mysql-test/r/myisam_explain_json_non_select_none.result
+index 18b6b4a8f37..5f3935f0115 100644
+--- a/mysql-test/r/myisam_explain_json_non_select_none.result
++++ b/mysql-test/r/myisam_explain_json_non_select_none.result
+@@ -7955,6 +7955,8 @@ DROP TABLE t1,t2;
+ CREATE TABLE t1 (c1 INT KEY);
+ CREATE TABLE t2 (c2 INT);
+ CREATE TABLE t3 (c3 INT);
++set @old_simplify_count=@@rds_simplify_count_not_null;
++set rds_simplify_count_not_null=0;
+ EXPLAIN UPDATE t3 SET c3 = (
+ SELECT COUNT(d1.c1)
+ FROM (
+@@ -7969,6 +7971,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 3	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+ Warnings:
+ Note	1003	update `test`.`t3` set `test`.`t3`.`c3` = (/* select#2 */ select count(NULL) from (/* select#3 */ select NULL AS `c1` from `test`.`t1` `a11` straight_join `test`.`t2` `a21` join `test`.`t1` `a12` where multiple equal(NULL, NULL, NULL)) `d1`)
++set rds_simplify_count_not_null=@old_simplify_count;
+ DROP TABLE t1, t2, t3;
+ #71
+ CREATE TABLE t1 (c1 INT NOT NULL, c2 INT NOT NULL, INDEX i1(c1));
+diff --git a/mysql-test/r/myisam_explain_non_select_all.result b/mysql-test/r/myisam_explain_non_select_all.result
+index 1e06df6a9d9..617c14677f3 100644
+--- a/mysql-test/r/myisam_explain_non_select_all.result
++++ b/mysql-test/r/myisam_explain_non_select_all.result
+@@ -2399,6 +2399,8 @@ DROP TABLE t1,t2;
+ CREATE TABLE t1 (c1 INT KEY);
+ CREATE TABLE t2 (c2 INT);
+ CREATE TABLE t3 (c3 INT);
++set @old_simplify_count=@@rds_simplify_count_not_null;
++set rds_simplify_count_not_null=0;
+ EXPLAIN UPDATE t3 SET c3 = (
+ SELECT COUNT(d1.c1)
+ FROM (
+@@ -2413,6 +2415,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 3	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+ Warnings:
+ Note	1003	update `test`.`t3` set `test`.`t3`.`c3` = (/* select#2 */ select count(NULL) from (/* select#3 */ select NULL AS `c1` from `test`.`t1` `a11` straight_join `test`.`t2` `a21` join `test`.`t1` `a12` where multiple equal(NULL, NULL, NULL)) `d1`)
++set rds_simplify_count_not_null=@old_simplify_count;
+ DROP TABLE t1, t2, t3;
+ #71
+ CREATE TABLE t1 (c1 INT NOT NULL, c2 INT NOT NULL, INDEX i1(c1));
+diff --git a/mysql-test/r/myisam_explain_non_select_none.result b/mysql-test/r/myisam_explain_non_select_none.result
+index 00a8f9004fa..c882cef7f9f 100644
+--- a/mysql-test/r/myisam_explain_non_select_none.result
++++ b/mysql-test/r/myisam_explain_non_select_none.result
+@@ -2396,6 +2396,8 @@ DROP TABLE t1,t2;
+ CREATE TABLE t1 (c1 INT KEY);
+ CREATE TABLE t2 (c2 INT);
+ CREATE TABLE t3 (c3 INT);
++set @old_simplify_count=@@rds_simplify_count_not_null;
++set rds_simplify_count_not_null=0;
+ EXPLAIN UPDATE t3 SET c3 = (
+ SELECT COUNT(d1.c1)
+ FROM (
+@@ -2410,6 +2412,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 3	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
+ Warnings:
+ Note	1003	update `test`.`t3` set `test`.`t3`.`c3` = (/* select#2 */ select count(NULL) from (/* select#3 */ select NULL AS `c1` from `test`.`t1` `a11` straight_join `test`.`t2` `a21` join `test`.`t1` `a12` where multiple equal(NULL, NULL, NULL)) `d1`)
++set rds_simplify_count_not_null=@old_simplify_count;
+ DROP TABLE t1, t2, t3;
+ #71
+ CREATE TABLE t1 (c1 INT NOT NULL, c2 INT NOT NULL, INDEX i1(c1));
+diff --git a/mysql-test/r/mysqld--help-notwin.result b/mysql-test/r/mysqld--help-notwin.result
+index 025cf001354..0a646e7f831 100644
+--- a/mysql-test/r/mysqld--help-notwin.result
++++ b/mysql-test/r/mysqld--help-notwin.result
+@@ -1301,6 +1301,12 @@ The following options may be given as the first argument:
+  If the number of rows in the table is changed more than
+  this fraction, cached plan will be invalidated. A value
+  of 0 means the cached plan is always valid.
++ --rds-simplify-count-not-null 
++ Replace COUNT(column) with COUNT(*) if they are
++ equivalent. This may eliminate the need for 'column'
++ during execution, opening more possibilities for access
++ methods.
++ (Defaults to on; use --skip-rds-simplify-count-not-null to disable.)
+  --rds-write-binlog-into-redo 
+  Enable binlog write into redo.
+  --rds-write-ddl-info-into-redo 
+@@ -2289,6 +2295,7 @@ rds-local-socket-using-per-thread FALSE
+ rds-log-archive-path 
+ rds-plan-cache TRUE
+ rds-plan-cache-allow-change-ratio 0.2
++rds-simplify-count-not-null TRUE
+ rds-write-binlog-into-redo FALSE
+ rds-write-ddl-info-into-redo FALSE
+ read-buffer-size 131072
+diff --git a/mysql-test/r/skip_scan.result b/mysql-test/r/skip_scan.result
+index 78910dae9b7..b4fe51549ad 100644
+--- a/mysql-test/r/skip_scan.result
++++ b/mysql-test/r/skip_scan.result
+@@ -891,6 +891,8 @@ Handler_read_prev	0
+ Handler_read_rnd	0
+ Handler_read_rnd_next	0
+ include/diff_tables.inc [test.hint_skip_scan, test.no_skip_scan]
++set @old_simplify_count=@@rds_simplify_count_not_null;
++set rds_simplify_count_not_null=0;
+ set optimizer_switch = 'skip_scan=on';
+ EXPLAIN SELECT count(a), count(b), count(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+@@ -943,6 +945,7 @@ Handler_read_prev	0
+ Handler_read_rnd	0
+ Handler_read_rnd_next	0
+ include/diff_tables.inc [test.hint_skip_scan, test.no_skip_scan]
++set rds_simplify_count_not_null=@old_simplify_count;
+ set optimizer_switch = 'skip_scan=on';
+ EXPLAIN SELECT min(a), max(b), min(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+diff --git a/mysql-test/r/skip_scan_myisam.result b/mysql-test/r/skip_scan_myisam.result
+index 637ba9e82f5..43c5718db53 100644
+--- a/mysql-test/r/skip_scan_myisam.result
++++ b/mysql-test/r/skip_scan_myisam.result
+@@ -891,6 +891,8 @@ Handler_read_prev	0
+ Handler_read_rnd	0
+ Handler_read_rnd_next	0
+ include/diff_tables.inc [test.hint_skip_scan, test.no_skip_scan]
++set @old_simplify_count=@@rds_simplify_count_not_null;
++set rds_simplify_count_not_null=0;
+ set optimizer_switch = 'skip_scan=on';
+ EXPLAIN SELECT count(a), count(b), count(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+@@ -943,6 +945,7 @@ Handler_read_prev	0
+ Handler_read_rnd	0
+ Handler_read_rnd_next	0
+ include/diff_tables.inc [test.hint_skip_scan, test.no_skip_scan]
++set rds_simplify_count_not_null=@old_simplify_count;
+ set optimizer_switch = 'skip_scan=on';
+ EXPLAIN SELECT min(a), max(b), min(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+diff --git a/mysql-test/r/subquery_scalar_to_derived.result b/mysql-test/r/subquery_scalar_to_derived.result
+index e32857a5e47..fefd73470fb 100644
+--- a/mysql-test/r/subquery_scalar_to_derived.result
++++ b/mysql-test/r/subquery_scalar_to_derived.result
+@@ -1247,7 +1247,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 2	DERIVED	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+ Warnings:
+ Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+-Note	1003	/* select#1 */ select count(`test`.`t1`.`country`) AS `countrycount`,sum(`test`.`t1`.`funds_requested`) AS `smcnt`,`test`.`t1`.`country` AS `country`,`derived_1_2`.`SUM(funds_requested)` AS `total_funds`,row_number() OVER (ORDER BY std(`test`.`t1`.`funds_requested`) )  AS `rn` from `test`.`t1` left join (/* select#2 */ select sum(`test`.`t1`.`funds_requested`) AS `SUM(funds_requested)` from `test`.`t1`) `derived_1_2` on(true) where true group by `test`.`t1`.`country` having (avg(`test`.`t1`.`funds_requested`) > 0) order by sum(abs(`test`.`t1`.`funds_requested`))
++Note	1003	/* select#1 */ select count(0) AS `countrycount`,sum(`test`.`t1`.`funds_requested`) AS `smcnt`,`test`.`t1`.`country` AS `country`,`derived_1_2`.`SUM(funds_requested)` AS `total_funds`,row_number() OVER (ORDER BY std(`test`.`t1`.`funds_requested`) )  AS `rn` from `test`.`t1` left join (/* select#2 */ select sum(`test`.`t1`.`funds_requested`) AS `SUM(funds_requested)` from `test`.`t1`) `derived_1_2` on(true) where true group by `test`.`t1`.`country` having (avg(`test`.`t1`.`funds_requested`) > 0) order by sum(abs(`test`.`t1`.`funds_requested`))
+ SET sql_mode='';
+ SELECT COUNT(country) AS countrycount,
+ SUM(funds_requested) AS smcnt,
+@@ -1274,7 +1274,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 3	DERIVED	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+ Warnings:
+ Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+-Note	1003	/* select#1 */ select `derived_1_3`.`countrycount` AS `countrycount`,`derived_1_3`.`smcnt` AS `smcnt`,`derived_1_3`.`Name_exp_1` AS `country`,`derived_1_4`.`SUM(funds_requested)` AS `total_funds`,row_number() OVER (ORDER BY `derived_1_3`.`tmp_aggr_2` )  AS `rn` from (/* select#3 */ select count(`test`.`t1`.`country`) AS `countrycount`,sum(`test`.`t1`.`funds_requested`) AS `smcnt`,avg(`test`.`t1`.`funds_requested`) AS `tmp_aggr_1`,std(`test`.`t1`.`funds_requested`) AS `tmp_aggr_2`,`test`.`t1`.`country` AS `Name_exp_1` from `test`.`t1` having (avg(`test`.`t1`.`funds_requested`) > 0)) `derived_1_3` left join (/* select#4 */ select sum(`test`.`t1`.`funds_requested`) AS `SUM(funds_requested)` from `test`.`t1`) `derived_1_4` on(true) where true
++Note	1003	/* select#1 */ select `derived_1_3`.`countrycount` AS `countrycount`,`derived_1_3`.`smcnt` AS `smcnt`,`derived_1_3`.`Name_exp_1` AS `country`,`derived_1_4`.`SUM(funds_requested)` AS `total_funds`,row_number() OVER (ORDER BY `derived_1_3`.`tmp_aggr_2` )  AS `rn` from (/* select#3 */ select count(0) AS `countrycount`,sum(`test`.`t1`.`funds_requested`) AS `smcnt`,avg(`test`.`t1`.`funds_requested`) AS `tmp_aggr_1`,std(`test`.`t1`.`funds_requested`) AS `tmp_aggr_2`,`test`.`t1`.`country` AS `Name_exp_1` from `test`.`t1` having (avg(`test`.`t1`.`funds_requested`) > 0)) `derived_1_3` left join (/* select#4 */ select sum(`test`.`t1`.`funds_requested`) AS `SUM(funds_requested)` from `test`.`t1`) `derived_1_4` on(true) where true
+ Manually translated
+ SELECT derived_1_0.countrycount AS countrycount,
+ derived_1_0.smcnt AS smcnt,
+@@ -1403,7 +1403,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 4	DERIVED	t1	NULL	ALL	NULL	NULL	NULL	NULL	7	100.00	NULL
+ Warnings:
+ Note	1003	/* select#1 */ select (`derived_1_4`.`tmp_aggr_1` + `derived_1_6`.`SUM(t2.c)`) AS `SUM(t1.a) + (SELECT SUM(t2.c)
+-FROM t2)`,`derived_1_5`.`COUNT(t3.e)` AS `(SELECT COUNT(t3.e) FROM t3)` from (/* select#4 */ select sum(`test`.`t1`.`a`) AS `tmp_aggr_1` from `test`.`t1`) `derived_1_4` left join (/* select#6 */ select sum(`test`.`t2`.`c`) AS `SUM(t2.c)` from `test`.`t2`) `derived_1_6` on(true) left join (/* select#5 */ select count(`test`.`t3`.`e`) AS `COUNT(t3.e)` from `test`.`t3`) `derived_1_5` on(true) where true
++FROM t2)`,`derived_1_5`.`COUNT(t3.e)` AS `(SELECT COUNT(t3.e) FROM t3)` from (/* select#4 */ select sum(`test`.`t1`.`a`) AS `tmp_aggr_1` from `test`.`t1`) `derived_1_4` left join (/* select#6 */ select sum(`test`.`t2`.`c`) AS `SUM(t2.c)` from `test`.`t2`) `derived_1_6` on(true) left join (/* select#5 */ select count(0) AS `COUNT(t3.e)` from `test`.`t3`) `derived_1_5` on(true) where true
+ DROP TABLE t1, t2, t3;
+ # Bug discovered from running rapid.cp_i_subquery.test What is
+ # different here is that we have a combination of an implicitly
+@@ -3120,7 +3120,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 3	DERIVED	tab1	NULL	index	NULL	PRIMARY	4	NULL	1	100.00	Using index
+ 2	DERIVED	tab1	NULL	index	NULL	PRIMARY	4	NULL	1	100.00	Using index
+ Warnings:
+-Note	1003	/* select#1 */ select `test`.`table1`.`pk` AS `pk`,`test`.`table2`.`pk` AS `pk`,`test`.`table3`.`pk` AS `pk` from `test`.`tab1` `table1` left join (`test`.`tab1` `table2` join (/* select#2 */ select count(`test`.`tab1`.`pk`) AS `COUNT(pk)` from `test`.`tab1`) `derived_1_2` join `test`.`tab1` `table3`) on(((1 <= `derived_1_2`.`COUNT(pk)`))) join (/* select#3 */ select min(`test`.`tab1`.`pk`) AS `MIN(pk)` from `test`.`tab1` having (0 <> min(`test`.`tab1`.`pk`))) `derived_1_3` where true
++Note	1003	/* select#1 */ select `test`.`table1`.`pk` AS `pk`,`test`.`table2`.`pk` AS `pk`,`test`.`table3`.`pk` AS `pk` from `test`.`tab1` `table1` left join (`test`.`tab1` `table2` join (/* select#2 */ select count(0) AS `COUNT(pk)` from `test`.`tab1`) `derived_1_2` join `test`.`tab1` `table3`) on(((1 <= `derived_1_2`.`COUNT(pk)`))) join (/* select#3 */ select min(`test`.`tab1`.`pk`) AS `MIN(pk)` from `test`.`tab1` having (0 <> min(`test`.`tab1`.`pk`))) `derived_1_3` where true
+ DROP TABLE tab1;
+ #
+ # Bug#30617216 WL#12885 SIG6 IN JOIN::ADD_HAVING_AS_TMP_TABLE_COND() AT SQL/SQL_SELECT.CC
+@@ -3806,7 +3806,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 4	DERIVED	<derived5>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using join buffer (hash join)
+ 5	DERIVED	cc1	NULL	index	NULL	PRIMARY	4	NULL	1	100.00	Using index
+ Warnings:
+-Note	1003	/* select#1 */ select `derived_1_4`.`COUNT(table1.pk)` AS `COUNT(table1.pk)`,`derived_1_6`.`MIN(col_varchar_key)` AS `(SELECT MIN(col_varchar_key) FROM cc1 )` from (/* select#4 */ select count(`test`.`table1`.`pk`) AS `COUNT(table1.pk)` from `test`.`cc1` `table1` join `test`.`cc1` join `test`.`cc1` `table3` join (/* select#5 */ select count(0) AS `COUNT(*)` from `test`.`cc1` having (1 <> count(0))) `derived_4_5`) `derived_1_4` left join (/* select#6 */ select min(`test`.`cc1`.`col_varchar_key`) AS `MIN(col_varchar_key)` from `test`.`cc1`) `derived_1_6` on(true) where true
++Note	1003	/* select#1 */ select `derived_1_4`.`COUNT(table1.pk)` AS `COUNT(table1.pk)`,`derived_1_6`.`MIN(col_varchar_key)` AS `(SELECT MIN(col_varchar_key) FROM cc1 )` from (/* select#4 */ select count(0) AS `COUNT(table1.pk)` from `test`.`cc1` `table1` join `test`.`cc1` join `test`.`cc1` `table3` join (/* select#5 */ select count(0) AS `COUNT(*)` from `test`.`cc1` having (1 <> count(0))) `derived_4_5`) `derived_1_4` left join (/* select#6 */ select min(`test`.`cc1`.`col_varchar_key`) AS `MIN(col_varchar_key)` from `test`.`cc1`) `derived_1_6` on(true) where true
+ INSERT INTO t1 SELECT COUNT(table1.pk),
+ (SELECT MIN(col_varchar_key) FROM cc1 )
+ FROM (cc1 AS table1
+@@ -3834,7 +3834,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 4	DERIVED	<derived5>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using join buffer (hash join)
+ 5	DERIVED	cc1	NULL	index	NULL	PRIMARY	4	NULL	1	100.00	Using index
+ Warnings:
+-Note	1003	insert into `test`.`t1` /* select#1 */ select `derived_1_4`.`COUNT(table1.pk)` AS `COUNT(table1.pk)`,`derived_1_6`.`MIN(col_varchar_key)` AS `(SELECT MIN(col_varchar_key) FROM cc1 )` from (/* select#4 */ select count(`test`.`table1`.`pk`) AS `COUNT(table1.pk)` from `test`.`cc1` `table1` join `test`.`cc1` join `test`.`cc1` `table3` join (/* select#5 */ select count(0) AS `COUNT(*)` from `test`.`cc1` having (1 <> count(0))) `derived_4_5`) `derived_1_4` left join (/* select#6 */ select min(`test`.`cc1`.`col_varchar_key`) AS `MIN(col_varchar_key)` from `test`.`cc1`) `derived_1_6` on(true) where true
++Note	1003	insert into `test`.`t1` /* select#1 */ select `derived_1_4`.`COUNT(table1.pk)` AS `COUNT(table1.pk)`,`derived_1_6`.`MIN(col_varchar_key)` AS `(SELECT MIN(col_varchar_key) FROM cc1 )` from (/* select#4 */ select count(0) AS `COUNT(table1.pk)` from `test`.`cc1` `table1` join `test`.`cc1` join `test`.`cc1` `table3` join (/* select#5 */ select count(0) AS `COUNT(*)` from `test`.`cc1` having (1 <> count(0))) `derived_4_5`) `derived_1_4` left join (/* select#6 */ select min(`test`.`cc1`.`col_varchar_key`) AS `MIN(col_varchar_key)` from `test`.`cc1`) `derived_1_6` on(true) where true
+ SELECT * from t1;
+ field1	field2
+ 0	NULL
+diff --git a/mysql-test/suite/dstore_main/r/group_by-dstore.result b/mysql-test/suite/dstore_main/r/group_by-dstore.result
+index ce979593fa6..a347678815f 100644
+--- a/mysql-test/suite/dstore_main/r/group_by-dstore.result
++++ b/mysql-test/suite/dstore_main/r/group_by-dstore.result
+@@ -1537,7 +1537,7 @@ explain SELECT COUNT(varchar_key) AS x FROM t1 WHERE pk = 8 having 'foo'='bar';
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	Impossible HAVING
+ Warnings:
+-Note	1003	/* select#1 */ select count(`test`.`t1`.`varchar_key`) AS `x` from `test`.`t1` where multiple equal(8, `test`.`t1`.`pk`) having false
++Note	1003	/* select#1 */ select count(0) AS `x` from `test`.`t1` where multiple equal(8, `test`.`t1`.`pk`) having false
+ SELECT COUNT(varchar_key) AS x FROM t1 WHERE pk = 8 having 'foo'='bar';
+ x
+ drop table t1;
+diff --git a/mysql-test/suite/dstore_main/r/join-dstore.result b/mysql-test/suite/dstore_main/r/join-dstore.result
+index 65f54fafcc6..3126f4c73a8 100644
+--- a/mysql-test/suite/dstore_main/r/join-dstore.result
++++ b/mysql-test/suite/dstore_main/r/join-dstore.result
+@@ -2453,7 +2453,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 3	DEPENDENT DERIVED	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	33.33	Using where
+ Warnings:
+ Note	1276	Field or reference 'test.x1.b' of SELECT #3 was resolved in SELECT #2
+-Note	1003	/* select#1 */ select `test`.`x3`.`a` AS `a`,`test`.`x3`.`b` AS `b` from `test`.`t1` `x3` semi join (`test`.`t1` `x1` join `test`.`t1` `x2` join lateral (/* select#3 */ select count(`test`.`t1`.`a`) AS `c` from `test`.`t1` where (`test`.`t1`.`b` = `test`.`x1`.`b`)) `d3`) where ((`test`.`x2`.`b` = `test`.`x1`.`b`) and (`test`.`x1`.`b` = `d3`.`c`))
++Note	1003	/* select#1 */ select `test`.`x3`.`a` AS `a`,`test`.`x3`.`b` AS `b` from `test`.`t1` `x3` semi join (`test`.`t1` `x1` join `test`.`t1` `x2` join lateral (/* select#3 */ select count(0) AS `c` from `test`.`t1` where (`test`.`t1`.`b` = `test`.`x1`.`b`)) `d3`) where ((`test`.`x2`.`b` = `test`.`x1`.`b`) and (`test`.`x1`.`b` = `d3`.`c`))
+ DROP TABLE t1;
+ #
+ # Bug #32917482: SIG11 IN FLATTENINNERJOINS|MAKE_JOIN_HYPERGRAPH.CC
+diff --git a/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result b/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
+index 025cf001354..0a646e7f831 100644
+--- a/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
++++ b/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
+@@ -1301,6 +1301,12 @@ The following options may be given as the first argument:
+  If the number of rows in the table is changed more than
+  this fraction, cached plan will be invalidated. A value
+  of 0 means the cached plan is always valid.
++ --rds-simplify-count-not-null 
++ Replace COUNT(column) with COUNT(*) if they are
++ equivalent. This may eliminate the need for 'column'
++ during execution, opening more possibilities for access
++ methods.
++ (Defaults to on; use --skip-rds-simplify-count-not-null to disable.)
+  --rds-write-binlog-into-redo 
+  Enable binlog write into redo.
+  --rds-write-ddl-info-into-redo 
+@@ -2289,6 +2295,7 @@ rds-local-socket-using-per-thread FALSE
+ rds-log-archive-path 
+ rds-plan-cache TRUE
+ rds-plan-cache-allow-change-ratio 0.2
++rds-simplify-count-not-null TRUE
+ rds-write-binlog-into-redo FALSE
+ rds-write-ddl-info-into-redo FALSE
+ read-buffer-size 131072
+diff --git a/mysql-test/suite/dstore_main/r/simplify_count_not_null.result b/mysql-test/suite/dstore_main/r/simplify_count_not_null.result
+new file mode 100644
+index 00000000000..31d60758b10
+--- /dev/null
++++ b/mysql-test/suite/dstore_main/r/simplify_count_not_null.result
+@@ -0,0 +1,486 @@
++# FEATURE convert COUNT(col) to COUNT(*) if "col" is not nullable
++create table t1(a int not null, b int, index(b));
++show create table t1;
++Table	Create Table
++t1	CREATE TABLE `t1` (
++  `a` int NOT NULL,
++  `b` int DEFAULT NULL,
++  KEY `b` (`b`)
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++insert into t1 values (1,1),(2,2),(3,3),(5,3),(8,3),(4,-1);
++analyze table t1 update histogram on b;
++Table	Op	Msg_type	Msg_text
++test.t1	histogram	status	Histogram statistics created for column 'b'.
++analyze table t1;
++Table	Op	Msg_type	Msg_text
++test.t1	analyze	status	OK
++create view v1 as select a,a+1 as c,b from t1;
++# First the feature is off, then it is on. There are two things to observe in the "on" case, in EXPLAIN output:
++# - the rewrite to count(0), in the 'Note' line
++# - the "using index", which appears for most queries. Those for which it does not appear, have a good reason:
++# even after the simplification to count(0) there remains reasons why the index on 'b' is not enough (see comments
++# further down).
++set rds_simplify_count_not_null=1-1;
++select @@rds_simplify_count_not_null;
++@@rds_simplify_count_not_null
++0
++# Optimal case, using index only
++explain select count(*) from t1 where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(*)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++# same
++explain select count(0) from t1 where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(0)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++# this demonstrates the basic case for the feature: without/with the feature, a covering index is used or not.
++explain select count(a) from t1 where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++# we see the rewriting is done, and only on "count(a)". But as "count(distinct a)" is used, not "using index".
++explain select count(a), count(distinct a), count(b), sum(a), count(a+1) from t1 where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)`,count(distinct `test`.`t1`.`a`) AS `count(distinct a)`,count(`test`.`t1`.`b`) AS `count(b)`,sum(`test`.`t1`.`a`) AS `sum(a)`,count((`test`.`t1`.`a` + 1)) AS `count(a+1)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++# these two show the difference between inner join and left join: on the right side of the latter, columns become nullable.
++explain select count(t1.a), count(t2.a) from t1, t1 as t2 where t1.b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
++1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using join buffer (hash join)
++Warnings:
++Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(t1.a)`,count(`test`.`t2`.`a`) AS `count(t2.a)` from `test`.`t1` join `test`.`t1` `t2` where (`test`.`t1`.`b` > 1)
++explain select count(t1.a), count(t2.a) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
++1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where; Using join buffer (hash join)
++Warnings:
++Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(t1.a)`,count(`test`.`t2`.`a`) AS `count(t2.a)` from `test`.`t1` left join `test`.`t1` `t2` on((`test`.`t1`.`b` >= 3)) where (`test`.`t1`.`b` > 1)
++# see the difference between the counts
++select count(t1.a), count(t2.a), count(*) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
++count(t1.a)	count(t2.a)	count(*)
++19	18	19
++# a slightly more complicated case
++explain select count(t2.a), count(t1.a), count(t3.a) from t1 left join (t1 as t2, t1 as t3) on t1.b>=3 where t1.b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
++1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where; Using join buffer (hash join)
++1	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using join buffer (hash join)
++Warnings:
++Note	1003	/* select#1 */ select count(`test`.`t2`.`a`) AS `count(t2.a)`,count(`test`.`t1`.`a`) AS `count(t1.a)`,count(`test`.`t3`.`a`) AS `count(t3.a)` from `test`.`t1` left join (`test`.`t1` `t2` join `test`.`t1` `t3`) on((`test`.`t1`.`b` >= 3)) where (`test`.`t1`.`b` > 1)
++# the feature works on merged views' columns too
++explain select count(a), count(c), count(b) from v1 where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)`,count((`test`.`t1`.`a` + 1)) AS `count(c)`,count(`test`.`t1`.`b`) AS `count(b)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++# and also if the view is materialized: the tmp table's have proper (non-)nullability so we can use this information, and rewrite. No "using index" though, which is understandable: MySQL has not created any index on the tmp table.
++explain select /*+ no_merge() */ count(a), count(c), count(b) from v1 where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	NULL
++2	DERIVED	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select /*+ NO_MERGE(@`select#1`) */ count(`test`.`v1`.`a`) AS `count(a)`,count(`test`.`v1`.`c`) AS `count(c)`,count(`test`.`v1`.`b`) AS `count(b)` from `test`.`v1`
++# same, with derived tables
++explain select count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)`,count((`test`.`t1`.`a` + 1)) AS `count(c)`,count(`test`.`t1`.`b`) AS `count(b)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++explain select /*+ no_merge() */ count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	NULL
++2	DERIVED	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select /*+ NO_MERGE(@`select#1`) */ count(`dt`.`a`) AS `count(a)`,count(`dt`.`c`) AS `count(c)`,count(`dt`.`b`) AS `count(b)` from (/* select#2 */ select `test`.`t1`.`a` AS `a`,(`test`.`t1`.`a` + 1) AS `c`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 1)) `dt`
++# GROUP BY
++explain select b, count(a) from t1 where b>1 group by b;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b`
++# outer reference. Here the feature brings nothing, because in the subquery ext.a is a constant, so even without any rewriting we have "using index" in the subquery. Alas we do not have "using index" in the top query (see comment in Item_sum_count::fix_fields() for an explanation).
++explain select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	NULL
++2	DEPENDENT SUBQUERY	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1276	Field or reference 'test.ext.a' of SELECT #2 was resolved in SELECT #1
++Note	1003	/* select#1 */ select (/* select#2 */ select count(`test`.`ext`.`a`) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1)
++# However, note that the rewriting happens *after* deciding of where aggregation happens, so we get an error here (aggregation in top query), while we do not get an error if the user has written count(0) (aggregation in subquery), and each time this is proper behaviour.
++select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
++ERROR 21000: Subquery returns more than 1 row
++select (select count(0) from t1 where t1.b>1) from t1 as ext where b>1;
++(select count(0) from t1 where t1.b>1)
++4
++4
++4
++4
++# As a consequence, such rewriting must not be done while creating a view (but it can be done when reading from this view), otherwise, the query's meaning would change.
++create view v2 as select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
++# Not done when creating:
++show create view v2;
++View	Create View	character_set_client	collation_connection
++v2	CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `v2` AS select (select count(`ext`.`a`) from `t1` where (`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `t1` `ext` where (`ext`.`b` > 1)	utf8mb4	utf8mb4_0900_ai_ci
++# Done when reading:
++set optimizer_trace='enabled=on';
++select * from v2;
++ERROR 21000: Subquery returns more than 1 row
++# The rewriting happened above ; it cannot be seen in EXPLAIN (which would fail with ER_SUBQUERY_NO_1_ROW because the view is single-row so materialized during EXPLAIN) but it can be seen in the optimizer trace:
++select trace like '% count(0) %' from information_schema.optimizer_trace;
++trace like '% count(0) %'
++0
++set optimizer_trace=default;
++drop view v2;
++# GROUP BY and outer reference
++explain select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	NULL
++2	DEPENDENT SUBQUERY	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1276	Field or reference 'test.ext.a' of SELECT #2 was resolved in SELECT #1
++Note	1003	/* select#1 */ select (/* select#2 */ select count(`test`.`ext`.`a`) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1) group by `test`.`ext`.`b`
++explain select b,(select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	NULL
++2	DEPENDENT SUBQUERY	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1276	Field or reference 'test.ext.a' of SELECT #2 was resolved in SELECT #1
++Note	1003	/* select#1 */ select `test`.`ext`.`b` AS `b`,(/* select#2 */ select count(`test`.`ext`.`a`) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1) group by `test`.`ext`.`b`
++# HAVING
++explain select b from t1 where b>1 group by b having count(a)>0;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(`test`.`t1`.`a`) > 0)
++explain select b, count(a) from t1 where b>1 group by b having count(a)>0;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(`test`.`t1`.`a`) > 0)
++# HAVING and merged view
++explain select b from v1 where b>1 group by b having count(a)>0;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(`test`.`t1`.`a`) > 0)
++explain select b, count(a) from v1 where b>1 group by b having count(a)>0;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(`test`.`t1`.`a`) > 0)
++# ROLLUP
++# Rewritten, but cannot use index only, as we group by 'a'
++explain select count(a) from t1 where b>1 group by a;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using temporary
++Warnings:
++Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`a`
++explain select count(a) from t1 where b>1 group by a with rollup;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using filesort
++Warnings:
++Note	1003	/* select#1 */ select rollup_sum_switcher(count(`test`.`t1`.`a`)) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`a` with rollup
++select count(a) from t1 where b>1 group by a with rollup;
++count(a)
++1
++1
++1
++1
++4
++# COUNT as window function: the feature works too
++explain select count(a) over() from t1 where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
++Warnings:
++Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
++Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) OVER ()  AS `count(a) over()` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++select count(a) over() from t1 where b>1;
++count(a) over()
++4
++4
++4
++4
++explain select count(*) over() from t1 where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
++Note	1003	/* select#1 */ select count(0) OVER ()  AS `count(*) over()` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++# A window function is computed on the output of ROLLUP, and ROLLUP makes 'a' nullable; as explained in the code, the feature is disabled.
++explain select a, count(a) over() from t1 group by a with rollup;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using temporary; Using filesort
++Warnings:
++Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
++Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,count(`a`) OVER ()  AS `count(a) over()` from `test`.`t1` group by `test`.`t1`.`a` with rollup
++select a, count(a) over() from t1 group by a with rollup;
++a	count(a) over()
++1	6
++2	6
++3	6
++4	6
++5	6
++8	6
++NULL	6
++# compare to no-ROLLUP:
++explain select a, count(a) over() from t1 group by a;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using temporary
++Warnings:
++Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
++Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,count(`test`.`t1`.`a`) OVER ()  AS `count(a) over()` from `test`.`t1` group by `test`.`t1`.`a`
++select a, count(a) over() from t1 group by a;
++a	count(a) over()
++1	6
++2	6
++3	6
++5	6
++8	6
++4	6
++set rds_simplify_count_not_null=1-0;
++select @@rds_simplify_count_not_null;
++@@rds_simplify_count_not_null
++1
++# Optimal case, using index only
++explain select count(*) from t1 where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(*)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++# same
++explain select count(0) from t1 where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(0)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++# this demonstrates the basic case for the feature: without/with the feature, a covering index is used or not.
++explain select count(a) from t1 where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++# we see the rewriting is done, and only on "count(a)". But as "count(distinct a)" is used, not "using index".
++explain select count(a), count(distinct a), count(b), sum(a), count(a+1) from t1 where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(a)`,count(distinct `test`.`t1`.`a`) AS `count(distinct a)`,count(`test`.`t1`.`b`) AS `count(b)`,sum(`test`.`t1`.`a`) AS `sum(a)`,count((`test`.`t1`.`a` + 1)) AS `count(a+1)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++# these two show the difference between inner join and left join: on the right side of the latter, columns become nullable.
++explain select count(t1.a), count(t2.a) from t1, t1 as t2 where t1.b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++1	SIMPLE	t2	NULL	index	NULL	b	5	NULL	6	100.00	Using index; Using join buffer (hash join)
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(t1.a)`,count(0) AS `count(t2.a)` from `test`.`t1` join `test`.`t1` `t2` where (`test`.`t1`.`b` > 1)
++explain select count(t1.a), count(t2.a) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where; Using join buffer (hash join)
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(t1.a)`,count(`test`.`t2`.`a`) AS `count(t2.a)` from `test`.`t1` left join `test`.`t1` `t2` on((`test`.`t1`.`b` >= 3)) where (`test`.`t1`.`b` > 1)
++# see the difference between the counts
++select count(t1.a), count(t2.a), count(*) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
++count(t1.a)	count(t2.a)	count(*)
++19	18	19
++# a slightly more complicated case
++explain select count(t2.a), count(t1.a), count(t3.a) from t1 left join (t1 as t2, t1 as t3) on t1.b>=3 where t1.b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where; Using join buffer (hash join)
++1	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using join buffer (hash join)
++Warnings:
++Note	1003	/* select#1 */ select count(`test`.`t2`.`a`) AS `count(t2.a)`,count(0) AS `count(t1.a)`,count(`test`.`t3`.`a`) AS `count(t3.a)` from `test`.`t1` left join (`test`.`t1` `t2` join `test`.`t1` `t3`) on((`test`.`t1`.`b` >= 3)) where (`test`.`t1`.`b` > 1)
++# the feature works on merged views' columns too
++explain select count(a), count(c), count(b) from v1 where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(a)`,count(0) AS `count(c)`,count(`test`.`t1`.`b`) AS `count(b)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++# and also if the view is materialized: the tmp table's have proper (non-)nullability so we can use this information, and rewrite. No "using index" though, which is understandable: MySQL has not created any index on the tmp table.
++explain select /*+ no_merge() */ count(a), count(c), count(b) from v1 where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	NULL
++2	DERIVED	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select /*+ NO_MERGE(@`select#1`) */ count(0) AS `count(a)`,count(0) AS `count(c)`,count(`test`.`v1`.`b`) AS `count(b)` from `test`.`v1`
++# same, with derived tables
++explain select count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(a)`,count(0) AS `count(c)`,count(`test`.`t1`.`b`) AS `count(b)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++explain select /*+ no_merge() */ count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	NULL
++2	DERIVED	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select /*+ NO_MERGE(@`select#1`) */ count(0) AS `count(a)`,count(0) AS `count(c)`,count(`dt`.`b`) AS `count(b)` from (/* select#2 */ select `test`.`t1`.`a` AS `a`,(`test`.`t1`.`a` + 1) AS `c`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 1)) `dt`
++# GROUP BY
++explain select b, count(a) from t1 where b>1 group by b;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b`
++# outer reference. Here the feature brings nothing, because in the subquery ext.a is a constant, so even without any rewriting we have "using index" in the subquery. Alas we do not have "using index" in the top query (see comment in Item_sum_count::fix_fields() for an explanation).
++explain select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	Using index
++2	DEPENDENT SUBQUERY	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1276	Field or reference 'test.ext.a' of SELECT #2 was resolved in SELECT #1
++Note	1003	/* select#1 */ select (/* select#2 */ select count(0) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1)
++# However, note that the rewriting happens *after* deciding of where aggregation happens, so we get an error here (aggregation in top query), while we do not get an error if the user has written count(0) (aggregation in subquery), and each time this is proper behaviour.
++select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
++ERROR 21000: Subquery returns more than 1 row
++select (select count(0) from t1 where t1.b>1) from t1 as ext where b>1;
++(select count(0) from t1 where t1.b>1)
++4
++4
++4
++4
++# As a consequence, such rewriting must not be done while creating a view (but it can be done when reading from this view), otherwise, the query's meaning would change.
++create view v2 as select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
++# Not done when creating:
++show create view v2;
++View	Create View	character_set_client	collation_connection
++v2	CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `v2` AS select (select count(`ext`.`a`) from `t1` where (`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `t1` `ext` where (`ext`.`b` > 1)	utf8mb4	utf8mb4_0900_ai_ci
++# Done when reading:
++set optimizer_trace='enabled=on';
++select * from v2;
++ERROR 21000: Subquery returns more than 1 row
++# The rewriting happened above ; it cannot be seen in EXPLAIN (which would fail with ER_SUBQUERY_NO_1_ROW because the view is single-row so materialized during EXPLAIN) but it can be seen in the optimizer trace:
++select trace like '% count(0) %' from information_schema.optimizer_trace;
++trace like '% count(0) %'
++1
++set optimizer_trace=default;
++drop view v2;
++# GROUP BY and outer reference
++explain select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	NULL
++2	DEPENDENT SUBQUERY	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1276	Field or reference 'test.ext.a' of SELECT #2 was resolved in SELECT #1
++Note	1003	/* select#1 */ select (/* select#2 */ select count(0) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1) group by `test`.`ext`.`b`
++explain select b,(select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	NULL
++2	DEPENDENT SUBQUERY	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1276	Field or reference 'test.ext.a' of SELECT #2 was resolved in SELECT #1
++Note	1003	/* select#1 */ select `test`.`ext`.`b` AS `b`,(/* select#2 */ select count(0) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1) group by `test`.`ext`.`b`
++# HAVING
++explain select b from t1 where b>1 group by b having count(a)>0;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(0) > 0)
++explain select b, count(a) from t1 where b>1 group by b having count(a)>0;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(0) > 0)
++# HAVING and merged view
++explain select b from v1 where b>1 group by b having count(a)>0;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(0) > 0)
++explain select b, count(a) from v1 where b>1 group by b having count(a)>0;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(0) > 0)
++# ROLLUP
++# Rewritten, but cannot use index only, as we group by 'a'
++explain select count(a) from t1 where b>1 group by a;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using temporary
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`a`
++explain select count(a) from t1 where b>1 group by a with rollup;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using filesort
++Warnings:
++Note	1003	/* select#1 */ select rollup_sum_switcher(count(0)) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`a` with rollup
++select count(a) from t1 where b>1 group by a with rollup;
++count(a)
++1
++1
++1
++1
++4
++# COUNT as window function: the feature works too
++explain select count(a) over() from t1 where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
++Note	1003	/* select#1 */ select count(0) OVER ()  AS `count(a) over()` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++select count(a) over() from t1 where b>1;
++count(a) over()
++4
++4
++4
++4
++explain select count(*) over() from t1 where b>1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
++Note	1003	/* select#1 */ select count(0) OVER ()  AS `count(*) over()` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++# A window function is computed on the output of ROLLUP, and ROLLUP makes 'a' nullable; as explained in the code, the feature is disabled.
++explain select a, count(a) over() from t1 group by a with rollup;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using temporary; Using filesort
++Warnings:
++Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
++Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,count(`a`) OVER ()  AS `count(a) over()` from `test`.`t1` group by `test`.`t1`.`a` with rollup
++select a, count(a) over() from t1 group by a with rollup;
++a	count(a) over()
++1	6
++2	6
++3	6
++4	6
++5	6
++8	6
++NULL	6
++# compare to no-ROLLUP:
++explain select a, count(a) over() from t1 group by a;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using temporary
++Warnings:
++Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
++Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,count(0) OVER ()  AS `count(a) over()` from `test`.`t1` group by `test`.`t1`.`a`
++select a, count(a) over() from t1 group by a;
++a	count(a) over()
++1	6
++2	6
++3	6
++5	6
++8	6
++4	6
++select @@rds_simplify_count_not_null;
++@@rds_simplify_count_not_null
++1
++prepare s from 'explain select count(a) from t1 where b>1';
++execute s;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++execute s;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
++drop prepare s;
++drop view v1;
++drop table t1;
++set rds_simplify_count_not_null=default;
+diff --git a/mysql-test/suite/dstore_main/r/skip_scan-dstore.result b/mysql-test/suite/dstore_main/r/skip_scan-dstore.result
+index f5bfa89f712..112c5319c1d 100644
+--- a/mysql-test/suite/dstore_main/r/skip_scan-dstore.result
++++ b/mysql-test/suite/dstore_main/r/skip_scan-dstore.result
+@@ -895,6 +895,8 @@ Handler_read_prev	0
+ Handler_read_rnd	0
+ Handler_read_rnd_next	0
+ include/diff_tables.inc [test.hint_skip_scan, test.no_skip_scan]
++set @old_simplify_count=@@rds_simplify_count_not_null;
++set rds_simplify_count_not_null=0;
+ set optimizer_switch = 'skip_scan=on';
+ EXPLAIN SELECT count(a), count(b), count(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+@@ -947,6 +949,7 @@ Handler_read_prev	0
+ Handler_read_rnd	0
+ Handler_read_rnd_next	0
+ include/diff_tables.inc [test.hint_skip_scan, test.no_skip_scan]
++set rds_simplify_count_not_null=@old_simplify_count;
+ set optimizer_switch = 'skip_scan=on';
+ EXPLAIN SELECT min(a), max(b), min(c)  FROM t WHERE a = 5 AND c > 10 AND d < 3;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+diff --git a/mysql-test/suite/dstore_main/r/subquery_scalar_to_derived-dstore.result b/mysql-test/suite/dstore_main/r/subquery_scalar_to_derived-dstore.result
+index 7a6983f0005..95e6623e741 100644
+--- a/mysql-test/suite/dstore_main/r/subquery_scalar_to_derived-dstore.result
++++ b/mysql-test/suite/dstore_main/r/subquery_scalar_to_derived-dstore.result
+@@ -1247,7 +1247,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 2	DERIVED	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+ Warnings:
+ Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+-Note	1003	/* select#1 */ select count(`test`.`t1`.`country`) AS `countrycount`,sum(`test`.`t1`.`funds_requested`) AS `smcnt`,`test`.`t1`.`country` AS `country`,`derived_1_2`.`SUM(funds_requested)` AS `total_funds`,row_number() OVER (ORDER BY std(`test`.`t1`.`funds_requested`) )  AS `rn` from `test`.`t1` left join (/* select#2 */ select sum(`test`.`t1`.`funds_requested`) AS `SUM(funds_requested)` from `test`.`t1`) `derived_1_2` on(true) where true group by `test`.`t1`.`country` having (avg(`test`.`t1`.`funds_requested`) > 0) order by sum(abs(`test`.`t1`.`funds_requested`))
++Note	1003	/* select#1 */ select count(0) AS `countrycount`,sum(`test`.`t1`.`funds_requested`) AS `smcnt`,`test`.`t1`.`country` AS `country`,`derived_1_2`.`SUM(funds_requested)` AS `total_funds`,row_number() OVER (ORDER BY std(`test`.`t1`.`funds_requested`) )  AS `rn` from `test`.`t1` left join (/* select#2 */ select sum(`test`.`t1`.`funds_requested`) AS `SUM(funds_requested)` from `test`.`t1`) `derived_1_2` on(true) where true group by `test`.`t1`.`country` having (avg(`test`.`t1`.`funds_requested`) > 0) order by sum(abs(`test`.`t1`.`funds_requested`))
+ SET sql_mode='';
+ SELECT COUNT(country) AS countrycount,
+ SUM(funds_requested) AS smcnt,
+@@ -1274,7 +1274,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 3	DERIVED	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+ Warnings:
+ Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+-Note	1003	/* select#1 */ select `derived_1_3`.`countrycount` AS `countrycount`,`derived_1_3`.`smcnt` AS `smcnt`,`derived_1_3`.`Name_exp_1` AS `country`,`derived_1_4`.`SUM(funds_requested)` AS `total_funds`,row_number() OVER (ORDER BY `derived_1_3`.`tmp_aggr_2` )  AS `rn` from (/* select#3 */ select count(`test`.`t1`.`country`) AS `countrycount`,sum(`test`.`t1`.`funds_requested`) AS `smcnt`,avg(`test`.`t1`.`funds_requested`) AS `tmp_aggr_1`,std(`test`.`t1`.`funds_requested`) AS `tmp_aggr_2`,`test`.`t1`.`country` AS `Name_exp_1` from `test`.`t1` having (avg(`test`.`t1`.`funds_requested`) > 0)) `derived_1_3` left join (/* select#4 */ select sum(`test`.`t1`.`funds_requested`) AS `SUM(funds_requested)` from `test`.`t1`) `derived_1_4` on(true) where true
++Note	1003	/* select#1 */ select `derived_1_3`.`countrycount` AS `countrycount`,`derived_1_3`.`smcnt` AS `smcnt`,`derived_1_3`.`Name_exp_1` AS `country`,`derived_1_4`.`SUM(funds_requested)` AS `total_funds`,row_number() OVER (ORDER BY `derived_1_3`.`tmp_aggr_2` )  AS `rn` from (/* select#3 */ select count(0) AS `countrycount`,sum(`test`.`t1`.`funds_requested`) AS `smcnt`,avg(`test`.`t1`.`funds_requested`) AS `tmp_aggr_1`,std(`test`.`t1`.`funds_requested`) AS `tmp_aggr_2`,`test`.`t1`.`country` AS `Name_exp_1` from `test`.`t1` having (avg(`test`.`t1`.`funds_requested`) > 0)) `derived_1_3` left join (/* select#4 */ select sum(`test`.`t1`.`funds_requested`) AS `SUM(funds_requested)` from `test`.`t1`) `derived_1_4` on(true) where true
+ Manually translated
+ SELECT derived_1_0.countrycount AS countrycount,
+ derived_1_0.smcnt AS smcnt,
+@@ -1403,7 +1403,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 4	DERIVED	t1	NULL	ALL	NULL	NULL	NULL	NULL	7	100.00	NULL
+ Warnings:
+ Note	1003	/* select#1 */ select (`derived_1_4`.`tmp_aggr_1` + `derived_1_6`.`SUM(t2.c)`) AS `SUM(t1.a) + (SELECT SUM(t2.c)
+-FROM t2)`,`derived_1_5`.`COUNT(t3.e)` AS `(SELECT COUNT(t3.e) FROM t3)` from (/* select#4 */ select sum(`test`.`t1`.`a`) AS `tmp_aggr_1` from `test`.`t1`) `derived_1_4` left join (/* select#6 */ select sum(`test`.`t2`.`c`) AS `SUM(t2.c)` from `test`.`t2`) `derived_1_6` on(true) left join (/* select#5 */ select count(`test`.`t3`.`e`) AS `COUNT(t3.e)` from `test`.`t3`) `derived_1_5` on(true) where true
++FROM t2)`,`derived_1_5`.`COUNT(t3.e)` AS `(SELECT COUNT(t3.e) FROM t3)` from (/* select#4 */ select sum(`test`.`t1`.`a`) AS `tmp_aggr_1` from `test`.`t1`) `derived_1_4` left join (/* select#6 */ select sum(`test`.`t2`.`c`) AS `SUM(t2.c)` from `test`.`t2`) `derived_1_6` on(true) left join (/* select#5 */ select count(0) AS `COUNT(t3.e)` from `test`.`t3`) `derived_1_5` on(true) where true
+ DROP TABLE t1, t2, t3;
+ # Bug discovered from running rapid.cp_i_subquery.test What is
+ # different here is that we have a combination of an implicitly
+@@ -3013,7 +3013,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 3	DERIVED	tab1	NULL	index	NULL	PRIMARY	4	NULL	0	0.00	Using index
+ 2	DERIVED	tab1	NULL	index	NULL	PRIMARY	4	NULL	0	0.00	Using index
+ Warnings:
+-Note	1003	/* select#1 */ select `test`.`table1`.`pk` AS `pk`,`test`.`table2`.`pk` AS `pk`,`test`.`table3`.`pk` AS `pk` from `test`.`tab1` `table1` left join (`test`.`tab1` `table2` join (/* select#2 */ select count(`test`.`tab1`.`pk`) AS `COUNT(pk)` from `test`.`tab1`) `derived_1_2` join `test`.`tab1` `table3`) on(((1 <= `derived_1_2`.`COUNT(pk)`))) join (/* select#3 */ select min(`test`.`tab1`.`pk`) AS `MIN(pk)` from `test`.`tab1` having (0 <> min(`test`.`tab1`.`pk`))) `derived_1_3` where true
++Note	1003	/* select#1 */ select `test`.`table1`.`pk` AS `pk`,`test`.`table2`.`pk` AS `pk`,`test`.`table3`.`pk` AS `pk` from `test`.`tab1` `table1` left join (`test`.`tab1` `table2` join (/* select#2 */ select count(0) AS `COUNT(pk)` from `test`.`tab1`) `derived_1_2` join `test`.`tab1` `table3`) on(((1 <= `derived_1_2`.`COUNT(pk)`))) join (/* select#3 */ select min(`test`.`tab1`.`pk`) AS `MIN(pk)` from `test`.`tab1` having (0 <> min(`test`.`tab1`.`pk`))) `derived_1_3` where true
+ DROP TABLE tab1;
+ #
+ # Bug#30617216 WL#12885 SIG6 IN JOIN::ADD_HAVING_AS_TMP_TABLE_COND() AT SQL/SQL_SELECT.CC
+@@ -3699,7 +3699,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 4	DERIVED	<derived5>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using join buffer (hash join)
+ 5	DERIVED	cc1	NULL	index	NULL	PRIMARY	4	NULL	0	0.00	Using index
+ Warnings:
+-Note	1003	/* select#1 */ select `derived_1_4`.`COUNT(table1.pk)` AS `COUNT(table1.pk)`,`derived_1_6`.`MIN(col_varchar_key)` AS `(SELECT MIN(col_varchar_key) FROM cc1 )` from (/* select#4 */ select count(`test`.`table1`.`pk`) AS `COUNT(table1.pk)` from `test`.`cc1` `table1` join `test`.`cc1` join `test`.`cc1` `table3` join (/* select#5 */ select count(0) AS `COUNT(*)` from `test`.`cc1` having (1 <> count(0))) `derived_4_5`) `derived_1_4` left join (/* select#6 */ select min(`test`.`cc1`.`col_varchar_key`) AS `MIN(col_varchar_key)` from `test`.`cc1`) `derived_1_6` on(true) where true
++Note	1003	/* select#1 */ select `derived_1_4`.`COUNT(table1.pk)` AS `COUNT(table1.pk)`,`derived_1_6`.`MIN(col_varchar_key)` AS `(SELECT MIN(col_varchar_key) FROM cc1 )` from (/* select#4 */ select count(0) AS `COUNT(table1.pk)` from `test`.`cc1` `table1` join `test`.`cc1` join `test`.`cc1` `table3` join (/* select#5 */ select count(0) AS `COUNT(*)` from `test`.`cc1` having (1 <> count(0))) `derived_4_5`) `derived_1_4` left join (/* select#6 */ select min(`test`.`cc1`.`col_varchar_key`) AS `MIN(col_varchar_key)` from `test`.`cc1`) `derived_1_6` on(true) where true
+ INSERT INTO t1 SELECT COUNT(table1.pk),
+ (SELECT MIN(col_varchar_key) FROM cc1 )
+ FROM (cc1 AS table1
+@@ -3727,7 +3727,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ 4	DERIVED	<derived5>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using join buffer (hash join)
+ 5	DERIVED	cc1	NULL	index	NULL	PRIMARY	4	NULL	0	0.00	Using index
+ Warnings:
+-Note	1003	insert into `test`.`t1` /* select#1 */ select `derived_1_4`.`COUNT(table1.pk)` AS `COUNT(table1.pk)`,`derived_1_6`.`MIN(col_varchar_key)` AS `(SELECT MIN(col_varchar_key) FROM cc1 )` from (/* select#4 */ select count(`test`.`table1`.`pk`) AS `COUNT(table1.pk)` from `test`.`cc1` `table1` join `test`.`cc1` join `test`.`cc1` `table3` join (/* select#5 */ select count(0) AS `COUNT(*)` from `test`.`cc1` having (1 <> count(0))) `derived_4_5`) `derived_1_4` left join (/* select#6 */ select min(`test`.`cc1`.`col_varchar_key`) AS `MIN(col_varchar_key)` from `test`.`cc1`) `derived_1_6` on(true) where true
++Note	1003	insert into `test`.`t1` /* select#1 */ select `derived_1_4`.`COUNT(table1.pk)` AS `COUNT(table1.pk)`,`derived_1_6`.`MIN(col_varchar_key)` AS `(SELECT MIN(col_varchar_key) FROM cc1 )` from (/* select#4 */ select count(0) AS `COUNT(table1.pk)` from `test`.`cc1` `table1` join `test`.`cc1` join `test`.`cc1` `table3` join (/* select#5 */ select count(0) AS `COUNT(*)` from `test`.`cc1` having (1 <> count(0))) `derived_4_5`) `derived_1_4` left join (/* select#6 */ select min(`test`.`cc1`.`col_varchar_key`) AS `MIN(col_varchar_key)` from `test`.`cc1`) `derived_1_6` on(true) where true
+ SELECT * from t1;
+ field1	field2
+ 0	NULL
+diff --git a/mysql-test/suite/dstore_main/t/simplify_count_not_null.test b/mysql-test/suite/dstore_main/t/simplify_count_not_null.test
+new file mode 100644
+index 00000000000..57c0fdcd181
+--- /dev/null
++++ b/mysql-test/suite/dstore_main/t/simplify_count_not_null.test
+@@ -0,0 +1,132 @@
++--source include/have_only_dstore.inc
++
++--echo # FEATURE convert COUNT(col) to COUNT(*) if "col" is not nullable
++
++create table t1(a int not null, b int, index(b));
++show create table t1;
++insert into t1 values (1,1),(2,2),(3,3),(5,3),(8,3),(4,-1);
++analyze table t1 update histogram on b;
++analyze table t1;
++create view v1 as select a,a+1 as c,b from t1;
++
++--echo # First the feature is off, then it is on. There are two things to observe in the "on" case, in EXPLAIN output:
++--echo # - the rewrite to count(0), in the 'Note' line
++--echo # - the "using index", which appears for most queries. Those for which it does not appear, have a good reason:
++--echo # even after the simplification to count(0) there remains reasons why the index on 'b' is not enough (see comments
++--echo # further down).
++
++let $c=2;
++
++while ($c)
++{
++
++dec $c;
++
++eval set rds_simplify_count_not_null=1-$c;
++select @@rds_simplify_count_not_null;
++
++--echo # Optimal case, using index only
++explain select count(*) from t1 where b>1;
++
++--echo # same
++explain select count(0) from t1 where b>1;
++
++--echo # this demonstrates the basic case for the feature: without/with the feature, a covering index is used or not.
++explain select count(a) from t1 where b>1;
++
++--echo # we see the rewriting is done, and only on "count(a)". But as "count(distinct a)" is used, not "using index".
++explain select count(a), count(distinct a), count(b), sum(a), count(a+1) from t1 where b>1;
++
++--echo # these two show the difference between inner join and left join: on the right side of the latter, columns become nullable.
++explain select count(t1.a), count(t2.a) from t1, t1 as t2 where t1.b>1;
++
++explain select count(t1.a), count(t2.a) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
++--echo # see the difference between the counts
++select count(t1.a), count(t2.a), count(*) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
++
++--echo # a slightly more complicated case
++explain select count(t2.a), count(t1.a), count(t3.a) from t1 left join (t1 as t2, t1 as t3) on t1.b>=3 where t1.b>1;
++
++--echo # the feature works on merged views' columns too
++explain select count(a), count(c), count(b) from v1 where b>1;
++
++--echo # and also if the view is materialized: the tmp table's have proper (non-)nullability so we can use this information, and rewrite. No "using index" though, which is understandable: MySQL has not created any index on the tmp table.
++explain select /*+ no_merge() */ count(a), count(c), count(b) from v1 where b>1;
++
++--echo # same, with derived tables
++explain select count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
++
++explain select /*+ no_merge() */ count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
++
++--echo # GROUP BY
++
++explain select b, count(a) from t1 where b>1 group by b;
++
++--echo # outer reference. Here the feature brings nothing, because in the subquery ext.a is a constant, so even without any rewriting we have "using index" in the subquery. Alas we do not have "using index" in the top query (see comment in Item_sum_count::fix_fields() for an explanation).
++
++explain select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
++
++--echo # However, note that the rewriting happens *after* deciding of where aggregation happens, so we get an error here (aggregation in top query), while we do not get an error if the user has written count(0) (aggregation in subquery), and each time this is proper behaviour.
++--error ER_SUBQUERY_NO_1_ROW
++select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
++select (select count(0) from t1 where t1.b>1) from t1 as ext where b>1;
++
++--echo # As a consequence, such rewriting must not be done while creating a view (but it can be done when reading from this view), otherwise, the query's meaning would change.
++create view v2 as select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
++--echo # Not done when creating:
++show create view v2;
++--echo # Done when reading:
++set optimizer_trace='enabled=on';
++--error ER_SUBQUERY_NO_1_ROW
++select * from v2;
++--echo # The rewriting happened above ; it cannot be seen in EXPLAIN (which would fail with ER_SUBQUERY_NO_1_ROW because the view is single-row so materialized during EXPLAIN) but it can be seen in the optimizer trace:
++select trace like '% count(0) %' from information_schema.optimizer_trace;
++set optimizer_trace=default;
++drop view v2;
++
++--echo # GROUP BY and outer reference
++
++explain select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
++explain select b,(select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
++
++--echo # HAVING
++
++explain select b from t1 where b>1 group by b having count(a)>0;
++explain select b, count(a) from t1 where b>1 group by b having count(a)>0;
++
++--echo # HAVING and merged view
++
++explain select b from v1 where b>1 group by b having count(a)>0;
++explain select b, count(a) from v1 where b>1 group by b having count(a)>0;
++
++--echo # ROLLUP
++
++--echo # Rewritten, but cannot use index only, as we group by 'a'
++explain select count(a) from t1 where b>1 group by a;
++explain select count(a) from t1 where b>1 group by a with rollup;
++select count(a) from t1 where b>1 group by a with rollup;
++
++--echo # COUNT as window function: the feature works too
++
++explain select count(a) over() from t1 where b>1;
++select count(a) over() from t1 where b>1;
++explain select count(*) over() from t1 where b>1;
++--echo # A window function is computed on the output of ROLLUP, and ROLLUP makes 'a' nullable; as explained in the code, the feature is disabled.
++explain select a, count(a) over() from t1 group by a with rollup;
++select a, count(a) over() from t1 group by a with rollup;
++--echo # compare to no-ROLLUP:
++explain select a, count(a) over() from t1 group by a;
++select a, count(a) over() from t1 group by a;
++
++}
++
++# As we change arguments of COUNT, verify that it is a permanent transformation
++select @@rds_simplify_count_not_null;
++prepare s from 'explain select count(a) from t1 where b>1';
++execute s;
++execute s;
++drop prepare s;
++
++drop view v1;
++drop table t1;
++set rds_simplify_count_not_null=default;
+diff --git a/mysql-test/suite/innodb/r/select_count_perf.result b/mysql-test/suite/innodb/r/select_count_perf.result
+index e7d163d57f3..323797aee3c 100644
+--- a/mysql-test/suite/innodb/r/select_count_perf.result
++++ b/mysql-test/suite/innodb/r/select_count_perf.result
+@@ -1303,7 +1303,7 @@ EXPLAIN SELECT COUNT(c1) FROM t1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	index	NULL	k2	5	NULL	#	100.00	Using index
+ Warnings:
+-Note	1003	/* select#1 */ select count(`test`.`t1`.`c1`) AS `COUNT(c1)` from `test`.`t1`
++Note	1003	/* select#1 */ select count(0) AS `COUNT(c1)` from `test`.`t1`
+ EXPLAIN SELECT COUNT(c2) FROM t1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t1	NULL	index	NULL	k2	5	NULL	#	100.00	Using index
+diff --git a/mysql-test/suite/sys_vars/r/all_vars.result b/mysql-test/suite/sys_vars/r/all_vars.result
+index a7dbbcbc60a..eb1a2611485 100644
+--- a/mysql-test/suite/sys_vars/r/all_vars.result
++++ b/mysql-test/suite/sys_vars/r/all_vars.result
+@@ -205,6 +205,8 @@ rds_plan_cache
+ rds_plan_cache
+ rds_plan_cache_allow_change_ratio
+ rds_plan_cache_allow_change_ratio
++rds_simplify_count_not_null
++rds_simplify_count_not_null
+ rds_write_binlog_into_redo
+ rds_write_binlog_into_redo
+ rds_write_ddl_info_into_redo
+diff --git a/mysql-test/t/all_persisted_variables.test b/mysql-test/t/all_persisted_variables.test
+index 9e9352a3e7c..430f82803a4 100644
+--- a/mysql-test/t/all_persisted_variables.test
++++ b/mysql-test/t/all_persisted_variables.test
+@@ -41,7 +41,7 @@ call mtr.add_suppression("\\[Warning\\] .*MY-\\d+.* Changing innodb_extend_and_i
+ call mtr.add_suppression("Failed to initialize TLS for channel: mysql_main");
+ 
+ let $total_global_vars=`SELECT COUNT(*) FROM performance_schema.global_variables where variable_name NOT LIKE 'ndb_%' AND variable_name NOT LIKE 'debug_%'`;
+-let $total_persistent_vars=477;
++let $total_persistent_vars=478;
+ 
+ --echo ***************************************************************
+ --echo * 0. Verify that variables present in performance_schema.global
+diff --git a/mysql-test/t/heap_btree.test b/mysql-test/t/heap_btree.test
+index 0cb64b79321..5e50fcf0e0d 100644
+--- a/mysql-test/t/heap_btree.test
++++ b/mysql-test/t/heap_btree.test
+@@ -258,7 +258,10 @@ CREATE TABLE t1(
+ 
+ INSERT INTO t1(c1,c2) VALUES (5,1), (4,1), (3,5), (2,3), (1,3);
+ 
++set @old_simplify_count=@@rds_simplify_count_not_null;
++set rds_simplify_count_not_null=0;
+ EXPLAIN SELECT c2, COUNT(c1) FROM t1 GROUP BY c2;
+ SELECT c2, COUNT(c1) FROM t1 GROUP BY c2;
++set rds_simplify_count_not_null=@old_simplify_count;
+ 
+ DROP TABLE t1;
+diff --git a/mysql-test/t/heap_hash.test b/mysql-test/t/heap_hash.test
+index 23758b89c0b..f7029c6ae97 100644
+--- a/mysql-test/t/heap_hash.test
++++ b/mysql-test/t/heap_hash.test
+@@ -321,10 +321,12 @@ CREATE TABLE t1(
+ 
+ INSERT INTO t1(c1,c2) VALUES (5,1), (4,1), (3,5), (2,3), (1,3);
+ 
++set @old_simplify_count=@@rds_simplify_count_not_null;
++set rds_simplify_count_not_null=0;
+ EXPLAIN SELECT c2, COUNT(c1) FROM t1 GROUP BY c2;
+ --sorted_result
+ SELECT c2, COUNT(c1) FROM t1 GROUP BY c2;
+-
++set rds_simplify_count_not_null=@old_simplify_count;
+ DROP TABLE t1;
+ 
+ --echo #
+diff --git a/sql/item_sum.cc b/sql/item_sum.cc
+index eb590580e32..2c800af995e 100644
+--- a/sql/item_sum.cc
++++ b/sql/item_sum.cc
+@@ -49,6 +49,7 @@
+ #include "my_sys.h"
+ #include "mysql_com.h"
+ #include "mysqld_error.h"
++#include "scope_guard.h"
+ #include "sql-common/json_dom.h"
+ #include "sql/aggregate_check.h"  // Distinct_check
+ #include "sql/create_field.h"
+@@ -1408,15 +1409,77 @@ bool Item_sum_num::fix_fields(THD *thd, Item **ref) {
+ 
+   if (init_sum_func_check(thd)) return true;
+ 
+-  Condition_context CCT(thd->lex->current_query_block());
++  auto query_block = thd->lex->current_query_block();
++  Condition_context CCT(query_block);
+ 
+   set_nullable(false);
+ 
+-  for (uint i = 0; i < arg_count; i++) {
+-    if ((!args[i]->fixed && args[i]->fix_fields(thd, args + i)) ||
+-        args[i]->check_cols(1))
+-      return true;
+-    set_nullable(is_nullable() || args[i]->is_nullable());
++  if (thd->variables.rds_simplify_count_not_null && sum_func() == COUNT_FUNC &&
++      arg_count == 1 && args[0]->type() == FIELD_ITEM &&
++      !(m_is_window_function && query_block->olap != UNSPECIFIED_OLAP_TYPE) &&
++      !thd->lex->is_view_context_analysis()) {
++    /* We have COUNT(column), we can maybe convert it to COUNT(*) which would
++       remove the dependency on 'column' and thus allow for more covering
++       indexes. Such conversion requires to first know if 'column' is not
++       nullable. To know it, we must do fix_fields() on the column; and we
++       must prevent this inner call from updating the table's bitmaps (for
++       example, removing from table->covering_keys the indexes which don't
++       include this column would immediately defeat the optimization, and
++       there is no easy way to cancel such bad change to table->covering_keys,
++       and other bitmaps, afterwards).
++
++       Note that if COUNT is a window function, we excluded ROLLUP above. It
++       is because a window function applies after ROLLUP, ROLLUP can make a
++       non-nullable column become nullable, but this nullability change
++       happens only later (in Query_block::resolve_rollup_item()). So in the
++       present function we would still see the column as non-nullable, which
++       is incorrect.
++
++       Note also that our conversion is not fully effective if the aggregated
++       column is an outer reference; indeed Item_outer_ref::fix_fields() has
++       an explicit call to mark with MARK_COLUMNS_READ (does not observe the
++       content of thd->mark_used_columns). Changing that code was not
++       considered worth the risk, given the expected rareness of
++       COUNT(outer-ref). */
++    {
++      Variable_scope_guard guard(thd->mark_used_columns);
++      thd->mark_used_columns = MARK_COLUMNS_NONE;
++      if ((!args[0]->fixed && args[0]->fix_fields(thd, args + 0)) ||
++          args[0]->check_cols(1))
++        return true;
++    }
++    set_nullable(is_nullable() || args[0]->is_nullable());
++    if (!args[0]->is_nullable()) {
++      // Simplify to COUNT(*) (i.e. COUNT(0) as in PTI_count_sym::itemize())
++      args[0] = new (thd->mem_root) Item_int(int32{0}, 1);
++      if (args[0] == nullptr) return true;
++      /* Note that we are after fix_fields() of arguments, which means that
++         max_aggr_level has been set, so the aggregation query of this Item is
++         not going to be influenced by us replacing args[0] (possibly an outer
++         reference) with 0, which is a good thing. This also explains why we
++         do not do this replacement when creating a view (only later when
++         selecting from it). */
++    } else {
++      // Cannot simplify. We thus execute here the operation which is at the
++      // end of find_field_in_table_ref() and was delayed.
++      if (args[0]->type() != FIELD_ITEM) {
++        // a merged derived table, or an outer reference
++        Mark_field mf(thd->mark_used_columns);
++        args[0]->walk(&Item::mark_field_in_map, enum_walk::SUBQUERY_POSTFIX,
++                      reinterpret_cast<uchar *>(&mf));
++      } else {
++        // a base table or materialized derived table.
++        auto f = down_cast<Item_field *>(args[0])->field;
++        f->table->mark_column_used(f, thd->mark_used_columns);
++      }
++    }
++  } else {
++    for (uint i = 0; i < arg_count; i++) {
++      if ((!args[i]->fixed && args[i]->fix_fields(thd, args + i)) ||
++          args[i]->check_cols(1))
++        return true;
++      set_nullable(is_nullable() || args[i]->is_nullable());
++    }
+   }
+ 
+   // Set this value before calling resolve_type()
+@@ -1902,12 +1965,15 @@ bool Item_sum_sum::resolve_type(THD *thd) {
+ 
+   hybrid_type = Item::type_to_result(data_type());
+ 
+-  DBUG_PRINT("info", ("Type: %s (%d, %d)",
+-                      (hybrid_type == REAL_RESULT      ? "REAL_RESULT"
+-                       : hybrid_type == DECIMAL_RESULT ? "DECIMAL_RESULT"
+-                       : hybrid_type == INT_RESULT     ? "INT_RESULT"
+-                                                       : "--ILLEGAL!!!--"),
+-                      max_length, (int)decimals));
++  DBUG_PRINT("info",
++             ("Type: %s (%d, %d)",
++              (hybrid_type == REAL_RESULT
++                   ? "REAL_RESULT"
++                   : hybrid_type == DECIMAL_RESULT
++                         ? "DECIMAL_RESULT"
++                         : hybrid_type == INT_RESULT ? "INT_RESULT"
++                                                     : "--ILLEGAL!!!--"),
++              max_length, (int)decimals));
+   return false;
+ }
+ 
+@@ -5721,7 +5787,7 @@ bool Item_lead_lag::compute() {
+ 
+ template <typename... Args>
+ Item_sum_json::Item_sum_json(unique_ptr_destroy_only<Json_wrapper> wrapper,
+-                             Args &&...parent_args)
++                             Args &&... parent_args)
+     : Item_sum(std::forward<Args>(parent_args)...),
+       m_wrapper(std::move(wrapper)) {
+   set_data_type_json();
+diff --git a/sql/sys_vars.cc b/sql/sys_vars.cc
+index b9bf53fd4c1..282295f0e09 100644
+--- a/sql/sys_vars.cc
++++ b/sql/sys_vars.cc
+@@ -7800,6 +7800,13 @@ static Sys_var_bool Sys_var_rds_empty_redundant_check_in_range_scan(
+     SESSION_VAR(rds_empty_redundant_check_in_range_scan), CMD_LINE(OPT_ARG),
+     DEFAULT(true));
+ 
++static Sys_var_bool Sys_var_rds_simplify_count_not_null(
++    "rds_simplify_count_not_null",
++    "Replace COUNT(column) with COUNT(*) if they are equivalent. This may"
++    " eliminate the need for 'column' during execution, opening more"
++    " possibilities for access methods.",
++    SESSION_VAR(rds_simplify_count_not_null), CMD_LINE(OPT_ARG), DEFAULT(true));
++
+ static Sys_var_ulong Sys_rds_admin_max_connections(
+     "rds_admin_max_connections",
+     "The number of simultaneous clients allowed through admin port",
+diff --git a/sql/system_variables.h b/sql/system_variables.h
+index d13d4a29267..4396dad3340 100644
+--- a/sql/system_variables.h
++++ b/sql/system_variables.h
+@@ -314,6 +314,10 @@ struct System_variables {
+   // When true, a redundant condition (meaning that it is enforced by the range
+   // access method anyway) in the WHERE clause is removed
+   bool rds_empty_redundant_check_in_range_scan;
++  /// When true, COUNT(column) is replaced with COUNT(*) if possible. This may
++  // eliminate the need for 'column' during execution, opening more
++  // possibilities for access methods.
++  bool rds_simplify_count_not_null;
+ 
+   plugin_ref table_plugin;
+   plugin_ref temp_table_plugin;
+-- 
+2.23.0
+

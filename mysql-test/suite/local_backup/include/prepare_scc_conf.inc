@@ -1,0 +1,2 @@
+--exec mkdir -p $MYSQLTEST_VARDIR/scc_tmp
+--exec sh $MYSQL_TEST_DIR/suite/local_backup/include/prepare_scc_conf.sh $MYSQLTEST_VARDIR/scc_tmp

@@ -1,0 +1,32 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+
+create table t1(
+        id int primary key auto_increment,
+        col1 varchar(100),
+        col2 int,
+        key idx_col2(col2)
+ )engine= innodb;
+
+--disable_query_log
+ let $loop=1000;
+ while($loop)
+ {
+  eval insert into t1(col1, col2) values(repeat('test', 4), $loop);
+  dec $loop;
+ }
+--enable_query_log
+analyze table t1;
+
+--echo #
+--echo # fail in InitPQTab
+--echo #
+explain select * from t1 where id < 100;
+explain select * from t1;
+SET debug = '+d,pq_range_scan_reset';
+--error ER_PARALLEL_QUERY_ERROR
+select * from t1 where id < 100;
+select * from t1;
+SET debug = '-d,pq_range_scan_reset';
+select * from t1 where id < 100;
+drop table t1;

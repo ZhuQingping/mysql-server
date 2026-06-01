@@ -1,0 +1,26 @@
+SET @start_value= @@global.wait_timeout;
+SET @origin_rds_conn_log_error_verbosity= @@global.rds_conn_log_error_verbosity;
+SET @origin_threadpool_enabled= @@global.threadpool_enabled;
+SET GLOBAL rds_conn_log_error_verbosity=1;
+SET GLOBAL threadpool_enabled=ON;
+SET @start_time= UNIX_TIMESTAMP();
+connect (test_con1, localhost, root,,);
+SELECT @@session.wait_timeout = @@global.wait_timeout AS 'Expect 1';
+Expect 1
+1
+SET @@session.wait_timeout = <session_value>;
+connect (test_con2, localhost, root,,);
+SET @@session.wait_timeout = <session_value> - 1;
+connection default;
+wait until connections ready
+Timeout in wait_condition.inc for SELECT COUNT(*) = 1 FROM information_schema.processlist
+SELECT info FROM information_schema.processlist;
+info
+SELECT info FROM information_schema.processlist
+NULL
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+include/assert_grep.inc [Check that there is 'Wait timeout exceeded, kill connection.' in error log.]
+SET @@global.wait_timeout = @start_value;
+SET @@global.rds_conn_log_error_verbosity = @origin_rds_conn_log_error_verbosity;
+SET @@global.threadpool_enabled = @origin_threadpool_enabled;

@@ -1,0 +1,57 @@
+# 1. Test sync with drop database
+SET @saved_rds_permission_control = @@global.rds_permission_control;
+SET @saved_rds_sync_comment = @@global.rds_sync_comment;
+TRUNCATE mysql.rds_comment;
+RESET MASTER;
+SET GLOBAL rds_sync_comment = ON;
+INSERT INTO mysql.rds_comment (object_type, object_name, comment) VALUES ('DB','test_comment_db','test db comment');
+INSERT INTO mysql.rds_comment (object_type, object_name, comment) VALUES ('DB','not_exist_db','test db comment');
+CREATE DATABASE test_comment_db;
+SELECT object_type, object_name, comment FROM mysql.rds_comment WHERE object_type='DB';
+object_type	object_name	comment
+DB	not_exist_db	test db comment
+DB	test_comment_db	test db comment
+DROP DATABASE test_comment_db;
+SELECT object_type, object_name, comment FROM mysql.rds_comment WHERE object_type='DB';
+object_type	object_name	comment
+DB	not_exist_db	test db comment
+# 2. Check binlog (rds_comment should not record in binlog)
+include/show_binlog_events.inc
+Log_name	Pos	Event_type	Server_id	End_log_pos	Info
+binlog.000001	#	Query	#	#	BEGIN
+binlog.000001	#	Table_map	#	#	table_id: # (mysql.rds_comment)
+binlog.000001	#	Write_rows	#	#	table_id: # flags: STMT_END_F
+binlog.000001	#	Xid	#	#	COMMIT /* XID */
+binlog.000001	#	Query	#	#	BEGIN
+binlog.000001	#	Table_map	#	#	table_id: # (mysql.rds_comment)
+binlog.000001	#	Write_rows	#	#	table_id: # flags: STMT_END_F
+binlog.000001	#	Xid	#	#	COMMIT /* XID */
+binlog.000001	#	Query	#	#	CREATE DATABASE test_comment_db
+binlog.000001	#	Query	#	#	DROP DATABASE test_comment_db
+# 3. Make sure that user can't do any ddl to rds_comment;
+CREATE USER 'user1'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, REFERENCES, INDEX, ALTER, SHOW DATABASES, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER ON *.* TO 'user1'@'%' WITH GRANT OPTION;
+SET GLOBAL rds_permission_control = ON;
+DROP TABLE rds_comment;
+ERROR 42000: Access denied for user 'user1'@'%' to database 'mysql'
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'rds_comment';
+TABLE_NAME
+rds_comment
+ALTER TABLE rds_comment DROP COLUMN status;
+ERROR 42000: Access denied for user 'user1'@'%' to database 'mysql'
+SHOW CREATE TABLE rds_comment;
+Table	Create Table
+rds_comment	CREATE TABLE `rds_comment` (
+  `object_type` varchar(64) COLLATE utf8mb3_bin NOT NULL,
+  `object_name` varchar(128) COLLATE utf8mb3_bin NOT NULL,
+  `comment` varchar(512) COLLATE utf8mb3_bin DEFAULT NULL,
+  `status` tinyint DEFAULT NULL,
+  `create_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `update_at` timestamp NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`object_type`,`object_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_bin STATS_PERSISTENT=0
+DROP USER 'user1'@'%';
+DELETE FROM mysql.rds_comment;
+SET GLOBAL rds_permission_control = @saved_rds_permission_control;
+SET GLOBAL rds_sync_comment = @saved_rds_sync_comment;
+SET GLOBAL rds_reserved_users = "";

@@ -1,0 +1,163 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+
+# dstore support MRR
+CREATE TABLE employees (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100),
+    salary INT
+);
+
+CREATE INDEX idx_salary ON employees(salary);
+
+INSERT INTO employees(name, salary) VALUES
+('Alice', 1500),
+('Bob', 2500),
+('Charlie', 3500),
+('David', 1200),
+('Eve', 3200),
+('Frank', 1800),
+('Grace', 3100),
+('Helen', 2800),
+('Ivy', 1900),
+('Jack', 3300);
+
+ANALYZE TABLE employees UPDATE HISTOGRAM ON salary;
+ANALYZE TABLE employees;
+set optimizer_switch='mrr=on,mrr_cost_based=off';
+explain SELECT * FROM employees WHERE salary BETWEEN 1000 AND 2000 OR salary BETWEEN 3000 AND 4000 ORDER BY id;
+SELECT * FROM employees WHERE salary BETWEEN 1000 AND 2000 OR salary BETWEEN 3000 AND 4000 ORDER BY id;
+explain SELECT /*+ NO_MRR(employees) */ * FROM employees WHERE salary BETWEEN 1000 AND 2000 OR salary BETWEEN 3000 AND 4000 ORDER BY id;
+SELECT /*+ NO_MRR(employees) */ * FROM employees WHERE salary BETWEEN 1000 AND 2000 OR salary BETWEEN 3000 AND 4000 ORDER BY id;
+
+drop table employees;
+set optimizer_switch=default;
+
+# dstore support BKA
+CREATE TABLE departments (
+    dept_id INT AUTO_INCREMENT PRIMARY KEY,
+    dept_name VARCHAR(100)
+);
+
+INSERT INTO departments (dept_name) VALUES
+('HR'),
+('Finance'),
+('Engineering'),
+('Marketing'),
+('Sales');
+ANALYZE TABLE departments UPDATE HISTOGRAM ON dept_id;
+ANALYZE TABLE departments;
+
+CREATE TABLE employees (
+    emp_id INT AUTO_INCREMENT PRIMARY KEY,
+    emp_name VARCHAR(100),
+    salary INT,
+    dept_id INT,
+    FOREIGN KEY (dept_id) REFERENCES departments(dept_id)
+);
+
+CREATE INDEX idx_dept_id ON employees(dept_id);
+
+INSERT INTO employees (emp_name, salary, dept_id) VALUES
+('Alice', 5000, 1),
+('Bob', 6000, 2),
+('Charlie', 7000, 3),
+('David', 5500, 1),
+('Eve', 8000, 3),
+('Frank', 5800, 2),
+('Grace', 7500, 4),
+('Helen', 8500, 5),
+('Ivy', 6500, 4),
+('Jack', 9000, 5);
+
+# insert twice for more data
+INSERT INTO employees (emp_name, salary, dept_id) VALUES
+('Alice', 5000, 1),
+('Bob', 6000, 2),
+('Charlie', 7000, 3),
+('David', 5500, 1),
+('Eve', 8000, 3),
+('Frank', 5800, 2),
+('Grace', 7500, 4),
+('Helen', 8500, 5),
+('Ivy', 6500, 4),
+('Jack', 9000, 5);
+ANALYZE TABLE employees UPDATE HISTOGRAM ON emp_id,dept_id;
+ANALYZE TABLE employees;
+
+set optimizer_switch='mrr=on,mrr_cost_based=off,batched_key_access=on';
+EXPLAIN SELECT e.emp_name, e.salary, d.dept_name FROM employees e JOIN departments d ON e.dept_id = d.dept_id ORDER BY 1;
+SELECT e.emp_name, e.salary, d.dept_name FROM employees e JOIN departments d ON e.dept_id = d.dept_id ORDER BY 1;
+
+EXPLAIN SELECT /*+ NO_BKA(e) */ e.emp_name, e.salary, d.dept_name FROM employees e JOIN departments d ON e.dept_id = d.dept_id ORDER BY 1;
+SELECT /*+ NO_BKA(e) */ e.emp_name, e.salary, d.dept_name FROM employees e JOIN departments d ON e.dept_id = d.dept_id ORDER BY 1;
+
+drop table employees, departments;
+
+set optimizer_switch='mrr=on,mrr_cost_based=off,batched_key_access=on';
+
+CREATE TABLE orders (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL,
+    amount DECIMAL(10,2),
+    status VARCHAR(20),
+    INDEX idx_user_id (user_id)
+) ENGINE=Dstore;
+
+
+INSERT INTO orders (user_id, amount, status)
+WITH RECURSIVE seq AS (
+    SELECT 1 AS n UNION ALL SELECT n+1 FROM seq WHERE n < 100
+)
+SELECT 
+    150 + ((n-1) % 101),
+    10.00 + ((n % 101) * 0.5),
+    CASE WHEN 150 + ((n-1) % 101) < 200 THEN 'pending' ELSE 'completed' END
+FROM seq;
+ANALYZE TABLE orders UPDATE HISTOGRAM ON id,user_id;
+ANALYZE TABLE orders;
+
+BEGIN;
+
+EXPLAIN SELECT * FROM orders WHERE user_id BETWEEN 180 AND 220 AND status = 'pending' FOR UPDATE;
+SELECT * FROM orders WHERE user_id BETWEEN 180 AND 220 AND status = 'pending' limit 5 FOR UPDATE;
+
+UPDATE orders SET amount = amount * 1.1 WHERE user_id BETWEEN 180 AND 220;
+SELECT * FROM orders WHERE user_id BETWEEN 180 AND 220 AND status = 'pending' limit 5;
+COMMIT;
+
+DROP TABLE orders;
+
+CREATE TABLE t_shared_lock (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  user_id INT NOT NULL,
+  amount DECIMAL(10,2),
+  status VARCHAR(20),
+  INDEX idx_user_id (user_id))
+ENGINE=Dstore;
+
+INSERT INTO t_shared_lock (user_id, amount, status) VALUES
+(150, 10.00, 'pending'),
+(160, 15.00, 'completed'),
+(170, 20.00, 'pending'),
+(180, 25.00, 'completed');
+
+BEGIN;
+SELECT * FROM t_shared_lock WHERE user_id BETWEEN 150 AND 180 AND status = 'pending';
+COMMIT;
+
+# error scenario
+CALL mtr.add_suppression(".*CDELockTuple failed.*");
+SET SESSION DEBUG='+d,cde_lock_tuple_injection';
+SELECT * FROM t_shared_lock WHERE user_id BETWEEN 150 AND 180 AND status = 'pending';
+SET SESSION DEBUG='-d,cde_lock_tuple_injection';
+
+CALL mtr.add_suppression(".*FetchTuple fail.*");
+SET SESSION DEBUG='+d,cde_fetch_tuple_injection';
+--error ER_GET_ERRNO
+SELECT * FROM t_shared_lock WHERE user_id BETWEEN 150 AND 180 AND status = 'pending';
+SET SESSION DEBUG='-d,cde_fetch_tuple_injection';
+
+DROP TABLE t_shared_lock;
+
+set optimizer_switch=default;

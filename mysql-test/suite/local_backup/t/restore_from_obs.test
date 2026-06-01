@@ -1,0 +1,81 @@
+--source include/have_debug.inc
+--source suite/local_backup/include/have_obs_env.inc
+
+--let $clean_obs_history = 1
+--source suite/local_backup/include/prepare_for_backup.inc
+
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("OBS error occur when get object meta");
+call mtr.add_suppression("OBS get object metadata fail");
+
+CREATE DATABASE db1;
+USE db1;
+CREATE TABLE t1(a int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+
+connect(conn1,localhost,root,,db1);
+connection conn1;
+send INSERT INTO t1 VALUES(2);
+
+connection default;
+SET GLOBAL debug='+d,lb_pause_after_first_dstore_tbs_data_arrive';
+# full backup.
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+
+CREATE TABLE table_after_backup(s varchar(100)) ENGINE=Dstore;
+INSERT INTO table_after_backup VALUES("string after backup start");
+INSERT INTO table_after_backup VALUES("string after backup start");
+DELETE FROM table_after_backup LIMIT 1;
+UPDATE table_after_backup SET s="string after backup start updated";
+SELECT * FROM table_after_backup;
+
+SET GLOBAL debug='-d,lb_pause_after_first_dstore_tbs_data_arrive';
+--source suite/local_backup/include/wait_full_backup.inc
+
+# Verify mysqld not effected by SIGPIPE after backup using OBS.
+# After OBS SDK deinitialized, it will unregister handler for SIGPIPE and make process exit when receives SIGPIPE.
+# We removed it in OBS SDK.
+# See comments in local_ci/project_script/common/download_obs.sh and local_ci/script/build_obs.sh.
+# If fails after send SIGPIPE(kill -13) here, please pay attention to signal handler in OBS SDK.
+--disable_query_log
+--disable_result_log
+--let $read_from_file = `SELECT @@pid_file;`
+--source include/read_file_to_var.inc
+--let $pid_send_sigpipe_to = $result
+--exec kill -13 $pid_send_sigpipe_to
+--enable_query_log
+--enable_result_log
+
+connection conn1;
+reap;
+SELECT * FROM t1 order by a;
+
+connection default;
+INSERT INTO t1 VALUES(3);
+SELECT * FROM t1 order by a;
+
+--echo # Shut server down.
+--let $shutdown_server_timeout = 300
+--source include/shutdown_mysqld.inc
+
+# Restore with script.
+--source suite/local_backup/include/restore_with_script.inc
+
+# Should same
+--exec diff $MYSQLTEST_VARDIR/local_backup_restore_meta/RestoreMeta_RestoreMeta $MYSQLD_DATADIR/RestoreMeta_RestoreMeta
+
+--echo # Restart the server.
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+USE db1;
+SELECT * FROM t1 order by a;
+SELECT * FROM table_after_backup;
+
+# Drop database db1.
+DROP DATABASE db1;
+
+--source suite/local_backup/include/clean_backup.inc
+--let $clean_obs_history = 0

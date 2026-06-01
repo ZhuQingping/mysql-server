@@ -1,0 +1,456 @@
+From 269a715946bbe04478568f8c7f5db693e2876eaa Mon Sep 17 00:00:00 2001
+From: Guilhem Bichot <guilhem.bichot@contributor>
+
+Date: Tue, 2 Sep 2025 18:59:32 +0200
+Subject: [PATCH] [plan_cache][asan]using the ASan pkg to
+ start a DStore instance, find another new coredump scenerio including CTE
+ query. (the coredump won't occur while using the release pkg)
+
+Cause of the bug
+================
+
+We have a prepared statement with CTEs and a subquery in one CTE.
+
+First execution:
+
+we optimize CTE cte1. There we have bool_col<>'2020', bool_col is
+tinyint, so constant folding (fold_condition()) recognizes that this
+condition is always true except if bool_col is NULL, so replaces the
+'<>' with 'if((`test`.`tbl_1_all_type2index_desc`.`bool_col` is
+null),NULL,1)'. This pushes an "Item change" into
+THD::change_list (fold_or_simplify() calling change_item_tree()). So
+when we come to deciding if we can cache the plan for subquery #4 (the
+ANY in cte2, select_number==4), we hit:
+
+  if (unit->outer_query_block()) {
+    ...
+    // If Item tree changes have been done, given that THD::change_list is
+    // common to all query blocks, this makes it impossible for us to identify
+    // which changes must be replayed later in apply_cached_plan().
+    if (!thd->change_list.is_empty()) return false;
+
+and decide to not cache the plan of subquery #4.
+
+Second execution:
+
+we optimize CTE cte1. There we have bool_col<>'NULL', which means
+bool_col<>0 (conversion of string to number yields 0), constant
+folding cannot simplify that, so records no Item change. So later we
+decide that we can cache the plan for subquery #4.
+
+Third execution:
+
+we optimize CTE cte1. There we have bool_col<>'1901', so it's like in
+the first execution: we push an Item change. When we come to
+optimizing subquery #4, we see there's a cached plan, and expect no
+Item change to exist:
+
+  if (!thd->change_list.is_empty()) {
+    // We expect the change list to be empty, because we are in execution,
+    // resolution has not been re-done, and we are at the very start of
+    // optimization. If not empty, we would not know how to undo (in case of
+    // error) only the changes which apply_cached_plan() is about to do.
+    assert(false);
+    return true;
+  }
+
+but there are Item changes actually. The comment is wrong because it
+assumes there is a single query block (it is true in that case). We
+are not at the very start of optimization as cte1 has been optimized
+before subquery #4 which we're looking at now, and has pushed Item
+changes onto THD's list.
+
+This bug is specific of queries which use subqueries, and affects only
+debug binaries (in a release binary we properly just 'return true' and
+do not apply this plan).
+
+Fix
+===
+
+(1) remove the assertion.
+
+(2) Also, for extra safety, move the No-Item-change check to
+apply_cached_plan_if_suitable(), so that when this check fails it
+explicitly invalidates the plan. This ensures that the invalidation
+counter is incremented, helping to control memory usage (grep for
+PLAN_CACHE_MAX_INVALIDATIONS).
+
+(3) Also noticed that one enum value was unused (even in the original
+impl in MySQL) so removed it.
+
+(4) Noticed a std::set was passed by value, for efficiency let's pass
+it by ref-to-const.
+
+(5) A comment; and a compiler warning for unused variable.
+---
+ mysql-test/include/session_plan_cache.inc     | 41 ++++++++
+ mysql-test/r/session_plan_cache.result        | 97 +++++++++++++++++++
+ .../dstore_main/r/session_plan_cache.result   | 97 +++++++++++++++++++
+ sql/sql_const.h                               |  9 +-
+ sql/sql_plan_cache.cc                         | 25 +++--
+ sql/sql_plan_cache.h                          |  3 +-
+ 6 files changed, 256 insertions(+), 16 deletions(-)
+
+diff --git a/mysql-test/include/session_plan_cache.inc b/mysql-test/include/session_plan_cache.inc
+index d2091ade56a..f8e674dbf99 100644
+--- a/mysql-test/include/session_plan_cache.inc
++++ b/mysql-test/include/session_plan_cache.inc
+@@ -1926,4 +1926,45 @@ show status like '%Cached_plan%';
+ DEALLOCATE PREPARE stmt0;
+ DROP TABLE tbtest_part;
+ 
++--echo #
++--echo # BUGFIX [plan_cache][asan]using the ASan pkg to start a DStore instance, find another new coredump scenerio including CTE query. (the coredump won't occur while using the release pkg)
++--echo #
++
++CREATE TABLE tbl_1_all_type2index_desc (
++  bool_col tinyint(1) DEFAULT NULL,
++  time_col time(6) DEFAULT NULL,
++  blob_col blob,
++  text_col text CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci,
++  enum_col enum('aaa','bbb','ccc') CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci DEFAULT NULL
++);
++CREATE TABLE tbl_3_all_typeindex_desc (
++  decimal_col decimal(25,5) DEFAULT NULL,
++  datetime_col datetime(6) DEFAULT NULL,
++  text_col text CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci
++
++);
++CREATE TABLE tbl_1_all_typeindex_desc (
++  float_col float DEFAULT NULL,
++  text_col text CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci
++);
++
++prepare stmt from "WITH cte1 AS ( SELECT text_col,time_col FROM tbl_1_all_type2index_desc WHERE  tbl_1_all_type2index_desc.enum_col NOT BETWEEN NULL AND ? OR tbl_1_all_type2index_desc.blob_col IN (?,NULL,'a','iiiiiiiiii1') XOR tbl_1_all_type2index_desc.bool_col <> ?), cte2 AS ( SELECT cte1.text_col, tbl_3_all_typeindex_desc.decimal_col, COUNT(tbl_3_all_typeindex_desc.datetime_col) FROM cte1 left join tbl_3_all_typeindex_desc ON cte1.text_col = tbl_3_all_typeindex_desc.text_col WHERE cte1.text_col < ANY (WITH cte3 AS ( SELECT *  FROM tbl_1_all_typeindex_desc WHERE tbl_1_all_typeindex_desc.float_col IS NOT UNKNOWN) SELECT cte3.text_col FROM cte3 )GROUP BY 1,2 ORDER BY 1,2,3)SELECT * FROM cte2 ORDER BY 1,3,2;";
++
++flush status;
++set @enum_col0='iii2';set @blob_col1='a';set @bool_col2='2020';execute stmt USING @enum_col0,@blob_col1,@bool_col2;
++show status like '%Cached_plan%';
++set @enum_col0='i';set @blob_col1='iii2';set @bool_col2='NULL';execute stmt USING @enum_col0,@blob_col1,@bool_col2;
++show status like '%Cached_plan%';
++# the crash used to happen at this execution:
++set @enum_col0='NULL';set @blob_col1='a';set @bool_col2='1901';execute stmt USING @enum_col0,@blob_col1,@bool_col2;
++show status like '%Cached_plan%';
++set @enum_col0='iii2';set @blob_col1='a';set @bool_col2='2020';execute stmt USING @enum_col0,@blob_col1,@bool_col2;
++show status like '%Cached_plan%';
++set @enum_col0='i';set @blob_col1='iii2';set @bool_col2='NULL';execute stmt USING @enum_col0,@blob_col1,@bool_col2;
++show status like '%Cached_plan%';
++set @enum_col0='NULL';set @blob_col1='a';set @bool_col2='1901';execute stmt USING @enum_col0,@blob_col1,@bool_col2;
++show status like '%Cached_plan%';
++drop prepare stmt;
++drop table tbl_1_all_type2index_desc,tbl_3_all_typeindex_desc,tbl_1_all_typeindex_desc;
++
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/mysql-test/r/session_plan_cache.result b/mysql-test/r/session_plan_cache.result
+index 61998a0b77e..efb18a53697 100644
+--- a/mysql-test/r/session_plan_cache.result
++++ b/mysql-test/r/session_plan_cache.result
+@@ -3594,4 +3594,101 @@ Cached_plan_count	1
+ Cached_plan_hits	3
+ DEALLOCATE PREPARE stmt0;
+ DROP TABLE tbtest_part;
++#
++# BUGFIX [plan_cache][asan]using the ASan pkg to start a DStore instance, find another new coredump scenerio including CTE query. (the coredump won't occur while using the release pkg)
++#
++CREATE TABLE tbl_1_all_type2index_desc (
++bool_col tinyint(1) DEFAULT NULL,
++time_col time(6) DEFAULT NULL,
++blob_col blob,
++text_col text CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci,
++enum_col enum('aaa','bbb','ccc') CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci DEFAULT NULL
++);
++Warnings:
++Warning	1681	Integer display width is deprecated and will be removed in a future release.
++Warning	1287	'utf8mb3' is deprecated and will be removed in a future release. Please use utf8mb4 instead
++Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
++Warning	1287	'utf8mb3' is deprecated and will be removed in a future release. Please use utf8mb4 instead
++Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
++CREATE TABLE tbl_3_all_typeindex_desc (
++decimal_col decimal(25,5) DEFAULT NULL,
++datetime_col datetime(6) DEFAULT NULL,
++text_col text CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci
++);
++Warnings:
++Warning	1287	'utf8mb3' is deprecated and will be removed in a future release. Please use utf8mb4 instead
++Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
++CREATE TABLE tbl_1_all_typeindex_desc (
++float_col float DEFAULT NULL,
++text_col text CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci
++);
++Warnings:
++Warning	1287	'utf8mb3' is deprecated and will be removed in a future release. Please use utf8mb4 instead
++Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
++prepare stmt from "WITH cte1 AS ( SELECT text_col,time_col FROM tbl_1_all_type2index_desc WHERE  tbl_1_all_type2index_desc.enum_col NOT BETWEEN NULL AND ? OR tbl_1_all_type2index_desc.blob_col IN (?,NULL,'a','iiiiiiiiii1') XOR tbl_1_all_type2index_desc.bool_col <> ?), cte2 AS ( SELECT cte1.text_col, tbl_3_all_typeindex_desc.decimal_col, COUNT(tbl_3_all_typeindex_desc.datetime_col) FROM cte1 left join tbl_3_all_typeindex_desc ON cte1.text_col = tbl_3_all_typeindex_desc.text_col WHERE cte1.text_col < ANY (WITH cte3 AS ( SELECT *  FROM tbl_1_all_typeindex_desc WHERE tbl_1_all_typeindex_desc.float_col IS NOT UNKNOWN) SELECT cte3.text_col FROM cte3 )GROUP BY 1,2 ORDER BY 1,2,3)SELECT * FROM cte2 ORDER BY 1,3,2;";
++flush status;
++set @enum_col0='iii2';
++set @blob_col1='a';
++set @bool_col2='2020';
++execute stmt USING @enum_col0,@blob_col1,@bool_col2;
++text_col	decimal_col	COUNT(tbl_3_all_typeindex_desc.datetime_col)
++show status like '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	0
++Cached_plan_hits	0
++set @enum_col0='i';
++set @blob_col1='iii2';
++set @bool_col2='NULL';
++execute stmt USING @enum_col0,@blob_col1,@bool_col2;
++text_col	decimal_col	COUNT(tbl_3_all_typeindex_desc.datetime_col)
++Warnings:
++Warning	1292	Truncated incorrect INTEGER value: 'NULL'
++Warning	1292	Truncated incorrect INTEGER value: 'NULL'
++Warning	1292	Truncated incorrect INTEGER value: 'NULL'
++show status like '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	1
++Cached_plan_hits	0
++set @enum_col0='NULL';
++set @blob_col1='a';
++set @bool_col2='1901';
++execute stmt USING @enum_col0,@blob_col1,@bool_col2;
++text_col	decimal_col	COUNT(tbl_3_all_typeindex_desc.datetime_col)
++show status like '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	0
++Cached_plan_hits	0
++set @enum_col0='iii2';
++set @blob_col1='a';
++set @bool_col2='2020';
++execute stmt USING @enum_col0,@blob_col1,@bool_col2;
++text_col	decimal_col	COUNT(tbl_3_all_typeindex_desc.datetime_col)
++show status like '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	0
++Cached_plan_hits	0
++set @enum_col0='i';
++set @blob_col1='iii2';
++set @bool_col2='NULL';
++execute stmt USING @enum_col0,@blob_col1,@bool_col2;
++text_col	decimal_col	COUNT(tbl_3_all_typeindex_desc.datetime_col)
++Warnings:
++Warning	1292	Truncated incorrect INTEGER value: 'NULL'
++Warning	1292	Truncated incorrect INTEGER value: 'NULL'
++Warning	1292	Truncated incorrect INTEGER value: 'NULL'
++show status like '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	1
++Cached_plan_hits	0
++set @enum_col0='NULL';
++set @blob_col1='a';
++set @bool_col2='1901';
++execute stmt USING @enum_col0,@blob_col1,@bool_col2;
++text_col	decimal_col	COUNT(tbl_3_all_typeindex_desc.datetime_col)
++show status like '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	0
++Cached_plan_hits	0
++drop prepare stmt;
++drop table tbl_1_all_type2index_desc,tbl_3_all_typeindex_desc,tbl_1_all_typeindex_desc;
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/mysql-test/suite/dstore_main/r/session_plan_cache.result b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+index 2f7e66b96b6..601afaf7ae4 100644
+--- a/mysql-test/suite/dstore_main/r/session_plan_cache.result
++++ b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+@@ -3472,4 +3472,101 @@ Cached_plan_count	1
+ Cached_plan_hits	3
+ DEALLOCATE PREPARE stmt0;
+ DROP TABLE tbtest_part;
++#
++# BUGFIX [plan_cache][asan]using the ASan pkg to start a DStore instance, find another new coredump scenerio including CTE query. (the coredump won't occur while using the release pkg)
++#
++CREATE TABLE tbl_1_all_type2index_desc (
++bool_col tinyint(1) DEFAULT NULL,
++time_col time(6) DEFAULT NULL,
++blob_col blob,
++text_col text CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci,
++enum_col enum('aaa','bbb','ccc') CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci DEFAULT NULL
++);
++Warnings:
++Warning	1681	Integer display width is deprecated and will be removed in a future release.
++Warning	1287	'utf8mb3' is deprecated and will be removed in a future release. Please use utf8mb4 instead
++Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
++Warning	1287	'utf8mb3' is deprecated and will be removed in a future release. Please use utf8mb4 instead
++Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
++CREATE TABLE tbl_3_all_typeindex_desc (
++decimal_col decimal(25,5) DEFAULT NULL,
++datetime_col datetime(6) DEFAULT NULL,
++text_col text CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci
++);
++Warnings:
++Warning	1287	'utf8mb3' is deprecated and will be removed in a future release. Please use utf8mb4 instead
++Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
++CREATE TABLE tbl_1_all_typeindex_desc (
++float_col float DEFAULT NULL,
++text_col text CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci
++);
++Warnings:
++Warning	1287	'utf8mb3' is deprecated and will be removed in a future release. Please use utf8mb4 instead
++Warning	3778	'utf8mb3_unicode_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
++prepare stmt from "WITH cte1 AS ( SELECT text_col,time_col FROM tbl_1_all_type2index_desc WHERE  tbl_1_all_type2index_desc.enum_col NOT BETWEEN NULL AND ? OR tbl_1_all_type2index_desc.blob_col IN (?,NULL,'a','iiiiiiiiii1') XOR tbl_1_all_type2index_desc.bool_col <> ?), cte2 AS ( SELECT cte1.text_col, tbl_3_all_typeindex_desc.decimal_col, COUNT(tbl_3_all_typeindex_desc.datetime_col) FROM cte1 left join tbl_3_all_typeindex_desc ON cte1.text_col = tbl_3_all_typeindex_desc.text_col WHERE cte1.text_col < ANY (WITH cte3 AS ( SELECT *  FROM tbl_1_all_typeindex_desc WHERE tbl_1_all_typeindex_desc.float_col IS NOT UNKNOWN) SELECT cte3.text_col FROM cte3 )GROUP BY 1,2 ORDER BY 1,2,3)SELECT * FROM cte2 ORDER BY 1,3,2;";
++flush status;
++set @enum_col0='iii2';
++set @blob_col1='a';
++set @bool_col2='2020';
++execute stmt USING @enum_col0,@blob_col1,@bool_col2;
++text_col	decimal_col	COUNT(tbl_3_all_typeindex_desc.datetime_col)
++show status like '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	0
++Cached_plan_hits	0
++set @enum_col0='i';
++set @blob_col1='iii2';
++set @bool_col2='NULL';
++execute stmt USING @enum_col0,@blob_col1,@bool_col2;
++text_col	decimal_col	COUNT(tbl_3_all_typeindex_desc.datetime_col)
++Warnings:
++Warning	1292	Truncated incorrect INTEGER value: 'NULL'
++Warning	1292	Truncated incorrect INTEGER value: 'NULL'
++Warning	1292	Truncated incorrect INTEGER value: 'NULL'
++show status like '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	1
++Cached_plan_hits	0
++set @enum_col0='NULL';
++set @blob_col1='a';
++set @bool_col2='1901';
++execute stmt USING @enum_col0,@blob_col1,@bool_col2;
++text_col	decimal_col	COUNT(tbl_3_all_typeindex_desc.datetime_col)
++show status like '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	0
++Cached_plan_hits	0
++set @enum_col0='iii2';
++set @blob_col1='a';
++set @bool_col2='2020';
++execute stmt USING @enum_col0,@blob_col1,@bool_col2;
++text_col	decimal_col	COUNT(tbl_3_all_typeindex_desc.datetime_col)
++show status like '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	0
++Cached_plan_hits	0
++set @enum_col0='i';
++set @blob_col1='iii2';
++set @bool_col2='NULL';
++execute stmt USING @enum_col0,@blob_col1,@bool_col2;
++text_col	decimal_col	COUNT(tbl_3_all_typeindex_desc.datetime_col)
++Warnings:
++Warning	1292	Truncated incorrect INTEGER value: 'NULL'
++Warning	1292	Truncated incorrect INTEGER value: 'NULL'
++Warning	1292	Truncated incorrect INTEGER value: 'NULL'
++show status like '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	1
++Cached_plan_hits	0
++set @enum_col0='NULL';
++set @blob_col1='a';
++set @bool_col2='1901';
++execute stmt USING @enum_col0,@blob_col1,@bool_col2;
++text_col	decimal_col	COUNT(tbl_3_all_typeindex_desc.datetime_col)
++show status like '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	0
++Cached_plan_hits	0
++drop prepare stmt;
++drop table tbl_1_all_type2index_desc,tbl_3_all_typeindex_desc,tbl_1_all_typeindex_desc;
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/sql/sql_const.h b/sql/sql_const.h
+index 8298fefcbe0..127321d1462 100644
+--- a/sql/sql_const.h
++++ b/sql/sql_const.h
+@@ -333,11 +333,10 @@ enum class enum_condition_context {
+ namespace plan_cache {
+ /// State of plan cache.
+ enum class plan_cache_state {
+-  NONE,    ///< Initial state.
+-  START,   ///< We are copying a plan for storing into the cache
+-  READY,   ///< We have stored a plan in the cache, it can be reused by later
+-           ///< queries
+-  ACTIVE,  ///< We have fetched a plan from the cache and are using it
++  NONE,   ///< Initial state.
++  START,  ///< We are copying a plan for storing into the cache
++  READY,  ///< We have stored a plan in the cache, it can be reused by later
++          ///< queries
+   UNCACHEABLE  ///< The plan which the optimizer is making now cannot be cached
+ };
+ }  // namespace plan_cache
+diff --git a/sql/sql_plan_cache.cc b/sql/sql_plan_cache.cc
+index 692d75a02a0..a436c332ae9 100644
+--- a/sql/sql_plan_cache.cc
++++ b/sql/sql_plan_cache.cc
+@@ -2008,6 +2008,8 @@ bool cache_plan(JOIN *orig_join) {
+ 
+   Clone_plan_RAII cpr(thd);
+   JOIN *join_local = new (thd->mem_root) JOIN(thd, sl);
++  // Note that this uses the default implicit copy constructor of TABLE_LIST
++  // (also used in table_access_service.cc among others).
+   auto tl = new (thd->mem_root) TABLE_LIST(*sl->leaf_tables);
+   tl->table = nullptr;
+   Open_table_context ot_ctx(thd, 0);
+@@ -2410,6 +2412,16 @@ static bool apply_cached_plan_if_suitable(THD *thd, SELECT_LEX *select_lex,
+   auto error_guard = create_scope_guard(
+       [thd, select_lex]() { invalidate_cached_plan(thd, select_lex); });
+ 
++  if (!thd->change_list.is_empty()) {
++    // We expect the change list to be empty, because we are in execution,
++    // resolution has not been re-done, and we are at the very start of
++    // optimization.But if there are multiple query blocks (like subqueries)
++    // another query block may have started its optimization and filled the
++    // changed list. If not empty, we would not know how to undo (in case of
++    // error) only the changes which apply_cached_plan() is about to do.
++    return true;
++  }
++
+   // Checked when we cached plan, checked again when we reuse cached plan:
+   if (tl->table->s->is_secondary_engine()) {
+     trace.add("used", false);
+@@ -2481,7 +2493,7 @@ static bool refix_table(JOIN *join, TABLE *table) {
+                        true);
+   if (cond != nullptr) {
+     auto keyno = join->plan_cache_exec_context->pushed_idx_cond_keyno;
+-    auto not_pushed = table->file->idx_cond_push(keyno, cond);
++    auto not_pushed [[maybe_unused]] = table->file->idx_cond_push(keyno, cond);
+     // Verify that the engine accepted our request
+     assert(not_pushed == nullptr &&
+            keyno == table->file->pushed_idx_cond_keyno &&
+@@ -2516,14 +2528,6 @@ bool exec_cached_plan(SELECT_LEX *sl) {
+   Opt_trace_object trace_plan_cache(trace, "apply_cached_plan");
+   // LIMIT is required for optimization
+   if (sl->master_query_expression()->set_limit(thd, sl)) return true;
+-  if (!thd->change_list.is_empty()) {
+-    // We expect the change list to be empty, because we are in execution,
+-    // resolution has not been re-done, and we are at the very start of
+-    // optimization. If not empty, we would not know how to undo (in case of
+-    // error) only the changes which apply_cached_plan() is about to do.
+-    assert(false);
+-    return true;
+-  }
+ 
+   if (apply_cached_plan_if_suitable(thd, sl, trace_plan_cache)) return true;
+ 
+@@ -2838,7 +2842,8 @@ void collect_item_params(Item *item, std::set<Item *> &params) {
+   No need to compare types (as in plan_cache::has_same_type_and_item_params),
+   because condition optimization didn't change them.
+ */
+-void cmp_item_params_after_reduce_cond(THD *thd, std::set<Item *> old_params,
++void cmp_item_params_after_reduce_cond(THD *thd,
++                                       const std::set<Item *> &old_params,
+                                        Item *condition) {
+   if (!thd->variables.rds_plan_cache || old_params.empty()) return;
+ 
+diff --git a/sql/sql_plan_cache.h b/sql/sql_plan_cache.h
+index 7c214f17620..609c6586c00 100644
+--- a/sql/sql_plan_cache.h
++++ b/sql/sql_plan_cache.h
+@@ -131,7 +131,8 @@ bool is_clone_for_plan_cache(const Query_block *sl);
+ void invalidate_cached_plan(THD *thd, Query_block *select);
+ bool emulates_hint(const THD *thd, opt_hints_enum hint);
+ void restore_param_snapshot_clones(LEX *lex);
+-void cmp_item_params_after_reduce_cond(THD *thd, std::set<Item *> old_params,
++void cmp_item_params_after_reduce_cond(THD *thd,
++                                       const std::set<Item *> &old_params,
+                                        Item *condition);
+ }  // namespace plan_cache
+ #endif  // PLAN_CACHE_INCLUDE_H
+-- 
+2.23.0
+

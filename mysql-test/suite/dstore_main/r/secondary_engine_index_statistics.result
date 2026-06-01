@@ -1,0 +1,153 @@
+CREATE TABLE t1(id INT PRIMARY KEY, x INT, y INT, KEY (x))
+SECONDARY_ENGINE MOCK;
+INSERT INTO t1 VALUES
+(1, 1, 1),
+(2, 1, 1),
+(3, 1, 1),
+(4, 1, 1),
+(5, 1, 1),
+(6, 1, 1),
+(7, 1, 1),
+(8, 2, 2),
+(9, 2, 2),
+(10, 3, 3);
+ALTER TABLE t1 SECONDARY_LOAD;
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+# Uses the primary index to determine 10% filtering effect (one row).
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE id = 1;
+EXPLAIN
+-> Rows fetched before execution  (rows=1)
+
+# Uses the secondary index to determine 70% filtering effect (matches
+# rows 1 to 7).
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE x = 1;
+EXPLAIN
+-> Index lookup on t1 using x (x=1)  (rows=7)
+
+# Uses the secondary index to determine 20% filtering effect (matches
+# rows 8 and 9).
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE x = 2;
+EXPLAIN
+-> Index lookup on t1 using x (x=2)  (rows=2)
+
+# Uses the secondary index to determine 10% filtering effect (matches
+# row 10).
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE x = 3;
+EXPLAIN
+-> Index lookup on t1 using x (x=3)  (rows=1)
+
+# No index on y, so a heuristic is used for the filtering effect.
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE y = 1;
+EXPLAIN
+-> Filter: (t1.y = 1)  (rows=1)
+    -> Table scan on t1, with pushed condition: (t1.y = 1)  (rows=10)
+
+# Ignoring indexes cause heuristics to be used.
+EXPLAIN FORMAT=TREE SELECT * FROM t1 USE INDEX () WHERE id = 1;
+EXPLAIN
+-> Filter: (t1.id = 1)  (rows=1)
+    -> Table scan on t1, with pushed condition: (t1.id = 1)  (rows=10)
+
+EXPLAIN FORMAT=TREE SELECT * FROM t1 USE INDEX () WHERE x = 1;
+EXPLAIN
+-> Filter: (t1.x = 1)  (rows=3)
+    -> Table scan on t1, with pushed condition: (t1.x = 1)  (rows=10)
+
+EXPLAIN FORMAT=TREE SELECT * FROM t1 IGNORE INDEX (PRIMARY) WHERE id = 1;
+EXPLAIN
+-> Filter: (t1.id = 1)  (rows=1)
+    -> Table scan on t1, with pushed condition: (t1.id = 1)  (rows=10)
+
+EXPLAIN FORMAT=TREE SELECT * FROM t1 IGNORE INDEX (x) WHERE x = 1;
+EXPLAIN
+-> Filter: (t1.x = 1)  (rows=3)
+    -> Table scan on t1, with pushed condition: (t1.x = 1)  (rows=10)
+
+# No matching rows. Rounds up estimates to one matching row (10%).
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE id = 100;
+EXPLAIN
+-> Zero rows (no matching row in const table)  (rows=0)
+
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE x = 100;
+EXPLAIN
+-> Index lookup on t1 using x (x=100)  (rows=1)
+
+# Matches two rows in the primary index (20%).
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE id = 3 OR id = 7;
+EXPLAIN
+-> Index range scan on t1 using PRIMARY over (id = 3) OR (id = 7), with index condition: ((t1.id = 3) or (t1.id = 7))  (rows=2)
+
+# Matches three rows in the secondary index (30%).
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE x = 2 OR x = 3;
+EXPLAIN
+-> Index range scan on t1 using x over (x = 2) OR (x = 3), with index condition: ((t1.x = 2) or (t1.x = 3))  (rows=3)
+
+# Matches all rows in the secondary index (100%).
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE x = 1 OR x = 2 OR x = 3;
+EXPLAIN
+-> Index range scan on t1 using x over (x = 1) OR (x = 2) OR (x = 3), with index condition: ((t1.x = 1) or (t1.x = 2) or (t1.x = 3))  (rows=10)
+
+# Ranges in the primary index.
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE id > 0;
+EXPLAIN
+-> Index range scan on t1 using PRIMARY over (0 < id)  (rows=10)
+
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE id > 1;
+EXPLAIN
+-> Index range scan on t1 using PRIMARY over (1 < id)  (rows=9)
+
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE id > 3;
+EXPLAIN
+-> Index range scan on t1 using PRIMARY over (3 < id)  (rows=7)
+
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE id > 9;
+EXPLAIN
+-> Index range scan on t1 using PRIMARY over (9 < id)  (rows=1)
+
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE id > 10;
+EXPLAIN
+-> Index range scan on t1 using PRIMARY over (10 < id)  (rows=1)
+
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE id < 1;
+EXPLAIN
+-> Index range scan on t1 using PRIMARY over (id < 1)  (rows=1)
+
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE id < 3;
+EXPLAIN
+-> Index range scan on t1 using PRIMARY over (id < 3)  (rows=2)
+
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE id < 10;
+EXPLAIN
+-> Index range scan on t1 using PRIMARY over (id < 10)  (rows=9)
+
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE id BETWEEN 3 AND 7;
+EXPLAIN
+-> Index range scan on t1 using PRIMARY over (3 <= id <= 7)  (rows=5)
+
+# Ranges in the secondary index.
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE x < 1;
+EXPLAIN
+-> Index range scan on t1 using x over (NULL < x < 1)  (rows=1)
+
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE x < 2;
+EXPLAIN
+-> Index range scan on t1 using x over (NULL < x < 2)  (rows=7)
+
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE x < 3;
+EXPLAIN
+-> Index range scan on t1 using x over (NULL < x < 3)  (rows=9)
+
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE x < 4;
+EXPLAIN
+-> Index range scan on t1 using x over (NULL < x < 4)  (rows=10)
+
+EXPLAIN FORMAT=TREE SELECT * FROM t1 WHERE x BETWEEN 1 AND 2;
+EXPLAIN
+-> Index range scan on t1 using x over (1 <= x <= 2)  (rows=9)
+
+# Indexes should only be used during optimization. Verify that the
+# execution plan for this query does not use DYNAMIC RANGE access.
+# (No occurrence of "Range checked for each record" in the plan.)
+DROP TABLE t1;

@@ -1,0 +1,267 @@
+#
+# CDE
+#
+use test;
+
+--source include/have_debug.inc
+--source include/have_debug_sync.inc
+ 
+use test;
+
+--echo #
+--echo # test concurrent access dict sys cache by multithread, ensure function is correct.
+--echo #
+connect (con1, localhost, root,,);
+connect (con2, localhost, root,,);
+ 
+# execute query and create concurrently
+connection con1;
+create table q_c_t1 (a int not null);
+SET DEBUG_SYNC = 'AddTableEntryWait WAIT_FOR unexists_signal TIMEOUT 1';
+send create table q_c_t2 (a int not null);
+ 
+connection con2;
+--sleep 0.5
+select * from q_c_t1;
+ 
+connection con1;
+reap;
+ 
+SET DEBUG_SYNC = 'RESET';
+DROP TABLE if exists q_c_t1;
+DROP TABLE if exists q_c_t2;
+ 
+# execute query and rename concurrently
+connection con1;
+create table q_r_t1 (a int not null);
+SET DEBUG_SYNC = 'RenameTableEntryWait WAIT_FOR unexists_signal TIMEOUT 1';
+send RENAME TABLE q_r_t1 TO q_r_t3;
+ 
+connection con2;
+--sleep 0.5
+select * from q_r_t3;
+ 
+connection con1;
+reap;
+ 
+SET DEBUG_SYNC = 'RESET';
+DROP TABLE if exists q_r_t1;
+DROP TABLE if exists q_r_t3;
+ 
+# execute query and drop concurrently
+connection con1;
+create table q_d_t1 (a int not null);
+create table q_d_t2 (a int not null);
+SET DEBUG_SYNC = 'RemoveTableEntryBegin WAIT_FOR unexists_signal TIMEOUT 1';
+send drop TABLE q_d_t1;
+ 
+connection con2;
+select * from q_d_t2;
+ 
+connection con1;
+reap;
+ 
+SET DEBUG_SYNC = 'RESET';
+DROP TABLE if exists q_d_t1;
+DROP TABLE if exists q_d_t2;
+ 
+# execute create and create concurrently
+connection con1;
+SET DEBUG_SYNC = 'AddTableEntryWait WAIT_FOR unexists_signal TIMEOUT 1 EXECUTE 1';
+send create table c_c_t1 (a int not null);
+ 
+connection con2;
+create table c_c_t2 (a int not null);
+ 
+connection con1;
+reap;
+ 
+SET DEBUG_SYNC = 'RESET';
+DROP TABLE if exists c_c_t1;
+DROP TABLE if exists c_c_t2;
+ 
+# execute create and rename concurrently
+connection con1;
+create table c_r_t1 (a int not null);
+SET DEBUG_SYNC = 'RenameTableEntryWait WAIT_FOR unexists_signal TIMEOUT 1';
+send RENAME TABLE c_r_t1 TO c_r_t3;
+ 
+connection con2;
+--sleep 0.5
+create table c_r_t2 (a int not null);
+ 
+connection con1;
+reap;
+ 
+SET DEBUG_SYNC = 'RESET';
+DROP TABLE if exists c_r_t1;
+DROP TABLE if exists c_r_t2;
+DROP TABLE if exists c_r_t3;
+ 
+# execute create and drop concurrently
+connection con1;
+create table c_d_t1 (a int not null);
+SET DEBUG_SYNC = 'RemoveTableEntryBegin WAIT_FOR unexists_signal TIMEOUT 1';
+send drop TABLE c_d_t1;
+ 
+connection con2;
+create table c_d_t2 (a int not null);
+ 
+connection con1;
+reap;
+ 
+SET DEBUG_SYNC = 'RESET';
+DROP TABLE if exists c_d_t1;
+DROP TABLE if exists c_d_t2;
+ 
+# execute rename and rename concurrently
+connection con1;
+create table r_r_t1 (a int not null);
+create table r_r_t2 (a int not null);
+SET DEBUG_SYNC = 'RenameTableEntryWait WAIT_FOR unexists_signal TIMEOUT 1';
+send RENAME TABLE r_r_t1 TO r_r_t3;
+ 
+connection con2;
+RENAME TABLE r_r_t2 TO r_r_t4;
+ 
+connection con1;
+reap;
+ 
+SET DEBUG_SYNC= 'RESET';
+DROP TABLE if exists r_r_t1;
+DROP TABLE if exists r_r_t2;
+DROP TABLE if exists r_r_t3;
+DROP TABLE if exists r_r_t4;
+ 
+ 
+# execute rename and drop concurrently
+connection con1;
+create table r_d_t1 (a int not null);
+create table r_d_t2 (a int not null);
+SET DEBUG_SYNC = 'RemoveTableEntryBegin WAIT_FOR unexists_signal TIMEOUT 1';
+send drop TABLE r_d_t1;
+ 
+connection con2;
+RENAME TABLE r_d_t2 TO r_d_t3;
+ 
+connection con1;
+reap;
+ 
+SET DEBUG_SYNC= 'RESET';
+DROP TABLE if exists r_d_t1;
+DROP TABLE if exists r_d_t2;
+DROP TABLE if exists r_d_t3;
+ 
+ 
+# execute drop and drop concurrently
+connection con1;
+create table d_d_t1 (a int not null);
+create table d_d_t2 (a int not null);
+SET DEBUG_SYNC = 'RemoveTableEntryBegin WAIT_FOR unexists_signal TIMEOUT 1';
+send drop TABLE d_d_t1;
+ 
+connection con2;
+drop TABLE d_d_t2;
+ 
+connection con1;
+reap;
+ 
+SET DEBUG_SYNC= 'RESET';
+DROP TABLE if exists d_d_t1;
+DROP TABLE if exists d_d_t2;
+ 
+# execute alter table concurrently
+connection con1;
+create table a_a_t1 (a int not null);
+create table a_a_t2 (a int not null);
+ 
+SET DEBUG_SYNC = 'RemoveTableEntryBegin WAIT_FOR unexists_signal TIMEOUT 1';
+SET DEBUG_SYNC = 'RenameTableEntryWait WAIT_FOR unexists_signal TIMEOUT 1';
+ 
+# alter diff tables
+send ALTER TABLE a_a_t1 ADD COLUMN b VARCHAR(100) NOT NULL DEFAULT '', ALGORITHM=COPY;
+connection con2;
+ALTER TABLE a_a_t2 ADD COLUMN c VARCHAR(100) NOT NULL DEFAULT '', ALGORITHM=COPY;
+ 
+connection con1;
+reap;
+ 
+# alter same tables
+connection con1;
+send ALTER TABLE a_a_t1 ADD COLUMN c VARCHAR(100) NOT NULL DEFAULT '';
+connection con2;
+ALTER TABLE a_a_t1 ADD COLUMN d VARCHAR(100) NOT NULL DEFAULT '';
+ 
+connection con1;
+reap;
+ 
+SET DEBUG_SYNC= 'RESET';
+DROP TABLE if exists a_a_t1;
+DROP TABLE if exists a_a_t2;
+ 
+ 
+# execute drop and bg stat table concurrently
+SET DEBUG_SYNC = 'RemoveTableEntryEnd SIGNAL resume_bg_stat_sig';
+ 
+SET GLOBAL DEBUG='+d,bg_stat_after_get_table_wait';
+create table d_bgstat_t1 (a int not null);
+insert into d_bgstat_t1 values (1);
+insert into d_bgstat_t1 values (2);
+insert into d_bgstat_t1 values (3);
+--sleep 2
+SET GLOBAL DEBUG='-d,bg_stat_after_get_table_wait';
+ 
+drop table d_bgstat_t1;
+ 
+SET DEBUG_SYNC= 'RESET';
+
+# test rename repeatedly, ensure no crash.
+create table t0 SELECT 1,"table 1";
+create table t2 SELECT 2,"table 2";
+create table t3 SELECT 3,"table 3";
+
+--error ER_NO_SUCH_TABLE
+rename table t3 to t4, t2 to t3, t1 to t2;
+show tables like "t_";
+
+drop table t0;
+drop table t2;
+drop table t3;
+
+create table t1 (a int not null);
+insert into t1 values (1);
+--source include/restart_mysqld.inc
+
+CALL mtr.add_suppression(".*open table name =.*");
+CALL mtr.add_suppression(".*can't open table:.*");
+SET SESSION DEBUG='+d,dd_table_load_foreign_key_failed';
+--error ER_NO_SUCH_TABLE
+select * from t1;
+SET SESSION DEBUG='-d,dd_table_load_foreign_key_failed';
+
+select * from t1;
+drop table if exists t1;
+
+# test restart mysqld, ensure data persist.
+create table t1 (a int not null);
+insert into t1 values (1);
+insert into t1 values (2);
+insert into t1 values (3);
+
+--source include/restart_mysqld.inc
+
+use test;
+
+--error ER_TABLE_EXISTS_ERROR
+create table t1 (a int not null);
+
+create table t2 (a int not null);
+insert into t2 values (5);
+insert into t2 values (6);
+
+delete from t1 where a = 1;
+
+select * from t1;
+select * from t2;
+drop table t1;
+drop table t2;

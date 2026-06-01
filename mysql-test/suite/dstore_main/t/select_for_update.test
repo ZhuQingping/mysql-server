@@ -1,0 +1,105 @@
+--source include/have_only_dstore.inc
+
+let $initial_timeout=`select @@dstore_lock_wait_timeout`;
+set global dstore_lock_wait_timeout = 5;
+
+# BUG2025090500797 Under the repeatable read and read committed
+# isolation level, a SELECT FOR UPDATE not block an UPDATE operation. 
+connect (conn1,localhost,root,,);
+connect (conn2,localhost,root,,);
+
+connection default;
+CREATE TABLE tab_parent_hwsql_new_feature_sql_filter_017 (id INT NOT NULL, PRIMARY KEY (id)) ENGINE=dstore;
+INSERT into tab_parent_hwsql_new_feature_sql_filter_017 values(1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(11),(12),(13),(14),(15),(16),(17),(18),(19),(20),(21);
+
+### case 1 Under the repeatable read isolation level, a SELECT FOR UPDATE must block an UPDATE operation.
+connection conn1;
+SET TRANSACTION_ISOLATION='REPEATABLE-READ';
+BEGIN;
+SELECT * from tab_parent_hwsql_new_feature_sql_filter_017 FOR UPDATE;
+
+connection conn2;
+SET TRANSACTION_ISOLATION='REPEATABLE-READ';
+
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE tab_parent_hwsql_new_feature_sql_filter_017 SET id=id+1 WHERE id >=21;
+
+connection conn1;
+SELECT * from tab_parent_hwsql_new_feature_sql_filter_017 FOR UPDATE;
+COMMIT;
+
+
+### case 1 Under the read committed isolation level, a SELECT FOR UPDATE must block an UPDATE operation.
+connection conn1;
+SET TRANSACTION_ISOLATION='READ-COMMITTED';
+BEGIN;
+SELECT * from tab_parent_hwsql_new_feature_sql_filter_017 FOR UPDATE;
+
+connection conn2;
+SET TRANSACTION_ISOLATION='READ-COMMITTED';
+
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE tab_parent_hwsql_new_feature_sql_filter_017 SET id=id+1 WHERE id >=21;
+
+connection conn1;
+SELECT * from tab_parent_hwsql_new_feature_sql_filter_017 FOR UPDATE;
+COMMIT;
+
+### clean data
+connection default;
+DROP TABLE tab_parent_hwsql_new_feature_sql_filter_017;
+
+# BUG2025080830282 Under the SERIALIZABLE isolation level, a SELECT FOR SHARE must block anthoer SELECT FOR SHARE.
+
+connection default;
+CREATE TABLE t0(c0 DOUBLE  COMMENT 'asdf'  UNIQUE KEY PRIMARY KEY NOT NULL COLUMN_FORMAT DYNAMIC STORAGE DISK) ENGINE=dstore;
+INSERT INTO t0(c0) VALUES(1085561577);
+INSERT IGNORE INTO t0(c0) VALUES(1.085561577E9);
+INSERT LOW_PRIORITY IGNORE INTO t0(c0) VALUES(NULL);
+INSERT DELAYED IGNORE INTO t0(c0) VALUES(1085561577), (NULL), ("1085561577");
+INSERT DELAYED IGNORE INTO t0(c0) VALUES(90458813);
+
+connection conn1;
+SET TRANSACTION_ISOLATION='SERIALIZABLE';
+BEGIN;
+SELECT DISTINCT t0.c0 FROM t0 FOR SHARE;
+
+connection conn2;
+SET TRANSACTION_ISOLATION='SERIALIZABLE';
+BEGIN;
+--error ER_LOCK_WAIT_TIMEOUT
+SELECT t0.c0 FROM t0 FOR SHARE;
+
+connection conn1;
+COMMIT;
+
+connection conn2;
+ROLLBACK;
+
+connection default;
+DROP TABLE t0;
+
+connection default;
+CREATE TABLE t1(c1 INT, c2 INT, PRIMARY KEY(c1));
+INSERT INTO t1 VALUES(1,1),(2,2);
+
+connection conn1;
+SET TRANSACTION_ISOLATION='READ-COMMITTED';
+BEGIN;
+DELETE FROM t1 WHERE c2 = 1;
+
+connection conn2;
+SET TRANSACTION_ISOLATION='READ-COMMITTED';
+--send
+SELECT c1 FROM t1 FOR UPDATE;
+
+connection conn1;
+COMMIT;
+
+connection conn2;
+--reap
+
+connection default;
+DROP TABLE t1;
+
+eval set global dstore_lock_wait_timeout=$initial_timeout;

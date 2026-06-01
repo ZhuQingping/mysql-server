@@ -1,0 +1,282 @@
+# ==== Purpose ====
+#
+# The test case is used to test the permission access control
+# to internal databases including `I_S`, `P_S`, `mysql`, `sys`:
+#  - Users (non-built-in user and non-super user) are not allowed 
+#    to perform DML(insert, update, delete) operations on table in 
+#    internal databases while rds_internal_schema_dml_control
+#    is ON
+#  - Users (non-built-in user and non-super user) are allowed to
+#    perform DML(insert, update, delete) operations on table in
+#    internal databases while rds_internal_schema_dml_control
+#    is OFF
+#  - Built-in users or user with super privilege are allowed to
+#    perform DML(insert, update, delete) operations on table in
+#    internal databases no matter rds_internal_schema_dml_control
+#    is ON or OFF
+#
+# ==== Implementation ====
+#
+# 1. prepare some reserved users and some ordinary users
+# 2. SET rds_internal_schema_dml_control=ON, appoint ordinary user
+#    perform DML on tables in internal databases
+# 3. appoint built-in user and user with super privilege perform
+#    DML on tables in internal databases
+# 4. SET rds_internal_schema_dml_control=OFF, appoint ordinary user
+#    perform DML on tables in internal databases
+#
+
+--source include/count_sessions.inc
+SET @default_rds_permission_control = @@GLOBAL.rds_permission_control;
+SET @default_rds_internal_schema_dml_control = @@GLOBAL.rds_internal_schema_dml_control;
+SHOW GLOBAL VARIABLES LIKE 'rds_permission_control';
+SHOW GLOBAL VARIABLES LIKE 'rds_internal_schema_dml_control';
+SHOW GLOBAL VARIABLES LIKE 'rds_reserved_users';
+connection default;
+
+# create user root1, who has the same permissions as root in the production environment
+CREATE USER 'root1'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, REFERENCES, INDEX, ALTER, SHOW DATABASES, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER ON *.* TO 'root1'@'%' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+
+# create super user super_user
+CREATE USER 'super_user'@'%' IDENTIFIED BY '123456';
+GRANT SUPER ON *.* TO 'super_user'@'%' WITH GRANT OPTION;
+GRANT ALL PRIVILEGES ON *.* TO 'super_user'@'%';
+FLUSH PRIVILEGES;
+
+--echo # connect root1
+connect(conn1,localhost,root1,123456,);
+
+
+#        > test 1: Users (non-built-in user and non-super user) are not
+#                  allowed to execute insert on tables in the internal 
+#                  databases(`sys`, `mysql`) while both rds_permission_control 
+#                  and rds_internal_schema_dml_control are ON
+#-------------------------------------------------------------------------------
+
+# for 'mysql'
+--echo # test 'mysql' db
+use mysql;
+--error ER_DBACCESS_DENIED_ERROR
+INSERT INTO help_topic VALUES(644, 'TRY', 40, 'TRY', NULL, NULL);
+
+# for 'sys'
+--echo # test 'sys' db
+use sys;
+--error ER_DBACCESS_DENIED_ERROR
+INSERT INTO version values('1.5.2', '5.7.38.2207');
+--error ER_DBACCESS_DENIED_ERROR
+INSERT INTO metrics values('TEST()', 0, 'System Time', 'YES');
+
+
+#        > test 2: Users (non-built-in user and non-super user) are not
+#                  allowed to execute update on tables in the internal 
+#                  databases(`sys`, `mysql`) while both rds_permission_control
+#                  and rds_internal_schema_dml_control are ON
+#-------------------------------------------------------------------------------
+
+# for 'mysql'
+--echo # test 'mysql' db
+use mysql;
+--error ER_DBACCESS_DENIED_ERROR
+UPDATE db SET Insert_priv = 'Y' WHERE Db = 'sys';
+--error ER_DBACCESS_DENIED_ERROR
+UPDATE user SET Insert_priv = 'Y' WHERE User = 'mysql.sys';
+--error ER_DBACCESS_DENIED_ERROR
+UPDATE server_cost SET comment = 'try to update' WHERE cost_name = 'disk_temptable_row_cost';
+
+# for 'sys'
+--echo # test 'sys' db
+use sys;
+--error ER_DBACCESS_DENIED_ERROR
+UPDATE version SET sys_version = '8.8.8';
+--error ER_DBACCESS_DENIED_ERROR
+UPDATE x$session SET program_name = 'RDS' WHERE db = 'sys';
+
+
+#        > test 3: Users (non-built-in user and non-super user) are not
+#                  allowed to execute delete on tables in the internal
+#                  databases(`sys`, `mysql`) while both rds_permission_control
+#                  and rds_internal_schema_dml_control are ON
+#-------------------------------------------------------------------------------
+
+# for 'mysql'
+--echo # test 'mysql' db
+use mysql;
+--error ER_DBACCESS_DENIED_ERROR
+DELETE FROM tables_priv WHERE Db = 'mysql';
+--error ER_DBACCESS_DENIED_ERROR
+DELETE FROM user WHERE User = 'mysql.sys';
+
+# for 'sys'
+--echo # test 'sys' db
+use sys;
+--error ER_DBACCESS_DENIED_ERROR
+DELETE FROM x$user_summary WHERE user = 'background';
+--error ER_DBACCESS_DENIED_ERROR
+DELETE FROM x$waits_global_by_latency WHERE events = 'wait/io/file/sql/pid';
+
+
+#        > test 4: SUPER user can operate DML on tables in the internal 
+#                  database(`mysql`) while both rds_permission_control 
+#                  and rds_internal_schema_dml_control are ON
+#-------------------------------------------------------------------------------
+
+connection default;
+SET @@GLOBAL.rds_permission_control = 'ON';
+SET @@GLOBAL.rds_internal_schema_dml_control = 'ON';
+--echo # connect super
+connect(conn2,localhost,super_user,123456,);
+
+# for 'mysql'
+--echo # test 'mysql' db
+use mysql;
+
+# insert
+INSERT INTO help_keyword VALUES(6666,'TEST');
+
+# delete
+DELETE FROM help_keyword WHERE name = 'TEST';
+
+# update
+UPDATE user SET Insert_priv = 'Y' WHERE User = 'mysql.sys';
+UPDATE user SET Insert_priv = 'N' WHERE User = 'mysql.sys';
+
+
+#        > test 5: reserved user can operate DML on tables in the internal
+#                  database(`mysql`) while both rds_permission_control
+#                  and rds_internal_schema_dml_control are ON
+#-------------------------------------------------------------------------------
+
+# prepare reserved user
+connection default;
+CREATE USER 'reserved_user1'@'%' IDENTIFIED BY 're123456';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, REFERENCES, INDEX, ALTER, SHOW DATABASES, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER ON *.* TO 'reserved_user1'@'%' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+--echo # connect reserved_user1
+connect(conn3,localhost,reserved_user1,re123456,);
+
+# for 'mysql'
+--echo # test 'mysql' db
+use mysql;
+
+# insert
+INSERT INTO help_keyword VALUES(6666,'TEST');
+
+# delete
+DELETE FROM help_keyword WHERE name = 'TEST';
+
+# update
+UPDATE user SET Insert_priv = 'Y' WHERE User = 'mysql.sys';
+UPDATE user SET Insert_priv = 'N' WHERE User = 'mysql.sys';
+
+
+#        > test 6: Users (non-built-in user and non-super user) are 
+#                  allowed to operate DML on tables in the internal 
+#                  database(`mysql`) while rds_permission_control is 
+#                  ON but rds_internal_schema_dml_control is OFF
+#-------------------------------------------------------------------------------
+
+disconnect conn1;
+connection default;
+SET @@GLOBAL.rds_internal_schema_dml_control = 'OFF';
+--echo # connect root1
+connect(conn1,localhost,root1,123456,);
+
+# for 'mysql'
+--echo # test 'mysql' db
+use mysql;
+
+# insert
+INSERT INTO help_keyword VALUES(6666,'TEST');
+
+# delete
+DELETE FROM help_keyword WHERE name = 'TEST';
+
+# update
+UPDATE user SET Insert_priv = 'Y' WHERE User = 'mysql.sys';
+UPDATE user SET Insert_priv = 'N' WHERE User = 'mysql.sys';
+
+
+#        > test 7: Users (non-built-in user and non-super user) are
+#                  allowed to operate DML on tables in the internal
+#                  database(`mysql`) while rds_permission_control is
+#                  OFF but rds_internal_schema_dml_control is ON
+#-------------------------------------------------------------------------------
+
+disconnect conn1;
+connection default;
+SET @@GLOBAL.rds_permission_control = 'OFF';
+SET @@GLOBAL.rds_internal_schema_dml_control = 'ON';
+--echo # connect root1
+connect(conn1,localhost,root1,123456,);
+
+# for 'mysql'
+--echo # test 'mysql' db
+use mysql;
+
+# insert
+INSERT INTO help_keyword VALUES(6666,'TEST');
+
+# delete
+DELETE FROM help_keyword WHERE name = 'TEST';
+
+# update
+UPDATE user SET Insert_priv = 'Y' WHERE User = 'mysql.sys';
+UPDATE user SET Insert_priv = 'N' WHERE User = 'mysql.sys';
+
+
+#        > test 8: Users (non-built-in user and non-super user) are
+#                  allowed to use built-in operations on user tables
+#                  while rds_permission_control is ON
+#                  and rds_internal_schema_dml_control is ON
+#-------------------------------------------------------------------------------
+
+disconnect conn1;
+
+connection default;
+SET @@GLOBAL.rds_permission_control = 'ON';
+SET @@GLOBAL.rds_internal_schema_dml_control = 'ON';
+--echo # connect root1
+connect(conn1,localhost,root1,123456,);
+
+# create user
+create user test001@'%' IDENTIFIED by 'Fnst@123';
+
+# grant user
+grant SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,INDEX,ALTER,CREATE TEMPORARY TABLES,LOCK TABLES,EXECUTE,CREATE VIEW,SHOW VIEW,CREATE ROUTINE,ALTER ROUTINE,EVENT,TRIGGER,REPLICATION SLAVE,REPLICATION CLIENT,reload on *.* TO 'test001'@'%' WITH GRANT OPTION;
+
+flush privileges;
+
+# set password
+set password for test001 = '*6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9';
+
+# revoke user
+revoke SELECT on *.* from test001@'%';
+
+# alter user
+alter user 'test001' IDENTIFIED by 'Fnst@123';
+
+# revoke all
+revoke ALL PRIVILEGES, GRANT OPTION FROM test001@'%';
+
+# rename user
+rename user test001 to test002;
+
+# drop user
+drop user test002;
+
+
+# end
+--disable_warnings
+connection default;
+SET @@GLOBAL.rds_permission_control = @default_rds_permission_control;
+SET @@GLOBAL.rds_internal_schema_dml_control = @default_rds_internal_schema_dml_control;
+disconnect conn1;
+disconnect conn2;
+disconnect conn3;
+DROP USER super_user, root1, reserved_user1;
+--enable_warnings
+--source include/wait_until_count_sessions.inc
+source include/force_restart.inc;

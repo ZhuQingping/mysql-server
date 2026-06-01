@@ -1,0 +1,83 @@
+From f8325f6074b2e912142297681212ae344a001cd9 Mon Sep 17 00:00:00 2001
+From: wuwenbin <wuwenbin19@contributor>
+
+Date: Mon, 1 Sep 2025 17:26:38 +0800
+Subject: [PATCH] Crash caused by TABLE::in_use being a null
+ pointer
+
+Issue:
+------
+In the current scenario, TABLE::in_use is a null pointer, causing a crash when obtaining the mem_root.
+
+Solution:
+---------
+The issue has been fixed in an commit([internal-git-removed] on MySQL. The commit also backported a community fix, and the problem no longer exists in version 8.0.41. However, since PTRC is a backported feature, this fix was not included during its initial integration.
+Changing the method of obtaining the thd by using current_thd can resolve the PTRC issue.
+---
+ mysql-test/suite/ptrc/r/ptrc_bugs.result | 12 ++++++++++++
+ mysql-test/suite/ptrc/t/ptrc_bugs.test   | 11 +++++++++++
+ sql/partial_result_cache.cc              |  2 +-
+ 3 files changed, 24 insertions(+), 1 deletion(-)
+
+diff --git a/mysql-test/suite/ptrc/r/ptrc_bugs.result b/mysql-test/suite/ptrc/r/ptrc_bugs.result
+index 3727df88ced..a4034c9f79a 100644
+--- a/mysql-test/suite/ptrc/r/ptrc_bugs.result
++++ b/mysql-test/suite/ptrc/r/ptrc_bugs.result
+@@ -948,3 +948,15 @@ WHERE EXISTS (SELECT 1 FROM t1 JOIN t2 ON t2.c0 = t1.c0 JOIN (SELECT 1 FROM t0 G
+ 1
+ DROP TABLE t0, t1;
+ DROP VIEW t2;
++#
++# BUGFIX: Crash caused by TABLE::in_use being a null pointer
++#
++CREATE TABLE t1 (a smallint);
++CREATE TABLE t2 (a smallint);
++SELECT col2 FROM (SELECT a AS col2 FROM t2 GROUP BY a)b WHERE b.col2 = ALL ( SELECT a FROM t1);
++col2
++PREPARE stmt0 FROM 'SELECT col2 FROM (SELECT a AS col2 FROM t2 GROUP BY a)b WHERE b.col2 = ALL ( SELECT a FROM t1)';
++EXECUTE stmt0;
++col2
++drop table t1;
++drop table t2;
+diff --git a/mysql-test/suite/ptrc/t/ptrc_bugs.test b/mysql-test/suite/ptrc/t/ptrc_bugs.test
+index 4e50ddb4ee3..e842087c726 100644
+--- a/mysql-test/suite/ptrc/t/ptrc_bugs.test
++++ b/mysql-test/suite/ptrc/t/ptrc_bugs.test
+@@ -856,3 +856,14 @@ SELECT DISTINCT 1 FROM (SELECT 1 FROM (SELECT 1) w(w) GROUP BY w.w) x(x) JOIN (S
+ WHERE EXISTS (SELECT 1 FROM t1 JOIN t2 ON t2.c0 = t1.c0 JOIN (SELECT 1 FROM t0 GROUP BY t0.c0) z(z) ON z.z = t1.c0 WHERE t1.c0 = t1.c0);
+ DROP TABLE t0, t1;
+ DROP VIEW t2;
++
++--echo #
++--echo # BUGFIX: Crash caused by TABLE::in_use being a null pointer
++--echo #
++CREATE TABLE t1 (a smallint);
++CREATE TABLE t2 (a smallint);
++SELECT col2 FROM (SELECT a AS col2 FROM t2 GROUP BY a)b WHERE b.col2 = ALL ( SELECT a FROM t1);
++PREPARE stmt0 FROM 'SELECT col2 FROM (SELECT a AS col2 FROM t2 GROUP BY a)b WHERE b.col2 = ALL ( SELECT a FROM t1)';
++EXECUTE stmt0;
++drop table t1;
++drop table t2;
+diff --git a/sql/partial_result_cache.cc b/sql/partial_result_cache.cc
+index 7b8431d3397..8fb7652537e 100644
+--- a/sql/partial_result_cache.cc
++++ b/sql/partial_result_cache.cc
+@@ -114,6 +114,7 @@ class PtrcMemRoot {
+ 
+ static bool fill_table_collection(std::set<Field *> *cols,
+                                   std::set<pack_rows::Table *> *tables) {
++  THD *thd = current_thd;
+   // In the list 'cols', two columns may belong to the same TABLE, but we
+   // want only one Table for the two. So we use a map for tracking:
+   std::map<TABLE *, pack_rows::Table *> table_map;
+@@ -122,7 +123,6 @@ static bool fill_table_collection(std::set<Field *> *cols,
+     auto it = table_map.find(table);
+     pack_rows::Table *tab = nullptr;
+     if (it == table_map.end()) {
+-      THD *thd = table->in_use;
+       // Initialize an empty list of columns
+       tab = new (thd->mem_root) pack_rows::Table(table, false);
+       if (!tab) return true;
+-- 
+2.23.0
+

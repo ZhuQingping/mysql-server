@@ -1,0 +1,144 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+--source include/have_debug_sync.inc
+
+--disable_query_log
+call mtr.add_suppression("CdeZalloc SpaceName fail.*");
+call mtr.add_suppression("deleteTableSpace spaceId:.*");
+call mtr.add_suppression("CdeCreateTableInfo.prepare_create_table fail.*");
+call mtr.add_suppression("while alter rename tablespace missing.*");
+call mtr.add_suppression("insert dstore heap tuple fail");
+call mtr.add_suppression("insert dstore index tuple fail.*");
+call mtr.add_suppression("nsert_heap fail");
+call mtr.add_suppression("ReplayRecordsBackGround thread still has some.*");
+--enable_query_log
+
+--echo #
+--echo # Validate tablespace names in the SE.
+--echo #
+--echo # 1. Tablespace DDL.
+--echo # 1.1 Create/drop predefined tablespaces.
+
+--error ER_WRONG_TABLESPACE_NAME
+CREATE TABLESPACE dstore_default ENGINE DStore;
+--error ER_WRONG_TABLESPACE_NAME
+CREATE TABLESPACE dstore_temporary ENGINE DStore;
+--error ER_WRONG_TABLESPACE_NAME
+CREATE TABLESPACE dstore_global ENGINE DStore;
+--error ER_FEATURE_UNSUPPORTED
+CREATE UNDO TABLESPACE test ADD DATAFILE "undo.ibu" ENGINE DStore;
+--error ER_FEATURE_UNSUPPORTED
+CREATE LOGFILE GROUP lg1 ADD UNDOFILE "lg1.dat" ENGINE DStore;
+--error ER_WRONG_TABLESPACE_NAME
+CREATE TABLESPACE dstore_test;
+--error ER_TABLESPACE_MAXSIZE_INVALID
+CREATE TABLESPACE test max_size 1M;
+create tablespace test ENGINE DStore;
+select * from information_schema.dstore_tablespaces order by SPACE;
+alter tablespace test rename to test1;
+select * from information_schema.dstore_tablespaces order by SPACE;
+--error ER_ILLEGAL_HA_CREATE_OPTION
+create temporary table test(a int) tablespace=test;
+--error ER_TABLESPACE_MISSING_WITH_NAME
+drop tablespace test;
+create table test2 (a int) tablespace=test1;
+insert into test2 values(10);
+--error ER_ILLEGAL_HA_CREATE_OPTION
+alter table test2 tablespace=dstore_temporary;
+select * from test2;
+drop table test2;
+drop tablespace test1;
+SET SESSION DEBUG="+d,addtablespace_zalloc_failed";
+--error ER_CREATE_FILEGROUP_FAILED
+create tablespace test;
+SET SESSION DEBUG="-d,addtablespace_zalloc_failed";
+create tablespace test;
+SET SESSION DEBUG="+d,rename_tablespace_old_not_exist";
+--error ER_ALTER_FILEGROUP_FAILED
+alter tablespace test rename to test1;
+SET SESSION DEBUG="-d,rename_tablespace_old_not_exist";
+drop tablespace test;
+--error ER_WRONG_TABLESPACE_NAME
+alter tablespace dstore_default rename to testy;
+--error ER_WRONG_TABLESPACE_NAME
+alter tablespace dstore_global rename to testy;
+--error ER_WRONG_TABLESPACE_NAME
+alter tablespace dstore_temporary rename to testy;
+create tablespace test2 max_size=41943040;
+CREATE TABLE users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    email VARCHAR(150) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) tablespace=test2;
+
+DELIMITER |;
+
+CREATE PROCEDURE insert_many_users(IN num_rows INT)
+BEGIN
+    DECLARE i INT DEFAULT 0;
+    DECLARE random_name VARCHAR(100);
+    DECLARE random_email VARCHAR(150);
+
+    WHILE i < num_rows DO
+        SET random_name = CONCAT('User', FLOOR(RAND() * 1000000));
+        SET random_email = CONCAT(random_name, '@example.com');
+
+        INSERT INTO users (name, email) VALUES (random_name, random_email);
+
+        SET i = i + 1;
+    END WHILE;
+END |
+
+DELIMITER ;|
+--error ER_DSTORE_ERR_TABLESPACE_REACH_MAXSIZE
+call insert_many_users(100000);
+drop procedure insert_many_users;
+drop table users;
+drop tablespace test2;
+create table test(a int);
+insert into test values(10);
+--error ER_TABLESPACE_MISSING
+alter table test tablespace=innodb_system;
+--error 1478
+alter table test tablespace=dstore_temporary;
+--error 3723
+alter table test tablespace=dstore_global;
+drop table test;
+CREATE TABLE `test_data` (
+`id` INT AUTO_INCREMENT PRIMARY KEY,
+`username` VARCHAR(50),
+`score` INT,
+`created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+DELIMITER //;
+CREATE PROCEDURE BatchInsertData()
+BEGIN
+    DECLARE i INT DEFAULT 1;
+    START TRANSACTION;
+    WHILE i <= 100000 DO
+        INSERT INTO test_data (username, score) 
+        VALUES (CONCAT('user_', i), FLOOR(RAND() * 100));
+        IF i % 10000 = 0 THEN
+            COMMIT;
+            START TRANSACTION;
+        END IF;
+        SET i = i + 1;
+    END WHILE;
+END;
+//
+DELIMITER ;//
+CALL BatchInsertData();
+create tablespace ts1 max_size 43554432;
+#--error ER_DSTORE_ERR_TABLESPACE_REACH_MAXSIZE 
+#alter table test_data tablespace ts1, algorithm = inplace;
+drop tablespace ts1;
+drop procedure BatchInsertData;
+drop table test_data;
+drop tablespace dstore_default;
+create table test (a int) tablespace=dstore_default;
+drop table test;
+create tablespace test1;
+SET DEBUG='+d,insert_legacy_drop_segment_tablespaceid_op';
+--error 1529
+drop tablespace test1;

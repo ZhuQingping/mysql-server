@@ -1,0 +1,267 @@
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_setup.inc
+--enable_warnings
+
+# --echo ############################################################
+# --echo 一、 准备工作：创建测试环境。
+# --echo 二、 针对 SQLCOM_CREATE_EVENT 、 SQLCOM_DROP_EVENT 、 SQLCOM_ALTER_EVENT 执行对应的 ddl 语句 。 
+# --echo 三、 在备机测查看dd信息，保证备机回放元数据的正确性。
+# --echo 四、 执行一些与这个ddl相关的sql，执行完后，进行全表扫描，供后面的新主机对比，保证回放功能正确。 这里对event操作的表进行select。
+# --echo 五、 执行 switchover 。
+# --echo 六、 这里对event操作的表进行select。与第四步进行对比，保证备机回放功能的正确性。
+# --echo 七、 新主机查看调度参数，查看回放出的event是否可以正常调度。并对回放出来的event进行操作(修改、删除)，保证回放出来的ddl可用性和可操作性。
+# --echo ############################################################
+--echo ############################################################
+--echo 一、Set up the test environment.
+--echo 二、Execute the corresponding DDL statements for SQLCOM_CREATE_EVENT, SQLCOM_DROP_EVENT, and SQLCOM_ALTER_EVENT.
+--echo 三、Check the DD information on the standby node to ensure correct metadata replay.
+--echo 四、Execute some SQL statements related to these DDL operations. After execution, perform a full table scan and select from the tables operated by the events, for later comparison on the new primary node to ensure the replay function works correctly.
+--echo 五、Perform a switchover.
+--echo 六、Select from the tables operated by the events on the new primary node, and compare the results with those from Step 4 to verify the correctness of the standby node replay function.
+--echo 七、Check the scheduling parameters on the new primary node to verify whether the replayed events can be scheduled normally. Perform operations (alter and drop) on the replayed events to ensure the availability and operability of the replayed DDL results.
+--echo ############################################################
+
+--echo #
+--echo # 一、Set up the test environment.
+--echo #
+--connection $node1
+CREATE DATABASE IF NOT EXISTS test_event_db 
+DEFAULT CHARACTER SET utf8mb4 
+DEFAULT COLLATE utf8mb4_general_ci;
+
+USE test_event_db;
+
+CREATE TABLE event_log (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    event_type VARCHAR(50),
+    event_name VARCHAR(100),
+    execute_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+    remark VARCHAR(200)
+);
+
+CREATE TABLE test_employees (
+    emp_id INT AUTO_INCREMENT PRIMARY KEY,
+    emp_name VARCHAR(100) NOT NULL,
+    department VARCHAR(50),
+    salary DECIMAL(10, 2),
+    hire_date DATE,
+    status VARCHAR(20) DEFAULT 'ACTIVE',
+    last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE event_execution_log (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    event_name VARCHAR(100) NOT NULL,
+    execution_time DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
+    executed_by VARCHAR(50) DEFAULT 'EVENT',
+    remarks TEXT
+);
+
+INSERT INTO test_employees (emp_name, department, salary, hire_date) VALUES
+('张三', '技术部', 15000.00, '2020-01-15'),
+('李四', '技术部', 12000.00, '2020-03-20'),
+('王五', '销售部', 8000.00, '2021-05-10'),
+('赵六', '人事部', 10000.00, '2019-11-30'),
+('钱七', '销售部', 9000.00, '2022-02-14'),
+('孙八', '财务部', 11000.00, '2021-07-01');
+
+--echo #
+--echo # 二、Execute the corresponding DDL statements for SQLCOM_CREATE_EVENT, SQLCOM_DROP_EVENT, and SQLCOM_ALTER_EVENT.
+--echo #
+
+--echo #
+--echo # SQLCOM_CREATE_EVENT
+--echo #
+--connection $node1
+
+# 这个one-time event 在单主机情况下，mtr这个架子应该会自己给它删除。 自己执行sql则不会
+--echo # 1 Create a one-time event
+CREATE EVENT ev_one_time
+ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 1 SECOND
+ON COMPLETION NOT PRESERVE
+COMMENT '一次性测试事件'
+DO 
+    INSERT INTO event_log(event_type, event_name, remark) 
+    VALUES ('one_time', 'ev_one_time', '一次性事件执行');
+
+--echo # 2 Create recurring event
+CREATE EVENT ev_daily
+ON SCHEDULE EVERY 1 DAY
+STARTS CURRENT_TIMESTAMP + INTERVAL 3 SECOND
+ON COMPLETION PRESERVE
+COMMENT '周期性测试事件'
+DO 
+    INSERT INTO event_log(event_type, event_name, remark) 
+    VALUES ('daily', 'ev_daily', '周期性事件执行');
+
+--sleep 4
+
+--echo # 3 Create a test event in disabled state
+CREATE EVENT ev_disabled
+ON SCHEDULE EVERY 1 MINUTE
+STARTS CURRENT_TIMESTAMP + INTERVAL 1 SECOND
+ENDS CURRENT_TIMESTAMP + INTERVAL 1 HOUR
+ON COMPLETION NOT PRESERVE
+DISABLE
+COMMENT '禁用状态测试事件'
+DO 
+    INSERT INTO event_log(event_type, event_name, remark) 
+    VALUES ('disabled', 'ev_disabled', '禁用事件不应执行');
+
+--echo # 4 Create an event with conditions
+DELIMITER $$;
+CREATE EVENT e_dynamic_frequency
+ON SCHEDULE EVERY 30 MINUTE
+STARTS CURRENT_TIMESTAMP + INTERVAL 1 SECOND
+COMMENT '根据数据量动态调整的执行事件'
+DO
+BEGIN
+    DECLARE v_record_count INT;
+    DECLARE v_frequency VARCHAR(50);
+    
+    SELECT COUNT(*) INTO v_record_count FROM test_employees;
+    
+    IF v_record_count < 10 THEN
+        SET v_frequency = '低频';
+        INSERT INTO event_execution_log (event_name, remarks)
+        VALUES ('e_dynamic_frequency', '数据量较少，执行低频操作');
+    ELSEIF v_record_count BETWEEN 10 AND 100 THEN
+        SET v_frequency = '中频';
+        INSERT INTO event_execution_log (event_name, remarks)
+        VALUES ('e_dynamic_frequency', '数据量适中，执行中频操作');
+    ELSE
+        SET v_frequency = '高频';
+        INSERT INTO event_execution_log (event_name, remarks)
+        VALUES ('e_dynamic_frequency', '数据量较大，执行高频操作');
+    END IF;
+END$$
+DELIMITER ;$$
+
+--echo # 5 Create an event to verify deletion
+CREATE EVENT ev_one_time_delete
+ON SCHEDULE EVERY 1 DAY
+STARTS CURRENT_TIMESTAMP + INTERVAL 1 DAY
+ON COMPLETION PRESERVE
+COMMENT '一个验证删除的事件'
+DO 
+    INSERT INTO event_log(event_type, event_name, remark) 
+    VALUES ('daily', 'ev_one_time_delete', '一个验证删除的事件');
+
+--echo #
+--echo # SQLCOM_ALTER_EVENT
+--echo #
+--echo # 1 Alter the event schedule time
+ALTER EVENT ev_daily
+ON SCHEDULE EVERY 1 HOUR
+STARTS TIMESTAMP(CURRENT_DATE, '00:30:00')
+COMMENT '改为每2天执行一次';
+
+--echo # 2 Rename the event
+ALTER EVENT ev_daily
+RENAME TO ev_hour;
+
+--echo # 3 Alter the event status (enable/disable)
+ALTER EVENT ev_hour DISABLE;
+
+--echo #
+--echo # SQLCOM_DROP_EVENT
+--echo #
+DROP EVENT IF EXISTS ev_one_time_delete;
+
+--sleep 2
+--echo # View event metadata on the primary node
+SELECT 
+    EVENT_NAME,
+    EVENT_SCHEMA,
+    DEFINER,
+    EVENT_TYPE
+FROM INFORMATION_SCHEMA.EVENTS 
+WHERE EVENT_SCHEMA = 'test_event_db'
+ORDER BY EVENT_NAME;
+
+--echo #
+--echo # 三、Check the DD information on the standby node to ensure correct metadata replay.
+--echo #
+--sleep 1
+--connection $node2
+SELECT 
+    EVENT_NAME,
+    EVENT_SCHEMA,
+    DEFINER,
+    EVENT_TYPE
+FROM INFORMATION_SCHEMA.EVENTS 
+WHERE EVENT_SCHEMA = 'test_event_db'
+ORDER BY EVENT_NAME;
+
+--echo #
+--echo # 四、Execute some SQL statements related to these DDL operations. After execution, perform a full table scan and select from the tables operated by the events, for later comparison on the new primary node to ensure the replay function works correctly.
+--echo #
+
+--connection $node1
+USE test_event_db;
+
+--echo # View the event_log table
+SELECT id, event_type, event_name, remark FROM event_log ORDER BY id;
+
+--echo # View the event_execution_log table
+SELECT id, event_name, executed_by, remarks FROM event_execution_log ORDER BY id DESC LIMIT 10;
+
+--echo #
+--echo # 五、Perform a switchover.
+--echo #
+--sleep 2
+--let $old_primary = $node1
+--let $old_standby = $node2
+--let $old_standby_port = $SERVER_MYPORT_2
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_switch.inc
+
+--echo #
+--echo # 六、Select from the tables operated by the events on the new primary node, and compare the results with those from Step 4 to verify the correctness of the standby node replay function.
+--echo #
+
+--connection $node2
+USE test_event_db;
+
+--echo # View the event_log table
+SELECT id, event_type, event_name, remark FROM event_log ORDER BY id;
+
+--echo # View the event_execution_log table
+SELECT id, event_name, executed_by, remarks FROM event_execution_log ORDER BY id DESC LIMIT 10;
+
+--echo #
+--echo # 七、Check the scheduling parameters on the new primary node to verify whether the replayed events can be scheduled normally. Perform operations (alter and drop) on the replayed events to ensure the availability and operability of the replayed DDL results.
+--echo #
+--echo # 1 Modify the event scheduling time
+ALTER EVENT ev_hour
+ON SCHEDULE EVERY 3 HOUR
+COMMENT '在新主机上修改为每3小时执行';
+
+--echo # 2 Modify the status of the event
+ALTER EVENT ev_disabled ENABLE;
+
+--connection $node1
+--sleep 2
+SELECT 
+    EVENT_NAME,
+    EVENT_SCHEMA,
+    DEFINER,
+    EVENT_TYPE,
+    # EXECUTE_AT,
+    INTERVAL_VALUE,
+    INTERVAL_FIELD,
+    # STARTS,
+    # ENDS,
+    STATUS,
+    ON_COMPLETION,
+    # CREATED,
+    # LAST_ALTERED,
+    EVENT_COMMENT
+FROM INFORMATION_SCHEMA.EVENTS 
+WHERE EVENT_SCHEMA = 'test_event_db'
+ORDER BY EVENT_NAME;
+
+--disable_warnings
+--let $current_standby = $node1
+--let $current_primary = $node2
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_cleanup.inc
+--enable_warnings

@@ -1,0 +1,35 @@
+# Test drop user with rdsAdmin which is to simulate same scenario in RDS.
+
+#connect with rdsAdmin
+connect (conn1,localhost,rdsAdmin);
+connection conn1;
+
+#set sql mode to avoid zero timestamp error at back up proxies_priv 
+SET SESSION SQL_MODE='ALLOW_INVALID_DATES';
+
+#backup user and priv tables
+-- let $backup = 1
+-- source include/backup_tables_priv_and_users.inc
+CREATE TABLE mysql.tmp_backup_proxies_priv AS SELECT * FROM mysql.proxies_priv;
+
+#test start
+select count(1) from mysql.user where host='localhost' and user='root'; 
+
+drop user 'root'@'localhost';
+
+select count(1) from mysql.user where host='localhost' and user='root';
+
+#restore user and priv tables and priv of root@locahost.
+
+TRUNCATE TABLE mysql.proxies_priv;
+INSERT INTO mysql.proxies_priv (SELECT * FROM mysql.tmp_backup_proxies_priv);
+DROP TABLE mysql.tmp_backup_proxies_priv;
+
+-- let $restore = 1
+-- source include/backup_tables_priv_and_users.inc
+
+flush privileges;
+
+GRANT ALL ON *.* TO `root`@`localhost` WITH GRANT OPTION;
+
+disconnect conn1;

@@ -1,0 +1,114 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+
+--disable_query_log
+CALL mtr.add_suppression("Make worker plan failed");
+CALL mtr.add_suppression("Create worker tmp tables or make join read info failed");
+CALL mtr.add_suppression("Create worker result mq failed");
+--enable_query_log
+
+set @saved_parallel_cost_threshold = @@parallel_cost_threshold;
+set @saved_parallel_rows_threshold = @@parallel_rows_threshold;
+set @saved_optimizer_trace = @@optimizer_trace;
+set @saved_parallel_max_threads = @@parallel_max_threads;
+set @saved_sql_mode = @@sql_mode;
+
+SET optimizer_trace="enabled=on";
+set global parallel_cost_threshold = 0;
+set global parallel_rows_threshold = 0;
+
+create table tt(
+  `a` int NOT NULL,
+  PRIMARY KEY (`a`)
+);
+insert into tt values(1),(2),(3),(4),(5);
+
+--echo # BUG2024082306950
+set parallel_rows_threshold=10;
+select * from tt;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+set parallel_rows_threshold=0;
+
+set parallel_cost_threshold=10;
+select * from tt;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+set parallel_cost_threshold=0;
+
+--echo # BUG2024082308390
+select count(a) from tt;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+select /*+ NO_PQ */ count(a) from tt;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+drop table tt;
+
+--echo # BUG2024083008038
+create table tt(date_col date);
+insert into tt values("2024-08-20"),("2024-08-25");
+select date_col from tt where date_col not in (select date_col from tt where date_col > "2000-01-01");
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+WITH RECURSIVE dates (date_col) AS (   SELECT MIN(date_col) FROM tt   UNION ALL   SELECT date_col + INTERVAL 1 DAY FROM dates   WHERE date_col + INTERVAL 1 DAY <= (SELECT MAX(date_col) FROM tt) ) SELECT * FROM dates;
+SELECT trace FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+set global parallel_max_threads = 0;
+SELECT * FROM tt;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+set global parallel_max_threads = @saved_parallel_max_threads;
+drop table tt;
+
+--echo # BUG2024082705769
+CREATE TABLE t(c VARCHAR(10), i INT);
+INSERT INTO t VALUES ('key', 3), ('key', 4), ('key', 5);
+set sql_mode = '';
+SELECT c,JSON_ARRAYAGG(i) FROM t;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+set sql_mode = @saved_sql_mode;
+drop table t;
+
+--echo # BUG2024082706626
+create table tt(id int, varchar_col varchar(255), blob_col blob);
+#insert into tt values (1, 'abcd', 'aaa'), (2, 'wwwwwwwww', 'bbbbbbbbb'), (3, 'aaaaaaaaaa', 'ccccccccccc'), (4, 'abababa', 'ddddddddddd'), (5, 'dfghjkl', 'eeeeeeeeeeeeee');
+select compress(varchar_col) from tt;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+select uncompress(varchar_col) from tt;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+select binary(varchar_col) from tt;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+select id, convert(blob_col , CHAR CHARACTER SET utf8) from tt;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+select id, STATEMENT_DIGEST_TEXT('select id from tt where id=5') from tt where id=5;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+drop table tt;
+
+--echo # BUG2025030518630
+CREATE TABLE t0 (c0 INT);
+INSERT INTO t0(c0) VALUES (1);
+SELECT c0 FROM (SELECT t0.c0 FROM t0 tx JOIN t0 GROUP BY t0.c0 WITH ROLLUP) t0(c0) ORDER BY c0;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+SELECT json_extract(trace,"$.steps[*].join_optimization.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+create table t1 (a int , b int);
+insert into t1 values (1,3),(4,6);
+select SQL_BUFFER_RESULT * from t1;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+--echo # no_pq hint
+select/*+ no_pq */ SQL_BUFFER_RESULT * from t1;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+SELECT/*+ no_pq */ c0 FROM (SELECT t0.c0 FROM t0 tx JOIN t0 GROUP BY t0.c0 WITH ROLLUP) t0(c0) ORDER BY c0;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+SELECT json_extract(trace,"$.steps[*].join_optimization.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+select SQL_BUFFER_RESULT * from t1;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+SELECT c0 FROM (SELECT t0.c0 FROM t0 tx JOIN t0 GROUP BY t0.c0 WITH ROLLUP) t0(c0) ORDER BY c0;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+SELECT json_extract(trace,"$.steps[*].join_optimization.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+drop table t0;
+drop table t1;
+
+set global parallel_cost_threshold = @saved_parallel_cost_threshold;
+set global parallel_rows_threshold = @saved_parallel_rows_threshold;
+set optimizer_trace = @saved_optimizer_trace;

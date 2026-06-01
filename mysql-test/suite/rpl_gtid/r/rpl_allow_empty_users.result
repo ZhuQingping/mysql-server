@@ -1,0 +1,180 @@
+include/master-slave.inc
+Warnings:
+Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
+[connection master]
+#Validate the behavior of the program when creating empty users.        #
+[connection master]
+call mtr.add_suppression("Unsafe statement written to the binary log.*");
+#Obtains the current user name.
+
+#Enable the function of allowing empty users.
+#All accounts with the permission of creating new users can create empty
+#users.
+SET GLOBAL rds_allow_empty_users=ON;
+SET GLOBAL rds_reserved_users='';
+[connection slave]
+SET GLOBAL rds_allow_empty_users=ON;
+SET GLOBAL rds_reserved_users='';
+[connection master]
+CREATE USER ''@'10.185.%' IDENTIFIED BY '';
+include/sync_slave_sql_with_master.inc
+
+#Disable the function of allowing empty users.
+#Only rds reserved accounts can create empty users.
+[connection master]
+SET GLOBAL rds_allow_empty_users=OFF;
+[connection slave]
+SET GLOBAL rds_allow_empty_users=OFF;
+[connection master]
+CREATE USER ''@'10.186.%' IDENTIFIED BY '';
+ERROR HY000: Operation CREATE USER failed for ''@'10.186.%'
+#Add the current user as rds_reserved_users.
+SET @@global.rds_reserved_users=root;
+[connection slave]
+SET @@global.rds_reserved_users=root;
+[connection master]
+CREATE USER ''@'10.186.%' IDENTIFIED BY '';
+
+#Verify the synchronization between the source and the replica.
+include/sync_slave_sql_with_master.inc
+include/diff_tables.inc [master:mysql.user, slave:mysql.user]
+
+#Clear the previous data.
+[connection master]
+DROP USER ''@'10.185.%', ''@'10.186.%';
+include/sync_slave_sql_with_master.inc
+
+#Validate the program behavior when renaming another user name to an    #
+#empty user.                                                            #
+[connection master]
+#Enable the function of allowing empty users.
+#All accounts with the permission of renaming users can change a user to
+#an empty user.
+SET GLOBAL rds_allow_empty_users=ON;
+SET GLOBAL rds_reserved_users='';
+[connection slave]
+SET GLOBAL rds_allow_empty_users=ON;
+SET GLOBAL rds_reserved_users='';
+[connection master]
+CREATE USER 'test1'@'10.185.%' IDENTIFIED BY '';
+RENAME USER 'test1'@'10.185.%' TO ''@'10.185.%';
+include/sync_slave_sql_with_master.inc
+
+#Disable the function of allowing empty users.
+#Only rds reserved accounts can rename a user to empty users.
+[connection master]
+SET GLOBAL rds_allow_empty_users=OFF;
+[connection slave]
+SET GLOBAL rds_allow_empty_users=OFF;
+[connection master]
+CREATE USER 'test2'@'10.186.%' IDENTIFIED BY '';
+RENAME USER 'test2'@'10.186.%' TO ''@'10.186.%';
+ERROR HY000: Operation RENAME USER failed for 'test2'@'10.186.%'
+#Add the current user as rds_reserved_users.
+SET @@global.rds_reserved_users=root;
+[connection slave]
+SET @@global.rds_reserved_users=root;
+[connection master]
+RENAME USER 'test2'@'10.186.%' TO ''@'10.186.%';
+
+#Verify the synchronization between the source and the replica.
+include/sync_slave_sql_with_master.inc
+include/diff_tables.inc [master:mysql.user, slave:mysql.user]
+
+#Clear the previous data.
+[connection master]
+DROP USER ''@'10.185.%', ''@'10.186.%';
+include/sync_slave_sql_with_master.inc
+
+#Validate the program behavior when inserting empty users directly into #
+#the mysql.user table.                                                  #
+[connection master]
+#Enable the function of allowing empty users.
+#All accounts with the permission to insert data into the mysql.user
+#table can create empty users.
+SET GLOBAL rds_allow_empty_users=ON;
+SET GLOBAL rds_reserved_users='';
+[connection slave]
+SET GLOBAL rds_allow_empty_users=ON;
+SET GLOBAL rds_reserved_users='';
+[connection master]
+INSERT INTO mysql.user(HOST, USER, authentication_string, ssl_cipher,
+x509_issuer, x509_subject) VALUES ('10.185.%', '', '12345678', '', '', '');
+include/sync_slave_sql_with_master.inc
+include/diff_tables.inc [master:mysql.user, slave:mysql.user]
+
+#Disable the function of allowing empty users.
+#All accounts can not insert empty users.
+[connection master]
+SET GLOBAL rds_allow_empty_users=OFF;
+[connection slave]
+SET GLOBAL rds_allow_empty_users=OFF;
+[connection master]
+INSERT INTO mysql.user(HOST, USER, authentication_string, ssl_cipher,
+x509_issuer, x509_subject) VALUES ('10.186.%', '', '12345678', '', '', '');
+ERROR 45000: CANNOT CREATE AN EMPTY USER.
+#Add the current user as rds_reserved_users.
+SET @@global.rds_reserved_users=root;
+[connection slave]
+SET @@global.rds_reserved_users=root;
+[connection master]
+#Even rds reserved users cannot insert empty users.
+INSERT INTO mysql.user(HOST, USER, authentication_string, ssl_cipher,
+x509_issuer, x509_subject) VALUES ('10.186.%', '', '12345678', '', '', '');
+ERROR 45000: CANNOT CREATE AN EMPTY USER.
+
+#Clear the previous data.
+[connection master]
+DROP USER ''@'10.185.%';
+include/sync_slave_sql_with_master.inc
+
+#Validate the program behavior when updating to an empty user directly  #
+#in the mysql.user table.                                               #
+[connection master]
+#Enable the function of allowing empty users.
+#All accounts with the permission to update the mysql.user table can
+#update a user name to an empty user.
+SET GLOBAL rds_allow_empty_users=ON;
+SET GLOBAL rds_reserved_users='';
+[connection slave]
+SET GLOBAL rds_allow_empty_users=ON;
+SET GLOBAL rds_reserved_users='';
+[connection master]
+CREATE USER 'test1'@'10.185.%' IDENTIFIED BY '12345678';
+UPDATE mysql.user SET user='' WHERE user='test1';
+include/sync_slave_sql_with_master.inc
+include/diff_tables.inc [master:mysql.user, slave:mysql.user]
+
+#Disable the function of allowing empty users.
+#ALL accounts can not update a user to an empty user.
+[connection master]
+SET GLOBAL rds_allow_empty_users=OFF;
+[connection slave]
+SET GLOBAL rds_allow_empty_users=OFF;
+[connection master]
+CREATE USER 'test2'@'10.186.%' IDENTIFIED BY '12345678';
+UPDATE mysql.user SET user='' WHERE user='test2';
+ERROR 45000: CANNOT UPDATE test2 USER TO AN EMPTY USER.
+#Add the current user as rds_reserved_users.
+SET @@global.rds_reserved_users=root;
+[connection slave]
+SET @@global.rds_reserved_users=root;
+[connection master]
+#Even rds reserved users cannot update others users to empty users.
+UPDATE mysql.user SET user='' WHERE user='test2';
+ERROR 45000: CANNOT UPDATE test2 USER TO AN EMPTY USER.
+
+#Clear the previous data.
+[connection master]
+DROP USER ''@'10.185.%', 'test2'@'10.186.%';
+include/sync_slave_sql_with_master.inc
+
+#Clear the modification of system variables.
+[connection master]
+SET GLOBAL rds_allow_empty_users=OFF;
+SET GLOBAL rds_reserved_users='';
+[connection slave]
+SET GLOBAL rds_allow_empty_users=OFF;
+SET GLOBAL rds_reserved_users='';
+include/rpl_end.inc

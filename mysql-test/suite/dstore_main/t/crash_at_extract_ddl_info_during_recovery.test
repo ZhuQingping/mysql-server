@@ -1,0 +1,39 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+
+--echo #
+--echo # BUG2025112020531: Dstore recovery failure due to empty DDL SQL check in CdeDdWriteExtraCommitWalCallback
+--echo #
+--echo # Description:
+--echo # This test verifies that the server can recover successfully after a crash occurs 
+--echo # immediately after DStore commits a DDL operation. Previously, recovery would
+--echo # panic in `CdeDdWriteExtraCommitWalCallback` due to an incorrect error check 
+--echo # for empty DDL SQL strings.
+--echo #
+
+--echo #
+--echo # Step 1: Simulate a crash after DStore commit during DDL execution
+--echo #
+SET GLOBAL debug='d,ddl_crash_safe_crash_after_commit_in_dstore';
+
+--echo # Expect the server to crash during the following CREATE TABLE statement
+--source include/expect_crash.inc
+--error 2013
+CREATE TABLE t1(pk INT PRIMARY KEY, col1 INT);
+
+--echo #
+--echo # Step 2: Restart the server and verify recovery
+--echo #
+--echo # Wait for the disconnect to complete
+--source include/wait_until_disconnected.inc
+
+--echo # Restart the server. 
+--echo # Without the fix, this step would fail because DStore recovery would panic.
+--source include/start_mysqld.inc
+
+--echo #
+--echo # Step 3: Cleanup
+--echo #
+DROP TABLE t1;
+
+--echo # Test completed successfully.

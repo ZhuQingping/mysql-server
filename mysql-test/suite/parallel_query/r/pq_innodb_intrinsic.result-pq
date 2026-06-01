@@ -1,0 +1,142 @@
+CREATE TABLE `lineitem` (
+`l_orderkey` int NOT NULL,
+`l_partkey` int NOT NULL,
+`l_suppkey` int NOT NULL,
+`l_linenumber` int NOT NULL,
+`l_quantity` decimal(15,2) NOT NULL,
+`l_extendedprice` decimal(15,2) NOT NULL,
+`l_discount` decimal(15,2) NOT NULL,
+`l_tax` decimal(15,2) NOT NULL,
+`l_returnflag` char(1) NOT NULL,
+`l_linestatus` char(1) NOT NULL,
+`l_shipdate` date NOT NULL,
+`l_commitdate` date NOT NULL,
+`l_receiptdate` date NOT NULL,
+`l_shipinstruct` char(25) NOT NULL,
+`l_shipmode` char(10) NOT NULL,
+`l_comment` varchar(44) NOT NULL,
+PRIMARY KEY (`l_orderkey`,`l_linenumber`),
+KEY `lineitem_fk2` (`l_partkey`,`l_suppkey`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+copy file
+# Check that the file exists in the working folder
+# Unzip the contents
+# Load data into table
+LOAD DATA INFILE 'MYSQL_TMP_DIR/pq_lineitem.tbl' INTO TABLE lineitem;;
+BUG2022022800026: PQ innodb intrinsic table crash when the node
+pointer in father page has a wrong son page no than expected one.
+SET @saved_big_tables = @@big_tables;
+SET @@big_tables=on;
+EXPLAIN FORMAT=tree SELECT
+l_suppkey, SUM(l_extendedprice * ( 1 - l_discount )) AS s
+FROM   lineitem
+WHERE  l_shipdate >= DATE '1997-07-01'
+	       AND l_shipdate < DATE '1997-07-01' + interval '6' month
+GROUP  BY l_suppkey ORDER BY l_suppkey LIMIT 50;
+EXPLAIN
+-> Limit: 50 row(s)
+    -> Sort: lineitem.l_suppkey, limit input to 50 row(s) per chunk
+        -> Table scan on <temporary>
+            -> Aggregate using temporary table
+                -> Gather: 4 workers, parallel scan on lineitem  (cost=#.# rows=##)
+                    -> Table scan on <temporary>
+                        -> Aggregate using temporary table
+                            -> Filter: ((lineitem.l_shipdate >= DATE'1997-07-01') and (lineitem.l_shipdate < <cache>((DATE'1997-07-01' + interval '6' month))))  (cost=#.# rows=##)
+                                -> Parallel table scan on lineitem  (cost=#.# rows=##)
+
+SELECT
+l_suppkey, SUM(l_extendedprice * ( 1 - l_discount )) AS s
+FROM   lineitem
+WHERE  l_shipdate >= DATE '1997-07-01'
+	       AND l_shipdate < DATE '1997-07-01' + interval '6' month
+GROUP  BY l_suppkey ORDER BY l_suppkey LIMIT 50;
+l_suppkey	s
+2	88948.8180
+10	20764.6026
+13	56229.6462
+14	19385.1000
+22	7444.6496
+28	17351.2251
+29	40816.0207
+38	35036.1900
+43	30652.3770
+44	29586.7936
+48	6920.2602
+54	42280.0000
+56	6013.6710
+59	22916.0776
+65	49497.5676
+75	11685.8434
+77	50694.8904
+78	40071.2130
+82	43471.6560
+93	11497.0284
+96	48637.6800
+102	7038.9844
+106	29633.2400
+109	45524.6064
+112	43746.3180
+119	18629.9446
+122	40225.7856
+127	24686.1432
+146	58288.9390
+148	27449.2152
+153	31241.0472
+156	19107.5628
+170	2026.9080
+184	3205.7568
+189	22219.0902
+208	57259.9496
+209	4658.1468
+215	14537.6790
+222	17578.6240
+225	17415.5264
+227	51866.1450
+228	48855.4080
+250	6165.5140
+256	62470.5750
+264	29604.9100
+265	31271.3090
+273	8815.3952
+283	9761.2736
+291	76032.5020
+295	19013.2050
+# Remove copied files
+CREATE TABLE t0 (c0 INT);
+OPTIMIZE TABLE t0;
+Table	Op	Msg_type	Msg_text
+test.t0	optimize	note	Table does not support optimize, doing recreate + analyze instead
+test.t0	optimize	status	OK
+INSERT INTO t0(c0) VALUES (1),(1);
+ANALYZE LOCAL TABLE t0 DROP HISTOGRAM ON c0;
+Table	Op	Msg_type	Msg_text
+test.t0	histogram	Error	No histogram statistics found for column 'c0'.
+ANALYZE TABLE t0;
+Table	Op	Msg_type	Msg_text
+test.t0	analyze	status	OK
+explain SELECT /*+NO_MERGE(c)*/ 1 FROM t0 JOIN (SELECT t0.c0 FROM t0) c USING (c0);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, test.t0)
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where
+1	SIMPLE	<derived2>	NULL	ref	<auto_key0>	<auto_key0>	5	test.t0.c0	2	100.00	Using index
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, test.t0)
+2	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select /*+ NO_MERGE(`c`@`select#1`) */ 1 AS `1` from `test`.`t0` join (/* select#2 */ select `test`.`t0`.`c0` AS `c0` from `test`.`t0`) `c` where (`c`.`c0` = `test`.`t0`.`c0`)
+SELECT /*+NO_MERGE(c)*/ 1 FROM t0 JOIN (SELECT t0.c0 FROM t0) c USING (c0);
+1
+1
+1
+1
+1
+set rds_partial_result_cache_cost_threshold = 0;
+SELECT /*+NO_MERGE(c)*/ 1 FROM t0 JOIN (SELECT t0.c0 FROM t0) c USING (c0);
+1
+1
+1
+1
+1
+set rds_partial_result_cache_cost_threshold = default;
+SET @@big_tables = @saved_big_tables;
+drop table lineitem;
+DROP TABLE t0;

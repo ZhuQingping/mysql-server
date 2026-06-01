@@ -1,0 +1,163 @@
+From d27edeefadd3d66f3b2bba9f3aba4044b2f1bb3e Mon Sep 17 00:00:00 2001
+From: Guilhem Bichot <guilhem.bichot@contributor>
+
+Date: Thu, 19 Mar 2026 10:53:29 +0100
+Subject: [PATCH] Updating
+ the PQ-specific result file following the fixes for these bugs
+
+---
+ mysql-test/r/join_elimination.result-pq | 127 +++++++++++++++++++++++-
+ 1 file changed, 125 insertions(+), 2 deletions(-)
+
+diff --git a/mysql-test/r/join_elimination.result-pq b/mysql-test/r/join_elimination.result-pq
+index 51489e64dab..f4663111ad0 100644
+--- a/mysql-test/r/join_elimination.result-pq
++++ b/mysql-test/r/join_elimination.result-pq
+@@ -494,8 +494,7 @@ EXPLAIN WITH cte AS (SELECT t4.a FROM t1 AS t4 WHERE t4.b<4 LIMIT 2) SELECT DIST
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+ 1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index
+-2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	3	33.33	Parallel execute (4 workers, test.t4)
+-2	SIMPLE	t4	NULL	ALL	NULL	NULL	NULL	NULL	3	33.33	Using where
++2	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	Not optimized, outer query is empty
+ Warnings:
+ Note	1003	with `cte` as (/* select#2 */ select `test`.`t4`.`a` AS `a` from `test`.`t1` `t4` where (`test`.`t4`.`b` < 4) limit 2) /* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+ EXPLAIN format=tree WITH cte AS (SELECT t4.a FROM t1 AS t4 WHERE t4.b<4 LIMIT 2) SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2 LEFT JOIN cte AS t3 ON TRUE) ON COALESCE(t3.a,1)=1 LEFT JOIN cte ON TRUE;
+@@ -1905,6 +1904,33 @@ GROUP BY t.a, computed_col
+ ) AS derived;
+ COUNT(1)
+ 1
++# Fix for a bug: it's not possible to get reliable used_tables information of an aggregate which is inside a subquery of our query block. We block this situation in code, otherwise we would not notice that t2 is used in count() and eliminate it, which would be wrong.
++explain select distinct (select count(t2.a+0) from t1 t0) from t1 left join t1 t2 on t1.a=t2.a;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	t1	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
++1	PRIMARY	t2	NULL	eq_ref	PRIMARY	PRIMARY	4	test.t1.a	1	100.00	Using index
++2	DEPENDENT SUBQUERY	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
++Warnings:
++Note	1276	Field or reference 'test.t2.a' of SELECT #2 was resolved in SELECT #1
++Note	1003	/* select#1 */ select (/* select#2 */ select count((`test`.`t2`.`a` + 0)) from `test`.`t1` `t0`) AS `(select count(t2.a+0) from t1 t0)` from `test`.`t1` left join `test`.`t1` `t2` on((`test`.`t2`.`a` = `test`.`t1`.`a`)) where true
++# It's also not possible to set reliable used_tables information after eliminating; so we cannot eliminate t1 here; count() would still pretend it depends on t2.
++explain select distinct (select count(t1.a+0) from t1 t0) from t1 left join t1 t2 on t1.a=t2.a;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	t1	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
++1	PRIMARY	t2	NULL	eq_ref	PRIMARY	PRIMARY	4	test.t1.a	1	100.00	Using index
++2	DEPENDENT SUBQUERY	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
++Warnings:
++Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
++Note	1003	/* select#1 */ select (/* select#2 */ select count((`test`.`t1`.`a` + 0)) from `test`.`t1` `t0`) AS `(select count(t1.a+0) from t1 t0)` from `test`.`t1` left join `test`.`t1` `t2` on((`test`.`t2`.`a` = `test`.`t1`.`a`)) where true
++# Here the aggregate in the subquery, is not an aggregate from the POV of the query block where the left join is, so there is no problem.
++explain select distinct (select count(t0.a+0) from t1 t0) from t1 left join t1 t2 on t1.a=t2.a;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
++1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
++2	SUBQUERY	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t0)
++2	SIMPLE	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
++Warnings:
++Note	1003	/* select#1 */ select distinct (/* select#2 */ select count((`test`.`t0`.`a` + 0)) from `test`.`t1` `t0`) AS `(select count(t0.a+0) from t1 t0)` from `test`.`t1`
+ # Without GROUP BY, and with composite unique key:
+ CREATE TABLE u (a INT, b INT, c INT NOT NULL, UNIQUE (a,b));
+ # Only one key part is functionally dependent, no elimination:
+@@ -2688,3 +2714,100 @@ FROM t2 LEFT JOIN t3 AS ref_49 ON TRUE;
+ (CASE WHEN EXISTS (SELECT ref_49.medal_now FROM t1) THEN 1 ELSE 0 END) IS NULL
+ 0
+ DROP TABLE t1,t2,t3;
++# BUGFIX Stored procedure + materialization scenario:
++# counter Query_block::m_hwm_free_tableno keeps increasing,
++# mysqld crashes at set_tableno.
++CREATE TABLE tbl_range_table (
++id_col int  AUTO_INCREMENT PRIMARY KEY
++);
++INSERT INTO tbl_range_table (id_col) VALUES (DEFAULT), (DEFAULT);
++CREATE PROCEDURE t3()
++BEGIN
++DECLARE i INT DEFAULT 1;
++WHILE i <= 61 DO
++EXPLAIN ANALYZE SELECT * FROM `tbl_range_table` WHERE id_col IN ( SELECT id_col FROM ( SELECT id_col FROM tbl_range_table limit 1) tmp );
++SET i = i + 1;
++END WHILE;
++END$$
++call t3();
++DROP PROCEDURE t3;
++DROP TABLE tbl_range_table;
++#
++# BUGFIX crash in JOIN::finalize_derived_keys
++#
++# This testcase exercises both if-s added to code. cte1 is eliminated, an index is added for the other reference (cte) due to the equality, and when adding this index we used to access cte1's JOIN_TAB which is nullptr.
++CREATE TABLE t(a INT);
++EXPLAIN WITH cte AS (SELECT * FROM t) SELECT /*+ NO_MERGE() */ DISTINCT cte.a FROM cte, t LEFT JOIN cte cte1 ON TRUE WHERE cte.a=t.a;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t)
++1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using temporary
++1	SIMPLE	<derived2>	NULL	ref	<auto_key0>	<auto_key0>	5	test.t.a	2	100.00	Using index
++2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t)
++2	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
++Warnings:
++Note	1003	with `cte` as (/* select#2 */ select `test`.`t`.`a` AS `a` from `test`.`t`) /* select#1 */ select /*+ NO_MERGE(@`select#1`) */ distinct `cte`.`a` AS `a` from `cte` join `test`.`t` where (`cte`.`a` = `test`.`t`.`a`)
++EXPLAIN FORMAT=TREE WITH cte AS (SELECT * FROM t) SELECT /*+ NO_MERGE() */ DISTINCT cte.a FROM cte, t LEFT JOIN cte cte1 ON TRUE WHERE cte.a=t.a;
++EXPLAIN
++-> Table scan on <temporary>  (cost=5.56..5.56 rows=1)
++    -> Temporary table with deduplication  (cost=3.05..3.05 rows=1)
++        -> Gather: 4 workers, parallel scan on t  (cost=2.95..2.95 rows=1)
++            -> Table scan on <temporary>  (cost=2.95..2.95 rows=0.25)
++                -> Temporary table with deduplication  (cost=0.45..0.45 rows=0.25)
++                    -> Nested loop inner join  (cost=0.425 rows=0.25)
++                        -> Filter: (t.a is not null)  (cost=0.275 rows=0.25)
++                            -> Parallel table scan on t  (cost=0.275 rows=0.25)
++                        -> Covering index lookup on cte using <auto_key0> (a=t.a)  (cost=0.725..1.07 rows=2)
++                            -> Materialize CTE cte  (cost=0.375..0.375 rows=1)
++                                -> Gather: 4 workers, parallel scan on t  (cost=0.275 rows=1)
++                                    -> Parallel table scan on t  (cost=0.275 rows=0.25)
++
++WITH cte AS (SELECT * FROM t) SELECT /*+ NO_MERGE() */ DISTINCT cte.a FROM cte, t LEFT JOIN cte cte1 ON TRUE WHERE cte.a=t.a;
++a
++#
++# BUGFIX crash in JOIN::compare_costs_of_subquery_strategies
++#
++# This testcase which exercises all changes in the bugfix. cte1 is eliminated, COUNT()'s used_tables() still referenced it, so when doing cost calculations for semijoin materialization we expected to be able to access cte1 through map2table. After fixing this, we used to hit an assertion failure in Query_expression::optimize() (assert(!is_recursive())).
++EXPLAIN WITH RECURSIVE cte AS (SELECT * FROM t UNION SELECT * FROM cte)
++SELECT * FROM t AS y
++WHERE y.a IN (SELECT /*+ NO_MERGE() SEMIJOIN(MATERIALIZATION) */ DISTINCT COUNT(cte.a) OVER()
++FROM cte LEFT JOIN cte cte1 ON TRUE, t WHERE cte.a=t.a GROUP BY t.a);
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	y	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
++2	SUBQUERY	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using temporary
++2	SUBQUERY	<derived3>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	5	test.t.a	1	100.00	Using index
++3	DERIVED	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
++4	UNION	cte	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Recursive
++6	UNION RESULT	<union3,4>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	Using temporary
++Warnings:
++Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
++Note	1003	with recursive `cte` as (/* select#3 */ select `test`.`t`.`a` AS `a` from `test`.`t` union /* select#4 */ select `cte`.`a` AS `a` from `cte`) /* select#1 */ select /*+ SEMIJOIN(@`select#2` MATERIALIZATION) NO_MERGE(@`select#2`) */ `test`.`y`.`a` AS `a` from `test`.`t` `y` where <in_optimizer>(`test`.`y`.`a`,`test`.`y`.`a` in ( <materialize> (/* select#2 */ select count(`cte`.`a`) OVER ()  from `cte` join `test`.`t` where (`cte`.`a` = `test`.`t`.`a`) group by `test`.`t`.`a` having true ), <primary_index_lookup>(`test`.`y`.`a` in <temporary table> on <auto_distinct_key> where ((`test`.`y`.`a` = `<materialized_subquery>`.`COUNT(cte.a) OVER()`)))))
++EXPLAIN FORMAT=TREE WITH RECURSIVE cte AS (SELECT * FROM t UNION SELECT * FROM cte)
++SELECT * FROM t AS y
++WHERE y.a IN (SELECT /*+ NO_MERGE() SEMIJOIN(MATERIALIZATION) */ DISTINCT COUNT(cte.a) OVER()
++FROM cte LEFT JOIN cte cte1 ON TRUE, t WHERE cte.a=t.a GROUP BY t.a);
++EXPLAIN
++-> Filter: <in_optimizer>(y.a,y.a in (select #2))  (cost=0.35 rows=1)
++    -> Table scan on y  (cost=0.35 rows=1)
++    -> Select #2 (subquery in condition; run only once)
++        -> Filter: ((y.a = `<materialized_subquery>`.`COUNT(cte.a) OVER()`))  (cost=0..0 rows=0)
++            -> Limit: 1 row(s)  (cost=0..0 rows=0)
++                -> Index lookup on <materialized_subquery> using <auto_distinct_key> (COUNT(cte.a) OVER()=y.a)
++                    -> Materialize with deduplication  (cost=0..0 rows=0)
++                        -> Window aggregate with buffering: count(cte.a) OVER () 
++                            -> Table scan on <temporary>  (cost=3.51..3.51 rows=1)
++                                -> Temporary table with deduplication  (cost=1..1 rows=1)
++                                    -> Nested loop inner join  (cost=0.9 rows=1)
++                                        -> Filter: (t.a is not null)  (cost=0.35 rows=1)
++                                            -> Table scan on t  (cost=0.35 rows=1)
++                                        -> Single-row covering index lookup on cte using <auto_distinct_key> (a=t.a)  (cost=3.73..3.73 rows=1)
++                                            -> Materialize recursive CTE cte with deduplication  (cost=3.38..3.38 rows=3)
++                                                -> Table scan on t  (cost=0.35 rows=1)
++                                                -> Repeat until convergence
++                                                    -> Scan new records on cte  (cost=2.73 rows=2)
++
++WITH RECURSIVE cte AS (SELECT * FROM t UNION SELECT * FROM cte)
++SELECT * FROM t AS y
++WHERE y.a IN (SELECT /*+ NO_MERGE() SEMIJOIN(MATERIALIZATION) */ DISTINCT COUNT(cte.a) OVER()
++FROM cte LEFT JOIN cte cte1 ON TRUE, t WHERE cte.a=t.a GROUP BY t.a);
++a
++DROP TABLE t;
+-- 
+2.23.0
+

@@ -1,0 +1,145 @@
+# ==== Purpose ====
+#
+# Verify the statement outline attached hint work sas expected
+# ==== Implementation ====
+#
+# 1. verify optimizer hint /*index*/ works as expected
+# 2. verify varchar index hint  works as expected
+
+set @start_opt_outline_enabled= @@global.rds_opt_outline_enabled;
+set global rds_opt_outline_enabled = ON;
+connect(con_root,localhost, root,,);
+connect(conn_rdsAdmin, 127.0.0.1, rdsAdmin,,test);
+
+connection con_root;
+
+set session sql_mode='';
+
+# delete sql
+
+create database outline_db;
+use outline_db;
+CREATE TABLE `user_auth_custom_refer_rule` (
+  `id` bigint NOT NULL COMMENT '主键',
+  `pubts` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '时间戳',
+  `yxy_user_id` bigint DEFAULT NULL COMMENT '营销用户',
+  `yht_user_id` varchar(60) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '友户通用户',
+  `yxy_tenant_id` bigint DEFAULT NULL COMMENT '营销租户',
+  `yht_tenant_id` varchar(60) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '友户通租户',
+  `auth_refer_id` bigint DEFAULT NULL COMMENT '自定义规则主键',
+  `temp_table_name` varchar(60) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '临时表名',
+  `ytenant_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '租户ID',
+  PRIMARY KEY (`id`) USING BTREE,
+  KEY `idx_ytenant_id` (`ytenant_id`) USING BTREE,
+  KEY `idx_yht_yxy_auth_new` (`yxy_user_id`,`yht_tenant_id`,`auth_refer_id`,`yht_user_id`),
+  KEY `idx_auth_refer_id_new` (`auth_refer_id`),
+  KEY `idx_authreferid_temptablename_yxyuserid_yhtuserid` (`auth_refer_id`,`temp_table_name`,`yxy_user_id`,`yht_user_id`)
+) ENGINE=Dstore;
+
+INSERT INTO `user_auth_custom_refer_rule` VALUES (2595959763779648,'0000-00-00 00:00:00',2383428931784960,'e7a5944b-cf57-4776-abbb-117aa4d0c6b7',4909,'qyic8c7o',2598416661175040,'auth_0.temp_perm_null_table','qyic8c7o'),(2595959763779650,'0000-00-00 00:00:00',2383428931784960,'e7a5944b-cf57-4776-abbb-117aa4d0c6b7',4909,'qyic8c7o',2598417017232896,'auth_0.temp_perm_v2_560578891631034368','qyic8c7o');
+
+EXPLAIN DELETE FROM user_auth_custom_refer_rule
+WHERE 1 = 1
+	AND yxy_user_id = 274106
+	AND yht_tenant_id = 'qyic8c7o'
+	AND auth_refer_id IN (1690469252308402240, 2696506841323520, 2605668647427840)
+	AND yht_user_id = '30abb2b8-a778-4603-b74e-39f6cba41df2';
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ INDEX(user_auth_custom_refer_rule idx_auth_refer_id_new) */',
+                                      "DELETE FROM user_auth_custom_refer_rule WHERE 1 = 1 AND yxy_user_id = 274106 AND yht_tenant_id = 'qyic8c7o' AND auth_refer_id IN (1690469252308402240, 2696506841323520, 2605668647427840) AND yht_user_id = '30abb2b8-a778-4603-b74e-39f6cba41df2';");
+
+EXPLAIN DELETE FROM user_auth_custom_refer_rule
+WHERE 1 = 1
+	AND yxy_user_id = 274106
+	AND yht_tenant_id = 'qyic8c7o'
+	AND auth_refer_id IN (1690469252308402240, 2696506841323520, 2605668647427840)
+	AND yht_user_id = '30abb2b8-a778-4603-b74e-39f6cba41df2';
+
+connection conn_rdsAdmin;
+delete from mysql.outline;
+connection con_root;
+call dbms_outln.flush_outline();
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'idx_auth_refer_id_new',
+                                  '', "DELETE FROM user_auth_custom_refer_rule WHERE 1 = 1 AND yxy_user_id = 274106 AND yht_tenant_id = 'qyic8c7o' AND auth_refer_id IN (1690469252308402240, 2696506841323520, 2605668647427840) AND yht_user_id = '30abb2b8-a778-4603-b74e-39f6cba41df2';");
+
+call dbms_outln.preview_outline("outline_db", "DELETE FROM user_auth_custom_refer_rule WHERE 1 = 1 AND yxy_user_id = 274106 AND yht_tenant_id = 'qyic8c7o' AND auth_refer_id IN (1690469252308402240, 2696506841323520, 2605668647427840) AND yht_user_id = '30abb2b8-a778-4603-b74e-39f6cba41df2';");
+
+EXPLAIN DELETE FROM user_auth_custom_refer_rule
+WHERE 1 = 1
+	AND yxy_user_id = 274106
+	AND yht_tenant_id = 'qyic8c7o'
+	AND auth_refer_id IN (1690469252308402240, 2696506841323520, 2605668647427840)
+	AND yht_user_id = '30abb2b8-a778-4603-b74e-39f6cba41df2';
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'idx_auth_refer_id_new',
+                                  '', "DELETE user_auth_custom_refer_rule.* FROM user_auth_custom_refer_rule WHERE 1 = 1 AND yxy_user_id = 274106 AND yht_tenant_id = 'qyic8c7o' AND auth_refer_id IN (1690469252308402240, 2696506841323520, 2605668647427840) AND yht_user_id = '30abb2b8-a778-4603-b74e-39f6cba41df2';");
+
+EXPLAIN DELETE user_auth_custom_refer_rule.* FROM user_auth_custom_refer_rule
+WHERE 1 = 1
+	AND yxy_user_id = 274106
+	AND yht_tenant_id = 'qyic8c7o'
+	AND auth_refer_id IN (1690469252308402240, 2696506841323520, 2605668647427840)
+	AND yht_user_id = '30abb2b8-a778-4603-b74e-39f6cba41df2';
+
+#-----------------------------------------------------------
+# json type
+#-----------------------------------------------------------
+
+CREATE TABLE `loan_loanInfo` (
+  `$json` json NOT NULL,
+  `repaymentDate` bigint(20) GENERATED ALWAYS AS (json_extract(`$json`,'$."repaymentDate"')) VIRTUAL NOT NULL,
+  `state` varchar(15) COLLATE utf8mb4_bin GENERATED ALWAYS AS (json_unquote(json_extract(`$json`,'$."state"'))) VIRTUAL NOT NULL,
+  `ownerId` varchar(60) COLLATE utf8mb4_bin GENERATED ALWAYS AS (json_unquote(json_extract(`$json`,'$."ownerId"'))) VIRTUAL NOT NULL,
+  `corporationId` varchar(50) COLLATE utf8mb4_bin GENERATED ALWAYS AS (json_unquote(json_extract(`$json`,'$."corporationId"'))) VIRTUAL NOT NULL,
+  `id` varchar(50) COLLATE utf8mb4_bin NOT NULL,
+  `$createTime` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `$updateTime` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `active` bit(1) GENERATED ALWAYS AS ((json_extract(`$json`,'$."active"') = TRUE)) VIRTUAL NOT NULL,
+  `flowId` varchar(50) COLLATE utf8mb4_bin GENERATED ALWAYS AS (json_unquote(json_extract(`$json`,'$."flowId"'))) VIRTUAL NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `by_corporationId_ownerId_state` (`corporationId`,`ownerId`,`state`),
+  KEY `by_corporationId_flowId` (`corporationId`,`flowId`),
+  KEY `by_state_repaymentDate` (`state`,`repaymentDate`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin ROW_FORMAT=DYNAMIC COMMENT='借款包信息';
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'force index', 'by_corporationId_flowId', '',"SELECT COUNT(1) FROM `loan_loanInfo` AS `t0` WHERE `t0`.`corporationId` = 'b1g9Mt1oiEmk00' AND ((`t0`.`ownerId` = 'b1g9Mt1oiEmk00:Xsm3hEj9eX4d48' OR (JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$.sharedOwnerIds')) LIKE '%\"b1g9Mt1oiEmk00:Xsm3hEj9eX4d48\"%') OR JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$.transferId')) = 'b1g9Mt1oiEmk00:Xsm3hEj9eX4d48' OR (JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$.notConfirmOwnerIds')) LIKE '%\"b1g9Mt1oiEmk00:Xsm3hEj9eX4d48\"%')) AND `t0`.`state` = 'REPAID')");
+explain SELECT COUNT(1) FROM `loan_loanInfo` AS `t0` WHERE `t0`.`corporationId` = 'b1g9Mt1oiEmk00' AND ((`t0`.`ownerId` = 'b1g9Mt1oiEmk00:Xsm3hEj9eX4d48' OR (JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$.sharedOwnerIds')) LIKE '%\"b1g9Mt1oiEmk00:Xsm3hEj9eX4d48\"%') OR JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$.transferId')) = 'b1g9Mt1oiEmk00:Xsm3hEj9eX4d48' OR (JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$.notConfirmOwnerIds')) LIKE '%\"b1g9Mt1oiEmk00:Xsm3hEj9eX4d48\"%')) AND `t0`.`state` = 'REPAID');
+
+CREATE TABLE `datalink_datalink_0107` (
+  `$createTime` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `$json` json NOT NULL,
+  `$updateTime` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `active` bit(1) GENERATED ALWAYS AS ((json_extract(`$json`,_utf8mb4'$."active"') = TRUE)) VIRTUAL NOT NULL,
+  `code` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin GENERATED ALWAYS AS (json_unquote(json_extract(`$json`,_utf8mb4'$."code"'))) VIRTUAL NOT NULL,
+  `corporationId` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin GENERATED ALWAYS AS (json_unquote(json_extract(`$json`,_utf8mb4'$."corporationId"'))) VIRTUAL NOT NULL,
+  `entityId` varchar(60) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin GENERATED ALWAYS AS (json_unquote(json_extract(`$json`,_utf8mb4'$."entityId"'))) VIRTUAL NOT NULL,
+  `id` varchar(60) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  `name` varchar(300) CHARACTER SET gb18030 COLLATE gb18030_chinese_ci GENERATED ALWAYS AS (json_unquote(json_extract(`$json`,_utf8mb4'$."name"'))) VIRTUAL NOT NULL,
+  `masterId` varchar(60) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin GENERATED ALWAYS AS (json_unquote(json_extract(`$json`,_utf8mb4'$."masterId"'))) VIRTUAL,
+  `sourceId` varchar(40) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin GENERATED ALWAYS AS (json_unquote(json_extract(`$json`,_utf8mb4'$."sourceId"'))) VIRTUAL,
+  `visible` bit(1) GENERATED ALWAYS AS ((json_extract(`$json`,_utf8mb4'$."visible"') = TRUE)) VIRTUAL NOT NULL,
+  `ownerId` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin GENERATED ALWAYS AS (json_unquote(json_extract(`$json`,_utf8mb4'$."ownerId"'))) VIRTUAL,
+  `json_createTime` bigint(20) GENERATED ALWAYS AS (json_unquote(json_extract(`$json`,_utf8mb4'$."createTime"'))) VIRTUAL NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `by_corporationId_code_entityId` (`corporationId`,`code`),
+  KEY `idx_updateTime` (`$updateTime`),
+  KEY `by_corporationId_entityId_json_createTime` (`corporationId`,`entityId`,`json_createTime`),
+  KEY `by_sourceId_corporationId_entityId` (`sourceId`,`corporationId`,`entityId`),
+  KEY `by_corporationId_active_entityId` (`corporationId`,`active`,`entityId`),
+  KEY `by_entityId_ownerId` (`entityId`,`ownerId`),
+  KEY `by_corporationId_visible` (`corporationId`,`visible`),
+  KEY `by_masterId_corporationId` (`masterId`,`corporationId`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin ROW_FORMAT=DYNAMIC COMMENT='数据互联实例-业务对象';
+
+call dbms_outln.add_index_outline('outline_db', '', 1, 'force index', 'by_entityId_ownerId', '',"SELECT `t0`.`$json` FROM `datalink_datalink_0107` AS `t0` WHERE `t0`.`corporationId` = 'aYB3l$9zfo4DDg' AND (`t0`.`visible` = 1 AND (`t0`.`entityId` IN ('a10dee71cdaa48cd8800', 'ab0db9a813218d0bbc00', 'b30d794b5f6781189c00', 'b50de94b281105d46000', 'b70dee72d83d46af6c00', 'c10edd67d042fc16bbc0', 'c80d794b5f6780b89c00', 'c90de94b281105ec6000', 'ca0de94b38b2c6472c00', 'dc0d794b5f6781009c00', 'ea0d794b5f6780d09c00', 'f30d794b5f6780e89c00', 'fe0d794b5f6781309c00')) AND ((JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$.\"form\".\"E_f80d794b5f6780889c00_申请单编码\"')) LIKE '%S23007385%') OR (JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$.\"form\".\"E_f80d794b5f6780889c00_申请单编码\"')) LIKE '%S23007054%') OR (JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$.\"form\".\"E_f80d794b5f6780889c00_申请单编码\"')) LIKE '%S23004913%') OR (JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$.\"form\".\"E_f80d794b5f6780889c00_申请单编码\"')) LIKE '%S23004514%') OR (JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$.\"form\".
+\"E_f80d794b5f6780889c00_申请单编码\"')) LIKE '%S23006899%') OR (JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$.\"form\".\"E_f80d794b5f6780889c00_申请单编码\"')) LIKE '%S23006203%') OR (JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$.\"form\".\"E_f80d794b5f6780889c00_申请单编码\"')) LIKE '%B23009709%')))");
+
+explain SELECT `t0`.`$json` FROM `datalink_datalink_0107` AS `t0` WHERE `t0`.`corporationId` = 'aYB3l$9zfo4DDg' AND (`t0`.`visible` = 1 AND (`t0`.`entityId` IN ('a10dee71cdaa48cd8800', 'ab0db9a813218d0bbc00', 'b30d794b5f6781189c00', 'b50de94b281105d46000', 'b70dee72d83d46af6c00', 'c10edd67d042fc16bbc0', 'c80d794b5f6780b89c00', 'c90de94b281105ec6000', 'ca0de94b38b2c6472c00', 'dc0d794b5f6781009c00', 'ea0d794b5f6780d09c00', 'f30d794b5f6780e89c00', 'fe0d794b5f6781309c00')) AND ((JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$."form"."E_f80d794b5f6780889c00_申请单编码"')) LIKE '%S23007385%') OR (JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$."form"."E_f80d794b5f6780889c00_申请单编码"')) LIKE '%S23007054%') OR (JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$."form"."E_f80d794b5f6780889c00_申请单编码"')) LIKE '%S23004913%') OR (JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$."form"."E_f80d794b5f6780889c00_申请单编码"')) LIKE '%S23004514%') OR (JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$."form"."E_f80d794b5f6780889c00_申请单编码"')) LIKE '%S23006899%') OR (JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$."form"."E_f80d794b5f6780889c00_申请单编码"')) LIKE '%S23006203%') OR (JSON_UNQUOTE(JSON_EXTRACT(`t0`.`$json`, '$."form"."E_f80d794b5f6780889c00_申请单编码"')) LIKE '%B23009709%')));
+
+connection default;
+disconnect con_root;
+drop database outline_db;
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+set global rds_opt_outline_enabled = @start_opt_outline_enabled;

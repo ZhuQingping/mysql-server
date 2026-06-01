@@ -1,0 +1,85 @@
+# Original lower_case_table_names=0
+SELECT @@lower_case_table_names;
+@@lower_case_table_names
+0
+# Stop the MTR default mysqld since it's lower_case_table_names=0
+#
+# Initialize a temporary database that uses lower_case_table_names=0.
+#
+#
+# Start the DB server with the lower_case_table_names=0
+#
+# restart: --datadir=MYSQL_DATA_DIR --lower_case_table_names=0
+# New lower_case_table_names=0
+select @@lower_case_table_names;
+@@lower_case_table_names
+0
+set rds_recycle_bin_mode=on;
+set global rds_recycle_bin_mode=ON;
+create database db_recycle;
+use db_recycle;
+create table t0(id int);
+drop table t0;
+call dbms_recyclebin.restore_table('t0', 'DB_RECYCLE', "t0");
+ERROR 42000: Unknown database 'DB_RECYCLE'
+call dbms_recyclebin.restore_table('t0', 'db_recycle', "t0");
+drop table t0;
+call dbms_recyclebin.restore_db('DB_RECYCLE');
+ERROR HY000: No table whose origin db is DB_RECYCLE exists in recycle bin.
+call dbms_recyclebin.restore_db('DB_RECYCLE', 'db_recycle');
+ERROR HY000: No table whose origin db is DB_RECYCLE exists in recycle bin.
+call dbms_recyclebin.restore_db('db_recycle', 'DB_RECYCLE');
+ERROR 42000: Unknown database 'DB_RECYCLE'
+call dbms_recyclebin.restore_db('db_recycle', 'db_recycle');
+drop table t0;
+call dbms_recyclebin.restore_db('db_recycle');
+drop table t0;
+create database DB_RECYCLE;
+use DB_RECYCLE;
+create table T0(id int);
+drop table T0;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	DB_RECYCLE	T0	#	#
+__recyclebin__	#	db_recycle	t0	#	#
+call dbms_recyclebin.restore_db('DB_RECYCLE');
+show tables;
+Tables_in_DB_RECYCLE
+T0
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t0	#	#
+drop table T0;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	DB_RECYCLE	T0	#	#
+__recyclebin__	#	db_recycle	t0	#	#
+call dbms_recyclebin.restore_db('db_recycle');
+show tables;
+Tables_in_DB_RECYCLE
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	DB_RECYCLE	T0	#	#
+use db_recycle;
+drop table t0;
+call dbms_recyclebin.restore_db('DB_RECYCLE', 'db_recycle');
+call dbms_recyclebin.restore_db('db_recycle', 'DB_RECYCLE');
+show tables;
+Tables_in_db_recycle
+T0
+use DB_RECYCLE;
+show tables;
+Tables_in_DB_RECYCLE
+t0
+set global rds_recycle_bin_mode=OFF;
+drop database db_recycle;
+drop database DB_RECYCLE;
+drop database __recyclebin__;
+CREATE DATABASE IF NOT EXISTS __recyclebin__ DEFAULT CHARACTER SET utf8mb4;
+#
+# Cleanup
+#
+# restart:
+SELECT @@lower_case_table_names;
+@@lower_case_table_names
+0

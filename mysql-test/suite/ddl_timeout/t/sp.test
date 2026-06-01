@@ -1,0 +1,177 @@
+# ==== Purpose ====
+#
+# A basic test to verify the new variable rds_ddl_lock_wait_timeout
+# can force DDL to abort in specified timeout seconds, but DML etc.
+# won't be affected. And if lock_wait_timeout is specified too,
+# the smaller will take effect for DDL.
+# This test case mainly aims for the stored procedure.
+#
+
+--source include/count_sessions.inc
+
+let $lock_wait_timeout_orig=`select @@lock_wait_timeout`;
+let $ddl_lock_wait_timeout_orig=`select @@rds_ddl_lock_wait_timeout`;
+let $innodb_lock_wait_timeout_orig=`select @@innodb_lock_wait_timeout`;
+
+
+--echo # Define some basic procedure and functions
+delimiter |;
+
+
+CREATE PROCEDURE my_alter()
+BEGIN
+  UPDATE t1 SET a = 100 WHERE a = 1;
+  ALTER TABLE t1 ADD COLUMN b INT FIRST;
+  SHOW CREATE TABLE t1;
+
+  ALTER TABLE t1 DROP COLUMN b;
+  UPDATE t1 SET a = 1 WHERE a = 100;
+  SHOW CREATE TABLE t1;
+
+  UPDATE t2 SET a = 100 WHERE a = 1;
+  ALTER TABLE t2 ADD COLUMN b INT FIRST;
+  SHOW CREATE TABLE t2;
+
+  ALTER TABLE t2 DROP COLUMN b;
+  UPDATE t2 SET a = 1 WHERE a = 100;
+  SHOW CREATE TABLE t2;
+END|
+
+
+CREATE PROCEDURE my_alter_high()
+BEGIN
+  CALL my_alter();
+END|
+
+
+delimiter ;|
+
+
+--echo # Prepare data
+CREATE TABLE t1 (a INT);
+INSERT INTO t1 VALUES(1), (2), (3);
+
+CREATE TABLE t2 (a INT, c INT, UNIQUE KEY(a));
+INSERT INTO t2 VALUES(1, 1), (2, 2), (3, 3);
+
+
+--echo #
+--echo # Scenario 1: Verify the DDL in procedure will abort properly
+--echo #             according to DDL timeout value
+--echo #
+connect(conn1,localhost,root,,);
+connect(conn2,localhost,root,,);
+
+--echo # conn1: start a select on t1 to block DDL
+connection conn1;
+START TRANSACTION;
+SELECT * FROM t1;
+
+
+--echo # conn2: start to call a procedure / function which will run DDL
+connection conn2;
+
+SET SESSION rds_ddl_lock_wait_timeout = 3;
+SET SESSION lock_wait_timeout = 20;
+SET SESSION innodb_lock_wait_timeout = 10;
+
+--echo # Verify that this call is blocked by DDL
+--let conn2_start = `SELECT unix_timestamp(now())`
+--error ER_LOCK_WAIT_TIMEOUT
+CALL my_alter();
+--let conn2_end = `SELECT unix_timestamp(now())`
+--let r = `select ("$conn2_end" - "$conn2_start") >= 3`
+--echo # conn2 waited for 3 seconds: $r
+--let r = `select ("$conn2_end" - "$conn2_start") < 10`
+--echo # conn2 waited for less than 10 seconds: $r
+--echo # Need to revert the update from sp call
+UPDATE t1 SET a = 1 WHERE a = 100;
+
+--echo # Verify that nested sp call is blocked by DDL too
+--let conn2_start = `SELECT unix_timestamp(now())`
+--error ER_LOCK_WAIT_TIMEOUT
+CALL my_alter_high();
+--let conn2_end = `SELECT unix_timestamp(now())`
+--let r = `select ("$conn2_end" - "$conn2_start") >= 3`
+--echo # conn2 waited for 3 seconds: $r
+--let r = `select ("$conn2_end" - "$conn2_start") < 10`
+--echo # conn2 waited for less than 10 seconds: $r
+--echo # Need to revert the update from sp call
+UPDATE t1 SET a = 1 WHERE a = 100;
+
+disconnect conn2;
+
+
+--echo # conn1: rollback
+connection conn1;
+ROLLBACK;
+--echo # 3 rows are expected
+SELECT * FROM t1;
+disconnect conn1;
+
+
+
+--echo #
+--echo # Scenario 2: Verify the DML in procedure will abort properly
+--echo #             according to normal timeout value rather than
+--echo #             the DDL timeout
+--echo #
+connect(conn1,localhost,root,,);
+connect(conn2,localhost,root,,);
+
+--echo # conn1: start a DML on t2 to block DML in sp/function on t2
+connection conn1;
+START TRANSACTION;
+REPLACE INTO t2 VALUES(1, 11);
+
+
+--echo # conn2: start to call a procedure / function which will run DDL
+connection conn2;
+
+SET SESSION rds_ddl_lock_wait_timeout = 10;
+SET SESSION lock_wait_timeout = 20;
+SET SESSION innodb_lock_wait_timeout = 3;
+
+--echo # Verify that this call is blocked by DML on t2
+--let conn2_start = `SELECT unix_timestamp(now())`
+--error ER_LOCK_WAIT_TIMEOUT
+CALL my_alter();
+--let conn2_end = `SELECT unix_timestamp(now())`
+--let r = `select ("$conn2_end" - "$conn2_start") >= 3`
+--echo # conn2 waited for 3 seconds: $r
+--let r = `select ("$conn2_end" - "$conn2_start") < 10`
+--echo # conn2 waited for less than 10 seconds: $r
+
+--echo # Verify that nested sp call is blocked by DML on t2 too
+--let conn2_start = `SELECT unix_timestamp(now())`
+--error ER_LOCK_WAIT_TIMEOUT
+CALL my_alter_high();
+--let conn2_end = `SELECT unix_timestamp(now())`
+--let r = `select ("$conn2_end" - "$conn2_start") >= 3`
+--echo # conn2 waited for 3 seconds: $r
+--let r = `select ("$conn2_end" - "$conn2_start") < 10`
+--echo # conn2 waited for less than 10 seconds: $r
+
+disconnect conn2;
+
+
+--echo # conn1: rollback
+connection conn1;
+ROLLBACK;
+--echo # 3 rows are expected
+SELECT * FROM t1;
+disconnect conn1;
+
+
+--echo # Teardown
+connection default;
+DROP PROCEDURE my_alter;
+DROP PROCEDURE my_alter_high;
+DROP TABLE t1, t2;
+
+
+eval set global lock_wait_timeout = $lock_wait_timeout_orig;
+eval set global rds_ddl_lock_wait_timeout = $ddl_lock_wait_timeout_orig;
+eval set global innodb_lock_wait_timeout = $innodb_lock_wait_timeout_orig;
+
+--source include/wait_until_count_sessions.inc

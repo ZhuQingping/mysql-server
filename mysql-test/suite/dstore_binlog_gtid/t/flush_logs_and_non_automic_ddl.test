@@ -1,0 +1,212 @@
+# ==== Purpose =======
+# Verify flush logs and parallel executed non automic ddl  generate gtid normal
+#
+# ==== References ====
+#
+# BUG2026012223284 flush logs and parallel executed non automic ddl cause gtid gap
+#
+
+
+--source include/have_binlog_format_row.inc
+--source include/have_only_dstore.inc
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+
+connect(con1, localhost, root,,);
+connect(con2, localhost, root,,);
+
+--echo #test create database if not exists 
+connection con1;
+set debug = '+d,sleep_before_update_gtid';
+create database if not exists test1;
+--send create database if not exists test1;
+
+connection con2;
+flush logs;
+connection con1;
+--reap 
+
+--let $keep_gtid_events= 1
+--let $keep_gtid_set = 1
+--let $binlog_file= LAST
+source include/show_binlog_events.inc;
+
+
+--echo #test drop database if exists 
+connection con1;
+drop database if exists test1;
+--send drop database if exists test1;
+
+connection con2;
+flush logs;
+connection con1;
+--reap 
+
+--let $keep_gtid_events= 1
+--let $keep_gtid_set = 1
+--let $binlog_file= LAST
+source include/show_binlog_events.inc;
+
+--echo #test create event if not exists 
+connection con1;
+create table app_logs (
+    id int auto_increment primary key,
+    log_message text,
+    created_at datetime
+);
+create event if not exists cleanup_old_logs  on schedule every 1 day  do delete from app_logs where created_at < date_sub(now(), interval 30 day);
+
+--send create event if not exists cleanup_old_logs  on schedule every 1 day  do delete from app_logs where created_at < date_sub(now(), interval 30 day);
+
+connection con2;
+flush logs;
+connection con1;
+--reap 
+
+--let $keep_gtid_events= 1
+--let $keep_gtid_set = 1
+--let $binlog_file= LAST
+source include/show_binlog_events.inc;
+
+--echo #test drop event if exists 
+connection con1;
+drop event if exists cleanup_old_logs;
+--send drop event if exists cleanup_old_logs;
+
+connection con2;
+flush logs;
+connection con1;
+--reap 
+
+--let $keep_gtid_events= 1
+--let $keep_gtid_set = 1
+--let $binlog_file= LAST
+source include/show_binlog_events.inc;
+drop table app_logs;
+
+--echo #test create func if not exists 
+connection con1;
+create function if not exists f1() returns int return 2;
+--send create function if not exists f1() returns int return 2;
+
+connection con2;
+flush logs;
+connection con1;
+--reap 
+
+--let $keep_gtid_events= 1
+--let $keep_gtid_set = 1
+--let $binlog_file= LAST
+source include/show_binlog_events.inc;
+
+
+--echo #test drop func if exists 
+connection con1;
+drop function if exists f1;
+--send drop function if exists f1;
+
+connection con2;
+flush logs;
+connection con1;
+--reap 
+
+--let $keep_gtid_events= 1
+--let $keep_gtid_set = 1
+--let $binlog_file= LAST
+source include/show_binlog_events.inc;
+
+
+--echo #test create procedure if not exists 
+connection con1;
+create procedure if not exists f1() select 1;
+--send create procedure if not exists f1() select 1;
+
+connection con2;
+flush logs;
+connection con1;
+--reap 
+
+--let $keep_gtid_events= 1
+--let $keep_gtid_set = 1
+--let $binlog_file= LAST
+source include/show_binlog_events.inc;
+
+
+--echo #test drop procedure if exists 
+connection con1;
+drop procedure if exists f1;
+--send drop procedure if exists f1;
+
+connection con2;
+flush logs;
+connection con1;
+--reap 
+
+--let $keep_gtid_events= 1
+--let $keep_gtid_set = 1
+--let $binlog_file= LAST
+source include/show_binlog_events.inc;
+
+--echo #test create table if not exists 
+connection con1;
+create table if not exists t(id int);
+--send create table if not exists t(id int);
+
+connection con2;
+flush logs;
+connection con1;
+--reap 
+
+--let $keep_gtid_events= 1
+--let $keep_gtid_set = 1
+--let $binlog_file= LAST
+source include/show_binlog_events.inc;
+
+
+--echo #test drop table if exists 
+connection con1;
+drop table if exists t;
+--send drop table if exists t;
+
+connection con2;
+flush logs;
+connection con1;
+--reap 
+
+--let $keep_gtid_events= 1
+--let $keep_gtid_set = 1
+--let $binlog_file= LAST
+source include/show_binlog_events.inc;
+
+--echo #test create trigger if not exists 
+connection con1;
+create table t1 (a int);
+create trigger if not exists t1_bi before insert on t1 for each row set @a := 1;
+--send create trigger if not exists t1_bi before insert on t1 for each row set @a := 1
+
+connection con2;
+flush logs;
+connection con1;
+--reap 
+
+--let $keep_gtid_events= 1
+--let $keep_gtid_set = 1
+--let $binlog_file= LAST
+source include/show_binlog_events.inc;
+
+
+--echo #test drop trigger if exists 
+connection con1;
+drop trigger if exists t1_bi;
+--send drop trigger if exists t1_bi;
+
+connection con2;
+flush logs;
+connection con1;
+--reap 
+
+--let $keep_gtid_events= 1
+--let $keep_gtid_set = 1
+--let $binlog_file= LAST
+source include/show_binlog_events.inc;
+drop table t1;

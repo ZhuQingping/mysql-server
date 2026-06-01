@@ -1,0 +1,33 @@
+--echo #
+--echo # test add_sql_filter/update_sql_filter/delete_sql_filter not record to binlog
+--echo #
+--source ../include/sqlfilter_prepare.inc
+
+--source include/not_valgrind.inc
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+--source include/have_binlog_format_row.inc
+RESET MASTER;
+
+--echo #
+--echo # excute all sql filter interface: add_sql_filter/update_sql_filter/delete_sql_filter/flush_sql_filter/show_sql_filter
+--echo #
+call dbms_sqlfilter.add_sql_filter("select", 10, "select~t","");
+--let $item_id = `select item_id from mysql.rds_sql_filter_rules limit 1`
+--replace_regex /\([0-9]+/(#/
+eval call dbms_sqlfilter.update_sql_filter($item_id,'SELECT',100,"SELECT~t6","");
+call dbms_sqlfilter.flush_sql_filter();
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--replace_regex /\([0-9]+/(#/
+eval call dbms_sqlfilter.delete_sql_filter($item_id);
+
+create table t(id int);
+drop table t;
+
+--echo #
+--echo # Show binlog events, no mysql.rds_sql_filter_rules
+--echo #
+--replace_regex /xid=[0-9]+/xid=#/ /Server ver: [^,]*,/Server ver: ###,/
+show binlog events;
+--source ../include/sqlfilter_cleanup.inc

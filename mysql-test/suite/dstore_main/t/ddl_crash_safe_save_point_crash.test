@@ -1,0 +1,19 @@
+--source include/have_only_dstore.inc
+
+--echo #
+--echo #  Test case for BUG2025080827905: rollback to savepoint will make IO_CACHE::pos_in_file
+--echo #  be invalid value, and make server crash.
+--echo #
+
+CREATE DATABASE BUG2025080827905;
+USE BUG2025080827905;
+CREATE TABLE t(pk INT);
+START TRANSACTION;
+DELETE FROM t;
+SAVEPOINT save1;
+INSERT INTO t VALUES(1);
+ROLLBACK TO SAVEPOINT save1;
+--echo # Before this patch, the following commit will make server crash.
+COMMIT;
+
+DROP DATABASE BUG2025080827905;

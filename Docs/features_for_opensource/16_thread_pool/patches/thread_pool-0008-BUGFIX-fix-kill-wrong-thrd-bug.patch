@@ -1,0 +1,346 @@
+From 851041ee3df6bcfb9057ae709ebce4ceb47916fc Mon Sep 17 00:00:00 2001
+From: songliyong <songliyong@contributor>
+
+
+Date: Wed, 17 Sep 2025 20:52:21 +0800
+Subject: [PATCH] BUGFIX fix kill wrong thrd bug
+
+Issue:
+------
+two session may share the same thrd, kill session1, but
+session2 may be killed if session2 is runing.
+
+Solution:
+---------
+skip setting interrupt flag if thd is not running.
+---
+ plugin/threadpool/tests/mtr/suite.opt         |   1 +
+ .../tests/mtr/threadpool_killquery.opt        |   3 +
+ .../tests/mtr/threadpool_killquery.result     |  56 ++++++++
+ .../tests/mtr/threadpool_killquery.test       | 134 ++++++++++++++++++
+ plugin/threadpool/threadpool_unix.cc          |  10 +-
+ sql/sql_class.cc                              |   1 +
+ sql/sql_class.h                               |  25 ++++
+ storage/dstore/handler/ha_cde.cc              |   5 +-
+ 8 files changed, 230 insertions(+), 5 deletions(-)
+ create mode 100644 plugin/threadpool/tests/mtr/threadpool_killquery.opt
+ create mode 100644 plugin/threadpool/tests/mtr/threadpool_killquery.result
+ create mode 100644 plugin/threadpool/tests/mtr/threadpool_killquery.test
+
+diff --git a/plugin/threadpool/tests/mtr/suite.opt b/plugin/threadpool/tests/mtr/suite.opt
+index 14cc8d35c04..72496163d64 100644
+--- a/plugin/threadpool/tests/mtr/suite.opt
++++ b/plugin/threadpool/tests/mtr/suite.opt
+@@ -1 +1,2 @@
+ --threadpool_enabled=ON
++--rds_load_data_infile_enable=true
+diff --git a/plugin/threadpool/tests/mtr/threadpool_killquery.opt b/plugin/threadpool/tests/mtr/threadpool_killquery.opt
+new file mode 100644
+index 00000000000..caba20ddd6b
+--- /dev/null
++++ b/plugin/threadpool/tests/mtr/threadpool_killquery.opt
+@@ -0,0 +1,3 @@
++--threadpool_enabled=ON
++--rds_load_data_infile_enable=true
++--threadpool-size=2
+diff --git a/plugin/threadpool/tests/mtr/threadpool_killquery.result b/plugin/threadpool/tests/mtr/threadpool_killquery.result
+new file mode 100644
+index 00000000000..e75cbae675a
+--- /dev/null
++++ b/plugin/threadpool/tests/mtr/threadpool_killquery.result
+@@ -0,0 +1,56 @@
++create database test_db;
++create table test_db.test_tbl (a int, b int);
++insert into test_db.test_tbl values (0, 1), (2, 3);
++create user test_user@localhost;
++grant select on performance_schema.* to test_user@localhost;
++grant select on test_db.* to test_user@localhost;
++grant system_variables_admin on *.* to test_user@localhost;
++grant session_variables_admin on *.* to test_user@localhost;
++flush privileges;
++#
++# BUGFIX
++#
++select count(*) from test_db.test_tbl;
++count(*)
++2
++/* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000);
++KILL QUERY <CONNECTION_ID>;
++SLEEP(1000)
++1
++select "connection is active after kill query";
++connection is active after kill query
++connection is active after kill query
++/* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000);
++SET SESSION DEBUG='+d,kill_connection_null_thread_context_injection';
++KILL QUERY <CONNECTION_ID>;
++KILL QUERY <CONNECTION_ID>;
++SLEEP(1000)
++1
++select "connection is active after kill query";
++connection is active after kill query
++connection is active after kill query
++SET SESSION DEBUG='-d,kill_connection_null_thread_context_injection';
++/* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000);
++SET SESSION DEBUG='+d,kill_connection_null_thread_core_injection';
++KILL QUERY <CONNECTION_ID>;
++SLEEP(1000)
++1
++select "connection is active after kill query";
++connection is active after kill query
++connection is active after kill query
++SET SESSION DEBUG='-d,kill_connection_null_thread_core_injection';
++/* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000);
++SET SESSION DEBUG='+d,thd_to_cde_session_null_cde_session_injection';
++KILL QUERY <CONNECTION_ID>;
++SLEEP(1000)
++1
++select "connection is active after kill query";
++connection is active after kill query
++connection is active after kill query
++SET SESSION DEBUG='-d,thd_to_cde_session_null_cde_session_injection';
++#
++# cleanup.
++#
++use test;
++drop user test_user@localhost;
++drop database test_db;
+diff --git a/plugin/threadpool/tests/mtr/threadpool_killquery.test b/plugin/threadpool/tests/mtr/threadpool_killquery.test
+new file mode 100644
+index 00000000000..d9e491a4504
+--- /dev/null
++++ b/plugin/threadpool/tests/mtr/threadpool_killquery.test
+@@ -0,0 +1,134 @@
++# ==== Purpose ====
++#
++# Kill related functions that can only be tested in a debugging environment, such as fault injection, etc.
++#
++
++--source include/have_only_dstore.inc
++--source include/have_debug.inc
++
++# create user
++connect (root_connection,localhost,root,,test);
++connection root_connection;
++
++create database test_db;
++create table test_db.test_tbl (a int, b int);
++insert into test_db.test_tbl values (0, 1), (2, 3);
++
++create user test_user@localhost;
++grant select on performance_schema.* to test_user@localhost;
++grant select on test_db.* to test_user@localhost;
++grant system_variables_admin on *.* to test_user@localhost;
++grant session_variables_admin on *.* to test_user@localhost;
++flush privileges;
++
++connect (user_connection0, localhost, test_user,,test,,);
++connection user_connection0;
++
++connect (user_connection1, localhost, test_user,,test,,);
++connection user_connection1;
++--disable_reconnect
++
++connect (user_connection2, localhost, test_user,,test,,);
++connection user_connection2;
++--disable_reconnect
++
++--echo #
++--echo # BUGFIX
++--echo #
++
++--connection user_connection1
++--disable_reconnect
++# open table
++select count(*) from test_db.test_tbl;
++# Get connection id
++--let $connection_id=`SELECT CONNECTION_ID()`
++--send /* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000)
++
++
++--connection user_connection2
++# Kill query.
++let $wait_condition= SELECT COUNT(processlist_info) FROM performance_schema.threads WHERE processlist_state="User sleep" AND processlist_info LIKE "%KILL QUERY: SELECT SLEEP(1000)%";
++--source include/wait_condition.inc
++--replace_result $connection_id <CONNECTION_ID>
++--eval KILL QUERY $connection_id
++
++--connection user_connection1
++--reap
++select "connection is active after kill query";
++
++--connection user_connection1
++--send /* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000)
++
++--connection user_connection2
++# Kill query.
++let $wait_condition= SELECT COUNT(processlist_info) FROM performance_schema.threads WHERE processlist_state="User sleep" AND processlist_info LIKE "%KILL QUERY: SELECT SLEEP(1000)%";
++--source include/wait_condition.inc
++SET SESSION DEBUG='+d,kill_connection_null_thread_context_injection';
++--replace_result $connection_id <CONNECTION_ID>
++--eval KILL QUERY $connection_id
++
++# kill inactive query
++--connection user_connection0
++--replace_result $connection_id <CONNECTION_ID>
++--eval KILL QUERY $connection_id
++
++--connection user_connection1
++--reap
++select "connection is active after kill query";
++
++--connection user_connection2
++SET SESSION DEBUG='-d,kill_connection_null_thread_context_injection';
++
++--connection user_connection1
++--send /* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000)
++
++--connection user_connection2
++
++# Kill query.
++let $wait_condition= SELECT COUNT(processlist_info) FROM performance_schema.threads WHERE processlist_state="User sleep" AND processlist_info LIKE "%KILL QUERY: SELECT SLEEP(1000)%";
++--source include/wait_condition.inc
++SET SESSION DEBUG='+d,kill_connection_null_thread_core_injection';
++--replace_result $connection_id <CONNECTION_ID>
++--eval KILL QUERY $connection_id
++
++--connection user_connection1
++--reap
++select "connection is active after kill query";
++
++--connection user_connection2
++SET SESSION DEBUG='-d,kill_connection_null_thread_core_injection';
++
++--connection user_connection1
++--send /* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000)
++
++--connection user_connection2
++
++# Kill query.
++let $wait_condition= SELECT COUNT(processlist_info) FROM performance_schema.threads WHERE processlist_state="User sleep" AND processlist_info LIKE "%KILL QUERY: SELECT SLEEP(1000)%";
++--source include/wait_condition.inc
++SET SESSION DEBUG='+d,thd_to_cde_session_null_cde_session_injection';
++--replace_result $connection_id <CONNECTION_ID>
++--eval KILL QUERY $connection_id
++
++
++--connection user_connection1
++--reap
++select "connection is active after kill query";
++
++
++--connection user_connection2
++SET SESSION DEBUG='-d,thd_to_cde_session_null_cde_session_injection';
++
++
++--echo #
++--echo # cleanup.
++--echo #
++
++disconnect user_connection1;
++disconnect user_connection2;
++
++connection root_connection;
++use test;
++drop user test_user@localhost;
++drop database test_db;
++disconnect root_connection;
+diff --git a/plugin/threadpool/threadpool_unix.cc b/plugin/threadpool/threadpool_unix.cc
+index b863dc95c68..9be17572793 100644
+--- a/plugin/threadpool/threadpool_unix.cc
++++ b/plugin/threadpool/threadpool_unix.cc
+@@ -1723,14 +1723,16 @@ static int start_io(connection_t *connection) {
+ static void handle_event(connection_t *connection) {
+   DBUG_ENTER("handle_event");
+   int err;
+-
++  THD *thd = connection->thd;
++  assert(thd != nullptr);
++  thd->set_thrd_is_killable(true);
+   if (!connection->is_logged_in()) {
+-    err = threadpool_add_connection(connection->thd);
++    err = threadpool_add_connection(thd);
+     connection->set_logged_in();
+   } else {
+-    err = threadpool_process_request(connection->thd);
++    err = threadpool_process_request(thd);
+   }
+-
++  thd->set_thrd_is_killable(false);
+   if (err) goto end;
+ 
+   set_wait_timeout(connection);
+diff --git a/sql/sql_class.cc b/sql/sql_class.cc
+index 7207e6f4ebd..ff4fbd2a659 100644
+--- a/sql/sql_class.cc
++++ b/sql/sql_class.cc
+@@ -760,6 +760,7 @@ THD::THD(bool enable_plugins)
+   query_name_consts = 0;
+   db_charset = global_system_variables.collation_database;
+   is_killable = false;
++  is_thrd_killable = true;
+   binlog_evt_union.do_union = false;
+   enable_slow_log = false;
+   commit_error = CE_NONE;
+diff --git a/sql/sql_class.h b/sql/sql_class.h
+index e9bad9e6062..dfc68498ced 100644
+--- a/sql/sql_class.h
++++ b/sql/sql_class.h
+@@ -1627,6 +1627,7 @@ class THD : public MDL_context_owner,
+   uint dbug_sentry;  // watch out for memory corruption
+ #endif
+   bool is_killable;
++  bool is_thrd_killable;
+   /**
+     Mutex protecting access to current_mutex and current_cond.
+   */
+@@ -4546,6 +4547,30 @@ class THD : public MDL_context_owner,
+     mysql_mutex_unlock(&LOCK_thd_data);
+   }
+ 
++  /**
++    Assign a new value to is_thrd_killable
++    Protected with the LOCK_thd_data mutex.
++  */
++  void set_thrd_is_killable(bool killable) {
++    mysql_mutex_lock(&LOCK_thd_data);
++    is_thrd_killable = killable;
++    mysql_mutex_unlock(&LOCK_thd_data);
++  }
++
++  /**
++    check whether current thrd could be interruptable.
++    We should skip interrupt it if this thd is idle.
++    consider this scenario:
++    session1 and session2 run in the same thread in threadpool,
++    so they share the same thrd.
++    session1 runs in thrd1.
++    schedule session1 out, and then session2 runs in thrd1.
++    killing session1 may interrupt session2. In this scenario,
++    the interruption should be skipped if session1 is not running.
++    @return true if current thrd could be interrupted.
++  */
++  bool thrd_is_killable() { return is_thrd_killable; }
++
+   void enter_locked_tables_mode(enum_locked_tables_mode mode_arg) {
+     assert(locked_tables_mode == LTM_NONE);
+ 
+diff --git a/storage/dstore/handler/ha_cde.cc b/storage/dstore/handler/ha_cde.cc
+index 5a2e279a52d..b05f5ba0a03 100644
+--- a/storage/dstore/handler/ha_cde.cc
++++ b/storage/dstore/handler/ha_cde.cc
+@@ -781,7 +781,10 @@ static void CdeKillConnection(handlerton *hton, THD *thd) {
+   CDE_ASSERT(hton == cde_hton_ptr);
+   CDE_LOG_INFO("cde kill connection, in_thd=%p, current_thd=%p", thd,
+                current_thd);
+-
++  // protected by LOCK_thd_data
++  if (!thd->thrd_is_killable()) {
++    return;
++  }
+   cde_session_t *session = CdeGetSession(thd, false);
+   CdeMutexGuard mutexGuard(&session->m_mutex, CDE_LOCATION_HERE);
+   session->m_setInterrupt = true;
+-- 
+2.23.0
+

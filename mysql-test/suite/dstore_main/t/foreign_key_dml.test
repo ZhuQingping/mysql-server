@@ -1,0 +1,606 @@
+--source include/have_only_dstore.inc
+--echo #
+--echo # CDE
+--echo #
+
+use test;
+
+
+--echo # test insert/update on referenced/foreign table in nostrict mod
+--disable_warnings
+drop table if exists t0, t1, t2, t3, t4;
+--enable_warnings
+
+create table t0 (a int, b int, c int key, index(b,a)) engine=Dstore;
+create table t1 (b int, f int key, index(b), foreign key(b) references t0(b)) engine=Dstore;
+insert into t0 values(1,1,1), (2,2,2), (3,3,3), (4,4,4), (5,5,5);
+insert into t1 values(1,1), (2,2), (3,3), (4,4), (5,5);
+update t0 set a=6 where c=1;
+update t0 set a=1 where c=1;
+-- error 1451
+update t0 set b=2 where c=1;
+
+create table t2 (a int, b int, f int, g int key, h int, i int, index(b,a), index(f), index(h,i), foreign key(b,a) references t0(b,a), foreign key(f) references t1(f)) engine=Dstore;
+create table t3 (c int, g int, index(c), index(g), foreign key(c) references t0(c), foreign key(g) references t2(g)) engine=Dstore;
+create table t4 (c int, h int, i int, index(c), index(h,i), foreign key(c) references t3(c), foreign key(h,i) references t2(h,i)) engine=Dstore;
+insert into t2 values(1,1,1,1,1,1), (2,2,2,2,2,2), (3,3,3,3,3,3), (4,4,4,4,4,4), (5,5,5,5,5,5);
+insert into t3 values(1,1), (2,2), (3,3), (4,4), (5,5);
+insert into t4 values(1,1,1), (2,2,2), (3,3,3), (4,4,4), (5,5,5);
+
+-- error 1452
+insert into t1 values(6,6);
+
+# todo: fix this testcase
+# -- error 1062
+# insert into t2 values(1,1,6,1,1,1);
+
+-- error 1452
+insert into t2 values(1,1,6,6,1,1);
+
+-- error 1452
+insert into t2 values(1,2,1,6,1,1);
+
+insert into t2 values(2,2,1,6,1,1);
+insert into t3 values(1,6);
+
+-- error 1452
+insert into t4 values(6,1,1);
+
+insert into t4 values(2,1,1);
+
+-- error 1451
+update t0 set c=6 where a=1;
+
+--disable_warnings
+drop table if exists t0, t1, t2, t3, t4;
+--enable_warnings
+
+CREATE TABLE t0(id INT key, a INT);
+CREATE TABLE t1(id INT key, a INT, FOREIGN KEY(a) REFERENCES t0(id) ON DELETE CASCADE);
+CREATE TABLE t2(id INT, x INT, FOREIGN KEY(id) REFERENCES t1(id) ON DELETE CASCADE);
+
+INSERT INTO t0 VALUES(1, 1);
+INSERT INTO t0 VALUES(2, 1);
+INSERT INTO t1 VALUES(1, 1);
+INSERT INTO t1 VALUES(2, 2);
+INSERT INTO t2 VALUES(1, 1);
+INSERT INTO t2 VALUES(2, 2);
+
+SELECT COUNT(*) = 2 FROM t0;
+SELECT COUNT(*) = 2 FROM t1;
+SELECT COUNT(*) = 2 FROM t2;
+
+DELETE FROM t0 WHERE id = 1;
+
+SELECT COUNT(*) = 1 FROM t0;
+SELECT COUNT(*) = 1 FROM t1;
+SELECT COUNT(*) = 1 FROM t2;
+
+SELECT * FROM t0;
+SELECT * FROM t1;
+SELECT * FROM t2;
+
+DROP TABLE t0,t1,t2;
+
+CREATE TABLE t0(id INT key, a INT);
+CREATE TABLE t1(id INT key, a INT, FOREIGN KEY(a) REFERENCES t0(id) ON DELETE SET NULL);
+CREATE TABLE t2(id INT, x INT, FOREIGN KEY(id) REFERENCES t0(id) ON DELETE SET NULL);
+
+INSERT INTO t0 VALUES(1, 1);
+INSERT INTO t0 VALUES(2, 1);
+INSERT INTO t1 VALUES(1, 1);
+INSERT INTO t1 VALUES(2, 2);
+INSERT INTO t2 VALUES(1, 1);
+INSERT INTO t2 VALUES(2, 2);
+
+SELECT COUNT(*) = 0 FROM t1 WHERE a IS NULL;
+SELECT COUNT(*) = 0 FROM t2 WHERE id IS NULL;
+
+DELETE FROM t0 WHERE id = 1;
+
+SELECT COUNT(*) = 1 FROM t1 WHERE a IS NULL;
+--let $assert_text = a should be NULL for id == 1
+--let $assert_cond = [SELECT id FROM t1 WHERE a IS NULL] = "1"
+--source include/assert.inc
+
+SELECT COUNT(*) = 1 FROM t2 WHERE id IS NULL;
+--let $assert_text = id should be NULL for x == 1
+--let $assert_cond = [SELECT x FROM t2 WHERE id IS NULL] = "1"
+--source include/assert.inc
+
+SELECT * FROM t0;
+SELECT * FROM t1;
+SELECT * FROM t2;
+
+DROP TABLE t0,t1,t2;
+
+CREATE TABLE t0(id INT key, a INT);
+CREATE TABLE t1(id INT key, a INT, FOREIGN KEY(a) REFERENCES t0(id) ON DELETE RESTRICT);
+CREATE TABLE t2(id INT, x INT, FOREIGN KEY(id) REFERENCES t0(id) ON DELETE RESTRICT);
+
+INSERT INTO t0 VALUES(1, 1);
+INSERT INTO t0 VALUES(2, 1);
+INSERT INTO t1 VALUES(1, 1);
+INSERT INTO t1 VALUES(2, 2);
+INSERT INTO t2 VALUES(1, 1);
+INSERT INTO t2 VALUES(2, 2);
+
+SELECT COUNT(*) = 2 FROM t0;
+SELECT COUNT(*) = 2 FROM t1;
+SELECT COUNT(*) = 2 FROM t2;
+
+--error 1451
+DELETE FROM t0 WHERE id = 1;
+
+SELECT COUNT(*) = 2 FROM t0;
+SELECT COUNT(*) = 2 FROM t1;
+SELECT COUNT(*) = 2 FROM t2;
+
+DROP TABLE t0,t1,t2;
+
+CREATE TABLE t0(id INT key, a INT);
+CREATE TABLE t1(id INT key, a INT, FOREIGN KEY(a) REFERENCES t0(id) ON DELETE NO ACTION);
+CREATE TABLE t2(id INT, x INT, FOREIGN KEY(id) REFERENCES t0(id) ON DELETE NO ACTION);
+
+INSERT INTO t0 VALUES(1, 1);
+INSERT INTO t0 VALUES(2, 1);
+INSERT INTO t1 VALUES(1, 1);
+INSERT INTO t1 VALUES(2, 2);
+INSERT INTO t2 VALUES(1, 1);
+INSERT INTO t2 VALUES(2, 2);
+
+SELECT COUNT(*) = 2 FROM t0;
+SELECT COUNT(*) = 2 FROM t1;
+SELECT COUNT(*) = 2 FROM t2;
+
+--error 1451
+DELETE FROM t0 WHERE id = 1;
+
+SELECT COUNT(*) = 2 FROM t0;
+SELECT COUNT(*) = 2 FROM t1;
+SELECT COUNT(*) = 2 FROM t2;
+
+DROP TABLE t0,t1,t2;
+
+CREATE TABLE t0(id INT key, a INT);
+CREATE TABLE t1(id INT key, a INT, FOREIGN KEY(a) REFERENCES t0(id) ON DELETE SET DEFAULT);
+CREATE TABLE t2(id INT, x INT, FOREIGN KEY(id) REFERENCES t0(id) ON DELETE SET DEFAULT);
+
+INSERT INTO t0 VALUES(1, 1);
+INSERT INTO t0 VALUES(2, 1);
+INSERT INTO t1 VALUES(1, 1);
+INSERT INTO t1 VALUES(2, 2);
+INSERT INTO t2 VALUES(1, 1);
+INSERT INTO t2 VALUES(2, 2);
+
+SELECT COUNT(*) = 2 FROM t0;
+SELECT COUNT(*) = 2 FROM t1;
+SELECT COUNT(*) = 2 FROM t2;
+
+--error 1451
+DELETE FROM t0 WHERE id = 1;
+
+SELECT COUNT(*) = 2 FROM t0;
+SELECT COUNT(*) = 2 FROM t1;
+SELECT COUNT(*) = 2 FROM t2;
+
+DROP TABLE t0,t1,t2;
+
+# ON UPDATE
+
+CREATE TABLE t0(id INT key, a INT);
+CREATE TABLE t1(id INT key, a INT, FOREIGN KEY(a) REFERENCES t0(id) ON UPDATE CASCADE);
+
+INSERT INTO t0 VALUES(1, 1);
+INSERT INTO t0 VALUES(2, 2);
+INSERT INTO t1 VALUES(1, 1);
+INSERT INTO t1 VALUES(2, 2);
+
+UPDATE t0 SET id = 3 WHERE a = 1;
+
+--let $assert_text = a should be 3 for id = 1
+--let $assert_cond = [SELECT a FROM t1 WHERE id = 1] = "3"
+--source include/assert.inc
+
+SELECT * FROM t0;
+SELECT * FROM t1;
+
+DROP TABLE t0,t1;
+
+CREATE TABLE t0(id INT key, a INT);
+CREATE TABLE t1(id INT key, a INT, FOREIGN KEY(a) REFERENCES t0(id) ON UPDATE SET NULL);
+CREATE TABLE t2(id INT, x INT, FOREIGN KEY(id) REFERENCES t0(id) ON UPDATE SET NULL);
+
+INSERT INTO t0 VALUES(1, 1);
+INSERT INTO t0 VALUES(2, 2);
+INSERT INTO t1 VALUES(1, 1);
+INSERT INTO t1 VALUES(2, 2);
+INSERT INTO t2 VALUES(1, 1);
+INSERT INTO t2 VALUES(2, 2);
+
+SELECT COUNT(*) = 0 FROM t1 WHERE a IS NULL;
+SELECT COUNT(*) = 0 FROM t2 WHERE id IS NULL;
+
+UPDATE t0 SET id = 3 WHERE a = 1;
+#DELETE FROM t0 WHERE id = 1;
+
+SELECT COUNT(*) = 1 FROM t1 WHERE a IS NULL;
+--let $assert_text = a should be NULL for id == 1
+--let $assert_cond = [SELECT id FROM t1 WHERE a IS NULL] = "1"
+--source include/assert.inc
+
+SELECT COUNT(*) = 1 FROM t2 WHERE id IS NULL;
+--let $assert_text = id should be NULL for x == 1
+--let $assert_cond = [SELECT x FROM t2 WHERE id IS NULL] = "1"
+--source include/assert.inc
+
+SELECT * FROM t0;
+SELECT * FROM t1;
+SELECT * FROM t2;
+
+DROP TABLE t0,t1,t2;
+
+CREATE TABLE t0(id INT key, a INT);
+CREATE TABLE t1(id INT key, a INT, FOREIGN KEY(a) REFERENCES t0(id) ON UPDATE RESTRICT);
+CREATE TABLE t2(id INT, x INT, FOREIGN KEY(id) REFERENCES t0(id) ON UPDATE RESTRICT);
+
+INSERT INTO t0 VALUES(1, 1);
+INSERT INTO t0 VALUES(2, 2);
+INSERT INTO t1 VALUES(1, 1);
+INSERT INTO t1 VALUES(2, 2);
+INSERT INTO t2 VALUES(1, 1);
+INSERT INTO t2 VALUES(2, 2);
+
+--error 1451
+UPDATE t0 SET id = 3 WHERE a = 1;
+
+SELECT COUNT(*) = 2 FROM t0;
+SELECT COUNT(*) = 2 FROM t1;
+SELECT COUNT(*) = 2 FROM t2;
+
+DROP TABLE t0,t1,t2;
+
+#NO ACTION
+
+CREATE TABLE t0(id INT key, a INT);
+CREATE TABLE t1(id INT key, a INT, FOREIGN KEY(a) REFERENCES t0(id) ON UPDATE NO ACTION);
+CREATE TABLE t2(id INT, x INT, FOREIGN KEY(id) REFERENCES t0(id) ON UPDATE NO ACTION);
+
+INSERT INTO t0 VALUES(1, 1);
+INSERT INTO t0 VALUES(2, 2);
+INSERT INTO t1 VALUES(1, 1);
+INSERT INTO t1 VALUES(2, 2);
+INSERT INTO t2 VALUES(1, 1);
+INSERT INTO t2 VALUES(2, 2);
+
+--error 1451
+UPDATE t0 SET id = 3 WHERE a = 1;
+
+SELECT COUNT(*) = 2 FROM t0;
+SELECT COUNT(*) = 2 FROM t1;
+SELECT COUNT(*) = 2 FROM t2;
+
+DROP TABLE t0,t1,t2;
+
+CREATE TABLE t0(id INT key, a INT);
+CREATE TABLE t1(id INT key, a INT, FOREIGN KEY(a) REFERENCES t0(id) ON UPDATE SET DEFAULT);
+CREATE TABLE t2(id INT, x INT, FOREIGN KEY(id) REFERENCES t0(id) ON UPDATE SET DEFAULT);
+
+INSERT INTO t0 VALUES(1, 1);
+INSERT INTO t0 VALUES(2, 2);
+INSERT INTO t1 VALUES(1, 1);
+INSERT INTO t1 VALUES(2, 2);
+INSERT INTO t2 VALUES(1, 1);
+INSERT INTO t2 VALUES(2, 2);
+
+--error 1451
+UPDATE t0 SET id = 3 WHERE a = 1;
+
+SELECT COUNT(*) = 2 FROM t0;
+SELECT COUNT(*) = 2 FROM t1;
+SELECT COUNT(*) = 2 FROM t2;
+
+DROP TABLE t0,t1,t2;
+
+CREATE TABLE t0(id INT key, a INT);
+CREATE TABLE t1(id INT key, a INT, FOREIGN KEY(a) REFERENCES t0(id) ON UPDATE CASCADE);
+
+INSERT INTO t0 VALUES(1, 1);
+INSERT INTO t0 VALUES(2, 2);
+INSERT INTO t1 VALUES(1, 1);
+INSERT INTO t1 VALUES(2, 2);
+
+--source include/restart_mysqld.inc
+
+UPDATE t0 SET id = 3 WHERE a = 1;
+
+--let $assert_text = a should be 3 for id = 1
+--let $assert_cond = [SELECT a FROM t1 WHERE id = 1] = "3"
+--source include/assert.inc
+
+SELECT * FROM t0;
+SELECT * FROM t1;
+
+DROP TABLE t0,t1;
+
+--echo # test bug BUG2025060533643
+DROP TABLE IF EXISTS all_data_types;
+DROP TABLE IF EXISTS related_table;
+
+CREATE TABLE related_table (
+  ref_id INT AUTO_INCREMENT PRIMARY KEY,
+  ref_name VARCHAR(50) NOT NULL
+) ENGINE=Dstore;
+
+INSERT INTO related_table (ref_name) 
+VALUES ('Ref1'),('Ref2'),('Ref3'),('Ref4'),('Ref5');
+
+CREATE TABLE all_data_types (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  
+  char_col CHAR(10),
+  varchar_col VARCHAR(100),
+  
+  binary_col BINARY(20),
+  varbinary_col VARBINARY(100),
+  
+  tinyblob_col TINYBLOB,
+  blob_col BLOB,
+  mediumblob_col BLOB,
+  longblob_col BLOB,
+  
+  tinytext_col TINYTEXT,
+  text_col TEXT,
+  mediumtext_col TEXT,
+  longtext_col TEXT,
+
+  ref_id INT,
+  
+  INDEX idx_varchar_prefix (varchar_col(10)),
+
+  CONSTRAINT fk_related_ref 
+    FOREIGN KEY (ref_id) 
+    REFERENCES related_table(ref_id)
+    ON DELETE SET NULL
+    ON UPDATE CASCADE
+) ENGINE=Dstore ROW_FORMAT=DYNAMIC;
+
+DELIMITER $;
+DROP PROCEDURE IF EXISTS insert_10k_rows;
+CREATE PROCEDURE insert_10k_rows(IN max_count INT)
+BEGIN
+  DECLARE i INT DEFAULT 0;
+  DECLARE max_ref INT;
+
+  SELECT MAX(ref_id) INTO max_ref FROM related_table;
+  IF max_ref IS NULL THEN SET max_ref = 1; END IF;
+
+  SET foreign_key_checks = 0;
+  ALTER TABLE all_data_types DISABLE KEYS;
+  
+  START TRANSACTION;
+  
+  WHILE i < max_count DO
+    SET @rand_num = FLOOR(RAND() * 10000) + 1;
+    SET @rand_str = CONCAT('Str_', LEFT(UUID(), 8));
+    SET @rand_date = DATE_ADD('2000-01-01', INTERVAL FLOOR(RAND() * 8000) DAY);
+    SET @rand_time = SEC_TO_TIME(FLOOR(RAND() * 86400));
+    SET @ref_id = FLOOR(1 + RAND() * max_ref);
+
+    INSERT INTO all_data_types (
+      char_col,
+      varchar_col,
+      binary_col,
+      varbinary_col,
+      tinyblob_col,
+      blob_col,
+      mediumblob_col,
+      longblob_col,
+      tinytext_col,
+      text_col,
+      mediumtext_col,
+      longtext_col,
+      ref_id
+    ) VALUES (  
+      LEFT(@rand_str, 10), 
+      @rand_str,        
+      UNHEX(HEX(@rand_str)), 
+      UNHEX(HEX(@rand_str)), 
+      RANDOM_BYTES(100), 
+      RANDOM_BYTES(1000),
+      RANDOM_BYTES(1000),
+      RANDOM_BYTES(1000),
+      LEFT(@rand_str, 50), 
+      CONCAT(@rand_str, ' ', REPEAT('Text ', 10)), 
+      CONCAT(@rand_str, ' ', REPEAT('MediumText ', 20)), 
+      CONCAT(@rand_str, ' ', REPEAT('LongText ', 50)), 
+      @ref_id
+    );
+    
+    SET i = i + 1;
+
+  END WHILE;
+  
+  COMMIT;
+  
+  ALTER TABLE all_data_types ENABLE KEYS;
+  SET foreign_key_checks = 1;
+  
+  OPTIMIZE TABLE all_data_types;
+END$
+
+DELIMITER ;$
+
+CALL insert_10k_rows(200);
+
+DELETE FROM related_table WHERE ref_id = 1;
+
+DROP PROCEDURE IF EXISTS insert_10k_rows;
+DROP TABLE IF EXISTS all_data_types;
+DROP TABLE IF EXISTS related_table;
+
+CREATE TABLE related_table (
+  ref_id INT AUTO_INCREMENT PRIMARY KEY,
+  ref_name VARCHAR(50) NOT NULL
+) ENGINE=Dstore;
+
+INSERT INTO related_table (ref_name) 
+VALUES ('Ref1'),('Ref2'),('Ref3'),('Ref4'),('Ref5');
+
+CREATE TABLE all_data_types (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  
+  char_col CHAR(10),
+  varchar_col VARCHAR(100),
+  
+  binary_col BINARY(20),
+  varbinary_col VARBINARY(100),
+  
+  tinyblob_col TINYBLOB,
+  blob_col BLOB,
+  mediumblob_col BLOB,
+  longblob_col BLOB,
+  
+  tinytext_col TINYTEXT,
+  text_col TEXT,
+  mediumtext_col TEXT,
+  longtext_col TEXT,
+
+  ref_id INT,
+  
+  INDEX idx_varchar_prefix (varchar_col(10)),
+
+  CONSTRAINT fk_related_ref 
+    FOREIGN KEY (ref_id) 
+    REFERENCES related_table(ref_id)
+    ON DELETE CASCADE
+    ON UPDATE CASCADE
+) ENGINE=Dstore ROW_FORMAT=DYNAMIC;
+
+DELIMITER $;
+DROP PROCEDURE IF EXISTS insert_10k_rows_ref_id_no_random;
+CREATE PROCEDURE insert_10k_rows_ref_id_no_random(IN max_count INT)
+BEGIN
+  DECLARE i INT DEFAULT 0;
+  DECLARE max_ref INT;
+
+  SELECT MAX(ref_id) INTO max_ref FROM related_table;
+  IF max_ref IS NULL THEN SET max_ref = 1; END IF;
+
+  SET foreign_key_checks = 0;
+  ALTER TABLE all_data_types DISABLE KEYS;
+  
+  START TRANSACTION;
+  
+  WHILE i < max_count DO
+    SET @rand_num = FLOOR(RAND() * 10000) + 1;
+    SET @rand_str = CONCAT('Str_', LEFT(UUID(), 8));
+    SET @rand_date = DATE_ADD('2000-01-01', INTERVAL FLOOR(RAND() * 8000) DAY);
+    SET @rand_time = SEC_TO_TIME(FLOOR(RAND() * 86400));
+    SET @ref_id = i + 1;
+
+    INSERT INTO all_data_types (
+      char_col,
+      varchar_col,
+      binary_col,
+      varbinary_col,
+      tinyblob_col,
+      blob_col,
+      mediumblob_col,
+      longblob_col,
+      tinytext_col,
+      text_col,
+      mediumtext_col,
+      longtext_col,
+      ref_id
+    ) VALUES (  
+      LEFT(@rand_str, 10), 
+      @rand_str,        
+      UNHEX(HEX(@rand_str)), 
+      UNHEX(HEX(@rand_str)), 
+      RANDOM_BYTES(100), 
+      RANDOM_BYTES(1000),
+      RANDOM_BYTES(1000),
+      RANDOM_BYTES(1000),
+      LEFT(@rand_str, 50), 
+      CONCAT(@rand_str, ' ', REPEAT('Text ', 10)), 
+      CONCAT(@rand_str, ' ', REPEAT('MediumText ', 20)), 
+      CONCAT(@rand_str, ' ', REPEAT('LongText ', 50)), 
+      @ref_id
+    );
+    
+    SET i = i + 1;
+
+  END WHILE;
+  
+  COMMIT;
+  
+  ALTER TABLE all_data_types ENABLE KEYS;
+  SET foreign_key_checks = 1;
+  
+  OPTIMIZE TABLE all_data_types;
+END$
+
+DELIMITER ;$
+
+CALL insert_10k_rows_ref_id_no_random(200);
+
+SELECT COUNT(*) FROM related_table WHERE ref_id = 1;
+SELECT COUNT(*) FROM all_data_types WHERE ref_id = 1;
+DELETE FROM related_table WHERE ref_id = 1;
+SELECT COUNT(*) FROM related_table WHERE ref_id = 1;
+SELECT COUNT(*) FROM all_data_types WHERE ref_id = 1;
+
+DROP TABLE all_data_types;
+TRUNCATE TABLE related_table;
+
+INSERT INTO related_table (ref_name) 
+VALUES ('Ref1'),('Ref2'),('Ref3'),('Ref4'),('Ref5');
+
+CREATE TABLE all_data_types (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  
+  char_col CHAR(10),
+  varchar_col VARCHAR(100),
+  
+  binary_col BINARY(20),
+  varbinary_col VARBINARY(100),
+  
+  tinyblob_col TINYBLOB,
+  blob_col BLOB,
+  mediumblob_col BLOB,
+  longblob_col BLOB,
+  
+  tinytext_col TINYTEXT,
+  text_col TEXT,
+  mediumtext_col TEXT,
+  longtext_col TEXT,
+
+  ref_id INT,
+  
+  INDEX idx_varchar_prefix (varchar_col(10)),
+
+  CONSTRAINT fk_related_ref 
+    FOREIGN KEY (ref_id) 
+    REFERENCES related_table(ref_id)
+    ON DELETE SET NULL
+    ON UPDATE CASCADE
+) ENGINE=Dstore ROW_FORMAT=DYNAMIC;
+
+CALL insert_10k_rows_ref_id_no_random(200);
+
+SET foreign_key_checks = 1;
+
+SELECT COUNT(*) FROM related_table WHERE ref_id = 1;
+SELECT COUNT(*) FROM related_table WHERE ref_id = 1008;
+SELECT COUNT(*) FROM all_data_types WHERE ref_id = 1;
+SELECT COUNT(*) FROM all_data_types WHERE ref_id = 1008;
+UPDATE related_table SET ref_id = 1008 WHERE ref_id = 1;
+SELECT COUNT(*) FROM related_table WHERE ref_id = 1;
+SELECT COUNT(*) FROM related_table WHERE ref_id = 1008;
+SELECT COUNT(*) FROM all_data_types WHERE ref_id = 1;
+SELECT COUNT(*) FROM all_data_types WHERE ref_id = 1008;
+
+DROP PROCEDURE insert_10k_rows_ref_id_no_random;
+DROP TABLE all_data_types;
+DROP TABLE related_table;

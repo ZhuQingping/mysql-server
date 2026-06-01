@@ -1,0 +1,307 @@
+SET GLOBAL dstore_stats_persistent = ON;
+SET GLOBAL dstore_stats_auto_recalc = ON;
+SET SESSION cte_max_recursion_depth = 10000;
+CREATE TABLE t (id INT) ENGINE=Dstore;
+# Initial statistics (should show 0 row)
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+BEGIN;
+# Inserting 30,000 rows (batch insert)
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM nums WHERE n < 10000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM nums WHERE n < 10000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM nums WHERE n < 10000
+)
+SELECT n FROM nums;
+# Statistics during transaction (should show 30000 row), because have not recalc
+SELECT SLEEP(1);
+SLEEP(1)
+0
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	30000	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+# Commit transaction
+COMMIT;
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	30000	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+# Wait for background stats recalculation (persistent mode)
+SELECT SLEEP(11);
+SLEEP(11)
+0
+# Statistics after background update (should show != 30,000 rows)
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	X	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+DROP TABLE t;
+SET GLOBAL dstore_stats_persistent = 1;
+SET GLOBAL dstore_stats_auto_recalc = 1;
+SET GLOBAL dstore_stats_persistent = ON;
+CREATE TABLE t (id INT) ENGINE=Dstore;
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+BEGIN;
+# Insert 3,000 rows
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM nums WHERE n < 1000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM nums WHERE n < 1000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM nums WHERE n < 1000
+)
+SELECT n FROM nums;
+# Statistics during transaction (should be unchanged)
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	3000	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+# Rollback transaction
+ROLLBACK;
+# Wait to ensure background update occurs
+SELECT SLEEP(11);
+SLEEP(11)
+0
+# Statistics after background update (should show == 0 rows)
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+DROP TABLE t;
+SET GLOBAL dstore_stats_persistent = 1;
+SET GLOBAL dstore_stats_persistent = ON;
+CREATE TABLE t (id INT) ENGINE=Dstore;
+BEGIN;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM nums WHERE n < 1000
+)
+SELECT n FROM nums;
+# In main session: Check stats while transaction is active
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	1000	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+ROLLBACK;
+# After rollback in main session
+# Wait to ensure background update occurs
+SELECT SLEEP(11);
+SLEEP(11)
+0
+# Statistics after background update (should show == 0 rows), because rollback trx
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+DROP TABLE t;
+SET GLOBAL dstore_stats_persistent = 1;
+#
+# Dstore statistics updated immediately when table has been changed more than 10%.
+# To avoid statistics updated too frequently of small tables, only when the time
+# since the last update is more than 1 second will trigger automatic update logic.
+#
+CREATE TABLE t1(a INT, INDEX(a))ENGINE=Dstore;
+INSERT INTO t1 VALUES(1),(2),(3),(4);
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS WHERE TABLE_NAME IN ('t1');
+TABLE_NAME	COLUMN_NAME	JSON_EXTRACT(HISTOGRAM, '$.buckets')
+t1	a	[[1, 0.25], [2, 0.5], [3, 0.75], [4, 1.0]]
+EXPLAIN SELECT * FROM t1 WHERE a=2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	a	a	5	const	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` where (`test`.`t1`.`a` = 2)
+DELETE FROM t1 WHERE a IN (3,4);
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS WHERE TABLE_NAME IN ('t1');
+TABLE_NAME	COLUMN_NAME	JSON_EXTRACT(HISTOGRAM, '$.buckets')
+t1	a	[[1, 0.25], [2, 0.5], [3, 0.75], [4, 1.0]]
+EXPLAIN SELECT * FROM t1 WHERE a=4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	a	a	5	const	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` where (`test`.`t1`.`a` = 4)
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS WHERE TABLE_NAME IN ('t1');
+TABLE_NAME	COLUMN_NAME	JSON_EXTRACT(HISTOGRAM, '$.buckets')
+t1	a	[[1, 0.5], [2, 1.0]]
+EXPLAIN SELECT * FROM t1 WHERE a=4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	a	a	5	const	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` where (`test`.`t1`.`a` = 4)
+CREATE TABLE t2(a VARCHAR(50), INDEX(a))ENGINE=Dstore;
+INSERT INTO t2 VALUES('MySQL'),('Dstore'),('TaurusDB'),('GaussDB');
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS WHERE TABLE_NAME IN ('t2');
+TABLE_NAME	COLUMN_NAME	JSON_EXTRACT(HISTOGRAM, '$.buckets')
+t2	a	[["base64:type254:RHN0b3Jl", 0.25], ["base64:type254:R2F1c3NEQg==", 0.5], ["base64:type254:TXlTUUw=", 0.75], ["base64:type254:VGF1cnVzREI=", 1.0]]
+EXPLAIN SELECT * FROM t2 WHERE a='MySQL';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	ref	a	a	203	const	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`a` AS `a` from `test`.`t2` where (`test`.`t2`.`a` = 'MySQL')
+INSERT INTO t2 VALUES('Oracle'),('DB2'),('SQL Server'),('Aurora');
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS WHERE TABLE_NAME IN ('t2');
+TABLE_NAME	COLUMN_NAME	JSON_EXTRACT(HISTOGRAM, '$.buckets')
+t2	a	[["base64:type254:RHN0b3Jl", 0.25], ["base64:type254:R2F1c3NEQg==", 0.5], ["base64:type254:TXlTUUw=", 0.75], ["base64:type254:VGF1cnVzREI=", 1.0]]
+EXPLAIN SELECT * FROM t2 WHERE a='Aurora';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	ref	a	a	203	const	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`a` AS `a` from `test`.`t2` where (`test`.`t2`.`a` = 'Aurora')
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS WHERE TABLE_NAME IN ('t2');
+TABLE_NAME	COLUMN_NAME	JSON_EXTRACT(HISTOGRAM, '$.buckets')
+t2	a	[["base64:type254:QXVyb3Jh", 0.125], ["base64:type254:REIy", 0.25], ["base64:type254:RHN0b3Jl", 0.375], ["base64:type254:R2F1c3NEQg==", 0.5], ["base64:type254:TXlTUUw=", 0.625], ["base64:type254:T3JhY2xl", 0.75], ["base64:type254:U1FMIFNlcnZlcg==", 0.875], ["base64:type254:VGF1cnVzREI=", 1.0]]
+EXPLAIN SELECT * FROM t2 WHERE a='Aurora';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	ref	a	a	203	const	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`a` AS `a` from `test`.`t2` where (`test`.`t2`.`a` = 'Aurora')
+DROP TABLE t1,t2;
+#
+# When table was droped, the element will be removed from delay recalculate pool
+#
+CREATE TABLE t1(a INT, INDEX(a))ENGINE=Dstore;
+SET debug='+d,dstore_recalc_pool_del_print';
+INSERT INTO t1 VALUES(1),(2),(3),(4);
+SELECT TABLE_NAME, COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.buckets') FROM information_schema.COLUMN_STATISTICS WHERE TABLE_NAME IN ('t1');
+TABLE_NAME	COLUMN_NAME	JSON_EXTRACT(HISTOGRAM, '$.buckets')
+t1	a	[[1, 0.25], [2, 0.5], [3, 0.75], [4, 1.0]]
+EXPLAIN SELECT * FROM t1 WHERE a=2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	a	a	5	const	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` where (`test`.`t1`.`a` = 2)
+INSERT INTO t1 VALUES(5),(6),(7),(8);
+DROP TABLE t1;
+Pattern "Remove table from backend auto update delay recalculate pool, table name: ./test/t1" found
+SET debug='-d,dstore_recalc_pool_del_print';
+#
+# Verify adaptive auto stats recalc interval branches with debug forcing.
+#
+CREATE TABLE t_stats_interval (
+id INT PRIMARY KEY
+) STATS_PERSISTENT=1 STATS_AUTO_RECALC=1;
+INSERT INTO t_stats_interval
+WITH RECURSIVE seq AS (
+SELECT 1 AS n
+UNION ALL
+SELECT n + 1 FROM seq WHERE n < 200
+)
+SELECT n FROM seq;
+ANALYZE TABLE t_stats_interval UPDATE HISTOGRAM ON id;
+Table	Op	Msg_type	Msg_text
+test.t_stats_interval	histogram	status	Histogram statistics created for column 'id'.
+ANALYZE TABLE t_stats_interval;
+Table	Op	Msg_type	Msg_text
+test.t_stats_interval	analyze	status	OK
+SET @old_ts= (
+SELECT UNIX_TIMESTAMP(last_update)
+FROM mysql.dstore_table_stats
+WHERE database_name= DATABASE() AND table_name= 't_stats_interval'
+);
+# Force high CPU branch and shorter test intervals (fast=1s, slow=3s).
+SET @save_debug= @@GLOBAL.debug;
+SET GLOBAL debug=
+'+d,dstore_auto_stats_interval_test_short,dstore_auto_stats_interval_force_high_cpu';
+INSERT INTO t_stats_interval
+WITH RECURSIVE seq AS (
+SELECT 1001 AS n
+UNION ALL
+SELECT n + 1 FROM seq WHERE n < 1040
+)
+SELECT n FROM seq;
+SELECT SLEEP(1);
+SLEEP(1)
+0
+SET @new_ts = (
+SELECT UNIX_TIMESTAMP(last_update)
+FROM mysql.dstore_table_stats
+WHERE database_name= DATABASE() AND table_name= 't_stats_interval'
+);
+SELECT @new_ts > @old_ts AS high_branch_not_too_early;
+high_branch_not_too_early
+0
+SELECT SLEEP(10);
+SLEEP(10)
+0
+SET @new_ts= (
+SELECT UNIX_TIMESTAMP(last_update)
+FROM mysql.dstore_table_stats
+WHERE database_name= DATABASE() AND table_name= 't_stats_interval'
+);
+SELECT @new_ts > @old_ts AS high_branch_eventually_updates;
+high_branch_eventually_updates
+1
+# Force low CPU branch and shorter test intervals (fast=1s).
+SET @old_ts= @new_ts;
+SET GLOBAL debug=
+'+d,dstore_auto_stats_interval_test_short,dstore_auto_stats_interval_force_low_cpu';
+INSERT INTO t_stats_interval
+WITH RECURSIVE seq AS (
+SELECT 2001 AS n
+UNION ALL
+SELECT n + 1 FROM seq WHERE n < 2040
+)
+SELECT n FROM seq;
+SELECT SLEEP(11);
+SLEEP(11)
+0
+SET @new_ts= (
+SELECT UNIX_TIMESTAMP(last_update)
+FROM mysql.dstore_table_stats
+WHERE database_name= DATABASE() AND table_name= 't_stats_interval'
+);
+SELECT @new_ts > @old_ts AS low_branch_updates_fast;
+low_branch_updates_fast
+1
+SET GLOBAL debug= @save_debug;
+DROP TABLE t_stats_interval;

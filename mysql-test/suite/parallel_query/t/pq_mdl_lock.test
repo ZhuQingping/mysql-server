@@ -1,0 +1,117 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+--source include/have_debug_sync.inc
+
+set @saved_autocommit = @@autocommit;
+SET session autocommit=0;
+
+CREATE TABLE t1 (f1 INT) ENGINE="InnoDB";
+
+SELECT 1  FROM DUAL;
+SELECT f1 FROM t1;
+
+UNLOCK TABLES;
+LOCK TABLES t1 WRITE;
+INSERT INTO t1 VALUES (2);
+INSERT INTO t1 VALUES (2);
+INSERT INTO t1 VALUES (2);
+INSERT INTO t1 VALUES (2);
+INSERT INTO t1 VALUES (2);
+INSERT INTO t1 VALUES (2);
+INSERT INTO t1 VALUES (2);
+INSERT INTO t1 VALUES (2);
+INSERT INTO t1 VALUES (2);
+
+explain SELECT f1 FROM t1;
+SELECT f1 FROM t1;
+
+COMMIT;
+
+UNLOCK TABLES;
+
+SET session autocommit = @saved_autocommit;
+drop table t1;
+
+## ISSUE 559: MDL deadlock with DROP DATABASE
+
+create database MDL;
+use MDL;
+create table t1 (id int);
+insert into t1 values (1), (2), (0), (4), (5), (3);
+
+--echo # DDL with add index
+
+connect(con1, localhost, root,,);
+connect(con2, localhost, root,,);
+
+connection default;
+set DEBUG_SYNC='pq_wait_launch_worker SIGNAL ready WAIT_FOR continue';
+--send select * from MDL.t1
+
+connection con1;
+# wait until PQ leader has launched worker threads
+SET DEBUG_SYNC='now WAIT_FOR ready';
+--send alter table MDL.t1 add index key1(id)
+
+connection con2;
+# wait until the above ALTER TABLE is blocked
+let $wait_condition=
+    select count(*) = 1 from information_schema.processlist
+    where state = "Waiting for table metadata lock" and
+          info = "alter table MDL.t1 add index key1(id)";
+--source include/wait_condition.inc
+
+# SIGNAL PQ continues to launch worker thread
+set debug_sync='now SIGNAL continue';
+connection default;
+--reap
+
+connection con1;
+--reap
+
+--echo # Cleanup
+connection default;
+set DEBUG_SYNC="reset";
+disconnect con1;
+disconnect con2;
+
+--echo # DDL with drop database
+
+# Deadlock error will cause this message in log, don't let test fail on it:
+call mtr.add_suppression("\\[Warning\\] .* Make worker plan failed");
+
+connect(con1, localhost, root,,);
+connect(con2, localhost, root,,);
+
+connection default;
+set DEBUG_SYNC='pq_wait_launch_worker SIGNAL ready WAIT_FOR continue';
+--send select * from MDL.t1;
+
+connection con1;
+# wait until PQ leader has launched worker threads
+SET DEBUG_SYNC='now WAIT_FOR ready';
+--send drop database MDL;
+
+connection con2;
+# wait until the above DROP DATABASE is blocked
+let $wait_condition=
+    select count(*) = 1 from information_schema.processlist
+    where state = "Waiting for table metadata lock" and
+          info = "drop database MDL";
+--source include/wait_condition.inc
+
+# SIGNAL PQ continues to launch worker thread
+set debug_sync='now SIGNAL continue';
+connection default;
+# Worker thread waits - we have a deadlock.
+--error ER_PARALLEL_QUERY_ERROR
+--reap
+
+connection con1;
+--reap
+
+--echo # Cleanup
+connection default;
+set DEBUG_SYNC="reset";
+disconnect con1;
+disconnect con2;

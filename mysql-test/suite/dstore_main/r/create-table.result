@@ -1,0 +1,243 @@
+#
+# CDE
+#
+use test;
+create table t53(id int, a int, b int, c CHAR(120),key(id),key(a),key(a,b)) engine=Dstore;
+insert into t53 values(1,1,1,1);
+insert into t53 values(2,2,2,2);
+insert into t53 values(3,3,3,3);
+insert into t53 values(4,4,4,4);
+insert into t53 values(5,5,5,5);
+insert into t53 values(6,6,6,6);
+insert into t53 values(7,7,7,7);
+insert into t53 values(8,8,8,8);
+insert into t53 values(9,9,9,9);
+show index from t53;
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+t53	1	id	1	id	A	#	NULL	NULL	YES	BTREE			YES	NULL
+t53	1	a	1	a	A	#	NULL	NULL	YES	BTREE			YES	NULL
+t53	1	a_2	1	a	A	#	NULL	NULL	YES	BTREE			YES	NULL
+t53	1	a_2	2	b	A	#	NULL	NULL	YES	BTREE			YES	NULL
+set optimizer_switch="index_condition_pushdown=off";
+select count(*) from t53;
+count(*)
+9
+select a from t53 where id >= 1;
+a
+1
+2
+3
+4
+5
+6
+7
+8
+9
+select * from t53 where a < 3;
+id	a	b	c
+1	1	1	1
+2	2	2	2
+select * from t53 where b >= 3;
+id	a	b	c
+3	3	3	3
+4	4	4	4
+5	5	5	5
+6	6	6	6
+7	7	7	7
+8	8	8	8
+9	9	9	9
+select a from t53 where a >=1;
+a
+1
+2
+3
+4
+5
+6
+7
+8
+9
+select a from t53 where id > 1;
+a
+2
+3
+4
+5
+6
+7
+8
+9
+select * from t53 where a >= 1;
+id	a	b	c
+1	1	1	1
+2	2	2	2
+3	3	3	3
+4	4	4	4
+5	5	5	5
+6	6	6	6
+7	7	7	7
+8	8	8	8
+9	9	9	9
+select * from t53 where a < 3;
+id	a	b	c
+1	1	1	1
+2	2	2	2
+select * from t53 where b >= 3;
+id	a	b	c
+3	3	3	3
+4	4	4	4
+5	5	5	5
+6	6	6	6
+7	7	7	7
+8	8	8	8
+9	9	9	9
+select a from t53 where a >=1;
+a
+1
+2
+3
+4
+5
+6
+7
+8
+9
+select max(id) from t53 where id>1;
+max(id)
+9
+select max(id) from t53 where id < 5;
+max(id)
+4
+select count(*) from t53 where id > 1 and id < 5;
+count(*)
+3
+select * from t53 where a > 1 and id < 9;
+id	a	b	c
+2	2	2	2
+3	3	3	3
+4	4	4	4
+5	5	5	5
+6	6	6	6
+7	7	7	7
+8	8	8	8
+select * from t53 where a > 1 or id < 8;
+id	a	b	c
+1	1	1	1
+2	2	2	2
+3	3	3	3
+4	4	4	4
+5	5	5	5
+6	6	6	6
+7	7	7	7
+8	8	8	8
+9	9	9	9
+select count(*) from t53 where a > 1 or id < 8;
+count(*)
+9
+explain select * from t53 force index(a_2) where a=2 and b=2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t53	NULL	ref	a_2	a_2	10	const,const	#	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t53`.`id` AS `id`,`test`.`t53`.`a` AS `a`,`test`.`t53`.`b` AS `b`,`test`.`t53`.`c` AS `c` from `test`.`t53` FORCE INDEX (`a_2`) where ((`test`.`t53`.`b` = 2) and (`test`.`t53`.`a` = 2))
+select * from t53 where id>4  order by id  desc;
+id	a	b	c
+9	9	9	9
+8	8	8	8
+7	7	7	7
+6	6	6	6
+5	5	5	5
+explain select * from t53 where id>4  order by id  desc;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t53	NULL	range	id	id	5	NULL	#	100.00	Backward index scan
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t53`.`id` AS `id`,`test`.`t53`.`a` AS `a`,`test`.`t53`.`b` AS `b`,`test`.`t53`.`c` AS `c` from `test`.`t53` where (`test`.`t53`.`id` > 4) order by `test`.`t53`.`id` desc
+select * from t53 force index(a_2) where a=2 and b=2;
+id	a	b	c
+2	2	2	2
+drop table t53;
+create table `@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#`(i int) engine=Dstore;
+create table `开始打发生的发生的防守打法四大分三大的说法发斯蒂芬是的法定富士达阿帆撒旦法撒旦法啊德`(i int) engine=Dstore;
+create table `!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!`(i int) engine=Dstore;
+ERROR 42000: Identifier name '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!' is too long
+create table `!!!`(i int) engine=Dstore;
+create table 表-测试(id int) engine=Dstore;
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '-测试(id int) engine=Dstore' at line 1
+create table `表-测试`(id int) engine=Dstore;
+create table `表_table123`(id int) engine=Dstore;
+create table select(id int) engine=Dstore;
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'select(id int) engine=Dstore' at line 1
+create table `table@special#char`(id int) engine=Dstore;
+drop table if exists `@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#`;
+drop table if exists `开始打发生的发生的防守打法四大分三大的说法发斯蒂芬是的法定富士达阿帆撒旦法撒旦法啊德`;
+drop table if exists `!!!`;
+drop table if exists `表-测试`;
+drop table if exists `表_table123`;
+drop table if exists `table@special#char`;
+create table t0(`@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#` int) engine=Dstore;
+create table t1(`开始打发生的发生的防守打法四大分三大的说法发斯蒂芬是的法定富士达阿帆撒旦法撒旦法啊德` int) engine=Dstore;
+create table t2(`!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!` int) engine=Dstore;
+ERROR 42000: Identifier name '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!' is too long
+create table t2(`!!!` int) engine=Dstore;
+create table t3(列-测试 int) engine=Dstore;
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '-测试 int) engine=Dstore' at line 1
+create table t3(`列-测试` int) engine=Dstore;
+create table t4(`列_column123` int) engine=Dstore;
+create table t5(select int) engine=Dstore;
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'int) engine=Dstore' at line 1
+create table t5(`table@special#char` int) engine=Dstore;
+drop table if exists t0, t1, t2, t3, t4, t5;
+create table t0(id int, key `@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#`(id)) engine=Dstore;
+create table t1(id int, key `开始打发生的发生的防守打法四大分三大的说法发斯蒂芬是的法定富士达阿帆撒旦法撒旦法啊德`(id)) engine=Dstore;
+create table t2(id int, key `!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!`(id)) engine=Dstore;
+ERROR 42000: Identifier name '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!' is too long
+create table t2(id int, key `!!!`(id)) engine=Dstore;
+create table t3(id int, key 列-测试(id)) engine=Dstore;
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '-测试(id)) engine=Dstore' at line 1
+create table t3(id int, key `列-测试`(id)) engine=Dstore;
+create table t4(id int, key `列_column123`(id)) engine=Dstore;
+create table t5(id int, key select(id)) engine=Dstore;
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'select(id)) engine=Dstore' at line 1
+create table t5(id int, key `table@special#char`(id)) engine=Dstore;
+drop table if exists t0, t1, t2, t3, t4, t5;
+create table table_column_limit(id int) engine=Dstore;
+CREATE PROCEDURE add_columns(table_name varchar(50), algorithm varchar(10))
+BEGIN
+DECLARE i INT DEFAULT 1;
+SET @sql_text = CONCAT('ALTER TABLE ', table_name, ' ');
+while (i < 1664) do
+SET @sql_text = CONCAT(@sql_text, ' ADD COLUMN ', CONCAT('col_', i), ' INTEGER NULL DEFAULT NULL,');
+set i = i + 1;
+end while;
+SET @sql_text = CONCAT(@sql_text, 'ALGORITHM=', algorithm);
+PREPARE stmt FROM @sql_text;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+END |
+call add_columns('table_column_limit', 'COPY');
+ALTER TABLE table_column_limit ADD I_VJ278 INTEGER NULL DEFAULT NULL, ALGORITHM=COPY;
+ERROR HY000: Too many columns
+drop table table_column_limit;
+DROP PROCEDURE add_columns;
+CREATE TABLE t2 (i INTEGER) TABLESPACE tttt;
+ERROR HY000: Tablespace tttt doesn't exist.
+call mtr.add_suppression("Alloc heap segment failed*");
+call mtr.add_suppression("Alloc lob segment failed*");
+call mtr.add_suppression("cde_create_table_info.create_table fail! *");
+SET DEBUG = '+d,create_table_alloc_failed_cause_full_tablespace';
+CREATE TABLE t2 (i INTEGER);
+ERROR HY000: Tablespace has reached to it's max_size
+SET DEBUG = '-d,create_table_alloc_failed_cause_full_tablespace';
+SET DEBUG = '+d,create_table_alloc_blob_failed_cause_full_tablespace';
+CREATE TABLE t2 (i blob);
+ERROR HY000: Tablespace has reached to it's max_size
+SET DEBUG = '-d,create_table_alloc_blob_failed_cause_full_tablespace';
+SET DEBUG = '+d,create_cde_dict_index_full_tablespace';
+CREATE TABLE t2 (i INTEGER, key(i));
+ERROR HY000: Tablespace has reached to it's max_size
+SET DEBUG = '-d,create_cde_dict_index_full_tablespace';
+CREATE TABLE t2 (i INTEGER, key(i));
+SET DEBUG = '+d,create_cde_dict_index_full_tablespace';
+alter table t2 add column j INTEGER, add index(j);
+ERROR HY000: Tablespace has reached to it's max_size
+SET DEBUG = '-d,create_cde_dict_index_full_tablespace';
+drop table t2;

@@ -1,0 +1,41 @@
+--source include/pq_test.inc
+--source include/have_log_bin.inc
+--source include/have_binlog_format_row.inc
+--source include/master-slave.inc
+
+create table t0(id int);
+--source include/sync_slave_sql_with_master.inc
+
+--echo # Connect to salve
+--source include/rpl_connection_slave.inc
+set @saved_read_only = @@read_only;
+set @saved_pq_master_enable = @@pq_master_enable;
+set global read_only = ON;
+
+set global pq_master_enable=on;
+
+set session force_parallel_execute = on;
+explain select * from t0;
+explain select /*+ PQ() */ * from t0;
+ 
+set session force_parallel_execute = off;
+explain select * from t0;
+explain select /*+ PQ() */ * from t0;
+ 
+set global pq_master_enable=off;
+ 
+set session force_parallel_execute = on;
+explain select * from t0;
+explain select /*+ PQ() */ * from t0;
+ 
+set session force_parallel_execute = off;
+explain select * from t0;
+explain select /*+ PQ() */ * from t0;
+ 
+set global pq_master_enable = @saved_pq_master_enable;
+set global read_only = @saved_read_only;
+
+--echo # Connect to master
+--source include/rpl_connection_master.inc
+drop table t0;
+--source include/rpl_end.inc

@@ -1,0 +1,126 @@
+#
+# BUG2026040128480 Forbid drop dstore_default tablespace when there are tables in it
+#
+CREATE TABLE test (c1 int);
+# Test 1: We cannot drop dstore_default tablespace when we have table in it.
+DROP TABLESPACE dstore_default;
+ERROR HY000: Tablespace `dstore_default` is not empty.
+# Test 2: We cannot drop dstore_default tablespace when we rebuild the table in it.
+OPTIMIZE TABLE test;
+Table	Op	Msg_type	Msg_text
+test.test	optimize	note	Table does not support optimize, doing recreate + analyze instead
+test.test	optimize	status	OK
+DROP TABLESPACE dstore_default;
+ERROR HY000: Tablespace `dstore_default` is not empty.
+# Test 3: We cannot drop dstore_default tablespace when we use copy algorithm to alter table
+alter table test add column c2 int, algorithm = COPY;
+DROP TABLESPACE dstore_default;
+ERROR HY000: Tablespace `dstore_default` is not empty.
+# Test 4: We cannot drop dstore_default tablespace when we use inplace algorithm to alter table
+alter table test add index (c1), algorithm = INPLACE;
+DROP TABLESPACE dstore_default;
+ERROR HY000: Tablespace `dstore_default` is not empty.
+# Test 5: We cannot drop dstore_default tablespace when a CREATE TABLE xxx LIKE table exist
+CREATE TABLE test2 like test;
+drop table test;
+DROP TABLESPACE dstore_default;
+ERROR HY000: Tablespace `dstore_default` is not empty.
+drop table test2;
+# Success drop default tablespace 
+DROP TABLESPACE dstore_default;
+Warnings:
+Warning	8059	Rebuild default tablespace success
+# Test 6: Test for parition table
+CREATE TABLE orders (
+id INT NOT NULL,
+order_date DATE NOT NULL,
+customer_id INT,
+amount DECIMAL(10,2),
+PRIMARY KEY (id, order_date)
+)
+PARTITION BY RANGE (YEAR(order_date)) (
+PARTITION p2023 VALUES LESS THAN (2024),
+PARTITION p2024 VALUES LESS THAN (2025),
+PARTITION p_future VALUES LESS THAN MAXVALUE
+);
+# Test 6.1:  We cannot drop dstore_default tablespace when we have table in it.
+TRUNCATE TABLE orders;
+DROP TABLESPACE dstore_default;
+ERROR HY000: Tablespace `dstore_default` is not empty.
+# Test 6.2: We cannot drop dstore_default tablespace when we rebuild the table in it.
+OPTIMIZE TABLE orders;
+Table	Op	Msg_type	Msg_text
+test.orders	optimize	note	Table does not support optimize, doing recreate + analyze instead
+test.orders	optimize	status	OK
+DROP TABLESPACE dstore_default;
+ERROR HY000: Tablespace `dstore_default` is not empty.
+# Test 6.3: We cannot drop dstore_default tablespace when we use copy algorithm to alter table
+alter table orders add column c2 int, algorithm = COPY;
+DROP TABLESPACE dstore_default;
+ERROR HY000: Tablespace `dstore_default` is not empty.
+# Test 6.4: We cannot drop dstore_default tablespace when a CREATE TABLE xxx LIKE table exist
+CREATE TABLE orders2 like orders;
+drop table orders;
+DROP TABLESPACE dstore_default;
+ERROR HY000: Tablespace `dstore_default` is not empty.
+drop table orders2;
+# Success drop default tablespace 
+DROP TABLESPACE dstore_default;
+Warnings:
+Warning	8059	Rebuild default tablespace success
+# Test 7: We can create temporary table without specify tempory table space
+CREATE TEMPORARY TABLE t1 (c1 int);
+DROP TABLE t1;
+# Test 8: Show create table does not show the tablespace for dstore_default tablespace
+CREATE TABLE t1 (c1 int);
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `c1` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+# Test 9: We can alter it to innodb engine
+ALTER TABLE t1 ENGINE=innodb;
+# Test 10: We can use create temporary table xxx like
+CREATE TEMPORARY TABLE t2 LIKE t1;
+# Test 11: We can use alter table to INNODB
+alter table t1 engine=innodb;
+# Test 12: We can use alter table to Dstore
+alter table t1 engine=dstore;
+DROP TABLE t1;
+# Test 13: We can create partition table with only specify engine innodb in partition clause
+CREATE TABLE t1 (
+a int not null,
+b int not null,
+c int not null,
+primary key(a,b))
+partition by key (a)
+partitions 3
+(partition x1 engine innodb,
+partition x2 engine innodb,
+partition x3 engine innodb);
+DROP TABLE t1;
+# Test 14: Test for create xxx select SQL
+CREATE TABLE t1 AS SELECT REPEAT(' ', 10) AS s1 LIMIT 0;
+ALTER TABLE t1 ADD KEY s1 (s1);
+DROP TABLESPACE dstore_default;
+ERROR HY000: Tablespace `dstore_default` is not empty.
+DROP TABLE t1;
+# Test 15: Test for tablespace length = 0
+SET DEBUG = "+d, mock_tablespace_len0";
+CREATE TABLE t1 AS SELECT REPEAT(' ', 10) AS s1 LIMIT 0;
+ALTER TABLE t1 ADD KEY s1 (s1);
+DROP TABLESPACE dstore_default;
+ERROR HY000: Tablespace `dstore_default` is not empty.
+DROP TABLE t1;
+CREATE TABLE test (c1 int);
+OPTIMIZE TABLE test;
+Table	Op	Msg_type	Msg_text
+test.test	optimize	note	Table does not support optimize, doing recreate + analyze instead
+test.test	optimize	status	OK
+DROP TABLESPACE dstore_default;
+ERROR HY000: Tablespace `dstore_default` is not empty.
+CREATE TABLE test2 like test;
+drop table test;
+DROP TABLESPACE dstore_default;
+ERROR HY000: Tablespace `dstore_default` is not empty.
+drop table test2;

@@ -1,0 +1,157 @@
+From 47029cac349033bb3cf51b99fd57817011782256 Mon Sep 17 00:00:00 2001
+From: wuwenbin <wuwenbin19@contributor>
+
+Date: Thu, 8 Jan 2026 01:00:45 +0000
+Subject: [PATCH] Fix a PTRC crash caused by using
+ QEP_shared::m_position before it was assigned a valid value Issue: ---------
+ SELECT c1 as c10 FROM t0 as t1 WHERE c1 NOT IN (((   SELECT c1 as c11   FROM
+ t0 as t2 ) IN (t1.c1 IS NULL)) IN (   SELECT c1 as c12   FROM t0 as t3 ));
+
+/* select#1 */ select `test`.`t1`.`c1` AS `c10` from `test`.`t0` `t1` where (`test`.`t1`.`c1` <> <cache>(<in_optimizer>(((/* select#2 */ select `test`.`t2`.`c1` AS `c11` from `test`.`t0` `t2`) = (`test`.`t1`.`c1` is null)),<exists>(/* select#3 */ select `test`.`t3`.`c1` AS `c12` from `test`.`t0` `t3` where <if>(outer_field_is_not_null, (<cache>(((/* select#2 */ select `test`.`t2`.`c1` AS `c11` from `test`.`t0` `t2`) = (`test`.`t1`.`c1` is null))) = `test`.`t3`.`c1`), true)))))
+
+In this query, the IN predicate involving t3 has its left expression involving t1.c1, thus t1.c1 is a PTRC cache key for this subquery. When deciding whether to use PTRC optimization, it needs to access t1's m_position. However, at this time, the outermost query block containing t1 is still in the JOIN::estimate_rowcount processing phase, (this is one of these cases where the subquery is evaluated by the outer query which has not yet finished its own optimization) and m_position has not been assigned a valid value, remaining as an initialized null pointer. The m_position information will only be set in the subsequent JOIN::get_best_combination phase.
+
+Solution:
+---------
+In such scenarios, we cannot estimate whether using PTRC will be beneficial. Therefore, we set the threshold to 0 to avoid using PTRC as much as possible.
+---
+ mysql-test/suite/ptrc/r/ptrc_bugs.result | 48 ++++++++++++++++++++++++
+ mysql-test/suite/ptrc/t/ptrc_bugs.test   | 21 +++++++++++
+ sql/partial_result_cache.cc              | 30 ++++++++++++++-
+ 3 files changed, 98 insertions(+), 1 deletion(-)
+
+diff --git a/mysql-test/suite/ptrc/r/ptrc_bugs.result b/mysql-test/suite/ptrc/r/ptrc_bugs.result
+index a6d444d419b..3d2c9571bc5 100644
+--- a/mysql-test/suite/ptrc/r/ptrc_bugs.result
++++ b/mysql-test/suite/ptrc/r/ptrc_bugs.result
+@@ -1015,6 +1015,54 @@ EXECUTE stmt0;
+ col2
+ drop table t1;
+ drop table t2;
++# BUGFIX: See in estimate_num_groups(), this is a case where 
++# tab->m_position==nullptr. When tab->m_position==nullptr, we cannot 
++# estimate whether using PTRC would be beneficial. By controlling the
++# values of the distinct_rows and est_rows variables, we ensure that 
++# the calculated cost ratio is always 0. PTRC is used only when 
++# rds_partial_result_cache_cost_threshold is 0.
++CREATE TABLE t0 (
++c1 bit(1) NOT NULL,
++PRIMARY KEY (c1)
++);
++set rds_partial_result_cache_cost_threshold=0.01;
++EXPLAIN ANALYZE SELECT c1 AS c10 FROM t0 t1 WHERE c1 NOT IN ((( SELECT c1 AS c11 FROM t0 t2 ) IN (t1.c1 IS NULL)) IN ( SELECT c1 AS c12 FROM t0 t3 ));
++EXPLAIN
++-> Filter: (t1.c1 <> <cache>(<in_optimizer>(((select #2) = (t1.c1 is null)),<exists>(select #3)))) 
++    -> Covering index scan on t1 using PRIMARY 
++    -> Select #2 (subquery in condition; run only once)
++        -> Covering index scan on t2 using PRIMARY 
++    -> Select #3 (subquery in condition; dependent)
++        -> Limit: 1 row(s)  (actual time=# loops=1)
++            -> Filter: <if>(outer_field_is_not_null, (<cache>(((select #2) = (t1.c1 is null))) = t3.c1), true)  (actual time=# loops=1)
++                -> Alternative plans for IN subquery: Index lookup unless c1 IS NULL 
++                    -> Single-row covering index lookup on t3 using PRIMARY (c1=<cache>(((select #2) = (t1.c1 is null)))) 
++                        -> Select #2 (subquery in reference key of index access; run only once)
++                            -> Covering index scan on t2 using PRIMARY 
++                    -> Table scan on t3 
++                -> Select #2 (subquery in condition; run only once)
++                    -> Covering index scan on t2 using PRIMARY 
++
++set rds_partial_result_cache_cost_threshold=0;
++EXPLAIN ANALYZE SELECT c1 AS c10 FROM t0 t1 WHERE c1 NOT IN ((( SELECT c1 AS c11 FROM t0 t2 ) IN (t1.c1 IS NULL)) IN ( SELECT c1 AS c12 FROM t0 t3 ));
++EXPLAIN
++-> Filter: (t1.c1 <> <cache>(<in_optimizer>(((select #2) = (t1.c1 is null)),<exists>(select #3)))) 
++    -> Covering index scan on t1 using PRIMARY 
++    -> Select #2 (subquery in condition; run only once)
++        -> Covering index scan on t2 using PRIMARY 
++    -> Select #3 (subquery in condition; dependent)
++        -> Result cache : cache keys(t1.c1) (Cache Hits: 0, Cache Misses: 1, Cache Evictions: 0, Cache Overflows: 0, Memory Usage: # )  (actual time=# loops=1)
++            -> Limit: 1 row(s)  (actual time=# loops=1)
++                -> Filter: <if>(outer_field_is_not_null, (<cache>(((select #2) = (t1.c1 is null))) = t3.c1), true)  (actual time=# loops=1)
++                    -> Alternative plans for IN subquery: Index lookup unless c1 IS NULL 
++                        -> Single-row covering index lookup on t3 using PRIMARY (c1=<cache>(((select #2) = (t1.c1 is null)))) 
++                            -> Select #2 (subquery in reference key of index access; run only once)
++                                -> Covering index scan on t2 using PRIMARY 
++                        -> Table scan on t3 
++                    -> Select #2 (subquery in condition; run only once)
++                        -> Covering index scan on t2 using PRIMARY 
++
++drop table t0;
+ SET force_parallel_execute= @save_force_parallel_execute;
+ SET parallel_cost_threshold= @save_parallel_cost_threshold;
+ SET parallel_rows_threshold= @save_parallel_rows_threshold;
+diff --git a/mysql-test/suite/ptrc/t/ptrc_bugs.test b/mysql-test/suite/ptrc/t/ptrc_bugs.test
+index 02ce66d3ce8..eb29e72e441 100644
+--- a/mysql-test/suite/ptrc/t/ptrc_bugs.test
++++ b/mysql-test/suite/ptrc/t/ptrc_bugs.test
+@@ -930,6 +930,27 @@ EXECUTE stmt0;
+ drop table t1;
+ drop table t2;
+ 
++
++--echo # BUGFIX: See in estimate_num_groups(), this is a case where 
++--echo # tab->m_position==nullptr. When tab->m_position==nullptr, we cannot 
++--echo # estimate whether using PTRC would be beneficial. By controlling the
++--echo # values of the distinct_rows and est_rows variables, we ensure that 
++--echo # the calculated cost ratio is always 0. PTRC is used only when 
++--echo # rds_partial_result_cache_cost_threshold is 0.
++CREATE TABLE t0 (
++  c1 bit(1) NOT NULL,
++  PRIMARY KEY (c1)
++);
++
++set rds_partial_result_cache_cost_threshold=0.01;
++--replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*//
++EXPLAIN ANALYZE SELECT c1 AS c10 FROM t0 t1 WHERE c1 NOT IN ((( SELECT c1 AS c11 FROM t0 t2 ) IN (t1.c1 IS NULL)) IN ( SELECT c1 AS c12 FROM t0 t3 ));
++
++set rds_partial_result_cache_cost_threshold=0;
++--replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*//
++EXPLAIN ANALYZE SELECT c1 AS c10 FROM t0 t1 WHERE c1 NOT IN ((( SELECT c1 AS c11 FROM t0 t2 ) IN (t1.c1 IS NULL)) IN ( SELECT c1 AS c12 FROM t0 t3 ));
++drop table t0;
++
+ SET force_parallel_execute= @save_force_parallel_execute;
+ SET parallel_cost_threshold= @save_parallel_cost_threshold;
+ SET parallel_rows_threshold= @save_parallel_rows_threshold;
+diff --git a/sql/partial_result_cache.cc b/sql/partial_result_cache.cc
+index 49b8f61cb72..467932216f8 100644
+--- a/sql/partial_result_cache.cc
++++ b/sql/partial_result_cache.cc
+@@ -404,7 +404,35 @@ static void estimate_num_groups(JOIN *src_join, const TableCollection *tables,
+       continue;
+ 
+     POSITION *const pos = tab->position();
+-    assert(pos);
++    // Case:
++    // SELECT c1 as c10
++    // FROM t0 as t1
++    // WHERE c1 NOT IN
++    // (((
++    //   SELECT c1 as c11
++    //   FROM t0 as t2
++    // ) IN (t1.c1 IS NULL)) IN (
++    //   SELECT c1 as c12
++    //   FROM t0 as t3
++    // ));
++    //
++    // In this query, the IN predicate involving t3 has its left expression
++    // involving t1.c1, thus t1.c1 is a PTRC cache key for this subquery. When
++    // deciding whether to use PTRC optimization, it needs to access t1's
++    // m_position. However, at this time, the outermost query block containing
++    // t1 is still in the JOIN::estimate_rowcount processing phase, (this is one
++    // of these cases where the subquery is evaluated by the outer query which
++    // has not yet finished its own optimization) and m_position has not been
++    // assigned a valid value, remaining as an initialized null pointer. The
++    // m_position information will only be set in the subsequent
++    // JOIN::get_best_combination phase. In such scenarios, we cannot estimate
++    // whether using PTRC will be beneficial. Therefore, we set the threshold to
++    // 0 to avoid using PTRC as much as possible.
++    if (pos == nullptr) {
++      *distinct_rows = 1.0;
++      *est_rows = 1.0;
++      return;
++    }
+     double rowcount = pos->rows_fetched * pos->filter_effect;
+     double rec_per_key = get_record_per_key(&table);
+     if (rec_per_key > 0)
+-- 
+2.23.0
+

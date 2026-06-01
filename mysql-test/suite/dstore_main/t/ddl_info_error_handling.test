@@ -1,0 +1,82 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+
+--echo #
+--echo #  Test DDL info set failed in various error conditions.
+--echo #
+
+CALL mtr.add_suppression("ddl info generating fail");
+CALL mtr.add_suppression("Failed to set DDL info");
+CALL mtr.add_suppression("Following users were specified");
+CALL mtr.add_suppression("Generate dstore alter ddl info failed!");
+
+CREATE DATABASE test_ddl_info_errors;
+USE test_ddl_info_errors;
+
+--echo # Case 1: Test DDL info set error in CREATE/DROP table.
+SET debug='reset';
+SET debug='d, dstore_create_set_ddl_sql_error';
+--error ER_DSTORE_DDL_INFO_SIZE_INVALID
+CREATE TABLE t1 (pk INT PRIMARY KEY, col INT);
+SET debug='reset';
+CREATE TABLE t1 (pk INT PRIMARY KEY, col INT);
+INSERT INTO t1 VALUES (1,2),(2,3),(3,4);
+
+SET debug='reset';
+SET debug='d, dstore_drop_set_ddl_sql_error';
+--error ER_DSTORE_DDL_INFO_SIZE_INVALID
+DROP TABLE t1;
+SET debug='reset';
+DROP TABLE t1;
+
+--echo # Case 2: Test DDL info set error in CREATE user.
+SET debug='reset';
+SET debug='d, acl_ddl_set_ddl_sql_error';
+--error ER_DSTORE_DDL_INFO_SIZE_INVALID
+CREATE USER 'zzq'@'%' IDENTIFIED BY 'ABC123';
+SET debug='reset';
+CREATE USER IF NOT EXISTS 'zzq'@'%' IDENTIFIED BY 'ABC123';
+
+
+--echo # Case 3: Test DDL info set error in CREATE/DROP event.
+SET debug='reset';
+SET debug='d, create_event_set_ddl_sql_error';
+--error ER_DSTORE_DDL_INFO_SIZE_INVALID
+CREATE EVENT e1 ON SCHEDULE EVERY 1 MINUTE DO SELECT 1;
+SET debug='reset';
+CREATE EVENT e1 ON SCHEDULE EVERY 1 MINUTE DO SELECT 1;
+
+SET debug='reset';
+SET debug='d, drop_event_set_ddl_sql_error';
+--error ER_DSTORE_DDL_INFO_SIZE_INVALID
+DROP EVENT e1;
+SET debug='reset';
+DROP EVENT e1;
+
+--echo # Case 4: Test DDL info set error in CREATE routine.
+SET debug='reset';
+SET debug='d, create_routine_set_ddl_sql_error';
+--error ER_DSTORE_DDL_INFO_SIZE_INVALID
+CREATE FUNCTION AddTen(num INT) RETURNS INT DETERMINISTIC RETURN num + 10;
+SET debug='reset';
+CREATE FUNCTION AddTen(num INT) RETURNS INT DETERMINISTIC RETURN num + 10;
+
+--echo # Case 5: Test DDL info set error in ALTER TABLE WITH INPLACE ALGORITHM.
+CREATE TABLE t1 (pk INT PRIMARY KEY, col INT);
+INSERT INTO t1 VALUES (1,2),(2,3),(3,4);
+SET debug='reset';
+SET debug='d, dstore_alter_set_ddl_sql_error';
+SET dstore_ddl_threads=4;
+--error ER_DSTORE_DDL_INFO_SIZE_INVALID
+ALTER TABLE t1 ADD INDEX idx_col(col), ALGORITHM=INPLACE;
+SHOW CREATE TABLE t1;
+INSERT INTO t1 VALUES (4,5),(5,6);
+SET debug='reset';
+DROP TABLE t1;
+SET dstore_ddl_threads=default;
+
+DROP USER 'zzq'@'%';
+
+DROP FUNCTION AddTen;
+
+DROP DATABASE test_ddl_info_errors;

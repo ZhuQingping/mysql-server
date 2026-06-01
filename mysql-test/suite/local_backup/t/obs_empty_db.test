@@ -1,0 +1,45 @@
+--source suite/local_backup/include/have_obs_env.inc
+
+--source suite/local_backup/include/prepare_for_backup.inc
+
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("OBS error occur when get object meta");
+call mtr.add_suppression("OBS get object metadata fail");
+
+CREATE DATABASE db1;
+CREATE DATABASE db2;
+USE db1;
+CREATE TABLE t1(a int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+SET GLOBAL rds_lb_obs_max_connected_time = 2147483647;
+SHOW VARIABLES LIKE 'rds_lb_obs_max_connected_time';
+
+# full backup.
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+
+INSERT INTO t1 VALUES(2);
+SELECT * FROM t1 order by a;
+
+--echo # Shut server down.
+--let $shutdown_server_timeout = 300
+--source include/shutdown_mysqld.inc
+
+# Restore with script.
+--source suite/local_backup/include/restore_with_script.inc
+
+--echo # Restart the server.
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+USE db1;
+SELECT * FROM t1 order by a;
+DROP DATABASE db2;
+SET GLOBAL rds_lb_obs_max_connected_time = 0;
+
+# Drop database db1.
+DROP DATABASE db1;
+
+--source suite/local_backup/include/clean_backup.inc

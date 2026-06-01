@@ -1,0 +1,1539 @@
+From 4ad65eecbee05d1988909da425b787907b92a0c1 Mon Sep 17 00:00:00 2001
+From: songliyong <songliyong@contributor>
+
+
+Date: Tue, 29 Apr 2025 19:30:17 +0800
+Subject: [PATCH] USERSTORY admin port and local socket use per thread
+
+Issue:
+--------
+When active threads are used up, threadpool may not be able to process
+new connections immediately. So the user connnection will be hunged.
+
+Solution:
+--------
+To avoid threadpool in some emergency scenarios, We support admin port
+connection or local socket use per thread instead of threadpool.
+
+This patch introduces three variables.
+1.rds_admin_max_connections: The max number of connections on admin port, only limit the total number
+  of connections from admin port. Independent of the max_connections parameter.
+  max_connections only limits the max connections from normal user connection.
+2.rds_admin_port_using_per_thread: It indicates whether admin port connection using per thread
+3.rds_local_socket_using_per_thread: It indicates whether local socket connection using per thread
+---
+ mysql-test/r/all_persisted_variables.result   |   8 +-
+ mysql-test/r/mysqld--help-notwin.result       |  12 ++
+ .../r/rds_admin_port_using_per_thread.result  |  90 ++++++++++++
+ .../rds_local_socket_using_per_thread.result  |  75 ++++++++++
+ .../cde/r/mysqld--help-notwin-dstore.result   |  12 ++
+ .../perfschema/r/one_thread_per_con.result    |   8 +
+ .../perfschema/t/one_thread_per_con.test      |  11 ++
+ .../r/rds_admin_max_connections_basic.result  |  38 +++++
+ ...s_admin_port_using_per_thread_basic.result |  40 +++++
+ ...local_socket_using_per_thread_basic.result |  40 +++++
+ .../t/rds_admin_max_connections_basic.test    |  39 +++++
+ ...rds_admin_port_using_per_thread_basic.test |  37 +++++
+ ...s_local_socket_using_per_thread_basic.test |  37 +++++
+ mysql-test/t/all_persisted_variables.test     |   2 +-
+ ...rds_admin_port_using_per_thread-master.opt |   4 +
+ .../t/rds_admin_port_using_per_thread.test    |  99 +++++++++++++
+ .../t/rds_local_socket_using_per_thread.test  |  86 +++++++++++
+ .../mtr/threadpool_connection_handler.result  |   9 ++
+ .../mtr/threadpool_connection_handler.test    |   9 ++
+ plugin/threadpool/threadpool_common.cc        |   2 +-
+ plugin/threadpool/threadpool_unix.cc          |   6 +-
+ sql/conn_handler/channel_info.h               |   6 +
+ .../connection_handler_manager.cc             |  55 +++++--
+ sql/conn_handler/connection_handler_manager.h |  34 ++++-
+ .../connection_handler_one_thread.cc          |   8 +-
+ .../connection_handler_per_thread.cc          |  20 ++-
+ sql/conn_handler/socket_connection.cc         |   6 +
+ sql/mysqld.cc                                 |  12 ++
+ sql/mysqld.h                                  |   3 +
+ sql/sys_vars.cc                               |  24 +++
+ sql/sys_vars.h                                |   5 +-
+ unittest/gunit/threadpool/CMakeLists.txt      |  10 +-
+ unittest/gunit/threadpool/conn_handler-t.cc   | 138 ++++++++++++++++++
+ 33 files changed, 949 insertions(+), 36 deletions(-)
+ create mode 100644 mysql-test/r/rds_admin_port_using_per_thread.result
+ create mode 100644 mysql-test/r/rds_local_socket_using_per_thread.result
+ create mode 100644 mysql-test/suite/sys_vars/r/rds_admin_max_connections_basic.result
+ create mode 100644 mysql-test/suite/sys_vars/r/rds_admin_port_using_per_thread_basic.result
+ create mode 100644 mysql-test/suite/sys_vars/r/rds_local_socket_using_per_thread_basic.result
+ create mode 100644 mysql-test/suite/sys_vars/t/rds_admin_max_connections_basic.test
+ create mode 100644 mysql-test/suite/sys_vars/t/rds_admin_port_using_per_thread_basic.test
+ create mode 100644 mysql-test/suite/sys_vars/t/rds_local_socket_using_per_thread_basic.test
+ create mode 100644 mysql-test/t/rds_admin_port_using_per_thread-master.opt
+ create mode 100644 mysql-test/t/rds_admin_port_using_per_thread.test
+ create mode 100644 mysql-test/t/rds_local_socket_using_per_thread.test
+ create mode 100644 unittest/gunit/threadpool/conn_handler-t.cc
+
+diff --git a/mysql-test/r/all_persisted_variables.result b/mysql-test/r/all_persisted_variables.result
+index 324199c20b8..15e373f3d79 100644
+--- a/mysql-test/r/all_persisted_variables.result
++++ b/mysql-test/r/all_persisted_variables.result
+@@ -40,7 +40,7 @@ include/assert.inc [Expect 500+ variables in the table. Due to open Bugs, we are
+ 
+ # Test SET PERSIST
+ 
+-include/assert.inc [Expect 473 persisted variables in the table.]
++include/assert.inc [Expect 476 persisted variables in the table.]
+ 
+ ************************************************************
+ * 3. Restart server, it must preserve the persisted variable
+@@ -48,9 +48,9 @@ include/assert.inc [Expect 473 persisted variables in the table.]
+ ************************************************************
+ # restart
+ 
+-include/assert.inc [Expect 473 persisted variables in persisted_variables table.]
+-include/assert.inc [Expect 473 persisted variables shown as PERSISTED in variables_info table.]
+-include/assert.inc [Expect 473 persisted variables with matching peristed and global values.]
++include/assert.inc [Expect 476 persisted variables in persisted_variables table.]
++include/assert.inc [Expect 476 persisted variables shown as PERSISTED in variables_info table.]
++include/assert.inc [Expect 476 persisted variables with matching peristed and global values.]
+ 
+ ************************************************************
+ * 4. Test RESET PERSIST IF EXISTS. Verify persisted variable
+diff --git a/mysql-test/r/mysqld--help-notwin.result b/mysql-test/r/mysqld--help-notwin.result
+index 263cee3e585..b3750fce101 100644
+--- a/mysql-test/r/mysqld--help-notwin.result
++++ b/mysql-test/r/mysqld--help-notwin.result
+@@ -1159,6 +1159,12 @@ The following options may be given as the first argument:
+  optimization of a query, index range scan will not be
+  considered for this query. A value of 0 means range
+  optimizer does not have any cap on memory. 
++ --rds-admin-max-connections=# 
++ The number of simultaneous clients allowed through admin
++ port
++ --rds-admin-port-using-per-thread 
++ This option indicates whether admin port connections
++ should use per thread
+  --rds-empty-redundant-check-in-range-scan 
+  From the condition evaluated at the SQL layer, remove any
+  comparison already evaluated by the range index scan
+@@ -1168,6 +1174,9 @@ The following options may be given as the first argument:
+  Path for full local backup data
+  --rds-local-backup-lock-timeout=# 
+  Timeout in seconds for local backup to wait to get MDL
++ --rds-local-socket-using-per-thread 
++ This option indicates whether local socket connections
++ should use per thread
+  --rds-log-archive-path[=name] 
+  Path for incremental local backup data
+  --rds-write-binlog-into-redo 
+@@ -2099,9 +2108,12 @@ query-alloc-block-size 8192
+ query-prealloc-size 8192
+ range-alloc-block-size 4096
+ range-optimizer-max-mem-size 8388608
++rds-admin-max-connections 100
++rds-admin-port-using-per-thread FALSE
+ rds-empty-redundant-check-in-range-scan TRUE
+ rds-full-local-backup-path 
+ rds-local-backup-lock-timeout 300
++rds-local-socket-using-per-thread FALSE
+ rds-log-archive-path 
+ rds-write-binlog-into-redo FALSE
+ read-buffer-size 131072
+diff --git a/mysql-test/r/rds_admin_port_using_per_thread.result b/mysql-test/r/rds_admin_port_using_per_thread.result
+new file mode 100644
+index 00000000000..838ed558e70
+--- /dev/null
++++ b/mysql-test/r/rds_admin_port_using_per_thread.result
+@@ -0,0 +1,90 @@
++# PREPARE
++# create user without SUPER privileges.
++CREATE USER 'user_without_service_admin'@'%' IDENTIFIED BY '123456';
++GRANT SELECT ON *.* TO 'user_without_service_admin'@'%' WITH GRANT OPTION;
++SHOW GRANTS FOR 'user_without_service_admin'@'%';
++Grants for user_without_service_admin@%
++GRANT SELECT ON *.* TO `user_without_service_admin`@`%` WITH GRANT OPTION
++# create user with SERVICE_CONN_ADMIN privileges.
++CREATE USER 'user_with_service_admin'@'%' IDENTIFIED BY '123456';
++GRANT SELECT,SERVICE_CONNECTION_ADMIN ON *.* TO 'user_with_service_admin'@'%' WITH GRANT OPTION;
++SHOW GRANTS FOR 'user_with_service_admin'@'%';
++Grants for user_with_service_admin@%
++GRANT SELECT ON *.* TO `user_with_service_admin`@`%` WITH GRANT OPTION
++GRANT SERVICE_CONNECTION_ADMIN ON *.* TO `user_with_service_admin`@`%` WITH GRANT OPTION
++SET @global_rds_admin_port_using_per_thread =  @@global.rds_admin_port_using_per_thread;
++SET @global_threadpool_enabled =  @@global.threadpool_enabled;
++# Test 1: when threadpool enable, rds_admin_port_using_per_thread
++#         controls whether admin connection to use per thread.
++set global threadpool_enabled=ON;
++show variables like 'threadpool_enabled';
++Variable_name	Value
++threadpool_enabled	ON
++show variables like 'rds_admin_port_using_per_thread';
++Variable_name	Value
++rds_admin_port_using_per_thread	OFF
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	1
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++Variable_name	Value
++Threadpool_active_connections	0
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	2
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++Variable_name	Value
++Threadpool_active_connections	1
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	3
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++Variable_name	Value
++Threadpool_active_connections	2
++set global rds_admin_port_using_per_thread=ON;
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	4
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++Variable_name	Value
++Threadpool_active_connections	2
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	5
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++Variable_name	Value
++Threadpool_active_connections	3
++# Test 2: when threadpool disable, normal connection and admin connection
++#         can connect success.
++set global threadpool_enabled=OFF;
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	6
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++Variable_name	Value
++Threadpool_active_connections	3
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	7
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++Variable_name	Value
++Threadpool_active_connections	3
++set global rds_admin_port_using_per_thread=OFF;
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	8
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++Variable_name	Value
++Threadpool_active_connections	3
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	9
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++Variable_name	Value
++Threadpool_active_connections	3
++connect(127.0.0.1,user_with_service_admin,123456,mysql,1501,MYSQL_SOCK);
++ERROR HY000: Too many connections
++# Cleanup
++SET @@global.rds_admin_port_using_per_thread = @global_rds_admin_port_using_per_thread;
++SET @@global.threadpool_enabled = @global_threadpool_enabled;
++DROP USER user_without_service_admin, user_with_service_admin;
+diff --git a/mysql-test/r/rds_local_socket_using_per_thread.result b/mysql-test/r/rds_local_socket_using_per_thread.result
+new file mode 100644
+index 00000000000..ac82207d23b
+--- /dev/null
++++ b/mysql-test/r/rds_local_socket_using_per_thread.result
+@@ -0,0 +1,75 @@
++SET @global_rds_local_socket_using_per_thread =  @@global.rds_local_socket_using_per_thread;
++SET @global_threadpool_enabled =  @@global.threadpool_enabled;
++# Test 1: when threadpool enable, rds_local_socket_using_per_thread
++#         controls whether local socket connection to use per thread.
++set global threadpool_enabled=ON;
++show variables like 'threadpool_enabled';
++Variable_name	Value
++threadpool_enabled	ON
++show variables like 'rds_local_socket_using_per_thread';
++Variable_name	Value
++rds_local_socket_using_per_thread	OFF
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	1
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++Variable_name	Value
++Threadpool_active_connections	0
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	2
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++Variable_name	Value
++Threadpool_active_connections	1
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	3
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++Variable_name	Value
++Threadpool_active_connections	2
++set global rds_local_socket_using_per_thread=ON;
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	4
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++Variable_name	Value
++Threadpool_active_connections	2
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	5
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++Variable_name	Value
++Threadpool_active_connections	3
++# Test 2: when threadpool disable, normal connection and socket connection
++#         can connect success.
++set global threadpool_enabled=OFF;
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	6
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++Variable_name	Value
++Threadpool_active_connections	3
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	7
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++Variable_name	Value
++Threadpool_active_connections	3
++set global rds_local_socket_using_per_thread=OFF;
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	8
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++Variable_name	Value
++Threadpool_active_connections	3
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	9
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++Variable_name	Value
++Threadpool_active_connections	3
++set global threadpool_enabled=ON;
++set global threadpool_enabled=OFF;
++# Cleanup
++SET @@global.rds_local_socket_using_per_thread = @global_rds_local_socket_using_per_thread;
++SET @@global.threadpool_enabled = @global_threadpool_enabled;
+diff --git a/mysql-test/suite/cde/r/mysqld--help-notwin-dstore.result b/mysql-test/suite/cde/r/mysqld--help-notwin-dstore.result
+index 263cee3e585..b3750fce101 100644
+--- a/mysql-test/suite/cde/r/mysqld--help-notwin-dstore.result
++++ b/mysql-test/suite/cde/r/mysqld--help-notwin-dstore.result
+@@ -1159,6 +1159,12 @@ The following options may be given as the first argument:
+  optimization of a query, index range scan will not be
+  considered for this query. A value of 0 means range
+  optimizer does not have any cap on memory. 
++ --rds-admin-max-connections=# 
++ The number of simultaneous clients allowed through admin
++ port
++ --rds-admin-port-using-per-thread 
++ This option indicates whether admin port connections
++ should use per thread
+  --rds-empty-redundant-check-in-range-scan 
+  From the condition evaluated at the SQL layer, remove any
+  comparison already evaluated by the range index scan
+@@ -1168,6 +1174,9 @@ The following options may be given as the first argument:
+  Path for full local backup data
+  --rds-local-backup-lock-timeout=# 
+  Timeout in seconds for local backup to wait to get MDL
++ --rds-local-socket-using-per-thread 
++ This option indicates whether local socket connections
++ should use per thread
+  --rds-log-archive-path[=name] 
+  Path for incremental local backup data
+  --rds-write-binlog-into-redo 
+@@ -2099,9 +2108,12 @@ query-alloc-block-size 8192
+ query-prealloc-size 8192
+ range-alloc-block-size 4096
+ range-optimizer-max-mem-size 8388608
++rds-admin-max-connections 100
++rds-admin-port-using-per-thread FALSE
+ rds-empty-redundant-check-in-range-scan TRUE
+ rds-full-local-backup-path 
+ rds-local-backup-lock-timeout 300
++rds-local-socket-using-per-thread FALSE
+ rds-log-archive-path 
+ rds-write-binlog-into-redo FALSE
+ read-buffer-size 131072
+diff --git a/mysql-test/suite/perfschema/r/one_thread_per_con.result b/mysql-test/suite/perfschema/r/one_thread_per_con.result
+index b448aa96955..7103ae785dc 100644
+--- a/mysql-test/suite/perfschema/r/one_thread_per_con.result
++++ b/mysql-test/suite/perfschema/r/one_thread_per_con.result
+@@ -35,4 +35,12 @@ thread/sql/one_connection
+ drop table test.t1;
+ drop table test.t2;
+ drop table test.t3;
++SET GLOBAL debug= '+d,simulate_resource_failure';
++call mtr.add_suppression("Out of memory");
++connect(localhost,root,,mysql,MYSQL_PORT,MYSQL_SOCK);
++ERROR HY000: Lost connection to MySQL server at 'reading initial communication packet', system error: NUM
++SET GLOBAL debug= '-d,simulate_resource_failure';
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	4
+ update performance_schema.setup_instruments set enabled='YES';
+diff --git a/mysql-test/suite/perfschema/t/one_thread_per_con.test b/mysql-test/suite/perfschema/t/one_thread_per_con.test
+index 6ee57c38afd..fd1b97bf51d 100644
+--- a/mysql-test/suite/perfschema/t/one_thread_per_con.test
++++ b/mysql-test/suite/perfschema/t/one_thread_per_con.test
+@@ -75,5 +75,16 @@ drop table test.t1;
+ drop table test.t2;
+ drop table test.t3;
+ 
++
++SET GLOBAL debug= '+d,simulate_resource_failure';
++call mtr.add_suppression("Out of memory");
++--replace_result $MASTER_MYPORT MYSQL_PORT $MASTER_MYSOCK MYSQL_SOCK
++--replace_regex /system error: [0-9]+/system error: NUM/
++--error 2013
++connect (con4, localhost, root,,mysql);
++
++connection default;
++SET GLOBAL debug= '-d,simulate_resource_failure';
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
+ --source ../include/cleanup_helper.inc
+ 
+diff --git a/mysql-test/suite/sys_vars/r/rds_admin_max_connections_basic.result b/mysql-test/suite/sys_vars/r/rds_admin_max_connections_basic.result
+new file mode 100644
+index 00000000000..863be15e7bc
+--- /dev/null
++++ b/mysql-test/suite/sys_vars/r/rds_admin_max_connections_basic.result
+@@ -0,0 +1,38 @@
++SET @start_global_value = @@global.rds_admin_max_connections;
++select @@global.rds_admin_max_connections;
++@@global.rds_admin_max_connections
++100
++show global variables like 'rds_admin_max_connections';
++Variable_name	Value
++rds_admin_max_connections	100
++show session variables like 'rds_admin_max_connections';
++Variable_name	Value
++rds_admin_max_connections	100
++select * from performance_schema.global_variables where variable_name='rds_admin_max_connections';
++VARIABLE_NAME	VARIABLE_VALUE
++rds_admin_max_connections	100
++select * from performance_schema.session_variables where variable_name='rds_admin_max_connections';
++VARIABLE_NAME	VARIABLE_VALUE
++rds_admin_max_connections	100
++set global rds_admin_max_connections=1;
++select @@global.rds_admin_max_connections;
++@@global.rds_admin_max_connections
++1
++set session rds_admin_max_connections=1;
++ERROR HY000: Variable 'rds_admin_max_connections' is a GLOBAL variable and should be set with SET GLOBAL
++set global rds_admin_max_connections=1.1;
++ERROR 42000: Incorrect argument type to variable 'rds_admin_max_connections'
++set global rds_admin_max_connections=1e1;
++ERROR 42000: Incorrect argument type to variable 'rds_admin_max_connections'
++set global rds_admin_max_connections="foo";
++ERROR 42000: Incorrect argument type to variable 'rds_admin_max_connections'
++set global rds_admin_max_connections=0;
++Warnings:
++Warning	1292	Truncated incorrect rds_admin_max_connections value: '0'
++set global rds_admin_max_connections=cast(-1 as unsigned int);
++Warnings:
++Warning	1292	Truncated incorrect rds_admin_max_connections value: '18446744073709551615'
++select @@global.rds_admin_max_connections;
++@@global.rds_admin_max_connections
++1000
++SET @@global.rds_admin_max_connections = @start_global_value;
+diff --git a/mysql-test/suite/sys_vars/r/rds_admin_port_using_per_thread_basic.result b/mysql-test/suite/sys_vars/r/rds_admin_port_using_per_thread_basic.result
+new file mode 100644
+index 00000000000..9654a31cd93
+--- /dev/null
++++ b/mysql-test/suite/sys_vars/r/rds_admin_port_using_per_thread_basic.result
+@@ -0,0 +1,40 @@
++SET @saved_rds_admin_port_using_per_thread = @@global.rds_admin_port_using_per_thread;
++set @@global.rds_admin_port_using_per_thread=default;
++select @@global.rds_admin_port_using_per_thread;
++@@global.rds_admin_port_using_per_thread
++0
++select @@session.rds_admin_port_using_per_thread;
++ERROR HY000: Variable 'rds_admin_port_using_per_thread' is a GLOBAL variable
++show global variables like 'rds_admin_port_using_per_thread';
++Variable_name	Value
++rds_admin_port_using_per_thread	OFF
++select * from performance_schema.global_variables where variable_name='rds_admin_port_using_per_thread';
++VARIABLE_NAME	VARIABLE_VALUE
++rds_admin_port_using_per_thread	OFF
++set global rds_admin_port_using_per_thread=OFF;
++select @@global.rds_admin_port_using_per_thread;
++@@global.rds_admin_port_using_per_thread
++0
++set global rds_admin_port_using_per_thread=ON;
++select @@global.rds_admin_port_using_per_thread;
++@@global.rds_admin_port_using_per_thread
++1
++set global rds_admin_port_using_per_thread=0;
++select @@global.rds_admin_port_using_per_thread;
++@@global.rds_admin_port_using_per_thread
++0
++set global rds_admin_port_using_per_thread=1;
++select @@global.rds_admin_port_using_per_thread;
++@@global.rds_admin_port_using_per_thread
++1
++set global rds_admin_port_using_per_thread=1.1;
++ERROR 42000: Incorrect argument type to variable 'rds_admin_port_using_per_thread'
++set global rds_admin_port_using_per_thread=1e1;
++ERROR 42000: Incorrect argument type to variable 'rds_admin_port_using_per_thread'
++set global rds_admin_port_using_per_thread=5;
++ERROR 42000: Variable 'rds_admin_port_using_per_thread' can't be set to the value of '5'
++set global rds_admin_port_using_per_thread=-3;
++ERROR 42000: Variable 'rds_admin_port_using_per_thread' can't be set to the value of '-3'
++set global rds_admin_port_using_per_thread="foo";
++ERROR 42000: Variable 'rds_admin_port_using_per_thread' can't be set to the value of 'foo'
++SET GLOBAL rds_admin_port_using_per_thread = @saved_rds_admin_port_using_per_thread;
+diff --git a/mysql-test/suite/sys_vars/r/rds_local_socket_using_per_thread_basic.result b/mysql-test/suite/sys_vars/r/rds_local_socket_using_per_thread_basic.result
+new file mode 100644
+index 00000000000..e3c476bef9f
+--- /dev/null
++++ b/mysql-test/suite/sys_vars/r/rds_local_socket_using_per_thread_basic.result
+@@ -0,0 +1,40 @@
++SET @saved_rds_local_socket_using_per_thread = @@global.rds_local_socket_using_per_thread;
++set @@global.rds_local_socket_using_per_thread=default;
++select @@global.rds_local_socket_using_per_thread;
++@@global.rds_local_socket_using_per_thread
++0
++select @@session.rds_local_socket_using_per_thread;
++ERROR HY000: Variable 'rds_local_socket_using_per_thread' is a GLOBAL variable
++show global variables like 'rds_local_socket_using_per_thread';
++Variable_name	Value
++rds_local_socket_using_per_thread	OFF
++select * from performance_schema.global_variables where variable_name='rds_local_socket_using_per_thread';
++VARIABLE_NAME	VARIABLE_VALUE
++rds_local_socket_using_per_thread	OFF
++set global rds_local_socket_using_per_thread=OFF;
++select @@global.rds_local_socket_using_per_thread;
++@@global.rds_local_socket_using_per_thread
++0
++set global rds_local_socket_using_per_thread=ON;
++select @@global.rds_local_socket_using_per_thread;
++@@global.rds_local_socket_using_per_thread
++1
++set global rds_local_socket_using_per_thread=0;
++select @@global.rds_local_socket_using_per_thread;
++@@global.rds_local_socket_using_per_thread
++0
++set global rds_local_socket_using_per_thread=1;
++select @@global.rds_local_socket_using_per_thread;
++@@global.rds_local_socket_using_per_thread
++1
++set global rds_local_socket_using_per_thread=1.1;
++ERROR 42000: Incorrect argument type to variable 'rds_local_socket_using_per_thread'
++set global rds_local_socket_using_per_thread=1e1;
++ERROR 42000: Incorrect argument type to variable 'rds_local_socket_using_per_thread'
++set global rds_local_socket_using_per_thread=5;
++ERROR 42000: Variable 'rds_local_socket_using_per_thread' can't be set to the value of '5'
++set global rds_local_socket_using_per_thread=-3;
++ERROR 42000: Variable 'rds_local_socket_using_per_thread' can't be set to the value of '-3'
++set global rds_local_socket_using_per_thread="foo";
++ERROR 42000: Variable 'rds_local_socket_using_per_thread' can't be set to the value of 'foo'
++SET GLOBAL rds_local_socket_using_per_thread = @saved_rds_local_socket_using_per_thread;
+diff --git a/mysql-test/suite/sys_vars/t/rds_admin_max_connections_basic.test b/mysql-test/suite/sys_vars/t/rds_admin_max_connections_basic.test
+new file mode 100644
+index 00000000000..6074b951ef1
+--- /dev/null
++++ b/mysql-test/suite/sys_vars/t/rds_admin_max_connections_basic.test
+@@ -0,0 +1,39 @@
++# ulong global
++
++SET @start_global_value = @@global.rds_admin_max_connections;
++
++#
++# exists as global only
++#
++select @@global.rds_admin_max_connections;
++show global variables like 'rds_admin_max_connections';
++show session variables like 'rds_admin_max_connections';
++select * from performance_schema.global_variables where variable_name='rds_admin_max_connections';
++select * from performance_schema.session_variables where variable_name='rds_admin_max_connections';
++
++#
++# show that it's writable
++#
++set global rds_admin_max_connections=1;
++select @@global.rds_admin_max_connections;
++--error ER_GLOBAL_VARIABLE
++set session rds_admin_max_connections=1;
++
++#
++# incorrect types
++#
++--error ER_WRONG_TYPE_FOR_VAR
++set global rds_admin_max_connections=1.1;
++--error ER_WRONG_TYPE_FOR_VAR
++set global rds_admin_max_connections=1e1;
++--error ER_WRONG_TYPE_FOR_VAR
++set global rds_admin_max_connections="foo";
++
++#
++# min/max values
++#
++set global rds_admin_max_connections=0;
++set global rds_admin_max_connections=cast(-1 as unsigned int);
++select @@global.rds_admin_max_connections;
++
++SET @@global.rds_admin_max_connections = @start_global_value;
+diff --git a/mysql-test/suite/sys_vars/t/rds_admin_port_using_per_thread_basic.test b/mysql-test/suite/sys_vars/t/rds_admin_port_using_per_thread_basic.test
+new file mode 100644
+index 00000000000..aa796e34e28
+--- /dev/null
++++ b/mysql-test/suite/sys_vars/t/rds_admin_port_using_per_thread_basic.test
+@@ -0,0 +1,37 @@
++SET @saved_rds_admin_port_using_per_thread = @@global.rds_admin_port_using_per_thread;
++
++# Test the default value
++set @@global.rds_admin_port_using_per_thread=default;
++select @@global.rds_admin_port_using_per_thread;
++
++--error ER_INCORRECT_GLOBAL_LOCAL_VAR
++select @@session.rds_admin_port_using_per_thread;
++
++show global variables like 'rds_admin_port_using_per_thread';
++select * from performance_schema.global_variables where variable_name='rds_admin_port_using_per_thread';
++
++# show that it's writable
++set global rds_admin_port_using_per_thread=OFF;
++select @@global.rds_admin_port_using_per_thread;
++set global rds_admin_port_using_per_thread=ON;
++select @@global.rds_admin_port_using_per_thread;
++set global rds_admin_port_using_per_thread=0;
++select @@global.rds_admin_port_using_per_thread;
++set global rds_admin_port_using_per_thread=1;
++select @@global.rds_admin_port_using_per_thread;
++
++# incorrect types
++--error ER_WRONG_TYPE_FOR_VAR
++set global rds_admin_port_using_per_thread=1.1;
++--error ER_WRONG_TYPE_FOR_VAR
++set global rds_admin_port_using_per_thread=1e1;
++
++# incorrect values
++--error ER_WRONG_VALUE_FOR_VAR
++set global rds_admin_port_using_per_thread=5;
++--error ER_WRONG_VALUE_FOR_VAR
++set global rds_admin_port_using_per_thread=-3;
++--error ER_WRONG_VALUE_FOR_VAR
++set global rds_admin_port_using_per_thread="foo";
++
++SET GLOBAL rds_admin_port_using_per_thread = @saved_rds_admin_port_using_per_thread;
+diff --git a/mysql-test/suite/sys_vars/t/rds_local_socket_using_per_thread_basic.test b/mysql-test/suite/sys_vars/t/rds_local_socket_using_per_thread_basic.test
+new file mode 100644
+index 00000000000..5067d085078
+--- /dev/null
++++ b/mysql-test/suite/sys_vars/t/rds_local_socket_using_per_thread_basic.test
+@@ -0,0 +1,37 @@
++SET @saved_rds_local_socket_using_per_thread = @@global.rds_local_socket_using_per_thread;
++
++# Test the default value
++set @@global.rds_local_socket_using_per_thread=default;
++select @@global.rds_local_socket_using_per_thread;
++
++--error ER_INCORRECT_GLOBAL_LOCAL_VAR
++select @@session.rds_local_socket_using_per_thread;
++
++show global variables like 'rds_local_socket_using_per_thread';
++select * from performance_schema.global_variables where variable_name='rds_local_socket_using_per_thread';
++
++# show that it's writable
++set global rds_local_socket_using_per_thread=OFF;
++select @@global.rds_local_socket_using_per_thread;
++set global rds_local_socket_using_per_thread=ON;
++select @@global.rds_local_socket_using_per_thread;
++set global rds_local_socket_using_per_thread=0;
++select @@global.rds_local_socket_using_per_thread;
++set global rds_local_socket_using_per_thread=1;
++select @@global.rds_local_socket_using_per_thread;
++
++# incorrect types
++--error ER_WRONG_TYPE_FOR_VAR
++set global rds_local_socket_using_per_thread=1.1;
++--error ER_WRONG_TYPE_FOR_VAR
++set global rds_local_socket_using_per_thread=1e1;
++
++# incorrect values
++--error ER_WRONG_VALUE_FOR_VAR
++set global rds_local_socket_using_per_thread=5;
++--error ER_WRONG_VALUE_FOR_VAR
++set global rds_local_socket_using_per_thread=-3;
++--error ER_WRONG_VALUE_FOR_VAR
++set global rds_local_socket_using_per_thread="foo";
++
++SET GLOBAL rds_local_socket_using_per_thread = @saved_rds_local_socket_using_per_thread;
+diff --git a/mysql-test/t/all_persisted_variables.test b/mysql-test/t/all_persisted_variables.test
+index 5eedb1d8302..3205f019c90 100644
+--- a/mysql-test/t/all_persisted_variables.test
++++ b/mysql-test/t/all_persisted_variables.test
+@@ -41,7 +41,7 @@ call mtr.add_suppression("\\[Warning\\] .*MY-\\d+.* Changing innodb_extend_and_i
+ call mtr.add_suppression("Failed to initialize TLS for channel: mysql_main");
+ 
+ let $total_global_vars=`SELECT COUNT(*) FROM performance_schema.global_variables where variable_name NOT LIKE 'ndb_%' AND variable_name NOT LIKE 'debug_%'`;
+-let $total_persistent_vars=473;
++let $total_persistent_vars=476;
+ 
+ --echo ***************************************************************
+ --echo * 0. Verify that variables present in performance_schema.global
+diff --git a/mysql-test/t/rds_admin_port_using_per_thread-master.opt b/mysql-test/t/rds_admin_port_using_per_thread-master.opt
+new file mode 100644
+index 00000000000..ba119fa6fa6
+--- /dev/null
++++ b/mysql-test/t/rds_admin_port_using_per_thread-master.opt
+@@ -0,0 +1,4 @@
++--port=1401
++--admin_address=127.0.0.1
++--admin_port=1501
++--rds_admin_max_connections=4
+diff --git a/mysql-test/t/rds_admin_port_using_per_thread.test b/mysql-test/t/rds_admin_port_using_per_thread.test
+new file mode 100644
+index 00000000000..b6d0de397aa
+--- /dev/null
++++ b/mysql-test/t/rds_admin_port_using_per_thread.test
+@@ -0,0 +1,99 @@
++# Test admin port connection using per thread
++--disable_query_log
++call mtr.add_suppression("Failed to initialize TLS for channel: mysql_admin. See below for the description of exact issue");
++call mtr.add_suppression("Failed to set up SSL because of the following SSL library error");
++--enable_query_log
++
++# Save the initial number of concurrent sessions
++--source include/count_sessions.inc
++
++--echo # PREPARE
++--echo # create user without SUPER privileges.
++CREATE USER 'user_without_service_admin'@'%' IDENTIFIED BY '123456';
++GRANT SELECT ON *.* TO 'user_without_service_admin'@'%' WITH GRANT OPTION;
++SHOW GRANTS FOR 'user_without_service_admin'@'%';
++
++--echo # create user with SERVICE_CONN_ADMIN privileges.
++CREATE USER 'user_with_service_admin'@'%' IDENTIFIED BY '123456';
++GRANT SELECT,SERVICE_CONNECTION_ADMIN ON *.* TO 'user_with_service_admin'@'%' WITH GRANT OPTION;
++SHOW GRANTS FOR 'user_with_service_admin'@'%';
++
++SET @global_rds_admin_port_using_per_thread =  @@global.rds_admin_port_using_per_thread;
++SET @global_threadpool_enabled =  @@global.threadpool_enabled;
++
++--echo # Test 1: when threadpool enable, rds_admin_port_using_per_thread
++--echo #         controls whether admin connection to use per thread.
++set global threadpool_enabled=ON;
++show variables like 'threadpool_enabled';
++show variables like 'rds_admin_port_using_per_thread';
++
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++
++connect(admin_conn1,127.0.0.1,user_with_service_admin,123456,mysql,1501);
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++
++connect(normal_conn1,127.0.0.1,user_without_service_admin,123456,mysql,1401);
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++
++connection default;
++set global rds_admin_port_using_per_thread=ON;
++
++connect(admin_conn2,127.0.0.1,user_with_service_admin,123456,mysql,1501);
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++
++connect(normal_conn2,127.0.0.1,user_without_service_admin,123456,mysql,1401);
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++
++--echo # Test 2: when threadpool disable, normal connection and admin connection
++--echo #         can connect success.
++connection default;
++set global threadpool_enabled=OFF;
++
++connect(admin_conn3,127.0.0.1,user_with_service_admin,123456,mysql,1501);
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++
++connect(normal_conn3,127.0.0.1,user_without_service_admin,123456,mysql,1401);
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++
++connection default;
++set global rds_admin_port_using_per_thread=OFF;
++
++connect(admin_conn4,127.0.0.1,user_with_service_admin,123456,mysql,1501);
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++
++connect(normal_conn4,127.0.0.1,user_without_service_admin,123456,mysql,1401);
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++
++--replace_result $MASTER_MYPORT MYSQL_PORT $MASTER_MYSOCK MYSQL_SOCK
++--error 1040
++connect(admin_conn5,127.0.0.1,user_with_service_admin,123456,mysql,1501);
++
++--echo # Cleanup
++
++connection default;
++SET @@global.rds_admin_port_using_per_thread = @global_rds_admin_port_using_per_thread;
++SET @@global.threadpool_enabled = @global_threadpool_enabled;
++disconnect normal_conn1;
++disconnect normal_conn2;
++disconnect normal_conn3;
++disconnect normal_conn4;
++disconnect admin_conn1;
++disconnect admin_conn2;
++disconnect admin_conn3;
++disconnect admin_conn4;
++--disable_warnings
++DROP USER user_without_service_admin, user_with_service_admin;
++--enable_warnings
++
++# Wait till we reached the initial number of concurrent sessions
++--source include/wait_until_count_sessions.inc
++
+diff --git a/mysql-test/t/rds_local_socket_using_per_thread.test b/mysql-test/t/rds_local_socket_using_per_thread.test
+new file mode 100644
+index 00000000000..bcee92e7f44
+--- /dev/null
++++ b/mysql-test/t/rds_local_socket_using_per_thread.test
+@@ -0,0 +1,86 @@
++# Test local socket connection using per thread
++
++# Save the initial number of concurrent sessions
++--source include/count_sessions.inc
++
++SET @global_rds_local_socket_using_per_thread =  @@global.rds_local_socket_using_per_thread;
++SET @global_threadpool_enabled =  @@global.threadpool_enabled;
++
++--echo # Test 1: when threadpool enable, rds_local_socket_using_per_thread
++--echo #         controls whether local socket connection to use per thread.
++set global threadpool_enabled=ON;
++show variables like 'threadpool_enabled';
++show variables like 'rds_local_socket_using_per_thread';
++
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++
++connect(socket_conn1,localhost,root,,);
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++
++connect(tcp_conn1,127.0.0.1,root,,,$MASTER_MYPORT);
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++
++connection default;
++set global rds_local_socket_using_per_thread=ON;
++
++connect(socket_conn2,localhost,root,,);
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++
++connect(tcp_conn2,127.0.0.1,root,,,$MASTER_MYPORT);
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++
++--echo # Test 2: when threadpool disable, normal connection and socket connection
++--echo #         can connect success.
++connection default;
++set global threadpool_enabled=OFF;
++
++connect(socket_conn3,localhost,root,,);
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++
++connect(tcp_conn3,127.0.0.1,root,,,$MASTER_MYPORT);
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++
++connection default;
++set global rds_local_socket_using_per_thread=OFF;
++
++connect(socket_conn4,localhost,root,,);
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++
++connect(tcp_conn4,127.0.0.1,root,,,$MASTER_MYPORT);
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++
++connection default;
++set global threadpool_enabled=ON;
++connect(tcp_conn5,127.0.0.1,root,,,$MASTER_MYPORT);
++disconnect tcp_conn5;
++
++connection default;
++set global threadpool_enabled=OFF;
++connect(tcp_conn5,127.0.0.1,root,,,$MASTER_MYPORT);
++disconnect tcp_conn5;
++--echo # Cleanup
++
++connection default;
++SET @@global.rds_local_socket_using_per_thread = @global_rds_local_socket_using_per_thread;
++SET @@global.threadpool_enabled = @global_threadpool_enabled;
++disconnect socket_conn1;
++disconnect socket_conn2;
++disconnect socket_conn3;
++disconnect socket_conn4;
++disconnect tcp_conn1;
++disconnect tcp_conn2;
++disconnect tcp_conn3;
++disconnect tcp_conn4;
++
++# Wait till we reached the initial number of concurrent sessions
++--source include/wait_until_count_sessions.inc
++
+diff --git a/plugin/threadpool/tests/mtr/threadpool_connection_handler.result b/plugin/threadpool/tests/mtr/threadpool_connection_handler.result
+index 6cf4a3fae13..889f69afbca 100644
+--- a/plugin/threadpool/tests/mtr/threadpool_connection_handler.result
++++ b/plugin/threadpool/tests/mtr/threadpool_connection_handler.result
+@@ -25,3 +25,12 @@ Threads_connected	1
+ SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+ Variable_name	Value
+ Threadpool_active_connections	1
++SET GLOBAL rds_local_socket_using_per_thread = true;
++SET GLOBAL debug= '-d,simulate_tp_alloc_connection_oom';
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	2
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++Variable_name	Value
++Threadpool_active_connections	1
++SET GLOBAL rds_local_socket_using_per_thread = false;
+diff --git a/plugin/threadpool/tests/mtr/threadpool_connection_handler.test b/plugin/threadpool/tests/mtr/threadpool_connection_handler.test
+index bd42ae5d0cb..cab4152f3a9 100644
+--- a/plugin/threadpool/tests/mtr/threadpool_connection_handler.test
++++ b/plugin/threadpool/tests/mtr/threadpool_connection_handler.test
+@@ -34,5 +34,14 @@ SET GLOBAL debug= '-d,simulate_tp_alloc_connection_oom';
+ SHOW GLOBAL STATUS LIKE 'Threads_connected';
+ SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+ 
++SET GLOBAL rds_local_socket_using_per_thread = true;
++connect (con3, localhost, root,,mysql);
++SET GLOBAL debug= '-d,simulate_tp_alloc_connection_oom';
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
++SET GLOBAL rds_local_socket_using_per_thread = false;
++disconnect con3;
++
++connection default;
+ # Wait till we reached the initial number of concurrent sessions
+ --source include/wait_until_count_sessions.inc
+diff --git a/plugin/threadpool/threadpool_common.cc b/plugin/threadpool/threadpool_common.cc
+index 7c4250c01c9..88516828162 100644
+--- a/plugin/threadpool/threadpool_common.cc
++++ b/plugin/threadpool/threadpool_common.cc
+@@ -240,7 +240,7 @@ void threadpool_remove_connection(THD *thd) {
+ 
+   Global_THD_manager::get_instance()->remove_thd(thd);
+ 
+-  Connection_handler_manager::dec_connection_count();
++  Connection_handler_manager::dec_connection_count(thd->is_admin_connection());
+   delete thd;
+ }
+ 
+diff --git a/plugin/threadpool/threadpool_unix.cc b/plugin/threadpool/threadpool_unix.cc
+index 444446aa041..f7db5340b22 100644
+--- a/plugin/threadpool/threadpool_unix.cc
++++ b/plugin/threadpool/threadpool_unix.cc
+@@ -1457,7 +1457,8 @@ bool add_connection(Channel_info *channel_info) {
+ 
+   if (unlikely(!thd)) {
+     channel_info->send_error_and_close_channel(ER_OUT_OF_RESOURCES, 0, false);
+-    Connection_handler_manager::dec_connection_count();
++    Connection_handler_manager::dec_connection_count(
++        channel_info->is_admin_connection());
+     DBUG_RETURN(true);
+   }
+ 
+@@ -1468,7 +1469,8 @@ bool add_connection(Channel_info *channel_info) {
+     thd->get_protocol_classic()->get_vio()->inactive = true;
+     delete thd;
+     channel_info->send_error_and_close_channel(ER_OUT_OF_RESOURCES, 0, false);
+-    Connection_handler_manager::dec_connection_count();
++    Connection_handler_manager::dec_connection_count(
++        channel_info->is_admin_connection());
+     DBUG_RETURN(true);
+   }
+ 
+diff --git a/sql/conn_handler/channel_info.h b/sql/conn_handler/channel_info.h
+index 33225621b8c..38776cc775c 100644
+--- a/sql/conn_handler/channel_info.h
++++ b/sql/conn_handler/channel_info.h
+@@ -88,6 +88,12 @@ class Channel_info {
+   }
+ 
+   virtual bool is_admin_connection() const { return false; }
++  /**
++    Check whether the connection from local socket.
++
++    @returns true if the connection is from a local socket, false otherwise.
++  */
++  virtual bool is_local_socket() const { return false; }
+ };
+ 
+ #endif  // SQL_CHANNEL_INFO_INCLUDED.
+diff --git a/sql/conn_handler/connection_handler_manager.cc b/sql/conn_handler/connection_handler_manager.cc
+index 5a03382dfa9..945f13e347b 100644
+--- a/sql/conn_handler/connection_handler_manager.cc
++++ b/sql/conn_handler/connection_handler_manager.cc
+@@ -54,6 +54,8 @@ struct Connection_handler_functions;
+ 
+ // Initialize static members
+ uint Connection_handler_manager::connection_count = 0;
++// current connections count from admin port
++uint Connection_handler_manager::rds_admin_connection_count = 0;
+ ulong Connection_handler_manager::max_used_connections = 0;
+ ulong Connection_handler_manager::max_used_connections_time = 0;
+ mysql_mutex_t Connection_handler_manager::LOCK_connection_count;
+@@ -97,16 +99,24 @@ static void scheduler_wait_sync_end() {
+ bool Connection_handler_manager::valid_connection_count() {
+   bool connection_accepted = true;
+   mysql_mutex_lock(&LOCK_connection_count);
+-  if (connection_count > max_connections) {
+-    connection_accepted = false;
+-    m_connection_errors_max_connection++;
++
++  if (current_thd->is_admin_connection()) {
++    if (rds_admin_connection_count > opt_rds_admin_max_connections) {
++      connection_accepted = false;
++      m_connection_errors_max_connection++;
++    }
++  } else {
++    if (connection_count > max_connections) {
++      connection_accepted = false;
++      m_connection_errors_max_connection++;
++    }
+   }
+   mysql_mutex_unlock(&LOCK_connection_count);
+   return connection_accepted;
+ }
+ 
+ bool Connection_handler_manager::check_and_incr_conn_count(
+-    bool is_admin_connection) {
++    bool ignore_max_connection_count, bool is_admin_connection) {
+   bool connection_accepted = true;
+   mysql_mutex_lock(&LOCK_connection_count);
+   /*
+@@ -116,13 +126,20 @@ bool Connection_handler_manager::check_and_incr_conn_count(
+     The last connection is reserved for SUPER users. This is
+     checked later during authentication where valid_connection_count()
+     is called for non-SUPER users only.
++
++    And for admin port connection, we allow opt_rds_admin_max_connections
++    clients to connect.
+   */
+-  if (connection_count > max_connections && !is_admin_connection) {
++  if (!ignore_max_connection_count &&
++      ((!is_admin_connection &&
++        connection_count > (rds_admin_connection_count + max_connections)) ||
++       (is_admin_connection &&
++        rds_admin_connection_count >= opt_rds_admin_max_connections))) {
+     connection_accepted = false;
+     m_connection_errors_max_connection++;
+   } else {
+     ++connection_count;
+-
++    if (is_admin_connection) ++rds_admin_connection_count;
+     if (connection_count > max_used_connections) {
+       max_used_connections = connection_count;
+       max_used_connections_time = time(nullptr);
+@@ -172,8 +189,18 @@ bool Connection_handler_manager::init() {
+     return true;
+   }
+ 
+-  m_instance =
+-      new (std::nothrow) Connection_handler_manager(connection_handler);
++  Connection_handler *per_thread_connection_handler =
++      new (std::nothrow) Per_thread_connection_handler();
++
++  if (per_thread_connection_handler == nullptr) {
++    delete connection_handler;
++    // This is a static member function.
++    Per_thread_connection_handler::destroy();
++    return true;
++  }
++
++  m_instance = new (std::nothrow) Connection_handler_manager(
++      connection_handler, per_thread_connection_handler);
+ 
+   if (m_instance == nullptr) {
+     delete connection_handler;
+@@ -259,13 +286,21 @@ bool Connection_handler_manager::unload_connection_handler() {
+ void Connection_handler_manager::process_new_connection(
+     Channel_info *channel_info) {
+   if (connection_events_loop_aborted() ||
+-      !check_and_incr_conn_count(channel_info->is_admin_connection())) {
++      !check_and_incr_conn_count(false, channel_info->is_admin_connection())) {
+     channel_info->send_error_and_close_channel(ER_CON_COUNT_ERROR, 0, true);
+     delete channel_info;
+     return;
+   }
+ 
+-  if (m_connection_handler->add_connection(channel_info)) {
++  Connection_handler *connection_handler =
++      ((channel_info->is_admin_connection() &&
++        opt_rds_admin_port_using_per_thread) ||
++       (channel_info->is_local_socket() &&
++        opt_rds_local_socket_using_per_thread))
++          ? m_per_thread_connection_handler
++          : m_connection_handler;
++
++  if (connection_handler->add_connection(channel_info)) {
+     inc_aborted_connects();
+     delete channel_info;
+   }
+diff --git a/sql/conn_handler/connection_handler_manager.h b/sql/conn_handler/connection_handler_manager.h
+index 6ccde3371b7..4b9ddfbf69d 100644
+--- a/sql/conn_handler/connection_handler_manager.h
++++ b/sql/conn_handler/connection_handler_manager.h
+@@ -64,6 +64,8 @@ class Connection_handler_manager {
+ 
+   // Pointer to current connection handler in use
+   Connection_handler *m_connection_handler;
++  // Pointer to per thread connection handler used by admin port or localhost
++  Connection_handler *m_per_thread_connection_handler;
+   // Pointer to saved connection handler
+   Connection_handler *m_saved_connection_handler;
+   // Saved scheduler_type
+@@ -77,16 +79,30 @@ class Connection_handler_manager {
+   /**
+     Constructor to instantiate an instance of this class.
+   */
+-  Connection_handler_manager(Connection_handler *connection_handler)
++  Connection_handler_manager(Connection_handler *connection_handler,
++                             Connection_handler *per_thread_connection_handler)
+       : m_connection_handler(connection_handler),
++        m_per_thread_connection_handler(per_thread_connection_handler),
+         m_saved_connection_handler(nullptr),
+         m_saved_thread_handling(0),
+         m_aborted_connects(0),
+         m_connection_errors_max_connection(0) {}
+ 
+   ~Connection_handler_manager() {
+-    delete m_connection_handler;
+-    if (m_saved_connection_handler) delete m_saved_connection_handler;
++    if (m_connection_handler != nullptr) {
++      delete m_connection_handler;
++      m_connection_handler = nullptr;
++    }
++
++    if (m_per_thread_connection_handler != nullptr) {
++      delete m_per_thread_connection_handler;
++      m_per_thread_connection_handler = nullptr;
++    }
++
++    if (m_saved_connection_handler) {
++      delete m_saved_connection_handler;
++      m_saved_connection_handler = nullptr;
++    }
+   }
+ 
+   /* Make this class non-copyable */
+@@ -115,6 +131,7 @@ class Connection_handler_manager {
+ 
+   // Status variables. Must be static as they are used by the signal handler.
+   static uint connection_count;            // Protected by LOCK_connection_count
++  static uint rds_admin_connection_count;  // Protected by LOCK_connection_count
+   static ulong max_used_connections;       // Protected by LOCK_connection_count
+   static ulong max_used_connections_time;  // Protected by LOCK_connection_count
+ 
+@@ -158,16 +175,17 @@ class Connection_handler_manager {
+ 
+   /**
+     Increment connection count if max_connections is not exceeded.
+-
+     @param ignore_max_connection_count  true if checking for a limit
+                                         specified by the max-connections
+                                         server option should be skipped
++    @param is_admin_connection          true if it is admin port connection
+ 
+     @retval
+       true   max_connections NOT exceeded
+       false  max_connections reached
+   */
+-  bool check_and_incr_conn_count(bool ignore_max_connection_count);
++  bool check_and_incr_conn_count(bool ignore_max_connection_count,
++                                 bool is_admin_connection = false);
+ 
+   /**
+     Reset the max_used_connections counter to the number of current
+@@ -178,8 +196,12 @@ class Connection_handler_manager {
+   /**
+     Decrease the number of current connections.
+   */
+-  static void dec_connection_count() {
++  static void dec_connection_count(bool is_admin_connection = false) {
+     mysql_mutex_lock(&LOCK_connection_count);
++    if (is_admin_connection) {
++      assert(rds_admin_connection_count > 0);
++      rds_admin_connection_count--;
++    }
+     connection_count--;
+     /*
+       Notify shutdown thread when last connection is done with its job
+diff --git a/sql/conn_handler/connection_handler_one_thread.cc b/sql/conn_handler/connection_handler_one_thread.cc
+index 4042d6b242d..c4824267f88 100644
+--- a/sql/conn_handler/connection_handler_one_thread.cc
++++ b/sql/conn_handler/connection_handler_one_thread.cc
+@@ -44,7 +44,8 @@ bool One_thread_connection_handler::add_connection(Channel_info *channel_info) {
+   if (my_thread_init()) {
+     connection_errors_internal++;
+     channel_info->send_error_and_close_channel(ER_OUT_OF_RESOURCES, 0, false);
+-    Connection_handler_manager::dec_connection_count();
++    Connection_handler_manager::dec_connection_count(
++        channel_info->is_admin_connection());
+     return true;
+   }
+ 
+@@ -52,7 +53,8 @@ bool One_thread_connection_handler::add_connection(Channel_info *channel_info) {
+   if (thd == nullptr) {
+     connection_errors_internal++;
+     channel_info->send_error_and_close_channel(ER_OUT_OF_RESOURCES, 0, false);
+-    Connection_handler_manager::dec_connection_count();
++    Connection_handler_manager::dec_connection_count(
++        channel_info->is_admin_connection());
+     return true;
+   }
+ 
+@@ -89,7 +91,7 @@ bool One_thread_connection_handler::add_connection(Channel_info *channel_info) {
+   close_connection(thd, 0, false, false);
+   thd->release_resources();
+   thd_manager->remove_thd(thd);
+-  Connection_handler_manager::dec_connection_count();
++  Connection_handler_manager::dec_connection_count(thd->is_admin_connection());
+   delete thd;
+   return error;
+ }
+diff --git a/sql/conn_handler/connection_handler_per_thread.cc b/sql/conn_handler/connection_handler_per_thread.cc
+index 68641b55723..6ab84c4bc60 100644
+--- a/sql/conn_handler/connection_handler_per_thread.cc
++++ b/sql/conn_handler/connection_handler_per_thread.cc
+@@ -254,18 +254,25 @@ static void *handle_connection(void *arg) {
+     connection_errors_internal++;
+     channel_info->send_error_and_close_channel(ER_OUT_OF_RESOURCES, 0, false);
+     handler_manager->inc_aborted_connects();
+-    Connection_handler_manager::dec_connection_count();
++    Connection_handler_manager::dec_connection_count(
++        channel_info->is_admin_connection());
+     delete channel_info;
+     my_thread_exit(nullptr);
+     return nullptr;
+   }
+ 
+   for (;;) {
++    /**
++      If initialization of thd fail, it will delete channel_info.
++      To decrease connection count, record whether this channel_info
++      is admin connection.
++    */
++    bool is_admin_connection = channel_info->is_admin_connection();
+     THD *thd = init_new_thd(channel_info);
+     if (thd == nullptr) {
+       connection_errors_internal++;
+       handler_manager->inc_aborted_connects();
+-      Connection_handler_manager::dec_connection_count();
++      Connection_handler_manager::dec_connection_count(is_admin_connection);
+       break;  // We are out of resources, no sense in continuing.
+     }
+ 
+@@ -314,7 +321,8 @@ static void *handle_connection(void *arg) {
+     ERR_remove_thread_state(0);
+ #endif /* OPENSSL_VERSION_NUMBER < 0x10100000L */
+     thd_manager->remove_thd(thd);
+-    Connection_handler_manager::dec_connection_count();
++    Connection_handler_manager::dec_connection_count(
++        thd->is_admin_connection());
+ 
+ #ifdef HAVE_PSI_THREAD_INTERFACE
+     /* Decouple THD and the thread instrumentation. */
+@@ -338,9 +346,10 @@ static void *handle_connection(void *arg) {
+     if (connection_events_loop_aborted()) {
+       // Close the channel and exit as server is undergoing shutdown.
+       channel_info->send_error_and_close_channel(ER_SERVER_SHUTDOWN, 0, false);
++      Connection_handler_manager::dec_connection_count(
++          channel_info->is_admin_connection());
+       delete channel_info;
+       channel_info = nullptr;
+-      Connection_handler_manager::dec_connection_count();
+       break;
+     }
+   }
+@@ -424,7 +433,8 @@ handle_error:
+       LogErr(ERROR_LEVEL, ER_CONN_PER_THREAD_NO_THREAD, error);
+     channel_info->send_error_and_close_channel(ER_CANT_CREATE_THREAD, error,
+                                                true);
+-    Connection_handler_manager::dec_connection_count();
++    Connection_handler_manager::dec_connection_count(
++        channel_info->is_admin_connection());
+     return true;
+   }
+ 
+diff --git a/sql/conn_handler/socket_connection.cc b/sql/conn_handler/socket_connection.cc
+index 1e0decf66ac..e5c8cc182bd 100644
+--- a/sql/conn_handler/socket_connection.cc
++++ b/sql/conn_handler/socket_connection.cc
+@@ -187,6 +187,12 @@ class Channel_info_local_socket : public Channel_info {
+     mysql_socket_shutdown(m_connect_sock, SHUT_RDWR);
+     mysql_socket_close(m_connect_sock);
+   }
++  /**
++    Check whether the connection from local socket.
++
++    @returns true if the connection is from a local socket, false otherwise.
++  */
++  bool is_local_socket() const override { return true; }
+ };
+ 
+ ///////////////////////////////////////////////////////////////////////////
+diff --git a/sql/mysqld.cc b/sql/mysqld.cc
+index 511b4983ec6..bc8b584e43e 100644
+--- a/sql/mysqld.cc
++++ b/sql/mysqld.cc
+@@ -1397,6 +1397,18 @@ ulonglong global_conn_mem_counter = 0;
+   Used to automatically update histograms based on table data changed.
+ */
+ bool dstore_use_histogram_auto_update = true;
++/**
++ The max number of connections allowed through admin port
++*/
++ulong opt_rds_admin_max_connections = 0;
++/**
++ Indicates whether admin port connections should use per thread
++*/
++bool opt_rds_admin_port_using_per_thread = false;
++/**
++ Indicates whether local socket connections should use per thread
++*/
++bool opt_rds_local_socket_using_per_thread = false;
+ 
+ /**
+   This variable holds handle to the object that's responsible
+diff --git a/sql/mysqld.h b/sql/mysqld.h
+index 0177ec086db..f4f486aaca9 100644
+--- a/sql/mysqld.h
++++ b/sql/mysqld.h
+@@ -366,6 +366,9 @@ extern char *opt_authentication_policy;
+ extern std::vector<std::string> authentication_policy_list;
+ 
+ extern bool dstore_use_histogram_auto_update;
++extern ulong opt_rds_admin_max_connections;
++extern bool opt_rds_admin_port_using_per_thread;
++extern bool opt_rds_local_socket_using_per_thread;
+ 
+ extern ulong stored_program_cache_size;
+ extern ulong back_log;
+diff --git a/sql/sys_vars.cc b/sql/sys_vars.cc
+index b572ff931b6..93bd9515d0b 100644
+--- a/sql/sys_vars.cc
++++ b/sql/sys_vars.cc
+@@ -7773,3 +7773,27 @@ static Sys_var_bool Sys_var_rds_empty_redundant_check_in_range_scan(
+     "already evaluated by the range index scan method in the storage engine",
+     SESSION_VAR(rds_empty_redundant_check_in_range_scan), CMD_LINE(OPT_ARG),
+     DEFAULT(true));
++
++static Sys_var_ulong Sys_rds_admin_max_connections(
++    "rds_admin_max_connections",
++    "The number of simultaneous clients allowed through admin port",
++    GLOBAL_VAR(opt_rds_admin_max_connections), CMD_LINE(REQUIRED_ARG),
++    VALID_RANGE(1, 1000), DEFAULT(MAX_RDS_ADMIN_CONNECTIONS_DEFAULT),
++    BLOCK_SIZE(1), NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(nullptr),
++    ON_UPDATE(nullptr), nullptr, sys_var::PARSE_EARLY);
++
++static Sys_var_bool Sys_rds_admin_port_using_per_thread(
++    "rds_admin_port_using_per_thread",
++    "This option indicates whether admin port connections should use per "
++    "thread",
++    GLOBAL_VAR(opt_rds_admin_port_using_per_thread), CMD_LINE(OPT_ARG),
++    DEFAULT(false), NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(nullptr),
++    ON_UPDATE(nullptr), nullptr, sys_var::PARSE_NORMAL);
++
++static Sys_var_bool Sys_rds_local_socket_using_per_thread(
++    "rds_local_socket_using_per_thread",
++    "This option indicates whether local socket connections should use per "
++    "thread",
++    GLOBAL_VAR(opt_rds_local_socket_using_per_thread), CMD_LINE(OPT_ARG),
++    DEFAULT(false), NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(0),
++    ON_UPDATE(nullptr), nullptr, sys_var::PARSE_NORMAL);
+diff --git a/sql/sys_vars.h b/sql/sys_vars.h
+index e7a86aa8c12..186e8f46aba 100644
+--- a/sql/sys_vars.h
++++ b/sql/sys_vars.h
+@@ -107,7 +107,10 @@ constexpr const unsigned long TABLE_DEF_CACHE_DEFAULT{400};
+   to avoid "too many connections" error in a common setup.
+ */
+ constexpr const unsigned long MAX_CONNECTIONS_DEFAULT{151};
+-
++/**
++  Maximum number of connections for admin port connection default value.
++*/
++constexpr const unsigned long MAX_RDS_ADMIN_CONNECTIONS_DEFAULT{100};
+ /*
+   a set of mostly trivial (as in f(X)=X) defines below to make system variable
+   declarations more readable
+diff --git a/unittest/gunit/threadpool/CMakeLists.txt b/unittest/gunit/threadpool/CMakeLists.txt
+index 5f30a54c81a..b1725372e05 100644
+--- a/unittest/gunit/threadpool/CMakeLists.txt
++++ b/unittest/gunit/threadpool/CMakeLists.txt
+@@ -15,12 +15,16 @@
+ 
+ INCLUDE_DIRECTORIES(
+   ${CMAKE_SOURCE_DIR}/plugin/threadpool
++  ${CMAKE_SOURCE_DIR}/sql/conn_handler
+ )
+ 
+-SET(SRC_FILES
+-cpubind-t.cc)
+ 
+-MYSQL_ADD_EXECUTABLE(cpubind-t ${SRC_FILES}
++MYSQL_ADD_EXECUTABLE(cpubind-t cpubind-t.cc
+   ADD_TEST cpubind
+   LINK_LIBRARIES gunit_large server_unittest_library
+   COMPILE_DEFINITIONS "${DISABLE_PSI_DEFINITIONS}")
++
++MYSQL_ADD_EXECUTABLE(conn_handler-t conn_handler-t.cc
++  ADD_TEST conn_handler
++  LINK_LIBRARIES gunit_large server_unittest_library
++  COMPILE_DEFINITIONS "${DISABLE_PSI_DEFINITIONS}")
+diff --git a/unittest/gunit/threadpool/conn_handler-t.cc b/unittest/gunit/threadpool/conn_handler-t.cc
+new file mode 100644
+index 00000000000..c406881d1f4
+--- /dev/null
++++ b/unittest/gunit/threadpool/conn_handler-t.cc
+@@ -0,0 +1,138 @@
++/*
++   Copyright (c) 2025, Huawei and/or its affiliates. All rights reserved.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License, version 2.0,
++   as published by the Free Software Foundation.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License, version 2.0, for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
++*/
++
++/* See http://code.google.com/p/googletest/wiki/Primer */
++#include <gtest/gtest.h>
++#include <chrono>
++#include <thread>
++#include "sql/conn_handler/channel_info.h"
++#include "sql/conn_handler/connection_handler_impl.h"
++#include "sql/conn_handler/connection_handler_manager.h"
++#include "sql/mysqld_thd_manager.h"
++#include "sql/sql_call.h"
++
++extern ulong Connection_handler_manager::thread_handling;
++extern ulong max_connections;
++extern ulong opt_rds_admin_max_connections;
++extern bool opt_rds_admin_port_using_per_thread;
++extern bool opt_rds_local_socket_using_per_thread;
++extern thread_local THD *current_thd;
++
++extern void my_thread_global_end();
++extern bool my_thread_global_init();
++
++class MockChannelInfo : public Channel_info {
++ public:
++  MockChannelInfo() { m_nullThd = true; }
++
++  MockChannelInfo(bool nullThd) { m_nullThd = nullThd; }
++
++  THD *create_thd() {
++    if (!m_nullThd) {
++      THD *thd = new (std::nothrow) THD(false);
++      return thd;
++    }
++    return nullptr;
++  }
++
++  Vio *create_and_init_vio() const override { return nullptr; }
++  void send_error_and_close_channel(uint, int, bool) {}
++
++ private:
++  bool m_nullThd = true;
++  bool is_admin_connection() const override { return true; }
++};
++
++class MockLocalChannelInfo : public MockChannelInfo {
++ public:
++  MockLocalChannelInfo(bool nullThd) : MockChannelInfo(nullThd) {}
++
++ private:
++  bool is_local_socket() const override { return true; }
++  bool is_admin_connection() const override { return false; }
++};
++
++class MockOneThreadConnHandler : public One_thread_connection_handler {
++ public:
++  bool AddConnection(Channel_info *channel_info) {
++    return add_connection(channel_info);
++  }
++};
++
++class MockPerThreadConnHandler : public Per_thread_connection_handler {
++ public:
++  bool AddConnection(Channel_info *channel_info) {
++    return add_connection(channel_info);
++  }
++};
++
++TEST(ConnHandlerManager, ConnHandlerManagerTest) {
++  Connection_handler_manager::init();
++  Connection_handler *perThread = new Per_thread_connection_handler();
++  Connection_handler_manager::get_instance()->load_connection_handler(
++      perThread);
++  Channel_info *channel = new MockChannelInfo();
++  ASSERT_FALSE(channel->is_local_socket());
++  Connection_handler_manager::get_instance()->process_new_connection(channel);
++
++  // per thread
++  Channel_info *channel2 = new MockLocalChannelInfo(true);
++  MockPerThreadConnHandler *perThreadConnHandler =
++      new MockPerThreadConnHandler();
++  ASSERT_FALSE(perThreadConnHandler->AddConnection(channel2));
++
++  // one thread
++  Channel_info *channel3 = new MockLocalChannelInfo(true);
++  MockOneThreadConnHandler *oneThreadConnHandler =
++      new MockOneThreadConnHandler();
++  ASSERT_TRUE(oneThreadConnHandler->AddConnection(channel3));
++
++  // admin port
++  opt_rds_admin_port_using_per_thread = true;
++  Channel_info *channel4 = new MockChannelInfo(false);
++  Connection_handler_manager::get_instance()->rds_admin_connection_count = 10;
++  opt_rds_admin_max_connections = 0;
++  max_connections = 0;
++  current_thd = channel4->create_thd();
++  current_thd->set_admin_connection(true);
++  Connection_handler_manager::get_instance()->process_new_connection(channel4);
++  ASSERT_FALSE(
++      Connection_handler_manager::get_instance()->valid_connection_count());
++  ASSERT_FALSE(
++      Connection_handler_manager::get_instance()->check_and_incr_conn_count(
++          false, true));
++  ASSERT_TRUE(
++      Connection_handler_manager::get_instance()->check_and_incr_conn_count(
++          true, true));
++  Connection_handler_manager::get_instance()->dec_connection_count(true);
++
++  // mock my_thread_init() fail
++  my_thread_global_end();
++
++  // one thread
++  Channel_info *channel5 = new MockLocalChannelInfo(true);
++  ASSERT_TRUE(oneThreadConnHandler->AddConnection(channel5));
++
++  // per thread
++  Channel_info *channel6 = new MockLocalChannelInfo(true);
++  ASSERT_FALSE(perThreadConnHandler->AddConnection(channel6));
++  // wait thread exit
++  std::this_thread::sleep_for(std::chrono::milliseconds(100));
++
++  // reinit
++  my_thread_global_init();
++}
+\ No newline at end of file
+-- 
+2.23.0
+

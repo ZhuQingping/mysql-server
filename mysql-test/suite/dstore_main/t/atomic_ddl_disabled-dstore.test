@@ -1,0 +1,47 @@
+# ==== Purpose ====
+#
+# This file includes testcases to verify the all DDL supported by MySQL on Dstore
+# when atomic-ddl is disabled.
+#
+# ==== References ====
+#
+# US2025071500732 Support atomic-DDL for MySQL on Dstore
+# 
+
+--disable_query_log
+call mtr.add_suppression("Don't call WriteBinlogExtraIntoWal or SetExtraCommitWAL, query is");
+--enable_query_log
+
+--echo ###################################################################################################
+--echo # Test1 Test basic ddl when atomic-ddl is disabled.                                               #
+--echo ###################################################################################################
+--source suite/dstore_main/include/all_ddl_basic.inc
+
+--echo ###################################################################################################
+--echo # Test2 Test intermediate table can be discard when after a failure of DDL with ALGORITHM=COPY.   #
+--echo ###################################################################################################
+USE test;
+CREATE TABLE `atomic_ddl_employees` (
+  `emp_id` INT,
+  `emp_name` VARCHAR(512)
+)ENGINE=DSTORE CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+INSERT INTO `atomic_ddl_employees` VALUES(1, "ZhangThree"),(2, "LiFour");
+INSERT INTO `atomic_ddl_employees` VALUES(1, "WangTwo");
+
+--error ER_DUP_ENTRY
+ALTER TABLE `atomic_ddl_employees` ADD UNIQUE idx1(emp_id), ALGORITHM=COPY;
+
+DELETE FROM `atomic_ddl_employees` WHERE emp_name='WangTwo';
+ALTER TABLE `atomic_ddl_employees` ADD UNIQUE idx1(emp_id), ALGORITHM=COPY;
+
+
+--echo ###################################################################################################
+--echo # Test3 Test some handling branches of exception when atomic-ddl is disabled.                     #
+--echo ###################################################################################################
+SET GLOBAL DEBUG='+d,rename_table_entry_fail';
+--error ER_ERROR_ON_RENAME
+RENAME TABLE `atomic_ddl_employees` to `atomic_ddl_employees_1`, `atomic_ddl_employees_1` to `atomic_ddl_employees`;
+SET GLOBAL DEBUG='-d,rename_table_entry_fail';
+
+DROP TABLE `atomic_ddl_employees`;

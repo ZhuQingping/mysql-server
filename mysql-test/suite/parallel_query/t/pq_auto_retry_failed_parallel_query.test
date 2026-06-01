@@ -1,0 +1,58 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+
+--echo # Test that the system variable "parallel_fail_retry" works as expected.
+
+CREATE TABLE t (i INTEGER);
+SET SESSION debug = "+d, dup_thd_abort";
+SET parallel_fail_retry = OFF;
+
+--error ER_PARALLEL_FAIL_INIT
+SELECT /*+ set_var(parallel_graceful_fallback=off) */ * FROM t LIMIT 1;
+
+--echo # Test parallel query failing with multi-statement query, as this has a
+--echo # slightly different code path.
+DELIMITER ||;
+--error ER_PARALLEL_FAIL_INIT
+SELECT 1;
+SELECT /*+ set_var(parallel_graceful_fallback=off) */ * FROM t LIMIT 1||
+DELIMITER ;||
+
+SET parallel_fail_retry = DEFAULT;
+
+--echo # With parallel_fail_retry == ON, the query should now be executed with
+--echo # parallel query disabled, but with a warning printed.
+SELECT /*+ set_var(parallel_graceful_fallback=off) */ * FROM t LIMIT 1;
+
+--echo # Test the multi-statement query code path again.
+DELIMITER ||;
+SELECT 1;
+SELECT /*+ set_var(parallel_graceful_fallback=off) */ * FROM t LIMIT 1||
+DELIMITER ;||
+
+SET SESSION debug = "";
+DROP TABLE t;
+
+--echo # BUG2023080903357
+--echo # Check that after a query was restarted because it failed with PQ,
+--echo # the next query can instantly use parallel query.
+CREATE TABLE t(id INTEGER, age INTEGER, name VARCHAR(220));
+INSERT INTO t VALUES (1, 14, 'zhangsan'), (2, 14, 'lisi');
+ANALYZE TABLE t;
+
+--echo # See that the query is restarted (can be seen from the warnings).
+EXPLAIN FORMAT=tree SELECT /*+ set_var(parallel_graceful_fallback=off) */ a.id, a.id, a.age FROM (SELECT * FROM t)a GROUP BY 1,2,3;
+
+--echo # graceful fallback to serial execute, no warnings.
+EXPLAIN FORMAT=tree SELECT /*+ set_var(parallel_graceful_fallback=on) */ a.id, a.id, a.age FROM (SELECT * FROM t)a GROUP BY 1,2,3;
+
+--echo # Disable the warnings, so that MTR does not run "SHOW WARNINGS;".
+--echo # Doing so would hide the bug.
+--disable_warnings
+EXPLAIN FORMAT=tree SELECT a.id, a.id, a.age FROM (SELECT * FROM t)a GROUP BY 1,2,3;
+--enable_warnings
+
+--echo # Finally, see that the first query after a query was restarted can use
+--echo # parallel query.
+EXPLAIN FORMAT=tree SELECT a.id, a.id, a.age FROM (SELECT * FROM t)a GROUP BY 2,3;
+DROP TABLE t;

@@ -1,0 +1,33 @@
+# ==== Purpose ====
+#
+# This script tests single-thread binlog commit during replication.
+#
+# ==== Implementation ====
+#
+# 1. Create a table with DStore as a storage-engine.
+# 2. Execute DMLs within a transaction and commit it.
+# 3. Verify source and replica are in sync.
+#
+
+--source include/have_dstore.inc
+--source include/have_debug.inc
+--source include/master-slave.inc
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  data VARCHAR(100)
+) ENGINE=DStore;
+
+BEGIN;
+INSERT INTO test.t1 VALUES (1, 'Testing gropu-commit with just 1 thread');
+INSERT INTO test.t1 VALUES (2, 'Testing again group-commit with just 1 thread');
+INSERT INTO test.t1 VALUES (3, 'Testing for the last time group-commit with just 1 thread');
+UPDATE test.t1 SET data = 'Testing group-commit with just 1 thread' WHERE id = 1;
+DELETE FROM test.t1 WHERE id = 2;
+COMMIT;
+
+--source include/sync_slave_sql_with_master.inc
+
+--source include/rpl_connection_master.inc
+DROP TABLE t1;
+--source include/rpl_end.inc

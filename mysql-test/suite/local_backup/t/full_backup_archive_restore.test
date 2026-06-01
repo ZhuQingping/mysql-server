@@ -1,0 +1,143 @@
+#
+# Basic test for full local backup and archive restore
+#
+
+call mtr.add_suppression("Local backup\: wal archiver is running");
+call mtr.add_suppression("failed to start wal archiver");
+call mtr.add_suppression("log archive path not configured");
+call mtr.add_suppression("start wal archive fail for pdb");
+call mtr.add_suppression("cannot access full backup directory");
+call mtr.add_suppression("cannot access log archive directory");
+call mtr.add_suppression("cannot access backup meta directory. Start wal archive failed");
+call mtr.add_suppression("full backup found binlog is not enabled");
+
+
+--source suite/local_backup/include/prepare_for_backup.inc
+
+# Test for archive path not set
+--let $shutdown_server_timeout= 300
+--let $restart_parameters= restart: --rds_log_archive_path=""
+--source include/restart_mysqld.inc
+
+--error ER_DA_LOCAL_BACKUP_ERROR
+call rds_backup.start_log_archive();
+
+--let $shutdown_server_timeout= 300
+--let $restart_parameters= restart
+--source include/restart_mysqld.inc
+
+# Archive start plsn is not set
+--error ER_DA_LOCAL_BACKUP_ERROR
+call rds_backup.start_log_archive();
+
+# 1. prepare some data
+create database full_backup_archive_restore;
+use full_backup_archive_restore;
+create table t1(s varchar(100)) engine=Dstore;
+
+# insert 1000 records
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 1000
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+# 2. Create a full backup
+set @origin_bak_path = @@rds_full_local_backup_path;
+--disable_query_log
+eval set global rds_full_local_backup_path='$MYSQLTEST_VARDIR/NotExist';
+--enable_query_log
+--error ER_DA_LOCAL_BACKUP_ERROR
+call rds_backup.start_full_local_backup(0);
+set global rds_full_local_backup_path=@origin_bak_path;
+
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+
+--source suite/local_backup/include/wait_full_backup.inc
+--source suite/local_backup/include/stop_full_backup.inc
+
+# 3. Start log archive
+set @origin_arch_path = @@rds_log_archive_path;
+--disable_query_log
+eval set global rds_log_archive_path='$MYSQLTEST_VARDIR/NotExist';
+--enable_query_log
+--error ER_DA_LOCAL_BACKUP_ERROR
+call rds_backup.start_log_archive();
+set global rds_log_archive_path=@origin_arch_path;
+
+set @origin_meta_path = @@dstore_local_backup_meta_path;
+--disable_query_log
+eval set global dstore_local_backup_meta_path='$MYSQLTEST_VARDIR/NotExist';
+--enable_query_log
+--error ER_DA_LOCAL_BACKUP_ERROR
+call rds_backup.start_log_archive();
+set global dstore_local_backup_meta_path=@origin_meta_path;
+
+--source suite/local_backup/include/start_log_archive.inc
+# should report error when start again
+--error ER_DA_LOCAL_BACKUP_ERROR
+call rds_backup.start_log_archive();
+
+# 4. Add more data for log archive
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $i = 500
+--source include/Load_data.inc
+--sleep 3
+--let $i = 500
+--source include/Load_data.inc
+--sleep 3
+--let $i = 500
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+--sleep 3
+
+# 5. Stop log archive
+--source suite/local_backup/include/stop_log_archive.inc
+# It's OK to stop again
+--source suite/local_backup/include/stop_log_archive.inc
+
+# 6. Add more data
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $table = t1
+--let $i = 300
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+# 7. Restore
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+--let $list_type = wal_archive
+--source suite/local_backup/include/restore_with_script.inc
+
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+# 8. Verify data. Data added in step 6 is not present
+select count(*) from t1;
+# insert after resotre
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--let $i = 50
+--source include/Load_data.inc
+--enable_result_log
+--enable_query_log
+select count(*) from t1;
+
+drop database full_backup_archive_restore;
+
+--source suite/local_backup/include/clean_backup.inc

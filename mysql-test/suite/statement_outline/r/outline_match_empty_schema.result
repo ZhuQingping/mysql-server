@@ -1,0 +1,86 @@
+set global rds_opt_outline_enabled = ON;
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+create database outline_test;
+use outline_test;
+create table t1(id int, a int, b int, key idx1(a), key idx2(b));
+create table t2(id int, a int, b int, key idx1(a), key idx2(b));
+call dbms_outln.add_index_outline("","",1,"FORCE INDEX","idx1","","select id from outline_test.t1 where a = 1");
+call dbms_outln.add_index_outline("outline_test","",1,"FORCE INDEX","idx1","","select id from outline_test.t1 where a = 1");
+call dbms_outln.add_index_outline("test","",1,"USE INDEX","idx1","","select id from outline_test.t1 where a = 1");
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+1		6b12f79f686c898e4a395670a227827d6e45c766b1813cddb93e920e3c7bef85	FORCE INDEX		1	idx1	0	0	SELECT `id` FROM `outline_test` . `t1` WHERE `a` = ?
+2	outline_test	6b12f79f686c898e4a395670a227827d6e45c766b1813cddb93e920e3c7bef85	FORCE INDEX		1	idx1	0	0	SELECT `id` FROM `outline_test` . `t1` WHERE `a` = ?
+3	test	6b12f79f686c898e4a395670a227827d6e45c766b1813cddb93e920e3c7bef85	USE INDEX		1	idx1	0	0	SELECT `id` FROM `outline_test` . `t1` WHERE `a` = ?
+call dbms_outln.preview_outline("", "select id from outline_test.t1 where a = 1");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+	6b12f79f686c898e4a395670a227827d6e45c766b1813cddb93e920e3c7bef85	TABLE	t1	1	FORCE INDEX (`idx1`)
+call dbms_outln.preview_outline("outline_test", "select id from outline_test.t1 where a = 1");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_test	6b12f79f686c898e4a395670a227827d6e45c766b1813cddb93e920e3c7bef85	TABLE	t1	1	FORCE INDEX (`idx1`)
+outline_test	6b12f79f686c898e4a395670a227827d6e45c766b1813cddb93e920e3c7bef85	TABLE	t1	1	FORCE INDEX (`idx1`)
+call dbms_outln.preview_outline("test", "select id from outline_test.t1 where a = 1");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+test	6b12f79f686c898e4a395670a227827d6e45c766b1813cddb93e920e3c7bef85	TABLE	t1	1	USE INDEX (`idx1`)
+test	6b12f79f686c898e4a395670a227827d6e45c766b1813cddb93e920e3c7bef85	TABLE	t1	1	FORCE INDEX (`idx1`)
+explain select id from outline_test.t1 where a = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx1	idx1	5	const	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `outline_test`.`t1`.`id` AS `id` from `outline_test`.`t1` FORCE INDEX (`idx1`) where (`outline_test`.`t1`.`a` = 1)
+explain select id from outline_test.t1 where a = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	idx1	idx1	5	const	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `outline_test`.`t1`.`id` AS `id` from `outline_test`.`t1` FORCE INDEX (`idx1`) FORCE INDEX (`idx1`) where (`outline_test`.`t1`.`a` = 1)
+create database outline_db;
+use outline_db;
+create table t1 (a int, key ind_1(a)) engine=Dstore;
+create table t2 (a int, key ind_1(a)) engine=Dstore;
+create table t3 (a int, key ind_1(a)) engine=Dstore;
+insert into t1 values (1),(2),(3),(4);
+insert into t2 values (10),(20),(30),(40);
+insert into t3 values (1),(2),(10),(50);
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ MAX_EXECUTION_TIME(1000) */', "select a from outline_db.t3 where outline_db.t3.a in (select a from outline_db.t1 where a <= 3 union select * from outline_db.t2 where a <= 30)");
+call dbms_outln.add_optimizer_outline('', '', 3, '/*+ INDEX(t2 ind_1) */', "select a from outline_db.t3 where outline_db.t3.a in (select a from outline_db.t1 where a <= 3 union select * from outline_db.t2 where a <= 30)");
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+4	outline_db	103b55c6f4b442ddca977629740660243b6c6ecf4a4c09eab42c22059545a76f	OPTIMIZER		1	/*+ MAX_EXECUTION_TIME(1000) */	0	0	SELECT `a` FROM `outline_db` . `t3` WHERE `outline_db` . `t3` . `a` IN ( SELECT `a` FROM `outline_db` . `t1` WHERE `a` <= ? UNION SELECT * FROM `outline_db` . `t2` WHERE `a` <= ? )
+5		103b55c6f4b442ddca977629740660243b6c6ecf4a4c09eab42c22059545a76f	OPTIMIZER		3	/*+ INDEX(t2 ind_1) */	0	0	SELECT `a` FROM `outline_db` . `t3` WHERE `outline_db` . `t3` . `a` IN ( SELECT `a` FROM `outline_db` . `t1` WHERE `a` <= ? UNION SELECT * FROM `outline_db` . `t2` WHERE `a` <= ? )
+1		6b12f79f686c898e4a395670a227827d6e45c766b1813cddb93e920e3c7bef85	FORCE INDEX		1	idx1	5	0	SELECT `id` FROM `outline_test` . `t1` WHERE `a` = ?
+2	outline_test	6b12f79f686c898e4a395670a227827d6e45c766b1813cddb93e920e3c7bef85	FORCE INDEX		1	idx1	2	0	SELECT `id` FROM `outline_test` . `t1` WHERE `a` = ?
+3	test	6b12f79f686c898e4a395670a227827d6e45c766b1813cddb93e920e3c7bef85	USE INDEX		1	idx1	1	0	SELECT `id` FROM `outline_test` . `t1` WHERE `a` = ?
+call dbms_outln.preview_outline('outline_db', "select a from outline_db.t3 where outline_db.t3.a in (select a from outline_db.t1 where a <= 3 union select * from outline_db.t2 where a <= 30)");
+SCHEMA	DIGEST	BLOCK_TYPE	BLOCK_NAME	BLOCK	HINT
+outline_db	103b55c6f4b442ddca977629740660243b6c6ecf4a4c09eab42c22059545a76f	QUERY		1	/*+ MAX_EXECUTION_TIME(1000) */ 
+explain select a from outline_db.t3 where outline_db.t3.a in (select a from outline_db.t1 where a <= 3 union select * from outline_db.t2 where a <= 30);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t3	NULL	index	NULL	ind_1	5	NULL	#	#	Using where; Using index
+2	DEPENDENT SUBQUERY	t1	NULL	ref	ind_1	ind_1	5	func	#	#	Using where; Using index
+3	DEPENDENT UNION	t2	NULL	ref	ind_1	ind_1	5	func	#	#	Using where; Using index
+4	UNION RESULT	<union2,3>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t3`.`a` AS `a` from `outline_db`.`t3` where <in_optimizer>(`outline_db`.`t3`.`a`,<exists>(/* select#2 */ select `outline_db`.`t1`.`a` from `outline_db`.`t1` where ((`outline_db`.`t1`.`a` <= 3) and (<cache>(`outline_db`.`t3`.`a`) = `outline_db`.`t1`.`a`)) union /* select#3 */ select `outline_db`.`t2`.`a` from `outline_db`.`t2` where ((`outline_db`.`t2`.`a` <= 30) and (<cache>(`outline_db`.`t3`.`a`) = `outline_db`.`t2`.`a`))))
+explain select a from outline_db.t3 where outline_db.t3.a in (select a from outline_db.t1 where a <= 3 union select * from outline_db.t2 where a <= 30);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t3	NULL	index	NULL	ind_1	5	NULL	#	#	Using where; Using index
+2	DEPENDENT SUBQUERY	t1	NULL	ref	ind_1	ind_1	5	func	#	#	Using where; Using index
+3	DEPENDENT UNION	t2	NULL	ref	ind_1	ind_1	5	func	#	#	Using where; Using index
+4	UNION RESULT	<union2,3>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select /*+ MAX_EXECUTION_TIME(1000) */ `outline_db`.`t3`.`a` AS `a` from `outline_db`.`t3` where <in_optimizer>(`outline_db`.`t3`.`a`,<exists>(/* select#2 */ select `outline_db`.`t1`.`a` from `outline_db`.`t1` where ((`outline_db`.`t1`.`a` <= 3) and (<cache>(`outline_db`.`t3`.`a`) = `outline_db`.`t1`.`a`)) union /* select#3 */ select `outline_db`.`t2`.`a` from `outline_db`.`t2` where ((`outline_db`.`t2`.`a` <= 30) and (<cache>(`outline_db`.`t3`.`a`) = `outline_db`.`t2`.`a`))))
+# restart:
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+4	outline_db	103b55c6f4b442ddca977629740660243b6c6ecf4a4c09eab42c22059545a76f	OPTIMIZER		1	/*+ MAX_EXECUTION_TIME(1000) */	0	0	SELECT `a` FROM `outline_db` . `t3` WHERE `outline_db` . `t3` . `a` IN ( SELECT `a` FROM `outline_db` . `t1` WHERE `a` <= ? UNION SELECT * FROM `outline_db` . `t2` WHERE `a` <= ? )
+5		103b55c6f4b442ddca977629740660243b6c6ecf4a4c09eab42c22059545a76f	OPTIMIZER		3	/*+ INDEX(t2 ind_1) */	0	0	SELECT `a` FROM `outline_db` . `t3` WHERE `outline_db` . `t3` . `a` IN ( SELECT `a` FROM `outline_db` . `t1` WHERE `a` <= ? UNION SELECT * FROM `outline_db` . `t2` WHERE `a` <= ? )
+1		6b12f79f686c898e4a395670a227827d6e45c766b1813cddb93e920e3c7bef85	FORCE INDEX		1	idx1	0	0	SELECT `id` FROM `outline_test` . `t1` WHERE `a` = ?
+2	outline_test	6b12f79f686c898e4a395670a227827d6e45c766b1813cddb93e920e3c7bef85	FORCE INDEX		1	idx1	0	0	SELECT `id` FROM `outline_test` . `t1` WHERE `a` = ?
+3	test	6b12f79f686c898e4a395670a227827d6e45c766b1813cddb93e920e3c7bef85	USE INDEX		1	idx1	0	0	SELECT `id` FROM `outline_test` . `t1` WHERE `a` = ?
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+drop database outline_db;
+drop database outline_test;

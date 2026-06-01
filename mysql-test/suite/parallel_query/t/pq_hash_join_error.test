@@ -1,0 +1,90 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+
+--disable_query_log
+CALL mtr.add_suppression("\\[Warning\\] worker [0-9]+ has failed to start up*");
+CALL mtr.add_suppression("[Parallel query]*");
+--enable_query_log
+
+CREATE TABLE t (i INTEGER);
+INSERT INTO t VALUES (1), (2), (3);
+ANALYZE TABLE t;
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+
+set session debug="+d, pq_worker_abort1";
+--error ER_PARALLEL_QUERY_ERROR
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+set session debug="-d, pq_worker_abort1";
+
+set session debug="+d, pq_worker_abort2";
+--error ER_PARALLEL_QUERY_ERROR
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+set session debug="-d, pq_worker_abort2";
+
+# partial workers exec fail
+set session debug="+d, pq_worker_error1";
+--error ER_PARALLEL_QUERY_ERROR
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+set session debug="-d, pq_worker_error1";
+
+set session debug="+d, pq_worker_error2";
+--error ER_PARALLEL_QUERY_ERROR
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+set session debug="-d, pq_worker_error2";
+
+set session debug="+d, pq_worker_error4";
+--error ER_PARALLEL_QUERY_ERROR
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+set session debug="-d, pq_worker_error4";
+
+set session debug="+d, pq_worker_error5";
+--error ER_PARALLEL_QUERY_ERROR
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+set session debug="-d, pq_worker_error5";
+
+set session debug="+d, pq_worker_error6";
+--error ER_PARALLEL_QUERY_ERROR
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+set session debug="-d, pq_worker_error6";
+
+set session debug="+d, pq_worker_error7";
+--error ER_PARALLEL_QUERY_ERROR
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+set session debug="-d, pq_worker_error7";
+
+set session debug="+d, pq_worker_error8";
+--error ER_PARALLEL_QUERY_ERROR
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+set session debug="-d, pq_worker_error8";
+
+# partial workers start up fail
+set session debug="+d, pq_worker_error9";
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+set session debug="-d, pq_worker_error9";
+
+set session debug="+d, pq_worker_error10";
+--error ER_PARALLEL_QUERY_ERROR
+SELECT /*+ PQ(t2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+set session debug="-d, pq_worker_error10";
+
+DROP TABLE t;
+
+--echo #
+--echo # BUG2022101401408 When PQ is enabled, execute a 4-table join query with
+--echo #                  aggregate function, and the query with MIN function is
+--echo #                  stuck randomly
+
+--echo # Create a case where execution of the query is started (Init() is called
+--echo # on the top-level iterator), but an error happens so that Init() is not
+--echo # called on the HashJoinIterator. We want to verify that we do not call
+--echo # ArriveAndDrop() in both HashJoinIterators End() and in the destructor.
+
+CREATE TABLE t1 (i INTEGER);
+INSERT INTO t1 VALUES (1);
+let $query = SELECT /*+ NO_BNL(t3) PQ(t2) */ * FROM t1 JOIN t1 t2 JOIN t1 t3;
+eval EXPLAIN FORMAT=tree $query;
+SET SESSION debug="+d, nested_loop_init_error";
+--error ER_SUBQUERY_NO_1_ROW
+eval $query;
+SET SESSION debug="-d, nested_loop_init_error";
+DROP TABLE t1;

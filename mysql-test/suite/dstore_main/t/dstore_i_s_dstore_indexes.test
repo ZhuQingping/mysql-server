@@ -1,0 +1,78 @@
+#
+#Testing of INFORMATION_SCHEMA.DSTORE_INDEXES
+#
+call mtr.add_suppression("IndexParseFromFilterSet Failed to parse segment ID: -100,100");
+call mtr.add_suppression("Failed to IndexParseFromFilterSet");
+call mtr.add_suppression("Failed to acquire table for no_exist_db.t1");
+call mtr.add_suppression("Failed to DstoreProcessByTableName for table no_exist_db,t1");
+call mtr.add_suppression("Failed to acquire table for no_exist_db.no_exist_table");
+call mtr.add_suppression("Failed to DstoreProcessByTableName for table no_exist_db,no_exist_table");
+call mtr.add_suppression("IndexParseFromFilterSet Failed to parse segment ID: 999999999999999999999,131");
+call mtr.add_suppression("IndexParseFromFilterSet Failed to parse segment ID: 999999999999999999,131");
+call mtr.add_suppression("IndexParseFromFilterSet Failed to parse segment ID: 131,999999999999999999");
+DESCRIBE INFORMATION_SCHEMA.DSTORE_INDEXES;
+
+--disable_warnings
+DROP database IF EXISTS i_s_test;
+--enable_warnings
+
+CREATE database i_s_test;
+USE i_s_test;
+
+SET @old_dstore_enable_btree_trace = @@dstore_enable_btree_trace;
+SET global dstore_enable_btree_trace = OFF;
+
+CREATE TABLE t1(id INT, int_col INT,
+                char_col char(5) not null,
+                varchar_col varchar(10) not null,
+                PRIMARY KEY(id)) ENGINE = DSTORE;
+
+CREATE UNIQUE INDEX int_index on t1(int_col);
+CREATE INDEX cover_index on t1(char_col, varchar_col);
+
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
+INSERT into t1 VALUES(1, 100, "abc", "de"), (2, 200, "ab", "cde"),
+                     (3, 300, "xyz", "jdk"), (4, 400, "fda", "hgr");
+SELECT * FROM t1;
+
+SHOW index FROM t1;
+
+SET global dstore_enable_btree_trace = ON;
+SELECT DB_NAME, TABLE_NAME, INDEX_NAME, ROOT_LEVEL, FAST_ROOT_LEVEL,
+       RELATION_KIND, KEY_NUM, ATTRS_NUM, SPLIT_TIMES_PER_LEVEL,
+       RECYCLE_TIMES_PER_LEVEL
+FROM information_schema.dstore_indexes
+WHERE DB_NAME = 'i_s_test' and TABLE_NAME = 't1' ORDER BY INDEX_NAME DESC;
+
+--disable_query_log
+SELECT SEGMENT_ID INTO @segment_id
+FROM INFORMATION_SCHEMA.DSTORE_SEGMENT 
+WHERE DB_NAME = 'i_s_test' and TABLE_NAME = 't1' and INDEX_NAME = 'PRIMARY';
+--enable_query_log
+
+PREPARE stmt1 FROM 'SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE SEGMENT_ID = ?';
+EXECUTE stmt1 USING @segment_id;
+
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE DB_NAME = 'i_s_test';
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE DB_NAME = 'i_s_test' AND TABLE_NAME = 't1';
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE DB_NAME = 'no_exist_db' AND TABLE_NAME = 't1';
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE DB_NAME = 'no_exist_db' AND TABLE_NAME = 'no_exist_table';
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE TABLE_NAME = 't1';
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE INDEX_NAME = 'PRIMARY';
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes;
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE SEGMENT_ID = "100,100";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE SEGMENT_ID = "-100,100";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE SEGMENT_ID != "-100,100";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE SEGMENT_ID = "5121,131";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE SEGMENT_ID = "5121,139";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes where segment_id = "999999999999999999999,131";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes where segment_id = "999999999999999999,131";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes where segment_id = "131,999999999999999999";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes where index_name = "int_index";
+
+
+DROP PREPARE stmt1;
+DROP database i_s_test;
+
+SET global dstore_enable_btree_trace = @old_dstore_enable_btree_trace;

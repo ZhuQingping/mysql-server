@@ -1,0 +1,248 @@
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_setup.inc
+--enable_warnings
+
+CALL mtr.add_suppression(".* failed on net_flush().*");
+
+--echo #
+--echo # 1. SQLCOM_CREATE_USER
+--echo #
+--connection $node1
+CREATE USER 'test_create_user'@'%' IDENTIFIED BY 'Pass123!';
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT User, Host FROM mysql.user 
+WHERE User = 'test_create_user' AND Host = '%';
+
+--echo #
+--echo # 2. SQLCOM_ALTER_USER
+--echo #
+--connection $node1
+ALTER USER 'test_create_user'@'%' IDENTIFIED BY 'NewPass123!';
+FLUSH PRIVILEGES;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT User, Host FROM mysql.user 
+WHERE User = 'test_create_user' AND Host = '%';
+# 对比当前用户
+SELECT CURRENT_USER();
+
+--connect (test_conn_2, localhost, test_create_user, NewPass123!, test, $SERVER_MYPORT_2)
+--connection test_conn_2
+SELECT CURRENT_USER();
+
+--echo #
+--echo # 3. SQLCOM_SET_PASSWORD
+--echo #
+--connection $node1
+SET PASSWORD FOR 'test_create_user'@'%' = 'NewNewPass123!';
+FLUSH PRIVILEGES;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT User, Host FROM mysql.user 
+WHERE User = 'test_create_user' AND Host = '%';
+
+--connect (default_conn, localhost, root, , test, $SERVER_MYPORT_2)
+--connection default_conn
+SELECT CURRENT_USER();
+--connect (test_conn_3, localhost, test_create_user, NewNewPass123!, test, $SERVER_MYPORT_2)
+--connection test_conn_3
+SELECT CURRENT_USER();
+
+--echo #
+--echo # 4. SQLCOM_RENAME_USER
+--echo #
+--connection $node1
+RENAME USER 'test_create_user'@'%' TO 'new_name_user'@'%';
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT User, Host FROM mysql.user 
+WHERE User = 'new_name_user' AND Host = '%';
+
+--echo #
+--echo # 5. SQLCOM_CREATE_ROLE
+--echo #
+--connection $node1
+CREATE ROLE 'test_role_1';
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT User, Host, authentication_string 
+FROM mysql.user 
+WHERE User = 'test_role_1' AND Host = '%' 
+  AND authentication_string = '';
+
+--echo #
+--echo # 6. SQLCOM_GRANT_ROLE
+--echo #
+--connection $node1
+GRANT 'test_role_1' TO 'new_name_user'@'%';
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT * FROM mysql.role_edges 
+WHERE FROM_USER = 'test_role_1' 
+  AND TO_USER = 'new_name_user' 
+  AND TO_HOST = '%';
+
+--echo #
+--echo # 7. SQLCOM_ALTER_USER_DEFAULT_ROLE
+--echo #
+--connection $node1
+--echo # Before setting the default role (there should be no records)
+SELECT USER, HOST, DEFAULT_ROLE_USER, DEFAULT_ROLE_HOST 
+FROM mysql.default_roles 
+WHERE USER = 'new_name_user' AND HOST = '%';
+
+ALTER USER 'new_name_user'@'%' DEFAULT ROLE 'test_role_1';
+
+--echo # After setting the default role (there should be records)
+SELECT USER, HOST, DEFAULT_ROLE_USER, DEFAULT_ROLE_HOST 
+FROM mysql.default_roles 
+WHERE USER = 'new_name_user' AND HOST = '%';
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+--echo # After setting the default role (there should be records)
+SELECT USER, HOST, DEFAULT_ROLE_USER, DEFAULT_ROLE_HOST 
+FROM mysql.default_roles 
+WHERE USER = 'new_name_user' AND HOST = '%';
+
+
+--echo #
+--echo # 8. SQLCOM_REVOKE_ROLE
+--echo #
+--connection $node1
+REVOKE 'test_role_1' FROM 'new_name_user'@'%';
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+--echo # No records expected, as the role has been revoked.
+SELECT * FROM mysql.role_edges 
+WHERE FROM_USER = 'test_role_1' 
+  AND TO_USER = 'new_name_user' 
+  AND TO_HOST = '%';
+
+--echo #
+--echo # 9. SQLCOM_GRANT
+--echo #
+--connection $node1
+# ON 库名.表名
+# 给用户 / 角色授予【具体权限】
+--echo # Grant global SELECT and UPDATE privileges to the user
+GRANT SELECT, UPDATE ON *.* TO 'new_name_user'@'%';
+
+--echo # Grant global UPDATE privilege to the role
+GRANT UPDATE ON *.* TO 'test_role_1';
+FLUSH PRIVILEGES;
+
+GRANT 'test_role_1' TO 'new_name_user'@'%';
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+--echo # Verify user privileges
+SHOW GRANTS FOR 'new_name_user'@'%';
+
+--echo # Verify role privileges
+SHOW GRANTS FOR 'test_role_1';
+
+--echo # Verify the privilege bits in the mysql.user table
+SELECT 
+    User, Host,
+    Select_priv, Insert_priv, Update_priv, Delete_priv,
+    Create_priv, Drop_priv
+FROM mysql.user 
+WHERE User = 'new_name_user' AND Host = '%';
+
+SELECT * FROM mysql.role_edges 
+WHERE FROM_USER = 'test_role_1' 
+  AND TO_USER = 'new_name_user' 
+  AND TO_HOST = '%';
+
+--echo #
+--echo # 10. SQLCOM_REVOKE
+--echo #
+--connection $node1
+--echo # Revoke partial privileges from the user
+REVOKE SELECT ON *.* FROM 'new_name_user'@'%';
+REVOKE UPDATE ON *.* FROM 'test_role_1';
+FLUSH PRIVILEGES;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT 
+    User, Host,
+    Select_priv, Update_priv
+FROM mysql.user 
+WHERE User = 'new_name_user' AND Host = '%';
+
+--echo #
+--echo # 11. SQLCOM_REVOKE_ALL
+--echo #
+--connection $node1
+--echo # Revoke all privileges of the user (including those obtained via roles)
+REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'new_name_user'@'%';
+
+--echo # Revoke all privileges from the role
+REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'test_role_1';
+FLUSH PRIVILEGES;
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+# 验证REVOKE ALL后的权限
+SHOW GRANTS FOR 'new_name_user'@'%';
+
+SHOW GRANTS FOR 'test_role_1';
+
+--echo # Verify role association (still exists; REVOKE ALL does not revoke role associations)
+SELECT * FROM mysql.role_edges 
+WHERE FROM_USER = 'test_role_1' 
+  AND TO_USER = 'new_name_user' 
+  AND TO_HOST = '%';
+
+--echo #
+--echo # 12. SQLCOM_DROP_USER
+--echo #
+--connection $node1
+DROP USER 'new_name_user'@'%';
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT User, Host FROM mysql.user 
+WHERE User = 'new_name_user' AND Host = '%';
+
+--echo #
+--echo # 13. SQLCOM_DROP_ROLE
+--echo #
+--connection $node1
+DROP ROLE 'test_role_1';
+
+--echo ---------------------
+--sleep 1
+--connection $node2
+SELECT User, Host, authentication_string 
+FROM mysql.user 
+WHERE User = 'test_role_1' AND Host = '%' 
+  AND authentication_string = '';
+
+--disable_warnings
+--let $current_standby = $node2
+--let $current_primary = $node1
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_cleanup.inc
+--enable_warnings

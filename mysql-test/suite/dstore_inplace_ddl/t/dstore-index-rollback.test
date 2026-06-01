@@ -1,0 +1,133 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+
+call mtr.add_suppression("Abort apply row log for new index");
+#
+# BUG2025121241695 Alter table rollback cause crash
+#
+--source include/have_debug.inc
+--source include/have_debug_sync.inc
+# Save the initial number of concurrent sessions.
+--source include/count_sessions.inc
+
+connect (con1, localhost, root);
+
+connection default;
+CREATE TABLE t1 (id INT) engine=Dstore;
+INSERT INTO t1 VALUES(1),(1);
+ 
+connection default;
+SET DEBUG_SYNC='rollback_inplace_alter_before SIGNAL query WAIT_FOR continue1';
+--send ALTER TABLE t1 ADD UNIQUE INDEX i1(id), ALGORITHM=INPLACE
+ 
+connection con1;
+SET DEBUG_SYNC='now WAIT_FOR query';
+SELECT * FROM t1;
+SET DEBUG_SYNC='now SIGNAL continue1';
+ 
+connection default;
+--error ER_DUP_ENTRY
+--reap
+SHOW CREATE TABLE t1;
+ALTER TABLE t1 ADD INDEX i1(id), ALGORITHM=INPLACE;
+SHOW CREATE TABLE t1;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1 FORCE INDEX(i1);
+
+DROP TABLE t1;
+SET DEBUG_SYNC='RESET';
+
+
+#
+# Test add multi index rollback
+#
+connection default;
+CREATE TABLE t1 (c1 INT, c2 INT, c3 INT) engine=Dstore;
+INSERT INTO t1 VALUES(1,1,1),(2,1,2);
+
+connection default;
+SET DEBUG_SYNC='rollback_inplace_alter_before SIGNAL query WAIT_FOR continue1';
+--send ALTER TABLE t1 ADD UNIQUE INDEX i1(c1), ADD UNIQUE INDEX i2(c2), ADD INDEX i3(c3), ALGORITHM=INPLACE
+
+connection con1;
+SET DEBUG_SYNC='now WAIT_FOR query';
+SELECT * FROM t1;
+SET DEBUG_SYNC='now SIGNAL continue1';
+
+connection default;
+--error ER_DUP_ENTRY
+--reap
+SHOW CREATE TABLE t1;
+ALTER TABLE t1 ADD INDEX i1(c1), ALGORITHM=INPLACE;
+SHOW CREATE TABLE t1;
+INSERT INTO t1 VALUES(1,1,1);
+SELECT c1 FROM t1 FORCE INDEX(i1);
+
+DROP TABLE t1;
+SET DEBUG_SYNC='RESET';
+
+
+#
+# Test concurrent add index rollback and analyze table
+#
+connection default;
+CREATE TABLE t1 (id INT) engine=Dstore;
+INSERT INTO t1 VALUES(1),(1);
+ 
+connection default;
+SET DEBUG_SYNC='rollback_inplace_alter_before SIGNAL query WAIT_FOR continue1';
+--send ALTER TABLE t1 ADD UNIQUE INDEX i1(id), ALGORITHM=INPLACE
+ 
+connection con1;
+SET DEBUG_SYNC='now WAIT_FOR query';
+ANALYZE TABLE t1;
+SET DEBUG_SYNC='now SIGNAL continue1';
+ 
+connection default;
+--error ER_DUP_ENTRY
+--reap
+SHOW CREATE TABLE t1;
+TRUNCATE TABLE t1;
+
+DROP TABLE t1;
+SET DEBUG_SYNC='RESET';
+disconnect con1;
+
+CALL mtr.add_suppression("Generate dstore alter ddl info failed!");
+# BUG2025121942405 Drop index rollback before commit, we need to clear dict cache.
+connection default;
+CREATE TABLE t1 (pk INT PRIMARY KEY, col INT, key(col));
+SET debug='reset';
+SET debug='d, dstore_alter_set_ddl_sql_error';
+--error ER_DSTORE_DDL_INFO_SIZE_INVALID
+ALTER TABLE t1 DROP INDEX col, ALGORITHM=INPLACE;
+SHOW CREATE TABLE t1;
+INSERT INTO t1 VALUES (4,5),(5,6);
+TRUNCATE TABLE t1;
+SET debug='reset';
+DROP TABLE t1;
+
+# BUG2026010636073 Add index rollback before commit, we need to clear dict cache.
+CREATE TABLE t1 (pk INT PRIMARY KEY, col1 INT, col2 INT);
+INSERT INTO t1 VALUES(1,1,1),(2,2,2);
+SET debug='reset';
+SET debug='d, dstore_alter_set_ddl_sql_error';
+--error ER_DSTORE_DDL_INFO_SIZE_INVALID
+ALTER TABLE t1 ADD INDEX idx1(col1), ADD INDEX idx2(col2), ALGORITHM=INPLACE;
+CREATE TABLE t2 (c1 int, c2 int)ENGINE=DSTORE;
+INSERT INTO t2 VALUES(1,1);
+INSERT INTO t1 VALUES(3,3,3);
+SET debug='reset';
+DROP TABLE t1,t2;
+
+# BUG2026010947238 Rename index rollback before commit, we need to clear dict cache.
+connection default;
+CREATE TABLE tt_50 (ipkey INT, i1 INT AUTO_INCREMENT,  PRIMARY KEY(ipkey), 
+                    INDEX tt_50i0(i1 DESC) , INDEX tt_50i1(i1, ipkey ASC)) ENCRYPTION='N' ENGINE=Dstore;
+SET debug='reset';
+SET debug='d, dstore_alter_set_ddl_sql_error';
+--error ER_DSTORE_DDL_INFO_SIZE_INVALID
+ALTER TABLE tt_50 RENAME INDEX tt_50i0 To tt_50i0_rename, LOCK=SHARED, ALGORITHM=INPLACE;
+ANALYZE TABLE tt_50 UPDATE HISTOGRAM ON `ipkey`,`i1`;
+SET debug='reset';
+drop table tt_50;

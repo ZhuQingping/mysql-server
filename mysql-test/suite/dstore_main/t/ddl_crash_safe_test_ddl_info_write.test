@@ -1,0 +1,299 @@
+--source include/have_debug_sync.inc
+--source include/have_debug.inc
+--source include/have_only_dstore.inc
+
+--echo #
+--echo #  DDL CRASH SAFE TEST 01: Test all DDL write DDL info to WAL correctly.
+--echo #
+--echo #  In this test, we will execute almost all DDL type query, and kill the
+--echo #  server. After that, we check whether DDL infos can be read from WAL.
+--echo #  This is the basic we can do safe recovery.
+--echo #
+
+--echo # Step 1. Pepare Data For Test.
+CREATE DATABASE ddl_crash_safe_db;
+USE ddl_crash_safe_db;
+--let $table_count = 31
+--let $i = 1
+while ($i <= $table_count)
+{
+  --eval CREATE TABLE t$i (id INT primary key auto_increment, name VARCHAR(20), mylob BLOB, c1 int, key ci(c1))
+  --eval INSERT INTO t$i (name, mylob, c1) VALUES ('User1', NULL, 1),('User2', 0x010203, 2),('User3', 0xFFD8FFE0, 3)
+  --inc $i
+}
+CREATE DATABASE db_4 CHARACTER SET = utf8mb4;
+CREATE VIEW v13 AS SELECT * FROM t14;
+CREATE PROCEDURE p16() SELECT 1;
+CREATE PROCEDURE p17() SELECT 1;
+CREATE TRIGGER tr19 BEFORE INSERT ON t19 FOR EACH ROW SET NEW.id = 0;
+CREATE EVENT e21 ON SCHEDULE EVERY 1 DAY DO DELETE FROM t21;
+CREATE EVENT e22 ON SCHEDULE EVERY 1 DAY DO DELETE FROM t22;
+
+CREATE SPATIAL REFERENCE SYSTEM 1004326 NAME 'WGS 84 (long-lat)' DEFINITION 'GEOGCS["WGS 84",DATUM["World Geodetic System 1984",SPHEROID["WGS 84",6378137,298.257223563,AUTHORITY["EPSG","7030"]],AUTHORITY["EPSG","6326"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.017453292519943278,AUTHORITY["EPSG","9122"]],AXIS["Lon",EAST],AXIS["Lat",NORTH]]' DESCRIPTION 'WGS 84';
+CREATE DATABASE db_31;
+
+--echo # Step 2. Do A Clean Shutdown.
+--disable_result_log
+--let error_log= $MYSQLTEST_VARDIR/tmp/test.err
+--let restart_parameters="restart: --log-error=$error_log --innodb_fast_shutdown=0"
+--source include/restart_mysqld.inc
+--enable_result_log
+
+--echo # Step 3. Write DDLs Concurrently.
+--echo #         We write almost all DDL types except for USER/PRIVILEGE related DDL
+--echo #         because those DDL will block the tests.
+--let $sync_point = ddl_crash_safe_before_innodb_commit
+--let $release_signal = release_all_connections
+
+--let $sql_count = 31
+--let $i = 1
+while($i <= $sql_count)
+{
+    --connect(conn$i, localhost, root,,ddl_crash_safe_db,)
+    --sleep 1
+    --eval SET DEBUG_SYNC = '$sync_point WAIT_FOR $release_signal'
+
+    if($i == 1)
+    {
+        --send CREATE DATABASE db_01
+    }
+    if($i == 2)
+    {
+        --send CREATE TABLE t_t2(pk INT PRIMARY KEY)
+    }
+    if($i == 3)
+    {
+        --send CREATE TABLE t_t3 CHARSET = utf8mb4 AS SELECT if(1, 9223372036854775808, 1) AS i, CASE WHEN 1 THEN 9223372036854775808 ELSE 1 END AS c, coalesce(9223372036854775808, 1)
+    }
+    if($i == 4)
+    {
+        --send ALTER DATABASE db_4 CHARACTER SET = latin1
+    }
+    if($i == 5)
+    {
+        --send DROP TABLE t5;
+    }
+    if($i == 6)
+    {
+        --send CREATE INDEX idx ON t6(name);
+    }
+    if($i == 7)
+    {
+        --send ALTER TABLE t7 ADD COLUMN age INT;
+    }
+    if($i == 8)
+    {
+#        ANALYZE is not supported anymore.
+#        --send ANALYZE TABLE t8;
+    }
+    if($i == 9)
+    {
+        --send TRUNCATE TABLE t9;
+    }
+    if($i == 10)
+    {
+        --send RENAME TABLE t10 TO t10_x;
+    }
+    if($i == 11)
+    {
+        --send DROP INDEX ci ON t11;
+    }
+    if($i == 12)
+    {
+        --send CREATE VIEW v12 AS SELECT * FROM t12
+    }
+    if($i == 13)
+    {
+        --send DROP VIEW v13
+    }
+    if($i == 14)
+    {
+        --send CREATE FUNCTION lookup RETURNS STRING SONAME 'udf_example.so';
+    }
+    if($i == 15)
+    {
+        --send CREATE FUNCTION f15() RETURNS INT DETERMINISTIC RETURN 1
+    }
+    if($i == 16)
+    {
+        --send ALTER PROCEDURE p16 COMMENT 'modified'
+    }
+    if($i == 17)
+    {
+        --send DROP PROCEDURE p17
+    }
+    if($i == 18)
+    {
+        --send CREATE TRIGGER tr18 BEFORE INSERT ON t18 FOR EACH ROW SET NEW.id = 0
+    }
+    if($i == 19)
+    {
+        --send DROP TRIGGER tr19
+    }
+    if($i == 20)
+    {
+        --send CREATE EVENT e20 ON SCHEDULE EVERY 1 DAY DO DELETE FROM t20
+    }
+    if($i == 21)
+    {
+        --send ALTER EVENT e21 DISABLE
+    }
+    if($i == 22)
+    {
+        --send DROP EVENT e22
+    }
+    if($i == 23)
+    {
+        --send CREATE SERVER s23 FOREIGN DATA WRAPPER mysql OPTIONS (HOST '127.0.0.3')
+    }
+    if($i == 24)
+    {
+#        Resource group atomic operation is not supported anymore.
+#        --send CREATE RESOURCE GROUP rg24 TYPE = USER
+    }
+    if($i == 25)
+    {
+#        --send ALTER RESOURCE GROUP rg25 VCPU = 0-1
+    }
+    if($i == 26)
+    {
+#        --send DROP RESOURCE GROUP rg26
+    }
+    if($i == 27)
+    {
+        --send CREATE SPATIAL REFERENCE SYSTEM 1004329 NAME 'Test SRS 27' DEFINITION 'GEOGCS["WGS 84",DATUM["World Geodetic System 1984",SPHEROID["WGS 84",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["degree",0.017453292519943295],AXIS["Latitude",NORTH],AXIS["Longitude",EAST],AUTHORITY["EPSG","4326"]]'
+    }
+    if($i == 28)
+    {
+        --send DROP SPATIAL REFERENCE SYSTEM 1004326
+    }
+    if($i == 30)
+    {
+        --send DROP TABLESPACE ts_30
+    }
+    if($i == 31)
+    {
+        --send DROP DATABASE db_31
+    }
+    --inc $i
+}
+
+connection default;
+--echo # Waiting for all connections to reach sync point...
+--echo # It's better to use a way to ensure all connection reach to sync point,
+--echo # but we just sleep 30s for simpler.
+--sleep 30
+
+--let $i = 1
+while($i <= $sql_count)
+{
+    --disconnect conn$i
+    --inc $i
+}
+
+--echo # Step 3. Kill The Server To Do Crash Recovery.
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+--source include/expect_crash.inc
+--error 2013
+CREATE TABLE tx(pk INT PRIMARY KEY);
+
+--disable_result_log
+--source include/wait_until_disconnected.inc
+--source include/start_mysqld_no_echo.inc
+--enable_result_log
+
+--echo # Step 4. Check Whether All DDLs Are In Prepared State.
+--let SEARCH_FILE = $error_log
+--let SEARCH_PATTERN = Found 26 prepared transaction\(s\) in InnoDB
+--source include/search_pattern.inc
+
+--echo # Step 5. Check Recovery Result: Ensure All DDLs Have Taken Effect.
+--echo # 1. CREATE DATABASE db_01
+SHOW DATABASES LIKE 'db_01';
+
+--echo # 2. CREATE TABLE t_t2
+SHOW CREATE TABLE ddl_crash_safe_db.t_t2;
+
+--echo # 3. CREATE TABLE t_t3
+SHOW CREATE TABLE ddl_crash_safe_db.t_t3;
+
+--echo # 4. ALTER DATABASE db_4
+SHOW DATABASES LIKE 'db_4';
+
+--echo # 5. DROP TABLE t5;
+--error ER_NO_SUCH_TABLE
+SHOW CREATE TABLE ddl_crash_safe_db.t5;
+
+--echo # 6. CREATE INDEX idx ON t6(name);
+SHOW CREATE TABLE ddl_crash_safe_db.t6;
+
+--echo # 7. ALTER TABLE t7 ADD COLUMN age INT;
+SHOW CREATE TABLE ddl_crash_safe_db.t7;
+
+--echo # 8. ANALYZE TABLE t8;
+--echo # No easy way to verify ANALYZE TABLE after crash, we just assume it's OK.
+
+--echo # 9. TRUNCATE TABLE t9;
+SELECT COUNT(*) FROM ddl_crash_safe_db.t9;
+
+--echo # 10. RENAME TABLE t10 TO t10_x;
+SHOW CREATE TABLE ddl_crash_safe_db.t10_x;
+
+--echo # 11. DROP INDEX ci ON t11;
+SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='ddl_crash_safe_db' AND table_name='t11' AND index_name='ci';
+
+--echo # 12. CREATE VIEW v12
+SHOW CREATE VIEW ddl_crash_safe_db.v12;
+
+--echo # 13. DROP VIEW v13
+--error ER_NO_SUCH_TABLE
+SHOW CREATE VIEW ddl_crash_safe_db.v13;
+
+--echo # 14. CREATE FUNCTION lookup
+SELECT COUNT(*) FROM mysql.func WHERE name = 'lookup';
+
+--echo # 15. CREATE FUNCTION f15
+SHOW CREATE FUNCTION ddl_crash_safe_db.f15;
+
+--echo # 16. ALTER PROCEDURE p16
+SELECT ROUTINE_COMMENT FROM information_schema.routines WHERE routine_schema = 'ddl_crash_safe_db' AND routine_name = 'p16';
+
+--echo # 17. DROP PROCEDURE p17
+SELECT COUNT(*) FROM information_schema.routines WHERE routine_schema = 'ddl_crash_safe_db' AND routine_name = 'p17';
+
+--echo # 18. CREATE TRIGGER tr18
+SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema = 'ddl_crash_safe_db' AND trigger_name = 'tr18' AND event_manipulation = 'INSERT' AND action_statement = 'SET NEW.id = 0';
+
+--echo # 19. DROP TRIGGER tr19
+SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema = 'ddl_crash_safe_db' AND trigger_name = 'tr19';
+
+--echo # 20. CREATE EVENT e20
+SELECT COUNT(*) FROM information_schema.events WHERE event_schema = 'ddl_crash_safe_db' AND event_name = 'e20' AND event_definition = 'DELETE FROM t20';
+
+--echo # 21. ALTER EVENT e21
+SELECT STATUS FROM information_schema.events WHERE event_schema = 'ddl_crash_safe_db' AND event_name = 'e21';
+
+--echo # 22. DROP EVENT e22
+SELECT COUNT(*) FROM information_schema.events WHERE event_schema = 'ddl_crash_safe_db' AND event_name = 'e22';
+
+--echo # 23. CREATE SERVER s23
+SELECT * FROM mysql.servers WHERE Server_name = 's23';
+
+--echo # 27. CREATE SPATIAL REFERENCE SYSTEM 1004329
+SELECT * FROM information_schema.st_spatial_reference_systems WHERE srs_id = 1004329;
+
+--echo # 28. DROP SPATIAL REFERENCE SYSTEM 1004326
+SELECT COUNT(*) FROM information_schema.st_spatial_reference_systems WHERE srs_id = 1004326;
+
+--echo # 31. DROP DATABASE db_31
+--error ER_BAD_DB_ERROR
+SHOW CREATE DATABASE db_31;
+
+--echo # Step 6. Clean Environment.
+DROP DATABASE db_01;
+DROP DATABASE db_4;
+DROP FUNCTION lookup;
+DROP DATABASE ddl_crash_safe_db;
+--remove_file $error_log
+--let restart_parameters="restart:"
+--source include/restart_mysqld.inc

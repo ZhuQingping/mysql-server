@@ -1,0 +1,476 @@
+############################################################
+Establish a master-replica replication relationship based on physical replication.
+############################################################
+include/master-slave.inc
+[connection master]
+#
+# 1. Initialize the required variables, then disconnect the subsequent master-replica replication connections.
+#
+[connection master]
+[connection slave]
+STOP REPLICA;
+RESET REPLICA ALL;
+#
+# 2. Since physical replication does not support DDL operations at present, execute all required DDL statements first.
+#
+create database copy_database;
+use copy_database;
+CREATE TABLE copy_table (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) engine = dstore;
+#
+# 3. Shutdown the primary and standby instances.
+#
+include/rpl_stop_server.inc [server_number=1]
+include/rpl_stop_server.inc [server_number=2]
+#
+# 4. Copy the data directory of the primary to that of the standby.
+#
+#
+# 5. Start the primary and standby instances with new parameters for establishing a master-replica physical replication relationship.
+#
+include/rpl_start_server.inc [server_number=1]
+include/rpl_start_server.inc [server_number=2]
+#
+# 6. Confirm that the primary and standby servers start with the new data directory.
+#
+include/assert.inc [Database copy_database should exist (only one record)]
+include/assert.inc [Table copy_table should exist in database copy_database (only one record)]
+use copy_database;
+show tables;
+Tables_in_copy_database
+copy_table
+include/assert.inc [Database copy_database should exist (only one record)]
+include/assert.inc [Table copy_table should exist in database copy_database (only one record)]
+use copy_database;
+show tables;
+Tables_in_copy_database
+copy_table
+#
+# 7. Install the plugin on both the primary and standby servers, and establish a master-replica physical replication relationship.
+#
+#
+# Install the primary server's plugin and set enabled_wal to ON.
+#
+INSTALL PLUGIN rpl_semi_sync_source SONAME 'semisync_source.so';
+INSTALL PLUGIN rpl_semi_sync_replica SONAME 'semisync_replica.so';
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 1;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 1;
+SET GLOBAL rds_physical_rpl_sender_packet_size = 1;
+#
+# dstore_enable_standby_role should show as false, indicating that the current node is the source.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	1
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	OFF
+#
+# Install the standby server's plugin and set enabled_wal to ON.
+#
+INSTALL PLUGIN rpl_semi_sync_source SONAME 'semisync_source.so';
+INSTALL PLUGIN rpl_semi_sync_replica SONAME 'semisync_replica.so';
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 1;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 1;
+SET GLOBAL rds_physical_rpl_sender_packet_size = 1;
+#
+# dstore_enable_standby_role should show as true, indicating that the current node is the replica.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	2
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	ON
+#
+# Configure the replica and check whether it is configured correctly.
+#
+STOP REPLICA;
+Warnings:
+Note	3084	Replication thread(s) for channel '' are already stopped.
+RESET REPLICA ALL;
+CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=SERVER_MYPORT_1, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL 'dstore_wal_replication_channel';;
+include/assert.inc [Channel name should be 'dstore_wal_replication_channel']
+Slave_IO_Running should be OFF.
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+OFF
+START REPLICA;
+#
+# Slave_IO_Running should be ON.
+#
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+ON
+############################################################
+一、Set up the test environment.
+二、Then execute the corresponding DDL statements for SQLCOM_CREATE_FUNCTION, SQLCOM_ALTER_FUNCTION, SQLCOM_DROP_FUNCTION, and SQLCOM_CREATE_SPFUNCTION.
+三、Check the DD information on the standby node to ensure correct metadata replay.
+四、Call the functions and create tables by calling the functions. After execution, perform a full table scan for later comparison on the new primary node to ensure the replay function works correctly.
+五、Perform a switchover.
+六、Perform a full table scan on the new primary node and compare the results with those from Step 4 to verify the correctness of the standby node replay function.
+七、Use the replayed functions and perform operations (alter and drop) on them to ensure the availability and operability of the replayed DDL results.
+############################################################
+#
+# 一、Set up the test environment.
+#
+CREATE DATABASE IF NOT EXISTS test_function_db 
+DEFAULT CHARACTER SET utf8mb4 
+DEFAULT COLLATE utf8mb4_general_ci;
+USE test_function_db;
+CREATE TABLE employees (
+emp_id INT AUTO_INCREMENT PRIMARY KEY,
+emp_name VARCHAR(100) NOT NULL,
+department VARCHAR(50),
+salary DECIMAL(10, 2),
+hire_date DATE
+);
+CREATE TABLE departments (
+dept_id INT AUTO_INCREMENT PRIMARY KEY,
+dept_name VARCHAR(50) NOT NULL UNIQUE,
+location VARCHAR(100)
+);
+INSERT INTO departments(dept_name, location) VALUES
+('技术部', '北京'),
+('销售部', '上海'),
+('人事部', '广州');
+INSERT INTO employees(emp_name, department, salary, hire_date) VALUES
+('张三', '技术部', 15000.00, '2020-01-15'),
+('李四', '技术部', 12000.00, '2020-03-20'),
+('王五', '销售部', 8000.00, '2021-05-10'),
+('赵六', '人事部', 10000.00, '2019-11-30');
+#
+# 二、Then execute the corresponding DDL statements for SQLCOM_CREATE_FUNCTION, SQLCOM_ALTER_FUNCTION, SQLCOM_DROP_FUNCTION, and SQLCOM_CREATE_SPFUNCTION.
+#
+#
+# SQLCOM_CREATE_FUNCTION
+#
+# Create a deterministic function for calculating annual salary
+CREATE FUNCTION calculate_annual_salary(monthly_salary DECIMAL(10,2))
+RETURNS DECIMAL(10,2)
+DETERMINISTIC
+BEGIN
+RETURN monthly_salary * 12;
+END$$
+# Create a non-deterministic function to get the number of employees
+CREATE FUNCTION get_department_employee_count(dept_name_param VARCHAR(50))
+RETURNS INT 
+READS SQL DATA 
+BEGIN
+DECLARE emp_count INT;
+SELECT COUNT(*) INTO emp_count 
+FROM employees 
+WHERE department = dept_name_param;
+RETURN emp_count;
+END$$
+# Create a custom function that uses built-in MySQL functions
+CREATE FUNCTION calculate_service_years(hire_date_param DATE)
+RETURNS INT
+DETERMINISTIC
+BEGIN
+RETURN YEAR(CURDATE()) - YEAR(hire_date_param);
+END$$
+# Create a function with conditional logic
+CREATE FUNCTION get_salary_level(salary_val DECIMAL(10,2))
+RETURNS VARCHAR(20)
+DETERMINISTIC
+BEGIN
+IF salary_val > 12000 THEN
+RETURN '高薪';
+ELSEIF salary_val > 8000 THEN
+RETURN '中薪';
+ELSE
+RETURN '低薪';
+END IF;
+END$$
+# Create a test function to be dropped
+CREATE FUNCTION calculate_service_years_delete(hire_date_param DATE)
+RETURNS INT
+DETERMINISTIC
+BEGIN
+RETURN YEAR(CURDATE()) - YEAR(hire_date_param);
+END$$
+#
+# 2 SQLCOM_ALTER_FUNCTION
+#
+ALTER FUNCTION calculate_annual_salary
+COMMENT '计算年薪函数（已修改）';
+# Modify the function's security setting to INVOKER
+ALTER FUNCTION get_department_employee_count
+SQL SECURITY INVOKER
+COMMENT '获取部门员工数量（已修改安全设置）';
+#
+# 3 SQLCOM_DROP_FUNCTION
+#
+DROP FUNCTION IF EXISTS calculate_service_years_delete;
+# Query metadata on the primary node
+SELECT 
+ROUTINE_NAME,
+ROUTINE_TYPE,
+DATA_TYPE,
+IS_DETERMINISTIC,
+SECURITY_TYPE,
+ROUTINE_COMMENT
+FROM INFORMATION_SCHEMA.ROUTINES 
+WHERE ROUTINE_SCHEMA = 'test_function_db'
+ORDER BY ROUTINE_TYPE, ROUTINE_NAME;
+ROUTINE_NAME	ROUTINE_TYPE	DATA_TYPE	IS_DETERMINISTIC	SECURITY_TYPE	ROUTINE_COMMENT
+calculate_annual_salary	FUNCTION	decimal	YES	DEFINER	计算年薪函数（已修改）
+calculate_service_years	FUNCTION	int	YES	DEFINER	
+get_department_employee_count	FUNCTION	int	NO	INVOKER	获取部门员工数量（已修改安全设置）
+get_salary_level	FUNCTION	varchar	YES	DEFINER	
+#
+# 三、Check the DD information on the standby node to ensure correct metadata replay.
+#
+# Query metadata on the standby node
+SELECT 
+ROUTINE_NAME,
+ROUTINE_TYPE,
+DATA_TYPE,
+IS_DETERMINISTIC,
+SECURITY_TYPE,
+ROUTINE_COMMENT
+FROM INFORMATION_SCHEMA.ROUTINES 
+WHERE ROUTINE_SCHEMA = 'test_function_db'
+ORDER BY ROUTINE_TYPE, ROUTINE_NAME;
+ROUTINE_NAME	ROUTINE_TYPE	DATA_TYPE	IS_DETERMINISTIC	SECURITY_TYPE	ROUTINE_COMMENT
+calculate_annual_salary	FUNCTION	decimal	YES	DEFINER	计算年薪函数（已修改）
+calculate_service_years	FUNCTION	int	YES	DEFINER	
+get_department_employee_count	FUNCTION	int	NO	INVOKER	获取部门员工数量（已修改安全设置）
+get_salary_level	FUNCTION	varchar	YES	DEFINER	
+# Verify the parameter information
+SELECT 
+SPECIFIC_NAME,
+PARAMETER_NAME,
+DATA_TYPE,
+ORDINAL_POSITION
+FROM INFORMATION_SCHEMA.PARAMETERS 
+WHERE SPECIFIC_SCHEMA = 'test_function_db'
+ORDER BY SPECIFIC_NAME, ORDINAL_POSITION;
+SPECIFIC_NAME	PARAMETER_NAME	DATA_TYPE	ORDINAL_POSITION
+calculate_annual_salary	NULL	decimal	0
+calculate_annual_salary	monthly_salary	decimal	1
+calculate_service_years	NULL	int	0
+calculate_service_years	hire_date_param	date	1
+get_department_employee_count	NULL	int	0
+get_department_employee_count	dept_name_param	varchar	1
+get_salary_level	NULL	varchar	0
+get_salary_level	salary_val	decimal	1
+#
+# 四、Call the functions and create tables by calling the functions. After execution, perform a full table scan for later comparison on the new primary node to ensure the replay function works correctly.
+#
+USE test_function_db;
+# 1 Create a new table that uses functions
+CREATE TABLE salary_analysis AS
+SELECT 
+emp_id,
+emp_name,
+salary,
+calculate_annual_salary(salary) as annual_salary,
+CASE 
+WHEN salary > 12000 THEN '高薪'
+        WHEN salary > 8000 THEN '中薪'
+        ELSE '低薪'
+    END as salary_level
+FROM employees;
+# 2 Create a view that uses functions
+CREATE VIEW v_employee_analysis AS
+SELECT 
+e.emp_name,
+e.department,
+e.salary,
+calculate_annual_salary(e.salary) as annual_salary,
+d.location,
+(SELECT get_department_employee_count(e.department)) as dept_emp_count
+FROM employees e
+LEFT JOIN departments d ON e.department = d.dept_name;
+# 3 Record the current data status for comparison with the new primary node
+# Data of the salary_analysis table
+SELECT * FROM salary_analysis ORDER BY emp_id;
+emp_id	emp_name	salary	annual_salary	salary_level
+1	张三	15000.00	180000.00	高薪
+2	李四	12000.00	144000.00	中薪
+3	王五	8000.00	96000.00	低薪
+4	赵六	10000.00	120000.00	中薪
+# Data of the view
+SELECT * FROM v_employee_analysis ORDER BY emp_name;
+emp_name	department	salary	annual_salary	location	dept_emp_count
+张三	技术部	15000.00	180000.00	北京	2
+李四	技术部	12000.00	144000.00	北京	2
+王五	销售部	8000.00	96000.00	上海	1
+赵六	人事部	10000.00	120000.00	广州	1
+# Verify the function invocation
+SELECT 
+dept_name,
+get_department_employee_count(dept_name) as employee_count
+FROM departments;
+dept_name	employee_count
+人事部	1
+技术部	2
+销售部	1
+#
+# 五、Perform a switchover.
+#
+############################################################
+switchover_1
+############################################################
+# Demote the source to replica.
+SET GLOBAL read_only = ON;
+SET GLOBAL event_scheduler = OFF;
+call rpl_wal.pdb_demote();
+#
+# dstore_enable_standby_role should show as true, indicating that the current node is the replica.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	1
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	ON
+#
+# Promote the replica to source.
+#
+STOP REPLICA;
+RESET REPLICA ALL FOR CHANNEL 'dstore_wal_replication_channel';
+call rpl_wal.pdb_promote();
+#
+# dstore_enable_standby_role should show as false, indicating that the current node is the source.
+#
+SHOW VARIABLES LIKE 'server_id';
+Variable_name	Value
+server_id	2
+SHOW VARIABLES LIKE 'dstore_enable_standby_role';
+Variable_name	Value
+dstore_enable_standby_role	OFF
+#
+# Clean the primary and standby servers.
+#
+include/stop_wal_dump_threads.inc
+#
+# Re-establish primary-standby relationship.
+#
+CHANGE REPLICATION SOURCE TO SOURCE_HOST='127.0.0.1', SOURCE_PORT=old_standby_port, SOURCE_USER='root', SOURCE_HEARTBEAT_PERIOD = 100 FOR CHANNEL 'dstore_wal_replication_channel';;
+include/assert.inc [Channel name should be 'dstore_wal_replication_channel']
+START REPLICA;
+#
+# Slave_IO_Running should be ON.
+#
+select rcs.SERVICE_STATE as Slave_IO_Running from performance_schema.replication_connection_status rcs;
+Slave_IO_Running
+ON
+#
+# Disable read-only mode on the new source.
+#
+SET GLOBAL read_only = OFF;
+SET GLOBAL event_scheduler = ON;
+#
+# 六、Perform a full table scan on the new primary node and compare the results with those from Step 4 to verify the correctness of the standby node replay function.
+#
+USE test_function_db;
+# 1. Verify the data in the salary_analysis table
+SELECT * FROM salary_analysis ORDER BY emp_id;
+emp_id	emp_name	salary	annual_salary	salary_level
+1	张三	15000.00	180000.00	高薪
+2	李四	12000.00	144000.00	中薪
+3	王五	8000.00	96000.00	低薪
+4	赵六	10000.00	120000.00	中薪
+# 2. Verify view data
+SELECT * FROM v_employee_analysis ORDER BY emp_name;
+emp_name	department	salary	annual_salary	location	dept_emp_count
+张三	技术部	15000.00	180000.00	北京	2
+李四	技术部	12000.00	144000.00	北京	2
+王五	销售部	8000.00	96000.00	上海	1
+赵六	人事部	10000.00	120000.00	广州	1
+# 3. Verify function invocation
+SELECT 
+dept_name,
+get_department_employee_count(dept_name) as employee_count
+FROM departments;
+dept_name	employee_count
+人事部	1
+技术部	2
+销售部	1
+#
+# 七、Use the replayed functions and perform operations (alter and drop) on them to ensure the availability and operability of the replayed DDL results.
+#
+# 1 Perform operations on the replayed functions: modify and delete the replayed functions
+ALTER FUNCTION calculate_annual_salary
+SQL SECURITY INVOKER
+COMMENT '在新主上修改的函数';
+DROP FUNCTION IF EXISTS get_department_employee_count;
+CREATE FUNCTION calculate_bonus(salary DECIMAL(10,2), performance_rating INT)
+RETURNS DECIMAL(10,2)
+DETERMINISTIC
+BEGIN
+DECLARE bonus DECIMAL(10,2);
+IF performance_rating >= 90 THEN
+SET bonus = salary * 0.3;
+ELSEIF performance_rating >= 80 THEN
+SET bonus = salary * 0.2;
+ELSEIF performance_rating >= 70 THEN
+SET bonus = salary * 0.1;
+ELSE
+SET bonus = 0;
+END IF;
+RETURN bonus;
+END$$
+# 2 Verify metadata on the standby node
+SELECT 
+ROUTINE_NAME,
+ROUTINE_TYPE,
+IS_DETERMINISTIC,
+SECURITY_TYPE,
+ROUTINE_COMMENT
+FROM INFORMATION_SCHEMA.ROUTINES 
+WHERE ROUTINE_SCHEMA = 'test_function_db'
+ORDER BY ROUTINE_TYPE, ROUTINE_NAME;
+ROUTINE_NAME	ROUTINE_TYPE	IS_DETERMINISTIC	SECURITY_TYPE	ROUTINE_COMMENT
+calculate_annual_salary	FUNCTION	YES	INVOKER	在新主上修改的函数
+calculate_bonus	FUNCTION	YES	DEFINER	
+calculate_service_years	FUNCTION	YES	DEFINER	
+get_salary_level	FUNCTION	YES	DEFINER	
+############################################################
+# Uninstall the plugins, reset the variables, and restore the original master-replica replication relationship.
+############################################################
+#
+# 1. Shutdown the mysqld instances of the master and replica servers launched with the new data directory.
+#
+STOP REPLICA;
+RESET REPLICA ALL FOR CHANNEL 'dstore_wal_replication_channel';
+include/stop_wal_dump_threads.inc
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 0;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 0;
+UNINSTALL PLUGIN rpl_semi_sync_source;
+UNINSTALL PLUGIN rpl_semi_sync_replica;
+use mtr;
+SET GLOBAL rpl_semi_sync_source_enabled_wal = 0;
+SET GLOBAL rpl_semi_sync_replica_enabled_wal = 0;
+UNINSTALL PLUGIN rpl_semi_sync_source;
+UNINSTALL PLUGIN rpl_semi_sync_replica;
+use mtr;
+#
+# 2. Shutdown the mysqld instances of the master and replica servers launched with the new data directory.
+#
+include/rpl_stop_server.inc [server_number=1]
+include/rpl_stop_server.inc [server_number=2]
+# Delete the directories of the primary and standby servers.
+#
+# 3. Restart the mysqld instances of the master and replica servers using the configurations from the opt file.
+#
+include/rpl_start_server.inc [server_number=1]
+show databases;
+Database
+__recyclebin__
+copy_database
+information_schema
+mtr
+mysql
+performance_schema
+sys
+test
+drop database copy_database;
+use mtr;
+include/rpl_start_server.inc [server_number=2]
+use mtr;

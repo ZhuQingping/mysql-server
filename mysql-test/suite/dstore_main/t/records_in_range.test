@@ -1,0 +1,593 @@
+#
+# Test ha_cde::records_in_range()
+#
+
+-- source include/have_debug.inc
+-- source include/not_hypergraph.inc   # Does not use the same estimators.
+
+-- echo 
+-- echo ## TEST VARCHAR KEY ##
+-- echo
+CREATE TABLE records_in_range_test_varchar (
+	c1 VARCHAR(16),
+	c2 VARCHAR(512),
+	PRIMARY KEY (c1)
+);
+
+# Insert some records so that they cannot fit in one page for some page sizes
+# in order to exercise records_in_range() where 1, 2 or more pages are sampled
+INSERT INTO records_in_range_test_varchar VALUES
+('ccc', REPEAT('v', 512)),
+('kkk01', REPEAT('v', 512)),
+('kkk02', REPEAT('v', 512)),
+('kkk03', REPEAT('v', 512)),
+('kkk04', REPEAT('v', 512)),
+('kkk05', REPEAT('v', 512)),
+('kkk06', REPEAT('v', 512)),
+('kkk07', REPEAT('v', 512)),
+('kkk08', REPEAT('v', 512)),
+('mmm', REPEAT('v', 512)),
+('nnn', REPEAT('v', 512)),
+('uuu01', REPEAT('v', 512)),
+('uuu02', REPEAT('v', 512)),
+('uuu03', REPEAT('v', 512)),
+('uuu04', REPEAT('v', 512)),
+('uuu05', REPEAT('v', 512)),
+('uuu06', REPEAT('v', 512)),
+('uuu07', REPEAT('v', 512)),
+('uuu08', REPEAT('v', 512)),
+('xxx', REPEAT('v', 512));
+
+ANALYZE TABLE records_in_range_test_varchar;
+
+-- echo
+-- echo Test left-unbounded, right-open intervals
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 < 'aaa';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 < 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 < 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 < 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 < 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 < 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 < 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 < 'zzz';
+
+-- echo
+-- echo Test left-unbounded, right-closed intervals
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 <= 'aaa';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 <= 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 <= 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 <= 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 <= 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 <= 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 <= 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 <= 'zzz';
+
+-- echo
+-- echo Test left-open, right-unbounded intervals
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'aaa';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'zzz';
+
+-- echo
+-- echo Test left-closed, right-unbounded intervals
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'aaa';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'zzz';
+
+-- echo
+-- echo Test left-open, right-open intervals
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'aaa' AND c1 < 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'aaa' AND c1 < 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'aaa' AND c1 < 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'aaa' AND c1 < 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'aaa' AND c1 < 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'aaa' AND c1 < 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'aaa' AND c1 < 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'aaa' AND c1 < 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'ccc' AND c1 < 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'ccc' AND c1 < 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'ccc' AND c1 < 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'ccc' AND c1 < 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'ccc' AND c1 < 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'ccc' AND c1 < 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'ccc' AND c1 < 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'ccc' AND c1 < 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'eee' AND c1 < 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'eee' AND c1 < 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'eee' AND c1 < 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'eee' AND c1 < 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'eee' AND c1 < 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'eee' AND c1 < 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'eee' AND c1 < 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'eee' AND c1 < 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'mmm' AND c1 < 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'mmm' AND c1 < 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'mmm' AND c1 < 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'mmm' AND c1 < 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'mmm' AND c1 < 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'mmm' AND c1 < 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'mmm' AND c1 < 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'mmm' AND c1 < 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'nnn' AND c1 < 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'nnn' AND c1 < 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'nnn' AND c1 < 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'nnn' AND c1 < 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'nnn' AND c1 < 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'nnn' AND c1 < 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'nnn' AND c1 < 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'nnn' AND c1 < 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'qqq' AND c1 < 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'qqq' AND c1 < 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'qqq' AND c1 < 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'qqq' AND c1 < 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'qqq' AND c1 < 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'qqq' AND c1 < 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'qqq' AND c1 < 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'qqq' AND c1 < 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'xxx' AND c1 < 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'xxx' AND c1 < 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'xxx' AND c1 < 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'xxx' AND c1 < 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'xxx' AND c1 < 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'xxx' AND c1 < 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'xxx' AND c1 < 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'xxx' AND c1 < 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'zzz' AND c1 < 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'zzz' AND c1 < 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'zzz' AND c1 < 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'zzz' AND c1 < 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'zzz' AND c1 < 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'zzz' AND c1 < 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'zzz' AND c1 < 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'zzz' AND c1 < 'zzz';
+
+-- echo
+-- echo Test left-closed, right-open intervals
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'aaa' AND c1 < 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'aaa' AND c1 < 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'aaa' AND c1 < 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'aaa' AND c1 < 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'aaa' AND c1 < 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'aaa' AND c1 < 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'aaa' AND c1 < 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'aaa' AND c1 < 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'ccc' AND c1 < 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'ccc' AND c1 < 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'ccc' AND c1 < 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'ccc' AND c1 < 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'ccc' AND c1 < 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'ccc' AND c1 < 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'ccc' AND c1 < 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'ccc' AND c1 < 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'eee' AND c1 < 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'eee' AND c1 < 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'eee' AND c1 < 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'eee' AND c1 < 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'eee' AND c1 < 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'eee' AND c1 < 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'eee' AND c1 < 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'eee' AND c1 < 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'mmm' AND c1 < 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'mmm' AND c1 < 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'mmm' AND c1 < 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'mmm' AND c1 < 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'mmm' AND c1 < 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'mmm' AND c1 < 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'mmm' AND c1 < 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'mmm' AND c1 < 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'nnn' AND c1 < 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'nnn' AND c1 < 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'nnn' AND c1 < 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'nnn' AND c1 < 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'nnn' AND c1 < 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'nnn' AND c1 < 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'nnn' AND c1 < 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'nnn' AND c1 < 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'qqq' AND c1 < 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'qqq' AND c1 < 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'qqq' AND c1 < 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'qqq' AND c1 < 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'qqq' AND c1 < 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'qqq' AND c1 < 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'qqq' AND c1 < 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'qqq' AND c1 < 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'xxx' AND c1 < 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'xxx' AND c1 < 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'xxx' AND c1 < 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'xxx' AND c1 < 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'xxx' AND c1 < 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'xxx' AND c1 < 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'xxx' AND c1 < 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'xxx' AND c1 < 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'zzz' AND c1 < 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'zzz' AND c1 < 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'zzz' AND c1 < 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'zzz' AND c1 < 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'zzz' AND c1 < 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'zzz' AND c1 < 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'zzz' AND c1 < 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'zzz' AND c1 < 'zzz';
+
+-- echo
+-- echo Test left-open, right-closed intervals
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'aaa' AND c1 <= 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'aaa' AND c1 <= 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'aaa' AND c1 <= 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'aaa' AND c1 <= 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'aaa' AND c1 <= 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'aaa' AND c1 <= 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'aaa' AND c1 <= 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'aaa' AND c1 <= 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'ccc' AND c1 <= 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'ccc' AND c1 <= 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'ccc' AND c1 <= 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'ccc' AND c1 <= 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'ccc' AND c1 <= 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'ccc' AND c1 <= 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'ccc' AND c1 <= 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'ccc' AND c1 <= 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'eee' AND c1 <= 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'eee' AND c1 <= 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'eee' AND c1 <= 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'eee' AND c1 <= 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'eee' AND c1 <= 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'eee' AND c1 <= 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'eee' AND c1 <= 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'eee' AND c1 <= 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'mmm' AND c1 <= 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'mmm' AND c1 <= 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'mmm' AND c1 <= 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'mmm' AND c1 <= 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'mmm' AND c1 <= 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'mmm' AND c1 <= 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'mmm' AND c1 <= 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'mmm' AND c1 <= 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'nnn' AND c1 <= 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'nnn' AND c1 <= 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'nnn' AND c1 <= 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'nnn' AND c1 <= 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'nnn' AND c1 <= 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'nnn' AND c1 <= 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'nnn' AND c1 <= 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'nnn' AND c1 <= 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'qqq' AND c1 <= 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'qqq' AND c1 <= 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'qqq' AND c1 <= 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'qqq' AND c1 <= 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'qqq' AND c1 <= 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'qqq' AND c1 <= 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'qqq' AND c1 <= 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'qqq' AND c1 <= 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'xxx' AND c1 <= 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'xxx' AND c1 <= 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'xxx' AND c1 <= 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'xxx' AND c1 <= 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'xxx' AND c1 <= 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'xxx' AND c1 <= 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'xxx' AND c1 <= 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'xxx' AND c1 <= 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'zzz' AND c1 <= 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'zzz' AND c1 <= 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'zzz' AND c1 <= 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'zzz' AND c1 <= 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'zzz' AND c1 <= 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'zzz' AND c1 <= 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'zzz' AND c1 <= 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 > 'zzz' AND c1 <= 'zzz';
+
+-- echo
+-- echo Test left-closed, right-closed intervals
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'aaa' AND c1 <= 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'aaa' AND c1 <= 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'aaa' AND c1 <= 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'aaa' AND c1 <= 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'aaa' AND c1 <= 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'aaa' AND c1 <= 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'aaa' AND c1 <= 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'aaa' AND c1 <= 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'ccc' AND c1 <= 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'ccc' AND c1 <= 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'ccc' AND c1 <= 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'ccc' AND c1 <= 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'ccc' AND c1 <= 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'ccc' AND c1 <= 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'ccc' AND c1 <= 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'ccc' AND c1 <= 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'eee' AND c1 <= 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'eee' AND c1 <= 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'eee' AND c1 <= 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'eee' AND c1 <= 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'eee' AND c1 <= 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'eee' AND c1 <= 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'eee' AND c1 <= 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'eee' AND c1 <= 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'mmm' AND c1 <= 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'mmm' AND c1 <= 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'mmm' AND c1 <= 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'mmm' AND c1 <= 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'mmm' AND c1 <= 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'mmm' AND c1 <= 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'mmm' AND c1 <= 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'mmm' AND c1 <= 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'nnn' AND c1 <= 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'nnn' AND c1 <= 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'nnn' AND c1 <= 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'nnn' AND c1 <= 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'nnn' AND c1 <= 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'nnn' AND c1 <= 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'nnn' AND c1 <= 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'nnn' AND c1 <= 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'qqq' AND c1 <= 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'qqq' AND c1 <= 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'qqq' AND c1 <= 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'qqq' AND c1 <= 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'qqq' AND c1 <= 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'qqq' AND c1 <= 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'qqq' AND c1 <= 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'qqq' AND c1 <= 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'xxx' AND c1 <= 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'xxx' AND c1 <= 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'xxx' AND c1 <= 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'xxx' AND c1 <= 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'xxx' AND c1 <= 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'xxx' AND c1 <= 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'xxx' AND c1 <= 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'xxx' AND c1 <= 'zzz';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'zzz' AND c1 <= 'bbb';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'zzz' AND c1 <= 'ccc';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'zzz' AND c1 <= 'eee';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'zzz' AND c1 <= 'mmm';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'zzz' AND c1 <= 'nnn';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'zzz' AND c1 <= 'qqq';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'zzz' AND c1 <= 'xxx';
+SELECT COUNT(*) FROM records_in_range_test_varchar WHERE c1 >= 'zzz' AND c1 <= 'zzz';
+
+DROP TABLE records_in_range_test_varchar;
+
+-- echo 
+-- echo ## TEST INT KEY ##
+-- echo
+CREATE TABLE records_in_range_test_int (
+	c1 INT,
+	c2 VARCHAR(2048),
+	PRIMARY KEY (c1)
+);
+
+# Insert some records so that they cannot fit in one page for some page sizes
+# in order to exercise records_in_range() where 1, 2 or more pages are sampled
+INSERT INTO records_in_range_test_int VALUES
+('111', REPEAT('v', 2048)),
+('2222', REPEAT('v', 2048)),
+('3333', REPEAT('v', 2048)),
+('4444', REPEAT('v', 2048)),
+('5555', REPEAT('v', 2048)),
+('6666', REPEAT('v', 2048)),
+('7777', REPEAT('v', 2048)),
+('8888', REPEAT('v', 2048)),
+('9999', REPEAT('v', 2048)),
+('444', REPEAT('v', 2048)),
+('777', REPEAT('v', 2048)),
+('33333', REPEAT('v', 2048)),
+('44444', REPEAT('v', 2048)),
+('55555', REPEAT('v', 2048)),
+('66666', REPEAT('v', 2048)),
+('77777', REPEAT('v', 2048)),
+('88888', REPEAT('v', 2048)),
+('99999', REPEAT('v', 2048)),
+('88', REPEAT('v', 2048)),
+('77', REPEAT('v', 2048)),
+('999', REPEAT('v', 2048));
+
+ANALYZE TABLE records_in_range_test_int;
+
+-- echo
+-- echo Test left-unbounded, right-open intervals
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 < '111';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 < '222';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 < '444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 < '777';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 < '3333';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 < '8888';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 < '66666';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 < '99999';
+
+-- echo
+-- echo Test left-unbounded, right-closed intervals
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 <= '111';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 <= '222';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 <= '444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 <= '777';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 <= '3333';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 <= '8888';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 <= '66666';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 <= '99999';
+
+-- echo
+-- echo Test left-open, right-unbounded intervals
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '111';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '222';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '777';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '3333';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '8888';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '66666';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '99999';
+
+-- echo
+-- echo Test left-closed, right-unbounded intervals
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '111';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '222';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '777';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '3333';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '8888';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '66666';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '99999';
+
+-- echo
+-- echo Test left-open, right-open intervals
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '111' AND c1 < '444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '111' AND c1 < '999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '111' AND c1 < '3333';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '111' AND c1 < '7777';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '111' AND c1 < '9999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '111' AND c1 < '44444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '111' AND c1 < '77777';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '111' AND c1 < '99999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '111' AND c1 < '999999';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '2222' AND c1 < '4444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '2222' AND c1 < '9999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '2222' AND c1 < '33333';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '2222' AND c1 < '66666';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '2222' AND c1 < '99999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '2222' AND c1 < '999999';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '11111' AND c1 < '22222';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '11111' AND c1 < '44444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '11111' AND c1 < '99999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '11111' AND c1 < '111';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '11111' AND c1 < '999999';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '99999' AND c1 < '999999';
+-- echo
+
+-- echo
+-- echo Test left-closed, right-open intervals
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '111' AND c1 < '444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '111' AND c1 < '999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '111' AND c1 < '3333';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '111' AND c1 < '7777';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '111' AND c1 < '9999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '111' AND c1 < '44444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '111' AND c1 < '77777';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '111' AND c1 < '99999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '111' AND c1 < '999999';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '2222' AND c1 < '4444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '2222' AND c1 < '9999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '2222' AND c1 < '33333';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '2222' AND c1 < '66666';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '2222' AND c1 < '99999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '2222' AND c1 < '999999';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '11111' AND c1 < '22222';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '11111' AND c1 < '44444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '11111' AND c1 < '99999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '11111' AND c1 < '111';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '11111' AND c1 < '999999';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '99999' AND c1 < '999999';
+-- echo
+
+-- echo
+-- echo Test left-open, right-closed intervals
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '111' AND c1 <= '444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '111' AND c1 <= '999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '111' AND c1 <= '3333';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '111' AND c1 <= '7777';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '111' AND c1 <= '9999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '111' AND c1 <= '44444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '111' AND c1 <= '77777';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '111' AND c1 <= '99999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '111' AND c1 <= '999999';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '2222' AND c1 <= '4444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '2222' AND c1 <= '9999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '2222' AND c1 <= '33333';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '2222' AND c1 <= '66666';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '2222' AND c1 <= '99999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '2222' AND c1 <= '999999';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '11111' AND c1 <= '22222';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '11111' AND c1 <= '44444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '11111' AND c1 <= '99999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '11111' AND c1 <= '111';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '11111' AND c1 <= '999999';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 > '99999' AND c1 <= '999999';
+-- echo
+
+-- echo
+-- echo Test left-closed, right-closed intervals
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '111' AND c1 <= '444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '111' AND c1 <= '999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '111' AND c1 <= '3333';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '111' AND c1 <= '7777';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '111' AND c1 <= '9999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '111' AND c1 <= '44444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '111' AND c1 <= '77777';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '111' AND c1 <= '99999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '111' AND c1 <= '999999';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '2222' AND c1 <= '4444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '2222' AND c1 <= '9999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '2222' AND c1 <= '33333';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '2222' AND c1 <= '66666';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '2222' AND c1 <= '99999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '2222' AND c1 <= '999999';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '11111' AND c1 <= '22222';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '11111' AND c1 <= '44444';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '11111' AND c1 <= '99999';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '11111' AND c1 <= '111';
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '11111' AND c1 <= '999999';
+-- echo
+SELECT COUNT(*) FROM records_in_range_test_int WHERE c1 >= '99999' AND c1 <= '999999';
+-- echo
+
+DROP TABLE records_in_range_test_int;

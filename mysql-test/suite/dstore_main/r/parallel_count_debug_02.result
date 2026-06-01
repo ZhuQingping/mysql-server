@@ -1,0 +1,36 @@
+CALL mtr.add_suppression("Out of resources when creating threads");
+CALL mtr.add_suppression("heap scan failed during parallel heap scan");
+CALL mtr.add_suppression("Parallel record counting failed");
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 (
+id INT,
+name VARCHAR(100),
+age INT NOT NULL
+) ENGINE=DSTORE;
+INSERT INTO t1 VALUES (1, 'Alice', 25), (2, 'Bob', 30), (3, 'Charlie', 35);
+# Test 1: thread create failed.
+# Test 1.1: all threads create failed.
+SET SESSION dstore_parallel_read_threads = 4;
+SET SESSION debug = '+d,parallel_reader_create_thread_error_01';
+SELECT COUNT(*) FROM t1;
+COUNT(*)
+10003
+SET SESSION debug = '-d,parallel_reader_create_thread_error_01';
+# Test 1.2: some threads create failed.
+SET SESSION dstore_parallel_read_threads = 4;
+SET SESSION debug = '+d,parallel_reader_create_thread_error_02';
+SELECT COUNT(*) FROM t1;
+COUNT(*)
+10003
+SET SESSION debug = '-d,parallel_reader_create_thread_error_02';
+#
+# Test 2: Cleanup
+#
+# 2.1 drop all tables
+DROP TABLE t1;
+# 2.2 retore parameter value.
+SET GLOBAL dstore_parallel_read_threads = 4;
+SET SESSION dstore_parallel_read_threads = 4;
+#
+# Test completed successfully
+#

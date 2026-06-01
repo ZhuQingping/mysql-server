@@ -1,0 +1,525 @@
+#
+# Bug 21922176 - PREBUILT->SEARCH_TUPLE CREATED WITHOUT INCLUDING
+# THE NUMBER OF VIRTUAL COLUMNS
+#
+CREATE TABLE t1 (a INT, a1 INT GENERATED ALWAYS AS (a) VIRTUAL, a2 INT
+GENERATED ALWAYS AS (a) VIRTUAL, a3 INT GENERATED ALWAYS AS (a) VIRTUAL, a4
+INT GENERATED ALWAYS AS (a) VIRTUAL, a5 INT GENERATED ALWAYS AS (a) VIRTUAL,
+a6 INT GENERATED ALWAYS AS (a) VIRTUAL, a7 INT GENERATED ALWAYS AS (a)
+VIRTUAL, a8 INT GENERATED ALWAYS AS (a) VIRTUAL, a9 INT GENERATED ALWAYS AS
+(a) VIRTUAL, INDEX(a1, a2, a3, a4, a5, a6, a7, a8, a9)) ;
+INSERT INTO t1(a) VALUES(10);
+SELECT * FROM t1 WHERE a1=10 AND a2 = 10 AND a3 =10 AND a4 = 10 AND a5=10 AND
+a6=10 AND a7=10 AND a8=10 AND a9=10;
+a	a1	a2	a3	a4	a5	a6	a7	a8	a9
+10	10	10	10	10	10	10	10	10	10
+DROP TABLE t1;
+#
+# Bug 22572997 - GCOL:INNODB: FAILING ASSERTION: N < REC_OFFS_N_FIELDS(
+# OFFSETS)
+#
+SET @@SESSION.sql_mode=0;
+CREATE TABLE t1(
+c1 int(1)AUTO_INCREMENT,
+c2 int(1),
+c3 int(1)GENERATED ALWAYS AS ((c2 + c2)) VIRTUAL,
+c4 int(1)GENERATED ALWAYS AS ((c3 + c2)) VIRTUAL,
+c5 date,
+c6 date GENERATED ALWAYS AS((c5 + interval 30 day)) VIRTUAL,
+c7 DATE,
+c8 time,
+c9 DATE GENERATED ALWAYS AS(addtime(c7,c8)) VIRTUAL,
+c10 time GENERATED ALWAYS AS(addtime(c7,c8)) VIRTUAL,
+c11 DATE GENERATED ALWAYS AS(addtime(c9,c8)) VIRTUAL,
+c12 CHAR(1),
+c13 CHAR(1)GENERATED ALWAYS AS (concat(c12,c12)) VIRTUAL,
+c14 CHAR(2)GENERATED ALWAYS AS (concat(c13,'x')) VIRTUAL,
+PRIMARY KEY(c1),
+KEY c4_6(c4,c11)
+)ENGINE=Dstore DEFAULT CHARSET=latin1;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+CREATE TABLE t2(
+c1 int(1)AUTO_INCREMENT,
+c2 int(1),
+c3 int(1)GENERATED ALWAYS AS ((c2 + c2)) VIRTUAL,
+c4 int(1)GENERATED ALWAYS AS ((c3 + c2)) VIRTUAL,
+c5 date,
+c6 date GENERATED ALWAYS AS((c5 + interval 30 day)) VIRTUAL,
+c6a date GENERATED ALWAYS AS((c6 + interval 30 day)) VIRTUAL,
+c7 DATE,
+c8 time,
+c9 DATE GENERATED ALWAYS AS(addtime(c7,c8)) VIRTUAL,
+c10 time GENERATED ALWAYS AS(addtime(c7,c8)) VIRTUAL,
+c11 DATE GENERATED ALWAYS AS(addtime(c9,c8)) VIRTUAL,
+c11a time GENERATED ALWAYS AS(addtime(c7,c10)) VIRTUAL,
+c12 CHAR(1),
+c13 CHAR(2)GENERATED ALWAYS AS (concat(c12,c12)) VIRTUAL,
+c14 CHAR(4)GENERATED ALWAYS AS (concat(c13,'x')) VIRTUAL,
+PRIMARY KEY(c1),
+KEY c13(c13),
+KEY c4_6(c4,c11)
+)ENGINE=Dstore DEFAULT CHARSET=latin1;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO t2(c1,c2,c5,c7,c8,c12)VALUES (0,0,0,0,0,'v');
+CREATE TABLE t3(
+c1 int(1)AUTO_INCREMENT,
+c2 int(1),
+c3 int(1)GENERATED ALWAYS AS ((c2 + c2)) VIRTUAL,
+c4 int(1)GENERATED ALWAYS AS ((c3 + c2)) VIRTUAL,
+c5 date,
+c7 DATE,
+c8 time,
+c9 DATE GENERATED ALWAYS AS(addtime(c7,c8)) VIRTUAL,
+c11 DATE GENERATED ALWAYS AS(addtime(c9,c8)) VIRTUAL,
+c12 CHAR(1),
+PRIMARY KEY(c1),
+KEY c4_6(c4,c11)
+)ENGINE=Dstore DEFAULT CHARSET=latin1;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO t3(c1,c2,c5,c7,c8,c12)VALUES
+(0,0,0,0,0,'q'),(0,0,0,0,0,'g'),(0,0,0,0,0,'l'),(0,0,0,0,0,1),(0,0,0,0,0,'v'),
+(0,1,0,0,0,'c'),(0,0,0,0,0,'x');
+UPDATE
+t2 AS O1,t3 AS O2
+SET O1.c12=1
+WHERE O1.c14 NOT IN
+(
+SELECT
+DISTINCT I1.c14 AS y
+FROM t1 AS I1
+ORDER BY I1.c14);
+SET @@SESSION.sql_mode=default;
+DROP TABLE t1, t2, t3;
+#
+# Bug 22650296 - ASSERTION IN INNOBASE_BUILD_COL_MAP, ALTER
+#
+CREATE TABLE `ibstd_08` (
+`nc00577` tinyint(4) DEFAULT NULL,
+`nc07844` varchar(41) DEFAULT NULL,
+`nc04156` char(17) DEFAULT NULL,
+`nc09231` decimal(10,0) NOT NULL,
+`a` int(11) NOT NULL,
+`b` varchar(198) NOT NULL,
+`c` char(187) DEFAULT NULL,
+`vbidxcol` char(3) GENERATED ALWAYS AS (substr(`b`,1,3)) VIRTUAL,
+`nc05121` int(11) NOT NULL DEFAULT '85941481',
+KEY `a` (`a`),
+KEY `b` (`b`(3),`a`),
+KEY `c` (`c`(99),`b`(25)),
+KEY `b_2` (`b`(5),`c`(10),`a`),
+KEY `vbidxcol` (`vbidxcol`),
+KEY `a_2` (`a`,`vbidxcol`),
+KEY `vbidxcol_2` (`vbidxcol`)
+) ENGINE=Dstore;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1831	Duplicate index 'vbidxcol_2' defined on the table 'test.ibstd_08'. This is deprecated and will be disallowed in a future release.
+ALTER TABLE ibstd_08  ADD COLUMN nc07006 BIGINT  AUTO_INCREMENT NOT NULL  , ADD KEY auto_nc07006(nc07006);
+DROP TABLE ibstd_08;
+#
+# Bug 22899305 - GCOLS: FAILING ASSERTION: !(COL->PRTYPE & 256)
+# AND SEGFAULT
+#
+set sql_mode="";
+create table t (a int) ENGINE=Dstore;
+create table s (
+b int generated always as (1) virtual,
+c int,
+d int generated always as (1) virtual not null,
+key (d)
+) ENGINE=Dstore;
+insert into t(a) values ((select d from s for update));
+insert into s(c) values ('');
+Warnings:
+Warning	1366	Incorrect integer value: '' for column 'c' at row 1
+SET sql_mode = default;
+drop table if exists t,s;
+CREATE TABLE t1 (
+col1 int(11) NOT NULL,
+col2 int(11) DEFAULT NULL,
+col3 int(11) NOT NULL,
+col4 int(11) DEFAULT NULL,
+col5 int(11) GENERATED ALWAYS AS ((col2 - col4)) VIRTUAL,
+col6 int(11) GENERATED ALWAYS AS ((col5 + col1)) VIRTUAL,
+col7 bigint(20) GENERATED ALWAYS AS ((col2 / col1)) VIRTUAL,
+col8 int(11) GENERATED ALWAYS AS ((col5 % col5)) VIRTUAL,
+col9 varchar(255),
+KEY idx1 (col5 DESC),
+KEY idx2 (col6)
+) ENGINE=Dstore DEFAULT CHARSET=latin1;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `col1` int NOT NULL,
+  `col2` int DEFAULT NULL,
+  `col3` int NOT NULL,
+  `col4` int DEFAULT NULL,
+  `col5` int GENERATED ALWAYS AS ((`col2` - `col4`)) VIRTUAL,
+  `col6` int GENERATED ALWAYS AS ((`col5` + `col1`)) VIRTUAL,
+  `col7` bigint GENERATED ALWAYS AS ((`col2` / `col1`)) VIRTUAL,
+  `col8` int GENERATED ALWAYS AS ((`col5` % `col5`)) VIRTUAL,
+  `col9` varchar(255) DEFAULT NULL,
+  KEY `idx1` (`col5` DESC),
+  KEY `idx2` (`col6`)
+) ENGINE=Dstore DEFAULT CHARSET=latin1
+CHECK TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	check	note	The storage engine for the table doesn't support check
+INSERT INTO t1(col1, col2, col3, col4, col9) VALUES (10, 50, 40, 300, "lope");
+INSERT INTO t1(col1, col2, col3, col4, col9) VALUES (100, 3240, 4000, 11, "dskf");
+INSERT INTO t1(col1, col2, col3, col4, col9) VALUES (5, 400, 20, 900, "hqal");
+SELECT * FROM t1;
+col1	col2	col3	col4	col5	col6	col7	col8	col9
+10	50	40	300	-250	-240	5	0	lope
+100	3240	4000	11	3229	3329	32	0	dskf
+5	400	20	900	-500	-495	80	0	hqal
+SELECT col5 FROM t1;
+col5
+-250
+-500
+3229
+SELECT col6 FROM t1;
+col6
+-240
+-495
+3329
+SELECT col7 FROM t1;
+col7
+32
+5
+80
+ALTER TABLE t1 ADD INDEX idx3 (col7 DESC);
+CHECK TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	check	note	The storage engine for the table doesn't support check
+SELECT col7 FROM t1;
+col7
+32
+5
+80
+SELECT col7 FROM t1;
+col7
+32
+5
+80
+ALTER TABLE t1 DROP INDEX idx3, ADD INDEX idx3 (col7 ASC);
+CHECK TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	check	note	The storage engine for the table doesn't support check
+SELECT col7 FROM t1;
+col7
+32
+5
+80
+DROP TABLE t1;
+#
+# Bug 23014521 - mysqld crash at row_upd_sec_index_entry_low
+#
+SET @org_mode=@@sql_mode;
+SET @@sql_mode='';
+CREATE TABLE t1 (
+col1 varchar(32),
+col3 varchar(32),
+col4 varchar(32),
+col5 varchar(32) GENERATED ALWAYS AS ((col1 - col4)) VIRTUAL,
+col5x varchar(32) GENERATED ALWAYS AS ((col1 / col3)) VIRTUAL,
+col9 varchar(32),
+col2b varchar(32) GENERATED ALWAYS AS ((col5x / col5)) VIRTUAL,
+KEY idx7 (col9(10), col5(5)),
+KEY idx10 (col9(10), col2b(5))
+) ENGINE=Dstore;
+INSERT INTO t1 (col1,col3,col4,col9) VALUES (REPEAT('a',20),REPEAT('a',20),REPEAT('a',20),REPEAT('a',20));
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'aaaaaaaaaaaaaaaaaaaa'
+Warning	1292	Truncated incorrect DOUBLE value: 'aaaaaaaaaaaaaaaaaaaa'
+Warning	1292	Truncated incorrect DOUBLE value: 'aaaaaaaaaaaaaaaaaaaa'
+Warning	1292	Truncated incorrect DOUBLE value: 'aaaaaaaaaaaaaaaaaaaa'
+UPDATE t1 SET col1 = 50;
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'aaaaaaaaaaaaaaaaaaaa'
+Warning	1292	Truncated incorrect DOUBLE value: 'aaaaaaaaaaaaaaaaaaaa'
+Warning	1292	Truncated incorrect DOUBLE value: 'aaaaaaaaaaaaaaaaaaaa'
+Warning	1292	Truncated incorrect DOUBLE value: 'aaaaaaaaaaaaaaaaaaaa'
+Warning	1292	Truncated incorrect DOUBLE value: 'aaaaaaaaaaaaaaaaaaaa'
+Warning	1292	Truncated incorrect DOUBLE value: 'aaaaaaaaaaaaaaaaaaaa'
+Warning	1292	Truncated incorrect DOUBLE value: 'aaaaaaaaaaaaaaaaaaaa'
+Warning	1292	Truncated incorrect DOUBLE value: 'aaaaaaaaaaaaaaaaaaaa'
+Warning	1292	Truncated incorrect DOUBLE value: 'aaaaaaaaaaaaaaaaaaaa'
+DELETE FROM t1;
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'aaaaaaaaaaaaaaaaaaaa'
+Warning	1292	Truncated incorrect DOUBLE value: 'aaaaaaaaaaaaaaaaaaaa'
+Warning	1292	Truncated incorrect DOUBLE value: 'aaaaaaaaaaaaaaaaaaaa'
+Warning	1292	Truncated incorrect DOUBLE value: 'aaaaaaaaaaaaaaaaaaaa'
+Warning	1292	Truncated incorrect DOUBLE value: 'aaaaaaaaaaaaaaaaaaaa'
+DROP TABLE t1;
+#
+# BUG 2025102834832 - [virtual column index]Index range scan on a table with some virtual columns using a multi-virtual-column
+#                     index will return a wrong result.(change the virtual columns as stored, the result will be right)
+#
+SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS `t0`;
+Warnings:
+Note	1051	Unknown table 'test.t0'
+CREATE TABLE `t0` (
+`c0` varchar(200) DEFAULT NULL COMMENT 'asdf',
+`c1` varchar(200) DEFAULT NULL COMMENT 'asdf',
+`c2` varchar(200)  DEFAULT NULL COMMENT 'asdf',
+`vc3` varchar(200) GENERATED ALWAYS AS (cast(`c0` as char(30) charset utf8mb4)) VIRTUAL,
+`c4` varchar(200) DEFAULT NULL,
+`c5` varchar(200) DEFAULT NULL,
+`vc6` varchar(200) GENERATED ALWAYS AS (cast(`c5` as char(30) charset utf8mb4)) VIRTUAL,
+`vc7` varchar(200) GENERATED ALWAYS AS (cast(`c1` as char(30) charset utf8mb4)) VIRTUAL,
+`c8` varchar(200) DEFAULT NULL,
+`c9` varchar(200) DEFAULT NULL,
+`c10` varchar(200) DEFAULT NULL,
+UNIQUE KEY `c0` (`c0`),
+UNIQUE KEY `c1` (`c1`),
+UNIQUE KEY `c2` (`c2`),
+UNIQUE KEY `c4` (`c4`),
+UNIQUE KEY `c5` (`c5`),
+UNIQUE KEY `c8` (`c8`),
+UNIQUE KEY `c9` (`c9`),
+UNIQUE KEY `c10` (`c10`),
+KEY `i0` (`c9`,`c2`(2)) USING BTREE,
+KEY `i1` (`c0`(2),`c5`) USING BTREE,
+KEY `i48` (`c4`,`c5`(4)),
+KEY `i7` (`c1`(4),`c5`(2) DESC,`c2`,`c4`(2)),
+KEY `i2` (`vc7`(2) DESC,`vc6`) USING BTREE,
+KEY `i5` (`c1`(3),`vc6` DESC,`vc3`(2) DESC,`c10`(2),`c2`(2)),
+KEY `i6` (`vc7`,`vc6`(4) DESC,`c5`(4)) USING BTREE
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci MAX_ROWS=4294967295 STATS_PERSISTENT=1;
+INSERT INTO `t0` (`c0`, `c1`, `c2`, `c4`, `c5`, `c8`, `c9`, `c10`) VALUES (NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),('10000',NULL,NULL,NULL,'外键测试',NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,'1外键测试',NULL),('1024',NULL,NULL,NULL,NULL,'1外键测试',NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,'-2147483648',NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,'1024',NULL,NULL,'1024',NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,'1外键测试\0test-foreign-key'),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),('000000000',NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,'000000000',NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),('2147483647',NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,'2147483647'),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,'1024'),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,'NULL','1024',NULL,'-2147483648',NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,'1外键测试\0test-foreign-key',NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,'外键测试0',NULL,'NULL',NULL),(NULL,'1外键测试\0test-foreign-key',NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,'000000000',NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,'10000',NULL,NULL),(NULL,NULL,NULL,NULL,NULL,'外键测试\0',NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,'test-foreign-key\0',NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,'test-foreign-key',NULL,NULL,NULL,NULL,NULL),(NULL,NULL,'0',NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,'外键测试\0',NULL,NULL,NULL,NULL,NULL,'1外键测试'),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,'外键测试0'),(NULL,NULL,NULL,'1外键测试\0test-foreign-key',NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,'1外键测试',NULL,'test-foreign-key',NULL,NULL,NULL),(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),(NULL,NULL,'100',NULL,NULL,NULL,NULL,NULL);
+SET FOREIGN_KEY_CHECKS = 1;
+SELECT t0.c0 AS ref0, t0.c1 AS ref1, t0.c2 AS ref2, t0.vc3 AS ref3, t0.c4 AS ref4, t0.c5 AS ref5, t0.vc6 AS ref6, t0.vc7 AS ref7, t0.c8 AS ref8, t0.c9 AS ref9, t0.c10 AS ref10 FROM t0 WHERE ((t0.vc7) NOT IN (GREATEST(-870041137, "eS~^jW<I!"))) OR ((t0.c8) IS NOT UNKNOWN);
+ref0	ref1	ref2	ref3	ref4	ref5	ref6	ref7	ref8	ref9	ref10
+1024	NULL	NULL	1024	NULL	NULL	NULL	NULL	1外键测试	NULL	NULL
+NULL	NULL	1024	NULL	NULL	NULL	NULL	NULL	1024	NULL	NULL
+NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	000000000	NULL	NULL
+NULL	1外键测试 test-foreign-key	NULL	NULL	NULL	NULL	NULL	1外键测试 test-foreign-key	NULL	NULL	NULL
+NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	10000	NULL	NULL
+NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	外键测试 	NULL	NULL
+NULL	test-foreign-key 	NULL	NULL	NULL	NULL	NULL	test-foreign-key 	NULL	NULL	NULL
+NULL	外键测试 	NULL	NULL	NULL	NULL	NULL	外键测试 	NULL	NULL	1外键测试
+DROP TABLE t0;
+#
+# BUG 2025101529730
+#
+DROP TABLE IF EXISTS `t0`;
+Warnings:
+Note	1051	Unknown table 'test.t0'
+CREATE TABLE `t0` (
+`c2` varchar(500) /*!50606 COLUMN_FORMAT FIXED */ DEFAULT NULL COMMENT 'asdf',
+`vc3` mediumint GENERATED ALWAYS AS (cast(`c2` as signed)) VIRTUAL,
+KEY `i0` (`vc3`,`c2`(3)) USING BTREE
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO `t0` (`c2`) VALUES 
+(NULL), (NULL),
+('Td'), ('-1362252899'), (''),
+('m'), ('P?{5aS'), ('iG'),
+('j<'), ('-1660390593'), (''),
+('1154095541'), ('xkrll'),
+('-801569443'), ('>W'),
+('1977826308'), ('McwH(|%'),
+('0.6453414389533769'), ('<~<h'), ('');
+Warnings:
+Warning	1292	Truncated incorrect INTEGER value: 'Td'
+Warning	1264	Out of range value for column 'vc3' at row 4
+Warning	1292	Truncated incorrect INTEGER value: ''
+Warning	1292	Truncated incorrect INTEGER value: 'm'
+Warning	1292	Truncated incorrect INTEGER value: 'P?{5aS'
+Warning	1292	Truncated incorrect INTEGER value: 'iG'
+Warning	1292	Truncated incorrect INTEGER value: 'j<'
+Warning	1264	Out of range value for column 'vc3' at row 10
+Warning	1292	Truncated incorrect INTEGER value: ''
+Warning	1264	Out of range value for column 'vc3' at row 12
+Warning	1292	Truncated incorrect INTEGER value: 'xkrll'
+Warning	1264	Out of range value for column 'vc3' at row 14
+Warning	1292	Truncated incorrect INTEGER value: '>W'
+Warning	1264	Out of range value for column 'vc3' at row 16
+Warning	1292	Truncated incorrect INTEGER value: 'McwH(|%'
+Warning	1292	Truncated incorrect INTEGER value: '0.6453414389533769'
+Warning	1292	Truncated incorrect INTEGER value: '<~<h'
+Warning	1292	Truncated incorrect INTEGER value: ''
+EXPLAIN FORMAT=TREE SELECT DISTINCT t0.vc3 AS ref0 FROM t0;
+EXPLAIN
+-> Covering index skip scan for deduplication on t0 using i0  (cost=3 rows=11)
+
+SELECT DISTINCT t0.vc3 AS ref0 FROM t0;
+ref0
+NULL
+-8388608
+0
+8388607
+DROP TABLE t0;
+CREATE TABLE `t0` (
+`c0` decimal(10,0) DEFAULT NULL COMMENT 'asdf',
+`c1` double DEFAULT NULL,
+`vc3` varchar(100) GENERATED ALWAYS AS (cast(`c1` as char(30) charset utf8mb4)) VIRTUAL,
+`vc4` decimal(10,0) GENERATED ALWAYS AS (cast(`vc3` as unsigned)) VIRTUAL,
+`c5` tinyint(160) unsigned zerofill  DEFAULT NULL COMMENT 'asdf',
+`c6` float DEFAULT NULL,
+`vc7` varchar(100) GENERATED ALWAYS AS (cast(`c5` as char(30) charset utf8mb4)) VIRTUAL,
+`c8` tinyint(1) DEFAULT NULL COMMENT 'asdf',
+`vc9` tinyint(1) GENERATED ALWAYS AS (cast(`c5` as unsigned)) VIRTUAL,
+UNIQUE KEY `i0` (`c1` DESC,`c5`),
+UNIQUE KEY `i8` (`c0` DESC,`c8`,`vc4`,`c6`) USING BTREE /*!80000 INVISIBLE */,
+UNIQUE KEY `i3` (`c0`,`vc7`(3),`vc4`,`c5`,`c1`,`vc3`,`c6`,`c8`,`vc9`) /*!80000 INVISIBLE */,
+UNIQUE KEY `i6` (`c5`,`vc9`,`c0`,`vc3`(2),`c6`,`vc7`(3),`vc4`,`c8`,`c1`),
+KEY `i2` (`c5`,`c0`,`vc3`(3),`vc9`,`vc4`,`c6`,`c8`,`vc7`,`c1`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci MIN_ROWS=4294967295 AVG_ROW_LENGTH=2009662977 PACK_KEYS=1 STATS_AUTO_RECALC=0 DELAY_KEY_WRITE=1 KEY_BLOCK_SIZE=26693;
+Warnings:
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1478	Storage engine does not support KEY_BLOCK_SIZE. The option is ignored.
+INSERT INTO `t0` (`c0`, `c1`, `c5`, `c6`, `c8`) VALUES (NULL,NULL,NULL,NULL,-128),(NULL,NULL,NULL,NULL,-128),(NULL,NULL,NULL,NULL,-128),(NULL,NULL,NULL,NULL,-128),(NULL,NULL,NULL,NULL,-128),(NULL,0.7898406404387871,NULL,NULL,-128),(NULL,0.49991343780462894,NULL,NULL,-128),(NULL,0.8122295648686259,NULL,NULL,-128),(NULL,NULL,NULL,NULL,127),(NULL,0.655663083855762,NULL,NULL,-128),(NULL,0.36271655640493605,NULL,NULL,127),(NULL,0.6108578157352983,NULL,NULL,-128),(NULL,0.6307627876528052,NULL,NULL,-73),(NULL,0.9771882543042433,NULL,NULL,127),(NULL,821195445,NULL,NULL,-128),(NULL,0.9769891158050414,NULL,NULL,19),(NULL,0.4770107304095551,NULL,NULL,-128),(NULL,0.815188111861759,NULL,NULL,-128),(NULL,0.6547443874532237,NULL,NULL,-128),(NULL,1145473877,NULL,NULL,-128),(1,NULL,NULL,NULL,-128),(0,NULL,NULL,NULL,127),(252967036,NULL,NULL,NULL,-128),(1,NULL,NULL,NULL,127),(-761717393,NULL,NULL,NULL,-128),(0,0.5053052712194469,0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000033,0.158931,-128),(0,0,NULL,0.995153,127),(1,0.9049899958305185,0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000255,0.146647,-128),(0,0.5727062842865472,0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000255,0.503506,NULL),(0,0.6678569872212523,0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000255,-1222030000,-128),(NULL,0.713391742701408,NULL,0.00942901,NULL),(NULL,663493435,NULL,0.655663,NULL),(NULL,0.29249189150570387,NULL,0.961259,NULL),(NULL,0.5380596859383873,NULL,0.799259,NULL),(NULL,0.4035881502373242,NULL,0.959107,NULL),(NULL,0.3764279005774839,NULL,0.332039,NULL),(NULL,0.009568778559762348,NULL,0.867074,NULL),(NULL,0.23496323876709502,NULL,0.950621,NULL),(NULL,0.1394711662936462,NULL,0.42138,NULL),(NULL,0.4644412989014468,NULL,0.94278,NULL),(1,NULL,0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000,0.904362,-17),(1,NULL,0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000255,0.94522,-128),(-1377851480,NULL,0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000,0.889551,-20),(1,NULL,0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000,0.682481,127),(-1869412226,NULL,NULL,0.777188,127),(1,NULL,NULL,NULL,NULL),(1,NULL,NULL,NULL,NULL),(0,NULL,NULL,NULL,NULL),(1,NULL,NULL,NULL,NULL),(0,NULL,NULL,NULL,NULL);
+Warnings:
+Warning	1292	Truncated incorrect INTEGER value: '0.7898406404387871'
+Warning	1292	Truncated incorrect INTEGER value: '0.49991343780462894'
+Warning	1292	Truncated incorrect INTEGER value: '0.8122295648686259'
+Warning	1292	Truncated incorrect INTEGER value: '0.655663083855762'
+Warning	1292	Truncated incorrect INTEGER value: '0.36271655640493605'
+Warning	1292	Truncated incorrect INTEGER value: '0.6108578157352983'
+Warning	1292	Truncated incorrect INTEGER value: '0.6307627876528052'
+Warning	1292	Truncated incorrect INTEGER value: '0.9771882543042433'
+Warning	1292	Truncated incorrect INTEGER value: '0.9769891158050414'
+Warning	1292	Truncated incorrect INTEGER value: '0.4770107304095551'
+Warning	1292	Truncated incorrect INTEGER value: '0.815188111861759'
+Warning	1292	Truncated incorrect INTEGER value: '0.6547443874532237'
+Warning	1292	Truncated incorrect INTEGER value: '0.5053052712194469'
+Warning	1292	Truncated incorrect CHAR(30) value: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+Warning	1292	Truncated incorrect INTEGER value: '0.9049899958305185'
+Warning	1292	Truncated incorrect CHAR(30) value: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+Warning	1264	Out of range value for column 'vc9' at row 28
+Warning	1292	Truncated incorrect INTEGER value: '0.5727062842865472'
+Warning	1292	Truncated incorrect CHAR(30) value: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+Warning	1264	Out of range value for column 'vc9' at row 29
+Warning	1292	Truncated incorrect INTEGER value: '0.6678569872212523'
+Warning	1292	Truncated incorrect CHAR(30) value: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+Warning	1264	Out of range value for column 'vc9' at row 30
+Warning	1292	Truncated incorrect INTEGER value: '0.713391742701408'
+Warning	1292	Truncated incorrect INTEGER value: '0.29249189150570387'
+Warning	1292	Truncated incorrect INTEGER value: '0.5380596859383873'
+Warning	1292	Truncated incorrect INTEGER value: '0.4035881502373242'
+Warning	1292	Truncated incorrect INTEGER value: '0.3764279005774839'
+Warning	1292	Truncated incorrect INTEGER value: '0.009568778559762348'
+Warning	1292	Truncated incorrect INTEGER value: '0.23496323876709502'
+Warning	1292	Truncated incorrect INTEGER value: '0.1394711662936462'
+Warning	1292	Truncated incorrect INTEGER value: '0.4644412989014468'
+Warning	1292	Truncated incorrect CHAR(30) value: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+Warning	1292	Truncated incorrect CHAR(30) value: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+Warning	1264	Out of range value for column 'vc9' at row 42
+Warning	1292	Truncated incorrect CHAR(30) value: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+Warning	1292	Truncated incorrect CHAR(30) value: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+SET @saved_optimizer_switch = @@optimizer_switch;
+SET SESSION optimizer_switch = 'mrr_cost_based=off';
+SELECT ALL t0.vc7 AS ref0 FROM t0 WHERE t0.c1;
+ref0
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+000000000000000000000000000000
+000000000000000000000000000000
+000000000000000000000000000000
+000000000000000000000000000000
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+Warnings:
+Warning	1292	Truncated incorrect CHAR(30) value: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+Warning	1292	Truncated incorrect CHAR(30) value: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+Warning	1292	Truncated incorrect CHAR(30) value: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+Warning	1292	Truncated incorrect CHAR(30) value: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+SET SESSION optimizer_switch = 'mrr_cost_based=on';
+SELECT ALL t0.vc7 AS ref0 FROM t0 WHERE t0.c1;
+ref0
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+000000000000000000000000000000
+000000000000000000000000000000
+000000000000000000000000000000
+000000000000000000000000000000
+SET @@optimizer_switch = @saved_optimizer_switch;
+DROP TABLE t0;
+CREATE TABLE t1 (
+c1 varchar(10)
+) ENGINE=Dstore;
+insert into t1 values('ab'),('bb');
+CREATE TABLE t2 (
+id int NOT NULL DEFAULT 0,
+c1 int,
+c2 varchar(10),
+KEY idx (((c1 - id)))
+) ENGINE=Dstore;
+INSERT INTO t2 VALUES(1, 3, 'ab'),(2, 4, 'aabb');
+delete from t2 using t2 right join t1 on t2.c2 = t1.c1;
+select * from t2;
+id	c1	c2
+2	4	aabb
+drop table t1,t2;
+SET @@sql_mode=@org_mode;

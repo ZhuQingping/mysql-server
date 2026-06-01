@@ -1,0 +1,135 @@
+create table t(id int, a int, b int, c int,key(id),key(a ,b ,c)) engine=Dstore;
+analyze table t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+analyze table t update histogram on id,a,b,c;
+Table	Op	Msg_type	Msg_text
+test.t	histogram	status	Histogram statistics created for column 'a'.
+test.t	histogram	status	Histogram statistics created for column 'b'.
+test.t	histogram	status	Histogram statistics created for column 'c'.
+test.t	histogram	status	Histogram statistics created for column 'id'.
+show index from t;
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+t	1	id	1	id	A	#	NULL	NULL	YES	BTREE			YES	NULL
+t	1	a	1	a	A	#	NULL	NULL	YES	BTREE			YES	NULL
+t	1	a	2	b	A	#	NULL	NULL	YES	BTREE			YES	NULL
+t	1	a	3	c	A	#	NULL	NULL	YES	BTREE			YES	NULL
+# test print scan key of indx read
+set debug='+d,print_dstore_scankey_info';
+explain select * from t force index(a) where a = 3 and b = 3 and c < 5 order by id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	15	NULL	#	#	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`b` = 3) and (`test`.`t`.`a` = 3) and (`test`.`t`.`c` < 5)) order by `test`.`t`.`id`
+explain format=tree select * from t force index(a) where a = 3 and b = 3 and c < 5 order by id;
+EXPLAIN
+-> Sort: t.id
+    -> Index range scan on t using a over (a = 3 AND b = 3 AND NULL < c < 5)
+
+explain analyze select * from t force index(a) where a = 3 and b = 3 and c < 5 order by id;
+EXPLAIN
+-> Sort: t.id
+    -> Index range scan on t using a over (a = 3 AND b = 3 AND NULL < c < 5)
+
+select * from t force index(a) where a = 3 and b = 3 and c < 5 order by id;
+id	a	b	c
+3	3	3	3
+Pattern "ScanKey_IndexScan" found
+# test print scan key of rescan
+explain select * from t force index(a) where a < 1 or a is null order by a desc,id asc;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	5	NULL	#	#	Using index condition; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` < 1) or (`test`.`t`.`a` is null)) order by `test`.`t`.`a` desc,`test`.`t`.`id`
+explain format=tree select * from t force index(a) where a < 1 or a is null order by a desc,id asc;
+EXPLAIN
+-> Sort: t.a DESC, t.id
+    -> Index range scan on t using a over (NULL <= a < 1), with index condition: ((t.a < 1) or (t.a is null))
+
+explain analyze select * from t force index(a) where a < 1 or a is null order by a desc,id asc;
+EXPLAIN
+-> Sort: t.a DESC, t.id
+    -> Index range scan on t using a over (NULL <= a < 1), with index condition: ((t.a < 1) or (t.a is null))
+
+select * from t force index(a) where a < 1 or a is null order by a desc,id asc;
+id	a	b	c
+0	0	0	0
+-1	-1	-1	-1
+-2	-2	-2	-2
+10	NULL	NULL	NULL
+11	NULL	1	1
+12	NULL	2	2
+13	NULL	3	3
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+Pattern "ScanKey_ScanAgain" found
+set debug='-d,print_dstore_scankey_info';
+# test index locking read
+explain select * from t force index(a) where a < 3 or a is null order by a desc,id asc for update;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	5	NULL	#	#	Using index condition; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id`,`test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b`,`test`.`t`.`c` AS `c` from `test`.`t` FORCE INDEX (`a`) where ((`test`.`t`.`a` < 3) or (`test`.`t`.`a` is null)) order by `test`.`t`.`a` desc,`test`.`t`.`id`
+select * from t force index(a) where a < 3 or a is null order by a desc,id asc for update;
+id	a	b	c
+2	2	2	2
+15	2	NULL	2
+18	2	2	NULL
+1	1	1	1
+14	1	NULL	1
+17	1	1	NULL
+0	0	0	0
+-1	-1	-1	-1
+-2	-2	-2	-2
+10	NULL	NULL	NULL
+11	NULL	1	1
+12	NULL	2	2
+13	NULL	3	3
+20	NULL	NULL	1
+21	NULL	NULL	2
+22	NULL	NULL	3
+set debug='+d,cde_lcktuple_updated_injection';
+select * from t force index(a) where a < 3 or a is null order by a desc,id asc for update;
+id	a	b	c
+set debug='-d,cde_lcktuple_updated_injection';
+set debug='+d,cde_lcktuple_allocid_injection';
+select * from t force index(a) where a < 3 or a is null order by a desc,id asc for update;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+set debug='-d,cde_lcktuple_allocid_injection';
+set debug='+d,cde_lcktuple_deadlk_injection';
+select * from t force index(a) where a < 3 or a is null order by a desc,id asc for update;
+ERROR 40001: Deadlock found when trying to get lock; try restarting transaction
+set debug='-d,cde_lcktuple_deadlk_injection';
+set debug='+d,cde_lcktuple_invis_injection';
+select * from t force index(a) where a < 3 or a is null order by a desc,id asc for update;
+id	a	b	c
+set debug='-d,cde_lcktuple_invis_injection';
+set debug='+d,cde_lcktuple_otherfail_injection';
+select * from t force index(a) where a < 3 or a is null order by a desc,id asc for update;
+ERROR HY000: Got error 168 - 'Unknown (generic) error from engine' from storage engine
+set debug='-d,cde_lcktuple_otherfail_injection';
+#
+# BUG2025052817129: COUNT(*) scenario choose covering index read
+#
+SET debug='+d,print_dstore_scankey_info';
+EXPLAIN SELECT COUNT(0) AS cover_index_read FROM t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	index	NULL	id	5	NULL	25	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `cover_index_read` from `test`.`t`
+SELECT COUNT(0) AS cover_index_read FROM t;
+cover_index_read
+25
+EXPLAIN SELECT COUNT(a) AS non_cover_index_read FROM t WHERE id > 50;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	id	id	5	NULL	1	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t`.`a`) AS `non_cover_index_read` from `test`.`t` where (`test`.`t`.`id` > 50)
+SELECT COUNT(a) AS non_cover_index_read FROM t WHERE id > 50;
+non_cover_index_read
+0
+SET debug='-d,print_dstore_scankey_info';
+Pattern "Dstore index read info, read only index: 1, SQL Query: SELECT COUNT\(0\) AS cover_index_read FROM t" found
+Pattern "Dstore index read info, read only index: 0, SQL Query: SELECT COUNT\(a\) AS non_cover_index_read FROM t WHERE id > 50" found
+drop table t;

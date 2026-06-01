@@ -1,0 +1,22 @@
+#
+# prepare some data
+# 
+create database local_backup_db;
+use local_backup_db;
+create table t1(s varchar(100)) engine=Dstore;
+select count(*) from t1;
+count(*)
+100
+#
+# Case 1. check global read lock and backup on same thd
+#
+FLUSH TABLES WITH READ LOCK;
+#
+# default connection run local_backup
+#
+call rds_backup.start_full_local_backup(0);
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+UNLOCK TABLES;
+drop database local_backup_db;

@@ -1,0 +1,100 @@
+--source include/not_have_only_dstore.inc
+--source include/have_log_bin.inc
+--source include/have_binlog_format_row.inc
+--source include/master-slave.inc
+--echo #
+--echo # add switch rds_maintenance_operation_write_binlog
+--echo # to control ANALYZE/OPTIMIZE/REPAIR write binlog or not
+--echo #
+ 
+--echo # [root] [super & connection_amdin]
+--echo # This user has super & connection_amdin privileges, so
+--echo # analyze/optimize/repair can be execute on the slave node.
+--echo # When rds_maintenance_operation_write_binlog is set to off, these
+--echo # commands can not be recorded in binlog file.
+--echo # "master info"
+--source include/rpl_connection_master.inc
+--disable_warnings
+drop table if exists t1;
+--enable_warnings
+create table t1(id int);
+insert into t1 values(1);
+analyze table t1;
+analyze table t1 update histogram on id;
+optimize table t1;
+repair table t1;
+--echo # analyze/optimize/repair can not be recorded in binlog file
+--echo # after rds_maintenance_operation_write_binlog is set to on.
+set global rds_maintenance_operation_write_binlog=off;
+insert into t1 values(2);
+analyze table t1;
+analyze table t1 update histogram on id;
+optimize table t1;
+repair table t1;
+--let $binlog_file=m-bin.000001
+--source include/show_binlog_events.inc
+set global rds_maintenance_operation_write_binlog=on;
+
+--let $gtid_executed1= `SELECT @@GLOBAL.GTID_EXECUTED`
+
+--echo # "slave info"
+--source include/sync_slave_sql_with_master.inc
+
+--let $gtid_executed2= `SELECT @@GLOBAL.GTID_EXECUTED`
+--let $assert_cond= "$gtid_executed1" = "$gtid_executed2"
+--let $assert_text= No additional transaction is added on slave
+--source include/assert.inc
+
+set global rds_maintenance_operation_write_binlog=off;
+analyze table t1;
+set global rds_maintenance_operation_write_binlog=on;
+analyze table t1;
+analyze table t1 update histogram on id;
+optimize table t1;
+repair table t1;
+--let $binlog_file=s-bin.000001
+--source include/show_binlog_events.inc
+set global rds_maintenance_operation_write_binlog=on;
+ 
+--echo # [common user]
+--echo # This account has the same permission
+--echo # as the root account in the production environment.
+--source include/rpl_connection_master.inc
+create user 'test'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, REFERENCES, INDEX, ALTER, SHOW DATABASES, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER, CREATE ROLE, DROP ROLE ON *.* TO `test`@`localhost` WITH GRANT OPTION;
+GRANT XA_RECOVER_ADMIN, SYSTEM_VARIABLES_ADMIN ON *.* TO 'test'@'localhost' WITH GRANT OPTION;
+create table t2(id int);
+insert into t2 values(1);
+--echo # login into the slave node as user test who does not
+--echo # have super & connection_amdin privileges.
+--source include/sync_slave_sql_with_master.inc
+--echo # "slave info"
+connect (con1, localhost, test, , , $SLAVE_MYPORT, $SLAVE_MYSOCK);
+select current_user();
+select @@global.rds_maintenance_operation_write_binlog;
+set global rds_maintenance_operation_write_binlog=off;
+--error ER_OPTION_PREVENTS_STATEMENT
+analyze table t2;
+analyze table t2 update histogram on id;
+--error ER_OPTION_PREVENTS_STATEMENT
+optimize table t2;
+set global rds_maintenance_operation_write_binlog=on;
+--error ER_OPTION_PREVENTS_STATEMENT
+analyze table t2;
+analyze table t2 update histogram on id;
+--error ER_OPTION_PREVENTS_STATEMENT
+analyze table t2;
+--error ER_OPTION_PREVENTS_STATEMENT
+optimize table t2;
+--let $binlog_file=s-bin.000001
+--source include/show_binlog_events.inc
+set global rds_maintenance_operation_write_binlog=on;
+ 
+--echo "clean up"
+--source include/rpl_connection_master.inc
+drop user 'test'@'localhost';
+drop table t1,t2;
+set global rds_maintenance_operation_write_binlog=on;
+--source include/rpl_connection_slave.inc
+set global rds_maintenance_operation_write_binlog=on;
+--source include/rpl_end.inc

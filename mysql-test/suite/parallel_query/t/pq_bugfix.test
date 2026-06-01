@@ -1,0 +1,1712 @@
+--source include/pq_test.inc
+--source include/elide_costs.inc
+--source include/have_debug.inc
+
+CALL mtr.add_suppression(".*deep copy method is not implemented, will not use parallel query.*");
+
+# to preserve plans:
+--source include/turn_off_join_elimination.inc
+
+## BUG2023051504057
+
+ CREATE TABLE `A` (
+  `id_col` int NOT NULL DEFAULT '0'
+);
+CREATE TABLE `B` (
+  `id_col` int NOT NULL DEFAULT '0'
+);
+
+Explain select CAST(B.id_col AS CHAR), IF(STRCMP(CAST(A.id_col AS UNSIGNED), CAST(B.id_col AS BINARY)), CAST(A.id_col AS UNSIGNED), CAST(B.id_col AS BINARY)) from A join B;
+select CAST(B.id_col AS CHAR), IF(STRCMP(CAST(A.id_col AS UNSIGNED), CAST(B.id_col AS BINARY)), CAST(A.id_col AS UNSIGNED), CAST(B.id_col AS BINARY)) from A join B;
+
+drop table A;
+drop table B;
+
+## BUG2023051802498
+
+CREATE TABLE `t1` (
+  `date_col` date DEFAULT NULL,
+  `id_col` int NOT NULL DEFAULT '0'
+);
+create view v1 as select * from t1;
+select date_col col1,id_col col2 from v1 group by 1,2 having 0=0 or v1.date_col > (select date_col from t1 order by 1 limit 1) order by 1,2;
+
+drop view v1;
+drop table t1;
+
+## BUG2023042502987
+
+CREATE TABLE t1 (c0 INT);
+explain SELECT 1 WHERE (SELECT 1, 2 FROM t1) NOT IN (SELECT 1, 2 FROM (SELECT DISTINCT 1 FROM t1) x(x));
+SELECT 1 WHERE (SELECT 1, 2 FROM t1) NOT IN (SELECT 1, 2 FROM (SELECT DISTINCT 1 FROM t1) x(x));
+
+drop table t1;
+
+## BUG2023060102952
+set sql_mode="";
+
+--disable_warnings
+
+DROP TABLE IF EXISTS `t2`;
+CREATE TABLE `t2` (
+  `id_col` int NOT NULL AUTO_INCREMENT,
+  `tinyint_col` tinyint DEFAULT NULL,
+  `bool_col` tinyint(1) DEFAULT NULL,
+  `smallint_col` smallint DEFAULT NULL,
+  `mediumint_col` mediumint DEFAULT NULL,
+  `int_col` int DEFAULT NULL,
+  `bigint_col` bigint NOT NULL,
+  `decimal_col` decimal(25,5) DEFAULT NULL,
+  `float_col` float DEFAULT NULL,
+  `double_col` double DEFAULT NULL,
+  `date_col` date DEFAULT NULL,
+  `datetime_col` datetime(6) DEFAULT NULL,
+  `timestamp_col` timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  `time_col` time(6) DEFAULT NULL,
+  `year_col` year DEFAULT NULL,
+  `char_col` char(4) CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL,
+  `varchar_col` varchar(255) CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL,
+  `binary_col` binary(11) DEFAULT NULL,
+  `varbinary_col` varbinary(255) DEFAULT NULL,
+  `tinyblob_col` tinyblob,
+  `blob_col` blob,
+  `mediumblob_col` mediumblob,
+  `longblob_col` longblob,
+  `tinytext_col` tinytext CHARACTER SET utf8 COLLATE utf8_unicode_ci,
+  `text_col` text CHARACTER SET utf8 COLLATE utf8_unicode_ci,
+  `mediumtext_col` mediumtext CHARACTER SET utf8 COLLATE utf8_unicode_ci,
+  `longtext_col` longtext CHARACTER SET utf8 COLLATE utf8_unicode_ci,
+  `enum_col` enum('aaa','bbb','ccc') CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL,
+  `set_col` set('111','222','333') CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL,
+  `json_col` json DEFAULT NULL,
+  `bit_col` bit(8) DEFAULT b'0',
+  PRIMARY KEY (`id_col`),
+  KEY `ndx_id_int_col` (`id_col`,`int_col`),
+  KEY `ndx_id_bigint_col` (`id_col`,`bigint_col`),
+  KEY `ndx_id_decimal_col` (`id_col`,`decimal_col`),
+  KEY `ndx_id_float_col` (`id_col`,`float_col`),
+  KEY `ndx_id_datetime_col` (`id_col`,`datetime_col`),
+  KEY `ndx_id_timestamp_col` (`id_col`,`timestamp_col`),
+  KEY `ndx_id_time_col` (`id_col`,`time_col`),
+  KEY `ndx_id_char_col` (`id_col`,`char_col`),
+  KEY `ndx_id_varchar_col` (`id_col`,`varchar_col`(4)),
+  KEY `ndx_int_decimal_col` (`int_col`,`decimal_col`),
+  KEY `ndx_int_float_col` (`int_col`,`float_col`),
+  KEY `ndx_int_datetime_col` (`int_col`,`datetime_col`),
+  KEY `ndx_int_timestamp_col` (`int_col`,`timestamp_col`),
+  KEY `ndx_int_time_col` (`int_col`,`time_col`),
+  KEY `ndx_int_char_col` (`int_col`,`char_col`),
+  KEY `ndx_int_varchar_col` (`int_col`,`varchar_col`(4)),
+  KEY `ndx_bigint_decimal_col` (`bigint_col`,`decimal_col`),
+  KEY `ndx_bigint_float_col` (`bigint_col`,`float_col`),
+  KEY `ndx_bigint_timestamp_col` (`bigint_col`,`timestamp_col`),
+  KEY `ndx_bigint_time_col` (`bigint_col`,`time_col`),
+  KEY `ndx_bigint_char_col` (`bigint_col`,`char_col`),
+  KEY `ndx_bigint_varchar_col` (`bigint_col`,`varchar_col`(4)),
+  KEY `ndx_decimal_float_col` (`decimal_col`,`float_col`),
+  KEY `ndx_decimal_datetime_col` (`decimal_col`,`datetime_col`),
+  KEY `ndx_decimal_timestamp_col` (`decimal_col`,`timestamp_col`),
+  KEY `ndx_decimal_time_col` (`decimal_col`,`time_col`),
+  KEY `ndx_decimal_char_col` (`decimal_col`,`char_col`),
+  KEY `ndx_decimal_varchar_col` (`decimal_col`,`varchar_col`(4)),
+  KEY `ndx_float_datetime_col` (`float_col`,`datetime_col`),
+  KEY `ndx_float_timestamp_col` (`float_col`,`timestamp_col`),
+  KEY `ndx_float_time_col` (`float_col`,`time_col`),
+  KEY `ndx_float_char_col` (`float_col`,`char_col`),
+  KEY `ndx_float_varchar_col` (`float_col`,`varchar_col`(4)),
+  KEY `ndx_datetime_timestamp_col` (`datetime_col`,`timestamp_col`),
+  KEY `ndx_datetime_time_col` (`datetime_col`,`time_col`),
+  KEY `ndx_datetime_char_col` (`datetime_col`,`char_col`),
+  KEY `ndx_datetime_varchar_col` (`datetime_col`,`varchar_col`(4)),
+  KEY `ndx_timestamp_time_col` (`timestamp_col`,`time_col`),
+  KEY `ndx_timestamp_char_col` (`timestamp_col`,`char_col`),
+  KEY `ndx_timestamp_varchar_col` (`timestamp_col`,`varchar_col`(4)),
+  KEY `ndx_time_char_col` (`time_col`,`char_col`),
+  KEY `ndx_time_varchar_col` (`time_col`,`varchar_col`(4)),
+  KEY `ndx_char_varchar_col` (`char_col`,`varchar_col`(4)),
+  KEY `ndx_bit_varchar_col` (`bit_col`,`varchar_col`(4)),
+  KEY `ndx_int_bigint_col` (((`int_col` + `tinyint_col`)),`bigint_col`),
+  KEY `ndx_bigint_datetime_col` (`bigint_col`,(dayofmonth(`datetime_col`)))
+) ENGINE=InnoDB AUTO_INCREMENT=51 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+
+INSERT INTO `t2` VALUES (1,127,1,-32768,-8388608,-2147483648,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1000-01-01','1000-01-01 00:00:00.000000','2023-06-02 01:45:44.983982','24:59:59.000000',1901,'aaaa','bbbbbbbbbaa',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary '\ð'),(2,127,1,-32768,-8388608,-2147483648,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1000-01-01','1000-01-01 00:00:00.000000','2023-06-02 01:45:45.070704','24:59:59.000000',1901,'aaaa','bbbbbbbbbaa',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary 'ª'),(3,127,1,-32768,-8388608,-2147483648,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1000-01-01','1000-01-01 00:00:00.000000','2023-06-02 01:45:45.141051','24:59:59.000000',1901,'aaaa','bbbbbbbbbaa',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary ''),(4,127,1,-32768,-8388608,-2147483648,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1000-01-01','1000-01-01 00:00:00.000000','1970-01-01 00:00:01.123456','24:59:59.000000',1901,'aaaa','bbbbbbbbbaa',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary '\0'),(5,127,1,-32768,-8388608,-2147483648,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1000-01-01','1000-01-01 00:00:00.000000','2023-06-02 01:45:44.944262','24:59:59.000000',1901,'aaaa','bbbbbbbbbaa',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary 'ÿ'),(6,126,1,-32768,-8388608,100,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-12-03','2001-01-01 00:00:00.000000','2023-06-02 01:45:44.983982','23:23:59.000000',1902,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary '\ð'),(7,126,1,-32768,-8388608,100,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-12-03','2001-01-01 00:00:00.000000','2023-06-02 01:45:45.070704','23:23:59.000000',1902,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary 'ª'),(8,126,1,-32768,-8388608,100,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-12-03','2001-01-01 00:00:00.000000','2023-06-02 01:45:45.141051','23:23:59.000000',1902,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary ''),(9,126,1,-32768,-8388608,100,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-12-03','2001-01-01 00:00:00.000000','2020-01-01 02:00:00.000000','23:23:59.000000',1902,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary '\0'),(10,126,1,-32768,-8388608,100,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-12-03','2001-01-01 00:00:00.000000','2023-06-02 01:45:44.944262','23:23:59.000000',1902,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary 'ÿ');
+
+
+DROP TABLE IF EXISTS `t3`;
+CREATE TABLE `t3` (
+  `id_col` int NOT NULL DEFAULT '0',
+  `tinyint_col` tinyint DEFAULT NULL,
+  `bool_col` tinyint(1) DEFAULT NULL,
+  `smallint_col` smallint DEFAULT NULL,
+  `mediumint_col` mediumint DEFAULT NULL,
+  `int_col` int DEFAULT NULL,
+  `bigint_col` bigint NOT NULL,
+  `decimal_col` decimal(25,5) DEFAULT NULL,
+  `float_col` float DEFAULT NULL,
+  `double_col` double DEFAULT NULL,
+  `date_col` date DEFAULT NULL,
+  `datetime_col` datetime(6) DEFAULT NULL,
+  `timestamp_col` timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  `time_col` time(6) DEFAULT NULL,
+  `year_col` year DEFAULT NULL,
+  `char_col` char(4) CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL,
+  `varchar_col` varchar(255) CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL,
+  `binary_col` binary(11) DEFAULT NULL,
+  `varbinary_col` varbinary(255) DEFAULT NULL,
+  `tinyblob_col` tinyblob,
+  `blob_col` blob,
+  `mediumblob_col` mediumblob,
+  `longblob_col` longblob,
+  `tinytext_col` tinytext CHARACTER SET utf8 COLLATE utf8_unicode_ci,
+  `text_col` text CHARACTER SET utf8 COLLATE utf8_unicode_ci,
+  `mediumtext_col` mediumtext CHARACTER SET utf8 COLLATE utf8_unicode_ci,
+  `longtext_col` longtext CHARACTER SET utf8 COLLATE utf8_unicode_ci,
+  `enum_col` enum('aaa','bbb','ccc') CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL,
+  `set_col` set('111','222','333') CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL,
+  `json_col` json DEFAULT NULL,
+  `bit_col` bit(8) DEFAULT b'0',
+  KEY `ndx_id_col` (`id_col` DESC),
+  KEY `ndx_tinyint_col` (`tinyint_col` DESC),
+  KEY `ndx_bool_col` (`bool_col` DESC),
+  KEY `ndx_smallint_col` (`smallint_col` DESC),
+  KEY `ndx_mediumint_col` (`mediumint_col` DESC),
+  KEY `ndx_int_col` (`int_col` DESC),
+  KEY `ndx_bigint_col` (`bigint_col` DESC),
+  KEY `ndx_decimal_col` (`decimal_col` DESC),
+  KEY `ndx_double_col` (`double_col` DESC),
+  KEY `ndx_date_col` (`date_col` DESC),
+  KEY `ndx_datetime_col` (`datetime_col` DESC),
+  KEY `ndx_timestamp_col` (`timestamp_col` DESC),
+  KEY `ndx_time_col` (`time_col` DESC),
+  KEY `ndx_year_col` (`year_col` DESC),
+  KEY `ndx_char_col` (`char_col` DESC),
+  KEY `ndx_binary_col` (`binary_col` DESC),
+  KEY `ndx_enum_col` (`enum_col` DESC),
+  KEY `ndx_set_col` (`set_col` DESC),
+  KEY `ndx_bit_col` (`bit_col` DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+INSERT INTO `t3` VALUES (1,127,1,-32768,-8388608,-2147483648,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1000-01-01','1000-01-01 00:00:00.000000','2023-06-02 01:46:53.382981','24:59:59.000000',1901,'aaaa','bbbbbbbbbaa',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary '\ð'),(2,127,1,-32768,-8388608,-2147483648,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1000-01-01','1000-01-01 00:00:00.000000','2023-06-02 01:46:59.764320','24:59:59.000000',1901,'aaaa','bbbbbbbbbaa',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary 'ª'),(3,127,1,-32768,-8388608,-2147483648,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1000-01-01','1000-01-01 00:00:00.000000','2023-06-02 01:47:05.697602','24:59:59.000000',1901,'aaaa','bbbbbbbbbaa',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary ''),(4,127,1,-32768,-8388608,-2147483648,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1000-01-01','1000-01-01 00:00:00.000000','1970-01-01 00:00:01.123456','24:59:59.000000',1901,'aaaa','bbbbbbbbbaa',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary '\0'),(5,127,1,-32768,-8388608,-2147483648,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1000-01-01','1000-01-01 00:00:00.000000','2023-06-02 01:46:47.781743','24:59:59.000000',1901,'aaaa','bbbbbbbbbaa',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary 'ÿ'),(6,126,1,-32768,-8388608,100,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-12-03','2001-01-01 00:00:00.000000','2023-06-02 01:46:53.382981','23:23:59.000000',1902,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary '\ð'),(7,126,1,-32768,-8388608,100,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-12-03','2001-01-01 00:00:00.000000','2023-06-02 01:46:59.764320','23:23:59.000000',1902,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary 'ª'),(8,126,1,-32768,-8388608,100,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-12-03','2001-01-01 00:00:00.000000','2023-06-02 01:47:05.697602','23:23:59.000000',1902,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary ''),(9,126,1,-32768,-8388608,100,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-12-03','2001-01-01 00:00:00.000000','2020-01-01 02:00:00.000000','23:23:59.000000',1902,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary '\0'),(10,126,1,-32768,-8388608,100,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-12-03','2001-01-01 00:00:00.000000','2023-06-02 01:46:47.781743','23:23:59.000000',1902,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary 'ÿ'),(11,110,1,-32768,-8388608,101,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-11-03','2001-02-01 00:00:00.000000','2023-06-02 01:46:53.382981','10:59:59.000000',1903,'aacd','bbbbbbbbcd',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary '\ð'),(12,110,1,-32768,-8388608,101,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-11-03','2001-02-01 00:00:00.000000','2023-06-02 01:46:59.764320','10:59:59.000000',1903,'aacd','bbbbbbbbcd',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary 'ª'),(13,110,1,-32768,-8388608,101,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-11-03','2001-02-01 00:00:00.000000','2023-06-02 01:47:05.697602','10:59:59.000000',1903,'aacd','bbbbbbbbcd',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary ''),(14,110,1,-32768,-8388608,101,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-11-03','2001-02-01 00:00:00.000000','2020-02-03 02:00:00.000000','10:59:59.000000',1903,'aacd','bbbbbbbbcd',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary '\0'),(15,110,1,-32768,-8388608,101,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-11-03','2001-02-01 00:00:00.000000','2023-06-02 01:46:47.781743','10:59:59.000000',1903,'aacd','bbbbbbbbcd',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary 'ÿ'),(16,108,1,-32768,-8388608,99,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-10-03','2001-03-02 00:00:00.000000','2023-06-02 01:46:53.382981','09:09:59.000000',1904,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary '\ð'),(17,108,1,-32768,-8388608,99,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-10-03','2001-03-02 00:00:00.000000','2023-06-02 01:46:59.764320','09:09:59.000000',1904,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary 'ª'),(18,108,1,-32768,-8388608,99,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-10-03','2001-03-02 00:00:00.000000','2023-06-02 01:47:05.697602','09:09:59.000000',1904,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary ''),(19,108,1,-32768,-8388608,99,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-10-03','2001-03-02 00:00:00.000000','2020-03-02 02:00:00.000000','09:09:59.000000',1904,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary '\0'),(20,108,1,-32768,-8388608,99,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-10-03','2001-03-02 00:00:00.000000','2023-06-02 01:46:47.781743','09:09:59.000000',1904,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary 'ÿ'),(21,98,1,-32768,-8388608,80,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-09-03','2001-04-06 00:00:00.000000','2023-06-02 01:46:53.382981','20:59:59.000000',1905,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary '\ð'),(22,98,1,-32768,-8388608,80,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-09-03','2001-04-06 00:00:00.000000','2023-06-02 01:46:59.764320','20:59:59.000000',1905,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary 'ª'),(23,98,1,-32768,-8388608,80,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-09-03','2001-04-06 00:00:00.000000','2023-06-02 01:47:05.697602','20:59:59.000000',1905,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary ''),(24,98,1,-32768,-8388608,80,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-09-03','2001-04-06 00:00:00.000000','2020-04-04 02:00:00.000000','20:59:59.000000',1905,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary '\0'),(25,98,1,-32768,-8388608,80,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-09-03','2001-04-06 00:00:00.000000','2023-06-02 01:46:47.781743','20:59:59.000000',1905,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary 'ÿ'),(26,87,1,-32768,-8388608,76,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-08-03','2001-05-09 00:00:00.000000','2023-06-02 01:46:53.382981','08:59:59.000000',1906,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary '\ð'),(27,87,1,-32768,-8388608,76,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-08-03','2001-05-09 00:00:00.000000','2023-06-02 01:46:59.764320','08:59:59.000000',1906,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary 'ª'),(28,87,1,-32768,-8388608,76,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-08-03','2001-05-09 00:00:00.000000','2023-06-02 01:47:05.697602','08:59:59.000000',1906,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary ''),(29,87,1,-32768,-8388608,76,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-08-03','2001-05-09 00:00:00.000000','2020-05-06 02:00:00.000000','08:59:59.000000',1906,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary '\0'),(30,87,1,-32768,-8388608,76,-9223372036854775808,-99999999999999999999.99999,-3.40282e38,-1.7976931348623157e308,'1998-08-03','2001-05-09 00:00:00.000000','2023-06-02 01:46:47.781743','08:59:59.000000',1906,'aabb','bbbbbbbbbb',_binary 'cccccccccc1',_binary 'dddddddddd1',_binary 'eeeeeeeeee1',_binary 'ffffffffff1',_binary 'gggggggggg1',_binary 'hhhhhhhhhh1','iiiiiiiiii1','jjjjjjjjjj1','kkkkkkkkkk1','llllllllll1','bbb','111','{\"key2\": 2}',_binary 'ÿ');
+
+--enable_warnings
+
+ANALYZE TABLE t2, t3;
+explain SELECT /*+ BKA() PQ() */ count(B.datetime_col) AS datetime_col, count(B.bigint_col) FROM t3 A  RIGHT JOIN t2 B ON (A.datetime_col = B.datetime_col) AND (A.bigint_col = B.bigint_col);
+SELECT /*+ BKA() PQ() */ count(B.datetime_col) AS datetime_col, count(B.bigint_col) FROM t3 A  RIGHT JOIN t2 B ON (A.datetime_col = B.datetime_col) AND (A.bigint_col = B.bigint_col);
+
+drop table t2;
+drop table t3;
+
+## BUG2023060800235 
+
+CREATE TABLE `t3` (
+  `id_col` int NOT NULL DEFAULT '0',
+  `year_col` year DEFAULT NULL,
+  KEY `ndx_year_col` (`year_col` DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+INSERT INTO `t3` VALUES (88,NULL),(1,1901),(89,1902),(11,1903),(89,1904),(21,1905),(89,1906),(31,1907),(89,1908),(41,1909),(89,1910),(51,1911),(89,1912),(61,1913),(89,2020),(66,2155);
+
+analyze table t3;
+explain SELECT year_col,avg(id_col) FROM t3 GROUP BY 1 order by 1,2;
+SELECT year_col,avg(id_col) FROM t3 GROUP BY 1 order by 1,2;
+
+drop table t3;
+
+## BUG2023060504524
+CREATE TABLE t0 (c0 INT);
+INSERT INTO t0(c0) VALUES (1);
+
+explain SELECT c0 FROM (SELECT t0.c0 FROM t0 tx JOIN t0 GROUP BY t0.c0 WITH ROLLUP) t0(c0) ORDER BY c0;
+SELECT c0 FROM (SELECT t0.c0 FROM t0 tx JOIN t0 GROUP BY t0.c0 WITH ROLLUP) t0(c0) ORDER BY c0;
+
+drop table t0;
+SET sql_mode = DEFAULT;
+
+--echo #
+--echo # BUG2023080801753: Plan clone assertion error
+--echo #
+CREATE TABLE t0 (c0 INT);
+EXPLAIN SELECT 1 FROM t0 LEFT JOIN (SELECT 1) x(x) ON compress(t0.c0) = current_timestamp() WHERE NOT t0.c0;
+SELECT 1 FROM t0 LEFT JOIN (SELECT 1) x(x) ON compress(t0.c0) = current_timestamp() WHERE NOT t0.c0;
+DROP TABLE t0;
+
+--echo #
+--echo # BUG2023080801772: Keyparts error
+--echo #
+CREATE TABLE t0 (c0 INT);
+CREATE TABLE t1 (c0 TEXT, PRIMARY KEY (c0(100)));
+EXPLAIN SELECT 1 FROM t0 JOIN (SELECT 1) x(x) LEFT JOIN t1 ON t1.c0 = concat_ws(1, x.x);
+SELECT 1 FROM t0 JOIN (SELECT 1) x(x) LEFT JOIN t1 ON t1.c0 = concat_ws(1, x.x);
+DROP TABLE t0, t1;
+
+--echo #
+--echo # BUG2023082804292: Index merge intesect causes an inconsistent result error
+--echo #
+CREATE TABLE t5 (
+  bool_col tinyint(1) DEFAULT NULL,
+  int_col int DEFAULT NULL,
+  id int NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (id),
+  KEY ndx_int_col (int_col),
+  KEY ndx_bool_col (bool_col)
+);
+INSERT INTO t5 VALUES (0,131,70),(0,131,71),(0,131,72),(1,65,73),(1,65,74),(1,65,75),(1,65,76),(1,65,77),(0,131,78),(0,131,79),(0,131,80),(1,65,81),(1,65,82),(1,65,83),(1,65,84),(1,65,85),(0,131,86),(0,131,87),(0,131,88),(1,65,89),(1,65,90),(1,65,91),(1,65,92),(1,65,93),(0,131,94),(0,131,95),(0,131,96),(1,65,97),(1,65,98),(1,65,99),(1,65,100);
+
+CREATE TABLE t4 (
+  a int DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO t4 VALUES (1);
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=tree SELECT /*+no_bnl() index_merge(b)*/ 1 FROM t5 b STRAIGHT_JOIN t4 c ON b.bool_col = 0 and b.int_col = 65;
+SELECT /*+no_bnl() index_merge(b)*/ 1 FROM t5 b STRAIGHT_JOIN t4 c ON b.bool_col = 0 and b.int_col = 65;
+DROP TABLE t5, t4;
+
+--echo #
+--echo # BUG2023110204101: Disable parallel query when we have a column pointing to a constant table.
+--echo #
+CREATE TABLE t (c0 INT);
+INSERT INTO t VALUES(2),(1),(3);
+# Parallel query disabled for this query
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=tree SELECT c0, c1 FROM (SELECT -t0.c0 c0, t2.c0 c1 FROM (SELECT 1 c0)t0 JOIN t t1 JOIN t t2) t0 ORDER BY c0, c1;
+SELECT c0, c1 FROM (SELECT -t0.c0 c0, t2.c0 c1 FROM (SELECT 1 c0)t0 JOIN t t1 JOIN t t2) t0 ORDER BY c0, c1;
+# Parallel query disabled for this query
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=tree SELECT -t0.c0 c0, t2.c0 c1 FROM (SELECT 1 c0)t0 JOIN t t1 JOIN t t2 ORDER BY c0, c1;
+SELECT -t0.c0 c0, t2.c0 c1 FROM (SELECT 1 c0)t0 JOIN t t1 JOIN t t2 ORDER BY c0, c1;
+# Parallel query enabled for this query
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=tree SELECT c0, c1 FROM (SELECT t0.c0 c0, t2.c0 c1 FROM (SELECT 1 c0)t0 JOIN t t1 JOIN t t2) t0 ORDER BY c0, c1;
+SELECT c0, c1 FROM (SELECT t0.c0 c0, t2.c0 c1 FROM (SELECT 1 c0)t0 JOIN t t1 JOIN t t2) t0 ORDER BY c0, c1;
+DROP TABLE t;
+
+--echo #
+--echo # BUG2023102503870: Partition assertion error
+--echo #
+CREATE TABLE t0 (c0 INT, c1 INT, c2 MEDIUMBLOB, PRIMARY KEY (c0, c2(100))) PARTITION BY HASH(t0.c0) PARTITIONS 1;
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=tree SELECT c0, c1 FROM t0 ORDER BY c0, c1;
+SELECT c0, c1 FROM t0 ORDER BY c0, c1;
+DROP TABLE t0;
+
+--echo #
+--echo # BUG2023120403228: CTE query SEGV
+--echo #
+WITH t1 (c0) AS (SELECT 1 FROM (SELECT 1) x(x) JOIN (SELECT 1) y(y) ON y.y = x.x WHERE 1 < x.x), t2 (c0) AS ((SELECT 1) UNION (SELECT 1)) SELECT (SELECT 1 FROM t1 JOIN t2 ON tx.c0) FROM t2 tx;
+
+--echo #
+--echo # BUG2023112403840: Parallel execution error 2
+--echo #
+SET @session_start_value = @@COLLATION_CONNECTION;
+CREATE TABLE t0 (c0 INT);
+SET SESSION COLLATION_CONNECTION = utf16_lithuanian_ci;
+SELECT CASE 1 WHEN 1 THEN sec_to_time(t0.c0) END FROM t0;
+DROP TABLE t0;
+SET SESSION COLLATION_CONNECTION = @session_start_value;
+
+--echo #
+--echo # BUG2023080801794: Item field error
+--echo #
+CREATE TABLE t0 (c0 INT);
+INSERT INTO t0 (c0) VALUES (1),(2),(3),(4),(5),(6),(7),(8);
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=tree SELECT SQL_BUFFER_RESULT count(*) FROM (SELECT rank() OVER () FROM t0) x(x);
+SELECT SQL_BUFFER_RESULT count(*) FROM (SELECT rank() OVER () FROM t0) x(x);
+DROP TABLE t0;
+
+--echo #
+--echo # BUG2024020504292: Bit value collation assertion
+--echo #
+CREATE TABLE t0 (c0 INT);
+SELECT _ucs2 b'1' COLLATE ucs2_roman_ci FROM t0;
+DROP TABLE t0;
+
+--echo #
+--echo # BUG2023091504326: Wrong cast result
+--echo #
+CREATE TABLE t0 (c0 TINYINT);
+INSERT INTO t0(c0) VALUES (-30);
+SELECT c0, c1 FROM (SELECT t0.c0, CAST(CONVERT(t0.c0 USING koi8u) AS UNSIGNED) FROM t0) t0 (c0, c1) ORDER BY c0, c1;
+DROP TABLE t0;
+
+--echo #
+--echo # BUG2024022603083: PQ on-disk hash join causes a incorrect result
+--echo #
+CREATE TABLE t0 (
+  mediumint_col mediumint DEFAULT NULL
+);
+
+INSERT INTO t0 VALUES (1),(1),(1),(1),(1),(1),(1),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(8388607),(8388607),(8388607),(8388607),(8388607),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(-8388608),(8388607),(8388607),(8388607),(8388607),(8388607),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1),(1);
+CREATE TABLE t1 (
+  id int DEFAULT NULL,
+  data int DEFAULT NULL
+) ;
+INSERT INTO t1 VALUES (5,2);
+SET @old_pq_support_features_switch = @@pq_support_features_switch;
+SET @old_join_buffer_size = @@join_buffer_size;
+SET join_buffer_size=8192;
+SET pq_support_features_switch='hash_join_spill_to_disk=on';
+
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=tree SELECT count(mediumint_col) AS col4 FROM t0 WHERE EXISTS (SELECT 1 FROM t1 a left JOIN t0 b ON 0=0 left JOIN t0 c ON false ) ;
+SELECT count(mediumint_col) AS col4 FROM t0 WHERE EXISTS (SELECT 1 FROM t1 a left JOIN t0 b ON 0=0 left JOIN t0 c ON false ) ;
+
+SET join_buffer_size=@old_join_buffer_size;
+SET pq_support_features_switch = @old_pq_support_features_switch;
+DROP TABLE t0, t1;
+
+--echo #
+--echo # BUG2024040701906: PQ lead to memory leak in function row_search_mvcc and row_search_no_mvcc
+--echo #
+CREATE TABLE bmsql_order_line (
+  ol_w_id int NOT NULL,
+  ol_d_id int NOT NULL,
+  ol_o_id int NOT NULL,
+  ol_number int NOT NULL,
+  ol_i_id int NOT NULL,
+  ol_delivery_d timestamp NULL DEFAULT NULL,
+  ol_amount decimal(6,2) DEFAULT NULL,
+  ol_supply_w_id int DEFAULT NULL,
+  ol_quantity int DEFAULT NULL,
+  ol_dist_info char(32) DEFAULT NULL,
+  PRIMARY KEY (ol_w_id,ol_d_id,ol_o_id,ol_number)
+);
+
+DELIMITER ||;
+CREATE PROCEDURE insert_data(in n int, in ol_w_id int, in ol_d_id int)
+BEGIN
+DECLARE i int DEFAULT 1;
+WHILE (i <= n) do
+INSERT INTO bmsql_order_line VALUES(ol_w_id,ol_d_id,i,i,round(rand()*100),now(),0,round(rand()*100),1,md5(rand()));
+SET i=i+1;
+END WHILE;
+END ||
+DELIMITER ;||
+
+CALL insert_data(100,1,1);
+CALL insert_data(100,1,2);
+CALL insert_data(100,1,3);
+
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE SELECT sum(ol_amount) AS sum_ol_amount FROM bmsql_order_line WHERE ol_w_id = 1 AND ol_d_id=2;
+SELECT sum(ol_amount) AS sum_ol_amount FROM bmsql_order_line WHERE ol_w_id = 1 AND ol_d_id=2;
+
+# InnoDB intrinsic
+SET @optimizer_switch_saved = @@optimizer_switch;
+SET @@optimizer_switch="derived_merge=off,derived_condition_pushdown=off";
+SET big_tables = 1;
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE SELECT sum(prod) FROM (SELECT t1.ol_d_id + t2.ol_d_id AS prod FROM bmsql_order_line t1, bmsql_order_line t2 WHERE t1.ol_d_id=t2.ol_d_id) t WHERE prod=3;
+SELECT sum(prod) FROM (SELECT t1.ol_d_id + t2.ol_d_id AS prod FROM bmsql_order_line t1, bmsql_order_line t2 WHERE t1.ol_d_id=t2.ol_d_id) t WHERE prod=3;
+
+SET @@optimizer_switch = @optimizer_switch_saved;
+SET big_tables = DEFAULT;
+DROP PROCEDURE insert_data;
+DROP TABLE bmsql_order_line;
+
+--echo #
+--echo # BUG2024050703299: PQ should not work when table fetched rows <= parallel_rows_threshold
+--echo #
+CREATE TABLE t1 (a int DEFAULT NULL, b int DEFAULT NULL);
+CREATE TABLE t2 (a int DEFAULT NULL, b int DEFAULT NULL);
+insert into t1 values(1,2);
+insert into t1 values(2,3);
+insert into t1 values(3,4);
+insert into t2 select * from t1;
+insert into t2 select * from t1;
+insert into t2 select * from t1;
+insert into t2 select * from t1;
+insert into t2 select * from t1;
+analyze table t1,t2;
+set @saved_threshold = @@parallel_rows_threshold;
+
+## hash join scenario
+## choose t2 as divide table, no cut table.
+set session parallel_rows_threshold = 6;
+--replace_regex $elide_costs_and_rows
+explain format=tree select count(*) from t1 join t2 on t1.a=t2.a;
+select count(*) from t1 join t2 on t1.a=t2.a;
+
+## do not choose parallel query.
+set session parallel_rows_threshold = 15;
+--replace_regex $elide_costs_and_rows
+explain format=tree select count(*) from t1 join t2 on t1.a=t2.a;
+select count(*) from t1 join t2 on t1.a=t2.a;
+
+## nested loop join scenario
+alter table t1 add index idx_a(a);
+alter table t2 add index idx_a(a);
+## choose t2 as divide table.
+set session parallel_rows_threshold = 3;
+explain select count(*) from t1 join t2 on t1.a=t2.a;
+select count(*) from t1 join t2 on t1.a=t2.a;
+
+## do not choose parallel query.
+set session parallel_rows_threshold = 10;
+explain select count(*) from t1 join t2 on t1.a=t2.a;
+select count(*) from t1 join t2 on t1.a=t2.a;
+
+## cleanup
+drop table t1,t2;
+set session parallel_rows_threshold = @saved_threshold;
+
+--echo #
+--echo # BUG2023120803343: PQ debug assertion failure in PQ block scan
+--echo #
+create table t0 (c0 int, index i0 (c0));
+insert into t0 values (1);
+analyze table t0;
+set @saved_binlog_format = @@binlog_format;
+set @saved_pq_support_features_switch = @@pq_support_features_switch;
+set pq_support_features_switch='insert_select=on';
+set global binlog_format = 'mixed';
+explain insert into t0 (c0) ((select t0.c0 from t0) union (select t0.c0 from t0 ignore index (i0)));
+insert into t0 (c0) ((select t0.c0 from t0) union (select t0.c0 from t0 ignore index (i0)));
+select count(*) from t0;
+set global binlog_format = @saved_binlog_format;
+set pq_support_features_switch = @saved_pq_support_features_switch;
+drop table t0;
+--echo #
+--echo # BUG2025031214061 Enable PQ and PTRC, execute a VIEW with nested multi-table join query, and the result returned is incorrect.
+--echo #
+
+CREATE VIEW v1
+AS
+SELECT 1 AS `c_d_id`, 1 AS `c_id`, 1 AS `c_middle`, 1 AS `c_street_1`, 1 AS `c_credit`
+	, 1 AS `c_w_id`;
+
+CREATE TABLE `t0` (
+	`C_ID` int NOT NULL,
+	PRIMARY KEY (`C_ID`)
+);
+
+INSERT INTO `t0` VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+
+CREATE TABLE `t1` (
+	`id_col` int NOT NULL AUTO_INCREMENT,
+	`date_col` date DEFAULT NULL,
+	`binary_col` binary(11) DEFAULT NULL,
+	`varbinary_col` varbinary(255) DEFAULT NULL,
+	`timestamp_col` datetime NOT NULL,
+	PRIMARY KEY (`id_col`)
+);
+
+SELECT subq_0.c15 AS c8
+FROM (
+	SELECT acos(CASE 
+			WHEN EXISTS (
+					SELECT ref_2.date_col AS c1
+					FROM t1 ref_2
+					WHERE ref_1.c_credit IS NOT NULL
+				)
+			THEN log2(atan(CAST(NULL AS char)))
+			ELSE log2(atan(CAST(NULL AS char)))
+		END) AS c5
+		, ref_1.c_street_1 AS c15
+	FROM t0 ref_0
+		LEFT JOIN v1 ref_1 ON true
+	WHERE ref_1.c_street_1 IS NOT NULL
+) subq_0
+GROUP BY 1
+ORDER BY 1 DESC;
+
+DROP TABLE t0;
+DROP TABLE t1;
+DROP VIEW v1;
+
+--echo #
+--echo # BUG2024112113744 CREATE TEMPORARY TABLE stuck after run PQ queries
+--echo #
+CREATE TABLE t1 (a INT , b INT , INDEX(b));
+INSERT INTO t1 VALUES (1, 2), (2, 3), (3, 3), (4, 3);
+ANALYZE TABLE t1;
+
+# connection1 
+connect(con1, localhost, root,,);
+connection con1;
+SET big_tables = 1; 
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/
+EXPLAIN FORMAT=TREE SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 0;
+SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 0;
+SET big_tables = DEFAULT; 
+connection default;
+disconnect con1;
+
+# connection2
+connect(con2, localhost, root,,);
+connection con2;
+CREATE TEMPORARY TABLE tmp_tbl (filename varchar(1024));
+connection default;
+disconnect con2;
+
+# cleanup
+DROP TABLE t1;
+
+--echo #
+--echo # BUG2024052800870G After the query statement initiates NDP through force index(primary), PQ did not take effect.
+--echo #
+set @saved_parallel_rows_threshold = @@parallel_rows_threshold;
+# table scan
+CREATE TABLE `account_change_log` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT 'ID',
+  `shop_id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '店铺ID',
+  `user_id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '用户ID',
+  `amount` decimal(20,4) DEFAULT NULL COMMENT '金额',
+  `order_no` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '订单号',
+  `is_delete` int NOT NULL DEFAULT '0' COMMENT '是否删除 0:否 1:是',
+  `recharge_status` int DEFAULT NULL COMMENT '充值状态 1.待处理 2.成功 3.失败',
+  `is_pa` int DEFAULT NULL COMMENT '是否处理过 1 是',
+  `channel` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '渠道 system:系统生成 C:客户生成',
+  PRIMARY KEY (`id`),
+  KEY `idx_channel_userId` (`channel`,`user_id`) USING BTREE,
+  KEY `idx_is_pa_is_delete_recharge_status_channel` (`is_pa`,`is_delete`,`recharge_status`,`channel`)
+) ENGINE=InnoDB AUTO_INCREMENT=11 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='账户变动日志';
+
+INSERT INTO `account_change_log` (
+  `shop_id`, `user_id`, `amount`, `order_no`, `is_delete`, `recharge_status`, `is_pa`, `channel`
+) VALUES
+  ('shop_1', 'user_1', 100.00, 'order_1', 0, 2, 1, 'mshop'),
+  ('shop_1', 'user_2', 200.00, 'order_2', 0, 3, 1, 'mshop'),
+  ('shop_2', 'user_3', 300.00, 'order_3', 0, 2, 1, 'mshop'),
+  ('shop_2', 'user_4', 400.00, 'order_4', 0, 3, 1, 'mshop'),
+  ('shop_3', 'user_5', 500.00, 'order_5', 0, 2, 1, 'mshop'),
+  ('shop_4', 'user_6', 600.00, 'order_6', 1, 1, 0, 'other_channel'),
+  ('shop_5', 'user_7', 700.00, 'order_7', 1, 2, 0, 'other_channel'),
+  ('shop_6', 'user_8', 800.00, 'order_8', 1, 3, 0, 'other_channel'),
+  ('shop_7', 'user_9', 900.00, 'order_9', 1, 1, 0, 'other_channel'),
+  ('shop_8', 'user_10', 1000.00, 'order_10', 1, 2, 0, 'other_channel');
+
+ANALYZE TABLE account_change_log;
+
+SET parallel_rows_threshold=10;
+EXPLAIN FORMAT = tree SELECT shop_id, user_id AS user_id, SUM(amount) AS settled_revenue
+	, COUNT(order_no) AS order_count
+FROM account_change_log FORCE INDEX (PRIMARY)
+WHERE is_delete = 0
+	AND recharge_status IN (2, 3)
+	AND is_pa = 1
+	AND channel = 'mshop'
+GROUP BY shop_id, user_id;
+SELECT shop_id, user_id AS user_id, SUM(amount) AS settled_revenue
+	, COUNT(order_no) AS order_count
+FROM account_change_log FORCE INDEX (PRIMARY)
+WHERE is_delete = 0
+	AND recharge_status IN (2, 3)
+	AND is_pa = 1
+	AND channel = 'mshop'
+GROUP BY shop_id, user_id;
+
+SET parallel_rows_threshold=9;
+EXPLAIN FORMAT = tree SELECT shop_id, user_id AS user_id, SUM(amount) AS settled_revenue
+	, COUNT(order_no) AS order_count
+FROM account_change_log FORCE INDEX (PRIMARY)
+WHERE is_delete = 0
+	AND recharge_status IN (2, 3)
+	AND is_pa = 1
+	AND channel = 'mshop'
+GROUP BY shop_id, user_id;
+SELECT shop_id, user_id AS user_id, SUM(amount) AS settled_revenue
+	, COUNT(order_no) AS order_count
+FROM account_change_log FORCE INDEX (PRIMARY)
+WHERE is_delete = 0
+	AND recharge_status IN (2, 3)
+	AND is_pa = 1
+	AND channel = 'mshop'
+GROUP BY shop_id, user_id;
+
+SET parallel_rows_threshold=0;
+DROP TABLE account_change_log;
+
+# index scan
+CREATE TABLE t0 (i0 INTEGER);
+INSERT INTO t0 VALUES (0),(1),(2),(3),(4);
+CREATE TABLE t1 (f1 INTEGER, f2 INTEGER, f3 INTEGER,
+  KEY(f1), KEY(f1,f2), KEY(f3));
+INSERT INTO t1
+  SELECT i0, i0 + 10*i0,
+    i0 + 10*i0 + 100*i0
+  FROM t0 AS a0;
+INSERT INTO t1
+  SELECT i0, i0 + 10*i0,
+    i0 + 10*i0 + 100*i0
+  FROM t0 AS a0;
+INSERT INTO t1 VALUES (NULL, 1, 2);
+INSERT INTO t1 VALUES (NULL, 1, 3);
+SELECT f1, f2 FROM t1;
+
+ANALYZE TABLE t1;
+
+SET parallel_rows_threshold=4;
+EXPLAIN FORMAT=tree SELECT f1, f2 FROM t1  WHERE f1 > 2 and f2 < 40;
+SELECT f1, f2 FROM t1  WHERE f1 > 2 and f2 < 40;
+
+SET parallel_rows_threshold=3;
+EXPLAIN FORMAT=tree SELECT f1, f2 FROM t1  WHERE f1 > 2 and f2 < 40;
+SELECT f1, f2 FROM t1  WHERE f1 > 2 and f2 < 40;
+DROP TABLE t0,t1;
+set parallel_rows_threshold = @saved_parallel_rows_threshold;
+
+--echo # BUG2022081003200 
+--echo # 3 tests cases
+
+--echo # test 1
+--echo # Bug itself - should not allow to cut the inner/build table because there is a LIMIT_OFFSET access_path.
+--echo # firstmatch alone is not enough to create an issue, the query plan has to convert it to a LIMIT clause
+
+
+--echo # test 2
+--echo # Inner table can be cut (firstmatch but no limit clause)
+--echo # It shows that inner table cutting restriction is not too coarse.
+
+--echo # test 3 
+--echo # FirstMatch is deactivated
+--echo # Should not cut because there is a limit clause in the query plan.
+
+
+--echo # test 1
+CREATE TABLE ta(a int);
+INSERT INTO ta VALUES (2),(2),(2),(2);
+CREATE TABLE tb (b varchar(255),c varchar(255));
+INSERT INTO tb VALUES (1,2),(2,3),(3,3);
+INSERT INTO tb SELECT * FROM tb;
+INSERT INTO tb SELECT * FROM tb;
+INSERT INTO tb SELECT * FROM tb;
+INSERT INTO tb SELECT * FROM tb;
+INSERT INTO tb SELECT * FROM tb;
+INSERT INTO tb SELECT * FROM tb;
+INSERT INTO tb SELECT * FROM tb;
+INSERT INTO tb SELECT * FROM tb;
+
+SET parallel_default_dop=2; 
+--echo # There should not be a parallel table scan of the inner table
+ANALYZE TABLE ta, tb;
+
+SELECT * FROM ta WHERE EXISTS (SELECT * FROM tb);
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=tree SELECT * FROM ta WHERE EXISTS (SELECT * FROM tb);
+
+--echo # test 1 - modified
+
+CREATE TABLE tc (d varchar(255), e varchar(255));
+INSERT INTO tc VALUES (1,2),(2,3),(3,3);
+ANALYZE TABLE tc;
+--echo # Cutting tb returns the wrong answer - cutting tc does not, likely because there
+--echo # are not enough rows in tc: Haven't managed to  get large tc with // scan,
+--echo # but should it happen, it will be a problem. It is therefore not allowed.
+
+--replace_regex $elide_costs_and_rows
+EXPLAIN format=tree SELECT * FROM ta WHERE EXISTS (SELECT * FROM tc,tb);
+SELECT * FROM ta WHERE EXISTS (SELECT * FROM tc,tb);
+
+drop table ta,tb,tc;
+
+--echo # test 2
+--echo # First match is used but no LIMIT_OFFSET access path
+--echo # Therefore not a problem.
+
+CREATE TABLE t1 (
+pk INT NOT NULL,
+col_int_nokey INT,
+col_int_key INT NOT NULL,
+PRIMARY KEY (pk),
+KEY col_int_key (col_int_key)
+) ENGINE=InnoDB;
+
+INSERT INTO t1 VALUES (10,1,7), (11,7,0), (12,4,9), (13,7,3),
+(14,0,4), (15,2,2), (16,9,5), (17,4,3), (18,0,1), (19,9,3), (20,1,6),
+(21,3,7), (22,8,5), (23,8,1), (24,18,204), (25,84,224), (26,6,9),
+(27,3,5), (28,6,0), (29,6,3);
+
+CREATE TABLE t2 ( col_int_nokey INT NOT NULL, col_datetime_key DATETIME NOT NULL, col_varchar_key VARCHAR(1) NOT NULL, KEY col_datetime_key (col_datetime_key), KEY col_varchar_key (col_varchar_key) ) ENGINE=InnoDB; 
+
+INSERT INTO t2 VALUES (1,'2001-11-04 19:07:55','k');
+CREATE TABLE t3 ( col_time_key TIME, KEY col_time_key (col_time_key) ) ENGINE=InnoDB; 
+
+INSERT INTO t3 VALUES ('21:22:34'), ('10:50:38'), ('00:21:38'),
+('04:08:02'), ('16:25:11'), ('10:14:58'), ('19:47:59'), ('11:14:24'),
+('00:00:00'), ('00:00:00'), ('15:57:25'), ('07:05:51'), ('19:22:21'),
+('03:53:16'), ('09:16:38'), ('15:37:26'), ('00:00:00'), ('05:03:03'),
+('02:59:24'), ('00:01:58');
+
+ANALYZE TABLE t1,t2,t3;
+
+--replace_regex $elide_costs_and_rows
+EXPLAIN format=tree SELECT outr.col_int_nokey FROM t2 as outr STRAIGHT_JOIN t3 AS outr2
+ ON outr2.col_time_key > outr.col_datetime_key 
+ WHERE outr.col_int_nokey 
+ IN ( SELECT col_int_key FROM t1 AS innr WHERE innr.pk >= innr.col_int_nokey ) 
+ AND ( outr.col_int_nokey <= 6 OR outr.col_varchar_key IS NULL ); 
+
+drop table t1,t2,t3;
+
+--echo # Test 3 
+--echo # The cut table for the inner hash join cannot be below the LIMIT/OFFSET access path 
+--echo # In addition to FirstMatch, Duplicate Weedout can also add LIMIT iterators to the plan
+SET @saved_optimizer_switch = @@optimizer_switch;
+SET optimizer_switch='firstmatch=off';
+CREATE TABLE t1 (
+  pk INT NOT NULL,
+  col_int_nokey INT,
+  col_int_key INT NOT NULL,
+  KEY col_int_key (col_int_key)
+) ENGINE=InnoDB;
+
+INSERT INTO t1 VALUES (10,1,7), (11,7,0), (12,4,9), (13,7,3),
+(14,0,4), (15,2,2), (16,9,5), (17,4,3), (18,0,1), (19,9,3), (20,1,6),
+(21,3,7), (22,8,5), (23,8,1), (24,18,204), (25,84,224), (26,6,9),
+(27,3,5), (28,6,0), (29,6,3);
+
+CREATE TABLE t2 (
+  col_int_nokey INT NOT NULL,
+  col_datetime_key DATETIME NOT NULL,
+  col_varchar_key VARCHAR(1) NOT NULL,
+  KEY col_datetime_key (col_datetime_key),
+  KEY col_varchar_key (col_varchar_key)
+) ENGINE=InnoDB;
+
+INSERT INTO t2 VALUES (1,'2001-11-04 19:07:55','k');
+
+CREATE TABLE t3 (
+  col_time_key TIME,
+  KEY col_time_key (col_time_key)
+) ENGINE=InnoDB;
+
+INSERT INTO t3 VALUES ('21:22:34'), ('10:50:38'), ('00:21:38'),
+('04:08:02'), ('16:25:11'), ('10:14:58'), ('19:47:59'), ('11:14:24'),
+('00:00:00'), ('00:00:00'), ('15:57:25'), ('07:05:51'), ('19:22:21'),
+('03:53:16'), ('09:16:38'), ('15:37:26'), ('00:00:00'), ('05:03:03'),
+('02:59:24'), ('00:01:58');
+
+ANALYZE TABLE t1;
+ANALYZE TABLE t2;
+ANALYZE TABLE t3;
+
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+
+ANALYZE TABLE t1;
+
+--replace_regex $elide_costs_and_rows
+explain format=tree SELECT outr.col_int_nokey
+FROM t2 as outr
+  STRAIGHT_JOIN t3 AS outr2
+WHERE outr.col_int_nokey IN (
+  SELECT col_int_key
+  FROM t1 AS innr
+);
+
+# This would return 40 rows if the cut table was below the LIMIT/OFFSET access path
+SELECT outr.col_int_nokey
+FROM t2 as outr
+  STRAIGHT_JOIN t3 AS outr2
+WHERE outr.col_int_nokey IN (
+  SELECT col_int_key
+  FROM t1 AS innr
+);
+
+drop table t1,t2,t3;
+
+SET parallel_default_dop = DEFAULT;
+SET optimizer_switch=@saved_optimizer_switch;
+
+--echo #
+--echo # BUG2022101002302: item replace result truncated
+--echo #
+
+create table t1(char_col_1 char(4),char_col_2 char(4),char_col_3 char(4));
+insert into t1 values ('aabb','ab','aabb');
+insert into t1 values ('aabb','ab','aaa2');
+insert into t1 values ('aabb','ab','aaa2');
+insert into t1 values ('aabb','ab','ab');
+
+let $query=
+select char_col_1,char_col_2,char_col_3,replace(char_col_1,char_col_2,char_col_3) c3 from t1;
+
+--replace_regex /cost=[0-9]+.[0-9]+/cost=#.#/ /rows=[0-9]+/rows=##/
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+
+drop table t1;
+
+--echo # A few simple tests that reproduce the issue in BUG2022112303416
+--echo # Before the patch, we return 02:59:59.000000 instead of NULL
+--echo # or foo ( for the IFNULL test)
+
+--echo # The memcpy we added make sure that the correct information 
+--echo # about the nullity of a column is stored in the pq joins. 
+create table t1 ( a  decimal(25,5) DEFAULT NULL, b time(6) DEFAULT NULL, index(b));
+create table t2 ( a  decimal(25,5) DEFAULT NULL, b time(6) DEFAULT NULL, INDEX(b));
+
+insert into  t1 values (1,'02:59:59.000000'),(3,'02:59:59.000001'),(5,'02:59:59.000001');
+insert into  t2 values (1,'02:59:59.000000'),(3,'02:59:59.000001'),(5,'02:59:59.000001');
+
+select  A.a, A.b from t1 A RIGHT JOIN t2 B ON A.b < NULL 
+WHERE A.b IS UNKNOWN OR A.b IN ('02:00:00.000001','02:59:59.000000');
+
+select /*+NO_PQ*/ A.a, A.b from t1 A RIGHT JOIN t2 B ON A.b < NULL 
+WHERE A.b IS UNKNOWN OR A.b IN ('02:00:00.000001','02:59:59.000000');
+
+select  IFNULL(A.b,"foo") from t1 A RIGHT JOIN t2 B ON A.b < NULL  
+WHERE A.b IS UNKNOWN OR A.b IN ('02:00:00.000001','02:59:59.000000');
+
+select /*+NO_PQ*/ IFNULL(A.b,"foo") from t1 A RIGHT JOIN t2 B ON A.b < NULL 
+ WHERE A.b IS UNKNOWN OR A.b IN ('02:00:00.000001','02:59:59.000000');
+
+--replace_regex $elide_costs_and_rows
+explain format=tree select  A.a, A.b from t1 A RIGHT JOIN t2 B ON A.b < NULL 
+WHERE A.b IS UNKNOWN OR A.b IN ('02:00:00.000001','02:59:59.000000');
+
+--replace_regex $elide_costs_and_rows
+explain format=tree select /*+NO_PQ*/ A.a, A.b from t1 A RIGHT JOIN t2 B ON A.b < NULL 
+WHERE A.b IS UNKNOWN OR A.b IN ('02:00:00.000001','02:59:59.000000');
+
+--replace_regex $elide_costs_and_rows
+explain format=tree select  IFNULL(A.b,"foo") from t1 A RIGHT JOIN t2 B ON A.b < NULL  
+WHERE A.b IS UNKNOWN OR A.b IN ('02:00:00.000001','02:59:59.000000');
+
+--replace_regex $elide_costs_and_rows
+explain format=tree select /*+NO_PQ*/ IFNULL(A.b,"foo") from t1 A RIGHT JOIN t2 B ON A.b < NULL 
+ WHERE A.b IS UNKNOWN OR A.b IN ('02:00:00.000001','02:59:59.000000');
+
+drop table t1,t2;
+
+--echo #
+--echo # BUG2022121601147: Materialized table issue
+--echo #
+
+CREATE TABLE `t1` (
+  `c_id` int NOT NULL,
+  `c_d_id` int NOT NULL,
+  `c_w_id` int NOT NULL,
+  `c_discount` decimal(4,4) DEFAULT NULL,
+  PRIMARY KEY (`c_w_id` DESC,`c_d_id` DESC,`c_id` DESC),
+  KEY `ndx_c_discount` (`c_discount` DESC) USING BTREE
+) ENGINE=InnoDB;
+
+CREATE TABLE `alltypecol_t0` (
+ `id_col` int NOT NULL AUTO_INCREMENT,
+ `timestamp_col` timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+ PRIMARY KEY (`id_col` DESC),
+ KEY `ddm_timestamp_col` (`timestamp_col` DESC)
+) ENGINE=InnoDB;
+
+CREATE TABLE `t2` (
+  `id_col` int NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (`id_col` DESC)
+) ENGINE=InnoDB;
+
+CREATE TABLE `range_pt_t0` (
+  `C_KEY` int NOT NULL AUTO_INCREMENT,
+  `C_UINT_ID` int unsigned DEFAULT NULL,
+  `C_PART_ID` tinyint unsigned NOT NULL,
+  PRIMARY KEY (`C_KEY` DESC,`C_PART_ID` DESC),
+  KEY `C_UINT_ID` (`C_UINT_ID` DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+/*!50100 PARTITION BY RANGE (`C_PART_ID`)
+(PARTITION smalldata VALUES LESS THAN (100) ENGINE = InnoDB,
+ PARTITION mediumdata VALUES LESS THAN (200) ENGINE = InnoDB,
+ PARTITION bigdata VALUES LESS THAN (256) ENGINE = InnoDB) */;
+
+ CREATE TABLE `t12` (
+  `C_ID` int NOT NULL DEFAULT '99',
+  `C_D_ID` int NOT NULL,
+  `C_W_ID` bigint NOT NULL,
+  `C_DELIVERY_CNT` tinyint(1) DEFAULT NULL,
+  PRIMARY KEY (`C_ID` DESC,`C_D_ID` DESC),
+  UNIQUE KEY `UNIQUE_index_CREATE_TABLE_PART_RANGE_029_taurus` (`C_ID` DESC,`C_D_ID` DESC,`C_W_ID` DESC) USING BTREE COMMENT 'string',
+  KEY `ndx_C_DELIVERY_CNT` (`C_DELIVERY_CNT` DESC) USING BTREE
+) ENGINE=InnoDB;
+
+CREATE TABLE `key_pt_t0` (
+  `C_KEY` int NOT NULL AUTO_INCREMENT,
+  `C_UINT_ID` int unsigned DEFAULT NULL,
+  `C_PART_ID` tinyint NOT NULL,
+  PRIMARY KEY (`C_KEY` DESC,`C_PART_ID` DESC),
+  KEY `C_UINT_ID` (`C_UINT_ID` DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+/*!50100 PARTITION BY LINEAR KEY (C_PART_ID) PARTITIONS 8 */;
+
+CREATE VIEW `tx_cmplx_0061` AS
+SELECT `subq_0`.`c4` AS `c1`,
+       `subq_0`.`c4` AS `c2`
+FROM (
+        (SELECT `ref_0`.`C_ID` AS `c4`
+         FROM `t12` `ref_0`
+         WHERE (`ref_0`.`C_DELIVERY_CNT` IS NOT NULL)) `subq_0`
+      LEFT JOIN
+        (SELECT `ref_3`.`C_W_ID` AS `c0`
+         FROM (`t12` `ref_1`
+               JOIN (`t12` `ref_3`
+                     LEFT JOIN `t2` `ref_2` on((`ref_2`.`id_col` = `ref_3`.`C_ID`))) on(TRUE))
+         WHERE FALSE) `subq_1` on(FALSE))
+GROUP BY `subq_0`.`c4`,
+         `subq_0`.`c4`;
+
+explain select 1 from
+  t1
+where EXISTS (
+  select
+      1
+    from
+      alltypecol_t0
+        inner join key_pt_t0
+            right join t2
+              right join range_pt_t0
+                left join tx_cmplx_0061
+                on (true)
+              on (EXISTS (
+                      select
+                          1
+                        from
+                          t12
+                        where ((false
+                              or (EXISTS (
+                                select
+                                    1
+                                  from
+                                    t1
+                                  where ((EXISTS (
+                                        select
+                                            1
+                                          from
+                                            t1
+                                          where false
+                                          )))
+                                    or (true)
+                                  ))))
+                        )
+                  )
+            on (true)
+        on (true)
+);
+
+drop table t1,alltypecol_t0,t2,range_pt_t0, t12, key_pt_t0;
+drop view tx_cmplx_0061;
+
+--echo # BUG2022122601304
+--echo # PQ bug: PQ decided to do a block scan instead of a refscan even though 
+--echo # we had a non-constant lookup. The criterion used for the decision making process
+--echo # has been improved, and we now do a refscan in this case. 
+CREATE TABLE `t1` (
+`c_d_id` int(2) unsigned  NOT NULL,
+KEY `ndx_c_d_id` (`c_d_id`) 
+);
+insert into  t1 values (0),(1),(2),(3),(4),(5);
+
+
+let $query=with t0_view(c_d_id) as (select 1) select
+2
+from
+(select
+c_d_id
+from
+t0_view
+) as subq_0
+inner join t1
+on (subq_0.c_d_id = t1.c_d_id)
+;
+eval $query;
+eval EXPLAIN format=tree $query;
+
+
+drop table t1;
+
+--echo # check that it works with several key parts in different orders. 
+--echo # In both cases we do a ref scan. 
+
+--echo # key1 = non constant look up key2= constant look up 
+
+create table t2 (a int unsigned  NOT NULL, b int, index(a,b));
+insert into  t2 values (0,0),(1,1),(2,2),(3,3),(4,4),(5,5);
+
+let $query=  with t0_view(a) as (select 1) select 2 from (select a from t0_view ) as subq_0 inner join t2 on (subq_0.a = t2.a
+and t2.b=1);
+eval $query;
+eval EXPLAIN format=tree $query;
+drop table t2;
+
+--echo # key1 = constant look up key2= non constant look up 
+
+create table t3 (b int, a int unsigned  NOT NULL, index(b,a));
+insert into  t3 values (0,0),(1,1),(2,2),(3,3),(4,4),(5,5);
+let $query =  with t0_view(a) as (select 1) select 2 from (select a from t0_view ) as subq_0 inner join t3 on (subq_0.a = t3.a
+and t3.b=1);
+eval $query;
+eval EXPLAIN format=tree $query;
+drop table t3;
+
+--echo #
+--echo # BUG2023021002770: Crash due to the cloned Item_hex_string do not fixed
+--echo #
+
+CREATE TABLE t0 (c0 INT);
+let $query=
+SELECT CAST(sum(c0) AS SIGNED) FROM (SELECT CAST(X'53673F5D3A5C754449193217177B682E0B16520C7A26281E6271250156' AS CHAR) FROM (SELECT DISTINCT 1 FROM t0) t0(c1)) t0(c0);
+
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+
+DROP TABLE t0;
+
+--echo # BUG2023040403493
+--echo # PQ wrong result; Missing logic for functions when the table is empty
+--echo # the leader is not aware of the constant it should return and defaults to NULL
+--source include/pq_test.inc
+
+CREATE TABLE t0 (c0 INT);
+INSERT INTO t0 (c0) VALUES (1);
+CREATE TABLE t1 (c0 INT);
+explain format=tree SELECT 95 DIV count(*), power(2, (SELECT 1 FROM t0)) FROM t1;
+SELECT 95 DIV count(*), power(2, (SELECT 1 FROM t0)) FROM t1;
+drop table  t0,t1;
+
+--echo #
+--echo # BUG2023050801711 PQ derived table: Enable PQ, SELECT query, nested derived table, subquery in the innermost derived table, union in the outermost derived table, and then join another derived table, which causes the database to crash
+--echo #
+
+CREATE TABLE t1 (int_col INT);
+
+# Simplified query (because tables are empty, hints are necessary to force a plan which exhibits the problem)
+SET parallel_graceful_fallback = off;
+EXPLAIN SELECT /*+ NO_MERGE() */ A.int_col
+FROM (
+       SELECT int_col
+       FROM (SELECT 1) D JOIN t1
+            ON int_col IN (
+                            SELECT /*+ SEMIJOIN(MATERIALIZATION) */ int_col
+                            FROM t1 AS t2
+                          )
+     ) A;
+
+# Original query
+EXPLAIN SELECT A.int_col
+FROM (
+       SELECT int_col
+       FROM (
+              SELECT int_col
+              FROM t1
+              WHERE int_col IN (
+                                 SELECT /*+ SEMIJOIN(MATERIALIZATION) */ int_col
+                                 FROM t1 AS t2
+                               )
+            ) C
+       UNION
+       SELECT int_col FROM t1 AS t3
+     ) A
+     INNER JOIN (SELECT int_col FROM t1 AS t4) B
+     ON A.int_col = B.int_col;
+
+SET parallel_graceful_fallback = on;
+EXPLAIN SELECT /*+ NO_MERGE() */ A.int_col
+FROM (
+       SELECT int_col
+       FROM (SELECT 1) D JOIN t1
+            ON int_col IN (
+                            SELECT /*+ SEMIJOIN(MATERIALIZATION) */ int_col
+                            FROM t1 AS t2
+                          )
+     ) A;
+ 
+EXPLAIN SELECT A.int_col
+FROM (
+       SELECT int_col
+       FROM (
+              SELECT int_col
+              FROM t1
+              WHERE int_col IN (
+                                 SELECT /*+ SEMIJOIN(MATERIALIZATION) */ int_col
+                                 FROM t1 AS t2
+                               )
+            ) C
+       UNION
+       SELECT int_col FROM t1 AS t3
+     ) A
+     INNER JOIN (SELECT int_col FROM t1 AS t4) B
+     ON A.int_col = B.int_col;
+ 
+SET parallel_graceful_fallback = default;
+DROP TABLE t1;
+
+--echo # BUG2023050804370
+--echo # Memory leak : Attempts PQ, does not succeed and fails to free tmp table
+--echo # Compile with asan - pre_fix: will detect indirect memory leaks
+--source include/pq_test.inc
+CREATE TABLE t0 (c0 INT);
+INSERT INTO t0(c0) VALUES (1);
+SELECT c0 FROM (SELECT t0.c0 FROM t0 tx JOIN t0 GROUP BY t0.c0 WITH ROLLUP) t0(c0) ORDER BY c0;
+drop table t0;
+
+--echo # BUG2023051103275: PQ wrong result with derived table that has 
+--echo # a window function and a roll up. Fix stops pq from proceeding. 
+--source include/pq_test.inc
+
+CREATE TABLE t0 (c0 INT PRIMARY KEY);
+INSERT INTO t0(c0) VALUES (7);
+explain format=tree SELECT h0, h1 FROM (SELECT rank() OVER (), t0.c0 FROM t0 GROUP BY t0.c0 WITH ROLLUP) h0 (h0, h1);
+SELECT h0, h1 FROM (SELECT rank() OVER (), t0.c0 FROM t0 GROUP BY t0.c0 WITH ROLLUP) h0 (h0, h1);
+drop table t0;
+
+--echo # BUG2023051203134 PQ HAVING AVG(col) is NULL ("HAVING AVG(col) is NULL" returns wrong result in some specific cases after PQ turns on)
+
+CREATE TABLE t (
+  smallint_col  SMALLINT,
+  enum_col ENUM('aaa','bbb','ccc')
+  );
+
+INSERT INTO t VALUES (32767,'ccc'),(32767,'ccc'),(32767,'ccc'),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(32767,'ccc'),(32767,'ccc'),(32767,'ccc'),(32767,'ccc'),(32767,'ccc'),(1,NULL),(1,NULL),(1,NULL),(1,NULL),(1,NULL),(1,NULL),(1,NULL),(1,NULL),(1,NULL),(1,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL),(NULL,NULL);
+
+ANALYZE TABLE t;
+
+let $query=
+SELECT smallint_col,enum_col FROM t GROUP BY 1,2 HAVING AVG(enum_col) IS NULL ORDER BY 1,2;
+
+--echo # Compare results of PQ and non-PQ
+--echo # In PQ, HAVING was wrongly pushed to the worker
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+
+set force_parallel_execute=off;
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+set force_parallel_execute=default;
+
+DROP TABLE t;
+
+--echo #
+--echo # BUG2023062703392
+--echo #
+--echo # Disable parallel query when we have a column (x.x in this case) 
+--echo # pointing to a constant table. Since we always  set TABLE::const_table
+--echo # to false for workers, the leader and the workers may end up with
+--echo # different number of columns in their temporary tables.
+CREATE TABLE t0 (c0 INT); 
+
+let $query = SELECT DISTINCT CAST(x.x AS UNSIGNED) w
+             FROM t0 JOIN (SELECT count(*)) x(x) ORDER BY w;
+
+eval EXPLAIN FORMAT=tree $query;
+eval $query;
+DROP TABLE t0;
+
+--echo # BUG2023080801777
+--echo # For PQ, it copy the saved condition which is before optimize phase.
+--echo # Optimizer will inject cast nodes into condition. So PQ will have
+--echo # different condition with the origin plan, which causes PQ have
+--echo # wrong result.
+--echo # Fix: inject cast nodes after copy the condition.
+CREATE TABLE t0 (c0 INT, c1 DATETIME(4), c2 INT);
+CREATE TABLE t1 (c0 INT);
+INSERT INTO t0 VALUES (1,'9300-07-02 12:27:20',1);
+INSERT INTO t1 VALUES (2);
+
+EXPLAIN FORMAT=TREE SELECT 1 FROM t1 JOIN t0 ON CASE WHEN (SELECT t0.c0 FROM t0 JOIN (SELECT 1) x(c1) USING (c1) GROUP BY t0.c0) THEN t0.c1 WHEN t1.c0 THEN t0.c2 END <> t0.c1;
+SELECT 1 FROM t1 JOIN t0 ON CASE WHEN (SELECT t0.c0 FROM t0 JOIN (SELECT 1) x(c1) USING (c1) GROUP BY t0.c0) THEN t0.c1 WHEN t1.c0 THEN t0.c2 END <> t0.c1;
+
+DROP TABLE t0, t1;
+
+--echo # BUG2023080801803
+SET SESSION PARALLEL_ROWS_THRESHOLD = 0;
+
+CREATE TABLE t0 (c0 INT, INDEX i0 (c0));
+INSERT INTO t0 VALUES(1),(2),(3);
+
+SELECT DISTINCT c0 FROM t0 ORDER BY log(c0);
+--replace_regex /  \(cost.*//
+EXPLAIN FORMAT=TREE SELECT DISTINCT c0 FROM t0 ORDER BY log(c0);
+SELECT c0 FROM t0 ORDER BY log(c0);
+SELECT DISTINCT c0 FROM t0 ORDER BY c0;
+
+DROP TABLE t0;
+
+--echo # BUG2023110202800
+set @saved_optimizer_switch = @@optimizer_switch;
+set @saved_force_parallel_execute = @@force_parallel_execute;
+
+set optimizer_switch='derived_condition_pushdown=on';
+
+create table t0 (c0 int);
+insert into t0 values (1);
+analyze table t0;
+let $query = select * from (select max(c0),c0 from t0 where t0.c0 = 1) t2(c0,c1) where t2.c1 = 2;
+set force_parallel_execute=off;
+--replace_regex $elide_pq_costs_and_time_and_row_estimate
+eval explain analyze $query;
+eval $query;
+
+set force_parallel_execute=on;
+--replace_regex $elide_pq_costs_and_time_and_row_estimate
+eval explain analyze $query;
+eval $query;
+
+#having_cond has been pushed down to worker.
+let $query = select max(c0), c0 from t0 where c0 = 1 having c0 = 2;
+set force_parallel_execute=off;
+--replace_regex $elide_pq_costs_and_time_and_row_estimate
+eval explain analyze $query;
+eval $query;
+
+set force_parallel_execute=on;
+--replace_regex $elide_pq_costs_and_time_and_row_estimate
+eval explain analyze $query;
+eval $query;
+
+drop table t0;
+
+create table t0 (c0 int);
+create table t1 (c0 int, c1 int);
+insert into t0 values (1);
+analyze table t0;
+analyze table t1;
+
+let $query = select 1 from (select min(t1.c0), any_value(t1.c0) from t1 join t0 where t1.c1 = 1) t2(c0,c1) where t2.c1 is not null;
+set force_parallel_execute=off;
+--replace_regex $elide_pq_costs_and_time_and_row_estimate
+eval explain analyze $query;
+eval $query;
+
+set force_parallel_execute=on;
+--replace_regex $elide_pq_costs_and_time_and_row_estimate
+eval explain analyze $query;
+eval $query;
+
+drop table t0, t1;
+
+#having_cond is not pushed down to worker.
+create table t1(c0 int);
+let $query = select max(c0) as c1, c0 from t1 where (c0 = 1) having c1 is null;
+set force_parallel_execute=off;
+--replace_regex $elide_pq_costs_and_time_and_row_estimate
+eval explain analyze $query;
+eval $query;
+
+set force_parallel_execute=on;
+--replace_regex $elide_pq_costs_and_time_and_row_estimate
+eval explain analyze $query;
+eval $query;
+
+#having_cond has been pushed down to worker.
+let $query = select max(c0), c0 from t1 where c0 = 1 having c0 is NULL;
+set force_parallel_execute=off;
+--replace_regex $elide_pq_costs_and_time_and_row_estimate
+eval explain analyze $query;
+eval $query;
+
+set force_parallel_execute=on;
+--replace_regex $elide_pq_costs_and_time_and_row_estimate
+eval explain analyze $query;
+eval $query;
+
+drop table t1;
+
+#group_optimized_away is true
+create table t0 (c0 int);
+create table t1 (c1 int);
+let $query = select 1 from (select 1 from t0 group by t0.c0) x(x) join t1 on t1.c1 = 1 group by t1.c1 having t1.c1 > 1;
+
+set force_parallel_execute=on;
+--replace_regex $elide_costs_and_rows
+eval explain format=tree $query;
+eval $query;
+
+set force_parallel_execute=off;
+--replace_regex $elide_costs_and_rows
+eval explain format=tree $query;
+eval $query;
+
+drop table t0;
+drop table t1;
+
+set optimizer_switch = @saved_optimizer_switch;
+set force_parallel_execute = @saved_force_parallel_execute;
+
+--echo # BUG2024010805139
+CREATE TABLE t0 (c0 INT);
+--replace_column 10 # 11 #
+EXPLAIN SELECT CONVERT(t0.c0 USING utf16le) x FROM t0 tx JOIN t0 GROUP BY t0.c0 HAVING CONVERT(t0.c0 USING cp932) ORDER BY x;
+DROP TABLE t0;
+
+--echo # BUG2024091006466
+CREATE TABLE tbl_3_all_typeindex (
+  id_col int NOT NULL AUTO_INCREMENT,
+  tinyint_col tinyint DEFAULT NULL,
+  int_col int DEFAULT NULL,
+  bigint_col bigint NOT NULL,
+  double_col double DEFAULT NULL,
+  date_col date DEFAULT NULL,
+  timestamp_col timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY ndx_id_col (id_col),
+  KEY ndx_tinyint_col (tinyint_col),
+  KEY ndx_int_col (int_col),
+  KEY ndx_bigint_col (bigint_col),
+  KEY ndx_double_col (double_col),
+  KEY ndx_timestamp_col (timestamp_col)
+);
+
+INSERT INTO tbl_3_all_typeindex(tinyint_col, int_col, bigint_col, double_col, date_col, timestamp_col) VALUES
+  (126, 100, -9223372036854775808, -1.7976931348623157e308, '1998-12-03', '2024-09-11 17:17:07.414747'),
+  (NULL, 100, -9223372036854775808, -1.7976931348623157e308, '1998-12-03', '2024-09-11 17:17:07.414747'),
+  (127, -2147483648, -9223372036854775808, -1.7976931348623157e308, '1998-12-03', '2024-09-11 17:17:07.414747'),
+  (0, 100, 245, -1.7976931348623157e308, '2020-01-01', '2024-09-11 17:17:07.414747'),
+  (0, 100, -9223372036854775808, -1.7976931348623157e308, '1998-12-03', '2024-09-11 17:17:07.414747'),
+  (0, 100, -9223372036854775808, -2.2250738585072014e-308, '1998-12-03', '2024-09-10 17:17:07.414747');
+
+ANALYZE TABLE tbl_3_all_typeindex;
+
+# query1
+--let $query = SELECT bigint_col FROM tbl_3_all_typeindex WHERE tbl_3_all_typeindex.int_col IN (-2147483648,65,121) GROUP BY bigint_col HAVING tbl_3_all_typeindex.bigint_col IN (92,92,NULL) or COUNT(tbl_3_all_typeindex.bigint_col) IS NULL
+
+set force_parallel_execute=off;
+--replace_regex $elide_costs_and_rows
+--eval EXPLAIN FORMAT=TREE $query
+--eval $query
+
+set force_parallel_execute=on;
+--replace_regex $elide_costs_and_rows
+--eval EXPLAIN FORMAT=TREE $query
+--eval $query
+
+# query2
+--let $query = SELECT bigint_col,date_col FROM tbl_3_all_typeindex GROUP BY bigint_col,date_col HAVING COUNT(tbl_3_all_typeindex.date_col) IS NOT NULL and tbl_3_all_typeindex.bigint_col = 245;
+
+set force_parallel_execute=off;
+--replace_regex $elide_costs_and_rows
+--eval EXPLAIN FORMAT=TREE $query
+--eval $query
+
+set force_parallel_execute=on;
+--replace_regex $elide_costs_and_rows
+--eval EXPLAIN FORMAT=TREE $query
+--eval $query
+
+# query3
+--let $query = SELECT double_col,timestamp_col FROM tbl_3_all_typeindex WHERE tbl_3_all_typeindex.double_col IN (NULL,-1.7976931348623157e308,-2.2250738585072014e-308) GROUP BY double_col,timestamp_col HAVING COUNT(tbl_3_all_typeindex.timestamp_col) IS NOT NULL and tbl_3_all_typeindex.double_col = 0;
+
+set force_parallel_execute=off;
+--replace_regex $elide_costs_and_rows
+--eval EXPLAIN FORMAT=TREE $query
+--eval $query
+
+set force_parallel_execute=on;
+--replace_regex $elide_costs_and_rows
+--eval EXPLAIN FORMAT=TREE $query
+--eval $query
+
+# query4
+--let $query = SELECT tinyint_col FROM tbl_3_all_typeindex GROUP BY tinyint_col HAVING COUNT(tbl_3_all_typeindex.tinyint_col) IS NULL or tbl_3_all_typeindex.tinyint_col NOT LIKE '127%';
+
+set force_parallel_execute=off;
+--replace_regex $elide_costs_and_rows
+--eval EXPLAIN FORMAT=TREE $query
+--eval $query
+
+set force_parallel_execute=on;
+--replace_regex $elide_costs_and_rows
+--eval EXPLAIN FORMAT=TREE $query
+--eval $query
+
+DROP TABLE tbl_3_all_typeindex;
+
+--echo # BUG2024092003503
+create table test3(id int, C_END int, c_w_id int);
+insert into test3 values(1,NULL,1);
+create table t5(id int);
+insert into t5 values(1);
+
+--let $query = select c1 c6, cast(c6 as char) from (select (select c_w_id from test3 limit 1) c1, (select C_END from test3 limit 1) c6 from t5) subq_0 limit 1;
+--eval explain $query
+--eval $query
+
+set force_parallel_execute=off;
+--eval explain $query
+--eval $query
+
+set force_parallel_execute=on;
+drop table test3;
+drop table t5;
+
+--echo # BUG2024111213917
+CREATE TABLE `t1` (
+  `id_col` int NOT NULL DEFAULT '0',
+  `bool_col` tinyint(1) DEFAULT NULL,
+  `timestamp_col` timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  `bit_col` bit(8) DEFAULT b'0'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+eval load data infile '../../std_data/BUG2024111213917.dat' into table t1 fields TERMINATED BY ',' lines terminated by '\n';
+
+set @saved_force_parallel_execute=@@force_parallel_execute;
+set force_parallel_execute=0;
+let query = SELECT
+    bool_col, timestamp_col, MIN(bit_col), count(*) FROM t1 GROUP BY 1,2 HAVING MIN(bit_col) <= 1
+    ORDER BY 1,2 limit 5;
+
+--replace_column 10 # 11 #
+eval explain $query;
+eval $query;
+eval $query;
+eval $query;
+
+set force_parallel_execute=1;
+--replace_column 10 # 11 #
+eval explain $query;
+eval $query;
+eval $query;
+eval $query;
+
+drop table t1;
+
+#Reset
+set force_parallel_execute = @saved_force_parallel_execute;
+
+--echo # BUG2024120318122
+set @saved_sql_mode=@@sql_mode;
+
+CREATE TABLE `tbl_1_all_typeindex_desc` (
+  `id_col` int NOT NULL AUTO_INCREMENT,
+  `tinyint_col` tinyint DEFAULT NULL,
+  `bool_col` tinyint(1) DEFAULT NULL,
+  `binary_col` binary(11) DEFAULT NULL,
+  PRIMARY KEY (`id_col` DESC)
+);
+INSERT INTO `tbl_1_all_typeindex_desc` VALUES (1398654,14,6,_binary 'Jeremy Hunt'),(1398653,3,9,_binary 'Joshua Roge'),(1398652,2,11,_binary 'Anna Bailey'),(1398651,6,1,_binary 'Mary Lynch\0'),(1398650,11,12,_binary 'John Peters'),(1398649,4,3,_binary 'Judy Wheele'),(1398648,9,6,_binary 'Mrs. Ms. Mi'),(1398647,4,3,_binary 'Elizabeth N'),(1398646,8,8,_binary 'Cheryl Carr'),(1398645,3,3,_binary 'Rachel Dunc'),(1398644,2,9,_binary 'Clarence Br'),(1398643,10,11,_binary 'Mrs. Ms. Mi'),(1398642,12,2,_binary 'Mr. Dr. Geo'),(1398641,0,10,_binary 'Jerry Armst'),(1398640,11,13,_binary 'Joyce Green'),(1398639,2,10,_binary 'Lois Dean\0\0'),(1398638,13,14,_binary 'Paul Chapma'),(1398637,13,11,_binary 'Steven Adam'),(1398636,13,3,_binary 'Denise Pere'),(1398635,1,4,_binary 'Gloria Andr'),(1398634,12,0,_binary 'Michelle Mo'),(1398633,7,3,_binary 'Alice Burns'),(1398632,6,7,_binary 'Aaron Reid\0'),(1398631,8,11,_binary 'Diana Lynch'),(1398630,9,11,_binary 'Lori Boyd\0\0'),(1398629,13,2,_binary 'Victor Wood'),(1398628,7,10,_binary 'Kenneth Bry'),(1398627,5,9,_binary 'Mr. Dr. Rob'),(1398626,8,2,_binary 'Scott Carr\0'),(1398625,13,8,_binary 'Denise Meye'),(1398624,12,4,_binary 'Michelle Pe');
+
+CREATE TABLE `tbl_1_all_type2index` (
+  `id_col` int NOT NULL AUTO_INCREMENT,
+  `bool_col` tinyint(1) DEFAULT NULL,
+  `int_col` int DEFAULT NULL,
+  `char_col` char(4) CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL,
+  PRIMARY KEY (`id_col`),
+  KEY `ndx_int_char_col` (`int_col`,`char_col`)
+);
+INSERT INTO `tbl_1_all_type2index` VALUES (1,1,-2147483648,'aaaa'),(2,1,-2147483648,'aaaa'),(3,1,-2147483648,'aaaa'),(4,1,-2147483648,'aaaa'),(5,1,-2147483648,'aaaa'),(6,1,100,'aabb'),(7,1,100,'aabb'),(8,1,100,'aabb'),(9,1,100,'aabb'),(10,1,100,'aabb'),(11,1,101,'aacd'),(12,1,101,'aacd'),(13,1,101,'aacd'),(14,1,101,'aacd'),(15,1,101,'aacd'),(16,1,99,'aabb'),(17,1,99,'aabb'),(18,1,99,'aabb'),(19,1,99,'aabb'),(20,1,99,'aabb'),(21,1,80,'aabb'),(22,1,80,'aabb'),(23,1,80,'aabb'),(24,1,80,'aabb'),(25,1,80,'aabb'),(26,1,76,'aabb'),(27,1,76,'aabb'),(28,1,76,'aabb'),(29,1,76,'aabb'),(30,1,76,'aabb'),(31,1,65,'aabb'),(32,1,65,'aabb'),(33,1,65,'aabb'),(34,1,65,'aabb'),(35,1,65,'aabb'),(36,1,58,'aabb'),(37,1,58,'aabb'),(38,1,58,'aabb'),(39,1,58,'aabb'),(40,1,58,'aabb'),(41,1,43,'aabb'),(42,1,43,'aabb'),(43,1,43,'aabb'),(44,1,43,'aabb'),(45,1,43,'aabb'),(46,1,39,'aabb'),(47,1,39,'aabb'),(48,1,39,'aabb'),(49,1,39,'aabb'),(50,1,39,'aabb'),(51,1,22,'aabb'),(52,1,22,'aabb'),(53,1,22,'aabb'),(54,1,22,'aabb'),(55,1,22,'aabb'),(56,1,15,'aabb'),(57,1,15,'aabb'),(58,1,15,'aabb'),(59,1,15,'aabb'),(60,1,15,'aabb'),(61,1,121,'aabb'),(62,1,121,'aabb'),(63,1,121,'aabb'),(64,1,121,'aabb'),(65,1,121,'aabb'),(66,0,2147483647,'aaa2'),(67,0,2147483647,'aaa2'),(68,0,2147483647,'aaa2'),(69,0,2147483647,'aaa2'),(70,0,2147483647,'aaa2'),(71,0,131,'ab'),(72,0,131,'ab'),(73,0,131,'ab'),(74,0,100,'ab'),(75,0,100,'ab'),(76,0,100,'ab'),(77,0,100,'ab'),(78,0,100,'ab'),(79,0,84,'ab'),(80,0,84,'ab'),(81,0,84,'ab'),(82,0,84,'ab'),(83,0,84,'ab'),(84,0,67,NULL),(85,0,67,NULL),(86,0,67,NULL),(87,0,67,NULL),(88,0,67,NULL),(89,1,43,NULL),(90,1,43,NULL),(91,1,43,NULL),(92,1,43,NULL),(93,1,43,NULL),(94,1,24,NULL),(95,1,24,NULL),(96,1,24,NULL),(97,1,24,NULL),(98,1,24,NULL);
+
+let QUERY = SELECT
+sum(bool_col) as c1, (SELECT avg(bool_col) as c2 FROM tbl_1_all_typeindex_desc WHERE binary_col = 'cccccccccc1' XOR tinyint_col <= -128 ORDER BY c2) as c2 FROM tbl_1_all_type2index WHERE int_col IN (22,11) AND char_col IN ('aaaa') ORDER BY c1, c2 LIMIT 1;
+
+set debug='+d,pq_simulate_save_in_field_error1';
+eval explain $QUERY;
+eval $QUERY;
+set debug='-d,pq_simulate_save_in_field_error1';
+
+set debug='+d,pq_simulate_save_in_field_error2';
+eval explain $QUERY;
+--error ER_PARALLEL_QUERY_ERROR
+eval $QUERY;
+set debug='-d,pq_simulate_save_in_field_error2';
+
+drop table tbl_1_all_typeindex_desc;
+drop table tbl_1_all_type2index;
+
+set sql_mode = @saved_sql_mode;
+
+--source include/restore_opt_switch_after_turn_off_join_elimination.inc
+
+--echo #
+--echo # mysqld crash when enable audit_log and throw a error in pq_worker_exec
+--echo #
+install plugin audit_log soname 'audit_log.so';
+select PLUGIN_STATUS from information_schema.PLUGINS where PLUGIN_NAME = 'audit_log';
+--source include/disconnect_connections.inc
+call mtr.add_suppression("\\[Warning\\] .* Make worker plan failed");
+
+CREATE TABLE t1 (a int, b int, PRIMARY KEY (b));
+CREATE TABLE t2 (x int auto_increment, y int, z int, PRIMARY KEY (x), FOREIGN KEY (y) REFERENCES t1 (b));
+create table t3 (a int);
+insert into t3 values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+insert into t1 select RAND()*1000, A.a + 10*(B.a+10*(C.a+10*D.a))
+from t3 A, t3 B, t3 C, t3 D where D.a<3;
+insert into t2(y,z) select t1.b, RAND()*1000 from t1, t3;
+analyze table t1, t2, t3;
+
+SET SESSION sort_buffer_size = 32 * 1024;
+SELECT COUNT(*) FROM (SELECT a, b, (SELECT x FROM t2 WHERE y=b ORDER BY z DESC LIMIT 1) c FROM t1) t;
+
+SET SESSION sort_buffer_size = 8 * 1024;
+set debug='+d, pq_worker_error1, pq_worker_failed';
+--error ER_QUERY_INTERRUPTED
+SELECT COUNT(*) FROM (SELECT a, b, (SELECT x FROM t2 WHERE y=b ORDER BY z DESC LIMIT 1) c FROM t1) t;
+set debug='-d, pq_worker_error1, pq_worker_failed';
+
+set debug='+d, parallelscaniter_error';
+--error ER_QUERY_INTERRUPTED
+SELECT COUNT(*) FROM (SELECT a, b, (SELECT x FROM t2 WHERE y=b ORDER BY z DESC LIMIT 1) c FROM t1) t;
+set debug='-d, parallelscaniter_error';
+
+uninstall plugin audit_log;
+drop table t1, t2, t3;
+
+--echo #
+--echo # Test BIT data type in parallel queries
+--echo #
+--disable_warnings
+DROP TABLE IF EXISTS t_bit;
+--enable_warnings
+
+CREATE TABLE t_bit (
+  id   INT,
+  b1   BIT(1),
+  b2   BIT(2),
+  b7   BIT(7),
+  b8   BIT(8),
+  b9   BIT(9),
+  b16  BIT(16),
+  b32  BIT(32),
+  b64  BIT(64),
+  KEY(id)
+);
+
+INSERT INTO t_bit VALUES
+(1, b'0', b'00', b'0000000', b'00000000', b'000000000', b'0000000000000000', b'00000000000000000000000000000000', b'0000000000000000000000000000000000000000000000000000000000000000'),
+(1, b'1', b'01', b'0000001', b'00000001', b'000000001', b'0000000000000001', b'00000000000000000000000000000001', b'0000000000000000000000000000000000000000000000000000000000000001'),
+(1, b'0', b'10', b'0111111', b'11111110', b'111111110', b'1111111111111110', b'11111111111111111111111111111110', b'1111111111111111111111111111111111111111111111111111111111111110'),
+(1, b'1', b'11', b'1111111', b'11111111', b'111111111', b'1111111111111111', b'11111111111111111111111111111111', b'1111111111111111111111111111111111111111111111111111111111111111'),
+(2, b'0', b'00', b'0000000', b'00000000', b'000000000', b'0000000000000000', b'00000000000000000000000000000000', b'0000000000000000000000000000000000000000000000000000000000000000'),
+(2, b'1', b'01', b'1000000', b'00000001', b'000000001', b'1000000000000001', b'10101010101010101010101010101010', b'1010101010101010101010101010101010101010101010101010101010101010'),
+(2, b'0', b'10', b'0111110', b'11111100', b'111111100', b'1111111111111100', b'11111111111111111111111111111100', b'1111111111111111111111111111111111111111111111111111111111111100'),
+(2, b'1', b'11', b'1111111', b'11111111', b'111111111', b'1111111111111111', b'11111111111111111111111111111111', b'1111111111111111111111111111111111111111111111111111111111111111'),
+(3, b'0', b'01', b'0000001', b'00000001', b'000000001', b'0000000000000001', b'00000000000000000000000000000001', b'0000000000000000000000000000000000000000000000000000000000000001'),
+(3, b'1', b'10', b'1111110', b'11111110', b'111111110', b'1111111111111110', b'11111111111111111111111111111110', b'1111111111111111111111111111111111111111111111111111111111111110'),
+(3, b'0', b'11', b'0111111', b'11111111', b'111111111', b'1111111111111111', b'11111111111111111111111111111111', b'1111111111111111111111111111111111111111111111111111111111111111'),
+(3, b'1', b'00', b'0000000', b'00000000', b'000000000', b'0000000000000000', b'00000000000000000000000000000000', b'0000000000000000000000000000000000000000000000000000000000000000');
+
+ANALYZE TABLE t_bit;
+
+--echo #1. Original reported case: multiple hidden BIT aggregates
+EXPLAIN SELECT HEX(CONCAT(MIN(b1))), HEX(CONCAT(MIN(b9))), HEX(CONCAT(MIN(b64))) FROM t_bit GROUP BY id;
+SELECT HEX(CONCAT(MIN(b1))), HEX(CONCAT(MIN(b9))), HEX(CONCAT(MIN(b64))) FROM t_bit GROUP BY id;
+
+--echo #2. Single BIT aggregate + GROUP BY
+EXPLAIN SELECT HEX(MIN(b1)) FROM t_bit GROUP BY id;
+SELECT HEX(MIN(b1)) FROM t_bit GROUP BY id;
+
+EXPLAIN SELECT HEX(MAX(b8)) FROM t_bit GROUP BY id;
+SELECT HEX(MAX(b8)) FROM t_bit GROUP BY id;
+
+EXPLAIN SELECT HEX(MIN(b64)) FROM t_bit GROUP BY id;
+SELECT HEX(MIN(b64)) FROM t_bit GROUP BY id;
+
+--echo #3. Mixed BIT widths in one query
+EXPLAIN SELECT HEX(MIN(b2)), HEX(MAX(b7)), HEX(AVG(b8)), HEX(MIN(b9)), HEX(MAX(b16)), HEX(AVG(b32)), HEX(MIN(b64)) FROM t_bit GROUP BY id;
+SELECT HEX(MIN(b2)), HEX(MAX(b7)), HEX(AVG(b8)), HEX(MIN(b9)), HEX(MAX(b16)), HEX(AVG(b32)), HEX(MIN(b64)) FROM t_bit GROUP BY id;
+
+--echo #4. GROUP BY key hidden, BIT only in aggregate
+EXPLAIN SELECT COUNT(*), HEX(AVG(b1)) FROM t_bit GROUP BY id;
+SELECT COUNT(*), HEX(AVG(b1)) FROM t_bit GROUP BY id;
+
+--echo #5. ORDER BY hidden BIT column
+EXPLAIN SELECT id FROM t_bit ORDER BY b9;
+SELECT id FROM t_bit ORDER BY b9;
+
+EXPLAIN SELECT id FROM t_bit ORDER BY b64, id;
+SELECT id FROM t_bit ORDER BY b64, id;
+
+--echo #6. HAVING with BIT aggregate
+EXPLAIN SELECT id FROM t_bit GROUP BY id HAVING MIN(b1) = b'1';
+SELECT id FROM t_bit GROUP BY id HAVING MIN(b1) = b'1';
+
+EXPLAIN SELECT id FROM t_bit GROUP BY id HAVING MIN(b9) <> b'0';
+SELECT id FROM t_bit GROUP BY id HAVING MIN(b9) <> b'0';
+
+--echo #7. DISTINCT + BIT aggregate
+EXPLAIN SELECT DISTINCT HEX(MIN(b8)) FROM t_bit GROUP BY id;
+SELECT DISTINCT HEX(MIN(b8)) FROM t_bit GROUP BY id;
+
+EXPLAIN SELECT DISTINCT HEX(MIN(b64)) FROM t_bit GROUP BY id;
+SELECT DISTINCT HEX(MIN(b64)) FROM t_bit GROUP BY id;
+
+--echo #8. Subquery with BIT aggregate (const_for_execution path)
+EXPLAIN SELECT (SELECT HEX(MIN(b1)) FROM t_bit) FROM t_bit GROUP BY id;
+SELECT (SELECT HEX(MIN(b1)) FROM t_bit) FROM t_bit GROUP BY id;
+
+EXPLAIN SELECT (SELECT HEX(MIN(b64)) FROM t_bit) FROM t_bit GROUP BY id;
+SELECT (SELECT HEX(MIN(b64)) FROM t_bit) FROM t_bit GROUP BY id;
+
+--echo #9. BIT in expression inside aggregate
+EXPLAIN SELECT HEX(CONCAT(MIN(b1 & b'1'))) FROM t_bit GROUP BY id;
+SELECT HEX(CONCAT(MIN(b1 & b'1'))) FROM t_bit GROUP BY id;
+
+EXPLAIN SELECT HEX(CONCAT(MIN(b9 | b'1'))) FROM t_bit GROUP BY id;
+SELECT HEX(CONCAT(MIN(b9 | b'1'))) FROM t_bit GROUP BY id;
+
+--echo #10. BIT aggregate family
+EXPLAIN SELECT HEX(BIT_AND(b8)), HEX(BIT_OR(b8)), HEX(BIT_XOR(b8)) FROM t_bit GROUP BY id;
+SELECT HEX(BIT_AND(b8)), HEX(BIT_OR(b8)), HEX(BIT_XOR(b8)) FROM t_bit GROUP BY id;
+
+EXPLAIN SELECT HEX(BIT_AND(b64)), HEX(BIT_OR(b64)), HEX(BIT_XOR(b64)) FROM t_bit GROUP BY id;
+SELECT HEX(BIT_AND(b64)), HEX(BIT_OR(b64)), HEX(BIT_XOR(b64)) FROM t_bit GROUP BY id;
+
+--echo #11. ORDER BY + LIMIT
+EXPLAIN SELECT HEX(MIN(b9)) FROM t_bit GROUP BY id ORDER BY id LIMIT 1;
+SELECT HEX(MIN(b9)) FROM t_bit GROUP BY id ORDER BY id LIMIT 1;
+
+EXPLAIN SELECT HEX(MIN(b64)) FROM t_bit GROUP BY id ORDER BY id DESC LIMIT 1;
+SELECT HEX(MIN(b64)) FROM t_bit GROUP BY id ORDER BY id DESC LIMIT 1;
+
+--echo #12. Multiple aggregates sharing same hidden BIT field
+EXPLAIN SELECT HEX(MIN(b1)), HEX(MAX(b1)), HEX(BIT_OR(b1)) FROM t_bit GROUP BY id;
+SELECT HEX(MIN(b1)), HEX(MAX(b1)), HEX(BIT_OR(b1)) FROM t_bit GROUP BY id;
+
+--echo #13. CAST / CONCAT interaction with BIT
+EXPLAIN SELECT HEX(CONCAT(CAST(MIN(b8) AS BINARY))) FROM t_bit GROUP BY id;
+SELECT HEX(CONCAT(CAST(MIN(b8) AS BINARY))) FROM t_bit GROUP BY id;
+
+EXPLAIN SELECT HEX(CONCAT(MIN(b16), MIN(b8))) FROM t_bit GROUP BY id;
+SELECT HEX(CONCAT(MIN(b16), MIN(b8))) FROM t_bit GROUP BY id;
+
+--echo #14. Nested expression depth stress
+EXPLAIN SELECT HEX(CONCAT(CONCAT(MIN(b1)))), HEX(CONCAT(CONCAT(MIN(b64)))) FROM t_bit GROUP BY id;
+SELECT HEX(CONCAT(CONCAT(MIN(b1)))), HEX(CONCAT(CONCAT(MIN(b64)))) FROM t_bit GROUP BY id;
+
+--echo #15. LENGTH check to detect BIT->LONG regression
+EXPLAIN SELECT LENGTH(CONCAT(MIN(b1))) FROM t_bit GROUP BY id;
+SELECT LENGTH(CONCAT(MIN(b1))) FROM t_bit GROUP BY id;
+
+EXPLAIN SELECT LENGTH(CONCAT(MIN(b64))) FROM t_bit GROUP BY id;
+SELECT LENGTH(CONCAT(MIN(b64))) FROM t_bit GROUP BY id;
+
+--echo #Cleanup
+DROP TABLE t_bit;
+
+--echo #
+--echo # BUG2026020924468: mysqld crash in function pq_clone_sj_mat_exec for pq_clone fail scenario
+--echo #
+CREATE TABLE t0(a INT);
+INSERT INTO t0 VALUES(0),(1),(2);
+CREATE TABLE t1(b INT, c INT);
+INSERT INTO t1 VALUES(0,0),(1,1),(2,2);
+ANALYZE TABLE t0,t1;
+
+# Cover Item_func_last_insert_id::pq_clone function
+EXPLAIN SELECT last_insert_id(a) FROM t0;
+SELECT last_insert_id(a) FROM t0;
+
+# PQ not support following query due to Item_func_member_of do not implement pq_clone function
+let query=SELECT b FROM t1 WHERE ((b MEMBER OF ((NOT(99)))) = ANY (SELECT a FROM t0)) IS NOT TRUE;
+
+eval EXPLAIN FORMAT=TREE $query;
+--error ER_INVALID_TYPE_FOR_JSON
+eval $query;
+
+SET @optimizer_switch_saved = @@optimizer_switch;
+# Turn off loosescan, firstmatch and duplicateweedout, optimizer choose materialization handler semi-join
+SET optimizer_switch='loosescan=off,firstmatch=off,duplicateweedout=off';
+# Crash for this query without this mr.
+eval EXPLAIN FORMAT=TREE $query;
+--error ER_INVALID_TYPE_FOR_JSON
+eval $query;
+
+SET @@optimizer_switch = @optimizer_switch_saved;
+DROP TABLE t0,t1;
+
+--let $restart_parameters="restart: "
+--source include/restart_mysqld.inc

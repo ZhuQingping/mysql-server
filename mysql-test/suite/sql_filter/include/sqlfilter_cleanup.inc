@@ -1,0 +1,1 @@
+DROP PROCEDURE delete_one_sql_filter_rule;

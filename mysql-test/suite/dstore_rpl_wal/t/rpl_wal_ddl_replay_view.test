@@ -1,0 +1,373 @@
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_setup.inc
+--enable_warnings
+
+# --echo ############################################################
+# --echo 一、 准备工作：创建测试环境。
+# --echo 二、 针对 SQLCOM_CREATE_VIEW、SQLCOM_ALTER_VIEW、SQLCOM_DROP_VIEW 执行对应的 ddl 语句
+# --echo 三、 在备机测查看dd信息，保证备机回放元数据的正确性
+# --echo 四、 使用创建的view进行查询，供后面的新主机对比，保证回放功能正确
+# --echo 五、 执行 switchover 
+# --echo 六、 新主机使用老主创建的view进行查询，与第四步进行对比，保证备机回放功能的正确性
+# --echo 七、 新主机对回放出的view进行修改删除，保证回放出来的ddl的可操作性
+# --echo ############################################################
+
+--echo ############################################################
+--echo # 一、Create the test environment.
+--echo # 二、Execute the corresponding DDL statements for SQLCOM_CREATE_VIEW, SQLCOM_ALTER_VIEW, and SQLCOM_DROP_VIEW.
+--echo # 三、Check the DD information on the standby node to ensure correct metadata replay.
+--echo # 四、Query using the created views for subsequent comparison with the new primary node to ensure the correctness of the replay function.
+--echo # 五、Perform a switchover.
+--echo # 六、Query using the views created by the original primary node on the new primary node, and compare the results with those from Step 4 to ensure the correctness of the standby node replay function.
+--echo # 七、Modify and delete the replayed views on the new primary node to ensure the availability and operability of the replayed DDL.
+--echo ############################################################
+
+--echo #
+--echo # 一、Create the test environment.
+--echo #
+
+--connection $node1
+CREATE DATABASE IF NOT EXISTS test_view_db 
+DEFAULT CHARACTER SET utf8mb4 
+DEFAULT COLLATE utf8mb4_general_ci;
+
+USE test_view_db;
+
+CREATE TABLE employees (
+    emp_id INT AUTO_INCREMENT PRIMARY KEY,
+    emp_name VARCHAR(100) NOT NULL,
+    department VARCHAR(50),
+    salary DECIMAL(10, 2),
+    hire_date DATE,
+    status VARCHAR(20) DEFAULT 'ACTIVE'
+);
+
+CREATE TABLE departments (
+    dept_id INT AUTO_INCREMENT PRIMARY KEY,
+    dept_name VARCHAR(50) NOT NULL UNIQUE,
+    location VARCHAR(100),
+    budget DECIMAL(15, 2) DEFAULT 0
+);
+
+CREATE TABLE projects (
+    project_id INT AUTO_INCREMENT PRIMARY KEY,
+    project_name VARCHAR(100) NOT NULL,
+    manager_id INT,
+    department VARCHAR(50),
+    budget DECIMAL(15, 2),
+    start_date DATE,
+    end_date DATE,
+    status VARCHAR(20) DEFAULT 'PLANNING',
+    FOREIGN KEY (manager_id) REFERENCES employees(emp_id)
+);
+
+# 4. 员工项目关联表
+CREATE TABLE employee_projects (
+    emp_proj_id INT AUTO_INCREMENT PRIMARY KEY,
+    emp_id INT NOT NULL,
+    project_id INT NOT NULL,
+    role VARCHAR(50),
+    hours_assigned INT DEFAULT 0,
+    assigned_date DATE DEFAULT (CURDATE()),
+    FOREIGN KEY (emp_id) REFERENCES employees(emp_id),
+    FOREIGN KEY (project_id) REFERENCES projects(project_id),
+    UNIQUE KEY uniq_emp_project (emp_id, project_id)  -- 防止重复分配
+);
+
+INSERT INTO departments(dept_name, location, budget) VALUES
+('技术部', '北京', 500000.00),
+('销售部', '上海', 300000.00),
+('人事部', '广州', 200000.00),
+('财务部', '深圳', 250000.00);
+
+INSERT INTO employees(emp_name, department, salary, hire_date) VALUES
+('张三', '技术部', 15000.00, '2020-01-15'),
+('李四', '技术部', 12000.00, '2020-03-20'),
+('王五', '销售部', 8000.00, '2021-05-10'),
+('赵六', '人事部', 10000.00, '2019-11-30'),
+('钱七', '销售部', 9000.00, '2022-02-14'),
+('孙八', '财务部', 11000.00, '2021-07-01');
+
+INSERT INTO projects(project_name, manager_id, department, budget, start_date, end_date, status) VALUES
+('OA系统开发', 1, '技术部', 100000.00, '2023-01-01', '2023-12-31', 'IN_PROGRESS'),
+('CRM系统优化', 1, '技术部', 80000.00, '2023-03-01', '2023-09-30', 'IN_PROGRESS'),
+('市场推广活动', 3, '销售部', 50000.00, '2023-06-01', '2023-11-30', 'PLANNING'),
+('年度预算编制', 6, '财务部', 120000.00, '2023-02-01', '2023-10-31', 'COMPLETED');
+
+INSERT INTO employee_projects(emp_id, project_id, role, hours_assigned) VALUES
+(1, 1, '项目经理', 160),
+(2, 1, '后端开发', 120),
+(1, 2, '项目经理', 140),
+(2, 2, '技术顾问', 40),
+(3, 3, '项目经理', 140),
+(5, 3, '市场专员', 100),
+(6, 4, '项目经理', 160),
+(4, 4, '人力资源协调', 90);
+
+--echo #
+--echo # 二、Execute the corresponding DDL statements for SQLCOM_CREATE_VIEW, SQLCOM_ALTER_VIEW, and SQLCOM_DROP_VIEW.
+--echo #
+
+--echo #
+--echo # 1 SQLCOM_CREATE_VIEW
+--echo #
+
+--echo # 1 Create an associated view: Employee and department information
+CREATE VIEW v_emp_dept AS
+SELECT 
+    e.emp_id,
+    e.emp_name,
+    e.department,
+    e.salary,
+    d.location,
+    d.budget
+FROM employees e
+JOIN departments d ON e.department = d.dept_name
+WHERE e.status = 'ACTIVE';
+
+--echo # 2. Create an aggregate view: Department statistical information
+CREATE VIEW v_dept_stats AS
+SELECT 
+    d.dept_name,
+    d.location,
+    COUNT(e.emp_id) AS employee_count,
+    SUM(e.salary) AS total_salary,
+    AVG(e.salary) AS avg_salary,
+    MIN(e.hire_date) AS earliest_hire,
+    MAX(e.hire_date) AS latest_hire
+FROM departments d
+LEFT JOIN employees e ON d.dept_name = e.department AND e.status = 'ACTIVE'
+GROUP BY d.dept_name, d.location;
+
+--echo # 3 Create a complex view: Employee project participation status
+CREATE VIEW v_emp_project_details AS
+SELECT 
+    e.emp_id,
+    e.emp_name,
+    e.department,
+    p.project_name,
+    p.status AS project_status,
+    ep.role,
+    ep.hours_assigned,
+    p.start_date,
+    p.end_date,
+    CASE 
+        WHEN CURDATE() BETWEEN p.start_date AND p.end_date THEN '进行中'
+        WHEN CURDATE() > p.end_date THEN '已结束'
+        ELSE '未开始'
+    END AS timeline_status
+FROM employees e
+JOIN employee_projects ep ON e.emp_id = ep.emp_id
+JOIN projects p ON ep.project_id = p.project_id
+WHERE e.status = 'ACTIVE';
+
+--echo # 4 Create a view with calculated aggregation: Salary analysis
+CREATE VIEW v_salary_analysis AS
+ SELECT 
+      department,
+      COUNT(*) AS emp_count,
+     SUM(salary) AS total_salary,
+     AVG(salary) AS avg_salary,
+      MIN(salary) AS min_salary,
+      MAX(salary) AS max_salary,
+     (MAX(salary) - MIN(salary)) AS salary_range,
+    ROUND((MAX(salary) - MIN(salary)) / AVG(salary) * 100, 2) AS range_percentage
+ FROM employees
+ WHERE status = 'ACTIVE'
+ GROUP BY department;
+
+--echo # 5 Create a nested view: A view based on other views
+CREATE VIEW v_nested_view AS
+SELECT 
+    v.dept_name,
+    v.employee_count,
+    v.total_salary,
+    ROUND(v.total_salary / NULLIF(v.employee_count, 0), 2) AS per_capita_cost
+FROM v_dept_stats v;
+
+--echo # 6 Create a view for verifying the delete operation
+CREATE VIEW v_to_delete AS
+SELECT emp_id, emp_name, department, salary, hire_date
+FROM employees
+WHERE status = 'ACTIVE'
+WITH CHECK OPTION;
+
+--echo #
+--echo # 2 SQLCOM_ALTER_VIEW
+--echo #
+# Note: SQLCOM_CREATE_VIEW also handles 'ALTER VIEW' commands
+# as specified through the thd->lex->create_view_mode flag.
+
+# 1 Modify the associated view and add filter conditions
+ALTER VIEW v_emp_dept AS
+SELECT 
+    e.emp_id,
+    e.emp_name,
+    e.department,
+    e.salary,
+    d.location,
+    d.budget,
+    CASE 
+        WHEN e.salary > 10000 THEN '高薪'
+        WHEN e.salary > 8000 THEN '中薪'
+        ELSE '低薪'
+    END AS salary_level
+FROM employees e
+JOIN departments d ON e.department = d.dept_name
+WHERE e.status = 'ACTIVE' AND e.salary > 0;
+
+# 2 Modify the aggregate view and add more statistical fields
+ALTER VIEW v_dept_stats AS
+SELECT 
+    d.dept_name,
+    d.location,
+    d.budget,
+    COUNT(e.emp_id) AS employee_count,
+    SUM(e.salary) AS total_salary,
+    AVG(e.salary) AS avg_salary,
+    MIN(e.hire_date) AS earliest_hire,
+    MAX(e.hire_date) AS latest_hire,
+    ROUND(SUM(e.salary) / d.budget * 100, 2) AS salary_budget_ratio
+FROM departments d
+LEFT JOIN employees e ON d.dept_name = e.department AND e.status = 'ACTIVE'
+GROUP BY d.dept_name, d.location, d.budget;
+
+--echo #
+--echo # 3 SQLCOM_DROP_VIEW
+--echo #
+DROP VIEW IF EXISTS v_to_delete;
+
+--echo # Check view metadata on the primary node
+SELECT 
+    TABLE_NAME,
+    CHECK_OPTION,
+    IS_UPDATABLE,
+    DEFINER,
+    SECURITY_TYPE
+FROM INFORMATION_SCHEMA.VIEWS 
+WHERE TABLE_SCHEMA = 'test_view_db'
+ORDER BY TABLE_NAME;
+
+--echo #
+--echo # 三、Check the DD on the standby node to ensure the correctness of metadata replay on the standby node.
+--echo #
+
+--sleep 2
+--connection $node2
+USE test_view_db;
+
+--echo # Verify the view replay on the standby node
+SELECT 
+    TABLE_NAME,
+    CHECK_OPTION,
+    IS_UPDATABLE,
+    DEFINER,
+    SECURITY_TYPE
+FROM INFORMATION_SCHEMA.VIEWS 
+WHERE TABLE_SCHEMA = 'test_view_db'
+ORDER BY TABLE_NAME;
+
+--echo #
+--echo # 四、Query using the created views for subsequent comparison with the new primary node to ensure the correctness of the replay function.
+--echo #
+
+--connection $node1
+USE test_view_db;
+
+--echo # 1 Query the associated view
+SELECT * FROM v_emp_dept ORDER BY emp_id;
+
+--echo # 2 Query the aggregate view
+SELECT * FROM v_dept_stats ORDER BY dept_name;
+
+--echo # 3 Perform complex view query
+SELECT * FROM v_emp_project_details ORDER BY emp_id, project_name;
+
+--echo # 4 Perform a salary analysis view query
+SELECT * FROM v_salary_analysis ORDER BY department;
+
+--echo # 5 Verify the nested view
+SELECT * FROM v_nested_view ORDER BY dept_name;
+
+--echo #
+--echo # 五、Perform a switchover.
+--echo #
+
+--sleep 2
+--let $old_primary = $node1
+--let $old_standby = $node2
+--let $old_standby_port = $SERVER_MYPORT_2
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_switch.inc
+
+--echo #
+--echo # 六、Query using the views created by the original primary node on the new primary node, and compare the results with those from Step 4 to ensure the correctness of the standby node replay function.
+--echo #
+
+--connection $node2
+USE test_view_db;
+
+--echo # 1 Query the associated view
+SELECT * FROM v_emp_dept ORDER BY emp_id;
+
+--echo # 2 Query the aggregate view
+SELECT * FROM v_dept_stats ORDER BY dept_name;
+
+--echo # 3 Perform complex view query
+SELECT * FROM v_emp_project_details ORDER BY emp_id, project_name;
+
+--echo # 4 Perform a salary analysis view query
+SELECT * FROM v_salary_analysis ORDER BY department;
+
+--echo # 5 Verify the nested view
+SELECT * FROM v_nested_view ORDER BY dept_name;
+
+--echo #
+--echo # 七、Modify and delete the replayed views on the new primary node to ensure the availability and operability of the replayed DDL.
+--echo #
+
+--echo # 1 Perform operations on the replayed views on the new primary node
+ALTER VIEW v_emp_dept
+AS
+SELECT 
+    e.emp_id,
+    e.emp_name,
+    e.department,
+    e.salary,
+    d.location,
+    d.budget,
+    CASE 
+        WHEN e.salary > 10000 THEN '高薪'
+        WHEN e.salary > 8000 THEN '中薪'
+        ELSE '低薪'
+    END AS salary_level,
+    CASE 
+        WHEN d.dept_name = '技术部' THEN '技术岗位'
+        WHEN d.dept_name = '销售部' THEN '业务岗位'
+        ELSE '职能岗位'
+    END AS position_type
+FROM employees e
+JOIN departments d ON TRIM(e.department) = TRIM(d.dept_name)  -- 修复：加TRIM防空格，主备一致
+WHERE e.status = 'ACTIVE' AND e.salary > 0;
+
+DROP VIEW IF EXISTS v_salary_analysis;
+
+--echo # 2 Verify whether the new standby node has synchronized the modifications
+--sleep 2
+--connection $node1
+USE test_view_db;
+
+SELECT 
+    TABLE_NAME,
+    CHECK_OPTION,
+    IS_UPDATABLE,
+    DEFINER,
+    SECURITY_TYPE
+FROM INFORMATION_SCHEMA.VIEWS 
+WHERE TABLE_SCHEMA = 'test_view_db'
+ORDER BY TABLE_NAME;
+
+--disable_warnings
+--let $current_standby = $node1
+--let $current_primary = $node2
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_cleanup.inc
+--enable_warnings

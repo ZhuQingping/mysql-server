@@ -1,0 +1,659 @@
+#
+# BUG2023120704276: IN-list conversion causes an incorrect result
+#
+CREATE TABLE tt (
+bigint_col bigint NOT NULL,
+char_col char(4),
+KEY ndx_char_col (char_col)
+);
+INSERT INTO tt VALUES(0,NULL),(9223372036854775807,'aaa2'),(79,NULL),(13,NULL),(16,NULL),(-9223372036854775808,'aaaa'),(-9223372036854775808,'aabb'),(-9223372036854775808,'aacd'),(245,'ab'),(110,'ab'),(92,'ab'),(50,NULL),(38,NULL);
+SET rds_in_predicate_conversion_threshold=0;
+SELECT A.bigint_col, A.char_col FROM tt A WHERE A.char_col IN (NULL,'aaaa',NULL,'aacd') XOR A.bigint_col BETWEEN 50 AND 92 GROUP BY 1, 2;
+bigint_col	char_col
+-9223372036854775808	aaaa
+-9223372036854775808	aacd
+SET rds_in_predicate_conversion_threshold=1;
+EXPLAIN SELECT A.bigint_col, A.char_col FROM tt A WHERE A.char_col IN (NULL,'aaaa',NULL,'aacd') XOR A.bigint_col BETWEEN 50 AND 92 GROUP BY 1, 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	A	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using temporary
+2	SUBQUERY	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+Warnings:
+Note	1003	/* select#1 */ select `test`.`A`.`bigint_col` AS `bigint_col`,`test`.`A`.`char_col` AS `char_col` from `test`.`tt` `A` where (<in_optimizer>(`test`.`A`.`char_col`,`test`.`A`.`char_col` in ( <materialize> (/* select#2 */ select `test`.`<in_predicate_2>`.`char_col` from `test`.`<in_predicate_2>` where true having true ), <primary_index_lookup>(`test`.`A`.`char_col` in <temporary table> on <auto_distinct_key> where ((`test`.`A`.`char_col` = `<materialized_subquery>`.`char_col`))))) xor (`test`.`A`.`bigint_col` between 50 and 92)) group by `test`.`A`.`bigint_col`,`test`.`A`.`char_col`
+SELECT A.bigint_col, A.char_col FROM tt A WHERE A.char_col IN (NULL,'aaaa',NULL,'aacd') XOR A.bigint_col BETWEEN 50 AND 92 GROUP BY 1, 2;
+bigint_col	char_col
+-9223372036854775808	aaaa
+-9223372036854775808	aacd
+DROP TABLE tt;
+#
+# BUG2025081216523: IN-list conversion causes an incorrect result
+#
+CREATE TABLE t2 (
+bigint_col bigint NOT NULL,
+varchar_col varchar(255),
+KEY ndx_bigint_col (bigint_col)
+);
+INSERT INTO t2 VALUES (-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbaa'),(-9223372036854775808,'bbbbbbbbbb'),(-9223372036854775808,'bbbbbbbbbb'),(-9223372036854775808,'bbbbbbbbbb'),(-9223372036854775808,'bbbbbbbbbb'),(-9223372036854775808,'bbbbbbbbbb');
+ANALYZE TABLE t2;
+Table	Op	Msg_type	Msg_text
+test.t2	analyze	status	OK
+SET rds_in_predicate_conversion_threshold=1;
+EXPLAIN
+SELECT A.bigint_col, A.varchar_col FROM
+(SELECT bigint_col,
+varchar_col
+FROM t2
+WHERE NOT EXISTS
+(SELECT bigint_col,
+varchar_col
+FROM
+(SELECT bigint_col,
+varchar_col
+FROM t2 FORCE INDEX(ndx_bigint_col)
+WHERE bigint_col LIKE '9223%') C
+WHERE bigint_col IN (50,
+16)
+ORDER BY 1,
+2
+LIMIT 1)) A;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+3	SUBQUERY	<in_predicate_5>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted; Using where
+3	SUBQUERY	t2	NULL	ref	ndx_bigint_col	ndx_bigint_col	8	test.<in_predicate_5>.bigint_col	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`bigint_col` AS `bigint_col`,`test`.`t2`.`varchar_col` AS `varchar_col` from `test`.`t2` where true
+DROP TABLE t2;
+#
+# BUG2024032204641: IN-list conversion causes mysqld crashed
+#
+set rds_in_predicate_conversion_threshold = 1;
+explain select VARIABLE_NAME Variable_name, VARIABLE_VALUE Value from performance_schema.global_status where VARIABLE_NAME in('Threads_connected','Admin_threads_connected','Resserved_threads_connected');
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	3	100.00	IN-list converted
+1	SIMPLE	global_status	NULL	eq_ref	PRIMARY	PRIMARY	258	<in_predicate_db>.<in_predicate_2>.VARIABLE_NAME	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `performance_schema`.`global_status`.`VARIABLE_NAME` AS `Variable_name`,`performance_schema`.`global_status`.`VARIABLE_VALUE` AS `Value` from `<in_predicate_db>`.`<in_predicate_2>` join `performance_schema`.`global_status` where (`performance_schema`.`global_status`.`VARIABLE_NAME` = `<in_predicate_db>`.`<in_predicate_2>`.`VARIABLE_NAME`)
+set rds_in_predicate_conversion_threshold = 1;
+use test;
+explain select VARIABLE_NAME Variable_name, VARIABLE_VALUE Value from performance_schema.global_status where VARIABLE_NAME in('Threads_connected','Admin_threads_connected','Resserved_threads_connected');
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	3	100.00	IN-list converted
+1	SIMPLE	global_status	NULL	eq_ref	PRIMARY	PRIMARY	258	test.<in_predicate_2>.VARIABLE_NAME	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `performance_schema`.`global_status`.`VARIABLE_NAME` AS `Variable_name`,`performance_schema`.`global_status`.`VARIABLE_VALUE` AS `Value` from `test`.`<in_predicate_2>` join `performance_schema`.`global_status` where (`performance_schema`.`global_status`.`VARIABLE_NAME` = `test`.`<in_predicate_2>`.`VARIABLE_NAME`)
+set rds_in_predicate_conversion_threshold = 1;
+use information_schema;
+explain select VARIABLE_NAME Variable_name, VARIABLE_VALUE Value from performance_schema.global_status where VARIABLE_NAME in('Threads_connected','Admin_threads_connected','Resserved_threads_connected');
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	3	100.00	IN-list converted
+1	SIMPLE	global_status	NULL	eq_ref	PRIMARY	PRIMARY	258	<in_predicate_db>.<in_predicate_2>.VARIABLE_NAME	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `performance_schema`.`global_status`.`VARIABLE_NAME` AS `Variable_name`,`performance_schema`.`global_status`.`VARIABLE_VALUE` AS `Value` from `<in_predicate_db>`.`<in_predicate_2>` join `performance_schema`.`global_status` where (`performance_schema`.`global_status`.`VARIABLE_NAME` = `<in_predicate_db>`.`<in_predicate_2>`.`VARIABLE_NAME`)
+set rds_in_predicate_conversion_threshold = 1;
+set debug="+d,simulate_in_predicate_to_subs_add_table_failed";
+explain select VARIABLE_NAME Variable_name, VARIABLE_VALUE Value from performance_schema.global_status where VARIABLE_NAME in('Threads_connected','Admin_threads_connected','Resserved_threads_connected');
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	global_status	NULL	range	PRIMARY	PRIMARY	258	NULL	3	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `performance_schema`.`global_status`.`VARIABLE_NAME` AS `Variable_name`,`performance_schema`.`global_status`.`VARIABLE_VALUE` AS `Value` from `performance_schema`.`global_status` where (`performance_schema`.`global_status`.`VARIABLE_NAME` in ('Threads_connected','Admin_threads_connected','Resserved_threads_connected'))
+set debug="-d,simulate_in_predicate_to_subs_add_table_failed";
+set debug="+d,simulate_in_predicate_to_subs_new_query_failed";
+explain select VARIABLE_NAME Variable_name, VARIABLE_VALUE Value from performance_schema.global_status where VARIABLE_NAME in('Threads_connected','Admin_threads_connected','Resserved_threads_connected');
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	global_status	NULL	range	PRIMARY	PRIMARY	258	NULL	3	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `performance_schema`.`global_status`.`VARIABLE_NAME` AS `Variable_name`,`performance_schema`.`global_status`.`VARIABLE_VALUE` AS `Value` from `performance_schema`.`global_status` where (`performance_schema`.`global_status`.`VARIABLE_NAME` in ('Threads_connected','Admin_threads_connected','Resserved_threads_connected'))
+set debug="-d,simulate_in_predicate_to_subs_new_query_failed";
+set debug="+d,simulate_in_predicate_to_new_Table_ident_failed";
+explain select VARIABLE_NAME Variable_name, VARIABLE_VALUE Value from performance_schema.global_status where VARIABLE_NAME in('Threads_connected','Admin_threads_connected','Resserved_threads_connected');
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	global_status	NULL	range	PRIMARY	PRIMARY	258	NULL	3	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `performance_schema`.`global_status`.`VARIABLE_NAME` AS `Variable_name`,`performance_schema`.`global_status`.`VARIABLE_VALUE` AS `Value` from `performance_schema`.`global_status` where (`performance_schema`.`global_status`.`VARIABLE_NAME` in ('Threads_connected','Admin_threads_connected','Resserved_threads_connected'))
+set debug="-d,simulate_in_predicate_to_new_Table_ident_failed";
+set debug="+d,simulate_in_predicate_to_subs_add_table_to_list_failed";
+explain select VARIABLE_NAME Variable_name, VARIABLE_VALUE Value from performance_schema.global_status where VARIABLE_NAME in('Threads_connected','Admin_threads_connected','Resserved_threads_connected');
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	global_status	NULL	range	PRIMARY	PRIMARY	258	NULL	3	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `performance_schema`.`global_status`.`VARIABLE_NAME` AS `Variable_name`,`performance_schema`.`global_status`.`VARIABLE_VALUE` AS `Value` from `performance_schema`.`global_status` where (`performance_schema`.`global_status`.`VARIABLE_NAME` in ('Threads_connected','Admin_threads_connected','Resserved_threads_connected'))
+set debug="-d,simulate_in_predicate_to_subs_add_table_to_list_failed";
+set debug="+d,simulate_in_predicate_to_Item_asterisk_failed";
+explain select VARIABLE_NAME Variable_name, VARIABLE_VALUE Value from performance_schema.global_status where VARIABLE_NAME in('Threads_connected','Admin_threads_connected','Resserved_threads_connected');
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	global_status	NULL	range	PRIMARY	PRIMARY	258	NULL	3	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `performance_schema`.`global_status`.`VARIABLE_NAME` AS `Variable_name`,`performance_schema`.`global_status`.`VARIABLE_VALUE` AS `Value` from `performance_schema`.`global_status` where (`performance_schema`.`global_status`.`VARIABLE_NAME` in ('Threads_connected','Admin_threads_connected','Resserved_threads_connected'))
+set debug="-d,simulate_in_predicate_to_Item_asterisk_failed";
+#
+# BUG2025083022646: IN-list conversion causes mysqld crashed for prepare + multiple execution scenario
+#
+create table t1(a int, b int, index(b))engine=innodb;
+create table t2(a int, b int)engine=innodb;
+insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10);
+insert into t2 values(11,11),(12,12),(13,13),(14,14),(15,15),(16,16),(17,17),(18,18),(19,19),(10,10);
+analyze table t1,t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+set rds_in_predicate_conversion_threshold = 1;
+prepare stmt1 from 'explain select b from t1 where t1.b != any (select b from t2) and t1.b IN (1,2,3) order by b';
+prepare stmt2 from 'explain format=tree select b from t1 where t1.b != any (select b from t2) and t1.b IN (1,2,3) order by b';
+prepare stmt3 from 'select b from t1 where t1.b != any (select b from t2) and t1.b IN (1,2,3) order by b';
+execute stmt1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<in_predicate_3>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted; Using where; Using temporary; Using filesort
+1	PRIMARY	t1	NULL	ref	b	b	5	test.<in_predicate_3>.b	#	#	Using index
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`<in_predicate_3>` join `test`.`t1` where ((`test`.`t1`.`b` = `test`.`<in_predicate_3>`.`b`) and <nop>(<in_optimizer>(`test`.`<in_predicate_3>`.`b`,<exists>(/* select#2 */ select `test`.`t2`.`b` from `test`.`t2` where <if>(outer_field_is_not_null, ((<cache>(`test`.`t1`.`b`) <> `test`.`t2`.`b`) or (`test`.`t2`.`b` is null)), true) having <if>(outer_field_is_not_null, <is_not_null_test>(`test`.`t2`.`b`), true))))) order by `test`.`t1`.`b`
+execute stmt2;
+EXPLAIN
+-> Sort: t1.b
+    -> Stream results  (...)
+        -> Nested loop inner join  (...)
+            -> Filter: (<nop>(<in_optimizer>(`<in_predicate_3>`.b,<exists>(select #2))) and (`<in_predicate_3>`.b is not null))  (...)
+                -> Table scan on <in_predicate_3>  (...)
+                -> Select #2 (subquery in condition; dependent)
+                    -> Limit: 1 row(s)  (...)
+                        -> Filter: <if>(outer_field_is_not_null, <is_not_null_test>(t2.b), true)  (...)
+                            -> Filter: <if>(outer_field_is_not_null, ((<cache>(t1.b) <> t2.b) or (t2.b is null)), true)  (...)
+                                -> Table scan on t2  (...)
+            -> Covering index lookup on t1 using b (b=`<in_predicate_3>`.b)  (...)
+
+execute stmt3;
+b
+1
+2
+3
+execute stmt3;
+b
+1
+2
+3
+execute stmt3;
+b
+1
+2
+3
+deallocate prepare stmt1;
+deallocate prepare stmt2;
+deallocate prepare stmt3;
+drop table t1,t2;
+#
+# BUG2025091100137: IN-list conversion in (NULL) scenario causes an incorrect result 
+#
+CREATE TABLE `t0` (
+`c1` varchar(500) DEFAULT NULL,
+`c4` float unsigned zerofill DEFAULT NULL,
+KEY `i1` (`c1` DESC),
+KEY `i2` (`c4` DESC)
+) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO `t0` VALUES ('509107433',000000000000),('488915313',00000.702564),(NULL,000059716400);
+SET SESSION optimizer_switch = 'materialization=off';
+set rds_in_predicate_conversion_threshold = 0;
+SELECT DISTINCT  t0.c1 , t0.c4  FROM t0 WHERE (!((( EXISTS (SELECT 1 WHERE FALSE)) NOT IN ((t0.c1) IN ('123', NULL))) || (t0.c4)));
+c1	c4
+set rds_in_predicate_conversion_threshold = 1;
+SELECT DISTINCT  t0.c1 , t0.c4  FROM t0 WHERE (!((( EXISTS (SELECT 1 WHERE FALSE)) NOT IN ((t0.c1) IN ('123', NULL))) || (t0.c4)));
+c1	c4
+drop table `t0`;
+#
+# BUG2025093022639: IN-list conversion causes wrong result for read const + preare/execute scenario
+#
+CREATE TABLE t1(a int, b year, index(b));
+INSERT INTO t1 VALUES(1,1901),(2,1902),(3,1903),(4,1904),(5,1905),(6,1906),(7,1907),(8,1908),(9,1909),(10,1910),(11,1911),(12,1912),(13,1913),(14,2020);
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SET rds_in_predicate_conversion_threshold=0;
+PREPARE stmt1 FROM 'EXPLAIN SELECT b FROM (SELECT b FROM t1 WHERE b IN (1901,1902,1903)) tt WHERE b IN (1902) ORDER BY 1 LIMIT 1';
+PREPARE stmt2 FROM 'SELECT b FROM (SELECT b FROM t1 WHERE b IN (1901,1902,1903)) tt WHERE b IN (1902) ORDER BY 1 LIMIT 1';
+EXECUTE stmt1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	b	b	2	const	32	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` = 1902) order by `test`.`t1`.`b` limit 1
+EXECUTE stmt1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	b	b	2	const	32	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` = 1902) order by `test`.`t1`.`b` limit 1
+EXECUTE stmt2;
+b
+1902
+EXECUTE stmt2;
+b
+1902
+DEALLOCATE PREPARE stmt1;
+DEALLOCATE PREPARE stmt2;
+SET rds_in_predicate_conversion_threshold=1;
+PREPARE stmt1 FROM 'EXPLAIN SELECT b FROM (SELECT b FROM t1 WHERE b IN (1901,1902,1903)) tt WHERE b IN (1902) ORDER BY 1 LIMIT 1';
+PREPARE stmt2 FROM 'SELECT b FROM (SELECT b FROM t1 WHERE b IN (1901,1902,1903)) tt WHERE b IN (1902) ORDER BY 1 LIMIT 1';
+EXECUTE stmt1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_3>	NULL	const	<auto_distinct_key>	<auto_distinct_key>	2	const	1	100.00	IN-list converted
+1	SIMPLE	t1	NULL	ref	b	b	2	const	32	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`<in_predicate_3>` join `test`.`t1` where (`test`.`t1`.`b` = 1902) order by `test`.`t1`.`b` limit 1
+EXECUTE stmt1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_3>	NULL	const	<auto_distinct_key>	<auto_distinct_key>	2	const	1	100.00	IN-list converted
+1	SIMPLE	t1	NULL	ref	b	b	2	const	32	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`<in_predicate_3>` join `test`.`t1` where (`test`.`t1`.`b` = 1902) order by `test`.`t1`.`b` limit 1
+EXECUTE stmt2;
+b
+1902
+EXECUTE stmt2;
+b
+1902
+DEALLOCATE PREPARE stmt1;
+DEALLOCATE PREPARE stmt2;
+DROP TABLE t1;
+#
+# US2026010500250: Test the correctness of results for time-related data types
+#
+CREATE TABLE test (
+id INT NOT NULL,
+col_year YEAR,
+col_date DATE NOT NULL,
+col_dt DATETIME(6) NOT NULL,
+col_ts TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+col_time TIME(6) NOT NULL DEFAULT '00:00:00',
+PRIMARY KEY (id),
+INDEX idx_year (col_year),
+INDEX idx_date (col_date),
+INDEX idx_dt (col_dt),
+INDEX idx_ts (col_ts),
+INDEX idx_time (col_time)
+) DEFAULT CHARSET=utf8mb4;
+INSERT INTO test (id, col_year, col_date, col_dt, col_ts, col_time) VALUES 
+(1,  2026, '2026-01-08', '2026-01-08 10:30:00', '2026-01-08 10:30:00', '10:30:00'),
+(2,  '26', '20260109', '20260109120000', '2026-01-09 12:00:00', '12:00:00'),
+(3,  26,   20260110, 20260110154530, 20260110154530, 154530),
+(4,  26,   260110, 260110083000, 260110083000, 083000),
+(5,  '26', '260109', '2026-01-09 23:59:59.999999', '2026-01-09 23:59:59.999999', '23:59:59.999999'),
+(6,  '26', '20260110', '20260110154530', '20260110154530', '154530'),
+(7,  2026, '2026.01.11', '2026.01.11 01:01:01', '2026.01.11 01:01:01', '01:01:01'),
+(8,  2026, '2026/01/12', '2026/01/12 02:02:02', '2026-01-12 02:02:02', '02:02:02'),
+(9,  2026, '2026-1-1', '2026-01-01 03:04:05', '2026-01-01 03:04:05', '03:04:05'),
+(10, 2025, 20251231, 20251231235959, 20251231235959, '23:59:59'),
+(11, '99', '19991231', '1999-12-31 11:11:11', '1999-12-31 11:11:11', '11:11:11'),
+(12, '70', 700101, '1970-01-01 08:00:01', '1970-01-01 08:00:01', '08:00:01'),
+(13, 2026, '2026@01@13', '2026-01-08 10:30:00', '2026-01-08 10:30:00', '10:30:00'),
+(14, 2024, 20240229, 20240229120000, 20240229120000, '12:00:00'),
+(15, 2026, '2026-02-28', '2026-02-28 23:59:59.500', '2026-02-28 23:59:59.500', '23:59:59.500'),
+(16, 2038, '2038-01-19', '2038-01-19 03:14:07', '2038-01-19 03:14:07', '03:14:07'),
+(17, 2026, '2026-01-08', '2026-01-08 00:00:00', '2026-01-08 00:00:00', '838:59:59'),
+(18, 2026, '2026-01-08', '2026-01-08 00:00:00', '2026-01-08 00:00:00', '-838:59:59'),
+(19, 2026, '2026-01-08', '2026-01-08 00:00:00', '2026-01-08 00:00:00', '100:00:00'),
+(20, 2026, '2026-01-08', '2026-01-08 00:00:00', '2026-01-08 00:00:00', 120);
+Warnings:
+Warning	4095	Delimiter '.' in position 4 in datetime value '2026.01.11' at row 7 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '.' in position 4 in datetime value '2026.01.11 01:01:01' at row 7 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '.' in position 4 in datetime value '2026.01.11 01:01:01' at row 7 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '/' in position 4 in datetime value '2026/01/12' at row 8 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '/' in position 4 in datetime value '2026/01/12 02:02:02' at row 8 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '@' in position 4 in datetime value '2026@01@13' at row 13 is deprecated. Prefer the standard '-'.
+select * from test;
+id	col_year	col_date	col_dt	col_ts	col_time
+1	2026	2026-01-08	2026-01-08 10:30:00.000000	2026-01-08 10:30:00.000000	10:30:00.000000
+2	2026	2026-01-09	2026-01-09 12:00:00.000000	2026-01-09 12:00:00.000000	12:00:00.000000
+3	2026	2026-01-10	2026-01-10 15:45:30.000000	2026-01-10 15:45:30.000000	15:45:30.000000
+4	2026	2026-01-10	2026-01-10 08:30:00.000000	2026-01-10 08:30:00.000000	08:30:00.000000
+5	2026	2026-01-09	2026-01-09 23:59:59.999999	2026-01-09 23:59:59.999999	23:59:59.999999
+6	2026	2026-01-10	2026-01-10 15:45:30.000000	2026-01-10 15:45:30.000000	15:45:30.000000
+7	2026	2026-01-11	2026-01-11 01:01:01.000000	2026-01-11 01:01:01.000000	01:01:01.000000
+8	2026	2026-01-12	2026-01-12 02:02:02.000000	2026-01-12 02:02:02.000000	02:02:02.000000
+9	2026	2026-01-01	2026-01-01 03:04:05.000000	2026-01-01 03:04:05.000000	03:04:05.000000
+10	2025	2025-12-31	2025-12-31 23:59:59.000000	2025-12-31 23:59:59.000000	23:59:59.000000
+11	1999	1999-12-31	1999-12-31 11:11:11.000000	1999-12-31 11:11:11.000000	11:11:11.000000
+12	1970	1970-01-01	1970-01-01 08:00:01.000000	1970-01-01 08:00:01.000000	08:00:01.000000
+13	2026	2026-01-13	2026-01-08 10:30:00.000000	2026-01-08 10:30:00.000000	10:30:00.000000
+14	2024	2024-02-29	2024-02-29 12:00:00.000000	2024-02-29 12:00:00.000000	12:00:00.000000
+15	2026	2026-02-28	2026-02-28 23:59:59.500000	2026-02-28 23:59:59.500000	23:59:59.500000
+16	2038	2038-01-19	2038-01-19 03:14:07.000000	2038-01-19 03:14:07.000000	03:14:07.000000
+17	2026	2026-01-08	2026-01-08 00:00:00.000000	2026-01-08 00:00:00.000000	838:59:59.000000
+18	2026	2026-01-08	2026-01-08 00:00:00.000000	2026-01-08 00:00:00.000000	-838:59:59.000000
+19	2026	2026-01-08	2026-01-08 00:00:00.000000	2026-01-08 00:00:00.000000	100:00:00.000000
+20	2026	2026-01-08	2026-01-08 00:00:00.000000	2026-01-08 00:00:00.000000	00:01:20.000000
+# Test DATE
+set rds_in_predicate_conversion_threshold = 0;
+select id,col_date from test where col_date in ('26-1-08','260109');
+id	col_date
+1	2026-01-08
+17	2026-01-08
+18	2026-01-08
+19	2026-01-08
+20	2026-01-08
+2	2026-01-09
+5	2026-01-09
+select id,col_date from test where col_date in ('26.1.11','25.12.31');
+id	col_date
+10	2025-12-31
+7	2026-01-11
+Warnings:
+Warning	4095	Delimiter '.' in position 2 in datetime value '26.1.11' at row 1 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '.' in position 2 in datetime value '25.12.31' at row 1 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '.' in position 2 in datetime value '26.1.11' at row 1 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '.' in position 2 in datetime value '25.12.31' at row 1 is deprecated. Prefer the standard '-'.
+select id,col_date from test where col_date in ('26/1/12','26-1-1');
+id	col_date
+9	2026-01-01
+8	2026-01-12
+Warnings:
+Warning	4095	Delimiter '/' in position 2 in datetime value '26/1/12' at row 1 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '/' in position 2 in datetime value '26/1/12' at row 1 is deprecated. Prefer the standard '-'.
+select id,col_date from test where col_date in ('991231','26109');
+id	col_date
+11	1999-12-31
+select id,col_date from test where col_date in (260110,700101);
+id	col_date
+12	1970-01-01
+3	2026-01-10
+4	2026-01-10
+6	2026-01-10
+set rds_in_predicate_conversion_threshold = 1;
+select id,col_date from test where col_date in ('26-1-08','260109');
+id	col_date
+1	2026-01-08
+17	2026-01-08
+18	2026-01-08
+19	2026-01-08
+20	2026-01-08
+2	2026-01-09
+5	2026-01-09
+select id,col_date from test where col_date in ('26.1.11','25.12.31');
+id	col_date
+7	2026-01-11
+10	2025-12-31
+Warnings:
+Warning	4095	Delimiter '.' in position 2 in datetime value '26.1.11' at row 1 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '.' in position 2 in datetime value '25.12.31' at row 1 is deprecated. Prefer the standard '-'.
+select id,col_date from test where col_date in ('26/1/12','26-1-1');
+id	col_date
+8	2026-01-12
+9	2026-01-01
+Warnings:
+Warning	4095	Delimiter '/' in position 2 in datetime value '26/1/12' at row 1 is deprecated. Prefer the standard '-'.
+select id,col_date from test where col_date in ('991231','26109');
+id	col_date
+11	1999-12-31
+select id,col_date from test where col_date in (260110,700101);
+id	col_date
+12	1970-01-01
+3	2026-01-10
+4	2026-01-10
+6	2026-01-10
+# Test DATETIME
+set rds_in_predicate_conversion_threshold = 0;
+select id, col_dt from test where col_dt in ('26-1-08 10:30:00', '26-1-09 12:00:00');
+id	col_dt
+1	2026-01-08 10:30:00.000000
+13	2026-01-08 10:30:00.000000
+2	2026-01-09 12:00:00.000000
+select id, col_dt from test where col_dt in ('26.1.11 01:01:01', '25.12.31 23:59:59');
+id	col_dt
+10	2025-12-31 23:59:59.000000
+7	2026-01-11 01:01:01.000000
+Warnings:
+Warning	4095	Delimiter '.' in position 2 in datetime value '26.1.11 01:01:01' at row 1 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '.' in position 2 in datetime value '25.12.31 23:59:59' at row 1 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '.' in position 2 in datetime value '26.1.11 01:01:01' at row 1 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '.' in position 2 in datetime value '25.12.31 23:59:59' at row 1 is deprecated. Prefer the standard '-'.
+select id, col_dt from test where col_dt in ('26/1/12 2:2:2', '26-1-1 3:4:5');
+id	col_dt
+9	2026-01-01 03:04:05.000000
+8	2026-01-12 02:02:02.000000
+Warnings:
+Warning	4095	Delimiter '/' in position 2 in datetime value '26/1/12 2:2:2' at row 1 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '/' in position 2 in datetime value '26/1/12 2:2:2' at row 1 is deprecated. Prefer the standard '-'.
+select id, col_dt from test where col_dt in ('991231111111', '260109 23:59:59.999999');
+id	col_dt
+11	1999-12-31 11:11:11.000000
+Warnings:
+Warning	1292	Incorrect datetime value: '260109 23:59:59.999999' for column 'col_dt' at row 1
+Warning	1292	Incorrect datetime value: '260109 23:59:59.999999' for column 'col_dt' at row 1
+select id, col_dt from test where col_dt in (20260110154530, 260110083000);
+id	col_dt
+4	2026-01-10 08:30:00.000000
+3	2026-01-10 15:45:30.000000
+6	2026-01-10 15:45:30.000000
+set rds_in_predicate_conversion_threshold = 1;
+select id, col_dt from test where col_dt in ('26-1-08 10:30:00', '26-1-09 12:00:00');
+id	col_dt
+1	2026-01-08 10:30:00.000000
+13	2026-01-08 10:30:00.000000
+2	2026-01-09 12:00:00.000000
+select id, col_dt from test where col_dt in ('26.1.11 01:01:01', '25.12.31 23:59:59');
+id	col_dt
+7	2026-01-11 01:01:01.000000
+10	2025-12-31 23:59:59.000000
+Warnings:
+Warning	4095	Delimiter '.' in position 2 in datetime value '26.1.11 01:01:01' at row 1 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '.' in position 2 in datetime value '25.12.31 23:59:59' at row 1 is deprecated. Prefer the standard '-'.
+select id, col_dt from test where col_dt in ('26/1/12 2:2:2', '26-1-1 3:4:5');
+id	col_dt
+8	2026-01-12 02:02:02.000000
+9	2026-01-01 03:04:05.000000
+Warnings:
+Warning	4095	Delimiter '/' in position 2 in datetime value '26/1/12 2:2:2' at row 1 is deprecated. Prefer the standard '-'.
+select id, col_dt from test where col_dt in ('991231111111', '260109 23:59:59.999999');
+id	col_dt
+11	1999-12-31 11:11:11.000000
+Warnings:
+Warning	1292	Incorrect datetime value: '260109 23:59:59.999999' for column 'col_dt' at row 1
+Warning	1292	Incorrect datetime value: '260109 23:59:59.999999' for column 'col_dt' at row 1
+select id, col_dt from test where col_dt in (20260110154530, 260110083000);
+id	col_dt
+4	2026-01-10 08:30:00.000000
+3	2026-01-10 15:45:30.000000
+6	2026-01-10 15:45:30.000000
+# Test TIMESTAMP
+set rds_in_predicate_conversion_threshold = 0;
+select id, col_ts from test where col_ts in ('26-1-08 10:30:00', '26-1-09 12:00:00');
+id	col_ts
+1	2026-01-08 10:30:00.000000
+13	2026-01-08 10:30:00.000000
+2	2026-01-09 12:00:00.000000
+select id, col_ts from test where col_ts in ('26.1.11 01:01:01', '25.12.31 23:59:59');
+id	col_ts
+10	2025-12-31 23:59:59.000000
+7	2026-01-11 01:01:01.000000
+Warnings:
+Warning	4095	Delimiter '.' in position 2 in datetime value '26.1.11 01:01:01' at row 1 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '.' in position 2 in datetime value '25.12.31 23:59:59' at row 1 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '.' in position 2 in datetime value '26.1.11 01:01:01' at row 1 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '.' in position 2 in datetime value '25.12.31 23:59:59' at row 1 is deprecated. Prefer the standard '-'.
+select id, col_ts from test where col_ts in ('26/1/12 2:2:2', '26-1-1 3:4:5');
+id	col_ts
+9	2026-01-01 03:04:05.000000
+8	2026-01-12 02:02:02.000000
+Warnings:
+Warning	4095	Delimiter '/' in position 2 in datetime value '26/1/12 2:2:2' at row 1 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '/' in position 2 in datetime value '26/1/12 2:2:2' at row 1 is deprecated. Prefer the standard '-'.
+select id, col_ts from test where col_ts in ('2038-01-19 03:14:07', '260109 23:59:59.999999');
+id	col_ts
+16	2038-01-19 03:14:07.000000
+Warnings:
+Warning	1292	Incorrect datetime value: '260109 23:59:59.999999' for column 'col_ts' at row 1
+Warning	1292	Incorrect datetime value: '260109 23:59:59.999999' for column 'col_ts' at row 1
+select id, col_ts from test where col_ts in (20260110154530, 260110083000);
+id	col_ts
+4	2026-01-10 08:30:00.000000
+3	2026-01-10 15:45:30.000000
+6	2026-01-10 15:45:30.000000
+set rds_in_predicate_conversion_threshold = 1;
+select id, col_ts from test where col_ts in ('26-1-08 10:30:00', '26-1-09 12:00:00');
+id	col_ts
+1	2026-01-08 10:30:00.000000
+13	2026-01-08 10:30:00.000000
+2	2026-01-09 12:00:00.000000
+select id, col_ts from test where col_ts in ('26.1.11 01:01:01', '25.12.31 23:59:59');
+id	col_ts
+7	2026-01-11 01:01:01.000000
+10	2025-12-31 23:59:59.000000
+Warnings:
+Warning	4095	Delimiter '.' in position 2 in datetime value '26.1.11 01:01:01' at row 1 is deprecated. Prefer the standard '-'.
+Warning	4095	Delimiter '.' in position 2 in datetime value '25.12.31 23:59:59' at row 1 is deprecated. Prefer the standard '-'.
+select id, col_ts from test where col_ts in ('26/1/12 2:2:2', '26-1-1 3:4:5');
+id	col_ts
+8	2026-01-12 02:02:02.000000
+9	2026-01-01 03:04:05.000000
+Warnings:
+Warning	4095	Delimiter '/' in position 2 in datetime value '26/1/12 2:2:2' at row 1 is deprecated. Prefer the standard '-'.
+select id, col_ts from test where col_ts in ('2038-01-19 03:14:07', '260109 23:59:59.999999');
+id	col_ts
+16	2038-01-19 03:14:07.000000
+Warnings:
+Warning	1292	Incorrect datetime value: '260109 23:59:59.999999' for column 'col_ts' at row 1
+Warning	1292	Incorrect datetime value: '260109 23:59:59.999999' for column 'col_ts' at row 1
+select id, col_ts from test where col_ts in (20260110154530, 260110083000);
+id	col_ts
+4	2026-01-10 08:30:00.000000
+3	2026-01-10 15:45:30.000000
+6	2026-01-10 15:45:30.000000
+# Test TIME
+set rds_in_predicate_conversion_threshold = 0;
+select id, col_time from test where col_time in ('10:30:00', '12:00:00');
+id	col_time
+1	10:30:00.000000
+13	10:30:00.000000
+2	12:00:00.000000
+14	12:00:00.000000
+select id, col_time from test where col_time in ('083000', '235959');
+id	col_time
+4	08:30:00.000000
+10	23:59:59.000000
+select id, col_time from test where col_time in (103000, 154530);
+id	col_time
+1	10:30:00.000000
+13	10:30:00.000000
+3	15:45:30.000000
+6	15:45:30.000000
+select id, col_time from test where col_time in ('23:59:59.999999', '00:00:00.500');
+id	col_time
+5	23:59:59.999999
+set rds_in_predicate_conversion_threshold = 1;
+select id, col_time from test where col_time in ('10:30:00', '12:00:00');
+id	col_time
+1	10:30:00.000000
+13	10:30:00.000000
+2	12:00:00.000000
+14	12:00:00.000000
+select id, col_time from test where col_time in ('083000', '235959');
+id	col_time
+4	08:30:00.000000
+10	23:59:59.000000
+select id, col_time from test where col_time in (103000, 154530);
+id	col_time
+1	10:30:00.000000
+13	10:30:00.000000
+3	15:45:30.000000
+6	15:45:30.000000
+select id, col_time from test where col_time in ('23:59:59.999999', '00:00:00.500');
+id	col_time
+5	23:59:59.999999
+# Test YEAR  BUG2026010549930 The result is incorrect in the open-source version.
+set rds_in_predicate_conversion_threshold = 0;
+select id, col_year from test where col_year in (26);
+id	col_year
+1	2026
+2	2026
+3	2026
+4	2026
+5	2026
+6	2026
+7	2026
+8	2026
+9	2026
+13	2026
+15	2026
+17	2026
+18	2026
+19	2026
+20	2026
+select id, col_year from test where col_year in (25);
+id	col_year
+10	2025
+select id, col_year from test where col_year in (26,25);
+id	col_year
+select id, col_year from test where col_year in ('26', '26');
+id	col_year
+1	2026
+2	2026
+3	2026
+4	2026
+5	2026
+6	2026
+7	2026
+8	2026
+9	2026
+13	2026
+15	2026
+17	2026
+18	2026
+19	2026
+20	2026
+set rds_in_predicate_conversion_threshold = 1;
+select id, col_year from test where col_year in (26);
+id	col_year
+1	2026
+2	2026
+3	2026
+4	2026
+5	2026
+6	2026
+7	2026
+8	2026
+9	2026
+13	2026
+15	2026
+17	2026
+18	2026
+19	2026
+20	2026
+select id, col_year from test where col_year in (25);
+id	col_year
+10	2025
+select id, col_year from test where col_year in (26,25);
+id	col_year
+1	2026
+2	2026
+3	2026
+4	2026
+5	2026
+6	2026
+7	2026
+8	2026
+9	2026
+13	2026
+15	2026
+17	2026
+18	2026
+19	2026
+20	2026
+10	2025
+select id, col_year from test where col_year in ('26', '26');
+id	col_year
+1	2026
+2	2026
+3	2026
+4	2026
+5	2026
+6	2026
+7	2026
+8	2026
+9	2026
+13	2026
+15	2026
+17	2026
+18	2026
+19	2026
+20	2026
+drop table test;

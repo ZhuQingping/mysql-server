@@ -1,0 +1,39 @@
+# ulong global
+
+SET @start_global_value = @@global.rds_physical_rpl_sender_wait_times;
+
+#
+# exists as global only
+#
+select @@global.rds_physical_rpl_sender_wait_times;
+show global variables like 'rds_physical_rpl_sender_wait_times';
+show session variables like 'rds_physical_rpl_sender_wait_times';
+select * from performance_schema.global_variables where variable_name='rds_physical_rpl_sender_wait_times';
+select * from performance_schema.session_variables where variable_name='rds_physical_rpl_sender_wait_times';
+
+#
+# show that it's writable
+#
+set global rds_physical_rpl_sender_wait_times=1;
+select @@global.rds_physical_rpl_sender_wait_times;
+--error ER_GLOBAL_VARIABLE
+set session rds_physical_rpl_sender_wait_times=1;
+
+#
+# incorrect types
+#
+--error ER_WRONG_TYPE_FOR_VAR
+set global rds_physical_rpl_sender_wait_times=1.1;
+--error ER_WRONG_TYPE_FOR_VAR
+set global rds_physical_rpl_sender_wait_times=1e1;
+--error ER_WRONG_TYPE_FOR_VAR
+set global rds_physical_rpl_sender_wait_times="xiaoli";
+
+#
+# min/max values
+#
+set global rds_physical_rpl_sender_wait_times=0;
+set global rds_physical_rpl_sender_wait_times=cast(-1 as unsigned int);
+select @@global.rds_physical_rpl_sender_wait_times;
+
+SET @@global.rds_physical_rpl_sender_wait_times = @start_global_value;

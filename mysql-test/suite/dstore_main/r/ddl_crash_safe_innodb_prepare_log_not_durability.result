@@ -1,0 +1,16 @@
+#  Test innodb prepare redo log can flush normally during DDL execution.
+create database test_ddl_durability;
+use test_ddl_durability;
+create table t1(pk int primary key, c1 int, c2 int, key ci(c1));
+insert into t1 values (1,2,3),(2,3,4),(3,4,5);
+# suspend master thread to stop backgroud redo flush.
+set global debug='d, ib_pause_master_thread';
+# hope 10s is ok
+# pause backgroud redo flush.
+set global innodb_flush_log_at_timeout=2700;
+set session debug='d, crash_afer_dstore_commit_done';
+optimize table t1;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+# Before this patch, the following drop table will crash.
+drop database test_ddl_durability;

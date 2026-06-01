@@ -1,0 +1,54 @@
+DESCRIBE INFORMATION_SCHEMA.DSTORE_UNDO;
+Field	Type	Null	Key	Default	Extra
+undo_zone_id	bigint unsigned	NO			
+undo_zone_status	varchar(32)	NO			
+page_num	bigint unsigned	NO			
+free_slot_num	bigint unsigned	NO			
+recycle_logical_slotid	bigint unsigned	NO			
+next_free_logical_slotid	bigint unsigned	NO			
+DROP TABLE IF EXISTS test_dstore_undo;
+CREATE TABLE test_dstore_undo (
+id INT PRIMARY KEY AUTO_INCREMENT,
+data INT,
+info VARCHAR(50)
+) ENGINE=DSTORE;
+DROP PROCEDURE IF EXISTS insert_test_data;
+CREATE PROCEDURE insert_test_data()
+BEGIN
+DECLARE i INT DEFAULT 1;
+DECLARE EXIT HANDLER FOR SQLEXCEPTION ROLLBACK;
+START TRANSACTION;
+WHILE i <= 500 DO
+INSERT INTO test_dstore_undo (data, info) VALUES (i, CONCAT('test_', i));
+SET i = i + 1;
+IF i % 100 = 0 THEN
+COMMIT;
+START TRANSACTION;
+END IF;
+END WHILE;
+COMMIT;
+END |
+DROP PROCEDURE IF EXISTS query_test_data;
+CREATE PROCEDURE query_test_data()
+BEGIN
+DECLARE dummy INT;
+SELECT COUNT(*) INTO dummy FROM test_dstore_undo WHERE data < 100;
+SELECT COUNT(*) INTO dummy FROM test_dstore_undo WHERE data > 400;
+SELECT MAX(data) INTO dummy FROM test_dstore_undo;
+END |
+CALL insert_test_data();
+CALL query_test_data();
+SELECT COUNT(*) AS dstore_undo_row_count FROM INFORMATION_SCHEMA.DSTORE_UNDO;
+dstore_undo_row_count
+##
+SET @MAX_UNDO_ZONE_ID=1048576;
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_UNDO WHERE UNDO_ZONE_ID=@MAX_UNDO_ZONE_ID+1;
+COUNT(*)
+0
+SELECT UNDO_ZONE_ID into @zone_id FROM INFORMATION_SCHEMA.DSTORE_UNDO LIMIT 1;
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_UNDO WHERE UNDO_ZONE_ID=@zone_id;
+COUNT(*)
+1
+DROP TABLE test_dstore_undo;
+DROP PROCEDURE insert_test_data;
+DROP PROCEDURE query_test_data;

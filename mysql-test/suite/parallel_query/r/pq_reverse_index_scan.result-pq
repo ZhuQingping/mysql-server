@@ -1,0 +1,375 @@
+create table t1 (a int, key(a desc));
+insert into t1 values(1),(2),(3),(4),(5),(6),(7);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+explain select a from t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	7	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	a	5	NULL	7	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1`
+select a from t1;
+a
+7
+6
+5
+4
+3
+2
+1
+explain select a from t1 order by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	7	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	a	5	NULL	7	100.00	Backward index scan; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` order by `test`.`t1`.`a`
+select a from t1 order by a;
+a
+1
+2
+3
+4
+5
+6
+7
+explain select a from t1 order by a desc;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	7	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	a	5	NULL	7	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` order by `test`.`t1`.`a` desc
+select a from t1 order by a desc;
+a
+7
+6
+5
+4
+3
+2
+1
+BUG2022050700571: when the thread yields in move_to_prev_block(), then
+move_to_prev_on_page() will crash as the current record is infimum.
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+set session debug="+d, move_block_yield";
+SELECT COUNT(*) from t1;
+COUNT(*)
+28672
+reverse index scan
+explain select /*+PQ(1) */ a from t1 order by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	#	#	100.00	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	a	5	#	#	100.00	Backward index scan; Using index
+Warnings:
+Note	1003	/* select#1 */ select /*+ PQ(@`select#1`) */ `test`.`t1`.`a` AS `a` from `test`.`t1` order by `test`.`t1`.`a`
+select /*+PQ(1) */ a from t1 order by a;
+normal index scan
+explain select /*+PQ(1) */ a from t1 order by a desc;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	#	#	100.00	Parallel execute (1 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	a	5	#	#	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select /*+ PQ(@`select#1`) */ `test`.`t1`.`a` AS `a` from `test`.`t1` order by `test`.`t1`.`a` desc
+select /*+PQ(1) */ a from t1 order by a desc;
+set session debug="-d, move_block_yield";
+drop table t1;
+#
+#BUG2022102503204 Wrong group merge when using a reverse_sorted index
+#
+create table t1 (a int, b int, c int, key(a desc, b asc, c desc));
+create table t2 (d int, key(d asc));
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  KEY `a` (`a` DESC,`b`,`c` DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+# Test reverse_sorted using index prefix
+explain format=tree select sum(a), a from t1 group by a;
+EXPLAIN
+-> Group aggregate: sum(`<temporary>`.`sum(a)`)  (...)
+    -> Gather: 4 workers, parallel scan on t1  (...)
+        -> Group aggregate: sum(`<temporary>`.`sum(a)`)  (...)
+            -> Parallel index scan on t1 using a  (...)
+
+explain format=tree select/*+NO_PQ*/ sum(a), a from t1 group by a;
+EXPLAIN
+-> Group aggregate: sum(t1.a)  (...)
+    -> Index scan on t1 using a  (...)
+
+select sum(a), a from t1 group by a;
+sum(a)	a
+625	5
+500	4
+375	3
+250	2
+125	1
+select/*+NO_PQ*/ sum(a), a from t1 group by a;
+sum(a)	a
+625	5
+500	4
+375	3
+250	2
+125	1
+# Test reverse_sorted index not using index prefix (use temptable)
+explain format=tree select sum(c), c from t1 group by c;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t1  (...)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Parallel index scan on t1 using a  (...)
+
+explain format=tree select/*+NO_PQ*/ sum(c), c from t1 group by c;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Index scan on t1 using a  (...)
+
+# Test reverse_sorted index with two key_part(prefix of key)
+explain format=tree select sum(a+b), a, b from t1 group by a,b;
+EXPLAIN
+-> Group aggregate: sum(`<temporary>`.`sum(a+b)`)  (...)
+    -> Gather: 4 workers, parallel scan on t1  (...)
+        -> Group aggregate: sum(`<temporary>`.`sum(a+b)`)  (...)
+            -> Parallel index scan on t1 using a  (...)
+
+explain format=tree select/*+NO_PQ*/ sum(a+b), a, b from t1 group by a,b;
+EXPLAIN
+-> Group aggregate: sum((t1.a + t1.b))  (...)
+    -> Index scan on t1 using a  (...)
+
+select sum(a+b), a, b from t1 group by a,b;
+sum(a+b)	a	b
+150	5	1
+175	5	2
+200	5	3
+225	5	4
+250	5	5
+125	4	1
+150	4	2
+175	4	3
+200	4	4
+225	4	5
+100	3	1
+125	3	2
+150	3	3
+175	3	4
+200	3	5
+75	2	1
+100	2	2
+125	2	3
+150	2	4
+175	2	5
+50	1	1
+75	1	2
+100	1	3
+125	1	4
+150	1	5
+select/*+NO_PQ*/ sum(a+b), a, b from t1 group by a,b;
+sum(a+b)	a	b
+150	5	1
+175	5	2
+200	5	3
+225	5	4
+250	5	5
+125	4	1
+150	4	2
+175	4	3
+200	4	4
+225	4	5
+100	3	1
+125	3	2
+150	3	3
+175	3	4
+200	3	5
+75	2	1
+100	2	2
+125	2	3
+150	2	4
+175	2	5
+50	1	1
+75	1	2
+100	1	3
+125	1	4
+150	1	5
+# Test reverse_sorted index with two key_part(not prefix of key)(use temptable)
+explain format=tree select sum(b+c), b, c from t1 group by b,c;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t1  (...)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Parallel index scan on t1 using a  (...)
+
+explain format=tree select/*+NO_PQ*/ sum(b+c), b, c from t1 group by b,c;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Index scan on t1 using a  (...)
+
+# Test reverse_sorted index with two tables(use temptable)
+explain format=tree select sum(t1.a+t2.d), t1.a, t2.d from t1 join t2 on t1.a = t2.d group by t1.a,t2.d;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t1  (...)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Nested loop inner join  (...)
+                        -> Filter: (t2.d is not null)  (...)
+                            -> Index scan on t2 using d  (...)
+                        -> Parallel covering index lookup on t1 using a (a=t2.d)  (...)
+
+explain format=tree select/*+NO_PQ*/ sum(t1.a+t2.d), t1.a, t2.d from t1 join t2 on t1.a = t2.d group by t1.a,t2.d;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Nested loop inner join  (...)
+            -> Filter: (t2.d is not null)  (...)
+                -> Index scan on t2 using d  (...)
+            -> Covering index lookup on t1 using a (a=t2.d)  (...)
+
+# Test reverse_sorted index using const key parts.
+explain format=tree select sum(t1.a), t1.a, t1.b, t1.c from t1 where t1.a = 1 and t1.b = 2 group by t1.a,t1.b,t1.c;
+EXPLAIN
+-> Group aggregate: sum(`<temporary>`.`sum(t1.a)`)  (...)
+    -> Gather: 4 workers, parallel scan on t1  (...)
+        -> Group aggregate: sum(`<temporary>`.`sum(t1.a)`)  (...)
+            -> Parallel covering index lookup on t1 using a (a=1, b=2)  (...)
+
+explain format=tree select/*+NO_PQ*/ sum(t1.a), t1.a, t1.b, t1.c from t1 where t1.a = 1 and t1.b = 2 group by t1.a,t1.b,t1.c;
+EXPLAIN
+-> Group aggregate: sum(t1.a)  (...)
+    -> Covering index lookup on t1 using a (a=1, b=2)  (...)
+
+select sum(t1.a), t1.a, t1.b, t1.c from t1 where t1.a = 1 and t1.b = 2 group by t1.a,t1.b,t1.c;
+sum(t1.a)	a	b	c
+5	1	2	5
+5	1	2	4
+5	1	2	3
+5	1	2	2
+5	1	2	1
+select/*+NO_PQ*/ sum(t1.a), t1.a, t1.b, t1.c from t1 where t1.a = 1 and t1.b = 2 group by t1.a,t1.b,t1.c;
+sum(t1.a)	a	b	c
+5	1	2	5
+5	1	2	4
+5	1	2	3
+5	1	2	2
+5	1	2	1
+create database test1;
+create table test1.t3 like t2;
+insert into test1.t3 select * from t2;
+# Test reverse_sorted index with two tables from different databases(use temptable)
+explain format=tree select sum(t1.a + test1.t3.d), t1.a, test1.t3.d from t1 join test1.t3 on t1.a = test1.t3.d group by t1.a,test1.t3.d;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t1  (...)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Nested loop inner join  (...)
+                        -> Filter: (test1.t3.d is not null)  (...)
+                            -> Index scan on t3 using d  (...)
+                        -> Result cache : cache keys(t3.d)  (...)
+                            -> Parallel covering index lookup on t1 using a (a=test1.t3.d)  (...)
+
+explain format=tree select/*+NO_PQ*/ sum(t1.a + test1.t3.d), t1.a, test1.t3.d from t1 join test1.t3 on t1.a = test1.t3.d group by t1.a,test1.t3.d;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Nested loop inner join  (...)
+            -> Filter: (test1.t3.d is not null)  (...)
+                -> Index scan on t3 using d  (...)
+            -> Result cache : cache keys(t3.d)  (...)
+                -> Covering index lookup on t1 using a (a=test1.t3.d)  (...)
+
+drop database test1;
+#
+#BUG2022102503168 Wrong result with limit when using a reverse_sorted index
+#
+explain format=tree select * from t2, t1 force index(`a`) having c < 3 order by a, b limit 10;
+EXPLAIN
+-> Limit: 10 row(s)  (...)
+    -> Gather: 4 workers, parallel scan on t1  (...)
+        -> Limit: 10 row(s)  (...)
+            -> Nested loop inner join  (...)
+                -> Sort: t1.a, t1.b  (...)
+                    -> Filter: ((t1.c < 3) and (t1.c < 3))  (...)
+                        -> Parallel index scan on t1 using a  (...)
+                -> Result cache : cache keys(t1.a, t1.b, t1.c)  (...)
+                    -> Index scan on t2 using d  (...)
+
+select * from t2, t1 force index(`a`) having c < 3 order by a, b limit 10;
+d	a	b	c
+1	1	1	2
+2	1	1	2
+3	1	1	2
+4	1	1	2
+5	1	1	2
+1	1	1	2
+2	1	1	2
+3	1	1	2
+4	1	1	2
+5	1	1	2
+explain format=tree select/*+NO_PQ*/ * from t2, t1 force index(`a`) having c < 3 order by a, b limit 10;
+EXPLAIN
+-> Limit: 10 row(s)  (...)
+    -> Nested loop inner join  (...)
+        -> Sort: t1.a, t1.b  (...)
+            -> Filter: (t1.c < 3)  (...)
+                -> Index scan on t1 using a  (...)
+        -> Result cache : cache keys(t1.a, t1.b, t1.c)  (...)
+            -> Index scan on t2 using d  (...)
+
+select/*+NO_PQ*/ * from t2, t1 force index(`a`) having c < 3 order by a, b limit 10;
+d	a	b	c
+1	1	1	2
+2	1	1	2
+3	1	1	2
+4	1	1	2
+5	1	1	2
+1	1	1	2
+2	1	1	2
+3	1	1	2
+4	1	1	2
+5	1	1	2
+drop table t1;
+drop table t2;
+#
+#BUG2023033003884 PQ leader plan assertion error
+#
+CREATE TABLE t0 (c0 INT, INDEX i0 (c0 DESC));
+CREATE TABLE t1 (c0 INT PRIMARY KEY);
+ANALYZE TABLE t0,t1;
+Table	Op	Msg_type	Msg_text
+test.t0	analyze	status	OK
+test.t1	analyze	status	OK
+EXPLAIN SELECT 1 FROM t0 LEFT JOIN t1 ON t1.c0 = NULL GROUP BY t0.c0, t1.c0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t0)
+1	SIMPLE	t1	NULL	const	PRIMARY	NULL	NULL	NULL	1	100.00	Impossible ON condition
+1	SIMPLE	t0	NULL	index	NULL	i0	5	NULL	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select 1 AS `1` from `test`.`t0` left join `test`.`t1` on((`test`.`t1`.`c0` = NULL)) where true group by `test`.`t0`.`c0`
+SELECT 1 FROM t0 LEFT JOIN t1 ON t1.c0 = NULL GROUP BY t0.c0, t1.c0;
+1
+DROP TABLE t0,t1;

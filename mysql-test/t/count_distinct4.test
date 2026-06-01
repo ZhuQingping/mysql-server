@@ -1,0 +1,1033 @@
+--source include/not_have_only_dstore.inc
+--source include/elide_costs.inc
+
+SET @saved_pq_support_features_switch = @@pq_support_features_switch;
+
+show variables like '%pq_support_features_switch%';
+SET pq_support_features_switch = 'count_distinct=on';
+show variables like '%pq_support_features_switch%';
+
+--echo # case1: COUNT(DISTINCT) includes a field
+
+CREATE TABLE t1 (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(50),
+    age INT,
+    class VARCHAR(50)
+);
+INSERT INTO t1 (name, age, class) VALUES 
+('Alice', 30, '1'),
+('Bob', 25, '1'),
+('Charlie', 35, '2'),
+('David', 40, '1'),
+('Alice', 30, '1'),
+('Frank', 29, '1'),
+('Grace', 33, '2'),
+('Hank', 45, '1'),
+('Ivy', 27, '2'),
+('John', 38, '1'),
+('Alice', 30, '1');
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT age) FROM t1;
+SELECT COUNT(DISTINCT age) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT name) FROM t1;
+SELECT COUNT(DISTINCT name) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT class) FROM t1;
+SELECT COUNT(DISTINCT class) FROM t1;
+
+--echo # case2: COUNT(DISTINCT) includes multiple fields
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT age, name) FROM t1;
+SELECT COUNT(DISTINCT age, name) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT age, name, class) FROM t1;
+SELECT COUNT(DISTINCT age, name, class) FROM t1;
+
+--echo # case3: The parameter of COUNT(DISTINCT) is a constant.
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT 1) FROM t1;
+SELECT COUNT(DISTINCT 1) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT 0) FROM t1;
+SELECT COUNT(DISTINCT 0) FROM t1;
+
+--echo # case4: The parameter of COUNT(DISTINCT) is a NULL value.
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT NULL) FROM t1;
+SELECT COUNT(DISTINCT NULL) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT 1, NULL) FROM t1;
+SELECT COUNT(DISTINCT 1, NULL) FROM t1;
+
+DROP TABLE t1;
+
+--echo # case5: The parameter of COUNT(DISTINCT) has multiple data types.
+
+CREATE TABLE t1 (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    -- Integer types
+    tinyint_col TINYINT,
+    smallint_col SMALLINT,
+    mediumint_col MEDIUMINT,
+    int_col INT,
+    bigint_col BIGINT,
+    
+    -- Floating-point types
+    float_col FLOAT(10,2),
+    double_col DOUBLE(16,2),
+    decimal_col DECIMAL(10,2),
+    
+    -- String types
+    char_col CHAR(10),
+    varchar_col VARCHAR(100),
+    text_col TEXT,
+    tinytext_col TINYTEXT,
+    mediumtext_col MEDIUMTEXT,
+    longtext_col LONGTEXT,
+    
+    -- Date and time types
+    date_col DATE,
+    time_col TIME,
+    datetime_col DATETIME,
+    timestamp_col TIMESTAMP,
+    year_col YEAR,
+    
+    -- Binary string types
+    binary_col BINARY(10),
+    varbinary_col VARBINARY(100),
+    blob_col BLOB,
+    tinyblob_col TINYBLOB,
+    mediumblob_col MEDIUMBLOB,
+    longblob_col LONGBLOB
+);
+
+INSERT INTO t1 (tinyint_col, smallint_col, mediumint_col, int_col, bigint_col,
+                            float_col, double_col, decimal_col,
+                            char_col, varchar_col, text_col, tinytext_col, mediumtext_col, longtext_col,
+                            date_col, time_col, datetime_col, timestamp_col, year_col,
+                            binary_col, varbinary_col, blob_col, tinyblob_col, mediumblob_col, longblob_col)
+VALUES 
+(1, 2, 3, 4, 5, 1.11, 1234567.89, 12345.67, 'A', 'Varchar1', 'Text1', 'Tiny1', 'Medium1', 'Long1', '2025-02-13', '17:04:00', '2025-02-13 17:04:00', CURRENT_TIMESTAMP, 2025, 'Bin1', 'Varbin1', 'Blob1', 'Tinyb1', 'Mediab1', 'Longb1'),
+(2, 3, 4, 5, 6, 2.22, 1234567.89, 12345.67, 'B', 'Varchar2', 'Text2', 'Tiny2', 'Medium2', 'Long2', '2025-02-14', '17:05:00', '2025-02-14 17:05:00', CURRENT_TIMESTAMP, 2025, 'Bin2', 'Varbin2', 'Blob2', 'Tinyb2', 'Mediab2', 'Longb2'),
+(3, 4, 5, 6, 7, 3.33, 1234567.89, 12345.67, 'C', 'Varchar3', 'Text3', 'Tiny3', 'Medium3', 'Long3', '2025-02-15', '17:06:00', '2025-02-15 17:06:00', CURRENT_TIMESTAMP, 2025, 'Bin3', 'Varbin3', 'Blob3', 'Tinyb3', 'Mediab3', 'Longb3'),
+(4, 5, 6, 7, 8, 4.44, 1234567.89, 12345.67, 'D', 'Varchar4', 'Text4', 'Tiny4', 'Medium4', 'Long4', '2025-02-16', '17:07:00', '2025-02-16 17:07:00', CURRENT_TIMESTAMP, 2025, 'Bin4', 'Varbin4', 'Blob4', 'Tinyb4', 'Mediab4', 'Longb4'),
+(5, 6, 7, 8, 9, 5.55, 1234567.89, 12345.67, 'E', 'Varchar5', 'Text5', 'Tiny5', 'Medium5', 'Long5', '2025-02-17', '17:08:00', '2025-02-17 17:08:00', CURRENT_TIMESTAMP, 2025, 'Bin5', 'Varbin5', 'Blob5', 'Tinyb5', 'Mediab5', 'Longb5'),
+(6, 7, 8, 9, 10, 6.66, 1234567.89, 12345.67, 'F', 'Varchar6', 'Text6', 'Tiny6', 'Medium6', 'Long6', '2025-02-18', '17:09:00', '2025-02-18 17:09:00', CURRENT_TIMESTAMP, 2025, 'Bin6', 'Varbin6', 'Blob6', 'Tinyb6', 'Mediab6', 'Longb6'),
+(7, 8, 9, 10, 11, 7.77, 1234567.89, 12345.67, 'G', 'Varchar7', 'Text7', 'Tiny7', 'Medium7', 'Long7', '2025-02-19', '17:10:00', '2025-02-19 17:10:00', CURRENT_TIMESTAMP, 2025, 'Bin7', 'Varbin7', 'Blob7', 'Tinyb7', 'Mediab7', 'Longb7'),
+(8, 9, 10, 11, 12, 8.88, 1234567.89, 12345.67, 'H', 'Varchar8', 'Text8', 'Tiny8', 'Medium8', 'Long8', '2025-02-20', '17:11:00', '2025-02-20 17:11:00', CURRENT_TIMESTAMP, 2025, 'Bin8', 'Varbin8', 'Blob8', 'Tinyb8', 'Mediab8', 'Longb8'),
+(9, 10, 11, 12, 13, 9.99, 1234567.89, 12345.67, 'I', 'Varchar9', 'Text9', 'Tiny9', 'Medium9', 'Long9', '2025-02-21', '17:12:00', '2025-02-21 17:12:00', CURRENT_TIMESTAMP, 2025, 'Bin9', 'Varbin9', 'Blob9', 'Tinyb9', 'Mediab9', 'Longb9'),
+(10, 11, 12, 13, 14, 10.10, 1234567.89, 12345.67, 'J', 'Varchar10', 'Text10', 'Tiny10', 'Medium10', 'Long10', '2025-02-22', '17:13:00', '2025-02-22 17:13:00', CURRENT_TIMESTAMP, 2025, 'Bin10', 'Varbin10', 'Blob10', 'Tinyb10', 'Mediab10', 'Longb10'),
+(11, 2, 3, 4, 5, 1.11, 1234567.89, 12345.67, 'A', 'Varchar1', 'Text1', 'Tiny1', 'Medium1', 'Long1', '2025-02-13', '17:04:00', '2025-02-13 17:04:00', CURRENT_TIMESTAMP, 2025, 'Bin1', 'Varbin1', 'Blob1', 'Tinyb1', 'Mediab1', 'Longb1'),
+(12, 2, 3, 4, 5, 1.11, 1234567.89, 12345.67, 'A', 'Varchar1', 'Text1', 'Tiny1', 'Medium1', 'Long1', '2025-02-13', '17:04:00', '2025-02-13 17:04:00', CURRENT_TIMESTAMP, 2025, 'Bin1', 'Varbin1', 'Blob1', 'Tinyb1', 'Mediab1', 'Longb1'),
+(13, 2, 3, 4, 5, 1.11, 1234567.89, 12345.67, 'A', 'Varchar1', 'Text1', 'Tiny1', 'Medium1', 'Long1', '2025-02-13', '17:04:00', '2025-02-13 17:04:00', CURRENT_TIMESTAMP, 2025, 'Bin1', 'Varbin1', 'Blob1', 'Tinyb1', 'Mediab1', 'Longb1'),
+(14, 2, 3, 4, 5, 1.11, 1234567.89, 12345.67, 'A', 'Varchar1', 'Text1', 'Tiny1', 'Medium1', 'Long1', '2025-02-13', '17:04:00', '2025-02-13 17:04:00', CURRENT_TIMESTAMP, 2025, 'Bin1', 'Varbin1', 'Blob1', 'Tinyb1', 'Mediab1', 'Longb1'),
+(15, 2, 3, 4, 5, 1.11, 1234567.89, 12345.67, 'A', 'Varchar1', 'Text1', 'Tiny1', 'Medium1', 'Long1', '2025-02-13', '17:04:00', '2025-02-13 17:04:00', CURRENT_TIMESTAMP, 2025, 'Bin1', 'Varbin1', 'Blob1', 'Tinyb1', 'Mediab1', 'Longb1'),
+(16, 2, 3, 4, 5, 1.11, 1234567.89, 12345.67, 'A', 'Varchar1', 'Text1', 'Tiny1', 'Medium1', 'Long1', '2025-02-13', '17:04:00', '2025-02-13 17:04:00', CURRENT_TIMESTAMP, 2025, 'Bin1', 'Varbin1', 'Blob1', 'Tinyb1', 'Mediab1', 'Longb1');
+
+# Integer types
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT tinyint_col) FROM t1;
+SELECT COUNT(DISTINCT tinyint_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT smallint_col) FROM t1;
+SELECT COUNT(DISTINCT smallint_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT mediumint_col) FROM t1;
+SELECT COUNT(DISTINCT mediumint_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT int_col) FROM t1;
+SELECT COUNT(DISTINCT int_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT bigint_col) FROM t1;
+SELECT COUNT(DISTINCT bigint_col) FROM t1;
+
+# Floating-point types
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT float_col) FROM t1;
+SELECT COUNT(DISTINCT float_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT double_col) FROM t1;
+SELECT COUNT(DISTINCT double_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT decimal_col) FROM t1;
+SELECT COUNT(DISTINCT decimal_col) FROM t1;
+
+# String types
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT char_col) FROM t1;
+SELECT COUNT(DISTINCT char_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT varchar_col) FROM t1;
+SELECT COUNT(DISTINCT varchar_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT text_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT tinytext_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT mediumtext_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT longtext_col) FROM t1;
+
+# Date and time types
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT date_col) FROM t1;
+SELECT COUNT(DISTINCT date_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT time_col) FROM t1;
+SELECT COUNT(DISTINCT time_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT datetime_col) FROM t1;
+SELECT COUNT(DISTINCT datetime_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT timestamp_col) FROM t1;
+SELECT COUNT(DISTINCT timestamp_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT year_col) FROM t1;
+SELECT COUNT(DISTINCT year_col) FROM t1;
+
+# Binary string types
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT binary_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT varbinary_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT blob_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT tinyblob_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT mediumblob_col) FROM t1;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT longblob_col) FROM t1;
+
+DROP TABLE t1;
+
+--echo # case6: The parameter of COUNT(DISTINCT) is a function.
+
+CREATE TABLE t1 (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    c1 INT,
+    c2 INT,
+    c3 TINYINT
+);
+INSERT INTO t1 (c1, c2, c3) VALUES 
+(10, 100, 10),
+(10, 100, 10),
+(30, 300, 3),
+(100, 10, 10),
+(50, 500, 5);
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT 1+2) FROM t1;
+SELECT COUNT(DISTINCT 1+2) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT c1+c2) FROM t1;
+SELECT COUNT(DISTINCT c1+c2) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT c1+c2-c3) FROM t1;
+SELECT COUNT(DISTINCT c1+c2-c3) FROM t1;
+
+--echo # case7: Cases with multiple COUNT(DISTINCT).
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT c1+c2-c3), COUNT(DISTINCT(c1)) FROM t1;
+SELECT COUNT(DISTINCT c1+c2-c3), COUNT(DISTINCT(c1)) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT c1+c2-c3), COUNT(DISTINCT(1)) FROM t1;
+SELECT COUNT(DISTINCT c1+c2-c3), COUNT(DISTINCT(1)) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT c1+c2-c3), COUNT(DISTINCT(NULL)) FROM t1;
+SELECT COUNT(DISTINCT c1+c2-c3), COUNT(DISTINCT(NULL)) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT c1), COUNT(DISTINCT c2) FROM t1;
+SELECT COUNT(DISTINCT c1), COUNT(DISTINCT c2) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT c1), COUNT(DISTINCT c2), COUNT(DISTINCT c3) FROM t1;
+SELECT COUNT(DISTINCT c1), COUNT(DISTINCT c2), COUNT(DISTINCT c3) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT c1), COUNT(DISTINCT c2), COUNT(DISTINCT 1) FROM t1;
+SELECT COUNT(DISTINCT c1), COUNT(DISTINCT c2), COUNT(DISTINCT 1) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT c1), COUNT(DISTINCT c2), COUNT(DISTINCT NULL) FROM t1;
+SELECT COUNT(DISTINCT c1), COUNT(DISTINCT c2), COUNT(DISTINCT NULL) FROM t1;
+
+DROP TABLE t1;
+
+--echo # case8: COUNT(DISTINCT) appears in the HAVING clause.
+
+CREATE TABLE t1 (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    n1 INT,
+    n2 INT
+);
+
+INSERT INTO t1 (n1, n2) VALUES 
+(10, 100),
+(20, 200),
+(30, 300),
+(20, 201),
+(40, 400),
+(50, 500),
+(30, 301),
+(60, 600);
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT n1) AS DISTINCT_n1_COUNT FROM t1 HAVING COUNT(DISTINCT n1) > 4;
+SELECT COUNT(DISTINCT n1) AS DISTINCT_n1_COUNT FROM t1 HAVING COUNT(DISTINCT n1) > 4;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT n1) AS DISTINCT_n1_COUNT FROM t1 HAVING COUNT(DISTINCT n1) < 4;
+SELECT COUNT(DISTINCT n1) AS DISTINCT_n1_COUNT FROM t1 HAVING COUNT(DISTINCT n1) < 4;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT n1) AS DISTINCT_n1_COUNT FROM t1 HAVING COUNT(DISTINCT n1, n2) > 4;
+SELECT COUNT(DISTINCT n1) AS DISTINCT_n1_COUNT FROM t1 HAVING COUNT(DISTINCT n1, n2) > 4;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT n1 AS DISTINCT_n1_COUNT FROM t1 GROUP BY n1 HAVING COUNT(DISTINCT n1, n2) < 4;
+SELECT n1 AS DISTINCT_n1_COUNT FROM t1 GROUP BY n1 HAVING COUNT(DISTINCT n1, n2) < 4;
+
+DROP TABLE t1;
+
+--echo # case9: COUNT(DISTINCT) appears in the WHERE clause.
+
+CREATE TABLE t1 (
+    id INT PRIMARY KEY,
+    c1 INT,
+    c2 INT
+);
+
+CREATE TABLE t2 (
+    id INT PRIMARY KEY,
+    c1 INT,
+    c2 INT
+);
+
+CREATE TABLE t3 (
+    id INT PRIMARY KEY,
+    c1 INT,
+    c2 INT
+);
+
+INSERT INTO t1 (id, c1, c2) VALUES
+(1, 100, 101),
+(2, 200, 201),
+(3, 300, 301);
+
+INSERT INTO t2 (id, c1, c2) VALUES
+(1, 400, 401),
+(2, 500, 501),
+(3, 600, 601);
+
+INSERT INTO t3 (id, c1, c2) VALUES
+(1, 700, 701),
+(2, 800, 801),
+(3, 900, 901);
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT * FROM t1 WHERE t1.c1 >= (SELECT COUNT(DISTINCT c1) FROM t2 WHERE c1 >= 500);
+SELECT * FROM t1 WHERE t1.c1 >= (SELECT COUNT(DISTINCT c1) FROM t2 WHERE c1 >= 500);
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT * FROM t1 WHERE t1.c1 >= (SELECT COUNT(DISTINCT c1, c2) FROM t2 WHERE c1 >= 500);
+SELECT * FROM t1 WHERE t1.c1 >= (SELECT COUNT(DISTINCT c1, c2) FROM t2 WHERE c1 >= 500);
+
+--echo # case10: COUNT(DISTINCT) appears in the join condition.
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT t1.*, t2.* FROM t1 JOIN t2 ON t1.id=t2.id AND t1.c1 >= (SELECT COUNT(DISTINCT c1) FROM t3 WHERE c1 > 700);
+SELECT t1.*, t2.* FROM t1 JOIN t2 ON t1.id=t2.id AND t1.c1 >= (SELECT COUNT(DISTINCT c1) FROM t3 WHERE c1 > 700);
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT t1.*, t2.* FROM t1 JOIN t2 ON t1.id=t2.id AND t1.c1 >= (SELECT COUNT(DISTINCT c1, c2) FROM t3 WHERE c1 > 700);
+SELECT t1.*, t2.* FROM t1 JOIN t2 ON t1.id=t2.id AND t1.c1 >= (SELECT COUNT(DISTINCT c1, c2) FROM t3 WHERE c1 > 700);
+
+DROP TABLE t1;
+DROP TABLE t2;
+DROP TABLE t3;
+
+--echo # case11: COUNT(DISTINCT) with GROUP BY.
+
+CREATE TABLE t1 (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    age INT NOT NULL,
+    department VARCHAR(50) NOT NULL
+);
+INSERT INTO t1 (name, age, department) VALUES
+('Alice', 30, 'Sales'),
+('Bob', 35, 'Dev'),
+('Charlie', 40, 'HR'),
+('Diana', 30, 'Sales'),
+('Eve', 20, 'Dev'),
+('Frank', 45, 'HR'),
+('Grace', 35, 'Sales'),
+('Heidi', 30, 'Dev'),
+('Ivan', 40, 'HR'),
+('Judy', 20, 'Sales');
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department;
+SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department;
+
+ALTER TABLE t1 ADD INDEX idx_dep(department);
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department;
+SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department;
+
+--echo # case12: COUNT(DISTINCT) with GROUP BY + ORDER BY.
+
+ALTER TABLE t1 DROP INDEX idx_dep;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department ORDER BY department DESC;
+SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department ORDER BY department DESC;
+
+ALTER TABLE t1 ADD INDEX idx_dep(department);
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department ORDER BY department DESC;
+SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department ORDER BY department DESC;
+
+--echo # case13: COUNT(DISTINCT) with GROUP BY + ORDER BY + HAVING.
+
+ALTER TABLE t1 DROP INDEX idx_dep;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department HAVING COUNT(DISTINCT age) > 2 ORDER BY department DESC;
+SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department HAVING COUNT(DISTINCT age) > 2 ORDER BY department DESC;
+
+ALTER TABLE t1 ADD INDEX idx_dep(department);
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department HAVING COUNT(DISTINCT age) > 2 ORDER BY department DESC;
+SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department HAVING COUNT(DISTINCT age) > 2 ORDER BY department DESC;
+
+--echo # case14: COUNT(DISTINCT) with GROUP BY + ORDER BY + HAVING + limit
+
+ALTER TABLE t1 DROP INDEX idx_dep;
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department HAVING COUNT(DISTINCT age) > 2 ORDER BY department DESC limit 2;
+SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department HAVING COUNT(DISTINCT age) > 2 ORDER BY department DESC limit 2;
+
+ALTER TABLE t1 ADD INDEX idx_dep(department);
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department HAVING COUNT(DISTINCT age) > 2 ORDER BY department DESC limit 2;
+SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department HAVING COUNT(DISTINCT age) > 2 ORDER BY department DESC limit 2;
+
+--echo # case15: PQ does not support scenarios where ROLLUP is used.
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department WITH ROLLUP;
+SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department WITH ROLLUP;
+
+DROP TABLE t1;
+
+--echo # case16: COUNT(DISTINCT) + PRIMARY KEY / UNIQUE KEY / KEY
+
+CREATE TABLE `t1` (
+  `id` int NOT NULL,
+  `c1` int DEFAULT NULL,
+  `c2` int DEFAULT NULL,
+  `c3` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `c2` (`c2`),
+  KEY `idx_c3` (`c3`)
+);
+
+INSERT INTO t1 (id, c1, c2, c3) VALUES
+(1, 10, 100, 1000),
+(2, 20, 200, 2000),
+(3, 30, 300, 3000),
+(4, 40, 400, 3000),
+(5, 10, 500, 5000);
+analyze table t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT id) FROM t1;
+SELECT COUNT(DISTINCT id) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT c1) FROM t1;
+SELECT COUNT(DISTINCT c1) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT c2) FROM t1;
+SELECT COUNT(DISTINCT c2) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT c3) FROM t1;
+SELECT COUNT(DISTINCT c3) FROM t1;
+
+--echo # case17: COUNT(DISTINCT) used in conjunction with other aggregate functions.
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(*), COUNT(DISTINCT c1) FROM t1;
+SELECT COUNT(*), COUNT(DISTINCT c1) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(*), COUNT(DISTINCT 1) FROM t1;
+SELECT COUNT(*), COUNT(DISTINCT 1) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(*), COUNT(DISTINCT NULL) FROM t1;
+SELECT COUNT(*), COUNT(DISTINCT NULL) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT DISTINCT 1, COUNT(DISTINCT c1) FROM t1;
+SELECT DISTINCT 1, COUNT(DISTINCT c1) FROM t1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT DISTINCT(c1),COUNT(DISTINCT c2)  FROM t1 GROUP BY c1;
+SELECT DISTINCT(c1),COUNT(DISTINCT c2)  FROM t1 GROUP BY c1;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT DISTINCT(c1),COUNT(DISTINCT c1, c2)  FROM t1 GROUP BY c1;
+SELECT DISTINCT(c1),COUNT(DISTINCT c1, c2)  FROM t1 GROUP BY c1;
+
+DROP TABLE t1;
+
+# Subquery
+
+CREATE TABLE departments (
+    department_id INT PRIMARY KEY,
+    department_name VARCHAR(255) NOT NULL
+);
+
+CREATE TABLE employees (
+    employee_id INT PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    sex CHAR(1) NOT NULL,
+    department_id INT
+);
+
+INSERT INTO departments (department_id, department_name) VALUES
+(1, 'Sales'),
+(2, 'Engineering'),
+(3, 'Human Resources'),
+(4, 'Finance');
+
+INSERT INTO employees (employee_id, name, sex, department_id) VALUES
+(1, 'John Doe', 'M', 1),
+(2, 'Jane Smith', 'F', 2),
+(3, 'Emily Davis', 'F', 3),
+(4, 'Michael Brown', 'M', 4),
+(5, 'Jessica Wilson', 'F', 1),
+(6, 'Christopher Lee', 'M', 2),
+(7, 'Patricia Miller', 'F', 3),
+(8, 'William Hall', 'M', 4),
+(9, 'Amanda Allen', 'F', 1),
+(10, 'Richard Scott', 'M', 2);
+
+--echo # case18: Singlerow Subquery
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT 
+    d.department_name,
+    (SELECT COUNT(DISTINCT e.sex) 
+     FROM employees e 
+     WHERE e.department_id = (
+         SELECT department_id 
+         FROM employees 
+         WHERE name = 'John Doe'
+     )) AS distinct_sex_count
+FROM departments d
+WHERE d.department_id = (
+    SELECT department_id 
+    FROM employees 
+    WHERE name = 'John Doe'
+);
+
+SELECT 
+    d.department_name,
+    (SELECT COUNT(DISTINCT e.sex) 
+     FROM employees e 
+     WHERE e.department_id = (
+         SELECT department_id 
+         FROM employees 
+         WHERE name = 'John Doe'
+     )) AS distinct_sex_count
+FROM departments d
+WHERE d.department_id = (
+    SELECT department_id 
+    FROM employees 
+    WHERE name = 'John Doe'
+);
+
+--echo # case19: IN Subquery
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT 
+    d.department_id,
+    d.department_name
+FROM 
+    departments d
+WHERE 
+    d.department_id IN (
+        SELECT e.department_id
+        FROM employees e
+        GROUP BY e.department_id
+        HAVING COUNT(DISTINCT e.sex) > 2
+    );
+
+SELECT 
+    d.department_id,
+    d.department_name
+FROM 
+    departments d
+WHERE 
+    d.department_id IN (
+        SELECT e.department_id
+        FROM employees e
+        GROUP BY e.department_id
+        HAVING COUNT(DISTINCT e.sex) > 2
+    );
+
+--echo # case20: EXISTS Subquery
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT 
+    d.department_id,
+    d.department_name
+FROM 
+    departments d
+WHERE 
+    EXISTS (
+        SELECT 1
+        FROM employees e
+        WHERE e.department_id = d.department_id
+        GROUP BY e.department_id
+        HAVING COUNT(DISTINCT e.sex) >= 2
+    );
+
+SELECT 
+    d.department_id,
+    d.department_name
+FROM 
+    departments d
+WHERE 
+    EXISTS (
+        SELECT 1
+        FROM employees e
+        WHERE e.department_id = d.department_id
+        GROUP BY e.department_id
+        HAVING COUNT(DISTINCT e.sex) >= 2
+    );
+
+--echo # case21: ALL Subquery
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT 
+    d.department_id,
+    d.department_name
+FROM 
+    departments d
+WHERE 
+    (SELECT COUNT(DISTINCT e.sex)
+     FROM employees e
+     WHERE e.department_id = d.department_id) >= ALL (
+         SELECT COUNT(DISTINCT e2.sex)
+         FROM employees e2
+         GROUP BY e2.department_id
+     );
+
+SELECT 
+    d.department_id,
+    d.department_name
+FROM 
+    departments d
+WHERE 
+    (SELECT COUNT(DISTINCT e.sex)
+     FROM employees e
+     WHERE e.department_id = d.department_id) >= ALL (
+         SELECT COUNT(DISTINCT e2.sex)
+         FROM employees e2
+         GROUP BY e2.department_id
+     );
+
+--echo # case22: ANY Subquery
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT 
+    d.department_id,
+    d.department_name
+FROM 
+    departments d
+WHERE 
+    (SELECT COUNT(DISTINCT e.sex)
+     FROM employees e
+     WHERE e.department_id = d.department_id) >= ANY (
+         SELECT COUNT(DISTINCT e2.sex)
+         FROM employees e2
+         GROUP BY e2.department_id
+         HAVING COUNT(DISTINCT e2.sex) >= 2
+     );
+
+SELECT 
+    d.department_id,
+    d.department_name
+FROM 
+    departments d
+WHERE 
+    (SELECT COUNT(DISTINCT e.sex)
+     FROM employees e
+     WHERE e.department_id = d.department_id) >= ANY (
+         SELECT COUNT(DISTINCT e2.sex)
+         FROM employees e2
+         GROUP BY e2.department_id
+         HAVING COUNT(DISTINCT e2.sex) >= 2
+     );
+
+DROP TABLE employees;
+DROP TABLE departments;
+
+--echo # case23: temporary table parameters
+
+CREATE TABLE t1 (a INT);
+--delimiter |
+CREATE PROCEDURE InsertNumbers()
+BEGIN
+  DECLARE i INT DEFAULT 1;
+  WHILE i <= 1000 DO
+    INSERT INTO t1 (a) VALUES (i);
+    SET i = i + 1;
+  END WHILE;
+END|
+--delimiter ;
+
+CALL InsertNumbers();
+
+SELECT /*+ SET_VAR(tmp_table_size=1024) */ COUNT(DISTINCT a) FROM t1;
+
+DROP PROCEDURE InsertNumbers;
+DROP TABLE t1;
+
+--echo # case24: EXPLAIN
+
+CREATE TABLE t1 (
+    id INT PRIMARY KEY,
+    c1 INT
+);
+
+INSERT INTO t1 (id, c1) VALUES
+(1, 100),
+(2, 200),
+(3, 300);
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT c1) FROM t1;
+--replace_regex $elide_actual_time_rows_loops
+EXPLAIN ANALYZE SELECT COUNT(DISTINCT c1) FROM t1;
+
+--echo # case25: pq_support_features_switch = 'count_distinct=off'
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT c1) FROM t1;
+
+show variables like '%pq_support_features_switch%';
+SET pq_support_features_switch = 'count_distinct=off';
+show variables like '%pq_support_features_switch%';
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT COUNT(DISTINCT c1) FROM t1;
+
+SET pq_support_features_switch = 'count_distinct=on';
+DROP TABLE t1;
+
+--echo # case26: range
+
+CREATE TABLE transactions (
+ app_trans_id INT DEFAULT NULL,
+ id INT NOT NULL,
+ tbl INT NOT NULL DEFAULT 1,
+ created TIMESTAMP NOT NULL DEFAULT '2017-01-01 01:01:01',
+ trans_type INT NOT NULL,
+ description BLOB,
+ source_lvl1 INT DEFAULT NULL,
+ source_lvl2 INT DEFAULT NULL,
+ KEY tbl_id_idx (tbl,id),
+ KEY created_idx (created),
+ KEY trans_type_created_idx (trans_type,created),
+ KEY app_trans_id_idx (app_trans_id)
+) ENGINE=INNODB ;
+
+CREATE TABLE t1 (c1 INT);
+INSERT INTO t1 VALUES (1), (1000), (2000), (3000), (4000), (5000), (6000),
+       (7000), (8000), (9000);
+
+DELIMITER $;
+CREATE PROCEDURE p()
+BEGIN
+
+SET @x = 1;
+REPEAT
+
+INSERT IGNORE INTO transactions(id,trans_type, description)
+  SELECT c1 + @x, @x , 'abcd'
+  FROM t1;
+
+SET @x =  @x + 1;
+
+UNTIL @x > 300 END REPEAT;
+END $
+DELIMITER ;$
+
+CALL p();
+SELECT count(*) FROM transactions;
+
+# The qualifying row.
+INSERT IGNORE INTO transactions(id,trans_type, description, created)
+  SELECT 3, 3 , 'abcd', '2018-01-01 01:01:01'
+  FROM dual;
+
+let query1=
+SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+       COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+
+# UPDATE stats to produce a ref-access plan on 'trans_type_created_idx'
+--disable_query_log
+ALTER TABLE transactions STATS_PERSISTENT=1, STATS_AUTO_RECALC=0;
+
+UPDATE mysql.innodb_index_stats
+SET stat_value=3001
+WHERE index_name ='trans_type_created_idx' AND TABLE_name='transactions';
+
+UPDATE mysql.innodb_table_stats SET n_rows=3001 WHERE TABLE_name='transactions';
+
+FLUSH TABLE transactions;
+--enable_query_log
+--disable_result_log
+--disable_query_log
+ANALYZE TABLE transactions;
+--enable_query_log
+--enable_result_log
+
+--echo # case 26.0: origin
+SET pq_support_features_switch = 'count_distinct=off';
+
+--replace_column 10 # 11 #
+eval EXPLAIN $query1;
+eval $query1;
+
+SET pq_support_features_switch = 'count_distinct=on';
+
+--replace_column 10 # 11 #
+eval EXPLAIN $query1;
+eval $query1;
+
+--echo # case 26.1 range_none
+
+set optimizer_switch=default;
+
+--disable_query_log
+if (`select locate('semijoin', @@optimizer_switch) > 0`) 
+{
+  set optimizer_switch='semijoin=off';
+}
+if (`select locate('materialization', @@optimizer_switch) > 0`) 
+{
+  set optimizer_switch='materialization=off';
+}
+if (`select locate('index_condition_pushdown', @@optimizer_switch) > 0`) 
+{
+  set optimizer_switch='index_condition_pushdown=off';
+}
+if (`select locate('mrr', @@optimizer_switch) > 0`) 
+{
+  set optimizer_switch='mrr=off';
+}
+--enable_query_log
+
+SET pq_support_features_switch = 'count_distinct=off';
+
+--replace_column 10 # 11 #
+eval EXPLAIN $query1;
+eval $query1;
+
+SET pq_support_features_switch = 'count_distinct=on';
+
+--replace_column 10 # 11 #
+eval EXPLAIN $query1;
+eval $query1;
+
+set optimizer_switch=default;
+
+--echo # case 26.2 range_mrr_cost
+
+set optimizer_switch=default;
+
+set optimizer_switch='mrr=on,mrr_cost_based=on';
+
+--disable_query_log
+if (`select locate('semijoin', @@optimizer_switch) > 0`) 
+{
+  set optimizer_switch='semijoin=off';
+}
+if (`select locate('materialization', @@optimizer_switch) > 0`) 
+{
+  set optimizer_switch='materialization=off';
+}
+if (`select locate('index_condition_pushdown', @@optimizer_switch) > 0`) 
+{
+  set optimizer_switch='index_condition_pushdown=off';
+}
+--enable_query_log
+
+SET pq_support_features_switch = 'count_distinct=off';
+
+--replace_column 10 # 11 #
+eval EXPLAIN $query1;
+eval $query1;
+
+SET pq_support_features_switch = 'count_distinct=on';
+
+--replace_column 10 # 11 #
+eval EXPLAIN $query1;
+eval $query1;
+
+set optimizer_switch=default;
+
+--echo # case 26.3 range_mrr
+
+set optimizer_switch=default;
+
+set optimizer_switch='mrr=on,mrr_cost_based=off';
+
+--disable_query_log
+if (`select locate('semijoin', @@optimizer_switch) > 0`) 
+{
+  set optimizer_switch='semijoin=off';
+}
+if (`select locate('materialization', @@optimizer_switch) > 0`) 
+{
+  set optimizer_switch='materialization=off';
+}
+if (`select locate('index_condition_pushdown', @@optimizer_switch) > 0`) 
+{
+  set optimizer_switch='index_condition_pushdown=off';
+}
+--enable_query_log
+
+SET pq_support_features_switch = 'count_distinct=off';
+
+--replace_column 10 # 11 #
+eval EXPLAIN $query1;
+eval $query1;
+
+SET pq_support_features_switch = 'count_distinct=on';
+
+--replace_column 10 # 11 #
+eval EXPLAIN $query1;
+eval $query1;
+
+set optimizer_switch=default;
+
+--echo # case 26.4 range_icp_mrr
+
+set optimizer_switch=default;
+
+set optimizer_switch='index_condition_pushdown=on,mrr=on,mrr_cost_based=off';
+set rds_empty_redundant_check_in_range_scan=false;
+--disable_query_log
+if (`select locate('semijoin', @@optimizer_switch) > 0`) 
+{
+  set optimizer_switch='semijoin=off';
+}
+if (`select locate('materialization', @@optimizer_switch) > 0`) 
+{
+  set optimizer_switch='materialization=off';
+}
+--enable_query_log
+
+SET pq_support_features_switch = 'count_distinct=off';
+
+--replace_column 10 # 11 #
+eval EXPLAIN $query1;
+eval $query1;
+
+SET pq_support_features_switch = 'count_distinct=on';
+
+--replace_column 10 # 11 #
+eval EXPLAIN $query1;
+eval $query1;
+
+set rds_empty_redundant_check_in_range_scan=true;
+set optimizer_switch=default;
+
+--echo # case 26.5 range_icp
+set optimizer_switch=default;
+
+set optimizer_switch='index_condition_pushdown=on';
+set rds_empty_redundant_check_in_range_scan=false;
+--disable_query_log
+if (`select locate('semijoin', @@optimizer_switch) > 0`) 
+{
+  set optimizer_switch='semijoin=off';
+}
+if (`select locate('materialization', @@optimizer_switch) > 0`) 
+{
+  set optimizer_switch='materialization=off';
+}
+if (`select locate('mrr', @@optimizer_switch) > 0`) 
+{
+  set optimizer_switch='mrr=off';
+}
+--enable_query_log
+
+SET pq_support_features_switch = 'count_distinct=off';
+
+--replace_column 10 # 11 #
+eval EXPLAIN $query1;
+eval $query1;
+
+SET pq_support_features_switch = 'count_distinct=on';
+
+--replace_column 10 # 11 #
+eval EXPLAIN $query1;
+eval $query1;
+
+set rds_empty_redundant_check_in_range_scan=true;
+set optimizer_switch=default;
+
+--echo # case 26.6 range_all
+
+set optimizer_switch=default;
+
+set optimizer_switch='semijoin=on,materialization=on,firstmatch=on,loosescan=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=off';
+
+SET pq_support_features_switch = 'count_distinct=off';
+
+--replace_column 10 # 11 #
+eval EXPLAIN $query1;
+eval $query1;
+
+SET pq_support_features_switch = 'count_distinct=on';
+
+--replace_column 10 # 11 #
+eval EXPLAIN $query1;
+eval $query1;
+
+set optimizer_switch=default;
+
+DROP PROCEDURE p;
+DROP TABLE t1, transactions;
+
+# Reset
+SET global pq_support_features_switch = @saved_pq_support_features_switch;

@@ -1,0 +1,37 @@
+# ==== Purpose ====
+#
+# Verify the statement outline related system variables
+# rds_opt_outline_enabled/rds_outline_partitions/rds_outline_allowed_sql_digest_truncate
+# ==== Implementation ====
+#
+# 1. Verify bool rds_opt_outline_enabled
+# 2. Verify the global read only rds_outline_allowed_sql_digest_truncate can't be SET
+# 3. Verify bool rds_outline_allowed_sql_digest_truncate 
+
+
+SET @start_opt_outline_enabled= @@global.rds_opt_outline_enabled;
+SET @start_outline_allow_sql_digest_truncate= @@global.rds_outline_allowed_sql_digest_truncate;
+
+SET global rds_opt_outline_enabled=on;
+SHOW variables like 'rds_opt_outline_enabled';
+SET global rds_opt_outline_enabled=off;
+SHOW variables like 'rds_opt_outline_enabled';
+SET global rds_opt_outline_enabled=1;
+SHOW variables like 'rds_opt_outline_enabled';
+SET global rds_opt_outline_enabled=0;
+SHOW variables like 'rds_opt_outline_enabled';
+
+--error ER_GLOBAL_VARIABLE
+SET session rds_opt_outline_enabled = off;
+
+--error ER_INCORRECT_GLOBAL_LOCAL_VAR
+SET session rds_outline_partitions = 2;
+
+--error ER_INCORRECT_GLOBAL_LOCAL_VAR
+SET global rds_outline_partitions = 2;
+
+SET session rds_outline_allowed_sql_digest_truncate=on;
+SET global rds_outline_allowed_sql_digest_truncate=off;
+
+SET global rds_opt_outline_enabled = @start_opt_outline_enabled;
+SET global rds_outline_allowed_sql_digest_truncate = @start_outline_allow_sql_digest_truncate;

@@ -1,0 +1,94 @@
+--source include/have_only_dstore.inc
+--source include/elide_costs.inc
+
+CREATE TABLE t1(i INT,
+                j INT,
+                k INT) ENGINE=dstore;
+
+CREATE TABLE t2(i INT PRIMARY KEY,
+                j INT,
+                k INT,
+                UNIQUE KEY covering(i,j)) ENGINE=dstore;
+
+INSERT INTO t1 VALUES (1,2,3), (2,2,3), (3,2,3), (4,2,3);
+INSERT INTO t2 VALUES (1,2,3), (2,2,3), (3,2,3), (4,2,3);
+
+ANALYZE TABLE t1, t2;
+
+let $query =
+  SELECT t2.i, t2.j
+  FROM t1, t2 WHERE t1.i = t2.i;
+
+# Uses covering index on t2(i,j)
+eval $query;
+eval EXPLAIN $query;
+--replace_regex $elide_costs_and_rows
+eval EXPLAIN FORMAT=tree $query;
+
+--echo # Check that the promotion is visible in optimizer trace
+SET SESSION optimizer_trace="enabled=ON";
+eval $query;
+SELECT json_extract(trace,
+                    CONCAT("$.steps[1].join_optimization.steps[5].",
+                           "considered_execution_plans[0].rest_of_plan[0].",
+                           "best_access_path.considered_access_paths[1].",
+                           "promoted_covering_index_over_PK"))
+FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+--echo # Check that we do not get promotion if the feature is switched off:
+SET SESSION rds_prefer_covering_index_over_pk = 0;
+eval $query;
+SELECT json_extract(trace,
+                    CONCAT("$.steps[1].join_optimization.steps[5].",
+                           "considered_execution_plans[0].rest_of_plan[0].",
+                           "best_access_path.considered_access_paths[1].",
+                           "promoted_covering_index_over_PK"))
+FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+eval EXPLAIN $QUERY;
+SET SESSION optimizer_trace="enabled=DEFAULT";
+SET SESSION rds_prefer_covering_index_over_pk = default;
+
+# Uses primary key, since index is no longer covering: we also need
+# t2.k
+EXPLAIN
+  SELECT t2.*
+  FROM t1, t2 WHERE t1.i = t2.i;
+
+let $query2 =
+  SELECT t2.i, t2.j, t2_a.i, t2_a.j
+  FROM t2, t2 AS t2_a WHERE t2_a.i = t2.i AND t2.j = t2_a.j;
+
+eval $query2;
+eval EXPLAIN $query2;
+--replace_regex $elide_costs_and_rows
+eval EXPLAIN FORMAT=tree $query2;
+
+DROP TABLE t2;
+
+--echo # Don't be explicit that the covering key is unique, since
+--echo # it contains primary key prefix we know that is redundant.
+CREATE TABLE t2(i INT PRIMARY KEY,
+                j INT,
+                k INT,
+                KEY covering(i,j)) ENGINE=dstore;
+
+INSERT INTO t2 VALUES (1,2,3), (2,2,3), (3,2,3), (4,2,3);
+ANALYZE TABLE t2;
+
+# Uses covering index on t2(i,j)
+eval $query;
+eval EXPLAIN $query;
+--replace_regex $elide_costs_and_rows
+eval EXPLAIN FORMAT=tree $query;
+
+eval $query2;
+eval EXPLAIN $query2;
+--replace_regex $elide_costs_and_rows
+eval EXPLAIN FORMAT=tree $query2;
+
+# Verify that our temporary promotion of the covering index to unique
+# in the query is not made permanent.
+SHOW CREATE TABLE t2;
+
+DROP TABLE t1, t2;
+

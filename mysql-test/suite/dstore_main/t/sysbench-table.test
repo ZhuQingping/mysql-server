@@ -1,0 +1,27 @@
+--source include/have_only_dstore.inc
+--echo #
+--echo # CDE for sysbench simple test
+--echo #
+use test;
+#not use AUTO_INCREMENT now
+CREATE TABLE sbtest1(id INTEGER NOT NULL AUTO_INCREMENT,k INTEGER DEFAULT '0' NOT NULL,c CHAR(120) DEFAULT '' NOT NULL,pad CHAR(60) DEFAULT '' NOT NULL,PRIMARY KEY (id)) engine=Dstore;
+INSERT INTO sbtest1 VALUES(1, 1, 1, 1);
+INSERT INTO sbtest1 VALUES(2, 2, 2, 2);
+INSERT INTO sbtest1 VALUES(3, 3, 3, 3);
+INSERT INTO sbtest1 VALUES(4, 4, 4, 4);
+--sleep 1
+--disable_warnings
+# ICP will not be used when index is clustered index(see QEP_TAB::push_index_cond), so innodb will not use ICP in following SQL statement while cde will.
+explain SELECT c FROM sbtest1 WHERE id=1;
+explain SELECT c FROM sbtest1 WHERE id BETWEEN 1 AND 4;
+explain SELECT c FROM sbtest1 WHERE id BETWEEN 1 AND 4 ORDER BY c;
+explain SELECT DISTINCT c FROM sbtest1 WHERE id BETWEEN 1 AND 4 ORDER BY c;
+--enable_warnings
+SELECT c FROM sbtest1 WHERE id=1;
+SELECT c FROM sbtest1 WHERE id BETWEEN 1 AND 4;
+SELECT SUM(k) FROM sbtest1 WHERE id BETWEEN 1 AND 4;
+SELECT c FROM sbtest1 WHERE id BETWEEN 1 AND 4 ORDER BY c;
+SELECT DISTINCT c FROM sbtest1 WHERE id BETWEEN 1 AND 4 ORDER BY c;
+--disable_result_log
+--disable_query_log
+drop table sbtest1;

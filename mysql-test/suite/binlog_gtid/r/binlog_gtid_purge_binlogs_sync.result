@@ -1,0 +1,37 @@
+RESET MASTER;
+CREATE TABLE t1(c1 INT);
+#
+# Generate several binlogs by 'FLUSH BINARY LOGS'
+#
+#
+# Expect that there are five binary logs before binlog purge
+#
+show binary logs;
+Log_name	File_size	Encrypted
+binlog.000001	#	#
+binlog.000002	#	#
+binlog.000003	#	#
+binlog.000004	#	#
+binlog.000005	#	#
+#
+# Expect that the expired binlog.000001, binlog.000002 and
+# binlog.000003 are purged synchronously on a binlog rotation
+# triggered by the following transaction commit.
+#
+SET SESSION DEBUG="+d,force_rotate";
+INSERT INTO t1 VALUES (5);
+show binary logs;
+Log_name	File_size	Encrypted
+binlog.000005	#	#
+binlog.000006	#	#
+#
+# Expect that the expired binlog.000004 is purged synchronously on
+# a binlog rotation triggered by the following transaction commit.
+#
+INSERT INTO t1 VALUES (6);
+show binary logs;
+Log_name	File_size	Encrypted
+binlog.000006	#	#
+binlog.000007	#	#
+SET SESSION DEBUG="-d,force_rotate";
+DROP TABLE t1;

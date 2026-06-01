@@ -1,0 +1,209 @@
+SET GLOBAL dstore_stats_persistent = ON;
+SET GLOBAL dstore_stats_auto_recalc = ON;
+SET SESSION cte_max_recursion_depth = 10000;
+CREATE TABLE t (id INT) ENGINE=Dstore;
+# Initial statistics (should show 0 row)
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+BEGIN;
+# subtrx Inserting 30,000 rows (batch insert)
+SAVEPOINT subtxn1;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM nums WHERE n < 10000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM nums WHERE n < 10000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM nums WHERE n < 10000
+)
+SELECT n FROM nums;
+RELEASE SAVEPOINT subtxn1;
+# Statistics during transaction (should show 30000 row), because have not recalc
+SELECT SLEEP(10);
+SLEEP(10)
+0
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	X	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+# Commit transaction
+COMMIT;
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	X	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+# Wait for background stats recalculation (persistent mode)
+SELECT SLEEP(15);
+SLEEP(15)
+0
+# Statistics after background update (should show != 30,000 rows)
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	X	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+DROP TABLE t;
+SET GLOBAL dstore_stats_persistent = 1;
+SET GLOBAL dstore_stats_auto_recalc = 1;
+CREATE TABLE t (id INT) ENGINE=Dstore;
+# Initial statistics (should show 0 row)
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+BEGIN;
+# main trx 1,000 rows (insert)
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM nums WHERE n < 1000
+)
+SELECT n FROM nums;
+# subtrx Inserting 30,000 rows (batch insert)
+SAVEPOINT subtxn2;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM nums WHERE n < 10000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM nums WHERE n < 10000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM nums WHERE n < 10000
+)
+SELECT n FROM nums;
+ROLLBACK TO SAVEPOINT subtxn2;
+# Statistics during transaction (should show 31000 row), because have not recalc
+SELECT SLEEP(10);
+SLEEP(10)
+0
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	1241	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+# Commit transaction
+COMMIT;
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	1241	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+# Wait for background stats recalculation (persistent mode)
+SELECT SLEEP(15);
+SLEEP(15)
+0
+# Statistics after background update (should show ~= 1,000 rows) because subtrx rollback. main trx commit
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	1241	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+DROP TABLE t;
+SET GLOBAL dstore_stats_persistent = 1;
+SET GLOBAL dstore_stats_auto_recalc = 1;
+SET GLOBAL dstore_stats_persistent = ON;
+CREATE TABLE t (id INT) ENGINE=Dstore;
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+BEGIN;
+# Insert 3,000 rows
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM nums WHERE n < 1000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM nums WHERE n < 1000
+)
+SELECT n FROM nums;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM nums WHERE n < 1000
+)
+SELECT n FROM nums;
+SAVEPOINT subtxn3;
+INSERT INTO t (id)
+WITH RECURSIVE nums (n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM nums WHERE n < 1000
+)
+SELECT n FROM nums;
+RELEASE SAVEPOINT subtxn3;
+# Statistics during transaction (should be unchanged)
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	4000	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+# Rollback transaction
+ROLLBACK;
+SELECT SLEEP(1);
+SLEEP(1)
+0
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+# Wait to ensure background update occurs
+SELECT SLEEP(15);
+SLEEP(15)
+0
+# Statistics after background update (should show == 0 rows), because rollback main trx
+explain select * from t;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`id` AS `id` from `test`.`t`
+DROP TABLE t;
+SET GLOBAL dstore_stats_persistent = 1;

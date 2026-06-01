@@ -1,0 +1,80 @@
+DROP DATABASE IF EXISTS sysbench_test;
+Warnings:
+Note	1008	Can't drop database 'sysbench_test'; database doesn't exist
+CREATE DATABASE sysbench_test;
+USE sysbench_test;
+SET GLOBAL dstore_ddl_buffer_size = 64;
+CREATE PROCEDURE create_sbtest_tables()
+BEGIN
+DECLARE table_num INT DEFAULT 1;
+DECLARE table_name VARCHAR(20);
+WHILE (table_num <= 4) DO
+SET table_name = CONCAT('sbtest', table_num);
+SET @create_sql = CONCAT(
+'CREATE TABLE ', table_name, '(',
+'c INT, ',
+'k CHAR(120), ',
+'PRIMARY KEY (c) ',
+') ENGINE=DSTORE;'
+        );
+PREPARE stmt FROM @create_sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+SET table_num = table_num + 1;
+END WHILE;
+END|
+CREATE PROCEDURE insert_rows(IN BASE INT, IN SIZE INT)
+BEGIN
+DECLARE i INT DEFAULT BASE;       
+DECLARE table_num INT DEFAULT 1;          
+DECLARE table_name VARCHAR(20);         
+DECLARE batch_size INT DEFAULT 10000;     
+DECLARE current_batch INT DEFAULT 0;
+WHILE (i <= SIZE) DO
+START TRANSACTION;
+SET current_batch = 0;
+WHILE (i <= SIZE AND current_batch < batch_size) DO
+SET table_num = 1;
+WHILE (table_num <= 4) DO
+SET table_name = CONCAT('sbtest', table_num);
+SET @insert_sql = CONCAT(
+'INSERT IGNORE INTO ', table_name, '(c, k) VALUES (''', i, ''', ''', i, ''')'
+                );
+PREPARE stmt FROM @insert_sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+SET table_num = table_num + 1; 
+END WHILE;
+SET i = i + 1; 
+SET current_batch = current_batch + 1;
+END WHILE;
+COMMIT;
+END WHILE;
+END|
+CALL create_sbtest_tables();
+CALL insert_rows(1, 20000);
+ALTER TABLE sbtest1 ADD INDEX k_1(k);;
+ALTER TABLE sbtest2 ADD INDEX k_2(k);;
+ALTER TABLE sbtest3 ADD INDEX k_3(k);;
+ALTER TABLE sbtest4 ADD INDEX k_4(k);;
+SELECT k FROM sbtest1 WHERE c = 1000;
+k
+1000
+UPDATE sbtest1 SET k = k + 1 WHERE c = 1000;
+UPDATE sbtest2 SET k = k + 1 WHERE c = 1000;
+UPDATE sbtest3 SET k = k + 1 WHERE c = 1000;
+UPDATE sbtest4 SET k = k + 1 WHERE c = 1000;
+SELECT k FROM sbtest1 WHERE c = 1000;
+k
+1001
+TRUNCATE TABLE sbtest4;
+SHOW CREATE TABLE sbtest1;
+Table	Create Table
+sbtest1	CREATE TABLE `sbtest1` (
+  `c` int NOT NULL,
+  `k` char(120) DEFAULT NULL,
+  PRIMARY KEY (`c`),
+  KEY `k_1` (`k`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SET GLOBAL dstore_ddl_buffer_size = 1024;
+DROP DATABASE IF EXISTS sysbench_test;

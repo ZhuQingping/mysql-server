@@ -1,0 +1,20 @@
+include/master-slave.inc
+Warnings:
+Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
+[connection master]
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) ENGINE=DStore;
+BEGIN;
+INSERT INTO test.t1 VALUES (1, 'Testing gropu-commit with just 1 thread');
+INSERT INTO test.t1 VALUES (2, 'Testing again group-commit with just 1 thread');
+INSERT INTO test.t1 VALUES (3, 'Testing for the last time group-commit with just 1 thread');
+UPDATE test.t1 SET data = 'Testing group-commit with just 1 thread' WHERE id = 1;
+DELETE FROM test.t1 WHERE id = 2;
+COMMIT;
+include/sync_slave_sql_with_master.inc
+[connection master]
+DROP TABLE t1;
+include/rpl_end.inc

@@ -1,0 +1,66 @@
+#
+# Basic test for check data consistency after restore
+#
+
+--source include/have_debug.inc
+call mtr.add_suppression("previous full backup is running");
+call mtr.add_suppression("full backup found binlog is not enabled");
+
+--source suite/local_backup/include/prepare_for_backup.inc
+
+# 1. prepare some data
+create database consistency_check;
+use consistency_check;
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--source suite/local_backup/include/data_consistency_create_table.inc
+
+SET SESSION autocommit=0;
+--source suite/local_backup/include/data_consistency_load_data.inc
+CALL LoadAllTPCCData(10, 90, 100, 100);
+
+--enable_result_log
+--enable_query_log 
+show status like 'Rds_local_backup_last_full_backup_status';
+
+# 2. Create a full backup
+--let $full_backup_flag = 0
+--source suite/local_backup/include/start_full_backup.inc
+
+# 3. Execute DDL DML operation
+--disable_query_log
+--disable_result_log
+SET SESSION autocommit=0;
+--source suite/local_backup/include/data_consistency_ddl.inc
+CALL ExecuteAllDDL();
+--source suite/local_backup/include/data_consistency_dml.inc
+CALL ExecuteTPCCWorkload(10, 90, 100, 100, 1000, 0.6, 0.25, 0.05, 0.05, 0.05);
+--enable_result_log
+--enable_query_log 
+
+--source suite/local_backup/include/wait_full_backup.inc
+show status like 'Rds_local_backup_last_full_backup_status';
+
+# 4. Restore
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+
+--let $list_type = full_backup
+--source suite/local_backup/include/restore_with_script.inc
+
+--let $restart_parameters= restart: --dstore_open_restore_mode=on
+--source include/start_mysqld.inc
+
+# 5. Verify data
+--disable_query_log
+SET SESSION autocommit=0;
+--echo # Check data consistency with DDL operation
+--source suite/local_backup/include/data_consistency_ddl_check.inc
+--echo # Check data consistency with DML operation
+--source suite/local_backup/include/data_consistency_dml_check.inc
+--enable_query_log
+
+drop database consistency_check;
+
+--source suite/local_backup/include/clean_backup.inc

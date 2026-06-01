@@ -1,0 +1,1472 @@
+#--source include/not_have_only_dstore.inc
+
+--echo # Test: list-list
+
+set @saved_rds_extended_partitions_enabled=@@rds_extended_partitions_enabled;
+set global rds_extended_partitions_enabled = true;
+set @loose_partition_restriction=@@rds_loose_partition_restriction;
+
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no)
+(
+  partition p0 values in (1, 2)(
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4),
+    subpartition partno2 values in (5, 6)
+  ),
+  partition p1 values in (3, 4)(
+    subpartition partno3 values in (1, 2),
+    subpartition partno4 values in (3, 4),
+    subpartition partno5 values in (5, 6)
+  ),
+  partition p2 values in (5, 6)(
+    subpartition partno6 values in (1, 2),
+    subpartition partno7 values in (3, 4),
+    subpartition partno8 values in (5, 6)
+  )
+);
+
+insert into t1(part_no, amount) values(1,1),(1,2),(1,3),(1,4),(1,5),(1,6);
+insert into t1(part_no, amount) values(3,1),(3,2),(3,3),(3,4),(3,5),(3,6);
+insert into t1(part_no, amount) values(5,1),(5,2),(5,3),(5,4),(5,5),(5,6);
+
+select * from t1;
+--replace_column 10 # 11 #
+explain select * from t1 where part_no = 1;
+--replace_column 10 # 11 #
+explain select * from t1 where part_no = 1 and amount = 4;
+select * from t1 where amount = 4;
+--replace_column 10 # 11 #
+explain select * from t1 where amount = 4;
+
+--error ER_NO_PARTITION_FOR_GIVEN_VALUE
+insert into t1(part_no, amount) values(1,8);
+
+--error ER_NO_PARTITION_FOR_GIVEN_VALUE
+insert into t1(part_no, amount) values(8,1);
+
+select part_no, amount from t1 partition(partno7);
+update t1 partition(partno7) set part_no = part_no + 1;
+select part_no, amount from t1 partition(partno7);
+delete from t1 partition(partno7);
+select part_no, amount from t1 partition(partno7);
+
+drop table t1;
+
+# Test : subpartitions
+
+--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no) subpartitions 3
+(
+  partition p0 values in (1, 2),
+  partition p1 values in (3, 4),
+  partition p2 values in (5, 6)
+);
+
+--error ER_PARSE_ERROR
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no) subpartitions 2
+(
+  partition p0 values in (1, 2)(
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4),
+    subpartition partno2 values in (5, 6)
+  ),
+  partition p1 values in (3, 4)(
+    subpartition partno3 values in (1, 2),
+    subpartition partno4 values in (3, 4),
+    subpartition partno5 values in (5, 6)
+  ),
+  partition p2 values in (5, 6)(
+    subpartition partno6 values in (1, 2),
+    subpartition partno7 values in (3, 4),
+    subpartition partno8 values in (5, 6)
+  )
+);
+
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no) subpartitions 3
+(
+  partition p0 values in (1, 2)(
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4),
+    subpartition partno2 values in (5, 6)
+  ),
+  partition p1 values in (3, 4)(
+    subpartition partno3 values in (1, 2),
+    subpartition partno4 values in (3, 4),
+    subpartition partno5 values in (5, 6)
+  ),
+  partition p2 values in (5, 6)(
+    subpartition partno6 values in (1, 2),
+    subpartition partno7 values in (3, 4),
+    subpartition partno8 values in (5, 6)
+  )
+);
+show create table t1;
+drop table t1;
+
+# Test : partition name must be unique within the table.
+--error ER_SAME_NAME_PARTITION
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no)
+(
+  partition p0 values in (1, 2)(
+    subpartition partno0 values in (1, 2),
+    subpartition partno0 values in (3, 4)
+  )
+);
+
+--error ER_SAME_NAME_PARTITION
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no)
+(
+  partition p0 values in (1, 2)(
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4)
+  ),
+  partition p1 values in (1, 2)(
+    subpartition partno0 values in (1, 2),
+    subpartition partno2 values in (3, 4)
+  )
+);
+
+--error ER_SAME_NAME_PARTITION
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no)
+(
+  partition p0 values in (1, 2)(
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4)
+  ),
+  partition p1 values in (1, 2)(
+    subpartition p0 values in (1, 2),
+    subpartition partno2 values in (3, 4)
+  )
+);
+
+# Test : number of subpartitions must be same for every part_defination
+
+--error ER_PARSE_ERROR
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no)
+(
+  partition p0 values in (1, 2)(
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4)
+  ),
+  partition p1 values in (1, 2)(
+    subpartition partno2 values in (1, 2)
+  )
+);
+
+--error ER_PARSE_ERROR
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no)
+(
+  partition p0 values in (1, 2)(
+    subpartition partno0 values in (1, 2)
+  ),
+  partition p1 values in (1, 2)(
+    subpartition partno2 values in (1, 2),
+    subpartition partno1 values in (3, 4)
+  )
+);
+
+# Test : must be defining subpartition defination for list type
+--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no)
+(
+  partition p0 values in (1, 2)
+);
+
+--error ER_PARSE_ERROR
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no)
+(
+  partition p0 values in (1, 2) (
+    subpartition p0sp0 values in (1)
+  ),
+  partition p1 values in (3, 4)
+);
+
+--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no)
+(
+  partition p0 values in (1, 2),
+  partition p1 values in (3, 4)(
+    subpartition p0sp0 values in (1)
+  )
+);
+
+# Test: list type's value defination is values in
+
+--error ER_PARTITION_WRONG_VALUES_ERROR
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no)
+(
+  partition p0 values in (1, 2) (
+    subpartition p0sp0 values less than(3)
+  )
+);
+
+# Test: expr/value must be INT type
+
+--error ER_VALUES_IS_NOT_INT_TYPE_ERROR
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no)
+(
+  partition p0 values in (1, 2) (
+    subpartition p0sp0 values in ('XiAN')
+  )
+);
+
+--error ER_VALUES_IS_NOT_INT_TYPE_ERROR
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (date)
+(
+  partition p0 values in (1, 2) (
+    subpartition p0sp0 values in ('2021-01-01')
+  )
+);
+
+--error ER_FIELD_TYPE_NOT_ALLOWED_AS_PARTITION_FIELD
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (date)
+(
+  partition p0 values in (1, 2) (
+    subpartition p0sp0 values in (1)
+  )
+);
+
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (dept_no)
+subpartition by list (part_no + amount)
+(
+  partition p0 values in (1, 2) (
+    subpartition p0sp0 values in (1,2,3,90,34),
+    subpartition p0sp2 values in (4,5,6)
+  )
+);
+show create table t1;
+insert into t1(dept_no, part_no, amount) values(1,1,1),(1,1,2);
+--error ER_NO_PARTITION_FOR_GIVEN_VALUE
+insert into t1(dept_no, part_no, amount) values(2,5,2);
+select * from t1 where part_no = 1 and amount = 1;
+--replace_column 10 # 11 #
+explain select * from t1 where part_no = 1 and amount = 1;
+drop table t1;
+
+--echo #
+--echo # DDL for list-list
+--echo #
+
+# Test: add partition
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no)
+(
+  partition p0 values in (1, 2)(
+    subpartition p0sp0 values in (1, 2),
+    subpartition p0sp1 values in (3, 4)
+  ),
+  partition p1 values in (3, 4)(
+    subpartition p1sp0 values in (1, 2),
+    subpartition p1sp1 values in (3, 4)
+  )
+);
+
+--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
+alter table t1 add partition (
+  partition p2 values in (5, 6)
+);
+
+--error ER_PARTITION_WRONG_VALUES_ERROR
+alter table t1 add partition (
+  partition p2 values in (5, 6) (
+    subpartition p2sp0 values less than (5),
+    subpartition p2sp0 values less than (6)
+  )
+);
+
+--error ER_PARTITION_WRONG_VALUES_ERROR
+alter table t1 add partition (
+  partition p2 values in (5, 6) (
+    subpartition p2sp0 values less than (5),
+    subpartition p2sp0 values in (6)
+  )
+);
+
+--error ER_ADD_PARTITION_SUBPART_ERROR
+alter table t1 add partition (
+  partition p2 values in (5, 6) (
+    subpartition p2sp0 values in (5, 6)
+  )
+);
+
+--error ER_PARTITION_COLUMN_LIST_ERROR
+alter table t1 add partition (
+  partition p2 values in (5, 6) (
+    subpartition p2sp0 values in ((5,6),(6,7))
+  )
+);
+
+alter table t1 add partition (
+  partition p2 values in (5, 6) (
+    subpartition p2sp0 values in (1, 2),
+    subpartition p2sp1 values in (3, 4)
+  )
+);
+show create table t1;
+alter table t1 remove partitioning;
+show create table t1;
+
+--error ER_PARTITION_MGMT_ON_NONPARTITIONED
+alter table t1 add partition (
+  partition p3 values in (7,8) (
+    subpartition p3sp0 values in (1, 2),
+    subpartition p3sp1 values in (3, 4)
+  )
+);
+drop table t1;
+
+# Test: converting a Non-partitioned Table to a Partitioned Table
+
+create table t1 (
+`a` int ,
+`b` int ,
+primary Key(a, b));
+
+insert into t1 values(1,1),(2,1),(3,1),(4,1),(111,111),(3333,333);
+
+alter table t1 partition by list(a) subpartition by list(b) (
+  partition p0 values in (1, 2, 3, 4) (
+    subpartition p0sp0 values in (1),
+    subpartition p0sp1 values in (111),
+    subpartition p0sp2 values in (333)
+  ),
+  partition p1 values in (111, 3333) (
+    subpartition p1sp0 values in (1),
+    subpartition p1sp1 values in (111),
+    subpartition p1sp2 values in (333)
+  )
+);
+show create table t1;
+
+select * from t1 partition(p0sp0);
+select * from t1 partition(p0);
+select * from t1 partition(p1);
+
+--error ER_NO_PARTITION_FOR_GIVEN_VALUE
+alter table t1 partition by list(a) subpartition by list(b) (
+  partition p0 values in (1, 2, 3, 4) (
+    subpartition p0sp0 values in (1),
+    subpartition p0sp1 values in (111),
+    subpartition p0sp2 values in (333)
+  ),
+  partition p1 values in (111) (
+    subpartition p1sp0 values in (1),
+    subpartition p1sp1 values in (111),
+    subpartition p1sp2 values in (3)
+  )
+);
+
+# Test: drop partition
+
+--error ER_DROP_PARTITION_NON_EXISTENT
+alter table t1 drop partition p0sp0;
+# Currently, we only support copy algorithm for partitioned tables in DStore.
+# The default for MySQL for DROP PARTITION is the inplace algorithm.
+# The behavior for inplace and copy algorithm is different for drop partition
+# (i.e. there is an error for copy).
+#alter table t1 drop partition p1;
+
+show create table t1;
+select * from t1;
+select partition_name, subpartition_name, table_rows from
+  information_schema.partitions where table_name = 't1';
+
+--echo # Test for truncate partition
+
+alter table t1 truncate partition p0sp0;
+show create table t1;
+select * from t1 partition(p0sp0);
+
+insert into t1 values(1, 111),(2, 333);
+select * from t1 partition(p0);
+alter table t1 truncate partition p0;
+select * from t1 partition(p0);
+
+drop table t1;
+
+# Test: for reorganize partition
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no)
+(
+  partition p0 values in (1, 2)(
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4),
+    subpartition partno2 values in (5, 6)
+  ),
+  partition p1 values in (3, 4)(
+    subpartition partno3 values in (1, 2),
+    subpartition partno4 values in (3, 4),
+    subpartition partno5 values in (5, 6)
+  ),
+  partition p2 values in (5, 6)(
+    subpartition partno6 values in (1, 2),
+    subpartition partno7 values in (3, 4),
+    subpartition partno8 values in (5, 6)
+  )
+);
+--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
+alter table t1 reorganize partition p1 into (
+  partition p1 values in (3, 4)
+);
+
+--error ER_PARTITION_WRONG_NO_SUBPART_ERROR
+alter table t1 reorganize partition p1 into (
+  partition p1 values in (3, 4) (
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4)
+  )
+);
+
+--error ER_PARTITION_WRONG_VALUES_ERROR
+alter table t1 reorganize partition p1 into (
+  partition p1 values in (3, 4) (
+    subpartition partno0 values less than (1),
+    subpartition partno1 values less than (3)
+  )
+);
+
+--error ER_PARTITION_WRONG_VALUES_ERROR
+alter table t1 reorganize partition p1 into (
+  partition p1 values in (3, 4) (
+    subpartition partno0 values in (1,2,4,5,6),
+    subpartition partno1 values less than (3)
+  )
+);
+
+--error ER_PARSE_ERROR
+alter table t1 reorganize partition p1 into (
+  partition p1 values in (3, 4) (
+    subpartition p1partno0 values in (1, 2),
+    subpartition p1partno1 values in (3, 4),
+    subpartition p1partno2 values in (5, 6)
+  ),
+  partition p3 values in (7, 8) (
+    subpartition p3partno0 values in (1, 2),
+    subpartition p3partno1 values in (3, 4)
+  )
+);
+
+--error ER_PARSE_ERROR
+alter table t1 reorganize partition p1 into (
+  partition p1 values in (3, 4) (
+    subpartition p1partno0 values in (1, 2),
+    subpartition p1partno1 values in (3, 4),
+    subpartition p1partno2 values in (5, 6)
+  ),
+  partition p3 values in (7, 8)
+);
+
+# value range can be expanded
+alter table t1 reorganize partition p1 into (
+  partition p1 values in (3, 4) (
+    subpartition p1partno0 values in (1, 2),
+    subpartition p1partno1 values in (3, 4),
+    subpartition p1partno2 values in (5, 6)
+  ),
+  partition p3 values in (7, 8) (
+    subpartition p3partno0 values in (1, 2),
+    subpartition p3partno1 values in (3, 4),
+    subpartition p3partno2 values in (5, 6)
+  )
+);
+show create table t1;
+drop table t1;
+
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no)
+(
+  partition p0 values in (1, 2)(
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4),
+    subpartition partno2 values in (5, 6)
+  ),
+  partition p1 values in (3, 4)(
+    subpartition partno3 values in (1, 2),
+    subpartition partno4 values in (3, 4),
+    subpartition partno5 values in (5, 6)
+  ),
+  partition p2 values in (5, 6)(
+    subpartition partno6 values in (1, 2),
+    subpartition partno7 values in (3, 4),
+    subpartition partno8 values in (5, 6)
+  )
+);
+insert into t1(part_no, amount) values(1,1),(1,2),(1,3),(1,4),(1,5),(1,6);
+insert into t1(part_no, amount) values(3,1),(3,2),(3,3),(3,4),(3,5),(3,6);
+insert into t1(part_no, amount) values(5,1),(5,2),(5,3),(5,4),(5,5),(5,6);
+
+# 1. modify partition definition
+select * from t1 partition(p1);
+select * from t1 partition(partno3);
+select * from t1 partition(partno4);
+select * from t1 partition(partno5);
+alter table t1 reorganize partition p1 into (
+  partition p1 values in (3, 4) (
+    subpartition partno3 values in (1),
+    subpartition partno4 values in (2),
+    subpartition partno5 values in (3, 4, 5, 6)
+  )
+);
+show create table t1;
+select * from t1 partition(p1);
+select * from t1 partition(partno3);
+select * from t1 partition(partno4);
+select * from t1 partition(partno5);
+
+select * from t1 partition(p0);
+select * from t1 partition(partno1);
+select * from t1 partition(partno2);
+select * from t1 partition(partno3);
+alter table t1 reorganize partition p0 into (
+  partition p0 values in (1, 2) (
+    subpartition partno0 values in (3,4),
+    subpartition partno1 values in (1,6),
+    subpartition partno2 values in (2,5)
+  )
+);
+show create table t1;
+select * from t1 partition(p0);
+select * from t1 partition(partno0);
+select * from t1 partition(partno1);
+select * from t1 partition(partno2);
+
+select * from t1 partition(p2);
+select * from t1 partition(partno6);
+select * from t1 partition(partno7);
+select * from t1 partition(partno8);
+alter table t1 reorganize partition p2 into (
+  partition p2 values in (5, 6) (
+    subpartition partno6 values in (3,4),
+    subpartition partno7 values in (1,6),
+    subpartition partno8 values in (2,5)
+  )
+);
+show create table t1;
+select * from t1 partition(p2);
+select * from t1 partition(partno6);
+select * from t1 partition(partno7);
+select * from t1 partition(partno8);
+
+# 2. merge partition
+alter table t1 reorganize partition p1,p2 into (
+  partition p1 values in (3, 4, 5, 6) (
+    subpartition partno3 values in (1, 2),
+    subpartition partno4 values in (3, 4),
+    subpartition partno5 values in (5, 6)
+  )
+);
+show create table t1;
+select * from t1 partition(p1);
+
+alter table t1 partition by list (amount) subpartition by list (part_no)
+(
+  partition p0 values in (1, 2)(
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4),
+    subpartition partno2 values in (5, 6)
+  ),
+  partition p1 values in (3, 4)(
+    subpartition partno3 values in (1, 2),
+    subpartition partno4 values in (3, 4),
+    subpartition partno5 values in (5, 6)
+  ),
+  partition p2 values in (5, 6)(
+    subpartition partno6 values in (1, 2),
+    subpartition partno7 values in (3, 4),
+    subpartition partno8 values in (5, 6)
+  )
+);
+alter table t1 reorganize partition p0,p1 into (
+  partition p0 values in (1, 2, 3, 4) (
+    subpartition partno3 values in (1, 2),
+    subpartition partno4 values in (3, 4),
+    subpartition partno5 values in (5, 6)
+  )
+);
+select * from t1;
+select * from t1 partition(p0);
+
+alter table t1 partition by list (amount) subpartition by list (part_no)
+(
+  partition p0 values in (1, 2)(
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4),
+    subpartition partno2 values in (5, 6)
+  ),
+  partition p1 values in (3, 4)(
+    subpartition partno3 values in (1, 2),
+    subpartition partno4 values in (3, 4),
+    subpartition partno5 values in (5, 6)
+  ),
+  partition p2 values in (5, 6)(
+    subpartition partno6 values in (1, 2),
+    subpartition partno7 values in (3, 4),
+    subpartition partno8 values in (5, 6)
+  ),
+  partition p3 values in (7,8,9) (
+    subpartition partno9 values in (1, 2),
+    subpartition partno10 values in (3, 4),
+    subpartition partno11 values in (5, 6)
+  )
+);
+insert into t1(part_no, amount) values(1,7),(2,8),(3,9),(4,7),(5,8),(6,9);
+select * from t1 partition(p3);
+select * from t1 partition(partno9);
+select * from t1 partition(partno10);
+select * from t1 partition(partno11);
+
+alter table t1 reorganize partition p0,p1,p2 into (
+  partition p0_0 values in (1, 2, 3, 4, 5 ,6) (
+    subpartition partno1 values in (1, 2),
+    subpartition partno2 values in (3, 4),
+    subpartition partno3 values in (5, 6)
+  )
+);
+show create table t1;
+select * from t1;
+select * from t1 partition(p0_0);
+select * from t1 partition(partno1);
+select * from t1 partition(partno2);
+select * from t1 partition(partno3);
+
+alter table t1 partition by list (amount) subpartition by list (part_no)
+(
+  partition p0 values in (1, 2)(
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4),
+    subpartition partno2 values in (5, 6)
+  ),
+  partition p1 values in (3, 4)(
+    subpartition partno3 values in (1, 2),
+    subpartition partno4 values in (3, 4),
+    subpartition partno5 values in (5, 6)
+  ),
+  partition p2 values in (5, 6)(
+    subpartition partno6 values in (1, 2),
+    subpartition partno7 values in (3, 4),
+    subpartition partno8 values in (5, 6)
+  ),
+  partition p3 values in (7,8,9) (
+    subpartition partno9 values in (1, 2),
+    subpartition partno10 values in (3, 4),
+    subpartition partno11 values in (5, 6)
+  )
+);
+set global rds_loose_partition_restriction = 0;
+# Currently, we only support copy algorithm for partitioned tables in DStore.
+# The default for MySQL for REORGANIZE PARTITION is the inplace algorithm.
+# The behavior for inplace and copy algorithm is different for reorganize partition.
+# (i.e. there is an error for copy).
+#--error ER_REORG_WRONG_VALUES_RANGE
+#alter table t1 reorganize partition p1,p2,p3 into (
+#  partition p1_0 values in (3, 4, 5 ,6, 7, 8) (
+#    subpartition partno1_1 values in (1, 2),
+#    subpartition partno1_2 values in (3, 4),
+#    subpartition partno1_3 values in (5, 6)
+#  )
+#);
+#set global rds_loose_partition_restriction = 1;
+#alter table t1 reorganize partition p1,p2,p3 into (
+#  partition p1_0 values in (3, 4, 5 ,6, 7, 8) (
+#    subpartition partno1_1 values in (1, 2),
+#    subpartition partno1_2 values in (3, 4),
+#    subpartition partno1_3 values in (5, 6)
+#  )
+#);
+#show create table t1;
+#select * from t1;
+#select * from t1 partition(p1_0);
+#select * from t1 partition(partno1_1);
+#select * from t1 partition(partno1_2);
+#select * from t1 partition(partno1_3);
+
+# not in consecutive order
+#alter table t1 partition by list (amount) subpartition by list (part_no)
+#(
+#  partition p0 values in (1, 2)(
+#    subpartition partno0 values in (1, 2),
+#    subpartition partno1 values in (3, 4),
+#    subpartition partno2 values in (5, 6)
+#  ),
+#  partition p1 values in (3, 4)(
+#    subpartition partno3 values in (1, 2),
+#    subpartition partno4 values in (3, 4),
+#    subpartition partno5 values in (5, 6)
+#  ),
+#  partition p2 values in (5, 6)(
+#    subpartition partno6 values in (1, 2),
+#    subpartition partno7 values in (3, 4),
+#    subpartition partno8 values in (5, 6)
+#  ),
+#  partition p3 values in (7,8,9) (
+#    subpartition partno9 values in (1, 2),
+#    subpartition partno10 values in (3, 4),
+#    subpartition partno11 values in (5, 6)
+#  )
+#);
+#--error ER_CONSECUTIVE_REORG_PARTITIONS
+#alter table t1 reorganize partition p0,p2,p3 into (
+#  partition p1_0 values in (3, 4, 5 ,6, 7, 8) (
+#    subpartition partno1_1 values in (1, 2),
+#    subpartition partno1_2 values in (3, 4),
+#    subpartition partno1_3 values in (5, 6)
+#  )
+#);
+drop table t1;
+
+# 3. split partition
+create table t1(a int , b int) partition by list (a) subpartition by list (b)
+(
+  partition p0 values in (1,3,5,7,9)(
+    subpartition partno0 values in (1,3,5),
+    subpartition partno1 values in (2,4,6)
+  ),
+  partition p1 values in (2,4,6,8)(
+    subpartition partno3 values in (2,4,6),
+    subpartition partno4 values in (1,3,5)
+  )
+);
+insert into t1 values (1,1),(1,2),(1,3),(1,4),(1,5),(1,6),
+                      (3,1),(3,2),(3,3),(3,4),(3,5),(3,6),
+                      (7,1),(7,2),(7,3),(7,4),(7,5),(7,6),
+                      (4,1),(4,2),(4,3),(4,4),(4,5),(4,6),
+                      (6,1),(6,2),(6,3),(6,4),(6,5),(6,6),
+                      (8,1),(8,2),(8,3),(8,4),(8,5),(8,6);
+alter table t1 reorganize partition p0 into (
+  partition p0_0 values in (1,3)(
+    subpartition partno0_0 values in (1,3,5),
+    subpartition partno0_1 values in (2,4,6)
+  ),
+  partition p0_1 values in (5)(
+    subpartition partno1_0 values in (1,3,5),
+    subpartition partno1_1 values in (2,4,6)
+  ),
+  partition p0_2 values in (7,9)(
+    subpartition partno2_0 values in (1,3,5),
+    subpartition partno2_1 values in (2,4,6)
+  )
+);
+select * from t1 partition(p0_0);
+select * from t1 partition(p0_1);
+select * from t1 partition(p0_2);
+select * from t1 partition(partno2_1);
+
+# 2 partitions split 3 partitions
+alter table t1 partition by list(a) subpartition by list(b) (
+  partition p0 values in (1,3,5,7,9)(
+    subpartition partno0 values in (1,3,5),
+    subpartition partno1 values in (2,4,6)
+  ),
+  partition p1 values in (2,4,6,8)(
+    subpartition partno3 values in (2,4,6),
+    subpartition partno4 values in (1,3,5)
+  )
+);
+# Currently, we only support copy algorithm for partitioned tables in DStore.
+# The default for MySQL for REORGANIZE PARTITION is the inplace algorithm.
+# The behavior for inplace and copy algorithm is different for reorganize partition.
+# (i.e. there is an error for copy).
+#alter table t1 reorganize partition p0,p1 into (
+#  partition p0_0 values in (1,3)(
+#    subpartition partno0_0 values in (1,3,5),
+#    subpartition partno0_1 values in (2,4,6)
+#  ),
+#  partition p0_1 values in (5)(
+#    subpartition partno1_0 values in (1,3,5),
+#    subpartition partno1_1 values in (2,4,6)
+#  ),
+#  partition p0_2 values in (7,9)(
+#    subpartition partno2_0 values in (1,3,5),
+#    subpartition partno2_1 values in (2,4,6)
+#  )
+#);
+#select * from t1 partition(p0_0);
+#select * from t1 partition(p0_1);
+#select * from t1 partition(p0_2);
+#select * from t1 partition(partno2_1);
+drop table t1;
+
+# 4. Error scenario : data loss
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (part_no)
+subpartition by list (amount)
+(
+  partition p0 values in (1, 2)(
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4),
+    subpartition partno2 values in (5, 6)
+  ),
+  partition p1 values in (3, 4)(
+    subpartition partno3 values in (1, 2),
+    subpartition partno4 values in (3, 4),
+    subpartition partno5 values in (5, 6)
+  ),
+  partition p2 values in (5, 6)(
+    subpartition partno6 values in (1, 2),
+    subpartition partno7 values in (3, 4),
+    subpartition partno8 values in (5, 6)
+  )
+);
+insert into t1(part_no, amount) values(5,1),(5,3),(5,6);
+select * from t1;
+# Currently, we only support copy algorithm for partitioned tables in DStore.
+# # The default for MySQL for REORGANIZE PARTITION is the inplace algorithm.
+# # The behavior for inplace and copy algorithm is different for reorganize partition.
+# # (i.e. there is an error for copy).
+#alter table t1 reorganize partition p2 into (
+#  partition p2 values in (5, 6) (
+#    subpartition partno6 values in (1, 2),
+#    subpartition partno7 values in (3, 4),
+#    subpartition partno8 values in (7, 8)
+#  )
+#);
+# leading to data loss
+select * from t1;
+drop table t1;
+
+# Test: exchange partition
+
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no)
+(
+  partition p0 values in (1, 2)(
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4),
+    subpartition partno2 values in (5, 6)
+  ),
+  partition p1 values in (3, 4)(
+    subpartition partno3 values in (1, 2),
+    subpartition partno4 values in (3, 4),
+    subpartition partno5 values in (5, 6)
+  ),
+  partition p2 values in (5, 6)(
+    subpartition partno6 values in (1, 2),
+    subpartition partno7 values in (3, 4),
+    subpartition partno8 values in (5, 6)
+  )
+);
+insert into t1(part_no, amount) values(1,1),(1,2),(1,3),(1,4),(1,5),(1,6);
+insert into t1(part_no, amount) values(3,1),(3,2),(3,3),(3,4),(3,5),(3,6);
+insert into t1(part_no, amount) values(5,1),(5,2),(5,3),(5,4),(5,5),(5,6);
+
+create table t2 like t1;
+alter table t2 remove partitioning;
+
+alter table t1 exchange partition partno7 with table t2;
+select * from t1 partition(partno7);
+select * from t2;
+
+delete from t2;
+insert into t2(part_no, amount) values(10, 5), (4, 6);
+insert into t1(part_no, amount) values(3, 5);
+--error ER_NO_PARTITION_FOR_GIVEN_VALUE
+alter table t1 exchange partition partno7 with table t2;
+
+alter table t1 exchange partition partno7 with table t2 without validation;
+select * from t1 partition(partno7);
+select * from t2;
+
+drop table t1, t2;
+
+# Test: analyze partition
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no)
+(
+  partition p0 values in (1, 2)(
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4),
+    subpartition partno2 values in (5, 6)
+  ),
+  partition p1 values in (3, 4)(
+    subpartition partno3 values in (1, 2),
+    subpartition partno4 values in (3, 4),
+    subpartition partno5 values in (5, 6)
+  ),
+  partition p2 values in (5, 6)(
+    subpartition partno6 values in (1, 2),
+    subpartition partno7 values in (3, 4),
+    subpartition partno8 values in (5, 6)
+  )
+);
+insert into t1(part_no, amount) values(1,1),(1,2),(1,3),(1,4),(1,5),(1,6);
+insert into t1(part_no, amount) values(3,1),(3,2),(3,3),(3,4),(3,5),(3,6);
+insert into t1(part_no, amount) values(5,1),(5,2),(5,3),(5,4),(5,5),(5,6);
+select count(*) from t1;
+
+alter table t1 analyze partition partno3, partno8;
+select * from t1 partition(partno3);
+
+# Test: check partition
+select * from t1 partition(partno1, partno4, partno5);
+alter table t1 check partition partno1, partno4, partno5;
+select * from t1 partition(partno1, partno4, partno5);
+
+# Test: optimize partition
+select * from t1 partition(partno1, partno6, partno8);
+alter table t1 optimize partition partno3, partno6, partno8;
+select * from t1 partition(partno1, partno6, partno8);
+
+# Test: rebuild partition, only for partiton_name, not for subpartition_name
+select * from t1 partition(p0);
+alter table t1 rebuild partition p0;
+select * from t1 partition(p0);
+--error ER_DROP_PARTITION_NON_EXISTENT
+alter table t1 rebuild partition partno2;
+
+# Test: repair partition
+select * from t1 partition(partno3);
+alter table t1 repair partition partno3;
+select * from t1 partition(partno3);
+
+# Test: remove partitioning
+alter table t1 remove partitioning;
+show create table t1;
+select * from t1;
+
+drop table t1;
+
+# Test: DDL for partition table
+create table t_list_list
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (amount)
+subpartition by list (part_no)
+(
+  partition p0 values in (1, 2)(
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4),
+    subpartition partno2 values in (5, 6)
+  ),
+  partition p1 values in (3, 4)(
+    subpartition partno3 values in (1, 2),
+    subpartition partno4 values in (3, 4),
+    subpartition partno5 values in (5, 6)
+  )
+);
+alter table t_list_list add column col1 date;
+--error ER_NO_PARTITION_FOR_GIVEN_VALUE
+insert into t_list_list(col1) values('2031-02-01');
+insert into t_list_list(part_no, amount, col1) values(1,1,'2023-02-01');
+show create table t_list_list;
+create index idx1 on t_list_list(dept_no);
+show indexes from t_list_list;
+drop table t_list_list;
+
+# Verify index
+create table t1(a int, b int) partition by list(a) subpartition by list(b) (
+partition p1 values in (3,4,5) (
+  subpartition p1sp0 values in (1,2,3),
+  subpartition p1sp1 values in (4,5,6)),
+partition p2 values in (6,7,8) (
+  subpartition p2sp0 values in (7,8,9),
+  subpartition p2sp1 values in (20,21,22))
+);
+insert into t1 values(3,2),(4,5),(5,3),(6,7),(7,20),(8,21),(6,9);
+--replace_column 10 # 11 #
+explain select * from t1 where a < 5;
+alter table t1 add index idx(a);
+select * from t1 where a < 5;
+--replace_column 10 # 11 #
+explain select * from t1 where a < 5;
+select * from t1 where a = 8;
+alter table t1 add index idx1(a, b);
+select * from t1 where a = 5 and b = 3;
+--replace_column 10 # 11 #
+explain select * from t1 where a = 5 and b = 3;
+--replace_column 10 # 11 #
+explain select * from t1 where b = 20;
+select * from t1 where b = 20;
+alter table t1 drop index idx;
+alter table t1 drop index idx1;
+alter table t1 add index idx2(b);
+select * from t1 where a = 7;
+select * from t1 where b = 3;
+drop table t1;
+
+# Test partitioning interval analysis
+create table t1(a int, b int) partition by list(a) subpartition by list(b) (
+partition p1 values in (5,3,4) (
+  subpartition p1sp0 values in (1,2,3),
+  subpartition p1sp1 values in (4,5,6)),
+partition p2 values in (7,8,6) (
+  subpartition p2sp0 values in (7,8,9),
+  subpartition p2sp1 values in (20,21,22))
+);
+insert into t1 values(3,2),(4,5),(5,3),(6,7),(7,20),(8,21),(6,9);
+select b from t1;
+select b from t1 where b > 3 and b < 9;
+--replace_column 10 # 11 #
+explain select b from t1 where b > 3 and b < 9;
+select b from t1 where b > 4;
+--replace_column 10 # 11 #
+explain select b from t1 where b > 4;
+select b from t1 where b is null;
+--replace_column 10 # 11 #
+explain select b from t1 where b is null;
+select b from t1 where b > 19 and b < 22;
+drop table t1;
+
+# Out of order
+create table t1(a int, b int) partition by list(a) subpartition by list(b) (
+partition p1 values in (3,7,8,33) (
+  subpartition p1sp0 values in (1,10,6,21),
+  subpartition p1sp1 values in (3,4,11,23)),
+partition p2 values in (4,9,21,6,45) (
+  subpartition p2sp0 values in (2,9,12),
+  subpartition p2sp1 values in (1,3,10,20,8))
+);
+insert into t1 values(3,1),(7,10),(8,6),(33,3),(8,11),(8,4),(33,23);
+insert into t1 values(4,1),(21,10),(9,2),(9,9),(6,20),(45,20),(21,12);
+
+select * from t1 order by b;
+select * from t1 where b > 11  and b < 21 order by b;
+--replace_column 10 # 11 #
+explain select * from t1 where b > 11  and b < 21 order by b;
+drop table t1;
+
+# Test more than one part_fileds
+create table t1(a int, b int, c int) partition by list(a) subpartition by list(b+c) (
+  partition p0 values in (1,2,4)(
+    subpartition p0sp0 values in (3,4,5),
+    subpartition p0sp1 values in (11,12,13)
+  ),
+  partition p1 values in (7,9,10)(
+    subpartition p1sp0 values in (7,3,4),
+    subpartition p1sp1 values in (23,12,11)
+  )
+);
+insert into t1 values(1,1,2),(2,2,2),(4,5,6),(4,1,12);
+insert into t1 values(9,3,4),(9,21,2),(10,5,6),(7,-1,5);
+
+select * from t1 where a > 0 and a < 8 order by a;
+--replace_column 10 # 11 #
+explain select * from t1 where a > 0 and a < 8 order by a;
+
+# does not prune
+select * from t1 where b > 0 and b < 8 order by b;
+select * from t1 where b > 0 and b < 8 and c > 0 and c < 4 order by b;
+drop table t1;
+
+# part_info->part_expr->get_monotonicity_info() == NON_MONOTONIC
+create table t1(a int, b int) partition by list(a) subpartition by list(3-b) (
+  partition p0 values in (1,2,4)(
+    subpartition p0sp0 values in (3,4,5),
+    subpartition p0sp1 values in (11,12,13)
+  ),
+  partition p1 values in (7,9,10)(
+    subpartition p1sp0 values in (7,-3,4),
+    subpartition p1sp1 values in (23,-12,11)
+  )
+);
+insert into t1 values(1,0),(2,-9),(4,-10),(4,-2);
+insert into t1 values(9,6),(9,-4),(10,15),(7,-20);
+select * from t1 where b > -19 and b < 4 order by b;
+--replace_column 10 # 11 #
+explain select * from t1 where b > -19 and b < 4 order by b;
+drop table t1;
+
+create table t1(a int, b int) partition by list(3-b) (
+  partition p0 values in (3,4,5),
+  partition p1 values in (23,-12,13)
+);
+insert into t1(b) values(0),(15),(-10),(-2);
+insert into t1(b) values(-1),(-20);
+
+--replace_column 10 # 11 #
+explain select * from t1 where b > -19 and b < 4;
+select * from t1 where b > -19 and b < 4;
+drop table t1;
+
+#special test: part_info->num_list_values is 0 and it will traverse all partitions
+create table t1(a int, b int) partition by list(a) subpartition by list(b) (
+  partition p0 values in (1,2,4)(
+    subpartition p0sp0 values in (null)
+  ),
+  partition p1 values in (7,9,10)(
+    subpartition p1sp0 values in (null)
+  )
+);
+insert into t1 values(1,null),(7,null);
+select * from t1 where b is null;
+--replace_column 10 # 11 #
+explain select * from t1 where b is null;
+drop table t1;
+
+# The value of one partition does not meet the requirement.
+create table t1(a int, b int) partition by list(a) subpartition by list(b) (
+  partition p0 values in (1,2,4)(
+    subpartition p0sp0 values in (1,2,3),
+    subpartition p0sp1 values in (4,5,7)
+  ),
+  partition p1 values in (7,9,10)(
+    subpartition p1sp0 values in (10,11,12),
+    subpartition p1sp1 values in (20,21,22)
+  ),
+  partition p2 values in (21,22,23)(
+    subpartition p2sp0 values in (30,31),
+    subpartition p2sp1 values in (null)
+  )
+);
+insert into t1 values(1,1),(2,5),(4,7),(2,2);
+insert into t1 values(7,10),(9,21),(10,11),(9,12);
+select * from t1 where b = 9;
+select * from t1 where b = 10;
+select * from t1 where b > 10 and b < 21;
+select * from t1 where b > 10 and b < 18;
+select * from t1 where b = 5 or b = 30;
+select * from t1 where b is null;
+--replace_column 10 # 11 #
+explain select * from t1 where b = 9;
+--replace_column 10 # 11 #
+explain select * from t1 where b = 10;
+--replace_column 10 # 11 #
+explain select * from t1 where b > 10 and b < 21;
+--replace_column 10 # 11 #
+explain select * from t1 where b > 10 and b < 18;
+--replace_column 10 # 11 #
+explain select * from t1 where b = 5 or b = 30;
+--replace_column 10 # 11 #
+explain select * from t1 where b is null;
+drop table t1;
+
+# Test null value
+--error ER_MULTIPLE_DEF_CONST_IN_LIST_PART_ERROR
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (part_no)
+subpartition by list (amount)
+(
+  partition p0 values in (1, 2)(
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4, null),
+    subpartition partno2 values in (5, 6, null)
+  )
+);
+
+--error ER_MULTIPLE_DEF_CONST_IN_LIST_PART_ERROR
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (part_no)
+subpartition by list (amount)
+(
+  partition p0 values in (1, 2 , null) (
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4),
+    subpartition partno2 values in (5, 6, null)
+  ),
+  partition p1 values in (3, null) (
+    subpartition partno3 values in (1, 2, null),
+    subpartition partno4 values in (3, 4),
+    subpartition partno5 values in (5, 6)
+  )
+);
+
+create table t1
+(
+  dept_no     int,
+  part_no     int,
+  country     varchar(20),
+  date        date,
+  amount      int
+)
+partition by list (part_no)
+subpartition by list (amount)
+(
+  partition p0 values in (1, 2, null) (
+    subpartition partno0 values in (1, 2),
+    subpartition partno1 values in (3, 4),
+    subpartition partno2 values in (5, 6, null)
+  ),
+  partition p1 values in (3, 4) (
+    subpartition partno3 values in (1, 2, null),
+    subpartition partno4 values in (3, 4),
+    subpartition partno5 values in (5, 6)
+  ),
+  partition p2 values in (5, 6)(
+    subpartition partno6 values in (1, 2),
+    subpartition partno7 values in (3, 4, null),
+    subpartition partno8 values in (5, 6)
+  )
+);
+insert into t1(amount) values (null);
+insert into t1(part_no, amount) values (null, 1),(null, 3);
+select * from t1 partition(p0);
+select * from t1 partition(partno0);
+select * from t1 partition(partno1);
+select * from t1 partition(partno2);
+drop table t1;
+
+create table t1(a int, b int) partition by list(a) subpartition by list(b) (
+partition p1 values in (5,3,4) (
+  subpartition p1sp0 values in (1,2,3),
+  subpartition p1sp1 values in (4,5,6)),
+partition p2 values in (7,8,6) (
+  subpartition p2sp0 values in (7,8,9,null),
+  subpartition p2sp1 values in (20,21,22))
+);
+insert into t1 values(3,2),(4,5),(5,3),(6,7),(7,20),(8,21),(6,9);
+select b from t1 where b is null;
+--replace_column 10 # 11 #
+explain select b from t1 where b is null;
+select * from t1 where b > 7 and b < 28;
+--replace_column 10 # 11 #
+explain select * from t1 where b > 7 and b < 28;
+
+alter table t1 add partition (
+  partition p3 values in (16,14,11,19,17,20) (
+    subpartition p3sp0 values in (11,32),
+    subpartition p3sp1 values in (0,null,12,45,78,89)
+  )
+);
+insert into t1 values(16,11),(14,null),(11,45),(19,32),(17,null);
+select b from t1 where b is null;
+--replace_column 10 # 11 #
+explain select b from t1 where b is null;
+select * from t1 where b > 7 and b < 28 order by b;
+--replace_column 10 # 11 #
+explain select * from t1 where b > 7 and b < 28 order by b;
+
+alter table t1 add partition (
+  partition p4 values in (null,12) (
+    subpartition p4sp0 values in (1,12,45),
+    subpartition p4sp1 values in (0,3,4,5,11,null)
+  )
+);
+
+insert into t1 values(null,1),(null,0),(null,3),(null,null),(12,12),(12,null),(12,1);
+select * from t1 where b is null;
+--replace_column 10 # 11 #
+explain select * from t1 where b is null;
+select * from t1 where a is null;
+--replace_column 10 # 11 #
+explain select * from t1 where a is null;
+select * from t1 where a is null and b is null;
+--replace_column 10 # 11 #
+explain select * from t1 where a is null and b is null;
+select * from t1 where a is null and b = 3;
+--replace_column 10 # 11 #
+explain select * from t1 where a is null and b = 3;
+select * from t1 where a = 12 and b is null;
+--replace_column 10 # 11 #
+explain select * from t1 where a = 12 and b is null;
+drop table t1;
+
+# reset
+set global rds_extended_partitions_enabled = @saved_rds_extended_partitions_enabled;
+set global rds_loose_partition_restriction = @loose_partition_restriction;

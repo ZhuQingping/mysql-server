@@ -1,0 +1,58 @@
+--echo #
+--echo # non-reserved keyword PRODUCT_VERSION can be used as database name
+--echo #
+CREATE DATABASE PRODUCT_VERSION;
+DROP DATABASE PRODUCT_VERSION;
+ 
+--echo #
+--echo # non-reserved keyword PRODUCT_VERSION can be used as table name and colum name
+--echo #
+CREATE TABLE PRODUCT_VERSION (PRODUCT_VERSION INT);
+INSERT INTO PRODUCT_VERSION(PRODUCT_VERSION) VALUES (1);
+SELECT PRODUCT_VERSION from PRODUCT_VERSION ORDER BY PRODUCT_VERSION;
+DROP TABLE PRODUCT_VERSION;
+ 
+--echo #
+--echo # non-reserved keyword PRODUCT_VERSION can be used as procedure lable and user-defined variable name
+--echo #
+CREATE TABLE t1 (PRODUCT_VERSION INT);
+INSERT INTO t1 VALUES (1);
+DELIMITER |;
+CREATE PROCEDURE p1()
+BEGIN
+  DECLARE PRODUCT_VERSION INT;
+ 
+  SELECT max(t1.PRODUCT_VERSION) INTO PRODUCT_VERSION FROM t1;
+ 
+  SELECT PRODUCT_VERSION;
+END|
+ 
+CREATE PROCEDURE p2()
+BEGIN
+ 
+   DECLARE n INT DEFAULT 2;
+   PRODUCT_VERSION: WHILE n > 0 DO 
+     SET n = n -1;
+   END WHILE PRODUCT_VERSION;
+END|
+DELIMITER ;|
+CALL p1();
+call p2();
+DROP PROCEDURE p1;
+DROP PROCEDURE p2;
+DROP TABLE t1;
+
+--echo #
+--echo # non-reserved keyword PRODUCT_VERSION is function name
+--echo #
+create function PRODUCT_VERSION() returns int DETERMINISTIC return 1;
+select `PRODUCT_VERSION`();
+--error ER_PARSE_ERROR
+select PRODUCT_VERSION();
+drop function PRODUCT_VERSION;
+
+--echo #
+--echo # test show PRODUCT_VERSION print in format: TaurusDB V##.##.##
+--echo #
+--replace_regex /[0-9]+/##/
+show product_version;

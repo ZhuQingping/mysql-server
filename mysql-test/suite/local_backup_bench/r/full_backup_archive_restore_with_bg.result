@@ -1,0 +1,112 @@
+CALL mtr.add_suppression("insert dstore index tuple fail");
+CALL mtr.add_suppression("insert_index fail");
+#
+# 1. prepare some data
+#
+create database full_backup_archive_restore;
+use full_backup_archive_restore;
+create table t1(s varchar(100)) engine=Dstore;
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1000
+#
+# start bg dml
+#
+include/read_file_to_var.inc
+#
+## 2. Create a full backup
+#
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+call rds_backup.stop_full_local_backup();
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+#
+# 3. Start log archive
+#
+call rds_backup.start_log_archive();
+show status like 'Rds_local_backup_log_archive_is_running';
+Variable_name	Value
+Rds_local_backup_log_archive_is_running	ON
+#
+#  4. Full backup 0 : create a full backup
+#
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+call rds_backup.stop_full_local_backup();
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+#
+#  4. Full backup 1 : create a full backup
+#
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+call rds_backup.stop_full_local_backup();
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+#
+#  4. Full backup 2 : create a full backup
+#
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+call rds_backup.stop_full_local_backup();
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+#
+# 5. Stop log archive
+#
+call rds_backup.stop_log_archive();
+show status like 'Rds_local_backup_log_archive_is_running';
+Variable_name	Value
+Rds_local_backup_log_archive_is_running	OFF
+#
+# 6. Add more data
+#
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1300
+#
+# 7. Restore
+#
+# Kill the server
+# restart: --dstore_open_restore_mode=on
+select count(*) from t1;
+count(*)
+1000
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1050
+drop database full_backup_archive_restore;

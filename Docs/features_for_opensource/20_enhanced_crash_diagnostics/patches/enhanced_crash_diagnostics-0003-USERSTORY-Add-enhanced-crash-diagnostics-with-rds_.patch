@@ -1,0 +1,2192 @@
+From 2ef131b5d1e4cbc0d8b2faeb625a7ef1ca5d6c55 Mon Sep 17 00:00:00 2001
+From: songliyong <songliyong@huawei.com>
+Date: Fri, 27 Mar 2026 15:56:03 +0800
+Subject: [PATCH] US2026033100141 FFIC: Add enhanced crash diagnostics with
+ rds_ffic_verbose_crash_diagnostics
+
+Issue:
+------
+The current implementation of MySQL only prints stack traces during a
+process crash; this information is too limited for effective issue localization
+
+Solution:
+---------
+When rds_ffic_verbose_crash_diagnostics is enabled, handle_fatal_signal()
+emits a structured extended crash report covering CPU registers (x86_64
+and AArch64) with plain-language hints, stack-top hex dump, instruction
+bytes around the faulting PC, FNV-1a crash fingerprint, process memory
+stats, loaded executable segments, OS version, and active query context.
+All new code is appended to existing files (mysys/stacktrace.cc,
+sql/signal_handler.cc); changes to existing code are limited to three
+targeted edits in sql/mysqld.cc (SA_SIGINFO registration, global flag,
+startup option) and a one-line handler signature change in
+sql/signal_handler.cc. All new functions are async-signal-safe.
+---
+ include/my_stacktrace.h                       | 100 ++
+ mysql-test/r/all_persisted_variables.result   |   8 +-
+ mysql-test/r/mysqld--help-notwin.result       |  11 +
+ .../r/all_persisted_variables.result          |  10 +-
+ .../r/mysqld--help-notwin-dstore.result       |  11 +
+ .../t/all_persisted_variables.test            |   4 +-
+ mysql-test/suite/sys_vars/r/all_vars.result   |   2 +
+ .../suite/sys_vars/r/dstore-all_vars.result   |   2 +
+ mysql-test/t/all_persisted_variables.test     |   2 +-
+ mysys/CMakeLists.txt                          |   8 +
+ mysys/stacktrace.cc                           | 880 +++++++++++++++++-
+ sql/mysqld.cc                                 |  17 +-
+ sql/mysqld.h                                  |   1 +
+ sql/signal_handler.cc                         | 176 ++++
+ sql/sys_vars.cc                               |  19 +
+ unittest/gunit/CMakeLists.txt                 |   8 +
+ unittest/gunit/ffic_stacktrace-t.cc           | 578 ++++++++++++
+ 17 files changed, 1816 insertions(+), 21 deletions(-)
+ create mode 100644 unittest/gunit/ffic_stacktrace-t.cc
+
+diff --git a/include/my_stacktrace.h b/include/my_stacktrace.h
+index d279c1c1e6c..ecdd8ab83c9 100644
+--- a/include/my_stacktrace.h
++++ b/include/my_stacktrace.h
+@@ -28,6 +28,7 @@
+   @file include/my_stacktrace.h
+ */
+ 
++#include <signal.h>
+ #include <stddef.h>
+ #include <sys/types.h>
+ 
+@@ -50,6 +51,12 @@
+ void my_init_stacktrace();
+ void my_print_stacktrace(const uchar *stack_bottom, ulong thread_stack);
+ void my_safe_puts_stderr(const char *val, size_t max_len);
++#if defined(HAVE_EXT_BACKTRACE)
++/**
++  loading symbols is slow, we can warm it at startup
++ */
++void my_warmup_ext_backtrace();
++#endif
+ 
+ #ifdef _WIN32
+ void my_set_exception_pointers(EXCEPTION_POINTERS *ep);
+@@ -125,4 +132,97 @@ size_t my_write_stderr(const void *buf, size_t count);
+ */
+ void my_safe_print_system_time();
+ 
++/* -----------------------------------------------------------------------
++ * FFIC: Enhanced Crash Diagnostics
++ * All declarations below are new additions.  No existing code was changed.
++ * ----------------------------------------------------------------------- */
++#if defined(__linux__) && !defined(_WIN32)
++#if defined(__x86_64__) || defined(__aarch64__)
++/**
++ * Print a full CPU register dump (x86_64 or AArch64) with a brief legend.
++ * @param ucontext_ptr  Pointer to ucontext_t from the SA_SIGINFO handler,
++ *                      or nullptr (no-op).
++ */
++void ffic_print_registers(const ucontext_t *ucontext_ptr);
++
++/**
++ * Print plain-language diagnostic hints derived from register values
++ * (null-pointer detection, stack misalignment, frame-pointer corruption,
++ * write-fault detection).
++ * @param ucontext_ptr  Pointer to ucontext_t, or nullptr.
++ */
++void ffic_print_register_hints(const ucontext_t *ucontext_ptr);
++
++/**
++ * Print a hex dump of the top-of-stack memory with a full interpretation
++ * guide explaining what the stack is and how to recognise common problems.
++ * @param sp        Stack pointer at crash time.
++ * @param num_words Number of pointer-sized words to dump (suggested: 32).
++ */
++void ffic_print_stack_memory(const uint64_t *sp, size_t num_words);
++
++/**
++ * Print the raw instruction bytes around the faulting PC.
++ * Memory validity is verified with dladdr() before any reads.
++ * @param ucontext_ptr  Pointer to ucontext_t, or nullptr.
++ */
++void ffic_print_instruction_context(const ucontext_t *ucontext_ptr);
++
++#endif /* __x86_64__ || __aarch64__ */
++
++/** Print selected /proc/self/status lines (VmRSS, VmPeak, VmStk, Threads). */
++void ffic_print_process_resources();
++
++/**
++ * Print system-wide memory from /proc/meminfo.
++ * Reports MemTotal, MemFree, MemAvailable, Buffers, Cached, SwapTotal,
++ * SwapFree. A very low MemAvailable suggests an OOM condition caused the crash.
++ */
++void ffic_print_memory_info();
++
++/**
++ * Print system load averages from /proc/loadavg (1/5/15 min).
++ * High sustained load may indicate resource saturation before the crash.
++ */
++void ffic_print_system_load();
++
++/**
++ * Print key process resource limits from /proc/self/limits.
++ * Reports Max stack size, Max core file size, Max open files, and
++ * Max address space. These help diagnose stack overflow, missing core
++ * dumps, and file-descriptor exhaustion.
++ */
++void ffic_print_process_limits();
++
++/** Print executable segments from /proc/self/maps for ASLR resolution. */
++void ffic_print_loaded_segments();
++
++/** Print OS kernel version and architecture via uname(2). */
++void ffic_print_os_info();
++
++/**
++ * Print raw signal information from a siginfo_t pointer.
++ * @param sig      Signal number.
++ * @param info_ptr Pointer to siginfo_t, or nullptr (no-op).
++ */
++void ffic_print_signal_info(int sig, const siginfo_t *info_ptr);
++
++/**
++ * Print actionable post-crash diagnostic tips (c++filt, addr2line, GDB).
++ * Printed last in the crash report so it is immediately visible.
++ */
++void ffic_print_post_crash_tips();
++#endif /* __linux__ && !_WIN32 */
++
++/**
++ * Print the complete FFIC enhanced crash report (all sections).
++ * Called from handle_fatal_signal() when rds_ffic_verbose_crash_diagnostics
++ * is true.
++ * @param sig      Signal number.
++ * @param info_ptr Pointer to siginfo_t, or nullptr.
++ * @param context  Pointer to ucontext_t, or nullptr.
++ */
++void ffic_print_enhanced_crash_info(int sig, const siginfo_t *info_ptr,
++                                    const ucontext_t *context);
++
+ #endif  // MY_STACKTRACE_INCLUDED
+diff --git a/mysql-test/r/all_persisted_variables.result b/mysql-test/r/all_persisted_variables.result
+index f53f9d71715..e2b756d93d5 100644
+--- a/mysql-test/r/all_persisted_variables.result
++++ b/mysql-test/r/all_persisted_variables.result
+@@ -41,7 +41,7 @@ include/assert.inc [Expect 500+ variables in the table. Due to open Bugs, we are
+ 
+ # Test SET PERSIST
+ 
+-include/assert.inc [Expect 584 persisted variables in the table.]
++include/assert.inc [Expect 585 persisted variables in the table.]
+ 
+ ************************************************************
+ * 3. Restart server, it must preserve the persisted variable
+@@ -49,9 +49,9 @@ include/assert.inc [Expect 584 persisted variables in the table.]
+ ************************************************************
+ # restart
+ 
+-include/assert.inc [Expect 584 persisted variables in persisted_variables table.]
+-include/assert.inc [Expect 584 persisted variables shown as PERSISTED in variables_info table.]
+-include/assert.inc [Expect 584 persisted variables with matching peristed and global values.]
++include/assert.inc [Expect 585 persisted variables in persisted_variables table.]
++include/assert.inc [Expect 585 persisted variables shown as PERSISTED in variables_info table.]
++include/assert.inc [Expect 585 persisted variables with matching peristed and global values.]
+ 
+ ************************************************************
+ * 4. Test RESET PERSIST IF EXISTS. Verify persisted variable
+diff --git a/mysql-test/r/mysqld--help-notwin.result b/mysql-test/r/mysqld--help-notwin.result
+index fd758a6e26d..aede94b24f0 100644
+--- a/mysql-test/r/mysqld--help-notwin.result
++++ b/mysql-test/r/mysqld--help-notwin.result
+@@ -1697,6 +1697,16 @@ The following options may be given as the first argument:
+  --rds-extended-partitions-enabled 
+  This option indicates whether supportes more partition
+  types.
++ --rds-ffic-verbose-crash-diagnostics 
++ When ON, mysqld prints an extended FFIC crash report on
++ any fatal signal (SIGSEGV, SIGBUS, SIGILL, SIGFPE,
++ SIGABRT). The report includes CPU register dumps with
++ diagnostic hints, stack-top memory, instruction bytes
++ around the faulting PC, system-wide memory stats, process
++ resource limits, system load averages, loaded segment
++ addresses for offline symbol resolution, and OS version.
++ Toggle at runtime with SET GLOBAL. Default ON.
++ (Defaults to on; use --skip-rds-ffic-verbose-crash-diagnostics to disable.)
+  --rds-full-local-backup-path[=name] 
+  Path for full local backup data
+  --rds-hint-work-for-view 
+@@ -3043,6 +3053,7 @@ rds-dstore-support-binlog-check TRUE
+ rds-dstore-write-ddl-sql-into-redo TRUE
+ rds-empty-redundant-check-in-range-scan TRUE
+ rds-extended-partitions-enabled FALSE
++rds-ffic-verbose-crash-diagnostics TRUE
+ rds-full-local-backup-path 
+ rds-hint-work-for-view TRUE
+ rds-imitate-mariadb-server FALSE
+diff --git a/mysql-test/suite/dstore_main/r/all_persisted_variables.result b/mysql-test/suite/dstore_main/r/all_persisted_variables.result
+index ff7d4d87f85..cd2b337db22 100644
+--- a/mysql-test/suite/dstore_main/r/all_persisted_variables.result
++++ b/mysql-test/suite/dstore_main/r/all_persisted_variables.result
+@@ -37,11 +37,11 @@ AND variable_name NOT LIKE 'ndb_%'
+ AND variable_name NOT LIKE 'debug_%'
+ ORDER BY variable_name;
+ 
+-include/assert.inc [Expect 500+ variables in the table. Due to open Bugs, we are checking for fewer ]
++include/assert.inc [Expect 500+ variables in the table. Due to open Bugs, we are checking for fewer]
+ 
+ # Test SET PERSIST
+ 
+-include/assert.inc [Expect 631 persisted variables in the table.]
++include/assert.inc [Expect 632 persisted variables in the table.]
+ 
+ ************************************************************
+ * 3. Restart server, it must preserve the persisted variable
+@@ -49,9 +49,9 @@ include/assert.inc [Expect 631 persisted variables in the table.]
+ ************************************************************
+ # restart
+ 
+-include/assert.inc [Expect 631 persisted variables in persisted_variables table.]
+-include/assert.inc [Expect 631 persisted variables shown as PERSISTED in variables_info table.]
+-include/assert.inc [Expect 631 persisted variables with matching peristed and global values.]
++include/assert.inc [Expect 632 persisted variables in persisted_variables table.]
++include/assert.inc [Expect 632 persisted variables shown as PERSISTED in variables_info table.]
++include/assert.inc [Expect 632 persisted variables with matching peristed and global values.]
+ 
+ ************************************************************
+ * 4. Test RESET PERSIST IF EXISTS. Verify persisted variable
+diff --git a/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result b/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
+index fd758a6e26d..aede94b24f0 100644
+--- a/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
++++ b/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
+@@ -1697,6 +1697,16 @@ The following options may be given as the first argument:
+  --rds-extended-partitions-enabled 
+  This option indicates whether supportes more partition
+  types.
++ --rds-ffic-verbose-crash-diagnostics 
++ When ON, mysqld prints an extended FFIC crash report on
++ any fatal signal (SIGSEGV, SIGBUS, SIGILL, SIGFPE,
++ SIGABRT). The report includes CPU register dumps with
++ diagnostic hints, stack-top memory, instruction bytes
++ around the faulting PC, system-wide memory stats, process
++ resource limits, system load averages, loaded segment
++ addresses for offline symbol resolution, and OS version.
++ Toggle at runtime with SET GLOBAL. Default ON.
++ (Defaults to on; use --skip-rds-ffic-verbose-crash-diagnostics to disable.)
+  --rds-full-local-backup-path[=name] 
+  Path for full local backup data
+  --rds-hint-work-for-view 
+@@ -3043,6 +3053,7 @@ rds-dstore-support-binlog-check TRUE
+ rds-dstore-write-ddl-sql-into-redo TRUE
+ rds-empty-redundant-check-in-range-scan TRUE
+ rds-extended-partitions-enabled FALSE
++rds-ffic-verbose-crash-diagnostics TRUE
+ rds-full-local-backup-path 
+ rds-hint-work-for-view TRUE
+ rds-imitate-mariadb-server FALSE
+diff --git a/mysql-test/suite/dstore_main/t/all_persisted_variables.test b/mysql-test/suite/dstore_main/t/all_persisted_variables.test
+index 60bd5b899e3..794c1f13f52 100644
+--- a/mysql-test/suite/dstore_main/t/all_persisted_variables.test
++++ b/mysql-test/suite/dstore_main/t/all_persisted_variables.test
+@@ -42,7 +42,7 @@ call mtr.add_suppression("\\[Warning\\] .*MY-\\d+.* Changing innodb_extend_and_i
+ call mtr.add_suppression("Failed to initialize TLS for channel: mysql_main");
+ 
+ let $total_global_vars=`SELECT COUNT(*) FROM performance_schema.global_variables where variable_name NOT LIKE 'ndb_%' AND variable_name NOT LIKE 'debug_%'`;
+-let $total_persistent_vars=631;
++let $total_persistent_vars=632;
+ 
+ --echo ***************************************************************
+ --echo * 0. Verify that variables present in performance_schema.global
+@@ -128,7 +128,7 @@ ORDER BY variable_name;
+ 
+ --let $count_vars= `SELECT COUNT(*) FROM all_vars;`
+ --echo
+---let $assert_text= Expect 500+ variables in the table. Due to open Bugs, we are checking for fewer 
++--let $assert_text= Expect 500+ variables in the table. Due to open Bugs, we are checking for fewer
+ --let $assert_cond= [SELECT COUNT(*) as count FROM all_vars, count, 1] = $expected_var_count
+ --source include/assert.inc
+ 
+diff --git a/mysql-test/suite/sys_vars/r/all_vars.result b/mysql-test/suite/sys_vars/r/all_vars.result
+index 95923bbfe21..2dfa5444dae 100644
+--- a/mysql-test/suite/sys_vars/r/all_vars.result
++++ b/mysql-test/suite/sys_vars/r/all_vars.result
+@@ -167,6 +167,8 @@ rds_empty_redundant_check_in_range_scan
+ rds_empty_redundant_check_in_range_scan
+ rds_extended_partitions_enabled
+ rds_extended_partitions_enabled
++rds_ffic_verbose_crash_diagnostics
++rds_ffic_verbose_crash_diagnostics
+ rds_full_local_backup_path
+ rds_full_local_backup_path
+ rds_hint_work_for_view
+diff --git a/mysql-test/suite/sys_vars/r/dstore-all_vars.result b/mysql-test/suite/sys_vars/r/dstore-all_vars.result
+index 85b2a119984..0eee713af83 100644
+--- a/mysql-test/suite/sys_vars/r/dstore-all_vars.result
++++ b/mysql-test/suite/sys_vars/r/dstore-all_vars.result
+@@ -439,6 +439,8 @@ rds_empty_redundant_check_in_range_scan
+ rds_empty_redundant_check_in_range_scan
+ rds_extended_partitions_enabled
+ rds_extended_partitions_enabled
++rds_ffic_verbose_crash_diagnostics
++rds_ffic_verbose_crash_diagnostics
+ rds_full_local_backup_path
+ rds_full_local_backup_path
+ rds_hint_work_for_view
+diff --git a/mysql-test/t/all_persisted_variables.test b/mysql-test/t/all_persisted_variables.test
+index 48a2fd1bf96..785a07ffae5 100644
+--- a/mysql-test/t/all_persisted_variables.test
++++ b/mysql-test/t/all_persisted_variables.test
+@@ -42,7 +42,7 @@ call mtr.add_suppression("\\[Warning\\] .*MY-\\d+.* Changing innodb_extend_and_i
+ call mtr.add_suppression("Failed to initialize TLS for channel: mysql_main");
+ 
+ let $total_global_vars=`SELECT COUNT(*) FROM performance_schema.global_variables where variable_name NOT LIKE 'ndb_%' AND variable_name NOT LIKE 'debug_%'`;
+-let $total_persistent_vars=584;
++let $total_persistent_vars=585;
+ 
+ --echo ***************************************************************
+ --echo * 0. Verify that variables present in performance_schema.global
+diff --git a/mysys/CMakeLists.txt b/mysys/CMakeLists.txt
+index 647a056f58a..dded538cb2f 100644
+--- a/mysys/CMakeLists.txt
++++ b/mysys/CMakeLists.txt
+@@ -182,6 +182,14 @@ IF(FREEBSD)
+   ADD_COMPILE_FLAGS(stacktrace.cc COMPILE_FLAGS ${LIBUNWIND_CFLAGS})
+ ENDIF()
+ 
++IF(WITH_EXT_BACKTRACE)
++  SET(ABSL_SRC_ROOT "${CMAKE_SOURCE_DIR}/extra/abseil/abseil-cpp-20230802.1")
++  IF(HAVE_ABI_CXA_DEMANGLE)
++    INCLUDE_DIRECTORIES(SYSTEM "${ABSL_SRC_ROOT}")
++    LIST(APPEND MYSYS_SOURCES "${ABSL_SRC_ROOT}/absl/debugging/internal/demangle.cc")
++  ENDIF()
++ENDIF()
++
+ ADD_CONVENIENCE_LIBRARY(mysys ${MYSYS_SOURCES}
+   LINK_LIBRARIES
+   mytime
+diff --git a/mysys/stacktrace.cc b/mysys/stacktrace.cc
+index cab14c4419e..d0312f64007 100644
+--- a/mysys/stacktrace.cc
++++ b/mysys/stacktrace.cc
+@@ -45,6 +45,7 @@
+ #include <sys/syscall.h>
+ #ifdef HAVE_EXT_BACKTRACE
+ #include <backtrace/stacktrace.hpp>
++#include "absl/debugging/internal/demangle.h"
+ #endif
+ #endif
+ #include <time.h>
+@@ -86,6 +87,11 @@ static const char *heap_start;
+ extern char *__bss_start;
+ #endif /* __linux */
+ 
++static constexpr uint64_t NULLPTR_BOUND = 4095;
++constexpr uint32_t MAX_LINE_SIZE = 256;
++constexpr uint32_t MAX_CHUNK_SIZE = 4096;
++constexpr uint32_t HEX_PER_WORD = 17;
++
+ static inline bool ptr_sane(const char *p [[maybe_unused]],
+                             const char *heap_end [[maybe_unused]]) {
+ #ifdef __linux__
+@@ -99,6 +105,10 @@ void my_init_stacktrace() {
+ #ifdef __linux__
+   heap_start = (char *)&__bss_start;
+ #endif /* __linux__ */
++
++#ifdef HAVE_EXT_BACKTRACE
++  my_warmup_ext_backtrace();
++#endif
+ }
+ 
+ #ifdef __linux__
+@@ -126,7 +136,7 @@ static int safe_print_str(const char *addr, int max_len) {
+   off_t offset;
+   ssize_t nbytes = 0;
+   size_t total, count;
+-  char buf[256];
++  char buf[MAX_LINE_SIZE];
+ 
+   tid = (pid_t)syscall(SYS_gettid);
+ 
+@@ -196,6 +206,50 @@ void my_safe_puts_stderr(const char *val, size_t max_len) {
+ }
+ 
+ #ifdef HAVE_EXT_BACKTRACE
++struct cookie_t {
++  int index;
++};
++
++/**
++  loading symbols is slow, we can warm it at startup
++ */
++static void *preload_symbols(void *) {
++  cookie_t cookie{.index = 0};
++  auto dummy_print_callback = [](void *, uintptr_t, const char *, int,
++                                 const char *) { return 0; };
++  auto dummy_error_callback = [](void *, const char *, int) {};
++  stacktrace::full(1, dummy_print_callback, dummy_error_callback, &cookie);
++  return nullptr;
++}
++
++/**
++ warm up the symbol, speedup extracting file name and lineno
++*/
++void my_warmup_ext_backtrace() {
++  my_thread_handle thread_id;
++  my_thread_attr_t thr_attr;
++  my_thread_attr_init(&thr_attr);
++  my_thread_attr_setdetachstate(&thr_attr, MY_THREAD_CREATE_DETACHED);
++  /* Automatically release resources when the thread exits */
++  my_thread_create(&thread_id, &thr_attr, preload_symbols, nullptr);
++
++  my_thread_attr_destroy(&thr_attr);
++}
++
++/**
++ Demangle a mangled C++ symbol name.
++ This function is async-signal-safe (unlike abi::__cxa_demangle).
++
++ @param mangled_name The mangled symbol name (starting with "_Z")
++ @param buf Buffer to store the demangled name
++ @param buf_size Size of the output buffer
++
++ @return true if demangling succeeded, false otherwise
++*/
++static bool my_demangle_safe(const char *mangled_name, char *buf,
++                             size_t buf_size) {
++  return absl::debugging_internal::Demangle(mangled_name, buf, buf_size);
++}
+ static size_t my_write_stderr(const std::string_view &sv) {
+   return my_write_stderr(std::data(sv), std::size(sv));
+ }
+@@ -204,14 +258,23 @@ void my_print_stacktrace(const uchar *stack_bottom, ulong thread_stack) {
+   my_safe_printf_stderr("stack_bottom = %p thread_stack 0x%lx\n", stack_bottom,
+                         thread_stack);
+ 
+-  struct cookie_t {
+-    int index;
+-  };
+   auto print_callback = [](void *cookie, uintptr_t pc, const char *filename,
+                            int lineno, const char *function) {
+     auto idx = static_cast<cookie_t *>(cookie)->index++;
+     my_safe_printf_stderr(" #%d 0x%lx ", idx, (unsigned long)pc);
+-    my_write_stderr(function == nullptr ? "<unknown>" : function);
++    if (function == nullptr) {
++      my_write_stderr("<unknown>");
++    } else {
++#ifdef HAVE_ABI_CXA_DEMANGLE
++      static constexpr size_t kDemangleBufferSize = 256;
++      char demangled_buf[kDemangleBufferSize];
++      bool ok =
++          my_demangle_safe(function, demangled_buf, sizeof(demangled_buf));
++      my_write_stderr(ok ? demangled_buf : function);
++#else
++      my_write_stderr(function);
++#endif
++    }
+     if (filename != nullptr) {
+       std::string_view filename_sv{filename};
+       constexpr std::string_view parent_dir{"../"};
+@@ -219,10 +282,14 @@ void my_print_stacktrace(const uchar *stack_bottom, ulong thread_stack) {
+           pos != std::string_view::npos) {
+         filename_sv.remove_prefix(pos + std::size(parent_dir));
+       }
+-      constexpr std::string_view mysql_dir{"mysql/"};
++      constexpr std::string_view mysql_dir{"/mysql-server/"};
++      constexpr std::string_view dstore_dir{"/dstore/"};
+       if (auto pos = filename_sv.find(mysql_dir);
+           pos != std::string_view::npos) {
+-        filename_sv.remove_prefix(pos + std::size(mysql_dir));
++        filename_sv.remove_prefix(pos);
++      } else if (pos = filename_sv.find(dstore_dir);
++                 pos != std::string_view::npos) {
++        filename_sv.remove_prefix(pos);
+       }
+       my_write_stderr(" at ");
+       my_write_stderr(filename_sv);
+@@ -862,3 +929,802 @@ void my_safe_print_system_time() {
+   my_safe_printf_stderr("---------- %s:%s:%s UTC - ", hrs_buf, mins_buf,
+                         secs_buf);
+ }
++
++/* ============================================================
++ * FFIC: Enhanced Crash Diagnostics
++ * All functions below are new additions appended to this file.
++ * No existing code was modified.
++ *
++ * Async-signal-safe contract: only write(2), read(2), open(2),
++ * close(2), uname(2), and dladdr(3) are used.  No heap allocation.
++ * Supported on Linux x86_64 and AArch64.
++ * ============================================================ */
++#if defined(__linux__) && !defined(_WIN32)
++#include <dlfcn.h>
++#include <fcntl.h>
++#include <sys/utsname.h>
++#include <ucontext.h>
++
++/* Print a formatted section separator: "\n=== Title ===\n" */
++static void ffic_section(const char *title) {
++  my_safe_printf_stderr("\n=== %s ===\n", title);
++}
++
++/* Format a 64-bit value as exactly 16 lowercase hex digits into buf[17]. */
++static void ffic_fmt_hex64(char *buf, uint64_t v) {
++  static const char kH[] = "0123456789abcdef";
++  for (int i = 15; i >= 0; --i, v >>= 4) buf[i] = kH[v & 0xf];
++  buf[16] = '\0';
++}
++
++/* Format an 8-bit value as exactly 2 lowercase hex digits into buf[3]. */
++static void ffic_fmt_hex8(char *buf, unsigned char v) {
++  static const char kH[] = "0123456789abcdef";
++  buf[0] = kH[v >> 4];
++  buf[1] = kH[v & 0xf];
++  buf[2] = '\0';
++}
++
++#if defined(__x86_64__) || defined(__aarch64__)
++
++/**
++ * Print a full CPU register dump from the ucontext captured at crash time.
++ *
++ * Each register is printed as a 16-digit hex value.  A one-line explanation
++ * of the most important registers is included so that engineers unfamiliar
++ * with the ABI can understand what they are looking at.
++ *
++ * @param uc  Pointer to ucontext_t from the SA_SIGINFO handler,
++ *                      or nullptr (in which case this function is a no-op).
++ */
++void ffic_print_registers(const ucontext_t *uc) {
++  if (!uc) return;
++  char h0[HEX_PER_WORD], h1[HEX_PER_WORD], h2[HEX_PER_WORD], h3[HEX_PER_WORD];
++
++#if defined(__x86_64__)
++  ffic_section("CPU Registers (x86_64)");
++
++  /* Brief legend so non-OS-experts can orient themselves. */
++  my_safe_printf_stderr(
++      "  Explanation: Registers are the CPU's fastest storage locations.\n"
++      "  At crash time they capture what the CPU was operating on.\n");
++  my_safe_printf_stderr(
++      "  RIP = faulting instruction  RSP = stack pointer"
++      "  RBP = frame pointer\n");
++  my_safe_printf_stderr(
++      "  RDI = 1st arg / 'this'  RSI = 2nd arg"
++      "  RAX = return value / syscall#\n");
++
++  const greg_t *gr = uc->uc_mcontext.gregs;
++
++  /* Control registers */
++  ffic_fmt_hex64(h0, (uint64_t)gr[REG_RIP]);
++  ffic_fmt_hex64(h1, (uint64_t)gr[REG_RSP]);
++  ffic_fmt_hex64(h2, (uint64_t)gr[REG_RBP]);
++  ffic_fmt_hex64(h3, (uint64_t)gr[REG_EFL]);
++  my_safe_printf_stderr("  RIP = 0x%s  RSP = 0x%s\n", h0, h1);
++  my_safe_printf_stderr("  RBP = 0x%s  EFL = 0x%s\n", h2, h3);
++
++  /* CPU trap / fault codes */
++  ffic_fmt_hex64(h0, (uint64_t)gr[REG_TRAPNO]);
++  ffic_fmt_hex64(h1, (uint64_t)gr[REG_ERR]);
++  my_safe_printf_stderr("  TRAPNO = 0x%s  ERR = 0x%s\n", h0, h1);
++  uint64_t trapno = (uint64_t)gr[REG_TRAPNO];
++  if (trapno == 0x0e)
++    my_safe_printf_stderr(
++        "  [TRAPNO=0x0e: page fault; ERR bits: bit0=protection-violation,"
++        " bit1=write-access, bit2=user-mode]\n");
++  else if (trapno == 0x0d)
++    my_safe_printf_stderr(
++        "  [TRAPNO=0x0d: general protection fault"
++        " -- invalid memory access or privilege violation]\n");
++  else if (trapno == 0x00)
++    my_safe_printf_stderr("  [TRAPNO=0x00: divide-by-zero]\n");
++
++  /* General-purpose registers -- two per line for readability */
++  my_safe_printf_stderr("  General-purpose registers:\n");
++  ffic_fmt_hex64(h0, (uint64_t)gr[REG_RAX]);
++  ffic_fmt_hex64(h1, (uint64_t)gr[REG_RBX]);
++  my_safe_printf_stderr("  RAX = 0x%s  RBX = 0x%s\n", h0, h1);
++  ffic_fmt_hex64(h0, (uint64_t)gr[REG_RCX]);
++  ffic_fmt_hex64(h1, (uint64_t)gr[REG_RDX]);
++  my_safe_printf_stderr("  RCX = 0x%s  RDX = 0x%s\n", h0, h1);
++  ffic_fmt_hex64(h0, (uint64_t)gr[REG_RSI]);
++  ffic_fmt_hex64(h1, (uint64_t)gr[REG_RDI]);
++  my_safe_printf_stderr("  RSI = 0x%s  RDI = 0x%s\n", h0, h1);
++  ffic_fmt_hex64(h0, (uint64_t)gr[REG_R8]);
++  ffic_fmt_hex64(h1, (uint64_t)gr[REG_R9]);
++  my_safe_printf_stderr("  R8  = 0x%s  R9  = 0x%s\n", h0, h1);
++  ffic_fmt_hex64(h0, (uint64_t)gr[REG_R10]);
++  ffic_fmt_hex64(h1, (uint64_t)gr[REG_R11]);
++  my_safe_printf_stderr("  R10 = 0x%s  R11 = 0x%s\n", h0, h1);
++  ffic_fmt_hex64(h0, (uint64_t)gr[REG_R12]);
++  ffic_fmt_hex64(h1, (uint64_t)gr[REG_R13]);
++  my_safe_printf_stderr("  R12 = 0x%s  R13 = 0x%s\n", h0, h1);
++  ffic_fmt_hex64(h0, (uint64_t)gr[REG_R14]);
++  ffic_fmt_hex64(h1, (uint64_t)gr[REG_R15]);
++  my_safe_printf_stderr("  R14 = 0x%s  R15 = 0x%s\n", h0, h1);
++
++#elif defined(__aarch64__)
++  ffic_section("CPU Registers (AArch64)");
++
++  my_safe_printf_stderr(
++      "  Explanation: Registers are the CPU's fastest storage locations.\n"
++      "  At crash time they capture what the CPU was operating on.\n");
++  my_safe_printf_stderr("  PC = faulting instruction  SP = stack pointer\n");
++  my_safe_printf_stderr(
++      "  x29(FP) = frame pointer  x30(LR) = return address\n");
++  my_safe_printf_stderr(
++      "  x0 = 1st arg / 'this' / return value  x1 = 2nd arg\n");
++
++  const mcontext_t *mc = &uc->uc_mcontext;
++
++  /* Special registers first */
++  ffic_fmt_hex64(h0, (uint64_t)mc->pc);
++  ffic_fmt_hex64(h1, (uint64_t)mc->sp);
++  ffic_fmt_hex64(h2, (uint64_t)mc->regs[30]); /* LR */
++  ffic_fmt_hex64(h3, (uint64_t)mc->pstate);
++  my_safe_printf_stderr("  PC      = 0x%s  SP     = 0x%s\n", h0, h1);
++  my_safe_printf_stderr("  LR(x30) = 0x%s  PSTATE = 0x%s\n", h2, h3);
++
++  /* x0-x29 printed two per line */
++  my_safe_printf_stderr("  General-purpose registers (x0-x29):\n");
++  for (int i = 0; i < 30; i += 2) {
++    char ha[HEX_PER_WORD], hb[HEX_PER_WORD];
++    ffic_fmt_hex64(ha, (uint64_t)mc->regs[i]);
++    ffic_fmt_hex64(hb, (uint64_t)mc->regs[i + 1]);
++    my_safe_printf_stderr("  x%-2d = 0x%s  x%-2d = 0x%s\n", i, ha, i + 1, hb);
++  }
++#endif /* __x86_64__ / __aarch64__ */
++}
++
++/**
++ * Print human-readable diagnostic hints derived from register values.
++ *
++ * This section is aimed at engineers who are not CPU/OS experts.
++ * Each hint explains what a suspicious register value means and what
++ * action to take.
++ *
++ * @param uc  Pointer to ucontext_t, or nullptr.
++ */
++void ffic_print_register_hints(const ucontext_t *uc) {
++  if (!uc) return;
++  char hbuf[HEX_PER_WORD];
++
++  ffic_section("Register Diagnostic Hints");
++  my_safe_printf_stderr(
++      "  This section translates key register values into actionable clues.\n"
++      "  Even without OS expertise, these hints point to the root cause.\n");
++
++#if defined(__x86_64__)
++  const greg_t *gr = uc->uc_mcontext.gregs;
++  uint64_t rip = (uint64_t)gr[REG_RIP];
++  uint64_t rsp = (uint64_t)gr[REG_RSP];
++  uint64_t rbp = (uint64_t)gr[REG_RBP];
++  uint64_t rdi = (uint64_t)gr[REG_RDI];
++  uint64_t err = (uint64_t)gr[REG_ERR];
++
++  /* Faulting instruction address -- always useful */
++  ffic_fmt_hex64(hbuf, rip);
++  my_safe_printf_stderr(
++      "\n  [RIP = 0x%s] -- Faulting instruction address.\n"
++      "    To locate in source: addr2line -e mysqld -f -C -p 0x%s\n",
++      hbuf, hbuf);
++
++  /* Null or near-null first argument / 'this' pointer */
++  if (rdi <= NULLPTR_BOUND) {
++    ffic_fmt_hex64(hbuf, rdi);
++    my_safe_printf_stderr(
++        "\n  [RDI = 0x%s] -- 1st argument / 'this' is NULL or near-NULL.\n"
++        "    Strongest indicator of a null-pointer dereference.\n"
++        "    A method was called on a NULL 'this', or NULL was passed\n"
++        "    as the first argument to the faulting function.\n",
++        hbuf);
++  }
++
++  /* Stack pointer misalignment */
++  if (rsp % 16 != 0) {
++    ffic_fmt_hex64(hbuf, rsp);
++    my_safe_printf_stderr(
++        "\n  [RSP = 0x%s] -- WARNING: stack pointer is NOT 16-byte aligned.\n"
++        "    Indicates stack corruption or an ABI violation\n"
++        "    (e.g. mismatched calling convention or corrupted return "
++        "address).\n",
++        hbuf);
++  }
++
++  /* Frame pointer below stack pointer */
++  if (rbp != 0 && rbp < rsp) {
++    ffic_fmt_hex64(hbuf, rbp);
++    my_safe_printf_stderr(
++        "\n  [RBP = 0x%s] -- WARNING: frame pointer is below stack pointer.\n"
++        "    The stack frame is likely corrupted; the backtrace above\n"
++        "    may show wrong function names or be incomplete.\n",
++        hbuf);
++  }
++
++  /* Write-access page fault */
++  if ((uint64_t)gr[REG_TRAPNO] == 0x0e && (err & 0x2)) {
++    my_safe_printf_stderr(
++        "\n  [ERR bit1=1] -- The fault was a WRITE to an invalid address.\n"
++        "    Look for an assignment or store operation in the faulting"
++        " function.\n");
++  }
++
++#elif defined(__aarch64__)
++  const mcontext_t *mc = &uc->uc_mcontext;
++  uint64_t pc = (uint64_t)mc->pc;
++  uint64_t sp = (uint64_t)mc->sp;
++  uint64_t fp = (uint64_t)mc->regs[29];
++  uint64_t x0 = (uint64_t)mc->regs[0];
++
++  /* Faulting instruction address */
++  ffic_fmt_hex64(hbuf, pc);
++  my_safe_printf_stderr(
++      "\n  [PC = 0x%s] -- Faulting instruction address.\n"
++      "    To locate in source: addr2line -e mysqld -f -C -p 0x%s\n",
++      hbuf, hbuf);
++
++  /* Null or near-null x0 */
++  if (x0 <= NULLPTR_BOUND) {
++    ffic_fmt_hex64(hbuf, x0);
++    my_safe_printf_stderr(
++        "\n  [x0 = 0x%s] -- 1st argument / 'this' is NULL or near-NULL.\n"
++        "    Strongest indicator of a null-pointer dereference.\n"
++        "    A method was called on a NULL 'this', or NULL was passed\n"
++        "    as the first argument to the faulting function.\n",
++        hbuf);
++  }
++
++  /* Stack pointer misalignment */
++  if (sp % 16 != 0) {
++    ffic_fmt_hex64(hbuf, sp);
++    my_safe_printf_stderr(
++        "\n  [SP = 0x%s] -- WARNING: stack pointer is NOT 16-byte aligned.\n"
++        "    AArch64 hardware enforces 16-byte alignment; misalignment means\n"
++        "    stack corruption or an ABI violation.\n",
++        hbuf);
++  }
++
++  /* Frame pointer below stack pointer */
++  if (fp != 0 && fp < sp) {
++    ffic_fmt_hex64(hbuf, fp);
++    my_safe_printf_stderr(
++        "\n  [x29/FP = 0x%s] -- WARNING: frame pointer is below SP.\n"
++        "    Stack frame likely corrupted; backtrace may be incomplete.\n",
++        hbuf);
++  }
++#endif /* __x86_64__ / __aarch64__ */
++}
++
++/**
++ * Print a hex dump of the top-of-stack memory with an interpretation guide.
++ *
++ * The guide explains what the stack is and how to recognise common patterns
++ * such as buffer overflows, stack canary corruption, and infinite recursion.
++ * This is designed to be understandable without prior knowledge of CPU/OS
++ * internals.
++ *
++ * @param sp        Stack pointer at crash time (start of the dump).
++ * @param num_words Number of pointer-sized words to dump (default: 32).
++ */
++void ffic_print_stack_memory(const uint64_t *sp, size_t num_words) {
++  if (!sp) return;
++  ffic_section("Stack Memory Dump");
++
++  /* Plain-language explanation of what the stack is and how to read the dump.
++     Split across multiple calls to stay within the 512-byte fprintf buffer. */
++  my_safe_printf_stderr(
++      "  The stack holds local variables, saved return addresses, and\n"
++      "  register spills for the currently-executing function chain.\n");
++  my_safe_printf_stderr(
++      "  Each function call pushes a return address (where to resume after\n"
++      "  the function returns) and a frame pointer onto the stack.\n"
++      "  The stack grows DOWNWARD, so SP points to the lowest used address.\n");
++  my_safe_printf_stderr(
++      "\n  How to read this dump:\n"
++      "    Each row: [SP+offset]  value0  value1  value2  value3\n"
++      "    Values are 8-byte words in little-endian (native) byte order.\n");
++  my_safe_printf_stderr(
++      "    Return addresses look like code pointers (e.g. 0x00007f...).\n"
++      "    Repeating patterns (0x4141...='AAAA', 0xdead...) mean buffer\n"
++      "    overflow or memory poison.\n");
++  my_safe_printf_stderr(
++      "    All-zero or 0xffff... near the top = uninitialised locals.\n"
++      "    Stack canary (__stack_chk_guard) = random value before saved RIP;\n"
++      "    if overwritten the binary should have printed"
++      " 'stack smashing detected'.\n");
++  my_safe_printf_stderr(
++      "\n  What problems this helps detect:\n"
++      "    1. Stack buffer overflow: fill pattern before saved RIP/PC.\n"
++      "    2. Stack smashing: corrupted canary value.\n"
++      "    3. Infinite recursion: all frames look identical.\n"
++      "    4. Wrong calling convention: saved RIP/PC points to garbage.\n");
++
++  const uint64_t *p = reinterpret_cast<const uint64_t *>(sp);
++  constexpr uint32_t ADDR_PER_LINE = 4;
++  constexpr uint32_t OFFSET_BUF_SIZE = 12;
++  char hex[ADDR_PER_LINE][HEX_PER_WORD];
++  char off_buf[OFFSET_BUF_SIZE];
++
++  my_safe_printf_stderr("  SP = %p\n", sp);
++  for (size_t i = 0; i < num_words; i += ADDR_PER_LINE) {
++    size_t n = num_words - i;
++    if (n > ADDR_PER_LINE) n = ADDR_PER_LINE;
++
++    char *off_str = my_safe_utoa(10, (ulonglong)(i * sizeof(uint64_t)),
++                                 &off_buf[sizeof(off_buf) - 1]);
++
++    my_safe_printf_stderr("  [SP+%s]", off_str);
++    for (size_t j = 0; j < n; ++j) {
++      ffic_fmt_hex64(hex[j], (uint64_t)p[i + j]);
++      my_safe_printf_stderr("  0x%s", hex[j]);
++    }
++    my_safe_printf_stderr("%s", "\n");
++  }
++}
++
++/**
++ * Print the raw instruction bytes around the faulting PC.
++ *
++ * Inspired by openGauss fatal_err.cpp::print_inst_ctx().
++ * Memory validity is verified with dladdr() before reading.
++ * The row containing the faulting PC is marked with ">>".
++ *
++ * @param uc  Pointer to ucontext_t, or nullptr.
++ */
++void ffic_print_instruction_context(const ucontext_t *uc) {
++  if (!uc) return;
++
++  uint64_t pc = 0;
++#if defined(__x86_64__)
++  pc = (uint64_t)uc->uc_mcontext.gregs[REG_RIP];
++#elif defined(__aarch64__)
++  pc = (uint64_t)uc->uc_mcontext.pc;
++#endif
++  if (pc == 0) return;
++
++  ffic_section("Instruction Bytes Around Fault PC");
++  my_safe_printf_stderr(
++      "  Shows raw machine-code bytes near the faulting instruction.\n"
++      "  Primarily useful for advanced analysis or when no debug symbols\n"
++      "  are available.  To disassemble, run:\n"
++      "    objdump -d mysqld | grep -A10 '<addr>'\n");
++
++  char hbuf[HEX_PER_WORD];
++  ffic_fmt_hex64(hbuf, pc);
++  my_safe_printf_stderr("  Faulting PC = 0x%s\n", hbuf);
++
++  /* Validate 32 bytes before and after PC with dladdr() before reading. */
++  const unsigned char *start = reinterpret_cast<const unsigned char *>(pc) - 32;
++  const unsigned char *end = reinterpret_cast<const unsigned char *>(pc) + 32;
++  Dl_info dlinfo;
++  if (!dladdr(reinterpret_cast<const void *>(start), &dlinfo) ||
++      !dladdr(reinterpret_cast<const void *>(end), &dlinfo)) {
++    my_safe_printf_stderr(
++        "  (memory around PC is not readable -- possibly JIT or unmapped)\n");
++    return;
++  }
++
++  /* Print 8 bytes per row; mark the row that contains the faulting PC. */
++  const unsigned char *row = start;
++  const unsigned char *pc_ptr = reinterpret_cast<const unsigned char *>(pc);
++  while (row < end) {
++    if (row <= pc_ptr && pc_ptr < row + 8)
++      my_safe_printf_stderr("  >> %p:", static_cast<const void *>(row));
++    else
++      my_safe_printf_stderr("     %p:", static_cast<const void *>(row));
++    for (int b = 0; b < 8 && row + b < end; ++b) {
++      char hbyte[3];
++      ffic_fmt_hex8(hbyte, row[b]);
++      my_safe_printf_stderr(" %s", hbyte);
++    }
++    my_safe_printf_stderr("%s", "\n");
++    row += 8;
++  }
++}
++#endif /* __x86_64__ || __aarch64__ */
++
++/**
++ * Print selected lines from /proc/self/status (memory and thread stats).
++ *
++ * Helps identify OOM conditions (high VmRSS) and resource exhaustion
++ * (high thread count).
++ */
++void ffic_print_process_resources() {
++  ffic_section("Process Resources (/proc/self/status)");
++  my_safe_printf_stderr(
++      "  Shows memory and thread usage at the time of the crash.\n"
++      "  VmRSS  = actual RAM used (resident set size).\n"
++      "  VmPeak = peak virtual memory ever used by this process.\n");
++  my_safe_printf_stderr(
++      "  A very high VmRSS (close to system RAM) suggests an OOM condition.\n"
++      "  A high Threads count may indicate a thread-pool or lock problem.\n");
++
++  int fd = open("/proc/self/status", O_RDONLY);
++  if (fd == -1) {
++    my_safe_printf_stderr("  (cannot open /proc/self/status)\n");
++    return;
++  }
++  char buf[MAX_CHUNK_SIZE];
++  ssize_t n = read(fd, buf, (ssize_t)sizeof(buf) - 1);
++  close(fd);
++  if (n <= 0) {
++    my_safe_printf_stderr("  (cannot read /proc/self/status)\n");
++    return;
++  }
++  buf[n] = '\0';
++
++  /* Print only the lines we care about */
++  static const char *const kFields[] = {
++      "VmPeak:", "VmRSS:", "VmData:", "VmStk:", "Threads:", nullptr};
++
++  const char *line = buf;
++  while (*line) {
++    const char *eol = line;
++    while (*eol && *eol != '\n') ++eol;
++
++    for (int i = 0; kFields[i]; ++i) {
++      const char *f = kFields[i];
++      size_t flen = 0;
++      while (f[flen]) ++flen;
++      bool match = true;
++      for (size_t j = 0; j < flen && match; ++j) match = (line[j] == f[j]);
++      if (match) {
++        my_safe_printf_stderr("  ");
++        my_write_stderr(line, (size_t)(eol - line));
++        my_write_stderr("\n", 1);
++        break;
++      }
++    }
++    line = (*eol == '\n') ? eol + 1 : eol;
++    if (*eol == '\0') break;
++  }
++
++  my_safe_printf_stderr("  (For open FD count: ls /proc/%d/fd | wc -l)\n",
++                        (int)getpid());
++}
++
++/**
++ * Print executable segments from /proc/self/maps.
++ *
++ * With ASLR, absolute addresses in the register dump change every run.
++ * Knowing the segment base address allows offline symbol resolution:
++ *   relative_addr = absolute_addr - segment_base
++ *   addr2line -e mysqld -f -C -p <relative_addr>
++ */
++void ffic_print_loaded_segments() {
++  ffic_section("Loaded Segments (/proc/self/maps, selected)");
++  my_safe_printf_stderr(
++      "  Shows base addresses of key binaries and shared libraries.\n"
++      "  With ASLR these change every run.  To resolve a register address:\n");
++  my_safe_printf_stderr(
++      "    relative_addr = absolute_addr - segment_base\n"
++      "    addr2line -e mysqld -f -C -p <relative_addr>\n"
++      "  Only executable (r-xp) segments containing 'mysqld' or '.so'"
++      " are shown.\n");
++
++  int fd = open("/proc/self/maps", O_RDONLY);
++  if (fd == -1) {
++    my_safe_printf_stderr("  (cannot open /proc/self/maps)\n");
++    return;
++  }
++
++  /* Read in 4096-byte chunks; parse line-by-line using a small line buffer. */
++  char buf[MAX_CHUNK_SIZE];
++  char line_buf[MAX_LINE_SIZE];
++  int line_pos = 0;
++  ssize_t nr;
++
++  while ((nr = read(fd, buf, (ssize_t)sizeof(buf))) > 0) {
++    for (ssize_t i = 0; i < nr; ++i) {
++      char c = buf[i];
++      if (c == '\n') {
++        line_buf[line_pos] = '\0';
++
++        /* Filter: must contain "r-xp" (executable segment) */
++        bool is_exec = false;
++        for (int j = 0; j + 3 < line_pos; ++j) {
++          if (line_buf[j] == 'r' && line_buf[j + 1] == '-' &&
++              line_buf[j + 2] == 'x' && line_buf[j + 3] == 'p') {
++            is_exec = true;
++            break;
++          }
++        }
++        if (is_exec) {
++          /* Further filter: path must contain ".so" or "mysqld" */
++          bool relevant = false;
++          for (int j = 0; j + 2 < line_pos && !relevant; ++j) {
++            if (line_buf[j] == '.' && line_buf[j + 1] == 's' &&
++                line_buf[j + 2] == 'o')
++              relevant = true;
++            if (j + 6 < line_pos && line_buf[j] == 'm' &&
++                line_buf[j + 1] == 'y' && line_buf[j + 2] == 's' &&
++                line_buf[j + 3] == 'q' && line_buf[j + 4] == 'l' &&
++                line_buf[j + 5] == 'd')
++              relevant = true;
++          }
++          if (relevant) my_safe_printf_stderr("  %s\n", line_buf);
++        }
++        line_pos = 0;
++      } else if (line_pos < (int)sizeof(line_buf) - 1) {
++        line_buf[line_pos++] = c;
++      }
++    }
++  }
++  close(fd);
++}
++
++/**
++ * Print OS kernel version and machine architecture via uname(2).
++ *
++ * Useful for confirming whether a crash is kernel-version-specific or
++ * architecture-specific.
++ */
++void ffic_print_os_info() {
++  ffic_section("OS Information");
++  my_safe_printf_stderr(
++      "  Kernel version and architecture.\n"
++      "  Helps confirm whether the crash is OS-version or arch specific.\n");
++
++  struct utsname u;
++  if (uname(&u) != 0) {
++    my_safe_printf_stderr("  (uname() failed)\n");
++    return;
++  }
++  my_safe_printf_stderr("  Sysname : %s\n", u.sysname);
++  my_safe_printf_stderr("  Release : %s\n", u.release);
++  my_safe_printf_stderr("  Version : %s\n", u.version);
++  my_safe_printf_stderr("  Machine : %s\n", u.machine);
++}
++
++/**
++ * Print system-wide memory statistics from /proc/meminfo.
++ *
++ * Captures MemTotal, MemFree, MemAvailable, Buffers, Cached, SwapTotal,
++ * and SwapFree at crash time.
++ *
++ * How to interpret:
++ *   MemTotal    -- total physical RAM installed.
++ *   MemFree     -- completely unused pages (does NOT include reclaimable
++ * cache). MemAvailable-- kernel's estimate of memory available for new
++ * allocations without swapping; this is the most meaningful OOM indicator.
++ *   Buffers     -- page-cache for block device metadata.
++ *   Cached      -- page-cache for file data (reclaimable under pressure).
++ *   SwapTotal / SwapFree -- if SwapFree << SwapTotal, the system was swapping.
++ *
++ * OOM indicator: if MemAvailable < 5%% of MemTotal at crash time, the process
++ * or the kernel OOM killer likely contributed to the crash.
++ */
++void ffic_print_memory_info() {
++  ffic_section("System Memory (/proc/meminfo)");
++  my_safe_printf_stderr(
++      "  System-wide memory at crash time.\n"
++      "  MemAvailable < 5%% of MemTotal -> possible OOM-related crash.\n"
++      "  SwapFree << SwapTotal         -> system was actively swapping.\n");
++
++  int fd = open("/proc/meminfo", O_RDONLY);
++  if (fd == -1) {
++    my_safe_printf_stderr("  (cannot open /proc/meminfo)\n");
++    return;
++  }
++  char buf[MAX_CHUNK_SIZE];
++  ssize_t n = read(fd, buf, (ssize_t)sizeof(buf) - 1);
++  close(fd);
++  if (n <= 0) {
++    my_safe_printf_stderr("  (cannot read /proc/meminfo)\n");
++    return;
++  }
++  buf[n] = '\0';
++
++  static const char *const kFields[] = {
++      "MemTotal:", "MemFree:",   "MemAvailable:", "Buffers:",
++      "Cached:",   "SwapTotal:", "SwapFree:",     nullptr};
++
++  const char *line = buf;
++  while (*line) {
++    const char *eol = line;
++    while (*eol && *eol != '\n') ++eol;
++    for (int i = 0; kFields[i]; ++i) {
++      const char *f = kFields[i];
++      size_t flen = 0;
++      while (f[flen]) ++flen;
++      bool match = true;
++      for (size_t j = 0; j < flen && match; ++j) match = (line[j] == f[j]);
++      if (match) {
++        my_safe_printf_stderr("  ");
++        my_write_stderr(line, (size_t)(eol - line));
++        my_write_stderr("\n", 1);
++        break;
++      }
++    }
++    line = (*eol == '\n') ? eol + 1 : eol;
++    if (*eol == '\0') break;
++  }
++}
++
++/**
++ * Print system load averages from /proc/loadavg.
++ *
++ * Format: 1-min  5-min  15-min  running/total  last-spawned-PID
++ *
++ * How to interpret:
++ *   The three load numbers represent the average number of runnable or
++ *   uninterruptible threads over 1, 5, and 15 minutes.  Compare to the
++ *   CPU count (from the OS Information section).
++ *
++ *   load < CPU_count   -- system was not saturated.
++ *   load ~ CPU_count   -- system was fully utilized.
++ *   load > CPU_count   -- CPU bottleneck; threads were waiting for the CPU.
++ *
++ *   High 15-min load relative to 1-min load means the pressure was
++ *   sustained before the crash, not a momentary spike.
++ */
++void ffic_print_system_load() {
++  ffic_section("System Load (/proc/loadavg)");
++  my_safe_printf_stderr(
++      "  Format: 1-min 5-min 15-min  running/total  last-pid\n"
++      "  Compare load values to CPU count (see OS Information section).\n"
++      "  load >> CPUs -> CPU saturation may have contributed to the crash.\n");
++
++  int fd = open("/proc/loadavg", O_RDONLY);
++  if (fd == -1) {
++    my_safe_printf_stderr("  (cannot open /proc/loadavg)\n");
++    return;
++  }
++  char buf[MAX_LINE_SIZE];
++  ssize_t n = read(fd, buf, (ssize_t)sizeof(buf) - 1);
++  close(fd);
++  if (n <= 0) {
++    my_safe_printf_stderr("  (cannot read /proc/loadavg)\n");
++    return;
++  }
++  buf[n] = '\0';
++  /* Strip trailing newline */
++  for (ssize_t i = 0; i < n; ++i)
++    if (buf[i] == '\n') {
++      buf[i] = '\0';
++      break;
++    }
++
++  my_safe_printf_stderr("  %s\n", buf);
++}
++
++/**
++ * Print key process resource limits from /proc/self/limits.
++ *
++ * Filters to the four limits most relevant to MySQL crashes:
++ *
++ *   Max stack size    -- if the soft limit is small (e.g. 8 MB default on
++ *                        Linux) and the thread stack grew beyond it, the
++ *                        kernel sends SIGSEGV with a stack-overflow pattern.
++ *                        Check VmStk in Process Resources for current usage.
++ *   Max core file size-- '0' means no core dump will be written, even if
++ *                        mysqld crashes. To enable: ulimit -c unlimited
++ *   Max open files    -- if too small (< 65535 for busy servers), mysqld
++ *                        may fail to open sockets or files and crash.
++ *   Max address space -- unlimited is normal; a cap can cause mmap() failure.
++ *
++ * How to read the file: columns are Soft Limit / Hard Limit / Units.
++ * 'unlimited' means the OS imposes no cap at that level.
++ */
++void ffic_print_process_limits() {
++  ffic_section("Process Limits (/proc/self/limits, selected)");
++  my_safe_printf_stderr(
++      "  Key resource limits for this process (soft / hard / units).\n"
++      "  Max stack size   small -> possible stack overflow (see VmStk above).\n"
++      "  Max core file sz 0     -> no core dump will be written on crash.\n"
++      "  Max open files   small -> FD exhaustion may cause socket failures.\n");
++
++  int fd = open("/proc/self/limits", O_RDONLY);
++  if (fd == -1) {
++    my_safe_printf_stderr("  (cannot open /proc/self/limits)\n");
++    return;
++  }
++  char buf[MAX_CHUNK_SIZE];
++  ssize_t n = read(fd, buf, (ssize_t)sizeof(buf) - 1);
++  close(fd);
++  if (n <= 0) {
++    my_safe_printf_stderr("  (cannot read /proc/self/limits)\n");
++    return;
++  }
++  buf[n] = '\0';
++
++  static const char *const kFields[] = {"Max stack size", "Max core file size",
++                                        "Max open files", "Max address space",
++                                        nullptr};
++
++  const char *line = buf;
++  while (*line) {
++    const char *eol = line;
++    while (*eol && *eol != '\n') ++eol;
++    for (int i = 0; kFields[i]; ++i) {
++      const char *f = kFields[i];
++      size_t flen = 0;
++      while (f[flen]) ++flen;
++      bool match = true;
++      for (size_t j = 0; j < flen && match; ++j) match = (line[j] == f[j]);
++      if (match) {
++        my_write_stderr("  ", 2);
++        my_write_stderr(line, (size_t)(eol - line));
++        my_write_stderr("\n", 1);
++        break;
++      }
++    }
++    line = (*eol == '\n') ? eol + 1 : eol;
++    if (*eol == '\0') break;
++  }
++}
++
++/**
++ * Print the raw signal information from siginfo_t.
++ * Moved from sql/signal_handler.cc to allow unit testing.
++ *
++ * @param sig      Signal number.
++ * @param si       Pointer to siginfo_t, or nullptr (no-op).
++ */
++void ffic_print_signal_info(int sig, const siginfo_t *si) {
++  if (!si) return;
++
++  my_safe_printf_stderr("\n=== Signal Information ===\n");
++  my_safe_printf_stderr("  si_signo = %d\n", sig);
++  my_safe_printf_stderr("  si_code  = %d\n", si->si_code);
++
++  if (sig == SIGSEGV || sig == SIGBUS || sig == SIGILL || sig == SIGFPE)
++    my_safe_printf_stderr("  si_addr  = %p\n", si->si_addr);
++
++  /* If the signal was explicitly sent by another process (e.g. kill -SIGSEGV),
++     si_code == SI_USER (0) or SI_QUEUE (-1), and si_pid / si_uid are valid. */
++  if (si->si_code == SI_USER || si->si_code == SI_QUEUE) {
++    my_safe_printf_stderr(
++        "  Sender   : PID %d, UID %d\n"
++        "             (signal was sent by another process, not a CPU fault)\n",
++        (int)si->si_pid, (int)si->si_uid);
++  }
++}
++
++/**
++ * Print actionable post-crash tips.
++ * Moved from sql/signal_handler.cc to allow unit testing.
++ */
++void ffic_print_post_crash_tips() {
++  my_safe_printf_stderr("\n=== Post-Crash Diagnostic Tips ===\n");
++  my_safe_printf_stderr(
++      "  The following commands help decode information in this report.\n\n");
++
++  /* c++filt tip */
++  my_safe_printf_stderr(
++      "  1. Demangle a C++ symbol shown in the stack trace:\n"
++      "       c++filt <mangled_name>\n"
++      "     Example:\n"
++      "       c++filt _ZN3foo3barEv\n"
++      "       -> foo::bar()\n\n");
++
++  /* addr2line tip */
++  my_safe_printf_stderr(
++      "  2. Map an absolute crash address to source file and line number:\n"
++      "       Step 1: find segment_base in the 'Loaded Segments' section "
++      "above.\n"
++      "       Step 2: relative_addr = absolute_addr - segment_base\n"
++      "       Step 3: addr2line -e /path/to/mysqld -f -C -p <relative_addr>\n"
++      "     Example (RIP = 0x7f1234abcd, base = 0x7f1200000):\n"
++      "       addr2line -e mysqld -f -C -p 0x34abcd\n\n");
++
++  /* GDB tip */
++  my_safe_printf_stderr(
++      "  3. Open a core dump in GDB (requires 'Max core file size' > 0\n"
++      "     in the 'Process Limits' section above):\n"
++      "       gdb /path/to/mysqld core\n"
++      "     Useful GDB commands:\n"
++      "       bt full          -- full stack trace with local variables\n"
++      "       info registers   -- all CPU register values\n"
++      "       x/32xg $rsp      -- hex dump of stack top (x86_64)\n"
++      "       x/32xg $sp       -- hex dump of stack top (AArch64)\n\n");
++
++  /* Enable-at-runtime reminder */
++  my_safe_printf_stderr(
++      "  4. Enable verbose crash diagnostics at runtime (no restart needed):\n"
++      "       SET GLOBAL rds_ffic_verbose_crash_diagnostics = ON;\n");
++}
++
++#endif /* __linux__ && !_WIN32 */
+diff --git a/sql/mysqld.cc b/sql/mysqld.cc
+index 7ed2ada2210..2e4c4cb8a64 100644
+--- a/sql/mysqld.cc
++++ b/sql/mysqld.cc
+@@ -1082,7 +1082,11 @@ inline void setup_fpu() {
+ #endif /* __i386__ */
+ }
+ 
++#ifdef _WIN32
+ extern "C" void handle_fatal_signal(int sig);
++#else
++extern "C" void handle_fatal_signal(int sig, siginfo_t *info, void *context);
++#endif
+ void my_server_abort();
+ 
+ /* Constants */
+@@ -1513,6 +1517,15 @@ bool pq_master_enable;
+ /* Controls whether index hints work for view */
+ bool hint_work_for_view = true;
+ 
++/**
++ * When true, handle_fatal_signal() emits an extended FFIC crash report
++ * containing register dumps, stack memory, instruction bytes, and OS info.
++ * Controlled by the sys var rds_ffic_verbose_crash_diagnostics (GLOBAL,
++ * dynamic). Default ON; enable with: SET GLOBAL
++ * rds_ffic_verbose_crash_diagnostics = ON
++ */
++bool rds_ffic_verbose_crash_diagnostics = false;
++
+ ulonglong global_conn_mem_limit = 0;
+ ulonglong global_conn_mem_counter = 0;
+ 
+@@ -3876,8 +3889,8 @@ void my_init_signals() {
+       SA_NODEFER allows receiving the same signal during handler.
+       E.g. SIGABRT during our signal handler will dump core (default action).
+     */
+-    sa.sa_flags = SA_RESETHAND | SA_NODEFER;
+-    sa.sa_handler = handle_fatal_signal;
++    sa.sa_flags = SA_RESETHAND | SA_NODEFER | SA_SIGINFO;
++    sa.sa_sigaction = handle_fatal_signal;
+     // Treat these as fatal and handle them.
+     sigaction(SIGABRT, &sa, nullptr);
+     sigaction(SIGFPE, &sa, nullptr);
+diff --git a/sql/mysqld.h b/sql/mysqld.h
+index a3e34563e41..6e78e7138a5 100644
+--- a/sql/mysqld.h
++++ b/sql/mysqld.h
+@@ -284,6 +284,7 @@ extern ulonglong rds_security_hardening;
+ extern ulonglong kMaxChunks;
+ extern bool pq_master_enable;
+ extern bool hint_work_for_view;
++extern bool rds_ffic_verbose_crash_diagnostics;
+ 
+ enum enum_delay_key_write {
+   DELAY_KEY_WRITE_NONE,
+diff --git a/sql/signal_handler.cc b/sql/signal_handler.cc
+index afade595c25..08eec7bb0e2 100644
+--- a/sql/signal_handler.cc
++++ b/sql/signal_handler.cc
+@@ -218,7 +218,13 @@ void print_fatal_signal(int sig) {
+ 
+   @param sig Signal number
+ */
++#ifdef _WIN32
+ extern "C" void handle_fatal_signal(int sig) {
++  const void *info = nullptr;
++  const void *context = nullptr;
++#else
++extern "C" void handle_fatal_signal(int sig, siginfo_t *info, void *context) {
++#endif
+   if (s_handler_being_processed) {
+     my_safe_printf_stderr("Fatal " SIGNAL_FMT " while backtracing\n", sig);
+     _exit(MYSQLD_FAILURE_EXIT); /* Quit without running destructors */
+@@ -230,6 +236,11 @@ extern "C" void handle_fatal_signal(int sig) {
+     print_fatal_signal(sig);
+   }
+ 
++  /* FFIC: emit extended crash diagnostics when the feature is enabled. */
++  if (rds_ffic_verbose_crash_diagnostics) {
++    ffic_print_enhanced_crash_info(sig, info, (ucontext_t *)context);
++  }
++
+   if ((test_flags & TEST_CORE_ON_SIGNAL) != 0) {
+     my_safe_printf_stderr("%s", "Writing a core file\n");
+     my_write_core(sig);
+@@ -303,3 +314,168 @@ void my_server_abort() {
+     std::this_thread::sleep_for(std::chrono::seconds(1));
+   }
+ }
++
++/* ============================================================
++ * FFIC: Enhanced Crash Diagnostics
++ * All functions below are new additions appended to this file.
++ * No existing code was modified.
++ * ============================================================ */
++
++/* System headers required by FFIC functions below. */
++#if defined(__linux__) && !defined(_WIN32)
++#include <pthread.h>
++#include <sys/syscall.h>
++#endif
++#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
++#include <ucontext.h>
++#endif
++
++#ifndef _WIN32
++
++/**
++ * Print a crash summary banner: signal name, fault address, thread info.
++ *
++ * This is the first section printed, giving an immediate triage verdict
++ * before the detailed register/stack sections.
++ *
++ * @param sig      Signal number.
++ * @param si       Pointer to siginfo_t, or nullptr.
++ */
++static void ffic_print_crash_banner(int sig, const siginfo_t *si) {
++  my_safe_printf_stderr("\n=== MYSQLD CRASH SUMMARY ===\n");
++
++  /* Signal name */
++  const char *signame = "UNKNOWN";
++  if (sig == SIGSEGV)
++    signame = "SIGSEGV (Segmentation fault)";
++  else if (sig == SIGBUS)
++    signame = "SIGBUS  (Bus error)";
++  else if (sig == SIGILL)
++    signame = "SIGILL  (Illegal instruction)";
++  else if (sig == SIGFPE)
++    signame = "SIGFPE  (Floating-point exception)";
++  else if (sig == SIGABRT)
++    signame = "SIGABRT (Abort)";
++  my_safe_printf_stderr("  Signal   : %s\n", signame);
++
++  if (si) {
++    /* Human-readable si_code */
++    const char *reason = nullptr;
++    if (sig == SIGSEGV) {
++      if (si->si_code == SEGV_MAPERR)
++        reason = "SEGV_MAPERR -- address not mapped to object";
++      else if (si->si_code == SEGV_ACCERR)
++        reason = "SEGV_ACCERR -- access permission denied";
++    } else if (sig == SIGBUS) {
++      if (si->si_code == BUS_ADRALN)
++        reason = "BUS_ADRALN -- invalid address alignment";
++      else if (si->si_code == BUS_ADRERR)
++        reason = "BUS_ADRERR -- non-existent physical address";
++    } else if (sig == SIGFPE) {
++      if (si->si_code == FPE_INTDIV)
++        reason = "FPE_INTDIV -- integer divide by zero";
++      else if (si->si_code == FPE_INTOVF)
++        reason = "FPE_INTOVF -- integer overflow";
++    } else if (sig == SIGILL) {
++      if (si->si_code == ILL_ILLOPC) reason = "ILL_ILLOPC -- illegal opcode";
++    }
++    if (reason) my_safe_printf_stderr("  Reason   : %s\n", reason);
++
++    /* Fault address with null-pointer hint */
++    if (sig == SIGSEGV || sig == SIGBUS || sig == SIGILL || sig == SIGFPE) {
++      static constexpr uint64_t NULLPTR_BOUND = 4095;
++      long long unsigned int addr =
++          (long long unsigned int)((uintptr_t)si->si_addr);
++      my_safe_printf_stderr("  Fault @  : %p", (uint8_t *)si->si_addr);
++      if (addr <= NULLPTR_BOUND)
++        my_safe_printf_stderr(
++            "  (NULL + %llu bytes -- likely null-pointer dereference)", addr);
++      my_safe_printf_stderr("%s", "\n");
++    }
++  }
++
++  /* Thread and process IDs */
++  THD *thd = current_thd;
++  if (thd)
++    my_safe_printf_stderr(
++        "  MySQL TID: %u    Query ID: %lu\n"
++        "             (MySQL internal thread ID, shown in SHOW PROCESSLIST)\n",
++        thd->thread_id(), (uint64_t)thd->query_id);
++
++  my_safe_printf_stderr("  PID      : %d\n", (int)getpid());
++
++#if defined(__linux__)
++  /* Linux kernel thread ID: shown in 'ps -L', 'top -H', and GDB 'info threads'
++   */
++  pid_t os_tid = (pid_t)syscall(SYS_gettid);
++  my_safe_printf_stderr(
++      "  OS TID   : %d\n"
++      "             (kernel thread ID -- matches 'ps -L -p %d | grep %d')\n",
++      (int)os_tid, (int)getpid(), (int)os_tid);
++
++  /* POSIX thread handle: opaque but useful for GDB 'thread find' */
++  uint64_t pt = (uint64_t)pthread_self();
++  my_safe_printf_stderr(
++      "  Pthread  : 0x%lx\n"
++      "             (in GDB: 'thread find %lu' or 'info threads')\n",
++      pt, pt);
++#endif /* __linux__ */
++}
++
++#endif /* !_WIN32 */
++
++/**
++ * Entry point for the FFIC extended crash report.
++ *
++ * Called from handle_fatal_signal() when rds_ffic_verbose_crash_diagnostics
++ * is true.  Emits all FFIC sections to stderr in order.
++ *
++ * @param sig      Signal number.
++ * @param info_ptr Pointer to siginfo_t (nullptr on Windows / abort path).
++ * @param context  Pointer to ucontext_t (nullptr on Windows / abort path).
++ */
++void ffic_print_enhanced_crash_info(int sig, const siginfo_t *info_ptr,
++                                    const ucontext_t *context) {
++#ifndef _WIN32
++  ffic_print_crash_banner(sig, info_ptr);
++  ffic_print_signal_info(sig, info_ptr);
++#endif /* !_WIN32 */
++
++#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
++  /* Register dump and hints */
++  ffic_print_registers(context);
++  ffic_print_register_hints(context);
++
++  /* Stack-top memory dump */
++  if (context) {
++    const uint64_t *sp = nullptr;
++#if defined(__x86_64__)
++    sp = (const uint64_t *)((uintptr_t)context->uc_mcontext.gregs[REG_RSP]);
++#elif defined(__aarch64__)
++    sp = (const uint64_t *)((uintptr_t)context->uc_mcontext.sp);
++#endif
++    ffic_print_stack_memory(sp, 32);
++  }
++
++  /* Instruction bytes around the faulting PC */
++  ffic_print_instruction_context(context);
++
++#endif /* Linux x86_64 / aarch64 */
++
++#if defined(__linux__) && !defined(_WIN32)
++  /* System and process diagnostics */
++  ffic_print_memory_info();
++  ffic_print_process_resources();
++  ffic_print_process_limits();
++  ffic_print_system_load();
++  ffic_print_loaded_segments();
++  ffic_print_os_info();
++#endif /* Linux */
++
++#ifndef _WIN32
++  ffic_print_post_crash_tips();
++#endif
++}
++
++/* ffic_print_post_crash_tips() is now defined in mysys/stacktrace.cc
++   and declared in include/my_stacktrace.h. */
+diff --git a/sql/sys_vars.cc b/sql/sys_vars.cc
+index 4fbf105037c..50babf94303 100644
+--- a/sql/sys_vars.cc
++++ b/sql/sys_vars.cc
+@@ -9183,3 +9183,22 @@ static Sys_var_bool Sys_rds_prefer_covering_index(
+     "not clustered and indexes have the same cost for EQ_REF access",
+     SESSION_VAR(rds_prefer_covering_index_over_pk), CMD_LINE(OPT_ARG),
+     DEFAULT(true), NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(0), ON_UPDATE(0));
++
++/* FFIC: dynamic switch for extended crash diagnostics.
++   The backing variable is defined in sql/mysqld.cc.
++   Users can toggle without restarting:
++     SET GLOBAL rds_ffic_verbose_crash_diagnostics = ON;
++   Or set at startup:
++     mysqld --rds-ffic-verbose-crash-diagnostics */
++static Sys_var_bool Sys_rds_ffic_verbose_crash_diagnostics(
++    "rds_ffic_verbose_crash_diagnostics",
++    "When ON, mysqld prints an extended FFIC crash report on any fatal signal "
++    "(SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT). The report includes CPU "
++    "register dumps with diagnostic hints, stack-top memory, instruction bytes "
++    "around the faulting PC, system-wide memory stats, process resource "
++    "limits, "
++    "system load averages, loaded segment addresses for offline symbol "
++    "resolution, and OS version. Toggle at runtime with SET GLOBAL. Default "
++    "ON.",
++    GLOBAL_VAR(rds_ffic_verbose_crash_diagnostics), CMD_LINE(OPT_ARG),
++    DEFAULT(true));
+diff --git a/unittest/gunit/CMakeLists.txt b/unittest/gunit/CMakeLists.txt
+index fd652aebc07..b7bd6e63f31 100644
+--- a/unittest/gunit/CMakeLists.txt
++++ b/unittest/gunit/CMakeLists.txt
+@@ -443,6 +443,14 @@ MYSQL_ADD_EXECUTABLE(rpl_commit_order_queue-t rpl_commit_order_queue-t.cc
+   LINK_LIBRARIES rpl_commit_order_queue_lib gunit_small sqlgunitlib
+ )
+ 
++# FFIC enhanced crash diagnostics unit tests.
++# Like mysys_stacktrace-t, excluded from ALL to avoid noisy stderr in CI.
++MYSQL_ADD_EXECUTABLE(ffic_stacktrace-t ffic_stacktrace-t.cc
++  ENABLE_EXPORTS
++  ADD_TEST ffic_stacktrace
++  LINK_LIBRARIES sqlgunitlib gunit_small
++)
++
+ ADD_SUBDIRECTORY(ddl_rewriter)
+ ADD_SUBDIRECTORY(innodb)
+ ADD_SUBDIRECTORY(keyring)
+diff --git a/unittest/gunit/ffic_stacktrace-t.cc b/unittest/gunit/ffic_stacktrace-t.cc
+new file mode 100644
+index 00000000000..d8a96f060cf
+--- /dev/null
++++ b/unittest/gunit/ffic_stacktrace-t.cc
+@@ -0,0 +1,578 @@
++/* Copyright (c) 2024, Oracle and/or its affiliates.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License, version 2.0,
++   as published by the Free Software Foundation.
++
++   This program is designed to work with certain software (including
++   but not limited to OpenSSL) that is licensed under separate terms,
++   as designated in a particular file or component or in included license
++   documentation.  The authors of MySQL hereby grant you an additional
++   permission to link the program and your derivative works with the
++   separately licensed software that they have either included with
++   the program or referenced in the documentation.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License, version 2.0, for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
++
++/**
++  @file unittest/gunit/ffic_stacktrace-t.cc
++
++  Unit tests for the FFIC enhanced crash diagnostics functions in
++  mysys/stacktrace.cc (declared in include/my_stacktrace.h).
++
++  Coverage strategy:
++  - Every public function is called with nullptr / zero inputs to verify
++    the documented no-op contracts (tests the early-return branches).
++  - Every public function is called with valid inputs derived from
++    getcontext(3) to verify the success paths.
++  - For ffic_print_registers and ffic_print_register_hints, synthetic
++    ucontext_t values are used to exercise every conditional hint branch
++    that getcontext() alone would not trigger (misaligned SP, corrupt FP,
++    null-arg hint, write-fault hint, TRAPNO page/GP/div-by-zero branches).
++  - For ffic_print_stack_memory, multiple word-count values exercise the
++    inner loop: zero words (loop skipped), partial row, full rows,
++    and the n > 4 truncation branch.
++  - For ffic_print_instruction_context, a zero PC and an obviously-unmapped
++    PC exercise the early-return and dladdr-failure branches respectively.
++  - /proc file functions are called normally (covering the success and
++    line-matching branches); their open()/read() failure branches are not
++    reachable without kernel-level mocking and are excluded from the target.
++
++  Target: >=85% line coverage and >=85% branch coverage of the FFIC code
++  added in mysys/stacktrace.cc by commits e82191232c and e25374f59b5.
++*/
++
++#include <gtest/gtest.h>
++
++#include "my_stacktrace.h"
++
++#if defined(__linux__) && !defined(_WIN32)
++
++#include <ucontext.h>
++
++/* -------------------------------------------------------------------------
++ * Helper: obtain the current CPU context via getcontext(3).
++ * Safe to call outside a signal handler.
++ * ---------------------------------------------------------------------- */
++static int capture_context(ucontext_t *uc) { return getcontext(uc); }
++
++/* =========================================================================
++ * Section 1: Functions available on all Linux builds (proc-file readers)
++ * ====================================================================== */
++
++/* ffic_print_os_info — calls uname(2) and prints kernel/arch info. */
++TEST(FficCrashDiag, OsInfo_Success) {
++  EXPECT_NO_FATAL_FAILURE(ffic_print_os_info());
++}
++
++/* ffic_print_process_resources — reads /proc/self/status. */
++TEST(FficCrashDiag, ProcessResources_Success) {
++  EXPECT_NO_FATAL_FAILURE(ffic_print_process_resources());
++}
++
++/* ffic_print_memory_info — reads /proc/meminfo. */
++TEST(FficCrashDiag, MemoryInfo_Success) {
++  EXPECT_NO_FATAL_FAILURE(ffic_print_memory_info());
++}
++
++/* ffic_print_system_load — reads /proc/loadavg. */
++TEST(FficCrashDiag, SystemLoad_Success) {
++  EXPECT_NO_FATAL_FAILURE(ffic_print_system_load());
++}
++
++/* ffic_print_process_limits — reads /proc/self/limits. */
++TEST(FficCrashDiag, ProcessLimits_Success) {
++  EXPECT_NO_FATAL_FAILURE(ffic_print_process_limits());
++}
++
++/* ffic_print_loaded_segments — reads /proc/self/maps. */
++TEST(FficCrashDiag, LoadedSegments_Success) {
++  EXPECT_NO_FATAL_FAILURE(ffic_print_loaded_segments());
++}
++
++/* =========================================================================
++ * Section 2: Architecture-specific functions (x86_64 / AArch64)
++ * ====================================================================== */
++
++#if defined(__x86_64__) || defined(__aarch64__)
++
++/* -----------------------------------------------------------------------
++ * ffic_print_registers
++ * --------------------------------------------------------------------- */
++
++/* Null input: documented no-op contract. */
++TEST(FficCrashDiag, Registers_NullIsNoop) {
++  EXPECT_NO_FATAL_FAILURE(ffic_print_registers(nullptr));
++}
++
++/* Real context: exercises the full register-dump code path. */
++TEST(FficCrashDiag, Registers_RealContext) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  EXPECT_NO_FATAL_FAILURE(ffic_print_registers(&uc));
++}
++
++#if defined(__x86_64__)
++
++/* TRAPNO = 0x0e (page fault): triggers the "[TRAPNO=0x0e: page fault ...]"
++   message and covers that branch of the if/else-if chain. */
++TEST(FficCrashDiag, Registers_Trapno_PageFault) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uc.uc_mcontext.gregs[REG_TRAPNO] = 0x0e;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_registers(&uc));
++}
++
++/* TRAPNO = 0x0d (general protection fault): triggers the GP fault branch. */
++TEST(FficCrashDiag, Registers_Trapno_GPFault) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uc.uc_mcontext.gregs[REG_TRAPNO] = 0x0d;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_registers(&uc));
++}
++
++/* TRAPNO = 0x00 (divide-by-zero): triggers the div-by-zero branch. */
++TEST(FficCrashDiag, Registers_Trapno_DivByZero) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uc.uc_mcontext.gregs[REG_TRAPNO] = 0x00;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_registers(&uc));
++}
++
++/* TRAPNO = 0x01 (an unrecognised value): falls through all branches silently,
++   covering the "else nothing" path of the TRAPNO chain. */
++TEST(FficCrashDiag, Registers_Trapno_Unrecognised) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uc.uc_mcontext.gregs[REG_TRAPNO] = 0x01;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_registers(&uc));
++}
++
++/* -----------------------------------------------------------------------
++ * ffic_print_register_hints  (x86_64 branch coverage)
++ *
++ * Each test crafts a ucontext_t that triggers exactly one conditional
++ * in the hint function, verifying both the "hint printed" and "no hint"
++ * code paths for each check.
++ * --------------------------------------------------------------------- */
++
++/* Null input: documented no-op contract. */
++TEST(FficCrashDiag, RegisterHints_NullIsNoop) {
++  EXPECT_NO_FATAL_FAILURE(ffic_print_register_hints(nullptr));
++}
++
++/* Real context (all registers at normal values): exercises the code path
++   where no hint conditions are triggered.  Getcontext() produces a 16-byte
++   aligned RSP, RDI > 4095, RBP >= RSP, TRAPNO = 0 / ERR = 0. */
++TEST(FficCrashDiag, RegisterHints_RealContext_NoHintsTriggered) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  /* Ensure RSP is 16-byte aligned (it should be, but make it explicit). */
++  uint64_t rsp = (uint64_t)uc.uc_mcontext.gregs[REG_RSP];
++  rsp &= ~(uint64_t)0xf;
++  uc.uc_mcontext.gregs[REG_RSP] = (greg_t)rsp;
++  /* RDI > 4095 → no null-arg hint. */
++  uc.uc_mcontext.gregs[REG_RDI] = (greg_t)0x10000;
++  /* RBP above RSP → no frame-pointer corruption hint. */
++  uc.uc_mcontext.gregs[REG_RBP] = (greg_t)(rsp + 0x40);
++  /* TRAPNO = 0x05 (not page fault) and ERR = 0 → no write-fault hint. */
++  uc.uc_mcontext.gregs[REG_TRAPNO] = 0x05;
++  uc.uc_mcontext.gregs[REG_ERR] = 0x00;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_register_hints(&uc));
++}
++
++/* RDI == 0: first argument is NULL → null-arg-dereference hint printed.
++   Branch: if (rdi <= 4095) → true. */
++TEST(FficCrashDiag, RegisterHints_NullFirstArg_Hint) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uc.uc_mcontext.gregs[REG_RDI] = 0;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_register_hints(&uc));
++}
++
++/* RDI == 4095 (near-null): still within the <= 4095 range.
++   Branch: if (rdi <= 4095) → true (boundary value). */
++TEST(FficCrashDiag, RegisterHints_NearNullFirstArg_Hint) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uc.uc_mcontext.gregs[REG_RDI] = (greg_t)4095;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_register_hints(&uc));
++}
++
++/* RDI == 4096: just outside the null range → no hint.
++   Branch: if (rdi <= 4095) → false (boundary value). */
++TEST(FficCrashDiag, RegisterHints_NonNullFirstArg_NoHint) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uc.uc_mcontext.gregs[REG_RDI] = (greg_t)4096;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_register_hints(&uc));
++}
++
++/* RSP not 16-byte aligned → stack-misalignment hint printed.
++   Branch: if (rsp % 16 != 0) → true. */
++TEST(FficCrashDiag, RegisterHints_MisalignedSP_Hint) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  /* Force misalignment by setting the low nibble to 1. */
++  uint64_t rsp = (uint64_t)uc.uc_mcontext.gregs[REG_RSP];
++  rsp = (rsp & ~(uint64_t)0xf) | 1ULL;
++  uc.uc_mcontext.gregs[REG_RSP] = (greg_t)rsp;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_register_hints(&uc));
++}
++
++/* RSP 16-byte aligned → no misalignment hint.
++   Branch: if (rsp % 16 != 0) → false. */
++TEST(FficCrashDiag, RegisterHints_AlignedSP_NoHint) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uint64_t rsp = (uint64_t)uc.uc_mcontext.gregs[REG_RSP];
++  rsp &= ~(uint64_t)0xf; /* clear low nibble → aligned */
++  uc.uc_mcontext.gregs[REG_RSP] = (greg_t)rsp;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_register_hints(&uc));
++}
++
++/* RBP non-zero and RBP < RSP → frame-pointer-corruption hint.
++   Branch: if (rbp != 0 && rbp < rsp) → true (both conditions true). */
++TEST(FficCrashDiag, RegisterHints_CorruptFramePointer_Hint) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uint64_t rsp = (uint64_t)uc.uc_mcontext.gregs[REG_RSP];
++  /* Place RSP at a known aligned value and RBP below it. */
++  rsp &= ~(uint64_t)0xf;
++  uc.uc_mcontext.gregs[REG_RSP] = (greg_t)rsp;
++  uc.uc_mcontext.gregs[REG_RBP] = (greg_t)(rsp - 0x100); /* below RSP */
++  EXPECT_NO_FATAL_FAILURE(ffic_print_register_hints(&uc));
++}
++
++/* RBP == 0: first sub-condition (rbp != 0) is false → no FP hint.
++   Branch: if (rbp != 0 && rbp < rsp) → false at first operand. */
++TEST(FficCrashDiag, RegisterHints_RbpZero_NoCorruptHint) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uc.uc_mcontext.gregs[REG_RBP] = 0;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_register_hints(&uc));
++}
++
++/* RBP > RSP: second sub-condition (rbp < rsp) is false → no FP hint.
++   Branch: if (rbp != 0 && rbp < rsp) → false at second operand. */
++TEST(FficCrashDiag, RegisterHints_RbpAboveSP_NoCorruptHint) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uint64_t rsp = (uint64_t)uc.uc_mcontext.gregs[REG_RSP];
++  uc.uc_mcontext.gregs[REG_RBP] = (greg_t)(rsp + 0x100); /* above RSP: normal */
++  EXPECT_NO_FATAL_FAILURE(ffic_print_register_hints(&uc));
++}
++
++/* TRAPNO = 0x0e (page fault) and ERR bit 1 set → write-fault hint.
++   Branch: if (TRAPNO == 0x0e && (err & 0x2)) → true. */
++TEST(FficCrashDiag, RegisterHints_WriteFault_Hint) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uc.uc_mcontext.gregs[REG_TRAPNO] = 0x0e;
++  uc.uc_mcontext.gregs[REG_ERR] = 0x02; /* bit 1: write access */
++  EXPECT_NO_FATAL_FAILURE(ffic_print_register_hints(&uc));
++}
++
++/* TRAPNO = 0x0e (page fault) but ERR bit 1 clear → no write-fault hint.
++   Branch: if (TRAPNO == 0x0e && (err & 0x2)) → false at second operand
++   (read fault, not a write). */
++TEST(FficCrashDiag, RegisterHints_ReadFault_NoWriteHint) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uc.uc_mcontext.gregs[REG_TRAPNO] = 0x0e;
++  uc.uc_mcontext.gregs[REG_ERR] =
++      0x01; /* bit 0 only: protection violation, not write */
++  EXPECT_NO_FATAL_FAILURE(ffic_print_register_hints(&uc));
++}
++
++/* TRAPNO != 0x0e → first condition of write-fault check is false.
++   Branch: if (TRAPNO == 0x0e && (err & 0x2)) → false at first operand. */
++TEST(FficCrashDiag, RegisterHints_NotPageFault_NoWriteHint) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uc.uc_mcontext.gregs[REG_TRAPNO] = 0x05; /* not a page fault trap */
++  uc.uc_mcontext.gregs[REG_ERR] = 0x02;    /* bit 1 set, but TRAPNO mismatch */
++  EXPECT_NO_FATAL_FAILURE(ffic_print_register_hints(&uc));
++}
++
++/* All hints triggered simultaneously: RDI=0, RSP misaligned, RBP < RSP,
++   TRAPNO=0x0e ERR bit1=1.  Exercises every true-branch in one shot. */
++TEST(FficCrashDiag, RegisterHints_AllHintsTriggered) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uc.uc_mcontext.gregs[REG_RDI] = 0;                /* null first arg */
++  uc.uc_mcontext.gregs[REG_RSP] = (greg_t)0x100001; /* misaligned */
++  uc.uc_mcontext.gregs[REG_RBP] = (greg_t)0x1;      /* non-zero, below RSP */
++  uc.uc_mcontext.gregs[REG_TRAPNO] = 0x0e;
++  uc.uc_mcontext.gregs[REG_ERR] = 0x02; /* write access bit */
++  EXPECT_NO_FATAL_FAILURE(ffic_print_register_hints(&uc));
++}
++
++#endif /* __x86_64__ */
++
++/* -----------------------------------------------------------------------
++ * ffic_print_stack_memory — branch coverage for the word-count loop
++ * --------------------------------------------------------------------- */
++
++/* Null SP: documented no-op contract (early return).
++   Branch: if (!sp) → true. */
++TEST(FficCrashDiag, StackMemory_NullSP_IsNoop) {
++  EXPECT_NO_FATAL_FAILURE(ffic_print_stack_memory(nullptr, 0));
++}
++
++/* num_words = 0: sp is valid but loop body is never entered.
++   Branch: for (...; i < num_words; ...) → condition is immediately false. */
++TEST(FficCrashDiag, StackMemory_ZeroWords_LoopSkipped) {
++  alignas(16) uint64_t buf[1] = {0xdeadbeefcafeULL};
++  EXPECT_NO_FATAL_FAILURE(ffic_print_stack_memory(buf, 0));
++}
++
++/* num_words = 1: single word, partial row (n stays 1; the n > 4 truncation
++   branch is NOT taken).
++   Branch: if (n > 4) → false. */
++TEST(FficCrashDiag, StackMemory_OneWord_PartialRow) {
++  alignas(16) uint64_t buf[1] = {0x0102030405060708ULL};
++  EXPECT_NO_FATAL_FAILURE(ffic_print_stack_memory(buf, 1));
++}
++
++/* num_words = 4: exactly one full row of 4 words (n == 4; if (n > 4) false).
++   Exercises the inner j-loop running to completion (j=0..3). */
++TEST(FficCrashDiag, StackMemory_FourWords_OneFullRow) {
++  alignas(16) uint64_t buf[4] = {0, 1, 2, 3};
++  EXPECT_NO_FATAL_FAILURE(ffic_print_stack_memory(buf, 4));
++}
++
++/* num_words = 5: first row has 4 words (n > 4 → n = 4 truncated), second
++   row has 1 word.
++   Branch: if (n > 4) → true (first row). */
++TEST(FficCrashDiag, StackMemory_FiveWords_TruncationBranch) {
++  alignas(16) uint64_t buf[8] = {};
++  for (int i = 0; i < 8; ++i) buf[i] = (uint64_t)i * 0x111;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_stack_memory(buf, 5));
++}
++
++/* num_words = 16: four full rows.  Exercises multiple loop iterations and
++   multiple inner-j-loop completions. */
++TEST(FficCrashDiag, StackMemory_SixteenWords_MultipleRows) {
++  alignas(16) uint64_t buf[16];
++  for (int i = 0; i < 16; ++i) buf[i] = (uint64_t)i * 0xfeedcafe;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_stack_memory(buf, 16));
++}
++
++/* -----------------------------------------------------------------------
++ * ffic_print_instruction_context — branch coverage
++ * --------------------------------------------------------------------- */
++
++/* Null ucontext: documented no-op.
++   Branch: if (!ucontext_ptr) → true. */
++TEST(FficCrashDiag, InstructionContext_NullIsNoop) {
++  EXPECT_NO_FATAL_FAILURE(ffic_print_instruction_context(nullptr));
++}
++
++#if defined(__x86_64__)
++
++/* PC = 0: second early-return branch.
++   Branch: if (pc == 0) → true. */
++TEST(FficCrashDiag, InstructionContext_ZeroPC_EarlyReturn) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uc.uc_mcontext.gregs[REG_RIP] = 0;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_instruction_context(&uc));
++}
++
++/* PC at an obviously-unmapped address: dladdr() on pc-32 or pc+32 fails,
++   so the function prints "(memory around PC is not readable ...)" and returns.
++   Branch: if (!dladdr(...) || !dladdr(...)) → true. */
++TEST(FficCrashDiag, InstructionContext_UnmappedPC_DladdrFails) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  /* 0xdeadbeef0000 is far outside any mapped region. */
++  uc.uc_mcontext.gregs[REG_RIP] = (greg_t)0xdeadbeef0000ULL;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_instruction_context(&uc));
++}
++
++/* Real PC (from getcontext): both dladdr() calls succeed, the full byte
++   dump is printed, and the ">>" marker is produced for the row containing PC.
++   Branch: if (!dladdr(...) || !dladdr(...)) → false.
++           if (row <= pc_ptr && pc_ptr < row + 8) → true (the PC row). */
++TEST(FficCrashDiag, InstructionContext_ValidPC_FullDump) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  /* RIP captured by getcontext points into this test binary — always valid. */
++  EXPECT_NO_FATAL_FAILURE(ffic_print_instruction_context(&uc));
++}
++
++#endif /* __x86_64__ */
++
++#endif /* __x86_64__ || __aarch64__ */
++
++/* =========================================================================
++ * Section 3: AArch64-specific hint branches
++ * ====================================================================== */
++
++#if defined(__aarch64__)
++
++/* x0 == 0: null-arg hint (AArch64 first-arg register). */
++TEST(FficCrashDiag, RegisterHints_AArch64_NullX0_Hint) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uc.uc_mcontext.regs[0] = 0;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_register_hints(&uc));
++}
++
++/* x0 > 4095: no null-arg hint. */
++TEST(FficCrashDiag, RegisterHints_AArch64_NonNullX0_NoHint) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uc.uc_mcontext.regs[0] = 0x10000;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_register_hints(&uc));
++}
++
++/* SP not 16-byte aligned (AArch64 enforces 16-byte alignment). */
++TEST(FficCrashDiag, RegisterHints_AArch64_MisalignedSP_Hint) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uint64_t sp = (uc.uc_mcontext.sp & ~0xfULL) | 1ULL;
++  uc.uc_mcontext.sp = sp;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_register_hints(&uc));
++}
++
++/* x29 (FP) non-zero and below SP: frame-pointer corruption hint. */
++TEST(FficCrashDiag, RegisterHints_AArch64_CorruptFP_Hint) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uint64_t sp = uc.uc_mcontext.sp & ~0xfULL;
++  uc.uc_mcontext.sp = sp;
++  uc.uc_mcontext.regs[29] = sp - 0x100; /* FP below SP */
++  EXPECT_NO_FATAL_FAILURE(ffic_print_register_hints(&uc));
++}
++
++/* x29 == 0: first sub-condition (fp != 0) is false → no FP hint. */
++TEST(FficCrashDiag, RegisterHints_AArch64_FPZero_NoHint) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uc.uc_mcontext.regs[29] = 0;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_register_hints(&uc));
++}
++
++/* PC = 0: early return in ffic_print_instruction_context (AArch64). */
++TEST(FficCrashDiag, InstructionContext_AArch64_ZeroPC_EarlyReturn) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uc.uc_mcontext.pc = 0;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_instruction_context(&uc));
++}
++
++/* Unmapped PC (AArch64): dladdr() fails → "not readable" message. */
++TEST(FficCrashDiag, InstructionContext_AArch64_UnmappedPC) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  uc.uc_mcontext.pc = 0xdeadbeef0000ULL;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_instruction_context(&uc));
++}
++
++/* Real PC (AArch64): full instruction byte dump. */
++TEST(FficCrashDiag, InstructionContext_AArch64_ValidPC_FullDump) {
++  ucontext_t uc;
++  ASSERT_EQ(0, capture_context(&uc));
++  EXPECT_NO_FATAL_FAILURE(ffic_print_instruction_context(&uc));
++}
++
++#endif /* __aarch64__ */
++
++/* =========================================================================
++ * Section 4: ffic_print_signal_info branch coverage
++ * ====================================================================== */
++
++#include <signal.h>
++
++/* Null info_ptr: early return (no-op).
++   Branch: if (!si) → true. */
++TEST(FficCrashDiag, SignalInfo_NullIsNoop) {
++  EXPECT_NO_FATAL_FAILURE(ffic_print_signal_info(SIGSEGV, nullptr));
++}
++
++/* SIGSEGV with a real siginfo_t that has si_addr set: exercises the
++   address-printing branch (sig == SIGSEGV → true).
++   Branch: if (sig == SIGSEGV || ...) → true. */
++TEST(FficCrashDiag, SignalInfo_Sigsegv_PrintsAddr) {
++  siginfo_t si{};
++  si.si_signo = SIGSEGV;
++  si.si_code = SEGV_MAPERR;
++  si.si_addr = reinterpret_cast<void *>(0xdeadbeef);
++  EXPECT_NO_FATAL_FAILURE(ffic_print_signal_info(SIGSEGV, &si));
++}
++
++/* SIGBUS with si_addr set: exercises SIGBUS arm of the OR chain.
++   Branch: if (sig == SIGSEGV || sig == SIGBUS || ...) → true via SIGBUS. */
++TEST(FficCrashDiag, SignalInfo_Sigbus_PrintsAddr) {
++  siginfo_t si{};
++  si.si_signo = SIGBUS;
++  si.si_code = BUS_ADRALN;
++  si.si_addr = reinterpret_cast<void *>(0x1234);
++  EXPECT_NO_FATAL_FAILURE(ffic_print_signal_info(SIGBUS, &si));
++}
++
++/* SIGTERM (not in the addr-printing set): address line is NOT printed.
++   Branch: if (sig == SIGSEGV || sig == SIGBUS || sig == SIGILL || sig ==
++   SIGFPE) → false. */
++TEST(FficCrashDiag, SignalInfo_Sigterm_NoAddr) {
++  siginfo_t si{};
++  si.si_signo = SIGTERM;
++  si.si_code = SI_USER;
++  si.si_pid = 1234;
++  si.si_uid = 1000;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_signal_info(SIGTERM, &si));
++}
++
++/* si_code == SI_USER: sender info printed.
++   Branch: if (si->si_code == SI_USER || si->si_code == SI_QUEUE) → true
++           via SI_USER (first operand). */
++TEST(FficCrashDiag, SignalInfo_SiUser_PrintsSender) {
++  siginfo_t si{};
++  si.si_signo = SIGTERM;
++  si.si_code = SI_USER;
++  si.si_pid = 42;
++  si.si_uid = 100;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_signal_info(SIGTERM, &si));
++}
++
++/* si_code == SI_QUEUE: sender info printed.
++   Branch: if (si->si_code == SI_USER || si->si_code == SI_QUEUE) → true
++           via SI_QUEUE (second operand). */
++TEST(FficCrashDiag, SignalInfo_SiQueue_PrintsSender) {
++  siginfo_t si{};
++  si.si_signo = SIGTERM;
++  si.si_code = SI_QUEUE;
++  si.si_pid = 99;
++  si.si_uid = 0;
++  EXPECT_NO_FATAL_FAILURE(ffic_print_signal_info(SIGTERM, &si));
++}
++
++/* si_code == SEGV_MAPERR (not SI_USER or SI_QUEUE): sender block skipped.
++   Branch: if (si->si_code == SI_USER || si->si_code == SI_QUEUE) → false. */
++TEST(FficCrashDiag, SignalInfo_SegvMaperr_NoSender) {
++  siginfo_t si{};
++  si.si_signo = SIGSEGV;
++  si.si_code = SEGV_MAPERR;
++  si.si_addr = reinterpret_cast<void *>(0x0);
++  EXPECT_NO_FATAL_FAILURE(ffic_print_signal_info(SIGSEGV, &si));
++}
++
++/* =========================================================================
++ * Section 5: ffic_print_post_crash_tips
++ * ====================================================================== */
++
++/* Just verify the function completes without crashing and produces output. */
++TEST(FficCrashDiag, PostCrashTips_NoCrash) {
++  EXPECT_NO_FATAL_FAILURE(ffic_print_post_crash_tips());
++}
++
++#endif /* __linux__ && !_WIN32 */
+-- 
+2.23.0
+

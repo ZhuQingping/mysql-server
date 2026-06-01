@@ -1,0 +1,90 @@
+--echo #
+--echo # Basic test for innodb_rds_purge_subbatch_size
+--echo #
+ 
+--source include/load_sysvars.inc
+ 
+#  Saving initial value of innodb_purge_subbatch_size in a temporary variable
+SET @global_start_value = @@global.innodb_rds_purge_subbatch_size;
+SELECT @global_start_value;
+ 
+#  Display the DEFAULT value of innodb_rds_purge_subbatch_size
+SET @@global.innodb_rds_purge_subbatch_size = 1;
+SET @@global.innodb_rds_purge_subbatch_size = DEFAULT;
+SELECT @@global.innodb_rds_purge_subbatch_size;
+ 
+#  Check if innodb_rds_purge_subbatch_size can be accessed with and without @@ sign
+--Error ER_GLOBAL_VARIABLE
+SET innodb_rds_purge_subbatch_size = 1;
+SELECT @@innodb_rds_purge_subbatch_size;
+ 
+--Error ER_UNKNOWN_TABLE
+SELECT local.innodb_rds_purge_subbatch_size;
+ 
+SET global innodb_rds_purge_subbatch_size = 1;
+SELECT @@global.innodb_rds_purge_subbatch_size;
+ 
+#   Change the value of innodb_rds_purge_subbatch_size to a valid value
+SET @@global.innodb_rds_purge_subbatch_size = 1;
+SELECT @@global.innodb_rds_purge_subbatch_size;
+ 
+SET @@global.innodb_rds_purge_subbatch_size = 300;
+SELECT @@global.innodb_rds_purge_subbatch_size;
+SET @@global.innodb_rds_purge_subbatch_size = 10;
+SELECT @@global.innodb_rds_purge_subbatch_size;
+ 
+#  Change the value of innodb_rds_purge_subbatch_size to invalid value
+SET @@global.innodb_rds_purge_subbatch_size = 0;
+SELECT @@global.innodb_rds_purge_subbatch_size;
+ 
+--Error ER_WRONG_TYPE_FOR_VAR
+SET @@global.innodb_rds_purge_subbatch_size = "T";
+SELECT @@global.innodb_rds_purge_subbatch_size;
+ 
+--Error ER_WRONG_TYPE_FOR_VAR
+SET @@global.innodb_rds_purge_subbatch_size = "Y";
+SELECT @@global.innodb_rds_purge_subbatch_size;
+--Error ER_WRONG_TYPE_FOR_VAR
+SET @@global.innodb_rds_purge_subbatch_size = ' ';
+SELECT @@global.innodb_rds_purge_subbatch_size;
+--Error ER_WRONG_TYPE_FOR_VAR
+SET @@global.innodb_rds_purge_subbatch_size = " ";
+SELECT @@global.innodb_rds_purge_subbatch_size;
+--Error ER_WRONG_TYPE_FOR_VAR
+SET @@global.innodb_rds_purge_subbatch_size = 1.1;
+SELECT @@global.innodb_rds_purge_subbatch_size;
+ 
+SET @@global.innodb_rds_purge_subbatch_size = 4294967297;
+SELECT @@global.innodb_rds_purge_subbatch_size;
+ 
+#  Check if the value in GLOBAL Table matches value in variable
+ 
+--disable_warnings
+SELECT @@global.innodb_rds_purge_subbatch_size =
+ VARIABLE_VALUE FROM performance_schema.global_variables
+  WHERE VARIABLE_NAME='innodb_rds_purge_subbatch_size';
+--enable_warnings
+SELECT @@global.innodb_rds_purge_subbatch_size;
+--disable_warnings
+SELECT VARIABLE_VALUE FROM performance_schema.global_variables
+ WHERE VARIABLE_NAME='innodb_rds_purge_subbatch_size';
+--enable_warnings
+ 
+#  Check if ON and OFF values can be used on variable
+--ERROR ER_WRONG_TYPE_FOR_VAR
+SET @@global.innodb_rds_purge_subbatch_size = OFF;
+SELECT @@global.innodb_rds_purge_subbatch_size;
+ 
+--ERROR ER_WRONG_TYPE_FOR_VAR
+SET @@global.innodb_rds_purge_subbatch_size = ON;
+SELECT @@global.innodb_rds_purge_subbatch_size;
+ 
+#  Check if TRUE and FALSE values can be used on variable
+SET @@global.innodb_rds_purge_subbatch_size = TRUE;
+SELECT @@global.innodb_rds_purge_subbatch_size;
+SET @@global.innodb_rds_purge_subbatch_size = FALSE;
+SELECT @@global.innodb_rds_purge_subbatch_size;
+ 
+# Restore initial value
+SET @@global.innodb_rds_purge_subbatch_size = @global_start_value;
+SELECT @@global.innodb_rds_purge_subbatch_size;

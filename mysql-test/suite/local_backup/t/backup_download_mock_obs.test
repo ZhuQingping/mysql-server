@@ -1,0 +1,78 @@
+--source include/have_debug.inc
+
+--let $mock_obs = 1
+--source suite/local_backup/include/prepare_for_backup.inc
+
+CREATE DATABASE db1;
+USE db1;
+CREATE TABLE t1(a int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+
+--disable_result_log
+--disable_query_log
+
+# Test for backup download.
+--let $MYSQL_BASEDIR = `SELECT @@basedir`
+--let $prefix_key = `SELECT @@rds_full_local_backup_path`
+--let $bd = $MYSQL_BASEDIR/bin/backup_download
+--let $config_name = $MYSQLTEST_VARDIR/backup_download.config
+--let $trace_log_name = $MYSQLTEST_VARDIR/download_trace.json
+--let $debug = d,mock_list_object,mock_get_object_meta,mock_get_object,mock_delete_object
+--let $debug_multi = d,mock_multi_list_object,mock_get_object_meta,mock_get_object,mock_delete_object
+--let $debug_mock = d,mock_multi_list_object,mock_get_object_meta,mock_get_object,mock_delete_object,bd_worker_mock_obs
+
+--exec $bd
+--exec $bd -h
+--exec $bd -v
+--error 1
+--exec $bd -p $prefix_key/ -c $MYSQLTEST_VARDIR/not_exist.config -t $trace_log_name -w 4
+--exec $bd -p $prefix_key/ -c $config_name -t $trace_log_name -w 4 --debug=$debug
+--exec $bd -p $prefix_key/ -c $config_name -t $trace_log_name -w 4 --debug=$debug_multi
+--exec $bd -p $prefix_key/ -c $config_name -t $trace_log_name -w 4 --debug=$debug_mock
+--exec $bd -p $prefix_key/ -c $config_name -s --debug=$debug
+--exec $bd -p $prefix_key/ -c $config_name -s --debug=$debug -P0
+--exec $bd -p $prefix_key/ -c $config_name -s --debug=$debug -d bd.txt
+--exec $bd -p $prefix_key/ -c $config_name -s --debug=$debug -P0 -d bd.txt
+--error 1
+--exec $bd -p $prefix_key/ -c $config_name -s --debug=$debug_multi
+--error 1
+--exec $bd -p $prefix_key/ -c $config_name -s --debug=$debug_multi -P0
+--error 1
+--exec $bd -p $prefix_key/ -c $config_name -s --debug=$debug_multi -d bd.txt
+--exec $bd -p $prefix_key/ -c $config_name -s --debug=$debug_mock
+--exec $bd -p $prefix_key/ -c $config_name -s --debug=$debug_mock -P0
+--exec $bd -p $prefix_key/ -c $config_name -s --debug=$debug_mock -d bd.txt
+--exec $bd -p $prefix_key/ -c $config_name -s --debug=$debug_mock -P0 -d bd.txt
+--exec $bd -p $prefix_key/ -c $config_name -t $trace_log_name -w 0 --debug=$debug
+--error 1
+--exec $bd -p $prefix_key/ -c $config_name -t $trace_log_name -w 0 --debug=$debug_multi
+--exec rm -rf $MYSQLTEST_VARDIR/obs
+--exec $bd -p $prefix_key/ -c $config_name -t $trace_log_name -w 0 --debug=$debug_mock
+--error 1
+--exec $bd -p $prefix_key/ -c $MYSQLTEST_VARDIR/not_exist.config -r
+--exec $bd -p $prefix_key/ -c $config_name -r --debug=$debug_multi
+--error 1
+--exec $bd -p
+--error 1
+--exec $bd -c
+--error 1
+--exec $bd -t
+--error 1
+--exec $bd -w
+--exec $bd -w 3
+--exec $bd -s
+--exec $bd -r
+
+--error 1
+--exec $bd -p $prefix_key/ -c $config_name -s --debug=d,bd_tmp_file_fail -d bd.txt
+--exec rm -rf ./bd.txt
+
+--enable_query_log
+--enable_result_log
+
+# Drop database db1.
+DROP DATABASE db1;
+
+--source suite/local_backup/include/clean_backup.inc
+--let $mock_obs = 0

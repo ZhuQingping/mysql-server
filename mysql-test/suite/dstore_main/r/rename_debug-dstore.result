@@ -1,0 +1,33 @@
+#
+# Bug#22653180:ASSERT DD::CACHE::SHARED_MULTI_MAP<T>::
+# PUT(CONST K*, CONST T*, DD::CACHE::CACHE
+#
+CREATE TABLE t1(i int);
+# Force rename_table to fail after update has been applied to dd cache
+SET SESSION debug="+d,abort_rename_after_update";
+# rename table will fail with dummy error
+SET SESSION debug="-d,abort_rename_after_update";
+SELECT * FROM t1;
+i
+DROP TABLE t1;
+#
+# Part of test coverage for WL#9826 "Allow RENAME TABLES under
+# LOCK TABLES" which needs debug build and debug_sync facility.
+#
+# The main part of coverage for this WL resides in rename.test.
+# This file only contains subtests which require debug/debug_sync
+# facilities, hence their odd numbering.
+SET @old_lock_wait_timeout= @@lock_wait_timeout;
+connect  con1, localhost, root,,;
+SET @old_lock_wait_timeout= @@lock_wait_timeout;
+connection default;
+#
+# 1) Requirements on table locking for tables renamed and
+#    target table names.
+#
+#
+# 1.2) Locking of target table.
+# Clean-up.
+connection con1;
+disconnect con1;
+connection default;

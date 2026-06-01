@@ -1,0 +1,34 @@
+# ==== Purpose ====
+# Verify that the transactions can be replicated successfully 
+# with concurrent commit on dstore when gtid mode is on.
+#
+# ==== References ====
+#
+# US2025030700428 Implement a "BINLOG GROUP COMMIT" with one phase commit
+#
+
+--source include/have_only_dstore.inc
+--source include/master-slave.inc
+--source include/have_binlog_format_row.inc
+
+CREATE TABLE t1(c1 INT);
+
+--let $i = 1
+while ($i < 50) {
+  --eval INSERT INTO t1 VALUES ($i);
+  --inc $i
+}
+
+--source include/sync_slave_sql_with_master.inc
+--echo #
+--echo # Assert that the tables have the same content.
+--echo #
+--let $diff_tables=master:test.t1,slave:test.t1
+--source include/diff_tables.inc
+
+# Cleanup
+--source include/rpl_connection_master.inc
+DROP TABLE t1;
+--source include/sync_slave_sql_with_master.inc
+
+--source include/rpl_end.inc

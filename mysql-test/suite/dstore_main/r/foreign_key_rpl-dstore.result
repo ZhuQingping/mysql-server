@@ -1,0 +1,93 @@
+include/master-slave.inc
+Warnings:
+Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
+[connection master]
+# master
+#
+# BUG2025082725774
+# 
+DROP TABLE IF EXISTS `bmsql_warehouse`;
+Warnings:
+Note	1051	Unknown table 'test.bmsql_warehouse'
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `bmsql_warehouse` (
+`w_id` int NOT NULL,
+`w_ytd` decimal(12,2) DEFAULT NULL,
+`w_tax` decimal(4,4) DEFAULT NULL,
+`w_name` varchar(10) DEFAULT NULL,
+`w_street_1` varchar(20) DEFAULT NULL,
+`w_street_2` varchar(20) DEFAULT NULL,
+`w_city` varchar(20) DEFAULT NULL,
+`w_state` char(2) DEFAULT NULL,
+`w_zip` char(9) DEFAULT NULL,
+PRIMARY KEY (`w_id`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+INSERT INTO `bmsql_warehouse` VALUES (19,300000.00,0.1197,'Cqv5i5Qne','NyWaFtEl5PwVUhMcZ1Z','u119bqjynK433bBm','r0owSiVuusxwKlO','VX','537511111');
+DROP TABLE IF EXISTS `bmsql_district`;
+Warnings:
+Note	1051	Unknown table 'test.bmsql_district'
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `bmsql_district` (
+`d_w_id` int NOT NULL,
+`d_id` int NOT NULL,
+`d_ytd` decimal(12,2) DEFAULT NULL,
+`d_tax` decimal(4,4) DEFAULT NULL,
+`d_next_o_id` int DEFAULT NULL,
+`d_name` varchar(10) DEFAULT NULL,
+`d_street_1` varchar(20) DEFAULT NULL,
+`d_street_2` varchar(20) DEFAULT NULL,
+`d_city` varchar(20) DEFAULT NULL,
+`d_state` char(2) DEFAULT NULL,
+`d_zip` char(9) DEFAULT NULL,
+PRIMARY KEY (`d_w_id`,`d_id`),
+CONSTRAINT `d_warehouse_fkey` FOREIGN KEY (`d_w_id`) REFERENCES `bmsql_warehouse` (`w_id`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO `bmsql_district` VALUES (19,1,30000.00,0.0037,3001,'wTYmradm','uFosTyiCuwDI6SYT8i6A','wpuSaIYwzwB5oo','IDAEbEbllAjx4NgDecbL','ZI','091411111');
+DROP TABLE IF EXISTS `bmsql_customer`;
+Warnings:
+Note	1051	Unknown table 'test.bmsql_customer'
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `bmsql_customer` (
+`c_w_id` int NOT NULL,
+`c_d_id` int NOT NULL,
+`c_id` int NOT NULL,
+`c_discount` decimal(4,4) DEFAULT NULL,
+`c_credit` char(2) DEFAULT NULL,
+`c_last` varchar(16) DEFAULT NULL,
+`c_first` varchar(16) DEFAULT NULL,
+`c_credit_lim` decimal(12,2) DEFAULT NULL,
+`c_balance` decimal(12,2) DEFAULT NULL,
+`c_ytd_payment` decimal(12,2) DEFAULT NULL,
+`c_payment_cnt` int DEFAULT NULL,
+`c_delivery_cnt` int DEFAULT NULL,
+`c_street_1` varchar(20) DEFAULT NULL,
+`c_street_2` varchar(20) DEFAULT NULL,
+`c_city` varchar(20) DEFAULT NULL,
+`c_state` char(2) DEFAULT NULL,
+`c_zip` char(9) DEFAULT NULL,
+`c_phone` char(16) DEFAULT NULL,
+`c_since` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+`c_middle` char(2) DEFAULT NULL,
+`c_data` varchar(500) DEFAULT NULL,
+PRIMARY KEY (`c_w_id`,`c_d_id`,`c_id`),
+KEY `bmsql_customer_idx1` (`c_w_id`,`c_d_id`,`c_last`,`c_first`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO `bmsql_customer` VALUES (19,1,1,0.1203,'GC','BARBARBAR','XABr2btAs',50000.00,-10.00,10.00,1,1,'xdXrQBwc2kPCs3eyyX8','c5YDp7k0QwJ19CuF','QR8E5HRAv0T4BN5kh2Q','FL','847611111','2487641956225857','2025-08-25 23:50:32','OE','THTry6rmaJpTDaeeAy4cj5uQYsOIwsE7nTeOdyISY9JNo4XS3oyuaVklezC41O0T6nl2nEJOWDHA1sCuQXoDjPmBYx4gjY2zGhBnoadYi1GhjlLN796ZDohbqqjvy6iexEyGZSw7lFl2SYd2KLABjgIBmuNvH9osIDrnMZcZtlshop19HaXddhPeZnSTFvvtdPgsshwFB4967iSaBZBS725sr0gZLjJNY5omenP0EqkKE2oVNpNwdj7fRYELuHxIFm5ZXIG62km5mixUkfWAfyjpE2K8Q5m61Km9ZZSW1XztVLFgT');
+include/rpl_restart_server.inc [server_number=2]
+include/start_slave.inc
+ALTER TABLE bmsql_customer ADD CONSTRAINT c_district_fkey FOREIGN KEY (c_w_id, c_d_id) REFERENCES bmsql_district (d_w_id, d_id);
+SELECT
+c.c_w_id, c.c_d_id, c.c_id
+FROM
+bmsql_customer c LEFT JOIN bmsql_district d ON c.c_w_id = d.d_w_id AND c.c_d_id = d.d_id
+WHERE d.d_w_id IS NULL;
+c_w_id	c_d_id	c_id
+DROP TABLE bmsql_customer;
+DROP TABLE bmsql_district;
+DROP TABLE bmsql_warehouse;
+include/rpl_end.inc

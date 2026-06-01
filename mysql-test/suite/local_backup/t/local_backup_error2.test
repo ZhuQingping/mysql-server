@@ -1,0 +1,121 @@
+#
+# Another error handle test for full local backup and archive restore
+#
+call mtr.add_suppression("dstore_local_backup_meta_path is not configured");
+call mtr.add_suppression("dstore_restore_meta_path is not configured");
+call mtr.add_suppression("Local backup: failed to do full backup for dstore");
+call mtr.add_suppression("Local backup: failed to start wal archiver");
+call mtr.add_suppression("boot dstore failed, ret=-1");
+call mtr.add_suppression("Plugin 'Dstore' init function returned error.");
+call mtr.add_suppression("Plugin 'Dstore' registration as a STORAGE ENGINE failed.");
+call mtr.add_suppression("Unknown/unsupported storage engine: Dstore");
+call mtr.add_suppression("Aborting");
+call mtr.add_suppression("Local backup: cannot access full backup directory");
+call mtr.add_suppression("Local backup: cannot access log archive directory");
+call mtr.add_suppression("cannot access backup meta directory. Start full local backup failed");
+call mtr.add_suppression("cannot access backup meta directory. Start wal archive failed");
+call mtr.add_suppression("RestoreMeta_RestoreMeta fail when create is 0 and read only is 1, errno is 2");
+call mtr.add_suppression("RestoreMeta_RestoreMeta fail when read last local backup point");
+call mtr.add_suppression("read latest local backup point fail for cmd 4");
+call mtr.add_suppression("Failed to set recovery start plsn for restore");
+call mtr.add_suppression("Prepare full backup mkdir ");
+call mtr.add_suppression("failed to prepare directory for full backup");
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("fail");
+
+--source suite/local_backup/include/prepare_for_backup.inc
+
+# Backup meta path not set
+--let $shutdown_server_timeout= 300
+--let $restart_parameters= restart: --dstore_local_backup_meta_path="" --dstore_can_do_wal_archive=on
+--source include/restart_mysqld.inc
+
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let SEARCH_PATTERN=dstore_local_backup_meta_path is not configured. Cannot set plsn for wal archive
+--source include/search_pattern.inc
+
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+show status like 'Rds_local_backup_last_full_backup_status';
+
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let SEARCH_PATTERN=dstore_local_backup_meta_path is not configured. Start full local backup failed
+--source include/search_pattern.inc
+
+--error ER_DA_LOCAL_BACKUP_ERROR
+call rds_backup.start_log_archive();
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let SEARCH_PATTERN=dstore_local_backup_meta_path is not configured. Start wal archive failed
+--source include/search_pattern.inc
+
+# Restore meta path not set
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+--let $mysqld_exec_cmd = $MYSQLD --defaults-file=$MYSQLTEST_VARDIR/my.cnf --defaults-group-suffix=.1 --dstore_restore_meta_path="" --dstore_open_restore_mode=ON --log-error=$MYSQLTEST_VARDIR/log/mysqld.1.err --user=`whoami`
+--disable_abort_on_error
+--exec $mysqld_exec_cmd
+--enable_abort_on_error
+
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let SEARCH_PATTERN=dstore_restore_meta_path is not configured. Cannot set recovery start plsn for restore
+--source include/search_pattern.inc
+
+# Backup path invalid
+--let $shutdown_server_timeout= 300
+--let $restart_parameters= restart: --rds_full_local_backup_path=$MYSQLTEST_VARDIR/NotExist --rds_log_archive_path=$MYSQLTEST_VARDIR/NotExist
+--source include/start_mysqld_no_echo.inc
+
+--error ER_DA_LOCAL_BACKUP_ERROR
+call rds_backup.start_full_local_backup(0);
+show status like 'Rds_local_backup_last_full_backup_status';
+
+--error ER_DA_LOCAL_BACKUP_ERROR
+call rds_backup.start_log_archive();
+
+# Meta path invalid
+--let $shutdown_server_timeout= 300
+--let $restart_parameters= restart: --dstore_local_backup_meta_path=$MYSQLTEST_VARDIR/NotExist
+--source include/restart_mysqld_no_echo.inc
+
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+show status like 'Rds_local_backup_last_full_backup_status';
+
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let SEARCH_PATTERN=cannot access backup meta directory. Start full local backup failed
+--source include/search_pattern.inc
+
+--error ER_DA_LOCAL_BACKUP_ERROR
+call rds_backup.start_log_archive();
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let SEARCH_PATTERN=cannot access backup meta directory. Start wal archive failed
+--source include/search_pattern.inc
+
+# Restore meta path invalid
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+--let $mysqld_exec_cmd = $MYSQLD --defaults-file=$MYSQLTEST_VARDIR/my.cnf --defaults-group-suffix=.1 --dstore_restore_meta_path=$MYSQLTEST_VARDIR/NotExist --dstore_open_restore_mode=ON --log-error=$MYSQLTEST_VARDIR/log/mysqld.1.err --user=`whoami`
+--disable_abort_on_error
+--exec $mysqld_exec_cmd
+--enable_abort_on_error
+
+--let $restart_parameters= restart
+--source include/start_mysqld.inc
+
+--error ER_INCORRECT_GLOBAL_LOCAL_VAR
+set dstore_open_restore_mode=on;
+--error ER_INCORRECT_GLOBAL_LOCAL_VAR
+set global dstore_open_restore_mode=on;
+--error ER_INCORRECT_GLOBAL_LOCAL_VAR
+set dstore_can_do_wal_archive=on;
+--error ER_INCORRECT_GLOBAL_LOCAL_VAR
+set global dstore_can_do_wal_archive=on;
+
+# Prepare backup dir failed
+set global debug='+d,PrepareFullLocalBackupDir_mkdir_fail';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+show status like 'Rds_local_backup_last_full_backup_status';
+set global debug='-d,PrepareFullLocalBackupDir_mkdir_fail';
+
+--source suite/local_backup/include/clean_backup.inc

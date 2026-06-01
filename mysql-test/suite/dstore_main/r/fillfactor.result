@@ -1,0 +1,346 @@
+#case1: test variable dstore_default_fillfactor.
+set dstore_default_fillfactor=90;
+ERROR HY000: Variable 'dstore_default_fillfactor' is a GLOBAL variable and should be set with SET GLOBAL
+set global dstore_default_fillfactor=80;
+set global dstore_default_fillfactor=60.1;
+ERROR 42000: Incorrect argument type to variable 'dstore_default_fillfactor'
+set global dstore_default_fillfactor=80.0;
+ERROR 42000: Incorrect argument type to variable 'dstore_default_fillfactor'
+set global dstore_default_fillfactor=default;
+set global dstore_default_fillfactor=10;
+select @@dstore_default_fillfactor;
+@@dstore_default_fillfactor
+10
+set global dstore_default_fillfactor=100;
+select @@dstore_default_fillfactor;
+@@dstore_default_fillfactor
+100
+set global dstore_default_fillfactor=9;
+Warnings:
+Warning	1292	Truncated incorrect dstore_default_fillfactor value: '9'
+select @@dstore_default_fillfactor;
+@@dstore_default_fillfactor
+10
+set global dstore_default_fillfactor=101;
+Warnings:
+Warning	1292	Truncated incorrect dstore_default_fillfactor value: '101'
+select @@dstore_default_fillfactor;
+@@dstore_default_fillfactor
+100
+set global dstore_default_fillfactor=default;
+select @@dstore_default_fillfactor;
+@@dstore_default_fillfactor
+80
+#case2: fillfactor is not a key word.
+create table fillfactor(fillfactor int) engine=Dstore, charset=utf8mb4;
+alter table fillfactor add index fillfactor(fillfactor);
+show create table fillfactor;
+Table	Create Table
+fillfactor	CREATE TABLE `fillfactor` (
+  `fillfactor` int DEFAULT NULL,
+  KEY `fillfactor` (`fillfactor`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+insert into fillfactor values(1),(2);
+select fillfactor from fillfactor;
+fillfactor
+1
+2
+drop table fillfactor;
+create function fillfactor() returns int return 1;
+select fillfactor();
+fillfactor()
+1
+drop function fillfactor;
+create table t1(a int);
+insert into t1 values(1),(2);
+create view fillfactor as select a fillfactor from t1;
+select fillfactor from fillfactor;
+fillfactor
+1
+2
+drop view fillfactor;
+drop table t1;
+#case3: Fillfactor only support dstore engine.
+set @save_default_storage_engine = @@default_storage_engine;
+create table t1(a int)engine=Dstore, comment 'fillfactor=200';
+Warnings:
+Warning	1478	DStore: The valid range for fillfactor is [10, 100]. The value is ignored.
+create table t2(a int)engine=Dstore, comment 'use table,FILLFACTOR=80';
+create table t3(a int, b int, index(a) comment 'FILLFACTOR=90')engine=Dstore, comment 'fillFACTOR=85,use table';
+create table t4(a int, b int, index(a) comment 'FILLFACTOR=95')engine=Dstore, comment 'use table,FILLfactor=90,test';
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='fillfactor=200'
+show create table t2;
+Table	Create Table
+t2	CREATE TABLE `t2` (
+  `a` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='use table,FILLFACTOR=80'
+show create table t3;
+Table	Create Table
+t3	CREATE TABLE `t3` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  KEY `a` (`a`) COMMENT 'FILLFACTOR=90'
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='fillFACTOR=85,use table'
+show create table t4;
+Table	Create Table
+t4	CREATE TABLE `t4` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  KEY `a` (`a`) COMMENT 'FILLFACTOR=95'
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='use table,FILLfactor=90,test'
+drop table t1,t2,t3,t4;
+set default_storage_engine='Dstore';
+create table t1(a int)comment 'fillfactor=200';
+Warnings:
+Warning	1478	DStore: The valid range for fillfactor is [10, 100]. The value is ignored.
+create table t2(a int)comment 'use table,FILLFACTOR=80';
+create table t3(a int, b int, index(a) comment 'FILLFACTOR=90')comment 'fillFACTOR=85,use table';
+create table t4(a int, b int, index(a) comment 'FILLFACTOR=95')comment 'use table,FILLfactor=90,test';
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='fillfactor=200'
+show create table t2;
+Table	Create Table
+t2	CREATE TABLE `t2` (
+  `a` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='use table,FILLFACTOR=80'
+show create table t3;
+Table	Create Table
+t3	CREATE TABLE `t3` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  KEY `a` (`a`) COMMENT 'FILLFACTOR=90'
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='fillFACTOR=85,use table'
+show create table t4;
+Table	Create Table
+t4	CREATE TABLE `t4` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  KEY `a` (`a`) COMMENT 'FILLFACTOR=95'
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='use table,FILLfactor=90,test'
+drop table t1,t2,t3,t4;
+create table t1(a int)engine=innodb, comment 'fillfactor=200';
+create table t2(a int)engine=innodb, comment 'use table,FILLFACTOR=80';
+create table t3(a int, b int, index(a) comment 'FILLFACTOR=90')engine=innodb, comment 'fillFACTOR=85,use table';
+create table t4(a int, b int, index(a) comment 'FILLFACTOR=95')engine=innodb, comment 'use table,FILLfactor=90,test';
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='fillfactor=200'
+show create table t2;
+Table	Create Table
+t2	CREATE TABLE `t2` (
+  `a` int DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='use table,FILLFACTOR=80'
+show create table t3;
+Table	Create Table
+t3	CREATE TABLE `t3` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  KEY `a` (`a`) COMMENT 'FILLFACTOR=90'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='fillFACTOR=85,use table'
+show create table t4;
+Table	Create Table
+t4	CREATE TABLE `t4` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  KEY `a` (`a`) COMMENT 'FILLFACTOR=95'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='use table,FILLfactor=90,test'
+drop table t1,t2,t3,t4;
+set default_storage_engine='InnoDB';
+create table t1(a int)comment 'fillfactor=200';
+create table t2(a int)comment 'use table,FILLFACTOR=80';
+create table t3(a int, b int, index(a) comment 'FILLFACTOR=90')comment 'fillFACTOR=85,use table';
+create table t4(a int, b int, index(a) comment 'FILLFACTOR=95')comment 'use table,FILLfactor=90,test';
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='fillfactor=200'
+show create table t2;
+Table	Create Table
+t2	CREATE TABLE `t2` (
+  `a` int DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='use table,FILLFACTOR=80'
+show create table t3;
+Table	Create Table
+t3	CREATE TABLE `t3` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  KEY `a` (`a`) COMMENT 'FILLFACTOR=90'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='fillFACTOR=85,use table'
+show create table t4;
+Table	Create Table
+t4	CREATE TABLE `t4` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  KEY `a` (`a`) COMMENT 'FILLFACTOR=95'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='use table,FILLfactor=90,test'
+drop table t1,t2,t3,t4;
+set default_storage_engine = @save_default_storage_engine;
+#case4: The valid fillfactor range for fillfactor is [10, 100].
+create table t1(a int)engine=Dstore, comment 'fillfactor=1';
+Warnings:
+Warning	1478	DStore: The valid range for fillfactor is [10, 100]. The value is ignored.
+create table t2(a int)engine=Dstore, comment 'fillfactor=10';
+create table t3(a int)engine=Dstore, comment 'fillfactor=90';
+create table t4(a int)engine=Dstore, comment 'fillfactor=99';
+create table t5(a int)engine=Dstore, comment 'fillfactor=99.9';
+create table t6(a int)engine=Dstore, comment 'fillfactor=100';
+create table t7(a int)engine=Dstore, comment 'fillfactor=100.9';
+create table t8(a int)engine=Dstore, comment 'fillfactor=101';
+Warnings:
+Warning	1478	DStore: The valid range for fillfactor is [10, 100]. The value is ignored.
+create table t9(a int)engine=Dstore, comment 'fillfactor=101.1';
+Warnings:
+Warning	1478	DStore: The valid range for fillfactor is [10, 100]. The value is ignored.
+drop table t1,t2,t3,t4,t5,t6,t7,t8,t9;
+create table t1(a int)engine=Dstore, charset=utf8mb4, comment 'fillfactor=19.99';
+alter table t1 add index idx_a(a) comment 'fillfactor=79.99';
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int DEFAULT NULL,
+  KEY `idx_a` (`a`) COMMENT 'fillfactor=79.99'
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='fillfactor=19.99'
+drop table t1;
+#case5: Check fillfactor format in comment.
+create table t1(a int)engine=Dstore, comment 'fillfactor=75';
+create table t2(a int)engine=Dstore, comment 'user table, FillFactor=75';
+create table t3(a int)engine=Dstore, comment 'FILLFACTOR=75 user table';
+create table t4(a int)engine=Dstore, comment 'user table FILLfactor=75 test fillfactor';
+create table t5(a int)engine=Dstore, comment 'user table fillFACTOR 	=75 test fillfactor';
+create table t6(a int)engine=Dstore, comment 'user table fillfacTOR= 	75 test fillfactor';
+create table t7(a int)engine=Dstore, comment 'user table FillFactor	= 	75 test fillfactor';
+create table t8(a int)engine=Dstore, comment 'user tableFillFactor=75dstore';
+create table t9(a int)engine=Dstore, comment 'user table fillfactor=test fillfactor';
+drop table t1,t2,t3,t4,t5,t6,t7,t8,t9;
+#case6: Truncate table can retain fillfactor attribute.
+create table t1(a int, b int, index(a) comment 'fillfactor=60')engine=Dstore, comment 'fillfactor=50';
+insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  KEY `a` (`a`) COMMENT 'fillfactor=60'
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='fillfactor=50'
+truncate table t1;
+insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  KEY `a` (`a`) COMMENT 'fillfactor=60'
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='fillfactor=50'
+drop table t1;
+#case7: Create table like can retain fillfactor attribute.
+create table t1(a int, b int, index(a) comment 'fillfactor=80')engine=Dstore, stats_sample_pages=23, comment 'fillfactor=60';
+create table t2 like t1;
+show create table t2;
+Table	Create Table
+t2	CREATE TABLE `t2` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  KEY `a` (`a`) COMMENT 'fillfactor=80'
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci STATS_SAMPLE_PAGES=23 COMMENT='fillfactor=60'
+drop table t1,t2;
+#case8: Test different DStore heap table fillfactor consume different storage space.
+create table t1(a varchar(512), b varchar(512), c varchar(512), d varchar(512))engine=Dstore, comment 'fillfactor=10';
+create table t2(a varchar(512), b varchar(512), c varchar(512), d varchar(512))engine=Dstore, comment 'fillfactor=100';
+insert into t1 values(repeat('a',500),repeat('b',500),repeat('c',500),repeat('d',500));
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t2 select * from t1;
+analyze table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+analyze table t2;
+Table	Op	Msg_type	Msg_text
+test.t2	analyze	status	OK
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` varchar(512) DEFAULT NULL,
+  `b` varchar(512) DEFAULT NULL,
+  `c` varchar(512) DEFAULT NULL,
+  `d` varchar(512) DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='fillfactor=10'
+select count(*) from t1;
+count(*)
+256
+show create table t2;
+Table	Create Table
+t2	CREATE TABLE `t2` (
+  `a` varchar(512) DEFAULT NULL,
+  `b` varchar(512) DEFAULT NULL,
+  `c` varchar(512) DEFAULT NULL,
+  `d` varchar(512) DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='fillfactor=100'
+select count(*) from t2;
+count(*)
+256
+select (select DATA_LENGTH from information_schema.tables where table_name='t1') > (select DATA_LENGTH from information_schema.tables where table_name='t2') as 'compare';
+compare
+1
+drop table t1, t2;
+#case9: restart mysqld, test open table parse fillfactor process
+create table t1(a int, b int, index(a) comment 'fillfactor=60')engine=Dstore, comment 'fillfactor=50';
+insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5);
+alter table t1 add index idx_b(b) comment 'fillfactor=65';
+create table t2 like t1;
+insert into t2 select * from t1;
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  KEY `a` (`a`) COMMENT 'fillfactor=60',
+  KEY `idx_b` (`b`) COMMENT 'fillfactor=65'
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='fillfactor=50'
+show create table t2;
+Table	Create Table
+t2	CREATE TABLE `t2` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  KEY `a` (`a`) COMMENT 'fillfactor=60',
+  KEY `idx_b` (`b`) COMMENT 'fillfactor=65'
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='fillfactor=50'
+# restart:
+select count(*) from t1;
+count(*)
+5
+select count(*) from t2;
+count(*)
+5
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  KEY `a` (`a`) COMMENT 'fillfactor=60',
+  KEY `idx_b` (`b`) COMMENT 'fillfactor=65'
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='fillfactor=50'
+show create table t2;
+Table	Create Table
+t2	CREATE TABLE `t2` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  KEY `a` (`a`) COMMENT 'fillfactor=60',
+  KEY `idx_b` (`b`) COMMENT 'fillfactor=65'
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='fillfactor=50'
+drop table t1, t2;

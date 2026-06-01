@@ -1,0 +1,83 @@
+#
+# Test for recovery resume
+#
+--source include/have_debug.inc
+
+# 1. prepare some data
+create database recovery_resume;
+use recovery_resume;
+--disable_query_log
+--disable_result_log
+--source suite/local_backup/include/data_consistency_create_table.inc
+ 
+# insert data
+SET SESSION autocommit=0;
+--source suite/local_backup/include/data_consistency_load_data.inc
+CALL LoadAllTPCCData(10, 90, 100, 100);
+
+# 2. execute DDL
+--source suite/local_backup/include/data_consistency_ddl.inc
+CALL ExecuteAllDDL();
+--enable_result_log
+--enable_query_log
+
+# 3. Recovery. Not creating checkpoint
+--source include/kill_mysqld.inc
+--let $restart_parameters= restart: --dstore_recovery_create_checkpoint_interval=0
+--source include/start_mysqld_no_echo.inc
+--let $MYSQLD_DATADIR = `SELECT @@datadir`
+--let SEARCH_FILE = $MYSQLD_DATADIR/mysqld-current.log
+--let SEARCH_PATTERN=WalRecovery redo start recoveryStartPlsn:\d+
+--source include/search_pattern.inc
+
+# 4. Verify data
+--disable_query_log
+SET SESSION autocommit=0;
+--echo # Check data consistency with DDL operation
+--source suite/local_backup/include/data_consistency_ddl_check.inc
+--enable_query_log
+
+# 5. Clean DDL operation
+--disable_query_log
+--disable_result_log
+--source suite/local_backup/include/data_consistency_ddl_clean.inc
+CALL CleanAllDDL();
+
+# 6. execute DDL 
+--source suite/local_backup/include/data_consistency_ddl.inc
+CALL ExecuteAllDDL();
+--enable_result_log
+--enable_query_log 
+
+# 7. Recovery. Creating checkpoint during recovery
+--exec rm $MYSQLD_DATADIR/mysqld-current.log
+--source include/kill_mysqld.inc
+--let $restart_parameters= restart: --dstore_recovery_create_checkpoint_interval=44 --dstore_gap_flush_wal_length=44
+--source include/start_mysqld_no_echo.inc
+
+# 8. Kill mysqld while recoverying and then resume recovery.
+--sleep 5
+--source include/kill_mysqld.inc
+--let $restart_parameters= restart: --dstore_recovery_create_checkpoint_interval=44 --dstore_gap_flush_wal_length=44
+--source include/start_mysqld_no_echo.inc
+--echo # Expect found 2 times
+--let $MYSQLD_DATADIR = `SELECT @@datadir`
+--let PRINT_HIT_TIMES = 1
+--let SEARCH_FILE = $MYSQLD_DATADIR/mysqld-current.log
+--let SEARCH_PATTERN=WalRecovery redo start recoveryStartPlsn:\d+
+--source include/search_pattern.inc
+
+--echo # Expect recovery start lsn increasing
+--let $MYSQLD_DATADIR = `SELECT @@datadir`
+--let SEARCH_FILE = $MYSQLD_DATADIR/mysqld-current.log
+--let SEARCH_PATTERN=WalRecovery redo start recoveryStartPlsn:(\d+)
+--source include/search_pattern_and_compare.inc
+
+# 9. Verify data
+--disable_query_log
+SET SESSION autocommit=0;
+--echo # Check data consistency with DDL operation
+--source suite/local_backup/include/data_consistency_ddl_check.inc
+--enable_query_log
+
+drop database recovery_resume;

@@ -1,0 +1,37 @@
+call mtr.add_suppression("full backup found binlog is not enabled");
+CREATE DATABASE big_innodb_file;
+USE big_innodb_file;
+CREATE TABLE t1(i int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+i
+1
+CREATE TABLE t2(i int) ENGINE=Innodb;
+INSERT INTO t2 VALUES(2);
+SELECT * FROM t2;
+i
+2
+4351705088
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+# Shut server down.
+# Restart the server.
+# restart: --dstore_open_restore_mode=on
+4351705088
+USE big_innodb_file;
+SELECT * FROM t1;
+i
+1
+SELECT * FROM t2;
+i
+2
+DROP DATABASE big_innodb_file;

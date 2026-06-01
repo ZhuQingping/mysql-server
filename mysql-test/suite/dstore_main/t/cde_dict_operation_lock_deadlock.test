@@ -1,0 +1,41 @@
+--source include/have_dstore.inc
+
+create table t0 (a int, b int, c int key, index(b,a)) engine=Dstore;
+create table t1 (b int, f int key, index(b), foreign key(b) references t0(b)) engine=Dstore;
+
+insert into t0 values(1,1,1);
+
+--source include/restart_mysqld.inc
+--connect(con1,localhost,root)
+--connect(con2,localhost,root)
+--connect(con3,localhost,root)
+
+--connection con1
+set debug_sync = "WaitLoadReferencedTable WAIT_FOR LoadContinue";
+
+--send insert into t1 values(1,1);
+
+--connection con2
+--sleep 5
+--send select * from t0;
+
+--connection con3
+--sleep 5
+set debug_sync = "now SIGNAL LoadContinue";
+
+--connection con1
+--reap
+
+--connection con2
+--reap
+
+select * from t0;
+select * from t1;
+
+drop table t1;
+drop table t0;
+
+--disconnect con1
+--disconnect con2
+--disconnect con3
+

@@ -1,0 +1,1067 @@
+# Enabling ROUND and TRUNCATE to pq
+# Test layout
+# First part: testing on DECIMAL columns
+# Second part: same on DOUBLE columns
+# Within each part, we test ROUND and TRUNCATE
+# --------
+# DECIMAL
+# --------
+CREATE TABLE t0 ( a DECIMAL(10,5), b DECIMAL(10,5),c DECIMAL (10,5), type INT);
+INSERT INTO t0 VALUES (1.2246,2.54678,3.5446,1),(2.2246,3.54678,9.5446,1),(3.2246,4.54678,8.5446,2),(4.2246,5.54678,7.5446,3),(5.2246,6.54678,6.5446,3);
+CREATE TABLE t1 ( a INT, b DECIMAL(15,8), c DECIMAL(15,8));
+INSERT INTO t1 VALUES(1,1.3534653,3.243),(2,2.3534653,3.353454),(1,2.3534653,4.5565),(1,14.3534653,43245.35656),(1,15.3534653,766.346546),(1,155.3534653,3656.56),(1,135.3534653,125345.553464);
+CREATE TABLE t2 (a DECIMAL(15,8), b DECIMAL(15,8));
+INSERT INTO t2 VALUES (999.99,354.656),(499.99,154.656),(699.99,254.656),(599.99,454.656),(399.99,154.656),(NULL,NULL),(1399.99,NULL),(NULL,14.6123);
+ANALYZE TABLE t0, t1, t2;
+Table	Op	Msg_type	Msg_text
+test.t0	analyze	status	OK
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+# --------------------------------
+# ROUND 
+# --------------------------------
+# Same execution plan (FLOOR and ROUND)
+EXPLAIN FORMAT=TREE SELECT FLOOR(a) FROM t0;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=5)
+    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT FLOOR(a) FROM t0;
+FLOOR(a)
+1
+2
+3
+4
+5
+# Same result (ROUND with and without PQ) 
+EXPLAIN FORMAT=TREE SELECT ROUND(a) FROM t0;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=5)
+    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT ROUND(a) FROM t0;
+ROUND(a)
+1
+2
+3
+4
+5
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ ROUND(a) FROM t0;
+EXPLAIN
+-> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */ ROUND(a) FROM t0;
+ROUND(a)
+1
+2
+3
+4
+5
+# With aggregates
+# Same execution plan (FLOOR and ROUND)
+EXPLAIN FORMAT=TREE SELECT FLOOR(SUM(a)) FROM t0;
+EXPLAIN
+-> Aggregate: sum(`<temporary>`.`SUM(a)`)  (cost=0.9 rows=1)
+    -> Gather: 4 workers, parallel scan on t0  (cost=0.5 rows=4)
+        -> Aggregate: sum(`<temporary>`.`SUM(a)`)  (cost=0.5 rows=1)
+            -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT FLOOR(SUM(a)) FROM t0;
+FLOOR(SUM(a))
+16
+# Same result (ROUND with and without PQ) 
+EXPLAIN FORMAT=TREE SELECT ROUND(SUM(a)) FROM t0;
+EXPLAIN
+-> Aggregate: sum(`<temporary>`.`SUM(a)`)  (cost=0.9 rows=1)
+    -> Gather: 4 workers, parallel scan on t0  (cost=0.5 rows=4)
+        -> Aggregate: sum(`<temporary>`.`SUM(a)`)  (cost=0.5 rows=1)
+            -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT ROUND(SUM(a)) FROM t0;
+ROUND(SUM(a))
+16
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ ROUND(SUM(a)) FROM t0;
+EXPLAIN
+-> Aggregate: sum(t0.a)  (cost=1.25 rows=1)
+    -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */ ROUND(SUM(a)) FROM t0;
+ROUND(SUM(a))
+16
+#3/ With aggregates and GROUP BY 
+# Same execution plan (FLOOR and ROUND)
+EXPLAIN FORMAT=TREE  SELECT FLOOR(SUM(a)),type  FROM t0 GROUP BY type;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=4)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT FLOOR(SUM(a)),type  FROM t0 GROUP BY type;
+FLOOR(SUM(a))	type
+3	1
+3	2
+9	3
+EXPLAIN FORMAT=TREE SELECT ROUND(SUM(a)),type  FROM t0 GROUP BY type;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=4)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT ROUND(SUM(a)),type  FROM t0 GROUP BY type;
+ROUND(SUM(a))	type
+3	1
+3	2
+9	3
+# Same result (ROUND with and without PQ) 
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ ROUND(SUM(a)),type  FROM t0 GROUP BY type;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */ ROUND(SUM(a)),type  FROM t0 GROUP BY type;
+ROUND(SUM(a))	type
+3	1
+3	2
+9	3
+# 4/ SUM_DISTINCT_FUNC is not supported by PQ (yet)
+# Same layout as previous tests - if evt. enabled only the execution plans should change 
+EXPLAIN FORMAT=TREE SELECT FLOOR(SUM(DISTINCT a))  FROM t0 GROUP BY b;
+EXPLAIN
+-> Group aggregate: sum(distinct t0.a)  (cost=1.25 rows=2.24)
+    -> Sort: t0.b  (cost=0.75 rows=5)
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT FLOOR(SUM(DISTINCT a))  FROM t0 GROUP BY b;
+FLOOR(SUM(DISTINCT a))
+1
+2
+3
+4
+5
+EXPLAIN FORMAT=TREE  SELECT ROUND(SUM(DISTINCT a))  FROM t0 GROUP BY b;
+EXPLAIN
+-> Group aggregate: sum(distinct t0.a)  (cost=1.25 rows=2.24)
+    -> Sort: t0.b  (cost=0.75 rows=5)
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT ROUND(SUM(DISTINCT a))  FROM t0 GROUP BY b;
+ROUND(SUM(DISTINCT a))
+1
+2
+3
+4
+5
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ ROUND(SUM(DISTINCT a))  FROM t0 GROUP BY b;
+EXPLAIN
+-> Group aggregate: sum(distinct t0.a)  (cost=1.25 rows=2.24)
+    -> Sort: t0.b  (cost=0.75 rows=5)
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */  ROUND(SUM(DISTINCT a))  FROM t0 GROUP BY b;
+ROUND(SUM(DISTINCT a))
+1
+2
+3
+4
+5
+# 5/  Aggregate + SUM of another column and GROUP BY
+EXPLAIN FORMAT=TREE SELECT  FLOOR(a + SUM(b)) FROM t0 GROUP BY a;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=4)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT  FLOOR(a + SUM(b)) FROM t0 GROUP BY a;
+FLOOR(a + SUM(b))
+3
+5
+7
+9
+11
+EXPLAIN FORMAT=TREE SELECT  ROUND(a + SUM(b)) FROM t0 GROUP BY a;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=4)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT  ROUND(a + SUM(b)) FROM t0 GROUP BY a;
+ROUND(a + SUM(b))
+4
+6
+8
+10
+12
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */  ROUND(a + SUM(b)) FROM t0 GROUP BY a;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */ ROUND(a + SUM(b)) FROM t0 GROUP BY a;
+ROUND(a + SUM(b))
+4
+6
+8
+10
+12
+# Additional tests
+# 1 IF
+EXPLAIN FORMAT=TREE SELECT ROUND(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b)) FROM t1;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.425 rows=7)
+    -> Parallel table scan on t1  (cost=0.425 rows=1.75)
+
+SELECT ROUND(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b)) FROM t1;
+ROUND(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b))
+-2
+2
+-2
+-43231
+-751
+-3501
+-125210
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ ROUND(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b)) FROM t1;
+EXPLAIN
+-> Table scan on t1  (cost=0.95 rows=7)
+
+SELECT /*+ NO_PQ */ROUND(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b)) FROM t1;
+ROUND(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b))
+-2
+2
+-2
+-43231
+-751
+-3501
+-125210
+# 2 IFNULL
+EXPLAIN FORMAT=TREE SELECT IFNULL(ROUND(SUM(ROUND(t1.a, 2) - ROUND(IFNULL(t1.b, 0), 2)) * 100 / ABS(SUM(ROUND(t1.a, 2))), 2), 0) avgGrossProfitRate FROM t1;
+EXPLAIN
+-> Aggregate: sum(`<temporary>`.`SUM(ROUND(t1.a, 2))`), sum(`<temporary>`.`sum((round(t1.a,2) - round(ifnull(t1.b,0),2)))`)  (cost=1 rows=1)
+    -> Gather: 4 workers, parallel scan on t1  (cost=0.6 rows=4)
+        -> Aggregate: sum(`<temporary>`.`SUM(ROUND(t1.a, 2))`), sum(`<temporary>`.`sum((round(t1.a,2) - round(ifnull(t1.b,0),2)))`)  (cost=0.6 rows=1)
+            -> Parallel table scan on t1  (cost=0.425 rows=1.75)
+
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ IFNULL(ROUND(SUM(ROUND(t1.a, 2) - ROUND(IFNULL(t1.b, 0), 2)) * 100 / ABS(SUM(ROUND(t1.a, 2))), 2), 0) avgGrossProfitRate FROM t1;
+EXPLAIN
+-> Aggregate: sum(round(t1.a,2)), sum((round(t1.a,2) - round(ifnull(t1.b,0),2)))  (cost=1.65 rows=1)
+    -> Table scan on t1  (cost=0.95 rows=7)
+
+SELECT IFNULL(ROUND(SUM(ROUND(t2.a, 2) - ROUND(IFNULL(t2.b, 0), 2)) * 100 / ABS(SUM(ROUND(t2.a, 2))), 2), 0) avgGrossProfitRate FROM t2;
+avgGrossProfitRate
+70.15
+SELECT /*+ NO_PQ */ IFNULL(ROUND(SUM(ROUND(t2.a, 2) - ROUND(IFNULL(t2.b, 0), 2)) * 100 / ABS(SUM(ROUND(t2.a, 2))), 2), 0) avgGrossProfitRate FROM t2;
+avgGrossProfitRate
+70.15
+# Test switch 
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ ROUND(a) FROM t0;
+EXPLAIN
+-> Table scan on t0  (cost=0.75 rows=5)
+
+EXPLAIN FORMAT=TREE SELECT ROUND(a) FROM t0;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=5)
+    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+# ------------------------------
+# TRUNCATE
+# --------------------------------
+# Same execution plan (FLOOR and TRUNCATE)
+EXPLAIN FORMAT=TREE SELECT FLOOR(a) FROM t0;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=5)
+    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT FLOOR(a) FROM t0;
+FLOOR(a)
+1
+2
+3
+4
+5
+# Same result (TRUNCATE with and without PQ) 
+EXPLAIN FORMAT=TREE SELECT TRUNCATE(a,2) FROM t0;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=5)
+    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT TRUNCATE(a,2) FROM t0;
+TRUNCATE(a,2)
+1.22
+2.22
+3.22
+4.22
+5.22
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ TRUNCATE(a,2) FROM t0;
+EXPLAIN
+-> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */ TRUNCATE(a,2) FROM t0;
+TRUNCATE(a,2)
+1.22
+2.22
+3.22
+4.22
+5.22
+# With aggregates
+# Same execution plan (FLOOR and TRUNCATE)
+EXPLAIN FORMAT=TREE SELECT FLOOR(SUM(a)) FROM t0;
+EXPLAIN
+-> Aggregate: sum(`<temporary>`.`SUM(a)`)  (cost=0.9 rows=1)
+    -> Gather: 4 workers, parallel scan on t0  (cost=0.5 rows=4)
+        -> Aggregate: sum(`<temporary>`.`SUM(a)`)  (cost=0.5 rows=1)
+            -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT FLOOR(SUM(a)) FROM t0;
+FLOOR(SUM(a))
+16
+# Same result (TRUNCATE with and without PQ) 
+EXPLAIN FORMAT=TREE SELECT TRUNCATE(SUM(a),2) FROM t0;
+EXPLAIN
+-> Aggregate: sum(`<temporary>`.`sum(t0.a)`)  (cost=0.9 rows=1)
+    -> Gather: 4 workers, parallel scan on t0  (cost=0.5 rows=4)
+        -> Aggregate: sum(`<temporary>`.`sum(t0.a)`)  (cost=0.5 rows=1)
+            -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT TRUNCATE(SUM(a),2) FROM t0;
+TRUNCATE(SUM(a),2)
+16.12
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ TRUNCATE(SUM(a),2) FROM t0;
+EXPLAIN
+-> Aggregate: sum(t0.a)  (cost=1.25 rows=1)
+    -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */ TRUNCATE(SUM(a),2) FROM t0;
+TRUNCATE(SUM(a),2)
+16.12
+#3/ With aggregates and GROUP BY 
+# Same execution plan (FLOOR and TRUNCATE)
+EXPLAIN FORMAT=TREE  SELECT FLOOR(SUM(a)),type  FROM t0 GROUP BY type;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=4)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT FLOOR(SUM(a)),type  FROM t0 GROUP BY type;
+FLOOR(SUM(a))	type
+3	1
+3	2
+9	3
+EXPLAIN FORMAT=TREE SELECT TRUNCATE(SUM(a),2),type  FROM t0 GROUP BY type;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=4)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT TRUNCATE(SUM(a),2),type  FROM t0 GROUP BY type;
+TRUNCATE(SUM(a),2)	type
+3.44	1
+3.22	2
+9.44	3
+# Same result (TRUNCATE with and without PQ) 
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ TRUNCATE(SUM(a),2),type  FROM t0 GROUP BY type;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */ TRUNCATE(SUM(a),2),type  FROM t0 GROUP BY type;
+TRUNCATE(SUM(a),2)	type
+3.44	1
+3.22	2
+9.44	3
+# 4/ SUM_DISTINCT_FUNC is not supported by PQ (yet)
+# Same layout as previous tests - if evt. enabled only the execution plans should change 
+EXPLAIN FORMAT=TREE SELECT FLOOR(SUM(DISTINCT a))  FROM t0 GROUP BY b;
+EXPLAIN
+-> Group aggregate: sum(distinct t0.a)  (cost=1.25 rows=2.24)
+    -> Sort: t0.b  (cost=0.75 rows=5)
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT FLOOR(SUM(DISTINCT a))  FROM t0 GROUP BY b;
+FLOOR(SUM(DISTINCT a))
+1
+2
+3
+4
+5
+EXPLAIN FORMAT=TREE  SELECT TRUNCATE(SUM(DISTINCT a),2)  FROM t0 GROUP BY b;
+EXPLAIN
+-> Group aggregate: sum(distinct t0.a)  (cost=1.25 rows=2.24)
+    -> Sort: t0.b  (cost=0.75 rows=5)
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT TRUNCATE(SUM(DISTINCT a),2)  FROM t0 GROUP BY b;
+TRUNCATE(SUM(DISTINCT a),2)
+1.22
+2.22
+3.22
+4.22
+5.22
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ TRUNCATE(SUM(DISTINCT a),2)  FROM t0 GROUP BY b;
+EXPLAIN
+-> Group aggregate: sum(distinct t0.a)  (cost=1.25 rows=2.24)
+    -> Sort: t0.b  (cost=0.75 rows=5)
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */  TRUNCATE(SUM(DISTINCT a),2)  FROM t0 GROUP BY b;
+TRUNCATE(SUM(DISTINCT a),2)
+1.22
+2.22
+3.22
+4.22
+5.22
+# 5/  Aggregate + SUM of another column and GROUP BY
+EXPLAIN FORMAT=TREE SELECT  FLOOR(a + SUM(b)) FROM t0 GROUP BY a;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=4)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT  FLOOR(a + SUM(b)) FROM t0 GROUP BY a;
+FLOOR(a + SUM(b))
+3
+5
+7
+9
+11
+EXPLAIN FORMAT=TREE SELECT  TRUNCATE(a + SUM(b),2) FROM t0 GROUP BY a;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=4)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT  TRUNCATE(a + SUM(b),2) FROM t0 GROUP BY a;
+TRUNCATE(a + SUM(b),2)
+3.77
+5.77
+7.77
+9.77
+11.77
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */  TRUNCATE(a + SUM(b),2) FROM t0 GROUP BY a;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */ TRUNCATE(a + SUM(b),2) FROM t0 GROUP BY a;
+TRUNCATE(a + SUM(b),2)
+3.77
+5.77
+7.77
+9.77
+11.77
+# Additional tests 
+# 1 IF
+EXPLAIN FORMAT=TREE SELECT TRUNCATE(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b),2) FROM t1;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.425 rows=7)
+    -> Parallel table scan on t1  (cost=0.425 rows=1.75)
+
+SELECT TRUNCATE(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b),2) FROM t1;
+TRUNCATE(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b),2)
+-1.88
+2.35
+-2.20
+-43231.00
+-750.99
+-3501.20
+-125210.19
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ TRUNCATE(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b),2) FROM t1;
+EXPLAIN
+-> Table scan on t1  (cost=0.95 rows=7)
+
+SELECT /*+ NO_PQ */ TRUNCATE(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b),2) FROM t1;
+TRUNCATE(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b),2)
+-1.88
+2.35
+-2.20
+-43231.00
+-750.99
+-3501.20
+-125210.19
+# 2 IFNULL
+EXPLAIN FORMAT=TREE SELECT IFNULL(TRUNCATE(SUM(TRUNCATE(t2.a, 2) - TRUNCATE(IFNULL(t2.b, 0), 2)) * 100 / ABS(SUM(TRUNCATE(t2.a, 2))), 2), 0) avgGrossProfitRate FROM t2;
+EXPLAIN
+-> Aggregate: sum(`<temporary>`.`SUM(TRUNCATE(t2.a, 2))`), sum(`<temporary>`.`sum((truncate(t2.a,2) - truncate(ifnull(t2.b,0),2)))`)  (cost=1.05 rows=1)
+    -> Gather: 4 workers, parallel scan on t2  (cost=0.65 rows=4)
+        -> Aggregate: sum(`<temporary>`.`SUM(TRUNCATE(t2.a, 2))`), sum(`<temporary>`.`sum((truncate(t2.a,2) - truncate(ifnull(t2.b,0),2)))`)  (cost=0.65 rows=1)
+            -> Parallel table scan on t2  (cost=0.45 rows=2)
+
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ IFNULL(TRUNCATE(SUM(TRUNCATE(t2.a, 2) - TRUNCATE(IFNULL(t2.b, 0), 2)) * 100 / ABS(SUM(TRUNCATE(t2.a, 2))), 2), 0) avgGrossProfitRate FROM t2;
+EXPLAIN
+-> Aggregate: sum(truncate(t2.a,2)), sum((truncate(t2.a,2) - truncate(ifnull(t2.b,0),2)))  (cost=1.85 rows=1)
+    -> Table scan on t2  (cost=1.05 rows=8)
+
+SELECT IFNULL(TRUNCATE(SUM(TRUNCATE(t2.a, 2) - TRUNCATE(IFNULL(t2.b, 0), 2)) * 100 / ABS(SUM(TRUNCATE(t2.a, 2))), 2), 0) avgGrossProfitRate FROM t2;
+avgGrossProfitRate
+70.14
+SELECT /*+ NO_PQ */ IFNULL(TRUNCATE(SUM(TRUNCATE(t2.a, 2) - TRUNCATE(IFNULL(t2.b, 0), 2)) * 100 / ABS(SUM(TRUNCATE(t2.a, 2))), 2), 0) avgGrossProfitRate FROM t2;
+avgGrossProfitRate
+70.14
+# Test switch 
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ TRUNCATE(a,2) FROM t0;
+EXPLAIN
+-> Table scan on t0  (cost=0.75 rows=5)
+
+EXPLAIN FORMAT=TREE SELECT TRUNCATE(a,2) FROM t0;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=5)
+    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+DROP TABLE t0,t1,t2;
+# --------
+# DOUBLE
+# --------
+CREATE TABLE t0 ( a DOUBLE, b DOUBLE,c DOUBLE, type INT);
+INSERT INTO t0 VALUES (1.2246,2.54678,3.5446,1),(2.2246,3.54678,9.5446,1),(3.2246,4.54678,8.5446,2),(4.2246,5.54678,7.5446,3),(5.2246,6.54678,6.5446,3);
+CREATE TABLE t1 ( a INT, b DOUBLE, c DOUBLE);
+INSERT INTO t1 VALUES(1,1.3534653,3.243),(2,2.3534653,3.353454),(1,2.3534653,4.5565),(1,14.3534653,43245.35656),(1,15.3534653,766.346546),(1,155.3534653,3656.56),(1,135.3534653,125345.553464);
+CREATE TABLE t2 (a DOUBLE, b DOUBLE);
+INSERT INTO t2 VALUES (999.99,354.656),(499.99,154.656),(699.99,254.656),(599.99,454.656),(399.99,154.656),(NULL,NULL),(1399.99,NULL),(NULL,14.6123);
+ANALYZE TABLE t0, t1, t2;
+Table	Op	Msg_type	Msg_text
+test.t0	analyze	status	OK
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+# --------------------------------
+# ROUND 
+# --------------------------------
+# Same execution plan (FLOOR and ROUND)
+EXPLAIN FORMAT=TREE SELECT FLOOR(a) FROM t0;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=5)
+    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT FLOOR(a) FROM t0;
+FLOOR(a)
+1
+2
+3
+4
+5
+# Same result (ROUND with and without PQ) 
+EXPLAIN FORMAT=TREE SELECT ROUND(a) FROM t0;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=5)
+    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT ROUND(a) FROM t0;
+ROUND(a)
+1
+2
+3
+4
+5
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ ROUND(a) FROM t0;
+EXPLAIN
+-> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */ ROUND(a) FROM t0;
+ROUND(a)
+1
+2
+3
+4
+5
+# With aggregates
+# Same execution plan (FLOOR and ROUND)
+EXPLAIN FORMAT=TREE SELECT FLOOR(SUM(a)) FROM t0;
+EXPLAIN
+-> Aggregate: sum(`<temporary>`.`SUM(a)`)  (cost=0.9 rows=1)
+    -> Gather: 4 workers, parallel scan on t0  (cost=0.5 rows=4)
+        -> Aggregate: sum(`<temporary>`.`SUM(a)`)  (cost=0.5 rows=1)
+            -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT FLOOR(SUM(a)) FROM t0;
+FLOOR(SUM(a))
+16
+# Same result (ROUND with and without PQ) 
+EXPLAIN FORMAT=TREE SELECT ROUND(SUM(a)) FROM t0;
+EXPLAIN
+-> Aggregate: sum(`<temporary>`.`SUM(a)`)  (cost=0.9 rows=1)
+    -> Gather: 4 workers, parallel scan on t0  (cost=0.5 rows=4)
+        -> Aggregate: sum(`<temporary>`.`SUM(a)`)  (cost=0.5 rows=1)
+            -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT ROUND(SUM(a)) FROM t0;
+ROUND(SUM(a))
+16
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ ROUND(SUM(a)) FROM t0;
+EXPLAIN
+-> Aggregate: sum(t0.a)  (cost=1.25 rows=1)
+    -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */ ROUND(SUM(a)) FROM t0;
+ROUND(SUM(a))
+16
+#3/ With aggregates and GROUP BY 
+# Same execution plan (FLOOR and ROUND)
+EXPLAIN FORMAT=TREE  SELECT FLOOR(SUM(a)),type  FROM t0 GROUP BY type;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=4)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT FLOOR(SUM(a)),type  FROM t0 GROUP BY type;
+FLOOR(SUM(a))	type
+3	1
+3	2
+9	3
+EXPLAIN FORMAT=TREE SELECT ROUND(SUM(a)),type  FROM t0 GROUP BY type;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=4)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT ROUND(SUM(a)),type  FROM t0 GROUP BY type;
+ROUND(SUM(a))	type
+3	1
+3	2
+9	3
+# Same result (ROUND with and without PQ) 
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ ROUND(SUM(a)),type  FROM t0 GROUP BY type;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */ ROUND(SUM(a)),type  FROM t0 GROUP BY type;
+ROUND(SUM(a))	type
+3	1
+3	2
+9	3
+# 4/ SUM_DISTINCT_FUNC is not supported by PQ (yet)
+# Same layout as previous tests - if evt. enabled only the execution plans should change 
+EXPLAIN FORMAT=TREE SELECT FLOOR(SUM(DISTINCT a))  FROM t0 GROUP BY b;
+EXPLAIN
+-> Group aggregate: sum(distinct t0.a)  (cost=1.25 rows=2.24)
+    -> Sort: t0.b  (cost=0.75 rows=5)
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT FLOOR(SUM(DISTINCT a))  FROM t0 GROUP BY b;
+FLOOR(SUM(DISTINCT a))
+1
+2
+3
+4
+5
+EXPLAIN FORMAT=TREE  SELECT ROUND(SUM(DISTINCT a))  FROM t0 GROUP BY b;
+EXPLAIN
+-> Group aggregate: sum(distinct t0.a)  (cost=1.25 rows=2.24)
+    -> Sort: t0.b  (cost=0.75 rows=5)
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT ROUND(SUM(DISTINCT a))  FROM t0 GROUP BY b;
+ROUND(SUM(DISTINCT a))
+1
+2
+3
+4
+5
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ ROUND(SUM(DISTINCT a))  FROM t0 GROUP BY b;
+EXPLAIN
+-> Group aggregate: sum(distinct t0.a)  (cost=1.25 rows=2.24)
+    -> Sort: t0.b  (cost=0.75 rows=5)
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */  ROUND(SUM(DISTINCT a))  FROM t0 GROUP BY b;
+ROUND(SUM(DISTINCT a))
+1
+2
+3
+4
+5
+# 5/  Aggregate + SUM of another column and GROUP BY
+EXPLAIN FORMAT=TREE SELECT  FLOOR(a + SUM(b)) FROM t0 GROUP BY a;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=4)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT  FLOOR(a + SUM(b)) FROM t0 GROUP BY a;
+FLOOR(a + SUM(b))
+3
+5
+7
+9
+11
+EXPLAIN FORMAT=TREE SELECT  ROUND(a + SUM(b)) FROM t0 GROUP BY a;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=4)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT  ROUND(a + SUM(b)) FROM t0 GROUP BY a;
+ROUND(a + SUM(b))
+4
+6
+8
+10
+12
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */  ROUND(a + SUM(b)) FROM t0 GROUP BY a;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */ ROUND(a + SUM(b)) FROM t0 GROUP BY a;
+ROUND(a + SUM(b))
+4
+6
+8
+10
+12
+# Additional tests
+# 1 IF
+EXPLAIN FORMAT=TREE SELECT ROUND(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b)) FROM t1;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.425 rows=7)
+    -> Parallel table scan on t1  (cost=0.425 rows=1.75)
+
+SELECT ROUND(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b)) FROM t1;
+ROUND(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b))
+-2
+2
+-2
+-43231
+-751
+-3501
+-125210
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ ROUND(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b)) FROM t1;
+EXPLAIN
+-> Table scan on t1  (cost=0.95 rows=7)
+
+SELECT /*+ NO_PQ */ROUND(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b)) FROM t1;
+ROUND(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b))
+-2
+2
+-2
+-43231
+-751
+-3501
+-125210
+# 2 IFNULL
+EXPLAIN FORMAT=TREE SELECT IFNULL(ROUND(SUM(ROUND(t1.a, 2) - ROUND(IFNULL(t1.b, 0), 2)) * 100 / ABS(SUM(ROUND(t1.a, 2))), 2), 0) avgGrossProfitRate FROM t1;
+EXPLAIN
+-> Aggregate: sum(`<temporary>`.`SUM(ROUND(t1.a, 2))`), sum(`<temporary>`.`sum((round(t1.a,2) - round(ifnull(t1.b,0),2)))`)  (cost=1 rows=1)
+    -> Gather: 4 workers, parallel scan on t1  (cost=0.6 rows=4)
+        -> Aggregate: sum(`<temporary>`.`SUM(ROUND(t1.a, 2))`), sum(`<temporary>`.`sum((round(t1.a,2) - round(ifnull(t1.b,0),2)))`)  (cost=0.6 rows=1)
+            -> Parallel table scan on t1  (cost=0.425 rows=1.75)
+
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ IFNULL(ROUND(SUM(ROUND(t1.a, 2) - ROUND(IFNULL(t1.b, 0), 2)) * 100 / ABS(SUM(ROUND(t1.a, 2))), 2), 0) avgGrossProfitRate FROM t1;
+EXPLAIN
+-> Aggregate: sum(round(t1.a,2)), sum((round(t1.a,2) - round(ifnull(t1.b,0),2)))  (cost=1.65 rows=1)
+    -> Table scan on t1  (cost=0.95 rows=7)
+
+SELECT IFNULL(ROUND(SUM(ROUND(t2.a, 2) - ROUND(IFNULL(t2.b, 0), 2)) * 100 / ABS(SUM(ROUND(t2.a, 2))), 2), 0) avgGrossProfitRate FROM t2;
+avgGrossProfitRate
+70.15
+SELECT /*+ NO_PQ */ IFNULL(ROUND(SUM(ROUND(t2.a, 2) - ROUND(IFNULL(t2.b, 0), 2)) * 100 / ABS(SUM(ROUND(t2.a, 2))), 2), 0) avgGrossProfitRate FROM t2;
+avgGrossProfitRate
+70.15
+# Test switch 
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ ROUND(a) FROM t0;
+EXPLAIN
+-> Table scan on t0  (cost=0.75 rows=5)
+
+EXPLAIN FORMAT=TREE SELECT ROUND(a) FROM t0;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=5)
+    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+# ------------------------------
+# TRUNCATE
+# --------------------------------
+# Same execution plan (FLOOR and TRUNCATE)
+EXPLAIN FORMAT=TREE SELECT FLOOR(a) FROM t0;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=5)
+    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT FLOOR(a) FROM t0;
+FLOOR(a)
+1
+2
+3
+4
+5
+# Same result (TRUNCATE with and without PQ) 
+EXPLAIN FORMAT=TREE SELECT TRUNCATE(a,2) FROM t0;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=5)
+    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT TRUNCATE(a,2) FROM t0;
+TRUNCATE(a,2)
+1.22
+2.22
+3.22
+4.22
+5.22
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ TRUNCATE(a,2) FROM t0;
+EXPLAIN
+-> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */ TRUNCATE(a,2) FROM t0;
+TRUNCATE(a,2)
+1.22
+2.22
+3.22
+4.22
+5.22
+# With aggregates
+# Same execution plan (FLOOR and TRUNCATE)
+EXPLAIN FORMAT=TREE SELECT FLOOR(SUM(a)) FROM t0;
+EXPLAIN
+-> Aggregate: sum(`<temporary>`.`SUM(a)`)  (cost=0.9 rows=1)
+    -> Gather: 4 workers, parallel scan on t0  (cost=0.5 rows=4)
+        -> Aggregate: sum(`<temporary>`.`SUM(a)`)  (cost=0.5 rows=1)
+            -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT FLOOR(SUM(a)) FROM t0;
+FLOOR(SUM(a))
+16
+# Same result (TRUNCATE with and without PQ) 
+EXPLAIN FORMAT=TREE SELECT TRUNCATE(SUM(a),2) FROM t0;
+EXPLAIN
+-> Aggregate: sum(`<temporary>`.`sum(t0.a)`)  (cost=0.9 rows=1)
+    -> Gather: 4 workers, parallel scan on t0  (cost=0.5 rows=4)
+        -> Aggregate: sum(`<temporary>`.`sum(t0.a)`)  (cost=0.5 rows=1)
+            -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT TRUNCATE(SUM(a),2) FROM t0;
+TRUNCATE(SUM(a),2)
+16.12
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ TRUNCATE(SUM(a),2) FROM t0;
+EXPLAIN
+-> Aggregate: sum(t0.a)  (cost=1.25 rows=1)
+    -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */ TRUNCATE(SUM(a),2) FROM t0;
+TRUNCATE(SUM(a),2)
+16.12
+#3/ With aggregates and GROUP BY 
+# Same execution plan (FLOOR and TRUNCATE)
+EXPLAIN FORMAT=TREE  SELECT FLOOR(SUM(a)),type  FROM t0 GROUP BY type;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=4)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT FLOOR(SUM(a)),type  FROM t0 GROUP BY type;
+FLOOR(SUM(a))	type
+3	1
+3	2
+9	3
+EXPLAIN FORMAT=TREE SELECT TRUNCATE(SUM(a),2),type  FROM t0 GROUP BY type;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=4)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT TRUNCATE(SUM(a),2),type  FROM t0 GROUP BY type;
+TRUNCATE(SUM(a),2)	type
+3.44	1
+3.22	2
+9.44	3
+# Same result (TRUNCATE with and without PQ) 
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ TRUNCATE(SUM(a),2),type  FROM t0 GROUP BY type;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */ TRUNCATE(SUM(a),2),type  FROM t0 GROUP BY type;
+TRUNCATE(SUM(a),2)	type
+3.44	1
+3.22	2
+9.44	3
+# 4/ SUM_DISTINCT_FUNC is not supported by PQ (yet)
+# Same layout as previous tests - if evt. enabled only the execution plans should change 
+EXPLAIN FORMAT=TREE SELECT FLOOR(SUM(DISTINCT a))  FROM t0 GROUP BY b;
+EXPLAIN
+-> Group aggregate: sum(distinct t0.a)  (cost=1.25 rows=2.24)
+    -> Sort: t0.b  (cost=0.75 rows=5)
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT FLOOR(SUM(DISTINCT a))  FROM t0 GROUP BY b;
+FLOOR(SUM(DISTINCT a))
+1
+2
+3
+4
+5
+EXPLAIN FORMAT=TREE  SELECT TRUNCATE(SUM(DISTINCT a),2)  FROM t0 GROUP BY b;
+EXPLAIN
+-> Group aggregate: sum(distinct t0.a)  (cost=1.25 rows=2.24)
+    -> Sort: t0.b  (cost=0.75 rows=5)
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT TRUNCATE(SUM(DISTINCT a),2)  FROM t0 GROUP BY b;
+TRUNCATE(SUM(DISTINCT a),2)
+1.22
+2.22
+3.22
+4.22
+5.22
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ TRUNCATE(SUM(DISTINCT a),2)  FROM t0 GROUP BY b;
+EXPLAIN
+-> Group aggregate: sum(distinct t0.a)  (cost=1.25 rows=2.24)
+    -> Sort: t0.b  (cost=0.75 rows=5)
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */  TRUNCATE(SUM(DISTINCT a),2)  FROM t0 GROUP BY b;
+TRUNCATE(SUM(DISTINCT a),2)
+1.22
+2.22
+3.22
+4.22
+5.22
+# 5/  Aggregate + SUM of another column and GROUP BY
+EXPLAIN FORMAT=TREE SELECT  FLOOR(a + SUM(b)) FROM t0 GROUP BY a;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=4)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT  FLOOR(a + SUM(b)) FROM t0 GROUP BY a;
+FLOOR(a + SUM(b))
+3
+5
+7
+9
+11
+EXPLAIN FORMAT=TREE SELECT  TRUNCATE(a + SUM(b),2) FROM t0 GROUP BY a;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=4)
+            -> Table scan on <temporary>
+                -> Aggregate using temporary table
+                    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+SELECT  TRUNCATE(a + SUM(b),2) FROM t0 GROUP BY a;
+TRUNCATE(a + SUM(b),2)
+3.77
+5.77
+7.77
+9.77
+11.77
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */  TRUNCATE(a + SUM(b),2) FROM t0 GROUP BY a;
+EXPLAIN
+-> Table scan on <temporary>
+    -> Aggregate using temporary table
+        -> Table scan on t0  (cost=0.75 rows=5)
+
+SELECT /*+ NO_PQ */ TRUNCATE(a + SUM(b),2) FROM t0 GROUP BY a;
+TRUNCATE(a + SUM(b),2)
+3.77
+5.77
+7.77
+9.77
+11.77
+# Additional tests 
+# 1 IF
+EXPLAIN FORMAT=TREE SELECT TRUNCATE(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b),2) FROM t1;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.425 rows=7)
+    -> Parallel table scan on t1  (cost=0.425 rows=1.75)
+
+SELECT TRUNCATE(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b),2) FROM t1;
+TRUNCATE(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b),2)
+-1.88
+2.35
+-2.2
+-43231
+-750.99
+-3501.2
+-125210.19
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ TRUNCATE(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b),2) FROM t1;
+EXPLAIN
+-> Table scan on t1  (cost=0.95 rows=7)
+
+SELECT /*+ NO_PQ */ TRUNCATE(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b),2) FROM t1;
+TRUNCATE(IF(t1.a= 1, t1.b - IF(t1.b> 0, t1.c, -t1.c),t1.b),2)
+-1.88
+2.35
+-2.2
+-43231
+-750.99
+-3501.2
+-125210.19
+# 2 IFNULL
+EXPLAIN FORMAT=TREE SELECT IFNULL(TRUNCATE(SUM(TRUNCATE(t2.a, 2) - TRUNCATE(IFNULL(t2.b, 0), 2)) * 100 / ABS(SUM(TRUNCATE(t2.a, 2))), 2), 0) avgGrossProfitRate FROM t2;
+EXPLAIN
+-> Aggregate: sum(`<temporary>`.`SUM(TRUNCATE(t2.a, 2))`), sum(`<temporary>`.`sum((truncate(t2.a,2) - truncate(ifnull(t2.b,0),2)))`)  (cost=1.05 rows=1)
+    -> Gather: 4 workers, parallel scan on t2  (cost=0.65 rows=4)
+        -> Aggregate: sum(`<temporary>`.`SUM(TRUNCATE(t2.a, 2))`), sum(`<temporary>`.`sum((truncate(t2.a,2) - truncate(ifnull(t2.b,0),2)))`)  (cost=0.65 rows=1)
+            -> Parallel table scan on t2  (cost=0.45 rows=2)
+
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ IFNULL(TRUNCATE(SUM(TRUNCATE(t2.a, 2) - TRUNCATE(IFNULL(t2.b, 0), 2)) * 100 / ABS(SUM(TRUNCATE(t2.a, 2))), 2), 0) avgGrossProfitRate FROM t2;
+EXPLAIN
+-> Aggregate: sum(truncate(t2.a,2)), sum((truncate(t2.a,2) - truncate(ifnull(t2.b,0),2)))  (cost=1.85 rows=1)
+    -> Table scan on t2  (cost=1.05 rows=8)
+
+SELECT IFNULL(TRUNCATE(SUM(TRUNCATE(t2.a, 2) - TRUNCATE(IFNULL(t2.b, 0), 2)) * 100 / ABS(SUM(TRUNCATE(t2.a, 2))), 2), 0) avgGrossProfitRate FROM t2;
+avgGrossProfitRate
+70.14
+SELECT /*+ NO_PQ */ IFNULL(TRUNCATE(SUM(TRUNCATE(t2.a, 2) - TRUNCATE(IFNULL(t2.b, 0), 2)) * 100 / ABS(SUM(TRUNCATE(t2.a, 2))), 2), 0) avgGrossProfitRate FROM t2;
+avgGrossProfitRate
+70.14
+# Test switch 
+EXPLAIN FORMAT=TREE SELECT /*+ NO_PQ */ TRUNCATE(a,2) FROM t0;
+EXPLAIN
+-> Table scan on t0  (cost=0.75 rows=5)
+
+EXPLAIN FORMAT=TREE SELECT TRUNCATE(a,2) FROM t0;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t0  (cost=0.375 rows=5)
+    -> Parallel table scan on t0  (cost=0.375 rows=1.25)
+
+DROP TABLE t0,t1,t2;

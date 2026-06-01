@@ -1,0 +1,39 @@
+#
+# DStore storage engine do not support partition table.
+#
+SET @default_storage_engine_saved = @@default_storage_engine;
+#
+# TEST 1: Can not create partition table if default_storage_engine
+#         is Dstore and create table do not specify storage engine type.
+#
+SET default_storage_engine='Dstore';
+CREATE TABLE tp1 (
+c1 int DEFAULT NULL
+) ENGINE=InnoDB PARTITION BY KEY (c1) PARTITIONS 1;
+DROP TABLE tp1;
+CREATE TABLE tp1 (
+c1 int DEFAULT NULL
+) ENGINE=Dstore PARTITION BY KEY (c1) PARTITIONS 1;
+ERROR HY000: Engine cannot be used in partitioned tables
+CREATE TABLE tp1 (
+c1 int DEFAULT NULL
+) PARTITION BY KEY (c1) PARTITIONS 1;
+ERROR HY000: Engine cannot be used in partitioned tables
+#
+# TEST 2: Can create partition table if default_storage_engine
+#         is InnoDB and create table do not specify storage engine type.
+#
+SET default_storage_engine='InnoDB';
+CREATE TABLE tp1 (
+c1 int DEFAULT NULL
+) ENGINE=InnoDB PARTITION BY KEY (c1) PARTITIONS 1;
+DROP TABLE tp1;
+CREATE TABLE tp1 (
+c1 int DEFAULT NULL
+) ENGINE=Dstore PARTITION BY KEY (c1) PARTITIONS 1;
+ERROR HY000: Engine cannot be used in partitioned tables
+CREATE TABLE tp1 (
+c1 int DEFAULT NULL
+) PARTITION BY KEY (c1) PARTITIONS 1;
+DROP TABLE tp1;
+SET @@default_storage_engine = @default_storage_engine_saved;

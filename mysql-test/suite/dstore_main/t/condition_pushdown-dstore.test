@@ -1,0 +1,1134 @@
+#
+# Test common conditon pushdown.
+#
+--source include/have_only_dstore.inc
+
+--disable_warnings
+drop table if exists  numeric_types, datetime_types, string_types, json_type, users;
+--enable_warnings
+
+CREATE TABLE numeric_types (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    tiny_int_col TINYINT,
+    small_int_col SMALLINT,
+    medium_int_col MEDIUMINT,
+    int_col INT,
+    big_int_col BIGINT,
+    decimal_col DECIMAL(10,2),
+    float_col FLOAT,
+    double_col DOUBLE,
+    bit_col BIT(8),
+    boolean_col BOOLEAN
+);
+
+INSERT INTO numeric_types VALUES
+(1, 127, 32767, 8388607, 2147483647, 9223372036854775807, 12345.67, 3.14159, 2.71828, b'10101010', TRUE),
+(2, -128, -32768, -8388608, -2147483648, -9223372036854775808, -9876.54, -1.234, -5.678, b'11110000', FALSE),
+(3, 0, 0, 0, 0, 0, 0.00, 0.0, 0.0, b'00000000', FALSE),
+(4, 50, 15000, 500000, 1000000, 5000000000, 9999.99, 9.876, 5.432, b'01010101', TRUE),
+(5, -50, -15000, -500000, -1000000, -5000000000, -9999.99, -9.876, -5.432, b'10101010', FALSE),
+(6, 25, 16384, 4194304, 1073741824, 4611686018427387904, 5000.50, 2.5, 1.5, b'11001100', TRUE),
+(7, -25, -16384, -4194304, -1073741824, -4611686018427387904, -5000.50, -2.5, -1.5, b'00110011', FALSE),
+(8, 100, 25000, 7500000, 2000000000, 9000000000000000000, 1234.56, 1.234, 6.789, b'11111111', TRUE),
+(9, -100, -25000, -7500000, -2000000000, -9000000000000000000, -1234.56, -1.234, -6.789, b'00000000', FALSE),
+(10, 10, 1000, 100000, 10000000, 1000000000000000000, 333.33, 3.333, 33.333, b'10100101', TRUE);
+
+# primary key
+EXPLAIN SELECT id, tiny_int_col, int_col FROM numeric_types where id=6;
+SELECT id, tiny_int_col, int_col FROM numeric_types where id=6;
+
+EXPLAIN SELECT id, tiny_int_col, int_col FROM numeric_types where id=6;
+SELECT id, tiny_int_col, int_col FROM numeric_types where id=6;
+
+EXPLAIN SELECT id, tiny_int_col, int_col FROM numeric_types where id>=6;
+SELECT id, tiny_int_col, int_col FROM numeric_types where id>=6;
+
+# TINYINT Type Tests
+EXPLAIN SELECT id, tiny_int_col FROM numeric_types WHERE tiny_int_col = -128;
+SELECT id, tiny_int_col FROM numeric_types WHERE tiny_int_col = -128;
+
+EXPLAIN SELECT id, tiny_int_col FROM numeric_types WHERE tiny_int_col = 127;
+SELECT id, tiny_int_col FROM numeric_types WHERE tiny_int_col = 127;
+
+EXPLAIN SELECT id, tiny_int_col FROM numeric_types WHERE tiny_int_col > 25;
+SELECT id, tiny_int_col FROM numeric_types WHERE tiny_int_col > 25;
+
+EXPLAIN SELECT id, tiny_int_col FROM numeric_types WHERE tiny_int_col < 25;
+SELECT id, tiny_int_col FROM numeric_types WHERE tiny_int_col < 25;
+
+EXPLAIN SELECT id, tiny_int_col FROM numeric_types WHERE tiny_int_col BETWEEN -50 AND 50;
+SELECT id, tiny_int_col FROM numeric_types WHERE tiny_int_col BETWEEN -50 AND 50;
+
+# SMALLINT Type Tests
+EXPLAIN SELECT id, small_int_col FROM numeric_types WHERE small_int_col = -32768;
+SELECT id, small_int_col FROM numeric_types WHERE small_int_col = -32768;
+
+EXPLAIN SELECT id, small_int_col FROM numeric_types WHERE small_int_col = 32767;
+SELECT id, small_int_col FROM numeric_types WHERE small_int_col = 32767;
+
+EXPLAIN SELECT id, small_int_col FROM numeric_types WHERE small_int_col > 16384;
+SELECT id, small_int_col FROM numeric_types WHERE small_int_col > 16384;
+
+EXPLAIN SELECT id, small_int_col FROM numeric_types WHERE small_int_col < 15000;
+SELECT id, small_int_col FROM numeric_types WHERE small_int_col < 15000;
+
+EXPLAIN SELECT id, small_int_col FROM numeric_types WHERE small_int_col BETWEEN -16384 AND 25000;
+SELECT id, small_int_col FROM numeric_types WHERE small_int_col BETWEEN -16384 AND 25000;
+
+# MEDIUMINT Type Tests
+EXPLAIN SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col = -8388608;
+SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col = -8388608;
+
+EXPLAIN SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col = 8388607;
+SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col = 8388607;
+
+EXPLAIN SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col > 1000000;
+SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col > 1000000;
+
+EXPLAIN SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col < 500000;
+SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col < 500000;
+
+EXPLAIN SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col BETWEEN -1000000 AND 2000000;
+SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col BETWEEN -1000000 AND 2000000;
+
+EXPLAIN SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col BETWEEN -1000000 AND int_col;
+SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col BETWEEN -1000000 AND int_col;
+
+EXPLAIN SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col BETWEEN int_col AND 500000;
+SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col BETWEEN int_col AND 500000;
+
+EXPLAIN SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col BETWEEN tiny_int_col AND int_col;
+SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col BETWEEN  tiny_int_col AND int_col;
+
+EXPLAIN SELECT id, medium_int_col FROM numeric_types WHERE 2 BETWEEN 1 AND 3;
+SELECT id, medium_int_col FROM numeric_types WHERE 2 BETWEEN  1 AND 3;
+
+EXPLAIN SELECT id, medium_int_col FROM numeric_types WHERE 2 BETWEEN medium_int_col AND 3;
+EXPLAIN SELECT id, medium_int_col FROM numeric_types WHERE 2 BETWEEN 1 AND medium_int_col;
+EXPLAIN SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col BETWEEN 3 AND int_col;
+EXPLAIN SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col BETWEEN 2 AND 3;
+
+# INT Type Tests
+EXPLAIN SELECT id, int_col FROM numeric_types WHERE int_col = -2147483648;
+SELECT id, int_col FROM numeric_types WHERE int_col = -2147483648;
+
+EXPLAIN SELECT id, int_col FROM numeric_types WHERE int_col = 2147483647;
+SELECT id, int_col FROM numeric_types WHERE int_col = 2147483647;
+
+EXPLAIN SELECT id, int_col FROM numeric_types WHERE int_col > 1000000000;
+SELECT id, int_col FROM numeric_types WHERE int_col > 1000000000;
+
+EXPLAIN SELECT id, int_col FROM numeric_types WHERE int_col < 500000000;
+SELECT id, int_col FROM numeric_types WHERE int_col < 500000000;
+
+EXPLAIN SELECT id, int_col FROM numeric_types WHERE int_col BETWEEN -1000000000 AND 2000000000;
+SELECT id, int_col FROM numeric_types WHERE int_col BETWEEN -1000000000 AND 2000000000;
+
+# BIGINT Type Tests
+EXPLAIN SELECT id, big_int_col FROM numeric_types WHERE big_int_col = -9223372036854775808;
+SELECT id, big_int_col FROM numeric_types WHERE big_int_col = -9223372036854775808;
+
+EXPLAIN SELECT id, big_int_col FROM numeric_types WHERE big_int_col = 9223372036854775807;
+SELECT id, big_int_col FROM numeric_types WHERE big_int_col = 9223372036854775807;
+
+EXPLAIN SELECT id, big_int_col FROM numeric_types WHERE big_int_col > 5000000000000000000;
+SELECT id, big_int_col FROM numeric_types WHERE big_int_col > 5000000000000000000;
+
+EXPLAIN SELECT id, big_int_col FROM numeric_types WHERE big_int_col < 2500000000000000000;
+SELECT id, big_int_col FROM numeric_types WHERE big_int_col < 2500000000000000000;
+
+EXPLAIN SELECT id, big_int_col FROM numeric_types WHERE big_int_col BETWEEN -5000000000000000000 AND 7500000000000000000;
+SELECT id, big_int_col FROM numeric_types WHERE big_int_col BETWEEN -5000000000000000000 AND 7500000000000000000;
+
+# DECIMAL Type Tests
+EXPLAIN SELECT id, decimal_col FROM numeric_types WHERE decimal_col = 12345.67;
+SELECT id, decimal_col FROM numeric_types WHERE decimal_col = 12345.67;
+
+EXPLAIN SELECT id, decimal_col FROM numeric_types WHERE decimal_col > 5000.00;
+SELECT id, decimal_col FROM numeric_types WHERE decimal_col > 5000.00;
+
+EXPLAIN SELECT id, decimal_col FROM numeric_types WHERE decimal_col < 3000.00;
+SELECT id, decimal_col FROM numeric_types WHERE decimal_col < 3000.00;
+
+EXPLAIN SELECT id, decimal_col FROM numeric_types WHERE decimal_col BETWEEN -6000.00 AND 8000.00;
+SELECT id, decimal_col FROM numeric_types WHERE decimal_col BETWEEN -6000.00 AND 8000.00;
+
+# FLOAT and DOUBLE Type Tests
+EXPLAIN SELECT id, float_col FROM numeric_types WHERE float_col < 1234.5678;
+SELECT id, float_col FROM numeric_types WHERE float_col < 1234.5678;
+
+EXPLAIN SELECT id, float_col FROM numeric_types WHERE float_col BETWEEN 1000.0000 AND 2000.0000;
+SELECT id, float_col FROM numeric_types WHERE float_col BETWEEN 1000.0000 AND 2000.0000;
+
+EXPLAIN SELECT id, double_col FROM numeric_types WHERE double_col > 12345678.12345678;
+SELECT id, double_col FROM numeric_types WHERE double_col > 12345678.12345678;
+
+EXPLAIN SELECT id, double_col FROM numeric_types WHERE double_col BETWEEN 10000000.00000000 AND 20000000.00000000;
+SELECT id, double_col FROM numeric_types WHERE double_col BETWEEN 10000000.00000000 AND 20000000.00000000;
+
+# BOOLEAN Type Tests
+EXPLAIN SELECT id, boolean_col FROM numeric_types WHERE boolean_col = TRUE;
+SELECT id, boolean_col FROM numeric_types WHERE boolean_col = TRUE;
+
+EXPLAIN SELECT id, boolean_col FROM numeric_types WHERE boolean_col = FALSE;
+SELECT id, boolean_col FROM numeric_types WHERE boolean_col = FALSE;
+
+# BIT Type Tests
+EXPLAIN SELECT id FROM numeric_types WHERE bit_col = b'10101010';
+SELECT id FROM numeric_types WHERE bit_col = b'10101010';
+
+EXPLAIN SELECT id FROM numeric_types WHERE bit_col & b'10101010' = b'10101010';
+SELECT id FROM numeric_types WHERE bit_col & b'10101010' = b'10101010';
+
+CREATE TABLE datetime_types (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    date_col DATE,
+    time_col TIME,
+    datetime_col DATETIME,
+    timestamp_col TIMESTAMP,
+    year_col YEAR
+);
+
+INSERT INTO datetime_types VALUES
+(1, '2023-01-01', '12:00:00', '2023-01-01 12:00:00', '2023-01-01 12:00:00', 2023),
+(2, '2022-12-31', '23:59:59', '2022-12-31 23:59:59', '2022-12-31 23:59:59', 2022),
+(3, '2000-02-29', '00:00:00', '2000-02-29 00:00:00', '2000-02-29 00:00:00', 2000),
+(4, '1999-12-31', '13:30:15', '1999-12-31 13:30:15', '1999-12-31 13:30:15', 1999),
+(5, '2038-01-19', '03:14:07', '2038-01-19 03:14:07', '2038-01-19 03:14:07', 2038),
+(6, '1980-05-15', '08:45:30', '1980-05-15 08:45:30', '1980-05-15 08:45:30', 1980),
+(7, '2023-06-30', '18:30:00', '2023-06-30 18:30:00', '2023-06-30 18:30:00', 2023),
+(8, '2015-11-11', '11:11:11', '2015-11-11 11:11:11', '2015-11-11 11:11:11', 2015),
+(9, '1970-01-01', '00:00:01', '1970-01-01 00:00:01', '1970-01-01 23:00:01', 1970),
+(10, '2024-02-29', '14:25:36', '2024-02-29 14:25:36', '2024-02-29 14:25:36', 2024);
+
+# Basic Date and Time Queries
+EXPLAIN SELECT id, date_col FROM datetime_types WHERE date_col = '2023-01-01';
+SELECT id, date_col FROM datetime_types WHERE date_col = '2023-01-01';
+
+EXPLAIN SELECT id, time_col FROM datetime_types WHERE time_col = '12:00:00';
+SELECT id, time_col FROM datetime_types WHERE time_col = '12:00:00';
+
+EXPLAIN SELECT id, datetime_col FROM datetime_types WHERE datetime_col = '2023-01-01 12:00:00';
+SELECT id, datetime_col FROM datetime_types WHERE datetime_col = '2023-01-01 12:00:00';
+
+# # Range Queries
+EXPLAIN SELECT id, date_col FROM datetime_types WHERE date_col BETWEEN '2023-01-01' AND '2023-06-30';
+SELECT id, date_col FROM datetime_types WHERE date_col BETWEEN '2023-01-01' AND '2023-06-30';
+
+EXPLAIN SELECT id, time_col FROM datetime_types WHERE time_col BETWEEN '09:00:00' AND '17:00:00';
+SELECT id, time_col FROM datetime_types WHERE time_col BETWEEN '09:00:00' AND '17:00:00';
+
+EXPLAIN SELECT id, datetime_col FROM datetime_types WHERE datetime_col BETWEEN '2023-01-01 00:00:00' AND '2023-12-31 23:59:59';
+SELECT id, datetime_col FROM datetime_types WHERE datetime_col BETWEEN '2023-01-01 00:00:00' AND '2023-12-31 23:59:59';
+
+SET DEBUG="+d,condition_pushdown_invalid_datetime";
+EXPLAIN SELECT id, datetime_col FROM datetime_types WHERE datetime_col BETWEEN '2023-01-01 00:00:01' AND '2023-12-31 23:59:59';
+SELECT id, datetime_col FROM datetime_types WHERE datetime_col BETWEEN '2023-01-01 00:00:00' AND '2023-12-31 23:59:59';
+SET DEBUG="-d,condition_pushdown_invalid_datetime";
+
+# Comparison Operators
+EXPLAIN SELECT id, date_col FROM datetime_types WHERE date_col > '2023-03-01';
+SELECT id, date_col FROM datetime_types WHERE date_col > '2023-03-01';
+
+EXPLAIN SELECT id, time_col FROM datetime_types WHERE time_col < '12:00:00';
+SELECT id, time_col FROM datetime_types WHERE time_col < '12:00:00';
+
+EXPLAIN SELECT id, datetime_col FROM datetime_types WHERE datetime_col >= '2023-06-01 00:00:00';
+SELECT id, datetime_col FROM datetime_types WHERE datetime_col >= '2023-06-01 00:00:00';
+
+# Date and Time Functions
+EXPLAIN SELECT id, date_col FROM datetime_types WHERE YEAR(date_col) = 2023;
+SELECT id, date_col FROM datetime_types WHERE YEAR(date_col) = 2023;
+
+EXPLAIN SELECT id, datetime_col FROM datetime_types WHERE MONTH(datetime_col) = 6;
+SELECT id, datetime_col FROM datetime_types WHERE MONTH(datetime_col) = 6;
+
+EXPLAIN SELECT id, time_col FROM datetime_types WHERE HOUR(time_col) > 12;
+SELECT id, time_col FROM datetime_types WHERE HOUR(time_col) > 12;
+
+EXPLAIN SELECT id, date_col FROM datetime_types WHERE DAYOFWEEK(date_col) = 2;
+SELECT id, date_col FROM datetime_types WHERE DAYOFWEEK(date_col) = 2;
+
+# Date Arithmetic
+EXPLAIN SELECT id, date_col FROM datetime_types WHERE date_col = DATE_ADD('2023-01-01', INTERVAL 30 DAY);
+SELECT id, date_col FROM datetime_types WHERE date_col = DATE_ADD('2023-01-01', INTERVAL 30 DAY);
+
+EXPLAIN SELECT id, datetime_col FROM datetime_types WHERE datetime_col BETWEEN DATE_SUB(NOW(), INTERVAL 1 MONTH) AND NOW();
+SELECT id, datetime_col FROM datetime_types WHERE datetime_col BETWEEN DATE_SUB(NOW(), INTERVAL 1 MONTH) AND NOW();
+
+EXPLAIN SELECT id, time_col FROM datetime_types WHERE TIMEDIFF(time_col, '12:00:00') > '02:00:00';
+SELECT id, time_col FROM datetime_types WHERE TIMEDIFF(time_col, '12:00:00') > '02:00:00';
+
+# TIMESTAMP Specific Queries
+EXPLAIN SELECT id, timestamp_col FROM datetime_types WHERE timestamp_col > '2025-07-08 22:49:22' - INTERVAL 1 HOUR;
+SELECT id, timestamp_col FROM datetime_types WHERE timestamp_col > '2025-07-08 22:49:22' - INTERVAL 1 HOUR;
+
+EXPLAIN SELECT id, timestamp_col FROM datetime_types WHERE timestamp_col BETWEEN '2023-01-01 00:00:00' AND '2023-12-31 23:59:59';
+SELECT id, timestamp_col FROM datetime_types WHERE timestamp_col BETWEEN '2023-01-01 00:00:00' AND '2023-12-31 23:59:59';
+
+EXPLAIN SELECT id, timestamp_col FROM datetime_types WHERE UNIX_TIMESTAMP(timestamp_col) > 1672531200;
+SELECT id, timestamp_col FROM datetime_types WHERE UNIX_TIMESTAMP(timestamp_col) > 1672531200;
+
+SELECT id, timestamp_col FROM datetime_types WHERE (not 99991231235959.00000000000000001 < timestamp_col) order by id;
+
+# YEAR Type Queries
+EXPLAIN SELECT id, year_col FROM datetime_types WHERE year_col = 2023;
+SELECT id, year_col FROM datetime_types WHERE year_col = 2023;
+
+EXPLAIN SELECT id, year_col FROM datetime_types WHERE year_col BETWEEN 2020 AND 2025;
+SELECT id, year_col FROM datetime_types WHERE year_col BETWEEN 2020 AND 2025;
+
+EXPLAIN SELECT id, year_col FROM datetime_types WHERE year_col > 2020;
+SELECT id, year_col FROM datetime_types WHERE year_col > 2020;
+
+# Complex Date/Time Conditions
+EXPLAIN SELECT id, date_col FROM datetime_types WHERE DAYOFWEEK(date_col) IN (1, 7) AND MONTH(date_col) = 6;
+SELECT id, date_col FROM datetime_types WHERE DAYOFWEEK(date_col) IN (1, 7) AND MONTH(date_col) = 6;
+
+EXPLAIN SELECT id, datetime_col FROM datetime_types WHERE HOUR(datetime_col) BETWEEN 9 AND 17 AND DAYOFWEEK(datetime_col) BETWEEN 2 AND 6;
+SELECT id, datetime_col FROM datetime_types WHERE HOUR(datetime_col) BETWEEN 9 AND 17 AND DAYOFWEEK(datetime_col) BETWEEN 2 AND 6;
+
+EXPLAIN SELECT id, date_col FROM datetime_types WHERE date_col = LAST_DAY(date_col);
+SELECT id, date_col FROM datetime_types WHERE date_col = LAST_DAY(date_col);
+
+#time precision test
+EXPLAIN SELECT id, time_col FROM datetime_types WHERE time_col < '12:00:00.001.00';
+SELECT id, time_col FROM datetime_types WHERE time_col < '12:00:00.001.00';
+EXPLAIN SELECT id, datetime_col FROM datetime_types WHERE datetime_col = '2023-01-01 12:00:00.001.00';
+SELECT id, datetime_col FROM datetime_types WHERE datetime_col = '2023-01-01 12:00:00.001.00';
+EXPLAIN SELECT id, timestamp_col FROM datetime_types WHERE timestamp_col > '2025-07-08 22:49:22:00.001.00';
+SELECT id, timestamp_col FROM datetime_types WHERE timestamp_col > '2025-07-08 22:49:22:00.001.00';
+
+CREATE TABLE string_types (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    char_col CHAR(10),
+    varchar_col VARCHAR(100),
+    binary_col BINARY(5),
+    varbinary_col VARBINARY(100),
+    tinytext_col TINYTEXT,
+    text_col TEXT,
+    enum_col ENUM('small', 'medium', 'large'),
+    set_col SET('red', 'green', 'blue', 'yellow')
+);
+
+INSERT INTO string_types VALUES
+(1, 'fixed', 'Variable length string', 'abcde', 'binary data', 'Short text', 'This is a longer text field', 'small', 'red,green'),
+(2, 'hello', 'MySQL data types', '12345', 'more binary', 'Tiny text', 'Lorem ipsum dolor sit amet', 'medium', 'blue'),
+(3, 'world', 'Example varchar', 'ABCDE', 'data', 'Sample', 'Consectetur adipiscing elit', 'large', 'yellow'),
+(4, 'test', 'Another example', '!@#$%', 'binary', 'Content', 'Sed do eiusmod tempor', 'small', 'red,blue'),
+(5, 'data', 'String values', '67890', 'information', 'Info', 'Incididunt ut labore', 'medium', 'green,yellow'),
+(6, 'types', 'Database table', 'XYZ12', 'storage', 'Details', 'Et dolore magna aliqua', 'large', 'red,green,blue'),
+(7, 'mysql', 'Relational DB', 'QWERT', 'bytes', 'Summary', 'Ut enim ad minim veniam', 'small', 'blue,yellow'),
+(8, 'sample', 'Test data', 'ASDFG', 'raw data', 'Abstract', 'Quis nostrud exercitation', 'medium', 'red'),
+(9, 'string', 'Character data', 'HJKLM', 'binary info', 'Brief', 'Ullamco laboris nisi', 'large', 'green'),
+(10, 'value', 'Last example', 'NOPQR', 'final data', 'Closing', 'Ut aliquip ex ea commodo', 'small', 'red,green,blue,yellow');
+
+# CHAR and VARCHAR Type Tests
+EXPLAIN SELECT id, char_col FROM string_types WHERE char_col = 'ABC';
+SELECT id, char_col FROM string_types WHERE char_col = 'ABC';
+
+EXPLAIN SELECT id, varchar_col FROM string_types WHERE varchar_col = 'Sample text';
+SELECT id, varchar_col FROM string_types WHERE varchar_col = 'Sample text';
+
+EXPLAIN SELECT id, char_col FROM string_types WHERE char_col IN ('ABC', 'XYZ');
+SELECT id, char_col FROM string_types WHERE char_col IN ('ABC', 'XYZ');
+
+EXPLAIN SELECT id, varchar_col FROM string_types WHERE varchar_col LIKE 'Sample%';
+SELECT id, varchar_col FROM string_types WHERE varchar_col LIKE 'Sample%';
+
+# BINARY and VARBINARY Type Tests
+EXPLAIN SELECT id, binary_col FROM string_types WHERE binary_col = UNHEX('0123456789');
+SELECT id, binary_col FROM string_types WHERE binary_col = UNHEX('0123456789');
+
+EXPLAIN SELECT id, varbinary_col FROM string_types WHERE varbinary_col = UNHEX('0123456789ABCDEF');
+SELECT id, varbinary_col FROM string_types WHERE varbinary_col = UNHEX('0123456789ABCDEF');
+
+# TEXT Type Tests
+EXPLAIN SELECT id, tinytext_col FROM string_types WHERE tinytext_col = 'Tiny text';
+SELECT id, tinytext_col FROM string_types WHERE tinytext_col = 'Tiny text';
+
+EXPLAIN SELECT id, text_col FROM string_types WHERE text_col = 'This is a longer text content';
+SELECT id, text_col FROM string_types WHERE text_col = 'This is a longer text content';
+
+# ENUM and SET Type Tests
+EXPLAIN SELECT id, enum_col FROM string_types WHERE enum_col = 'medium';
+SELECT id, enum_col FROM string_types WHERE enum_col = 'medium';
+
+EXPLAIN SELECT id, set_col FROM string_types WHERE set_col = 'red,green';
+SELECT id, set_col FROM string_types WHERE set_col = 'red,green';
+
+EXPLAIN SELECT id, set_col FROM string_types WHERE FIND_IN_SET('green', set_col) > 0;
+SELECT id, set_col FROM string_types WHERE FIND_IN_SET('green', set_col) > 0;
+
+# String Function Tests
+EXPLAIN SELECT id, char_col FROM string_types WHERE LENGTH(char_col) = 3;
+SELECT id, char_col FROM string_types WHERE LENGTH(char_col) = 3;
+
+EXPLAIN SELECT id, varchar_col FROM string_types WHERE UPPER(varchar_col) = 'SAMPLE TEXT';
+SELECT id, varchar_col FROM string_types WHERE UPPER(varchar_col) = 'SAMPLE TEXT';
+
+EXPLAIN SELECT id, text_col FROM string_types WHERE SUBSTRING(text_col, 1, 4) = 'This';
+SELECT id, text_col FROM string_types WHERE SUBSTRING(text_col, 1, 4) = 'This';
+
+CREATE TABLE json_type (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    json_col JSON,
+    description VARCHAR(100)
+);
+
+INSERT INTO json_type VALUES
+(1, '{"name": "John Doe", "age": 30, "email": "john@example.com", "active": true, "roles": ["admin", "user"]}', 'Basic user profile'),
+(2, '{"product": "Laptop", "price": 999.99, "specs": {"cpu": "i7", "ram": "16GB", "storage": "512GB SSD"}, "in_stock": true}', 'Product information'),
+(3, '{"order_id": "ORD12345", "customer": {"name": "Alice", "id": 42}, "items": [{"id": 1, "qty": 2}, {"id": 5, "qty": 1}], "total": 149.98}', 'Order details'),
+(4, '{"config": {"theme": "dark", "notifications": true, "language": "en"}, "last_login": "2023-05-15T14:30:00Z"}', 'User preferences'),
+(5, '{"error": {"code": 404, "message": "Not Found", "details": "The requested resource was not found"}, "timestamp": "2023-06-20T09:15:22Z"}', 'Error response'),
+(6, '{"employee": {"id": 101, "name": "Bob Smith", "department": "IT", "skills": ["Java", "SQL", "JavaScript"], "projects": [1, 3, 7]}}', 'Employee record'),
+(7, '{"geolocation": {"latitude": 40.7128, "longitude": -74.0060, "city": "New York", "country": "USA"}, "timezone": "America/New_York"}', 'Location data'),
+(8, '{"blog_post": {"title": "MySQL JSON Features", "author": "Jane Doe", "tags": ["database", "mysql", "json"], "content": "..."}}', 'Blog post metadata'),
+(9, '{"survey_results": {"question1": {"yes": 45, "no": 15}, "question2": {"optionA": 20, "optionB": 30, "optionC": 10}}, "participants": 60}', 'Survey data'),
+(10, '{"system_metrics": {"cpu_usage": 32.5, "memory_usage": 45.2, "disk_space": {"total": 500, "used": 120}, "uptime": "7d 3h 22m"}}', 'System monitoring data');
+
+# JSON Type Tests
+EXPLAIN SELECT id, json_col FROM json_type WHERE json_col = '{"key": "value"}';
+SELECT id, json_col FROM json_type WHERE json_col = '{"key": "value"}';
+
+EXPLAIN SELECT id, json_col FROM json_type WHERE JSON_EXTRACT(json_col, '$.name') = 'John';
+SELECT id, json_col FROM json_type WHERE JSON_EXTRACT(json_col, '$.name') = 'John';
+
+EXPLAIN SELECT id, json_col FROM json_type WHERE JSON_CONTAINS(json_col, 'true', '$.active');
+SELECT id, json_col FROM json_type WHERE JSON_CONTAINS(json_col, 'true', '$.active');
+
+CREATE TABLE users (
+    id INT PRIMARY KEY,
+    name VARCHAR(50),
+    age INT,
+    city VARCHAR(50),
+    index idx(name)
+);
+
+INSERT INTO users VALUES
+( 1, 'Emily Johnson', 10, 'Toronto'),
+( 2, 'Liam Smith', 11, 'Sydney'),
+( 3, 'Sophia Martinez', 12, 'Manchester'),
+( 4, 'Noah Brown', 13, 'Chicago'),
+( 5, 'Olivia Davis', 14, 'Berlin'),
+( 6, 'Ethan Wilson', 15, NULL),
+( 7, 'Ava Taylor', 14, 'Dublin'),
+( 8, 'Lucas Anderson', 13, 'Mumbai'),
+( 9, 'Mia Thomas', 12, 'Barcelona'),
+(10, 'Benjamin Lee', 11, NULL);
+
+EXPLAIN SELECT id, age FROM users where age between 14 and 15;
+SELECT id, age FROM users where age between 14 and 15;
+
+EXPLAIN SELECT * FROM users where age between 14 and 15;
+SELECT * FROM users where age between 14 and 15;
+
+EXPLAIN SELECT id, name FROM users where name = 'Lucas Anderson';
+SELECT id, name FROM users where name = 'Lucas Anderson';
+
+EXPLAIN SELECT * FROM users where name = 'Lucas Anderson';
+SELECT * FROM users where name = 'Lucas Anderson';
+
+EXPLAIN SELECT id, city FROM users where city != 'Dublin';
+SELECT id, city FROM users where city != 'Dublin';
+
+EXPLAIN SELECT id, city FROM users where city IS NULL;
+SELECT id, city FROM users where city IS NULL;
+
+EXPLAIN SELECT id, city FROM users where city IS NOT NULL;
+SELECT id, city FROM users where city IS NOT NULL;
+
+
+#prepare statements test
+
+# TINYINT Type Tests
+PREPARE stmt_e from 'EXPLAIN SELECT id, tiny_int_col FROM numeric_types WHERE tiny_int_col = ?;';
+PREPARE stmt_s from 'SELECT id, tiny_int_col FROM numeric_types WHERE tiny_int_col = ?;';
+set @a = -128;
+execute stmt_e using @a;
+execute stmt_s using @a;
+
+# SMALLINT Type Tests
+PREPARE stmt_e from 'EXPLAIN SELECT id, small_int_col FROM numeric_types WHERE small_int_col = ?;';
+PREPARE stmt_s from 'SELECT id, small_int_col FROM numeric_types WHERE small_int_col = ?;';
+set @a = -32768;
+execute stmt_e using @a;
+execute stmt_s using @a;
+
+# MEDIUMINT Type Tests
+PREPARE stmt_e from 'EXPLAIN SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col = ?;';
+PREPARE stmt_s from 'SELECT id, medium_int_col FROM numeric_types WHERE medium_int_col = ?;';
+set @a = -8388608;
+execute stmt_e using @a;
+execute stmt_s using @a;
+
+# INT Type Tests
+PREPARE stmt_e from 'EXPLAIN SELECT id, int_col FROM numeric_types WHERE int_col BETWEEN ? AND ?;';
+PREPARE stmt_s from 'SELECT id, int_col FROM numeric_types WHERE int_col BETWEEN ? AND ?;';
+set @a = -1000000000;
+set @b = 2000000000;
+execute stmt_e using @a, @b;
+execute stmt_s using @a, @b;
+
+# DECIMAL Type Tests
+PREPARE stmt_e from 'EXPLAIN SELECT id, decimal_col FROM numeric_types WHERE decimal_col = ?;';
+PREPARE stmt_s from 'SELECT id, decimal_col FROM numeric_types WHERE decimal_col = ?;';
+set @a = 12345.67;
+execute stmt_e using @a;
+execute stmt_s using @a;
+
+# FLOAT and DOUBLE Type Tests
+PREPARE stmt_e from 'EXPLAIN SELECT id, float_col FROM numeric_types WHERE float_col < ?;';
+PREPARE stmt_s from 'SELECT id, float_col FROM numeric_types WHERE float_col < ?;';
+set @a = 1234.5678;
+execute stmt_e using @a;
+execute stmt_s using @a;
+
+# FLOAT and DOUBLE Type Tests
+PREPARE stmt_e from 'EXPLAIN SELECT id, boolean_col FROM numeric_types WHERE boolean_col = ?;';
+PREPARE stmt_s from 'SELECT id, boolean_col FROM numeric_types WHERE boolean_col = ?;';
+set @a = TRUE;
+execute stmt_e using @a;
+execute stmt_s using @a;
+set @a = 'FALSE';
+execute stmt_e using @a;
+execute stmt_s using @a;
+
+# CHAR and VARCHAR Type Tests
+PREPARE stmt_e from 'EXPLAIN SELECT id, char_col FROM string_types WHERE char_col = ?;';
+PREPARE stmt_s from 'SELECT id, char_col FROM string_types WHERE char_col = ?;';
+set @a = 'ABC';
+execute stmt_e using @a;
+execute stmt_s using @a;
+
+# Basic Date and Time Queries
+PREPARE stmt_e from 'EXPLAIN SELECT id, date_col FROM datetime_types WHERE date_col BETWEEN ? AND ?;';
+PREPARE stmt_s from 'SELECT id, date_col FROM datetime_types WHERE date_col BETWEEN ? AND ?;';
+set @a = '2023-01-01';
+set @b = '2023-06-30';
+execute stmt_e using @a, @b;
+execute stmt_s using @a, @b;
+
+PREPARE stmt_e from 'EXPLAIN SELECT id, time_col FROM datetime_types WHERE time_col BETWEEN ? AND ?;';
+PREPARE stmt_s from 'SELECT id, time_col FROM datetime_types WHERE time_col BETWEEN ? AND ?;';
+set @a = '09:00:00';
+set @b = '17:00:00';
+execute stmt_e using @a, @b;
+execute stmt_s using @a, @b;
+
+PREPARE stmt_e from 'EXPLAIN SELECT id, datetime_col FROM datetime_types WHERE datetime_col BETWEEN ? AND ?;';
+PREPARE stmt_s from 'SELECT id, datetime_col FROM datetime_types WHERE datetime_col BETWEEN ? AND ?;';
+set @a = '2023-01-01 00:00:00';
+set @b = '2023-12-31 23:59:59';
+execute stmt_e using @a, @b;
+execute stmt_s using @a, @b;
+
+# Date Arithmetic
+PREPARE stmt_e from 'EXPLAIN SELECT id, date_col FROM datetime_types WHERE date_col = ?;';
+PREPARE stmt_s from 'SELECT id, date_col FROM datetime_types WHERE date_col = ?;';
+set @a = DATE_ADD('2023-01-01', INTERVAL 30 DAY);
+execute stmt_e using @a;
+execute stmt_s using @a;
+
+# TIMESTAMP Specific Queries
+PREPARE stmt_e from 'EXPLAIN SELECT id, timestamp_col FROM datetime_types WHERE timestamp_col > ?;';
+PREPARE stmt_s from 'SELECT id, timestamp_col FROM datetime_types WHERE timestamp_col > ?;';
+set @a = '2025-07-08 22:49:22' - INTERVAL 1 HOUR;
+execute stmt_e using @a;
+execute stmt_s using @a;
+
+# YEAR Type Queries
+PREPARE stmt_e from 'EXPLAIN SELECT id, year_col FROM datetime_types WHERE year_col BETWEEN ? AND ?;';
+PREPARE stmt_s from 'SELECT id, year_col FROM datetime_types WHERE year_col BETWEEN ? AND ?;';
+set @a = 2020;
+set @b = 2025;
+execute stmt_e using @a, @b;
+execute stmt_s using @a, @b;
+PREPARE stmt_overflow from 'SELECT id, year_col FROM datetime_types WHERE year_col > ?;';
+set @a = 2147483647;
+execute stmt_overflow using @a;
+
+# Aggregate Test
+CREATE TABLE agg (
+    a INT,
+    b int
+);
+INSERT INTO agg VALUES(1, 10), (2, 20), (3, 30), (4, 40), (5, 50), (6, 60), (7, 70), (8, 80), (9, 90), (10, 100);
+EXPLAIN SELECT COUNT(*) FROM agg where b between 20 and 60;
+SELECT COUNT(*) FROM agg where b between 20 and 60;
+
+EXPLAIN SELECT SUM(a) FROM agg where b between 20 and 60;
+SELECT SUM(a) FROM agg where b between 20 and 60;
+
+
+# ORDER BY/GROUP BY/DISTINCT/LIMIT, OFFSET/
+explain select id from users where age between 14 and 15 order by age;
+explain select distinct age from users where age between 14 and 15 order by age;
+explain select age from users where age between 14 and 15 group by age;
+explain select id,age from users where age between 14 and 15 order by age limit 2 offset 1;
+
+# window function
+explain SELECT
+    id,
+    name,
+    age,
+    city,
+    RANK() OVER (PARTITION BY city ORDER BY age DESC) AS age_rank_in_city
+FROM
+    users
+WHERE
+    age BETWEEN 12 AND 14
+ORDER BY
+    city, age_rank_in_city;
+
+explain SELECT
+    id,
+    name,
+    age,
+    city,
+    AVG(age) OVER (ORDER BY age ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS moving_avg_age
+FROM
+    users
+WHERE
+    age >= 12
+ORDER BY
+    age;
+
+explain SELECT
+    age,
+    COUNT(*) AS user_count,
+    SUM(COUNT(*)) OVER (ORDER BY age ROWS UNBOUNDED PRECEDING) AS cumulative_users
+FROM
+    users
+WHERE
+    age > 12
+GROUP BY
+    age
+ORDER BY
+    age;
+
+explain SELECT
+    id,
+    name,
+    age,
+    city,
+    PERCENT_RANK() OVER (ORDER BY age) AS age_percentile
+FROM
+    users
+WHERE
+    age > 12
+ORDER BY
+    age_percentile DESC;
+
+# CTE
+explain WITH filtered_users AS (
+    SELECT
+        id,
+        name,
+        age,
+        city
+    FROM
+        users
+    WHERE
+        age BETWEEN 11 AND 14
+        AND city LIKE 'M%'
+)
+SELECT
+    id,
+    name,
+    age,
+    city,
+    RANK() OVER (PARTITION BY city ORDER BY age DESC) AS age_rank,
+    age - AVG(age) OVER (PARTITION BY city) AS age_diff_from_avg
+FROM
+    filtered_users
+ORDER BY
+    city, age_rank;
+
+EXPLAIN SELECT age from users GROUP BY age;
+
+# Fix issue
+EXPLAIN SELECT id, decimal_col FROM numeric_types WHERE decimal_col < CAST(1000.01 AS FLOAT);
+EXPLAIN SELECT id, decimal_col FROM numeric_types WHERE decimal_col < CAST(1000.01 AS DOUBLE);
+SELECT id, decimal_col FROM numeric_types WHERE decimal_col < CAST(1000.01 AS DOUBLE);
+EXPLAIN SELECT id, decimal_col FROM numeric_types WHERE decimal_col < CAST(1000.01 AS UNSIGNED);
+SELECT id, decimal_col FROM numeric_types WHERE decimal_col < CAST(1000.01 AS SIGNED);
+SELECT id, decimal_col FROM numeric_types WHERE decimal_col < ((EXISTS (SELECT 1 WHERE FALSE)) IS NOT NULL);
+
+# Item_REF
+CREATE TABLE t1 (f1 INT, f2 INT);
+INSERT INTO t1 VALUES (1, 0), (2, 1), (3, 2);
+CREATE TABLE t2 (f1 INT, f2 INT);
+SELECT t1.f1
+FROM t1
+HAVING (3, 2) IN (SELECT f1, f2 FROM t2) AND t1.f1  >= 0
+ORDER BY t1.f1;
+
+# generated column and instant DDL
+CREATE TABLE gen (
+    a INT PRIMARY KEY,
+    b INT,
+    c INT GENERATED ALWAYS AS (a + b) VIRTUAL,
+    d INT,
+    e INT GENERATED ALWAYS AS (b * d /100) STORED,
+    f INT
+);
+INSERT INTO gen (a, b, d, f) VALUES
+(1, 10, 100, 1000),
+(2, 20, 200, 2000),
+(3, 30, 300, 3000);
+
+explain select * from gen where b<20;
+explain select * from gen where c<20;
+explain select * from gen where d<200;
+explain select * from gen where e<40;
+explain select * from gen where f<2000;
+
+alter table gen  ADD COLUMN g VARCHAR(16);
+INSERT INTO gen (a, b, d, f, g) VALUES(4, 40, 400, 4000, 'Tom');
+explain select * from gen where g='Tom';
+select * from gen where g='Tom';
+alter table gen drop COLUMN g;
+alter table gen  ADD COLUMN h INT;
+INSERT INTO gen (a, b, d, f, h) VALUES(5, 50, 500, 5000, 999);
+select * from gen where h=999;
+
+# update/delete
+explain update numeric_types set int_col = 10 where int_col=100000;
+explain delete from numeric_types where int_col=100000;
+
+--disable_warnings
+SET @orig_sql_mode = @@sql_mode;
+SET sql_mode= '';
+# integer overflow
+CREATE TABLE overflow_test (
+    tiny_s TINYINT,
+    tiny_u TINYINT UNSIGNED,
+    small_s SMALLINT,
+    small_u SMALLINT UNSIGNED,
+    int24_s MEDIUMINT,
+    int24_u MEDIUMINT UNSIGNED,
+    long_s INT,
+    long_u INT UNSIGNED,
+    longlong_s BIGINT,
+    longlong_u BIGINT UNSIGNED
+);
+
+INSERT INTO overflow_test (tiny_s) VALUES (-128);
+INSERT INTO overflow_test (tiny_s) VALUES (127);
+INSERT INTO overflow_test (tiny_s) VALUES (-129);
+INSERT INTO overflow_test (tiny_s) VALUES (128);
+
+INSERT INTO overflow_test (tiny_u) VALUES (0);
+INSERT INTO overflow_test (tiny_u) VALUES (255);
+INSERT INTO overflow_test (tiny_u) VALUES (-1);
+INSERT INTO overflow_test (tiny_u) VALUES (256);
+
+INSERT INTO overflow_test (small_s) VALUES (-32768);
+INSERT INTO overflow_test (small_s) VALUES (32767);
+INSERT INTO overflow_test (small_s) VALUES (-32769);
+INSERT INTO overflow_test (small_s) VALUES (32768);
+
+INSERT INTO overflow_test (small_u) VALUES (0);
+INSERT INTO overflow_test (small_u) VALUES (65535);
+INSERT INTO overflow_test (small_u) VALUES (-1);
+INSERT INTO overflow_test (small_u) VALUES (65536);
+
+INSERT INTO overflow_test (int24_s) VALUES (-8388608);
+INSERT INTO overflow_test (int24_s) VALUES (8388607);
+INSERT INTO overflow_test (int24_s) VALUES (-8388609);
+INSERT INTO overflow_test (int24_s) VALUES (8388608);
+
+INSERT INTO overflow_test (int24_u) VALUES (0);
+INSERT INTO overflow_test (int24_u) VALUES (16777215);
+INSERT INTO overflow_test (int24_u) VALUES (-1);
+INSERT INTO overflow_test (int24_u) VALUES (16777216);
+
+INSERT INTO overflow_test (long_s) VALUES (-2147483648);
+INSERT INTO overflow_test (long_s) VALUES (2147483647);
+INSERT INTO overflow_test (long_s) VALUES (-2147483649);
+INSERT INTO overflow_test (long_s) VALUES (2147483648);
+
+INSERT INTO overflow_test (long_u) VALUES (0);
+INSERT INTO overflow_test (long_u) VALUES (4294967295);
+INSERT INTO overflow_test (long_u) VALUES (-1);
+INSERT INTO overflow_test (long_u) VALUES (4294967296);
+
+INSERT INTO overflow_test (longlong_s) VALUES (-9223372036854775808);
+INSERT INTO overflow_test (longlong_s) VALUES (9223372036854775807);
+INSERT INTO overflow_test (longlong_s) VALUES (-9223372036854775809);
+INSERT INTO overflow_test (longlong_s) VALUES (9223372036854775808);
+
+INSERT INTO overflow_test (longlong_u) VALUES (0);
+INSERT INTO overflow_test (longlong_u) VALUES (18446744073709551615);
+INSERT INTO overflow_test (longlong_u) VALUES (-1);
+INSERT INTO overflow_test (longlong_u) VALUES (18446744073709551616);
+
+# TINYINT SIGNED test (-128 to 127)
+SELECT tiny_s FROM overflow_test WHERE tiny_s BETWEEN -128 AND -128 ORDER BY tiny_s;
+SELECT tiny_s FROM overflow_test WHERE tiny_s BETWEEN 127 AND 127 ORDER BY tiny_s;
+SELECT tiny_s FROM overflow_test WHERE tiny_s BETWEEN -129 AND -129 ORDER BY tiny_s;
+SELECT tiny_s FROM overflow_test WHERE tiny_s BETWEEN 128 AND 128 ORDER BY tiny_s;
+
+# TINYINT UNSIGNED test (0 to 255)
+SELECT tiny_u FROM overflow_test WHERE tiny_u BETWEEN 0 AND 0 ORDER BY tiny_u;
+SELECT tiny_u FROM overflow_test WHERE tiny_u BETWEEN 255 AND 255 ORDER BY tiny_u;
+SELECT tiny_u FROM overflow_test WHERE tiny_u BETWEEN -1 AND -1 ORDER BY tiny_u;
+SELECT tiny_u FROM overflow_test WHERE tiny_u BETWEEN 256 AND 256 ORDER BY tiny_u;
+
+# SMALLINT SIGNED test (-32768 to 32767)
+SELECT small_s FROM overflow_test WHERE small_s BETWEEN -32768 AND -32768 ORDER BY small_s;
+SELECT small_s FROM overflow_test WHERE small_s BETWEEN 32767 AND 32767 ORDER BY small_s;
+SELECT small_s FROM overflow_test WHERE small_s BETWEEN -32769 AND -32769 ORDER BY small_s;
+SELECT small_s FROM overflow_test WHERE small_s BETWEEN 32768 AND 32768 ORDER BY small_s;
+
+# SMALLINT UNSIGNED test (0 to 65535)
+SELECT small_u FROM overflow_test WHERE small_u BETWEEN 0 AND 0 ORDER BY small_u;
+SELECT small_u FROM overflow_test WHERE small_u BETWEEN 65535 AND 65535 ORDER BY small_u;
+SELECT small_u FROM overflow_test WHERE small_u BETWEEN -1 AND -1 ORDER BY small_u;
+SELECT small_u FROM overflow_test WHERE small_u BETWEEN 65536 AND 65536 ORDER BY small_u;
+
+# MEDIUMINT SIGNED test (-8388608 to 8388607)
+SELECT int24_s FROM overflow_test WHERE int24_s BETWEEN -8388608 AND -8388608 ORDER BY int24_s;
+SELECT int24_s FROM overflow_test WHERE int24_s BETWEEN 8388607 AND 8388607 ORDER BY int24_s;
+SELECT int24_s FROM overflow_test WHERE int24_s BETWEEN -8388609 AND -8388609 ORDER BY int24_s;
+SELECT int24_s FROM overflow_test WHERE int24_s BETWEEN 8388608 AND 8388608 ORDER BY int24_s;
+
+# MEDIUMINT UNSIGNED test (0 to 16777215)
+SELECT int24_u FROM overflow_test WHERE int24_u BETWEEN 0 AND 0 ORDER BY int24_u;
+SELECT int24_u FROM overflow_test WHERE int24_u BETWEEN 16777215 AND 16777215 ORDER BY int24_u;
+SELECT int24_u FROM overflow_test WHERE int24_u BETWEEN -1 AND -1 ORDER BY int24_u;
+SELECT int24_u FROM overflow_test WHERE int24_u BETWEEN 16777216 AND 16777216 ORDER BY int24_u;
+
+# INT SIGNED test (-2147483648 to 2147483647)
+SELECT long_s FROM overflow_test WHERE long_s BETWEEN -2147483648 AND -2147483648 ORDER BY long_s;
+SELECT long_s FROM overflow_test WHERE long_s BETWEEN 2147483647 AND 2147483647 ORDER BY long_s;
+SELECT long_s FROM overflow_test WHERE long_s BETWEEN -2147483649 AND -2147483649 ORDER BY long_s;
+SELECT long_s FROM overflow_test WHERE long_s BETWEEN 2147483648 AND 2147483648 ORDER BY long_s;
+
+# INT UNSIGNED test (0 to 4294967295)
+SELECT long_u FROM overflow_test WHERE long_u BETWEEN 0 AND 0 ORDER BY long_u;
+SELECT long_u FROM overflow_test WHERE long_u BETWEEN 4294967295 AND 4294967295 ORDER BY long_u;
+SELECT long_u FROM overflow_test WHERE long_u BETWEEN -1 AND -1 ORDER BY long_u;
+SELECT long_u FROM overflow_test WHERE long_u BETWEEN 4294967296 AND 4294967296 ORDER BY long_u;
+
+# BIGINT SIGNED test (-9223372036854775808 to 9223372036854775807)
+SELECT longlong_s FROM overflow_test WHERE longlong_s BETWEEN -9223372036854775808 AND -9223372036854775808 ORDER BY longlong_s;
+SELECT longlong_s FROM overflow_test WHERE longlong_s BETWEEN 9223372036854775807 AND 9223372036854775807 ORDER BY longlong_s;
+SELECT longlong_s FROM overflow_test WHERE longlong_s BETWEEN -9223372036854775809 AND -9223372036854775809 ORDER BY longlong_s;
+SELECT longlong_s FROM overflow_test WHERE longlong_s BETWEEN 9223372036854775808 AND 9223372036854775808 ORDER BY longlong_s;
+
+# BIGINT UNSIGNED test (0 to 18446744073709551615)
+SELECT longlong_u FROM overflow_test WHERE longlong_u BETWEEN 0 AND 0 ORDER BY longlong_u;
+SELECT longlong_u FROM overflow_test WHERE longlong_u BETWEEN 18446744073709551615 AND 18446744073709551615 ORDER BY longlong_u;
+SELECT longlong_u FROM overflow_test WHERE longlong_u BETWEEN -1 AND -1 ORDER BY longlong_u;
+SELECT longlong_u FROM overflow_test WHERE longlong_u BETWEEN 18446744073709551616 AND 18446744073709551616 ORDER BY longlong_u;
+
+# BUG2025072831816 skip virtual generated columns in conditon pushdown
+CREATE TABLE `tt_2` (
+  `d0` double DEFAULT NULL,
+  `i4` int DEFAULT NULL,
+  `v5` varchar(24) DEFAULT NULL,
+  `g6` varchar(10) GENERATED ALWAYS AS (concat(substr(`v5`,1,10))) VIRTUAL,
+  `vN290_rename` varchar(24) DEFAULT NULL,
+  `gN173` varchar(2) GENERATED ALWAYS AS (concat(substr(`vN290_rename`,1,2))) VIRTUAL,
+  `vN223` varchar(20) DEFAULT NULL,
+  `vN234` varchar(28) DEFAULT NULL,
+  `gN276_rename` char(3) GENERATED ALWAYS AS (concat(substr(`vN234`,1,2),substr(`vN290_rename`,1,1))) VIRTUAL,
+  `gN267` char(11) GENERATED ALWAYS AS (concat(substr(`vN290_rename`,1,1),substr(`vN223`,1,6),substr(`vN290_rename`,1,2),substr(`vN290_rename`,1,2))) STORED,
+  `cN165` char(22) DEFAULT NULL,
+  `cN54` char(15) DEFAULT NULL,
+  `iN128` int DEFAULT NULL
+);
+INSERT INTO `tt_2` (`d0`, `i4`, `v5`, `vN290_rename`, `vN223`, `vN234`, `cN165`, `cN54`, `iN128`) VALUES (3.14,1,'a','b',NULL,NULL,NULL,NULL,128);
+INSERT INTO `tt_2` (`d0`, `i4`, `v5`, `vN290_rename`, `vN223`, `vN234`, `cN165`, `cN54`, `iN128`) VALUES (6.14,2,'a','b',NULL,NULL,NULL,NULL,256);
+SELECT * FROM tt_2 WHERE iN128 = 11994;
+SELECT * FROM tt_2 WHERE iN128 = 128;
+
+# float/char/decimal overflow or underflow
+CREATE TABLE fcd_overflow (
+    c char(4),
+    f float,
+    d  Decimal(45,30),
+    c0 BIGINT
+);
+
+INSERT INTO fcd_overflow VALUES ('aaaa',-1.17549e-38,-999999999999999.999999999999999999999999999999,774037201);
+INSERT INTO fcd_overflow VALUES ('aa ',-1.17549e-38,999999999999999.999999999999999999999999999999,774037202);
+INSERT INTO fcd_overflow VALUES ('aaa',-3.40282e38,999999999999999.999999999999999999999999999999,774037203);
+INSERT INTO fcd_overflow VALUES ('a      ',3.40282e38,999999999999999.999999999999999999999999999999,774037204);
+INSERT INTO fcd_overflow VALUES ('aaaa    ',1.17549e-38,-999999999999999.999999999999999999999999999999,774037205);
+
+SELECT d FROM fcd_overflow WHERE d BETWEEN -99999999999999999999.99999 AND 99999999999999999999.99999 ORDER BY d;
+SELECT d FROM fcd_overflow WHERE d BETWEEN -99.9 AND 99999999999999999999.99999 ORDER BY d;
+SELECT d FROM fcd_overflow WHERE d BETWEEN -99999999999999999999.99999 AND 99 ORDER BY d;
+SELECT c FROM fcd_overflow WHERE c < 'aaaa ' ORDER BY c;
+SELECT c FROM fcd_overflow WHERE c < 'aa  ' ORDER BY c;
+SELECT c FROM fcd_overflow WHERE c = 'aa  ' ORDER BY c;
+
+SELECT f FROM fcd_overflow WHERE f < -1.17549e-38 ORDER BY f;
+SELECT f FROM fcd_overflow WHERE f < 1.17549e-38 ORDER BY f;
+SELECT f FROM fcd_overflow WHERE f > 1.17549e-38 ORDER BY f;
+SELECT f FROM fcd_overflow WHERE f < 3.40282e38 ORDER BY f;
+SELECT f FROM fcd_overflow WHERE f <= 3.40282e38 ORDER BY f;
+SELECT f FROM fcd_overflow WHERE f > 3.40282e38 ORDER BY f;
+SELECT f FROM fcd_overflow WHERE f >= 3.40282e38 ORDER BY f;
+SELECT f FROM fcd_overflow WHERE f < -3.40282e38 ORDER BY f;
+SELECT f FROM fcd_overflow WHERE f <= -3.40282e38 ORDER BY f;
+SELECT f FROM fcd_overflow WHERE f > -3.40282e38 ORDER BY f;
+SELECT f FROM fcd_overflow WHERE f > -3.4028222222e38 ORDER BY f;
+SELECT f FROM fcd_overflow WHERE f >= -3.40282e38 ORDER BY f;
+SELECT f FROM fcd_overflow where f < -3.4e38 ORDER BY f;
+SELECT f FROM fcd_overflow where f > 3.4e38 ORDER BY f;
+SELECT f FROM fcd_overflow WHERE f < -1.17e-38 ORDER BY f;
+
+SELECT fcd_overflow.c0 FROM fcd_overflow GROUP BY fcd_overflow.c0 HAVING ((774037204)>(((SUM(((((((fcd_overflow.c0)OR(fcd_overflow.c0)))&(fcd_overflow.c0))) IS NULL)))OR(((0.9504262054990246)^(fcd_overflow.c0)))))) ORDER BY false DESC;
+
+CREATE TABLE t0 (
+    c0 tinyint(1) NOT NULL,
+    c1 smallint DEFAULT NULL,
+    c4 float unsigned zerofill,
+    c5 decimal(10,0)
+);
+
+INSERT INTO t0 values(0, -32768, 0.5, 1);
+INSERT INTO t0 values(1, 32767, 0.125, 1);
+INSERT INTO t0 values(0, 32767, 3.1415926, 100);
+INSERT INTO t0 values(1, -32768, 3.14, -100);
+INSERT INTO t0 values(0, -32768, -3.14, 300);
+INSERT INTO t0 values(1, 32767, 0.685776, 1522944381);
+INSERT INTO t0 values(0, 32767, 254219000, 9999999999);
+INSERT INTO t0 values(1, -32768, 001191080000, 1022870916);
+INSERT INTO t0 values(1, -32767, 0.733325, 1022870916);
+
+SELECT ALL t0.c4 AS ref4, t0.c5 as ref5 FROM t0 WHERE (t0.c4) < (1.191082021E9) order by 1,2;
+SELECT ALL t0.c5 AS ref4,(GREATEST(0.7608962789784409, -1.961734088E9)) < (t0.c5) FROM t0 WHERE (GREATEST(0.7608962789784409, -1.961734088E9)) < (t0.c5);
+SELECT c5 FROM t0 where c5 < CAST(1000 AS SIGNED);
+SELECT t0.c1 FROM t0 WHERE (((~ ('1')))>(t0.c0));
+SELECT t0.c1 FROM t0 WHERE (1 >(t0.c0));
+SELECT t0.c1 FROM t0 WHERE (NOT (((CAST(-402288618 AS UNSIGNED))<(t0.c1))));
+SELECT t0.c1 FROM t0 WHERE (NOT (((CAST(-1 AS SIGNED))<(t0.c1))));
+SELECT t0.c1 FROM t0 WHERE c5 > coalesce(NULL,0.6887587680412904);
+SELECT t0.c1 FROM t0 WHERE c5 < coalesce(NULL,0.6887587680412904);
+SELECT t0.c1 FROM t0 WHERE c5 = coalesce(NULL,0.6887587680412904);
+SELECT t0.c4 FROM t0 WHERE !(GREATEST(0.7333249765105414, -1348401349) >= t0.c4);
+
+# for coverage
+EXPLAIN SELECT id, tiny_int_col, small_int_col FROM numeric_types WHERE 10 BETWEEN tiny_int_col and small_int_col;
+EXPLAIN SELECT id, date_col FROM datetime_types WHERE date_col > 3.1415;
+EXPLAIN SELECT id, time_col FROM datetime_types WHERE time_col > 11.08;
+
+SET DEBUG="+d,condition_pushdown_injection";
+EXPLAIN SELECT id, tiny_int_col, small_int_col FROM numeric_types WHERE 10 BETWEEN tiny_int_col and small_int_col;
+EXPLAIN SELECT id, int_col FROM numeric_types WHERE int_col BETWEEN -1000000000 AND 2000000000;
+EXPLAIN SELECT id, date_col FROM datetime_types WHERE date_col > 3.1415;
+EXPLAIN SELECT id, time_col FROM datetime_types WHERE time_col > 11.08;
+EXPLAIN SELECT * FROM users where name = 'Lucas Anderson';
+EXPLAIN SELECT id, decimal_col FROM numeric_types WHERE decimal_col < CAST(1000.01 AS FLOAT);
+EXPLAIN SELECT id, decimal_col FROM numeric_types WHERE decimal_col < CAST(1000.01 AS DOUBLE);
+EXPLAIN SELECT id, decimal_col FROM numeric_types WHERE decimal_col > 3.14159;
+EXPLAIN SELECT id, float_col FROM numeric_types WHERE float_col BETWEEN 1000.0000 AND 2000.0000;
+EXPLAIN SELECT id, double_col FROM numeric_types WHERE double_col > 12345678.12345678;
+SET DEBUG="-d,condition_pushdown_injection";
+
+SET DEBUG="+d,condpush_injection_invalid_column";
+SELECT id, int_col FROM numeric_types WHERE int_col BETWEEN -1000000000 AND 2000000000;
+SELECT * FROM users where name = 'Lucas Anderson';
+SET DEBUG="-d,condpush_injection_invalid_column";
+
+#BUG2025090936447
+CREATE TABLE sp (
+    a char(4),
+    b char(6)
+);
+INSERT INTO sp values('a\r', 'b\r');
+INSERT INTO sp values('a  ', 'b  ');
+INSERT INTO sp values('a\n ', 'b\n ');
+INSERT INTO sp values(' a\t ', ' b\t ');
+
+EXPLAIN SELECT a from sp where a < 'a ';
+SELECT a from sp where a < 'a ';
+EXPLAIN SELECT a from sp where a <= 'a ';
+SELECT a from sp where a <= 'a ';
+
+EXPLAIN SELECT a from sp where 'a ' > a;
+SELECT a from sp where 'a ' > a;
+EXPLAIN SELECT a from sp where 'a ' >= a;
+SELECT a from sp where 'a ' >= a;
+
+EXPLAIN SELECT a from sp where a >= 'a ';
+SELECT a from sp where a >= 'a ';
+
+EXPLAIN SELECT a from sp where a BETWEEN 'a' AND 'a ';
+SELECT a from sp where a BETWEEN 'a' AND 'a ';
+EXPLAIN SELECT a from sp where 'a ' BETWEEN a AND b;
+SELECT a from sp where 'a ' BETWEEN a AND b;
+
+CREATE TABLE spbin (
+    a char(4),
+    b char(6)
+) COLLATE=utf8mb4_general_ci;
+
+INSERT INTO spbin values('a\r', 'b\r');
+INSERT INTO spbin values('a  ', 'b  ');
+INSERT INTO spbin values('a\n ', 'b\n ');
+INSERT INTO spbin values(' a\t ', ' b\t ');
+
+EXPLAIN SELECT a from spbin where a < 'a ' COLLATE utf8mb4_general_ci;
+SELECT a from spbin where a < 'a ' COLLATE utf8mb4_general_ci;
+EXPLAIN SELECT a from spbin where a <= 'a ' COLLATE utf8mb4_general_ci;
+SELECT a from spbin where a <= 'a ' COLLATE utf8mb4_general_ci;
+
+EXPLAIN SELECT a from spbin where 'a ' COLLATE utf8mb4_general_ci > a;
+SELECT a from spbin where 'a ' COLLATE utf8mb4_general_ci > a;
+EXPLAIN SELECT a from spbin where 'a ' COLLATE utf8mb4_general_ci >= a;
+SELECT a from spbin where 'a ' COLLATE utf8mb4_general_ci >= a;
+
+EXPLAIN SELECT a from sp where a >= 'a ' COLLATE utf8mb4_general_ci;
+SELECT a from spbin where a >= 'a ' COLLATE utf8mb4_general_ci;
+
+EXPLAIN SELECT a from spbin where a BETWEEN 'a' COLLATE utf8mb4_general_ci AND 'a ' COLLATE utf8mb4_general_ci;
+SELECT a from spbin where a BETWEEN 'a' COLLATE utf8mb4_general_ci AND 'a ' COLLATE utf8mb4_general_ci;
+EXPLAIN SELECT a from spbin where 'a ' COLLATE utf8mb4_general_ci BETWEEN a AND b;
+SELECT a from spbin where 'a ' COLLATE utf8mb4_general_ci BETWEEN a AND b;
+
+SET sql_mode='PAD_CHAR_TO_FULL_LENGTH';
+EXPLAIN SELECT a from sp where a < 'a ';
+SELECT a from sp where a < 'a ';
+EXPLAIN SELECT a from sp where a <= 'a ';
+SELECT a from sp where a <= 'a ';
+
+EXPLAIN SELECT a from sp where 'a ' > a;
+SELECT a from sp where 'a ' > a;
+EXPLAIN SELECT a from sp where 'a ' >= a;
+SELECT a from sp where 'a ' >= a;
+
+EXPLAIN SELECT a from sp where a >= 'a ';
+SELECT a from sp where a >= 'a ';
+
+EXPLAIN SELECT a from sp where a = 'a   ';
+SELECT a from sp where a = 'a   ';
+
+EXPLAIN SELECT a from sp where a = 'a  ';
+SELECT a from sp where a = 'a  ';
+
+EXPLAIN SELECT a from sp where a BETWEEN 'a' AND 'a ';
+SELECT a from sp where a BETWEEN 'a' AND 'a ';
+EXPLAIN SELECT a from sp where 'a ' BETWEEN a AND b;
+SELECT a from sp where 'a ' BETWEEN a AND b;
+
+CREATE TABLE bt (
+    a int,
+    b int,
+    c varchar(32) COLLATE utf8mb4_general_ci,
+    d varchar(32) COLLATE utf8mb4_0900_ai_ci
+);
+insert into bt values(1, 10, 'Tom', 'Jerry');
+insert into bt values(2, 20, 'Huawei', 'Tecent');
+insert into bt values(3, 30, 'Ali', 'Tecent');
+EXPLAIN SELECT a, b, c, d FROM bt WHERE 5 BETWEEN a and b;
+--error 1270
+EXPLAIN SELECT a, b, c, d FROM bt WHERE 'Baba' BETWEEN c and d;
+EXPLAIN SELECT a, b, c, d FROM bt WHERE 5 BETWEEN c and d;
+
+CREATE TABLE tm_trunc (
+    a time DEFAULT NULL,
+    b time(3) DEFAULT NULL,
+    c time(6) DEFAULT NULL
+);
+
+insert into tm_trunc values('-838:59:59.000000', '-838:59:59.000000', '-838:59:59.000000');
+insert into tm_trunc values('838:59:59.000000', '838:59:59.000000', '838:59:59.000000');
+insert into tm_trunc values('00:00:00.000000', '00:00:00.000000', '00:00:00.000000');
+insert into tm_trunc values('-00:00:00.000000', '-00:00:00.000000', '-00:00:00.000000');
+insert into tm_trunc values('00:00:00.000001', '00:00:00.000001', '00:00:00.000001');
+insert into tm_trunc values('-00:00:00.000001', '-00:00:00.000001', '-00:00:00.000001');
+insert into tm_trunc values('23:59:59.999999', '23:59:59.999999', '23:59:59.999999');
+insert into tm_trunc values('-23:59:59.999999', '-23:59:59.999999', '-23:59:59.999999');
+insert into tm_trunc values('00:00:01.000000', '00:00:01.000000', '00:00:01.000000');
+insert into tm_trunc values('-00:00:01.000000', '-00:00:01.000000', '-00:00:01.000000');
+insert into tm_trunc values('00:00:01.000001', '00:00:01.000001', '00:00:01.000001');
+insert into tm_trunc values('-00:00:01.000001', '-00:00:01.000001', '-00:00:01.000001');
+insert into tm_trunc values('-00:00:01.000000', '-00:00:01.000000', '-00:00:01.000000');
+insert into tm_trunc values('-838:59:59.000000', '-838:59:59.000000', '-838:59:59.000000');
+
+select a from tm_trunc where  a > '1.001.00';
+select a from tm_trunc where  '1.001.00' < a;
+select a from tm_trunc where  a < '1.001.00';
+select a from tm_trunc where  '1.001.00' > a;
+
+select c from tm_trunc where  c > '0.000.000001';
+select c from tm_trunc where  '0.000.000001' < c;
+select c from tm_trunc where  c < '0.000.00001';
+select c from tm_trunc where  '0.000.000001' > c;
+
+select a from tm_trunc where  a > '0:00:00.000001';
+select b from tm_trunc where  b > '0:00:00.000001';
+select c from tm_trunc where  c > '0:00:00.000001';
+select b FROM tm_trunc where 9e9 <= b ORDER BY 1;
+
+explain select a from tm_trunc where '-20250101' > a;
+SET DEBUG="+d,condition_pushdown_invalid_datetime";
+explain select a from tm_trunc where '-20250101' > a;
+SET DEBUG="-d,condition_pushdown_invalid_datetime";
+
+CREATE TABLE invalid_time (a TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6), b datetime(3));
+INSERT INTO invalid_time VALUES ('2001-01-01 11:22:33.123456', '2016-12-31 23:59:59.000');
+INSERT INTO invalid_time VALUES ('2001-01-01 00:00:00.100000', '1000-12-31 23:59:59.000');
+SET @a=20010101000000.1e0;
+SELECT * FROM invalid_time WHERE a=@a;
+SELECT * FROM invalid_time WHERE 9e9 <= b;
+SELECT * FROM invalid_time WHERE 9e9 between b and b;
+explain SELECT * FROM invalid_time WHERE a= cast(20010101000000.1e0 AS CHAR);
+
+create table tm_bt(a timestamp NULL DEFAULT NULL, b timestamp(3) NULL DEFAULT NULL, c timestamp(3) NULL DEFAULT NULL);
+insert into tm_bt values('2025-01-01 00:00:00', '2025-01-01 00:00:00.000', '2025-01-01 00:00:00.000');
+insert into tm_bt values('2025-01-01 00:00:01', '2025-01-01 00:00:00.001', '2025-01-01 00:00:00.001');
+insert into tm_bt values('2025-01-01 00:00:01', '2025-01-01 00:00:00.000', '2025-01-01 00:00:00.000');
+insert into tm_bt values('2038-01-19 03:14:07', '2025-01-01 00:00:00.000', '2025-01-01 00:00:00.000');
+select a,b from tm_bt where 20250101000000.000000 between b and a order by 1;
+select a,b from tm_bt where 20250101000000.000000 between b and c order by 1;
+
+# negative year test
+INSERT INTO datetime_types VALUES (11, '2023-01-01', '12:00:00', '2023-01-01 12:00:00', '2023-01-01 12:00:00', 0);
+EXPLAIN SELECT id, year_col FROM datetime_types WHERE year_col > (CAST('-1' AS SIGNED));
+SELECT id, year_col FROM datetime_types WHERE year_col > (CAST('-1' AS SIGNED));
+SELECT id, year_col FROM datetime_types WHERE year_col >= ('1753-01-01 00:00:00');
+
+# test mv, BUG2025121727849
+CREATE TABLE `tmv` (
+  `c0` tinyint(1) NOT NULL /*!50606 STORAGE DISK */ /*!50606 COLUMN_FORMAT DYNAMIC */ COMMENT 'asdf',
+  `c1` mediumblob,
+  `c2` double(56,10) unsigned zerofill /*!50606 STORAGE DISK */ DEFAULT NULL COMMENT 'asdf',
+  `vc3` mediumblob GENERATED ALWAYS AS (cast(`c0` as char(30) charset utf8mb4)) VIRTUAL,
+  `vc4` timestamp GENERATED ALWAYS AS (cast(`c1` as unsigned)) VIRTUAL NOT NULL,
+  `vc5` datetime(5) GENERATED ALWAYS AS (cast(`c1` as unsigned)) VIRTUAL,
+  `vc7` tinyint(1) GENERATED ALWAYS AS (cast(`vc4` as unsigned)) VIRTUAL,
+  `vc9` float(53,23) unsigned zerofill GENERATED ALWAYS AS (cast(`vc7` as unsigned)) VIRTUAL,
+  PRIMARY KEY (`c0`),
+  UNIQUE KEY `i0` (`c2`,`vc5`,`vc4`,`vc7`),
+  KEY `i1` ((_utf8mb4'04:04:13')) /*!80000 INVISIBLE */,
+  KEY `i42` (`c0`,`vc7` DESC)
+);
+
+INSERT INTO `tmv` (`c0`, `c1`, `c2`) VALUES (49,_binary '-56145272',NULL),
+(-14,_binary '-56145272',NULL),(-29,_binary '-56145272',NULL),
+(-118,_binary '-56145272',000000000000000000000000000000000000000000000.0293593148),
+(0,_binary '?年螆</',000000000000000000000000000000000000000000000.6421560977),
+(105,'',NULL),(127,_binary '0.4783672862056204',NULL),(6,_binary '1886298335产品',NULL),
+(-84,_binary '🌟用户',NULL),(55,'',NULL),(-128,'',NULL);
+
+CREATE ALGORITHM=UNDEFINED VIEW `v0` (`c0`) AS select 1975 AS `ref0` from `tmv` order by `tmv`.`vc3` limit 4881250600087046415;
+SELECT tmv.c0 AS ref0 FROM v0 LEFT JOIN tmv ON  EXISTS (SELECT 1 wHERE FALSE) WHERE ((NULL) IS FALSE) < ((+ (v0.c0)));
+
+SET DEBUG="+d,condpush_injection_null_field";
+SELECT id, int_col FROM numeric_types WHERE int_col BETWEEN -1000000000 AND 2000000000;
+SELECT * FROM users where name = 'Lucas Anderson';
+SET DEBUG="-d,condpush_injection_null_field";
+
+SET sql_mode= @orig_sql_mode;
+--enable_warnings
+DROP TABLE numeric_types, datetime_types, string_types, json_type, users, agg, t1, t2, gen, overflow_test, tt_2, fcd_overflow, t0, sp, spbin, bt, tm_trunc, invalid_time, tm_bt, tmv;
+DROP view v0;
+

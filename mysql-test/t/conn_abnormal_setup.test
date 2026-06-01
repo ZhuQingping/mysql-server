@@ -1,0 +1,122 @@
+# Save the initial number of concurrent sessions
+--source include/count_sessions.inc
+
+--disable_query_log
+call mtr.add_suppression("Too many connections, valid_connection_count check fail.*");
+call mtr.add_suppression("Too many connections, check_and_incr_conn_count fail.*");
+call mtr.add_suppression("Too many connections, check_and_incr_reserved_conn_count fail.*");
+call mtr.add_suppression("Access denied for user 'reserved_user2'.*");
+--enable_query_log
+ 
+SET @save_max_connections= @@global.max_connections;
+SET @save_rds_reserved_connections= @@global.rds_reserved_connections;
+SET @save_rds_conn_log_error_verbosity= @@global.rds_conn_log_error_verbosity;
+SET @save_log_error_verbosity= @@global.log_error_verbosity;
+ 
+ 
+SET GLOBAL max_connections=2;
+SET GLOBAL rds_reserved_connections=1;
+SET GLOBAL rds_reserved_users='reserved_user1,reserved_user2';
+SET GLOBAL rds_conn_log_error_verbosity=1;
+SET GLOBAL log_error_verbosity=2;
+ 
+CREATE USER 'reserved_user1'@'%' IDENTIFIED BY '123456';
+GRANT SELECT ON *.* TO 'reserved_user1'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'reserved_user1'@'%';
+ 
+CREATE USER 'reserved_user2'@'%' IDENTIFIED BY '123456';
+GRANT SELECT ON *.* TO 'reserved_user2'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'reserved_user2'@'%';
+ 
+connect (test_con1, localhost, root,,,);
+ 
+connect (test_con2, localhost, root,,,);
+ 
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE "Reserved_threads_connected";
+ 
+--echo #
+--echo # root's connections reached the maximum limit
+--echo #
+--disable_query_log
+--error ER_CON_COUNT_ERROR, 9999
+connect (test_con3, localhost, root,,,);
+--enable_query_log
+--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let $assert_text= Check that there is 'Too many connections, valid_connection_count check fail' in error log.
+--let $assert_select= \[Warning\] \[[^]]*\] \[[^]]*\] \[GAUSSDB-DEBUG\]Too many connections, valid_connection_count check fail
+--let $assert_only_after=.* \[System\] \[[^]]*\] \[[^]]*\] .* ready for connections
+--let $assert_count= 1
+--source include/assert_grep.inc
+ 
+connect (reserved_conn1, 127.0.0.1, reserved_user1,123456,,);
+ 
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE "Reserved_threads_connected";
+ 
+--echo #
+--echo # all users can not be connected
+--echo #
+--disable_query_log
+--error ER_CON_COUNT_ERROR, 9999
+connect (reserved_conn2, 127.0.0.1, reserved_user2,123456,,);
+--enable_query_log
+disconnect test_con1;
+disconnect test_con2;
+connection default;
+--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let $assert_text= Check that there is 'Too many connections, check_and_incr_conn_count fail' in error log.
+--let $assert_select= \[Warning\] \[[^]]*\] \[[^]]*\] \[GAUSSDB-DEBUG\]Too many connections, check_and_incr_conn_count fail
+--let $assert_only_after=.* \[System\] \[[^]]*\] \[[^]]*\] .* ready for connections
+--let $assert_count= 1
+--source include/assert_grep.inc
+ 
+ 
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE "Reserved_threads_connected";
+ 
+ --echo #
+--echo # reserved user's connections reached the maximum limit
+--echo #
+--disable_query_log
+--error ER_CON_COUNT_ERROR, 9999
+connect (reserved_conn2, 127.0.0.1, reserved_user2,123456,,);
+--enable_query_log
+connection default;
+--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let $assert_text= Check that there is 'Too many connections, check_and_incr_reserved_conn_count fail' in error log.
+--let $assert_select= \[Warning\] \[[^]]*\] \[[^]]*\] \[GAUSSDB-DEBUG\]Too many connections, check_and_incr_reserved_conn_count fail
+--let $assert_only_after=.* \[System\] \[[^]]*\] \[[^]]*\] .* ready for connections
+--let $assert_count= 1
+--source include/assert_grep.inc
+ 
+disconnect reserved_conn1;
+ 
+--echo #
+--echo # password error
+--echo #
+--disable_query_log
+--error ER_ACCESS_DENIED_ERROR
+connect (reserved_conn2, 127.0.0.1, reserved_user2,1234,,);
+--enable_query_log
+connection default;
+--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let $assert_text= Check that there is 'Access denied for user' in error log.
+--let $assert_select= \[Warning\] \[[^]]*\] \[[^]]*\] \[GAUSSDB-DEBUG\]Access denied for user
+--let $assert_only_after=.* \[System\] \[[^]]*\] \[[^]]*\] .* ready for connections
+--let $assert_count= 1
+--source include/assert_grep.inc
+ 
+SET GLOBAL max_connections=@save_max_connections;
+SET GLOBAL rds_reserved_connections=@save_rds_reserved_connections;
+SET GLOBAL rds_reserved_users=default;
+SET GLOBAL rds_conn_log_error_verbosity=@save_rds_conn_log_error_verbosity;
+SET GLOBAL log_error_verbosity=@save_log_error_verbosity;
+ 
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user1','reserved_user2');
+ 
+--disable_warnings
+DROP USER reserved_user1,reserved_user2;
+--enable_warnings
+
+--source include/wait_until_count_sessions.inc

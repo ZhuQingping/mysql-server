@@ -1,0 +1,481 @@
+From ac7b9c789c55075f0a9d0e23263e74a1e7f65382 Mon Sep 17 00:00:00 2001
+From: Guilhem Bichot <guilhem.bichot@contributor>
+
+Date: Thu, 11 Sep 2025 11:10:38 +0200
+Subject: [PATCH] decrease the memory footprint of session
+ plan cache.
+
+do not allocate any TABLE_LIST when caching a plan.
+
+This saves memory in several ways:
+- no TABLE_LIST
+- no open_table() on it => no TABLE, no data structures in Dstore are
+allocated.
+
+For a simple query of sysbench, this reduces the number of bytes
+requested from the prepared statement's MEM_ROOT, from 18kB to 6kB.
+
+Why was TABLE_LIST used?
+
+It was used:
+- probably because PQ functions (QEP_TAB::pq_copy and callees)
+expected to have one?
+- to store some information.
+- and that's all. Note that it was _not_ used when the cached plan was
+applied: at that moment, the cached plan's QEP_TAB was re-pointed to
+the TABLE_LIST of the new execution (opened by the prepared
+statement's usual open_tables()).
+
+So we can say that this TABLE_LIST was not fully used, which didn't
+justify its important memory occupation.
+
+List of changes:
+
+- TABLE_REF::pq_copy() does not call get_store_key() anymore; because
+there is no long-lived TABLE available anymore, so the store_key has
+no TABLE to link its own Field to. This is not a problem
+as get_store_key() is called later when applying the plan in
+replace_cache_key() ; which means the first call has always been
+useless, probably. Also, when TABLE_REF::pq_copy() creates a Key_use,
+it does not set the TABLE_LIST member of the Key_use anymore; instead
+this will be set when applying the plan.
+- pq_set_table_ref() is not needed anymore, as the new QEP_TAB does
+not have a TABLE_LIST at the time of caching anymore.
+- No need to copy TABLE::record when caching the plan ; this data was
+not used anyway, because this instance of TABLE was not the one which
+was used when applying the cached plan.
+- The artificial hint for range access is not built when caching the
+plan, anymore, it is built when applying it; because we need to attach
+it to TABLE_LIST.
+- No TABLE_LIST is attached to the new JOIN when caching. The
+attaching is done when applying the plan.
+- No need to set_keyread() on the TABLE when caching, as there is no
+more TABLE at this moment.
+- partition_info::pq_copy_from() and TABLE::pq_copy() are not needed
+anymore.
+- in path_helpers.h: while debugging, hit an assertion failure, and
+tracked it to a small error (present in MySQL Community version): the
+said paths are not index merge, obviously.
+- In plan cache code, the synonym TABLE_REF (old name) for
+Index_lookup is removed because it causes confusion with Table_ref.
+---
+ sql/partition_info.h               |   1 -
+ sql/range_optimizer/path_helpers.h |   4 +-
+ sql/sql_plan_cache.cc              | 195 +++++++++--------------------
+ sql/sql_plan_cache.h               |   2 +-
+ sql/table.h                        |   3 -
+ 5 files changed, 62 insertions(+), 143 deletions(-)
+
+diff --git a/sql/partition_info.h b/sql/partition_info.h
+index 948f543936a..162e31b3838 100644
+--- a/sql/partition_info.h
++++ b/sql/partition_info.h
+@@ -492,7 +492,6 @@ class partition_info {
+     part_field_list.clear();
+   }
+ 
+-  bool pq_copy_from(partition_info *part_info);
+   partition_info *get_clone(THD *thd, bool reset = false);
+   partition_info *get_full_clone(THD *thd);
+   bool set_named_partition_bitmap(const char *part_name, size_t length);
+diff --git a/sql/range_optimizer/path_helpers.h b/sql/range_optimizer/path_helpers.h
+index c49cc5e7399..88250eca95b 100644
+--- a/sql/range_optimizer/path_helpers.h
++++ b/sql/range_optimizer/path_helpers.h
+@@ -500,10 +500,10 @@ inline void dbug_dump(const AccessPath *path, int indent, bool verbose) {
+     }
+     case AccessPath::ROWID_INTERSECTION:
+       dbug_dump_rowid_intersection(indent, verbose,
+-                                   *path->index_merge().children);
++                                   *path->rowid_intersection().children);
+       break;
+     case AccessPath::ROWID_UNION:
+-      dbug_dump_rowid_union(indent, verbose, *path->index_merge().children);
++      dbug_dump_rowid_union(indent, verbose, *path->rowid_union().children);
+       break;
+     case AccessPath::INDEX_SKIP_SCAN:
+       dbug_dump_index_skip_scan(indent, verbose, path);
+diff --git a/sql/sql_plan_cache.cc b/sql/sql_plan_cache.cc
+index 5306724a65d..5044aace75c 100644
+--- a/sql/sql_plan_cache.cc
++++ b/sql/sql_plan_cache.cc
+@@ -305,60 +305,10 @@ void Temp_table_param::pq_copy(Temp_table_param *orig) {
+   allow_group_via_temp_table = orig->allow_group_via_temp_table;
+ }
+ 
+-/**
+-   Set QEP_TAB's table_ref. If we can find TABLE_LIST in resolved leaf tables
+-   through table_no, then we directly set the found one as QEP_TAB's table_ref
+-   because the table_no is unique. Otherwise, we clone one TABLE_LIST and assign
+-   it as table_ref.
+-
+-   @param thd Thread handler.
+-   @param cloned_join The cloned JOIN object.
+-   @param tab The QEP_TAB to be filled with table_ref.
+-   @param orig_tbl The filled table_ref in original plan
+-
+-   @returns true if clone error, and otherwise false.
+-*/
+-static bool pq_set_table_ref(THD *thd [[maybe_unused]], JOIN *cloned_join,
+-                             QEP_TAB *tab, TABLE_LIST *orig_tbl) {
+-  TABLE_LIST *tbl = nullptr;
+-#ifdef PLAN_CACHE_TAURUS
+-  SELECT_LEX *select = cloned_join->select_lex;  // PLAN_CACHE_PORT unused
+-#endif
+-  for (TABLE_LIST *tr = cloned_join->tables_list; tr; tr = tr->next_leaf) {
+-    if (tr->tableno() == orig_tbl->tableno()) {
+-      tbl = tr;
+-      break;
+-    }
+-  }
+-
+-  // PLAN_CACHE_PORT in plan cache this should not be needed: plan cache is
+-  // disabled if there is more than one table.
++// It turns out that the following two functions are finally unneeded in the
++// new implementation, as we do not store a TABLE_LIST in the cached plan
++// anymore.
+ #ifdef PLAN_CACHE_TAURUS
+-  if (!tbl) {
+-    // This case can occur for a TABLE_LIST created for a
+-    // semijoin-materialized temporary table. Indeed, in pq_dup_select() we
+-    // create clones of the TABLE_LISTs in leaf_tables list. But if semijoin
+-    // materialization is used, an additional TABLE_LIST exists out of this
+-    // list, created by the optimization process. Thus every worker needs to
+-    // clone it when it clones the relevant QEP_TAB, which is done here.
+-    tbl = new (thd->pq_mem_root) TABLE_LIST();
+-    if (!tbl) return true;
+-    tbl->pq_copy(thd, orig_tbl);
+-    tbl->select_lex = select;
+-    tbl->table = tab->table();
+-    tbl->table->pos_in_table_list = tbl;
+-    tab->table_ref = tbl;
+-    tbl->next_name_resolution_table =
+-        select->context.first_name_resolution_table;
+-    select->context.first_name_resolution_table = tbl;
+-  }
+-#endif
+-
+-  assert(tbl);
+-  tab->table_ref = tbl;
+-  return false;
+-}
+-
+ // PLAN_CACHE_PORT Note that in Taurus this function is much more complex due
+ // to : USERSTORY Support for partition-level MDL locks and concurrency
+ // control. If one day this feature is ported to the mysql+dstore branch, a
+@@ -407,21 +357,20 @@ bool TABLE::pq_copy(THD *thd, void *select_arg [[maybe_unused]], TABLE *orig) {
+   file->stats.records = orig->file->stats.records;
+   return false;
+ }
++#endif
+ 
+ // PLAN_CACHE_PORT in .41 this is not exported by sql_select.h anymore, so:
+ store_key *get_store_key(THD *thd, Item *val, table_map used_tables,
+                          table_map const_tables, const KEY_PART_INFO *key_part,
+                          uchar *key_buff, uint maybe_null);
+ 
+-#define TABLE_REF Index_lookup  // PLAN_CACHE_PORT renamed in .41
+-
+ /*
+  * copy table_ref info.
+  *
+  * @retval:
+  *    false if copy successfully, and otherwise true.
+  */
+-bool TABLE_REF::pq_copy(JOIN *join, TABLE_REF *ref, QEP_TAB *qep_tab) {
++bool Index_lookup::pq_copy(JOIN *join, Index_lookup *ref, QEP_TAB *qep_tab) {
+   THD *thd = join->thd;
+   key_parts = ref->key_parts;
+   key_length = ref->key_length;
+@@ -455,12 +404,25 @@ bool TABLE_REF::pq_copy(JOIN *join, TABLE_REF *ref, QEP_TAB *qep_tab) {
+     memcpy_s(key_buff, cpy_size, ref->key_buff, cpy_size);
+     memcpy_s(key_buff2, cpy_size, ref->key_buff2, cpy_size);
+   }
++
++#ifdef PLAN_CACHE_TAURUS
+   uchar *key_buff_tmp = key_buff;
++#endif
+ 
+   assert(ref->items && ref->cond_guards);
+-  assert(qep_tab->table()->key_info);
+   Key_use *keyuse = qep_tab->position()->key;
+-  KEY *const keyinfo = qep_tab->table()->key_info + key;
++#ifdef PLAN_CACHE_TAURUS
++  // PLAN_CACHE_PORT in the new implementation, we cannot use the keyinfo
++  // below. Indeed, all we have is the original TABLE, and if we read and keep
++  // any of its pointer members (which is what get_store_key() does, in
++  // essence, by creating Field which has a Field::table), it would be unsafe
++  // as these pointers may point to garbage when the current execution ends
++  // and the TABLE possibly gets recycled for another query. Fortunately, this
++  // keyinfo is actually unnecessary, see get_store_key below.
++  assert(qep_tab->table()->key_info);
++  const KEY *keyinfo = qep_tab->table()->key_info + key;
++#endif
++
+   for (uint i = 0; i < key_parts; i++, keyuse++) {
+     assert(ref->items[i]);
+     items[i] = clone_if_transient(thd, ref->items[i]);
+@@ -475,10 +437,16 @@ bool TABLE_REF::pq_copy(JOIN *join, TABLE_REF *ref, QEP_TAB *qep_tab) {
+     }
+ #endif
+ 
+-    bool maybe_null = keyinfo->key_part[i].null_bit;
+     keyuse->val = items[i];
+-    keyuse->table_ref = qep_tab->table_ref;
++    keyuse->table_ref = nullptr;  // set later when applying the cached plan.
+ 
++    // PLAN_CACHE_PORT In the new implementation, we cannot create the
++    // store_key at this moment (as we do not have a long-lived TABLE) ; and
++    // actually it is not needed, as a store_key is created later in
++    // replace_cache_key() when we have the proper TABLE as part of applying
++    // the plan.
++#ifdef PLAN_CACHE_TAURUS
++    bool maybe_null = keyinfo->key_part[i].null_bit;
+     if (ref->key_copy[i] != nullptr) {
+       // PLAN_CACHE_PORT signature of get_store_key changed in .41
+       key_copy[i] = get_store_key(thd, keyuse->val, keyuse->used_tables,
+@@ -486,6 +454,7 @@ bool TABLE_REF::pq_copy(JOIN *join, TABLE_REF *ref, QEP_TAB *qep_tab) {
+                                   key_buff_tmp, maybe_null);
+     }
+     key_buff_tmp += keyinfo->key_part[i].store_length;
++#endif
+     cond_guards[i] = ref->cond_guards[i];
+   }
+   return false;
+@@ -562,10 +531,10 @@ static bool pq_dup_tabs(JOIN *join, JOIN *top_orig,
+ 
+     join->const_tables = orig->const_tables;
+     join->primary_tables = orig->primary_tables;
+-    SELECT_LEX *select = join->select_lex;
+     assert(thd == join->thd);
+     // PLAN_CACHE_PORT unused as in plan cache there is only one query block
+ #ifdef PLAN_CACHE_TAURUS
++    SELECT_LEX *select = join->select_lex;
+     Switch_for_resolution_of_query_block switch_resol(
+         thd->lex, select, query_block != top_orig->select_lex);
+ 
+@@ -611,20 +580,7 @@ static bool pq_dup_tabs(JOIN *join, JOIN *top_orig,
+ 
+         // setup physic table object
+         assert(orig_tbl->table == orig_tab->table());
+-        if (pq_set_table_ref(join->thd, join, tab, orig_tbl)) return true;
+-        tab->set_table(tab->table_ref->table);
+-        assert(tab->table() != orig_tbl->table);
+-        memcpy_s(tab->table()->record[0], tab->table()->s->reclength,
+-                 orig_tbl->table->record[0], orig_tbl->table->s->reclength);
+-        tab->table()->pq_copy(join->thd, select, orig_tab->table());
+-        if (UseBKA(orig_tab) && (orig_tab->condition())) {
+-          // For BKA & outer join, fields would be treated as index access
+-          // fields, so PQ won't set table's read_set by item::fix_field() for
+-          // the index fields(it doesn't exists in fields list, where/having
+-          // condition, group by or order by fields). So here need copy original
+-          // table's read_set directly.
+-          bitmap_copy(tab->table()->read_set, orig_tab->table()->read_set);
+-        }
++        assert(tab->table() == nullptr && tab->table_ref == nullptr);
+ 
+         if (orig_tab->ref().key_parts &&  // ref access is used
+             tab->ref().pq_copy(join, &orig_tab->ref(), tab))
+@@ -764,27 +720,6 @@ static bool pq_dup_tabs(JOIN *join, JOIN *top_orig,
+         }
+       }
+ 
+-      // Higher up in this function, refix_fields is called and could have
+-      // altered the information in tab->table()->record[0]: in the case of a
+-      // RIGHT JOIN with an impossible ON condition and an IN clause in the
+-      // WHERE, refix_fields call item_func_in::resolve_type which in turns
+-      // calls convert_constant_item: it is going to successively save in  the
+-      // field the values in the IN clause (without resetting it to its original
+-      // value as save_field_value is false in our case) and set the field to
+-      // not null even though it should be NULL because of the impossible ON
+-      // condition. With the memcpy, we simply restore the information in
+-      // tab->table()->record[0] to what it should be (nullity and value stored
+-      // in field).
+-      for (uint i = 0; i < join->tables; i++) {
+-        QEP_TAB *tab = &join->qep_tab[i];
+-        QEP_TAB *orig_tab = &orig->qep_tab[i];
+-
+-        TABLE_LIST *orig_tbl = orig_tab->table_ref;
+-
+-        if (!orig_tbl) continue;
+-        memcpy_s(tab->table()->record[0], tab->table()->s->reclength,
+-                 orig_tbl->table->record[0], orig_tbl->table->s->reclength);
+-      }
+     }  // end of if(orig->qep_tab)
+   }    // end of for()
+ 
+@@ -816,8 +751,8 @@ bool POSITION::pq_copy(THD *thd, QEP_TAB *orig_tab) {
+   prefix_cost = orig->prefix_cost;
+   table = nullptr;
+   Key_use *chosen_keyuses[MAX_REF_PARTS];
+-  // Clone all of Key_use objects. When clone TABLE_REF, value of Key_use will
+-  // be cloned and assigned because TABLE is not ready by here and
++  // Clone all of Key_use objects. When clone Index_lookup, value of Key_use
++  // will be cloned and assigned because TABLE is not ready by here and
+   // key_use->val can't be fixed correctly. Note: here we use ref().key to
+   // check instead of orig->key is because RANGE_SCAN might result in
+   // orig->key is not null but ref().key == -1.
+@@ -846,7 +781,7 @@ bool POSITION::pq_copy(THD *thd, QEP_TAB *orig_tab) {
+     // loop there). So we advance key_use to satisfy this requirement.
+     while (keyuse->key != (uint)orig_tab->ref().key) keyuse++;
+     // Here we need call this function to recollect chosen_keyuses because we
+-    // must make sure POSITION::key are same as TABLE_REF::items. Details can
++    // must make sure POSITION::key are same as Index_lookup::items. Details can
+     // be checked in create_ref_for_key. For example, in a join of table
+     // A with table B with WHERE A.col1=val1 AND A.col1=B.colX AND
+     // A.col2=val2, if table A is first in plan, A.col1=B.colX will be
+@@ -1373,14 +1308,14 @@ static inline void get_item_and_refresh(Item *&dst, Item *src, bool is_cond) {
+ /**
+   This function is used for plan cache. When reuse a cached plan for a ref
+   scan, if referenced value is changed, this function is responsible to change
+-  the values of store_keys of TABLE_REF.
++  the values of store_keys of Index_lookup.
+ 
+   This function was made by copying create_ref_for_key() and simplifying.
+   Future changes to create_ref_for_key() probably must be propagated here. So:
+   HUAWEI_ASSERT_MATCH_CANON create_ref_for_key
+ */
+ bool QEP_TAB::replace_cache_key() {
+-  TABLE_REF *t_ref = &ref();
++  Index_lookup *t_ref = &ref();
+   THD *const thd = join()->thd;
+   Key_use *keyuse = NULL;
+   KEY *const keyinfo = table()->key_info + t_ref->key;
+@@ -1907,19 +1842,9 @@ bool Exec_context::fill(THD *thd, JOIN *join, QEP_TAB *cached_qep_tab) {
+     // values in the intervals of ranges to match the new values of prepared
+     // statements' parameters for the new execution, which is complex.
+     // Instead, when this plan is later reused, its QUICK_SELECT_I will be
+-    // regenerated by a call to test_quick_select(). To make sure that such
+-    // function will pick the exact same type of QUICK_SELECT_I as we had in
+-    // the cached plan, we have modified hint_table_state() and also create a
+-    // table hint below (used by idx_merge_hint_state()). It is unfortunately
+-    // not respecting the layout of hint classes (it is not "resolved", it has
+-    // no PT_key_level_hint, etc), due to the complexity of such layout.
+-    if (!(cached_qep_tab->table_ref->opt_hints_table = new (thd->mem_root)
+-              Opt_hints_table(nullptr, nullptr, thd->mem_root)))
+-      return true;
++    // regenerated by a call to test_quick_select().
+     quick_type = quick->type;
+     quick_keys_map.merge(get_quick_key_map(quick));
+-    cached_qep_tab->table_ref->opt_hints_table->index_merge.get_key_map()
+-        ->merge(quick_keys_map);
+     if (quick->type == AccessPath::INDEX_RANGE_SCAN)
+       index_range_scan_props = quick->index_range_scan();
+     quick_used_key_parts = get_used_key_parts(quick);
+@@ -2009,11 +1934,6 @@ bool cache_plan(JOIN *orig_join) {
+ 
+   Clone_plan_RAII cpr(thd);
+   JOIN *join_local = new (thd->mem_root) JOIN(thd, sl);
+-  // Note that this uses the default implicit copy constructor of TABLE_LIST
+-  // (also used in table_access_service.cc among others).
+-  auto tl = new (thd->mem_root) TABLE_LIST(*sl->leaf_tables);
+-  tl->table = nullptr;
+-  Open_table_context ot_ctx(thd, 0);
+ 
+   auto error_guard =
+       create_scope_guard([&trace_plan_cache, orig_join, join_local, sl]() {
+@@ -2051,26 +1971,14 @@ bool cache_plan(JOIN *orig_join) {
+   // failure.
+   if (some_item_param_are_gone()) return true;
+ 
+-  // Why do we make a copy of TABLE_LIST, which will not be the one used
+-  // during the next execution (the execution which picks up the cached plan)?
+-  // Because it serves as "caching storage" for some properties of TABLE_LIST
+-  // which participate in the plan's description. Just one example:
+-  // TABLE_LIST::table->file->pushed_idx_cond_keyno. An alternative design
+-  // (storing such info in Exec_context) would probably be possible.
+-
+-  // This clone's opening operation happens within the same MDL context as the
+-  // original table's opening. Thus, even though there may be a deadlock (our
+-  // connection blocks connection X which blocks this new opening) it should
+-  // be detected.
+-  if (open_table(thd, tl, &ot_ctx)) return true;
+-
+   if (!(join_local->plan_cache_exec_context =
+             new (thd->mem_root) Exec_context(thd->mem_root)))
+     return true;
+ 
+   orig_join->select_lex->cached_plan = join_local;
+   join_local->shallow_clone(orig_join);
+-  join_local->tables_list = tl;
++  // No TABLE_LIST is stored in the cached plan.
++  join_local->tables_list = nullptr;
+ 
+   {
+     auto &transient_items_map =  // shorter synonym
+@@ -2120,9 +2028,6 @@ bool cache_plan(JOIN *orig_join) {
+   // During clone, fix_fields might do a transformation, which might cause
+   // the plan to not be cacheable
+   if (sl->plan_cache_state == plan_cache_state::UNCACHEABLE) return true;
+-  // In order to close table, key_read needs to be false. Here this table is
+-  // only for clone, we need reset key_read.
+-  tl->table->set_keyread(false);
+   // Do deep copy for tmp_table_param. Following execution on join_local may
+   // allocate memory when create temp table, if allocate memory on
+   // thd->stmt_arena may result in increased memory usage even OOM for long
+@@ -2631,15 +2536,33 @@ bool exec_cached_plan(SELECT_LEX *sl) {
+     TABLE *table = leaf_tables->table;
+ 
+     DBUG_ASSERT(table);
++    Key_use *keyuse = qep_tab->position()->key;
++    if (keyuse) keyuse->table_ref = leaf_tables;
+     if (refix_table(join, table)) return true;
+     // If multiple tables, map2qep_tab should be used to set correct
+     // table_ref for qep_tab.
+     qep_tab->set_table(table);
+-    // Needs inherits hints table of table_ref of cached plan.
+-    leaf_tables->opt_hints_table = qep_tab->table_ref->opt_hints_table;
++    if (join->plan_cache_exec_context->quick_type != -1) {
++      // reinit_qep_tab_properties() will soon call the range optimizer. To
++      // ensure that such function will pick the exact same type of range
++      // access path as we had in the cached plan, we have modified
++      // hint_table_state() and also create a table hint (used by
++      // idx_merge_hint_state()). It is unfortunately not respecting the
++      // layout of hint classes (it is not "resolved", it has no
++      // PT_key_level_hint, etc), due to the complexity of such layout.
++      auto opt_hints_table =
++          new (thd->mem_root) Opt_hints_table(nullptr, nullptr, thd->mem_root);
++      opt_hints_table->index_merge.get_key_map()->merge(
++          join->plan_cache_exec_context->quick_keys_map);
++      leaf_tables->opt_hints_table = opt_hints_table;
++    }
+     qep_tab->table_ref = leaf_tables;
++    auto old_leaf = leaf_tables;
+     leaf_tables = leaf_tables->next_leaf;
+     status = reinit_qep_tab_properties(qep_tab);
++    // The hint is not needed anymore, and is on transient MEM_ROOT, so do not
++    // keep a pointer to it.
++    old_leaf->opt_hints_table = hints_table_saved;
+     if (status > 0) return true;
+   }
+ 
+diff --git a/sql/sql_plan_cache.h b/sql/sql_plan_cache.h
+index 6d638e77b2a..786b3f66ed8 100644
+--- a/sql/sql_plan_cache.h
++++ b/sql/sql_plan_cache.h
+@@ -86,7 +86,7 @@ struct Exec_context {
+   /// It's used to help recover m_condition for QEP_TAB. In Taurus, if ndp
+   /// condition is pushed down, it will cleanup m_condition of QEP_TAB.
+   Item *tab_condition{nullptr};
+-  int quick_type;
++  int quick_type{-1};  // -1 to mean "no range access"
+ 
+   Explain_format_flags explain_flags;
+   bool calc_found_rows;
+diff --git a/sql/table.h b/sql/table.h
+index 244b0b8ea7d..681b70149d1 100644
+--- a/sql/table.h
++++ b/sql/table.h
+@@ -1742,9 +1742,6 @@ struct TABLE {
+   // List of table check constraints.
+   Sql_table_check_constraint_list *table_check_constraint_list{nullptr};
+ 
+-  /** copy table property from orig table */
+-  bool pq_copy(THD *thd, void *select, TABLE *orig);
+-
+  private:
+   /**
+     If true, this table is inner w.r.t. some outer join operation, all columns
+-- 
+2.23.0
+

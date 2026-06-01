@@ -1,0 +1,967 @@
+From e4f34bdce7a21d25b0e876d866cc33ec0efc4e5e Mon Sep 17 00:00:00 2001
+From: wanghan <wanghan58@contributor>
+
+
+Date: Fri, 13 Feb 2026 11:58:19 +0800
+Subject: [PATCH] BUGFIX Fix crash on truncate table with instant
+ drop column when recycle bin enabled
+
+Issue:
+Fix the server crash when executing TRUNCATE TABLE on a table that previously had columns dropped using the ALGORITHM=INSTANT method, while the recycle bin is enabled.
+
+Analysis:
+The root cause is that when the recycle bin is enabled and a table undergoes a TRUNCATE TABLE operation, it fails to thoroughly purge the metadata for columns dropped using the instant algorithm. This leaves orphaned column metadata residues in the COLUMNS system table.
+
+Solution:
+Immediate Workaround:
+When the recycle bin is enabled, the TRUNCATE TABLE command is modified to explicitly delete the instant column metadata from the data dictionary. Note that this fix is not yet applicable to partitioned tables.
+Long-term Optimization:
+The TRUNCATE TABLE workflow will be refactored in the future to ensure cleanup of instant column metadata is performed consistently, regardless of whether the recycle bin is enabled or disabled.
+---
+ ...yclebin_instant_ddl_truncate-dstore.result | 178 +++++++++++++
+ .../r/recyclebin_instant_ddl_truncate.result  | 234 ++++++++++++++++++
+ ...ecyclebin_instant_ddl_truncate-dstore.test |  68 +++++
+ .../t/recyclebin_instant_ddl_truncate.test    | 108 ++++++++
+ sql/dd/collection.cc                          |  16 ++
+ sql/dd/collection.h                           |   2 +
+ sql/dd/impl/types/abstract_table_impl.cc      |  12 +
+ sql/dd/impl/types/abstract_table_impl.h       |   1 +
+ sql/dd/impl/types/table_impl.h                |   3 +
+ sql/dd/types/abstract_table.h                 |   1 +
+ storage/dstore/ddl/cde_dd_table.cc            |  29 ++-
+ storage/dstore/ddl/cde_dd_table.h             |   3 +-
+ storage/dstore/handler/ha_cde.cc              |   6 +-
+ storage/innobase/dict/dict0dd.cc              |   6 +-
+ storage/innobase/handler/ha_innodb.cc         |   2 +-
+ storage/innobase/handler/ha_innopart.cc       |   2 +-
+ storage/innobase/include/dict0dd.h            |   4 +-
+ storage/innobase/include/dict0dd.ic           |   6 +-
+ 18 files changed, 670 insertions(+), 11 deletions(-)
+
+diff --git a/mysql-test/suite/recyclebin/r/recyclebin_instant_ddl_truncate-dstore.result b/mysql-test/suite/recyclebin/r/recyclebin_instant_ddl_truncate-dstore.result
+index 169debad1c4..559ef453f51 100644
+--- a/mysql-test/suite/recyclebin/r/recyclebin_instant_ddl_truncate-dstore.result
++++ b/mysql-test/suite/recyclebin/r/recyclebin_instant_ddl_truncate-dstore.result
+@@ -98,6 +98,184 @@ db1.tt_1	check	note	The storage engine for the table doesn't support check
+ set rds_recycle_bin_mode=off;
+ truncate table tt_1;
+ drop table tt_1;
++set global rds_recycle_bin_mode=on;
++set rds_recycle_bin_mode=on;
++CREATE TABLE tt_25 (f0 FLOAT, i1_rename INT AUTO_INCREMENT, i2 INTEGER, i3 INT, g4_rename  CHAR(8) GENERATED ALWAYS AS (CONCAT(SUBSTRING(i3,1,1),SUBSTRING(i3,1,3),SUBSTRING(i2,1,4))) STORED, iN149 INT, cN12_rename CHAR(14), iN180_rename INTEGER, cN184 CHAR(18), gN114  VARCHAR(11) GENERATED ALWAYS AS (CONCAT(SUBSTRING(f0,1,4),SUBSTRING(cN184,1,6),SUBSTRING(f0,1,1))), vN259_rename VARCHAR(25), iN91_rename INT, vN92_rename VARCHAR(21), gN186  CHAR(10) GENERATED ALWAYS AS (CONCAT(i2)), vN299_rename VARCHAR(18), tN132 BOOL, tN33_rename BOOL, vN95 VARCHAR(26), tN23 BOOL, vN289_rename VARCHAR(13), tN234_rename BOOL, tN10 BOOL, tN203 BOOL, vN136 VARCHAR(19), vN92 VARCHAR(18), iN105 INT, cN22 CHAR(10), gN79_rename  CHAR(5) GENERATED ALWAYS AS (CONCAT(tN234_rename,tN234_rename,SUBSTRING(cN22,1,1),SUBSTRING(iN91_rename,1,1),tN132)), vN68_rename VARCHAR(17), iN181 INT, cN174 CHAR(29), iN163 INT, iN24 INT, vN111 VARCHAR(24), tN273_rename BOOL, tN95 BOOL, iN88_rename INT, iN226 INT, iN23 INT, vN76 VARCHAR(29), iN172 INTEGER, vN230 VARCHAR(14), iN57 INT, vN103 VARCHAR(29), vN106 VARCHAR(26), iN283 INT(64), cN185 CHAR(19), INDEX tt_25i0(f0, i2 DESC, g4_rename) , INDEX tt_25i1(i1_rename DESC, i2, i3, f0 DESC, g4_rename ASC)  ) ROW_FORMAT=COMPRESSED ENGINE=Dstore;
++Warnings:
++Warning	1681	Integer display width is deprecated and will be removed in a future release.
++Warning	1178	The storage engine for the table doesn't support ROW_FORMAT
++ALTER TABLE tt_25 DROP COLUMN iN163, LOCK=DEFAULT, ALGORITHM=INSTANT;
++Warnings:
++Warning	1178	The storage engine for the table doesn't support ROW_FORMAT
++TRUNCATE TABLE tt_25;
++ALTER TABLE tt_25 ADD COLUMN tN135 BOOL, LOCK=DEFAULT, ALGORITHM=INSTANT;
++Warnings:
++Warning	1178	The storage engine for the table doesn't support ROW_FORMAT
++SHOW CREATE TABLE tt_25;
++Table	Create Table
++tt_25	CREATE TABLE `tt_25` (
++  `f0` float DEFAULT NULL,
++  `i1_rename` int NOT NULL AUTO_INCREMENT,
++  `i2` int DEFAULT NULL,
++  `i3` int DEFAULT NULL,
++  `g4_rename` char(8) GENERATED ALWAYS AS (concat(substr(`i3`,1,1),substr(`i3`,1,3),substr(`i2`,1,4))) STORED,
++  `iN149` int DEFAULT NULL,
++  `cN12_rename` char(14) DEFAULT NULL,
++  `iN180_rename` int DEFAULT NULL,
++  `cN184` char(18) DEFAULT NULL,
++  `gN114` varchar(11) GENERATED ALWAYS AS (concat(substr(`f0`,1,4),substr(`cN184`,1,6),substr(`f0`,1,1))) VIRTUAL,
++  `vN259_rename` varchar(25) DEFAULT NULL,
++  `iN91_rename` int DEFAULT NULL,
++  `vN92_rename` varchar(21) DEFAULT NULL,
++  `gN186` char(10) GENERATED ALWAYS AS (concat(`i2`)) VIRTUAL,
++  `vN299_rename` varchar(18) DEFAULT NULL,
++  `tN132` tinyint(1) DEFAULT NULL,
++  `tN33_rename` tinyint(1) DEFAULT NULL,
++  `vN95` varchar(26) DEFAULT NULL,
++  `tN23` tinyint(1) DEFAULT NULL,
++  `vN289_rename` varchar(13) DEFAULT NULL,
++  `tN234_rename` tinyint(1) DEFAULT NULL,
++  `tN10` tinyint(1) DEFAULT NULL,
++  `tN203` tinyint(1) DEFAULT NULL,
++  `vN136` varchar(19) DEFAULT NULL,
++  `vN92` varchar(18) DEFAULT NULL,
++  `iN105` int DEFAULT NULL,
++  `cN22` char(10) DEFAULT NULL,
++  `gN79_rename` char(5) GENERATED ALWAYS AS (concat(`tN234_rename`,`tN234_rename`,substr(`cN22`,1,1),substr(`iN91_rename`,1,1),`tN132`)) VIRTUAL,
++  `vN68_rename` varchar(17) DEFAULT NULL,
++  `iN181` int DEFAULT NULL,
++  `cN174` char(29) DEFAULT NULL,
++  `iN24` int DEFAULT NULL,
++  `vN111` varchar(24) DEFAULT NULL,
++  `tN273_rename` tinyint(1) DEFAULT NULL,
++  `tN95` tinyint(1) DEFAULT NULL,
++  `iN88_rename` int DEFAULT NULL,
++  `iN226` int DEFAULT NULL,
++  `iN23` int DEFAULT NULL,
++  `vN76` varchar(29) DEFAULT NULL,
++  `iN172` int DEFAULT NULL,
++  `vN230` varchar(14) DEFAULT NULL,
++  `iN57` int DEFAULT NULL,
++  `vN103` varchar(29) DEFAULT NULL,
++  `vN106` varchar(26) DEFAULT NULL,
++  `iN283` int DEFAULT NULL,
++  `cN185` char(19) DEFAULT NULL,
++  `tN135` tinyint(1) DEFAULT NULL,
++  KEY `tt_25i0` (`f0`,`i2` DESC,`g4_rename`),
++  KEY `tt_25i1` (`i1_rename` DESC,`i2`,`i3`,`f0` DESC,`g4_rename`)
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=COMPRESSED
++CREATE TABLE tt_26 (
++f0 FLOAT,
++iN163 INT,
++iN164 INT
++) ENGINE = Dstore;
++INSERT INTO tt_26
++VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
++ALTER TABLE tt_26
++DROP COLUMN iN163,
++LOCK = DEFAULT,
++ALGORITHM = INSTANT;
++INSERT INTO tt_26
++VALUES (4, 4), (5, 5), (6, 6);
++SHOW CREATE TABLE tt_26;
++Table	Create Table
++tt_26	CREATE TABLE `tt_26` (
++  `f0` float DEFAULT NULL,
++  `iN164` int DEFAULT NULL
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++TRUNCATE TABLE tt_26;
++SHOW CREATE TABLE tt_26;
++Table	Create Table
++tt_26	CREATE TABLE `tt_26` (
++  `f0` float DEFAULT NULL,
++  `iN164` int DEFAULT NULL
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++SELECT * FROM tt_26;
++f0	iN164
++INSERT INTO tt_26
++VALUES (7, 7), (8, 8), (9, 9);
++SELECT * FROM tt_26;
++f0	iN164
++7	7
++8	8
++9	9
++ALTER TABLE tt_26
++ADD COLUMN tN136 BOOL AFTER f0,
++LOCK = DEFAULT,
++ALGORITHM = INSTANT;
++SHOW CREATE TABLE tt_26;
++Table	Create Table
++tt_26	CREATE TABLE `tt_26` (
++  `f0` float DEFAULT NULL,
++  `tN136` tinyint(1) DEFAULT NULL,
++  `iN164` int DEFAULT NULL
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++SELECT * FROM tt_26;
++f0	tN136	iN164
++7	NULL	7
++8	NULL	8
++9	NULL	9
++INSERT INTO tt_26
++VALUES (10, 10, 10), (11, 11, 11), (12, 12, 12);
++SELECT * FROM tt_26;
++f0	tN136	iN164
++7	NULL	7
++8	NULL	8
++9	NULL	9
++10	10	10
++11	11	11
++12	12	12
++TRUNCATE TABLE tt_26;
++SHOW CREATE TABLE tt_26;
++Table	Create Table
++tt_26	CREATE TABLE `tt_26` (
++  `f0` float DEFAULT NULL,
++  `tN136` tinyint(1) DEFAULT NULL,
++  `iN164` int DEFAULT NULL
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++SELECT * FROM tt_26;
++f0	tN136	iN164
++INSERT INTO tt_26
++VALUES (13, 13, 13), (14, 14, 14), (15, 15, 15);
++SHOW CREATE TABLE tt_26;
++Table	Create Table
++tt_26	CREATE TABLE `tt_26` (
++  `f0` float DEFAULT NULL,
++  `tN136` tinyint(1) DEFAULT NULL,
++  `iN164` int DEFAULT NULL
++) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++SELECT * FROM tt_26;
++f0	tN136	iN164
++13	13	13
++14	14	14
++15	15	15
++CREATE TABLE tt_28 (
++f0 FLOAT,
++iN163 INT AUTO_INCREMENT PRIMARY KEY,
++iN164 INT
++) ENGINE = InnoDB;
++INSERT INTO tt_28(f0, iN164)
++VALUES (1, 1), (2, 2), (3, 3);
++SELECT * FROM tt_28;
++f0	iN163	iN164
++1	1	1
++2	2	2
++3	3	3
++TRUNCATE TABLE tt_28;
++INSERT INTO tt_28(f0, iN164)
++VALUES (1, 1), (2, 2), (3, 3);
++SELECT * FROM tt_28;
++f0	iN163	iN164
++1	1	1
++2	2	2
++3	3	3
++call dbms_recyclebin.show_tables();
++SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
++__recyclebin__	#	db1	tt_25	#	#
++__recyclebin__	#	db1	tt_26	#	#
++__recyclebin__	#	db1	tt_26	#	#
++__recyclebin__	#	db1	tt_28	#	#
++DROP TABLE tt_25, tt_26, tt_28;
+ drop database db1;
+ drop database __recyclebin__;
+ create database __recyclebin__ default character set utf8mb4;
+diff --git a/mysql-test/suite/recyclebin/r/recyclebin_instant_ddl_truncate.result b/mysql-test/suite/recyclebin/r/recyclebin_instant_ddl_truncate.result
+index 0d5e912d7e0..7d992c2e8e3 100644
+--- a/mysql-test/suite/recyclebin/r/recyclebin_instant_ddl_truncate.result
++++ b/mysql-test/suite/recyclebin/r/recyclebin_instant_ddl_truncate.result
+@@ -126,6 +126,240 @@ db1.tt_324_p	check	status	OK
+ set rds_recycle_bin_mode=off;
+ truncate table tt_1;
+ drop table tt_1, tt_324_p;
++set global rds_recycle_bin_mode=on;
++set rds_recycle_bin_mode=on;
++CREATE TABLE tt_25 (
++f0 FLOAT,
++iN163 INT AUTO_INCREMENT PRIMARY KEY,
++iN164 INT
++) ENGINE = InnoDB;
++INSERT INTO tt_25(f0, iN164)
++VALUES (1, 1), (2, 2), (3, 3);
++SELECT * FROM tt_25;
++f0	iN163	iN164
++1	1	1
++2	2	2
++3	3	3
++TRUNCATE TABLE tt_25;
++INSERT INTO tt_25(f0, iN164)
++VALUES (1, 1), (2, 2), (3, 3);
++SELECT * FROM tt_25;
++f0	iN163	iN164
++1	1	1
++2	2	2
++3	3	3
++CREATE TABLE tt_26 (
++f0 FLOAT,
++iN163 INT,
++iN164 INT
++) ENGINE = InnoDB;
++INSERT INTO tt_26
++VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
++ALTER TABLE tt_26
++DROP COLUMN iN163,
++LOCK = DEFAULT,
++ALGORITHM = INSTANT;
++INSERT INTO tt_26
++VALUES (4, 4), (5, 5), (6, 6);
++SHOW CREATE TABLE tt_26;
++Table	Create Table
++tt_26	CREATE TABLE `tt_26` (
++  `f0` float DEFAULT NULL,
++  `iN164` int DEFAULT NULL
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++TRUNCATE TABLE tt_26;
++SHOW CREATE TABLE tt_26;
++Table	Create Table
++tt_26	CREATE TABLE `tt_26` (
++  `f0` float DEFAULT NULL,
++  `iN164` int DEFAULT NULL
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++SELECT * FROM tt_26;
++f0	iN164
++INSERT INTO tt_26
++VALUES (7, 7), (8, 8), (9, 9);
++SELECT * FROM tt_26;
++f0	iN164
++7	7
++8	8
++9	9
++ALTER TABLE tt_26
++ADD COLUMN tN136 BOOL AFTER f0,
++LOCK = DEFAULT,
++ALGORITHM = INSTANT;
++SHOW CREATE TABLE tt_26;
++Table	Create Table
++tt_26	CREATE TABLE `tt_26` (
++  `f0` float DEFAULT NULL,
++  `tN136` tinyint(1) DEFAULT NULL,
++  `iN164` int DEFAULT NULL
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++SELECT * FROM tt_26;
++f0	tN136	iN164
++7	NULL	7
++8	NULL	8
++9	NULL	9
++INSERT INTO tt_26
++VALUES (10, 10, 10), (11, 11, 11), (12, 12, 12);
++SELECT * FROM tt_26;
++f0	tN136	iN164
++7	NULL	7
++8	NULL	8
++9	NULL	9
++10	10	10
++11	11	11
++12	12	12
++TRUNCATE TABLE tt_26;
++SHOW CREATE TABLE tt_26;
++Table	Create Table
++tt_26	CREATE TABLE `tt_26` (
++  `f0` float DEFAULT NULL,
++  `tN136` tinyint(1) DEFAULT NULL,
++  `iN164` int DEFAULT NULL
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++SELECT * FROM tt_26;
++f0	tN136	iN164
++INSERT INTO tt_26
++VALUES (13, 13, 13), (14, 14, 14), (15, 15, 15);
++SHOW CREATE TABLE tt_26;
++Table	Create Table
++tt_26	CREATE TABLE `tt_26` (
++  `f0` float DEFAULT NULL,
++  `tN136` tinyint(1) DEFAULT NULL,
++  `iN164` int DEFAULT NULL
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++SELECT * FROM tt_26;
++f0	tN136	iN164
++13	13	13
++14	14	14
++15	15	15
++CREATE TABLE tt_28 (
++f0 FLOAT,
++iN163 INT,
++iN164 INT
++) ENGINE=InnoDB
++PARTITION BY HASH(iN163)
++PARTITIONS 4;
++INSERT INTO tt_28
++VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
++ALTER TABLE tt_28 DROP COLUMN f0, LOCK=DEFAULT, ALGORITHM=INSTANT;
++INSERT INTO tt_28
++VALUES (4, 4), (5, 5), (6, 6);
++SHOW CREATE TABLE tt_28;
++Table	Create Table
++tt_28	CREATE TABLE `tt_28` (
++  `iN163` int DEFAULT NULL,
++  `iN164` int DEFAULT NULL
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++/*!50100 PARTITION BY HASH (`iN163`)
++PARTITIONS 4 */
++TRUNCATE TABLE tt_28;
++INSERT INTO tt_28
++VALUES (7, 7), (8, 8), (9, 9);
++SHOW CREATE TABLE tt_28;
++Table	Create Table
++tt_28	CREATE TABLE `tt_28` (
++  `iN163` int DEFAULT NULL,
++  `iN164` int DEFAULT NULL
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++/*!50100 PARTITION BY HASH (`iN163`)
++PARTITIONS 4 */
++SELECT * FROM tt_28;
++iN163	iN164
++8	8
++9	9
++7	7
++ALTER TABLE tt_28 ADD COLUMN tN135 BOOL, LOCK=DEFAULT, ALGORITHM=INSTANT;
++SHOW CREATE TABLE tt_28;
++Table	Create Table
++tt_28	CREATE TABLE `tt_28` (
++  `iN163` int DEFAULT NULL,
++  `iN164` int DEFAULT NULL,
++  `tN135` tinyint(1) DEFAULT NULL
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++/*!50100 PARTITION BY HASH (`iN163`)
++PARTITIONS 4 */
++SELECT * FROM tt_28;
++iN163	iN164	tN135
++8	8	NULL
++9	9	NULL
++7	7	NULL
++TRUNCATE TABLE tt_28;
++INSERT INTO tt_28
++VALUES (10, 10, 10), (11, 11, 11), (12, 12, 12);
++SELECT * FROM tt_28;
++iN163	iN164	tN135
++12	12	12
++10	10	10
++11	11	11
++SHOW CREATE TABLE tt_28;
++Table	Create Table
++tt_28	CREATE TABLE `tt_28` (
++  `iN163` int DEFAULT NULL,
++  `iN164` int DEFAULT NULL,
++  `tN135` tinyint(1) DEFAULT NULL
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++/*!50100 PARTITION BY HASH (`iN163`)
++PARTITIONS 4 */
++TRUNCATE TABLE tt_28;
++SHOW CREATE TABLE tt_28;
++Table	Create Table
++tt_28	CREATE TABLE `tt_28` (
++  `iN163` int DEFAULT NULL,
++  `iN164` int DEFAULT NULL,
++  `tN135` tinyint(1) DEFAULT NULL
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++/*!50100 PARTITION BY HASH (`iN163`)
++PARTITIONS 4 */
++SELECT * FROM tt_28;
++iN163	iN164	tN135
++INSERT INTO tt_28
++VALUES (13, 13, 13), (14, 14, 14), (15, 15, 15);
++SHOW CREATE TABLE tt_28;
++Table	Create Table
++tt_28	CREATE TABLE `tt_28` (
++  `iN163` int DEFAULT NULL,
++  `iN164` int DEFAULT NULL,
++  `tN135` tinyint(1) DEFAULT NULL
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
++/*!50100 PARTITION BY HASH (`iN163`)
++PARTITIONS 4 */
++SELECT * FROM tt_28;
++iN163	iN164	tN135
++13	13	13
++14	14	14
++15	15	15
++CREATE TABLE tt_29 (
++f0 FLOAT,
++iN163 INT AUTO_INCREMENT PRIMARY KEY,
++iN164 INT
++) ENGINE = InnoDB;
++INSERT INTO tt_29(f0, iN164)
++VALUES (1, 1), (2, 2), (3, 3);
++SELECT * FROM tt_29;
++f0	iN163	iN164
++1	1	1
++2	2	2
++3	3	3
++TRUNCATE TABLE tt_29;
++INSERT INTO tt_29(f0, iN164)
++VALUES (1, 1), (2, 2), (3, 3);
++SELECT * FROM tt_29;
++f0	iN163	iN164
++1	1	1
++2	2	2
++3	3	3
++call dbms_recyclebin.show_tables();
++SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
++__recyclebin__	#	db1	tt_25	#	#
++__recyclebin__	#	db1	tt_26	#	#
++__recyclebin__	#	db1	tt_26	#	#
++__recyclebin__	#	db1	tt_28	#	#
++__recyclebin__	#	db1	tt_28	#	#
++__recyclebin__	#	db1	tt_28	#	#
++__recyclebin__	#	db1	tt_29	#	#
++__recyclebin__	#	db1	tt_324_p	#	#
++DROP TABLE tt_25, tt_26, tt_28, tt_29;
+ drop database db1;
+ drop database __recyclebin__;
+ create database __recyclebin__ default character set utf8mb4;
+diff --git a/mysql-test/suite/recyclebin/t/recyclebin_instant_ddl_truncate-dstore.test b/mysql-test/suite/recyclebin/t/recyclebin_instant_ddl_truncate-dstore.test
+index 081a7883330..81067cf5217 100644
+--- a/mysql-test/suite/recyclebin/t/recyclebin_instant_ddl_truncate-dstore.test
++++ b/mysql-test/suite/recyclebin/t/recyclebin_instant_ddl_truncate-dstore.test
+@@ -1,4 +1,5 @@
+ --source include/have_only_dstore.inc
++--source include/have_debug.inc
+ #
+ # Test for recycle func of truncate after instant ddl
+ #
+@@ -81,6 +82,73 @@ check table tt_1;
+ set rds_recycle_bin_mode=off;
+ truncate table tt_1;
+ drop table tt_1;
++
++set global rds_recycle_bin_mode=on;
++set rds_recycle_bin_mode=on;
++CREATE TABLE tt_25 (f0 FLOAT, i1_rename INT AUTO_INCREMENT, i2 INTEGER, i3 INT, g4_rename  CHAR(8) GENERATED ALWAYS AS (CONCAT(SUBSTRING(i3,1,1),SUBSTRING(i3,1,3),SUBSTRING(i2,1,4))) STORED, iN149 INT, cN12_rename CHAR(14), iN180_rename INTEGER, cN184 CHAR(18), gN114  VARCHAR(11) GENERATED ALWAYS AS (CONCAT(SUBSTRING(f0,1,4),SUBSTRING(cN184,1,6),SUBSTRING(f0,1,1))), vN259_rename VARCHAR(25), iN91_rename INT, vN92_rename VARCHAR(21), gN186  CHAR(10) GENERATED ALWAYS AS (CONCAT(i2)), vN299_rename VARCHAR(18), tN132 BOOL, tN33_rename BOOL, vN95 VARCHAR(26), tN23 BOOL, vN289_rename VARCHAR(13), tN234_rename BOOL, tN10 BOOL, tN203 BOOL, vN136 VARCHAR(19), vN92 VARCHAR(18), iN105 INT, cN22 CHAR(10), gN79_rename  CHAR(5) GENERATED ALWAYS AS (CONCAT(tN234_rename,tN234_rename,SUBSTRING(cN22,1,1),SUBSTRING(iN91_rename,1,1),tN132)), vN68_rename VARCHAR(17), iN181 INT, cN174 CHAR(29), iN163 INT, iN24 INT, vN111 VARCHAR(24), tN273_rename BOOL, tN95 BOOL, iN88_rename INT, iN226 INT, iN23 INT, vN76 VARCHAR(29), iN172 INTEGER, vN230 VARCHAR(14), iN57 INT, vN103 VARCHAR(29), vN106 VARCHAR(26), iN283 INT(64), cN185 CHAR(19), INDEX tt_25i0(f0, i2 DESC, g4_rename) , INDEX tt_25i1(i1_rename DESC, i2, i3, f0 DESC, g4_rename ASC)  ) ROW_FORMAT=COMPRESSED ENGINE=Dstore;
++ALTER TABLE tt_25 DROP COLUMN iN163, LOCK=DEFAULT, ALGORITHM=INSTANT;
++TRUNCATE TABLE tt_25;
++ALTER TABLE tt_25 ADD COLUMN tN135 BOOL, LOCK=DEFAULT, ALGORITHM=INSTANT;
++SHOW CREATE TABLE tt_25;
++
++CREATE TABLE tt_26 (
++    f0 FLOAT,
++    iN163 INT,
++    iN164 INT
++) ENGINE = Dstore;
++INSERT INTO tt_26
++VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
++ALTER TABLE tt_26
++    DROP COLUMN iN163,
++    LOCK = DEFAULT,
++    ALGORITHM = INSTANT;
++INSERT INTO tt_26
++VALUES (4, 4), (5, 5), (6, 6);
++SHOW CREATE TABLE tt_26;
++
++TRUNCATE TABLE tt_26;
++SHOW CREATE TABLE tt_26;
++SELECT * FROM tt_26;
++INSERT INTO tt_26
++VALUES (7, 7), (8, 8), (9, 9);
++SELECT * FROM tt_26;
++
++ALTER TABLE tt_26
++    ADD COLUMN tN136 BOOL AFTER f0,
++    LOCK = DEFAULT,
++    ALGORITHM = INSTANT;
++SHOW CREATE TABLE tt_26;
++SELECT * FROM tt_26;
++INSERT INTO tt_26
++VALUES (10, 10, 10), (11, 11, 11), (12, 12, 12);
++SELECT * FROM tt_26;
++
++TRUNCATE TABLE tt_26;
++SHOW CREATE TABLE tt_26;
++SELECT * FROM tt_26;
++INSERT INTO tt_26
++VALUES (13, 13, 13), (14, 14, 14), (15, 15, 15);
++SHOW CREATE TABLE tt_26;
++SELECT * FROM tt_26;
++
++CREATE TABLE tt_28 (
++    f0 FLOAT,
++    iN163 INT AUTO_INCREMENT PRIMARY KEY,
++    iN164 INT
++) ENGINE = InnoDB;
++INSERT INTO tt_28(f0, iN164)
++VALUES (1, 1), (2, 2), (3, 3);
++SELECT * FROM tt_28;
++TRUNCATE TABLE tt_28;
++INSERT INTO tt_28(f0, iN164)
++VALUES (1, 1), (2, 2), (3, 3);
++SELECT * FROM tt_28;
++
++--replace_column 2 # 5 # 6 #
++call dbms_recyclebin.show_tables();
++
++DROP TABLE tt_25, tt_26, tt_28;
++
+ drop database db1;
+ drop database __recyclebin__;
+ create database __recyclebin__ default character set utf8mb4;
+diff --git a/mysql-test/suite/recyclebin/t/recyclebin_instant_ddl_truncate.test b/mysql-test/suite/recyclebin/t/recyclebin_instant_ddl_truncate.test
+index fcfe1f0eb4b..7e0c5609322 100644
+--- a/mysql-test/suite/recyclebin/t/recyclebin_instant_ddl_truncate.test
++++ b/mysql-test/suite/recyclebin/t/recyclebin_instant_ddl_truncate.test
+@@ -101,6 +101,114 @@ check table tt_324_p;
+ set rds_recycle_bin_mode=off;
+ truncate table tt_1;
+ drop table tt_1, tt_324_p;
++
++set global rds_recycle_bin_mode=on;
++set rds_recycle_bin_mode=on;
++CREATE TABLE tt_25 (
++    f0 FLOAT,
++    iN163 INT AUTO_INCREMENT PRIMARY KEY,
++    iN164 INT
++) ENGINE = InnoDB;
++INSERT INTO tt_25(f0, iN164)
++VALUES (1, 1), (2, 2), (3, 3);
++SELECT * FROM tt_25;
++TRUNCATE TABLE tt_25;
++INSERT INTO tt_25(f0, iN164)
++VALUES (1, 1), (2, 2), (3, 3);
++SELECT * FROM tt_25;
++
++CREATE TABLE tt_26 (
++    f0 FLOAT,
++    iN163 INT,
++    iN164 INT
++) ENGINE = InnoDB;
++INSERT INTO tt_26
++VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
++ALTER TABLE tt_26
++    DROP COLUMN iN163,
++    LOCK = DEFAULT,
++    ALGORITHM = INSTANT;
++INSERT INTO tt_26
++VALUES (4, 4), (5, 5), (6, 6);
++SHOW CREATE TABLE tt_26;
++
++TRUNCATE TABLE tt_26;
++SHOW CREATE TABLE tt_26;
++SELECT * FROM tt_26;
++INSERT INTO tt_26
++VALUES (7, 7), (8, 8), (9, 9);
++SELECT * FROM tt_26;
++
++ALTER TABLE tt_26
++    ADD COLUMN tN136 BOOL AFTER f0,
++    LOCK = DEFAULT,
++    ALGORITHM = INSTANT;
++SHOW CREATE TABLE tt_26;
++SELECT * FROM tt_26;
++INSERT INTO tt_26
++VALUES (10, 10, 10), (11, 11, 11), (12, 12, 12);
++SELECT * FROM tt_26;
++
++TRUNCATE TABLE tt_26;
++SHOW CREATE TABLE tt_26;
++SELECT * FROM tt_26;
++INSERT INTO tt_26
++VALUES (13, 13, 13), (14, 14, 14), (15, 15, 15);
++SHOW CREATE TABLE tt_26;
++SELECT * FROM tt_26;
++
++CREATE TABLE tt_28 (
++    f0 FLOAT,
++    iN163 INT,
++    iN164 INT
++) ENGINE=InnoDB
++PARTITION BY HASH(iN163)
++PARTITIONS 4;
++INSERT INTO tt_28
++VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
++ALTER TABLE tt_28 DROP COLUMN f0, LOCK=DEFAULT, ALGORITHM=INSTANT;
++INSERT INTO tt_28
++VALUES (4, 4), (5, 5), (6, 6);
++SHOW CREATE TABLE tt_28;
++TRUNCATE TABLE tt_28;
++INSERT INTO tt_28
++VALUES (7, 7), (8, 8), (9, 9);
++SHOW CREATE TABLE tt_28;
++SELECT * FROM tt_28;
++ALTER TABLE tt_28 ADD COLUMN tN135 BOOL, LOCK=DEFAULT, ALGORITHM=INSTANT;
++SHOW CREATE TABLE tt_28;
++SELECT * FROM tt_28;
++TRUNCATE TABLE tt_28;
++INSERT INTO tt_28
++VALUES (10, 10, 10), (11, 11, 11), (12, 12, 12);
++SELECT * FROM tt_28;
++SHOW CREATE TABLE tt_28;
++TRUNCATE TABLE tt_28;
++SHOW CREATE TABLE tt_28;
++SELECT * FROM tt_28;
++INSERT INTO tt_28
++VALUES (13, 13, 13), (14, 14, 14), (15, 15, 15);
++SHOW CREATE TABLE tt_28;
++SELECT * FROM tt_28;
++
++CREATE TABLE tt_29 (
++    f0 FLOAT,
++    iN163 INT AUTO_INCREMENT PRIMARY KEY,
++    iN164 INT
++) ENGINE = InnoDB;
++INSERT INTO tt_29(f0, iN164)
++VALUES (1, 1), (2, 2), (3, 3);
++SELECT * FROM tt_29;
++TRUNCATE TABLE tt_29;
++INSERT INTO tt_29(f0, iN164)
++VALUES (1, 1), (2, 2), (3, 3);
++SELECT * FROM tt_29;
++
++--replace_column 2 # 5 # 6 #
++call dbms_recyclebin.show_tables();
++
++DROP TABLE tt_25, tt_26, tt_28, tt_29;
++
+ drop database db1;
+ drop database __recyclebin__;
+ create database __recyclebin__ default character set utf8mb4;
+diff --git a/sql/dd/collection.cc b/sql/dd/collection.cc
+index 044905dc931..745983724ee 100644
+--- a/sql/dd/collection.cc
++++ b/sql/dd/collection.cc
+@@ -107,6 +107,21 @@ void Collection<T>::remove(typename Collection<T>::impl_type *item) {
+   }
+ }
+ 
++template <typename T>
++void Collection<T>::recycle_bin_remove(
++    typename Collection<T>::impl_type *item) {
++  if (std::find(m_items.begin(), m_items.end(), item) != m_items.end()) {
++    /* When the recycle bin is enabled and the create table is called for
++    the TRUNCATE TABLE operation, columns have not been stored in the data
++    dictionary yet. Therefore, there is no need to temporarily store the
++    deleted columns in m_removed_items. */
++    m_items.erase(std::remove(m_items.begin(), m_items.end(), item),
++                  m_items.end());
++
++    renumerate_items();
++  }
++}
++
+ template <typename T>
+ typename Collection<T>::iterator Collection<T>::find(const impl_type *item) {
+   // Find the element and prepare iterator pointing to found element.
+@@ -498,6 +513,7 @@ template void Collection<Trigger *>::clear_removed_items();
+ template void Collection<Check_constraint *>::clear_removed_items();
+ 
+ template void Collection<Column *>::remove(Column_impl *);
++template void Collection<Column *>::recycle_bin_remove(Column_impl *);
+ template void Collection<Column_type_element *>::remove(
+     Column_type_element_impl *);
+ template void Collection<Foreign_key *>::remove(Foreign_key_impl *);
+diff --git a/sql/dd/collection.h b/sql/dd/collection.h
+index 0fb20c60610..e596b1b7877 100644
+--- a/sql/dd/collection.h
++++ b/sql/dd/collection.h
+@@ -182,6 +182,8 @@ class Collection {
+ 
+   void remove(impl_type *item);
+ 
++  void recycle_bin_remove(impl_type *item);
++
+   /**
+     Remove all items and move it to m_removed_items items.
+   */
+diff --git a/sql/dd/impl/types/abstract_table_impl.cc b/sql/dd/impl/types/abstract_table_impl.cc
+index 1550d63a75e..3ae2e0cc1e8 100644
+--- a/sql/dd/impl/types/abstract_table_impl.cc
++++ b/sql/dd/impl/types/abstract_table_impl.cc
+@@ -286,6 +286,18 @@ bool Abstract_table_impl::drop_column(const String_type &name) {
+   return false;
+ }
+ 
++bool Abstract_table_impl::recycle_bin_drop_column(const String_type &name) {
++  for (Column *c : m_columns) {
++    if (my_strcasecmp(system_charset_info, name.c_str(), c->name().c_str()) ==
++        0) {
++      m_columns.recycle_bin_remove(down_cast<Column_impl *>(c));
++      return true;
++    }
++  }
++
++  return false;
++}
++
+ ///////////////////////////////////////////////////////////////////////////
+ 
+ Column *Abstract_table_impl::get_column(Object_id column_id) {
+diff --git a/sql/dd/impl/types/abstract_table_impl.h b/sql/dd/impl/types/abstract_table_impl.h
+index 5bbc9a33651..ec277482434 100644
+--- a/sql/dd/impl/types/abstract_table_impl.h
++++ b/sql/dd/impl/types/abstract_table_impl.h
+@@ -158,6 +158,7 @@ class Abstract_table_impl : public Entity_object_impl,
+ 
+   Column *add_column() override;
+   bool drop_column(const String_type &name) override;
++  bool recycle_bin_drop_column(const String_type &name) override;
+ 
+   const Column_collection &columns() const override { return m_columns; }
+ 
+diff --git a/sql/dd/impl/types/table_impl.h b/sql/dd/impl/types/table_impl.h
+index 7b14d1ce2e6..10cdd1c9ac1 100644
+--- a/sql/dd/impl/types/table_impl.h
++++ b/sql/dd/impl/types/table_impl.h
+@@ -469,6 +469,9 @@ class Table_impl : public Abstract_table_impl, virtual public Table {
+   bool drop_column(const String_type &name) override {
+     return Abstract_table_impl::drop_column(name);
+   }
++  bool recycle_bin_drop_column(const String_type &name) override {
++    return Abstract_table_impl::recycle_bin_drop_column(name);
++  }
+   const Column_collection &columns() const override {
+     return Abstract_table_impl::columns();
+   }
+diff --git a/sql/dd/types/abstract_table.h b/sql/dd/types/abstract_table.h
+index 05c28c2bc5a..6e4ed8ab3f0 100644
+--- a/sql/dd/types/abstract_table.h
++++ b/sql/dd/types/abstract_table.h
+@@ -168,6 +168,7 @@ class Abstract_table : virtual public Entity_object {
+ 
+   virtual Column *add_column() = 0;
+   virtual bool drop_column(const String_type &name) = 0;
++  virtual bool recycle_bin_drop_column(const String_type &name) = 0;
+ 
+   virtual const Column_collection &columns() const = 0;
+ 
+diff --git a/storage/dstore/ddl/cde_dd_table.cc b/storage/dstore/ddl/cde_dd_table.cc
+index 4b05f4d61bd..ab56d2eb542 100644
+--- a/storage/dstore/ddl/cde_dd_table.cc
++++ b/storage/dstore/ddl/cde_dd_table.cc
+@@ -1698,17 +1698,24 @@ bool DDTableHasRowVersions(const dd::Table &table) {
+   return hasRowVersion;
+ }
+ 
+-void DDClearInstantTable(dd::Table &dd_table) {
++int32_t DDClearInstantTable(dd::Table &dd_table) {
++  int32_t ret = CDE_OK;
+   auto columns = dd_table.columns();
+   if (columns == nullptr) {
+-    return;
++    return HA_ERR_GENERIC;
+   }
++  std::vector<std::string> colsToDrop;
+   for (auto col : *columns) {
+     auto fn = [&](const char *s) {
+       if (col->se_private_data().exists(s)) {
+         col->se_private_data().remove(s);
+       }
+     };
++    /* Possibly an INSTANT ADD/DROP column with a version */
++    if (DDColumnIsDropped(col)) {
++      colsToDrop.push_back(col->name().c_str());
++      continue;
++    }
+ 
+     fn(ddColumnKeyStrings[DD_INSTANT_COLUMN_DEFAULT_NULL]);
+     fn(ddColumnKeyStrings[DD_INSTANT_COLUMN_DEFAULT]);
+@@ -1716,6 +1723,24 @@ void DDClearInstantTable(dd::Table &dd_table) {
+     fn(ddColumnKeyStrings[DD_INSTANT_VERSION_DROPPED]);
+     fn(ddColumnKeyStrings[DD_INSTANT_PHYSICAL_POS]);
+   }
++
++  if (!colsToDrop.empty()) {
++    for (auto colName : colsToDrop) {
++      if (!dd_table.recycle_bin_drop_column(colName.c_str())) {
++        CDE_LOG_ERROR(
++            "Failed to clear instant drop column metadata for table "
++            "%s",
++            dd_table.name().c_str());
++        my_error(
++            ER_INTERNAL_ERROR, MYF(0),
++            "Failed to truncate table. You may drop and re-create this table.");
++        ret = HA_ERR_GENERIC;
++      }
++      CDE_ASSERT_DEBUG(ret == CDE_OK);
++    }
++  }
++  colsToDrop.clear();
++  return ret;
+ }
+ 
+ void CdeGetDstoreTableDDInfo(String *packet, const dd::Table *table_obj) {
+diff --git a/storage/dstore/ddl/cde_dd_table.h b/storage/dstore/ddl/cde_dd_table.h
+index 6f93908d0fc..6092b9815c2 100644
+--- a/storage/dstore/ddl/cde_dd_table.h
++++ b/storage/dstore/ddl/cde_dd_table.h
+@@ -377,8 +377,9 @@ bool DDTableHasRowVersions(const dd::Table &table);
+ 
+ /** Clear the instant ADD COLUMN information of a table
+ @param[in,out]  dd_table        dd::Table
++@return CDE_OK if success else false.
+ */
+-void DDClearInstantTable(dd::Table &dd_table);
++int32_t DDClearInstantTable(dd::Table &dd_table);
+ 
+ /**
+ Get the number of columns being added using ALTER TABLE.
+diff --git a/storage/dstore/handler/ha_cde.cc b/storage/dstore/handler/ha_cde.cc
+index d1b93adea42..3eec2029ef4 100644
+--- a/storage/dstore/handler/ha_cde.cc
++++ b/storage/dstore/handler/ha_cde.cc
+@@ -2558,10 +2558,12 @@ int ha_cde::create(const char *name, TABLE *form, HA_CREATE_INFO *create_info,
+         CdeDdTableSetSePrivateDataAutoInc(table_def, 0);
+       }
+       if (DDTableHasRowVersions(*table_def)) {
+-        DDClearInstantTable(*table_def);
++        ret = DDClearInstantTable(*table_def);
+       }
+     }
+-    ret = CdeCreateTable(thd, name, form, create_info, table_def);
++    if (!ret) {
++      ret = CdeCreateTable(thd, name, form, create_info, table_def);
++    }
+   }
+ 
+   if (need_ddl_info_sql(thd) && !ret) {
+diff --git a/storage/innobase/dict/dict0dd.cc b/storage/innobase/dict/dict0dd.cc
+index d6ef9570c7b..1a4bb61ac4c 100644
+--- a/storage/innobase/dict/dict0dd.cc
++++ b/storage/innobase/dict/dict0dd.cc
+@@ -1827,8 +1827,10 @@ void dd_part_adjust_table_id(dd::Table *new_table) {
+ /** Clear the instant ADD COLUMN information of a table
+ @param[in,out]  dd_table        dd::Table
+ @param[in]      clear_version   true if version metadata is to be cleared
++@param[in]      is_recycle      true if is recycle bin operation
+ @return DB_SUCCESS or error code */
+-dberr_t dd_clear_instant_table(dd::Table &dd_table, bool clear_version) {
++dberr_t dd_clear_instant_table(dd::Table &dd_table, bool clear_version,
++                               bool is_recycle) {
+   dberr_t err = DB_SUCCESS;
+   dd_table.se_private_data().remove(
+       dd_table_key_strings[DD_TABLE_INSTANT_COLS]);
+@@ -1867,7 +1869,7 @@ dberr_t dd_clear_instant_table(dd::Table &dd_table, bool clear_version) {
+ 
+   if (!cols_to_drop.empty()) {
+     for (auto col_name : cols_to_drop) {
+-      if (!dd_drop_hidden_column(&dd_table, col_name.c_str())) {
++      if (!dd_drop_hidden_column(&dd_table, col_name.c_str(), is_recycle)) {
+         ib::error(ER_IB_MSG_CLEAR_INSTANT_DROP_COLUMN_METADATA)
+             << dd_table.name().c_str();
+         my_error(
+diff --git a/storage/innobase/handler/ha_innodb.cc b/storage/innobase/handler/ha_innodb.cc
+index 9efc8f0e949..3f1e22a5001 100644
+--- a/storage/innobase/handler/ha_innodb.cc
++++ b/storage/innobase/handler/ha_innodb.cc
+@@ -15187,7 +15187,7 @@ int ha_innobase::create(const char *name, TABLE *form,
+       dd_set_autoinc(table_def->se_private_data(), 0);
+     }
+     if (dd_table_has_instant_cols(*table_def)) {
+-      dberr_t ret = dd_clear_instant_table(*table_def, true);
++      dberr_t ret = dd_clear_instant_table(*table_def, true, true);
+       if (ret != DB_SUCCESS) {
+         error = HA_ERR_GENERIC;
+       }
+diff --git a/storage/innobase/handler/ha_innopart.cc b/storage/innobase/handler/ha_innopart.cc
+index 9606f883e64..1907c21cddf 100644
+--- a/storage/innobase/handler/ha_innopart.cc
++++ b/storage/innobase/handler/ha_innopart.cc
+@@ -2620,7 +2620,7 @@ int ha_innopart::create(const char *name, TABLE *form,
+         }
+       }
+ 
+-      dberr_t ret = dd_clear_instant_table(*table_def, true);
++      dberr_t ret = dd_clear_instant_table(*table_def, true, true);
+       if (ret != DB_SUCCESS) {
+         error = HA_ERR_GENERIC;
+       }
+diff --git a/storage/innobase/include/dict0dd.h b/storage/innobase/include/dict0dd.h
+index f0e1845aa41..b9525873c3f 100644
+--- a/storage/innobase/include/dict0dd.h
++++ b/storage/innobase/include/dict0dd.h
+@@ -813,8 +813,10 @@ bool dd_add_instant_columns(const dd::Table *old_dd_table,
+ /** Clear the instant ADD COLUMN information of a table
+ @param[in,out]  dd_table        dd::Table
+ @param[in]      clear_version   true if version metadata is to be cleared
++@param[in]      is_recycle      true if is recycle bin operation
+ @return DB_SUCCESS or error code */
+-dberr_t dd_clear_instant_table(dd::Table &dd_table, bool clear_version);
++dberr_t dd_clear_instant_table(dd::Table &dd_table, bool clear_version,
++                               bool is_recycle = false);
+ 
+ /** Clear the instant ADD COLUMN information of a partition, to make it
+ as a normal partition
+diff --git a/storage/innobase/include/dict0dd.ic b/storage/innobase/include/dict0dd.ic
+index 5a5693c874b..557ddffb2ee 100644
+--- a/storage/innobase/include/dict0dd.ic
++++ b/storage/innobase/include/dict0dd.ic
+@@ -106,12 +106,16 @@ inline dd::Column *dd_add_hidden_column(dd::Table *dd_table, const char *name,
+   return (col);
+ }
+ 
+-inline bool dd_drop_hidden_column(dd::Table *dd_table, const char *name) {
++inline bool dd_drop_hidden_column(dd::Table *dd_table, const char *name,
++                                  bool is_recycle) {
+ #ifdef UNIV_DEBUG
+   const dd::Column *col = dd_find_column(dd_table, name);
+   ut_ad(col != nullptr);
+   ut_ad(dd_column_is_dropped(col));
+ #endif
++  if (is_recycle) {
++    return dd_table->recycle_bin_drop_column(name);
++  }
+   return dd_table->drop_column(name);
+ }
+ 
+-- 
+2.23.0
+

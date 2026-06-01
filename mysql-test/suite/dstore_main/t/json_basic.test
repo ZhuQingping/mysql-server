@@ -1,0 +1,134 @@
+# ==== Purpose ====
+# 
+# Testing the basic operations and boundary values of the josn data types.
+# 
+--source include/have_only_dstore.inc
+use test;
+--echo # 
+--echo # 1. JSON generation column test.
+--echo # 
+CREATE TABLE t (
+    j JSON,
+    stored_gc JSON GENERATED ALWAYS AS (JSON_EXTRACT(j, '$[0]')) STORED,
+    virtual_gc JSON GENERATED ALWAYS AS (JSON_EXTRACT(j, '$[1]')) VIRTUAL
+);
+INSERT INTO t(j) VALUES
+    (JSON_ARRAY(1, 2)),
+    (JSON_ARRAY(2, 1)),
+    (JSON_ARRAY(10, 10)),
+    (JSON_ARRAY(5));
+
+SELECT * FROM t ORDER BY stored_gc;
+SELECT * FROM t ORDER BY virtual_gc;
+
+UPDATE t
+SET j = JSON_ARRAY(100, 200)
+WHERE stored_gc = JSON_EXTRACT(j, '$[0]') AND virtual_gc = JSON_EXTRACT(j, '$[1]')
+LIMIT 1;
+
+SELECT * FROM t ORDER BY stored_gc;
+
+UPDATE t
+SET j = JSON_ARRAY(50, 50)
+WHERE stored_gc = JSON_EXTRACT(j, '$[0]') AND virtual_gc = JSON_EXTRACT(j, '$[1]')
+LIMIT 1;
+
+SELECT * FROM t ORDER BY virtual_gc;
+
+UPDATE t
+SET j = JSON_ARRAY(
+    JSON_UNQUOTE(JSON_EXTRACT(j, '$[0]')) * 2, 
+    JSON_UNQUOTE(JSON_EXTRACT(j, '$[1]'))
+);
+
+SELECT * FROM t ORDER BY stored_gc;
+SELECT * FROM t ORDER BY virtual_gc;
+drop table t;
+
+--echo # 
+--echo # 2. JSON column exceeds length limit.
+--echo # 
+SET @@global.max_allowed_packet = 1073741824;
+--connect (newconn, localhost, root,,)
+CREATE TABLE t1 (i INT, j JSON) CHARSET utf8mb4;
+INSERT INTO t1 VALUES (1, '{"a": 2}');
+--error ER_CHECK_NOT_IMPLEMENTED
+INSERT INTO t1 VALUES (100, CONCAT('{"',REPEAT('a',65535),'":"',REPEAT('a',1069547497),'"}'));
+UPDATE t1 SET j = CONCAT('{"', REPEAT('a', 64 * 1024 - 1), '":123}') WHERE i = 1;
+drop table t1;
+connection default;
+set @@global.max_allowed_packet=default;
+
+--echo # 
+--echo # 3. The persistence of json column.
+--echo # 
+CREATE TABLE json_test (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    json_col JSON
+) engine=Dstore;
+
+INSERT INTO json_test (json_col) VALUES (NULL);
+INSERT INTO json_test (json_col) VALUES ('{"a": 2}');
+INSERT INTO json_test (json_col) VALUES ('[1,2]');
+INSERT INTO json_test (json_col) VALUES ('{"a":"b", "c":"d","ab":"abc", "bc": ["x", "y"]}');
+INSERT INTO json_test (json_col) VALUES ('["here", ["I", "am"], "!!!"]');
+INSERT INTO json_test (json_col) VALUES ('"scalar string"');
+INSERT INTO json_test (json_col) VALUES ('true');
+INSERT INTO json_test (json_col) VALUES ('false');
+INSERT INTO json_test (json_col) VALUES ('null');
+INSERT INTO json_test (json_col) VALUES ('-1');
+INSERT INTO json_test (json_col) VALUES (CAST(CAST(1 AS UNSIGNED) AS JSON));
+SELECT * FROM json_test;
+
+# Restart mysqld.
+--source include/restart_mysqld.inc
+SELECT * FROM json_test;
+
+# Add blob col and restart mysqld.
+--error ER_DSTORE_INSTANT_ADD_NOT_SUPPORTED_BLOB
+ALTER TABLE json_test ADD COLUMN json_col2 JSON, ALGORITHM=INSTANT;
+ALTER TABLE json_test ADD COLUMN json_col2 JSON, ALGORITHM=INPLACE;
+ALTER TABLE json_test ADD COLUMN json_col3 JSON, ALGORITHM=COPY;
+show create table json_test;
+--source include/restart_mysqld.inc
+SELECT * FROM json_test;
+
+# Add varchar col and restart mysqld.
+ALTER TABLE json_test ADD COLUMN (varchar_col VARCHAR(255));
+show create table json_test;
+--source include/restart_mysqld.inc
+SELECT * FROM json_test;
+
+# Modify json col and restart mysqld.
+ALTER TABLE json_test MODIFY COLUMN json_col2 BLOB;
+show create table json_test;
+--source include/restart_mysqld.inc
+SELECT * FROM json_test;
+
+# Drop blob col and restart mysqld.
+ALTER TABLE json_test DROP COLUMN json_col2;
+show create table json_test;
+--source include/restart_mysqld.inc
+SELECT * FROM json_test;
+show create table json_test;
+
+# Rename table and restart mysqld.
+RENAME TABLE json_test TO json_test_new;
+--source include/restart_mysqld.inc
+SELECT * FROM json_test_new;
+
+# Cretae table like and restart mysqld.
+CREATE TABLE json_test_new2 LIKE json_test_new;
+--source include/restart_mysqld.inc
+SELECT * FROM json_test_new2;
+
+# Truncate table and restart mysqld.
+TRUNCATE TABLE json_test_new2;
+--source include/restart_mysqld.inc
+SELECT * FROM json_test_new2;
+
+# Modify blob col and restart mysqld.
+DROP TABLE json_test_new2;
+--source include/restart_mysqld.inc
+show tables;
+DROP TABLE json_test_new;

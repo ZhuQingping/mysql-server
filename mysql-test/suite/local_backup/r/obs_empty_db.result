@@ -1,0 +1,43 @@
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("OBS error occur when get object meta");
+call mtr.add_suppression("OBS get object metadata fail");
+CREATE DATABASE db1;
+CREATE DATABASE db2;
+USE db1;
+CREATE TABLE t1(a int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+a
+1
+SET GLOBAL rds_lb_obs_max_connected_time = 2147483647;
+Warnings:
+Warning	1292	Truncated incorrect rds_lb_obs_max_connected_time value: '2147483647'
+SHOW VARIABLES LIKE 'rds_lb_obs_max_connected_time';
+Variable_name	Value
+rds_lb_obs_max_connected_time	604800
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+INSERT INTO t1 VALUES(2);
+SELECT * FROM t1 order by a;
+a
+1
+2
+# Shut server down.
+# Restart the server.
+# restart: --dstore_open_restore_mode=on
+USE db1;
+SELECT * FROM t1 order by a;
+a
+1
+DROP DATABASE db2;
+SET GLOBAL rds_lb_obs_max_connected_time = 0;
+DROP DATABASE db1;

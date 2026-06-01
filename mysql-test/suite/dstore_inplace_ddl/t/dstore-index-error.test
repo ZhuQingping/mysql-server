@@ -1,0 +1,107 @@
+--source include/have_only_dstore.inc
+
+# This test aims at test the abnormal case of the dstore index related operation
+
+# Test 2. rename index fail
+CREATE TABLE t1 (c1 int, c2 char);
+INSERT INTO t1 VALUES (1, '1'), (2, '2'), (3, '3'), (4, '4');
+
+ALTER TABLE t1 ADD INDEX keyc1(c1);
+ALTER TABLE t1 ADD INDEX keyc2(c2);
+
+SET DEBUG = "+d, inplace_rename_index_error";
+--error ER_KEY_DOES_NOT_EXITS
+ALTER TABLE t1 DROP INDEX keyc1, RENAME INDEX keyc2 TO keyc2_bak;
+SET DEBUG = "-d, inplace_rename_index_error";
+
+ALTER TABLE t1 DROP INDEX keyc1, RENAME INDEX keyc2 TO keyc2_bak;
+SHOW CREATE TABLE t1;
+DROP TABLE t1;
+
+# Test 3. BUG2025122249809 Error release dict stats write lock
+
+SET GLOBAL dstore_stats_persistent = OFF;
+
+CREATE TABLE t1 (c1 int, c2 char);
+INSERT INTO t1 VALUES (1, '1'), (2, '2'), (3, '3'), (4, '4');
+
+ALTER TABLE t1 ADD INDEX key2(c1);
+
+ALTER TABLE t1 DROP INDEX key2;
+
+--connect(con1,localhost,root)
+--connection con1
+ANALYZE TABLE t1;
+--disconnect con1
+
+--connection default
+SET GLOBAL dstore_stats_persistent = ON;
+DROP TABLE t1;
+
+# Test 4. BUG2026010428811 Enrich inplace ddl error message
+call mtr.add_suppression("Dstore inplace alter table fail due to out of resources, error code.*");
+call mtr.add_suppression("Dstore inplace alter table fail due to tuple sort error, error code.*");
+call mtr.add_suppression("Dstore inplace alter table fail due to caculate expression value, error code.*");
+call mtr.add_suppression("Dstore inplace alter table fail, error code is.*");
+CREATE TABLE t1 (c1 int, c2 char);
+INSERT INTO t1 VALUES (1, '1'), (2, '2'), (3, '3'), (4, '4');
+
+SET DEBUG = '+d,dstore_build_index_fail';
+SET DEBUG = "+d,dstore_inplace_tuple_sort_err";
+SET DEBUG = "+d,dstore_inplace_tuple_sort_err";
+--error ER_DSTORE_INPLACE_GENERIC_ERR
+ALTER TABLE t1 ADD INDEX key2(c1);
+SET DEBUG = "-d,dstore_inplace_tuple_sort_err";
+
+SET DEBUG = "+d,dstore_inplace_get_expr_val_err";
+--error ER_DSTORE_INPLACE_GENERIC_ERR
+ALTER TABLE t1 ADD INDEX key2(c1);
+SET DEBUG = "-d,dstore_inplace_get_expr_val_err";
+
+SET DEBUG = "+d,dstore_inplace_out_of_resource_err";
+--error ER_OUT_OF_RESOURCES
+ALTER TABLE t1 ADD INDEX key2(c1);
+SET DEBUG = "-d,dstore_inplace_out_of_resource_err";
+
+SET DEBUG = "+d,dstore_inplace_generic_err";
+--error ER_DSTORE_INPLACE_GENERIC_ERR
+ALTER TABLE t1 ADD INDEX key2(c1);
+SET DEBUG = "-d,dstore_inplace_generic_err";
+
+DROP TABLE t1;
+
+# Test 5. BUG2026012253909 Send Interrupt before alloc segement gets wrong error code
+
+call mtr.add_suppression("insert dstore heap tuple fail");
+call mtr.add_suppression("Heap insert failed at WriteRecordToTable.*");
+call mtr.add_suppression("Log DDL failed, record.*");
+call mtr.add_suppression("Log drop segment fail.*");
+call mtr.add_suppression("Drop the newly allocated segment due to write log fail.*");
+call mtr.add_suppression("Alloc index segment failed.*");
+call mtr.add_suppression("Inplace prepare create index fail, index name: key2");
+
+CREATE TABLE t1 (c1 int, c2 char);
+INSERT INTO t1 VALUES (1, '1'), (2, '2'), (3, '3'), (4, '4');
+
+--connect(con1,localhost,root)
+--connection con1
+
+let $ID= `SELECT connection_id()`;
+
+# Test interrupt before alloc segement in prepare stage
+SET DEBUG_SYNC = "WaitInterruptBeforeAllocSeg SIGNAL BeginKill WAIT_FOR c1";
+--send ALTER TABLE t1 ADD INDEX key2(c1);
+
+--connection default
+SET DEBUG_SYNC = "now WAIT_FOR BeginKill";
+--replace_result $ID ID
+eval KILL QUERY $ID;
+
+--connection con1
+--error ER_QUERY_INTERRUPTED
+--reap
+
+--disconnect con1
+
+--connection default
+DROP TABLE t1;

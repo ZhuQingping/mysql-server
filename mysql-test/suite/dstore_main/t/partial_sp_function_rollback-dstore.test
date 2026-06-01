@@ -1,0 +1,119 @@
+#
+# Check for problems with  partial rollback for dstore
+#
+
+--source include/have_only_dstore.inc
+--disable_warnings
+
+set explicit_defaults_for_timestamp=ON;
+set global log_bin_trust_function_creators=true;
+set sql_mode = '';
+
+drop database if exists xm;
+create database xm;
+use xm;
+create table xm1(a int, b int, c int);
+create table xm2(a int, b int, c int);
+create table xm3(a int, b int, c int);
+alter table xm1 add unique key(a);
+alter table xm2 add unique key(a);
+alter table xm3 add unique key(a);
+insert into xm1 values(1, 100, 1000);
+insert into xm1 values(3, 300, 3000);
+insert into xm2 select * from xm1;
+insert into xm3 select * from xm2;
+select * from xm1;
+select * from xm2;
+select * from xm3;
+insert into xm1 values(2, 200, 2000);
+insert into xm2 values(2, 200, 2000);
+insert into xm3 values(2, 200, 2000);
+
+
+DELIMITER |;
+create function rand_num()
+  returns int(5)
+  begin
+    declare i int default 0;
+    insert into xm1 values(7, 70, 700);
+    insert into xm2 values(7, 70, 700);
+    insert into xm3 select * from xm1;
+    set i=floor(100+rand()*10);
+    return i;
+  end|
+DELIMITER ;|
+
+delimiter |;
+CREATE PROCEDURE p_insert_xmm(in id INTEGER)
+  begin
+    start transaction;
+    insert into xm1 values(id, id*10, id*100);
+    insert into xm2 values(id, id*10, id*100);
+    commit;
+    start transaction;
+    update xm3 set a=5;
+    select count(*) from xm1;
+    select count(*) from xm2;
+    select a from xm3;
+    commit;
+  end|
+delimiter ;|
+
+delimiter |;
+CREATE PROCEDURE vv_insert_xmm(in id INTEGER)
+  begin
+    start transaction;
+    insert into xm1 values(id, id*10, id*100);
+    insert into xm2 values(id, id*10, id*100);
+    commit;
+
+	update xm1 set a=a*55;
+    update xm3 set a=5;
+    select count(*) from xm1;
+    select count(*) from xm2;
+    select a from xm3;
+
+  end|
+delimiter ;|
+
+
+--enable_warnings
+
+#
+# Test of  parital rollback for dstore in function and sp #
+#
+
+begin;
+--error 1062
+select rand_num();
+select * from xm1;
+select * from xm2;
+select * from xm3;
+commit;
+select * from xm1;
+select * from xm2;
+select * from xm3;
+
+--error 1062
+call p_insert_xmm(9);
+select count(*) from xm1;
+select count(*) from xm2;
+select count(*) from xm3;
+commit;
+select count(*) from xm1;
+select count(*) from xm2;
+select count(*) from xm3;
+
+
+begin;
+--error 1062
+call vv_insert_xmm(111);
+select * from xm1;
+select * from xm3;
+select * from xm3;
+commit;
+select * from xm1;
+select * from xm3;
+select * from xm3;
+
+drop database xm;

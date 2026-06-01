@@ -1,0 +1,36 @@
+RESET MASTER;
+CREATE USER u1@h;
+#
+# Verify that u1 is added into mysql.user.
+#
+SELECT user FROM mysql.user where user='u1';
+user
+u1
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, GRANT OPTION, REFERENCES, INDEX, ALTER, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER, BACKUP_ADMIN, SYSTEM_VARIABLES_ADMIN, BINLOG_ADMIN, REPLICATION_SLAVE_ADMIN, TABLE_ENCRYPTION_ADMIN ON *.* TO u1@h;
+#
+# Execute a statement, which is not in progress of dstore trx.
+#
+FLUSH PRIVILEGES;
+# Kill and restart
+#
+# Expect that rds_binlog_dstore_consistent is on, which indicates
+# that the gtid set between binlog and dstore is consistent.
+#
+show variables like 'rds_binlog_dstore_consistent';
+Variable_name	Value
+rds_binlog_dstore_consistent	ON
+#
+# Expect that rds_dstore_missed_gtids is empty.
+#
+show variables like 'rds_dstore_missed_gtids';
+Variable_name	Value
+rds_dstore_missed_gtids	
+#
+# Expect that rds_dstore_missed_gtids_on_binlog is empty.
+#
+show variables like 'rds_dstore_missed_gtids_on_binlog';
+Variable_name	Value
+rds_dstore_missed_gtids_on_binlog	
+REVOKE SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, GRANT OPTION, REFERENCES, INDEX, ALTER, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER, BACKUP_ADMIN, SYSTEM_VARIABLES_ADMIN, BINLOG_ADMIN, REPLICATION_SLAVE_ADMIN, TABLE_ENCRYPTION_ADMIN ON *.* FROM u1@h;
+FLUSH PRIVILEGES;
+DROP USER u1@h;

@@ -1,0 +1,422 @@
+CREATE TABLE IF NOT EXISTS t1 (sno int(11) NOT NULL DEFAULT '0',
+name int(11) DEFAULT NULL,
+PRIMARY KEY (sno),
+UNIQUE KEY idx(name));
+INSERT INTO t1 VALUES (1,2),(2,3),(3,4);
+SELECT * FROM t1;
+sno	name
+1	2
+2	3
+3	4
+CREATE TABLE IF NOT EXISTS t2 (sno int(11) NOT NULL DEFAULT '0',
+name int(11) DEFAULT NULL,
+PRIMARY KEY (sno),
+UNIQUE KEY idx(name));
+INSERT INTO t2 VALUES (1,2),(2,3),(3,4);
+# Multi-table delete submission, reset trx_execute_time
+DELETE t1 FROM t1,t2 WHERE t1.sno=t2.sno;
+DROP TABLE t1;
+DROP TABLE t2;
+# note: For the same query execution time is an unstable value,
+# so the value is masked
+CALL mtr.add_suppression("Query Cache is ON, but it is unsafe and retiring in 8.0.*");
+#        >   test1: Count the execution time of idle transactions
+#========================================================================
+SHOW FULL PROCESSLIST;
+FLUSH STATUS;
+set @start_time= (select unix_timestamp(now()));
+BEGIN;
+SELECT SLEEP(2);
+SLEEP(2)
+0
+# Verify the correctness of the query time
+# "Success"
+SHOW FULL PROCESSLIST;
+COMMIT;
+# Trx commited, reset TRX_EXECUTED_TIME 0
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+TRX_EXECUTED_TIME
+0
+0
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+SHOW FULL PROCESSLIST;
+#      >    test2: Statistics the execution time of explicitly commmit
+#                  transactions
+#======================================================================
+DROP TABLE IF EXISTS test.t1;
+CREATE TABLE test.t1(id INT PRIMARY KEY,name VARCHAR(20));
+set @start_time= (select unix_timestamp(now()));
+BEGIN;
+INSERT INTO test.t1 value(0,'wuhan');
+SELECT SLEEP(3);
+SLEEP(3)
+0
+DELETE FROM test.t1 where id=0;
+INSERT INTO test.t1 value(0,'wuhan');
+# Verify the correctness of the query time
+# "Success"
+SHOW FULL PROCESSLIST;
+set @start_time= (select unix_timestamp(now()));
+START TRANSACTION;
+INSERT INTO test.t1 value(1,'zhengzhou');
+SELECT SLEEP(2);
+SLEEP(2)
+0
+# Verify the correctness of the query time
+# "Success"
+SHOW FULL PROCESSLIST;
+ROLLBACK;
+# Explicit transaction rollback, reset execution time
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+TRX_EXECUTED_TIME
+0
+0
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+SHOW FULL PROCESSLIST;
+#     >  test3: Statistics dml operation execution time
+#====================================================================
+INSERT INTO test.t1 value(2,'hangzhou');
+INSERT INTO test.t1 value(3,'guiyang');
+SELECT COUNT(*) FROM test.t1;
+COUNT(*)
+3
+# connect m1
+SELECT COUNT(*) FROM test.t1 where SLEEP(1)=0;;
+# connect m2
+DELETE FROM test.t1 WHERE id=1 AND SLEEP(1)=0;;
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+SHOW FULL PROCESSLIST;
+COUNT(*)
+3
+UPDATE test.t1 SET name='guangzhou' WHERE SLEEP(1)=0 AND id=2;
+# end
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+TRX_EXECUTED_TIME
+0
+0
+0
+0
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+# connect default
+start transaction;
+UPDATE test.t1 SET name='wentasy' WHERE id = 2;
+# connect m1
+UPDATE test.t1 SET name='wentasy' WHERE id = 2;;
+SELECT SLEEP(2);
+SLEEP(2)
+0
+# Success
+SHOW FULL PROCESSLIST;
+commit;
+#    >  test5: Verify trx execute time of not auto-commit mode
+#===============================================================
+commit;
+# set not auto-commit
+set @start_time= (select unix_timestamp(now()));
+set AUTOCOMMIT=0;
+select count(*) from test.t1;
+count(*)
+3
+select sleep(2);
+sleep(2)
+0
+# Verify the correctness of the query time
+# "Success"
+SHOW FULL PROCESSLIST;
+UPDATE test.t1 SET name='11111' WHERE id = 2;
+SELECT sleep(1);
+sleep(1)
+0
+# Verify the correctness of the query time
+# "Success"
+SHOW FULL PROCESSLIST;
+# Implicit commit, reset execution time
+begin;
+set @start_time= (select unix_timestamp(now()));
+UPDATE test.t1 SET name='11111' WHERE id = 2;
+SELECT sleep(1);
+sleep(1)
+0
+update test.t1 set name=(
+select name from (
+select name from test.t1 where id=0) temp
+) where id=2;
+SELECT sleep(3);
+sleep(3)
+0
+# The execution time of the current transaction is 4 seconds
+# Verify the correctness of the query time
+# "Success"
+SHOW FULL PROCESSLIST;
+# reset 0
+commit;
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+TRX_EXECUTED_TIME
+0
+0
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+#    >  test6: Verify the correctness of the execution time of
+#              the rollback transaction
+#===============================================================
+set AUTOCOMMIT=1;
+set @start_time= (select unix_timestamp(now()));
+begin;
+UPDATE test.t1 SET name='11111' WHERE id = 2;
+SAVEPOINT point1;
+SELECT sleep(2);
+sleep(2)
+0
+update test.t1 set name=(
+select name from (
+select name from test.t1 where id=0) temp
+) where id=2;
+SAVEPOINT point2;
+SELECT sleep(1);
+sleep(1)
+0
+rollback to point1;
+# Verify the correctness of the query time
+# "Success"
+show full processlist;
+rollback;
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+TRX_EXECUTED_TIME
+0
+0
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+set AUTOCOMMIT=0;
+set @start_time= (select unix_timestamp(now()));
+UPDATE test.t1 SET name='11111' WHERE id = 2;
+SAVEPOINT point1;
+SELECT sleep(2);
+sleep(2)
+0
+update test.t1 set name=(
+select name from (
+select name from test.t1 where id=0) temp
+) where id=2;
+SAVEPOINT point2;
+SELECT sleep(1);
+sleep(1)
+0
+# Verify the correctness of the query time
+# "Success"
+show full processlist;
+rollback to point1;
+# Verify the correctness of the query time
+# "Success"
+show full processlist;
+rollback;
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+TRX_EXECUTED_TIME
+0
+0
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+show full processlist;
+#    >  test7: Verify the correctness of the execution time of
+#              DDL/DCL and single statement trx
+#===============================================================
+# Verify the correctness of the execution time of the single statement
+# connect con1
+set DEBUG_SYNC='after_set_transaction_psi_before_set_transaction_gtid SIGNAL sleep WAIT_FOR commit';
+select count(*) from t1;
+# connect default
+SET  DEBUG_SYNC= 'now WAIT_FOR sleep';
+select sleep(3);
+sleep(3)
+0
+SHOW FULL PROCESSLIST;
+SET  DEBUG_SYNC= 'now SIGNAL commit';
+# connect con1
+count(*)
+3
+# Verify the correctness of the query time
+# "Success"
+# query end, The TRX_EXECUTED_TIME is reset to 0.
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+TRX_EXECUTED_TIME
+0
+0
+0
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+# Verify the correctness of the execution time of DDL
+# connect con1
+set DEBUG_SYNC='after_set_transaction_psi_before_set_transaction_gtid SIGNAL sleep WAIT_FOR commit';
+create database local_disk;
+# connect default
+SET  DEBUG_SYNC= 'now WAIT_FOR sleep';
+select sleep(3);
+sleep(3)
+0
+SHOW FULL PROCESSLIST;
+SET  DEBUG_SYNC= 'now SIGNAL commit';
+# connect con1
+# Verify the correctness of the query time
+# "Success"
+# query end, The TRX_EXECUTED_TIME is reset to 0.
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+TRX_EXECUTED_TIME
+0
+0
+0
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+# connect con1
+set DEBUG_SYNC='after_set_transaction_psi_before_set_transaction_gtid SIGNAL sleep WAIT_FOR commit';
+drop database local_disk;
+# connect default
+SET  DEBUG_SYNC= 'now WAIT_FOR sleep';
+select sleep(3);
+sleep(3)
+0
+SHOW FULL PROCESSLIST;
+SET  DEBUG_SYNC= 'now SIGNAL commit';
+# connect con1
+# Verify the correctness of the query time
+# "Success"
+# query end, The TRX_EXECUTED_TIME is reset to 0.
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+TRX_EXECUTED_TIME
+0
+0
+0
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+# connect con1
+set DEBUG_SYNC='after_set_transaction_psi_before_set_transaction_gtid SIGNAL sleep WAIT_FOR commit';
+create table DDL_TABLE(a int);
+# connect default
+SET  DEBUG_SYNC= 'now WAIT_FOR sleep';
+select sleep(3);
+sleep(3)
+0
+SHOW FULL PROCESSLIST;
+SET  DEBUG_SYNC= 'now SIGNAL commit';
+# connect con1
+# Verify the correctness of the query time
+# "Success"
+# query end, The TRX_EXECUTED_TIME is reset to 0.
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+TRX_EXECUTED_TIME
+0
+0
+0
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+# connect con1
+set DEBUG_SYNC='after_set_transaction_psi_before_set_transaction_gtid SIGNAL sleep WAIT_FOR commit';
+alter table DDL_TABLE add b int;
+# connect default
+SET  DEBUG_SYNC= 'now WAIT_FOR sleep';
+select sleep(3);
+sleep(3)
+0
+SHOW FULL PROCESSLIST;
+SET  DEBUG_SYNC= 'now SIGNAL commit';
+# connect con1
+# Verify the correctness of the query time
+# "Success"
+# query end, The TRX_EXECUTED_TIME is reset to 0.
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+TRX_EXECUTED_TIME
+0
+0
+0
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+SELECT * FROM DDL_TABLE;
+a	b
+# connect con1
+set DEBUG_SYNC='after_set_transaction_psi_before_set_transaction_gtid SIGNAL sleep WAIT_FOR commit';
+drop table test.t1;
+# connect default
+SET  DEBUG_SYNC= 'now WAIT_FOR sleep';
+select sleep(3);
+sleep(3)
+0
+SHOW FULL PROCESSLIST;
+SET  DEBUG_SYNC= 'now SIGNAL commit';
+# connect con1
+# Verify the correctness of the query time
+# "Success"
+# query end, The TRX_EXECUTED_TIME is reset to 0.
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+TRX_EXECUTED_TIME
+0
+0
+0
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+# Verify the correctness of the execution time of DCL
+# connect con1
+set DEBUG_SYNC='after_set_transaction_psi_before_set_transaction_gtid SIGNAL sleep WAIT_FOR commit';
+create user mysqltest_1@localhost;
+# connect default
+SET  DEBUG_SYNC= 'now WAIT_FOR sleep';
+select sleep(3);
+sleep(3)
+0
+SHOW FULL PROCESSLIST;
+SET  DEBUG_SYNC= 'now SIGNAL commit';
+# connect con1
+# Verify the correctness of the query time
+# "Success"
+# query end, The TRX_EXECUTED_TIME is reset to 0.
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+TRX_EXECUTED_TIME
+0
+0
+0
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+# connect con1
+set DEBUG_SYNC='after_set_transaction_psi_before_set_transaction_gtid SIGNAL sleep WAIT_FOR commit';
+grant CREATE TEMPORARY TABLES, LOCK TABLES on mysqltest.* to mysqltest_1@localhost;
+# connect default
+SET  DEBUG_SYNC= 'now WAIT_FOR sleep';
+select sleep(3);
+sleep(3)
+0
+SHOW FULL PROCESSLIST;
+SET  DEBUG_SYNC= 'now SIGNAL commit';
+# connect con1
+# Verify the correctness of the query time
+# "Success"
+# query end, The TRX_EXECUTED_TIME is reset to 0.
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+TRX_EXECUTED_TIME
+0
+0
+0
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+# connect con1
+set DEBUG_SYNC='after_set_transaction_psi_before_set_transaction_gtid SIGNAL sleep WAIT_FOR commit';
+drop user mysqltest_1@localhost;
+# connect default
+SET  DEBUG_SYNC= 'now WAIT_FOR sleep';
+select sleep(3);
+sleep(3)
+0
+SHOW FULL PROCESSLIST;
+SET  DEBUG_SYNC= 'now SIGNAL commit';
+# connect con1
+# Verify the correctness of the query time
+# "Success"
+# query end, The TRX_EXECUTED_TIME is reset to 0.
+SELECT TRX_EXECUTED_TIME FROM INFORMATION_SCHEMA.PROCESSLIST;
+TRX_EXECUTED_TIME
+0
+0
+0
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+# cleanup
+DROP TABLE IF EXISTS test.DDL_TABLE;

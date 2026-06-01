@@ -1,0 +1,164 @@
+--source ../include/sqlfilter_prepare.inc
+
+--replace_column 1 #
+select * from mysql.rds_sql_filter_rules;
+
+# add sql filter
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t~id~between","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t~id~between~in","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t~id~in","");
+call dbms_sqlfilter.add_sql_filter('UPDATE',20,"update~t","");
+
+--replace_column 1 #
+select * from mysql.rds_sql_filter_rules;
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+# delete based on a valid id
+call delete_one_sql_filter_rule(1);
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--replace_column 1 #
+select * from mysql.rds_sql_filter_rules;
+
+# delete a invalid id
+call dbms_sqlfilter.delete_sql_filter(999999);
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--replace_column 1 #
+select * from mysql.rds_sql_filter_rules;
+
+# check rules matching and interrupt query;
+set global rds_sqlfilter_control=ON;
+create table t (
+    id int primary key auto_increment,
+    year_col year DEFAULT NULL,
+    KEY `ndx_year_col` (`year_col` DESC)
+);
+
+--error ER_QUERY_INTERRUPTED
+select * from t where id between 0 and 11;
+
+# BLOCK_QUERY_NUM should increase 1
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+# after flush, the BLOCK_QUERY_NUM reset to 0
+call dbms_sqlfilter.flush_sql_filter();
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+## verify rds_node_id and rule node_id
+SET GLOBAL rds_node_id="";
+--error ER_WRONG_VALUE_FOR_VAR
+SET GLOBAL rds_node_id=NULL;
+--error ER_WRONG_VALUE_FOR_VAR
+SET GLOBAL rds_node_id = "abc34567890123dfe78901234567890123456中ta@";
+## length == 36
+SET GLOBAL rds_node_id = "abc34567890123dfe7890123456789012345";
+## length < 36
+--let $same_node_id = "abc34567890123dfe7890"
+eval SET GLOBAL rds_node_id = $same_node_id;
+
+eval call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t~id~or",$same_node_id);
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--error ER_QUERY_INTERRUPTED
+select * from t where id in (1, 2);
+
+--error ER_QUERY_INTERRUPTED
+select * from t where id = 10 or id = 15;
+
+--let $other_node_id = "abc34567890123dfe7890123456789012345"
+eval call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t~id~<=",$other_node_id);
+## not interrupt
+select * from t where id <= 10;
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+# restart server will reload sqlfilter rules
+--let $restart_parameters = restart:
+--source include/restart_mysqld.inc
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--replace_column 1 #
+select * from mysql.rds_sql_filter_rules;
+
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+--replace_column 1 #
+select * from mysql.rds_sql_filter_rules;
+
+# test update_sql_filter
+--let $master_node_id = "def34567890123dfe7890123456789012345"
+--let $rpl_node_id = "abc34567890123dfe7890123456789012345"
+
+eval SET GLOBAL rds_node_id = $master_node_id;
+
+# add sql filter
+eval call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t~id~or~>=",$master_node_id);
+eval call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t~id~in",$rpl_node_id);
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--replace_column 1 #
+select * from mysql.rds_sql_filter_rules;
+
+SET GLOBAL rds_sqlfilter_control=ON;
+
+## success
+select * from t where id in (1, 2);
+## interrupt
+--error ER_QUERY_INTERRUPTED
+select * from t where id = 1 or id >= 5;
+
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--let $id_var1 = `select item_id from mysql.rds_sql_filter_rules where key_str = "select~t~id~in"`
+--let $id_var2 = `select item_id from mysql.rds_sql_filter_rules where key_str = "select~t~id~or~>="`
+
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+eval call dbms_sqlfilter.update_sql_filter($id_var1, 'SELECT', 0, "select~t~id~in", $master_node_id);
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+eval call dbms_sqlfilter.update_sql_filter($id_var2, 'SELECT', 0, "select~t~id~or~>=",$rpl_node_id);
+
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--error ER_QUERY_INTERRUPTED
+select * from t where id in (1, 2);
+
+## success
+select * from t where id = 1 or id >= 5;
+
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+eval call dbms_sqlfilter.update_sql_filter($id_var1, 'SELECT', 10, "select~t~id~in", $master_node_id);
+## success
+select * from t where id in (1, 2);
+
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+eval call dbms_sqlfilter.update_sql_filter($id_var1, 'SELECT', 0, "select~t~id~in~<", $master_node_id);
+## success
+select * from t where id in (1, 2);
+--error ER_QUERY_INTERRUPTED
+select * from t where id in (1, 2) or id < 10;
+
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--replace_column 1 #
+select * from mysql.rds_sql_filter_rules;
+
+call dbms_sqlfilter.update_sql_filter(999999, 'SELECT', 0, "select~t~id~or~>=", "");
+
+# cleanup
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+
+SET GLOBAL rds_node_id = default;
+SET GLOBAL rds_sqlfilter_control= default;
+DROP TABLE t;
+
+--source ../include/sqlfilter_cleanup.inc

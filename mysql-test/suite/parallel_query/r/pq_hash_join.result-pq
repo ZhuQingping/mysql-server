@@ -1,0 +1,1765 @@
+# Start out simple: see that a simple parallel-oblivious hash join
+# without any re-fill of the hash table works as expected.
+CREATE TABLE t (i INTEGER);
+INSERT INTO t VALUES (1), (2), (3);
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t 2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+EXPLAIN
+-> Gather: 2 workers, parallel scan on t  (cost=*** rows=***)
+    -> Inner hash join, one hash table per worker (t2.i = t.i)  (cost=*** rows=***)
+        -> Table scan on t2  (cost=*** rows=***)
+        -> Hash
+            -> Parallel table scan on t  (cost=*** rows=***)
+
+SELECT /*+ PQ(t 2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+i	i
+1	1
+2	2
+3	3
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t 64) */ * FROM t JOIN t t2 ON t.i = t2.i;
+EXPLAIN
+-> Gather: 64 workers, parallel scan on t  (cost=*** rows=***)
+    -> Inner hash join, one hash table per worker (t2.i = t.i)  (cost=*** rows=***)
+        -> Table scan on t2  (cost=*** rows=***)
+        -> Hash
+            -> Parallel table scan on t  (cost=*** rows=***)
+
+SELECT /*+ PQ(t 64) */ * FROM t JOIN t t2 ON t.i = t2.i;
+i	i
+1	1
+2	2
+3	3
+DROP TABLE t;
+# Increase the number of rows, and decrease the join buffer size.
+# See that we disable parallel query when we estimate the number
+# of hash table re-fills to become high.
+CREATE TABLE t (i INTEGER);
+INSERT INTO t VALUES
+(1), (2), (3), (4), (5), (6), (7), (8), (9), (10),
+(11), (12), (13), (14), (15), (16), (17), (18), (19), (20),
+(21), (22), (23), (24), (25), (26), (27), (28), (29), (30);
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+SET join_buffer_size = 128;
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t 2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+EXPLAIN
+-> Gather: 2 workers, parallel scan on t  (cost=*** rows=***)
+    -> Inner hash join, one hash table per worker (t2.i = t.i)  (cost=*** rows=***)
+        -> Table scan on t2  (cost=*** rows=***)
+        -> Hash
+            -> Parallel table scan on t  (cost=*** rows=***)
+
+# Now, ignore the number of re-fills limit to see that we can
+# execute a parallel-oblivious hash join with multiple re-fills.
+SET session debug = '+d,ignore_pq_hash_join_num_refills';
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t 2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+EXPLAIN
+-> Gather: 2 workers, parallel scan on t  (cost=*** rows=***)
+    -> Inner hash join, one hash table per worker (t2.i = t.i)  (cost=*** rows=***)
+        -> Table scan on t2  (cost=*** rows=***)
+        -> Hash
+            -> Parallel table scan on t  (cost=*** rows=***)
+
+SELECT /*+ PQ(t 2) */ * FROM t JOIN t t2 ON t.i = t2.i;
+i	i
+1	1
+10	10
+11	11
+12	12
+13	13
+14	14
+15	15
+16	16
+17	17
+18	18
+19	19
+2	2
+20	20
+21	21
+22	22
+23	23
+24	24
+25	25
+26	26
+27	27
+28	28
+29	29
+3	3
+30	30
+4	4
+5	5
+6	6
+7	7
+8	8
+9	9
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t 64) */ * FROM t JOIN t t2 ON t.i = t2.i;
+EXPLAIN
+-> Gather: 64 workers, parallel scan on t  (cost=*** rows=***)
+    -> Inner hash join, one hash table per worker (t2.i = t.i)  (cost=*** rows=***)
+        -> Table scan on t2  (cost=*** rows=***)
+        -> Hash
+            -> Parallel table scan on t  (cost=*** rows=***)
+
+SELECT /*+ PQ(t 64) */ * FROM t JOIN t t2 ON t.i = t2.i;
+i	i
+1	1
+10	10
+11	11
+12	12
+13	13
+14	14
+15	15
+16	16
+17	17
+18	18
+19	19
+2	2
+20	20
+21	21
+22	22
+23	23
+24	24
+25	25
+26	26
+27	27
+28	28
+29	29
+3	3
+30	30
+4	4
+5	5
+6	6
+7	7
+8	8
+9	9
+SET join_buffer_size = DEFAULT;
+SET session debug = '-d,ignore_pq_hash_join_num_refills';
+DROP TABLE t;
+# Test a three table join including one parallel-aware hash join node.
+CREATE TABLE t (i INTEGER);
+INSERT INTO t VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9), (10);
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t2 2) */ * FROM t
+JOIN t t2 ON t.i = t2.i
+JOIN t t3 on t2.i = t3.i
+ORDER BY t.i, t2.i, t3.i;
+EXPLAIN
+-> Sort: t.i, t2.i, t3.i
+    -> Stream results  (cost=*** rows=***)
+        -> Gather: 2 workers, parallel scan on t, t2  (cost=*** rows=***)
+            -> Table scan on <temporary>  (cost=*** rows=***)
+                -> Temporary table  (cost=*** rows=***)
+                    -> Inner hash join, one hash table per worker (t3.i = t.i)  (cost=*** rows=***)
+                        -> Table scan on t3  (cost=*** rows=***)
+                        -> Hash
+                            -> Inner hash join, hash table shared by worker threads (t2.i = t.i)  (cost=*** rows=***)
+                                -> Parallel table scan on t2  (cost=*** rows=***)
+                                -> Hash
+                                    -> Parallel table scan on t  (cost=*** rows=***)
+
+SELECT /*+ PQ(t2 2) */ * FROM t
+JOIN t t2 ON t.i = t2.i
+JOIN t t3 on t2.i = t3.i
+ORDER BY t.i, t2.i, t3.i;
+i	i	i
+1	1	1
+10	10	10
+2	2	2
+3	3	3
+4	4	4
+5	5	5
+6	6	6
+7	7	7
+8	8	8
+9	9	9
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t2 64) */ * FROM t
+JOIN t t2 ON t.i = t2.i
+JOIN t t3 on t2.i = t3.i
+ORDER BY t.i, t2.i, t3.i;
+EXPLAIN
+-> Sort: t.i, t2.i, t3.i
+    -> Stream results  (cost=*** rows=***)
+        -> Gather: 64 workers, parallel scan on t, t2  (cost=*** rows=***)
+            -> Table scan on <temporary>  (cost=*** rows=***)
+                -> Temporary table  (cost=*** rows=***)
+                    -> Inner hash join, one hash table per worker (t3.i = t.i)  (cost=*** rows=***)
+                        -> Table scan on t3  (cost=*** rows=***)
+                        -> Hash
+                            -> Inner hash join, hash table shared by worker threads (t2.i = t.i)  (cost=*** rows=***)
+                                -> Parallel table scan on t2  (cost=*** rows=***)
+                                -> Hash
+                                    -> Parallel table scan on t  (cost=*** rows=***)
+
+SELECT /*+ PQ(t2 64) */ * FROM t
+JOIN t t2 ON t.i = t2.i
+JOIN t t3 on t2.i = t3.i
+ORDER BY t.i, t2.i, t3.i;
+i	i	i
+1	1	1
+10	10	10
+2	2	2
+3	3	3
+4	4	4
+5	5	5
+6	6	6
+7	7	7
+8	8	8
+9	9	9
+DROP TABLE t;
+# Increase the number of rows, and decrease the join buffer size.
+# We want to fill up the join buffer so that at least one re-fill
+# of the hash table is necessary.
+SET session debug = '+d,ignore_pq_hash_join_num_refills';
+CREATE TABLE t (i INTEGER);
+INSERT INTO t VALUES
+(1), (2), (3), (4), (5), (6), (7), (8), (9), (10),
+(11), (12), (13), (14), (15), (16), (17), (18), (19), (20),
+(21), (22), (23), (24), (25), (26), (27), (28), (29), (30);
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+SET join_buffer_size = 128;
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t2 2) */ * FROM t
+JOIN t t2 ON t.i = t2.i
+JOIN t t3 ON t2.i = t3.i
+ORDER BY t.i, t2.i, t3.i;
+EXPLAIN
+-> Sort: t.i, t2.i, t3.i
+    -> Stream results  (cost=*** rows=***)
+        -> Gather: 2 workers, parallel scan on t, t2  (cost=*** rows=***)
+            -> Table scan on <temporary>  (cost=*** rows=***)
+                -> Temporary table  (cost=*** rows=***)
+                    -> Inner hash join, one hash table per worker (t3.i = t.i)  (cost=*** rows=***)
+                        -> Table scan on t3  (cost=*** rows=***)
+                        -> Hash
+                            -> Inner hash join, hash table shared by worker threads (t2.i = t.i)  (cost=*** rows=***)
+                                -> Parallel table scan on t2  (cost=*** rows=***)
+                                -> Hash
+                                    -> Parallel table scan on t  (cost=*** rows=***)
+
+SELECT /*+ PQ(t2 2) */ * FROM t
+JOIN t t2 ON t.i = t2.i
+JOIN t t3 ON t2.i = t3.i
+ORDER BY t.i, t2.i, t3.i;
+i	i	i
+1	1	1
+2	2	2
+3	3	3
+4	4	4
+5	5	5
+6	6	6
+7	7	7
+8	8	8
+9	9	9
+10	10	10
+11	11	11
+12	12	12
+13	13	13
+14	14	14
+15	15	15
+16	16	16
+17	17	17
+18	18	18
+19	19	19
+20	20	20
+21	21	21
+22	22	22
+23	23	23
+24	24	24
+25	25	25
+26	26	26
+27	27	27
+28	28	28
+29	29	29
+30	30	30
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t2 64) */ * FROM t
+JOIN t t2 ON t.i = t2.i
+JOIN t t3 ON t2.i = t3.i
+ORDER BY t.i, t2.i, t3.i;
+EXPLAIN
+-> Sort: t.i, t2.i, t3.i
+    -> Stream results  (cost=*** rows=***)
+        -> Gather: 64 workers, parallel scan on t, t2  (cost=*** rows=***)
+            -> Table scan on <temporary>  (cost=*** rows=***)
+                -> Temporary table  (cost=*** rows=***)
+                    -> Inner hash join, one hash table per worker (t3.i = t.i)  (cost=*** rows=***)
+                        -> Table scan on t3  (cost=*** rows=***)
+                        -> Hash
+                            -> Inner hash join, hash table shared by worker threads (t2.i = t.i)  (cost=*** rows=***)
+                                -> Parallel table scan on t2  (cost=*** rows=***)
+                                -> Hash
+                                    -> Parallel table scan on t  (cost=*** rows=***)
+
+SELECT /*+ PQ(t2 64) */ * FROM t
+JOIN t t2 ON t.i = t2.i
+JOIN t t3 ON t2.i = t3.i
+ORDER BY t.i, t2.i, t3.i;
+i	i	i
+1	1	1
+2	2	2
+3	3	3
+4	4	4
+5	5	5
+6	6	6
+7	7	7
+8	8	8
+9	9	9
+10	10	10
+11	11	11
+12	12	12
+13	13	13
+14	14	14
+15	15	15
+16	16	16
+17	17	17
+18	18	18
+19	19	19
+20	20	20
+21	21	21
+22	22	22
+23	23	23
+24	24	24
+25	25	25
+26	26	26
+27	27	27
+28	28	28
+29	29	29
+30	30	30
+SET join_buffer_size = DEFAULT;
+SET session debug = '-d,ignore_pq_hash_join_num_refills';
+DROP TABLE t;
+# The following test case exercises the need for detaching from the
+# message queue after the probe phase has completed. If we do not
+# temporarily detach while waiting for other workers to complete
+# their probe phase, we will most likely end up in a deadlock.
+CREATE TABLE t (i BIGINT);
+INSERT INTO t (i) VALUES (1), (1), (1), (1), (1), (1), (1), (1), (1), (1);
+INSERT INTO t (i) VALUES (1), (1), (1), (1), (1), (1), (1), (1), (1), (1);
+INSERT INTO t (i) VALUES (1), (1), (1), (1), (1), (1), (1), (1), (1), (1);
+INSERT INTO t (i) VALUES (1);
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t3 2) */ * FROM t
+JOIN t t2 ON t.i = t2.i
+JOIN t t3 ON t2.i = t3.i;
+EXPLAIN
+-> Gather: 2 workers, parallel scan on t2, t3  (cost=*** rows=***)
+    -> Inner hash join, hash table shared by worker threads (t3.i = t.i)  (cost=*** rows=***)
+        -> Parallel table scan on t3  (cost=*** rows=***)
+        -> Hash
+            -> Inner hash join, one hash table per worker (t2.i = t.i)  (cost=*** rows=***)
+                -> Parallel table scan on t2  (cost=*** rows=***)
+                -> Hash
+                    -> Table scan on t  (cost=*** rows=***)
+
+SELECT /*+ PQ(t3 2) */ * FROM t
+JOIN t t2 ON t.i = t2.i
+JOIN t t3 ON t2.i = t3.i;
+DROP TABLE t;
+# Increase the number of rows, and decrease the join buffer size.
+# We want to fill up the join buffer so that at least one re-fill
+# of the hash table is necessary. The following test case exercises
+# the need for setting nowait mode of worker msg queue slot after
+# the probe phase has completed. If we do not set nowait mode while
+# waiting for other workers to complete, their probe phase, we will
+# most likely end up in a deadlock.
+CREATE TABLE t (i BIGINT);
+INSERT INTO t (i) VALUES (1), (1), (1), (1), (1), (1), (1), (1), (1), (1);
+INSERT INTO t (i) VALUES (1), (1), (1), (1), (1), (1), (1), (1), (1), (1);
+INSERT INTO t (i) VALUES (1), (1), (1), (1), (1), (1), (1), (1), (1), (1);
+INSERT INTO t (i) VALUES (1);
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+SET join_buffer_size = 128;
+SET session debug = '+d,ignore_pq_hash_join_num_refills';
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t3 2) */ * FROM t
+JOIN t t2 ON t.i = t2.i
+JOIN t t3 ON t2.i = t3.i;
+EXPLAIN
+-> Gather: 2 workers, parallel scan on t2, t3  (cost=*** rows=***)
+    -> Inner hash join, hash table shared by worker threads (t3.i = t.i)  (cost=*** rows=***)
+        -> Parallel table scan on t3  (cost=*** rows=***)
+        -> Hash
+            -> Inner hash join, one hash table per worker (t2.i = t.i)  (cost=*** rows=***)
+                -> Parallel table scan on t2  (cost=*** rows=***)
+                -> Hash
+                    -> Table scan on t  (cost=*** rows=***)
+
+SELECT /*+ PQ(t3 2) */ * FROM t
+JOIN t t2 ON t.i = t2.i
+JOIN t t3 ON t2.i = t3.i;
+SET join_buffer_size = DEFAULT;
+SET session debug = '-d,ignore_pq_hash_join_num_refills';
+DROP TABLE t;
+# Set up a test which verifies that we can find/mark the cut table
+# when the execution tree contains a StreamingIterator and/or
+# a MaterializeIterator that are not on a query block boundary.
+CREATE TABLE t (i INTEGER);
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t3 2) */ * FROM t JOIN t t2 JOIN t t3 ORDER BY t.i;
+EXPLAIN
+-> Sort: t.i
+    -> Stream results  (cost=*** rows=***)
+        -> Gather: 2 workers, parallel scan on t2, t3  (cost=*** rows=***)
+            -> Table scan on <temporary>  (cost=*** rows=***)
+                -> Temporary table  (cost=*** rows=***)
+                    -> Inner hash join, hash table shared by worker threads (no condition)  (cost=*** rows=***)
+                        -> Parallel table scan on t3  (cost=*** rows=***)
+                        -> Hash
+                            -> Inner hash join, one hash table per worker (no condition)  (cost=*** rows=***)
+                                -> Parallel table scan on t2  (cost=*** rows=***)
+                                -> Hash
+                                    -> Table scan on t  (cost=*** rows=***)
+
+DROP TABLE t;
+# ISSUE 627: deadlock of parallel-aware hash join
+CREATE TABLE t (i BIGINT);
+INSERT INTO t (i) VALUES (1), (1), (1), (1), (1), (1), (1), (1), (1), (1);
+INSERT INTO t (i) VALUES (1), (1), (1), (1), (1), (1), (1), (1), (1), (1);
+INSERT INTO t (i) VALUES (1), (1), (1), (1), (1), (1), (1), (1), (1), (1);
+INSERT INTO t (i) VALUES (1);
+analyze table t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+EXPLAIN SELECT /*+ PQ(t3 2) */ * FROM t JOIN t t2 ON t.i = t2.i JOIN t t3 ON t2.i = t3.i;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	31	10.00	Parallel execute (2 workers, test.t2, test.t3)
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	31	100.00	NULL
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	31	10.00	Using where; Using join buffer (hash join)
+1	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	31	10.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select /*+ PQ(`t3`@`select#1`) */ `test`.`t`.`i` AS `i`,`test`.`t2`.`i` AS `i`,`test`.`t3`.`i` AS `i` from `test`.`t` join `test`.`t` `t2` join `test`.`t` `t3` where ((`test`.`t2`.`i` = `test`.`t`.`i`) and (`test`.`t3`.`i` = `test`.`t`.`i`))
+SELECT /*+ PQ(t3 2) */ * FROM t JOIN t t2 ON t.i = t2.i JOIN t t3 ON t2.i = t3.i;
+EXPLAIN SELECT /*+ PQ(t3 2) */ * FROM t JOIN t t2 ON t.i = t2.i JOIN t t3 ON t2.i = t3.i ORDER by t.i;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	31	10.00	Parallel execute (2 workers, test.t2, test.t3)
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	31	100.00	Using temporary; Using filesort
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	31	10.00	Using where; Using join buffer (hash join)
+1	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	31	10.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select /*+ PQ(`t3`@`select#1`) */ `test`.`t`.`i` AS `i`,`test`.`t2`.`i` AS `i`,`test`.`t3`.`i` AS `i` from `test`.`t` join `test`.`t` `t2` join `test`.`t` `t3` where ((`test`.`t2`.`i` = `test`.`t`.`i`) and (`test`.`t3`.`i` = `test`.`t`.`i`)) order by `test`.`t`.`i`
+SELECT /*+ PQ(t3 2) */ * FROM t JOIN t t2 ON t.i = t2.i JOIN t t3 ON t2.i = t3.i ORDER by t.i;
+# test HJ with index scan
+create table t2 like t;
+insert into t2 select * from t;
+create table t3 like t;
+insert into t3 select * from t;
+# test if order-by with index-scan
+alter table t add index(i);
+EXPLAIN SELECT /*+ PQ(t3 2) */ * FROM t JOIN t2 ON t.i = t2.i JOIN t3 ON t2.i = t3.i;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	31	10.00	Parallel execute (2 workers, test.t2, test.t3)
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	31	100.00	Using where
+1	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	31	10.00	Using where; Using join buffer (hash join)
+1	SIMPLE	t	NULL	ref	i	i	9	test.t2.i	31	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select /*+ PQ(`t3`@`select#1`) */ `test`.`t`.`i` AS `i`,`test`.`t2`.`i` AS `i`,`test`.`t3`.`i` AS `i` from `test`.`t` join `test`.`t2` join `test`.`t3` where ((`test`.`t3`.`i` = `test`.`t2`.`i`) and (`test`.`t`.`i` = `test`.`t2`.`i`))
+SELECT /*+ PQ(t3 2) */ * FROM t JOIN t2 ON t.i = t2.i JOIN t3 ON t2.i = t3.i;
+EXPLAIN SELECT /*+ PQ(t3 2) */ * FROM t JOIN t2 ON t.i = t2.i JOIN t3 ON t2.i = t3.i ORDER by t.i;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	31	10.00	Parallel execute (2 workers, test.t2, test.t3)
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	31	100.00	Using where; Using temporary; Using filesort
+1	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	31	10.00	Using where; Using join buffer (hash join)
+1	SIMPLE	t	NULL	ref	i	i	9	test.t2.i	31	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select /*+ PQ(`t3`@`select#1`) */ `test`.`t`.`i` AS `i`,`test`.`t2`.`i` AS `i`,`test`.`t3`.`i` AS `i` from `test`.`t` join `test`.`t2` join `test`.`t3` where ((`test`.`t3`.`i` = `test`.`t2`.`i`) and (`test`.`t`.`i` = `test`.`t2`.`i`)) order by `test`.`t`.`i`
+SELECT /*+ PQ(t3 2) */ * FROM t JOIN t2 ON t.i = t2.i JOIN t3 ON t2.i = t3.i ORDER by t.i;
+DROP table t, t2, t3;
+CREATE TABLE `t1` (
+`id` int DEFAULT NULL,
+`a` int DEFAULT NULL
+) ENGINE=InnoDB;
+CREATE TABLE `t2` (
+`id` int DEFAULT NULL,
+`a` int DEFAULT NULL
+) ENGINE=InnoDB;
+insert into t1 values(1,2);
+insert into t1 values(2,3);
+insert into t1 values(3,4);
+insert into t2 select * from t1;
+insert into t2 select * from t1;
+insert into t2 select * from t1;
+insert into t2 select * from t1;
+insert into t2 select * from t1;
+ANALYZE TABLE t1, t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+set @saved_threshold = @@parallel_rows_threshold;
+set session parallel_rows_threshold = 1;
+explain select count(*) from t1 join t2 on t1.id=t2.id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	15	10.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(*)` from `test`.`t1` join `test`.`t2` where (`test`.`t2`.`id` = `test`.`t1`.`id`)
+explain format=tree select count(*) from t1 join t2 on t1.id=t2.id;
+EXPLAIN
+-> Aggregate: count(`<temporary>`.`count(*)`)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+        -> Aggregate: count(`<temporary>`.`count(*)`)  (cost=*** rows=***)
+            -> Inner hash join, one hash table per worker (t2.id = t1.id)  (cost=*** rows=***)
+                -> Table scan on t2  (cost=*** rows=***)
+                -> Hash
+                    -> Parallel table scan on t1  (cost=*** rows=***)
+
+select count(*) from t1 join t2 on t1.id=t2.id;
+count(*)
+15
+set session parallel_rows_threshold = 3;
+explain select count(*) from t1 join t2 on t1.id=t2.id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	15	10.00	Parallel execute (4 workers, test.t1, test.t2)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	15	10.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(*)` from `test`.`t1` join `test`.`t2` where (`test`.`t2`.`id` = `test`.`t1`.`id`)
+explain format=tree select count(*) from t1 join t2 on t1.id=t2.id;
+EXPLAIN
+-> Aggregate: count(`<temporary>`.`count(*)`)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t1, t2  (cost=*** rows=***)
+        -> Aggregate: count(`<temporary>`.`count(*)`)  (cost=*** rows=***)
+            -> Inner hash join, hash table shared by worker threads (t2.id = t1.id)  (cost=*** rows=***)
+                -> Parallel table scan on t2  (cost=*** rows=***)
+                -> Hash
+                    -> Parallel table scan on t1  (cost=*** rows=***)
+
+select count(*) from t1 join t2 on t1.id=t2.id;
+count(*)
+15
+set session parallel_rows_threshold = @saved_threshold;
+drop table t1,t2;
+CREATE TABLE t1 (i INTEGER);
+CREATE TABLE t2 (i INTEGER);
+INSERT INTO t1 (i) VALUES (1), (1);
+INSERT INTO t2 (i) VALUES (1);
+EXPLAIN FORMAT=tree SELECT * FROM t1, t2 LIMIT 1;
+EXPLAIN
+-> Limit: 1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t2, t1  (cost=*** rows=***)
+        -> Limit: 1 row(s)  (cost=*** rows=***)
+            -> Inner hash join, hash table shared by worker threads (no condition)  (cost=*** rows=***)
+                -> Parallel table scan on t1  (cost=*** rows=***)
+                -> Hash
+                    -> Parallel table scan on t2  (cost=*** rows=***)
+
+SELECT * FROM t1, t2 LIMIT 1;
+i	i
+1	1
+DROP TABLE t1, t2;
+SET @save_optimizer_switch= @@optimizer_switch;
+SET @save_sql_mode= @@sql_mode;
+set optimizer_switch='semijoin=on,materialization=on,firstmatch=on,loosescan=on,index_condition_pushdown=on,mrr=on';
+set optimizer_switch='subquery_materialization_cost_based=off';
+SET sql_mode = 'NO_ENGINE_SUBSTITUTION';
+drop table if exists t1, t2, t3;
+Warnings:
+Note	1051	Unknown table 'test.t1'
+Note	1051	Unknown table 'test.t2'
+Note	1051	Unknown table 'test.t3'
+create table t1 (a1 char(8), a2 char(8)) charset utf8mb4;
+create table t2 (b1 char(8), b2 char(8)) charset utf8mb4;
+create table t3 (c1 char(8), c2 char(8)) charset utf8mb4;
+insert into t1 values ('1 - 00', '2 - 00');
+insert into t1 values ('1 - 01', '2 - 01');
+insert into t1 values ('1 - 02', '2 - 02');
+insert into t2 values ('1 - 01', '2 - 01');
+insert into t2 values ('1 - 01', '2 - 01');
+insert into t2 values ('1 - 02', '2 - 02');
+insert into t2 values ('1 - 02', '2 - 02');
+insert into t2 values ('1 - 03', '2 - 03');
+insert into t3 values ('1 - 01', '2 - 01');
+insert into t3 values ('1 - 02', '2 - 02');
+insert into t3 values ('1 - 03', '2 - 03');
+insert into t3 values ('1 - 04', '2 - 04');
+create algorithm=merge view v1 as select b1, c2 from t2, t3 where b2 > c2;
+create algorithm=merge view v2 as select b1, c2 from t2, t3 group by b2, c2;
+Warnings:
+Warning	1354	View merge algorithm can't be used here for now (assumed undefined algorithm)
+ANALYZE TABLE t1, t2, t3;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+test.t3	analyze	status	OK
+explain select * from v1 where (c2, b1) in (select c2, b1 from v2 where b1 is not null);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	5	33.33	Parallel execute (4 workers, test.t3, test.t2)
+1	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	Using where
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	5	33.33	Using where; Using join buffer (hash join)
+1	SIMPLE	<derived4>	NULL	ref	<auto_key0>	<auto_key0>	66	test.t2.b1,test.t3.c2	2	100.00	Using index; FirstMatch(t2)
+4	DERIVED	t3	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	Using temporary
+4	DERIVED	t2	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`b1` AS `b1`,`test`.`t3`.`c2` AS `c2` from `test`.`t2` join `test`.`t3` semi join (`test`.`v2`) where ((`test`.`v2`.`b1` = `test`.`t2`.`b1`) and (`test`.`v2`.`c2` = `test`.`t3`.`c2`) and (`test`.`t2`.`b2` > `test`.`t3`.`c2`))
+select * from v1 where (c2, b1) in (select c2, b1 from v2 where b1 is not null);
+b1	c2
+1 - 02	2 - 01
+1 - 02	2 - 01
+1 - 03	2 - 02
+1 - 03	2 - 01
+DROP TABLE t1, t2, t3;
+DROP VIEW v1, v2;
+SET @@optimizer_switch = @save_optimizer_switch;
+SET @@sql_mode = @save_sql_mode;
+CREATE TABLE t1(f1 INT(11) NOT NULL);
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO t1 VALUES (10);
+CREATE TABLE t2
+(
+f1 INT(11) NOT NULL AUTO_INCREMENT,
+f2 INT(11) DEFAULT NULL,
+PRIMARY KEY (f1),
+KEY (f2)
+);
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO t2 VALUES (1, 7), (2, 1), (4, 7);
+CREATE TABLE t4(f1 INT DEFAULT NULL);
+INSERT INTO t4 VALUES (2);
+ANALYZE TABLE t1, t2, t4;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+test.t4	analyze	status	OK
+explain format=tree SELECT /*+ JOIN_PREFIX(t2@qb2, t4@qb1, ta3, ta4) PQ(ta4) */ COUNT(*) FROM t1 JOIN t2 AS ta3 JOIN t2 AS ta4 WHERE ta4.f2 IN (SELECT /*+ QB_NAME(qb1) */ f1 FROM t4) AND ta3.f2 IN (SELECT /*+ QB_NAME(qb2) */ f2 FROM t2);
+EXPLAIN
+-> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on ta4  (cost=*** rows=***)
+        -> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+            -> Inner hash join, one hash table per worker (no condition)  (cost=*** rows=***)
+                -> Table scan on t1  (cost=*** rows=***)
+                -> Hash
+                    -> Remove duplicate (ta3, ta4) rows using temporary table (weedout)  (cost=*** rows=***)
+                        -> Nested loop inner join  (cost=*** rows=***)
+                            -> Nested loop inner join  (cost=*** rows=***)
+                                -> Inner hash join, one hash table per worker (no condition)  (cost=*** rows=***)
+                                    -> Filter: (t4.f1 is not null)  (cost=*** rows=***)
+                                        -> Table scan on t4  (cost=*** rows=***)
+                                    -> Hash
+                                        -> Filter: (t2.f2 is not null)  (cost=*** rows=***)
+                                            -> Index scan on t2 using f2  (cost=*** rows=***)
+                                -> Covering index lookup on ta3 using f2 (f2=t2.f2)  (cost=*** rows=***)
+                            -> Parallel covering index lookup on ta4 using f2 (f2=t4.f1)  (cost=*** rows=***)
+
+DROP TABLE t1,t2,t4;
+CREATE TABLE `t0` (
+`c0` double unsigned zerofill DEFAULT NULL,
+`c1` smallint DEFAULT NULL COMMENT 'asdf',
+UNIQUE KEY `c0` (`c0`),
+UNIQUE KEY `c1` (`c1`)
+);
+Warnings:
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	UNSIGNED for decimal and floating point data types is deprecated and support for it will be removed in a future release.
+CREATE TABLE `t1` (
+`c0` float DEFAULT NULL,
+UNIQUE KEY `c0` (`c0`),
+KEY `i0` (`c0`)
+);
+INSERT INTO t0 VALUES(0000000000000207520508, 0);
+INSERT INTO t1 VALUES(NULL), (0), (1847920000);
+ANALYZE TABLE t0, t1;
+Table	Op	Msg_type	Msg_text
+test.t0	analyze	status	OK
+test.t1	analyze	status	OK
+EXPLAIN SELECT /*+MRR(t0)*/ ALL t0.c0 AS ref0 FROM t0, t1 WHERE (t0.c1) NOT IN ("");
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t0, test.t1)
+1	SIMPLE	t0	NULL	range	c1	c1	3	NULL	2	100.00	Using index condition
+1	SIMPLE	t1	NULL	index	NULL	c0	5	NULL	3	100.00	Using index; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select /*+ MRR(`t0`@`select#1`) */ `test`.`t0`.`c0` AS `ref0` from `test`.`t0` join `test`.`t1` where (`test`.`t0`.`c1` <> 0)
+EXPLAIN FORMAT=TREE SELECT /*+MRR(t0)*/ ALL t0.c0 AS ref0 FROM t0, t1 WHERE (t0.c1) NOT IN ("");
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t0, t1  (cost=*** rows=***)
+    -> Inner hash join, hash table shared by worker threads (no condition)  (cost=*** rows=***)
+        -> Parallel index scan on t1 using c0  (cost=*** rows=***)
+        -> Hash
+            -> Parallel index range scan on t0 using c1 over (NULL < c1 < 0) OR (0 < c1), with index condition: (t0.c1 <> 0)  (cost=*** rows=***)
+
+SELECT /*+MRR(t0)*/ ALL t0.c0 AS ref0 FROM t0, t1 WHERE (t0.c1) NOT IN ("");
+ref0
+DROP TABLE t0, t1;
+# Test for semi/anti/outer hash join
+# Test parallel hash join. For semi/anti/outer hash join, it just
+# can choose probe table as divided table. If the build table is
+# considered small or is not suitable as cut table, it will be
+# executed as parallel-oblivious hash join. If the build table is
+# considered large or is suitable as cut table, it will be executed
+# as parallel-aware hash join with building a shared hash table.
+set @saved_threshold = @@parallel_rows_threshold;
+CREATE TABLE t1 (i INTEGER);
+CREATE TABLE t2 (i INTEGER);
+INSERT INTO t1 VALUES (1), (2);
+INSERT INTO t2 VALUES (1), (1);
+ANALYZE TABLE t1, t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+# Parallel-oblivious semi hash join
+set session parallel_rows_threshold = 100;
+EXPLAIN FORMAT=tree SELECT /*+PQ(t1)*/ * FROM t1 WHERE (t1.i) IN (SELECT t2.i FROM t2);
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+    -> Hash semijoin, one hash table per worker (t2.i = t1.i)  (cost=*** rows=***)
+        -> Parallel table scan on t1  (cost=*** rows=***)
+        -> Hash
+            -> Table scan on t2  (cost=*** rows=***)
+
+SELECT /*+PQ(t1)*/ * FROM t1 WHERE (t1.i) IN (SELECT t2.i FROM t2);
+i
+1
+# Parallel-aware semi hash join
+set session parallel_rows_threshold = 0;
+EXPLAIN FORMAT=tree SELECT * FROM t1 WHERE (t1.i) IN (SELECT t2.i FROM t2);
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2, t1  (cost=*** rows=***)
+    -> Hash semijoin, hash table shared by worker threads (t2.i = t1.i)  (cost=*** rows=***)
+        -> Parallel table scan on t1  (cost=*** rows=***)
+        -> Hash
+            -> Parallel table scan on t2  (cost=*** rows=***)
+
+SELECT * FROM t1 WHERE (t1.i) IN (SELECT t2.i FROM t2);
+i
+1
+DROP TABLE t1, t2;
+CREATE TABLE t1 (f1 INTEGER PRIMARY KEY);
+INSERT INTO t1 VALUES (1), (2), (3);
+CREATE TABLE t2 (f1 INTEGER NOT NULL);
+INSERT INTO t2 VALUES (1), (2), (3), (4);
+ANALYZE TABLE t1, t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+# Parallel-oblivious anti hash join
+set session parallel_rows_threshold = 100;
+EXPLAIN FORMAT=tree SELECT /*+PQ(t1)*/ * FROM t1 LEFT JOIN t2 USING (f1) WHERE t2.f1 IS NULL;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+    -> Filter: (t2.f1 is null)  (cost=*** rows=***)
+        -> Hash antijoin, one hash table per worker (t2.f1 = t1.f1)  (cost=*** rows=***)
+            -> Parallel index scan on t1 using PRIMARY  (cost=*** rows=***)
+            -> Hash
+                -> Table scan on t2  (cost=*** rows=***)
+
+SELECT /*+PQ(t1)*/ * FROM t1 LEFT JOIN t2 USING (f1) WHERE t2.f1 IS NULL;
+f1
+# Parallel-aware anti hash join
+set session parallel_rows_threshold = 0;
+EXPLAIN FORMAT=tree SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t2.f1 IS NULL;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2, t1  (cost=*** rows=***)
+    -> Filter: (t2.f1 is null)  (cost=*** rows=***)
+        -> Hash antijoin, hash table shared by worker threads (t2.f1 = t1.f1)  (cost=*** rows=***)
+            -> Parallel index scan on t1 using PRIMARY  (cost=*** rows=***)
+            -> Hash
+                -> Parallel table scan on t2  (cost=*** rows=***)
+
+SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t2.f1 IS NULL;
+f1
+DROP TABLE t1, t2;
+CREATE TABLE t1 (col1 INTEGER);
+CREATE TABLE t2 (col1 INTEGER);
+INSERT INTO t1 VALUES (1), (2);
+INSERT INTO t2 VALUES (1);
+ANALYZE TABLE t1, t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+# Parallel-oblivious outer hash join
+set session parallel_rows_threshold = 100;
+EXPLAIN FORMAT=tree SELECT /*+PQ(t1)*/ * FROM t1 LEFT JOIN t2 ON t1.col1 = t2.col1;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+    -> Left hash join, one hash table per worker (t2.col1 = t1.col1)  (cost=*** rows=***)
+        -> Parallel table scan on t1  (cost=*** rows=***)
+        -> Hash
+            -> Table scan on t2  (cost=*** rows=***)
+
+SELECT /*+PQ(t1)*/ * FROM t1 LEFT JOIN t2 ON t1.col1 = t2.col1;
+col1	col1
+1	1
+2	NULL
+# Parallel-aware outer hash join
+set session parallel_rows_threshold = 0;
+EXPLAIN FORMAT=tree SELECT * FROM t1 LEFT JOIN t2 ON t1.col1 = t2.col1;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2, t1  (cost=*** rows=***)
+    -> Left hash join, hash table shared by worker threads (t2.col1 = t1.col1)  (cost=*** rows=***)
+        -> Parallel table scan on t1  (cost=*** rows=***)
+        -> Hash
+            -> Parallel table scan on t2  (cost=*** rows=***)
+
+SELECT * FROM t1 LEFT JOIN t2 ON t1.col1 = t2.col1;
+col1	col1
+1	1
+2	NULL
+set session parallel_rows_threshold = @saved_threshold;
+DROP TABLE t1, t2;
+CREATE TABLE t1 (i INTEGER);
+CREATE TABLE t2 (i INTEGER);
+ANALYZE TABLE t1, t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+SET @save_optimizer_switch= @@optimizer_switch;
+SET @save_pq_hash_join_max_hash_table_refills= @@pq_hash_join_max_hash_table_refills;
+SET optimizer_switch="materialization=off";
+SET join_buffer_size = 128;
+SET pq_hash_join_max_hash_table_refills = 999999999;
+EXPLAIN FORMAT=tree SELECT * FROM t1 WHERE t1.i IN (SELECT t2.i FROM t2) order by t1.i limit 5;
+EXPLAIN
+-> Limit: 5 row(s)
+    -> Sort: t1.i, limit input to 5 row(s) per chunk
+        -> Stream results  (cost=*** rows=***)
+            -> Gather: 4 workers, parallel scan on t2, t1  (cost=*** rows=***)
+                -> Limit: 5 row(s)  (cost=*** rows=***)
+                    -> Sort: t1.i, limit input to 5 row(s) per chunk  (cost=*** rows=***)
+                        -> Stream results  (cost=*** rows=***)
+                            -> Hash semijoin, hash table shared by worker threads (t2.i = t1.i)  (cost=*** rows=***)
+                                -> Parallel table scan on t1  (cost=*** rows=***)
+                                -> Hash
+                                    -> Parallel table scan on t2  (cost=*** rows=***)
+
+SELECT * FROM t1 WHERE t1.i IN (SELECT t2.i FROM t2) order by t1.i limit 5;
+i
+1
+2
+3
+4
+5
+SET @@optimizer_switch = @save_optimizer_switch;
+SET join_buffer_size = DEFAULT;
+SET @@pq_hash_join_max_hash_table_refills = @save_pq_hash_join_max_hash_table_refills;
+DROP TABLE t1,t2;
+CREATE TABLE t1 (i BIGINT NOT NULL);
+CREATE TABLE t2 (i BIGINT NOT NULL);
+INSERT INTO t1 SELECT RAND(1) * 10000000;
+INSERT INTO t1 SELECT RAND(2) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(3) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(4) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(5) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(6) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(7) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(8) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(9) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(10) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(11) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(12) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(13) * 10000000 FROM t1;
+INSERT INTO t1 SELECT RAND(14) * 10000000 FROM t1;
+INSERT INTO t2 SELECT RAND(15) * 10000000 FROM t1;
+ANALYZE TABLE t1, t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+SET @save_optimizer_switch= @@optimizer_switch;
+SET optimizer_switch="materialization=off";
+EXPLAIN FORMAT=tree SELECT * FROM t1 WHERE i NOT IN (SELECT /*+ PQ() */ i FROM t2) ORDER BY t1.i LIMIT 2;
+EXPLAIN
+-> Limit: 2 row(s)
+    -> Sort: t1.i, limit input to 2 row(s) per chunk
+        -> Stream results  (cost=3.36e+6..3.36e+6 rows=8)
+            -> Gather: 4 workers, parallel scan on t2, t1  (cost=3.36e+6..3.36e+6 rows=8)
+                -> Limit: 2 row(s)  (cost=3.36e+6..3.36e+6 rows=2)
+                    -> Sort: t1.i, limit input to 2 row(s) per chunk  (cost=3.36e+6..3.36e+6 rows=2)
+                        -> Stream results  (cost=1.68e+6 rows=16.8e+6)
+                            -> Hash antijoin, hash table shared by worker threads (t2.i = t1.i)  (cost=1.68e+6 rows=16.8e+6)
+                                -> Parallel table scan on t1  (cost=210 rows=2048)
+                                -> Hash
+                                    -> Parallel table scan on t2  (cost=211 rows=2048)
+
+SELECT * FROM t1 WHERE i NOT IN (SELECT /*+ PQ() */ i FROM t2) ORDER BY t1.i LIMIT 2;
+i
+236
+470
+EXPLAIN FORMAT=tree SELECT * FROM t1 WHERE i NOT IN (SELECT /*+ PQ(64) */ i FROM t2) ORDER BY t1.i LIMIT 2;
+EXPLAIN
+-> Limit: 2 row(s)
+    -> Sort: t1.i, limit input to 2 row(s) per chunk
+        -> Stream results  (cost=*** rows=***)
+            -> Gather: 64 workers, parallel scan on t2, t1  (cost=*** rows=***)
+                -> Limit: 2 row(s)  (cost=*** rows=***)
+                    -> Sort: t1.i, limit input to 2 row(s) per chunk  (cost=*** rows=***)
+                        -> Stream results  (cost=*** rows=***)
+                            -> Hash antijoin, hash table shared by worker threads (t2.i = t1.i)  (cost=*** rows=***)
+                                -> Parallel table scan on t1  (cost=*** rows=***)
+                                -> Hash
+                                    -> Parallel table scan on t2  (cost=*** rows=***)
+
+SELECT * FROM t1 WHERE i NOT IN (SELECT /*+ PQ(64) */ i FROM t2) ORDER BY t1.i LIMIT 2;
+i
+236
+470
+SET @@optimizer_switch = @save_optimizer_switch;
+DROP TABLE t1,t2;
+#
+# BUG2022112202646 For parallel-aware hash join, if cut table is under the
+#                  WEEDOUT, it will result duplicate results. Because for
+#                  workers, it just remove duplicate in worker, not between
+#                  workers. So WEEDOUT can not contain cut table.
+#                  Due to this scenario is related to big distribution and
+#                  big data, only related execution plan is displayed here.
+SET @@optimizer_switch = @save_optimizer_switch;
+CREATE TABLE t1 (
+id_col int NOT NULL AUTO_INCREMENT,
+mediumint_col mediumint DEFAULT NULL,
+decimal_col decimal(25,5) DEFAULT NULL,
+PRIMARY KEY (id_col DESC),
+KEY ndx_mediumint_decimal_col (mediumint_col DESC, decimal_col DESC)
+) ENGINE=InnoDB AUTO_INCREMENT=114 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+CREATE TABLE t2 (
+id_col int NOT NULL AUTO_INCREMENT,
+mediumint_col mediumint DEFAULT NULL,
+decimal_col decimal(25,5) DEFAULT NULL,
+PRIMARY KEY (id_col DESC)
+) ENGINE=InnoDB AUTO_INCREMENT=114 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+CREATE TABLE t3 (
+id_col int NOT NULL,
+mediumint_col mediumint DEFAULT NULL,
+decimal_col decimal(25,5) DEFAULT NULL,
+float_col float DEFAULT NULL,
+datetimelist_col datetime(6) NOT NULL,
+PRIMARY KEY (datetimelist_col DESC, id_col DESC),
+KEY ndx_decimal_float_col (datetimelist_col DESC, decimal_col DESC, float_col DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+SET optimizer_switch="loosescan=off,firstmatch=off";
+# The origin execution plan choose C as cut table. After fixed, the cut table can
+# not under WEEDOUT
+EXPLAIN FORMAT=tree WITH A AS (SELECT /*+PQ(C, B)*/ A.decimal_col, A.mediumint_col FROM t1 A JOIN t2 B ON A.decimal_col = B.decimal_col AND A.mediumint_col = B.mediumint_col WHERE (A.decimal_col, A.mediumint_col) = ANY (SELECT decimal_col, mediumint_col FROM t3 C WHERE (C.datetimelist_col = '1984-02-01 00:00:00' OR C.datetimelist_col = '1984-02-29 23:59:59') AND C.decimal_col > 0.00000)) SELECT /*+join_order(A,C,B)*/ A.decimal_col, RADIANS(A.mediumint_col) FROM A WHERE A.mediumint_col > 1 ORDER BY 1, 2;
+EXPLAIN
+-> Sort: A.decimal_col, `RADIANS(A.mediumint_col)`
+    -> Stream results  (cost=*** rows=***)
+        -> Gather: 4 workers, parallel scan on B  (cost=*** rows=***)
+            -> Table scan on <temporary>  (cost=*** rows=***)
+                -> Temporary table  (cost=*** rows=***)
+                    -> Inner hash join, one hash table per worker (B.mediumint_col = A.mediumint_col), (B.decimal_col = A.decimal_col)  (cost=*** rows=***)
+                        -> Parallel table scan on B  (cost=*** rows=***)
+                        -> Hash
+                            -> Remove duplicate A rows using temporary table (weedout)  (cost=*** rows=***)
+                                -> Inner hash join, one hash table per worker (C.mediumint_col = A.mediumint_col), (C.decimal_col = A.decimal_col)  (cost=*** rows=***)
+                                    -> Filter: ((C.datetimelist_col = TIMESTAMP'1984-02-01 00:00:00') or (C.datetimelist_col = TIMESTAMP'1984-02-29 23:59:59'))  (cost=*** rows=***)
+                                        -> Index range scan on C using PRIMARY over (datetimelist_col = '1984-02-29 23:59:59.000000') OR (datetimelist_col = '1984-02-01 00:00:00.000000')  (cost=*** rows=***)
+                                    -> Hash
+                                        -> Filter: ((A.mediumint_col > 1) and (A.decimal_col > 0.00000))  (cost=*** rows=***)
+                                            -> Index scan on A using ndx_mediumint_decimal_col  (cost=*** rows=***)
+
+Warnings:
+Warning	3128	Unresolved name `C`@`select#2` for PQ hint
+SET @@optimizer_switch = @save_optimizer_switch;
+drop table t1, t2, t3;
+#
+# BUG2023042803295 PQ remaining workers assertion error
+#
+CREATE TABLE t0 (c0 INT UNIQUE KEY);
+CREATE TABLE t1 (c0 INT);
+INSERT INTO t0(c0) VALUES (1),(2),(3),(4),(5);
+INSERT INTO t1(c0) VALUES (1);
+ANALYZE TABLE t0, t1;
+Table	Op	Msg_type	Msg_text
+test.t0	analyze	status	OK
+test.t1	analyze	status	OK
+# Verify that we have a parallel hash join under a dependent subquery.
+EXPLAIN FORMAT=tree SELECT ((SELECT 1 FROM t1 JOIN t0) UNION (SELECT 1 WHERE t0.c0 = 1)) FROM t0;
+EXPLAIN
+-> Index scan on t0 using c0  (cost=*** rows=***)
+-> Select #2 (subquery in projection; uncacheable)
+    -> Table scan on <union temporary>  (cost=*** rows=***)
+        -> Union materialize with deduplication  (cost=*** rows=***)
+            -> Gather: 4 workers, parallel scan on t1, t0  (cost=*** rows=***)
+                -> Inner hash join, hash table shared by worker threads (no condition)  (cost=*** rows=***)
+                    -> Parallel index scan on t0 using c0  (cost=*** rows=***)
+                    -> Hash
+                        -> Parallel table scan on t1  (cost=*** rows=***)
+            -> Filter: (t0.c0 = 1)  (cost=*** rows=***)
+                -> Rows fetched before execution  (cost=*** rows=***)
+
+Warnings:
+Note	1276	Field or reference 'test.t0.c0' of SELECT #3 was resolved in SELECT #1
+SELECT ((SELECT 1 FROM t1 JOIN t0) UNION (SELECT 1 WHERE t0.c0 = 1)) FROM t0;
+((SELECT 1 FROM t1 JOIN t0) UNION (SELECT 1 WHERE t0.c0 = 1))
+1
+1
+1
+1
+1
+DROP TABLE t0, t1;
+CREATE TABLE t (s VARCHAR(0) COLLATE utf8mb4_bin);
+INSERT INTO t VALUES ("");
+EXPLAIN FORMAT=tree SELECT * FROM t JOIN t t2 ON t.s = t2.s;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t  (cost=*** rows=***)
+    -> Inner hash join, one hash table per worker (t2.s = t.s)  (cost=*** rows=***)
+        -> Table scan on t2  (cost=*** rows=***)
+        -> Hash
+            -> Parallel table scan on t  (cost=*** rows=***)
+
+SELECT * FROM t JOIN t t2 ON t.s = t2.s;
+s	s
+	
+SET SESSION debug="+d, force_bloom_filter_miss";
+SELECT * FROM t JOIN t t2 ON t.s = t2.s;
+s	s
+SET SESSION debug="-d, force_bloom_filter_miss";
+DROP TABLE t;
+#
+# Test parallel-aware hash join with spill to disk.
+#
+CREATE TABLE t1 (i INTEGER NOT NULL, s VARCHAR(255) NOT NULL);
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID();
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+INSERT INTO t1 SELECT RAND() * 2147483647, UUID() FROM t1;
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SET GLOBAL join_buffer_size = 128;
+SET GLOBAL vfd_max_open_files = 1;
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+TRUNCATE performance_schema.file_summary_by_event_name;
+SELECT COUNT_STAR = 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR = 0
+1
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t2) */ COUNT(*) FROM t1 JOIN t1 t2 ON t1.s = t2.s;
+EXPLAIN
+-> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t1, t2  (cost=*** rows=***)
+        -> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+            -> Filter: (t2.s = t1.s)  (cost=*** rows=***)
+                -> Inner hash join, hash table shared by worker threads (<hash>(t2.s)=<hash>(t1.s))  (cost=*** rows=***)
+                    -> Parallel table scan on t2  (cost=*** rows=***)
+                    -> Hash
+                        -> Parallel table scan on t1  (cost=*** rows=***)
+
+SET debug_sync = "before_send_eof SIGNAL stats_ready
+                  WAIT_FOR main_thread_continue";
+SELECT /*+ PQ(t2) */ COUNT(*) FROM t1 JOIN t1 t2 ON t1.s = t2.s;;
+SET debug_sync = "now WAIT_FOR stats_ready";
+SELECT
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files,
+@@vfd_max_open_files
+FROM performance_schema.file_instances
+WHERE EVENT_NAME LIKE "%hash_join%" AND OPEN_COUNT > 0;
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files	@@vfd_max_open_files
+1	1
+SET debug_sync = "now SIGNAL main_thread_continue";
+COUNT(*)
+8192
+SELECT COUNT_STAR > 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR > 0
+1
+TRUNCATE performance_schema.file_summary_by_event_name;
+SELECT COUNT_STAR = 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR = 0
+1
+EXPLAIN FORMAT=tree SELECT COUNT(*) FROM t1 LEFT JOIN t1 t2 ON t1.s = t2.s;
+EXPLAIN
+-> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t2, t1  (cost=*** rows=***)
+        -> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+            -> Left hash join, hash table shared by worker threads (<hash>(t2.s)=<hash>(t1.s)), extra conditions: (t2.s = t1.s)  (cost=*** rows=***)
+                -> Parallel table scan on t1  (cost=*** rows=***)
+                -> Hash
+                    -> Parallel table scan on t2  (cost=*** rows=***)
+
+SET debug_sync = "before_send_eof SIGNAL stats_ready
+                  WAIT_FOR main_thread_continue";
+SELECT COUNT(*) FROM t1 LEFT JOIN t1 t2 ON t1.s = t2.s;;
+SET debug_sync = "now WAIT_FOR stats_ready";
+SELECT
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files,
+@@vfd_max_open_files
+FROM performance_schema.file_instances
+WHERE EVENT_NAME LIKE "%hash_join%" AND OPEN_COUNT > 0;
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files	@@vfd_max_open_files
+1	1
+SET debug_sync = "now SIGNAL main_thread_continue";
+COUNT(*)
+8192
+SELECT COUNT_STAR > 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR > 0
+1
+TRUNCATE performance_schema.file_summary_by_event_name;
+SELECT COUNT_STAR = 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR = 0
+1
+SET optimizer_switch = "materialization=off";
+EXPLAIN FORMAT=tree SELECT COUNT(*) FROM t1 WHERE t1.s IN (SELECT s FROM t1 t2);
+EXPLAIN
+-> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t2, t1  (cost=*** rows=***)
+        -> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+            -> Hash semijoin, hash table shared by worker threads (<hash>(t2.s)=<hash>(t1.s)), extra conditions: (t2.s = t1.s)  (cost=*** rows=***)
+                -> Parallel table scan on t1  (cost=*** rows=***)
+                -> Hash
+                    -> Parallel table scan on t2  (cost=*** rows=***)
+
+SET debug_sync = "before_send_eof SIGNAL stats_ready
+                  WAIT_FOR main_thread_continue";
+SELECT COUNT(*) FROM t1 WHERE t1.s IN (SELECT s FROM t1 t2);;
+SET debug_sync = "now WAIT_FOR stats_ready";
+SELECT
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files,
+@@vfd_max_open_files
+FROM performance_schema.file_instances
+WHERE EVENT_NAME LIKE "%hash_join%" AND OPEN_COUNT > 0;
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files	@@vfd_max_open_files
+1	1
+SET debug_sync = "now SIGNAL main_thread_continue";
+COUNT(*)
+8192
+SELECT COUNT_STAR > 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR > 0
+1
+TRUNCATE performance_schema.file_summary_by_event_name;
+SELECT COUNT_STAR = 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR = 0
+1
+EXPLAIN FORMAT=tree SELECT COUNT(*) FROM t1 WHERE t1.s NOT IN (SELECT s FROM t1 t2);
+EXPLAIN
+-> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t2, t1  (cost=*** rows=***)
+        -> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+            -> Hash antijoin, hash table shared by worker threads (<hash>(t2.s)=<hash>(t1.s)), extra conditions: (t2.s = t1.s)  (cost=*** rows=***)
+                -> Parallel table scan on t1  (cost=*** rows=***)
+                -> Hash
+                    -> Parallel table scan on t2  (cost=*** rows=***)
+
+SET debug_sync = "before_send_eof SIGNAL stats_ready
+                  WAIT_FOR main_thread_continue";
+SELECT COUNT(*) FROM t1 WHERE t1.s NOT IN (SELECT s FROM t1 t2);;
+SET debug_sync = "now WAIT_FOR stats_ready";
+SELECT
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files,
+@@vfd_max_open_files
+FROM performance_schema.file_instances
+WHERE EVENT_NAME LIKE "%hash_join%" AND OPEN_COUNT > 0;
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files	@@vfd_max_open_files
+1	1
+SET debug_sync = "now SIGNAL main_thread_continue";
+COUNT(*)
+0
+SELECT COUNT_STAR > 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR > 0
+1
+SET optimizer_switch = DEFAULT;
+SET GLOBAL vfd_max_open_files = 256;
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+TRUNCATE performance_schema.file_summary_by_event_name;
+SELECT COUNT_STAR = 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR = 0
+1
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t2) */ COUNT(*) FROM t1 JOIN t1 t2 ON t1.s = t2.s;
+EXPLAIN
+-> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t1, t2  (cost=*** rows=***)
+        -> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+            -> Filter: (t2.s = t1.s)  (cost=*** rows=***)
+                -> Inner hash join, hash table shared by worker threads (<hash>(t2.s)=<hash>(t1.s))  (cost=*** rows=***)
+                    -> Parallel table scan on t2  (cost=*** rows=***)
+                    -> Hash
+                        -> Parallel table scan on t1  (cost=*** rows=***)
+
+SET debug_sync = "before_send_eof SIGNAL stats_ready
+                  WAIT_FOR main_thread_continue";
+SELECT /*+ PQ(t2) */ COUNT(*) FROM t1 JOIN t1 t2 ON t1.s = t2.s;;
+SET debug_sync = "now WAIT_FOR stats_ready";
+SELECT
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files,
+@@vfd_max_open_files
+FROM performance_schema.file_instances
+WHERE EVENT_NAME LIKE "%hash_join%" AND OPEN_COUNT > 0;
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files	@@vfd_max_open_files
+1	256
+SET debug_sync = "now SIGNAL main_thread_continue";
+COUNT(*)
+8192
+SELECT COUNT_STAR > 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR > 0
+1
+TRUNCATE performance_schema.file_summary_by_event_name;
+SELECT COUNT_STAR = 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR = 0
+1
+EXPLAIN FORMAT=tree SELECT COUNT(*) FROM t1 LEFT JOIN t1 t2 ON t1.s = t2.s;
+EXPLAIN
+-> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t2, t1  (cost=*** rows=***)
+        -> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+            -> Left hash join, hash table shared by worker threads (<hash>(t2.s)=<hash>(t1.s)), extra conditions: (t2.s = t1.s)  (cost=*** rows=***)
+                -> Parallel table scan on t1  (cost=*** rows=***)
+                -> Hash
+                    -> Parallel table scan on t2  (cost=*** rows=***)
+
+SET debug_sync = "before_send_eof SIGNAL stats_ready
+                  WAIT_FOR main_thread_continue";
+SELECT COUNT(*) FROM t1 LEFT JOIN t1 t2 ON t1.s = t2.s;;
+SET debug_sync = "now WAIT_FOR stats_ready";
+SELECT
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files,
+@@vfd_max_open_files
+FROM performance_schema.file_instances
+WHERE EVENT_NAME LIKE "%hash_join%" AND OPEN_COUNT > 0;
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files	@@vfd_max_open_files
+1	256
+SET debug_sync = "now SIGNAL main_thread_continue";
+COUNT(*)
+8192
+SELECT COUNT_STAR > 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR > 0
+1
+TRUNCATE performance_schema.file_summary_by_event_name;
+SELECT COUNT_STAR = 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR = 0
+1
+SET optimizer_switch = "materialization=off";
+EXPLAIN FORMAT=tree SELECT COUNT(*) FROM t1 WHERE t1.s IN (SELECT s FROM t1 t2);
+EXPLAIN
+-> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t2, t1  (cost=*** rows=***)
+        -> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+            -> Hash semijoin, hash table shared by worker threads (<hash>(t2.s)=<hash>(t1.s)), extra conditions: (t2.s = t1.s)  (cost=*** rows=***)
+                -> Parallel table scan on t1  (cost=*** rows=***)
+                -> Hash
+                    -> Parallel table scan on t2  (cost=*** rows=***)
+
+SET debug_sync = "before_send_eof SIGNAL stats_ready
+                  WAIT_FOR main_thread_continue";
+SELECT COUNT(*) FROM t1 WHERE t1.s IN (SELECT s FROM t1 t2);;
+SET debug_sync = "now WAIT_FOR stats_ready";
+SELECT
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files,
+@@vfd_max_open_files
+FROM performance_schema.file_instances
+WHERE EVENT_NAME LIKE "%hash_join%" AND OPEN_COUNT > 0;
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files	@@vfd_max_open_files
+1	256
+SET debug_sync = "now SIGNAL main_thread_continue";
+COUNT(*)
+8192
+SELECT COUNT_STAR > 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR > 0
+1
+TRUNCATE performance_schema.file_summary_by_event_name;
+SELECT COUNT_STAR = 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR = 0
+1
+EXPLAIN FORMAT=tree SELECT COUNT(*) FROM t1 WHERE t1.s NOT IN (SELECT s FROM t1 t2);
+EXPLAIN
+-> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t2, t1  (cost=*** rows=***)
+        -> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+            -> Hash antijoin, hash table shared by worker threads (<hash>(t2.s)=<hash>(t1.s)), extra conditions: (t2.s = t1.s)  (cost=*** rows=***)
+                -> Parallel table scan on t1  (cost=*** rows=***)
+                -> Hash
+                    -> Parallel table scan on t2  (cost=*** rows=***)
+
+SET debug_sync = "before_send_eof SIGNAL stats_ready
+                  WAIT_FOR main_thread_continue";
+SELECT COUNT(*) FROM t1 WHERE t1.s NOT IN (SELECT s FROM t1 t2);;
+SET debug_sync = "now WAIT_FOR stats_ready";
+SELECT
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files,
+@@vfd_max_open_files
+FROM performance_schema.file_instances
+WHERE EVENT_NAME LIKE "%hash_join%" AND OPEN_COUNT > 0;
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files	@@vfd_max_open_files
+1	256
+SET debug_sync = "now SIGNAL main_thread_continue";
+COUNT(*)
+0
+SELECT COUNT_STAR > 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR > 0
+1
+SET optimizer_switch = DEFAULT;
+SET GLOBAL vfd_max_open_files = DEFAULT;
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+TRUNCATE performance_schema.file_summary_by_event_name;
+SELECT COUNT_STAR = 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR = 0
+1
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t2) */ COUNT(*) FROM t1 JOIN t1 t2 ON t1.s = t2.s;
+EXPLAIN
+-> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t1, t2  (cost=*** rows=***)
+        -> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+            -> Filter: (t2.s = t1.s)  (cost=*** rows=***)
+                -> Inner hash join, hash table shared by worker threads (<hash>(t2.s)=<hash>(t1.s))  (cost=*** rows=***)
+                    -> Parallel table scan on t2  (cost=*** rows=***)
+                    -> Hash
+                        -> Parallel table scan on t1  (cost=*** rows=***)
+
+SET debug_sync = "before_send_eof SIGNAL stats_ready
+                  WAIT_FOR main_thread_continue";
+SELECT /*+ PQ(t2) */ COUNT(*) FROM t1 JOIN t1 t2 ON t1.s = t2.s;;
+SET debug_sync = "now WAIT_FOR stats_ready";
+SELECT
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files,
+@@vfd_max_open_files
+FROM performance_schema.file_instances
+WHERE EVENT_NAME LIKE "%hash_join%" AND OPEN_COUNT > 0;
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files	@@vfd_max_open_files
+1	32
+SET debug_sync = "now SIGNAL main_thread_continue";
+COUNT(*)
+8192
+SELECT COUNT_STAR > 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR > 0
+1
+TRUNCATE performance_schema.file_summary_by_event_name;
+SELECT COUNT_STAR = 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR = 0
+1
+EXPLAIN FORMAT=tree SELECT COUNT(*) FROM t1 LEFT JOIN t1 t2 ON t1.s = t2.s;
+EXPLAIN
+-> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t2, t1  (cost=*** rows=***)
+        -> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+            -> Left hash join, hash table shared by worker threads (<hash>(t2.s)=<hash>(t1.s)), extra conditions: (t2.s = t1.s)  (cost=*** rows=***)
+                -> Parallel table scan on t1  (cost=*** rows=***)
+                -> Hash
+                    -> Parallel table scan on t2  (cost=*** rows=***)
+
+SET debug_sync = "before_send_eof SIGNAL stats_ready
+                  WAIT_FOR main_thread_continue";
+SELECT COUNT(*) FROM t1 LEFT JOIN t1 t2 ON t1.s = t2.s;;
+SET debug_sync = "now WAIT_FOR stats_ready";
+SELECT
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files,
+@@vfd_max_open_files
+FROM performance_schema.file_instances
+WHERE EVENT_NAME LIKE "%hash_join%" AND OPEN_COUNT > 0;
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files	@@vfd_max_open_files
+1	32
+SET debug_sync = "now SIGNAL main_thread_continue";
+COUNT(*)
+8192
+SELECT COUNT_STAR > 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR > 0
+1
+TRUNCATE performance_schema.file_summary_by_event_name;
+SELECT COUNT_STAR = 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR = 0
+1
+SET optimizer_switch = "materialization=off";
+EXPLAIN FORMAT=tree SELECT COUNT(*) FROM t1 WHERE t1.s IN (SELECT s FROM t1 t2);
+EXPLAIN
+-> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t2, t1  (cost=*** rows=***)
+        -> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+            -> Hash semijoin, hash table shared by worker threads (<hash>(t2.s)=<hash>(t1.s)), extra conditions: (t2.s = t1.s)  (cost=*** rows=***)
+                -> Parallel table scan on t1  (cost=*** rows=***)
+                -> Hash
+                    -> Parallel table scan on t2  (cost=*** rows=***)
+
+SET debug_sync = "before_send_eof SIGNAL stats_ready
+                  WAIT_FOR main_thread_continue";
+SELECT COUNT(*) FROM t1 WHERE t1.s IN (SELECT s FROM t1 t2);;
+SET debug_sync = "now WAIT_FOR stats_ready";
+SELECT
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files,
+@@vfd_max_open_files
+FROM performance_schema.file_instances
+WHERE EVENT_NAME LIKE "%hash_join%" AND OPEN_COUNT > 0;
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files	@@vfd_max_open_files
+1	32
+SET debug_sync = "now SIGNAL main_thread_continue";
+COUNT(*)
+8192
+SELECT COUNT_STAR > 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR > 0
+1
+TRUNCATE performance_schema.file_summary_by_event_name;
+SELECT COUNT_STAR = 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR = 0
+1
+EXPLAIN FORMAT=tree SELECT COUNT(*) FROM t1 WHERE t1.s NOT IN (SELECT s FROM t1 t2);
+EXPLAIN
+-> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t2, t1  (cost=*** rows=***)
+        -> Aggregate: count(`<temporary>`.`COUNT(*)`)  (cost=*** rows=***)
+            -> Hash antijoin, hash table shared by worker threads (<hash>(t2.s)=<hash>(t1.s)), extra conditions: (t2.s = t1.s)  (cost=*** rows=***)
+                -> Parallel table scan on t1  (cost=*** rows=***)
+                -> Hash
+                    -> Parallel table scan on t2  (cost=*** rows=***)
+
+SET debug_sync = "before_send_eof SIGNAL stats_ready
+                  WAIT_FOR main_thread_continue";
+SELECT COUNT(*) FROM t1 WHERE t1.s NOT IN (SELECT s FROM t1 t2);;
+SET debug_sync = "now WAIT_FOR stats_ready";
+SELECT
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files,
+@@vfd_max_open_files
+FROM performance_schema.file_instances
+WHERE EVENT_NAME LIKE "%hash_join%" AND OPEN_COUNT > 0;
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files	@@vfd_max_open_files
+1	32
+SET debug_sync = "now SIGNAL main_thread_continue";
+COUNT(*)
+0
+SELECT COUNT_STAR > 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR > 0
+1
+SET optimizer_switch = DEFAULT;
+SET GLOBAL pq_support_features_switch='hash_join_spill_to_disk=off';
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+TRUNCATE performance_schema.file_summary_by_event_name;
+SELECT COUNT_STAR = 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR = 0
+1
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t2) */ COUNT(*) FROM t1 JOIN t1 t2 ON t1.s = t2.s;
+EXPLAIN
+-> Aggregate: count(0)  (cost=*** rows=***)
+    -> Filter: (t2.s = t1.s)  (cost=*** rows=***)
+        -> Inner hash join (<hash>(t2.s)=<hash>(t1.s))  (cost=*** rows=***)
+            -> Table scan on t2  (cost=*** rows=***)
+            -> Hash
+                -> Table scan on t1  (cost=*** rows=***)
+
+SET debug_sync = "before_send_eof SIGNAL stats_ready
+                  WAIT_FOR main_thread_continue";
+SELECT /*+ PQ(t2) */ COUNT(*) FROM t1 JOIN t1 t2 ON t1.s = t2.s;;
+SET debug_sync = "now WAIT_FOR stats_ready";
+SELECT
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files,
+@@vfd_max_open_files
+FROM performance_schema.file_instances
+WHERE EVENT_NAME LIKE "%hash_join%" AND OPEN_COUNT > 0;
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files	@@vfd_max_open_files
+1	32
+SET debug_sync = "now SIGNAL main_thread_continue";
+COUNT(*)
+8192
+SELECT COUNT_STAR > 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR > 0
+1
+TRUNCATE performance_schema.file_summary_by_event_name;
+SELECT COUNT_STAR = 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR = 0
+1
+EXPLAIN FORMAT=tree SELECT COUNT(*) FROM t1 LEFT JOIN t1 t2 ON t1.s = t2.s;
+EXPLAIN
+-> Aggregate: count(0)  (cost=*** rows=***)
+    -> Left hash join (<hash>(t2.s)=<hash>(t1.s)), extra conditions: (t2.s = t1.s)  (cost=*** rows=***)
+        -> Table scan on t1  (cost=*** rows=***)
+        -> Hash
+            -> Table scan on t2  (cost=*** rows=***)
+
+SET debug_sync = "before_send_eof SIGNAL stats_ready
+                  WAIT_FOR main_thread_continue";
+SELECT COUNT(*) FROM t1 LEFT JOIN t1 t2 ON t1.s = t2.s;;
+SET debug_sync = "now WAIT_FOR stats_ready";
+SELECT
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files,
+@@vfd_max_open_files
+FROM performance_schema.file_instances
+WHERE EVENT_NAME LIKE "%hash_join%" AND OPEN_COUNT > 0;
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files	@@vfd_max_open_files
+1	32
+SET debug_sync = "now SIGNAL main_thread_continue";
+COUNT(*)
+8192
+SELECT COUNT_STAR > 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR > 0
+1
+TRUNCATE performance_schema.file_summary_by_event_name;
+SELECT COUNT_STAR = 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR = 0
+1
+SET optimizer_switch = "materialization=off";
+EXPLAIN FORMAT=tree SELECT COUNT(*) FROM t1 WHERE t1.s IN (SELECT s FROM t1 t2);
+EXPLAIN
+-> Aggregate: count(0)  (cost=*** rows=***)
+    -> Hash semijoin (<hash>(t2.s)=<hash>(t1.s)), extra conditions: (t2.s = t1.s)  (cost=*** rows=***)
+        -> Table scan on t1  (cost=*** rows=***)
+        -> Hash
+            -> Table scan on t2  (cost=*** rows=***)
+
+SET debug_sync = "before_send_eof SIGNAL stats_ready
+                  WAIT_FOR main_thread_continue";
+SELECT COUNT(*) FROM t1 WHERE t1.s IN (SELECT s FROM t1 t2);;
+SET debug_sync = "now WAIT_FOR stats_ready";
+SELECT
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files,
+@@vfd_max_open_files
+FROM performance_schema.file_instances
+WHERE EVENT_NAME LIKE "%hash_join%" AND OPEN_COUNT > 0;
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files	@@vfd_max_open_files
+1	32
+SET debug_sync = "now SIGNAL main_thread_continue";
+COUNT(*)
+8192
+SELECT COUNT_STAR > 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR > 0
+1
+TRUNCATE performance_schema.file_summary_by_event_name;
+SELECT COUNT_STAR = 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR = 0
+1
+EXPLAIN FORMAT=tree SELECT COUNT(*) FROM t1 WHERE t1.s NOT IN (SELECT s FROM t1 t2);
+EXPLAIN
+-> Aggregate: count(0)  (cost=*** rows=***)
+    -> Hash antijoin (<hash>(t2.s)=<hash>(t1.s)), extra conditions: (t2.s = t1.s)  (cost=*** rows=***)
+        -> Table scan on t1  (cost=*** rows=***)
+        -> Hash
+            -> Table scan on t2  (cost=*** rows=***)
+
+SET debug_sync = "before_send_eof SIGNAL stats_ready
+                  WAIT_FOR main_thread_continue";
+SELECT COUNT(*) FROM t1 WHERE t1.s NOT IN (SELECT s FROM t1 t2);;
+SET debug_sync = "now WAIT_FOR stats_ready";
+SELECT
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files,
+@@vfd_max_open_files
+FROM performance_schema.file_instances
+WHERE EVENT_NAME LIKE "%hash_join%" AND OPEN_COUNT > 0;
+COUNT(*) BETWEEN FLOOR(@@vfd_max_open_files * 0.9) AND @@vfd_max_open_files	@@vfd_max_open_files
+1	32
+SET debug_sync = "now SIGNAL main_thread_continue";
+COUNT(*)
+0
+SELECT COUNT_STAR > 0 FROM performance_schema.file_summary_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+COUNT_STAR > 0
+1
+SET optimizer_switch = DEFAULT;
+SET GLOBAL join_buffer_size = DEFAULT;
+SET GLOBAL pq_support_features_switch='hash_join_spill_to_disk=on';
+DROP TABLE t1;
+#
+# BUG2023082400256
+#
+CREATE TABLE t (i INTEGER NOT NULL);
+INSERT INTO t SELECT 0;
+INSERT INTO t SELECT 0 FROM t;
+INSERT INTO t SELECT 0 FROM t;
+INSERT INTO t SELECT 0 FROM t;
+INSERT INTO t SELECT 0 FROM t;
+INSERT INTO t SELECT 0 FROM t;
+INSERT INTO t SELECT 0 FROM t;
+INSERT INTO t SELECT 0 FROM t;
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+SET join_buffer_size = 128;
+TRUNCATE performance_schema.memory_summary_global_by_event_name;
+SELECT HIGH_NUMBER_OF_BYTES_USED
+FROM performance_schema.memory_summary_global_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+HIGH_NUMBER_OF_BYTES_USED
+0
+EXPLAIN FORMAT=tree SELECT /*+ PQ(t3 1) */ SUM(t3.i) FROM t JOIN t t2 JOIN t t3;
+EXPLAIN
+-> Aggregate: sum(`<temporary>`.`SUM(t3.i)`)  (cost=*** rows=***)
+    -> Gather: 1 workers, parallel scan on t2, t3  (cost=*** rows=***)
+        -> Aggregate: sum(`<temporary>`.`SUM(t3.i)`)  (cost=*** rows=***)
+            -> Inner hash join, hash table shared by worker threads (no condition)  (cost=*** rows=***)
+                -> Parallel table scan on t3  (cost=***-6 rows=***)
+                -> Hash
+                    -> Inner hash join, one hash table per worker (no condition)  (cost=*** rows=***)
+                        -> Parallel table scan on t2  (cost=*** rows=***)
+                        -> Hash
+                            -> Table scan on t  (cost=*** rows=***)
+
+SELECT /*+ PQ(t3 1) */ SUM(t3.i) FROM t JOIN t t2 JOIN t t3;
+SUM(t3.i)
+0
+SELECT HIGH_NUMBER_OF_BYTES_USED < 500 * 1000
+FROM performance_schema.memory_summary_global_by_event_name
+WHERE EVENT_NAME LIKE "%hash_join%";
+HIGH_NUMBER_OF_BYTES_USED < 500 * 1000
+1
+SET join_buffer_size = DEFAULT;
+SET pq_hash_join_max_hash_table_refills = DEFAULT;
+DROP TABLE t;
+# BUG2021120300060
+#
+# The following test case is probably way more complex than it needs to
+# be, but I haven't found any way to simplify it further. What we want to
+# achieve is a parallel-aware hash join below a weedout, where the build
+# input contains a parallel-oblivious hash join with a materialize iterator
+# as its probe input. In ASCII art, we want something that looks like this:
+#
+#              weedout
+#                 |
+#      hash join, parallel-aware
+#      |                       |
+#  hash join                  t3
+#  |       |
+#  t1  materialize
+#          |
+#         t2
+#
+CREATE TABLE t1 (s VARCHAR(255), INDEX idx (s));
+INSERT INTO t1 SELECT UUID();
+INSERT INTO t1 SELECT UUID() FROM t1;
+INSERT INTO t1 SELECT UUID() FROM t1;
+INSERT INTO t1 SELECT UUID() FROM t1;
+INSERT INTO t1 SELECT UUID() FROM t1;
+INSERT INTO t1 SELECT UUID() FROM t1;
+INSERT INTO t1 SELECT UUID() FROM t1;
+INSERT INTO t1 SELECT UUID() FROM t1;
+INSERT INTO t1 SELECT UUID() FROM t1;
+CREATE TABLE t2 (i INTEGER);
+INSERT INTO t2 SELECT RAND(1) * 1000 FROM t1 LIMIT 27;
+CREATE TABLE t3 (i INTEGER, INDEX idx (i));
+INSERT INTO t3 SELECT IF(RAND(1) > 0.5, NULL, RAND(1) * 1000) FROM t1 LIMIT 50;
+CREATE TABLE t4 (i INTEGER);
+INSERT INTO t4 SELECT 1 FROM t1 LIMIT 27;
+CREATE VIEW view1 AS
+SELECT 1 FROM t1
+UNION ALL
+SELECT 1 FROM t1;
+CREATE VIEW view2 AS
+SELECT
+subq_1.c0 AS c1
+FROM
+(SELECT pi() AS c0, subq_0.c0 AS c1 FROM
+(t2 LEFT JOIN
+(SELECT 1 AS c0 FROM t3 ref_1 WHERE (ref_1.i IS NULL)) subq_0
+ON (subq_0.c0 IS NOT NULL))) subq_1
+GROUP BY subq_1.c1, subq_1.c0;
+CREATE VIEW view3 AS
+SELECT
+subq_0.c2 AS c2
+FROM
+(SELECT
+i AS c2 FROM t4) subq_0
+GROUP BY subq_0.c2
+ORDER BY subq_0.c2;
+ANALYZE TABLE t1, t2, t3, t4;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+test.t3	analyze	status	OK
+test.t4	analyze	status	OK
+EXPLAIN FORMAT=tree SELECT /*+ PQ(ref_12 4) */
+1
+FROM
+view1 AS ref_9
+INNER JOIN t1 AS ref_11 ON (false)
+RIGHT JOIN t1 AS ref_12
+LEFT JOIN view2 AS ref_13
+INNER JOIN t1 AS ref_14 ON (true)
+ON (EXISTS (
+SELECT
+ref_15.c2 AS c0
+FROM
+view3 AS ref_15
+WHERE ref_14.s IS NOT NULL))
+ON (ref_13.c1 IS NOT NULL);
+EXPLAIN
+-> Gather: 4 workers, parallel scan on ref_12  (cost=32881 rows=256)
+    -> Left hash join, one hash table per worker (no condition)  (cost=32881 rows=64)
+        -> Remove duplicate (ref_12, ref_14, ref_13) rows using temporary table (weedout)  (cost=2838 rows=64)
+            -> Left hash join, one hash table per worker (no condition)  (cost=2838 rows=64)
+                -> Parallel index scan on ref_12 using idx  (cost=7.15 rows=64)
+                -> Hash
+                    -> Filter: (ref_14.s is not null)  (cost=2831 rows=0)
+                        -> Inner hash join, one hash table per worker (no condition)  (cost=2831 rows=0)
+                            -> Table scan on ref_13  (cost=187..198 rows=675)
+                                -> Materialize  (cost=187..187 rows=675)
+                                    -> Table scan on <temporary>  (cost=109..119 rows=675)
+                                        -> Temporary table with deduplication  (cost=109..109 rows=675)
+                                            -> Gather: 4 workers, parallel scan on t2  (cost=36.4..41 rows=675)
+                                                -> Table scan on <temporary>  (cost=36.4..41 rows=169)
+                                                    -> Temporary table with deduplication  (cost=36.4..36.4 rows=169)
+                                                        -> Nested loop left join  (cost=19.5 rows=169)
+                                                            -> Parallel table scan on t2  (cost=0.925 rows=6.75)
+                                                            -> Filter: ((1 is not null) and (ref_1.i is null))  (cost=0.351 rows=25)
+                                                                -> Covering index lookup on ref_1 using idx (i=NULL)  (cost=0.351 rows=25)
+                            -> Hash
+                                -> Inner hash join, one hash table per worker (no condition)  (cost=3.37 rows=0)
+                                    -> Index scan on ref_14 using idx  (cost=0.103 rows=256)
+                                    -> Hash
+                                        -> Table scan on ref_15  (cost=2.5..2.5 rows=0)
+                                            -> Materialize  (cost=0..0 rows=0)
+                                                -> Sort: subq_0.c2
+                                                    -> Table scan on <temporary>  (cost=6.98..9.71 rows=27)
+                                                        -> Temporary table with deduplication  (cost=6.88..6.88 rows=27)
+                                                            -> Gather: 4 workers, parallel scan on t4  (cost=1.7..4.17 rows=27)
+                                                                -> Table scan on <temporary>  (cost=1.98..4.17 rows=6.75)
+                                                                    -> Temporary table with deduplication  (cost=1.6..1.6 rows=6.75)
+                                                                        -> Parallel table scan on t4  (cost=0.925 rows=6.75)
+        -> Hash
+            -> Zero rows (Impossible filter)  (cost=0..0 rows=0)
+
+Warnings:
+Note	1276	Field or reference 'test.ref_14.s' of SELECT #2 was resolved in SELECT #1
+# We only want to see that we do not hit any assertion,
+# so disable the result log.
+SELECT /*+ PQ(ref_12 4) */
+1
+FROM
+view1 AS ref_9
+INNER JOIN t1 AS ref_11 ON (false)
+RIGHT JOIN t1 AS ref_12
+LEFT JOIN view2 AS ref_13
+INNER JOIN t1 AS ref_14 ON (true)
+ON (EXISTS (
+SELECT
+ref_15.c2 AS c0
+FROM
+view3 AS ref_15
+WHERE ref_14.s IS NOT NULL))
+ON (ref_13.c1 IS NOT NULL);
+DROP VIEW view1, view2, view3;
+DROP TABLE t1, t2, t3, t4;

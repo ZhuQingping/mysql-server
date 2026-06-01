@@ -1,0 +1,54 @@
+call mtr.add_suppression("Threadpool could create additional thread to handle queries");
+SET @save_threadpool_schedule_mode = @@global.threadpool_schedule_mode;
+CREATE TABLE t1(id int primary key, age int, key idx_age(age));
+INSERT INTO t1 values(1, 11),(2, 12);
+CREATE TABLE t2(id int primary key);
+INSERT INTO t2 values(3),(4);
+select 1;
+1
+1
+select * from t1;
+id	age
+1	11
+2	12
+select * from t2;
+id
+3
+4
+set GLOBAL threadpool_schedule_mode = 'transaction';
+BEGIN;
+select 1;
+1
+1
+select * from t1;
+id	age
+1	11
+2	12
+select * from t2;
+id
+3
+4
+select 1;
+1
+1
+COMMIT;
+set GLOBAL threadpool_schedule_mode = 'statement';
+BEGIN;
+select 1;
+1
+1
+select * from t1;
+id	age
+1	11
+2	12
+select * from t2;
+id
+3
+4
+select 1;
+1
+1
+COMMIT;
+DROP TABLE t1;
+DROP TABLE t2;
+SET GLOBAL threadpool_schedule_mode = @save_threadpool_schedule_mode;

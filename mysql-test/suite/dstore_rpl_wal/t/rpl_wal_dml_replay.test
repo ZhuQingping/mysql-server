@@ -1,0 +1,70 @@
+#
+# ==== Purpose ====
+#
+# Test the correctness of DML in source-replica replication.
+#
+
+--disable_query_log
+CALL mtr.add_suppression(".* failed on net_flush().*");
+--enable_query_log
+
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_setup.inc
+--enable_warnings
+
+--echo ############################################################
+--echo Execute a simple DML test.
+--echo ############################################################
+
+--echo #
+--echo # 1. Execute some DML operations on the primary.
+--echo #
+
+--echo #
+--echo # INSERT
+--echo #
+--connection $node1
+use copy_database;
+insert into copy_table values (1, 'aaa');
+insert into copy_table values (2, 'bbb');
+insert into copy_table values (3, 'ccc');
+insert into copy_table values (4, 'ddd');
+insert into copy_table values (5, 'eee');
+INSERT INTO copy_table (id, data) VALUES (6, 'fff');
+INSERT INTO copy_table (id, data) VALUES (7, 'ggg'), (8, 'hhh'), (9, 'iii');
+INSERT INTO copy_table (id, data) VALUES (10, 'j j 123'), (11, 'k_k_456'), (12, 'l-l-789');
+
+--echo #
+--echo # UPDATE
+--echo #
+UPDATE copy_table SET data = 'aaa_update' WHERE id = 1;
+UPDATE copy_table SET data = CONCAT(data, '_batch_update') WHERE id BETWEEN 2 AND 4;
+UPDATE copy_table SET data = 'default_data' WHERE id > 10 AND id < 13;
+UPDATE copy_table SET data = UPPER(data) WHERE id = 5;
+UPDATE copy_table SET data = LOWER(data) WHERE id = 6;
+UPDATE copy_table SET data = SUBSTRING(data, 1, 2) WHERE id = 7;
+
+--echo #
+--echo # DELETE
+--echo #
+DELETE FROM copy_table WHERE id BETWEEN 1 AND 2;
+DELETE FROM copy_table WHERE data LIKE '%_batch_update';
+
+--echo #
+--echo # Print the results after modification.
+--echo #
+select * from copy_table;
+--sleep 3
+
+--echo #
+--echo # 2. Promote the replica to master to verify the correctness of replica's log replay, with the expectation of data consistency with the original master.
+--echo #
+--connection $node2
+STOP REPLICA;
+call rpl_wal.pdb_promote();
+use copy_database;
+select * from copy_table;
+
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_cleanup.inc
+--enable_warnings

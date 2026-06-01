@@ -1,0 +1,33 @@
+SET SESSION debug= '+d,skip_dd_table_access_check';
+#
+# Tests column with functions set as DEFAULT. Test needs debug mode
+# in order to be able to check for the changes in DD.
+#
+#
+# CREATE TABLE - column with func as DEFAULT then test DROP column.
+#
+#
+# Test ALTER table ADD column with DEFAULT
+#
+#
+# Test ALTER table ADD column with DEFAULT then ALTER TABLE SET DEFAULT func
+#
+#
+# Test CREATE TABLE with column without default then SET a DEFAULT.
+# ALSO TEST DROP DEFAULT
+#
+#
+# Test SHOW COLUMNS for table with NOT NULL DEFAULT (expr).
+#
+CREATE TABLE t1 (f1 INT NOT NULL DEFAULT (32));
+SHOW COLUMNS FROM t1;
+Field	Type	Null	Key	Default	Extra
+f1	int	NO		32	DEFAULT_GENERATED
+SELECT CONCAT(t.name, ".", c.name) as col_name,
+c.default_option, c.default_value_utf8
+FROM mysql.tables AS t JOIN mysql.columns as c ON t.id = c.table_id
+WHERE t.name = 't1' ORDER BY c.id;
+col_name	default_option	default_value_utf8
+t1.f1	32	32
+DROP TABLE t1;
+SET SESSION debug= '-d,skip_dd_table_access_check';

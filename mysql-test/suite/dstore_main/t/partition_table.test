@@ -1,0 +1,50 @@
+--source include/have_only_dstore.inc
+--echo #
+--echo # DStore storage engine do not support partition table.
+--echo #
+
+SET @default_storage_engine_saved = @@default_storage_engine;
+
+--echo #
+--echo # TEST 1: Can not create partition table if default_storage_engine
+--echo #         is Dstore and create table do not specify storage engine type.
+--echo #
+SET default_storage_engine='Dstore';
+
+CREATE TABLE tp1 (
+  c1 int DEFAULT NULL
+) ENGINE=Dstore PARTITION BY KEY (c1) PARTITIONS 1;
+DROP TABLE tp1;
+
+--error ER_PARTITION_MERGE_ERROR
+CREATE TABLE tp1 (
+  c1 int DEFAULT NULL
+) ENGINE=Dstore PARTITION BY KEY (c1) PARTITIONS 1;
+
+--error ER_PARTITION_MERGE_ERROR
+CREATE TABLE tp1 (
+  c1 int DEFAULT NULL
+) PARTITION BY KEY (c1) PARTITIONS 1;
+
+--echo #
+--echo # TEST 2: Can create partition table if default_storage_engine
+--echo #         is Dstore and create table do not specify storage engine type.
+--echo #
+SET default_storage_engine='Dstore';
+
+CREATE TABLE tp1 (
+  c1 int DEFAULT NULL
+) ENGINE=Dstore PARTITION BY KEY (c1) PARTITIONS 1;
+DROP TABLE tp1;
+
+--error ER_PARTITION_MERGE_ERROR
+CREATE TABLE tp1 (
+  c1 int DEFAULT NULL
+) ENGINE=Dstore PARTITION BY KEY (c1) PARTITIONS 1;
+
+CREATE TABLE tp1 (
+  c1 int DEFAULT NULL
+) PARTITION BY KEY (c1) PARTITIONS 1;
+DROP TABLE tp1;
+
+SET @@default_storage_engine = @default_storage_engine_saved;

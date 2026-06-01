@@ -1,0 +1,104 @@
+CALL mtr.add_suppression("Local backup\: wal archiver is running");
+CALL mtr.add_suppression("insert dstore index tuple fail");
+CALL mtr.add_suppression("insert_index fail");
+call mtr.add_suppression("full backup found binlog is not enabled");
+#
+# 0. prepare some data
+#
+create database full_backup_archive_restore;
+use full_backup_archive_restore;
+create table t1(s varchar(100)) engine=Dstore;
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1000
+#
+# 1. create a full backup with flag 1
+#
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+call rds_backup.stop_full_local_backup();
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+#
+#    add more data
+#
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1500
+#
+# 2. start log archive
+#
+call rds_backup.start_log_archive();
+#
+# 3. create a full backup with flag 0
+#
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+call rds_backup.stop_full_local_backup();
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+#
+# 4. add more data for log archive
+#
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+2000
+#
+# 5. stop log archive
+#
+call rds_backup.stop_log_archive();
+#
+# 6. Add more data
+#
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+2300
+#
+# 7. Restore
+#
+# restart: --dstore_open_restore_mode=on
+#
+# 8. Verify data. Data added in step 6 is not present
+#
+select count(*) from t1;
+count(*)
+2000
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+2050
+drop database full_backup_archive_restore;

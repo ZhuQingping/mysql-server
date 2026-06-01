@@ -1,0 +1,125 @@
+call mtr.add_suppression("SegParseFromFilterSet Failed to parse segment ID: -100,100");
+call mtr.add_suppression("Failed to SegParseFromFilterSet");
+call mtr.add_suppression("Failed to acquire table for IS_PUSHDOWN.no_exist_table");
+call mtr.add_suppression("Failed to DstoreProcessByTableName for table [IS_PUSHDOWN,no_exist_table]");
+call mtr.add_suppression("Failed to acquire table for no_exist_db.test_dstore_segment2");
+call mtr.add_suppression("Failed to DstoreProcessByTableName for table [no_exist_db,test_dstore_segment2]");
+call mtr.add_suppression("SegParseFromFilterSet Failed to parse segment ID: 999999999999999999999,131");
+call mtr.add_suppression("SegParseFromFilterSet Failed to parse segment ID: 999999999999999999,131");
+call mtr.add_suppression("SegParseFromFilterSet Failed to parse segment ID: 131,999999999999999999");
+DESCRIBE INFORMATION_SCHEMA.DSTORE_SEGMENT;
+-- disable_warnings
+DROP DATABASE IF EXISTS IS_PUSHDOWN;
+-- enable_warnings
+CREATE DATABASE IS_PUSHDOWN;
+
+USE IS_PUSHDOWN;
+
+-- disable_warnings
+DROP TABLE IF EXISTS test_dstore_segment1;
+DROP TABLE IF EXISTS test_dstore_segment2;
+DROP TABLE IF EXISTS test_dstore_segment3;
+DROP TABLE IF EXISTS test_dstore_segment_no_index;
+-- enable_warnings
+
+CREATE TABLE test_dstore_segment1 (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  data INT,
+  info VARCHAR(50)
+) ENGINE=DSTORE;
+
+CREATE TABLE test_dstore_segment2 (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  data INT,
+  info VARCHAR(50),
+  INDEX idx_segment2_data (data)
+) ENGINE=DSTORE;
+
+CREATE TABLE test_dstore_segment3 (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  data INT,
+  info BLOB
+) ENGINE=DSTORE;
+
+CREATE TABLE test_dstore_segment_no_index (
+  id INT
+) ENGINE=DSTORE;
+
+
+DELIMITER |;
+DROP PROCEDURE IF EXISTS insert_test_data;
+CREATE PROCEDURE insert_test_data()
+BEGIN
+  DECLARE i INT DEFAULT 1;
+  DECLARE EXIT HANDLER FOR SQLEXCEPTION ROLLBACK;
+  
+  START TRANSACTION;
+  WHILE i <= 500 DO
+    INSERT INTO test_dstore_segment1 (data, info) VALUES (i, CONCAT('test_', i));
+    INSERT INTO test_dstore_segment2 (data, info) VALUES (i, CONCAT('test_', i));
+    INSERT INTO test_dstore_segment3 (data, info) VALUES (i, REPEAT(i, 3000));
+    SET i = i + 1;
+    IF i % 100 = 0 THEN
+      COMMIT;
+      START TRANSACTION;
+    END IF;
+  END WHILE;
+  COMMIT;
+END |
+
+DROP PROCEDURE IF EXISTS query_test_data;
+CREATE PROCEDURE query_test_data()
+BEGIN
+  DECLARE dummy INT;
+  SELECT COUNT(*) INTO dummy FROM test_dstore_segment1 WHERE data < 100;
+  SELECT COUNT(*) INTO dummy FROM test_dstore_segment1 WHERE data > 400;
+  SELECT MAX(data) INTO dummy FROM test_dstore_segment1;
+END |
+DELIMITER ;|
+
+CALL insert_test_data();
+CALL query_test_data();
+
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_SEGMENT;
+
+--disable_query_log
+SELECT SEGMENT_ID INTO @segment_id
+FROM INFORMATION_SCHEMA.DSTORE_SEGMENT 
+WHERE TABLE_NAME = "test_dstore_segment_no_index"
+LIMIT 1;
+
+SELECT SEGMENT_ID INTO @segment_id2
+FROM INFORMATION_SCHEMA.DSTORE_SEGMENT 
+WHERE TABLE_NAME = "test_dstore_segment1" AND INDEX_NAME = "PRIMARY"
+LIMIT 1;
+--enable_query_log
+
+PREPARE stmt1 FROM 'SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_SEGMENT WHERE SEGMENT_ID = ?';
+EXECUTE stmt1 USING @segment_id;
+EXECUTE stmt1 USING @segment_id2;
+
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_SEGMENT WHERE TABLE_NAME = "test_dstore_segment_no_index";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_SEGMENT WHERE TABLE_NAME = "test_dstore_segment1" AND INDEX_NAME = "PRIMARY";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_SEGMENT WHERE TABLE_NAME = "test_dstore_segment1" AND INDEX_NAME = "PRIMARY" AND DB_NAME = "IS_PUSHDOWN";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_SEGMENT WHERE TABLE_NAME = "test_dstore_segment2" AND DB_NAME = "IS_PUSHDOWN";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_SEGMENT WHERE TABLE_NAME = "no_exist_table" AND DB_NAME = "IS_PUSHDOWN";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_SEGMENT WHERE TABLE_NAME = "test_dstore_segment2" AND DB_NAME = "no_exist_db";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_SEGMENT WHERE DB_NAME = "IS_PUSHDOWN";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_SEGMENT WHERE SEGMENT_ID = "100,100";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_SEGMENT WHERE SEGMENT_ID = "-100,100";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_SEGMENT WHERE SEGMENT_ID != "-100,100";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_SEGMENT WHERE SEGMENT_ID = "5121,131";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_SEGMENT WHERE SEGMENT_ID = "5121,139";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_SEGMENT where segment_id = "999999999999999999999,131";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_SEGMENT where segment_id = "999999999999999999,131";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_SEGMENT where segment_id = "131,999999999999999999";
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_SEGMENT WHERE INDEX_NAME = "idx_segment2_data";
+
+DROP PREPARE stmt1;
+DROP TABLE test_dstore_segment1;
+DROP TABLE test_dstore_segment2;
+DROP TABLE test_dstore_segment3;
+DROP TABLE test_dstore_segment_no_index;
+DROP PROCEDURE insert_test_data;
+DROP PROCEDURE query_test_data;
+DROP DATABASE IS_PUSHDOWN;

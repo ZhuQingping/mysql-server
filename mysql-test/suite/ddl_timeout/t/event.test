@@ -1,0 +1,140 @@
+# ==== Purpose ====
+#
+# This is the typical test case for user, there is an event to
+# create the partition periodically, however, there could be some
+# unexpected DML/SELECT which block the DDL, and the DDL should
+# not block following DML/SELECT with the timeout set
+#
+
+--source include/count_sessions.inc
+
+let $lock_wait_timeout_orig=`select @@lock_wait_timeout`;
+let $ddl_lock_wait_timeout_orig=`select @@rds_ddl_lock_wait_timeout`;
+let $event_scheduler_orig=`select @@event_scheduler`;
+
+CREATE TABLE counter(a INT NOT NULL AUTO_INCREMENT PRIMARY KEY);
+
+SET GLOBAL event_scheduler = OFF;
+
+delimiter |;
+
+CREATE PROCEDURE add_part()
+BEGIN
+  DECLARE seq INT;
+  DECLARE part_name VARCHAR(10);
+
+  INSERT INTO counter VALUES();
+  SELECT max(a) INTO @seq FROM counter;
+  SELECT concat('p', @seq) INTO @part_name;
+  SET @sql = concat('ALTER TABLE t1 ADD PARTITION (PARTITION ', @part_name,
+      ' VALUES LESS THAN(', @seq * 1000, '));');
+  PREPARE stmt FROM @sql;
+  EXECUTE stmt;
+  DEALLOCATE PREPARE stmt;
+END|
+
+
+# Use 20 seconds to make sure the result is stable
+CREATE EVENT add_partition ON SCHEDULE EVERY 20 SECOND DO
+BEGIN
+  CALL add_part();
+END|
+
+
+CREATE PROCEDURE populate_data(IN total INT)
+BEGIN
+  DECLARE i INT DEFAULT 1;
+
+  WHILE (i <= total) DO
+    INSERT INTO t1 VALUES(i + 100);
+    SET i = i + 1;
+    SELECT sleep(1);
+  END WHILE;
+END|
+
+
+delimiter ;|
+
+
+
+--echo # Prepare data
+CREATE TABLE t1 (a INT)
+PARTITION BY RANGE(a) (
+  PARTITION p0 VALUES LESS THAN(100),
+  PARTITION p1 VALUES LESS THAN(200)
+);
+
+INSERT INTO t1 VALUES(1), (2), (3);
+
+# Make sure it will generate next counter from 2
+INSERT INTO counter VALUES(1);
+SELECT max(a) FROM counter;
+
+
+--echo # Event should follow this timeout
+SET GLOBAL rds_ddl_lock_wait_timeout=2;
+SET GLOBAL lock_wait_timeout=10;
+
+
+connect(conn1,localhost,root,,);
+connect(conn2,localhost,root,,);
+
+
+--echo # conn1: start the event
+connection conn1;
+SET GLOBAL event_scheduler = ON;
+# Sleep 25 seconds so that there must be at least one partition added
+sleep 25;
+
+--echo # Start a SELECT to block the DDL
+START TRANSACTION;
+SELECT * FROM t1;
+
+--let before_parts = `SELECT count(1) FROM INFORMATION_SCHEMA.partitions WHERE table_name LIKE '%t1%' and partition_name IS NOT NULL`
+
+
+--echo # conn2: Start the data bulk insert, to verify that it won't
+--echo #        be blocked by DDL due to DDL timeout
+connection conn2;
+--let conn2_start = `SELECT unix_timestamp(now())`
+CALL populate_data(100);
+--let conn2_end = `SELECT unix_timestamp(now())`
+# We expect 22 seconds to insert 20 values, due to the DDL timeout
+# is set to 2 seconds, so it minimum time cost should be 22 * (100 / 20)
+# which is 110 seconds.
+--let r = `select ("$conn2_end" - "$conn2_start") >= 110`
+--echo # conn2 waited for 110 seconds: $r
+disconnect conn2;
+
+
+--echo # conn2: Stop the SELECT and wait for one successful DDL
+connection conn1;
+ROLLBACK;
+
+sleep 20;
+SET GLOBAL event_scheduler = OFF;
+
+--echo # Expect to see one more partition added if no message printed
+--let after_parts = `SELECT count(1) FROM INFORMATION_SCHEMA.partitions WHERE table_name LIKE '%t1%' and partition_name IS NOT NULL`
+if ($before_parts == $after_parts)
+{
+  --echo # Number of partitions did not change.
+}
+
+--echo # Expect to read 103(3 + 100) rows
+SELECT count(*) FROM t1;
+
+disconnect conn1;
+
+
+connection default;
+DROP PROCEDURE populate_data;
+DROP PROCEDURE add_part;
+DROP EVENT add_partition;
+DROP TABLE counter;
+DROP TABLE t1;
+
+eval SET GLOBAL lock_wait_timeout = $lock_wait_timeout_orig;
+eval SET GLOBAL rds_ddl_lock_wait_timeout = $ddl_lock_wait_timeout_orig;
+eval SET GLOBAL event_scheduler = $event_scheduler_orig;
+--source include/wait_until_count_sessions.inc

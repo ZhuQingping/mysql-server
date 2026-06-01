@@ -1,0 +1,576 @@
+########################################################################################################
+# Test1.1 Verify can't access ddl log table table on default.                                          #
+########################################################################################################
+USE mysql;
+SHOW TABLES LIKE "%dstore_ddl_log%";
+Tables_in_mysql (%dstore_ddl_log%)
+SELECT * FROM dstore_ddl_log;
+ERROR HY000: Access to table 'mysql.dstore_ddl_log' is rejected.
+INSERT INTO dstore_ddl_log VALUES(1,1,1,1,1,1,"a","b");
+ERROR HY000: Access to table 'mysql.dstore_ddl_log' is rejected.
+UPDATE dstore_ddl_log set id=1 WHERE id=2;
+ERROR HY000: Access to table 'mysql.dstore_ddl_log' is rejected.
+ALTER TABLE dstore_ddl_log ADD COLUMN new_col VARCHAR(50);
+ERROR HY000: Access to table 'mysql.dstore_ddl_log' is rejected.
+DROP TABLE dstore_ddl_log;
+ERROR HY000: Access to table 'mysql.dstore_ddl_log' is rejected.
+CREATE TABLE dstore_ddl_log (id INT AUTO_INCREMENT PRIMARY KEY);
+ERROR HY000: Access to table 'mysql.dstore_ddl_log' is rejected.
+SELECT count(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='mysql' and TABLE_NAME='dstore_ddl_log';
+count(*)
+0
+########################################################################################################
+# Test1.2 The permission only works with who has ACL_SUPER grant.                                      #
+########################################################################################################
+CREATE USER 'no_super'@'%' IDENTIFIED BY '123456';
+GRANT ALL PRIVILEGES ON *.* TO 'no_super'@'%' WITH GRANT OPTION;
+REVOKE SUPER ON *.* FROM 'no_super'@'%';
+Warnings:
+Warning	1287	The SUPER privilege identifier is deprecated
+SET GLOBAL rds_show_hidden_table=true;
+ERROR 42000: Access denied; you need (at least one of) the SUPER privilege(s) for this operation
+DROP USER 'no_super'@'%';
+########################################################################################################
+# Test1.3 Testing any operations on ddl log table to simulate the rescure mode after get permission.   #
+########################################################################################################
+# restart: --rds_dstore_enable_atomic_ddl=false --dstore_use_histogram_auto_update=false
+SET GLOBAL rds_show_hidden_table=true;
+SELECT * FROM dstore_ddl_log;
+id	thread_id	type	file_id	block_id	segment_type	tablespace_id	table_name	table_name_new
+INSERT INTO dstore_ddl_log VALUES(1,1,1,1,1,1,1,"a","b");
+UPDATE dstore_ddl_log set id=2 WHERE id=1;
+ALTER TABLE mysql.dstore_ddl_log ADD COLUMN new_col VARCHAR(50);
+DROP TABLE dstore_ddl_log;
+CREATE TABLE IF NOT EXISTS dstore_ddl_log(
+id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+thread_id BIGINT UNSIGNED NOT NULL,
+type INT UNSIGNED NOT NULL,
+file_id INT UNSIGNED NOT NULL,
+block_id INT UNSIGNED NOT NULL,
+segment_type INT UNSIGNED NOT NULL,
+tablespace_id INT UNSIGNED NOT NULL,
+table_name VARCHAR(512),
+table_name_new VARCHAR(512),
+PRIMARY KEY idx_pk(id),
+KEY idx_1(thread_id)
+)engine=DSTORE STATS_PERSISTENT=0 CHARACTER SET latin1 COLLATE latin1_bin;
+SET GLOBAL rds_show_hidden_table=false;
+SELECT * FROM dstore_ddl_log;
+ERROR HY000: Access to table 'mysql.dstore_ddl_log' is rejected.
+USE test;
+# restart
+call mtr.add_suppression("\\[DSTORE\\] Replay DDL log failed");
+DROP TABLE IF EXISTS atomic_ddl_department;
+DROP TABLE IF EXISTS atomic_ddl_employees;
+CREATE TABLE `atomic_ddl_department` (
+`dept_id` INT PRIMARY KEY NOT NULL,
+`dept_name` VARCHAR(512)
+)ENGINE=DSTORE CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO `atomic_ddl_department` VALUES(1, "DBS Product Department"),(2, "2012 Gauss Department");
+########################################################################################################
+# Test2.1 Create table rollback triggered by error.                                                    #
+########################################################################################################
+SET GLOBAL DEBUG='+d,cde_create_table_error_before_commit';
+CREATE TABLE `atomic_ddl_employees` (
+`emp_id` INT,
+`emp_name` VARCHAR(512),
+`dept_id` INT,
+CONSTRAINT fk_dept 
+FOREIGN KEY (dept_id) REFERENCES `atomic_ddl_department`(dept_id)
+ON DELETE SET NULL
+ON UPDATE CASCADE
+)ENGINE=DSTORE CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+ERROR HY000: Got error 168 - 'Unknown (generic) error from engine' from storage engine
+SET GLOBAL DEBUG='-d,cde_create_table_error_before_commit';
+# Expect found 2 times
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" found 2 times
+# Expect found 1 time
+Pattern "Replay DDL log success.*Type:REMOVE_CACHE_LOG" found 1 times
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='atomic_ddl_employees';
+COUNT(*)
+0
+########################################################################################################
+# Test2.2 Create table rollback triggered by crash.                                                    #
+########################################################################################################
+SET GLOBAL DEBUG='+d,cde_create_table_crash_before_commit';
+CREATE TABLE `atomic_ddl_employees` (
+`emp_id` INT,
+`emp_name` VARCHAR(512),
+`dept_id` INT,
+`contet` TEXT,
+CONSTRAINT fk_dept 
+FOREIGN KEY (dept_id) REFERENCES atomic_ddl_department(dept_id)
+ON DELETE SET NULL
+ON UPDATE CASCADE
+)ENGINE=DSTORE CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+SELECT COUNT(*) FROM `atomic_ddl_department`;
+COUNT(*)
+2
+# Expect found 3 times
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" found 3 times
+# Expect not found
+Pattern "Replay DDL log success.*Type:REMOVE_CACHE_LOG" not found
+########################################################################################################
+# Test3.1 Drop table rollback triggered by error.                                                      #
+########################################################################################################
+CREATE TABLE `atomic_ddl_employees` (
+`emp_id` INT,
+`emp_name` VARCHAR(512),
+`dept_id` INT,
+CONSTRAINT fk_dept 
+FOREIGN KEY (dept_id) REFERENCES atomic_ddl_department(dept_id)
+ON DELETE SET NULL
+ON UPDATE CASCADE
+)ENGINE=DSTORE CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO `atomic_ddl_employees` VALUES(1, "ZhangThree", 1),(2, "LiFour", 2);
+SET GLOBAL DEBUG='+d,cde_drop_table_error_before_commit';
+DROP TABLE `atomic_ddl_employees`;
+ERROR HY000: Storage engine can't drop table './test/atomic_ddl_employees'
+SET GLOBAL DEBUG='-d,cde_drop_table_error_before_commit';
+# Expect found 2 times
+Pattern "Log DDL success.*Type:DROP_SEGMENT_LOG" found 2 times
+# Expect not found
+Pattern "Replay DDL log success" not found
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='atomic_ddl_employees';
+COUNT(*)
+1
+INSERT INTO `atomic_ddl_employees` VALUES(3, "WangTwo", 2);
+SELECT * FROM `atomic_ddl_employees`;
+emp_id	emp_name	dept_id
+1	ZhangThree	1
+2	LiFour	2
+3	WangTwo	2
+DELETE FROM `atomic_ddl_employees` WHERE `emp_id` = 3;
+########################################################################################################
+# Test3.2 Drop table rollback triggered by crash.                                                      #
+########################################################################################################
+SET GLOBAL DEBUG='+d,cde_drop_table_crash_before_commit';
+DROP TABLE `atomic_ddl_employees`;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+SELECT COUNT(*) FROM `atomic_ddl_department`;
+COUNT(*)
+2
+# Expect found 2 times
+Pattern "Log DDL success.*Type:DROP_SEGMENT_LOG" found 2 times
+# Expect not found
+Pattern "Replay DDL log success" not found
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='atomic_ddl_employees';
+COUNT(*)
+1
+INSERT INTO `atomic_ddl_employees` VALUES(3, "WangTwo", 2);
+SELECT * FROM `atomic_ddl_employees`;
+emp_id	emp_name	dept_id
+1	ZhangThree	1
+2	LiFour	2
+3	WangTwo	2
+DELETE FROM `atomic_ddl_employees` WHERE `emp_id` = 3;
+########################################################################################################
+# Test4.1 Rename table rollback triggered by error.                                                    #
+########################################################################################################
+SET GLOBAL DEBUG='+d,rename_last_table_error';
+RENAME TABLE `atomic_ddl_employees` to `atomic_ddl_employees_1`, `atomic_ddl_employees_1` to `atomic_ddl_employees_2`, `atomic_ddl_employees_2` to `atomic_ddl_employees`;
+ERROR HY000: Error on rename of 'atomic_ddl_employees_2' to 'atomic_ddl_employees' (errno: -1 - injected error)
+SET GLOBAL DEBUG='-d,rename_last_table_error';
+# Expect found 2 times
+Pattern "Log DDL success.*Type:RENAME_TABLE_LOG" found 2 times
+# Expect found 2 times
+Pattern "Replay DDL log success.*Type:RENAME_TABLE_LOG" found 2 times
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='atomic_ddl_employees';
+COUNT(*)
+1
+INSERT INTO `atomic_ddl_employees` VALUES(3, "WangTwo", 2);
+SELECT * FROM `atomic_ddl_employees`;
+emp_id	emp_name	dept_id
+1	ZhangThree	1
+2	LiFour	2
+3	WangTwo	2
+DELETE FROM `atomic_ddl_employees` WHERE `emp_id` = 3;
+########################################################################################################
+# Test4.2 Rename table rollback triggered by crash.                                                    #
+########################################################################################################
+SET GLOBAL DEBUG='+d,rename_last_table_crash';
+RENAME TABLE `atomic_ddl_employees` to `atomic_ddl_employees_1`, `atomic_ddl_employees_1` to `atomic_ddl_employees_2`, `atomic_ddl_employees_2` to `atomic_ddl_employees`;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+SELECT COUNT(*) FROM `atomic_ddl_department`;
+COUNT(*)
+2
+# Expect found 2 times
+Pattern "Log DDL success.*Type:RENAME_TABLE_LOG" found 2 times
+# Expect not found
+Pattern "Replay DDL log success.*Type:RENAME_TABLE_LOG" not found
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='atomic_ddl_employees';
+COUNT(*)
+1
+INSERT INTO `atomic_ddl_employees` VALUES(3, "WangTwo", 2);
+SELECT * FROM `atomic_ddl_employees`;
+emp_id	emp_name	dept_id
+1	ZhangThree	1
+2	LiFour	2
+3	WangTwo	2
+DELETE FROM `atomic_ddl_employees` WHERE `emp_id` = 3;
+########################################################################################################
+# Test5.1 Alter table with ALGORITHM:COPY rollback triggered by error occured after new table created. #
+########################################################################################################
+SET GLOBAL DEBUG='+d,cde_create_table_error_before_commit';
+ALTER TABLE `atomic_ddl_employees` ADD UNIQUE idx1(emp_id), ALGORITHM = COPY;
+ERROR HY000: Got error 168 - 'Unknown (generic) error from engine' from storage engine
+SET GLOBAL DEBUG='-d,cde_create_table_error_before_commit';
+# Expect found 3 times
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" found 3 times
+# Expect found 1 time
+Pattern "Replay DDL log success.*Type:REMOVE_CACHE_LOG" found 1 times
+SHOW CREATE TABLE `atomic_ddl_employees`;
+Table	Create Table
+atomic_ddl_employees	CREATE TABLE `atomic_ddl_employees` (
+  `emp_id` int DEFAULT NULL,
+  `emp_name` varchar(512) DEFAULT NULL,
+  `dept_id` int DEFAULT NULL,
+  KEY `fk_dept` (`dept_id`),
+  CONSTRAINT `fk_dept` FOREIGN KEY (`dept_id`) REFERENCES `atomic_ddl_department` (`dept_id`) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+########################################################################################################
+# Test5.2 Alter table with ALGORITHM:COPY rollback triggered by error occured at copying date.         #
+########################################################################################################
+INSERT INTO `atomic_ddl_employees` VALUES(1, "WangTwo", 2);
+ALTER TABLE `atomic_ddl_employees` ADD UNIQUE idx1(emp_id);
+ERROR 23000: Duplicate entry '1' for key 'atomic_ddl_employees.idx1'
+# Expect found 3 times
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" found 1 times
+# Expect found 1 time
+Pattern "Replay DDL log success.*Type:REMOVE_CACHE_LOG" not found
+SHOW CREATE TABLE `atomic_ddl_employees`;
+Table	Create Table
+atomic_ddl_employees	CREATE TABLE `atomic_ddl_employees` (
+  `emp_id` int DEFAULT NULL,
+  `emp_name` varchar(512) DEFAULT NULL,
+  `dept_id` int DEFAULT NULL,
+  KEY `fk_dept` (`dept_id`),
+  CONSTRAINT `fk_dept` FOREIGN KEY (`dept_id`) REFERENCES `atomic_ddl_department` (`dept_id`) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+DELETE FROM `atomic_ddl_employees` WHERE `emp_name` = "WangTwo";
+########################################################################################################################
+# Test5.3 Alter table with ALGORITHM:COPY rollback triggered by error occured after old_table renamed to backup_table. #
+########################################################################################################################
+SET GLOBAL DEBUG='+d,cde_alter_table_copy_rename_table_error1';
+ALTER TABLE `atomic_ddl_employees` ADD UNIQUE idx1(emp_id), ALGORITHM = COPY;
+SET GLOBAL DEBUG='-d,cde_alter_table_copy_rename_table_error1';
+# Expect found 1 time
+Pattern "Replay DDL log success.*Type:RENAME_TABLE_LOG" found 1 times
+# Expect found 3 times
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" found 3 times
+# Expect found 1 time
+Pattern "Replay DDL log success.*Type:REMOVE_CACHE_LOG" found 1 times
+SHOW CREATE TABLE `atomic_ddl_employees`;
+Table	Create Table
+atomic_ddl_employees	CREATE TABLE `atomic_ddl_employees` (
+  `emp_id` int DEFAULT NULL,
+  `emp_name` varchar(512) DEFAULT NULL,
+  `dept_id` int DEFAULT NULL,
+  KEY `fk_dept` (`dept_id`),
+  CONSTRAINT `fk_dept` FOREIGN KEY (`dept_id`) REFERENCES `atomic_ddl_department` (`dept_id`) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+########################################################################################################################
+# Test5.4 Alter table with ALGORITHM:COPY rollback triggered by error occured after tmp_table renamed to new_table.    #
+########################################################################################################################
+SET GLOBAL DEBUG='+d,cde_alter_table_copy_rename_table_error2';
+ALTER TABLE `atomic_ddl_employees` ADD UNIQUE idx1(emp_id), ALGORITHM = COPY;
+SET GLOBAL DEBUG='-d,cde_alter_table_copy_rename_table_error2';
+# Expect found 2 times
+Pattern "Replay DDL log success.*Type:RENAME_TABLE_LOG" found 2 times
+# Expect found 3 times
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" found 3 times
+# Expect found 1 time
+Pattern "Replay DDL log success.*Type:REMOVE_CACHE_LOG" found 1 times
+RENAME TABLE `atomic_ddl_employees` to `atomic_ddl_employees_1`, `atomic_ddl_employees_1` to `atomic_ddl_employees`;
+SHOW CREATE TABLE `atomic_ddl_employees`;
+Table	Create Table
+atomic_ddl_employees	CREATE TABLE `atomic_ddl_employees` (
+  `emp_id` int DEFAULT NULL,
+  `emp_name` varchar(512) DEFAULT NULL,
+  `dept_id` int DEFAULT NULL,
+  KEY `fk_dept` (`dept_id`),
+  CONSTRAINT `fk_dept` FOREIGN KEY (`dept_id`) REFERENCES `atomic_ddl_department` (`dept_id`) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+########################################################################################################################
+# Test5.5 Alter table with ALGORITHM:COPY rollback by error after dict_obj of tmp_table renamed to new_table.          #
+########################################################################################################################
+SET GLOBAL DEBUG='+d,cde_alter_table_error_after_rename_dict_obj1';
+ALTER TABLE `atomic_ddl_employees` ADD UNIQUE idx1(emp_id), ALGORITHM=COPY;
+SET GLOBAL DEBUG='-d,cde_alter_table_error_after_rename_dict_obj1';
+# Expect found 2 times
+Pattern "Replay DDL log success.*Type:RENAME_TABLE_LOG" found 2 times
+# Expect found 3 times
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" found 3 times
+# Expect found 1 time
+Pattern "Replay DDL log success.*Type:REMOVE_CACHE_LOG" found 1 times
+RENAME TABLE `atomic_ddl_employees` to `atomic_ddl_employees_1`, `atomic_ddl_employees_1` to `atomic_ddl_employees`;
+SHOW CREATE TABLE `atomic_ddl_employees`;
+Table	Create Table
+atomic_ddl_employees	CREATE TABLE `atomic_ddl_employees` (
+  `emp_id` int DEFAULT NULL,
+  `emp_name` varchar(512) DEFAULT NULL,
+  `dept_id` int DEFAULT NULL,
+  KEY `fk_dept` (`dept_id`),
+  CONSTRAINT `fk_dept` FOREIGN KEY (`dept_id`) REFERENCES `atomic_ddl_department` (`dept_id`) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+########################################################################################################################
+# Test5.7 Alter table with ALGORITHM:COPY rollback by error after dict_obj of old_table renamed to back_table.         #
+########################################################################################################################
+SET GLOBAL DEBUG='+d,cde_alter_table_error_after_rename_dict_obj2';
+ALTER TABLE `atomic_ddl_employees` ADD UNIQUE idx1(emp_id), ALGORITHM=COPY;
+SET GLOBAL DEBUG='-d,cde_alter_table_error_after_rename_dict_obj2';
+# Expect found 2 times
+Pattern "Replay DDL log success.*Type:RENAME_TABLE_LOG" found 1 times
+# Expect found 3 times
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" found 3 times
+# Expect found 1 time
+Pattern "Replay DDL log success.*Type:REMOVE_CACHE_LOG" found 1 times
+RENAME TABLE `atomic_ddl_employees` to `atomic_ddl_employees_1`, `atomic_ddl_employees_1` to `atomic_ddl_employees`;
+SHOW CREATE TABLE `atomic_ddl_employees`;
+Table	Create Table
+atomic_ddl_employees	CREATE TABLE `atomic_ddl_employees` (
+  `emp_id` int DEFAULT NULL,
+  `emp_name` varchar(512) DEFAULT NULL,
+  `dept_id` int DEFAULT NULL,
+  KEY `fk_dept` (`dept_id`),
+  CONSTRAINT `fk_dept` FOREIGN KEY (`dept_id`) REFERENCES `atomic_ddl_department` (`dept_id`) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+########################################################################################################
+# Test5.6 Alter table with ALGORITHM:COPY rollback triggered by error occured after drop old_table.    #
+########################################################################################################
+SET GLOBAL DEBUG='+d,cde_drop_table_error_before_commit';
+ALTER TABLE `atomic_ddl_employees` ADD UNIQUE idx1(emp_id), ALGORITHM = COPY;
+SET GLOBAL DEBUG='-d,cde_drop_table_error_before_commit';
+# Expect found 1 time
+Pattern "Replay DDL log success.*Type:RENAME_TABLE_LOG" found 1 times
+# Expect found 1 time
+Pattern "Replay DDL log failed.*Type:RENAME_TABLE_LOG" found 1 times
+# Expect found 3 times
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" found 3 times
+# Expect found 1 time
+Pattern "Replay DDL log success.*Type:REMOVE_CACHE_LOG" found 1 times
+# Expect found 5 times
+Pattern "Log DDL success.*Type:DROP_SEGMENT_LOG" found 5 times
+SHOW CREATE TABLE `atomic_ddl_employees`;
+Table	Create Table
+atomic_ddl_employees	CREATE TABLE `atomic_ddl_employees` (
+  `emp_id` int DEFAULT NULL,
+  `emp_name` varchar(512) DEFAULT NULL,
+  `dept_id` int DEFAULT NULL,
+  KEY `fk_dept` (`dept_id`),
+  CONSTRAINT `fk_dept` FOREIGN KEY (`dept_id`) REFERENCES `atomic_ddl_department` (`dept_id`) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+########################################################################################################
+# Test6 Truncate table rollback by error.                                                              #
+########################################################################################################
+SELECT * FROM atomic_ddl_employees;
+emp_id	emp_name	dept_id
+1	ZhangThree	1
+2	LiFour	2
+SET GLOBAL DEBUG='+d,cde_truncate_impl_exec_injection';
+TRUNCATE TABLE atomic_ddl_employees;
+ERROR HY000: Got error 168 - 'Unknown (generic) error from engine' from storage engine
+TRUNCATE TABLE atomic_ddl_employees;
+ERROR HY000: Got error 168 - 'Unknown (generic) error from engine' from storage engine
+SET GLOBAL DEBUG='-d,cde_truncate_impl_exec_injection';
+SELECT * FROM atomic_ddl_employees;
+emp_id	emp_name	dept_id
+1	ZhangThree	1
+2	LiFour	2
+########################################################################################################
+# Test7 Session in Post ddl is killed.                                                                 #
+########################################################################################################
+show variables like '%threadpool_enabled%';
+Variable_name	Value
+threadpool_enabled	OFF
+# connection conn1
+SET DEBUG_SYNC='hanging_at_log_dummy WAIT_FOR kill_session';
+CREATE DATABASE atomic_ddl_tmp_db;
+# connection conn2
+KILL QUERY 12;
+SET DEBUG_SYNC= 'now SIGNAL kill_session';
+# connection conn1
+SET DEBUG_SYNC="reset";
+DROP DATABASE atomic_ddl_tmp_db;
+########################################################################################################
+# Test8 Duplicate deletion of segment by DDL log replay.                                               #
+########################################################################################################
+CREATE TABLE `atomic_ddl_tmp1` (
+`id` int,
+`content` VARCHAR(512)
+)ENGINE=DSTORE CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+# connection conn2
+SET DEBUG_SYNC= 'sql_parse_before_rewrite WAIT_FOR replay_log_done';
+# connection conn1
+SET DEBUG_SYNC= 'cde_replay_drop_segment_hang_before_commit SIGNAL replay_log_done WAIT_FOR kill_mysqld';
+DROP TABLE `atomic_ddl_employees`;
+# connection conn2
+INSERT INTO `atomic_ddl_tmp1` VALUES(1, "aaa");
+# Kill and restart
+# Expect found 2 times
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" found 1 times
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='atomic_ddl_employees';
+COUNT(*)
+0
+DROP TABLE `atomic_ddl_tmp1`;
+########################################################################################################
+# Test9 Drop Database as an atomic operation.                                                         #
+########################################################################################################
+CREATE DATABASE `automic_ddl_db`;
+CREATE TABLE `automic_ddl_db`.`atomic_ddl_tmp0` (`id` int)ENGINE=DSTORE;
+CREATE TABLE `automic_ddl_db`.`atomic_ddl_tmp1` (`id` int)ENGINE=DSTORE;
+CREATE TABLE `automic_ddl_db`.`atomic_ddl_tmp2` (`id` int)ENGINE=DSTORE;
+CREATE TABLE `automic_ddl_db`.`atomic_ddl_tmp3` (`id` int)ENGINE=DSTORE;
+CREATE TABLE `automic_ddl_db`.`atomic_ddl_tmp4` (`id` int)ENGINE=DSTORE;
+CREATE TABLE `automic_ddl_db`.`atomic_ddl_tmp5` (`id` int)ENGINE=DSTORE;
+CREATE TABLE `automic_ddl_db`.`atomic_ddl_tmp6` (`id` int)ENGINE=DSTORE;
+CREATE TABLE `automic_ddl_db`.`atomic_ddl_tmp7` (`id` int)ENGINE=DSTORE;
+CREATE TABLE `automic_ddl_db`.`atomic_ddl_tmp8` (`id` int)ENGINE=DSTORE;
+CREATE TABLE `automic_ddl_db`.`atomic_ddl_tmp9` (`id` int)ENGINE=DSTORE;
+SELECT SLEEP(5);
+SLEEP(5)
+0
+SET GLOBAL DEBUG='+d,cde_drop_db_crash_after_some_tables_dropped';
+DROP DATABASE `automic_ddl_db`;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+# Expect found 6 times
+Pattern "Log DDL success.*Type:DROP_SEGMENT_LOG" found 6 times
+# Expect not found
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" not found
+USE `automic_ddl_db`;
+SHOW TABLES;
+Tables_in_automic_ddl_db
+atomic_ddl_tmp0
+atomic_ddl_tmp1
+atomic_ddl_tmp2
+atomic_ddl_tmp3
+atomic_ddl_tmp4
+atomic_ddl_tmp5
+atomic_ddl_tmp6
+atomic_ddl_tmp7
+atomic_ddl_tmp8
+atomic_ddl_tmp9
+INSERT INTO `atomic_ddl_tmp0` VALUES(1);
+INSERT INTO `atomic_ddl_tmp1` VALUES(1);
+INSERT INTO `atomic_ddl_tmp2` VALUES(1);
+INSERT INTO `atomic_ddl_tmp3` VALUES(1);
+INSERT INTO `atomic_ddl_tmp4` VALUES(1);
+INSERT INTO `atomic_ddl_tmp5` VALUES(1);
+INSERT INTO `atomic_ddl_tmp6` VALUES(1);
+INSERT INTO `atomic_ddl_tmp7` VALUES(1);
+INSERT INTO `atomic_ddl_tmp8` VALUES(1);
+INSERT INTO `atomic_ddl_tmp9` VALUES(1);
+DROP DATABASE `automic_ddl_db`;
+########################################################################################################
+# Test10 DDL rollback by write ddl log table error.                                                     #
+########################################################################################################
+USE test;
+CREATE TABLE `atomic_ddl_tmp2` (
+id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+col1 INT NOT NULL,
+INDEX idx_col1 (col1)
+);
+INSERT INTO atomic_ddl_tmp2 VALUES (1,1);
+INSERT INTO atomic_ddl_tmp2 VALUES (2,1);
+call mtr.add_suppression("Inject failure of insert DDL log table");
+call mtr.add_suppression("Log DDL failed, record");
+call mtr.add_suppression("Log drop segment fail");
+call mtr.add_suppression("Drop the newly allocated segment");
+call mtr.add_suppression("Alloc heap segment failed");
+call mtr.add_suppression("cde_create_table_info.create_table fail");
+call mtr.add_suppression("Drop index: idx_col1 fail due to LogDropSegment fail.");
+SET GLOBAL DEBUG="+d,insert_index_tuple_of_ddl_log_table_fail";
+ALTER TABLE `atomic_ddl_tmp2` DROP INDEX idx_col1, ALGORITHM=COPY;
+ERROR HY000: Got error 168 - 'Unknown (generic) error from engine' from storage engine
+SET GLOBAL DEBUG='-d,insert_index_tuple_of_ddl_log_table_fail';
+SHOW CREATE TABLE atomic_ddl_tmp2;
+Table	Create Table
+atomic_ddl_tmp2	CREATE TABLE `atomic_ddl_tmp2` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `col1` int NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_col1` (`col1`)
+) ENGINE=Dstore AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SELECT * FROM atomic_ddl_tmp2;
+id	col1
+1	1
+2	1
+DROP TABLE atomic_ddl_tmp2;
+########################################################################################################
+# Test11 Search ddl log table lock timeouted and retry.                                                #
+########################################################################################################
+CREATE TABLE `atomic_ddl_tmp1` (
+id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+col1 INT NOT NULL,
+INDEX idx_col1 (col1)
+);
+CREATE TABLE `atomic_ddl_tmp2` (
+id INT UNSIGNED
+);
+SET GLOBAL dstore_lock_wait_timeout=1;
+# connection conn1_new
+SET DEBUG_SYNC= 'cde_post_ddl_hang_before_search WAIT_FOR others_pending_commmit';
+ALTER TABLE atomic_ddl_tmp1 DROP INDEX idx_col1, ALGORITHM=COPY;
+# connection conn2_new
+SET GLOBAL DEBUG='+d,stay_in_pending_commit';
+DROP TABLE `atomic_ddl_tmp2`;
+# connection conn3_new
+SET GLOBAL DEBUG='-d,stay_in_pending_commit';
+SET DEBUG_SYNC= 'now SIGNAL others_pending_commmit';
+call mtr.add_suppression("DDL log table index scan next timeouted and retry");
+# Expect found
+Pattern "DDL log table index scan next timeouted and retry" found
+SET GLOBAL DEBUG='+d,resume_pending_commit';
+# connection conn1_new
+# connection conn2_new
+# Expect found 4 times
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" found 4 times
+SET GLOBAL DEBUG='-d,resume_pending_commit';
+SET GLOBAL dstore_lock_wait_timeout=50;
+DROP TABLE `atomic_ddl_tmp1`;
+########################################################################################################
+# Test variables.                                                                                      #
+########################################################################################################
+SET GLOBAL dstore_ddl_log_fillfactor_heap=9;
+Warnings:
+Warning	1292	Truncated incorrect dstore_ddl_log_fillfactor_heap value: '9'
+SHOW GLOBAL VARIABLES LIKE 'dstore_ddl_log_fillfactor_heap';
+Variable_name	Value
+dstore_ddl_log_fillfactor_heap	10
+SET GLOBAL dstore_ddl_log_fillfactor_heap=101;
+Warnings:
+Warning	1292	Truncated incorrect dstore_ddl_log_fillfactor_heap value: '101'
+SHOW GLOBAL VARIABLES LIKE 'dstore_ddl_log_fillfactor_heap';
+Variable_name	Value
+dstore_ddl_log_fillfactor_heap	100
+SET GLOBAL dstore_ddl_log_fillfactor_heap=70;
+SHOW GLOBAL VARIABLES LIKE 'dstore_ddl_log_fillfactor_heap';
+Variable_name	Value
+dstore_ddl_log_fillfactor_heap	70
+SET GLOBAL dstore_ddl_log_fillfactor_heap=default;
+SET GLOBAL dstore_ddl_log_fillfactor_index=9;
+Warnings:
+Warning	1292	Truncated incorrect dstore_ddl_log_fillfactor_index value: '9'
+SHOW GLOBAL VARIABLES LIKE 'dstore_ddl_log_fillfactor_index';
+Variable_name	Value
+dstore_ddl_log_fillfactor_index	10
+SET GLOBAL dstore_ddl_log_fillfactor_index=101;
+Warnings:
+Warning	1292	Truncated incorrect dstore_ddl_log_fillfactor_index value: '101'
+SHOW GLOBAL VARIABLES LIKE 'dstore_ddl_log_fillfactor_index';
+Variable_name	Value
+dstore_ddl_log_fillfactor_index	100
+SET GLOBAL dstore_ddl_log_fillfactor_index=60;
+SHOW GLOBAL VARIABLES LIKE 'dstore_ddl_log_fillfactor_index';
+Variable_name	Value
+dstore_ddl_log_fillfactor_index	60
+SET GLOBAL dstore_ddl_log_fillfactor_index=default;
+########################################################################################################
+# Clean up.                                                                                            #
+########################################################################################################
+DROP TABLE `test`.`atomic_ddl_department`;

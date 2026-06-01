@@ -1,0 +1,1295 @@
+# -------------------------------
+# -------------------------------
+# Content of the test file:
+# Offset pushdown and non-locking read
+# SELECT LIMIT OFFSET FOR UPDATE w/ and w/o OP
+#  check locking - insert - # of rows skipped
+#  READ COMMITED
+#  LOCK IN SHARE MODE
+#  READ UNCOMMITTED
+#  SKIP LOCKED
+#  NO WAIT
+# SERIALIZABLE
+# FOR UPDATE with serializable - all read rows have an x-lock -> equivalent to FOR UPDATE with RR
+# LOCK IN SHARE MODE with serializable - read rows have a s-lock - no different to LOCK IN SHARE MODE with RR
+# To keep track of the number of rows skipped by offset pushdown we use:
+# SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+# SELECT query
+# SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+# -------------------------------
+# -------------------------------
+SET @old_innodb_lock_wait_timeout = @@global.innodb_lock_wait_timeout;
+SET @@global.innodb_lock_wait_timeout = 1;
+# TOP
+# -------------------------------
+# SELECT LIMIT OFFSET FOR UPDATE w/ and w/o OP
+# check locking - insert - # of rows skipped
+# ------------------------------
+# -------------------------------
+# Without OP
+# -------------------------------
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+# Compare locks and count how many rows are skipped
+# template query: SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap WHERE a BETWEEN 15 AND 25 LIMIT 100 OFFSET 2 FOR UPDATE;
+# To check locking status use: SHOW ENGINE INNODB STATUS; with SET GLOBAL innodb_status_output_locks=ON; SET GLOBAL innodb_status_output=ON;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap WHERE a BETWEEN 15 AND 25 LIMIT 100 OFFSET 2 FOR UPDATE;
+a
+# Check that we don't skip any rows
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+START TRANSACTION;
+# Should go through
+INSERT INTO t_gap VALUES (9);
+INSERT INTO t_gap VALUES (31);
+# next key locking
+INSERT INTO t_gap VALUES (11);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO t_gap VALUES (29);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# gap lock
+INSERT INTO t_gap VALUES (18);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO t_gap VALUES (23);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+rollback;
+rollback;
+DROP TABLE t_gap;
+# -------------------------------
+# With OP
+# -------------------------------
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+# Compare locks and count how many rows are skipped
+# Template query: SELECT  * FROM t_gap WHERE a BETWEEN 15 AND 25 LIMIT 100 OFFSET 2 FOR UPDATE;
+# To check locking status use: SHOW ENGINE INNODB STATUS;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap WHERE a BETWEEN 15 AND 25 LIMIT 100 OFFSET 2 FOR UPDATE;
+a
+# Check that we only skip one row
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+1
+START TRANSACTION;
+# Should go through
+INSERT INTO t_gap VALUES (9);
+INSERT INTO t_gap VALUES (31);
+# next key locking
+INSERT INTO t_gap VALUES (11);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO t_gap VALUES (29);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# gap lock
+INSERT INTO t_gap VALUES (18);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO t_gap VALUES (23);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+rollback;
+rollback;
+DROP TABLE t_gap;
+# UPDATE statement  locks and gaps locks
+# --------------------
+# Without OP
+# --------------------
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30),(40),(50),(60),(70),(80),(90),(100);
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap WHERE a BETWEEN 45 AND 65 LIMIT 100 OFFSET 3 FOR UPDATE;
+a
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+START TRANSACTION;
+# Record LOCKs
+UPDATE t_gap SET a = 200 WHERE a = 50;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t_gap SET a = 300 WHERE a = 60;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Next key locking
+UPDATE t_gap SET a = 67 WHERE a = 10;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t_gap SET a = 42 WHERE a = 20;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t_gap SET a = 200 WHERE a = 40;
+UPDATE t_gap SET a = 300 WHERE a = 70;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Gap Locks
+UPDATE t_gap SET a = 47 WHERE a = 10;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t_gap SET a = 63 WHERE a = 90;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# No locks outside next key locking
+DELETE FROM t_gap WHERE a=20;
+DELETE FROM t_gap WHERE a=90;
+INSERT INTO t_gap values (75),(85);
+UPDATE t_gap SET a = 85 WHERE a = 80;
+rollback;
+rollback;
+DROP TABLE t_gap;
+# --------------------
+# With Offset pushdown
+# --------------------
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30),(40),(50),(60),(70),(80),(90),(100);
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap WHERE a BETWEEN 45 AND 65 LIMIT 100 OFFSET 3 FOR UPDATE;
+a
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+2
+START TRANSACTION;
+# Record LOCKs
+UPDATE t_gap SET a = 200 WHERE a = 50;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t_gap SET a = 300 WHERE a = 60;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Next key locking
+UPDATE t_gap SET a = 67 WHERE a = 10;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t_gap SET a = 42 WHERE a = 20;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t_gap SET a = 200 WHERE a = 40;
+UPDATE t_gap SET a = 300 WHERE a = 70;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Gap Locks
+UPDATE t_gap SET a = 47 WHERE a = 10;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t_gap SET a = 63 WHERE a = 90;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# No locks outside next key locking
+DELETE FROM t_gap WHERE a=20;
+DELETE FROM t_gap WHERE a=90;
+INSERT INTO t_gap values (75),(85);
+UPDATE t_gap SET a = 85 WHERE a = 80;
+rollback;
+rollback;
+DROP TABLE t_gap;
+# ---------------------------------------------------
+# Skipping pk access
+# ---------------------------------------------------
+# ---------------------------------------------------
+# WITHOUT  OP
+# ---------------------------------------------------
+CREATE TABLE t1 (b INT, PRIMARY KEY (b));
+INSERT INTO t1 VALUES (1),(2),(3),(4),(5),(7);
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */  b FROM t1  WHERE b>2 AND b<5 LIMIT 100 OFFSET 100 FOR UPDATE;
+b
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+start transaction;
+UPDATE t1 SET b = 100 WHERE b = 2;
+rollback;
+start transaction;
+UPDATE t1 SET b = 100 WHERE b = 3;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t1 SET b = 100 WHERE b = 4;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t1 SET b = 100 WHERE b = 5;
+rollback;
+rollback;
+DROP TABLE t1;
+# ---------------------------------------------------
+# WITH OP
+# ---------------------------------------------------
+CREATE TABLE t1 (b INT, PRIMARY KEY (b));
+INSERT INTO t1 VALUES (1), (2), (3), (4),(5),(7);
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT b FROM t1 WHERE b>2 AND b<5 LIMIT 100 OFFSET 100 FOR UPDATE;
+b
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+2
+start transaction;
+UPDATE t1 SET b = 100 WHERE b = 2;
+rollback;
+start transaction;
+UPDATE t1 SET b = 100 WHERE b = 3;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t1 SET b = 100 WHERE b = 4;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t1 SET b = 100 WHERE b = 5;
+rollback;
+rollback;
+DROP TABLE t1;
+# ---------------------------------------------------
+# ---------------------------------------------------
+# SERIALIZABLE
+# ---------------------------------------------------
+# ---------------------------------------------------
+# -------------------------------
+# Without OP
+# -------------------------------
+SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+# Compare locks and count how many rows are skipped
+# To check locking status use: SHOW ENGINE INNODB STATUS;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap WHERE a BETWEEN 15 AND 25 LIMIT 100 OFFSET 2 FOR UPDATE;
+a
+# Check that we don't skip any rows
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+START TRANSACTION;
+# Should go through
+INSERT INTO t_gap VALUES (9);
+INSERT INTO t_gap VALUES (31);
+# next key locking
+INSERT INTO t_gap VALUES (11);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO t_gap VALUES (29);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# gap lock
+INSERT INTO t_gap VALUES (18);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO t_gap VALUES (23);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+rollback;
+rollback;
+DROP TABLE t_gap;
+# -------------------------------
+# With OP
+# -------------------------------
+SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+# Compare locks and count how many rows are skipped
+# To check locking status use: SHOW ENGINE INNODB STATUS;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap WHERE a BETWEEN 15 AND 25 LIMIT 100 OFFSET 2 FOR UPDATE;
+a
+# Check that we only skip one row
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+1
+SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+START TRANSACTION;
+# Should go through
+INSERT INTO t_gap VALUES (9);
+INSERT INTO t_gap VALUES (31);
+# next key locking
+INSERT INTO t_gap VALUES (11);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO t_gap VALUES (29);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# gap lock
+INSERT INTO t_gap VALUES (18);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO t_gap VALUES (23);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+rollback;
+rollback;
+DROP TABLE t_gap;
+# ---------------------------------------------------
+# ---------------------------------------------------
+#  READ COMMITED
+# ---------------------------------------------------
+# ---------------------------------------------------
+# ---------------------------------------------------
+#  Without OP
+# ---------------------------------------------------
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ *  FROM t_gap LIMIT 100 OFFSET 50 FOR UPDATE;
+a
+# Check that no rows are skipped
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+# To check locking status use: SHOW ENGINE INNODB STATUS;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
+UPDATE t_gap SET a = 30 WHERE a = 10;
+UPDATE t_gap SET a = 30 WHERE a = 20;
+UPDATE t_gap SET a = 30 WHERE a = 30;
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+rollback;
+rollback;
+DROP TABLE t_gap;
+# ---------------------------------------------------
+# With OP
+# ---------------------------------------------------
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT *  FROM t_gap LIMIT 100 OFFSET 50 FOR UPDATE;
+a
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+3
+# To check locking status use: SHOW ENGINE INNODB STATUS;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
+UPDATE t_gap SET a = 30 WHERE a = 10;
+UPDATE t_gap SET a = 30 WHERE a = 20;
+UPDATE t_gap SET a = 30 WHERE a = 30;
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+rollback;
+rollback;
+DROP TABLE t_gap;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+# ---------------------------------------------------
+# READ COMMITED without OP (bis)
+# ---------------------------------------------------
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+#
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ *  FROM t_gap LIMIT 100 OFFSET 1 FOR UPDATE;
+a
+20
+30
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+# To check locking status use: SHOW ENGINE INNODB STATUS;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
+UPDATE t_gap SET a = 30 WHERE a = 10;
+UPDATE t_gap SET a = 30 WHERE a = 20;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t_gap SET a = 30 WHERE a = 30;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+rollback;
+rollback;
+DROP TABLE t_gap;
+# ---------------------------------------------------
+# READ COMMITED with OP (bis)
+# ---------------------------------------------------
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT *  FROM t_gap LIMIT 100 OFFSET 1 FOR UPDATE;
+a
+20
+30
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+1
+# To check locking status use: SHOW ENGINE INNODB STATUS;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
+UPDATE t_gap SET a = 30 WHERE a = 10;
+UPDATE t_gap SET a = 30 WHERE a = 20;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t_gap SET a = 30 WHERE a = 30;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+rollback;
+rollback;
+DROP TABLE t_gap;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+# ---------------------------------------------------
+#READ COMMITTED:  Skipping pk access- check lock release
+# ---------------------------------------------------
+# ---------------------------------------------------
+# WITHOUT  OP
+# ---------------------------------------------------
+CREATE TABLE t1 (b INT, PRIMARY KEY (b));
+INSERT INTO t1 VALUES (1),(2),(3),(4),(5),(7);
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */  b FROM t1 LIMIT 100 OFFSET 100 FOR UPDATE;
+b
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
+UPDATE t1 SET b = 100 WHERE b = 3;
+rollback;
+rollback;
+DROP TABLE t1;
+# ---------------------------------------------------
+# WITH OP
+# ---------------------------------------------------
+CREATE TABLE t1 (b INT, PRIMARY KEY (b));
+INSERT INTO t1 VALUES (1), (2), (3), (4),(5),(7);
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT b FROM t1 LIMIT 100 OFFSET 100 FOR UPDATE;
+b
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+6
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
+UPDATE t1 SET b = 100 WHERE b = 3;
+rollback;
+rollback;
+DROP TABLE t1;
+# ---------------------------------------------------
+# ---------------------------------------------------
+#  LOCK IN SHARE MODE
+# For RR, check that we can read but not update rows
+# For RC, can read, can't write - check what happens for released locks
+# ---------------------------------------------------
+# ---------------------------------------------------
+# ---------------------------------------------------
+#  For RR, check that we can read but not update rows
+# ---------------------------------------------------
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+# ---------------------------------------------------
+# Without OP
+# ---------------------------------------------------
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap LIMIT 100 OFFSET 50 LOCK IN SHARE MODE;
+a
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+start transaction;
+SELECT * FROM t_gap WHERE a = 10 OR a = 20 OR a = 30;
+a
+10
+20
+30
+UPDATE t_gap SET a = 100 WHERE a = 10;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t_gap SET a = 100 WHERE a = 30;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO t_gap VALUES (1);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO t_gap VALUES (15);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO t_gap VALUES (25);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO t_gap VALUES (1000);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+rollback;
+rollback;
+# -----------------------------------
+# With OP
+# -----------------------------------
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap LIMIT 100 OFFSET 50 LOCK IN SHARE MODE;
+a
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+3
+start transaction;
+SELECT * FROM t_gap WHERE a = 10 OR a = 20 OR a = 30;
+a
+10
+20
+30
+UPDATE t_gap SET a = 30 WHERE a = 10;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t_gap SET a = 30 WHERE a = 30;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO t_gap VALUES (1);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO t_gap VALUES (15);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO t_gap VALUES (25);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+INSERT INTO t_gap VALUES (1000);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+rollback;
+rollback;
+DROP TABLE t_gap;
+# ---------------------------------------------------
+#  For RC, check that we can slide in the gaps
+# ---------------------------------------------------
+CREATE TABLE t_gap (a INT, INDEX(a));
+INSERT INTO t_gap VALUES (10),(20),(30);
+# ---------------------------------------------------
+# Without OP
+# ---------------------------------------------------
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap LIMIT 100 OFFSET 50 LOCK IN SHARE MODE;
+a
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT * FROM t_gap WHERE a = 10 OR a = 20 OR a = 30;
+a
+10
+20
+30
+UPDATE t_gap SET a = 50 WHERE a = 10;
+UPDATE t_gap SET a = 60 WHERE a = 30;
+INSERT INTO t_gap VALUES (1);
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+INSERT INTO t_gap VALUES (1000);
+rollback;
+rollback;
+# ---------------------------------------------------
+# With OP
+# ---------------------------------------------------
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap LIMIT 100 OFFSET 50 LOCK IN SHARE MODE;
+a
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+3
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT * FROM t_gap WHERE a = 10 OR a = 20 OR a = 30;
+a
+10
+20
+30
+UPDATE t_gap SET a = 50 WHERE a = 10;
+UPDATE t_gap SET a = 60 WHERE a = 30;
+INSERT INTO t_gap VALUES (1);
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+INSERT INTO t_gap VALUES (1000);
+rollback;
+rollback;
+# ---------------------------------------------------
+#  For RC, LOCK IN SHARED MODE places shared lock on all the read rows, so even if they are not displayed the locks stay in place
+# but we can still insert in the gaps
+# ---------------------------------------------------
+# ---------------------------------------------------
+# Without OP
+# ---------------------------------------------------
+# how do i check if there is a gap lock? - gap lock is respected
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap LIMIT 100 OFFSET 1 LOCK IN SHARE MODE;
+a
+20
+30
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+# not released even though it's not output
+UPDATE t_gap SET a = 50 WHERE a = 10;
+INSERT INTO t_gap VALUES (1);
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+INSERT INTO t_gap VALUES (1000);
+rollback;
+rollback;
+# ---------------------------------------------------
+# With OP
+# ---------------------------------------------------
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap LIMIT 100 OFFSET 1 LOCK IN SHARE MODE;
+a
+20
+30
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+1
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+# not release even though it's not output
+UPDATE t_gap SET a = 50 WHERE a = 10;
+INSERT INTO t_gap VALUES (1);
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+INSERT INTO t_gap VALUES (1000);
+rollback;
+rollback;
+# ---------------------------------------------------
+# READ UNCOMMITTED
+# ---------------------------------------------------
+# ---------------------------------------------------
+# Without OP
+# ---------------------------------------------------
+SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-UNCOMMITTED
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap LIMIT 100 OFFSET 50 FOR UPDATE;
+a
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+# NO LOCKS placed !
+SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-UNCOMMITTED
+SELECT * FROM t_gap WHERE a = 10 OR a = 20 OR a = 30;
+a
+10
+20
+30
+UPDATE t_gap SET a = 50 WHERE a = 10;
+UPDATE t_gap SET a = 60 WHERE a = 30;
+INSERT INTO t_gap VALUES (1);
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+INSERT INTO t_gap VALUES (1000);
+rollback;
+rollback;
+# ---------------------------------------------------
+# With OP
+# ---------------------------------------------------
+SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-UNCOMMITTED
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap LIMIT 100 OFFSET 50 FOR UPDATE;
+a
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+3
+# NO LOCKS placed !
+SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-UNCOMMITTED
+SELECT * FROM t_gap WHERE a = 10 OR a = 20 OR a = 30;
+a
+10
+20
+30
+UPDATE t_gap SET a = 50 WHERE a = 10;
+UPDATE t_gap SET a = 60 WHERE a = 30;
+INSERT INTO t_gap VALUES (1);
+INSERT INTO t_gap VALUES (15);
+INSERT INTO t_gap VALUES (25);
+INSERT INTO t_gap VALUES (1000);
+rollback;
+rollback;
+# ---------------------------------------------------
+# SKIP LOCKED
+# ---------------------------------------------------
+# ---------------------------------------------------
+# Without OP
+# ---------------------------------------------------
+INSERT INTO t_gap VALUES (40),(50),(60);
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap  LIMIT 100 OFFSET 1  FOR UPDATE;
+a
+20
+30
+40
+50
+60
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+# No output all locked
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap LIMIT 100 OFFSET 1  FOR UPDATE SKIP LOCKED;
+a
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+rollback;
+rollback;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap  WHERE a <15 LIMIT 100 OFFSET 1  FOR UPDATE;
+a
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+# 10 20 locked, 30 skipped by OFFSET  - rest : output
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap LIMIT 100 OFFSET 1  FOR UPDATE SKIP LOCKED;
+a
+40
+50
+60
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+rollback;
+rollback;
+# ---------------------------------------------------
+# With OP
+# ---------------------------------------------------
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap  LIMIT 100 OFFSET 1  FOR UPDATE;
+a
+20
+30
+40
+50
+60
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+1
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+# No output all locked
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap LIMIT 100 OFFSET 1  FOR UPDATE SKIP LOCKED;
+a
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+rollback;
+rollback;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap  WHERE a < 15 LIMIT 100 OFFSET 1 FOR UPDATE;
+a
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+1
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+# 10 20 locked, 30 skipped by OFFSET  - rest : output
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap LIMIT 100 OFFSET 1  FOR UPDATE SKIP LOCKED;
+a
+40
+50
+60
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+1
+rollback;
+rollback;
+# ---------------------------------------------------
+# NO WAIT
+# ---------------------------------------------------
+# ---------------------------------------------------
+# Without OP
+# ---------------------------------------------------
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap  LIMIT 100 OFFSET 1 FOR UPDATE;
+a
+20
+30
+40
+50
+60
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+# No output all locked
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t_gap LIMIT 100 OFFSET 1 FOR UPDATE NOWAIT;
+ERROR HY000: Statement aborted because lock(s) could not be acquired immediately and NOWAIT is set.
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+rollback;
+rollback;
+# ---------------------------------------------------
+# With OP
+# ---------------------------------------------------
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap  LIMIT 100 OFFSET 1 FOR UPDATE;
+a
+20
+30
+40
+50
+60
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+1
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+# No output all locked
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT  * FROM t_gap LIMIT 100 OFFSET 1 FOR UPDATE NOWAIT;
+ERROR HY000: Statement aborted because lock(s) could not be acquired immediately and NOWAIT is set.
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+rollback;
+rollback;
+# -------------------------------------------------
+# -------------------------------------------------
+#  End range check  for OP at supremum (same for locking and non locking reads)
+# -------------------------------------------------
+# -------------------------------------------------
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+INSERT INTO t_gap SELECT * FROM t_gap;
+INSERT INTO t_gap SELECT * FROM t_gap;
+INSERT INTO t_gap SELECT * FROM t_gap;
+INSERT INTO t_gap SELECT * FROM t_gap;
+INSERT INTO t_gap SELECT * FROM t_gap;
+INSERT INTO t_gap SELECT * FROM t_gap;
+INSERT INTO t_gap SELECT * FROM t_gap;
+INSERT INTO t_gap SELECT * FROM t_gap;
+INSERT INTO t_gap VALUES (5);
+# Show status shows we skipped less than 1000 OFFSET rows - stopped by end range check on page supremum.
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t_gap  WHERE a < 8 LIMIT 1 OFFSET 1000;
+a
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+533
+# Show status shows we skipped less than 3000 OFFSET rows - stopped by end range check on page supremum
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t_gap  WHERE a < 11 LIMIT 1 OFFSET 3000;
+a
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+533
+SET rds_empty_redundant_check_in_range_scan=true;
+DROP TABLE t_gap;
+# -------------------------------------------------
+# -------------------------------------------------
+#  End range check  v ICP_OUT_OF_RANGE
+# -------------------------------------------------
+# -------------------------------------------------
+CREATE TABLE t2 (a INT, b INT, c INT, INDEX(a,b));
+INSERT INTO t2 VALUES (1,10,4),(2,20,5),(3,30,6),(4,40,12),(5,50,13),(6,60,14),(7,70,15);
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+# End of range check does not apply with ICP - stopped by ICP out of range before OFFSET 5000 is reached
+SET rds_empty_redundant_check_in_range_scan = false;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t2 WHERE a = 1 AND b < 11 LIMIT 1 OFFSET 5000;
+a	b	c
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+2048
+# ICP_OUT_OF_RANGE evaluated before systematic end of range check for locking scenario- no need to check end of range if idx_cond==true
+start transaction;
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT * FROM t2 WHERE a = 1 AND b < 11 LIMIT 1 OFFSET 5000 FOR UPDATE;
+a	b	c
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+2048
+rollback;
+DROP TABLE t2;
+# -----------------
+# OP and ICP that hits ICP_NO_MATCH
+# -----------------
+# --
+# RR
+# --
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+CREATE TABLE t0 (a VARCHAR(10), b INT, c INT, INDEX(a(10),b));
+insert into t0 values ('banama',1,1),('banana',1,1),('banana',2,3),('banana',3,3),('banaoa',3,6),('banapa',4,9),('banaqa',5,12);
+explain format=tree SELECT a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=2.96 rows=6)
+    -> Index range scan on t0 using a over ('banama' < a), with index condition: ((t0.a > 'banama') and (t0.b > 2))  (cost=2.96 rows=6)
+
+explain format=tree  SELECT /*+ NO_OFFSET_PUSHDOWN() */ a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=2.96 rows=5)
+    -> Index range scan on t0 using a over ('banama' < a), with index condition: ((t0.a > 'banama') and (t0.b > 2))  (cost=2.96 rows=6)
+
+# row_search_mvcc hits ICP_NO_MATCH for ('banana',1,1),('banana',2,3) because 1 and 2 are smaller than 3 with and without OP
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1;
+a	c
+banaoa	6
+banapa	9
+banaqa	12
+# ('banana',3,3) is skipped by offset pushdown in innodb
+SELECT a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1;
+a	c
+banaoa	6
+banapa	9
+banaqa	12
+explain format=tree SELECT a,c FROM t0 WHERE a>'banama' AND a<'banaqa' AND b>2 LIMIT 100 offset 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=2.51 rows=5)
+    -> Index range scan on t0 using a over ('banama' < a < 'banaqa'), with index condition: ((t0.a > 'banama') and (t0.a < 'banaqa') and (t0.b > 2))  (cost=2.51 rows=5)
+
+# row_search_mvcc hits ICP_OUT_OF_RANGE for ('banaqa',5,12)
+SELECT a,c FROM t0 WHERE a>'banama' AND a<'banaqa' AND b>2 LIMIT 100 offset 1;
+a	c
+banaoa	6
+banapa	9
+# --
+# OP and ICP that hits ICP_NO_MATCH with LOCKING READ
+# --
+# Without OP
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1 FOR UPDATE;
+a	c
+banaoa	6
+banapa	9
+banaqa	12
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+# Next key locking interval is (x,y], we can therefore update the 'banama',1,1
+UPDATE t0 SET a = ' pears' WHERE a = 'banama';
+rollback;
+start transaction;
+# Next key locking interval is (x,y], we cannot therefore insert  right of the 'banama',1,1 row
+INSERT INTO t0 values ('banama',2,2);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 1;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 2;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 3 AND c=3;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t0 SET a = 'apples' WHERE a= 'banaoa' AND b = 3 AND c=6;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+rollback;
+rollback;
+# With OP
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1 FOR UPDATE;
+a	c
+banaoa	6
+banapa	9
+banaqa	12
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+1
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+REPEATABLE-READ
+# Next key locking interval is (x,y], we can therefore update the 'banama',1,1
+UPDATE t0 SET a = ' pears' WHERE a = 'banama';
+rollback;
+start transaction;
+# Next key locking interval is (x,y], we cannot therefore insert  right of the 'banama',1,1 row
+INSERT INTO t0 values ('banama',2,2);
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 1;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 2;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 3 AND c=3;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+UPDATE t0 SET a = 'apples' WHERE a= 'banaoa' AND b = 3 AND c=6;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+rollback;
+rollback;
+# --
+# RC
+# --
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+explain format=tree SELECT a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=2.96 rows=6)
+    -> Index range scan on t0 using a over ('banama' < a), with index condition: ((t0.a > 'banama') and (t0.b > 2))  (cost=2.96 rows=6)
+
+explain format=tree  SELECT /*+ NO_OFFSET_PUSHDOWN() */ a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=2.96 rows=5)
+    -> Index range scan on t0 using a over ('banama' < a), with index condition: ((t0.a > 'banama') and (t0.b > 2))  (cost=2.96 rows=6)
+
+# row_search_mvcc hits ICP_NO_MATCH for ('banana',1,1),('banana',2,3) because 1 and 2 are smaller than 3 with and without OP
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1;
+a	c
+banaoa	6
+banapa	9
+banaqa	12
+# ('banana',3,3) is skipped by offset pushdown in innodb
+SELECT a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1;
+a	c
+banaoa	6
+banapa	9
+banaqa	12
+explain format=tree SELECT a,c FROM t0 WHERE a>'banama' AND a<'banaqa' AND b>2 LIMIT 100 offset 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=2.51 rows=5)
+    -> Index range scan on t0 using a over ('banama' < a < 'banaqa'), with index condition: ((t0.a > 'banama') and (t0.a < 'banaqa') and (t0.b > 2))  (cost=2.51 rows=5)
+
+# row_search_mvcc hits ICP_OUT_OF_RANGE for ('banaqa',5,12)
+SELECT a,c FROM t0 WHERE a>'banama' AND a<'banaqa' AND b>2 LIMIT 100 offset 1;
+a	c
+banaoa	6
+banapa	9
+# --
+# RC - OP and ICP that hits ICP_NO_MATCH with LOCKING READ
+# --
+# Without OP - Without ICP
+# This test is there to show that ICP does not release the locks in RC for rows that are read and not returned to the client.
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
+SET optimizer_switch = 'index_condition_pushdown=off';
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1 FOR UPDATE;
+a	c
+banaoa	6
+banapa	9
+banaqa	12
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
+# Next key locking interval is (x,y], we can therefore update the 'banama',1,1
+UPDATE t0 SET a = ' pears' WHERE a = 'banama';
+rollback;
+start transaction;
+INSERT INTO t0 values ('banama',2,2);
+rollback;
+start transaction;
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 1;
+rollback;
+start transaction;
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 2;
+rollback;
+start transaction;
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 3 AND c=3;
+rollback;
+start transaction;
+UPDATE t0 SET a = 'apples' WHERE a= 'banaoa' AND b = 3 AND c=6;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+rollback;
+rollback;
+SET optimizer_switch = 'index_condition_pushdown=on';
+# Without OP
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT /*+ NO_OFFSET_PUSHDOWN() */ a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1 FOR UPDATE;
+a	c
+banaoa	6
+banapa	9
+banaqa	12
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+0
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
+# Next key locking interval is (x,y], we can therefore update the 'banama',1,1
+UPDATE t0 SET a = ' pears' WHERE a = 'banama';
+rollback;
+start transaction;
+# NO Next key locking
+INSERT INTO t0 values ('banama',2,2);
+rollback;
+start transaction;
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 1;
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 2;
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 3 AND c=3;
+rollback;
+start transaction;
+UPDATE t0 SET a = 'apples' WHERE a= 'banaoa' AND b = 3 AND c=6;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+rollback;
+rollback;
+# With OP
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
+SET @save_skipped_rows = (SELECT variable_value FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown');
+SELECT a,c FROM t0 WHERE a>'banama' AND b>2 LIMIT 100 offset 1 FOR UPDATE;
+a	c
+banaoa	6
+banapa	9
+banaqa	12
+SELECT variable_value - @save_skipped_rows FROM performance_schema.global_status WHERE LOWER(variable_name) = 'innodb_rds_rows_skipped_by_offset_pushdown';
+variable_value - @save_skipped_rows
+1
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
+# Next key locking interval is (x,y], we can therefore update the 'banama',1,1
+UPDATE t0 SET a = ' pears' WHERE a = 'banama';
+rollback;
+start transaction;
+SELECT @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
+# Next key locking interval is (x,y], we can therefore update the 'banama',1,1
+UPDATE t0 SET a = ' pears' WHERE a = 'banama';
+rollback;
+start transaction;
+# NO Next key locking
+INSERT INTO t0 values ('banama',2,2);
+rollback;
+start transaction;
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 1;
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 2;
+# Skipped - Not returned lock released
+UPDATE t0 SET a = 'apples' WHERE a= 'banana' AND b = 3 AND c=3;
+rollback;
+start transaction;
+UPDATE t0 SET a = 'apples' WHERE a= 'banaoa' AND b = 3 AND c=6;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+rollback;
+rollback;
+DROP TABLE t0;
+# Restore orig wait timeout
+# BOTTOM
+show variables LIKE '%innodb_lock_wait_timeout%';
+Variable_name	Value
+innodb_lock_wait_timeout	50
+SET @@global.innodb_lock_wait_timeout = @old_innodb_lock_wait_timeout;
+show variables LIKE '%innodb_lock_wait_timeout%';
+Variable_name	Value
+innodb_lock_wait_timeout	50
+DROP TABLE if EXISTS t2;
+Warnings:
+Note	1051	Unknown table 'test.t2'

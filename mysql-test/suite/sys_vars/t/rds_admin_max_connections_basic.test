@@ -1,0 +1,39 @@
+# ulong global
+
+SET @start_global_value = @@global.rds_admin_max_connections;
+
+#
+# exists as global only
+#
+select @@global.rds_admin_max_connections;
+show global variables like 'rds_admin_max_connections';
+show session variables like 'rds_admin_max_connections';
+select * from performance_schema.global_variables where variable_name='rds_admin_max_connections';
+select * from performance_schema.session_variables where variable_name='rds_admin_max_connections';
+
+#
+# show that it's writable
+#
+set global rds_admin_max_connections=1;
+select @@global.rds_admin_max_connections;
+--error ER_GLOBAL_VARIABLE
+set session rds_admin_max_connections=1;
+
+#
+# incorrect types
+#
+--error ER_WRONG_TYPE_FOR_VAR
+set global rds_admin_max_connections=1.1;
+--error ER_WRONG_TYPE_FOR_VAR
+set global rds_admin_max_connections=1e1;
+--error ER_WRONG_TYPE_FOR_VAR
+set global rds_admin_max_connections="foo";
+
+#
+# min/max values
+#
+set global rds_admin_max_connections=0;
+set global rds_admin_max_connections=cast(-1 as unsigned int);
+select @@global.rds_admin_max_connections;
+
+SET @@global.rds_admin_max_connections = @start_global_value;

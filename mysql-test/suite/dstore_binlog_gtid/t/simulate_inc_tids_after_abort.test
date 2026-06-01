@@ -1,0 +1,57 @@
+# ==== Purpose =======
+# An abort occurred after incrementing TIDs during 
+# the execution of a non-atomic DDL operation. After this, 
+# restart the service and execute the FLUSH LOGS command. 
+# This operation is expected to succeed.
+#
+# ==== References ====
+#
+# BUG2026012223284 flush logs and parallel executed non automic ddl cause gtid gap
+#
+
+
+--source include/have_binlog_format_row.inc
+--source include/have_only_dstore.inc
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+
+call mtr.add_suppression("An error occurred during sync stage of the commit");
+call mtr.add_suppression("Attempting backtrace. You can use the following information to find out");
+call mtr.add_suppression("rds_binlog_dstore_consistent is set false.");
+# (binlog_error_action = ABORT_SERVER)
+SET GLOBAL sync_binlog = 1;
+create table if not exists t(id int);
+SET SESSION debug = "+d,simulate_error_during_sync_binlog_file";
+SET GLOBAL binlog_error_action = ABORT_SERVER;
+--exec echo "wait" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+
+# Check that sync error causing server to abort and client gets
+# ER_BINLOG_LOGGING_IMPOSSIBLE when binlog_error_action= 'ABORT_SERVER'.
+--error ER_BINLOG_LOGGING_IMPOSSIBLE
+create table if not exists t(id int);
+
+--exec echo "restart" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--enable_reconnect
+--source include/wait_until_connected_again.inc
+drop table t;
+
+#Check that the binlog events are correct.
+--let $keep_gtid_events= 1
+--let $keep_gtid_set = 1
+--source include/show_binlog_events.inc
+
+--let $keep_gtid_events= 1
+--let $keep_gtid_set = 1
+--let $binlog_file= LAST
+source include/show_binlog_events.inc;
+
+#The flush logs operation is expected to execute normally.
+flush logs;
+
+#Check that the binlog events are correct.
+--let $keep_gtid_events= 1
+--let $keep_gtid_set = 1
+--let $binlog_file= LAST
+source include/show_binlog_events.inc;
+
+set global rds_binlog_dstore_consistent=on;

@@ -1,0 +1,68 @@
+# ==== Purpose ====
+#
+# Verify that the expired binary logs are purged automatically
+# by a dedicated thread after wait timeout, which is set by
+# 'rds_binlog_purge_thread_wait_timeout'.
+#
+# ==== References ====
+#
+# US2023121500746  Decouple binlog purge and transaction commit
+#
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+--source include/have_binlog_format_row.inc
+
+# Force restart the server to make the test be repeatable.
+--source include/force_restart.inc
+
+RESET MASTER;
+
+CREATE TABLE t1(c1 INT);
+--echo #
+--echo # Generate some binlogs by 'FLUSH BINARY LOGS'
+--echo #
+--let $i = 1
+--disable_query_log
+while ($i <= 20) {
+  --eval INSERT INTO t1 VALUES ($i);
+  FLUSH BINARY LOGS;
+  --inc $i
+}
+--enable_query_log
+
+--echo #
+--echo # Expect that there are 21 binary logs before binlog purge
+--echo #
+--source include/show_binary_logs.inc
+
+# Wait a while, so that the wait timeout of a dedicated thread reached.
+--sleep 23
+--echo #
+--echo # Expect that the expired binary logs from binlog.000001 to
+--echo # binlog.000019 are purged automatically by a dedicated
+--echo # thread after wait timeout.
+--echo #
+--source include/show_binary_logs.inc
+
+--echo #
+--echo # Generate more binlogs by 'FLUSH BINARY LOGS'
+--echo #
+--disable_query_log
+while ($i <= 40) {
+  FLUSH BINARY LOGS;
+  --inc $i
+}
+--enable_query_log
+--source include/show_binary_logs.inc
+
+# Wait a while, so that the wait timeout of a dedicated thread reached.
+--sleep 23
+--echo #
+--echo # Expect that the expired binary logs from binlog.000020 to
+--echo # binlog.000039 are purged automatically by a dedicated
+--echo # thread after wait timeout.
+--echo #
+--source include/show_binary_logs.inc
+
+# Cleanup
+DROP TABLE t1;

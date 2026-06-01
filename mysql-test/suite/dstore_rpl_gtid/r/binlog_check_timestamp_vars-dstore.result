@@ -1,0 +1,50 @@
+include/master-slave.inc
+Warnings:
+Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
+[connection master]
+# -----------------------------------------------------------------------
+# Step 1: Initialize Data on Master
+# -----------------------------------------------------------------------
+[connection master]
+CREATE TABLE t(
+id INT, 
+itime TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+) ENGINE=DSTORE;
+INSERT INTO t(id) VALUES(1),(2),(3),(4),(5);
+include/sync_slave_sql_with_master.inc
+# -----------------------------------------------------------------------
+# Step 2: Prepare Slave Binlog environment
+# -----------------------------------------------------------------------
+[connection slave]
+FLUSH LOGS;
+# -----------------------------------------------------------------------
+# Step 3: Trigger DDL/DML on Master that involves session variables
+# -----------------------------------------------------------------------
+[connection master]
+CREATE TABLE IF NOT EXISTS t1 ENGINE=DSTORE AS SELECT * FROM t;
+include/sync_slave_sql_with_master.inc
+# -----------------------------------------------------------------------
+# Step 4: Extract and Replay using mysqlbinlog
+# -----------------------------------------------------------------------
+[connection slave]
+SELECT COUNT(*) FROM t1;
+COUNT(*)
+5
+set sql_log_bin=0;
+DROP TABLE t1;
+set sql_log_bin=1;
+# --- Replaying binlog on Slave ---
+SELECT COUNT(*) FROM t1;
+COUNT(*)
+5
+# -----------------------------------------------------------------------
+# Step 5: Final Cleanup
+# -----------------------------------------------------------------------
+[connection master]
+DROP TABLE IF EXISTS t, t1;
+include/sync_slave_sql_with_master.inc
+# =======================================================================
+# Result: Success. Replay finished without transaction errors.
+# =======================================================================
+include/rpl_end.inc

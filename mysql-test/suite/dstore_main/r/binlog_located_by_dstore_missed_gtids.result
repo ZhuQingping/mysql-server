@@ -1,0 +1,35 @@
+RESET MASTER;
+FLUSH LOGS;
+FLUSH LOGS;
+CREATE TABLE t1(c1 INT);
+INSERT INTO t1 VALUES (1);;
+INSERT INTO t1 VALUES (2);;
+INSERT INTO t1 VALUES (3);;
+FLUSH LOGS;
+FLUSH LOGS;
+# 
+# Restart mysqld.
+#
+# restart
+#
+# Expect that the rds_dstore_missed_gtids_on_binlog is ./binlog.000003.
+#
+SELECT @@GLOBAL.rds_dstore_missed_gtids_on_binlog;
+@@GLOBAL.rds_dstore_missed_gtids_on_binlog
+./binlog.000003
+DROP TABLE t1;
+# 
+# Make gtid_executed be empty.
+#
+RESET MASTER;
+SELECT @@GLOBAL.GTID_EXECUTED;
+@@GLOBAL.GTID_EXECUTED
+
+# 
+# Restart mysqld with dstore_missed_gtids is empty, expect
+# that rds_dstore_missed_gtids_on_binlog is empty.
+#
+# restart
+SELECT @@GLOBAL.rds_dstore_missed_gtids_on_binlog;
+@@GLOBAL.rds_dstore_missed_gtids_on_binlog
+

@@ -1,0 +1,266 @@
+--source include/have_debug.inc
+
+--let $mock_obs = 1
+--source suite/local_backup/include/prepare_for_backup.inc
+
+--source suite/local_backup/include/prepare_scc_conf.inc
+
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("OBS error occur when get object meta");
+call mtr.add_suppression("OBS get object metadata fail");
+call mtr.add_suppression("call Secrypto component decrypt failed");
+call mtr.add_suppression("SCC init failed. Please see scc.log for more message");
+call mtr.add_suppression("Local backup: current backup uses too many OBS objects");
+call mtr.add_suppression("Secrypto component does not load. Please set rds_scc_conf");
+call mtr.add_suppression("call Secrypto component decrypt fail,");
+call mtr.add_suppression("Local backup: Decrypt OBS AK SK from mysql configuration file fail");
+call mtr.add_suppression("Local backup: Failed to create OBS service handler instance");
+call mtr.add_suppression("Local backup: failed to rename full backup direcory");
+call mtr.add_suppression("Local backup: failed to get schema files for sub directory");
+call mtr.add_suppression("Local backup: failed to get schema file informations for directory");
+call mtr.add_suppression("Local backup: failed to open soure directory");
+call mtr.add_suppression("Local backup: get file size fail for");
+call mtr.add_suppression("Local backup: failed to append schema file");
+call mtr.add_suppression("Local backup: failed to generate schema files meta data for OBS object");
+call mtr.add_suppression("Local backup: failed to write full backup restore meta to OBS");
+call mtr.add_suppression("get file .+backup_meta.json size fail");
+call mtr.add_suppression("write full local backup meta json with status fail");
+call mtr.add_suppression("write full local backup meta json with progress fail");
+call mtr.add_suppression("Local backup: OBS error occur when put object, error code: ");
+call mtr.add_suppression("Local backup: OBS put object fail. Error code:");
+call mtr.add_suppression("write simple file .+backup_meta.json fail when write full local backup meta json data");
+call mtr.add_suppression("create full local backup meta json file fail");
+call mtr.add_suppression("write full local backup meta json fail");
+call mtr.add_suppression("Local backup: failed to write full backup meta json");
+call mtr.add_suppression("Local backup: OBS error occur when append object, error code: ");
+call mtr.add_suppression("Local backup: OBS append object fail. Error code:");
+call mtr.add_suppression("backup file .+ write data buffer fail");
+call mtr.add_suppression("Local backup: failed to do full backup for dstore");
+call mtr.add_suppression("Local backup: OBS error occur when get object, error code: ");
+call mtr.add_suppression("Local backup: OBS get object fail. Error code:");
+call mtr.add_suppression("Local backup: OBS error occur when list all object, error code: ");
+call mtr.add_suppression("Local backup: OBS list all object fail. Error code:");
+call mtr.add_suppression("file open fail when add local backup file");
+call mtr.add_suppression("add local backup file fail when create full local backup meta json");
+call mtr.add_suppression("Local backup: OBS error occur when batch delete objects, error code: ");
+call mtr.add_suppression("Local backup: OBS batch delete object fail. Error code:");
+call mtr.add_suppression("Local backup: There are 1 OBS objects delete fail. This may be caused by server restart during the last removal objects procedure.");
+call mtr.add_suppression("add local backup file fail when write full local backup meta");
+call mtr.add_suppression("write full local backup meta fail, time point ");
+call mtr.add_suppression("Local backup: failed to write full backup meta info");
+call mtr.add_suppression("start full local backup fail");
+call mtr.add_suppression("SCC lib dlopen ");
+call mtr.add_suppression("Load Secrypto component failed");
+
+--let $skip_check_meta_json = 1
+SET GLOBAL debug='+d,mock_put_object';
+SET GLOBAL debug='+d,mock_append_object';
+SET GLOBAL debug='+d,mock_get_object';
+SET GLOBAL debug='+d,mock_list_object';
+SET GLOBAL debug='+d,mock_delete_object';
+SET GLOBAL debug='+d,mock_get_object_meta';
+SET GLOBAL debug='+d,full_lb_obs_skip_write_restore_meta';
+SET GLOBAL debug='+d,mock_append_too_many_objects';
+
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+# Should fail since scc not configured
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+
+SET GLOBAL debug='+d,scc_load_lib_not_exist';
+--disable_query_log
+--error ER_DA_RDS_SCC_INIT
+--eval SET GLOBAL rds_scc_conf='$MYSQLTEST_VARDIR/scc_tmp/scc.conf'
+--enable_query_log
+SET GLOBAL debug='-d,scc_load_lib_not_exist';
+
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+# Should fail since scc not loaded
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+
+--disable_query_log
+--disable_result_log
+--error ER_CANT_OPEN_FILE
+--eval SET GLOBAL rds_scc_conf='$MYSQLTEST_VARDIR/scc_tmp/scc.conf.not_exist'
+--enable_result_log
+--eval SET GLOBAL rds_scc_conf='$MYSQLTEST_VARDIR/scc_tmp/scc.conf'
+--exec cp $MYSQLTEST_VARDIR/scc_tmp/scc.conf $MYSQLTEST_VARDIR/scc_tmp/scc.conf.bak
+--eval SET GLOBAL rds_scc_conf='$MYSQLTEST_VARDIR/scc_tmp/scc.conf.bak'
+
+--let $SCC_CONF = $MYSQLTEST_VARDIR/scc_tmp/scc.conf
+--let $SCC_PLAIN_TEXT = AK_Plain_Text
+--let $SCC_ENCRYPT_RES_FILE = $MYSQLTEST_VARDIR/1.txt
+--source suite/local_backup/include/scc_encrypt.inc
+
+--let $read_from_file = $MYSQLTEST_VARDIR/1.txt
+--source include/read_file_to_var.inc
+--let $EncryptedFakeAK = $result
+
+--let $SCC_PLAIN_TEXT = SK_Plain_Text
+--source suite/local_backup/include/scc_encrypt.inc
+
+--let $read_from_file = $MYSQLTEST_VARDIR/1.txt
+--source include/read_file_to_var.inc
+--let $EncryptedFakeSK = $result
+--exec rm -f $MYSQLTEST_VARDIR/1.txt
+
+--eval SET GLOBAL rds_local_backup_obs_access_key='$EncryptedFakeAK'
+--eval SET GLOBAL rds_local_backup_obs_secret_key='$EncryptedFakeSK'
+--enable_query_log
+
+CREATE DATABASE db1;
+USE db1;
+CREATE TABLE t1(a int) ENGINE=Dstore;
+INSERT INTO t1 VALUES(1);
+SELECT * FROM t1;
+
+connect(conn1,localhost,root,,db1);
+connection conn1;
+send INSERT INTO t1 VALUES(2);
+
+connection default;
+SET GLOBAL rds_local_backup_sleep_interval = 1;
+# full backup.
+--let $full_backup_flag = 1
+--source suite/local_backup/include/start_full_backup.inc
+# Test for local backup status.
+--disable_query_log
+--disable_result_log
+SHOW STATUS LIKE 'Dstore_local_backup_full_backup_status';
+--enable_result_log
+--enable_query_log
+--source suite/local_backup/include/wait_full_backup.inc
+
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+
+connection conn1;
+reap;
+SELECT * FROM t1 order by a;
+
+connection default;
+INSERT INTO t1 VALUES(3);
+SELECT * FROM t1 order by a;
+
+SET GLOBAL rds_local_backup_sleep_interval = 0;
+SET GLOBAL debug='-d,mock_append_too_many_objects';
+
+# OBS encrypt
+SET GLOBAL rds_lb_obs_encryption=on;
+--source suite/local_backup/include/start_full_backup.inc
+--source suite/local_backup/include/wait_full_backup.inc
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+
+# Inject some error
+SET GLOBAL debug='+d,get_schema_file_meta_cp_sub_dir_fail';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+SET GLOBAL debug='-d,get_schema_file_meta_cp_sub_dir_fail';
+
+SET GLOBAL debug='+d,get_schema_file_meta_get_file_size_fail';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+SET GLOBAL debug='-d,get_schema_file_meta_get_file_size_fail';
+
+SET GLOBAL debug='+d,merge_schema_dirs_to_obs_obj_gen_merged_file_obj_meta_fail';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+SET GLOBAL debug='-d,merge_schema_dirs_to_obs_obj_gen_merged_file_obj_meta_fail';
+
+SET GLOBAL debug='+d,merge_schema_dirs_to_obs_obj_append_one_file_to_obj_fail';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+SET GLOBAL debug='-d,merge_schema_dirs_to_obs_obj_append_one_file_to_obj_fail';
+
+SET GLOBAL debug='+d,mock_append_object_max_append';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+SET GLOBAL debug='-d,mock_append_object_max_append';
+
+SET GLOBAL debug='+d,mock_put_object_error';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+SET GLOBAL debug='-d,mock_put_object_error';
+
+SET GLOBAL debug='+d,mock_append_object_error';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+SET GLOBAL debug='-d,mock_append_object_error';
+
+SET GLOBAL debug='+d,mock_get_object_error';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+SET GLOBAL debug='-d,mock_get_object_error';
+
+SET GLOBAL debug='+d,mock_list_object_error';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+SET GLOBAL debug='-d,mock_list_object_error';
+
+SET GLOBAL debug='+d,mock_delete_object_error';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+SET GLOBAL debug='-d,mock_delete_object_error';
+
+SET GLOBAL debug='+d,mock_get_object_meta_error';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+SET GLOBAL debug='-d,mock_get_object_meta_error';
+
+SET GLOBAL debug='+d,mock_put_object_retry';
+SET GLOBAL debug='+d,mock_append_object_retry';
+SET GLOBAL debug='+d,mock_get_object_retry';
+SET GLOBAL debug='+d,mock_list_object_retry';
+SET GLOBAL debug='+d,mock_delete_object_retry';
+SET GLOBAL debug='+d,mock_get_object_meta_retry';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+SET GLOBAL debug='-d,mock_put_object_retry';
+SET GLOBAL debug='-d,mock_append_object_retry';
+SET GLOBAL debug='-d,mock_get_object_retry';
+SET GLOBAL debug='-d,mock_list_object_retry';
+SET GLOBAL debug='-d,mock_delete_object_retry';
+SET GLOBAL debug='-d,mock_get_object_meta_retry';
+
+SET GLOBAL debug='-d,full_lb_obs_skip_write_restore_meta';
+SET GLOBAL debug='+d,full_lb_obs_write_restore_meta_fail';
+call rds_backup.start_full_local_backup(0);
+--source suite/local_backup/include/wait_full_backup.inc
+SHOW STATUS LIKE 'Rds_local_backup_last_full_backup_status';
+SET GLOBAL debug='-d,full_lb_obs_write_restore_meta_fail';
+
+# Drop database db1.
+DROP DATABASE db1;
+
+--let $skip_check_meta_json = 0
+SET GLOBAL debug='-d,mock_put_object';
+SET GLOBAL debug='-d,mock_append_object';
+SET GLOBAL debug='-d,mock_get_object';
+SET GLOBAL debug='-d,mock_list_object';
+SET GLOBAL debug='-d,mock_delete_object';
+SET GLOBAL debug='-d,mock_get_object_meta';
+
+--source suite/local_backup/include/clean_backup.inc
+--let $mock_obs = 0
+
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+--let $restart_parameters = "restart: --rds_scc_conf='$MYSQLTEST_VARDIR/scc_tmp/scc.conf'"
+--source include/start_mysqld_no_echo.inc
+
+--source include/shutdown_mysqld.inc
+--let $restart_parameters = "restart"
+--source include/start_mysqld_no_echo.inc
+--exec rm -rf $MYSQLTEST_VARDIR/scc_tmp

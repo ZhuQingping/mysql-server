@@ -1,0 +1,36 @@
+#
+# Testing of disabled key_block_size and row_format
+#
+SET @save_sql_mode = @@SQL_MODE;
+
+CREATE TABLE `test_dstore1` (
+  `id` int NOT NULL,
+  PRIMARY KEY (`id`) KEY_BLOCK_SIZE=10
+) ENGINE=Innodb DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE `test_dstore2` (
+  `id` int NOT NULL,
+  PRIMARY KEY (`id`) KEY_BLOCK_SIZE=10
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+drop table test_dstore1;
+drop table test_dstore2;
+
+create table test1(id int) engine=Innodb row_format=dynamic;
+
+create table test2(id int) engine=Dstore row_format=dynamic;
+
+drop table test1;
+drop table test2;
+
+SET sql_mode = STRICT_ALL_TABLES;
+--error ER_CHECK_NOT_IMPLEMENTED
+CREATE TABLE `test_dstore2` (
+  `id` int NOT NULL,
+  PRIMARY KEY (`id`) KEY_BLOCK_SIZE=10
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+--error ER_CHECK_NOT_IMPLEMENTED
+create table test2(id int) engine=Dstore row_format=dynamic;
+
+set sql_mode = @save_sql_mode;

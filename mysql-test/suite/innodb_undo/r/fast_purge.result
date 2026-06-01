@@ -1,0 +1,55 @@
+#
+# Test with a lot of purge operations shows the difference between fast
+# and normal purge. Running of purge tasks occurs simultaneously with
+# collection of purge records in fast purge and strongly after collection
+# of purge records in normal purge.
+#
+SET GLOBAL innodb_fast_shutdown = 0;
+Matching lines are:
+FAST PURGE: starting to collect records
+FAST PURGE: running tasks
+FAST PURGE: finishing to collect records
+Occurrences of 'FAST PURGE' in the input file: 3
+# restart: --innodb_rds_fast_purge_enabled=0 --innodb_purge_batch_size=6
+SET @old_truncate_frequency = @@innodb_purge_rseg_truncate_frequency;
+SET GLOBAL innodb_purge_rseg_truncate_frequency=5;
+SET DEBUG="+d,testing_purge_mode_recs";
+CREATE UNDO TABLESPACE undo_003 ADD DATAFILE 'undo_003.ibu';
+CREATE UNDO TABLESPACE undo_004 ADD DATAFILE 'undo_004.ibu';
+CREATE UNDO TABLESPACE undo_005 ADD DATAFILE 'undo_005.ibu';
+ALTER UNDO TABLESPACE innodb_undo_001 SET INACTIVE;
+ALTER UNDO TABLESPACE innodb_undo_002 SET INACTIVE;
+SELECT NAME, SPACE_TYPE, STATE FROM INFORMATION_SCHEMA.INNODB_TABLESPACES
+WHERE SPACE_TYPE = 'Undo' ORDER BY NAME;
+NAME	SPACE_TYPE	STATE
+innodb_undo_001	Undo	empty
+innodb_undo_002	Undo	empty
+undo_003	Undo	active
+undo_004	Undo	active
+undo_005	Undo	active
+SELECT TABLESPACE_NAME, FILE_TYPE, FILE_NAME FROM INFORMATION_SCHEMA.FILES
+WHERE FILE_NAME LIKE '%undo%' ORDER BY TABLESPACE_NAME;
+TABLESPACE_NAME	FILE_TYPE	FILE_NAME
+innodb_undo_001	UNDO LOG	./undo_001
+innodb_undo_002	UNDO LOG	./undo_002
+undo_003	UNDO LOG	./undo_003.ibu
+undo_004	UNDO LOG	./undo_004.ibu
+undo_005	UNDO LOG	./undo_005.ibu
+#
+# Cleanup
+#
+ALTER UNDO TABLESPACE innodb_undo_001 SET ACTIVE;
+ALTER UNDO TABLESPACE innodb_undo_002 SET ACTIVE;
+ALTER UNDO TABLESPACE undo_003 SET INACTIVE;
+ALTER UNDO TABLESPACE undo_004 SET INACTIVE;
+ALTER UNDO TABLESPACE undo_005 SET INACTIVE;
+DROP UNDO TABLESPACE undo_003;
+DROP UNDO TABLESPACE undo_004;
+DROP UNDO TABLESPACE undo_005;
+Matching lines are:
+NORMAL PURGE: starting to collect records
+NORMAL PURGE: finishing to collect records
+NORMAL PURGE: running tasks
+Occurrences of 'NORMAL PURGE' in the input file: 3
+SET GLOBAL innodb_purge_rseg_truncate_frequency=@old_truncate_frequency;
+SET DEBUG="-d,testing_purge_mode_recs";

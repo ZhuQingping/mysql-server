@@ -1,0 +1,43 @@
+--source include/have_only_dstore.inc
+#
+# Test for recycle func of recyclebin
+#
+
+--echo # Connect to master
+connection default;
+create database db_recycle;
+
+set global rds_recycle_bin_mode=ON;
+set rds_recycle_bin_mode=ON;
+
+use db_recycle;
+create table t1(id int);
+drop table t1;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+--replace_result $t1_name_in_recyclebin t1
+eval call dbms_recyclebin.restore_table('$t1_name_in_recyclebin');
+
+drop table t1;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+--replace_result $t1_name_in_recyclebin t1
+eval call dbms_recyclebin.restore_table('$t1_name_in_recyclebin');
+
+CREATE TABLE p1 (id INT NOT NULL, PRIMARY KEY (id)) ENGINE=Dstore;
+CREATE TABLE c1 (id INT, parent_id INT, INDEX par_ind (parent_id),
+                 FOREIGN KEY (parent_id) REFERENCES p1(id)) ENGINE=Dstore;
+
+DROP TABLE p1,c1;
+
+set rds_recycle_bin_mode=OFF;
+set global rds_recycle_bin_mode=OFF;
+drop database db_recycle;
+drop database __recyclebin__;
+CREATE DATABASE IF NOT EXISTS __recyclebin__ DEFAULT CHARACTER SET utf8mb4;

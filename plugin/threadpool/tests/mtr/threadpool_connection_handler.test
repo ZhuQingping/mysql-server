@@ -1,0 +1,47 @@
+# Test threadpool connection handler
+
+--source include/have_debug.inc
+
+call mtr.add_suppression("Out of memory");
+
+# Save the initial number of concurrent sessions
+--source include/count_sessions.inc
+
+# Test resource allocation failure like out of memory.
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+SET GLOBAL debug= '+d,simulate_resource_failure';
+--replace_result $MASTER_MYPORT MYSQL_PORT $MASTER_MYSOCK MYSQL_SOCK
+--replace_regex /system error: [0-9]+/system error: NUM/
+--error 2013
+connect (con2, localhost, root,,mysql);
+
+connection default;
+SET GLOBAL debug= '-d,simulate_resource_failure';
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+# Test threadpool alloc connection failure like out of memory.
+SET GLOBAL debug= '+d,simulate_tp_alloc_connection_oom';
+--replace_result $MASTER_MYPORT MYSQL_PORT $MASTER_MYSOCK MYSQL_SOCK
+--replace_regex /system error: [0-9]+/system error: NUM/
+--error 2013
+connect (con2, localhost, root,,mysql);
+
+connection default;
+SET GLOBAL debug= '-d,simulate_tp_alloc_connection_oom';
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+
+SET GLOBAL rds_local_socket_using_per_thread = true;
+connect (con3, localhost, root,,mysql);
+SET GLOBAL debug= '-d,simulate_tp_alloc_connection_oom';
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+SET GLOBAL rds_local_socket_using_per_thread = false;
+disconnect con3;
+
+connection default;
+# Wait till we reached the initial number of concurrent sessions
+--source include/wait_until_count_sessions.inc

@@ -1,0 +1,120 @@
+# ==== Purpose ====
+#
+# Testing the persistence of BLOB and TEXT columns.
+#
+--source include/have_only_dstore.inc
+use test;
+--echo # 
+--echo # 1. Create table
+--echo # 
+CREATE TABLE blob_text_test (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    tiny_blob_col TINYBLOB,
+    tiny_text_col TINYTEXT,
+    blob_col BLOB,
+    text_col TEXT
+) engine=Dstore;
+
+CREATE TABLE userscde (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(50) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL
+) engine=Dstore;
+
+--echo # 
+--echo # 2. Insert data (including some boundary value tests).
+--echo # 
+INSERT INTO blob_text_test (tiny_blob_col, tiny_text_col, blob_col, text_col)
+VALUES
+    (NULL, NULL, NULL, NULL),
+    ('', '', '', ''),
+    (UNHEX('48656C6C6F'), 'Hello', UNHEX('776F726C64'), 'world'),
+    (REPEAT('A', 255), REPEAT('B', 255), REPEAT('C', 65535), REPEAT('D', 65535));
+
+INSERT INTO userscde (name, email) VALUES ('Alice', 'alice@example.com');
+--echo # 
+--echo # 3. Restart mysqld.
+--echo # 
+--source include/restart_mysqld.inc
+SELECT id, LENGTH(tiny_blob_col), LENGTH(tiny_text_col), LENGTH(blob_col), LENGTH(text_col) FROM blob_text_test;
+SELECT * FROM blob_text_test WHERE id = 3;
+SELECT * FROM userscde;
+
+--echo # 
+--echo # 4. Add blob col and restart mysqld.
+--echo # 
+--error ER_DSTORE_INSTANT_ADD_NOT_SUPPORTED_BLOB
+ALTER TABLE blob_text_test ADD COLUMN tiny_blob_col2 TINYBLOB, ALGORITHM=INSTANT;
+ALTER TABLE blob_text_test ADD COLUMN tiny_blob_col2 TINYBLOB, ALGORITHM=INPLACE;
+ALTER TABLE blob_text_test ADD COLUMN tiny_blob_col3 TINYBLOB, ALGORITHM=COPY;
+ALTER TABLE userscde ADD COLUMN blob_col BLOB;
+
+INSERT INTO userscde (name, email, blob_col) VALUES ('Bob', 'Bob@example.com', repeat('A', 3000));
+show create table blob_text_test;
+--source include/restart_mysqld.inc
+SELECT id, LENGTH(tiny_blob_col), LENGTH(tiny_text_col), LENGTH(blob_col), LENGTH(text_col) FROM blob_text_test;
+SELECT * FROM blob_text_test WHERE id = 3;
+SELECT id, name, email, LENGTH(blob_col) FROM userscde;
+
+--echo # 
+--echo # 5. Add varchar col and restart mysqld.
+--echo # 
+ALTER TABLE blob_text_test ADD COLUMN (varchar_col VARCHAR(255));
+show create table blob_text_test;
+--source include/restart_mysqld.inc
+SELECT id, LENGTH(tiny_blob_col), LENGTH(tiny_text_col), LENGTH(blob_col), LENGTH(text_col) FROM blob_text_test;
+SELECT * FROM blob_text_test WHERE id = 3;
+
+--echo # 
+--echo # 6. Modify blob col and restart mysqld.
+--echo # 
+ALTER TABLE blob_text_test MODIFY COLUMN tiny_blob_col BLOB;
+show create table blob_text_test;
+--source include/restart_mysqld.inc
+SELECT id, LENGTH(tiny_blob_col), LENGTH(tiny_text_col), LENGTH(blob_col), LENGTH(text_col) FROM blob_text_test;
+SELECT * FROM blob_text_test WHERE id = 3;
+
+--echo # 
+--echo # 7. Drop blob col and restart mysqld.
+--echo # 
+ALTER TABLE blob_text_test DROP COLUMN tiny_blob_col;
+ALTER TABLE userscde DROP COLUMN blob_col;
+show create table blob_text_test;
+--source include/restart_mysqld.inc
+SELECT id, LENGTH(tiny_text_col), LENGTH(blob_col), LENGTH(text_col) FROM blob_text_test;
+SELECT * FROM blob_text_test WHERE id = 3;
+show create table blob_text_test;
+show create table userscde;
+
+--echo # 
+--echo # 8. Rename table and restart mysqld.
+--echo # 
+RENAME TABLE blob_text_test TO blob_text_test_new;
+--source include/restart_mysqld.inc
+SELECT id, LENGTH(tiny_text_col), LENGTH(blob_col), LENGTH(text_col) FROM blob_text_test_new;
+SELECT * FROM blob_text_test_new WHERE id = 3;
+
+--echo # 
+--echo # 9. Cretae table like and restart mysqld.
+--echo # 
+CREATE TABLE blob_text_test_new2 LIKE blob_text_test_new;
+--source include/restart_mysqld.inc
+SELECT id, LENGTH(tiny_text_col), LENGTH(blob_col), LENGTH(text_col) FROM blob_text_test_new2;
+SELECT * FROM blob_text_test_new2 WHERE id = 3;
+
+--echo # 
+--echo # 10. Truncate table and restart mysqld.
+--echo # 
+TRUNCATE TABLE blob_text_test_new2;
+--source include/restart_mysqld.inc
+SELECT id, LENGTH(tiny_text_col), LENGTH(blob_col), LENGTH(text_col) FROM blob_text_test_new2;
+SELECT * FROM blob_text_test_new2 WHERE id = 3;
+
+--echo # 
+--echo # 11. Modify blob col and restart mysqld.
+--echo # 
+DROP TABLE blob_text_test_new2;
+--source include/restart_mysqld.inc
+show tables;
+DROP TABLE blob_text_test_new;
+DROP TABLE userscde;

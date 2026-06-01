@@ -1,0 +1,103 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+
+CREATE TABLE `t4` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  `c` varchar(100) DEFAULT NULL,
+  `d` varchar(100) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_abc` (`a`,`b`,`c`)
+) ENGINE=InnoDB AUTO_INCREMENT=16384 DEFAULT CHARSET=utf8mb4;
+
+INSERT INTO `t4` VALUES
+(1,1,2,'abcabc',    'cbacbacbacba'),
+(2,3,2,'abcabca',   'cbacbacbacba'),
+(3,1,2,'abca',      'cbacbacbacba'),
+(4,1,2,'abcabca',   'cbacbacbacba'),
+(5,1,1,'abcabcabc', 'cbacbacbacba'),
+(6,0,3,'cabcabcabc','cbacbacbacba'),
+(7,1,2,'abc',       'cbacbacbacba'),
+(8,2,4,'abcabd',    'cbacbacbacba'),
+(9,1,0,'xabcabcad', 'cbacbacbacba'),
+(10,1,5,'xycabcab', 'cbacbacbacba');
+
+INSERT INTO t4(a, b, c, d) SELECT a, b, c, d FROM t4;
+INSERT INTO t4(a, b, c, d) SELECT a, b, c, d FROM t4;
+INSERT INTO t4(a, b, c, d) SELECT a, b, c, d FROM t4;
+INSERT INTO t4(a, b, c, d) SELECT a, b, c, d FROM t4;
+INSERT INTO t4(a, b, c, d) SELECT a, b, c, d FROM t4;
+INSERT INTO t4(a, b, c, d) SELECT a, b, c, d FROM t4;
+INSERT INTO t4(a, b, c, d) SELECT a, b, c, d FROM t4;
+INSERT INTO t4(a, b, c, d) SELECT a, b, c, d FROM t4;
+INSERT INTO t4(a, b, c, d) SELECT a, b, c, d FROM t4;
+INSERT INTO t4(a, b, c, d) SELECT a, b, c, d FROM t4;
+INSERT INTO t4(a, b, c, d) SELECT a, b, c, d FROM t4;
+
+# Increase the number of pages sampled by InnoDB during ANALYZE TABLE to get
+# more stable row count estimates.
+SET GLOBAL innodb_stats_persistent_sample_pages = 2000;
+ANALYZE TABLE t4;
+SET GLOBAL innodb_stats_persistent_sample_pages = DEFAULT;
+
+## case Item_cond_and/Item_cond_or
+
+SELECT * FROM t4 where id > 1 and a < 1 and b = 2 limit 10;
+SELECT * FROM t4 where (id  > 1 and a < 1) or (b = 2) limit 10;
+
+EXPLAIN SELECT * FROM t4 where id > 1 and a + b < 2 limit 10;
+SELECT * FROM t4 where id > 1 and a + b < 2 limit 10;
+SELECT * FROM t4 where id < 10 or (a + b < 5) limit 10;
+
+--replace_regex /[0-9]/#/
+EXPLAIN SELECT SUM(a) FROM t4 group by b HAVING b > 1 and SUM(a) + b > 5 order by b;
+SELECT SUM(a) FROM t4 group by b HAVING b > 1 and SUM(a) + b > 5 order by b;
+
+SELECT * FROM t4 where c < make_set(1, 'abca') and b > 1 limit 10;
+SELECT * FROM t4 where c < make_set(1 | 4, 'abc', 'bca', 'ccb') and a < 2 order by id limit 10;
+
+SELECT * FROM t4 where id IN (1, 3, 5) and b > 1;
+SELECT * FROM t4 where id IN (1, 3, 5, 7, 9, 10) and (b > 1 or a < 3) and a + b > 2;
+
+## case Item_func
+
+--replace_regex /[0-9]/#/
+EXPLAIN SELECT SUM(a), SUM(a)/AVG(b) from t4 group by a HAVING AVG(b) + a > 2 order by a;
+SELECT SUM(a), SUM(a)/AVG(b) from t4 group by a HAVING AVG(b) + a > 2 order by a;
+
+SELECT SUM(a) from t4 where a + b < 3 and id < 100;
+SELECT SUM(b) from t4 where a * b < 3 or id > 1000;
+
+--replace_regex /[0-9]/#/
+EXPLAIN SELECT b, COUNT(a) from t4 group by b HAVING b IN (1, 2, 3, 5, 7) and SUM(a) > 2000 ORDER BY SUM(b);
+SELECT b, COUNT(a) from t4 group by b HAVING b IN (1, 2, 3, 5, 7) and SUM(a) > 2000 ORDER BY SUM(b);
+
+SELECT SUM(a) FROM t4 where c = make_set(1, 'abcabc');
+SELECT SUM(a), c FROM t4 group by b, c HAVING c < make_set(1 | 4, 'abc', NULL, 'a') and b > 1 order by b, c;
+
+## case Item_func_make_set
+
+SELECT SUM(a) FROM t4 group by make_set(1 | 2, 'ab', 'c');
+
+--replace_regex /[0-9]/#/
+explain select make_set(NULL,'a','b','c'),make_set(1|4,'a',NULL,'c'),make_set(1+2,'a',NULL,'c') from t4 group by a, b HAVING sum(a)/(AVG(b) + 1) > 2;
+select make_set(NULL,'a','b','c'),make_set(1|4,'a',NULL,'c'),make_set(1+2,'a',NULL,'c') from t4 group by a, b HAVING sum(a)/(AVG(b) + 1) > 2;
+
+select make_set(NULL,'a','b','c'), make_set(1+2,'a',NULL,'c') from t4 group by a, b HAVING sum(a) > 2 and b > 1;
+SELECT AVG(a) from t4 group by b, c HAVING c = make_set(1, 'abca') or b = 2 order by b, c;
+SELECT COUNT(a) from t4 group by b HAVING b IN (1, 2, 3, 4, 6) and SUM(b - 2) > 1 order by b;
+
+## case Item_row
+
+SELECT COUNT(b IN (1, 3, 5)) from t4;
+
+--replace_regex /[0-9]/#/
+EXPLAIN SELECT b as c1, SUM(a) from t4 group by b HAVING c1 in (1, 3, 5) or 2 * b < 5 and AVG(c1) > 1 order by c1;
+SELECT b as c1, SUM(a) from t4 group by b HAVING c1 in (1, 3, 5) or 2 * b < 5 and AVG(c1) > 1 order by c1;
+
+--replace_regex /[0-9]/#/
+EXPLAIN SELECT b in (1, 3, 5) as c1, SUM(b) from t4 group by c1 HAVING c1 IN (0, 1) and AVG(b) > 1 order by c1;
+SELECT b in (1, 3, 5) as c1, SUM(b) from t4 group by c1 HAVING c1 IN (0, 1) and AVG(b) > 1 order by c1;
+
+DROP TABLE t4;

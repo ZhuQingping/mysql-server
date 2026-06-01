@@ -1,0 +1,38 @@
+#########################Test preparation#####################################
+-- source include/have_log_bin.inc
+#--disable_query_log
+--disable_warnings
+SET @old_server_id=@@server_id;
+let $server_id_file=tmp_serverid_file;
+--exec rm -rf $server_id_file
+
+SET GLOBAL server_id=2;
+RESET MASTER;
+let $data_dir=query_get_value(SHOW VARIABLES LIKE 'datadir',Value,1);
+DROP DATABASE IF EXISTS mtest;
+CREATE DATABASE mtest;
+#########################Test execution#######################################
+SET GLOBAL server_id=100;
+let $binlog_name=query_get_value(SHOW MASTER STATUS,File,1);
+USE mtest;
+CREATE TABLE test1(p0 INT,p1 CHAR(10));
+INSERT INTO test1 VALUES(1,'aaa');
+SET GLOBAL server_id=10;
+INSERT INTO test1 VALUES(2,'bbb');
+FLUSH LOGS;
+--exec $MYSQL_BINLOG -vv --collect-server-id --server-id-file=$server_id_file  $data_dir$binlog_name -r /dev/null
+
+let $binlog_name=query_get_value(SHOW MASTER STATUS,File,1);
+SET GLOBAL server_id=200;
+INSERT INTO test1 VALUES(3,'ccc');
+SET GLOBAL server_id=150;
+INSERT INTO test1 VALUES(4,'ddd');
+FLUSH LOGS;
+--exec $MYSQL_BINLOG -vv --collect-server-id --server-id-file=$server_id_file  $data_dir$binlog_name -r /dev/null
+--exec cat $server_id_file
+
+#########################Clean up the environment#############################
+DROP DATABASE mtest;
+--exec rm -rf $server_id_file
+SET GLOBAL server_id=@old_server_id;
+--enable_warnings

@@ -1,0 +1,237 @@
+SET @@default_storage_engine = 'Dstore';
+SHOW VARIABLES LIKE 'default_storage_engine';
+Variable_name	Value
+default_storage_engine	Dstore
+SHOW VARIABLES LIKE 'transaction_isolation';
+Variable_name	Value
+transaction_isolation	REPEATABLE-READ
+CREATE TABLE statistics (
+tx_errors INTEGER NOT NULL
+);
+INSERT INTO statistics (tx_errors) VALUES (0);
+CREATE TABLE t1 (
+`pk` INTEGER AUTO_INCREMENT NOT NULL,
+`id` INTEGER NOT NULL,
+`int1` INTEGER,
+`int1_key` INTEGER,
+`int1_unique` INTEGER,
+`int2` INTEGER,
+`int2_key` INTEGER,
+`int2_unique` INTEGER,
+`for_update` BOOLEAN DEFAULT 0,
+`timestamp` TIMESTAMP,
+`connection_id` INTEGER,
+`thread_id` INTEGER DEFAULT 0,
+`is_uncommitted` BOOLEAN DEFAULT 0,
+`is_consistent` BOOLEAN DEFAULT 0,
+KEY (`id`),
+KEY (`int1_key`),
+KEY (`int2_key`),
+UNIQUE (`int1_unique`),
+UNIQUE (`int2_unique`),
+PRIMARY KEY (`pk`)
+);
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `pk` int NOT NULL AUTO_INCREMENT,
+  `id` int NOT NULL,
+  `int1` int DEFAULT NULL,
+  `int1_key` int DEFAULT NULL,
+  `int1_unique` int DEFAULT NULL,
+  `int2` int DEFAULT NULL,
+  `int2_key` int DEFAULT NULL,
+  `int2_unique` int DEFAULT NULL,
+  `for_update` tinyint(1) DEFAULT '0',
+  `timestamp` timestamp NULL DEFAULT NULL,
+  `connection_id` int DEFAULT NULL,
+  `thread_id` int DEFAULT '0',
+  `is_uncommitted` tinyint(1) DEFAULT '0',
+  `is_consistent` tinyint(1) DEFAULT '0',
+  PRIMARY KEY (`pk`),
+  UNIQUE KEY `int1_unique` (`int1_unique`),
+  UNIQUE KEY `int2_unique` (`int2_unique`),
+  KEY `id` (`id`),
+  KEY `int1_key` (`int1_key`),
+  KEY `int2_key` (`int2_key`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+CREATE PROCEDURE insertRows(num INT)
+BEGIN
+SET @n = 1;
+REPEAT
+INSERT INTO t1 (`id`, `int1`, `int1_key`, `int1_unique`, 
+`int2`, `int2_key`, `int2_unique`,
+`for_update`, `connection_id`, `thread_id`, 
+`is_uncommitted`, `is_consistent`) 
+VALUES (0, 1000, 1000, @n,
+-1000, -1000, -@n,
+0, CONNECTION_ID(), 0, 
+0, 1);
+SET @n = @n + 1;
+UNTIL @n > num
+END REPEAT;
+END;
+//
+CALL insertRows(1000);
+SELECT SUM(`int1` + `int1_key` + `int1_unique`
+         + `int2` + `int2_key` + `int2_unique`) 
+AS TotalSum 
+FROM t1;
+TotalSum
+0
+SET autocommit = 0;
+
+*** Move record out of locked portion of index:
+
+START TRANSACTION;
+*** Disabling result log (result will vary)
+SELECT * FROM t1 WHERE `int1_key` BETWEEN 981 + (CONNECTION_ID() MOD 15) AND 1030 ORDER BY `int1_key`, `pk` FOR UPDATE;
+SELECT @pk:=`pk` FROM t1 WHERE `int1_key` BETWEEN 981 + (CONNECTION_ID() MOD 15) AND 1030 ORDER BY `int1_key`, `pk` LIMIT 1;
+*** Enabling result log
+UPDATE t1 SET `int1_key` = `int1_key` + 50,
+`int2_key` = `int2_key` - 50,
+`id` = 10,
+`connection_id` = CONNECTION_ID(),
+`is_consistent` = IF(`int1` + `int2` + `int1_key` + `int2_key` + `int1_unique` + `int2_unique` = 0, 1, 0),
+`thread_id` = 0
+WHERE `pk` = @pk;
+COMMIT;
+
+*** Move record out of locked portion of UNIQUE index:
+
+START TRANSACTION;
+*** Disabling result log (result will vary)
+SELECT * FROM t1 WHERE `int1_unique` BETWEEN 981 + (CONNECTION_ID() MOD 15) AND 1030 ORDER BY `int1_unique` FOR UPDATE;
+SELECT @pk:=`pk` FROM t1 WHERE `int1_unique` BETWEEN 981 + (CONNECTION_ID() MOD 15) AND 1030 ORDER BY `int1_unique` LIMIT 1;
+*** Enabling result log
+UPDATE t1 SET `int1_unique` = `int1_unique` + 50 + CONNECTION_ID(),
+`int2_unique` = `int2_unique` - 50,
+`id` = 11,
+`connection_id` = CONNECTION_ID(),
+`is_consistent` = IF(`int1` + `int2` + `int1_key` + `int2_key` + `int1_unique` + `int2_unique` = 0, 1, 0),
+`thread_id` = 0
+WHERE `pk` = @pk;
+COMMIT;
+
+*** Move record into locked portion of index:
+
+START TRANSACTION;
+*** Disabling result log (result will vary)
+SELECT * FROM t1 WHERE `int1_key` BETWEEN 981 + (CONNECTION_ID() MOD 15) AND 1030 ORDER BY `int1_key`, `pk` FOR UPDATE;
+SELECT @pk:=`pk` FROM t1 WHERE `int1_key` > 1030 ORDER BY `int1_key`, `pk` LIMIT 1;
+*** Enabling result log
+UPDATE t1 SET `int1_key` = `int1_key` + 50,
+`int2_key` = `int2_key` - 50,
+`id` = 12,
+`connection_id` = CONNECTION_ID(),
+`is_consistent` = IF(`int1` + `int2` + `int1_key` + `int2_key` + `int1_unique` + `int2_unique` = 0, 1, 0),
+`thread_id` = 0
+WHERE `pk` = @pk;
+COMMIT;
+
+*** Move record inside locked portion of index (move it but stay inside the locked range):
+
+START TRANSACTION;
+*** Disabling result log (result will vary)
+SELECT * FROM t1 WHERE `int1_key` BETWEEN 981 + (CONNECTION_ID() MOD 15) AND 1030 ORDER BY `int1_key`, `pk` FOR UPDATE;
+SELECT @pk:=`pk` FROM t1 WHERE `int1_key` BETWEEN  981 + 10 + (CONNECTION_ID() MOD 15) AND 1019 ORDER BY `int1_key`, `pk` LIMIT 1;
+*** Enabling result log
+UPDATE t1 SET `int1_key` = `int1_key` - 10,
+`int2_key` = `int2_key` + 10,
+`id` = 13,
+`connection_id` = CONNECTION_ID(),
+`is_consistent` = IF(`int1` + `int2` + `int1_key` + `int2_key` + `int1_unique` + `int2_unique` = 0, 1, 0),
+`thread_id` = 0
+WHERE `pk` = @pk;
+COMMIT;
+
+*** Move record outside existing index boundary (max):
+
+START TRANSACTION;
+*** Disabling result log (results will vary)
+SELECT @max:=MAX(`int2_key`), @pk:=FLOOR(1 + RAND() * (MAX(`pk`) - 1)) FROM t1;
+SELECT * FROM t1 WHERE `pk` = @pk FOR UPDATE;
+SELECT @old:=`int2_key`, (@sum:=`int1` + `int2` + `int1_key` + `int2_key` + `int1_unique` + `int2_unique`) FROM t1 WHERE `pk` = @pk;
+*** Enabling result log
+UPDATE t1 SET `int2_key` = @max + 1,
+`int2` = `int2` - (@max + 1 - @old),
+`id` = 14,
+`connection_id` = CONNECTION_ID(),
+`is_consistent` = IF(@sum = 0, 1, 0),
+`thread_id` = 0
+WHERE `pk` = @pk;
+COMMIT;
+
+*** Move record outside existing UNIQUE index boundary (max):
+
+START TRANSACTION;
+*** Disabling result log (results will vary)
+SELECT @max:=MAX(`int2_unique`), @pk:=FLOOR(1 + RAND() * (MAX(`pk`) - 1)) FROM t1;
+SELECT * FROM t1 WHERE `pk` = @pk FOR UPDATE;
+SELECT @old:=`int2_unique`, (@sum:=`int1` + `int2` + `int1_key` + `int2_key` + `int1_unique` + `int2_unique`) FROM t1 WHERE `pk` = @pk;
+*** Enabling result log
+UPDATE t1 SET `int2_unique` = @max + 1,
+`int2` = `int2` - (@max + 1 - @old),
+`id` = 15,
+`connection_id` = CONNECTION_ID(),
+`is_consistent` = IF(@sum = 0, 1, 0),
+`thread_id` = 0
+WHERE `pk` = @pk;
+COMMIT;
+
+*** Move record outside existing index boundary (min):
+
+START TRANSACTION;
+*** Disabling result log (results will vary)
+SELECT @min:=MIN(`int1_key`), @pk:=FLOOR(1 + RAND() * (MAX(`pk`) - 1)) FROM t1;
+SELECT * FROM t1 WHERE `pk` = @pk FOR UPDATE;
+SELECT @old:=`int1_key`, (@sum:=`int1` + `int2` + `int1_key` + `int2_key` + `int1_unique` + `int2_unique`) FROM t1 WHERE `pk` = @pk;
+*** Enabling result log
+UPDATE t1 SET `int1_key` = @min - 1,
+`int1` = `int1` - (@min - 1 - @old),
+`id` = 16,
+`connection_id` = CONNECTION_ID(),
+`is_consistent` = IF(@sum = 0, 1, 0),
+`thread_id` = 0
+WHERE `pk` = @pk;
+COMMIT;
+
+*** Move record outside existing UNIQUE index boundary (min):
+
+START TRANSACTION;
+*** Disabling result log (results will vary)
+SELECT @min:=MIN(`int1_unique`), @pk:=FLOOR(1 + RAND() * (MAX(`pk`) - 1)) FROM t1;
+SELECT * FROM t1 WHERE `pk` = @pk FOR UPDATE;
+SELECT @old:=`int1_unique`, (@sum:=`int1` + `int2` + `int1_key` + `int2_key` + `int1_unique` + `int2_unique`) FROM t1 WHERE `pk` = @pk;
+*** Enabling result log
+UPDATE t1 SET `int1_unique` = @min - 1,
+`int1` = `int1` - (@min - 1 - @old),
+`id` = 17,
+`connection_id` = CONNECTION_ID(),
+`is_consistent` = IF(@sum = 0, 1, 0),
+`thread_id` = 0
+WHERE `pk` = @pk;
+COMMIT;
+
+*** Move record forward in index (add some number):
+
+START TRANSACTION;
+UPDATE t1 SET `int2_key` = `int2_key` + 16,
+`int2` = `int2` - 16,
+`id` = 18,
+`connection_id` = CONNECTION_ID(),
+`thread_id` = 0
+WHERE `pk` = CONNECTION_ID() MOD 1000;
+
+*** Move record backward in index (subtract some number):
+
+UPDATE t1 SET `int1_key` = `int1_key` - 16,
+`int1` = `int1` + 16,
+`id` = 18,
+`connection_id` = CONNECTION_ID(),
+`thread_id` = 0
+WHERE `pk` = CONNECTION_ID() + 16 MOD 1000;
+COMMIT;
+drop table if exists statistics;
+drop table if exists t1 ;
+drop procedure if exists insertRows;

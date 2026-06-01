@@ -1,0 +1,111 @@
+# ==== Purpose ====
+# Verify BUG2025122725931:
+# 1. For DSTORE engine, changing explicit_defaults_for_timestamp within a 
+#    transaction is ALLOWED if pseudo_replica_mode is ON.
+# 2. Ensure that mysqlbinlog output (which contains pseudo_replica_mode=1)
+#    can be replayed on a DSTORE-enabled instance without transaction errors.
+#
+# ==== Technical Background ====
+# mysqlbinlog generates a script starting with 'SET @@session.pseudo_replica_mode=1'.
+# If the binlog contains 'CREATE TABLE ... AS SELECT' or other DDLs that 
+# implicitly set session variables inside a transaction block, the new 
+# bypass logic must allow it for DSTORE.
+# ============================================================================
+
+--source include/have_only_dstore.inc
+--source include/have_binlog_format_row.inc
+--source include/master-slave.inc
+
+--echo # -----------------------------------------------------------------------
+--echo # Step 1: Initialize Data on Master
+--echo # -----------------------------------------------------------------------
+
+--source include/rpl_connection_master.inc
+# Expected: Table 't' is created using the default DSTORE engine.
+CREATE TABLE t(
+  id INT, 
+  itime TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+) ENGINE=DSTORE;
+
+# Expected: 5 rows are inserted and logged as Row events.
+INSERT INTO t(id) VALUES(1),(2),(3),(4),(5);
+
+# Expected: Sync the initial state to the slave.
+--source include/sync_slave_sql_with_master.inc
+
+--echo # -----------------------------------------------------------------------
+--echo # Step 2: Prepare Slave Binlog environment
+--echo # -----------------------------------------------------------------------
+
+--source include/rpl_connection_slave.inc
+# Expected: Close current binlog and start a new one to isolate test events.
+FLUSH LOGS;
+
+--echo # -----------------------------------------------------------------------
+--echo # Step 3: Trigger DDL/DML on Master that involves session variables
+--echo # -----------------------------------------------------------------------
+
+--source include/rpl_connection_master.inc
+# Expected: This CTAS (Create Table As Select) operation generates binlog events.
+# On some versions, CTAS inside binlog captures the state of timestamp variables.
+CREATE TABLE IF NOT EXISTS t1 ENGINE=DSTORE AS SELECT * FROM t;
+
+# Expected: Ensure slave has received and executed the CTAS.
+--source include/sync_slave_sql_with_master.inc
+
+--echo # -----------------------------------------------------------------------
+--echo # Step 4: Extract and Replay using mysqlbinlog
+--echo # -----------------------------------------------------------------------
+
+--source include/rpl_connection_slave.inc
+
+--disable_query_log
+# Expected: Locate the active binlog file on slave.
+let $binlog_file= query_get_value(SHOW MASTER STATUS, File, 1);
+let $datadir= `SELECT @@datadir`;
+let $out_sql= $MYSQLTEST_VARDIR/tmp/out_sql.sql;
+--enable_query_log
+
+# Expected: Run mysqlbinlog tool. 
+# The output file will contain 'pseudo_replica_mode=1' at the top.
+--exec $MYSQL_BINLOG --skip_gtids --force-if-open $datadir/$binlog_file > $out_sql
+
+#Expected: count should be 5. If replay failed, this query would fail or return error.
+SELECT COUNT(*) FROM t1;
+
+set sql_log_bin=0;
+# Expected: Drop t1 on slave so we can verify if the replay can re-create it.
+DROP TABLE t1;
+
+set sql_log_bin=1;
+
+--echo # --- Replaying binlog on Slave ---
+# Expected: Replay the extracted SQL.
+# Logic check: Even if 'explicit_defaults_for_timestamp' is modified inside 
+# a transaction block in the SQL file, the bypass logic (pseudo_replica_mode=1 
+# + DSTORE) will prevent 'ER_VARIABLE_NOT_SETTABLE_IN_TRANSACTION'.
+--exec $MYSQL --user=root --host=127.0.0.1 --port=$SERVER_MYPORT_2  < $out_sql
+
+# Expected: count should be 5. If replay failed, this query would fail or return error.
+SELECT COUNT(*) FROM t1;
+
+--echo # -----------------------------------------------------------------------
+--echo # Step 5: Final Cleanup
+--echo # -----------------------------------------------------------------------
+
+
+--source include/rpl_connection_master.inc
+# Expected: Drop tables on Master to prevent 'Check Testcase' failure.
+DROP TABLE IF EXISTS t, t1;
+
+# Expected: Final sync to ensure both nodes are clean.
+--source include/sync_slave_sql_with_master.inc
+
+# Expected: Remove temporary file from the disk.
+--remove_file $out_sql
+
+--echo # =======================================================================
+--echo # Result: Success. Replay finished without transaction errors.
+--echo # =======================================================================
+
+--source include/rpl_end.inc

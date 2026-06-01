@@ -1,0 +1,5500 @@
+#
+# Test HASH - HASH
+#
+SET @saved_rds_extended_partitions_enabled=@@rds_extended_partitions_enabled;
+SET global rds_extended_partitions_enabled = true;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash(dept_no)
+subpartition by  hash(part_no)
+(
+partition dp0 (
+subpartition p0,
+subpartition p1,
+subpartition p2
+),
+partition dp1
+(
+subpartition p3,
+subpartition p4,
+subpartition p5
+)
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`dept_no`)
+SUBPARTITION BY HASH (`part_no`)
+(PARTITION dp0
+ (SUBPARTITION p0 ENGINE = Dstore,
+  SUBPARTITION p1 ENGINE = Dstore,
+  SUBPARTITION p2 ENGINE = Dstore),
+ PARTITION dp1
+ (SUBPARTITION p3 ENGINE = Dstore,
+  SUBPARTITION p4 ENGINE = Dstore,
+  SUBPARTITION p5 ENGINE = Dstore)) */
+insert into t1(dept_no,part_no) values(1,1),(1,2),(1,3),
+(2,1),(2,2),(2,3),(3,1),(4,2),(5,3);
+select * from t1;
+dept_no	part_no	country	date	amount
+2	3	NULL	NULL	NULL
+2	1	NULL	NULL	NULL
+2	2	NULL	NULL	NULL
+4	2	NULL	NULL	NULL
+1	3	NULL	NULL	NULL
+5	3	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+3	1	NULL	NULL	NULL
+1	2	NULL	NULL	NULL
+select * from t1 where dept_no = 1;
+dept_no	part_no	country	date	amount
+1	3	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+1	2	NULL	NULL	NULL
+explain select * from t1 where dept_no = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	dp1_p3,dp1_p4,dp1_p5	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`dept_no` = 1)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where (`test`.`t1`.`dept_no` = 1)
+select * from t1 where part_no = 2;
+dept_no	part_no	country	date	amount
+2	2	NULL	NULL	NULL
+4	2	NULL	NULL	NULL
+1	2	NULL	NULL	NULL
+explain select * from t1 where part_no = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	dp0_p2,dp1_p5	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`part_no` = 2)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where (`test`.`t1`.`part_no` = 2)
+select * from t1 where dept_no = 1 and part_no = 1;
+dept_no	part_no	country	date	amount
+1	1	NULL	NULL	NULL
+explain select * from t1 where dept_no = 1 and part_no = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	dp1_p4	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`part_no` = 1) and (`test`.`t1`.`dept_no` = 1))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where ((`test`.`t1`.`part_no` = 1) and (`test`.`t1`.`dept_no` = 1))
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash(dept_no) partitions 2
+subpartition by  hash(part_no)
+(
+partition dp0,
+partition dp1
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`dept_no`)
+SUBPARTITION BY HASH (`part_no`)
+(PARTITION dp0 ENGINE = Dstore,
+ PARTITION dp1 ENGINE = Dstore) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+HASH	`dept_no`	`dept_no`	NO	HASH	`part_no`	`part_no`	YES
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	dp0	NULL	Dstore		NULL
+0	dp0sp0	NULL	Dstore		NULL
+1	dp1	NULL	Dstore		NULL
+0	dp1sp0	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash(dept_no) partitions 2
+subpartition by  hash(part_no) subpartitions 3
+(
+partition dp0,
+partition dp1
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`dept_no`)
+SUBPARTITION BY HASH (`part_no`)
+SUBPARTITIONS 3
+(PARTITION dp0 ENGINE = Dstore,
+ PARTITION dp1 ENGINE = Dstore) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+HASH	`dept_no`	`dept_no`	NO	HASH	`part_no`	`part_no`	NUMBER
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	dp0	NULL	Dstore		NULL
+0	dp0sp0	NULL	Dstore		NULL
+1	dp0sp1	NULL	Dstore		NULL
+2	dp0sp2	NULL	Dstore		NULL
+1	dp1	NULL	Dstore		NULL
+0	dp1sp0	NULL	Dstore		NULL
+1	dp1sp1	NULL	Dstore		NULL
+2	dp1sp2	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash(dept_no) partitions 2
+subpartition by  hash(part_no) subpartitions 3;
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`dept_no`)
+PARTITIONS 2
+SUBPARTITION BY HASH (`part_no`)
+SUBPARTITIONS 3 */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+HASH	`dept_no`	`dept_no`	NUMBER	HASH	`part_no`	`part_no`	NUMBER
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	p0	NULL	Dstore		NULL
+0	p0sp0	NULL	Dstore		NULL
+1	p0sp1	NULL	Dstore		NULL
+2	p0sp2	NULL	Dstore		NULL
+1	p1	NULL	Dstore		NULL
+0	p1sp0	NULL	Dstore		NULL
+1	p1sp1	NULL	Dstore		NULL
+2	p1sp2	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash(dept_no)
+subpartition by  hash(part_no) subpartitions 3
+(
+partition dp0,
+partition dp1
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`dept_no`)
+SUBPARTITION BY HASH (`part_no`)
+SUBPARTITIONS 3
+(PARTITION dp0 ENGINE = Dstore,
+ PARTITION dp1 ENGINE = Dstore) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+HASH	`dept_no`	`dept_no`	NO	HASH	`part_no`	`part_no`	NUMBER
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	dp0	NULL	Dstore		NULL
+0	dp0sp0	NULL	Dstore		NULL
+1	dp0sp1	NULL	Dstore		NULL
+2	dp0sp2	NULL	Dstore		NULL
+1	dp1	NULL	Dstore		NULL
+0	dp1sp0	NULL	Dstore		NULL
+1	dp1sp1	NULL	Dstore		NULL
+2	dp1sp2	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash(dept_no)
+subpartition by  hash(part_no) subpartitions 3
+(
+partition dp0 (
+subpartition p0,
+subpartition p1,
+subpartition p2
+),
+partition dp1
+(
+subpartition p3,
+subpartition p4,
+subpartition p5
+)
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`dept_no`)
+SUBPARTITION BY HASH (`part_no`)
+(PARTITION dp0
+ (SUBPARTITION p0 ENGINE = Dstore,
+  SUBPARTITION p1 ENGINE = Dstore,
+  SUBPARTITION p2 ENGINE = Dstore),
+ PARTITION dp1
+ (SUBPARTITION p3 ENGINE = Dstore,
+  SUBPARTITION p4 ENGINE = Dstore,
+  SUBPARTITION p5 ENGINE = Dstore)) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+HASH	`dept_no`	`dept_no`	NO	HASH	`part_no`	`part_no`	NO
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	dp0	NULL	Dstore		NULL
+0	p0	NULL	Dstore		NULL
+1	p1	NULL	Dstore		NULL
+2	p2	NULL	Dstore		NULL
+1	dp1	NULL	Dstore		NULL
+0	p3	NULL	Dstore		NULL
+1	p4	NULL	Dstore		NULL
+2	p5	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash(dept_no)
+subpartition by  hash(part_no) subpartitions 3
+(
+partition dp0 (
+subpartition p0,
+subpartition p1
+)
+);
+ERROR 42000: Wrong number of subpartitions defined, mismatch with previous setting near '(
+subpartition p0,
+subpartition p1
+)
+)' at line 12
+create table t1 (a int, b int)
+partition by  hash (a) partitions 2
+subpartition by  hash (b)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno0
+),
+partition p1 (
+subpartition partno0,
+subpartition partno0
+),
+);
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near ')' at line 13
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash (dept_no)
+subpartition by  hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1
+),
+partition p1 (
+subpartition partno0,
+subpartition partno2
+)
+);
+ERROR HY000: Duplicate partition name partno0
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash (dept_no)
+subpartition by  hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1
+),
+partition p1 (
+subpartition p0,
+subpartition partno2
+)
+);
+ERROR HY000: Duplicate partition name p0
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash (dept_no)
+subpartition by  hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1
+),
+partition p1 (
+subpartition partno2
+)
+);
+ERROR 42000: Wrong number of subpartitions defined, mismatch with previous setting near '(
+subpartition partno2
+)
+)' at line 16
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash (dept_no)
+subpartition by  hash (part_no)
+(
+partition p0 (
+subpartition partno0
+),
+partition p1 (
+subpartition partno2,
+subpartition partno1
+)
+);
+ERROR 42000: Wrong number of subpartitions defined, mismatch with previous setting near '(
+subpartition partno2,
+subpartition partno1
+)
+)' at line 15
+#
+# DDL for key-key
+#
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash (dept_no)
+subpartition by  hash (part_no)
+(
+partition p0 (
+subpartition p0sp0,
+subpartition p0sp1
+),
+partition p1 (
+subpartition p1sp0,
+subpartition p1sp1
+)
+);
+alter table t1 add partition (
+partition p2 (
+subpartition p2sp0
+)
+);
+ERROR HY000: Trying to Add partition(s) with wrong number of subpartitions
+alter table t1 add partition (
+partition p2 (
+subpartition p2sp0,
+subpartition p2sp1 values in (6)
+)
+);
+ERROR HY000: Only LIST PARTITIONING can use VALUES IN in partition definition
+alter table t1 add partition (
+partition p2 (
+subpartition p2sp0,
+subpartition p2sp1
+)
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`dept_no`)
+SUBPARTITION BY HASH (`part_no`)
+(PARTITION p0
+ (SUBPARTITION p0sp0 ENGINE = Dstore,
+  SUBPARTITION p0sp1 ENGINE = Dstore),
+ PARTITION p1
+ (SUBPARTITION p1sp0 ENGINE = Dstore,
+  SUBPARTITION p1sp1 ENGINE = Dstore),
+ PARTITION p2
+ (SUBPARTITION p2sp0 ENGINE = Dstore,
+  SUBPARTITION p2sp1 ENGINE = Dstore)) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+HASH	`dept_no`	`dept_no`	NO	HASH	`part_no`	`part_no`	NO
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	p0	NULL	Dstore		NULL
+0	p0sp0	NULL	Dstore		NULL
+1	p0sp1	NULL	Dstore		NULL
+1	p1	NULL	Dstore		NULL
+0	p1sp0	NULL	Dstore		NULL
+1	p1sp1	NULL	Dstore		NULL
+2	p2	NULL	Dstore		NULL
+0	p2sp0	NULL	Dstore		NULL
+1	p2sp1	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+insert into t1(dept_no, part_no) values (23, 4), (24, 1);
+select * from t1;
+dept_no	part_no	country	date	amount
+24	1	NULL	NULL	NULL
+23	4	NULL	NULL	NULL
+alter table t1 add partition (
+partition p3
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`dept_no`)
+SUBPARTITION BY HASH (`part_no`)
+(PARTITION p0
+ (SUBPARTITION p0sp0 ENGINE = Dstore,
+  SUBPARTITION p0sp1 ENGINE = Dstore),
+ PARTITION p1
+ (SUBPARTITION p1sp0 ENGINE = Dstore,
+  SUBPARTITION p1sp1 ENGINE = Dstore),
+ PARTITION p2
+ (SUBPARTITION p2sp0 ENGINE = Dstore,
+  SUBPARTITION p2sp1 ENGINE = Dstore),
+ PARTITION p3
+ (SUBPARTITION p3sp0 ENGINE = Dstore,
+  SUBPARTITION p3sp1 ENGINE = Dstore)) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+HASH	`dept_no`	`dept_no`	NO	HASH	`part_no`	`part_no`	NO
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	p0	NULL	Dstore		NULL
+0	p0sp0	NULL	Dstore		NULL
+1	p0sp1	NULL	Dstore		NULL
+1	p1	NULL	Dstore		NULL
+0	p1sp0	NULL	Dstore		NULL
+1	p1sp1	NULL	Dstore		NULL
+2	p2	NULL	Dstore		NULL
+0	p2sp0	NULL	Dstore		NULL
+1	p2sp1	NULL	Dstore		NULL
+3	p3	NULL	Dstore		NULL
+0	p3sp0	NULL	Dstore		NULL
+1	p3sp1	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+select * from t1;
+dept_no	part_no	country	date	amount
+24	1	NULL	NULL	NULL
+23	4	NULL	NULL	NULL
+drop table t1;
+create table t1 (
+`a` int ,
+`b` int ,
+primary Key(a, b));
+insert into t1 values(1,1),(2,1),(3,1),(4,1),(111,111),(3333,333);
+alter table t1 partition by  hash(a) subpartition by  hash(b) (
+partition p0 (
+subpartition p0sp0,
+subpartition p0sp1,
+subpartition p0sp2
+),
+partition p1 (
+subpartition p1sp0,
+subpartition p1sp1,
+subpartition p1sp2
+)
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int NOT NULL,
+  `b` int NOT NULL,
+  PRIMARY KEY (`a`,`b`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`a`)
+SUBPARTITION BY HASH (`b`)
+(PARTITION p0
+ (SUBPARTITION p0sp0 ENGINE = Dstore,
+  SUBPARTITION p0sp1 ENGINE = Dstore,
+  SUBPARTITION p0sp2 ENGINE = Dstore),
+ PARTITION p1
+ (SUBPARTITION p1sp0 ENGINE = Dstore,
+  SUBPARTITION p1sp1 ENGINE = Dstore,
+  SUBPARTITION p1sp2 ENGINE = Dstore)) */
+select * from t1;
+a	b
+2	1
+4	1
+111	111
+3333	333
+1	1
+3	1
+select * from t1 partition(p0);
+a	b
+2	1
+4	1
+select * from t1 partition(p1);
+a	b
+111	111
+3333	333
+1	1
+3	1
+select * from t1 where a = 111 and b = 111;
+a	b
+111	111
+explain select * from t1 where a = 111 and b = 111;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0	const	PRIMARY	PRIMARY	8	const,const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select '111' AS `a`,'111' AS `b` from `test`.`t1` where true
+select * from t1 partition(p0sp0);
+a	b
+alter table t1 partition by  hash(a) partitions 2 subpartition by  hash(b) subpartitions 2;
+select * from t1;
+a	b
+2	1
+4	1
+1	1
+3	1
+111	111
+3333	333
+select * from t1 partition(p0);
+a	b
+2	1
+4	1
+select * from t1 partition(p1);
+a	b
+1	1
+3	1
+111	111
+3333	333
+select * from t1 where a = 111 and b = 111;
+a	b
+111	111
+explain select * from t1 where a = 111 and b = 111;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp1	const	PRIMARY	PRIMARY	8	const,const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select '111' AS `a`,'111' AS `b` from `test`.`t1` where true
+select * from t1 partition(p0sp0);
+a	b
+alter table t1 drop partition p1;
+ERROR HY000: DROP PARTITION can only be used on RANGE/LIST partitions
+alter table t1 drop partition p0sp0;
+ERROR HY000: DROP PARTITION can only be used on RANGE/LIST partitions
+select * from t1 partition(p0sp0);
+a	b
+alter table t1 truncate partition p0sp0;
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int NOT NULL,
+  `b` int NOT NULL,
+  PRIMARY KEY (`a`,`b`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`a`)
+PARTITIONS 2
+SUBPARTITION BY HASH (`b`)
+SUBPARTITIONS 2 */
+select * from t1 partition(p0sp0);
+a	b
+insert into t1 values(1, 111),(2, 333);
+select * from t1 partition(p0);
+a	b
+2	1
+2	333
+4	1
+alter table t1 truncate partition p0;
+select * from t1 partition(p0);
+a	b
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash (dept_no)
+subpartition by  hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1,
+subpartition partno2
+),
+partition p1 (
+subpartition partno3,
+subpartition partno4,
+subpartition partno5
+),
+partition p2 (
+subpartition partno6,
+subpartition partno7,
+subpartition partno8
+)
+);
+insert into t1(dept_no, part_no) values(1,1),(5,2),(6,3),(6,4),(9,5),(9,6);
+insert into t1(dept_no, part_no) values(13,1),(13,2),(13,3),(13,4),(13,5),(13,6);
+insert into t1(dept_no, part_no) values(20,1),(52,2),(52,3),(52,4),(52,5),(52,6);
+select * from t1 partition(p1);
+dept_no	part_no	country	date	amount
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	4	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+select * from t1 partition(partno3);
+dept_no	part_no	country	date	amount
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+select * from t1 partition(partno4);
+dept_no	part_no	country	date	amount
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	4	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+select * from t1 partition(partno5);
+dept_no	part_no	country	date	amount
+13	2	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+alter table t1 reorganize partition p1 into (
+partition p1_1 (
+subpartition partno3_1,
+subpartition partno4_1,
+subpartition partno5_1
+)
+);
+select * from t1 partition(p1_1);
+dept_no	part_no	country	date	amount
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	4	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+select * from t1 partition(partno3_1);
+dept_no	part_no	country	date	amount
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+select * from t1 partition(partno4_1);
+dept_no	part_no	country	date	amount
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	4	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+select * from t1 partition(partno5_1);
+dept_no	part_no	country	date	amount
+13	2	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+alter table t1 reorganize partition p1,p2 into (
+partition p1 (
+subpartition partno3,
+subpartition partno4,
+subpartition partno5
+)
+);
+ERROR HY000: REORGANIZE PARTITION can only be used to reorganize partitions not to change their numbers
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash (dept_no)
+subpartition by  hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1,
+subpartition partno2
+),
+partition p1 (
+subpartition partno3,
+subpartition partno4,
+subpartition partno5
+),
+partition p2 (
+subpartition partno6,
+subpartition partno7,
+subpartition partno8
+)
+);
+insert into t1(dept_no, part_no) values(1,1),(5,2),(6,3),(6,4),(9,5),(9,6);
+insert into t1(dept_no, part_no) values(13,1),(13,2),(13,3),(13,4),(13,5),(13,6);
+insert into t1(dept_no, part_no) values(20,1),(52,2),(52,3),(52,4),(52,5),(52,6);
+create table t2 like t1;
+alter table t2 remove partitioning;
+select * from t1 partition(partno7);
+dept_no	part_no	country	date	amount
+20	1	NULL	NULL	NULL
+alter table t1 exchange partition partno7 with table t2;
+select * from t1 partition(partno7);
+dept_no	part_no	country	date	amount
+select * from t2;
+dept_no	part_no	country	date	amount
+20	1	NULL	NULL	NULL
+delete from t2;
+insert into t2(dept_no, part_no) values(30, 7), (30, 6);
+insert into t1(dept_no, part_no) values(9, 6);
+alter table t1 exchange partition partno7 with table t2;
+ERROR HY000: Found a row that does not match the partition
+alter table t1 exchange partition partno7 with table t2 without validation;
+select * from t1 partition(partno7);
+dept_no	part_no	country	date	amount
+30	7	NULL	NULL	NULL
+30	6	NULL	NULL	NULL
+select * from t2;
+dept_no	part_no	country	date	amount
+drop table t1, t2;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash (dept_no)
+subpartition by  hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1,
+subpartition partno2
+),
+partition p1 (
+subpartition partno3,
+subpartition partno4,
+subpartition partno5
+),
+partition p2 (
+subpartition partno6,
+subpartition partno7,
+subpartition partno8
+)
+);
+insert into t1(dept_no, part_no) values(1,1),(5,2),(6,3),(6,4),(9,5),(9,6);
+insert into t1(dept_no, part_no) values(13,1),(13,2),(13,3),(13,4),(13,5),(13,6);
+insert into t1(dept_no, part_no) values(20,1),(52,2),(52,3),(52,4),(52,5),(52,6);
+alter table t1 analyze partition partno3, partno8;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+select * from t1 partition(partno3);
+dept_no	part_no	country	date	amount
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+select * from t1 partition(partno1, partno4, partno5);
+dept_no	part_no	country	date	amount
+6	4	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	4	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+alter table t1 check partition partno1, partno4, partno5;
+Table	Op	Msg_type	Msg_text
+test.t1	check	status	OK
+select * from t1 partition(partno1, partno4, partno5);
+dept_no	part_no	country	date	amount
+6	4	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	4	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+select * from t1 partition(partno3, partno6, partno8);
+dept_no	part_no	country	date	amount
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+5	2	NULL	NULL	NULL
+alter table t1 optimize partition partno3, partno6, partno8;
+Table	Op	Msg_type	Msg_text
+test.t1	optimize	note	Table does not support optimize on partitions. All partitions will be rebuilt and analyzed.
+test.t1	optimize	status	OK
+select * from t1 partition(partno3, partno6, partno8);
+dept_no	part_no	country	date	amount
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+5	2	NULL	NULL	NULL
+select * from t1 partition(p0);
+dept_no	part_no	country	date	amount
+6	3	NULL	NULL	NULL
+9	6	NULL	NULL	NULL
+6	4	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+alter table t1 rebuild partition p0;
+select * from t1 partition(p0);
+dept_no	part_no	country	date	amount
+6	3	NULL	NULL	NULL
+9	6	NULL	NULL	NULL
+6	4	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+alter table t1 rebuild partition partno2;
+ERROR HY000: Error in list of partitions to REBUILD
+select * from t1 partition(partno3);
+dept_no	part_no	country	date	amount
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+alter table t1 repair partition partno3;
+Table	Op	Msg_type	Msg_text
+test.t1	repair	status	OK
+select * from t1 partition(partno3);
+dept_no	part_no	country	date	amount
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+alter table t1 remove partitioning;
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+select * from t1;
+dept_no	part_no	country	date	amount
+6	3	NULL	NULL	NULL
+9	6	NULL	NULL	NULL
+6	4	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	4	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+20	1	NULL	NULL	NULL
+5	2	NULL	NULL	NULL
+drop table t1;
+create table t1(a int, b int) partition by  hash(a) subpartition by  hash(b) (
+partition p1 (
+subpartition p1sp0,
+subpartition p1sp1),
+partition p2 (
+subpartition p2sp0,
+subpartition p2sp1)
+);
+insert into t1 values(3,1);
+insert into t1 values(4,7);
+insert into t1 values(5,4);
+insert into t1 values(6,20);
+insert into t1 values(7,3);
+insert into t1 values(8,9);
+insert into t1 values(6,22);
+select * from t1 where a < 5;
+a	b
+4	7
+3	1
+explain select * from t1 where a < 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`a` < 5)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` < 5)
+alter table t1 add index idx(a);
+select * from t1 where a < 5;
+a	b
+4	7
+3	1
+explain select * from t1 where a < 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	range	idx	idx	5	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` < 5)
+select * from t1 where a = 8;
+a	b
+8	9
+alter table t1 add index idx1(a, b);
+select * from t1 where a = 6 and b = 20;
+a	b
+6	20
+explain select * from t1 where a = 6 and b = 20;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0	ref	idx,idx1	idx1	10	const,const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` = 20) and (`test`.`t1`.`a` = 6))
+select * from t1 where b = 20;
+a	b
+6	20
+explain select * from t1 where b = 20;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p2_p2sp0	index	idx1	idx1	10	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` = 20)
+alter table t1 drop index idx;
+alter table t1 drop index idx1;
+alter table t1 add index idx2(b);
+select * from t1 where a = 7;
+a	b
+7	3
+select * from t1 where b = 3;
+a	b
+7	3
+drop table t1;
+create table t1(a int, b int) partition by  hash(a) subpartition by  hash(b) (
+partition p1 (
+subpartition p1sp0,
+subpartition p1sp1),
+partition p2 (
+subpartition p2sp0,
+subpartition p2sp1)
+);
+insert into t1 values(3,1);
+insert into t1 values(4,7);
+insert into t1 values(5,4);
+insert into t1 values(6,20);
+insert into t1 values(7,3);
+insert into t1 values(8,9);
+insert into t1 values(6,22);
+select * from t1 order by b;
+a	b
+3	1
+7	3
+5	4
+4	7
+8	9
+6	20
+6	22
+select * from t1 where b > 3 and b < 9 order by b;
+a	b
+5	4
+4	7
+explain select b from t1 where b > 3 and b < 9 order by b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 9)); Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 9)) order by `test`.`t1`.`b`
+select * from t1 where b > 4 order by b;
+a	b
+4	7
+8	9
+6	20
+6	22
+explain select b from t1 where b > 4 order by b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`b` > 4); Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 4) order by `test`.`t1`.`b`
+select * from t1 where b is null order by b;
+a	b
+explain select b from t1 where b is null order by b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null) order by `test`.`t1`.`b`
+select * from t1 where b > 19 and b < 22 order by b;
+a	b
+6	20
+select * from t1 order by a;
+a	b
+3	1
+4	7
+5	4
+6	20
+6	22
+7	3
+8	9
+select * from t1 where a > 3 and a < 9 order by a;
+a	b
+4	7
+5	4
+6	20
+6	22
+7	3
+8	9
+explain select b from t1 where a > 3 and a < 9 order by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`a` > 3) and (`test`.`t1`.`a` < 9)); Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` > 3) and (`test`.`t1`.`a` < 9)) order by `test`.`t1`.`a`
+select * from t1 where a > 7 order by a;
+a	b
+8	9
+explain select * from t1 where a > 7 order by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`a` > 7); Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` > 7) order by `test`.`t1`.`a`
+select * from t1 where a is null order by a;
+a	b
+explain select b from t1 where a is null order by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1	ALL	NULL	NULL	NULL	NULL	4	25.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` is null) order by `test`.`t1`.`a`
+select * from t1 where a > 4 and (b > 3 and b < 7);
+a	b
+5	4
+select * from t1 where a > 4 or (b > 3 and b < 7);
+a	b
+6	20
+6	22
+8	9
+5	4
+7	3
+explain select * from t1 where a > 4 and (b > 3 and b < 7);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`a` > 4) and (`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 7))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` > 4) and (`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 7))
+explain select * from t1 where a > 4 or (b > 3 and b < 7);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` > 4) or ((`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 7)))
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int default(0),
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash (dept_no) partitions 2
+subpartition by  hash (part_no) subpartitions 3;
+insert into t1(part_no) values(null);
+insert into t1(dept_no) values(null);
+select * from t1 where dept_no is null;
+dept_no	part_no	country	date	amount
+NULL	0	NULL	NULL	NULL
+NULL	NULL	NULL	NULL	NULL
+explain select * from t1 where dept_no is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p0_p0sp1,p0_p0sp2	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where (`test`.`t1`.`dept_no` is null)
+select * from t1 where part_no is null;
+dept_no	part_no	country	date	amount
+NULL	NULL	NULL	NULL	NULL
+explain select * from t1 where part_no is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp2,p1_p1sp2	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where (`test`.`t1`.`part_no` is null)
+drop table t1;
+create table t1(a int, b int) partition by  hash(a) partitions 3 subpartition by  hash(b) subpartitions 4;
+insert into t1 values(2,7),(5,5),(5,6),(6,7),(7,2),(8,20),(6,7),(3,4),(1,6),(8,21);
+select b from t1 where b is null;
+b
+explain select b from t1 where b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null)
+insert into t1 values(null,4),(12,null);
+select b from t1 where b is null;
+b
+NULL
+explain select b from t1 where b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null)
+select * from t1 where a is null;
+a	b
+NULL	4
+explain select * from t1 where a is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p2_p2sp0,p2_p2sp1,p2_p2sp2,p2_p2sp3	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` is null)
+drop table t1;
+create table t1(a int, b int) partition by  hash(a) partitions 3 subpartition by  hash(b) subpartitions 4;
+insert into t1 values(3,11),(4,2),(5,1),(6,null);
+insert into t1 values(7,7),(8,11),(6,20),(3,null),(1,null),(5,5);
+insert into t1 values(null,0);
+select * from t1 where b is null;
+a	b
+6	NULL
+3	NULL
+1	NULL
+explain select * from t1 where b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null)
+insert into t1 values(17,2),(14,null),(11,6),(20,32),(17,3);
+select b from t1 where b is null;
+b
+NULL
+NULL
+NULL
+NULL
+explain select b from t1 where b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null)
+select * from t1 where a is null and b is null;
+a	b
+explain select * from t1 where a is null and b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` is null) and (`test`.`t1`.`b` is null))
+select * from t1 where a < 20 and b is null;
+a	b
+6	NULL
+3	NULL
+1	NULL
+14	NULL
+explain select * from t1 where a < 20 and b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`a` < 20)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` < 20) and (`test`.`t1`.`b` is null))
+select * from t1 where b > 7 and b < 28;
+a	b
+6	20
+3	11
+8	11
+explain select * from t1 where b > 7 and b < 28;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p0_p0sp1,p0_p0sp2,p0_p0sp3,p1_p1sp0,p1_p1sp1,p1_p1sp2,p1_p1sp3,p2_p2sp0,p2_p2sp1,p2_p2sp2,p2_p2sp3	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28))
+select * from t1 where b > 7 and b < 28 and a is null;
+a	b
+explain select * from t1 where b > 7 and b < 28 and a is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p2_p2sp0,p2_p2sp1,p2_p2sp2,p2_p2sp3	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28) and (`test`.`t1`.`a` is null))
+select * from t1 where b > 7 and b < 28 and a > 5;
+a	b
+6	20
+8	11
+explain select * from t1 where b > 7 and b < 28 and a > 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p0_p0sp1,p0_p0sp2,p0_p0sp3,p1_p1sp0,p1_p1sp1,p1_p1sp2,p1_p1sp3,p2_p2sp0,p2_p2sp1,p2_p2sp2,p2_p2sp3	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28) and (`test`.`t1`.`a` > 5))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28) and (`test`.`t1`.`a` > 5))
+drop table t1;
+create table t1(a int, b int) partition by  hash(a) partitions 3 subpartition by  hash(b) subpartitions 2;
+insert into t1 values(3,11),(4,2),(5,1),(6,1);
+insert into t1 values(7,7),(8,11),(6,20),(3,null),(1,null),(5,5);
+insert into t1 values(null,0);
+explain select * from t1 where a = 6 and b = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` = 1) and (`test`.`t1`.`a` = 6))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` = 1) and (`test`.`t1`.`a` = 6))
+select * from t1 partition(p1sp0);
+a	b
+4	2
+1	NULL
+select * from t1 partition(p1sp1);
+a	b
+7	7
+update t1 set b = 6 where a = 6 and b = 1;
+explain select * from t1 where a = 6 and b = 6;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` = 6) and (`test`.`t1`.`a` = 6))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` = 6) and (`test`.`t1`.`a` = 6))
+select * from t1 where a = 6 and b = 6;
+a	b
+6	6
+select * from t1 partition(p1sp0);
+a	b
+4	2
+1	NULL
+select * from t1 partition(p1sp1);
+a	b
+7	7
+select * from t1 partition(p1);
+a	b
+4	2
+1	NULL
+7	7
+select * from t1 partition(p2);
+a	b
+NULL	0
+5	1
+8	11
+5	5
+update t1 set a = 8 where a = 6;
+select * from t1 partition(p1);
+a	b
+4	2
+1	NULL
+7	7
+select * from t1 partition(p2);
+a	b
+NULL	0
+8	20
+8	6
+5	1
+8	11
+5	5
+delete from t1 where a = 8;
+select * from t1 partition(p2);
+a	b
+NULL	0
+5	1
+5	5
+drop table t1;
+SET global rds_extended_partitions_enabled = @saved_rds_extended_partitions_enabled;
+#
+# Test HASH - LINEAR HASH
+#
+SET @saved_rds_extended_partitions_enabled=@@rds_extended_partitions_enabled;
+SET global rds_extended_partitions_enabled = true;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash(dept_no)
+subpartition by linear hash(part_no)
+(
+partition dp0 (
+subpartition p0,
+subpartition p1,
+subpartition p2
+),
+partition dp1
+(
+subpartition p3,
+subpartition p4,
+subpartition p5
+)
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`dept_no`)
+SUBPARTITION BY LINEAR HASH (`part_no`)
+(PARTITION dp0
+ (SUBPARTITION p0 ENGINE = Dstore,
+  SUBPARTITION p1 ENGINE = Dstore,
+  SUBPARTITION p2 ENGINE = Dstore),
+ PARTITION dp1
+ (SUBPARTITION p3 ENGINE = Dstore,
+  SUBPARTITION p4 ENGINE = Dstore,
+  SUBPARTITION p5 ENGINE = Dstore)) */
+insert into t1(dept_no,part_no) values(1,1),(1,2),(1,3),
+(2,1),(2,2),(2,3),(3,1),(4,2),(5,3);
+select * from t1;
+dept_no	part_no	country	date	amount
+2	1	NULL	NULL	NULL
+2	3	NULL	NULL	NULL
+2	2	NULL	NULL	NULL
+4	2	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+1	3	NULL	NULL	NULL
+3	1	NULL	NULL	NULL
+5	3	NULL	NULL	NULL
+1	2	NULL	NULL	NULL
+select * from t1 where dept_no = 1;
+dept_no	part_no	country	date	amount
+1	1	NULL	NULL	NULL
+1	3	NULL	NULL	NULL
+1	2	NULL	NULL	NULL
+explain select * from t1 where dept_no = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	dp1_p3,dp1_p4,dp1_p5	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`dept_no` = 1)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where (`test`.`t1`.`dept_no` = 1)
+select * from t1 where part_no = 2;
+dept_no	part_no	country	date	amount
+2	2	NULL	NULL	NULL
+4	2	NULL	NULL	NULL
+1	2	NULL	NULL	NULL
+explain select * from t1 where part_no = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	dp0_p2,dp1_p5	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`part_no` = 2)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where (`test`.`t1`.`part_no` = 2)
+select * from t1 where dept_no = 1 and part_no = 1;
+dept_no	part_no	country	date	amount
+1	1	NULL	NULL	NULL
+explain select * from t1 where dept_no = 1 and part_no = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	dp1_p4	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`part_no` = 1) and (`test`.`t1`.`dept_no` = 1))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where ((`test`.`t1`.`part_no` = 1) and (`test`.`t1`.`dept_no` = 1))
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash(dept_no) partitions 2
+subpartition by linear hash(part_no)
+(
+partition dp0,
+partition dp1
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`dept_no`)
+SUBPARTITION BY LINEAR HASH (`part_no`)
+(PARTITION dp0 ENGINE = Dstore,
+ PARTITION dp1 ENGINE = Dstore) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+HASH	`dept_no`	`dept_no`	NO	LINEAR_HASH	`part_no`	`part_no`	YES
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	dp0	NULL	Dstore		NULL
+0	dp0sp0	NULL	Dstore		NULL
+1	dp1	NULL	Dstore		NULL
+0	dp1sp0	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash(dept_no) partitions 2
+subpartition by linear hash(part_no) subpartitions 3
+(
+partition dp0,
+partition dp1
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`dept_no`)
+SUBPARTITION BY LINEAR HASH (`part_no`)
+SUBPARTITIONS 3
+(PARTITION dp0 ENGINE = Dstore,
+ PARTITION dp1 ENGINE = Dstore) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+HASH	`dept_no`	`dept_no`	NO	LINEAR_HASH	`part_no`	`part_no`	NUMBER
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	dp0	NULL	Dstore		NULL
+0	dp0sp0	NULL	Dstore		NULL
+1	dp0sp1	NULL	Dstore		NULL
+2	dp0sp2	NULL	Dstore		NULL
+1	dp1	NULL	Dstore		NULL
+0	dp1sp0	NULL	Dstore		NULL
+1	dp1sp1	NULL	Dstore		NULL
+2	dp1sp2	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash(dept_no) partitions 2
+subpartition by linear hash(part_no) subpartitions 3;
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`dept_no`)
+PARTITIONS 2
+SUBPARTITION BY LINEAR HASH (`part_no`)
+SUBPARTITIONS 3 */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+HASH	`dept_no`	`dept_no`	NUMBER	LINEAR_HASH	`part_no`	`part_no`	NUMBER
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	p0	NULL	Dstore		NULL
+0	p0sp0	NULL	Dstore		NULL
+1	p0sp1	NULL	Dstore		NULL
+2	p0sp2	NULL	Dstore		NULL
+1	p1	NULL	Dstore		NULL
+0	p1sp0	NULL	Dstore		NULL
+1	p1sp1	NULL	Dstore		NULL
+2	p1sp2	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash(dept_no)
+subpartition by linear hash(part_no) subpartitions 3
+(
+partition dp0,
+partition dp1
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`dept_no`)
+SUBPARTITION BY LINEAR HASH (`part_no`)
+SUBPARTITIONS 3
+(PARTITION dp0 ENGINE = Dstore,
+ PARTITION dp1 ENGINE = Dstore) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+HASH	`dept_no`	`dept_no`	NO	LINEAR_HASH	`part_no`	`part_no`	NUMBER
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	dp0	NULL	Dstore		NULL
+0	dp0sp0	NULL	Dstore		NULL
+1	dp0sp1	NULL	Dstore		NULL
+2	dp0sp2	NULL	Dstore		NULL
+1	dp1	NULL	Dstore		NULL
+0	dp1sp0	NULL	Dstore		NULL
+1	dp1sp1	NULL	Dstore		NULL
+2	dp1sp2	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash(dept_no)
+subpartition by linear hash(part_no) subpartitions 3
+(
+partition dp0 (
+subpartition p0,
+subpartition p1,
+subpartition p2
+),
+partition dp1
+(
+subpartition p3,
+subpartition p4,
+subpartition p5
+)
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`dept_no`)
+SUBPARTITION BY LINEAR HASH (`part_no`)
+(PARTITION dp0
+ (SUBPARTITION p0 ENGINE = Dstore,
+  SUBPARTITION p1 ENGINE = Dstore,
+  SUBPARTITION p2 ENGINE = Dstore),
+ PARTITION dp1
+ (SUBPARTITION p3 ENGINE = Dstore,
+  SUBPARTITION p4 ENGINE = Dstore,
+  SUBPARTITION p5 ENGINE = Dstore)) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+HASH	`dept_no`	`dept_no`	NO	LINEAR_HASH	`part_no`	`part_no`	NO
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	dp0	NULL	Dstore		NULL
+0	p0	NULL	Dstore		NULL
+1	p1	NULL	Dstore		NULL
+2	p2	NULL	Dstore		NULL
+1	dp1	NULL	Dstore		NULL
+0	p3	NULL	Dstore		NULL
+1	p4	NULL	Dstore		NULL
+2	p5	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash(dept_no)
+subpartition by linear hash(part_no) subpartitions 3
+(
+partition dp0 (
+subpartition p0,
+subpartition p1
+)
+);
+ERROR 42000: Wrong number of subpartitions defined, mismatch with previous setting near '(
+subpartition p0,
+subpartition p1
+)
+)' at line 12
+create table t1 (a int, b int)
+partition by  hash (a) partitions 2
+subpartition by linear hash (b)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno0
+),
+partition p1 (
+subpartition partno0,
+subpartition partno0
+),
+);
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near ')' at line 13
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash (dept_no)
+subpartition by linear hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1
+),
+partition p1 (
+subpartition partno0,
+subpartition partno2
+)
+);
+ERROR HY000: Duplicate partition name partno0
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash (dept_no)
+subpartition by linear hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1
+),
+partition p1 (
+subpartition p0,
+subpartition partno2
+)
+);
+ERROR HY000: Duplicate partition name p0
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash (dept_no)
+subpartition by linear hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1
+),
+partition p1 (
+subpartition partno2
+)
+);
+ERROR 42000: Wrong number of subpartitions defined, mismatch with previous setting near '(
+subpartition partno2
+)
+)' at line 16
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash (dept_no)
+subpartition by linear hash (part_no)
+(
+partition p0 (
+subpartition partno0
+),
+partition p1 (
+subpartition partno2,
+subpartition partno1
+)
+);
+ERROR 42000: Wrong number of subpartitions defined, mismatch with previous setting near '(
+subpartition partno2,
+subpartition partno1
+)
+)' at line 15
+#
+# DDL for key-key
+#
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash (dept_no)
+subpartition by linear hash (part_no)
+(
+partition p0 (
+subpartition p0sp0,
+subpartition p0sp1
+),
+partition p1 (
+subpartition p1sp0,
+subpartition p1sp1
+)
+);
+alter table t1 add partition (
+partition p2 (
+subpartition p2sp0
+)
+);
+ERROR HY000: Trying to Add partition(s) with wrong number of subpartitions
+alter table t1 add partition (
+partition p2 (
+subpartition p2sp0,
+subpartition p2sp1 values in (6)
+)
+);
+ERROR HY000: Only LIST PARTITIONING can use VALUES IN in partition definition
+alter table t1 add partition (
+partition p2 (
+subpartition p2sp0,
+subpartition p2sp1
+)
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`dept_no`)
+SUBPARTITION BY LINEAR HASH (`part_no`)
+(PARTITION p0
+ (SUBPARTITION p0sp0 ENGINE = Dstore,
+  SUBPARTITION p0sp1 ENGINE = Dstore),
+ PARTITION p1
+ (SUBPARTITION p1sp0 ENGINE = Dstore,
+  SUBPARTITION p1sp1 ENGINE = Dstore),
+ PARTITION p2
+ (SUBPARTITION p2sp0 ENGINE = Dstore,
+  SUBPARTITION p2sp1 ENGINE = Dstore)) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+HASH	`dept_no`	`dept_no`	NO	LINEAR_HASH	`part_no`	`part_no`	NO
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	p0	NULL	Dstore		NULL
+0	p0sp0	NULL	Dstore		NULL
+1	p0sp1	NULL	Dstore		NULL
+1	p1	NULL	Dstore		NULL
+0	p1sp0	NULL	Dstore		NULL
+1	p1sp1	NULL	Dstore		NULL
+2	p2	NULL	Dstore		NULL
+0	p2sp0	NULL	Dstore		NULL
+1	p2sp1	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+insert into t1(dept_no, part_no) values (23, 4), (24, 1);
+select * from t1;
+dept_no	part_no	country	date	amount
+24	1	NULL	NULL	NULL
+23	4	NULL	NULL	NULL
+alter table t1 add partition (
+partition p3
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`dept_no`)
+SUBPARTITION BY LINEAR HASH (`part_no`)
+(PARTITION p0
+ (SUBPARTITION p0sp0 ENGINE = Dstore,
+  SUBPARTITION p0sp1 ENGINE = Dstore),
+ PARTITION p1
+ (SUBPARTITION p1sp0 ENGINE = Dstore,
+  SUBPARTITION p1sp1 ENGINE = Dstore),
+ PARTITION p2
+ (SUBPARTITION p2sp0 ENGINE = Dstore,
+  SUBPARTITION p2sp1 ENGINE = Dstore),
+ PARTITION p3
+ (SUBPARTITION p3sp0 ENGINE = Dstore,
+  SUBPARTITION p3sp1 ENGINE = Dstore)) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+HASH	`dept_no`	`dept_no`	NO	LINEAR_HASH	`part_no`	`part_no`	NO
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	p0	NULL	Dstore		NULL
+0	p0sp0	NULL	Dstore		NULL
+1	p0sp1	NULL	Dstore		NULL
+1	p1	NULL	Dstore		NULL
+0	p1sp0	NULL	Dstore		NULL
+1	p1sp1	NULL	Dstore		NULL
+2	p2	NULL	Dstore		NULL
+0	p2sp0	NULL	Dstore		NULL
+1	p2sp1	NULL	Dstore		NULL
+3	p3	NULL	Dstore		NULL
+0	p3sp0	NULL	Dstore		NULL
+1	p3sp1	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+select * from t1;
+dept_no	part_no	country	date	amount
+24	1	NULL	NULL	NULL
+23	4	NULL	NULL	NULL
+drop table t1;
+create table t1 (
+`a` int ,
+`b` int ,
+primary Key(a, b));
+insert into t1 values(1,1),(2,1),(3,1),(4,1),(111,111),(3333,333);
+alter table t1 partition by  hash(a) subpartition by linear hash(b) (
+partition p0 (
+subpartition p0sp0,
+subpartition p0sp1,
+subpartition p0sp2
+),
+partition p1 (
+subpartition p1sp0,
+subpartition p1sp1,
+subpartition p1sp2
+)
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int NOT NULL,
+  `b` int NOT NULL,
+  PRIMARY KEY (`a`,`b`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`a`)
+SUBPARTITION BY LINEAR HASH (`b`)
+(PARTITION p0
+ (SUBPARTITION p0sp0 ENGINE = Dstore,
+  SUBPARTITION p0sp1 ENGINE = Dstore,
+  SUBPARTITION p0sp2 ENGINE = Dstore),
+ PARTITION p1
+ (SUBPARTITION p1sp0 ENGINE = Dstore,
+  SUBPARTITION p1sp1 ENGINE = Dstore,
+  SUBPARTITION p1sp2 ENGINE = Dstore)) */
+select * from t1;
+a	b
+2	1
+4	1
+1	1
+3	1
+111	111
+3333	333
+select * from t1 partition(p0);
+a	b
+2	1
+4	1
+select * from t1 partition(p1);
+a	b
+1	1
+3	1
+111	111
+3333	333
+select * from t1 where a = 111 and b = 111;
+a	b
+111	111
+explain select * from t1 where a = 111 and b = 111;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp1	const	PRIMARY	PRIMARY	8	const,const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select '111' AS `a`,'111' AS `b` from `test`.`t1` where true
+select * from t1 partition(p0sp0);
+a	b
+alter table t1 partition by  hash(a) partitions 2 subpartition by linear hash(b) subpartitions 2;
+select * from t1;
+a	b
+2	1
+4	1
+1	1
+3	1
+111	111
+3333	333
+select * from t1 partition(p0);
+a	b
+2	1
+4	1
+select * from t1 partition(p1);
+a	b
+1	1
+3	1
+111	111
+3333	333
+select * from t1 where a = 111 and b = 111;
+a	b
+111	111
+explain select * from t1 where a = 111 and b = 111;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp1	const	PRIMARY	PRIMARY	8	const,const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select '111' AS `a`,'111' AS `b` from `test`.`t1` where true
+select * from t1 partition(p0sp0);
+a	b
+alter table t1 drop partition p1;
+ERROR HY000: DROP PARTITION can only be used on RANGE/LIST partitions
+alter table t1 drop partition p0sp0;
+ERROR HY000: DROP PARTITION can only be used on RANGE/LIST partitions
+select * from t1 partition(p0sp0);
+a	b
+alter table t1 truncate partition p0sp0;
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int NOT NULL,
+  `b` int NOT NULL,
+  PRIMARY KEY (`a`,`b`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY HASH (`a`)
+PARTITIONS 2
+SUBPARTITION BY LINEAR HASH (`b`)
+SUBPARTITIONS 2 */
+select * from t1 partition(p0sp0);
+a	b
+insert into t1 values(1, 111),(2, 333);
+select * from t1 partition(p0);
+a	b
+2	1
+2	333
+4	1
+alter table t1 truncate partition p0;
+select * from t1 partition(p0);
+a	b
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash (dept_no)
+subpartition by linear hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1,
+subpartition partno2
+),
+partition p1 (
+subpartition partno3,
+subpartition partno4,
+subpartition partno5
+),
+partition p2 (
+subpartition partno6,
+subpartition partno7,
+subpartition partno8
+)
+);
+insert into t1(dept_no, part_no) values(1,1),(5,2),(6,3),(6,4),(9,5),(9,6);
+insert into t1(dept_no, part_no) values(13,1),(13,2),(13,3),(13,4),(13,5),(13,6);
+insert into t1(dept_no, part_no) values(20,1),(52,2),(52,3),(52,4),(52,5),(52,6);
+select * from t1 partition(p1);
+dept_no	part_no	country	date	amount
+13	4	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+select * from t1 partition(partno3);
+dept_no	part_no	country	date	amount
+13	4	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+select * from t1 partition(partno4);
+dept_no	part_no	country	date	amount
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+select * from t1 partition(partno5);
+dept_no	part_no	country	date	amount
+13	2	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+alter table t1 reorganize partition p1 into (
+partition p1_1 (
+subpartition partno3_1,
+subpartition partno4_1,
+subpartition partno5_1
+)
+);
+select * from t1 partition(p1_1);
+dept_no	part_no	country	date	amount
+13	4	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+select * from t1 partition(partno3_1);
+dept_no	part_no	country	date	amount
+13	4	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+select * from t1 partition(partno4_1);
+dept_no	part_no	country	date	amount
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+select * from t1 partition(partno5_1);
+dept_no	part_no	country	date	amount
+13	2	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+alter table t1 reorganize partition p1,p2 into (
+partition p1 (
+subpartition partno3,
+subpartition partno4,
+subpartition partno5
+)
+);
+ERROR HY000: REORGANIZE PARTITION can only be used to reorganize partitions not to change their numbers
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash (dept_no)
+subpartition by linear hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1,
+subpartition partno2
+),
+partition p1 (
+subpartition partno3,
+subpartition partno4,
+subpartition partno5
+),
+partition p2 (
+subpartition partno6,
+subpartition partno7,
+subpartition partno8
+)
+);
+insert into t1(dept_no, part_no) values(1,1),(5,2),(6,3),(6,4),(9,5),(9,6);
+insert into t1(dept_no, part_no) values(13,1),(13,2),(13,3),(13,4),(13,5),(13,6);
+insert into t1(dept_no, part_no) values(20,1),(52,2),(52,3),(52,4),(52,5),(52,6);
+create table t2 like t1;
+alter table t2 remove partitioning;
+select * from t1 partition(partno7);
+dept_no	part_no	country	date	amount
+20	1	NULL	NULL	NULL
+alter table t1 exchange partition partno7 with table t2;
+select * from t1 partition(partno7);
+dept_no	part_no	country	date	amount
+select * from t2;
+dept_no	part_no	country	date	amount
+20	1	NULL	NULL	NULL
+delete from t2;
+insert into t2(dept_no, part_no) values(30, 7), (30, 6);
+insert into t1(dept_no, part_no) values(9, 6);
+alter table t1 exchange partition partno7 with table t2;
+ERROR HY000: Found a row that does not match the partition
+alter table t1 exchange partition partno7 with table t2 without validation;
+select * from t1 partition(partno7);
+dept_no	part_no	country	date	amount
+30	7	NULL	NULL	NULL
+30	6	NULL	NULL	NULL
+select * from t2;
+dept_no	part_no	country	date	amount
+drop table t1, t2;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash (dept_no)
+subpartition by linear hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1,
+subpartition partno2
+),
+partition p1 (
+subpartition partno3,
+subpartition partno4,
+subpartition partno5
+),
+partition p2 (
+subpartition partno6,
+subpartition partno7,
+subpartition partno8
+)
+);
+insert into t1(dept_no, part_no) values(1,1),(5,2),(6,3),(6,4),(9,5),(9,6);
+insert into t1(dept_no, part_no) values(13,1),(13,2),(13,3),(13,4),(13,5),(13,6);
+insert into t1(dept_no, part_no) values(20,1),(52,2),(52,3),(52,4),(52,5),(52,6);
+alter table t1 analyze partition partno3, partno8;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+select * from t1 partition(partno3);
+dept_no	part_no	country	date	amount
+13	4	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+select * from t1 partition(partno1, partno4, partno5);
+dept_no	part_no	country	date	amount
+6	3	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+alter table t1 check partition partno1, partno4, partno5;
+Table	Op	Msg_type	Msg_text
+test.t1	check	status	OK
+select * from t1 partition(partno1, partno4, partno5);
+dept_no	part_no	country	date	amount
+6	3	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+select * from t1 partition(partno3, partno6, partno8);
+dept_no	part_no	country	date	amount
+13	4	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+5	2	NULL	NULL	NULL
+alter table t1 optimize partition partno3, partno6, partno8;
+Table	Op	Msg_type	Msg_text
+test.t1	optimize	note	Table does not support optimize on partitions. All partitions will be rebuilt and analyzed.
+test.t1	optimize	status	OK
+select * from t1 partition(partno3, partno6, partno8);
+dept_no	part_no	country	date	amount
+13	4	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+5	2	NULL	NULL	NULL
+select * from t1 partition(p0);
+dept_no	part_no	country	date	amount
+6	4	NULL	NULL	NULL
+6	3	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+9	6	NULL	NULL	NULL
+alter table t1 rebuild partition p0;
+select * from t1 partition(p0);
+dept_no	part_no	country	date	amount
+6	4	NULL	NULL	NULL
+6	3	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+9	6	NULL	NULL	NULL
+alter table t1 rebuild partition partno2;
+ERROR HY000: Error in list of partitions to REBUILD
+select * from t1 partition(partno3);
+dept_no	part_no	country	date	amount
+13	4	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+alter table t1 repair partition partno3;
+Table	Op	Msg_type	Msg_text
+test.t1	repair	status	OK
+select * from t1 partition(partno3);
+dept_no	part_no	country	date	amount
+13	4	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+alter table t1 remove partitioning;
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+select * from t1;
+dept_no	part_no	country	date	amount
+6	4	NULL	NULL	NULL
+6	3	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+9	6	NULL	NULL	NULL
+13	4	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+20	1	NULL	NULL	NULL
+5	2	NULL	NULL	NULL
+drop table t1;
+create table t1(a int, b int) partition by  hash(a) subpartition by linear hash(b) (
+partition p1 (
+subpartition p1sp0,
+subpartition p1sp1),
+partition p2 (
+subpartition p2sp0,
+subpartition p2sp1)
+);
+insert into t1 values(3,1);
+insert into t1 values(4,7);
+insert into t1 values(5,4);
+insert into t1 values(6,20);
+insert into t1 values(7,3);
+insert into t1 values(8,9);
+insert into t1 values(6,22);
+select * from t1 where a < 5;
+a	b
+4	7
+3	1
+explain select * from t1 where a < 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`a` < 5)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` < 5)
+alter table t1 add index idx(a);
+select * from t1 where a < 5;
+a	b
+4	7
+3	1
+explain select * from t1 where a < 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	range	idx	idx	5	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` < 5)
+select * from t1 where a = 8;
+a	b
+8	9
+alter table t1 add index idx1(a, b);
+select * from t1 where a = 6 and b = 20;
+a	b
+6	20
+explain select * from t1 where a = 6 and b = 20;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0	ref	idx,idx1	idx1	10	const,const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` = 20) and (`test`.`t1`.`a` = 6))
+select * from t1 where b = 20;
+a	b
+6	20
+explain select * from t1 where b = 20;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p2_p2sp0	index	idx1	idx1	10	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` = 20)
+alter table t1 drop index idx;
+alter table t1 drop index idx1;
+alter table t1 add index idx2(b);
+select * from t1 where a = 7;
+a	b
+7	3
+select * from t1 where b = 3;
+a	b
+7	3
+drop table t1;
+create table t1(a int, b int) partition by  hash(a) subpartition by linear hash(b) (
+partition p1 (
+subpartition p1sp0,
+subpartition p1sp1),
+partition p2 (
+subpartition p2sp0,
+subpartition p2sp1)
+);
+insert into t1 values(3,1);
+insert into t1 values(4,7);
+insert into t1 values(5,4);
+insert into t1 values(6,20);
+insert into t1 values(7,3);
+insert into t1 values(8,9);
+insert into t1 values(6,22);
+select * from t1 order by b;
+a	b
+3	1
+7	3
+5	4
+4	7
+8	9
+6	20
+6	22
+select * from t1 where b > 3 and b < 9 order by b;
+a	b
+5	4
+4	7
+explain select b from t1 where b > 3 and b < 9 order by b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 9)); Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 9)) order by `test`.`t1`.`b`
+select * from t1 where b > 4 order by b;
+a	b
+4	7
+8	9
+6	20
+6	22
+explain select b from t1 where b > 4 order by b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`b` > 4); Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 4) order by `test`.`t1`.`b`
+select * from t1 where b is null order by b;
+a	b
+explain select b from t1 where b is null order by b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null) order by `test`.`t1`.`b`
+select * from t1 where b > 19 and b < 22 order by b;
+a	b
+6	20
+select * from t1 order by a;
+a	b
+3	1
+4	7
+5	4
+6	20
+6	22
+7	3
+8	9
+select * from t1 where a > 3 and a < 9 order by a;
+a	b
+4	7
+5	4
+6	20
+6	22
+7	3
+8	9
+explain select b from t1 where a > 3 and a < 9 order by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`a` > 3) and (`test`.`t1`.`a` < 9)); Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` > 3) and (`test`.`t1`.`a` < 9)) order by `test`.`t1`.`a`
+select * from t1 where a > 7 order by a;
+a	b
+8	9
+explain select * from t1 where a > 7 order by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`a` > 7); Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` > 7) order by `test`.`t1`.`a`
+select * from t1 where a is null order by a;
+a	b
+explain select b from t1 where a is null order by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1	ALL	NULL	NULL	NULL	NULL	4	25.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` is null) order by `test`.`t1`.`a`
+select * from t1 where a > 4 and (b > 3 and b < 7);
+a	b
+5	4
+select * from t1 where a > 4 or (b > 3 and b < 7);
+a	b
+6	20
+6	22
+8	9
+5	4
+7	3
+explain select * from t1 where a > 4 and (b > 3 and b < 7);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`a` > 4) and (`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 7))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` > 4) and (`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 7))
+explain select * from t1 where a > 4 or (b > 3 and b < 7);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` > 4) or ((`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 7)))
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int default(0),
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by  hash (dept_no) partitions 2
+subpartition by linear hash (part_no) subpartitions 3;
+insert into t1(part_no) values(null);
+insert into t1(dept_no) values(null);
+select * from t1 where dept_no is null;
+dept_no	part_no	country	date	amount
+NULL	NULL	NULL	NULL	NULL
+NULL	0	NULL	NULL	NULL
+explain select * from t1 where dept_no is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p0_p0sp1,p0_p0sp2	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where (`test`.`t1`.`dept_no` is null)
+select * from t1 where part_no is null;
+dept_no	part_no	country	date	amount
+NULL	NULL	NULL	NULL	NULL
+explain select * from t1 where part_no is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where (`test`.`t1`.`part_no` is null)
+drop table t1;
+create table t1(a int, b int) partition by  hash(a) partitions 3 subpartition by linear hash(b) subpartitions 4;
+insert into t1 values(2,7),(5,5),(5,6),(6,7),(7,2),(8,20),(6,7),(3,4),(1,6),(8,21);
+select b from t1 where b is null;
+b
+explain select b from t1 where b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null)
+insert into t1 values(null,4),(12,null);
+select b from t1 where b is null;
+b
+NULL
+explain select b from t1 where b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null)
+select * from t1 where a is null;
+a	b
+NULL	4
+explain select * from t1 where a is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p2_p2sp0,p2_p2sp1,p2_p2sp2,p2_p2sp3	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` is null)
+drop table t1;
+create table t1(a int, b int) partition by  hash(a) partitions 3 subpartition by linear hash(b) subpartitions 4;
+insert into t1 values(3,11),(4,2),(5,1),(6,null);
+insert into t1 values(7,7),(8,11),(6,20),(3,null),(1,null),(5,5);
+insert into t1 values(null,0);
+select * from t1 where b is null;
+a	b
+6	NULL
+3	NULL
+1	NULL
+explain select * from t1 where b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null)
+insert into t1 values(17,2),(14,null),(11,6),(20,32),(17,3);
+select b from t1 where b is null;
+b
+NULL
+NULL
+NULL
+NULL
+explain select b from t1 where b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null)
+select * from t1 where a is null and b is null;
+a	b
+explain select * from t1 where a is null and b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` is null) and (`test`.`t1`.`b` is null))
+select * from t1 where a < 20 and b is null;
+a	b
+6	NULL
+3	NULL
+1	NULL
+14	NULL
+explain select * from t1 where a < 20 and b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`a` < 20)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` < 20) and (`test`.`t1`.`b` is null))
+select * from t1 where b > 7 and b < 28;
+a	b
+6	20
+3	11
+8	11
+explain select * from t1 where b > 7 and b < 28;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p0_p0sp1,p0_p0sp2,p0_p0sp3,p1_p1sp0,p1_p1sp1,p1_p1sp2,p1_p1sp3,p2_p2sp0,p2_p2sp1,p2_p2sp2,p2_p2sp3	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28))
+select * from t1 where b > 7 and b < 28 and a is null;
+a	b
+explain select * from t1 where b > 7 and b < 28 and a is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p2_p2sp0,p2_p2sp1,p2_p2sp2,p2_p2sp3	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28) and (`test`.`t1`.`a` is null))
+select * from t1 where b > 7 and b < 28 and a > 5;
+a	b
+6	20
+8	11
+explain select * from t1 where b > 7 and b < 28 and a > 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p0_p0sp1,p0_p0sp2,p0_p0sp3,p1_p1sp0,p1_p1sp1,p1_p1sp2,p1_p1sp3,p2_p2sp0,p2_p2sp1,p2_p2sp2,p2_p2sp3	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28) and (`test`.`t1`.`a` > 5))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28) and (`test`.`t1`.`a` > 5))
+drop table t1;
+create table t1(a int, b int) partition by  hash(a) partitions 3 subpartition by linear hash(b) subpartitions 2;
+insert into t1 values(3,11),(4,2),(5,1),(6,1);
+insert into t1 values(7,7),(8,11),(6,20),(3,null),(1,null),(5,5);
+insert into t1 values(null,0);
+explain select * from t1 where a = 6 and b = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` = 1) and (`test`.`t1`.`a` = 6))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` = 1) and (`test`.`t1`.`a` = 6))
+select * from t1 partition(p1sp0);
+a	b
+4	2
+1	NULL
+select * from t1 partition(p1sp1);
+a	b
+7	7
+update t1 set b = 6 where a = 6 and b = 1;
+explain select * from t1 where a = 6 and b = 6;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` = 6) and (`test`.`t1`.`a` = 6))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` = 6) and (`test`.`t1`.`a` = 6))
+select * from t1 where a = 6 and b = 6;
+a	b
+6	6
+select * from t1 partition(p1sp0);
+a	b
+4	2
+1	NULL
+select * from t1 partition(p1sp1);
+a	b
+7	7
+select * from t1 partition(p1);
+a	b
+4	2
+1	NULL
+7	7
+select * from t1 partition(p2);
+a	b
+NULL	0
+5	1
+8	11
+5	5
+update t1 set a = 8 where a = 6;
+select * from t1 partition(p1);
+a	b
+4	2
+1	NULL
+7	7
+select * from t1 partition(p2);
+a	b
+NULL	0
+8	20
+8	6
+5	1
+8	11
+5	5
+delete from t1 where a = 8;
+select * from t1 partition(p2);
+a	b
+NULL	0
+5	1
+5	5
+drop table t1;
+SET global rds_extended_partitions_enabled = @saved_rds_extended_partitions_enabled;
+#
+# Test LINEAR HASH - HASH
+#
+SET @saved_rds_extended_partitions_enabled=@@rds_extended_partitions_enabled;
+SET global rds_extended_partitions_enabled = true;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash(dept_no)
+subpartition by  hash(part_no)
+(
+partition dp0 (
+subpartition p0,
+subpartition p1,
+subpartition p2
+),
+partition dp1
+(
+subpartition p3,
+subpartition p4,
+subpartition p5
+)
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`dept_no`)
+SUBPARTITION BY HASH (`part_no`)
+(PARTITION dp0
+ (SUBPARTITION p0 ENGINE = Dstore,
+  SUBPARTITION p1 ENGINE = Dstore,
+  SUBPARTITION p2 ENGINE = Dstore),
+ PARTITION dp1
+ (SUBPARTITION p3 ENGINE = Dstore,
+  SUBPARTITION p4 ENGINE = Dstore,
+  SUBPARTITION p5 ENGINE = Dstore)) */
+insert into t1(dept_no,part_no) values(1,1),(1,2),(1,3),
+(2,1),(2,2),(2,3),(3,1),(4,2),(5,3);
+select * from t1;
+dept_no	part_no	country	date	amount
+2	3	NULL	NULL	NULL
+2	1	NULL	NULL	NULL
+2	2	NULL	NULL	NULL
+4	2	NULL	NULL	NULL
+1	3	NULL	NULL	NULL
+5	3	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+3	1	NULL	NULL	NULL
+1	2	NULL	NULL	NULL
+select * from t1 where dept_no = 1;
+dept_no	part_no	country	date	amount
+1	3	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+1	2	NULL	NULL	NULL
+explain select * from t1 where dept_no = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	dp1_p3,dp1_p4,dp1_p5	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`dept_no` = 1)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where (`test`.`t1`.`dept_no` = 1)
+select * from t1 where part_no = 2;
+dept_no	part_no	country	date	amount
+2	2	NULL	NULL	NULL
+4	2	NULL	NULL	NULL
+1	2	NULL	NULL	NULL
+explain select * from t1 where part_no = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	dp0_p2,dp1_p5	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`part_no` = 2)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where (`test`.`t1`.`part_no` = 2)
+select * from t1 where dept_no = 1 and part_no = 1;
+dept_no	part_no	country	date	amount
+1	1	NULL	NULL	NULL
+explain select * from t1 where dept_no = 1 and part_no = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	dp1_p4	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`part_no` = 1) and (`test`.`t1`.`dept_no` = 1))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where ((`test`.`t1`.`part_no` = 1) and (`test`.`t1`.`dept_no` = 1))
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash(dept_no) partitions 2
+subpartition by  hash(part_no)
+(
+partition dp0,
+partition dp1
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`dept_no`)
+SUBPARTITION BY HASH (`part_no`)
+(PARTITION dp0 ENGINE = Dstore,
+ PARTITION dp1 ENGINE = Dstore) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+LINEAR_HASH	`dept_no`	`dept_no`	NO	HASH	`part_no`	`part_no`	YES
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	dp0	NULL	Dstore		NULL
+0	dp0sp0	NULL	Dstore		NULL
+1	dp1	NULL	Dstore		NULL
+0	dp1sp0	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash(dept_no) partitions 2
+subpartition by  hash(part_no) subpartitions 3
+(
+partition dp0,
+partition dp1
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`dept_no`)
+SUBPARTITION BY HASH (`part_no`)
+SUBPARTITIONS 3
+(PARTITION dp0 ENGINE = Dstore,
+ PARTITION dp1 ENGINE = Dstore) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+LINEAR_HASH	`dept_no`	`dept_no`	NO	HASH	`part_no`	`part_no`	NUMBER
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	dp0	NULL	Dstore		NULL
+0	dp0sp0	NULL	Dstore		NULL
+1	dp0sp1	NULL	Dstore		NULL
+2	dp0sp2	NULL	Dstore		NULL
+1	dp1	NULL	Dstore		NULL
+0	dp1sp0	NULL	Dstore		NULL
+1	dp1sp1	NULL	Dstore		NULL
+2	dp1sp2	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash(dept_no) partitions 2
+subpartition by  hash(part_no) subpartitions 3;
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`dept_no`)
+PARTITIONS 2
+SUBPARTITION BY HASH (`part_no`)
+SUBPARTITIONS 3 */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+LINEAR_HASH	`dept_no`	`dept_no`	NUMBER	HASH	`part_no`	`part_no`	NUMBER
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	p0	NULL	Dstore		NULL
+0	p0sp0	NULL	Dstore		NULL
+1	p0sp1	NULL	Dstore		NULL
+2	p0sp2	NULL	Dstore		NULL
+1	p1	NULL	Dstore		NULL
+0	p1sp0	NULL	Dstore		NULL
+1	p1sp1	NULL	Dstore		NULL
+2	p1sp2	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash(dept_no)
+subpartition by  hash(part_no) subpartitions 3
+(
+partition dp0,
+partition dp1
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`dept_no`)
+SUBPARTITION BY HASH (`part_no`)
+SUBPARTITIONS 3
+(PARTITION dp0 ENGINE = Dstore,
+ PARTITION dp1 ENGINE = Dstore) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+LINEAR_HASH	`dept_no`	`dept_no`	NO	HASH	`part_no`	`part_no`	NUMBER
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	dp0	NULL	Dstore		NULL
+0	dp0sp0	NULL	Dstore		NULL
+1	dp0sp1	NULL	Dstore		NULL
+2	dp0sp2	NULL	Dstore		NULL
+1	dp1	NULL	Dstore		NULL
+0	dp1sp0	NULL	Dstore		NULL
+1	dp1sp1	NULL	Dstore		NULL
+2	dp1sp2	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash(dept_no)
+subpartition by  hash(part_no) subpartitions 3
+(
+partition dp0 (
+subpartition p0,
+subpartition p1,
+subpartition p2
+),
+partition dp1
+(
+subpartition p3,
+subpartition p4,
+subpartition p5
+)
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`dept_no`)
+SUBPARTITION BY HASH (`part_no`)
+(PARTITION dp0
+ (SUBPARTITION p0 ENGINE = Dstore,
+  SUBPARTITION p1 ENGINE = Dstore,
+  SUBPARTITION p2 ENGINE = Dstore),
+ PARTITION dp1
+ (SUBPARTITION p3 ENGINE = Dstore,
+  SUBPARTITION p4 ENGINE = Dstore,
+  SUBPARTITION p5 ENGINE = Dstore)) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+LINEAR_HASH	`dept_no`	`dept_no`	NO	HASH	`part_no`	`part_no`	NO
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	dp0	NULL	Dstore		NULL
+0	p0	NULL	Dstore		NULL
+1	p1	NULL	Dstore		NULL
+2	p2	NULL	Dstore		NULL
+1	dp1	NULL	Dstore		NULL
+0	p3	NULL	Dstore		NULL
+1	p4	NULL	Dstore		NULL
+2	p5	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash(dept_no)
+subpartition by  hash(part_no) subpartitions 3
+(
+partition dp0 (
+subpartition p0,
+subpartition p1
+)
+);
+ERROR 42000: Wrong number of subpartitions defined, mismatch with previous setting near '(
+subpartition p0,
+subpartition p1
+)
+)' at line 12
+create table t1 (a int, b int)
+partition by linear hash (a) partitions 2
+subpartition by  hash (b)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno0
+),
+partition p1 (
+subpartition partno0,
+subpartition partno0
+),
+);
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near ')' at line 13
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash (dept_no)
+subpartition by  hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1
+),
+partition p1 (
+subpartition partno0,
+subpartition partno2
+)
+);
+ERROR HY000: Duplicate partition name partno0
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash (dept_no)
+subpartition by  hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1
+),
+partition p1 (
+subpartition p0,
+subpartition partno2
+)
+);
+ERROR HY000: Duplicate partition name p0
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash (dept_no)
+subpartition by  hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1
+),
+partition p1 (
+subpartition partno2
+)
+);
+ERROR 42000: Wrong number of subpartitions defined, mismatch with previous setting near '(
+subpartition partno2
+)
+)' at line 16
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash (dept_no)
+subpartition by  hash (part_no)
+(
+partition p0 (
+subpartition partno0
+),
+partition p1 (
+subpartition partno2,
+subpartition partno1
+)
+);
+ERROR 42000: Wrong number of subpartitions defined, mismatch with previous setting near '(
+subpartition partno2,
+subpartition partno1
+)
+)' at line 15
+#
+# DDL for key-key
+#
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash (dept_no)
+subpartition by  hash (part_no)
+(
+partition p0 (
+subpartition p0sp0,
+subpartition p0sp1
+),
+partition p1 (
+subpartition p1sp0,
+subpartition p1sp1
+)
+);
+alter table t1 add partition (
+partition p2 (
+subpartition p2sp0
+)
+);
+ERROR HY000: Trying to Add partition(s) with wrong number of subpartitions
+alter table t1 add partition (
+partition p2 (
+subpartition p2sp0,
+subpartition p2sp1 values in (6)
+)
+);
+ERROR HY000: Only LIST PARTITIONING can use VALUES IN in partition definition
+alter table t1 add partition (
+partition p2 (
+subpartition p2sp0,
+subpartition p2sp1
+)
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`dept_no`)
+SUBPARTITION BY HASH (`part_no`)
+(PARTITION p0
+ (SUBPARTITION p0sp0 ENGINE = Dstore,
+  SUBPARTITION p0sp1 ENGINE = Dstore),
+ PARTITION p1
+ (SUBPARTITION p1sp0 ENGINE = Dstore,
+  SUBPARTITION p1sp1 ENGINE = Dstore),
+ PARTITION p2
+ (SUBPARTITION p2sp0 ENGINE = Dstore,
+  SUBPARTITION p2sp1 ENGINE = Dstore)) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+LINEAR_HASH	`dept_no`	`dept_no`	NO	HASH	`part_no`	`part_no`	NO
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	p0	NULL	Dstore		NULL
+0	p0sp0	NULL	Dstore		NULL
+1	p0sp1	NULL	Dstore		NULL
+1	p1	NULL	Dstore		NULL
+0	p1sp0	NULL	Dstore		NULL
+1	p1sp1	NULL	Dstore		NULL
+2	p2	NULL	Dstore		NULL
+0	p2sp0	NULL	Dstore		NULL
+1	p2sp1	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+insert into t1(dept_no, part_no) values (23, 4), (24, 1);
+select * from t1;
+dept_no	part_no	country	date	amount
+24	1	NULL	NULL	NULL
+23	4	NULL	NULL	NULL
+alter table t1 add partition (
+partition p3
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`dept_no`)
+SUBPARTITION BY HASH (`part_no`)
+(PARTITION p0
+ (SUBPARTITION p0sp0 ENGINE = Dstore,
+  SUBPARTITION p0sp1 ENGINE = Dstore),
+ PARTITION p1
+ (SUBPARTITION p1sp0 ENGINE = Dstore,
+  SUBPARTITION p1sp1 ENGINE = Dstore),
+ PARTITION p2
+ (SUBPARTITION p2sp0 ENGINE = Dstore,
+  SUBPARTITION p2sp1 ENGINE = Dstore),
+ PARTITION p3
+ (SUBPARTITION p3sp0 ENGINE = Dstore,
+  SUBPARTITION p3sp1 ENGINE = Dstore)) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+LINEAR_HASH	`dept_no`	`dept_no`	NO	HASH	`part_no`	`part_no`	NO
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	p0	NULL	Dstore		NULL
+0	p0sp0	NULL	Dstore		NULL
+1	p0sp1	NULL	Dstore		NULL
+1	p1	NULL	Dstore		NULL
+0	p1sp0	NULL	Dstore		NULL
+1	p1sp1	NULL	Dstore		NULL
+2	p2	NULL	Dstore		NULL
+0	p2sp0	NULL	Dstore		NULL
+1	p2sp1	NULL	Dstore		NULL
+3	p3	NULL	Dstore		NULL
+0	p3sp0	NULL	Dstore		NULL
+1	p3sp1	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+select * from t1;
+dept_no	part_no	country	date	amount
+24	1	NULL	NULL	NULL
+23	4	NULL	NULL	NULL
+drop table t1;
+create table t1 (
+`a` int ,
+`b` int ,
+primary Key(a, b));
+insert into t1 values(1,1),(2,1),(3,1),(4,1),(111,111),(3333,333);
+alter table t1 partition by linear hash(a) subpartition by  hash(b) (
+partition p0 (
+subpartition p0sp0,
+subpartition p0sp1,
+subpartition p0sp2
+),
+partition p1 (
+subpartition p1sp0,
+subpartition p1sp1,
+subpartition p1sp2
+)
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int NOT NULL,
+  `b` int NOT NULL,
+  PRIMARY KEY (`a`,`b`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`a`)
+SUBPARTITION BY HASH (`b`)
+(PARTITION p0
+ (SUBPARTITION p0sp0 ENGINE = Dstore,
+  SUBPARTITION p0sp1 ENGINE = Dstore,
+  SUBPARTITION p0sp2 ENGINE = Dstore),
+ PARTITION p1
+ (SUBPARTITION p1sp0 ENGINE = Dstore,
+  SUBPARTITION p1sp1 ENGINE = Dstore,
+  SUBPARTITION p1sp2 ENGINE = Dstore)) */
+select * from t1;
+a	b
+2	1
+4	1
+111	111
+3333	333
+1	1
+3	1
+select * from t1 partition(p0);
+a	b
+2	1
+4	1
+select * from t1 partition(p1);
+a	b
+111	111
+3333	333
+1	1
+3	1
+select * from t1 where a = 111 and b = 111;
+a	b
+111	111
+explain select * from t1 where a = 111 and b = 111;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0	const	PRIMARY	PRIMARY	8	const,const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select '111' AS `a`,'111' AS `b` from `test`.`t1` where true
+select * from t1 partition(p0sp0);
+a	b
+alter table t1 partition by linear hash(a) partitions 2 subpartition by  hash(b) subpartitions 2;
+select * from t1;
+a	b
+2	1
+4	1
+1	1
+3	1
+111	111
+3333	333
+select * from t1 partition(p0);
+a	b
+2	1
+4	1
+select * from t1 partition(p1);
+a	b
+1	1
+3	1
+111	111
+3333	333
+select * from t1 where a = 111 and b = 111;
+a	b
+111	111
+explain select * from t1 where a = 111 and b = 111;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp1	const	PRIMARY	PRIMARY	8	const,const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select '111' AS `a`,'111' AS `b` from `test`.`t1` where true
+select * from t1 partition(p0sp0);
+a	b
+alter table t1 drop partition p1;
+ERROR HY000: DROP PARTITION can only be used on RANGE/LIST partitions
+alter table t1 drop partition p0sp0;
+ERROR HY000: DROP PARTITION can only be used on RANGE/LIST partitions
+select * from t1 partition(p0sp0);
+a	b
+alter table t1 truncate partition p0sp0;
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int NOT NULL,
+  `b` int NOT NULL,
+  PRIMARY KEY (`a`,`b`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`a`)
+PARTITIONS 2
+SUBPARTITION BY HASH (`b`)
+SUBPARTITIONS 2 */
+select * from t1 partition(p0sp0);
+a	b
+insert into t1 values(1, 111),(2, 333);
+select * from t1 partition(p0);
+a	b
+2	1
+2	333
+4	1
+alter table t1 truncate partition p0;
+select * from t1 partition(p0);
+a	b
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash (dept_no)
+subpartition by  hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1,
+subpartition partno2
+),
+partition p1 (
+subpartition partno3,
+subpartition partno4,
+subpartition partno5
+),
+partition p2 (
+subpartition partno6,
+subpartition partno7,
+subpartition partno8
+)
+);
+insert into t1(dept_no, part_no) values(1,1),(5,2),(6,3),(6,4),(9,5),(9,6);
+insert into t1(dept_no, part_no) values(13,1),(13,2),(13,3),(13,4),(13,5),(13,6);
+insert into t1(dept_no, part_no) values(20,1),(52,2),(52,3),(52,4),(52,5),(52,6);
+select * from t1 partition(p1);
+dept_no	part_no	country	date	amount
+9	6	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	4	NULL	NULL	NULL
+5	2	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+select * from t1 partition(partno3);
+dept_no	part_no	country	date	amount
+9	6	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+select * from t1 partition(partno4);
+dept_no	part_no	country	date	amount
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	4	NULL	NULL	NULL
+select * from t1 partition(partno5);
+dept_no	part_no	country	date	amount
+5	2	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+alter table t1 reorganize partition p1 into (
+partition p1_1 (
+subpartition partno3_1,
+subpartition partno4_1,
+subpartition partno5_1
+)
+);
+select * from t1 partition(p1_1);
+dept_no	part_no	country	date	amount
+9	6	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	4	NULL	NULL	NULL
+5	2	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+select * from t1 partition(partno3_1);
+dept_no	part_no	country	date	amount
+9	6	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+select * from t1 partition(partno4_1);
+dept_no	part_no	country	date	amount
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	4	NULL	NULL	NULL
+select * from t1 partition(partno5_1);
+dept_no	part_no	country	date	amount
+5	2	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+alter table t1 reorganize partition p1,p2 into (
+partition p1 (
+subpartition partno3,
+subpartition partno4,
+subpartition partno5
+)
+);
+ERROR HY000: REORGANIZE PARTITION can only be used to reorganize partitions not to change their numbers
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash (dept_no)
+subpartition by  hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1,
+subpartition partno2
+),
+partition p1 (
+subpartition partno3,
+subpartition partno4,
+subpartition partno5
+),
+partition p2 (
+subpartition partno6,
+subpartition partno7,
+subpartition partno8
+)
+);
+insert into t1(dept_no, part_no) values(1,1),(5,2),(6,3),(6,4),(9,5),(9,6);
+insert into t1(dept_no, part_no) values(13,1),(13,2),(13,3),(13,4),(13,5),(13,6);
+insert into t1(dept_no, part_no) values(20,1),(52,2),(52,3),(52,4),(52,5),(52,6);
+create table t2 like t1;
+alter table t2 remove partitioning;
+select * from t1 partition(partno7);
+dept_no	part_no	country	date	amount
+6	4	NULL	NULL	NULL
+alter table t1 exchange partition partno7 with table t2;
+select * from t1 partition(partno7);
+dept_no	part_no	country	date	amount
+select * from t2;
+dept_no	part_no	country	date	amount
+6	4	NULL	NULL	NULL
+delete from t2;
+insert into t2(dept_no, part_no) values(30, 7), (30, 6);
+insert into t1(dept_no, part_no) values(9, 6);
+alter table t1 exchange partition partno7 with table t2;
+ERROR HY000: Found a row that does not match the partition
+alter table t1 exchange partition partno7 with table t2 without validation;
+select * from t1 partition(partno7);
+dept_no	part_no	country	date	amount
+30	7	NULL	NULL	NULL
+30	6	NULL	NULL	NULL
+select * from t2;
+dept_no	part_no	country	date	amount
+drop table t1, t2;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash (dept_no)
+subpartition by  hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1,
+subpartition partno2
+),
+partition p1 (
+subpartition partno3,
+subpartition partno4,
+subpartition partno5
+),
+partition p2 (
+subpartition partno6,
+subpartition partno7,
+subpartition partno8
+)
+);
+insert into t1(dept_no, part_no) values(1,1),(5,2),(6,3),(6,4),(9,5),(9,6);
+insert into t1(dept_no, part_no) values(13,1),(13,2),(13,3),(13,4),(13,5),(13,6);
+insert into t1(dept_no, part_no) values(20,1),(52,2),(52,3),(52,4),(52,5),(52,6);
+alter table t1 analyze partition partno3, partno8;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+select * from t1 partition(partno3);
+dept_no	part_no	country	date	amount
+9	6	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+select * from t1 partition(partno1, partno4, partno5);
+dept_no	part_no	country	date	amount
+20	1	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	4	NULL	NULL	NULL
+5	2	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+alter table t1 check partition partno1, partno4, partno5;
+Table	Op	Msg_type	Msg_text
+test.t1	check	status	OK
+select * from t1 partition(partno1, partno4, partno5);
+dept_no	part_no	country	date	amount
+20	1	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	4	NULL	NULL	NULL
+5	2	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+select * from t1 partition(partno3, partno6, partno8);
+dept_no	part_no	country	date	amount
+9	6	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+6	3	NULL	NULL	NULL
+alter table t1 optimize partition partno3, partno6, partno8;
+Table	Op	Msg_type	Msg_text
+test.t1	optimize	note	Table does not support optimize on partitions. All partitions will be rebuilt and analyzed.
+test.t1	optimize	status	OK
+select * from t1 partition(partno3, partno6, partno8);
+dept_no	part_no	country	date	amount
+9	6	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+6	3	NULL	NULL	NULL
+select * from t1 partition(p0);
+dept_no	part_no	country	date	amount
+52	3	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+20	1	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+alter table t1 rebuild partition p0;
+select * from t1 partition(p0);
+dept_no	part_no	country	date	amount
+52	3	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+20	1	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+alter table t1 rebuild partition partno2;
+ERROR HY000: Error in list of partitions to REBUILD
+select * from t1 partition(partno3);
+dept_no	part_no	country	date	amount
+9	6	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+alter table t1 repair partition partno3;
+Table	Op	Msg_type	Msg_text
+test.t1	repair	status	OK
+select * from t1 partition(partno3);
+dept_no	part_no	country	date	amount
+9	6	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+alter table t1 remove partitioning;
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+select * from t1;
+dept_no	part_no	country	date	amount
+52	3	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+20	1	NULL	NULL	NULL
+52	4	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+9	6	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	4	NULL	NULL	NULL
+5	2	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+6	3	NULL	NULL	NULL
+6	4	NULL	NULL	NULL
+drop table t1;
+create table t1(a int, b int) partition by linear hash(a) subpartition by  hash(b) (
+partition p1 (
+subpartition p1sp0,
+subpartition p1sp1),
+partition p2 (
+subpartition p2sp0,
+subpartition p2sp1)
+);
+insert into t1 values(3,1);
+insert into t1 values(4,7);
+insert into t1 values(5,4);
+insert into t1 values(6,20);
+insert into t1 values(7,3);
+insert into t1 values(8,9);
+insert into t1 values(6,22);
+select * from t1 where a < 5;
+a	b
+4	7
+3	1
+explain select * from t1 where a < 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`a` < 5)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` < 5)
+alter table t1 add index idx(a);
+select * from t1 where a < 5;
+a	b
+4	7
+3	1
+explain select * from t1 where a < 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	range	idx	idx	5	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` < 5)
+select * from t1 where a = 8;
+a	b
+8	9
+alter table t1 add index idx1(a, b);
+select * from t1 where a = 6 and b = 20;
+a	b
+6	20
+explain select * from t1 where a = 6 and b = 20;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0	ref	idx,idx1	idx1	10	const,const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` = 20) and (`test`.`t1`.`a` = 6))
+select * from t1 where b = 20;
+a	b
+6	20
+explain select * from t1 where b = 20;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p2_p2sp0	index	idx1	idx1	10	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` = 20)
+alter table t1 drop index idx;
+alter table t1 drop index idx1;
+alter table t1 add index idx2(b);
+select * from t1 where a = 7;
+a	b
+7	3
+select * from t1 where b = 3;
+a	b
+7	3
+drop table t1;
+create table t1(a int, b int) partition by linear hash(a) subpartition by  hash(b) (
+partition p1 (
+subpartition p1sp0,
+subpartition p1sp1),
+partition p2 (
+subpartition p2sp0,
+subpartition p2sp1)
+);
+insert into t1 values(3,1);
+insert into t1 values(4,7);
+insert into t1 values(5,4);
+insert into t1 values(6,20);
+insert into t1 values(7,3);
+insert into t1 values(8,9);
+insert into t1 values(6,22);
+select * from t1 order by b;
+a	b
+3	1
+7	3
+5	4
+4	7
+8	9
+6	20
+6	22
+select * from t1 where b > 3 and b < 9 order by b;
+a	b
+5	4
+4	7
+explain select b from t1 where b > 3 and b < 9 order by b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 9)); Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 9)) order by `test`.`t1`.`b`
+select * from t1 where b > 4 order by b;
+a	b
+4	7
+8	9
+6	20
+6	22
+explain select b from t1 where b > 4 order by b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`b` > 4); Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 4) order by `test`.`t1`.`b`
+select * from t1 where b is null order by b;
+a	b
+explain select b from t1 where b is null order by b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null) order by `test`.`t1`.`b`
+select * from t1 where b > 19 and b < 22 order by b;
+a	b
+6	20
+select * from t1 order by a;
+a	b
+3	1
+4	7
+5	4
+6	20
+6	22
+7	3
+8	9
+select * from t1 where a > 3 and a < 9 order by a;
+a	b
+4	7
+5	4
+6	20
+6	22
+7	3
+8	9
+explain select b from t1 where a > 3 and a < 9 order by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`a` > 3) and (`test`.`t1`.`a` < 9)); Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` > 3) and (`test`.`t1`.`a` < 9)) order by `test`.`t1`.`a`
+select * from t1 where a > 7 order by a;
+a	b
+8	9
+explain select * from t1 where a > 7 order by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`a` > 7); Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` > 7) order by `test`.`t1`.`a`
+select * from t1 where a is null order by a;
+a	b
+explain select b from t1 where a is null order by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1	ALL	NULL	NULL	NULL	NULL	4	25.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` is null) order by `test`.`t1`.`a`
+select * from t1 where a > 4 and (b > 3 and b < 7);
+a	b
+5	4
+select * from t1 where a > 4 or (b > 3 and b < 7);
+a	b
+6	20
+6	22
+8	9
+5	4
+7	3
+explain select * from t1 where a > 4 and (b > 3 and b < 7);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`a` > 4) and (`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 7))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` > 4) and (`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 7))
+explain select * from t1 where a > 4 or (b > 3 and b < 7);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` > 4) or ((`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 7)))
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int default(0),
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash (dept_no) partitions 2
+subpartition by  hash (part_no) subpartitions 3;
+insert into t1(part_no) values(null);
+insert into t1(dept_no) values(null);
+select * from t1 where dept_no is null;
+dept_no	part_no	country	date	amount
+NULL	0	NULL	NULL	NULL
+NULL	NULL	NULL	NULL	NULL
+explain select * from t1 where dept_no is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p0_p0sp1,p0_p0sp2	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where (`test`.`t1`.`dept_no` is null)
+select * from t1 where part_no is null;
+dept_no	part_no	country	date	amount
+NULL	NULL	NULL	NULL	NULL
+explain select * from t1 where part_no is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp2,p1_p1sp2	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where (`test`.`t1`.`part_no` is null)
+drop table t1;
+create table t1(a int, b int) partition by linear hash(a) partitions 3 subpartition by  hash(b) subpartitions 4;
+insert into t1 values(2,7),(5,5),(5,6),(6,7),(7,2),(8,20),(6,7),(3,4),(1,6),(8,21);
+select b from t1 where b is null;
+b
+explain select b from t1 where b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null)
+insert into t1 values(null,4),(12,null);
+select b from t1 where b is null;
+b
+NULL
+explain select b from t1 where b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null)
+select * from t1 where a is null;
+a	b
+NULL	4
+explain select * from t1 where a is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p0_p0sp1,p0_p0sp2,p0_p0sp3	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` is null)
+drop table t1;
+create table t1(a int, b int) partition by linear hash(a) partitions 3 subpartition by  hash(b) subpartitions 4;
+insert into t1 values(3,11),(4,2),(5,1),(6,null);
+insert into t1 values(7,7),(8,11),(6,20),(3,null),(1,null),(5,5);
+insert into t1 values(null,0);
+select * from t1 where b is null;
+a	b
+3	NULL
+1	NULL
+6	NULL
+explain select * from t1 where b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null)
+insert into t1 values(17,2),(14,null),(11,6),(20,32),(17,3);
+select b from t1 where b is null;
+b
+NULL
+NULL
+NULL
+NULL
+explain select b from t1 where b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null)
+select * from t1 where a is null and b is null;
+a	b
+explain select * from t1 where a is null and b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` is null) and (`test`.`t1`.`b` is null))
+select * from t1 where a < 20 and b is null;
+a	b
+3	NULL
+1	NULL
+6	NULL
+14	NULL
+explain select * from t1 where a < 20 and b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`a` < 20)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` < 20) and (`test`.`t1`.`b` is null))
+select * from t1 where b > 7 and b < 28;
+a	b
+8	11
+3	11
+6	20
+explain select * from t1 where b > 7 and b < 28;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p0_p0sp1,p0_p0sp2,p0_p0sp3,p1_p1sp0,p1_p1sp1,p1_p1sp2,p1_p1sp3,p2_p2sp0,p2_p2sp1,p2_p2sp2,p2_p2sp3	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28))
+select * from t1 where b > 7 and b < 28 and a is null;
+a	b
+explain select * from t1 where b > 7 and b < 28 and a is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p0_p0sp1,p0_p0sp2,p0_p0sp3	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28) and (`test`.`t1`.`a` is null))
+select * from t1 where b > 7 and b < 28 and a > 5;
+a	b
+8	11
+6	20
+explain select * from t1 where b > 7 and b < 28 and a > 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p0_p0sp1,p0_p0sp2,p0_p0sp3,p1_p1sp0,p1_p1sp1,p1_p1sp2,p1_p1sp3,p2_p2sp0,p2_p2sp1,p2_p2sp2,p2_p2sp3	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28) and (`test`.`t1`.`a` > 5))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28) and (`test`.`t1`.`a` > 5))
+drop table t1;
+create table t1(a int, b int) partition by linear hash(a) partitions 3 subpartition by  hash(b) subpartitions 2;
+insert into t1 values(3,11),(4,2),(5,1),(6,1);
+insert into t1 values(7,7),(8,11),(6,20),(3,null),(1,null),(5,5);
+insert into t1 values(null,0);
+explain select * from t1 where a = 6 and b = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` = 1) and (`test`.`t1`.`a` = 6))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` = 1) and (`test`.`t1`.`a` = 6))
+select * from t1 partition(p1sp0);
+a	b
+3	NULL
+1	NULL
+select * from t1 partition(p1sp1);
+a	b
+3	11
+5	1
+7	7
+5	5
+update t1 set b = 6 where a = 6 and b = 1;
+explain select * from t1 where a = 6 and b = 6;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` = 6) and (`test`.`t1`.`a` = 6))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` = 6) and (`test`.`t1`.`a` = 6))
+select * from t1 where a = 6 and b = 6;
+a	b
+6	6
+select * from t1 partition(p1sp0);
+a	b
+3	NULL
+1	NULL
+select * from t1 partition(p1sp1);
+a	b
+3	11
+5	1
+7	7
+5	5
+select * from t1 partition(p1);
+a	b
+3	NULL
+1	NULL
+3	11
+5	1
+7	7
+5	5
+select * from t1 partition(p2);
+a	b
+6	20
+6	6
+update t1 set a = 8 where a = 6;
+select * from t1 partition(p1);
+a	b
+3	NULL
+1	NULL
+3	11
+5	1
+7	7
+5	5
+select * from t1 partition(p2);
+a	b
+delete from t1 where a = 8;
+select * from t1 partition(p2);
+a	b
+drop table t1;
+SET global rds_extended_partitions_enabled = @saved_rds_extended_partitions_enabled;
+#
+# Test LINEAR HASH - LINEAR HASH
+#
+SET @saved_rds_extended_partitions_enabled=@@rds_extended_partitions_enabled;
+SET global rds_extended_partitions_enabled = true;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash(dept_no)
+subpartition by linear hash(part_no)
+(
+partition dp0 (
+subpartition p0,
+subpartition p1,
+subpartition p2
+),
+partition dp1
+(
+subpartition p3,
+subpartition p4,
+subpartition p5
+)
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`dept_no`)
+SUBPARTITION BY LINEAR HASH (`part_no`)
+(PARTITION dp0
+ (SUBPARTITION p0 ENGINE = Dstore,
+  SUBPARTITION p1 ENGINE = Dstore,
+  SUBPARTITION p2 ENGINE = Dstore),
+ PARTITION dp1
+ (SUBPARTITION p3 ENGINE = Dstore,
+  SUBPARTITION p4 ENGINE = Dstore,
+  SUBPARTITION p5 ENGINE = Dstore)) */
+insert into t1(dept_no,part_no) values(1,1),(1,2),(1,3),
+(2,1),(2,2),(2,3),(3,1),(4,2),(5,3);
+select * from t1;
+dept_no	part_no	country	date	amount
+2	1	NULL	NULL	NULL
+2	3	NULL	NULL	NULL
+2	2	NULL	NULL	NULL
+4	2	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+1	3	NULL	NULL	NULL
+3	1	NULL	NULL	NULL
+5	3	NULL	NULL	NULL
+1	2	NULL	NULL	NULL
+select * from t1 where dept_no = 1;
+dept_no	part_no	country	date	amount
+1	1	NULL	NULL	NULL
+1	3	NULL	NULL	NULL
+1	2	NULL	NULL	NULL
+explain select * from t1 where dept_no = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	dp1_p3,dp1_p4,dp1_p5	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`dept_no` = 1)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where (`test`.`t1`.`dept_no` = 1)
+select * from t1 where part_no = 2;
+dept_no	part_no	country	date	amount
+2	2	NULL	NULL	NULL
+4	2	NULL	NULL	NULL
+1	2	NULL	NULL	NULL
+explain select * from t1 where part_no = 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	dp0_p2,dp1_p5	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`part_no` = 2)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where (`test`.`t1`.`part_no` = 2)
+select * from t1 where dept_no = 1 and part_no = 1;
+dept_no	part_no	country	date	amount
+1	1	NULL	NULL	NULL
+explain select * from t1 where dept_no = 1 and part_no = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	dp1_p4	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`part_no` = 1) and (`test`.`t1`.`dept_no` = 1))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where ((`test`.`t1`.`part_no` = 1) and (`test`.`t1`.`dept_no` = 1))
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash(dept_no) partitions 2
+subpartition by linear hash(part_no)
+(
+partition dp0,
+partition dp1
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`dept_no`)
+SUBPARTITION BY LINEAR HASH (`part_no`)
+(PARTITION dp0 ENGINE = Dstore,
+ PARTITION dp1 ENGINE = Dstore) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+LINEAR_HASH	`dept_no`	`dept_no`	NO	LINEAR_HASH	`part_no`	`part_no`	YES
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	dp0	NULL	Dstore		NULL
+0	dp0sp0	NULL	Dstore		NULL
+1	dp1	NULL	Dstore		NULL
+0	dp1sp0	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash(dept_no) partitions 2
+subpartition by linear hash(part_no) subpartitions 3
+(
+partition dp0,
+partition dp1
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`dept_no`)
+SUBPARTITION BY LINEAR HASH (`part_no`)
+SUBPARTITIONS 3
+(PARTITION dp0 ENGINE = Dstore,
+ PARTITION dp1 ENGINE = Dstore) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+LINEAR_HASH	`dept_no`	`dept_no`	NO	LINEAR_HASH	`part_no`	`part_no`	NUMBER
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	dp0	NULL	Dstore		NULL
+0	dp0sp0	NULL	Dstore		NULL
+1	dp0sp1	NULL	Dstore		NULL
+2	dp0sp2	NULL	Dstore		NULL
+1	dp1	NULL	Dstore		NULL
+0	dp1sp0	NULL	Dstore		NULL
+1	dp1sp1	NULL	Dstore		NULL
+2	dp1sp2	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash(dept_no) partitions 2
+subpartition by linear hash(part_no) subpartitions 3;
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`dept_no`)
+PARTITIONS 2
+SUBPARTITION BY LINEAR HASH (`part_no`)
+SUBPARTITIONS 3 */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+LINEAR_HASH	`dept_no`	`dept_no`	NUMBER	LINEAR_HASH	`part_no`	`part_no`	NUMBER
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	p0	NULL	Dstore		NULL
+0	p0sp0	NULL	Dstore		NULL
+1	p0sp1	NULL	Dstore		NULL
+2	p0sp2	NULL	Dstore		NULL
+1	p1	NULL	Dstore		NULL
+0	p1sp0	NULL	Dstore		NULL
+1	p1sp1	NULL	Dstore		NULL
+2	p1sp2	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash(dept_no)
+subpartition by linear hash(part_no) subpartitions 3
+(
+partition dp0,
+partition dp1
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`dept_no`)
+SUBPARTITION BY LINEAR HASH (`part_no`)
+SUBPARTITIONS 3
+(PARTITION dp0 ENGINE = Dstore,
+ PARTITION dp1 ENGINE = Dstore) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+LINEAR_HASH	`dept_no`	`dept_no`	NO	LINEAR_HASH	`part_no`	`part_no`	NUMBER
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	dp0	NULL	Dstore		NULL
+0	dp0sp0	NULL	Dstore		NULL
+1	dp0sp1	NULL	Dstore		NULL
+2	dp0sp2	NULL	Dstore		NULL
+1	dp1	NULL	Dstore		NULL
+0	dp1sp0	NULL	Dstore		NULL
+1	dp1sp1	NULL	Dstore		NULL
+2	dp1sp2	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash(dept_no)
+subpartition by linear hash(part_no) subpartitions 3
+(
+partition dp0 (
+subpartition p0,
+subpartition p1,
+subpartition p2
+),
+partition dp1
+(
+subpartition p3,
+subpartition p4,
+subpartition p5
+)
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`dept_no`)
+SUBPARTITION BY LINEAR HASH (`part_no`)
+(PARTITION dp0
+ (SUBPARTITION p0 ENGINE = Dstore,
+  SUBPARTITION p1 ENGINE = Dstore,
+  SUBPARTITION p2 ENGINE = Dstore),
+ PARTITION dp1
+ (SUBPARTITION p3 ENGINE = Dstore,
+  SUBPARTITION p4 ENGINE = Dstore,
+  SUBPARTITION p5 ENGINE = Dstore)) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+LINEAR_HASH	`dept_no`	`dept_no`	NO	LINEAR_HASH	`part_no`	`part_no`	NO
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	dp0	NULL	Dstore		NULL
+0	p0	NULL	Dstore		NULL
+1	p1	NULL	Dstore		NULL
+2	p2	NULL	Dstore		NULL
+1	dp1	NULL	Dstore		NULL
+0	p3	NULL	Dstore		NULL
+1	p4	NULL	Dstore		NULL
+2	p5	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash(dept_no)
+subpartition by linear hash(part_no) subpartitions 3
+(
+partition dp0 (
+subpartition p0,
+subpartition p1
+)
+);
+ERROR 42000: Wrong number of subpartitions defined, mismatch with previous setting near '(
+subpartition p0,
+subpartition p1
+)
+)' at line 12
+create table t1 (a int, b int)
+partition by linear hash (a) partitions 2
+subpartition by linear hash (b)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno0
+),
+partition p1 (
+subpartition partno0,
+subpartition partno0
+),
+);
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near ')' at line 13
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash (dept_no)
+subpartition by linear hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1
+),
+partition p1 (
+subpartition partno0,
+subpartition partno2
+)
+);
+ERROR HY000: Duplicate partition name partno0
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash (dept_no)
+subpartition by linear hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1
+),
+partition p1 (
+subpartition p0,
+subpartition partno2
+)
+);
+ERROR HY000: Duplicate partition name p0
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash (dept_no)
+subpartition by linear hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1
+),
+partition p1 (
+subpartition partno2
+)
+);
+ERROR 42000: Wrong number of subpartitions defined, mismatch with previous setting near '(
+subpartition partno2
+)
+)' at line 16
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash (dept_no)
+subpartition by linear hash (part_no)
+(
+partition p0 (
+subpartition partno0
+),
+partition p1 (
+subpartition partno2,
+subpartition partno1
+)
+);
+ERROR 42000: Wrong number of subpartitions defined, mismatch with previous setting near '(
+subpartition partno2,
+subpartition partno1
+)
+)' at line 15
+#
+# DDL for key-key
+#
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash (dept_no)
+subpartition by linear hash (part_no)
+(
+partition p0 (
+subpartition p0sp0,
+subpartition p0sp1
+),
+partition p1 (
+subpartition p1sp0,
+subpartition p1sp1
+)
+);
+alter table t1 add partition (
+partition p2 (
+subpartition p2sp0
+)
+);
+ERROR HY000: Trying to Add partition(s) with wrong number of subpartitions
+alter table t1 add partition (
+partition p2 (
+subpartition p2sp0,
+subpartition p2sp1 values in (6)
+)
+);
+ERROR HY000: Only LIST PARTITIONING can use VALUES IN in partition definition
+alter table t1 add partition (
+partition p2 (
+subpartition p2sp0,
+subpartition p2sp1
+)
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`dept_no`)
+SUBPARTITION BY LINEAR HASH (`part_no`)
+(PARTITION p0
+ (SUBPARTITION p0sp0 ENGINE = Dstore,
+  SUBPARTITION p0sp1 ENGINE = Dstore),
+ PARTITION p1
+ (SUBPARTITION p1sp0 ENGINE = Dstore,
+  SUBPARTITION p1sp1 ENGINE = Dstore),
+ PARTITION p2
+ (SUBPARTITION p2sp0 ENGINE = Dstore,
+  SUBPARTITION p2sp1 ENGINE = Dstore)) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+LINEAR_HASH	`dept_no`	`dept_no`	NO	LINEAR_HASH	`part_no`	`part_no`	NO
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	p0	NULL	Dstore		NULL
+0	p0sp0	NULL	Dstore		NULL
+1	p0sp1	NULL	Dstore		NULL
+1	p1	NULL	Dstore		NULL
+0	p1sp0	NULL	Dstore		NULL
+1	p1sp1	NULL	Dstore		NULL
+2	p2	NULL	Dstore		NULL
+0	p2sp0	NULL	Dstore		NULL
+1	p2sp1	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+insert into t1(dept_no, part_no) values (23, 4), (24, 1);
+select * from t1;
+dept_no	part_no	country	date	amount
+24	1	NULL	NULL	NULL
+23	4	NULL	NULL	NULL
+alter table t1 add partition (
+partition p3
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`dept_no`)
+SUBPARTITION BY LINEAR HASH (`part_no`)
+(PARTITION p0
+ (SUBPARTITION p0sp0 ENGINE = Dstore,
+  SUBPARTITION p0sp1 ENGINE = Dstore),
+ PARTITION p1
+ (SUBPARTITION p1sp0 ENGINE = Dstore,
+  SUBPARTITION p1sp1 ENGINE = Dstore),
+ PARTITION p2
+ (SUBPARTITION p2sp0 ENGINE = Dstore,
+  SUBPARTITION p2sp1 ENGINE = Dstore),
+ PARTITION p3
+ (SUBPARTITION p3sp0 ENGINE = Dstore,
+  SUBPARTITION p3sp1 ENGINE = Dstore)) */
+set global debug='+d,skip_dd_table_access_check';
+select partition_type,partition_expression,partition_expression_utf8,default_partitioning,
+subpartition_type,subpartition_expression,subpartition_expression_utf8,default_subpartitioning
+from mysql.tables where name='t1';
+partition_type	partition_expression	partition_expression_utf8	default_partitioning	subpartition_type	subpartition_expression	subpartition_expression_utf8	default_subpartitioning
+LINEAR_HASH	`dept_no`	`dept_no`	NO	LINEAR_HASH	`part_no`	`part_no`	NO
+select number,name,description_utf8,engine,comment,options from mysql.table_partitions where table_id in (select id from mysql.tables where name='t1');
+number	name	description_utf8	engine	comment	options
+0	p0	NULL	Dstore		NULL
+0	p0sp0	NULL	Dstore		NULL
+1	p0sp1	NULL	Dstore		NULL
+1	p1	NULL	Dstore		NULL
+0	p1sp0	NULL	Dstore		NULL
+1	p1sp1	NULL	Dstore		NULL
+2	p2	NULL	Dstore		NULL
+0	p2sp0	NULL	Dstore		NULL
+1	p2sp1	NULL	Dstore		NULL
+3	p3	NULL	Dstore		NULL
+0	p3sp0	NULL	Dstore		NULL
+1	p3sp1	NULL	Dstore		NULL
+set global debug='-d,skip_dd_table_access_check';
+select * from t1;
+dept_no	part_no	country	date	amount
+24	1	NULL	NULL	NULL
+23	4	NULL	NULL	NULL
+drop table t1;
+create table t1 (
+`a` int ,
+`b` int ,
+primary Key(a, b));
+insert into t1 values(1,1),(2,1),(3,1),(4,1),(111,111),(3333,333);
+alter table t1 partition by linear hash(a) subpartition by linear hash(b) (
+partition p0 (
+subpartition p0sp0,
+subpartition p0sp1,
+subpartition p0sp2
+),
+partition p1 (
+subpartition p1sp0,
+subpartition p1sp1,
+subpartition p1sp2
+)
+);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int NOT NULL,
+  `b` int NOT NULL,
+  PRIMARY KEY (`a`,`b`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`a`)
+SUBPARTITION BY LINEAR HASH (`b`)
+(PARTITION p0
+ (SUBPARTITION p0sp0 ENGINE = Dstore,
+  SUBPARTITION p0sp1 ENGINE = Dstore,
+  SUBPARTITION p0sp2 ENGINE = Dstore),
+ PARTITION p1
+ (SUBPARTITION p1sp0 ENGINE = Dstore,
+  SUBPARTITION p1sp1 ENGINE = Dstore,
+  SUBPARTITION p1sp2 ENGINE = Dstore)) */
+select * from t1;
+a	b
+2	1
+4	1
+1	1
+3	1
+111	111
+3333	333
+select * from t1 partition(p0);
+a	b
+2	1
+4	1
+select * from t1 partition(p1);
+a	b
+1	1
+3	1
+111	111
+3333	333
+select * from t1 where a = 111 and b = 111;
+a	b
+111	111
+explain select * from t1 where a = 111 and b = 111;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp1	const	PRIMARY	PRIMARY	8	const,const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select '111' AS `a`,'111' AS `b` from `test`.`t1` where true
+select * from t1 partition(p0sp0);
+a	b
+alter table t1 partition by linear hash(a) partitions 2 subpartition by linear hash(b) subpartitions 2;
+select * from t1;
+a	b
+2	1
+4	1
+1	1
+3	1
+111	111
+3333	333
+select * from t1 partition(p0);
+a	b
+2	1
+4	1
+select * from t1 partition(p1);
+a	b
+1	1
+3	1
+111	111
+3333	333
+select * from t1 where a = 111 and b = 111;
+a	b
+111	111
+explain select * from t1 where a = 111 and b = 111;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp1	const	PRIMARY	PRIMARY	8	const,const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select '111' AS `a`,'111' AS `b` from `test`.`t1` where true
+select * from t1 partition(p0sp0);
+a	b
+alter table t1 drop partition p1;
+ERROR HY000: DROP PARTITION can only be used on RANGE/LIST partitions
+alter table t1 drop partition p0sp0;
+ERROR HY000: DROP PARTITION can only be used on RANGE/LIST partitions
+select * from t1 partition(p0sp0);
+a	b
+alter table t1 truncate partition p0sp0;
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int NOT NULL,
+  `b` int NOT NULL,
+  PRIMARY KEY (`a`,`b`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+/*!50100 PARTITION BY LINEAR HASH (`a`)
+PARTITIONS 2
+SUBPARTITION BY LINEAR HASH (`b`)
+SUBPARTITIONS 2 */
+select * from t1 partition(p0sp0);
+a	b
+insert into t1 values(1, 111),(2, 333);
+select * from t1 partition(p0);
+a	b
+2	1
+2	333
+4	1
+alter table t1 truncate partition p0;
+select * from t1 partition(p0);
+a	b
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash (dept_no)
+subpartition by linear hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1,
+subpartition partno2
+),
+partition p1 (
+subpartition partno3,
+subpartition partno4,
+subpartition partno5
+),
+partition p2 (
+subpartition partno6,
+subpartition partno7,
+subpartition partno8
+)
+);
+insert into t1(dept_no, part_no) values(1,1),(5,2),(6,3),(6,4),(9,5),(9,6);
+insert into t1(dept_no, part_no) values(13,1),(13,2),(13,3),(13,4),(13,5),(13,6);
+insert into t1(dept_no, part_no) values(20,1),(52,2),(52,3),(52,4),(52,5),(52,6);
+select * from t1 partition(p1);
+dept_no	part_no	country	date	amount
+13	4	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+5	2	NULL	NULL	NULL
+9	6	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+select * from t1 partition(partno3);
+dept_no	part_no	country	date	amount
+13	4	NULL	NULL	NULL
+select * from t1 partition(partno4);
+dept_no	part_no	country	date	amount
+1	1	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+select * from t1 partition(partno5);
+dept_no	part_no	country	date	amount
+5	2	NULL	NULL	NULL
+9	6	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+alter table t1 reorganize partition p1 into (
+partition p1_1 (
+subpartition partno3_1,
+subpartition partno4_1,
+subpartition partno5_1
+)
+);
+select * from t1 partition(p1_1);
+dept_no	part_no	country	date	amount
+13	4	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+5	2	NULL	NULL	NULL
+9	6	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+select * from t1 partition(partno3_1);
+dept_no	part_no	country	date	amount
+13	4	NULL	NULL	NULL
+select * from t1 partition(partno4_1);
+dept_no	part_no	country	date	amount
+1	1	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+select * from t1 partition(partno5_1);
+dept_no	part_no	country	date	amount
+5	2	NULL	NULL	NULL
+9	6	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+alter table t1 reorganize partition p1,p2 into (
+partition p1 (
+subpartition partno3,
+subpartition partno4,
+subpartition partno5
+)
+);
+ERROR HY000: REORGANIZE PARTITION can only be used to reorganize partitions not to change their numbers
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash (dept_no)
+subpartition by linear hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1,
+subpartition partno2
+),
+partition p1 (
+subpartition partno3,
+subpartition partno4,
+subpartition partno5
+),
+partition p2 (
+subpartition partno6,
+subpartition partno7,
+subpartition partno8
+)
+);
+insert into t1(dept_no, part_no) values(1,1),(5,2),(6,3),(6,4),(9,5),(9,6);
+insert into t1(dept_no, part_no) values(13,1),(13,2),(13,3),(13,4),(13,5),(13,6);
+insert into t1(dept_no, part_no) values(20,1),(52,2),(52,3),(52,4),(52,5),(52,6);
+create table t2 like t1;
+alter table t2 remove partitioning;
+select * from t1 partition(partno7);
+dept_no	part_no	country	date	amount
+6	3	NULL	NULL	NULL
+alter table t1 exchange partition partno7 with table t2;
+select * from t1 partition(partno7);
+dept_no	part_no	country	date	amount
+select * from t2;
+dept_no	part_no	country	date	amount
+6	3	NULL	NULL	NULL
+delete from t2;
+insert into t2(dept_no, part_no) values(30, 7), (30, 6);
+insert into t1(dept_no, part_no) values(9, 6);
+alter table t1 exchange partition partno7 with table t2;
+ERROR HY000: Found a row that does not match the partition
+alter table t1 exchange partition partno7 with table t2 without validation;
+select * from t1 partition(partno7);
+dept_no	part_no	country	date	amount
+30	7	NULL	NULL	NULL
+30	6	NULL	NULL	NULL
+select * from t2;
+dept_no	part_no	country	date	amount
+drop table t1, t2;
+create table t1
+(
+dept_no     int,
+part_no     int,
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash (dept_no)
+subpartition by linear hash (part_no)
+(
+partition p0 (
+subpartition partno0,
+subpartition partno1,
+subpartition partno2
+),
+partition p1 (
+subpartition partno3,
+subpartition partno4,
+subpartition partno5
+),
+partition p2 (
+subpartition partno6,
+subpartition partno7,
+subpartition partno8
+)
+);
+insert into t1(dept_no, part_no) values(1,1),(5,2),(6,3),(6,4),(9,5),(9,6);
+insert into t1(dept_no, part_no) values(13,1),(13,2),(13,3),(13,4),(13,5),(13,6);
+insert into t1(dept_no, part_no) values(20,1),(52,2),(52,3),(52,4),(52,5),(52,6);
+alter table t1 analyze partition partno3, partno8;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+select * from t1 partition(partno3);
+dept_no	part_no	country	date	amount
+13	4	NULL	NULL	NULL
+select * from t1 partition(partno1, partno4, partno5);
+dept_no	part_no	country	date	amount
+20	1	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+5	2	NULL	NULL	NULL
+9	6	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+alter table t1 check partition partno1, partno4, partno5;
+Table	Op	Msg_type	Msg_text
+test.t1	check	status	OK
+select * from t1 partition(partno1, partno4, partno5);
+dept_no	part_no	country	date	amount
+20	1	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+5	2	NULL	NULL	NULL
+9	6	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+select * from t1 partition(partno3, partno6, partno8);
+dept_no	part_no	country	date	amount
+13	4	NULL	NULL	NULL
+6	4	NULL	NULL	NULL
+alter table t1 optimize partition partno3, partno6, partno8;
+Table	Op	Msg_type	Msg_text
+test.t1	optimize	note	Table does not support optimize on partitions. All partitions will be rebuilt and analyzed.
+test.t1	optimize	status	OK
+select * from t1 partition(partno3, partno6, partno8);
+dept_no	part_no	country	date	amount
+13	4	NULL	NULL	NULL
+6	4	NULL	NULL	NULL
+select * from t1 partition(p0);
+dept_no	part_no	country	date	amount
+52	4	NULL	NULL	NULL
+20	1	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+alter table t1 rebuild partition p0;
+select * from t1 partition(p0);
+dept_no	part_no	country	date	amount
+52	4	NULL	NULL	NULL
+20	1	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+alter table t1 rebuild partition partno2;
+ERROR HY000: Error in list of partitions to REBUILD
+select * from t1 partition(partno3);
+dept_no	part_no	country	date	amount
+13	4	NULL	NULL	NULL
+alter table t1 repair partition partno3;
+Table	Op	Msg_type	Msg_text
+test.t1	repair	status	OK
+select * from t1 partition(partno3);
+dept_no	part_no	country	date	amount
+13	4	NULL	NULL	NULL
+alter table t1 remove partitioning;
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `dept_no` int DEFAULT NULL,
+  `part_no` int DEFAULT NULL,
+  `country` varchar(20) DEFAULT NULL,
+  `date` date DEFAULT NULL,
+  `amount` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+select * from t1;
+dept_no	part_no	country	date	amount
+52	4	NULL	NULL	NULL
+20	1	NULL	NULL	NULL
+52	3	NULL	NULL	NULL
+52	5	NULL	NULL	NULL
+52	2	NULL	NULL	NULL
+52	6	NULL	NULL	NULL
+13	4	NULL	NULL	NULL
+1	1	NULL	NULL	NULL
+9	5	NULL	NULL	NULL
+13	1	NULL	NULL	NULL
+13	3	NULL	NULL	NULL
+13	5	NULL	NULL	NULL
+5	2	NULL	NULL	NULL
+9	6	NULL	NULL	NULL
+13	2	NULL	NULL	NULL
+13	6	NULL	NULL	NULL
+6	4	NULL	NULL	NULL
+6	3	NULL	NULL	NULL
+drop table t1;
+create table t1(a int, b int) partition by linear hash(a) subpartition by linear hash(b) (
+partition p1 (
+subpartition p1sp0,
+subpartition p1sp1),
+partition p2 (
+subpartition p2sp0,
+subpartition p2sp1)
+);
+insert into t1 values(3,1);
+insert into t1 values(4,7);
+insert into t1 values(5,4);
+insert into t1 values(6,20);
+insert into t1 values(7,3);
+insert into t1 values(8,9);
+insert into t1 values(6,22);
+select * from t1 where a < 5;
+a	b
+4	7
+3	1
+explain select * from t1 where a < 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`a` < 5)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` < 5)
+alter table t1 add index idx(a);
+select * from t1 where a < 5;
+a	b
+4	7
+3	1
+explain select * from t1 where a < 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	range	idx	idx	5	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` < 5)
+select * from t1 where a = 8;
+a	b
+8	9
+alter table t1 add index idx1(a, b);
+select * from t1 where a = 6 and b = 20;
+a	b
+6	20
+explain select * from t1 where a = 6 and b = 20;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0	ref	idx,idx1	idx1	10	const,const	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` = 20) and (`test`.`t1`.`a` = 6))
+select * from t1 where b = 20;
+a	b
+6	20
+explain select * from t1 where b = 20;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p2_p2sp0	index	idx1	idx1	10	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` = 20)
+alter table t1 drop index idx;
+alter table t1 drop index idx1;
+alter table t1 add index idx2(b);
+select * from t1 where a = 7;
+a	b
+7	3
+select * from t1 where b = 3;
+a	b
+7	3
+drop table t1;
+create table t1(a int, b int) partition by linear hash(a) subpartition by linear hash(b) (
+partition p1 (
+subpartition p1sp0,
+subpartition p1sp1),
+partition p2 (
+subpartition p2sp0,
+subpartition p2sp1)
+);
+insert into t1 values(3,1);
+insert into t1 values(4,7);
+insert into t1 values(5,4);
+insert into t1 values(6,20);
+insert into t1 values(7,3);
+insert into t1 values(8,9);
+insert into t1 values(6,22);
+select * from t1 order by b;
+a	b
+3	1
+7	3
+5	4
+4	7
+8	9
+6	20
+6	22
+select * from t1 where b > 3 and b < 9 order by b;
+a	b
+5	4
+4	7
+explain select b from t1 where b > 3 and b < 9 order by b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 9)); Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 9)) order by `test`.`t1`.`b`
+select * from t1 where b > 4 order by b;
+a	b
+4	7
+8	9
+6	20
+6	22
+explain select b from t1 where b > 4 order by b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`b` > 4); Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 4) order by `test`.`t1`.`b`
+select * from t1 where b is null order by b;
+a	b
+explain select b from t1 where b is null order by b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null) order by `test`.`t1`.`b`
+select * from t1 where b > 19 and b < 22 order by b;
+a	b
+6	20
+select * from t1 order by a;
+a	b
+3	1
+4	7
+5	4
+6	20
+6	22
+7	3
+8	9
+select * from t1 where a > 3 and a < 9 order by a;
+a	b
+4	7
+5	4
+6	20
+6	22
+7	3
+8	9
+explain select b from t1 where a > 3 and a < 9 order by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`a` > 3) and (`test`.`t1`.`a` < 9)); Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` > 3) and (`test`.`t1`.`a` < 9)) order by `test`.`t1`.`a`
+select * from t1 where a > 7 order by a;
+a	b
+8	9
+explain select * from t1 where a > 7 order by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`a` > 7); Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` > 7) order by `test`.`t1`.`a`
+select * from t1 where a is null order by a;
+a	b
+explain select b from t1 where a is null order by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1	ALL	NULL	NULL	NULL	NULL	4	25.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` is null) order by `test`.`t1`.`a`
+select * from t1 where a > 4 and (b > 3 and b < 7);
+a	b
+5	4
+select * from t1 where a > 4 or (b > 3 and b < 7);
+a	b
+6	20
+6	22
+8	9
+5	4
+7	3
+explain select * from t1 where a > 4 and (b > 3 and b < 7);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`a` > 4) and (`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 7))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` > 4) and (`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 7))
+explain select * from t1 where a > 4 or (b > 3 and b < 7);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p1_p1sp0,p1_p1sp1,p2_p2sp0,p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` > 4) or ((`test`.`t1`.`b` > 3) and (`test`.`t1`.`b` < 7)))
+drop table t1;
+create table t1
+(
+dept_no     int,
+part_no     int default(0),
+country     varchar(20),
+date        date,
+amount      int
+)
+partition by linear hash (dept_no) partitions 2
+subpartition by linear hash (part_no) subpartitions 3;
+insert into t1(part_no) values(null);
+insert into t1(dept_no) values(null);
+select * from t1 where dept_no is null;
+dept_no	part_no	country	date	amount
+NULL	NULL	NULL	NULL	NULL
+NULL	0	NULL	NULL	NULL
+explain select * from t1 where dept_no is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p0_p0sp1,p0_p0sp2	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where (`test`.`t1`.`dept_no` is null)
+select * from t1 where part_no is null;
+dept_no	part_no	country	date	amount
+NULL	NULL	NULL	NULL	NULL
+explain select * from t1 where part_no is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dept_no` AS `dept_no`,`test`.`t1`.`part_no` AS `part_no`,`test`.`t1`.`country` AS `country`,`test`.`t1`.`date` AS `date`,`test`.`t1`.`amount` AS `amount` from `test`.`t1` where (`test`.`t1`.`part_no` is null)
+drop table t1;
+create table t1(a int, b int) partition by linear hash(a) partitions 3 subpartition by linear hash(b) subpartitions 4;
+insert into t1 values(2,7),(5,5),(5,6),(6,7),(7,2),(8,20),(6,7),(3,4),(1,6),(8,21);
+select b from t1 where b is null;
+b
+explain select b from t1 where b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null)
+insert into t1 values(null,4),(12,null);
+select b from t1 where b is null;
+b
+NULL
+explain select b from t1 where b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null)
+select * from t1 where a is null;
+a	b
+NULL	4
+explain select * from t1 where a is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p0_p0sp1,p0_p0sp2,p0_p0sp3	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` is null)
+drop table t1;
+create table t1(a int, b int) partition by linear hash(a) partitions 3 subpartition by linear hash(b) subpartitions 4;
+insert into t1 values(3,11),(4,2),(5,1),(6,null);
+insert into t1 values(7,7),(8,11),(6,20),(3,null),(1,null),(5,5);
+insert into t1 values(null,0);
+select * from t1 where b is null;
+a	b
+3	NULL
+1	NULL
+6	NULL
+explain select * from t1 where b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null)
+insert into t1 values(17,2),(14,null),(11,6),(20,32),(17,3);
+select b from t1 where b is null;
+b
+NULL
+NULL
+NULL
+NULL
+explain select b from t1 where b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` is null)
+select * from t1 where a is null and b is null;
+a	b
+explain select * from t1 where a is null and b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` is null) and (`test`.`t1`.`b` is null))
+select * from t1 where a < 20 and b is null;
+a	b
+3	NULL
+1	NULL
+6	NULL
+14	NULL
+explain select * from t1 where a < 20 and b is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p1_p1sp0,p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition (`test`.`t1`.`a` < 20)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` < 20) and (`test`.`t1`.`b` is null))
+select * from t1 where b > 7 and b < 28;
+a	b
+8	11
+3	11
+6	20
+explain select * from t1 where b > 7 and b < 28;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p0_p0sp1,p0_p0sp2,p0_p0sp3,p1_p1sp0,p1_p1sp1,p1_p1sp2,p1_p1sp3,p2_p2sp0,p2_p2sp1,p2_p2sp2,p2_p2sp3	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28))
+select * from t1 where b > 7 and b < 28 and a is null;
+a	b
+explain select * from t1 where b > 7 and b < 28 and a is null;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p0_p0sp1,p0_p0sp2,p0_p0sp3	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28) and (`test`.`t1`.`a` is null))
+select * from t1 where b > 7 and b < 28 and a > 5;
+a	b
+8	11
+6	20
+explain select * from t1 where b > 7 and b < 28 and a > 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p0_p0sp0,p0_p0sp1,p0_p0sp2,p0_p0sp3,p1_p1sp0,p1_p1sp1,p1_p1sp2,p1_p1sp3,p2_p2sp0,p2_p2sp1,p2_p2sp2,p2_p2sp3	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28) and (`test`.`t1`.`a` > 5))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` > 7) and (`test`.`t1`.`b` < 28) and (`test`.`t1`.`a` > 5))
+drop table t1;
+create table t1(a int, b int) partition by linear hash(a) partitions 3 subpartition by linear hash(b) subpartitions 2;
+insert into t1 values(3,11),(4,2),(5,1),(6,1);
+insert into t1 values(7,7),(8,11),(6,20),(3,null),(1,null),(5,5);
+insert into t1 values(null,0);
+explain select * from t1 where a = 6 and b = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p2_p2sp1	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` = 1) and (`test`.`t1`.`a` = 6))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` = 1) and (`test`.`t1`.`a` = 6))
+select * from t1 partition(p1sp0);
+a	b
+3	NULL
+1	NULL
+select * from t1 partition(p1sp1);
+a	b
+3	11
+5	1
+7	7
+5	5
+update t1 set b = 6 where a = 6 and b = 1;
+explain select * from t1 where a = 6 and b = 6;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	p2_p2sp0	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using pushed condition ((`test`.`t1`.`b` = 6) and (`test`.`t1`.`a` = 6))
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`b` = 6) and (`test`.`t1`.`a` = 6))
+select * from t1 where a = 6 and b = 6;
+a	b
+6	6
+select * from t1 partition(p1sp0);
+a	b
+3	NULL
+1	NULL
+select * from t1 partition(p1sp1);
+a	b
+3	11
+5	1
+7	7
+5	5
+select * from t1 partition(p1);
+a	b
+3	NULL
+1	NULL
+3	11
+5	1
+7	7
+5	5
+select * from t1 partition(p2);
+a	b
+6	20
+6	6
+update t1 set a = 8 where a = 6;
+select * from t1 partition(p1);
+a	b
+3	NULL
+1	NULL
+3	11
+5	1
+7	7
+5	5
+select * from t1 partition(p2);
+a	b
+delete from t1 where a = 8;
+select * from t1 partition(p2);
+a	b
+drop table t1;
+SET global rds_extended_partitions_enabled = @saved_rds_extended_partitions_enabled;

@@ -1,0 +1,266 @@
+From e4de738980b3bb9269107672a7df033ba7dfc23f Mon Sep 17 00:00:00 2001
+From: songliyong <songliyong@contributor>
+
+
+Date: Fri, 12 Dec 2025 15:10:57 +0800
+Subject: [PATCH] BUGFIX fix query information_schema table abort
+ issue
+
+Issue:
+----------
+Query threadpool status from infromation_schema will abort
+when threadpool is disabled.
+
+Solution:
+----------
+Return directly when query threadpool status from infromation_schema
+if threadpool is disabled.
+---
+ ...hread_pool_groups_information_table.result |  3 --
+ .../thread_pool_groups_information_table.test |  4 --
+ .../mtr/thread_pool_information_table.result  | 36 ++++++++++++++++
+ .../mtr/thread_pool_information_table.test    | 41 +++++++++++++++++++
+ ...hread_pool_queues_information_table.result |  2 -
+ .../thread_pool_queues_information_table.test |  4 --
+ ...thread_pool_stats_information_table.result |  3 --
+ .../thread_pool_stats_information_table.test  |  4 --
+ ...thread_pool_waits_information_table.result |  3 --
+ .../thread_pool_waits_information_table.test  |  4 --
+ plugin/threadpool/threadpool_plugin.cc        | 19 +++++++++
+ 11 files changed, 96 insertions(+), 27 deletions(-)
+ delete mode 100644 plugin/threadpool/tests/mtr/thread_pool_groups_information_table.result
+ delete mode 100644 plugin/threadpool/tests/mtr/thread_pool_groups_information_table.test
+ create mode 100644 plugin/threadpool/tests/mtr/thread_pool_information_table.result
+ create mode 100644 plugin/threadpool/tests/mtr/thread_pool_information_table.test
+ delete mode 100644 plugin/threadpool/tests/mtr/thread_pool_queues_information_table.result
+ delete mode 100644 plugin/threadpool/tests/mtr/thread_pool_queues_information_table.test
+ delete mode 100644 plugin/threadpool/tests/mtr/thread_pool_stats_information_table.result
+ delete mode 100644 plugin/threadpool/tests/mtr/thread_pool_stats_information_table.test
+ delete mode 100644 plugin/threadpool/tests/mtr/thread_pool_waits_information_table.result
+ delete mode 100644 plugin/threadpool/tests/mtr/thread_pool_waits_information_table.test
+
+diff --git a/plugin/threadpool/tests/mtr/thread_pool_groups_information_table.result b/plugin/threadpool/tests/mtr/thread_pool_groups_information_table.result
+deleted file mode 100644
+index 26fb4392e8b..00000000000
+--- a/plugin/threadpool/tests/mtr/thread_pool_groups_information_table.result
++++ /dev/null
+@@ -1,3 +0,0 @@
+-SELECT * FROM information_schema.thread_pool_groups LIMIT 1;
+-GROUP_ID	CONNECTIONS	THREADS	ACTIVE_THREADS	STANDBY_THREADS	LOWPRIO_QUEUE_LENGTH	HIGHPRIO_QUEUE_LENGTH	HAS_LISTENER	IS_STALLED	THREADPOOL_SIZE	CPU_COUNT	CPU_TIME	WAIT_TIME	DEQUEUED EVENTS	EVENT_COUNT	IO_EVENT_COUNT
+-#	#	#	#	#	#	#	#	#	#	#	#	#	#	#	#
+diff --git a/plugin/threadpool/tests/mtr/thread_pool_groups_information_table.test b/plugin/threadpool/tests/mtr/thread_pool_groups_information_table.test
+deleted file mode 100644
+index b913caf5550..00000000000
+--- a/plugin/threadpool/tests/mtr/thread_pool_groups_information_table.test
++++ /dev/null
+@@ -1,4 +0,0 @@
+---source include/have_pool_of_threads.inc
+-
+---replace_column 1 # 2 # 3 # 4 # 5 # 6 # 7 # 8 # 9 # 10 # 11 # 12 # 13 # 14 # 15 # 16 #
+-SELECT * FROM information_schema.thread_pool_groups LIMIT 1;
+diff --git a/plugin/threadpool/tests/mtr/thread_pool_information_table.result b/plugin/threadpool/tests/mtr/thread_pool_information_table.result
+new file mode 100644
+index 00000000000..a7d1a76fe62
+--- /dev/null
++++ b/plugin/threadpool/tests/mtr/thread_pool_information_table.result
+@@ -0,0 +1,36 @@
++SET @orig_threadpool_enabled = @@threadpool_enabled;
++SELECT * FROM information_schema.thread_pool_groups LIMIT 1;
++GROUP_ID	CONNECTIONS	THREADS	ACTIVE_THREADS	STANDBY_THREADS	LOWPRIO_QUEUE_LENGTH	HIGHPRIO_QUEUE_LENGTH	HAS_LISTENER	IS_STALLED	THREADPOOL_SIZE	CPU_COUNT	CPU_TIME	WAIT_TIME	DEQUEUED EVENTS	EVENT_COUNT	IO_EVENT_COUNT
++#	#	#	#	#	#	#	#	#	#	#	#	#	#	#	#
++SELECT * FROM information_schema.thread_pool_stats LIMIT 1;
++GROUP_ID	THREAD_CREATIONS	THREAD_CREATIONS_DUE_TO_STALL	WAKES	WAKES_DUE_TO_STALL	THROTTLES	STALLS	POLLS_BY_LISTENER	POLLS_BY_WORKER	DEQUEUES_BY_LISTENER	DEQUEUES_BY_WORKER	KICKUPS	THREAD_CREATIONS_QUEUE_PUT_CONNECTION	THREAD_CREATIONS_WAIT_BEGIN	THREAD_CREATIONS_SINGLE_LISTENER	THREAD_CREATION_ATTEMPTS	THREAD_REMOVES	CPU_TIMER	EVENTS_HANDLED_CUR
++#	#	#	#	#	#	#	#	#	#	#	#	#	#	#	#	#	#	#
++SELECT * FROM information_schema.thread_pool_queues LIMIT 1;
++GROUP_ID	POSITION	PRIORITY	CONNECTION_ID	QUEUEING_TIME_MICROSECONDS	QUEUEING_HTIME_MICROSECONDS	TICKETS	KICKUP
++SELECT * FROM information_schema.thread_pool_waits LIMIT 1;
++REASON	COUNT
++#	#
++SET GLOBAL threadpool_enabled = OFF;
++SHOW GLOBAL VARIABLES LIKE "threadpool_enabled";
++Variable_name	Value
++threadpool_enabled	OFF
++SELECT * FROM information_schema.thread_pool_groups;
++GROUP_ID	CONNECTIONS	THREADS	ACTIVE_THREADS	STANDBY_THREADS	LOWPRIO_QUEUE_LENGTH	HIGHPRIO_QUEUE_LENGTH	HAS_LISTENER	IS_STALLED	THREADPOOL_SIZE	CPU_COUNT	CPU_TIME	WAIT_TIME	DEQUEUED EVENTS	EVENT_COUNT	IO_EVENT_COUNT
++SELECT * FROM information_schema.thread_pool_stats;
++GROUP_ID	THREAD_CREATIONS	THREAD_CREATIONS_DUE_TO_STALL	WAKES	WAKES_DUE_TO_STALL	THROTTLES	STALLS	POLLS_BY_LISTENER	POLLS_BY_WORKER	DEQUEUES_BY_LISTENER	DEQUEUES_BY_WORKER	KICKUPS	THREAD_CREATIONS_QUEUE_PUT_CONNECTION	THREAD_CREATIONS_WAIT_BEGIN	THREAD_CREATIONS_SINGLE_LISTENER	THREAD_CREATION_ATTEMPTS	THREAD_REMOVES	CPU_TIMER	EVENTS_HANDLED_CUR
++SELECT * FROM information_schema.thread_pool_queues;
++GROUP_ID	POSITION	PRIORITY	CONNECTION_ID	QUEUEING_TIME_MICROSECONDS	QUEUEING_HTIME_MICROSECONDS	TICKETS	KICKUP
++SELECT * FROM information_schema.thread_pool_waits;
++REASON	COUNT
++SET GLOBAL threadpool_enabled = @orig_threadpool_enabled;
++SELECT * FROM information_schema.thread_pool_groups LIMIT 1;
++GROUP_ID	CONNECTIONS	THREADS	ACTIVE_THREADS	STANDBY_THREADS	LOWPRIO_QUEUE_LENGTH	HIGHPRIO_QUEUE_LENGTH	HAS_LISTENER	IS_STALLED	THREADPOOL_SIZE	CPU_COUNT	CPU_TIME	WAIT_TIME	DEQUEUED EVENTS	EVENT_COUNT	IO_EVENT_COUNT
++#	#	#	#	#	#	#	#	#	#	#	#	#	#	#	#
++SELECT * FROM information_schema.thread_pool_stats LIMIT 1;
++GROUP_ID	THREAD_CREATIONS	THREAD_CREATIONS_DUE_TO_STALL	WAKES	WAKES_DUE_TO_STALL	THROTTLES	STALLS	POLLS_BY_LISTENER	POLLS_BY_WORKER	DEQUEUES_BY_LISTENER	DEQUEUES_BY_WORKER	KICKUPS	THREAD_CREATIONS_QUEUE_PUT_CONNECTION	THREAD_CREATIONS_WAIT_BEGIN	THREAD_CREATIONS_SINGLE_LISTENER	THREAD_CREATION_ATTEMPTS	THREAD_REMOVES	CPU_TIMER	EVENTS_HANDLED_CUR
++#	#	#	#	#	#	#	#	#	#	#	#	#	#	#	#	#	#	#
++SELECT * FROM information_schema.thread_pool_queues LIMIT 1;
++GROUP_ID	POSITION	PRIORITY	CONNECTION_ID	QUEUEING_TIME_MICROSECONDS	QUEUEING_HTIME_MICROSECONDS	TICKETS	KICKUP
++SELECT * FROM information_schema.thread_pool_waits LIMIT 1;
++REASON	COUNT
++#	#
+diff --git a/plugin/threadpool/tests/mtr/thread_pool_information_table.test b/plugin/threadpool/tests/mtr/thread_pool_information_table.test
+new file mode 100644
+index 00000000000..8e7295e81cc
+--- /dev/null
++++ b/plugin/threadpool/tests/mtr/thread_pool_information_table.test
+@@ -0,0 +1,41 @@
++--source include/have_pool_of_threads.inc
++
++SET @orig_threadpool_enabled = @@threadpool_enabled;
++
++--replace_column 1 # 2 # 3 # 4 # 5 # 6 # 7 # 8 # 9 # 10 # 11 # 12 # 13 # 14 # 15 # 16 #
++SELECT * FROM information_schema.thread_pool_groups LIMIT 1;
++
++--replace_column 1 # 2 # 3 # 4 # 5 # 6 # 7 # 8 # 9 # 10 # 11 # 12 # 13 # 14 # 15 # 16 # 17 # 18 # 19 #
++SELECT * FROM information_schema.thread_pool_stats LIMIT 1;
++
++--replace_column 1 # 2 # 3 # 4 # 5 # 6 # 7 # 8 #
++SELECT * FROM information_schema.thread_pool_queues LIMIT 1;
++
++--replace_column 1 # 2 #
++SELECT * FROM information_schema.thread_pool_waits LIMIT 1;
++
++# disable threadpool thren query information table
++SET GLOBAL threadpool_enabled = OFF;
++SHOW GLOBAL VARIABLES LIKE "threadpool_enabled";
++
++SELECT * FROM information_schema.thread_pool_groups;
++
++SELECT * FROM information_schema.thread_pool_stats;
++
++SELECT * FROM information_schema.thread_pool_queues;
++
++SELECT * FROM information_schema.thread_pool_waits;
++
++SET GLOBAL threadpool_enabled = @orig_threadpool_enabled;
++
++--replace_column 1 # 2 # 3 # 4 # 5 # 6 # 7 # 8 # 9 # 10 # 11 # 12 # 13 # 14 # 15 # 16 #
++SELECT * FROM information_schema.thread_pool_groups LIMIT 1;
++
++--replace_column 1 # 2 # 3 # 4 # 5 # 6 # 7 # 8 # 9 # 10 # 11 # 12 # 13 # 14 # 15 # 16 # 17 # 18 # 19 #
++SELECT * FROM information_schema.thread_pool_stats LIMIT 1;
++
++--replace_column 1 # 2 # 3 # 4 # 5 # 6 # 7 # 8 #
++SELECT * FROM information_schema.thread_pool_queues LIMIT 1;
++
++--replace_column 1 # 2 #
++SELECT * FROM information_schema.thread_pool_waits LIMIT 1;
+diff --git a/plugin/threadpool/tests/mtr/thread_pool_queues_information_table.result b/plugin/threadpool/tests/mtr/thread_pool_queues_information_table.result
+deleted file mode 100644
+index 534ad177508..00000000000
+--- a/plugin/threadpool/tests/mtr/thread_pool_queues_information_table.result
++++ /dev/null
+@@ -1,2 +0,0 @@
+-SELECT * FROM information_schema.thread_pool_queues LIMIT 1;
+-GROUP_ID	POSITION	PRIORITY	CONNECTION_ID	QUEUEING_TIME_MICROSECONDS	QUEUEING_HTIME_MICROSECONDS	TICKETS	KICKUP
+diff --git a/plugin/threadpool/tests/mtr/thread_pool_queues_information_table.test b/plugin/threadpool/tests/mtr/thread_pool_queues_information_table.test
+deleted file mode 100644
+index 3c8ee4b58ee..00000000000
+--- a/plugin/threadpool/tests/mtr/thread_pool_queues_information_table.test
++++ /dev/null
+@@ -1,4 +0,0 @@
+---source include/have_pool_of_threads.inc
+-
+---replace_column 1 # 2 # 3 # 4 # 5 # 6 # 7 # 8 #
+-SELECT * FROM information_schema.thread_pool_queues LIMIT 1;
+diff --git a/plugin/threadpool/tests/mtr/thread_pool_stats_information_table.result b/plugin/threadpool/tests/mtr/thread_pool_stats_information_table.result
+deleted file mode 100644
+index 763da1e7d3e..00000000000
+--- a/plugin/threadpool/tests/mtr/thread_pool_stats_information_table.result
++++ /dev/null
+@@ -1,3 +0,0 @@
+-SELECT * FROM information_schema.thread_pool_stats LIMIT 1;
+-GROUP_ID	THREAD_CREATIONS	THREAD_CREATIONS_DUE_TO_STALL	WAKES	WAKES_DUE_TO_STALL	THROTTLES	STALLS	POLLS_BY_LISTENER	POLLS_BY_WORKER	DEQUEUES_BY_LISTENER	DEQUEUES_BY_WORKER	KICKUPS	THREAD_CREATIONS_QUEUE_PUT_CONNECTION	THREAD_CREATIONS_WAIT_BEGIN	THREAD_CREATIONS_SINGLE_LISTENER	THREAD_CREATION_ATTEMPTS	THREAD_REMOVES	CPU_TIMER	EVENTS_HANDLED_CUR
+-#	#	#	#	#	#	#	#	#	#	#	#	#	#	#	#	#	#	#
+diff --git a/plugin/threadpool/tests/mtr/thread_pool_stats_information_table.test b/plugin/threadpool/tests/mtr/thread_pool_stats_information_table.test
+deleted file mode 100644
+index 182fbdbff10..00000000000
+--- a/plugin/threadpool/tests/mtr/thread_pool_stats_information_table.test
++++ /dev/null
+@@ -1,4 +0,0 @@
+---source include/have_pool_of_threads.inc
+-
+---replace_column 1 # 2 # 3 # 4 # 5 # 6 # 7 # 8 # 9 # 10 # 11 # 12 # 13 # 14 # 15 # 16 # 17 # 18 # 19 #
+-SELECT * FROM information_schema.thread_pool_stats LIMIT 1;
+diff --git a/plugin/threadpool/tests/mtr/thread_pool_waits_information_table.result b/plugin/threadpool/tests/mtr/thread_pool_waits_information_table.result
+deleted file mode 100644
+index d8da5f5d416..00000000000
+--- a/plugin/threadpool/tests/mtr/thread_pool_waits_information_table.result
++++ /dev/null
+@@ -1,3 +0,0 @@
+-SELECT * FROM information_schema.thread_pool_waits LIMIT 1;
+-REASON	COUNT
+-#	#
+diff --git a/plugin/threadpool/tests/mtr/thread_pool_waits_information_table.test b/plugin/threadpool/tests/mtr/thread_pool_waits_information_table.test
+deleted file mode 100644
+index 8aef432aa08..00000000000
+--- a/plugin/threadpool/tests/mtr/thread_pool_waits_information_table.test
++++ /dev/null
+@@ -1,4 +0,0 @@
+---source include/have_pool_of_threads.inc
+-
+---replace_column 1 # 2 #
+-SELECT * FROM information_schema.thread_pool_waits LIMIT 1;
+diff --git a/plugin/threadpool/threadpool_plugin.cc b/plugin/threadpool/threadpool_plugin.cc
+index 309dd8f5ec9..a231f327308 100644
+--- a/plugin/threadpool/threadpool_plugin.cc
++++ b/plugin/threadpool/threadpool_plugin.cc
+@@ -414,6 +414,13 @@ static int threadpool_plugin_deinit(void *p MY_ATTRIBUTE((unused))) {
+   DBUG_RETURN(0);
+ }
+ 
++/* check whether thread group is invalid, if so, we can
++ not access the status of threadpool
++ */
++static bool inline threadgroup_invalid() {
++  return !threadpool_enabled || !threadpool_running;
++}
++
+ static ST_FIELD_INFO groups_fields_info[] = {
+     {"GROUP_ID", 6, MYSQL_TYPE_LONG, 0, 0, 0, 0},
+     {"CONNECTIONS", 6, MYSQL_TYPE_LONG, 0, 0, 0, 0},
+@@ -434,6 +441,9 @@ static ST_FIELD_INFO groups_fields_info[] = {
+     {0, 0, MYSQL_TYPE_STRING, 0, 0, 0, 0}};
+ 
+ static int groups_fill_table(THD *thd, Table_ref *tables, Item *) {
++  if (threadgroup_invalid()) {
++    return 0;
++  }
+   TABLE *table = tables->table;
+   for (uint i = 0; i < MAX_THREAD_GROUPS && g_all_groups[i].pollfd != -1; i++) {
+     thread_group_t *group = &g_all_groups[i];
+@@ -506,6 +516,9 @@ typedef connection_queue_t::Iterator connection_queue_iterator;
+ @return 0 if success, non-zero otherwise
+ */
+ static int queues_fill_table(THD *thd, Table_ref *tables, Item *) {
++  if (threadgroup_invalid()) {
++    return 0;
++  }
+   TABLE *table = tables->table;
+   for (uint group_id = 0;
+        group_id < MAX_THREAD_GROUPS && g_all_groups[group_id].pollfd != -1;
+@@ -598,6 +611,9 @@ static ST_FIELD_INFO stats_fields_info[] = {
+ @return 0 if success, non-zero otherwise
+ */
+ static int stats_fill_table(THD *thd, Table_ref *tables, Item *) {
++  if (threadgroup_invalid()) {
++    return 0;
++  }
+   TABLE *table = tables->table;
+   for (uint i = 0; i < MAX_THREAD_GROUPS && g_all_groups[i].pollfd != -1; i++) {
+     table->field[0]->store(i, true);
+@@ -676,6 +692,9 @@ extern TP_atomic_counter tp_waits[THD_WAIT_LAST];
+ @return 0 if success, non-zero otherwise
+ */
+ static int waits_fill_table(THD *thd, Table_ref *tables, Item *) {
++  if (threadgroup_invalid()) {
++    return 0;
++  }
+   TABLE *table = tables->table;
+   for (uint i = 0; i < THD_WAIT_LAST; i++) {
+     table->field[0]->store(wait_reasons[i].str, wait_reasons[i].length,
+-- 
+2.23.0
+

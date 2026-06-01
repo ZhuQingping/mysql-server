@@ -1,0 +1,101 @@
+--source include/pq_test.inc
+--source include/big_test.inc
+--source include/count_sessions.inc
+SET @old_innodb_lock_wait_timeout = @@global.innodb_lock_wait_timeout;
+
+SET @@global.innodb_lock_wait_timeout = 1;
+SET @saved_pq_support_features_switch = @@session.pq_support_features_switch;
+set pq_support_features_switch='insert_select=off';
+--echo # Tests INSERT SELECT in parallel with tables large enough to use several workers
+--echo # It should not produce a .result-pq because the outputs are intended to be the same with and without pq
+
+
+CREATE TABLE t1 (c1 int,
+	c2 INT,
+	c3 INT);
+
+create table t2 (a int, b int);
+create table t3 (a int, b int, c int, index(a));
+create table t4 (a int, b int, c int, primary key (a));
+create table t5 (a int, b int, c int, UNIQUE(a));
+
+
+INSERT INTO t1(c1,c2, c3) VALUES
+	(1,2,3),
+	(2,4,5),
+	(3,6,7),
+	(4,8,9);
+
+INSERT INTO t1 SELECT  c1+1,c2+1,c3+1 FROM t1;
+INSERT INTO t1 SELECT  c1+1,c2+1,c3+1 FROM t1;
+INSERT INTO t1 SELECT  c1+1,c2+1,c3+1 FROM t1;
+INSERT INTO t1 SELECT  c1+1,c2+1,c3+1 FROM t1;
+INSERT INTO t1 SELECT  c1+1,c2+1,c3+1 FROM t1;
+INSERT INTO t1 SELECT  c1+1,c2+1,c3+1 FROM t1;
+INSERT INTO t1 SELECT  c1+1,c2+1,c3+1 FROM t1;
+INSERT INTO t1 SELECT  c1+1,c2+1,c3+1 FROM t1;
+INSERT INTO t1 SELECT  c1+1,c2+1,c3+1 FROM t1;
+INSERT INTO t1 SELECT  c1+1,c2+1,c3+1 FROM t1;
+
+select count(*) from t1;
+
+--echo # 
+set pq_support_features_switch='insert_select=on';
+SET parallel_default_dop=4; 
+
+INSERT INTO t2 select c1,c2 from t1;
+--echo # Instead of printing the whole table  - we use BIT_XOR and SUM on the columns 
+--echo # to check that inserted rows are the same from one run of 
+--echo # to the next ( with and without parallel query)
+select BIT_XOR(a) + SUM(a), BIT_XOR(b) + SUM(b) from t2;
+
+insert into t3 select * from t1;
+--echo # Instead of printing the whole table  - we use BIT_XOR and SUM on the columns 
+--echo # to check that inserted rows are the same from one run of 
+--echo # to the next ( with and without parallel query)
+select BIT_XOR(a) + SUM(a), BIT_XOR(b) + SUM(b), BIT_XOR(c) + SUM(c) from t3;
+
+--error ER_DUP_ENTRY
+insert into t4 select * from t1;
+
+--echo # Intensive use of the UPDATE
+insert into t5 select * from t1 ON DUPLICATE KEY UPDATE c=c+1;
+select * from t5;
+select count(*) from t5;
+select count(*) from t1;
+
+--echo # Check insertion follows PK order from selected-from table
+--echo # Instead of printing out the whole table, we take the sum of 
+--echo # the product between the PK column and another column.
+--echo # If there is a change in the ordering - it likely will pick it up
+create table t6(d int auto_increment,a int, b int, c int, primary key (d) );
+create table t7(d int ,a int, b int, c int, primary key (d) );
+
+set pq_support_features_switch='insert_select=off';
+insert into t6(a,b,c) select c1,c2,c3 from t1;
+insert into t7 select * from t6;
+set pq_support_features_switch='insert_select=on';
+create table t8 (d int, a int, b int, c int);
+insert into t8 select * from t7;
+select count(*),sum(d*a) from t8;
+drop table t2,t3,t4,t5,t6,t7,t8;
+
+create table t2 (a int, b int);
+create table t3 (a int, b int, c int, index(a));
+create table t4 (a int, b int, c int, primary key (a));
+
+alter table t1 ADD INDEX(c1);
+
+INSERT INTO t2 select c1,c2 from t1;
+select count(*),sum(a*b) from t2;
+
+insert into t3 select * from t1;
+select count(*),sum(a*b) from t3;
+
+--error ER_DUP_ENTRY
+insert into t4 select * from t1;
+
+SET @@global.innodb_lock_wait_timeout = @old_innodb_lock_wait_timeout;
+SET pq_support_features_switch = @saved_pq_support_features_switch;
+--source include/wait_until_count_sessions.inc
+drop table t1,t2,t3, t4;

@@ -1,0 +1,34 @@
+-- source include/have_debug.inc
+
+--echo # BUG2024081206862 : mysqld crash in debug mode. Native packages should not be included in stored procedure or function or trigger.
+ 
+delimiter |;
+--error ER_COMMIT_NOT_ALLOWED_IN_SF_OR_TRG
+CREATE FUNCTION func() RETURNS INT
+BEGIN
+  call mysql.dummy();
+  RETURN 0;
+END|
+ 
+--error ER_COMMIT_NOT_ALLOWED_IN_SF_OR_TRG
+CREATE FUNCTION func() RETURNS INT
+BEGIN
+  call mysql.dummy_3(1, 'huawei', 99.9);
+  RETURN 0;
+END|
+
+--error ER_COMMIT_NOT_ALLOWED_IN_SF_OR_TRG
+CREATE TRIGGER add_outline_after_insert
+    AFTER INSERT ON t1 FOR EACH ROW
+    BEGIN
+      call mysql.dummy();
+    END|
+ 
+--error ER_COMMIT_NOT_ALLOWED_IN_SF_OR_TRG
+CREATE TRIGGER show_outline_after_insert
+    AFTER INSERT ON t1 FOR EACH ROW
+    BEGIN
+      call mysql.dummy_3(2, 'amazon', 99.9);
+    END|
+ 
+delimiter ;|

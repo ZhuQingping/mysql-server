@@ -1,0 +1,123 @@
+# The first worker will not fetch any record from "const_table" while the second worker
+# read all records. However, the second worker can see the new inserted value (2) in t1.
+# This is unreasonable and will cause inconsistent read.
+SET @saved_parallel_dop= @@parallel_default_dop;
+SET @save_optimizer_switch= @@optimizer_switch;
+set optimizer_switch='block_nested_loop=off';
+set GLOBAL debug="+d, pq_skip_fetch_ctx";
+SET parallel_default_dop=2;
+create table t1 (id int);
+insert into t1 values (0), (1);
+EXPLAIN FORMAT=tree SELECT /*+PQ(const_table) */ t1.id FROM t1 JOIN (VALUES ROW(4), ROW(5), ROW(6), ROW(7)) AS const_table(a) ON TRUE;
+EXPLAIN
+-> Gather: 2 workers, parallel scan on const_table  (cost=3.4 rows=8)
+    -> Nested loop inner join  (cost=3.4 rows=4)
+        -> Table scan on t1  (cost=0.45 rows=2)
+        -> Parallel table scan on const_table  (cost=1.66..2.92 rows=2)
+            -> Materialize  (cost=0.4..0.4 rows=4)
+                -> Rows fetched before execution  (cost=0..0 rows=4)
+
+SET DEBUG_SYNC='pq_launch_worker_1 SIGNAL ready WAIT_FOR insert_data';
+SELECT /*+PQ(const_table) */ t1.id FROM t1 JOIN (VALUES ROW(4), ROW(5), ROW(6), ROW(7)) AS const_table(a) ON TRUE;
+SET DEBUG_SYNC='now WAIT_FOR ready';
+INSERT INTO t1 VALUES (2);
+SET DEBUG_SYNC='now SIGNAL insert_data';
+id
+0
+0
+0
+0
+1
+1
+1
+1
+SET GLOBAL debug="-d, pq_skip_fetch_ctx";
+SET parallel_default_dop=@saved_parallel_dop;
+DROP table t1;
+# when the outer query of derived table only contains one tmp table,
+# the cloned snapshot may be not freed and thus leading to memory leak.
+CREATE TABLE `t1` ( `master` int(10) unsigned NOT NULL default '0', `map` smallint(6) unsigned NOT NULL default '0', `slave` int(10) unsigned NOT NULL default '0', `access` int(10) unsigned NOT NULL default '0', UNIQUE KEY `access_u` (`master`,`map`,`slave`));
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO `t1` VALUES (1,0,0,700),(1,1,1,400),(1,5,5,400),(1,12,12,400),(1,12,32,400),(4,12,32,400);
+CREATE TABLE `t2` ( `id` int(10) unsigned NOT NULL default '0', `pid` int(10) unsigned NOT NULL default '0', `map` smallint(6) unsigned NOT NULL default '0', `level` tinyint(4) unsigned NOT NULL default '0', `title` varchar(255) default NULL, PRIMARY KEY  (`id`,`pid`,`map`), KEY `level` (`level`), KEY `id` (`id`,`map`)) ;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO `t2` VALUES (6,5,12,7,'a'),(12,0,0,7,'a'),(12,1,0,7,'a'),(12,5,5,7,'a'),(12,5,12,7,'a');
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+ANALYZE TABLE t2;
+Table	Op	Msg_type	Msg_text
+test.t2	analyze	status	OK
+EXPLAIN FORMAT=tree SELECT b.ac
+FROM   (SELECT (SELECT a.access
+FROM   t1 a
+WHERE  a.map = op.map
+AND a.slave = op.pid
+AND a.master = 1) ac
+FROM   t2 op
+WHERE  op.id = 12
+AND op.map = 0) b;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on b  (cost=1.75..3 rows=2)
+    -> Parallel table scan on b  (cost=3..3 rows=0.5)
+        -> Materialize  (cost=0.5..0.5 rows=2)
+            -> Gather: 4 workers, parallel scan on op  (cost=0.3 rows=2)
+                -> Parallel covering index lookup on op using id (id=12, map=0)  (cost=0.3 rows=0.5)
+            -> Select #3 (subquery in projection; dependent)
+                -> Single-row index lookup on a using access_u (master=1, map=op.map, slave=op.pid)  (cost=0.35 rows=1)
+
+Warnings:
+Note	1276	Field or reference 'test.op.map' of SELECT #3 was resolved in SELECT #2
+Note	1276	Field or reference 'test.op.pid' of SELECT #3 was resolved in SELECT #2
+SELECT b.ac
+FROM   (SELECT (SELECT a.access
+FROM   t1 a
+WHERE  a.map = op.map
+AND a.slave = op.pid
+AND a.master = 1) ac
+FROM   t2 op
+WHERE  op.id = 12
+AND op.map = 0) b;
+ac
+700
+NULL
+drop tables t1,t2;
+# BUG2023021603940 PQ assertion crash during transaction
+SET SESSION FORCE_PARALLEL_EXECUTE = 1;
+SET SESSION PARALLEL_COST_THRESHOLD = 0;
+SET SESSION PARALLEL_ROWS_THRESHOLD = 0;
+SET SESSION OPTIMIZER_SWITCH = 'subquery_to_derived=on';
+CREATE TABLE t0 (c0 BOOLEAN);
+START TRANSACTION;
+DELETE FROM t0;
+SELECT 1 FROM (SELECT 2) t0(c0);
+1
+1
+COMMIT;
+drop table t0;
+SET optimizer_switch=@save_optimizer_switch;
+# fix pq crash when pq worker copy read_view
+CREATE TABLE `t1` (`blob_col` blob);
+explain format=tree SELECT /*+ PQ(vtb) no_bnl() */ vtb.id_col FROM (VALUES ROW(1,3,5), ROW(2,4,6) order by 1,2,3 limit 1 offset 1) AS vtb(id_col,int_col,big_int_col) JOIN t1 B on true;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on vtb  (cost=1.01 rows=1)
+    -> Nested loop inner join  (cost=1.01 rows=0.25)
+        -> Table scan on B  (cost=0.35 rows=1)
+        -> Parallel table scan on vtb  (cost=2.6..2.6 rows=0.25)
+            -> Materialize  (cost=0.1..0.1 rows=1)
+                -> Limit/Offset: 1/1 row(s)  (cost=0..0 rows=1)
+                    -> Rows fetched before execution  (cost=0..0 rows=2)
+
+SELECT /*+ PQ(vtb) no_bnl() */ vtb.id_col FROM (VALUES ROW(1,3,5), ROW(2,4,6) order by 1,2,3 limit 1 offset 1) AS vtb(id_col,int_col,big_int_col) JOIN t1 B on true;
+id_col
+SELECT /*+ PQ(vtb) no_bnl() */ vtb.id_col FROM (VALUES ROW(1,3,5), ROW(2,4,6) order by 1,2,3 limit 1 offset 1) AS vtb(id_col,int_col,big_int_col) JOIN t1 B on true;
+id_col
+drop table t1;

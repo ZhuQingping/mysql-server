@@ -1,0 +1,35 @@
+CREATE TABLE `tbl_1` (
+`id_col` int NOT NULL AUTO_INCREMENT,
+`int_col` int DEFAULT NULL,
+`bigint_col` bigint NOT NULL,
+`char_col` char(4) DEFAULT NULL,
+`varbinary_col` varbinary(255) DEFAULT NULL,
+`enum_col` enum('aaa','bbb','ccc') DEFAULT NULL,
+PRIMARY KEY (`id_col`),
+KEY `ddm_bigint_col__id_col` (`bigint_col`,`id_col`),
+KEY `uniq_ndx_bigint_col` (`bigint_col`)
+) ENGINE=InnoDB;
+insert into tbl_1 values(79,84,92,'ab','a','aaa');
+insert into tbl_1 values(80,84,92,'ab','a','aaa');
+insert into tbl_1 values(81,84,92,'ab','d','aaa');
+insert into tbl_1 values(82,84,92,'ab','d','bbb');
+insert into tbl_1 values(83,84,92,'ab','d','ccc');
+analyze table tbl_1;
+Table	Op	Msg_type	Msg_text
+test.tbl_1	analyze	status	OK
+EXPLAIN FORMAT=TREE SELECT /*+ bnl(A) */ A.varbinary_col,B.int_col FROM tbl_1 A force index (ddm_bigint_col__id_col) LEFT JOIN tbl_1 B ON A.bigint_col=B.bigint_col WHERE B.enum_col >= 'ccc' OR B.char_col = 'ab' AND A.id_col <= 40;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on B  (...)
+    -> Nested loop inner join  (...)
+        -> Filter: (((B.enum_col >= 'ccc') or (B.char_col = 'ab')) and (B.bigint_col is not null))  (...)
+            -> Parallel table scan on B  (...)
+        -> Index lookup on A using ddm_bigint_col__id_col (bigint_col=B.bigint_col), with index condition: ((B.enum_col >= 'ccc') or ((B.char_col = 'ab') and (A.id_col <= 40)))  (...)
+
+SELECT /*+ bnl(A) */ A.varbinary_col,B.int_col FROM tbl_1 A force index (ddm_bigint_col__id_col) LEFT JOIN tbl_1 B ON A.bigint_col=B.bigint_col WHERE B.enum_col >= 'ccc' OR B.char_col = 'ab' AND A.id_col <= 40;
+varbinary_col	int_col
+a	84
+a	84
+d	84
+d	84
+d	84
+drop table tbl_1;

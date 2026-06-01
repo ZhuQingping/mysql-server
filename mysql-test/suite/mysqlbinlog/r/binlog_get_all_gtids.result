@@ -1,0 +1,153 @@
+DROP DATABASE IF EXISTS mtest;
+CREATE DATABASE mtest;
+USE mtest;
+RESET MASTER;
+FLUSH LOGS;
+SET @@SESSION.GTID_NEXT= 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1';
+CREATE TABLE test1(id INT);
+SET @@SESSION.GTID_NEXT=AUTOMATIC;
+FLUSH LOGS;
+SET @@SESSION.GTID_NEXT= 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1';
+CREATE TABLE test2(id INT);
+SET @@SESSION.GTID_NEXT= 'cccccccc-cccc-cccc-cccc-cccccccccccc:1';
+INSERT INTO test1 VALUES(1);
+SET @@SESSION.GTID_NEXT=AUTOMATIC;
+FLUSH LOGS;
+SET @@SESSION.GTID_NEXT= 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:2';
+begin;
+insert into test1 values(1);
+insert into test1 values(2);
+commit;
+SET @@SESSION.GTID_NEXT= 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:3';
+xa start '1';
+insert into  test1 values(3);
+xa end '1';
+xa prepare '1';
+# test empty gtids
+
+# test single gtids
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1
+# test multi gtids
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1
+#test xa prepare;
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1-3,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1
+SET @@SESSION.GTID_NEXT= 'cccccccc-cccc-cccc-cccc-cccccccccccc:2';
+xa commit '1';
+#test xa commit;
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1-3,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1-2
+SET @@SESSION.GTID_NEXT= 'cccccccc-cccc-cccc-cccc-cccccccccccc:3';
+xa start '1';
+insert into  test1 values(3);
+xa end '1';
+xa prepare '1';
+SET @@SESSION.GTID_NEXT= 'cccccccc-cccc-cccc-cccc-cccccccccccc:4';
+xa rollback '1';
+#test xa rollback;
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1-3,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1-4
+SET @@SESSION.GTID_NEXT=AUTOMATIC;
+set sql_log_bin=0;
+create table test3(id int)engine=myisam;
+set sql_log_bin=1;
+SET @@SESSION.GTID_NEXT= 'cccccccc-cccc-cccc-cccc-cccccccccccc:5';
+begin;
+insert into test3 values(1);
+commit;
+#test commit;
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1-3,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1-5
+SET @@SESSION.GTID_NEXT= 'cccccccc-cccc-cccc-cccc-cccccccccccc:6';
+alter table test2 add column b int;
+#test alter table;
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1-3,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1-6
+SET @@SESSION.GTID_NEXT= 'cccccccc-cccc-cccc-cccc-cccccccccccc:7';
+create table t select * from test1;
+#test create table select;
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1-3,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1-7
+SET @@SESSION.GTID_NEXT= 'cccccccc-cccc-cccc-cccc-cccccccccccc:8';
+OPTIMIZE TABLE t;
+Table	Op	Msg_type	Msg_text
+mtest.t	optimize	note	Table does not support optimize, doing recreate + analyze instead
+mtest.t	optimize	status	OK
+#test OPTIMIZE TABLE;
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1-3,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1-8
+SET @@SESSION.GTID_NEXT= 'cccccccc-cccc-cccc-cccc-cccccccccccc:9';
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+mtest.t	analyze	status	OK
+#test ANALYZE TABLE;
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1-3,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1-9
+SET @@SESSION.GTID_NEXT= 'cccccccc-cccc-cccc-cccc-cccccccccccc:10';
+flush engine logs;
+#test flush engine;
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1-3,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1-10
+SET @@SESSION.GTID_NEXT= 'cccccccc-cccc-cccc-cccc-cccccccccccc:11';
+create user 'test'@'%' identified by 'Hw@123456';
+#test create user;
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1-3,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1-11
+SET @@SESSION.GTID_NEXT= 'cccccccc-cccc-cccc-cccc-cccccccccccc:12';
+grant all ON *.* TO `test`@`%` WITH GRANT OPTION;
+#test grant;
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1-3,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1-12
+SET @@SESSION.GTID_NEXT= 'cccccccc-cccc-cccc-cccc-cccccccccccc:13';
+flush privileges;
+#test flush privileges;
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1-3,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1-13
+SET @@SESSION.GTID_NEXT= 'cccccccc-cccc-cccc-cccc-cccccccccccc:14';
+truncate table t;
+#test truncate table;
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1-3,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1-14
+SET @@SESSION.GTID_NEXT= 'cccccccc-cccc-cccc-cccc-cccccccccccc:15';
+drop table t;
+#test drop table;
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1-3,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1-15
+SET @@SESSION.GTID_NEXT=AUTOMATIC;
+FLUSH LOGS;
+SET @@SESSION.GTID_NEXT= 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:4';
+create database test1;
+#test create database
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1-4,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1-15
+SET @@SESSION.GTID_NEXT= 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:5';
+insert into test1 values(5);
+SET @@SESSION.GTID_NEXT= 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:6';
+insert into test1 values(6);
+SET @@SESSION.GTID_NEXT=AUTOMATIC;
+FLUSH LOGS;
+#test incomplete binlog
+aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1,
+bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1-5,
+cccccccc-cccc-cccc-cccc-cccccccccccc:1-15
+drop database test1;
+DROP DATABASE mtest;
+drop user test@'%';
+flush privileges;

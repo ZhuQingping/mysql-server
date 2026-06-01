@@ -1,0 +1,390 @@
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_setup.inc
+--enable_warnings
+
+# --echo ############################################################
+# --echo 一、 准备工作：创建测试环境。
+# --echo 二、 针对  SQLCOM_DROP_PROCEDURE 、 SQLCOM_CREATE_PROCEDURE 、 SQLCOM_ALTER_PROCEDURE  执行对应的 ddl 语句 。 
+# --echo 三、 在备机测查看dd信息，保证备机回放元数据的正确性。
+# --echo 四、 调用procedure。执行完后，进行全表扫描，供后面的新主机对比，保证回放功能正确。
+# --echo 五、 执行 switchover 。
+# --echo 六、 新主机进行全表扫描，与第四步进行对比，保证备机回放功能的正确性。
+# --echo 七、 使用回放出的procedure，并对回放出来的procedure进行操作(修改、删除)，保证回放出来的ddl可用性和可操作性。
+# --echo ############################################################
+
+--echo ############################################################
+--echo 一、Set up the test environment.
+--echo 二、Execute the corresponding DDL statements for SQLCOM_DROP_PROCEDURE, SQLCOM_CREATE_PROCEDURE, and SQLCOM_ALTER_PROCEDURE.
+--echo 三、Check the DD information on the standby node to ensure correct metadata replay.
+--echo 四、Invoke the procedures. After execution, perform a full table scan for later comparison on the new primary node to ensure the replay function works correctly.
+--echo 五、Perform a switchover.
+--echo 六、Perform a full table scan on the new primary node and compare the results with those from Step 4 to verify the correctness of the standby node replay function.
+--echo 七、Use the replayed procedures and perform operations (alter and drop) on them to ensure the availability and operability of the replayed DDL results.
+--echo ############################################################
+
+--echo #
+--echo # 一、Set up the test environment.
+--echo #
+--connection $node1
+CREATE DATABASE IF NOT EXISTS test_procedure_db 
+DEFAULT CHARACTER SET utf8mb4 
+DEFAULT COLLATE utf8mb4_general_ci;
+
+USE test_procedure_db;
+
+CREATE TABLE employees (
+    emp_id INT AUTO_INCREMENT PRIMARY KEY,
+    emp_name VARCHAR(100) NOT NULL,
+    department VARCHAR(50),
+    salary DECIMAL(10, 2),
+    hire_date DATE,
+    performance_rating INT DEFAULT 0,
+    status VARCHAR(20) DEFAULT 'ACTIVE'
+);
+
+CREATE TABLE departments (
+    dept_id INT AUTO_INCREMENT PRIMARY KEY,
+    dept_name VARCHAR(50) NOT NULL UNIQUE,
+    location VARCHAR(100),
+    budget DECIMAL(15, 2)
+);
+
+CREATE TABLE salary_history (
+    history_id INT AUTO_INCREMENT PRIMARY KEY,
+    emp_id INT,
+    old_salary DECIMAL(10, 2),
+    new_salary DECIMAL(10, 2),
+    change_reason VARCHAR(200),
+    changed_by VARCHAR(100),
+    changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO departments(dept_name, location, budget) VALUES
+('技术部', '北京', 1000000.00),
+('销售部', '上海', 500000.00),
+('人事部', '广州', 300000.00),
+('财务部', '深圳', 400000.00);
+
+INSERT INTO employees(emp_name, department, salary, hire_date, performance_rating) VALUES
+('张三', '技术部', 15000.00, '2020-01-15', 95),
+('李四', '技术部', 12000.00, '2020-03-20', 88),
+('王五', '销售部', 8000.00, '2021-05-10', 92),
+('赵六', '人事部', 10000.00, '2019-11-30', 85),
+('钱七', '销售部', 9000.00, '2022-02-14', 78),
+('孙八', '财务部', 11000.00, '2021-07-01', 90);
+
+--echo #
+--echo # 二、Execute the corresponding DDL statements for SQLCOM_DROP_PROCEDURE, SQLCOM_CREATE_PROCEDURE, and SQLCOM_ALTER_PROCEDURE.
+--echo #
+
+--echo #
+--echo # 1 SQLCOM_CREATE_PROCEDURE
+--echo #
+
+--echo # Create a stored procedure with an INOUT parameter: Adjust the salary
+DELIMITER $$;
+CREATE PROCEDURE sp_adjust_salary(
+    INOUT emp_id_param INT,
+    IN adjustment_percentage DECIMAL(5, 2),
+    OUT old_salary DECIMAL(10, 2),
+    OUT new_salary DECIMAL(10, 2),
+    OUT adjustment_amount DECIMAL(10, 2)
+)
+MODIFIES SQL DATA
+BEGIN
+    -- 获取当前薪资
+    SELECT salary INTO old_salary
+    FROM employees 
+    WHERE emp_id = emp_id_param;
+    
+    -- 计算新薪资
+    SET adjustment_amount = old_salary * (adjustment_percentage / 100);
+    SET new_salary = old_salary + adjustment_amount;
+    
+    -- 更新薪资
+    UPDATE employees 
+    SET salary = new_salary
+    WHERE emp_id = emp_id_param;
+    
+    -- 记录薪资历史
+    INSERT INTO salary_history(emp_id, old_salary, new_salary, change_reason, changed_by)
+    VALUES (emp_id_param, old_salary, new_salary, 
+            CONCAT('调薪比例: ', adjustment_percentage, '%'), 
+            CURRENT_USER());
+END$$
+DELIMITER ;$$
+
+
+--echo # Create a stored procedure with complex logic: Annual performance evaluation and salary adjustment
+DELIMITER $$;
+CREATE PROCEDURE sp_perform_annual_review(
+    IN dept_name_param VARCHAR(50),
+    IN base_increase_rate DECIMAL(5, 2),
+    IN high_perf_bonus_rate DECIMAL(5, 2)
+)
+MODIFIES SQL DATA
+COMMENT '执行年度评估并调整薪资'
+BEGIN
+    DECLARE done INT DEFAULT 0;
+    DECLARE v_emp_id INT;
+    DECLARE v_salary DECIMAL(10, 2);
+    DECLARE v_performance_rating INT;
+    DECLARE v_new_salary DECIMAL(10, 2);
+    DECLARE v_adjustment DECIMAL(10, 2);
+    DECLARE v_old_salary DECIMAL(10, 2);
+    
+    -- 声明游标：获取部门内所有员工
+    DECLARE emp_cursor CURSOR FOR
+        SELECT emp_id, salary, performance_rating
+        FROM employees 
+        WHERE department = dept_name_param;
+    
+    -- 声明异常处理
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = 1;
+    
+    -- 打开游标
+    OPEN emp_cursor;
+    
+    emp_loop: LOOP
+        FETCH emp_cursor INTO v_emp_id, v_salary, v_performance_rating;
+        IF done = 1 THEN
+            LEAVE emp_loop;
+        END IF;
+        
+        -- 计算调整金额
+        SET v_old_salary = v_salary;
+        SET v_adjustment = v_salary * (base_increase_rate / 100);
+        
+        -- 高绩效额外奖励
+        IF v_performance_rating >= 90 THEN
+            SET v_adjustment = v_adjustment + (v_salary * (high_perf_bonus_rate / 100));
+        END IF;
+        
+        SET v_new_salary = v_old_salary + v_adjustment;
+        
+        -- 更新员工薪资
+        UPDATE employees 
+        SET salary = v_new_salary
+        WHERE emp_id = v_emp_id;
+        
+        -- 记录历史
+        INSERT INTO salary_history(emp_id, old_salary, new_salary, change_reason, changed_by)
+        VALUES (v_emp_id, v_old_salary, v_new_salary,
+                CONCAT('年度评估调薪, 绩效分: ', v_performance_rating),
+                CURRENT_USER());
+    END LOOP;
+    
+    CLOSE emp_cursor;
+
+    -- 输出结果
+    SELECT 
+        dept_name_param AS department,
+        base_increase_rate AS base_rate,
+        high_perf_bonus_rate AS bonus_rate,
+        '年度评估完成' AS status;
+END$$
+DELIMITER ;$$
+
+--echo # Create a test stored procedure to be dropped
+DELIMITER $$;
+CREATE PROCEDURE sp_test_for_deletion()
+BEGIN
+    SELECT 'This procedure will be deleted' AS message;
+END$$
+DELIMITER ;$$
+
+--echo #
+--echo # 2 SQLCOM_ALTER_PROCEDURE
+--echo #
+ALTER PROCEDURE sp_adjust_salary
+SQL SECURITY INVOKER
+COMMENT '调整员工薪资（修改为INVOKER安全模式）';
+
+ALTER PROCEDURE sp_perform_annual_review
+COMMENT '年度评估调薪过程（已更新注释）'
+SQL SECURITY INVOKER;
+
+--echo #
+--echo # 3 SQLCOM_DROP_PROCEDURE
+--echo #
+DROP PROCEDURE IF EXISTS sp_test_for_deletion;
+
+--echo # View the stored procedure metadata on the primary node
+SELECT 
+    ROUTINE_NAME,
+    ROUTINE_TYPE,
+    DATA_TYPE,
+    IS_DETERMINISTIC,
+    SQL_DATA_ACCESS,
+    SECURITY_TYPE,
+    ROUTINE_COMMENT
+    # CREATED,
+    # LAST_ALTERED
+FROM INFORMATION_SCHEMA.ROUTINES 
+WHERE ROUTINE_SCHEMA = 'test_procedure_db'
+  AND ROUTINE_TYPE = 'PROCEDURE'
+ORDER BY ROUTINE_NAME;
+
+--echo #
+--echo # 三、Check the DD information on the standby node to ensure correct metadata replay.
+--echo #
+
+--sleep 2
+--connection $node2
+USE test_procedure_db;
+
+--echo # View the stored procedure metadata on the standby node
+SELECT 
+    ROUTINE_NAME,
+    ROUTINE_TYPE,
+    DATA_TYPE,
+    IS_DETERMINISTIC,
+    SQL_DATA_ACCESS,
+    SECURITY_TYPE,
+    ROUTINE_COMMENT
+    # CREATED,
+    # LAST_ALTERED
+FROM INFORMATION_SCHEMA.ROUTINES 
+WHERE ROUTINE_SCHEMA = 'test_procedure_db'
+  AND ROUTINE_TYPE = 'PROCEDURE'
+ORDER BY ROUTINE_NAME;
+
+--echo # View the stored procedure parameter information
+SELECT 
+    SPECIFIC_NAME,
+    PARAMETER_NAME,
+    ORDINAL_POSITION,
+    PARAMETER_MODE,
+    DATA_TYPE,
+    CHARACTER_MAXIMUM_LENGTH,
+    NUMERIC_PRECISION,
+    NUMERIC_SCALE
+FROM INFORMATION_SCHEMA.PARAMETERS 
+WHERE SPECIFIC_SCHEMA = 'test_procedure_db'
+ORDER BY SPECIFIC_NAME, ORDINAL_POSITION;
+
+--echo #
+--echo # 四、Invoke the procedures. After execution, perform a full table scan for later comparison on the new primary node to ensure the replay function works correctly.
+--echo #
+
+--connection $node1
+USE test_procedure_db;
+
+--echo # 1 Call the stored procedure with INOUT parameters
+SET @emp_id = 1;
+SET @adjustment_percent = 10.00;
+CALL sp_adjust_salary(@emp_id, @adjustment_percent, @old_salary, @new_salary, @adjust_amount);
+
+SELECT 
+    @emp_id AS employee_id,
+    @old_salary AS old_salary,
+    @new_salary AS new_salary,
+    @adjust_amount AS adjustment_amount,
+    @adjustment_percent AS adjustment_percent;
+
+--echo # 2 Call complex stored procedure to perform annual evaluation
+CALL sp_perform_annual_review('技术部', 5.00, 3.00);
+
+--echo # 3 Record the current data status (for comparison with the new primary node)
+SELECT 
+    emp_id,
+    emp_name,
+    department,
+    salary,
+    performance_rating
+FROM employees
+ORDER BY emp_id;
+
+SELECT 
+    emp_id,
+    old_salary,
+    new_salary,
+    change_reason,
+    changed_by
+    # changed_at
+FROM salary_history
+ORDER BY history_id;
+
+--echo #
+--echo # 五、Perform a switchover.
+--echo #
+
+--sleep 2
+--let $old_primary = $node1
+--let $old_standby = $node2
+--let $old_standby_port = $SERVER_MYPORT_2
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_switch.inc
+
+--echo #
+--echo # 六、Perform a full table scan on the new primary node and compare the results with those from Step 4 to verify the correctness of the standby node replay function.
+--echo #
+
+--connection $node2
+USE test_procedure_db;
+
+--echo # 1 Verify the stored procedure with INOUT parameters
+SET @emp_id = 2;
+SET @adjustment_percent = 8.50;
+
+CALL sp_adjust_salary(@emp_id, @adjustment_percent, @old_salary, @new_salary, @adjust_amount);
+
+SELECT 
+    @emp_id AS employee_id,
+    @old_salary AS old_salary,
+    @new_salary AS new_salary,
+    @adjust_amount AS adjustment_amount,
+    @adjustment_percent AS adjustment_percent;
+
+--echo # 2. Verify the complex stored procedure
+CALL sp_perform_annual_review('销售部', 4.50, 2.50);
+
+--echo # 3 Verify the consistency of the data tables
+SELECT 
+    emp_id,
+    emp_name,
+    department,
+    salary,
+    performance_rating
+FROM employees
+ORDER BY emp_id;
+
+SELECT 
+    emp_id,
+    old_salary,
+    new_salary,
+    change_reason,
+    changed_by
+    # changed_at
+FROM salary_history
+ORDER BY history_id;
+
+--echo #
+--echo # 七、Use the replayed procedures and perform operations (alter and drop) on them to ensure the availability and operability of the replayed DDL results.
+--echo #
+
+--echo # Perform operations on the replayed procedures
+ALTER PROCEDURE sp_adjust_salary
+COMMENT '调整员工薪资（在新主上再次修改注释）';
+
+DROP PROCEDURE IF EXISTS sp_perform_annual_review;
+
+--echo # 2 Verify whether the new standby node has synchronized the modifications
+--sleep 2
+--connection $node1
+SELECT 
+    ROUTINE_NAME,
+    ROUTINE_TYPE,
+    SECURITY_TYPE,
+    ROUTINE_COMMENT
+    # CREATED,
+    # LAST_ALTERED
+FROM INFORMATION_SCHEMA.ROUTINES 
+WHERE ROUTINE_SCHEMA = 'test_procedure_db'
+  AND ROUTINE_TYPE = 'PROCEDURE'
+ORDER BY ROUTINE_NAME;
+
+--disable_warnings
+--let $current_standby = $node1
+--let $current_primary = $node2
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_cleanup.inc
+--enable_warnings

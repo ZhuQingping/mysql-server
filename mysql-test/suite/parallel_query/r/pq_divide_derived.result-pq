@@ -1,0 +1,182 @@
+create database pq_test;
+use pq_test;
+SET @@optimizer_switch="derived_merge=off,derived_condition_pushdown=off";
+create table t1(
+id int primary key auto_increment,
+col1 varchar(100),
+col2 int
+)engine= innodb;
+show variables like 'force_parallel_execute';
+Variable_name	Value
+force_parallel_execute	ON
+flush status;
+select @@internal_tmp_mem_storage_engine;
+@@internal_tmp_mem_storage_engine
+TempTable
+explain select sum(prod) from (select t1.id*t2.id as prod from t1, t1 as t2) as derived;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	10000	100.00	Parallel execute (4 workers, .derived)
+1	SIMPLE	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	10000	100.00	NULL
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Parallel execute (4 workers, pq_test.t1)
+2	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	100	100.00	Using index
+2	SIMPLE	t2	NULL	index	NULL	PRIMARY	4	NULL	100	100.00	Using index; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select sum(`derived`.`prod`) AS `sum(prod)` from (/* select#2 */ select (`pq_test`.`t1`.`id` * `pq_test`.`t2`.`id`) AS `prod` from `pq_test`.`t1` join `pq_test`.`t1` `t2`) `derived`
+select sum(prod) from (select t1.id*t2.id as prod from t1, t1 as t2) as derived;
+sum(prod)
+25502500
+explain select sum(prod) from (select t1.id*t2.id as prod from t1, t1 as t2) as derived where prod=33;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<derived2>	NULL	ref	<auto_key0>	<auto_key0>	8	const	10	100.00	Using index
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Parallel execute (4 workers, pq_test.t1)
+2	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	100	100.00	Using index
+2	SIMPLE	t2	NULL	index	NULL	PRIMARY	4	NULL	100	100.00	Using index; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select sum(`derived`.`prod`) AS `sum(prod)` from (/* select#2 */ select (`pq_test`.`t1`.`id` * `pq_test`.`t2`.`id`) AS `prod` from `pq_test`.`t1` join `pq_test`.`t1` `t2`) `derived` where (`derived`.`prod` = 33)
+select sum(prod) from (select t1.id*t2.id as prod from t1, t1 as t2) as derived where prod=33;
+sum(prod)
+132
+show status like "Created_tmp_disk_tables";
+Variable_name	Value
+Created_tmp_disk_tables	0
+set internal_tmp_mem_storage_engine=MEMORY;
+explain select sum(prod) from (select t1.id*t2.id as prod from t1, t1 as t2) as derived;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	10000	100.00	NULL
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Parallel execute (4 workers, pq_test.t1)
+2	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	100	100.00	Using index
+2	SIMPLE	t2	NULL	index	NULL	PRIMARY	4	NULL	100	100.00	Using index; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select sum(`derived`.`prod`) AS `sum(prod)` from (/* select#2 */ select (`pq_test`.`t1`.`id` * `pq_test`.`t2`.`id`) AS `prod` from `pq_test`.`t1` join `pq_test`.`t1` `t2`) `derived`
+set internal_tmp_mem_storage_engine=default;
+set big_tables = 1;
+explain select sum(prod) from (select t1.id*t2.id as prod from t1, t1 as t2) as derived;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	10000	100.00	Parallel execute (4 workers, .derived)
+1	SIMPLE	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	10000	100.00	NULL
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Parallel execute (4 workers, pq_test.t1)
+2	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	100	100.00	Using index
+2	SIMPLE	t2	NULL	index	NULL	PRIMARY	4	NULL	100	100.00	Using index; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select sum(`derived`.`prod`) AS `sum(prod)` from (/* select#2 */ select (`pq_test`.`t1`.`id` * `pq_test`.`t2`.`id`) AS `prod` from `pq_test`.`t1` join `pq_test`.`t1` `t2`) `derived`
+select sum(prod) from (select t1.id*t2.id as prod from t1, t1 as t2) as derived;
+sum(prod)
+25502500
+explain select sum(prod) from (select t1.id*t2.id as prod from t1, t1 as t2) as derived where prod=33;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	10	100.00	Parallel execute (4 workers, .derived)
+1	SIMPLE	<derived2>	NULL	ref	<auto_key0>	<auto_key0>	8	const	10	100.00	Using index
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Parallel execute (4 workers, pq_test.t1)
+2	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	100	100.00	Using index
+2	SIMPLE	t2	NULL	index	NULL	PRIMARY	4	NULL	100	100.00	Using index; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select sum(`derived`.`prod`) AS `sum(prod)` from (/* select#2 */ select (`pq_test`.`t1`.`id` * `pq_test`.`t2`.`id`) AS `prod` from `pq_test`.`t1` join `pq_test`.`t1` `t2`) `derived` where (`derived`.`prod` = 33)
+select sum(prod) from (select t1.id*t2.id as prod from t1, t1 as t2) as derived where prod=33;
+sum(prod)
+132
+create table t0(id int);
+insert t0 values(33),(-1);
+explain select /*+ pq(derived) */ sum(prod) from
+t0 straight_join
+(select t1.id*t2.id as prod from t1, t1 as t2) as derived
+where derived.prod=t0.id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Parallel execute (4 workers, .derived)
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where
+1	SIMPLE	<derived2>	NULL	ref	<auto_key0>	<auto_key0>	8	pq_test.t0.id	100	100.00	Using where; Using index
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	100	100.00	Parallel execute (4 workers, pq_test.t1)
+2	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	100	100.00	Using index
+2	SIMPLE	t2	NULL	index	NULL	PRIMARY	4	NULL	100	100.00	Using index; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select /*+ PQ(`derived`@`select#1`) */ sum(`derived`.`prod`) AS `sum(prod)` from `pq_test`.`t0` straight_join (/* select#2 */ select (`pq_test`.`t1`.`id` * `pq_test`.`t2`.`id`) AS `prod` from `pq_test`.`t1` join `pq_test`.`t1` `t2`) `derived` where (`derived`.`prod` = `pq_test`.`t0`.`id`)
+select /*+ pq(derived) */ sum(prod) from
+t0 straight_join
+(select t1.id*t2.id as prod from t1, t1 as t2) as derived
+where derived.prod=t0.id;
+sum(prod)
+132
+show status like "Created_tmp_disk_tables";
+Variable_name	Value
+Created_tmp_disk_tables	15
+drop table t0;
+with qn1 as (select id, col2 from t1),
+qn2 as (select id, col2 from t1)
+select /*+ no_bnl() */ count(*) from qn1, qn2;
+count(*)
+10000
+drop table t1;
+create table t1(a int not null, b int not null, c int);
+insert into t1 values(1,2,3),(2,3,4);
+check table t1;
+Table	Op	Msg_type	Msg_text
+pq_test.t1	check	status	OK
+with qn as (select a, sum(b) as s from t1 group by a) select s from qn group by a;
+s
+2
+3
+drop table t1;
+# BUG2023032203662 PQ SEGV with big tables
+CREATE TABLE t0 (c0 INT);
+CREATE TABLE t1 (c1 INT);
+SET SESSION BIG_TABLES = 1;
+# Hash join with 't1' as build input and the materialized tmp
+# table 'x' as probe input. The build input is empty. So the probe input
+# will not be read by the worker; this used to crash then because the
+# worker calls ha_innobase::pq_worker_scan_end which was not robust
+# against a non-opened table (now it is).
+EXPLAIN FORMAT=TREE SELECT 1 FROM (SELECT 1 FROM t0 GROUP BY t0.c0) x(x) JOIN t1 ON t1.c1 = 1 GROUP BY t1.c1;
+EXPLAIN
+-> Group (no aggregates)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t1, x  (cost=*** rows=***)
+        -> Group (no aggregates)  (cost=*** rows=***)
+            -> Inner hash join, hash table shared by worker threads (no condition)  (cost=*** rows=***)
+                -> Parallel table scan on x  (cost=*** rows=***)
+                    -> Materialize  (cost=*** rows=***)
+                        -> Table scan on <temporary>  (cost=*** rows=***)
+                            -> Temporary table with deduplication  (cost=*** rows=***)
+                                -> Gather: 4 workers, parallel scan on t0  (cost=*** rows=***)
+                                    -> Table scan on <temporary>  (cost=*** rows=***)
+                                        -> Temporary table with deduplication  (cost=*** rows=***)
+                                            -> Parallel table scan on t0  (cost=*** rows=***)
+                -> Hash
+                    -> Filter: (t1.c1 = 1)  (cost=*** rows=***)
+                        -> Parallel table scan on t1  (cost=*** rows=***)
+
+SELECT 1 FROM (SELECT 1 FROM t0 GROUP BY t0.c0) x(x) JOIN t1 ON t1.c1 = 1 GROUP BY t1.c1;
+1
+SET SESSION BIG_TABLES = DEFAULT;
+# BUG2023080801757 assertion failure on reversed_access for derived table
+# With Temptable engine, no PQ on top level, as such table cannot be divided if not doing a full table scan
+EXPLAIN FORMAT=TREE SELECT 1 FROM ((SELECT pi() FROM t0) LIMIT 0 OFFSET 2) y(z) JOIN (SELECT 1) x(z) USING (z)
+ORDER BY y.z DESC;
+EXPLAIN
+-> Filter: (y.z = '1')  (cost=*** rows=***)
+    -> Covering index lookup on y using <auto_key0> (z='1') (reverse)  (cost=*** rows=***)
+        -> Materialize  (cost=*** rows=***)
+            -> Limit/Offset: 0/2 row(s)  (cost=*** rows=***)
+                -> Gather: 4 workers, parallel scan on t0  (cost=*** rows=***)
+                    -> Limit: 2 row(s)  (cost=*** rows=***)
+                        -> Parallel table scan on t0  (cost=*** rows=***)
+
+SELECT 1 FROM ((SELECT pi() FROM t0) LIMIT 0 OFFSET 2) y(z) JOIN (SELECT 1) x(z) USING (z)
+ORDER BY y.z DESC;
+1
+# With InnoDB engine, PQ
+SET SESSION BIG_TABLES = 1;
+EXPLAIN FORMAT=TREE SELECT 1 FROM ((SELECT pi() FROM t0) LIMIT 0 OFFSET 2) y(z) JOIN (SELECT 1) x(z) USING (z)
+ORDER BY y.z DESC;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on y  (cost=*** rows=***)
+    -> Filter: (y.z = x.z)  (cost=*** rows=***)
+        -> Parallel covering index lookup on y using <auto_key0> (z=x.z) (reverse)  (cost=*** rows=***)
+            -> Materialize  (cost=*** rows=***)
+                -> Limit/Offset: 0/2 row(s)  (cost=*** rows=***)
+                    -> Gather: 4 workers, parallel scan on t0  (cost=*** rows=***)
+                        -> Limit: 2 row(s)  (cost=*** rows=***)
+                            -> Parallel table scan on t0  (cost=*** rows=***)
+
+SELECT 1 FROM ((SELECT pi() FROM t0) LIMIT 0 OFFSET 2) y(z) JOIN (SELECT 1) x(z) USING (z)
+ORDER BY y.z DESC;
+1
+SET SESSION BIG_TABLES = DEFAULT;
+drop database pq_test;

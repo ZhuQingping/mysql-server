@@ -1,0 +1,118 @@
+--echo #  ------------------------------------------
+--echo # Test system variable: rds_sqlfilter_rules_max_count 
+--echo # The maximum number for sql filter rules that is allowed to be added.
+--echo # range [1, 1500], default 100.
+--echo #  ------------------------------------------
+
+--source ../include/sqlfilter_prepare.inc
+
+## Test case 1: check the default
+show variables like 'rds_sqlfilter_rules_max_count';
+select @@rds_sqlfilter_rules_max_count;
+
+## Test case 2: check the range of rds_sqlfilter_rules_max_count
+set global rds_sqlfilter_rules_max_count = 0;
+show variables like 'rds_sqlfilter_rules_max_count';
+set global rds_sqlfilter_rules_max_count = 1501;
+show variables like 'rds_sqlfilter_rules_max_count';
+set global rds_sqlfilter_rules_max_count = default;
+
+## Test case 3: rules number exceed the limit
+## procedure for add multiple rules
+delimiter |;
+create procedure add_rules(in num_rules int)
+begin
+    declare i int default 1;
+    declare key_str VARCHAR(1024) default "";
+    while i <= num_rules do
+        select concat('select~from~t~', i) into key_str;
+        call dbms_sqlfilter.add_sql_filter('SELECT', 10, key_str, "");
+        set i = i + 1;
+    end while;
+end|
+delimiter ;|
+
+## procedure for delete all sqlfilter rules
+delimiter |;
+create procedure delete_all_rules()
+begin
+    declare done int default 0;
+    declare item_id_to_delete bigint;
+    
+    declare cur cursor for select item_id from mysql.rds_sql_filter_rules;
+    declare continue handler for not found set done = 1;
+    
+    open cur;
+    
+    read_loop: loop
+        fetch cur into item_id_to_delete;
+        if done then
+            leave read_loop;
+        end if;
+        
+        call dbms_sqlfilter.delete_sql_filter(item_id_to_delete);
+    end loop;
+    
+    close cur;
+end|
+delimiter ;|
+
+## add 100 sqlfilter rules
+call add_rules(100);
+
+## validate the current number of rules
+select count(*) from mysql.rds_sql_filter_rules;
+
+## Test case 4: the error for rules number out of limit
+--error ER_SQLFILTER_PRIVILEGE_REQUIRED
+call dbms_sqlfilter.add_sql_filter('SELECT', 10, "select~from~t~101", "");
+select count(*) from mysql.rds_sql_filter_rules;
+
+## Test case 5: dynamically change the variable
+set global rds_sqlfilter_rules_max_count = 200;
+show variables like 'rds_sqlfilter_rules_max_count';
+
+## add more rules
+call add_rules(100);
+select count(*) from mysql.rds_sql_filter_rules;
+
+## Test case 6: re-add the rule after delete it
+call delete_one_sql_filter_rule(0);
+call dbms_sqlfilter.add_sql_filter('SELECT', 10, "select~from~t~1", "");
+select count(*) from mysql.rds_sql_filter_rules;
+
+## Test case 7: exceed the new limit(200)
+--error ER_SQLFILTER_PRIVILEGE_REQUIRED
+call dbms_sqlfilter.add_sql_filter('SELECT', 10, "select~from~t~201", "");
+select count(*) from mysql.rds_sql_filter_rules;
+
+## Test case 8: cleanup all sqlfilter rules
+call delete_all_rules();
+call dbms_sqlfilter.show_sql_filter();
+
+## Test case 9: the maximum rules number is small
+set global rds_sqlfilter_rules_max_count = 1;
+call dbms_sqlfilter.add_sql_filter('SELECT', 10, "select~from~t", "");
+--error ER_SQLFILTER_PRIVILEGE_REQUIRED
+call dbms_sqlfilter.add_sql_filter('SELECT', 10, "select~from~t~1", "");
+select count(*) from mysql.rds_sql_filter_rules;
+call delete_one_sql_filter_rule(0);
+
+## Test case 10: the upper boundary of maximum rules number
+set global rds_sqlfilter_rules_max_count = 1500;
+call add_rules(1500);
+--error ER_SQLFILTER_PRIVILEGE_REQUIRED
+call dbms_sqlfilter.add_sql_filter('SELECT', 10, "select~from~t~1", "");
+select count(*) from mysql.rds_sql_filter_rules;
+
+## cleanup
+set global rds_sqlfilter_rules_max_count = default;
+show variables like 'rds_sqlfilter_rules_max_count';
+
+call delete_all_rules();
+call dbms_sqlfilter.show_sql_filter();
+select count(*) from mysql.rds_sql_filter_rules;
+
+drop procedure add_rules;
+drop procedure delete_all_rules;
+--source ../include/sqlfilter_cleanup.inc

@@ -1,0 +1,97 @@
+--source include/not_have_only_dstore.inc
+# BUG2025031334647 range optimizer scanning too many index cells in TPC-C
+
+set default_storage_engine=innodb;
+create table t1 (a int primary key, b int);
+insert into t1 values (100,100);
+create table t2 (a int, key(a) );
+insert into t2 values (101),(102),(103),(104);
+
+analyze table t1,t2;
+
+explain format=tree select * from t1, t2 where t1.a=100 and t2.a>=t1.b-20 and t2.a<t1.b;
+select * from t1, t2 where t1.a=100 and t2.a>=t1.b-20 and t2.a<t1.b;
+
+# Similar case, but within an ON condition of a LEFT JOIN
+explain format=tree select * from (t1, t1 as t3) left join t2 on t2.a>=t1.b-20 and t2.a<t1.b where t1.a=100;
+
+drop table t1,t2;
+
+CREATE TABLE t0 (c0 INT NOT NULL, c1 INT NOT NULL PRIMARY KEY);
+CREATE TABLE t1 (a INT NOT NULL, b INT NOT NULL);
+--echo #
+--echo # BUG2025102514874: Debug assertion failure in function Item_typecast_unsigned::val_int
+--echo #
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON CAST(t0.c0 AS UNSIGNED) WHERE (NOT (t0.c1));
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON CAST(t0.c0 AS UNSIGNED) WHERE (NOT (t0.c1));
+
+--echo #
+--echo # BUG2025102416592: Debug assertion failure in function Item_typecast_signed::val_int
+--echo #
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON CAST(t0.c0 AS SIGNED) WHERE (NOT (t0.c1));
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON CAST(t0.c0 AS SIGNED) WHERE (NOT (t0.c1));
+
+--echo #
+--echo # Debug assertion failure in function Item_func_concat::val_str
+--echo #
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON CONCAT(t0.c0,'') WHERE (NOT (t0.c1));
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON CONCAT(t0.c0,'') WHERE (NOT (t0.c1));
+DROP TABLE t0,t1;
+ 
+--echo #
+--echo # BUG2025102514878: Debug assertion failure in function Item::null_return_str
+--echo #
+CREATE TABLE t0 (c0 INT PRIMARY KEY, c1 INT);
+CREATE ALGORITHM=TEMPTABLE VIEW v0(c0) AS select c0 from t0 where false;
+EXPLAIN SELECT v0.c0, t0.c0 FROM v0 LEFT JOIN t0 ON (BINARY(CASE 0 WHEN 1 THEN v0.c0 ELSE v0.c0 END));
+SELECT v0.c0 FROM v0 LEFT JOIN t0 ON (BINARY(CASE 0 WHEN 1 THEN v0.c0 ELSE v0.c0 END));
+DROP VIEW v0;
+DROP TABLE t0;
+
+--echo #
+--echo # Debug assertion failure in function Item_func_json_schema_valid::val_bool
+--echo #
+CREATE TABLE t0 (c0 INT NOT NULL, c1 INT NOT NULL PRIMARY KEY, c2 JSON NOT NULL);
+CREATE TABLE t1 (a INT NOT NULL, b INT NOT NULL); 
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON JSON_SCHEMA_VALID('{"type":"object"}',t0.c2) WHERE (NOT (t0.c1));
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON JSON_SCHEMA_VALID('{"type":"object"}',t0.c2) WHERE (NOT (t0.c1));
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON JSON_VALUE(t0.c2, '$' RETURNING UNSIGNED) WHERE (NOT (t0.c1));
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON JSON_VALUE(t0.c2, '$' RETURNING UNSIGNED) WHERE (NOT (t0.c1));
+DROP TABLE t0,t1;
+
+CREATE TABLE t0 (c0 INT NOT NULL, c1 INT NOT NULL PRIMARY KEY, g GEOMETRY NOT NULL);
+CREATE TABLE t1 (a INT NOT NULL, b INT NOT NULL);
+--echo #
+--echo # Debug assertion failure in function Item_func_st_issimple::val_int
+--echo #
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_ISSIMPLE(g) WHERE (NOT (t0.c1));
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_ISSIMPLE(g) WHERE (NOT (t0.c1));
+
+--echo #
+--echo # Debug assertion failure in function Item_func_isvalid::val_int
+--echo #
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_ISVALID(g) WHERE (NOT (t0.c1));
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_ISVALID(g) WHERE (NOT (t0.c1));
+
+--echo #
+--echo # Debug assertion failure in function Item_func_coordinate_observer::val_real
+--echo #
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_LATITUDE(g) WHERE (NOT (t0.c1));
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_LATITUDE(g) WHERE (NOT (t0.c1));
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_LONGITUDE(g) WHERE (NOT (t0.c1));
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_LONGITUDE(g) WHERE (NOT (t0.c1));
+
+--echo #
+--echo # Debug assertion failure in function Item_func_st_srid_observer::val_int
+--echo #
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_SRID(g) WHERE (NOT (t0.c1));
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_SRID(g) WHERE (NOT (t0.c1));
+
+--echo #
+--echo # Debug assertion failure in function Item_func_st_distance_sphere::val_real
+--echo #
+EXPLAIN SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_DISTANCE_SPHERE(g,1,42) WHERE (NOT (t0.c1));
+SELECT t0.c0, t1.a FROM t0 LEFT JOIN t1 ON ST_DISTANCE_SPHERE(g,1,42) WHERE (NOT (t0.c1));
+
+DROP TABLE t0,t1;
+

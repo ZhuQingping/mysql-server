@@ -1,0 +1,39 @@
+SET @old_binlog_format=@@binlog_format;
+SET GLOBAL binlog_format='row';
+SET SESSION binlog_format='row';
+RESET MASTER;
+ON.000001
+DROP DATABASE IF EXISTS mergedb;
+CREATE DATABASE mergedb;
+USE mergedb;
+create table t1(id int);
+CREATE PROCEDURE `mergetest`()
+BEGIN
+DECLARE i INT;
+DECLARE tmp INT;
+SET i = 0;
+WHILE i<20 DO
+SET @csql =CONCAT('insert into t1 values(',i,');');
+SET i = i+1;
+PREPARE create_stmt FROM @csql;
+EXECUTE create_stmt;
+END WHILE;
+END$$
+call mergetest;
+"original size of the file"
+ON.000001
+ON.000001.merged
+flush logs;
+call mergetest;
+# restart
+use mergedb;
+select count(*) from t1;
+count(*)
+40
+reset master;
+DROP DATABASE IF EXISTS mergedb;
+use mergedb;
+select count(*) from t1;
+count(*)
+40
+DROP DATABASE mergedb;

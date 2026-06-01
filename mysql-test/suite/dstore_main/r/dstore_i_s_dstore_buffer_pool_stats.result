@@ -1,0 +1,103 @@
+DESCRIBE INFORMATION_SCHEMA.DSTORE_BUFFER_POOL_STATS;
+Field	Type	Null	Key	Default	Extra
+lru_partition_size	bigint unsigned	NO			
+pool_size	bigint unsigned	NO			
+candidate_buffers	bigint unsigned	NO			
+hot_database_pages	bigint unsigned	NO			
+lru_database_pages	bigint unsigned	NO			
+number_dirty_pages	bigint unsigned	NO			
+number_last_dirty_pages_remove	bigint unsigned	NO			
+number_last_dirty_pages_flush	bigint unsigned	NO			
+number_push_queue_total	bigint unsigned	NO			
+number_remove_queue_total	bigint unsigned	NO			
+dirty_pages_low_watermark	int unsigned	NO			
+dirty_pages_high_watermark	int unsigned	NO			
+current_disk_slave_writer_num	int unsigned	NO			
+current_flush_batch_num	bigint unsigned	NO			
+current_disk_master_writer_sleep_ms	int unsigned	NO			
+pages_made_hot	bigint unsigned	NO			
+pages_remove_hot	bigint unsigned	NO			
+pages_made_hot_rate	float(12,0)	NO			
+pages_remove_hot_rate	float(12,0)	NO			
+hot_make_per_thousand_gets	bigint unsigned	NO			
+hot_remove_per_thousand_gets	bigint unsigned	NO			
+pages_lru_add	bigint unsigned	NO			
+pages_lru_remove	bigint unsigned	NO			
+pages_lru_move	bigint unsigned	NO			
+pages_lru_add_rate	float(12,0)	NO			
+pages_lru_remove_rate	float(12,0)	NO			
+pages_lru_move_rate	float(12,0)	NO			
+pages_candidate_add	bigint unsigned	NO			
+pages_candidate_remove	bigint unsigned	NO			
+pages_candidate_miss	bigint unsigned	NO			
+pages_candidate_add_rate	float(12,0)	NO			
+pages_candidate_remove_rate	float(12,0)	NO			
+pages_candidate_miss_rate	float(12,0)	NO			
+number_pages_read	bigint unsigned	NO			
+number_pages_written	bigint unsigned	NO			
+numbers_buffers_alloc	bigint unsigned	NO			
+numbers_buffers_remove	bigint unsigned	NO			
+pages_read_rate	float(12,0)	NO			
+pages_written_rate	float(12,0)	NO			
+buffers_alloc_rate	float(12,0)	NO			
+buffers_remove_rate	float(12,0)	NO			
+number_pages_get	bigint unsigned	NO			
+number_pages_hit	bigint unsigned	NO			
+hit_rate	float(12,0)	NO			
+number_cr_buffers_alloc	bigint unsigned	NO			
+number_cr_buffers_build	bigint unsigned	NO			
+number_cr_buffers_reuse	bigint unsigned	NO			
+number_cr_buffers_get	bigint unsigned	NO			
+number_cr_buffers_hit	bigint unsigned	NO			
+cr_hit_rate	float(12,0)	NO			
+time_after_counter_reset	int unsigned	NO			
+number_pages_read_after_counter_reset	bigint unsigned	NO			
+average_read_latency_after_counter_reset_us	bigint unsigned	NO			
+min_read_latency_after_counter_reset_us	bigint unsigned	NO			
+max_read_latency_after_counter_reset_us	bigint unsigned	NO			
+number_pages_write_after_counter_reset	bigint unsigned	NO			
+average_write_latency_after_counter_reset_us	bigint unsigned	NO			
+min_write_latency_after_counter_reset_us	bigint unsigned	NO			
+max_write_latency_after_counter_reset_us	bigint unsigned	NO			
+DROP TABLE IF EXISTS sample_table;
+CREATE TABLE sample_table (
+id INT PRIMARY KEY AUTO_INCREMENT,
+number_column INT,
+string_column VARCHAR(100)
+) ENGINE=DSTORE;
+DROP PROCEDURE IF EXISTS insert_1000_rows;
+CREATE PROCEDURE insert_1000_rows()
+BEGIN
+DECLARE i INT DEFAULT 1;
+DECLARE sample_str VARCHAR(100) DEFAULT REPEAT('X', 100);
+DECLARE EXIT HANDLER FOR SQLEXCEPTION ROLLBACK;
+START TRANSACTION;
+WHILE i <= 1000 DO
+INSERT INTO sample_table (id, number_column, string_column) 
+VALUES (i, FLOOR(RAND()*1000), sample_str);
+SET i = i + 1;
+IF i % 100 = 0 THEN
+COMMIT;
+START TRANSACTION;
+END IF;
+END WHILE;
+COMMIT;
+END |
+DROP PROCEDURE IF EXISTS execute_queries;
+CREATE PROCEDURE execute_queries()
+BEGIN
+DECLARE dummy INT;
+SELECT COUNT(id) INTO dummy FROM sample_table WHERE id < 100;
+SELECT COUNT(id) INTO dummy FROM sample_table WHERE id > 900;
+SELECT COUNT(id) INTO dummy FROM sample_table;
+SELECT COUNT(number_column) INTO dummy FROM sample_table WHERE number_column < 500;
+SELECT COUNT(string_column) INTO dummy FROM sample_table;
+END |
+call insert_1000_rows();
+call execute_queries();
+SELECT count(*) FROM INFORMATION_SCHEMA.DSTORE_BUFFER_POOL_STATS;
+count(*)
+1
+DROP TABLE sample_table;
+DROP PROCEDURE insert_1000_rows;
+DROP PROCEDURE execute_queries;

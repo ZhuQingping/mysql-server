@@ -1,0 +1,184 @@
+
+# Initialise
+--disable_warnings
+drop table if exists t1,t2;
+--enable_warnings
+
+#
+# Testing of the <=> operator
+#
+
+#
+# First some simple tests
+#
+
+select 0<=>0,0.0<=>0.0,0E0=0E0,"A"<=>"A",NULL<=>NULL;
+select 1<=>0,0<=>NULL,NULL<=>0;
+select 1.0<=>0.0,0.0<=>NULL,NULL<=>0.0;
+select "A"<=>"B","A"<=>NULL,NULL<=>"A";
+select 0<=>0.0, 0.0<=>0E0, 0E0<=>"0", 10.0<=>1E1, 10<=>10.0, 10<=>1E1;
+select 1.0<=>0E1,10<=>NULL,NULL<=>0.0, NULL<=>0E0;
+
+#
+# Test with tables
+#
+
+create table t1 (id int, value int);
+create table t2 (id int, value int);
+
+insert into t1 values (1,null);
+insert into t2 values (1,null);
+
+select t1.*, t2.*, t1.value<=>t2.value from t1, t2 where t1.id=t2.id and t1.id=1;
+select * from t1 where id <=>id;
+select * from t1 where value <=> value;
+select * from t1 where id <=> value or value<=>id;
+drop table t1,t2;
+
+#
+# Bug #12612: quoted bigint unsigned value and the use of "in" in where clause
+#
+create table t1 (a bigint unsigned);
+insert into t1 values (4828532208463511553);
+select * from t1 where a = '4828532208463511553';
+select * from t1 where a in ('4828532208463511553');
+drop table t1;
+
+# End of 4.1 tests
+
+--echo # 33790919: Null-safe compare works incorrectly with TIMESTAMP in trigger
+
+CREATE TABLE t1(id INT, ts TIMESTAMP NULL DEFAULT NULL);
+INSERT INTO t1 VALUES (1, "2022-01-01"), (2, NULL), (NULL, "2022-01-01");
+
+delimiter //;
+CREATE TRIGGER tr_bi_check_uniqueness_with_nulls
+BEFORE INSERT ON t1 FOR EACH ROW
+BEGIN
+  IF EXISTS (SELECT * FROM t1 WHERE t1.id <=> NEW.id AND t1.ts <=> NEW.ts) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Duplicated values not allowed.';
+  END IF;
+END
+//
+delimiter ;//
+--error ER_SIGNAL_EXCEPTION
+INSERT INTO t1 VALUES (1,'2022-01-01');
+--error ER_SIGNAL_EXCEPTION
+INSERT INTO t1 VALUES (2, NULL);
+--error ER_SIGNAL_EXCEPTION
+INSERT INTO t1 VALUES (NULL,'2022-01-01');
+
+SELECT * FROM t1;
+
+DROP TABLE t1;
+
+#
+# BUG2023110202275
+#
+
+#prepare
+--disable_warnings
+DROP TABLE IF EXISTS `tb1`;
+--enable_warnings
+CREATE TABLE `tb1` (`double_col` double DEFAULT NULL, `bit_col` bit(8) DEFAULT b'0');
+
+--disable_warnings
+DROP TABLE IF EXISTS `tb2`;
+--enable_warnings
+CREATE TABLE `tb2` (`double_col` double DEFAULT NULL, `bit_col` bit(8) DEFAULT b'0');
+
+--disable_warnings
+DROP TABLE IF EXISTS `tb3`;
+--enable_warnings
+CREATE TABLE `tb3` (`double_col` double DEFAULT NULL, `bit_col` bit(8) DEFAULT b'0');
+
+insert into tb1(bit_col) values(0x00),(0xFF),(0xF0),(0xAA),(0x99);
+insert into tb2(bit_col) values(0x00),(0xFF),(0xF0),(0xAA),(0x99);
+insert into tb3(bit_col) values(0x00),(0xFF),(0xF0),(0xAA),(0x99);
+
+SELECT HEX(bit_col), double_col FROM (SELECT B.bit_col, B.double_col FROM tb1 A JOIN tb2 B GROUP BY 1,2
+       HAVING (B.double_col, B.bit_col) <=>
+       (SELECT double_col, bit_col FROM tb3 D WHERE D.bit_col NOT BETWEEN true AND D.double_col OR B.bit_col > D.double_col ORDER BY 1,2  LIMIT 1)
+       ORDER BY 1,2) AS subquery;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT B.bit_col, B.double_col FROM tb1 A JOIN tb2 B GROUP BY 1,2
+       HAVING (B.double_col, B.bit_col) <=>
+       (SELECT double_col, bit_col FROM tb3 D WHERE D.bit_col NOT BETWEEN true AND D.double_col OR B.bit_col > D.double_col ORDER BY 1,2  LIMIT 1)
+       ORDER BY 1,2;
+
+#clear
+DROP TABLE tb1;
+DROP TABLE tb2;
+DROP TABLE tb3;
+
+#
+# BUG2023102801376
+#
+#prepare
+--disable_warnings
+DROP TABLE IF EXISTS `ta`;
+--enable_warnings
+
+CREATE TABLE `ta` (
+  `time_col` time(6) DEFAULT NULL,
+  `datetime_col` datetime(6) DEFAULT NULL
+);
+
+INSERT INTO `ta` VALUES ('08:59:59.000000', '2001-05-09 00:00:00.000000');
+INSERT INTO `ta` VALUES ('10:59:59.000000', '2001-02-01 00:00:00.000000');
+INSERT INTO `ta` VALUES (NULL, '1995-09-02 13:20:00.000000');
+INSERT INTO `ta` VALUES (NULL, '1992-03-04 12:20:00.000000');
+INSERT INTO `ta` VALUES (NULL, '2008-10-02 13:20:00.000000');
+
+--disable_warnings
+DROP TABLE IF EXISTS `tb`;
+--enable_warnings
+
+CREATE TABLE `tb` (
+  `time_col` time(6) DEFAULT NULL,
+  `datetime_col` datetime(6) DEFAULT NULL
+);
+
+INSERT INTO `tb` VALUES (NULL, '2008-10-02 13:20:00.000000');
+INSERT INTO `tb` VALUES ('09:09:59.000000', '2001-03-02 00:00:00.000000');
+INSERT INTO `tb` VALUES ('24:59:59.000000', '1000-01-01 00:00:00.000000');
+INSERT INTO `tb` VALUES ('03:59:59.000000', '2012-11-09 00:00:00.000000');
+
+--disable_warnings
+DROP TABLE IF EXISTS `tc`;
+--enable_warnings
+
+CREATE TABLE `tc` (
+  `time_col` time(6) DEFAULT NULL,
+  `datetime_col` datetime(6) DEFAULT NULL
+);
+
+INSERT INTO `tc` VALUES (NULL, '1992-03-04 12:20:00.000000');
+INSERT INTO `tc` VALUES (NULL, '1995-09-02 13:20:00.000000');
+INSERT INTO `tc` VALUES (NULL, '1997-09-02 13:20:00.000000');
+INSERT INTO `tc` VALUES (NULL, '1998-09-02 13:20:00.000000');
+INSERT INTO `tc` VALUES (NULL, '1999-09-02 13:20:00.000000');
+INSERT INTO `tc` VALUES (NULL, '2008-10-02 13:20:00.000000');
+INSERT INTO `tc` VALUES ('08:59:59.000000', '2001-05-09 00:00:00.000000');
+INSERT INTO `tc` VALUES ('10:59:59.000000', '2001-02-01 00:00:00.000000');
+INSERT INTO `tc` VALUES ('20:59:59.000000', '2001-04-06 00:00:00.000000');
+INSERT INTO `tc` VALUES ('23:23:59.000000', '2001-01-01 00:00:00.000000');
+
+SELECT A.time_col as c1, A.datetime_col as c2, B.datetime_col as c4,
+      ((A.time_col, A.datetime_col) <=> (SELECT time_col, datetime_col FROM tc D WHERE B.datetime_col > D.datetime_col ORDER BY 1,2  LIMIT 1 OFFSET 5)) AS t
+      FROM ta A , tb B GROUP BY 1,2,3
+      HAVING (A.time_col, A.datetime_col) <=> (SELECT time_col, datetime_col FROM tc D WHERE B.datetime_col > D.datetime_col ORDER BY 1,2  LIMIT 1 OFFSET 5)
+      ORDER BY 1,2,3 LIMIT 10;
+
+--replace_column 10 # 11 #
+EXPLAIN SELECT A.time_col as c1, A.datetime_col as c4, B.time_col as c4, B.datetime_col as c4 FROM ta A LEFT JOIN tb B ON B.time_col IS NOT UNKNOWN
+      WHERE A.datetime_col IN ('2012-11-09 00:00:00.000000','2001-04-06 00:00:00.000000') XOR B.time_col NOT BETWEEN '02:59:59.000000' AND B.datetime_col
+      GROUP BY 1,2,3,4
+      HAVING (A.time_col, A.datetime_col) <=> (SELECT time_col, datetime_col FROM tc D WHERE A.time_col > D.time_col OR B.datetime_col > D.datetime_col ORDER BY 1  LIMIT 1 OFFSET 5)
+      ORDER BY 1,2,3,4 LIMIT 10;
+
+#clear
+DROP TABLE ta;
+DROP TABLE tb;
+DROP TABLE tc;

@@ -1,0 +1,173 @@
+call mtr.add_suppression("Local backup\: wal archiver is running");
+call mtr.add_suppression("failed to start wal archiver");
+call mtr.add_suppression("log archive path not configured");
+call mtr.add_suppression("start wal archive fail for pdb");
+call mtr.add_suppression("Plugin 'Dstore' will be forced to shutdown");
+call mtr.add_suppression("Plugin 'Dstore' has ref_count=[0-9]* after shutdown");
+call mtr.add_suppression("full backup found binlog is not enabled");
+create database full_backup_archive_restore;
+use full_backup_archive_restore;
+create table t1(s varchar(100)) engine=Dstore;
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+call rds_backup.stop_full_local_backup();
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+show status like "Rds_local_backup_last_full_backup_status";
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Success
+call rds_backup.start_log_archive();
+call rds_backup.start_log_archive();
+ERROR HY000: Local backup: wal archiver is already running
+create database ddl_test0;
+USE ddl_test0;
+CREATE TABLE t1 (id INT, name VARCHAR(20), mylob BLOB);
+CREATE TABLE t2 (id INT primary key auto_increment, name VARCHAR(20), mylob BLOB);
+ALTER DATABASE ddl_test0 CHARACTER SET = utf8mb4;
+DROP TABLE t2;
+drop database ddl_test0;
+CREATE DATABASE ddl_inplace_test0;
+CREATE DATABASE ddl_inplace_test1;
+USE ddl_inplace_test0;
+CREATE TABLE t1(c1 int)ENGINE=Dstore;
+ALTER TABLE t1 ADD INDEX idx(c1), RENAME TO ddl_inplace_test1.t2, ALGORITHM=INPLACE;
+USE ddl_inplace_test1;
+ALTER TABLE t2 RENAME INDEX idx TO idx2, ALGORITHM=INPLACE;
+ALTER TABLE t2 DROP INDEX idx2, ALGORITHM=INPLACE;
+ALTER TABLE t2 RENAME COLUMN c1 to c2, ALGORITHM=INPLACE;
+DROP DATABASE ddl_inplace_test0;
+DROP DATABASE ddl_inplace_test1;
+create database ddl_test1;
+USE ddl_test1;
+CREATE TABLE t1 (id INT, name VARCHAR(20), mylob BLOB);
+create table t_select charset utf8mb4 select if(1, 9223372036854775808, 1) i,case when 1 then 9223372036854775808 else 1 end c,coalesce(9223372036854775808, 1);
+CREATE INDEX idx1 ON t1(id);
+DROP INDEX idx1 ON t1;
+CREATE INDEX idx2 ON t1(name);
+ALTER TABLE t1 ADD COLUMN age INT;
+OPTIMIZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+ddl_test1.t1	optimize	note	Table does not support optimize, doing recreate + analyze instead
+ddl_test1.t1	optimize	status	OK
+TRUNCATE TABLE t1;
+RENAME TABLE t1 TO t2;
+CREATE VIEW v1 AS SELECT 1 AS col;
+DROP VIEW v1;
+CREATE VIEW v1 AS SELECT * FROM t2;
+CREATE FUNCTION hello() RETURNS INT DETERMINISTIC RETURN 1;
+DROP FUNCTION hello;
+CREATE FUNCTION hello() RETURNS INT DETERMINISTIC RETURN 100;
+CREATE PROCEDURE p1() BEGIN SELECT 1; END|
+DROP PROCEDURE p1;
+CREATE PROCEDURE p1() BEGIN SELECT 100; END|
+ALTER PROCEDURE p1 COMMENT 'modified';
+CREATE TABLE t3 (id INT);
+CREATE TRIGGER tr1 BEFORE INSERT ON t3 FOR EACH ROW SET NEW.id = 0;
+DROP TRIGGER tr1;
+CREATE TRIGGER tr1 BEFORE INSERT ON t3 FOR EACH ROW SET NEW.id = 100;
+CREATE EVENT e1 ON SCHEDULE EVERY 1 DAY DO DELETE FROM t3;
+DROP EVENT e1;
+CREATE EVENT e1 ON SCHEDULE EVERY 1 DAY DO DELETE FROM t3 WHERE id < 100;
+ALTER EVENT e1 DISABLE;
+CREATE USER 'testuser'@'localhost' IDENTIFIED BY 'password';
+CREATE USER 'testuser2'@'localhost' IDENTIFIED BY 'password';
+ALTER USER 'testuser'@'localhost' IDENTIFIED BY 'new_password';
+RENAME USER 'testuser'@'localhost' TO 'newuser'@'localhost';
+SET PASSWORD FOR 'newuser'@'localhost' = 'pass';
+DROP USER 'testuser2'@'localhost';
+CREATE ROLE 'role1';
+CREATE ROLE 'role2';
+GRANT 'role1' TO 'newuser'@'localhost';
+GRANT 'role2' TO 'root'@'localhost';
+DROP ROLE 'role2';
+CREATE ROLE 'role2';
+GRANT 'role2' TO 'newuser'@'localhost';
+GRANT SELECT ON ddl_test1.* TO 'role1';
+GRANT SELECT ON ddl_test1.* TO 'role2';
+REVOKE 'role2' FROM 'newuser'@'localhost';
+REVOKE SELECT ON ddl_test1.* FROM 'role2';
+ALTER USER 'newuser'@'localhost' DEFAULT ROLE 'role1';
+call rds_backup.stop_log_archive();
+# restart: --dstore_open_restore_mode=on
+select count(*) from mysql.ddl_info_replay_trace;
+count(*)
+61
+show tables;
+Tables_in_ddl_test1
+t2
+t3
+t_select
+v1
+show create view v1;
+View	Create View	character_set_client	collation_connection
+v1	CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `v1` AS select `t2`.`id` AS `id`,`t2`.`name` AS `name`,`t2`.`mylob` AS `mylob`,`t2`.`age` AS `age` from `t2`	utf8mb4	utf8mb4_0900_ai_ci
+select * from v1;
+id	name	mylob	age
+show create function hello;
+Function	sql_mode	Create Function	character_set_client	collation_connection	Database Collation
+hello	ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION	CREATE DEFINER=`root`@`localhost` FUNCTION `hello`() RETURNS int
+    DETERMINISTIC
+RETURN 100	utf8mb4	utf8mb4_0900_ai_ci	utf8mb4_0900_ai_ci
+SELECT hello();
+hello()
+100
+show create procedure p1;
+Procedure	sql_mode	Create Procedure	character_set_client	collation_connection	Database Collation
+p1	ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION	CREATE DEFINER=`root`@`localhost` PROCEDURE `p1`()
+    COMMENT 'modified'
+BEGIN SELECT 100; END	utf8mb4	utf8mb4_0900_ai_ci	utf8mb4_0900_ai_ci
+call p1;
+100
+100
+SELECT TRIGGER_CATALOG, TRIGGER_SCHEMA, TRIGGER_NAME, ACTION_STATEMENT, DEFINER FROM information_schema.TRIGGERS WHERE TRIGGER_NAME = 'tr1';
+TRIGGER_CATALOG	TRIGGER_SCHEMA	TRIGGER_NAME	ACTION_STATEMENT	DEFINER
+def	ddl_test1	tr1	SET NEW.id = 100	root@localhost
+INSERT INTO t3 (id) VALUES (5);
+SELECT * FROM t3;
+id
+100
+select EVENT_CATALOG, EVENT_SCHEMA, EVENT_NAME, EVENT_DEFINITION, STATUS from information_schema.EVENTS WHERE EVENT_SCHEMA = 'ddl_test1';
+EVENT_CATALOG	EVENT_SCHEMA	EVENT_NAME	EVENT_DEFINITION	STATUS
+def	ddl_test1	e1	DELETE FROM t3 WHERE id < 100	DISABLED
+select * from mysql.servers;
+Server_name	Host	Db	Username	Password	Port	Socket	Wrapper	Owner
+SELECT *  FROM INFORMATION_SCHEMA.RESOURCE_GROUPS WHERE RESOURCE_GROUP_NAME = 'rg1';
+RESOURCE_GROUP_NAME	RESOURCE_GROUP_TYPE	RESOURCE_GROUP_ENABLED	VCPU_IDS	THREAD_PRIORITY
+SHOW GRANTS FOR 'role1';
+Grants for role1@%
+GRANT USAGE ON *.* TO `role1`@`%`
+GRANT SELECT ON `ddl_test1`.* TO `role1`@`%`
+SHOW GRANTS FOR 'role2';
+Grants for role2@%
+GRANT USAGE ON *.* TO `role2`@`%`
+SHOW GRANTS FOR 'newuser'@'localhost';
+Grants for newuser@localhost
+GRANT USAGE ON *.* TO `newuser`@`localhost`
+GRANT `role1`@`%` TO `newuser`@`localhost`
+SELECT * FROM mysql.role_edges WHERE FROM_USER = 'role1';
+FROM_HOST	FROM_USER	TO_HOST	TO_USER	WITH_ADMIN_OPTION
+%	role1	localhost	newuser	N
+SELECT default_role_user FROM mysql.default_roles WHERE user = 'newuser' AND host = 'localhost';
+default_role_user
+role1
+DROP PROCEDURE p1;
+DROP TRIGGER tr1;
+REVOKE 'role1' FROM 'newuser'@'localhost';
+REVOKE SELECT ON ddl_test1.* FROM 'role1';
+DROP ROLE 'role1';
+DROP ROLE 'role2';
+DROP USER 'newuser'@'localhost';
+DROP FUNCTION hello;
+DROP EVENT e1;
+drop database ddl_test1;
+drop database full_backup_archive_restore;

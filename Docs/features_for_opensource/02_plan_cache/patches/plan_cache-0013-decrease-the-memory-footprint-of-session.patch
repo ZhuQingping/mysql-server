@@ -1,0 +1,2496 @@
+From fa355c8441892ceecd7d49337513d7bb2dd170b3 Mon Sep 17 00:00:00 2001
+From: Guilhem Bichot <guilhem.bichot@contributor>
+
+Date: Wed, 10 Sep 2025 15:06:02 +0200
+Subject: [PATCH] decrease the memory footprint of session
+ plan cache.
+
+This is the first commit of a series.
+
+Adding a status variable to show the number of invalidations of
+cached plans.
+
+Can be queried with
+SHOW STATUS LIKE "Cached_plan_invalidations"
+
+It is a global value (count of all invalidations of all connections
+since startup), like Cached_plan_count (count of all currently cached
+plans of all connections).
+
+This is useful to document what happens in mtr testing, and also when
+trying to understand performance issues in benchmarks.
+---
+ mysql-test/include/session_plan_cache.inc     |  25 ++-
+ mysql-test/r/session_plan_cache.result        | 185 ++++++++++++++++++
+ mysql-test/r/session_plan_cache_debug.result  |   7 +
+ .../dstore_main/r/session_plan_cache.result   | 175 +++++++++++++++++
+ .../r/session_plan_cache_debug.result         |   8 +
+ .../t/session_plan_cache_debug.test           |   3 +
+ mysql-test/t/session_plan_cache_debug.test    |   3 +
+ sql/mysqld.cc                                 |  10 +
+ sql/sql_plan_cache.cc                         |   2 +
+ sql/sql_plan_cache.h                          |   1 +
+ 10 files changed, 417 insertions(+), 2 deletions(-)
+
+diff --git a/mysql-test/include/session_plan_cache.inc b/mysql-test/include/session_plan_cache.inc
+index 3abe7d4875a..681f56e619a 100644
+--- a/mysql-test/include/session_plan_cache.inc
++++ b/mysql-test/include/session_plan_cache.inc
+@@ -2,10 +2,10 @@
+ --source include/count_sessions.inc
+ --source include/elide_costs.inc
+ 
+-# We will test "flush global status"; if mysqld has already executed some other mtr tests and they used plan cache, this status will contain effects from those other tests,
++# We will be displaying global status variables which FLUSH STATUS does not reset (Cached_plan_invalidations is of type SHOW_FUNC in mysqld.cc, and SHOW_FUNC variables are not reset, see reset_status_vars()); if mysqld has already executed some other mtr tests and they used plan cache, this status will contain effects from those other tests, so restart:
+ --source include/restart_mysqld.inc
+ 
+-# This helps with two things:
++# This SET below helps with two things:
+ # - there is OPTIMIZE TABLE in this test; if the auto-update runs at the same time we can get a deadlock error (as in BUGFIX)
+ # - the plan in explain_distinct_ranges is unstable, probably due to the auto-update.
+ set global dstore_use_histogram_auto_update=off;
+@@ -740,6 +740,7 @@ EXECUTE stmt USING @var1,@var2;
+ EXECUTE stmt USING @var1,@var2;
+ # SET ndp_mode = ON;
+ EXECUTE stmt USING @var1,@var2;
++show status like "cached_plan%";
+ DEALLOCATE PREPARE stmt;
+ SET rds_plan_cache = @old_plan_cache;
+ # SET ndp_row_filter_factor = @old_ndp_row_filter_factor;
+@@ -781,6 +782,8 @@ set @p='xv1e342cccc11qss';
+ set @q='tfs2fe56jmssstccccehRnADB8HU4C9eTl';
+ execute pd using @p,@q;
+ 
++show status like "cached_plan%";
++
+ # Full table scan + Impossible where_cond
+ --connection default
+ alter table bsc_erc1155_owner drop index idx_nft_unique_num;
+@@ -800,6 +803,8 @@ set @p='xv1e342cccc11qss';
+ set @q=1;
+ execute pd using @p,@q;
+ 
++show status like "cached_plan%";
++
+ --connection default
+ --disconnect con1
+ --disconnect con2
+@@ -829,6 +834,8 @@ set @p='fe';
+ set @q='2';
+ execute pd using @p,@q;
+ 
++show status like "cached_plan%";
++
+ drop table t1;
+ 
+ --echo # BUGFIX
+@@ -846,6 +853,7 @@ prepare stmt from "select blob_col from tbl1 a where a.decimal_col in (?,NULL) a
+ set @col1=-999.99;set @col2='iiiiiiiiii1';execute stmt using @col1,@col2;
+ set @col1=100.111;set @col2='jkj';execute stmt using @col1,@col2;
+ set @col1=NULL;set @col2='a';execute stmt using @col1,@col2;
++show status like "cached_plan%";
+ drop table tbl1;
+ 
+ --echo # BUGFIX
+@@ -864,6 +872,7 @@ insert into tbl1(decimal_col, char_col) values(99999999999999999999.99999, 'aaa2
+ prepare stmt from "select char_col, decimal_col from tbl1 A where A.char_col not like ? or A.decimal_col = ? order by 1,2";
+ set @col1='aacd%';set @col2=3.1415926;execute stmt using @col1,@col2;
+ set @col1='aabb%';set @col2=0.00000;execute stmt using @col1,@col2;
++show status like "cached_plan%";
+ drop table tbl1;
+ 
+ --echo # BUGFIX
+@@ -878,7 +887,9 @@ insert into tbl1 values(1,'02:59:59.000000'),(2,'00:00:00.000000'),(3,'24:59:59.
+ # If you want to study this test, first grep for BUGFIX further down.
+ prepare stmt from "SELECT time_col FROM tbl1 WHERE time_col = ? limit 10";
+ set @col3='02:59:59.000000';execute stmt USING @col3;
++# Note an invalidation here, because when we store this wrong TIME into the Index_lookup object, it causes an error.
+ set @col3='03:59:60.000000';execute stmt USING @col3;
++show status like "cached_plan%";
+ drop table tbl1;
+ 
+ --echo # BUGFIX Plan cache result in memory usage growth
+@@ -935,6 +946,7 @@ execute explain_tree_distinct_ranges using @a,@b;
+ --replace_column 10 #
+ execute explain_distinct_ranges using @a,@b;
+ execute distinct_ranges using @a,@b;
++show status like "cached_plan%";
+ set @a=400;
+ set @b=600;
+ # PLAN_CACHE_PORT On second execution, "using temporary; using
+@@ -953,12 +965,14 @@ execute explain_tree_distinct_ranges using @a,@b;
+ --replace_column 10 #
+ execute explain_distinct_ranges using @a,@b;
+ execute distinct_ranges using @a,@b;
++show status like "cached_plan%";
+ # test group by
+ prepare group_by_stmt from 'select count(*), t from t1 where t = ? group by t order by t desc';
+ set @arg1 = 'eleven';
+ execute group_by_stmt using @arg1;
+ execute group_by_stmt using @arg1;
+ execute group_by_stmt using @arg1;
++show status like "cached_plan%";
+ --enable_warnings
+ 
+ # cleanup
+@@ -988,8 +1002,12 @@ insert into sbtest1(smallint_col, time_col, binary_col) values(45, '05:59:59.000
+ 
+ prepare stmt from "select time_col, binary_col, smallint_col from sbtest1 A where A.time_col in (?,'14:00:30.000000',NULL) and A.smallint_col in (?,-2635,-32768,878) order by 1,2";
+ set @col1='05:59:59.000000';set @col2=45;execute stmt USING @col1,@col2;
++# Note an invalidation here, because the previous execution had two ranges in the range scan for time_col (because the first IN has two non-NULL values), whereas this execution has only one range (the first IN has one non-NULL value only), and reinit_qep_tab_properties() compares the number of ranges.
+ set @col1=NULL;set @col2=32767;execute stmt USING @col1,@col2;
++show status like "cached_plan%";
++# An invalidation, as we go from one range to two ranges, again:
+ set @col1='03:59:60.000000';set @col2=-32768;execute stmt USING @col1,@col2;
++show status like "cached_plan%";
+ drop table sbtest1;
+ deallocate prepare stmt;
+ 
+@@ -1038,6 +1056,8 @@ execute stmt USING @col2;
+ set @col2='12:59:59.000000';
+ execute stmt USING @col2;
+ 
++show status like "cached_plan%";
++
+ deallocate prepare stmt;
+ drop table test1;
+ }
+@@ -1059,6 +1079,7 @@ set rds_plan_cache = 1;
+ prepare stmt_sh1 from 'SELECT 1 FROM cols HAVING SUM(s1)=1';
+ execute stmt_sh1;
+ execute stmt_sh1;
++show status like "cached_plan%";
+ deallocate prepare stmt_sh1;
+ 
+ drop table cols, source;
+diff --git a/mysql-test/r/session_plan_cache.result b/mysql-test/r/session_plan_cache.result
+index dcb31eb3cc6..b1c39cd9e3f 100644
+--- a/mysql-test/r/session_plan_cache.result
++++ b/mysql-test/r/session_plan_cache.result
+@@ -29,6 +29,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	0
+ execute stmt using @a;
+ a	b
+ 2	two
+@@ -42,6 +43,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	0
+ flush status;
+ "test system table"
+ create table s_table(a int, b int) engine=heap;
+@@ -65,6 +67,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	0
+ insert into s_table values(1,2);
+ explain select * from s_table;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+@@ -79,6 +82,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	1
+ execute stmt;
+ a	b
+ 1	2
+@@ -87,6 +91,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	3
++Cached_plan_invalidations	1
+ flush status;
+ drop table s_table;
+ "test full table scan"
+@@ -113,6 +118,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	1
+ flush status;
+ "test ref table scan"
+ alter table t1 add index idx(b);
+@@ -135,6 +141,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	1
+ flush status;
+ "test range table scan"
+ explain select * from t1 where b > 't';
+@@ -160,6 +167,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	1
+ "Test that OPTIMIZE TABLE in another connection invalidates the plan"
+ set rds_plan_cache=on;
+ optimize table t1;
+@@ -175,10 +183,12 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	2
+ show global status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	11
++Cached_plan_invalidations	2
+ flush status;
+ "test index merge intersect"
+ alter table t1 add column c int default 2;
+@@ -207,6 +217,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	2
+ flush status;
+ "test index merge union"
+ explain select * from t1 where b = 'two' or c = 5;
+@@ -236,6 +247,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	2
+ flush status;
+ "test index skip scan"
+ "Skip scan is supported as we do not use pq_clone anymore"
+@@ -254,6 +266,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	2
+ flush status;
+ "test group by"
+ set @a = 'two';
+@@ -277,6 +290,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	2
+ flush status;
+ "don't support with-rollup"
+ prepare stmt from "select sum(a) from t1 where c > 1 group by b with rollup";
+@@ -300,6 +314,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	2
+ "test aggregation without GROUP BY"
+ prepare stmt from "select sum(b + ?), count(*) from t1";
+ execute stmt using @b;
+@@ -339,6 +354,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	2
+ flush status;
+ "test window function"
+ prepare stmt from 'select a, c, sum(a+c+?) over (rows unbounded preceding) foo from t1 order by foo desc';
+@@ -373,6 +389,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	2
+ flush status;
+ prepare stmt from 'select a, c, sum(a+c) over (rows between unbounded preceding and current row) foo from t1';
+ execute stmt;
+@@ -406,6 +423,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	2
+ flush status;
+ prepare stmt from 'select a, min(c), sum(c), sum(c) over (rows unbounded preceding) wf from t1 group by (a) order by wf desc';
+ execute stmt;
+@@ -439,6 +457,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	2
+ flush status;
+ "test order by"
+ drop table t1;
+@@ -462,6 +481,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	3
+ set @a=2;
+ execute stmt using @a;
+ a	b
+@@ -472,6 +492,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	3
+ flush status;
+ deallocate prepare stmt;
+ "test some special cases"
+@@ -489,6 +510,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	3
+ flush status;
+ drop table t1,t2;
+ deallocate prepare stmt;
+@@ -511,6 +533,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	3
+ flush status;
+ "test FOUND_ROWS"
+ create table t1 (id int);
+@@ -543,6 +566,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	3
+ insert into t1 values (1);
+ execute stmt;
+ id
+@@ -562,6 +586,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	3
+ flush status;
+ deallocate prepare stmt;
+ drop table t1;
+@@ -581,6 +606,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	3
+ flush status;
+ deallocate prepare stmt;
+ drop table t1;
+@@ -599,6 +625,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	3
+ set @b=3;
+ execute stmt using @a, @b;
+ a
+@@ -614,6 +641,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	3
++Cached_plan_invalidations	3
+ flush status;
+ "test BETWEEN ... AND with bigint"
+ set @a='111e9999';
+@@ -633,6 +661,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	4
+ flush status;
+ drop table t1;
+ deallocate prepare stmt;
+@@ -662,6 +691,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	4
+ flush status;
+ deallocate prepare stmt;
+ create table t1 (a int);
+@@ -674,6 +704,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	4
+ flush status;
+ "block subquery"
+ prepare stmt from "select * from t1 where 1 > (1 in (SELECT * FROM t1))";
+@@ -685,6 +716,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	4
+ drop table t1;
+ deallocate prepare stmt;
+ "Only support one table"
+@@ -705,6 +737,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	4
+ drop view v1;
+ drop table t1, t2;
+ deallocate prepare stmt;
+@@ -736,6 +769,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	5
+ "Change the range so that pruning does not occur => no invalidation."
+ flush status;
+ set @a=3;
+@@ -752,6 +786,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	6
+ flush status;
+ drop table t1;
+ deallocate prepare stmt;
+@@ -771,6 +806,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	6
+ flush status;
+ drop table t1;
+ select now() into @a;
+@@ -799,6 +835,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	6
+ flush status;
+ drop table t1;
+ More tests of "system" and "const" tables
+@@ -820,6 +857,7 @@ show status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	1
++Cached_plan_invalidations	6
+ drop table t1;
+ flush status;
+ create table t1(a int primary key, b int);
+@@ -840,6 +878,7 @@ show status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	1
++Cached_plan_invalidations	6
+ drop table t1;
+ flush status;
+ "block temporary table"
+@@ -853,6 +892,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	6
+ drop temporary table t1;
+ deallocate prepare stmt;
+ "test derived table"
+@@ -866,6 +906,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	1
++Cached_plan_invalidations	6
+ prepare stmt from "select * from (select a from t1 group by a) as tt";
+ execute stmt;
+ a
+@@ -875,6 +916,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	6
+ flush status;
+ drop table t1;
+ deallocate prepare stmt;
+@@ -893,6 +935,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	6
+ drop function f1;
+ deallocate prepare stmt;
+ drop table t1;
+@@ -921,6 +964,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	6
+ prepare stmt from
+ '(select a from t1) union all (select a+10 from t1) order by a';
+ execute stmt;
+@@ -943,6 +987,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	6
+ deallocate prepare stmt;
+ "invalid cached plan if table is changed"
+ prepare stmt from 'select * from t1 order by 1';
+@@ -960,6 +1005,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	1
++Cached_plan_invalidations	6
+ alter table t1 add column b int;
+ execute stmt;
+ a	b
+@@ -970,6 +1016,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	1
++Cached_plan_invalidations	7
+ "invalid cached plan if table records are changed sharply"
+ execute stmt;
+ a	b
+@@ -980,6 +1027,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	2
++Cached_plan_invalidations	7
+ select count(*) from t1;
+ count(*)
+ 3
+@@ -999,6 +1047,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	2
++Cached_plan_invalidations	8
+ "when rds_plan_cache_allow_change_ratio is 0, plan cache work even if table records are changed sharply"
+ select @@rds_plan_cache_allow_change_ratio;
+ @@rds_plan_cache_allow_change_ratio
+@@ -1015,6 +1064,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	3
++Cached_plan_invalidations	8
+ "table rows change from 5 rows to 20, plan cache work"
+ insert into t1 select * from t1;
+ insert into t1 select * from t1;
+@@ -1044,6 +1094,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	4
++Cached_plan_invalidations	8
+ set rds_plan_cache_allow_change_ratio = default;
+ select @@rds_plan_cache_allow_change_ratio;
+ @@rds_plan_cache_allow_change_ratio
+@@ -1078,6 +1129,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	8
+ flush status;
+ deallocate prepare stmt;
+ drop table tinytbl;
+@@ -1095,6 +1147,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	8
+ flush status;
+ drop table t1;
+ "BUGFIX: Ref scan with multiple Key parts can result in crash"
+@@ -1102,6 +1155,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	8
+ create table t1(a int, b int, c int, key(a, b, c));
+ insert into t1 values(1,2,3),(1,2,4),(3,2,6),(3,4,5);
+ explain select * from t1 where a = 1 and b = 2;
+@@ -1129,6 +1183,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	2
++Cached_plan_invalidations	8
+ create table t1(a int, b int);
+ insert into t1 values(1,2),(3,4);
+ prepare stmt from 'select * from t1 where a > ?';
+@@ -1274,6 +1329,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	2
++Cached_plan_invalidations	8
+ execute stmt using @a;
+ a	b
+ 3	4
+@@ -1281,6 +1337,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	3
++Cached_plan_invalidations	8
+ select * from information_schema.optimizer_trace;
+ QUERY	TRACE	MISSING_BYTES_BEYOND_MAX_MEM_SIZE	INSUFFICIENT_PRIVILEGES
+ select * from t1 where a > 1	{
+@@ -1638,6 +1695,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	4
++Cached_plan_invalidations	11
+ prepare stmt from 'select * from t1 lock in share mode';
+ execute stmt;
+ a	b
+@@ -1651,6 +1709,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	5
++Cached_plan_invalidations	11
+ drop table t1;
+ # BUGFIX
+ flush status;
+@@ -1659,6 +1718,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	0
++Cached_plan_invalidations	11
+ PREPARE p1 FROM 'SELECT 1 FROM t0 GROUP BY t0.c0, t0.c1';
+ EXECUTE p1;
+ 1
+@@ -1668,6 +1728,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	3
+ Cached_plan_hits	1
++Cached_plan_invalidations	11
+ DROP PREPARE p1;
+ drop table t0;
+ BUGFIX: Plan cache causes a incorrect result
+@@ -1683,6 +1744,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	0
++Cached_plan_invalidations	11
+ execute stmt;
+ decimal_col	time_col
+ Warnings:
+@@ -1691,6 +1753,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	1
++Cached_plan_invalidations	11
+ DROP TABLE t1;
+ deallocate prepare stmt;
+ BUGFIX: Virtual column cause a server crash for plan cache
+@@ -1747,12 +1810,14 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	11
+ execute stmt;
+ $json
+ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	11
+ DROP TABLE datalink_dataLink_0046;
+ deallocate prepare stmt;
+ set rds_plan_cache = @old_plan_cache;
+@@ -1783,6 +1848,11 @@ EXECUTE stmt USING @var1,@var2;
+ c
+ 38014276128-25250245652-62722561801-27818678124-24890218270-18312424692-92565570600-36243745486-21199862476-38576014630
+ 83868641912-28773972837-60736120486-75162659906-27563526494-20381887404-41576422241-93426793964-56405065102-33518432330
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	2
++Cached_plan_hits	2
++Cached_plan_invalidations	11
+ DEALLOCATE PREPARE stmt;
+ SET rds_plan_cache = @old_plan_cache;
+ DROP TABLE `sbtest`;
+@@ -1816,6 +1886,11 @@ set @q='tfs2fe56jmssstccccehRnADB8HU4C9eTl';
+ execute pd using @p,@q;
+ id
+ 1
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	2
++Cached_plan_hits	2
++Cached_plan_invalidations	11
+ alter table bsc_erc1155_owner drop index idx_nft_unique_num;
+ set rds_plan_cache=on;
+ prepare pd from "select id from bsc_erc1155_owner where nft_unique_num = ? and 1 = ?";
+@@ -1833,6 +1908,11 @@ set @q=1;
+ execute pd using @p,@q;
+ id
+ 1
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	2
++Cached_plan_hits	0
++Cached_plan_invalidations	11
+ drop table bsc_erc1155_owner;
+ create table t1 (
+ id bigint unsigned not null auto_increment,
+@@ -1855,6 +1935,11 @@ set @q='2';
+ execute pd using @p,@q;
+ id	col1	col2
+ 1	fe	2
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	2
++Cached_plan_hits	4
++Cached_plan_invalidations	11
+ drop table t1;
+ # BUGFIX
+ set rds_plan_cache=on;
+@@ -1879,6 +1964,11 @@ set @col1=NULL;
+ set @col2='a';
+ execute stmt using @col1,@col2;
+ blob_col
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	3
++Cached_plan_hits	6
++Cached_plan_invalidations	11
+ drop table tbl1;
+ # BUGFIX
+ set rds_plan_cache=on;
+@@ -1913,6 +2003,11 @@ aaaa	-99999999999999999999.99999
+ aabb	0.00000
+ aacd	-99999999999999999999.99999
+ ab	0.00000
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	2
++Cached_plan_hits	6
++Cached_plan_invalidations	11
+ drop table tbl1;
+ # BUGFIX
+ set rds_plan_cache=on;
+@@ -1936,6 +2031,11 @@ Warning	1292	Incorrect time value: '03:59:60.000000' for column 'time_col' at ro
+ Warning	1292	Incorrect time value: '03:59:60.000000' for column 'time_col' at row 1
+ Warning	1292	Incorrect time value: '03:59:60.000000' for column 'time_col' at row 1
+ Warning	1292	Truncated incorrect time value: '03:59:60.000000'
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	3
++Cached_plan_hits	6
++Cached_plan_invalidations	12
+ drop table tbl1;
+ # BUGFIX Plan cache result in memory usage growth
+ set rds_plan_cache=ON;
+@@ -1995,6 +2095,11 @@ c4ca4238a0b923820dcc509a6f75849bc4ca4238a0b923820dcc509a6f75849bc4ca4238a0b92382
+ c81e728d9d4c2f636f067f89cc14862cc81e728d9d4c2f636f067f89cc14862cc81e728d9d4c2f636f067f89cc14862cc81e728d9d4c2f636f067f89cc14862c
+ cfcd208495d565ef66e7dff9f98764dacfcd208495d565ef66e7dff9f98764dacfcd208495d565ef66e7dff9f98764dacfcd208495d565ef66e7dff9f98764da
+ eccbc87e4b5ce2fe28308fd9f2a7baf3eccbc87e4b5ce2fe28308fd9f2a7baf3eccbc87e4b5ce2fe28308fd9f2a7baf3eccbc87e4b5ce2fe28308fd9f2a7baf3
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	6
++Cached_plan_hits	6
++Cached_plan_invalidations	12
+ set @a=400;
+ set @b=600;
+ execute explain_tree_distinct_ranges using @a,@b;
+@@ -2035,6 +2140,11 @@ c4ca4238a0b923820dcc509a6f75849bc4ca4238a0b923820dcc509a6f75849bc4ca4238a0b92382
+ c81e728d9d4c2f636f067f89cc14862cc81e728d9d4c2f636f067f89cc14862cc81e728d9d4c2f636f067f89cc14862cc81e728d9d4c2f636f067f89cc14862c
+ cfcd208495d565ef66e7dff9f98764dacfcd208495d565ef66e7dff9f98764dacfcd208495d565ef66e7dff9f98764dacfcd208495d565ef66e7dff9f98764da
+ eccbc87e4b5ce2fe28308fd9f2a7baf3eccbc87e4b5ce2fe28308fd9f2a7baf3eccbc87e4b5ce2fe28308fd9f2a7baf3eccbc87e4b5ce2fe28308fd9f2a7baf3
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	6
++Cached_plan_hits	12
++Cached_plan_invalidations	12
+ prepare group_by_stmt from 'select count(*), t from t1 where t = ? group by t order by t desc';
+ set @arg1 = 'eleven';
+ execute group_by_stmt using @arg1;
+@@ -2046,6 +2156,11 @@ count(*)	t
+ execute group_by_stmt using @arg1;
+ count(*)	t
+ 3	eleven
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	7
++Cached_plan_hits	14
++Cached_plan_invalidations	12
+ drop table sbtest1;
+ drop table t1;
+ drop procedure insert_data;
+@@ -2081,6 +2196,11 @@ set @col1=NULL;
+ set @col2=32767;
+ execute stmt USING @col1,@col2;
+ time_col	binary_col	smallint_col
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	7
++Cached_plan_hits	14
++Cached_plan_invalidations	13
+ set @col1='03:59:60.000000';
+ set @col2=-32768;
+ execute stmt USING @col1,@col2;
+@@ -2088,6 +2208,11 @@ time_col	binary_col	smallint_col
+ Warnings:
+ Warning	1292	Incorrect time value: '03:59:60.000000' for column 'time_col' at row 1
+ Warning	1292	Incorrect time value: '03:59:60.000000' for column 'time_col' at row 1
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	7
++Cached_plan_hits	14
++Cached_plan_invalidations	14
+ drop table sbtest1;
+ deallocate prepare stmt;
+ # PQ refactor fix_field process
+@@ -2156,6 +2281,11 @@ llllllllll1	15:59:59.000000
+ llllllllll1	14:59:59.000000
+ llllllllll1	13:59:59.000000
+ lll2	00:00:00.000000
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	7
++Cached_plan_hits	15
++Cached_plan_invalidations	14
+ deallocate prepare stmt;
+ drop table test1;
+ CREATE TABLE cols(
+@@ -2177,6 +2307,11 @@ execute stmt_sh1;
+ execute stmt_sh1;
+ 1
+ 1
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	7
++Cached_plan_hits	16
++Cached_plan_invalidations	14
+ deallocate prepare stmt_sh1;
+ drop table cols, source;
+ # more tests following the porting to 8.0.41
+@@ -2191,6 +2326,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	14
+ create table t (vc varchar(100),
+ gc varchar(10) generated always as (reverse(vc)) stored,
+ key (gc(3)));
+@@ -2213,12 +2349,14 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	14
+ prepare s from "explain select * from t where reverse(vc) = 'cba'";
+ flush status;
+ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	14
+ execute s;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t	NULL	ref	gc	gc	15	const	#	100.00	Using where
+@@ -2233,12 +2371,14 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	14
+ prepare s from "select * from t where reverse(vc) = 'cba'";
+ flush status;
+ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	14
+ execute s;
+ vc	gc
+ abc	cba
+@@ -2249,6 +2389,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	14
+ drop table t;
+ create table t (vc varchar(100),
+ gc varchar(10) generated always as (reverse(vc)) stored,
+@@ -2273,6 +2414,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	14
+ prepare s from "explain format=tree select gc from t where reverse(vc)='a'";
+ flush status;
+ execute s;
+@@ -2287,6 +2429,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	14
+ prepare s from "select gc from t where reverse(vc)='a'";
+ flush status;
+ execute s;
+@@ -2299,6 +2442,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	14
+ drop table t;
+ create table t (a int, b int);
+ insert into t values (1,1),(1,2),(2,1),(2,2);
+@@ -2321,6 +2465,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	14
+ prepare s from "explain select * from t where a=b and a=1";
+ flush status;
+ execute s;
+@@ -2337,6 +2482,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	14
+ prepare s from "select * from t where a=b and a=1";
+ flush status;
+ execute s;
+@@ -2349,6 +2495,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	14
+ prepare s from "explain format=tree select * from t where a<b and a=1";
+ flush status;
+ execute s;
+@@ -2365,6 +2512,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	14
+ prepare s from "explain select * from t where a<b and a=1";
+ flush status;
+ execute s;
+@@ -2381,6 +2529,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	14
+ prepare s from "select * from t where a<b and a=1";
+ flush status;
+ execute s;
+@@ -2393,6 +2542,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	14
+ set @old_empty=@@rds_empty_redundant_check_in_range_scan;
+ set @@rds_empty_redundant_check_in_range_scan=false;
+ prepare s from "explain format=tree select * from t where (a+2)<b and a=1";
+@@ -2411,6 +2561,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	14
+ alter table t add key(b);
+ prepare s from "explain format=tree select * from t force index (b) where (a+2)<b and a=1";
+ flush status;
+@@ -2428,6 +2579,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	14
+ drop table t;
+ set @@rds_empty_redundant_check_in_range_scan=@old_empty;
+ create table t1 (s1 char(5) character set utf8 collate utf8_lithuanian_ci);
+@@ -2451,6 +2603,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	14
+ drop table t1;
+ CREATE TABLE dt_t (dt DATETIME, i INT);
+ prepare s from "EXPLAIN FORMAT=TREE SELECT * from dt_t WHERE dt_t.dt = dt_t.i";
+@@ -2469,6 +2622,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	14
+ DROP TABLE dt_t;
+ create table t2 (a tinyint unsigned, key(a));
+ insert into t2 values (0),(3),(255);
+@@ -2485,6 +2639,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	14
+ set @a=0;
+ execute s using @a;
+ a
+@@ -2493,6 +2648,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	14
+ prepare s from "select * from t2 where a=?";
+ flush status;
+ set @a=3;
+@@ -2503,6 +2659,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	14
+ set @a=1000;
+ execute s using @a;
+ a
+@@ -2510,6 +2667,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	15
+ set @a=1000;
+ execute s using @a;
+ a
+@@ -2517,6 +2675,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	15
+ set @a=3;
+ execute s using @a;
+ a
+@@ -2525,6 +2684,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	15
+ set @a=0;
+ execute s using @a;
+ a
+@@ -2533,6 +2693,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	15
+ set @a=1000;
+ execute s using @a;
+ a
+@@ -2540,6 +2701,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	15
+ drop table t2;
+ create table t1 
+ (
+@@ -2575,6 +2737,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	15
+ DROP TABLE t1;
+ CREATE TABLE t1 (a INT, b INT, KEY(a,b));
+ INSERT INTO t1 VALUES (1,1000), (1,1001), (1,2000),
+@@ -2594,6 +2757,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	16
+ show session status like "Com_stmt_reprepare";
+ Variable_name	Value
+ Com_stmt_reprepare	0
+@@ -2684,6 +2848,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	25
+ DROP TABLE t1;
+ CREATE TABLE t1(u TINYINT UNSIGNED);
+ INSERT INTO t1 VALUES (0), (3), (255), (NULL);
+@@ -2703,6 +2868,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	25
+ DROP TABLE t1;
+ CREATE TABLE t1(i TINYINT);
+ INSERT INTO t1 VALUES (10),(100),(1),(0),(NULL);
+@@ -2720,6 +2886,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	25
+ DROP TABLE t1;
+ DROP PREPARE s;
+ CREATE USER test@localhost;
+@@ -2742,6 +2909,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	25
+ COMMIT;
+ EXECUTE s;
+ a
+@@ -2754,6 +2922,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	3
++Cached_plan_invalidations	25
+ SELECT * FROM t1 WHERE a = 2 FOR UPDATE NOWAIT;
+ ERROR HY000: Statement aborted because lock(s) could not be acquired immediately and NOWAIT is set.
+ DROP TABLE t1;
+@@ -2793,6 +2962,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	6
++Cached_plan_invalidations	25
+ drop prepare s;
+ drop table t1;
+ #
+@@ -3079,6 +3249,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	10
++Cached_plan_invalidations	25
+ DROP PREPARE stmt1;
+ set @sql_text1='select sex,create_time,id,avg(id) over (order by create_time ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) as moving_avg_id from t_general_test_pk t order by sex,create_time;';
+ PREPARE stmt1 FROM @sql_text1;
+@@ -3308,6 +3479,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	12
++Cached_plan_invalidations	25
+ DROP PREPARE stmt1;
+ DROP TABLE t_general_test_pk;
+ #
+@@ -3391,6 +3563,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	4
+ Cached_plan_hits	20
++Cached_plan_invalidations	25
+ DROP PREPARE stmt1;
+ DROP TABLE t_general_test;
+ # Second problem in BUGFIX ('reverse' property of index access was lost)
+@@ -3430,6 +3603,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	22
++Cached_plan_invalidations	25
+ DROP PREPARE stmt;
+ DROP TABLE tbl_1_all_type2index_desc;
+ #
+@@ -3518,6 +3692,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	22
++Cached_plan_invalidations	26
+ DROP TABLE tbl_1_all_type2index_desc;
+ #
+ # BUGFIX while executing a prepared query including "order by int, tinytext", the second time using cached plan, mysqld will coredump.
+@@ -3554,6 +3729,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	25
++Cached_plan_invalidations	26
+ DEALLOCATE PREPARE stmt0;
+ DROP TABLE tbtest_part;
+ #
+@@ -3594,6 +3770,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	3
++Cached_plan_invalidations	26
+ DEALLOCATE PREPARE stmt0;
+ DROP TABLE tbtest_part;
+ #
+@@ -3638,6 +3815,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	26
+ set @enum_col0='i';
+ set @blob_col1='iii2';
+ set @bool_col2='NULL';
+@@ -3651,6 +3829,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	26
+ set @enum_col0='NULL';
+ set @blob_col1='a';
+ set @bool_col2='1901';
+@@ -3660,6 +3839,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	27
+ set @enum_col0='iii2';
+ set @blob_col1='a';
+ set @bool_col2='2020';
+@@ -3669,6 +3849,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	27
+ set @enum_col0='i';
+ set @blob_col1='iii2';
+ set @bool_col2='NULL';
+@@ -3682,6 +3863,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	27
+ set @enum_col0='NULL';
+ set @blob_col1='a';
+ set @bool_col2='1901';
+@@ -3691,6 +3873,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	28
+ drop prepare stmt;
+ drop table tbl_1_all_type2index_desc,tbl_3_all_typeindex_desc,tbl_1_all_typeindex_desc;
+ # BUGFIX [plan_cache][wrong result] after enable plan_cache, a query including a where subclause like "tinyblob_col IS NOT UNKNOWN AND int_col NOT BETWEEN ? AND ?" return the result set with wrong sort
+@@ -3760,6 +3943,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	28
+ DROP PREPARE stmt;
+ DROP TABLE t;
+ # BUGFIX after enable plan_cache, In the scenario where subqueries are nested and subqueries of the year type are queried, for debug pkg: mysqld will crash; for release pkg:the result is incorrect when the plan_cache feature is used for the second time.
+@@ -3786,6 +3970,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	3
++Cached_plan_invalidations	28
+ DROP PREPARE stmt;
+ DROP TABLE t;
+ set sql_mode=default;
+diff --git a/mysql-test/r/session_plan_cache_debug.result b/mysql-test/r/session_plan_cache_debug.result
+index c2cb19fcf97..9d7467834cf 100644
+--- a/mysql-test/r/session_plan_cache_debug.result
++++ b/mysql-test/r/session_plan_cache_debug.result
+@@ -1,3 +1,4 @@
++# restart
+ set rds_plan_cache=ON;
+ "test optimizer trace for plan cache"
+ flush status;
+@@ -5,6 +6,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	0
+ create table t1(a int, b int);
+ insert into t1 values(1,2),(3,4);
+ prepare stmt from 'select * from t1 where a > ?';
+@@ -17,6 +19,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	0
+ execute stmt using @a;
+ a	b
+ 3	4
+@@ -24,6 +27,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	0
+ set debug='+d,apply_cached_plan_fail';
+ execute stmt using @a;
+ a	b
+@@ -174,6 +178,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	1
+ set optimizer_trace='enabled=off';
+ drop table t1;
+ set debug='-d,apply_cached_plan_fail';
+@@ -270,6 +275,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	2
+ SET session debug="-d,pq_dup_tabs_error0";
+ PREPARE stmt FROM 'SELECT DISTINCT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY c';
+ EXECUTE stmt USING @n, @m;
+@@ -300,5 +306,6 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	2
+ DEALLOCATE PREPARE stmt;
+ DROP TABLE sbtest;
+diff --git a/mysql-test/suite/dstore_main/r/session_plan_cache.result b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+index f716050078e..415bd1d224c 100644
+--- a/mysql-test/suite/dstore_main/r/session_plan_cache.result
++++ b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+@@ -29,6 +29,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	0
+ execute stmt using @a;
+ a	b
+ 2	two
+@@ -42,6 +43,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	0
+ flush status;
+ "test system table"
+ create table s_table(a int, b int) engine=heap;
+@@ -65,6 +67,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	0
+ insert into s_table values(1,2);
+ explain select * from s_table;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+@@ -79,6 +82,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	1
+ execute stmt;
+ a	b
+ 1	2
+@@ -87,6 +91,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	3
++Cached_plan_invalidations	1
+ flush status;
+ drop table s_table;
+ "test full table scan"
+@@ -113,6 +118,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	1
+ flush status;
+ "test ref table scan"
+ alter table t1 add index idx(b);
+@@ -135,6 +141,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	1
+ flush status;
+ "test range table scan"
+ explain select * from t1 where b > 't';
+@@ -160,6 +167,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	1
+ "Test that OPTIMIZE TABLE in another connection invalidates the plan"
+ set rds_plan_cache=on;
+ optimize table t1;
+@@ -175,10 +183,12 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	2
+ show global status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	11
++Cached_plan_invalidations	2
+ flush status;
+ "test index merge intersect"
+ alter table t1 add column c int default 2;
+@@ -207,6 +217,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	2
+ flush status;
+ "test index merge union"
+ explain select * from t1 where b = 'two' or c = 5;
+@@ -236,6 +247,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	2
+ flush status;
+ "test index skip scan"
+ "Skip scan is supported as we do not use pq_clone anymore"
+@@ -254,6 +266,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	2
+ flush status;
+ "test group by"
+ set @a = 'two';
+@@ -277,6 +290,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	2
+ flush status;
+ "don't support with-rollup"
+ prepare stmt from "select sum(a) from t1 where c > 1 group by b with rollup";
+@@ -300,6 +314,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	2
+ "test aggregation without GROUP BY"
+ prepare stmt from "select sum(b + ?), count(*) from t1";
+ execute stmt using @b;
+@@ -339,6 +354,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	2
+ flush status;
+ "test window function"
+ prepare stmt from 'select a, c, sum(a+c+?) over (rows unbounded preceding) foo from t1 order by foo desc';
+@@ -373,6 +389,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	2
+ flush status;
+ prepare stmt from 'select a, c, sum(a+c) over (rows between unbounded preceding and current row) foo from t1';
+ execute stmt;
+@@ -406,6 +423,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	2
+ flush status;
+ prepare stmt from 'select a, min(c), sum(c), sum(c) over (rows unbounded preceding) wf from t1 group by (a) order by wf desc';
+ execute stmt;
+@@ -439,6 +457,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	2
+ flush status;
+ "test order by"
+ drop table t1;
+@@ -462,6 +481,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	3
+ set @a=2;
+ execute stmt using @a;
+ a	b
+@@ -472,6 +492,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	3
+ flush status;
+ deallocate prepare stmt;
+ "test some special cases"
+@@ -489,6 +510,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	3
+ flush status;
+ drop table t1,t2;
+ deallocate prepare stmt;
+@@ -511,6 +533,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	3
+ flush status;
+ "test FOUND_ROWS"
+ create table t1 (id int);
+@@ -543,6 +566,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	3
+ insert into t1 values (1);
+ execute stmt;
+ id
+@@ -562,6 +586,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	3
+ flush status;
+ deallocate prepare stmt;
+ drop table t1;
+@@ -581,6 +606,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	3
+ flush status;
+ deallocate prepare stmt;
+ drop table t1;
+@@ -599,6 +625,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	3
+ set @b=3;
+ execute stmt using @a, @b;
+ a
+@@ -614,6 +641,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	3
++Cached_plan_invalidations	3
+ flush status;
+ "test BETWEEN ... AND with bigint"
+ set @a='111e9999';
+@@ -633,6 +661,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	4
+ flush status;
+ drop table t1;
+ deallocate prepare stmt;
+@@ -662,6 +691,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	4
+ flush status;
+ deallocate prepare stmt;
+ create table t1 (a int);
+@@ -674,6 +704,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	4
+ flush status;
+ "block subquery"
+ prepare stmt from "select * from t1 where 1 > (1 in (SELECT * FROM t1))";
+@@ -685,6 +716,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	4
+ drop table t1;
+ deallocate prepare stmt;
+ "Only support one table"
+@@ -705,6 +737,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	4
+ drop view v1;
+ drop table t1, t2;
+ deallocate prepare stmt;
+@@ -724,6 +757,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	4
+ flush status;
+ drop table t1;
+ select now() into @a;
+@@ -752,6 +786,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	4
+ flush status;
+ drop table t1;
+ More tests of "system" and "const" tables
+@@ -773,6 +808,7 @@ show status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	1
++Cached_plan_invalidations	4
+ drop table t1;
+ flush status;
+ create table t1(a int primary key, b int);
+@@ -793,6 +829,7 @@ show status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	1
++Cached_plan_invalidations	4
+ drop table t1;
+ flush status;
+ "block temporary table"
+@@ -806,6 +843,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	4
+ drop temporary table t1;
+ deallocate prepare stmt;
+ "test derived table"
+@@ -819,6 +857,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	1
++Cached_plan_invalidations	4
+ prepare stmt from "select * from (select a from t1 group by a) as tt";
+ execute stmt;
+ a
+@@ -828,6 +867,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	4
+ flush status;
+ drop table t1;
+ deallocate prepare stmt;
+@@ -846,6 +886,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	4
+ drop function f1;
+ deallocate prepare stmt;
+ drop table t1;
+@@ -874,6 +915,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	4
+ prepare stmt from
+ '(select a from t1) union all (select a+10 from t1) order by a';
+ execute stmt;
+@@ -896,6 +938,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	4
+ deallocate prepare stmt;
+ "invalid cached plan if table is changed"
+ prepare stmt from 'select * from t1 order by 1';
+@@ -913,6 +956,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	1
++Cached_plan_invalidations	4
+ alter table t1 add column b int;
+ execute stmt;
+ a	b
+@@ -923,6 +967,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	1
++Cached_plan_invalidations	5
+ "invalid cached plan if table records are changed sharply"
+ execute stmt;
+ a	b
+@@ -933,6 +978,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	2
++Cached_plan_invalidations	5
+ select count(*) from t1;
+ count(*)
+ 3
+@@ -952,6 +998,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	2
++Cached_plan_invalidations	6
+ "when rds_plan_cache_allow_change_ratio is 0, plan cache work even if table records are changed sharply"
+ select @@rds_plan_cache_allow_change_ratio;
+ @@rds_plan_cache_allow_change_ratio
+@@ -968,6 +1015,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	3
++Cached_plan_invalidations	6
+ "table rows change from 5 rows to 20, plan cache work"
+ insert into t1 select * from t1;
+ insert into t1 select * from t1;
+@@ -997,6 +1045,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	4
++Cached_plan_invalidations	6
+ set rds_plan_cache_allow_change_ratio = default;
+ select @@rds_plan_cache_allow_change_ratio;
+ @@rds_plan_cache_allow_change_ratio
+@@ -1031,6 +1080,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	6
+ flush status;
+ deallocate prepare stmt;
+ drop table tinytbl;
+@@ -1048,6 +1098,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	6
+ flush status;
+ drop table t1;
+ "BUGFIX: Ref scan with multiple Key parts can result in crash"
+@@ -1055,6 +1106,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	6
+ create table t1(a int, b int, c int, key(a, b, c));
+ insert into t1 values(1,2,3),(1,2,4),(3,2,6),(3,4,5);
+ explain select * from t1 where a = 1 and b = 2;
+@@ -1082,6 +1134,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	2
++Cached_plan_invalidations	6
+ create table t1(a int, b int);
+ insert into t1 values(1,2),(3,4);
+ prepare stmt from 'select * from t1 where a > ?';
+@@ -1227,6 +1280,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	2
++Cached_plan_invalidations	6
+ execute stmt using @a;
+ a	b
+ 3	4
+@@ -1234,6 +1288,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	3
++Cached_plan_invalidations	6
+ select * from information_schema.optimizer_trace;
+ QUERY	TRACE	MISSING_BYTES_BEYOND_MAX_MEM_SIZE	INSUFFICIENT_PRIVILEGES
+ select * from t1 where a > 1	{
+@@ -1591,6 +1646,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	4
++Cached_plan_invalidations	9
+ drop table t1;
+ # BUGFIX
+ flush status;
+@@ -1599,6 +1655,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	0
++Cached_plan_invalidations	9
+ PREPARE p1 FROM 'SELECT 1 FROM t0 GROUP BY t0.c0, t0.c1';
+ EXECUTE p1;
+ 1
+@@ -1608,6 +1665,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	3
+ Cached_plan_hits	1
++Cached_plan_invalidations	9
+ DROP PREPARE p1;
+ drop table t0;
+ BUGFIX: Plan cache causes a incorrect result
+@@ -1623,6 +1681,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	0
++Cached_plan_invalidations	9
+ execute stmt;
+ decimal_col	time_col
+ Warnings:
+@@ -1631,6 +1690,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	1
++Cached_plan_invalidations	9
+ DROP TABLE t1;
+ deallocate prepare stmt;
+ BUGFIX: Virtual column cause a server crash for plan cache
+@@ -1687,12 +1747,14 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	9
+ execute stmt;
+ $json
+ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	9
+ DROP TABLE datalink_dataLink_0046;
+ deallocate prepare stmt;
+ set rds_plan_cache = @old_plan_cache;
+@@ -1723,6 +1785,11 @@ EXECUTE stmt USING @var1,@var2;
+ c
+ 38014276128-25250245652-62722561801-27818678124-24890218270-18312424692-92565570600-36243745486-21199862476-38576014630
+ 83868641912-28773972837-60736120486-75162659906-27563526494-20381887404-41576422241-93426793964-56405065102-33518432330
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	2
++Cached_plan_hits	2
++Cached_plan_invalidations	9
+ DEALLOCATE PREPARE stmt;
+ SET rds_plan_cache = @old_plan_cache;
+ DROP TABLE `sbtest`;
+@@ -1756,6 +1823,11 @@ set @q='tfs2fe56jmssstccccehRnADB8HU4C9eTl';
+ execute pd using @p,@q;
+ id
+ 1
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	2
++Cached_plan_hits	2
++Cached_plan_invalidations	9
+ alter table bsc_erc1155_owner drop index idx_nft_unique_num;
+ set rds_plan_cache=on;
+ prepare pd from "select id from bsc_erc1155_owner where nft_unique_num = ? and 1 = ?";
+@@ -1773,6 +1845,11 @@ set @q=1;
+ execute pd using @p,@q;
+ id
+ 1
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	2
++Cached_plan_hits	0
++Cached_plan_invalidations	9
+ drop table bsc_erc1155_owner;
+ create table t1 (
+ id bigint unsigned not null auto_increment,
+@@ -1795,6 +1872,11 @@ set @q='2';
+ execute pd using @p,@q;
+ id	col1	col2
+ 1	fe	2
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	2
++Cached_plan_hits	4
++Cached_plan_invalidations	9
+ drop table t1;
+ # BUGFIX
+ set rds_plan_cache=on;
+@@ -1819,6 +1901,11 @@ set @col1=NULL;
+ set @col2='a';
+ execute stmt using @col1,@col2;
+ blob_col
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	3
++Cached_plan_hits	6
++Cached_plan_invalidations	9
+ drop table tbl1;
+ # BUGFIX
+ set rds_plan_cache=on;
+@@ -1853,6 +1940,11 @@ aaaa	-99999999999999999999.99999
+ aabb	0.00000
+ aacd	-99999999999999999999.99999
+ ab	0.00000
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	2
++Cached_plan_hits	6
++Cached_plan_invalidations	9
+ drop table tbl1;
+ # BUGFIX
+ set rds_plan_cache=on;
+@@ -1876,6 +1968,11 @@ Warning	1292	Incorrect time value: '03:59:60.000000' for column 'time_col' at ro
+ Warning	1292	Incorrect time value: '03:59:60.000000' for column 'time_col' at row 1
+ Warning	1292	Incorrect time value: '03:59:60.000000' for column 'time_col' at row 1
+ Warning	1292	Truncated incorrect time value: '03:59:60.000000'
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	3
++Cached_plan_hits	6
++Cached_plan_invalidations	10
+ drop table tbl1;
+ # BUGFIX Plan cache result in memory usage growth
+ set rds_plan_cache=ON;
+@@ -1934,6 +2031,11 @@ c4ca4238a0b923820dcc509a6f75849bc4ca4238a0b923820dcc509a6f75849bc4ca4238a0b92382
+ c81e728d9d4c2f636f067f89cc14862cc81e728d9d4c2f636f067f89cc14862cc81e728d9d4c2f636f067f89cc14862cc81e728d9d4c2f636f067f89cc14862c
+ cfcd208495d565ef66e7dff9f98764dacfcd208495d565ef66e7dff9f98764dacfcd208495d565ef66e7dff9f98764dacfcd208495d565ef66e7dff9f98764da
+ eccbc87e4b5ce2fe28308fd9f2a7baf3eccbc87e4b5ce2fe28308fd9f2a7baf3eccbc87e4b5ce2fe28308fd9f2a7baf3eccbc87e4b5ce2fe28308fd9f2a7baf3
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	6
++Cached_plan_hits	6
++Cached_plan_invalidations	10
+ set @a=400;
+ set @b=600;
+ execute explain_tree_distinct_ranges using @a,@b;
+@@ -1972,6 +2074,11 @@ c4ca4238a0b923820dcc509a6f75849bc4ca4238a0b923820dcc509a6f75849bc4ca4238a0b92382
+ c81e728d9d4c2f636f067f89cc14862cc81e728d9d4c2f636f067f89cc14862cc81e728d9d4c2f636f067f89cc14862cc81e728d9d4c2f636f067f89cc14862c
+ cfcd208495d565ef66e7dff9f98764dacfcd208495d565ef66e7dff9f98764dacfcd208495d565ef66e7dff9f98764dacfcd208495d565ef66e7dff9f98764da
+ eccbc87e4b5ce2fe28308fd9f2a7baf3eccbc87e4b5ce2fe28308fd9f2a7baf3eccbc87e4b5ce2fe28308fd9f2a7baf3eccbc87e4b5ce2fe28308fd9f2a7baf3
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	6
++Cached_plan_hits	12
++Cached_plan_invalidations	10
+ prepare group_by_stmt from 'select count(*), t from t1 where t = ? group by t order by t desc';
+ set @arg1 = 'eleven';
+ execute group_by_stmt using @arg1;
+@@ -1983,6 +2090,11 @@ count(*)	t
+ execute group_by_stmt using @arg1;
+ count(*)	t
+ 3	eleven
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	7
++Cached_plan_hits	14
++Cached_plan_invalidations	10
+ drop table sbtest1;
+ drop table t1;
+ drop procedure insert_data;
+@@ -2018,6 +2130,11 @@ set @col1=NULL;
+ set @col2=32767;
+ execute stmt USING @col1,@col2;
+ time_col	binary_col	smallint_col
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	7
++Cached_plan_hits	14
++Cached_plan_invalidations	11
+ set @col1='03:59:60.000000';
+ set @col2=-32768;
+ execute stmt USING @col1,@col2;
+@@ -2025,6 +2142,11 @@ time_col	binary_col	smallint_col
+ Warnings:
+ Warning	1292	Incorrect time value: '03:59:60.000000' for column 'time_col' at row 1
+ Warning	1292	Incorrect time value: '03:59:60.000000' for column 'time_col' at row 1
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	7
++Cached_plan_hits	14
++Cached_plan_invalidations	12
+ drop table sbtest1;
+ deallocate prepare stmt;
+ # PQ refactor fix_field process
+@@ -2047,6 +2169,11 @@ execute stmt_sh1;
+ execute stmt_sh1;
+ 1
+ 1
++show status like "cached_plan%";
++Variable_name	Value
++Cached_plan_count	7
++Cached_plan_hits	15
++Cached_plan_invalidations	12
+ deallocate prepare stmt_sh1;
+ drop table cols, source;
+ # more tests following the porting to 8.0.41
+@@ -2061,6 +2188,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	12
+ create table t (vc varchar(100),
+ gc varchar(10) generated always as (reverse(vc)) stored,
+ key (gc(3)));
+@@ -2083,12 +2211,14 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	12
+ prepare s from "explain select * from t where reverse(vc) = 'cba'";
+ flush status;
+ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	12
+ execute s;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	SIMPLE	t	NULL	ref	gc	gc	15	const	#	100.00	Using where
+@@ -2103,12 +2233,14 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	12
+ prepare s from "select * from t where reverse(vc) = 'cba'";
+ flush status;
+ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	12
+ execute s;
+ vc	gc
+ abc	cba
+@@ -2119,6 +2251,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	12
+ drop table t;
+ create table t (vc varchar(100),
+ gc varchar(10) generated always as (reverse(vc)) stored,
+@@ -2143,6 +2276,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	12
+ prepare s from "explain format=tree select gc from t where reverse(vc)='a'";
+ flush status;
+ execute s;
+@@ -2157,6 +2291,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	12
+ prepare s from "select gc from t where reverse(vc)='a'";
+ flush status;
+ execute s;
+@@ -2169,6 +2304,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	12
+ drop table t;
+ create table t (a int, b int);
+ insert into t values (1,1),(1,2),(2,1),(2,2);
+@@ -2191,6 +2327,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	12
+ prepare s from "explain select * from t where a=b and a=1";
+ flush status;
+ execute s;
+@@ -2207,6 +2344,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	12
+ prepare s from "select * from t where a=b and a=1";
+ flush status;
+ execute s;
+@@ -2219,6 +2357,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	12
+ prepare s from "explain format=tree select * from t where a<b and a=1";
+ flush status;
+ execute s;
+@@ -2235,6 +2374,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	12
+ prepare s from "explain select * from t where a<b and a=1";
+ flush status;
+ execute s;
+@@ -2251,6 +2391,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	12
+ prepare s from "select * from t where a<b and a=1";
+ flush status;
+ execute s;
+@@ -2263,6 +2404,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	12
+ set @old_empty=@@rds_empty_redundant_check_in_range_scan;
+ set @@rds_empty_redundant_check_in_range_scan=false;
+ prepare s from "explain format=tree select * from t where (a+2)<b and a=1";
+@@ -2281,6 +2423,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	12
+ alter table t add key(b);
+ prepare s from "explain format=tree select * from t force index (b) where (a+2)<b and a=1";
+ flush status;
+@@ -2298,6 +2441,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	12
+ drop table t;
+ set @@rds_empty_redundant_check_in_range_scan=@old_empty;
+ create table t1 (s1 char(5) character set utf8 collate utf8_lithuanian_ci);
+@@ -2321,6 +2465,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	12
+ drop table t1;
+ CREATE TABLE dt_t (dt DATETIME, i INT);
+ prepare s from "EXPLAIN FORMAT=TREE SELECT * from dt_t WHERE dt_t.dt = dt_t.i";
+@@ -2339,6 +2484,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	12
+ DROP TABLE dt_t;
+ create table t2 (a tinyint unsigned, key(a));
+ insert into t2 values (0),(3),(255);
+@@ -2355,6 +2501,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	12
+ set @a=0;
+ execute s using @a;
+ a
+@@ -2363,6 +2510,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	12
+ prepare s from "select * from t2 where a=?";
+ flush status;
+ set @a=3;
+@@ -2373,6 +2521,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	12
+ set @a=1000;
+ execute s using @a;
+ a
+@@ -2380,6 +2529,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	13
+ set @a=1000;
+ execute s using @a;
+ a
+@@ -2387,6 +2537,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	13
+ set @a=3;
+ execute s using @a;
+ a
+@@ -2395,6 +2546,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	13
+ set @a=0;
+ execute s using @a;
+ a
+@@ -2403,6 +2555,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	13
+ set @a=1000;
+ execute s using @a;
+ a
+@@ -2410,6 +2563,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	13
+ drop table t2;
+ create table t1 
+ (
+@@ -2445,6 +2599,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	13
+ DROP TABLE t1;
+ CREATE TABLE t1 (a INT, b INT, KEY(a,b));
+ INSERT INTO t1 VALUES (1,1000), (1,1001), (1,2000),
+@@ -2464,6 +2619,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	14
+ show session status like "Com_stmt_reprepare";
+ Variable_name	Value
+ Com_stmt_reprepare	0
+@@ -2554,6 +2710,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	23
+ DROP TABLE t1;
+ CREATE TABLE t1(u TINYINT UNSIGNED);
+ INSERT INTO t1 VALUES (0), (3), (255), (NULL);
+@@ -2573,6 +2730,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	23
+ DROP TABLE t1;
+ CREATE TABLE t1(i TINYINT);
+ INSERT INTO t1 VALUES (10),(100),(1),(0),(NULL);
+@@ -2590,6 +2748,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	23
+ DROP TABLE t1;
+ DROP PREPARE s;
+ create table t1(a int, b int, c int, d int, e int, key(a,b,c,d DESC));
+@@ -2626,6 +2785,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	2
+ Cached_plan_hits	6
++Cached_plan_invalidations	23
+ drop prepare s;
+ drop table t1;
+ #
+@@ -2912,6 +3072,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	10
++Cached_plan_invalidations	23
+ DROP PREPARE stmt1;
+ set @sql_text1='select sex,create_time,id,avg(id) over (order by create_time ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) as moving_avg_id from t_general_test_pk t order by sex,create_time;';
+ PREPARE stmt1 FROM @sql_text1;
+@@ -3141,6 +3302,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	12
++Cached_plan_invalidations	23
+ DROP PREPARE stmt1;
+ DROP TABLE t_general_test_pk;
+ #
+@@ -3224,6 +3386,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	4
+ Cached_plan_hits	20
++Cached_plan_invalidations	23
+ DROP PREPARE stmt1;
+ DROP TABLE t_general_test;
+ # Second problem in BUGFIX ('reverse' property of index access was lost)
+@@ -3263,6 +3426,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	22
++Cached_plan_invalidations	23
+ DROP PREPARE stmt;
+ DROP TABLE tbl_1_all_type2index_desc;
+ #
+@@ -3397,6 +3561,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	22
++Cached_plan_invalidations	25
+ DROP TABLE tbl_1_all_type2index_desc;
+ #
+ # BUGFIX while executing a prepared query including "order by int, tinytext", the second time using cached plan, mysqld will coredump.
+@@ -3433,6 +3598,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	25
++Cached_plan_invalidations	25
+ DEALLOCATE PREPARE stmt0;
+ DROP TABLE tbtest_part;
+ #
+@@ -3473,6 +3639,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	3
++Cached_plan_invalidations	25
+ DEALLOCATE PREPARE stmt0;
+ DROP TABLE tbtest_part;
+ #
+@@ -3517,6 +3684,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	25
+ set @enum_col0='i';
+ set @blob_col1='iii2';
+ set @bool_col2='NULL';
+@@ -3530,6 +3698,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	25
+ set @enum_col0='NULL';
+ set @blob_col1='a';
+ set @bool_col2='1901';
+@@ -3539,6 +3708,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	26
+ set @enum_col0='iii2';
+ set @blob_col1='a';
+ set @bool_col2='2020';
+@@ -3548,6 +3718,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	26
+ set @enum_col0='i';
+ set @blob_col1='iii2';
+ set @bool_col2='NULL';
+@@ -3561,6 +3732,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	26
+ set @enum_col0='NULL';
+ set @blob_col1='a';
+ set @bool_col2='1901';
+@@ -3570,6 +3742,7 @@ show status like '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	27
+ drop prepare stmt;
+ drop table tbl_1_all_type2index_desc,tbl_3_all_typeindex_desc,tbl_1_all_typeindex_desc;
+ # BUGFIX [plan_cache][wrong result] after enable plan_cache, a query including a where subclause like "tinyblob_col IS NOT UNKNOWN AND int_col NOT BETWEEN ? AND ?" return the result set with wrong sort
+@@ -3639,6 +3812,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	27
+ DROP PREPARE stmt;
+ DROP TABLE t;
+ # BUGFIX after enable plan_cache, In the scenario where subqueries are nested and subqueries of the year type are queried, for debug pkg: mysqld will crash; for release pkg:the result is incorrect when the plan_cache feature is used for the second time.
+@@ -3665,6 +3839,7 @@ SHOW STATUS LIKE '%Cached_plan%';
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	3
++Cached_plan_invalidations	27
+ DROP PREPARE stmt;
+ DROP TABLE t;
+ set sql_mode=default;
+diff --git a/mysql-test/suite/dstore_main/r/session_plan_cache_debug.result b/mysql-test/suite/dstore_main/r/session_plan_cache_debug.result
+index 83f9e2326f7..dbc09a1424d 100644
+--- a/mysql-test/suite/dstore_main/r/session_plan_cache_debug.result
++++ b/mysql-test/suite/dstore_main/r/session_plan_cache_debug.result
+@@ -1,3 +1,4 @@
++# restart
+ set rds_plan_cache=ON;
+ "test optimizer trace for plan cache"
+ flush status;
+@@ -5,6 +6,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	0
+ create table t1(a int, b int);
+ insert into t1 values(1,2),(3,4);
+ prepare stmt from 'select * from t1 where a > ?';
+@@ -17,6 +19,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	0
++Cached_plan_invalidations	0
+ execute stmt using @a;
+ a	b
+ 3	4
+@@ -24,6 +27,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	0
+ set debug='+d,apply_cached_plan_fail';
+ execute stmt using @a;
+ a	b
+@@ -174,6 +178,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	1
++Cached_plan_invalidations	1
+ set optimizer_trace='enabled=off';
+ drop table t1;
+ set debug='-d,apply_cached_plan_fail';
+@@ -270,6 +275,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	0
+ Cached_plan_hits	0
++Cached_plan_invalidations	2
+ SET session debug="-d,pq_dup_tabs_error0";
+ PREPARE stmt FROM 'SELECT DISTINCT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY c';
+ EXECUTE stmt USING @n, @m;
+@@ -300,6 +306,7 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	2
++Cached_plan_invalidations	2
+ DEALLOCATE PREPARE stmt;
+ #
+ # BUGFIX after enable rds_plan_cache, using the sysbench range query model(select_random_ranges.lua), the performance fluctuates sharply and the performance decreases by 5% to 25%
+@@ -326,5 +333,6 @@ show session status like "cached_plan%";
+ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	4
++Cached_plan_invalidations	2
+ set debug='-d,dstore_must_read_only_index';
+ DROP TABLE sbtest;
+diff --git a/mysql-test/suite/dstore_main/t/session_plan_cache_debug.test b/mysql-test/suite/dstore_main/t/session_plan_cache_debug.test
+index e1bee73a89a..fd0062ca268 100644
+--- a/mysql-test/suite/dstore_main/t/session_plan_cache_debug.test
++++ b/mysql-test/suite/dstore_main/t/session_plan_cache_debug.test
+@@ -3,6 +3,9 @@
+ 
+ # Tests of session-level plan cache which require a debug binary
+ 
++# We will be displaying global status variables which FLUSH STATUS does not reset (like Cached_plan_invalidations); if mysqld has already executed some other mtr tests and they used plan cache, this status will contain effects from those other tests, so restart:
++--source include/restart_mysqld.inc
++
+ # PLAN_CACHE_PORT: here some sections moved from session_plan_cache.test
+ 
+ set rds_plan_cache=ON;
+diff --git a/mysql-test/t/session_plan_cache_debug.test b/mysql-test/t/session_plan_cache_debug.test
+index 38cc862f040..dbd9679aadb 100644
+--- a/mysql-test/t/session_plan_cache_debug.test
++++ b/mysql-test/t/session_plan_cache_debug.test
+@@ -3,6 +3,9 @@
+ 
+ # Tests of session-level plan cache which require a debug binary
+ 
++# We will be displaying global status variables which FLUSH STATUS does not reset (like Cached_plan_invalidations); if mysqld has already executed some other mtr tests and they used plan cache, this status will contain effects from those other tests, so restart:
++--source include/restart_mysqld.inc
++
+ # PLAN_CACHE_PORT: here some sections moved from session_plan_cache.test
+ 
+ set rds_plan_cache=ON;
+diff --git a/sql/mysqld.cc b/sql/mysqld.cc
+index 73619fb3758..449507aa72c 100644
+--- a/sql/mysqld.cc
++++ b/sql/mysqld.cc
+@@ -10026,6 +10026,14 @@ static int show_deprecated_use_i_s_processlist_last_timestamp(THD *,
+   return 0;
+ }
+ 
++static int show_cached_plan_invalidations(THD *, SHOW_VAR *var, char *buff) {
++  var->type = SHOW_LONG;
++  var->value = buff;
++  *((long *)buff) = (long)plan_cache::cached_plan_invalidations.load(
++      std::memory_order_relaxed);
++  return 0;
++}
++
+ static int show_cached_plan_count(THD *, SHOW_VAR *var, char *buff) {
+   var->type = SHOW_LONG;
+   var->value = buff;
+@@ -10415,6 +10423,8 @@ SHOW_VAR status_vars[] = {
+     {"Deprecated_use_i_s_processlist_last_timestamp",
+      (char *)&show_deprecated_use_i_s_processlist_last_timestamp, SHOW_FUNC,
+      SHOW_SCOPE_GLOBAL},
++    {"Cached_plan_invalidations", (char *)&show_cached_plan_invalidations,
++     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+     {"Cached_plan_count", (char *)&show_cached_plan_count, SHOW_FUNC,
+      SHOW_SCOPE_GLOBAL},
+     {"Cached_plan_hits", (char *)offsetof(System_status_var, cached_plan_hits),
+diff --git a/sql/sql_plan_cache.cc b/sql/sql_plan_cache.cc
+index a619cb97611..5306724a65d 100644
+--- a/sql/sql_plan_cache.cc
++++ b/sql/sql_plan_cache.cc
+@@ -1510,6 +1510,7 @@ void QEP_TAB::rerun_constructor_for_tmp_table() {
+ namespace plan_cache {
+ 
+ std::atomic<ulong> cached_plan_count{0};
++std::atomic<ulong> cached_plan_invalidations{0};
+ 
+ class Clone_plan_RAII {
+  public:
+@@ -1602,6 +1603,7 @@ void invalidate_cached_plan(THD *thd, SELECT_LEX *select) {
+     ask_to_reprepare(thd);
+   }
+   cached_plan_count--;
++  cached_plan_invalidations++;
+ }
+ 
+ bool is_ready(SELECT_LEX *sl) {
+diff --git a/sql/sql_plan_cache.h b/sql/sql_plan_cache.h
+index 012cb95afac..6d638e77b2a 100644
+--- a/sql/sql_plan_cache.h
++++ b/sql/sql_plan_cache.h
+@@ -46,6 +46,7 @@ class QEP_TAB;
+ namespace plan_cache {
+ 
+ extern std::atomic<ulong> cached_plan_count;
++extern std::atomic<ulong> cached_plan_invalidations;
+ 
+ struct Exec_context {
+   /// If one of these flags is changed by the user, plan may change, so the
+-- 
+2.23.0
+

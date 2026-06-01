@@ -1,0 +1,98 @@
+call mtr.add_suppression("start wal archive fail for pdb");
+call mtr.add_suppression("failed to start wal archiver");
+call mtr.add_suppression("full backup found binlog is not enabled");
+call mtr.add_suppression("wal archive disjoin, lsnPoint");
+call mtr.add_suppression("write wal archive meta for disjoin fail");
+call mtr.add_suppression("failed to alloc time point in ShowTimePointFrom");
+call mtr.add_suppression("the child file is disjoined and not last parent point when show time point from wal archive child meta offset");
+call mtr.add_suppression("show time point from wal archive child meta offset fail");
+create database wal_archive_disjoin;
+use wal_archive_disjoin;
+create table t1(s varchar(100)) engine=Dstore;
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1000
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+call rds_backup.start_log_archive();
+===============
+Load the data
+===============
+===============
+Load the data
+===============
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+2500
+call rds_backup.stop_log_archive();
+DROP PROCEDURE IF EXISTS load_data;
+CALL load_data('t1','s',600000);
+134217728
+# restart: --dstore_can_do_wal_archive=off --dstore_wal_keep_segments=0
+insert into t1 values('aaa');
+# restart: --dstore_can_do_wal_archive=on --dstore_wal_keep_segments=0
+call rds_backup.start_log_archive();
+ERROR HY000: Local backup: failed to start wal archiver
+set global debug='+d,write_wal_archive_disjoin_meta_fail';
+call rds_backup.start_log_archive();
+ERROR HY000: Local backup: failed to start wal archiver
+set global debug='-d,write_wal_archive_disjoin_meta_fail';
+set global debug='+d,wal_archive_disjoin_extra_inject';
+call rds_backup.start_log_archive();
+ERROR HY000: Local backup: failed to start wal archiver
+set global debug='-d,wal_archive_disjoin_extra_inject';
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Success
+select count(*) from t1;
+count(*)
+602501
+call rds_backup.start_log_archive();
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+603001
+# restart: --dstore_can_do_wal_archive=on --dstore_wal_keep_segments=0
+call rds_backup.start_log_archive();
+select count(*) from t1;
+count(*)
+603001
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+603501
+# restart: --dstore_open_restore_mode=on --dstore_wal_keep_segments=0
+select count(*) from t1;
+count(*)
+603501
+drop database wal_archive_disjoin;

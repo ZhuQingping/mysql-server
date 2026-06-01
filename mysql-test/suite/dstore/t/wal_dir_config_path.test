@@ -1,0 +1,39 @@
+--echo =====================================
+--echo Test: WAL dir failure during startup
+--echo =====================================
+
+CALL mtr.add_suppression(".*startup fail.*");
+call mtr.add_suppression("boot dstore failed, ret=-1");
+call mtr.add_suppression("Plugin 'Dstore' init function returned error.");
+call mtr.add_suppression("Plugin 'Dstore' registration as a STORAGE ENGINE failed.");
+call mtr.add_suppression("Unknown/unsupported storage engine: Dstore");
+call mtr.add_suppression("Aborting");
+
+--source include/have_only_dstore.inc
+--let $MYSQLD_DATADIR = `SELECT @@datadir`
+
+--echo # 1. Shutdown server
+--let $shutdown_server_timeout = 300
+--source include/shutdown_mysqld.inc
+
+--echo # 2. Inject failure at startup, rename wal dir
+
+--exec mv $MYSQLD_DATADIR/#mysql_dstore/gs_pdb/PDB_17/wal $MYSQLD_DATADIR/#mysql_dstore/gs_pdb/PDB_17/fake
+
+--echo # 3. restart mysqld
+--let $mysqld_exec_cmd = $MYSQLD --defaults-file=$MYSQLTEST_VARDIR/my.cnf --defaults-group-suffix=.1 --log-error=$MYSQLTEST_VARDIR/mysql_dstore_waldir.log
+
+--disable_abort_on_error
+--exec $mysqld_exec_cmd --user=`whoami`
+--enable_abort_on_error
+
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/mysql_dstore_waldir.log
+--let SEARCH_PATTERN=dstore wal files dir doesn't exist, startup fail
+--source include/search_pattern.inc
+
+--echo # 4. delete diy log
+--exec rm -rf $MYSQLTEST_VARDIR/mysql_dstore_waldir.log
+
+--echo # 5. rename wal dir origin
+--exec mv $MYSQLD_DATADIR/#mysql_dstore/gs_pdb/PDB_17/fake $MYSQLD_DATADIR/#mysql_dstore/gs_pdb/PDB_17/wal
+--source include/start_mysqld.inc

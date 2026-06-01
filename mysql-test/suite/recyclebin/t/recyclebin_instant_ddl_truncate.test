@@ -1,0 +1,217 @@
+--source include/not_have_only_dstore.inc
+#
+# Test for recycle func of truncate after instant ddl
+#
+
+--echo #
+--echo # instant add columns and truncate
+--echo #
+
+connect (root, 127.0.0.1, root,,);
+
+# connect root
+connection root;
+set global rds_recycle_bin_mode=on;
+set rds_recycle_bin_mode=on;
+
+create database db1;
+use db1;
+CREATE TABLE tt_1 (ipkey INT AUTO_INCREMENT, d1 DOUBLE, v2 VARCHAR(23), v3 VARCHAR(25), i4 INT(52), v5 VARCHAR(29), t6 BOOL,  PRIMARY KEY(ipkey), INDEX tt_136i0(i4, ipkey DESC) , INDEX tt_136i1(v2 ASC)  ) ENCRYPTION='N' ROW_FORMAT=DYNAMIC ENGINE=INNODB;
+ALTER TABLE tt_1 ADD COLUMN  tN49 BOOL, LOCK=DEFAULT, ALGORITHM=INSTANT;
+ALTER TABLE tt_1 COMPRESSION= 'zlib';
+ALTER TABLE tt_1 ADD COLUMN  tN175 BOOL, LOCK=DEFAULT, ALGORITHM=INSTANT;
+ALTER TABLE tt_1 ADD COLUMN  tN273 BOOL, LOCK=DEFAULT, ALGORITHM=INSTANT;
+insert into tt_1 values(456961,0,"fVJKfZSsL","OqXVoixf1v0Q","211070","w7iqpB8NtxxiKqxaV35z4x",0,0,1,1);
+check table tt_1;
+TRUNCATE TABLE tt_1;
+insert into tt_1 values(456961,0,"fVJKfZSsL","OqXVoixf1v0Q","211070","w7iqpB8NtxxiKqxaV35z4x",0,0,1,1);
+use db1;
+select * from tt_1;
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+let $t1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+--replace_result $t1_name_in_recyclebin tt_1
+eval SELECT instant_cols FROM information_schema.innodb_tables WHERE name='$t1_name_in_recyclebin';
+--replace_result $t1_name_in_recyclebin tt_1
+eval check table `$t1_name_in_recyclebin`;
+SELECT instant_cols FROM information_schema.innodb_tables WHERE name='tt_1';
+check table tt_1;
+
+CREATE TABLE tt_324_p (ip_col INT, ipkey INT AUTO_INCREMENT, i1 INT, i2 INT, c3 CHAR(17), v4 VARCHAR(11),  PRIMARY KEY(ipkey, ip_col), INDEX tt_324_pi0(c3 DESC, ip_col ASC, ipkey DESC, i1 DESC, i2 ASC) , INDEX tt_324_pi1(ip_col DESC, c3, i1 ASC, i2 DESC, v4) , INDEX tt_324_pi2(ipkey ASC) , INDEX tt_324_pi3(v4, ipkey DESC)  ) ENGINE=INNODB PARTITION BY RANGE (ip_col)( PARTITION p0 VALUES LESS THAN (24794), PARTITION p1 VALUES LESS THAN (77784), PARTITION p2 VALUES LESS THAN (129974), PARTITION p3 VALUES LESS THAN (159840), PARTITION p4 VALUES LESS THAN (163297), PARTITION p5 VALUES LESS THAN (240976), PARTITION p6 VALUES LESS THAN (343858), PARTITION p7 VALUES LESS THAN (357317), PARTITION p8 VALUES LESS THAN (399257), PARTITION p9 VALUES LESS THAN (431544), PARTITION p10 VALUES LESS THAN (570569), PARTITION p11 VALUES LESS THAN (585657), PARTITION p12 VALUES LESS THAN (647602), PARTITION p13 VALUES LESS THAN (695879), PARTITION p14 VALUES LESS THAN (770385), PARTITION p15 VALUES LESS THAN (770513), PARTITION p16 VALUES LESS THAN (834446), PARTITION p17 VALUES LESS THAN (923225), PARTITION p18 VALUES LESS THAN (936756));
+ALTER TABLE tt_324_p ADD COLUMN  gN249  VARCHAR(20) AS  (CONCAT(ip_col,i2)), LOCK=DEFAULT, ALGORITHM=INSTANT;
+ALTER TABLE tt_324_p ADD COLUMN  iN121 INT, LOCK=DEFAULT, ALGORITHM=INSTANT;
+ALTER TABLE tt_324_p ADD COLUMN  tN161 TEXT, LOCK=DEFAULT, ALGORITHM=INSTANT;
+INSERT INTO `tt_324_p` (`ip_col`,`ipkey`,`i1`,`i2`,`c3`,`v4`,`iN121`, `tN161`) VALUES (620684,799022,562929,984219,'br','z7',114630, "aa123123213");
+TRUNCATE TABLE tt_324_p;
+INSERT INTO `tt_324_p` (`ip_col`,`ipkey`,`i1`,`i2`,`c3`,`v4`,`iN121`, `tN161`) VALUES (620684,799022,562929,984219,'br','z7',114630, "aa123123213");
+select * from tt_324_p;
+check table tt_324_p;
+
+--echo #
+--echo # restart
+--echo #
+--let $restart_parameters= restart:
+--source include/restart_mysqld.inc
+
+connection root;
+set global rds_recycle_bin_mode=on;
+set rds_recycle_bin_mode=on;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+--replace_result $t1_name_in_recyclebin tt_1
+eval select * from __recyclebin__.`$t1_name_in_recyclebin`;
+check table tt_1;
+--replace_result $t1_name_in_recyclebin tt_1
+eval check table __recyclebin__.`$t1_name_in_recyclebin`;
+--replace_result $t1_name_in_recyclebin tt_1
+eval call dbms_recyclebin.purge_table('$t1_name_in_recyclebin');
+
+select * from tt_324_p;
+check table tt_324_p;
+
+use db1;
+select * from tt_1;
+SELECT instant_cols FROM information_schema.innodb_tables WHERE name like '%tt_1%';
+check table tt_1;
+insert into tt_1 values(456962,0,"fVJKfZSsL","OqXVoixf1v0Q","211070","w7iqpB8NtxxiKqxaV35z4x",0,0,1,1);
+select * from tt_1;
+check table tt_1;
+
+INSERT INTO `tt_324_p` (`ip_col`,`ipkey`,`i1`,`i2`,`c3`,`v4`,`iN121`, `tN161`) VALUES (620685,799022,562929,984219,'br','z7',114630, "aa123123213");
+select * from tt_324_p;
+check table tt_324_p;
+
+--echo #
+--echo # restart
+--echo #
+--let $restart_parameters= restart:
+--source include/restart_mysqld.inc
+
+use db1;
+select * from tt_1;
+SELECT instant_cols FROM information_schema.innodb_tables WHERE name like '%tt_1%';
+check table tt_1;
+
+select * from tt_324_p;
+check table tt_324_p;
+
+set rds_recycle_bin_mode=off;
+truncate table tt_1;
+drop table tt_1, tt_324_p;
+
+set global rds_recycle_bin_mode=on;
+set rds_recycle_bin_mode=on;
+CREATE TABLE tt_25 (
+    f0 FLOAT,
+    iN163 INT AUTO_INCREMENT PRIMARY KEY,
+    iN164 INT
+) ENGINE = InnoDB;
+INSERT INTO tt_25(f0, iN164)
+VALUES (1, 1), (2, 2), (3, 3);
+SELECT * FROM tt_25;
+TRUNCATE TABLE tt_25;
+INSERT INTO tt_25(f0, iN164)
+VALUES (1, 1), (2, 2), (3, 3);
+SELECT * FROM tt_25;
+
+CREATE TABLE tt_26 (
+    f0 FLOAT,
+    iN163 INT,
+    iN164 INT
+) ENGINE = InnoDB;
+INSERT INTO tt_26
+VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
+ALTER TABLE tt_26
+    DROP COLUMN iN163,
+    LOCK = DEFAULT,
+    ALGORITHM = INSTANT;
+INSERT INTO tt_26
+VALUES (4, 4), (5, 5), (6, 6);
+SHOW CREATE TABLE tt_26;
+
+TRUNCATE TABLE tt_26;
+SHOW CREATE TABLE tt_26;
+SELECT * FROM tt_26;
+INSERT INTO tt_26
+VALUES (7, 7), (8, 8), (9, 9);
+SELECT * FROM tt_26;
+
+ALTER TABLE tt_26
+    ADD COLUMN tN136 BOOL AFTER f0,
+    LOCK = DEFAULT,
+    ALGORITHM = INSTANT;
+SHOW CREATE TABLE tt_26;
+SELECT * FROM tt_26;
+INSERT INTO tt_26
+VALUES (10, 10, 10), (11, 11, 11), (12, 12, 12);
+SELECT * FROM tt_26;
+
+TRUNCATE TABLE tt_26;
+SHOW CREATE TABLE tt_26;
+SELECT * FROM tt_26;
+INSERT INTO tt_26
+VALUES (13, 13, 13), (14, 14, 14), (15, 15, 15);
+SHOW CREATE TABLE tt_26;
+SELECT * FROM tt_26;
+
+CREATE TABLE tt_28 (
+    f0 FLOAT,
+    iN163 INT,
+    iN164 INT
+) ENGINE=InnoDB
+PARTITION BY HASH(iN163)
+PARTITIONS 4;
+INSERT INTO tt_28
+VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
+ALTER TABLE tt_28 DROP COLUMN f0, LOCK=DEFAULT, ALGORITHM=INSTANT;
+INSERT INTO tt_28
+VALUES (4, 4), (5, 5), (6, 6);
+SHOW CREATE TABLE tt_28;
+TRUNCATE TABLE tt_28;
+INSERT INTO tt_28
+VALUES (7, 7), (8, 8), (9, 9);
+SHOW CREATE TABLE tt_28;
+SELECT * FROM tt_28;
+ALTER TABLE tt_28 ADD COLUMN tN135 BOOL, LOCK=DEFAULT, ALGORITHM=INSTANT;
+SHOW CREATE TABLE tt_28;
+SELECT * FROM tt_28;
+TRUNCATE TABLE tt_28;
+INSERT INTO tt_28
+VALUES (10, 10, 10), (11, 11, 11), (12, 12, 12);
+SELECT * FROM tt_28;
+SHOW CREATE TABLE tt_28;
+TRUNCATE TABLE tt_28;
+SHOW CREATE TABLE tt_28;
+SELECT * FROM tt_28;
+INSERT INTO tt_28
+VALUES (13, 13, 13), (14, 14, 14), (15, 15, 15);
+SHOW CREATE TABLE tt_28;
+SELECT * FROM tt_28;
+
+CREATE TABLE tt_29 (
+    f0 FLOAT,
+    iN163 INT AUTO_INCREMENT PRIMARY KEY,
+    iN164 INT
+) ENGINE = InnoDB;
+INSERT INTO tt_29(f0, iN164)
+VALUES (1, 1), (2, 2), (3, 3);
+SELECT * FROM tt_29;
+TRUNCATE TABLE tt_29;
+INSERT INTO tt_29(f0, iN164)
+VALUES (1, 1), (2, 2), (3, 3);
+SELECT * FROM tt_29;
+
+--replace_column 2 # 5 # 6 #
+call dbms_recyclebin.show_tables();
+
+DROP TABLE tt_25, tt_26, tt_28, tt_29;
+
+drop database db1;
+drop database __recyclebin__;
+create database __recyclebin__ default character set utf8mb4;
+
+set global rds_recycle_bin_mode=off;
+set rds_recycle_bin_mode=off;

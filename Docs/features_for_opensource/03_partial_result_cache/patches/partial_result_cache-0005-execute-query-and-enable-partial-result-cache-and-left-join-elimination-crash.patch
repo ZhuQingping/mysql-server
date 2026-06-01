@@ -1,0 +1,252 @@
+From ea619894188993d7876abe180ba534afabce1001 Mon Sep 17 00:00:00 2001
+From: Guilhem Bichot <guilhem.bichot@contributor>
+
+Date: Mon, 1 Dec 2025 19:12:56 +0100
+Subject: [PATCH] =?UTF-8?q?BUGFIX=20Execute=20query=20and=20enab?=
+ =?UTF-8?q?le=20partial=5Fresult=5Fcache=20and=20left=5Fjoin=5Felimination?=
+ =?UTF-8?q?=20at=20the=20same=20time,=20mysqld=20crashes=EF=BC=9ACreateNes?=
+ =?UTF-8?q?tedLoopAccessPath?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Paraphrasing the good analysis by Wuwenbin:
+
+"
+SELECT DISTINCT
+      (CASE WHEN EXISTS (SELECT ref_49.medal_now FROM t1)
+       THEN 1 ELSE 0
+       END) IS NULL
+FROM t2 LEFT JOIN t3 AS ref_49 ON TRUE;
+
+In the current scenario, because the return result of the CASE WHEN
+expression is guaranteed to be non-NULL, the
+Item_func_isnull::resolve_type function clears the used_tables_cache
+information that was set during the earlier subquery processing.
+
+Join elimination logic relies on used_tables() to determine if an
+inner table is referenced outside the ON clause. The used_tables() is
+0. Combined with the presence of a DISTINCT clause, the conditions for
+left join elimination are met, and the inner table is eliminated.
+
+However, the correlated subquery remains. In the subsequent PTRC
+processing phase, this leads to a crash because the inner table
+pointer becomes a nullptr.
+"
+
+Vaguely similar problems had occurred before, but it was when the
+subquery was part of the ON condition of the eliminated LEFT JOIN; so
+I had solved it by calling cleanup_after_removal() on this ON
+condition, so that PTRC does not meet the subquery. But here, the
+"elimination" of the subquery happens in
+Item_func_isnull::resolve_type() which does not care to call
+cleanup_after_removal(). So PTRC is still involved. A more robust fix,
+which covers both cases (and maybe other ones due to other
+Item_func-s?), is to make PTRC more careful.
+
+Once this is done in PTRC code, some comments in the code of left join
+elimination are modified accordingly.
+---
+ mysql-test/include/join_elimination.inc       | 30 +++++++++++++++++
+ mysql-test/r/join_elimination.result          | 32 +++++++++++++++++++
+ .../r/join_elimination-dstore.result          | 32 +++++++++++++++++++
+ sql/partial_result_cache.cc                   | 17 ++++++++++
+ sql/sql_join_elimination.cc                   | 22 ++++---------
+ 5 files changed, 118 insertions(+), 15 deletions(-)
+
+diff --git a/mysql-test/include/join_elimination.inc b/mysql-test/include/join_elimination.inc
+index d9a07c34d7a..58a8ac0c434 100644
+--- a/mysql-test/include/join_elimination.inc
++++ b/mysql-test/include/join_elimination.inc
+@@ -1104,3 +1104,33 @@ eval EXPLAIN $query;
+ eval $query;
+ 
+ DROP TABLE t0,t98;
++
++--echo # BUGFIX Execute query and enable
++--echo # partial_result_cache and left_join_elimination at the same
++--echo # time, mysqld crashes：CreateNestedLoopAccessPath
++
++CREATE TABLE t1 (medal_now INT);
++CREATE TABLE t2 (id INT);
++CREATE TABLE t3 (medal_now INT);
++
++INSERT INTO t1 (medal_now) VALUES (1);
++INSERT INTO t2 (id) VALUES (1), (2), (3);
++INSERT INTO t3 (medal_now) VALUES (1), (2), (NULL);
++
++--echo # Used to crash. This CASE is always non-NULL, so IS NULL says it is
++--echo # constant FALSE and thus contains no reference so ref_49 is eliminated
++--echo # from the left join; still the subquery remains in the tree of
++--echo # Query_expression-s, gets optimized, Partial Table Result Cache is set
++--echo # up for it, sees that it depends on outer value ref49.medal_now, and
++--echo # then crashes when trying to access statistics of ref_49 which do not
++--echo # exist as ref_49 has not been dealt with by the Optimizer when
++--echo # optimizing the outer query.
++
++let $query=
++SELECT DISTINCT
++(CASE WHEN EXISTS (SELECT ref_49.medal_now FROM t1) THEN 1 ELSE 0 END) IS NULL
++FROM t2 LEFT JOIN t3 AS ref_49 ON TRUE;
++eval EXPLAIN $query;
++eval $query;
++
++DROP TABLE t1,t2,t3;
+diff --git a/mysql-test/r/join_elimination.result b/mysql-test/r/join_elimination.result
+index 79f11d52f3a..1b43d4dc14e 100644
+--- a/mysql-test/r/join_elimination.result
++++ b/mysql-test/r/join_elimination.result
+@@ -2513,3 +2513,35 @@ SELECT subq_1.c1 AS c0 FROM (SELECT subq_0.c1 AS c1 FROM t0 ref_0 LEFT JOIN (SEL
+ c0
+ NULL
+ DROP TABLE t0,t98;
++# BUGFIX Execute query and enable
++# partial_result_cache and left_join_elimination at the same
++# time, mysqld crashes：CreateNestedLoopAccessPath
++CREATE TABLE t1 (medal_now INT);
++CREATE TABLE t2 (id INT);
++CREATE TABLE t3 (medal_now INT);
++INSERT INTO t1 (medal_now) VALUES (1);
++INSERT INTO t2 (id) VALUES (1), (2), (3);
++INSERT INTO t3 (medal_now) VALUES (1), (2), (NULL);
++# Used to crash. This CASE is always non-NULL, so IS NULL says it is
++# constant FALSE and thus contains no reference so ref_49 is eliminated
++# from the left join; still the subquery remains in the tree of
++# Query_expression-s, gets optimized, Partial Table Result Cache is set
++# up for it, sees that it depends on outer value ref49.medal_now, and
++# then crashes when trying to access statistics of ref_49 which do not
++# exist as ref_49 has not been dealt with by the Optimizer when
++# optimizing the outer query.
++EXPLAIN SELECT DISTINCT
++(CASE WHEN EXISTS (SELECT ref_49.medal_now FROM t1) THEN 1 ELSE 0 END) IS NULL
++FROM t2 LEFT JOIN t3 AS ref_49 ON TRUE;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	t2	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using temporary
++2	DEPENDENT SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
++Warnings:
++Note	1276	Field or reference 'test.ref_49.medal_now' of SELECT #2 was resolved in SELECT #1
++Note	1003	/* select#1 */ select distinct ((case when exists(/* select#2 */ select `test`.`ref_49`.`medal_now` from `test`.`t1`) then 1 else 0 end) is null) AS `(CASE WHEN EXISTS (SELECT ref_49.medal_now FROM t1) THEN 1 ELSE 0 END) IS NULL` from `test`.`t2`
++SELECT DISTINCT
++(CASE WHEN EXISTS (SELECT ref_49.medal_now FROM t1) THEN 1 ELSE 0 END) IS NULL
++FROM t2 LEFT JOIN t3 AS ref_49 ON TRUE;
++(CASE WHEN EXISTS (SELECT ref_49.medal_now FROM t1) THEN 1 ELSE 0 END) IS NULL
++0
++DROP TABLE t1,t2,t3;
+diff --git a/mysql-test/suite/dstore_main/r/join_elimination-dstore.result b/mysql-test/suite/dstore_main/r/join_elimination-dstore.result
+index 141bd20424b..591b9356f12 100644
+--- a/mysql-test/suite/dstore_main/r/join_elimination-dstore.result
++++ b/mysql-test/suite/dstore_main/r/join_elimination-dstore.result
+@@ -2513,3 +2513,35 @@ SELECT subq_1.c1 AS c0 FROM (SELECT subq_0.c1 AS c1 FROM t0 ref_0 LEFT JOIN (SEL
+ c0
+ NULL
+ DROP TABLE t0,t98;
++# BUGFIX Execute query and enable
++# partial_result_cache and left_join_elimination at the same
++# time, mysqld crashes：CreateNestedLoopAccessPath
++CREATE TABLE t1 (medal_now INT);
++CREATE TABLE t2 (id INT);
++CREATE TABLE t3 (medal_now INT);
++INSERT INTO t1 (medal_now) VALUES (1);
++INSERT INTO t2 (id) VALUES (1), (2), (3);
++INSERT INTO t3 (medal_now) VALUES (1), (2), (NULL);
++# Used to crash. This CASE is always non-NULL, so IS NULL says it is
++# constant FALSE and thus contains no reference so ref_49 is eliminated
++# from the left join; still the subquery remains in the tree of
++# Query_expression-s, gets optimized, Partial Table Result Cache is set
++# up for it, sees that it depends on outer value ref49.medal_now, and
++# then crashes when trying to access statistics of ref_49 which do not
++# exist as ref_49 has not been dealt with by the Optimizer when
++# optimizing the outer query.
++EXPLAIN SELECT DISTINCT
++(CASE WHEN EXISTS (SELECT ref_49.medal_now FROM t1) THEN 1 ELSE 0 END) IS NULL
++FROM t2 LEFT JOIN t3 AS ref_49 ON TRUE;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	PRIMARY	t2	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using temporary
++2	DEPENDENT SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
++Warnings:
++Note	1276	Field or reference 'test.ref_49.medal_now' of SELECT #2 was resolved in SELECT #1
++Note	1003	/* select#1 */ select distinct ((case when exists(/* select#2 */ select `test`.`ref_49`.`medal_now` from `test`.`t1`) then 1 else 0 end) is null) AS `(CASE WHEN EXISTS (SELECT ref_49.medal_now FROM t1) THEN 1 ELSE 0 END) IS NULL` from `test`.`t2`
++SELECT DISTINCT
++(CASE WHEN EXISTS (SELECT ref_49.medal_now FROM t1) THEN 1 ELSE 0 END) IS NULL
++FROM t2 LEFT JOIN t3 AS ref_49 ON TRUE;
++(CASE WHEN EXISTS (SELECT ref_49.medal_now FROM t1) THEN 1 ELSE 0 END) IS NULL
++0
++DROP TABLE t1,t2,t3;
+diff --git a/sql/partial_result_cache.cc b/sql/partial_result_cache.cc
+index 7f952d575cb..e7a76e14292 100644
+--- a/sql/partial_result_cache.cc
++++ b/sql/partial_result_cache.cc
+@@ -120,6 +120,23 @@ static bool fill_table_collection(std::set<Field *> *cols,
+   std::map<TABLE *, pack_rows::Table *> table_map;
+   for (auto &field : *cols) {
+     TABLE *table = field->table;
++    if (table->pos_in_table_list != nullptr) {
++      /* It can happen that a subquery becomes unused (it will never be
++      evaluated) but remains linked into the tree of Query_expressions-s (no
++      call to clean_up_after_removal()) (for an example, you may read
++      Item_func_isnull::resolve_type(), when the argument is not nullable).
++      Therefore the subquery will be optimized, and PTRC will be set up for
++      it. If the outer references in the subquery belong to tables which have
++      been eliminated from a LEFT JOIN in the outer query, these tables have
++      not gone through the optimization phase, have no usable statistics,
++      cannot be used in PTRC. */
++      JOIN_TAB *join_tab = table->reginfo.join_tab;
++      QEP_TAB *qep_tab = table->reginfo.qep_tab;
++      const QEP_shared_owner *tab =
++          join_tab ? implicit_cast<QEP_shared_owner *>(join_tab)
++                   : implicit_cast<QEP_shared_owner *>(qep_tab);
++      if (tab == nullptr) return true;
++    }
+     auto it = table_map.find(table);
+     pack_rows::Table *tab = nullptr;
+     if (it == table_map.end()) {
+diff --git a/sql/sql_join_elimination.cc b/sql/sql_join_elimination.cc
+index a8bfeebdc8a..dcb51d9bc98 100644
+--- a/sql/sql_join_elimination.cc
++++ b/sql/sql_join_elimination.cc
+@@ -1050,17 +1050,11 @@ void Query_block::do_join_elimination_for_list(
+ 
+       /* Imagine we have
+       t1 LEFT JOIN t2 ON cond_with_subq,
+-      and we are currently
+-      removing t2. We must clean up cond_with_subq, which detaches the
+-      subquery's query expression from the tree of query expressions, for two
+-      reasons :
+-      - partial table result cache (PTRC) would otherwise try to set itself up
+-      for this subquery, which cannot work as the table which likely holds
+-      some "cache keys" (= outer dependencies of the correlated subquery's
+-      body) is t2 and is gone.
+-      - so that we do not waste time in doing JOIN::optimize() on it, and do
+-      not show rows for it in EXPLAIN FORMAT=TRADITIONAL (this is not a
+-      "must", rather a "nice to have").
++      and we are currently removing t2. We clean up cond_with_subq, which
++      detaches the subquery's query expression from the tree of query
++      expressions so that we do not waste time in doing JOIN::optimize() on
++      it, and do not show rows for it in EXPLAIN FORMAT=TRADITIONAL (this is
++      not a "must", rather a "nice to have").
+ 
+       Also imagine that t2 is actually a materialized derived table: we would
+       like to detach its query expression, again to not optimize it. However,
+@@ -1087,9 +1081,7 @@ void Query_block::do_join_elimination_for_list(
+             show up in EXPLAIN FORMAT=TRADITIONAL; which may very well be
+             needed if other references are not eliminated; in the extreme case
+             where they all are eliminated, it's not optimal but we have to
+-            accept this price. PTRC is not a problem as it is not used for a
+-            subquery forming a derived tables or CTE, only for Item_subselect
+-            (see Query_expression::optimize()). */
++            accept this price. */
+           } else {
+             // This un-plugs the body of the derived table
+             tr->derived_query_expression()->exclude_tree();
+@@ -1121,7 +1113,7 @@ void Query_block::do_join_elimination_for_list(
+       if (table->nested_join != nullptr) {
+         /* Imagine we have
+         t1 LEFT JOIN (t2 JOIN t3 ON cond_with_subq) ON cond,
+-        and we are currently removing the nest t2-t3. We must clean up
++        and we are currently removing the nest t2-t3. We clean up
+         cond_with_subq. Also imagine that t3 is actually a materialized
+         derived table: we would like to detach its query expression. */
+         walk_join_list(table->nested_join->m_tables, table_cleaner);
+-- 
+2.23.0
+

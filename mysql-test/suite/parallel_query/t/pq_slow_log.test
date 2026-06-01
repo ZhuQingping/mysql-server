@@ -1,0 +1,101 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+
+create table t1 (id int);
+create table t2 (id int);
+
+SET @old_slow_query_log_file= @@global.slow_query_log_file;
+SET @old_long_query_time= @@global.long_query_time;
+SET @old_slow_query_log= @@global.slow_query_log;
+
+--replace_result $MYSQL_TMP_DIR ...
+eval SET GLOBAL slow_query_log_file= '$MYSQL_TMP_DIR/my_slow.log';
+
+let SLOW_LOG1= `SELECT @@global.slow_query_log_file`;
+
+SET GLOBAL long_query_time=0;
+SET GLOBAL slow_query_log=on;
+
+connect (con1,localhost,root,,);
+
+--echo # select statement
+select * from t1;
+--let $grep_file= $SLOW_LOG1
+--let $grep_pattern= PQ_executed: 1
+--let $grep_output= print_count
+--source include/grep_pattern.inc
+
+SET long_query_time=10;
+# PQ_executed is set to 1, but sql is not slow query
+select * from t1;
+--let $grep_file= $SLOW_LOG1
+--let $grep_pattern= PQ_executed
+--let $grep_output= print_count
+--source include/grep_pattern.inc
+
+SET long_query_time=0;
+select CURRENT_USER() from t1;
+--let $grep_file= $SLOW_LOG1
+--let $grep_pattern= PQ_executed: 0
+--let $grep_output= print_count
+--source include/grep_pattern.inc
+
+SET long_query_time=10;
+# PQ_executed is not set to true, and sql is not slow query
+select CURRENT_USER() from t1;
+--let $grep_file= $SLOW_LOG1
+--let $grep_pattern= PQ_executed
+--let $grep_output= print_count
+--source include/grep_pattern.inc
+
+SET long_query_time=0;
+select * from t1;
+--let $grep_file= $SLOW_LOG1
+--let $grep_pattern= PQ_executed: 1
+--let $grep_output= print_count
+--source include/grep_pattern.inc
+
+--echo # insert select statement
+insert into t2 select * from t1;
+--let $grep_file= $SLOW_LOG1
+--let $grep_pattern= PQ_executed: 1
+--let $grep_output= print_count
+--source include/grep_pattern.inc
+
+--echo # replace select statement
+replace into t2 select * from t1;
+--let $grep_file= $SLOW_LOG1
+--let $grep_pattern= PQ_executed: 1
+--let $grep_output= print_count
+--source include/grep_pattern.inc
+
+--echo # insert statement
+insert into t1 values(1);
+--let $grep_file= $SLOW_LOG1
+--let $grep_pattern= PQ_executed
+--let $grep_output= print_count
+--source include/grep_pattern.inc
+
+--echo # update statement
+update t1 set id = 2;
+--let $grep_file= $SLOW_LOG1
+--let $grep_pattern= PQ_executed
+--let $grep_output= print_count
+--source include/grep_pattern.inc
+
+--echo # delete statement
+delete from t1;
+--let $grep_file= $SLOW_LOG1
+--let $grep_pattern= PQ_executed
+--let $grep_output= print_count
+--source include/grep_pattern.inc
+
+connection default;
+disconnect con1;
+SET GLOBAL slow_query_log_file= @old_slow_query_log_file;
+SET GLOBAL long_query_time= @old_long_query_time;
+SET GLOBAL slow_query_log= @old_slow_query_log;
+
+drop table t1;
+drop table t2;
+--remove_file $SLOW_LOG1

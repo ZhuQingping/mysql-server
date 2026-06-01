@@ -1,0 +1,58 @@
+DESCRIBE INFORMATION_SCHEMA.DSTORE_BUFFER_POOL_STATS;
+
+-- disable_warnings
+DROP TABLE IF EXISTS sample_table;
+-- enable_warnings
+
+CREATE TABLE sample_table (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  number_column INT,
+  string_column VARCHAR(100)
+) ENGINE=DSTORE;
+
+DELIMITER |;
+DROP PROCEDURE IF EXISTS insert_1000_rows;
+CREATE PROCEDURE insert_1000_rows()
+BEGIN
+  DECLARE i INT DEFAULT 1;
+  DECLARE sample_str VARCHAR(100) DEFAULT REPEAT('X', 100);
+  DECLARE EXIT HANDLER FOR SQLEXCEPTION ROLLBACK;
+
+  START TRANSACTION;
+  WHILE i <= 1000 DO
+    INSERT INTO sample_table (id, number_column, string_column) 
+    VALUES (i, FLOOR(RAND()*1000), sample_str);
+    SET i = i + 1;
+    IF i % 100 = 0 THEN
+      COMMIT;
+      START TRANSACTION;
+    END IF;
+  END WHILE;
+COMMIT;
+END |
+
+DROP PROCEDURE IF EXISTS execute_queries;
+CREATE PROCEDURE execute_queries()
+BEGIN
+  DECLARE dummy INT;
+
+  SELECT COUNT(id) INTO dummy FROM sample_table WHERE id < 100;
+
+  SELECT COUNT(id) INTO dummy FROM sample_table WHERE id > 900;
+
+  SELECT COUNT(id) INTO dummy FROM sample_table;
+
+  SELECT COUNT(number_column) INTO dummy FROM sample_table WHERE number_column < 500;
+
+  SELECT COUNT(string_column) INTO dummy FROM sample_table;
+END |
+DELIMITER ;|
+
+call insert_1000_rows();
+call execute_queries();
+
+SELECT count(*) FROM INFORMATION_SCHEMA.DSTORE_BUFFER_POOL_STATS;
+
+DROP TABLE sample_table;
+DROP PROCEDURE insert_1000_rows;
+DROP PROCEDURE execute_queries;

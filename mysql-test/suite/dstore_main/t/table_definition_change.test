@@ -1,0 +1,316 @@
+--source include/have_only_dstore.inc
+
+# This test aims at testing the ensure the error is reported when the table
+# definition is changed and the user access the new table in an active
+# transaction.
+
+connect (a,localhost,root,,);
+connect (b,localhost,root,,);
+
+--echo ########################################
+--echo ### Test 1. Test for doing full scan on a no primary key table
+--echo ########################################
+
+--echo ### Connection A: Start a active transaction
+connection a;
+
+CREATE TABLE t2 (c1 char(10), c2 char(10));
+INSERT INTO t2 VALUES ("r1c1", "r1c2");
+SELECT * FROM t2;
+
+CREATE TABLE t1 (c1 char(10), c2 char(10));
+INSERT INTO t1 VALUES ("r1c1", "r1c2");
+SELECT * FROM t1;
+
+# Start a transaction
+BEGIN;
+SELECT * FROM t2;
+
+--echo ### Connection B: Change table t1 definition
+connection b;
+ALTER TABLE t1 ADD COLUMN c3 char(10) DEFAULT "c3_def",ALGORITHM=COPY;
+UPDATE t1 SET c1 = "r1c11";
+SELECT * FROM t1;
+
+--echo ### Connection A: Query on t1 results the ER_TABLE_DEF_CHANGED
+connection a;
+--error ER_TABLE_DEF_CHANGED
+SELECT * FROM t1;
+--error ER_TABLE_DEF_CHANGED
+SELECT * FROM t1;
+COMMIT;
+
+--echo ### The result should be normal
+SELECT * FROM t1;
+
+--echo ########################################
+--echo ### Test 2. Test for doing full scan on a table with primary key
+--echo ########################################
+
+DROP TABLE t1, t2;
+
+--echo ### Connection A: Start a active transaction
+connection a;
+
+CREATE TABLE t2 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t2 VALUES ("r1c1", "r1c2");
+SELECT * FROM t2;
+
+CREATE TABLE t1 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t1 VALUES ("r1c1", "r1c2");
+SELECT * FROM t1;
+
+# Start a transaction
+BEGIN;
+SELECT * FROM t2;
+
+--echo ### Connection B: Change table t1 definition
+connection b;
+ALTER TABLE t1 ADD COLUMN c3 char(10) DEFAULT "c3_def",ALGORITHM=COPY;
+UPDATE t1 SET c1 = "r1c11";
+SELECT * FROM t1;
+
+--echo ### Connection A: Query on t1 results the ER_TABLE_DEF_CHANGED
+connection a;
+--error ER_TABLE_DEF_CHANGED
+SELECT * FROM t1;
+--error ER_TABLE_DEF_CHANGED
+SELECT * FROM t1;
+COMMIT;
+
+--echo ### The result should be normal
+SELECT * FROM t1;
+
+--echo ########################################
+--echo ### Test 3. Test for doing index scan on a table with primary key and secondary index
+--echo ########################################
+
+DROP TABLE t1, t2;
+
+--echo ### Connection A: Start a active transaction
+connection a;
+
+CREATE TABLE t2 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t2 VALUES ("r1c1", "r1c2");
+SELECT * FROM t2 force index(key_2) where c2 = 'r1c2';
+
+CREATE TABLE t1 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t1 VALUES ("r1c1", "r1c2");
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+
+# Start a transaction
+BEGIN;
+SELECT * FROM t2 force index(key_2) where c2 = 'r1c2';
+
+--echo ### Connection B: Change table t1 definition
+connection b;
+ALTER TABLE t1 ADD COLUMN c3 char(10) DEFAULT "c3_def",ALGORITHM=COPY;
+UPDATE t1 SET c1 = "r1c11";
+SELECT * FROM t1;
+
+--echo ### Connection A: Query on t1 results the ER_TABLE_DEF_CHANGED
+connection a;
+--error ER_TABLE_DEF_CHANGED
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+--error ER_TABLE_DEF_CHANGED
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+COMMIT;
+
+--echo ### The result should be normal
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+
+--echo ########################################
+--echo ### Test 4. Test for drop a key and add it back
+--echo ########################################
+
+DROP TABLE t1, t2;
+
+--echo ### Connection A: Start a active transaction
+connection a;
+
+CREATE TABLE t2 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t2 VALUES ("r1c1", "r1c2");
+SELECT * FROM t2 force index(key_2) where c2 = 'r1c2';
+
+CREATE TABLE t1 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t1 VALUES ("r1c1", "r1c2");
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+
+# Start a transaction
+BEGIN;
+SELECT * FROM t2 force index(key_2) where c2 = 'r1c2';
+
+--echo ### Connection B: Change table t1 definition
+connection b;
+ALTER TABLE t1 DROP INDEX key_2;
+ALTER TABLE t1 ADD INDEX key_2(c2);
+UPDATE t1 SET c1 = "r1c11";
+SELECT * FROM t1;
+
+--echo ### Connection A: Query on t1 results the ER_TABLE_DEF_CHANGED
+connection a;
+--error ER_TABLE_DEF_CHANGED
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+--error ER_TABLE_DEF_CHANGED
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+COMMIT;
+
+--echo ### The result should be normal
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+
+--echo ########################################
+--echo ### Test 5. Test for doing full scan on a no primary key table (instant DDL)
+--echo ########################################
+
+DROP TABLE t1, t2;
+
+--echo ### Connection A: Start a active transaction
+connection a;
+
+CREATE TABLE t2 (c1 char(10), c2 char(10));
+INSERT INTO t2 VALUES ("r1c1", "r1c2");
+SELECT * FROM t2;
+
+CREATE TABLE t1 (c1 char(10), c2 char(10));
+INSERT INTO t1 VALUES ("r1c1", "r1c2");
+SELECT * FROM t1;
+
+# Start a transaction
+BEGIN;
+SELECT * FROM t2;
+
+--echo ### Connection B: Change table t1 definition
+connection b;
+ALTER TABLE t1 ADD COLUMN c3 char(10) DEFAULT "c3_def",ALGORITHM=INSTANT;
+UPDATE t1 SET c1 = "r1c11";
+SELECT * FROM t1;
+
+--echo ### Connection A: Query on t1 results the ER_TABLE_DEF_CHANGED
+connection a;
+--error ER_TABLE_DEF_CHANGED
+SELECT * FROM t1;
+--error ER_TABLE_DEF_CHANGED
+SELECT * FROM t1;
+COMMIT;
+
+--echo ### The result should be normal
+SELECT * FROM t1;
+
+--echo ########################################
+--echo ### Test 6. Test for doing full scan on a table with primary key (instant DDL)
+--echo ########################################
+
+DROP TABLE t1, t2;
+
+--echo ### Connection A: Start a active transaction
+connection a;
+
+CREATE TABLE t2 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t2 VALUES ("r1c1", "r1c2");
+SELECT * FROM t2;
+
+CREATE TABLE t1 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t1 VALUES ("r1c1", "r1c2");
+SELECT * FROM t1;
+
+# Start a transaction
+BEGIN;
+SELECT * FROM t2;
+
+--echo ### Connection B: Change table t1 definition
+connection b;
+ALTER TABLE t1 ADD COLUMN c3 char(10) DEFAULT "c3_def",ALGORITHM=INSTANT;
+UPDATE t1 SET c1 = "r1c11";
+SELECT * FROM t1;
+
+--echo ### Connection A: Query on t1 results the ER_TABLE_DEF_CHANGED
+connection a;
+--error ER_TABLE_DEF_CHANGED
+SELECT * FROM t1;
+--error ER_TABLE_DEF_CHANGED
+SELECT * FROM t1;
+COMMIT;
+
+--echo ########################################
+--echo ### Test 7. Test for doing index scan on a table with primary key and secondary index (instant DDL)
+--echo ########################################
+
+DROP TABLE t1, t2;
+
+--echo ### Connection A: Start a active transaction
+connection a;
+
+CREATE TABLE t2 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t2 VALUES ("r1c1", "r1c2");
+SELECT * FROM t2 force index(key_2) where c2 = 'r1c2';
+
+CREATE TABLE t1 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t1 VALUES ("r1c1", "r1c2");
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+
+# Start a transaction
+BEGIN;
+SELECT * FROM t2 force index(key_2) where c2 = 'r1c2';
+
+--echo ### Connection B: Change table t1 definition
+connection b;
+ALTER TABLE t1 ADD COLUMN c3 char(10) DEFAULT "c3_def",ALGORITHM=INSTANT;
+UPDATE t1 SET c1 = "r1c11";
+SELECT * FROM t1;
+
+--echo ### Connection A: Query on t1 results the ER_TABLE_DEF_CHANGED
+connection a;
+--error ER_TABLE_DEF_CHANGED
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+--error ER_TABLE_DEF_CHANGED
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+COMMIT;
+
+--echo ### The result should be normal
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+
+--echo ### The result should be normal
+SELECT * FROM t1;
+
+--echo ########################################
+--echo ### Test 7. Test for truncate table
+--echo ########################################
+
+DROP TABLE t1, t2;
+
+--echo ### Connection A: Start a active transaction
+connection a;
+
+CREATE TABLE t2 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t2 VALUES ("r1c1", "r1c2");
+SELECT * FROM t2 force index(key_2) where c2 = 'r1c2';
+
+CREATE TABLE t1 (c1 char(10), c2 char(10), Key key_2(c2), primary key(c1));
+INSERT INTO t1 VALUES ("r1c1", "r1c2");
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+
+# Start a transaction
+BEGIN;
+SELECT * FROM t2 force index(key_2) where c2 = 'r1c2';
+
+--echo ### Connection B: Truncate table
+connection b;
+Truncate table t1;
+
+--echo ### Connection A: Query on t1 results the ER_TABLE_DEF_CHANGED
+connection a;
+--error ER_TABLE_DEF_CHANGED
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+--error ER_TABLE_DEF_CHANGED
+SELECT * FROM t1;
+COMMIT;
+
+--echo ### The result should be normal
+SELECT * FROM t1 force index(key_2) where c2 = 'r1c2';
+
+--echo ### The result should be normal
+SELECT * FROM t1;
+
+DROP TABLE t1, t2;
+disconnect a;
+disconnect b;

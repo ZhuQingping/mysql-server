@@ -1,0 +1,273 @@
+From d1a11b1734b7149cbf4bad86cef0d0712b27dffb Mon Sep 17 00:00:00 2001
+From: Guilhem Bichot <guilhem.bichot@contributor>
+
+Date: Tue, 12 Aug 2025 14:06:31 +0200
+Subject: [PATCH] while executing a prepared query including
+ many aggregate functions in select field, the second time using cached plan,
+ mysqld will coredump.
+
+During JOIN::make_tmp_tables_info(), JOIN::streaming_aggregation is
+tested, first, then, ~100 lines further down, may go from 'false' to
+'true'. This member is stored in the cached plan, with value
+'false' (because plan caching happens right before
+make_tmp_tables_info). The first execution happens on the original
+JOIN. On the second execution, the JOIN is the cached plan. So in
+make_tmp_tables_info its streaming_aggregation is seen as false, then
+becomes true 100 lines after, and remains so. On third execution, the
+JOIN is still the cached plan, and streaming_aggregation is thus true
+even before make_tmp_tables_info(): this function thus sees it as
+true. This leads to a different execution path being taken.
+
+The bug first showed up as the reading of freed Items in
+JOIN::sum_funcs. After resetting that list, it was found that
+JOIN::group_fields_cache had the same problem. It is because
+JOIN::make_tmp_tables_info() fills these two lists with possibly
+short-lived Items, for use with tmp tables (Items created by this
+function and callees, pointing to tmp table's columns). After
+resetting these two lists, the next problem was the odd 'true' value
+of streaming_aggregation. Then the bug was solved.
+
+Overall, the JOIN members which make_tmp_tables_info() changes must
+have their value saved, in plan_cache::Exec_context, and reset when we
+apply the plan, each time.
+---
+ mysql-test/include/session_plan_cache.inc     | 35 ++++++++++++++++
+ mysql-test/r/session_plan_cache.result        | 41 +++++++++++++++++++
+ .../dstore_main/r/session_plan_cache.result   | 41 +++++++++++++++++++
+ sql/sql_plan_cache.cc                         | 40 ++++++++++++++++++
+ sql/sql_plan_cache.h                          |  9 ++++
+ 5 files changed, 166 insertions(+)
+
+diff --git a/mysql-test/include/session_plan_cache.inc b/mysql-test/include/session_plan_cache.inc
+index aaa1c28e6c5..d2091ade56a 100644
+--- a/mysql-test/include/session_plan_cache.inc
++++ b/mysql-test/include/session_plan_cache.inc
+@@ -1890,5 +1890,40 @@ EXECUTE stmt0;
+ EXECUTE stmt0;
+ SHOW STATUS LIKE '%Cached_plan%';
+ DEALLOCATE PREPARE stmt0;
++DROP TABLE tbtest_part;
++
++--echo #
++--echo # BUGFIX while executing a prepared query including many aggregate functions in select field, the second time using cached plan, mysqld will coredump.
++--echo #
++
++flush status;
++CREATE TABLE tbtest_part (
++ id int NOT NULL,
++ tinyint_field tinyint DEFAULT NULL,
++ smallint_field smallint DEFAULT NULL,
++ bigint_field bigint DEFAULT NULL,
++ float_field float DEFAULT NULL,
++ datetime_field datetime DEFAULT NULL,
++ timestamp_field timestamp NULL DEFAULT NULL,
++ char_field char(8) DEFAULT NULL,
++ varchar_field varchar(10) DEFAULT NULL,
++ text_field tinytext,
++ PRIMARY KEY (id),
++ UNIQUE KEY idx_uni (id,tinyint_field,smallint_field,bigint_field),
++ KEY idx_f (char_field,varchar_field),
++ KEY idx_n (float_field),
++ KEY idx_d (datetime_field,timestamp_field)
++);
++ 
++PREPARE stmt0 FROM ' SELECT DISTINCT STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BUFFER_RESULT AVG(smallint_field),AVG(distinct smallint_field),BIT_AND(tinyint_field),BIT_OR(tinyint_field),BIT_XOR(tinyint_field),COUNT(1),COUNT(*),COUNT(DISTINCT float_field),COUNT(DISTINCT tinyint_field,smallint_field,bigint_field),JSON_ARRAYAGG(char_field),JSON_ARRAYAGG(1+1),JSON_OBJECTAGG(char_field,varchar_field),MAX(smallint_field),MAX(distinct smallint_field),MIN(smallint_field),MIN(distinct smallint_field),STD(float_field),STDDEV(float_field),STDDEV_SAMP(float_field),SUM(smallint_field),SUM(distinct smallint_field),VAR_POP(bigint_field),VAR_SAMP(bigint_field),VARIANCE(bigint_field) FROM tbtest_part  WHERE (id=1280601 or id=1280701 or id=1280801 or id=1280901 or id=1281001 or id=1281101 or id=1281201 or id=1281301) LIMIT 2200000 OFFSET 0 ';
++ 
++EXECUTE stmt0;
++EXECUTE stmt0;
++# The 3rd execution used to segfault, while reading a freed Item_sum from JOIN::sum_funcs
++EXECUTE stmt0;
++EXECUTE stmt0;
++show status like '%Cached_plan%';
++DEALLOCATE PREPARE stmt0;
++DROP TABLE tbtest_part;
+ 
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/mysql-test/r/session_plan_cache.result b/mysql-test/r/session_plan_cache.result
+index dbf64fae718..61998a0b77e 100644
+--- a/mysql-test/r/session_plan_cache.result
++++ b/mysql-test/r/session_plan_cache.result
+@@ -3553,4 +3553,45 @@ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	25
+ DEALLOCATE PREPARE stmt0;
++DROP TABLE tbtest_part;
++#
++# BUGFIX while executing a prepared query including many aggregate functions in select field, the second time using cached plan, mysqld will coredump.
++#
++flush status;
++CREATE TABLE tbtest_part (
++id int NOT NULL,
++tinyint_field tinyint DEFAULT NULL,
++smallint_field smallint DEFAULT NULL,
++bigint_field bigint DEFAULT NULL,
++float_field float DEFAULT NULL,
++datetime_field datetime DEFAULT NULL,
++timestamp_field timestamp NULL DEFAULT NULL,
++char_field char(8) DEFAULT NULL,
++varchar_field varchar(10) DEFAULT NULL,
++text_field tinytext,
++PRIMARY KEY (id),
++UNIQUE KEY idx_uni (id,tinyint_field,smallint_field,bigint_field),
++KEY idx_f (char_field,varchar_field),
++KEY idx_n (float_field),
++KEY idx_d (datetime_field,timestamp_field)
++);
++PREPARE stmt0 FROM ' SELECT DISTINCT STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BUFFER_RESULT AVG(smallint_field),AVG(distinct smallint_field),BIT_AND(tinyint_field),BIT_OR(tinyint_field),BIT_XOR(tinyint_field),COUNT(1),COUNT(*),COUNT(DISTINCT float_field),COUNT(DISTINCT tinyint_field,smallint_field,bigint_field),JSON_ARRAYAGG(char_field),JSON_ARRAYAGG(1+1),JSON_OBJECTAGG(char_field,varchar_field),MAX(smallint_field),MAX(distinct smallint_field),MIN(smallint_field),MIN(distinct smallint_field),STD(float_field),STDDEV(float_field),STDDEV_SAMP(float_field),SUM(smallint_field),SUM(distinct smallint_field),VAR_POP(bigint_field),VAR_SAMP(bigint_field),VARIANCE(bigint_field) FROM tbtest_part  WHERE (id=1280601 or id=1280701 or id=1280801 or id=1280901 or id=1281001 or id=1281101 or id=1281201 or id=1281301) LIMIT 2200000 OFFSET 0 ';
++EXECUTE stmt0;
++AVG(smallint_field)	AVG(distinct smallint_field)	BIT_AND(tinyint_field)	BIT_OR(tinyint_field)	BIT_XOR(tinyint_field)	COUNT(1)	COUNT(*)	COUNT(DISTINCT float_field)	COUNT(DISTINCT tinyint_field,smallint_field,bigint_field)	JSON_ARRAYAGG(char_field)	JSON_ARRAYAGG(1+1)	JSON_OBJECTAGG(char_field,varchar_field)	MAX(smallint_field)	MAX(distinct smallint_field)	MIN(smallint_field)	MIN(distinct smallint_field)	STD(float_field)	STDDEV(float_field)	STDDEV_SAMP(float_field)	SUM(smallint_field)	SUM(distinct smallint_field)	VAR_POP(bigint_field)	VAR_SAMP(bigint_field)	VARIANCE(bigint_field)
++NULL	NULL	18446744073709551615	0	0	0	0	0	0	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
++EXECUTE stmt0;
++AVG(smallint_field)	AVG(distinct smallint_field)	BIT_AND(tinyint_field)	BIT_OR(tinyint_field)	BIT_XOR(tinyint_field)	COUNT(1)	COUNT(*)	COUNT(DISTINCT float_field)	COUNT(DISTINCT tinyint_field,smallint_field,bigint_field)	JSON_ARRAYAGG(char_field)	JSON_ARRAYAGG(1+1)	JSON_OBJECTAGG(char_field,varchar_field)	MAX(smallint_field)	MAX(distinct smallint_field)	MIN(smallint_field)	MIN(distinct smallint_field)	STD(float_field)	STDDEV(float_field)	STDDEV_SAMP(float_field)	SUM(smallint_field)	SUM(distinct smallint_field)	VAR_POP(bigint_field)	VAR_SAMP(bigint_field)	VARIANCE(bigint_field)
++NULL	NULL	18446744073709551615	0	0	0	0	0	0	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
++EXECUTE stmt0;
++AVG(smallint_field)	AVG(distinct smallint_field)	BIT_AND(tinyint_field)	BIT_OR(tinyint_field)	BIT_XOR(tinyint_field)	COUNT(1)	COUNT(*)	COUNT(DISTINCT float_field)	COUNT(DISTINCT tinyint_field,smallint_field,bigint_field)	JSON_ARRAYAGG(char_field)	JSON_ARRAYAGG(1+1)	JSON_OBJECTAGG(char_field,varchar_field)	MAX(smallint_field)	MAX(distinct smallint_field)	MIN(smallint_field)	MIN(distinct smallint_field)	STD(float_field)	STDDEV(float_field)	STDDEV_SAMP(float_field)	SUM(smallint_field)	SUM(distinct smallint_field)	VAR_POP(bigint_field)	VAR_SAMP(bigint_field)	VARIANCE(bigint_field)
++NULL	NULL	18446744073709551615	0	0	0	0	0	0	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
++EXECUTE stmt0;
++AVG(smallint_field)	AVG(distinct smallint_field)	BIT_AND(tinyint_field)	BIT_OR(tinyint_field)	BIT_XOR(tinyint_field)	COUNT(1)	COUNT(*)	COUNT(DISTINCT float_field)	COUNT(DISTINCT tinyint_field,smallint_field,bigint_field)	JSON_ARRAYAGG(char_field)	JSON_ARRAYAGG(1+1)	JSON_OBJECTAGG(char_field,varchar_field)	MAX(smallint_field)	MAX(distinct smallint_field)	MIN(smallint_field)	MIN(distinct smallint_field)	STD(float_field)	STDDEV(float_field)	STDDEV_SAMP(float_field)	SUM(smallint_field)	SUM(distinct smallint_field)	VAR_POP(bigint_field)	VAR_SAMP(bigint_field)	VARIANCE(bigint_field)
++NULL	NULL	18446744073709551615	0	0	0	0	0	0	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
++show status like '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	1
++Cached_plan_hits	3
++DEALLOCATE PREPARE stmt0;
++DROP TABLE tbtest_part;
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/mysql-test/suite/dstore_main/r/session_plan_cache.result b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+index 341204992d4..2f7e66b96b6 100644
+--- a/mysql-test/suite/dstore_main/r/session_plan_cache.result
++++ b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+@@ -3431,4 +3431,45 @@ Variable_name	Value
+ Cached_plan_count	1
+ Cached_plan_hits	25
+ DEALLOCATE PREPARE stmt0;
++DROP TABLE tbtest_part;
++#
++# BUGFIX while executing a prepared query including many aggregate functions in select field, the second time using cached plan, mysqld will coredump.
++#
++flush status;
++CREATE TABLE tbtest_part (
++id int NOT NULL,
++tinyint_field tinyint DEFAULT NULL,
++smallint_field smallint DEFAULT NULL,
++bigint_field bigint DEFAULT NULL,
++float_field float DEFAULT NULL,
++datetime_field datetime DEFAULT NULL,
++timestamp_field timestamp NULL DEFAULT NULL,
++char_field char(8) DEFAULT NULL,
++varchar_field varchar(10) DEFAULT NULL,
++text_field tinytext,
++PRIMARY KEY (id),
++UNIQUE KEY idx_uni (id,tinyint_field,smallint_field,bigint_field),
++KEY idx_f (char_field,varchar_field),
++KEY idx_n (float_field),
++KEY idx_d (datetime_field,timestamp_field)
++);
++PREPARE stmt0 FROM ' SELECT DISTINCT STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BUFFER_RESULT AVG(smallint_field),AVG(distinct smallint_field),BIT_AND(tinyint_field),BIT_OR(tinyint_field),BIT_XOR(tinyint_field),COUNT(1),COUNT(*),COUNT(DISTINCT float_field),COUNT(DISTINCT tinyint_field,smallint_field,bigint_field),JSON_ARRAYAGG(char_field),JSON_ARRAYAGG(1+1),JSON_OBJECTAGG(char_field,varchar_field),MAX(smallint_field),MAX(distinct smallint_field),MIN(smallint_field),MIN(distinct smallint_field),STD(float_field),STDDEV(float_field),STDDEV_SAMP(float_field),SUM(smallint_field),SUM(distinct smallint_field),VAR_POP(bigint_field),VAR_SAMP(bigint_field),VARIANCE(bigint_field) FROM tbtest_part  WHERE (id=1280601 or id=1280701 or id=1280801 or id=1280901 or id=1281001 or id=1281101 or id=1281201 or id=1281301) LIMIT 2200000 OFFSET 0 ';
++EXECUTE stmt0;
++AVG(smallint_field)	AVG(distinct smallint_field)	BIT_AND(tinyint_field)	BIT_OR(tinyint_field)	BIT_XOR(tinyint_field)	COUNT(1)	COUNT(*)	COUNT(DISTINCT float_field)	COUNT(DISTINCT tinyint_field,smallint_field,bigint_field)	JSON_ARRAYAGG(char_field)	JSON_ARRAYAGG(1+1)	JSON_OBJECTAGG(char_field,varchar_field)	MAX(smallint_field)	MAX(distinct smallint_field)	MIN(smallint_field)	MIN(distinct smallint_field)	STD(float_field)	STDDEV(float_field)	STDDEV_SAMP(float_field)	SUM(smallint_field)	SUM(distinct smallint_field)	VAR_POP(bigint_field)	VAR_SAMP(bigint_field)	VARIANCE(bigint_field)
++NULL	NULL	18446744073709551615	0	0	0	0	0	0	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
++EXECUTE stmt0;
++AVG(smallint_field)	AVG(distinct smallint_field)	BIT_AND(tinyint_field)	BIT_OR(tinyint_field)	BIT_XOR(tinyint_field)	COUNT(1)	COUNT(*)	COUNT(DISTINCT float_field)	COUNT(DISTINCT tinyint_field,smallint_field,bigint_field)	JSON_ARRAYAGG(char_field)	JSON_ARRAYAGG(1+1)	JSON_OBJECTAGG(char_field,varchar_field)	MAX(smallint_field)	MAX(distinct smallint_field)	MIN(smallint_field)	MIN(distinct smallint_field)	STD(float_field)	STDDEV(float_field)	STDDEV_SAMP(float_field)	SUM(smallint_field)	SUM(distinct smallint_field)	VAR_POP(bigint_field)	VAR_SAMP(bigint_field)	VARIANCE(bigint_field)
++NULL	NULL	18446744073709551615	0	0	0	0	0	0	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
++EXECUTE stmt0;
++AVG(smallint_field)	AVG(distinct smallint_field)	BIT_AND(tinyint_field)	BIT_OR(tinyint_field)	BIT_XOR(tinyint_field)	COUNT(1)	COUNT(*)	COUNT(DISTINCT float_field)	COUNT(DISTINCT tinyint_field,smallint_field,bigint_field)	JSON_ARRAYAGG(char_field)	JSON_ARRAYAGG(1+1)	JSON_OBJECTAGG(char_field,varchar_field)	MAX(smallint_field)	MAX(distinct smallint_field)	MIN(smallint_field)	MIN(distinct smallint_field)	STD(float_field)	STDDEV(float_field)	STDDEV_SAMP(float_field)	SUM(smallint_field)	SUM(distinct smallint_field)	VAR_POP(bigint_field)	VAR_SAMP(bigint_field)	VARIANCE(bigint_field)
++NULL	NULL	18446744073709551615	0	0	0	0	0	0	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
++EXECUTE stmt0;
++AVG(smallint_field)	AVG(distinct smallint_field)	BIT_AND(tinyint_field)	BIT_OR(tinyint_field)	BIT_XOR(tinyint_field)	COUNT(1)	COUNT(*)	COUNT(DISTINCT float_field)	COUNT(DISTINCT tinyint_field,smallint_field,bigint_field)	JSON_ARRAYAGG(char_field)	JSON_ARRAYAGG(1+1)	JSON_OBJECTAGG(char_field,varchar_field)	MAX(smallint_field)	MAX(distinct smallint_field)	MIN(smallint_field)	MIN(distinct smallint_field)	STD(float_field)	STDDEV(float_field)	STDDEV_SAMP(float_field)	SUM(smallint_field)	SUM(distinct smallint_field)	VAR_POP(bigint_field)	VAR_SAMP(bigint_field)	VARIANCE(bigint_field)
++NULL	NULL	18446744073709551615	0	0	0	0	0	0	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
++show status like '%Cached_plan%';
++Variable_name	Value
++Cached_plan_count	1
++Cached_plan_hits	3
++DEALLOCATE PREPARE stmt0;
++DROP TABLE tbtest_part;
+ set rds_plan_cache = @old_plan_cache;
+diff --git a/sql/sql_plan_cache.cc b/sql/sql_plan_cache.cc
+index b0d818bdcf8..cb63b81b965 100644
+--- a/sql/sql_plan_cache.cc
++++ b/sql/sql_plan_cache.cc
+@@ -1931,6 +1931,30 @@ bool Exec_context::fill(THD *thd, JOIN *join, QEP_TAB *cached_qep_tab) {
+   }
+ 
+   tab_condition = cached_qep_tab->condition();
++
++  /* Here we have some members of JOIN which have already been copied from the
++  original JOIN to our JOIN by JOIN::shallow_clone(). However, after this
++  copying happened, their values in the original JOIN will be modified (most
++  often in JOIN::make_tmp_tables_info() and callees). You may think this is
++  ok, as our JOIN is already made at this time. But now imagine we apply the
++  cached plan. Now it is our JOIN (the cached JOIN) which is going to go
++  through make_tmp_tables_info() and its members will be modified. So when we
++  apply the cached plan a second time (i.e. when we are starting the third
++  execution of the prepared statement), the members in our cached JOIN will
++  not be what they used to be: the third execution will not start on the same
++  state as the second did, leading to bugs. This is why we back up these
++  members in the context. */
++  explain_flags = join->explain_flags;
++  calc_found_rows = join->calc_found_rows;
++  m_select_limit = join->m_select_limit;
++  grouped = join->grouped;
++  streaming_aggregation = join->streaming_aggregation;
++  select_distinct = join->select_distinct;
++  // rollup_state should also be copied as it's modified, but is not needed as
++  // plan cache does not support ROLLUP.
++  assert(join->rollup_state == JOIN::RollupState::NONE);
++  best_read = join->best_read;
++
+   return false;
+ }
+ 
+@@ -2723,6 +2747,22 @@ static bool apply_cached_plan(JOIN *join) {
+     }
+   }
+ 
++  // JOIN::make_tmp_tables_info() fills these two lists with possibly
++  // short-lived Items, for use with tmp tables, so empty them for our fresh
++  // start, they will be recreated.
++  if (join->sum_funcs) *join->sum_funcs = nullptr;
++  join->group_fields_cache.clear();
++
++  // Non-pointer members of JOIN which JOIN:make_tmp_tables_info() changes,
++  // need to be restored from their value at the time of caching.
++  join->explain_flags = context->explain_flags;
++  join->calc_found_rows = context->calc_found_rows;
++  join->m_select_limit = context->m_select_limit;
++  join->grouped = context->grouped;
++  join->streaming_aggregation = context->streaming_aggregation;
++  join->select_distinct = context->select_distinct;
++  join->best_read = context->best_read;
++
+   // PLAN_CACHE_PORT Two things:
+   // - no cloning is needed here: when we built the cached plan, we already
+   // cloned what was needed, now we can just use that, these are all
+diff --git a/sql/sql_plan_cache.h b/sql/sql_plan_cache.h
+index 778825c39a8..7c214f17620 100644
+--- a/sql/sql_plan_cache.h
++++ b/sql/sql_plan_cache.h
+@@ -27,6 +27,7 @@
+ #include "my_base.h"
+ #include "my_inttypes.h"
+ #include "sql/mysqld.h"
++#include "sql/opt_explain_format.h"
+ #include "sql/opt_hints.h"
+ #include "sql/sql_list.h"
+ #include "sql_const.h"
+@@ -81,6 +82,14 @@ struct Exec_context {
+   Item *tab_condition{nullptr};
+   int quick_type;
+ 
++  Explain_format_flags explain_flags;
++  bool calc_found_rows;
++  ha_rows m_select_limit;
++  bool grouped;
++  bool streaming_aggregation;
++  bool select_distinct;
++  double best_read;
++
+   using allocator_for_map = Mem_root_allocator<std::pair<Item *const, Item *>>;
+   std::map<Item *, Item *, std::less<Item *>, allocator_for_map>
+       transient_items;
+-- 
+2.23.0
+

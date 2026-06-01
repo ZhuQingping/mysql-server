@@ -1,0 +1,74 @@
+#-------------------------------------------------------------
+#
+#    Conditions:
+#          1. log-bin=mysql-bin(binlog function is turned on)
+#          2. binlog format in row
+#          3. gtid_mode=OFF
+#          4. single mysql-bin.00000x
+#    Actions:
+#          execute  the command 'mysqlbinlog --collect-server-id mysql-bin.000001
+#            --server-id-file=mysql-bin.srvids'
+#          to collect all server ids in binlog file.
+#
+#-------------------------------------------------------------
+--disable_warnings
+
+SET @old_binlog_format=@@binlog_format;
+SET GLOBAL binlog_format='row';
+SET SESSION binlog_format='row';
+
+RESET MASTER;
+let $tmp=query_get_value(SHOW VARIABLES LIKE 'datadir',Value,1);
+let $binlog_name=query_get_value(SHOW MASTER STATUS,File,1);
+--echo $binlog_name
+
+DROP DATABASE IF EXISTS testdb;
+CREATE DATABASE testdb;
+
+#------------------------ Test execution --------------------------------------------
+
+USE testdb;
+create table t1(id int);
+DELIMITER $$;
+CREATE PROCEDURE `sbtest`()
+BEGIN
+DECLARE i INT;
+DECLARE tmp INT;
+SET i = 0;
+WHILE i<20 DO
+SET @csql =CONCAT('insert into t1 values(',i,');');
+SET i = i+1;
+PREPARE create_stmt FROM @csql;
+EXECUTE create_stmt;
+END WHILE;
+END$$
+DELIMITER ;$$
+call sbtest;
+set global server_id=20;
+call sbtest;
+set global server_id=30;
+call sbtest;
+set global server_id=1;
+
+--echo $binlog_name
+--echo $binlog_name.srvids
+
+#--------------------- check fake rotate event not exist ------ ---------------
+--exec $MYSQL_BINLOG -vv --force-if-open $tmp/$binlog_name > $tmp/$binlog_name.sql
+--exec cat $tmp/$binlog_name.sql | grep fake_rotate_event | wc -l
+--exec rm -rf $tmp/$binlog_name.sql
+
+#--------------------- collect server ids -------------------------------------
+--exec $MYSQL_BINLOG $tmp/$binlog_name --force-if-open --collect-server-id --server-id-file=$tmp/$binlog_name.srvids -r /dev/null
+--exec cat $tmp/$binlog_name.srvids
+--exec rm -rf $tmp/$binlog_name.srvids
+
+#--------------------- check fake rotate event exist --------- ----------------
+--exec $MYSQL_BINLOG -vv --force-if-open $tmp/$binlog_name > $tmp/$binlog_name.sql
+--exec cat $tmp/$binlog_name.sql | grep fake_rotate_event | wc -l
+--exec rm -rf $tmp/$binlog_name.sql
+
+#------------------------ Clean up the environment-----------------------------
+SET GLOBAL binlog_format = @old_binlog_format;
+DROP DATABASE testdb;
+--enable_warnings

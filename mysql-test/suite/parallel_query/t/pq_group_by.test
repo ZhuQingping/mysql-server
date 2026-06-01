@@ -1,0 +1,590 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+--source include/elide_costs.inc
+
+## group by with bit ##
+create table t1 (a bit(1));
+insert into t1 values(B'0'),(B'1');
+explain select bin(a) from t1;
+select bin(a) from t1;
+explain select bin(a) from t1 group by a;
+select bin(a) from t1 group by a;
+drop table t1;
+
+create table t1(a int primary key, b varchar(10), c decimal(5,2), d double);
+
+SELECT COUNT(a) FROM t1; 
+SELECT SUM(a) FROM t1; 
+SELECT AVG(a) FROM t1; 
+
+insert into t1 values (1, 'The', '3.14', '3.14');
+insert into t1 values (2, 'quick', '4.25', '3.14');
+insert into t1 values (3, 'brown', '5.36', '3.14');
+insert into t1 values (4, 'fox', '6.47', '3.14');
+insert into t1 values (5, 'jumps', '3.14', '6.28');
+insert into t1 values (6, 'over', '4.25', '6.28');
+insert into t1 values (7, 'the', '5.36', '6.28');
+insert into t1 values (8, 'lazy', '6.47', '6.28');
+insert into t1 values (9, 'dog', '7.58', '6.28');
+
+select count(*) from t1;
+select count(a) from t1;
+select count(b) from t1;
+select count(c) from t1;
+select count(d) from t1;
+select sum(a) from t1;
+select sum(c) from t1;
+select sum(d) from t1;
+select avg(a) from t1;
+select avg(c) from t1;
+select avg(d) from t1;
+select std(d) from t1;
+select variance(d) from t1;
+
+select sum(a) from t1 where c > 5.0;
+select sum(c) from t1 where a > 5;
+select sum(d) from t1 where c > 5.0;
+select avg(a) from t1 where c > 5.0;
+select avg(c) from t1 where a > 5;
+select avg(d) from t1 where c > 5.0;
+select count(*) from t1 where c > 5.0;
+select count(a) from t1 where a > 5;
+select count(b) from t1 where c > 5.0;
+select count(c) from t1 where d > 6.0;
+select count(d) from t1 where a > 5;
+
+select c,sum(a) from t1 group by(c);
+select b,sum(c) from t1 group by(b);
+select c,sum(d) from t1 group by(c);
+select c,avg(a) from t1 group by(c);
+select b,avg(c) from t1 group by(b);
+select c,avg(d) from t1 group by(c);
+select count(*) from t1 group by(c);
+select count(a) from t1 group by(a);
+select count(b) from t1 group by(c);
+select count(c) from t1 group by(b);
+select count(d) from t1 group by(c);
+
+drop table t1;
+
+--disable_warnings
+
+CREATE TABLE `t2` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `a` varchar(10) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+);
+
+--enable_warnings 
+
+insert into t2 values(1, 'a'), (2, 'b');
+
+select sum(id) from t2 group by id;
+select avg(id) from t2 group by id;
+select count(id) from t2 group by id;
+
+drop table t2;
+
+## sum_max/sum/min ##
+
+create table t1 (a char(2), t timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP);
+insert into t1 values ('a', '2004-01-01 00:00:00'), ('a', '2004-01-01 01:00:00'), ('b', '2004-02-01 00:00:00');
+
+select max(t) from t1 group by a;
+explain select max(t) from t1 group by a;
+
+select min(t) from t1 group by a;
+explain select min(t) from t1 group by a;
+
+drop table t1;
+
+## optimized with key 
+
+set sql_mode = ''; 
+set big_tables = 1;
+CREATE TABLE t1(
+  id INT AUTO_INCREMENT PRIMARY KEY, 
+  c1 INT NOT NULL, 
+  c2 INT NOT NULL,
+  UNIQUE KEY (c2,c1));
+
+INSERT INTO t1(c1,c2) VALUES (5,1), (4,1), (3,5), (2,3), (1,3);
+
+SELECT * FROM t1 ORDER BY c1;
+SELECT * FROM t1 GROUP BY id ORDER BY c1;
+
+## desc 
+SELECT * FROM t1 GROUP BY id ORDER BY id DESC; 
+
+drop table t1; 
+
+--disable_warnings
+
+CREATE TABLE t1 (
+  spID int(10) unsigned,
+  userID int(10) unsigned,
+  score smallint(5) unsigned,
+  key (spid),
+  key (score)
+);
+
+--enable_warnings 
+
+INSERT INTO t1 VALUES (1,1,1),(2,2,2),(2,1,1),(3,3,3),(4,3,3),(5,3,3),(6,3,3),(7,3,3);
+ANALYZE TABLE t1;
+select userid,count(*) from t1 group by userid order by userid;
+select userid,count(*) from t1 group by userid order by null;
+select userid,count(*) from t1 group by userid order by userid desc;
+select spid,count(*) from t1 group by spid;
+select spid,count(*) from t1 group by spid order by spid;
+select spid,count(*) from t1 group by spid order by spid desc; 
+
+drop table t1;
+
+## optimized-group-by 
+set sql_mode = ''; 
+
+create table t3 (
+ period    int not null,
+ name      char(32) not null,
+ companynr int not null,
+ price     double(11,0),
+ price2     double(11,0),
+ key (period),
+ key (name)
+);
+
+INSERT INTO t3 (period,name,companynr,price,price2) VALUES (1001,"Iranizes",37,5987435,234724);
+INSERT INTO t3 (period,name,companynr,price,price2) VALUES (1002,"violinist",37,28357832,8723648);
+INSERT INTO t3 (period,name,companynr,price,price2) VALUES (1003,"extramarital",37,39654943,235872);
+INSERT INTO t3 (period,name,companynr,price,price2) VALUES (1004,"spates",78,726498,72987523);
+INSERT INTO t3 (period,name,companynr,price,price2) VALUES (1005,"cloakroom",78,98439034,823742);
+INSERT INTO t3 (period,name,companynr,price,price2) VALUES (1006,"gazer",101,834598,27348324);
+INSERT INTO t3 (period,name,companynr,price,price2) VALUES (1007,"hand",154,983543950,29837423);
+INSERT INTO t3 (period,name,companynr,price,price2) VALUES (1008,"tucked",311,234298,3275892);
+INSERT INTO t3 (period,name,companynr,price,price2) VALUES (1009,"gems",447,2374834,9872392);
+INSERT INTO t3 (period,name,companynr,price,price2) VALUES (1010,"clinker",512,786542,76234234);
+
+create temporary table tmp select * from t3;
+
+insert into t3 select * from tmp;
+insert into tmp select * from t3;
+insert into t3 select * from tmp;
+insert into tmp select * from t3;
+insert into t3 select * from tmp;
+insert into tmp select * from t3;
+insert into t3 select * from tmp;
+insert into tmp select * from t3;
+insert into t3 select * from tmp;
+insert into tmp select * from t3;
+insert into t3 select * from tmp;
+insert into tmp select * from t3;
+insert into t3 select * from tmp;
+insert into tmp select * from t3;
+insert into t3 select * from tmp;
+insert into tmp select * from t3;
+insert into t3 select * from tmp;
+set session innodb_parallel_read_threads = 1;
+alter table t3 add t2nr int not null auto_increment primary key first;
+set session innodb_parallel_read_threads = default;
+drop table tmp;
+
+select companynr,t2nr,count(price),sum(price),min(price),max(price),avg(price) from t3 where companynr = 37 
+group by companynr,t2nr order by companynr,t2nr limit 10;
+
+drop table t3; 
+
+## Aggr. limit 
+CREATE TABLE t1 (a int, b int); 
+
+let $1=64;
+--disable_query_log
+
+while($1) 
+{
+  let $2=32;
+	while($2)
+	{
+		eval INSERT INTO t1 VALUES (MOD($1, 23), MOD(133, $2)); 
+		dec $2;
+	}
+	dec $1; 
+}
+
+--enable_query_log
+
+SELECT a, sum(a) FROM t1 GROUP BY a ORDER BY a;
+SELECT a, sum(a) FROM t1 GROUP BY a ORDER BY a desc; 
+SELECT a, sum(a) FROM t1 GROUP BY a ORDER BY a limit 10; 
+SELECT a, sum(a) FROM t1 GROUP BY a ORDER BY a limit 10, 10; 
+
+SELECT b, avg(a) FROM t1 GROUP BY a, b ORDER BY b, NULL limit 10; 
+SELECT b, sum(a) FROM t1 GROUP BY a, b ORDER BY NULL, a, b, NULL, a, NULL; 
+SELECT b, sum(a) FROM t1 GROUP BY a, b ORDER BY NULL, a, b, NULL, a, NULL limit 10, 5; 
+
+EXPLAIN select distinct a FROM t1 order by a limit 10;
+select distinct a FROM t1 order by a limit 10;
+select distinct a, b FROM t1 order by a, b limit 10;
+
+set sql_mode = '';
+EXPLAIN select distinct a from t1 group by a, b order by a, b limit 10;
+select distinct a from t1 group by a, b order by a, b limit 10;
+
+DROP TABLE t1; 
+
+## Normal group by
+
+CREATE TABLE t1 (a int, b int);
+
+let $1=64;
+
+--disable_query_log
+
+while($1)
+{
+  let $2=32;
+	while($2)
+	{
+		eval INSERT INTO t1 VALUES (MOD($1, 31), MOD($2, 11));
+		dec $2;
+	}
+	dec $1;
+}
+
+--enable_query_log
+
+## having normal item
+
+SELECT a FROM t1 GROUP BY a ORDER by a Limit 10;
+SELECT a FROM t1 GROUP BY a HAVING a > 1 ORDER by a Limit 10;
+SELECT a FROM t1 GROUP BY a HAVING 1 != 1 AND a > 1 ORDER by a Limit 10;
+SELECT 0 AS x, a FROM t1 GROUP BY x,a HAVING x=1 AND a > 1 ORDER by a Limit 10;
+
+## having item func
+
+EXPLAIN SELECT a FROM t1 GROUP BY a HAVING (a % 11) > 1 ORDER by a Limit 10;
+SELECT a FROM t1 GROUP BY a HAVING (a % 11) > 1 ORDER by a Limit 10;
+SELECT a, b FROM t1 GROUP BY a, b HAVING a + b > 31 ORDER by a, b Limit 10;
+SELECT a, b FROM t1 GROUP BY a, b HAVING a * b > 61 ORDER by a, b Limit 10, 10;
+SELECT a, b FROM t1 GROUP BY a, b HAVING sin(a % 11) > 0.5 and cos(b % 7) < 0.5 ORDER by a, b Limit 10, 10;
+
+## having aggr
+EXPLAIN SELECT a, sum(b) from t1 GROUP BY a, b HAVING sum(b) > 5 ORDER BY a, b LIMIT 10;
+SELECT a, sum(b) from t1 GROUP BY a, b HAVING sum(b) > 5 ORDER BY a, b LIMIT 10;
+
+EXPLAIN SELECT a, sum(b) from t1 GROUP BY a, b HAVING sum(b) > 5 ORDER BY a, b LIMIT 10;
+SELECT a, b from t1 GROUP BY a, b HAVING avg(b) > 5 ORDER BY a, b LIMIT 10;
+SELECT sum(a), avg(b) from t1 GROUP BY a, b HAVING sum(a) * avg(b) > 25 ORDER BY a, b LIMIT 10;
+
+DROP TABLE t1; 
+
+### optimized-group-by without parallel execution, #pq_issues 423/429
+
+CREATE TABLE `t1` (
+`a` int NOT NULL,
+`b` char(10) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+INSERT INTO t1 values (1, 'a'), (2, 'b'), (3, 'c'), (3, 'c'), (4, 'd'), (5, 'f'), (6, 'e');
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+alter table t1 add index idx(`a`);
+
+analyze table t1;
+SELECT a, count(*)g from t1 group by a order by a;
+EXPLAIN SELECT a, count(*)g from t1 group by a order by a;
+
+SELECT a, count(*)g from t1 group by a order by a limit 1;
+EXPLAIN SELECT a, count(*)g from t1 group by a order by a limit 1;
+
+drop table t1;
+
+create table t4 (
+  companynr tinyint(2) unsigned zerofill NOT NULL default '00',
+  companyname char(30) NOT NULL default '',
+  PRIMARY KEY (companynr),
+  UNIQUE KEY companyname(companyname)
+) MAX_ROWS=50 PACK_KEYS=1 COMMENT='companynames';
+
+INSERT INTO t4 (companynr, companyname) VALUES (29,'company 1');
+INSERT INTO t4 (companynr, companyname) VALUES (34,'company 2');
+INSERT INTO t4 (companynr, companyname) VALUES (36,'company 3');
+INSERT INTO t4 (companynr, companyname) VALUES (37,'company 4');
+INSERT INTO t4 (companynr, companyname) VALUES (40,'company 5');
+INSERT INTO t4 (companynr, companyname) VALUES (41,'company 6');
+INSERT INTO t4 (companynr, companyname) VALUES (53,'company 7');
+INSERT INTO t4 (companynr, companyname) VALUES (58,'company 8');
+INSERT INTO t4 (companynr, companyname) VALUES (65,'company 9');
+INSERT INTO t4 (companynr, companyname) VALUES (68,'company 10');
+INSERT INTO t4 (companynr, companyname) VALUES (50,'company 11');
+INSERT INTO t4 (companynr, companyname) VALUES (00,'Unknown');
+
+select distinct companynr from t4;
+select distinct companynr from t4 order by companynr;
+select distinct mod(companynr,10) from t4 group by companynr;
+
+DROP table t4;
+
+SET NAMES utf8;
+SET collation_connection=ujis_japanese_ci;
+CREATE TABLE t1 (b VARCHAR(2));
+INSERT INTO t1 VALUES ('0'),('1'),('2'),('3'),('4'),('5'),('6'),('7');
+INSERT INTO t1 VALUES ('8'),('9'),('A'),('B'),('C'),('D'),('E'),('F');
+CREATE TEMPORARY TABLE head AS SELECT concat(b1.b, b2.b) AS head FROM t1 b1, t1 b2;
+CREATE TEMPORARY TABLE tail AS SELECT concat(b1.b, b2.b) AS tail FROM t1 b1, t1 b2;
+DROP TABLE t1;
+
+CREATE TABLE t1 AS SELECT 'XXXXXX' AS code, ' ' AS a LIMIT 0;
+INSERT INTO t1 (code) SELECT concat('8E', head) FROM head
+WHERE (head BETWEEN 'A1' AND 'DF') ORDER BY head;
+INSERT INTO t1 (code) SELECT concat(head, tail)
+FROM head, tail
+WHERE (head BETWEEN '80' AND 'FF') AND (head NOT BETWEEN '8E' AND '8F')
+AND   (tail BETWEEN '20' AND 'FF')
+ORDER BY head, tail;
+INSERT INTO t1 (code) SELECT concat('8F', head, tail)
+FROM head, tail
+WHERE (head BETWEEN '80' AND 'FF') AND (tail BETWEEN '80' AND 'FF')
+ORDER BY head, tail;
+DROP TEMPORARY TABLE head, tail;
+
+SET @@session.max_error_count = 64;
+UPDATE IGNORE t1 SET a=unhex(code) ORDER BY code;
+SELECT code, hex(upper(a)), hex(lower(a)),a, upper(a), lower(a) FROM t1 WHERE hex(a)<>hex(upper(a)) OR hex(a)<>hex(lower(a)) ORDER BY code;
+SELECT * FROM t1
+WHERE HEX(CAST(LOWER(a) AS CHAR CHARACTER SET utf8)) <>
+      HEX(LOWER(CAST(a AS CHAR CHARACTER SET utf8))) ORDER BY code;
+SELECT * FROM t1
+WHERE HEX(CAST(UPPER(a) AS CHAR CHARACTER SET utf8)) <>
+      HEX(UPPER(CAST(a AS CHAR CHARACTER SET utf8))) ORDER BY code;
+
+SELECT HEX(a), HEX(CONVERT(a USING utf8)) as b FROM t1
+WHERE a<>'' HAVING b<>'3F' ORDER BY code;
+
+DROP TABLE t1;
+
+## BUG of ISSUE 509
+
+CREATE TABLE t1 (a tinyint(3), b varchar(255), PRIMARY KEY  (a));
+CREATE TABLE t2 (a tinyint(3), b tinyint(3), PRIMARY KEY  (a), KEY b (b));
+
+INSERT INTO t1 VALUES (1,'-----'), (6,'Allemagne'), (17,'Autriche'),
+    (25,'Belgique'), (54,'Danemark'), (62,'Espagne'), (68,'France');
+
+INSERT INTO t2 VALUES (1,1), (2,1), (6,6), (18,17), (15,25), (16,25),
+ (17,25), (10,54), (5,62),(3,68);
+
+ANALYZE TABLE t1,t2;
+
+explain
+SELECT straight_join concat(t1.b, "") from t2, t1 where t2.b=t1.a GROUP BY t2.b;
+
+SELECT straight_join concat(t1.b, "") from t2, t1 where t2.b=t1.a GROUP BY t2.b;
+
+drop table t1,t2;
+
+## BUG ISSUE 525
+
+CREATE TABLE t1 (f1 INTEGER, f2 INTEGER, f3 INTEGER,
+                 KEY(f1), KEY(f1,f2), KEY(f3));
+INSERT INTO t1 VALUES (NULL, 1, 2);
+INSERT INTO t1 VALUES (NULL, 1, 3);
+
+EXPLAIN FORMAT=tree SELECT * FROM (SELECT f1, SUM(f2) AS sum FROM (SELECT f1, f2 FROM t1 WHERE f1 > 10) as dt1 GROUP BY f1) dt2 WHERE sum > 10;
+
+drop table t1;
+
+## BUG ISSUE 511
+create table t1 (a bit(7), b bit(9), key(a, b)) engine=innodb;
+insert into t1 values 
+(94, 46), (31, 438), (61, 152), (78, 123), (88, 411), (122, 118), (0, 177),    
+(75, 42), (108, 67), (79, 349), (59, 188), (68, 206), (49, 345), (118, 380),   
+(111, 368), (94, 468), (56, 379), (77, 133), (29, 399), (9, 363), (23, 36),    
+(116, 390), (119, 368), (87, 351), (123, 411), (24, 398), (34, 202), (28, 499),
+(30, 83), (5, 178), (60, 343), (4, 245), (104, 280), (106, 446), (127, 403),   
+(44, 307), (68, 454), (57, 135);
+
+explain select hex(min(a)), hex(max(a)) from t1;
+select hex(min(a)), hex(max(a)) from t1;
+
+drop table t1;
+
+## BUG ISSUE 537
+CREATE TABLE t(id INT PRIMARY KEY,
+               c1 INT, c2 INT, key(c2)) engine=InnoDB;
+INSERT INTO t(id, c1, c2) VALUES(1, 2, 3), (2, 3, 4), (3, 3, 4), (4, 3, 4);
+
+analyze table t;
+EXPLAIN SELECT * FROM
+(SELECT t1.id + 1
+FROM t t1 INNER JOIN t t2 ON t1.id= 1
+GROUP BY t1.id + 1) a, t b
+WHERE b.id BETWEEN 1 AND 10;
+
+drop table t;
+
+## issues 541, 549
+
+create table t1 (v varchar(10), c char(10), t text, key(v), key(c), key(t(10)));
+
+--disable_query_log
+
+let $1=10;
+while ($1)
+{
+  let $2=27;
+  eval set @space=repeat(' ',10-$1);
+  while ($2)
+  {
+    eval set @char=char(ascii('a')+$2-1);
+    insert into t1 values(concat(@char,@space),concat(@char,@space),concat(@char,@space));
+    dec $2;
+  }
+  dec $1;
+}
+--enable_query_log
+
+insert into t1 values(concat('a',char(1)),concat('a',char(1)),concat('a',char(1)));
+--error ER_DUP_ENTRY
+alter table t1 add unique(v);
+alter table t1 add key(v);
+
+select /*+NO_PQ*/  sql_big_result TRIM(v),count(c) from t1 group by TRIM(v) order by TRIM(v) limit 10;
+explain select /*+PQ(1)*/ sql_big_result TRIM(v),count(c) from t1 group by TRIM(v) order by TRIM(v) limit 10;
+select /*+PQ(1)*/ sql_big_result TRIM(v),count(c) from t1 group by TRIM(v) order by TRIM(v) limit 10;
+select /*+PQ(4)*/ sql_big_result TRIM(v),count(c) from t1 group by TRIM(v) order by TRIM(v) limit 10;
+
+DROP TABLE t1;
+
+SET @saved_sql_mode=@@sql_mode;
+
+set sql_mode = '';
+CREATE TABLE t1 (a INT NOT NULL, b INT NOT NULL) ENGINE $engine;
+
+INSERT INTO t1 VALUES (70000, 1092), (70001, 1085), (70002, 1065);
+
+SELECT CONVERT(a, CHAR), CONVERT(b, CHAR) FROM t1 GROUP BY b;
+
+ALTER TABLE t1 ADD INDEX (b);
+
+SELECT CONVERT(a, CHAR), CONVERT(b, CHAR) from t1 GROUP BY b;
+
+DROP TABLE t1;
+
+## ISSUE 557: Send empty record would cause wrong result
+
+set sql_mode = '';
+create table t2 (a int);
+insert into t2 values (1), (2);
+
+explain select count(t2.a), MAX(t2.a) from t2 join t2 tt;
+select count(t2.a), MAX(t2.a) from t2 join t2 tt;
+
+drop table t2;
+
+--echo # when group-by is implemented with index scan, and the field list
+--echo # contains scalar subqueries, the created Item_copy can't set proper result_field.
+--echo # This will lead to parallel execution error when worker sends partial results.
+create table t1 (a int, KEY(a));
+insert into t1 values (1), (1), (2), (3);
+analyze table t1;
+explain select (select a from t1 limit 1) as v from t1 group by a limit 1;
+select (select a from t1 limit 1) as v from t1 group by a limit 1;
+drop table t1;
+
+--echo # Item_row has not implemented its own eq() method, which leads to
+--echo # eq() return false for two cloned equal items.
+create table t1 (id int not null, qty int not null);
+insert into t1 values (1,2),(1,3),(2,4),(2,5);
+explain select count(*), interval(qty,2,3,4,5,6,7,8) as category from t1 group by category;
+select count(*), interval(qty,2,3,4,5,6,7,8) as category from t1 group by category;
+drop table t1;
+
+## restore sql_mode
+SET sql_mode = @saved_sql_mode;
+
+--echo #
+--echo # BUG2022101401350, Wrong result for AVG(DIV) in PQ
+--echo #
+
+SET @saved_div_precision_increment=@@div_precision_increment;
+SET div_precision_increment = 4;
+
+drop table if exists t1;
+CREATE TABLE `t1` (
+  `id_col` int NOT NULL AUTO_INCREMENT,
+  `mediumint_col` mediumint DEFAULT NULL,
+  PRIMARY KEY (`id_col`)
+);
+
+insert into t1 values(1, -8388608.0000);
+
+let $query= SELECT id_col, AVG(id_col/mediumint_col) FROM t1 group by id_col;
+--replace_regex $elide_costs_and_rows
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+
+let $query= SELECT /*+ NO_PQ */ id_col, AVG(id_col/mediumint_col) FROM t1 group by id_col;
+--replace_regex $elide_costs_and_rows
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+
+drop table t1;
+
+--echo # Test overflow for AVG in pq
+CREATE TABLE `t1` (
+  `id` int,
+  `overflow` decimal(5,2) DEFAULT NULL
+);
+
+insert into t1 values (1, 666.66);
+insert into t1 values (1, 888.88);
+
+let $query= SELECT AVG(overflow) from t1 group by id;
+--replace_regex $elide_costs_and_rows
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+
+let $query= SELECT /*+ NO_PQ */ AVG(overflow) from t1 group by id;
+--replace_regex $elide_costs_and_rows
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+
+drop table t1;
+
+SET div_precision_increment = @saved_div_precision_increment;
+
+# BUG2023030103071 
+
+CREATE TABLE t1 (c1 BOOLEAN, c0 BOOLEAN PRIMARY KEY);
+explain SELECT 1 FROM t1 GROUP BY c0, c1 HAVING c0 AND c1 ORDER BY c1;
+SELECT 1 FROM t1 GROUP BY c0, c1 HAVING c0 AND c1 ORDER BY c1;
+
+drop table t1;
+
+# BUG2023030202831 ER_PARALLEL_FAIL_INIT
+SET OPTIMIZER_SWITCH = 'derived_merge=off';
+CREATE TABLE t0 (c0 BOOLEAN);
+explain SELECT 1 FROM (SELECT c0, 1 c1 FROM t0) t0 JOIN t0 USING (c0) GROUP BY t0.c0, c1 HAVING (6E-7 = CASE 2 WHEN 8 THEN 5 END) IS NULL;
+SELECT 1 FROM (SELECT c0, 1 c1 FROM t0) t0 JOIN t0 USING (c0) GROUP BY t0.c0, c1 HAVING (6E-7 = CASE 2 WHEN 8 THEN 5 END) IS NULL;
+SET OPTIMIZER_SWITCH=DEFAULT;
+DROP TABLE t0;
+
+# BUG2023042401521 ER_PARALLEL_FAIL_INIT
+set sql_mode="";
+SET OPTIMIZER_SWITCH = 'derived_merge=off';
+create table aa(id int,age int,grade int);
+insert into aa values(1,1,1),(2,2,2),(3,3,3);
+explain select a.id,a.id,a.age from(select * from aa) a group by 1,2;
+select a.id,a.id,a.age from(select * from aa) a group by 1,2;
+set sql_mode= default;
+SET OPTIMIZER_SWITCH=DEFAULT;
+DROP TABLE aa;

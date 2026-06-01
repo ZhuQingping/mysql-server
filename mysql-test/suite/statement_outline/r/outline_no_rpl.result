@@ -1,0 +1,60 @@
+include/master-slave.inc
+Warnings:
+Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
+[connection master]
+[connection master]
+set @start_opt_outline_enabled= @@global.rds_opt_outline_enabled;
+set global rds_opt_outline_enabled = ON;
+create database outline_db;
+create table outline_db.t1(id int auto_increment primary key,
+col1 int,
+col2 varchar(100),
+key ind_1(col1),
+key ind_2(col2)) engine = Dstore;
+use outline_db;
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_1',
+'FOR ORDER BY', "select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1");
+use outline_db;
+select * from t1 where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', 'ind_2',
+'FOR ORDER BY', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+call dbms_outln.add_index_outline('outline_db', '', 1, 'USE INDEX', '',
+'FOR ORDER BY', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'ind_2',
+'FOR ORDER BY', "select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1");
+ERROR HY000: Statement outline 0 is not valid when add index outline since Cannot mix USE INDEX and FORCE INDEX
+select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+explain select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_1,ind_2	ind_1	5	const	1	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t1`.`col1` AS `col1`,`outline_db`.`t1`.`col2` AS `col2` from `outline_db`.`t1` USE INDEX FOR ORDER BY (`ind_2`) USE INDEX FOR ORDER BY () where ((`outline_db`.`t1`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 2)) order by `outline_db`.`t1`.`col1`
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+1	outline_db	768ee14da49ea48e9a666810ec97173a71ce5f5bc4d29f14ea43665d6518e890	USE INDEX	FOR ORDER BY	1	ind_1	1	0	SELECT * FROM `t1` WHERE `col1` = ? AND `col2` = ? ORDER BY `col1`
+3	outline_db	ccad7ddcb0e1ee0af015dfbeaba988c457992f5702ebf40cb25bdda562a4ea1e	USE INDEX	FOR ORDER BY	1		2	0	SELECT * FROM `t1` FORCE INDEX ( `ind_1` ) WHERE `col1` = ? AND `col2` = ? ORDER BY `col1`
+2	outline_db	ccad7ddcb0e1ee0af015dfbeaba988c457992f5702ebf40cb25bdda562a4ea1e	USE INDEX	FOR ORDER BY	1	ind_2	2	0	SELECT * FROM `t1` FORCE INDEX ( `ind_1` ) WHERE `col1` = ? AND `col2` = ? ORDER BY `col1`
+include/sync_slave_sql_with_master.inc
+[connection slave]
+use outline_db;
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+call dbms_outln.flush_outline();
+call dbms_outln.show_outline();
+ID	SCHEMA	DIGEST	TYPE	SCOPE	POS	HINT	HIT	OVERFLOW	DIGEST_TEXT
+select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+id	col1	col2
+explain select * from t1 force index(ind_1) where col1 = 2 and col2 = 'xpchild' order by col1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ref	ind_1	ind_1	5	const	1	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `outline_db`.`t1`.`id` AS `id`,`outline_db`.`t1`.`col1` AS `col1`,`outline_db`.`t1`.`col2` AS `col2` from `outline_db`.`t1` FORCE INDEX (`ind_1`) where ((`outline_db`.`t1`.`col2` = 'xpchild') and (`outline_db`.`t1`.`col1` = 2)) order by `outline_db`.`t1`.`col1`
+[connection master]
+USE outline_db;
+drop table t1;
+drop database outline_db;
+set global rds_opt_outline_enabled = @start_opt_outline_enabled;
+include/rpl_end.inc

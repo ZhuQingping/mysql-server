@@ -1,0 +1,56 @@
+--source include/count_sessions.inc
+ 
+--disable_query_log
+call mtr.add_suppression("Wait timeout exceeded, kill connection.");
+--enable_query_log
+ 
+SET @start_value= @@global.wait_timeout;
+SET @origin_rds_conn_log_error_verbosity= @@global.rds_conn_log_error_verbosity;
+SET @origin_threadpool_enabled= @@global.threadpool_enabled;
+ 
+SET GLOBAL rds_conn_log_error_verbosity=1;
+SET GLOBAL threadpool_enabled=ON;
+ 
+# 1. test of scope session
+ 
+SET @start_time= UNIX_TIMESTAMP();
+--echo connect (test_con1, localhost, root,,);
+connect (test_con1, localhost, root,,);
+connection test_con1;
+ 
+# If not explicitly changed, @@session.wait_timeout equals @@global.wait_timeout.
+SELECT @@session.wait_timeout = @@global.wait_timeout AS 'Expect 1';
+ 
+# Find a small value <> @@global.wait_timeout.
+let $session_value =
+`SELECT IF(@@global.wait_timeout <> 2 OR @@global.wait_timeout IS NULL, 2, 3)`;
+--replace_result $session_value <session_value>
+eval SET @@session.wait_timeout = $session_value;
+ 
+--echo connect (test_con2, localhost, root,,);
+connect (test_con2, localhost, root,,);
+connection test_con2;
+ 
+--replace_result $session_value <session_value>
+eval SET @@session.wait_timeout = $session_value - 1;
+ 
+--echo connection default;
+connection default;
+ 
+--echo wait until connections ready
+let $wait_condition= SELECT COUNT(*) = 1 FROM information_schema.processlist;
+--source include/wait_condition.inc
+SELECT info FROM information_schema.processlist;
+ 
+--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let $assert_text= Check that there is 'Wait timeout exceeded, kill connection.' in error log.
+--let $assert_select= \[Warning\] \[[^]]*\] \[[^]]*\] \[TAURUS-DEBUG\]Wait timeout exceeded, kill connection.
+--let $assert_only_after = CURRENT_TEST:main.enrich_errlog_for_connection_with_threadpool
+--let $assert_match= Wait timeout exceeded, kill connection.
+--source include/assert_grep.inc
+ 
+SET @@global.wait_timeout = @start_value;
+SET @@global.rds_conn_log_error_verbosity = @origin_rds_conn_log_error_verbosity;
+SET @@global.threadpool_enabled = @origin_threadpool_enabled;
+
+--source include/wait_until_count_sessions.inc

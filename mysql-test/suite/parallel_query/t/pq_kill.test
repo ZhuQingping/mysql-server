@@ -1,0 +1,33 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+--source include/have_debug_sync.inc
+
+# prepare data
+create table t1(a int, b int);
+insert into t1 values(1, 1);
+insert into t1 values(2, 2);
+
+connect(con1, localhost, root,,);
+
+# parallel query, launch part workers, and then wait for KILL QUERY
+connection default;
+--let $ID= `SELECT connection_id()`
+SET DEBUG_SYNC='pq_wait_kill SIGNAL ready WAIT_FOR kill_query';
+--send select * from t1
+
+# send KILL QUERY
+connection con1;
+SET DEBUG_SYNC='now WAIT_FOR ready';
+--replace_result $ID ID
+--eval KILL QUERY $ID
+SET DEBUG_SYNC='now SIGNAL kill_query';
+
+# parallel query was killed
+connection default;
+--error ER_QUERY_INTERRUPTED
+--reap
+select * from t1;
+explain select * from t1;
+
+drop table t1;
+disconnect con1;

@@ -1,0 +1,360 @@
+--source include/have_only_dstore.inc
+
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/log/mysqld.1.err
+--let PRINT_HIT_TIMES = 1
+
+--echo # 
+--echo # Test-1:
+--echo # Indexed varchar size growed but length under the threshold(910)
+--echo # with no explicit ALGORITHM;
+--echo # Expect no rebuild.
+--echo #
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  c1 VARCHAR(200),
+  KEY idx_1(c1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+--source include/get_file_line_number.inc
+--let SEARCH_START_LINE = $LINE_NUMBER
+ALTER TABLE t1 MODIFY COLUMN c1 VARCHAR(201);
+
+--sleep 1
+--let SEARCH_PATTERN = Replay DDL log success.*Type:DROP_SEGMENT_LOG
+--echo # Expect DROP_SEGMENT_LOG not found(no rebuild)
+--source include/search_pattern.inc
+
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+
+DROP TABLE t1;
+
+--echo #
+--echo # Test-2:
+--echo # Indexed virtual varchar size growed but length under the threshold(910)
+--echo # with no explicit ALGORITHM;
+--echo # Expect no rebuild.
+--echo #
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  c1 VARCHAR(200),
+  vc1 VARCHAR(200) GENERATED ALWAYS AS (c1) VIRTUAL,
+  KEY vidx_1(vc1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+--source include/get_file_line_number.inc
+--let SEARCH_START_LINE = $LINE_NUMBER
+ALTER TABLE t1 MODIFY COLUMN vc1 VARCHAR(201) GENERATED ALWAYS AS (c1) VIRTUAL;
+
+--sleep 1
+--let SEARCH_PATTERN = Replay DDL log success.*Type:DROP_SEGMENT_LOG
+--echo # Expect DROP_SEGMENT_LOG not found(no rebuild)
+--source include/search_pattern.inc
+
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+
+DROP TABLE t1;
+
+--echo #
+--echo # Test-3:
+--echo # Indexed varchar size growed + renamed but length under the threshold(910)
+--echo # with no explicit ALGORITHM;
+--echo # Expect no rebuild.
+--echo #
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  c1 VARCHAR(200),
+  KEY idx_1(c1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+--source include/get_file_line_number.inc
+--let SEARCH_START_LINE = $LINE_NUMBER
+ALTER TABLE t1 CHANGE COLUMN c1 c1_new VARCHAR(201);
+
+--sleep 1
+--let SEARCH_PATTERN = Replay DDL log success.*Type:DROP_SEGMENT_LOG
+--echo # Expect DROP_SEGMENT_LOG not found(no rebuild)
+--source include/search_pattern.inc
+
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+
+DROP TABLE t1;
+
+--echo #
+--echo # Test-4:
+--echo # Prefix-indexed varchar size growed but key part length unchanged
+--echo # with no explicit ALGORITHM;
+--echo # Expect no rebuild.
+--echo #
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  c1 VARCHAR(226),
+  KEY pidx_1(c1(226))
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+--source include/get_file_line_number.inc
+--let SEARCH_START_LINE = $LINE_NUMBER
+ALTER TABLE t1 MODIFY COLUMN c1 VARCHAR(227);
+
+--sleep 1
+--let SEARCH_PATTERN = Replay DDL log success.*Type:DROP_SEGMENT_LOG
+--echo # Expect DROP_SEGMENT_LOG not found(no rebuild)
+--source include/search_pattern.inc
+
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+
+DROP TABLE t1;
+
+--echo #
+--echo # Test-5:
+--echo # Indexed varchar growed and length beyond the threshold(910)
+--echo # with no explicit ALGORITHM;
+--echo # Expect rebuild.
+--echo #
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  c1 VARCHAR(227),
+  KEY idx_1(c1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+--source include/get_file_line_number.inc
+--let SEARCH_START_LINE = $LINE_NUMBER
+ALTER TABLE t1 MODIFY COLUMN c1 VARCHAR(228);
+--sleep 1
+--let SEARCH_PATTERN = Replay DDL log success.*Type:DROP_SEGMENT_LOG
+--echo # Expect found 3 times (rebuild table)
+--source include/search_pattern.inc
+
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+
+DROP TABLE t1;
+
+--echo #
+--echo # Test-6:
+--echo # Indexed varchar growed and length beyond the threshold(910)
+--echo # with explicit ALGORITHM=INSTANT;
+--echo # Expect no rebuild.
+--echo #
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  c1 VARCHAR(227),
+  KEY idx_1(c1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+--source include/get_file_line_number.inc
+--let SEARCH_START_LINE = $LINE_NUMBER
+ALTER TABLE t1 MODIFY COLUMN c1 VARCHAR(228), ALGORITHM=INSTANT;
+
+--sleep 1
+--let SEARCH_PATTERN = Replay DDL log success.*Type:DROP_SEGMENT_LOG
+--echo # Expect DROP_SEGMENT_LOG not found(no rebuild for explicit ALGORITHM=INSTANT)
+--source include/search_pattern.inc
+
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+
+DROP TABLE t1;
+
+--echo #
+--echo # Test-7:
+--echo # Indexed virtual varchar growed and length beyond the threshold(910)
+--echo # with no explicit ALGORITHM;
+--echo # Expect rebuild.
+--echo #
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  c1 VARCHAR(227),
+  vc1 VARCHAR(227) GENERATED ALWAYS AS (c1) VIRTUAL,
+  KEY vidx_1(vc1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+--source include/get_file_line_number.inc
+--let SEARCH_START_LINE = $LINE_NUMBER
+ALTER TABLE t1 MODIFY COLUMN vc1 VARCHAR(228) GENERATED ALWAYS AS (c1) VIRTUAL;
+
+--sleep 1
+--let SEARCH_PATTERN = Replay DDL log success.*Type:DROP_SEGMENT_LOG
+--echo # Expect found 3 times (rebuild table)
+--source include/search_pattern.inc
+
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+
+DROP TABLE t1;
+
+--echo #
+--echo # Test-8:
+--echo # Base column varchar growed but Indexed virtual varchar not changed while size beyond threshold(910)
+--echo # with no explicit ALGORITHM;
+--echo # Expect no rebuild.
+--echo #
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  c1 VARCHAR(227),
+  vc1 VARCHAR(227) GENERATED ALWAYS AS (c1) VIRTUAL,
+  KEY vidx_1(vc1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+--source include/get_file_line_number.inc
+--let SEARCH_START_LINE = $LINE_NUMBER
+ALTER TABLE t1 MODIFY COLUMN c1 VARCHAR(228);
+
+--sleep 1
+--let SEARCH_PATTERN = Replay DDL log success.*Type:DROP_SEGMENT_LOG
+--echo # Expect DROP_SEGMENT_LOG not found(no rebuild)
+--source include/search_pattern.inc
+
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+
+DROP TABLE t1;
+
+
+--echo #
+--echo # Test-9:
+--echo # Indexed varchar growed and length beyond the threshold(910), but it becomes non-indexed
+--echo # Expect no rebuild.
+--echo #
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  c1 VARCHAR(227),
+  KEY idx_1(c1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+--source include/get_file_line_number.inc
+--let SEARCH_START_LINE = $LINE_NUMBER
+ALTER TABLE t1 DROP INDEX idx_1, MODIFY COLUMN c1 VARCHAR(228);
+
+--sleep 1
+--let SEARCH_PATTERN = Replay DDL log success.*Type:DROP_SEGMENT_LOG
+--echo # Expect DROP_SEGMENT_LOG not found(no rebuild)
+--source include/search_pattern.inc
+
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+
+DROP TABLE t1;
+
+--echo #
+--echo # Test-10:
+--echo # Indexed varchar shorten
+--echo # Expect rebuild.
+--echo #
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  c1 VARCHAR(227),
+  KEY idx_1(c1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+--source include/get_file_line_number.inc
+--let SEARCH_START_LINE = $LINE_NUMBER
+ALTER TABLE t1 MODIFY COLUMN c1 VARCHAR(226);
+
+--sleep 1
+--let SEARCH_PATTERN = Replay DDL log success.*Type:DROP_SEGMENT_LOG
+--echo # Expect found 3 times (rebuild table)
+--source include/search_pattern.inc
+
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
+ALTER TABLE t1 MODIFY COLUMN c1 VARCHAR(225), ALGORITHM=INSTANT;
+
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+
+DROP TABLE t1;
+
+--echo #
+--echo # Test-11:
+--echo # Virtual indexed varchar shorten
+--echo # Expect rebuild.
+--echo #
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  c1 VARCHAR(227),
+  vc1 VARCHAR(227) GENERATED ALWAYS AS (c1) VIRTUAL,
+  KEY vidx_1(vc1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+--source include/get_file_line_number.inc
+--let SEARCH_START_LINE = $LINE_NUMBER
+ALTER TABLE t1 MODIFY COLUMN c1 VARCHAR(226);
+
+--sleep 1
+--let SEARCH_PATTERN = Replay DDL log success.*Type:DROP_SEGMENT_LOG
+--echo # Expect found 3 times (rebuild table)
+--source include/search_pattern.inc
+
+--error ER_ALTER_OPERATION_NOT_SUPPORTED
+ALTER TABLE t1 MODIFY COLUMN vc1 VARCHAR(225) GENERATED ALWAYS AS (c1) VIRTUAL, ALGORITHM=INSTANT;
+
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+
+DROP TABLE t1;
+
+--echo #
+--echo # Test-12:
+--echo # CHANGE COLUMN reorders indexed varchar, key length under threshold(910)
+--echo # with no explicit ALGORITHM;
+--echo # Expect no rebuild.
+--echo #
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  a VARCHAR(5),
+  c1 VARCHAR(10),
+  KEY idx_12(c1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+--source include/get_file_line_number.inc
+--let SEARCH_START_LINE = $LINE_NUMBER
+ALTER TABLE t1 CHANGE COLUMN c1 c1 VARCHAR(12) FIRST;
+
+--sleep 1
+--let SEARCH_PATTERN = Replay DDL log success.*Type:DROP_SEGMENT_LOG
+--echo # Expect DROP_SEGMENT_LOG not found(no rebuild)
+--source include/search_pattern.inc
+
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+
+DROP TABLE t1;

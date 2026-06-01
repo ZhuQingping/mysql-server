@@ -1,0 +1,143 @@
+From dff61c79cfc6cb1247c16eaa95530b59055aeb51 Mon Sep 17 00:00:00 2001
+From: zhangzhiqiang <zhangzhiqiang40@contributor>
+
+
+Date: Thu, 25 Sep 2025 11:29:59 +0800
+Subject: [PATCH] BUGFIX flush_sql_filter() not trim keywords' spaces
+ for key_str
+
+Issue
+------
+When add one sql filter which key_str is "update~t~id~ +" and max_concurrency
+is 0, statement "update t1 set id=1+1" will be interrupted. But after call
+dbms_sqlfilter.flush_sql_filter(), statement "update t1 set id=1+1" will not be
+interrupted. The reason is that the flush_sql_filter() does not trim the
+wordkeys' spaces from key_str.
+
+Solution
+------
+When call dbms_sqlfilter.flush_sql_filter(), it will read attributes from table
+mysql.rds_sql_filter_rules, so we need to trim the wordkeys' spaces from key_str
+in function Sql_filter_reader::read_attributes().
+---
+ .../sql_filter/r/sqlfilter_bugfix.result      | 39 +++++++++++++++++++
+ .../suite/sql_filter/t/sqlfilter_bugfix.test  | 36 +++++++++++++++++
+ sql/sql_filter/sql_filter_table.cc            |  1 +
+ 3 files changed, 76 insertions(+)
+
+diff --git a/mysql-test/suite/sql_filter/r/sqlfilter_bugfix.result b/mysql-test/suite/sql_filter/r/sqlfilter_bugfix.result
+index 6303b409c4b..2a876b842d6 100644
+--- a/mysql-test/suite/sql_filter/r/sqlfilter_bugfix.result
++++ b/mysql-test/suite/sql_filter/r/sqlfilter_bugfix.result
+@@ -1,3 +1,9 @@
++CREATE PROCEDURE delete_one_sql_filter_rule(IN offset_value INT)
++begin
++declare my_var BIGINT default 1;
++select item_id into my_var from mysql.rds_sql_filter_rules limit offset_value,1;
++call dbms_sqlfilter.delete_sql_filter(my_var);
++end |
+ SET @old_rds_sqlfilter_control=@@global.rds_sqlfilter_control;
+ SET GLOBAL rds_sqlfilter_control=on;
+ # BUGFIX (1) length of single rule's keyword <= 1024
+@@ -74,4 +80,37 @@ select item_id into @int_var from mysql.rds_sql_filter_rules where upper(type)='
+ call dbms_sqlfilter.delete_sql_filter((select @int_var));
+ call dbms_sqlfilter.show_sql_filter();
+ item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
++#
++# BUGFIX flush_sql_filter not trim white-space character for key_str
++#
++create table t1(id int);
++call dbms_sqlfilter.add_sql_filter('select', 0, 'select~t1~id~ +', '');
++call dbms_sqlfilter.add_sql_filter('update', 0, 'update~t1~id~ +', '');
++call dbms_sqlfilter.add_sql_filter('delete', 0, 'delete~t1~id~ +', '');
++call dbms_sqlfilter.add_sql_filter('insert', 0, 'insert~t1~values~ +', '');
++select * from t1 where id=1+1;
++ERROR 70100: Query execution was interrupted
++update t1 set id=1+1;
++ERROR 70100: Query execution was interrupted
++delete from t1 where id=1+1;
++ERROR 70100: Query execution was interrupted
++insert into t1 values(1+1);
++ERROR 70100: Query execution was interrupted
++call dbms_sqlfilter.flush_sql_filter();
++select * from t1 where id=1+1;
++ERROR 70100: Query execution was interrupted
++update t1 set id=1+1;
++ERROR 70100: Query execution was interrupted
++delete from t1 where id=1+1;
++ERROR 70100: Query execution was interrupted
++insert into t1 values(1+1);
++ERROR 70100: Query execution was interrupted
++call delete_one_sql_filter_rule(0);
++call delete_one_sql_filter_rule(0);
++call delete_one_sql_filter_rule(0);
++call delete_one_sql_filter_rule(0);
++call dbms_sqlfilter.show_sql_filter();
++item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
++drop table t1;
+ SET GLOBAL rds_sqlfilter_control=@old_rds_sqlfilter_control;
++DROP PROCEDURE delete_one_sql_filter_rule;
+diff --git a/mysql-test/suite/sql_filter/t/sqlfilter_bugfix.test b/mysql-test/suite/sql_filter/t/sqlfilter_bugfix.test
+index 2f15093008f..4c1e4b9c041 100644
+--- a/mysql-test/suite/sql_filter/t/sqlfilter_bugfix.test
++++ b/mysql-test/suite/sql_filter/t/sqlfilter_bugfix.test
+@@ -1,3 +1,4 @@
++--source ../include/sqlfilter_prepare.inc
+ SET @old_rds_sqlfilter_control=@@global.rds_sqlfilter_control;
+ SET GLOBAL rds_sqlfilter_control=on;
+ connect(conn_rdsAdmin, localhost, rdsAdmin);
+@@ -117,4 +118,39 @@ call dbms_sqlfilter.delete_sql_filter((select @int_var));
+ 
+ call dbms_sqlfilter.show_sql_filter();
+ 
++--echo #
++--echo # BUGFIX flush_sql_filter not trim white-space character for key_str
++--echo #
++create table t1(id int);
++call dbms_sqlfilter.add_sql_filter('select', 0, 'select~t1~id~ +', '');
++call dbms_sqlfilter.add_sql_filter('update', 0, 'update~t1~id~ +', '');
++call dbms_sqlfilter.add_sql_filter('delete', 0, 'delete~t1~id~ +', '');
++call dbms_sqlfilter.add_sql_filter('insert', 0, 'insert~t1~values~ +', '');
++--error ER_QUERY_INTERRUPTED
++select * from t1 where id=1+1;
++--error ER_QUERY_INTERRUPTED
++update t1 set id=1+1;
++--error ER_QUERY_INTERRUPTED
++delete from t1 where id=1+1;
++--error ER_QUERY_INTERRUPTED
++insert into t1 values(1+1);
++
++call dbms_sqlfilter.flush_sql_filter();
++--error ER_QUERY_INTERRUPTED
++select * from t1 where id=1+1;
++--error ER_QUERY_INTERRUPTED
++update t1 set id=1+1;
++--error ER_QUERY_INTERRUPTED
++delete from t1 where id=1+1;
++--error ER_QUERY_INTERRUPTED
++insert into t1 values(1+1);
++
++call delete_one_sql_filter_rule(0);
++call delete_one_sql_filter_rule(0);
++call delete_one_sql_filter_rule(0);
++call delete_one_sql_filter_rule(0);
++call dbms_sqlfilter.show_sql_filter();
++drop table t1;
++
+ SET GLOBAL rds_sqlfilter_control=@old_rds_sqlfilter_control;
++--source ../include/sqlfilter_cleanup.inc
+diff --git a/sql/sql_filter/sql_filter_table.cc b/sql/sql_filter/sql_filter_table.cc
+index 24832eba642..0f48f7c2e06 100644
+--- a/sql/sql_filter/sql_filter_table.cc
++++ b/sql/sql_filter/sql_filter_table.cc
+@@ -130,6 +130,7 @@ void Sql_filter_reader::read_attributes(Conf_record *r) {
+ 
+   boost::split(record->m_key_array, record->m_key_str.str,
+                boost::is_any_of("~"));
++  for (auto &key : record->m_key_array) trim_str(key);
+ 
+   record->m_node_id = to_lex_cstring(
+       get_field(m_mem_root, m_table->field[MYSQL_SQL_FILTER_FIELD_NODE_ID]));
+-- 
+2.23.0
+

@@ -1,0 +1,2813 @@
+# This tests the feature: "LEFT JOIN elimination" implemented by Huawei
+# in code file sql/sql_join_elimination.cc .
+# Results of SELECTs have all been compared to results with the
+# feature off, and are identical.
+CREATE TABLE t1(a INT PRIMARY KEY, b INT, c VARCHAR(10), dt DATETIME);
+CREATE TABLE t2(a INT PRIMARY KEY, b INT, c VARCHAR(10), dt DATETIME);
+SHOW CREATE TABLE t2;
+Table	Create Table
+t2	CREATE TABLE `t2` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` varchar(10) DEFAULT NULL,
+  `dt` datetime DEFAULT NULL,
+  PRIMARY KEY (`a`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+INSERT INTO t1 VALUES(1,1,"4.0","2000-01-01 12:34:56"),
+(2,3,"abc","2002-01-01"),(7,null,"wxc","2004-02-02");
+INSERT INTO t2 VALUES(2,2,"4.0","2000-01-01 12:34:56"),
+(4,5,"def","2002-01-01"),(5,4,"abc","2004-02-02");
+# Should be ON by default
+SELECT @@optimizer_switch LIKE "%left_join_elimination=off%",
+@@optimizer_switch LIKE "%left_join_elimination=on%";
+@@optimizer_switch LIKE "%left_join_elimination=off%"	@@optimizer_switch LIKE "%left_join_elimination=on%"
+0	1
+# No elimination, as no GROUP BY or DISTINCT, and no equality
+# on unique key
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	SIMPLE	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) where true
+SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b;
+a
+1
+1
+1
+2
+2
+7
+# (I) Elimination due to LEFT JOIN with GROUP BY or DISTINCT
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b GROUP BY t1.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` group by `test`.`t1`.`a`
+SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b GROUP BY t1.a;
+a
+1
+2
+7
+EXPLAIN SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b;
+a
+1
+2
+7
+# If switch is off, feature is disabled:
+SET optimizer_switch="left_join_elimination=off";
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b GROUP BY t1.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	NULL
+1	SIMPLE	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) where true group by `test`.`t1`.`a`
+SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b GROUP BY t1.a;
+a
+1
+2
+7
+SET optimizer_switch="left_join_elimination=on";
+# No elimination in inner join
+EXPLAIN SELECT DISTINCT t1.a FROM t1 JOIN t2 ON t2.a>t1.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Using temporary
+1	SIMPLE	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	33.33	Range checked for each record (index map: 0x1); Distinct
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1` join `test`.`t2` where (`test`.`t2`.`a` > `test`.`t1`.`b`)
+SELECT DISTINCT t1.a FROM t1 JOIN t2 ON t2.a>t1.b;
+a
+1
+2
+EXPLAIN SELECT DISTINCT t1.a FROM t1, t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index; Using temporary
+1	SIMPLE	t2	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index; Distinct; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1` join `test`.`t2`
+SELECT DISTINCT t1.a FROM t1, t2;
+a
+7
+2
+1
+# Elimination in right join
+EXPLAIN SELECT DISTINCT t1.a FROM t2 RIGHT JOIN t1 ON t2.a>t1.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT DISTINCT t1.a FROM t2 RIGHT JOIN t1 ON t2.a>t1.b;
+a
+1
+2
+7
+# No elimination as t2.a is selected
+EXPLAIN SELECT t1.a, t2.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b GROUP BY t1.a, t2.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using temporary
+1	SIMPLE	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t2`.`a` AS `a` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) where true group by `test`.`t1`.`a`,`test`.`t2`.`a`
+SELECT t1.a, t2.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b GROUP BY t1.a, t2.a;
+a	a
+1	2
+1	4
+1	5
+2	4
+2	5
+7	NULL
+EXPLAIN SELECT DISTINCT t1.a, t2.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using temporary
+1	SIMPLE	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a`,`test`.`t2`.`a` AS `a` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) where true
+SELECT DISTINCT t1.a, t2.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b;
+a	a
+1	2
+1	4
+1	5
+2	4
+2	5
+7	NULL
+# In next queries, t2.a is referenced here and there, to check
+# that it prevents elimination.
+# t2.a in GROUP BY
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b GROUP BY t1.a, t2.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using temporary
+1	SIMPLE	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) where true group by `test`.`t1`.`a`,`test`.`t2`.`a`
+SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b GROUP BY t1.a, t2.a;
+a
+1
+1
+1
+2
+2
+7
+# t2.a in WHERE
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t2.a>3 GROUP BY t1.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	66.67	Parallel execute (4 workers, test.t2)
+1	SIMPLE	t2	NULL	index	PRIMARY	PRIMARY	4	NULL	3	66.67	Using where; Using index; Using temporary
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	33.33	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` join `test`.`t2` where ((`test`.`t2`.`a` > 3) and (`test`.`t2`.`a` > `test`.`t1`.`b`)) group by `test`.`t1`.`a`
+SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t2.a>3 GROUP BY t1.a;
+a
+1
+2
+# vs this ok case
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t1.a>3 GROUP BY t1.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` where (`test`.`t1`.`a` > 3) group by `test`.`t1`.`a`
+SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t1.a>3 GROUP BY t1.a;
+a
+7
+# t2.a in subquery in WHERE
+EXPLAIN SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE (SELECT t2.a FROM t1 AS t3 ORDER BY 1 LIMIT 1)>4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	PRIMARY	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Using temporary
+1	PRIMARY	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1); Distinct
+2	DEPENDENT SUBQUERY	t3	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index; Using temporary; Using filesort
+Warnings:
+Note	1276	Field or reference 'test.t2.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) where ((/* select#2 */ select `test`.`t2`.`a` from `test`.`t1` `t3` order by `test`.`t2`.`a` limit 1) > 4)
+SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE (SELECT t2.a FROM t1 AS t3 ORDER BY 1 LIMIT 1)>4;
+a
+1
+2
+# t2.a in ON condition of another join.
+EXPLAIN SELECT DISTINCT t1.a, t3.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b LEFT JOIN t1 AS t3 ON t2.a>t3.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t3, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using temporary
+1	SIMPLE	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+1	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a`,`test`.`t3`.`a` AS `a` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) left join `test`.`t1` `t3` on((`test`.`t2`.`a` > `test`.`t3`.`b`)) where true
+SELECT DISTINCT t1.a, t3.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b LEFT JOIN t1 AS t3 ON t2.a>t3.b;
+a	a
+1	1
+1	2
+2	2
+2	1
+7	NULL
+# vs
+EXPLAIN SELECT DISTINCT t1.a, t3.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b LEFT JOIN t1 AS t3 ON t1.a>t3.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t3, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using temporary
+1	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a`,`test`.`t3`.`a` AS `a` from `test`.`t1` left join `test`.`t1` `t3` on((`test`.`t1`.`a` > `test`.`t3`.`b`)) where true
+SELECT DISTINCT t1.a, t3.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b LEFT JOIN t1 AS t3 ON t1.a>t3.b;
+a	a
+1	NULL
+2	1
+7	2
+7	1
+# t2.a in lateral table's body
+EXPLAIN SELECT DISTINCT t1.a, derived.b FROM t1 LEFT JOIN t2 ON t2.a>t1.b JOIN LATERAL (SELECT t3.a, t3.b FROM t1 AS t3 WHERE t2.a>t3.b) AS derived ON TRUE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using temporary
+1	SIMPLE	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	33.33	Range checked for each record (index map: 0x1)
+1	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	3	33.33	Using where; Using join buffer (hash join)
+Warnings:
+Note	1276	Field or reference 'test.t2.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a`,`test`.`t3`.`b` AS `b` from `test`.`t1` join `test`.`t2` join `test`.`t1` `t3` where ((`test`.`t2`.`a` > `test`.`t3`.`b`) and (`test`.`t2`.`a` > `test`.`t1`.`b`))
+SELECT DISTINCT t1.a, derived.b FROM t1 LEFT JOIN t2 ON t2.a>t1.b JOIN LATERAL (SELECT t3.a, t3.b FROM t1 AS t3 WHERE t2.a>t3.b) AS derived ON TRUE;
+a	b
+2	1
+1	1
+2	3
+1	3
+# vs
+EXPLAIN SELECT DISTINCT t1.a, derived.b FROM t1 LEFT JOIN t2 ON t2.a>t1.b JOIN LATERAL (SELECT t3.a, t3.b FROM t1 AS t3 WHERE t1.a>t3.b) AS derived ON TRUE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t3)
+1	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using temporary
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	33.33	Range checked for each record (index map: 0x1)
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a`,`test`.`t3`.`b` AS `b` from `test`.`t1` join `test`.`t1` `t3` where (`test`.`t1`.`a` > `test`.`t3`.`b`)
+SELECT DISTINCT t1.a, derived.b FROM t1 LEFT JOIN t2 ON t2.a>t1.b JOIN LATERAL (SELECT t3.a, t3.b FROM t1 AS t3 WHERE t1.a>t3.b) AS derived ON TRUE;
+a	b
+2	1
+7	1
+7	3
+# the same, with materialization
+EXPLAIN SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b JOIN LATERAL (SELECT t3.a, t3.b FROM t1 AS t3 WHERE t2.a>t3.b LIMIT 2) AS derived ON TRUE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Using temporary
+1	PRIMARY	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1); Distinct; Rematerialize (<derived2>)
+1	PRIMARY	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Distinct
+2	DEPENDENT DERIVED	t3	NULL	ALL	NULL	NULL	NULL	NULL	3	33.33	Using where
+Warnings:
+Note	1276	Field or reference 'test.t2.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) join lateral (/* select#2 */ select `test`.`t3`.`a` AS `a`,`test`.`t3`.`b` AS `b` from `test`.`t1` `t3` where (`test`.`t2`.`a` > `test`.`t3`.`b`) limit 2) `derived` where true
+SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b JOIN LATERAL (SELECT t3.a, t3.b FROM t1 AS t3 WHERE t2.a>t3.b LIMIT 2) AS derived ON TRUE;
+a
+1
+2
+# vs
+EXPLAIN SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b JOIN LATERAL (SELECT t3.a, t3.b FROM t1 AS t3 WHERE t1.a>t3.b LIMIT 2) AS derived ON TRUE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Using temporary; Rematerialize (<derived2>)
+1	PRIMARY	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Distinct
+2	DEPENDENT DERIVED	t3	NULL	ALL	NULL	NULL	NULL	NULL	3	33.33	Using where
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1` join lateral (/* select#2 */ select `test`.`t3`.`a` AS `a`,`test`.`t3`.`b` AS `b` from `test`.`t1` `t3` where (`test`.`t1`.`a` > `test`.`t3`.`b`) limit 2) `derived` where true
+SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b JOIN LATERAL (SELECT t3.a, t3.b FROM t1 AS t3 WHERE t1.a>t3.b LIMIT 2) AS derived ON TRUE;
+a
+2
+7
+# the same, with a JSON_TABLE which is similar to a lateral
+# table but is not one in MySQL's implementation, so needs
+# special handling
+EXPLAIN SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b JOIN JSON_TABLE(
+COALESCE('[{"a":"3"},{"a":2},{"b":1},{"a":0}]', CONCAT(t2.a)),
+'$[*]' COLUMNS (id FOR ORDINALITY,
+jpath VARCHAR(100) PATH '$.a',
+jexst INT EXISTS PATH '$.b')
+) AS derived ON TRUE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Using temporary
+1	SIMPLE	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1); Distinct
+1	SIMPLE	derived	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Table function: json_table; Using temporary; Distinct
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) join json_table(coalesce('[{"a":"3"},{"a":2},{"b":1},{"a":0}]',concat(`test`.`t2`.`a`)), '$[*]' columns (`id` for ordinality, `jpath` varchar(100) character set utf8mb4 path '$.a', `jexst` int exists path '$.b')) `derived` where true
+SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b JOIN JSON_TABLE(
+COALESCE('[{"a":"3"},{"a":2},{"b":1},{"a":0}]', CONCAT(t2.a)),
+'$[*]' COLUMNS (id FOR ORDINALITY,
+jpath VARCHAR(100) PATH '$.a',
+jexst INT EXISTS PATH '$.b')
+) AS derived ON TRUE;
+a
+1
+2
+7
+# vs
+EXPLAIN SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b JOIN JSON_TABLE(
+COALESCE('[{"a":"3"},{"a":2},{"b":1},{"a":0}]', CONCAT(t1.a)),
+'$[*]' COLUMNS (id FOR ORDINALITY,
+jpath VARCHAR(100) PATH '$.a',
+jexst INT EXISTS PATH '$.b')
+) AS derived ON TRUE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Using temporary
+1	SIMPLE	derived	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Table function: json_table; Using temporary; Distinct
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1` join json_table(coalesce('[{"a":"3"},{"a":2},{"b":1},{"a":0}]',concat(`test`.`t1`.`a`)), '$[*]' columns (`id` for ordinality, `jpath` varchar(100) character set utf8mb4 path '$.a', `jexst` int exists path '$.b')) `derived` where true
+SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b JOIN JSON_TABLE(
+COALESCE('[{"a":"3"},{"a":2},{"b":1},{"a":0}]', CONCAT(t1.a)),
+'$[*]' COLUMNS (id FOR ORDINALITY,
+jpath VARCHAR(100) PATH '$.a',
+jexst INT EXISTS PATH '$.b')
+) AS derived ON TRUE;
+a
+1
+2
+7
+# t2.a in subquery in ON of t2's join: eliminated
+EXPLAIN SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON (SELECT t2.a FROM t1 AS t3 ORDER BY 1 LIMIT 1)>t1.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t2.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON (SELECT t2.a FROM t1 AS t3 ORDER BY 1 LIMIT 1)>t1.b;
+a
+1
+2
+7
+# vs
+EXPLAIN SELECT DISTINCT t1.a, t3.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b LEFT JOIN t1 AS t3 ON (SELECT t2.a FROM t1 AS t4 ORDER BY 1 LIMIT 1)>t3.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using temporary
+1	PRIMARY	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+1	PRIMARY	t3	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where; Using join buffer (hash join)
+2	DEPENDENT SUBQUERY	t4	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index; Using temporary; Using filesort
+Warnings:
+Note	1276	Field or reference 'test.t2.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a`,`test`.`t3`.`a` AS `a` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) left join `test`.`t1` `t3` on(((/* select#2 */ select `test`.`t2`.`a` from `test`.`t1` `t4` order by `test`.`t2`.`a` limit 1) > `test`.`t3`.`b`)) where true
+SELECT DISTINCT t1.a, t3.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b LEFT JOIN t1 AS t3 ON (SELECT t2.a FROM t1 AS t4 ORDER BY 1 LIMIT 1)>t3.b;
+a	a
+1	1
+1	2
+2	2
+2	1
+7	NULL
+# Two consecutive eliminations: elimination of t3, which then
+# allows elimination of t2 (do_join_elimination() processes join nests
+# from right to left)
+EXPLAIN SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b LEFT JOIN t1 AS t3 ON t2.a>t3.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON t2.a>t1.b LEFT JOIN t1 AS t3 ON t2.a>t3.b;
+a
+1
+2
+7
+# Elimination of a two-table nest t2-t3. COALESCE is here to
+# prevent t2-t3 from being changed to an inner join
+EXPLAIN SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2 LEFT JOIN t1 AS t3 ON t3.a=t2.b) ON COALESCE(t3.a,1)=1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2 LEFT JOIN t1 AS t3 ON t3.a=t2.b) ON COALESCE(t3.a,1)=1;
+a
+1
+2
+7
+# Without COALESCE, t2-t3 is changed to an inner join, then is
+# eliminated.
+EXPLAIN SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2 LEFT JOIN t1 AS t3 ON t3.a=t2.b) ON t3.a=1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2 LEFT JOIN t1 AS t3 ON t3.a=t2.b) ON t3.a=1;
+a
+1
+2
+7
+EXPLAIN SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2,t1 AS t3) ON t3.a=1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2,t1 AS t3) ON t3.a=1;
+a
+1
+2
+7
+# The same, with a subquery in ON inside the removed nest. This
+# is to demonstrate that, when removing the nest t2-t3, we must also
+# clean up any subquery inside it, not just the ON clause of t1 LEFT
+# JOIN (t2-t3). Otherwise, it remains "dangling" and causes
+# subquery-partial-result-cache to crash.
+EXPLAIN SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2 LEFT JOIN t1 AS t3 ON t3.a=(SELECT t4.a FROM t1 AS t4 WHERE t2.b<4 ORDER BY 1 LIMIT 1)) ON COALESCE(t3.a,1)=1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1276	Field or reference 'test.t2.b' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2 LEFT JOIN t1 AS t3 ON t3.a=(SELECT t4.a FROM t1 AS t4 WHERE t2.b<4 ORDER BY 1 LIMIT 1)) ON COALESCE(t3.a,1)=1;
+a
+1
+2
+7
+# The same, with a subquery into a derived table inside the
+# removed nest.
+EXPLAIN SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2 LEFT JOIN (SELECT t4.a FROM t1 AS t4 WHERE t4.b<4 LIMIT 2) AS t3 ON TRUE) ON COALESCE(t3.a,1)=1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2 LEFT JOIN (SELECT t4.a FROM t1 AS t4 WHERE t4.b<4 LIMIT 2) AS t3 ON TRUE) ON COALESCE(t3.a,1)=1;
+a
+1
+2
+7
+# The same, with less nesting
+EXPLAIN SELECT DISTINCT t1.a FROM t1 LEFT JOIN (SELECT t4.a FROM t1 AS t4 WHERE t4.b<4 LIMIT 2) AS t3 ON COALESCE(t3.a,1)=1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT DISTINCT t1.a FROM t1 LEFT JOIN (SELECT t4.a FROM t1 AS t4 WHERE t4.b<4 LIMIT 2) AS t3 ON COALESCE(t3.a,1)=1;
+a
+1
+2
+7
+# The same, but this time the derived table is a common table
+# expression referenced once. The CTE is removed and not optimized.
+# Because there was only one reference to the CTE, the WITH clause is
+# not printed in the 'Note'.
+EXPLAIN WITH cte AS (SELECT t4.a FROM t1 AS t4 WHERE t4.b<4 LIMIT 2) SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2 LEFT JOIN cte AS t3 ON TRUE) ON COALESCE(t3.a,1)=1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+WITH cte AS (SELECT t4.a FROM t1 AS t4 WHERE t4.b<4 LIMIT 2) SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2 LEFT JOIN cte AS t3 ON TRUE) ON COALESCE(t3.a,1)=1;
+a
+1
+2
+7
+# The same, but this time the common table expression is
+# referenced twice. One CTE reference (t3) is removed. The other
+# reference (t0) stays, and thus WITH is printed.
+EXPLAIN WITH cte AS (SELECT t4.a FROM t1 AS t4 WHERE t4.b<4 LIMIT 2) SELECT DISTINCT t1.a FROM cte AS t0, t1 LEFT JOIN (t2 LEFT JOIN cte AS t3 ON TRUE) ON COALESCE(t3.a,1)=1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, .t0, test.t1)
+1	SIMPLE	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Using temporary
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index; Using join buffer (hash join)
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	3	33.33	Parallel execute (4 workers, test.t4)
+2	SIMPLE	t4	NULL	ALL	NULL	NULL	NULL	NULL	3	33.33	Using where
+Warnings:
+Note	1003	with `cte` as (/* select#2 */ select `test`.`t4`.`a` AS `a` from `test`.`t1` `t4` where (`test`.`t4`.`b` < 4) limit 2) /* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `cte` `t0` join `test`.`t1`
+WITH cte AS (SELECT t4.a FROM t1 AS t4 WHERE t4.b<4 LIMIT 2) SELECT DISTINCT t1.a FROM cte AS t0, t1 LEFT JOIN (t2 LEFT JOIN cte AS t3 ON TRUE) ON COALESCE(t3.a,1)=1;
+a
+1
+2
+7
+# The same, but this time both references are eliminated.
+# FORMAT=TREE shows iterators, and here we only see a table scan on t1,
+# confirming the CTE is gone (never materialized).
+EXPLAIN WITH cte AS (SELECT t4.a FROM t1 AS t4 WHERE t4.b<4 LIMIT 2) SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2 LEFT JOIN cte AS t3 ON TRUE) ON COALESCE(t3.a,1)=1 LEFT JOIN cte ON TRUE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index
+2	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	Not optimized, outer query is empty
+Warnings:
+Note	1003	with `cte` as (/* select#2 */ select `test`.`t4`.`a` AS `a` from `test`.`t1` `t4` where (`test`.`t4`.`b` < 4) limit 2) /* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN format=tree WITH cte AS (SELECT t4.a FROM t1 AS t4 WHERE t4.b<4 LIMIT 2) SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2 LEFT JOIN cte AS t3 ON TRUE) ON COALESCE(t3.a,1)=1 LEFT JOIN cte ON TRUE;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.325 rows=3)
+    -> Parallel index scan on t1 using PRIMARY  (cost=0.325 rows=0.75)
+
+WITH cte AS (SELECT t4.a FROM t1 AS t4 WHERE t4.b<4 LIMIT 2) SELECT DISTINCT t1.a FROM t1 LEFT JOIN (t2 LEFT JOIN cte AS t3 ON TRUE) ON COALESCE(t3.a,1)=1 LEFT JOIN cte ON TRUE;
+a
+1
+2
+7
+# Make sure elimination does not apply to an anti-join, which
+# in MySQL's implementation is very similar to a LEFT JOIN and should
+# not be confused with it. Elimination shouldn't apply to the
+# semi-join either. For the anti-join transformation of NOT IN, the
+# left and right arguments must not be nullable so we use COALESCE.
+# For reference, we start with a LEFT JOIN which does elimination.
+EXPLAIN SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON COALESCE(t1.a,0)=COALESCE(t2.b,0);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON COALESCE(t1.a,0)=COALESCE(t2.b,0);
+a
+1
+2
+7
+EXPLAIN SELECT DISTINCT t1.a FROM t1 WHERE COALESCE(t1.a,0) NOT IN (SELECT COALESCE(t2.b,0) FROM t2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t2, test.t1)
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index; Using temporary
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where; Not exists; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1` anti join (`test`.`t2`) on((coalesce(`test`.`t1`.`a`,0) = coalesce(`test`.`t2`.`b`,0))) where true
+SELECT DISTINCT t1.a FROM t1 WHERE COALESCE(t1.a,0) NOT IN (SELECT COALESCE(t2.b,0) FROM t2);
+a
+1
+7
+EXPLAIN SELECT DISTINCT t1.a FROM t1 WHERE NOT EXISTS (SELECT * FROM t2 WHERE t2.b=t1.a);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t2, test.t1)
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index; Using temporary
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where; Not exists; Using join buffer (hash join)
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1` anti join (`test`.`t2`) on((`test`.`t2`.`b` = `test`.`t1`.`a`)) where true
+SELECT DISTINCT t1.a FROM t1 WHERE NOT EXISTS (SELECT * FROM t2 WHERE t2.b=t1.a);
+a
+1
+7
+EXPLAIN SELECT DISTINCT t1.a FROM t1 WHERE t1.a IN (SELECT t2.b FROM t2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<subquery2>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	100.00	Using where; Using temporary
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	<subquery2>.b	1	100.00	Using index
+2	MATERIALIZED	t2	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1` semi join (`test`.`t2`) where (`test`.`t1`.`a` = `<subquery2>`.`b`)
+SELECT DISTINCT t1.a FROM t1 WHERE t1.a IN (SELECT t2.b FROM t2);
+a
+2
+EXPLAIN SELECT DISTINCT t1.a FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2.b=t1.a);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<subquery2>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	100.00	Using where; Using temporary
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	<subquery2>.b	1	100.00	Using index
+2	MATERIALIZED	t2	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1` semi join (`test`.`t2`) where (`test`.`t1`.`a` = `<subquery2>`.`b`)
+SELECT DISTINCT t1.a FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2.b=t1.a);
+a
+2
+# Aggregates and window functions prevent elimination except in
+# the second of these four queries (in that query, duplicate
+# elimination by GROUP BY happens before the window function is
+# calculated, so the increase in number of rows due to the LEFT JOIN
+# is without influence on the window function's value)
+EXPLAIN SELECT t1.a,COUNT(*) FROM t1 LEFT JOIN t2 ON t2.a>t1.b GROUP BY t1.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	NULL
+1	SIMPLE	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,count(0) AS `COUNT(*)` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) where true group by `test`.`t1`.`a`
+SELECT t1.a,COUNT(*) FROM t1 LEFT JOIN t2 ON t2.a>t1.b GROUP BY t1.a;
+a	COUNT(*)
+1	3
+2	2
+7	1
+EXPLAIN SELECT t1.a,COUNT(*) OVER() FROM t1 LEFT JOIN t2 ON t2.a>t1.b GROUP BY t1.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,count(0) OVER ()  AS `COUNT(*) OVER()` from `test`.`t1` group by `test`.`t1`.`a`
+SELECT t1.a,COUNT(*) OVER() FROM t1 LEFT JOIN t2 ON t2.a>t1.b GROUP BY t1.a;
+a	COUNT(*) OVER()
+1	3
+2	3
+7	3
+EXPLAIN SELECT DISTINCT COUNT(*) FROM t1 LEFT JOIN t2 ON t2.a>t1.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	SIMPLE	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) where true
+SELECT DISTINCT COUNT(*) FROM t1 LEFT JOIN t2 ON t2.a>t1.b;
+COUNT(*)
+6
+EXPLAIN SELECT DISTINCT COUNT(*) OVER () FROM t1 LEFT JOIN t2 ON t2.a>t1.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	SIMPLE	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+Warnings:
+Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+Note	1003	/* select#1 */ select distinct count(0) OVER ()  AS `COUNT(*) OVER ()` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) where true
+SELECT DISTINCT COUNT(*) OVER () FROM t1 LEFT JOIN t2 ON t2.a>t1.b;
+COUNT(*) OVER ()
+6
+# No elimination, like the first query except that the
+# incompatible aggregate is hidden in a compatible window function
+EXPLAIN SELECT t1.a,COUNT(SUM(1)) OVER() FROM t1 LEFT JOIN t2 ON t2.a>t1.b GROUP BY t1.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Using temporary
+1	SIMPLE	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+Warnings:
+Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,count(```sum(1)```) OVER ()  AS `COUNT(SUM(1)) OVER()` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) where true group by `test`.`t1`.`a`
+SELECT t1.a,COUNT(SUM(1)) OVER() FROM t1 LEFT JOIN t2 ON t2.a>t1.b GROUP BY t1.a;
+a	COUNT(SUM(1)) OVER()
+1	3
+2	3
+7	3
+# Window function and DISTINCT together prevent elimination,
+# but not if GROUP BY is used too:
+EXPLAIN SELECT DISTINCT COUNT(*) OVER () FROM t1 LEFT JOIN t2 ON t2.a>t1.b GROUP BY t1.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+Note	1003	/* select#1 */ select distinct count(0) OVER ()  AS `COUNT(*) OVER ()` from `test`.`t1` group by `test`.`t1`.`a`
+SELECT DISTINCT COUNT(*) OVER () FROM t1 LEFT JOIN t2 ON t2.a>t1.b GROUP BY t1.a;
+COUNT(*) OVER ()
+3
+# Elimination can make semi-joins disappear (+0 is to make sure
+# that semi-join pullout does not happen - t4.a is a primary key):
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN (t1 AS t3 JOIN t2 ON t2.a+t3.a IN (SELECT t4.a+0 FROM t2 AS t4)) ON t2.a>t1.b GROUP BY t1.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` group by `test`.`t1`.`a`
+SELECT t1.a FROM t1 LEFT JOIN (t1 AS t3 JOIN t2 ON t2.a+t3.a IN (SELECT t4.a+0 FROM t2 AS t4)) ON t2.a>t1.b GROUP BY t1.a;
+a
+1
+2
+7
+# Here one semi-join will remain, out of two:
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN (t1 AS t3 JOIN t2 ON t2.a+t3.a IN (SELECT t4.a+0 FROM t2 AS t4)) ON t2.a>t1.b WHERE t1.a IN (SELECT t5.a+0 FROM t2 AS t5) GROUP BY t1.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<subquery3>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	100.00	Using temporary
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	<subquery3>.t5.a+0	1	100.00	Using where
+3	MATERIALIZED	t5	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` semi join (`test`.`t2` `t5`) where (`test`.`t1`.`a` = `<subquery3>`.`t5.a+0`) group by `test`.`t1`.`a`
+SELECT t1.a FROM t1 LEFT JOIN (t1 AS t3 JOIN t2 ON t2.a+t3.a IN (SELECT t4.a+0 FROM t2 AS t4)) ON t2.a>t1.b WHERE t1.a IN (SELECT t5.a+0 FROM t2 AS t5) GROUP BY t1.a;
+a
+2
+# Elimination when the right side is a lateral derived table or JSON_TABLE
+EXPLAIN SELECT DISTINCT t1.a FROM t1 LEFT JOIN LATERAL (SELECT t3.a, t3.b FROM t1 AS t3 WHERE t1.a>t3.b LIMIT 2) AS derived ON derived.b+t1.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT DISTINCT t1.a FROM t1 LEFT JOIN LATERAL (SELECT t3.a, t3.b FROM t1 AS t3 WHERE t1.a>t3.b LIMIT 2) AS derived ON derived.b+t1.a;
+a
+1
+2
+7
+EXPLAIN SELECT DISTINCT t1.a FROM t1 LEFT JOIN JSON_TABLE(
+COALESCE('[{"a":"3"},{"a":2},{"b":1},{"a":0}]', CONCAT(t1.a)),
+'$[*]' COLUMNS (id FOR ORDINALITY,
+jpath VARCHAR(100) PATH '$.a',
+jexst INT EXISTS PATH '$.b')
+) AS derived ON derived.jexst+t1.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT DISTINCT t1.a FROM t1 LEFT JOIN JSON_TABLE(
+COALESCE('[{"a":"3"},{"a":2},{"b":1},{"a":0}]', CONCAT(t1.a)),
+'$[*]' COLUMNS (id FOR ORDINALITY,
+jpath VARCHAR(100) PATH '$.a',
+jexst INT EXISTS PATH '$.b')
+) AS derived ON derived.jexst+t1.a;
+a
+1
+2
+7
+# (II) Elimination due to LEFT JOIN contained in semi-join or anti-join
+# EXISTS. Note that 'JOIN t2.b' does not prevent elimination of
+# t2, as this 't2.b' is disposed off (during semi-join transformation)
+# before we try elimination.
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE EXISTS (SELECT t2.b FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t0.a=t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<subquery2>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	100.00	Using where
+1	SIMPLE	t0	NULL	eq_ref	PRIMARY	PRIMARY	4	<subquery2>.b	1	100.00	Using index
+2	MATERIALIZED	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t0.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` semi join (`test`.`t1`) where (`test`.`t0`.`a` = `<subquery2>`.`b`)
+SELECT t0.a FROM t1 AS t0 WHERE EXISTS (SELECT t2.b FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t0.a=t1.b);
+a
+1
+# Verify that the choice of semi-join strategy is like if t2
+# had never been there
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE EXISTS (SELECT 1 FROM t1 WHERE t0.a=t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<subquery2>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	100.00	Using where
+1	SIMPLE	t0	NULL	eq_ref	PRIMARY	PRIMARY	4	<subquery2>.b	1	100.00	Using index
+2	MATERIALIZED	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t0.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` semi join (`test`.`t1`) where (`test`.`t0`.`a` = `<subquery2>`.`b`)
+SELECT t0.a FROM t1 AS t0 WHERE EXISTS (SELECT 1 FROM t1 WHERE t0.a=t1.b);
+a
+1
+# t2 is referenced in WHERE outside of the left join (i.e. in
+# the semi-join condition) => no elimination.
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE EXISTS (SELECT t2.b FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t0.a=COALESCE(t2.b,0));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<subquery2>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	100.00	NULL
+1	SIMPLE	t0	NULL	eq_ref	PRIMARY	PRIMARY	4	<subquery2>.coalesce(t2.b,0)	1	100.00	Using where; Using index
+2	MATERIALIZED	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+2	MATERIALIZED	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+Warnings:
+Note	1276	Field or reference 'test.t0.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` semi join (`test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`))) where (`test`.`t0`.`a` = `<subquery2>`.`coalesce(t2.b,0)`)
+SELECT t0.a FROM t1 AS t0 WHERE EXISTS (SELECT t2.b FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t0.a=COALESCE(t2.b,0));
+a
+2
+# IN. We have elimination, then no elimination, as above.
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE t0.a IN (SELECT t1.b FROM t1 LEFT JOIN t2 ON t2.a>t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<subquery2>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	100.00	Using where
+1	SIMPLE	t0	NULL	eq_ref	PRIMARY	PRIMARY	4	<subquery2>.b	1	100.00	Using index
+2	MATERIALIZED	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` semi join (`test`.`t1`) where (`test`.`t0`.`a` = `<subquery2>`.`b`)
+SELECT t0.a FROM t1 AS t0 WHERE t0.a IN (SELECT t1.b FROM t1 LEFT JOIN t2 ON t2.a>t1.b);
+a
+1
+# COALESCE is used otherwise the left join becomes inner join,
+# which we do not want.
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE t0.a IN (SELECT COALESCE(t2.b) FROM t1 LEFT JOIN t2 ON t2.a>t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<subquery2>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	100.00	Using where
+1	SIMPLE	t0	NULL	eq_ref	PRIMARY	PRIMARY	4	<subquery2>.COALESCE(t2.b)	1	100.00	Using where; Using index
+2	MATERIALIZED	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+2	MATERIALIZED	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` semi join (`test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`))) where (`test`.`t0`.`a` = `<subquery2>`.`COALESCE(t2.b)`)
+SELECT t0.a FROM t1 AS t0 WHERE t0.a IN (SELECT COALESCE(t2.b) FROM t1 LEFT JOIN t2 ON t2.a>t1.b);
+a
+2
+# NOT EXISTS. We have elimination, then no elimination, as above.
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE NOT EXISTS (SELECT t2.b FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t0.a=t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1, test.t0)
+1	SIMPLE	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where; Not exists; Using join buffer (hash join)
+Warnings:
+Note	1276	Field or reference 'test.t0.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` anti join (`test`.`t1`) on((`test`.`t1`.`b` = `test`.`t0`.`a`)) where true
+SELECT t0.a FROM t1 AS t0 WHERE NOT EXISTS (SELECT t2.b FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t0.a=t1.b);
+a
+2
+7
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE NOT EXISTS (SELECT t2.b FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t0.a=COALESCE(t2.b,0));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t0)
+1	SIMPLE	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
+1	SIMPLE	<subquery2>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	8	test.t0.a	1	100.00	Using where; Not exists
+2	MATERIALIZED	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+2	MATERIALIZED	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+Warnings:
+Note	1276	Field or reference 'test.t0.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` anti join (`test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`))) on((`test`.`t0`.`a` = `<subquery2>`.`coalesce(t2.b,0)`)) where true
+SELECT t0.a FROM t1 AS t0 WHERE NOT EXISTS (SELECT t2.b FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t0.a=COALESCE(t2.b,0));
+a
+1
+7
+# NOT IN. We have elimination, then no elimination, as above.
+# COALESCE is used on t1.b, to make that non-nullable, as is necessary
+# for NOT IN to be translatable into anti-join. t0.a is already
+# non-nullable.
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE t0.a NOT IN (SELECT COALESCE(t1.b,0) FROM t1 LEFT JOIN t2 ON t2.a>t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1, test.t0)
+1	SIMPLE	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where; Not exists; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` anti join (`test`.`t1`) on((`test`.`t0`.`a` = coalesce(`test`.`t1`.`b`,0))) where true
+SELECT t0.a FROM t1 AS t0 WHERE t0.a NOT IN (SELECT COALESCE(t1.b,0) FROM t1 LEFT JOIN t2 ON t2.a>t1.b);
+a
+2
+7
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE t0.a NOT IN (SELECT COALESCE(t2.b,0) FROM t1 LEFT JOIN t2 ON t2.a>t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t0)
+1	SIMPLE	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
+1	SIMPLE	<subquery2>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	8	test.t0.a	1	100.00	Using where; Not exists
+2	MATERIALIZED	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+2	MATERIALIZED	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` anti join (`test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`))) on((`test`.`t0`.`a` = `<subquery2>`.`COALESCE(t2.b,0)`)) where true
+SELECT t0.a FROM t1 AS t0 WHERE t0.a NOT IN (SELECT COALESCE(t2.b,0) FROM t1 LEFT JOIN t2 ON t2.a>t1.b);
+a
+1
+7
+# One case where the LEFT JOIN is deeply nested in the
+# semi-join, in other words there are intermediate joins between the two:
+# t0 SEMI JOIN (t1 LEFT JOIN (t3 LEFT JOIN t2)), and t2 is eliminated.
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE t0.a IN (SELECT COALESCE(t1.b+t3.b) FROM t1 LEFT JOIN (t1 AS t3 LEFT JOIN t2 ON t2.a<t3.b) ON COALESCE(t3.a)>t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Start temporary
+1	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where; Using join buffer (hash join)
+1	SIMPLE	t0	NULL	eq_ref	PRIMARY	PRIMARY	4	func	1	100.00	Using where; Using index; End temporary
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` semi join (`test`.`t1` left join (`test`.`t1` `t3`) on((coalesce(`test`.`t3`.`a`) > `test`.`t1`.`b`))) where (`test`.`t0`.`a` = coalesce((`test`.`t1`.`b` + `test`.`t3`.`b`)))
+SELECT t0.a FROM t1 AS t0 WHERE t0.a IN (SELECT COALESCE(t1.b+t3.b) FROM t1 LEFT JOIN (t1 AS t3 LEFT JOIN t2 ON t2.a<t3.b) ON COALESCE(t3.a)>t1.b);
+a
+# Now the same subqueries, but without transformation to
+# semi-join or anti-join: because they are EXISTS or IN, elimination
+# is sometimes possible too.
+SET optimizer_switch="semijoin=off";
+# EXISTS. Note that 'SELECT t2.b' this time does prevent elimination of t2
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE EXISTS (SELECT t2.b FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t0.a=t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t0)
+1	PRIMARY	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using where; Using index
+2	DEPENDENT SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	33.33	Using where
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+Warnings:
+Note	1276	Field or reference 'test.t0.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` where exists(/* select#2 */ select `test`.`t2`.`b` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) where (`test`.`t0`.`a` = `test`.`t1`.`b`))
+SELECT t0.a FROM t1 AS t0 WHERE EXISTS (SELECT t2.b FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t0.a=t1.b);
+a
+1
+# But, surprisingly, if it's 'SELECT *' instead of 'SELECT
+# t2.b' then it is replaced with 'SELECT 1' in setup_wild() before we
+# try elimination, and so we can eliminate:
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE EXISTS (SELECT t2.* FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t0.a=t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t0)
+1	PRIMARY	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using where; Using index
+2	DEPENDENT SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	33.33	Using where
+Warnings:
+Note	1276	Field or reference 'test.t0.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` where exists(/* select#2 */ select 1 from `test`.`t1` where (`test`.`t0`.`a` = `test`.`t1`.`b`))
+SELECT t0.a FROM t1 AS t0 WHERE EXISTS (SELECT t2.* FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t0.a=t1.b);
+a
+1
+# t2 is referenced in WHERE outside of the left join => no elimination.
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE EXISTS (SELECT t2.* FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t0.a=COALESCE(t2.b,0));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t0)
+1	PRIMARY	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using where; Using index
+2	DEPENDENT SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+Warnings:
+Note	1276	Field or reference 'test.t0.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` where exists(/* select#2 */ select 1 from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) where (`test`.`t0`.`a` = coalesce(`test`.`t2`.`b`,0)))
+SELECT t0.a FROM t1 AS t0 WHERE EXISTS (SELECT t2.* FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t0.a=COALESCE(t2.b,0));
+a
+2
+# IN. We have elimination, then no elimination, as above.
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE t0.a IN (SELECT t1.b FROM t1 LEFT JOIN t2 ON t2.a>t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using where; Using index
+2	DEPENDENT SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	33.33	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` where <in_optimizer>(`test`.`t0`.`a`,<exists>(/* select#2 */ select `test`.`t1`.`b` from `test`.`t1` where (<cache>(`test`.`t0`.`a`) = `test`.`t1`.`b`)))
+SELECT t0.a FROM t1 AS t0 WHERE t0.a IN (SELECT t1.b FROM t1 LEFT JOIN t2 ON t2.a>t1.b);
+a
+1
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE t0.a IN (SELECT COALESCE(t2.b) FROM t1 LEFT JOIN t2 ON t2.a>t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using where; Using index
+2	SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+2	SUBQUERY	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` where <in_optimizer>(`test`.`t0`.`a`,`test`.`t0`.`a` in ( <materialize> (/* select#2 */ select coalesce(`test`.`t2`.`b`) from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) where true ), <primary_index_lookup>(`test`.`t0`.`a` in <temporary table> on <auto_distinct_key> where ((`test`.`t0`.`a` = `<materialized_subquery>`.`COALESCE(t2.b)`)))))
+SELECT t0.a FROM t1 AS t0 WHERE t0.a IN (SELECT COALESCE(t2.b) FROM t1 LEFT JOIN t2 ON t2.a>t1.b);
+a
+2
+# NOT EXISTS. We have elimination, then no elimination, as above.
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE NOT EXISTS (SELECT t2.* FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t0.a=t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t0)
+1	PRIMARY	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using where; Using index
+2	DEPENDENT SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	33.33	Using where
+Warnings:
+Note	1276	Field or reference 'test.t0.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` where exists(/* select#2 */ select 1 from `test`.`t1` where (`test`.`t0`.`a` = `test`.`t1`.`b`)) is false
+SELECT t0.a FROM t1 AS t0 WHERE NOT EXISTS (SELECT t2.* FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t0.a=t1.b);
+a
+2
+7
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE NOT EXISTS (SELECT t2.* FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t0.a=COALESCE(t2.b,0));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t0)
+1	PRIMARY	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using where; Using index
+2	DEPENDENT SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+2	DEPENDENT SUBQUERY	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+Warnings:
+Note	1276	Field or reference 'test.t0.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` where exists(/* select#2 */ select 1 from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) where (`test`.`t0`.`a` = coalesce(`test`.`t2`.`b`,0))) is false
+SELECT t0.a FROM t1 AS t0 WHERE NOT EXISTS (SELECT t2.* FROM t1 LEFT JOIN t2 ON t2.a>t1.b WHERE t0.a=COALESCE(t2.b,0));
+a
+1
+7
+# NOT IN. We have elimination, then no elimination, as above.
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE t0.a NOT IN (SELECT COALESCE(t1.b,0) FROM t1 LEFT JOIN t2 ON t2.a>t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using where; Using index
+2	DEPENDENT SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` where <in_optimizer>(`test`.`t0`.`a`,<exists>(/* select#2 */ select coalesce(`test`.`t1`.`b`,0) from `test`.`t1` where (<cache>(`test`.`t0`.`a`) = coalesce(`test`.`t1`.`b`,0))) is false)
+SELECT t0.a FROM t1 AS t0 WHERE t0.a NOT IN (SELECT COALESCE(t1.b,0) FROM t1 LEFT JOIN t2 ON t2.a>t1.b);
+a
+2
+7
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE t0.a NOT IN (SELECT COALESCE(t2.b,0) FROM t1 LEFT JOIN t2 ON t2.a>t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using where; Using index
+2	SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+2	SUBQUERY	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` where <in_optimizer>(`test`.`t0`.`a`,`test`.`t0`.`a` in ( <materialize> (/* select#2 */ select coalesce(`test`.`t2`.`b`,0) from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) where true ), <primary_index_lookup>(`test`.`t0`.`a` in <temporary table> on <auto_distinct_key> where ((`test`.`t0`.`a` = `<materialized_subquery>`.`COALESCE(t2.b,0)`)))) is false)
+SELECT t0.a FROM t1 AS t0 WHERE t0.a NOT IN (SELECT COALESCE(t2.b,0) FROM t1 LEFT JOIN t2 ON t2.a>t1.b);
+a
+1
+7
+# One case where the LEFT JOIN is deeply nested in the subquery.
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE t0.a IN (SELECT COALESCE(t1.b+t3.b) FROM t1 LEFT JOIN (t1 AS t3 LEFT JOIN t2 ON t2.a<t3.b) ON COALESCE(t3.a)>t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using where; Using index
+2	SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+2	SUBQUERY	t3	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` where <in_optimizer>(`test`.`t0`.`a`,`test`.`t0`.`a` in ( <materialize> (/* select#2 */ select coalesce((`test`.`t1`.`b` + `test`.`t3`.`b`)) from `test`.`t1` left join (`test`.`t1` `t3`) on((coalesce(`test`.`t3`.`a`) > `test`.`t1`.`b`)) where true ), <primary_index_lookup>(`test`.`t0`.`a` in <temporary table> on <auto_distinct_key> where ((`test`.`t0`.`a` = `<materialized_subquery>`.`COALESCE(t1.b+t3.b)`)))))
+SELECT t0.a FROM t1 AS t0 WHERE t0.a IN (SELECT COALESCE(t1.b+t3.b) FROM t1 LEFT JOIN (t1 AS t3 LEFT JOIN t2 ON t2.a<t3.b) ON COALESCE(t3.a)>t1.b);
+a
+# IN, with an aggregate, should not have elimination.
+EXPLAIN SELECT t0.a FROM t1 AS t0 WHERE t0.a in (SELECT COUNT(*) FROM t1 LEFT JOIN t2 ON t2.a>t1.b);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using where; Using index
+2	SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+2	SUBQUERY	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	3	100.00	Range checked for each record (index map: 0x1)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`a` AS `a` from `test`.`t1` `t0` where <in_optimizer>(`test`.`t0`.`a`,`test`.`t0`.`a` in ( <materialize> (/* select#2 */ select count(0) from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` > `test`.`t1`.`b`)) where true having true ), <primary_index_lookup>(`test`.`t0`.`a` in <temporary table> on <auto_distinct_key> where ((`test`.`t0`.`a` = `<materialized_subquery>`.`COUNT(*)`)))))
+SELECT t0.a FROM t1 AS t0 WHERE t0.a in (SELECT COUNT(*) FROM t1 LEFT JOIN t2 ON t2.a>t1.b);
+a
+SET optimizer_switch="semijoin=on";
+# (III.1) Elimination due to LEFT JOIN ON <condition which binds
+# all columns of a unique key of the right table>
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a=t1.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a=t1.b;
+a
+1
+2
+7
+# No elimination as equality is not deterministic
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a=RAND();
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t2, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
+1	SIMPLE	t2	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using where; Using index; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` = rand())) where true
+SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a=RAND();
+a
+1
+2
+7
+# This one is deterministic
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a=3;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a=3;
+a
+1
+2
+7
+# The order of arguments in the important equality, and the
+# presence of extra uninteresting AND-ed conditions, don't matter:
+# elimination is done
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t1.b=t2.a AND RAND()/10>t2.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT t1.a FROM t1 LEFT JOIN t2 ON t1.b=t2.a AND RAND()/10>t2.b;
+a
+1
+2
+7
+# No elimination as t2.a is selected
+EXPLAIN SELECT t1.a, t2.a FROM t1 LEFT JOIN t2 ON t2.a=t1.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	SIMPLE	t2	NULL	eq_ref	PRIMARY	PRIMARY	4	test.t1.b	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t2`.`a` AS `a` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` = `test`.`t1`.`b`)) where true
+SELECT t1.a, t2.a FROM t1 LEFT JOIN t2 ON t2.a=t1.b;
+a	a
+1	NULL
+2	NULL
+7	NULL
+# No elimination as using <=> (in case t2.a is nullable)
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a<=>t1.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	SIMPLE	t2	NULL	eq_ref	PRIMARY	PRIMARY	4	test.t1.b	1	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`a` <=> `test`.`t1`.`b`)) where true
+SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a<=>t1.b;
+a
+1
+2
+7
+# Elimination of a two-table nest on right side, as both have a
+# bound unique key. Also testing optimizer tracing of the feature.
+SET optimizer_trace="enabled=on";
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN (t2, t2 AS t3) ON t2.a=t1.b AND t3.a=t1.b+1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT t1.a FROM t1 LEFT JOIN (t2, t2 AS t3) ON t2.a=t1.b AND t3.a=t1.b+1;
+a
+1
+2
+7
+# we see a block in the trace, saying 2 tables have been eliminated
+SELECT TRACE FROM information_schema.optimizer_trace;
+TRACE
+{
+  "steps": [
+    {
+      "join_preparation": {
+        "select#": 1,
+        "steps": [
+          {
+            "expanded_query": "/* select#1 */ select `t1`.`a` AS `a` from (`t1` left join (`t2` join `t2` `t3`) on(((`t2`.`a` = `t1`.`b`) and (`t3`.`a` = (`t1`.`b` + 1)))))"
+          },
+          {
+            "transformations_to_nested_joins": {
+              "transformations": [
+                "parenthesis_removal"
+              ],
+              "expanded_query": "/* select#1 */ select `t1`.`a` AS `a` from `t1` left join (`t2` join `t2` `t3`) on(((`t2`.`a` = `t1`.`b`) and (`t3`.`a` = (`t1`.`b` + 1))))"
+            }
+          },
+          {
+            "join_elimination": {
+              "number_of_eliminated_tables": 2,
+              "expanded_query": "/* select#1 */ select `t1`.`a` AS `a` from `t1`"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "join_optimization": {
+        "select#": 1,
+        "steps": [
+          {
+            "table_dependencies": [
+              {
+                "table": "`t1`",
+                "row_may_be_null": false,
+                "map_bit": 0,
+                "depends_on_map_bits": [
+                ]
+              }
+            ]
+          },
+          {
+            "rows_estimation": [
+              {
+                "table": "`t1`",
+                "table_scan": {
+                  "rows": 3,
+                  "cost": 0.25
+                }
+              }
+            ]
+          },
+          {
+            "considered_execution_plans": [
+              {
+                "plan_prefix": [
+                ],
+                "table": "`t1`",
+                "best_access_path": {
+                  "considered_access_paths": [
+                    {
+                      "rows_to_scan": 3,
+                      "access_type": "scan",
+                      "resulting_rows": 3,
+                      "cost": 0.55,
+                      "chosen": true
+                    }
+                  ]
+                },
+                "condition_filtering_pct": 100,
+                "rows_for_plan": 3,
+                "cost_for_plan": 0.55,
+                "chosen": true
+              }
+            ]
+          },
+          {
+            "attaching_conditions_to_tables": {
+              "original_condition": null,
+              "attached_conditions_computation": [
+              ],
+              "attached_conditions_summary": [
+                {
+                  "table": "`t1`",
+                  "attached": null
+                }
+              ]
+            }
+          },
+          {
+            "finalizing_table_conditions": [
+            ]
+          },
+          {
+            "refine_plan": [
+              {
+                "table": "`t1`"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "make_parallel_query_plan": {
+        "select#": 1,
+        "detail": [
+          {
+            "table": "`t1`",
+            "degree of parallel": 4,
+            "merge_sort": true
+          }
+        ]
+      }
+    },
+    {
+      "join_execution": {
+        "select#": 1,
+        "steps": [
+        ]
+      }
+    }
+  ]
+}
+# OR-ed conditions, no elimination
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN (t2, t2 AS t3) ON t2.a=t1.b OR t3.a=t1.b+1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t3, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	SIMPLE	t2	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index; Using join buffer (hash join)
+1	SIMPLE	t3	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using where; Using index; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` left join (`test`.`t2` join `test`.`t2` `t3`) on(((`test`.`t2`.`a` = `test`.`t1`.`b`) or (`test`.`t3`.`a` = (`test`.`t1`.`b` + 1)))) where true
+SELECT t1.a FROM t1 LEFT JOIN (t2, t2 AS t3) ON t2.a=t1.b OR t3.a=t1.b+1;
+a
+1
+1
+1
+2
+2
+2
+7
+# and we see nothing in the trace
+SELECT TRACE FROM information_schema.optimizer_trace;
+TRACE
+{
+  "steps": [
+    {
+      "join_preparation": {
+        "select#": 1,
+        "steps": [
+          {
+            "expanded_query": "/* select#1 */ select `t1`.`a` AS `a` from (`t1` left join (`t2` join `t2` `t3`) on(((`t2`.`a` = `t1`.`b`) or (`t3`.`a` = (`t1`.`b` + 1)))))"
+          },
+          {
+            "transformations_to_nested_joins": {
+              "transformations": [
+                "parenthesis_removal"
+              ],
+              "expanded_query": "/* select#1 */ select `t1`.`a` AS `a` from `t1` left join (`t2` join `t2` `t3`) on(((`t2`.`a` = `t1`.`b`) or (`t3`.`a` = (`t1`.`b` + 1))))"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "join_optimization": {
+        "select#": 1,
+        "steps": [
+          {
+            "condition_processing": {
+              "condition": "WHERE",
+              "original_condition": null,
+              "steps": [
+                {
+                  "transformation": "equality_propagation",
+                  "resulting_condition": null
+                }
+              ]
+            }
+          },
+          {
+            "table_dependencies": [
+              {
+                "table": "`t1`",
+                "row_may_be_null": false,
+                "map_bit": 0,
+                "depends_on_map_bits": [
+                ]
+              },
+              {
+                "table": "`t2`",
+                "row_may_be_null": true,
+                "map_bit": 1,
+                "depends_on_map_bits": [
+                  0
+                ]
+              },
+              {
+                "table": "`t2` `t3`",
+                "row_may_be_null": true,
+                "map_bit": 2,
+                "depends_on_map_bits": [
+                  0
+                ]
+              }
+            ]
+          },
+          {
+            "ref_optimizer_key_uses": [
+            ]
+          },
+          {
+            "rows_estimation": [
+              {
+                "table": "`t1`",
+                "table_scan": {
+                  "rows": 3,
+                  "cost": 0.25
+                }
+              },
+              {
+                "table": "`t2`",
+                "table_scan": {
+                  "rows": 3,
+                  "cost": 0.25
+                }
+              },
+              {
+                "table": "`t2` `t3`",
+                "table_scan": {
+                  "rows": 3,
+                  "cost": 0.25
+                }
+              }
+            ]
+          },
+          {
+            "considered_execution_plans": [
+              {
+                "plan_prefix": [
+                ],
+                "table": "`t1`",
+                "best_access_path": {
+                  "considered_access_paths": [
+                    {
+                      "rows_to_scan": 3,
+                      "access_type": "scan",
+                      "resulting_rows": 3,
+                      "cost": 0.55,
+                      "chosen": true
+                    }
+                  ]
+                },
+                "condition_filtering_pct": 100,
+                "rows_for_plan": 3,
+                "cost_for_plan": 0.55,
+                "rest_of_plan": [
+                  {
+                    "plan_prefix": [
+                      "`t1`"
+                    ],
+                    "table": "`t2`",
+                    "best_access_path": {
+                      "considered_access_paths": [
+                        {
+                          "rows_to_scan": 3,
+                          "access_type": "scan",
+                          "using_join_cache": true,
+                          "buffers_needed": 1,
+                          "resulting_rows": 3,
+                          "cost": 1.15003,
+                          "chosen": true
+                        }
+                      ]
+                    },
+                    "condition_filtering_pct": 100,
+                    "rows_for_plan": 9,
+                    "cost_for_plan": 1.70003,
+                    "rest_of_plan": [
+                      {
+                        "plan_prefix": [
+                          "`t1`",
+                          "`t2`"
+                        ],
+                        "table": "`t2` `t3`",
+                        "best_access_path": {
+                          "considered_access_paths": [
+                            {
+                              "rows_to_scan": 3,
+                              "access_type": "scan",
+                              "using_join_cache": true,
+                              "buffers_needed": 1,
+                              "resulting_rows": 3,
+                              "cost": 2.95012,
+                              "chosen": true
+                            }
+                          ]
+                        },
+                        "condition_filtering_pct": 100,
+                        "rows_for_plan": 27,
+                        "cost_for_plan": 4.65015,
+                        "chosen": true
+                      }
+                    ]
+                  },
+                  {
+                    "plan_prefix": [
+                      "`t1`"
+                    ],
+                    "table": "`t2` `t3`",
+                    "best_access_path": {
+                      "considered_access_paths": [
+                        {
+                          "rows_to_scan": 3,
+                          "access_type": "scan",
+                          "using_join_cache": true,
+                          "buffers_needed": 1,
+                          "resulting_rows": 3,
+                          "cost": 1.15003,
+                          "chosen": true
+                        }
+                      ]
+                    },
+                    "condition_filtering_pct": 100,
+                    "rows_for_plan": 9,
+                    "cost_for_plan": 1.70003,
+                    "pruned_by_heuristic": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "condition_on_constant_tables": "true",
+            "condition_value": true
+          },
+          {
+            "attaching_conditions_to_tables": {
+              "original_condition": "true",
+              "attached_conditions_computation": [
+                {
+                  "table": "`t2`",
+                  "rechecking_index_usage": {
+                    "recheck_reason": "not_first_table",
+                    "range_analysis": {
+                      "table_scan": {
+                        "rows": 3,
+                        "cost": 2.65
+                      },
+                      "potential_range_indexes": [
+                        {
+                          "index": "PRIMARY",
+                          "usable": true,
+                          "key_parts": [
+                            "a"
+                          ]
+                        }
+                      ],
+                      "best_covering_index_scan": {
+                        "index": "PRIMARY",
+                        "cost": 0.550488,
+                        "chosen": true
+                      },
+                      "setup_range_conditions": [
+                      ],
+                      "group_index_range": {
+                        "chosen": false,
+                        "cause": "not_single_table"
+                      },
+                      "skip_scan_range": {
+                        "chosen": false,
+                        "cause": "not_single_table"
+                      }
+                    }
+                  }
+                },
+                {
+                  "table": "`t2` `t3`",
+                  "rechecking_index_usage": {
+                    "recheck_reason": "not_first_table",
+                    "range_analysis": {
+                      "table_scan": {
+                        "rows": 3,
+                        "cost": 2.65
+                      },
+                      "potential_range_indexes": [
+                        {
+                          "index": "PRIMARY",
+                          "usable": true,
+                          "key_parts": [
+                            "a"
+                          ]
+                        }
+                      ],
+                      "best_covering_index_scan": {
+                        "index": "PRIMARY",
+                        "cost": 0.550488,
+                        "chosen": true
+                      },
+                      "group_index_range": {
+                        "chosen": false,
+                        "cause": "not_single_table"
+                      },
+                      "skip_scan_range": {
+                        "chosen": false,
+                        "cause": "not_single_table"
+                      }
+                    }
+                  }
+                }
+              ],
+              "attached_conditions_summary": [
+                {
+                  "table": "`t1`",
+                  "attached": null
+                },
+                {
+                  "table": "`t2`",
+                  "attached": null
+                },
+                {
+                  "table": "`t2` `t3`",
+                  "attached": "<if>(is_not_null_compl(t2..t3), ((`t2`.`a` = `t1`.`b`) or (`t3`.`a` = (`t1`.`b` + 1))), true)"
+                }
+              ]
+            }
+          },
+          {
+            "finalizing_table_conditions": [
+              {
+                "table": "`t2` `t3`",
+                "original_table_condition": "<if>(is_not_null_compl(t2..t3), ((`t2`.`a` = `t1`.`b`) or (`t3`.`a` = (`t1`.`b` + 1))), true)",
+                "final_table_condition   ": "<if>(is_not_null_compl(t2..t3), ((`t2`.`a` = `t1`.`b`) or (`t3`.`a` = (`t1`.`b` + 1))), true)"
+              }
+            ]
+          },
+          {
+            "refine_plan": [
+              {
+                "table": "`t1`"
+              },
+              {
+                "table": "`t2`"
+              },
+              {
+                "table": "`t2` `t3`"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "make_parallel_query_plan": {
+        "select#": 1,
+        "detail": [
+          {
+            "table": "`t1`",
+            "degree of parallel": 4,
+            "merge_sort": false
+          }
+        ]
+      }
+    },
+    {
+      "join_execution": {
+        "select#": 1,
+        "steps": [
+        ]
+      }
+    }
+  ]
+}
+SET optimizer_trace=default;
+# One single bound unique key, no elimination
+explain SELECT t1.a FROM t1 LEFT JOIN (t2, t2 AS t3) ON t2.a=t1.b AND t3.a>t1.b+1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	SIMPLE	t2	NULL	eq_ref	PRIMARY	PRIMARY	4	test.t1.b	1	100.00	Using index
+1	SIMPLE	t3	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` left join (`test`.`t2` join `test`.`t2` `t3`) on(((`test`.`t2`.`a` = `test`.`t1`.`b`) and (`test`.`t3`.`a` > (`test`.`t1`.`b` + 1)))) where true
+SELECT t1.a FROM t1 LEFT JOIN (t2, t2 AS t3) ON t2.a=t1.b AND t3.a>t1.b+1;
+a
+1
+2
+7
+# Equality on string column is tricky, we test it
+ALTER TABLE t2 ADD UNIQUE INDEX (c);
+# No elimination, comparing number on left to string on right.
+# In detail: imagine te left table has one row with integer
+# value 1, and the right table has two rows with string values
+# '1' and '1.0' (which are different strings, so UNIQUE is
+# respected) : with the original query there will be _two_ matches in
+# the join (comparison is done as numbers), and two rows in the result;
+# with elimination, only one row).
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.c=t1.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t2, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
+1	SIMPLE	t2	NULL	index	c	c	43	NULL	3	100.00	Using where; Using index; Using join buffer (hash join)
+Warnings:
+Warning	1739	Cannot use ref access on index 'c' due to type or collation conversion on field 'c'
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` left join `test`.`t2` on((cast(`test`.`t2`.`c` as double) = cast(`test`.`t1`.`a` as double))) where true
+SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.c=t1.a;
+a
+1
+2
+7
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'abc'
+Warning	1292	Truncated incorrect DOUBLE value: 'def'
+# In the reverse case, there is elimination
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a=t1.c;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a=t1.c;
+a
+1
+2
+7
+# Also with string=string, but only if collations match
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.c=t1.c;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.c=t1.c;
+a
+1
+2
+7
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.c=t1.c COLLATE utf8mb4_lv_0900_ai_ci;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t2, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	SIMPLE	t2	NULL	index	c	c	43	NULL	3	100.00	Using where; Using index; Using join buffer (hash join)
+Warnings:
+Warning	1739	Cannot use ref access on index 'c' due to type or collation conversion on field 'c'
+Warning	1739	Cannot use range access on index 'c' due to type or collation conversion on field 'c'
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`c` = (`test`.`t1`.`c` collate utf8mb4_lv_0900_ai_ci))) where true
+SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.c=t1.c COLLATE utf8mb4_lv_0900_ai_ci;
+a
+1
+2
+7
+# Here the collation is explicit but it's the same as the columns'.
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.c=t1.c COLLATE utf8mb4_0900_ai_ci;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.c=t1.c COLLATE utf8mb4_0900_ai_ci;
+a
+1
+2
+7
+FLUSH STATUS;
+# Here t1.c is replaced with a '?'. Even though the comments
+# below are a bit complicated as they try to explain what is going
+# internally, the visible result of queries is that elimination is done
+# and not done, properly.
+# 'c' is string so '?' is also given an inferred string type by
+# param_type_uses_non_param(). string_col=string is safe for
+# elimination, so elimination is done.
+PREPARE s FROM 'EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.c=?';
+SET @var='abc';
+EXECUTE s USING @var;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1`
+SET @var=1;
+# As is usual when a PS parameter changes from string type to
+# integer type (checked in check_parameter_types()), there is
+# re-preparation. In this new preparation we have t2.c=integer, so
+# elimination cannot be done (string_col=int is unsafe, look for
+# is_string_type() in sql_join_elimination.cc).
+EXECUTE s USING @var;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
+1	SIMPLE	t2	NULL	index	c	c	43	NULL	3	100.00	Using where; Using index; Using join buffer (hash join)
+Warnings:
+Warning	1739	Cannot use ref access on index 'c' due to type or collation conversion on field 'c'
+Warning	1739	Cannot use range access on index 'c' due to type or collation conversion on field 'c'
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`c` = 1)) where true
+SHOW STATUS LIKE "Com_stmt_reprepare";
+Variable_name	Value
+Com_stmt_reprepare	1
+# Here the type of '?' is integer (inferred from 'a').
+PREPARE s FROM 'EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a=?';
+SET @var=1;
+# Elimination can be done ('a' is an integer, int_col=anything
+# is safe).
+EXECUTE s USING @var;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1`
+SET @var='abc';
+# No re-preparation (parameter type changes int->string does
+# not cause a re-preparation). So elimination remains in force (and
+# fortunately, int_col=string is safe).
+EXECUTE s USING @var;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1`
+DROP PREPARE s;
+SHOW STATUS LIKE "Com_stmt_reprepare";
+Variable_name	Value
+Com_stmt_reprepare	1
+# Elimination works with equality on ROW type too
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON (t2.c,t2.b+1)=(t1.c,t2.a+1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT t1.a FROM t1 LEFT JOIN t2 ON (t2.c,t2.b+1)=(t1.c,t2.a+1);
+a
+1
+2
+7
+# With temporal type
+ALTER TABLE t2 add unique(dt);
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.dt=t1.dt;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.dt=t1.dt;
+a
+1
+2
+7
+# As in a previous test, this can do elimination as a string in
+# t1.c can only map to a single DATETIME in t2.dt
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.dt=t1.c;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1`
+SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.dt=t1.c;
+a
+1
+2
+7
+# but this cannot do join elimination, as multiple strings in
+# t2.c can map to the same DATETIME in t1.dt
+EXPLAIN SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.c=t1.dt;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t2, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	SIMPLE	t2	NULL	index	c	c	43	NULL	3	100.00	Using where; Using index; Using join buffer (hash join)
+Warnings:
+Warning	1739	Cannot use ref access on index 'c' due to type or collation conversion on field 'c'
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a` from `test`.`t1` left join `test`.`t2` on((cast(`test`.`t2`.`c` as datetime(6)) = `test`.`t1`.`dt`)) where true
+SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.c=t1.dt;
+a
+1
+2
+7
+Warnings:
+Warning	1292	Incorrect datetime value: '4.0'
+Warning	1292	Incorrect datetime value: 'abc'
+Warning	1292	Incorrect datetime value: 'def'
+# (III.2) Pseudo-unique key of derived table containing GROUP BY
+# This can do elimination as all group expressions of the derived
+# table have imposed values in the top LEFT JOIN
+EXPLAIN SELECT t1.* FROM t1 LEFT JOIN (SELECT t2.b+1 AS x, t2.b*t3.a AS y, COUNT(*) AS col_count FROM t2, t2 AS t3 GROUP BY t2.b+1, t2.b*t3.a) AS derived ON derived.x=t1.a AND derived.y=t1.a+4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c`,`test`.`t1`.`dt` AS `dt` from `test`.`t1`
+SELECT t1.* FROM t1 LEFT JOIN (SELECT t2.b+1 AS x, t2.b*t3.a AS y, COUNT(*) AS col_count FROM t2, t2 AS t3 GROUP BY t2.b+1, t2.b*t3.a) AS derived ON derived.x=t1.a AND derived.y=t1.a+4;
+a	b	c	dt
+1	1	4.0	2000-01-01 12:34:56
+2	3	abc	2002-01-01 00:00:00
+7	NULL	wxc	2004-02-02 00:00:00
+# But here one of the two expressions is missing, no elimination
+EXPLAIN SELECT t1.* FROM t1 LEFT JOIN (SELECT t2.b+1 AS x, t2.b*t3.a AS y, COUNT(*) AS col_count FROM t2, t2 AS t3 GROUP BY t2.b+1, t2.b*t3.a) AS derived ON derived.x>t1.a AND derived.y=t1.a+4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, .derived, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	SIMPLE	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where; Using join buffer (hash join)
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t2)
+2	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using temporary
+2	SIMPLE	t3	NULL	index	NULL	dt	6	NULL	3	100.00	Using index; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c`,`test`.`t1`.`dt` AS `dt` from `test`.`t1` left join (/* select#2 */ select (`test`.`t2`.`b` + 1) AS `x`,(`test`.`t2`.`b` * `test`.`t3`.`a`) AS `y`,count(0) AS `col_count` from `test`.`t2` join `test`.`t2` `t3` group by `x`,`y`) `derived` on(((`derived`.`x` > `test`.`t1`.`a`) and (`derived`.`y` = (`test`.`t1`.`a` + 4)))) where true
+SELECT t1.* FROM t1 LEFT JOIN (SELECT t2.b+1 AS x, t2.b*t3.a AS y, COUNT(*) AS col_count FROM t2, t2 AS t3 GROUP BY t2.b+1, t2.b*t3.a) AS derived ON derived.x>t1.a AND derived.y=t1.a+4;
+a	b	c	dt
+1	1	4.0	2000-01-01 12:34:56
+2	3	abc	2002-01-01 00:00:00
+7	NULL	wxc	2004-02-02 00:00:00
+# The same, with group expressions referencing selected expressions,
+# using numbers or alias.
+EXPLAIN SELECT t1.* FROM t1 LEFT JOIN (SELECT t2.b+1 AS x, t2.b*t3.a AS y, COUNT(*) AS col_count FROM t2, t2 AS t3 GROUP BY 2,1) AS derived ON derived.x=t1.a AND derived.y=t1.a+4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c`,`test`.`t1`.`dt` AS `dt` from `test`.`t1`
+SELECT t1.* FROM t1 LEFT JOIN (SELECT t2.b+1 AS x, t2.b*t3.a AS y, COUNT(*) AS col_count FROM t2, t2 AS t3 GROUP BY 2,1) AS derived ON derived.x=t1.a AND derived.y=t1.a+4;
+a	b	c	dt
+1	1	4.0	2000-01-01 12:34:56
+2	3	abc	2002-01-01 00:00:00
+7	NULL	wxc	2004-02-02 00:00:00
+EXPLAIN SELECT t1.* FROM t1 LEFT JOIN (SELECT t2.b+1 AS x, t2.b*t3.a AS y, COUNT(*) AS col_count FROM t2, t2 AS t3 GROUP BY y,x) AS derived ON derived.x=t1.a AND derived.y=t1.a+4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c`,`test`.`t1`.`dt` AS `dt` from `test`.`t1`
+SELECT t1.* FROM t1 LEFT JOIN (SELECT t2.b+1 AS x, t2.b*t3.a AS y, COUNT(*) AS col_count FROM t2, t2 AS t3 GROUP BY y,x) AS derived ON derived.x=t1.a AND derived.y=t1.a+4;
+a	b	c	dt
+1	1	4.0	2000-01-01 12:34:56
+2	3	abc	2002-01-01 00:00:00
+7	NULL	wxc	2004-02-02 00:00:00
+# The same, with a view instead of a derived table
+CREATE VIEW v1 AS
+SELECT t2.b+1 AS x, t2.b*t3.a AS y, COUNT(*) AS col_count FROM t2, t2 AS t3 GROUP BY t2.b+1, t2.b*t3.a;
+EXPLAIN SELECT t1.* FROM t1 LEFT JOIN v1 ON v1.x=t1.a AND v1.y=t1.a+4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c`,`test`.`t1`.`dt` AS `dt` from `test`.`t1`
+SELECT t1.* FROM t1 LEFT JOIN v1 ON v1.x=t1.a AND v1.y=t1.a+4;
+a	b	c	dt
+1	1	4.0	2000-01-01 12:34:56
+2	3	abc	2002-01-01 00:00:00
+7	NULL	wxc	2004-02-02 00:00:00
+DROP VIEW v1;
+# and as a CTE
+EXPLAIN WITH cte AS (SELECT t2.b+1 AS x, t2.b*t3.a AS y, COUNT(*) AS col_count FROM t2, t2 AS t3 GROUP BY t2.b+1, t2.b*t3.a) SELECT t1.* FROM t1 LEFT JOIN cte ON cte.x=t1.a AND cte.y=t1.a+4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c`,`test`.`t1`.`dt` AS `dt` from `test`.`t1`
+WITH cte AS (SELECT t2.b+1 AS x, t2.b*t3.a AS y, COUNT(*) AS col_count FROM t2, t2 AS t3 GROUP BY t2.b+1, t2.b*t3.a) SELECT t1.* FROM t1 LEFT JOIN cte ON cte.x=t1.a AND cte.y=t1.a+4;
+a	b	c	dt
+1	1	4.0	2000-01-01 12:34:56
+2	3	abc	2002-01-01 00:00:00
+7	NULL	wxc	2004-02-02 00:00:00
+# Adding ROLLUP to GROUP BY
+EXPLAIN SELECT t1.* FROM t1 LEFT JOIN (SELECT t2.b+1 AS x, t2.b*t3.a AS y, COUNT(*) AS col_count FROM t2, t2 AS t3 GROUP BY t2.b+1, t2.b*t3.a WITH ROLLUP) AS derived ON derived.x=t1.a AND derived.y=t1.a+4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c`,`test`.`t1`.`dt` AS `dt` from `test`.`t1`
+SELECT t1.* FROM t1 LEFT JOIN (SELECT t2.b+1 AS x, t2.b*t3.a AS y, COUNT(*) AS col_count FROM t2, t2 AS t3 GROUP BY t2.b+1, t2.b*t3.a WITH ROLLUP) AS derived ON derived.x=t1.a AND derived.y=t1.a+4;
+a	b	c	dt
+1	1	4.0	2000-01-01 12:34:56
+2	3	abc	2002-01-01 00:00:00
+7	NULL	wxc	2004-02-02 00:00:00
+(III.3) Pseudo-unique key of derived table containing DISTINCT
+# This can do elimination as all selected expressions of the derived
+# table have imposed values in the top LEFT JOIN
+EXPLAIN SELECT t1.* FROM t1 LEFT JOIN (SELECT DISTINCT t2.b+1 AS x, t2.b*t3.a AS y FROM t2, t2 AS t3) AS derived ON derived.x=t1.a AND derived.y=t1.a+4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c`,`test`.`t1`.`dt` AS `dt` from `test`.`t1`
+SELECT t1.* FROM t1 LEFT JOIN (SELECT DISTINCT t2.b+1 AS x, t2.b*t3.a AS y FROM t2, t2 AS t3) AS derived ON derived.x=t1.a AND derived.y=t1.a+4;
+a	b	c	dt
+1	1	4.0	2000-01-01 12:34:56
+2	3	abc	2002-01-01 00:00:00
+7	NULL	wxc	2004-02-02 00:00:00
+# But here one of the two expressions is missing, no elimination
+EXPLAIN SELECT t1.* FROM t1 LEFT JOIN (SELECT DISTINCT t2.b+1 AS x, t2.b*t3.a AS y FROM t2, t2 AS t3) AS derived ON derived.x>t1.a AND derived.y=t1.a+4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, .derived, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	SIMPLE	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Using where; Using join buffer (hash join)
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t2)
+2	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using temporary
+2	SIMPLE	t3	NULL	index	NULL	dt	6	NULL	3	100.00	Using index; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c`,`test`.`t1`.`dt` AS `dt` from `test`.`t1` left join (/* select#2 */ select distinct (`test`.`t2`.`b` + 1) AS `x`,(`test`.`t2`.`b` * `test`.`t3`.`a`) AS `y` from `test`.`t2` join `test`.`t2` `t3`) `derived` on(((`derived`.`x` > `test`.`t1`.`a`) and (`derived`.`y` = (`test`.`t1`.`a` + 4)))) where true
+SELECT t1.* FROM t1 LEFT JOIN (SELECT DISTINCT t2.b+1 AS x, t2.b*t3.a AS y FROM t2, t2 AS t3) AS derived ON derived.x>t1.a AND derived.y=t1.a+4;
+a	b	c	dt
+1	1	4.0	2000-01-01 12:34:56
+2	3	abc	2002-01-01 00:00:00
+7	NULL	wxc	2004-02-02 00:00:00
+# No DISTINCT, no elimination (LIMIT is to keep materialization, avoid merging)
+EXPLAIN SELECT t1.* FROM t1 LEFT JOIN (SELECT t2.b+1 AS x, t2.b*t3.a AS y FROM t2, t2 AS t3 LIMIT 100) AS derived ON derived.x=t1.a AND derived.y=t1.a+4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	SIMPLE	<derived2>	NULL	ref	<auto_key0>	<auto_key0>	18	test.t1.a,func	2	100.00	Using where; Using index
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t2)
+2	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+2	SIMPLE	t3	NULL	index	NULL	dt	6	NULL	3	100.00	Using index; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c`,`test`.`t1`.`dt` AS `dt` from `test`.`t1` left join (/* select#2 */ select (`test`.`t2`.`b` + 1) AS `x`,(`test`.`t2`.`b` * `test`.`t3`.`a`) AS `y` from `test`.`t2` join `test`.`t2` `t3` limit 100) `derived` on(((`derived`.`x` = `test`.`t1`.`a`) and (`derived`.`y` = (`test`.`t1`.`a` + 4)))) where true
+SELECT t1.* FROM t1 LEFT JOIN (SELECT t2.b+1 AS x, t2.b*t3.a AS y FROM t2, t2 AS t3 LIMIT 100) AS derived ON derived.x=t1.a AND derived.y=t1.a+4;
+a	b	c	dt
+1	1	4.0	2000-01-01 12:34:56
+2	3	abc	2002-01-01 00:00:00
+7	NULL	wxc	2004-02-02 00:00:00
+# (IV) Query similar to customer's
+EXPLAIN SELECT COUNT(1) FROM
+(SELECT t.a,
+CASE WHEN t.b = '1' THEN 'ab' ELSE 'cd' END AS computed_col
+FROM t1 AS t
+LEFT JOIN t2 AS u ON t.a = u.b+1
+INNER JOIN t2 AS v ON v.b+2 = t.a
+INNER JOIN t2 AS w ON w.b+3 = t.a
+GROUP BY t.a, computed_col
+) AS derived;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, .derived)
+1	SIMPLE	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	NULL
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.v)
+2	SIMPLE	v	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using temporary
+2	SIMPLE	t	NULL	eq_ref	PRIMARY	PRIMARY	4	func	1	100.00	Using where
+2	SIMPLE	w	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select count(1) AS `COUNT(1)` from (/* select#2 */ select `test`.`t`.`a` AS `a`,(case when (`test`.`t`.`b` = '1') then 'ab' else 'cd' end) AS `computed_col` from `test`.`t1` `t` join `test`.`t2` `v` join `test`.`t2` `w` where (((`test`.`w`.`b` + 3) = `test`.`t`.`a`) and ((`test`.`v`.`b` + 2) = `test`.`t`.`a`)) group by `test`.`t`.`a`,`computed_col`) `derived`
+SELECT COUNT(1) FROM
+(SELECT t.a,
+CASE WHEN t.b = '1' THEN 'ab' ELSE 'cd' END AS computed_col
+FROM t1 AS t
+LEFT JOIN t2 AS u ON t.a = u.b+1
+INNER JOIN t2 AS v ON v.b+2 = t.a
+INNER JOIN t2 AS w ON w.b+3 = t.a
+GROUP BY t.a, computed_col
+) AS derived;
+COUNT(1)
+1
+# Fix for a bug: it's not possible to get reliable used_tables information of an aggregate which is inside a subquery of our query block. We block this situation in code, otherwise we would not notice that t2 is used in count() and eliminate it, which would be wrong.
+explain select distinct (select count(t2.a+0) from t1 t0) from t1 left join t1 t2 on t1.a=t2.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
+1	PRIMARY	t2	NULL	eq_ref	PRIMARY	PRIMARY	4	test.t1.a	1	100.00	Using index
+2	DEPENDENT SUBQUERY	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1276	Field or reference 'test.t2.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select (/* select#2 */ select count((`test`.`t2`.`a` + 0)) from `test`.`t1` `t0`) AS `(select count(t2.a+0) from t1 t0)` from `test`.`t1` left join `test`.`t1` `t2` on((`test`.`t2`.`a` = `test`.`t1`.`a`)) where true
+# It's also not possible to set reliable used_tables information after eliminating; so we cannot eliminate t1 here; count() would still pretend it depends on t2.
+explain select distinct (select count(t1.a+0) from t1 t0) from t1 left join t1 t2 on t1.a=t2.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
+1	PRIMARY	t2	NULL	eq_ref	PRIMARY	PRIMARY	4	test.t1.a	1	100.00	Using index
+2	DEPENDENT SUBQUERY	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1276	Field or reference 'test.t1.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select (/* select#2 */ select count((`test`.`t1`.`a` + 0)) from `test`.`t1` `t0`) AS `(select count(t1.a+0) from t1 t0)` from `test`.`t1` left join `test`.`t1` `t2` on((`test`.`t2`.`a` = `test`.`t1`.`a`)) where true
+# Here the aggregate in the subquery, is not an aggregate from the POV of the query block where the left join is, so there is no problem.
+explain select distinct (select count(t0.a+0) from t1 t0) from t1 left join t1 t2 on t1.a=t2.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
+2	SUBQUERY	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t0)
+2	SIMPLE	t0	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select distinct (/* select#2 */ select count((`test`.`t0`.`a` + 0)) from `test`.`t1` `t0`) AS `(select count(t0.a+0) from t1 t0)` from `test`.`t1`
+# Without GROUP BY, and with composite unique key:
+CREATE TABLE u (a INT, b INT, c INT NOT NULL, UNIQUE (a,b));
+# Only one key part is functionally dependent, no elimination:
+EXPLAIN SELECT COUNT(1) FROM
+(SELECT t.a,
+CASE WHEN t.b = '1' THEN 'ab' ELSE 'cd' END AS computed_col
+FROM t1 AS t
+LEFT JOIN u ON t.a = u.b
+INNER JOIN t2 AS v ON v.b+2 = t.a
+INNER JOIN t2 AS w ON w.b+3 = t.a
+) AS derived;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.u, test.v)
+1	SIMPLE	v	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	SIMPLE	t	NULL	eq_ref	PRIMARY	PRIMARY	4	func	1	100.00	Using where; Using index
+1	SIMPLE	u	NULL	index	NULL	a	10	NULL	1	100.00	Using where; Using index; Using join buffer (hash join)
+1	SIMPLE	w	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select count(1) AS `COUNT(1)` from `test`.`t1` `t` left join `test`.`u` on((`test`.`u`.`b` = `test`.`t`.`a`)) join `test`.`t2` `v` join `test`.`t2` `w` where (((`test`.`w`.`b` + 3) = `test`.`t`.`a`) and ((`test`.`v`.`b` + 2) = `test`.`t`.`a`))
+SELECT COUNT(1) FROM
+(SELECT t.a,
+CASE WHEN t.b = '1' THEN 'ab' ELSE 'cd' END AS computed_col
+FROM t1 AS t
+LEFT JOIN u ON t.a = u.b
+INNER JOIN t2 AS v ON v.b+2 = t.a
+INNER JOIN t2 AS w ON w.b+3 = t.a
+) AS derived;
+COUNT(1)
+1
+# Both one key parts are functionally dependent, elimination:
+EXPLAIN SELECT COUNT(1) FROM
+(SELECT t.a,
+CASE WHEN t.b = '1' THEN 'ab' ELSE 'cd' END AS computed_col
+FROM t1 AS t
+LEFT JOIN u ON t.a = u.b and t.b = u.a
+INNER JOIN t2 AS v ON v.b+2 = t.a
+INNER JOIN t2 AS w ON w.b+3 = t.a
+) AS derived;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.v)
+1	SIMPLE	v	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	SIMPLE	t	NULL	eq_ref	PRIMARY	PRIMARY	4	func	1	100.00	Using where
+1	SIMPLE	w	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select count(1) AS `COUNT(1)` from `test`.`t1` `t` join `test`.`t2` `v` join `test`.`t2` `w` where (((`test`.`w`.`b` + 3) = `test`.`t`.`a`) and ((`test`.`v`.`b` + 2) = `test`.`t`.`a`))
+SELECT COUNT(1) FROM
+(SELECT t.a,
+CASE WHEN t.b = '1' THEN 'ab' ELSE 'cd' END AS computed_col
+FROM t1 AS t
+LEFT JOIN u ON t.a = u.b and t.b = u.a
+INNER JOIN t2 AS v ON v.b+2 = t.a
+INNER JOIN t2 AS w ON w.b+3 = t.a
+) AS derived;
+COUNT(1)
+1
+# Same, expressed as ROW-equality; we also change the aggregate
+# a bit and "nest" it
+EXPLAIN SELECT 1+(2*SUM(derived.a)) FROM
+(SELECT t.a,
+CASE WHEN t.b = '1' THEN 'ab' ELSE 'cd' END AS computed_col
+FROM t1 AS t
+LEFT JOIN u ON (t.a, t.b) = (u.b, u.a)
+INNER JOIN t2 AS v ON v.b+2 = t.a
+INNER JOIN t2 AS w ON w.b+3 = t.a
+) AS derived;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.v)
+1	SIMPLE	v	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	SIMPLE	t	NULL	eq_ref	PRIMARY	PRIMARY	4	func	1	100.00	Using where
+1	SIMPLE	w	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select (1 + (2 * sum(`<temporary>`.`sum(t.a)`))) AS `1+(2*SUM(derived.a))` from `test`.`t1` `t` join `test`.`t2` `v` join `test`.`t2` `w` where (((`test`.`w`.`b` + 3) = `test`.`t`.`a`) and ((`test`.`v`.`b` + 2) = `test`.`t`.`a`))
+SELECT 1+(2*SUM(derived.a)) FROM
+(SELECT t.a,
+CASE WHEN t.b = '1' THEN 'ab' ELSE 'cd' END AS computed_col
+FROM t1 AS t
+LEFT JOIN u ON (t.a, t.b) = (u.b, u.a)
+INNER JOIN t2 AS v ON v.b+2 = t.a
+INNER JOIN t2 AS w ON w.b+3 = t.a
+) AS derived;
+1+(2*SUM(derived.a))
+15
+# Only one key part is functionally dependent, but there is also
+# GROUP BY, so elimination
+EXPLAIN SELECT COUNT(1) FROM
+(SELECT t.a,
+CASE WHEN t.b = '1' THEN 'ab' ELSE 'cd' END AS computed_col
+FROM t1 AS t
+LEFT JOIN u ON t.a = u.b
+INNER JOIN t2 AS v ON v.b+2 = t.a
+INNER JOIN t2 AS w ON w.b+3 = t.a
+GROUP BY t.a
+) AS derived;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, .derived)
+1	SIMPLE	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	NULL
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.v)
+2	SIMPLE	v	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using temporary
+2	SIMPLE	t	NULL	eq_ref	PRIMARY	PRIMARY	4	func	1	100.00	Using where
+2	SIMPLE	w	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select count(1) AS `COUNT(1)` from (/* select#2 */ select `test`.`t`.`a` AS `a`,(case when (`test`.`t`.`b` = '1') then 'ab' else 'cd' end) AS `computed_col` from `test`.`t1` `t` join `test`.`t2` `v` join `test`.`t2` `w` where (((`test`.`w`.`b` + 3) = `test`.`t`.`a`) and ((`test`.`v`.`b` + 2) = `test`.`t`.`a`)) group by `test`.`t`.`a`) `derived`
+SELECT COUNT(1) FROM
+(SELECT t.a,
+CASE WHEN t.b = '1' THEN 'ab' ELSE 'cd' END AS computed_col
+FROM t1 AS t
+LEFT JOIN u ON t.a = u.b
+INNER JOIN t2 AS v ON v.b+2 = t.a
+INNER JOIN t2 AS w ON w.b+3 = t.a
+GROUP BY t.a
+) AS derived;
+COUNT(1)
+1
+# One note: join elimination and COUNT(not-null) optimization have no
+# chance to work together: we could hope that the latter would
+# eliminate a reference to the right-side table in COUNT, so maybe
+# elimination could then happen; but actually no: the right-side table
+# is potentially NULL-complemented by definition, so COUNT(not-null)
+# cannot apply. Example below, even though in base table 'u' the
+# column 'c' is not nullable, we cannot eliminate 'u':
+EXPLAIN SELECT 1+(2*COUNT(derived.uc)) FROM
+(SELECT t.a, u.c AS uc,
+CASE WHEN t.b = '1' THEN 'ab' ELSE 'cd' END AS computed_col
+FROM t1 AS t
+LEFT JOIN u ON (t.a, t.b) = (u.b, u.a)
+INNER JOIN t2 AS v ON v.b+2 = t.a
+INNER JOIN t2 AS w ON w.b+3 = t.a
+) AS derived;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.u, test.v)
+1	SIMPLE	v	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	SIMPLE	t	NULL	eq_ref	PRIMARY	PRIMARY	4	func	1	100.00	Using where
+1	SIMPLE	u	NULL	ALL	a	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (hash join)
+1	SIMPLE	w	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select (1 + (2 * count(`<temporary>`.`count(u.c)`))) AS `1+(2*COUNT(derived.uc))` from `test`.`t1` `t` left join `test`.`u` on(((`test`.`u`.`a` = `test`.`t`.`b`) and (`test`.`u`.`b` = `test`.`t`.`a`))) join `test`.`t2` `v` join `test`.`t2` `w` where (((`test`.`w`.`b` + 3) = `test`.`t`.`a`) and ((`test`.`v`.`b` + 2) = `test`.`t`.`a`))
+SELECT 1+(2*COUNT(derived.uc)) FROM
+(SELECT t.a, u.c AS uc,
+CASE WHEN t.b = '1' THEN 'ab' ELSE 'cd' END AS computed_col
+FROM t1 AS t
+LEFT JOIN u ON (t.a, t.b) = (u.b, u.a)
+INNER JOIN t2 AS v ON v.b+2 = t.a
+INNER JOIN t2 AS w ON w.b+3 = t.a
+) AS derived;
+1+(2*COUNT(derived.uc))
+1
+# Re-checking three previous cases of elimination, with a view
+# instead of a derived table.
+CREATE VIEW v1 AS SELECT t.a,
+CASE WHEN t.b = '1' THEN 'ab' ELSE 'cd' END AS computed_col
+FROM t1 AS t
+LEFT JOIN u ON t.a = u.b+1
+INNER JOIN t2 AS v ON v.b+2 = t.a
+INNER JOIN t2 AS w ON w.b+3 = t.a
+GROUP BY t.a, computed_col;
+EXPLAIN SELECT COUNT(1) FROM v1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, .v1)
+1	SIMPLE	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	NULL
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.v)
+2	SIMPLE	v	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using temporary
+2	SIMPLE	t	NULL	eq_ref	PRIMARY	PRIMARY	4	func	1	100.00	Using where
+2	SIMPLE	w	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select count(1) AS `COUNT(1)` from `test`.`v1`
+SELECT COUNT(1) FROM v1;
+COUNT(1)
+1
+DROP VIEW v1;
+CREATE VIEW v1 AS 
+SELECT t.a,
+CASE WHEN t.b = '1' THEN 'ab' ELSE 'cd' END AS computed_col
+FROM t1 AS t
+LEFT JOIN u ON (t.a, t.b) = (u.b, u.a)
+INNER JOIN t2 AS v ON v.b+2 = t.a
+INNER JOIN t2 AS w ON w.b+3 = t.a;
+EXPLAIN SELECT 1+(2*SUM(a)) FROM v1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.v)
+1	SIMPLE	v	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	SIMPLE	t	NULL	eq_ref	PRIMARY	PRIMARY	4	func	1	100.00	Using where
+1	SIMPLE	w	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select (1 + (2 * sum(`<temporary>`.`sum(t.a)`))) AS `1+(2*SUM(a))` from `test`.`t1` `t` join `test`.`t2` `v` join `test`.`t2` `w` where (((`test`.`w`.`b` + 3) = `test`.`t`.`a`) and ((`test`.`v`.`b` + 2) = `test`.`t`.`a`))
+SELECT 1+(2*SUM(a)) FROM v1;
+1+(2*SUM(a))
+15
+DROP VIEW v1;
+CREATE VIEW v1 AS 
+SELECT t.a,
+CASE WHEN t.b = '1' THEN 'ab' ELSE 'cd' END AS computed_col
+FROM t1 AS t
+LEFT JOIN u ON t.a = u.b
+INNER JOIN t2 AS v ON v.b+2 = t.a
+INNER JOIN t2 AS w ON w.b+3 = t.a
+GROUP BY t.a;
+EXPLAIN SELECT COUNT(1) FROM v1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	Parallel execute (4 workers, .v1)
+1	SIMPLE	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	9	100.00	NULL
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.v)
+2	SIMPLE	v	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using temporary
+2	SIMPLE	t	NULL	eq_ref	PRIMARY	PRIMARY	4	func	1	100.00	Using where
+2	SIMPLE	w	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select count(1) AS `COUNT(1)` from `test`.`v1`
+SELECT COUNT(1) FROM v1;
+COUNT(1)
+1
+DROP VIEW v1;
+DROP TABLE u;
+# Now an imaginary example which looks realistic: we have two
+# tables with PK-FK relationship, a view which presents information
+# gathered from both tables, and a query which happens to select only
+# certain columns, making one table actually unnecessary.
+CREATE TABLE person(name VARCHAR(10) PRIMARY KEY, zip_code CHAR(6));
+CREATE TABLE town(zip_code CHAR(6) PRIMARY KEY, name VARCHAR(10));
+INSERT INTO person VALUES('M. A', NULL),('Ms. B', '170150');
+INSERT INTO town VALUES('170150', 'Quito'), ('090150', 'Guayaquil');
+# A view which presents the person's name and the town's name; using a LEFT JOIN in case the person has a NULL (unknown) zip_code.
+CREATE VIEW person_town AS SELECT p.name AS p_name, t.name AS t_name
+FROM person p LEFT JOIN town t ON p.zip_code=t.zip_code;
+# All information is requested, cannot eliminate 'town'
+EXPLAIN SELECT * FROM person_town;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, test.t, test.p)
+1	SIMPLE	p	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+1	SIMPLE	t	NULL	ALL	PRIMARY	NULL	NULL	NULL	2	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`p`.`name` AS `p_name`,`test`.`t`.`name` AS `t_name` from `test`.`person` `p` left join `test`.`town` `t` on((`test`.`t`.`zip_code` = `test`.`p`.`zip_code`)) where true
+SELECT * FROM person_town;
+p_name	t_name
+M. A	NULL
+Ms. B	Quito
+# Can eliminate
+EXPLAIN SELECT p_name FROM person_town;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, test.p)
+1	SIMPLE	p	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`p`.`name` AS `p_name` from `test`.`person` `p`
+SELECT p_name FROM person_town;
+p_name
+M. A
+Ms. B
+DROP VIEW person_town;
+DROP TABLE person, town;
+# (V) Misc
+# Show a little difference between the query after elimination of LEFT
+# JOIN t3, and the query if it had no LEFT JOIN t3 to begin with: in
+# the first case, the nest (t2-t3) becomes (t2), whereas in the second
+# case, (t2) becomes just t2 as an effect of simplify_joins().
+# simplify_joins() runs before join elimination which is why, in the
+# first case, (t2) remains (t2). We could run simplify_joins() a
+# second time after join elimination, if something has been
+# eliminated, but such function is not quite re-rentrant which leads
+# to crashes. And it is not worth it: the Optimizer works just as well
+# with (t2) as with just t2, as we see in the identical query plans.
+EXPLAIN SELECT DISTINCT t1.a,t2.a FROM t1 LEFT JOIN (t2 LEFT JOIN t2 AS t3 ON TRUE) ON TRUE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t2, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index; Using temporary
+1	SIMPLE	t2	NULL	index	NULL	dt	6	NULL	3	100.00	Using where; Using index; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a`,`test`.`t2`.`a` AS `a` from `test`.`t1` left join (`test`.`t2`) on(true) where true
+SELECT DISTINCT t1.a,t2.a FROM t1 LEFT JOIN (t2 LEFT JOIN t2 AS t3 ON TRUE) ON TRUE;
+a	a
+1	5
+1	4
+1	2
+2	5
+2	4
+2	2
+7	5
+7	4
+7	2
+EXPLAIN SELECT DISTINCT t1.a,t2.a FROM t1 LEFT JOIN (t2) ON TRUE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t2, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index; Using temporary
+1	SIMPLE	t2	NULL	index	NULL	dt	6	NULL	3	100.00	Using where; Using index; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a`,`test`.`t2`.`a` AS `a` from `test`.`t1` left join `test`.`t2` on(true) where true
+SELECT DISTINCT t1.a,t2.a FROM t1 LEFT JOIN (t2) ON TRUE;
+a	a
+1	5
+1	4
+1	2
+2	5
+2	4
+2	2
+7	5
+7	4
+7	2
+# In a prepared statement, with plan cache
+FLUSH STATUS;
+PREPARE s FROM 'EXPLAIN SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON t2.b=t1.a';
+EXECUTE s;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXECUTE s;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXECUTE s;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a` from `test`.`t1`
+SHOW STATUS LIKE "cached_plan_hits";
+Variable_name	Value
+Cached_plan_hits	2
+PREPARE s FROM 'SELECT DISTINCT t1.a FROM t1 LEFT JOIN t2 ON t2.b=t1.a';
+EXECUTE s;
+a
+1
+2
+7
+EXECUTE s;
+a
+1
+2
+7
+EXECUTE s;
+a
+1
+2
+7
+SHOW STATUS LIKE "cached_plan_hits";
+Variable_name	Value
+Cached_plan_hits	4
+# and without plan cache (two tables => no plan cache)
+PREPARE s FROM 'EXPLAIN SELECT DISTINCT t1.a,t2.a FROM t1 LEFT JOIN (t2 LEFT JOIN t2 AS t3 ON TRUE) ON TRUE';
+EXECUTE s;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index; Using temporary
+1	SIMPLE	t2	NULL	index	NULL	dt	6	NULL	3	100.00	Using where; Using index; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a`,`test`.`t2`.`a` AS `a` from `test`.`t1` left join (`test`.`t2`) on(true) where true
+PREPARE s FROM 'SELECT DISTINCT t1.a,t2.a FROM t1 LEFT JOIN (t2 LEFT JOIN t2 AS t3 ON TRUE) ON TRUE';
+EXECUTE s;
+a	a
+1	5
+1	4
+1	2
+2	5
+2	4
+2	2
+7	5
+7	4
+7	2
+DROP PREPARE s;
+EXPLAIN SELECT DISTINCT t1.a,t3.a,t5.a FROM t1 LEFT JOIN t2 ON TRUE LEFT JOIN t1 AS t3 ON TRUE LEFT JOIN (t1 AS t4, t1 AS t6) ON TRUE LEFT JOIN (t1 AS t5, t1 AS t7) ON TRUE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t7, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index; Using temporary
+1	SIMPLE	t3	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using where; Using index; Using join buffer (hash join)
+1	SIMPLE	t5	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using where; Using index; Using join buffer (hash join)
+1	SIMPLE	t7	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index; Distinct; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a`,`test`.`t3`.`a` AS `a`,`test`.`t5`.`a` AS `a` from `test`.`t1` left join `test`.`t1` `t3` on(true) left join (`test`.`t1` `t5` join `test`.`t1` `t7`) on(true) where true
+SELECT DISTINCT t1.a,t3.a,t5.a FROM t1 LEFT JOIN t2 ON TRUE LEFT JOIN t1 AS t3 ON TRUE LEFT JOIN (t1 AS t4, t1 AS t6) ON TRUE LEFT JOIN (t1 AS t5, t1 AS t7) ON TRUE;
+a	a	a
+1	7	1
+1	7	2
+1	7	7
+1	2	1
+1	2	2
+1	2	7
+1	1	1
+1	1	2
+1	1	7
+2	7	1
+2	7	2
+2	7	7
+2	2	1
+2	2	2
+2	2	7
+2	1	1
+2	1	2
+2	1	7
+7	7	1
+7	7	2
+7	7	7
+7	2	1
+7	2	2
+7	2	7
+7	1	1
+7	1	2
+7	1	7
+# Same, with more nesting
+EXPLAIN SELECT DISTINCT t1.a,t3.a,t5.a,t9.a FROM (t1 LEFT JOIN t2 ON TRUE LEFT JOIN t1 AS t3 ON TRUE LEFT JOIN (t1 AS t4, t1 AS t6) ON TRUE LEFT JOIN (t1 AS t5, t1 AS t7) ON TRUE) LEFT JOIN (t1 AS t8 LEFT JOIN (t1 AS t9, t1 AS t10 LEFT JOIN t1 AS t11 ON TRUE) ON TRUE) ON TRUE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Parallel execute (4 workers, test.t8, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index; Using temporary
+1	SIMPLE	t3	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using where; Using index; Using join buffer (hash join)
+1	SIMPLE	t5	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using where; Using index; Using join buffer (hash join)
+1	SIMPLE	t7	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index; Using join buffer (hash join)
+1	SIMPLE	t8	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using where; Using index; Using join buffer (hash join)
+1	SIMPLE	t9	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using where; Using index; Using join buffer (hash join)
+1	SIMPLE	t10	NULL	index	NULL	PRIMARY	4	NULL	3	100.00	Using index; Distinct; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`a` AS `a`,`test`.`t3`.`a` AS `a`,`test`.`t5`.`a` AS `a`,`test`.`t9`.`a` AS `a` from `test`.`t1` left join `test`.`t1` `t3` on(true) left join (`test`.`t1` `t5` join `test`.`t1` `t7`) on(true) left join (`test`.`t1` `t8` left join (`test`.`t1` `t9` join `test`.`t1` `t10`) on(true)) on(true) where true
+SELECT DISTINCT t1.a,t3.a,t5.a,t9.a FROM (t1 LEFT JOIN t2 ON TRUE LEFT JOIN t1 AS t3 ON TRUE LEFT JOIN (t1 AS t4, t1 AS t6) ON TRUE LEFT JOIN (t1 AS t5, t1 AS t7) ON TRUE) LEFT JOIN (t1 AS t8 LEFT JOIN (t1 AS t9, t1 AS t10 LEFT JOIN t1 AS t11 ON TRUE) ON TRUE) ON TRUE;
+a	a	a	a
+1	7	1	7
+1	7	1	2
+1	7	1	1
+1	7	2	7
+1	7	2	2
+1	7	2	1
+1	7	7	7
+1	7	7	2
+1	7	7	1
+1	2	1	7
+1	2	1	2
+1	2	1	1
+1	2	2	7
+1	2	2	2
+1	2	2	1
+1	2	7	7
+1	2	7	2
+1	2	7	1
+1	1	1	7
+1	1	1	2
+1	1	1	1
+1	1	2	7
+1	1	2	2
+1	1	2	1
+1	1	7	7
+1	1	7	2
+1	1	7	1
+2	7	1	7
+2	7	1	2
+2	7	1	1
+2	7	2	7
+2	7	2	2
+2	7	2	1
+2	7	7	7
+2	7	7	2
+2	7	7	1
+2	2	1	7
+2	2	1	2
+2	2	1	1
+2	2	2	7
+2	2	2	2
+2	2	2	1
+2	2	7	7
+2	2	7	2
+2	2	7	1
+2	1	1	7
+2	1	1	2
+2	1	1	1
+2	1	2	7
+2	1	2	2
+2	1	2	1
+2	1	7	7
+2	1	7	2
+2	1	7	1
+7	7	1	7
+7	7	1	2
+7	7	1	1
+7	7	2	7
+7	7	2	2
+7	7	2	1
+7	7	7	7
+7	7	7	2
+7	7	7	1
+7	2	1	7
+7	2	1	2
+7	2	1	1
+7	2	2	7
+7	2	2	2
+7	2	2	1
+7	2	7	7
+7	2	7	2
+7	2	7	1
+7	1	1	7
+7	1	1	2
+7	1	1	1
+7	1	2	7
+7	1	2	2
+7	1	2	1
+7	1	7	7
+7	1	7	2
+7	1	7	1
+# Elimination in INSERT SELECT ... ON DUPLICATE KEY UPDATE.
+# t5 could be eliminated from the SELECT if it were just a
+# SELECT, but here should not as it's used in the UPDATE clause. If we
+# accidentally eliminate it, and given that we zero its read_set, then
+# when reading t5.a to calculate t5.a+0, we fail the assertion
+# ASSERT_COLUMN_MARKED_FOR_READ in Field_long::val_int(), as is
+# appropriate.
+CREATE TABLE t3 (a INT PRIMARY KEY);
+INSERT INTO t3 VALUES (100);
+CREATE TABLE t4 (a INT PRIMARY KEY);
+INSERT INTO t4 VALUES (100);
+# So this cannot eliminate
+EXPLAIN INSERT INTO t3 SELECT DISTINCT t4.a FROM t4 LEFT JOIN t4 AS t5 ON t4.a=t5.a ON DUPLICATE KEY UPDATE t3.a=t5.a+0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	INSERT	t3	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t4)
+1	SIMPLE	t4	NULL	index	PRIMARY	PRIMARY	4	NULL	1	100.00	Using index; Using temporary
+1	SIMPLE	t5	NULL	eq_ref	PRIMARY	PRIMARY	4	test.t4.a	1	100.00	Using index
+Warnings:
+Note	1003	insert into `test`.`t3` /* select#1 */ select distinct `test`.`t4`.`a` AS `a` from `test`.`t4` left join `test`.`t4` `t5` on((`test`.`t5`.`a` = `test`.`t4`.`a`)) where true on duplicate key update `test`.`t3`.`a` = (`test`.`t5`.`a` + 0)
+INSERT INTO t3 SELECT DISTINCT t4.a FROM t4 LEFT JOIN t4 AS t5 ON t4.a=t5.a ON DUPLICATE KEY UPDATE t3.a=t5.a+0;
+# vs
+EXPLAIN INSERT INTO t3 SELECT DISTINCT t4.a FROM t4 LEFT JOIN t4 AS t5 ON t4.a=t5.a ON DUPLICATE KEY UPDATE t3.a=t4.a+0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	INSERT	t3	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t4)
+1	SIMPLE	t4	NULL	index	PRIMARY	PRIMARY	4	NULL	1	100.00	Using index
+Warnings:
+Note	1003	insert into `test`.`t3` /* select#1 */ select distinct `test`.`t4`.`a` AS `a` from `test`.`t4` on duplicate key update `test`.`t3`.`a` = (`test`.`t4`.`a` + 0)
+INSERT INTO t3 SELECT DISTINCT t4.a FROM t4 LEFT JOIN t4 AS t5 ON t4.a=t5.a ON DUPLICATE KEY UPDATE t3.a=t4.a+0;
+# REPLACE SELECT is simpler, having no ON DUPLICATE KEY UPDATE,
+# we can eliminate.
+EXPLAIN replace into t3 SELECT DISTINCT t4.a FROM t4 LEFT JOIN t4 AS t5 ON t4.a=t5.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	REPLACE	t3	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t4)
+1	SIMPLE	t4	NULL	index	PRIMARY	PRIMARY	4	NULL	1	100.00	Using index
+Warnings:
+Note	1003	replace into `test`.`t3` /* select#1 */ select distinct `test`.`t4`.`a` AS `a` from `test`.`t4`
+replace into t3 SELECT DISTINCT t4.a FROM t4 LEFT JOIN t4 AS t5 ON t4.a=t5.a;
+# Multi-table {UPDATE, DELETE} also have a possible problem
+# with references, like in the query below. For simplicity, we just
+# skip elimination for these two types of statements.
+EXPLAIN UPDATE t4 LEFT JOIN t4 AS t5 ON t4.a=t5.a SET t4.a=t5.a+0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	UPDATE	t4	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+1	SIMPLE	t5	NULL	eq_ref	PRIMARY	PRIMARY	4	test.t4.a	1	100.00	Using index
+Warnings:
+Note	1003	update `test`.`t4` left join `test`.`t4` `t5` on((`test`.`t5`.`a` = `test`.`t4`.`a`)) set `test`.`t4`.`a` = (`test`.`t5`.`a` + 0) where true
+UPDATE t4 LEFT JOIN t4 AS t5 ON t4.a=t5.a SET t4.a=t5.a+0;
+EXPLAIN DELETE t5.* FROM t4 LEFT JOIN t4 AS t5 ON t4.a=t5.a ;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t4	NULL	index	NULL	PRIMARY	4	NULL	1	100.00	Using index
+1	DELETE	t5	NULL	eq_ref	PRIMARY	PRIMARY	4	test.t4.a	1	100.00	NULL
+Warnings:
+Note	1003	delete `test`.`t4` from `test`.`t4` left join `test`.`t4` `t5` on((`test`.`t5`.`a` = `test`.`t4`.`a`)) where true
+DELETE t5.* FROM t4 LEFT JOIN t4 AS t5 ON t4.a=t5.a ;
+# Elimination is always possible in any type statement if the
+# FROM clause is in a subquery
+EXPLAIN UPDATE t3 SET t3.a = (SELECT t4.a FROM t4 LEFT JOIN t4 AS t5 ON t4.a=t5.a LIMIT 1)+2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	UPDATE	t3	NULL	index	NULL	PRIMARY	4	NULL	1	100.00	Using temporary
+2	SUBQUERY	t4	NULL	index	NULL	PRIMARY	4	NULL	1	100.00	Using index
+Warnings:
+Note	1003	update `test`.`t3` set `test`.`t3`.`a` = ((/* select#2 */ select `test`.`t4`.`a` from `test`.`t4` limit 1) + 2)
+UPDATE t3 SET t3.a = (SELECT t4.a FROM t4 LEFT JOIN t4 AS t5 ON t4.a=t5.a LIMIT 1)+2;
+ERROR 23000: Column 'a' cannot be null
+EXPLAIN INSERT INTO t3 VALUES((SELECT t4.a FROM t4 LEFT JOIN t4 AS t5 ON t4.a=t5.a ORDER BY t4.a LIMIT 1)+5);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	INSERT	t3	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+2	SUBQUERY	t4	NULL	index	NULL	PRIMARY	4	NULL	1	100.00	Using index
+Warnings:
+Note	1003	insert into `test`.`t3` values (((/* select#2 */ select `test`.`t4`.`a` from `test`.`t4` order by `test`.`t4`.`a` limit 1) + 5))
+INSERT INTO t3 VALUES((SELECT t4.a FROM t4 LEFT JOIN t4 AS t5 ON t4.a=t5.a ORDER BY t4.a LIMIT 1)+5);
+ERROR 23000: Column 'a' cannot be null
+DROP TABLE t3,t4;
+DROP TABLE t1,t2;
+# BUG2025111736066 When 100 SQLsmith services are concurrently
+# executed, mysqld crashes：JOIN::attach_join_condition_to_nest
+CREATE TABLE t1 (a INT);
+CREATE TABLE t2 LIKE t1;
+# We need a few rows in t2 for the optimizer to pick a wrong order of tables
+# (ref_15-ref_0-ref_5 without the code fix)
+INSERT INTO t2 VALUES(1);
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t2;
+ANALYZE TABLE t1,t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+EXPLAIN SELECT DISTINCT  
+ref_0.*
+FROM
+t1 AS ref_15
+LEFT JOIN
+(
+(t2 AS ref_5
+LEFT JOIN t1 AS ref_6
+ON TRUE)
+LEFT JOIN
+t1 AS ref_0
+ON TRUE
+) 
+ON TRUE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.ref_5, test.ref_15)
+1	SIMPLE	ref_15	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using temporary
+1	SIMPLE	ref_5	NULL	ALL	NULL	NULL	NULL	NULL	32	100.00	Using where; Using join buffer (hash join)
+1	SIMPLE	ref_0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`ref_0`.`a` AS `a` from `test`.`t1` `ref_15` left join (`test`.`t2` `ref_5` left join `test`.`t1` `ref_0` on(true)) on(true) where true
+SELECT DISTINCT  
+ref_0.*
+FROM
+t1 AS ref_15
+LEFT JOIN
+(
+(t2 AS ref_5
+LEFT JOIN t1 AS ref_6
+ON TRUE)
+LEFT JOIN
+t1 AS ref_0
+ON TRUE
+) 
+ON TRUE;
+a
+#
+# BUG2025111835949 Execute query with outer join and semijoin, mysqld crashes:JOIN::make_join_plan
+#
+EXPLAIN SELECT t2.a FROM
+t1 LEFT JOIN t1 t2
+ON
+(t2.a) IN
+(SELECT t4.a FROM
+t1 t3 LEFT JOIN t1 t4 ON TRUE
+INNER JOIN t1 t5 ON FALSE)
+GROUP BY 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using temporary
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+1	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+1	SIMPLE	t5	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	FirstMatch(t2)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`a` AS `a` from `test`.`t1` left join (`test`.`t1` `t2` semi join (`test`.`t1` `t3` join `test`.`t1` `t5`)) on((false)) where true group by `test`.`t2`.`a`
+SELECT t2.a FROM
+t1 LEFT JOIN t1 t2
+ON
+(t2.a) IN
+(SELECT t4.a FROM
+t1 t3 LEFT JOIN t1 t4 ON TRUE
+INNER JOIN t1 t5 ON FALSE)
+GROUP BY 1;
+a
+DROP TABLE t1,t2;
+#
+# BUG2025111917210 The results of the left join query are inconsistent.
+#
+CREATE TABLE t0 (c1 TINYINT DEFAULT '-45');
+INSERT INTO t0 VALUES(0),(1);
+CREATE TABLE t98 (c3 DECIMAL(10,0) NOT NULL DEFAULT '1317787993');
+# The returned value, NULL, is a bug in MySQL, due to
+# NULL-complementing of t98 :
+# https://bugs.mysql.com/bug.php?id=119453 , result should be 1317787993.
+EXPLAIN SELECT DEFAULT(t98.c3) FROM t0 LEFT JOIN t98 ON TRUE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, test.t98, test.t0)
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+1	SIMPLE	t98	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select default(`test`.`t98`.`c3`) AS `DEFAULT(t98.c3)` from `test`.`t0` left join `test`.`t98` on(true) where true
+SELECT DEFAULT(t98.c3) FROM t0 LEFT JOIN t98 ON TRUE;
+DEFAULT(t98.c3)
+1317787993
+1317787993
+# Elimination is here disabled because there is DEFAULT(X)
+# where X is a column of a table on the right side of a left join.
+EXPLAIN SELECT DEFAULT(t98.c3) FROM t0 LEFT JOIN t98 ON TRUE GROUP BY 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+1	SIMPLE	t98	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select default(`test`.`t98`.`c3`) AS `DEFAULT(t98.c3)` from `test`.`t0` left join `test`.`t98` on(true) where true group by default(`test`.`t98`.`c3`)
+SELECT DEFAULT(t98.c3) FROM t0 LEFT JOIN t98 ON TRUE GROUP BY 1;
+DEFAULT(t98.c3)
+NULL
+# Elimination is not disabled because there is DEFAULT(X)
+# where X is a column of a table _not_ on the right side of a left join.
+EXPLAIN SELECT DEFAULT(t0.c1) FROM t0 LEFT JOIN t98 ON TRUE GROUP BY 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select default(`test`.`t0`.`c1`) AS `DEFAULT(t0.c1)` from `test`.`t0` group by default(`test`.`t0`.`c1`)
+SELECT DEFAULT(t0.c1) FROM t0 LEFT JOIN t98 ON TRUE GROUP BY 1;
+DEFAULT(t0.c1)
+-45
+# This query is not respecting GROUP BY's standard rules, but
+# has deterministic result.
+SET SQL_MODE=0;
+# Elimination is disabled. Given that DEFAULT evaluates to NULL (bug
+# above), the fourth expression in GROUP BY takes two values: NULL and
+# 1. Note that if we did elimination, there would be no
+# NULL-complementing, DEFAULT would evaluate to 1317787993, the fourth
+# expression in GROUP BY would take only one value: 1.
+EXPLAIN SELECT t0.c1 FROM t0 NATURAL LEFT JOIN t98 GROUP BY '[', (((NOT (((-140958305)OR('2LE冑W.'))))) IS NULL), NULL, ((((t0.c1)OR(DEFAULT(t98.c3)))) IS NOT NULL), PI();
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Using temporary
+1	SIMPLE	t98	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`c1` AS `c1` from `test`.`t0` left join `test`.`t98` on(true) where true group by '[',(((0 = -(140958305)) and (0 = '2LE冑W.')) is null),NULL,(((0 <> `test`.`t0`.`c1`) or (0 <> default(`test`.`t98`.`c3`))) is not null)
+SELECT t0.c1 FROM t0 NATURAL LEFT JOIN t98 GROUP BY '[', (((NOT (((-140958305)OR('2LE冑W.'))))) IS NULL), NULL, ((((t0.c1)OR(DEFAULT(t98.c3)))) IS NOT NULL), PI();
+c1
+0
+1
+# The same within a merged derived table and a merged semi-join, to
+# verify that information about the presence of DEFAULT propagates
+# through both. We cannot have GROUP BY in the derived table, or it
+# would not be merged. See in EXPLAIN that there is no elimination.
+EXPLAIN SELECT * FROM t0 AS t1 WHERE 1 IN (SELECT * FROM (SELECT t0.c1 FROM t0 NATURAL LEFT JOIN t98 WHERE ((((t0.c1)OR(DEFAULT(t98.c3)))) IS NOT NULL)) AS derived);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	Using where
+1	SIMPLE	t98	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; FirstMatch
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`c1` AS `c1` from `test`.`t0` `t1` semi join (`test`.`t0` left join `test`.`t98` on(true)) where (`test`.`t0`.`c1` = 1)
+SELECT * FROM t0 AS t1 WHERE 1 IN (SELECT * FROM (SELECT t0.c1 FROM t0 NATURAL LEFT JOIN t98 WHERE ((((t0.c1)OR(DEFAULT(t98.c3)))) IS NOT NULL)) AS derived);
+c1
+0
+1
+SET SQL_MODE=DEFAULT;
+# BUG2025112534813 In the SQL statement for querying a common
+# table left join derived table, the query result is incorrect.
+# After fixing the bug there should be no elimination
+EXPLAIN SELECT subq_1.c1 AS c0 FROM (SELECT subq_0.c1 AS c1 FROM t0 ref_0 LEFT JOIN (SELECT PI() AS c1 FROM t98 ref_1) subq_0 ON FALSE) subq_1 GROUP BY 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, test.ref_0)
+1	SIMPLE	ref_0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Using temporary
+1	SIMPLE	ref_1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select pi() AS `c0` from `test`.`t0` `ref_0` left join (`test`.`t98` `ref_1`) on(false) where true group by `subq_1`.`c0`
+SELECT subq_1.c1 AS c0 FROM (SELECT subq_0.c1 AS c1 FROM t0 ref_0 LEFT JOIN (SELECT PI() AS c1 FROM t98 ref_1) subq_0 ON FALSE) subq_1 GROUP BY 1;
+c0
+NULL
+# BUG2025121228767 explain analyze crash when set global
+# optimizer_switch='left_join_elimination=on'; in debug version
+EXPLAIN SELECT t0.c1 FROM t0 LEFT JOIN t0 AS t1 ON (t1.c1,t0.c1)=(SELECT 1,2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Parallel execute (4 workers, test.t1, test.t0)
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	NULL
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where; Using join buffer (hash join)
+2	SUBQUERY	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`c1` AS `c1` from `test`.`t0` left join `test`.`t0` `t1` on(((`test`.`t1`.`c1`,`test`.`t0`.`c1`) = (/* select#2 */ select 1,2))) where true
+SELECT t0.c1 FROM t0 LEFT JOIN t0 AS t1 ON (t1.c1,t0.c1)=(SELECT 1,2);
+c1
+0
+1
+DROP TABLE t0,t98;
+# BUG2025112734711 Execute query and enable
+# partial_result_cache and left_join_elimination at the same
+# time, mysqld crashes：CreateNestedLoopAccessPath
+CREATE TABLE t1 (medal_now INT);
+CREATE TABLE t2 (id INT);
+CREATE TABLE t3 (medal_now INT);
+INSERT INTO t1 (medal_now) VALUES (1);
+INSERT INTO t2 (id) VALUES (1), (2), (3);
+INSERT INTO t3 (medal_now) VALUES (1), (2), (NULL);
+# Used to crash. This CASE is always non-NULL, so IS NULL says it is
+# constant FALSE and thus contains no reference so ref_49 is eliminated
+# from the left join; still the subquery remains in the tree of
+# Query_expression-s, gets optimized, Partial Table Result Cache is set
+# up for it, sees that it depends on outer value ref49.medal_now, and
+# then crashes when trying to access statistics of ref_49 which do not
+# exist as ref_49 has not been dealt with by the Optimizer when
+# optimizing the outer query.
+EXPLAIN SELECT DISTINCT
+(CASE WHEN EXISTS (SELECT ref_49.medal_now FROM t1) THEN 1 ELSE 0 END) IS NULL
+FROM t2 LEFT JOIN t3 AS ref_49 ON TRUE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t2	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using temporary
+2	DEPENDENT SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.ref_49.medal_now' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select distinct ((case when exists(/* select#2 */ select `test`.`ref_49`.`medal_now` from `test`.`t1`) then 1 else 0 end) is null) AS `(CASE WHEN EXISTS (SELECT ref_49.medal_now FROM t1) THEN 1 ELSE 0 END) IS NULL` from `test`.`t2`
+SELECT DISTINCT
+(CASE WHEN EXISTS (SELECT ref_49.medal_now FROM t1) THEN 1 ELSE 0 END) IS NULL
+FROM t2 LEFT JOIN t3 AS ref_49 ON TRUE;
+(CASE WHEN EXISTS (SELECT ref_49.medal_now FROM t1) THEN 1 ELSE 0 END) IS NULL
+0
+DROP TABLE t1,t2,t3;
+# BUG2025112734711 Stored procedure + materialization scenario:
+# counter Query_block::m_hwm_free_tableno keeps increasing,
+# mysqld crashes at set_tableno.
+CREATE TABLE tbl_range_table (
+id_col int  AUTO_INCREMENT PRIMARY KEY
+);
+INSERT INTO tbl_range_table (id_col) VALUES (DEFAULT), (DEFAULT);
+CREATE PROCEDURE t3()
+BEGIN
+DECLARE i INT DEFAULT 1;
+WHILE i <= 61 DO
+EXPLAIN ANALYZE SELECT * FROM `tbl_range_table` WHERE id_col IN ( SELECT id_col FROM ( SELECT id_col FROM tbl_range_table limit 1) tmp );
+SET i = i + 1;
+END WHILE;
+END$$
+call t3();
+DROP PROCEDURE t3;
+DROP TABLE tbl_range_table;
+#
+# BUG2026030437596 crash in JOIN::finalize_derived_keys
+#
+# This testcase exercises both if-s added to code. cte1 is eliminated, an index is added for the other reference (cte) due to the equality, and when adding this index we used to access cte1's JOIN_TAB which is nullptr.
+CREATE TABLE t(a INT);
+EXPLAIN WITH cte AS (SELECT * FROM t) SELECT /*+ NO_MERGE() */ DISTINCT cte.a FROM cte, t LEFT JOIN cte cte1 ON TRUE WHERE cte.a=t.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t)
+1	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using temporary
+1	SIMPLE	<derived2>	NULL	ref	<auto_key0>	<auto_key0>	5	test.t.a	2	100.00	Using index
+2	DERIVED	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t)
+2	SIMPLE	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	with `cte` as (/* select#2 */ select `test`.`t`.`a` AS `a` from `test`.`t`) /* select#1 */ select /*+ NO_MERGE(@`select#1`) */ distinct `cte`.`a` AS `a` from `cte` join `test`.`t` where (`cte`.`a` = `test`.`t`.`a`)
+EXPLAIN FORMAT=TREE WITH cte AS (SELECT * FROM t) SELECT /*+ NO_MERGE() */ DISTINCT cte.a FROM cte, t LEFT JOIN cte cte1 ON TRUE WHERE cte.a=t.a;
+EXPLAIN
+-> Table scan on <temporary>  (cost=5.56..5.56 rows=1)
+    -> Temporary table with deduplication  (cost=3.05..3.05 rows=1)
+        -> Gather: 4 workers, parallel scan on t  (cost=2.95..2.95 rows=1)
+            -> Table scan on <temporary>  (cost=2.95..2.95 rows=0.25)
+                -> Temporary table with deduplication  (cost=0.45..0.45 rows=0.25)
+                    -> Nested loop inner join  (cost=0.425 rows=0.25)
+                        -> Filter: (t.a is not null)  (cost=0.275 rows=0.25)
+                            -> Parallel table scan on t  (cost=0.275 rows=0.25)
+                        -> Covering index lookup on cte using <auto_key0> (a=t.a)  (cost=0.725..1.07 rows=2)
+                            -> Materialize CTE cte  (cost=0.375..0.375 rows=1)
+                                -> Gather: 4 workers, parallel scan on t  (cost=0.275 rows=1)
+                                    -> Parallel table scan on t  (cost=0.275 rows=0.25)
+
+WITH cte AS (SELECT * FROM t) SELECT /*+ NO_MERGE() */ DISTINCT cte.a FROM cte, t LEFT JOIN cte cte1 ON TRUE WHERE cte.a=t.a;
+a
+#
+# BUG2026030438541 crash in JOIN::compare_costs_of_subquery_strategies
+#
+# This testcase which exercises all changes in the bugfix. cte1 is eliminated, COUNT()'s used_tables() still referenced it, so when doing cost calculations for semijoin materialization we expected to be able to access cte1 through map2table. After fixing this, we used to hit an assertion failure in Query_expression::optimize() (assert(!is_recursive())).
+EXPLAIN WITH RECURSIVE cte AS (SELECT * FROM t UNION SELECT * FROM cte)
+SELECT * FROM t AS y
+WHERE y.a IN (SELECT /*+ NO_MERGE() SEMIJOIN(MATERIALIZATION) */ DISTINCT COUNT(cte.a) OVER()
+FROM cte LEFT JOIN cte cte1 ON TRUE, t WHERE cte.a=t.a GROUP BY t.a);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	y	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+2	SUBQUERY	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using temporary
+2	SUBQUERY	<derived3>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	5	test.t.a	1	100.00	Using index
+3	DERIVED	t	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+4	UNION	cte	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Recursive
+6	UNION RESULT	<union3,4>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	Using temporary
+Warnings:
+Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+Note	1003	with recursive `cte` as (/* select#3 */ select `test`.`t`.`a` AS `a` from `test`.`t` union /* select#4 */ select `cte`.`a` AS `a` from `cte`) /* select#1 */ select /*+ SEMIJOIN(@`select#2` MATERIALIZATION) NO_MERGE(@`select#2`) */ `test`.`y`.`a` AS `a` from `test`.`t` `y` where <in_optimizer>(`test`.`y`.`a`,`test`.`y`.`a` in ( <materialize> (/* select#2 */ select count(`cte`.`a`) OVER ()  from `cte` join `test`.`t` where (`cte`.`a` = `test`.`t`.`a`) group by `test`.`t`.`a` having true ), <primary_index_lookup>(`test`.`y`.`a` in <temporary table> on <auto_distinct_key> where ((`test`.`y`.`a` = `<materialized_subquery>`.`COUNT(cte.a) OVER()`)))))
+EXPLAIN FORMAT=TREE WITH RECURSIVE cte AS (SELECT * FROM t UNION SELECT * FROM cte)
+SELECT * FROM t AS y
+WHERE y.a IN (SELECT /*+ NO_MERGE() SEMIJOIN(MATERIALIZATION) */ DISTINCT COUNT(cte.a) OVER()
+FROM cte LEFT JOIN cte cte1 ON TRUE, t WHERE cte.a=t.a GROUP BY t.a);
+EXPLAIN
+-> Filter: <in_optimizer>(y.a,y.a in (select #2))  (cost=0.35 rows=1)
+    -> Table scan on y  (cost=0.35 rows=1)
+    -> Select #2 (subquery in condition; run only once)
+        -> Filter: ((y.a = `<materialized_subquery>`.`COUNT(cte.a) OVER()`))  (cost=0..0 rows=0)
+            -> Limit: 1 row(s)  (cost=0..0 rows=0)
+                -> Index lookup on <materialized_subquery> using <auto_distinct_key> (COUNT(cte.a) OVER()=y.a)
+                    -> Materialize with deduplication  (cost=0..0 rows=0)
+                        -> Window aggregate with buffering: count(cte.a) OVER () 
+                            -> Table scan on <temporary>  (cost=3.51..3.51 rows=1)
+                                -> Temporary table with deduplication  (cost=1..1 rows=1)
+                                    -> Nested loop inner join  (cost=0.9 rows=1)
+                                        -> Filter: (t.a is not null)  (cost=0.35 rows=1)
+                                            -> Table scan on t  (cost=0.35 rows=1)
+                                        -> Single-row covering index lookup on cte using <auto_distinct_key> (a=t.a)  (cost=3.73..3.73 rows=1)
+                                            -> Materialize recursive CTE cte with deduplication  (cost=3.38..3.38 rows=3)
+                                                -> Table scan on t  (cost=0.35 rows=1)
+                                                -> Repeat until convergence
+                                                    -> Scan new records on cte  (cost=2.73 rows=2)
+
+WITH RECURSIVE cte AS (SELECT * FROM t UNION SELECT * FROM cte)
+SELECT * FROM t AS y
+WHERE y.a IN (SELECT /*+ NO_MERGE() SEMIJOIN(MATERIALIZATION) */ DISTINCT COUNT(cte.a) OVER()
+FROM cte LEFT JOIN cte cte1 ON TRUE, t WHERE cte.a=t.a GROUP BY t.a);
+a
+DROP TABLE t;

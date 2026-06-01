@@ -1,0 +1,18 @@
+create table t0 (a int, b int, c int key, index(b,a)) engine=Dstore;
+create table t1 (b int, f int key, index(b), foreign key(b) references t0(b)) engine=Dstore;
+insert into t0 values(1,1,1);
+# restart
+set debug_sync = "WaitLoadReferencedTable WAIT_FOR LoadContinue";
+insert into t1 values(1,1);;
+select * from t0;;
+set debug_sync = "now SIGNAL LoadContinue";
+a	b	c
+1	1	1
+select * from t0;
+a	b	c
+1	1	1
+select * from t1;
+b	f
+1	1
+drop table t1;
+drop table t0;

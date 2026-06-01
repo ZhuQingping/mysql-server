@@ -1,0 +1,1894 @@
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=SHARED, ALGORITHM=COPY, add column col4_5 varchar(20) not null after col4;
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select a, va from t2;
+a	va
+# conn2: DDL
+alter table t2 LOCK=DEFAULT, ALGORITHM=INSTANT, add column v1 char(3) generated always as (substr(a, 1, 3));
+# conn3: DMLs
+insert into t2 (a, b) values ('1', ST_GeomFromText('POINT(1 1)'));
+select a, va from t2;
+a	va
+1	1
+update t2 set a='11' where a = 1;
+select a, va from t2;
+a	va
+11	11
+delete from t2 where va = '11';
+select a, va from t2;
+a	va
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn1: commit
+COMMIT;
+select a, va from t2;
+a	va
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=EXCLUSIVE, ALGORITHM=INPLACE, add column col9 varchar(20) not null;
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+create index idx2 on t1(col2) LOCK=EXCLUSIVE ALGORITHM=INPLACE;
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=EXCLUSIVE, ALGORITHM=INPLACE, add unique index idx2(col2);
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=SHARED, ALGORITHM=INPLACE, add fulltext index idx2(col2);
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=DEFAULT, ALGORITHM=INSTANT, alter column col2 set default '';
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=EXCLUSIVE, ALGORITHM=INPLACE, alter column col2 set default '';
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=EXCLUSIVE, ALGORITHM=INPLACE, alter column col5  drop default;
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=DEFAULT, ALGORITHM=INSTANT, alter column col5  drop default;
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=SHARED, ALGORITHM=COPY, alter column col2 set default '';
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=SHARED, ALGORITHM=COPY, change column col2 fourth varchar(30) not null after col3;
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=SHARED, ALGORITHM=COPY, modify column col6 int not null first;
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=EXCLUSIVE, ALGORITHM=INPLACE, modify column col6 int null;
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=SHARED, ALGORITHM=COPY, character set latin1;
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=SHARED, ALGORITHM=COPY, convert to character set latin1;
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select a, va from t2;
+a	va
+# conn2: DDL
+alter table t2 LOCK=DEFAULT, ALGORITHM=INSTANT, drop column va;
+# conn3: DMLs
+insert into t2 (a, b) values ('1', ST_GeomFromText('POINT(1 1)'));
+select a, va from t2;
+a	va
+1	1
+update t2 set a='11' where a = 1;
+select a, va from t2;
+a	va
+11	11
+delete from t2 where va = '11';
+select a, va from t2;
+a	va
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn1: commit
+COMMIT;
+select a, va from t2;
+a	va
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=EXCLUSIVE, ALGORITHM=INPLACE, drop column col4;
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=EXCLUSIVE, ALGORITHM=INPLACE, drop index idx6;
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+drop index idx6 on t1 LOCK=EXCLUSIVE ALGORITHM=INPLACE;
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=SHARED, ALGORITHM=COPY, force;
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=EXCLUSIVE, ALGORITHM=INPLACE, rename column col3 to col33;
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=EXCLUSIVE, ALGORITHM=INPLACE, rename index idx6 to idx66;
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 ALGORITHM=INSTANT, rename to tt1;
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 ALGORITHM=INPLACE, rename to tt1;
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+# conn2: DDL
+alter table t1 LOCK=EXCLUSIVE, ALGORITHM=INPLACE, alter index idx6 invisible;
+# conn3: DMLs
+insert into t1 values (3,4,3,5,"ACTIVE",1,7);
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	PENDING	1	7
+3	4	3	5	ACTIVE	1	7
+update t1 set col5='DISABLED' where col1 = 2;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+2	4	3	5	DISABLED	1	7
+3	4	3	5	ACTIVE	1	7
+delete from t1 where col5='DISABLED';
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Table definition is not as expected!
+# conn1: commit
+COMMIT;
+select * from t1;
+col1	col2	col3	col4	col5	col6	to_be_deleted
+3	4	3	5	ACTIVE	1	7
+# Table definition is not as expected!
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select a, va from t2;
+a	va
+# conn2: DDL
+alter table t2 LOCK=SHARED, ALGORITHM=COPY, add index idx_va(va);
+# conn3: DMLs
+insert into t2 (a, b) values ('1', ST_GeomFromText('POINT(1 1)'));
+select a, va from t2;
+a	va
+1	1
+update t2 set a='11' where a = 1;
+select a, va from t2;
+a	va
+11	11
+delete from t2 where va = '11';
+select a, va from t2;
+a	va
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn1: commit
+COMMIT;
+select a, va from t2;
+a	va
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select a, va from t2;
+a	va
+# conn2: DDL
+alter table t2 ALGORITHM=INPLACE, ADD SPATIAL INDEX(b);
+# conn3: DMLs
+insert into t2 (a, b) values ('1', ST_GeomFromText('POINT(1 1)'));
+select a, va from t2;
+a	va
+1	1
+update t2 set a='11' where a = 1;
+select a, va from t2;
+a	va
+11	11
+delete from t2 where va = '11';
+select a, va from t2;
+a	va
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn1: commit
+COMMIT;
+select a, va from t2;
+a	va
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select a, va from t2;
+a	va
+# conn2: DDL
+alter table t2 LOCK=EXCLUSIVE, ALGORITHM=INPLACE, add primary key(a);
+# conn3: DMLs
+insert into t2 (a, b) values ('1', ST_GeomFromText('POINT(1 1)'));
+select a, va from t2;
+a	va
+1	1
+update t2 set a='11' where a = 1;
+select a, va from t2;
+a	va
+11	11
+delete from t2 where va = '11';
+select a, va from t2;
+a	va
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn1: commit
+COMMIT;
+select a, va from t2;
+a	va
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select a, va from t2;
+a	va
+# conn2: DDL
+alter table t2 LOCK=SHARED, ALGORITHM=COPY, add primary key(a);
+# conn3: DMLs
+insert into t2 (a, b) values ('1', ST_GeomFromText('POINT(1 1)'));
+select a, va from t2;
+a	va
+1	1
+update t2 set a='11' where a = 1;
+select a, va from t2;
+a	va
+11	11
+delete from t2 where va = '11';
+select a, va from t2;
+a	va
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn1: commit
+COMMIT;
+select a, va from t2;
+a	va
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select a, va from t2;
+a	va
+# conn2: DDL
+alter table t2 LOCK=DEFAULT, ALGORITHM=INSTANT, add column v1 char(3) generated always as (substr(a, 1, 3));
+# conn3: DMLs
+insert into t2 (a, b) values ('1', ST_GeomFromText('POINT(1 1)'));
+select a, va from t2;
+a	va
+1	1
+update t2 set a='11' where a = 1;
+select a, va from t2;
+a	va
+11	11
+delete from t2 where va = '11';
+select a, va from t2;
+a	va
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn1: commit
+COMMIT;
+select a, va from t2;
+a	va
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select a, va from t2;
+a	va
+# conn2: DDL
+alter table t2 LOCK=EXCLUSIVE, ALGORITHM=INPLACE, add column v1 char(3) generated always as (substr(a, 1, 3));
+# conn3: DMLs
+insert into t2 (a, b) values ('1', ST_GeomFromText('POINT(1 1)'));
+select a, va from t2;
+a	va
+1	1
+update t2 set a='11' where a = 1;
+select a, va from t2;
+a	va
+11	11
+delete from t2 where va = '11';
+select a, va from t2;
+a	va
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn1: commit
+COMMIT;
+select a, va from t2;
+a	va
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select a, va from t2;
+a	va
+# conn2: DDL
+alter table t2 LOCK=DEFAULT, ALGORITHM=INSTANT, drop column va;
+# conn3: DMLs
+insert into t2 (a, b) values ('1', ST_GeomFromText('POINT(1 1)'));
+select a, va from t2;
+a	va
+1	1
+update t2 set a='11' where a = 1;
+select a, va from t2;
+a	va
+11	11
+delete from t2 where va = '11';
+select a, va from t2;
+a	va
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn1: commit
+COMMIT;
+select a, va from t2;
+a	va
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select a, va from t2;
+a	va
+# conn2: DDL
+alter table t2 LOCK=EXCLUSIVE, ALGORITHM=INPLACE, drop column va;
+# conn3: DMLs
+insert into t2 (a, b) values ('1', ST_GeomFromText('POINT(1 1)'));
+select a, va from t2;
+a	va
+1	1
+update t2 set a='11' where a = 1;
+select a, va from t2;
+a	va
+11	11
+delete from t2 where va = '11';
+select a, va from t2;
+a	va
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn1: commit
+COMMIT;
+select a, va from t2;
+a	va
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select a from t3;
+a
+# conn2: DDL
+alter table t3 LOCK=EXCLUSIVE, ALGORITHM=INPLACE, drop column va;
+# conn3: DMLs
+insert into t3 (a, b) values ('1', ST_GeomFromText('POINT(1 1)'));
+select a from t3;
+a
+1
+update t3 set a='11' where a = 1;
+select a from t3;
+a
+11
+delete from t3 where va = '11';
+select a from t3;
+a
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn1: commit
+COMMIT;
+select a from t3;
+a
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select a, va from t2;
+a	va
+# conn2: DDL
+alter table t2 ALGORITHM=COPY, add column v2 char(3) generated always as (substr(a, 1, 3)) stored, with validation;
+# conn3: DMLs
+insert into t2 (a, b) values ('1', ST_GeomFromText('POINT(1 1)'));
+select a, va from t2;
+a	va
+1	1
+update t2 set a='11' where a = 1;
+select a, va from t2;
+a	va
+11	11
+delete from t2 where va = '11';
+select a, va from t2;
+a	va
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn1: commit
+COMMIT;
+select a, va from t2;
+a	va
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=10;
+SET GLOBAL rds_ddl_lock_wait_timeout=1;
+#
+# prepare t1 with one row, empty t2 and t3
+#
+#
+# determine ddl command
+#
+#
+# Testing
+#
+# conn1: a ddl blocking operation
+START TRANSACTION;
+select a, va from t2;
+a	va
+# conn2: DDL
+alter table t2 ALGORITHM=COPY, add column v3 char(3) generated always as (substr(a, 1, 3)) stored, without validation;
+# conn3: DMLs
+insert into t2 (a, b) values ('1', ST_GeomFromText('POINT(1 1)'));
+select a, va from t2;
+a	va
+1	1
+update t2 set a='11' where a = 1;
+select a, va from t2;
+a	va
+11	11
+delete from t2 where va = '11';
+select a, va from t2;
+a	va
+# conn2: DDL
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn1: commit
+COMMIT;
+select a, va from t2;
+a	va
+#
+# teardown
+#
+drop table t1;
+drop table t2;
+drop table t3;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;

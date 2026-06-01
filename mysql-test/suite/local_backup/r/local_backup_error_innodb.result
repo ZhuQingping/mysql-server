@@ -1,0 +1,149 @@
+call mtr.add_suppression("failed to create full backup thread");
+call mtr.add_suppression("failed to mkdir for full backup");
+call mtr.add_suppression("failed to get backup MDL");
+call mtr.add_suppression("failed to fetch schemas from DD");
+call mtr.add_suppression("failed to copy schema directory");
+call mtr.add_suppression("full backup path not configured");
+call mtr.add_suppression("Cannot start local backup: change buffer is not disabled");
+call mtr.add_suppression("failed to do full backup for innodb");
+call mtr.add_suppression("failed to do full backup for dstore");
+call mtr.add_suppression("start full local backup fail");
+call mtr.add_suppression("Backup file already exist");
+call mtr.add_suppression("Local backup file");
+call mtr.add_suppression("Failed to create directory when backup");
+call mtr.add_suppression("Failed to open destination file");
+call mtr.add_suppression("Failed to open source file");
+call mtr.add_suppression("Failed to get size of");
+call mtr.add_suppression("Failed to copy file");
+call mtr.add_suppression("full backup found binlog is not enabled");
+create database local_backup_error_innodb;
+use local_backup_error_innodb;
+create table t1(s varchar(100)) engine=Dstore;
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1000
+set global innodb_change_buffering=all;
+call rds_backup.start_full_local_backup(0);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" not found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+set global innodb_change_buffering=none;
+set global debug='+d,innodb_lb_cbk_file_exist_fail';
+call rds_backup.start_full_local_backup(0);
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" not found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+set global debug='-d,innodb_lb_cbk_file_exist_fail';
+set global debug='+d,innodb_lb_cbk_create_sub_dir_fail';
+call rds_backup.start_full_local_backup(0);
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" not found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+set global debug='-d,innodb_lb_cbk_create_sub_dir_fail';
+set global debug='+d,innodb_lb_cbk_open_dst_fail';
+call rds_backup.start_full_local_backup(0);
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" not found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+set global debug='-d,innodb_lb_cbk_open_dst_fail';
+set global debug='+d,innodb_lb_cbk_open_src_fail';
+call rds_backup.start_full_local_backup(0);
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" not found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+set global debug='-d,innodb_lb_cbk_open_src_fail';
+set global debug='+d,innodb_lb_cbk_lseek_fail';
+call rds_backup.start_full_local_backup(0);
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" not found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+set global debug='-d,innodb_lb_cbk_lseek_fail';
+set global debug='+d,innodb_lb_cbk_copy_fail';
+call rds_backup.start_full_local_backup(0);
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" not found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+set global debug='-d,innodb_lb_cbk_copy_fail';
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1100
+call rds_backup.start_full_local_backup(0);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+# restart: --dstore_open_restore_mode=on
+select count(*) from t1;
+count(*)
+1100
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1150
+drop database local_backup_error_innodb;

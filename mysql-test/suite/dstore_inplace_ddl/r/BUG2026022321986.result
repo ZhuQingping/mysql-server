@@ -1,0 +1,29 @@
+SET GLOBAL dstore_online_ddl_enable=OFF;
+CREATE DATABASE IF NOT EXISTS db1;
+use db1;
+CREATE TABLE t1 (
+id INT AUTO_INCREMENT PRIMARY KEY,
+name VARCHAR(110),
+age INT,
+email VARCHAR(110)
+);
+INSERT INTO t1 (name, age, email)
+VALUES ('Alice', 30, 'alice.test@example.com'),
+('Bob', 25, 'bob.sample@example.org'),
+('Charlie', 28, 'charlie.demo@example.net'),
+('David', 35, 'david.example@example.co.uk'),
+('Eve', 22, 'eve.test@example.io');
+SET DEBUG_SYNC = 'WaitRowLogAppendAndApply SIGNAL start_logging WAIT_FOR ddl_continue';
+ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+KILL <CONNECTION_ID>;
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+ERROR HY000: Lost connection to MySQL server during query
+SET GLOBAL dstore_online_ddl_enable=ON;
+SET DEBUG_SYNC = 'WaitRowLogAppendAndApply SIGNAL start_logging WAIT_FOR ddl_continue';
+ALTER TABLE db1.t1 ADD INDEX idx_name_email (name, email), ALGORITHM=inplace;;
+SET DEBUG_SYNC = 'now WAIT_FOR start_logging';
+KILL <CONNECTION_ID>;
+SET DEBUG_SYNC = 'now SIGNAL ddl_continue';
+ERROR HY000: Lost connection to MySQL server during query
+DROP DATABASE db1;

@@ -1,0 +1,30 @@
+call mtr.add_suppression("failed to do full backup for dstore");
+call mtr.add_suppression("start full local backup fail");
+call mtr.add_suppression("full backup found binlog is not enabled");
+CREATE DATABASE db1;
+USE db1;
+create table t1(s varchar(100)) engine=Dstore;
+INSERT INTO t1 VALUES('a');
+select count(*) from t1;
+count(*)
+1
+SET GLOBAL dstore_local_backup_max_wal_size = 10;
+call rds_backup.start_full_local_backup(1);
+DROP PROCEDURE IF EXISTS load_data;
+CALL load_data('t1','s',10000);
+select count(*) from t1;
+count(*)
+10001
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" not found
+Pattern ""tablespaceRunningStatus": "Completed"" not found
+Pattern ""walRunningStatus": "Completed"" not found
+Pattern ""controlFileRunningStatus": "Completed"" not found
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+Pattern "the wal size increases too quickly" found
+SET GLOBAL dstore_local_backup_max_wal_size = 38654705664;
+DROP DATABASE db1;

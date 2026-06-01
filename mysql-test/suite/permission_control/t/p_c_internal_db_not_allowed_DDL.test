@@ -1,0 +1,711 @@
+#############################################################################
+#                                                                           #
+#                                                                           #
+#     Descriptions:                                                         #
+#           The test case is used to test the permission access control     #
+#           to mysql and sys db:                                            #
+#            - Users (non-built-in user s and non-super user) are not       #
+#              allowed to drop internal databases, including `sys`,         #  
+#              `I_S`, `P_S`, `mysql`                                        #
+#            - Users (not built-in users or non-super users) are not        #
+#              allowed to  perform DML operations on table in the           #
+#              mysql database                                               #
+#            - Users (not built-in users or non-super users) are not        #
+#              allowed to change the table schema of the tables in the      #
+#              mysql and sys databases.                                     #
+#                                                                           #
+#                                                                           #
+#############################################################################
+
+--source include/count_sessions.inc
+show global variables like 'rds_permission_control';
+show global variables like 'rds_internal_schema_ddl_control';
+show global variables like 'rds_reserved_users';
+
+connection default;
+
+# User root1 has the same permissions as root in the production environment
+CREATE USER 'root1'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, REFERENCES, INDEX, ALTER, SHOW DATABASES,
+CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW,
+CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER ON *.* TO 'root1'@'%' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+# create super user
+CREATE USER 'super_user'@'%' IDENTIFIED BY '123456';
+GRANT SUPER ON *.* TO 'super_user'@'%' WITH GRANT OPTION;
+GRANT ALL PRIVILEGES ON *.* TO 'super_user'@'%';
+FLUSH PRIVILEGES;
+
+--echo # connect root1
+connect(conn1,localhost,root1,123456,);
+
+#        > test 1: Users (non-built-in user s and non-super user) are not
+#                  allowed to drop internal databases, including `sys`,
+#                  `I_S`, `P_S`, `mysql`.
+#---------------------------------------------------------------------------
+--error ER_DBACCESS_DENIED_ERROR
+DROP DATABASE mysql;
+--error ER_DBACCESS_DENIED_ERROR
+DROP DATABASE sys;
+--error ER_DBACCESS_DENIED_ERROR
+DROP DATABASE information_schema;
+--error ER_DBACCESS_DENIED_ERROR
+DROP DATABASE performance_schema;
+
+#        > test 2: Users (non-built-in user s and non-super user) are not
+#                  allowed to execute DDL in the internal database(`sys`,
+#                  `mysql`).
+#---------------------------------------------------------------------------
+use mysql;
+# create table
+--error ER_DBACCESS_DENIED_ERROR
+CREATE TABLE t1 (a int, b int);
+--error ER_DBACCESS_DENIED_ERROR
+CREATE TABLE user_backup select * from user;
+--error ER_DBACCESS_DENIED_ERROR
+CREATE TEMPORARY TABLE db_backup select * from db;
+# create event
+--error ER_DBACCESS_DENIED_ERROR
+CREATE EVENT myevent
+    ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 1 HOUR
+    DO
+      UPDATE mysql.base_user SET user = test_user1;
+# create function ,procedure and trigger
+DELIMITER |;
+--error ER_DBACCESS_DENIED_ERROR
+  CREATE PROCEDURE pc_i_tt_5_suc (IN p_trans_id INTEGER, IN p_stmt_id INTEGER) BEGIN END|
+
+--error ER_DBACCESS_DENIED_ERROR
+  CREATE FUNCTION fc_i_tt_5_suc (p_trans_id INTEGER, p_stmt_id INTEGER) RETURNS VARCHAR(64)
+  BEGIN
+    DECLARE in_stmt_id INTEGER;
+    SELECT max(stmt_id) INTO in_stmt_id FROM tt_5 WHERE trans_id= p_trans_id;
+    SELECT COALESCE(greatest(in_stmt_id + 1, p_stmt_id), 1) INTO in_stmt_id;
+    INSERT INTO tt_5(trans_id, stmt_id) VALUES (p_trans_id, in_stmt_id);
+    INSERT INTO tt_5(trans_id, stmt_id) VALUES (p_trans_id, in_stmt_id + 1);
+    RETURN "fc_i_tt_5_suc";
+  END|
+
+--error ER_NO_TRIGGERS_ON_SYSTEM_SCHEMA
+CREATE TRIGGER tr_i_tt_3_to_nt_3 AFTER INSERT ON user FOR EACH ROW BEGIN END|
+DELIMITER ;|
+
+--error ER_DBACCESS_DENIED_ERROR
+CREATE INDEX index_name ON db (db);
+
+# create view
+--error ER_DBACCESS_DENIED_ERROR
+CREATE VIEW v_today (today) AS SELECT CURRENT_DATE;
+
+# rename table
+--error ER_DBACCESS_DENIED_ERROR
+RENAME TABLE mysql.user TO user2;
+
+# truncate table
+--error ER_DBACCESS_DENIED_ERROR
+TRUNCATE TABLE user;
+
+use sys;
+# create table
+--error ER_DBACCESS_DENIED_ERROR
+CREATE TABLE t1 (a int, b int);
+--error ER_DBACCESS_DENIED_ERROR
+CREATE TABLE user_backup select * from user;
+--error ER_DBACCESS_DENIED_ERROR
+CREATE TEMPORARY TABLE db_backup select * from db;
+
+# create event
+--error ER_DBACCESS_DENIED_ERROR
+CREATE EVENT myevent
+    ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 1 HOUR
+    DO
+      UPDATE mysql.base_user SET user = test_user1;
+
+# create function ,procedure and trigger
+DELIMITER |;
+--error ER_DBACCESS_DENIED_ERROR
+  CREATE PROCEDURE pc_i_tt_5_suc (IN p_trans_id INTEGER, IN p_stmt_id INTEGER) BEGIN END|
+
+--error ER_DBACCESS_DENIED_ERROR
+  CREATE FUNCTION fc_i_tt_5_suc (p_trans_id INTEGER, p_stmt_id INTEGER) RETURNS VARCHAR(64)
+  BEGIN
+    DECLARE in_stmt_id INTEGER;
+    SELECT max(stmt_id) INTO in_stmt_id FROM tt_5 WHERE trans_id= p_trans_id;
+    SELECT COALESCE(greatest(in_stmt_id + 1, p_stmt_id), 1) INTO in_stmt_id;
+    INSERT INTO tt_5(trans_id, stmt_id) VALUES (p_trans_id, in_stmt_id);
+    INSERT INTO tt_5(trans_id, stmt_id) VALUES (p_trans_id, in_stmt_id + 1);
+    RETURN "fc_i_tt_5_suc";
+  END|
+
+--error ER_DBACCESS_DENIED_ERROR
+CREATE TRIGGER tr_i_tt_3_to_nt_3 AFTER INSERT ON user FOR EACH ROW BEGIN END|
+DELIMITER ;|
+
+--error ER_DBACCESS_DENIED_ERROR
+CREATE INDEX index_name ON sys.sys_config (value);
+
+# create view
+--error ER_DBACCESS_DENIED_ERROR
+CREATE VIEW v_today (today) AS SELECT CURRENT_DATE;
+
+# rename table
+--error ER_DBACCESS_DENIED_ERROR
+RENAME TABLE sys_config TO sys.sys_config2;
+
+# truncate table
+--error ER_DBACCESS_DENIED_ERROR
+TRUNCATE TABLE sys_config;
+
+
+
+#        > test 3: Users (non-built-in user s and non-super user) are
+#                  allowed to execute DDL in the internal database(`sys`,
+#                  `mysql`) when rds_permission_control = OFF.
+#---------------------------------------------------------------------------
+#         CREATE_ACL | DROP_ACL | REFERENCES_ACL | INDEX_ACL | ALTER_ACL |
+#         CREATE_TMP_ACL | CREATE_VIEW_ACL | CREATE_PROC_ACL | ALTER_PROC_ACL |
+#         EVENT_ACL | TRIGGER_ACL
+
+--echo # connect root
+connection default;
+SET GLOBAL rds_permission_control = OFF;
+--echo # connect root1 
+connection conn1;
+--echo # test mysql db
+use mysql;
+# create table
+CREATE TABLE t1 (a int PRIMARY KEY, b int);
+CREATE TABLE user_backup select * from user;
+CREATE TEMPORARY TABLE db_backup select * from db;
+# alter table
+ALTER TABLE t1 ENGINE = InnoDB;
+ALTER TABLE t1 RENAME COLUMN b TO c;
+# rename table
+RENAME TABLE t1 to t2;
+# truncate table
+TRUNCATE TABLE t2;
+
+# create event
+CREATE EVENT myevent
+    ON SCHEDULE
+      EVERY 6 HOUR
+    COMMENT 'A sample comment.'
+    DO
+      UPDATE myschema.mytable SET mycol = mycol + 1;
+# alter event
+ALTER EVENT myevent
+    ON SCHEDULE
+      EVERY 12 HOUR
+    STARTS CURRENT_TIMESTAMP + INTERVAL 4 HOUR;
+
+# create function
+CREATE FUNCTION f() RETURNS INT return 1;
+# alter function
+ALTER FUNCTION f comment "atomic DDL on routine";
+
+# create procedure
+CREATE PROCEDURE p() SELECT 1;
+# alter procedure
+ALTER PROCEDURE p comment "atomic DDL on routine";
+
+# create view
+create view v1 as select * from user;
+# alter view
+alter view v1 as select * from db;
+
+--echo # test sys db
+use sys;
+# create table
+CREATE TABLE t1 (a int PRIMARY KEY, b int);
+CREATE TABLE sys_config1 select * from sys_config;
+CREATE TEMPORARY TABLE sys_config2 select * from sys_config;
+# alter table
+ALTER TABLE t1 ENGINE = InnoDB;
+ALTER TABLE t1 RENAME COLUMN b TO c;
+# rename table
+RENAME TABLE t1 to t2;
+# truncate table
+TRUNCATE TABLE t2;
+
+# create event
+CREATE EVENT myevent
+    ON SCHEDULE
+      EVERY 6 HOUR
+    COMMENT 'A sample comment.'
+    DO
+      UPDATE myschema.mytable SET mycol = mycol + 1;
+# alter event
+ALTER EVENT myevent
+    ON SCHEDULE
+      EVERY 12 HOUR
+    STARTS CURRENT_TIMESTAMP + INTERVAL 4 HOUR;
+
+# create function
+CREATE FUNCTION f() RETURNS INT return 1;
+# alter function
+ALTER FUNCTION f comment "atomic DDL on routine";
+
+# create procedure
+CREATE PROCEDURE p() SELECT 1;
+# alter procedure
+ALTER PROCEDURE p comment "atomic DDL on routine";
+
+# create view
+create view v1 as select * from mysql.user;
+# alter view
+alter view v1 as select * from mysql.db;
+
+--echo # connect root
+connection default;
+SET GLOBAL rds_permission_control = ON;
+
+#        > test 4: Users (non-built-in user and non-super user) are not
+#                  allowed to execute DDL(alter/drop) in the internal
+#                   database(`sys`,`mysql`) 
+#---------------------------------------------------------------------------
+--echo # connect root1
+disconnect conn1;
+connect(conn1,localhost,root1,123456,);
+--echo # test mysql db
+use mysql;
+# alter table
+--error ER_DBACCESS_DENIED_ERROR
+ALTER TABLE t2 ENGINE = InnoDB;
+--error ER_DBACCESS_DENIED_ERROR
+ALTER TABLE t2 RENAME COLUMN c TO b;
+# drop index
+--error ER_DBACCESS_DENIED_ERROR
+DROP INDEX `PRIMARY` ON t2;
+# drop table
+--error ER_DBACCESS_DENIED_ERROR
+drop table t2;
+
+# alter event
+--error ER_DBACCESS_DENIED_ERROR
+ALTER EVENT myevent
+    ON SCHEDULE
+      EVERY 12 HOUR
+    STARTS CURRENT_TIMESTAMP + INTERVAL 4 HOUR;
+# drop event
+--error ER_DBACCESS_DENIED_ERROR
+DROP EVENT myevent;
+
+# alter function
+--error ER_DBACCESS_DENIED_ERROR
+ALTER FUNCTION f comment "not allowed alter internal db";
+# drop function
+--error ER_DBACCESS_DENIED_ERROR
+#DROP FUNCTION f;
+
+# alter procedure
+--error ER_DBACCESS_DENIED_ERROR
+ALTER PROCEDURE p comment "not allowed alter internal db";
+# drop procedure
+--error ER_DBACCESS_DENIED_ERROR
+DROP PROCEDURE p;
+# alter view
+--error ER_DBACCESS_DENIED_ERROR
+alter view v1 as select * from user;
+#drop view
+--error ER_DBACCESS_DENIED_ERROR
+DROP VIEW v1;
+
+--echo # test sys db
+use sys;
+# alter table
+--error ER_DBACCESS_DENIED_ERROR
+ALTER TABLE t2 ENGINE = InnoDB;
+--error ER_DBACCESS_DENIED_ERROR
+ALTER TABLE t2 RENAME COLUMN c TO b;
+# drop index
+--error ER_DBACCESS_DENIED_ERROR
+DROP INDEX `PRIMARY` ON t2;
+# drop table
+--error ER_DBACCESS_DENIED_ERROR
+DROP TABLE t2;
+
+# alter event
+--error ER_DBACCESS_DENIED_ERROR
+ALTER EVENT myevent
+    ON SCHEDULE
+      EVERY 12 HOUR
+    STARTS CURRENT_TIMESTAMP + INTERVAL 4 HOUR;
+# drop event
+--error ER_DBACCESS_DENIED_ERROR
+DROP EVENT myevent;
+# alter function
+--error ER_DBACCESS_DENIED_ERROR
+ALTER FUNCTION f comment "atomic DDL on routine";
+# drop function
+--error ER_DBACCESS_DENIED_ERROR
+DROP FUNCTION f;
+
+# alter procedure
+--error ER_DBACCESS_DENIED_ERROR
+ALTER PROCEDURE p comment "atomic DDL on routine";
+# drop procedure
+--error ER_DBACCESS_DENIED_ERROR
+DROP PROCEDURE p;
+# alter view
+--error ER_DBACCESS_DENIED_ERROR
+alter view v1 as select * from mysql.user;
+# drop view
+--error ER_DBACCESS_DENIED_ERROR
+DROP VIEW v1;
+
+#        > test 5: Users (non-built-in user s and non-super user) are
+#                  allowed to execute drop in the internal database(`sys`,
+#                  `mysql`) when rds_permission_control = OFF.
+#---------------------------------------------------------------------------
+--echo # connect root
+connection default;
+SET GLOBAL rds_permission_control = OFF;
+--echo # connect root1 
+connection conn1;
+--echo # test mysql db
+use mysql;
+DROP INDEX `PRIMARY` ON t2;
+DROP TABLE IF EXISTS t2;
+DROP TABLE  user_backup;
+DROP EVENT myevent;
+DROP FUNCTION f;
+DROP PROCEDURE p;
+DROP VIEW v1;
+
+--echo # test sys db
+use sys;
+DROP INDEX `PRIMARY` ON t2;
+DROP TABLE IF EXISTS t2;
+DROP TABLE  sys_config1;
+DROP EVENT myevent;
+DROP FUNCTION f;
+DROP PROCEDURE p;
+DROP VIEW v1;
+
+--echo # connect root
+connection default;
+SET GLOBAL rds_permission_control = ON;
+
+#        > test 6: SUPER user can operating DDL & DML in internal(mysql/sys) db
+#---------------------------------------------------------------------------
+--echo # connect super 
+connect(conn2,localhost,super_user,123456,);
+--echo # test mysql db
+use mysql;
+# create table
+CREATE TABLE t1 (a int PRIMARY KEY, b int);
+CREATE TABLE user_backup select * from user;
+CREATE TEMPORARY TABLE db_backup select * from db;
+# alter table
+ALTER TABLE t1 ENGINE = InnoDB;
+ALTER TABLE t1 RENAME COLUMN b TO c;
+# rename table
+RENAME TABLE t1 to t2;
+# truncate table
+TRUNCATE TABLE t2;
+
+# create event
+CREATE EVENT myevent
+    ON SCHEDULE
+      EVERY 6 HOUR
+    COMMENT 'A sample comment.'
+    DO
+      UPDATE myschema.mytable SET mycol = mycol + 1;
+# alter event
+ALTER EVENT myevent
+    ON SCHEDULE
+      EVERY 12 HOUR
+    STARTS CURRENT_TIMESTAMP + INTERVAL 4 HOUR;
+
+# create function
+CREATE FUNCTION f() RETURNS INT return 1;
+# alter function
+ALTER FUNCTION f comment "atomic DDL on routine";
+
+# create procedure
+CREATE PROCEDURE p() SELECT 1;
+# alter procedure
+ALTER PROCEDURE p comment "atomic DDL on routine";
+
+# create view
+create view v1 as select * from user;
+# alter view
+alter view v1 as select * from db;
+
+--echo # test sys db
+use sys;
+# create table
+CREATE TABLE t1 (a int PRIMARY KEY, b int);
+CREATE TABLE sys_config1 select * from sys_config;
+CREATE TEMPORARY TABLE sys_config2 select * from sys_config;
+# alter table
+ALTER TABLE t1 ENGINE = InnoDB;
+ALTER TABLE t1 RENAME COLUMN b TO c;
+# rename table
+RENAME TABLE t1 to t2;
+# truncate table
+TRUNCATE TABLE t2;
+
+# create event
+CREATE EVENT myevent
+    ON SCHEDULE
+      EVERY 6 HOUR
+    COMMENT 'A sample comment.'
+    DO
+      UPDATE myschema.mytable SET mycol = mycol + 1;
+# alter event
+ALTER EVENT myevent
+    ON SCHEDULE
+      EVERY 12 HOUR
+    STARTS CURRENT_TIMESTAMP + INTERVAL 4 HOUR;
+
+# create function
+CREATE FUNCTION f() RETURNS INT return 1;
+# alter function
+ALTER FUNCTION f comment "atomic DDL on routine";
+
+# create procedure
+CREATE PROCEDURE p() SELECT 1;
+# alter procedure
+ALTER PROCEDURE p comment "atomic DDL on routine";
+
+# create view
+create view v1 as select * from mysql.user;
+# alter view
+alter view v1 as select * from mysql.db;
+
+--echo # test mysql db
+use mysql;
+DROP INDEX `PRIMARY` ON t2;
+DROP TABLE IF EXISTS t2;
+DROP TABLE user_backup;
+DROP EVENT myevent;
+DROP FUNCTION f;
+DROP PROCEDURE p;
+DROP VIEW v1;
+
+--echo # test sys db
+use sys;
+DROP INDEX `PRIMARY` ON t2;
+DROP TABLE IF EXISTS t2;
+DROP TABLE sys_config1;
+DROP EVENT myevent;
+DROP FUNCTION f;
+DROP PROCEDURE p;
+DROP VIEW v1;
+
+#       > test 7: reserved user can operating DDL & DML in internal(mysql/sys) db
+#-----------------------------------------------------------------------------------
+connection default;
+CREATE USER 'reserved_user1'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, REFERENCES, INDEX, ALTER, SHOW DATABASES,
+CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW,
+CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER ON *.* TO 'reserved_user1'@'%' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+--echo # connect reserved_user1
+connect(conn3,localhost,reserved_user1,123456,);
+--echo # test mysql db
+use mysql;
+# create table
+CREATE TABLE t1 (a int PRIMARY KEY, b int);
+CREATE TABLE user_backup select * from user;
+CREATE TEMPORARY TABLE db_backup select * from db;
+# alter table
+ALTER TABLE t1 ENGINE = InnoDB;
+ALTER TABLE t1 RENAME COLUMN b TO c;
+# rename table
+RENAME TABLE t1 to t2;
+# truncate table
+TRUNCATE TABLE t2;
+
+# create event
+CREATE EVENT myevent
+    ON SCHEDULE
+      EVERY 6 HOUR
+    COMMENT 'A sample comment.'
+    DO
+      UPDATE myschema.mytable SET mycol = mycol + 1;
+# alter event
+ALTER EVENT myevent
+    ON SCHEDULE
+      EVERY 12 HOUR
+    STARTS CURRENT_TIMESTAMP + INTERVAL 4 HOUR;
+
+# create function
+CREATE FUNCTION f() RETURNS INT return 1;
+# alter function
+ALTER FUNCTION f comment "atomic DDL on routine";
+
+# create procedure
+CREATE PROCEDURE p() SELECT 1;
+# alter procedure
+ALTER PROCEDURE p comment "atomic DDL on routine";
+
+# create view
+create view v1 as select * from user;
+# alter view
+alter view v1 as select * from db;
+
+--echo # test sys db
+use sys;
+# create table
+CREATE TABLE t1 (a int PRIMARY KEY, b int);
+CREATE TABLE sys_config1 select * from sys_config;
+CREATE TEMPORARY TABLE sys_config2 select * from sys_config;
+# alter table
+ALTER TABLE t1 ENGINE = InnoDB;
+ALTER TABLE t1 RENAME COLUMN b TO c;
+# rename table
+RENAME TABLE t1 to t2;
+# truncate table
+TRUNCATE TABLE t2;
+
+# create event
+CREATE EVENT myevent
+    ON SCHEDULE
+      EVERY 6 HOUR
+    COMMENT 'A sample comment.'
+    DO
+      UPDATE myschema.mytable SET mycol = mycol + 1;
+# alter event
+ALTER EVENT myevent
+    ON SCHEDULE
+      EVERY 12 HOUR
+    STARTS CURRENT_TIMESTAMP + INTERVAL 4 HOUR;
+
+# create function
+CREATE FUNCTION f() RETURNS INT return 1;
+# alter function
+ALTER FUNCTION f comment "atomic DDL on routine";
+
+# create procedure
+CREATE PROCEDURE p() SELECT 1;
+# alter procedure
+ALTER PROCEDURE p comment "atomic DDL on routine";
+
+# create view
+create view v1 as select * from mysql.user;
+# alter view
+alter view v1 as select * from mysql.db;
+
+--echo # test mysql db
+use mysql;
+DROP INDEX `PRIMARY` ON t2;
+DROP TABLE IF EXISTS t2;
+DROP TABLE user_backup;
+DROP EVENT myevent;
+DROP FUNCTION f;
+DROP PROCEDURE p;
+DROP VIEW v1;
+
+--echo # test sys db
+use sys;
+DROP INDEX `PRIMARY` ON t2;
+DROP TABLE IF EXISTS t2;
+DROP TABLE sys_config1;
+DROP EVENT myevent;
+DROP FUNCTION f;
+DROP PROCEDURE p;
+DROP VIEW v1;
+
+#         > test 8: non-super operating DCL
+#                   Permission control does not affect the authorization operation.
+#-----------------------------------------------------------------------------------
+connection default;
+CREATE USER 'normal_user'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, CREATE USER ON *.* TO 'normal_user'@'%' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+--echo # connect normal_user
+connect(conn4,localhost,normal_user,123456,);
+CREATE USER 'normal_user2'@'%' IDENTIFIED BY '123456';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, CREATE USER ON *.* TO 'normal_user2'@'%';
+FLUSH PRIVILEGES;
+query_vertical SELECT user,host,Select_priv,Insert_priv,Update_priv,Delete_priv,Create_priv,Drop_priv FROM mysql.user WHERE user = 'normal_user2';
+REVOKE SELECT ON *.* FROM 'normal_user2'@'%';
+SELECT user,host,Select_priv FROM mysql.user WHERE user = 'normal_user2';
+
+
+#        > test 9: Users (not built-in users or non-super users) are
+#                  allowed to  perform DML operations on table in the 
+#                  `sys`, `mysql`.
+#----------------------------------------------------------------------------
+connection default;
+USE mysql;
+--disable_warnings
+DROP TABLE IF EXISTS db1;
+CREATE TABLE db1 SELECT * FROM db;
+
+DROP TABLE IF EXISTS user1;
+CREATE TABLE user1 SELECT * FROM user;
+set global rds_internal_schema_dml_control=OFF;
+
+--echo # connect root1
+connection conn1;
+
+# 1 Single-TABLE Delete
+DELETE FROM mysql.user1 where user='root1';
+# 2 Multi-TABLE Deletes
+USE mysql;
+DELETE mysql.db1, mysql.user1 FROM mysql.user1 INNER JOIN mysql.db1 where user1.User = db1.user;
+# 3 Single-TABLE Update
+UPDATE mysql.db1 set host='localhost' where user ='root1';
+UPDATE sys.sys_config set value='ON' where variable ='diagnostics.allow_i_s_TABLEs';
+# 4 Multi-TABLES Updates
+USE mysql;
+UPDATE mysql.db1, mysql.user1 set user1.host='localhost' where user1.user = db1.user;
+# 5 INSERT
+INSERT INTO mysql.user1(user, host, ssl_cipher, x509_issuer, x509_subject, authentication_string)
+VALUES ('u2', 'h', '', '', '','123456');
+# 6 INSERT ... SELECT
+INSERT INTO mysql.user1 select * FROM mysql.user where Super_priv='T';
+INSERT INTO sys.sys_config SELECT * FROM sys.sys_config where value='T';
+REPLACE INTO mysql.user1(user, host, ssl_cipher, x509_issuer, x509_subject, authentication_string)
+VALUES ('u2', 'h', '', '', '','*46ABF58B20022A84DF7B2E8B1AC8219C8DA71553');
+REPLACE INTO mysql.user1 select * FROM mysql.user  where Super_priv='T';
+REPLACE INTO sys.sys_config select * FROM sys.sys_config where value='T';
+
+connection default;
+set global rds_internal_schema_dml_control=ON;
+
+#        > test 10: Users (not built-in users or non-super users) are
+#                   not allowed to  perform DDL operations on table in the 
+#                  `P_S`,'I_S'
+#----------------------------------------------------------------------------
+--echo # connect root1
+connection conn1;
+USE performance_schema;
+--error ER_DBACCESS_DENIED_ERROR
+CREATE TABLE t1(a int);
+TRUNCATE TABLE events_statements_summary_by_host_by_event_name;
+--error ER_TABLEACCESS_DENIED_ERROR
+DROP TABLE socket_summary_by_instance;
+USE information_schema;
+--error ER_DBACCESS_DENIED_ERROR
+CREATE TABLE t1(a int);
+--error ER_DBACCESS_DENIED_ERROR
+DROP TABLE t1;
+
+connection default;
+USE performance_schema;
+--error ER_DBACCESS_DENIED_ERROR
+CREATE TABLE t1(a int);
+--error ER_TABLEACCESS_DENIED_ERROR
+DROP TABLE events_statements_summary_by_host_by_event_name;
+
+USE information_schema;
+--error ER_DBACCESS_DENIED_ERROR
+CREATE TABLE t1(a int);
+--error ER_DBACCESS_DENIED_ERROR
+DROP TABLE t1;
+
+# end
+--disable_warnings
+connection default;
+disconnect conn1;
+disconnect conn2;
+disconnect conn3;
+disconnect conn4;
+DROP USER super_user ,root1, normal_user, normal_user2;
+--enable_warnings
+--source include/wait_until_count_sessions.inc
+source include/force_restart.inc;

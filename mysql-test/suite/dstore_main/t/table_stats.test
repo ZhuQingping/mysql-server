@@ -1,0 +1,126 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+
+--echo # ###################################################################
+--echo # Test TABLE STATUS information for Dstore table
+--echo # ###################################################################
+
+# Create required table and stored procedure
+CREATE TABLE t1 (
+    a int not NULL,
+    b VARCHAR(1024) not NULL,
+    c blob,
+    PRIMARY KEY (a)
+) ENGINE=Dstore, STATS_SAMPLE_PAGES=500;
+
+DELIMITER ||;
+CREATE PROCEDURE insert_table(IN n int)
+BEGIN
+  DECLARE i INT DEFAULT 1;
+  START TRANSACTION;
+  WHILE (i <= n ) DO
+    INSERT INTO t1 (a, b, c) VALUES (i,REPEAT('Dstore',150),REPEAT('A',3000));
+    SET i=i+1;
+  END WHILE;
+COMMIT;
+END ||
+DELIMITER ;||
+
+--echo # 1 Test Empty table, do not gererate record in mysql.dstore_table_stats
+SELECT COUNT(*) FROM t1;
+--let $table_name = 't1'
+--source suite/dstore_main/include/check_table_status.inc
+
+--echo # 2 Test insert 2 records in heap table
+CALL insert_table(2);
+ANALYZE TABLE t1;
+SELECT COUNT(*) FROM t1;
+--let $table_name = 't1'
+--source suite/dstore_main/include/check_table_status.inc
+
+--echo # 3 Test insert 100 records in heap table
+TRUNCATE TABLE t1;
+CALL insert_table(100);
+ANALYZE TABLE t1;
+SELECT COUNT(*) FROM t1;
+--let $table_name = 't1'
+--source suite/dstore_main/include/check_table_status.inc
+
+--echo # 4 Test insert 1000 records in heap table
+TRUNCATE TABLE t1;
+CALL insert_table(1000);
+ANALYZE TABLE t1;
+SELECT COUNT(*) FROM t1;
+--let $table_name = 't1'
+--source suite/dstore_main/include/check_table_status.inc
+
+--echo # 5 Test insert 1000 records + remove 990 records in heap table
+DELETE FROM t1 LIMIT 990; 
+ANALYZE TABLE t1;
+SELECT COUNT(*) FROM t1;
+--let $table_name = 't1'
+--source suite/dstore_main/include/check_table_status.inc
+
+--echo # 6 Test heap table stats after restart
+# restart server to fetch stats from system table
+--let $restart_parameters = restart;
+--source include/restart_mysqld.inc
+SELECT COUNT(*) FROM t1;
+--let $table_name = 't1'
+--source suite/dstore_main/include/check_table_status.inc
+
+--echo # 7 Test heap table size larger than stats_sample_pages
+DROP TABLE t1;
+CREATE TABLE t1 (
+    a int not NULL,
+    b VARCHAR(1024) not NULL,
+    c blob,
+    PRIMARY KEY (a)
+) ENGINE=Dstore, STATS_SAMPLE_PAGES=100;
+CALL insert_table(1000);
+DELETE FROM t1 LIMIT 990; 
+ANALYZE TABLE t1;
+SELECT COUNT(*) FROM t1;
+
+# Check stats in information_schema.tables
+SELECT TABLE_NAME,TABLE_TYPE,ENGINE,DATA_LENGTH,DATA_FREE>(DATA_LENGTH-DATA_FREE) FROM information_schema.tables WHERE table_name='t1';
+# Check stats in mysql.table_stats
+SELECT table_name,heap_table_pages,heap_table_free_pages>(heap_table_pages-heap_table_free_pages) FROM mysql.dstore_table_stats WHERE table_name='t1';
+
+# Cleanup
+DROP TABLE t1;
+DROP PROCEDURE insert_table;
+
+--echo #
+--echo # BUG2026031741987: [Partition Table] When an SQLancer service that contains partition table operations is executed,
+--echo #                   the instance is abnormal. The error keyword is "CdeDdOpenTableOne&:HaCdepartShare::openOneTablePart".
+--echo # increase test coverage
+
+DELIMITER ||;
+CREATE PROCEDURE insert_table(IN n int)
+BEGIN
+  DECLARE i INT DEFAULT 1;
+  START TRANSACTION;
+  WHILE (i <= n ) DO
+    INSERT INTO t1 (a, b, c) VALUES (i,REPEAT('Dstore',150),REPEAT('A',3000));
+    SET i=i+1;
+  END WHILE;
+COMMIT;
+END ||
+DELIMITER ;||
+
+
+CREATE TABLE t1 (
+    a int not NULL,
+    b VARCHAR(1024) not NULL,
+    c blob,
+    PRIMARY KEY (a)
+) ENGINE=Dstore, STATS_SAMPLE_PAGES=100;
+CALL insert_table(1000);
+
+SET SESSION DEBUG='+d,info_impl_null_dict_table';
+ANALYZE TABLE t1;
+SET SESSION DEBUG='-d,info_impl_null_dict_table';
+
+DROP TABLE t1;
+DROP PROCEDURE insert_table;

@@ -1,0 +1,139 @@
+CREATE USER 'con1'@'localhost' IDENTIFIED BY '123456';
+GRANT INSERT,DELETE,UPDATE,SELECT ON *.* TO 'con1'@'localhost';
+FLUSH PRIVILEGES;
+CREATE USER 'rds'@'localhost' IDENTIFIED BY '123456';
+GRANT INSERT,DELETE,UPDATE,SELECT,SUPER ON *.* TO 'rds'@'localhost' WITH GRANT OPTION;
+Warnings:
+Warning	1287	The SUPER privilege identifier is deprecated
+GRANT SYSTEM_USER ON *.* TO 'rds'@'localhost';
+FLUSH PRIVILEGES;
+CREATE USER 'root_1'@'%' IDENTIFIED BY '123456';
+GRANT ALL PRIVILEGES ON *.* TO 'root_1'@'%' WITH GRANT OPTION;
+GRANT SYSTEM_USER ON *.* TO 'root_1'@'%';
+REVOKE SUPER ON *.* FROM 'root_1'@'%';
+Warnings:
+Warning	1287	The SUPER privilege identifier is deprecated
+FLUSH PRIVILEGES;
+save original global variables value
+SHOW GLOBAL VARIABLES LIKE 'rds_restricted_dynamic_privileges_control';
+Variable_name	Value
+rds_restricted_dynamic_privileges_control	ON
+SHOW GLOBAL VARIABLES LIKE 'rds_restricted_dynamic_privileges_list';
+Variable_name	Value
+rds_restricted_dynamic_privileges_list	session_variables_admin,system_variables_admin
+SET @saved_rds_restricted_dynamic_privileges_control = @@global.rds_restricted_dynamic_privileges_control;
+SET @saved_rds_restricted_dynamic_privileges_list = @@global.rds_restricted_dynamic_privileges_list;
+###################################################
+# rds_restricted_dynamic_privileges_control is ON #
+# rds_restricted_dynamic_privileges_list is SET   #
+###################################################
+# Normal situations
+root user
+SET GLOBAL rds_restricted_dynamic_privileges_control = 1;
+SET GLOBAL rds_restricted_dynamic_privileges_list = "SESSION_VARIABLES_ADMIN,SYSTEM_VARIABLES_ADMIN";
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'root'@'localhost';
+ERROR HY000: Granting the dynamic privilege 'SESSION_VARIABLES_ADMIN' is not allowed, when rds_restricted_dynamic_privileges_control is ON
+GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'root'@'localhost';
+ERROR HY000: Granting the dynamic privilege 'SYSTEM_VARIABLES_ADMIN' is not allowed, when rds_restricted_dynamic_privileges_control is ON
+GRANT SYSTEM_VARIABLES_ADMIN,BINLOG_ADMIN ON *.* TO 'root'@'localhost';
+ERROR HY000: Granting the dynamic privilege 'SYSTEM_VARIABLES_ADMIN' is not allowed, when rds_restricted_dynamic_privileges_control is ON
+Non-reserved user
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'con1'@'localhost';
+ERROR HY000: Granting the dynamic privilege 'SESSION_VARIABLES_ADMIN' is not allowed, when rds_restricted_dynamic_privileges_control is ON
+GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'con1'@'localhost';
+ERROR HY000: Granting the dynamic privilege 'SYSTEM_VARIABLES_ADMIN' is not allowed, when rds_restricted_dynamic_privileges_control is ON
+GRANT SYSTEM_VARIABLES_ADMIN,BINLOG_ADMIN ON *.* TO 'con1'@'localhost';
+ERROR HY000: Granting the dynamic privilege 'SYSTEM_VARIABLES_ADMIN' is not allowed, when rds_restricted_dynamic_privileges_control is ON
+Reserved user
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'rds'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN ON *.* FROM 'rds'@'localhost';
+# Mixed case and duplicate value
+root user
+SET GLOBAL rds_restricted_dynamic_privileges_control = 1;
+SET GLOBAL rds_restricted_dynamic_privileges_list = "SESSION_VariaBLes_Admin,SYStem_VARIABLES_Admin,SessIon_VariabLES_adMIN";
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'root'@'localhost';
+ERROR HY000: Granting the dynamic privilege 'SESSION_VARIABLES_ADMIN' is not allowed, when rds_restricted_dynamic_privileges_control is ON
+GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'root'@'localhost';
+ERROR HY000: Granting the dynamic privilege 'SYSTEM_VARIABLES_ADMIN' is not allowed, when rds_restricted_dynamic_privileges_control is ON
+GRANT SYSTEM_VARIABLES_ADMIN,BINLOG_ADMIN ON *.* TO 'root'@'localhost';
+ERROR HY000: Granting the dynamic privilege 'SYSTEM_VARIABLES_ADMIN' is not allowed, when rds_restricted_dynamic_privileges_control is ON
+CREATE USER 'con2'@'localhost' IDENTIFIED BY '123456';
+GRANT ALL PRIVILEGES ON *.* TO 'con2'@'localhost';
+DROP USER 'con2'@'localhost';
+Non-reserved user
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'con1'@'localhost';
+ERROR HY000: Granting the dynamic privilege 'SESSION_VARIABLES_ADMIN' is not allowed, when rds_restricted_dynamic_privileges_control is ON
+GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'con1'@'localhost';
+ERROR HY000: Granting the dynamic privilege 'SYSTEM_VARIABLES_ADMIN' is not allowed, when rds_restricted_dynamic_privileges_control is ON
+GRANT SYSTEM_VARIABLES_ADMIN,BINLOG_ADMIN ON *.* TO 'con1'@'localhost';
+ERROR HY000: Granting the dynamic privilege 'SYSTEM_VARIABLES_ADMIN' is not allowed, when rds_restricted_dynamic_privileges_control is ON
+Reserved user
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'rds'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN ON *.* FROM 'rds'@'localhost';
+# Restricted dynamic privileges exists before this feature
+SET GLOBAL rds_restricted_dynamic_privileges_control = 0;
+SET GLOBAL rds_restricted_dynamic_privileges_list = "";
+GRANT SESSION_VARIABLES_ADMIN,SYSTEM_VARIABLES_ADMIN ON *.* TO 'root'@'localhost';
+GRANT SESSION_VARIABLES_ADMIN,SYSTEM_VARIABLES_ADMIN,SYSTEM_USER ON *.* TO 'con1'@'localhost';
+FLUSH PRIVILEGES;
+root user
+SET GLOBAL rds_restricted_dynamic_privileges_control = 1;
+SET GLOBAL rds_restricted_dynamic_privileges_list = "SESSION_VARIABLES_ADMIN,SYSTEM_VARIABLES_ADMIN";
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'root'@'localhost';
+ERROR HY000: Granting the dynamic privilege 'SESSION_VARIABLES_ADMIN' is not allowed, when rds_restricted_dynamic_privileges_control is ON
+GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'root'@'localhost';
+ERROR HY000: Granting the dynamic privilege 'SYSTEM_VARIABLES_ADMIN' is not allowed, when rds_restricted_dynamic_privileges_control is ON
+GRANT SYSTEM_VARIABLES_ADMIN,BINLOG_ADMIN ON *.* TO 'root'@'localhost';
+ERROR HY000: Granting the dynamic privilege 'SYSTEM_VARIABLES_ADMIN' is not allowed, when rds_restricted_dynamic_privileges_control is ON
+GRANT BINLOG_ADMIN ON *.* TO 'root'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN,SYSTEM_VARIABLES_ADMIN,BINLOG_ADMIN ON *.* FROM 'root'@'localhost';
+CREATE USER 'con2'@'localhost' IDENTIFIED BY '123456';
+GRANT ALL PRIVILEGES ON *.* TO 'con2'@'localhost';
+DROP USER 'con2'@'localhost';
+Non-reserved user
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'con1'@'localhost';
+ERROR HY000: Granting the dynamic privilege 'SESSION_VARIABLES_ADMIN' is not allowed, when rds_restricted_dynamic_privileges_control is ON
+GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'con1'@'localhost';
+ERROR HY000: Granting the dynamic privilege 'SYSTEM_VARIABLES_ADMIN' is not allowed, when rds_restricted_dynamic_privileges_control is ON
+GRANT SYSTEM_VARIABLES_ADMIN,BINLOG_ADMIN ON *.* TO 'con1'@'localhost';
+ERROR HY000: Granting the dynamic privilege 'SYSTEM_VARIABLES_ADMIN' is not allowed, when rds_restricted_dynamic_privileges_control is ON
+GRANT BINLOG_ADMIN ON *.* TO 'con1'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN,SYSTEM_VARIABLES_ADMIN,BINLOG_ADMIN ON *.* FROM 'con1'@'localhost';
+####################################################
+# rds_restricted_dynamic_privileges_control is OFF #
+#rds_restricted_dynamic_privileges_list is SET     #
+####################################################
+root user
+SET GLOBAL rds_restricted_dynamic_privileges_control = 0;
+SET GLOBAL rds_restricted_dynamic_privileges_list = "SESSION_VARIABLES_ADMIN,SYSTEM_VARIABLES_ADMIN";
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'root'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN ON *.* FROM 'root'@'localhost';
+Non-reserved user
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'con1'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN ON *.* FROM 'con1'@'localhost';
+Reserved user
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'rds'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN ON *.* FROM 'rds'@'localhost';
+###################################################
+# rds_restricted_dynamic_privileges_control is ON #
+# rds_restricted_dynamic_privileges_list is EMPTY #
+###################################################
+root user
+SET GLOBAL rds_restricted_dynamic_privileges_control = 1;
+SET GLOBAL rds_restricted_dynamic_privileges_list = "";
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'root'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN ON *.* FROM 'root'@'localhost';
+Non-reserved user
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'con1'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN ON *.* FROM 'con1'@'localhost';
+Reserved user
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'rds'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN ON *.* FROM 'rds'@'localhost';
+############
+# Clean up #
+############
+SET GLOBAL rds_restricted_dynamic_privileges_control = OFF;
+SET GLOBAL rds_restricted_dynamic_privileges_list = default;
+DROP USER con1@localhost;
+DROP USER root_1;
+DROP USER 'rds'@'localhost';

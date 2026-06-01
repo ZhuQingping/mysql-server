@@ -1,0 +1,167 @@
+#
+# common settings
+#
+SET GLOBAL lock_wait_timeout=15;
+SET GLOBAL rds_ddl_lock_wait_timeout=10;
+#
+# prepare
+#
+CREATE TABLE stu (
+sno INT AUTO_INCREMENT PRIMARY KEY,
+name CHAR(20) NOT NULL
+);
+INSERT INTO stu VALUES (NULL, 'foo');
+CREATE TABLE grade (
+sno INT,
+grade INT,
+FOREIGN KEY (sno) REFERENCES stu(sno)
+);
+#
+# Scenario 1: Foreign key case which involves two tables
+#
+# conn1: a ddl blocking operation on grade
+START TRANSACTION;
+SELECT * FROM grade;
+sno	grade
+# conn2: a ddl blocking operation on stu
+START TRANSACTION;
+INSERT INTO stu VALUES (NULL, "bar");
+# conn3: DDL
+ALTER TABLE grade DROP FOREIGN KEY grade_ibfk_1;
+# conn4: DML which would be blocked by DDL
+SHOW CREATE TABLE grade;
+Table	Create Table
+grade	CREATE TABLE `grade` (
+  `sno` int DEFAULT NULL,
+  `grade` int DEFAULT NULL,
+  KEY `sno` (`sno`),
+  CONSTRAINT `grade_ibfk_1` FOREIGN KEY (`sno`) REFERENCES `stu` (`sno`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+INSERT INTO grade VALUES(1,1);
+# conn1: release lock on grade
+ROLLBACK;
+# conn4: Now it can continue
+SHOW CREATE TABLE grade;
+Table	Create Table
+grade	CREATE TABLE `grade` (
+  `sno` int DEFAULT NULL,
+  `grade` int DEFAULT NULL,
+  KEY `sno` (`sno`),
+  CONSTRAINT `grade_ibfk_1` FOREIGN KEY (`sno`) REFERENCES `stu` (`sno`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SELECT * FROM grade;
+sno	grade
+1	1
+# conn5: Do some DDL which should not be blocked by the DDL
+SHOW CREATE TABLE stu;
+Table	Create Table
+stu	CREATE TABLE `stu` (
+  `sno` int NOT NULL AUTO_INCREMENT,
+  `name` char(20) NOT NULL,
+  PRIMARY KEY (`sno`)
+) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+INSERT INTO stu VALUES (NULL, "2nd try");
+# conn3: DDL timeout
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+SHOW CREATE TABLE grade;
+Table	Create Table
+grade	CREATE TABLE `grade` (
+  `sno` int DEFAULT NULL,
+  `grade` int DEFAULT NULL,
+  KEY `sno` (`sno`),
+  CONSTRAINT `grade_ibfk_1` FOREIGN KEY (`sno`) REFERENCES `stu` (`sno`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SELECT * FROM grade;
+sno	grade
+1	1
+# Expect to be 15
+SELECT @@session.lock_wait_timeout;
+@@session.lock_wait_timeout
+15
+# Expect to be 10
+SELECT @@session.rds_ddl_lock_wait_timeout;
+@@session.rds_ddl_lock_wait_timeout
+10
+# Expect to be default 50
+SELECT @@session.innodb_lock_wait_timeout;
+@@session.innodb_lock_wait_timeout
+50
+# conn2: rollback
+ROLLBACK;
+SHOW CREATE TABLE stu;
+Table	Create Table
+stu	CREATE TABLE `stu` (
+  `sno` int NOT NULL AUTO_INCREMENT,
+  `name` char(20) NOT NULL,
+  PRIMARY KEY (`sno`)
+) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SELECT * FROM stu;
+sno	name
+1	foo
+3	2nd try
+#
+# Scenario 2: LOCK TABLE to block DDLs, and verify it works
+#
+SET GLOBAL lock_wait_timeout=20;
+SET GLOBAL rds_ddl_lock_wait_timeout=5;
+# conn1: Issue the LOCK TABLE
+LOCK TABLES grade READ, stu WRITE;
+# conn2: To run DDL on grade and verify the timeout
+ALTER TABLE grade ADD KEY(grade);;
+# conn3: To run DDL on stu and verify it won't timeout
+# Make sure this won't timeout too soon
+SET SESSION rds_ddl_lock_wait_timeout = 10;
+ALTER TABLE stu ADD KEY(name);;
+# conn2: Verify the timeout duration
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# conn2 waited for 5 seconds: 1
+# conn2 waited for less than 10 seconds: 1
+SHOW CREATE TABLE grade;
+Table	Create Table
+grade	CREATE TABLE `grade` (
+  `sno` int DEFAULT NULL,
+  `grade` int DEFAULT NULL,
+  KEY `sno` (`sno`),
+  CONSTRAINT `grade_ibfk_1` FOREIGN KEY (`sno`) REFERENCES `stu` (`sno`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+# Expect to be 20
+SELECT @@session.lock_wait_timeout;
+@@session.lock_wait_timeout
+20
+# Expect to be 5
+SELECT @@session.rds_ddl_lock_wait_timeout;
+@@session.rds_ddl_lock_wait_timeout
+5
+# Expect to be default 50
+SELECT @@session.innodb_lock_wait_timeout;
+@@session.innodb_lock_wait_timeout
+50
+# conn1: Unlock to not block conn3
+UNLOCK TABLES;
+# conn3: Verify DDL succeeded
+SHOW CREATE TABLE stu;
+Table	Create Table
+stu	CREATE TABLE `stu` (
+  `sno` int NOT NULL AUTO_INCREMENT,
+  `name` char(20) NOT NULL,
+  PRIMARY KEY (`sno`),
+  KEY `name` (`name`)
+) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+# Expect to be 20
+SELECT @@session.lock_wait_timeout;
+@@session.lock_wait_timeout
+20
+# Expect to be 10
+SELECT @@session.rds_ddl_lock_wait_timeout;
+@@session.rds_ddl_lock_wait_timeout
+10
+# Expect to be default 50
+SELECT @@session.innodb_lock_wait_timeout;
+@@session.innodb_lock_wait_timeout
+50
+#
+# teardown
+#
+DROP TABLE grade, stu;
+SET GLOBAL lock_wait_timeout = 31536000;
+SET GLOBAL rds_ddl_lock_wait_timeout = 31536000;

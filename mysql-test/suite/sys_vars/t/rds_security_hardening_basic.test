@@ -1,0 +1,43 @@
+SET @saved_rds_security_hardening = @@global.rds_security_hardening;
+ 
+--echo # Test the default value
+set @@global.rds_security_hardening=default;
+select @@global.rds_security_hardening;
+ 
+--error ER_INCORRECT_GLOBAL_LOCAL_VAR
+select @@session.rds_security_hardening;
+ 
+show global variables like 'rds_security_hardening';
+select * from performance_schema.global_variables where variable_name='rds_security_hardening';
+ 
+--echo # show that it's writable
+set global rds_security_hardening = "use_load_file=on";
+select @@global.rds_security_hardening;
+
+set global rds_security_hardening = "use_load_file=off";
+select @@global.rds_security_hardening;
+
+set global rds_security_hardening = default;
+select @@global.rds_security_hardening;
+
+set global rds_security_hardening='use_load_file=on';
+set global rds_security_hardening='use_load_file=default';
+select @@global.rds_security_hardening;
+
+set global rds_security_hardening='use_load_file=on';
+set global rds_security_hardening='default';
+select @@global.rds_security_hardening;
+
+set global rds_security_hardening='use_load_file=on';
+set global rds_security_hardening=default;
+select @@global.rds_security_hardening;
+ 
+--echo # incorrect values
+--error ER_WRONG_VALUE_FOR_VAR
+set global rds_security_hardening=on;
+--error ER_WRONG_VALUE_FOR_VAR
+set global rds_security_hardening=off;
+--error ER_WRONG_VALUE_FOR_VAR
+set global rds_security_hardening="foo";
+ 
+SET GLOBAL rds_security_hardening = @saved_rds_security_hardening;

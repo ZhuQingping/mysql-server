@@ -1,0 +1,70 @@
+include/master-slave.inc
+Warnings:
+Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
+[connection master]
+create table t0(id int);
+include/sync_slave_sql_with_master.inc
+# Connect to salve
+[connection slave]
+set @saved_read_only = @@read_only;
+set @saved_pq_master_enable = @@pq_master_enable;
+set global read_only = ON;
+set global pq_master_enable=on;
+set session force_parallel_execute = on;
+explain select * from t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t0)
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`id` AS `id` from `test`.`t0`
+explain select /*+ PQ() */ * from t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t0)
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select /*+ PQ(@`select#1`) */ `test`.`t0`.`id` AS `id` from `test`.`t0`
+set session force_parallel_execute = off;
+explain select * from t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`id` AS `id` from `test`.`t0`
+explain select /*+ PQ() */ * from t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t0)
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select /*+ PQ(@`select#1`) */ `test`.`t0`.`id` AS `id` from `test`.`t0`
+set global pq_master_enable=off;
+set session force_parallel_execute = on;
+explain select * from t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t0)
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`id` AS `id` from `test`.`t0`
+explain select /*+ PQ() */ * from t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t0)
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select /*+ PQ(@`select#1`) */ `test`.`t0`.`id` AS `id` from `test`.`t0`
+set session force_parallel_execute = off;
+explain select * from t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`id` AS `id` from `test`.`t0`
+explain select /*+ PQ() */ * from t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t0)
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select /*+ PQ(@`select#1`) */ `test`.`t0`.`id` AS `id` from `test`.`t0`
+set global pq_master_enable = @saved_pq_master_enable;
+set global read_only = @saved_read_only;
+# Connect to master
+[connection master]
+drop table t0;
+include/rpl_end.inc

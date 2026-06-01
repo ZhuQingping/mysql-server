@@ -1,0 +1,85 @@
+--source include/have_binlog_format_row.inc
+--source include/master-slave.inc
+source include/have_debug.inc;
+source include/have_debug_sync.inc;
+
+# ==== Purpose ====
+#
+# Verify that DDL and DML relaylog replaying can be blocked by 'lock binlog 
+# for backup' which executed on binlog based slave.
+#
+#
+# ==== References ==== 
+#
+# US2024051401016 LOCK BINLOG FOR BACKUP and UNLOCK BINLOCK
+#
+
+--echo #
+--echo # DDL relaylog replaying can be blocked by 'lock binlog for backup' on slave
+--echo #
+--echo # LOCK BINLOG FOR BACKUP on the slave
+--source include/rpl_connection_slave.inc
+LOCK BINLOG FOR BACKUP;
+
+--echo # Execute DDL on the master
+--source include/rpl_connection_master.inc 
+CREATE TABLE t1 (c1 INT) ENGINE=InnoDB;
+
+--connection slave
+--sleep 3
+--echo # Expect that DDL relaylog replaying is waiting for binlog Lock, so count(*)=1 is true.
+SELECT count(*)=1 FROM information_schema.processlist where STATE = 'Waiting for binlog lock';
+UNLOCK BINLOG;
+--sleep 1
+
+--echo # Expect that DDL relaylog replaying finished, so count(*)=0 is true.
+SELECT count(*)=0 FROM information_schema.processlist where STATE = 'Waiting for binlog lock';
+
+--echo #--------------------------------------------------------------------
+--echo # DML relaylog replaying can be blocked by 'lock binlog for backup' on slave
+--echo #
+--echo # LOCK BINLOG FOR BACKUP on the slave
+--connection slave
+LOCK BINLOG FOR BACKUP;
+
+--echo # Execute DML on the master
+--connection master
+INSERT INTO t1 values(1);
+
+--connection slave
+--sleep 3
+--echo # Expect that DML relaylog replaying is waiting for binlog Lock, so count(*)=1 is true.
+SELECT count(*)=1 FROM information_schema.processlist where STATE = 'Waiting for binlog lock';
+UNLOCK BINLOG;
+--sleep 1
+
+--echo # Expect that DML relaylog replaying finished, so count(*)=0 is true.
+SELECT count(*)=0 FROM information_schema.processlist where STATE = 'Waiting for binlog lock';
+
+--echo # --------------------------------------------------------------------
+--echo # SHOW SLAVE STATUS can't be blocked by 'lock binlog for backup' on slave.
+--echo #
+--echo # LOCK BINLOG FOR BACKUP on the slave
+--connection slave
+LOCK BINLOG FOR BACKUP;
+
+--echo # Execute SHOW SLAVE STATUS on the slave1
+--source include/rpl_connection_slave1.inc
+--disable_result_log
+SHOW SLAVE STATUS;
+--enable_result_log
+
+--connection slave
+--sleep 3
+--echo # Expect that no thread is waiting for binlog Lock, so count(*)=0 is true.
+SELECT count(*)=0 FROM information_schema.processlist where STATE = 'Waiting for binlog lock';
+UNLOCK BINLOG;
+
+--echo #
+--echo # Cleanup
+--echo #
+--source include/rpl_connection_master.inc
+DROP TABLE t1;
+# Make rpl_end.inc to verify GTID_EXECUTED
+--let $use_gtids= 1
+--source include/rpl_end.inc

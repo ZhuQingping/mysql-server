@@ -1,0 +1,55 @@
+set @saved_rds_recycle_bin_mode = @@GLOBAL.rds_recycle_bin_mode;
+set global rds_recycle_bin_mode = ON;
+create database sbtest1;
+create database sbtest2;
+create table sbtest1.t1(id int);
+create table sbtest2.t2(id int);
+create table sbtest1.another_t1(uid int, name varchar(255));
+create user 'test1'@'localhost' identified by '123456';
+create user 'test2'@'localhost' identified by '123456';
+create user 'my_root'@'localhost' identified by '123456';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, SHUTDOWN, PROCESS, FILE, REFERENCES, INDEX, ALTER, SHOW DATABASES,
+CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER,
+CREATE TABLESPACE, CREATE ROLE, DROP ROLE ON *.* TO 'my_root'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP ON sbtest1.* TO 'test1'@'localhost';
+GRANT SHOW DATABASES ON *.* TO 'test1'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP ON __recyclebin__.* TO 'test1'@'localhost';
+GRANT SHOW DATABASES ON *.* TO 'test2'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP ON __recyclebin__.* TO 'test2'@'localhost';
+# use conn1 represent my_root, conn2 represent test1, conn3 represent test2 throughout recycbin suite
+# drop and purge table in the test file, prepare.inc and cleanup.inc only deal with db and user;
+#
+# prepare the conn
+#
+#
+# Case 1: check the invalid input parameter for dbms_recyclebin.purge_table()
+#
+ERROR 42000: Incorrect number of arguments for PROCEDURE dbms_recyclebin.purge_table; expected 1, got 0
+ERROR HY000: Incorrect parameters (pos is 1) to native procedure 'dbms_recyclebin.purge_table.
+ERROR 42S22: Unknown column 'fdbfbr' in 'field list'
+ERROR HY000: Incorrect parameters (pos is 1) to native procedure 'dbms_recyclebin.purge_table.
+#
+# Case 2: users can't purge tables which they don't have access to
+#
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	sbtest2	t2	#	#
+# let user test1 purge sbtest2.t2, expected fail
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+#
+# Case 3: rds_recycle_bin_mode is off
+#
+ERROR HY000: Cannot execute recyclebin command, the recycle bin switch is OFF or rds_recycle_bin_skip_acl_check is ON.
+ERROR HY000: Cannot execute recyclebin command, the recycle bin switch is OFF or rds_recycle_bin_skip_acl_check is ON.
+ERROR HY000: Cannot execute recyclebin command, the recycle bin switch is OFF or rds_recycle_bin_skip_acl_check is ON.
+ERROR HY000: Cannot execute recyclebin command, the recycle bin switch is OFF or rds_recycle_bin_skip_acl_check is ON.
+#
+# Case 4: lock mode
+#
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+ERROR HY000: Recycle table failed : unable to restore locked table.
+ERROR HY000: Recycle table failed : unable to purge locked table.
+ERROR HY000: Recycle table failed : unable to restore locked table.
+ERROR HY000: Recycle table failed : recycle schema didn't exist.
+ERROR HY000: Recycle table failed : recycle schema didn't exist.
+ERROR HY000: Recycle table failed : recycle schema didn't exist.

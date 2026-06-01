@@ -1,0 +1,314 @@
+# ==== Purpose ====
+# 
+# Test collation-related functions, including in operator, like operation, ordering, string functions, subquery etc.
+# 
+# ==== Implementation ====
+# 
+
+
+# non-binary collations comparisonin operator functionality.
+
+create table tbl1 (cp integer primary key, uc varchar(5) character set utf8mb4 collate utf8mb4_zh_0900_as_cs, name varchar(256), category varchar(2));
+insert into tbl1 values
+    (0x1F12A, _utf32 0x1F12A, 'TORTOISE SHELL BRACKETED LATIN CAPITAL LETTER S', 'So');
+create table tbl2 (cp integer primary key, uc varchar(5) character set utf8mb4 collate utf8mb4_ja_0900_as_cs, name varchar(256), category varchar(2));
+insert into tbl2 values
+    (0x1F243, _utf32 0x1F243, 'TORTOISE SHELL BRACKETED CJK UNIFIED IDEOGRAPH-5B89', 'So');
+
+## Actually, this error is raised by MySQL.
+--error ER_CANT_AGGREGATE_2COLLATIONS
+select t1.cp, t1.name, t2.cp, t2.name from tbl1 as t1, tbl2 as t2 where t1.uc > t2.uc;
+ 
+## Specify collation
+select t1.cp, t1.name, t2.cp, t2.name from tbl1 as t1, tbl2 as t2 where t1.uc > t2.uc collate utf8mb4_ja_0900_as_cs;
+select t1.cp, t1.name, t2.cp, t2.name from tbl1 as t1, tbl2 as t2 where t1.uc collate utf8mb4_ja_0900_as_cs > t2.uc;
+select t1.cp, t1.name, t2.cp, t2.name from tbl1 as t1, tbl2 as t2 where t1.uc > t2.uc collate utf8mb4_zh_0900_as_cs;
+select t1.cp, t1.name, t2.cp, t2.name from tbl1 as t1, tbl2 as t2 where t1.uc collate utf8mb4_zh_0900_as_cs > t2.uc;
+ 
+## Specify same collation
+select t1.cp, t1.name, t2.cp, t2.name from tbl1 as t1, tbl2 as t2 where t1.uc collate utf8mb4_ja_0900_as_cs > t2.uc collate utf8mb4_ja_0900_as_cs;
+select t1.cp, t1.name, t2.cp, t2.name from tbl1 as t1, tbl2 as t2 where t1.uc collate utf8mb4_zh_0900_as_cs > t2.uc collate utf8mb4_zh_0900_as_cs;
+ 
+--error ER_CANT_AGGREGATE_2COLLATIONS
+select t1.cp, t1.name, t2.cp, t2.name from tbl1 as t1, tbl2 as t2 where t1.uc collate utf8mb4_zh_0900_as_cs > t2.uc collate utf8mb4_ja_0900_as_cs;
+--error ER_CANT_AGGREGATE_2COLLATIONS
+select t1.cp, t1.name, t2.cp, t2.name from tbl1 as t1, tbl2 as t2 where t1.uc collate utf8mb4_ja_0900_as_cs > t2.uc collate utf8mb4_zh_0900_as_cs;
+
+drop table tbl1;
+drop table tbl2;
+
+# implicit collation with different charsets
+
+create table tbl1 (cp integer primary key, uc varchar(5) collate utf8_latvian_ci);
+insert into tbl1 values (1, 'a ');
+create table tbl2 (cp integer primary key, uc varchar(5) collate utf8mb4_ja_0900_as_cs);
+insert into tbl2 values (2, 'a');
+
+select * from tbl1, tbl2 where tbl1.uc = tbl2.uc;
+select 'a' = uc from tbl1;
+select 'a' collate utf8mb4_ja_0900_as_cs = uc from tbl1;
+
+--error ER_COLLATION_CHARSET_MISMATCH
+select 'a' = uc collate utf8mb4_ja_0900_as_cs from tbl1;
+--error ER_COLLATION_CHARSET_MISMATCH
+select 'a' = uc collate utf8_latvian_ci from tbl2;
+
+drop table tbl1;
+drop table tbl2;
+
+
+
+# binary and non-binary collation
+
+create table tbl1 (cp integer primary key, uc varchar(5) character set utf8mb4 collate utf8mb4_0900_bin, name varchar(256), category varchar(2));
+insert into tbl1 values
+    (0x1F12A, _utf32 0x1F12A, 'TORTOISE SHELL BRACKETED LATIN CAPITAL LETTER S', 'So');
+create table tbl2 (cp integer primary key, uc varchar(5) character set utf8mb4 collate utf8mb4_ja_0900_as_cs, name varchar(256), category varchar(2));
+insert into tbl2 values
+    (0x1F243, _utf32 0x1F243, 'TORTOISE SHELL BRACKETED CJK UNIFIED IDEOGRAPH-5B89', 'So');
+
+## Use default collation, binary will be used.
+select t1.cp, t1.name, t2.cp, t2.name from tbl1 as t1, tbl2 as t2 where t1.uc > t2.uc;
+
+## Specify collation explicitly
+select t1.cp, t1.name, t2.cp, t2.name from tbl1 as t1, tbl2 as t2 where t1.uc collate utf8mb4_0900_bin > t2.uc;
+select t1.cp, t1.name, t2.cp, t2.name from tbl1 as t1, tbl2 as t2 where t1.uc > t2.uc collate utf8mb4_0900_bin;
+select t1.cp, t1.name, t2.cp, t2.name from tbl1 as t1, tbl2 as t2 where t1.uc collate utf8mb4_ja_0900_as_cs > t2.uc;
+select t1.cp, t1.name, t2.cp, t2.name from tbl1 as t1, tbl2 as t2 where t1.uc > t2.uc collate utf8mb4_ja_0900_as_cs;
+select t1.cp, t1.name, t2.cp, t2.name from tbl1 as t1, tbl2 as t2 where t1.uc collate utf8mb4_zh_0900_as_cs > t2.uc;
+select t1.cp, t1.name, t2.cp, t2.name from tbl1 as t1, tbl2 as t2 where t1.uc > t2.uc collate utf8mb4_zh_0900_as_cs;
+
+## Specify different collations explicitly, this error is raised by MySQL.
+--error ER_CANT_AGGREGATE_2COLLATIONS
+select t1.cp, t1.name, t2.cp, t2.name from tbl1 as t1, tbl2 as t2 where t1.uc collate utf8mb4_ja_0900_as_cs > t2.uc collate utf8mb4_0900_bin;
+--error ER_CANT_AGGREGATE_2COLLATIONS
+select t1.cp, t1.name, t2.cp, t2.name from tbl1 as t1, tbl2 as t2 where t1.uc collate utf8mb4_0900_bin > t2.uc collate utf8mb4_ja_0900_as_cs;
+
+drop table tbl1;
+drop table tbl2;
+
+
+# Table 1 comparison
+
+create table tbl1 (cp integer primary key, uc varchar(5) character set utf8mb4, name varchar(256), category varchar(2));
+insert into tbl1 values
+    (0x1F12A, _utf32 0x1F12A, 'TORTOISE SHELL BRACKETED LATIN CAPITAL LETTER S', 'So'),
+    (0x1F243, _utf32 0x1F243, 'TORTOISE SHELL BRACKETED CJK UNIFIED IDEOGRAPH-5B89', 'So');
+
+## ORDER BY utf8mb4_zh_0900_as_cs
+select cp, name from tbl1 order by uc collate utf8mb4_zh_0900_as_cs;
+
+## ORDER BY utf8mb4_ja_0900_as_cs
+select cp, name from tbl1 order by uc collate utf8mb4_ja_0900_as_cs;
+
+## AS utf8mb4_zh_0900_as_cs
+select t2.cp, t2.name from (select cp as cp, name as name, uc collate utf8mb4_zh_0900_as_cs as col1 from tbl1 order by col1) t2;
+
+## AS utf8mb4_ja_0900_as_cs
+select t2.cp, t2.name from (select cp as cp, name as name, uc collate utf8mb4_ja_0900_as_cs as col1 from tbl1 order by col1) t2;
+
+## BETWEEN utf8mb4_zh_0900_as_cs
+select cp, name from tbl1 where uc collate utf8mb4_zh_0900_as_cs between _utf32 0x321B and _utf32 0x1F248;
+
+## BETWEEN utf8mb4_ja_0900_as_cs
+select cp, name from tbl1 where uc collate utf8mb4_ja_0900_as_cs between _utf32 0x321B and _utf32 0x1F248;
+
+## CASE utf8mb4_zh_0900_as_cs
+select t2.cp, t2.name from (select CASE WHEN uc = _utf32 0x1F12A THEN uc collate utf8mb4_zh_0900_as_cs ELSE uc collate utf8mb4_zh_0900_as_cs END AS col1 from tbl1) t1, tbl1 as t2 where t1.col1 > t2.uc;
+
+## CASE utf8mb4_ja_0900_as_cs
+select t2.cp, t2.name from (select CASE WHEN uc = _utf32 0x1F12A THEN uc collate utf8mb4_ja_0900_as_cs ELSE uc collate utf8mb4_ja_0900_as_cs END AS col1 from tbl1) t1, tbl1 as t2 where t1.col1 > t2.uc;
+
+
+# Table 2 comparison
+
+create table tbl2 (pk int primary key, col varchar(20) collate utf8mb4_ja_0900_as_cs);
+insert into tbl2 values (1, 'a'), (2, 'A'), (3, 'a '), (4, 'A ');
+
+# Compare with case sensitive collation
+select * from tbl2 where col = 'a';
+
+# Compare with case insensitive collation
+select * from tbl2 where col = 'a' collate utf8mb4_eo_0900_ai_ci;
+
+# Compare with pad space collation
+select * from tbl2 where col = 'a' collate utf8mb4_bin;
+
+# Compare with no pad collation
+select * from tbl2 where col = 'a' collate utf8mb4_0900_bin;
+
+
+# Table 3 utf8 only has pad space and case insensitive collations
+
+create table tbl3 (pk int primary key, col varchar(20) charset utf8);
+insert into tbl3 values (1, 'a'), (2, 'A'), (3, 'a '), (4, 'A ');
+
+select * from tbl3 where col = 'a';
+select * from tbl3 where col collate utf8_bin = 'a';
+select * from tbl3 where convert(col using utf8mb4) = 'a';
+select distinct col from tbl3;
+
+--sorted_result
+select distinct col collate utf8_bin from tbl3;
+--sorted_result
+select distinct convert(col using utf8mb4) from tbl3;
+
+drop table tbl1, tbl2, tbl3;
+
+create table tbl (pk int primary key, col varchar(4) charset utf8);
+insert into tbl values (1, 'A'), (2, 'A   ');
+
+select length(col) from tbl where col = 'A';
+select length(col) from tbl where col = 'A            ';
+select length(col) from tbl where col = 'A           C';
+
+drop table tbl;
+
+
+# compare with different coercibility
+create table tbl (a int primary key, b varchar(20) collate utf8_persian_ci);
+insert into tbl values (1, 'a'), (2, 'A');
+create table tbl2 (a int primary key, b varchar(20) collate utf8mb4_sl_0900_as_cs);
+insert into tbl2 values (1, 'a'), (2, 'A');
+
+
+set @default_collation_connection = @@collation_connection;
+
+set collation_connection = utf8mb4_cs_0900_ai_ci;
+select * from tbl where b = 'a';
+select * from tbl2 where b = 'a';
+select * from tbl where b collate utf8_persian_ci = 'a ';
+select * from tbl2 where b collate utf8mb4_sl_0900_as_cs = 'a';
+
+set collation_connection = utf8mb4_estonian_ci;
+select * from tbl where b = 'a ';
+select * from tbl2 where b = 'a';
+select * from tbl where b collate utf8_persian_ci = 'a ';
+select * from tbl2 where b collate utf8mb4_sl_0900_as_cs = 'a';
+
+set collation_connection = utf8_persian_ci;
+select * from tbl where b = 'a';
+select * from tbl2 where b = 'a';
+select * from tbl where b collate utf8_persian_ci = 'a ';
+select * from tbl2 where b collate utf8mb4_sl_0900_as_cs = 'a';
+
+# Cast scenario
+set collation_connection = utf8mb4_cs_0900_ai_ci;
+select '1 ' = cast(1 as char(10)) from tbl;
+
+set @@collation_connection =  @default_collation_connection;
+DROP TABLE tbl, tbl2;
+
+
+# empty strings for PAD SPACE
+create table tbl (a int primary key);
+insert into tbl values (1);
+
+select "" = " " collate utf8mb4_general_ci from tbl;
+select "" = " " collate utf8mb4_bin from tbl;
+select "" = " " collate utf8mb4_persian_ci from tbl;
+
+select "    " = "  " collate utf8mb4_general_ci from tbl;
+select "    " = "  " collate utf8mb4_bin from tbl;
+select "    " = "  " collate utf8mb4_persian_ci from tbl;
+
+drop table tbl;
+
+
+# LONGTEXT with PAD or NO PAD collations
+# 
+# create table tbl (a int primary key, b LONGTEXT);
+# insert into tbl values (1, concat("a", repeat(" ", 1000000)));
+# 
+# select b = "a" collate utf8mb4_general_ci from tbl;
+# select b = "a" collate utf8mb4_bin from tbl;
+# select b = "a" collate utf8mb4_persian_ci from tbl;
+# select b = "a" collate utf8mb4_hr_0900_as_cs from tbl;
+# 
+# select b = "a  " collate utf8mb4_general_ci from tbl;
+# select b = "a  " collate utf8mb4_bin from tbl;
+# select b = "a  " collate utf8mb4_persian_ci from tbl;
+# select b = "a  " collate utf8mb4_hr_0900_as_cs from tbl;
+# 
+# select b = "  " collate utf8mb4_general_ci from tbl;
+# select b = "  " collate utf8mb4_bin from tbl;
+# select b = "  " collate utf8mb4_persian_ci from tbl;
+# select b = "  " collate utf8mb4_hr_0900_as_cs from tbl;
+# 
+# drop table tbl;
+
+
+# Reject long string with PAD SPACE collation
+
+# create table tbl (a int primary key, tt TINYTEXT, t TEXT, mt MEDIUMTEXT collate utf8mb4_general_ci, lt LONGTEXT, tv VARCHAR(10), v VARCHAR(1000) collate utf8mb4_general_ci);
+# insert into tbl values (1, "a", "a", "a", "a", "a", "a");
+# 
+# set @default_max_sort_length = @@max_sort_length;
+# set @@max_sort_length = 1024;
+# 
+# select * from tbl order by tv collate utf8mb4_general_ci;
+# select * from tbl order by v collate utf8mb4_general_ci;
+# select * from tbl order by tt collate utf8mb4_general_ci;
+# 
+# set @@max_sort_length = @default_max_sort_length;
+# drop table tbl;
+
+
+# max_sort_length is used only for ORDER BY
+
+# set @default_max_sort_length = @@max_sort_length;
+# set @@max_sort_length = 1024;
+# 
+# create table tbl (a longtext collate utf8mb4_general_ci, b int primary key);
+# insert into tbl values (concat(repeat('a', 10000), 'b'), 1), (concat(repeat('a', 10000), 'c'), 2), (concat(repeat('a', 10000), 'a'), 3), (concat(repeat('a', 10000), '0'), 4);
+# 
+# --sorted_result
+# select substring(a, 9999, 10) from tbl group by a;
+# select count(distinct(a)) from tbl;
+# 
+# set @@max_sort_length = @default_max_sort_length;
+# drop table tbl;
+
+# Like function
+
+create table tbl (a int primary key, b varchar(20) collate utf8mb4_eo_0900_as_cs, c varchar(20) collate utf8_czech_ci);
+insert into tbl values (1, 'abc', 'ab%');
+
+
+select b like c from tbl;
+select 'abc' like 'ab%' escape 'x' from tbl;
+select 'abc' like 'ab%' escape 'x' collate utf8mb4_sl_0900_ai_ci from tbl;
+
+drop table tbl;
+
+# Time compared with string literal: issue #2984
+create table tbl1 (a int primary key, b time);
+insert into tbl1 values (1, '04:59:59.000000');
+create table tbl2 (a int primary key, b varchar(30));
+insert into tbl2 values (1, '04:59:59.000000');
+
+
+select * from tbl1 where b = '04:59:59.000000';
+select * from tbl1 where b = '04:59:59.000000' collate utf8mb4_0900_bin;
+select * from tbl1 where b between '04:59:59.000000' and '05:59:59.000000';
+select * from tbl1 where b in ('04:59:59.000000', '05:59:59.000000');
+select * from tbl1 where b not in ('04:59:59.000000', '05:59:59.000000');
+select * from tbl1, tbl2 where tbl1.b = tbl2.b;
+select * from tbl1, tbl2 where tbl1.b = tbl2.b collate utf8mb4_0900_bin;
+
+select * from tbl1 where b = '04:59:59.0000xxx';
+
+drop table tbl1, tbl2;
+
+create table u(pk int primary key, a time);
+insert into u values (1,'09:09:59');
+
+select * from  u;
+select * from  u where a='09:09:59.000000';
+select * from  u where a in('09:09:59.000000');
+select * from  u where a in('09:09:59.000000','23:23:59.000000');
+select * from  u where a not in('09:09:59.000000','23:23:59.000000');
+
+drop table u;
+
+

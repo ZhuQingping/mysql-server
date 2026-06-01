@@ -1,0 +1,53 @@
+create table t0(id int);
+set @saved_pq_master_enable = @@pq_master_enable;
+set global pq_master_enable=on;
+set session force_parallel_execute = on;
+explain select * from t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t0)
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`id` AS `id` from `test`.`t0`
+explain select /*+ PQ() */ * from t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t0)
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select /*+ PQ(@`select#1`) */ `test`.`t0`.`id` AS `id` from `test`.`t0`
+set session force_parallel_execute = off;
+explain select * from t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`id` AS `id` from `test`.`t0`
+explain select /*+ PQ() */ * from t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Parallel execute (4 workers, test.t0)
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select /*+ PQ(@`select#1`) */ `test`.`t0`.`id` AS `id` from `test`.`t0`
+set global pq_master_enable=off;
+set session force_parallel_execute = on;
+explain select * from t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`id` AS `id` from `test`.`t0`
+explain select /*+ PQ() */ * from t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select /*+ PQ(@`select#1`) */ `test`.`t0`.`id` AS `id` from `test`.`t0`
+set session force_parallel_execute = off;
+explain select * from t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t0`.`id` AS `id` from `test`.`t0`
+explain select /*+ PQ() */ * from t0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t0	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select /*+ PQ(@`select#1`) */ `test`.`t0`.`id` AS `id` from `test`.`t0`
+drop table t0;
+set global pq_master_enable = @saved_pq_master_enable;

@@ -1,0 +1,205 @@
+--source include/have_only_dstore.inc
+
+--echo Test 1. Test for dstore_rollback_on_timeout = 0 (default)
+select @@dstore_rollback_on_timeout;
+let $initial_timeout=`select @@dstore_lock_wait_timeout`;
+set global dstore_lock_wait_timeout=10;
+
+--echo Prepare data
+CREATE TABLE `t1` (
+  `id` int NOT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+insert into t1 values(1),(2);
+
+connect (a,localhost,root,,);
+connect (b,localhost,root,,);
+
+connection a;
+select @@dstore_lock_wait_timeout;
+
+BEGIN;
+UPDATE t1 SET id = 3 WHERE id = 1;
+
+connection b;
+select @@dstore_lock_wait_timeout;
+
+BEGIN;
+UPDATE t1 SET id = 4 WHERE id = 2;
+
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t1 set id = 3 WHERE id = 1;
+COMMIT;
+
+--echo We can find that the data with id = 2 is not rolled back.
+connection default;
+SELECT * FROM t1;
+
+disconnect a;
+disconnect b;
+
+DROP TABLE t1;
+
+--echo kill connection finish
+connection default;
+-- source include/kill_mysqld.inc
+
+--echo Test 2. Test for dstore_rollback_on_timeout = 1
+
+
+let $restart_parameters = restart: --dstore_rollback_on_timeout=1;
+-- source include/start_mysqld.inc
+select @@dstore_rollback_on_timeout;
+set global dstore_lock_wait_timeout=10;
+
+--echo Prepare data
+CREATE TABLE `t1` (
+  `id` int NOT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+insert into t1 values(1),(2);
+
+connect (a,localhost,root,,);
+connect (b,localhost,root,,);
+
+connection a;
+select @@dstore_lock_wait_timeout;
+
+BEGIN;
+UPDATE t1 SET id = 3 WHERE id = 1;
+
+connection b;
+select @@dstore_lock_wait_timeout;
+
+BEGIN;
+UPDATE t1 SET id = 4 WHERE id = 2;
+
+--error ER_LOCK_WAIT_TIMEOUT
+UPDATE t1 set id = 3 WHERE id = 1;
+COMMIT;
+
+--echo We can find that the data with id = 2 is rolled back.
+SELECT * FROM t1;
+
+--echo Clean environment
+connection default;
+
+disconnect a;
+disconnect b;
+
+DROP TABLE t1;
+
+# BUG2025072817895 The ER_LOCK_WAIT_TIMEOUT error code is not handled correctly. 
+connect (conn1,localhost,root,,);
+connect (conn2,localhost,root,,);
+
+connection default;
+
+set global dstore_lock_wait_timeout=1;
+select @@dstore_lock_wait_timeout;
+
+CREATE TABLE tab_lock_timeout_001(
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  tiny_int_col TINYINT DEFAULT NULL,
+  small_int_col SMALLINT DEFAULT NULL,
+  medium_int_col MEDIUMINT DEFAULT NULL,
+  int_col INT DEFAULT NULL,
+  big_int_col BIGINT DEFAULT NULL,
+  float_col FLOAT DEFAULT NULL,
+  double_col DOUBLE DEFAULT NULL,
+  decimal_col DECIMAL(10,2) DEFAULT NULL,
+  bit_col BIT(8) DEFAULT NULL,
+  boolean_col BOOLEAN DEFAULT NULL,
+  char_col CHAR(10) DEFAULT NULL,
+  varchar_col VARCHAR(100) DEFAULT NULL,
+  varchar_col_c1 VARCHAR(16) DEFAULT NULL,
+  varchar_col_c2 VARCHAR(32) DEFAULT NULL,
+  varchar_col_c3 VARCHAR(64) DEFAULT NULL,
+  varchar_col_c4 VARCHAR(64) DEFAULT NULL,
+  binary_col BINARY(20) DEFAULT NULL,
+  varbinary_col VARBINARY(100) DEFAULT NULL,
+  tinyblob_col TINYBLOB,
+  blob_col BLOB,
+  mediumblob_col BLOB,
+  longblob_col BLOB,
+  tinytext_col TINYTEXT,
+  text_col TEXT,
+  mediumtext_col TEXT,
+  longtext_col TEXT,
+  enum_col ENUM('Red','Green','Blue') DEFAULT NULL,
+  set_col SET('Music','Sports','Movies') DEFAULT NULL,
+  date_col DATE DEFAULT NULL,
+  time_col TIME DEFAULT NULL,
+  datetime_col DATETIME DEFAULT NULL,
+  timestamp_col TIMESTAMP NULL DEFAULT NULL,
+  year_col YEAR DEFAULT NULL,
+  json_col JSON DEFAULT NULL,
+  INDEX idx_int_col (int_col),
+  INDEX idx_varchar_prefix (varchar_col(10)),
+  INDEX idx_combo (int_col, date_col),
+  INDEX idx_desc_int (int_col DESC),
+  INDEX inv_idx_float (float_col) INVISIBLE,
+  KEY ndx_tinyint_col (tiny_int_col),
+  KEY ndx_bool_col (boolean_col),
+  KEY ndx_smallint_col (small_int_col),
+  KEY ndx_mediumint_col (medium_int_col),
+  KEY ndx_bigint_col (big_int_col),
+  KEY ndx_decimal_col (decimal_col),
+  KEY ndx_double_col (double_col),
+  KEY ndx_datetime_col (datetime_col),
+  KEY ndx_timestamp_col (timestamp_col),
+  KEY ndx_time_col (time_col),
+  KEY ndx_year_col (year_col),
+  KEY ndx_char_col (char_col(4)),
+  KEY ndx_binary_col (binary_col),
+  KEY ndx_enum_col (enum_col),
+  KEY ndx_set_col (set_col)
+);
+
+ALTER TABLE tab_lock_timeout_001 ADD UNIQUE INDEX uniq_varchar_c1 (varchar_col_c1);
+
+call mtr.add_suppression("insert dstore index tuple fail.*");
+connection conn1;
+START TRANSACTION;
+INSERT INTO tab_lock_timeout_001 (varchar_col_c1) VALUES ('unique_value');
+
+connection conn2;
+START TRANSACTION;
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO tab_lock_timeout_001 (varchar_col_c1) VALUES ('unique_value');
+ROLLBACK;
+
+connection conn1;
+ROLLBACK;
+
+connection default;
+DROP TABLE tab_lock_timeout_001;
+
+CREATE TABLE `tu1` (
+  `c1` int NOT NULL,
+  `c2` int DEFAULT NULL,
+  PRIMARY KEY (`c1`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+connection conn1;
+BEGIN;
+INSERT INTO tu1 VALUES (1,100) ON DUPLICATE KEY UPDATE c2=200;
+
+connection conn2;
+BEGIN;
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO tu1 VALUES (1,300) ON DUPLICATE KEY UPDATE c2=400;
+ROLLBACK;
+
+connection conn1;
+ROLLBACK;
+
+connection default;
+DROP TABLE tu1;
+
+disconnect conn1;
+disconnect conn2;
+
+eval set global innodb_lock_wait_timeout=$initial_timeout;

@@ -1,0 +1,664 @@
+From 5be8af3c4442f14b187c0d29247ee379254687f9 Mon Sep 17 00:00:00 2001
+From: songliyong <songliyong@contributor>
+
+
+Date: Tue, 18 Mar 2025 10:56:29 +0800
+Subject: [PATCH] USERSTORY - support threadpool cpu bind
+
+1.To prevent threads from being scheduled on different CPUs,
+which can lead to CPU cache invalidation and cross-NUMA
+memory access, threads in each thread group are bound to a single CPU.
+This approach is particularly effective in ARM environments.
+
+The parmaters can be 'nobind' and 'cpubind(1-30,40-70,...)',
+For "nobind, worker threads do not bind to specified cpus.
+And for "cpubind", bind thread groups to cpus by round robin.
+
+To avoid workers from needing to continuously check binding parameters
+during execution, threadpool_cpubind_info is set to read-only,
+and binding occurs only once when a worker starts. So, need restart process
+if you want to set new bind parameters.
+---
+ plugin/threadpool/CMakeLists.txt              |   2 +-
+ .../tests/mtr/threadpool_cpubind.cnf          |   5 +
+ .../tests/mtr/threadpool_cpubind.result       |  13 ++
+ .../tests/mtr/threadpool_cpubind.test         |  10 +
+ plugin/threadpool/threadpool.h                |  28 ++-
+ plugin/threadpool/threadpool_common.cc        |   1 +
+ plugin/threadpool/threadpool_cpubind.cc       | 201 ++++++++++++++++++
+ plugin/threadpool/threadpool_plugin.cc        |  78 +++++--
+ plugin/threadpool/threadpool_unix.cc          |  18 +-
+ 9 files changed, 333 insertions(+), 23 deletions(-)
+ create mode 100644 plugin/threadpool/tests/mtr/threadpool_cpubind.cnf
+ create mode 100644 plugin/threadpool/tests/mtr/threadpool_cpubind.result
+ create mode 100644 plugin/threadpool/tests/mtr/threadpool_cpubind.test
+ create mode 100644 plugin/threadpool/threadpool_cpubind.cc
+
+diff --git a/plugin/threadpool/CMakeLists.txt b/plugin/threadpool/CMakeLists.txt
+index d108f988a74..6b8856bb99b 100644
+--- a/plugin/threadpool/CMakeLists.txt
++++ b/plugin/threadpool/CMakeLists.txt
+@@ -13,7 +13,7 @@
+ #   along with this program; if not, write to the Free Software
+ #   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ 
+-MYSQL_ADD_PLUGIN(threadpool threadpool_common.cc threadpool_unix.cc threadpool_plugin.cc
++MYSQL_ADD_PLUGIN(threadpool threadpool_common.cc threadpool_unix.cc threadpool_plugin.cc threadpool_cpubind.cc
+   DEFAULT STATIC_ONLY MODULE_OUTPUT_NAME "threadpool")
+ 
+   IF(INSTALL_MYSQLTESTDIR)
+diff --git a/plugin/threadpool/tests/mtr/threadpool_cpubind.cnf b/plugin/threadpool/tests/mtr/threadpool_cpubind.cnf
+new file mode 100644
+index 00000000000..a02378d2124
+--- /dev/null
++++ b/plugin/threadpool/tests/mtr/threadpool_cpubind.cnf
+@@ -0,0 +1,5 @@
++[mysqld.1]
++loose-threadpool_enabled = ON
++loose-threadpool_cpubind_info = cpubind:1-4
++[client]
++connect-timeout= 10
+\ No newline at end of file
+diff --git a/plugin/threadpool/tests/mtr/threadpool_cpubind.result b/plugin/threadpool/tests/mtr/threadpool_cpubind.result
+new file mode 100644
+index 00000000000..8d22db02e2d
+--- /dev/null
++++ b/plugin/threadpool/tests/mtr/threadpool_cpubind.result
+@@ -0,0 +1,13 @@
++call mtr.add_suppression("Threadpool could create additional thread to handle queries");
++SET GLOBAL threadpool_enabled = ON;
++SHOW GLOBAL VARIABLES LIKE "threadpool_cpubind_info";
++Variable_name	Value
++threadpool_cpubind_info	cpubind:1-4
++SELECT 1;
++1
++1
++SET GLOBAL threadpool_cpubind_info = "nobind";
++ERROR HY000: Variable 'threadpool_cpubind_info' is a read only variable
++SHOW GLOBAL VARIABLES LIKE "threadpool_cpubind_info";
++Variable_name	Value
++threadpool_cpubind_info	cpubind:1-4
+diff --git a/plugin/threadpool/tests/mtr/threadpool_cpubind.test b/plugin/threadpool/tests/mtr/threadpool_cpubind.test
+new file mode 100644
+index 00000000000..970afad32cb
+--- /dev/null
++++ b/plugin/threadpool/tests/mtr/threadpool_cpubind.test
+@@ -0,0 +1,10 @@
++call mtr.add_suppression("Threadpool could create additional thread to handle queries");
++SET GLOBAL threadpool_enabled = ON;
++SHOW GLOBAL VARIABLES LIKE "threadpool_cpubind_info";
++--connect(con1,localhost,root,,)
++--connection con1
++--send SELECT 1
++--reap
++--error 1238
++SET GLOBAL threadpool_cpubind_info = "nobind";
++SHOW GLOBAL VARIABLES LIKE "threadpool_cpubind_info";
+\ No newline at end of file
+diff --git a/plugin/threadpool/threadpool.h b/plugin/threadpool/threadpool.h
+index c2a1f460dad..b27d5b8cb9c 100644
+--- a/plugin/threadpool/threadpool.h
++++ b/plugin/threadpool/threadpool.h
+@@ -82,6 +82,7 @@ extern bool threadpool_enabled;
+ /** flag for limiting thread oversubscribe*/
+ extern bool threadpool_enable_active_threads_check;
+ extern bool threadpool_running;
++extern char *threadpool_cpubind_info;
+ 
+ extern ulonglong threadpool_cpu_timer;
+ extern TP_atomic_counter threadpool_events_handled_cur;
+@@ -274,7 +275,6 @@ enum worker_creation_reason_t {
+   WORKER_CREATION_REASON_SINGLE_LISTENER,
+   WORKER_CREATION_REASON_ARRAY_SIZE
+ };
+-
+ struct thread_group_counters_t {
+   ulonglong thread_creations;
+   ulonglong thread_creations_by_reason[WORKER_CREATION_REASON_ARRAY_SIZE];
+@@ -314,10 +314,36 @@ struct alignas(512) thread_group_t {
+   ulonglong cpu_watch, cpu_time, wait_watch, wait_time;
+   ulonglong event_count;
+   std::atomic_bool exit_one_worker;
++  int index;
+ };
+ 
+ #define TP_INCREMENT_GROUP_COUNTER(group, var) group->counters.var++;
+ 
+ extern thread_group_t g_all_groups[MAX_THREAD_GROUPS];
+ 
++/** for threadpool cpu bind
++ */
++
++enum class Tp_cpu_bind_mode_t {
++  TP_NOBIND_MODE,
++  TP_CPUBIND_MODE,
++  TP_BIND_INVALID
++};
++
++/**
++parse user passed cpubind parameters, and check
++whether it is valid
++
++@param[in] proposed_value user passed parameters
++
++@return  0 if success, non-zero otherwise
++*/
++extern void set_current_thread_affinity(thread_group_t *thread_group);
++
++/** Bind current thread to cpu
++
++@param[in] thread_group current thread group
++*/
++extern int parse_and_check_cpubind_info(const char *proposed_value);
++
+ #endif /* THREADPOOL_INCLUDED */
+diff --git a/plugin/threadpool/threadpool_common.cc b/plugin/threadpool/threadpool_common.cc
+index d64586a543f..7c4250c01c9 100644
+--- a/plugin/threadpool/threadpool_common.cc
++++ b/plugin/threadpool/threadpool_common.cc
+@@ -48,6 +48,7 @@ bool threadpool_enable_active_threads_check;
+ bool threadpool_running = false;
+ bool threadpool_exact_stats;
+ bool threadpool_dedicated_listener;
++char *threadpool_cpubind_info = nullptr;
+ 
+ /** Stats */
+ TP_STATISTICS g_tp_stats;
+diff --git a/plugin/threadpool/threadpool_cpubind.cc b/plugin/threadpool/threadpool_cpubind.cc
+new file mode 100644
+index 00000000000..629ac94859e
+--- /dev/null
++++ b/plugin/threadpool/threadpool_cpubind.cc
+@@ -0,0 +1,201 @@
++/* Copyright (C) 2012 Monty Program Ab
++   Copyright (c) 2019, 2025, Huawei and/or its affiliates. All rights reserved.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; version 2 of the License.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301,
++   USA */
++
++#include <regex>
++#include <sstream>
++#include <stdexcept>
++#include <string>
++#include <vector>
++
++#include "mysql/components/services/log_builtins.h"
++#include "mysqld_error.h"
++#include "threadpool.h"
++
++#define TP_NO_BIND "nobind"
++#define TP_CPU_BIND_PREFIX "cpubind"
++struct Cpu_range_t {
++  int start;
++  int end;
++};
++
++static std::vector<int> g_available_cpus;
++
++/** We bind all the threads in a group to a specified cpu,
++So get the cpu id from the group index
++
++@param[in] index  index of the group in the group array.
++
++@return  cpu id
++*/
++static int get_cpuid_by_group_index(int index) {
++  if (g_available_cpus.empty()) {
++    return -1;
++  }
++  return g_available_cpus[index % g_available_cpus.size()];
++}
++
++/** get cpu list from cpubind info
++
++@param[in] cpubind the user configed cpulist in string
++
++@return  vector of cpu ids
++*/
++static std::vector<Cpu_range_t> parse_cpu_bind(const std::string &cpubind) {
++  std::vector<Cpu_range_t> ranges;
++  // Define a regex pattern to match the entire string and extract ranges
++  std::regex pattern(
++      R"(^cpubind\s*:\s*((\d+\s*-\s*\d+)(\s*,\s*\d+\s*-\s*\d+)*)$)");
++  std::smatch match;
++
++  if (std::regex_match(cpubind, match, pattern)) {
++    // Extract the content after the colon
++    std::string rangesStr = match[1].str();
++    // Split the ranges by commas
++    std::regex rangePattern(R"(\s*(\d+)\s*-\s*(\d+)\s*)");
++    auto words_begin =
++        std::sregex_iterator(rangesStr.begin(), rangesStr.end(), rangePattern);
++    auto words_end = std::sregex_iterator();
++
++    for (std::sregex_iterator i = words_begin; i != words_end; ++i) {
++      std::smatch match = *i;
++      if (match.size() == 3) {  // Match should have two groups: start and end
++        try {
++          int start = std::stoi(match.str(1));
++          int end = std::stoi(match.str(2));
++          ranges.push_back({start, end});
++        } catch (const std::invalid_argument &e) {
++          throw std::invalid_argument(
++              "Invalid number format in cpubind string.");
++        } catch (const std::out_of_range &e) {
++          throw std::out_of_range("Number out of range in cpubind string.");
++        }
++      }
++    }
++  } else {
++    throw std::invalid_argument(
++        "Input string does not match the required cpubind format.");
++  }
++
++  return ranges;
++}
++
++/** check whether the str has prefix
++
++@param[in] str the string will be checked
++@param[in] prefix the match patten
++
++@return  true if patten match, false otherwise
++*/
++static bool has_prefix(const std::string &str, const std::string &prefix) {
++  if (prefix.size() > str.size()) {
++    return false;
++  }
++  auto mismatchPair = std::mismatch(prefix.begin(), prefix.end(), str.begin());
++  return mismatchPair.first == prefix.end();
++}
++
++/** Get the bind mode from user parameters
++
++@param[in] bind_value the user configed cpu bind info
++
++@return  one of the Tp_cpu_bind_mode_t
++*/
++static Tp_cpu_bind_mode_t get_bind_mode(std::string bind_value) {
++  if (bind_value == TP_NO_BIND) {
++    return Tp_cpu_bind_mode_t::TP_NOBIND_MODE;
++  } else if (has_prefix(bind_value, TP_CPU_BIND_PREFIX)) {
++    return Tp_cpu_bind_mode_t::TP_CPUBIND_MODE;
++  }
++  return Tp_cpu_bind_mode_t::TP_BIND_INVALID;
++}
++
++/** parse user passed cpubind parameters, and check
++whether it is valid
++
++@param[in] proposed_value user passed parameters
++
++@return  0 if success, non-zero otherwise
++*/
++int parse_and_check_cpubind_info(const char *proposed_value) {
++  if (proposed_value == nullptr) return 1;
++  if (strlen(proposed_value) < strlen(TP_NO_BIND)) return 1;
++
++  const char *start = proposed_value;
++  const char *end = proposed_value + strlen(proposed_value) - 1;
++  while (std::isspace(*start)) ++start;
++  while (std::isspace(*end)) --end;
++
++  std::string bind_value = std::string(start, end + 1);
++  std::transform(bind_value.begin(), bind_value.end(), bind_value.begin(),
++                 [](unsigned char c) { return std::tolower(c); });
++
++  Tp_cpu_bind_mode_t bind_mode = get_bind_mode(bind_value);
++
++  std::vector<Cpu_range_t> ranges;
++  cpu_set_t cpuset;
++  bool set_valid = false;
++  switch (bind_mode) {
++    case Tp_cpu_bind_mode_t::TP_NOBIND_MODE:
++      g_available_cpus.clear();
++      break;
++    case Tp_cpu_bind_mode_t::TP_CPUBIND_MODE:
++      try {
++        ranges = parse_cpu_bind(bind_value);
++      } catch (...) {
++        // return 1 here, set variable will be failed
++        return 1;
++      }
++
++      /** get available cpu info, the process may be limited
++          by cgroup or taskset
++      */
++      CPU_ZERO(&cpuset);
++      set_valid = (sched_getaffinity(getpid(), sizeof(cpuset), &cpuset) == 0);
++
++      g_available_cpus.clear();
++      for (const auto &range : ranges) {
++        for (int i = range.start; i <= range.start; i++) {
++          if (set_valid && CPU_ISSET(i, &cpuset)) {
++            g_available_cpus.push_back(i);
++          }
++        }
++      }
++      break;
++    default:
++      return 1;
++  }
++  return 0;
++}
++
++/** Bind current thread to cpu
++
++@param[in] thread_group current thread group
++*/
++void set_current_thread_affinity(thread_group_t *thread_group) {
++  int cpu_id = get_cpuid_by_group_index(thread_group->index);
++  if (cpu_id >= 0) {
++    cpu_set_t cpuset;
++    CPU_ZERO(&cpuset);
++    CPU_SET(cpu_id, &cpuset);
++    int ret =
++        pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
++    if (ret != 0) {
++      LogErr(WARNING_LEVEL, ER_UNKNOWN_ERROR,
++             "pthread_setaffinity_np failed, error code:", ret);
++    }
++  }
++}
+\ No newline at end of file
+diff --git a/plugin/threadpool/threadpool_plugin.cc b/plugin/threadpool/threadpool_plugin.cc
+index 2b13b58337d..0504861c730 100644
+--- a/plugin/threadpool/threadpool_plugin.cc
++++ b/plugin/threadpool/threadpool_plugin.cc
+@@ -24,6 +24,8 @@
+ #include <sql/sql_show.h>
+ #include <sql/table.h>
+ #include <unistd.h>
++#include "mysql/components/services/log_builtins.h"
++#include "mysqld_error.h"
+ #include "threadpool.h"
+ 
+ #define MAX_CONNECTIONS 100000
+@@ -31,6 +33,7 @@
+ 
+ /** declare system global variables for threadpool
+  */
++
+ static const char *g_schedule_mode_names[] = {"statement", "transaction",
+                                               nullptr};
+ static TYPELIB g_schedule_mode_typelib = {
+@@ -111,6 +114,36 @@ static void fix_threadpool_enabled(MYSQL_THD, SYS_VAR *, void *,
+   }
+ }
+ 
++/**
++Check whether cpu bind info is valid.
++
++@param[in]  thd      session
++@param[in]  self     the system variable we're checking
++@param[in]  save     where to save the resulting intermediate (char *) value
++@param[in]  value    the value we're validating
++
++@return   0    value OK, go ahead and update system variable (from "save")
++          1    value rejected, do not update variable
++*/
++static int check_cpu_bindinfo(MYSQL_THD thd [[maybe_unused]],
++                              SYS_VAR *self [[maybe_unused]], void *save,
++                              struct st_mysql_value *value) {
++  int value_len = 0;
++  const char *proposed_value;
++  if (value == nullptr) {
++    return 1;
++  }
++
++  proposed_value = value->val_str(value, nullptr, &value_len);
++  if (proposed_value == nullptr) {
++    return 1;
++  }
++
++  *static_cast<const char **>(save) = proposed_value;
++
++  return parse_and_check_cpubind_info(proposed_value);
++}
++
+ static MYSQL_SYSVAR_UINT(idle_timeout, threadpool_idle_timeout,
+                          PLUGIN_VAR_RQCMDARG,
+                          "Timeout in seconds for an idle thread in the thread "
+@@ -186,6 +219,15 @@ static MYSQL_SYSVAR_ENUM(
+     "worker.",
+     nullptr, nullptr, TP_SCHEDULE_MODE_TRANSACTION, &g_schedule_mode_typelib);
+ 
++static MYSQL_SYSVAR_STR(
++    cpubind_info, threadpool_cpubind_info,
++    PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_MEMALLOC | PLUGIN_VAR_READONLY,
++    "Bind threadpool worker threads to specified cpus, "
++    "the parmaters can be 'nobind' and 'cpubind(1-30,40-70,...)'. "
++    "nobind: worker threads do not bind to specified cpus. "
++    "cpubind: bind thread group to one of the specified cpus by round robin.",
++    check_cpu_bindinfo, nullptr, "nobind");
++
+ static SYS_VAR *system_variables[] = {MYSQL_SYSVAR(idle_timeout),
+                                       MYSQL_SYSVAR(oversubscribe),
+                                       MYSQL_SYSVAR(size),
+@@ -198,13 +240,14 @@ static SYS_VAR *system_variables[] = {MYSQL_SYSVAR(idle_timeout),
+                                       MYSQL_SYSVAR(exact_stats),
+                                       MYSQL_SYSVAR(enable_active_threads_check),
+                                       MYSQL_SYSVAR(schedule_mode),
++                                      MYSQL_SYSVAR(cpubind_info),
+                                       NULL};
+ 
+ /** idle threads stats for information_schema
+ 
+ @param[out] var the content of the idle thread stats
+ 
+-@return 0 if success
++@return  0 if success, non-zero otherwise
+ */
+ int show_threadpool_idle_threads(THD *thd MY_ATTRIBUTE((unused)), SHOW_VAR *var,
+                                  char *buff) {
+@@ -218,7 +261,7 @@ int show_threadpool_idle_threads(THD *thd MY_ATTRIBUTE((unused)), SHOW_VAR *var,
+ 
+ @param[out] var the content of the idle thread stats
+ 
+-@return 0 if success
++@return 0 if success, non-zero otherwise
+ */
+ int show_threadpool_active_threads(THD *thd MY_ATTRIBUTE((unused)),
+                                    SHOW_VAR *var, char *buff) {
+@@ -232,7 +275,7 @@ int show_threadpool_active_threads(THD *thd MY_ATTRIBUTE((unused)),
+ 
+ @param[out] var the content of the idle thread stats
+ 
+-@return 0 if success
++@return 0 if success, non-zero otherwise
+ */
+ int show_threadpool_waiting_threads(THD *thd MY_ATTRIBUTE((unused)),
+                                     SHOW_VAR *var, char *buff) {
+@@ -245,7 +288,7 @@ int show_threadpool_waiting_threads(THD *thd MY_ATTRIBUTE((unused)),
+ 
+ @param[out] var the content of the idle thread stats
+ 
+-@return 0 if success
++@return 0 if success, non-zero otherwise
+ */
+ 
+ int show_threadpool_alive_connections(THD *thd MY_ATTRIBUTE((unused)),
+@@ -291,13 +334,22 @@ update mysql scheduler functions point to our threadpool scheduler functions
+ 
+ @param[in]      p unused
+ 
+-@return 0 if success
++@return 0 if success, non-zero otherwise
+ */
+ static int threadpool_plugin_init(void *p MY_ATTRIBUTE((unused))) {
+   DBUG_ENTER("threadpool_plugin_init");
+   // skip init if threadpool is not enabled
+   if (!threadpool_enabled) DBUG_RETURN(0);
+   tp_init();
++
++  if (threadpool_cpubind_info != nullptr) {
++    int ret = parse_and_check_cpubind_info(threadpool_cpubind_info);
++    if (ret != 0) {
++      LogErr(WARNING_LEVEL, ER_UNKNOWN_ERROR,
++             "cpubind_info is invalid:", threadpool_cpubind_info);
++    }
++  }
++
+   my_connection_handler_set(&tp_handler_functions);
+   DBUG_RETURN(0);
+ }
+@@ -307,7 +359,7 @@ restore the scheduler to be the original one
+ 
+ @param[in]      p unused
+ 
+-@return 0 if success
++@return 0 if success, non-zero otherwise
+ */
+ static int threadpool_plugin_deinit(void *p MY_ATTRIBUTE((unused))) {
+   DBUG_ENTER("threadpool_plugin_deinit");
+@@ -378,7 +430,7 @@ static int groups_fill_table(THD *thd, Table_ref *tables, Item *) {
+ 
+ @param[in]      p schema
+ 
+-@return 0 if success
++@return 0 if success, non-zero otherwise
+ */
+ static int groups_init(void *p) {
+   ST_SCHEMA_TABLE *schema = (ST_SCHEMA_TABLE *)p;
+@@ -405,7 +457,7 @@ typedef connection_queue_t::Iterator connection_queue_iterator;
+ @param[in]      thd  current thd
+ @param[in]      tables tables to be filled
+ 
+-@return 0 if success
++@return 0 if success, non-zero otherwise
+ */
+ static int queues_fill_table(THD *thd, Table_ref *tables, Item *) {
+   TABLE *table = tables->table;
+@@ -460,7 +512,7 @@ static int queues_fill_table(THD *thd, Table_ref *tables, Item *) {
+ 
+ @param[in]      p  schema
+ 
+-@return 0 if success
++@return 0 if success, non-zero otherwise
+ */
+ static int queues_init(void *p) {
+   ST_SCHEMA_TABLE *schema = (ST_SCHEMA_TABLE *)p;
+@@ -497,7 +549,7 @@ static ST_FIELD_INFO stats_fields_info[] = {
+ @param[in]      thd  current thd
+ @param[in]      tables tables to be filled
+ 
+-@return 0 if success
++@return 0 if success, non-zero otherwise
+ */
+ static int stats_fill_table(THD *thd, Table_ref *tables, Item *) {
+   TABLE *table = tables->table;
+@@ -543,7 +595,7 @@ static int stats_fill_table(THD *thd, Table_ref *tables, Item *) {
+ 
+ @param[in]      p  schema
+ 
+-@return 0 if success
++@return 0 if success, non-zero otherwise
+ */
+ static int stats_init(void *p) {
+   ST_SCHEMA_TABLE *schema = (ST_SCHEMA_TABLE *)p;
+@@ -575,7 +627,7 @@ extern TP_atomic_counter tp_waits[THD_WAIT_LAST];
+ @param[in]      thd  current thd
+ @param[in]      tables tables to be filled
+ 
+-@return 0 if success
++@return 0 if success, non-zero otherwise
+ */
+ static int waits_fill_table(THD *thd, Table_ref *tables, Item *) {
+   TABLE *table = tables->table;
+@@ -592,7 +644,7 @@ static int waits_fill_table(THD *thd, Table_ref *tables, Item *) {
+ 
+ @param[in]      p  schema
+ 
+-@return 0 if success
++@return 0 if success, non-zero otherwise
+ */
+ static int waits_init(void *p) {
+   ST_SCHEMA_TABLE *schema = (ST_SCHEMA_TABLE *)p;
+diff --git a/plugin/threadpool/threadpool_unix.cc b/plugin/threadpool/threadpool_unix.cc
+index ef014b1b720..444446aa041 100644
+--- a/plugin/threadpool/threadpool_unix.cc
++++ b/plugin/threadpool/threadpool_unix.cc
+@@ -16,9 +16,8 @@
+    USA */
+ #define MYSQL_SERVER 1
+ 
+-#include <atomic>
+-
+ #include <time.h>
++#include <atomic>
+ #include "my_sys.h"
+ #include "my_systime.h"
+ #include "mysql/psi/mysql_socket.h"
+@@ -1066,12 +1065,13 @@ static int wake_or_create_thread(thread_group_t *thread_group,
+ /**
+ Init the specified thread group
+ 
++@parma[in] index current group index in the group array
+ @param[in] thread_group the thread group to be inited
+ @param[in] thread_attr the connection attribute
+ 
+ @return    0 if success, non-zero otherwise
+ */
+-static int thread_group_init(thread_group_t *thread_group,
++static int thread_group_init(int index, thread_group_t *thread_group,
+                              pthread_attr_t *thread_attr) noexcept {
+   DBUG_ENTER("thread_group_init");
+   thread_group->shutdown = false;
+@@ -1083,7 +1083,7 @@ static int thread_group_init(thread_group_t *thread_group,
+   thread_group->event_count = 0;
+   thread_group->wait_time = 0;
+   thread_group->cpu_watch = my_cputime_clock();
+-
++  thread_group->index = index;
+   DBUG_RETURN(0);
+ }
+ 
+@@ -1527,7 +1527,8 @@ MySQL scheduler callback : kill connection
+ */
+ void tp_post_kill_notification(THD *thd) noexcept {
+   DBUG_ENTER("tp_post_kill_notification");
+-  if (current_thd == thd || thd->system_thread) DBUG_VOID_RETURN;
++  if (current_thd == thd || thd->system_thread || !thd->is_classic_protocol())
++    DBUG_VOID_RETURN;
+ 
+   Vio *vio = thd->get_protocol_classic()->get_vio();
+   if (vio) vio_cancel(vio, SHUT_RD);
+@@ -1742,12 +1743,13 @@ end:
+ @param[in]  param  user passed parameter
+ */
+ static void *worker_main(void *param) {
++  thread_group_t *thread_group = (thread_group_t *)param;
++  set_current_thread_affinity(thread_group);
++
+   my_thread_init();
+ 
+   DBUG_ENTER("worker_main");
+ 
+-  thread_group_t *thread_group = (thread_group_t *)param;
+-
+   /* Init per-thread structure */
+   worker_thread_t this_thread;
+   mysql_cond_init(key_worker_cond, &this_thread.cond);
+@@ -1808,7 +1810,7 @@ bool tp_init() {
+   g_threadpool_started = true;
+ 
+   for (uint i = 0; i < array_elements(g_all_groups); i++) {
+-    thread_group_init(&g_all_groups[i], get_connection_attrib());
++    thread_group_init(i, &g_all_groups[i], get_connection_attrib());
+   }
+   tp_set_threadpool_size(threadpool_size);
+   if (g_group_count != threadpool_size) {
+-- 
+2.23.0
+

@@ -1,0 +1,37 @@
+SET @saved_rds_admin_port_using_per_thread = @@global.rds_admin_port_using_per_thread;
+
+# Test the default value
+set @@global.rds_admin_port_using_per_thread=default;
+select @@global.rds_admin_port_using_per_thread;
+
+--error ER_INCORRECT_GLOBAL_LOCAL_VAR
+select @@session.rds_admin_port_using_per_thread;
+
+show global variables like 'rds_admin_port_using_per_thread';
+select * from performance_schema.global_variables where variable_name='rds_admin_port_using_per_thread';
+
+# show that it's writable
+set global rds_admin_port_using_per_thread=OFF;
+select @@global.rds_admin_port_using_per_thread;
+set global rds_admin_port_using_per_thread=ON;
+select @@global.rds_admin_port_using_per_thread;
+set global rds_admin_port_using_per_thread=0;
+select @@global.rds_admin_port_using_per_thread;
+set global rds_admin_port_using_per_thread=1;
+select @@global.rds_admin_port_using_per_thread;
+
+# incorrect types
+--error ER_WRONG_TYPE_FOR_VAR
+set global rds_admin_port_using_per_thread=1.1;
+--error ER_WRONG_TYPE_FOR_VAR
+set global rds_admin_port_using_per_thread=1e1;
+
+# incorrect values
+--error ER_WRONG_VALUE_FOR_VAR
+set global rds_admin_port_using_per_thread=5;
+--error ER_WRONG_VALUE_FOR_VAR
+set global rds_admin_port_using_per_thread=-3;
+--error ER_WRONG_VALUE_FOR_VAR
+set global rds_admin_port_using_per_thread="foo";
+
+SET GLOBAL rds_admin_port_using_per_thread = @saved_rds_admin_port_using_per_thread;

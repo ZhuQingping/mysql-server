@@ -1,0 +1,59 @@
+# Connect to master
+create database db_recycle;
+set global rds_recycle_bin_mode=ON;
+set rds_recycle_bin_mode=ON;
+use db_recycle;
+CREATE TABLE t1 (c1 INT PRIMARY KEY, c2 INT, INDEX(c2)) ENGINE = Dstore;
+CREATE TABLE t2 (
+c2 INT PRIMARY KEY,
+CONSTRAINT t2c2 FOREIGN KEY (c2) REFERENCES t1 (c2))
+ENGINE = Dstore;
+DROP TABLE t2;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t2	#	#
+SHOW CREATE TABLE __recyclebin__.`t2`;
+Table	Create Table
+t2	CREATE TABLE `t2` (
+  `c2` int NOT NULL,
+  PRIMARY KEY (`c2`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+call dbms_recyclebin.restore_table('t2');
+ALTER TABLE t2 ADD CONSTRAINT t2c2 FOREIGN KEY (c2) REFERENCES t1 (c2);
+SHOW CREATE TABLE t2;
+Table	Create Table
+t2	CREATE TABLE `t2` (
+  `c2` int NOT NULL,
+  PRIMARY KEY (`c2`),
+  CONSTRAINT `t2c2` FOREIGN KEY (`c2`) REFERENCES `t1` (`c2`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+DROP TABLE t2;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t2	#	#
+SHOW CREATE TABLE __recyclebin__.`t2`;
+Table	Create Table
+t2	CREATE TABLE `t2` (
+  `c2` int NOT NULL,
+  PRIMARY KEY (`c2`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+call dbms_recyclebin.purge_table('t2');
+create table t3(id int);
+CREATE TRIGGER before_t3_insert BEFORE INSERT ON t3 FOR EACH ROW INSERT INTO t1 (c1, c2) VALUES (1, 1);
+drop table t3;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t3	#	#
+SELECT count(*) FROM information_schema.TRIGGERS WHERE TRIGGER_NAME = 'before_t3_insert';
+count(*)
+0
+call dbms_recyclebin.restore_table('t3');
+CREATE TRIGGER before_t3_insert BEFORE INSERT ON t3 FOR EACH ROW INSERT INTO t1 (c1, c2) VALUES (1, 1);
+DROP DATABASE db_recycle;
+SELECT count(*) FROM information_schema.TRIGGERS WHERE TRIGGER_NAME = 'before_t3_insert';
+count(*)
+0
+SET rds_recycle_bin_mode=OFF;
+SET GLOBAL rds_recycle_bin_mode=OFF;
+DROP DATABASE __recyclebin__;
+CREATE DATABASE IF NOT EXISTS __recyclebin__ DEFAULT CHARACTER SET utf8mb4;

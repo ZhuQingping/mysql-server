@@ -1,0 +1,43 @@
+call mtr.add_suppression("swat hit damage page when fetch tuple in seq scan");
+call mtr.add_suppression("Got error 10004 when reading table");
+call mtr.add_suppression("Attempting backtrace");
+create database damage_heap_page;
+use damage_heap_page;
+create table t1(s varchar(100)) engine=Dstore;
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+10000
+# restart
+select count(*) from t1;
+ERROR HY000: Lost connection to MySQL server during query
+# restart: --dstore_enable_damage_page_manager=on --dstore_report_error_on_damage_page=on
+select count(*) from t1;
+ERROR HY000: Storage engine Dstore: hit damage page
+update t1 set s='abc' limit 1;
+ERROR HY000: Storage engine Dstore: hit damage page
+delete from t1 limit 1;
+ERROR HY000: Storage engine Dstore: hit damage page
+insert into t1 values('xyz');
+# restart: --dstore_enable_damage_page_manager=on
+select count(*) from t1;
+count(*)
+9804
+update t1 set s='abc' limit 1;
+delete from t1 limit 1;
+insert into t1 values('xyz');
+select count(*) from t1;
+count(*)
+9804
+drop table t1;
+create table t1(s varchar(100)) engine=Dstore;
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+10000
+drop database damage_heap_page;
+# restart

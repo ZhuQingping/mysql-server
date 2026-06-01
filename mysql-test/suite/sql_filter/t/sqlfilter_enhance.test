@@ -1,0 +1,414 @@
+# --------------------------------------------------------------------
+# Test point: Basic functions of sql filter
+# --------------------------------------------------------------------
+--source include/force_restart.inc
+
+CALL mtr.add_suppression("sql filter rules was set exceeding the max length");
+
+CREATE USER 'rds'@'localhost' IDENTIFIED BY '123456';
+GRANT ALL PRIVILEGES ON *.* TO 'rds'@'localhost' WITH GRANT OPTION;
+GRANT ALL PRIVILEGES ON *.* TO 'rdsAdmin'@'localhost' WITH GRANT OPTION;
+
+connection default;
+SET @old_rds_sqlfilter_case_sensitive=@@global.rds_sqlfilter_case_sensitive;
+SET @old_rds_sqlfilter_control=@@global.rds_sqlfilter_control;
+SET @old_rds_sqlfilter_sys_table_control=@@global.rds_sqlfilter_sys_table_control;
+SET GLOBAL rds_sqlfilter_control=on;
+
+# ---------------------------------------------------------
+--echo #----    support insert-type filtering rules    ----
+# ---------------------------------------------------------
+
+connect(conn_rdsAdmin, 127.0.0.1, rdsAdmin);
+--echo #----invalid format: wrong delimiter----
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('INSERT',0,"INSERT~t1~","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('INSERT',1,"INSERT~","");
+--error ER_SP_WRONG_NO_OF_ARGS
+call dbms_sqlfilter.add_sql_filter('INSERT',0,1,"INSERT~t1","");
+--error ER_NATIVE_PROC_PARAMETER_MISMATCH
+call dbms_sqlfilter.add_sql_filter('INSERT',1.1,"INSERT~tt~aa","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('INSERT',0,"t1~aa","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('INSERT',-1,"INSERT~from~t1~aaa","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('INSERT',1,"INSERT","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('INSERT',~1,"INSERT~t1","");
+--error ER_SP_WRONG_NO_OF_ARGS
+call dbms_sqlfilter.add_sql_filter('INSERT',"");
+call dbms_sqlfilter.add_sql_filter('INSERT',0,"INSERT~into~t1","");
+call dbms_sqlfilter.add_sql_filter('INSERT',1,"INSERT~.t1","");
+call dbms_sqlfilter.add_sql_filter('INSERT',1," \n INSERT~t1~values,0;INSERT  \n~t2","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+
+--echo cleanup sql filter rules
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--echo #--- invalid format: wrong filter type -----
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('INSERT',1,"SELECT~t1","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('DELETE',1,"INSERT~t1","");
+call dbms_sqlfilter.add_sql_filter('INSERT',0,"INSERT~into~a.a","");
+call dbms_sqlfilter.add_sql_filter('INSERT',1,"INSERT~into~t1~bb","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--echo cleanup sql filter rules
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--echo #---invalid format: wrong number of args ----
+--error ER_SP_WRONG_NO_OF_ARGS
+call dbms_sqlfilter.add_sql_filter('INSERT',"INSERT~into~t1","");
+--error ER_SP_WRONG_NO_OF_ARGS
+call dbms_sqlfilter.add_sql_filter('INSERT',1,1,1,"INSERT~t1","");
+--error ER_SP_WRONG_NO_OF_ARGS
+call dbms_sqlfilter.add_sql_filter('INSERT',0,1,"INSERT~t1","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--echo #---invalid format: wrong header ----
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('INSERT',1,"t1","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('INSERT',1,"~t1","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('INSERT',1,"DELETE~t1","");
+
+--echo #---- add sql filter rules (case sensitive)------
+SET GLOBAL rds_sqlfilter_case_sensitive=on;
+SHOW VARIABLES LIKE "rds_sqlfilter_case_sensitive";
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+call dbms_sqlfilter.add_sql_filter('INSERT',0,"INSERT~INTO~t1","");
+
+connect(conn0, 127.0.0.1, rds,123456,test);
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+CREATE TABLE t1 (iddd INT, name VARCHAR(20));
+
+insert INTO t1 VALUES (1,"a");
+select * from t1 where iddd=5;
+--error ER_QUERY_INTERRUPTED
+INSERT  INTO t1 values (2,"b");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+select * from t1 where iddd=6;
+
+--echo #---- add sql filter rules (not case sensitive) ------
+SET GLOBAL rds_sqlfilter_case_sensitive=off;
+SHOW VARIABLES LIKE "rds_sqlfilter_case_sensitive";
+
+--error ER_QUERY_INTERRUPTED
+INSERT INTO t1 values (2,"b");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+select * from t1;
+--error ER_QUERY_INTERRUPTED
+INSERT into t1 values (2,"b");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+select * from t1;
+
+SET GLOBAL rds_sqlfilter_case_sensitive=on;
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+SET GLOBAL rds_sqlfilter_control=off;
+INSERT INTO t1 values (2,"b");
+SET GLOBAL rds_sqlfilter_case_sensitive=off;
+
+--echo #---- reset sql filter rules (valid format) ------
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+
+connection conn0;
+SET GLOBAL rds_sqlfilter_control=on;
+INSERT INTO t1 values (3,"c");
+INSERT into t1 values (4,"d");
+
+
+
+--echo #--- trim space character at the beginning and end of keyword----
+call dbms_sqlfilter.add_sql_filter('INSERT',1,"insert~into~t1","");
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('INSERT',0," insert~   t1 ","");
+--error ER_QUERY_INTERRUPTED
+INSERT INTO t1 VALUES(5,"e");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('INSERT',0," insert   ~ into   t1 ","");
+INSERT INTO t1 VALUES(6,"f");
+--error ER_QUERY_INTERRUPTED
+INSERT INTO   t1 VALUES(7,"g");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--echo #--- update variables when the rule is illegal ---
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+--error ER_NATIVE_PROC_PARAMETER_MISMATCH
+call dbms_sqlfilter.add_sql_filter('INSERT', 1.1,"insert~into~t1","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--echo #--- supports Special characters----
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+create table tmp1 (id int);
+create table tmp2 (id int);
+
+# key word is null(after trimming spacial character and blank character at the beginning and end of key word)
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('INSERT', 0,"insert~   ~into ~tmp1","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('INSERT', 0,"insert~  \n ~into ~tmp1","");
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('INSERT', 0,"  \n ~insert~into ~tmp1","");
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('INSERT', 0,"insert~into \n~tmp1","");
+call dbms_sqlfilter.add_sql_filter('INSERT', 0," insert~into  \ntmp2 ","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--error ER_QUERY_INTERRUPTED
+insert into tmp1 values(1);
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--error ER_QUERY_INTERRUPTED
+insert into tmp1 
+values(1);
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+insert into tmp2 values(1);
+--error ER_QUERY_INTERRUPTED
+insert into  
+tmp1 values(2);
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('INSERT', 0," \ninsert~into~tmp1","");
+call dbms_sqlfilter.add_sql_filter('INSERT', 0," insert  \n~into~tmp2 ","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--error ER_QUERY_INTERRUPTED
+insert into tmp1 values(2);
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--error ER_QUERY_INTERRUPTED
+insert into tmp2 values(2);
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+drop table tmp1;
+drop table tmp2;
+
+--echo #--- concurrency_str supports Special characters ----
+call dbms_sqlfilter.add_sql_filter('INSERT', 0,"\n insert~into~tmp1 \r","");
+call dbms_sqlfilter.add_sql_filter('INSERT', 1," insert~into~tmp \t2\r","");
+--error ER_QUERY_INTERRUPTED
+insert into tmp1 values(0);
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+
+--echo #--------- "\\" ----------
+call dbms_sqlfilter.add_sql_filter('INSERT', 0,"insert~into~t1","");
+--error ER_QUERY_INTERRUPTED
+insert into t1 values(3);
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('INSERT', 0,"insert~into~t2","");
+--error ER_QUERY_INTERRUPTED
+insert into t2 values(3);
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+
+--echo #----------- prepare statement -----------
+connection conn_rdsAdmin;
+SET GLOBAL rds_sqlfilter_case_sensitive=on;
+
+CREATE TABLE `mesi` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `uuid` VARCHAR(36) NOT NULL,
+  `batch_id` VARCHAR(36) NOT NULL,
+  `platform_id` int(10) NOT NULL,
+  `channel_id` int(10) DEFAULT NULL,
+  `template_id` int(10) NOT NULL,
+  `title` VARCHAR(64) DEFAULT NULL,
+  `send_at` timestamp NULL DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  `deleted_at` timestamp NULL DEFAULT NULL,
+  `sort` int(9) unsigned NOT NULL DEFAULT '0',
+  PRIMARY KEY (`id`) USING BTREE,
+  KEY `idx_batch_id` (`batch_id`) USING BTREE,
+  KEY `idx_send_at` (`send_at`),
+  KEY `idx_uuid` (`uuid`)
+) AUTO_INCREMENT=1;
+
+call dbms_sqlfilter.add_sql_filter('INSERT', 0,"INSERT~mesi","");
+PREPARE insert_stmt FROM 'INSERT into mesi values (1,"uuID","batchID",1,1,2,"title",null,null,null,null,0)';
+#PREPARE insert_stmt FROM 'INSERT into mesi values (1,'uuid','batch_id',1,1,2,'title',null,null,null,null,0);';
+--error ER_QUERY_INTERRUPTED
+EXECUTE insert_stmt;
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+DROP PREPARE insert_stmt;
+DROP TABLE mesi;
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+
+--echo #-----------The object of SQL filter is system database. ----
+connection conn0;
+create table tmp1 (a int);
+insert into tmp1 values (1);
+SET GLOBAL rds_sqlfilter_control=on;
+call dbms_sqlfilter.add_sql_filter('SELECT', 0,"SELECT~FROM~mysql","");
+call dbms_sqlfilter.add_sql_filter('SELECT', 0,"SELECT~FROM~sys","");
+call dbms_sqlfilter.add_sql_filter('SELECT', 0,"SELECT~FROM~information_schema","");
+call dbms_sqlfilter.add_sql_filter('SELECT', 0,"SELECT~FROM~performance_schema","");
+--echo 1.rds_sqlfilter_sys_table_control is off
+set global rds_sqlfilter_sys_table_control = off;
+SELECT 1 FROM information_schema.tables LIMIT 1;
+SELECT 1 FROM tmp1,information_schema.tables LIMIT 1;
+SELECT 1 FROM information_schema.tables,tmp1 LIMIT 1;
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--echo 2.rds_sqlfilter_sys_table_control is on
+set GLOBAL rds_sqlfilter_sys_table_control = on;
+--error ER_QUERY_INTERRUPTED
+SELECT 1 FROM information_schema.tables LIMIT 1;
+--error ER_QUERY_INTERRUPTED
+SELECT 1 FROM tmp1,information_schema.tables LIMIT 1;
+--error ER_QUERY_INTERRUPTED
+SELECT 1 FROM information_schema.tables,tmp1 LIMIT 1;
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+drop table tmp1;
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+SET @old_rds_sqlfilter_sys_table_control=@@global.rds_sqlfilter_sys_table_control;
+
+--echo #-----sql filter permission -----
+CREATE USER 'user1'@'localhost' identified by '123456';
+GRANT ALL PRIVILEGES ON test.* to user1@localhost;
+connect (user1,localhost,user1,123456);
+
+connection user1;
+
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+call dbms_sqlfilter.add_sql_filter('INSERT', 0,"insert|into|t1","");
+connection conn0;
+DROP USER user1@localhost;
+
+--echo # rdsAdmin@localhost has privileges to update/insert/delete sql filter table,
+--echo # flush sql filter, call sql filter procedure API, select sql filter.
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+call dbms_sqlfilter.add_sql_filter('INSERT', 0,"INSERT~INTO~t1","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter(); 
+
+connection conn0;
+--error ER_QUERY_INTERRUPTED
+INSERT INTO t1 VALUES (7,"g");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+INSERT into t1 VALUES (7,"g");
+SELECT * FROM t1 where iddd = 5;
+
+--echo #----cleanup ----------
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.show_sql_filter();
+DROP table t1;
+DROP user rds@localhost;
+
+--echo #key words for each sql filter rule <= 128
+call dbms_sqlfilter.add_sql_filter('INSERT', 0,"insert~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~update~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~update~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and","");
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--echo # rule include 129 key words
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('INSERT', 0,"insert~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~update~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~update~t1~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and~and","");
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection conn0;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.show_sql_filter();
+
+--echo # sql filter string include space
+--error ER_SQLFILTER_INVALID
+call dbms_sqlfilter.add_sql_filter('INSERT', 0,"in s e rt~1","");
+
+# cleanup
+connection conn_rdsAdmin;
+delete from mysql.rds_sql_filter_rules;
+connection default;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.show_sql_filter();
+

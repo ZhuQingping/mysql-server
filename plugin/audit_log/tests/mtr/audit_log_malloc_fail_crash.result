@@ -1,0 +1,237 @@
+call mtr.add_suppression(".*Out of memory in Audit Log.*");
+call mtr.add_suppression(".*Attempting backtrace.*");
+# FE2022112400392: Oversized SQL statements can be recorded in audit logs.
+# > System Variable: audit_log_format != CSV2.
+# > When memory allocation for audit logs fails, mysqld always crashes.
+# ------------------------------Case 1----------------------------------------------
+# 1.1 Set variable value.
+SET @@global.audit_log_csv2_truncation = ON;
+SET @@global.audit_log_csv2_escape = ON;
+SET @@global.audit_log_csv2_old_separated_format = ON;
+show variables like '%audit_log%';
+Variable_name	Value
+audit_log_anonymized_ip	
+audit_log_buffer_size	1048576
+audit_log_csv2_escape	ON
+audit_log_csv2_old_separated_format	ON
+audit_log_csv2_truncation	ON
+audit_log_exclude_accounts	
+audit_log_exclude_commands	
+audit_log_exclude_databases	
+audit_log_file	test_audit.log
+audit_log_flush	OFF
+audit_log_force_rotate	OFF
+audit_log_format	CSV
+audit_log_handler	FILE
+audit_log_include_accounts	
+audit_log_include_commands	
+audit_log_include_databases	
+audit_log_policy	ALL
+audit_log_rotate_on_size	0
+audit_log_rotations	0
+audit_log_strategy	SYNCHRONOUS
+audit_log_syslog_facility	LOG_USER
+audit_log_syslog_ident	taurus-audit
+audit_log_syslog_priority	LOG_INFO
+audit_log_thread_safe	ON
+SET debug = "+d, simulate_audit_malloc_fail";
+# 1.2 Actively crash.
+DROP TABLE IF EXISTS `employee_tb`;
+CREATE TABLE IF NOT EXISTS `employee_tb`(`employee_id` INT UNSIGNED AUTO_INCREMENT,`employee_name` VARCHAR(100) NOT
+NULL,`employee_title` VARCHAR(100) NOT NULL,`birthdate` VARCHAR(100) NOT NULL,PRIMARY KEY (`employee_id`))ENGINE=InnoDB
+DEFAULT CHARSET=utf8mb4;
+INSERT INTO `employee_tb` (`employee_name`, `employee_title`, `birthdate`) VALUES
+("Zhang San", "General Director", "2020-01-01"),("Love Dollar Lisi", "Product Manager", "2020-01-02"),
+("Dadao Wangwu", "Entrance Guard", "2020-01-03"),("Hen Nanchi", "Main Cook", "2020-01-04"),
+("Shangdaren Kongyiji", "Student", "2020-01-05"),("Abudurezeke Aosiman", "Test Engineer", "2020-01-06"),
+("Li Si", "Chief", "2020-01-07"),("Jiandao Wangmazi", "Product Manager", "2020-01-08"),
+("Zhu Zhu", "Entrance Guard", "2020-01-09"),("Doge Du", "Cook", "2020-01-10"),("Xunger", "Student", "2020-01-11"),
+("Shaonian Runtu", "Test Engineer", "2020-01-12"),("James Solos", "General Director", "2020-01-13"),
+("Zhao Si", "General Director", "2020-01-14"),("Liu Jiannan", "Chief", "2020-01-15"),("Lao Yu", "Cook", "2020-01-16"),
+("James Cameron", "Artist Director", "2020-01-17"),("Wu Shifu", "Entrance Guard", "2020-01-18"),
+("Li Shifu", "Behavioral Artist", "2020-01-19");
+# 1.3 Restart the server.
+"restarting after crash"
+# ------------------------------Case 2----------------------------------------------
+# 2.1 Set variable value.
+SET @@global.audit_log_csv2_truncation = OFF;
+SET @@global.audit_log_csv2_escape = ON;
+SET @@global.audit_log_csv2_old_separated_format = ON;
+SET debug = "+d, simulate_audit_malloc_fail";
+# 2.2 Actively crash.
+DROP TABLE IF EXISTS `employee_tb`;
+CREATE TABLE IF NOT EXISTS `employee_tb`(`employee_id` INT UNSIGNED AUTO_INCREMENT,`employee_name` VARCHAR(100) NOT
+NULL,`employee_title` VARCHAR(100) NOT NULL,`birthdate` VARCHAR(100) NOT NULL,PRIMARY KEY (`employee_id`))ENGINE=InnoDB
+DEFAULT CHARSET=utf8mb4;
+INSERT INTO `employee_tb` (`employee_name`, `employee_title`, `birthdate`) VALUES
+("Zhang San", "General Director", "2020-01-01"),("Love Dollar Lisi", "Product Manager", "2020-01-02"),
+("Dadao Wangwu", "Entrance Guard", "2020-01-03"),("Hen Nanchi", "Main Cook", "2020-01-04"),
+("Shangdaren Kongyiji", "Student", "2020-01-05"),("Abudurezeke Aosiman", "Test Engineer", "2020-01-06"),
+("Li Si", "Chief", "2020-01-07"),("Jiandao Wangmazi", "Product Manager", "2020-01-08"),
+("Zhu Zhu", "Entrance Guard", "2020-01-09"),("Doge Du", "Cook", "2020-01-10"),("Xunger", "Student", "2020-01-11"),
+("Shaonian Runtu", "Test Engineer", "2020-01-12"),("James Solos", "General Director", "2020-01-13"),
+("Zhao Si", "General Director", "2020-01-14"),("Liu Jiannan", "Chief", "2020-01-15"),("Lao Yu", "Cook", "2020-01-16"),
+("James Cameron", "Artist Director", "2020-01-17"),("Wu Shifu", "Entrance Guard", "2020-01-18"),
+("Li Shifu", "Behavioral Artist", "2020-01-19");
+# 2.3 Restart the server.
+"restarting after crash"
+# ------------------------------Case 3----------------------------------------------
+# 3.1 Set variable value.
+SET @@global.audit_log_csv2_truncation = ON;
+SET @@global.audit_log_csv2_escape = OFF;
+SET @@global.audit_log_csv2_old_separated_format = ON;
+SET debug = "+d, simulate_audit_log_buffer_malloc_fail";
+# 3.2 Actively crash.
+DROP TABLE IF EXISTS `employee_tb`;
+CREATE TABLE IF NOT EXISTS `employee_tb`(`employee_id` INT UNSIGNED AUTO_INCREMENT,`employee_name` VARCHAR(100) NOT
+NULL,`employee_title` VARCHAR(100) NOT NULL,`birthdate` VARCHAR(100) NOT NULL,PRIMARY KEY (`employee_id`))ENGINE=InnoDB
+DEFAULT CHARSET=utf8mb4;
+INSERT INTO `employee_tb` (`employee_name`, `employee_title`, `birthdate`) VALUES
+("Zhang San", "General Director", "2020-01-01"),("Love Dollar Lisi", "Product Manager", "2020-01-02"),
+("Dadao Wangwu", "Entrance Guard", "2020-01-03"),("Hen Nanchi", "Main Cook", "2020-01-04"),
+("Shangdaren Kongyiji", "Student", "2020-01-05"),("Abudurezeke Aosiman", "Test Engineer", "2020-01-06"),
+("Li Si", "Chief", "2020-01-07"),("Jiandao Wangmazi", "Product Manager", "2020-01-08"),
+("Zhu Zhu", "Entrance Guard", "2020-01-09"),("Doge Du", "Cook", "2020-01-10"),("Xunger", "Student", "2020-01-11"),
+("Shaonian Runtu", "Test Engineer", "2020-01-12"),("James Solos", "General Director", "2020-01-13"),
+("Zhao Si", "General Director", "2020-01-14"),("Liu Jiannan", "Chief", "2020-01-15"),("Lao Yu", "Cook", "2020-01-16"),
+("James Cameron", "Artist Director", "2020-01-17"),("Wu Shifu", "Entrance Guard", "2020-01-18"),
+("Li Shifu", "Behavioral Artist", "2020-01-19");
+# 3.3 Restart the server.
+"restarting after crash"
+# ------------------------------Case 4----------------------------------------------
+# 4.1 Set variable value.
+SET @@global.audit_log_csv2_truncation = OFF;
+SET @@global.audit_log_csv2_escape = OFF;
+SET @@global.audit_log_csv2_old_separated_format = ON;
+SET debug = "+d, simulate_audit_log_buffer_malloc_fail";
+# 4.2 Actively crash.
+DROP TABLE IF EXISTS `employee_tb`;
+CREATE TABLE IF NOT EXISTS `employee_tb`(`employee_id` INT UNSIGNED AUTO_INCREMENT,`employee_name` VARCHAR(100) NOT
+NULL,`employee_title` VARCHAR(100) NOT NULL,`birthdate` VARCHAR(100) NOT NULL,PRIMARY KEY (`employee_id`))ENGINE=InnoDB
+DEFAULT CHARSET=utf8mb4;
+INSERT INTO `employee_tb` (`employee_name`, `employee_title`, `birthdate`) VALUES
+("Zhang San", "General Director", "2020-01-01"),("Love Dollar Lisi", "Product Manager", "2020-01-02"),
+("Dadao Wangwu", "Entrance Guard", "2020-01-03"),("Hen Nanchi", "Main Cook", "2020-01-04"),
+("Shangdaren Kongyiji", "Student", "2020-01-05"),("Abudurezeke Aosiman", "Test Engineer", "2020-01-06"),
+("Li Si", "Chief", "2020-01-07"),("Jiandao Wangmazi", "Product Manager", "2020-01-08"),
+("Zhu Zhu", "Entrance Guard", "2020-01-09"),("Doge Du", "Cook", "2020-01-10"),("Xunger", "Student", "2020-01-11"),
+("Shaonian Runtu", "Test Engineer", "2020-01-12"),("James Solos", "General Director", "2020-01-13"),
+("Zhao Si", "General Director", "2020-01-14"),("Liu Jiannan", "Chief", "2020-01-15"),("Lao Yu", "Cook", "2020-01-16"),
+("James Cameron", "Artist Director", "2020-01-17"),("Wu Shifu", "Entrance Guard", "2020-01-18"),
+("Li Shifu", "Behavioral Artist", "2020-01-19");
+# 4.3 Checking error log.
+Pattern "Out of memory in Audit Log" found
+# 4.4 Restart the server.
+"restarting after crash"
+# ------------------------------Case 5----------------------------------------------
+# 5.1 Set variable value.
+SET @@global.audit_log_csv2_truncation = ON;
+SET @@global.audit_log_csv2_escape = ON;
+SET @@global.audit_log_csv2_old_separated_format = OFF;
+SET debug = "+d, simulate_audit_malloc_fail";
+# 5.2 Actively crash.
+DROP TABLE IF EXISTS `employee_tb`;
+CREATE TABLE IF NOT EXISTS `employee_tb`(`employee_id` INT UNSIGNED AUTO_INCREMENT,`employee_name` VARCHAR(100) NOT
+NULL,`employee_title` VARCHAR(100) NOT NULL,`birthdate` VARCHAR(100) NOT NULL,PRIMARY KEY (`employee_id`))ENGINE=InnoDB
+DEFAULT CHARSET=utf8mb4;
+INSERT INTO `employee_tb` (`employee_name`, `employee_title`, `birthdate`) VALUES
+("Zhang San", "General Director", "2020-01-01"),("Love Dollar Lisi", "Product Manager", "2020-01-02"),
+("Dadao Wangwu", "Entrance Guard", "2020-01-03"),("Hen Nanchi", "Main Cook", "2020-01-04"),
+("Shangdaren Kongyiji", "Student", "2020-01-05"),("Abudurezeke Aosiman", "Test Engineer", "2020-01-06"),
+("Li Si", "Chief", "2020-01-07"),("Jiandao Wangmazi", "Product Manager", "2020-01-08"),
+("Zhu Zhu", "Entrance Guard", "2020-01-09"),("Doge Du", "Cook", "2020-01-10"),("Xunger", "Student", "2020-01-11"),
+("Shaonian Runtu", "Test Engineer", "2020-01-12"),("James Solos", "General Director", "2020-01-13"),
+("Zhao Si", "General Director", "2020-01-14"),("Liu Jiannan", "Chief", "2020-01-15"),("Lao Yu", "Cook", "2020-01-16"),
+("James Cameron", "Artist Director", "2020-01-17"),("Wu Shifu", "Entrance Guard", "2020-01-18"),
+("Li Shifu", "Behavioral Artist", "2020-01-19");
+# 5.3 Restart the server.
+"restarting after crash"
+# ------------------------------Case 6----------------------------------------------
+# 6.1 Set variable value.
+SET @@global.audit_log_csv2_truncation = OFF;
+SET @@global.audit_log_csv2_escape = ON;
+SET @@global.audit_log_csv2_old_separated_format = OFF;
+SET debug = "+d, simulate_audit_malloc_fail";
+# 6.2 Actively crash.
+DROP TABLE IF EXISTS `employee_tb`;
+CREATE TABLE IF NOT EXISTS `employee_tb`(`employee_id` INT UNSIGNED AUTO_INCREMENT,`employee_name` VARCHAR(100) NOT
+NULL,`employee_title` VARCHAR(100) NOT NULL,`birthdate` VARCHAR(100) NOT NULL,PRIMARY KEY (`employee_id`))ENGINE=InnoDB
+DEFAULT CHARSET=utf8mb4;
+INSERT INTO `employee_tb` (`employee_name`, `employee_title`, `birthdate`) VALUES
+("Zhang San", "General Director", "2020-01-01"),("Love Dollar Lisi", "Product Manager", "2020-01-02"),
+("Dadao Wangwu", "Entrance Guard", "2020-01-03"),("Hen Nanchi", "Main Cook", "2020-01-04"),
+("Shangdaren Kongyiji", "Student", "2020-01-05"),("Abudurezeke Aosiman", "Test Engineer", "2020-01-06"),
+("Li Si", "Chief", "2020-01-07"),("Jiandao Wangmazi", "Product Manager", "2020-01-08"),
+("Zhu Zhu", "Entrance Guard", "2020-01-09"),("Doge Du", "Cook", "2020-01-10"),("Xunger", "Student", "2020-01-11"),
+("Shaonian Runtu", "Test Engineer", "2020-01-12"),("James Solos", "General Director", "2020-01-13"),
+("Zhao Si", "General Director", "2020-01-14"),("Liu Jiannan", "Chief", "2020-01-15"),("Lao Yu", "Cook", "2020-01-16"),
+("James Cameron", "Artist Director", "2020-01-17"),("Wu Shifu", "Entrance Guard", "2020-01-18"),
+("Li Shifu", "Behavioral Artist", "2020-01-19");
+# 6.3 Restart the server.
+"restarting after crash"
+# ------------------------------Case 7----------------------------------------------
+# 7.1 Set variable value.
+SET @@global.audit_log_csv2_truncation = ON;
+SET @@global.audit_log_csv2_escape = OFF;
+SET @@global.audit_log_csv2_old_separated_format = OFF;
+SET debug = "+d, simulate_audit_log_buffer_malloc_fail";
+# 7.2 Actively crash.
+DROP TABLE IF EXISTS `employee_tb`;
+CREATE TABLE IF NOT EXISTS `employee_tb`(`employee_id` INT UNSIGNED AUTO_INCREMENT,`employee_name` VARCHAR(100) NOT
+NULL,`employee_title` VARCHAR(100) NOT NULL,`birthdate` VARCHAR(100) NOT NULL,PRIMARY KEY (`employee_id`))ENGINE=InnoDB
+DEFAULT CHARSET=utf8mb4;
+INSERT INTO `employee_tb` (`employee_name`, `employee_title`, `birthdate`) VALUES
+("Zhang San", "General Director", "2020-01-01"),("Love Dollar Lisi", "Product Manager", "2020-01-02"),
+("Dadao Wangwu", "Entrance Guard", "2020-01-03"),("Hen Nanchi", "Main Cook", "2020-01-04"),
+("Shangdaren Kongyiji", "Student", "2020-01-05"),("Abudurezeke Aosiman", "Test Engineer", "2020-01-06"),
+("Li Si", "Chief", "2020-01-07"),("Jiandao Wangmazi", "Product Manager", "2020-01-08"),
+("Zhu Zhu", "Entrance Guard", "2020-01-09"),("Doge Du", "Cook", "2020-01-10"),("Xunger", "Student", "2020-01-11"),
+("Shaonian Runtu", "Test Engineer", "2020-01-12"),("James Solos", "General Director", "2020-01-13"),
+("Zhao Si", "General Director", "2020-01-14"),("Liu Jiannan", "Chief", "2020-01-15"),("Lao Yu", "Cook", "2020-01-16"),
+("James Cameron", "Artist Director", "2020-01-17"),("Wu Shifu", "Entrance Guard", "2020-01-18"),
+("Li Shifu", "Behavioral Artist", "2020-01-19");
+# 7.3 Restart the server.
+"restarting after crash"
+# ------------------------------Case 8----------------------------------------------
+# 8.1 Set variable value.
+SET @@global.audit_log_csv2_truncation = OFF;
+SET @@global.audit_log_csv2_escape = OFF;
+SET @@global.audit_log_csv2_old_separated_format = OFF;
+SET debug = "+d, simulate_audit_log_buffer_malloc_fail";
+# 8.2 Actively crash.
+DROP TABLE IF EXISTS `employee_tb`;
+CREATE TABLE IF NOT EXISTS `employee_tb`(`employee_id` INT UNSIGNED AUTO_INCREMENT,`employee_name` VARCHAR(100) NOT
+NULL,`employee_title` VARCHAR(100) NOT NULL,`birthdate` VARCHAR(100) NOT NULL,PRIMARY KEY (`employee_id`))ENGINE=InnoDB
+DEFAULT CHARSET=utf8mb4;
+INSERT INTO `employee_tb` (`employee_name`, `employee_title`, `birthdate`) VALUES
+("Zhang San", "General Director", "2020-01-01"),("Love Dollar Lisi", "Product Manager", "2020-01-02"),
+("Dadao Wangwu", "Entrance Guard", "2020-01-03"),("Hen Nanchi", "Main Cook", "2020-01-04"),
+("Shangdaren Kongyiji", "Student", "2020-01-05"),("Abudurezeke Aosiman", "Test Engineer", "2020-01-06"),
+("Li Si", "Chief", "2020-01-07"),("Jiandao Wangmazi", "Product Manager", "2020-01-08"),
+("Zhu Zhu", "Entrance Guard", "2020-01-09"),("Doge Du", "Cook", "2020-01-10"),("Xunger", "Student", "2020-01-11"),
+("Shaonian Runtu", "Test Engineer", "2020-01-12"),("James Solos", "General Director", "2020-01-13"),
+("Zhao Si", "General Director", "2020-01-14"),("Liu Jiannan", "Chief", "2020-01-15"),("Lao Yu", "Cook", "2020-01-16"),
+("James Cameron", "Artist Director", "2020-01-17"),("Wu Shifu", "Entrance Guard", "2020-01-18"),
+("Li Shifu", "Behavioral Artist", "2020-01-19");
+# 8.3 Restart the server.
+"restarting after crash"
+# ------------------------------Case 9----------------------------------------------
+# 9.1 Create table and insert data.
+DROP TABLE IF EXISTS `employee_tb`;
+CREATE TABLE IF NOT EXISTS `employee_tb`(`employee_id` INT UNSIGNED AUTO_INCREMENT,`employee_name` VARCHAR(100) NOT
+NULL,`employee_title` VARCHAR(100) NOT NULL,`birthdate` VARCHAR(100) NOT NULL,PRIMARY KEY (`employee_id`))ENGINE=InnoDB
+DEFAULT CHARSET=utf8mb4;
+INSERT INTO `employee_tb` (`employee_name`, `employee_title`, `birthdate`) VALUES
+("Zhang San", "General Director", "2020-01-01"),("Love Dollar Lisi", "Product Manager", "2020-01-02"),
+("Dadao Wangwu", "Entrance Guard", "2020-01-03"),("Hen Nanchi", "Main Cook", "2020-01-04"),
+("Shangdaren Kongyiji", "Student", "2020-01-05"),("Abudurezeke Aosiman", "Test Engineer", "2020-01-06"),
+("Li Si", "Chief", "2020-01-07"),("Jiandao Wangmazi", "Product Manager", "2020-01-08"),
+("Zhu Zhu", "Entrance Guard", "2020-01-09"),("Doge Du", "Cook", "2020-01-10"),("Xunger", "Student", "2020-01-11"),
+("Shaonian Runtu", "Test Engineer", "2020-01-12"),("James Solos", "General Director", "2020-01-13"),
+("Zhao Si", "General Director", "2020-01-14"),("Liu Jiannan", "Chief", "2020-01-15"),("Lao Yu", "Cook", "2020-01-16"),
+("James Cameron", "Artist Director", "2020-01-17"),("Wu Shifu", "Entrance Guard", "2020-01-18"),
+("Li Shifu", "Behavioral Artist", "2020-01-19");
+# 9.2 Checking audit log.
+Pattern "(""Li Shifu"", ""Behavioral Artist"", ""2020-01-19"")" found
+# 9.3 Clean up.
+DROP TABLE IF EXISTS `employee_tb`;

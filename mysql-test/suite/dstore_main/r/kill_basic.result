@@ -1,0 +1,88 @@
+create database test_db;
+create table test_db.test_tbl (a int primary key, b int);
+insert into test_db.test_tbl values (0, 1), (2, 3);
+create user test_user@localhost;
+grant select on performance_schema.* to test_user@localhost;
+grant insert on test_db.* to test_user@localhost;
+grant select on test_db.* to test_user@localhost;
+grant delete on test_db.* to test_user@localhost;
+grant create on test_db.* to test_user@localhost;
+grant create temporary tables on test_db.* to test_user@localhost;
+flush privileges;
+# 
+# 1. Test kill query functionality.
+#
+/* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000);
+KILL QUERY <CONNECTION_ID>;
+SLEEP(1000)
+1
+select "connection is active after kill query";
+connection is active after kill query
+connection is active after kill query
+begin;
+insert into test_db.test_tbl values (4, 5);
+/* KILL QUERY: SELECT SLEEP(2000) */ SELECT SLEEP(2000);
+KILL QUERY <CONNECTION_ID>;
+SLEEP(2000)
+1
+select "connection is active after kill query";
+connection is active after kill query
+connection is active after kill query
+commit;
+select * from test_db.test_tbl;
+a	b
+0	1
+2	3
+4	5
+# 
+# 2. Test kill connection functionality.
+#
+/* KILL CONNECTION: SELECT SLEEP(3000) */ SELECT SLEEP(3000);
+KILL CONNECTION <CONNECTION_ID>;
+# connection is broken
+Got one of the listed errors
+begin;
+select * from test_db.test_tbl for update;
+a	b
+0	1
+2	3
+4	5
+insert into test_db.test_tbl values (6, 7);
+create temporary table test_tmp_tbl ( a int, b varchar(50));
+insert into test_db.test_tmp_tbl values (0, "abc");
+/* KILL CONNECTION: SELECT SLEEP(4000)  */ SELECT SLEEP(4000);
+KILL CONNECTION <CONNECTION_ID>;
+# connection is broken
+Got one of the listed errors
+# insert (6, 7) has benn rollback
+select * from test_db.test_tbl;
+a	b
+0	1
+2	3
+4	5
+# create temporary table is rollback
+select * from test_db.test_tmp_tbl;
+ERROR 42S02: Table 'test_db.test_tmp_tbl' doesn't exist
+select * from test_db.test_tbl;
+a	b
+0	1
+2	3
+4	5
+begin;
+select * from test_db.test_tbl where a = 0 for update;
+a	b
+0	1
+begin;
+select * from test_db.test_tbl where a = 0 for update;
+KILL QUERY <CONNECTION_ID>;;
+Got one of the listed errors
+begin;
+select * from test_db.test_tbl where a = 0 for update;
+KILL QUERY <CONNECTION_ID>;;
+Got one of the listed errors
+#
+# 3. cleanup.
+#
+use test;
+drop user test_user@localhost;
+drop database test_db;

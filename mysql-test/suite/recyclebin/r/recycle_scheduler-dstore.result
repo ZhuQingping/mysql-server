@@ -1,0 +1,54 @@
+# Connect to master
+create database db_recycle;
+1. The rds_recycle_scheduler is turned off. The background thread stops clearing expired files.
+set global rds_recycle_bin_mode=ON;
+set rds_recycle_bin_mode=ON;
+set global rds_recycle_scheduler=OFF;
+set global rds_recycle_bin_retention=1;
+set global rds_recycle_scheduler_interval=1;
+use db_recycle;
+create table t1(id int);
+drop table t1;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t1	#	#
+2. The rds_recycle_scheduler is turned on. The background thread starts clearing expired files.
+set global rds_recycle_scheduler_purge_table_print=ON;
+set global rds_recycle_scheduler=ON;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+create table t1(id int);
+drop table t1;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+3. Adjust the value of rds_recycle_bin_retention, the tables in the recycle bin expire based on the latest time.
+set global rds_recycle_bin_retention=10;
+create table t1(id int);
+drop table t1;
+set global rds_recycle_bin_retention=60;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t1	#	#
+set global rds_recycle_bin_retention=1;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+4. The rds_recycle_scheduler is turned off during wait expired. The background thread stops clearing expired files.
+set global rds_recycle_bin_retention=60;
+create table t1(id int);
+drop table t1;
+set global rds_recycle_scheduler_purge_table_print=OFF;
+set global rds_recycle_scheduler=OFF;
+set global rds_recycle_bin_retention=10;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t1	#	#
+call dbms_recyclebin.purge_table('t1');
+# Connect to master
+set rds_recycle_bin_mode=ON;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+set global rds_recycle_scheduler=OFF;
+set global rds_recycle_bin_retention=259200;
+set global rds_recycle_scheduler_interval=30;
+set global rds_recycle_bin_mode=OFF;
+drop database db_recycle;

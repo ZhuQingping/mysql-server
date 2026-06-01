@@ -1,0 +1,50 @@
+# ==== Purpose =======
+# Execute a statement, which is not in progress of dstore trx. Then kill
+# and restart the mysqld, verify that the gtid set between binlog and
+# dstore is consistent.
+#
+# ==== References ====
+#
+# BUG2025082818258 The gtid set between binlog and dstore may inconsistent
+# after executing a statement which is not in progress of dstore trx
+#
+
+--source include/have_binlog_format_row.inc
+--source include/have_only_dstore.inc
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+
+RESET MASTER;
+CREATE USER u1@h;
+--echo #
+--echo # Verify that u1 is added into mysql.user.
+--echo #
+SELECT user FROM mysql.user where user='u1';
+
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, GRANT OPTION, REFERENCES, INDEX, ALTER, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER, BACKUP_ADMIN, SYSTEM_VARIABLES_ADMIN, BINLOG_ADMIN, REPLICATION_SLAVE_ADMIN, TABLE_ENCRYPTION_ADMIN ON *.* TO u1@h;
+--echo #
+--echo # Execute a statement, which is not in progress of dstore trx.
+--echo #
+FLUSH PRIVILEGES;
+
+--sleep 3
+--source include/kill_and_restart_mysqld.inc
+
+--echo #
+--echo # Expect that rds_binlog_dstore_consistent is on, which indicates
+--echo # that the gtid set between binlog and dstore is consistent.
+--echo #
+show variables like 'rds_binlog_dstore_consistent';
+--echo #
+--echo # Expect that rds_dstore_missed_gtids is empty.
+--echo #
+show variables like 'rds_dstore_missed_gtids';
+--echo #
+--echo # Expect that rds_dstore_missed_gtids_on_binlog is empty.
+--echo #
+show variables like 'rds_dstore_missed_gtids_on_binlog';
+
+# Execute the following statements for covering changed code
+REVOKE SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, PROCESS, GRANT OPTION, REFERENCES, INDEX, ALTER, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER, BACKUP_ADMIN, SYSTEM_VARIABLES_ADMIN, BINLOG_ADMIN, REPLICATION_SLAVE_ADMIN, TABLE_ENCRYPTION_ADMIN ON *.* FROM u1@h;
+FLUSH PRIVILEGES;
+DROP USER u1@h;

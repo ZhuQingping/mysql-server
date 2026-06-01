@@ -1,0 +1,189 @@
+call mtr.add_suppression("full backup found binlog is not enabled");
+CREATE DATABASE db1;
+USE db1;
+CREATE TABLE t1(a INT NOT NULL AUTO_INCREMENT, PRIMARY KEY(a)) ENGINE=Dstore;
+CREATE TABLE t2(a INT NOT NULL AUTO_INCREMENT, b VARCHAR(100), PRIMARY KEY(a)) ENGINE=Dstore;
+CREATE TABLE t3(a INT, t1_a INT, FOREIGN KEY(t1_a) REFERENCES t1(a)) ENGINE=Dstore;
+CREATE TABLE t4(a INT, b INT GENERATED ALWAYS AS (a), c CHAR(10), d CHAR(10) GENERATED ALWAYS AS (c), a1 INT GENERATED ALWAYS AS (a) VIRTUAL, INDEX(a1)) ENGINE=Dstore;
+CREATE TABLE t5(a INT, b INT INVISIBLE) ENGINE=Dstore;
+CREATE TABLE t6(a INT, b CHAR(100), c VARCHAR(100), KEY(b(5)), KEY(c(5))) ENGINE=Dstore;
+INSERT INTO t1 VALUES();
+INSERT INTO t2 VALUES();
+INSERT INTO t3 VALUES(1, 1);
+INSERT INTO t4 VALUES(1, DEFAULT, 'aa', DEFAULT, DEFAULT);
+INSERT INTO t5 VALUES(1);
+INSERT INTO t6 VALUES(1, '1234567890', 'abcde@abc.com');
+SELECT * FROM t1;
+a
+1
+SELECT * FROM t2;
+a	b
+1	NULL
+SELECT * FROM t3;
+a	t1_a
+1	1
+SELECT * FROM t4;
+a	b	c	d	a1
+1	1	aa	aa	1
+SELECT a, b FROM t5;
+a	b
+1	NULL
+SELECT * FROM t6;
+a	b	c
+1	1234567890	abcde@abc.com
+call rds_backup.start_full_local_backup(1);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+Pattern ""nonDstoreRunningStatus": "Completed"" found
+Pattern ""tablespaceRunningStatus": "Completed"" found
+Pattern ""walRunningStatus": "Completed"" found
+Pattern ""controlFileRunningStatus": "Completed"" found
+INSERT INTO t1 VALUES();
+INSERT INTO t2(b) VALUES('bb');
+INSERT INTO t3 VALUES(2, 2);
+INSERT INTO t4 VALUES(2, DEFAULT, 'bb', DEFAULT, DEFAULT);
+INSERT INTO t5(a, b) VALUES(2, 22);
+INSERT INTO t6 VALUES(2, '9876543210', 'zyxwv@zyx.com');
+SELECT * FROM t1 order by a;
+a
+1
+2
+SELECT * FROM t2 order by a;
+a	b
+1	NULL
+2	bb
+SELECT * FROM t3 order by a;
+a	t1_a
+1	1
+2	2
+SELECT * FROM t4 order by a;
+a	b	c	d	a1
+1	1	aa	aa	1
+2	2	bb	bb	2
+SELECT a, b FROM t5 order by a;
+a	b
+1	NULL
+2	22
+SELECT * FROM t6 order by a;
+a	b	c
+1	1234567890	abcde@abc.com
+2	9876543210	zyxwv@zyx.com
+call rds_backup.start_log_archive();
+INSERT INTO t1 VALUES();
+INSERT INTO t2(b) VALUES('cc');
+INSERT INTO t3 VALUES(3, 3);
+INSERT INTO t4 VALUES(3, DEFAULT, 'cc', DEFAULT, DEFAULT);
+INSERT INTO t5(a, b) VALUES(3, 33);
+INSERT INTO t6 VALUES(3, 'abc123def456ghi789', 'abc123@abc123.com');
+SELECT * FROM t1 order by a;
+a
+1
+2
+3
+SELECT * FROM t2 order by a;
+a	b
+1	NULL
+2	bb
+3	cc
+SELECT * FROM t3 order by a;
+a	t1_a
+1	1
+2	2
+3	3
+SELECT * FROM t4 order by a;
+a	b	c	d	a1
+1	1	aa	aa	1
+2	2	bb	bb	2
+3	3	cc	cc	3
+SELECT a, b FROM t5 order by a;
+a	b
+1	NULL
+2	22
+3	33
+SELECT * FROM t6 order by a;
+a	b	c
+1	1234567890	abcde@abc.com
+2	9876543210	zyxwv@zyx.com
+3	abc123def456ghi789	abc123@abc123.com
+call rds_backup.stop_log_archive();
+INSERT INTO t1 VALUES();
+INSERT INTO t2(b) VALUES('dd');
+INSERT INTO t3 VALUES(4, 4);
+INSERT INTO t4 VALUES(4, DEFAULT, 'dd', DEFAULT, DEFAULT);
+INSERT INTO t5(a, b) VALUES(4, 44);
+INSERT INTO t6 VALUES(4, '987abc654def321ghi', '987abc@987abc.com');
+SELECT * FROM t1 order by a;
+a
+1
+2
+3
+4
+SELECT * FROM t2 order by a;
+a	b
+1	NULL
+2	bb
+3	cc
+4	dd
+SELECT * FROM t3 order by a;
+a	t1_a
+1	1
+2	2
+3	3
+4	4
+SELECT * FROM t4 order by a;
+a	b	c	d	a1
+1	1	aa	aa	1
+2	2	bb	bb	2
+3	3	cc	cc	3
+4	4	dd	dd	4
+SELECT a, b FROM t5 order by a;
+a	b
+1	NULL
+2	22
+3	33
+4	44
+SELECT * FROM t6 order by a;
+a	b	c
+1	1234567890	abcde@abc.com
+2	9876543210	zyxwv@zyx.com
+3	abc123def456ghi789	abc123@abc123.com
+4	987abc654def321ghi	987abc@987abc.com
+# Shut server down.
+# Restart the server.
+# restart: --dstore_open_restore_mode=on
+USE db1;
+SELECT * FROM t1 order by a;
+a
+1
+2
+3
+SELECT * FROM t2 order by a;
+a	b
+1	NULL
+2	bb
+3	cc
+SELECT * FROM t3 order by a;
+a	t1_a
+1	1
+2	2
+3	3
+SELECT * FROM t4 order by a;
+a	b	c	d	a1
+1	1	aa	aa	1
+2	2	bb	bb	2
+3	3	cc	cc	3
+SELECT a, b FROM t5 order by a;
+a	b
+1	NULL
+2	22
+3	33
+SELECT * FROM t6 order by a;
+a	b	c
+1	1234567890	abcde@abc.com
+2	9876543210	zyxwv@zyx.com
+3	abc123def456ghi789	abc123@abc123.com
+DROP DATABASE db1;

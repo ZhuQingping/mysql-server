@@ -1,0 +1,48 @@
+From 2025fb96fcd3753835016e69ee6ff5db7c7e7210 Mon Sep 17 00:00:00 2001
+From: husishu <husishu1@contributor>
+
+Date: Tue, 2 Dec 2025 11:09:00 +0800
+Subject: [PATCH] fix some codecheck
+
+Issue:
+-----
+1.Mixing unsigned and signed numbers.
+2.Dereferencing of "opt_hints_table" which can be null
+
+Solution:
+---------
+1.Convert "gtid_set->to_string()" to uint32_t.
+2.Verify whether "opt_hints_table" is empty before dereferencing.
+---
+ sql/ddl_info_file.cc  | 2 +-
+ sql/sql_plan_cache.cc | 1 +
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/sql/ddl_info_file.cc b/sql/ddl_info_file.cc
+index 624943e83da..dcfa2096185 100644
+--- a/sql/ddl_info_file.cc
++++ b/sql/ddl_info_file.cc
+@@ -205,7 +205,7 @@ void persist_gtids_in_wal_to_file(const Gtid_set *gtid_set) {
+       writer = g_gtids_in_wal_store_file.createWriterPtr();
+   global_sid_lock->wrlock();
+   char *gtid_str = nullptr;
+-  uint16_t gtid_len = gtid_set->to_string(&gtid_str);
++  uint32_t gtid_len = static_cast<uint32_t>(gtid_set->to_string(&gtid_str));
+ 
+   global_sid_lock->unlock();
+ 
+diff --git a/sql/sql_plan_cache.cc b/sql/sql_plan_cache.cc
+index 522979ce646..f93605e4501 100644
+--- a/sql/sql_plan_cache.cc
++++ b/sql/sql_plan_cache.cc
+@@ -2621,6 +2621,7 @@ bool exec_cached_plan(SELECT_LEX *sl) {
+       // PT_key_level_hint, etc), due to the complexity of such layout.
+       auto opt_hints_table =
+           new (thd->mem_root) Opt_hints_table(nullptr, nullptr, thd->mem_root);
++      if (opt_hints_table == nullptr) return true;
+       opt_hints_table->index_merge.get_key_map()->merge(
+           join->plan_cache_exec_context->quick_keys_map);
+       leaf_tables->opt_hints_table = opt_hints_table;
+-- 
+2.23.0
+

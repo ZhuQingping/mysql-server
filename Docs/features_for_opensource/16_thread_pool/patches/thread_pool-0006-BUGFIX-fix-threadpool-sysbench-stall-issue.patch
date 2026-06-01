@@ -1,0 +1,86 @@
+From 7cf534ee20776828ad8e7af19cb06c26395b8f2b Mon Sep 17 00:00:00 2001
+From: songliyong <songliyong@contributor>
+
+
+Date: Fri, 22 Aug 2025 08:57:52 +0800
+Subject: [PATCH] BUGFIX fix threadpool sysbench stall issue
+
+Issue:
+------
+Sysbench threads initing stalls when using more than 64 connections
+
+Solution:
+---------
+When using a thread pool with epoll's EPOLLET + EPOLLONESHOT mode,
+where monitoring begins after login, if there is unread data in the
+TCP buffer before adding the listener and no new messages arrive,
+no monitoring event will be triggered. As a result, the remaining
+data in the buffer will not be processed promptly.
+
+Improvement: set threadpool_dedicated_listener=false ,let the Listener
+also handle user data to read the data as quickly as possible.After
+login, check for any residual data and completely read any remaining data.
+---
+ mysql-test/r/mysqld--help-notwin.result                        | 3 +--
+ .../suite/dstore_main/r/mysqld--help-notwin-dstore.result      | 3 +--
+ plugin/threadpool/threadpool_plugin.cc                         | 2 +-
+ 3 files changed, 3 insertions(+), 5 deletions(-)
+
+diff --git a/mysql-test/r/mysqld--help-notwin.result b/mysql-test/r/mysqld--help-notwin.result
+index 5fb1ac8270a..d7937cc8173 100644
+--- a/mysql-test/r/mysqld--help-notwin.result
++++ b/mysql-test/r/mysqld--help-notwin.result
+@@ -2036,7 +2036,6 @@ The following options may be given as the first argument:
+  by round robin.
+  --threadpool-dedicated-listener 
+  If set to true, listener thread will not pick up queries
+- (Defaults to on; use --skip-threadpool-dedicated-listener to disable.)
+  --threadpool-enable-active-threads-check 
+  If set to false then enable threadpool to create
+  additional thread when the threadpool_active_threads >=
+@@ -2686,7 +2685,7 @@ thread-pool-waits ON
+ thread-stack 1048576
+ threadpool ON
+ threadpool-cpubind-info nobind
+-threadpool-dedicated-listener TRUE
++threadpool-dedicated-listener FALSE
+ threadpool-enable-active-threads-check TRUE
+ threadpool-enabled FALSE
+ threadpool-exact-stats FALSE
+diff --git a/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result b/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
+index 5fb1ac8270a..d7937cc8173 100644
+--- a/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
++++ b/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
+@@ -2036,7 +2036,6 @@ The following options may be given as the first argument:
+  by round robin.
+  --threadpool-dedicated-listener 
+  If set to true, listener thread will not pick up queries
+- (Defaults to on; use --skip-threadpool-dedicated-listener to disable.)
+  --threadpool-enable-active-threads-check 
+  If set to false then enable threadpool to create
+  additional thread when the threadpool_active_threads >=
+@@ -2686,7 +2685,7 @@ thread-pool-waits ON
+ thread-stack 1048576
+ threadpool ON
+ threadpool-cpubind-info nobind
+-threadpool-dedicated-listener TRUE
++threadpool-dedicated-listener FALSE
+ threadpool-enable-active-threads-check TRUE
+ threadpool-enabled FALSE
+ threadpool-exact-stats FALSE
+diff --git a/plugin/threadpool/threadpool_plugin.cc b/plugin/threadpool/threadpool_plugin.cc
+index 5e52eeb34cd..18255e93523 100644
+--- a/plugin/threadpool/threadpool_plugin.cc
++++ b/plugin/threadpool/threadpool_plugin.cc
+@@ -201,7 +201,7 @@ static MYSQL_SYSVAR_BOOL(exact_stats, threadpool_exact_stats,
+ static MYSQL_SYSVAR_BOOL(
+     dedicated_listener, threadpool_dedicated_listener, PLUGIN_VAR_RQCMDARG,
+     "If set to true, listener thread will not pick up queries", NULL, NULL,
+-    true);
++    false);
+ 
+ static MYSQL_SYSVAR_BOOL(
+     enable_active_threads_check, threadpool_enable_active_threads_check,
+-- 
+2.23.0
+

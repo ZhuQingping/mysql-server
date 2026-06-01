@@ -1,0 +1,819 @@
+--echo #
+--echo # Test add_sql_filter/delete_sql_filter/update_sql_filter/flush_sql_filter/show_sql_filter/
+--echo # match sqlfilter/dec sqlfilter concurrency
+--echo #
+--source include/have_debug.inc
+--source include/have_debug_sync.inc
+--source ../include/sqlfilter_prepare.inc
+
+connect (con1, localhost, root);
+connect (con2, localhost, root);
+connect (con3, localhost, root);
+--echo #
+--echo # Test add_sql_filter and add_sql_filter concurrency
+--echo #
+connection con1;
+SET DEBUG_SYNC='add_sql_filter_after_open_table SIGNAL waiting WAIT_FOR continue';
+--send call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t1","");
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--send call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t2","");
+
+connection con3;
+let $wait_condition= SELECT COUNT(*) > 0 FROM information_schema.processlist
+                     WHERE info LIKE 'call dbms_sqlfilter.add_sql_filter%' AND
+                     state='Waiting for table metadata lock';
+source include/wait_condition.inc;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--reap
+
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+
+--echo #
+--echo # Test add_sql_filter and delete_sql_filter concurrency
+--echo #
+connection con2;
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t3","");
+--let $item_id = `select item_id from mysql.rds_sql_filter_rules where type = 'SELECT' and max_concurrency = 0 and key_str = 'SELECT~t3'`
+
+connection con1;
+SET DEBUG_SYNC='add_sql_filter_after_open_table SIGNAL waiting WAIT_FOR continue';
+--send call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t4","");
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.delete_sql_filter($item_id);
+
+connection con3;
+let $wait_condition= SELECT COUNT(*) > 0 FROM information_schema.processlist
+                     WHERE info LIKE 'call dbms_sqlfilter.delete_sql_filter%' AND
+                     state='Waiting for table metadata lock';
+source include/wait_condition.inc;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--reap
+
+connection con1;
+--let $item_id = `select item_id from mysql.rds_sql_filter_rules where type = 'SELECT' and max_concurrency = 0 and key_str = 'SELECT~t4'`
+
+SET DEBUG_SYNC='del_sql_filter_after_open_table SIGNAL waiting WAIT_FOR continue';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.delete_sql_filter($item_id);
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--send call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t5","");
+
+connection con3;
+let $wait_condition= SELECT COUNT(*) > 0 FROM information_schema.processlist
+                     WHERE info LIKE 'call dbms_sqlfilter.add_sql_filter%' AND
+                     state='Waiting for table metadata lock';
+source include/wait_condition.inc;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--replace_regex /\([0-9]+/(#/
+--reap
+
+connection con2;
+--reap
+
+call delete_one_sql_filter_rule(0);
+
+--echo #
+--echo # Test add_sql_filter and update_sql_filter concurrency
+--echo #
+connection con2;
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t6","");
+--let $item_id = `select item_id from mysql.rds_sql_filter_rules where type = 'SELECT' and max_concurrency = 0 and key_str = 'SELECT~t6'`
+
+connection con1;
+SET DEBUG_SYNC='add_sql_filter_after_open_table SIGNAL waiting WAIT_FOR continue';
+--send call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t7","");
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.update_sql_filter($item_id,'SELECT',10,"SELECT~t6","");
+
+connection con3;
+let $wait_condition= SELECT COUNT(*) > 0 FROM information_schema.processlist
+                     WHERE info LIKE 'call dbms_sqlfilter.update_sql_filter%' AND
+                     state='Waiting for table metadata lock';
+source include/wait_condition.inc;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--reap
+
+connection con1;
+--let $item_id = `select item_id from mysql.rds_sql_filter_rules where type = 'SELECT' and max_concurrency = 10 and key_str = 'SELECT~t6'`
+
+SET DEBUG_SYNC='update_sql_filter_after_open_table SIGNAL waiting WAIT_FOR continue';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.update_sql_filter($item_id,'SELECT',0,"SELECT~t6","");
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--send call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t8","");
+
+connection con3;
+let $wait_condition= SELECT COUNT(*) > 0 FROM information_schema.processlist
+                     WHERE info LIKE 'call dbms_sqlfilter.add_sql_filter%' AND
+                     state='Waiting for table metadata lock';
+source include/wait_condition.inc;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--reap
+
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+
+--echo #
+--echo # Test add_sql_filter and show_sql_filter concurrency
+--echo #
+connection con1;
+SET DEBUG_SYNC='add_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue';
+--send call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t9","");
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--send call dbms_sqlfilter.show_sql_filter();
+
+connection con3;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--replace_column 1 #
+--reap
+
+connection con1;
+SET DEBUG_SYNC='show_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue';
+--send call dbms_sqlfilter.show_sql_filter();
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--send call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t10","");
+
+connection con3;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--replace_column 1 #
+--reap
+
+connection con2;
+--reap
+
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call dbms_sqlfilter.show_sql_filter();
+
+--echo #
+--echo # Test add_sql_filter and flush_sql_filter concurrency
+--echo #
+connection con1;
+SET DEBUG_SYNC='add_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue';
+--send call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t11","");
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--send call dbms_sqlfilter.flush_sql_filter();
+
+connection con3;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--reap
+
+connection con1;
+SET DEBUG_SYNC='flush_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue';
+--send call dbms_sqlfilter.flush_sql_filter();
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--send call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t12","");
+
+connection con3;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--reap
+
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call dbms_sqlfilter.show_sql_filter();
+
+--echo #
+--echo # Test delete_sql_filter and detete_sql_filter concurrency
+--echo #
+connection default;
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t13","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t14","");
+--let $item_id1 = `select item_id from mysql.rds_sql_filter_rules where type = 'SELECT' and max_concurrency = 0 and key_str = 'SELECT~t13'`
+--let $item_id2 = `select item_id from mysql.rds_sql_filter_rules where type = 'SELECT' and max_concurrency = 0 and key_str = 'SELECT~t14'`
+
+connection con1;
+SET DEBUG_SYNC='del_sql_filter_after_open_table SIGNAL waiting WAIT_FOR continue';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.delete_sql_filter($item_id1);
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.delete_sql_filter($item_id2);
+
+connection con3;
+let $wait_condition= SELECT COUNT(*) > 0 FROM information_schema.processlist
+                     WHERE info LIKE 'call dbms_sqlfilter.delete_sql_filter%' AND
+                     state='Waiting for table metadata lock';
+source include/wait_condition.inc;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--reap
+
+--echo #
+--echo # Test delete_sql_filter and update_sql_filter concurrency
+--echo #
+connection default;
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t15","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t16","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t17","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t18","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t19","");
+
+connection con1;
+--let $item_id1 = `select item_id from mysql.rds_sql_filter_rules where type = 'SELECT' and max_concurrency = 0 and key_str = 'SELECT~t15'`
+--let $item_id2 = `select item_id from mysql.rds_sql_filter_rules where type = 'SELECT' and max_concurrency = 0 and key_str = 'SELECT~t16'`
+--let $item_id3 = `select item_id from mysql.rds_sql_filter_rules where type = 'SELECT' and max_concurrency = 0 and key_str = 'SELECT~t17'`
+--let $item_id4 = `select item_id from mysql.rds_sql_filter_rules where type = 'SELECT' and max_concurrency = 0 and key_str = 'SELECT~t18'`
+--let $item_id5 = `select item_id from mysql.rds_sql_filter_rules where type = 'SELECT' and max_concurrency = 0 and key_str = 'SELECT~t19'`
+
+--echo # delete_sql_filter and update_sql_filter same sql_filter
+--disable_warnings
+connection con1;
+SET DEBUG_SYNC='del_sql_filter_after_open_table SIGNAL waiting WAIT_FOR continue';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.delete_sql_filter($item_id1);
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.update_sql_filter($item_id1,'SELECT',10,"SELECT~t15","");
+
+connection con3;
+let $wait_condition= SELECT COUNT(*) > 0 FROM information_schema.processlist
+                     WHERE info LIKE 'call dbms_sqlfilter.update_sql_filter%' AND
+                     state='Waiting for table metadata lock';
+source include/wait_condition.inc;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--reap
+--enable_warnings
+
+--echo # delete_sql_filter and update_sql_filter not same sql_filter
+connection con1;
+SET DEBUG_SYNC='del_sql_filter_after_open_table SIGNAL waiting WAIT_FOR continue';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.delete_sql_filter($item_id2);
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.update_sql_filter($item_id3,'SELECT',10,"SELECT~t16","");
+
+connection con3;
+let $wait_condition= SELECT COUNT(*) > 0 FROM information_schema.processlist
+                     WHERE info LIKE 'call dbms_sqlfilter.update_sql_filter%' AND
+                     state='Waiting for table metadata lock';
+source include/wait_condition.inc;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--reap
+
+--echo # update_sql_filter and delete_sql_filter same sql_filter
+--disable_warnings
+connection con1;
+SET DEBUG_SYNC='update_sql_filter_after_open_table SIGNAL waiting WAIT_FOR continue';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.update_sql_filter($item_id3,'SELECT',10,"SELECT~t17","");
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.delete_sql_filter($item_id3);
+
+connection con3;
+let $wait_condition= SELECT COUNT(*) > 0 FROM information_schema.processlist
+                     WHERE info LIKE 'call dbms_sqlfilter.delete_sql_filter%' AND
+                     state='Waiting for table metadata lock';
+source include/wait_condition.inc;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--reap
+--enable_warnings
+
+--echo # update_sql_filter and delete_sql_filter not same sql_filter
+connection con1;
+SET DEBUG_SYNC='update_sql_filter_after_open_table SIGNAL waiting WAIT_FOR continue';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.update_sql_filter($item_id4,'SELECT',10,"SELECT~t17","");
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.delete_sql_filter($item_id5);
+
+connection con3;
+let $wait_condition= SELECT COUNT(*) > 0 FROM information_schema.processlist
+                     WHERE info LIKE 'call dbms_sqlfilter.delete_sql_filter%' AND
+                     state='Waiting for table metadata lock';
+source include/wait_condition.inc;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--reap
+
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+call delete_one_sql_filter_rule(0);
+
+--echo #
+--echo # Test delete_sql_filter and show_sql_filter concurrency
+--echo #
+connection default;
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t20","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t21","");
+--let $item_id1 = `select item_id from mysql.rds_sql_filter_rules where type = 'SELECT' and max_concurrency = 0 and key_str = 'SELECT~t20'`
+--let $item_id2 = `select item_id from mysql.rds_sql_filter_rules where type = 'SELECT' and max_concurrency = 0 and key_str = 'SELECT~t21'`
+
+connection con1;
+SET DEBUG_SYNC='delete_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.delete_sql_filter($item_id1);
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--send_eval call dbms_sqlfilter.show_sql_filter();
+
+connection con3;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--replace_column 1 #
+--reap
+
+connection con1;
+SET DEBUG_SYNC='show_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue';
+--send_eval call dbms_sqlfilter.show_sql_filter();
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.delete_sql_filter($item_id2);
+
+connection con3;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--replace_column 1 #
+--reap
+
+connection con2;
+--reap
+
+--echo #
+--echo # Test delete_sql_filter and flush_sql_filter concurrency
+--echo #
+connection default;
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t22","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t23","");
+--let $item_id1 = `select item_id from mysql.rds_sql_filter_rules where type = 'SELECT' and max_concurrency = 0 and key_str = 'SELECT~t22'`
+--let $item_id2 = `select item_id from mysql.rds_sql_filter_rules where type = 'SELECT' and max_concurrency = 0 and key_str = 'SELECT~t23'`
+
+connection con1;
+SET DEBUG_SYNC='delete_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.delete_sql_filter($item_id1);
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--send_eval call dbms_sqlfilter.flush_sql_filter();
+
+connection con3;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--reap
+
+connection con1;
+SET DEBUG_SYNC='flush_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue';
+--send_eval call dbms_sqlfilter.flush_sql_filter();
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.delete_sql_filter($item_id2);
+
+connection con3;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--reap
+
+--echo #
+--echo # Test update_sql_filter and update_sql_filter concurrency
+--echo #
+connection default;
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t24","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t25","");
+--let $item_id1 = `select item_id from mysql.rds_sql_filter_rules where type = 'SELECT' and max_concurrency = 0 and key_str = 'SELECT~t24'`
+--let $item_id2 = `select item_id from mysql.rds_sql_filter_rules where type = 'SELECT' and max_concurrency = 0 and key_str = 'SELECT~t25'`
+
+--echo # udpate same sql_filter
+--disable_warnings
+connection con1;
+SET DEBUG_SYNC='update_sql_filter_after_open_table SIGNAL waiting WAIT_FOR continue';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.update_sql_filter($item_id1,'SELECT',10,"SELECT~t24","");
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.update_sql_filter($item_id1,'SELECT',11,"SELECT~t24","");
+
+connection con3;
+let $wait_condition= SELECT COUNT(*) > 0 FROM information_schema.processlist
+                     WHERE info LIKE 'call dbms_sqlfilter.update_sql_filter%' AND
+                     state='Waiting for table metadata lock';
+source include/wait_condition.inc;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--reap
+
+--enable_warnings
+
+--echo # udpate not same sql_filter
+connection con1;
+SET DEBUG_SYNC='update_sql_filter_after_open_table SIGNAL waiting WAIT_FOR continue';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.update_sql_filter($item_id1,'SELECT',20,"SELECT~t24","");
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.update_sql_filter($item_id2,'SELECT',11,"SELECT~t25","");
+
+connection con3;
+let $wait_condition= SELECT COUNT(*) > 0 FROM information_schema.processlist
+                     WHERE info LIKE 'call dbms_sqlfilter.update_sql_filter%' AND
+                     state='Waiting for table metadata lock';
+source include/wait_condition.inc;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--reap
+
+--echo #
+--echo # Test update_sql_filter and show_sql_filter concurrency
+--echo #
+connection con1;
+SET DEBUG_SYNC='update_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.update_sql_filter($item_id1,'SELECT',10,"SELECT~t24","");
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--send_eval call dbms_sqlfilter.show_sql_filter();
+
+connection con3;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--replace_column 1 #
+--reap
+
+connection con1;
+SET DEBUG_SYNC='show_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue';
+--send_eval call dbms_sqlfilter.show_sql_filter();
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.update_sql_filter($item_id1,'SELECT',10,"SELECT~t24","");
+
+connection con3;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--replace_column 1 #
+--reap
+
+connection con2;
+--reap
+
+--echo #
+--echo # Test update_sql_filter and flush_sql_filter concurrency
+--echo #
+connection con1;
+SET DEBUG_SYNC='update_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.update_sql_filter($item_id1,'SELECT',10,"SELECT~t24","");
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--send_eval call dbms_sqlfilter.flush_sql_filter();
+
+connection con3;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--reap
+
+connection con1;
+SET DEBUG_SYNC='flush_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue';
+--send_eval call dbms_sqlfilter.flush_sql_filter();
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--replace_regex /\([0-9]+/(#/
+--send_eval call dbms_sqlfilter.update_sql_filter($item_id1,'SELECT',10,"SELECT~t24","");
+
+connection con3;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--reap
+
+--echo #
+--echo # Test show_sql_filter and show_sql_filter concurrency
+--echo #
+connection con1;
+SET DEBUG_SYNC='show_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue';
+--send_eval call dbms_sqlfilter.show_sql_filter();
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--send_eval call dbms_sqlfilter.show_sql_filter();
+
+connection con3;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--replace_column 1 #
+--reap
+
+connection con2;
+--replace_column 1 #
+--reap
+
+--echo #
+--echo # Test show_sql_filter and flush_sql_filter concurrency
+--echo #
+connection con1;
+SET DEBUG_SYNC='show_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue';
+--send_eval call dbms_sqlfilter.show_sql_filter();
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--send_eval call dbms_sqlfilter.flush_sql_filter();
+
+connection con3;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--replace_column 1 #
+--reap
+
+connection con2;
+--reap
+
+connection con1;
+SET DEBUG_SYNC='flush_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue';
+--send_eval call dbms_sqlfilter.flush_sql_filter();
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--send_eval call dbms_sqlfilter.show_sql_filter();
+
+connection con3;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--replace_column 1 #
+--reap
+
+--echo #
+--echo # Test flush_sql_filter and flush_sql_filter concurrency
+--echo #
+connection con1;
+SET DEBUG_SYNC='flush_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue';
+--send_eval call dbms_sqlfilter.flush_sql_filter();
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--send_eval call dbms_sqlfilter.flush_sql_filter();
+
+connection con3;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--reap
+
+connection con2;
+--reap
+
+--echo #
+--echo # Test match sql_filter and match sql_filter concurrency
+--echo #
+connection default;
+--replace_regex /\([0-9]+/(#/
+eval call dbms_sqlfilter.update_sql_filter($item_id1,'SELECT',0,"SELECT~t24","");
+create table t24 (id int);
+insert into t24 values(1);
+SET GLOBAL rds_sqlfilter_control=on;
+
+connection con1;
+SET DEBUG_SYNC='match_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue';
+--send select * from t24;
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--send select * from t24;
+
+connection con3;
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--error ER_QUERY_INTERRUPTED
+--reap
+
+connection con2;
+--error ER_QUERY_INTERRUPTED
+--reap
+
+connection con3;
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+--echo #
+--echo # Test match sql_filter and dec sql_filter concurrency
+--echo #
+connection default;
+--replace_regex /\([0-9]+/(#/
+eval call dbms_sqlfilter.update_sql_filter($item_id1,'SELECT',1,"SELECT~t24","");
+SET DEBUG_SYNC='dec_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue';
+--send select * from t24;
+
+connection con1;
+SET DEBUG_SYNC='match_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue1';
+--send select * from t24;
+
+connection con2;
+SET DEBUG_SYNC='now WAIT_FOR waiting';
+--send select * from t24;
+
+connection con3;
+SET DEBUG_SYNC='now SIGNAL continue1';
+
+connection con1;
+--error ER_QUERY_INTERRUPTED
+--reap
+
+connection con2;
+--error ER_QUERY_INTERRUPTED
+--reap
+
+connection con3;
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+connection con1;
+SET DEBUG_SYNC='dec_sql_filter_after_map_lock SIGNAL waiting WAIT_FOR continue2';
+--send select * from t24;
+
+connection con3;
+SET DEBUG_SYNC='now SIGNAL continue2';
+SET DEBUG_SYNC='now SIGNAL continue';
+
+connection con1;
+--error ER_QUERY_INTERRUPTED
+--reap
+
+connection default;
+--reap
+
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call dbms_sqlfilter.show_sql_filter();
+
+--echo #
+--echo # dbms_sqlfilter.flush_sql_filter() will set m_cur_concur to zero
+--echo # in high-concurrency scenarios, m_cur_concur may be reduced to ULONG_MAX
+connection default;
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~FROM","");
+call dbms_sqlfilter.add_sql_filter('SELECT',1,"SELECT~FROM","");
+
+connection con1;
+SET DEBUG_SYNC= 'before_reduce_sqlfilter_item_concurrency WAIT_FOR go';
+--send select * from t24;
+
+connection default;
+select sleep(1);
+call delete_one_sql_filter_rule(0);
+
+call dbms_sqlfilter.flush_sql_filter();
+SET DEBUG_SYNC= 'now SIGNAL go';
+
+connection con1;
+--reap
+
+connection default;
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+
+call delete_one_sql_filter_rule(0);
+call dbms_sqlfilter.show_sql_filter();
+
+SET GLOBAL rds_sqlfilter_control=default;
+drop table t24;
+--source ../include/sqlfilter_cleanup.inc

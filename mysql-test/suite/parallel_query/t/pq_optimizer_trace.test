@@ -1,0 +1,356 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+
+--disable_query_log
+CALL mtr.add_suppression("Make worker plan failed");
+CALL mtr.add_suppression("Create worker tmp tables or make join read info failed");
+CALL mtr.add_suppression("Create worker result mq failed");
+--enable_query_log
+
+set @saved_parallel_cost_threshold = @@parallel_cost_threshold;
+set @saved_parallel_rows_threshold = @@parallel_rows_threshold;
+set @saved_optimizer_trace = @@optimizer_trace;
+set @saved_parallel_fail_retry = @@parallel_fail_retry;
+set @saved_parallel_memory_limit = @@parallel_memory_limit;
+
+drop table if exists tab_1;
+create table tab_1(a int);
+insert into tab_1 values (6),(2),(1);
+
+SET optimizer_trace="enabled=on";
+set global parallel_cost_threshold = 0;
+set global parallel_rows_threshold = 0;
+
+--echo # 
+--echo # max pq memory size limit.
+--echo # 
+set global parallel_memory_limit = 1;
+
+select * from tab_1;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+set global parallel_memory_limit = @saved_parallel_memory_limit;
+
+--echo # 
+--echo # pq_running_threads
+--echo # 
+set @saved_parallel_max_threads = @@parallel_max_threads;
+set global parallel_max_threads = 2;
+
+select * from tab_1;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+set global parallel_max_threads = @saved_parallel_max_threads;
+
+--echo # 
+--echo # parallel_cost_threshold
+set parallel_cost_threshold = 1000;
+
+select * from tab_1;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+set parallel_cost_threshold = 0;
+
+--echo # 
+--echo # parallel_rows_threshold
+set parallel_rows_threshold = 1000;
+
+select * from tab_1;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+set parallel_rows_threshold = 0;
+
+--echo # 
+--echo # parallel correlated_subquery
+set optimizer_switch="semijoin=off";
+SET @saved_pq_support_features_switch = @@global.pq_support_features_switch;
+set pq_support_features_switch='correlated_subquery=on';
+explain select * from tab_1 where exists(select * from tab_1 as dt where dt.a = tab_1.a);
+
+set pq_support_features_switch='correlated_subquery=off';
+explain select * from tab_1 where exists(select * from tab_1 as dt where dt.a = tab_1.a);
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+set optimizer_switch="semijoin=on";
+set pq_support_features_switch='correlated_subquery=on';
+
+--echo # 
+--echo # no_pq or pq_dop is 0. (force_parallel_execute/parallel_default_dop)
+# printf "check force_parallel_execute/parallel_default_dop."
+
+set @saved_force_parallel_execute = @@force_parallel_execute;
+set force_parallel_execute = off;
+select * from tab_1;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+set force_parallel_execute = @saved_force_parallel_execute;
+
+set @saved_parallel_default_dop = @@parallel_default_dop;
+set parallel_default_dop = 0;
+select * from tab_1;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+set parallel_default_dop = @saved_parallel_default_dop;
+
+--echo #
+--echo # PQ hint
+create table tab_3 (a int, b text);
+#PQ hint
+set force_parallel_execute = off;
+select b from tab_3;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+select /*+PQ(1) */ b from tab_3;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+select /*+PQ(1) */ /*+NO_PQ */ b from tab_3;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+select  /*+NO_PQ */ /*+PQ(1) */ b from tab_3;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+set force_parallel_execute = on;
+# NO_PQ
+select b from tab_3;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+select /*+NO_PQ */ b from tab_3;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+select /*+PQ(1) */ /*+NO_PQ */ b from tab_3;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+select  /*+NO_PQ */ /*+PQ(1) */ b from tab_3;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+drop table tab_3;
+
+--echo #
+--echo # isn't SELECT/INSERT SELECT/REPLACE SELECT command or is explain analyze commnad
+# explain analyze select * from tab_3;
+# SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+--echo #
+--echo # prepare statement
+prepare stmt from "select * from tab_1";
+execute stmt;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+deallocate prepare stmt;
+
+--echo #
+--echo # procedure
+delimiter $$;
+create procedure p1()
+begin
+select a from tab_1;
+end$$
+delimiter ;$$
+call p1();
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+drop procedure p1;
+
+--echo #
+--echo # query with SQL_BUFFER_RESULT
+select SQL_BUFFER_RESULT * from tab_1;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+--echo #
+--echo # query with "with rollup"
+select * from tab_1 group by a with rollup;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+--echo #
+--echo # query has windows functions
+drop table if exists tab_2;
+create table tab_2 (a int ,b int);
+insert into tab_2 values (1,100),(1,120),(2,50),(2,90);
+select a,sum(b) over (partition by a ) from tab_2;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+--echo #
+--echo # has system table
+select 1 from mysql.user limit 1;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+--echo #
+--echo # table lock
+# HIGH_PRIORITY
+select HIGH_PRIORITY * from tab_1;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+# for update
+select * from tab_1 for update;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+--echo #
+--echo # tmp table
+create temporary table tmp_table (a int);
+insert into tmp_table values (1),(2),(3);
+select * from tmp_table;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+drop table tmp_table;
+
+--echo #
+--echo # partition table
+create table part_tab (a int) 
+partition by range (a)
+(
+partition p0 values less than (10),
+partition p1 values less than (20),
+partition p2 values less than (30),
+partition p3 values less than (40));
+
+#simple
+select a from part_tab where a < 10;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+#multiple
+select a from part_tab where a < 40;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+drop table part_tab;
+
+--echo #
+--echo # test round function
+select /*+ NO_PQ */ round(a) from tab_1;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+--echo #
+--echo # pq clone condition failed
+CREATE TABLE t0 (c0 INT);
+SELECT 1 WHERE (SELECT 1, 2 FROM t0) NOT IN (SELECT 1, 2 FROM (SELECT DISTINCT 1 FROM t0) x(x));
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+drop table t0;
+
+--echo #
+--echo # unsupported field data type
+create table datatype_tab (a int , b text, c blob, d json,e geometry);
+select a from datatype_tab;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+select b from datatype_tab;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+select c from datatype_tab;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+select d from datatype_tab;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+select e from datatype_tab;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+drop table datatype_tab;
+
+--echo #
+--echo virtual column
+create table gol_tab(price int, quantity int, total_sales int as (price * quantity) virtual);
+insert into gol_tab(price, quantity) values (10,2),(5,8);
+select * from gol_tab;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+drop table gol_tab;
+
+--echo #
+--echo # unsupported function type
+--echo # unsuppored aggregation function
+select BIT_AND(a) from tab_1;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+--echo #
+--echo # unsuppored function without arg
+select row_count() from tab_1;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+--echo #
+--echo # unsuppored function with arg
+#rand
+select a from tab_1 where a > rand(1);
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+#match
+create table match_tab(name varchar(50),info varchar(100));
+insert into match_tab values ("tom","info a"),("jane","info b");
+alter table match_tab add fulltext(name,info);
+select MATCH(name,info) AGAINST('a') from match_tab;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+
+--echo #
+--echo # clone where condition failed
+select * from match_tab where MATCH(name,info) AGAINST('a');
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+drop table match_tab;
+
+
+--echo # 
+--echo # unsupported subquery.
+
+select (select avg(a) from tab_1 where a = A.a) as avgnum from tab_1 as A;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+
+--echo # 
+--echo # Internal check failed.  const item not support.
+SELECT DISTINCT CAST(x.x AS UNSIGNED) w
+FROM tab_1 JOIN (SELECT count(*)) x(x) ORDER BY w;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+--echo # 
+--echo # error in save tmp table param
+set session debug="";
+set session debug="+d, have_error_in_saving";
+select a from tab_1;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+set session debug="";
+
+--echo # 
+--echo # choose pq
+set global parallel_cost_threshold = 0;
+set global parallel_rows_threshold = 0;
+select count(a) as b from tab_1 where a=0;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+--echo #
+--echo # choose pq but make pq leader plan failed. retry without pq.
+--echo # pq_leader_abort1
+set session debug="";
+set session debug="+d, pq_leader_abort1";
+SET parallel_graceful_fallback=off;
+select count(a) as b from tab_1 where a=0;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+--echo #
+--echo # choose pq but make pq leader plan failed. graceful fallback to serial execute.
+--echo # pq_leader_abort1
+SET parallel_graceful_fallback=on;
+select count(a) as b from tab_1 where a=0;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+SET parallel_graceful_fallback=default;
+
+--echo #
+--echo # choose pq but make pq leader plan failed. no retry, query execute failed.
+--echo # 
+--echo # pq_leader_abort2
+#set parallel_fail_retry = false;
+set session debug="";
+set session debug="+d, pq_leader_abort2";
+select count(a) as b from tab_1 where a=0;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+set parallel_fail_retry = on;
+
+drop table tab_1;
+drop table tab_2;
+set session debug="";
+
+--echo #
+--echo # Parallel query do not support hypergraph optimizer, since hypergraph optimizer
+--echo # doesn't create QEP_TABs, and PQ clones QEP_TABs.
+CREATE TABLE t(a INT);
+INSERT INTO t
+WITH RECURSIVE tt (n) AS (
+    SELECT 1
+    UNION ALL
+    SELECT n + 1 FROM tt WHERE n < 1000
+)
+SELECT n FROM tt;
+ANALYZE TABLE t;
+SET @saved_optimizer_switch = @@optimizer_switch;
+SET optimizer_switch='hypergraph_optimizer=on';
+SELECT COUNT(*) FROM t WHERE a % 2 > 0;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+
+SET optimizer_switch='hypergraph_optimizer=off';
+EXPLAIN SELECT COUNT(*) FROM t WHERE a % 2 > 0;
+SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+SELECT COUNT(*) FROM t WHERE a % 2 > 0;
+
+SET optimizer_switch = @saved_optimizer_switch;
+DROP TABLE t;
+
+set global parallel_cost_threshold = @saved_parallel_cost_threshold;
+set global parallel_rows_threshold = @saved_parallel_rows_threshold;
+set optimizer_trace = @saved_optimizer_trace;
+set parallel_fail_retry = @saved_parallel_fail_retry;
+set global parallel_memory_limit = @saved_parallel_memory_limit;
+SET global pq_support_features_switch = @saved_pq_support_features_switch;

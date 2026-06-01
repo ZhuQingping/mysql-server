@@ -1,0 +1,43 @@
+# ==== Purpose ====
+# Simulate the binlog is closed while committing a tranction, verify that
+# the transaction is committed and not written into binary log.
+#
+# ==== References ====
+#
+# US2025030700428 Implement a "BINLOG GROUP COMMIT" with one phase commit
+#
+
+--source include/have_binlog_format_row.inc
+--source include/have_only_dstore.inc
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+
+RESET MASTER;
+
+CREATE TABLE t1(c1 INT);
+
+SET @@GLOBAL.DEBUG= '+d, simulate_binlog_is_closed';
+INSERT INTO t1 VALUES(1);
+--echo #
+--echo # Check that the 'INSERT' transaction is committed successfully.
+--echo #
+SELECT * FROM t1 ORDER BY t1.c1;
+SET @@GLOBAL.DEBUG= '-d, simulate_binlog_is_closed';
+
+DELETE FROM t1 WHERE c1=1;
+--echo #
+--echo # Check that the 'DELETE' transaction is committed successfully.
+--echo #
+SELECT * FROM t1 ORDER BY t1.c1;
+
+--echo #
+--echo # Check that the above 'INSERT' transaction is not written into
+--echo # binary log and the above 'DELETE' transaction is written into
+--echo # binary log.
+--echo #
+--sleep 2
+--let $keep_gtid_events= 1
+--source include/show_binlog_events.inc
+
+# Cleanup
+DROP TABLE t1;

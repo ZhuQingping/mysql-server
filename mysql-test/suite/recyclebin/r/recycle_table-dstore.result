@@ -1,0 +1,618 @@
+# Connect to master
+set global rds_recycle_bin_mode=ON;
+create database db_recycle;
+create database db_recycle_dropped;
+create user normal_1@'%' identified by 'pass';
+create user normal_2@'%' identified by 'pass';
+create user normal_3@'%' identified by 'pass';
+grant all on db_recycle.* to normal_1@'%' ;
+grant all on db_recycle_dropped.* to normal_1@'%';
+grant all on __recyclebin__.* to normal_1@'%' ;
+grant SYSTEM_VARIABLES_ADMIN on *.* to normal_1@'%';
+grant all on __recyclebin__.* to normal_3@'%' ;
+revoke drop on __recyclebin__.* from normal_3@'%';
+------------------------------------------------------
+1. Privileges
+-- Still require related privileges if want to
+show recycle bin db;
+-- No one can alter db except super_acl user;
+------------------------------------------------------
+1.1 dbms_recyclebin.purge_table still require db.table privileges;
+use db_recycle;
+create table t1(id int);
+drop table t1;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t1	#	#
+call dbms_recyclebin.purge_table('t1');
+ERROR 42000: DROP command denied to user 'normal_2'@'localhost' for table 't1'
+call dbms_recyclebin.purge_table('t1');
+ERROR 42000: DROP command denied to user 'normal_3'@'localhost' for table 't1'
+show grants;
+Grants for normal_1@%
+GRANT USAGE ON *.* TO `normal_1`@`%`
+GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO `normal_1`@`%`
+GRANT ALL PRIVILEGES ON `__recyclebin__`.* TO `normal_1`@`%`
+GRANT ALL PRIVILEGES ON `db_recycle`.* TO `normal_1`@`%`
+GRANT ALL PRIVILEGES ON `db_recycle_dropped`.* TO `normal_1`@`%`
+call dbms_recyclebin.purge_table('t1');
+------------------------------------------------------
+1. Drop table
+-- Related object:
+Foreign key:
+Trigger:
+View:
+Constraint:
+-- multi tables
+------------------------------------------------------
+use db_recycle;
+CREATE TABLE p1 (
+id INT NOT NULL,
+PRIMARY KEY (id)
+) ENGINE=Dstore;
+CREATE TABLE c1 (
+id INT,
+parent_id INT,
+INDEX par_ind (parent_id),
+FOREIGN KEY (parent_id)
+REFERENCES p1(id)
+ON DELETE CASCADE
+) ENGINE=Dstore;
+create table l1(id int);
+CREATE TRIGGER tri_1
+before INSERT ON c1 FOR EACH ROW
+BEGIN
+INSERT INTO l1 value(1);
+END//
+create view v1 as select * from c1;
+1.1 confirm the trigger, view, foreign key.
+drop table c1;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	c1	#	#
+show create table __recyclebin__.`c1`;
+Table	Create Table
+c1	CREATE TABLE `c1` (
+  `id` int DEFAULT NULL,
+  `parent_id` int DEFAULT NULL,
+  KEY `par_ind` (`parent_id`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+show create trigger tri_1;
+ERROR HY000: Trigger does not exist
+show create view v1;
+View	Create View	character_set_client	collation_connection
+v1	CREATE ALGORITHM=UNDEFINED DEFINER=`normal_1`@`%` SQL SECURITY DEFINER VIEW `v1` AS select `c1`.`id` AS `id`,`c1`.`parent_id` AS `parent_id` from `c1`	utf8mb4	utf8mb4_0900_ai_ci
+Warnings:
+Warning	1356	View 'db_recycle.v1' references invalid table(s) or column(s) or function(s) or definer/invoker of view lack rights to use them
+select * from v1;
+ERROR HY000: View 'db_recycle.v1' references invalid table(s) or column(s) or function(s) or definer/invoker of view lack rights to use them
+call dbms_recyclebin.purge_table('c1');
+# Connect to master
+use db_recycle;
+CREATE TABLE t1 (
+id INT NOT NULL,
+PRIMARY KEY (id)
+) ENGINE=Dstore;
+CREATE TABLE t2 (
+id INT NOT NULL,
+PRIMARY KEY (id)
+) ENGINE=Dstore;
+drop table t1,t2;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t1	#	#
+__recyclebin__	#	db_recycle	t2	#	#
+call dbms_recyclebin.purge_table('t1');
+call dbms_recyclebin.purge_table('t2');
+CREATE TABLE t1 (
+id INT NOT NULL,
+PRIMARY KEY (id)
+) ENGINE=Dstore;
+CREATE TEMPORARY TABLE t2 (
+id INT NOT NULL);
+drop table t1,t2;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t1	#	#
+call dbms_recyclebin.purge_table('t1');
+# Connect to master
+set rds_recycle_bin_mode=OFF;
+use db_recycle;
+drop table l1;
+drop view v1;
+drop table p1;
+------------------------------------------------------
+1. Drop parent table
+------------------------------------------------------
+use db_recycle;
+CREATE TABLE p1 (
+id INT NOT NULL,
+PRIMARY KEY (id)
+) ENGINE=Dstore;
+CREATE TABLE c1 (
+id INT,
+parent_id INT,
+INDEX par_ind (parent_id),
+FOREIGN KEY (parent_id)
+REFERENCES p1(id)
+ON DELETE CASCADE
+) ENGINE=Dstore;
+1.1  foreign key.
+drop table p1;
+ERROR HY000: Cannot drop table 'p1' referenced by a foreign key constraint 'c1_fk_1' on table 'c1'.
+set foreign_key_checks=off;
+drop table p1;
+insert into c1 values(1, 2);
+commit;
+show create table c1;
+Table	Create Table
+c1	CREATE TABLE `c1` (
+  `id` int DEFAULT NULL,
+  `parent_id` int DEFAULT NULL,
+  KEY `par_ind` (`parent_id`),
+  CONSTRAINT `c1_fk_1` FOREIGN KEY (`parent_id`) REFERENCES `p1` (`id`) ON DELETE CASCADE
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+set foreign_key_checks=on;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+# Connect to master
+set rds_recycle_bin_mode=OFF;
+drop table db_recycle.c1;
+------------------------------------------------------
+1. Drop in procedure
+------------------------------------------------------
+use db_recycle;
+CREATE TABLE p1 (
+id INT NOT NULL,
+PRIMARY KEY (id)
+) ENGINE=Dstore;
+create procedure proc_1()
+begin
+drop table p1;
+end//
+call proc_1();
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+drop procedure proc_1;
+------------------------------------------------------
+2. Drop database
+------------------------------------------------------
+use db_recycle_dropped;
+CREATE TABLE p2 (
+id INT NOT NULL,
+PRIMARY KEY (id)
+) ENGINE=Dstore;
+CREATE TABLE c2 (
+id INT,
+parent_id INT,
+self_id INT,
+INDEX id_ind (id),
+INDEX par_ind (parent_id),
+INDEX sel_ind (self_id),
+FOREIGN KEY (self_id)
+REFERENCES c2(id),
+FOREIGN KEY (parent_id)
+REFERENCES p2(id)
+ON DELETE CASCADE
+) ENGINE=Dstore;
+create table l2(id int);
+CREATE TRIGGER tri_1
+before INSERT ON c2 FOR EACH ROW
+BEGIN
+INSERT INTO l2 value(1);
+END//
+create view v2 as select * from c2;
+drop database db_recycle_dropped;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle_dropped	c2	#	#
+__recyclebin__	#	db_recycle_dropped	l2	#	#
+__recyclebin__	#	db_recycle_dropped	p2	#	#
+create database db_recycle_dropped;
+SET SESSION debug="+d,recyclebin_restore_table_old_db_null";
+call dbms_recyclebin.restore_db('db_recycle_dropped');
+ERROR HY000: Incorrect parameters (pos is 1) to native procedure 'dbms_recyclebin.restore_db.
+SET SESSION debug="-d,recyclebin_restore_table_old_db_null";
+call dbms_recyclebin.restore_db('db_recycle_dropped', '__recyclebin__');
+ERROR HY000: Recycle table failed : unable to restore table to __recyclebin__.
+SET SESSION debug="+d,recyclebin_copy_with_cs_fail_05";
+call dbms_recyclebin.restore_db('db_recycle_dropped', 'db_recycle_dropped');
+ERROR HY000: Incorrect parameters (pos is 2) to native procedure 'dbms_recyclebin.restore_db.
+SET SESSION debug="-d,recyclebin_copy_with_cs_fail_05";
+call dbms_recyclebin.restore_db('db_recycle_dropped');
+call dbms_recyclebin.restore_db('db_recycle_dropped_note_exist');
+ERROR HY000: No table whose origin db is db_recycle_dropped_note_exist exists in recycle bin.
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+set rds_recycle_bin_mode=OFF;
+drop database db_recycle_dropped;
+set rds_recycle_bin_mode=ON;
+------------------------------------------------------
+3. read only
+------------------------------------------------------
+use db_recycle;
+create table t2 (id int);
+drop table t2;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t2	#	#
+set global read_only = on;
+call dbms_recyclebin.purge_table('t2');
+ERROR HY000: The MySQL server is running with the --read-only option so it cannot execute this statement
+set global read_only = off;
+call dbms_recyclebin.purge_table('t2');
+------------------------------------------------------
+4. recycle_bin table exists error
+------------------------------------------------------
+use db_recycle;
+create table t5(id int);
+drop table t5;
+create table t5(id int);
+drop table t5;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t5	#	#
+__recyclebin__	#	db_recycle	t5	#	#
+call dbms_recyclebin.purge_table('t5');
+call dbms_recyclebin.purge_table('t5_2');
+------------------------------------------------------
+5. purge normal table or noexist table
+------------------------------------------------------
+set rds_recycle_bin_mode=ON;
+create table __recyclebin__.no_recycle_table(id int);
+create table __recyclebin__.__Dstore_olddb_oldtable_1234(id int);
+create table __recyclebin__.__Dstore_olddb_oldtable_1234_(id int);
+create table __recyclebin__.abc(id int);
+create table __recyclebin__.`@@`(id int);
+create table __recyclebin__.`@`(id int);
+create table __recyclebin__.`@123`(id int);
+create table __recyclebin__.`abc@123`(id int);
+create table __recyclebin__.`@1@123`(id int);
+create table __recyclebin__.`1@@123`(id int);
+create table __recyclebin__.`1@2@`(id int);
+create table __recyclebin__.`1@2@ok`(id int);
+create table __recyclebin__.`1@2@123`(id int);
+create table __recyclebin__.`db_recycle@2@123`(id int);
+create table __recyclebin__.`db@recycle@2@123`(id int);
+create table __recyclebin__.`db_recycle@4@FFFFFFFF`(id int);
+create table db_recycle.`db_recycle@3@123`(id int);
+create table db_recycle.`4`(id int);
+rename table db_recycle.`db_recycle@3@123` to __recyclebin__.`@3@123`;
+rename table db_recycle.`4` to __recyclebin__.`db_recycle@4@123`;
+use __recyclebin__;
+show tables;
+Tables_in___recyclebin__
+1@2@
+1@2@123
+1@2@ok
+1@@123
+@
+@123
+@1@123
+@3@123
+@@
+__Dstore_olddb_oldtable_1234
+__Dstore_olddb_oldtable_1234_
+abc
+abc@123
+db@recycle@2@123
+db_recycle@2@123
+db_recycle@4@123
+db_recycle@4@FFFFFFFF
+no_recycle_table
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	1@2@123	1	2	#	#
+__recyclebin__	db_recycle@2@123	db_recycle	2	#	#
+__recyclebin__	db_recycle@4@123	db_recycle	4	#	#
+set rds_recycle_bin_mode=ON;
+call dbms_recyclebin.restore_table("no_recycle_table");
+ERROR HY000: Recycle table failed : no_recycle_table isn't recycled table.
+call dbms_recyclebin.restore_table("__Dstore_olddb_oldtable_1234");
+ERROR HY000: Recycle table failed : __Dstore_olddb_oldtable_1234 isn't recycled table.
+call dbms_recyclebin.restore_table("abc");
+ERROR HY000: Recycle table failed : abc isn't recycled table.
+call dbms_recyclebin.restore_table("@@");
+ERROR HY000: Recycle table failed : @@ isn't recycled table.
+call dbms_recyclebin.restore_table("@");
+ERROR HY000: Recycle table failed : @ isn't recycled table.
+call dbms_recyclebin.restore_table("@123");
+ERROR HY000: Recycle table failed : @123 isn't recycled table.
+call dbms_recyclebin.restore_table("__Dstore_olddb_oldtable_1234_");
+ERROR HY000: Recycle table failed : __Dstore_olddb_oldtable_1234_ isn't recycled table.
+call dbms_recyclebin.restore_table("abc@123");
+ERROR HY000: Recycle table failed : abc@123 isn't recycled table.
+call dbms_recyclebin.restore_table("@1@123");
+ERROR HY000: Recycle table failed : @1@123 isn't recycled table.
+call dbms_recyclebin.restore_table("1@2@");
+ERROR HY000: Recycle table failed : 1@2@ isn't recycled table.
+call dbms_recyclebin.restore_table("1@2@ok");
+ERROR HY000: Recycle table failed : 1@2@ok isn't recycled table.
+call dbms_recyclebin.restore_table("1@2@123");
+ERROR 42000: INSERT, CREATE command denied to user 'normal_1'@'localhost' for table '2'
+call dbms_recyclebin.restore_table("1@2@123", "db_recycle", "1");
+call dbms_recyclebin.restore_table("db_recycle@2@123");
+call dbms_recyclebin.restore_table("db@recycle@2@123");
+ERROR HY000: Recycle table failed : db@recycle@2@123 isn't recycled table.
+call dbms_recyclebin.restore_table("db_recycle@4@FFFFFFFF");
+ERROR HY000: Recycle table failed : db_recycle@4@FFFFFFFF isn't recycled table.
+call dbms_recyclebin.restore_table("@3@123", "db_recycle", "3");
+ERROR HY000: Recycle table failed : @3@123 isn't recycled table.
+call dbms_recyclebin.restore_table("db_recycle@4@123");
+show tables;
+Tables_in_db_recycle
+1
+2
+4
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+call dbms_recyclebin.purge_table("no_recycle_table");
+Warnings:
+Warning	8050	table no_recycle_table was not moved to the recycle bin by recycle bin operation.
+call dbms_recyclebin.purge_table("__Dstore_olddb_oldtable_1234");
+Warnings:
+Warning	8050	table __Dstore_olddb_oldtable_1234 was not moved to the recycle bin by recycle bin operation.
+call dbms_recyclebin.purge_table("abc");
+Warnings:
+Warning	8050	table abc was not moved to the recycle bin by recycle bin operation.
+call dbms_recyclebin.purge_table("@@");
+Warnings:
+Warning	8050	table @@ was not moved to the recycle bin by recycle bin operation.
+call dbms_recyclebin.purge_table("@");
+Warnings:
+Warning	8050	table @ was not moved to the recycle bin by recycle bin operation.
+call dbms_recyclebin.purge_table("@123");
+Warnings:
+Warning	8050	table @123 was not moved to the recycle bin by recycle bin operation.
+call dbms_recyclebin.purge_table("__Dstore_olddb_oldtable_1234_");
+Warnings:
+Warning	8050	table __Dstore_olddb_oldtable_1234_ was not moved to the recycle bin by recycle bin operation.
+call dbms_recyclebin.purge_table("abc@123");
+Warnings:
+Warning	8050	table abc@123 was not moved to the recycle bin by recycle bin operation.
+call dbms_recyclebin.purge_table("@1@123");
+Warnings:
+Warning	8050	table @1@123 was not moved to the recycle bin by recycle bin operation.
+call dbms_recyclebin.purge_table("1@2@");
+Warnings:
+Warning	8050	table 1@2@ was not moved to the recycle bin by recycle bin operation.
+call dbms_recyclebin.purge_table("1@2@ok");
+Warnings:
+Warning	8050	table 1@2@ok was not moved to the recycle bin by recycle bin operation.
+call dbms_recyclebin.purge_table("@3@123");
+Warnings:
+Warning	8050	table @3@123 was not moved to the recycle bin by recycle bin operation.
+call dbms_recyclebin.purge_table("db@recycle@2@123");
+Warnings:
+Warning	8050	table db@recycle@2@123 was not moved to the recycle bin by recycle bin operation.
+call dbms_recyclebin.purge_table("db_recycle@4@FFFFFFFF");
+Warnings:
+Warning	8050	table db_recycle@4@FFFFFFFF was not moved to the recycle bin by recycle bin operation.
+show tables;
+Tables_in_db_recycle
+1
+2
+4
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+call dbms_recyclebin.purge_table("no_exist_table");
+ERROR HY000: Recycle table failed : no_exist_table didn't exist.
+SET SESSION debug="+d,recyclebin_slave_purge_table_not_exist";
+call dbms_recyclebin.purge_table("no_exist_table");
+Warnings:
+Error	8045	Recycle table failed : no_exist_table didn't exist.
+SET SESSION debug="-d,recyclebin_slave_purge_table_not_exist";
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+set rds_recycle_bin_mode=ON;
+drop database __recyclebin__;
+create database __recyclebin__ default character set utf8mb4;
+drop table db_recycle.1,db_recycle.2,db_recycle.4;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	1	#	#
+__recyclebin__	#	db_recycle	2	#	#
+__recyclebin__	#	db_recycle	4	#	#
+create table db_recycle.`4_123`(id int);
+rename table db_recycle.4_123 to __recyclebin__.`db_recycle@4@123`;
+rename table __recyclebin__.`db_recycle@4@123` to db_recycle.4;
+drop table db_recycle.`4`;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	1	#	#
+__recyclebin__	#	db_recycle	2	#	#
+__recyclebin__	#	db_recycle	4	#	#
+__recyclebin__	#	db_recycle	4	#	#
+drop database __recyclebin__;
+create database __recyclebin__ default character set utf8mb4;
+use __recyclebin__;
+create table `db@tt@1`(id int primary key, num int, num2 int);
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	db@tt@1	db	tt	1970-01-01 03:00:01	#
+alter table `db@tt@1` rename to `db2@tt2@2`;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	db2@tt2@2	db2	tt2	1970-01-01 03:00:02	#
+alter table `db2@tt2@2` add index `idx1` (`num`);
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	db2@tt2@2	db2	tt2	1970-01-01 03:00:02	#
+alter table `db2@tt2@2` add key `key2` (`num2`);
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	db2@tt2@2	db2	tt2	1970-01-01 03:00:02	#
+drop database __recyclebin__;
+create database __recyclebin__ default character set utf8mb4;
+use __recyclebin__;
+create TEMPORARY table `db3@tt3@3`(id int, num int, num2 int);
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+alter table `db3@tt3@3` add index `idx1` (`num`);
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+alter table `db3@tt3@3` add key `key2` (`num2`);
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+drop database __recyclebin__;
+create database __recyclebin__ default character set utf8mb4;
+------------------------------------------------------
+6. simulate handler rename failed.
+------------------------------------------------------
+use db_recycle;
+create table t6(id int);
+insert into t6 values(1);
+commit;
+show create table t6;
+Table	Create Table
+t6	CREATE TABLE `t6` (
+  `id` int DEFAULT NULL
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+select * from t6;
+id
+1
+drop table t6;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t6	#	#
+call dbms_recyclebin.purge_table('t6');
+------------------------------------------------------
+7. truncate table.
+------------------------------------------------------
+use db_recycle;
+create table t7(id int);
+insert into t7 values(1);
+truncate table t7;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t7	#	#
+call dbms_recyclebin.purge_table('t7');
+------------------------------------------------------
+8. table name with different characters.
+------------------------------------------------------
+CREATE TABLE `这是一张表` (`id_col` int NOT NULL) ENGINE=Dstore DEFAULT CHARSET=gbk COMMENT='这是一张表';
+CREATE TABLE `这是一个表` (`id_col` int NOT NULL) ENGINE=Dstore DEFAULT CHARSET=gbk COMMENT='这是一张表';
+CREATE TABLE `tt是一张有中文字符的表` (`id_col` int NOT NULL) ENGINE=Dstore DEFAULT CHARSET=gbk COMMENT='这是一张表';
+CREATE TABLE `tt是一张有英文字符的表` (`id_col` int NOT NULL) ENGINE=Dstore DEFAULT CHARSET=gbk COMMENT='这是一张表';
+CREATE TABLE `tt中αααααααααα` (`id_col` int NOT NULL) ENGINE=Dstore DEFAULT CHARSET=gbk COMMENT='这是一张表';
+drop table `这是一张表`, `这是一个表`, `tt是一张有中文字符的表`, `tt是一张有英文字符的表`, `tt中αααααααααα`;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	tt中αααααααααα	#	#
+__recyclebin__	#	db_recycle	tt是一张有中文字符的表	#	#
+__recyclebin__	#	db_recycle	tt是一张有英文字符的表	#	#
+__recyclebin__	#	db_recycle	这是一个表	#	#
+__recyclebin__	#	db_recycle	这是一张表	#	#
+CREATE TABLE `一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四` (`id_col` int NOT NULL) ENGINE=Dstore DEFAULT CHARSET=gbk COMMENT='这是一张表';
+CREATE TABLE `一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五` (`id_col` int NOT NULL) ENGINE=Dstore DEFAULT CHARSET=gbk COMMENT='这是一张表';
+CREATE TABLE `01234567890123456789012345678901234567890123` (`id_col` int NOT NULL);
+CREATE TABLE `012345678901234567890123456789012345678901234` (`id_col` int NOT NULL);
+drop table `一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四`;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	tt中αααααααααα	#	#
+__recyclebin__	#	db_recycle	tt是一张有中文字符的表	#	#
+__recyclebin__	#	db_recycle	tt是一张有英文字符的表	#	#
+__recyclebin__	#	db_recycle	一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四	#	#
+__recyclebin__	#	db_recycle	这是一个表	#	#
+__recyclebin__	#	db_recycle	这是一张表	#	#
+drop table `一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五`;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	tt中αααααααααα	#	#
+__recyclebin__	#	db_recycle	tt是一张有中文字符的表	#	#
+__recyclebin__	#	db_recycle	tt是一张有英文字符的表	#	#
+__recyclebin__	#	db_recycle	一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四	#	#
+__recyclebin__	#	db_recycle	这是一个表	#	#
+__recyclebin__	#	db_recycle	这是一张表	#	#
+drop table `01234567890123456789012345678901234567890123`;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	01234567890123456789012345678901234567890123	#	#
+__recyclebin__	#	db_recycle	tt中αααααααααα	#	#
+__recyclebin__	#	db_recycle	tt是一张有中文字符的表	#	#
+__recyclebin__	#	db_recycle	tt是一张有英文字符的表	#	#
+__recyclebin__	#	db_recycle	一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四	#	#
+__recyclebin__	#	db_recycle	这是一个表	#	#
+__recyclebin__	#	db_recycle	这是一张表	#	#
+drop table `012345678901234567890123456789012345678901234`;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	01234567890123456789012345678901234567890123	#	#
+__recyclebin__	#	db_recycle	tt中αααααααααα	#	#
+__recyclebin__	#	db_recycle	tt是一张有中文字符的表	#	#
+__recyclebin__	#	db_recycle	tt是一张有英文字符的表	#	#
+__recyclebin__	#	db_recycle	一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四	#	#
+__recyclebin__	#	db_recycle	这是一个表	#	#
+__recyclebin__	#	db_recycle	这是一张表	#	#
+drop database __recyclebin__;
+create database __recyclebin__ default character set utf8mb4;
+------------------------------------------------------
+BUG2026033140364 The table drop fails when the table name is too long and contains foreign keys.
+------------------------------------------------------
+use test;
+create table create_create_create_create_create_create_ddl_test_5 (
+id INT PRIMARY KEY,
+info VARCHAR(20)
+) ENGINE=Dstore;
+create table create_create_create_create_create_ddl_test_10 (
+c_id INT PRIMARY KEY,
+p_id INT,
+FOREIGN KEY (p_id) REFERENCES create_create_create_create_create_create_ddl_test_5(id)
+) ENGINE=Dstore;
+drop table create_create_create_create_create_ddl_test_10;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	test	create_create_create_create_create_ddl_test_10	#	#
+create table create_create_create_create_create_ddl_test_10 (
+c_id INT PRIMARY KEY,
+p_id INT,
+CONSTRAINT `create_create_create_create_create_ddl_test_100000_fk_1` FOREIGN KEY (`c_id`) REFERENCES `create_create_create_create_create_create_ddl_test_5` (`id`) ON DELETE CASCADE
+) ENGINE=Dstore;
+drop table create_create_create_create_create_ddl_test_10;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	test	create_create_create_create_create_ddl_test_10	#	#
+__recyclebin__	#	test	create_create_create_create_create_ddl_test_10	#	#
+SET SESSION debug="+d,recyclebin_after_rename_before_drop_fk_fail";
+create table create_create_create_create_create_ddl_test_10 (
+c_id INT PRIMARY KEY,
+p_id INT,
+FOREIGN KEY (p_id) REFERENCES create_create_create_create_create_create_ddl_test_5(id)
+) ENGINE=Dstore;
+show create table create_create_create_create_create_ddl_test_10;
+Table	Create Table
+create_create_create_create_create_ddl_test_10	CREATE TABLE `create_create_create_create_create_ddl_test_10` (
+  `c_id` int NOT NULL,
+  `p_id` int DEFAULT NULL,
+  PRIMARY KEY (`c_id`),
+  KEY `p_id` (`p_id`),
+  CONSTRAINT `create_create_create_create_create_ddl_test_10_fk_1` FOREIGN KEY (`p_id`) REFERENCES `create_create_create_create_create_create_ddl_test_5` (`id`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+drop table create_create_create_create_create_ddl_test_10;
+ERROR HY000: Failed to recycle table to the recycle bin.
+show create table create_create_create_create_create_ddl_test_10;
+Table	Create Table
+create_create_create_create_create_ddl_test_10	CREATE TABLE `create_create_create_create_create_ddl_test_10` (
+  `c_id` int NOT NULL,
+  `p_id` int DEFAULT NULL,
+  PRIMARY KEY (`c_id`),
+  KEY `p_id` (`p_id`),
+  CONSTRAINT `create_create_create_create_create_ddl_test_10_fk_1` FOREIGN KEY (`p_id`) REFERENCES `create_create_create_create_create_create_ddl_test_5` (`id`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+SET SESSION debug="-d,recyclebin_after_rename_before_drop_fk_fail";
+drop table create_create_create_create_create_ddl_test_10;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	test	create_create_create_create_create_ddl_test_10	#	#
+__recyclebin__	#	test	create_create_create_create_create_ddl_test_10	#	#
+__recyclebin__	#	test	create_create_create_create_create_ddl_test_10	#	#
+drop table create_create_create_create_create_create_ddl_test_5;
+drop database __recyclebin__;
+create database __recyclebin__ default character set utf8mb4;
+set rds_recycle_bin_mode=OFF;
+set global rds_recycle_bin_mode=OFF;
+drop database db_recycle;
+drop user normal_1@'%';
+drop user normal_2@'%';
+drop user normal_3@'%';

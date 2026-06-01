@@ -1,0 +1,200 @@
+# BUG2022071502284
+# We have a dynamic range scan with a virtually generated column 
+# which triggers a call to `filter_gcol_for_dynamic_range_scan`. The access method uses c1, which is a unique index.
+# In this case c1 is marked as covering 
+# but because it is a unique index, it is not extended with the primary key which results in a wrong read set
+# This matches the bug fix described in the patch 3d5993456bcb3062926968d53e0eef501df1795e
+CREATE TABLE `t11` (  `c0` float NOT NULL,  `c1` float DEFAULT NULL,  PRIMARY KEY (`c0`),  UNIQUE KEY `c1` (`c1`),  UNIQUE KEY `i1` (((0 <> NULL) and (0 <> -(1191590188)))));
+insert into t11 values(-805268992, NULL),(129469776, 0);
+CREATE TABLE `t12` (  `c0` float NOT NULL,  PRIMARY KEY (`c0`),  KEY `i0` (`c0`));
+insert into t12 values (522561152), (254729824);
+select * from t11,t12;
+c0	c1	c0
+129470000	0	254730000
+-805269000	NULL	254730000
+129470000	0	522561000
+-805269000	NULL	522561000
+explain SELECT t11.c0 AS ref0 FROM t11, t12 WHERE (t11.c1) NOT IN (t12.c0, t11.c0);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t12	NULL	index	NULL	PRIMARY	4	NULL	2	100.00	Using index
+1	SIMPLE	t11	NULL	ALL	c1	NULL	NULL	NULL	2	50.00	Range checked for each record (index map: 0x2)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t11`.`c0` AS `ref0` from `test`.`t11` join `test`.`t12` where (`test`.`t11`.`c1` not in (`test`.`t12`.`c0`,`test`.`t11`.`c0`))
+SELECT t11.c0 AS ref0 FROM t11, t12 WHERE (t11.c1) NOT IN (t12.c0, t11.c0);
+ref0
+129470000
+129470000
+DROP TABLE t11,t12;
+# BUG2022090601480
+CREATE TABLE tab1(id int, a int);
+CREATE TABLE tab2(id int, b int);
+CREATE TABLE tab3(id_col int);
+CREATE TABLE tab4(id_ int);
+EXPLAIN format=tree
+SELECT
+schema() AS c0,
+database() AS c1
+FROM
+tab4
+LEFT JOIN
+(SELECT
+(SELECT id FROM tab1 LIMIT 1 OFFSET 1) AS c4
+FROM
+tab3 AS ref_15
+) AS subq_8
+ON ((subq_8.c4 IS NOT NULL)
+OR (
+EXISTS(
+SELECT
+subq_8.c4 AS c2
+FROM
+tab2
+)
+AND (false)
+));
+EXPLAIN
+-> Left hash join (no condition)
+    -> Table scan on tab4
+    -> Hash
+        -> Filter: (((select #3) is not null))
+            -> Table scan on ref_15
+            -> Select #3 (subquery in condition; run only once)
+                -> Limit/Offset: 1/1 row(s), with offset pushdown
+                    -> Table scan on tab1
+
+Warnings:
+Note	1276	Field or reference 'subq_8.c4' of SELECT #4 was resolved in SELECT #1
+DROP TABLE tab1;
+DROP TABLE tab2;
+DROP TABLE tab3;
+DROP TABLE tab4;
+# BUG2022090602896
+# For Item_singlerow_subselect, PQ add eq() function. It need to compute cols()
+# to get how many cached items it has. But for some scenario, the unit of
+# Item_singlerow_subselect has excluded tree. So when eq() compute cols(), it
+# will access a null pointer, and get signal 11.
+CREATE TABLE t1(a int DEFAULT '0');
+CREATE TABLE t2(a decimal(28,10) DEFAULT NULL);
+CREATE TABLE t3(a date DEFAULT NULL);
+CREATE TABLE t4(a double DEFAULT NULL);
+explain format=tree select
+max((select a from t1 limit 1 offset 6)) over (partition by subq_1.c2, subq_2.c3 order by subq_0.c1) as c0
+from 
+(select  
+(select a from t2 limit 1 offset 3) as c1
+from 
+t3 as ref_0) as subq_0
+right join
+(select  
+last_day(ref_1.a) as c2
+from 
+t3 as ref_1) as subq_1
+on (false)
+inner join 
+(select  
+ref_2.a as c3
+from 
+t4 as ref_2
+where false) as subq_2
+on (EXISTS (
+select  
+subq_0.c1 as c4
+from 
+t4 as ref_3
+where subq_0.c1 is not NULL))
+where subq_0.c1 is not NULL;
+EXPLAIN
+-> Zero rows (Impossible WHERE)  (cost=0..0 rows=0)
+
+Warnings:
+Note	1276	Field or reference 'subq_0.c1' of SELECT #7 was resolved in SELECT #1
+Note	1276	Field or reference 'subq_0.c1' of SELECT #7 was resolved in SELECT #1
+select
+max((select a from t1 limit 1 offset 6)) over (partition by subq_1.c2, subq_2.c3 order by subq_0.c1) as c0
+from 
+(select  
+(select a from t2 limit 1 offset 3) as c1
+from 
+t3 as ref_0) as subq_0
+right join
+(select  
+last_day(ref_1.a) as c2
+from 
+t3 as ref_1) as subq_1
+on (false)
+inner join 
+(select  
+ref_2.a as c3
+from 
+t4 as ref_2
+where false) as subq_2
+on (EXISTS (
+select  
+subq_0.c1 as c4
+from 
+t4 as ref_3
+where subq_0.c1 is not NULL))
+where subq_0.c1 is not NULL;
+c0
+DROP TABLE t1, t2, t3, t4;
+# BUG2022090800791
+CREATE TABLE `t4` (`c_id` int,
+`c_state` char(150) DEFAULT NULL,
+`c_zip` char(23) DEFAULT NULL,
+PRIMARY KEY (`c_id`), KEY `ndx_c_state` (`c_state`) USING BTREE,
+KEY `ndx_c_zip` (`c_zip`) USING BTREE);
+SELECT pi() AS c0
+FROM
+(SELECT
+(SELECT c_id
+FROM t4
+ORDER BY 1
+LIMIT 1
+OFFSET 5) AS c0
+FROM t4 AS ref_1) AS subq_5
+WHERE (subq_5.c0 IS NOT NULL)
+AND (EXISTS
+(SELECT subq_5.c0 AS c5
+FROM t4 AS ref_2
+WHERE FALSE));
+c0
+DROP TABLE t4;
+#
+# BUG2022091502327: SELECT returns incorrect result set
+#
+create table tinytable(a int, key(a));
+insert into tinytable values(0),(0),(0);
+analyze table tinytable;
+Table	Op	Msg_type	Msg_text
+test.tinytable	analyze	status	OK
+explain select * from tinytable where a = (select 0.29 from tinytable limit 1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	tinytable	NULL	ref	a	a	5	const	3	100.00	Using where; Using index
+2	SUBQUERY	tinytable	NULL	index	NULL	a	5	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`tinytable`.`a` AS `a` from `test`.`tinytable` where (`test`.`tinytable`.`a` = (/* select#2 */ select 0.29 from `test`.`tinytable` limit 1))
+select * from tinytable where a = (select 0.29 from tinytable limit 1);
+a
+select /*+ no_index(tinytable a) */ * from tinytable where a = 0.29+0.0;
+a
+select  * from tinytable where a = 0.29+0.0;
+a
+drop table tinytable;
+# BUG2025041529773 At the end of the first execution, a constant
+# (created by equality propagation, allocated in the
+# execution&transient MEM_ROOT) was left as an argument of an
+# equality; the second execution thus read garbage.
+CREATE TABLE t (
+c varchar(20) CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+UNIQUE KEY day_hour_unique_index (c)
+);
+Warnings:
+Warning	3719	'utf8' is currently an alias for the character set UTF8MB3, but will be an alias for UTF8MB4 in a future release. Please consider using UTF8MB4 in order to be unambiguous.
+Warning	3778	'utf8mb3_general_ci' is a collation of the deprecated character set UTF8MB3. Please consider using UTF8MB4 with an appropriate collation instead.
+PREPARE stmt1 FROM 'SELECT 1 FROM t WHERE c = \'100747\' AND c = ?';
+SET @c = '100747';
+EXECUTE stmt1 USING @c;
+1
+EXECUTE stmt1 USING @c;
+1
+DROP TABLE t;

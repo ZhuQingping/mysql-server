@@ -1,0 +1,200 @@
+From 75026ab31ec09dad601b78b3b36620544f55ad10 Mon Sep 17 00:00:00 2001
+From: tangxiangbing <tangxiangbing@contributor>
+
+
+Date: Thu, 19 Mar 2026 16:08:08 +0800
+Subject: [PATCH] BUGFIX Fix memory leak in SQL Filter feature.
+
+Issue:
+------
+The Sql_filter_record class had a member variable m_key_array of type
+std::vector<std::string>, which was populated using boost::split.
+boost::split dynamically allocates memory for the vector elements.
+However, Sql_filter_record objects are allocated on a MEM_ROOT, so
+their destructor is never invoked. Consequently, m_key_array was never
+destroyed, causing a memory leak each time throttling was applied.
+
+Solution:
+------
+To resolve the leak, m_key_array has been removed from the class.
+Instead, a local temporary vector is now created on the stack where
+needed. This ensures that the memory allocated by boost::split is
+properly freed when the vector goes out of scope.
+---
+ mysql-test/suite/sql_filter/r/sqlfilter_basic.result | 4 ++--
+ mysql-test/suite/sql_filter/t/sqlfilter_basic.test   | 4 ++--
+ sql/sql_filter/sql_filter_cache.cc                   | 7 ++++++-
+ sql/sql_filter/sql_filter_cache.h                    | 8 ++++++--
+ sql/sql_filter/sql_filter_proc.cc                    | 8 --------
+ sql/sql_filter/sql_filter_table.cc                   | 4 ----
+ sql/sql_filter/sql_filter_table_common.h             | 2 --
+ 7 files changed, 16 insertions(+), 21 deletions(-)
+
+diff --git a/mysql-test/suite/sql_filter/r/sqlfilter_basic.result b/mysql-test/suite/sql_filter/r/sqlfilter_basic.result
+index ca1ec1671cb..fb502a1b35b 100644
+--- a/mysql-test/suite/sql_filter/r/sqlfilter_basic.result
++++ b/mysql-test/suite/sql_filter/r/sqlfilter_basic.result
+@@ -477,7 +477,7 @@ call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~format","");
+ call dbms_sqlfilter.show_sql_filter();
+ item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+ #	SELECT	0	0	2	0	select~format	
+-EXPLAIN FORMAT=TREE SELECT a, b FROM tt1 WHERE a=1;
++EXPLAIN FORMAT=TREE SELECT /*+ SET_VAR(optimizer_switch='engine_condition_pushdown=off') */ a, b FROM tt1 WHERE a=1;
+ EXPLAIN
+ -> Filter: (tt1.a = 1)
+     -> Table scan on tt1
+@@ -488,7 +488,7 @@ call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~analyze","");
+ call dbms_sqlfilter.show_sql_filter();
+ item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+ #	SELECT	0	0	2	0	select~analyze	
+-EXPLAIN ANALYZE SELECT a, b FROM tt1 WHERE a=1;
++EXPLAIN ANALYZE SELECT /*+ SET_VAR(optimizer_switch='engine_condition_pushdown=off') */ a, b FROM tt1 WHERE a=1;
+ EXPLAIN
+ -> Filter: (tt1.a = 1) 
+     -> Table scan on tt1 
+diff --git a/mysql-test/suite/sql_filter/t/sqlfilter_basic.test b/mysql-test/suite/sql_filter/t/sqlfilter_basic.test
+index 185f1c7f12f..173edeb9030 100644
+--- a/mysql-test/suite/sql_filter/t/sqlfilter_basic.test
++++ b/mysql-test/suite/sql_filter/t/sqlfilter_basic.test
+@@ -450,7 +450,7 @@ call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~format","");
+ --replace_column 1 #
+ call dbms_sqlfilter.show_sql_filter();
+ --replace_regex /  \(cost.*//
+-EXPLAIN FORMAT=TREE SELECT a, b FROM tt1 WHERE a=1;
++EXPLAIN FORMAT=TREE SELECT /*+ SET_VAR(optimizer_switch='engine_condition_pushdown=off') */ a, b FROM tt1 WHERE a=1;
+ 
+ connection conn_rdsAdmin;
+ delete from mysql.rds_sql_filter_rules;
+@@ -460,7 +460,7 @@ call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~analyze","");
+ --replace_column 1 #
+ call dbms_sqlfilter.show_sql_filter();
+ --replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*//
+-EXPLAIN ANALYZE SELECT a, b FROM tt1 WHERE a=1;
++EXPLAIN ANALYZE SELECT /*+ SET_VAR(optimizer_switch='engine_condition_pushdown=off') */ a, b FROM tt1 WHERE a=1;
+ 
+ connection conn_rdsAdmin;
+ delete from mysql.rds_sql_filter_rules;
+diff --git a/sql/sql_filter/sql_filter_cache.cc b/sql/sql_filter/sql_filter_cache.cc
+index cd291d46c87..9570b5e9bc5 100644
+--- a/sql/sql_filter/sql_filter_cache.cc
++++ b/sql/sql_filter/sql_filter_cache.cc
+@@ -22,6 +22,7 @@
+ 
+ #include "sql/sql_filter/sql_filter_cache.h"
+ #include <string.h>
++#include <boost/algorithm/string.hpp>
+ #include "sql/common/table.h"
+ #include "sql/debug_sync.h"
+ #include "sql/derror.h"  // ER_THD
+@@ -168,7 +169,10 @@ Sqlfilter_update_error Sql_filter::update_sqlfilter_rule(
+     m_cur_concur.store(0);
+     m_block_query_num.store(0);
+     m_key_str = new_key_str;
+-    m_key_array = record->m_key_array;
++    std::vector<std::string> keywords;
++    boost::split(keywords, record->m_key_str.str, boost::is_any_of("~"));
++    for (auto &key : keywords) trim_str(key);
++    m_key_array = keywords;
+   }
+   m_node_id = new_node_id;
+ 
+@@ -308,6 +312,7 @@ static bool contains_keywords_in_order(
+   } else {
+     find_func = &find_first<false>;
+   }
++
+   for (const auto &keyword : keywords) {
+     if (keyword.empty()) continue;
+     int item_key_len = (int)keyword.size();
+diff --git a/sql/sql_filter/sql_filter_cache.h b/sql/sql_filter/sql_filter_cache.h
+index 227c99dcfc6..5744457498d 100644
+--- a/sql/sql_filter/sql_filter_cache.h
++++ b/sql/sql_filter/sql_filter_cache.h
+@@ -23,6 +23,7 @@
+ #ifndef SQL_SQL_FILTER_CACHE_INCLUDED
+ #define SQL_SQL_FILTER_CACHE_INCLUDED
+ 
++#include <boost/algorithm/string.hpp>
+ #include "sql/common/table_common.h"
+ #include "sql/sql_filter/sql_filter_common.h"
+ #include "sql/sql_filter/sql_filter_table_common.h"
+@@ -36,10 +37,13 @@ class Sql_filter {
+         m_type(record->m_type),
+         m_max_concurrency(record->m_max_concurrency),
+         m_key_str(record->m_key_str.str ? record->m_key_str.str : ""),
+-        m_node_id(record->m_node_id.str ? record->m_node_id.str : ""),
+-        m_key_array(record->m_key_array) {
++        m_node_id(record->m_node_id.str ? record->m_node_id.str : "") {
+     m_cur_concur.store(record->m_cur_concur);
+     m_block_query_num.store(record->m_block_query_num);
++    std::vector<std::string> keywords;
++    boost::split(keywords, record->m_key_str.str, boost::is_any_of("~"));
++    for (auto &key : keywords) trim_str(key);
++    m_key_array = keywords;
+   }
+ 
+   virtual ~Sql_filter() {}
+diff --git a/sql/sql_filter/sql_filter_proc.cc b/sql/sql_filter/sql_filter_proc.cc
+index f30a9ee48af..0fadddb3508 100644
+--- a/sql/sql_filter/sql_filter_proc.cc
++++ b/sql/sql_filter/sql_filter_proc.cc
+@@ -134,10 +134,6 @@ Sql_filter_record *Sql_cmd_sqlfilter_proc_add::get_record(THD *thd) {
+   record->m_key_str =
+       to_lex_cstring(strmake_root(thd->mem_root, res->ptr(), res->length()));
+ 
+-  boost::split(record->m_key_array, record->m_key_str.str,
+-               boost::is_any_of("~"));
+-  for (auto &key : record->m_key_array) trim_str(key);
+-
+   // node_id
+   res = (*m_list)[3]->val_str(&str);
+   record->m_node_id =
+@@ -324,10 +320,6 @@ Sql_filter_record *Sql_cmd_sqlfilter_proc_update::get_record(THD *thd) {
+   record->m_key_str =
+       to_lex_cstring(strmake_root(thd->mem_root, res->ptr(), res->length()));
+ 
+-  boost::split(record->m_key_array, record->m_key_str.str,
+-               boost::is_any_of("~"));
+-  for (auto &key : record->m_key_array) trim_str(key);
+-
+   // node_id
+   res = (*m_list)[4]->val_str(&str);
+   record->m_node_id =
+diff --git a/sql/sql_filter/sql_filter_table.cc b/sql/sql_filter/sql_filter_table.cc
+index 0f48f7c2e06..fa60b87a53b 100644
+--- a/sql/sql_filter/sql_filter_table.cc
++++ b/sql/sql_filter/sql_filter_table.cc
+@@ -128,10 +128,6 @@ void Sql_filter_reader::read_attributes(Conf_record *r) {
+   record->m_key_str = to_lex_cstring(
+       get_field(m_mem_root, m_table->field[MYSQL_SQL_FILTER_FIELD_KEYWORDS]));
+ 
+-  boost::split(record->m_key_array, record->m_key_str.str,
+-               boost::is_any_of("~"));
+-  for (auto &key : record->m_key_array) trim_str(key);
+-
+   record->m_node_id = to_lex_cstring(
+       get_field(m_mem_root, m_table->field[MYSQL_SQL_FILTER_FIELD_NODE_ID]));
+ 
+diff --git a/sql/sql_filter/sql_filter_table_common.h b/sql/sql_filter/sql_filter_table_common.h
+index bdc2753d8ab..5a4d6c40b1e 100644
+--- a/sql/sql_filter/sql_filter_table_common.h
++++ b/sql/sql_filter/sql_filter_table_common.h
+@@ -80,7 +80,6 @@ struct Sql_filter_record : public Conf_record {
+ 
+   std::atomic<ulong> m_cur_concur;
+   std::atomic<ulong> m_block_query_num;
+-  std::vector<std::string> m_key_array;
+ 
+  public:
+   Sql_filter_record() { reset(); }
+@@ -93,7 +92,6 @@ struct Sql_filter_record : public Conf_record {
+     m_node_id = {nullptr, 0};
+     m_cur_concur = 0;
+     m_block_query_num = 0;
+-    m_key_array.clear();
+   }
+   virtual bool check_valid(const char **msg) const override;
+   bool check_record_valid(const char **msg) const;
+-- 
+2.23.0
+

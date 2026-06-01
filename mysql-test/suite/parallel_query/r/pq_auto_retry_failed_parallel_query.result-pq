@@ -1,0 +1,74 @@
+# Test that the system variable "parallel_fail_retry" works as expected.
+CREATE TABLE t (i INTEGER);
+SET SESSION debug = "+d, dup_thd_abort";
+SET parallel_fail_retry = OFF;
+SELECT /*+ set_var(parallel_graceful_fallback=off) */ * FROM t LIMIT 1;
+ERROR HY000: Failed to parallel execute. this SQL is not supported.
+# Test parallel query failing with multi-statement query, as this has a
+# slightly different code path.
+SELECT 1;
+SELECT /*+ set_var(parallel_graceful_fallback=off) */ * FROM t LIMIT 1||
+1
+1
+ERROR HY000: Failed to parallel execute. this SQL is not supported.
+SET parallel_fail_retry = DEFAULT;
+# With parallel_fail_retry == ON, the query should now be executed with
+# parallel query disabled, but with a warning printed.
+SELECT /*+ set_var(parallel_graceful_fallback=off) */ * FROM t LIMIT 1;
+i
+Warnings:
+Warning	8026	Failed to execute the query using parallel query, the query was restarted without parallel query.
+# Test the multi-statement query code path again.
+SELECT 1;
+SELECT /*+ set_var(parallel_graceful_fallback=off) */ * FROM t LIMIT 1||
+1
+1
+i
+Warnings:
+Warning	8026	Failed to execute the query using parallel query, the query was restarted without parallel query.
+SET SESSION debug = "";
+DROP TABLE t;
+# BUG2023080903357
+# Check that after a query was restarted because it failed with PQ,
+# the next query can instantly use parallel query.
+CREATE TABLE t(id INTEGER, age INTEGER, name VARCHAR(220));
+INSERT INTO t VALUES (1, 14, 'zhangsan'), (2, 14, 'lisi');
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+# See that the query is restarted (can be seen from the warnings).
+EXPLAIN FORMAT=tree SELECT /*+ set_var(parallel_graceful_fallback=off) */ a.id, a.id, a.age FROM (SELECT * FROM t)a GROUP BY 1,2,3;
+EXPLAIN
+-> Table scan on <temporary>  (cost=1.91..3.18 rows=2)
+    -> Temporary table with deduplication  (cost=0.65..0.65 rows=2)
+        -> Table scan on t  (cost=0.45 rows=2)
+
+Warnings:
+Warning	8026	Failed to execute the query using parallel query, the query was restarted without parallel query.
+# graceful fallback to serial execute, no warnings.
+EXPLAIN FORMAT=tree SELECT /*+ set_var(parallel_graceful_fallback=on) */ a.id, a.id, a.age FROM (SELECT * FROM t)a GROUP BY 1,2,3;
+EXPLAIN
+-> Table scan on <temporary>  (cost=1.91..3.18 rows=2)
+    -> Temporary table with deduplication  (cost=0.65..0.65 rows=2)
+        -> Table scan on t  (cost=0.45 rows=2)
+
+# Disable the warnings, so that MTR does not run "SHOW WARNINGS;".
+# Doing so would hide the bug.
+EXPLAIN FORMAT=tree SELECT a.id, a.id, a.age FROM (SELECT * FROM t)a GROUP BY 1,2,3;
+EXPLAIN
+-> Table scan on <temporary>  (cost=1.91..3.18 rows=2)
+    -> Temporary table with deduplication  (cost=0.65..0.65 rows=2)
+        -> Table scan on t  (cost=0.45 rows=2)
+
+# Finally, see that the first query after a query was restarted can use
+# parallel query.
+EXPLAIN FORMAT=tree SELECT a.id, a.id, a.age FROM (SELECT * FROM t)a GROUP BY 2,3;
+EXPLAIN
+-> Table scan on <temporary>  (cost=4.31..5.58 rows=2)
+    -> Temporary table with deduplication  (cost=3.05..3.05 rows=2)
+        -> Gather: 4 workers, parallel scan on t  (cost=1.6..2.85 rows=2)
+            -> Table scan on <temporary>  (cost=2.85..2.85 rows=0.5)
+                -> Temporary table with deduplication  (cost=0.35..0.35 rows=0.5)
+                    -> Parallel table scan on t  (cost=0.3 rows=0.5)
+
+DROP TABLE t;

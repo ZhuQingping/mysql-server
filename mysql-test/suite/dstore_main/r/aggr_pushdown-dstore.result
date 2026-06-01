@@ -1,0 +1,875 @@
+CREATE AGGREGATE FUNCTION avgcost
+RETURNS REAL SONAME "UDF_EXAMPLE_LIB";
+CREATE FUNCTION myfunc_double RETURNS REAL SONAME "UDF_EXAMPLE_LIB";
+CREATE FUNCTION myfunc_int RETURNS INTEGER SONAME "UDF_EXAMPLE_LIB";
+CREATE TABLE t1 (
+dummy INT PRIMARY KEY,
+a INT UNIQUE,
+b INT,
+d real,
+e int generated always as (b+1) virtual
+);
+INSERT INTO t1(dummy,a,b,d) VALUES (1,1,1,1.0),(3,3,3,3.0),(5,5,5,5.0),
+(7,7,1,1.0),(9,9,3,3.0),(11,11,5,5.0),
+(13,13,1,1.0),(15,15,3,3.0),(17,17,5,5.0),
+(19,NULL,1,1.0),(21,NULL,3,3.0),(23,NULL,5,5.0),
+(25,NULL,7,7.0);
+CREATE index idx_t1 on t1(b);
+CREATE index idx2_t1 on t1(e);
+CREATE index idx3_t1 on t1(a,d);
+CREATE TABLE t2 (
+c INT,
+d INT,
+e time,
+f date
+);
+CREATE index idx_t2 on t2(c);
+INSERT INTO t2 VALUES (3,1, '00:38:38','2007-10-07'),
+(0,5, NULL, '2102-12-31'),(3,5,'00:00:00', '1837-01-31');
+CREATE TABLE t6 (c1 int, c2 int);
+INSERT INTO t6 VALUES (1,1),(1,1),(1,1),(2,2),(2,2),(3,3),(3,3);
+CREATE index idx1_t6 on t6(c1);
+CREATE TABLE t4 (c1 int, c2 int);
+INSERT INTO t4 SELECT * from t6;
+CREATE TABLE t5 (dummy INT PRIMARY KEY, a INT UNIQUE, b INT, d real, e int generated always as (b+1) virtual);
+INSERT INTO t5(dummy,a,b,d) VALUES (1,1,1,1.0),(3,3,3,3.0),(5,5,5,5.0),  (7,7,1,1.0),(9,9,3,3.0),(11,11,5,5.0),  (13,13,1,1.0),(15,15,3,3.0),(17,17,5,5.0),  (19,NULL,1,1.0),(21,NULL,3,3.0),(23,NULL,5,5.0),  (25,NULL,7,7.0);
+CREATE index idx1_t5 on t5(a,d);
+CREATE index idx3_t5 on t5(e);
+analyze TABLE t1,t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+No aggregate-pushdown if const access is used
+EXPLAIN SELECT count(*) from t1 where dummy=3;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	const	PRIMARY	PRIMARY	4	const	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(*)` from `test`.`t1` where true
+No aggregate-pushdown if eq_ref access is used
+EXPLAIN SELECT count(*) from t1 as tt, t1 as tt2 where tt.dummy = tt2.dummy;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tt	NULL	index	PRIMARY	PRIMARY	4	NULL	13	100.00	Using index
+1	SIMPLE	tt2	NULL	eq_ref	PRIMARY	PRIMARY	4	test.tt.dummy	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(*)` from `test`.`t1` `tt` join `test`.`t1` `tt2` where (`test`.`tt2`.`dummy` = `test`.`tt`.`dummy`)
+aggregate-pushdown when some but not all TABLE accesses are reduced to const access
+SELECT count(tt2.a) from t1 as tt, t1 as tt2 where tt.dummy = 1 and  tt.a = tt2.b;
+count(tt2.a)
+3
+EXPLAIN SELECT count(tt2.a) from t1 as tt, t1 as tt2 where tt.dummy = 1 and  tt.a = tt2.b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tt	NULL	const	PRIMARY,a,idx3_t1	PRIMARY	4	const	1	100.00	NULL
+1	SIMPLE	tt2	NULL	ref	idx_t1	idx_t1	5	const	4	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`tt2`.`a`) AS `count(tt2.a)` from `test`.`t1` `tt` join `test`.`t1` `tt2` where ((`test`.`tt2`.`b` = '1'))
+ICP on keyread when aggr-pushdown occurs
+EXPLAIN SELECT count(a) from t1 force index (idx3_t1) where a > 2 ;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	idx3_t1	idx3_t1	5	NULL	8	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` FORCE INDEX (`idx3_t1`) where (`test`.`t1`.`a` > 2)
+EXPLAIN SELECT count(a) from t1 force index (idx3_t1) where a > 2 having avgcost(a, d) > 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	idx3_t1	idx3_t1	5	NULL	8	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` FORCE INDEX (`idx3_t1`) where (`test`.`t1`.`a` > 2) having (avgcost(`test`.`t1`.`a`,`test`.`t1`.`d`) > 2)
+ICP on clustered-index when aggr-pushdown occurs
+EXPLAIN SELECT count(a) from t1 where dummy between 2 and 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	2	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`dummy` between 2 and 5)
+EXPLAIN SELECT count(a) from t1 where dummy between 2 and 5 and myfunc_double(dummy) > 3;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	2	100.00	Using index condition; Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where ((`test`.`t1`.`dummy` between 2 and 5) and (myfunc_double(`test`.`t1`.`dummy` AS `dummy`) > 3))
+No aggregate-pushdown when TABLE access uses dynamic range
+EXPLAIN SELECT count(*) from t2 straight_join t1 where t2.c>t1.a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	index	idx_t2	idx_t2	5	NULL	3	100.00	Using index
+1	SIMPLE	t1	NULL	ALL	a,idx3_t1	NULL	NULL	NULL	13	33.33	Range checked for each record (index map: 0xA)
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(*)` from `test`.`t2` straight_join `test`.`t1` where (`test`.`t2`.`c` > `test`.`t1`.`a`)
+nested aggregates
+SELECT sum(t1.a) FROM t1 GROUP BY t1.b
+HAVING count(t1.a) IN (SELECT t2.c FROM t2 GROUP BY t2.c
+HAVING AVG(t2.d+SUM(t1.b)) > 7) ;
+sum(t1.a)
+27
+33
+NULL
+EXPLAIN SELECT sum(t1.a) FROM t1 GROUP BY t1.b
+HAVING count(t1.a) IN (SELECT t2.c FROM t2 GROUP BY t2.c
+HAVING AVG(t2.d+SUM(t1.b)) > 7) ;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	index	idx_t1	idx_t1	5	NULL	13	100.00	Using aggregate
+2	DEPENDENT SUBQUERY	t2	NULL	index	idx_t2	idx_t2	5	NULL	3	100.00	NULL
+Warnings:
+Note	1276	Field or reference 'test.t1.b' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select sum(`test`.`t1`.`a`) AS `sum(t1.a)` from `test`.`t1` group by `test`.`t1`.`b` having <in_optimizer>(count(`test`.`t1`.`a`),<exists>(/* select#2 */ select `test`.`t2`.`c` from `test`.`t2` group by `test`.`t2`.`c` having ((avg((`test`.`t2`.`d` + sum(`test`.`t1`.`b`))) > 7) and (<cache>(count(`test`.`t1`.`a`)) = <ref_null_helper>(`test`.`t2`.`c`)))))
+aggregated nested in scalar and vice versa.
+SELECT SEC_TO_TIME(SUM(TIME_TO_SEC(e))) FROM t2 group by c;
+SEC_TO_TIME(SUM(TIME_TO_SEC(e)))
+NULL
+00:38:38
+EXPLAIN SELECT SEC_TO_TIME(SUM(TIME_TO_SEC(e))) FROM t2 group by c;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	index	idx_t2	idx_t2	5	NULL	3	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select sec_to_time(sum(time_to_sec(`test`.`t2`.`e`))) AS `SEC_TO_TIME(SUM(TIME_TO_SEC(e)))` from `test`.`t2` group by `test`.`t2`.`c`
+SELECT FROM_DAYS(SUM(TO_DAYS(f))) FROM t2 group by c;
+FROM_DAYS(SUM(TO_DAYS(f)))
+2102-12-31
+3844-11-06
+EXPLAIN SELECT FROM_DAYS(SUM(TO_DAYS(f))) FROM t2 group by c;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	index	idx_t2	idx_t2	5	NULL	3	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select from_days(sum(to_days(`test`.`t2`.`f`))) AS `FROM_DAYS(SUM(TO_DAYS(f)))` from `test`.`t2` group by `test`.`t2`.`c`
+union.
+SELECT count(a) from t1 where a > 2 union all SELECT sum(dummy) from t1 where a between 3 and 5;
+count(a)
+8
+8
+EXPLAIN SELECT count(a) from t1 where a > 2 union all SELECT sum(dummy) from t1 where a between 3 and 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	range	a,idx3_t1	a	5	NULL	8	100.00	Using aggregate; Using index
+2	UNION	t1	NULL	range	a,idx3_t1	a	5	NULL	2	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`a` > 2) union all /* select#2 */ select sum(`test`.`t1`.`dummy`) AS `sum(dummy)` from `test`.`t1` where (`test`.`t1`.`a` between 3 and 5)
+SELECT count(a) from t1 where a > 2 union SELECT sum(dummy) from t1 where a between 3 and 5;
+count(a)
+8
+EXPLAIN SELECT count(a) from t1 where a > 2 union SELECT sum(dummy) from t1 where a between 3 and 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	range	a,idx3_t1	a	5	NULL	8	100.00	Using aggregate; Using index
+2	UNION	t1	NULL	range	a,idx3_t1	a	5	NULL	2	100.00	Using aggregate
+3	UNION RESULT	<union1,2>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`a` > 2) union /* select#2 */ select sum(`test`.`t1`.`dummy`) AS `sum(dummy)` from `test`.`t1` where (`test`.`t1`.`a` between 3 and 5)
+aggregate in derived TABLE
+SELECT * from t1, (SELECT count(e) from t2 group by c) tt;
+dummy	a	b	d	e	count(e)
+1	1	1	1	2	2
+1	1	1	1	2	0
+3	3	3	3	4	2
+3	3	3	3	4	0
+5	5	5	5	6	2
+5	5	5	5	6	0
+7	7	1	1	2	2
+7	7	1	1	2	0
+9	9	3	3	4	2
+9	9	3	3	4	0
+11	11	5	5	6	2
+11	11	5	5	6	0
+13	13	1	1	2	2
+13	13	1	1	2	0
+15	15	3	3	4	2
+15	15	3	3	4	0
+17	17	5	5	6	2
+17	17	5	5	6	0
+19	NULL	1	1	2	2
+19	NULL	1	1	2	0
+21	NULL	3	3	4	2
+21	NULL	3	3	4	0
+23	NULL	5	5	6	2
+23	NULL	5	5	6	0
+25	NULL	7	7	8	2
+25	NULL	7	7	8	0
+EXPLAIN SELECT * from t1, (SELECT count(e) from t2 group by c) tt;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	NULL
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	13	100.00	Using join buffer (hash join)
+2	DERIVED	t2	NULL	index	idx_t2	idx_t2	5	NULL	3	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`dummy` AS `dummy`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`d` AS `d`,`test`.`t1`.`e` AS `e`,`tt`.`count(e)` AS `count(e)` from `test`.`t1` join (/* select#2 */ select count(`test`.`t2`.`e`) AS `count(e)` from `test`.`t2` group by `test`.`t2`.`c`) `tt`
+INSERT...SELECT, cursor and stored procedure
+CREATE TABLE t3 (
+e INT,
+r REAL,
+ma INT
+);
+EXPLAIN INSERT INTO t3 SELECT e, myfunc_double(b), max(a) from t1 group by b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	INSERT	t3	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+1	SIMPLE	t1	NULL	index	idx_t1	idx_t1	5	NULL	13	100.00	Using aggregate
+Warnings:
+Note	1003	insert into `test`.`t3` /* select#1 */ select `test`.`t1`.`e` AS `e`,myfunc_double(`test`.`t1`.`b` AS `b`) AS `myfunc_double(b)`,max(`test`.`t1`.`a`) AS `max(a)` from `test`.`t1` group by `test`.`t1`.`b`
+INSERT INTO t3 SELECT e, myfunc_double(b), max(a) from t1 group by b;
+CREATE PROCEDURE curdemo()
+BEGIN
+DECLARE done INT DEFAULT FALSE;
+DECLARE max_a INT;
+DECLARE store_e INT;
+DECLARE store_r REAL;
+DECLARE cur1 CURSOR FOR SELECT e, myfunc_double(b), max(a) from t1 group by b;
+DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+OPEN cur1;
+read_loop: LOOP
+FETCH cur1 INTO store_e, store_r, max_a;
+IF done THEN
+LEAVE read_loop;
+END IF;
+INSERT INTO t3 VALUES (store_e, store_r, max_a);
+END LOOP;
+CLOSE cur1;
+END|
+call curdemo();
+SELECT * from t3;
+e	r	ma
+2	49	13
+4	51	15
+6	53	17
+2	55	NULL
+2	49	13
+4	51	15
+6	53	17
+2	55	NULL
+DROP TABLE t3;
+DROP procedure curdemo;
+aggregate-pushdown on user temprorary TABLE
+CREATE TEMPORARY TABLE temp2 (
+c INT,
+d INT,
+e time,
+f date
+);
+INSERT INTO temp2 SELECT * from t2;
+CREATE index idx_temp2 on temp2(c);
+SELECT SEC_TO_TIME(SUM(TIME_TO_SEC(e))) FROM temp2 group by c;
+SEC_TO_TIME(SUM(TIME_TO_SEC(e)))
+NULL
+00:38:38
+EXPLAIN SELECT SEC_TO_TIME(SUM(TIME_TO_SEC(e))) FROM temp2 group by c;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	temp2	NULL	index	idx_temp2	idx_temp2	5	NULL	1	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select sec_to_time(sum(time_to_sec(`test`.`temp2`.`e`))) AS `SEC_TO_TIME(SUM(TIME_TO_SEC(e)))` from `test`.`temp2` group by `test`.`temp2`.`c`
+DROP TABLE temp2;
+No ICP on index on virtual column
+EXPLAIN SELECT count(*) from t1 force index (idx2_t1) where e>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	idx2_t1	idx2_t1	5	NULL	13	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(*)` from `test`.`t1` FORCE INDEX (`idx2_t1`) where (`test`.`t1`.`e` > 1)
+No aggregate-pushdown if DS-MRR access is used
+range-desc always turns off DS-MRR even if it is forced
+set optimizer_switch='mrr_cost_based=off';
+EXPLAIN SELECT count(b) FROM t1 force index (a) WHERE a > 2 ;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	5	NULL	8	100.00	Using MRR
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`b`) AS `count(b)` from `test`.`t1` FORCE INDEX (`a`) where (`test`.`t1`.`a` > 2)
+EXPLAIN SELECT count(a) FROM t1 force index (idx_t1) group by b order by b desc ;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	idx_t1	idx_t1	5	NULL	13	100.00	Backward index scan; Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` FORCE INDEX (`idx_t1`) group by `test`.`t1`.`b` desc order by `test`.`t1`.`b` desc
+set optimizer_switch=default;
+EXPLAIN SELECT count(b) FROM t1 force index (a) WHERE a > 2 ;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	5	NULL	8	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`b`) AS `count(b)` from `test`.`t1` FORCE INDEX (`a`) where (`test`.`t1`.`a` > 2)
+EXPLAIN SELECT count(a) FROM t1 force index (idx_t1) group by b order by b desc ;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	idx_t1	idx_t1	5	NULL	13	100.00	Backward index scan; Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` FORCE INDEX (`idx_t1`) group by `test`.`t1`.`b` desc order by `test`.`t1`.`b` desc
+SELECT count(b) FROM t1 force index (a) WHERE a > 2 ;
+count(b)
+8
+SELECT count(a) FROM t1 force index (idx_t1) group by b order by b desc ;
+count(a)
+0
+3
+3
+3
+semi dup elimiation use loosescan
+EXPLAIN SELECT count(*) from t1 where t1.a in (SELECT c from t2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	index	idx_t2	idx_t2	5	NULL	3	100.00	Using where; Using index; LooseScan
+1	SIMPLE	t1	NULL	eq_ref	a,idx3_t1	a	5	test.t2.c	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(*)` from `test`.`t1` semi join (`test`.`t2`) where (`test`.`t1`.`a` = `test`.`t2`.`c`)
+SELECT count(*) from t1 where t1.a in (SELECT c from t2);
+count(*)
+1
+set optimizer_switch='loosescan=off';
+semi dup elimiation use materialization
+EXPLAIN SELECT count(*) from t1 where t1.a in (SELECT c from t2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<subquery2>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	100.00	Using where
+1	SIMPLE	t1	NULL	eq_ref	a,idx3_t1	a	5	<subquery2>.c	1	100.00	Using index
+2	MATERIALIZED	t2	NULL	index	idx_t2	idx_t2	5	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(*)` from `test`.`t1` semi join (`test`.`t2`) where (`test`.`t1`.`a` = `<subquery2>`.`c`)
+SELECT count(*) from t1 where t1.a in (SELECT c from t2);
+count(*)
+1
+set optimizer_switch='materialization=off';
+semi dup elimiation use weed out
+EXPLAIN SELECT count(*) from t1 where t1.a in (SELECT c from t2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	index	idx_t2	idx_t2	5	NULL	3	100.00	Using where; Using index; Start temporary
+1	SIMPLE	t1	NULL	eq_ref	a,idx3_t1	a	5	test.t2.c	1	100.00	Using index; End temporary
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(*)` from `test`.`t1` semi join (`test`.`t2`) where (`test`.`t1`.`a` = `test`.`t2`.`c`)
+SELECT count(*) from t1 where t1.a in (SELECT c from t2);
+count(*)
+1
+semi dup elimiation use firstmatch
+set optimizer_switch='duplicateweedout=off';
+EXPLAIN SELECT count(*) from t1 where t1.a in (SELECT c from t2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	a,idx3_t1	a	5	NULL	13	100.00	Using where; Using index
+1	SIMPLE	t2	NULL	ref	idx_t2	idx_t2	5	test.t1.a	1	100.00	Using index; FirstMatch(t1)
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(*)` from `test`.`t1` semi join (`test`.`t2`) where (`test`.`t2`.`c` = `test`.`t1`.`a`)
+SELECT count(*) from t1 where t1.a in (SELECT c from t2);
+count(*)
+1
+set optimizer_switch=default;
+SELECT distinct count(c1) from  t6 group by c1;
+count(c1)
+2
+3
+SELECT avg(dummy), count(a), avgcost(a,d) from t5 group by a;
+avg(dummy)	count(a)	avgcost(a,d)
+22.0000	0	NULL
+1.0000	1	1.0000
+3.0000	1	3.0000
+5.0000	1	5.0000
+7.0000	1	1.0000
+9.0000	1	3.0000
+11.0000	1	5.0000
+13.0000	1	1.0000
+15.0000	1	3.0000
+17.0000	1	5.0000
+SELECT avg(dummy), count(a), sum(a), count(myfunc_int(a)) from t5 group by a;
+avg(dummy)	count(a)	sum(a)	count(myfunc_int(a))
+22.0000	0	NULL	4
+1.0000	1	1	1
+3.0000	1	3	1
+5.0000	1	5	1
+7.0000	1	7	1
+9.0000	1	9	1
+11.0000	1	11	1
+13.0000	1	13	1
+15.0000	1	15	1
+17.0000	1	17	1
+SELECT avg(a) from t5 group by dummy;
+avg(a)
+1.0000
+3.0000
+5.0000
+7.0000
+9.0000
+11.0000
+13.0000
+15.0000
+17.0000
+NULL
+NULL
+NULL
+NULL
+SELECT count(b) from t5 group by e;
+count(b)
+4
+4
+4
+1
+UPDATE t4 set c1=(SELECT sum(c1) from t6 where t6.c1=t4.c1);
+UPDATE t6 set c1=(SELECT sum(c1) from t4 where t6.c1=t4.c1);
+UPDATE t4 set c1=c2*1 where c1 > (SELECT sum(t6.c2) from t6 group by c1 limit 1);
+UPDATE t6 set c1=c2*1 where c1 > (SELECT sum(t4.c1) from t4 group by c2 limit 1);
+DROP function avgcost;
+DROP function myfunc_double;
+DROP function myfunc_int;
+DROP TABLE t1, t2;
+DROP TABLE t4,t5,t6;
+CREATE TABLE t1 (d int not null auto_increment,primary key(d), a int, b int, c int);
+INSERT INTO t1(a,b) VALUES (1,3), (1,4), (1,2), (2,7), (1,1), (1,2), (2,3), (2,3);
+SELECT d,a,b from t1 order by a;
+d	a	b
+1	1	3
+2	1	4
+3	1	2
+5	1	1
+6	1	2
+4	2	7
+7	2	3
+8	2	3
+EXPLAIN SELECT a, group_concat(b) from t1 group by a with rollup;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	8	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select rollup_group_item(`test`.`t1`.`a`,0) AS `a`,rollup_sum_switcher(group_concat(`test`.`t1`.`b` separator ',')) AS `group_concat(b)` from `test`.`t1` group by `test`.`t1`.`a` with rollup
+SELECT a, group_concat(b) from t1 group by a with rollup;
+a	group_concat(b)
+1	3,4,2,1,2
+2	7,3,3
+NULL	3,4,2,1,2,7,3,3
+SELECT a, group_concat(distinct b) from t1 group by a with rollup;
+a	group_concat(distinct b)
+1	1,2,3,4
+2	3,7
+NULL	1,2,3,4,7
+SELECT a, group_concat(b order by b) from t1 group by a with rollup;
+a	group_concat(b order by b)
+1	1,2,2,3,4
+2	3,3,7
+NULL	1,2,2,3,3,3,4,7
+SELECT a, group_concat(distinct b order by b) from t1 group by a with rollup;
+a	group_concat(distinct b order by b)
+1	1,2,3,4
+2	3,7
+NULL	1,2,3,4,7
+CREATE index idx1_t1 on t1(a);
+EXPLAIN SELECT a, group_concat(b) from t1 group by a with rollup;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	idx1_t1	idx1_t1	5	NULL	8	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select rollup_group_item(`test`.`t1`.`a`,0) AS `a`,rollup_sum_switcher(group_concat(`test`.`t1`.`b` separator ',')) AS `group_concat(b)` from `test`.`t1` group by `test`.`t1`.`a` with rollup
+SELECT a, group_concat(b) from t1 group by a with rollup;
+a	group_concat(b)
+1	3,4,2,1,2
+2	7,3,3
+NULL	3,4,2,1,2,7,3,3
+SELECT a, group_concat(distinct b) from t1 group by a with rollup;
+a	group_concat(distinct b)
+1	1,2,3,4
+2	3,7
+NULL	1,2,3,4,7
+SELECT a, group_concat(b order by b) from t1 group by a with rollup;
+a	group_concat(b order by b)
+1	1,2,2,3,4
+2	3,3,7
+NULL	1,2,2,3,3,3,4,7
+SELECT a, group_concat(distinct b order by b) from t1 group by a with rollup;
+a	group_concat(distinct b order by b)
+1	1,2,3,4
+2	3,7
+NULL	1,2,3,4,7
+DROP TABLE t1;
+CREATE TABLE t1 (
+cid mediumint(9) NOT NULL auto_increment,
+firstname varchar(32) DEFAULT '' NOT NULL,
+surname varchar(32) DEFAULT '' NOT NULL,
+PRIMARY KEY (cid)
+);
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO t1 VALUES (1,'That','Guy');
+INSERT INTO t1 VALUES (2,'Another','Gent');
+CREATE TABLE t2 (
+call_id mediumint(8) NOT NULL auto_increment,
+contact_id mediumint(8) DEFAULT '0' NOT NULL,
+PRIMARY KEY (call_id),
+KEY contact_id (contact_id)
+);
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO t2 VALUES (10,2);
+INSERT INTO t2 VALUES (18,2);
+INSERT INTO t2 VALUES (62,2);
+INSERT INTO t2 VALUES (91,2);
+INSERT INTO t2 VALUES (92,2);
+ANALYZE TABLE t1 UPDATE HISTOGRAM ON cid;
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'cid'.
+ANALYZE TABLE t2 UPDATE HISTOGRAM ON call_id,contact_id;
+Table	Op	Msg_type	Msg_text
+test.t2	histogram	status	Histogram statistics created for column 'call_id'.
+test.t2	histogram	status	Histogram statistics created for column 'contact_id'.
+ANALYZE TABLE t1,t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+EXPLAIN SELECT cid, CONCAT(firstname, ' ', surname), COUNT(call_id) FROM t1 LEFT JOIN t2 ON cid=contact_id WHERE firstname like '%oth%' GROUP BY cid;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	2	50.00	Using where; Using temporary
+1	SIMPLE	t2	NULL	ref	contact_id	contact_id	3	test.t1.cid	5	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`cid` AS `cid`,concat(`test`.`t1`.`firstname`,' ',`test`.`t1`.`surname`) AS `CONCAT(firstname, ' ', surname)`,count(`test`.`t2`.`call_id`) AS `COUNT(call_id)` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`contact_id` = `test`.`t1`.`cid`)) where (`test`.`t1`.`firstname` like '%oth%') group by `test`.`t1`.`cid`
+EXPLAIN SELECT cid, CONCAT(firstname, ' ', surname), COUNT(call_id) FROM t1 ignore index (primary) STRAIGHT_JOIN t2 ON cid=contact_id WHERE firstname like '%oth%' GROUP BY cid;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	Using where; Using temporary
+1	SIMPLE	t2	NULL	ref	contact_id	contact_id	3	test.t1.cid	5	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`cid` AS `cid`,concat(`test`.`t1`.`firstname`,' ',`test`.`t1`.`surname`) AS `CONCAT(firstname, ' ', surname)`,count(0) AS `COUNT(call_id)` from `test`.`t1` IGNORE INDEX (PRIMARY) straight_join `test`.`t2` where ((`test`.`t2`.`contact_id` = `test`.`t1`.`cid`) and (`test`.`t1`.`firstname` like '%oth%')) group by `test`.`t1`.`cid`
+EXPLAIN SELECT cid, CONCAT(firstname, ' ', surname), COUNT(call_id) FROM t1 force index (primary) STRAIGHT_JOIN t2 ON cid=contact_id WHERE firstname like '%oth%' GROUP BY cid;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	3	NULL	2	50.00	Using where
+1	SIMPLE	t2	NULL	ref	contact_id	contact_id	3	test.t1.cid	5	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`cid` AS `cid`,concat(`test`.`t1`.`firstname`,' ',`test`.`t1`.`surname`) AS `CONCAT(firstname, ' ', surname)`,count(0) AS `COUNT(call_id)` from `test`.`t1` FORCE INDEX (PRIMARY) straight_join `test`.`t2` where ((`test`.`t2`.`contact_id` = `test`.`t1`.`cid`) and (`test`.`t1`.`firstname` like '%oth%')) group by `test`.`t1`.`cid`
+SELECT cid, CONCAT(firstname, ' ', surname), COUNT(call_id) FROM t1 force index (primary) STRAIGHT_JOIN t2 ON cid=contact_id WHERE firstname like '%oth%' GROUP BY cid;
+cid	CONCAT(firstname, ' ', surname)	COUNT(call_id)
+2	Another Gent	5
+DROP TABLE t1,t2;
+CREATE TABLE t1 (a1 char(8), a2 char(8));
+CREATE TABLE t2 (b1 char(8), b2 char(8));
+INSERT INTO t1 VALUES ('1 - 00', '2 - 00');
+INSERT INTO t1 VALUES ('1 - 01', '2 - 01');
+INSERT INTO t1 VALUES ('1 - 02', '2 - 02');
+INSERT INTO t2 VALUES ('1 - 01', '2 - 01');
+INSERT INTO t2 VALUES ('1 - 01', '2 - 01');
+INSERT INTO t2 VALUES ('1 - 02', '2 - 02');
+INSERT INTO t2 VALUES ('1 - 02', '2 - 02');
+INSERT INTO t2 VALUES ('1 - 03', '2 - 03');
+SET @orig_switch = @@optimizer_switch;
+SET @orig_trace = @@optimizer_trace;
+SET @orig_trace_fea = @@optimizer_trace_features;
+SET optimizer_switch='aggregate_pushdown=on';
+CREATE index idxt2 on t2(b1);
+PREPARE st1 from "SELECT * from t1 where (a1, a2) in (SELECT b1, min(b2) from t2 where b1 > '0' group by b1)";
+PREPARE st2 from "EXPLAIN SELECT * from t1 where (a1, a2) in (SELECT b1, min(b2) from t2 where b1 > '0' group by b1)";
+SET optimizer_trace="enabled=on";
+SET optimizer_trace_features="greedy_search=off,range_optimizer=off,dynamic_range=off,repeated_subSELECT=off";
+EXECUTE st1;
+a1	a2
+1 - 01	2 - 01
+1 - 02	2 - 02
+SELECT TRACE LIKE '%aggregate_pushdown%' FROM information_schema.OPTIMIZER_TRACE;
+TRACE LIKE '%aggregate_pushdown%'
+1
+EXECUTE st2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where
+2	SUBQUERY	t2	NULL	range	idxt2	idxt2	33	NULL	5	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a1` AS `a1`,`test`.`t1`.`a2` AS `a2` from `test`.`t1` where <in_optimizer>((`test`.`t1`.`a1`,`test`.`t1`.`a2`),(`test`.`t1`.`a1`,`test`.`t1`.`a2`) in ( <materialize> (/* select#2 */ select `test`.`t2`.`b1`,min(`test`.`t2`.`b2`) from `test`.`t2` where (`test`.`t2`.`b1` > '0') group by `test`.`t2`.`b1` having true ), <primary_index_lookup>(`test`.`t1`.`a1` in <temporary table> on <auto_distinct_key> where ((`test`.`t1`.`a1` = `<materialized_subquery>`.`b1`) and (`test`.`t1`.`a2` = `<materialized_subquery>`.`min(b2)`)))))
+EXECUTE st1;
+a1	a2
+1 - 01	2 - 01
+1 - 02	2 - 02
+SELECT TRACE LIKE '%aggregate_pushdown%' FROM information_schema.OPTIMIZER_TRACE;
+TRACE LIKE '%aggregate_pushdown%'
+1
+EXECUTE st2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where
+2	SUBQUERY	t2	NULL	range	idxt2	idxt2	33	NULL	5	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a1` AS `a1`,`test`.`t1`.`a2` AS `a2` from `test`.`t1` where <in_optimizer>((`test`.`t1`.`a1`,`test`.`t1`.`a2`),(`test`.`t1`.`a1`,`test`.`t1`.`a2`) in ( <materialize> (/* select#2 */ select `test`.`t2`.`b1`,min(`test`.`t2`.`b2`) from `test`.`t2` where (`test`.`t2`.`b1` > '0') group by `test`.`t2`.`b1` having true ), <primary_index_lookup>(`test`.`t1`.`a1` in <temporary table> on <auto_distinct_key> where ((`test`.`t1`.`a1` = `<materialized_subquery>`.`b1`) and (`test`.`t1`.`a2` = `<materialized_subquery>`.`min(b2)`)))))
+SET optimizer_switch='aggregate_pushdown=off';
+EXECUTE st1;
+a1	a2
+1 - 01	2 - 01
+1 - 02	2 - 02
+SELECT TRACE LIKE '%aggregate_pushdown%' FROM information_schema.OPTIMIZER_TRACE;
+TRACE LIKE '%aggregate_pushdown%'
+0
+EXECUTE st2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Using where
+2	SUBQUERY	t2	NULL	range	idxt2	idxt2	33	NULL	5	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a1` AS `a1`,`test`.`t1`.`a2` AS `a2` from `test`.`t1` where <in_optimizer>((`test`.`t1`.`a1`,`test`.`t1`.`a2`),(`test`.`t1`.`a1`,`test`.`t1`.`a2`) in ( <materialize> (/* select#2 */ select `test`.`t2`.`b1`,min(`test`.`t2`.`b2`) from `test`.`t2` where (`test`.`t2`.`b1` > '0') group by `test`.`t2`.`b1` having true ), <primary_index_lookup>(`test`.`t1`.`a1` in <temporary table> on <auto_distinct_key> where ((`test`.`t1`.`a1` = `<materialized_subquery>`.`b1`) and (`test`.`t1`.`a2` = `<materialized_subquery>`.`min(b2)`)))))
+DROP TABLE t1,t2;
+SET optimizer_trace = @orig_trace;
+SET optimizer_trace_features = @orig_trace_fea;
+CREATE TABLE t1 (
+carrier char(2) default NULL,
+id int NOT NULL auto_increment PRIMARY KEY
+) CHARSET utf8mb4;
+INSERT INTO t1 VALUES
+('CO',235371754),('CO',235376554),('CO',235376884),('CO',235377874),
+('CO',231060394),('CO',231059224),('CO',231059314),('CO',231060484),
+('CO',231060274),('CO',231060124),('CO',231060244),('CO',231058594),
+('CO',231058924),('CO',231058504),('CO',231059344),('CO',231060424),
+('CO',231059554),('CO',231060304),('CO',231059644),('CO',231059464),
+('CO',231059764),('CO',231058294),('CO',231058624),('CO',231058864),
+('CO',231059374),('CO',231059584),('CO',231059734),('CO',231059014),
+('CO',231059854),('CO',231059494),('CO',231059794),('CO',231058534),
+('CO',231058324),('CO',231058684),('CO',231059524),('CO',231059974);
+CREATE TABLE t2 (
+scan_date date default NULL,
+package_id int default NULL,
+INDEX scan_date(scan_date),
+INDEX package_id(package_id)
+);
+INSERT INTO t2 VALUES
+('2008-12-29',231062944),('2008-12-29',231065764),('2008-12-29',231066124),
+('2008-12-29',231060094),('2008-12-29',231061054),('2008-12-29',231065644),
+('2008-12-29',231064384),('2008-12-29',231064444),('2008-12-29',231073774),
+('2008-12-29',231058594),('2008-12-29',231059374),('2008-12-29',231066004),
+('2008-12-29',231068494),('2008-12-29',231070174),('2008-12-29',231071884),
+('2008-12-29',231063274),('2008-12-29',231063754),('2008-12-29',231064144),
+('2008-12-29',231069424),('2008-12-29',231073714),('2008-12-29',231058414),
+('2008-12-29',231060994),('2008-12-29',231069154),('2008-12-29',231068614),
+('2008-12-29',231071464),('2008-12-29',231074014),('2008-12-29',231059614),
+('2008-12-29',231059074),('2008-12-29',231059464),('2008-12-29',231069094),
+('2008-12-29',231067294),('2008-12-29',231070144),('2008-12-29',231073804),
+('2008-12-29',231072634),('2008-12-29',231058294),('2008-12-29',231065344),
+('2008-12-29',231066094),('2008-12-29',231069034),('2008-12-29',231058594),
+('2008-12-29',231059854),('2008-12-29',231059884),('2008-12-29',231059914),
+('2008-12-29',231063664),('2008-12-29',231063814),('2008-12-29',231063904);
+CREATE TABLE t3 (
+package_id int default NULL,
+INDEX package_id(package_id)
+);
+INSERT INTO t3 VALUES
+(231058294),(231058324),(231058354),(231058384),(231058414),(231058444),
+(231058474),(231058504),(231058534),(231058564),(231058594),(231058624),
+(231058684),(231058744),(231058804),(231058864),(231058924),(231058954),
+(231059014),(231059074),(231059104),(231059134),(231059164),(231059194),
+(231059224),(231059254),(231059284),(231059314),(231059344),(231059374),
+(231059404),(231059434),(231059464),(231059494),(231059524),(231059554),
+(231059584),(231059614),(231059644),(231059674),(231059704),(231059734),
+(231059764),(231059794),(231059824),(231059854),(231059884),(231059914),
+(231059944),(231059974),(231060004),(231060034),(231060064),(231060094),
+(231060124),(231060154),(231060184),(231060214),(231060244),(231060274),
+(231060304),(231060334),(231060364),(231060394),(231060424),(231060454),
+(231060484),(231060514),(231060544),(231060574),(231060604),(231060634),
+(231060664),(231060694),(231060724),(231060754),(231060784),(231060814),
+(231060844),(231060874),(231060904),(231060934),(231060964),(231060994),
+(231061024),(231061054),(231061084),(231061144),(231061174),(231061204),
+(231061234),(231061294),(231061354),(231061384),(231061414),(231061474),
+(231061564),(231061594),(231061624),(231061684),(231061714),(231061774),
+(231061804),(231061894),(231061984),(231062074),(231062134),(231062224),
+(231062254),(231062314),(231062374),(231062434),(231062494),(231062554),
+(231062584),(231062614),(231062644),(231062704),(231062734),(231062794),
+(231062854),(231062884),(231062944),(231063004),(231063034),(231063064),
+(231063124),(231063154),(231063184),(231063214),(231063274),(231063334),
+(231063394),(231063424),(231063454),(231063514),(231063574),(231063664);
+CREATE TABLE t4 (
+carrier char(2) NOT NULL default '' PRIMARY KEY,
+id int(11) default NULL,
+INDEX id(id)
+) CHARSET utf8mb4;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO t4 VALUES
+('99',6),('SK',456),('UA',486),('AI',1081),('OS',1111),('VS',1510);
+CREATE TABLE t5 (
+carrier_id int default NULL,
+INDEX carrier_id(carrier_id)
+);
+INSERT INTO t5 VALUES
+(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),
+(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),
+(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),
+(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),
+(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),
+(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(6),(456),(456),(456),
+(456),(456),(456),(456),(456),(456),(456),(456),(456),(456),(456),(456),
+(456),(486),(1081),(1111),(1111),(1111),(1111),(1510);
+ANALYZE TABLE t1 UPDATE HISTOGRAM ON id;
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'id'.
+ANALYZE TABLE t2 UPDATE HISTOGRAM ON scan_date,package_id;
+Table	Op	Msg_type	Msg_text
+test.t2	histogram	status	Histogram statistics created for column 'package_id'.
+test.t2	histogram	status	Histogram statistics created for column 'scan_date'.
+ANALYZE TABLE t3 UPDATE HISTOGRAM ON package_id;
+Table	Op	Msg_type	Msg_text
+test.t3	histogram	status	Histogram statistics created for column 'package_id'.
+ANALYZE TABLE t4 UPDATE HISTOGRAM ON carrier,id;
+Table	Op	Msg_type	Msg_text
+test.t4	histogram	status	Histogram statistics created for column 'carrier'.
+test.t4	histogram	status	Histogram statistics created for column 'id'.
+ANALYZE TABLE t5 UPDATE HISTOGRAM ON carrier_id;
+Table	Op	Msg_type	Msg_text
+test.t5	histogram	status	Histogram statistics created for column 'carrier_id'.
+ANALYZE TABLE t1, t2, t3, t4, t5;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+test.t3	analyze	status	OK
+test.t4	analyze	status	OK
+test.t5	analyze	status	OK
+set optimizer_switch='aggregate_pushdown=on';
+set optimizer_switch='partial_result_cache=on';
+EXPLAIN SELECT COUNT(*)
+FROM ((t2 JOIN t1 ON t2.package_id = t1.id)
+JOIN t3 ON t3.package_id = t1.id)
+LEFT JOIN
+(t5 JOIN t4 ON t5.carrier_id = t4.id)
+ON t4.carrier = t1.carrier;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	index	package_id	package_id	5	NULL	45	100.00	Using where; Using index
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.t2.package_id	1	100.00	NULL
+1	SIMPLE	t4	NULL	eq_ref	PRIMARY,id	PRIMARY	8	test.t1.carrier	1	100.00	NULL
+1	SIMPLE	t5	NULL	ref	carrier_id	carrier_id	5	test.t4.id	22	100.00	Using index
+1	SIMPLE	t3	NULL	ref	package_id	package_id	5	test.t2.package_id	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `test`.`t2` join `test`.`t1` join `test`.`t3` left join (`test`.`t5` join `test`.`t4`) on(((`test`.`t5`.`carrier_id` = `test`.`t4`.`id`) and (`test`.`t4`.`carrier` = `test`.`t1`.`carrier`))) where ((`test`.`t1`.`id` = `test`.`t2`.`package_id`) and (`test`.`t3`.`package_id` = `test`.`t2`.`package_id`))
+set optimizer_switch='partial_result_cache=off';
+EXPLAIN SELECT COUNT(*)
+FROM ((t2 JOIN t1 ON t2.package_id = t1.id)
+JOIN t3 ON t3.package_id = t1.id)
+LEFT JOIN
+(t5 JOIN t4 ON t5.carrier_id = t4.id)
+ON t4.carrier = t1.carrier;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	index	package_id	package_id	5	NULL	45	100.00	Using where; Using index
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.t2.package_id	1	100.00	NULL
+1	SIMPLE	t4	NULL	eq_ref	PRIMARY,id	PRIMARY	8	test.t1.carrier	1	100.00	NULL
+1	SIMPLE	t5	NULL	ref	carrier_id	carrier_id	5	test.t4.id	22	100.00	Using index
+1	SIMPLE	t3	NULL	ref	package_id	package_id	5	test.t2.package_id	1	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `test`.`t2` join `test`.`t1` join `test`.`t3` left join (`test`.`t5` join `test`.`t4`) on(((`test`.`t5`.`carrier_id` = `test`.`t4`.`id`) and (`test`.`t4`.`carrier` = `test`.`t1`.`carrier`))) where ((`test`.`t1`.`id` = `test`.`t2`.`package_id`) and (`test`.`t3`.`package_id` = `test`.`t2`.`package_id`))
+DROP TABLE t1,t2,t3,t4,t5;
+CREATE TABLE t1(a int);
+INSERT INTO t1 values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+CREATE TABLE t2(a char(8), b char(8), c char(8), filler char(100), key k1(a,b,c) ) charset utf8mb4;
+INSERT INTO t2 SELECT
+concat('a-', 1000 + A.a, '-a'),
+concat('b-', 1000 + B.a, '-b'),
+concat('c-', 1000 + C.a, '-c'),
+'filler'
+FROM t1 A, t1 B, t1 C;
+set optimizer_switch='mrr=on,mrr_cost_based=off';
+EXPLAIN SELECT sum(length(a)),sum(length(filler)) FROM t2 force index (k1) where a>='a-1000-a' and a <'a-1001-a';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	range	k1	k1	33	NULL	200	100.00	Using MRR
+Warnings:
+Note	1003	/* select#1 */ select sum(length(`test`.`t2`.`a`)) AS `sum(length(a))`,sum(length(`test`.`t2`.`filler`)) AS `sum(length(filler))` from `test`.`t2` FORCE INDEX (`k1`) where ((`test`.`t2`.`a` >= 'a-1000-a') and (`test`.`t2`.`a` < 'a-1001-a'))
+SELECT sum(length(a)),sum(length(filler)) FROM t2 force index (k1) where a>='a-1000-a' and a <'a-1001-a';
+sum(length(a))	sum(length(filler))
+800	600
+set optimizer_switch='mrr=off';
+EXPLAIN SELECT sum(length(a)),sum(length(filler)) FROM t2 force index (k1) where a>='a-1000-a' and a <'a-1001-a';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	range	k1	k1	33	NULL	200	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select sum(length(`test`.`t2`.`a`)) AS `sum(length(a))`,sum(length(`test`.`t2`.`filler`)) AS `sum(length(filler))` from `test`.`t2` FORCE INDEX (`k1`) where ((`test`.`t2`.`a` >= 'a-1000-a') and (`test`.`t2`.`a` < 'a-1001-a'))
+SELECT sum(length(a)),sum(length(filler)) FROM t2 force index (k1) where a>='a-1000-a' and a <'a-1001-a';
+sum(length(a))	sum(length(filler))
+800	600
+DROP TABLE t1,t2;
+SET optimizer_switch = @orig_switch;
+CREATE TABLE no_idx(a int, b int, c int);
+INSERT into no_idx values(1,1,1);
+INSERT into no_idx values(2,1,1);
+INSERT into no_idx values(3,2,1);
+INSERT into no_idx values(4,2,2);
+INSERT into no_idx values(5,3,2);
+INSERT into no_idx values(6,3,2);
+ANALYZE TABLE no_idx;
+Table	Op	Msg_type	Msg_text
+test.no_idx	analyze	status	OK
+EXPLAIN SELECT min(a), max(a), avg(b), sum(c) from no_idx;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	no_idx	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select min(`test`.`no_idx`.`a`) AS `min(a)`,max(`test`.`no_idx`.`a`) AS `max(a)`,avg(`test`.`no_idx`.`b`) AS `avg(b)`,sum(`test`.`no_idx`.`c`) AS `sum(c)` from `test`.`no_idx`
+SELECT min(a), max(a), avg(b), sum(c) from no_idx;
+min(a)	max(a)	avg(b)	sum(c)
+1	6	2.0000	9
+EXPLAIN SELECT min(a), max(a), avg(b), sum(c) from no_idx group by c;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	no_idx	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select min(`test`.`no_idx`.`a`) AS `min(a)`,max(`test`.`no_idx`.`a`) AS `max(a)`,avg(`test`.`no_idx`.`b`) AS `avg(b)`,sum(`test`.`no_idx`.`c`) AS `sum(c)` from `test`.`no_idx` group by `test`.`no_idx`.`c`
+SELECT min(a), max(a), avg(b), sum(c) from no_idx group by c;
+min(a)	max(a)	avg(b)	sum(c)
+1	3	1.3333	3
+4	6	2.6667	6
+ALTER TABLE no_idx add index idx_c(c);
+ANALYZE TABLE no_idx UPDATE HISTOGRAM ON c;
+Table	Op	Msg_type	Msg_text
+test.no_idx	histogram	status	Histogram statistics created for column 'c'.
+ANALYZE TABLE no_idx;
+Table	Op	Msg_type	Msg_text
+test.no_idx	analyze	status	OK
+EXPLAIN SELECT min(a), max(a), avg(b), sum(c) from no_idx group by c;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	no_idx	NULL	index	idx_c	idx_c	5	NULL	6	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select min(`test`.`no_idx`.`a`) AS `min(a)`,max(`test`.`no_idx`.`a`) AS `max(a)`,avg(`test`.`no_idx`.`b`) AS `avg(b)`,sum(`test`.`no_idx`.`c`) AS `sum(c)` from `test`.`no_idx` group by `test`.`no_idx`.`c`
+EXPLAIN ANALYZE SELECT min(a), max(a), avg(b), sum(c) from no_idx group by c;
+EXPLAIN
+-> Group aggregate: min(no_idx.a), max(no_idx.a), avg(no_idx.b), sum(no_idx.c)
+    -> Index scan on no_idx using idx_c, with aggregate
+
+SELECT min(a), max(a), avg(b), sum(c) from no_idx group by c;
+min(a)	max(a)	avg(b)	sum(c)
+1	3	1.3333	3
+4	6	2.6667	6
+DROP TABLE no_idx;
+CREATE TABLE t0 (a int);
+INSERT into t0 values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+CREATE TABLE t1 (a int) as SELECT A.a + 10 *(B.a + 10*C.a) as a  from t0 A, t0 B, t0 C;
+CREATE TABLE t2 (id int, a int, primary key(id), key(a)) charset utf8mb4 as SELECT a as id, a as a  from t1;
+SELECT COUNT(*) FROM t0 for share;
+COUNT(*)
+10
+SELECT SUM(a) FROM t0 for share;
+SUM(a)
+45
+SELECT AVG(a) FROM t0 for update;
+AVG(a)
+4.5000
+CREATE TEMPORARY  TABLE tmp (a int);
+INSERT into tmp values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+SELECT COUNT(*) FROM tmp;
+COUNT(*)
+10
+SELECT SUM(a) FROM tmp;
+SUM(a)
+45
+SELECT COUNT(*) FROM tmp for share;
+COUNT(*)
+10
+SELECT SUM(a) FROM tmp for share;
+SUM(a)
+45
+SELECT AVG(a) FROM tmp for update;
+AVG(a)
+4.5000
+set @a=0;
+CREATE TABLE t3 as SELECT * from t2 limit 0;
+INSERT into t3 SELECT @a:=@a+1, t2.a from t2, t0;
+Warnings:
+Warning	1287	Setting user variables within expressions is deprecated and will be removed in a future release. Consider alternatives: 'SET variable=expression, ...', or 'SELECT expression(s) INTO variables(s)'.
+INSERT into t3 SELECT @a:=@a+1, t2.a from t2, t0;
+Warnings:
+Warning	1287	Setting user variables within expressions is deprecated and will be removed in a future release. Consider alternatives: 'SET variable=expression, ...', or 'SELECT expression(s) INTO variables(s)'.
+INSERT into t3 SELECT @a:=@a+1, t2.a from t2, t0;
+Warnings:
+Warning	1287	Setting user variables within expressions is deprecated and will be removed in a future release. Consider alternatives: 'SET variable=expression, ...', or 'SELECT expression(s) INTO variables(s)'.
+alter TABLE t3 add primary key(id), add key(a);
+ANALYZE TABLE t3 UPDATE HISTOGRAM ON id;
+Table	Op	Msg_type	Msg_text
+test.t3	histogram	status	Histogram statistics created for column 'id'.
+ANALYZE TABLE t1,t2,t3;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+test.t3	analyze	status	OK
+EXPLAIN SELECT count(a) from t2 where a in ( SELECT  a FROM t3);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	index	a	a	5	NULL	#	100.00	Using where; Using index
+1	SIMPLE	t3	NULL	ref	a	a	5	test.t2.a	#	100.00	Using index; FirstMatch(t2)
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t2`.`a`) AS `count(a)` from `test`.`t2` semi join (`test`.`t3`) where (`test`.`t3`.`a` = `test`.`t2`.`a`)
+EXPLAIN ANALYZE SELECT count(a) from t2 where a in ( SELECT  a FROM t3);
+EXPLAIN
+-> Aggregate: count(t2.a)
+    -> Nested loop semijoin
+        -> Filter: (t2.a is not null)
+            -> Covering index scan on t2 using a
+        -> Covering index lookup on t3 using a (a=t2.a)
+
+DROP TABLE t0,t1,t2,t3,tmp;
+CREATE TABLE vt (
+a INT NOT NULL,
+b INT generated always as (a+1) virtual,
+INDEX idx_b (b)
+);
+INSERT INTO vt(a) VALUES(1),(2),(3);
+SELECT COUNT(*) FROM vt;
+COUNT(*)
+3
+SELECT COUNT(b) FROM vt;
+COUNT(b)
+3
+SELECT SUM(b) FROM vt;
+SUM(b)
+9
+DROP TABLE vt;

@@ -1,0 +1,30 @@
+#
+# Bug fix verification: DDL info writing in multi-DDL procedures
+#
+# Description:
+# Previously, DDL info was not written for subsequent DDL statements in a 
+# multi-DDL stored procedure when 'rds_dstore_write_ddl_sql_into_redo' was OFF.
+# This happened because 'THD::is_ddl_info_written' was only reset when 
+# 'thd->ddl_info_sql().length()' was non-zero. When the variable is OFF, 
+# the length is always zero, causing subsequent DDLs to skip writing DDL info.
+#
+# 1. Create the stored procedure with multiple DDLs
+DROP PROCEDURE IF EXISTS `test_lifecycle_demo`$$
+Warnings:
+Note	1305	PROCEDURE test.test_lifecycle_demo does not exist
+CREATE PROCEDURE `test_lifecycle_demo`()
+BEGIN
+-- Execute multiple DDLs in sequence
+CREATE TABLE `tb_user` (id INT);
+CREATE TABLE `tb_product` (id INT);
+CREATE TABLE `tb_order` (id INT);
+DROP TABLE `tb_user`;
+DROP TABLE `tb_product`;
+DROP TABLE `tb_order`;
+END$$
+# 2. Execute the procedure
+# If the bug exists, server will crash at Dstore extral wal check function.
+CALL test_lifecycle_demo();
+# 3. Cleanup
+DROP PROCEDURE test_lifecycle_demo;
+# Test passed.

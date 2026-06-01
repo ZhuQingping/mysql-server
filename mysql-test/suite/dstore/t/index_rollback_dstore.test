@@ -1,0 +1,81 @@
+--source include/have_only_dstore.inc
+
+
+CREATE TABLE t1(
+a INT PRIMARY KEY,
+b CHAR(10) NOT NULL
+)ENGINE=Dstore;
+
+# Create Insert Procedure
+DELIMITER |;
+CREATE PROCEDURE test_rollback_t1()
+BEGIN
+	DECLARE i int DEFAULT 1;
+	START TRANSACTION;
+	WHILE (i <= 324) DO
+        UPDATE t1 SET a = 10 WHERE a = 9;
+        UPDATE t1 SET a = 9 WHERE a = 10;
+		SET i = i + 1;
+	END WHILE;
+	COMMIT;
+END|
+DELIMITER ;|
+
+connect (conn1,localhost,root,,);
+connect (conn2,localhost,root,,);
+connect (conn3,localhost,root,,);
+connect (conn4,localhost,root,,);
+
+--connection conn1
+BEGIN;
+insert into t1 values(9, 'a');
+COMMIT;
+
+# start other connection to occupy TD1-TD3, make sure we reuse TD0
+--connection conn2
+BEGIN;
+insert into t1 values(0, 'a');
+
+--connection conn3
+BEGIN;
+insert into t1 values(1, 'a');
+
+--connection conn4
+BEGIN;
+insert into t1 values(2, 'a');
+
+# insert and delete util almost full
+--connection conn1
+call test_rollback_t1();
+
+# cause page split and then rollback
+--connection conn1
+BEGIN;
+DELETE FROM t1 where a = 9;
+insert into t1 values(3, 'a');
+insert into t1 values(4, 'a');
+insert into t1 values(5, 'a');
+insert into t1 values(6, 'a');
+insert into t1 values(7, 'a');
+ROLLBACK;
+
+BEGIN;
+DELETE FROM t1 where a = 9;
+COMMIT;
+
+BEGIN;
+explain select a from t1;
+select a from t1;
+COMMIT;
+
+--connection conn2
+COMMIT;
+
+--connection conn3
+COMMIT;
+
+--connection conn4
+COMMIT;
+
+DROP TABLE t1;
+DROP PROCEDURE test_rollback_t1;

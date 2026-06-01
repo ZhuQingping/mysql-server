@@ -1,0 +1,1606 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+
+--disable_query_log
+CALL mtr.add_suppression("invalid index str in FetchIndexStats");
+CALL mtr.add_suppression("UpdateDstoreIndexStats other error*");
+CALL mtr.add_suppression("DstoreDictStatDropTable error, table*");
+--enable_query_log
+
+set global dstore_stats_persistent = ON;
+use test;
+create table t1(c1 int, c2 int, index(c1), index index_c2(c2)) engine=Dstore;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+insert into t1 values(1,1);
+insert into t1 values(1,2);
+insert into t1 values(1,3);
+insert into t1 values(2,1);
+insert into t1 values(2,2);
+insert into t1 values(2,3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+drop table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+create table t1(c1 int, c2 int, index index_c1_c2(c1,c2)) engine=Dstore;
+select table_rows, data_length from information_schema.tables where table_schema = 'test' and table_name = 't1';
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+insert into t1 values(1,1);
+insert into t1 values(1,2);
+insert into t1 values(1,3);
+insert into t1 values(1,4);
+insert into t1 values(1,5);
+insert into t1 values(1,6);
+analyze table t1;
+select table_rows, data_length from information_schema.tables where table_schema = 'test' and table_name = 't1';
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+# restart fetch stat from table
+--let $restart_parameters = restart;
+--source include/restart_mysqld.inc
+set global dstore_stats_persistent = ON;
+select table_rows, data_length from information_schema.tables where table_schema = 'test' and table_name = 't1';
+select * from t1;
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+update mysql.dstore_index_stats set stat_name = 'size_001' where database_name = 'test' and table_name = 't1' and stat_name = 'size';
+--let $restart_parameters = restart;
+--source include/restart_mysqld.inc
+set global dstore_stats_persistent = ON;
+select * from t1;
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+alter table t1 add index index_c1(c1);
+alter table t1 add index index_c2(c2);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+alter table t1 drop index index_c1_c2;
+drop index index_c1 on t1;
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+alter table t1 rename t1_1;
+select count(1) from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+select count(1) from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1_1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1_1';
+
+truncate table t1_1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1_1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1_1';
+
+drop table t1_1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1_1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1_1';
+
+create table t1(c1 int, c2 int, index(c1), index index_c2(c2)) engine=Dstore;
+insert into t1 values(1,1);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+create table t1(c1 int, c2 int, index(c1), index index_c2(c2)) engine=Dstore;
+insert into t1 values(1,1);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 engine=heap;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+create table t1(c1 int, c2 int, index(c1), index index_c1_c2(c1, c2)) engine=Dstore;
+insert into t1 values(1,1),(2,2),(3,3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 rename index c1 to index_c1;
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 rename index index_c1_c2 to index_c1_c2_1;
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+drop table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+create table t1(c1 int, c2 int, index(c1)) engine=Dstore;
+SET DEBUG='+d,cde_drop_table_crash_before_commit';
+--source include/expect_crash.inc
+--error CR_SERVER_LOST
+alter table t1 add index index_c2(c2), algorithm=COPY;
+
+# Restart mysqld
+--source include/start_mysqld.inc
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+SET DEBUG='-d,cde_drop_table_crash_before_commit';
+
+insert into t1 values(1,1),(2,2),(3,3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+SET DEBUG='+d,cde_drop_table_crash_before_commit';
+--source include/expect_crash.inc
+--error CR_SERVER_LOST
+alter table t1 add index index_c1_c2(c1, c2), algorithm=COPY;
+
+# Restart mysqld
+--source include/start_mysqld.inc
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+drop table t1;
+SET DEBUG='-d,cde_drop_table_crash_before_commit';
+
+create table t1(c1 int, index(c1)) engine=Dstore;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+create table `t'1` (`c'1` int, c2 int, index index_c1_c2(`c'1`, c2));
+insert into `t'1` values(1,1),(1,2),(1,3),(1,4);
+analyze table `t'1`;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't''1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't''1';
+drop table  `t'1`;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't''1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't''1';
+
+create table `t\'1` (`c'1` int, c2 int, index index_c1_c2(`c'1`, c2));
+insert into `t\'1` values(1,1),(1,2),(1,3),(1,4);
+analyze table `t\'1`;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't\\\'1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't\\\'1';
+drop table  `t\'1`;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't\\\'1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't\\\'1';
+
+create table `t``1` (c1 int, c2 int, index index_c1_c2(c1, c2));
+insert into `t``1` values(1,1),(1,2),(1,3),(1,4);
+analyze table `t``1`;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't`1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't`1';
+drop table  `t``1`;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't`1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't`1';
+
+create table `t"@!~#$%^&*()-=/?[{]}-=_+,./`(c1 int, c2 int, index index_c1_c2(c1, c2));
+insert into `t"@!~#$%^&*()-=/?[{]}-=_+,./` values(1,1),(1,2),(1,3),(1,4);
+analyze table `t"@!~#$%^&*()-=/?[{]}-=_+,./`;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't"@!~#$%^&*()-=/?[{]}-=_+,./';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't"@!~#$%^&*()-=/?[{]}-=_+,./';
+drop table  `t"@!~#$%^&*()-=/?[{]}-=_+,./`;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't"@!~#$%^&*()-=/?[{]}-=_+,./';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't"@!~#$%^&*()-=/?[{]}-=_+,./';
+
+CREATE TEMPORARY TABLE tt_1(c1 int, c2 int, index(c1), index(c2)) engine=Dstore;
+insert into tt_1 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6);
+analyze table tt_1;
+alter table tt_1 rename tt_2;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 'tt_2';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 'tt_2';
+drop table tt_2;
+
+-- echo #
+-- echo # BUG2025110318840 some alter ddl operation like adding/droping index have flushed statistics when
+-- echo #                  table option STATS_AUTO_RECALC=0
+-- echo #
+
+use test;
+create table t1(c1 int, c2 int, index index_c1(c1)) engine=Dstore STATS_AUTO_RECALC=0;
+insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6);
+select count(1) from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+select count(1) from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 add index index_c2(c2);
+select count(1) from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+select count(1) from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 drop index index_c2;
+select count(1) from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+select count(1) from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 rename index index_c1 to index_c1_1;
+select count(1) from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+select count(1) from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+create table t1(c1 int, c2 int, index index_c1(c1)) engine=Dstore STATS_AUTO_RECALC=1;
+insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 add index index_c2(c2);
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 drop index index_c2;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 rename index index_c1 to index_c1_1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+create table t1(c1 int, c2 int, index(c1)) engine=Dstore;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+insert into t1 values(1,1);
+insert into t1 values(1,2);
+insert into t1 values(1,3);
+insert into t1 values(2,1);
+insert into t1 values(2,2);
+insert into t1 values(2,3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 add index index_c2(c2), algorithm=INPLACE;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+-- echo #
+-- echo # BUG2025122241785 When inserting big tuple data scenario. statistics background thread sample heap data 
+-- echo #                  but the fetch data is all invalid.
+-- echo #
+set sql_mode = '';
+--disable_warnings
+CREATE TABLE `t1` (
+  `ID` int NOT NULL AUTO_INCREMENT,
+  `varbinary_1` varbinary(100) DEFAULT NULL,
+  `binary_2` binary(60) DEFAULT NULL,
+  `varbinary_3` varbinary(100) DEFAULT NULL,
+  `binary_4` binary(60) DEFAULT NULL,
+  `bigint_5` bigint DEFAULT NULL,
+  `double_6` double DEFAULT NULL,
+  `binary_7` binary(60) DEFAULT NULL,
+  `binary_8` binary(60) DEFAULT NULL,
+  `bigint_9` bigint DEFAULT NULL,
+  `double_10` double DEFAULT NULL,
+  `bigint_11` bigint DEFAULT NULL,
+  `double_12` double DEFAULT NULL,
+  `bigint_13` bigint DEFAULT NULL,
+  `bigint_14` bigint DEFAULT NULL,
+  `double_15` double DEFAULT NULL,
+  `varbinary_16` varbinary(100) DEFAULT NULL,
+  `binary_17` binary(60) DEFAULT NULL,
+  `bigint_18` bigint DEFAULT NULL,
+  `double_19` double DEFAULT NULL,
+  `bigint_20` bigint DEFAULT NULL,
+  `varbinary_21` varbinary(100) DEFAULT NULL,
+  `varbinary_22` varbinary(100) DEFAULT NULL,
+  `bigint_23` bigint DEFAULT NULL,
+  `varbinary_24` varbinary(100) DEFAULT NULL,
+  `double_25` double DEFAULT NULL,
+  `varbinary_26` varbinary(100) DEFAULT NULL,
+  `double_27` double DEFAULT NULL,
+  `double_28` double DEFAULT NULL,
+  `binary_29` binary(60) DEFAULT NULL,
+  `double_30` double DEFAULT NULL,
+  `bigint_31` bigint DEFAULT NULL,
+  `varbinary_32` varbinary(100) DEFAULT NULL,
+  `double_33` double DEFAULT NULL,
+  `varbinary_34` varbinary(100) DEFAULT NULL,
+  `bigint_35` bigint DEFAULT NULL,
+  `double_36` double DEFAULT NULL,
+  `bigint_37` bigint DEFAULT NULL,
+  `varbinary_38` varbinary(100) DEFAULT NULL,
+  `varbinary_39` varbinary(100) DEFAULT NULL,
+  `varbinary_40` varbinary(100) DEFAULT NULL,
+  `binary_41` binary(60) DEFAULT NULL,
+  `double_42` double DEFAULT NULL,
+  `binary_43` binary(60) DEFAULT NULL,
+  `varbinary_44` varbinary(100) DEFAULT NULL,
+  `varbinary_45` varbinary(100) DEFAULT NULL,
+  `varbinary_46` varbinary(100) DEFAULT NULL,
+  `double_47` double DEFAULT NULL,
+  `bigint_48` bigint DEFAULT NULL,
+  `bigint_49` bigint DEFAULT NULL,
+  `bigint_50` bigint DEFAULT NULL,
+  `binary_51` binary(60) DEFAULT NULL,
+  `binary_52` binary(60) DEFAULT NULL,
+  `varbinary_53` varbinary(100) DEFAULT NULL,
+  `binary_54` binary(60) DEFAULT NULL,
+  `varbinary_55` varbinary(100) DEFAULT NULL,
+  `bigint_56` bigint DEFAULT NULL,
+  `binary_57` binary(60) DEFAULT NULL,
+  `bigint_58` bigint DEFAULT NULL,
+  `double_59` double DEFAULT NULL,
+  `varbinary_60` varbinary(100) DEFAULT NULL,
+  `double_61` double DEFAULT NULL,
+  `binary_62` binary(60) DEFAULT NULL,
+  `double_63` double DEFAULT NULL,
+  `varbinary_64` varbinary(100) DEFAULT NULL,
+  `binary_65` binary(60) DEFAULT NULL,
+  `double_66` double DEFAULT NULL,
+  `binary_67` binary(60) DEFAULT NULL,
+  `double_68` double DEFAULT NULL,
+  `bigint_69` bigint DEFAULT NULL,
+  `varbinary_70` varbinary(100) DEFAULT NULL,
+  `bigint_71` bigint DEFAULT NULL,
+  `varbinary_72` varbinary(100) DEFAULT NULL,
+  `varbinary_73` varbinary(100) DEFAULT NULL,
+  `double_74` double DEFAULT NULL,
+  `bigint_75` bigint DEFAULT NULL,
+  `bigint_76` bigint DEFAULT NULL,
+  `double_77` double DEFAULT NULL,
+  `bigint_78` bigint DEFAULT NULL,
+  `varbinary_79` varbinary(100) DEFAULT NULL,
+  `double_80` double DEFAULT NULL,
+  `double_81` double DEFAULT NULL,
+  `binary_82` binary(60) DEFAULT NULL,
+  `bigint_83` bigint DEFAULT NULL,
+  `bigint_84` bigint DEFAULT NULL,
+  `varbinary_85` varbinary(100) DEFAULT NULL,
+  `binary_86` binary(60) DEFAULT NULL,
+  `binary_87` binary(60) DEFAULT NULL,
+  `double_88` double DEFAULT NULL,
+  `binary_89` binary(60) DEFAULT NULL,
+  `binary_90` binary(60) DEFAULT NULL,
+  `binary_91` binary(60) DEFAULT NULL,
+  `binary_92` binary(60) DEFAULT NULL,
+  `binary_93` binary(60) DEFAULT NULL,
+  `varbinary_94` varbinary(100) DEFAULT NULL,
+  `binary_95` binary(60) DEFAULT NULL,
+  `bigint_96` bigint DEFAULT NULL,
+  `double_97` double DEFAULT NULL,
+  `bigint_98` bigint DEFAULT NULL,
+  `bigint_99` bigint DEFAULT NULL,
+  `varbinary_100` varbinary(100) DEFAULT NULL,
+  `bigint_101` bigint DEFAULT NULL,
+  `bigint_102` bigint DEFAULT NULL,
+  `double_103` double DEFAULT NULL,
+  `double_104` double DEFAULT NULL,
+  `binary_105` binary(60) DEFAULT NULL,
+  `double_106` double DEFAULT NULL,
+  `bigint_107` bigint DEFAULT NULL,
+  `double_108` double DEFAULT NULL,
+  `double_109` double DEFAULT NULL,
+  `binary_110` binary(60) DEFAULT NULL,
+  `bigint_111` bigint DEFAULT NULL,
+  `binary_112` binary(60) DEFAULT NULL,
+  `bigint_113` bigint DEFAULT NULL,
+  `varbinary_114` varbinary(100) DEFAULT NULL,
+  `varbinary_115` varbinary(100) DEFAULT NULL,
+  `double_116` double DEFAULT NULL,
+  `varbinary_117` varbinary(100) DEFAULT NULL,
+  `varbinary_118` varbinary(100) DEFAULT NULL,
+  `bigint_119` bigint DEFAULT NULL,
+  `varbinary_120` varbinary(100) DEFAULT NULL,
+  `bigint_121` bigint DEFAULT NULL,
+  `double_122` double DEFAULT NULL,
+  `bigint_123` bigint DEFAULT NULL,
+  `bigint_124` bigint DEFAULT NULL,
+  `bigint_125` bigint DEFAULT NULL,
+  `bigint_126` bigint DEFAULT NULL,
+  `bigint_127` bigint DEFAULT NULL,
+  `bigint_128` bigint DEFAULT NULL,
+  `varbinary_129` varbinary(100) DEFAULT NULL,
+  `varbinary_130` varbinary(100) DEFAULT NULL,
+  `bigint_131` bigint DEFAULT NULL,
+  `double_132` double DEFAULT NULL,
+  `bigint_133` bigint DEFAULT NULL,
+  `double_134` double DEFAULT NULL,
+  `bigint_135` bigint DEFAULT NULL,
+  `binary_136` binary(60) DEFAULT NULL,
+  `binary_137` binary(60) DEFAULT NULL,
+  `varbinary_138` varbinary(100) DEFAULT NULL,
+  `double_139` double DEFAULT NULL,
+  `binary_140` binary(60) DEFAULT NULL,
+  `varbinary_141` varbinary(100) DEFAULT NULL,
+  `binary_142` binary(60) DEFAULT NULL,
+  `binary_143` binary(60) DEFAULT NULL,
+  `bigint_144` bigint DEFAULT NULL,
+  `double_145` double DEFAULT NULL,
+  `double_146` double DEFAULT NULL,
+  `double_147` double DEFAULT NULL,
+  `bigint_148` bigint DEFAULT NULL,
+  `binary_149` binary(60) DEFAULT NULL,
+  `double_150` double DEFAULT NULL,
+  `varbinary_151` varbinary(100) DEFAULT NULL,
+  `bigint_152` bigint DEFAULT NULL,
+  `binary_153` binary(60) DEFAULT NULL,
+  `varbinary_154` varbinary(100) DEFAULT NULL,
+  `bigint_155` bigint DEFAULT NULL,
+  `binary_156` binary(60) DEFAULT NULL,
+  `varbinary_157` varbinary(100) DEFAULT NULL,
+  `double_158` double DEFAULT NULL,
+  `bigint_159` bigint DEFAULT NULL,
+  `varbinary_160` varbinary(100) DEFAULT NULL,
+  `bigint_161` bigint DEFAULT NULL,
+  `bigint_162` bigint DEFAULT NULL,
+  `bigint_163` bigint DEFAULT NULL,
+  `double_164` double DEFAULT NULL,
+  `bigint_165` bigint DEFAULT NULL,
+  `binary_166` binary(60) DEFAULT NULL,
+  `bigint_167` bigint DEFAULT NULL,
+  `double_168` double DEFAULT NULL,
+  `bigint_169` bigint DEFAULT NULL,
+  `varbinary_170` varbinary(100) DEFAULT NULL,
+  `bigint_171` bigint DEFAULT NULL,
+  `varbinary_172` varbinary(100) DEFAULT NULL,
+  `binary_173` binary(60) DEFAULT NULL,
+  `binary_174` binary(60) DEFAULT NULL,
+  `varbinary_175` varbinary(100) DEFAULT NULL,
+  `binary_176` binary(60) DEFAULT NULL,
+  `bigint_177` bigint DEFAULT NULL,
+  `varbinary_178` varbinary(100) DEFAULT NULL,
+  `binary_179` binary(60) DEFAULT NULL,
+  `bigint_180` bigint DEFAULT NULL,
+  `bigint_181` bigint DEFAULT NULL,
+  `binary_182` binary(60) DEFAULT NULL,
+  `bigint_183` bigint DEFAULT NULL,
+  `varbinary_184` varbinary(100) DEFAULT NULL,
+  `binary_185` binary(60) DEFAULT NULL,
+  `bigint_186` bigint DEFAULT NULL,
+  `bigint_187` bigint DEFAULT NULL,
+  `binary_188` binary(60) DEFAULT NULL,
+  `double_189` double DEFAULT NULL,
+  `varbinary_190` varbinary(100) DEFAULT NULL,
+  `binary_191` binary(60) DEFAULT NULL,
+  `double_192` double DEFAULT NULL,
+  `double_193` double DEFAULT NULL,
+  `bigint_194` bigint DEFAULT NULL,
+  `bigint_195` bigint DEFAULT NULL,
+  `bigint_196` bigint DEFAULT NULL,
+  `varbinary_197` varbinary(100) DEFAULT NULL,
+  `varbinary_198` varbinary(100) DEFAULT NULL,
+  `double_199` double DEFAULT NULL,
+  `double_200` double DEFAULT NULL,
+  `varbinary_201` varbinary(100) DEFAULT NULL,
+  `varbinary_202` varbinary(100) DEFAULT NULL,
+  `double_203` double DEFAULT NULL,
+  `binary_204` binary(60) DEFAULT NULL,
+  `double_205` double DEFAULT NULL,
+  `varbinary_206` varbinary(100) DEFAULT NULL,
+  `bigint_207` bigint DEFAULT NULL,
+  `double_208` double DEFAULT NULL,
+  `binary_209` binary(60) DEFAULT NULL,
+  `varbinary_210` varbinary(100) DEFAULT NULL,
+  `double_211` double DEFAULT NULL,
+  `varbinary_212` varbinary(100) DEFAULT NULL,
+  `varbinary_213` varbinary(100) DEFAULT NULL,
+  `binary_214` binary(60) DEFAULT NULL,
+  `varbinary_215` varbinary(100) DEFAULT NULL,
+  `varbinary_216` varbinary(100) DEFAULT NULL,
+  `double_217` double DEFAULT NULL,
+  `varbinary_218` varbinary(100) DEFAULT NULL,
+  `binary_219` binary(60) DEFAULT NULL,
+  `varbinary_220` varbinary(100) DEFAULT NULL,
+  `varbinary_221` varbinary(100) DEFAULT NULL,
+  `double_222` double DEFAULT NULL,
+  `double_223` double DEFAULT NULL,
+  `binary_224` binary(60) DEFAULT NULL,
+  `bigint_225` bigint DEFAULT NULL,
+  `binary_226` binary(60) DEFAULT NULL,
+  `binary_227` binary(60) DEFAULT NULL,
+  `varbinary_228` varbinary(100) DEFAULT NULL,
+  `binary_229` binary(60) DEFAULT NULL,
+  `double_230` double DEFAULT NULL,
+  `varbinary_231` varbinary(100) DEFAULT NULL,
+  `varbinary_232` varbinary(100) DEFAULT NULL,
+  `varbinary_233` varbinary(100) DEFAULT NULL,
+  `bigint_234` bigint DEFAULT NULL,
+  `binary_235` binary(60) DEFAULT NULL,
+  `double_236` double DEFAULT NULL,
+  `binary_237` binary(60) DEFAULT NULL,
+  `double_238` double DEFAULT NULL,
+  `varbinary_239` varbinary(100) DEFAULT NULL,
+  `varbinary_240` varbinary(100) DEFAULT NULL,
+  `varbinary_241` varbinary(100) DEFAULT NULL,
+  `binary_242` binary(60) DEFAULT NULL,
+  `varbinary_243` varbinary(100) DEFAULT NULL,
+  `bigint_244` bigint DEFAULT NULL,
+  `binary_245` binary(60) DEFAULT NULL,
+  `binary_246` binary(60) DEFAULT NULL,
+  `bigint_247` bigint DEFAULT NULL,
+  `bigint_248` bigint DEFAULT NULL,
+  `bigint_249` bigint DEFAULT NULL,
+  `varbinary_250` varbinary(100) DEFAULT NULL,
+  `double_251` double DEFAULT NULL,
+  `varbinary_252` varbinary(100) DEFAULT NULL,
+  `double_253` double DEFAULT NULL,
+  `double_254` double DEFAULT NULL,
+  `double_255` double DEFAULT NULL,
+  `varbinary_256` varbinary(100) DEFAULT NULL,
+  `varbinary_257` varbinary(100) DEFAULT NULL,
+  `bigint_258` bigint DEFAULT NULL,
+  `binary_259` binary(60) DEFAULT NULL,
+  `bigint_260` bigint DEFAULT NULL,
+  `bigint_261` bigint DEFAULT NULL,
+  `bigint_262` bigint DEFAULT NULL,
+  `double_263` double DEFAULT NULL,
+  `varbinary_264` varbinary(100) DEFAULT NULL,
+  `double_265` double DEFAULT NULL,
+  `double_266` double DEFAULT NULL,
+  `varbinary_267` varbinary(100) DEFAULT NULL,
+  `double_268` double DEFAULT NULL,
+  `binary_269` binary(60) DEFAULT NULL,
+  `varbinary_270` varbinary(100) DEFAULT NULL,
+  `bigint_271` bigint DEFAULT NULL,
+  `varbinary_272` varbinary(100) DEFAULT NULL,
+  `double_273` double DEFAULT NULL,
+  `double_274` double DEFAULT NULL,
+  `double_275` double DEFAULT NULL,
+  `varbinary_276` varbinary(100) DEFAULT NULL,
+  `bigint_277` bigint DEFAULT NULL,
+  `bigint_278` bigint DEFAULT NULL,
+  `varbinary_279` varbinary(100) DEFAULT NULL,
+  `double_280` double DEFAULT NULL,
+  `bigint_281` bigint DEFAULT NULL,
+  `double_282` double DEFAULT NULL,
+  `bigint_283` bigint DEFAULT NULL,
+  `bigint_284` bigint DEFAULT NULL,
+  `varbinary_285` varbinary(100) DEFAULT NULL,
+  `binary_286` binary(60) DEFAULT NULL,
+  `binary_287` binary(60) DEFAULT NULL,
+  `binary_288` binary(60) DEFAULT NULL,
+  `bigint_289` bigint DEFAULT NULL,
+  `bigint_290` bigint DEFAULT NULL,
+  `double_291` double DEFAULT NULL,
+  `binary_292` binary(60) DEFAULT NULL,
+  `double_293` double DEFAULT NULL,
+  `binary_294` binary(60) DEFAULT NULL,
+  `bigint_295` bigint DEFAULT NULL,
+  `double_296` double DEFAULT NULL,
+  `varbinary_297` varbinary(100) DEFAULT NULL,
+  `double_298` double DEFAULT NULL,
+  `varbinary_299` varbinary(100) DEFAULT NULL,
+  `binary_300` binary(60) DEFAULT NULL,
+  `bigint_301` bigint DEFAULT NULL,
+  `bigint_302` bigint DEFAULT NULL,
+  `varbinary_303` varbinary(100) DEFAULT NULL,
+  `binary_304` binary(60) DEFAULT NULL,
+  `bigint_305` bigint DEFAULT NULL,
+  `varbinary_306` varbinary(100) DEFAULT NULL,
+  `double_307` double DEFAULT NULL,
+  `double_308` double DEFAULT NULL,
+  `double_309` double DEFAULT NULL,
+  `double_310` double DEFAULT NULL,
+  `bigint_311` bigint DEFAULT NULL,
+  `double_312` double DEFAULT NULL,
+  `varbinary_313` varbinary(100) DEFAULT NULL,
+  `binary_314` binary(60) DEFAULT NULL,
+  `binary_315` binary(60) DEFAULT NULL,
+  `varbinary_316` varbinary(100) DEFAULT NULL,
+  `double_317` double DEFAULT NULL,
+  `varbinary_318` varbinary(100) DEFAULT NULL,
+  `varbinary_319` varbinary(100) DEFAULT NULL,
+  `double_320` double DEFAULT NULL,
+  `double_321` double DEFAULT NULL,
+  `binary_322` binary(60) DEFAULT NULL,
+  `double_323` double DEFAULT NULL,
+  `double_324` double DEFAULT NULL,
+  `varbinary_325` varbinary(100) DEFAULT NULL,
+  `double_326` double DEFAULT NULL,
+  `varbinary_327` varbinary(100) DEFAULT NULL,
+  `varbinary_328` varbinary(100) DEFAULT NULL,
+  `varbinary_329` varbinary(100) DEFAULT NULL,
+  `varbinary_330` varbinary(100) DEFAULT NULL,
+  `double_331` double DEFAULT NULL,
+  `double_332` double DEFAULT NULL,
+  `double_333` double DEFAULT NULL,
+  `bigint_334` bigint DEFAULT NULL,
+  `varbinary_335` varbinary(100) DEFAULT NULL,
+  `binary_336` binary(60) DEFAULT NULL,
+  `varbinary_337` varbinary(100) DEFAULT NULL,
+  `varbinary_338` varbinary(100) DEFAULT NULL,
+  `double_339` double DEFAULT NULL,
+  `varbinary_340` varbinary(100) DEFAULT NULL,
+  `varbinary_341` varbinary(100) DEFAULT NULL,
+  `bigint_342` bigint DEFAULT NULL,
+  `varbinary_343` varbinary(100) DEFAULT NULL,
+  `binary_344` binary(60) DEFAULT NULL,
+  `double_345` double DEFAULT NULL,
+  `binary_346` binary(60) DEFAULT NULL,
+  `double_347` double DEFAULT NULL,
+  `varbinary_348` varbinary(100) DEFAULT NULL,
+  `double_349` double DEFAULT NULL,
+  `binary_350` binary(60) DEFAULT NULL,
+  `bigint_351` bigint DEFAULT NULL,
+  `binary_352` binary(60) DEFAULT NULL,
+  `varbinary_353` varbinary(100) DEFAULT NULL,
+  `binary_354` binary(60) DEFAULT NULL,
+  `bigint_355` bigint DEFAULT NULL,
+  `binary_356` binary(60) DEFAULT NULL,
+  `bigint_357` bigint DEFAULT NULL,
+  `double_358` double DEFAULT NULL,
+  `double_359` double DEFAULT NULL,
+  `double_360` double DEFAULT NULL,
+  `varbinary_361` varbinary(100) DEFAULT NULL,
+  `double_362` double DEFAULT NULL,
+  `binary_363` binary(60) DEFAULT NULL,
+  `double_364` double DEFAULT NULL,
+  `varbinary_365` varbinary(100) DEFAULT NULL,
+  `bigint_366` bigint DEFAULT NULL,
+  `bigint_367` bigint DEFAULT NULL,
+  `binary_368` binary(60) DEFAULT NULL,
+  `bigint_369` bigint DEFAULT NULL,
+  `binary_370` binary(60) DEFAULT NULL,
+  `varbinary_371` varbinary(100) DEFAULT NULL,
+  `bigint_372` bigint DEFAULT NULL,
+  `double_373` double DEFAULT NULL,
+  `binary_374` binary(60) DEFAULT NULL,
+  `double_375` double DEFAULT NULL,
+  `double_376` double DEFAULT NULL,
+  `binary_377` binary(60) DEFAULT NULL,
+  `binary_378` binary(60) DEFAULT NULL,
+  `bigint_379` bigint DEFAULT NULL,
+  `varbinary_380` varbinary(100) DEFAULT NULL,
+  `varbinary_381` varbinary(100) DEFAULT NULL,
+  `bigint_382` bigint DEFAULT NULL,
+  `binary_383` binary(60) DEFAULT NULL,
+  `binary_384` binary(60) DEFAULT NULL,
+  `bigint_385` bigint DEFAULT NULL,
+  `bigint_386` bigint DEFAULT NULL,
+  `bigint_387` bigint DEFAULT NULL,
+  `double_388` double DEFAULT NULL,
+  `bigint_389` bigint DEFAULT NULL,
+  `varbinary_390` varbinary(100) DEFAULT NULL,
+  `double_391` double DEFAULT NULL,
+  `varbinary_392` varbinary(100) DEFAULT NULL,
+  `double_393` double DEFAULT NULL,
+  `binary_394` binary(60) DEFAULT NULL,
+  `varbinary_395` varbinary(100) DEFAULT NULL,
+  `double_396` double DEFAULT NULL,
+  `binary_397` binary(60) DEFAULT NULL,
+  `binary_398` binary(60) DEFAULT NULL,
+  `bigint_399` bigint DEFAULT NULL,
+  `varbinary_400` varbinary(100) DEFAULT NULL,
+  `binary_401` binary(60) DEFAULT NULL,
+  `bigint_402` bigint DEFAULT NULL,
+  `double_403` double DEFAULT NULL,
+  `double_404` double DEFAULT NULL,
+  `varbinary_405` varbinary(100) DEFAULT NULL,
+  `double_406` double DEFAULT NULL,
+  `binary_407` binary(60) DEFAULT NULL,
+  `varbinary_408` varbinary(100) DEFAULT NULL,
+  `varbinary_409` varbinary(100) DEFAULT NULL,
+  `varbinary_410` varbinary(100) DEFAULT NULL,
+  `bigint_411` bigint DEFAULT NULL,
+  `varbinary_412` varbinary(100) DEFAULT NULL,
+  `varbinary_413` varbinary(100) DEFAULT NULL,
+  `double_414` double DEFAULT NULL,
+  `varbinary_415` varbinary(100) DEFAULT NULL,
+  `varbinary_416` varbinary(100) DEFAULT NULL,
+  `double_417` double DEFAULT NULL,
+  `bigint_418` bigint DEFAULT NULL,
+  `bigint_419` bigint DEFAULT NULL,
+  `bigint_420` bigint DEFAULT NULL,
+  `double_421` double DEFAULT NULL,
+  `bigint_422` bigint DEFAULT NULL,
+  `binary_423` binary(60) DEFAULT NULL,
+  `varbinary_424` varbinary(100) DEFAULT NULL,
+  `binary_425` binary(60) DEFAULT NULL,
+  `bigint_426` bigint DEFAULT NULL,
+  `bigint_427` bigint DEFAULT NULL,
+  `double_428` double DEFAULT NULL,
+  `bigint_429` bigint DEFAULT NULL,
+  `double_430` double DEFAULT NULL,
+  `bigint_431` bigint DEFAULT NULL,
+  `binary_432` binary(60) DEFAULT NULL,
+  `binary_433` binary(60) DEFAULT NULL,
+  `binary_434` binary(60) DEFAULT NULL,
+  `bigint_435` bigint DEFAULT NULL,
+  `binary_436` binary(60) DEFAULT NULL,
+  `bigint_437` bigint DEFAULT NULL,
+  `bigint_438` bigint DEFAULT NULL,
+  `binary_439` binary(60) DEFAULT NULL,
+  `double_440` double DEFAULT NULL,
+  `binary_441` binary(60) DEFAULT NULL,
+  `binary_442` binary(60) DEFAULT NULL,
+  `bigint_443` bigint DEFAULT NULL,
+  `bigint_444` bigint DEFAULT NULL,
+  `double_445` double DEFAULT NULL,
+  `binary_446` binary(60) DEFAULT NULL,
+  `varbinary_447` varbinary(100) DEFAULT NULL,
+  `double_448` double DEFAULT NULL,
+  `binary_449` binary(60) DEFAULT NULL,
+  `double_450` double DEFAULT NULL,
+  `varbinary_451` varbinary(100) DEFAULT NULL,
+  `varbinary_452` varbinary(100) DEFAULT NULL,
+  `binary_453` binary(60) DEFAULT NULL,
+  `varbinary_454` varbinary(100) DEFAULT NULL,
+  `varbinary_455` varbinary(100) DEFAULT NULL,
+  `varbinary_456` varbinary(100) DEFAULT NULL,
+  `bigint_457` bigint DEFAULT NULL,
+  `double_458` double DEFAULT NULL,
+  `binary_459` binary(60) DEFAULT NULL,
+  `double_460` double DEFAULT NULL,
+  `bigint_461` bigint DEFAULT NULL,
+  `binary_462` binary(60) DEFAULT NULL,
+  `binary_463` binary(60) DEFAULT NULL,
+  `bigint_464` bigint DEFAULT NULL,
+  `bigint_465` bigint DEFAULT NULL,
+  `binary_466` binary(60) DEFAULT NULL,
+  `bigint_467` bigint DEFAULT NULL,
+  `double_468` double DEFAULT NULL,
+  `double_469` double DEFAULT NULL,
+  `double_470` double DEFAULT NULL,
+  `double_471` double DEFAULT NULL,
+  `double_472` double DEFAULT NULL,
+  `varbinary_473` varbinary(100) DEFAULT NULL,
+  `bigint_474` bigint DEFAULT NULL,
+  `binary_475` binary(60) DEFAULT NULL,
+  `bigint_476` bigint DEFAULT NULL,
+  `binary_477` binary(60) DEFAULT NULL,
+  `double_478` double DEFAULT NULL,
+  `double_479` double DEFAULT NULL,
+  `binary_480` binary(60) DEFAULT NULL,
+  `varbinary_481` varbinary(100) DEFAULT NULL,
+  `varbinary_482` varbinary(100) DEFAULT NULL,
+  `binary_483` binary(60) DEFAULT NULL,
+  `bigint_484` bigint DEFAULT NULL,
+  `double_485` double DEFAULT NULL,
+  `bigint_486` bigint DEFAULT NULL,
+  `bigint_487` bigint DEFAULT NULL,
+  `varbinary_488` varbinary(100) DEFAULT NULL,
+  `double_489` double DEFAULT NULL,
+  `double_490` double DEFAULT NULL,
+  `varbinary_491` varbinary(100) DEFAULT NULL,
+  `double_492` double DEFAULT NULL,
+  `bigint_493` bigint DEFAULT NULL,
+  `binary_494` binary(60) DEFAULT NULL,
+  `varbinary_495` varbinary(100) DEFAULT NULL,
+  `bigint_496` bigint DEFAULT NULL,
+  `bigint_497` bigint DEFAULT NULL,
+  `varbinary_498` varbinary(100) DEFAULT NULL,
+  `double_499` double DEFAULT NULL,
+  `double_500` double DEFAULT NULL,
+  PRIMARY KEY (`ID`)
+) ENGINE=Dstore;
+
+let $wait_condition=select count(1) > 0 from mysql.dstore_table_stats where database_name = 'test' and TABLE_NAME = 't1' and n_rows > 0;
+let $wait_timeout= 60;
+
+INSERT INTO `t1` VALUES (1,-191541310,-1220955500,-35878.43121385703,1992483725,'BCgIRbkJWdLcU\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','IdUBpyCczeivbvYdulSasqPRtnhYAxwEJBwaVRMw\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',59014.63665593768,25991.58426763804,'BrgonzcmfFkdCEZewSsQlomRqXRQMFA',503351848,'RaDFAZdV\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','uLfFePEURTGlgbsNKb\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','hBrMUUPhfaCfvkZGLc\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','BOjQkRNobPGxFKWKhLZ',777648615,'JnMeJbUsvcgqBzETWqrQhIjEkulDmAqCxAJRXRzxwdSsUXeYWZYQkFqPKabfndUdDEdTlgkYo',-84040.43954370797,49392.16136251512,34338.62985127178,620915892,'ZtwFMMaVVegDxdAeygARaKTZpdpNZDnyYMGljMevtpjpkQjKkqTbhoKfabbgNehMlVsMBdTIXQIsjQJQgKKW',-51310.69977516531,-46257.2107537117,-1487689525,'ZBzOSuSVPLuCbWywnDclYgZUKMUimKafaxxDcOYOTxXVziIUyKaxJtmdse\0\0',789864437,'BDDIyiDrbFfKbaNYjWgOssriGMGoMNAbHRdZcamWWItfBGoQNqv\0\0\0\0\0\0\0\0\0',-573736768,'BakxzmHX\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','OclAjODYqJwvHncMDzPEAqBRSpUDDhwRmYRychKHyXWDgvxUkobNlQJpYFUDRwJCKlQETdtIQxDgqeMKi',1306321431,1880222443,45715.499259767064,932860531,'IoJuSYPjQfldPNyzZjDbUXwjaewbIoOIBJaqozNzaiZBAIwOvVBicMhBolYTodAdERaXOImWcZTUlEAQVmOHkuMByW',-53376.51079948649,'NMhCgkXspa\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','mejAejbfEmlqdkYdumHTByKWyPVCmWqfYyBxtUFy\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','CPLFShnMisQxHBlNfnTobhIEBFpNMaphwSokatKFKAlhjWEUppLELMLuEJcMscVPtAvl',163918828,'bPHTRcJjUUpSxjQhrlTrOXDPkXyYsshNMTouKcBYSIjuXVvVAyZjYzRnGosnxfOFxREfRWvojYrHNdNBEFbWzUvPqXRuSyiZzOyA',557435295,'wXeftvtWZtYEXlgaWFwXtBRfTalqNEVhIfbAXCKBdk\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','NWHvPHiPEqjMBfvCMyjHONraCPbahBasPNCVGRFn','BMeXsTwNaTMfOFtYkQbGqYgYteeR\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-35248.62479613924,'DkQtzvmhLHYixONlzEFriSjiwXUINrGH\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',1571193338,'kjJNSzHLvWwkyxj','kyFzqWziKH',-40355.67174691988,'nFRJsDrijsZlaXQdOtYgQBbdPprpdAfgFTM\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','ITUJIHittGqSXmDpSPnMSb',406184910,-55889.58159656709,'f\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','vkypdJVsctNwyBMRikWHlBbuoeGyNufocmbatUIgLZcFZvIJLORsxpsUaqownzKCbTXZgVJtUcocgDofBxBzZMeROW','MXjGDizTZGWLe\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',321275499,454250815,21138.58040805561,-9417.528758992135,'GdehhI\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','gZbfziv\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-56382.64191873652,585162028,51117.21527880157,803064815,'VkzFREOEtwDtyZpqhqpCBqdpMsSVnUbMBRGDl',225406030,'y\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','ZLbLZtxYQURPwbXpBNfHeptZaqTqRymIVIILCzqwJZhabvbDZc',2112305626,'AAiKDHaaxSCavJPiIxrlTgHzwrggsDLeYCLTVoJvuIqufZQbZKKlzpzrDWdWZbjoJiCFSRYiKCPtReBaUPhHKeeSx',42685.289712602535,-711629068,638858913,'eYZJMVohvogorIsFLAyMQXUumvsHbJyZsQxNLyTeuDycALskehNOHavDupEOMtvALqzlWtrJqVkBOayGdcV','AddMpBYYlRqDGylACcDjqcSSPgi\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',77647.73074857148,-99339.78653856518,'ebGabwxQiWccTAGRrraeYVzUYmUeCwzJjUHOoiEoqSomcOlDZ\0\0\0\0\0\0\0\0\0\0\0','tusJDWxWyfDeQZLgx',629566191,'cKlcIOsFTPBnRNCXOuOd\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',625071971,'peVpMmSAsWGQdLGkiMlzMnMgnrTaPfdnvXczFIWa\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',1935368956,1727490683,'KwPlFpGgqZaaNNVTohKIWAcAsiyfiqSJoysmQbIDFzaicUiLKKZ','WtELynjSZQfvYVSfIVYQNzgqZXyjUKYGmIipOfsEvxzhkmTI','UTCVZkacFvyqtusIVxdbnNAIJfnRwlJYRyqUlMmVpajHQGAxfnwXMKE','BZVyFGABltulUirMNlgjznFRxLZRFBjCBvlWCSI','GYKOGPvJVCIycQftHVKzDpBAUaIbSxJQ\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','gkgQnhOgicIcHgfErIEeuwUImZOplsakPKlSfoWOJqNNIOXodSBqvhmOOlTyEgPgllul','aiTgqqFiJWoFzuoXgcJMEQHiukrHHFXcuZMonUiFhiGphhUpCxnbdvSuevuqmPVgPfKUTLEcOykI',780701936,'UeURUzytApjQhOREZktSfonyjG',1679234891,'fbTlZJWMVyHVwnsyqRusCCNerUweVhwp',-57589.11233322597,102133881,57716.71772854615,'zOqBXywSxKaOFdnPJjVCXH\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',867157982,'oqwAqUaiWlwERCndtUzsrBfoVwRRsGopdiJiBVwibUFlbGQvKRelmZN\0\0\0\0\0','kDrmMKtjlFtjMrxhcLLexcIWGLdNUAGqyDojJcHfYqRc',1781508679,-1517031266,22984.104522901427,'RgWlRKDyPtiCZGEMMNbsxHCFWDVJANKhaJMdgjFyoQutIIWfEdtF\0\0\0\0\0\0\0\0','IxancIPwdcPFAVqjDPCiWJ\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-22505.25538064388,-62494.21873860841,'StNYOzcisyQGdIGucNssbcUCAWPggFcccFvrijbSirCKussfagNltF\0\0\0\0\0\0',-486029326,'WsUnrvHoEWlXGXTZRIdzIoGwcEtyboHu\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-1117127346,-23750.548671230004,'drMauAJprXxZltppkMWzZJeDxFwubmXHSbiJxMfKJCKKORcqRepvmuFI\0\0\0\0',80718.1657745151,'DHveZKByzFYBqktcknmXPFmMrkvUTV\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',28980.092403239905,'vDYuvlsdOuXBOcQxqxTklNMepLfFTHyWMCbpqYhnFkTWUjnpaAxKjnAtETEb','HEmNOMrhmizZcRSwgYEPTDmDQNaBMWFzMvMIlNeyxQOExUszYpJNRzjdDlKjlneGKHEmHlWe','sWQ',-1245420760,'mThWQCsitupZCgniiNgIe\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','YEaQBaITSlAmfLLLoNGfWxBJgVuLWOIlTWCErVBhVKutkzygVY\0\0\0\0\0\0\0\0\0\0',446520605,'emQcvOdvutQ\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',1054392345,'FhHoTHNzPTdRjEsPqvEtTRgYHqTklSRBvjotqubVnhXiFaJsXyzjLucWVUVXEfeLT',1435161591,71935546,50452263,-79724.77974678078,'vAtHJFpRfxDnGbyeaRhpNOcjcPXeHXyUPOhkkCRVZAXTpkVlqLYhYKJDcrHXJuWHrYQHP',71730095,735790600,'zdfzXvMyOCVMgtu\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',2120915608,-7708.050077373293,'CjOKVcRVqkLlXmHKpRnqnp\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',490391106,'jcErnvVsbnqHD','VAjwqPLEYWyEaOeFgiZNtnyYYLvmVfbNTAdGTWswIgz',1996618845,'AsAyIqHAQaYGxGlCIORaEJKPcRuKuwMGvmRgcyVgYwI','UZfSPnZZnjToqlvsKmfPoSOYJXIIWmADXQxkRCq\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','jVmyOdezmnsaUwpZzRhHoQDVBOvDcItxk\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-71561.04487663797,-55388.496040070124,'nfVdxVDUmlxLFdsWyhqmlOKJrHjYFN','VRhnyoLWdQUVzSudmdoypRb\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-728700175,1779607655,'lABLvEHRutQFKrOJoLBeZrGqoZcUuiZiSSReOOBBOvlYtgugJVUfejzpNGeFqPTiiwjHTZoXR',-66390.747907087,-99002.22309308064,17420.559966848086,280219222,-114760114,-409.9714397208736,'CUqYXheDMvBQRAmYfDtEWAJWeexAmkdmQhwxYYQwFgjCmEYusaeUxWjETGz\0',62630.97310691321,-90950.96707538207,'LyhdfLeAFYZDOPYiQjlXdWtWrbqJOBwLLqJwgeAJKlaikZZSnVyTlFln','NvpQAAcpYSJuCrjdZxOGWhMUuexEwjqK','NUmGZucvjeMJVJymaiHNrJUJkNGouQ','eboTLCqtMAGpSDQXejEcJb\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','TTHtrdRcJkPZEsSaRuBtMSCRpbbpBYYvovFiMIlaKdIlHxwdKeDCXGmCuiM\0','bAWfEXyytcptm\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','VYiJFqCMtNygTRTIcdQpiTLH\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',1026751516,'vRZLlLcXvMvwyMBesFaryapxjqLxIfWBousyvfhAOMFZtnGcOFgHnPZVQwUrl',-922346971,'mKbkwyIitccRInNRiWhzeKHGRKLPYjPTkwGGgkKXAWM\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-46159.30843336882,-39661.70933577135,-3218.8899290489353,-63888.3911582637,51101.07031377492,'dqbEUHSLSMBWIaMzigbjGVyitjrZlxZRqYxlrbYcMCpXCXVYSyGMfOOmKmQYXQPHdboSvJOgXBK','UmKDLzbLcUSCHlmtwmSz\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','tmKWHbZsIRDPDlxJT\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','vHatF',2066914614,2090636638,'EblJzsyYkxAELxMkZZMQMeZnzvhHWwbHElSSrNXaex\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','ZzyakoltsHpOlDTvFrUESHoMGVNdcmSgLONXXlNZhTRoPiGThmIoSZhNwrSCZGIqDVz','nUOkZtWShipGgXftHzOrhFohYMXVqyXIcWZYwaxqQESvFUkgRztDPvnur\0\0\0','FGNCJBzqcoiTynfhUMdpRgXgXSvXDROBATrmZOtBiDtKoscVgsbfhdvqXwuXiMvfjRW',460513830,'pTbNXZEaiMWqsEeJSUyZkUfiEMRBkyAz\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','w','bCQKlfFfZgECXBrzAScSWStCGhUppsSiCvLQhaxGgmLm',77411.69983494424,'IxrjkrrVxW','qXKhOlfezVEkPqvDcGailzpxKCOIqEOFNItRyaNLEdZSRkTPXoZJnqsm\0\0\0\0','aBDCBLcShbkAFPlnXfBUVaLHIPTmwaV\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',98746.82978766697,55929.11002912381,'XpEjgLyEfWKjUlfcEFjuogNZkgdeCHKbBtNLAXohGjDVYkwRebEHmmC\0\0\0\0\0','teQDWnR',-98334.36098825467,'hvrNKDTwAzkeMgAZfJJnVCXegfnf','OKdxoLexIHQCrGkVzJIKagCMtJIeJKR\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','jOExZOymjicg\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',922305816,-2059995259,'dQlnhMdAroHqKrSatc\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-1192676937,'SrV\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',1928443353,'FWPXUzmFiMWmJWqJsIGt\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','PCNCNX\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','awLwrXbj\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','QaxZNXUBaTVEIyOBctXfrwZCJnUOGnoHdbWnNRTJqdTIiOfgrBwdZoxzsdUBBYHKsQEGfZmzdcpw','RIIVDPSi\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-708545386,-12940.285747860413,-98835.83023147412,41729.01035471019,-2004129601,'mvKoyENWdtNIiEPRyqCLTuHIjsrEEJDgWqysTGGs\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-41113.87237742772,'ioTBRRAdqWgKaMtuWfEmUpiYVYDCZQXKtC','FLiFQiFvQYFJtnoiutBQhLI\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','PHMqzKYAjGvTOsFzddBkkVr\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',73218.04428787806,1758307979,'FawtkWZzPjXstaaZrGXXborJixPWkeYzJjxxLEXJRlNHlPOxLmCaxAgQgywd',-62419.333282016385,'MDqZPPRcGRQZbdNAmwZnsiBzOsfzpwxxTOXVRhxmFAzJsbsaNAQObzQdxu','LZvOKxYUxkvKUMOGUBAfcTFGwevgkgWTZdjeQMRJxobItRLlONPMZvNqlUsKqn',1305685248,87716895,'ABsOdXKlGMaEvUharypYGNAqPJXRtOkLUuwswpfUIRzRwwSsngbIqFXPEu\0\0','mdUGHyzLgcZCbbzbXGAKaqVkUjqFnGO','siqXwAbTJNlYymr',-845990500,-1761632023,86117.7418578626,'IioDzaZcsYGfXAwEgxFJYJdhZQmExGKmtH',2086790891,-42738.249947099226,'tcgWebKNtLAMaenttkMtVALqUJjWNMnnRnGhsYNwNRkJzNdsEtKFvdL\0\0\0\0\0','nBn',-1876724879,'AlfIVvgxudJWWQokPQijaDsuTeAKZBfTAb\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','KGZGyxJgXYmrmwMwsfWSUFuUGoyuKusegwJwKwoHjXHIqOLecAgQNjIuKAJuFTHBzEXPKQZvSEWMzWRUgG','oPCUCmVACfwudvdrZLqmscSiusEgnaFHhCBMFP\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','AAuCvGbPWBpdPFJ\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','vBDOsOlM\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','vJqyLnUmWUmXkHZyqrMYquAKBo\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','XBNENmeUGeYMxnpfaoWApISJxrHwomgTdYsnVdglmVXijFHJqEtg\0\0\0\0\0\0\0\0',-2055072703,788382588,'MaBvYhIleFoURFtwJCXvfyFXyuQpBnIagdPXFQxUXPUziQCZipCkKvBbQpLPLjuibQucaPyPDHAxqYMEkordzpToHvDWLvVM',-120807531,-59518.914047526785,284618074,'RgxMWArewREziWNOk\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',40918.23395995225,'CtrxDDoFzSjIMwrzOtdbjCNKcbxfIKWTICFJrCWjibdHBIndcAUuSVLhS',1549737959,1867069938,'MjQPCSGGgDWbrPMsTTDdQtZmcyVrdrXV\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-480658026,47779.7085925375,-88238.34977510551,'XhxCYYBVYGdOmzoCJYQcnFTfNtxFEjrUJhqJXvIyrCdQOzTdeGJErDuAhbaKmiwmdqqgXUBgqGOiGGSP',99711.90835403104,117878076,-51001.48157347406,1242949038,-23234.685019523487,'hATnozbYdwHCBopwDCy\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','yLULTRcKcGZurdBFwdbadZktcUVYfVBWiOP',-1078236071,4424.234999739769,-7518.171993442316,118134057,'WxJwkZamHAgemOXMYkvkOqRWNbnrlmzhCJIXcipSZYhGQrwQAJEPXYspndHwahjoxXEVTzzlZcsEHqIajSADgbFAWwVSCcPKppr','wBmLYJkYbTbMqHnbMFmwnYNvGejWR\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',618205325,'lfwLncbdpCvnLQhZnPmUZPTqbdHQNDtYknEP\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',1776295805,'rQryY',-57140.28698329412,'RaoSwvjoCcZxZyEPeXaKArxbsdVhSjPctgeFapLOmskGBfyMWJBvomiETBpbDbWlHY','ChjZEJhaMBPNDjjTqgZbMseqTzlYvAqdcvpdEUpzJo',-64220.119302830135,-510038944,46908.7416802386,-1207145604,'pZFzrDMWVcInxYOCAxDZOP\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','VLOpJpmkqjFmXaCJBsFyrOHJlLaJCJMUbKU','NzyIKyJdiOzGNNACxIepBkIWq\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','TYnhlvMYNWBLiIZWietuaZKCicLagUkDylNWfCtpnJCiJ',90420.07413050241,87292.56929384408,'fostQJuMYzPxcHEEIGVgYzZOqUQBFZPbiQvRVCBwtBeh\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-68814.24805674772,'NWyiptKEeRxFHmNMGcYHfYmDfHOpvXSyGJiIyfGUtVGVwFmuQfWnpgmmNPVbAbtSwSECDWCi',-84836.8522952547,'KjYmYfStkHcOflYMZcMhdLUNUrCLEFsObpcNywbINyJZodkMXrs\0\0\0\0\0\0\0\0\0','iUHixGwRhXadUEvGkgtoduWXsZEmieUgOOYOxReMdUSZEIPwUgtBDGIvILtyOPvgUICzVWJydbSeNHuvPRcKQfAaA',39952.06423529086,-60087.42196721379,-54930.77964458486,'qxZKBZhfhogzEAUwJnxuw\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','BLpBLDYVqytdgQaGeijBRrhCUOYyNskJOAUPXxxfrigjpgbUZ','DRKK\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',2007427761,'RJcLkheCpWQgYrOWDxmOnHXmAIoZPN\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','ImYArvtsCdYNXvmkEQzkdsKbHxnyYKLBnvEWMgBVsDGmDRdkCr',-1774567156,'mqNwstpAfrsTuOhInjEQXyeZlBTVVbwhvrMIEhDJesWvcAgbEFAtiOOzwypZUNpEycNaZcDgbroIvgeQn',6990.215360385468,-89235.71117550407,'ohcWRXvBpOahyUrNadqkgfQtSuKWiPgQJjIiyYRXwroKI\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','aYSlnIhqRQLqvxgRGOooEC\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-69125.43472714155,'RBrVyrEeNwpxCwFwoyshxYvbDfDQsnvyOCelTEddwpAjJGgOSmO\0\0\0\0\0\0\0\0\0','bQwZ\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',42487.2803279612,'WwcMaSaHVDqBTuqAJGriQyQQNoNpKBGaNeaAJDrp\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-1936592936,-966282973,-96705.58095738602,'tfZTYuMDgMFNpkWwvxmmWKZxymedCCySDlLjNTiboNVeuGNrFWgVJFShsNYTpjo',57141.114186035236,46814.80479878516,'LFvsNsPCPtODeHnTeYWjNIhnfGpNoHuwPtvPagveSkLimkVfGqSqKtmQPCCyBThRywyqVEKLoFcA','hppCdDwkkdFLbKUZYhUJKOtZINvwDEdyXUOwOvEKXmjoJAekPznRnBxQnuoSqqmuDghZlitiZNMRHVRKOHCmwNgiyI','gWgFAuBZnjvnymfHOvErKiAuFpcaxdiLzoqJCyCcpHWZmFbyvMgp',-31358.207745583204,420712187,'JdZGZmWQNJijCWGaWfcghWKTIHOoOhie\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','aunfgbKBgtUnovNsPWlwBDUjDUHHHWGTchrz\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',1473172499,-1503431135,-1104267713,1336419533,'nwvcbOmzJGFGnqtv\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',1437772138,'yyRZKwNutcfrYDTdKxEtDmi',-78442.56622718953,'VHrTjiDWYkSfLmoMbXZapJGZU','UEVcFoIqhJylcphlUoVlihoBaLZQTCCzMiwCbcAkpvuOOYfupYDSUMqEEcdNzGrULYlnIUqxGQkiVvRsLhPCazlHYBVUWQS','wN','XxqUrOmYdXooJQJAqlPIeXSJWtiasDcJfYKOsSsVtzCILkZQzAGAg\0\0\0\0\0\0\0',14437.07154231191,-93451.57787732808,'HfGCssLtfB','GLlTZMfDIFfhrZ','IocwUfNeoWbbkiGvZ\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-1617425370,-78550.56937384393,-1910550309,37979.989118180674,-1551076508,-1257461730,'tKSWwMUmDFKVWOaljUrawtGzghMaWnAfEUzpjiDejSnUEhQZCloawbvtqyWvzjEra',-67150.28831288894,76046.94079048227,-44510.29358320511,-1847799801,'DzgTxbWBcyJykxdtjHzpdRjgqxZLXQcTdPZRWHmbMbutsQBWuxdkD',1143106586,37219.586161677784,'PKJLbPSEFbLYFXVOQFgOeleaOUsdkGIWQcVVRHSYJaOoZvdGUEfdownFZszRtHvNOZdyfPkwFJEqfZf','spBMtGCmrOrWKHuGMOGNytXTWrvGUbfFgfpihuoB',72215.73848468528,'zTCHRUXmtSyMJQqRGyrtesJRdjMzhMmPrfhYxbfjqur\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',485835179,'KPXxQVuiJpJoOMeLBaDErumNresGQSneaHMcGUlUuObtcEQfBFzUpDpMTDqriKIwXoEuclOFIZJRMcIcUTcpqpzjKKXPERrdltyM',-46206.073638918555,'yPgfuSSOXdplHwrBJTsbODACHAMLzUgjKFSIacxM\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','yAKkbHDgGeLFekpyBJFltFzKKKrKIPtfeGLiYAgdRgTSvBNXhUUxumRwvPkQhpcxQoVFjcVackmysKyHPYhTGc',-1017306661,'nmEGihONKuFQqaRtMgvTcAqS\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','uhTXRPJKOjFpWdRnbEzDSeTekDVKhrFvBrxkzHXohgOccTQh',81771.65248214608,'BVSKHZdiwLpCtIESVQSkolYwjHiLanVCHwSyDJcpeWFvZNykMrQNhp','XNBuVvdSBHbSHifivymUBNuDncZYJXCNtoUvrXZoVuvomsJxwTKcpF','msbtQNjkKWFUJkDTxVlJbThZIcvnVRmWUkWRgh',-919006187,'LwaCubKwuqgNtJDjkmSiBhNomuufskQCgwNqTjsunTZirUJrzqXuhSTDbMJcGeLwRlbBIOiqLAatHwIYEpFLnnZqZLsoZOodn','VqSBksHlzYmGjLOvAFxwJzbGcjoMYxvrRnmXLCJtVgIJsGEi\0\0\0\0\0\0\0\0\0\0\0\0',-91442.37230447467,'DSCgyIEmistuyacMwJrsLrQyktPgEwKLOmGwUoMTtJknmrY\0\0\0\0\0\0\0\0\0\0\0\0\0','qaRNjgGNyBrss\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','XMnVuCSYswVNHSWwvogMnRQpqCafTJeyjiXxRAqDatjslXzxuePmKXrzzS',-36622.644114134004,-49783.02034338391,'KPW\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','MEpzCrPwXDOKZtkLoBIXbfotRRMXvpSgkwy\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','ILL',-46241.49582032009,-62527.25927749525,'MaIzXkjiWtz',802838321,'L\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','xZgVyrdfqmZTfrebnwzMygoakwhx',-1856520471,'pOO\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-7256.6880418348155,68796.66679377033,33023.06257575605,-1468605232,'ZwxRhhpMIXqMyyuvCePYBSkhjvnm\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-1699038014,93038.88646324523,31013.88873660688,1353694692,-300597551,'vyVchlIWbBmTbcRFeRlylHM\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','zGmiAHRElWHseChmNyqkyfWwPuBCVBsoneQrMWDaDhSz\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','kdJxLpkKtvqaYCsa','rEgmLeRNxEVxJbgYjoiGXaTeqnMkwQDGRvXDkDsjkSsJGHJZSerT\0\0\0\0\0\0\0\0','HMaOwGFzDJFXexjcuZqZeXQMlTOCPZmeWozIlIarlWvMxPBjWZQEITUQmkAHyfMWvLXIziCCsMDJkcztBXzvpXO',64287.194183069485,'bjkbKBSGQRJXCR',-1927776593,'QerTUeykanEBySDah\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','NcDarMfizfuPOXCXwsTysFlyHRgVOwPAwxgeqesndmEjflG\0\0\0\0\0\0\0\0\0\0\0\0\0','kCxJJlzRfCFgyJbeIzXAdJlCdwq','PurvPTTCfhoaWwJuQj','BB\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','CtYtkkaYGtXdFbWQhmloiWGJOnMTflkBJCMFGBPpBxJSoliHnAYTABmEbXJZMhICGeqaneHTlOdoxIJHJ','mVGJPINIZByHWKYQwnBLQzPoyiKUL',2090835502,'vzcPjzKFeRixGBmLgDenWXFRWENWnFIxudVpwHaInINaLklJwVkGblgpcJIDWcqgkptxKDrJEBRnAFjkxfliKYTDbDHt','iURYubvqrlgDvqPMzRVCJjhlNqqGbtuGVj',-1093152980,-71497.69566571045,'OFpuW\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',94426.86789241026,'HIpobVzsS\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','dfKWqWJPhsOdnElTiIwgPv\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',76229.4799868341,'gzktLcVqzPwELazYjFdDBohYpQqO\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','eRZyTKtsRTegktPtzutvaIxEutTfHTugMVLceXIRgRSr\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','kPxtWsTFjSaPsKWLnXaxjYtgHDbaWPT','cyJgUbsJlZThYBQXclqeqFLVBmHRXUDVh\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-30865.694843139194,1259042456,40262.2535918302,52048.61368455124,937535741,'HlBvuYYOsVCbG\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','jlDWoxkxitqceuOwJPzGqKZIuQhZGphnwUOHDGKeSzYfGtYDqpYMGi',78760.4304813231,43747.896485013014,'YyYPchGFQtUnTlojIyPnifNsOOfheyWlPXbUorVyCXdwAr',3131.004368802154,-398626467,'fSjHAQzegTgLfjhRmxVFtswPW\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','sxNrPUOdFFcfIskviMQCmWYaYDSnuFMmNPTAb',-1940518771,1182135167,'FBlIdTi\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-1591019840,'PdwaRpTFmw',27519.31811779247,1554136117,-28151.101338351567,1040440913,-677652093,-21218.05213294938,-23408.249452392192,1596963167,-30577947,'ctqXItMXoGlcxQjBSBofMp\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','taK',1113734674,'cJvwgDjMzDgUKUxN',-1944296078,-1934487783,17079.09156201144,'ZfjHRsNIyTxtQYCrJRMsiGQdMHqpUHkoOT\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',77139.68841856503,87925.98276792865,'VLYiJmWFPvMIEkbMNCXGnysde\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-73510.52756180905,'jchRFYaAIRqAfTmXrPwwoLlcNiNHd\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','OZHTvMejmABZtOSUgANmhIhKsQOwRQYnGAQemrsqvXHvlvYY\0\0\0\0\0\0\0\0\0\0\0\0','DWehAsgrphYPTqUIgxuUPrBPqbKIkRsnjqRhrlbm','jYcchJdhbJbosGSXyKCTrcqboUjFyXVNBtod\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','jhvOTrlWR','WpNFpfjnctVHhKtefff\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','hxfBcBCBMgtrcQyrQBEtrytHkNryMycxBOAcqRhiEQSDnolNdpmdpLprimyj','pggLiuetKcrTsnRugVfQyFqQQbeYjSFWNBhitfuQDjrEVICoFFIAzZClutIZyTlzbpZwwyYiCEAaSjUzCHDGouFJVWN','fqkXeBXGAvBqlqtgydXTzkXaBlfqXXiVZnEbqWcIPqrQnvYixAVrDAWPXGKDkJqXPxBLkfmgyyMKXaByltJw','YkwwTKpyXofmPjYULVJfWLrgLFTafvqHVFcaFePWSMfGWixzBwkYpVWBOduChySNwFpUNeZWiCcVGXchZKyWsmbwrdCkGVDFO','MxejMUnWafJleEVZwsjxiXBKCLqmjGEfEHDZkqmnjcDQzUfOwyIXhdUZpGhphVZvHGIYKRkgHCecZAlfdvW','PsXVUnuhPGl'),(2,31731459,-23137517,18002.585954629918,540665257,'RWgOjYKsWFLWiIzeeGwVUrGqs\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','QuzZFfHOzsAolkcWlfIFTj\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-31591.491836176065,-14042.508961141313,'JmHo',-514398723,'KuARRTmTkCsUMZoriHjPuAOlGEiDodhEZsHOrRlJxyLDFqU\0\0\0\0\0\0\0\0\0\0\0\0\0','uNzghvizZiWVsMtqjqcNDZIaktgpAMAi\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','zmzGtqSACZZYGterXbGIkAThsmCDkABzuM\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','dOltXMIoyvlXNOZGzUyMUGYsLEkbfxNDlKA',1594654035,'nUGBEHpMKDJXdZQTZUkXlyOrXKTOgKIOvfzyInGoTgERRuslePWtGZXXCQiTbhM',55379.504432646965,15764.900666454996,79809.54885208979,-1684914141,'XcqolnqGxlWyzoEdJGxLvzECKZBnmQMdljBdVgAXmGQFNqzeXBpnPriOMDiHq',-36737.812654853165,-85879.13267911266,-1819932151,'uVGQkwalIXxTIVxMwPxATeismunGIku\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-1293196478,'BLLxvBqL\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-2033487467,'wVqaHSZDrBgUwPYGETIMveBotvTOYOANfQagNjjxmawtTJLyKxgqGHmHGmu\0','aNDUcfmplQIuLMWYmKIFgXneqWhTvkNkVJBVnUkHLSjkuDeDYGiLWxBtzqaGykVGFSuxBQALLjppmItEpnt',-1404313344,-1339572999,-53208.665377427234,256147084,'hahcIBGxUewdBxZnnDgicRBOfUwvbGGVqPgYYbFtfNwRDsoAPXyaKBORuezQliQasXcKUAUIdHuhNELhtQLfLPYDvLtZhqqHnqpo',-26595.400000143156,'oKPwXDMaWqZVARFWVyvOCeqRVfDszZuQWQXwLZ\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','wAWYmETD\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','NnYoqyWKwTiBssnhWpxpoOaTtcswhVZmxPqeGHPrTm',2029156868,'CmivUqnymUaIYKKnWClaROBCSrXgLUupHpHtXtLcBnoDXYdHYQyjSRtKbDwPbYSobgZxPAhVkjtoSiEQGnvxCmbH',930834294,'wJYmLvaJKjJMhGniTaRdbSwfMXzEChfUoEQtfTHIZVhcBqSZHjntbHYiJpgq','CCfuhPBoIcVOzgReRLXErFNyyKaMijhHMIZmxTFEknnveHYmKFDznXKCZDqWvDQliwNSxvfusIinPlZarsynI','gBLGPuEjaLgqAGrxfDJexSsjXtfsTsWxfmhhZLibDNpALJzYdk\0\0\0\0\0\0\0\0\0\0',39793.64410558232,'SOqkU\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',195911705,'YwaBRtRzIHUOMWDgiveXUpbcIKsFEkjfEe','ATrdAFElKdlSxsEAoUlmkktu',-26795.170910509274,'dZZPhYFiwefSkfEJgabCUt\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','dNGLJTDNTsPEStKELnsmdwRQFLrCznFvQJhwh',1403923231,-29954.08592673503,'kifWCYjdhJjijpGCAonaUuDgVDsVYBUIRHcbFXGUIknWyEzgZVoBWZyyMn\0\0','lQRRCEhbFHoszgEITkZOTGfPL','pVeosORmGxYMVzFUtnIcMCxlYcnTasL\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',1051980303,-416879253,60671.11505519017,-787.4217823158106,'IHIWGlUYZxCTaTAcFbmmTIBmnUdFCEHxz\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','hukZuDPphpX\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',43495.29336124734,-1863848529,-54060.534729270905,-1470051957,'xWfOvNYANSyHwMrCPeVjtUjPvovztJcPTbeYIEKz',-562917733,'U\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','odkulmpDOgjHTjSWUiGinPPTlKicoXEWvkjvWWEOcpgGVUpbtLcDfuLTLsBnfGbrLJYsapWvPZulReyDUdgWMIYwrMKCVFGgZ',-1617676211,'BxPhdYLJVhdSJgCptRtY',-23058.669531562366,1491233847,-1117881077,'D','bYTDPgMKrNjeGfPETSGreEldawk\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-66807.06972254353,30938.540574666433,'cEjzrFziQIoSTtsNb\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','annGOoqBrIsYCcwdshAzDqnmLZIPf',2102965830,'GCMfjQthgEOBrvLLYcePHIiBkousaVDqDvTOVkbil\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-365824967,'MTZZUKWYXqhfxzMkmdHGPTuKkOoEtGUjhbRASrwIxNSTwdyxqiCVtrztoWC\0',425801386,-1341027673,'qWWZFPnIALCcQaAVHggGGXOkhJnEZmBqLsshfCnvxdBvdXNejaIAX','hBLakHFuFqirMWnEIOqEzCixrSrczEFOWHoWVWdUfXPCpcqncWyqKDTIMJQQbgKRxaAXwlhpoXHZXpJqHJlpZKWhgMr','xaskByyHEhMJUFGEMqpLzZrjHqJIdJzYsXwbufNYzqB','RSrUihfuNRuQSouBXfoNm','TFIATcswTZmmmxSAlidkhwFMizhAYQlOoGCexdbpfFqYpkD\0\0\0\0\0\0\0\0\0\0\0\0\0','yUdnSKUmXxUWHxsKCFtxGCuQGMlmVlBFsWBkfesXnHknxtPpbqdVVNLgAMmdat','IvjgijWwJqjAlFdRYtoxstSfcfaxvoptNHlVRqQQNrCgSDiQMOMbflEpUgJebZkMyVTrATsFSuNMeCgZCAHLuHJFvVTRtZeP',673496843,'ucBzCuzKMPpeUmSWHTNq',-87807305,'vyCJjkXrzGFbxFTJosBjlxPGQcpVHTINKMKJCWCOqZrMUyRHMntxrXKkqEKTJlGcWwSxAmIbyaMZuecOTobyzFxVBdwkQsLyAwe',72518.17468381848,2135027071,28639.032858739884,'zGPnGot\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',672554231,'npHYnIZzSquazXpZcjLQjXvVXIvHQIesUnqrJtJikQfbdYmHH\0\0\0\0\0\0\0\0\0\0\0','FxiwpASdwPgPraoevVjthqCTmqwqtdwqqvesYMewikzcmhxWjOMdZRfshbeUf',1081637304,-1266438815,-43813.62636848356,'fNZDZqoRXuFRHjwxEfZpDjqJSAOxLbGAmSrlzVCoRtMeLVWccZRr\0\0\0\0\0\0\0\0','WtHFdrusFIPtmtBaviYbnaMUbCSQWGDVsIadCVhtfu\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',71889.20508287539,-32253.868961418993,'rOXuuFpoeWOXZzhexnxzTPlFivoofJXHsBOwcBKnHMl\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',628257669,'xVneiXORGHPrezxTtLdISSyHFWDQnCbfD\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',2019691559,-60028.20805636731,'EwBJA\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',56782.277967301314,'yEjofYEnoBfZMALcOUeMkwExZ\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-31991.036417335054,'VvVMdTEvHQ\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','zMhKXyWHvTirCGxEytDYumjCujOcFnPurtqqoQChZDnSaNNeu','zIRvAcapFGfXcyXAwreGENfzbPwpgFAGMzKnxKSPydDshAVrzCMxjNKyKdNObNoLAjuhvJQsJpRYUGTqZKiUBbbROybwap',-1745990348,'ccyeUGgrFZgOGdIXPVXcMfmHlYFuTEwoS\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','YixnulELnPYtTiVdrkkOODMikfFcHBPBDgTNrurnsVITC\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-1494018927,'vccOwMogbj\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-320722488,'CCOMowoNbhHZcNGwszxOXErQMfClVoUdSDDnuPQKHEeBAITXvKSdyaaTVGIGTjJXAgjYpktujtKfEsWHUyzSe',-710963041,-172175954,-378405349,65876.55119352497,'WauGNQibaTDHfcpbs',-490116836,-265458521,'xrbjiKmAoCpxCALimDgJONEwS\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',552474586,34833.500008245086,'QpAmVMGwKYeogrzLlnnPQAUthgfmlCvgXhtNonBgcsrjZs\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-1581452184,'KWfEXPllmaQqIxpRpP','QmVSKMeiLEDJSmRMGHLHWYJQIdUSzfUqMnuwSeiiIgjTHpzWneoijKmMGH',-1633217337,'hpfIQuAAkWojNvJuxcpmGmtrAErFvjHrTFaMpFGcPGUxZI','dluzvAuqeTeTwYFdPJHrcKIoJPKhsLEzx\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','zcHzVRELjfnsNaksXpyCjNdPZUWXFREKuSNoMceTItzleTTGXPiGARCs\0\0\0\0',50871.96916077778,-67392.59366405566,'ctBESyhwzfHjEfctclggYgIwFjWuxkcOXQzTNBHdXTBhcqlJ','AtDegKqBcFtKqNbFMH\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-1546014245,398724728,'OXWKPYgVTRYAmtVJIaeFWIVINEQmzUVpJG',86893.21798165844,-98630.83849185647,32684.44781968952,707374912,124243097,-18228.399211634038,'AuiuZFszBnwigIvpQjzzBXSSKybZLziboYZtUMpKjyfpYYFiHM\0\0\0\0\0\0\0\0\0\0',-51532.69305443626,85898.99640782631,'LHZLtvudUfYSAUvguhcQeqPkPiosWfxbdjlxOrBPueBMLTnQcVVdiQenKoubuiduOLCKaZRTRKrqdudvhPTVSzeeOhm','nRjvxMbVUJnbXRLemnhnqPOPEmedWSIFuxMBywPXnHBsHgBYoWrPBpCYUCSYkFLvEaQtILelQyGNgwsPE','XOyouQwdRtgNepJLdWhvEqRbVXvzkDPzfVYWxGmHcmQKNfpQWBDBFBCoQwTimAOVW','CDvJEdeINloZbT\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','orX\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','bfXcqcFQoOStBBQIqYBMziVkPrqeFydXTLVPjNmOw\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','hJGbvLGVsUntBWRzWnaWMvDHBELW\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',328106147,'XKCENlFDOtMDulpoBVttYpyxhrtAafGjnMxalIoiRnSzTmovwnuxbZrxcncwQVCitQMyAhomqhsXZqPCARe',-1398157175,'euCFhZyGtqngEPxsOXoaXmLsVOyuoIJdRqQMYpB\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-42195.00506239935,-15501.693992385859,-35249.16410249155,-33471.39830868089,-45805.94136702314,'joFbIxmDWrylvZhjzKEoKdVtdYCMJNWdLbdEvcTMPQvzBEPDUpaVkYgnYjEfAAxCNTihJoHLnEAcbCXWpaBWzfaNdSuZjcjCmFvo','wgKnqGOGPMCWjsDEuaaaLGDolEeCeiZKlktBGjbsRlopnUjIZTlBfIoJRqI\0','yeB\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','IpFoRxTYlClOLxSHSsHgSrYpXfZPFlTZdtqUNpeWAayVbOM',-947409002,1986013597,'WwvCmEzyccYhptzAafQb\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','IqRNyqovqpnVkvXMWXtInbmaYZYIusFOtPnNew','PUSGzomECFQogm\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','AxnBB',257017011,'ZypwUDnziU\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','jNyHnPWIbcYbvPEPeUmHOuDTDSkLsHPCsnorbdXJsuHGZvoRpFGBngQUBKuQDMyEBAGQVIObATefcAnIHqcTo','IH',-64480.314229578114,'qORBGRLAxsSuwLLZcczjLklYnENlCadkvcmHYkSiZXVwbLQieLkVZqMAzNmdfDdQSIaLsQQyeNKkVhWExYIMZskNDJFuesnhE','oEzTqFkJumGiSPIkbgXshzXLUIesQrmoBOaLxrYKbmEWzMHTbqDXiTBlbhNY','JwNPesTjXzHSwU\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-39424.78556713114,-46519.286677762415,'nuMxKQhsQBBQluqnToCWchf\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','epoeYkQZMIxJmbJXGDupkVpcmRJBrEAuu',40663.55158041115,'VThswgrXNfYLyFQksqzVMFUQbajZkIHrzGGxUDbPDPwRNvhWGLcEoPCwSb','lJURCnlAykVbHRGlGZ\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','sukwzfAGLMwrMCrqFMllLhSfkZSnvSLPPgHalkDszhZgskoRepVuJxFKj\0\0\0',1000771967,-1922212386,'CUvjxRXoUbUXEJzmnaNl\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',1620411406,'tOYmHfHWiFBAVovrhHAsyOmbOchqXVfKJaFYJhNbZPJiLbha\0\0\0\0\0\0\0\0\0\0\0\0',918212214,'woLFn\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','drroKyEPDHmb\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','rNNKLHkBaXtrU\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','gMsWypoXiAYcCfmIrCdyXJATGmaHDkKrBJvyeNEpXVnjUCwpOUucufGKLpCs','HFTbiDkRRPJZMpsYPnNgbosBIXjISFjnXXvsVcvumWdADEbb\0\0\0\0\0\0\0\0\0\0\0\0',-395217819,84400.7451889329,89865.14089265812,38815.816173639,-1340509877,'CZmWqbunsjPJhE\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-93036.94447108888,'SWWjwnOKsAsvEgtWVTQgFjVfBtpqQtwmHNJRuWkqjXCnpKbDyxgxGqicTHZICL','hrYWWzVeppshwUwFvNzHAITawXWJfIRcTGnaLa\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','eyDCGQXjZljJILTzzJWJuyecBPiGRGRFhRZARGBRGBMUK\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-88678.44077476053,1364769379,'spatSyfKhhQtDYfOlNmYvlWxWxYJPEddZovqDIGFQzRjZZWMQswuWWGFetw\0',81549.46067739843,'uePiYhaTjNGmUcClCHOPNOcyIBkOJrkbYGFlDsEBpmmPxdscnfWDiZDLncOcXmELJuIrwcsWjBrbOrGaXWjviFkHukv','nidzoGmdJWtHJfRTaJqsTJUcuoKsPtJUNECCafUjVVHMBMV',-1396003971,1641622926,'srelzgIXvMZOS\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','iJWmFSrQQloAwlqgzLrYBtdUFldVzuncthfII','YeQvIbvvoDwUQnwHkIIXicTEvFbYUEDutj',-1124053488,-787616542,8169.4794697577745,'ruRggvIcNkEsqCnkeBJfMOUTIbdFVqMTCjfgNArXE',511603161,-78392.84559985614,'OoyVnANsRmVvujPxSFQJeTzNI\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','MFCSxEcRnqFdbgAeuCwiaFaLygJwGLRFZGmELxzeMwPtYeOnTktuHaFhKatHdbCkMGE',-894249473,'GrzGJzadwpgefEsMVLMkFijp\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','juQIYdmqTXkxXrLNgcxRfSirMIDDNKgYyRXXsfje','JfGKScaCXsGWnndgTNvjQZjHMuVGVTSeWcdSssiaR\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','KfwOlZtUvZBfyysFiNqSXgiQWGMqWogJiIURAW\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','ZVzuYFixvMWgcqvqaDCHzbxzEDkGfExBOMDrbKwlYIpdQwEBGMisXAd\0\0\0\0\0','DOztVLfgrIImGZNcwTAvjmgHWjZiYH\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','NLoFqaxBSOHJUnXiLqKAWGBXCCwVP\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',288052074,-38887514,'HmcBTuYoLrGrWgWTNzcyuQpHSYRiyBFxBpWDYiVEuyKjlZNGoahpaNlczQpDSjdZuuPuFITjfgVMuqIH',-480276985,78465.74017892536,884350267,'ZLiEqwKSpiYCLKrQCCCCJOkgzocOajuwJpujt\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-1672.9909716073162,'kFrhnyYuiKX',-1793062021,-697331947,'sNKNiLBGhRkvojJHZkiHufezJsKWYCbyQJYjaZblvBbROiYJqyTjbERyZNyn',1591190856,-72556.04843641224,-59233.91327128396,'russkMnJZQGlbAUOBXKshoqvAzknWBBdcLFKAZMwdvDFMLpeHIaIpJSVDYodLvOCyaPrFM',40040.8028785128,546340319,-7433.670892404276,-1429276850,-43216.961606667435,'CyjoJHzEwVhWfBrgjkuG\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','rrfaIVFvoqbuWiLZZUbsdjBusTgAWRMBWoTDAyWRqbEMGYlFnUtIDXLkpjsSrsjGuqauFEnFsFzOPmFFCypbVPWUogrHHwCgRkf',1933234075,-62923.61597585965,-45972.5583737556,-1719783291,'kWtcOQrcJVpEYvVjxADkFiRMDKNeLRQVgdQPYCaZZAmBOJtoZzrcFHfUxeqRkFN','oFRMLTRxruhKnSmaqKKGJSwdAoDcnOsbMeAyZAreuGuqWnyXw\0\0\0\0\0\0\0\0\0\0\0',-1342967846,'rGTeNRwpsHjcPtVJGReOCLhbrxtpKAylsxsLvWrnjViH\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-886034644,'CYndRWFYqGPlXdpWkkDOAVXUKrQxFSRyRCvzOfYzUKsEtKoDfOjw',57201.994370558445,'WJBfDwlJItjWcBUsTVXf','ObDayvRIjUEJwayTGRqCOGUufLeqvBZveOBpKeXUeESMfPTAnnjFPzmIuTQjUvJk',91303.68739971568,2046378093,12097.95655376176,-533737197,'XxCjmJq\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','fnZsAgIvidHqEcpPogJRagcFCkxdtBHJwxCSbZuARuvOuDmLTvzmQxASMpEMhksRPwjMPeIgko','kOfHPwKrhOsgzGhJuNzroRzQAcHJoV\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','ZKEbAMwpqourqGbgCnqbxUlQOJStHrIfZYmyqGcelzpvZRFakZfxPVCuVzJXwHCuMlWvHFYgQZ',64875.162995879335,65112.623897721176,'dfmochEzRqnOwIyTWBruYcybV\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-76150.50453686359,'ETkgVuUrcSkLjGKMGxNPqfTsqHyohxpazVuLNvjCjtfAdTGUBWaNgZcRLCcdi',12052.236086970748,'hMyvUovbArvErBUUpduUkaztKnwbxVvFbBvXHiV\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','OOPnpRvrNHtjwBeuIDzeVbVpqE',-21257.539167844312,-11415.163116248747,61970.371669349086,'oxXTjCJWUpxqamcbtOCjpBwPTxlDYBOtlaXMBtLHtXjyKzkAeWZIEwNpPvzG','JgDgcJLitUoMpeNr','lyYmzGc\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',1615353397,'dBkvDDPsQHPAwwvVOl\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','LnigAwS',544873536,'BPVNVydaCoGxBOoilikNAOECAuNIIUdYqcLpnCQAxyhbBVjMkIYKOtWEcyarZqlQlBqduIMkJnJrkhCxdLtZkzSYhCMyQLgkTCz',-73848.96844372044,20170.703614324026,'lwUbtyzzrwvHFPGnbCoesZRgTkidsfSWhHbTkeie\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','irFBohLTTUfCQIfyRPaQORPCgnYREweOdiwPqwVpxYtHnMgQacXeTmfykQ\0\0',-29327.309435546515,'EIiCSgHMgnfJHekRfwvTM\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','SSeVqwImTnxEXAVuPzquIQLOvHFpYcwyejUIJVChIncXofHjshWgtKQ\0\0\0\0\0',93300.87938630962,'IlLQvonIBVh\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',1713369686,1272690841,-7715.434671542782,'yzLQbehZAeKUlBx',-81781.26968533159,-40606.44685234387,'fyJWlolmVATXonjIcejaHMDSbc','ibfqqjpqpQwkbyZXkDQUGHQdLRfBQwVbityDXzdHASxgLSjXhSnWK','yctNCDITDWibdlFilWvHQhTNaDmisLgrBcGU',-61562.67251645893,349135201,'tKBGKxDtNguCQyUkfI\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','WVrDNUoqIuEZaeLKHPUNdC\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-408431223,-2096537109,-1828218904,-32044291,'XtUKrzAKLXlhivOxeQUHTpEZASmV\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-1562464871,'vxXpbcbbqlFkgyvUdqQcNRMMsjfjrrMTOzqEaQnv',-72280.98505786879,'XludCeZxdoPVEvFFqldawiuyEfBqMYAvcomCuvLUIunAIblvcStXNyZsCwXOtfMJUlFXhwSuCPWu','pWYWwKbtmTWewhIGwdoxMGjnbCyJzGmnLOdUrtgWBeCjejjCevfCnsEfgXKimE','XaYZPInqzaZOTTPedpPpLKajJCt','lcfPmuGytxOmrRKt\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',23638.30377213232,29034.051165976503,'ElsMPgxMSahUOTawDsMSRLyeZNSFMtDQaCmQiYjCvVytpcNzrNNnAgTvZJhKkoCeTXeFiQDZ','YTNyBUFyjGnOHtUuelnzyCkJmuZNtguJWylveDMiyqgRMZayk','wBPUNYwPmOdHEIsmCycCsowDSiByqtRaFBSHsslwGwIagmNrEbZNbbq\0\0\0\0\0',-2037969043,39621.4158151646,219445689,20364.85983326046,-176867784,824810051,'NTMMjSYSrpbGPBQIEXIOMnBENwJjjekYXMOBtMwiNgFFFrmNctRCJFPZEMWCiFLJ',54419.70911773341,-83338.42037886343,70801.83208790925,-416054376,'EEOTTh',-25415758,71643.84810596335,'qnOqHrOinwsbXsclrmgIegasfgYgGNkTyudTX','ULcRkesvVPbRfKgIJlZYpZlVqCBApplNhmrKZUtmTHHundWdFMxCQtcuWMYvVXZlZrv',93978.61665158841,'GBEKvgGoJKnSKGkEKWDlwFKMencWeXfDeCexmQAyy\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-598442331,'RlgmcsobgmMJsfTUNzbHhZVopTcYfmDDDsUJppDCMlYyQjcrCdXjtxRvPXJSLm',-11694.328363578374,'KtMAqXSbkimSTY\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','gSNsfmpMKHvjNDyOUnNwRjpydjyovFbqVpBYUAKJfsZhAzjelKWrgWDOMgTrRKSlhuyqvJnhHZcyzhzcztpjnEBlSVeIAjmUnQm',-468081416,'WcklJBIwBGASKbF\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','FYIXlBwmmLJHhnZlMbsPFGqcdSPDSPEFyAXyLhYtbgxRHfCScYpDDUnLMiGPUteHycGHlmEFkolqPmVaESFkfXXC',-62711.38746503962,'zXyMnsfKeyTBT','jQGojSlraKrYdCWBEWMTKwMZVNAcCtldzeNXWqRMrgBMOIxrTPrRzZGI','Ob',362433541,'PacVYmolRIUwyLitKhfPbXrYEJwVzkKVeZExLwMfZjwmkqkjizR','unZncmjxfglRSvljZcWQprNVFlKIFAYheIph\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',19122.66996375531,'ITGaOGPO\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','ZCJfGqkzgvwvcXBtjLZjaLVSQQYiUNJePktnvZzoGBPAQz\0\0\0\0\0\0\0\0\0\0\0\0\0\0','fHXvuuYAhRmPxHUZzFZoqLLKNGkRjXmHHdyiYPguShaIemfcoSrJKfJVkDvnsxuyhVABnC',82138.81929072918,-73082.02520470937,'vomUgWa\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','LHwYavpMCceewLPERWiAsCeKaZMZNnupUMasqhUMFhL\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','vcIfRdRdmubdvnsshbsEjCSgorTKAOlGbfulpTCAdizcKKsjomnDDugqGyCFFlnJlxVdoMNuRxJcfXxHuaXcNhduVkPzColVbP',17559.72228587068,-13366.44209352677,'gdEyJLhUFKUTNaiDAwaIWaObdZWaUVnopYVpynVlNPQnPRXQdVVTZRNXPkQvJnJRHExKeikLoRQBkuLRiSGabHclUaHgvFCMSxz',-856124587,'eykUnCIfoAPPprmnl\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','OaOsHZYSQKAcpQLwrCRZkHSGMfmNRvOLFnlhrnXMBgSFfAFRyoTaeUTZGHHBHefowkcBTlNyueStrnJptXtkspYPRMWzZns',1100167094,'WfWvyqseddlBSYkonIITTDrucgCKYcscshcBkCXjdAdOIhH\0\0\0\0\0\0\0\0\0\0\0\0\0',41256.648736855626,-13932.162785901615,-85344.04419168762,1449236821,'FgVsuelwxtqkjnKsnqMgiJFcNEXvWNKxvA\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-1803112022,-79541.74487883887,-83646.40668028002,-1903389960,-2063795837,'czqGXHuJpulYIgPGrawZGnpTDJeuTSeObqTYhnOYnaSkzGHlBOpsuif\0\0\0\0\0','wWngDCGrFwWoaSoZFHwKYzXszpmS\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','ZjQPTfoDkftkwooIEFvjdTRbkAcoeuUKWQgXYRsqMvxLloOmlNJAvMggTJDgndxvdxmpgTqvdIJtumreJzUQRoDv','AViNicxNchywaWdzgFvBxbdePJuEKBqdq\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','gsHclzfx',-22303.646400399608,'PFBTBQFXGNiRiTlxwKBAMUFIijOZCOWixtWdhWewLvGtWZeIKjFcYqEyFozECcCWHAcaeNrmxamAmfUcLkJM',480403283,'mBBGjxhPoJywqAdDQYflEySmfDLAryWni\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','uhUGQiaKSaThvcOlSmIjJoTeqbkbxIY\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','AvLivpeGxpvJNRLRe','xryZtoZlPxgNjcNBPxCgQJuRGPbAdZFIFHXLZyqrKDQRBUctNVYKLosOAHJABQrGwbcdvLCy','IzqQxmPOPCIUDDrlmxqhpODAsOTJguZVq\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','MylXhkhwnjnktkUVbXzDUSGpICwRcLSZQCZjxzvzduxEfNtDWuIToZRXjiOfORaqrumNVIEvuFKpaIGVX','tafEQKJnRKCOcv',151305314,'NEWozwyZoEnIkoSTsKIohLjRmLXCVqYTbVKTKpnyUqzujKtnqYsVDZkOmskPdjwbGnpJCteuQgWumuxfQrEO','cSXbPAMCDAPXzdUKEUVFqRDsFlqQBwgibohvQHprWeZcDyFluOFgBCLPAtsclvmYpNvqzPzTjiFpKeiadLcsBqFpEGEpUgBet',-1157336942,44488.75745371822,'hWtNkrXJerHoabOwZZUPgGsLVZpiJqMLInMpxxmqHNPsBVqKzcfO\0\0\0\0\0\0\0\0',91807.01153965597,'mrVhKvQnkwtVlXDbjPKqtKWYWesibWMfzMDNpDVkdAFWZOLvkgpPIQXOQR\0\0','bxGTkqrDpTDwqBfQrgyNiAcDeBjbQlWmppoOplbDTafYIySTdRXbnyUSeYxV',-22523.111369801452,'lfvaGlXzufmxnzWiiViXxAruMaQJuL\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','HQBKJRajaqOepojZgCqoKgUQInmBmjlCONn\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','meViUzlIbBtJpjDjPjaqPMHEyyWRHvSUUVzHZpYQYz','inXuOImabykFCwZxda\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',89694.8451008593,-460633380,-38330.21547947732,-26855.05439960932,1542507468,'cpYGIDAytESmNlAYYNiEdnXrZliaPBJbpIAHDGXSFTBCgxiGgWcIjmKDjpzh','vRMLuzOTbcGSUrUKAnMWUD',76335.6577629011,93923.55770076759,'qtC',12632.287700669258,85224278,'s\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','HohXjHqWSRhacXCxMCNJjyVdIZypxaiaIWcojigTgmlBLHZYwpcWYmJRQorzctFdxecvOaiAtZSohRirEwPGmNk',644875301,563590599,'tcwyUAHSIUmoaMCJvQnFKIzLjQLsQoGAD\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',-2142247692,'XInzQuVfegNOjLOxQZFTblHpIinZWfCDfAqnCNFWvtzYe',15659.036163239376,-957555348,41268.68592857363,-138181592,804290620,-67722.82333035688,-19965.36342553809,985144164,1716188140,'fYAKLiSjiqIhNGQjFrCUVWHLvfmBiYsafpBmgbmpXAavjGsGAVEQ\0\0\0\0\0\0\0\0','gobCAiktBXmUvZMvctfVZPHWPKXHrAUIWgvpIglcdDZKiPEMgqcsgmaDPsqRDZRBoeLPZkxuxvGulOZoUpJCKU',11818583,'eVEehCwNYjM',24397941,-239698864,-65950.71968218296,'ORSPyLTmBHfBIWcmzogWdhiyKkUNUedOrVEuaiN\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0',34354.93969754732,76428.61084354235,'fZZMsGSHrnaMKhVmRopWePuPjmBKPqqWhspGpAZwiuhxuw\0\0\0\0\0\0\0\0\0\0\0\0\0\0',52867.0464589569,'TfRFjVKOlk\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','muqy\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','JIeGVSorVHbBwrtAeAgeRMlvwoNwmFUCTsA','LCMPDYqqjgutiQzIGOsMJp\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','kJOHbYVsbpoXixqyVVeQXXGfBsYdz','aTnzvXZADWMtJS\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0','BfjFwIpYYXORwKLFTLKyaWFjgqsIAiHKEfQjpUrbvdeOislcYxvELkaAuEBZXIxHHjiMLLenJlmtOZlzHBAJ','uHsxOTROlSkkHpUtBjBZZFyymK','RvjeVNaQyzUIRrEfWyZAVjSxwpsnF','tjNECTlpQfoCVIRjKFIjpvvRIRYZjxAnoksSGyDnz','ANEGAJgAUkAVgryyc','aw');
+--source include/wait_condition.inc
+set sql_mode = default;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--enable_warnings
+drop table t1;
+
+create table t1(c1 int, index(c1)) engine=Dstore STATS_PERSISTENT=1;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+create table t1(c1 int, index(c1)) engine=Dstore STATS_PERSISTENT=0;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+--source include/restart_mysqld.inc
+select * from t1;
+drop table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+create table t1(c1 int, index(c1)) engine=Dstore STATS_PERSISTENT=0;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 rename to t1_1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1_1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1_1';
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1_1;
+
+create table t1(c1 int, index(c1)) engine=Dstore STATS_PERSISTENT=1;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 rename to t1_1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1_1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1_1';
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1_1;
+
+create table t1(c1 int, index index_c1(c1)) engine=Dstore STATS_PERSISTENT=0;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 drop index index_c1;
+alter table t1 add index index_c2(c1);
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+create table t1(c1 int, index index_c1(c1)) engine=Dstore STATS_PERSISTENT=1;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 drop index index_c1;
+alter table t1 add index index_c2(c1);
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+create table t1(c1 int, index index_c1(c1)) engine=Dstore STATS_PERSISTENT=0;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 add column c2 int null;
+alter table t1 add index index_c2(c2);
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+create table t1(c1 int, index index_c1(c1)) engine=Dstore STATS_PERSISTENT=1;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 add column c2 int null;
+alter table t1 add index index_c2(c2);
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+create table t1(c1 int, c2 int, index index_c1(c1), index index_c2(c2)) engine=Dstore STATS_PERSISTENT=0;
+insert into t1 values(1,1),(2,2),(3,3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 drop index index_c1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+create table t1(c1 int, c2 int, index index_c1(c1), index index_c2(c2)) engine=Dstore STATS_PERSISTENT=1;
+insert into t1 values(1,1),(2,2),(3,3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 drop index index_c1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+CREATE TABLE t1(col1 INT, col2 INT, index index_c1(col1), index index_c2(col2)) engine=Dstore;
+ALTER TABLE t1 RENAME TO t1_1, ALGORITHM = COPY;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1_1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1_1';
+drop table t1_1;
+
+CREATE TABLE t1(col1 INT, col2 INT, index index_c1(col1), index index_c2(col2)) engine=Dstore STATS_PERSISTENT=0;
+ALTER TABLE t1 RENAME TO t1_1, ALGORITHM = COPY;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1_1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1_1';
+drop table t1_1;
+
+CREATE TABLE t1(col1 INT, col2 INT, index index_c1(col1), index index_c2(col2)) engine=Dstore;
+CREATE TABLE t4(col1 INT, col2 INT, index index_c1(col1), index index_c2(col2)) engine=Dstore;
+--error ER_TABLE_EXISTS_ERROR
+rename table t1 to t2, t2 to t4;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test';
+drop table t1;
+drop table t4;
+
+CREATE TABLE t1(col1 INT, col2 INT, index index_c1(col1), index index_c2(col2)) engine=Dstore;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+SET GLOBAL DEBUG='+d,rename_last_table_error';
+--error ER_ERROR_ON_RENAME
+RENAME TABLE `t1` to `t2`, `t2` to `t3`, `t3` to `t1`;
+SET GLOBAL DEBUG='-d,rename_last_table_error';
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test';
+drop table t1;
+
+create table t1(c1 int, c2 int, index(c1), index index_c2(c2)) engine=Dstore;
+SET DEBUG='+d,simulate_persist_updateIndexstats_index_read_map_error';
+analyze table t1;
+
+# Wait a while to ensure error log has been flushed to file.
+--sleep 3
+let SEARCH_FILE= $MYSQLTEST_VARDIR/log/mysqld.1.err;
+--let SEARCH_PATTERN= UpdateDstoreIndexStats other error, table:t1 error:168
+--source include/search_pattern.inc
+
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+SET DEBUG='-d,simulate_persist_updateIndexstats_index_read_map_error';
+
+CREATE TABLE t1(col1 INT, col2 INT, index index_c1(col1), index index_c2(col2)) engine=Dstore;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+SET DEBUG='+d,simulate_persist_dictstat_droptable_failed';
+drop table t1;
+# Wait a while to ensure error log has been flushed to file.
+--sleep 3
+let SEARCH_FILE= $MYSQLTEST_VARDIR/log/mysqld.1.err;
+--let SEARCH_PATTERN= DstoreDictStatDropTable error, table:t1
+--source include/search_pattern.inc
+
+SET DEBUG='-d,simulate_persist_dictstat_droptable_failed';
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+CREATE TABLE t1(col1 INT, col2 INT, index index_c1(col1), index index_c2(col2)) engine=Dstore;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+SET DEBUG='+d,simulate_persist_dictstat_updatetable_failed';
+analyze table t1;
+SET DEBUG='-d,simulate_persist_dictstat_updatetable_failed';
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+CREATE TABLE t1(col1 INT, col2 INT, index index_c1(col1), index index_c2(col2)) engine=Dstore;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test';
+SET DEBUG='+d,simulate_persist_dictstat_renametable_failed';
+alter table t1 rename to t1_1;
+SET DEBUG='-d,simulate_persist_dictstat_renametable_failed';
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test';
+drop table t1_1;
+
+create table t1 (a int unsigned not null auto_increment primary key) engine=Dstore
+partition by key(a);
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test';
+ALTER TABLE t1 RENAME TO t1_1, ALGORITHM = COPY;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test';
+drop table t1_1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test';
+
+create table t1 (a int unsigned not null auto_increment primary key) engine=Dstore
+partition by key(a);
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test';
+ALTER TABLE t1 RENAME TO t1_1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test';
+drop table t1_1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test';
+
+create table t1 (a int unsigned not null auto_increment primary key) engine=Dstore
+partition by key(a) PARTITIONS 4;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test';
+ALTER TABLE t1 RENAME TO t1_1, ALGORITHM = COPY;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test';
+drop table t1_1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test';
+
+create table t1 (a int unsigned not null auto_increment primary key) engine=Dstore
+partition by key(a) PARTITIONS 4;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test';
+alter table t1 rename t2, add c char(10), comment "no comment";
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test';
+drop table t2;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test';
+
+create table t1 (a int unsigned not null auto_increment primary key) engine=Dstore
+partition by key(a) PARTITIONS 4;
+create table t4 (a int unsigned not null auto_increment primary key) engine=Dstore
+partition by key(a) PARTITIONS 4;
+--error ER_TABLE_EXISTS_ERROR
+rename table t1 to t2, t2 to t4;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test';
+drop table t1;
+drop table t4;
+
+set global dstore_stats_persistent = OFF;
+
+create table t1(c1 int, index(c1)) engine=Dstore STATS_PERSISTENT=1;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+create table t1(c1 int, index(c1)) engine=Dstore STATS_PERSISTENT=0;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+--source include/restart_mysqld.inc
+set global dstore_stats_persistent = OFF;
+select * from t1;
+drop table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+create table t1(c1 int, index(c1)) engine=Dstore STATS_PERSISTENT=0;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 rename to t1_1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1_1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1_1';
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1_1;
+
+create table t1(c1 int, index(c1)) engine=Dstore STATS_PERSISTENT=1;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 rename to t1_1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1_1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1_1';
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1_1;
+
+create table t1(c1 int, index index_c1(c1)) engine=Dstore STATS_PERSISTENT=0;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 drop index index_c1;
+alter table t1 add index index_c2(c1);
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+create table t1(c1 int, index index_c1(c1)) engine=Dstore STATS_PERSISTENT=1;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 drop index index_c1;
+alter table t1 add index index_c2(c1);
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+create table t1(c1 int, index index_c1(c1)) engine=Dstore STATS_PERSISTENT=0;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 add column c2 int null;
+alter table t1 add index index_c2(c2);
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+create table t1(c1 int, index index_c1(c1)) engine=Dstore STATS_PERSISTENT=1;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 add column c2 int null;
+alter table t1 add index index_c2(c2);
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+create table t1(c1 int, c2 int, index index_c1(c1), index index_c2(c2)) engine=Dstore STATS_PERSISTENT=0;
+insert into t1 values(1,1),(2,2),(3,3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 drop index index_c1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+create table t1(c1 int, c2 int, index index_c1(c1), index index_c2(c2)) engine=Dstore STATS_PERSISTENT=1;
+insert into t1 values(1,1),(2,2),(3,3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 drop index index_c1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+create table t1(c1 int, c2 int, index(c1), index index_c2(c2)) engine=Dstore;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+insert into t1 values(1,1);
+insert into t1 values(1,2);
+insert into t1 values(1,3);
+insert into t1 values(2,1);
+insert into t1 values(2,2);
+insert into t1 values(2,3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+drop table t1;
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+create table t1(c1 int, c2 int, index index_c1_c2(c1,c2)) engine=Dstore;
+select table_rows, data_length from information_schema.tables where table_schema = 'test' and table_name = 't1';
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+insert into t1 values(1,1);
+insert into t1 values(1,2);
+insert into t1 values(1,3);
+insert into t1 values(1,4);
+insert into t1 values(1,5);
+insert into t1 values(1,6);
+analyze table t1;
+select table_rows, data_length from information_schema.tables where table_schema = 'test' and table_name = 't1';
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+# restart fetch stat from table
+--let $restart_parameters = restart;
+--source include/restart_mysqld.inc
+set global dstore_stats_persistent = OFF;
+select table_rows, data_length from information_schema.tables where table_schema = 'test' and table_name = 't1';
+select * from t1;
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+update mysql.dstore_index_stats set stat_name = 'size_001' where database_name = 'test' and table_name = 't1' and stat_name = 'size';
+--let $restart_parameters = restart;
+--source include/restart_mysqld.inc
+set global dstore_stats_persistent = OFF;
+select * from t1;
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+alter table t1 add index index_c1(c1);
+alter table t1 add index index_c2(c2);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+alter table t1 drop index index_c1_c2;
+drop index index_c1 on t1;
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+alter table t1 rename t1_1;
+select count(1) from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+select count(1) from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1_1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1_1';
+
+truncate table t1_1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1_1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1_1';
+
+drop table t1_1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1_1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1_1';
+
+create table t1(c1 int, index(c1)) engine=Dstore STATS_PERSISTENT=1;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+create table t1(c1 int, index(c1)) engine=Dstore;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+alter table t1 engine=heap;
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+create table t1(c1 int, index(c1)) engine=Dstore;
+insert into t1 values(1),(2),(3);
+analyze table t1;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+drop table t1;
+
+create table `t'1` (`c'1` int, c2 int, index index_c1_c2(`c'1`, c2));
+insert into `t'1` values(1,1),(1,2),(1,3),(1,4);
+analyze table `t'1`;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't''1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't''1';
+drop table  `t'1`;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't''1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't''1';
+
+create table `t\'1` (`c'1` int, c2 int, index index_c1_c2(`c'1`, c2));
+insert into `t\'1` values(1,1),(1,2),(1,3),(1,4);
+analyze table `t\'1`;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't\\\'1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't\\\'1';
+drop table  `t\'1`;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't\\\'1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't\\\'1';
+
+create table `t``1` (c1 int, c2 int, index index_c1_c2(c1, c2));
+insert into `t``1` values(1,1),(1,2),(1,3),(1,4);
+analyze table `t``1`;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't`1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't`1';
+drop table  `t``1`;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't`1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't`1';
+
+create table `t"@!~#$%^&*()-=/?[{]}-=_+,./`(c1 int, c2 int, index index_c1_c2(c1, c2));
+insert into `t"@!~#$%^&*()-=/?[{]}-=_+,./` values(1,1),(1,2),(1,3),(1,4);
+analyze table `t"@!~#$%^&*()-=/?[{]}-=_+,./`;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't"@!~#$%^&*()-=/?[{]}-=_+,./';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't"@!~#$%^&*()-=/?[{]}-=_+,./';
+drop table  `t"@!~#$%^&*()-=/?[{]}-=_+,./`;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't"@!~#$%^&*()-=/?[{]}-=_+,./';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't"@!~#$%^&*()-=/?[{]}-=_+,./';
+
+-- echo #
+-- echo # BUG2026010740696 if a table in dstore_index_stats data is empty. when fetch statistics to dict index->stat_leaf_page_cnt is 0.
+-- echo # But when an empty table is created. initial value index->stat_leaf_page_cnt is 1. that have a inconsistency.
+-- echo #
+set global dstore_stats_persistent = default;
+# set dstore_enable_index_sample off
+--let $shutdown_server_timeout= 300
+--source include/shutdown_mysqld.inc
+ 
+# restart disable index sample
+--let $restart_parameters= restart: --dstore_enable_index_sample=off
+--source include/start_mysqld.inc
+
+create table t1(c1 int, c2 int, index index_c1_c2(c1, c2)) engine=Dstore;
+--replace_column 3 #
+select * from mysql.dstore_table_stats where database_name = 'test' and table_name = 't1';
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+delete from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+# Restart mysqld
+--source include/shutdown_mysqld.inc
+--let $restart_parameters= restart: --dstore_enable_index_sample=off
+--source include/start_mysqld.inc
+
+analyze table t1;
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+delete from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+# Restart mysqld
+--source include/shutdown_mysqld.inc
+--let $restart_parameters= restart: --dstore_enable_index_sample=off
+--source include/start_mysqld.inc
+
+select * from t1;
+analyze table t1;
+--replace_column 4 #
+select * from mysql.dstore_index_stats where database_name = 'test' and table_name = 't1';
+
+drop table t1;
+
+#BUG2026021253096
+create table tt3(a int, index idx(a)) partition by range(a) (PARTITION p1 VALUES LESS THAN (20), PARTITION p2 VALUES LESS THAN (40),PARTITION p3 VALUES LESS THAN MAXVALUE);
+select table_name from mysql.dstore_index_stats where database_name="test" and table_name like "tt3%" group by 1;
+drop table if exists tt3;
+select table_name from mysql.dstore_index_stats where database_name="test" and table_name like "tt3%" group by 1;
+
+# set dstore_enable_index_sample default
+let $restart_parameters = restart:;
+--source include/restart_mysqld.inc
+
+set global dstore_stats_persistent = default;

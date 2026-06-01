@@ -1,0 +1,38 @@
+call mtr.add_suppression("failed to do full backup for dstore");
+call mtr.add_suppression("start full local backup fail");
+call mtr.add_suppression("full backup found binlog is not enabled");
+
+--source suite/local_backup/include/prepare_for_backup.inc
+--let $backup_config_py = $MYSQLTEST_VARDIR/backup_config.py
+--exec sed -i 's#"wal_file_size": "134217728"#"wal_file_size": "1048576"#g' $backup_config_py
+
+CREATE DATABASE db1;
+USE db1;
+create table t1(s varchar(100)) engine=Dstore;
+INSERT INTO t1 VALUES('a');
+select count(*) from t1;
+
+SET GLOBAL dstore_local_backup_max_wal_size = 10;
+
+# Full local backup.
+call rds_backup.start_full_local_backup(1);
+
+# Add more data to make first wal file full
+--source suite/local_backup/include/load_data.inc
+CALL load_data('t1','s',10000);
+select count(*) from t1;
+
+--source suite/local_backup/include/wait_full_backup.inc
+show status like 'Rds_local_backup_last_full_backup_status';
+
+--let SEARCH_FILE = $MYSQLD_DATADIR/mysqld-current.log
+--let SEARCH_PATTERN=the wal size increases too quickly
+--source include/search_pattern.inc
+
+SET GLOBAL dstore_local_backup_max_wal_size = 38654705664;
+
+# Drop database db1.
+DROP DATABASE db1;
+
+--exec sed -i 's#"wal_file_size": "1048576"#"wal_file_size": "134217728"#g' $backup_config_py
+--source suite/local_backup/include/clean_backup.inc

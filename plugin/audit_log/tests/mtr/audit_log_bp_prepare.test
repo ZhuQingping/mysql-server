@@ -1,0 +1,44 @@
+#
+#  This test check whether binary protocol PREPARE/EXECUTE
+#  can be logged successfully.
+#
+--enable_ps_protocol
+CREATE TABLE t1 (
+    id INT PRIMARY KEY,
+    name VARCHAR(50)
+);
+
+PREPARE stmt1 FROM 'INSERT INTO t1 VALUES (?, ?)';
+SET @id = 1;
+SET @name = 'test';
+EXECUTE stmt1 USING @id, @name;
+
+PREPARE stmt2 FROM 'SELECT * FROM t1 WHERE id = ?';
+SET @search_id = 1;
+EXECUTE stmt2 USING @search_id;
+
+PREPARE stmt3 FROM 'UPDATE t1 SET name = ? WHERE id = ?';
+SET @new_name = 'updated';
+SET @update_id = 1;
+EXECUTE stmt3 USING @new_name, @update_id;
+
+DEALLOCATE PREPARE stmt1;
+DEALLOCATE PREPARE stmt2;
+DEALLOCATE PREPARE stmt3;
+
+DROP TABLE t1;
+--disable_ps_protocol
+
+--echo # Check result.
+let $MYSQLD_DATADIR= `select @@datadir`;
+--let SEARCH_FILE = $MYSQLD_DATADIR/test_audit.log
+--let SEARCH_PATTERN =prepare_sql
+--source include/search_pattern.inc
+
+--let SEARCH_FILE = $MYSQLD_DATADIR/test_audit.log
+--let SEARCH_PATTERN =execute_sql
+--source include/search_pattern.inc
+
+--let SEARCH_FILE = $MYSQLD_DATADIR/test_audit.log
+--let SEARCH_PATTERN =dealloc_sql
+--source include/search_pattern.inc

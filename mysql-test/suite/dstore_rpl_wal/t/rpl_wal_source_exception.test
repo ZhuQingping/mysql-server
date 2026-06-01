@@ -1,0 +1,128 @@
+#
+# ==== Purpose ====
+#
+# Test the exception handling of the source based on physical replication.
+#
+# ==== References ====
+#
+# US2025031800790 Implement the core logic of physical replication for the source server.
+#
+
+--disable_query_log
+CALL mtr.add_suppression(".* failed on net_flush().*");
+CALL mtr.add_suppression(".* replica net_flush().*");
+CALL mtr.add_suppression(".* Timeout waiting for reply of .*");
+CALL mtr.add_suppression(".*Failed on my_net_write.*");
+CALL mtr.add_suppression(".*Failed to run hook.*");
+CALL mtr.add_suppression(".*hook failed.*");
+CALL mtr.add_suppression(".*Failed to get cde plugin data.*");
+CALL mtr.add_suppression(".*Check wal sender param is failed.*");
+CALL mtr.add_suppression(".*The wal stream id of the master and standby.*");
+CALL mtr.add_suppression(".*The flushed lsn of the master is smaller than standby.*");
+CALL mtr.add_suppression(".*Wal data has been recycled and cannot be sent.*");
+CALL mtr.add_suppression(".*Failed to init wal sender.*");
+--enable_query_log
+
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_setup.inc
+--enable_warnings
+
+--echo ############################################################
+--echo Test the exception handling of the source based on physical replication.
+--echo ############################################################
+
+--connection $node1
+set global debug="+d,wal_sender_cde_plugin_data_null";
+
+--connection $node2
+STOP REPLICA;
+START REPLICA;
+--sleep 1
+
+--connection $node1
+set global debug="-d,wal_sender_cde_plugin_data_null";
+set global debug="+d,wal_sender_stream_id_diff";
+
+--connection $node2
+STOP REPLICA;
+START REPLICA;
+--sleep 1
+
+--connection $node1
+set global debug="-d,wal_sender_stream_id_diff";
+set global debug="+d,wal_sender_master_flush_lsn_error";
+
+--connection $node2
+STOP REPLICA;
+START REPLICA;
+--sleep 1
+
+--connection $node1
+set global debug="-d,wal_sender_master_flush_lsn_error";
+set global debug="+d,wal_sender_wal_recycled";
+
+--connection $node2
+STOP REPLICA;
+START REPLICA;
+
+--connection $node1
+set global debug="-d,wal_sender_wal_recycled";
+
+--connection $node2
+STOP REPLICA;
+START REPLICA;
+
+--connection $node1
+set global debug="+d,wal_sender_too_large_wal";
+set global debug="+d,wal_sender_read_wal_data_failed";
+USE copy_database;
+INSERT INTO copy_database.copy_table VALUES (1, 'Channel Test');
+INSERT INTO copy_database.copy_table VALUES (2, 'Channel Test');
+sleep 1;
+set global debug="-d,wal_sender_too_large_wal";
+set global debug="-d,wal_sender_read_wal_data_failed";
+
+--connection $node2
+STOP REPLICA;
+START REPLICA;
+--sleep 1
+
+--connection $node1
+set global debug="+d,simulate_wal_send_error";
+INSERT INTO copy_database.copy_table VALUES (3, 'Channel Test2');
+INSERT INTO copy_database.copy_table VALUES (4, 'Channel Test2');
+sleep 1;
+set global debug="-d,simulate_wal_send_error";
+
+--connection $node2
+STOP REPLICA;
+START REPLICA;
+--sleep 1
+
+--connection $node1
+set global debug="+d,wal_sender_set_sync_failed";
+INSERT INTO copy_database.copy_table VALUES (5, 'Channel Test2');
+INSERT INTO copy_database.copy_table VALUES (6, 'Channel Test2');
+sleep 1;
+set global debug="-d,wal_sender_set_sync_failed";
+
+--connection $node2
+STOP REPLICA;
+START REPLICA;
+--sleep 1
+
+--connection $node1
+set global debug="+d,wal_sender_net_flush_failed";
+INSERT INTO copy_database.copy_table VALUES (7, 'Channel Test2');
+INSERT INTO copy_database.copy_table VALUES (8, 'Channel Test2');
+sleep 1;
+set global debug="-d,wal_sender_net_flush_failed";
+
+--connection $node2
+STOP REPLICA;
+START REPLICA;
+--sleep 1
+
+--disable_warnings
+--source suite/dstore_rpl_wal/include/rpl_wal_physical_replication_cleanup.inc
+--enable_warnings

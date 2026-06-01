@@ -1,0 +1,37 @@
+# ==== Purpose ====
+# Before setting rpl_semi_sync_source_timeout_wal, check it's value.
+# It needs to be at least 10 seconds smaller than the value of dstore_lock_wait_timeout.
+#
+# ==== References ====
+#
+# BUG2025092429866 Check the value of rpl_semi_sync_source_timeout_wal before setting it.
+#
+
+
+--echo #
+--echo # install rpl_semi_sync_source plugin.
+--echo #
+--replace_result $SEMISYNC_SOURCE_PLUGIN SEMISYNC_SOURCE_PLUGIN
+eval INSTALL PLUGIN rpl_semi_sync_source SONAME '$SEMISYNC_SOURCE_PLUGIN';
+
+--echo #
+--echo # set rpl_semi_sync_source_timeout_wal to 10s, should success.
+--echo #
+SET GLOBAL rpl_semi_sync_source_timeout_wal = 10000;
+
+--echo #
+--echo # set rpl_semi_sync_source_timeout_wal to 40s, should fail.
+--echo #
+--error ER_WRONG_VALUE_FOR_VAR
+SET GLOBAL rpl_semi_sync_source_timeout_wal = 40000;
+
+--echo #
+--echo # set rpl_semi_sync_source_timeout_wal to 100s, should fail.
+--echo #
+--error ER_WRONG_VALUE_FOR_VAR
+SET GLOBAL rpl_semi_sync_source_timeout_wal = 100000;
+
+--echo #
+--echo # Clean up.
+--echo #
+UNINSTALL PLUGIN rpl_semi_sync_source;

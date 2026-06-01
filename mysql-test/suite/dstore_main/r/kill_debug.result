@@ -1,0 +1,64 @@
+create database test_db;
+create table test_db.test_tbl (a int, b int);
+insert into test_db.test_tbl values (0, 1), (2, 3);
+create user test_user@localhost;
+grant select on performance_schema.* to test_user@localhost;
+grant select on test_db.* to test_user@localhost;
+grant system_variables_admin on *.* to test_user@localhost;
+grant session_variables_admin on *.* to test_user@localhost;
+flush privileges;
+#
+# BUG2025040323355
+#
+select count(*) from test_db.test_tbl;
+count(*)
+2
+/* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000);
+KILL QUERY <CONNECTION_ID>;
+SLEEP(1000)
+1
+select "connection is active after kill query";
+connection is active after kill query
+connection is active after kill query
+/* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000);
+SET SESSION DEBUG='+d,kill_connection_null_thread_context_injection';
+KILL QUERY <CONNECTION_ID>;
+SLEEP(1000)
+1
+select "connection is active after kill query";
+connection is active after kill query
+connection is active after kill query
+SET SESSION DEBUG='-d,kill_connection_null_thread_context_injection';
+/* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000);
+SET SESSION DEBUG='+d,kill_connection_null_thread_core_injection';
+KILL QUERY <CONNECTION_ID>;
+SLEEP(1000)
+1
+select "connection is active after kill query";
+connection is active after kill query
+connection is active after kill query
+SET SESSION DEBUG='-d,kill_connection_null_thread_core_injection';
+/* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000);
+SET SESSION DEBUG='+d,thd_to_cde_session_null_cde_session_injection';
+KILL QUERY <CONNECTION_ID>;
+SLEEP(1000)
+1
+select "connection is active after kill query";
+connection is active after kill query
+connection is active after kill query
+SET SESSION DEBUG='-d,thd_to_cde_session_null_cde_session_injection';
+/* KILL QUERY: SELECT SLEEP(1000) */ SELECT SLEEP(1000);
+SET SESSION DEBUG='+d,kill_connection_null_thrd_session_injection';
+KILL QUERY <CONNECTION_ID>;
+SLEEP(1000)
+1
+select "connection is active after kill query";
+connection is active after kill query
+connection is active after kill query
+SET SESSION DEBUG='-d,kill_connection_null_thrd_session_injection';
+#
+# cleanup.
+#
+use test;
+drop user test_user@localhost;
+drop database test_db;

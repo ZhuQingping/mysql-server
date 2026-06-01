@@ -1,0 +1,36 @@
+call mtr.add_suppression("Out of memory");
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+Variable_name	Value
+Threads_connected	1
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+Variable_name	Value
+Threadpool_active_connections	1
+SET GLOBAL debug= '+d,simulate_resource_failure';
+connect(localhost,root,,mysql,MYSQL_PORT,MYSQL_SOCK);
+ERROR HY000: Lost connection to MySQL server at 'reading initial communication packet', system error: NUM
+SET GLOBAL debug= '-d,simulate_resource_failure';
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+Variable_name	Value
+Threads_connected	1
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+Variable_name	Value
+Threadpool_active_connections	1
+SET GLOBAL debug= '+d,simulate_tp_alloc_connection_oom';
+connect(localhost,root,,mysql,MYSQL_PORT,MYSQL_SOCK);
+ERROR HY000: Lost connection to MySQL server at 'reading initial communication packet', system error: NUM
+SET GLOBAL debug= '-d,simulate_tp_alloc_connection_oom';
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+Variable_name	Value
+Threads_connected	1
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+Variable_name	Value
+Threadpool_active_connections	1
+SET GLOBAL rds_local_socket_using_per_thread = true;
+SET GLOBAL debug= '-d,simulate_tp_alloc_connection_oom';
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+Variable_name	Value
+Threads_connected	2
+SHOW GLOBAL STATUS LIKE 'THREADPOOL_ACTIVE_CONNECTIONS';
+Variable_name	Value
+Threadpool_active_connections	1
+SET GLOBAL rds_local_socket_using_per_thread = false;

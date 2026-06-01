@@ -1,0 +1,70 @@
+include/master-slave.inc
+Warnings:
+Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
+[connection master]
+[connection master]
+SET @start_master_global_rds_oma_log_file = @@global.rds_oma_log_file;
+SET @start_master_global_oma_log = @@global.rds_oma_log;
+SET GLOBAL rds_oma_log_file= 'master_oma/my_oma1.log';
+SET GLOBAL rds_oma_log = ON;
+SET timestamp=10;
+[connection slave]
+SET @start_slave_global_rds_oma_log_file = @@global.rds_oma_log_file;
+SET @start_slave_global_oma_log = @@global.rds_oma_log;
+SET GLOBAL rds_oma_log_file= 'slave_oma/my_oma2.log';
+SET GLOBAL rds_oma_log = ON;
+SET timestamp=10;
+[connection master]
+drop table if exists t1;
+create table t1(id int);
+insert into t1 values(1);
+insert into t1 values(2);
+insert into t1 values(3);
+update t1 set id = 7 where id = 2;
+delete from t1 where id = 7;
+alter table t1 add column name varchar(10);
+create user 'test'@'localhost' IDENTIFIED BY '123456';
+Time                 Id Command    Argument
+use test;
+SET timestamp=10;
+drop table if exists t1;
+SET timestamp=10;
+create table t1(id int);
+SET timestamp=10;
+alter table t1 add column name varchar(10);
+SET timestamp=10;
+CREATE USER 'test'@'localhost' IDENTIFIED BY <secret>;
+
+# dump content of OMA log end.
+
+include/sync_slave_sql_with_master.inc
+[connection slave]
+select * from t1;
+id	name
+1	NULL
+3	NULL
+select user,host from mysql.user;
+user	host
+mysql.infoschema	localhost
+mysql.session	localhost
+mysql.sys	localhost
+rdsAdmin	localhost
+root	localhost
+test	localhost
+Time                 Id Command    Argument
+
+# dump content of OMA log end.
+
+"clean up master"
+[connection master]
+drop user 'test'@'localhost';
+drop table t1;
+SET @@global.rds_oma_log_file = @start_master_global_rds_oma_log_file;
+SET @@global.rds_oma_log = @start_master_global_oma_log;
+"clean up slave"
+include/sync_slave_sql_with_master.inc
+[connection slave]
+SET @@global.rds_oma_log_file = @start_slave_global_rds_oma_log_file;
+SET @@global.rds_oma_log = @start_slave_global_oma_log;
+include/rpl_end.inc

@@ -1,0 +1,191 @@
+# Connect to master
+set global rds_recycle_bin_mode=ON;
+create database db_recycle;
+create database db_recycle_2;
+create user normal_1@'%' identified by 'pass';
+create user normal_2@'%' identified by 'pass';
+create user normal_3@'%' identified by 'pass';
+create user normal_4@'%' identified by 'pass';
+create user normal_5@'%' identified by 'pass';
+grant all on db_recycle.* to normal_1@'%' ;
+grant all on __recyclebin__.* to normal_1@'%' ;
+grant select on db_recycle.* to normal_2@'%' ;
+grant all on db_recycle_2.* to normal_2@'%' ;
+grant select on __recyclebin__.* to normal_2@'%' ;
+grant select on db_recycle.* to normal_3@'%' ;
+grant select on db_recycle_2.* to normal_3@'%' ;
+grant all on __recyclebin__.* to normal_3@'%' ;
+grant select on db_recycle.* to normal_4@'%' ;
+grant all on db_recycle_2.* to normal_4@'%' ;
+grant select,alter,drop on __recyclebin__.* to normal_4@'%' ;
+grant select on db_recycle.* to normal_5@'%' ;
+grant select,insert,create on db_recycle_2.* to normal_5@'%' ;
+grant all on __recyclebin__.* to normal_5@'%' ;
+------------------------------------------------------
+1. Normal
+-- Restore the table after drop;
+------------------------------------------------------
+use db_recycle;
+create table t1(id int);
+drop table t1;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t1	#	#
+show grants;
+Grants for normal_1@%
+GRANT USAGE ON *.* TO `normal_1`@`%`
+GRANT ALL PRIVILEGES ON `__recyclebin__`.* TO `normal_1`@`%`
+GRANT ALL PRIVILEGES ON `db_recycle`.* TO `normal_1`@`%`
+call dbms_recyclebin.restore_table('t1');
+show tables;
+Tables_in_db_recycle
+t1
+drop table t1;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t1	#	#
+call dbms_recyclebin.restore_table('t1', '__recyclebin__', 't2');
+ERROR HY000: Recycle table failed : unable to restore table to __recyclebin__.
+call dbms_recyclebin.restore_table('t1', 'db_recycle', 't2');
+show tables;
+Tables_in_db_recycle
+t2
+# Connect to master
+set rds_recycle_bin_mode=OFF;
+drop table db_recycle.t2;
+------------------------------------------------------
+2. DB and Table check
+-- The origin table must exists and the dest table must not exists;
+------------------------------------------------------
+use db_recycle;
+create table t1(id int);
+drop table t1;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t1	#	#
+call dbms_recyclebin.restore_table("", "", "");
+ERROR HY000: Incorrect parameters (pos is 1) to native procedure 'dbms_recyclebin.restore_table.
+call dbms_recyclebin.restore_table("__innodb_table_not_exist", "", "new_table");
+ERROR HY000: Incorrect parameters (pos is 2) to native procedure 'dbms_recyclebin.restore_table.
+call dbms_recyclebin.restore_table("__innodb_table_not_exist", "new_db", "");
+ERROR HY000: Incorrect parameters (pos is 3) to native procedure 'dbms_recyclebin.restore_table.
+create table t1(id int);
+call dbms_recyclebin.restore_table('t1');
+ERROR 42S01: Table 't1' already exists
+call dbms_recyclebin.restore_table('t1', 'db_recycle_2', 't1');
+ERROR 42000: INSERT, CREATE command denied to user 'normal_1'@'localhost' for table 't1'
+show tables;
+Tables_in_db_recycle
+t1
+call dbms_recyclebin.purge_table('t1');
+set rds_recycle_bin_mode=OFF;
+drop table db_recycle.t1;
+------------------------------------------------------
+3. Privileges
+-- Restore table need ALTER_ACL | DROP_ACL of origin table and
+INSERT_ACL | CREATE_ACL of dest table;
+------------------------------------------------------
+use db_recycle;
+create table t1(id int);
+create table t2(id int);
+drop table t1;
+drop table t2;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t1	#	#
+__recyclebin__	#	db_recycle	t2	#	#
+call dbms_recyclebin.restore_table("t1", "db_recycle_2", "t1");
+ERROR 42000: INSERT, CREATE command denied to user 'normal_1'@'localhost' for table 't1'
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t1	#	#
+__recyclebin__	#	db_recycle	t2	#	#
+call dbms_recyclebin.restore_table("t1", "db_recycle_2", "t1");
+ERROR 42000: DROP, ALTER command denied to user 'normal_2'@'localhost' for table 't1'
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t1	#	#
+__recyclebin__	#	db_recycle	t2	#	#
+call dbms_recyclebin.restore_table("t1", "db_recycle_2", "t2");
+ERROR 42000: INSERT, CREATE command denied to user 'normal_3'@'localhost' for table 't2'
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t1	#	#
+__recyclebin__	#	db_recycle	t2	#	#
+call dbms_recyclebin.restore_table("t2", "db_recycle_2", "t1");
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t1	#	#
+call dbms_recyclebin.restore_table("t1", "db_recycle_2", "t2");
+use db_recycle_2;
+show tables;
+Tables_in_db_recycle_2
+t1
+t2
+set rds_recycle_bin_mode=OFF;
+drop table t1;
+drop table t2;
+------------------------------------------------------
+4. Rename table in __recyclebin__ directly
+------------------------------------------------------
+use db_recycle;
+create table t1(id int);
+drop table t1;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	t1	#	#
+show grants;
+Grants for normal_1@%
+GRANT USAGE ON *.* TO `normal_1`@`%`
+GRANT ALL PRIVILEGES ON `__recyclebin__`.* TO `normal_1`@`%`
+GRANT ALL PRIVILEGES ON `db_recycle`.* TO `normal_1`@`%`
+use __recyclebin__;
+rename table `t1` to db_recycle.t1;
+ERROR 42000: Access denied for user 'normal_1'@'%' to database '__recyclebin__'
+rename table `t1` to db_recycle.t2;
+ERROR 42000: Access denied for user 'normal_1'@'%' to database '__recyclebin__'
+call dbms_recyclebin.purge_table('t1');
+------------------------------------------------------
+5. Foreign key
+------------------------------------------------------
+use db_recycle;
+CREATE TABLE p1 (
+id INT NOT NULL,
+PRIMARY KEY (id)
+) ENGINE=Dstore;
+CREATE TABLE c1 (
+id INT,
+parent_id INT,
+INDEX par_ind (parent_id),
+FOREIGN KEY (parent_id)
+REFERENCES p1(id)
+ON DELETE CASCADE
+) ENGINE=Dstore;
+drop table c1;
+call dbms_recyclebin.show_tables();
+SCHEMA	TABLE	ORIGIN_SCHEMA	ORIGIN_TABLE	RECYCLED_TIME	PURGE_TIME
+__recyclebin__	#	db_recycle	c1	#	#
+call dbms_recyclebin.restore_table('c1');
+show create table c1;
+Table	Create Table
+c1	CREATE TABLE `c1` (
+  `id` int DEFAULT NULL,
+  `parent_id` int DEFAULT NULL,
+  KEY `par_ind` (`parent_id`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+# Connect to master
+set rds_recycle_bin_mode=OFF;
+use db_recycle;
+drop table p1;
+drop table c1;
+------------------------------------------------------
+** Clean up **
+------------------------------------------------------
+set global rds_recycle_bin_mode=OFF;
+drop database db_recycle;
+drop database db_recycle_2;
+drop user normal_1@'%';
+drop user normal_2@'%';
+drop user normal_3@'%';
+drop user normal_4@'%';
+drop user normal_5@'%';

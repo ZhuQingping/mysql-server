@@ -1,0 +1,553 @@
+--source include/pq_test.inc
+
+CREATE TABLE `t1` (
+`a` int NOT NULL,
+`b` char(10) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE `t2` (
+`a` int NOT NULL,
+`b` char(10) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+INSERT INTO t1 values (1, 'a'), (2, 'b'), (3, 'c'), (3, 'c'), (4, 'd'), (5, 'f'), (6, 'e');
+INSERT INTO t2 values (3, 'c'), (4, 'd'), (5, 'f'), (6, 'e'), (1, 'a'), (2, 'b');
+INSERT INTO t1 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t1 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t2 SELECT * FROM t2;
+INSERT INTO t1 SELECT * FROM t2;
+INSERT INTO t2 SELECT * FROM t1;
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t2 SELECT * FROM t2;
+
+ANALYZE TABLE t1;
+ANALYZE TABLE t2;
+
+## share in-memory tmp table
+explain select t1.b from t1 join (select avg(a) from t2 group by a) as sub_2(b) on t1.a = sub_2.b;
+select t1.b from t1 join (select avg(a) from t2 group by a) as sub_2(b) on t1.a = sub_2.b;
+explain select t1.b from t1 join (select (a) from t2 group by a) as sub_2(b) on t1.a = sub_2.b;
+select /*+ SET_VAR(max_heap_table_size=16384) SET_VAR(internal_tmp_mem_storage_engine=MEMORY)*/
+t1.b from t1 join (select (a) from t2 group by a) as sub_2(b) on t1.a = sub_2.b;
+
+## share innodb tmp table
+set @save_big_tables= @@big_tables;
+
+SET BIG_TABLES=1;
+explain select t1.b from t1 join (select (a) from t2 group by a) as sub_2(b) on t1.a = sub_2.b;
+select t1.b from t1 join (select (a) from t2 group by a) as sub_2(b) on t1.a = sub_2.b;
+explain select t1.b from t1 join (select avg(a) from t2 group by a) as sub_2(b) on t1.a = sub_2.b;
+explain format=tree select t1.b from t1 join (select avg(a) from t2 group by a) as sub_2(b) on t1.a = sub_2.b;
+select t1.b from t1 join (select avg(a) from t2 group by a) as sub_2(b) on t1.a = sub_2.b;
+
+drop table t1;
+drop table t2;
+
+create table t(a int, b int);
+insert into t values(1,10),(2,20);
+set optimizer_switch="block_nested_loop=off";
+
+let query=
+ select t1.*, (select * from
+                (select count(*)
+                 from t t2
+                 left join t t3 on t3.a>t2.a-t1.a) as dt)
+ from t t1;
+eval explain format=tree $query;
+eval $query;
+
+DROP TABLE t;
+
+CREATE TABLE t1(f1 CHAR(255) CHARSET utf8);
+INSERT INTO t1 VALUES('1'),('2'),('3'),('4'),('5'),('6'),('7'),('8'),('9'),('0');
+SET @optimizer_switch_saved= @@optimizer_switch;
+SET @@optimizer_switch="derived_merge=off";
+FLUSH STATUS;
+SELECT /*+ SET_VAR(max_heap_table_size=16384) SET_VAR(internal_tmp_mem_storage_engine=MEMORY)*/ count(*)
+FROM t1 JOIN (
+  SELECT t1.f1 FROM t1 JOIN t1 AS t2 JOIN t1 AS t3) tt ON t1.f1 = tt.f1;
+
+DROP table t1;
+
+## ISSUE 555: LIMIT/OFFSET in derived table
+
+SET BIG_TABLES = 0;
+
+CREATE TABLE t1(a INT);
+CREATE TABLE t2(a INT);
+INSERT INTO t1 VALUES (1),(2),(3),(4);
+INSERT INTO t2 VALUES (1),(2);
+CREATE TABLE t3(a INT, b INT);
+INSERT INTO t3 VALUES (1,3), (2,3);
+ANALYZE TABLE t1, t2, t3;
+
+EXPLAIN
+select a from t1 join
+  (select count(a) as cnt from t2 union select 1 limit 1, 1) as derived_1_2(cnt)
+  on (true) where t1.a > derived_1_2.cnt;
+
+select a from t1 join
+  (select count(a) as cnt from t2 union select 1 limit 1, 1) as derived_1_2(cnt)
+  on (true) where t1.a > derived_1_2.cnt;
+
+## ISSUE 619
+
+EXPLAIN select /*+ no_merge() */ t1.a from t1 straight_join (select a from t2 where a < (select avg(a) from t3) ) as dt where t1.a = dt.a;
+
+select /*+ no_merge() */ t1.a from t1 straight_join (select a from t2 where a < (select avg(a) from t3) ) as dt where t1.a = dt.a;
+
+DROP TABLE t1, t2, t3;
+
+## SemiJoin Materialized PQ 
+
+CREATE TABLE `t2`(
+  `id` int DEFAULT NULL,
+  `a` int DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE `t3`(
+  `id` int DEFAULT NULL,
+  `a` int DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+set @save_parallel= @@force_parallel_execute;
+Explain SELECT /*+ SEMIJOIN(@subq1 MATERIALIZATION, DUPSWEEDOUT) */ * FROM t2  WHERE t2.a IN (SELECT /*+ QB_NAME(subq1) */ a FROM t3);
+
+set session force_parallel_execute = 0;
+Explain SELECT /*+ SEMIJOIN(@subq1 MATERIALIZATION, DUPSWEEDOUT) */ * FROM t2  WHERE t2.a IN (SELECT /*+ QB_NAME(subq1) */ a FROM t3);
+
+set session force_parallel_execute = @save_parallel;
+drop table t3, t2;
+
+set @saved_optimize_trace=@@optimizer_switch;
+set session optimizer_switch='semijoin=on,materialization=on,loosescan=off,firstmatch=off,duplicateweedout=off,index_condition_pushdown=off,mrr=off';
+
+CREATE TABLE t1 (
+  pk int NOT NULL,
+  col_int_key int NOT NULL,
+  col_varchar_nokey varchar(1) NOT NULL,
+  col_varchar_key varchar(1) NOT NULL,
+  PRIMARY KEY(pk),
+  KEY col_int_key(col_int_key),
+  KEY col_varchar_key(col_varchar_key, col_int_key)
+) charset utf8mb4 engine=innodb;
+
+INSERT INTO t1 VALUES
+(1,7,'a','a'),
+(2,0,'v','v'),
+(3,9,'c','c'),
+(4,3,'m','m'),
+(5,2,'a','a'),
+(6,1,'d','d'),
+(7,8,'y','y'),
+(8,6,'t','t'),
+(11,7,'a','x'),
+(12,0,'v','v'),
+(13,9,'c','c'),
+(14,3,'m','m'),
+(15,2,'a','x'),
+(16,1,'d','d'),
+(17,8,'y','y'),
+(18,6,'t','u'),
+(19,6,'t','u');
+
+CREATE TABLE t2 (
+  pk int NOT NULL,
+  col_int_key int NOT NULL,
+  col_varchar_key varchar(1) NOT NULL,
+  PRIMARY KEY(pk),
+  KEY col_varchar_key(col_varchar_key, col_int_key)
+) charset utf8mb4 engine=innodb;
+
+INSERT INTO t2(pk,col_int_key,col_varchar_key) VALUES
+(8,7,'c'),
+(11,4,'l'),
+(12,7,'b'),
+(13,0,'c'),
+(14,2,'i'),
+(15,9,'h'),
+(16,4,'q'),
+(17,1,'m'),
+(18,9,'b'),
+(19,2,'e'),
+(20,1,'c'),
+(21,7,'z'),
+(22,4,'l'),
+(23,7,'z'),
+(24,0,'c'),
+(25,2,'i'),
+(26,9,'h'),
+(27,4,'q'),
+(28,0,'a'),
+(29,1,'d');
+
+--replace_regex /[0-9]/#/
+explain
+SELECT outr.col_varchar_key AS x, outr.pk AS y
+FROM t1 AS outr
+WHERE outr.col_varchar_key IN (SELECT innr.col_varchar_key
+                               FROM t2 AS innr
+                               WHERE innr.col_varchar_key = 'a' OR innr.pk = 8)
+  AND outr.col_varchar_nokey < 't'
+ORDER BY outr.col_varchar_key, outr.pk;
+
+## Materialize scan
+
+--replace_regex /[0-9]/#/
+explain
+SELECT outr.col_varchar_key AS x, outr.pk AS y
+FROM t1 AS outr
+WHERE outr.col_varchar_key IN (SELECT innr.col_varchar_key
+                               FROM t2 AS innr
+                               WHERE innr.col_varchar_key = 'a' OR innr.pk = 8)
+  AND outr.col_varchar_nokey < 't'
+ORDER BY outr.col_varchar_key, outr.pk;
+
+SELECT outr.col_varchar_key AS x, outr.pk AS y
+FROM t1 AS outr
+WHERE outr.col_varchar_key IN (SELECT innr.col_varchar_key
+                               FROM t2 AS innr
+                               WHERE innr.col_varchar_key = 'a' OR innr.pk = 8)
+  AND outr.col_varchar_nokey < 't'
+ORDER BY outr.col_varchar_key, outr.pk;
+
+## Materialize lookup
+
+--replace_regex /[0-9]/#/
+explain
+SELECT outr.col_varchar_key AS x, outr.pk AS y
+FROM t1 AS outr
+WHERE outr.col_varchar_key IN (SELECT innr.col_varchar_key
+                               FROM t2 AS innr
+                               WHERE innr.col_varchar_key = 'a')
+  AND outr.col_varchar_nokey < 't'
+ORDER BY outr.col_varchar_key, outr.pk;
+
+SELECT outr.col_varchar_key AS x, outr.pk AS y
+FROM t1 AS outr
+WHERE outr.col_varchar_key IN (SELECT innr.col_varchar_key
+                               FROM t2 AS innr
+                               WHERE innr.col_varchar_key = 'a')
+  AND outr.col_varchar_nokey < 't'
+ORDER BY outr.col_varchar_key, outr.pk;
+
+## incorporate with derived table
+--replace_regex /[0-9]/#/
+explain
+SELECT outr.col_varchar_key AS x, outr.pk AS y, dt.avg AS z
+FROM t1 AS outr
+INNER JOIN (SELECT AVG(t1.col_int_key) from t1 where t1.col_varchar_key < 'g' group by col_int_key) as dt(avg)
+WHERE outr.col_varchar_key IN (SELECT innr.col_varchar_key
+                               FROM t2 AS innr
+                               WHERE innr.col_varchar_key = 'a')
+  AND outr.col_varchar_nokey < 't'
+ORDER BY outr.col_varchar_key, outr.pk;
+
+SELECT outr.col_varchar_key AS x, outr.pk AS y, dt.avg AS z
+FROM t1 AS outr
+INNER JOIN (SELECT AVG(t1.col_int_key) from t1 where t1.col_varchar_key < 'g' group by col_int_key) as dt(avg)
+WHERE outr.col_varchar_key IN (SELECT innr.col_varchar_key
+                               FROM t2 AS innr
+                               WHERE innr.col_varchar_key = 'a')
+  AND outr.col_varchar_nokey < 't'
+ORDER BY outr.col_varchar_key, outr.pk;
+
+## incorporate with scalar subquery
+--replace_regex /[0-9]/#/
+explain
+SELECT outr.col_varchar_key AS x, outr.pk AS y
+FROM t1 AS outr
+WHERE outr.col_varchar_key IN (SELECT innr.col_varchar_key
+                               FROM t2 AS innr
+                               WHERE innr.col_varchar_key = 'a')
+  AND outr.col_int_key < ANY (select t2.col_int_key from t2 group by t2.col_varchar_key)
+ORDER BY outr.col_varchar_key, outr.pk;
+
+SELECT outr.col_varchar_key AS x, outr.pk AS y
+FROM t1 AS outr
+WHERE outr.col_varchar_key IN (SELECT innr.col_varchar_key
+                               FROM t2 AS innr
+                               WHERE innr.col_varchar_key = 'a')
+  AND outr.col_int_key < ANY (select t2.col_int_key from t2 group by t2.col_varchar_key)
+ORDER BY outr.col_varchar_key, outr.pk;
+
+set session optimizer_switch=@saved_optimize_trace;
+drop table t1,t2;
+
+## scalar uncorrelated subquery
+create table t1 (id int, a int);
+create table t2 (b int);
+insert into t1 values (1, 1), (2, 1), (0, 2), (1, 3), (3, 3), (0, 2);
+insert into t2 values (1), (3), (2), (0), (1), (2), (1);
+
+analyze table t1, t2;
+# scalar subquery in field list
+explain select id, (select avg(b) from t2) as t from t1;
+select id, (select avg(b) from t2) as t from t1;
+
+# scalar subquery in group-by
+explain select sum(t1.a) from t1, t2 group by (select avg(t1.id) from t1) + t1.a;
+select sum(t1.a) from t1, t2 group by (select avg(t1.id) from t1) + t1.a;
+
+# scalar subquery in order-by
+explain select t1.a from t1 order by (select avg(t1.id) from t1) + t1.a;
+select t1.a from t1 order by (select avg(t1.id) from t1) + t1.a;
+
+# scalar subquery in where condition
+explain select * from t1 where a > (select avg(b) from t2);
+select * from t1 where a > (select avg(b) from t2);
+
+# scalar subquery in aggregation
+explain select id, sum((select avg(b) from t2)) as t from t1 group by id order by id;
+select id, sum((select avg(b) from t2)) as t from t1 group by id order by id;
+
+# scalar subquery in having
+explain SELECT SUM(a), (SELECT SUM(b) FROM t2) AS scalar FROM t1 HAVING SUM(a) > scalar;
+SELECT SUM(a), (SELECT SUM(b) FROM t2) AS scalar FROM t1 HAVING SUM(a) > scalar;
+
+# incorporate with derived table
+## scalar-aggregation
+explain SELECT * from t1 JOIN (SELECT SUM(a) as c1, (SELECT sum(b) FROM t2) AS c2 FROM t1  HAVING SUM(a) > c2) as dt;
+SELECT * from t1 JOIN (SELECT SUM(a) as c1, (SELECT sum(b) FROM t2) AS c2 FROM t1  HAVING SUM(a) > c2) as dt;
+
+## vector-aggregation
+explain SELECT * from t1 JOIN (SELECT SUM(a) as c1, (SELECT sum(b) FROM t2) AS c2 FROM t1 group by t1.a HAVING SUM(a) > c2) as dt;
+SELECT * from t1 JOIN (SELECT SUM(a) as c1, (SELECT sum(b) FROM t2) AS c2 FROM t1 group by t1.a HAVING SUM(a) > c2) as dt;
+
+## scalar subquery is optimized out by ref-access
+alter table t1 add index (a);
+explain format=tree select * from t1 where t1.a = (select max(b) from t2);
+select * from t1 where t1.a = (select max(b) from t2);
+
+## scalar subquery transformed by "ANY/ALL" not supported by PQ
+explain format=tree select * from t1 where t1.id + 2 > ALL (select t1.a from t1);
+select * from t1 where t1.id + 2 > ALL (select t1.a from t1);
+explain format=tree select * from t1 where t1.id + 2 > ALL (select t1.a from t1 union select t1.a + 1 from t1);
+select * from t1 where t1.id + 2 > ALL (select t1.a from t1 union select t1.a + 1 from t1);
+
+## scalar subquery runs in PQ while the outer query does not
+explain format=tree select sum(distinct t1.id) from t1 where t1.id > (select t1.a from t1 limit 1);
+select sum(distinct t1.id) from t1 where t1.id > (select t1.a from t1 limit 1);
+
+## scalar subquery doesn't run in PQ while the outer query does.
+explain format=tree select t1.id from t1 where t1.id < (select avg(distinct t1.a) from t1);
+select t1.id from t1 where t1.id < (select avg(distinct t1.a) from t1);
+
+DROP tables t1, t2;
+
+CREATE TABLE t1(a INT);
+CREATE TABLE t2(a INT);
+INSERT INTO t1 VALUES (1),(2),(3),(4);
+INSERT INTO t2 VALUES (1),(2);
+CREATE TABLE t3(a INT, b INT);
+INSERT INTO t3 VALUES (1,3), (2,3);
+ANALYZE TABLE t1, t2, t3;
+
+let query =
+SELECT t1.a, t2.a, t3.a
+            FROM t1
+                 LEFT JOIN ( t2
+                             JOIN t3
+                             ON t2.a = (SELECT COUNT(*) FROM t1) )
+                 ON t1.a + (SELECT MIN(a) FROM t1) = t3.b;
+
+## scalar subquery in join condition
+
+eval explain format=tree $query;
+eval $query;
+
+--echo # Subquery in multiple-equality item
+SELECT * FROM t1, t2 WHERE t1.a=t2.a AND t1.a=(SELECT 23 FROM t3 LIMIT 1);
+
+DROP table t1, t2, t3;
+
+## ISSUE 637
+
+--echo # `test_if_ref` checks whether 'left_item = right_item'. However, it encounters issue 637 that
+--echo # both left_item and right_item point to the same address, while "Item_subselect::eq()" return false.
+
+create table t1(a int);
+insert into t1 values(1),(2);
+let $query=
+with qn(a) as (select 1 from t1 limit 2)
+select * from qn where qn.a=(select * from qn qn1 limit 1) ;
+
+eval explain format=traditional $query;
+eval explain format=tree $query;
+
+DROP table t1;
+
+## ISSUE 622
+
+--echo #the scalar subquery is wrapped into the condition, and Item_sum_hybrid is
+--echo #formed to evaluate the value of scalar subquery. However, the evaluation
+--echo #depends on the rebuilt Item_sum on leader. Therefore we should keep trace
+--echo #of it when worker evaluates the condition.
+
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES (0);
+explain SELECT 1 FROM t1 WHERE 1 > ALL(SELECT 1 FROM t1 WHERE a);
+SELECT 1 FROM t1 WHERE 1 > ALL(SELECT 1 FROM t1 WHERE a);
+DROP TABLE t1;
+
+# ISSUE 626
+
+--echo # the scalar subquery is wrapped into the condition. And, the evaluation of
+--echo # subquery depends on "was_values" of the transformed Item_sum_hybrid. However,
+--echo # this value is not correctly cloned.
+
+SET time_zone=DEFAULT;
+create table t1(a time);
+insert into t1 values ('00:00:00'),('00:01:00');
+explain select 1 from t1 where 1 < some (select cast(a as datetime) from t1);
+select 1 from t1 where 1 < some (select cast(a as datetime) from t1);
+DROP table t1;
+
+--echo # BUG2023031703695 PQ query with wrong result
+CREATE TABLE t2 (c0 INT);
+CREATE TABLE t8 (c0 INT);
+INSERT INTO t2(c0) VALUES (46);
+explain SELECT (SELECT 76,1 FROM t8) > (2,1) FROM t2;
+SELECT (SELECT 76,1 FROM t8) > (2,1) FROM t2;
+DROP table t2;
+DROP table t8;
+
+--echo # BUG2023032100017 PQ SEGV
+CREATE TABLE t0 (c0 INT);
+EXPLAIN SELECT (SELECT 1 WHERE 2 IS NULL) FROM t0 GROUP BY t0.c0;
+SELECT (SELECT 1 WHERE 2 IS NULL) FROM t0 GROUP BY t0.c0;
+DROP table t0;
+
+## restore big tables
+
+set big_tables=@save_big_tables;
+
+# restart
+--source include/restart_mysqld.inc
+
+# BUG2023032004098
+
+CREATE TABLE t0 (c0 INT);
+SET SESSION FORCE_PARALLEL_EXECUTE = 1;
+SET SESSION PARALLEL_COST_THRESHOLD = 0;
+SET SESSION PARALLEL_ROWS_THRESHOLD = 0;
+explain SELECT CASE (SELECT x.c0) WHEN 3 THEN 2 END FROM t0 JOIN (SELECT 1) x(c0) ON TRUE;
+SELECT CASE (SELECT x.c0) WHEN 3 THEN 2 END FROM t0 JOIN (SELECT 1) x(c0) ON TRUE;
+
+drop table t0;
+
+# BUG2023031703482
+
+CREATE TABLE t2 (c0 INT);
+CREATE TABLE t4 (c0 INT);
+SET SESSION FORCE_PARALLEL_EXECUTE = 1;
+SET SESSION PARALLEL_COST_THRESHOLD = 0;
+SET SESSION PARALLEL_ROWS_THRESHOLD = 0;
+SET @@SESSION.OPTIMIZER_SWITCH = 'subquery_to_derived=on';
+explain SELECT (SELECT TIME '1:0:0' FROM t2) IS FALSE FROM t2 tx JOIN t2 ty ON (SELECT 1 FROM t2 JOIN t4 ON FALSE);
+SELECT (SELECT TIME '1:0:0' FROM t2) IS FALSE FROM t2 tx JOIN t2 ty ON (SELECT 1 FROM t2 JOIN t4 ON FALSE);
+
+drop table t2;
+drop table t4;
+
+# BUG2023032303094
+
+CREATE TABLE t0 (c0 INT);
+CREATE TABLE t1 (c0 INT);
+SET SESSION FORCE_PARALLEL_EXECUTE = 1;
+SET SESSION PARALLEL_COST_THRESHOLD = 0;
+SET SESSION PARALLEL_ROWS_THRESHOLD = 0;
+(SELECT 1 FROM (SELECT schema() FROM t1) x(x) RIGHT JOIN t0 ON x.x = current_date()) UNION (SELECT 1);
+SELECT 1 FROM (SELECT schema() FROM t1) x(x) RIGHT JOIN t0 ON x.x = now();
+
+drop table t0;
+drop table t1;
+
+# BUG2023032203492
+
+CREATE TABLE t1 (c0 INT);
+INSERT INTO t1 (c0) VALUES (1918),(1938);
+CREATE TABLE t12 (c0 INT, c1 INT, c2 INT);
+CREATE TABLE t72 (c0 INT, c3 INT);
+CREATE TABLE t23 (c0 INT AS (1) VIRTUAL, c1 INT, c4 INT);
+INSERT INTO t23 (c1, c4) VALUES (53302558,196),(53302558,196),(286897839,244),(53302558,196),(286897839,244);
+
+explain SELECT (SELECT sum(t72.c0) FROM t72 JOIN t12 ON 1 = t12.c1 GROUP BY t12.c2, t72.c0) FROM LATERAL (SELECT count(*) FROM (SELECT t72.c3 FROM t72) x(x) JOIN ((SELECT 2) UNION (SELECT 1)) y(y) ON TRUE) z(z) JOIN t23 ON ((SELECT 1 FROM t1) UNION (SELECT t23.c0 FROM t72)) = t23.c4;
+
+SELECT (SELECT sum(t72.c0) FROM t72 JOIN t12 ON 1 = t12.c1 GROUP BY t12.c2, t72.c0) FROM LATERAL (SELECT count(*) FROM (SELECT t72.c3 FROM t72) x(x) JOIN ((SELECT 2) UNION (SELECT 1)) y(y) ON TRUE) z(z) JOIN t23 ON ((SELECT 1 FROM t1) UNION (SELECT t23.c0 FROM t72)) = t23.c4;
+
+drop table t1;
+drop table t12;
+drop table t72;
+drop table t23;
+
+# BUG2023040403633
+CREATE TABLE t0 (c0 BIT(58), UNIQUE INDEX i0 (c0));
+CREATE TABLE t1 (c0 INT);
+SELECT 1 FROM (SELECT count(*) FROM (SELECT 1) x(x) JOIN t1 ON TRUE) y(y) LEFT JOIN t0 ON t0.c0 = field(y.y, 'a') JOIN t1 ON TRUE;
+
+drop table t0;
+drop table t1;
+
+--echo # BUG2023041802455 assert fail in PQ - derived condition pushdown of a const subquery
+CREATE TABLE t0 (c0 INT);
+INSERT INTO t0(c0) VALUES (7580965),(-7120991);
+explain format=tree SELECT 1 FROM (SELECT t0.c0 FROM t0 GROUP BY t0.c0) as t11 WHERE CAST(sqrt(sysdate()) AS CHAR(30)) >= ANY(SELECT CAST(X'6F' AS CHAR));
+SELECT 1 FROM (SELECT t0.c0 FROM t0 GROUP BY t0.c0) as t11 WHERE CAST(sqrt(sysdate()) AS CHAR(30)) >= ANY(SELECT CAST(X'6F' AS CHAR));
+drop table if exists t0;
+
+#BUG2023051501836
+
+CREATE TABLE `t13` (
+  `binary_col` binary(11) DEFAULT NULL,
+  `datetime_col` datetime(6) DEFAULT NULL
+);
+
+insert into t13 values(NULL, "1998-09-02 13:20:00.000000");
+insert into t13 values(NULL, "1998-09-02 13:20:00.000000");
+insert into t13 values(NULL, "1998-09-02 13:20:00.000000");
+insert into t13 values(NULL, "1997-09-02 13:20:00.000000");
+insert into t13 values(NULL, "1997-09-02 13:20:00.000000");
+insert into t13 values(NULL, "1997-09-02 13:20:00.000000");
+
+SELECT binary_col, datetime_col FROM t13 where 0=0 xor (binary_col,datetime_col) = (select binary_col,datetime_col from t13 group by 1,2 limit 1) order by 1,2;
+
+drop table t13;
+
+# BUG2023042404381
+CREATE TABLE t0 (c0 INT);
+CREATE TABLE t1 (c0 INT);
+INSERT INTO t1(c0) VALUES (-1109283734),(-1082761962),(-33190510);
+INSERT INTO t0(c0) VALUES (665881),(-1095895);
+CREATE VIEW v0(c0) AS (SELECT 1 FROM t0 tx JOIN t0 ty ON FALSE);
+SELECT 1 FROM t1 WHERE current_date() NOT IN (SELECT v0.c0 FROM v0);
+
+drop view v0;
+drop table t0;
+drop table t1;
+
+# BUG2023042603500
+CREATE TABLE t0 (c1 BIGINT, INDEX i0 (c1));
+CREATE TABLE t1 (c0 BIGINT);
+SELECT (SELECT 1 FROM t0 JOIN t1 ON row_count() = t0.c1) FROM t0;
+
+drop table t0;
+drop table t1;
+
+--echo # BUG2023080801962: fail to attach field to item when copying item CAST('2550-6-24 8:2:36' AS DATETIME)
+--echo # for PQ: Cause SEGV - fix: catch error and retry without PQ
+
+CREATE TABLE t0(z8 DATETIME(6), INDEX i0(z8));
+CREATE VIEW v0(c0) AS (SELECT 1 LIMIT 0);
+EXPLAIN SELECT 1 FROM t0 WHERE (t0.z8, t0.z8) IN (SELECT v0.c0, CAST('2550-6-24 8:2:36' AS DATETIME) FROM v0);
+SELECT 1 FROM t0 WHERE (t0.z8, t0.z8) IN (SELECT v0.c0, CAST('2550-6-24 8:2:36' AS DATETIME) FROM v0);
+
+drop table t0;
+drop view v0;
+## restore OPTIMIZER_SWITCH
+SET @@SESSION.OPTIMIZER_SWITCH = 'default';

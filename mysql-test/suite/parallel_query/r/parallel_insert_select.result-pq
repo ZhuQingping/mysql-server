@@ -1,0 +1,644 @@
+SET @old_innodb_lock_wait_timeout = @@global.innodb_lock_wait_timeout;
+SET @@global.innodb_lock_wait_timeout = 1;
+# -----------------------
+# basic testing 
+# ----------------------
+SET @saved_pq_support_features_switch = @@global.pq_support_features_switch;
+set pq_support_features_switch='insert_select=on';
+create table t0 (a int);
+create table t1 (a int);
+insert into t0 values (1),(2),(3);
+insert into t1 values (1),(2),(3);
+# FOR UPDATE and LOCK IN SHARE MODE disable parallel insert select
+# To run in parallel, INSERT SELECT needs not to acquire row locks on the selected from table
+# because there is no locking logic in PQ and FOR UPDATE and LOCK IN SHARE MODE explicitely 
+# require row locks. 
+explain format=tree insert into t1 select * from t0;
+EXPLAIN
+-> Insert into t1
+    -> Gather: 4 workers, parallel scan on t0  (cost=0.325 rows=3)
+        -> Parallel table scan on t0  (cost=0.325 rows=0.75)
+
+explain format=tree insert into t1 select * from t0 FOR UPDATE;
+EXPLAIN
+-> Insert into t1
+    -> Table scan on t0  (cost=0.55 rows=3)
+
+explain format=tree insert into t1 select * from t0 LOCK IN SHARE MODE;
+EXPLAIN
+-> Insert into t1
+    -> Table scan on t0  (cost=0.55 rows=3)
+
+drop table t0;
+# SELECT ON PK 
+alter table t1 add primary key(a);
+create table t2 ( a int);
+explain format=tree insert into t2 select * from t1;
+EXPLAIN
+-> Insert into t2
+    -> Gather: 4 workers, parallel scan on t1  (...)
+        -> Parallel index scan on t1 using PRIMARY  (...)
+
+insert into t2 select * from t1;
+select * from t2;
+a
+1
+2
+3
+drop table t2;
+# SELECT ON 2nd index
+alter table t1 drop primary key;
+alter table t1 add index(a);
+create table t2 ( a int);
+explain format=tree insert into t2 select * from t1;
+EXPLAIN
+-> Insert into t2
+    -> Gather: 4 workers, parallel scan on t1  (...)
+        -> Parallel index scan on t1 using a  (...)
+
+insert into t2 select * from t1;
+select * from t2;
+a
+1
+2
+3
+drop table t2;
+# Doubles the number of rows everytime we apply the same insert select statement 
+alter table t1 drop index a;
+start transaction;
+insert into t1 select * from t1;
+select count(*) from t1;
+count(*)
+6
+insert into t1 select * from t1;
+select count(*) from t1;
+count(*)
+12
+insert into t1 select * from t1;
+select count(*) from t1;
+count(*)
+24
+rollback;
+# Insert into itself
+explain format=tree insert into t1 select * from t1;
+EXPLAIN
+-> Insert into t1
+    -> Table scan on <temporary>  (...)
+        -> Temporary table  (...)
+            -> Table scan on t1  (...)
+
+start transaction;
+insert into t1 select * from t1;
+select * from t1;
+a
+1
+2
+3
+1
+2
+3
+rollback;
+alter table t1 add primary key(a);
+start transaction;
+explain format=tree insert into t1 select a+10 from t1;
+EXPLAIN
+-> Insert into t1
+    -> Table scan on <temporary>  (...)
+        -> Temporary table  (...)
+            -> Index scan on t1 using PRIMARY  (...)
+
+insert into t1 select a+10 from t1;
+select * from t1;
+a
+1
+2
+3
+11
+12
+13
+rollback;
+alter table t1 drop primary key;
+alter table t1 add index(a);
+explain format=tree insert into t1 select a+10 from t1;
+EXPLAIN
+-> Insert into t1
+    -> Table scan on <temporary>  (...)
+        -> Temporary table  (...)
+            -> Index scan on t1 using a  (...)
+
+insert into t1 select a+10 from t1;
+select * from t1;
+a
+1
+2
+3
+11
+12
+13
+drop table t1;
+# ON DUPLICATE KEY UPDATE
+CREATE TABLE t1 (
+c2 INT, c4 INT,
+c3 VARCHAR(2048), index(c2)) Engine=InnoDB;
+INSERT INTO t1(c2,  c4,c3) VALUES
+(1,1, REPEAT('a', 1024)),
+(2,1, REPEAT('b', 1024)),
+(3,1, REPEAT('c', 1024)),
+(4,1, REPEAT('d', 1024)),
+(5,1, REPEAT('a', 1024));
+create table t2( a int, b int, UNIQUE(a));
+insert into t2 values (1,1),(2,2),(3,3);
+# Non clustered scan 
+explain format=tree insert into t2 select c2,c2 from t1 where c2>4 on DUPLICATE KEY UPDATE b=b+100;
+EXPLAIN
+-> Insert into t2
+    -> Gather: 4 workers, parallel scan on t1  (...)
+        -> Parallel covering index range scan on t1 using c2 over (4 < c2)  (...)
+
+insert into t2 select c2,c2 from t1 where c2>4 on DUPLICATE KEY UPDATE b=b+100;
+# Clustered index scan 
+truncate table t2;
+insert into t2 values (1,1),(2,2),(3,3);
+insert into t2 select c2,c2 from t1 ON DUPLICATE KEY UPDATE b = b +100;
+# ON DUPLICATE KEY UPDATE - INSERT into itself
+drop table  t1,t2;
+CREATE TABLE t1 (
+c2 INT, c4 INT,
+c3 VARCHAR(2048), UNIQUE(c2)) Engine=InnoDB;
+INSERT INTO t1(c2,  c4,c3) VALUES
+(1,1, REPEAT('a', 1024)),
+(2,1, REPEAT('b', 1024)),
+(3,1, REPEAT('c', 1024)),
+(4,1, REPEAT('d', 1024)),
+(5,1, REPEAT('a', 1024));
+SET GLOBAL pq_support_features_switch='insert_select=off';
+# Using connection con1
+start transaction;
+update t1 set c4=10;
+# Using connection con2
+insert into t1 select * from t1 on duplicate key update c4= values(c4)+1;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Using connection con1
+rollback;
+# Using connection default
+# Using connection con1
+start transaction;
+update t1 set c4=10;;
+# Using connection con2
+insert into t1 select * from t1 on duplicate key update c4= values(c4)+1;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Using connection con1
+rollback;
+# Using connection default
+SET GLOBAL pq_support_features_switch='insert_select=on';
+# Using connection con1
+start transaction;
+update t1 set c4=10;
+# Using connection con2
+insert into t1 select * from t1 on duplicate key update c4= values(c4)+1;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Using connection con1
+rollback;
+# Using connection default
+# Using connection con1
+start transaction;
+update t1 set c4=10;;
+# Using connection con2
+insert into t1 select * from t1 on duplicate key update c4= values(c4)+1;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Using connection con1
+rollback;
+# Using connection default
+# Corner case: UPDATE clause with default from select from table
+SET pq_support_features_switch='insert_select=on';
+drop table  t1;
+create table t1 (a int unique);
+create table t2 (b int default 10);
+insert into t1 (a) values (1);
+insert into t2 (b) values (1);
+start transaction;
+explain format=tree insert into t1 (a) select b from t2 on duplicate key update a=default(b);
+EXPLAIN
+-> Insert into t1
+    -> Gather: 4 workers, parallel scan on t2  (...)
+        -> Parallel table scan on t2  (...)
+
+insert into t1 (a) select b from t2 on duplicate key update a=default(b);
+select * from t1;
+a
+10
+rollback;
+SET pq_support_features_switch='insert_select=off';
+explain format=tree insert into t1 (a) select b from t2 on duplicate key update a=default(b);
+EXPLAIN
+-> Insert into t1
+    -> Table scan on t2  (...)
+
+insert into t1 (a) select b from t2 on duplicate key update a=default(b);
+select * from t1;
+a
+10
+drop table t1,t2;
+# -------------
+# Parallel insert select with concurrent DML
+# A: INSERT B: UPDATE C: DELETE
+# --------------------
+# A 
+# Parallel Insert into select with concurrent INSERT 
+# 1: with parallel insert 2: without 
+# They behave the same.
+# ---------------------
+# 1
+SET GLOBAL pq_support_features_switch='insert_select=on';
+create table t1 (a int);
+create table t2 (b int);
+insert into t1 values (1),(3),(5);
+# Using connection con1
+start transaction;
+INSERT INTO t2 SELECT a from t1;
+# Using connection con2
+INSERT INTO t1 values(85);;
+# Using connection con1
+commit;
+# Using connection con2
+# Using connection default
+select * from t1;
+a
+1
+3
+5
+85
+select * from t2;
+b
+1
+3
+5
+drop table t1,t2;
+# 2
+SET GLOBAL pq_support_features_switch='insert_select=off';
+create table t1 (a int);
+create table t2 (b int);
+insert into t1 values (1),(3),(5);
+# Using connection con1
+start transaction;
+INSERT INTO t2 SELECT a from t1;
+# Using connection con2
+INSERT INTO t1 values(85);;
+# Using connection con1
+commit;
+# Using connection con2
+# Using connection default
+select * from t1;
+a
+1
+3
+5
+85
+select * from t2;
+b
+1
+3
+5
+drop table t1,t2;
+# --------------------
+# B
+# Parallel Insert into select with concurrent UPDATE
+# 1: with parallel insert 2: without 
+# They behave the same.
+# ---------------------
+# 1
+SET GLOBAL pq_support_features_switch='insert_select=on';
+create table t1 (a int);
+create table t2 (b int);
+insert into t1 values (1),(3),(5);
+# Using connection con1
+start transaction;
+INSERT INTO t2 SELECT a from t1;
+# Using connection con2
+UPDATE t1 SET a = 85 where a=5;;
+# Using connection con1
+commit;
+# Using connection con2
+# Using connection default
+select * from t1;
+a
+1
+3
+85
+select * from t2;
+b
+1
+3
+5
+drop table t1,t2;
+# 2
+SET GLOBAL pq_support_features_switch='insert_select=off';
+create table t1 (a int);
+create table t2 (b int);
+insert into t1 values (1),(3),(5);
+# Using connection con1
+start transaction;
+INSERT INTO t2 SELECT a from t1;
+# Using connection con2
+UPDATE t1 SET a = 85 where a=5;;
+# Using connection con1
+commit;
+# Using connection con2
+# Using connection default
+select * from t1;
+a
+1
+3
+85
+select * from t2;
+b
+1
+3
+5
+drop table t1,t2;
+# --------------------
+# C
+# Parallel Insert into select with concurrent DELETE
+# 1: with parallel insert 2: without 
+# They behave the same.
+# ---------------------
+# 1
+SET GLOBAL pq_support_features_switch='insert_select=on';
+create table t1 (a int);
+create table t2 (b int);
+insert into t1 values (1),(3),(5);
+# Using connection con1
+start transaction;
+INSERT INTO t2 SELECT a from t1;
+# Using connection con2
+DELETE FROM  t1 where a=5;;
+# Using connection con1
+commit;
+# Using connection con2
+# Using connection default
+select * from t1;
+a
+1
+3
+select * from t2;
+b
+1
+3
+5
+drop table t1,t2;
+# 2
+SET GLOBAL pq_support_features_switch='insert_select=off';
+create table t1 (a int);
+create table t2 (b int);
+insert into t1 values (1),(3),(5);
+# Using connection con1
+start transaction;
+INSERT INTO t2 SELECT a from t1;
+# Using connection con2
+DELETE FROM  t1 where a=5;;
+# Using connection con1
+commit;
+# Using connection con2
+# Using connection default
+select * from t1;
+a
+1
+3
+select * from t2;
+b
+1
+3
+5
+drop table t1,t2;
+# A/ INSERTING INTO table t1 with UNIQUE INDEX from t2 
+# Locks from inserted-into table prevent the insert 
+# 1/a
+SET GLOBAL pq_support_features_switch='insert_select=on';
+CREATE TABLE t1(a INT,  UNIQUE KEY(a));
+CREATE TABLE t2(a int);
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+INSERT INTO t2 values (2),(7),(30),(40),(50);
+# Using connection con1
+start transaction;
+INSERT INTO t1 values (50);
+# Using connection con2
+INSERT INTO t1 select * from t2;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Using connection con1
+rollback;
+# Using connection default
+# 1/b/ 
+# Using connection con1
+start transaction;
+INSERT INTO t1 values (50);
+# Using connection con2
+INSERT INTO t1 select * from t2;;
+# Using connection con1
+commit;
+# Using connection con2
+ERROR 23000: Duplicate entry '50' for key 't1.a'
+# Using connection default
+drop table t1,t2;
+# 2/a (same as 1/a but without parallel insert select)
+SET GLOBAL pq_support_features_switch='insert_select=off';
+CREATE TABLE t1(a INT,  UNIQUE KEY(a));
+CREATE TABLE t2(a int);
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+INSERT INTO t2 values (2),(7),(30),(40),(50);
+# Using connection con1
+start transaction;
+INSERT INTO t1 values (50);
+# Using connection con2
+INSERT INTO t1 select * from t2;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Using connection con1
+rollback;
+# Using connection default
+# 2/b (same as 1/b but without parallel insert select)
+# Using connection con1
+start transaction;
+INSERT INTO t1 values (50);
+# Using connection con2
+INSERT INTO t1 select * from t2;;
+# Using connection con1
+commit;
+# Using connection con2
+ERROR 23000: Duplicate entry '50' for key 't1.a'
+# Using connection default
+drop table t1,t2;
+# B/ INSERTING INTO table t1 into itself with UNIQUE INDEX 
+# Locks from inserted-into table prevent the insert 
+SET GLOBAL pq_support_features_switch='insert_select=on';
+CREATE TABLE t1(a INT,  UNIQUE KEY(a));
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+# Using connection con1
+start transaction;
+INSERT INTO t1 values (85);
+# Using connection con2
+INSERT INTO t1 SELECT a + 50 from t1;;
+# Using connection con1
+commit;
+# Using connection con2
+ERROR 23000: Duplicate entry '85' for key 't1.a'
+# Using connection default
+select * from t1;
+a
+1
+5
+15
+35
+85
+drop table t1;
+SET GLOBAL pq_support_features_switch='insert_select=off';
+CREATE TABLE t1(a INT,  UNIQUE KEY(a));
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+# Using connection con1
+start transaction;
+INSERT INTO t1 values (85);
+# Using connection con2
+INSERT INTO t1 SELECT a + 50 from t1;;
+# Using connection con1
+commit;
+# Using connection con2
+ERROR 23000: Duplicate entry '85' for key 't1.a'
+# Using connection default
+select * from t1;
+a
+1
+5
+15
+35
+85
+# -------------------------
+# session one calls 'INSERT ... SELECT a + 50 ...' to the same table, 
+# Session two tries to inserts 85
+# Session two insert fails because of the duplicate key error.
+# --------------------------
+SET GLOBAL pq_support_features_switch='insert_select=off';
+drop table t1;
+CREATE TABLE t1(a INT,  UNIQUE KEY(a));
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+# Using connection con1
+start transaction;
+INSERT INTO t1 SELECT a + 50 from t1;
+# Using connection con2
+INSERT INTO t1 values(85);;
+# Using connection con1
+commit;
+# Using connection con2
+ERROR 23000: Duplicate entry '85' for key 't1.a'
+# Using connection default
+SET GLOBAL pq_support_features_switch='insert_select=on';
+drop table t1;
+CREATE TABLE t1(a INT,  UNIQUE KEY(a));
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+# Using connection con1
+start transaction;
+INSERT INTO t1 SELECT a + 50 from t1;
+# Using connection con2
+INSERT INTO t1 values(85);;
+# Using connection con1
+commit;
+# Using connection con2
+ERROR 23000: Duplicate entry '85' for key 't1.a'
+# Using connection default
+drop table t1;
+INSERT IGNORE
+CREATE TABLE t0(c0 INT);
+CREATE TABLE t1(c0 INT);
+INSERT INTO t1(c0) VALUES (1);
+CREATE TABLE t2(c0 INT);
+INSERT INTO t2(c0) VALUES (1),(2);
+INSERT IGNORE INTO t1(c0) SELECT (SELECT 1 FROM t2) FROM t0;
+drop table t0,t1,t2;
+INSERT IGNORE locks are released
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+CREATE TABLE t2 (a int);
+SET GLOBAL pq_support_features_switch='insert_select=on';
+# Using connection con1
+start transaction;
+INSERT INTO t1 values (100);
+# Using connection con2
+start transaction;
+INSERT IGNORE INTO t2 select * from t1;
+select * from t2;
+a
+1
+5
+15
+35
+commit;
+# Using connection con1
+commit;
+drop table t1;
+drop table t2;
+# The first table in the table_list in the non-parallel-query JOIN represents the inserted-into table
+# this had to be handled properly in pq code. 
+CREATE TABLE t0(c0 INT);
+CREATE TABLE t1(c0 INT);
+set pq_support_features_switch='insert_select=on';
+explain format=tree INSERT INTO t0 (SELECT (tx.c0) FROM t0 tx);
+EXPLAIN
+-> Insert into t0
+    -> Table scan on <temporary>  (cost=2.96..2.96 rows=1)
+        -> Temporary table  (cost=0.45..0.45 rows=1)
+            -> Table scan on tx  (cost=0.35 rows=1)
+
+INSERT INTO t0 (SELECT (tx.c0) FROM t0 tx);
+# Insert into itself + aggregates is not enabled
+# PQ does not know how to handle the additional temporary table in conjunction with an
+# aggregation.
+explain format=tree INSERT INTO t0 SELECT max(c0) FROM t0;
+EXPLAIN
+-> Insert into t0
+    -> Aggregate: max(t0.c0)  (cost=3.06..3.06 rows=1)
+        -> Table scan on <temporary>  (cost=2.96..2.96 rows=1)
+            -> Temporary table  (cost=0.45..0.45 rows=1)
+                -> Table scan on t0  (cost=0.35 rows=1)
+
+explain format=tree INSERT INTO t0 SELECT min(c0) FROM t0;
+EXPLAIN
+-> Insert into t0
+    -> Aggregate: min(t0.c0)  (cost=3.06..3.06 rows=1)
+        -> Table scan on <temporary>  (cost=2.96..2.96 rows=1)
+            -> Temporary table  (cost=0.45..0.45 rows=1)
+                -> Table scan on t0  (cost=0.35 rows=1)
+
+explain format=tree INSERT INTO t0 SELECT sum(c0) FROM t0;
+EXPLAIN
+-> Insert into t0
+    -> Aggregate: sum(t0.c0)  (cost=3.06..3.06 rows=1)
+        -> Table scan on <temporary>  (cost=2.96..2.96 rows=1)
+            -> Temporary table  (cost=0.45..0.45 rows=1)
+                -> Table scan on t0  (cost=0.35 rows=1)
+
+# SQL_BUFFER_RESULT with aggregation is also disabled for the same reason 
+# as insert into itself with aggregation
+explain format=tree INSERT INTO t1 SELECT SQL_BUFFER_RESULT max(c0) FROM t0;
+EXPLAIN
+-> Insert into t1
+    -> Aggregate: max(t0.c0)  (cost=3.06..3.06 rows=1)
+        -> Table scan on <temporary>  (cost=2.96..2.96 rows=1)
+            -> Temporary table  (cost=0.45..0.45 rows=1)
+                -> Table scan on t0  (cost=0.35 rows=1)
+
+explain format=tree INSERT INTO t1 SELECT SQL_BUFFER_RESULT min(c0) FROM t0;
+EXPLAIN
+-> Insert into t1
+    -> Aggregate: min(t0.c0)  (cost=3.06..3.06 rows=1)
+        -> Table scan on <temporary>  (cost=2.96..2.96 rows=1)
+            -> Temporary table  (cost=0.45..0.45 rows=1)
+                -> Table scan on t0  (cost=0.35 rows=1)
+
+explain format=tree INSERT INTO t1 SELECT SQL_BUFFER_RESULT sum(c0) FROM t0;
+EXPLAIN
+-> Insert into t1
+    -> Aggregate: sum(t0.c0)  (cost=3.06..3.06 rows=1)
+        -> Table scan on <temporary>  (cost=2.96..2.96 rows=1)
+            -> Temporary table  (cost=0.45..0.45 rows=1)
+                -> Table scan on t0  (cost=0.35 rows=1)
+
+drop table t0,t1;
+SET @@global.innodb_lock_wait_timeout = @old_innodb_lock_wait_timeout;
+SET global pq_support_features_switch = @saved_pq_support_features_switch;

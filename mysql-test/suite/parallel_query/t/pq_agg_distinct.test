@@ -1,0 +1,249 @@
+--source include/pq_test.inc
+--source include/elide_costs.inc
+
+SET @saved_pq_support_features_switch = @@session.pq_support_features_switch;
+SET pq_support_features_switch = 'count_distinct=on';
+
+--disable_query_log
+CALL mtr.add_suppression("[Parallel query]*");
+--enable_query_log
+
+CREATE TABLE t1 (a int, b int);
+let $1=64;
+--disable_query_log
+
+while($1)
+{
+  let $2=32;
+	while($2)
+	{
+		eval INSERT INTO t1 VALUES (MOD($1, 23), MOD(133, $2));
+		dec $2;
+	}
+	dec $1;
+}
+
+--enable_query_log
+
+# count(distinct)
+
+let $query = select count(distinct a) from t1;
+let $no_pq_query = select /*+ no_pq */ count(distinct a) from t1;
+--replace_column 10 # 11 #
+eval explain $query;
+--replace_regex $elide_pq_costs_and_time_and_row_estimate
+eval explain analyze $query;
+eval $query;
+eval $no_pq_query;
+
+let $query = select count(distinct a) from t1 group by b;
+let $no_pq_query = select /*+ no_pq */ count(distinct a) from t1 group by b;
+--replace_column 10 # 11 #
+eval explain $query;
+--replace_regex $elide_pq_costs_and_time_and_row_estimate
+eval explain analyze $query;
+eval $query;
+eval $no_pq_query;
+
+drop table t1;
+
+# more than one args in Item_sum_count
+create table t1(n1 int, n2 int, s char(20), vs varchar(20), t text);
+insert into t1 values (1,11, 'one','eleven', 'eleven'),
+ (1,11, 'one','eleven', 'eleven'),
+ (2,11, 'two','eleven', 'eleven'),
+ (2,12, 'two','twevle', 'twelve'),
+ (2,13, 'two','thirteen', 'foo'),
+ (2,13, 'two','thirteen', 'foo'),
+ (2,13, 'two','thirteen', 'bar'),
+ (NULL,13, 'two','thirteen', 'bar'),
+ (2,NULL, 'two','thirteen', 'bar'),
+ (2,13, NULL,'thirteen', 'bar'),
+ (2,13, 'two',NULL, 'bar'),
+ (2,13, 'two','thirteen', NULL);
+
+explain select count(distinct n1,n2) from t1;
+select count(distinct n1,n2) from t1;
+select /*+ no_pq */ count(distinct n1,n2) from t1;
+
+explain select count(distinct n1,s) from t1;
+select count(distinct n1,s) from t1;
+select /*+ no_pq */ count(distinct n1,s) from t1;
+
+explain select count(distinct s,n1,vs) from t1;
+select count(distinct s,n1,vs) from t1;
+select /*+ no_pq */ count(distinct s,n1,vs) from t1;
+
+# text fields does not use pq
+explain select count(distinct s,t) from t1;
+select count(distinct s,t) from t1;
+select /*+ no_pq */ count(distinct s,t) from t1;
+
+# more than one count(distinct) in select_list
+explain select count(distinct n1), count(distinct n2) from t1;
+select count(distinct n1), count(distinct n2) from t1;
+select /*+ no_pq */ count(distinct n1), count(distinct n2) from t1;
+
+# arg's type is varchar
+explain select count(distinct vs) from t1;
+select count(distinct vs) from t1;
+select /*+ no_pq */ count(distinct vs) from t1;
+
+drop table t1;
+
+# tree->is_in_memory() is false. The whole tree is not in memory.
+CREATE TABLE t1 (a INT);
+INSERT INTO t1 VALUES (1),(2),(3),(4),(5),(6),(7),(8);
+INSERT INTO t1 SELECT a+8 FROM t1;
+INSERT INTO t1 SELECT a+16 FROM t1;
+INSERT INTO t1 SELECT a+32 FROM t1;
+INSERT INTO t1 SELECT a+64 FROM t1;
+INSERT INTO t1 VALUE(NULL);
+FLUSH STATUS;
+EXPLAIN SELECT /*+ SET_VAR(tmp_table_size=1024) */ COUNT(DISTINCT a) FROM t1;
+SELECT /*+ SET_VAR(tmp_table_size=1024) */ COUNT(DISTINCT a) FROM t1;
+SELECT /*+ SET_VAR(tmp_table_size=1024) no_pq */ COUNT(DISTINCT a) FROM t1;
+
+# For distinct in worker, not whole tree is in memory.
+set debug="+d,simulate_low_itemsum_ram_limitation";
+EXPLAIN SELECT COUNT(DISTINCT a) FROM t1;
+SELECT COUNT(DISTINCT a) FROM t1;
+SELECT /*+no_pq */ COUNT(DISTINCT a) FROM t1;
+set debug="";
+
+DROP TABLE t1;
+
+# count(distinct) with rollup, Item_sum_count->get_aggr() is nullptr. This can not use pq.
+
+CREATE TABLE t1(
+  product VARCHAR(32),
+  country_id INTEGER NOT NULL,
+  year INTEGER,
+  profit INTEGER
+);
+
+INSERT INTO t1 VALUES ( 'Computer', 2,2000, 1200),
+( 'TV', 1, 1999, 150),
+( 'Calculator', 1, 1999,50),
+( 'Computer', 1, 1999,1500),
+( 'Computer', 1, 2000,1500),
+( 'TV', 1, 2000, 150),
+( 'TV', 2, 2000, 100),
+( 'TV', 2, 2000, 100),
+( 'Calculator', 1, 2000,75),
+( 'Calculator', 2, 2000,75),
+( 'TV', 1, 1999, 100),
+( 'Computer', 1, 1999,1200),
+( 'Computer', 2, 2000,1500),
+( 'Calculator', 2, 2000,75),
+( 'Phone', 3, 2003,10)
+;
+
+EXPLAIN SELECT product, country_id, COUNT(*), COUNT(distinct year) FROM t1 GROUP BY product, country_id WITH ROLLUP;
+SELECT product, country_id, COUNT(*), COUNT(distinct year) FROM t1 GROUP BY product, country_id WITH ROLLUP;
+
+# const_distinct != NOT_CONST and tree is nullptr
+EXPLAIN SELECT product, country_id, COUNT(*), COUNT(distinct 1) FROM t1 GROUP BY product, country_id;
+SELECT product, country_id, COUNT(*), COUNT(distinct 1) FROM t1 GROUP BY product, country_id;
+
+DROP TABLE t1;
+
+# template storage is myisam of Aggregator_distinct and so tree is nullptr, no using pq.
+SET @big_tables_save=@@big_tables;
+SET SESSION big_tables=1;
+create table t1 (s text);
+let $1=5000;
+disable_query_log;
+while ($1)
+{
+ eval insert into t1 values('$1');
+ dec $1;
+}
+enable_query_log;
+flush status;
+explain select count(distinct s) from t1;
+select count(distinct s) from t1;
+show status like 'Created_tmp_disk_tables';
+drop table t1;
+
+CREATE TABLE t1 (a INT PRIMARY KEY);
+INSERT INTO t1 VALUES (1),(2);
+SET SESSION big_tables=1;
+EXPLAIN SELECT COUNT(DISTINCT t1.a) FROM t1,t1 t2 WHERE t1.a = 1;
+SELECT COUNT(DISTINCT t1.a) FROM t1,t1 t2 WHERE t1.a = 1;
+DROP TABLE t1;
+
+SET SESSION big_tables=@big_tables_save;
+
+# crash at assert(field->field->item_sum_ref) in Aggregator_distinct::setup
+CREATE TABLE t1 (a INT, b INT);
+INSERT INTO t1 VALUES (4, 40), (1, 10), (2, 20), (2, 20), (3, 30);
+SELECT (SELECT tt.a FROM t1 tt LIMIT 1) aa, COUNT(DISTINCT b) FROM t1 GROUP BY aa;
+DROP TABLE t1;
+
+# SortingIterator
+
+CREATE TABLE t1 (
+  f1 INTEGER,
+  f2 INTEGER,
+  KEY k1 ( f1 )
+);
+INSERT INTO t1 VALUES ( 1, 1 );
+INSERT INTO t1 VALUES ( 1, 2 );
+INSERT INTO t1 VALUES ( 1, 3 );
+INSERT INTO t1 VALUES ( 2, 1 );
+INSERT INTO t1 VALUES ( 2, 2 );
+INSERT INTO t1 VALUES ( 3, 5 );
+ANALYZE TABLE t1;
+
+EXPLAIN FORMAT=tree SELECT f1, f1 + 1, COUNT(DISTINCT f2) AS x FROM t1 GROUP BY f1 ORDER BY x;
+SELECT COUNT(DISTINCT f2) AS x FROM t1 GROUP BY f1 ORDER BY x;
+SELECT f1, f1 + 1, COUNT(DISTINCT f2) AS x FROM t1 GROUP BY f1 ORDER BY x;
+DROP TABLE t1;
+
+create table t1 (id integer primary key not null auto_increment, gender char(1));
+insert into t1 values (NULL, 'M'), (NULL, 'F'),(NULL, 'F'),(NULL, 'F'),(NULL, 'M');
+create table t2 (user_id integer not null, date date);
+insert into t2 values (1, '2002-06-09'),(2, '2002-06-09'),(1, '2002-06-09'),(3, '2002-06-09'),(4, '2002-06-09'),(4, '2002-06-09');
+explain format=tree select u.gender as gender, count(distinct  u.id) as dist_count, (count(distinct u.id)/5*100) as percentage from t1 u, t2 l where l.user_id = u.id group by u.gender;
+select u.gender as gender, count(distinct  u.id) as dist_count, (count(distinct u.id)/5*100) as percentage from t1 u, t2 l where l.user_id = u.id group by u.gender;
+
+drop table t1, t2;
+
+# count_distinct in having_condition
+create table t1 (id int not null, qty int not null);
+insert into t1 values (1,2),(1,3),(2,4),(2,5);
+explain select sum(qty) as sqty from t1 group by id having count(distinct id) > 0;
+select sum(qty) as sqty from t1 group by id having count(distinct id) > 0;
+drop table t1;
+
+# crash at DBUG_ASSERT(!item->hidden) in Aggregator_distinct::setup
+create table t1(name char(10));
+insert into t1 value('abc3');
+insert into t1 value('abc2');
+insert into t1 value('abc1');
+#TODO: explain result warnings is different.
+explain select /*+ no_pq */ count(distinct name)=3 from t1;
+explain select count(distinct name)=3 from t1;
+select count(distinct name)=3 from t1;
+drop table t1;
+
+# bat_buf memory allocation failed
+CREATE TABLE t1 (
+    id INT PRIMARY KEY,
+    c1 INT,
+    c2 INT
+);
+INSERT INTO t1 (id, c1, c2) VALUES 
+(1, 10, 100),
+(2, 20, 200),
+(3, 30, 300);
+
+SET session debug="+d, bat_buf_is_null";
+--error ER_PARALLEL_QUERY_ERROR
+SELECT COUNT(DISTINCT c1) from t1;
+SET session debug="-d, bat_buf_is_null";
+
+DROP TABLE t1;
+
+SET pq_support_features_switch = @saved_pq_support_features_switch;

@@ -1,0 +1,80 @@
+From eb31ce39214a28173c29a3d976c0021ac56dc515 Mon Sep 17 00:00:00 2001
+From: Sven Sandberg <sven.sandberg@oracle.com>
+Date: Fri, 31 Jan 2025 14:21:20 +0100
+Subject: [PATCH] US2026033100141 BUG#37543598: Do not truncate long function
+ names in demangled stack traces
+
+* Background
+
+The server comes with its own stack trace printer, which produces a
+stack trace when the server crashes.
+
+* Problem
+
+In case a stack entry including the demangled function name exceeds
+512 bytes, it gets truncated.  It does not even print the newline, so
+multiple truncated stack entries appear concatenated on the same
+output line. This makes the stack incomplete and hard to read.
+
+* Analysis
+
+The stack trace printer uses a home-grown simplified version of printf
+to print each line. This function has an internal buffer of 512 bytes.
+
+* Fix
+
+Use the home-grown printf function only to print numbers and
+delimiters which are short. For any any potentially long strings -
+filenames and demangled functions - write them directly to the output.
+
+Change-Id: Iec3f30c8feb929e9c3096fcc395d82d2ad7d415f
+(cherry picked from commit 65d7d86b35b9bbfaad871a033fce0759594bdffc)
+---
+ mysys/stacktrace.cc | 16 ++++++++++------
+ 1 file changed, 10 insertions(+), 6 deletions(-)
+
+diff --git a/mysys/stacktrace.cc b/mysys/stacktrace.cc
+index 7a87386e8fc..cab14c4419e 100644
+--- a/mysys/stacktrace.cc
++++ b/mysys/stacktrace.cc
+@@ -196,6 +196,10 @@ void my_safe_puts_stderr(const char *val, size_t max_len) {
+ }
+ 
+ #ifdef HAVE_EXT_BACKTRACE
++static size_t my_write_stderr(const std::string_view &sv) {
++  return my_write_stderr(std::data(sv), std::size(sv));
++}
++
+ void my_print_stacktrace(const uchar *stack_bottom, ulong thread_stack) {
+   my_safe_printf_stderr("stack_bottom = %p thread_stack 0x%lx\n", stack_bottom,
+                         thread_stack);
+@@ -206,6 +210,8 @@ void my_print_stacktrace(const uchar *stack_bottom, ulong thread_stack) {
+   auto print_callback = [](void *cookie, uintptr_t pc, const char *filename,
+                            int lineno, const char *function) {
+     auto idx = static_cast<cookie_t *>(cookie)->index++;
++    my_safe_printf_stderr(" #%d 0x%lx ", idx, (unsigned long)pc);
++    my_write_stderr(function == nullptr ? "<unknown>" : function);
+     if (filename != nullptr) {
+       std::string_view filename_sv{filename};
+       constexpr std::string_view parent_dir{"../"};
+@@ -218,13 +224,11 @@ void my_print_stacktrace(const uchar *stack_bottom, ulong thread_stack) {
+           pos != std::string_view::npos) {
+         filename_sv.remove_prefix(pos + std::size(mysql_dir));
+       }
+-      my_safe_printf_stderr(" #%d 0x%lx %s at %s:%d\n", idx, (unsigned long)pc,
+-                            function == nullptr ? "<unknown>" : function,
+-                            std::data(filename_sv), lineno);
+-    } else {
+-      my_safe_printf_stderr(" #%d 0x%lx %s\n", idx, (unsigned long)pc,
+-                            function == nullptr ? "<unknown>" : function);
++      my_write_stderr(" at ");
++      my_write_stderr(filename_sv);
++      my_safe_printf_stderr(":%d", lineno);
+     }
++    my_write_stderr("\n");
+ 
+     return 0;
+   };
+-- 
+2.23.0
+

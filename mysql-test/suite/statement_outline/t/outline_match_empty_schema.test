@@ -1,0 +1,77 @@
+set global rds_opt_outline_enabled = ON;
+
+# Test index outline for matching empty schema outline.
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+call dbms_outln.show_outline();
+
+create database outline_test;
+use outline_test;
+create table t1(id int, a int, b int, key idx1(a), key idx2(b));
+create table t2(id int, a int, b int, key idx1(a), key idx2(b));
+
+call dbms_outln.add_index_outline("","",1,"FORCE INDEX","idx1","","select id from outline_test.t1 where a = 1");
+call dbms_outln.add_index_outline("outline_test","",1,"FORCE INDEX","idx1","","select id from outline_test.t1 where a = 1");
+call dbms_outln.add_index_outline("test","",1,"USE INDEX","idx1","","select id from outline_test.t1 where a = 1");
+call dbms_outln.show_outline();
+
+call dbms_outln.preview_outline("", "select id from outline_test.t1 where a = 1");
+call dbms_outln.preview_outline("outline_test", "select id from outline_test.t1 where a = 1");
+call dbms_outln.preview_outline("test", "select id from outline_test.t1 where a = 1");
+
+--connect(con1,localhost,root,,*NO-ONE*)
+connection con1;
+--replace_column 10 # 11 #
+explain select id from outline_test.t1 where a = 1;
+
+--connect(con2,localhost,root,,outline_test)
+connection con2;
+--replace_column 10 # 11 #
+explain select id from outline_test.t1 where a = 1;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+# Test optimizer_outline for matching empty schema outline.
+create database outline_db;
+use outline_db;
+create table t1 (a int, key ind_1(a)) engine=Dstore;
+create table t2 (a int, key ind_1(a)) engine=Dstore;
+create table t3 (a int, key ind_1(a)) engine=Dstore;
+insert into t1 values (1),(2),(3),(4);
+insert into t2 values (10),(20),(30),(40);
+insert into t3 values (1),(2),(10),(50);
+
+call dbms_outln.add_optimizer_outline('outline_db', '', 1, '/*+ MAX_EXECUTION_TIME(1000) */', "select a from outline_db.t3 where outline_db.t3.a in (select a from outline_db.t1 where a <= 3 union select * from outline_db.t2 where a <= 30)");
+call dbms_outln.add_optimizer_outline('', '', 3, '/*+ INDEX(t2 ind_1) */', "select a from outline_db.t3 where outline_db.t3.a in (select a from outline_db.t1 where a <= 3 union select * from outline_db.t2 where a <= 30)");
+call dbms_outln.show_outline();
+
+call dbms_outln.preview_outline('outline_db', "select a from outline_db.t3 where outline_db.t3.a in (select a from outline_db.t1 where a <= 3 union select * from outline_db.t2 where a <= 30)");
+
+--connect(con1,localhost,root,,*NO-ONE*)
+connection con1;
+
+--replace_column 10 # 11 #
+explain select a from outline_db.t3 where outline_db.t3.a in (select a from outline_db.t1 where a <= 3 union select * from outline_db.t2 where a <= 30);
+
+--connect(con2,localhost,root,,outline_db)
+connection con2;
+
+--replace_column 10 # 11 #
+explain select a from outline_db.t3 where outline_db.t3.a in (select a from outline_db.t1 where a <= 3 union select * from outline_db.t2 where a <= 30);
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+--let $restart_parameters = restart:
+--source include/restart_mysqld.inc
+
+call dbms_outln.show_outline();
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+
+drop database outline_db;
+drop database outline_test;
+

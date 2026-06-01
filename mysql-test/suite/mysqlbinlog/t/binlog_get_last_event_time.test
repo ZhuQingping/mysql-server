@@ -1,0 +1,55 @@
+#########################Test preparation#####################################
+
+--source include/have_log_bin.inc
+#--disable_query_log
+--disable_warnings
+let $result_file=get_last_time_result_file;
+let $no_exist_binlog=no_exist_binlog_file;
+--exec rm -rf $result_file
+SET @a=UNIX_TIMESTAMP("2022-01-21 08:00:00");
+SET timestamp=@a;
+RESET MASTER;
+
+let $data_dir=query_get_value(SHOW VARIABLES LIKE 'datadir',Value,1);
+let $binlog_name=query_get_value(SHOW MASTER STATUS,File,1);
+DROP DATABASE IF EXISTS mtest;
+CREATE DATABASE mtest;
+--enable_warnings
+#########################Test execution#######################################
+USE mtest;
+let $binlog_name=query_get_value(SHOW MASTER STATUS,File,1);
+CREATE TABLE test1(p0 INT,p1 CHAR(10))engine=innodb;
+SET timestamp=@a+2;
+INSERT INTO test1 VALUES(1,'aaa');
+BEGIN;
+SET timestamp=@a+6;
+INSERT INTO test1 VALUES(2,'bbb');
+SET timestamp=@a+4;
+COMMIT;
+SET timestamp=@a+3;
+FLUSH LOGS;
+let $binlog_name2=query_get_value(SHOW MASTER STATUS,File,1);
+FLUSH LOGS;
+
+--exec $MYSQL_BINLOG --get-last-event-time $data_dir$binlog_name
+
+--exec $MYSQL_BINLOG --get-last-event-time -r $result_file $data_dir$binlog_name
+--exec cat $result_file
+
+--exec $MYSQL_BINLOG --get-last-event-time --stop-position=1102 $data_dir$binlog_name
+--exec $MYSQL_BINLOG --get-last-event-time --stop-position=1103 $data_dir$binlog_name
+--exec $MYSQL_BINLOG --get-last-event-time --stop-position=1118 $data_dir$binlog_name
+--exec $MYSQL_BINLOG --get-last-event-time --stop-position=1118 -r $result_file $data_dir$binlog_name
+--exec cat $result_file
+--exec echo "error" >> $data_dir$binlog_name
+--error 1
+--exec $MYSQL_BINLOG --get-last-event-time $data_dir$binlog_name
+--error 1
+--exec $MYSQL_BINLOG --get-last-event-time $data_dir$no_exist_binlog
+--error 1
+--exec $MYSQL_BINLOG --get-last-event-time $data_dir$binlog_name2
+
+#########################Clean up the environment#############################
+DROP DATABASE mtest;
+--exec rm -rf $result_file
+

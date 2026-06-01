@@ -1,0 +1,121 @@
+From 3097bf82c474fe65804565e3d919446f998dd27b Mon Sep 17 00:00:00 2001
+From: zhangzhiqiang <zhangzhiqiang40@contributor>
+
+
+Date: Thu, 18 Sep 2025 10:42:25 +0800
+Subject: [PATCH] BUGFIX In high-concurrency scenarios, m_cur_concur
+ may be reduced to ULONG_MAX
+
+Issue
+------
+Because dbms_sqlfilter.flush_sql_filter() will set m_cur_concur to zero,
+in high-concurrency scenarios, m_cur_concur may be reduced to ULONG_MAX.
+
+Solution
+------
+Before performing the decrement operation on the atomic variable m_cur_concur,
+check whether the value of m_cur_concur is greater than 0.
+---
+ .../sql_filter/r/sqlfilter_concurrency.result | 21 ++++++++++++++
+ .../sql_filter/t/sqlfilter_concurrency.test   | 28 +++++++++++++++++++
+ sql/sql_filter/sql_filter_cache.cc            | 12 +++++++-
+ 3 files changed, 60 insertions(+), 1 deletion(-)
+
+diff --git a/mysql-test/suite/sql_filter/r/sqlfilter_concurrency.result b/mysql-test/suite/sql_filter/r/sqlfilter_concurrency.result
+index 6708fa99063..abc9f7998ad 100644
+--- a/mysql-test/suite/sql_filter/r/sqlfilter_concurrency.result
++++ b/mysql-test/suite/sql_filter/r/sqlfilter_concurrency.result
+@@ -308,6 +308,27 @@ call delete_one_sql_filter_rule(0);
+ call delete_one_sql_filter_rule(0);
+ call dbms_sqlfilter.show_sql_filter();
+ item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
++#
++# dbms_sqlfilter.flush_sql_filter() will set m_cur_concur to zero
++# in high-concurrency scenarios, m_cur_concur may be reduced to ULONG_MAX
++call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~FROM","");
++call dbms_sqlfilter.add_sql_filter('SELECT',1,"SELECT~FROM","");
++SET DEBUG_SYNC= 'before_reduce_sqlfilter_item_concurrency WAIT_FOR go';
++select * from t24;;
++select sleep(1);
++sleep(1)
++0
++call delete_one_sql_filter_rule(0);
++call dbms_sqlfilter.flush_sql_filter();
++SET DEBUG_SYNC= 'now SIGNAL go';
++id
++1
++call dbms_sqlfilter.show_sql_filter();
++item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
++#	SELECT	0	1	2	0	SELECT~FROM	
++call delete_one_sql_filter_rule(0);
++call dbms_sqlfilter.show_sql_filter();
++item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+ SET GLOBAL rds_sqlfilter_control=default;
+ drop table t24;
+ DROP PROCEDURE delete_one_sql_filter_rule;
+diff --git a/mysql-test/suite/sql_filter/t/sqlfilter_concurrency.test b/mysql-test/suite/sql_filter/t/sqlfilter_concurrency.test
+index d446ecb4bff..3ab2a67c585 100644
+--- a/mysql-test/suite/sql_filter/t/sqlfilter_concurrency.test
++++ b/mysql-test/suite/sql_filter/t/sqlfilter_concurrency.test
+@@ -786,6 +786,34 @@ call delete_one_sql_filter_rule(0);
+ call delete_one_sql_filter_rule(0);
+ call dbms_sqlfilter.show_sql_filter();
+ 
++--echo #
++--echo # dbms_sqlfilter.flush_sql_filter() will set m_cur_concur to zero
++--echo # in high-concurrency scenarios, m_cur_concur may be reduced to ULONG_MAX
++connection default;
++call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~FROM","");
++call dbms_sqlfilter.add_sql_filter('SELECT',1,"SELECT~FROM","");
++
++connection con1;
++SET DEBUG_SYNC= 'before_reduce_sqlfilter_item_concurrency WAIT_FOR go';
++--send select * from t24;
++
++connection default;
++select sleep(1);
++call delete_one_sql_filter_rule(0);
++
++call dbms_sqlfilter.flush_sql_filter();
++SET DEBUG_SYNC= 'now SIGNAL go';
++
++connection con1;
++--reap
++
++connection default;
++--replace_column 1 #
++call dbms_sqlfilter.show_sql_filter();
++
++call delete_one_sql_filter_rule(0);
++call dbms_sqlfilter.show_sql_filter();
++
+ SET GLOBAL rds_sqlfilter_control=default;
+ drop table t24;
+ --source ../include/sqlfilter_cleanup.inc
+diff --git a/sql/sql_filter/sql_filter_cache.cc b/sql/sql_filter/sql_filter_cache.cc
+index fd96769b1a6..12d6a6219b3 100644
+--- a/sql/sql_filter/sql_filter_cache.cc
++++ b/sql/sql_filter/sql_filter_cache.cc
+@@ -442,8 +442,18 @@ void System_sql_filter::dec_filter_item_conc(THD *thd) {
+     DEBUG_SYNC_C("dec_sql_filter_after_map_lock");
+ 
+     auto it = m_rule_map[type]->find(thd->filter_id);
++    // dbms_sqlfilter.flush_sql_filter() will set m_cur_concur to zero, in
++    // high-concurrency scenarios, m_cur_concur may be reduced to ULONG_MAX.
+     if (it != m_rule_map[type]->end()) {
+-      it->second->m_cur_concur.fetch_sub(1, std::memory_order_release);
++      auto &concur = it->second->m_cur_concur;
++      auto store_val = concur.load(std::memory_order_relaxed);
++      while (store_val > 0) {
++        if (concur.compare_exchange_weak(store_val, store_val - 1,
++                                         std::memory_order_release,
++                                         std::memory_order_relaxed)) {
++          break;
++        }
++      }
+     }
+   }
+ 
+-- 
+2.23.0
+

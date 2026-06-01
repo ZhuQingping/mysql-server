@@ -1,0 +1,33 @@
+# restart
+create database pq_test;
+use pq_test;
+CREATE TABLE `t2` (
+`id` int(11) NOT NULL AUTO_INCREMENT,
+`a` int(11) DEFAULT NULL,
+`b` int(11) DEFAULT NULL,
+`c` varchar(100) DEFAULT NULL,
+`d` varchar(100) DEFAULT NULL,
+PRIMARY KEY (`id`),
+KEY `idx_abc` (`a`,`b`,`c`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+ANALYZE TABLE t2;
+Table	Op	Msg_type	Msg_text
+pq_test.t2	analyze	status	OK
+SET debug_sync = "pq_init_01 WAIT_FOR deleted";
+select /*+PQ(1)*/ * from t2 order by id desc;
+use pq_test;
+select sleep(5);
+delete from t2 where id > 8000;
+select sleep(100);
+SET debug_sync = "now SIGNAL deleted";
+SET debug_sync = "pq_init_01 WAIT_FOR deleted";
+select /*+PQ(1)*/ * from t2 order by id desc;
+use pq_test;
+select sleep(50);
+SET debug_sync = "now SIGNAL deleted";
+drop table t2;
+drop database pq_test;

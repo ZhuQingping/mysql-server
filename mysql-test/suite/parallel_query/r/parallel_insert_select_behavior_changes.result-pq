@@ -1,0 +1,273 @@
+SET @old_innodb_lock_wait_timeout = @@global.innodb_lock_wait_timeout;
+SET @@global.innodb_lock_wait_timeout = 1;
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+CREATE TABLE t2 (a int);
+# -------------------------
+# Behavior difference 1
+# If pq_support_features_switch insert_select is on, there aren't any locks placed on t1 when doing an 
+# INSERT INTO SELECT from table t1, which means that it is possible to update t1 in another transaction
+# which is not possible initially because of the locks on t1. In addition, while SELECT * FROM t1 will fetch the 
+# snapshot from the start of the transaction in the first connection. SELECT * FROM t1 LOCK IN SHARE MODE will
+# however fetch the freshest snapshot of t1 and will show the updated row.
+SET @saved_pq_support_features_switch = @@global.pq_support_features_switch;
+set GLOBAL pq_support_features_switch='insert_select=on';
+# Using connection con1
+start transaction;
+INSERT INTO t2 SELECT * from t1;
+# Using connection con2
+start transaction;
+UPDATE t1 SET a = 300 WHERE a = 1;
+commit;
+# Using connection con1
+SELECT * FROM t1;
+a
+1
+5
+15
+35
+SELECT * FROM t1 LOCK IN SHARE MODE;
+a
+300
+5
+15
+35
+commit;
+# ---------------------------
+# BEHAVIOR DIFFERENCE 2
+# With locks on the selected-from table, INSERT SELECT must wait until UPDATE,INSERT and DELETE
+# statements on the selected-from table are done. Without locks (
+# INSERT INTO SELECT does not need to wait anymore. 
+# a/ INSERT 
+drop table t2;
+drop table t1;
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+CREATE TABLE t2 (a int);
+# Using connection con1
+start transaction;
+INSERT INTO t1 values (100);
+# Using connection con2
+start transaction;
+INSERT INTO t2 select * from t1;
+select * from t2;
+a
+1
+5
+15
+35
+commit;
+# Using connection con1
+commit;
+drop table t1;
+drop table t2;
+CREATE TABLE t2 (a int);
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+set GLOBAL pq_support_features_switch='insert_select=off';
+# Using connection con1
+start transaction;
+INSERT INTO t1 values (100);
+# Using connection con2
+start transaction;
+INSERT INTO t2 select * from t1;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+select * from t2;
+a
+commit;
+# Using connection con1
+commit;
+drop table t1,t2;
+# a/ UPDATE
+# without locks
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+CREATE TABLE t2 (a int);
+SET GLOBAL pq_support_features_switch='insert_select=on';
+# Using connection con1
+start transaction;
+UPDATE t1 set a = 123 where a =35;
+# Using connection con2
+start transaction;
+INSERT INTO t2 select * from t1;
+select * from t2;
+a
+1
+5
+15
+35
+commit;
+# Using connection con1
+commit;
+# with locks
+drop table t1;
+drop table t2;
+CREATE TABLE t2 (a int);
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+SET GLOBAL pq_support_features_switch='insert_select=off';
+# Using connection con1
+start transaction;
+UPDATE t1 set a = 123 where a =35;
+# Using connection con2
+start transaction;
+INSERT INTO t2 select * from t1;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+select * from t2;
+a
+commit;
+# Using connection con1
+commit;
+drop table t1,t2;
+# a/ DELETE
+# without locks
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+CREATE TABLE t2 (a int);
+SET GLOBAL pq_support_features_switch='insert_select=on';
+# Using connection con1
+start transaction;
+DELETE FROM t1 where a =35;
+# Using connection con2
+start transaction;
+INSERT INTO t2 select * from t1;
+select * from t2;
+a
+1
+5
+15
+35
+commit;
+# Using connection con1
+commit;
+# with locks
+drop table t1;
+drop table t2;
+CREATE TABLE t2 (a int);
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+SET GLOBAL pq_support_features_switch='insert_select=off';
+# Using connection con1
+start transaction;
+DELETE FROM t1 where a =35;
+# Using connection con2
+start transaction;
+INSERT INTO t2 select * from t1;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+select * from t2;
+a
+commit;
+# Using connection con1
+commit;
+drop table t1,t2;
+# ------------------------
+# Behavior difference 3
+# with pq_support_features_switch insert_select = off
+# Table has 1, 10, 30, unique key on this column.
+# 1. con1 inserts 15, and con2 does INSERT INTO t1 SELECT a * 2 FROM t1;
+# 2. Then con2 has to wait and it sees 15, and finally, duplicate key error.
+# However, with pq_support_features_switch insert_select = off,
+# con2 will only read 1, 10, 30 because it does not have to wait for the locks on t1 to be release by con1,
+# and insert 2, 20, 60, no duplicate key.
+# We use DEBUG_SYNC so that the tests are stable.
+# -------------------------
+SET GLOBAL pq_support_features_switch='insert_select=off';
+create table t1 ( a int , UNIQUE KEY(a));
+insert into t1 values (1),(10),(30);
+# Using connection con1
+start transaction;
+INSERT INTO t1 values (15);
+# Using connection con2
+INSERT INTO t1 SELECT a*2 from t1;;
+# Using connection con1
+commit;
+# Using connection con2
+ERROR 23000: Duplicate entry '30' for key 't1.a'
+SET GLOBAL pq_support_features_switch='insert_select=on';
+drop table t1;
+create table t1 ( a int , UNIQUE KEY(a));
+insert into t1 values (1),(10),(30);
+# Using connection con1
+start transaction;
+# We do not want con1 to commit before con2 has had time to do SELECT
+SET debug_sync = 'after_inserting WAIT_FOR done_tmp_insert_select';
+INSERT INTO t1 values (15);
+# Using connection con2
+# con1 can commit after we have assembled the temporary table
+SET debug_sync = 'Iterator_read SIGNAL done_tmp_insert_select';
+INSERT INTO t1 SELECT a*2 from t1;
+# Using connection con1
+commit;
+# Using connection con2
+# 15 is inserted - and 15*2 not inserted - insert select does not see 15.
+select * from t1;
+a
+1
+2
+10
+15
+20
+30
+60
+drop table t1;
+# -----------------------
+# Behavior difference 4
+# With pq_support_features_switch insert_select is on
+# con1 starts inserting 85 into t1
+# con2 does INSERT INTO t1 SELECT ... FROM t1 and stops after the temporary table is filled
+# but before the INSERT requires locks on t1
+# con1 commits
+# con2 now starts inserting, tries inserting 85, realises it's been inserted by t1 and has to rollback 
+# If con2 has already inserted a lot of rows into t1 by the point it tries inserting 85 - the rollback is going 
+# to be heavy
+# With pq_support_features_switch insert_select is off
+# con2 has to wait until con1 commits the INSERT - no heavy rollback
+# ----------------------
+SET GLOBAL pq_support_features_switch='insert_select=on';
+CREATE TABLE t1(a INT,  UNIQUE KEY(a));
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+# Using connection con1
+start transaction;
+INSERT INTO t1 values (85);
+# Using connection con2
+start transaction;
+SET debug_sync = 'Iterator_read WAIT_FOR done_insert';
+INSERT INTO t1 SELECT a + 50 from t1;
+# Using connection con1
+commit;
+SET debug_sync='now SIGNAL done_insert';
+# Using connection con2
+ERROR 23000: Duplicate entry '85' for key 't1.a'
+commit;
+select * from t1;
+a
+1
+5
+15
+35
+85
+drop table t1;
+SET GLOBAL pq_support_features_switch='insert_select=off';
+CREATE TABLE t1(a INT,  UNIQUE KEY(a));
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+# Using connection con1
+start transaction;
+INSERT INTO t1 values (85);
+# Using connection con2
+start transaction;
+INSERT INTO t1 SELECT a + 50 from t1;
+ERROR HY000: Lock wait timeout exceeded; try restarting transaction
+# Using connection con1
+commit;
+# Using connection con2
+commit;
+select * from t1;
+a
+1
+5
+15
+35
+85
+drop table t1;
+SET @@global.innodb_lock_wait_timeout = @old_innodb_lock_wait_timeout;
+SET global pq_support_features_switch = @saved_pq_support_features_switch;

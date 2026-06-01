@@ -1,0 +1,744 @@
+# FE2025032900033 convert COUNT(col) to COUNT(*) if "col" is not nullable
+create table t1(a int not null, b int, index(b));
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  KEY `b` (`b`)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+insert into t1 values (1,1),(2,2),(3,3),(5,3),(8,3),(4,-1);
+analyze table t1 update histogram on b;
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'b'.
+analyze table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+create view v1 as select a,a+1 as c,b from t1;
+# First the feature is off, then it is on. There are two things to observe in the "on" case, in EXPLAIN output:
+# - the rewrite to count(0), in the 'Note' line
+# - the "using index", which appears for most queries. Those for which it does not appear, have a good reason:
+# even after the simplification to count(0) there remains reasons why the index on 'b' is not enough (see comments
+# further down).
+set optimizer_switch='simplify_count_not_null=off';
+select @@optimizer_switch like '%simplify_count_not_null=on%' as simplify_count_not_null;
+simplify_count_not_null
+0
+# Optimal case, using index only
+explain select count(*) from t1 where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(*)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+# same
+explain select count(0) from t1 where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(0)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+# this demonstrates the basic case for the feature: without/with the feature, a covering index is used or not.
+explain select count(a) from t1 where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+select count(a) from t1 where b>1;
+count(a)
+4
+# we see the rewriting is done, and only on "count(a)". But as "count(distinct a)" is used, not "using index".
+explain select count(a), count(distinct a), count(b), sum(a), count(a+1) from t1 where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)`,count(distinct `test`.`t1`.`a`) AS `count(distinct a)`,count(`test`.`t1`.`b`) AS `count(b)`,sum(`test`.`t1`.`a`) AS `sum(a)`,count((`test`.`t1`.`a` + 1)) AS `count(a+1)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+select count(a), count(distinct a), count(b), sum(a), count(a+1) from t1 where b>1;
+count(a)	count(distinct a)	count(b)	sum(a)	count(a+1)
+4	4	4	18	4
+# these two show the difference between inner join and left join: on the right side of the latter, columns become nullable.
+explain select count(t1.a), count(t2.a) from t1, t1 as t2 where t1.b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(t1.a)`,count(`test`.`t2`.`a`) AS `count(t2.a)` from `test`.`t1` join `test`.`t1` `t2` where (`test`.`t1`.`b` > 1)
+select count(t1.a), count(t2.a) from t1, t1 as t2 where t1.b>1;
+count(t1.a)	count(t2.a)
+24	24
+explain select count(t1.a), count(t2.a) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(t1.a)`,count(`test`.`t2`.`a`) AS `count(t2.a)` from `test`.`t1` left join `test`.`t1` `t2` on((`test`.`t1`.`b` >= 3)) where (`test`.`t1`.`b` > 1)
+select count(t1.a), count(t2.a) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
+count(t1.a)	count(t2.a)
+19	18
+# see the difference between the counts
+explain select count(t1.a), count(t2.a), count(*) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(t1.a)`,count(`test`.`t2`.`a`) AS `count(t2.a)`,count(0) AS `count(*)` from `test`.`t1` left join `test`.`t1` `t2` on((`test`.`t1`.`b` >= 3)) where (`test`.`t1`.`b` > 1)
+select count(t1.a), count(t2.a), count(*) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
+count(t1.a)	count(t2.a)	count(*)
+19	18	19
+# a slightly more complicated case
+explain select count(t2.a), count(t1.a), count(t3.a) from t1 left join (t1 as t2, t1 as t3) on t1.b>=3 where t1.b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where; Using join buffer (hash join)
+1	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t2`.`a`) AS `count(t2.a)`,count(`test`.`t1`.`a`) AS `count(t1.a)`,count(`test`.`t3`.`a`) AS `count(t3.a)` from `test`.`t1` left join (`test`.`t1` `t2` join `test`.`t1` `t3`) on((`test`.`t1`.`b` >= 3)) where (`test`.`t1`.`b` > 1)
+select count(t2.a), count(t1.a), count(t3.a) from t1 left join (t1 as t2, t1 as t3) on t1.b>=3 where t1.b>1;
+count(t2.a)	count(t1.a)	count(t3.a)
+108	109	108
+# the feature works on merged views' columns too
+explain select count(a), count(c), count(b) from v1 where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)`,count((`test`.`t1`.`a` + 1)) AS `count(c)`,count(`test`.`t1`.`b`) AS `count(b)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+select count(a), count(c), count(b) from v1 where b>1;
+count(a)	count(c)	count(b)
+4	4	4
+# and also if the view is materialized: the tmp table's have proper (non-)nullability so we can use this information, and rewrite. No "using index" though, which is understandable: MySQL has not created any index on the tmp table.
+explain select /*+ no_merge() */ count(a), count(c), count(b) from v1 where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	NULL
+2	DERIVED	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select /*+ NO_MERGE(@`select#1`) */ count(`test`.`v1`.`a`) AS `count(a)`,count(`test`.`v1`.`c`) AS `count(c)`,count(`test`.`v1`.`b`) AS `count(b)` from `test`.`v1`
+select /*+ no_merge() */ count(a), count(c), count(b) from v1 where b>1;
+count(a)	count(c)	count(b)
+4	4	4
+# same, with derived tables
+explain select count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)`,count((`test`.`t1`.`a` + 1)) AS `count(c)`,count(`test`.`t1`.`b`) AS `count(b)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+select count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
+count(a)	count(c)	count(b)
+4	4	4
+explain select /*+ no_merge() */ count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	NULL
+2	DERIVED	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select /*+ NO_MERGE(@`select#1`) */ count(`dt`.`a`) AS `count(a)`,count(`dt`.`c`) AS `count(c)`,count(`dt`.`b`) AS `count(b)` from (/* select#2 */ select `test`.`t1`.`a` AS `a`,(`test`.`t1`.`a` + 1) AS `c`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 1)) `dt`
+select /*+ no_merge() */ count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
+count(a)	count(c)	count(b)
+4	4	4
+# GROUP BY
+explain select b, count(a) from t1 where b>1 group by b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b`
+select b, count(a) from t1 where b>1 group by b;
+b	count(a)
+2	1
+3	3
+# outer reference. Here the feature brings nothing, because in the subquery ext.a is a constant, so even without any rewriting we have "using index" in the subquery. Alas we do not have "using index" in the top query (see comment in Item_sum_count::fix_fields() for an explanation).
+# However, note that the rewriting happens *after* deciding of where aggregation happens, so we get an error here (aggregation in top query), while we do not get an error if the user has written count(0) (aggregation in subquery), and each time this is proper behaviour.
+explain select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	Using aggregate
+2	DEPENDENT SUBQUERY	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+Warnings:
+Note	1276	Field or reference 'test.ext.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select (/* select#2 */ select count(`test`.`ext`.`a`) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1)
+select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
+ERROR 21000: Subquery returns more than 1 row
+explain select (select count(0) from t1 where t1.b>1) from t1 as ext where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	Using index
+2	SUBQUERY	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select (/* select#2 */ select count(0) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(0) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1)
+select (select count(0) from t1 where t1.b>1) from t1 as ext where b>1;
+(select count(0) from t1 where t1.b>1)
+4
+4
+4
+4
+# As a consequence, such rewriting must not be done while creating a view (but it can be done when reading from this view), otherwise, the query's meaning would change.
+create view v2 as select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
+# Not done when creating:
+show create view v2;
+View	Create View	character_set_client	collation_connection
+v2	CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `v2` AS select (select count(`ext`.`a`) from `t1` where (`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `t1` `ext` where (`ext`.`b` > 1)	utf8mb4	utf8mb4_0900_ai_ci
+# Done when reading:
+set optimizer_trace='enabled=on';
+select * from v2;
+ERROR 21000: Subquery returns more than 1 row
+# The rewriting happened above ; it cannot be seen in EXPLAIN (which would fail with ER_SUBQUERY_NO_1_ROW because the view is single-row so materialized during EXPLAIN) but it can be seen in the optimizer trace:
+select trace like '% count(0) %' from information_schema.optimizer_trace;
+trace like '% count(0) %'
+0
+set optimizer_trace=default;
+drop view v2;
+# GROUP BY and outer reference
+explain select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	Using aggregate
+2	DEPENDENT SUBQUERY	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+Warnings:
+Note	1276	Field or reference 'test.ext.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select (/* select#2 */ select count(`test`.`ext`.`a`) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1) group by `test`.`ext`.`b`
+select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
+ERROR 21000: Subquery returns more than 1 row
+explain select b,(select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	Using aggregate
+2	DEPENDENT SUBQUERY	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+Warnings:
+Note	1276	Field or reference 'test.ext.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`ext`.`b` AS `b`,(/* select#2 */ select count(`test`.`ext`.`a`) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1) group by `test`.`ext`.`b`
+select b,(select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
+ERROR 21000: Subquery returns more than 1 row
+# HAVING
+explain select b from t1 where b>1 group by b having count(a)>0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(`test`.`t1`.`a`) > 0)
+select b from t1 where b>1 group by b having count(a)>0;
+b
+2
+3
+explain select b, count(a) from t1 where b>1 group by b having count(a)>0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(`test`.`t1`.`a`) > 0)
+select b, count(a) from t1 where b>1 group by b having count(a)>0;
+b	count(a)
+2	1
+3	3
+# HAVING and merged view
+explain select b from v1 where b>1 group by b having count(a)>0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(`test`.`t1`.`a`) > 0)
+select b from v1 where b>1 group by b having count(a)>0;
+b
+2
+3
+explain select b, count(a) from v1 where b>1 group by b having count(a)>0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(`test`.`t1`.`a`) > 0)
+select b, count(a) from v1 where b>1 group by b having count(a)>0;
+b	count(a)
+2	1
+3	3
+# ROLLUP
+# Rewritten, but cannot use index only, as we group by 'a'
+explain select count(a) from t1 where b>1 group by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`a`
+select count(a) from t1 where b>1 group by a;
+count(a)
+1
+1
+1
+1
+explain select count(a) from t1 where b>1 group by a with rollup;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select rollup_sum_switcher(count(`test`.`t1`.`a`)) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`a` with rollup
+select count(a) from t1 where b>1 group by a with rollup;
+count(a)
+1
+1
+1
+1
+4
+# COUNT as window function: the feature works too
+explain select count(a) over() from t1 where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+Warnings:
+Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) OVER ()  AS `count(a) over()` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+select count(a) over() from t1 where b>1;
+count(a) over()
+4
+4
+4
+4
+explain select count(*) over() from t1 where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+Warnings:
+Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+Note	1003	/* select#1 */ select count(0) OVER ()  AS `count(*) over()` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+select count(*) over() from t1 where b>1;
+count(*) over()
+4
+4
+4
+4
+# A window function is computed on the output of ROLLUP, and ROLLUP makes 'a' nullable; as explained in the code, the feature is disabled.
+explain select a, count(a) over(), count(0) over() from t1 group by a with rollup;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using temporary; Using filesort
+Warnings:
+Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,count(`a`) OVER ()  AS `count(a) over()`,count(0) OVER ()  AS `count(0) over()` from `test`.`t1` group by `test`.`t1`.`a` with rollup
+select a, count(a) over(), count(0) over() from t1 group by a with rollup;
+a	count(a) over()	count(0) over()
+1	6	7
+2	6	7
+3	6	7
+4	6	7
+5	6	7
+8	6	7
+NULL	6	7
+# compare to no-ROLLUP:
+explain select a, count(a) over() from t1 group by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using temporary
+Warnings:
+Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,count(`test`.`t1`.`a`) OVER ()  AS `count(a) over()` from `test`.`t1` group by `test`.`t1`.`a`
+select a, count(a) over() from t1 group by a;
+a	count(a) over()
+1	6
+2	6
+3	6
+5	6
+8	6
+4	6
+# prepare statement
+prepare s1 from "explain select count(a) from t1 where b>?";
+prepare s2 from "select count(a) from t1 where b>?";
+set @b=1;
+execute s1 using @b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index condition; Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+execute s2 using @b;
+count(a)
+4
+set @b=2;
+execute s1 using @b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index condition; Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 2)
+execute s2 using @b;
+count(a)
+3
+set @b=3;
+execute s1 using @b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index condition; Using aggregate
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t1`.`a`) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 3)
+execute s2 using @b;
+count(a)
+0
+deallocate prepare s1;
+deallocate prepare s2;
+# store procedure
+create procedure p1(in arg int)
+begin
+explain select count(a) from t1 where b>arg;
+select count(a) from t1 where b>arg;
+end|
+call p1(1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index condition; Using aggregate
+count(a)
+4
+call p1(2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using index condition; Using aggregate
+count(a)
+3
+call p1(3);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	1	100.00	Using index condition; Using aggregate
+count(a)
+0
+drop procedure p1;
+set optimizer_switch='simplify_count_not_null=on';
+select @@optimizer_switch like '%simplify_count_not_null=on%' as simplify_count_not_null;
+simplify_count_not_null
+1
+# Optimal case, using index only
+explain select count(*) from t1 where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(*)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+# same
+explain select count(0) from t1 where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(0)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+# this demonstrates the basic case for the feature: without/with the feature, a covering index is used or not.
+explain select count(a) from t1 where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+select count(a) from t1 where b>1;
+count(a)
+4
+# we see the rewriting is done, and only on "count(a)". But as "count(distinct a)" is used, not "using index".
+explain select count(a), count(distinct a), count(b), sum(a), count(a+1) from t1 where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(a)`,count(distinct `test`.`t1`.`a`) AS `count(distinct a)`,count(`test`.`t1`.`b`) AS `count(b)`,sum(`test`.`t1`.`a`) AS `sum(a)`,count((`test`.`t1`.`a` + 1)) AS `count(a+1)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+select count(a), count(distinct a), count(b), sum(a), count(a+1) from t1 where b>1;
+count(a)	count(distinct a)	count(b)	sum(a)	count(a+1)
+4	4	4	18	4
+# these two show the difference between inner join and left join: on the right side of the latter, columns become nullable.
+explain select count(t1.a), count(t2.a) from t1, t1 as t2 where t1.b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+1	SIMPLE	t2	NULL	index	NULL	b	5	NULL	6	100.00	Using index; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(t1.a)`,count(0) AS `count(t2.a)` from `test`.`t1` join `test`.`t1` `t2` where (`test`.`t1`.`b` > 1)
+select count(t1.a), count(t2.a) from t1, t1 as t2 where t1.b>1;
+count(t1.a)	count(t2.a)
+24	24
+explain select count(t1.a), count(t2.a) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(t1.a)`,count(`test`.`t2`.`a`) AS `count(t2.a)` from `test`.`t1` left join `test`.`t1` `t2` on((`test`.`t1`.`b` >= 3)) where (`test`.`t1`.`b` > 1)
+select count(t1.a), count(t2.a) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
+count(t1.a)	count(t2.a)
+19	18
+# see the difference between the counts
+explain select count(t1.a), count(t2.a), count(*) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(t1.a)`,count(`test`.`t2`.`a`) AS `count(t2.a)`,count(0) AS `count(*)` from `test`.`t1` left join `test`.`t1` `t2` on((`test`.`t1`.`b` >= 3)) where (`test`.`t1`.`b` > 1)
+select count(t1.a), count(t2.a), count(*) from t1 left join t1 as t2 on t1.b>=3 where t1.b>1;
+count(t1.a)	count(t2.a)	count(*)
+19	18	19
+# a slightly more complicated case
+explain select count(t2.a), count(t1.a), count(t3.a) from t1 left join (t1 as t2, t1 as t3) on t1.b>=3 where t1.b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where; Using join buffer (hash join)
+1	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select count(`test`.`t2`.`a`) AS `count(t2.a)`,count(0) AS `count(t1.a)`,count(`test`.`t3`.`a`) AS `count(t3.a)` from `test`.`t1` left join (`test`.`t1` `t2` join `test`.`t1` `t3`) on((`test`.`t1`.`b` >= 3)) where (`test`.`t1`.`b` > 1)
+select count(t2.a), count(t1.a), count(t3.a) from t1 left join (t1 as t2, t1 as t3) on t1.b>=3 where t1.b>1;
+count(t2.a)	count(t1.a)	count(t3.a)
+108	109	108
+# the feature works on merged views' columns too
+explain select count(a), count(c), count(b) from v1 where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(a)`,count(0) AS `count(c)`,count(`test`.`t1`.`b`) AS `count(b)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+select count(a), count(c), count(b) from v1 where b>1;
+count(a)	count(c)	count(b)
+4	4	4
+# and also if the view is materialized: the tmp table's have proper (non-)nullability so we can use this information, and rewrite. No "using index" though, which is understandable: MySQL has not created any index on the tmp table.
+explain select /*+ no_merge() */ count(a), count(c), count(b) from v1 where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	NULL
+2	DERIVED	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select /*+ NO_MERGE(@`select#1`) */ count(0) AS `count(a)`,count(0) AS `count(c)`,count(`test`.`v1`.`b`) AS `count(b)` from `test`.`v1`
+select /*+ no_merge() */ count(a), count(c), count(b) from v1 where b>1;
+count(a)	count(c)	count(b)
+4	4	4
+# same, with derived tables
+explain select count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(a)`,count(0) AS `count(c)`,count(`test`.`t1`.`b`) AS `count(b)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+select count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
+count(a)	count(c)	count(b)
+4	4	4
+explain select /*+ no_merge() */ count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	NULL
+2	DERIVED	t1	NULL	range	b	b	5	NULL	4	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select /*+ NO_MERGE(@`select#1`) */ count(0) AS `count(a)`,count(0) AS `count(c)`,count(`dt`.`b`) AS `count(b)` from (/* select#2 */ select `test`.`t1`.`a` AS `a`,(`test`.`t1`.`a` + 1) AS `c`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 1)) `dt`
+select /*+ no_merge() */ count(a), count(c), count(b) from (select a,a+1 as c,b from t1) as dt where b>1;
+count(a)	count(c)	count(b)
+4	4	4
+# GROUP BY
+explain select b, count(a) from t1 where b>1 group by b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b`
+select b, count(a) from t1 where b>1 group by b;
+b	count(a)
+2	1
+3	3
+# outer reference. Here the feature brings nothing, because in the subquery ext.a is a constant, so even without any rewriting we have "using index" in the subquery. Alas we do not have "using index" in the top query (see comment in Item_sum_count::fix_fields() for an explanation).
+# However, note that the rewriting happens *after* deciding of where aggregation happens, so we get an error here (aggregation in top query), while we do not get an error if the user has written count(0) (aggregation in subquery), and each time this is proper behaviour.
+explain select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	Using aggregate; Using index
+2	DEPENDENT SUBQUERY	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+Warnings:
+Note	1276	Field or reference 'test.ext.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select (/* select#2 */ select count(0) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1)
+select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
+ERROR 21000: Subquery returns more than 1 row
+explain select (select count(0) from t1 where t1.b>1) from t1 as ext where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	Using index
+2	SUBQUERY	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select (/* select#2 */ select count(0) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(0) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1)
+select (select count(0) from t1 where t1.b>1) from t1 as ext where b>1;
+(select count(0) from t1 where t1.b>1)
+4
+4
+4
+4
+# As a consequence, such rewriting must not be done while creating a view (but it can be done when reading from this view), otherwise, the query's meaning would change.
+create view v2 as select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1;
+# Not done when creating:
+show create view v2;
+View	Create View	character_set_client	collation_connection
+v2	CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `v2` AS select (select count(`ext`.`a`) from `t1` where (`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `t1` `ext` where (`ext`.`b` > 1)	utf8mb4	utf8mb4_0900_ai_ci
+# Done when reading:
+set optimizer_trace='enabled=on';
+select * from v2;
+ERROR 21000: Subquery returns more than 1 row
+# The rewriting happened above ; it cannot be seen in EXPLAIN (which would fail with ER_SUBQUERY_NO_1_ROW because the view is single-row so materialized during EXPLAIN) but it can be seen in the optimizer trace:
+select trace like '% count(0) %' from information_schema.optimizer_trace;
+trace like '% count(0) %'
+1
+set optimizer_trace=default;
+drop view v2;
+# GROUP BY and outer reference
+explain select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	Using aggregate
+2	DEPENDENT SUBQUERY	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+Warnings:
+Note	1276	Field or reference 'test.ext.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select (/* select#2 */ select count(0) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1) group by `test`.`ext`.`b`
+select (select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
+ERROR 21000: Subquery returns more than 1 row
+explain select b,(select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	ext	NULL	range	b	b	5	NULL	4	100.00	Using aggregate
+2	DEPENDENT SUBQUERY	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+Warnings:
+Note	1276	Field or reference 'test.ext.a' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`ext`.`b` AS `b`,(/* select#2 */ select count(0) from `test`.`t1` where (`test`.`t1`.`b` > 1)) AS `(select count(ext.a) from t1 where t1.b>1)` from `test`.`t1` `ext` where (`test`.`ext`.`b` > 1) group by `test`.`ext`.`b`
+select b,(select count(ext.a) from t1 where t1.b>1) from t1 as ext where b>1 group by b;
+ERROR 21000: Subquery returns more than 1 row
+# HAVING
+explain select b from t1 where b>1 group by b having count(a)>0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(0) > 0)
+select b from t1 where b>1 group by b having count(a)>0;
+b
+2
+3
+explain select b, count(a) from t1 where b>1 group by b having count(a)>0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(0) > 0)
+select b, count(a) from t1 where b>1 group by b having count(a)>0;
+b	count(a)
+2	1
+3	3
+# HAVING and merged view
+explain select b from v1 where b>1 group by b having count(a)>0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(0) > 0)
+select b from v1 where b>1 group by b having count(a)>0;
+b
+2
+3
+explain select b, count(a) from v1 where b>1 group by b having count(a)>0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b`,count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`b` having (count(0) > 0)
+select b, count(a) from v1 where b>1 group by b having count(a)>0;
+b	count(a)
+2	1
+3	3
+# ROLLUP
+# Rewritten, but cannot use index only, as we group by 'a'
+explain select count(a) from t1 where b>1 group by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`a`
+select count(a) from t1 where b>1 group by a;
+count(a)
+1
+1
+1
+1
+explain select count(a) from t1 where b>1 group by a with rollup;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select rollup_sum_switcher(count(0)) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1) group by `test`.`t1`.`a` with rollup
+select count(a) from t1 where b>1 group by a with rollup;
+count(a)
+1
+1
+1
+1
+4
+# COUNT as window function: the feature works too
+explain select count(a) over() from t1 where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+Warnings:
+Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+Note	1003	/* select#1 */ select count(0) OVER ()  AS `count(a) over()` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+select count(a) over() from t1 where b>1;
+count(a) over()
+4
+4
+4
+4
+explain select count(*) over() from t1 where b>1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using index
+Warnings:
+Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+Note	1003	/* select#1 */ select count(0) OVER ()  AS `count(*) over()` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+select count(*) over() from t1 where b>1;
+count(*) over()
+4
+4
+4
+4
+# A window function is computed on the output of ROLLUP, and ROLLUP makes 'a' nullable; as explained in the code, the feature is disabled.
+explain select a, count(a) over(), count(0) over() from t1 group by a with rollup;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using temporary; Using filesort
+Warnings:
+Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,count(`a`) OVER ()  AS `count(a) over()`,count(0) OVER ()  AS `count(0) over()` from `test`.`t1` group by `test`.`t1`.`a` with rollup
+select a, count(a) over(), count(0) over() from t1 group by a with rollup;
+a	count(a) over()	count(0) over()
+1	6	7
+2	6	7
+3	6	7
+4	6	7
+5	6	7
+8	6	7
+NULL	6	7
+# compare to no-ROLLUP:
+explain select a, count(a) over() from t1 group by a;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using temporary
+Warnings:
+Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,count(0) OVER ()  AS `count(a) over()` from `test`.`t1` group by `test`.`t1`.`a`
+select a, count(a) over() from t1 group by a;
+a	count(a) over()
+1	6
+2	6
+3	6
+5	6
+8	6
+4	6
+# prepare statement
+prepare s1 from "explain select count(a) from t1 where b>?";
+prepare s2 from "select count(a) from t1 where b>?";
+set @b=1;
+execute s1 using @b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+execute s2 using @b;
+count(a)
+4
+set @b=2;
+execute s1 using @b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 2)
+execute s2 using @b;
+count(a)
+3
+set @b=3;
+execute s1 using @b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 3)
+execute s2 using @b;
+count(a)
+0
+deallocate prepare s1;
+deallocate prepare s2;
+# store procedure
+create procedure p1(in arg int)
+begin
+explain select count(a) from t1 where b>arg;
+select count(a) from t1 where b>arg;
+end|
+call p1(1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using where; Using index
+count(a)
+4
+call p1(2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using where; Using index
+count(a)
+3
+call p1(3);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	1	100.00	Using where; Using index
+count(a)
+0
+drop procedure p1;
+select @@optimizer_switch like '%simplify_count_not_null=on%' as simplify_count_not_null;
+simplify_count_not_null
+1
+prepare s from 'explain select count(a) from t1 where b>1';
+execute s;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+execute s;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	b	b	5	NULL	4	100.00	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `count(a)` from `test`.`t1` where (`test`.`t1`.`b` > 1)
+drop prepare s;
+drop view v1;
+drop table t1;
+set optimizer_switch=default;

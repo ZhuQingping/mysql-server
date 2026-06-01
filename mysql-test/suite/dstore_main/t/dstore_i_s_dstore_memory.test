@@ -1,0 +1,53 @@
+DESCRIBE INFORMATION_SCHEMA.DSTORE_MEM;
+
+-- disable_warnings
+DROP TABLE IF EXISTS test_dstore_mem;
+-- enable_warnings
+
+CREATE TABLE test_dstore_mem (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  data INT,
+  info VARCHAR(50)
+) ENGINE=DSTORE;
+
+DELIMITER |;
+DROP PROCEDURE IF EXISTS insert_test_data;
+CREATE PROCEDURE insert_test_data()
+BEGIN
+  DECLARE i INT DEFAULT 1;
+  DECLARE EXIT HANDLER FOR SQLEXCEPTION ROLLBACK;
+  
+  START TRANSACTION;
+  WHILE i <= 500 DO
+    INSERT INTO test_dstore_mem (data, info) VALUES (i, CONCAT('test_', i));
+    SET i = i + 1;
+    IF i % 100 = 0 THEN
+      COMMIT;
+      START TRANSACTION;
+    END IF;
+  END WHILE;
+  COMMIT;
+END |
+
+DROP PROCEDURE IF EXISTS query_test_data;
+CREATE PROCEDURE query_test_data()
+BEGIN
+  DECLARE dummy INT;
+  SELECT COUNT(*) INTO dummy FROM test_dstore_mem WHERE data < 100;
+  SELECT COUNT(*) INTO dummy FROM test_dstore_mem WHERE data > 400;
+  SELECT MAX(data) INTO dummy FROM test_dstore_mem;
+END |
+DELIMITER ;|
+
+CALL insert_test_data();
+CALL query_test_data();
+
+--replace_regex /[0-9]+/##/
+--eval SELECT COUNT(*) AS dstore_mem_row_count FROM INFORMATION_SCHEMA.DSTORE_MEM
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_MEM WHERE OS_THREAD_ID=0;
+SELECT OS_THREAD_ID into @tid FROM INFORMATION_SCHEMA.DSTORE_MEM LIMIT 1;
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.DSTORE_MEM WHERE OS_THREAD_ID=@tid;
+
+DROP TABLE test_dstore_mem;
+DROP PROCEDURE insert_test_data;
+DROP PROCEDURE query_test_data;

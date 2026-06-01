@@ -1,0 +1,1483 @@
+From 4973f70b46afe78ca9c4b32ea54a8ba4d3674f5f Mon Sep 17 00:00:00 2001
+From: wangyunhua <wangyunhua3@contributor>
+
+
+Date: Sun, 31 Aug 2025 07:50:40 +0000
+Subject: [PATCH] BUGFIX User activities such as logins are not
+ recorded when audit logging is not enabled
+
+Issue:
+------
+User activities such as logins are not recorded when audit logging is not enabled.
+
+Solution:
+---------
+1. rds_conn_log_error_verbosity = 0, disable, not log connection info
+2. rds_conn_log_error_verbosity = 1, log abnormal connection setup and abnormal disconnection info.
+3. rds_conn_log_error_verbosity = 2, log all connection info.
+---
+ include/my_loglevel.h                         |   1 +
+ include/violite.h                             |   4 +
+ mysql-test/include/default_mysqld.cnf         |   3 +-
+ mysql-test/r/all_persisted_variables.result   |   8 +-
+ mysql-test/r/conn_abnormal_setup.result       |  68 ++++++++++
+ mysql-test/r/conn_normal_setup.result         |  29 +++++
+ ...h_errlog_for_connection_with_socket.result |  51 ++++++++
+ ...rlog_for_connection_with_threadpool.result |  26 ++++
+ mysql-test/r/mysqld--help-notwin.result       |   5 +
+ mysql-test/r/plugin_auth_user_lock.result     |   6 +
+ .../r/mysqld--help-notwin-dstore.result       |   5 +
+ .../rpl/t/rpl_enable_binlog_by_default.cnf    |   2 +-
+ .../r/max_user_connections_func.result        |   3 +
+ .../rds_conn_log_error_verbosity_basic.result |  32 +++++
+ .../sys_vars/t/max_user_connections_func.test |  15 ++-
+ .../t/rds_conn_log_error_verbosity_basic.test |  25 ++++
+ mysql-test/t/all_persisted_variables.test     |   2 +-
+ mysql-test/t/conn_abnormal_setup.test         | 122 ++++++++++++++++++
+ mysql-test/t/conn_normal_setup.test           |  68 ++++++++++
+ ...rich_errlog_for_connection_with_socket.cnf |   4 +
+ ...ich_errlog_for_connection_with_socket.test | 107 +++++++++++++++
+ ..._errlog_for_connection_with_threadpool.cnf |   9 ++
+ ...errlog_for_connection_with_threadpool.test |  56 ++++++++
+ mysql-test/t/plugin_auth_user_lock.test       |  22 +++-
+ plugin/threadpool/threadpool_unix.cc          |   2 +
+ sql-common/net_serv.cc                        |  20 +++
+ sql/auth/sql_authentication.cc                |  19 +++
+ .../connection_handler_manager.cc             |  36 ++++++
+ sql/log.cc                                    |  23 ++++
+ sql/log.h                                     |   3 +
+ sql/mysqld.cc                                 |   2 +
+ sql/mysqld.h                                  |   1 +
+ sql/sql_class.cc                              |  10 ++
+ sql/sql_connect.cc                            |   8 ++
+ sql/sys_vars.cc                               |  10 ++
+ unittest/gunit/xplugin/xpl/CMakeLists.txt     |   1 +
+ .../xpl/user_password_verification_t.cc       |  51 ++++++++
+ vio/vio.cc                                    |   5 +
+ vio/viosocket.cc                              |  56 ++++++++
+ 39 files changed, 911 insertions(+), 9 deletions(-)
+ create mode 100644 mysql-test/r/conn_abnormal_setup.result
+ create mode 100644 mysql-test/r/conn_normal_setup.result
+ create mode 100644 mysql-test/r/enrich_errlog_for_connection_with_socket.result
+ create mode 100644 mysql-test/r/enrich_errlog_for_connection_with_threadpool.result
+ create mode 100644 mysql-test/suite/sys_vars/r/rds_conn_log_error_verbosity_basic.result
+ create mode 100644 mysql-test/suite/sys_vars/t/rds_conn_log_error_verbosity_basic.test
+ create mode 100644 mysql-test/t/conn_abnormal_setup.test
+ create mode 100644 mysql-test/t/conn_normal_setup.test
+ create mode 100644 mysql-test/t/enrich_errlog_for_connection_with_socket.cnf
+ create mode 100644 mysql-test/t/enrich_errlog_for_connection_with_socket.test
+ create mode 100644 mysql-test/t/enrich_errlog_for_connection_with_threadpool.cnf
+ create mode 100644 mysql-test/t/enrich_errlog_for_connection_with_threadpool.test
+
+diff --git a/include/my_loglevel.h b/include/my_loglevel.h
+index e05b0ce4375..2f0008d96cb 100644
+--- a/include/my_loglevel.h
++++ b/include/my_loglevel.h
+@@ -45,4 +45,5 @@ enum loglevel {
+   INFORMATION_LEVEL = 3
+ };
+ 
++enum class ConnectLogType { NORMAL = 0, ABNORMAL = 1 };
+ #endif  // MY_LOGLEVEL_H
+diff --git a/include/violite.h b/include/violite.h
+index d89a3ddaff1..f35baed121d 100644
+--- a/include/violite.h
++++ b/include/violite.h
+@@ -142,6 +142,7 @@ enum enum_vio_io_event {
+ #define VIO_LOCALHOST 1            /* a localhost connection */
+ #define VIO_BUFFERED_READ 2        /* use buffered read */
+ #define VIO_READ_BUFFER_SIZE 16384 /* size of read buffer */
++#define VIO_ERRMSG_SIZE 512
+ 
+ MYSQL_VIO vio_new(my_socket sd, enum enum_vio_type type, uint flags);
+ MYSQL_VIO mysql_socket_vio_new(MYSQL_SOCKET mysql_socket,
+@@ -209,6 +210,8 @@ enum enum_vio_type vio_type(const MYSQL_VIO vio);
+ int vio_errno(MYSQL_VIO vio);
+ /* Get socket number */
+ my_socket vio_fd(MYSQL_VIO vio);
++/* Print socket errmsg to errorlog */
++void vio_get_err_msg(int error, char *buf);
+ /* Remote peer's address and name in text form */
+ bool vio_peer_addr(MYSQL_VIO vio, char *buf, uint16 *port, size_t buflen);
+ /* Wait for an I/O event notification. */
+@@ -429,6 +432,7 @@ struct Vio {
+   bool (*is_connected)(MYSQL_VIO) = {nullptr};
+   bool (*has_data)(MYSQL_VIO) = {nullptr};
+   int (*io_wait)(MYSQL_VIO, enum enum_vio_io_event, int) = {nullptr};
++  void (*get_err_msg)(int, char *);
+   bool (*connect)(MYSQL_VIO, struct sockaddr *, socklen_t, int) = {nullptr};
+ #ifdef _WIN32
+ #ifdef __clang__
+diff --git a/mysql-test/include/default_mysqld.cnf b/mysql-test/include/default_mysqld.cnf
+index 17702e5ea8c..71ffd900519 100644
+--- a/mysql-test/include/default_mysqld.cnf
++++ b/mysql-test/include/default_mysqld.cnf
+@@ -73,4 +73,5 @@ rds_permission_control=OFF
+ loose-rds_restricted_dynamic_privileges_control=OFF
+ loose-rds_extended_partitions_enabled = ON
+ rds-load-data-infile-enable=true
+-loose-rds_security_hardening = "use_load_file=on"
++loose-rds_conn_log_error_verbosity = 0
++loose-rds_security_hardening = "use_load_file=on"
+\ No newline at end of file
+diff --git a/mysql-test/r/all_persisted_variables.result b/mysql-test/r/all_persisted_variables.result
+index dd4bf0fdff1..a928ad1a06d 100644
+--- a/mysql-test/r/all_persisted_variables.result
++++ b/mysql-test/r/all_persisted_variables.result
+@@ -41,7 +41,7 @@ include/assert.inc [Expect 500+ variables in the table. Due to open Bugs, we are
+ 
+ # Test SET PERSIST
+ 
+-include/assert.inc [Expect 534 persisted variables in the table.]
++include/assert.inc [Expect 535 persisted variables in the table.]
+ 
+ ************************************************************
+ * 3. Restart server, it must preserve the persisted variable
+@@ -49,9 +49,9 @@ include/assert.inc [Expect 534 persisted variables in the table.]
+ ************************************************************
+ # restart
+ 
+-include/assert.inc [Expect 534 persisted variables in persisted_variables table.]
+-include/assert.inc [Expect 534 persisted variables shown as PERSISTED in variables_info table.]
+-include/assert.inc [Expect 534 persisted variables with matching peristed and global values.]
++include/assert.inc [Expect 535 persisted variables in persisted_variables table.]
++include/assert.inc [Expect 535 persisted variables shown as PERSISTED in variables_info table.]
++include/assert.inc [Expect 535 persisted variables with matching peristed and global values.]
+ 
+ ************************************************************
+ * 4. Test RESET PERSIST IF EXISTS. Verify persisted variable
+diff --git a/mysql-test/r/conn_abnormal_setup.result b/mysql-test/r/conn_abnormal_setup.result
+new file mode 100644
+index 00000000000..740139669d5
+--- /dev/null
++++ b/mysql-test/r/conn_abnormal_setup.result
+@@ -0,0 +1,68 @@
++SET @save_max_connections= @@global.max_connections;
++SET @save_rds_reserved_connections= @@global.rds_reserved_connections;
++SET @save_rds_conn_log_error_verbosity= @@global.rds_conn_log_error_verbosity;
++SET @save_log_error_verbosity= @@global.log_error_verbosity;
++SET GLOBAL max_connections=2;
++SET GLOBAL rds_reserved_connections=1;
++SET GLOBAL rds_reserved_users='reserved_user1,reserved_user2';
++SET GLOBAL rds_conn_log_error_verbosity=1;
++SET GLOBAL log_error_verbosity=2;
++CREATE USER 'reserved_user1'@'%' IDENTIFIED BY '123456';
++GRANT SELECT ON *.* TO 'reserved_user1'@'%' WITH GRANT OPTION;
++SHOW GRANTS FOR 'reserved_user1'@'%';
++Grants for reserved_user1@%
++GRANT SELECT ON *.* TO `reserved_user1`@`%` WITH GRANT OPTION
++CREATE USER 'reserved_user2'@'%' IDENTIFIED BY '123456';
++GRANT SELECT ON *.* TO 'reserved_user2'@'%' WITH GRANT OPTION;
++SHOW GRANTS FOR 'reserved_user2'@'%';
++Grants for reserved_user2@%
++GRANT SELECT ON *.* TO `reserved_user2`@`%` WITH GRANT OPTION
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	3
++SHOW GLOBAL STATUS LIKE "Reserved_threads_connected";
++Variable_name	Value
++Reserved_threads_connected	0
++#
++# root's connections reached the maximum limit
++#
++Got one of the listed errors
++include/assert_grep.inc [Check that there is 'Too many connections, valid_connection_count check fail' in error log.]
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	4
++SHOW GLOBAL STATUS LIKE "Reserved_threads_connected";
++Variable_name	Value
++Reserved_threads_connected	1
++#
++# all users can not be connected
++#
++Got one of the listed errors
++include/assert_grep.inc [Check that there is 'Too many connections, check_and_incr_conn_count fail' in error log.]
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++Variable_name	Value
++Threads_connected	2
++SHOW GLOBAL STATUS LIKE "Reserved_threads_connected";
++Variable_name	Value
++Reserved_threads_connected	1
++#
++# reserved user's connections reached the maximum limit
++#
++Got one of the listed errors
++include/assert_grep.inc [Check that there is 'Too many connections, check_and_incr_reserved_conn_count fail' in error log.]
++#
++# password error
++#
++ERROR 28000: Access denied for user 'reserved_user2'@'localhost' (using password: YES)
++include/assert_grep.inc [Check that there is 'Access denied for user' in error log.]
++SET GLOBAL max_connections=@save_max_connections;
++SET GLOBAL rds_reserved_connections=@save_rds_reserved_connections;
++SET GLOBAL rds_reserved_users=default;
++SET GLOBAL rds_conn_log_error_verbosity=@save_rds_conn_log_error_verbosity;
++SET GLOBAL log_error_verbosity=@save_log_error_verbosity;
++select count(*) from information_schema.PROCESSLIST where user in ('reserved_user1','reserved_user2');
++count(*)
++0
++Warnings:
++Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
++DROP USER reserved_user1,reserved_user2;
+diff --git a/mysql-test/r/conn_normal_setup.result b/mysql-test/r/conn_normal_setup.result
+new file mode 100644
+index 00000000000..dbb5fb867ee
+--- /dev/null
++++ b/mysql-test/r/conn_normal_setup.result
+@@ -0,0 +1,29 @@
++#
++# rds_conn_log_error_verbosity is 0, not record conn normal setup info
++#
++SET GLOBAL rds_conn_log_error_verbosity=0;
++select @@global.rds_conn_log_error_verbosity;
++@@global.rds_conn_log_error_verbosity
++0
++include/assert_grep.inc [Check that there is 'no record connection success info' in error log.]
++#
++# rds_conn_log_error_verbosity is 1, not record conn normal setup info
++#
++SET GLOBAL rds_conn_log_error_verbosity=1;
++select @@global.rds_conn_log_error_verbosity;
++@@global.rds_conn_log_error_verbosity
++1
++include/assert_grep.inc [Check that there is 'not record connection success info' in error log.]
++#
++# rds_conn_log_error_verbosity is 2, record conn normal setup info
++#
++SET GLOBAL rds_conn_log_error_verbosity=2;
++select @@global.rds_conn_log_error_verbosity;
++@@global.rds_conn_log_error_verbosity
++2
++include/assert_grep.inc [Check that there is 'record connection success info' in error log.]
++#
++# normal disconnect
++#
++include/assert_grep.inc [Check that there is 'normal disconnect' in error log.]
++SET GLOBAL rds_conn_log_error_verbosity=0;
+diff --git a/mysql-test/r/enrich_errlog_for_connection_with_socket.result b/mysql-test/r/enrich_errlog_for_connection_with_socket.result
+new file mode 100644
+index 00000000000..8fa86703653
+--- /dev/null
++++ b/mysql-test/r/enrich_errlog_for_connection_with_socket.result
+@@ -0,0 +1,51 @@
++SET @start_event_scheduler= @@global.event_scheduler;
++set global event_scheduler=off;
++## Test rds_conn_log_error_verbosity variable.
++SET GLOBAL rds_conn_log_error_verbosity=1;
++select @@global.rds_conn_log_error_verbosity;
++@@global.rds_conn_log_error_verbosity
++1
++SET GLOBAL rds_conn_log_error_verbosity=0;
++select @@global.rds_conn_log_error_verbosity;
++@@global.rds_conn_log_error_verbosity
++0
++## If rds_conn_log_error_verbosity=0, error log has not errmsg.
++SET @start_value= @@global.wait_timeout;
++SET GLOBAL rds_conn_log_error_verbosity=0;
++SET @start_time= UNIX_TIMESTAMP();
++connect (test_con1, localhost, root,,);
++SELECT @@session.wait_timeout = @@global.wait_timeout AS 'Expect 1';
++Expect 1
++1
++SET @@session.wait_timeout = <session_value>;
++connect (test_con2, localhost, root,,);
++SET @@session.wait_timeout = <session_value> - 1;
++connection default;
++wait until connections ready
++SELECT info FROM information_schema.processlist;
++info
++SELECT info FROM information_schema.processlist
++Warnings:
++Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
++## If rds_conn_log_error_verbosity=1, error log contains "Test socket errno: 110, socket errmsg: Connection timed out."
++SET @start_value= @@global.wait_timeout;
++SET GLOBAL rds_conn_log_error_verbosity=1;
++SET @start_time= UNIX_TIMESTAMP();
++connect (test_con3, localhost, root,,);
++SELECT @@session.wait_timeout = @@global.wait_timeout AS 'Expect 1';
++Expect 1
++1
++SET @@session.wait_timeout = <session_value>;
++connect (test_con4, localhost, root,,);
++SET @@session.wait_timeout = <session_value> - 1;
++connection default;
++wait until connections ready
++SELECT info FROM information_schema.processlist;
++info
++SELECT info FROM information_schema.processlist
++Warnings:
++Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
++include/assert_grep.inc [Check that there is 'socket errno: 110, socket errmsg: Connection timed out.(ETIMEDOUT)' in error log.]
++SET @@global.wait_timeout = @start_value;
++SET GLOBAL rds_conn_log_error_verbosity=0;
++SET GLOBAL event_scheduler= @start_event_scheduler;
+diff --git a/mysql-test/r/enrich_errlog_for_connection_with_threadpool.result b/mysql-test/r/enrich_errlog_for_connection_with_threadpool.result
+new file mode 100644
+index 00000000000..4b38a47777e
+--- /dev/null
++++ b/mysql-test/r/enrich_errlog_for_connection_with_threadpool.result
+@@ -0,0 +1,26 @@
++SET @start_value= @@global.wait_timeout;
++SET @origin_rds_conn_log_error_verbosity= @@global.rds_conn_log_error_verbosity;
++SET @origin_threadpool_enabled= @@global.threadpool_enabled;
++SET GLOBAL rds_conn_log_error_verbosity=1;
++SET GLOBAL threadpool_enabled=ON;
++SET @start_time= UNIX_TIMESTAMP();
++connect (test_con1, localhost, root,,);
++SELECT @@session.wait_timeout = @@global.wait_timeout AS 'Expect 1';
++Expect 1
++1
++SET @@session.wait_timeout = <session_value>;
++connect (test_con2, localhost, root,,);
++SET @@session.wait_timeout = <session_value> - 1;
++connection default;
++wait until connections ready
++Timeout in wait_condition.inc for SELECT COUNT(*) = 1 FROM information_schema.processlist
++SELECT info FROM information_schema.processlist;
++info
++SELECT info FROM information_schema.processlist
++NULL
++Warnings:
++Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
++include/assert_grep.inc [Check that there is 'Wait timeout exceeded, kill connection.' in error log.]
++SET @@global.wait_timeout = @start_value;
++SET @@global.rds_conn_log_error_verbosity = @origin_rds_conn_log_error_verbosity;
++SET @@global.threadpool_enabled = @origin_threadpool_enabled;
+diff --git a/mysql-test/r/mysqld--help-notwin.result b/mysql-test/r/mysqld--help-notwin.result
+index c52e6944131..3a5b3e100d5 100644
+--- a/mysql-test/r/mysqld--help-notwin.result
++++ b/mysql-test/r/mysqld--help-notwin.result
+@@ -1398,6 +1398,10 @@ The following options may be given as the first argument:
+  The waiting timeout in seconds for binlog purge thread.
+  After timeout, this thread will purge expired binary logs
+  automatically.
++ --rds-conn-log-error-verbosity=# 
++ How detailed the connection log should be.0, disable.1,
++ log abnormal connection setup and abnormal disconnection
++ info.2, log all connection info.
+  --rds-ddl-lock-wait-timeout=# 
+  Timeout in seconds to wait for a lock for the following
+  DDL operations before returning an error: ALTER TABLE,
+@@ -2570,6 +2574,7 @@ rds-binlog-dstore-trace TRUE
+ rds-binlog-lock-enable TRUE
+ rds-binlog-purge-thread-status NOT_CREATED
+ rds-binlog-purge-thread-wait-timeout 600
++rds-conn-log-error-verbosity 1
+ rds-ddl-lock-wait-timeout 31536000
+ rds-disable-user-defined-functions FALSE
+ rds-dstore-missed-gtids 
+diff --git a/mysql-test/r/plugin_auth_user_lock.result b/mysql-test/r/plugin_auth_user_lock.result
+index 86713c13633..c65104bed12 100644
+--- a/mysql-test/r/plugin_auth_user_lock.result
++++ b/mysql-test/r/plugin_auth_user_lock.result
+@@ -1,3 +1,6 @@
++SET @save_log_error_verbosity= @@global.log_error_verbosity;
++SET GLOBAL rds_conn_log_error_verbosity=1;
++SET GLOBAL log_error_verbosity=2;
+ # Create proxy and proxied users
+ CREATE USER 'empl_external'@'localhost' IDENTIFIED WITH test_plugin_server AS 'employee';
+ CREATE USER 'employee'@'localhost' IDENTIFIED BY 'passkey';
+@@ -15,4 +18,7 @@ ERROR HY000: Access denied for user 'empl_external'@'localhost'. Account is lock
+ ALTER USER employee@localhost ACCOUNT UNLOCK;
+ connect(localhost,empl_external,employee,test,MASTER_PORT,MASTER_SOCKET);
+ ERROR HY000: Access denied for user 'empl_external'@'localhost'. Account is locked.
++include/assert_grep.inc [Check that there is 'Account is locked' in error log.]
+ DROP USER 'empl_external'@'localhost', 'employee'@'localhost';
++SET GLOBAL rds_conn_log_error_verbosity=0;
++SET GLOBAL log_error_verbosity= @save_log_error_verbosity;
+diff --git a/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result b/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
+index c52e6944131..3a5b3e100d5 100644
+--- a/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
++++ b/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
+@@ -1398,6 +1398,10 @@ The following options may be given as the first argument:
+  The waiting timeout in seconds for binlog purge thread.
+  After timeout, this thread will purge expired binary logs
+  automatically.
++ --rds-conn-log-error-verbosity=# 
++ How detailed the connection log should be.0, disable.1,
++ log abnormal connection setup and abnormal disconnection
++ info.2, log all connection info.
+  --rds-ddl-lock-wait-timeout=# 
+  Timeout in seconds to wait for a lock for the following
+  DDL operations before returning an error: ALTER TABLE,
+@@ -2570,6 +2574,7 @@ rds-binlog-dstore-trace TRUE
+ rds-binlog-lock-enable TRUE
+ rds-binlog-purge-thread-status NOT_CREATED
+ rds-binlog-purge-thread-wait-timeout 600
++rds-conn-log-error-verbosity 1
+ rds-ddl-lock-wait-timeout 31536000
+ rds-disable-user-defined-functions FALSE
+ rds-dstore-missed-gtids 
+diff --git a/mysql-test/suite/rpl/t/rpl_enable_binlog_by_default.cnf b/mysql-test/suite/rpl/t/rpl_enable_binlog_by_default.cnf
+index fdea57c696d..7a69c41a287 100644
+--- a/mysql-test/suite/rpl/t/rpl_enable_binlog_by_default.cnf
++++ b/mysql-test/suite/rpl/t/rpl_enable_binlog_by_default.cnf
+@@ -9,7 +9,7 @@ rds-load-data-infile-enable=true
+ # --log-bin and --relay-log options are not configured on slave.
+ 
+ master-retry-count=         10
+-
++rds_conn_log_error_verbosity = 0
+ 
+ [ENV]
+ MASTER_MYPORT=              @mysqld.1.port
+diff --git a/mysql-test/suite/sys_vars/r/max_user_connections_func.result b/mysql-test/suite/sys_vars/r/max_user_connections_func.result
+index 2ff2ac82ce7..6f5cf2f13a9 100644
+--- a/mysql-test/suite/sys_vars/r/max_user_connections_func.result
++++ b/mysql-test/suite/sys_vars/r/max_user_connections_func.result
+@@ -1,3 +1,4 @@
++SET GLOBAL rds_conn_log_error_verbosity=1;
+ ** Setup **
+ 
+ SET @default_max_user_connections = @@global.max_user_connections;
+@@ -9,6 +10,7 @@ Set Global max_user_connections=2;
+ ERROR 42000: User root already has more than 'max_user_connections' active connections
+ Expected error "too many connections"
+ ** Disconnecting conn1 **
++include/assert_grep.inc [Check that there is 'has already too many connections' in error log.]
+ ** Poll till disconnected conn1 disappears from processlist
+ '#--------------------FN_DYNVARS_114_02-------------------------#'
+ Set Global max_user_connections=3;
+@@ -17,3 +19,4 @@ Set Global max_user_connections=3;
+ ** Connection default **
+ ** Disconnecting conn5, conn6 **
+ SET @@global.max_user_connections = @default_max_user_connections;
++SET GLOBAL rds_conn_log_error_verbosity=0;
+diff --git a/mysql-test/suite/sys_vars/r/rds_conn_log_error_verbosity_basic.result b/mysql-test/suite/sys_vars/r/rds_conn_log_error_verbosity_basic.result
+new file mode 100644
+index 00000000000..b76e4d70c08
+--- /dev/null
++++ b/mysql-test/suite/sys_vars/r/rds_conn_log_error_verbosity_basic.result
+@@ -0,0 +1,32 @@
++set @save_rds_conn_log_error_verbosity = @@global.rds_conn_log_error_verbosity;
++# Default value
++SELECT @save_rds_conn_log_error_verbosity;
++@save_rds_conn_log_error_verbosity
++0
++# valid value
++set global rds_conn_log_error_verbosity = 0;
++select @@global.rds_conn_log_error_verbosity;
++@@global.rds_conn_log_error_verbosity
++0
++set global rds_conn_log_error_verbosity = 1;
++select @@global.rds_conn_log_error_verbosity;
++@@global.rds_conn_log_error_verbosity
++1
++set global rds_conn_log_error_verbosity = 2;
++select @@global.rds_conn_log_error_verbosity;
++@@global.rds_conn_log_error_verbosity
++2
++set global rds_conn_log_error_verbosity = 3;
++Warnings:
++Warning	1292	Truncated incorrect rds_conn_log_error_verbosity value: '3'
++select @@global.rds_conn_log_error_verbosity;
++@@global.rds_conn_log_error_verbosity
++2
++# invalid value
++set global rds_conn_log_error_verbosity="aaa";
++ERROR 42000: Incorrect argument type to variable 'rds_conn_log_error_verbosity'
++set global rds_conn_log_error_verbosity=1.1;
++ERROR 42000: Incorrect argument type to variable 'rds_conn_log_error_verbosity'
++set session rds_conn_log_error_verbosity=1;
++ERROR HY000: Variable 'rds_conn_log_error_verbosity' is a GLOBAL variable and should be set with SET GLOBAL
++SET @@global.rds_conn_log_error_verbosity = @save_rds_conn_log_error_verbosity;
+diff --git a/mysql-test/suite/sys_vars/t/max_user_connections_func.test b/mysql-test/suite/sys_vars/t/max_user_connections_func.test
+index 1edec4b670e..9c92eaf670d 100644
+--- a/mysql-test/suite/sys_vars/t/max_user_connections_func.test
++++ b/mysql-test/suite/sys_vars/t/max_user_connections_func.test
+@@ -22,13 +22,17 @@
+ # Modified: 2008-07-10 HHUNGER: Inserted wait condition                      #
+ #                                                                            #
+ ##############################################################################
+-
++--source include/count_sessions.inc
++SET GLOBAL rds_conn_log_error_verbosity=1;
+ --echo ** Setup **
+ --echo
+ #
+ # Setup
+ #
+ 
++--disable_query_log
++call mtr.add_suppression("has already too many connections");
++--enable_query_log
+ 
+ SET @default_max_user_connections = @@global.max_user_connections;
+ 
+@@ -59,6 +63,13 @@ CONNECT (conn3,localhost,root,,);
+ --echo ** Disconnecting conn1 **
+ DISCONNECT conn1;
+ 
++--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
++--let $assert_text= Check that there is 'has already too many connections' in error log.
++--let $assert_select= \[Warning\] \[[^]]*\] \[[^]]*\] \[TAURUS-DEBUG\].*has already too many connections..*
++--let $assert_text= Check that there is 'has already too many connections' in error log.
++--let $assert_match= has already too many connections
++--source include/assert_grep.inc
++
+ --echo ** Poll till disconnected conn1 disappears from processlist
+ let $wait_condition= SELECT count(id) <= 2
+    FROM information_schema.processlist WHERE user = 'root';
+@@ -88,4 +99,6 @@ DISCONNECT conn5;
+ DISCONNECT conn6;
+ 
+ SET @@global.max_user_connections = @default_max_user_connections;
++SET GLOBAL rds_conn_log_error_verbosity=0;
++--source include/wait_until_count_sessions.inc
+ 
+diff --git a/mysql-test/suite/sys_vars/t/rds_conn_log_error_verbosity_basic.test b/mysql-test/suite/sys_vars/t/rds_conn_log_error_verbosity_basic.test
+new file mode 100644
+index 00000000000..f9f63575ffd
+--- /dev/null
++++ b/mysql-test/suite/sys_vars/t/rds_conn_log_error_verbosity_basic.test
+@@ -0,0 +1,25 @@
++set @save_rds_conn_log_error_verbosity = @@global.rds_conn_log_error_verbosity;
++
++--echo # Default value
++SELECT @save_rds_conn_log_error_verbosity;
++
++--echo # valid value
++set global rds_conn_log_error_verbosity = 0;
++select @@global.rds_conn_log_error_verbosity;
++set global rds_conn_log_error_verbosity = 1;
++select @@global.rds_conn_log_error_verbosity;
++set global rds_conn_log_error_verbosity = 2;
++select @@global.rds_conn_log_error_verbosity;
++set global rds_conn_log_error_verbosity = 3;
++select @@global.rds_conn_log_error_verbosity;
++
++
++--echo # invalid value
++--error ER_WRONG_TYPE_FOR_VAR
++set global rds_conn_log_error_verbosity="aaa";
++--error ER_WRONG_TYPE_FOR_VAR
++set global rds_conn_log_error_verbosity=1.1;
++--error ER_GLOBAL_VARIABLE
++set session rds_conn_log_error_verbosity=1;
++
++SET @@global.rds_conn_log_error_verbosity = @save_rds_conn_log_error_verbosity;
+\ No newline at end of file
+diff --git a/mysql-test/t/all_persisted_variables.test b/mysql-test/t/all_persisted_variables.test
+index 13d511f6a9a..e785a54be64 100644
+--- a/mysql-test/t/all_persisted_variables.test
++++ b/mysql-test/t/all_persisted_variables.test
+@@ -41,7 +41,7 @@ call mtr.add_suppression("\\[Warning\\] .*MY-\\d+.* Changing innodb_extend_and_i
+ call mtr.add_suppression("Failed to initialize TLS for channel: mysql_main");
+ 
+ let $total_global_vars=`SELECT COUNT(*) FROM performance_schema.global_variables where variable_name NOT LIKE 'ndb_%' AND variable_name NOT LIKE 'debug_%'`;
+-let $total_persistent_vars=534;
++let $total_persistent_vars=535;
+ 
+ --echo ***************************************************************
+ --echo * 0. Verify that variables present in performance_schema.global
+diff --git a/mysql-test/t/conn_abnormal_setup.test b/mysql-test/t/conn_abnormal_setup.test
+new file mode 100644
+index 00000000000..a01435f9a4a
+--- /dev/null
++++ b/mysql-test/t/conn_abnormal_setup.test
+@@ -0,0 +1,122 @@
++# Save the initial number of concurrent sessions
++--source include/count_sessions.inc
++
++--disable_query_log
++call mtr.add_suppression("Too many connections, valid_connection_count check fail.*");
++call mtr.add_suppression("Too many connections, check_and_incr_conn_count fail.*");
++call mtr.add_suppression("Too many connections, check_and_incr_reserved_conn_count fail.*");
++call mtr.add_suppression("Access denied for user 'reserved_user2'.*");
++--enable_query_log
++ 
++SET @save_max_connections= @@global.max_connections;
++SET @save_rds_reserved_connections= @@global.rds_reserved_connections;
++SET @save_rds_conn_log_error_verbosity= @@global.rds_conn_log_error_verbosity;
++SET @save_log_error_verbosity= @@global.log_error_verbosity;
++ 
++ 
++SET GLOBAL max_connections=2;
++SET GLOBAL rds_reserved_connections=1;
++SET GLOBAL rds_reserved_users='reserved_user1,reserved_user2';
++SET GLOBAL rds_conn_log_error_verbosity=1;
++SET GLOBAL log_error_verbosity=2;
++ 
++CREATE USER 'reserved_user1'@'%' IDENTIFIED BY '123456';
++GRANT SELECT ON *.* TO 'reserved_user1'@'%' WITH GRANT OPTION;
++SHOW GRANTS FOR 'reserved_user1'@'%';
++ 
++CREATE USER 'reserved_user2'@'%' IDENTIFIED BY '123456';
++GRANT SELECT ON *.* TO 'reserved_user2'@'%' WITH GRANT OPTION;
++SHOW GRANTS FOR 'reserved_user2'@'%';
++ 
++connect (test_con1, localhost, root,,,);
++ 
++connect (test_con2, localhost, root,,,);
++ 
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE "Reserved_threads_connected";
++ 
++--echo #
++--echo # root's connections reached the maximum limit
++--echo #
++--disable_query_log
++--error ER_CON_COUNT_ERROR, 9999
++connect (test_con3, localhost, root,,,);
++--enable_query_log
++--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
++--let $assert_text= Check that there is 'Too many connections, valid_connection_count check fail' in error log.
++--let $assert_select= \[Warning\] \[[^]]*\] \[[^]]*\] \[GAUSSDB-DEBUG\]Too many connections, valid_connection_count check fail
++--let $assert_only_after=.* \[System\] \[[^]]*\] \[[^]]*\] .* ready for connections
++--let $assert_count= 1
++--source include/assert_grep.inc
++ 
++connect (reserved_conn1, 127.0.0.1, reserved_user1,123456,,);
++ 
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE "Reserved_threads_connected";
++ 
++--echo #
++--echo # all users can not be connected
++--echo #
++--disable_query_log
++--error ER_CON_COUNT_ERROR, 9999
++connect (reserved_conn2, 127.0.0.1, reserved_user2,123456,,);
++--enable_query_log
++disconnect test_con1;
++disconnect test_con2;
++connection default;
++--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
++--let $assert_text= Check that there is 'Too many connections, check_and_incr_conn_count fail' in error log.
++--let $assert_select= \[Warning\] \[[^]]*\] \[[^]]*\] \[GAUSSDB-DEBUG\]Too many connections, check_and_incr_conn_count fail
++--let $assert_only_after=.* \[System\] \[[^]]*\] \[[^]]*\] .* ready for connections
++--let $assert_count= 1
++--source include/assert_grep.inc
++ 
++ 
++SHOW GLOBAL STATUS LIKE 'Threads_connected';
++SHOW GLOBAL STATUS LIKE "Reserved_threads_connected";
++ 
++ --echo #
++--echo # reserved user's connections reached the maximum limit
++--echo #
++--disable_query_log
++--error ER_CON_COUNT_ERROR, 9999
++connect (reserved_conn2, 127.0.0.1, reserved_user2,123456,,);
++--enable_query_log
++connection default;
++--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
++--let $assert_text= Check that there is 'Too many connections, check_and_incr_reserved_conn_count fail' in error log.
++--let $assert_select= \[Warning\] \[[^]]*\] \[[^]]*\] \[GAUSSDB-DEBUG\]Too many connections, check_and_incr_reserved_conn_count fail
++--let $assert_only_after=.* \[System\] \[[^]]*\] \[[^]]*\] .* ready for connections
++--let $assert_count= 1
++--source include/assert_grep.inc
++ 
++disconnect reserved_conn1;
++ 
++--echo #
++--echo # password error
++--echo #
++--disable_query_log
++--error ER_ACCESS_DENIED_ERROR
++connect (reserved_conn2, 127.0.0.1, reserved_user2,1234,,);
++--enable_query_log
++connection default;
++--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
++--let $assert_text= Check that there is 'Access denied for user' in error log.
++--let $assert_select= \[Warning\] \[[^]]*\] \[[^]]*\] \[GAUSSDB-DEBUG\]Access denied for user
++--let $assert_only_after=.* \[System\] \[[^]]*\] \[[^]]*\] .* ready for connections
++--let $assert_count= 1
++--source include/assert_grep.inc
++ 
++SET GLOBAL max_connections=@save_max_connections;
++SET GLOBAL rds_reserved_connections=@save_rds_reserved_connections;
++SET GLOBAL rds_reserved_users=default;
++SET GLOBAL rds_conn_log_error_verbosity=@save_rds_conn_log_error_verbosity;
++SET GLOBAL log_error_verbosity=@save_log_error_verbosity;
++ 
++select count(*) from information_schema.PROCESSLIST where user in ('reserved_user1','reserved_user2');
++ 
++--disable_warnings
++DROP USER reserved_user1,reserved_user2;
++--enable_warnings
++
++--source include/wait_until_count_sessions.inc
+diff --git a/mysql-test/t/conn_normal_setup.test b/mysql-test/t/conn_normal_setup.test
+new file mode 100644
+index 00000000000..3914237a7d9
+--- /dev/null
++++ b/mysql-test/t/conn_normal_setup.test
+@@ -0,0 +1,68 @@
++--source include/count_sessions.inc
++
++ --disable_query_log
++call mtr.add_suppression("normal disconnect");
++call mtr.add_suppression("User 'root'@'localhost', connection success");
++--enable_query_log
++
++--echo #
++--echo # rds_conn_log_error_verbosity is 0, not record conn normal setup info
++--echo #
++SET GLOBAL rds_conn_log_error_verbosity=0;
++select @@global.rds_conn_log_error_verbosity;
++connect (test_con1, localhost, root,,);
++--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
++--let $assert_only_after=.* \[System\] \[[^]]*\] \[[^]]*\] .* ready for connections
++--let $assert_select=.* \[Warning\] \[[^]]*\] \[[^]]*\] \[GAUSSDB-DEBUG\].*connection success
++--let $assert_text= Check that there is 'no record connection success info' in error log.
++--let $assert_count= 0
++--source include/assert_grep.inc
++ 
++disconnect test_con1;
++ 
++--echo #
++--echo # rds_conn_log_error_verbosity is 1, not record conn normal setup info
++--echo #
++connection default;
++SET GLOBAL rds_conn_log_error_verbosity=1;
++select @@global.rds_conn_log_error_verbosity;
++connect (test_con2, localhost, root,,);
++--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
++--let $assert_only_after=.* \[System\] \[[^]]*\] \[[^]]*\] .* ready for connections
++--let $assert_select=.* \[Warning\] \[[^]]*\] \[[^]]*\] \[GAUSSDB-DEBUG\].*connection success
++--let $assert_text= Check that there is 'not record connection success info' in error log.
++--let $assert_count= 0
++--source include/assert_grep.inc
++ 
++disconnect test_con2;
++ 
++--echo #
++--echo # rds_conn_log_error_verbosity is 2, record conn normal setup info
++--echo #
++connection default;
++SET GLOBAL rds_conn_log_error_verbosity=2;
++select @@global.rds_conn_log_error_verbosity;
++connect (test_con3, localhost, root,,);
++--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
++--let $assert_only_after=.* \[System\] \[[^]]*\] \[[^]]*\] .* ready for connections
++--let $assert_select=.* \[Warning\] \[[^]]*\] \[[^]]*\] \[GAUSSDB-DEBUG\].*connection success
++--let $assert_text= Check that there is 'record connection success info' in error log.
++--let $assert_count= 1
++--source include/assert_grep.inc
++ 
++--echo #
++--echo # normal disconnect
++--echo #
++disconnect test_con3;
++connection default;
++--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
++--let $assert_only_after=.* \[System\] \[[^]]*\] \[[^]]*\] .* ready for connections
++--let $assert_select=.* \[Warning\] \[[^]]*\] \[[^]]*\] \[GAUSSDB-DEBUG\].*normal disconnect.*
++--let $assert_text= Check that there is 'normal disconnect' in error log.
++--let $assert_count= 1
++--source include/assert_grep.inc
++ 
++connection default;
++SET GLOBAL rds_conn_log_error_verbosity=0;
++
++--source include/wait_until_count_sessions.inc
+diff --git a/mysql-test/t/enrich_errlog_for_connection_with_socket.cnf b/mysql-test/t/enrich_errlog_for_connection_with_socket.cnf
+new file mode 100644
+index 00000000000..d1d03dcb0aa
+--- /dev/null
++++ b/mysql-test/t/enrich_errlog_for_connection_with_socket.cnf
+@@ -0,0 +1,4 @@
++!include include/default_my.cnf
++
++[client]
++protocol=socket
+\ No newline at end of file
+diff --git a/mysql-test/t/enrich_errlog_for_connection_with_socket.test b/mysql-test/t/enrich_errlog_for_connection_with_socket.test
+new file mode 100644
+index 00000000000..d8f97cc0146
+--- /dev/null
++++ b/mysql-test/t/enrich_errlog_for_connection_with_socket.test
+@@ -0,0 +1,107 @@
++# If the mysql client procotol is socket, it will write error msg to error log.
++ 
++--source include/not_threadpool.inc
++--source include/count_sessions.inc
++ 
++--disable_query_log
++call mtr.add_suppression("socket errno: 110, socket errmsg: Connection timed out.");
++call mtr.add_suppression("Client actively closes the connection.");
++--enable_query_log
++ 
++ 
++SET @start_event_scheduler= @@global.event_scheduler;
++set global event_scheduler=off;
++ 
++--echo ## Test rds_conn_log_error_verbosity variable.
++ 
++SET GLOBAL rds_conn_log_error_verbosity=1;
++select @@global.rds_conn_log_error_verbosity;
++SET GLOBAL rds_conn_log_error_verbosity=0;
++select @@global.rds_conn_log_error_verbosity;
++ 
++--echo ## If rds_conn_log_error_verbosity=0, error log has not errmsg.
++ 
++SET @start_value= @@global.wait_timeout;
++SET GLOBAL rds_conn_log_error_verbosity=0;
++ 
++# 1. test of scope session
++ 
++SET @start_time= UNIX_TIMESTAMP();
++--echo connect (test_con1, localhost, root,,);
++connect (test_con1, localhost, root,,);
++connection test_con1;
++ 
++# If not explicitly changed, @@session.wait_timeout equals @@global.wait_timeout.
++SELECT @@session.wait_timeout = @@global.wait_timeout AS 'Expect 1';
++ 
++# Find a small value <> @@global.wait_timeout.
++let $session_value =
++`SELECT IF(@@global.wait_timeout <> 2 OR @@global.wait_timeout IS NULL, 2, 3)`;
++--replace_result $session_value <session_value>
++eval SET @@session.wait_timeout = $session_value;
++ 
++--echo connect (test_con2, localhost, root,,);
++connect (test_con2, localhost, root,,);
++connection test_con2;
++ 
++--replace_result $session_value <session_value>
++eval SET @@session.wait_timeout = $session_value - 1;
++ 
++--echo connection default;
++connection default;
++ 
++--echo wait until connections ready
++let $wait_condition= SELECT COUNT(*) = 1 FROM information_schema.processlist;
++--source include/wait_condition.inc
++SELECT info FROM information_schema.processlist;
++ 
++--source include/wait_until_count_sessions.inc
++ 
++--echo ## If rds_conn_log_error_verbosity=1, error log contains "Test socket errno: 110, socket errmsg: Connection timed out."
++ 
++SET @start_value= @@global.wait_timeout;
++SET GLOBAL rds_conn_log_error_verbosity=1;
++ 
++# 1. test of scope session
++ 
++SET @start_time= UNIX_TIMESTAMP();
++--echo connect (test_con3, localhost, root,,);
++connect (test_con3, localhost, root,,);
++connection test_con3;
++ 
++# If not explicitly changed, @@session.wait_timeout equals @@global.wait_timeout.
++SELECT @@session.wait_timeout = @@global.wait_timeout AS 'Expect 1';
++ 
++# Find a small value <> @@global.wait_timeout.
++let $session_value =
++`SELECT IF(@@global.wait_timeout <> 2 OR @@global.wait_timeout IS NULL, 2, 3)`;
++--replace_result $session_value <session_value>
++eval SET @@session.wait_timeout = $session_value;
++ 
++--echo connect (test_con4, localhost, root,,);
++connect (test_con4, localhost, root,,);
++connection test_con4;
++ 
++--replace_result $session_value <session_value>
++eval SET @@session.wait_timeout = $session_value - 1;
++ 
++--echo connection default;
++connection default;
++ 
++--echo wait until connections ready
++let $wait_condition= SELECT COUNT(*) = 1 FROM information_schema.processlist;
++--source include/wait_condition.inc
++SELECT info FROM information_schema.processlist;
++ 
++--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
++--let $assert_text= Check that there is 'socket errno: 110, socket errmsg: Connection timed out.(ETIMEDOUT)' in error log.
++--let $assert_select= \[Warning\] \[[^]]*\] \[[^]]*\] \[TAURUS-DEBUG\]Reading bytes from a network handler fails. Socket errno: 110, Socket errmsg: Connection timed out.
++--let $assert_only_after = CURRENT_TEST:main.enrich_errlog_for_connection_with_socket
++--let $assert_match= Reading bytes from a network handler fails. Socket errno: 110, Socket errmsg: Connection timed out.
++--source include/assert_grep.inc
++ 
++SET @@global.wait_timeout = @start_value;
++SET GLOBAL rds_conn_log_error_verbosity=0;
++SET GLOBAL event_scheduler= @start_event_scheduler;
++
++--source include/wait_until_count_sessions.inc
+diff --git a/mysql-test/t/enrich_errlog_for_connection_with_threadpool.cnf b/mysql-test/t/enrich_errlog_for_connection_with_threadpool.cnf
+new file mode 100644
+index 00000000000..675893d7882
+--- /dev/null
++++ b/mysql-test/t/enrich_errlog_for_connection_with_threadpool.cnf
+@@ -0,0 +1,9 @@
++!include include/default_my.cnf
++
++[mysqld.1]
++threadpool_size= 512
++threadpool_max_threads= 512
++threadpool_enabled=OFF
++
++[client]
++connect-timeout= 1
+\ No newline at end of file
+diff --git a/mysql-test/t/enrich_errlog_for_connection_with_threadpool.test b/mysql-test/t/enrich_errlog_for_connection_with_threadpool.test
+new file mode 100644
+index 00000000000..b0da3b2f37b
+--- /dev/null
++++ b/mysql-test/t/enrich_errlog_for_connection_with_threadpool.test
+@@ -0,0 +1,56 @@
++--source include/count_sessions.inc
++ 
++--disable_query_log
++call mtr.add_suppression("Wait timeout exceeded, kill connection.");
++--enable_query_log
++ 
++SET @start_value= @@global.wait_timeout;
++SET @origin_rds_conn_log_error_verbosity= @@global.rds_conn_log_error_verbosity;
++SET @origin_threadpool_enabled= @@global.threadpool_enabled;
++ 
++SET GLOBAL rds_conn_log_error_verbosity=1;
++SET GLOBAL threadpool_enabled=ON;
++ 
++# 1. test of scope session
++ 
++SET @start_time= UNIX_TIMESTAMP();
++--echo connect (test_con1, localhost, root,,);
++connect (test_con1, localhost, root,,);
++connection test_con1;
++ 
++# If not explicitly changed, @@session.wait_timeout equals @@global.wait_timeout.
++SELECT @@session.wait_timeout = @@global.wait_timeout AS 'Expect 1';
++ 
++# Find a small value <> @@global.wait_timeout.
++let $session_value =
++`SELECT IF(@@global.wait_timeout <> 2 OR @@global.wait_timeout IS NULL, 2, 3)`;
++--replace_result $session_value <session_value>
++eval SET @@session.wait_timeout = $session_value;
++ 
++--echo connect (test_con2, localhost, root,,);
++connect (test_con2, localhost, root,,);
++connection test_con2;
++ 
++--replace_result $session_value <session_value>
++eval SET @@session.wait_timeout = $session_value - 1;
++ 
++--echo connection default;
++connection default;
++ 
++--echo wait until connections ready
++let $wait_condition= SELECT COUNT(*) = 1 FROM information_schema.processlist;
++--source include/wait_condition.inc
++SELECT info FROM information_schema.processlist;
++ 
++--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
++--let $assert_text= Check that there is 'Wait timeout exceeded, kill connection.' in error log.
++--let $assert_select= \[Warning\] \[[^]]*\] \[[^]]*\] \[TAURUS-DEBUG\]Wait timeout exceeded, kill connection.
++--let $assert_only_after = CURRENT_TEST:main.enrich_errlog_for_connection_with_threadpool
++--let $assert_match= Wait timeout exceeded, kill connection.
++--source include/assert_grep.inc
++ 
++SET @@global.wait_timeout = @start_value;
++SET @@global.rds_conn_log_error_verbosity = @origin_rds_conn_log_error_verbosity;
++SET @@global.threadpool_enabled = @origin_threadpool_enabled;
++
++--source include/wait_until_count_sessions.inc
+diff --git a/mysql-test/t/plugin_auth_user_lock.test b/mysql-test/t/plugin_auth_user_lock.test
+index ce296118eca..8fe1d7b42e7 100644
+--- a/mysql-test/t/plugin_auth_user_lock.test
++++ b/mysql-test/t/plugin_auth_user_lock.test
+@@ -1,7 +1,16 @@
+ #
+ # Test account lock / unlock of the proxy and proxied users
+ #
++
++--disable_query_log
++call mtr.add_suppression("\\[TAURUS-DEBUG\\]Access denied for user 'empl_external'@'localhost'. Account is locked\\.");
++--enable_query_log
++
+ --source include/have_plugin_auth.inc
++--source include/count_sessions.inc
++SET @save_log_error_verbosity= @@global.log_error_verbosity;
++SET GLOBAL rds_conn_log_error_verbosity=1;
++SET GLOBAL log_error_verbosity=2;
+ 
+ --echo # Create proxy and proxied users
+ CREATE USER 'empl_external'@'localhost' IDENTIFIED WITH test_plugin_server AS 'employee';
+@@ -29,5 +38,16 @@ ALTER USER employee@localhost ACCOUNT UNLOCK;
+ --error ER_ACCOUNT_HAS_BEEN_LOCKED
+ --connect(employee_con, localhost, empl_external, employee)
+ 
++--let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
++--let $assert_text= Check that there is 'Account is locked' in error log.
++--let $assert_select= \[Warning\] \[[^]]*\] \[[^]]*\] \[TAURUS-DEBUG\].*Account is locked.*
++--let $assert_text= Check that there is 'Account is locked' in error log.
++--let $assert_match= Account is locked
++--source include/assert_grep.inc
++
+ #Cleanup
+-DROP USER 'empl_external'@'localhost', 'employee'@'localhost';
+\ No newline at end of file
++DROP USER 'empl_external'@'localhost', 'employee'@'localhost';
++SET GLOBAL rds_conn_log_error_verbosity=0;
++SET GLOBAL log_error_verbosity= @save_log_error_verbosity;
++
++--source include/wait_until_count_sessions.inc
+diff --git a/plugin/threadpool/threadpool_unix.cc b/plugin/threadpool/threadpool_unix.cc
+index f7db5340b22..b863dc95c68 100644
+--- a/plugin/threadpool/threadpool_unix.cc
++++ b/plugin/threadpool/threadpool_unix.cc
+@@ -468,6 +468,8 @@ class Thd_timeout_checker : public Do_THD_Impl {
+       /* Wait timeout exceeded, kill connection. */
+       mysql_mutex_lock(&thd->LOCK_thd_data);
+       thd->killed = THD::KILL_CONNECTION;
++      conn_info_print(ConnectLogType::ABNORMAL,
++                      "Wait timeout exceeded, kill connection.");
+       tp_post_kill_notification(thd);
+       mysql_mutex_unlock(&thd->LOCK_thd_data);
+     } else {
+diff --git a/sql-common/net_serv.cc b/sql-common/net_serv.cc
+index 4e5c46f768e..638fcda080b 100644
+--- a/sql-common/net_serv.cc
++++ b/sql-common/net_serv.cc
+@@ -59,6 +59,7 @@
+ #include "mysql_async.h"
+ #include "mysql_com.h"
+ #include "mysqld_error.h"
++#include "sql/mysqld.h"
+ #include "violite.h"
+ 
+ using std::max;
+@@ -1395,6 +1396,25 @@ static bool net_read_raw_loop(NET *net, size_t count) {
+       net->last_errno = ER_NET_READ_ERROR;
+ 
+ #ifdef MYSQL_SERVER
++    if (net->vio->get_err_msg != NULL) {
++      if (eof) {
++        conn_info_print(ConnectLogType::ABNORMAL,
++                        "Reading bytes from a network handler fails. "
++                        "Client actively closes the connection.");
++      } else if (socket_errno != SOCKET_EAGAIN
++#if EAGAIN != EWOULDBLOCK
++                 && socket_errno != SOCKET_EWOULDBLOCK
++#endif
++      ) {
++        char socket_errmsg[VIO_ERRMSG_SIZE];
++        net->vio->get_err_msg(socket_errno, socket_errmsg);
++        conn_info_print(ConnectLogType::ABNORMAL,
++                        "Reading bytes from a network handler fails. "
++                        "Socket errno: %d, Socket errmsg: %s",
++                        socket_errno, socket_errmsg);
++      }
++    }
++
+     /* First packet always wait for net_wait_timeout */
+     if (net->pkt_nr == 0 && (vio_was_timeout(net->vio) || is_packet_timeout)) {
+       net->last_errno = ER_CLIENT_INTERACTION_TIMEOUT;
+diff --git a/sql/auth/sql_authentication.cc b/sql/auth/sql_authentication.cc
+index 24566cc7309..b63f901165d 100644
+--- a/sql/auth/sql_authentication.cc
++++ b/sql/auth/sql_authentication.cc
+@@ -1488,6 +1488,16 @@ static void login_failed_error(THD *thd, MPVIO_EXT *mpvio, int passwd_used) {
+            mpvio->auth_info.user_name, mpvio->auth_info.host_or_ip,
+            passwd_used ? ER_DEFAULT(ER_YES) : ER_DEFAULT(ER_NO));
+   }
++  if (log_error_verbosity < INFORMATION_LEVEL) {
++    Security_context *sctx = thd->security_context();
++    LEX_CSTRING sctx_user = sctx->user();
++    if (sctx_user.str != nullptr) {
++      conn_info_print(ConnectLogType::ABNORMAL,
++                      ER_DEFAULT(ER_ACCESS_DENIED_ERROR), sctx_user.str,
++                      sctx->host_or_ip().str,
++                      passwd_used ? ER_DEFAULT(ER_YES) : ER_DEFAULT(ER_NO));
++    }
++  }
+ }
+ 
+ /* clang-format off */
+@@ -4161,6 +4171,10 @@ int acl_authenticate(THD *thd, enum_server_command command) {
+                  mpvio.auth_info.host_or_ip);
+         LogErr(INFORMATION_LEVEL, ER_ACCESS_DENIED_FOR_USER_ACCOUNT_LOCKED,
+                mpvio.acl_user->user, mpvio.auth_info.host_or_ip);
++        if (log_error_verbosity < INFORMATION_LEVEL)
++          conn_info_print(ConnectLogType::ABNORMAL,
++                          ER_DEFAULT(ER_ACCESS_DENIED_FOR_USER_ACCOUNT_LOCKED),
++                          mpvio.acl_user->user, mpvio.auth_info.host_or_ip);
+         goto end;
+       }
+ 
+@@ -4244,6 +4258,11 @@ int acl_authenticate(THD *thd, enum_server_command command) {
+         (uc->user_resources.conn_per_hour || uc->user_resources.user_conn ||
+          global_system_variables.max_user_connections) &&
+         check_for_max_user_connections(thd, uc)) {
++      conn_info_print(
++          ConnectLogType::ABNORMAL,
++          "User: '%-.48s'@'%-.64s' has already too many connections, user "
++          "current connections: %d.",
++          sctx->user().str, sctx->host_or_ip().str, uc->connections);
+       goto end;  // The error is set in check_for_max_user_connections()
+     }
+ 
+diff --git a/sql/conn_handler/connection_handler_manager.cc b/sql/conn_handler/connection_handler_manager.cc
+index fb67fb0946e..5b42d761e1f 100644
+--- a/sql/conn_handler/connection_handler_manager.cc
++++ b/sql/conn_handler/connection_handler_manager.cc
+@@ -45,6 +45,7 @@
+ #include "sql/conn_handler/connection_handler_impl.h"  // Per_thread_connection_handler
+ #include "sql/conn_handler/plugin_connection_handler.h"  // Plugin_connection_handler
+ #include "sql/current_thd.h"
++#include "sql/log.h"
+ #include "sql/mysqld.h"        // max_connections
+ #include "sql/sql_callback.h"  // MYSQL_CALLBACK
+ #include "sql/sql_class.h"     //THD
+@@ -195,6 +196,21 @@ bool Connection_handler_manager::valid_connection_count(THD *thd) {
+       assert(false);
+   }
+ 
++  if (connection_accepted == false) {
++    auto sctx = thd->security_context();
++    conn_info_print(
++        ConnectLogType::ABNORMAL,
++        "Too many connections, valid_connection_count check fail, "
++        "user: '%-.48s'@'%-.64s', connection_count: %d, "
++        "rds_admin_connection_count: %d, rds_reserved_connection_count: %d, "
++        "max_connections: %ld, max_rds_reserved_connections: %ld, "
++        "opt_rds_admin_max_connections: %ld.",
++        sctx->user().str, sctx->host_or_ip().str, connection_count,
++        rds_admin_connection_count, rds_reserved_connection_count,
++        max_connections, max_rds_reserved_connections,
++        opt_rds_admin_max_connections);
++  }
++
+   if (connection_accepted && connection_count > max_used_connections) {
+     max_used_connections = connection_count;
+     max_used_connections_time = time(nullptr);
+@@ -230,6 +246,17 @@ bool Connection_handler_manager::check_and_incr_conn_count(
+         rds_admin_connection_count >= opt_rds_admin_max_connections))) {
+     connection_accepted = false;
+     m_connection_errors_max_connection++;
++    conn_info_print(ConnectLogType::ABNORMAL,
++                    "Too many connections, check_and_incr_conn_count fail, "
++                    "is_admin_connection: %d, connection_count: %d, "
++                    "rds_admin_connection_count: %d, max_connections: %ld, "
++                    "max_rds_reserved_connections: %ld, "
++                    "opt_rds_admin_max_connections: %ld.",
++                    is_admin_connection, connection_count,
++
++                    rds_admin_connection_count, max_connections,
++                    max_rds_reserved_connections,
++                    opt_rds_admin_max_connections);
+   } else {
+     ++connection_count;
+     if (is_admin_connection) ++rds_admin_connection_count;
+@@ -260,6 +287,15 @@ bool Connection_handler_manager::check_and_incr_reserved_conn_count(
+   if (rds_reserved_connection_count >= max_rds_reserved_connections) {
+     connection_accepted = false;
+     m_connection_errors_max_connection++;
++
++    auto sctx = rds_reserved_thd->security_context();
++    conn_info_print(
++        ConnectLogType::ABNORMAL,
++        "Too many connections, check_and_incr_reserved_conn_count fail, "
++        "user: '%-.48s'@'%-.64s', rds_reserved_connection_count: %d, "
++        "max_rds_reserved_connections: %ld.",
++        sctx->user().str, sctx->host_or_ip().str, rds_reserved_connection_count,
++        max_rds_reserved_connections);
+   } else {
+     ++rds_reserved_connection_count;
+     rds_reserved_thd->mark_as_reserved_user_session();
+diff --git a/sql/log.cc b/sql/log.cc
+index 604414340b9..5050474ced8 100644
+--- a/sql/log.cc
++++ b/sql/log.cc
+@@ -2725,3 +2725,26 @@ int my_plugin_log_message(MYSQL_PLUGIN *plugin_ptr, plugin_log_level level,
+ 
+   return 0;
+ }
++
++void conn_info_print(ConnectLogType log_type, const char *format, ...) {
++  /* rds_conn_log_error_verbosity value range:0, 1, 2 */
++  switch (rds_conn_log_error_verbosity) {
++    case 0:  // not log conn info to err log
++      return;
++    case 1:  // log abnormal conn info to err log
++      if (log_type != ConnectLogType::ABNORMAL) return;
++      break;
++    case 2:  // log abnornal and normal conn info to err log
++      break;
++    default:  // never go to this logic
++      DBUG_ASSERT(false);
++      break;
++  }
++
++  char buff[MYSQL_ERRMSG_SIZE];
++  va_list args;
++  va_start(args, format);
++  (void)vsnprintf(buff, sizeof(buff), format, args);
++  va_end(args);
++  LogErr(WARNING_LEVEL, ER_RPL_IO_THREAD_KILLED, debug_info_prefix, buff);
++}
+\ No newline at end of file
+diff --git a/sql/log.h b/sql/log.h
+index ef987944450..c97db00cc87 100644
+--- a/sql/log.h
++++ b/sql/log.h
+@@ -1673,4 +1673,7 @@ int log_builtins_exit();
+ */
+ void log_write_errstream(const char *buffer, size_t length);
+ 
++void conn_info_print(ConnectLogType log_type, const char *format, ...)
++    MY_ATTRIBUTE((format(printf, 2, 3)));
++
+ #endif /* LOG_H */
+diff --git a/sql/mysqld.cc b/sql/mysqld.cc
+index 3394f2c874d..db1befb7949 100644
+--- a/sql/mysqld.cc
++++ b/sql/mysqld.cc
+@@ -1430,6 +1430,8 @@ ulonglong rds_security_hardening;
+ ulonglong global_conn_mem_limit = 0;
+ ulonglong global_conn_mem_counter = 0;
+ 
++ulong rds_conn_log_error_verbosity;
++
+ bool rds_purge_binary_logs_asynchronously = false;
+ 
+ /**
+diff --git a/sql/mysqld.h b/sql/mysqld.h
+index f039dee0100..bc65062665b 100644
+--- a/sql/mysqld.h
++++ b/sql/mysqld.h
+@@ -371,6 +371,7 @@ extern uint32 gtid_executed_compression_period;
+ extern bool binlog_gtid_simple_recovery;
+ extern ulong binlog_error_action;
+ extern ulong locked_account_connection_count;
++extern ulong rds_conn_log_error_verbosity;
+ /* Currently we only support {SELECT, UPDATE, DELETE, INSERT} type's SQL filter
+  */
+ extern bool opt_rds_sqlfilter_control;
+diff --git a/sql/sql_class.cc b/sql/sql_class.cc
+index aeb8b7f198f..7207e6f4ebd 100644
+--- a/sql/sql_class.cc
++++ b/sql/sql_class.cc
+@@ -75,6 +75,7 @@
+ #include "sql/item_func.h"        // user_var_entry
+ #include "sql/lock.h"             // mysql_lock_abort_for_thread
+ #include "sql/locking_service.h"  // release_all_locking_service_locks
++#include "sql/log.h"
+ #include "sql/log_event.h"
+ #include "sql/mdl_context_backup.h"  // MDL context backup for XA
+ #include "sql/mysqld.h"              // global_system_variables ...
+@@ -1637,6 +1638,15 @@ void THD::disconnect(bool server_shutdown) {
+ 
+   mysql_mutex_lock(&LOCK_thd_data);
+ 
++  if (rds_conn_log_error_verbosity == 2 && killed == THD::NOT_KILLED) {
++    Security_context *sctx = security_context();
++    const char *user =
++        ((sctx && sctx->user().str) ? sctx->user().str : "unauthenticated");
++    conn_info_print(ConnectLogType::NORMAL,
++                    "User '%-.48s'@'%-.64s' normal disconnect.", user,
++                    sctx->host_or_ip().str ? sctx->host_or_ip().str : "");
++  }
++
+   /* Shutdown clone vio always, to wake up clone waiting for remote. */
+   shutdown_clone_vio();
+ 
+diff --git a/sql/sql_connect.cc b/sql/sql_connect.cc
+index 74e2f34eb9f..77f5d382e72 100644
+--- a/sql/sql_connect.cc
++++ b/sql/sql_connect.cc
+@@ -718,6 +718,14 @@ static bool login_connection(THD *thd) {
+       thd->variables.net_read_timeout);
+   thd->get_protocol_classic()->set_write_timeout(
+       thd->variables.net_write_timeout);
++
++  Security_context *sctx = thd->security_context();
++  LEX_CSTRING sctx_user = sctx->user();
++  conn_info_print(ConnectLogType::NORMAL,
++                  "User '%-.48s'@'%-.64s', connection success",
++                  sctx_user.str ? sctx_user.str : "unauthenticated",
++                  sctx->host_or_ip().str);
++
+   return false;
+ }
+ 
+diff --git a/sql/sys_vars.cc b/sql/sys_vars.cc
+index 46d7b608837..fcfd566ba44 100644
+--- a/sql/sys_vars.cc
++++ b/sql/sys_vars.cc
+@@ -8447,6 +8447,16 @@ static Sys_var_bool Sys_rds_load_data_infile_enable(
+     NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(0), ON_UPDATE(0), DEFAULT(0),
+     sys_var::PARSE_NORMAL);
+ 
++static Sys_var_ulong Sys_conn_log_error_verbosity(
++    "rds_conn_log_error_verbosity",
++    "How detailed the connection log should be."
++    "0, disable."
++    "1, log abnormal connection setup and abnormal disconnection info."
++    "2, log all connection info.",
++    GLOBAL_VAR(rds_conn_log_error_verbosity), CMD_LINE(REQUIRED_ARG),
++    VALID_RANGE(0, 2), DEFAULT(1), BLOCK_SIZE(1), NO_MUTEX_GUARD,
++    NOT_IN_BINLOG);
++
+ static Sys_var_bool Sys_rds_maintenance_operation_write_binlog(
+     "rds_maintenance_operation_write_binlog",
+     "Control maintenance operation written to binlog",
+diff --git a/unittest/gunit/xplugin/xpl/CMakeLists.txt b/unittest/gunit/xplugin/xpl/CMakeLists.txt
+index 139ece4e8ff..8cc693a46a0 100644
+--- a/unittest/gunit/xplugin/xpl/CMakeLists.txt
++++ b/unittest/gunit/xplugin/xpl/CMakeLists.txt
+@@ -61,6 +61,7 @@ ENDIF()
+ 
+ MYSQL_ADD_EXECUTABLE(${XPL_UNIT_TESTS}
+   ../test_main.cc
++  user_password_verification_t.cc
+   LINK_LIBRARIES xpl_test_src
+   ADD_TEST xplugin
+ )
+diff --git a/unittest/gunit/xplugin/xpl/user_password_verification_t.cc b/unittest/gunit/xplugin/xpl/user_password_verification_t.cc
+index 98f2d115dd9..e5551fd2331 100644
+--- a/unittest/gunit/xplugin/xpl/user_password_verification_t.cc
++++ b/unittest/gunit/xplugin/xpl/user_password_verification_t.cc
+@@ -25,6 +25,7 @@
+ 
+ #include "mysql_com.h"  // NOLINT(build/include_subdir)
+ #include "sha1.h"       // for SHA1_HASH_SIZE NOLINT(build/include_subdir)
++#include "violite.h"
+ 
+ #include "plugin/x/src/cache_based_verification.h"
+ #include "plugin/x/src/native_plain_verification.h"
+@@ -175,5 +176,55 @@ TEST_F(User_password_verification, sha256_memory_verification_fail) {
+       "user", "host", SHA256_MEMORY_CLIENT_STRING, ""));
+ }
+ 
++class Get_conn_err_msg_test : public ::testing::Test {};
++TEST_F(Get_conn_err_msg_test, get_conn_err_msg_test) {
++  char buf[VIO_ERRMSG_SIZE];
++  vio_get_err_msg(EBADF, buf);
++  EXPECT_EQ(
++      0,
++      strcmp(buf, "The argument sockfd is an invalid file descriptor.(EBADF)"));
++  vio_get_err_msg(ECONNREFUSED, buf);
++  EXPECT_EQ(0, strcmp(buf,
++                      "A remote host refused to allow the network "
++                      "connection.(ECONNREFUSED)"));
++  vio_get_err_msg(EFAULT, buf);
++  EXPECT_EQ(0, strcmp(buf,
++                      "The receive buffer pointer(s) point outside the "
++                      "process's address space.(EFAULT)"));
++
++  vio_get_err_msg(EINTR, buf);
++  EXPECT_EQ(0, strcmp(buf,
++                      "The receive was interrupted by delivery of a signal "
++                      "before any data were available.(EINTR)"));
++
++  vio_get_err_msg(EINVAL, buf);
++  EXPECT_EQ(0, strcmp(buf, "Invalid argument passed.(EINVAL)"));
++
++  vio_get_err_msg(ENOMEM, buf);
++  EXPECT_EQ(0, strcmp(buf, "Could not allocate memory for recvmsg().(ENOMEM)"));
++
++  vio_get_err_msg(ENOTCONN, buf);
++  EXPECT_EQ(0, strcmp(buf, "The socket is not connected.(ENOTCONN)"));
++
++  vio_get_err_msg(ENOTSOCK, buf);
++  EXPECT_EQ(
++      0,
++      strcmp(
++          buf,
++          "The file descriptor sockfd does not refer to a socket.(ENOTSOCK)"));
++
++  vio_get_err_msg(ETIMEDOUT, buf);
++  EXPECT_EQ(0, strcmp(buf, "Connection timed out.(ETIMEDOUT)"));
++
++  vio_get_err_msg(EPIPE, buf);
++  EXPECT_EQ(0, strcmp(buf, "Connection reset by peer.(EPIPE)"));
++
++  vio_get_err_msg(ECONNRESET, buf);
++  EXPECT_EQ(0, strcmp(buf, "Connection reset by peer.(ECONNRESET)"));
++
++  vio_get_err_msg(0, buf);
++  EXPECT_EQ(0, strcmp(buf, "Others errors."));
++}
++
+ }  // namespace test
+ }  // namespace xpl
+diff --git a/vio/vio.cc b/vio/vio.cc
+index 5204e2b9229..54e36552679 100644
+--- a/vio/vio.cc
++++ b/vio/vio.cc
+@@ -311,6 +311,11 @@ static bool vio_init(Vio *vio, enum enum_vio_type type, my_socket sd,
+       break;
+   }
+ 
++  if (type == VIO_TYPE_SOCKET || type == VIO_TYPE_TCPIP)
++    vio->get_err_msg = vio_get_err_msg;
++  else
++    vio->get_err_msg = nullptr;
++
+   DBUG_EXECUTE_IF("vio_init_returns_error", { return true; });
+ 
+ #ifdef HAVE_KQUEUE
+diff --git a/vio/viosocket.cc b/vio/viosocket.cc
+index a1f7f05161c..1128e95b466 100644
+--- a/vio/viosocket.cc
++++ b/vio/viosocket.cc
+@@ -171,6 +171,62 @@ size_t vio_read(Vio *vio, uchar *buf, size_t size) {
+   return ret;
+ }
+ 
++/*
++ *   Print the socket err msg to error log.
++ *   */
++void vio_get_err_msg(int error, char *buf) {
++  const char *error_str;
++  switch (error) {
++    case EBADF:
++      error_str = "The argument sockfd is an invalid file descriptor.(EBADF)";
++      break;
++    case ECONNREFUSED:
++      error_str =
++          "A remote host refused to allow the network "
++          "connection.(ECONNREFUSED)";
++      break;
++    case EFAULT:
++      error_str =
++          "The receive buffer pointer(s) point outside the process's address "
++          "space.(EFAULT)";
++      break;
++    case EINTR:
++      error_str =
++          "The receive was interrupted by delivery of a signal "
++          "before any data were available.(EINTR)";
++      break;
++    case EINVAL:
++      error_str = "Invalid argument passed.(EINVAL)";
++      break;
++    case ENOMEM:
++      error_str = "Could not allocate memory for recvmsg().(ENOMEM)";
++      break;
++    case ENOTCONN:
++      error_str = "The socket is not connected.(ENOTCONN)";
++      break;
++    case ENOTSOCK:
++      error_str =
++          "The file descriptor sockfd does not refer to a socket.(ENOTSOCK)";
++      break;
++    case ETIMEDOUT:
++      error_str = "Connection timed out.(ETIMEDOUT)";
++      break;
++    case EPIPE:
++      error_str = "Connection reset by peer.(EPIPE)";
++      break;
++    case ECONNRESET:
++      error_str = "Connection reset by peer.(ECONNRESET)";
++      break;
++    default:
++      error_str = "Others errors.";
++  }
++
++  DBUG_ASSERT(strlen(error_str) < VIO_ERRMSG_SIZE);
++
++  memcpy(buf, error_str, strlen(error_str));
++  buf[strlen(error_str)] = '\0';
++}
++
+ /*
+   Buffered read: if average read size is small it may
+   reduce number of syscalls.
+-- 
+2.23.0
+

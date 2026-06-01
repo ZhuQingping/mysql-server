@@ -1,0 +1,68 @@
+#
+# BUG2025092628138: In subquery scenarios, Dstore performs worse than InnoDB
+#
+# For a unique index where all columns are not null, each row is unique,
+# the cardinality of the last column is equal to the number of rows in the table.
+DROP TABLE IF EXISTS t1;
+Warnings:
+Note	1051	Unknown table 'test.t1'
+CREATE TABLE t1 (
+col1 INT NOT NULL,
+col2 INT NOT NULL,
+col3 INT,
+UNIQUE KEY uniq_idx (col1, col2)
+);
+INSERT INTO t1 VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300), (4, 40, 400);
+ANALYZE TABLE t1 UPDATE HISTOGRAM ON col1, col2;
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'col1'.
+test.t1	histogram	status	Histogram statistics created for column 'col2'.
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SHOW INDEX FROM t1;
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+t1	0	uniq_idx	1	col1	A	4	NULL	NULL		BTREE			YES	NULL
+t1	0	uniq_idx	2	col2	A	4	NULL	NULL		BTREE			YES	NULL
+DROP TABLE t1;
+# For a composite index, if the value of rec_per_key is less than 1, it will be adjusted to 1.
+CREATE TABLE t1 (
+col1 INT NOT NULL,
+col2 INT,
+col3 INT,
+UNIQUE KEY uniq_idx (col1, col2)
+);
+INSERT INTO t1 VALUES (1, 10, 100), (2, 20, 200), (3, NULL, 300), (4, NULL, 400);
+ANALYZE TABLE t1 UPDATE HISTOGRAM ON col1, col2;
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'col1'.
+test.t1	histogram	status	Histogram statistics created for column 'col2'.
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SHOW INDEX FROM t1;
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+t1	0	uniq_idx	1	col1	A	4	NULL	NULL		BTREE			YES	NULL
+t1	0	uniq_idx	2	col2	A	4	NULL	NULL	YES	BTREE			YES	NULL
+DROP TABLE t1;
+# For a primary key index, each row in the table is unique, 
+# so the cardinality of the last column equals the total number of rows.
+CREATE TABLE t1 (
+col1 INT,
+col2 INT,
+col3 INT,
+PRIMARY KEY (col1, col2)
+);
+INSERT INTO t1 VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300), (4, 40, 400), (5, 50, 500);
+ANALYZE TABLE t1 UPDATE HISTOGRAM ON col1, col2;
+Table	Op	Msg_type	Msg_text
+test.t1	histogram	status	Histogram statistics created for column 'col1'.
+test.t1	histogram	status	Histogram statistics created for column 'col2'.
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SHOW INDEX FROM t1;
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+t1	0	PRIMARY	1	col1	A	5	NULL	NULL		BTREE			YES	NULL
+t1	0	PRIMARY	2	col2	A	5	NULL	NULL		BTREE			YES	NULL
+DROP TABLE t1;

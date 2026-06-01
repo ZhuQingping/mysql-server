@@ -1,0 +1,796 @@
+SET @original_time_zone = @@time_zone;
+SET @original_system_time_zone = @@system_time_zone;
+DROP TABLE IF EXISTS t_date_time_test;
+Warnings:
+Note	1051	Unknown table 'test.t_date_time_test'
+DROP TABLE IF EXISTS t_timezone_test;
+Warnings:
+Note	1051	Unknown table 'test.t_timezone_test'
+DROP TABLE IF EXISTS t_precision_test;
+Warnings:
+Note	1051	Unknown table 'test.t_precision_test'
+
+# Testing DATE type operations
+CREATE TABLE t_date_time_test (
+id INT AUTO_INCREMENT PRIMARY KEY,
+d DATE,
+dt DATETIME,
+ts TIMESTAMP,
+t TIME,
+KEY idx_date (d),
+KEY idx_datetime (dt),
+KEY idx_timestamp (ts),
+KEY idx_time (t)
+);
+INSERT INTO t_date_time_test (d) VALUES 
+('1000-01-01'),     # Min date
+('2023-12-31'),     # Regular date
+('9999-12-31'),     # Max date
+('2024-02-29'),     # Leap year
+('2023-02-28'),     # Non-leap year
+(NULL);
+# Basic DATE comparisons
+SELECT d FROM t_date_time_test WHERE d = '2023-12-31';
+d
+2023-12-31
+SELECT d FROM t_date_time_test WHERE d != '2023-12-31' ORDER BY d;
+d
+1000-01-01
+2023-02-28
+2024-02-29
+9999-12-31
+SELECT d FROM t_date_time_test WHERE d < '2024-01-01' ORDER BY d;
+d
+1000-01-01
+2023-02-28
+2023-12-31
+SELECT d FROM t_date_time_test WHERE d > '2023-01-01' ORDER BY d;
+d
+2023-02-28
+2023-12-31
+2024-02-29
+9999-12-31
+SELECT d FROM t_date_time_test WHERE d <= '2023-12-31' ORDER BY d;
+d
+1000-01-01
+2023-02-28
+2023-12-31
+SELECT d FROM t_date_time_test WHERE d >= '2023-12-31' ORDER BY d;
+d
+2023-12-31
+2024-02-29
+9999-12-31
+# DATE NULL-safe comparison
+SELECT d FROM t_date_time_test WHERE d <=> NULL;
+d
+NULL
+SELECT d FROM t_date_time_test WHERE d <=> '2023-12-31';
+d
+2023-12-31
+
+# Testing DATETIME type operations
+TRUNCATE TABLE t_date_time_test;
+INSERT INTO t_date_time_test (dt) VALUES 
+('1000-01-01 00:00:00'),           # Min datetime
+('2023-12-31 23:59:59'),           # Max time of day
+('9999-12-31 23:59:59'),           # Max datetime
+('2024-02-29 12:30:45'),           # Leap year with time
+('2023-07-15 00:00:00'),           # Midnight
+('2023-07-15 12:00:00.123456'),    # With microseconds
+(NULL);
+# Basic DATETIME comparisons
+SELECT dt FROM t_date_time_test WHERE dt = '2023-12-31 23:59:59';
+dt
+2023-12-31 23:59:59
+SELECT dt FROM t_date_time_test WHERE dt < '2024-01-01 00:00:00' ORDER BY dt;
+dt
+1000-01-01 00:00:00
+2023-07-15 00:00:00
+2023-07-15 12:00:00
+2023-12-31 23:59:59
+SELECT dt FROM t_date_time_test WHERE dt > '2023-01-01 00:00:00' ORDER BY dt;
+dt
+2023-07-15 00:00:00
+2023-07-15 12:00:00
+2023-12-31 23:59:59
+2024-02-29 12:30:45
+9999-12-31 23:59:59
+SELECT dt FROM t_date_time_test WHERE dt BETWEEN '2023-07-15 00:00:00' AND '2023-07-15 23:59:59' ORDER BY dt;
+dt
+2023-07-15 00:00:00
+2023-07-15 12:00:00
+# DATETIME with microsecond precision
+SELECT dt FROM t_date_time_test WHERE dt = '2023-07-15 12:00:00.123456';
+dt
+2023-07-15 12:00:00
+SELECT dt FROM t_date_time_test WHERE dt > '2023-07-15 12:00:00.000000' ORDER BY dt;
+dt
+2023-12-31 23:59:59
+2024-02-29 12:30:45
+9999-12-31 23:59:59
+
+# Testing TIMESTAMP type operations
+TRUNCATE TABLE t_date_time_test;
+INSERT INTO t_date_time_test (ts) VALUES 
+('1970-01-02 00:00:01'),           # Safe min timestamp
+('2023-12-31 23:59:59'),           # Regular timestamp
+('2038-01-19 03:14:07'),           # Max timestamp
+('2024-02-29 12:30:45'),           # Leap year
+('1980-01-01 12:00:00'),           # Another safe timestamp
+(NULL);
+# Basic TIMESTAMP comparisons
+SELECT ts FROM t_date_time_test WHERE ts = '2023-12-31 23:59:59';
+ts
+2023-12-31 23:59:59
+SELECT ts FROM t_date_time_test WHERE ts < '2024-01-01 00:00:00' ORDER BY ts;
+ts
+1970-01-02 00:00:01
+1980-01-01 12:00:00
+2023-12-31 23:59:59
+SELECT ts FROM t_date_time_test WHERE ts > '2000-01-01 00:00:00' ORDER BY ts;
+ts
+2023-12-31 23:59:59
+2024-02-29 12:30:45
+2038-01-19 03:14:07
+SELECT ts FROM t_date_time_test WHERE ts <= '2023-12-31 23:59:59' ORDER BY ts;
+ts
+1970-01-02 00:00:01
+1980-01-01 12:00:00
+2023-12-31 23:59:59
+# TIMESTAMP range validation
+SELECT ts FROM t_date_time_test WHERE ts >= '1970-01-02 00:00:01' ORDER BY ts;
+ts
+1970-01-02 00:00:01
+1980-01-01 12:00:00
+2023-12-31 23:59:59
+2024-02-29 12:30:45
+2038-01-19 03:14:07
+SELECT ts FROM t_date_time_test WHERE ts <= '2038-01-19 03:14:07' ORDER BY ts;
+ts
+1970-01-02 00:00:01
+1980-01-01 12:00:00
+2023-12-31 23:59:59
+2024-02-29 12:30:45
+2038-01-19 03:14:07
+
+# Testing TIME type operations
+TRUNCATE TABLE t_date_time_test;
+INSERT INTO t_date_time_test (t) VALUES 
+('-838:59:59'),                    # Min time
+('00:00:00'),                      # Midnight
+('12:30:45'),                      # Regular time
+('23:59:59'),                      # End of day
+('838:59:59'),                     # Max time
+('12:30:45.123456'),               # With microseconds
+(NULL);
+# Basic TIME comparisons
+SELECT t FROM t_date_time_test WHERE t = '12:30:45';
+t
+12:30:45
+12:30:45
+SELECT t FROM t_date_time_test WHERE t < '12:00:00' ORDER BY t;
+t
+-838:59:59
+00:00:00
+SELECT t FROM t_date_time_test WHERE t > '12:00:00' ORDER BY t;
+t
+12:30:45
+12:30:45
+23:59:59
+838:59:59
+SELECT t FROM t_date_time_test WHERE t BETWEEN '12:00:00' AND '13:00:00' ORDER BY t;
+t
+12:30:45
+12:30:45
+# TIME with negative values
+SELECT t FROM t_date_time_test WHERE t < '00:00:00' ORDER BY t;
+t
+-838:59:59
+SELECT t FROM t_date_time_test WHERE t > '00:00:00' ORDER BY t;
+t
+12:30:45
+12:30:45
+23:59:59
+838:59:59
+
+# ===============================================
+# COMPREHENSIVE PRECISION TESTING
+# ===============================================
+CREATE TABLE t_precision_test (
+id INT AUTO_INCREMENT PRIMARY KEY,
+description VARCHAR(100),
+dt0 DATETIME(0),
+dt1 DATETIME(1),
+dt2 DATETIME(2),
+dt3 DATETIME(3),
+dt4 DATETIME(4),
+dt5 DATETIME(5),
+dt6 DATETIME(6),
+ts0 TIMESTAMP(0) NULL,
+ts1 TIMESTAMP(1) NULL,
+ts2 TIMESTAMP(2) NULL,
+ts3 TIMESTAMP(3) NULL,
+ts4 TIMESTAMP(4) NULL,
+ts5 TIMESTAMP(5) NULL,
+ts6 TIMESTAMP(6) NULL,
+t0 TIME(0),
+t1 TIME(1),
+t2 TIME(2),
+t3 TIME(3),
+t4 TIME(4),
+t5 TIME(5),
+t6 TIME(6),
+KEY idx_dt6 (dt6),
+KEY idx_ts6 (ts6),
+KEY idx_t6 (t6)
+);
+
+# Testing basic precision functionality
+INSERT INTO t_precision_test (
+description, 
+dt0, dt1, dt2, dt3, dt4, dt5, dt6,
+ts0, ts1, ts2, ts3, ts4, ts5, ts6,
+t0, t1, t2, t3, t4, t5, t6
+) VALUES (
+'Full precision test',
+'2023-07-15 12:30:45.123456',    # Will be truncated to different precisions
+'2023-07-15 12:30:45.123456',
+'2023-07-15 12:30:45.123456',
+'2023-07-15 12:30:45.123456',
+'2023-07-15 12:30:45.123456',
+'2023-07-15 12:30:45.123456',
+'2023-07-15 12:30:45.123456',
+'2023-07-15 12:30:45.123456',    # TIMESTAMP with different precisions
+'2023-07-15 12:30:45.123456',
+'2023-07-15 12:30:45.123456',
+'2023-07-15 12:30:45.123456',
+'2023-07-15 12:30:45.123456',
+'2023-07-15 12:30:45.123456',
+'2023-07-15 12:30:45.123456',
+'12:30:45.123456',               # TIME with different precisions
+'12:30:45.123456',
+'12:30:45.123456',
+'12:30:45.123456',
+'12:30:45.123456',
+'12:30:45.123456',
+'12:30:45.123456'
+);
+# Display precision truncation results
+SELECT 
+description,
+dt0, dt1, dt2, dt3, dt4, dt5, dt6
+FROM t_precision_test;
+description	dt0	dt1	dt2	dt3	dt4	dt5	dt6
+Full precision test	2023-07-15 12:30:45	2023-07-15 12:30:45.1	2023-07-15 12:30:45.12	2023-07-15 12:30:45.123	2023-07-15 12:30:45.1235	2023-07-15 12:30:45.12346	2023-07-15 12:30:45.123456
+SELECT 
+description,
+ts0, ts1, ts2, ts3, ts4, ts5, ts6
+FROM t_precision_test;
+description	ts0	ts1	ts2	ts3	ts4	ts5	ts6
+Full precision test	2023-07-15 12:30:45	2023-07-15 12:30:45.1	2023-07-15 12:30:45.12	2023-07-15 12:30:45.123	2023-07-15 12:30:45.1235	2023-07-15 12:30:45.12346	2023-07-15 12:30:45.123456
+SELECT 
+description,
+t0, t1, t2, t3, t4, t5, t6
+FROM t_precision_test;
+description	t0	t1	t2	t3	t4	t5	t6
+Full precision test	12:30:45	12:30:45.1	12:30:45.12	12:30:45.123	12:30:45.1235	12:30:45.12346	12:30:45.123456
+
+# Testing precision rounding vs truncation
+INSERT INTO t_precision_test (
+description,
+dt0, dt1, dt2, dt3, dt4, dt5, dt6,
+t0, t1, t2, t3, t4, t5, t6
+) VALUES
+('Rounding up test', 
+'2023-07-15 12:30:45.999999', '2023-07-15 12:30:45.999999', '2023-07-15 12:30:45.999999',
+'2023-07-15 12:30:45.999999', '2023-07-15 12:30:45.999999', '2023-07-15 12:30:45.999999', '2023-07-15 12:30:45.999999',
+'12:30:45.999999', '12:30:45.999999', '12:30:45.999999',
+'12:30:45.999999', '12:30:45.999999', '12:30:45.999999', '12:30:45.999999'),
+('Rounding down test',
+'2023-07-15 12:30:45.111111', '2023-07-15 12:30:45.111111', '2023-07-15 12:30:45.111111',
+'2023-07-15 12:30:45.111111', '2023-07-15 12:30:45.111111', '2023-07-15 12:30:45.111111', '2023-07-15 12:30:45.111111',
+'12:30:45.111111', '12:30:45.111111', '12:30:45.111111',
+'12:30:45.111111', '12:30:45.111111', '12:30:45.111111', '12:30:45.111111'),
+('Mid-point rounding',
+'2023-07-15 12:30:45.555555', '2023-07-15 12:30:45.555555', '2023-07-15 12:30:45.555555',
+'2023-07-15 12:30:45.555555', '2023-07-15 12:30:45.555555', '2023-07-15 12:30:45.555555', '2023-07-15 12:30:45.555555',
+'12:30:45.555555', '12:30:45.555555', '12:30:45.555555',
+'12:30:45.555555', '12:30:45.555555', '12:30:45.555555', '12:30:45.555555');
+SELECT description, dt0, dt1, dt2, dt3, dt4, dt5, dt6 FROM t_precision_test WHERE description LIKE '%test';
+description	dt0	dt1	dt2	dt3	dt4	dt5	dt6
+Full precision test	2023-07-15 12:30:45	2023-07-15 12:30:45.1	2023-07-15 12:30:45.12	2023-07-15 12:30:45.123	2023-07-15 12:30:45.1235	2023-07-15 12:30:45.12346	2023-07-15 12:30:45.123456
+Rounding up test	2023-07-15 12:30:46	2023-07-15 12:30:46.0	2023-07-15 12:30:46.00	2023-07-15 12:30:46.000	2023-07-15 12:30:46.0000	2023-07-15 12:30:46.00000	2023-07-15 12:30:45.999999
+Rounding down test	2023-07-15 12:30:45	2023-07-15 12:30:45.1	2023-07-15 12:30:45.11	2023-07-15 12:30:45.111	2023-07-15 12:30:45.1111	2023-07-15 12:30:45.11111	2023-07-15 12:30:45.111111
+SELECT description, t0, t1, t2, t3, t4, t5, t6 FROM t_precision_test WHERE description LIKE '%test';
+description	t0	t1	t2	t3	t4	t5	t6
+Full precision test	12:30:45	12:30:45.1	12:30:45.12	12:30:45.123	12:30:45.1235	12:30:45.12346	12:30:45.123456
+Rounding up test	12:30:46	12:30:46.0	12:30:46.00	12:30:46.000	12:30:46.0000	12:30:46.00000	12:30:45.999999
+Rounding down test	12:30:45	12:30:45.1	12:30:45.11	12:30:45.111	12:30:45.1111	12:30:45.11111	12:30:45.111111
+
+# Testing precision comparison operations
+# Exact precision matches
+SELECT description FROM t_precision_test WHERE dt6 = '2023-07-15 12:30:45.123456';
+description
+Full precision test
+SELECT description FROM t_precision_test WHERE dt3 = '2023-07-15 12:30:45.123';
+description
+Full precision test
+SELECT description FROM t_precision_test WHERE dt1 = '2023-07-15 12:30:45.1';
+description
+Full precision test
+Rounding down test
+# Cross-precision comparisons
+SELECT description FROM t_precision_test WHERE dt6 > dt0;
+description
+Full precision test
+Rounding down test
+SELECT description FROM t_precision_test WHERE dt6 > '2023-07-15 12:30:45.123455';
+description
+Full precision test
+Mid-point rounding
+Rounding up test
+SELECT description FROM t_precision_test WHERE dt6 < '2023-07-15 12:30:45.123457';
+description
+Rounding down test
+Full precision test
+# TIME precision comparisons
+SELECT description FROM t_precision_test WHERE t6 = '12:30:45.123456';
+description
+Full precision test
+SELECT description FROM t_precision_test WHERE t3 > '12:30:45.123';
+description
+Rounding up test
+Mid-point rounding
+SELECT description FROM t_precision_test WHERE t6 BETWEEN '12:30:45.123455' AND '12:30:45.123457';
+description
+Full precision test
+
+# Testing precision boundary values
+TRUNCATE TABLE t_precision_test;
+INSERT INTO t_precision_test (description, dt6, ts6, t6) VALUES
+('Max microseconds', '2023-07-15 12:30:45.999999', '2023-07-15 12:30:45.999999', '12:30:45.999999'),
+('Min microseconds', '2023-07-15 12:30:45.000000', '2023-07-15 12:30:45.000000', '12:30:45.000000'),
+('One microsecond', '2023-07-15 12:30:45.000001', '2023-07-15 12:30:45.000001', '12:30:45.000001'),
+('Almost max', '2023-07-15 12:30:45.999998', '2023-07-15 12:30:45.999998', '12:30:45.999998');
+# Precision boundary comparisons
+SELECT description FROM t_precision_test WHERE dt6 > '2023-07-15 12:30:45.999998' ORDER BY dt6;
+description
+Max microseconds
+SELECT description FROM t_precision_test WHERE dt6 < '2023-07-15 12:30:45.000002' ORDER BY dt6;
+description
+Min microseconds
+One microsecond
+SELECT description FROM t_precision_test WHERE t6 BETWEEN '12:30:45.000000' AND '12:30:45.000001' ORDER BY t6;
+description
+Min microseconds
+One microsecond
+
+# Testing precision with different input formats
+TRUNCATE TABLE t_precision_test;
+INSERT INTO t_precision_test (description, dt6, ts6, t6) VALUES
+('Integer seconds', '2023-07-15 12:30:45', '2023-07-15 12:30:45', '12:30:45'),
+('One decimal', '2023-07-15 12:30:45.1', '2023-07-15 12:30:45.1', '12:30:45.1'),
+('Two decimals', '2023-07-15 12:30:45.12', '2023-07-15 12:30:45.12', '12:30:45.12'),
+('Three decimals', '2023-07-15 12:30:45.123', '2023-07-15 12:30:45.123', '12:30:45.123'),
+('Four decimals', '2023-07-15 12:30:45.1234', '2023-07-15 12:30:45.1234', '12:30:45.1234'),
+('Five decimals', '2023-07-15 12:30:45.12345', '2023-07-15 12:30:45.12345', '12:30:45.12345'),
+('Six decimals', '2023-07-15 12:30:45.123456', '2023-07-15 12:30:45.123456', '12:30:45.123456');
+SELECT description, dt6, ts6, t6 FROM t_precision_test ORDER BY id;
+description	dt6	ts6	t6
+Integer seconds	2023-07-15 12:30:45.000000	2023-07-15 12:30:45.000000	12:30:45.000000
+One decimal	2023-07-15 12:30:45.100000	2023-07-15 12:30:45.100000	12:30:45.100000
+Two decimals	2023-07-15 12:30:45.120000	2023-07-15 12:30:45.120000	12:30:45.120000
+Three decimals	2023-07-15 12:30:45.123000	2023-07-15 12:30:45.123000	12:30:45.123000
+Four decimals	2023-07-15 12:30:45.123400	2023-07-15 12:30:45.123400	12:30:45.123400
+Five decimals	2023-07-15 12:30:45.123450	2023-07-15 12:30:45.123450	12:30:45.123450
+Six decimals	2023-07-15 12:30:45.123456	2023-07-15 12:30:45.123456	12:30:45.123456
+# Compare different input precisions
+SELECT description FROM t_precision_test WHERE dt6 > '2023-07-15 12:30:45.12' ORDER BY dt6;
+description
+Three decimals
+Four decimals
+Five decimals
+Six decimals
+SELECT description FROM t_precision_test WHERE t6 < '12:30:45.123' ORDER BY t6;
+description
+Integer seconds
+One decimal
+Two decimals
+
+# ===============================================
+# TIMEZONE TESTING WITH PRECISION
+# ===============================================
+CREATE TABLE t_timezone_test (
+id INT AUTO_INCREMENT PRIMARY KEY,
+description VARCHAR(100),
+dt DATETIME(6),
+ts TIMESTAMP(6) NULL,
+created_at TIMESTAMP(6) NULL DEFAULT CURRENT_TIMESTAMP(6),
+KEY idx_ts (ts)
+);
+
+# Testing timezone with precision
+SET time_zone = '+00:00';
+INSERT INTO t_timezone_test (description, dt, ts) VALUES 
+('UTC precision test', '2023-07-15 12:00:00.123456', '2023-07-15 12:00:00.123456'),
+('UTC precision test 2', '2023-07-15 12:00:00.654321', '2023-07-15 12:00:00.654321');
+SELECT description, dt, ts FROM t_timezone_test;
+description	dt	ts
+UTC precision test	2023-07-15 12:00:00.123456	2023-07-15 12:00:00.123456
+UTC precision test 2	2023-07-15 12:00:00.654321	2023-07-15 12:00:00.654321
+SET time_zone = '+08:00';
+# Same data in +08:00 timezone (precision preserved)
+SELECT description, dt, ts FROM t_timezone_test;
+description	dt	ts
+UTC precision test	2023-07-15 12:00:00.123456	2023-07-15 20:00:00.123456
+UTC precision test 2	2023-07-15 12:00:00.654321	2023-07-15 20:00:00.654321
+SELECT description FROM t_timezone_test WHERE ts > '2023-07-15 20:00:00.200000' ORDER BY ts;
+description
+UTC precision test 2
+SELECT description FROM t_timezone_test WHERE ts < '2023-07-15 20:00:00.500000' ORDER BY ts;
+description
+UTC precision test
+
+# Testing precision with timezone conversion
+SET time_zone = '+00:00';
+# Basic timezone conversion test
+SELECT 
+description,
+ts,
+CONVERT_TZ(ts, '+00:00', '+08:00') as tz_beijing,
+CONVERT_TZ(ts, '+00:00', '-05:00') as tz_est
+FROM t_timezone_test 
+ORDER BY ts;
+description	ts	tz_beijing	tz_est
+UTC precision test	2023-07-15 12:00:00.123456	2023-07-15 20:00:00.123456	2023-07-15 07:00:00.123456
+UTC precision test 2	2023-07-15 12:00:00.654321	2023-07-15 20:00:00.654321	2023-07-15 07:00:00.654321
+# Timezone conversion with microsecond precision
+SELECT 
+description,
+MICROSECOND(ts) as orig_microsec,
+MICROSECOND(CONVERT_TZ(ts, '+00:00', '+08:00')) as conv_microsec
+FROM t_timezone_test 
+ORDER BY ts;
+description	orig_microsec	conv_microsec
+UTC precision test	123456	123456
+UTC precision test 2	654321	654321
+# Full timezone conversion details
+SELECT 
+description,
+ts as original_utc,
+CONVERT_TZ(ts, '+00:00', '+08:00') as beijing_time,
+CONVERT_TZ(ts, '+00:00', '-05:00') as eastern_time,
+CONVERT_TZ(ts, '+00:00', '+09:00') as tokyo_time
+FROM t_timezone_test 
+ORDER BY ts;
+description	original_utc	beijing_time	eastern_time	tokyo_time
+UTC precision test	2023-07-15 12:00:00.123456	2023-07-15 20:00:00.123456	2023-07-15 07:00:00.123456	2023-07-15 21:00:00.123456
+UTC precision test 2	2023-07-15 12:00:00.654321	2023-07-15 20:00:00.654321	2023-07-15 07:00:00.654321	2023-07-15 21:00:00.654321
+
+# Testing multiple timezone scenarios
+TRUNCATE TABLE t_timezone_test;
+SET time_zone = '+00:00';
+INSERT INTO t_timezone_test (description, dt, ts) VALUES ('UTC_data', '2023-07-15 12:00:00.123456', '2023-07-15 12:00:00.123456');
+SET time_zone = '+08:00';
+INSERT INTO t_timezone_test (description, dt, ts) VALUES ('Asia_data', '2023-07-15 20:00:00.123456', '2023-07-15 20:00:00.123456');
+SET time_zone = '-05:00';
+INSERT INTO t_timezone_test (description, dt, ts) VALUES ('EST_data', '2023-07-15 07:00:00.123456', '2023-07-15 07:00:00.123456');
+SET time_zone = '+09:00';
+INSERT INTO t_timezone_test (description, dt, ts) VALUES ('JST_data', '2023-07-15 21:00:00.123456', '2023-07-15 21:00:00.123456');
+SET time_zone = '+00:00';
+# All data viewed in UTC
+SELECT description, dt, ts, UNIX_TIMESTAMP(ts) as unix_ts FROM t_timezone_test ORDER BY ts;
+description	dt	ts	unix_ts
+UTC_data	2023-07-15 12:00:00.123456	2023-07-15 12:00:00.123456	1689422400.123456
+Asia_data	2023-07-15 20:00:00.123456	2023-07-15 12:00:00.123456	1689422400.123456
+EST_data	2023-07-15 07:00:00.123456	2023-07-15 12:00:00.123456	1689422400.123456
+JST_data	2023-07-15 21:00:00.123456	2023-07-15 12:00:00.123456	1689422400.123456
+SET time_zone = '+08:00';
+# All data viewed in +08:00
+SELECT description, dt, ts, UNIX_TIMESTAMP(ts) as unix_ts FROM t_timezone_test ORDER BY ts;
+description	dt	ts	unix_ts
+UTC_data	2023-07-15 12:00:00.123456	2023-07-15 20:00:00.123456	1689422400.123456
+Asia_data	2023-07-15 20:00:00.123456	2023-07-15 20:00:00.123456	1689422400.123456
+EST_data	2023-07-15 07:00:00.123456	2023-07-15 20:00:00.123456	1689422400.123456
+JST_data	2023-07-15 21:00:00.123456	2023-07-15 20:00:00.123456	1689422400.123456
+
+# Testing timezone conversion functions
+SET time_zone = '+00:00';
+SELECT 
+description,
+CONVERT_TZ(ts, '+00:00', '+08:00') as beijing_tz,
+CONVERT_TZ(ts, '+00:00', '-05:00') as est_tz,
+CONVERT_TZ(ts, '+00:00', '+09:00') as jst_tz
+FROM t_timezone_test 
+ORDER BY ts;
+description	beijing_tz	est_tz	jst_tz
+UTC_data	2023-07-15 20:00:00.123456	2023-07-15 07:00:00.123456	2023-07-15 21:00:00.123456
+Asia_data	2023-07-15 20:00:00.123456	2023-07-15 07:00:00.123456	2023-07-15 21:00:00.123456
+EST_data	2023-07-15 20:00:00.123456	2023-07-15 07:00:00.123456	2023-07-15 21:00:00.123456
+JST_data	2023-07-15 20:00:00.123456	2023-07-15 07:00:00.123456	2023-07-15 21:00:00.123456
+SELECT description FROM t_timezone_test 
+WHERE CONVERT_TZ(ts, '+00:00', '+08:00') > '2023-07-15 20:00:00';
+description
+UTC_data
+Asia_data
+EST_data
+JST_data
+SELECT description FROM t_timezone_test 
+WHERE CONVERT_TZ(ts, '+00:00', '-05:00') < '2023-07-15 08:00:00';
+description
+UTC_data
+Asia_data
+EST_data
+JST_data
+
+# Testing DST scenarios
+TRUNCATE TABLE t_timezone_test;
+SET time_zone = '-05:00';
+# Testing DST-like scenarios with timezone offset
+INSERT INTO t_timezone_test (description, dt, ts) VALUES 
+('Before spring forward', '2024-03-10 01:59:59.999999', '2024-03-10 01:59:59.999999'),
+('After spring forward', '2024-03-10 03:00:01.000000', '2024-03-10 03:00:01.000000');
+SELECT description, dt, ts FROM t_timezone_test WHERE description LIKE '%spring%';
+description	dt	ts
+Before spring forward	2024-03-10 01:59:59.999999	2024-03-10 01:59:59.999999
+After spring forward	2024-03-10 03:00:01.000000	2024-03-10 03:00:01.000000
+SELECT description FROM t_timezone_test 
+WHERE ts BETWEEN '2024-03-10 01:00:00' AND '2024-03-10 04:00:00'
+ORDER BY ts;
+description
+Before spring forward
+After spring forward
+
+# Testing precision with arithmetic operations
+TRUNCATE TABLE t_precision_test;
+INSERT INTO t_precision_test (description, dt6, ts6, t6) VALUES 
+('Arithmetic test', '2023-07-15 12:30:45.123456', '2023-07-15 12:30:45.123456', '12:30:45.123456');
+SELECT 
+description,
+dt6,
+dt6 + INTERVAL 1 MICROSECOND as plus_one_micro,
+dt6 - INTERVAL 1 MICROSECOND as minus_one_micro,
+dt6 + INTERVAL 500 MICROSECOND as plus_500_micro
+FROM t_precision_test 
+WHERE description = 'Arithmetic test';
+description	dt6	plus_one_micro	minus_one_micro	plus_500_micro
+Arithmetic test	2023-07-15 12:30:45.123456	2023-07-15 12:30:45.123457	2023-07-15 12:30:45.123455	2023-07-15 12:30:45.123956
+SELECT 
+description,
+t6,
+ADDTIME(t6, '0:0:0.000001') as plus_one_micro,
+SUBTIME(t6, '0:0:0.000001') as minus_one_micro
+FROM t_precision_test 
+WHERE description = 'Arithmetic test';
+description	t6	plus_one_micro	minus_one_micro
+Arithmetic test	12:30:45.123456	12:30:45.123457	12:30:45.123455
+
+# Testing precision with date/time functions
+SELECT 
+description,
+dt6,
+MICROSECOND(dt6) as microsecond_part,
+DATE_FORMAT(dt6, '%Y-%m-%d %H:%i:%s.%f') as formatted,
+UNIX_TIMESTAMP(dt6) as unix_timestamp
+FROM t_precision_test 
+WHERE description = 'Arithmetic test';
+description	dt6	microsecond_part	formatted	unix_timestamp
+Arithmetic test	2023-07-15 12:30:45.123456	123456	2023-07-15 12:30:45.123456	1689442245.123456
+SELECT
+description,
+t6,
+MICROSECOND(t6) as microsecond_part,
+TIME_FORMAT(t6, '%H:%i:%s.%f') as formatted
+FROM t_precision_test
+WHERE description = 'Arithmetic test';
+description	t6	microsecond_part	formatted
+Arithmetic test	12:30:45.123456	123456	12:30:45.123456
+
+# Testing precision with aggregation functions
+INSERT INTO t_precision_test (description, dt6, ts6, t6) VALUES
+('Agg test 1', '2023-07-15 12:30:45.123456', '2023-07-15 12:30:45.123456', '12:30:45.123456'),
+('Agg test 2', '2023-07-15 12:30:45.654321', '2023-07-15 12:30:45.654321', '12:30:45.654321'),
+('Agg test 3', '2023-07-15 12:30:45.999999', '2023-07-15 12:30:45.999999', '12:30:45.999999');
+SELECT 
+MIN(dt6) as min_datetime,
+MAX(dt6) as max_datetime,
+AVG(UNIX_TIMESTAMP(dt6)) as avg_unix_timestamp
+FROM t_precision_test 
+WHERE description LIKE 'Agg test%';
+min_datetime	max_datetime	avg_unix_timestamp
+2023-07-15 12:30:45.123456	2023-07-15 12:30:45.999999	1689442245.5925920000
+SELECT 
+MIN(t6) as min_time,
+MAX(t6) as max_time,
+COUNT(*) as count_records
+FROM t_precision_test 
+WHERE description LIKE 'Agg test%';
+min_time	max_time	count_records
+12:30:45.123456	12:30:45.999999	3
+
+# Testing precision with GROUP BY
+SELECT 
+DATE(dt6) as date_part,
+COUNT(*) as count_per_date,
+MIN(dt6) as earliest_time,
+MAX(dt6) as latest_time
+FROM t_precision_test 
+WHERE dt6 IS NOT NULL
+GROUP BY DATE(dt6)
+ORDER BY date_part;
+date_part	count_per_date	earliest_time	latest_time
+2023-07-15	4	2023-07-15 12:30:45.123456	2023-07-15 12:30:45.999999
+
+# Testing precision index operations
+SELECT dt6 FROM t_precision_test WHERE dt6 = '2023-07-15 12:30:45.123456';
+dt6
+2023-07-15 12:30:45.123456
+2023-07-15 12:30:45.123456
+SELECT dt6 FROM t_precision_test WHERE dt6 > '2023-07-15 12:30:45.123455';
+dt6
+2023-07-15 12:30:45.123456
+2023-07-15 12:30:45.123456
+2023-07-15 12:30:45.654321
+2023-07-15 12:30:45.999999
+SELECT dt6 FROM t_precision_test WHERE dt6 BETWEEN '2023-07-15 12:30:45.123456' AND '2023-07-15 12:30:45.654321';
+dt6
+2023-07-15 12:30:45.123456
+2023-07-15 12:30:45.123456
+2023-07-15 12:30:45.654321
+SET time_zone = @original_time_zone;
+
+# Testing cross-type comparisons with precision (back to original timezone)
+TRUNCATE TABLE t_date_time_test;
+INSERT INTO t_date_time_test (d, dt, ts, t) VALUES 
+('2023-07-15', '2023-07-15 12:30:45.123456', '2023-07-15 12:30:45.123456', '12:30:45.123456'),
+('2023-07-14', '2023-07-14 08:15:30.654321', '2023-07-14 08:15:30.654321', '08:15:30.654321'),
+('2023-07-16', '2023-07-16 18:45:00.999999', '2023-07-16 18:45:00.999999', '18:45:00.999999');
+# Cross-type precision comparisons
+SELECT * FROM t_date_time_test WHERE dt = '2023-07-15 12:30:45.123456';
+id	d	dt	ts	t
+1	2023-07-15	2023-07-15 12:30:45	2023-07-15 12:30:45	12:30:45
+SELECT * FROM t_date_time_test WHERE dt > '2023-07-15 12:30:45.123455';
+id	d	dt	ts	t
+3	2023-07-16	2023-07-16 18:45:01	2023-07-16 18:45:01	18:45:01
+SELECT * FROM t_date_time_test WHERE TIME(dt) = t;
+id	d	dt	ts	t
+1	2023-07-15	2023-07-15 12:30:45	2023-07-15 12:30:45	12:30:45
+2	2023-07-14	2023-07-14 08:15:31	2023-07-14 08:15:31	08:15:31
+3	2023-07-16	2023-07-16 18:45:01	2023-07-16 18:45:01	18:45:01
+SELECT * FROM t_date_time_test WHERE TIME(dt) > '12:30:45.123455';
+id	d	dt	ts	t
+3	2023-07-16	2023-07-16 18:45:01	2023-07-16 18:45:01	18:45:01
+# DATE vs DATETIME comparison
+SELECT * FROM t_date_time_test WHERE d = DATE(dt);
+id	d	dt	ts	t
+1	2023-07-15	2023-07-15 12:30:45	2023-07-15 12:30:45	12:30:45
+2	2023-07-14	2023-07-14 08:15:31	2023-07-14 08:15:31	08:15:31
+3	2023-07-16	2023-07-16 18:45:01	2023-07-16 18:45:01	18:45:01
+SELECT * FROM t_date_time_test WHERE d < '2023-07-15';
+id	d	dt	ts	t
+2	2023-07-14	2023-07-14 08:15:31	2023-07-14 08:15:31	08:15:31
+# DATETIME vs TIMESTAMP comparison
+SELECT * FROM t_date_time_test WHERE dt = ts;
+id	d	dt	ts	t
+1	2023-07-15	2023-07-15 12:30:45	2023-07-15 12:30:45	12:30:45
+2	2023-07-14	2023-07-14 08:15:31	2023-07-14 08:15:31	08:15:31
+3	2023-07-16	2023-07-16 18:45:01	2023-07-16 18:45:01	18:45:01
+SELECT * FROM t_date_time_test WHERE dt > ts;
+id	d	dt	ts	t
+
+# Testing precision with functions and expressions
+SELECT * FROM t_date_time_test WHERE dt < NOW(6);
+id	d	dt	ts	t
+2	2023-07-14	2023-07-14 08:15:31	2023-07-14 08:15:31	08:15:31
+1	2023-07-15	2023-07-15 12:30:45	2023-07-15 12:30:45	12:30:45
+3	2023-07-16	2023-07-16 18:45:01	2023-07-16 18:45:01	18:45:01
+SELECT * FROM t_date_time_test WHERE MICROSECOND(dt) > 123455;
+id	d	dt	ts	t
+SELECT * FROM t_date_time_test WHERE MICROSECOND(t) < 123457;
+id	d	dt	ts	t
+1	2023-07-15	2023-07-15 12:30:45	2023-07-15 12:30:45	12:30:45
+2	2023-07-14	2023-07-14 08:15:31	2023-07-14 08:15:31	08:15:31
+3	2023-07-16	2023-07-16 18:45:01	2023-07-16 18:45:01	18:45:01
+
+# Testing precision edge cases
+TRUNCATE TABLE t_precision_test;
+INSERT INTO t_precision_test (description, dt6, ts6, t6) VALUES
+('Zero microseconds', '2023-07-15 12:30:45.000000', '2023-07-15 12:30:45.000000', '12:30:45.000000'),
+('All nines', '2023-07-15 12:30:45.999999', '2023-07-15 12:30:45.999999', '12:30:45.999999'),
+('Pattern 123456', '2023-07-15 12:30:45.123456', '2023-07-15 12:30:45.123456', '12:30:45.123456'),
+('Pattern 654321', '2023-07-15 12:30:45.654321', '2023-07-15 12:30:45.654321', '12:30:45.654321'),
+('Alternating', '2023-07-15 12:30:45.505050', '2023-07-15 12:30:45.505050', '12:30:45.505050');
+# Precision pattern comparisons
+SELECT description, dt6, ts6, t6 FROM t_precision_test ORDER BY dt6;
+description	dt6	ts6	t6
+Zero microseconds	2023-07-15 12:30:45.000000	2023-07-15 12:30:45.000000	12:30:45.000000
+Pattern 123456	2023-07-15 12:30:45.123456	2023-07-15 12:30:45.123456	12:30:45.123456
+Alternating	2023-07-15 12:30:45.505050	2023-07-15 12:30:45.505050	12:30:45.505050
+Pattern 654321	2023-07-15 12:30:45.654321	2023-07-15 12:30:45.654321	12:30:45.654321
+All nines	2023-07-15 12:30:45.999999	2023-07-15 12:30:45.999999	12:30:45.999999
+SELECT description FROM t_precision_test WHERE MICROSECOND(dt6) % 2 = 0;
+description
+Zero microseconds
+Pattern 123456
+Alternating
+SELECT description FROM t_precision_test WHERE MICROSECOND(t6) > 500000;
+description
+All nines
+Pattern 654321
+Alternating
+
+# Testing precision with NULL values
+INSERT INTO t_precision_test (description, dt6, ts6, t6) VALUES ('NULL precision test', NULL, NULL, NULL);
+SELECT description FROM t_precision_test WHERE dt6 IS NULL;
+description
+NULL precision test
+SELECT description FROM t_precision_test WHERE dt6 IS NOT NULL AND MICROSECOND(dt6) > 0 ORDER BY dt6;
+description
+Pattern 123456
+Alternating
+Pattern 654321
+All nines
+
+# Testing precision sorting and ordering
+SELECT 
+description, 
+dt6, 
+MICROSECOND(dt6) as microsec_part
+FROM t_precision_test 
+WHERE dt6 IS NOT NULL
+ORDER BY MICROSECOND(dt6) ASC;
+description	dt6	microsec_part
+Zero microseconds	2023-07-15 12:30:45.000000	0
+Pattern 123456	2023-07-15 12:30:45.123456	123456
+Alternating	2023-07-15 12:30:45.505050	505050
+Pattern 654321	2023-07-15 12:30:45.654321	654321
+All nines	2023-07-15 12:30:45.999999	999999
+SELECT 
+description, 
+t6, 
+MICROSECOND(t6) as microsec_part
+FROM t_precision_test 
+WHERE t6 IS NOT NULL
+ORDER BY MICROSECOND(t6) DESC;
+description	t6	microsec_part
+All nines	12:30:45.999999	999999
+Pattern 654321	12:30:45.654321	654321
+Alternating	12:30:45.505050	505050
+Pattern 123456	12:30:45.123456	123456
+Zero microseconds	12:30:45.000000	0
+
+# Final comprehensive precision and timezone test
+SELECT 
+'DATETIME precision test' as test_type,
+COUNT(*) as total_records,
+COUNT(DISTINCT MICROSECOND(dt6)) as distinct_microseconds,
+MIN(dt6) as min_datetime,
+MAX(dt6) as max_datetime,
+AVG(MICROSECOND(dt6)) as avg_microsecond
+FROM t_precision_test 
+WHERE dt6 IS NOT NULL;
+test_type	total_records	distinct_microseconds	min_datetime	max_datetime	avg_microsecond
+DATETIME precision test	5	5	2023-07-15 12:30:45.000000	2023-07-15 12:30:45.999999	456565.2000
+SELECT 
+'TIME precision test' as test_type,
+COUNT(*) as total_records,
+COUNT(DISTINCT MICROSECOND(t6)) as distinct_microseconds,
+MIN(t6) as min_time,
+MAX(t6) as max_time,
+AVG(MICROSECOND(t6)) as avg_microsecond
+FROM t_precision_test 
+WHERE t6 IS NOT NULL;
+test_type	total_records	distinct_microseconds	min_time	max_time	avg_microsecond
+TIME precision test	5	5	12:30:45.000000	12:30:45.999999	456565.2000
+SET time_zone = '+00:00';
+SELECT FROM_UNIXTIME(1609459200) as fixed_utc, FROM_UNIXTIME(1609459200.123456) as fixed_utc_6;
+fixed_utc	fixed_utc_6
+2021-01-01 00:00:00	2021-01-01 00:00:00.123456
+SET time_zone = '+08:00';
+SELECT FROM_UNIXTIME(1609459200) as fixed_beijing, FROM_UNIXTIME(1609459200.123456) as fixed_beijing_6;
+fixed_beijing	fixed_beijing_6
+2021-01-01 08:00:00	2021-01-01 08:00:00.123456
+SET time_zone = @original_time_zone;
+DROP TABLE t_date_time_test;
+DROP TABLE t_timezone_test;
+DROP TABLE t_precision_test;

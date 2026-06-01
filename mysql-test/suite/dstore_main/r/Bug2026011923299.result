@@ -1,0 +1,42 @@
+#
+# Bug#2026011923299: Exist differs when running UPDATE statements
+#                    with nested subqueries in Dstore and InnoDB.
+#
+# This test case is designed to verify a compatibility issue of the dstore storage engine: 
+# its behavior is inconsistent with that of the InnoDB storage engine when a specific UPDATE
+# statement is executed after creating an empty table and performing the ANALYZE operation 
+# on the indexed column.
+CREATE TABLE IF NOT EXISTS t0 (
+c1 DECIMAL,
+c2 FLOAT NOT NULL,
+c3 BIT (40) UNIQUE NULL,
+c4 BIT,
+c5 FLOAT NULL
+) ENGINE=dstore;
+SET @orig_sql_mode = @@sql_mode;
+SET sql_mode = '';
+ALTER TABLE t0 DROP INDEX c3;
+ANALYZE TABLE t0 UPDATE HISTOGRAM ON c3;
+Table	Op	Msg_type	Msg_text
+test.t0	histogram	status	Histogram statistics created for column 'c3'.
+UPDATE t0 
+SET c1 = NULL, c4 = b'11101101' 
+WHERE (
+UNCOMPRESSED_LENGTH('13:42:57') > SOME (
+SELECT c5 FROM (SELECT c5 FROM t0) AS tmp1
+)
+) IN (
+SELECT c1 FROM (SELECT c1 FROM t0) AS tmp2 
+WHERE (
+('39' + INTERVAL '06 17:07:56.118527' DAY_MICROSECOND) IN (
+SELECT c3 FROM (SELECT c3 FROM t0) AS tmp3
+)
+)
+) IS UNKNOWN;
+Warnings:
+Warning	1292	Incorrect datetime value: '39'
+Warning	1292	Incorrect datetime value: '39'
+Warning	1292	Incorrect datetime value: '39'
+Warning	1292	Incorrect datetime value: '39'
+SET sql_mode = @orig_sql_mode;
+DROP TABLE t0;

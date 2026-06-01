@@ -1,0 +1,227 @@
+# === Purpose ====
+#
+# This case will test the restricted dynamic privileges works for root user,
+# non-reserved users and RDS reserved users.
+#
+#
+# Note:  rds_restricted_dynamic_privileges_control and
+#        rds_restricted_dynamic_privileges_list would not effect RDS reserved users.
+#
+# ==== Reference ====
+#
+# US2023120500457  Forbidding root user to grant restricted dynamic privileges
+ 
+# Try to reinitialize the datafiles with feature enabled
+--let extra_args=--no-defaults --innodb_dedicated_server=OFF --console --loose-skip-auto_generate_certs --loose-skip-sha256_password_auto_generate_rsa_keys --basedir=$BASEDIR --lc-messages-dir=$MYSQL_SHAREDIR
+--let case_args=--rds_restricted_dynamic_privileges_control=1 --rds_restricted_dynamic_privileges_list="session_variables_admin,system_variables_admin"
+--let LOG_FILE=$MYSQL_TMP_DIR/bootstrap_US2023120500457.err
+--let DDIR=$MYSQL_TMP_DIR/US2023120500457_installdb_test
+--let CMD=$MYSQLD $extra_args $case_args --initialize-insecure --datadir=$DDIR --log-error=$LOG_FILE --dstore_tenant_config=$MYSQL_DSTORE_TENANT_CONFIG_FILE 2>&1
+--mkdir $DDIR
+--exec $CMD
+--force-rmdir $DDIR
+ 
+--source include/force_restart.inc
+ 
+# Create a non-reserved user
+CREATE USER 'con1'@'localhost' IDENTIFIED BY '123456';
+GRANT INSERT,DELETE,UPDATE,SELECT ON *.* TO 'con1'@'localhost';
+FLUSH PRIVILEGES;
+ 
+# Create the reserved user
+CREATE USER 'rds'@'localhost' IDENTIFIED BY '123456';
+GRANT INSERT,DELETE,UPDATE,SELECT,SUPER ON *.* TO 'rds'@'localhost' WITH GRANT OPTION;
+GRANT SYSTEM_USER ON *.* TO 'rds'@'localhost';
+FLUSH PRIVILEGES;
+
+CREATE USER 'root_1'@'%' IDENTIFIED BY '123456';
+GRANT ALL PRIVILEGES ON *.* TO 'root_1'@'%' WITH GRANT OPTION;
+GRANT SYSTEM_USER ON *.* TO 'root_1'@'%';
+REVOKE SUPER ON *.* FROM 'root_1'@'%';
+FLUSH PRIVILEGES;
+ 
+connect (con_normal,localhost,'con1','123456',test);
+connect (con_reserved_user,localhost,'rds','123456',test);
+connect (con_root,localhost,root_1,'123456',test);
+ 
+--echo save original global variables value
+connection con_root;
+SHOW GLOBAL VARIABLES LIKE 'rds_restricted_dynamic_privileges_control';
+SHOW GLOBAL VARIABLES LIKE 'rds_restricted_dynamic_privileges_list';
+ 
+SET @saved_rds_restricted_dynamic_privileges_control = @@global.rds_restricted_dynamic_privileges_control;
+SET @saved_rds_restricted_dynamic_privileges_list = @@global.rds_restricted_dynamic_privileges_list;
+ 
+ 
+--echo ###################################################
+--echo # rds_restricted_dynamic_privileges_control is ON #
+--echo # rds_restricted_dynamic_privileges_list is SET   #
+--echo ###################################################
+ 
+--echo # Normal situations
+ 
+--echo root user
+connection con_root;
+SET GLOBAL rds_restricted_dynamic_privileges_control = 1;
+SET GLOBAL rds_restricted_dynamic_privileges_list = "SESSION_VARIABLES_ADMIN,SYSTEM_VARIABLES_ADMIN";
+ 
+--error ER_NOT_ALLOWED_GRANT_RDS_RESTRICTED_DYNAMIC_PRIVILEGES
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'root'@'localhost';
+--error ER_NOT_ALLOWED_GRANT_RDS_RESTRICTED_DYNAMIC_PRIVILEGES
+GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'root'@'localhost';
+--error ER_NOT_ALLOWED_GRANT_RDS_RESTRICTED_DYNAMIC_PRIVILEGES
+GRANT SYSTEM_VARIABLES_ADMIN,BINLOG_ADMIN ON *.* TO 'root'@'localhost';
+ 
+# GRANT ALL can be executed successfully,
+# because the ALL PRIVILEGES check is skipped in the code.
+ 
+ 
+--echo Non-reserved user
+connection con_normal;
+--error ER_NOT_ALLOWED_GRANT_RDS_RESTRICTED_DYNAMIC_PRIVILEGES
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'con1'@'localhost';
+--error ER_NOT_ALLOWED_GRANT_RDS_RESTRICTED_DYNAMIC_PRIVILEGES
+GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'con1'@'localhost';
+--error ER_NOT_ALLOWED_GRANT_RDS_RESTRICTED_DYNAMIC_PRIVILEGES
+GRANT SYSTEM_VARIABLES_ADMIN,BINLOG_ADMIN ON *.* TO 'con1'@'localhost';
+ 
+--echo Reserved user
+connection con_reserved_user;
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'rds'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN ON *.* FROM 'rds'@'localhost';
+ 
+--echo # Mixed case and duplicate value
+ 
+--echo root user
+connection con_root;
+SET GLOBAL rds_restricted_dynamic_privileges_control = 1;
+SET GLOBAL rds_restricted_dynamic_privileges_list = "SESSION_VariaBLes_Admin,SYStem_VARIABLES_Admin,SessIon_VariabLES_adMIN";
+ 
+--error ER_NOT_ALLOWED_GRANT_RDS_RESTRICTED_DYNAMIC_PRIVILEGES
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'root'@'localhost';
+--error ER_NOT_ALLOWED_GRANT_RDS_RESTRICTED_DYNAMIC_PRIVILEGES
+GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'root'@'localhost';
+--error ER_NOT_ALLOWED_GRANT_RDS_RESTRICTED_DYNAMIC_PRIVILEGES
+GRANT SYSTEM_VARIABLES_ADMIN,BINLOG_ADMIN ON *.* TO 'root'@'localhost';
+ 
+# GRANT ALL can be executed successfully,
+# because the ALL PRIVILEGES check is skipped in the code.
+connection default;
+CREATE USER 'con2'@'localhost' IDENTIFIED BY '123456';
+GRANT ALL PRIVILEGES ON *.* TO 'con2'@'localhost';
+DROP USER 'con2'@'localhost';
+ 
+--echo Non-reserved user
+connection con_normal;
+--error ER_NOT_ALLOWED_GRANT_RDS_RESTRICTED_DYNAMIC_PRIVILEGES
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'con1'@'localhost';
+--error ER_NOT_ALLOWED_GRANT_RDS_RESTRICTED_DYNAMIC_PRIVILEGES
+GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'con1'@'localhost';
+--error ER_NOT_ALLOWED_GRANT_RDS_RESTRICTED_DYNAMIC_PRIVILEGES
+GRANT SYSTEM_VARIABLES_ADMIN,BINLOG_ADMIN ON *.* TO 'con1'@'localhost';
+ 
+--echo Reserved user
+connection con_reserved_user;
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'rds'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN ON *.* FROM 'rds'@'localhost';
+ 
+--echo # Restricted dynamic privileges exists before this feature
+ 
+connection con_root;
+SET GLOBAL rds_restricted_dynamic_privileges_control = 0;
+SET GLOBAL rds_restricted_dynamic_privileges_list = "";
+GRANT SESSION_VARIABLES_ADMIN,SYSTEM_VARIABLES_ADMIN ON *.* TO 'root'@'localhost';
+GRANT SESSION_VARIABLES_ADMIN,SYSTEM_VARIABLES_ADMIN,SYSTEM_USER ON *.* TO 'con1'@'localhost';
+FLUSH PRIVILEGES;
+ 
+--echo root user
+SET GLOBAL rds_restricted_dynamic_privileges_control = 1;
+SET GLOBAL rds_restricted_dynamic_privileges_list = "SESSION_VARIABLES_ADMIN,SYSTEM_VARIABLES_ADMIN";
+ 
+--error ER_NOT_ALLOWED_GRANT_RDS_RESTRICTED_DYNAMIC_PRIVILEGES
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'root'@'localhost';
+--error ER_NOT_ALLOWED_GRANT_RDS_RESTRICTED_DYNAMIC_PRIVILEGES
+GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'root'@'localhost';
+--error ER_NOT_ALLOWED_GRANT_RDS_RESTRICTED_DYNAMIC_PRIVILEGES
+GRANT SYSTEM_VARIABLES_ADMIN,BINLOG_ADMIN ON *.* TO 'root'@'localhost';
+GRANT BINLOG_ADMIN ON *.* TO 'root'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN,SYSTEM_VARIABLES_ADMIN,BINLOG_ADMIN ON *.* FROM 'root'@'localhost';
+ 
+# GRANT ALL can be executed successfully,
+# because the ALL PRIVILEGES check is skipped in the code.
+connection default;
+CREATE USER 'con2'@'localhost' IDENTIFIED BY '123456';
+GRANT ALL PRIVILEGES ON *.* TO 'con2'@'localhost';
+DROP USER 'con2'@'localhost';
+ 
+--echo Non-reserved user
+connection con_normal;
+--error ER_NOT_ALLOWED_GRANT_RDS_RESTRICTED_DYNAMIC_PRIVILEGES
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'con1'@'localhost';
+--error ER_NOT_ALLOWED_GRANT_RDS_RESTRICTED_DYNAMIC_PRIVILEGES
+GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'con1'@'localhost';
+--error ER_NOT_ALLOWED_GRANT_RDS_RESTRICTED_DYNAMIC_PRIVILEGES
+GRANT SYSTEM_VARIABLES_ADMIN,BINLOG_ADMIN ON *.* TO 'con1'@'localhost';
+GRANT BINLOG_ADMIN ON *.* TO 'con1'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN,SYSTEM_VARIABLES_ADMIN,BINLOG_ADMIN ON *.* FROM 'con1'@'localhost';
+ 
+--echo ####################################################
+--echo # rds_restricted_dynamic_privileges_control is OFF #
+--echo #rds_restricted_dynamic_privileges_list is SET     #
+--echo ####################################################
+ 
+--echo root user
+connection con_root;
+SET GLOBAL rds_restricted_dynamic_privileges_control = 0;
+SET GLOBAL rds_restricted_dynamic_privileges_list = "SESSION_VARIABLES_ADMIN,SYSTEM_VARIABLES_ADMIN";
+ 
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'root'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN ON *.* FROM 'root'@'localhost';
+ 
+--echo Non-reserved user
+connection con_normal;
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'con1'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN ON *.* FROM 'con1'@'localhost';
+ 
+--echo Reserved user
+connection con_reserved_user;
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'rds'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN ON *.* FROM 'rds'@'localhost';
+ 
+--echo ###################################################
+--echo # rds_restricted_dynamic_privileges_control is ON #
+--echo # rds_restricted_dynamic_privileges_list is EMPTY #
+--echo ###################################################
+ 
+--echo root user
+connection con_root;
+SET GLOBAL rds_restricted_dynamic_privileges_control = 1;
+SET GLOBAL rds_restricted_dynamic_privileges_list = "";
+ 
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'root'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN ON *.* FROM 'root'@'localhost';
+ 
+--echo Non-reserved user
+connection con_normal;
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'con1'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN ON *.* FROM 'con1'@'localhost';
+ 
+--echo Reserved user
+connection con_reserved_user;
+GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'rds'@'localhost';
+REVOKE SESSION_VARIABLES_ADMIN ON *.* FROM 'rds'@'localhost';
+ 
+ 
+--echo ############
+--echo # Clean up #
+--echo ############
+ 
+connection default;
+SET GLOBAL rds_restricted_dynamic_privileges_control = OFF;
+SET GLOBAL rds_restricted_dynamic_privileges_list = default;
+DROP USER con1@localhost;
+DROP USER root_1;
+DROP USER 'rds'@'localhost';
+disconnect con_normal;
+disconnect con_reserved_user;
+disconnect con_root;

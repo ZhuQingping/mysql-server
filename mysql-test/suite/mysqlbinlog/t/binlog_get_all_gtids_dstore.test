@@ -1,0 +1,70 @@
+# ==== Purpose ====
+#
+# test mysqlbinlog tool option: --get_all_gtids
+# Get gtids of the prev gtid log event and the gtid 
+# log events from a binary log specified by the --get-all-gtids
+#
+--source include/have_log_bin.inc
+--source include/have_only_dstore.inc
+
+#--disable_query_log
+--disable_warnings
+DROP DATABASE IF EXISTS mtest;
+CREATE DATABASE mtest;
+USE mtest;
+--enable_warnings
+RESET MASTER;
+
+let $data_dir=query_get_value(SHOW VARIABLES LIKE 'datadir',Value,1);
+let $binlog_name=query_get_value(SHOW MASTER STATUS,File,1);
+FLUSH LOGS;
+
+let uuida= aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa;
+let uuidb= bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb;
+let uuidc= cccccccc-cccc-cccc-cccc-cccccccccccc;
+
+eval SET @@SESSION.GTID_NEXT= '$uuida:1';
+CREATE TABLE test1(id INT);
+eval SET @@SESSION.GTID_NEXT=AUTOMATIC;
+
+let $binlog_name2=query_get_value(SHOW MASTER STATUS,File,1);
+FLUSH LOGS;
+
+eval SET @@SESSION.GTID_NEXT= '$uuidb:1';
+CREATE TABLE test2(id INT);
+eval SET @@SESSION.GTID_NEXT= '$uuidc:1';
+INSERT INTO test1 VALUES(1);
+eval SET @@SESSION.GTID_NEXT=AUTOMATIC;
+
+
+let $binlog_name3=query_get_value(SHOW MASTER STATUS,File,1);
+FLUSH LOGS;
+
+--echo # test empty gtids
+--exec $MYSQL_BINLOG --get-all-gtids $data_dir$binlog_name
+
+--echo # test single gtids
+--exec $MYSQL_BINLOG --get-all-gtids $data_dir$binlog_name2
+
+--echo # test multi gtids
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name3
+
+let $binlog_name4=query_get_value(SHOW MASTER STATUS,File,1);
+eval SET @@SESSION.GTID_NEXT= '$uuidb:2';
+create database test1;
+
+--echo #test ddl 
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name4
+eval SET @@SESSION.GTID_NEXT= '$uuidb:3';
+insert into test1 values(5);
+eval SET @@SESSION.GTID_NEXT= '$uuidb:4';
+insert into test1 values(6);
+eval SET @@SESSION.GTID_NEXT=AUTOMATIC;
+FLUSH LOGS;
+
+--exec truncate -s 1000 $data_dir$binlog_name4
+--echo #test incomplete binlog
+--exec $MYSQL_BINLOG --get-all-gtids  $data_dir$binlog_name4
+
+drop database test1;
+DROP DATABASE mtest;

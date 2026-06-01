@@ -1,0 +1,262 @@
+DROP DATABASE IF EXISTS test_error_table;
+CREATE DATABASE test_error_table;
+USE test_error_table;
+CREATE TABLE test_error_table (
+id BIGINT AUTO_INCREMENT PRIMARY KEY,
+c1 INT NOT NULL,
+c2 INT,
+c3 INT,
+INDEX idx_c1 (c1),
+INDEX idx_c2 (c2),
+INDEX idx_c3 (c3),
+INDEX idx_c1_c2_c3 (c1, c2, c3)
+) ENGINE=Dstore;
+CALL insert_combinations();
+set global dstore_use_histogram_auto_update=off;
+ANALYZE TABLE test_error_table
+UPDATE HISTOGRAM ON c1, c2, c3
+WITH 100 BUCKETS;
+Table	Op	Msg_type	Msg_text
+test_error_table.test_error_table	histogram	status	Histogram statistics created for column 'c1'.
+test_error_table.test_error_table	histogram	status	Histogram statistics created for column 'c2'.
+test_error_table.test_error_table	histogram	status	Histogram statistics created for column 'c3'.
+ANALYZE TABLE test_error_table DROP HISTOGRAM ON c1;
+Table	Op	Msg_type	Msg_text
+test_error_table.test_error_table	histogram	status	Histogram statistics removed for column 'c1'.
+SELECT COUNT(1) FROM test_error_table WHERE c1 > 5;
+COUNT(1)
+505
+ANALYZE TABLE test_error_table UPDATE HISTOGRAM ON c1 WITH 100 BUCKETS;
+Table	Op	Msg_type	Msg_text
+test_error_table.test_error_table	histogram	status	Histogram statistics created for column 'c1'.
+SET session debug='+d,histogram_stat_clone_field_failed';
+SELECT COUNT(1) FROM test_error_table WHERE c1 > 5;
+COUNT(1)
+505
+SET session debug='-d,histogram_stat_clone_field_failed';
+SET session debug='+d,histogram_stat_new_item_field_failed';
+SELECT COUNT(1) FROM test_error_table WHERE c1 > 5;
+COUNT(1)
+505
+SELECT COUNT(1) FROM test_error_table WHERE c1 < 5;
+COUNT(1)
+404
+SELECT COUNT(1) FROM test_error_table WHERE c1 > 5 and c1 < 7;
+COUNT(1)
+101
+SET session debug='-d,histogram_stat_new_item_field_failed';
+DROP DATABASE test_error_table;
+DROP DATABASE IF EXISTS test_histogram;
+CREATE DATABASE test_histogram;
+USE test_histogram;
+create table t (i integer, i2 integer);
+insert into t values(1,1),(1,2),(1,3),(1,4),(2,1),(2,2),(2,3),(2,4),(3,1),(3,2),(3,3),(3,4),(4,1),(4,2),(4,3),(4,4);
+analyze table t update histogram on i;
+Table	Op	Msg_type	Msg_text
+test_histogram.t	histogram	status	Histogram statistics created for column 'i'.
+SET session debug='+d,print_histgram_recived_values';
+# 1. The following SQL should not use histogram.
+explain format=tree select * from t where i < i2;
+explain format=tree select * from t where i between i2 and i2;
+explain format=tree select * from t where i in (i2, i2);
+# Check whether use histogram by search debug print, it should be not found.
+Pattern "Enter get_selectivity_dispatcher" not found
+DROP DATABASE test_histogram;
+SET GLOBAL dstore_use_histogram_auto_update=default;
+#
+# Test variable dstore_calculate_exact_rows_for_range
+#
+use test;
+CREATE TABLE t(a INT, b INT, KEY(a, b));
+INSERT INTO t(a, b) VALUES
+( 1, 1), ( 2, 1), ( 3, 1), ( 4, 1), ( 5, 1),
+( 6, 1), ( 7, 1), ( 8, 1), ( 9, 1), (10, 1),
+(11, 1), (12, 1), (13, 1), (14, 1), (15, 1),
+(16, 1), (17, 1), (18, 1), (19, 1), (20, 1);
+INSERT INTO t SELECT a, 2 FROM t WHERE b = 1;
+INSERT INTO t SELECT a, 3 FROM t WHERE b = 1;
+INSERT INTO t SELECT -1, -1 FROM t;
+ANALYZE TABLE t UPDATE HISTOGRAM ON a,b;
+Table	Op	Msg_type	Msg_text
+test.t	histogram	status	Histogram statistics created for column 'a'.
+test.t	histogram	status	Histogram statistics created for column 'b'.
+ANALYZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+SET @save_dstore_calculate_exact_rows_for_range= @@global.dstore_calculate_exact_rows_for_range;
+SET @save_optimizer_switch=@@optimizer_switch;
+SELECT @@global.dstore_calculate_exact_rows_for_range;
+@@global.dstore_calculate_exact_rows_for_range
+1
+SET dstore_calculate_exact_rows_for_range=ON;
+ERROR HY000: Variable 'dstore_calculate_exact_rows_for_range' is a GLOBAL variable and should be set with SET GLOBAL
+SET GLOBAL dstore_calculate_exact_rows_for_range=ON;
+SELECT @@global.dstore_calculate_exact_rows_for_range;
+@@global.dstore_calculate_exact_rows_for_range
+1
+SET GLOBAL dstore_calculate_exact_rows_for_range=OFF;
+SELECT @@global.dstore_calculate_exact_rows_for_range;
+@@global.dstore_calculate_exact_rows_for_range
+0
+SET GLOBAL dstore_calculate_exact_rows_for_range=1;
+SELECT @@global.dstore_calculate_exact_rows_for_range;
+@@global.dstore_calculate_exact_rows_for_range
+1
+SET GLOBAL dstore_calculate_exact_rows_for_range=0;
+SELECT @@global.dstore_calculate_exact_rows_for_range;
+@@global.dstore_calculate_exact_rows_for_range
+0
+SET GLOBAL dstore_calculate_exact_rows_for_range=DEFAULT;
+SELECT @@global.dstore_calculate_exact_rows_for_range;
+@@global.dstore_calculate_exact_rows_for_range
+0
+SET optimizer_switch='dstore_use_histogram_range_estimation=off';
+SET GLOBAL dstore_calculate_exact_rows_for_range=OFF;
+EXPLAIN SELECT * FROM t WHERE 5 <= a AND a < 6 ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	5	NULL	10	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where ((5 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 6)) order by `test`.`t`.`a`,`test`.`t`.`b`
+SELECT * FROM t WHERE 5 <= a AND a < 6 ORDER BY a,b;
+a	b
+5	1
+5	2
+5	3
+EXPLAIN SELECT * FROM t WHERE (5 <= a AND a < 6) OR (15 <= a AND a < 16) ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	5	NULL	20	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where (((5 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 6)) or ((15 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 16))) order by `test`.`t`.`a`,`test`.`t`.`b`
+SELECT * FROM t WHERE (5 <= a AND a < 6) OR (15 <= a AND a < 16) ORDER BY a,b;
+a	b
+5	1
+5	2
+5	3
+15	1
+15	2
+15	3
+EXPLAIN SELECT * FROM t WHERE a = 5 AND b <= 3 ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	10	NULL	10	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where ((`test`.`t`.`a` = 5) and (`test`.`t`.`b` <= 3)) order by `test`.`t`.`a`,`test`.`t`.`b`
+SELECT * FROM t WHERE a = 5 AND b <= 3 ORDER BY a,b;
+a	b
+5	1
+5	2
+5	3
+EXPLAIN SELECT * FROM t WHERE a = 5 AND b > 2 and b < 4 ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	10	NULL	10	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where ((`test`.`t`.`a` = 5) and (`test`.`t`.`b` > 2) and (`test`.`t`.`b` < 4)) order by `test`.`t`.`a`,`test`.`t`.`b`
+SELECT * FROM t WHERE a = 5 AND b > 2 and b < 4 ORDER BY a,b;
+a	b
+5	3
+EXPLAIN SELECT * FROM t WHERE 5 <= a AND a < 8 AND b = 1 ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	10	NULL	10	16.67	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where ((`test`.`t`.`b` = 1) and (5 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 8)) order by `test`.`t`.`a`
+SELECT * FROM t WHERE 5 <= a AND a < 8 AND b = 1 ORDER BY a,b;
+a	b
+5	1
+6	1
+7	1
+EXPLAIN SELECT * FROM t WHERE (5 <= a AND a < 6 AND b = 1) OR (15 <= a AND a < 16 AND b = 3) ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	10	NULL	20	30.56	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where (((`test`.`t`.`b` = 1) and (5 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 6)) or ((`test`.`t`.`b` = 3) and (15 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 16))) order by `test`.`t`.`a`,`test`.`t`.`b`
+SELECT * FROM t WHERE (5 <= a AND a < 6 AND b = 1) OR (15 <= a AND a < 16 AND b = 3) ORDER BY a,b;
+a	b
+5	1
+15	3
+SET GLOBAL dstore_calculate_exact_rows_for_range=ON;
+EXPLAIN SELECT * FROM t WHERE 5 <= a AND a < 6 ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	5	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where ((5 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 6)) order by `test`.`t`.`a`,`test`.`t`.`b`
+SELECT * FROM t WHERE 5 <= a AND a < 6 ORDER BY a,b;
+a	b
+5	1
+5	2
+5	3
+EXPLAIN SELECT * FROM t WHERE (5 <= a AND a < 6) OR (15 <= a AND a < 16) ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	5	NULL	6	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where (((5 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 6)) or ((15 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 16))) order by `test`.`t`.`a`,`test`.`t`.`b`
+SELECT * FROM t WHERE (5 <= a AND a < 6) OR (15 <= a AND a < 16) ORDER BY a,b;
+a	b
+5	1
+5	2
+5	3
+15	1
+15	2
+15	3
+EXPLAIN SELECT * FROM t WHERE a = 5 AND b <= 3 ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	10	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where ((`test`.`t`.`a` = 5) and (`test`.`t`.`b` <= 3)) order by `test`.`t`.`a`,`test`.`t`.`b`
+SELECT * FROM t WHERE a = 5 AND b <= 3 ORDER BY a,b;
+a	b
+5	1
+5	2
+5	3
+EXPLAIN SELECT * FROM t WHERE a = 5 AND b > 2 and b < 4 ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	10	NULL	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where ((`test`.`t`.`a` = 5) and (`test`.`t`.`b` > 2) and (`test`.`t`.`b` < 4)) order by `test`.`t`.`a`,`test`.`t`.`b`
+SELECT * FROM t WHERE a = 5 AND b > 2 and b < 4 ORDER BY a,b;
+a	b
+5	3
+EXPLAIN SELECT * FROM t WHERE 5 <= a AND a < 8 AND b = 1 ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	10	NULL	3	16.67	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where ((`test`.`t`.`b` = 1) and (5 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 8)) order by `test`.`t`.`a`
+SELECT * FROM t WHERE 5 <= a AND a < 8 AND b = 1 ORDER BY a,b;
+a	b
+5	1
+6	1
+7	1
+EXPLAIN SELECT * FROM t WHERE (5 <= a AND a < 6 AND b = 1) OR (15 <= a AND a < 16 AND b = 3) ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	10	NULL	4	30.56	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where (((`test`.`t`.`b` = 1) and (5 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 6)) or ((`test`.`t`.`b` = 3) and (15 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 16))) order by `test`.`t`.`a`,`test`.`t`.`b`
+SELECT * FROM t WHERE (5 <= a AND a < 6 AND b = 1) OR (15 <= a AND a < 16 AND b = 3) ORDER BY a,b;
+a	b
+5	1
+15	3
+SET debug='+d,dstore_records_in_range_wring_key_no';
+EXPLAIN SELECT * FROM t WHERE 5 <= a AND a < 6 ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	index	a	a	10	NULL	120	25.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where ((5 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 6)) order by `test`.`t`.`a`,`test`.`t`.`b`
+SET debug='-d,dstore_records_in_range_wring_key_no';
+EXPLAIN SELECT * FROM t WHERE 5 <= a AND a < 6 ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	5	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where ((5 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 6)) order by `test`.`t`.`a`,`test`.`t`.`b`
+SET debug='+d,dstore_records_in_range_no_min_max_key';
+EXPLAIN SELECT * FROM t WHERE 5 <= a AND a < 6 ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	index	a	a	10	NULL	120	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where ((5 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 6)) order by `test`.`t`.`a`,`test`.`t`.`b`
+SET debug='-d,dstore_records_in_range_no_min_max_key';
+EXPLAIN SELECT * FROM t WHERE 5 <= a AND a < 6 ORDER BY a,b;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	range	a	a	5	NULL	3	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`a` AS `a`,`test`.`t`.`b` AS `b` from `test`.`t` where ((5 <= `test`.`t`.`a`) and (`test`.`t`.`a` < 6)) order by `test`.`t`.`a`,`test`.`t`.`b`
+DROP TABLE t;
+SET GLOBAL dstore_calculate_exact_rows_for_range= @save_dstore_calculate_exact_rows_for_range;
+SET optimizer_switch= @save_optimizer_switch;

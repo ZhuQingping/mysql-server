@@ -1,0 +1,66 @@
+--source include/have_nodebug.inc
+--source include/have_openssl.inc
+--source include/have_only_dstore.inc
+
+call mtr.add_suppression("'NO_ZERO_DATE', 'NO_ZERO_IN_DATE' and 'ERROR_FOR_DIVISION_BY_ZERO' sql modes should be used with strict mode");
+
+# The default dataset size with a single sysbench table containing 1M rows is
+# ~400 MB. We deliberately want to run the workload with the default Dstore
+# buffer pool size (512 MB) to run the test fast.
+
+SELECT @@innodb_buffer_pool_size;
+SELECT @@dstore_buffer;
+SELECT @@threadpool_schedule_mode;
+
+--source suite/pgo/include/sysbench_prepare.inc
+
+# Validate the prepared dataset
+SHOW CREATE TABLE sbtest1;
+SELECT COUNT(*), MIN(id), MAX(id) FROM sbtest1;
+
+CREATE USER root@127.0.0.1;
+GRANT ALL PRIVILEGES ON *.* TO root@127.0.0.1;
+
+# Save the initial number of concurrent sessions
+--source include/count_sessions.inc
+
+# Test with a non-SSL connection on a Unix socket
+connect (con0,localhost,root,,,,,);
+connection con0;
+--source suite/pgo/include/sysbench_run.inc
+connection default;
+disconnect con0;
+
+# Test with an SSL connection on a Unix socket
+connect (con0,localhost,root,,,,,SSL);
+connection con0;
+--replace_regex $ALLOWED_CIPHERS_REGEX
+SHOW STATUS LIKE 'Ssl_cipher';
+--source suite/pgo/include/sysbench_run.inc
+connection default;
+disconnect con0;
+
+# Test with a non-SSL connection on a TCP socket
+connect (con0,127.0.0.1,root,,,$MASTER_PORT,,);
+connection con0;
+--source suite/pgo/include/sysbench_run.inc
+connection default;
+disconnect con0;
+
+# Test with an SSL connection on a TCP socket
+connect (con0,127.0.0.1,root,,,$MASTER_PORT,,SSL);
+connection con0;
+--replace_regex $ALLOWED_CIPHERS_REGEX
+SHOW STATUS LIKE 'Ssl_cipher';
+--source suite/pgo/include/sysbench_run.inc
+connection default;
+disconnect con0;
+
+# Cleanup
+--source suite/pgo/include/sysbench_cleanup.inc
+
+# Wait till we reached the initial number of concurrent sessions
+--source include/wait_until_count_sessions.inc
+
+DROP USER root@127.0.0.1;
+

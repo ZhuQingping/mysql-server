@@ -1,0 +1,67 @@
+set sql_mode="";
+create table test.zright(grp_id int,row_id int,row_hex varchar(100),v1 varchar(100),v_check int,c1 int,c2 int,c3 int,c4 int,c5 int,c6 int,c7 int,c8 int,c9 int,c10 varchar(100),c11 int,c12 varchar(100),c13 int,c14 varchar(100),trx_grp int,r1 blob,r2 int,v3 varchar(100),v4 varchar(100),t3 timestamp,v5 varchar(100),d1 int,dec_1 decimal(16,4),dec_2 decimal(16,4),dec_3 decimal(16,6),dec_4 decimal(16,6),gmt_create timestamp,gmt_modify timestamp,primary key(grp_id,row_id,row_hex));
+create table test.tmp_zright(i int);
+create trigger test.auth_secure before update on test.zright FOR EACH ROW
+BEGIN
+insert into test.tmp_zright values(1);
+END
+$
+set sql_mode="";
+set transaction_isolation = "READ-COMMITTED";
+start transaction;
+update test.zright set v1=v1+1,r1=r1+1,gmt_modify=current_timestamp where grp_id=728;
+affected rows: 300
+info: Rows matched: 300  Changed: 300  Warnings: 0
+set sql_mode="";
+update test.zright set c1=-279,c2=-325,c3=473,c4=-60,c5=-985,c6=34,c7=831,c8=806,c9=-42,c10='pSgpBhD8V4xm1ejRL6T2fNgRK9mtWCG9hTwf2e1KMO1hw2nm5ZhL0oPrgiG70ra8rF24fFU4An7Lqr7f9PqLHVProVmWB9bBc3kJ',c11=-453,c12='7POuZ6ADcSE1GGAJIqWcX0zI9w4sTY7gb3MvWoKDsJJw01O1JsTCSmn2vkVCG7MbG18bIMiLRq4mCVlJeSZ1HmeMgsNFi4ilw9eV',c13=486,c14='q91kjWpL7lfFkbjM7vubNPp886KvEF5U48GGfDHmrofYOfAMKGLpvUAVG3PlxjGZ0BJRge1DL2A4IoTlfTsMjhpsCgSXgDhT8Lmu',trx_grp=-976,v3='wG6PrtakjOWp9XBzwvmNb8wmqozpKKD5lhTOV67Llll4Qlfc5xpDhSszoz40Ugd9L2tty3S4gBWCDMLfywtGTkEFmbVVd0smhDwc',v4='J1PIcoxPw1PQn61j2MbOlkiNPEaPOvbYvHg30KyerZyCpT1tMWWtzeQjMS9SlIPyF7llOLIOT06EvdIuTtjtAXQfjGFOvBNzA6ew',t3=DATE_FORMAT('5002', '%Y-%m-%d %H:%i:%s'),gmt_modify=current_timestamp where grp_id=728 and mod(row_id,10)=5;
+set sql_mode="";
+update test.zright set r1=-161,dec_1=-161*1024/10000*1024,gmt_modify=current_timestamp where grp_id=728 and mod(row_id,5)=0;
+commit;
+affected rows: 30
+info: Rows matched: 30  Changed: 30  Warnings: 30
+commit;
+affected rows: 60
+info: Rows matched: 60  Changed: 60  Warnings: 0
+commit;
+drop table zright;
+drop table tmp_zright;
+create database nebula;
+use nebula;
+create table nebula.obright(id int not null auto_increment primary key, c int);
+insert into nebula.obright(c) values (1),(2),(3);
+create table nebula.tmp_obright(c int);
+insert into nebula.tmp_obright values (1),(2),(3);
+create table nebula.tmp_obright2(c int);
+create table nebula.w(c int);
+insert into nebula.w values(0);
+create trigger nebula.auth_secure before update on nebula.obright FOR EACH ROW
+BEGIN
+insert into nebula.tmp_obright2 select * from nebula.tmp_obright;
+update nebula.w set c = c + 1;
+END
+$
+SET transaction_isolation = "READ-COMMITTED";
+use nebula;
+begin;
+select * from nebula.w for update;
+c
+0
+SET transaction_isolation = "READ-COMMITTED";
+use nebula;
+update nebula.obright set c=c+1;
+SET transaction_isolation = "READ-COMMITTED";
+use nebula;
+insert into nebula.tmp_obright values (4);
+commit;
+select * from tmp_obright2;
+c
+1
+2
+3
+1
+2
+3
+1
+2
+3
+drop database nebula;

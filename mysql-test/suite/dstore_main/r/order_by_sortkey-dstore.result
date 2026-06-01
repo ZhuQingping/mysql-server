@@ -1,0 +1,234 @@
+CREATE TABLE t1(
+f0 int auto_increment PRIMARY KEY,
+f1 int,
+f2 varchar(200)
+) charset latin1;
+INSERT INTO t1(f1, f2) VALUES 
+(0,"0"),(1,"1"),(2,"2"),(3,"3"),(4,"4"),(5,"5"),
+(6,"6"),(7,"7"),(8,"8"),(9,"9"),(10,"10"),
+(11,"11"),(12,"12"),(13,"13"),(14,"14"),(15,"15"),
+(16,"16"),(17,"17"),(18,"18"),(19,"19"),(20,"20"),
+(21,"21"),(22,"22"),(23,"23"),(24,"24"),(25,"25"),
+(26,"26"),(27,"27"),(28,"28"),(29,"29"),(30,"30"),
+(31,"31"),(32,"32"),(33,"33"),(34,"34"),(35,"35"),
+(36,"36"),(37,"37"),(38,"38"),(39,"39"),(40,"40"),
+(41,"41"),(42,"42"),(43,"43"),(44,"44"),(45,"45"),
+(46,"46"),(47,"47"),(48,"48"),(49,"49"),(50,"50"),
+(51,"51"),(52,"52"),(53,"53"),(54,"54"),(55,"55"),
+(56,"56"),(57,"57"),(58,"58"),(59,"59"),(60,"60"),
+(61,"61"),(62,"62"),(63,"63"),(64,"64"),(65,"65"),
+(66,"66"),(67,"67"),(68,"68"),(69,"69"),(70,"70"),
+(71,"71"),(72,"72"),(73,"73"),(74,"74"),(75,"75"),
+(76,"76"),(77,"77"),(78,"78"),(79,"79"),(80,"80"),
+(81,"81"),(82,"82"),(83,"83"),(84,"84"),(85,"85"),
+(86,"86"),(87,"87"),(88,"88"),(89,"89"),(90,"90"),
+(91,"91"),(92,"92"),(93,"93"),(94,"94"),(95,"95"),
+(96,"96"),(97,"97"),(98,"98"),(99,"99");
+CREATE TEMPORARY TABLE tmp (f1 int, f2 varchar(20)) charset latin1;
+INSERT INTO tmp SELECT f1,f2 FROM t1;
+INSERT INTO t1(f1,f2) SELECT * FROM tmp;
+INSERT INTO tmp SELECT f1,f2 FROM t1;
+INSERT INTO t1(f1,f2) SELECT * FROM tmp;
+INSERT INTO t1(f1,f2) SELECT * FROM tmp;
+INSERT INTO tmp SELECT f1,f2 FROM t1;
+INSERT INTO t1(f1,f2) SELECT * FROM tmp;
+INSERT INTO tmp SELECT f1,f2 FROM t1;
+INSERT INTO t1(f1,f2) SELECT * FROM tmp;
+INSERT INTO tmp SELECT f1,f2 FROM t1;
+INSERT INTO t1(f1,f2) SELECT * FROM tmp;
+INSERT INTO tmp SELECT f1,f2 FROM t1;
+INSERT INTO t1(f1,f2) SELECT * FROM tmp;
+INSERT INTO tmp SELECT f1,f2 FROM t1;
+INSERT INTO t1(f1,f2) SELECT * FROM tmp;
+set sort_buffer_size= 32768;
+FLUSH STATUS;
+SHOW SESSION STATUS LIKE 'Sort%';
+Variable_name	Value
+Sort_merge_passes	0
+Sort_range	0
+Sort_rows	0
+Sort_scan	0
+SELECT * FROM t1 ORDER BY f2,f0 LIMIT 101;
+f0	f1	f2
+1	0	0
+101	0	0
+228	0	0
+328	0	0
+428	0	0
+739	0	0
+839	0	0
+939	0	0
+1250	0	0
+1350	0	0
+1450	0	0
+1550	0	0
+1650	0	0
+1750	0	0
+1922	0	0
+2022	0	0
+2136	0	0
+2236	0	0
+2336	0	0
+3297	0	0
+3397	0	0
+3497	0	0
+3597	0	0
+3697	0	0
+3797	0	0
+3969	0	0
+4069	0	0
+4183	0	0
+4283	0	0
+4383	0	0
+4397	0	0
+4497	0	0
+4597	0	0
+4726	0	0
+4826	0	0
+4940	0	0
+5040	0	0
+5140	0	0
+5254	0	0
+5354	0	0
+5468	0	0
+5568	0	0
+5668	0	0
+5697	0	0
+5869	0	0
+6026	0	0
+6070	0	0
+6184	0	0
+6284	0	0
+7392	0	0
+7492	0	0
+7592	0	0
+7692	0	0
+7792	0	0
+7892	0	0
+8064	0	0
+8164	0	0
+8278	0	0
+8378	0	0
+8478	0	0
+8492	0	0
+8592	0	0
+8692	0	0
+8821	0	0
+8921	0	0
+9035	0	0
+9135	0	0
+9235	0	0
+9349	0	0
+9449	0	0
+9563	0	0
+9663	0	0
+9763	0	0
+9792	0	0
+9964	0	0
+10121	0	0
+10165	0	0
+10279	0	0
+10379	0	0
+10392	0	0
+10492	0	0
+10592	0	0
+10721	0	0
+10821	0	0
+10935	0	0
+11035	0	0
+11135	0	0
+11249	0	0
+11349	0	0
+11463	0	0
+11563	0	0
+11663	0	0
+11692	0	0
+11864	0	0
+11978	0	0
+12078	0	0
+12178	0	0
+12278	0	0
+12292	0	0
+12392	0	0
+12478	0	0
+SHOW SESSION STATUS LIKE 'Sort%';
+Variable_name	Value
+Sort_merge_passes	102
+Sort_range	0
+Sort_rows	101
+Sort_scan	1
+FLUSH STATUS;
+CREATE TABLE t2 (f1 int);
+INSERT INTO t2 VALUES (0), (0);
+SELECT * FROM t2 where f1 =
+(SELECT f2 from t1 where t1.f1 = t2.f1 ORDER BY f1 LIMIT 1);
+f1
+0
+0
+SHOW SESSION STATUS LIKE 'Sort%';
+Variable_name	Value
+Sort_merge_passes	0
+Sort_range	0
+Sort_rows	2
+Sort_scan	2
+DROP TABLE t1, t2, tmp;
+Bug#32038406: Filesort used for ORDER BY .. DESC even when
+descending index available and used
+Here, latin1 is used because it matches collation of temporal const
+CREATE TABLE t1(vc VARCHAR(20) CHARACTER SET latin1);
+INSERT INTO t1 VALUES('2021-02-08'), ('21-02-08');
+Verify that a string const value removes ORDER BY clause
+SELECT * FROM t1 WHERE vc = '2021-02-08' ORDER BY vc ASC;
+vc
+2021-02-08
+explain SELECT * FROM t1 WHERE vc = '2021-02-08' ORDER BY vc ASC;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`vc` AS `vc` from `test`.`t1` where (`test`.`t1`.`vc` = '2021-02-08') order by `test`.`t1`.`vc`
+SELECT * FROM t1 WHERE vc = '2021-02-08' ORDER BY vc DESC;
+vc
+2021-02-08
+explain SELECT * FROM t1 WHERE vc = '2021-02-08' ORDER BY vc DESC;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`vc` AS `vc` from `test`.`t1` where (`test`.`t1`.`vc` = '2021-02-08') order by `test`.`t1`.`vc` desc
+Verify the same with a variable (which is const for execution)
+set @strvar = _latin1'2021-02-08';
+SELECT * FROM t1 WHERE vc = @strvar ORDER BY vc ASC;
+vc
+2021-02-08
+explain SELECT * FROM t1 WHERE vc = @strvar ORDER BY vc ASC;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`vc` AS `vc` from `test`.`t1` where (`test`.`t1`.`vc` = <cache>((@`strvar`))) order by `test`.`t1`.`vc`
+SELECT * FROM t1 WHERE vc = @strvar ORDER BY vc DESC;
+vc
+2021-02-08
+explain SELECT * FROM t1 WHERE vc = @strvar ORDER BY vc DESC;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`vc` AS `vc` from `test`.`t1` where (`test`.`t1`.`vc` = <cache>((@`strvar`))) order by `test`.`t1`.`vc` desc
+Verify that a date const value does not remove ORDER BY clause
+SELECT * FROM t1 WHERE vc = DATE'2021-02-08' ORDER BY vc ASC;
+vc
+2021-02-08
+21-02-08
+explain SELECT * FROM t1 WHERE vc = DATE'2021-02-08' ORDER BY vc ASC;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`vc` AS `vc` from `test`.`t1` where (`test`.`t1`.`vc` = DATE'2021-02-08') order by `test`.`t1`.`vc`
+SELECT * FROM t1 WHERE vc = DATE'2021-02-08' ORDER BY vc DESC;
+vc
+21-02-08
+2021-02-08
+explain SELECT * FROM t1 WHERE vc = DATE'2021-02-08' ORDER BY vc DESC;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`vc` AS `vc` from `test`.`t1` where (`test`.`t1`.`vc` = DATE'2021-02-08') order by `test`.`t1`.`vc` desc
+DROP TABLE t1;

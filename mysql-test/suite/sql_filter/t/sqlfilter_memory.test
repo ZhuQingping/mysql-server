@@ -1,0 +1,145 @@
+--source ../include/sqlfilter_prepare.inc
+--source include/have_debug.inc
+call dbms_sqlfilter.add_sql_filter('select', 0, "select~t", "92c1c492b3d147c3a354830cf04c361dno07");
+
+--let $connection_id= `SELECT CONNECTION_ID()`
+set @before_memory=0;
+set @after_memory=0;
+
+--echo #
+--echo # test dbms_sqlfilter.add_sql_filter can add memory
+--echo #
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @before_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+call dbms_sqlfilter.add_sql_filter('select', 0, "select~t", "92c1c492b3d147c3a354830cf04c361dno07");
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+select @after_memory - @before_memory;
+
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @before_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+call  dbms_sqlfilter.add_sql_filter('SELECT', 10, "select~from~t~数据库", "92c1c492b3d147c3a354830cf04c361dno07");
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+select @after_memory - @before_memory;
+
+--echo #
+--echo # test dbms_sqlfilter.delete_sql_filter can reduce memory
+--echo #
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @before_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+call delete_one_sql_filter_rule(0);
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+select @after_memory - @before_memory;
+
+--echo #
+--echo # test dbms_sqlfilter.delete_sql_filter on a nonexisted item_id, memory not change
+--echo #
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @before_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+call dbms_sqlfilter.delete_sql_filter(9999999);
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+select @after_memory - @before_memory;
+
+--echo #
+--echo # test dbms_sqlfilter.show_sql_filter, Sql_filter memory not change
+--echo #
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @before_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+--replace_column 1 #
+call dbms_sqlfilter.show_sql_filter();
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+select @after_memory - @before_memory;
+
+--echo #
+--echo # test dbms_sqlfilter.flush_sql_filter, Sql_filter memory not change
+--echo #
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @before_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+call dbms_sqlfilter.flush_sql_filter();
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+select @after_memory - @before_memory;
+
+--echo #
+--echo # test dbms_sqlfilter.delete_sql_filter, delete all sql filter rules, Sql_filter memory reduce to 0
+--echo #
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @before_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+select @after_memory - @before_memory;
+select @after_memory;
+
+--echo #
+--echo # test the memory increase when a possible largest sqlfilter rule added
+--echo #
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @before_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+
+--let $long_key_num = `select concat("update~", repeat("abcdefg~", 126), "abcdefghi")`
+--disable_query_log
+eval select char_length("$long_key_num") as long_key_num_length;
+--enable_query_log
+
+eval call dbms_sqlfilter.add_sql_filter('update', 1000000000, "$long_key_num", "92c1c492b3d147c3a354830cf04c361dno07");
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+select @after_memory - @before_memory;
+
+call delete_one_sql_filter_rule(0);
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+select @after_memory - @before_memory;
+
+
+--echo #
+--echo # test dbms_sqlfilter.update_sql_filter, Sql_filter memory can be changed based on key_str length
+--echo #
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @before_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+
+eval call dbms_sqlfilter.add_sql_filter('update', 1000000000, "$long_key_num", "92c1c492b3d147c3a354830cf04c361dno07");
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+select @after_memory - @before_memory;
+
+## update the node_id of sql filter, memory no change as long as node_id length keep same.
+--let $item_id = `select item_id from mysql.rds_sql_filter_rules where key_str = "$long_key_num"`
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'update', 1000000000, "$long_key_num", "12b3c492b3d147c3a354830cf04c361dno07");
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+select @after_memory - @before_memory;
+
+## update_sql_filter when item_id not found, memory no change
+eval call dbms_sqlfilter.update_sql_filter(9999999, 'update', 1000000000, "$long_key_num", "12b3c492b3d147c3a354830cf04c361dno07");
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+select @after_memory - @before_memory;
+
+## update to a much shorter key_str, memory reduced
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'update', 1000000000, "update~t~数据库", "12b3c492b3d147c3a354830cf04c361dno07");
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+select @after_memory - @before_memory;
+
+## update the max_concurrency of sql filter, memory no change
+--replace_regex /update_sql_filter\([0-9]+,/update_sql_filter(#,/
+eval call dbms_sqlfilter.update_sql_filter($item_id, 'update', 1, "update~t~数据库", "12b3c492b3d147c3a354830cf04c361dno07");
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+select @after_memory - @before_memory;
+
+call delete_one_sql_filter_rule(0);
+--replace_regex /PROCESSLIST_ID\s*=\s*\d+/PROCESSLIST_ID = #/
+eval SELECT SUM(m.CURRENT_NUMBER_OF_BYTES_USED) into @after_memory FROM performance_schema.threads t JOIN performance_schema.memory_summary_by_thread_by_event_name m ON t.THREAD_ID = m.THREAD_ID WHERE m.EVENT_NAME LIKE '%Sql_filter%' AND t.PROCESSLIST_ID = $connection_id;
+select @after_memory - @before_memory;
+
+--source ../include/sqlfilter_cleanup.inc

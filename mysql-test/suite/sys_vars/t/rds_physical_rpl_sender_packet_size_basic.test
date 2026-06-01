@@ -1,0 +1,39 @@
+# ulong global
+
+SET @start_global_value = @@global.rds_physical_rpl_sender_packet_size;
+
+#
+# exists as global only
+#
+select @@global.rds_physical_rpl_sender_packet_size;
+show global variables like 'rds_physical_rpl_sender_packet_size';
+show session variables like 'rds_physical_rpl_sender_packet_size';
+select * from performance_schema.global_variables where variable_name='rds_physical_rpl_sender_packet_size';
+select * from performance_schema.session_variables where variable_name='rds_physical_rpl_sender_packet_size';
+
+#
+# show that it's writable
+#
+set global rds_physical_rpl_sender_packet_size=1;
+select @@global.rds_physical_rpl_sender_packet_size;
+--error ER_GLOBAL_VARIABLE
+set session rds_physical_rpl_sender_packet_size=1;
+
+#
+# incorrect types
+#
+--error ER_WRONG_TYPE_FOR_VAR
+set global rds_physical_rpl_sender_packet_size=1.1;
+--error ER_WRONG_TYPE_FOR_VAR
+set global rds_physical_rpl_sender_packet_size=1e1;
+--error ER_WRONG_TYPE_FOR_VAR
+set global rds_physical_rpl_sender_packet_size="xiaoli";
+
+#
+# min/max values
+#
+set global rds_physical_rpl_sender_packet_size=1;
+set global rds_physical_rpl_sender_packet_size=cast(-1 as unsigned int);
+select @@global.rds_physical_rpl_sender_packet_size;
+
+SET @@global.rds_physical_rpl_sender_packet_size = @start_global_value;

@@ -1,0 +1,195 @@
+#
+#  DDL CRASH SAFE TEST: ALL DDL TEST PART 03
+#  This test will check whether the server can recovery from different
+#  phases of ALL DDLs without inconsistency between dstore and
+#  innodb. Each DDL will be tested at 3 crash points and recovery
+#  results will be verified.
+#
+CREATE DATABASE test_ddl_crash_comprehensive;
+USE test_ddl_crash_comprehensive;
+#  25. Crash on CREATE SERVER statement.
+#  25.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+CREATE SERVER s_crash FOREIGN DATA WRAPPER mysql OPTIONS (HOST '127.0.0.1');
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify server should not exist
+SELECT COUNT(*) AS server_count FROM mysql.servers WHERE SERVER_NAME='s_crash';
+server_count
+0
+#  25.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+CREATE SERVER s_crash FOREIGN DATA WRAPPER mysql OPTIONS (HOST '127.0.0.1');
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify server should not exist
+SELECT COUNT(*) AS server_count FROM mysql.servers WHERE SERVER_NAME='s_crash';
+server_count
+0
+#  25.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+CREATE SERVER s_crash FOREIGN DATA WRAPPER mysql OPTIONS (HOST '127.0.0.1');
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify server should exist
+SELECT COUNT(*) AS server_count FROM mysql.servers WHERE SERVER_NAME='s_crash';
+server_count
+1
+SELECT SERVER_NAME, HOST FROM mysql.servers WHERE SERVER_NAME='s_crash';
+SERVER_NAME	HOST
+s_crash	127.0.0.1
+#  26. Crash on ALTER SERVER statement.
+#  26.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+ALTER SERVER s_crash OPTIONS (USER 'test');
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify server user should not be changed
+SELECT USERNAME FROM mysql.servers WHERE SERVER_NAME='s_crash';
+USERNAME
+
+#  26.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+ALTER SERVER s_crash OPTIONS (USER 'test');
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify server user should not be changed
+SELECT USERNAME FROM mysql.servers WHERE SERVER_NAME='s_crash';
+USERNAME
+
+#  26.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+ALTER SERVER s_crash OPTIONS (USER 'test');
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify server user should be changed
+SELECT USERNAME FROM mysql.servers WHERE SERVER_NAME='s_crash';
+USERNAME
+test
+#  27. Crash on DROP SERVER statement.
+#  27.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+DROP SERVER s_crash;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify server should still exist
+SELECT COUNT(*) AS server_count FROM mysql.servers WHERE SERVER_NAME='s_crash';
+server_count
+1
+#  27.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+DROP SERVER s_crash;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify server should still exist
+SELECT COUNT(*) AS server_count FROM mysql.servers WHERE SERVER_NAME='s_crash';
+server_count
+1
+#  27.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+DROP SERVER s_crash;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify server should be dropped
+SELECT COUNT(*) AS server_count FROM mysql.servers WHERE SERVER_NAME='s_crash';
+server_count
+0
+#  28. Crash on CREATE USER statement.
+#  28.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+CREATE USER 'testuser_crash'@'localhost' IDENTIFIED BY 'password';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify user should not exist
+SELECT COUNT(*) AS user_count FROM mysql.user WHERE USER='testuser_crash';
+user_count
+0
+#  28.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+CREATE USER 'testuser_crash'@'localhost' IDENTIFIED BY 'password';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify user should not exist
+SELECT COUNT(*) AS user_count FROM mysql.user WHERE USER='testuser_crash';
+user_count
+0
+#  28.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+CREATE USER 'testuser_crash'@'localhost' IDENTIFIED BY 'password';
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify user should exist
+SELECT COUNT(*) AS user_count FROM mysql.user WHERE USER='testuser_crash';
+user_count
+1
+SELECT USER, HOST FROM mysql.user WHERE USER='testuser_crash';
+USER	HOST
+testuser_crash	localhost
+#  29. Crash on ALTER USER statement.
+#  29.1 Crash before InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_during_xa_prepare_step';
+ALTER USER 'testuser_crash'@'localhost' ACCOUNT LOCK;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify user account should not be locked
+SELECT ACCOUNT_LOCKED FROM mysql.user WHERE USER='testuser_crash';
+ACCOUNT_LOCKED
+N
+#  29.2 Crash after InnoDB prepare.
+SET debug='reset';
+SET debug='d, ib_trx_crash_after_prepare_done_step';
+ALTER USER 'testuser_crash'@'localhost' ACCOUNT LOCK;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify user account should not be locked
+SELECT ACCOUNT_LOCKED FROM mysql.user WHERE USER='testuser_crash';
+ACCOUNT_LOCKED
+N
+#  29.3 Crash after DStore commited.
+SET debug='reset';
+SET debug='d, ddl_crash_safe_crash_after_commit_in_dstore';
+ALTER USER 'testuser_crash'@'localhost' ACCOUNT LOCK;
+ERROR HY000: Lost connection to MySQL server during query
+# restart
+USE test_ddl_crash_comprehensive;
+# Verify user account should be locked
+SELECT ACCOUNT_LOCKED FROM mysql.user WHERE USER='testuser_crash';
+ACCOUNT_LOCKED
+Y
+# Final cleanup and summary
+# Drop remaining objects for complete cleanup
+DROP USER 'testuser_crash'@'localhost';
+# Summary: All DDL crash recovery tests completed successfully
+# Each DDL was tested at 3 crash points with proper recovery verification
+# - Before InnoDB prepare: DDL should be rolled back
+# - After InnoDB prepare but before DStore commit: DDL should be rolled back
+# - After DStore commit: DDL should be committed and visible
+SET debug='reset';
+DROP DATABASE test_ddl_crash_comprehensive;

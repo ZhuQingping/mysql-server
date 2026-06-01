@@ -1,0 +1,91 @@
+--source include/pq_test.inc
+--source include/have_debug.inc
+
+create database pq_test;
+use pq_test;
+
+create table t1(
+        id int primary key auto_increment,
+        col1 varchar(100),
+        col2 int,
+        key idx_col2(col2)
+ )engine= innodb;
+
+--disable_query_log
+ let $loop=100;
+ while($loop)
+ {
+  eval insert into pq_test.t1(col1, col2) values(repeat('test', 4), $loop);
+  dec $loop;
+ }
+--enable_query_log
+
+show variables like 'force_parallel_execute';
+select count(*) from pq_test.t1;
+
+select * from pq_test.t1 limit 1;
+
+--disable_result_log
+select * from pq_test.t1;
+--enable_result_log
+
+--disable_result_log
+select id, col2 from pq_test.t1 force index(idx_col2);
+--enable_result_log
+
+SELECT * FROM t1 WHERE id IN (1, 10, 20, 80, 90, 100, 30, 40, 50, 60, 70);
+
+drop table pq_test.t1;
+drop database pq_test;
+
+## typecast ##
+use test;
+
+create table t1( firstname char(20), lastname char(20));
+insert into t1 values ("john","doe"),("John","Doe");
+select * from t1 where firstname='john' and binary 'john' = firstname;
+
+drop table t1;
+
+## ISSUE 614: clone resolved members
+
+--echo "BUG2021031701984"
+CREATE TABLE t0(c0 DECIMAL, c1 BIGINT(185) ZEROFILL) ;
+INSERT IGNORE INTO t0(c0, c1) VALUES(824912915, "L뼨"), ("8g.췧.^M8", "An.k᭯K'br");
+EXPLAIN SELECT ALL t0.c0 AS ref0 FROM t0 WHERE (NOT ((t0.c1) || ((((NOT (t0.c1))) IN ((t0.c1) NOT IN ("O凌푅2ffjH", t0.c0, NULL))) XOR (('?') != ((t0.c0) XOR (1733129750))))));
+SELECT ALL t0.c0 AS ref0 FROM t0 WHERE (NOT ((t0.c1) || ((((NOT (t0.c1))) IN ((t0.c1) NOT IN ("O凌푅2ffjH", t0.c0, NULL))) XOR (('?') != ((t0.c0) XOR (1733129750))))));
+DROP TABLE t0;
+
+--echo "BUG2021031701451"
+CREATE TABLE t0(c0 FLOAT UNIQUE, c1 VARCHAR(500)  NULL) ;
+INSERT INTO t0(c0) VALUES(7.16471724E8);
+INSERT IGNORE INTO t0(c1, c0) VALUES('/.', 1752655962);
+EXPLAIN SELECT ALL t0.c0 AS ref0 FROM t0 WHERE (((1407000304) NOT IN (("-700607847") NOT IN (NULL, t0.c0))) AND (((t0.c1) IN ("", 1796917100)) || (-2.147241605E9))) AND (t0.c0);
+SELECT ALL t0.c0 AS ref0 FROM t0 WHERE (((1407000304) NOT IN (("-700607847") NOT IN (NULL, t0.c0))) AND (((t0.c1) IN ("", 1796917100)) || (-2.147241605E9))) AND (t0.c0);
+DROP table t0;
+
+--echo "BUG2021031602705"
+CREATE TABLE `t2` (
+  `c0` mediumint unsigned zerofill DEFAULT NULL,
+  UNIQUE KEY `c0` (`c0`)
+);
+CREATE TABLE `t3` (
+  `c1` double unsigned zerofill DEFAULT NULL
+);
+
+insert into t2 values row(0);
+insert into t3 values row(0);
+EXPLAIN SELECT ALL t2.c0 AS ref0 FROM t2, t3 WHERE (! (((("") && (CAST(t3.c1 AS SIGNED))) >= (((t2.c0) IN (1670323136, '')) IS NOT TRUE)) OR (t2.c0)));
+SELECT ALL t2.c0 AS ref0 FROM t2, t3 WHERE (! (((("") && (CAST(t3.c1 AS SIGNED))) >= (((t2.c0) IN (1670323136, '')) IS NOT TRUE)) OR (t2.c0)));
+DROP TABLE t2, t3;
+
+--echo "BUG2021031202198"
+CREATE TABLE `t1` (
+  `c1` tinyint unsigned zerofill DEFAULT NULL,
+  UNIQUE KEY `i0` (`c1`)
+);
+insert into t1 values row(0);
+EXPLAIN SELECT t1.c1 AS ref0 FROM t1 WHERE (NOT (((t1.c1) OR ((IFNULL(t1.c1, t1.c1)) LIKE ((t1.c1) > (t1.c1)))) AND ((((NULL) || (t1.c1)) IS NOT FALSE) IS TRUE)));
+SELECT t1.c1 AS ref0 FROM t1 WHERE (NOT (((t1.c1) OR ((IFNULL(t1.c1, t1.c1)) LIKE ((t1.c1) > (t1.c1)))) AND ((((NULL) || (t1.c1)) IS NOT FALSE) IS TRUE)));
+DROP table t1;
+

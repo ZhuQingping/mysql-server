@@ -1,0 +1,44 @@
+# ==== Purpose =======
+# Verify crash scenarios:
+# Crash occurs after writing the GTID to WAL.
+# Crash occurs again after startup but before open the persistence file.
+# After normal restart, verify it correctly calculates the  GTID.
+# ==== References ====
+#
+# US2025072201182 Write gtid into wal and recovery read gtid from wal.
+#
+
+--source include/have_binlog_format_row.inc
+--source include/have_binlog_format_row.inc
+--source include/have_only_dstore.inc
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+call mtr.add_suppression("rds_dstore_missed_gtids is");
+RESET MASTER;
+CREATE TABLE t (i INT);
+INSERT INTO t VALUES (1);
+
+
+set session debug="+d, crash_write_gtid_after_log";
+set session gtid_next='9b11f58f-612a-11f0-a4de-0242ac110007:1';
+--source include/expect_crash.inc
+--error 2013
+INSERT INTO t VALUES (2);
+
+--let $restart_parameters=--debug=+d,crash_before_open_gtids_in_wal_file
+--source include/start_mysqld_expecting_crash.inc
+
+--let $restart_parameters=restart:
+--source include/start_mysqld.inc
+
+--echo # expect rds_binlog_dstore_consistent is ON.
+show variables like 'rds_binlog_dstore_consistent';
+
+--echo # expect rds_dstore_missed_gtids is empty.
+show variables like 'rds_dstore_missed_gtids';
+
+--echo # expect rds_dstore_missed_gtids_on_binlog is empty.
+
+show variables like 'rds_dstore_missed_gtids_on_binlog';
+
+drop table t;

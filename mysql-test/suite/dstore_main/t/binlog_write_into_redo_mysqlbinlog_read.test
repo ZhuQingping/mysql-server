@@ -1,0 +1,49 @@
+# ==== Purpose ====
+#
+#  Verify that the binlog writes to the WAL and mysqlbinlog receives the content correctly.
+# 
+#
+
+--source include/have_binlog_format_row.inc
+--source include/have_only_dstore.inc
+reset master;
+CREATE TABLE t1 (c1 INT, c2 VARCHAR(1000));
+--sleep 3
+--let $keep_gtid_events= 1
+--source include/show_binlog_events.inc
+
+delimiter |;
+create procedure binlog_insert ( loop_time INT ) 
+begin 
+  declare i int default 1; 
+  while i < loop_time do 
+    INSERT INTO t1 VALUES(1, REPEAT('a', 1000));
+    set i = i + 1; 
+  end while; 
+end;|
+delimiter ;|
+
+call binlog_insert(10);
+--sleep 3
+--source include/show_binlog_events.inc
+
+--source include/show_binary_logs.inc
+
+--echo # Generate two dump thread
+--let $binlog_file= query_get_value(SHOW MASTER STATUS, File, 1)
+--exec_in_background $MYSQL_BINLOG --user=root --host=127.0.0.1  --raw --result-file=$MYSQL_TMP_DIR/ $binlog_file --stop-never --read-from-remote-master=BINLOG-DUMP-GTIDS --connection-server-id=3 2> $MYSQL_TMP_DIR/dump_gtid.err
+
+flush logs;
+call binlog_insert(10);
+--sleep 3
+
+--let $dump_id = query_get_value(select id from information_schema.processlist where command = 'Binlog Dump GTID', id, 1)
+--disable_query_log
+eval kill $dump_id;
+--enable_query_log
+
+--remove_file  $MYSQL_TMP_DIR/dump_gtid.err
+--remove_files_wildcard  $MYSQL_TMP_DIR binlog.0000*
+
+DROP TABLE t1;
+DROP PROCEDURE binlog_insert;

@@ -1,0 +1,118 @@
+call mtr.add_suppression("IndexParseFromFilterSet Failed to parse segment ID: -100,100");
+call mtr.add_suppression("Failed to IndexParseFromFilterSet");
+call mtr.add_suppression("Failed to acquire table for no_exist_db.t1");
+call mtr.add_suppression("Failed to DstoreProcessByTableName for table no_exist_db,t1");
+call mtr.add_suppression("Failed to acquire table for no_exist_db.no_exist_table");
+call mtr.add_suppression("Failed to DstoreProcessByTableName for table no_exist_db,no_exist_table");
+call mtr.add_suppression("IndexParseFromFilterSet Failed to parse segment ID: 999999999999999999999,131");
+call mtr.add_suppression("IndexParseFromFilterSet Failed to parse segment ID: 999999999999999999,131");
+call mtr.add_suppression("IndexParseFromFilterSet Failed to parse segment ID: 131,999999999999999999");
+DESCRIBE INFORMATION_SCHEMA.DSTORE_INDEXES;
+Field	Type	Null	Key	Default	Extra
+DB_NAME	varchar(320)	NO			
+TABLE_NAME	varchar(320)	NO			
+INDEX_NAME	varchar(320)	NO			
+PARTITION_NAME	varchar(320)	NO			
+SEGMENT_ID	varchar(20)	NO			
+META_PAGE	varchar(20)	NO			
+ROOT_PAGE	varchar(20)	NO			
+ROOT_LEVEL	int unsigned	NO			
+FAST_ROOT_PAGE	varchar(20)	NO			
+FAST_ROOT_LEVEL	int unsigned	NO			
+RELATION_KIND	varchar(20)	NO			
+KEY_NUM	int unsigned	NO			
+ATTRS_NUM	int unsigned	NO			
+TABLE_OID_ATT	int unsigned	NO			
+SPLIT_TIMES_PER_LEVEL	varchar(512)	NO			
+RECYCLE_TIMES_PER_LEVEL	varchar(512)	NO			
+DROP database IF EXISTS i_s_test;
+CREATE database i_s_test;
+USE i_s_test;
+SET @old_dstore_enable_btree_trace = @@dstore_enable_btree_trace;
+SET global dstore_enable_btree_trace = OFF;
+CREATE TABLE t1(id INT, int_col INT,
+char_col char(5) not null,
+varchar_col varchar(10) not null,
+PRIMARY KEY(id)) ENGINE = DSTORE;
+CREATE UNIQUE INDEX int_index on t1(int_col);
+CREATE INDEX cover_index on t1(char_col, varchar_col);
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+INSERT into t1 VALUES(1, 100, "abc", "de"), (2, 200, "ab", "cde"),
+(3, 300, "xyz", "jdk"), (4, 400, "fda", "hgr");
+SELECT * FROM t1;
+id	int_col	char_col	varchar_col
+1	100	abc	de
+2	200	ab	cde
+3	300	xyz	jdk
+4	400	fda	hgr
+SHOW index FROM t1;
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+t1	0	PRIMARY	1	id	A	4	NULL	NULL		BTREE			YES	NULL
+t1	0	int_index	1	int_col	A	NULL	NULL	NULL	YES	BTREE			YES	NULL
+t1	1	cover_index	1	char_col	A	NULL	NULL	NULL		BTREE			YES	NULL
+t1	1	cover_index	2	varchar_col	A	NULL	NULL	NULL		BTREE			YES	NULL
+SET global dstore_enable_btree_trace = ON;
+SELECT DB_NAME, TABLE_NAME, INDEX_NAME, ROOT_LEVEL, FAST_ROOT_LEVEL,
+RELATION_KIND, KEY_NUM, ATTRS_NUM, SPLIT_TIMES_PER_LEVEL,
+RECYCLE_TIMES_PER_LEVEL
+FROM information_schema.dstore_indexes
+WHERE DB_NAME = 'i_s_test' and TABLE_NAME = 't1' ORDER BY INDEX_NAME DESC;
+DB_NAME	TABLE_NAME	INDEX_NAME	ROOT_LEVEL	FAST_ROOT_LEVEL	RELATION_KIND	KEY_NUM	ATTRS_NUM	SPLIT_TIMES_PER_LEVEL	RECYCLE_TIMES_PER_LEVEL
+i_s_test	t1	PRIMARY	0	0	i	1	1	level 0: split 0 times when build, 0 times when insert; 	level 0: mark recyclable 0 times, recycled 0 times; 
+i_s_test	t1	int_index	0	0	i	1	1	level 0: split 0 times when build, 0 times when insert; 	level 0: mark recyclable 0 times, recycled 0 times; 
+i_s_test	t1	cover_index	0	0	i	2	2	level 0: split 0 times when build, 0 times when insert; 	level 0: mark recyclable 0 times, recycled 0 times; 
+PREPARE stmt1 FROM 'SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE SEGMENT_ID = ?';
+EXECUTE stmt1 USING @segment_id;
+COUNT(*)
+1
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE DB_NAME = 'i_s_test';
+COUNT(*)
+3
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE DB_NAME = 'i_s_test' AND TABLE_NAME = 't1';
+COUNT(*)
+3
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE DB_NAME = 'no_exist_db' AND TABLE_NAME = 't1';
+COUNT(*)
+0
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE DB_NAME = 'no_exist_db' AND TABLE_NAME = 'no_exist_table';
+COUNT(*)
+0
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE TABLE_NAME = 't1';
+COUNT(*)
+3
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE INDEX_NAME = 'PRIMARY';
+COUNT(*)
+2
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes;
+COUNT(*)
+5
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE SEGMENT_ID = "100,100";
+COUNT(*)
+0
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE SEGMENT_ID = "-100,100";
+COUNT(*)
+0
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE SEGMENT_ID != "-100,100";
+COUNT(*)
+5
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE SEGMENT_ID = "5121,131";
+COUNT(*)
+0
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes WHERE SEGMENT_ID = "5121,139";
+COUNT(*)
+1
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes where segment_id = "999999999999999999999,131";
+COUNT(*)
+0
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes where segment_id = "999999999999999999,131";
+COUNT(*)
+0
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes where segment_id = "131,999999999999999999";
+COUNT(*)
+0
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.dstore_indexes where index_name = "int_index";
+COUNT(*)
+1
+DROP PREPARE stmt1;
+DROP database i_s_test;
+SET global dstore_enable_btree_trace = @old_dstore_enable_btree_trace;

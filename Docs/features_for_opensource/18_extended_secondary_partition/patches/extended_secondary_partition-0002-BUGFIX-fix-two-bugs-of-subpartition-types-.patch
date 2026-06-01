@@ -1,0 +1,622 @@
+From 26e6bcf724e08c329b976eb9f4a2cfa4a10a8e91 Mon Sep 17 00:00:00 2001
+From: xurong <xuchenfeng@contributor>
+
+
+Date: Tue, 26 Aug 2025 21:27:52 +0800
+Subject: [PATCH] BUGFIX fix two bugs of subpartition types support.
+
+1. BUGFIX Subpartition key of Range columns with IN clause which has more than one value, partition pruning is incorrect.
+
+    Problem:
+
+    For a partitioned table with a secondary partition type of RANGE COLUMNS, when the WHERE clause
+    of a query includes the use of the IN predicate on the subpartition key and the IN predicate
+    contains more than one value, partition pruning is incorrect.
+
+    Analysis:
+    The current logic for subpartition pruning uses find_used_partitions to process the subpartition key.
+    However, if a left subtree exists during the processing, the corresponding partitions are not marked.
+    Only the subpartition keys corresponding to the final right subtree are marked. A part_iter is then
+    generated based on this and used to retrieve the qualifying subpartitions. This approach is incorrect
+    and will cause qualifying partitions to be omitted in many scenarios.
+
+    Fix:
+    Regarding the processing of subpartition pruning, it is entirely treated as a first-level partition.
+    After the find_used_partitions process is completed, the IDs of the qualifying partitions are all marked
+    in the read_partitions bitmap. When the find_used_partitions function returns a non-zero value,
+    it indicates that there are qualifying partitions. Then, the corresponding partition keys can be calculated
+    by combining the primary partition key.
+
+2. BUGFIX fix probleam about alter table .. algorithm=inplace with list columns - range columns subpartition table failed.
+
+    Probleam:
+      There is a list columns - range columns partitioning which field sequence in
+    the list of subpartitions is different from that in the table. Defined as follows:
+
+    --------------------------------
+    CREATE TABLE t1 (
+      int_col int DEFAULT NULL,
+      date_col date DEFAULT NULL,
+      char_col char(4) NOT NULL,
+      varchar_col varchar(255) DEFAULT NULL,
+      tinytext_col tinytext,
+      longblob_col longblob,
+      json_col json DEFAULT NULL
+    ) PARTITION BY LIST COLUMNS(varchar_col,int_col)
+    SUBPARTITION BY RANGE COLUMNS(char_col,date_col)
+    (
+      PARTITION p0 VALUES in ((NULL,NULL))(
+        SUBPARTITION sub1 VALUES LESS THAN('aabb',MAXVALUE)
+      )
+    );
+
+    List of subpartitions is `char_col,date_col` and the sequence of fields in table
+    definition is `date_col, char_col`. These two are opposites.
+    --------------------------------
+
+    When running `ALTER TABLE t1 .. algorithm=inplace` query, query fails to be executed
+    and reportes HA_ALTER_INPLACE_NOT_SUPPORTED error code.
+
+    Analysis:
+      In partition_info::same_key_column_order function, it checks whether INPLACE alter
+    can be allowed or not for KEY [sub]partitioning. If the order is different then the
+    rows must be redistributed for KEY [sub]partitioning.
+
+    When checking for KEY subpartitioning, it only checkes if list_of_part_fields is true
+    and columns_list condition is missing. As a result, RANGE COLUMNS and LIST COLUMNS
+    are also checked with has_same_column_order function and query failed.
+
+    Fix:
+    The logic for checking KEY subpartitioning is modified as follows:
+    >>>
+    if (sub_part_info && sub_part_info->list_of_part_fields && !sub_part_info->column_list)
+    <<<
+---
+ .../suite/parts/r/subpartition_bugs.result    | 151 +++++++++++++++++-
+ .../suite/parts/t/subpartition_bugs.test      | 147 ++++++++++++++++-
+ sql/partition_info.cc                         |   3 +-
+ sql/range_optimizer/partition_pruning.cc      |  75 ++++-----
+ sql/sql_partition.cc                          |  10 +-
+ 5 files changed, 326 insertions(+), 60 deletions(-)
+
+diff --git a/mysql-test/suite/parts/r/subpartition_bugs.result b/mysql-test/suite/parts/r/subpartition_bugs.result
+index b8804f6ea66..0f675e2bf3e 100644
+--- a/mysql-test/suite/parts/r/subpartition_bugs.result
++++ b/mysql-test/suite/parts/r/subpartition_bugs.result
+@@ -82,8 +82,7 @@ int_col int,
+ date_col date,
+ varchar_col varchar(255),
+ char_col char(4)
+-) 
+-PARTITION BY LIST COLUMNS(varchar_col,int_col)
++)PARTITION BY LIST COLUMNS(varchar_col,int_col)
+ SUBPARTITION BY RANGE COLUMNS(char_col,date_col)
+ (
+ PARTITION p0 VALUES in ((NULL,NULL))(
+@@ -126,8 +125,7 @@ id_col int NOT NULL,
+ int_col int NOT NULL,
+ char_col char(8) NOT NULL,
+ varchar_col varchar(255) NOT NULL
+-) PARTITION BY LIST (id_col % 4) SUBPARTITION BY LIST COLUMNS(char_col,int_col,varchar_col)  
+-(
++) PARTITION BY LIST (id_col % 4) SUBPARTITION BY LIST COLUMNS(char_col,int_col,varchar_col) (
+ PARTITION p0 VALUES in (0)(
+ SUBPARTITION sub0 VALUES in (('ab', 84, 'ab'),('ab', 100, 'ab'),('ab', 131, 'ab')),
+ SUBPARTITION sub1 VALUES in (('aaa2', 2147483647, 'bbba2'),('aacd', 101, 'bbbbbbbbcd'),('aaaa', -2147483648, 'bbbbbbbbbaa'),('aabb', 121, 'bbbbbbbbbb'),('aabb', 15, 'bbbbbbbbbb'),('aabb', 22, 'bbbbbbbbbb'),('aabb', 39, 'bbbbbbbbbb'),('aabb', 43, 'bbbbbbbbbb'),('aabb', 58, 'bbbbbbbbbb'),('aabb', 65, 'bbbbbbbbbb'),('aabb', 76, 'bbbbbbbbbb'),('aabb', 80, 'bbbbbbbbbb'),('aabb', 99, 'bbbbbbbbbb'),('aabb', 100, 'bbbbbbbbbb'))
+@@ -151,4 +149,149 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`tbl_1`.`id_col` AS `id_col` from `test`.`tbl_1` where ((`test`.`tbl_1`.`char_col` = 'aaa2') and (`test`.`tbl_1`.`id_col` in (66,68,95)))
+ DROP TABLE tbl_1;
++#
++# BUGFIX: alter table .. algorithm=inplace with list columns - range columns subpartition table failed.
++#
++CREATE TABLE t1 (
++int_col int DEFAULT NULL,
++date_col date DEFAULT NULL,
++char_col char(4) NOT NULL,
++varchar_col varchar(255) DEFAULT NULL,
++tinytext_col tinytext,
++longblob_col longblob,
++json_col json DEFAULT NULL
++) PARTITION BY LIST COLUMNS(varchar_col,int_col)
++SUBPARTITION BY RANGE COLUMNS(char_col,date_col)
++(
++PARTITION p0 VALUES in ((NULL,NULL))(
++SUBPARTITION sub1 VALUES LESS THAN('aabb',MAXVALUE)
++)
++);
++ALTER TABLE t1 DROP tinytext_col,algorithm=inplace;
++DROP TABLE t1;
++CREATE TABLE t1 (
++int_col int DEFAULT NULL,
++date_col date DEFAULT NULL,
++char_col char(4) NOT NULL,
++varchar_col varchar(255) DEFAULT NULL,
++tinytext_col tinytext,
++longblob_col longblob,
++json_col json DEFAULT NULL
++) PARTITION BY LIST COLUMNS(varchar_col,int_col)
++SUBPARTITION BY KEY(char_col,date_col)
++(
++PARTITION p0 VALUES in ((NULL,NULL))
++);
++ALTER TABLE t1 DROP tinytext_col,algorithm=inplace;
++DROP TABLE t1;
++CREATE TABLE t1 (
++int_col int DEFAULT NULL,
++date_col date DEFAULT NULL,
++char_col char(4) NOT NULL,
++varchar_col varchar(255) DEFAULT NULL,
++tinytext_col tinytext,
++longblob_col longblob,
++json_col json DEFAULT NULL
++) PARTITION BY KEY(char_col,date_col);
++ALTER TABLE t1 DROP tinytext_col,algorithm=inplace;
++DROP TABLE t1;
++#
++#BUGFIX
++#For a partitioned table with a secondary partition type of RANGE COLUMNS,
++#when the WHERE clause of a query includes the use of the IN predicate on the
++#subpartition key and the IN predicate contains more than one value,
++#partition pruning is incorrect.
++#
++CREATE TABLE `biz_operation_log` (
++`id` varchar(50)  NOT NULL,
++`addr_id` varchar(50)  DEFAULT NULL ,
++`addr_code` varchar(50)  DEFAULT NULL,
++`company_id` varchar(50)  NOT NULL ,
++`tent_id` varchar(11)  NOT NULL ,
++`crt_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
++PRIMARY KEY (`id`,`crt_time`,`tent_id`,`company_id`),
++KEY `addr_id` (`addr_id`) USING BTREE,
++KEY `addr_code` (`addr_code`) USING BTREE,
++KEY `idx_tentid_crttime_companyid` (`tent_id`,`crt_time`,`company_id`) USING BTREE
++) PARTITION BY RANGE  COLUMNS(crt_time)
++SUBPARTITION BY RANGE  COLUMNS(tent_id,company_id)
++(PARTITION p2024 VALUES LESS THAN ('2024-01-01')
++(SUBPARTITION p_2024_p248_100001001002001 VALUES LESS THAN ('248','100001001002002'),
++SUBPARTITION p_2024_p248_100001001002005 VALUES LESS THAN ('248','100001001002006'),
++SUBPARTITION p_2024_p248_100001001003001 VALUES LESS THAN ('248','100001001003002'),
++SUBPARTITION p_2024_p248_100001001003002 VALUES LESS THAN ('248','100001001003003'),
++SUBPARTITION p_2024_p248_100001001003003 VALUES LESS THAN ('248','100001001003004'),
++SUBPARTITION p_2024_p248_100001001004001 VALUES LESS THAN ('248','100001001004002'),
++SUBPARTITION p_2024_p249_100002001001 VALUES LESS THAN ('249','100002001002'),
++SUBPARTITION p_2024_p_max VALUES LESS THAN (MAXVALUE,MAXVALUE)),
++PARTITION p2025 VALUES LESS THAN ('2025-01-01')
++(SUBPARTITION p_2025_p248_100001001002001 VALUES LESS THAN ('248','100001001002002'),
++SUBPARTITION p_2025_p248_100001001002005 VALUES LESS THAN ('248','100001001002006'),
++SUBPARTITION p_2025_p248_100001001003001 VALUES LESS THAN ('248','100001001003002'),
++SUBPARTITION p_2025_p248_100001001003002 VALUES LESS THAN ('248','100001001003003'),
++SUBPARTITION p_2025_p248_100001001003003 VALUES LESS THAN ('248','100001001003004'),
++SUBPARTITION p_2025_p248_100001001004001 VALUES LESS THAN ('248','100001001004002'),
++SUBPARTITION p_2025_p249_100002001001 VALUES LESS THAN ('249','100002001002'),
++SUBPARTITION p_2025_p_max VALUES LESS THAN (MAXVALUE,MAXVALUE)),
++PARTITION p2026 VALUES LESS THAN ('2026-01-01')
++(SUBPARTITION p_2026_p248_100001001002001 VALUES LESS THAN ('248','100001001002002'),
++SUBPARTITION p_2026_p248_100001001002005 VALUES LESS THAN ('248','100001001002006'),
++SUBPARTITION p_2026_p248_100001001003001 VALUES LESS THAN ('248','100001001003002'),
++SUBPARTITION p_2026_p248_100001001003002 VALUES LESS THAN ('248','100001001003003'),
++SUBPARTITION p_2026_p248_100001001003003 VALUES LESS THAN ('248','100001001003004'),
++SUBPARTITION p_2026_p248_100001001004001 VALUES LESS THAN ('248','100001001004002'),
++SUBPARTITION p_2026_p249_100002001001 VALUES LESS THAN ('249','100002001002'),
++SUBPARTITION p_2026_p_max VALUES LESS THAN (MAXVALUE,MAXVALUE)),
++PARTITION pmax VALUES LESS THAN (MAXVALUE)
++(SUBPARTITION p_max_p248_100001001002001 VALUES LESS THAN ('248','100001001002002'),
++SUBPARTITION p_max_p248_100001001002005 VALUES LESS THAN ('248','100001001002006'),
++SUBPARTITION p_max_p248_100001001003001 VALUES LESS THAN ('248','100001001003002'),
++SUBPARTITION p_max_p248_100001001003002 VALUES LESS THAN ('248','100001001003003'),
++SUBPARTITION p_max_p248_100001001003003 VALUES LESS THAN ('248','100001001003004'),
++SUBPARTITION p_max_p248_100001001004001 VALUES LESS THAN ('248','100001001004002'),
++SUBPARTITION p_max_p249_100002001001 VALUES LESS THAN ('249','100002001002'),
++SUBPARTITION p_max_p_max VALUES LESS THAN (MAXVALUE,MAXVALUE)));
++EXPLAIN
++SELECT count(0)FROM  biz_operation_log log
++WHERE log.crt_time >= '2024-04-09 09:16:06' AND
++log.crt_time <= '2024-07-08 09:16:06' AND
++log.company_id in ('100001001003001', '100001001003002', '100001001003003') AND
++log.tent_id = '248';
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	log	p2025_p_2025_p248_100001001003001,p2025_p_2025_p248_100001001003002,p2025_p_2025_p248_100001001003003	index	PRIMARY,addr_id,addr_code,idx_tentid_crttime_companyid	addr_id	203	NULL	1	#	Using where; Using index
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(0)` from `test`.`biz_operation_log` `log` where ((`test`.`log`.`tent_id` = '248') and (`test`.`log`.`crt_time` >= TIMESTAMP'2024-04-09 09:16:06') and (`test`.`log`.`crt_time` <= TIMESTAMP'2024-07-08 09:16:06') and (`test`.`log`.`company_id` in ('100001001003001','100001001003002','100001001003003')))
++EXPLAIN
++SELECT count(0)FROM  biz_operation_log log
++WHERE log.company_id in ('100001001003001', '100001001003002', '100001001003003') AND
++log.tent_id = '248';
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	log	p2024_p_2024_p248_100001001003001,p2024_p_2024_p248_100001001003002,p2024_p_2024_p248_100001001003003,p2025_p_2025_p248_100001001003001,p2025_p_2025_p248_100001001003002,p2025_p_2025_p248_100001001003003,p2026_p_2026_p248_100001001003001,p2026_p_2026_p248_100001001003002,p2026_p_2026_p248_100001001003003,pmax_p_max_p248_100001001003001,pmax_p_max_p248_100001001003002,pmax_p_max_p248_100001001003003	ref	PRIMARY,addr_id,addr_code,idx_tentid_crttime_companyid	idx_tentid_crttime_companyid	46	const	1	#	Using where; Using index
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(0)` from `test`.`biz_operation_log` `log` where ((`test`.`log`.`tent_id` = '248') and (`test`.`log`.`company_id` in ('100001001003001','100001001003002','100001001003003')))
++EXPLAIN
++SELECT count(0)FROM  biz_operation_log log
++WHERE log.company_id in ('100001001003002', '100001001003001', '100001001003003') AND
++log.tent_id = '248';
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	log	p2024_p_2024_p248_100001001003001,p2024_p_2024_p248_100001001003002,p2024_p_2024_p248_100001001003003,p2025_p_2025_p248_100001001003001,p2025_p_2025_p248_100001001003002,p2025_p_2025_p248_100001001003003,p2026_p_2026_p248_100001001003001,p2026_p_2026_p248_100001001003002,p2026_p_2026_p248_100001001003003,pmax_p_max_p248_100001001003001,pmax_p_max_p248_100001001003002,pmax_p_max_p248_100001001003003	ref	PRIMARY,addr_id,addr_code,idx_tentid_crttime_companyid	idx_tentid_crttime_companyid	46	const	1	#	Using where; Using index
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(0)` from `test`.`biz_operation_log` `log` where ((`test`.`log`.`tent_id` = '248') and (`test`.`log`.`company_id` in ('100001001003002','100001001003001','100001001003003')))
++EXPLAIN
++SELECT count(0)FROM  biz_operation_log log
++WHERE log.company_id in ('100001001003003', '100001001003002', '100001001003001') AND
++log.tent_id = '248';
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	log	p2024_p_2024_p248_100001001003001,p2024_p_2024_p248_100001001003002,p2024_p_2024_p248_100001001003003,p2025_p_2025_p248_100001001003001,p2025_p_2025_p248_100001001003002,p2025_p_2025_p248_100001001003003,p2026_p_2026_p248_100001001003001,p2026_p_2026_p248_100001001003002,p2026_p_2026_p248_100001001003003,pmax_p_max_p248_100001001003001,pmax_p_max_p248_100001001003002,pmax_p_max_p248_100001001003003	ref	PRIMARY,addr_id,addr_code,idx_tentid_crttime_companyid	idx_tentid_crttime_companyid	46	const	1	#	Using where; Using index
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(0)` from `test`.`biz_operation_log` `log` where ((`test`.`log`.`tent_id` = '248') and (`test`.`log`.`company_id` in ('100001001003003','100001001003002','100001001003001')))
++EXPLAIN
++SELECT count(0)FROM  biz_operation_log log
++WHERE log.company_id in ('100001001003002', '100001001003001') AND
++log.tent_id = '248';
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	log	p2024_p_2024_p248_100001001003001,p2024_p_2024_p248_100001001003002,p2025_p_2025_p248_100001001003001,p2025_p_2025_p248_100001001003002,p2026_p_2026_p248_100001001003001,p2026_p_2026_p248_100001001003002,pmax_p_max_p248_100001001003001,pmax_p_max_p248_100001001003002	ref	PRIMARY,addr_id,addr_code,idx_tentid_crttime_companyid	idx_tentid_crttime_companyid	46	const	1	#	Using where; Using index
++Warnings:
++Note	1003	/* select#1 */ select count(0) AS `count(0)` from `test`.`biz_operation_log` `log` where ((`test`.`log`.`tent_id` = '248') and (`test`.`log`.`company_id` in ('100001001003002','100001001003001')))
++DROP TABLE biz_operation_log;
+ SET global rds_extended_partitions_enabled = @saved_rds_extended_partitions_enabled;
+diff --git a/mysql-test/suite/parts/t/subpartition_bugs.test b/mysql-test/suite/parts/t/subpartition_bugs.test
+index 09b18397167..b2a7739354e 100644
+--- a/mysql-test/suite/parts/t/subpartition_bugs.test
++++ b/mysql-test/suite/parts/t/subpartition_bugs.test
+@@ -83,8 +83,7 @@ CREATE TABLE t1 (
+   date_col date,
+   varchar_col varchar(255),
+   char_col char(4)
+-) 
+-PARTITION BY LIST COLUMNS(varchar_col,int_col)
++)PARTITION BY LIST COLUMNS(varchar_col,int_col)
+ SUBPARTITION BY RANGE COLUMNS(char_col,date_col)
+ (
+   PARTITION p0 VALUES in ((NULL,NULL))(
+@@ -122,8 +121,7 @@ CREATE TABLE tbl_1 (
+   int_col int NOT NULL,
+   char_col char(8) NOT NULL,
+   varchar_col varchar(255) NOT NULL
+-) PARTITION BY LIST (id_col % 4) SUBPARTITION BY LIST COLUMNS(char_col,int_col,varchar_col)  
+-(
++) PARTITION BY LIST (id_col % 4) SUBPARTITION BY LIST COLUMNS(char_col,int_col,varchar_col) (
+    PARTITION p0 VALUES in (0)(
+     SUBPARTITION sub0 VALUES in (('ab', 84, 'ab'),('ab', 100, 'ab'),('ab', 131, 'ab')),
+     SUBPARTITION sub1 VALUES in (('aaa2', 2147483647, 'bbba2'),('aacd', 101, 'bbbbbbbbcd'),('aaaa', -2147483648, 'bbbbbbbbbaa'),('aabb', 121, 'bbbbbbbbbb'),('aabb', 15, 'bbbbbbbbbb'),('aabb', 22, 'bbbbbbbbbb'),('aabb', 39, 'bbbbbbbbbb'),('aabb', 43, 'bbbbbbbbbb'),('aabb', 58, 'bbbbbbbbbb'),('aabb', 65, 'bbbbbbbbbb'),('aabb', 76, 'bbbbbbbbbb'),('aabb', 80, 'bbbbbbbbbb'),('aabb', 99, 'bbbbbbbbbb'),('aabb', 100, 'bbbbbbbbbb'))
+@@ -146,5 +144,146 @@ CREATE TABLE tbl_1 (
+ EXPLAIN SELECT id_col FROM tbl_1 WHERE char_col IN ('aaa2') and id_col IN (66,68,95);
+ DROP TABLE tbl_1;
+ 
++--echo #
++--echo # BUGFIX: alter table .. algorithm=inplace with list columns - range columns subpartition table failed.
++--echo #
++CREATE TABLE t1 (
++  int_col int DEFAULT NULL,
++  date_col date DEFAULT NULL,
++  char_col char(4) NOT NULL,
++  varchar_col varchar(255) DEFAULT NULL,
++  tinytext_col tinytext,
++  longblob_col longblob,
++  json_col json DEFAULT NULL
++) PARTITION BY LIST COLUMNS(varchar_col,int_col)
++SUBPARTITION BY RANGE COLUMNS(char_col,date_col)
++(
++  PARTITION p0 VALUES in ((NULL,NULL))(
++    SUBPARTITION sub1 VALUES LESS THAN('aabb',MAXVALUE)
++  )
++);
++ALTER TABLE t1 DROP tinytext_col,algorithm=inplace;
++DROP TABLE t1;
++
++CREATE TABLE t1 (
++  int_col int DEFAULT NULL,
++  date_col date DEFAULT NULL,
++  char_col char(4) NOT NULL,
++  varchar_col varchar(255) DEFAULT NULL,
++  tinytext_col tinytext,
++  longblob_col longblob,
++  json_col json DEFAULT NULL
++) PARTITION BY LIST COLUMNS(varchar_col,int_col)
++SUBPARTITION BY KEY(char_col,date_col)
++(
++  PARTITION p0 VALUES in ((NULL,NULL))
++);
++ALTER TABLE t1 DROP tinytext_col,algorithm=inplace;
++DROP TABLE t1;
++
++CREATE TABLE t1 (
++  int_col int DEFAULT NULL,
++  date_col date DEFAULT NULL,
++  char_col char(4) NOT NULL,
++  varchar_col varchar(255) DEFAULT NULL,
++  tinytext_col tinytext,
++  longblob_col longblob,
++  json_col json DEFAULT NULL
++) PARTITION BY KEY(char_col,date_col);
++ALTER TABLE t1 DROP tinytext_col,algorithm=inplace;
++DROP TABLE t1;
++
++--echo #
++--echo #BUGFIX
++--echo #For a partitioned table with a secondary partition type of RANGE COLUMNS,
++--echo #when the WHERE clause of a query includes the use of the IN predicate on the
++--echo #subpartition key and the IN predicate contains more than one value,
++--echo #partition pruning is incorrect.
++--echo #
++CREATE TABLE `biz_operation_log` (
++  `id` varchar(50)  NOT NULL,
++  `addr_id` varchar(50)  DEFAULT NULL ,
++  `addr_code` varchar(50)  DEFAULT NULL,
++  `company_id` varchar(50)  NOT NULL ,
++  `tent_id` varchar(11)  NOT NULL ,
++  `crt_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
++  PRIMARY KEY (`id`,`crt_time`,`tent_id`,`company_id`),
++  KEY `addr_id` (`addr_id`) USING BTREE,
++  KEY `addr_code` (`addr_code`) USING BTREE,
++  KEY `idx_tentid_crttime_companyid` (`tent_id`,`crt_time`,`company_id`) USING BTREE
++) PARTITION BY RANGE  COLUMNS(crt_time)
++SUBPARTITION BY RANGE  COLUMNS(tent_id,company_id)
++(PARTITION p2024 VALUES LESS THAN ('2024-01-01')
++ (SUBPARTITION p_2024_p248_100001001002001 VALUES LESS THAN ('248','100001001002002'),
++  SUBPARTITION p_2024_p248_100001001002005 VALUES LESS THAN ('248','100001001002006'),
++  SUBPARTITION p_2024_p248_100001001003001 VALUES LESS THAN ('248','100001001003002'),
++  SUBPARTITION p_2024_p248_100001001003002 VALUES LESS THAN ('248','100001001003003'),
++  SUBPARTITION p_2024_p248_100001001003003 VALUES LESS THAN ('248','100001001003004'),
++  SUBPARTITION p_2024_p248_100001001004001 VALUES LESS THAN ('248','100001001004002'),
++  SUBPARTITION p_2024_p249_100002001001 VALUES LESS THAN ('249','100002001002'),
++  SUBPARTITION p_2024_p_max VALUES LESS THAN (MAXVALUE,MAXVALUE)),
++ PARTITION p2025 VALUES LESS THAN ('2025-01-01')
++ (SUBPARTITION p_2025_p248_100001001002001 VALUES LESS THAN ('248','100001001002002'),
++  SUBPARTITION p_2025_p248_100001001002005 VALUES LESS THAN ('248','100001001002006'),
++  SUBPARTITION p_2025_p248_100001001003001 VALUES LESS THAN ('248','100001001003002'),
++  SUBPARTITION p_2025_p248_100001001003002 VALUES LESS THAN ('248','100001001003003'),
++  SUBPARTITION p_2025_p248_100001001003003 VALUES LESS THAN ('248','100001001003004'),
++  SUBPARTITION p_2025_p248_100001001004001 VALUES LESS THAN ('248','100001001004002'),
++  SUBPARTITION p_2025_p249_100002001001 VALUES LESS THAN ('249','100002001002'),
++  SUBPARTITION p_2025_p_max VALUES LESS THAN (MAXVALUE,MAXVALUE)),
++ PARTITION p2026 VALUES LESS THAN ('2026-01-01')
++ (SUBPARTITION p_2026_p248_100001001002001 VALUES LESS THAN ('248','100001001002002'),
++  SUBPARTITION p_2026_p248_100001001002005 VALUES LESS THAN ('248','100001001002006'),
++  SUBPARTITION p_2026_p248_100001001003001 VALUES LESS THAN ('248','100001001003002'),
++  SUBPARTITION p_2026_p248_100001001003002 VALUES LESS THAN ('248','100001001003003'),
++  SUBPARTITION p_2026_p248_100001001003003 VALUES LESS THAN ('248','100001001003004'),
++  SUBPARTITION p_2026_p248_100001001004001 VALUES LESS THAN ('248','100001001004002'),
++  SUBPARTITION p_2026_p249_100002001001 VALUES LESS THAN ('249','100002001002'),
++  SUBPARTITION p_2026_p_max VALUES LESS THAN (MAXVALUE,MAXVALUE)),
++ PARTITION pmax VALUES LESS THAN (MAXVALUE)
++ (SUBPARTITION p_max_p248_100001001002001 VALUES LESS THAN ('248','100001001002002'),
++  SUBPARTITION p_max_p248_100001001002005 VALUES LESS THAN ('248','100001001002006'),
++  SUBPARTITION p_max_p248_100001001003001 VALUES LESS THAN ('248','100001001003002'),
++  SUBPARTITION p_max_p248_100001001003002 VALUES LESS THAN ('248','100001001003003'),
++  SUBPARTITION p_max_p248_100001001003003 VALUES LESS THAN ('248','100001001003004'),
++  SUBPARTITION p_max_p248_100001001004001 VALUES LESS THAN ('248','100001001004002'),
++  SUBPARTITION p_max_p249_100002001001 VALUES LESS THAN ('249','100002001002'),
++  SUBPARTITION p_max_p_max VALUES LESS THAN (MAXVALUE,MAXVALUE)));
++
++--replace_column 11 #
++EXPLAIN
++  SELECT count(0)FROM  biz_operation_log log
++    WHERE log.crt_time >= '2024-04-09 09:16:06' AND
++          log.crt_time <= '2024-07-08 09:16:06' AND
++          log.company_id in ('100001001003001', '100001001003002', '100001001003003') AND
++          log.tent_id = '248';
++
++--replace_column 11 #
++EXPLAIN
++  SELECT count(0)FROM  biz_operation_log log
++    WHERE log.company_id in ('100001001003001', '100001001003002', '100001001003003') AND
++          log.tent_id = '248';
++
++# Values in IN (xx, xx, xx) is not an orderly.
++--replace_column 11 #
++EXPLAIN
++  SELECT count(0)FROM  biz_operation_log log
++    WHERE log.company_id in ('100001001003002', '100001001003001', '100001001003003') AND
++          log.tent_id = '248';
++
++--replace_column 11 #
++EXPLAIN
++  SELECT count(0)FROM  biz_operation_log log
++    WHERE log.company_id in ('100001001003003', '100001001003002', '100001001003001') AND
++          log.tent_id = '248';
++
++--replace_column 11 #
++EXPLAIN
++  SELECT count(0)FROM  biz_operation_log log
++    WHERE log.company_id in ('100001001003002', '100001001003001') AND
++          log.tent_id = '248';
++
++DROP TABLE biz_operation_log;
++
+ #reset
+ SET global rds_extended_partitions_enabled = @saved_rds_extended_partitions_enabled;
+diff --git a/sql/partition_info.cc b/sql/partition_info.cc
+index b543851829c..f1ce2672add 100644
+--- a/sql/partition_info.cc
++++ b/sql/partition_info.cc
+@@ -2858,7 +2858,8 @@ bool partition_info::same_key_column_order(List<Create_field> *create_list) {
+   if (list_of_part_fields && !column_list) {
+     if (!has_same_column_order(create_list, part_field_array)) return false;
+   }
+-  if (sub_part_info && sub_part_info->list_of_part_fields) {
++  if (sub_part_info && sub_part_info->list_of_part_fields &&
++      !sub_part_info->column_list) {
+     if (!has_same_column_order(create_list, sub_part_info->part_field_array))
+       return false;
+   }
+diff --git a/sql/range_optimizer/partition_pruning.cc b/sql/range_optimizer/partition_pruning.cc
+index 086f57a1bd6..af86d3ec680 100644
+--- a/sql/range_optimizer/partition_pruning.cc
++++ b/sql/range_optimizer/partition_pruning.cc
+@@ -221,8 +221,6 @@ struct PART_PRUNE_PARAM {
+   // iterator won't be created.
+   bool key_from_start{false};
+   uint32 part_id;  // main partition id
+-  // True means Key_tree only includes partition column list of subpartition
+-  bool only_subpart_list{true};
+ };
+ 
+ static bool create_partition_index_description(PART_PRUNE_PARAM *prune_par);
+@@ -643,6 +641,8 @@ class PPar_subpart_context {
+   uint save_min_flag;
+   uint save_max_flag;
+   bool key_from_start;
++  get_part_id_func save_get_top_partition_id_func;
++  mark_full_part_func save_mark_full_partition_used;
+ 
+  public:
+   void init(SEL_ARG *key_tree, PART_PRUNE_PARAM *ppar) {
+@@ -665,6 +665,8 @@ class PPar_subpart_context {
+     ppar->arg_stack_end--;
+     ppar->cur_part_fields -= ppar->is_part_keypart[key_tree->part];
+     ppar->cur_subpart_fields -= ppar->is_subpart_keypart[key_tree->part];
++    save_get_top_partition_id_func = ppar->get_top_partition_id_func;
++    save_mark_full_partition_used = ppar->mark_full_partition_used;
+   }
+   void reset(SEL_ARG *&key_tree, PART_PRUNE_PARAM *ppar) {
+     key_tree = proc_key_tree;
+@@ -685,20 +687,11 @@ class PPar_subpart_context {
+     ppar->cur_max_flag = save_max_flag;
+     ppar->key_from_start = key_from_start;
+     ppar->arg_stack_end = arg_stack_end;
++    ppar->get_top_partition_id_func = save_get_top_partition_id_func;
++    ppar->mark_full_partition_used = save_mark_full_partition_used;
+   }
+ };
+ 
+-static void mark_subparts_readable(PART_PRUNE_PARAM *ppar, uint32 part_id,
+-                                   uint32 num_subparts, int &res) {
+-  uint32 subpart_id;
+-  while ((subpart_id = ppar->subpart_iter.get_next(&ppar->subpart_iter)) !=
+-         NOT_A_PARTITION_ID) {
+-    bitmap_set_bit(&ppar->part_info->get_parent()->read_partitions,
+-                   part_id * num_subparts + subpart_id);
+-    res = 1; /* Some partitions were marked as used */
+-  }
+-}
+-
+ /*
+   Collect partitioning ranges for the SEL_ARG tree and mark partitions as used
+ 
+@@ -823,7 +816,6 @@ static int find_used_partitions(THD *thd, PART_PRUNE_PARAM *ppar,
+   int last_part_partno;
+   uint32 part_fields = ppar->part_info->num_part_fields;
+   uint32 num_keys;
+-  if (key_tree->part <= ppar->last_part_partno) ppar->only_subpart_list = false;
+   if (ppar->part_info->is_subpart_info()) {
+     part_iter = &ppar->subpart_iter;
+     last_part_partno = ppar->last_subpart_partno;
+@@ -967,14 +959,8 @@ static int find_used_partitions(THD *thd, PART_PRUNE_PARAM *ppar,
+             ppar->part_info, false, store_length_array,
+             ppar->min_key + ppar->min_offset, ppar->max_key + ppar->max_offset,
+             min_len, max_len, flag, part_iter);
+-        if (!res) {
+-          // Main partition is responsible for look through right parts
+-          // continuely.
+-          if (ppar->part_info->is_subpart_info() && !ppar->only_subpart_list)
+-            goto end;
+-          else
+-            goto pop_and_go_right; /* res==0 --> no satisfying partitions */
+-        }
++        if (!res)
++          goto pop_and_go_right; /* res==0 --> no satisfying partitions */
+       } else
+         res = -1;
+ 
+@@ -994,15 +980,8 @@ static int find_used_partitions(THD *thd, PART_PRUNE_PARAM *ppar,
+         did_set_ignore_part_fields = true;
+         ppar->ignore_part_fields = true;
+       }
+-      if (!ppar->part_info->is_subpart_info()) {
+-        set_full_part_if_bad_ret = true;
+-        goto process_next_key_part;
+-      } else {
+-        if (ppar->only_subpart_list)
+-          goto pop_and_go_right;
+-        else
+-          goto end;
+-      }
++      set_full_part_if_bad_ret = true;
++      goto process_next_key_part;
+     }
+ 
+     if (!extended_partitions_enabled ||
+@@ -1056,17 +1035,32 @@ static int find_used_partitions(THD *thd, PART_PRUNE_PARAM *ppar,
+         PPar_subpart_context pc;
+         pc.init(key_tree, ppar);
+ 
++        // for sub_part_info goes to partition pruning, reset ppar's some func
++        // ptrs.
++        ppar->mark_full_partition_used = mark_full_partition_used_no_parts;
++        ppar->get_top_partition_id_func = ppar->part_info->get_partition_id;
++
+         while ((part_id = ppar->part_iter.get_next(&ppar->part_iter)) !=
+                NOT_A_PARTITION_ID) {
+           ppar->part_info->sub_part_info->fix_val_array_pointer(part_id);
+           ppar->part_info = ppar->part_info->sub_part_info;
+           ppar->part_id = part_id;
+           pc.reset(key_tree, ppar);
++          // it must clear all before using
++          bitmap_clear_all(&ppar->part_info->read_partitions);
+ 
+           res = find_used_partitions(thd, ppar, key_tree_type, key_tree);
+-
+-          // 0 : no partition, 1 : some partitions,  -1 : all partitions
+-          if (res != 0) mark_subparts_readable(ppar, part_id, subparts, res);
++          // After find_used_partitions completes partition pruning for
++          // sub_part_info, satisfying subpartitions are marked as used
++          // in sub_part_info::read_partitions bitmap. And subpart_id is
++          // calculated using part_id * sub_parts + subpart_id and set it in
++          // part_info->read_partitions.
++          if (res != 0) {
++            for (uint i = 0; i < subparts; i++)
++              if (bitmap_is_set(&ppar->part_info->read_partitions, i))
++                bitmap_set_bit(&ppar->part_info->get_parent()->read_partitions,
++                               part_id * subparts + i);
++          }
+           ppar->part_info = ppar->part_info->get_parent();
+         }
+         pc.restore(ppar);
+@@ -1193,24 +1187,11 @@ pop_and_go_right:
+ 
+   if (res == -1) return -1;
+   if (key_tree->right != null_element) {
+-    // If only includes partition fields list of subpartition, we need makr
+-    // subpartitions readable before take care of key_tree->right. Otherwise,
+-    // main partition is responsible for taking care of key_tree->right.
+-    if (res != 0 && ppar->part_info->is_subpart_info() &&
+-        ppar->only_subpart_list)
+-      mark_subparts_readable(ppar, ppar->part_id, ppar->part_info->num_parts,
+-                             res);
+     if (-1 == (right_res = find_used_partitions(thd, ppar, key_tree_type,
+                                                 key_tree->right)))
+       return -1;
+   }
+   return (left_res || right_res || res);
+-end:
+-  /* Pop this key part info off the "stack" */
+-  ppar->arg_stack_end--;
+-  ppar->cur_part_fields -= ppar->is_part_keypart[key_tree_part];
+-  ppar->cur_subpart_fields -= ppar->is_subpart_keypart[key_tree_part];
+-  return res;
+ }
+ 
+ static int find_used_partitions(THD *thd, PART_PRUNE_PARAM *ppar,
+diff --git a/sql/sql_partition.cc b/sql/sql_partition.cc
+index f934be3c9d6..009611e8837 100644
+--- a/sql/sql_partition.cc
++++ b/sql/sql_partition.cc
+@@ -1605,10 +1605,12 @@ bool fix_partition_func(THD *thd, TABLE *table, bool is_create_table_ind) {
+       return true;
+     }
+   }
+-  if (part_info->is_sub_partitioned() &&
+-      fix_partition_func_helper(thd, table, part_info->sub_part_info,
+-                                is_create_table_ind))
+-    goto end;
++  if (part_info->is_sub_partitioned()) {
++    if (fix_partition_func_helper(thd, table, part_info->sub_part_info,
++                                  is_create_table_ind))
++      goto end;
++    if (unlikely(set_up_partition_bitmaps(part_info->sub_part_info))) goto end;
++  }
+   assert(part_info->part_type != partition_type::NONE);
+   if (fix_partition_func_helper(thd, table, part_info, is_create_table_ind))
+     goto end;
+-- 
+2.23.0
+

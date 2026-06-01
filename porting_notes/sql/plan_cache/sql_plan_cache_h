@@ -1,0 +1,110 @@
+#ifndef PLAN_CACHE_INCLUDE_H
+#define PLAN_CACHE_INCLUDE_H
+
+/* Copyright (c) 2022, Huawei and/or its affiliates. All rights reserved.
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License, version 2.0,
+   as published by the Free Software Foundation.
+
+   This program is also distributed with certain software (including
+   but not limited to OpenSSL) that is licensed under separate terms,
+   as designated in a particular file or component or in included license
+   documentation.  The authors of MySQL hereby grant you an additional
+   permission to link the program and your derivative works with the
+   separately licensed software that they have included with MySQL.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License, version 2.0, for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
+#include <set>
+#include "m_ctype.h"
+#include "my_base.h"
+#include "my_inttypes.h"
+#include "sql/mysqld.h"
+#include "sql/opt_hints.h"
+#include "sql/sql_list.h"
+#include "sql_const.h"
+class JOIN;
+class QUICK_SELECT_I;
+class SELECT_LEX_UNIT;
+class Temp_table_param;
+class THD;
+struct LEX;
+class SELECT_LEX;
+class Item;
+class Item_cache;
+class ORDER_with_src;
+class QEP_TAB;
+
+namespace plan_cache {
+
+extern std::atomic<ulong> cached_plan_count;
+
+struct Exec_context {
+  /// If one of these flags is changed by the user, plan may change, so the
+  /// cached plan should not be used.
+  static const ulonglong interested_optimizer_switch_flags =
+      OPTIMIZER_SWITCH_INDEX_MERGE | OPTIMIZER_SWITCH_INDEX_MERGE_UNION |
+      OPTIMIZER_SWITCH_INDEX_MERGE_SORT_UNION |
+      OPTIMIZER_SWITCH_INDEX_MERGE_INTERSECT |
+      OPTIMIZER_SWITCH_ENGINE_CONDITION_PUSHDOWN |
+      OPTIMIZER_SWITCH_INDEX_CONDITION_PUSHDOWN | OPTIMIZER_SWITCH_MRR |
+      OPTIMIZER_SWITCH_MRR_COST_BASED | OPTIMIZER_SWITCH_USE_INVISIBLE_INDEXES |
+      OPTIMIZER_SKIP_SCAN | OPTIMIZER_SWITCH_PREFER_ORDERING_INDEX |
+      OPTIMIZER_SWITCH_HYPERGRAPH_OPTIMIZER;
+
+  Key_map quick_keys_map{0};
+  Temp_table_param *tmp_table_param{nullptr};
+  ulonglong optimizer_switch{0};
+  const CHARSET_INFO *character_set_client;
+  bool fill(THD *thd, JOIN *join, QEP_TAB *cached_qep_tab);
+  uint pushed_idx_cond_keyno{MAX_KEY};
+  Item *pushed_idx_cond{nullptr};
+  bool key_read{false};
+  double current_query_cost{0};
+  ORDER_with_src *distinct_group_list{nullptr};
+  ORDER_with_src *order_list{nullptr};
+  Item *where_cond{nullptr};
+  Item *having_cond{nullptr};
+  ha_rows table_records{0};  //#records in table
+  ulonglong table_version;
+  Key_map covering_keys{0};
+  /// It's used to help recover m_condition for QEP_TAB. In Taurus, if ndp
+  /// condition is pushed down, it will cleanup m_condition of QEP_TAB.
+  Item *tab_condition{nullptr};
+  int quick_type;
+  bool is_environment_changed(THD *thd);
+  bool is_table_stats_changed_sharply(ha_rows new_rows,
+                                      double allow_change_ratio) {
+    // If allow_change_ratio is not 0, when the number of rows in the table
+    // is changed more than this fraction, cached plan will be invalidated.
+    if (allow_change_ratio &&
+        (std::abs(longlong(new_rows - table_records)) /
+         (float)(table_records + 1)) > allow_change_ratio) {
+      return true;
+    }
+    return false;
+  }
+
+  ~Exec_context();
+};
+bool cache_plan(JOIN *orig_join);
+bool exec_cached_plan(SELECT_LEX *sl);
+bool is_ready(SELECT_LEX *sl);
+void set_uncacheable(SELECT_LEX *sl);
+void collect_item_params(Item *item, std::set<Item *> &params);
+void set_ready(SELECT_LEX *sl);
+bool is_clone_for_plan_cache(const SELECT_LEX *sl);
+void invalidate_cached_plan(SELECT_LEX *select);
+bool emulates_hint(const THD *thd, opt_hints_enum hint);
+void restore_param_snapshot_clones(LEX *lex);
+void cmp_item_params_after_reduce_cond(THD *thd, std::set<Item *> old_params,
+                                       Item *condition);
+}  // namespace plan_cache
+#endif  // PLAN_CACHE_INCLUDE_H

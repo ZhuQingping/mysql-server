@@ -1,0 +1,47 @@
+# ==== Purpose =======
+# Execute a statement, which is not in progress of dstore trx. Then kill
+# and restart the mysqld, verify that the gtid set between binlog and
+# dstore is consistent.
+#
+# ==== References ====
+#
+# BUG2025082818258 The gtid set between binlog and dstore may inconsistent
+# after executing a statement which is not in progress of dstore trx
+#
+
+--source include/have_binlog_format_row.inc
+--source include/have_only_dstore.inc
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+
+RESET MASTER;
+TRUNCATE mysql.rds_comment;
+--echo #
+--echo # Modify a system table with InnoDB engine, which
+--echo # is not in progress of dstore trx.
+--echo #
+INSERT INTO mysql.rds_comment (object_type, object_name, comment) VALUES ('DB','test_comment_db','test db comment');
+INSERT INTO mysql.rds_comment (object_type, object_name, comment) VALUES ('DB','not_exist_db','test db comment');
+
+--sleep 3
+--source include/kill_and_restart_mysqld.inc
+
+--echo #
+--echo # Expect that rds_binlog_dstore_consistent is on, which indicates
+--echo # that the gtid set between binlog and dstore is consistent.
+--echo #
+show variables like 'rds_binlog_dstore_consistent';
+--echo #
+--echo # Expect that rds_dstore_missed_gtids is empty.
+--echo #
+show variables like 'rds_dstore_missed_gtids';
+--echo #
+--echo # Expect that rds_dstore_missed_gtids_on_binlog is empty.
+--echo #
+show variables like 'rds_dstore_missed_gtids_on_binlog';
+
+# Execute the following statements for covering changed code
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(1);
+DROP TABLE t1;
+DELETE FROM mysql.rds_comment;

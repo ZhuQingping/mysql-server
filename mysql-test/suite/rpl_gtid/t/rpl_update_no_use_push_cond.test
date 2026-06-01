@@ -1,0 +1,31 @@
+# ==== Purpose ===========
+#
+#  Validate that updates or deletes do not use push conditions.
+#
+# ==== References ========
+#
+# BUG2025121924799 The replica fails to execute updates or deletes 
+# because push conditions are not used.
+#
+
+--source include/have_binlog_format_row.inc
+--source include/master-slave.inc
+
+create table t1(
+ id int,
+ `tinyint_col` tinyint DEFAULT NULL
+);
+insert into t1 values(1,0);
+insert into t1 values(2,1);
+
+alter table t1 add column c_generate_power mediumint generated always as (power(tinyint_col,-2)) virtual;
+
+--error ER_DATA_OUT_OF_RANGE 
+update t1 set tinyint_col=10 where id =2;
+
+--error ER_DATA_OUT_OF_RANGE 
+delete from t1 where id =2;
+
+drop table t1;
+
+--source include/rpl_end.inc

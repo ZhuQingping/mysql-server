@@ -1,0 +1,125 @@
+From dada643bc8ae335f44114e16aa1764b42224f7e3 Mon Sep 17 00:00:00 2001
+From: wuwenbin <wuwenbin19@contributor>
+
+Date: Wed, 24 Sep 2025 20:44:55 +0800
+Subject: [PATCH] fix codecheck & AT
+
+---
+ mysql-test/collections/innodb_tmp_disabled.def      |  2 --
+ mysql-test/suite/ptrc/r/partial_result_cache.result | 10 ++++++++++
+ mysql-test/suite/ptrc/t/partial_result_cache.test   |  4 ++++
+ sql/partial_result_cache.cc                         |  5 ++++-
+ sql/partial_result_cache.h                          |  4 ++--
+ storage/dstore/dml/cde_dml.cc                       |  1 +
+ 6 files changed, 21 insertions(+), 5 deletions(-)
+
+diff --git a/mysql-test/collections/innodb_tmp_disabled.def b/mysql-test/collections/innodb_tmp_disabled.def
+index 473d11c4483..7801aa68360 100644
+--- a/mysql-test/collections/innodb_tmp_disabled.def
++++ b/mysql-test/collections/innodb_tmp_disabled.def
+@@ -120,9 +120,7 @@ group_replication.gr_xa_commit_failure_before_gtid_externalization @windows : BU
+ group_replication.gr_xa_commit_one_phase_failure_before_gtid_externalization @windows : BUG#34155238 Disabled until bug is fixed
+ group_replication.gr_xa_prepare_failure_before_gtid_externalization @windows : BUG#34155238 Disabled until bug is fixed
+ group_replication.gr_xa_rollback_failure_before_gtid_externalization @windows : BUG#34155238 Disabled until bug is fixed
+-group_replication.gr_assert_psi_memory_instruments_disabled : BUG#81234896 Disabled until bug is fixed
+ group_replication.gr_gcs_xcom_psi_memory : BUG#81234896 Disabled until bug is fixed
+-group_replication.gr_assert_psi_memory_instruments_enabled : BUG#81234896 Disabled until bug is fixed
+ group_replication.gr_message_cache_size_min : BUG#81234896 Disabled until bug is fixed
+ group_replication.gr_clone_integration_no_managed_restart : BUG#9999 ONLY_INNODB does not support MYSQL_CLONE
+ group_replication.gr_clone_integration_concurrent_shutdown : BUG#9999 ONLY_INNODB does not support MYSQL_CLONE
+diff --git a/mysql-test/suite/ptrc/r/partial_result_cache.result b/mysql-test/suite/ptrc/r/partial_result_cache.result
+index c6d6bae4324..13667e19943 100644
+--- a/mysql-test/suite/ptrc/r/partial_result_cache.result
++++ b/mysql-test/suite/ptrc/r/partial_result_cache.result
+@@ -3286,6 +3286,16 @@ a	length(t1.b)	a	length(t2.b)
+ 3	920	3	920
+ 3	920	3	920
+ 3	920	3	920
++SET SESSION DEBUG='+d,key_pair_key_null_pointer_injection';
++explain analyze select/*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a;
++EXPLAIN
++-> Nested loop inner join 
++    -> Filter: (t1.a is not null) 
++        -> Table scan on t1 
++    -> Result cache : cache keys(t1.a, t1.b) (Cache Hits: 0, Cache Misses: 31, Cache Evictions: 0, Cache Overflows: 1, Memory Usage: # ) 
++        -> Index lookup on t2 using a (a=t1.a) 
++
++SET SESSION DEBUG='-d,key_pair_key_null_pointer_injection';
+ set rds_partial_result_cache_max_mem_size=@old_partial_result_cache_max_mem_size;
+ DROP TABLE t1,t2;
+ create table t1(a int, b varchar(1000), index(a));
+diff --git a/mysql-test/suite/ptrc/t/partial_result_cache.test b/mysql-test/suite/ptrc/t/partial_result_cache.test
+index f0caed60d79..907b96427eb 100644
+--- a/mysql-test/suite/ptrc/t/partial_result_cache.test
++++ b/mysql-test/suite/ptrc/t/partial_result_cache.test
+@@ -674,6 +674,10 @@ explain format=tree select/*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b)
+ explain analyze select/*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a;
+ select /*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a order by 1,2,3,4;
+ select /*+ no_prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a order by 1,2,3,4;
++SET SESSION DEBUG='+d,key_pair_key_null_pointer_injection';
++--replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*//
++explain analyze select/*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a;
++SET SESSION DEBUG='-d,key_pair_key_null_pointer_injection';
+ set rds_partial_result_cache_max_mem_size=@old_partial_result_cache_max_mem_size;
+ DROP TABLE t1,t2;
+ 
+diff --git a/sql/partial_result_cache.cc b/sql/partial_result_cache.cc
+index 8fb7652537e..7f952d575cb 100644
+--- a/sql/partial_result_cache.cc
++++ b/sql/partial_result_cache.cc
+@@ -537,6 +537,7 @@ static void process_ptrc_hints(Item_subselect *sub, JOIN *join,
+     join = sub->unit->first_query_block()->join;
+     inner_tables = TablesBetween(0, join->tables);
+   }
++  assert(join);
+   if (join->query_block->opt_hints_qb)
+     join->query_block->opt_hints_qb->apply_ptrc_hints(
+         join, &force_tab_map, &ignore_tab_map, &force_subquery_ptrc,
+@@ -1070,7 +1071,9 @@ Key_pair *PtrcIterator::LRU_free_mem(THD *thd, const Key &key,
+         std::pair<const char *, size_t> *key_pair_value =
+             new (thd->mem_root) std::pair<const char *, size_t>(
+                 tail->row_data.GetDataPointer(), tail->row_size);
+-
++        DBUG_EXECUTE_IF("key_pair_key_null_pointer_injection",
++                        key_pair_key = nullptr;);
++        if (!key_pair_key || !key_pair_value) return nullptr;
+         Key_pair *key_pair =
+             new (thd->mem_root) Key_pair(*key_pair_key, *key_pair_value);
+         if (!key_pair) return nullptr;
+diff --git a/sql/partial_result_cache.h b/sql/partial_result_cache.h
+index 701e6f0fbab..d1f11f0ac56 100644
+--- a/sql/partial_result_cache.h
++++ b/sql/partial_result_cache.h
+@@ -207,7 +207,7 @@ class PtrcIterator : public RowIterator {
+   Ptrc_status status{Ptrc_status::NONE};
+   LRU_list_type LRU_list;
+   // Used to mark LRU node created for current PTRC cache record
+-  LRU_node *current_LRU_node;
++  LRU_node *current_LRU_node{nullptr};
+   // Helper to store PTRC context information. LRU node address will be
+   // appended to the end of the cached record. This is used for quick update
+   // on LRU list. And a bit will also be appended to signal that there was a
+@@ -234,7 +234,7 @@ class PtrcIterator : public RowIterator {
+   // Item_field list created by temporary table fields, used to replace
+   // original select_list to return values.
+   mem_root_deque<Item *> *cached_res_fields{nullptr};
+-  size_t num_hidden_fields;
++  size_t num_hidden_fields = 0;
+   // String buffer used to cache intermediate result of one record.
+   String key_buff, res_buff;
+   PTRC_context *ptrc_context{nullptr};
+diff --git a/storage/dstore/dml/cde_dml.cc b/storage/dstore/dml/cde_dml.cc
+index 276982a4c84..3fdab36e732 100644
+--- a/storage/dstore/dml/cde_dml.cc
++++ b/storage/dstore/dml/cde_dml.cc
+@@ -76,6 +76,7 @@ Datum CdeCmpDstoreData(Datum a, Datum b, Oid type_oid, uint16_t proc) {
+   if (funcCache->fnAddr == nullptr) {
+     funcCache = CdeGetFuncCache(type_oid, type_oid, proc);
+   }
++  CDE_ASSERT(funcCache->fnAddr != nullptr);
+   FunctionCallInfoData fcinfo;
+   Datum args[2] = {a, b};
+   fcinfo.arg = args;
+-- 
+2.23.0
+

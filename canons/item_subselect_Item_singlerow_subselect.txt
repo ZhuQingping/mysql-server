@@ -1,0 +1,100 @@
+sql/item_subselect.h
+^class Item_singlerow_subselect : public Item_subselect \{$
+^\};$
+class Item_singlerow_subselect : public Item_subselect {
+  typedef Item_subselect super;
+
+ protected:
+  Item_cache *value, **row;
+  bool no_rows;  ///< @c no_rows_in_result
+ public:
+  Item_singlerow_subselect(Query_block *query_block);
+  Item_singlerow_subselect()
+      : Item_subselect(), value(nullptr), row(nullptr), no_rows(false) {}
+
+  void cleanup() override;
+  subs_type substype() const override { return SINGLEROW_SUBS; }
+
+  void reset() override;
+  bool select_transformer(THD *thd, Query_block *select) override;
+  void store(uint i, Item *item);
+  double val_real() override;
+  longlong val_int() override;
+  String *val_str(String *) override;
+  my_decimal *val_decimal(my_decimal *) override;
+  bool val_json(Json_wrapper *result) override;
+  bool get_date(MYSQL_TIME *ltime, my_time_flags_t fuzzydate) override;
+  bool get_time(MYSQL_TIME *ltime) override;
+  bool val_bool() override;
+  enum Item_result result_type() const override;
+  bool resolve_type(THD *) override;
+  /*
+    Mark the subquery as having no rows.
+    If there are aggregate functions (in the outer query),
+    we need to generate a NULL row. @c return_zero_rows().
+  */
+  void no_rows_in_result() override;
+
+  uint cols() const override { return unit_cols(); }
+
+  /**
+    @note that this returns the i-th element of the SELECT list.
+    To check for nullability, look at this->maybe_null and not
+    element_index[i]->maybe_null, since the selected expressions are
+    always NULL if the subquery is empty.
+  */
+  Item *element_index(uint i) override {
+    return reinterpret_cast<Item *>(row[i]);
+  }
+  Item **addr(uint i) override { return (Item **)row + i; }
+  bool check_cols(uint c) override;
+  bool null_inside() override;
+  void bring_value() override;
+
+  bool collect_scalar_subqueries(uchar *) override;
+  virtual bool is_maxmin() const { return false; }
+
+  /**
+    Argument for walk method replace_scalar_subquery
+  */
+  struct Scalar_subquery_replacement {
+    Item_singlerow_subselect *m_target;  ///< subquery to be replaced with field
+    Field *m_field;                      ///< the replacement field
+    Query_block *m_outer_query_block;    ///< The transformed query block.
+    Query_block *m_inner_query_block;    ///< The immediately surrounding query
+                                       ///< block. This will be the transformed
+                                       ///< block or a subquery of it
+    bool m_add_coalesce{false};
+    Scalar_subquery_replacement(Item_singlerow_subselect *target, Field *field,
+                                Query_block *select, bool add_coalesce)
+        : m_target(target),
+          m_field(field),
+          m_outer_query_block(select),
+          m_inner_query_block(select),
+          m_add_coalesce(add_coalesce) {}
+  };
+
+  Item *pq_clone(THD *thd, Query_block *) override;
+
+  Item *replace_scalar_subquery(uchar *arge) override;
+
+  /**
+    This method is used to implement a special case of semantic tree
+    rewriting, mandated by a SQL:2003 exception in the specification.
+    The only caller of this method is handle_sql2003_note184_exception(),
+    see the code there for more details.
+    Note that this method breaks the object internal integrity, by
+    removing it's association with the corresponding Query_block,
+    making this object orphan from the parse tree.
+    No other method, beside the destructor, should be called on this
+    object, as it is now invalid.
+    @return the Query_block structure that was given in the constructor.
+  */
+  Query_block *invalidate_and_restore_query_block();
+  std::optional<ContainedSubquery> get_contained_subquery(
+      const Query_block *outer_query_block) override;
+  friend class Query_result_scalar_subquery;
+
+ private:
+  bool is_value_shared();
+};

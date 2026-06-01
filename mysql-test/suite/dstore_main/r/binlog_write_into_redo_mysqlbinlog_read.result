@@ -1,0 +1,83 @@
+reset master;
+CREATE TABLE t1 (c1 INT, c2 VARCHAR(1000));
+include/show_binlog_events.inc
+Log_name	Pos	Event_type	Server_id	End_log_pos	Info
+binlog.000001	#	Previous_gtids	#	#	
+binlog.000001	#	Gtid	#	#	SET @@SESSION.GTID_NEXT= 'Gtid_set'
+binlog.000001	#	Query	#	#	use `test`; CREATE TABLE t1 (c1 INT, c2 VARCHAR(1000))
+create procedure binlog_insert ( loop_time INT ) 
+begin 
+declare i int default 1; 
+while i < loop_time do 
+INSERT INTO t1 VALUES(1, REPEAT('a', 1000));
+set i = i + 1; 
+end while; 
+end;|
+call binlog_insert(10);
+include/show_binlog_events.inc
+Log_name	Pos	Event_type	Server_id	End_log_pos	Info
+binlog.000001	#	Previous_gtids	#	#	
+binlog.000001	#	Gtid	#	#	SET @@SESSION.GTID_NEXT= 'Gtid_set'
+binlog.000001	#	Query	#	#	use `test`; CREATE TABLE t1 (c1 INT, c2 VARCHAR(1000))
+binlog.000001	#	Gtid	#	#	SET @@SESSION.GTID_NEXT= 'Gtid_set'
+binlog.000001	#	Query	#	#	use `test`; CREATE DEFINER=`root`@`localhost` PROCEDURE `binlog_insert`( loop_time INT )
+begin 
+declare i int default 1; 
+while i < loop_time do 
+INSERT INTO t1 VALUES(1, REPEAT('a', 1000));
+set i = i + 1; 
+end while; 
+end
+binlog.000001	#	Gtid	#	#	SET @@SESSION.GTID_NEXT= 'Gtid_set'
+binlog.000001	#	Query	#	#	BEGIN
+binlog.000001	#	Table_map	#	#	table_id: # (test.t1)
+binlog.000001	#	Write_rows	#	#	table_id: # flags: STMT_END_F
+binlog.000001	#	Xid	#	#	COMMIT /* XID */
+binlog.000001	#	Gtid	#	#	SET @@SESSION.GTID_NEXT= 'Gtid_set'
+binlog.000001	#	Query	#	#	BEGIN
+binlog.000001	#	Table_map	#	#	table_id: # (test.t1)
+binlog.000001	#	Write_rows	#	#	table_id: # flags: STMT_END_F
+binlog.000001	#	Xid	#	#	COMMIT /* XID */
+binlog.000001	#	Gtid	#	#	SET @@SESSION.GTID_NEXT= 'Gtid_set'
+binlog.000001	#	Query	#	#	BEGIN
+binlog.000001	#	Table_map	#	#	table_id: # (test.t1)
+binlog.000001	#	Write_rows	#	#	table_id: # flags: STMT_END_F
+binlog.000001	#	Xid	#	#	COMMIT /* XID */
+binlog.000001	#	Gtid	#	#	SET @@SESSION.GTID_NEXT= 'Gtid_set'
+binlog.000001	#	Query	#	#	BEGIN
+binlog.000001	#	Table_map	#	#	table_id: # (test.t1)
+binlog.000001	#	Write_rows	#	#	table_id: # flags: STMT_END_F
+binlog.000001	#	Xid	#	#	COMMIT /* XID */
+binlog.000001	#	Gtid	#	#	SET @@SESSION.GTID_NEXT= 'Gtid_set'
+binlog.000001	#	Query	#	#	BEGIN
+binlog.000001	#	Table_map	#	#	table_id: # (test.t1)
+binlog.000001	#	Write_rows	#	#	table_id: # flags: STMT_END_F
+binlog.000001	#	Xid	#	#	COMMIT /* XID */
+binlog.000001	#	Gtid	#	#	SET @@SESSION.GTID_NEXT= 'Gtid_set'
+binlog.000001	#	Query	#	#	BEGIN
+binlog.000001	#	Table_map	#	#	table_id: # (test.t1)
+binlog.000001	#	Write_rows	#	#	table_id: # flags: STMT_END_F
+binlog.000001	#	Xid	#	#	COMMIT /* XID */
+binlog.000001	#	Gtid	#	#	SET @@SESSION.GTID_NEXT= 'Gtid_set'
+binlog.000001	#	Query	#	#	BEGIN
+binlog.000001	#	Table_map	#	#	table_id: # (test.t1)
+binlog.000001	#	Write_rows	#	#	table_id: # flags: STMT_END_F
+binlog.000001	#	Xid	#	#	COMMIT /* XID */
+binlog.000001	#	Gtid	#	#	SET @@SESSION.GTID_NEXT= 'Gtid_set'
+binlog.000001	#	Query	#	#	BEGIN
+binlog.000001	#	Table_map	#	#	table_id: # (test.t1)
+binlog.000001	#	Write_rows	#	#	table_id: # flags: STMT_END_F
+binlog.000001	#	Xid	#	#	COMMIT /* XID */
+binlog.000001	#	Gtid	#	#	SET @@SESSION.GTID_NEXT= 'Gtid_set'
+binlog.000001	#	Query	#	#	BEGIN
+binlog.000001	#	Table_map	#	#	table_id: # (test.t1)
+binlog.000001	#	Write_rows	#	#	table_id: # flags: STMT_END_F
+binlog.000001	#	Xid	#	#	COMMIT /* XID */
+show binary logs;
+Log_name	File_size	Encrypted
+binlog.000001	#	#
+# Generate two dump thread
+flush logs;
+call binlog_insert(10);
+DROP TABLE t1;
+DROP PROCEDURE binlog_insert;

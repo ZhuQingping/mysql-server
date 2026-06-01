@@ -1,0 +1,78 @@
+#
+# Test syntax of foreign keys
+#
+
+# DDL of foreign keys
+
+--source include/have_only_dstore.inc
+drop table if exists t0, t1, t2, t3, t4, t5, t6;
+
+# case1: nomal create foreign key
+create table t0(id int, a int) engine=Dstore;
+--error 1822
+create table t1(id int, x int, foreign key(id) references t0(id)) engine=Dstore;
+create index id_key on t0(id);
+# success
+create table t1(id int, x int, foreign key(id) references t0(id)) engine=Dstore;
+create table t2(id int, x int, foreign key(id) references t0(id) match full) engine=Dstore;
+create table t3(id int, x int, foreign key(id) references t0(id) on delete cascade) engine=Dstore;
+create table t4(id int, x int, foreign key(id) references t0(id) on update cascade) engine=Dstore;
+create table t5(id int, x int, foreign key(id) references t0(id) on delete set null on update cascade) engine=Dstore;
+create table t6(id int, x int, foreign key(id) references t0(id) match simple on delete set null) engine=Dstore;
+
+drop table if exists t0, t1, t2, t3, t4, t5, t6;
+
+# case2: create foreign key with multi colnum
+create table t0(id int, a int, b int, key id_key(id), key a_key(a), key b_key(b)) engine=Dstore;
+--error 1822
+create table t1(id int, x int, y int, foreign key f_key(x, y) references t0(a, b)) engine=Dstore;
+create index ab_key on t0(a, b);
+# success
+create table t1(id int, x int, y int, foreign key f_key(x, y) references t0(a, b)) engine=Dstore;
+
+# case3: DDL operation with foreign key
+# rename
+drop table if exists t00;
+drop table if exists t11;
+rename table t0 to t00;
+rename table t1 to t11;
+
+# drop
+--error 1553
+drop index ab_key on t00;
+--error 1553
+drop index f_key on t11;
+--error 3730
+drop table t00;
+drop table t11;
+drop table t00;
+
+# case4: multi foreign on table
+create table t0(id int primary key, name char(20)) engine=Dstore;
+create table t1(id int primary key, a int, b int, key a_key(a), key b_key(b), 
+    foreign key id_f_key(id) references t0(id)) engine=Dstore;
+create table t2(id int primary key, x int, y int, z int, key x_key(x), key y_key(y),
+    foreign key id_f_key(id) references t1(id),
+    foreign key x_f_key(x) references t1(a),
+    foreign key y_f_key(y) references t1(b)) engine=Dstore;
+
+# case5: type match
+--error 3780
+create table t3(name char(10), foreign key(name) references t0(id)) engine=Dstore;
+
+# case6: self references
+create table employee(id int primary key auto_increment, name char(100), manager_id int,
+    foreign key f_key(manager_id) references employee(id)) engine=Dstore;
+
+drop table employee;
+drop table if exists t0, t1, t2;
+
+# case7: alter table copy algorithm
+create table t0(t0_id1 int not null, t0_id2 int, a int, primary key(t0_id1, t0_id2), key(t0_id2)) engine=Dstore;
+create table t1(t1_id1 int not null, t1_id2 int, t1_id3 int, x int, primary key(t1_id1, t1_id2, t1_id3)) engine=Dstore;
+create table t2(t2_id1 int, t2_id2 int, t2_id3 int, i int) engine=Dstore;
+alter table t1 add constraint t1_f_key foreign key(t1_id1, t1_id2) references t0(t0_id1, t0_id2), algorithm=copy;
+alter table t2 add constraint t2_f_key foreign key(t2_id3, t2_id2) references t1(t1_id1, t1_id2), algorithm=copy;
+alter table t2 add constraint t2_f_key2 foreign key(t2_id1) references t0(t0_id1), algorithm=copy;
+alter table t2 add constraint t2_f_key3 foreign key(t2_id2) references t0(t0_id2), algorithm=copy;
+drop table if exists t0, t1, t2;

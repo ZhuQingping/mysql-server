@@ -1,0 +1,81 @@
+call mtr.add_suppression("row in wrong partition.*from REBUILD/REORGANIZED");
+
+SET @loose_partition_restriction=@@rds_loose_partition_restriction;
+set global rds_loose_partition_restriction = 0;
+
+create table t1(id int, a int) partition by list(a) (
+  partition p1 values in (1,4,6,7),
+  partition p2 values in (3,5)
+);
+insert into t1(a) values (1),(3),(4),(5),(6),(7);
+
+--error ER_REORG_WRONG_VALUES_RANGE
+alter table t1 reorganize partition p2 into (
+  partition p2 values in (3)
+);
+
+create table t2 like t1;
+alter table t2 remove partitioning;
+insert into t2(a) values (6),(7);
+alter table t1 exchange partition p2 with table t2 without validation;
+select * from t1 partition(p2);
+
+--error ER_ROW_IN_WRONG_PARTITION
+alter table t1 reorganize partition p2 into (
+  partition p2 values in (2,3,5)
+);
+
+--error ER_REORG_WRONG_VALUES_RANGE
+alter table t1 reorganize partition p1,p2 into (
+  partition p1 values in (2,3,5)
+);
+
+--error ER_ROW_IN_WRONG_PARTITION
+alter table t1 rebuild partition p2;
+# Data redistribution
+alter table t1 rebuild partition all;
+
+drop table t1;
+
+create table t1(id int, a int) partition by range(a) (
+  partition p1 values less than(3),
+  partition p2 values less than(7),
+  partition p3 values less than(10)
+);
+insert into t1(a) values (1),(3),(4),(5),(6),(7),(8),(9);
+
+--error ER_REORG_OUTSIDE_RANGE
+alter table t1 reorganize partition p2 into (
+  partition p2 values less than (5)
+);
+drop table t1,t2;
+
+--echo # Test add partition for hash/key partition, it will redistribute all the datas
+create table t3 (
+  id int not null,
+  store_id int not null
+) partition by hash (store_id) subpartition by range(id)
+(
+  partition p0 (
+    subpartition q1 values less than (4),
+    subpartition q2 values less than (10)
+      ),
+  partition p1 (
+    subpartition q3 values less than (15),
+    subpartition q4 values less than (20)
+  )
+);
+insert into t3 values(1,3);
+insert into t3 values(14, 9);
+insert into t3 values(9, 8);
+
+--error ER_REORG_WRONG_VALUES_RANGE
+alter table t3 add partition (partition p3 (subpartition q5 values less than(15), subpartition q6 values less than(19)));
+set global rds_loose_partition_restriction = 1;
+alter table t3 add partition (partition p3 (subpartition q5 values less than(15), subpartition q6 values less than(19)));
+SELECT * FROM t3;
+
+drop table t3;
+
+# reset
+set global rds_loose_partition_restriction = @loose_partition_restriction;

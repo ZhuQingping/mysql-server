@@ -1,0 +1,39 @@
+call mtr.add_suppression("failed to do full backup for dstore");
+call mtr.add_suppression("start full local backup fail");
+call mtr.add_suppression("full backup found binlog is not enabled");
+create database backup_page_crc_fail;
+use backup_page_crc_fail;
+create table t1(s varchar(100)) engine=dstore;
+===============
+Load the data
+===============
+select count(*) from t1;
+count(*)
+1000
+call rds_backup.start_full_local_backup(0);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Success
+show variables like 'dstore_local_backup_retry_num';
+Variable_name	Value
+dstore_local_backup_retry_num	10
+call rds_backup.start_full_local_backup(0);
+show status like 'Rds_local_backup_full_backup_is_running';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	ON
+show status like '%local_backup_full_backup_is_running%';
+Variable_name	Value
+Rds_local_backup_full_backup_is_running	OFF
+show status like 'Rds_local_backup_last_full_backup_status';
+Variable_name	Value
+Rds_local_backup_last_full_backup_status	Failed
+Pattern "Read buffer and check failed" found
+Pattern "copy file\(fileName \= 5125\) failed" found
+# restart: --dstore_open_restore_mode=on
+drop database backup_page_crc_fail;

@@ -1,0 +1,444 @@
+CALL mtr.add_suppression("Failed to load sql filter rule into memory");
+CREATE USER 'rds'@'localhost' IDENTIFIED BY '123456';
+GRANT ALL PRIVILEGES ON *.* TO 'rds'@'localhost' WITH GRANT OPTION;
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 (a int);
+INSERT INTO t1 VALUES (1),(2);
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t1~WHERE","");
+call dbms_sqlfilter.add_sql_filter('UPDATE',0,"UPDATE~t1~WHERE","");
+call dbms_sqlfilter.add_sql_filter('DELETE',0,"DELETE~t1~WHERE","");
+call dbms_sqlfilter.add_sql_filter('INSERT',0,"INSERT~INTO~t1","");
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	3	0	SELECT~t1~WHERE	
+#	UPDATE	0	0	3	0	UPDATE~t1~WHERE	
+#	DELETE	0	0	3	0	DELETE~t1~WHERE	
+#	INSERT	0	0	3	0	INSERT~INTO~t1	
+SELECT * FROM t1 WHERE a=2;
+ERROR 70100: Query execution was interrupted
+UPDATE t1 SET a=3 WHERE a=2;
+ERROR 70100: Query execution was interrupted
+DELETE FROM t1 WHERE a>5;
+ERROR 70100: Query execution was interrupted
+INSERT INTO t1 VALUES(3);
+ERROR 70100: Query execution was interrupted
+# ---- DEBUG : add record is null ----
+set session debug = "+d,inject_record_is_null";
+call dbms_sqlfilter.add_sql_filter('SELECT',1,"SELECT~*~from~t1","");
+ERROR HY000: Statement sqlfilter is not valid when add a sql filter rule since record is null
+set session debug = "-d,inject_record_is_null";
+# ---- DEBUG : delete record is null ----
+set session debug = "+d,inject_record_is_null";
+call dbms_sqlfilter.delete_sql_filter(1);
+ERROR HY000: Statement sqlfilter is not valid when delete a sql filter rule since record is null
+set session debug = "-d,inject_record_is_null";
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"SELECT~t1~WHERE","");
+call dbms_sqlfilter.add_sql_filter('UPDATE',0,"UPDATE~t1~WHERE","");
+call dbms_sqlfilter.add_sql_filter('DELETE',0,"DELETE~t1~WHERE","");
+call dbms_sqlfilter.add_sql_filter('INSERT',0,"INSERT~INTO~t1","");
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	3	0	SELECT~t1~WHERE	
+#	UPDATE	0	0	3	0	UPDATE~t1~WHERE	
+#	DELETE	0	0	3	0	DELETE~t1~WHERE	
+#	INSERT	0	0	3	0	INSERT~INTO~t1	
+SELECT * FROM t1 WHERE a=2;
+ERROR 70100: Query execution was interrupted
+UPDATE t1 SET a=3 WHERE a=2;
+ERROR 70100: Query execution was interrupted
+DELETE FROM t1 WHERE a>5;
+ERROR 70100: Query execution was interrupted
+INSERT INTO t1 VALUES(4);
+ERROR 70100: Query execution was interrupted
+DROP table t1;
+SET DEBUG_SYNC= 'RESET';
+DROP DATABASE IF EXISTS t_db;
+Warnings:
+Note	1008	Can't drop database 't_db'; database doesn't exist
+CREATE DATABASE t_db;
+USE t_db;
+CREATE TABLE t_encrypt(c2 INT NOT NULL AUTO_INCREMENT PRIMARY KEY, c3 CHAR(255) Default 'No text',
+c4 JSON, c5 INT, c6 INT, KEY idx2 (c6));
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',1,"SELECT~SELECT~ORDER~BY","");
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	1	4	0	SELECT~SELECT~ORDER~BY	
+PREPARE select_stmt1 FROM 'SELECT * FROM (SELECT * FROM t_db.t_encrypt ORDER BY RAND() LIMIT 1) AS A WHERE A.c2 < 0';
+PREPARE select_stmt2 FROM 'SELECT * FROM (SELECT * FROM t_db.t_encrypt ORDER BY RAND() LIMIT 1) AS A WHERE A.c2 < 0';
+SET DEBUG_SYNC= 'sql_filter_read_find_matched_filter_and_update WAIT_FOR go';
+EXECUTE select_stmt1;;
+EXECUTE select_stmt2;
+ERROR 70100: Query execution was interrupted
+SET DEBUG_SYNC= 'now SIGNAL go';
+c2	c3	c4	c5	c6
+DROP PREPARE select_stmt1;
+DROP PREPARE select_stmt2;
+SET DEBUG_SYNC= 'RESET';
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',1,"SELECT~WHERE","");
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	1	2	0	SELECT~WHERE	
+SET DEBUG_SYNC= 'sql_filter_read_find_matched_filter_and_update WAIT_FOR go';
+SELECT * FROM (SELECT * FROM t_db.t_encrypt ORDER BY RAND() LIMIT 1) AS A WHERE A.c2 < 0;
+call dbms_sqlfilter.add_sql_filter('DELETE',1,"DELETE~FORM","");;
+SET DEBUG_SYNC= 'now SIGNAL go';
+c2	c3	c4	c5	c6
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	1	2	0	SELECT~WHERE	
+#	DELETE	0	1	2	0	DELETE~FORM	
+SET DEBUG_SYNC= 'RESET';
+"kill connection"
+CREATE TABLE tid1 (kill_id INT);
+INSERT INTO tid1 VALUES(connection_id());
+SET DEBUG_SYNC= 'sql_filter_read_find_matched_filter_and_update WAIT_FOR go';
+SELECT * FROM (SELECT * FROM t_db.t_encrypt ORDER BY RAND() LIMIT 1) AS A WHERE A.c2 < 0;
+call dbms_sqlfilter.add_sql_filter('UPDATE',1,"UPDATE~FORM","");;
+SELECT kill_id INTO @id1 FROM tid1 LIMIT 1;
+KILL CONNECTION @id1;
+USE test;
+USE test;
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+CREATE TABLE tt1(a int, b int);
+INSERT INTO tt1 VALUES(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10);
+INSERT INTO tt1 SELECT * FROM tt1;
+INSERT INTO tt1 SELECT * FROM tt1;
+INSERT INTO tt1 SELECT * FROM tt1;
+INSERT INTO tt1 SELECT * FROM tt1;
+SELECT COUNT(*) FROM tt1;
+COUNT(*)
+160
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~count~from~select~tt1~from~tt1~join~join","");
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	9	0	select~count~from~select~tt1~from~tt1~join~join	
+SELECT count(*) FROM (SELECT tt1.a FROM tt1 AS tt1 JOIN tt1 AS tt2 ON tt1.a != tt2.b JOIN tt1 AS tt3 ON tt2.a != tt3.b JOIN tt1 AS tt4 on tt3.a != tt4.b JOIN tt1 AS tt5 ON tt4.a != tt5.b) a;
+ERROR 70100: Query execution was interrupted
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',1,"select~count~from~select~tt1~from~tt1~join~join","");
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	1	9	0	select~count~from~select~tt1~from~tt1~join~join	
+SELECT count(*) FROM (SELECT tt1.a FROM tt1 AS tt1 JOIN tt1 AS tt2 ON tt1.a != tt2.b JOIN tt1 AS tt3 ON tt2.a != tt3.b JOIN tt1 AS tt4 on tt3.a != tt4.b JOIN tt1 AS tt5 ON tt4.a != tt5.b) a;
+SELECT SLEEP(1);
+SLEEP(1)
+0
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	1	1	9	0	select~count~from~select~tt1~from~tt1~join~join	
+SELECT count(*) FROM (SELECT tt1.a FROM tt1 AS tt1 JOIN tt1 AS tt2 ON tt1.a != tt2.b JOIN tt1 AS tt3 ON tt2.a != tt3.b JOIN tt1 AS tt4 on tt3.a != tt4.b JOIN tt1 AS tt5 ON tt4.a != tt5.b) a;
+ERROR 70100: Query execution was interrupted
+SELECT id into @id1 FROM performance_schema.processlist WHERE info LIKE '%tt1 AS tt1 JOIN tt1 AS tt2%' AND info NOT LIKE '%performance_schema.processlist%';
+KILL QUERY @id1;
+SELECT SLEEP(1);
+SLEEP(1)
+0
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	1	9	1	select~count~from~select~tt1~from~tt1~join~join	
+ERROR 70100: Query execution was interrupted
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	1	9	1	select~count~from~select~tt1~from~tt1~join~join	
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',1,"select~999","");
+call dbms_sqlfilter.add_sql_filter('SELECT',2,"select~999~9","");
+call dbms_sqlfilter.add_sql_filter('SELECT',2,"select~999~99","");
+call dbms_sqlfilter.add_sql_filter('SELECT',2,"select~long_item_string_test_here","");
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	2	2	0	select~long_item_string_test_here	
+#	SELECT	0	2	3	0	select~999~99	
+#	SELECT	0	2	3	0	select~999~9	
+#	SELECT	0	1	2	0	select~999	
+SET DEBUG_SYNC='before_reduce_sqlfilter_item_concurrency SIGNAL parked WAIT_FOR go';
+SELECT count(*) as a99 FROM tt1 LIMIT 999;
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	2	2	0	select~long_item_string_test_here	
+#	SELECT	0	2	3	0	select~999~99	
+#	SELECT	0	2	3	0	select~999~9	
+#	SELECT	1	1	2	0	select~999	
+SET DEBUG_SYNC='RESET';
+SET DEBUG_SYNC='now SIGNAL go';
+a99
+160
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	2	2	0	select~long_item_string_test_here	
+#	SELECT	0	2	3	0	select~999~99	
+#	SELECT	0	2	3	0	select~999~9	
+#	SELECT	0	1	2	0	select~999	
+SET DEBUG_SYNC='before_reduce_sqlfilter_item_concurrency SIGNAL parked WAIT_FOR go';
+SELECT count(*) as a99 FROM tt1 LIMIT 999;
+SET DEBUG_SYNC='RESET';
+SET GLOBAL rds_sqlfilter_control=OFF;
+SET DEBUG_SYNC='now SIGNAL go';
+a99
+160
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	2	2	0	select~long_item_string_test_here	
+#	SELECT	0	2	3	0	select~999~99	
+#	SELECT	0	2	3	0	select~999~9	
+#	SELECT	0	1	2	0	select~999	
+SET DEBUG_SYNC='before_reduce_sqlfilter_item_concurrency SIGNAL parked WAIT_FOR go';
+SELECT count(*) as a99 FROM tt1 LIMIT 9998;
+a99
+160
+SET GLOBAL rds_sqlfilter_control=ON;
+SELECT count(*) as a99 FROM tt1 LIMIT 9998;
+SET DEBUG_SYNC='RESET';
+SET DEBUG_SYNC='now SIGNAL go';
+a99
+160
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	2	2	0	select~long_item_string_test_here	
+#	SELECT	0	2	3	0	select~999~99	
+#	SELECT	0	2	3	0	select~999~9	
+#	SELECT	0	1	2	0	select~999	
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',2,"select~999","");
+call dbms_sqlfilter.add_sql_filter('SELECT',2,"select~999~9","");
+call dbms_sqlfilter.add_sql_filter('SELECT',2,"select~999~99","");
+call dbms_sqlfilter.add_sql_filter('SELECT',2,"select~long_item_string_test_here","");
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	2	2	0	select~long_item_string_test_here	
+#	SELECT	0	2	3	0	select~999~99	
+#	SELECT	0	2	3	0	select~999~9	
+#	SELECT	0	2	2	0	select~999	
+SET DEBUG_SYNC='before_reduce_sqlfilter_item_concurrency SIGNAL parked WAIT_FOR go1';
+SELECT count(*) as a99 FROM tt1 LIMIT 999;
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	2	2	0	select~long_item_string_test_here	
+#	SELECT	0	2	3	0	select~999~99	
+#	SELECT	0	2	3	0	select~999~9	
+#	SELECT	1	2	2	0	select~999	
+SET DEBUG_SYNC='before_reduce_sqlfilter_item_concurrency SIGNAL parked WAIT_FOR go2';
+SELECT count(*) as a99 FROM tt1 LIMIT 999;
+select sleep(1);
+sleep(1)
+0
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	2	2	0	select~long_item_string_test_here	
+#	SELECT	0	2	3	0	select~999~99	
+#	SELECT	0	2	3	0	select~999~9	
+#	SELECT	2	2	2	0	select~999	
+SELECT count(*) as a99 FROM tt1 LIMIT 999;
+ERROR 70100: Query execution was interrupted
+SET DEBUG_SYNC='RESET';
+SET DEBUG_SYNC='now SIGNAL go1';
+a99
+160
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	2	2	0	select~long_item_string_test_here	
+#	SELECT	0	2	3	0	select~999~99	
+#	SELECT	0	2	3	0	select~999~9	
+#	SELECT	1	2	2	1	select~999	
+SELECT count(*) as a99 FROM tt1 LIMIT 999;
+a99
+160
+SET DEBUG_SYNC='before_reduce_sqlfilter_item_concurrency SIGNAL parked WAIT_FOR go1';
+SELECT count(*) as a99 FROM tt1 LIMIT 999;
+select sleep(1);
+sleep(1)
+0
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	2	2	0	select~long_item_string_test_here	
+#	SELECT	0	2	3	0	select~999~99	
+#	SELECT	0	2	3	0	select~999~9	
+#	SELECT	2	2	2	1	select~999	
+SELECT count(*) as a99 FROM tt1 LIMIT 999;
+ERROR 70100: Query execution was interrupted
+SET DEBUG_SYNC='RESET';
+SET DEBUG_SYNC='now SIGNAL go1';
+SET DEBUG_SYNC='now SIGNAL go2';
+a99
+160
+a99
+160
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	2	2	0	select~long_item_string_test_here	
+#	SELECT	0	2	3	0	select~999~99	
+#	SELECT	0	2	3	0	select~999~9	
+#	SELECT	0	2	2	2	select~999	
+DROP TABLE tt1;
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~mysql","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~INFORMATION_SCHEMA","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~PERFORMANCE_SCHEMA","");
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~sys","");
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	2	0	select~sys	
+#	SELECT	0	0	2	0	select~PERFORMANCE_SCHEMA	
+#	SELECT	0	0	2	0	select~INFORMATION_SCHEMA	
+#	SELECT	0	0	2	0	select~mysql	
+SELECT count(*) FROM mysql.user WHERE user LIKE '%never_happen%';
+count(*)
+0
+SELECT count(*) FROM performance_schema.processlist WHERE user LIKE '%never_happen%';
+count(*)
+0
+SELECT count(*) FROM performance_schema.users WHERE user LIKE '%never_happen%';
+count(*)
+0
+SELECT count(*) FROM sys.processlist WHERE user LIKE '%never_happen%';
+count(*)
+0
+use test;
+CREATE TABLE t1 (
+id INT(11) NOT NULL AUTO_INCREMENT,
+name VARCHAR(50) NOT NULL,
+PRIMARY KEY (id)
+);
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO t1 (name) VALUES ('aaa');
+INSERT INTO t1 (name) VALUES ('bbb');
+CREATE TABLE t2 (
+id INT(11) NOT NULL AUTO_INCREMENT,
+name VARCHAR(50) NOT NULL,
+PRIMARY KEY (id)
+);
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+INSERT INTO t2 (name) VALUES ('ccc');
+INSERT INTO t2 (name) VALUES ('ddd');
+CREATE USER 'common1'@'127.0.0.1' IDENTIFIED BY '123456';
+CREATE USER 'common2'@'127.0.0.1' IDENTIFIED BY '123456';
+CREATE USER 'common3'@'127.0.0.1' IDENTIFIED BY '123456';
+GRANT ALL PRIVILEGES ON *.* TO 'common1'@'127.0.0.1';
+GRANT ALL PRIVILEGES ON *.* TO 'common2'@'127.0.0.1';
+GRANT ALL PRIVILEGES ON *.* TO 'common3'@'127.0.0.1';
+GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'common1'@'127.0.0.1';
+GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'common2'@'127.0.0.1';
+GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'common3'@'127.0.0.1';
+FLUSH PRIVILEGES;
+set global rds_sqlfilter_control = ON;
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',2,"select~t1","");
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	2	2	0	select~t1	
+SET DEBUG_SYNC= 'RESET';
+SET DEBUG_SYNC= 'before_reduce_sqlfilter_item_concurrency WAIT_FOR dec_concur';
+select count(*) FROM t1;;
+SET DEBUG_SYNC= 'RESET';
+SET DEBUG_SYNC= 'before_reduce_sqlfilter_item_concurrency WAIT_FOR dec_concur';
+select count(*) FROM t1;;
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+call dbms_sqlfilter.add_sql_filter('SELECT',0,"select~t1","");
+call dbms_sqlfilter.add_sql_filter('SELECT',2,"select~t2","");
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	2	2	0	select~t2	
+#	SELECT	0	0	2	0	select~t1	
+SELECT VARIABLE_VALUE INTO @sql_filter_block_num1 FROM performance_schema.global_status WHERE
+VARIABLE_NAME LIKE 'Sql_filter_block_num';
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	2	2	0	select~t2	
+#	SELECT	0	0	2	0	select~t1	
+select count(*) FROM t1;
+ERROR 70100: Query execution was interrupted
+SELECT VARIABLE_VALUE INTO @sql_filter_block_num2 FROM performance_schema.global_status WHERE
+VARIABLE_NAME LIKE 'Sql_filter_block_num';
+select @sql_filter_block_num2 - @sql_filter_block_num1;
+@sql_filter_block_num2 - @sql_filter_block_num1
+1
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	2	2	0	select~t2	
+#	SELECT	0	0	2	1	select~t1	
+SET DEBUG_SYNC= 'now SIGNAL dec_concur';
+SET DEBUG_SYNC= 'now SIGNAL dec_concur';
+count(*)
+2
+count(*)
+2
+select count(*) FROM t1;
+ERROR 70100: Query execution was interrupted
+SELECT VARIABLE_VALUE INTO @sql_filter_block_num3 FROM performance_schema.global_status WHERE
+VARIABLE_NAME LIKE 'Sql_filter_block_num';
+select @sql_filter_block_num3 - @sql_filter_block_num2;
+@sql_filter_block_num3 - @sql_filter_block_num2
+1
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	2	2	0	select~t2	
+#	SELECT	0	0	2	2	select~t1	
+DROP TABLE t1;
+DROP TABLE t2;
+DROP USER 'common1'@'127.0.0.1';
+DROP USER 'common2'@'127.0.0.1';
+DROP USER 'common3'@'127.0.0.1';
+call dbms_sqlfilter.add_sql_filter('SELECT'," ");
+ERROR 42000: Incorrect number of arguments for PROCEDURE dbms_sqlfilter.add_sql_filter; expected 4, got 2
+call dbms_sqlfilter.add_sql_filter('UPDATE'," ");
+ERROR 42000: Incorrect number of arguments for PROCEDURE dbms_sqlfilter.add_sql_filter; expected 4, got 2
+call dbms_sqlfilter.add_sql_filter('DELETE'," ");
+ERROR 42000: Incorrect number of arguments for PROCEDURE dbms_sqlfilter.add_sql_filter; expected 4, got 2
+call dbms_sqlfilter.add_sql_filter('INSERT'," ");
+ERROR 42000: Incorrect number of arguments for PROCEDURE dbms_sqlfilter.add_sql_filter; expected 4, got 2
+use test;
+DROP TABLE IF EXISTS t2;
+Warnings:
+Note	1051	Unknown table 'test.t2'
+CREATE TABLE t2(a INT NOT NULL);
+INSERT INTO t2 values(1);
+CALL dbms_sqlfilter.add_sql_filter("SELECT",1,"SELECT~FROM~t2~WHERE","");
+SET DEBUG_SYNC= 'RESET';
+SET DEBUG_SYNC= 'before_reduce_sqlfilter_item_concurrency WAIT_FOR dec_concur';
+select * FROM t2 where a=1; ;
+CALL dbms_sqlfilter.add_sql_filter("SELECT",1,"SELECT~FROM~t3~WHERE","");
+select * FROM t2 where a=1;
+ERROR 70100: Query execution was interrupted
+SET DEBUG_SYNC= 'now SIGNAL dec_concur';
+select * FROM t2 where a=1;
+a
+1
+a
+1
+use test;
+CREATE TABLE t4(a INT NOT NULL);
+INSERT INTO t4 values(1);
+CALL dbms_sqlfilter.add_sql_filter("SELECT",1,"SELECT~FROM~t4~WHERE","");
+SET DEBUG_SYNC= 'RESET';
+SET DEBUG_SYNC= 'before_reduce_sqlfilter_item_concurrency WAIT_FOR dec_concur2';
+select * FROM t4 where a=1; ;
+set global rds_sqlfilter_control=off;
+SET DEBUG_SYNC= 'now SIGNAL dec_concur2';
+set global rds_sqlfilter_control=on;
+select * FROM t4 where a=1;
+a
+1
+a
+1
+delete from mysql.rds_sql_filter_rules;
+call dbms_sqlfilter.flush_sql_filter();
+DROP USER rds@localhost;
+drop table tid1, t2, t4;
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+DROP DATABASE t_db;

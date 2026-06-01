@@ -1,0 +1,436 @@
+# PARALLEL INSERT INTO SELECT BEHAVIOR CHANGES
+--source include/pq_test.inc
+--source include/count_sessions.inc
+SET @old_innodb_lock_wait_timeout = @@global.innodb_lock_wait_timeout;
+
+SET @@global.innodb_lock_wait_timeout = 1;
+
+
+CREATE TABLE t1(a INT); 
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+
+CREATE TABLE t2 (a int);
+
+--echo # -------------------------
+
+--echo # Behavior difference 1
+
+--echo # If pq_support_features_switch insert_select is on, there aren't any locks placed on t1 when doing an 
+--echo # INSERT INTO SELECT from table t1, which means that it is possible to update t1 in another transaction
+--echo # which is not possible initially because of the locks on t1. In addition, while SELECT * FROM t1 will fetch the 
+--echo # snapshot from the start of the transaction in the first connection. SELECT * FROM t1 LOCK IN SHARE MODE will
+--echo # however fetch the freshest snapshot of t1 and will show the updated row.
+SET @saved_pq_support_features_switch = @@global.pq_support_features_switch;
+set GLOBAL pq_support_features_switch='insert_select=on';
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+INSERT INTO t2 SELECT * from t1;
+connection con2;
+--echo # Using connection con2
+start transaction;
+UPDATE t1 SET a = 300 WHERE a = 1;
+commit;
+connection con1;
+--echo # Using connection con1
+SELECT * FROM t1;
+SELECT * FROM t1 LOCK IN SHARE MODE;
+
+commit;
+
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+--echo # ---------------------------
+
+
+--echo # BEHAVIOR DIFFERENCE 2
+
+--echo # With locks on the selected-from table, INSERT SELECT must wait until UPDATE,INSERT and DELETE
+--echo # statements on the selected-from table are done. Without locks (
+--echo # INSERT INTO SELECT does not need to wait anymore. 
+
+
+--echo # a/ INSERT 
+
+
+drop table t2;
+drop table t1;
+CREATE TABLE t1(a INT); 
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+CREATE TABLE t2 (a int);
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+INSERT INTO t1 values (100);
+connection con2;
+--echo # Using connection con2
+start transaction;
+INSERT INTO t2 select * from t1;
+select * from t2;
+commit;
+connection con1;
+--echo # Using connection con1
+commit;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+
+drop table t1;
+
+drop table t2; 
+CREATE TABLE t2 (a int);
+
+
+CREATE TABLE t1(a INT); 
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+
+set GLOBAL pq_support_features_switch='insert_select=off';
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+INSERT INTO t1 values (100);
+connection con2;
+--echo # Using connection con2
+start transaction;
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t2 select * from t1;
+select * from t2;
+commit;
+connection con1;
+--echo # Using connection con1
+commit;
+
+connection default;
+disconnect con1;
+disconnect con2;
+drop table t1,t2;
+
+--echo # a/ UPDATE
+
+--echo # without locks
+
+
+CREATE TABLE t1(a INT); 
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+CREATE TABLE t2 (a int);
+SET GLOBAL pq_support_features_switch='insert_select=on';
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+UPDATE t1 set a = 123 where a =35;
+connection con2;
+--echo # Using connection con2
+start transaction;
+INSERT INTO t2 select * from t1;
+select * from t2;
+commit;
+connection con1;
+--echo # Using connection con1
+commit;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+--echo # with locks
+
+drop table t1;
+
+drop table t2; 
+CREATE TABLE t2 (a int);
+
+
+CREATE TABLE t1(a INT); 
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+
+SET GLOBAL pq_support_features_switch='insert_select=off';
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+UPDATE t1 set a = 123 where a =35;
+connection con2;
+--echo # Using connection con2
+start transaction;
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t2 select * from t1;
+select * from t2;
+commit;
+connection con1;
+--echo # Using connection con1
+commit;
+
+connection default;
+disconnect con1;
+disconnect con2;
+drop table t1,t2;
+
+
+
+--echo # a/ DELETE
+
+--echo # without locks
+
+
+CREATE TABLE t1(a INT); 
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+CREATE TABLE t2 (a int);
+SET GLOBAL pq_support_features_switch='insert_select=on';
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+DELETE FROM t1 where a =35;
+connection con2;
+--echo # Using connection con2
+start transaction;
+INSERT INTO t2 select * from t1;
+select * from t2;
+commit;
+connection con1;
+--echo # Using connection con1
+commit;
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+
+--echo # with locks
+
+drop table t1;
+
+drop table t2; 
+CREATE TABLE t2 (a int);
+
+
+CREATE TABLE t1(a INT); 
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+
+SET GLOBAL pq_support_features_switch='insert_select=off';
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+DELETE FROM t1 where a =35;
+connection con2;
+--echo # Using connection con2
+start transaction;
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t2 select * from t1;
+select * from t2;
+commit;
+connection con1;
+--echo # Using connection con1
+commit;
+
+connection default;
+disconnect con1;
+disconnect con2;
+drop table t1,t2;
+
+
+--echo # ------------------------
+
+--echo # Behavior difference 3
+--echo # with pq_support_features_switch insert_select = off
+--echo # Table has 1, 10, 30, unique key on this column.
+--echo # 1. con1 inserts 15, and con2 does INSERT INTO t1 SELECT a * 2 FROM t1;
+--echo # 2. Then con2 has to wait and it sees 15, and finally, duplicate key error.
+--echo # However, with pq_support_features_switch insert_select = off,
+--echo # con2 will only read 1, 10, 30 because it does not have to wait for the locks on t1 to be release by con1,
+--echo # and insert 2, 20, 60, no duplicate key.
+
+--echo # We use DEBUG_SYNC so that the tests are stable.
+
+--echo # -------------------------
+
+SET GLOBAL pq_support_features_switch='insert_select=off';
+
+create table t1 ( a int , UNIQUE KEY(a));
+insert into t1 values (1),(10),(30);
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+INSERT INTO t1 values (15);
+connection con2;
+--echo # Using connection con2
+--send INSERT INTO t1 SELECT a*2 from t1;
+connection con1;
+--echo # Using connection con1
+commit;
+connection con2;
+--echo # Using connection con2
+--error ER_DUP_ENTRY
+--reap
+connection default;
+disconnect con1;
+disconnect con2;
+
+SET GLOBAL pq_support_features_switch='insert_select=on';
+
+drop table t1;
+create table t1 ( a int , UNIQUE KEY(a));
+insert into t1 values (1),(10),(30);
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+--echo # We do not want con1 to commit before con2 has had time to do SELECT
+SET debug_sync = 'after_inserting WAIT_FOR done_tmp_insert_select';
+send INSERT INTO t1 values (15);
+
+connection con2;
+--echo # Using connection con2
+--echo # con1 can commit after we have assembled the temporary table
+SET debug_sync = 'Iterator_read SIGNAL done_tmp_insert_select';
+send INSERT INTO t1 SELECT a*2 from t1;
+
+connection con1;
+--echo # Using connection con1
+reap;
+commit;
+
+connection con2;
+--echo # Using connection con2
+reap;
+connection default;
+disconnect con1;
+disconnect con2;
+--echo # 15 is inserted - and 15*2 not inserted - insert select does not see 15.
+select * from t1;
+drop table t1;
+
+--echo # -----------------------
+--echo # Behavior difference 4
+--echo # With pq_support_features_switch insert_select is on
+--echo # con1 starts inserting 85 into t1
+--echo # con2 does INSERT INTO t1 SELECT ... FROM t1 and stops after the temporary table is filled
+--echo # but before the INSERT requires locks on t1
+--echo # con1 commits
+--echo # con2 now starts inserting, tries inserting 85, realises it's been inserted by t1 and has to rollback 
+--echo # If con2 has already inserted a lot of rows into t1 by the point it tries inserting 85 - the rollback is going 
+--echo # to be heavy
+
+--echo # With pq_support_features_switch insert_select is off
+--echo # con2 has to wait until con1 commits the INSERT - no heavy rollback
+
+--echo # ----------------------
+
+SET GLOBAL pq_support_features_switch='insert_select=on';
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+
+CREATE TABLE t1(a INT,  UNIQUE KEY(a)); 
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+ INSERT INTO t1 values (85);
+
+connection con2;
+--echo # Using connection con2
+start transaction;
+SET debug_sync = 'Iterator_read WAIT_FOR done_insert';
+send INSERT INTO t1 SELECT a + 50 from t1;
+
+
+connection con1;
+--echo # Using connection con1
+commit;
+SET debug_sync='now SIGNAL done_insert';
+
+connection con2; 
+--echo # Using connection con2
+--error ER_DUP_ENTRY
+reap;
+commit;
+
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+select * from t1;
+drop table t1;
+
+
+SET GLOBAL pq_support_features_switch='insert_select=off';
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+
+CREATE TABLE t1(a INT,  UNIQUE KEY(a)); 
+INSERT INTO t1 VALUES(1), (5), (15), (35);
+
+connection con1;
+--echo # Using connection con1
+start transaction;
+ INSERT INTO t1 values (85);
+
+connection con2;
+--echo # Using connection con2
+start transaction;
+--error ER_LOCK_WAIT_TIMEOUT
+INSERT INTO t1 SELECT a + 50 from t1;
+
+
+connection con1;
+--echo # Using connection con1
+commit;
+
+
+connection con2; 
+--echo # Using connection con2
+commit;
+
+
+connection default;
+disconnect con1;
+disconnect con2;
+
+select * from t1;
+drop table t1;
+
+
+SET @@global.innodb_lock_wait_timeout = @old_innodb_lock_wait_timeout;
+SET global pq_support_features_switch = @saved_pq_support_features_switch;
+--source include/wait_until_count_sessions.inc

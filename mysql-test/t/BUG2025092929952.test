@@ -1,0 +1,267 @@
+--echo # BUG2025092929952
+
+--let $MYSQLD_LOG= $MYSQL_TMP_DIR/server.log
+--let $MYSQLD_DATADIR= `SELECT @@datadir`
+
+--echo # Test 1: Starting MySQL with the ONLY_DSTORE under different transaction_isolation.
+
+--echo # Test 1.1: Restart server with ONLY_DSTORE and REPEATABLE-READ.
+--echo # restart failed
+--source include/kill_mysqld.inc
+--error 1
+--exec $MYSQLD_CMD --log-error=$MYSQLD_LOG --datadir=$MYSQLD_DATADIR --secure-file-priv="" --storage_engine_mode=ONLY_DSTORE --default_storage_engine=Dstore --default_tmp_storage_engine=Dstore --disabled_storage_engines=InnoDB,CSV,Memory,MyISAM,MRG_MyISAM --transaction_isolation=REPEATABLE-READ 
+
+--let SEARCH_FILE=$MYSQLD_LOG
+--let SEARCH_PATTERN=storage_engine_mode is set to ONLY_DSTORE. For ONLY_DSTORE, do not allow to use REPEATABLE-READ transaction isolation.
+--source include/search_pattern.inc
+
+--remove_file $MYSQLD_LOG
+--echo # ----- Test 1.1 succeeded -----
+
+--echo # Test 1.2: Restart server with ONLY_DSTORE and READ-UNCOMMITTED.
+--echo # Should succeed
+--exec echo "restart: --storage_engine_mode=ONLY_DSTORE --default_storage_engine=Dstore --default_tmp_storage_engine=Dstore --disabled_storage_engines=InnoDB,CSV,Memory,MyISAM,MRG_MyISAM --transaction_isolation=READ-UNCOMMITTED" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--enable_reconnect
+--source include/wait_until_connected_again.inc
+--echo # ----- Test 1.2 succeeded -----
+
+--exec echo "wait" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--shutdown_server
+--source include/wait_until_disconnected.inc
+
+--echo # Test 1.3: Restart server with ONLY_DSTORE and READ-COMMITTED.
+--echo # Should succeed
+--exec echo "restart: --storage_engine_mode=ONLY_DSTORE --default_storage_engine=Dstore --default_tmp_storage_engine=Dstore --disabled_storage_engines=InnoDB,CSV,Memory,MyISAM,MRG_MyISAM --transaction_isolation=READ-COMMITTED" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--enable_reconnect
+--source include/wait_until_connected_again.inc
+--echo # ----- Test 1.3 succeeded -----
+
+--exec echo "wait" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--shutdown_server
+--source include/wait_until_disconnected.inc
+
+--echo # Test 1.4: Restart server with ONLY_DSTORE and SERIALIZABLE.
+--echo # Should succeed
+--exec echo "restart: --storage_engine_mode=ONLY_DSTORE --default_storage_engine=Dstore --default_tmp_storage_engine=Dstore --disabled_storage_engines=InnoDB,CSV,Memory,MyISAM,MRG_MyISAM --transaction_isolation=SERIALIZABLE" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--enable_reconnect
+--source include/wait_until_connected_again.inc
+--echo # ----- Test 1.4 succeeded -----
+
+--exec echo "wait" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--shutdown_server
+--source include/wait_until_disconnected.inc
+
+--exec echo "restart" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--enable_reconnect
+--source include/wait_until_connected_again.inc
+
+--echo # Test 2:client modify transaction_isolation
+create user user_BUG2025092929952_common@localhost;
+create user user_BUG2025092929952_super@localhost;
+
+grant super on *.* TO user_BUG2025092929952_super@localhost;
+
+--exec echo "wait" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--shutdown_server
+--source include/wait_until_disconnected.inc
+
+# Restart server along with InnoDB storage engine.
+--exec echo "restart: --storage_engine_mode=ONLY_INNODB --default_storage_engine=InnoDB --default_tmp_storage_engine=InnoDB --disabled_storage_engines=Dstore,CSV,Memory,MyISAM,MRG_MyISAM" >$MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--enable_reconnect
+--source include/wait_until_connected_again.inc
+
+connect (conn1,localhost,user_BUG2025092929952_common);
+
+SHOW VARIABLES LIKE 'storage_engine_mode';
+
+--echo # Test 2.1:when storage_engine_mode == ONLY_INNODB
+--echo # common user
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'READ-UNCOMMITTED';
+
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'READ-COMMITTED';
+
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'REPEATABLE-READ';
+
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+set global transaction_isolation = 'REPEATABLE-READ';
+
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'SERIALIZABLE';
+
+show variables like "%transaction_isolation%";
+
+disconnect conn1;
+
+connect (conn2,localhost,user_BUG2025092929952_super);
+
+--echo # super user
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'READ-UNCOMMITTED';
+
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'READ-COMMITTED';
+
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'REPEATABLE-READ';
+
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'SERIALIZABLE';
+
+show variables like "%transaction_isolation%";
+
+disconnect conn2;
+
+--echo # ----- Test 2.1 succeeded -----
+
+connection default;
+
+--exec echo "wait" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--shutdown_server
+--source include/wait_until_disconnected.inc
+
+--exec echo "restart: --storage_engine_mode=BOTH_STORAGE_ENGINE --default_storage_engine=Dstore --default_tmp_storage_engine=InnoDB --disabled_storage_engines= " >$MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--enable_reconnect
+--source include/wait_until_connected_again.inc
+
+connect (conn1,localhost,user_BUG2025092929952_common);
+
+SHOW VARIABLES LIKE 'storage_engine_mode';
+
+--echo # Test 2.2: when storage_engine_mode == BOTH_STORAGE_ENGINE,
+--echo # common user
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'READ-UNCOMMITTED';
+
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'READ-COMMITTED';
+
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'REPEATABLE-READ';
+
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+set global transaction_isolation = 'REPEATABLE-READ';
+
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'SERIALIZABLE';
+
+show variables like "%transaction_isolation%";
+
+disconnect conn1;
+
+connect (conn2,localhost,user_BUG2025092929952_super);
+
+--echo # super user
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'READ-UNCOMMITTED';
+
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'READ-COMMITTED';
+
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'REPEATABLE-READ';
+
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'SERIALIZABLE';
+
+show variables like "%transaction_isolation%";
+
+disconnect conn2;
+
+--echo # ----- Test 2.2 succeeded -----
+
+connection default;
+
+--exec echo "wait" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--shutdown_server
+--source include/wait_until_disconnected.inc
+
+--echo # Restart server along with Dstore storage engine.
+--exec echo "restart: --storage_engine_mode=ONLY_DSTORE --default_storage_engine=Dstore --default_tmp_storage_engine=Dstore --disabled_storage_engines=InnoDB,CSV,Memory,MyISAM,MRG_MyISAM --transaction_isolation=READ-COMMITTED" >$MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--enable_reconnect
+--source include/wait_until_connected_again.inc
+
+connect (conn1,localhost,user_BUG2025092929952_common);
+
+SHOW VARIABLES LIKE 'storage_engine_mode';
+
+--echo # Test2.3 when storage_engine_mode == ONLY_DSTORE
+--echo # common user
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'READ-UNCOMMITTED';
+
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'READ-COMMITTED';
+
+show variables like "%transaction_isolation%";
+
+--error ER_DSTORE_TRX_CHANGE_TO_REPEATABLE_READ_NEED_SUPER
+set session transaction_isolation = 'REPEATABLE-READ';
+
+--error ER_SPECIFIC_ACCESS_DENIED_ERROR
+set global transaction_isolation = 'REPEATABLE-READ';
+
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'SERIALIZABLE';
+
+show variables like "%transaction_isolation%";
+
+disconnect conn1;
+
+connect (conn2,localhost,user_BUG2025092929952_super);
+
+--echo # super user
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'READ-UNCOMMITTED';
+
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'READ-COMMITTED';
+
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'REPEATABLE-READ';
+
+show variables like "%transaction_isolation%";
+
+set session transaction_isolation = 'SERIALIZABLE';
+
+show variables like "%transaction_isolation%";
+
+disconnect conn2;
+
+--echo # ----- Test 2.3 succeeded -----
+
+--echo # Clean up
+connection default;
+drop user user_BUG2025092929952_common@localhost,user_BUG2025092929952_super@localhost;
+
+--exec echo "wait" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--shutdown_server
+--source include/wait_until_disconnected.inc
+
+--exec echo "restart" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--enable_reconnect
+--source include/wait_until_connected_again.inc

@@ -1,0 +1,2509 @@
+From 42618fa556a550a58e8bcf5d2e373bc5742885f9 Mon Sep 17 00:00:00 2001
+From: zhuqingping <zhuqingping1@contributor>
+
+
+Date: Sat, 8 Mar 2025 15:59:58 +0800
+Subject: [PATCH] [Feature] USERSTORY Support Native Package Framework
+
+Summary:
+--------
+Native package is designed as a collection of procedures or other elements
+which are builtin objects that can be executed through "CALL xxx()";
+
+All the native procedure should implement two interface:
+  1) Proc interface
+    It is procedure definition, included parameters, columns, result type.
+
+  2) Sql_cmd_proc interface
+    It defined procedure execution logic
+
+The Framework supplied two demo native procedures "dummy" and "dummy_3" on debug mode;
+
+mysql> call mysql.dummy();
+Query OK, 0 rows affected
+
+mysql> call mysql.dummy_3(1, 'MySQL', 99.99);
++----------+------+-------+
+| NAME     | ID   | NUM   |
++----------+------+-------+
+| MySQL |    1 | 99.99 |
++----------+------+-------+
+
+   3) support show_native_procedure to show all procedure
+
+On debug mode, show_native_procedure result as follows:
+mysql> call dbms_admin.show_native_procedure();
++-------------+-----------------------+------------+-------------------------------+
+| SCHEMA_NAME | PROC_NAME             | PROC_TYPE  | PARAMETERS                    |
++-------------+-----------------------+------------+-------------------------------+
+| dbms_admin  | show_native_procedure | ADMIN_PROC |                               |
+| mysql       | dummy                 | ADMIN_PROC |                               |
+| mysql       | dummy_3               | ADMIN_PROC | LONGLONG, VARCHAR, NEWDECIMAL |
++-------------+-----------------------+------------+-------------------------------+
+3 rows in set (0.00 sec)
+
+On release mode, show_native_procedure result as follows:
+mysql> call dbms_admin.show_native_procedure();
++-------------+-----------------------+------------+------------+
+| SCHEMA_NAME | PROC_NAME             | PROC_TYPE  | PARAMETERS |
++-------------+-----------------------+------------+------------+
+| dbms_admin  | show_native_procedure | ADMIN_PROC |            |
++-------------+-----------------------+------------+------------+
+1 row in set (0.00 sec)
+
+Other fix:
+1) Cherry-pick native package bug fix BUGFIX.
+2) For hw developers, error numbers(to client) starting at 7500, to avoid subsequent conflicts with community.
+
+(cherry picked from commit 30fbe5f442db1229eb37c2d2812fdc611b4989d7)
+Signed-off-by: zhuqingping 00835654 <zhuqingping1@huawei.com>
+---
+ include/m_string.h                            |   1 +
+ include/my_sqlcommand.h                       |   1 +
+ include/mysql/plugin_audit.h.pp               |   1 +
+ .../suite/rds/r/native_procedure.result       |  43 +++
+ .../rds/r/native_procedure_bugfix.result      |  25 ++
+ .../rds/r/show_native_procedure_debug.result  |   7 +
+ .../r/show_native_procedure_release.result    |   5 +
+ mysql-test/suite/rds/t/native_procedure.test  |  92 ++++++
+ .../suite/rds/t/native_procedure_bugfix.test  |  34 +++
+ .../rds/t/show_native_procedure_debug.test    |   5 +
+ .../rds/t/show_native_procedure_release.test  |   5 +
+ share/messages_to_clients.txt                 |  30 +-
+ sql/CMakeLists.txt                            |   8 +
+ sql/common/component.cc                       |  54 ++++
+ sql/common/component.h                        | 104 +++++++
+ sql/mysqld.cc                                 |   7 +
+ sql/package/package.cc                        |  61 ++++
+ sql/package/package.h                         | 137 +++++++++
+ sql/package/package_cache.cc                  | 125 ++++++++
+ sql/package/package_common.cc                 |  29 ++
+ sql/package/package_common.h                  |  47 +++
+ sql/package/package_interface.h               |  61 ++++
+ sql/package/package_parse.cc                  |  51 ++++
+ sql/package/package_parse.h                   |  83 ++++++
+ sql/package/proc.cc                           | 185 ++++++++++++
+ sql/package/proc.h                            | 268 ++++++++++++++++++
+ sql/package/proc_dummy.cc                     | 121 ++++++++
+ sql/package/proc_dummy.h                      | 172 +++++++++++
+ sql/package/show_native_procedure.cc          | 202 +++++++++++++
+ sql/package/show_native_procedure.h           |  97 +++++++
+ sql/sp.cc                                     |  11 +-
+ sql/sql_parse.cc                              |   6 +-
+ sql/sql_yacc.yy                               |   7 +-
+ 33 files changed, 2075 insertions(+), 10 deletions(-)
+ create mode 100644 mysql-test/suite/rds/r/native_procedure.result
+ create mode 100644 mysql-test/suite/rds/r/native_procedure_bugfix.result
+ create mode 100644 mysql-test/suite/rds/r/show_native_procedure_debug.result
+ create mode 100644 mysql-test/suite/rds/r/show_native_procedure_release.result
+ create mode 100644 mysql-test/suite/rds/t/native_procedure.test
+ create mode 100644 mysql-test/suite/rds/t/native_procedure_bugfix.test
+ create mode 100644 mysql-test/suite/rds/t/show_native_procedure_debug.test
+ create mode 100644 mysql-test/suite/rds/t/show_native_procedure_release.test
+ create mode 100644 sql/common/component.cc
+ create mode 100644 sql/common/component.h
+ create mode 100644 sql/package/package.cc
+ create mode 100644 sql/package/package.h
+ create mode 100644 sql/package/package_cache.cc
+ create mode 100644 sql/package/package_common.cc
+ create mode 100644 sql/package/package_common.h
+ create mode 100644 sql/package/package_interface.h
+ create mode 100644 sql/package/package_parse.cc
+ create mode 100644 sql/package/package_parse.h
+ create mode 100644 sql/package/proc.cc
+ create mode 100644 sql/package/proc.h
+ create mode 100644 sql/package/proc_dummy.cc
+ create mode 100644 sql/package/proc_dummy.h
+ create mode 100644 sql/package/show_native_procedure.cc
+ create mode 100644 sql/package/show_native_procedure.h
+
+diff --git a/include/m_string.h b/include/m_string.h
+index dca1d103a88..56b05143e52 100644
+--- a/include/m_string.h
++++ b/include/m_string.h
+@@ -313,6 +313,7 @@ static inline char *ullstr(longlong value, char *buff) {
+ }
+ 
+ #define STRING_WITH_LEN(X) (X), ((sizeof(X) - 1))
++#define C_STRING_WITH_LEN(X) ((const char *)(X)), ((sizeof(X) - 1))
+ 
+ /**
+   Skip trailing space (ASCII spaces only).
+diff --git a/include/my_sqlcommand.h b/include/my_sqlcommand.h
+index f0f27775a39..38e3516af8c 100644
+--- a/include/my_sqlcommand.h
++++ b/include/my_sqlcommand.h
+@@ -203,6 +203,7 @@ enum enum_sql_command {
+   SQLCOM_RESTART_SERVER,
+   SQLCOM_CREATE_SRS,
+   SQLCOM_DROP_SRS,
++  SQLCOM_ADMIN_PROC,
+   /* This should be the last !!! */
+   SQLCOM_END
+ };
+diff --git a/include/mysql/plugin_audit.h.pp b/include/mysql/plugin_audit.h.pp
+index 8db4d6ee40f..a48be8370d1 100644
+--- a/include/mysql/plugin_audit.h.pp
++++ b/include/mysql/plugin_audit.h.pp
+@@ -335,6 +335,7 @@ enum enum_sql_command {
+   SQLCOM_RESTART_SERVER,
+   SQLCOM_CREATE_SRS,
+   SQLCOM_DROP_SRS,
++  SQLCOM_ADMIN_PROC,
+   SQLCOM_END
+ };
+ #include "plugin_audit_message_types.h"
+diff --git a/mysql-test/suite/rds/r/native_procedure.result b/mysql-test/suite/rds/r/native_procedure.result
+new file mode 100644
+index 00000000000..dea94ab3614
+--- /dev/null
++++ b/mysql-test/suite/rds/r/native_procedure.result
+@@ -0,0 +1,43 @@
++create user 'u0'@'%';
++grant all privileges on mysql.* to 'u0' @'%';
++call mysql.dummy();
++CREATE PROCEDURE mysql.dummy()
++BEGIN
++select sleep(1);
++END$$
++ERROR 42000: PROCEDURE dummy already exists
++drop procedure mysql.dummy;
++ERROR 42000: PROCEDURE mysql.dummy does not exist
++call mysql.dummy(1);
++ERROR 42000: Incorrect number of arguments for PROCEDURE mysql.dummy; expected 0, got 1
++call mysql.dummy_3(1, 'xpchild', 99.99);
++NAME	ID	NUM
++xpchild	1	99.99
++call mysql.dummy_3(1, 1, 1);
++ERROR HY000: Native procedure mysql.dummy_3 the 2th parameter mismatch
++call mysql.dummy_3("xpchild", 1, 1);
++ERROR HY000: Native procedure mysql.dummy_3 the 1th parameter mismatch
++call mysql.dummy_3(NULL, 'xpchild', 99.99);
++ERROR HY000: Native procedure mysql.dummy_3 the 1th parameter mismatch
++call mysql.dummy_3(1, NULL, 99.99);
++ERROR HY000: Native procedure mysql.dummy_3 the 2th parameter mismatch
++call mysql.dummy_3(1, 'xpchild', NULL);
++ERROR HY000: Native procedure mysql.dummy_3 the 3th parameter mismatch
++call mysql.dummy();
++ERROR 42000: Access denied; you need (at least one of) the SUPER privilege(s) for this operation
++CREATE PROCEDURE mysql.dummy()
++BEGIN
++select sleep(1);
++END$$
++ERROR 42000: PROCEDURE dummy already exists
++drop procedure mysql.dummy;
++ERROR 42000: PROCEDURE mysql.dummy does not exist
++call mysql.dummy(1);
++ERROR 42000: Access denied; you need (at least one of) the SUPER privilege(s) for this operation
++call mysql.dummy_3(1, 'xpchild', 9.9);
++ERROR 42000: Access denied; you need (at least one of) the SUPER privilege(s) for this operation
++call mysql.dummy_3(1, 1, 9.9);
++ERROR 42000: Access denied; you need (at least one of) the SUPER privilege(s) for this operation
++call mysql.dummy_3("xpchild", 1, 9.9);
++ERROR 42000: Access denied; you need (at least one of) the SUPER privilege(s) for this operation
++drop user 'u0'@'%';
+diff --git a/mysql-test/suite/rds/r/native_procedure_bugfix.result b/mysql-test/suite/rds/r/native_procedure_bugfix.result
+new file mode 100644
+index 00000000000..94533640bef
+--- /dev/null
++++ b/mysql-test/suite/rds/r/native_procedure_bugfix.result
+@@ -0,0 +1,25 @@
++# BUGFIX : mysqld crash in debug mode. Native packages should not be included in stored procedure or function or trigger.
++CREATE FUNCTION func() RETURNS INT
++BEGIN
++call mysql.dummy();
++RETURN 0;
++END|
++ERROR HY000: Explicit or implicit commit is not allowed in stored function or trigger.
++CREATE FUNCTION func() RETURNS INT
++BEGIN
++call mysql.dummy_3(1, 'huawei', 99.9);
++RETURN 0;
++END|
++ERROR HY000: Explicit or implicit commit is not allowed in stored function or trigger.
++CREATE TRIGGER add_outline_after_insert
++AFTER INSERT ON t1 FOR EACH ROW
++BEGIN
++call mysql.dummy();
++END|
++ERROR HY000: Explicit or implicit commit is not allowed in stored function or trigger.
++CREATE TRIGGER show_outline_after_insert
++AFTER INSERT ON t1 FOR EACH ROW
++BEGIN
++call mysql.dummy_3(2, 'amazon', 99.9);
++END|
++ERROR HY000: Explicit or implicit commit is not allowed in stored function or trigger.
+diff --git a/mysql-test/suite/rds/r/show_native_procedure_debug.result b/mysql-test/suite/rds/r/show_native_procedure_debug.result
+new file mode 100644
+index 00000000000..b2a1aeeb3dc
+--- /dev/null
++++ b/mysql-test/suite/rds/r/show_native_procedure_debug.result
+@@ -0,0 +1,7 @@
++call dbms_admin.show_native_procedure();
++SCHEMA_NAME	PROC_NAME	PROC_TYPE	PARAMETERS
++dbms_admin	show_native_procedure	ADMIN_PROC	
++mysql	dummy	ADMIN_PROC	
++mysql	dummy_3	ADMIN_PROC	LONGLONG, VARCHAR, NEWDECIMAL
++call dbms_admin.show_native_procedure(1);
++ERROR 42000: Incorrect number of arguments for PROCEDURE dbms_admin.show_native_procedure; expected 0, got 1
+diff --git a/mysql-test/suite/rds/r/show_native_procedure_release.result b/mysql-test/suite/rds/r/show_native_procedure_release.result
+new file mode 100644
+index 00000000000..64e68c1bb23
+--- /dev/null
++++ b/mysql-test/suite/rds/r/show_native_procedure_release.result
+@@ -0,0 +1,5 @@
++call dbms_admin.show_native_procedure();
++SCHEMA_NAME	PROC_NAME	PROC_TYPE	PARAMETERS
++dbms_admin	show_native_procedure	ADMIN_PROC	
++call dbms_admin.show_native_procedure(1);
++ERROR 42000: Incorrect number of arguments for PROCEDURE dbms_admin.show_native_procedure; expected 0, got 1
+diff --git a/mysql-test/suite/rds/t/native_procedure.test b/mysql-test/suite/rds/t/native_procedure.test
+new file mode 100644
+index 00000000000..34c7310d86b
+--- /dev/null
++++ b/mysql-test/suite/rds/t/native_procedure.test
+@@ -0,0 +1,92 @@
++-- source include/have_debug.inc
++
++--disable_ps_protocol
++
++connection default;
++
++create user 'u0'@'%';
++grant all privileges on mysql.* to 'u0' @'%';
++
++connect(con_u0, localhost, u0,,);
++connect(con_root,localhost, root,,);
++
++
++#
++# Super acl account
++#
++connection con_root;
++
++call mysql.dummy();
++
++delimiter $$;
++
++--error ER_SP_ALREADY_EXISTS
++ CREATE PROCEDURE mysql.dummy()
++ BEGIN
++    select sleep(1);
++ END$$
++delimiter ;$$
++
++--error ER_SP_DOES_NOT_EXIST
++drop procedure mysql.dummy;
++
++--error ER_SP_WRONG_NO_OF_ARGS
++call mysql.dummy(1);
++
++call mysql.dummy_3(1, 'xpchild', 99.99);
++
++--error ER_NATIVE_PROC_PARAMETER_MISMATCH
++call mysql.dummy_3(1, 1, 1);
++
++--error ER_NATIVE_PROC_PARAMETER_MISMATCH
++call mysql.dummy_3("xpchild", 1, 1);
++
++--error ER_NATIVE_PROC_PARAMETER_MISMATCH
++call mysql.dummy_3(NULL, 'xpchild', 99.99);
++
++--error ER_NATIVE_PROC_PARAMETER_MISMATCH
++call mysql.dummy_3(1, NULL, 99.99);
++
++--error ER_NATIVE_PROC_PARAMETER_MISMATCH
++call mysql.dummy_3(1, 'xpchild', NULL);
++
++#
++# normal account
++#
++
++connection con_u0;
++
++--error ER_SPECIFIC_ACCESS_DENIED_ERROR
++call mysql.dummy();
++
++delimiter $$;
++
++--error ER_SP_ALREADY_EXISTS
++ CREATE PROCEDURE mysql.dummy()
++ BEGIN
++    select sleep(1);
++ END$$
++delimiter ;$$
++
++--error ER_SP_DOES_NOT_EXIST
++drop procedure mysql.dummy;
++
++--error ER_SPECIFIC_ACCESS_DENIED_ERROR
++call mysql.dummy(1);
++
++--error ER_SPECIFIC_ACCESS_DENIED_ERROR
++call mysql.dummy_3(1, 'xpchild', 9.9);
++
++--error ER_SPECIFIC_ACCESS_DENIED_ERROR
++call mysql.dummy_3(1, 1, 9.9);
++
++--error ER_SPECIFIC_ACCESS_DENIED_ERROR
++call mysql.dummy_3("xpchild", 1, 9.9);
++
++connection default;
++drop user 'u0'@'%';
++
++disconnect con_u0;
++disconnect con_root;
++
++--enable_ps_protocol
+diff --git a/mysql-test/suite/rds/t/native_procedure_bugfix.test b/mysql-test/suite/rds/t/native_procedure_bugfix.test
+new file mode 100644
+index 00000000000..2a11e12361b
+--- /dev/null
++++ b/mysql-test/suite/rds/t/native_procedure_bugfix.test
+@@ -0,0 +1,34 @@
++-- source include/have_debug.inc
++
++--echo # BUGFIX : mysqld crash in debug mode. Native packages should not be included in stored procedure or function or trigger.
++ 
++delimiter |;
++--error ER_COMMIT_NOT_ALLOWED_IN_SF_OR_TRG
++CREATE FUNCTION func() RETURNS INT
++BEGIN
++  call mysql.dummy();
++  RETURN 0;
++END|
++ 
++--error ER_COMMIT_NOT_ALLOWED_IN_SF_OR_TRG
++CREATE FUNCTION func() RETURNS INT
++BEGIN
++  call mysql.dummy_3(1, 'huawei', 99.9);
++  RETURN 0;
++END|
++
++--error ER_COMMIT_NOT_ALLOWED_IN_SF_OR_TRG
++CREATE TRIGGER add_outline_after_insert
++    AFTER INSERT ON t1 FOR EACH ROW
++    BEGIN
++      call mysql.dummy();
++    END|
++ 
++--error ER_COMMIT_NOT_ALLOWED_IN_SF_OR_TRG
++CREATE TRIGGER show_outline_after_insert
++    AFTER INSERT ON t1 FOR EACH ROW
++    BEGIN
++      call mysql.dummy_3(2, 'amazon', 99.9);
++    END|
++ 
++delimiter ;|
+diff --git a/mysql-test/suite/rds/t/show_native_procedure_debug.test b/mysql-test/suite/rds/t/show_native_procedure_debug.test
+new file mode 100644
+index 00000000000..c9531d65dcc
+--- /dev/null
++++ b/mysql-test/suite/rds/t/show_native_procedure_debug.test
+@@ -0,0 +1,5 @@
++--source include/have_debug.inc
++call dbms_admin.show_native_procedure();
++
++--error ER_SP_WRONG_NO_OF_ARGS
++call dbms_admin.show_native_procedure(1);
+diff --git a/mysql-test/suite/rds/t/show_native_procedure_release.test b/mysql-test/suite/rds/t/show_native_procedure_release.test
+new file mode 100644
+index 00000000000..a0fe086102d
+--- /dev/null
++++ b/mysql-test/suite/rds/t/show_native_procedure_release.test
+@@ -0,0 +1,5 @@
++--source include/have_nodebug.inc
++call dbms_admin.show_native_procedure();
++
++--error ER_SP_WRONG_NO_OF_ARGS
++call dbms_admin.show_native_procedure(1);
+diff --git a/share/messages_to_clients.txt b/share/messages_to_clients.txt
+index 660990c1e49..a19c7562a59 100644
+--- a/share/messages_to_clients.txt
++++ b/share/messages_to_clients.txt
+@@ -9966,12 +9966,6 @@ ER_VALIDATE_PASSWORD_INSUFFICIENT_CHANGED_CHARACTERS
+ ER_WARN_DEPRECATED_WITH_NOTE
+   eng "'%s' is deprecated and will be removed in a future release. %s"
+ 
+-ER_ONLY_SUPPORTED_STORAGE_ENGINE_DSTORE
+-  eng "Only support create table with storage engine CDE."
+-
+-ER_ONLY_SUPPORTED_ALTER_STORAGE_ENGINE_CDE
+-  eng "Do not allow to change to other storage_engine except CDE."
+-
+ #
+ #  End of 8.0 error messages (server-to-client).
+ #  Do NOT add messages intended for the error log above!
+@@ -9986,6 +9980,30 @@ ER_ONLY_SUPPORTED_ALTER_STORAGE_ENGINE_CDE
+ reserved-error-section 5000 5999
+ 
+ 
++################################################################################
++# Error numbers starting at 7500: server-to-client messages hwsql
++# Maybe we need to cherry-pick hwsql features, keep error number 7500-7999
++# Start of hwsql error messages (error log).
++#
++start-error-number 7500
++
++################################################################################
++# Error numbers starting at 8000: server-to-client messages for new features
++#
++# Start of new feature error messages (error log).
++#
++start-error-number 8000
++
++ER_ONLY_SUPPORTED_STORAGE_ENGINE_DSTORE
++  eng "Only support create table with storage engine CDE."
++
++ER_ONLY_SUPPORTED_ALTER_STORAGE_ENGINE_CDE
++  eng "Do not allow to change to other storage_engine except CDE."
++
++ER_NATIVE_PROC_PARAMETER_MISMATCH
++  eng "Native procedure %s the %dth parameter mismatch"
++
++
+ ################################################################################
+ # DO NOT add messages for the error-log to this file;
+ # they go in messages_to_error_log.txt in the same
+diff --git a/sql/CMakeLists.txt b/sql/CMakeLists.txt
+index 9dc8b42abed..7be1b8c3e6f 100644
+--- a/sql/CMakeLists.txt
++++ b/sql/CMakeLists.txt
+@@ -633,6 +633,14 @@ SET(SQL_SHARED_SOURCES
+   xa/transaction_cache.cc
+   xa/xid_extract.cc
+   daemon_proxy_keyring/daemon_proxy_keyring.cc
++  common/component.cc
++  package/package.cc
++  package/package_cache.cc
++  package/package_common.cc
++  package/proc.cc
++  package/package_parse.cc
++  package/proc_dummy.cc
++  package/show_native_procedure.cc
+   )
+ 
+ IF(BUILD_IS_SINGLE_CONFIG)
+diff --git a/sql/common/component.cc b/sql/common/component.cc
+new file mode 100644
+index 00000000000..66f6db57d14
+--- /dev/null
++++ b/sql/common/component.cc
+@@ -0,0 +1,54 @@
++/* Copyright (c) 2023, Huawei and/or its affiliates.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License, version 2.0,
++   as published by the Free Software Foundation.
++
++   This program is also distributed with certain software (including
++   but not limited to OpenSSL) that is licensed under separate terms,
++   as designated in a particular file or component or in included license
++   documentation.  The authors of MySQL hereby grant you an additional
++   permission to link the program and your derivative works with the
++   separately licensed software that they have included with MySQL.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License, version 2.0, for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
++
++#include "sql/common/component.h"
++
++namespace im {
++
++/* String compare ingoring case */
++template <typename F, typename S>
++bool Pair_key_comparator<F, S>::operator()(
++    const Pair_key_type<F, S> &lhs, const Pair_key_type<F, S> &rhs) const {
++  return (my_strcasecmp(system_charset_info, lhs.first.c_str(),
++                        rhs.first.c_str()) == 0 &&
++          my_strcasecmp(system_charset_info, lhs.second.c_str(),
++                        rhs.second.c_str()) == 0);
++}
++
++template bool Pair_key_comparator<std::string, std::string>::operator()(
++    const Pair_key_type<std::string, std::string> &lhs,
++    const Pair_key_type<std::string, std::string> &rhs) const;
++
++} /* namespace im */
++
++namespace std {
++template <typename F, typename S>
++size_t hash<im::Pair_key_type<F, S>>::operator()(
++    const im::Pair_key_type<F, S> &p) const {
++  return hash<F>()(static_cast<const F>(p.first)) ^
++         hash<S>()(static_cast<const S>(p.second));
++}
++
++template size_t hash<im::Pair_key_type<std::string, std::string>>::operator()(
++    const im::Pair_key_type<std::string, std::string> &p) const;
++
++} /* namespace std */
+diff --git a/sql/common/component.h b/sql/common/component.h
+new file mode 100644
+index 00000000000..184855eb9b7
+--- /dev/null
++++ b/sql/common/component.h
+@@ -0,0 +1,104 @@
++/* Copyright (c) 2023, Huawei and/or its affiliates.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License, version 2.0,
++   as published by the Free Software Foundation.
++
++   This program is also distributed with certain software (including
++   but not limited to OpenSSL) that is licensed under separate terms,
++   as designated in a particular file or component or in included license
++   documentation.  The authors of MySQL hereby grant you an additional
++   permission to link the program and your derivative works with the
++   separately licensed software that they have included with MySQL.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License, version 2.0, for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
++
++#ifndef SQL_COMMON_COMPONENT_INCLUDED
++#define SQL_COMMON_COMPONENT_INCLUDED
++
++#include <string>
++
++#include "map_helpers.h"
++#include "mysql/components/services/bits/psi_memory_bits.h"
++#include "mysql/psi/psi_memory.h"
++
++namespace im {
++
++/**
++  PSI memory detect interface;
++*/
++class PSI_memory_base {
++ public:
++  PSI_memory_base(PSI_memory_key key) : m_key(key) {}
++
++  virtual ~PSI_memory_base() {}
++
++  /* Getting */
++  PSI_memory_key psi_key() { return m_key; }
++
++  /* Setting */
++  void set_psi_key(PSI_memory_key key) { m_key = key; }
++
++ private:
++  PSI_memory_key m_key;
++};
++
++/* Disable the copy and assign construct */
++class Disable_copy_base {
++ public:
++  Disable_copy_base() {}
++  virtual ~Disable_copy_base() {}
++
++ private:
++  Disable_copy_base(const Disable_copy_base &);
++  Disable_copy_base(const Disable_copy_base &&);
++  Disable_copy_base &operator=(const Disable_copy_base &);
++};
++
++/*
++  Pair key map definition
++*/
++template <typename F, typename S>
++using Pair_key_type = std::pair<F, S>;
++
++template <typename F, typename S>
++class Pair_key_comparator {
++ public:
++  bool operator()(const Pair_key_type<F, S> &lhs,
++                  const Pair_key_type<F, S> &rhs) const;
++};
++
++template <typename F, typename S, typename T>
++class Pair_key_unordered_map
++    : public malloc_unordered_map<Pair_key_type<F, S>, const T *,
++                                  std::hash<Pair_key_type<F, S>>,
++                                  Pair_key_comparator<F, S>> {
++ public:
++  explicit Pair_key_unordered_map(PSI_memory_key key)
++      : malloc_unordered_map<Pair_key_type<F, S>, const T *,
++                             std::hash<Pair_key_type<F, S>>,
++                             Pair_key_comparator<F, S>>(key) {}
++};
++
++} /* namespace im */
++
++namespace std {
++template <typename F, typename S>
++struct hash<im::Pair_key_type<F, S>> {
++ public:
++  typedef typename im::Pair_key_type<F, S> argument_type;
++  typedef size_t result_type;
++
++  size_t operator()(const im::Pair_key_type<F, S> &p) const;
++};
++
++} /* namespace std */
++
++#endif
+diff --git a/sql/mysqld.cc b/sql/mysqld.cc
+index e841c10e633..f126f7ec930 100644
+--- a/sql/mysqld.cc
++++ b/sql/mysqld.cc
+@@ -885,6 +885,8 @@ MySQL clients support the protocol:
+ #include "typelib.h"
+ #include "violite.h"
+ 
++#include "sql/package/package_interface.h"
++
+ #ifdef WITH_PERFSCHEMA_STORAGE_ENGINE
+ #include "storage/perfschema/pfs_server.h"
+ #endif /* WITH_PERFSCHEMA_STORAGE_ENGINE */
+@@ -4525,6 +4527,9 @@ SHOW_VAR com_status_vars[] = {
+     {"xa_start",
+      (char *)offsetof(System_status_var, com_stat[(uint)SQLCOM_XA_START]),
+      SHOW_LONG_STATUS, SHOW_SCOPE_ALL},
++    {"native_admin_proc",
++     (char *)offsetof(System_status_var, com_stat[(uint)SQLCOM_ADMIN_PROC]),
++     SHOW_LONG_STATUS, SHOW_SCOPE_ALL},
+     {NullS, NullS, SHOW_LONG, SHOW_SCOPE_ALL}};
+ 
+ LEX_CSTRING sql_statement_names[(uint)SQLCOM_END + 1];
+@@ -7565,6 +7570,8 @@ int mysqld_main(int argc, char **argv)
+   */
+   init_server_psi_keys();
+ 
++  im::package_context_init();
++
+   /*
+     Now that some instrumentation is in place,
+     recreate objects which were initialised early,
+diff --git a/sql/package/package.cc b/sql/package/package.cc
+new file mode 100644
+index 00000000000..330ba09d23e
+--- /dev/null
++++ b/sql/package/package.cc
+@@ -0,0 +1,61 @@
++/* Copyright (c) 2023, Huawei and/or its affiliates.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License, version 2.0,
++   as published by the Free Software Foundation.
++
++   This program is also distributed with certain software (including
++   but not limited to OpenSSL) that is licensed under separate terms,
++   as designated in a particular file or component or in included license
++   documentation.  The authors of MySQL hereby grant you an additional
++   permission to link the program and your derivative works with the
++   separately licensed software that they have included with MySQL.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License, version 2.0, for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
++
++/**
++  @file
++
++  Internal native mysql package.
++
++  DBMS package is designed as collections of procedures which are for
++  administration.
++
++  Not only procedure but also other type of object that implemented the package
++  interface.
++*/
++#include "sql/package/package.h"
++#include "sql/package/package_common.h"
++
++/**
++  @addtogroup Native Package
++
++  @{
++*/
++
++namespace im {
++
++/**
++  Global singleton package container.
++
++  @retval     package instance
++*/
++Package *Package::instance() {
++  static Package container(key_memory_package);
++
++  return &container;
++}
++
++/* Destructor of package */
++Package::~Package() { clear_elements(); }
++
++} /* namespace im */
++
++/// @} (end of group )
+diff --git a/sql/package/package.h b/sql/package/package.h
+new file mode 100644
+index 00000000000..d69445ca581
+--- /dev/null
++++ b/sql/package/package.h
+@@ -0,0 +1,137 @@
++/* Copyright (c) 2023, Huawei and/or its affiliates.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License, version 2.0,
++   as published by the Free Software Foundation.
++
++   This program is also distributed with certain software (including
++   but not limited to OpenSSL) that is licensed under separate terms,
++   as designated in a particular file or component or in included license
++   documentation.  The authors of MySQL hereby grant you an additional
++   permission to link the program and your derivative works with the
++   separately licensed software that they have included with MySQL.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License, version 2.0, for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
++
++#ifndef SQL_PACKAGE_PACKAGE_INCLUDED
++#define SQL_PACKAGE_PACKAGE_INCLUDED
++
++#include "sql/package/package_common.h"
++#include "sql/package/proc.h"
++#include "sql/psi_memory_key.h"
++
++/**
++  Internal native mysql package.
++
++  Package is the container of all native elements, so It's the singleton
++  instance, and initilized when mysqld reboot.
++*/
++namespace im {
++
++/* Native procedures container */
++class Package : public PSI_memory_base {
++  typedef Package_element_map<Proc> Proc_map;
++
++  /* Type selector for element map */
++  template <typename T>
++  struct Type_selector {};
++
++ public:
++  explicit Package(PSI_memory_key key)
++      : PSI_memory_base(key), m_proc_map(key) {}
++
++  virtual ~Package();
++
++  /* Disable copy and assign function */
++  Package(const Package &) = delete;
++  Package(const Package &&) = delete;
++  Package &operator=(const Package &) = delete;
++  /**
++    Global singleton package container.
++
++    @retval     package instance
++  */
++  static Package *instance();
++
++  /**
++    Register native element
++
++    @param[in]      schema_name     Element schema.
++    @param[in]      element_name    Element name
++    @param[in]      element         Object instance
++
++    @retval         false           Failure
++    @retval         true            Success
++  */
++  template <typename T>
++  bool register_element(const std::string &schema_name,
++                        const std::string &element_name, T *element) {
++    std::pair<typename Package_element_map<T>::iterator, bool> it;
++
++    it = m_map<T>()->insert(typename Package_element_map<T>::value_type(
++        typename Package_element_map<T>::key_type(schema_name, element_name),
++        element));
++
++    return it.second;
++  }
++
++  /**
++    Lookup element
++
++    @param[in]      schema_name     Element schema.
++    @param[in]      element_name    Element name
++
++    @retval         element         Object instance
++ */
++  template <typename T>
++  const T *lookup_element(const std::string &schema_name,
++                          const std::string &element_name) {
++    typename Package_element_map<T>::const_iterator it;
++
++    it = m_map<T>()->find(
++        typename Package_element_map<T>::key_type(schema_name, element_name));
++
++    if (it == m_map<T>()->end())
++      return nullptr;
++    else
++      return it->second;
++  }
++
++  template <typename T>
++  const Proc_map *get_all_element() {
++    return m_map<T>();
++  }
++
++ private:
++  /* Proc map getting */
++  Proc_map *m_map(Type_selector<Proc>) { return &m_proc_map; }
++
++  /* Template map getting */
++  template <typename T>
++  Package_element_map<T> *m_map() {
++    return m_map(Type_selector<T>());
++  }
++
++  /* Clear all elements */
++  void clear_elements() {
++    for (auto it = m_proc_map.cbegin(); it != m_proc_map.cend(); ++it) {
++      delete it->second;
++    }
++    m_proc_map.clear();
++  }
++
++ private:
++  /* Native proc container */
++  Proc_map m_proc_map;
++};
++
++} /* namespace im */
++
++#endif
+diff --git a/sql/package/package_cache.cc b/sql/package/package_cache.cc
+new file mode 100644
+index 00000000000..dd7e251dcfe
+--- /dev/null
++++ b/sql/package/package_cache.cc
+@@ -0,0 +1,125 @@
++/* Copyright (c) 2023, Huawei and/or its affiliates.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License, version 2.0,
++   as published by the Free Software Foundation.
++
++   This program is also distributed with certain software (including
++   but not limited to OpenSSL) that is licensed under separate terms,
++   as designated in a particular file or component or in included license
++   documentation.  The authors of MySQL hereby grant you an additional
++   permission to link the program and your derivative works with the
++   separately licensed software that they have included with MySQL.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License, version 2.0, for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
++
++#include "my_macros.h"
++#include "mysql/components/services/bits/psi_bits.h"
++#include "mysql/psi/mysql_memory.h"
++
++#include "sql/package/package.h"
++#include "sql/package/package_common.h"
++#include "sql/package/package_parse.h"
++#include "sql/package/proc.h"
++#include "sql/sp_head.h"
++
++#ifndef DBUG_OFF
++#include "sql/package/proc_dummy.h"
++#endif
++
++#include "sql/package/show_native_procedure.h"
++
++namespace im {
++
++/* All package memory usage aggregation point */
++PSI_memory_key key_memory_package;
++
++const char *PACKAGE_SCHEMA = "mysql";
++
++static bool package_inited = false;
++
++#ifdef HAVE_PSI_INTERFACE
++static PSI_memory_info package_memory[] = {
++    {&key_memory_package, "im::package", 0, 0, PSI_DOCUMENT_ME}};
++
++static void init_package_psi_key() {
++  const char *category = "sql";
++  int count;
++
++  count = static_cast<int>(array_elements(package_memory));
++  mysql_memory_register(category, package_memory, count);
++}
++#endif
++
++/* Register all the native package element */
++template <typename K, typename T>
++static void register_package(const LEX_CSTRING &schema) {
++  if (package_inited) {
++    Package::instance()->register_element<K>(
++        std::string(schema.str), T::instance()->str(), T::instance());
++  }
++}
++
++/* Template of search package element */
++template <typename T>
++static const T *find_package_element(const std::string &schema_name,
++                                     const std::string &element_name) {
++  return Package::instance()->lookup_element<T>(schema_name, element_name);
++}
++/* Template instantiation */
++template static const Proc *find_package_element(
++    const std::string &schema_name, const std::string &element_name);
++
++/**
++  whether exist native proc by schema_name and proc_name
++
++  @retval       true              Exist
++  @retval       false             Not exist
++*/
++bool exist_native_proc(const char *db, const char *name) {
++  return find_package_element<Proc>(std::string(db), std::string(name)) ? true
++                                                                        : false;
++}
++/**
++  Find the native proc and evoke the parse tree root
++
++  @param[in]    THD               Thread context
++  @param[in]    sp_name           Proc name
++  @param[in]    pt_expr_list      Parameters
++
++  @retval       parse_tree_root   Parser structure
++*/
++Parse_tree_root *find_native_proc_and_evoke(THD *thd, sp_name *sp_name,
++                                            PT_item_list *pt_expr_list) {
++  const Proc *proc = find_package_element<Proc>(
++      std::string(sp_name->m_db.str), std::string(sp_name->m_name.str));
++
++  return proc ? proc->PT_evoke(thd, pt_expr_list, proc) : nullptr;
++}
++
++/**
++  Initialize Package context.
++*/
++void package_context_init() {
++#ifdef HAVE_PSI_INTERFACE
++  init_package_psi_key();
++#endif
++
++  package_inited = true;
++
++#ifndef NDEBUG
++  register_package<Proc, Proc_dummy>(PROC_DUMMY_SCHEMA);
++  register_package<Proc, Proc_dummy_3>(PROC_DUMMY_SCHEMA);
++#endif
++
++  register_package<Proc, im::Show_native_procedure_proc>(im::ADMIN_PROC_SCHEMA);
++}
++
++} /* namespace im */
+diff --git a/sql/package/package_common.cc b/sql/package/package_common.cc
+new file mode 100644
+index 00000000000..e45161c8232
+--- /dev/null
++++ b/sql/package/package_common.cc
+@@ -0,0 +1,29 @@
++/* Copyright (c) 2023, Huawei and/or its affiliates.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License, version 2.0,
++   as published by the Free Software Foundation.
++
++   This program is also distributed with certain software (including
++   but not limited to OpenSSL) that is licensed under separate terms,
++   as designated in a particular file or component or in included license
++   documentation.  The authors of MySQL hereby grant you an additional
++   permission to link the program and your derivative works with the
++   separately licensed software that they have included with MySQL.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License, version 2.0, for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
++
++#include "sql/package/package_common.h"
++#include "m_ctype.h"
++#include "my_inttypes.h"
++#include "my_murmur3.h"  // my_murmur3_32
++#include "sql/common/component.h"
++
++namespace im {}  // namespace im
+diff --git a/sql/package/package_common.h b/sql/package/package_common.h
+new file mode 100644
+index 00000000000..04e26874115
+--- /dev/null
++++ b/sql/package/package_common.h
+@@ -0,0 +1,47 @@
++/* Copyright (c) 2023, Huawei and/or its affiliates.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License, version 2.0,
++   as published by the Free Software Foundation.
++
++   This program is also distributed with certain software (including
++   but not limited to OpenSSL) that is licensed under separate terms,
++   as designated in a particular file or component or in included license
++   documentation.  The authors of MySQL hereby grant you an additional
++   permission to link the program and your derivative works with the
++   separately licensed software that they have included with MySQL.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License, version 2.0, for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
++
++#ifndef SQL_PACKAGE_PACKAGE_COMMON_INCLUDED
++#define SQL_PACKAGE_PACKAGE_COMMON_INCLUDED
++
++#include "sql/common/component.h"
++
++/**
++  Common definition of package module.
++
++   - Memory usage detection
++   - Native package object container structure
++*/
++namespace im {
++
++/* Package memory P_S key */
++extern PSI_memory_key key_memory_package;
++
++extern const char *PACKAGE_SCHEMA;
++
++/* Package element map type */
++template <typename T>
++using Package_element_map = Pair_key_unordered_map<std::string, std::string, T>;
++
++} /*  namespace im */
++
++#endif
+diff --git a/sql/package/package_interface.h b/sql/package/package_interface.h
+new file mode 100644
+index 00000000000..517b20307e3
+--- /dev/null
++++ b/sql/package/package_interface.h
+@@ -0,0 +1,61 @@
++/* Copyright (c) 2023, Huawei and/or its affiliates.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License, version 2.0,
++   as published by the Free Software Foundation.
++
++   This program is also distributed with certain software (including
++   but not limited to OpenSSL) that is licensed under separate terms,
++   as designated in a particular file or component or in included license
++   documentation.  The authors of MySQL hereby grant you an additional
++   permission to link the program and your derivative works with the
++   separately licensed software that they have included with MySQL.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License, version 2.0, for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
++
++#ifndef SQL_PACKAGE_PACKAGE_INTERFACE_INCLUDED
++#define SQL_PACKAGE_PACKAGE_INTERFACE_INCLUDED
++
++class sp_name;
++class PT_item_list;
++class Parse_tree_root;
++class THD;
++
++/**
++  Interface of native package module.
++*/
++
++namespace im {
++
++/* Initialize Package context. */
++extern void package_context_init();
++
++/**
++  whether exist native proc by schema_name and proc_name
++
++  @retval       true              Exist
++  @retval       false             Not exist
++*/
++bool exist_native_proc(const char *db, const char *name);
++
++/**
++  Find the native proc and evoke the parse tree root
++
++  @param[in]    THD               Thread context
++  @param[in]    sp_name           Proc name
++  @param[in]    pt_expr_list      Parameters
++
++  @retval       parse_tree_root   Parser structure
++*/
++extern Parse_tree_root *find_native_proc_and_evoke(THD *thd, sp_name *sp_name,
++                                                   PT_item_list *pt_expr_list);
++
++} /* namespace im */
++#endif
+diff --git a/sql/package/package_parse.cc b/sql/package/package_parse.cc
+new file mode 100644
+index 00000000000..0901f0aa461
+--- /dev/null
++++ b/sql/package/package_parse.cc
+@@ -0,0 +1,51 @@
++/* Copyright (c) 2023, Huawei and/or its affiliates.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License, version 2.0,
++   as published by the Free Software Foundation.
++
++   This program is also distributed with certain software (including
++   but not limited to OpenSSL) that is licensed under separate terms,
++   as designated in a particular file or component or in included license
++   documentation.  The authors of MySQL hereby grant you an additional
++   permission to link the program and your derivative works with the
++   separately licensed software that they have included with MySQL.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License, version 2.0, for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
++
++#include "sql/package/package_parse.h"
++#include "sql/package/proc.h"
++
++namespace im {
++
++/**
++  Generate the proc execution command.
++
++  @param[in]      THD       Thread context
++
++  @retval         Sql_cmd   The Sql_cmd_proc object
++*/
++Sql_cmd *PT_package_proc::make_cmd(THD *thd) {
++  LEX *const lex = thd->lex;
++  Parse_context pc(thd, lex->current_query_block());
++
++  if (m_opt_expr_list != NULL && m_opt_expr_list->contextualize(&pc))
++    return NULL; /* purecov: inspected */
++
++  mem_root_deque<Item *> *proc_args = NULL;
++  if (m_opt_expr_list != NULL) proc_args = &m_opt_expr_list->value;
++
++  Sql_cmd *sql_cmd = m_proc->evoke_cmd(thd, proc_args);
++  lex->sql_command = sql_cmd->sql_command_code();
++
++  return sql_cmd;
++}
++
++} /* namespace im */
+diff --git a/sql/package/package_parse.h b/sql/package/package_parse.h
+new file mode 100644
+index 00000000000..f74907b0aae
+--- /dev/null
++++ b/sql/package/package_parse.h
+@@ -0,0 +1,83 @@
++/* Copyright (c) 2023, Huawei and/or its affiliates.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License, version 2.0,
++   as published by the Free Software Foundation.
++
++   This program is also distributed with certain software (including
++   but not limited to OpenSSL) that is licensed under separate terms,
++   as designated in a particular file or component or in included license
++   documentation.  The authors of MySQL hereby grant you an additional
++   permission to link the program and your derivative works with the
++   separately licensed software that they have included with MySQL.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License, version 2.0, for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
++
++#ifndef SQL_PACKAGE_PACKAGE_PARSE_INCLUDED
++#define SQL_PACKAGE_PACKAGE_PARSE_INCLUDED
++
++#include "sql/parse_tree_nodes.h"
++
++namespace im {
++class Proc;
++} /* namespace im */
++
++/**
++  Interface of all native package element parser tree.
++
++  PT_package_base is the uniform interface of all different types of
++  package element for parser.
++
++  1) Proc
++    PT_package_proc is the uniform parser interface for all native proc objects.
++
++    Proc will PT_revoke() the PT_package_proc instance.
++
++  2) ...
++*/
++namespace im {
++
++/**
++  Base parser root inteface for all package element.
++*/
++class PT_package_base : public Parse_tree_root {
++ public:
++  explicit PT_package_base() {}
++
++  virtual ~PT_package_base() = 0;
++};
++
++inline PT_package_base::~PT_package_base() {}
++
++/**
++  Implementation of proc parser tree root.
++*/
++class PT_package_proc final : public PT_package_base {
++ public:
++  explicit PT_package_proc(PT_item_list *opt_expr_list, const Proc *proc)
++      : m_opt_expr_list(opt_expr_list), m_proc(proc) {}
++
++  /**
++    Generate the proc execution command.
++
++    @param[in]      THD       Thread context
++
++    @retval         Sql_cmd   The Sql_cmd_proc object
++  */
++  Sql_cmd *make_cmd(THD *thd) override;
++
++ private:
++  PT_item_list *m_opt_expr_list;
++  const Proc *m_proc;
++};
++
++} /* namespace im */
++
++#endif
+diff --git a/sql/package/proc.cc b/sql/package/proc.cc
+new file mode 100644
+index 00000000000..27961efd22c
+--- /dev/null
++++ b/sql/package/proc.cc
+@@ -0,0 +1,185 @@
++/* Copyright (c) 2023, Huawei and/or its affiliates.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License, version 2.0,
++   as published by the Free Software Foundation.
++
++   This program is also distributed with certain software (including
++   but not limited to OpenSSL) that is licensed under separate terms,
++   as designated in a particular file or component or in included license
++   documentation.  The authors of MySQL hereby grant you an additional
++   permission to link the program and your derivative works with the
++   separately licensed software that they have included with MySQL.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License, version 2.0, for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
++
++#include "my_dbug.h"
++
++#include "sql/auth/auth_acls.h"
++#include "sql/auth/sql_security_ctx.h"
++#include "sql/package/package_parse.h"
++#include "sql/package/proc.h"
++#include "sql/protocol.h"
++
++namespace im {
++
++/**
++  Generate the parse tree root.
++
++  @param[in]    THD           Thread context
++  @param[in]    pt_expr_list  Parameters
++  @param[in]    proc          Native predefined proc
++
++  @retval       Parse_tree_root
++*/
++Parse_tree_root *Proc::PT_evoke(THD *thd, PT_item_list *pt_expr_list,
++                                const Proc *proc) const {
++  return new (thd->mem_root) PT_proc_type(pt_expr_list, proc);
++}
++
++/**
++  Send the result meta data by columns definition.
++
++  @param[in]    THD           Thread context
++
++  @retval       true          Failure
++  @retval       false         Success
++*/
++bool Proc::send_result_metadata(THD *thd) const {
++  mem_root_deque<Item *> field_list(thd->mem_root);
++  Item *item;
++  DBUG_ENTER("Proc::send_result_metadata");
++
++  DBUG_ASSERT(m_columns.size() > 0 && m_result_type == Result_type::RESULT_SET);
++
++  for (Columns::const_iterator it = m_columns.begin(); it != m_columns.end();
++       it++) {
++    /* TODO: Support more field type */
++    switch ((*it).type) {
++      case MYSQL_TYPE_LONGLONG:
++        field_list.push_back(
++            item = new Item_int(Name_string((*it).name, (*it).name_len),
++                                (*it).size, MY_INT64_NUM_DECIMAL_DIGITS));
++        item->set_nullable(true);
++        break;
++      case MYSQL_TYPE_VARCHAR:
++        field_list.push_back(item =
++                                 new Item_empty_string((*it).name, (*it).size));
++        item->set_nullable(true);
++        break;
++      case MYSQL_TYPE_NEWDECIMAL:
++        field_list.push_back(item = new Item_decimal((longlong)0, false));
++        item->set_nullable(true);
++        item->item_name.copy((*it).name, (*it).name_len);
++        break;
++      default:
++        DBUG_ASSERT(0);
++    }
++  }
++  if (thd->send_result_metadata(field_list,
++                                Protocol::SEND_NUM_ROWS | Protocol::SEND_EOF))
++    DBUG_RETURN(true);
++
++  DBUG_RETURN(false);
++}
++
++/**
++  Send the ok or error packet defaultly,
++  Override it if any result set.
++*/
++void Sql_cmd_proc::send_result(THD *thd, bool error) {
++  DBUG_ENTER("Sql_cmd_proc::send_result");
++  if (!error) {
++    DBUG_ASSERT(m_proc->get_result_type() == Proc::Result_type::RESULT_OK);
++    my_ok(thd);
++  } else {
++    DBUG_ASSERT(thd->is_error());
++  }
++  DBUG_VOID_RETURN;
++}
++
++/**
++  Check access, require SUPER_ACL defaultly.
++  Override it if any other requirement.
++*/
++bool Sql_cmd_proc::check_access(THD *thd) {
++  Security_context *sctx = thd->security_context();
++
++  if (m_priv_type == Priv_type::PRIV_NONE_ACL) {
++    return false;
++  } else if (m_priv_type == Priv_type::PRIV_SUPER_ACL) {
++    if (!sctx->check_access(SUPER_ACL)) {
++      my_error(ER_SPECIFIC_ACCESS_DENIED_ERROR, MYF(0), "SUPER");
++      return true;
++    }
++    return false;
++  }
++  return false;
++}
++
++/**
++  Check the list of parameters.
++  Override it if any other requirement.
++*/
++bool Sql_cmd_proc::check_parameter() {
++  std::size_t actual_size = (m_list == nullptr ? 0 : m_list->size());
++  std::size_t define_size = m_proc->get_parameters()->size();
++
++  if (actual_size != define_size) {
++    my_error(ER_SP_WRONG_NO_OF_ARGS, MYF(0), "PROCEDURE",
++             m_proc->qname().c_str(), define_size, actual_size);
++    return true;
++  }
++
++  if (actual_size > 0) {
++    std::size_t i = 0;
++    for (auto item = m_list->begin(); item != m_list->end(); ++item) {
++      if ((*item)->data_type() != m_proc->get_parameters()->at(i)) {
++        my_error(ER_NATIVE_PROC_PARAMETER_MISMATCH, MYF(0),
++                 m_proc->qname().c_str(), i + 1);
++        return true;
++      }
++      i++;
++    }
++  }
++  return false;
++}
++
++/**
++  Prepare the proc before execution.
++*/
++bool Sql_cmd_proc::prepare(THD *thd) {
++  if (check_access(thd) || check_parameter()) return true;
++  set_prepared();
++  return false;
++}
++
++/**
++  Interface of Proc execution body.
++
++  @param[in]    THD           Thread context
++
++  @retval       true          Failure
++  @retval       false         Success
++*/
++bool Sql_cmd_proc::execute(THD *thd) {
++  bool error;
++  /* Step 1 : prepare */
++  if ((error = prepare(thd))) goto end;
++
++  /* Step 2 : execute */
++  if ((error = pc_execute(thd))) goto end;
++
++end:
++  /* Step 3 : send result */
++  send_result(thd, error);
++  return error;
++}
++} /* namespace im */
+diff --git a/sql/package/proc.h b/sql/package/proc.h
+new file mode 100644
+index 00000000000..a78d3a3fe93
+--- /dev/null
++++ b/sql/package/proc.h
+@@ -0,0 +1,268 @@
++/* Copyright (c) 2023, Huawei and/or its affiliates.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License, version 2.0,
++   as published by the Free Software Foundation.
++
++   This program is also distributed with certain software (including
++   but not limited to OpenSSL) that is licensed under separate terms,
++   as designated in a particular file or component or in included license
++   documentation.  The authors of MySQL hereby grant you an additional
++   permission to link the program and your derivative works with the
++   separately licensed software that they have included with MySQL.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License, version 2.0, for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
++
++#ifndef SQL_PACKAGE_PROC_INCLUDED
++#define SQL_PACKAGE_PROC_INCLUDED
++
++#include "field_types.h"
++#include "prealloced_array.h"
++#include "sql/package/package_common.h"
++#include "sql/package/package_parse.h"
++#include "sql/sql_cmd.h"
++
++class THD;
++class sp_name;
++class PT_item_list;
++
++/**
++  Interface of native procedure.
++
++  Any native procedure should implement these two interface:
++
++    1) Proc
++        It's abstract class declaration.
++
++        - Parser structure
++          All subclass of proc will has the same parse tree root,
++            PT_package_proc(sp_name, item_list)
++
++        - Sql command
++          All subclass of proc need to implement itself command class.
++
++        - Procedure name
++          All subclass should define itself name.
++
++    2) Sql_cmd_proc
++        It's abstract class declaration.
++
++        - Execute logic (pc_execute())
++          All subclass need to implement it.
++
++        - SQL command type
++          All subclass has the same command type (SQLCOM_PROC).
++
++        - Default behaviour (pls override these if individualization)
++            1. send_result
++            2. check_access
++            3. check_parameter
++            4. prepare
++*/
++namespace im {
++
++/**
++   Native procedure interface
++*/
++class Proc : public PSI_memory_base {
++  static constexpr unsigned int PROC_PREALLOC_SIZE = 10;
++
++ public:
++  /**
++     All the native procedures have uniform parse tree root.
++     It includes:
++        - sp_name
++        - pt_expr_list
++      from sql_yacc.yy
++
++        - Proc
++      from searching native proc map
++  */
++  typedef PT_package_proc PT_proc_type;
++
++  /* Container of proc parameters */
++  typedef Prealloced_array<enum_field_types, PROC_PREALLOC_SIZE> Parameters;
++
++  /* Column element */
++  typedef struct st_column_element {
++    enum enum_field_types type;
++    const char *name;
++    std::size_t name_len;
++    std::size_t size;
++
++  } Column_element;
++
++  /* Container of proc columns */
++  typedef Prealloced_array<Column_element, PROC_PREALLOC_SIZE> Columns;
++
++  /**
++   */
++  enum class Result_type {
++    RESULT_NONE,  // Initiail state
++    RESULT_OK,    // Only OK or ERROR protocal
++    RESULT_SET    // Send result set
++  };
++
++ public:
++  explicit Proc(PSI_memory_key key)
++      : PSI_memory_base(key),
++        m_result_type(Result_type::RESULT_NONE),
++        m_parameters(key),
++        m_columns(key) {}
++
++  virtual ~Proc() {}
++
++  /**
++    Generate the parse tree root.
++
++    @param[in]    THD           Thread context
++    @param[in]    pt_expr_list  Parameters
++    @param[in]    proc          Native predefined proc
++
++    @retval       Parse_tree_root
++  */
++  Parse_tree_root *PT_evoke(THD *thd, PT_item_list *pt_expr_list,
++                            const Proc *proc) const;
++
++  /**
++    Interface of generating proc execution logic.
++
++    @param[in]    THD           Thread context
++    @param[in]    pt_expr_list  Parameters
++
++    @retval       Sql cmd
++  */
++  virtual Sql_cmd *evoke_cmd(THD *thd, mem_root_deque<Item *> *list) const = 0;
++
++  Result_type get_result_type() const { return m_result_type; }
++
++  const Parameters *get_parameters() const { return &m_parameters; }
++
++  const Columns &get_columns() const { return m_columns; }
++
++  /**
++    Send the result meta data by columns definition.
++
++    @param[in]    THD           Thread context
++
++    @retval       true          Failure
++    @retval       false         Success
++  */
++  bool send_result_metadata(THD *thd) const;
++
++  /**
++    Interface of proc name.
++
++    @retval       string        Proc name
++  */
++  virtual const std::string str() const = 0;
++
++  virtual const std::string qname() const {
++    std::stringstream ss;
++    ss << PACKAGE_SCHEMA << "." << str();
++    return ss.str();
++  }
++
++  /* Disable copy and assign function */
++  Proc(const Proc &) = delete;
++  Proc(const Proc &&) = delete;
++  Proc &operator=(const Proc &) = delete;
++
++ protected:
++  /* The type of result packet */
++  Result_type m_result_type;
++  /* The list of proc parameters */
++  Parameters m_parameters;
++  /* The list of proc columns */
++  Columns m_columns;
++};
++
++/**
++  Interface of proc execution.
++
++  Should implement pc_execute() function at least!
++*/
++class Sql_cmd_proc : public Sql_cmd {
++ protected:
++  enum class Priv_type { PRIV_NONE_ACL = 0, PRIV_SUPER_ACL };
++
++ public:
++  explicit Sql_cmd_proc(THD *thd, mem_root_deque<Item *> *list,
++                        const Proc *proc, Priv_type priv_type)
++      : m_thd(thd), m_list(list), m_proc(proc), m_priv_type(priv_type) {}
++  /**
++    Interface of Proc execution body.
++
++    @param[in]    THD           Thread context
++
++    @retval       true          Failure
++    @retval       false         Success
++  */
++  virtual bool execute(THD *thd) override;
++  /**
++    Implementation of Proc execution body.
++
++    @param[in]    THD           Thread context
++
++    @retval       true          Failure
++    @retval       false         Success
++  */
++  virtual bool pc_execute(THD *thd) = 0;
++
++  /**
++    Send the ok or error packet defaultly,
++    Override it if any result set.
++  */
++  virtual void send_result(THD *thd, bool error);
++
++  /**
++    Check access, require SUPER_ACL defaultly.
++    Override it if any other requirement.
++  */
++  virtual bool check_access(THD *thd);
++
++  /**
++    Check the parameters
++    Override it if any other requirement.
++  */
++  virtual bool check_parameter();
++
++  /**
++    Prepare the proc before execution.
++  */
++  virtual bool prepare(THD *thd) override;
++
++ protected:
++  void set_priv_type(Priv_type priv_type) { m_priv_type = priv_type; }
++
++ protected:
++  THD *m_thd;
++  mem_root_deque<Item *> *m_list;
++  const Proc *m_proc;
++  Priv_type m_priv_type;
++};
++
++/**
++  Base class for administrator procedure.
++  Require SUPER_ACL default.
++*/
++class Sql_cmd_admin_proc : public Sql_cmd_proc {
++ public:
++  explicit Sql_cmd_admin_proc(THD *thd, mem_root_deque<Item *> *list,
++                              const Proc *proc)
++      : Sql_cmd_proc(thd, list, proc, Priv_type::PRIV_SUPER_ACL) {}
++
++  virtual enum_sql_command sql_command_code() const override {
++    return SQLCOM_ADMIN_PROC;
++  }
++};
++} /* namespace im */
++
++#endif
+diff --git a/sql/package/proc_dummy.cc b/sql/package/proc_dummy.cc
+new file mode 100644
+index 00000000000..49338f1e243
+--- /dev/null
++++ b/sql/package/proc_dummy.cc
+@@ -0,0 +1,121 @@
++/* Copyright (c) 2023, Huawei and/or its affiliates.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License, version 2.0,
++   as published by the Free Software Foundation.
++
++   This program is also distributed with certain software (including
++   but not limited to OpenSSL) that is licensed under separate terms,
++   as designated in a particular file or component or in included license
++   documentation.  The authors of MySQL hereby grant you an additional
++   permission to link the program and your derivative works with the
++   separately licensed software that they have included with MySQL.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License, version 2.0, for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
++
++#include "my_dbug.h"
++#include "sql/auth/auth_acls.h"
++#include "sql/auth/sql_security_ctx.h"
++
++#include "sql/package/package_parse.h"
++#include "sql/package/proc.h"
++#include "sql/package/proc_dummy.h"
++
++#include "sql/protocol.h"
++
++/**
++  Dummy proc definition.
++
++  It was used to demostrate how to define a native procedure,
++  so it only take effect on DBUG mode.
++*/
++namespace im {
++
++/* The schema of dummy and dummy_3 proc */
++const LEX_CSTRING PROC_DUMMY_SCHEMA = {C_STRING_WITH_LEN("mysql")};
++
++Proc *Proc_dummy::instance() {
++  static Proc_dummy *proc = new Proc_dummy(key_memory_package);
++
++  return proc;
++}
++
++Sql_cmd *Proc_dummy::evoke_cmd(THD *thd, mem_root_deque<Item *> *list) const {
++  return new (thd->mem_root) Sql_cmd_type(thd, list, this);
++}
++
++bool Sql_cmd_proc_dummy::pc_execute(THD *) {
++  bool error = false;
++  DBUG_ENTER("Sql_cmd_proc_dummy::execute");
++  DBUG_ASSERT(m_proc->get_result_type() != Proc::Result_type::RESULT_NONE);
++  /**
++    Do nothing for dummy:
++      - Default access check
++      - Default parameter check
++      - Default send result
++  */
++  DBUG_RETURN(error);
++}
++
++Proc *Proc_dummy_3::instance() {
++  static Proc_dummy_3 *proc = new Proc_dummy_3(key_memory_package);
++
++  return proc;
++}
++
++Sql_cmd *Proc_dummy_3::evoke_cmd(THD *thd, mem_root_deque<Item *> *list) const {
++  return new (thd->mem_root) Sql_cmd_type(thd, list, this);
++}
++
++bool Sql_cmd_proc_dummy_3::pc_execute(THD *) {
++  bool error = false;
++  DBUG_ENTER("Sql_cmd_proc_dummy_3::pc_execute");
++  /**
++    Do nothing for dummy_3:
++      - Default access check
++      - Default parameter check
++      - Override send result
++  */
++  DBUG_RETURN(error);
++}
++
++/**
++  Dummy2 result format:
++    -- name
++    -- id
++    -- num
++*/
++void Sql_cmd_proc_dummy_3::send_result(THD *thd, bool error) {
++  Protocol *protocol = thd->get_protocol();
++
++  DBUG_ENTER("Sql_cmd_proc_dummy_3::send_result");
++
++  if (error) {
++    DBUG_ASSERT(thd->is_error());
++    DBUG_VOID_RETURN;
++  }
++
++  if (m_proc->send_result_metadata(thd)) DBUG_VOID_RETURN;
++
++  protocol->start_row();
++
++  String name;
++  String *res = (*m_list)[1]->val_str(&name);
++  protocol->store_string(res->ptr(), res->length(), system_charset_info);
++  protocol->store((*m_list)[0]->val_int());
++  res = (*m_list)[2]->val_str(&name);
++  protocol->store_string(res->ptr(), res->length(), system_charset_info);
++  if (protocol->end_row()) DBUG_VOID_RETURN;
++
++  my_eof(thd);
++  DBUG_VOID_RETURN;
++}
++
++} /* namespace im */
+diff --git a/sql/package/proc_dummy.h b/sql/package/proc_dummy.h
+new file mode 100644
+index 00000000000..a67f22d6afb
+--- /dev/null
++++ b/sql/package/proc_dummy.h
+@@ -0,0 +1,172 @@
++/* Copyright (c) 2023, Huawei and/or its affiliates.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License, version 2.0,
++   as published by the Free Software Foundation.
++
++   This program is also distributed with certain software (including
++   but not limited to OpenSSL) that is licensed under separate terms,
++   as designated in a particular file or component or in included license
++   documentation.  The authors of MySQL hereby grant you an additional
++   permission to link the program and your derivative works with the
++   separately licensed software that they have included with MySQL.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License, version 2.0, for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
++
++#ifndef SQL_PACKAGE_PROC_DUMMY_INCLUDED
++#define SQL_PACKAGE_PROC_DUMMY_INCLUDED
++
++/**
++  Dummy proc definition.
++
++  It was used to demostrate how to define a native procedure,
++  so it only take effect on DBUG mode.
++*/
++namespace im {
++
++/* The schema of dummy and dummy_3 proc */
++extern const LEX_CSTRING PROC_DUMMY_SCHEMA;
++
++/**
++  Dummy proc sql command class.
++*/
++class Sql_cmd_proc_dummy : public Sql_cmd_admin_proc {
++ public:
++  explicit Sql_cmd_proc_dummy(THD *thd, mem_root_deque<Item *> *list,
++                              const Proc *proc)
++      : Sql_cmd_admin_proc(thd, list, proc) {}
++
++  /**
++    Implementation of Proc execution body.
++
++    @param[in]    THD           Thread context
++
++    @retval       true          Failure
++    @retval       false         Success
++  */
++  virtual bool pc_execute(THD *thd) override;
++};
++
++/**
++  Dummy proc definition.
++*/
++class Proc_dummy : public Proc {
++  typedef Sql_cmd_proc_dummy Sql_cmd_type;
++
++ public:
++  explicit Proc_dummy(PSI_memory_key key) : Proc(key) {
++    m_result_type = Result_type::RESULT_OK;
++  }
++
++  virtual ~Proc_dummy() {}
++
++  static Proc *instance();
++
++  virtual Sql_cmd *evoke_cmd(THD *thd,
++                             mem_root_deque<Item *> *list) const override;
++
++  virtual const std::string str() const override {
++    return std::string("dummy");
++  }
++};
++
++/**
++  Dummy proc sql command class.
++*/
++class Sql_cmd_proc_dummy_3 : public Sql_cmd_admin_proc {
++ public:
++  explicit Sql_cmd_proc_dummy_3(THD *thd, mem_root_deque<Item *> *list,
++                                const Proc *proc)
++      : Sql_cmd_admin_proc(thd, list, proc) {}
++
++  /**
++    Implementation of Proc execution body.
++
++    @param[in]    THD           Thread context
++
++    @retval       true          Failure
++    @retval       false         Success
++  */
++  virtual bool pc_execute(THD *thd) override;
++
++  /**
++    Send the result set.
++  */
++  virtual void send_result(THD *thd, bool error) override;
++};
++
++/**
++  Dummy_3 proc definition.
++*/
++class Proc_dummy_3 : public Proc {
++ public:
++  typedef Sql_cmd_proc_dummy_3 Sql_cmd_type;
++
++  /**
++    call dummy_3(id bigint, name varchar(100), num decimal);
++     1) id : MYSQL_TYPE_LONGLONG
++     2) name : MYSQL_TYPE_VARCHAR
++     3) num  : MYSQL_TYPE_DECIMAL
++  */
++  enum enum_parameter {
++    PARAMETER_ID_ID = 0,
++    PARAMETER_NAME_ID = 1,
++    PARAMETER_NUM_ID = 2
++  };
++
++  /**
++    dummy_3 result columns list
++  */
++  enum enum_column { COLUMN_NAME = 0, COLUMN_ID, COLUMN_NUM };
++
++  static constexpr const char *column_name = "NAME";
++  static constexpr const char *column_id = "ID";
++  static constexpr const char *column_num = "NUM";
++
++ public:
++  explicit Proc_dummy_3(PSI_memory_key key) : Proc(key) {
++    m_result_type = Result_type::RESULT_SET;
++
++    /* Parameter definition. */
++    m_parameters.assign_at(PARAMETER_ID_ID, MYSQL_TYPE_LONGLONG);
++    m_parameters.assign_at(PARAMETER_NAME_ID, MYSQL_TYPE_VARCHAR);
++    m_parameters.assign_at(PARAMETER_NUM_ID, MYSQL_TYPE_NEWDECIMAL);
++
++    /* Column definition. */
++
++    Column_element element;
++
++    /* Column name */
++    element = {MYSQL_TYPE_VARCHAR, column_name, strlen(column_name), 256};
++    m_columns.assign_at(COLUMN_NAME, element);
++
++    /* Column id */
++    element = {MYSQL_TYPE_LONGLONG, column_id, strlen(column_id), 0};
++    m_columns.assign_at(COLUMN_ID, element);
++
++    /* Column num */
++    element = {MYSQL_TYPE_NEWDECIMAL, column_num, strlen(column_num), 0};
++    m_columns.assign_at(COLUMN_NUM, element);
++  }
++
++  virtual ~Proc_dummy_3() {}
++
++  static Proc *instance();
++
++  virtual Sql_cmd *evoke_cmd(THD *thd,
++                             mem_root_deque<Item *> *list) const override;
++
++  virtual const std::string str() const override {
++    return std::string("dummy_3");
++  }
++};
++} /* namespace im */
++
++#endif
+diff --git a/sql/package/show_native_procedure.cc b/sql/package/show_native_procedure.cc
+new file mode 100644
+index 00000000000..4dfafe67395
+--- /dev/null
++++ b/sql/package/show_native_procedure.cc
+@@ -0,0 +1,202 @@
++/* Copyright (c) 2023, Huawei and/or its affiliates.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License, version 2.0,
++   as published by the Free Software Foundation.
++
++   This program is also distributed with certain software (including
++   but not limited to OpenSSL) that is licensed under separate terms,
++   as designated in a particular file or component or in included license
++   documentation.  The authors of MySQL hereby grant you an additional
++   permission to link the program and your derivative works with the
++   separately licensed software that they have included with MySQL.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License, version 2.0, for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
++
++#include "my_config.h"
++#include "sql/derror.h"  // ER_THD
++
++#include "sql/package/package.h"
++#include "sql/package/package_common.h"
++#include "sql/package/show_native_procedure.h"
++
++#include "sql/protocol.h"
++
++namespace im {
++const LEX_CSTRING ADMIN_PROC_SCHEMA = {C_STRING_WITH_LEN("dbms_admin")};
++
++Proc *Show_native_procedure_proc::instance() {
++  static Proc *proc = new Show_native_procedure_proc();
++  return proc;
++}
++
++Sql_cmd *Show_native_procedure_proc::evoke_cmd(
++    THD *thd, mem_root_deque<Item *> *list) const {
++  return new (thd->mem_root) Sql_cmd_type(thd, list, this);
++}
++
++bool Sql_cmd_show_native_procedure::pc_execute(THD *) {
++  DBUG_ENTER("Sql_cmd_show_native_procedure::pc_execute");
++  DBUG_RETURN(false);
++}
++
++const std::string sql_command_enum_to_string(enum_sql_command e) {
++  switch (e) {
++    case SQLCOM_ADMIN_PROC:
++      return "ADMIN_PROC";
++    default:
++      /* Not allow other sql command other than ADMIN_PROC and TRANS_PROC. */
++      DBUG_ASSERT(0);
++      return "UNKNOWN";
++  }
++}
++
++std::string field_type_enum_to_string(const enum_field_types e) {
++  switch (e) {
++    case MYSQL_TYPE_DECIMAL:
++      return "DECIMAL";
++    case MYSQL_TYPE_TINY:
++      return "TINY";
++    case MYSQL_TYPE_SHORT:
++      return "SHORT";
++    case MYSQL_TYPE_LONG:
++      return "LONG";
++    case MYSQL_TYPE_FLOAT:
++      return "FLOAT";
++    case MYSQL_TYPE_DOUBLE:
++      return "DOUBLE";
++    case MYSQL_TYPE_NULL:
++      return "NULL";
++    case MYSQL_TYPE_TIMESTAMP:
++      return "TIMESTAMP";
++    case MYSQL_TYPE_LONGLONG:
++      return "LONGLONG";
++    case MYSQL_TYPE_INT24:
++      return "INT24";
++    case MYSQL_TYPE_DATE:
++      return "DATE";
++    case MYSQL_TYPE_TIME:
++      return "TIME";
++    case MYSQL_TYPE_DATETIME:
++      return "DATETIME";
++    case MYSQL_TYPE_YEAR:
++      return "YEAR";
++    case MYSQL_TYPE_NEWDATE:
++      return "NEWDATE";
++    case MYSQL_TYPE_VARCHAR:
++      return "VARCHAR";
++    case MYSQL_TYPE_BIT:
++      return "BIT";
++    case MYSQL_TYPE_TIMESTAMP2:
++      return "TIMESTAMP2";
++    case MYSQL_TYPE_DATETIME2:
++      return "DATETIME2";
++    case MYSQL_TYPE_TIME2:
++      return "TIME2";
++    case MYSQL_TYPE_JSON:
++      return "JSON";
++    case MYSQL_TYPE_NEWDECIMAL:
++      return "NEWDECIMAL";
++    case MYSQL_TYPE_ENUM:
++      return "ENUM";
++    case MYSQL_TYPE_SET:
++      return "SET";
++    case MYSQL_TYPE_TINY_BLOB:
++      return "TINY_BLOB";
++    case MYSQL_TYPE_MEDIUM_BLOB:
++      return "MEDIUM_BLOB";
++    case MYSQL_TYPE_LONG_BLOB:
++      return "LONG_BLOB";
++    case MYSQL_TYPE_BLOB:
++      return "BLOB";
++    case MYSQL_TYPE_VAR_STRING:
++      return "VAR_STRING";
++    case MYSQL_TYPE_STRING:
++      return "STRING";
++    case MYSQL_TYPE_GEOMETRY:
++      return "GEOMETRY";
++    default:
++      DBUG_ASSERT(0);
++      return "UNKNOWN";
++  }
++}
++
++void Sql_cmd_show_native_procedure::send_result(THD *thd, bool error) {
++  DBUG_ENTER("Sql_cmd_show_native_procedure::send_result");
++  Protocol *protocol = thd->get_protocol();
++
++  if (error) {
++    DBUG_ASSERT(thd->is_error());
++    DBUG_VOID_RETURN;
++  }
++
++  if (m_proc->send_result_metadata(thd)) DBUG_VOID_RETURN;
++
++  auto all_m_proc_map = Package::instance()->get_all_element<Proc>();
++
++  const Proc *procit;
++  const Sql_cmd *sqlcmdit;
++
++  using mproc_pairkey = Package_element_map<Proc>::key_type;
++  std::set<mproc_pairkey> sorted_proc_schema_name;
++
++  for (auto it = all_m_proc_map->cbegin(); it != all_m_proc_map->cend(); ++it) {
++    sorted_proc_schema_name.insert(
++        mproc_pairkey(it->first.first, it->first.second));
++  }
++
++  for (auto it = sorted_proc_schema_name.begin();
++       it != sorted_proc_schema_name.end(); ++it) {
++    std::string schema_name_str, element_name_str, params_str,
++        sql_command_code_str;
++
++    schema_name_str = it->first;
++    element_name_str = it->second;
++    procit =
++        all_m_proc_map->find(mproc_pairkey(schema_name_str, element_name_str))
++            ->second;
++
++    /**
++      Evoke the sql_cmd object to get sql_command_code,
++      notice that we use nullptr to mock List<Item> *list, so the evoked
++      sql_cmd cann't be called here.
++    */
++    sqlcmdit = procit->evoke_cmd(thd, nullptr);
++    sql_command_code_str =
++        sql_command_enum_to_string(sqlcmdit->sql_command_code());
++
++    auto parameters = procit->get_parameters();
++    std::size_t param_size = parameters->size();
++    if (param_size != 0)
++      params_str = field_type_enum_to_string(parameters->at(0));
++    if (param_size > 1)
++      for (std::size_t ii = 1; ii < param_size; ii++) {
++        params_str += ", ";
++        params_str += field_type_enum_to_string(parameters->at(ii));
++      }
++
++    protocol->start_row();
++    protocol->store_string(schema_name_str.c_str(), schema_name_str.length(),
++                           system_charset_info);
++    protocol->store_string(element_name_str.c_str(), element_name_str.length(),
++                           system_charset_info);
++    protocol->store_string(sql_command_code_str.c_str(),
++                           sql_command_code_str.length(), system_charset_info);
++    protocol->store_string(params_str.c_str(), params_str.length(),
++                           system_charset_info);
++
++    if (protocol->end_row()) DBUG_VOID_RETURN;
++  }
++
++  my_eof(thd);
++  DBUG_VOID_RETURN;
++}
++
++} /* namespace im */
+diff --git a/sql/package/show_native_procedure.h b/sql/package/show_native_procedure.h
+new file mode 100644
+index 00000000000..9b1f1910ba0
+--- /dev/null
++++ b/sql/package/show_native_procedure.h
+@@ -0,0 +1,97 @@
++/* Copyright (c) 2023, Huawei and/or its affiliates.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License, version 2.0,
++   as published by the Free Software Foundation.
++
++   This program is also distributed with certain software (including
++   but not limited to OpenSSL) that is licensed under separate terms,
++   as designated in a particular file or component or in included license
++   documentation.  The authors of MySQL hereby grant you an additional
++   permission to link the program and your derivative works with the
++   separately licensed software that they have included with MySQL.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License, version 2.0, for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
++
++#include "sql/package/proc.h"
++
++class sys_var;
++class THD;
++
++namespace im {
++extern const LEX_CSTRING ADMIN_PROC_SCHEMA;
++
++class Sql_cmd_show_native_procedure : public Sql_cmd_admin_proc {
++ public:
++  explicit Sql_cmd_show_native_procedure(THD *thd, mem_root_deque<Item *> *list,
++                                         const Proc *proc)
++      : Sql_cmd_admin_proc(thd, list, proc) {}
++  /**
++    Implementation of Proc execution body.
++
++    @param[in]    THD           Thread context
++
++    @retval       true          Failure
++    @retval       false         Success
++  */
++  virtual bool pc_execute(THD *thd) override;
++
++  /* Override default send_result */
++  virtual void send_result(THD *thd, bool error) override;
++};
++
++class Show_native_procedure_proc : public Proc, public Disable_copy_base {
++  using Sql_cmd_type = Sql_cmd_show_native_procedure;
++
++  enum enum_column {
++    COLUMN_SCHEMA_NAME = 0,
++    COLUMN_ELEMENT_NAME,
++    PROC_TYPE,
++    PARAMETERS,
++    COLUMN_LAST
++  };
++
++ public:
++  explicit Show_native_procedure_proc(PSI_memory_key key = 0) : Proc(key) {
++    m_result_type = Result_type::RESULT_SET;
++    Column_element elements[COLUMN_LAST] = {
++        {MYSQL_TYPE_VARCHAR, C_STRING_WITH_LEN("SCHEMA_NAME"), 128},
++        {MYSQL_TYPE_VARCHAR, C_STRING_WITH_LEN("PROC_NAME"), 128},
++        {MYSQL_TYPE_VARCHAR, C_STRING_WITH_LEN("PROC_TYPE"), 128},
++        {MYSQL_TYPE_VARCHAR, C_STRING_WITH_LEN("PARAMETERS"), 1024}};
++    for (size_t i = 0; i < COLUMN_LAST; i++) {
++      m_columns.assign_at(i, elements[i]);
++    }
++  }
++
++  /* Singleton instance */
++  static Proc *instance();
++
++  /**
++    Evoke the sql_cmd object for proc.
++  */
++  virtual Sql_cmd *evoke_cmd(THD *thd,
++                             mem_root_deque<Item *> *list) const override;
++
++  virtual ~Show_native_procedure_proc() {}
++
++  /* Proc name */
++  virtual const std::string str() const override {
++    return std::string("show_native_procedure");
++  }
++
++  virtual const std::string qname() const override {
++    std::stringstream ss;
++    ss << im::ADMIN_PROC_SCHEMA.str << "." << str();
++    return ss.str();
++  }
++};
++
++} /* namespace im */
+\ No newline at end of file
+diff --git a/sql/sp.cc b/sql/sp.cc
+index db4ab9e85dc..88364caf12a 100644
+--- a/sql/sp.cc
++++ b/sql/sp.cc
+@@ -100,6 +100,8 @@
+ #include "sql_string.h"
+ #include "template_utils.h"
+ 
++#include "sql/package/package_interface.h"
++
+ class sp_rcontext;
+ 
+ /* Used in error handling only */
+@@ -608,17 +610,21 @@ static bool check_routine_already_exists(THD *thd, sp_head *sp,
+   dd::cache::Dictionary_client::Auto_releaser releaser(thd->dd_client());
+   bool error;
+   const dd::Routine *sr;
++  bool exists = false;
+   if (sp->m_type == enum_sp_type::FUNCTION)
+     error = thd->dd_client()->acquire<dd::Function>(sp->m_db.str,
+                                                     sp->m_name.str, &sr);
+-  else
++  else {
+     error = thd->dd_client()->acquire<dd::Procedure>(sp->m_db.str,
+                                                      sp->m_name.str, &sr);
++
++    exists = im::exist_native_proc(sp->m_db.str, sp->m_name.str);
++  }
+   if (error) {
+     // Error is reported by DD API framework.
+     return true;
+   }
+-  if (sr == nullptr) {
++  if (sr == nullptr && !exists) {
+     // Routine with same name does not exist.
+     return false;
+   }
+@@ -2390,6 +2396,7 @@ uint sp_get_flags_for_command(LEX *lex) {
+     case SQLCOM_ALTER_RESOURCE_GROUP:
+     case SQLCOM_DROP_RESOURCE_GROUP:
+     case SQLCOM_ALTER_TABLESPACE:
++    case SQLCOM_ADMIN_PROC:
+       flags = sp_head::HAS_COMMIT_OR_ROLLBACK;
+       break;
+     default:
+diff --git a/sql/sql_parse.cc b/sql/sql_parse.cc
+index 4adf1433170..75d2e1c3180 100644
+--- a/sql/sql_parse.cc
++++ b/sql/sql_parse.cc
+@@ -1159,6 +1159,9 @@ void init_sql_command_flags() {
+   sql_command_flags[SQLCOM_RENAME_USER] |= CF_REQUIRE_ACL_CACHE;
+   sql_command_flags[SQLCOM_SHOW_GRANTS] |= CF_REQUIRE_ACL_CACHE;
+   sql_command_flags[SQLCOM_SET_PASSWORD] |= CF_REQUIRE_ACL_CACHE;
++
++  /* Native package proc flags */
++  sql_command_flags[SQLCOM_ADMIN_PROC] = CF_AUTO_COMMIT_TRANS;
+ }
+ 
+ bool sqlcom_can_generate_row_events(enum enum_sql_command command) {
+@@ -4716,7 +4719,8 @@ int mysql_execute_command(THD *thd, bool first_level) {
+     case SQLCOM_EXPLAIN_OTHER:
+     case SQLCOM_RESTART_SERVER:
+     case SQLCOM_CREATE_SRS:
+-    case SQLCOM_DROP_SRS: {
++    case SQLCOM_DROP_SRS:
++    case SQLCOM_ADMIN_PROC: {
+       assert(lex->m_sql_cmd != nullptr);
+ 
+       res = lex->m_sql_cmd->execute(thd);
+diff --git a/sql/sql_yacc.yy b/sql/sql_yacc.yy
+index 239f904d314..334fc004f7a 100644
+--- a/sql/sql_yacc.yy
++++ b/sql/sql_yacc.yy
+@@ -170,6 +170,8 @@ Note: YYTHD is passed as an argument to yyparse(), and subsequently to yylex().
+ #include "thr_lock.h"
+ #include "violite.h"
+ 
++#include "sql/package/package_interface.h"  // find_native_proc_and_evoke
++
+ /* this is to get the bison compilation windows warnings out */
+ #ifdef _MSC_VER
+ /* warning C4065: switch statement contains 'default' but no 'case' labels */
+@@ -3981,7 +3983,10 @@ sp_suid:
+ call_stmt:
+           CALL_SYM sp_name opt_paren_expr_list
+           {
+-            $$= NEW_PTN PT_call($2, $3);
++            if (($$ = im::find_native_proc_and_evoke(YYTHD, $2, $3))) {
++            } else {
++              $$ = NEW_PTN PT_call($2, $3);
++            }
+           }
+         ;
+ 
+-- 
+2.23.0
+

@@ -1,0 +1,442 @@
+--source include/have_only_dstore.inc
+use test;
+set rds_empty_redundant_check_in_range_scan=false;
+
+
+create table t(id int, a int, b int, c int,key(id),key(a ,b ,c)) engine=Dstore;
+insert into t values(0,0,0,0);
+insert into t values(-1,-1,-1,-1);
+insert into t values(-2,-2,-2,-2);
+insert into t values(1,1,1,1);
+insert into t values(2,2,2,2);
+insert into t values(3,3,3,3);
+insert into t values(4,3,4,4);
+insert into t values(5,4,5,5);
+insert into t values(6,4,6,6);
+insert into t values(7,7,7,7);
+insert into t values(8,8,8,8);
+insert into t values(9,8,9,9);
+insert into t values(10,null,null,null);
+insert into t values(11,null,1,1);
+insert into t values(12,null,2,2);
+insert into t values(13,null,3,3);
+insert into t values(14,1,null,1);
+insert into t values(15,2,null,2);
+insert into t values(16,3,null,3);
+insert into t values(17,1,1,null);
+insert into t values(18,2,2,null);
+insert into t values(19,3,3,null);
+insert into t values(20,null,null,1);
+insert into t values(21,null,null,2);
+insert into t values(22,null,null,3);
+
+--disable_query_log
+--disable_result_log
+ANALYZE TABLE t UPDATE HISTOGRAM ON id,a,b,c;
+ANALYZE TABLE t;
+--enable_query_log
+--enable_result_log
+
+--replace_column 7 #
+show index from t;
+set optimizer_switch="index_condition_pushdown=on";
+
+#test select null value
+#the first col is null
+select * from t force index(a) where a is null order by id;
+select * from t force index(a) where a is null and b > 2 order by id;
+select * from t force index(a) where a is null and b < 2 order by id;
+
+#the first two cols is null
+select * from t force index(a) where a is null and b is null order by id;
+select * from t force index(a) where a is null and b is null and c > 0 order by id;
+select * from t force index(a) where a is null and b is null and c < 5 order by id;
+
+#all of three cols is null
+select * from t force index(a) where a is null and b is null and c is null order by id;
+
+#the second col is null
+select * from t force index(a) where a = 2 and b is null and c > 0 order by id;
+
+#the third col is null
+select * from t force index(a) where a = 2 and b = 2 and c is null order by id;
+
+#test( < or is null) case
+select * from t force index(a) where a < 4 or a is null order by id;
+select * from t force index(a) where a = 2 and (b < 4 or b is null) order by id;
+select * from t force index(a) where a = 2 and b = 2 and (c < 4 or c is null) order by id;
+select * from t force index(a) where a is not null or a is null order by id;
+
+#test only use the first col in index
+select * from t force index(a) where a = 3 order by id;
+select * from t force index(a) where a between 3 and 6 order by id;
+select * from t force index(a) where a > 6 order by id;
+select * from t force index(a) where a >= 7 order by id;
+select * from t force index(a) where a < 3 order by id;
+select * from t force index(a) where a >= -1 order by id;
+select * from t force index(a) where a <= 3 order by id;
+
+
+#test only use the first two cols in index
+select * from t force index(a) where a = 3 and b = 3 order by id;
+select * from t force index(a) where a = 3 and b < 4 order by id;
+select * from t force index(a) where a = 3 and b <= 4 order by id;
+select * from t force index(a) where a = 3 and b > 3 order by id;
+select * from t force index(a) where a = 3 and b >= 3 order by id;
+select * from t force index(a) where a = -2 and b < 1 order by id;
+
+#test use all of the cols in index
+select * from t force index(a) where a = 3 and b = 3 and c = 3 order by id;
+select * from t force index(a) where a = 3 and b = 3 and c < 5 order by id;
+select * from t force index(a) where a = 3 and b = 3 and c > 2 order by id;
+select * from t force index(a) where a = 3 and b = 3 and c > 5 order by id;
+select * from t force index(a) where a = 3 and b = 3 and c < 2 order by id;
+select * from t force index(a) where a = -2 and b = -2 and c < 1 order by id;
+
+##########test ascend index backward scan
+#test select null value
+#the first col is null
+select * from t force index(a) where a is null order by a desc;
+select * from t force index(a) where a is null and b > 2 order by b desc;
+select * from t force index(a) where a is null and b < 2 order by b desc;
+
+#the first two cols is null
+select * from t force index(a) where a is null and b is null order by b desc;
+select * from t force index(a) where a is null and b is null and c > 0 order by c desc;
+select * from t force index(a) where a is null and b is null and c < 5 order by c desc;
+
+#all of three cols is null
+select * from t force index(a) where a is null and b is null and c is null order by c desc;
+
+#the second col is null
+select * from t force index(a) where a = 2 and b is null and c > 0 order by c desc;
+
+#the third col is null
+select * from t force index(a) where a = 2 and b = 2 and c is null order by c desc;
+
+#test( < or is null) case
+select * from t force index(a) where a < 4 or a is null order by a desc;
+select * from t force index(a) where a = 2 and (b < 4 or b is null) order by b desc;
+select * from t force index(a) where a = 2 and b = 2 and (c < 4 or c is null) order by c desc;
+select * from t force index(a) where a is not null or a is null order by a desc;
+
+#test only use the first col in index
+select * from t force index(a) where a = 3 order by a desc;
+select * from t force index(a) where a between 3 and 6 order by a desc;
+select * from t force index(a) where a > 6 order by a desc;
+select * from t force index(a) where a >= 7 order by a desc;
+select * from t force index(a) where a < 3 order by a desc;
+select * from t force index(a) where a >= -1 order by a desc;
+select * from t force index(a) where a <= 3 order by a desc;
+
+
+#test only use the first two cols in index
+select * from t force index(a) where a = 3 and b = 3 order by b desc;
+select * from t force index(a) where a = 3 and b < 4 order by b desc;
+select * from t force index(a) where a = 3 and b <= 4 order by b desc;
+select * from t force index(a) where a = 3 and b > 3 order by b desc;
+select * from t force index(a) where a = 3 and b >= 3 order by b desc;
+select * from t force index(a) where a = -2 and b < 1 order by b desc;
+
+#test use all of the cols in index
+select * from t force index(a) where a = 3 and b = 3 and c = 3 order by c desc;
+select * from t force index(a) where a = 3 and b = 3 and c < 5 order by c desc;
+select * from t force index(a) where a = 3 and b = 3 and c > 2 order by c desc;
+select * from t force index(a) where a = 3 and b = 3 and c > 5 order by c desc;
+select * from t force index(a) where a = 3 and b = 3 and c < 2 order by c desc;
+select * from t force index(a) where a = -2 and b = -2 and c < 1 order by c desc;
+
+#test only read a part of key cases
+select b from t force index(a) where a = 3 and b = 3;
+select b from t force index(a) where a = 3 and b < 4;
+select b from t force index(a) where a = 3 and b <= 4;
+select b from t force index(a) where a = 3 and b > 3;
+select b from t force index(a) where a = 3 and b >= 3;
+select b from t force index(a) where a = -2 and b < 1;
+
+select b from t force index(a) where a is null and b is null;
+select b from t force index(a) where a is null and b is null and c > 0;
+select b from t force index(a) where a is null and b is null and c < 5;
+
+##########test reverse index
+create table t1(id int, a int, b int, c int,key(id),key(a desc,b asc,c desc)) engine=Dstore;
+insert into t1 values(0,0,0,0);
+insert into t1 values(-1,-1,-1,-1);
+insert into t1 values(-2,-2,-2,-2);
+insert into t1 values(1,1,1,1);
+insert into t1 values(2,2,2,2);
+insert into t1 values(3,3,3,3);
+insert into t1 values(4,3,4,4);
+insert into t1 values(5,4,5,5);
+insert into t1 values(6,4,6,6);
+insert into t1 values(7,7,7,7);
+insert into t1 values(8,8,8,8);
+insert into t1 values(9,8,9,9);
+insert into t1 values(10,null,null,null);
+insert into t1 values(11,null,1,1);
+insert into t1 values(12,null,2,2);
+insert into t1 values(13,null,3,3);
+insert into t1 values(14,1,null,1);
+insert into t1 values(15,2,null,2);
+insert into t1 values(16,3,null,3);
+insert into t1 values(17,1,1,null);
+insert into t1 values(18,2,2,null);
+insert into t1 values(19,3,3,null);
+insert into t1 values(20,null,null,1);
+insert into t1 values(21,null,null,2);
+insert into t1 values(22,null,null,3);
+
+--disable_query_log
+--disable_result_log
+ANALYZE TABLE t1 UPDATE HISTOGRAM ON id,a,b,c;
+ANALYZE TABLE t1;
+--enable_query_log
+--enable_result_log
+
+--replace_column 7 #
+show index from t1;
+
+#test select null value
+#the first col is null
+select * from t1 force index(a) where a is null order by id;
+select * from t1 force index(a) where a is null and b > 2 order by id;
+select * from t1 force index(a) where a is null and b < 2 order by id;
+
+#the first two cols is null
+select * from t1 force index(a) where a is null and b is null order by id;
+select * from t1 force index(a) where a is null and b is null and c > 0 order by id;
+select * from t1 force index(a) where a is null and b is null and c < 5 order by id;
+
+#all of three cols is null
+select * from t1 force index(a) where a is null and b is null and c is null order by id;
+
+#the second col is null
+select * from t1 force index(a) where a = 2 and b is null and c > 0 order by id;
+
+#the third col is null
+select * from t1 force index(a) where a = 2 and b = 2 and c is null order by id;
+
+#test( < or is null) case
+select * from t1 force index(a) where a < 4 or a is null order by id;
+select * from t1 force index(a) where a = 2 and (b < 4 or b is null) order by id;
+select * from t1 force index(a) where a = 2 and b = 2 and (c < 4 or c is null) order by id;
+select * from t1 force index(a) where a is not null or a is null order by id;
+
+#test only use the first col in index
+select * from t1 force index(a) where a = 3 order by id;
+select * from t1 force index(a) where a between 3 and 6 order by id;
+select * from t1 force index(a) where a > 6 order by id;
+select * from t1 force index(a) where a >= 7 order by id;
+select * from t1 force index(a) where a < 3 order by id;
+select * from t1 force index(a) where a >= -1 order by id;
+select * from t1 force index(a) where a <= 3 order by id;
+
+#test only use the first two cols in index
+select * from t1 force index(a) where a = 3 and b = 3 order by id;
+select * from t1 force index(a) where a = 3 and b < 4 order by id;
+select * from t1 force index(a) where a = 3 and b <= 4 order by id;
+select * from t1 force index(a) where a = 3 and b > 3 order by id;
+select * from t1 force index(a) where a = 3 and b >= 3 order by id;
+select * from t1 force index(a) where a = -2 and b < 1 order by id;
+
+#test use all of the cols in index
+select * from t1 force index(a) where a = 3 and b = 3 and c = 3 order by id;
+select * from t1 force index(a) where a = 3 and b = 3 and c < 5 order by id;
+select * from t1 force index(a) where a = 3 and b = 3 and c > 2 order by id;
+select * from t1 force index(a) where a = 3 and b = 3 and c > 5 order by id;
+select * from t1 force index(a) where a = 3 and b = 3 and c < 2 order by id;
+select * from t1 force index(a) where a = -2 and b = -2 and c < 1 order by id;
+
+##########test descend index backward scan
+#test select null value
+#the first col is null
+select * from t1 force index(a) where a is null order by a;
+select * from t1 force index(a) where a is null and b > 2 order by b;
+select * from t1 force index(a) where a is null and b < 2 order by b;
+
+#the first two cols is null
+select * from t1 force index(a) where a is null and b is null order by b;
+select * from t1 force index(a) where a is null and b is null and c > 0 order by c;
+select * from t1 force index(a) where a is null and b is null and c < 5 order by c;
+
+#all of three cols is null
+select * from t1 force index(a) where a is null and b is null and c is null order by c;
+
+#the second col is null
+select * from t1 force index(a) where a = 2 and b is null and c > 0 order by c;
+
+#the third col is null
+select * from t1 force index(a) where a = 2 and b = 2 and c is null order by c;
+
+#test( < or is null) case
+select * from t1 force index(a) where a < 4 or a is null order by a;
+select * from t1 force index(a) where a = 2 and (b < 4 or b is null) order by b;
+select * from t1 force index(a) where a = 2 and b = 2 and (c < 4 or c is null) order by c;
+select * from t1 force index(a) where a is not null or a is null order by a;
+
+#test only use the first col in index
+select * from t1 force index(a) where a = 3 order by a;
+select * from t1 force index(a) where a between 3 and 6 order by a;
+select * from t1 force index(a) where a > 6 order by a;
+select * from t1 force index(a) where a >= 7 order by a;
+select * from t1 force index(a) where a < 3 order by a;
+select * from t1 force index(a) where a >= -1 order by a;
+select * from t1 force index(a) where a <= 3 order by a;
+
+
+#test only use the first two cols in index
+select * from t1 force index(a) where a = 3 and b = 3 order by b;
+select * from t1 force index(a) where a = 3 and b < 4 order by b;
+select * from t1 force index(a) where a = 3 and b <= 4 order by b;
+select * from t1 force index(a) where a = 3 and b > 3 order by b;
+select * from t1 force index(a) where a = 3 and b >= 3 order by b;
+select * from t1 force index(a) where a = -2 and b < 1 order by b;
+
+#test use all of the cols in index
+select * from t1 force index(a) where a = 3 and b = 3 and c = 3 order by c;
+select * from t1 force index(a) where a = 3 and b = 3 and c < 5 order by c;
+select * from t1 force index(a) where a = 3 and b = 3 and c > 2 order by c;
+select * from t1 force index(a) where a = 3 and b = 3 and c > 5 order by c;
+select * from t1 force index(a) where a = 3 and b = 3 and c < 2 order by c;
+select * from t1 force index(a) where a = -2 and b = -2 and c < 1 order by c;
+
+#test only read a part of key cases
+select b from t1 force index(a) where a = 3 and b = 3;
+select b from t1 force index(a) where a = 3 and b < 4;
+select b from t1 force index(a) where a = 3 and b <= 4;
+select b from t1 force index(a) where a = 3 and b > 3;
+select b from t1 force index(a) where a = 3 and b >= 3;
+select b from t1 force index(a) where a = -2 and b < 1;
+
+select b from t1 force index(a) where a is null and b is null;
+select b from t1 force index(a) where a is null and b is null and c > 0;
+select b from t1 force index(a) where a is null and b is null and c < 5;
+
+#test index include int and char
+create table t2(id int, a int, b char(5), key(id),key(a,b)) engine=Dstore;
+insert into t2 values(1, 1, 'a');
+insert into t2 values(2, 2, 'b');
+insert into t2 values(3, 3, 'c');
+insert into t2 values(4, 4, 'd');
+insert into t2 values(5, 5, 'e');
+
+--disable_query_log
+--disable_result_log
+ANALYZE TABLE t2 UPDATE HISTOGRAM ON id,a,b;
+ANALYZE TABLE t2;
+--enable_query_log
+--enable_result_log
+
+select * from t2 where a = 2 and b = 'b';
+select * from t2 where a > 2 and b = 'e';
+
+##########test records_in_range
+#test select null value
+#the first col is null
+explain select * from t force index(a) where a is null order by id;
+explain select * from t force index(a) where a is null and b > 2 order by id;
+explain select * from t force index(a) where a is null and b < 2 order by id;
+
+#the first two cols is null
+explain select * from t force index(a) where a is null and b is null order by id;
+explain select * from t force index(a) where a is null and b is null and c > 0 order by id;
+explain select * from t force index(a) where a is null and b is null and c < 5 order by id;
+
+#all of three cols is null
+explain select * from t force index(a) where a is null and b is null and c is null order by id;
+
+#the second col is null
+explain select * from t force index(a) where a = 2 and b is null and c > 0 order by id;
+
+#the third col is null
+explain select * from t force index(a) where a = 2 and b = 2 and c is null order by id;
+
+#test( < or is null) case
+explain select * from t force index(a) where a < 4 or a is null order by id;
+explain select * from t force index(a) where a = 2 and (b < 4 or b is null) order by id;
+explain select * from t force index(a) where a = 2 and b = 2 and (c < 4 or c is null) order by id;
+explain select * from t force index(a) where a is not null or a is null order by id;
+
+#test only use the first col in index
+explain select * from t force index(a) where a = 3 order by id;
+explain select * from t force index(a) where a between 3 and 6 order by id;
+explain select * from t force index(a) where a > 6 order by id;
+explain select * from t force index(a) where a >= 7 order by id;
+explain select * from t force index(a) where a < 3 order by id;
+explain select * from t force index(a) where a >= -1 order by id;
+explain select * from t force index(a) where a <= 3 order by id;
+
+
+#test only use the first two cols in index
+explain select * from t force index(a) where a = 3 and b = 3 order by id;
+explain select * from t force index(a) where a = 3 and b < 4 order by id;
+explain select * from t force index(a) where a = 3 and b <= 4 order by id;
+explain select * from t force index(a) where a = 3 and b > 3 order by id;
+explain select * from t force index(a) where a = 3 and b >= 3 order by id;
+explain select * from t force index(a) where a = -2 and b < 1 order by id;
+
+#test use all of the cols in index
+explain select * from t force index(a) where a = 3 and b = 3 and c = 3 order by id;
+explain select * from t force index(a) where a = 3 and b = 3 and c < 5 order by id;
+explain select * from t force index(a) where a = 3 and b = 3 and c > 2 order by id;
+explain select * from t force index(a) where a = 3 and b = 3 and c > 5 order by id;
+explain select * from t force index(a) where a = 3 and b = 3 and c < 2 order by id;
+explain select * from t force index(a) where a = -2 and b = -2 and c < 1 order by id;
+
+#test select null value
+#the first col is null
+explain select * from t1 force index(a) where a is null order by id;
+explain select * from t1 force index(a) where a is null and b > 2 order by id;
+explain select * from t1 force index(a) where a is null and b < 2 order by id;
+
+#the first two cols is null
+explain select * from t1 force index(a) where a is null and b is null order by id;
+explain select * from t1 force index(a) where a is null and b is null and c > 0 order by id;
+explain select * from t1 force index(a) where a is null and b is null and c < 5 order by id;
+
+#all of three cols is null
+explain select * from t1 force index(a) where a is null and b is null and c is null order by id;
+
+#the second col is null
+explain select * from t1 force index(a) where a = 2 and b is null and c > 0 order by id;
+
+#the third col is null
+explain select * from t1 force index(a) where a = 2 and b = 2 and c is null order by id;
+
+#test( < or is null) case
+explain select * from t1 force index(a) where a < 4 or a is null order by id;
+explain select * from t1 force index(a) where a = 2 and (b < 4 or b is null) order by id;
+explain select * from t1 force index(a) where a = 2 and b = 2 and (c < 4 or c is null) order by id;
+explain select * from t1 force index(a) where a is not null or a is null order by id;
+
+#test only use the first col in index
+explain select * from t1 force index(a) where a = 3 order by id;
+explain select * from t1 force index(a) where a between 3 and 6 order by id;
+explain select * from t1 force index(a) where a > 6 order by id;
+explain select * from t1 force index(a) where a >= 7 order by id;
+explain select * from t1 force index(a) where a < 3 order by id;
+explain select * from t1 force index(a) where a >= -1 order by id;
+explain select * from t1 force index(a) where a <= 3 order by id;
+
+
+#test only use the first two cols in index
+explain select * from t1 force index(a) where a = 3 and b = 3 order by id;
+explain select * from t1 force index(a) where a = 3 and b < 4 order by id;
+explain select * from t1 force index(a) where a = 3 and b <= 4 order by id;
+explain select * from t1 force index(a) where a = 3 and b > 3 order by id;
+explain select * from t1 force index(a) where a = 3 and b >= 3 order by id;
+explain select * from t1 force index(a) where a = -2 and b < 1 order by id;
+
+#test use all of the cols in index
+explain select * from t1 force index(a) where a = 3 and b = 3 and c = 3 order by id;
+explain select * from t1 force index(a) where a = 3 and b = 3 and c < 5 order by id;
+explain select * from t1 force index(a) where a = 3 and b = 3 and c > 2 order by id;
+explain select * from t1 force index(a) where a = 3 and b = 3 and c > 5 order by id;
+explain select * from t1 force index(a) where a = 3 and b = 3 and c < 2 order by id;
+explain select * from t1 force index(a) where a = -2 and b = -2 and c < 1 order by id;
+--disable_result_log
+--disable_query_log
+set rds_empty_redundant_check_in_range_scan=true;
+drop table t2;
+drop table t1;
+drop table t;

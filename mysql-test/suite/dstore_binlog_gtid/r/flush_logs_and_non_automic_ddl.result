@@ -1,0 +1,117 @@
+#test create database if not exists 
+set debug = '+d,sleep_before_update_gtid';
+create database if not exists test1;
+create database if not exists test1;;
+flush logs;
+Warnings:
+Note	1007	Can't create database 'test1'; database exists
+include/show_binlog_events.inc
+Log_name	Pos	Event_type	Server_id	End_log_pos	Info
+binlog.000002	#	Previous_gtids	#	#	uuid:1-2
+#test drop database if exists 
+drop database if exists test1;
+drop database if exists test1;;
+flush logs;
+Warnings:
+Note	1008	Can't drop database 'test1'; database doesn't exist
+include/show_binlog_events.inc
+Log_name	Pos	Event_type	Server_id	End_log_pos	Info
+binlog.000003	#	Previous_gtids	#	#	uuid:1-4
+#test create event if not exists 
+create table app_logs (
+id int auto_increment primary key,
+log_message text,
+created_at datetime
+);
+create event if not exists cleanup_old_logs  on schedule every 1 day  do delete from app_logs where created_at < date_sub(now(), interval 30 day);
+create event if not exists cleanup_old_logs  on schedule every 1 day  do delete from app_logs where created_at < date_sub(now(), interval 30 day);;
+flush logs;
+Warnings:
+Note	1537	Event 'cleanup_old_logs' already exists
+include/show_binlog_events.inc
+Log_name	Pos	Event_type	Server_id	End_log_pos	Info
+binlog.000004	#	Previous_gtids	#	#	uuid:1-7
+#test drop event if exists 
+drop event if exists cleanup_old_logs;
+drop event if exists cleanup_old_logs;;
+flush logs;
+Warnings:
+Note	1305	Event cleanup_old_logs does not exist
+include/show_binlog_events.inc
+Log_name	Pos	Event_type	Server_id	End_log_pos	Info
+binlog.000005	#	Previous_gtids	#	#	uuid:1-9
+drop table app_logs;
+#test create func if not exists 
+create function if not exists f1() returns int return 2;
+create function if not exists f1() returns int return 2;;
+flush logs;
+Warnings:
+Note	1304	FUNCTION f1 already exists
+include/show_binlog_events.inc
+Log_name	Pos	Event_type	Server_id	End_log_pos	Info
+binlog.000006	#	Previous_gtids	#	#	uuid:1-12
+#test drop func if exists 
+drop function if exists f1;
+drop function if exists f1;;
+flush logs;
+Warnings:
+Note	1305	FUNCTION test.f1 does not exist
+include/show_binlog_events.inc
+Log_name	Pos	Event_type	Server_id	End_log_pos	Info
+binlog.000007	#	Previous_gtids	#	#	uuid:1-14
+#test create procedure if not exists 
+create procedure if not exists f1() select 1;
+create procedure if not exists f1() select 1;;
+flush logs;
+Warnings:
+Note	1304	PROCEDURE f1 already exists
+include/show_binlog_events.inc
+Log_name	Pos	Event_type	Server_id	End_log_pos	Info
+binlog.000008	#	Previous_gtids	#	#	uuid:1-16
+#test drop procedure if exists 
+drop procedure if exists f1;
+drop procedure if exists f1;;
+flush logs;
+Warnings:
+Note	1305	PROCEDURE test.f1 does not exist
+include/show_binlog_events.inc
+Log_name	Pos	Event_type	Server_id	End_log_pos	Info
+binlog.000009	#	Previous_gtids	#	#	uuid:1-18
+#test create table if not exists 
+create table if not exists t(id int);
+create table if not exists t(id int);;
+flush logs;
+Warnings:
+Note	1050	Table 't' already exists
+include/show_binlog_events.inc
+Log_name	Pos	Event_type	Server_id	End_log_pos	Info
+binlog.000010	#	Previous_gtids	#	#	uuid:1-20
+#test drop table if exists 
+drop table if exists t;
+drop table if exists t;;
+flush logs;
+Warnings:
+Note	1051	Unknown table 'test.t'
+include/show_binlog_events.inc
+Log_name	Pos	Event_type	Server_id	End_log_pos	Info
+binlog.000011	#	Previous_gtids	#	#	uuid:1-22
+#test create trigger if not exists 
+create table t1 (a int);
+create trigger if not exists t1_bi before insert on t1 for each row set @a := 1;
+create trigger if not exists t1_bi before insert on t1 for each row set @a := 1;
+flush logs;
+Warnings:
+Note	4099	Trigger 't1_bi' already exists on the table 'test'.'t1'.
+include/show_binlog_events.inc
+Log_name	Pos	Event_type	Server_id	End_log_pos	Info
+binlog.000012	#	Previous_gtids	#	#	uuid:1-25
+#test drop trigger if exists 
+drop trigger if exists t1_bi;
+drop trigger if exists t1_bi;;
+flush logs;
+Warnings:
+Note	1360	Trigger does not exist
+include/show_binlog_events.inc
+Log_name	Pos	Event_type	Server_id	End_log_pos	Info
+binlog.000013	#	Previous_gtids	#	#	uuid:1-27
+drop table t1;

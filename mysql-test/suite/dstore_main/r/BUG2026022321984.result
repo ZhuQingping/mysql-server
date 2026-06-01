@@ -1,0 +1,275 @@
+# 
+# Test-1:
+# Indexed varchar size growed but length under the threshold(910)
+# with no explicit ALGORITHM;
+# Expect no rebuild.
+#
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+c1 VARCHAR(200),
+KEY idx_1(c1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+ALTER TABLE t1 MODIFY COLUMN c1 VARCHAR(201);
+# Expect DROP_SEGMENT_LOG not found(no rebuild)
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" not found
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+COLUMN_NAME	CHARACTER_MAXIMUM_LENGTH
+c1	201
+id	NULL
+DROP TABLE t1;
+#
+# Test-2:
+# Indexed virtual varchar size growed but length under the threshold(910)
+# with no explicit ALGORITHM;
+# Expect no rebuild.
+#
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+c1 VARCHAR(200),
+vc1 VARCHAR(200) GENERATED ALWAYS AS (c1) VIRTUAL,
+KEY vidx_1(vc1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+ALTER TABLE t1 MODIFY COLUMN vc1 VARCHAR(201) GENERATED ALWAYS AS (c1) VIRTUAL;
+# Expect DROP_SEGMENT_LOG not found(no rebuild)
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" not found
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+COLUMN_NAME	CHARACTER_MAXIMUM_LENGTH
+c1	200
+id	NULL
+vc1	201
+DROP TABLE t1;
+#
+# Test-3:
+# Indexed varchar size growed + renamed but length under the threshold(910)
+# with no explicit ALGORITHM;
+# Expect no rebuild.
+#
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+c1 VARCHAR(200),
+KEY idx_1(c1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+ALTER TABLE t1 CHANGE COLUMN c1 c1_new VARCHAR(201);
+# Expect DROP_SEGMENT_LOG not found(no rebuild)
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" not found
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+COLUMN_NAME	CHARACTER_MAXIMUM_LENGTH
+c1_new	201
+id	NULL
+DROP TABLE t1;
+#
+# Test-4:
+# Prefix-indexed varchar size growed but key part length unchanged
+# with no explicit ALGORITHM;
+# Expect no rebuild.
+#
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+c1 VARCHAR(226),
+KEY pidx_1(c1(226))
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+ALTER TABLE t1 MODIFY COLUMN c1 VARCHAR(227);
+# Expect DROP_SEGMENT_LOG not found(no rebuild)
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" found 3 times
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+COLUMN_NAME	CHARACTER_MAXIMUM_LENGTH
+c1	227
+id	NULL
+DROP TABLE t1;
+#
+# Test-5:
+# Indexed varchar growed and length beyond the threshold(910)
+# with no explicit ALGORITHM;
+# Expect rebuild.
+#
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+c1 VARCHAR(227),
+KEY idx_1(c1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+ALTER TABLE t1 MODIFY COLUMN c1 VARCHAR(228);
+# Expect found 3 times (rebuild table)
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" found 3 times
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+COLUMN_NAME	CHARACTER_MAXIMUM_LENGTH
+c1	228
+id	NULL
+DROP TABLE t1;
+#
+# Test-6:
+# Indexed varchar growed and length beyond the threshold(910)
+# with explicit ALGORITHM=INSTANT;
+# Expect no rebuild.
+#
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+c1 VARCHAR(227),
+KEY idx_1(c1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+ALTER TABLE t1 MODIFY COLUMN c1 VARCHAR(228), ALGORITHM=INSTANT;
+# Expect DROP_SEGMENT_LOG not found(no rebuild for explicit ALGORITHM=INSTANT)
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" not found
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+COLUMN_NAME	CHARACTER_MAXIMUM_LENGTH
+c1	228
+id	NULL
+DROP TABLE t1;
+#
+# Test-7:
+# Indexed virtual varchar growed and length beyond the threshold(910)
+# with no explicit ALGORITHM;
+# Expect rebuild.
+#
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+c1 VARCHAR(227),
+vc1 VARCHAR(227) GENERATED ALWAYS AS (c1) VIRTUAL,
+KEY vidx_1(vc1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+ALTER TABLE t1 MODIFY COLUMN vc1 VARCHAR(228) GENERATED ALWAYS AS (c1) VIRTUAL;
+# Expect found 3 times (rebuild table)
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" found 3 times
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+COLUMN_NAME	CHARACTER_MAXIMUM_LENGTH
+c1	227
+id	NULL
+vc1	228
+DROP TABLE t1;
+#
+# Test-8:
+# Base column varchar growed but Indexed virtual varchar not changed while size beyond threshold(910)
+# with no explicit ALGORITHM;
+# Expect no rebuild.
+#
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+c1 VARCHAR(227),
+vc1 VARCHAR(227) GENERATED ALWAYS AS (c1) VIRTUAL,
+KEY vidx_1(vc1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+ALTER TABLE t1 MODIFY COLUMN c1 VARCHAR(228);
+# Expect DROP_SEGMENT_LOG not found(no rebuild)
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" not found
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+COLUMN_NAME	CHARACTER_MAXIMUM_LENGTH
+c1	228
+id	NULL
+vc1	227
+DROP TABLE t1;
+#
+# Test-9:
+# Indexed varchar growed and length beyond the threshold(910), but it becomes non-indexed
+# Expect no rebuild.
+#
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+c1 VARCHAR(227),
+KEY idx_1(c1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+ALTER TABLE t1 DROP INDEX idx_1, MODIFY COLUMN c1 VARCHAR(228);
+# Expect DROP_SEGMENT_LOG not found(no rebuild)
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" found 3 times
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+COLUMN_NAME	CHARACTER_MAXIMUM_LENGTH
+c1	228
+id	NULL
+DROP TABLE t1;
+#
+# Test-10:
+# Indexed varchar shorten
+# Expect rebuild.
+#
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+c1 VARCHAR(227),
+KEY idx_1(c1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+ALTER TABLE t1 MODIFY COLUMN c1 VARCHAR(226);
+# Expect found 3 times (rebuild table)
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" found 3 times
+ALTER TABLE t1 MODIFY COLUMN c1 VARCHAR(225), ALGORITHM=INSTANT;
+ERROR 0A000: ALGORITHM=INSTANT is not supported. Reason: Need to rebuild the table to change column type. Try ALGORITHM=COPY/INPLACE.
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+COLUMN_NAME	CHARACTER_MAXIMUM_LENGTH
+c1	226
+id	NULL
+DROP TABLE t1;
+#
+# Test-11:
+# Virtual indexed varchar shorten
+# Expect rebuild.
+#
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+c1 VARCHAR(227),
+vc1 VARCHAR(227) GENERATED ALWAYS AS (c1) VIRTUAL,
+KEY vidx_1(vc1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+ALTER TABLE t1 MODIFY COLUMN c1 VARCHAR(226);
+# Expect found 3 times (rebuild table)
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" found 3 times
+ALTER TABLE t1 MODIFY COLUMN vc1 VARCHAR(225) GENERATED ALWAYS AS (c1) VIRTUAL, ALGORITHM=INSTANT;
+ERROR 0A000: ALGORITHM=INSTANT is not supported for this operation. Try ALGORITHM=COPY/INPLACE.
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+COLUMN_NAME	CHARACTER_MAXIMUM_LENGTH
+c1	226
+id	NULL
+vc1	227
+DROP TABLE t1;
+#
+# Test-12:
+# CHANGE COLUMN reorders indexed varchar, key length under threshold(910)
+# with no explicit ALGORITHM;
+# Expect no rebuild.
+#
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+a VARCHAR(5),
+c1 VARCHAR(10),
+KEY idx_12(c1)
+) ENGINE=dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+ALTER TABLE t1 CHANGE COLUMN c1 c1 VARCHAR(12) FIRST;
+# Expect DROP_SEGMENT_LOG not found(no rebuild)
+Pattern "Replay DDL log success.*Type:DROP_SEGMENT_LOG" found 3 times
+SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t1'
+  ORDER BY COLUMN_NAME;
+COLUMN_NAME	CHARACTER_MAXIMUM_LENGTH
+a	5
+c1	12
+id	NULL
+DROP TABLE t1;

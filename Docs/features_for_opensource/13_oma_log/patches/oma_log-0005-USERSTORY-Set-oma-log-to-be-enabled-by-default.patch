@@ -1,0 +1,104 @@
+From 58a8a8d84ab8264424dfbfc6b8383b18375a678f Mon Sep 17 00:00:00 2001
+From: kuangxiangbin <kuangxiangbin@contributor>
+
+
+Date: Mon, 25 Aug 2025 19:40:17 +0800
+Subject: [PATCH] USERSTORY Set oma log to be enabled by default
+
+Issue:
+------
+Set oma log to be enabled by default,Record DDL logs,Help R&D solve the problem.
+
+Solution:
+---------
+Set oma to be enabled by default in Sys_rds_oma_log.
+---
+ mysql-test/r/mysqld--help-notwin.result                        | 3 ++-
+ .../suite/dstore_main/r/mysqld--help-notwin-dstore.result      | 3 ++-
+ mysql-test/suite/perfschema/r/alter_table_progress.result      | 1 +
+ mysql-test/suite/perfschema/r/stage_mdl_global.result          | 1 +
+ sql/sys_vars.cc                                                | 2 +-
+ 5 files changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/mysql-test/r/mysqld--help-notwin.result b/mysql-test/r/mysqld--help-notwin.result
+index 83b5bbacc2a..1cbde7b1e83 100644
+--- a/mysql-test/r/mysqld--help-notwin.result
++++ b/mysql-test/r/mysqld--help-notwin.result
+@@ -1460,6 +1460,7 @@ The following options may be given as the first argument:
+  --rds-node-id[=name] 
+  Uniquely identifies a node which is set by agent.
+  --rds-oma-log       Record DDL statements to a log file oma.log.
++ (Defaults to on; use --skip-rds-oma-log to disable.)
+  --rds-oma-log-file=name 
+  Log queries to given log file for Operating and
+  Maintenance Assistant purpose. Defaults logging to
+@@ -2572,7 +2573,7 @@ rds-local-socket-using-per-thread FALSE
+ rds-log-archive-path 
+ rds-max-num-of-binary-logs-purged-per-time 100
+ rds-node-id 
+-rds-oma-log FALSE
++rds-oma-log TRUE
+ rds-partial-result-cache-cost-threshold 0.5
+ rds-partial-result-cache-hit-ratio-frequency 200
+ rds-partial-result-cache-max-mem-size 16777216
+diff --git a/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result b/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
+index 83b5bbacc2a..1cbde7b1e83 100644
+--- a/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
++++ b/mysql-test/suite/dstore_main/r/mysqld--help-notwin-dstore.result
+@@ -1460,6 +1460,7 @@ The following options may be given as the first argument:
+  --rds-node-id[=name] 
+  Uniquely identifies a node which is set by agent.
+  --rds-oma-log       Record DDL statements to a log file oma.log.
++ (Defaults to on; use --skip-rds-oma-log to disable.)
+  --rds-oma-log-file=name 
+  Log queries to given log file for Operating and
+  Maintenance Assistant purpose. Defaults logging to
+@@ -2572,7 +2573,7 @@ rds-local-socket-using-per-thread FALSE
+ rds-log-archive-path 
+ rds-max-num-of-binary-logs-purged-per-time 100
+ rds-node-id 
+-rds-oma-log FALSE
++rds-oma-log TRUE
+ rds-partial-result-cache-cost-threshold 0.5
+ rds-partial-result-cache-hit-ratio-frequency 200
+ rds-partial-result-cache-max-mem-size 16777216
+diff --git a/mysql-test/suite/perfschema/r/alter_table_progress.result b/mysql-test/suite/perfschema/r/alter_table_progress.result
+index 5dd33a8276c..84508a7d133 100644
+--- a/mysql-test/suite/perfschema/r/alter_table_progress.result
++++ b/mysql-test/suite/perfschema/r/alter_table_progress.result
+@@ -82,6 +82,7 @@ stage/sql/end	NULL	NULL
+ stage/sql/query end	NULL	NULL
+ stage/sql/closing tables	NULL	NULL
+ stage/sql/waiting for handler commit	NULL	NULL
++stage/sql/logging oma	NULL	NULL
+ stage/sql/freeing items	NULL	NULL
+ stage/sql/cleaning up	NULL	NULL
+ SET DEBUG_SYNC='RESET';
+diff --git a/mysql-test/suite/perfschema/r/stage_mdl_global.result b/mysql-test/suite/perfschema/r/stage_mdl_global.result
+index 816b4ef064c..23afa681c9a 100644
+--- a/mysql-test/suite/perfschema/r/stage_mdl_global.result
++++ b/mysql-test/suite/perfschema/r/stage_mdl_global.result
+@@ -20,6 +20,7 @@ user1	stage/sql/Executing hook on transaction begin.	STATEMENT
+ user1	stage/sql/starting	STATEMENT
+ user1	stage/sql/query end	STATEMENT
+ user1	stage/sql/closing tables	STATEMENT
++user1	stage/sql/logging oma	STATEMENT
+ user1	stage/sql/freeing items	STATEMENT
+ user1	stage/sql/cleaning up	STATEMENT
+ call dump_one_thread('user2');
+diff --git a/sql/sys_vars.cc b/sql/sys_vars.cc
+index 257286e07c8..0c6ca0f8284 100644
+--- a/sql/sys_vars.cc
++++ b/sql/sys_vars.cc
+@@ -8182,7 +8182,7 @@ static Sys_var_charptr Sys_rds_oma_log_path(
+ 
+ static Sys_var_bool Sys_rds_oma_log(
+     "rds_oma_log", "Record DDL statements to a log file oma.log.",
+-    GLOBAL_VAR(opt_oma_log), CMD_LINE(OPT_ARG), DEFAULT(false), NO_MUTEX_GUARD,
++    GLOBAL_VAR(opt_oma_log), CMD_LINE(OPT_ARG), DEFAULT(true), NO_MUTEX_GUARD,
+     NOT_IN_BINLOG, ON_CHECK(nullptr), ON_UPDATE(fix_oma_log_state));
+ 
+ static bool check_super_acl(sys_var *, THD *thd, set_var *) {
+-- 
+2.23.0
+

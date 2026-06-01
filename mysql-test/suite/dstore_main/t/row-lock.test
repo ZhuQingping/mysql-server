@@ -1,0 +1,148 @@
+
+#
+# Testing of row locking
+#
+
+# Save the initial number of concurrent sessions
+
+--source include/have_only_dstore.inc
+--source include/count_sessions.inc
+
+--disable_warnings
+drop table if exists test;
+--enable_warnings
+
+--echo # Establish connection thr1 (user=root)
+connect (thr1,localhost,root,,);
+--echo # Establish connection thr2 (user=root)
+connect (thr2,localhost,root,,);
+
+--echo # Switching to connection 'default'.
+connection default;
+
+create table test (
+    id int not null,
+    varchar_col varchar(10) not null,
+    char_col char(5) not null
+) ENGINE=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+
+delimiter ||;
+CREATE PROCEDURE insert_table(IN n int)
+BEGIN
+DECLARE i INT DEFAULT 0;
+WHILE(i <= n) DO
+INSERT into test (id, varchar_col, char_col) VALUES (i, "abc", "de"), (i+1, "xy", "uvw");
+set i = i + 2;
+END WHILE;
+END ||
+delimiter ;||
+call insert_table(50);
+drop procedure insert_table;
+
+--echo # test table scan.
+select * from test;
+select * from test where varchar_col = "abc";
+
+--echo # Switching to connection 'thr1'.
+connection thr1;
+set autocommit=0;
+begin;
+select * from test where id = 15;
+update test set varchar_col = "efg" where id = 15;
+select * from test where id = 15;
+
+--echo # Switching to connection 'thr2'.
+connection thr2;
+set autocommit=0;
+begin;
+select * from test where id = 15;
+--echo # thr2 hang here
+--send
+update test set varchar_col = "efg" where id = 15;
+--sleep 1
+
+
+--echo # Switching to connection 'thr1'.
+connection thr1;
+commit;
+
+--echo # Switching to connection 'thr2'.
+connection thr2;
+reap;
+select * from test where id = 15;
+commit;
+
+--echo # test lock conflict between delete and update.
+--echo # Switching to connection 'thr1'.
+connection thr1;
+begin;
+select * from test where id = 25;
+delete from test where id = 25;
+select * from test where id = 25;
+
+--echo # Switching to connection 'thr2'.
+connection thr2;
+begin;
+select * from test where id = 25;
+--echo # thr2 hang here
+--send
+update test set varchar_col = "efghigk" where id = 25;
+--sleep 1
+
+--echo # Switching to connection 'thr1'.
+connection thr1;
+commit;
+
+--echo # Switching to connection 'thr2'.
+connection thr2;
+reap;
+select * from test where id = 25;
+commit;
+
+--echo # test deadlock
+let $engine_type=Dstore;
+--echo # Switching to default.
+connection default;
+create table testp (
+    id int not null primary key, 
+    varchar_col varchar(10) not null,
+    char_col char(5) not null
+) ENGINE=Dstore character set utf8mb4 collate utf8mb4_0900_ai_ci;
+
+insert into testp values(1,'aaa','bbb');
+insert into testp values(2,'aaa','bbb');
+select * from testp;
+
+--echo # Switching to connection 'thr1'.
+connection thr1;
+begin;
+update testp set varchar_col = "xxx" where id = 1;
+
+--echo # Switching to connection 'thr2'.
+connection thr2;
+begin;
+update testp set varchar_col = "ppp" where id = 2;
+
+--echo # Switching to connection 'thr1'.
+connection thr1;
+--send update testp set varchar_col = "yyy" where id = 2;
+
+# thr2 roolback
+--echo # Switching to connection 'thr2'
+connection thr2;
+update testp set varchar_col = "qqq" where id = 1;
+commit;
+select * from testp;
+
+--echo # Switching to connection 'thr1'
+connection thr1;
+--error ER_LOCK_DEADLOCK
+reap;
+select * from testp;
+
+--echo # Switching to default.
+connection default;
+disconnect thr1;
+disconnect thr2;
+drop table test;
+drop table testp;

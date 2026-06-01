@@ -1,0 +1,608 @@
+--source include/pq_test.inc
+
+--echo # This file is to test support for correlated subqueries in PQ
+
+# At the end of this test we'll count how many queries did PQ, to catch regressions later.
+select 0*(@counter:=variable_value) from performance_schema.global_status where VARIABLE_NAME="PQ_stmt_executed";
+
+CREATE TABLE t1 (
+a int NOT NULL,
+b char(10) NOT NULL
+);
+
+CREATE TABLE t2 (
+a int NOT NULL,
+b char(10) NOT NULL
+);
+
+INSERT INTO t1 values (1, 'a'), (2, 'b'), (3, 'c'), (3, 'c'), (4, 'd'), (5, 'f'), (6, 'e'),(8,'h'),(0,'j');
+INSERT INTO t2 values (3, 'c'), (4, 'd'), (5, 'f'), (6, 'e'), (1, 'a'), (2, 'b'), (7, 'g'),(0,'i');
+
+ANALYZE TABLE t1;
+ANALYZE TABLE t2;
+
+let $query=
+select * from t1 where exists(select * from t2 where t2.b=t1.b);
+eval explain $query;
+eval $query;
+
+--echo # As we want to test PQ for subqueries, avoid semijoins by default
+set optimizer_switch="semijoin=off";
+eval explain $query;
+eval $query;
+
+--echo # Test the switch:
+SET @save_pq_support_features_switch = @@pq_support_features_switch;
+set pq_support_features_switch='correlated_subquery=off';
+eval explain $query;
+eval $query;
+set pq_support_features_switch=@save_pq_support_features_switch;
+
+let $query=
+select * from t1 where NOT exists(select * from t2 where t2.b=t1.b);
+eval explain $query;
+eval $query;
+
+let $query=
+select t1.b,sum(t1.a) from t1 where NOT exists(select * from t2 where t2.b=t1.b) group by t1.b;
+eval explain $query;
+eval $query;
+
+--echo # Variant of a supported EXISTS: IN and OPERATOR ALL/ANY, are not supported
+
+let $query=
+select * from t1 where t1.b in (select t2.b from t2);
+eval explain $query;
+
+let $query=
+select * from t1 where t1.b > all (select t2.b from t2);
+eval explain $query;
+
+let $query=
+select * from t1 where t1.b > any (select t2.b from t2);
+eval explain $query;
+
+let $query=
+select * from t1 where t1.b > any (select max(t2.b) from t2);
+eval explain $query;
+
+--echo # This one has a subquery in the SELECT list which references a column of GROUP BY, does not do PQ because it uses Item_outer_ref internally, which is not clonable.
+
+let $query=
+select t1.b, (select sum(t2.a) from t2 where t2.b=t1.b) from t1 group by t1.b;
+eval explain $query;
+eval $query;
+
+--echo # While the next ones, where the subquery is in ORDER BY or HAVING, does PQ.
+let $query=
+select t1.b from t1 group by t1.b order by (select sum(t2.a) from t2 where t2.b=t1.b);
+eval explain $query;
+eval $query;
+
+let $query=
+select t1.b from t1 group by t1.b having (select sum(t2.a) from t2 where t2.b=t1.b)>1;
+eval explain $query;
+eval $query;
+
+--echo # The previous query had a wrong "run only once" mention for the subquery, because SELECT_LEX::uncacheable was not copied.
+eval explain format=tree $query;
+
+--echo # This one justifies the change from is_nullable() to is_inner_table_of_outer_join() in pq_check_not_support_tab()
+
+let $query=
+select (select sum(t2.a) from t2 where 0>t2.a-t1.a) from t1;
+eval explain $query;
+eval $query;
+
+--echo # Not supporting LEFT JOIN ON (subq), or anti-join ON (subq).
+--echo # But in inner JOIN and semi-join it's ok.
+let $query=
+select * from t1 join t2 on (select t1.a+t2.a from t2 limit 1);
+eval explain $query;
+
+set optimizer_switch="semijoin=on";
+
+let $query=
+select * from t1 where t1.a in (select t2.a from t2 where (select t1.a+t2.a from t2 limit 1));
+eval explain $query;
+
+let $query=
+select * from t1 where t1.a not in (select t2.a from t2 where (select t1.a+t2.a from t2 limit 1));
+eval explain $query;
+
+set optimizer_switch="semijoin=off";
+
+let $query=
+select * from t1 left join t2 on (select t1.a+t2.a from t2 limit 1);
+eval explain $query;
+
+--echo # Test PQ+PQ, PQ+noPQ, noPQ+PQ, by introducing a non-supported JSON function
+explain select 1 from t1 where (select t1.a+t2.a from t2 limit 1);
+explain select json_valid('') from t1 where (select t1.a+t2.a from t2 limit 1);
+explain select 1 from t1 where (select t1.a+t2.a+json_valid('') from t2 limit 1);
+
+--echo # Two correlated subqueries
+let $query=
+select * from t1 where NOT exists(select * from t2 where t2.b=t1.b) and
+(select count(*) from t2 where t2.b=t1.b)=5;
+eval explain $query;
+eval $query;
+
+--echo # A substituted subquery
+
+let $query=
+select * from t1 where (select t1.b from dual);
+eval explain $query;
+eval $query;
+
+--echo # Subquery with zero_result_cause, is supported
+let $query=
+select * from t1 where (select t1.b from t2 LIMIT 0);
+eval explain $query;
+eval $query;
+
+--echo # Aggregate in subquery, referencing outer column, is not supported
+
+--echo # a) when aggregation is computed in the subquery
+let $query=
+select * from t1 where (select min(t1.b) from t2);
+eval explain $query;
+
+--echo # b) when aggregation is computed in the top query
+let $query=
+select (select min(t1.b) from t2 limit 1) from t1;
+eval explain $query;
+
+--echo # Aggregate in subquery, not referencing outer column, is supported
+let $query=
+select (select min(t2.b) from t2 where t2.b=t1.a) from t1;
+eval explain $query;
+eval $query;
+
+--echo # Variant with same subquery moved to WHERE
+let $query=
+select * from t1 where t1.a>(select min(t2.b) from t2 where t2.b=t1.a);
+eval explain $query;
+eval $query;
+
+--echo # Same with = instead of >, and AVG instead of MIN
+let $query=
+select * from t1 where t1.a=(select avg(t2.b)*3 from t2 where t2.b=t1.a);
+eval explain $query;
+eval $query;
+
+--echo # Variants
+
+let $query=
+select * from t1 where t1.a=(select avg(t2.b)*3 from t2 where t2.b=t1.a)+5;
+eval explain $query;
+eval $query;
+
+--echo # User variable in subquery is not supported (it sets the UNCACHEABLE_RAND flag)
+
+let $query=
+select a, (select @xyz from t2 limit 1) from t1;
+eval explain $query;
+
+--echo # Again aggregate in subquery, referencing outer column, but "hidden" into an aliased expression.
+--echo # One subquery without tables, one with tables.
+let $query=
+select sum(b) as s, (select 1 having s > 0) from t1;
+eval explain $query;
+eval $query;
+let $query=
+select sum(b) as s, (select 1 from t1 t2 having s > 0) from t1;
+eval explain $query;
+eval $query;
+
+--echo # Test of subquery which is "optimized away"
+--echo # a) because of impossible WHERE
+let $query=
+select * from t1 where (select t1.b from t1 t2 where 1=0);
+eval explain $query;
+eval $query;
+--echo # b) or of no tables used
+let $query=
+select * from t1 where (select t1.b where 1=1);
+eval explain $query;
+eval $query;
+create table t3(a int primary key);
+insert into t3 values(1),(2);
+--echo # c) or of all constant tables
+let $query=
+select * from t1 where (select t1.b from t3 where t3.a=2);
+eval explain $query;
+eval $query;
+--echo # d) or of aggregate computed during optimization. Actually
+--echo # there is no way to test this, indeed,
+--echo # 'explain select max(t3.a) from t3;'
+--echo # does use "Select tables optimized away", but when it is put into a
+--echo # correlated subquery, not everything can be computed during optimization
+--echo # (due to the outer reference) so the subquery gets AGGR_REGULAR and
+--echo # continues into full-blown optimization. 
+explain select max(t3.a) from t3;
+explain select * from t1 where (select t1.b+max(t3.a) from t3);
+drop table t3;
+
+--echo # EXISTS with OR (which could thus not be semijoin)
+
+let $query=
+select * from t1 where (exists(select * from t2 where t2.b=t1.b) or
+                        exists(select * from t2 where t2.b=t1.b+1)) and
+                        exists(select * from t2 where t2.b=t1.b-1);
+eval explain $query;
+eval $query;
+
+--echo CTE inside subquery, merged then materialized
+
+let $query=
+with cte as (select * from t2)
+select * from t1 where exists(select * from cte where cte.b=t1.b) or
+                       (select min(a) from cte where cte.b=t1.b+1)>10;
+eval explain $query;
+eval $query;
+
+let $query=
+with cte as (select * from t2 limit 100)
+select /*+ no_merge() */ *
+  from t1 where exists(select * from cte where cte.b=t1.b) or
+                       (select min(a) from cte where cte.b=t1.b+1)>10;
+eval explain $query;
+eval $query;
+
+--echo # Tests for various bugs caused by the fact that THD::is_pq_worker()==true does not always mean, anymore, that the execution is split between multiple threads
+
+let $query=
+select a, (select count(b) from t2 where 1=t1.a*0) from t1;
+eval explain $query;
+eval $query;
+ 
+let $query=
+select a, (select count(b) cc from t2 where 0=t1.a*0 having 0*cc>10) from t1;
+eval explain $query;
+eval $query;
+
+let $query=
+select a, (select count(b) cc from t2 where 0=t1.a*0 having 0*cc<10) from t1;
+eval explain $query;
+eval $query;
+
+let $query=
+select a from t1 where (select count(b) cc from t2 where 0=t1.a*0 having 0*cc<10)>0;
+eval explain $query;
+eval $query;
+
+--echo # Not only scalar, but also row subquery is supported:
+
+let $query=
+select a, (1,2)=(select count(b) cc, max(b) from t2 where 0=t1.a*0 having 0*cc<10) from t1;
+eval explain $query;
+eval $query;
+
+drop table t1,t2;
+set optimizer_switch=default;
+
+--echo # Bugs found during testing
+
+CREATE TABLE t0 (c0 INT);
+INSERT INTO t0(c0) VALUES (1);
+--echo # (1) Cannot do PQ: subquery is optimized-away (we decide to skip it, due to always-true OR-ed 2nd condition, choose to do PQ, but later we still look at this subquery and because it is not PQ-compatible (due to window function), we get into trouble. As a failover, we restart without PQ.
+EXPLAIN SELECT 1 FROM t0 JOIN (SELECT 1) x(x) ON x.x = t0.c0 WHERE EXISTS (SELECT (ROW_NUMBER() OVER ()) + t0.c0) OR current_date() IS NOT NULL;
+EXPLAIN SELECT 1 FROM t0 JOIN t0 tx ON t0.c0 = t0.c0 WHERE (1, 2) = (SELECT 1, ROW_NUMBER() OVER() + t0.c0) OR DATE '6289-5-28' >= current_date();
+--echo # (2) Cannot do PQ because ALL(subquery)
+EXPLAIN SELECT 1 WHERE 1 > ALL(SELECT (SELECT 1 FROM t0) FROM (SELECT count(*) OVER () FROM t0) x(x));
+--echo # (3) Resolution had trouble to decide that two EXISTS items are equal
+EXPLAIN SELECT CAST(min(c1) AS SIGNED) FROM (SELECT CAST(EXISTS (SELECT 1) AS SIGNED) FROM t0) t1 (c1);
+--echo # (4) Inconsistency in GROUP BY management, due to constant values
+EXPLAIN SELECT 1 FROM t0 JOIN (SELECT 1) x(x) ON (SELECT 1 FROM (SELECT 1 FROM t0) y(y) GROUP BY y.y, t0.c0, x.x);
+--echo # (5) INSERT IGNORE and correlated subquery in PQ: any error in the latter should not stop the whole PQ process, if IGNORE tolerates this particular error.
+DELETE FROM t0;
+CREATE TABLE t1 LIKE t0;
+SET pq_support_features_switch='insert_select=on';
+INSERT INTO t1(c0) VALUES (1),(2);
+let $query=
+INSERT INTO t0(c0) (SELECT (SELECT t1.c0 FROM t1 tx) FROM t1);
+eval explain $query;
+--error ER_SUBQUERY_NO_1_ROW
+eval $query;
+let $query=
+INSERT IGNORE INTO t0(c0) (SELECT (SELECT t1.c0 FROM t1 tx) FROM t1);
+eval explain $query;
+eval $query;
+SELECT c0 FROM t0 ORDER BY c0;
+SET pq_support_features_switch=@save_pq_support_features_switch;
+--echo # (6) Cannot clone an Item which represents a column of VALUES
+let $query=
+SELECT 1 FROM t1 JOIN t0 ON t1.c0 = CASE WHEN t1.c0 THEN 1 END WHERE EXISTS (VALUES ROW(t0.c0),ROW(t0.c0));
+eval explain $query;
+eval $query;
+--echo # But for an uncorrelated subquery, no cloning of the "SELECT list" is done so it does not block PQ:
+let $query=
+SELECT 1 FROM t1 JOIN t0 ON t1.c0 = CASE WHEN t1.c0 THEN 1 END WHERE EXISTS (VALUES ROW(123),ROW(456));
+eval explain $query;
+eval $query;
+--echo # (7) Misuse of Semijoin_mat_exec::m_pq_shared_info led to assertion failure
+DELETE FROM t1;
+INSERT INTO t1(c0) VALUES (1),(2),(3);
+let $query=
+SELECT 1 FROM t1 WHERE EXISTS
+ (SELECT /*+ NO_SEMIJOIN() */ 1 FROM t1 tx WHERE t1.c0 IN (SELECT 1 FROM t1 ty STRAIGHT_JOIN (SELECT 1) x(x)));
+eval explain $query;
+eval $query;
+DROP TABLE t0, t1;
+--echo # (8) Bug in name resolution for columns of merged views: an outer reference is resolved by PQ code as an inner reference.
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES (1),(2);
+CREATE VIEW v AS SELECT * FROM t1;
+let $query=
+SELECT * FROM v vo WHERE (SELECT 1 FROM v WHERE v.a=1 AND vo.a>=2);
+eval explain $query;
+eval $query;
+DROP VIEW v;
+DROP TABLE t1;
+
+--echo # (9) Equality propagation used a mix of THD::change_item_tree() and non-recorded change, confusing PQ cloning code, and we got in the subquery: WHERE t1.char_col=t1.char_col AND t2.char_col <=> 'aaaa'. So the subquery returned 'aaaa' instead of NULL.
+--echo # UPDATE: the fix for this case introduced BUG2025041529773; so it has been reverted and, instead, PQ is turned off (in this case where equality and constant propagation swaps the two arguments of the first condition in WHERE).
+CREATE TABLE t1(char_col CHAR(4));
+CREATE TABLE t2(char_col CHAR(4));
+INSERT INTO t1 VALUES('ab');
+INSERT INTO t2 VALUES('aaaa');
+let $query=
+SELECT (SELECT t2.char_col FROM t2  WHERE t2.char_col = t1.char_col AND t2.char_col <=> 'aaaa' ) AS c2 FROM t1 ;
+eval EXPLAIN FORMAT=TREE $query;
+eval $query;
+DROP TABLE t1,t2;
+
+--echo # Bug in Community MySQL : after transformation to derived table and merging, table t3 is in the table list of select#5 but has a select_lex pointer == select#2. This in turn poses problems during Item cloning, so we catch this situation early and go to non-PQ execution for select#5 (but not the others). Test query inspired by one in subquery_scalar_to_derived.test.
+
+CREATE TABLE t1(a INT);
+CREATE TABLE t2(a INT);
+CREATE TABLE t3(c INT);
+set @save_opt_s = @@optimizer_switch;
+set optimizer_switch="subquery_to_derived=on";
+let $query=
+SELECT (SELECT SUM(c) + (SELECT a FROM t1) FROM (SELECT  c from t3) t11) AS cnt FROM t2;
+eval explain $query;
+eval $query;
+set optimizer_switch=@save_opt_s;
+DROP TABLE t1,t2,t3;
+
+--echo # Test correlated subquery containing derived table having derived condition pushdown
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES (1),(2),(3);
+ANALYZE TABLE t1;
+let $query=
+SELECT * FROM t1 WHERE a=(SELECT count(derived.a)+t1.a*0 FROM (SELECT a FROM t1 GROUP BY a) derived WHERE MOD(derived.a,2)=1);
+eval explain $query;
+eval $query;
+DROP TABLE t1;
+
+--echo # BUG2023112700818 Crash in EXPLAIN, PQ plan cloning misses to create ZERO_ROWS path
+
+CREATE TABLE t1(timestamp_col TIMESTAMP, decimal_col DECIMAL);
+INSERT INTO t1 VALUES('2023-11-20 14:44:15',NULL);
+CREATE TABLE t2 SELECT * FROM t1;
+INSERT INTO t2 SELECT * FROM t1;
+ALTER TABLE t2 ADD INDEX(decimal_col);
+
+let $query=
+  SELECT timestamp_col, decimal_col FROM t1 A
+  HAVING ( SELECT timestamp_col FROM t1 B
+           WHERE A.decimal_col >= B.decimal_col AND
+             EXISTS (SELECT /*+ NO_SEMIJOIN(FIRSTMATCH) */ timestamp_col FROM t2 C
+                     WHERE decimal_col > NULL ORDER BY 1 LIMIT 1 ));
+eval EXPLAIN FORMAT=TREE $query;
+
+DROP TABLE t1,t2;
+
+--echo # BUG2023112703423 Correlated subquery on view assertion error
+
+CREATE TABLE t0 (c0 INT);
+CREATE ALGORITHM = MERGE VIEW v1 (c0) AS (SELECT (SELECT 1 WHERE t0.c0) FROM t0);
+let $query=
+SELECT 1 FROM v1 WHERE (SELECT 1 FROM t0 GROUP BY v1.c0, t0.c0);
+--echo # Should not use PQ
+eval EXPLAIN $query;
+eval $query;
+
+
+--echo # BUG2023120703786 Correlated subquery assertion error
+
+--echo # Should not use PQ
+SELECT (SELECT 1 FROM t0 HAVING COUNT(*) = tx.c0) FROM t0 tx GROUP BY tx.c0;
+
+DROP VIEW v1;
+DROP TABLE t0;
+
+--echo # BUG2023120802668 The query takes about 9min longer in parallel correlated_subquery is enabled than it is disabled
+
+CREATE TABLE t0 (c0 INT);
+INSERT INTO t0 VALUES(1);
+ANALYZE TABLE t0;
+
+--echo # Only the third query should use PQ. The others do not use a tmp table and thus a PQ worker evaluates the subquery twice (once for sorting, once for sending to the leader), which can be slow.
+EXPLAIN SELECT * FROM t0 ORDER BY (SELECT t1.c0+t0.c0 FROM t0 t1);
+EXPLAIN SELECT * FROM t0 ORDER BY (SELECT t1.c0+t0.c0 FROM t0 t1)+1;
+EXPLAIN SELECT (SELECT t1.c0+t0.c0 FROM t0 t1) AS subq, t0.* FROM t0 ORDER BY subq;
+EXPLAIN SELECT (SELECT t1.c0+t0.c0 FROM t0 t1) AS subq, t0.* FROM t0 ORDER BY subq+1;
+
+--echo No correlation => evaluations are cheap, can do PQ.
+EXPLAIN SELECT * FROM t0 ORDER BY (SELECT t1.c0+0 FROM t0 t1);
+
+--echo # BUG2023112803072 PQ Fix fields assertion error 2
+
+SELECT 1
+ FROM (SELECT t0.c0 FROM t0 GROUP BY t0.c0) x(x)
+ GROUP BY x.x
+ HAVING (SELECT 1 FROM t0 JOIN t0 tx ON x.x = tx.c0 JOIN t0 ty ON ty.c0 = x.x);
+
+DROP TABLE t0;
+
+--echo BUG2024010800799 explain format=tree query,mysqld crash,KeyWord:pq_dup_tabs(JOIN*, JOIN*, bool)+0x12a
+
+CREATE TABLE t4 (
+  c_id int(253) unsigned zerofill NOT NULL,
+  c_d_id int(253) unsigned zerofill NOT NULL,
+  c_w_id int(253) unsigned zerofill NOT NULL,
+  c_first varchar(253) DEFAULT NULL,
+  c_middle char(253) DEFAULT NULL,
+  c_last varchar(253) DEFAULT NULL,
+  c_street_1 varchar(253) DEFAULT NULL,
+  c_street_2 varchar(253) DEFAULT NULL,
+  c_city varchar(253) DEFAULT NULL,
+  c_state char(253) DEFAULT NULL,
+  c_zip char(23) DEFAULT NULL,
+  c_phone char(238) DEFAULT NULL,
+  c_since timestamp NOT NULL DEFAULT '1970-01-01 16:00:01',
+  c_credit char(253) DEFAULT NULL,
+  c_credit_lim decimal(62,2) DEFAULT NULL,
+  c_discount decimal(62,4) DEFAULT NULL,
+  c_balance decimal(62,2) DEFAULT NULL,
+  c_ytd_payment decimal(62,2) DEFAULT NULL,
+  c_payment_cnt int(253) unsigned zerofill DEFAULT NULL,
+  c_delivery_cnt int(253) unsigned zerofill DEFAULT NULL,
+  c_data varchar(253) DEFAULT NULL,
+  PRIMARY KEY (c_w_id DESC,c_d_id DESC,c_id DESC),
+  KEY Customer_100W_key (c_w_id DESC,c_d_id DESC,c_last DESC,c_first DESC),
+  KEY ndx_c_id (c_id DESC) USING BTREE,
+  KEY ndx_c_d_id (c_d_id DESC) USING BTREE,
+  KEY ndx_c_w_id (c_w_id DESC) USING BTREE,
+  KEY ndx_c_first (c_first DESC) USING BTREE,
+  KEY ndx_c_middle (c_middle DESC) USING BTREE,
+  KEY ndx_c_last (c_last DESC) USING BTREE,
+  KEY ndx_c_street_1 (c_street_1 DESC) USING BTREE,
+  KEY ndx_c_street_2 (c_street_2 DESC) USING BTREE,
+  KEY ndx_c_city (c_city DESC) USING BTREE,
+  KEY ndx_c_state (c_state DESC) USING BTREE,
+  KEY ndx_c_zip (c_zip DESC) USING BTREE,
+  KEY ndx_c_phone (c_phone DESC) USING BTREE,
+  KEY ndx_c_since (c_since DESC) USING BTREE,
+  KEY ndx_c_credit (c_credit DESC) USING BTREE,
+  KEY ndx_c_credit_lim (c_credit_lim DESC) USING BTREE,
+  KEY ndx_c_discount (c_discount DESC) USING BTREE,
+  KEY ndx_c_balance (c_balance DESC) USING BTREE,
+  KEY ndx_c_ytd_payment (c_ytd_payment DESC) USING BTREE,
+  KEY ndx_c_payment_cnt (c_payment_cnt DESC) USING BTREE,
+  KEY ndx_c_delivery_cnt (c_delivery_cnt DESC) USING BTREE,
+  KEY ndx_c_data (c_data DESC) USING BTREE,
+  KEY ndx_4_5_6 (c_first DESC,c_middle DESC,c_last DESC) USING BTREE,
+  KEY ndx_7_8 (c_street_1 DESC,c_street_2 DESC) USING BTREE,
+  KEY ndx_9_10_11_12 (c_city DESC,c_state DESC,c_zip DESC,c_phone DESC) USING BTREE,
+  KEY ndx_13_14 (c_since DESC,c_credit DESC) USING BTREE,
+  KEY ndx_15_16_17_18 (c_credit_lim DESC,c_discount DESC,c_balance DESC,c_ytd_payment DESC) USING BTREE,
+  KEY ndx_19_20_21 (c_payment_cnt DESC,c_delivery_cnt DESC,c_data DESC) USING BTREE,
+  KEY ndx_4_7_9_13_15_19 (c_first DESC,c_street_1 DESC,c_city DESC,c_since DESC,c_credit_lim DESC,c_payment_cnt DESC) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE t11 (
+  C_ID int NOT NULL DEFAULT '99' COMMENT 'string',
+  C_D_ID int DEFAULT NULL,
+  C_W_ID bigint DEFAULT NULL,
+  C_DOUBLE double DEFAULT NULL,
+  C_DECIMAL decimal(10,0) DEFAULT NULL,
+  C_FIRST varchar(64) DEFAULT NULL,
+  C_MIDDLE char(2) DEFAULT NULL,
+  C_LAST varchar(64) DEFAULT NULL,
+  C_STREET_1 varchar(20) DEFAULT NULL,
+  C_STREET_2 varchar(20) DEFAULT NULL,
+  C_CITY varchar(64) DEFAULT NULL,
+  C_STATE char(2) DEFAULT NULL,
+  C_ZIP char(9) DEFAULT NULL,
+  C_PHONE char(16) DEFAULT NULL,
+  C_SINCE timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  C_CREDIT char(2) DEFAULT NULL,
+  C_CREDIT_LIM decimal(12,2) DEFAULT NULL,
+  C_DISCOUNT decimal(4,4) DEFAULT NULL,
+  C_BALANCE decimal(12,2) DEFAULT NULL,
+  C_YTD_PAYMENT double DEFAULT NULL,
+  C_PAYMENT_CNT float DEFAULT NULL,
+  C_DELIVERY_CNT tinyint(1) DEFAULT NULL,
+  C_END date DEFAULT NULL,
+  C_VCHAR varchar(1000) DEFAULT NULL,
+  PRIMARY KEY (C_ID DESC),
+  UNIQUE KEY C_ID (C_ID),
+  UNIQUE KEY C_ID_2 (C_ID) COMMENT 'string',
+  KEY index_CREATE_TABLE_PART_HASH_029_taurus (C_ID DESC) USING BTREE,
+  KEY ndx_C_ID (C_ID) USING BTREE,
+  KEY ndx_C_D_ID (C_D_ID) USING BTREE,
+  KEY ndx_C_W_ID (C_W_ID) USING BTREE,
+  KEY ndx_C_DOUBLE (C_DOUBLE) USING BTREE,
+  KEY ndx_C_DECIMAL (C_DECIMAL) USING BTREE,
+  KEY ndx_C_FIRST (C_FIRST) USING BTREE,
+  KEY ndx_C_MIDDLE (C_MIDDLE) USING BTREE,
+  KEY ndx_C_LAST (C_LAST) USING BTREE,
+  KEY ndx_C_STREET_1 (C_STREET_1) USING BTREE,
+  KEY ndx_C_STREET_2 (C_STREET_2) USING BTREE,
+  KEY ndx_C_CITY (C_CITY) USING BTREE,
+  KEY ndx_C_STATE (C_STATE) USING BTREE,
+  KEY ndx_C_ZIP (C_ZIP) USING BTREE,
+  KEY ndx_C_PHONE (C_PHONE) USING BTREE,
+  KEY ndx_C_SINCE (C_SINCE) USING BTREE,
+  KEY ndx_C_CREDIT (C_CREDIT) USING BTREE,
+  KEY ndx_C_CREDIT_LIM (C_CREDIT_LIM) USING BTREE,
+  KEY ndx_C_DISCOUNT (C_DISCOUNT) USING BTREE,
+  KEY ndx_C_BALANCE (C_BALANCE) USING BTREE,
+  KEY ndx_C_YTD_PAYMENT (C_YTD_PAYMENT) USING BTREE,
+  KEY ndx_C_PAYMENT_CNT (C_PAYMENT_CNT) USING BTREE,
+  KEY ndx_C_DELIVERY_CNT (C_DELIVERY_CNT) USING BTREE,
+  KEY ndx_C_END (C_END) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 MAX_ROWS=99 AVG_ROW_LENGTH=8 PACK_KEYS=1 DELAY_KEY_WRITE=1 CONNECTION='connect_string';
+
+SELECT DATABASE() AS c0, ref_0.C_CREDIT_LIM AS c1
+FROM t11 ref_0
+WHERE EXISTS (
+        SELECT ref_0.C_FIRST AS c0
+        FROM (
+            SELECT subq_0.c2 AS c1, subq_0.c9 AS c2
+            FROM t4 ref_1
+                LEFT JOIN (
+                    SELECT 1 AS c2, ref_0.c_middle AS c9
+                    FROM t4 ref_0
+                ) subq_0
+                ON subq_0.c9 = ref_1.c_credit
+            WHERE subq_0.c2 IS NOT NULL
+        ) ref_7
+        WHERE false
+    )
+    OR true;
+
+DROP TABLE t4,t11;
+
+--echo # BUG2024012404354 crash in SELECT_LEX::flatten_subqueries
+
+CREATE TABLE tbl_1_all_type2index (
+  id_col int NOT NULL,
+  tinyint_col tinyint DEFAULT NULL,
+  bool_col tinyint(1) DEFAULT NULL
+);
+
+SELECT if (strcmp(a.tinyint_col, a.id_col), a.tinyint_col, a.id_col)
+FROM tbl_1_all_type2index a join tbl_1_all_type2index
+on(a.id_col,a.bool_col) in (select col1,col2 from
+  (SELECT id_col col1, bool_col col2 from tbl_1_all_type2index
+   where id_col not in(select id_col from tbl_1_all_type2index)) c);
+
+DROP TABLE tbl_1_all_type2index;
+
+--echo #
+--echo # BUG2024020404687 Order by correlated subquery SEGV
+--echo #
+
+CREATE TABLE t0 (c0 INT);
+let $query=
+SELECT c0 FROM
+ (
+   SELECT tx.tx y FROM
+      (SELECT t0.c0 FROM t0) tx(tx)
+   ORDER BY (SELECT y FROM t0)
+ ) tx1(c0)
+ORDER BY c0;
+
+--echo # Should not use PQ
+eval EXPLAIN $query;
+eval $query;
+DROP TABLE t0;
+
+--echo # Note that this does not count _statements_ but rather _query specifications_ i.e. SELECT_LEX_UNITs, which do PQ. So if your statement has a top query and a derived table, and both do PQ, it will count as two.
+
+select variable_value-@counter from performance_schema.global_status where VARIABLE_NAME="PQ_stmt_executed";

@@ -1,0 +1,1429 @@
+SET @saved_pq_support_features_switch = @@pq_support_features_switch;
+show variables like '%pq_support_features_switch%';
+Variable_name	Value
+pq_support_features_switch	simple_aggregate=on,count_distinct=on,correlated_subquery=on,hash_join_spill_to_disk=on,insert_select=on
+SET pq_support_features_switch = 'count_distinct=on';
+show variables like '%pq_support_features_switch%';
+Variable_name	Value
+pq_support_features_switch	simple_aggregate=on,count_distinct=on,correlated_subquery=on,hash_join_spill_to_disk=on,insert_select=on
+# case1: COUNT(DISTINCT) includes a field
+CREATE TABLE t1 (
+id INT AUTO_INCREMENT PRIMARY KEY,
+name VARCHAR(50),
+age INT,
+class VARCHAR(50)
+);
+INSERT INTO t1 (name, age, class) VALUES 
+('Alice', 30, '1'),
+('Bob', 25, '1'),
+('Charlie', 35, '2'),
+('David', 40, '1'),
+('Alice', 30, '1'),
+('Frank', 29, '1'),
+('Grace', 33, '2'),
+('Hank', 45, '1'),
+('Ivy', 27, '2'),
+('John', 38, '1'),
+('Alice', 30, '1');
+EXPLAIN SELECT COUNT(DISTINCT age) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`age`) AS `COUNT(DISTINCT age)` from `test`.`t1`
+SELECT COUNT(DISTINCT age) FROM t1;
+COUNT(DISTINCT age)
+9
+EXPLAIN SELECT COUNT(DISTINCT name) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`name`) AS `COUNT(DISTINCT name)` from `test`.`t1`
+SELECT COUNT(DISTINCT name) FROM t1;
+COUNT(DISTINCT name)
+9
+EXPLAIN SELECT COUNT(DISTINCT class) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`class`) AS `COUNT(DISTINCT class)` from `test`.`t1`
+SELECT COUNT(DISTINCT class) FROM t1;
+COUNT(DISTINCT class)
+2
+# case2: COUNT(DISTINCT) includes multiple fields
+EXPLAIN SELECT COUNT(DISTINCT age, name) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`age`,`test`.`t1`.`name`) AS `COUNT(DISTINCT age, name)` from `test`.`t1`
+SELECT COUNT(DISTINCT age, name) FROM t1;
+COUNT(DISTINCT age, name)
+9
+EXPLAIN SELECT COUNT(DISTINCT age, name, class) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`age`,`test`.`t1`.`name`,`test`.`t1`.`class`) AS `COUNT(DISTINCT age, name, class)` from `test`.`t1`
+SELECT COUNT(DISTINCT age, name, class) FROM t1;
+COUNT(DISTINCT age, name, class)
+9
+# case3: The parameter of COUNT(DISTINCT) is a constant.
+EXPLAIN SELECT COUNT(DISTINCT 1) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select count(distinct 1) AS `COUNT(DISTINCT 1)` from `test`.`t1`
+SELECT COUNT(DISTINCT 1) FROM t1;
+COUNT(DISTINCT 1)
+1
+EXPLAIN SELECT COUNT(DISTINCT 0) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select count(distinct 0) AS `COUNT(DISTINCT 0)` from `test`.`t1`
+SELECT COUNT(DISTINCT 0) FROM t1;
+COUNT(DISTINCT 0)
+1
+# case4: The parameter of COUNT(DISTINCT) is a NULL value.
+EXPLAIN SELECT COUNT(DISTINCT NULL) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select count(distinct NULL) AS `COUNT(DISTINCT NULL)` from `test`.`t1`
+SELECT COUNT(DISTINCT NULL) FROM t1;
+COUNT(DISTINCT NULL)
+0
+EXPLAIN SELECT COUNT(DISTINCT 1, NULL) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select count(distinct 1,NULL) AS `COUNT(DISTINCT 1, NULL)` from `test`.`t1`
+SELECT COUNT(DISTINCT 1, NULL) FROM t1;
+COUNT(DISTINCT 1, NULL)
+0
+DROP TABLE t1;
+# case5: The parameter of COUNT(DISTINCT) has multiple data types.
+CREATE TABLE t1 (
+id INT AUTO_INCREMENT PRIMARY KEY,
+-- Integer types
+tinyint_col TINYINT,
+smallint_col SMALLINT,
+mediumint_col MEDIUMINT,
+int_col INT,
+bigint_col BIGINT,
+-- Floating-point types
+float_col FLOAT(10,2),
+double_col DOUBLE(16,2),
+decimal_col DECIMAL(10,2),
+-- String types
+char_col CHAR(10),
+varchar_col VARCHAR(100),
+text_col TEXT,
+tinytext_col TINYTEXT,
+mediumtext_col MEDIUMTEXT,
+longtext_col LONGTEXT,
+-- Date and time types
+date_col DATE,
+time_col TIME,
+datetime_col DATETIME,
+timestamp_col TIMESTAMP,
+year_col YEAR,
+-- Binary string types
+binary_col BINARY(10),
+varbinary_col VARBINARY(100),
+blob_col BLOB,
+tinyblob_col TINYBLOB,
+mediumblob_col MEDIUMBLOB,
+longblob_col LONGBLOB
+);
+Warnings:
+Warning	1681	Specifying number of digits for floating point data types is deprecated and will be removed in a future release.
+Warning	1681	Specifying number of digits for floating point data types is deprecated and will be removed in a future release.
+INSERT INTO t1 (tinyint_col, smallint_col, mediumint_col, int_col, bigint_col,
+float_col, double_col, decimal_col,
+char_col, varchar_col, text_col, tinytext_col, mediumtext_col, longtext_col,
+date_col, time_col, datetime_col, timestamp_col, year_col,
+binary_col, varbinary_col, blob_col, tinyblob_col, mediumblob_col, longblob_col)
+VALUES 
+(1, 2, 3, 4, 5, 1.11, 1234567.89, 12345.67, 'A', 'Varchar1', 'Text1', 'Tiny1', 'Medium1', 'Long1', '2025-02-13', '17:04:00', '2025-02-13 17:04:00', CURRENT_TIMESTAMP, 2025, 'Bin1', 'Varbin1', 'Blob1', 'Tinyb1', 'Mediab1', 'Longb1'),
+(2, 3, 4, 5, 6, 2.22, 1234567.89, 12345.67, 'B', 'Varchar2', 'Text2', 'Tiny2', 'Medium2', 'Long2', '2025-02-14', '17:05:00', '2025-02-14 17:05:00', CURRENT_TIMESTAMP, 2025, 'Bin2', 'Varbin2', 'Blob2', 'Tinyb2', 'Mediab2', 'Longb2'),
+(3, 4, 5, 6, 7, 3.33, 1234567.89, 12345.67, 'C', 'Varchar3', 'Text3', 'Tiny3', 'Medium3', 'Long3', '2025-02-15', '17:06:00', '2025-02-15 17:06:00', CURRENT_TIMESTAMP, 2025, 'Bin3', 'Varbin3', 'Blob3', 'Tinyb3', 'Mediab3', 'Longb3'),
+(4, 5, 6, 7, 8, 4.44, 1234567.89, 12345.67, 'D', 'Varchar4', 'Text4', 'Tiny4', 'Medium4', 'Long4', '2025-02-16', '17:07:00', '2025-02-16 17:07:00', CURRENT_TIMESTAMP, 2025, 'Bin4', 'Varbin4', 'Blob4', 'Tinyb4', 'Mediab4', 'Longb4'),
+(5, 6, 7, 8, 9, 5.55, 1234567.89, 12345.67, 'E', 'Varchar5', 'Text5', 'Tiny5', 'Medium5', 'Long5', '2025-02-17', '17:08:00', '2025-02-17 17:08:00', CURRENT_TIMESTAMP, 2025, 'Bin5', 'Varbin5', 'Blob5', 'Tinyb5', 'Mediab5', 'Longb5'),
+(6, 7, 8, 9, 10, 6.66, 1234567.89, 12345.67, 'F', 'Varchar6', 'Text6', 'Tiny6', 'Medium6', 'Long6', '2025-02-18', '17:09:00', '2025-02-18 17:09:00', CURRENT_TIMESTAMP, 2025, 'Bin6', 'Varbin6', 'Blob6', 'Tinyb6', 'Mediab6', 'Longb6'),
+(7, 8, 9, 10, 11, 7.77, 1234567.89, 12345.67, 'G', 'Varchar7', 'Text7', 'Tiny7', 'Medium7', 'Long7', '2025-02-19', '17:10:00', '2025-02-19 17:10:00', CURRENT_TIMESTAMP, 2025, 'Bin7', 'Varbin7', 'Blob7', 'Tinyb7', 'Mediab7', 'Longb7'),
+(8, 9, 10, 11, 12, 8.88, 1234567.89, 12345.67, 'H', 'Varchar8', 'Text8', 'Tiny8', 'Medium8', 'Long8', '2025-02-20', '17:11:00', '2025-02-20 17:11:00', CURRENT_TIMESTAMP, 2025, 'Bin8', 'Varbin8', 'Blob8', 'Tinyb8', 'Mediab8', 'Longb8'),
+(9, 10, 11, 12, 13, 9.99, 1234567.89, 12345.67, 'I', 'Varchar9', 'Text9', 'Tiny9', 'Medium9', 'Long9', '2025-02-21', '17:12:00', '2025-02-21 17:12:00', CURRENT_TIMESTAMP, 2025, 'Bin9', 'Varbin9', 'Blob9', 'Tinyb9', 'Mediab9', 'Longb9'),
+(10, 11, 12, 13, 14, 10.10, 1234567.89, 12345.67, 'J', 'Varchar10', 'Text10', 'Tiny10', 'Medium10', 'Long10', '2025-02-22', '17:13:00', '2025-02-22 17:13:00', CURRENT_TIMESTAMP, 2025, 'Bin10', 'Varbin10', 'Blob10', 'Tinyb10', 'Mediab10', 'Longb10'),
+(11, 2, 3, 4, 5, 1.11, 1234567.89, 12345.67, 'A', 'Varchar1', 'Text1', 'Tiny1', 'Medium1', 'Long1', '2025-02-13', '17:04:00', '2025-02-13 17:04:00', CURRENT_TIMESTAMP, 2025, 'Bin1', 'Varbin1', 'Blob1', 'Tinyb1', 'Mediab1', 'Longb1'),
+(12, 2, 3, 4, 5, 1.11, 1234567.89, 12345.67, 'A', 'Varchar1', 'Text1', 'Tiny1', 'Medium1', 'Long1', '2025-02-13', '17:04:00', '2025-02-13 17:04:00', CURRENT_TIMESTAMP, 2025, 'Bin1', 'Varbin1', 'Blob1', 'Tinyb1', 'Mediab1', 'Longb1'),
+(13, 2, 3, 4, 5, 1.11, 1234567.89, 12345.67, 'A', 'Varchar1', 'Text1', 'Tiny1', 'Medium1', 'Long1', '2025-02-13', '17:04:00', '2025-02-13 17:04:00', CURRENT_TIMESTAMP, 2025, 'Bin1', 'Varbin1', 'Blob1', 'Tinyb1', 'Mediab1', 'Longb1'),
+(14, 2, 3, 4, 5, 1.11, 1234567.89, 12345.67, 'A', 'Varchar1', 'Text1', 'Tiny1', 'Medium1', 'Long1', '2025-02-13', '17:04:00', '2025-02-13 17:04:00', CURRENT_TIMESTAMP, 2025, 'Bin1', 'Varbin1', 'Blob1', 'Tinyb1', 'Mediab1', 'Longb1'),
+(15, 2, 3, 4, 5, 1.11, 1234567.89, 12345.67, 'A', 'Varchar1', 'Text1', 'Tiny1', 'Medium1', 'Long1', '2025-02-13', '17:04:00', '2025-02-13 17:04:00', CURRENT_TIMESTAMP, 2025, 'Bin1', 'Varbin1', 'Blob1', 'Tinyb1', 'Mediab1', 'Longb1'),
+(16, 2, 3, 4, 5, 1.11, 1234567.89, 12345.67, 'A', 'Varchar1', 'Text1', 'Tiny1', 'Medium1', 'Long1', '2025-02-13', '17:04:00', '2025-02-13 17:04:00', CURRENT_TIMESTAMP, 2025, 'Bin1', 'Varbin1', 'Blob1', 'Tinyb1', 'Mediab1', 'Longb1');
+EXPLAIN SELECT COUNT(DISTINCT tinyint_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`tinyint_col`) AS `COUNT(DISTINCT tinyint_col)` from `test`.`t1`
+SELECT COUNT(DISTINCT tinyint_col) FROM t1;
+COUNT(DISTINCT tinyint_col)
+16
+EXPLAIN SELECT COUNT(DISTINCT smallint_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`smallint_col`) AS `COUNT(DISTINCT smallint_col)` from `test`.`t1`
+SELECT COUNT(DISTINCT smallint_col) FROM t1;
+COUNT(DISTINCT smallint_col)
+10
+EXPLAIN SELECT COUNT(DISTINCT mediumint_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`mediumint_col`) AS `COUNT(DISTINCT mediumint_col)` from `test`.`t1`
+SELECT COUNT(DISTINCT mediumint_col) FROM t1;
+COUNT(DISTINCT mediumint_col)
+10
+EXPLAIN SELECT COUNT(DISTINCT int_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`int_col`) AS `COUNT(DISTINCT int_col)` from `test`.`t1`
+SELECT COUNT(DISTINCT int_col) FROM t1;
+COUNT(DISTINCT int_col)
+10
+EXPLAIN SELECT COUNT(DISTINCT bigint_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`bigint_col`) AS `COUNT(DISTINCT bigint_col)` from `test`.`t1`
+SELECT COUNT(DISTINCT bigint_col) FROM t1;
+COUNT(DISTINCT bigint_col)
+10
+EXPLAIN SELECT COUNT(DISTINCT float_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`float_col`) AS `COUNT(DISTINCT float_col)` from `test`.`t1`
+SELECT COUNT(DISTINCT float_col) FROM t1;
+COUNT(DISTINCT float_col)
+10
+EXPLAIN SELECT COUNT(DISTINCT double_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`double_col`) AS `COUNT(DISTINCT double_col)` from `test`.`t1`
+SELECT COUNT(DISTINCT double_col) FROM t1;
+COUNT(DISTINCT double_col)
+1
+EXPLAIN SELECT COUNT(DISTINCT decimal_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`decimal_col`) AS `COUNT(DISTINCT decimal_col)` from `test`.`t1`
+SELECT COUNT(DISTINCT decimal_col) FROM t1;
+COUNT(DISTINCT decimal_col)
+1
+EXPLAIN SELECT COUNT(DISTINCT char_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`char_col`) AS `COUNT(DISTINCT char_col)` from `test`.`t1`
+SELECT COUNT(DISTINCT char_col) FROM t1;
+COUNT(DISTINCT char_col)
+10
+EXPLAIN SELECT COUNT(DISTINCT varchar_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`varchar_col`) AS `COUNT(DISTINCT varchar_col)` from `test`.`t1`
+SELECT COUNT(DISTINCT varchar_col) FROM t1;
+COUNT(DISTINCT varchar_col)
+10
+EXPLAIN SELECT COUNT(DISTINCT text_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`text_col`) AS `COUNT(DISTINCT text_col)` from `test`.`t1`
+EXPLAIN SELECT COUNT(DISTINCT tinytext_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`tinytext_col`) AS `COUNT(DISTINCT tinytext_col)` from `test`.`t1`
+EXPLAIN SELECT COUNT(DISTINCT mediumtext_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`mediumtext_col`) AS `COUNT(DISTINCT mediumtext_col)` from `test`.`t1`
+EXPLAIN SELECT COUNT(DISTINCT longtext_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`longtext_col`) AS `COUNT(DISTINCT longtext_col)` from `test`.`t1`
+EXPLAIN SELECT COUNT(DISTINCT date_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`date_col`) AS `COUNT(DISTINCT date_col)` from `test`.`t1`
+SELECT COUNT(DISTINCT date_col) FROM t1;
+COUNT(DISTINCT date_col)
+10
+EXPLAIN SELECT COUNT(DISTINCT time_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`time_col`) AS `COUNT(DISTINCT time_col)` from `test`.`t1`
+SELECT COUNT(DISTINCT time_col) FROM t1;
+COUNT(DISTINCT time_col)
+10
+EXPLAIN SELECT COUNT(DISTINCT datetime_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`datetime_col`) AS `COUNT(DISTINCT datetime_col)` from `test`.`t1`
+SELECT COUNT(DISTINCT datetime_col) FROM t1;
+COUNT(DISTINCT datetime_col)
+10
+EXPLAIN SELECT COUNT(DISTINCT timestamp_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`timestamp_col`) AS `COUNT(DISTINCT timestamp_col)` from `test`.`t1`
+SELECT COUNT(DISTINCT timestamp_col) FROM t1;
+COUNT(DISTINCT timestamp_col)
+1
+EXPLAIN SELECT COUNT(DISTINCT year_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`year_col`) AS `COUNT(DISTINCT year_col)` from `test`.`t1`
+SELECT COUNT(DISTINCT year_col) FROM t1;
+COUNT(DISTINCT year_col)
+1
+EXPLAIN SELECT COUNT(DISTINCT binary_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`binary_col`) AS `COUNT(DISTINCT binary_col)` from `test`.`t1`
+EXPLAIN SELECT COUNT(DISTINCT varbinary_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`varbinary_col`) AS `COUNT(DISTINCT varbinary_col)` from `test`.`t1`
+EXPLAIN SELECT COUNT(DISTINCT blob_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`blob_col`) AS `COUNT(DISTINCT blob_col)` from `test`.`t1`
+EXPLAIN SELECT COUNT(DISTINCT tinyblob_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`tinyblob_col`) AS `COUNT(DISTINCT tinyblob_col)` from `test`.`t1`
+EXPLAIN SELECT COUNT(DISTINCT mediumblob_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`mediumblob_col`) AS `COUNT(DISTINCT mediumblob_col)` from `test`.`t1`
+EXPLAIN SELECT COUNT(DISTINCT longblob_col) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`longblob_col`) AS `COUNT(DISTINCT longblob_col)` from `test`.`t1`
+DROP TABLE t1;
+# case6: The parameter of COUNT(DISTINCT) is a function.
+CREATE TABLE t1 (
+id INT AUTO_INCREMENT PRIMARY KEY,
+c1 INT,
+c2 INT,
+c3 TINYINT
+);
+INSERT INTO t1 (c1, c2, c3) VALUES 
+(10, 100, 10),
+(10, 100, 10),
+(30, 300, 3),
+(100, 10, 10),
+(50, 500, 5);
+EXPLAIN SELECT COUNT(DISTINCT 1+2) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select count(distinct (1 + 2)) AS `COUNT(DISTINCT 1+2)` from `test`.`t1`
+SELECT COUNT(DISTINCT 1+2) FROM t1;
+COUNT(DISTINCT 1+2)
+1
+EXPLAIN SELECT COUNT(DISTINCT c1+c2) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct (`test`.`t1`.`c1` + `test`.`t1`.`c2`)) AS `COUNT(DISTINCT c1+c2)` from `test`.`t1`
+SELECT COUNT(DISTINCT c1+c2) FROM t1;
+COUNT(DISTINCT c1+c2)
+3
+EXPLAIN SELECT COUNT(DISTINCT c1+c2-c3) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct ((`test`.`t1`.`c1` + `test`.`t1`.`c2`) - `test`.`t1`.`c3`)) AS `COUNT(DISTINCT c1+c2-c3)` from `test`.`t1`
+SELECT COUNT(DISTINCT c1+c2-c3) FROM t1;
+COUNT(DISTINCT c1+c2-c3)
+3
+# case7: Cases with multiple COUNT(DISTINCT).
+EXPLAIN SELECT COUNT(DISTINCT c1+c2-c3), COUNT(DISTINCT(c1)) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct ((`test`.`t1`.`c1` + `test`.`t1`.`c2`) - `test`.`t1`.`c3`)) AS `COUNT(DISTINCT c1+c2-c3)`,count(distinct `test`.`t1`.`c1`) AS `COUNT(DISTINCT(c1))` from `test`.`t1`
+SELECT COUNT(DISTINCT c1+c2-c3), COUNT(DISTINCT(c1)) FROM t1;
+COUNT(DISTINCT c1+c2-c3)	COUNT(DISTINCT(c1))
+3	4
+EXPLAIN SELECT COUNT(DISTINCT c1+c2-c3), COUNT(DISTINCT(1)) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct ((`test`.`t1`.`c1` + `test`.`t1`.`c2`) - `test`.`t1`.`c3`)) AS `COUNT(DISTINCT c1+c2-c3)`,count(distinct 1) AS `COUNT(DISTINCT(1))` from `test`.`t1`
+SELECT COUNT(DISTINCT c1+c2-c3), COUNT(DISTINCT(1)) FROM t1;
+COUNT(DISTINCT c1+c2-c3)	COUNT(DISTINCT(1))
+3	1
+EXPLAIN SELECT COUNT(DISTINCT c1+c2-c3), COUNT(DISTINCT(NULL)) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct ((`test`.`t1`.`c1` + `test`.`t1`.`c2`) - `test`.`t1`.`c3`)) AS `COUNT(DISTINCT c1+c2-c3)`,count(distinct NULL) AS `COUNT(DISTINCT(NULL))` from `test`.`t1`
+SELECT COUNT(DISTINCT c1+c2-c3), COUNT(DISTINCT(NULL)) FROM t1;
+COUNT(DISTINCT c1+c2-c3)	COUNT(DISTINCT(NULL))
+3	0
+EXPLAIN SELECT COUNT(DISTINCT c1), COUNT(DISTINCT c2) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`c1`) AS `COUNT(DISTINCT c1)`,count(distinct `test`.`t1`.`c2`) AS `COUNT(DISTINCT c2)` from `test`.`t1`
+SELECT COUNT(DISTINCT c1), COUNT(DISTINCT c2) FROM t1;
+COUNT(DISTINCT c1)	COUNT(DISTINCT c2)
+4	4
+EXPLAIN SELECT COUNT(DISTINCT c1), COUNT(DISTINCT c2), COUNT(DISTINCT c3) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`c1`) AS `COUNT(DISTINCT c1)`,count(distinct `test`.`t1`.`c2`) AS `COUNT(DISTINCT c2)`,count(distinct `test`.`t1`.`c3`) AS `COUNT(DISTINCT c3)` from `test`.`t1`
+SELECT COUNT(DISTINCT c1), COUNT(DISTINCT c2), COUNT(DISTINCT c3) FROM t1;
+COUNT(DISTINCT c1)	COUNT(DISTINCT c2)	COUNT(DISTINCT c3)
+4	4	3
+EXPLAIN SELECT COUNT(DISTINCT c1), COUNT(DISTINCT c2), COUNT(DISTINCT 1) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`c1`) AS `COUNT(DISTINCT c1)`,count(distinct `test`.`t1`.`c2`) AS `COUNT(DISTINCT c2)`,count(distinct 1) AS `COUNT(DISTINCT 1)` from `test`.`t1`
+SELECT COUNT(DISTINCT c1), COUNT(DISTINCT c2), COUNT(DISTINCT 1) FROM t1;
+COUNT(DISTINCT c1)	COUNT(DISTINCT c2)	COUNT(DISTINCT 1)
+4	4	1
+EXPLAIN SELECT COUNT(DISTINCT c1), COUNT(DISTINCT c2), COUNT(DISTINCT NULL) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`c1`) AS `COUNT(DISTINCT c1)`,count(distinct `test`.`t1`.`c2`) AS `COUNT(DISTINCT c2)`,count(distinct NULL) AS `COUNT(DISTINCT NULL)` from `test`.`t1`
+SELECT COUNT(DISTINCT c1), COUNT(DISTINCT c2), COUNT(DISTINCT NULL) FROM t1;
+COUNT(DISTINCT c1)	COUNT(DISTINCT c2)	COUNT(DISTINCT NULL)
+4	4	0
+DROP TABLE t1;
+# case8: COUNT(DISTINCT) appears in the HAVING clause.
+CREATE TABLE t1 (
+id INT AUTO_INCREMENT PRIMARY KEY,
+n1 INT,
+n2 INT
+);
+INSERT INTO t1 (n1, n2) VALUES 
+(10, 100),
+(20, 200),
+(30, 300),
+(20, 201),
+(40, 400),
+(50, 500),
+(30, 301),
+(60, 600);
+EXPLAIN SELECT COUNT(DISTINCT n1) AS DISTINCT_n1_COUNT FROM t1 HAVING COUNT(DISTINCT n1) > 4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`n1`) AS `DISTINCT_n1_COUNT` from `test`.`t1` having (count(distinct `<temporary>`.`count(distinct t1.n1)`) > 4)
+SELECT COUNT(DISTINCT n1) AS DISTINCT_n1_COUNT FROM t1 HAVING COUNT(DISTINCT n1) > 4;
+DISTINCT_n1_COUNT
+6
+EXPLAIN SELECT COUNT(DISTINCT n1) AS DISTINCT_n1_COUNT FROM t1 HAVING COUNT(DISTINCT n1) < 4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`n1`) AS `DISTINCT_n1_COUNT` from `test`.`t1` having (count(distinct `<temporary>`.`count(distinct t1.n1)`) < 4)
+SELECT COUNT(DISTINCT n1) AS DISTINCT_n1_COUNT FROM t1 HAVING COUNT(DISTINCT n1) < 4;
+DISTINCT_n1_COUNT
+EXPLAIN SELECT COUNT(DISTINCT n1) AS DISTINCT_n1_COUNT FROM t1 HAVING COUNT(DISTINCT n1, n2) > 4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`n1`) AS `DISTINCT_n1_COUNT` from `test`.`t1` having (count(distinct `<temporary>`.`count(distinct t1.n1,t1.n2)`) > 4)
+SELECT COUNT(DISTINCT n1) AS DISTINCT_n1_COUNT FROM t1 HAVING COUNT(DISTINCT n1, n2) > 4;
+DISTINCT_n1_COUNT
+6
+EXPLAIN SELECT n1 AS DISTINCT_n1_COUNT FROM t1 GROUP BY n1 HAVING COUNT(DISTINCT n1, n2) < 4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`n1` AS `DISTINCT_n1_COUNT` from `test`.`t1` group by `test`.`t1`.`n1` having (count(distinct `<temporary>`.`count(distinct t1.n1,t1.n2)`) < 4)
+SELECT n1 AS DISTINCT_n1_COUNT FROM t1 GROUP BY n1 HAVING COUNT(DISTINCT n1, n2) < 4;
+DISTINCT_n1_COUNT
+10
+20
+30
+40
+50
+60
+DROP TABLE t1;
+# case9: COUNT(DISTINCT) appears in the WHERE clause.
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+c1 INT,
+c2 INT
+);
+CREATE TABLE t2 (
+id INT PRIMARY KEY,
+c1 INT,
+c2 INT
+);
+CREATE TABLE t3 (
+id INT PRIMARY KEY,
+c1 INT,
+c2 INT
+);
+INSERT INTO t1 (id, c1, c2) VALUES
+(1, 100, 101),
+(2, 200, 201),
+(3, 300, 301);
+INSERT INTO t2 (id, c1, c2) VALUES
+(1, 400, 401),
+(2, 500, 501),
+(3, 600, 601);
+INSERT INTO t3 (id, c1, c2) VALUES
+(1, 700, 701),
+(2, 800, 801),
+(3, 900, 901);
+EXPLAIN SELECT * FROM t1 WHERE t1.c1 >= (SELECT COUNT(DISTINCT c1) FROM t2 WHERE c1 >= 500);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+2	SUBQUERY	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t2)
+2	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`c1` AS `c1`,`test`.`t1`.`c2` AS `c2` from `test`.`t1` where (`test`.`t1`.`c1` >= (/* select#2 */ select count(distinct `test`.`t2`.`c1`) from `test`.`t2` where (`test`.`t2`.`c1` >= 500)))
+SELECT * FROM t1 WHERE t1.c1 >= (SELECT COUNT(DISTINCT c1) FROM t2 WHERE c1 >= 500);
+id	c1	c2
+1	100	101
+2	200	201
+3	300	301
+EXPLAIN SELECT * FROM t1 WHERE t1.c1 >= (SELECT COUNT(DISTINCT c1, c2) FROM t2 WHERE c1 >= 500);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+2	SUBQUERY	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t2)
+2	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`c1` AS `c1`,`test`.`t1`.`c2` AS `c2` from `test`.`t1` where (`test`.`t1`.`c1` >= (/* select#2 */ select count(distinct `test`.`t2`.`c1`,`test`.`t2`.`c2`) from `test`.`t2` where (`test`.`t2`.`c1` >= 500)))
+SELECT * FROM t1 WHERE t1.c1 >= (SELECT COUNT(DISTINCT c1, c2) FROM t2 WHERE c1 >= 500);
+id	c1	c2
+1	100	101
+2	200	201
+3	300	301
+# case10: COUNT(DISTINCT) appears in the join condition.
+EXPLAIN SELECT t1.*, t2.* FROM t1 JOIN t2 ON t1.id=t2.id AND t1.c1 >= (SELECT COUNT(DISTINCT c1) FROM t3 WHERE c1 > 700);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	Using where
+1	SIMPLE	t2	NULL	eq_ref	PRIMARY	PRIMARY	4	test.t1.id	#	#	NULL
+2	SUBQUERY	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t3)
+2	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`c1` AS `c1`,`test`.`t1`.`c2` AS `c2`,`test`.`t2`.`id` AS `id`,`test`.`t2`.`c1` AS `c1`,`test`.`t2`.`c2` AS `c2` from `test`.`t1` join `test`.`t2` where ((`test`.`t2`.`id` = `test`.`t1`.`id`) and (`test`.`t1`.`c1` >= (/* select#2 */ select count(distinct `test`.`t3`.`c1`) from `test`.`t3` where (`test`.`t3`.`c1` > 700))))
+SELECT t1.*, t2.* FROM t1 JOIN t2 ON t1.id=t2.id AND t1.c1 >= (SELECT COUNT(DISTINCT c1) FROM t3 WHERE c1 > 700);
+id	c1	c2	id	c1	c2
+1	100	101	1	400	401
+2	200	201	2	500	501
+3	300	301	3	600	601
+EXPLAIN SELECT t1.*, t2.* FROM t1 JOIN t2 ON t1.id=t2.id AND t1.c1 >= (SELECT COUNT(DISTINCT c1, c2) FROM t3 WHERE c1 > 700);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	Using where
+1	SIMPLE	t2	NULL	eq_ref	PRIMARY	PRIMARY	4	test.t1.id	#	#	NULL
+2	SUBQUERY	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t3)
+2	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`c1` AS `c1`,`test`.`t1`.`c2` AS `c2`,`test`.`t2`.`id` AS `id`,`test`.`t2`.`c1` AS `c1`,`test`.`t2`.`c2` AS `c2` from `test`.`t1` join `test`.`t2` where ((`test`.`t2`.`id` = `test`.`t1`.`id`) and (`test`.`t1`.`c1` >= (/* select#2 */ select count(distinct `test`.`t3`.`c1`,`test`.`t3`.`c2`) from `test`.`t3` where (`test`.`t3`.`c1` > 700))))
+SELECT t1.*, t2.* FROM t1 JOIN t2 ON t1.id=t2.id AND t1.c1 >= (SELECT COUNT(DISTINCT c1, c2) FROM t3 WHERE c1 > 700);
+id	c1	c2	id	c1	c2
+1	100	101	1	400	401
+2	200	201	2	500	501
+3	300	301	3	600	601
+DROP TABLE t1;
+DROP TABLE t2;
+DROP TABLE t3;
+# case11: COUNT(DISTINCT) with GROUP BY.
+CREATE TABLE t1 (
+id INT AUTO_INCREMENT PRIMARY KEY,
+name VARCHAR(100) NOT NULL,
+age INT NOT NULL,
+department VARCHAR(50) NOT NULL
+);
+INSERT INTO t1 (name, age, department) VALUES
+('Alice', 30, 'Sales'),
+('Bob', 35, 'Dev'),
+('Charlie', 40, 'HR'),
+('Diana', 30, 'Sales'),
+('Eve', 20, 'Dev'),
+('Frank', 45, 'HR'),
+('Grace', 35, 'Sales'),
+('Heidi', 30, 'Dev'),
+('Ivan', 40, 'HR'),
+('Judy', 20, 'Sales');
+EXPLAIN SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`age`) AS `COUNT(DISTINCT age)`,`test`.`t1`.`department` AS `department` from `test`.`t1` group by `test`.`t1`.`department`
+SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department;
+COUNT(DISTINCT age)	department
+3	Dev
+2	HR
+3	Sales
+ALTER TABLE t1 ADD INDEX idx_dep(department);
+EXPLAIN SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	idx_dep	idx_dep	202	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`age`) AS `COUNT(DISTINCT age)`,`test`.`t1`.`department` AS `department` from `test`.`t1` group by `test`.`t1`.`department`
+SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department;
+COUNT(DISTINCT age)	department
+3	Dev
+2	HR
+3	Sales
+# case12: COUNT(DISTINCT) with GROUP BY + ORDER BY.
+ALTER TABLE t1 DROP INDEX idx_dep;
+EXPLAIN SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department ORDER BY department DESC;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`age`) AS `COUNT(DISTINCT age)`,`test`.`t1`.`department` AS `department` from `test`.`t1` group by `test`.`t1`.`department` desc order by `test`.`t1`.`department` desc
+SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department ORDER BY department DESC;
+COUNT(DISTINCT age)	department
+3	Sales
+2	HR
+3	Dev
+ALTER TABLE t1 ADD INDEX idx_dep(department);
+EXPLAIN SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department ORDER BY department DESC;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	idx_dep	idx_dep	202	NULL	#	#	Backward index scan
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`age`) AS `COUNT(DISTINCT age)`,`test`.`t1`.`department` AS `department` from `test`.`t1` group by `test`.`t1`.`department` desc order by `test`.`t1`.`department` desc
+SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department ORDER BY department DESC;
+COUNT(DISTINCT age)	department
+3	Sales
+2	HR
+3	Dev
+# case13: COUNT(DISTINCT) with GROUP BY + ORDER BY + HAVING.
+ALTER TABLE t1 DROP INDEX idx_dep;
+EXPLAIN SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department HAVING COUNT(DISTINCT age) > 2 ORDER BY department DESC;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`age`) AS `COUNT(DISTINCT age)`,`test`.`t1`.`department` AS `department` from `test`.`t1` group by `test`.`t1`.`department` desc having (count(distinct `<temporary>`.`count(distinct t1.age)`) > 2) order by `test`.`t1`.`department` desc
+SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department HAVING COUNT(DISTINCT age) > 2 ORDER BY department DESC;
+COUNT(DISTINCT age)	department
+3	Sales
+3	Dev
+ALTER TABLE t1 ADD INDEX idx_dep(department);
+EXPLAIN SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department HAVING COUNT(DISTINCT age) > 2 ORDER BY department DESC;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	idx_dep	idx_dep	202	NULL	#	#	Backward index scan
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`age`) AS `COUNT(DISTINCT age)`,`test`.`t1`.`department` AS `department` from `test`.`t1` group by `test`.`t1`.`department` desc having (count(distinct `<temporary>`.`count(distinct t1.age)`) > 2) order by `test`.`t1`.`department` desc
+SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department HAVING COUNT(DISTINCT age) > 2 ORDER BY department DESC;
+COUNT(DISTINCT age)	department
+3	Sales
+3	Dev
+# case14: COUNT(DISTINCT) with GROUP BY + ORDER BY + HAVING + limit
+ALTER TABLE t1 DROP INDEX idx_dep;
+EXPLAIN SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department HAVING COUNT(DISTINCT age) > 2 ORDER BY department DESC limit 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`age`) AS `COUNT(DISTINCT age)`,`test`.`t1`.`department` AS `department` from `test`.`t1` group by `test`.`t1`.`department` desc having (count(distinct `<temporary>`.`count(distinct t1.age)`) > 2) order by `test`.`t1`.`department` desc limit 2
+SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department HAVING COUNT(DISTINCT age) > 2 ORDER BY department DESC limit 2;
+COUNT(DISTINCT age)	department
+3	Sales
+3	Dev
+ALTER TABLE t1 ADD INDEX idx_dep(department);
+EXPLAIN SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department HAVING COUNT(DISTINCT age) > 2 ORDER BY department DESC limit 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	idx_dep	idx_dep	202	NULL	#	#	Backward index scan
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`age`) AS `COUNT(DISTINCT age)`,`test`.`t1`.`department` AS `department` from `test`.`t1` group by `test`.`t1`.`department` desc having (count(distinct `<temporary>`.`count(distinct t1.age)`) > 2) order by `test`.`t1`.`department` desc limit 2
+SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department HAVING COUNT(DISTINCT age) > 2 ORDER BY department DESC limit 2;
+COUNT(DISTINCT age)	department
+3	Sales
+3	Dev
+# case15: PQ does not support scenarios where ROLLUP is used.
+EXPLAIN SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department WITH ROLLUP;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	idx_dep	idx_dep	202	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select rollup_sum_switcher(distinct count(distinct `test`.`t1`.`age`)) AS `COUNT(DISTINCT age)`,rollup_group_item(`test`.`t1`.`department`,0) AS `department` from `test`.`t1` group by `test`.`t1`.`department` with rollup
+SELECT COUNT(DISTINCT age), department FROM t1 GROUP BY department WITH ROLLUP;
+COUNT(DISTINCT age)	department
+3	Dev
+2	HR
+3	Sales
+5	NULL
+DROP TABLE t1;
+# case16: COUNT(DISTINCT) + PRIMARY KEY / UNIQUE KEY / KEY
+CREATE TABLE `t1` (
+`id` int NOT NULL,
+`c1` int DEFAULT NULL,
+`c2` int DEFAULT NULL,
+`c3` int DEFAULT NULL,
+PRIMARY KEY (`id`),
+UNIQUE KEY `c2` (`c2`),
+KEY `idx_c3` (`c3`)
+);
+INSERT INTO t1 (id, c1, c2, c3) VALUES
+(1, 10, 100, 1000),
+(2, 20, 200, 2000),
+(3, 30, 300, 3000),
+(4, 40, 400, 3000),
+(5, 10, 500, 5000);
+analyze table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+EXPLAIN SELECT COUNT(DISTINCT id) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	PRIMARY,c2,idx_c3	c2	5	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`id`) AS `COUNT(DISTINCT id)` from `test`.`t1`
+SELECT COUNT(DISTINCT id) FROM t1;
+COUNT(DISTINCT id)
+5
+EXPLAIN SELECT COUNT(DISTINCT c1) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`c1`) AS `COUNT(DISTINCT c1)` from `test`.`t1`
+SELECT COUNT(DISTINCT c1) FROM t1;
+COUNT(DISTINCT c1)
+4
+EXPLAIN SELECT COUNT(DISTINCT c2) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	c2	c2	5	NULL	#	#	Using index for group-by (scanning)
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`c2`) AS `COUNT(DISTINCT c2)` from `test`.`t1`
+SELECT COUNT(DISTINCT c2) FROM t1;
+COUNT(DISTINCT c2)
+5
+EXPLAIN SELECT COUNT(DISTINCT c3) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	idx_c3	idx_c3	5	NULL	#	#	Using index for group-by (scanning)
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`c3`) AS `COUNT(DISTINCT c3)` from `test`.`t1`
+SELECT COUNT(DISTINCT c3) FROM t1;
+COUNT(DISTINCT c3)
+4
+# case17: COUNT(DISTINCT) used in conjunction with other aggregate functions.
+EXPLAIN SELECT COUNT(*), COUNT(DISTINCT c1) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)`,count(distinct `test`.`t1`.`c1`) AS `COUNT(DISTINCT c1)` from `test`.`t1`
+SELECT COUNT(*), COUNT(DISTINCT c1) FROM t1;
+COUNT(*)	COUNT(DISTINCT c1)
+5	4
+EXPLAIN SELECT COUNT(*), COUNT(DISTINCT 1) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	c2	5	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)`,count(distinct 1) AS `COUNT(DISTINCT 1)` from `test`.`t1`
+SELECT COUNT(*), COUNT(DISTINCT 1) FROM t1;
+COUNT(*)	COUNT(DISTINCT 1)
+5	1
+EXPLAIN SELECT COUNT(*), COUNT(DISTINCT NULL) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	index	NULL	c2	5	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)`,count(distinct NULL) AS `COUNT(DISTINCT NULL)` from `test`.`t1`
+SELECT COUNT(*), COUNT(DISTINCT NULL) FROM t1;
+COUNT(*)	COUNT(DISTINCT NULL)
+5	0
+EXPLAIN SELECT DISTINCT 1, COUNT(DISTINCT c1) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select 1 AS `1`,count(distinct `test`.`t1`.`c1`) AS `COUNT(DISTINCT c1)` from `test`.`t1`
+SELECT DISTINCT 1, COUNT(DISTINCT c1) FROM t1;
+1	COUNT(DISTINCT c1)
+1	4
+EXPLAIN SELECT DISTINCT(c1),COUNT(DISTINCT c2)  FROM t1 GROUP BY c1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`c1` AS `c1`,count(distinct `test`.`t1`.`c2`) AS `COUNT(DISTINCT c2)` from `test`.`t1` group by `test`.`t1`.`c1`
+SELECT DISTINCT(c1),COUNT(DISTINCT c2)  FROM t1 GROUP BY c1;
+c1	COUNT(DISTINCT c2)
+10	2
+20	1
+30	1
+40	1
+EXPLAIN SELECT DISTINCT(c1),COUNT(DISTINCT c1, c2)  FROM t1 GROUP BY c1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`c1` AS `c1`,count(distinct `test`.`t1`.`c1`,`test`.`t1`.`c2`) AS `COUNT(DISTINCT c1, c2)` from `test`.`t1` group by `test`.`t1`.`c1`
+SELECT DISTINCT(c1),COUNT(DISTINCT c1, c2)  FROM t1 GROUP BY c1;
+c1	COUNT(DISTINCT c1, c2)
+10	2
+20	1
+30	1
+40	1
+DROP TABLE t1;
+CREATE TABLE departments (
+department_id INT PRIMARY KEY,
+department_name VARCHAR(255) NOT NULL
+);
+CREATE TABLE employees (
+employee_id INT PRIMARY KEY,
+name VARCHAR(255) NOT NULL,
+sex CHAR(1) NOT NULL,
+department_id INT
+);
+INSERT INTO departments (department_id, department_name) VALUES
+(1, 'Sales'),
+(2, 'Engineering'),
+(3, 'Human Resources'),
+(4, 'Finance');
+INSERT INTO employees (employee_id, name, sex, department_id) VALUES
+(1, 'John Doe', 'M', 1),
+(2, 'Jane Smith', 'F', 2),
+(3, 'Emily Davis', 'F', 3),
+(4, 'Michael Brown', 'M', 4),
+(5, 'Jessica Wilson', 'F', 1),
+(6, 'Christopher Lee', 'M', 2),
+(7, 'Patricia Miller', 'F', 3),
+(8, 'William Hall', 'M', 4),
+(9, 'Amanda Allen', 'F', 1),
+(10, 'Richard Scott', 'M', 2);
+# case18: Singlerow Subquery
+EXPLAIN SELECT 
+d.department_name,
+(SELECT COUNT(DISTINCT e.sex) 
+FROM employees e 
+WHERE e.department_id = (
+SELECT department_id 
+FROM employees 
+WHERE name = 'John Doe'
+     )) AS distinct_sex_count
+FROM departments d
+WHERE d.department_id = (
+SELECT department_id 
+FROM employees 
+WHERE name = 'John Doe'
+);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	d	NULL	const	PRIMARY	PRIMARY	4	const	#	#	NULL
+4	SUBQUERY	<gather4>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.employees)
+4	SIMPLE	employees	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+2	SUBQUERY	<gather2>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.e)
+2	SIMPLE	e	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+3	SUBQUERY	<gather3>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.employees)
+3	SIMPLE	employees	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select 'Sales' AS `department_name`,(/* select#2 */ select count(distinct `test`.`e`.`sex`) from `test`.`employees` `e` where (`test`.`e`.`department_id` = (/* select#3 */ select `test`.`employees`.`department_id` from `test`.`employees` where (`test`.`employees`.`name` = 'John Doe')))) AS `distinct_sex_count` from `test`.`departments` `d` where true
+SELECT 
+d.department_name,
+(SELECT COUNT(DISTINCT e.sex) 
+FROM employees e 
+WHERE e.department_id = (
+SELECT department_id 
+FROM employees 
+WHERE name = 'John Doe'
+     )) AS distinct_sex_count
+FROM departments d
+WHERE d.department_id = (
+SELECT department_id 
+FROM employees 
+WHERE name = 'John Doe'
+);
+department_name	distinct_sex_count
+Sales	2
+# case19: IN Subquery
+EXPLAIN SELECT 
+d.department_id,
+d.department_name
+FROM 
+departments d
+WHERE 
+d.department_id IN (
+SELECT e.department_id
+FROM employees e
+GROUP BY e.department_id
+HAVING COUNT(DISTINCT e.sex) > 2
+);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	d	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+2	SUBQUERY	e	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using filesort
+Warnings:
+Note	1003	/* select#1 */ select `test`.`d`.`department_id` AS `department_id`,`test`.`d`.`department_name` AS `department_name` from `test`.`departments` `d` where <in_optimizer>(`test`.`d`.`department_id`,`test`.`d`.`department_id` in ( <materialize> (/* select#2 */ select `test`.`e`.`department_id` from `test`.`employees` `e` group by `test`.`e`.`department_id` having (count(distinct `test`.`e`.`sex`) > 2) ), <primary_index_lookup>(`test`.`d`.`department_id` in <temporary table> on <auto_distinct_key> where ((`test`.`d`.`department_id` = `<materialized_subquery>`.`department_id`)))))
+SELECT 
+d.department_id,
+d.department_name
+FROM 
+departments d
+WHERE 
+d.department_id IN (
+SELECT e.department_id
+FROM employees e
+GROUP BY e.department_id
+HAVING COUNT(DISTINCT e.sex) > 2
+);
+department_id	department_name
+# case20: EXISTS Subquery
+EXPLAIN SELECT 
+d.department_id,
+d.department_name
+FROM 
+departments d
+WHERE 
+EXISTS (
+SELECT 1
+FROM employees e
+WHERE e.department_id = d.department_id
+GROUP BY e.department_id
+HAVING COUNT(DISTINCT e.sex) >= 2
+);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.d)
+1	PRIMARY	d	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+2	DEPENDENT SUBQUERY	e	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using filesort
+Warnings:
+Note	1276	Field or reference 'test.d.department_id' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`d`.`department_id` AS `department_id`,`test`.`d`.`department_name` AS `department_name` from `test`.`departments` `d` where exists(/* select#2 */ select 1 from `test`.`employees` `e` where (`test`.`e`.`department_id` = `test`.`d`.`department_id`) group by `test`.`e`.`department_id` having (count(distinct `test`.`e`.`sex`) >= 2))
+SELECT 
+d.department_id,
+d.department_name
+FROM 
+departments d
+WHERE 
+EXISTS (
+SELECT 1
+FROM employees e
+WHERE e.department_id = d.department_id
+GROUP BY e.department_id
+HAVING COUNT(DISTINCT e.sex) >= 2
+);
+department_id	department_name
+# case21: ALL Subquery
+EXPLAIN SELECT 
+d.department_id,
+d.department_name
+FROM 
+departments d
+WHERE 
+(SELECT COUNT(DISTINCT e.sex)
+FROM employees e
+WHERE e.department_id = d.department_id) >= ALL (
+SELECT COUNT(DISTINCT e2.sex)
+FROM employees e2
+GROUP BY e2.department_id
+);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	d	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+3	SUBQUERY	e2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using filesort
+2	DEPENDENT SUBQUERY	e	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1276	Field or reference 'test.d.department_id' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`d`.`department_id` AS `department_id`,`test`.`d`.`department_name` AS `department_name` from `test`.`departments` `d` where <not>(((/* select#2 */ select count(distinct `test`.`e`.`sex`) from `test`.`employees` `e` where (`test`.`e`.`department_id` = `test`.`d`.`department_id`)) < <max>(/* select#3 */ select count(distinct `test`.`e2`.`sex`) from `test`.`employees` `e2` group by `test`.`e2`.`department_id`)))
+SELECT 
+d.department_id,
+d.department_name
+FROM 
+departments d
+WHERE 
+(SELECT COUNT(DISTINCT e.sex)
+FROM employees e
+WHERE e.department_id = d.department_id) >= ALL (
+SELECT COUNT(DISTINCT e2.sex)
+FROM employees e2
+GROUP BY e2.department_id
+);
+department_id	department_name
+1	Sales
+2	Engineering
+# case22: ANY Subquery
+EXPLAIN SELECT 
+d.department_id,
+d.department_name
+FROM 
+departments d
+WHERE 
+(SELECT COUNT(DISTINCT e.sex)
+FROM employees e
+WHERE e.department_id = d.department_id) >= ANY (
+SELECT COUNT(DISTINCT e2.sex)
+FROM employees e2
+GROUP BY e2.department_id
+HAVING COUNT(DISTINCT e2.sex) >= 2
+);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	d	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+3	SUBQUERY	e2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using filesort
+2	DEPENDENT SUBQUERY	e	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1276	Field or reference 'test.d.department_id' of SELECT #2 was resolved in SELECT #1
+Note	1003	/* select#1 */ select `test`.`d`.`department_id` AS `department_id`,`test`.`d`.`department_name` AS `department_name` from `test`.`departments` `d` where <nop>(((/* select#2 */ select count(distinct `test`.`e`.`sex`) from `test`.`employees` `e` where (`test`.`e`.`department_id` = `test`.`d`.`department_id`)) >= <min>(/* select#3 */ select count(distinct `test`.`e2`.`sex`) from `test`.`employees` `e2` group by `test`.`e2`.`department_id` having (count(distinct `test`.`e2`.`sex`) >= 2))))
+SELECT 
+d.department_id,
+d.department_name
+FROM 
+departments d
+WHERE 
+(SELECT COUNT(DISTINCT e.sex)
+FROM employees e
+WHERE e.department_id = d.department_id) >= ANY (
+SELECT COUNT(DISTINCT e2.sex)
+FROM employees e2
+GROUP BY e2.department_id
+HAVING COUNT(DISTINCT e2.sex) >= 2
+);
+department_id	department_name
+1	Sales
+2	Engineering
+DROP TABLE employees;
+DROP TABLE departments;
+# case23: temporary table parameters
+CREATE TABLE t1 (a INT);
+CREATE PROCEDURE InsertNumbers()
+BEGIN
+DECLARE i INT DEFAULT 1;
+WHILE i <= 1000 DO
+INSERT INTO t1 (a) VALUES (i);
+SET i = i + 1;
+END WHILE;
+END|
+CALL InsertNumbers();
+SELECT /*+ SET_VAR(tmp_table_size=1024) */ COUNT(DISTINCT a) FROM t1;
+COUNT(DISTINCT a)
+1000
+DROP PROCEDURE InsertNumbers;
+DROP TABLE t1;
+# case24: EXPLAIN
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+c1 INT
+);
+INSERT INTO t1 (id, c1) VALUES
+(1, 100),
+(2, 200),
+(3, 300);
+EXPLAIN SELECT COUNT(DISTINCT c1) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`c1`) AS `COUNT(DISTINCT c1)` from `test`.`t1`
+EXPLAIN ANALYZE SELECT COUNT(DISTINCT c1) FROM t1;
+EXPLAIN
+-> Aggregate: count(distinct `<temporary>`.`COUNT(DISTINCT c1)`)  (cost=0.8 rows=1) (actual rows loops)
+    -> Gather: 4 workers, parallel scan on t1  (cost=0.4 rows=4) (actual rows loops)
+        -> Aggregate: count(distinct `<temporary>`.`COUNT(DISTINCT c1)`)  (cost=0.4 rows=1) (actual rows loops)
+            -> Parallel table scan on t1  (cost=0.325 rows=0.75) (actual rows loops)
+
+# case25: pq_support_features_switch = 'count_distinct=off'
+EXPLAIN SELECT COUNT(DISTINCT c1) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.t1)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`c1`) AS `COUNT(DISTINCT c1)` from `test`.`t1`
+show variables like '%pq_support_features_switch%';
+Variable_name	Value
+pq_support_features_switch	simple_aggregate=on,count_distinct=on,correlated_subquery=on,hash_join_spill_to_disk=on,insert_select=on
+SET pq_support_features_switch = 'count_distinct=off';
+show variables like '%pq_support_features_switch%';
+Variable_name	Value
+pq_support_features_switch	simple_aggregate=on,count_distinct=off,correlated_subquery=on,hash_join_spill_to_disk=on,insert_select=on
+EXPLAIN SELECT COUNT(DISTINCT c1) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`c1`) AS `COUNT(DISTINCT c1)` from `test`.`t1`
+SET pq_support_features_switch = 'count_distinct=on';
+DROP TABLE t1;
+# case26: range
+CREATE TABLE transactions (
+app_trans_id INT DEFAULT NULL,
+id INT NOT NULL,
+tbl INT NOT NULL DEFAULT 1,
+created TIMESTAMP NOT NULL DEFAULT '2017-01-01 01:01:01',
+trans_type INT NOT NULL,
+description BLOB,
+source_lvl1 INT DEFAULT NULL,
+source_lvl2 INT DEFAULT NULL,
+KEY tbl_id_idx (tbl,id),
+KEY created_idx (created),
+KEY trans_type_created_idx (trans_type,created),
+KEY app_trans_id_idx (app_trans_id)
+) ENGINE=INNODB ;
+CREATE TABLE t1 (c1 INT);
+INSERT INTO t1 VALUES (1), (1000), (2000), (3000), (4000), (5000), (6000),
+(7000), (8000), (9000);
+CREATE PROCEDURE p()
+BEGIN
+SET @x = 1;
+REPEAT
+INSERT IGNORE INTO transactions(id,trans_type, description)
+SELECT c1 + @x, @x , 'abcd'
+  FROM t1;
+SET @x =  @x + 1;
+UNTIL @x > 300 END REPEAT;
+END $
+CALL p();
+SELECT count(*) FROM transactions;
+count(*)
+3000
+INSERT IGNORE INTO transactions(id,trans_type, description, created)
+SELECT 3, 3 , 'abcd', '2018-01-01 01:01:01'
+  FROM dual;
+# case 26.0: origin
+SET pq_support_features_switch = 'count_distinct=off';
+EXPLAIN SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	transactions	NULL	range	tbl_id_idx,created_idx,trans_type_created_idx	created_idx	4	NULL	#	#	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select '2017-10-23 01:01:01' AS `2017-10-23 01:01:01`,hour(`test`.`transactions`.`created`) AS `HOUR(created)`,`test`.`transactions`.`source_lvl1` AS `source_lvl1`,`test`.`transactions`.`source_lvl2` AS `source_lvl2`,count(distinct `test`.`transactions`.`app_trans_id`) AS `COUNT(DISTINCT(app_trans_id))` from `test`.`transactions` where ((`test`.`transactions`.`trans_type` = 3) and (`test`.`transactions`.`tbl` = 1) and (`test`.`transactions`.`created` > TIMESTAMP'2017-10-23 01:01:01')) group by '2017-10-23 01:01:01',hour(`test`.`transactions`.`created`),`test`.`transactions`.`source_lvl1`,`test`.`transactions`.`source_lvl2`
+SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+2017-10-23 01:01:01	HOUR(created)	source_lvl1	source_lvl2	COUNT(DISTINCT(app_trans_id))
+2017-10-23 01:01:01	1	NULL	NULL	0
+SET pq_support_features_switch = 'count_distinct=on';
+EXPLAIN SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.transactions)
+1	SIMPLE	transactions	NULL	range	tbl_id_idx,created_idx,trans_type_created_idx	created_idx	4	NULL	#	#	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select '2017-10-23 01:01:01' AS `2017-10-23 01:01:01`,hour(`test`.`transactions`.`created`) AS `HOUR(created)`,`test`.`transactions`.`source_lvl1` AS `source_lvl1`,`test`.`transactions`.`source_lvl2` AS `source_lvl2`,count(distinct `test`.`transactions`.`app_trans_id`) AS `COUNT(DISTINCT(app_trans_id))` from `test`.`transactions` where ((`test`.`transactions`.`trans_type` = 3) and (`test`.`transactions`.`tbl` = 1) and (`test`.`transactions`.`created` > TIMESTAMP'2017-10-23 01:01:01')) group by '2017-10-23 01:01:01',`HOUR(created)`,`test`.`transactions`.`source_lvl1`,`test`.`transactions`.`source_lvl2`
+SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+2017-10-23 01:01:01	HOUR(created)	source_lvl1	source_lvl2	COUNT(DISTINCT(app_trans_id))
+2017-10-23 01:01:01	1	NULL	NULL	0
+# case 26.1 range_none
+set optimizer_switch=default;
+SET pq_support_features_switch = 'count_distinct=off';
+EXPLAIN SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	transactions	NULL	range	tbl_id_idx,created_idx,trans_type_created_idx	created_idx	4	NULL	#	#	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select '2017-10-23 01:01:01' AS `2017-10-23 01:01:01`,hour(`test`.`transactions`.`created`) AS `HOUR(created)`,`test`.`transactions`.`source_lvl1` AS `source_lvl1`,`test`.`transactions`.`source_lvl2` AS `source_lvl2`,count(distinct `test`.`transactions`.`app_trans_id`) AS `COUNT(DISTINCT(app_trans_id))` from `test`.`transactions` where ((`test`.`transactions`.`trans_type` = 3) and (`test`.`transactions`.`tbl` = 1) and (`test`.`transactions`.`created` > TIMESTAMP'2017-10-23 01:01:01')) group by '2017-10-23 01:01:01',hour(`test`.`transactions`.`created`),`test`.`transactions`.`source_lvl1`,`test`.`transactions`.`source_lvl2`
+SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+2017-10-23 01:01:01	HOUR(created)	source_lvl1	source_lvl2	COUNT(DISTINCT(app_trans_id))
+2017-10-23 01:01:01	1	NULL	NULL	0
+SET pq_support_features_switch = 'count_distinct=on';
+EXPLAIN SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.transactions)
+1	SIMPLE	transactions	NULL	range	tbl_id_idx,created_idx,trans_type_created_idx	created_idx	4	NULL	#	#	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select '2017-10-23 01:01:01' AS `2017-10-23 01:01:01`,hour(`test`.`transactions`.`created`) AS `HOUR(created)`,`test`.`transactions`.`source_lvl1` AS `source_lvl1`,`test`.`transactions`.`source_lvl2` AS `source_lvl2`,count(distinct `test`.`transactions`.`app_trans_id`) AS `COUNT(DISTINCT(app_trans_id))` from `test`.`transactions` where ((`test`.`transactions`.`trans_type` = 3) and (`test`.`transactions`.`tbl` = 1) and (`test`.`transactions`.`created` > TIMESTAMP'2017-10-23 01:01:01')) group by '2017-10-23 01:01:01',`HOUR(created)`,`test`.`transactions`.`source_lvl1`,`test`.`transactions`.`source_lvl2`
+SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+2017-10-23 01:01:01	HOUR(created)	source_lvl1	source_lvl2	COUNT(DISTINCT(app_trans_id))
+2017-10-23 01:01:01	1	NULL	NULL	0
+set optimizer_switch=default;
+# case 26.2 range_mrr_cost
+set optimizer_switch=default;
+set optimizer_switch='mrr=on,mrr_cost_based=on';
+SET pq_support_features_switch = 'count_distinct=off';
+EXPLAIN SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	transactions	NULL	range	tbl_id_idx,created_idx,trans_type_created_idx	created_idx	4	NULL	#	#	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select '2017-10-23 01:01:01' AS `2017-10-23 01:01:01`,hour(`test`.`transactions`.`created`) AS `HOUR(created)`,`test`.`transactions`.`source_lvl1` AS `source_lvl1`,`test`.`transactions`.`source_lvl2` AS `source_lvl2`,count(distinct `test`.`transactions`.`app_trans_id`) AS `COUNT(DISTINCT(app_trans_id))` from `test`.`transactions` where ((`test`.`transactions`.`trans_type` = 3) and (`test`.`transactions`.`tbl` = 1) and (`test`.`transactions`.`created` > TIMESTAMP'2017-10-23 01:01:01')) group by '2017-10-23 01:01:01',hour(`test`.`transactions`.`created`),`test`.`transactions`.`source_lvl1`,`test`.`transactions`.`source_lvl2`
+SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+2017-10-23 01:01:01	HOUR(created)	source_lvl1	source_lvl2	COUNT(DISTINCT(app_trans_id))
+2017-10-23 01:01:01	1	NULL	NULL	0
+SET pq_support_features_switch = 'count_distinct=on';
+EXPLAIN SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.transactions)
+1	SIMPLE	transactions	NULL	range	tbl_id_idx,created_idx,trans_type_created_idx	created_idx	4	NULL	#	#	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select '2017-10-23 01:01:01' AS `2017-10-23 01:01:01`,hour(`test`.`transactions`.`created`) AS `HOUR(created)`,`test`.`transactions`.`source_lvl1` AS `source_lvl1`,`test`.`transactions`.`source_lvl2` AS `source_lvl2`,count(distinct `test`.`transactions`.`app_trans_id`) AS `COUNT(DISTINCT(app_trans_id))` from `test`.`transactions` where ((`test`.`transactions`.`trans_type` = 3) and (`test`.`transactions`.`tbl` = 1) and (`test`.`transactions`.`created` > TIMESTAMP'2017-10-23 01:01:01')) group by '2017-10-23 01:01:01',`HOUR(created)`,`test`.`transactions`.`source_lvl1`,`test`.`transactions`.`source_lvl2`
+SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+2017-10-23 01:01:01	HOUR(created)	source_lvl1	source_lvl2	COUNT(DISTINCT(app_trans_id))
+2017-10-23 01:01:01	1	NULL	NULL	0
+set optimizer_switch=default;
+# case 26.3 range_mrr
+set optimizer_switch=default;
+set optimizer_switch='mrr=on,mrr_cost_based=off';
+SET pq_support_features_switch = 'count_distinct=off';
+EXPLAIN SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	transactions	NULL	range	tbl_id_idx,created_idx,trans_type_created_idx	created_idx	4	NULL	#	#	Using where; Using MRR; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select '2017-10-23 01:01:01' AS `2017-10-23 01:01:01`,hour(`test`.`transactions`.`created`) AS `HOUR(created)`,`test`.`transactions`.`source_lvl1` AS `source_lvl1`,`test`.`transactions`.`source_lvl2` AS `source_lvl2`,count(distinct `test`.`transactions`.`app_trans_id`) AS `COUNT(DISTINCT(app_trans_id))` from `test`.`transactions` where ((`test`.`transactions`.`trans_type` = 3) and (`test`.`transactions`.`tbl` = 1) and (`test`.`transactions`.`created` > TIMESTAMP'2017-10-23 01:01:01')) group by '2017-10-23 01:01:01',hour(`test`.`transactions`.`created`),`test`.`transactions`.`source_lvl1`,`test`.`transactions`.`source_lvl2`
+SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+2017-10-23 01:01:01	HOUR(created)	source_lvl1	source_lvl2	COUNT(DISTINCT(app_trans_id))
+2017-10-23 01:01:01	1	NULL	NULL	0
+SET pq_support_features_switch = 'count_distinct=on';
+EXPLAIN SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.transactions)
+1	SIMPLE	transactions	NULL	range	tbl_id_idx,created_idx,trans_type_created_idx	created_idx	4	NULL	#	#	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select '2017-10-23 01:01:01' AS `2017-10-23 01:01:01`,hour(`test`.`transactions`.`created`) AS `HOUR(created)`,`test`.`transactions`.`source_lvl1` AS `source_lvl1`,`test`.`transactions`.`source_lvl2` AS `source_lvl2`,count(distinct `test`.`transactions`.`app_trans_id`) AS `COUNT(DISTINCT(app_trans_id))` from `test`.`transactions` where ((`test`.`transactions`.`trans_type` = 3) and (`test`.`transactions`.`tbl` = 1) and (`test`.`transactions`.`created` > TIMESTAMP'2017-10-23 01:01:01')) group by '2017-10-23 01:01:01',`HOUR(created)`,`test`.`transactions`.`source_lvl1`,`test`.`transactions`.`source_lvl2`
+SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+2017-10-23 01:01:01	HOUR(created)	source_lvl1	source_lvl2	COUNT(DISTINCT(app_trans_id))
+2017-10-23 01:01:01	1	NULL	NULL	0
+set optimizer_switch=default;
+# case 26.4 range_icp_mrr
+set optimizer_switch=default;
+set optimizer_switch='index_condition_pushdown=on,mrr=on,mrr_cost_based=off';
+set rds_empty_redundant_check_in_range_scan=false;
+SET pq_support_features_switch = 'count_distinct=off';
+EXPLAIN SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	transactions	NULL	range	tbl_id_idx,created_idx,trans_type_created_idx	created_idx	4	NULL	#	#	Using index condition; Using where; Using MRR; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select '2017-10-23 01:01:01' AS `2017-10-23 01:01:01`,hour(`test`.`transactions`.`created`) AS `HOUR(created)`,`test`.`transactions`.`source_lvl1` AS `source_lvl1`,`test`.`transactions`.`source_lvl2` AS `source_lvl2`,count(distinct `test`.`transactions`.`app_trans_id`) AS `COUNT(DISTINCT(app_trans_id))` from `test`.`transactions` where ((`test`.`transactions`.`trans_type` = 3) and (`test`.`transactions`.`tbl` = 1) and (`test`.`transactions`.`created` > TIMESTAMP'2017-10-23 01:01:01')) group by '2017-10-23 01:01:01',hour(`test`.`transactions`.`created`),`test`.`transactions`.`source_lvl1`,`test`.`transactions`.`source_lvl2`
+SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+2017-10-23 01:01:01	HOUR(created)	source_lvl1	source_lvl2	COUNT(DISTINCT(app_trans_id))
+2017-10-23 01:01:01	1	NULL	NULL	0
+SET pq_support_features_switch = 'count_distinct=on';
+EXPLAIN SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.transactions)
+1	SIMPLE	transactions	NULL	range	tbl_id_idx,created_idx,trans_type_created_idx	created_idx	4	NULL	#	#	Using index condition; Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select '2017-10-23 01:01:01' AS `2017-10-23 01:01:01`,hour(`test`.`transactions`.`created`) AS `HOUR(created)`,`test`.`transactions`.`source_lvl1` AS `source_lvl1`,`test`.`transactions`.`source_lvl2` AS `source_lvl2`,count(distinct `test`.`transactions`.`app_trans_id`) AS `COUNT(DISTINCT(app_trans_id))` from `test`.`transactions` where ((`test`.`transactions`.`trans_type` = 3) and (`test`.`transactions`.`tbl` = 1) and (`test`.`transactions`.`created` > TIMESTAMP'2017-10-23 01:01:01')) group by '2017-10-23 01:01:01',`HOUR(created)`,`test`.`transactions`.`source_lvl1`,`test`.`transactions`.`source_lvl2`
+SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+2017-10-23 01:01:01	HOUR(created)	source_lvl1	source_lvl2	COUNT(DISTINCT(app_trans_id))
+2017-10-23 01:01:01	1	NULL	NULL	0
+set rds_empty_redundant_check_in_range_scan=true;
+set optimizer_switch=default;
+# case 26.5 range_icp
+set optimizer_switch=default;
+set optimizer_switch='index_condition_pushdown=on';
+set rds_empty_redundant_check_in_range_scan=false;
+SET pq_support_features_switch = 'count_distinct=off';
+EXPLAIN SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	transactions	NULL	range	tbl_id_idx,created_idx,trans_type_created_idx	created_idx	4	NULL	#	#	Using index condition; Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select '2017-10-23 01:01:01' AS `2017-10-23 01:01:01`,hour(`test`.`transactions`.`created`) AS `HOUR(created)`,`test`.`transactions`.`source_lvl1` AS `source_lvl1`,`test`.`transactions`.`source_lvl2` AS `source_lvl2`,count(distinct `test`.`transactions`.`app_trans_id`) AS `COUNT(DISTINCT(app_trans_id))` from `test`.`transactions` where ((`test`.`transactions`.`trans_type` = 3) and (`test`.`transactions`.`tbl` = 1) and (`test`.`transactions`.`created` > TIMESTAMP'2017-10-23 01:01:01')) group by '2017-10-23 01:01:01',hour(`test`.`transactions`.`created`),`test`.`transactions`.`source_lvl1`,`test`.`transactions`.`source_lvl2`
+SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+2017-10-23 01:01:01	HOUR(created)	source_lvl1	source_lvl2	COUNT(DISTINCT(app_trans_id))
+2017-10-23 01:01:01	1	NULL	NULL	0
+SET pq_support_features_switch = 'count_distinct=on';
+EXPLAIN SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.transactions)
+1	SIMPLE	transactions	NULL	range	tbl_id_idx,created_idx,trans_type_created_idx	created_idx	4	NULL	#	#	Using index condition; Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select '2017-10-23 01:01:01' AS `2017-10-23 01:01:01`,hour(`test`.`transactions`.`created`) AS `HOUR(created)`,`test`.`transactions`.`source_lvl1` AS `source_lvl1`,`test`.`transactions`.`source_lvl2` AS `source_lvl2`,count(distinct `test`.`transactions`.`app_trans_id`) AS `COUNT(DISTINCT(app_trans_id))` from `test`.`transactions` where ((`test`.`transactions`.`trans_type` = 3) and (`test`.`transactions`.`tbl` = 1) and (`test`.`transactions`.`created` > TIMESTAMP'2017-10-23 01:01:01')) group by '2017-10-23 01:01:01',`HOUR(created)`,`test`.`transactions`.`source_lvl1`,`test`.`transactions`.`source_lvl2`
+SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+2017-10-23 01:01:01	HOUR(created)	source_lvl1	source_lvl2	COUNT(DISTINCT(app_trans_id))
+2017-10-23 01:01:01	1	NULL	NULL	0
+set rds_empty_redundant_check_in_range_scan=true;
+set optimizer_switch=default;
+# case 26.6 range_all
+set optimizer_switch=default;
+set optimizer_switch='semijoin=on,materialization=on,firstmatch=on,loosescan=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=off';
+SET pq_support_features_switch = 'count_distinct=off';
+EXPLAIN SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	transactions	NULL	range	tbl_id_idx,created_idx,trans_type_created_idx	created_idx	4	NULL	#	#	Using where; Using MRR; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select '2017-10-23 01:01:01' AS `2017-10-23 01:01:01`,hour(`test`.`transactions`.`created`) AS `HOUR(created)`,`test`.`transactions`.`source_lvl1` AS `source_lvl1`,`test`.`transactions`.`source_lvl2` AS `source_lvl2`,count(distinct `test`.`transactions`.`app_trans_id`) AS `COUNT(DISTINCT(app_trans_id))` from `test`.`transactions` where ((`test`.`transactions`.`trans_type` = 3) and (`test`.`transactions`.`tbl` = 1) and (`test`.`transactions`.`created` > TIMESTAMP'2017-10-23 01:01:01')) group by '2017-10-23 01:01:01',hour(`test`.`transactions`.`created`),`test`.`transactions`.`source_lvl1`,`test`.`transactions`.`source_lvl2`
+SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+2017-10-23 01:01:01	HOUR(created)	source_lvl1	source_lvl2	COUNT(DISTINCT(app_trans_id))
+2017-10-23 01:01:01	1	NULL	NULL	0
+SET pq_support_features_switch = 'count_distinct=on';
+EXPLAIN SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.transactions)
+1	SIMPLE	transactions	NULL	range	tbl_id_idx,created_idx,trans_type_created_idx	created_idx	4	NULL	#	#	Using where; Using filesort
+Warnings:
+Note	1003	/* select#1 */ select '2017-10-23 01:01:01' AS `2017-10-23 01:01:01`,hour(`test`.`transactions`.`created`) AS `HOUR(created)`,`test`.`transactions`.`source_lvl1` AS `source_lvl1`,`test`.`transactions`.`source_lvl2` AS `source_lvl2`,count(distinct `test`.`transactions`.`app_trans_id`) AS `COUNT(DISTINCT(app_trans_id))` from `test`.`transactions` where ((`test`.`transactions`.`trans_type` = 3) and (`test`.`transactions`.`tbl` = 1) and (`test`.`transactions`.`created` > TIMESTAMP'2017-10-23 01:01:01')) group by '2017-10-23 01:01:01',`HOUR(created)`,`test`.`transactions`.`source_lvl1`,`test`.`transactions`.`source_lvl2`
+SELECT '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2,
+COUNT(DISTINCT(app_trans_id))
+FROM transactions
+WHERE created > '2017-10-23 01:01:01' AND tbl = 1 AND trans_type in (3)
+GROUP BY '2017-10-23 01:01:01', HOUR(created), source_lvl1, source_lvl2;
+2017-10-23 01:01:01	HOUR(created)	source_lvl1	source_lvl2	COUNT(DISTINCT(app_trans_id))
+2017-10-23 01:01:01	1	NULL	NULL	0
+set optimizer_switch=default;
+DROP PROCEDURE p;
+DROP TABLE t1, transactions;
+SET global pq_support_features_switch = @saved_pq_support_features_switch;

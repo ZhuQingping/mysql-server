@@ -1,0 +1,20 @@
+call mtr.add_suppression("File 'gtids_in_wal_store_file.data' has");
+RESET MASTER;
+CREATE TABLE t (i INT);
+INSERT INTO t VALUES (1);
+# Kill the server
+# restart_abort: --debug=+d,crash_before_persist_gtids_in_wal_to_file
+# restart:
+# expect rds_binlog_dstore_consistent is ON.
+show variables like 'rds_binlog_dstore_consistent';
+Variable_name	Value
+rds_binlog_dstore_consistent	ON
+# expect rds_dstore_missed_gtids is empty.
+show variables like 'rds_dstore_missed_gtids';
+Variable_name	Value
+rds_dstore_missed_gtids	
+# expect rds_dstore_missed_gtids_on_binlog is empty.
+show variables like 'rds_dstore_missed_gtids_on_binlog';
+Variable_name	Value
+rds_dstore_missed_gtids_on_binlog	
+drop table t;

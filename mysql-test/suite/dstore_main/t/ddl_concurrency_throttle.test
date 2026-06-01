@@ -1,0 +1,164 @@
+# ==== Purpose ====
+#
+# Test ddl concurrency throttle 
+#
+# ==== References ====
+#
+# BUG2026021145668
+#
+--source include/have_debug_sync.inc
+--source include/have_only_dstore.inc
+
+call mtr.add_suppression("DDL concurrency throttled");
+
+--let SEARCH_FILE = $MYSQLTEST_VARDIR/log/mysqld.1.err
+--source include/get_file_line_number.inc
+--let SEARCH_START_LINE = $LINE_NUMBER
+
+--disable_query_log
+SET @default_rds_dstore_ddl_throttle_timeout = @@global.rds_dstore_ddl_throttle_timeout;
+SET @@global.rds_dstore_ddl_throttle_timeout = 120;
+--enable_query_log
+
+--let $i = 0
+--let $max_concurrency = 64
+--let $ddl_concurrency = $max_concurrency + 1
+
+while($i <= $ddl_concurrency)
+{
+    --connect(conn$i,localhost,root,,)
+    --eval SET DEBUG_SYNC = 'ddl_crash_safe_before_innodb_commit SIGNAL reach_end_$i WAIT_FOR continue_ddl_$i'
+    --send_eval CREATE TABLE t_$i(pk INT PRIMARY KEY)
+    --inc $i
+}
+
+--connect(conn_tmp,localhost,root,,)
+--let $i = 0
+while($i < $max_concurrency)
+{
+    --eval SET DEBUG_SYNC = 'now WAIT_FOR reach_end_$i'
+    --inc $i
+}
+
+--echo # Waiting for warning print to err log.
+--sleep 65
+
+--let PRINT_HIT_TIMES = 0
+--let SEARCH_PATTERN = DDL concurrency throttled
+--echo # Expect found
+--source include/search_pattern.inc
+
+--let $i = 0
+while($i <= $ddl_concurrency)
+{
+    --eval SET DEBUG_SYNC = 'now SIGNAL continue_ddl_$i'
+    --inc $i
+}
+
+
+--let $i = 0
+while($i <= $ddl_concurrency)
+{
+    --connection conn$i
+    --reap
+	--eval DROP TABLE t_$i
+    --disconnect conn$i
+    --inc $i
+}
+--disconnect conn_tmp
+
+# BUG2026030636730: If the connection is killed, the thread should not continue to sleep.
+--connection default
+SET @default_rds_dstore_ddl_max_concurrency = @@global.rds_dstore_ddl_max_concurrency;
+--let $i = 0
+--let $ddl_concurrency = 4
+SET @@global.rds_dstore_ddl_max_concurrency = 4;
+
+while($i < $ddl_concurrency)
+{
+    --connect(conn$i,localhost,root,,)
+    --eval SET DEBUG_SYNC = 'ddl_crash_safe_before_innodb_commit SIGNAL reach_end_$i WAIT_FOR continue_ddl_$i'
+    --send_eval CREATE TABLE t_$i(pk INT PRIMARY KEY)
+    --inc $i
+}
+
+--connect(conn_tmp_1,localhost,root,,)
+--let $i = 0
+while($i < $ddl_concurrency)
+{
+    --eval SET DEBUG_SYNC = 'now WAIT_FOR reach_end_$i'
+    --inc $i
+}
+
+let $ID= `select connection_id()`;
+SET DEBUG_SYNC = 'ddl_concurrency_throttle_before_sleep SIGNAL before_sleep';
+--send CREATE TABLE test_kill(pk INT PRIMARY KEY);
+
+--connect(conn_tmp_2,localhost,root,,)
+SET DEBUG_SYNC = 'now WAIT_FOR before_sleep';
+--replace_result $ID ID
+eval kill query $ID;
+
+--connection conn_tmp_1
+--error ER_QUERY_INTERRUPTED
+--reap
+
+--let $i = 0
+while($i < $ddl_concurrency)
+{
+    --eval SET DEBUG_SYNC = 'now SIGNAL continue_ddl_$i'
+    --inc $i
+}
+
+--let $i = 0
+while($i < $ddl_concurrency)
+{
+    --connection conn$i
+    --reap
+	--eval DROP TABLE t_$i
+    --disconnect conn$i
+    --inc $i
+}
+
+# BUG2026032500001: avoid MDL + throttle waiting cycle.
+--connection conn_tmp_1
+--disable_query_log
+--disable_result_log
+SET @default_lock_wait_timeout = @@session.lock_wait_timeout;
+SET SESSION lock_wait_timeout = 5;
+SET @@global.rds_dstore_ddl_max_concurrency = 1;
+DROP USER IF EXISTS 'ddl_throttle_deadlock_user'@'localhost';
+DROP TABLE IF EXISTS ddl_throttle_deadlock_t;
+CREATE TABLE ddl_throttle_deadlock_t(id INT PRIMARY KEY);
+INSERT INTO ddl_throttle_deadlock_t VALUES (1);
+BEGIN;
+SELECT * FROM ddl_throttle_deadlock_t FOR UPDATE;
+
+--connection conn_tmp_2
+let $conn_tmp_2_id = `SELECT connection_id()`;
+--send ALTER TABLE ddl_throttle_deadlock_t ADD COLUMN c1 INT
+
+--connection conn_tmp_1
+--let $wait_condition= SELECT COUNT(*) = 1 FROM information_schema.processlist WHERE ID = $conn_tmp_2_id AND STATE = 'Waiting for table metadata lock'
+--source include/wait_condition.inc
+CREATE USER 'ddl_throttle_deadlock_user'@'localhost' IDENTIFIED BY 'deadlock_test_pwd_1';
+
+--connection conn_tmp_2
+--reap
+
+--connection conn_tmp_1
+COMMIT;
+DROP USER IF EXISTS 'ddl_throttle_deadlock_user'@'localhost';
+DROP TABLE ddl_throttle_deadlock_t;
+SET SESSION lock_wait_timeout = @default_lock_wait_timeout;
+SET @@global.rds_dstore_ddl_max_concurrency = 4;
+--enable_result_log
+--enable_query_log
+
+--connection default
+--disable_query_log
+SET @@global.rds_dstore_ddl_throttle_timeout = @default_rds_dstore_ddl_throttle_timeout;
+--enable_query_log
+SET @@global.rds_dstore_ddl_max_concurrency = @default_rds_dstore_ddl_max_concurrency;
+--disconnect conn_tmp_1
+--disconnect conn_tmp_2

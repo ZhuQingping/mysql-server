@@ -1,0 +1,44 @@
+# ==== Purpose ====
+#
+# test mysqlbinlog tool option: --get_prev_gtids
+# Its function is to print gtids in prev_gtid_log_event
+#
+--source include/have_log_bin.inc
+
+#--disable_query_log
+--disable_warnings
+DROP DATABASE IF EXISTS mtest;
+CREATE DATABASE mtest;
+USE mtest;
+--enable_warnings
+let $result_file=get_prev_gtids_file;
+RESET MASTER;
+
+let $data_dir=query_get_value(SHOW VARIABLES LIKE 'datadir',Value,1);
+let $binlog_name=query_get_value(SHOW MASTER STATUS,File,1);
+
+let uuida= aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa;
+let uuidb= bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb;
+let uuidc= cccccccc-cccc-cccc-cccc-cccccccccccc;
+
+eval SET @@SESSION.GTID_NEXT= '$uuida:1';
+CREATE TABLE test1(id INT);
+eval SET @@SESSION.GTID_NEXT= '$uuidb:1';
+CREATE TABLE test2(id INT);
+eval SET @@SESSION.GTID_NEXT= '$uuidc:1';
+INSERT INTO test1 VALUES(1);
+eval SET @@SESSION.GTID_NEXT=AUTOMATIC;
+FLUSH LOGS;
+
+let $binlog_name2=query_get_value(SHOW MASTER STATUS,File,1);
+
+--echo # test empty gtids
+--exec $MYSQL_BINLOG --get-prev-gtids $data_dir$binlog_name
+--echo # test multi gtids
+--exec $MYSQL_BINLOG --get-prev-gtids -r $result_file $data_dir$binlog_name2
+--exec sed -i 's/,//g' $result_file
+--exec cat $result_file | sed '/1-2/d' | sort
+
+DROP DATABASE mtest;
+--exec rm -f $result_file
+

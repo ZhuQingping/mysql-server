@@ -1,0 +1,2396 @@
+set optimizer_trace_max_mem_size = 1024 * 1024;
+create table t1 (a int primary key not null, b int);
+create table t2 (a int, b int);
+insert into t1 values (1,2), (4,6), (9,7), (3,1), (2,5), (7,8);
+insert into t2 select * from t1;
+analyze table t1,t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+# Case 0. Simple query with in predicate, args[0] is a single item.
+set rds_in_predicate_conversion_threshold = 0;
+# Explain and execute query: select * from t1 where a in (1,2);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where a in (1,2);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	#	#	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` in (1,2))
+EXPLAIN FORMAT=tree select * from t1 where a in (1,2);;
+EXPLAIN
+-> Index range scan on t1 using PRIMARY over (a = 1) OR (a = 2), with index condition: (t1.a in (1,2))  (cost=*** rows=***)
+
+select * from t1 where a in (1,2);;
+a	b
+1	2
+2	5
+set rds_in_predicate_conversion_threshold = 1;
+# Explain and execute query: select * from t1 where a in (1,2);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where a in (1,2);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_2>.a	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_2>` join `test`.`t1` where (`test`.`t1`.`a` = `test`.`<in_predicate_2>`.`a`)
+EXPLAIN FORMAT=tree select * from t1 where a in (1,2);;
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Table scan on <in_predicate_2>  (cost=*** rows=***)
+    -> Single-row index lookup on t1 using PRIMARY (a=`<in_predicate_2>`.a)  (cost=*** rows=***)
+
+select * from t1 where a in (1,2);;
+a	b
+1	2
+2	5
+set rds_in_predicate_conversion_threshold = 5;
+# Explain and execute query: select * from t1 where a in (1,2,3,4,5);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where a in (1,2,3,4,5);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	NULL
+1	SIMPLE	<in_predicate_2>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	4	test.t1.a	#	#	IN-list converted
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_2>` join `test`.`t1` where (`test`.`<in_predicate_2>`.`a` = `test`.`t1`.`a`)
+EXPLAIN FORMAT=tree select * from t1 where a in (1,2,3,4,5);;
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Table scan on t1  (cost=*** rows=***)
+    -> Single-row index lookup on <in_predicate_2> using <auto_distinct_key> (a=t1.a)  (cost=*** rows=***)
+
+select * from t1 where a in (1,2,3,4,5);;
+a	b
+1	2
+4	6
+3	1
+2	5
+set rds_in_predicate_conversion_threshold = 6;
+# Explain and execute query: select * from t1 where a in (1,2,3,4,5);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where a in (1,2,3,4,5);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	#	#	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` in (1,2,3,4,5))
+EXPLAIN FORMAT=tree select * from t1 where a in (1,2,3,4,5);;
+EXPLAIN
+-> Index range scan on t1 using PRIMARY over (a = 1) OR (a = 2) OR (3 more), with index condition: (t1.a in (1,2,3,4,5))  (cost=*** rows=***)
+
+select * from t1 where a in (1,2,3,4,5);;
+a	b
+1	2
+2	5
+3	1
+4	6
+set rds_in_predicate_conversion_threshold = 6;
+# Explain and execute query: select * from t1 where (a,b) in ((1,2),(2,3),(3,4));
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where (a,b) in ((1,2),(2,3),(3,4));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_2>.a	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_2>` join `test`.`t1` where ((`test`.`t1`.`b` = `test`.`<in_predicate_2>`.`b`) and (`test`.`t1`.`a` = `test`.`<in_predicate_2>`.`a`))
+EXPLAIN FORMAT=tree select * from t1 where (a,b) in ((1,2),(2,3),(3,4));;
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Table scan on <in_predicate_2>  (cost=*** rows=***)
+    -> Filter: (t1.b = `<in_predicate_2>`.b)  (cost=*** rows=***)
+        -> Single-row index lookup on t1 using PRIMARY (a=`<in_predicate_2>`.a)  (cost=*** rows=***)
+
+select * from t1 where (a,b) in ((1,2),(2,3),(3,4));;
+a	b
+1	2
+set rds_in_predicate_conversion_threshold = 7;
+# Explain and execute query: select * from t1 where (a,b) in ((1,2),(2,3),(3,4));
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where (a,b) in ((1,2),(2,3),(3,4));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a`,`test`.`t1`.`b`) in ((1,2),(2,3),(3,4)))
+EXPLAIN FORMAT=tree select * from t1 where (a,b) in ((1,2),(2,3),(3,4));;
+EXPLAIN
+-> Filter: ((t1.a,t1.b) in ((1,2),(2,3),(3,4)))  (cost=*** rows=***)
+    -> Index range scan on t1 using PRIMARY over (a = 1) OR (a = 2) OR (a = 3)  (cost=*** rows=***)
+
+select * from t1 where (a,b) in ((1,2),(2,3),(3,4));;
+a	b
+1	2
+set rds_in_predicate_conversion_threshold = 2;
+# Case 1. Simple query with in predicate, args[0] is a single item.
+# Explain and execute query: select * from t1 where a in (1,2);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where a in (1,2);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_2>.a	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_2>` join `test`.`t1` where (`test`.`t1`.`a` = `test`.`<in_predicate_2>`.`a`)
+EXPLAIN FORMAT=tree select * from t1 where a in (1,2);;
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Table scan on <in_predicate_2>  (cost=*** rows=***)
+    -> Single-row index lookup on t1 using PRIMARY (a=`<in_predicate_2>`.a)  (cost=*** rows=***)
+
+select * from t1 where a in (1,2);;
+a	b
+1	2
+2	5
+# Explain and execute query: select * from t2 where a in (1,2);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t2 where a in (1,2);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t2` where (`test`.`t2`.`a` in (1,2))
+EXPLAIN FORMAT=tree select * from t2 where a in (1,2);;
+EXPLAIN
+-> Filter: (t2.a in (1,2))  (cost=*** rows=***)
+    -> Table scan on t2  (cost=*** rows=***)
+
+select * from t2 where a in (1,2);;
+a	b
+1	2
+2	5
+# Simple query with not in predicate, args[0] is a single item.
+# Explain and execute query: select * from t1 where a not in (1,2);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where a not in (1,2);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	#	#	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` not in (1,2))
+EXPLAIN FORMAT=tree select * from t1 where a not in (1,2);;
+EXPLAIN
+-> Index range scan on t1 using PRIMARY over (a < 1) OR (1 < a < 2) OR (2 < a), with index condition: (t1.a not in (1,2))  (cost=*** rows=***)
+
+select * from t1 where a not in (1,2);;
+a	b
+3	1
+4	6
+7	8
+9	7
+# Explain and execute query: select * from t2 where a not in (1,2);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t2 where a not in (1,2);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t2` where (`test`.`t2`.`a` not in (1,2))
+EXPLAIN FORMAT=tree select * from t2 where a not in (1,2);;
+EXPLAIN
+-> Filter: (t2.a not in (1,2))  (cost=*** rows=***)
+    -> Table scan on t2  (cost=*** rows=***)
+
+select * from t2 where a not in (1,2);;
+a	b
+4	6
+9	7
+3	1
+7	8
+# Case 2. Simple query with in predicate, args[0] is a item row.
+# Explain and execute query: select * from t1 where (a,b) in ((1,2), (2,5));
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where (a,b) in ((1,2), (2,5));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_2>.a	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_2>` join `test`.`t1` where ((`test`.`t1`.`b` = `test`.`<in_predicate_2>`.`b`) and (`test`.`t1`.`a` = `test`.`<in_predicate_2>`.`a`))
+EXPLAIN FORMAT=tree select * from t1 where (a,b) in ((1,2), (2,5));;
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Table scan on <in_predicate_2>  (cost=*** rows=***)
+    -> Filter: (t1.b = `<in_predicate_2>`.b)  (cost=*** rows=***)
+        -> Single-row index lookup on t1 using PRIMARY (a=`<in_predicate_2>`.a)  (cost=*** rows=***)
+
+select * from t1 where (a,b) in ((1,2), (2,5));;
+a	b
+1	2
+2	5
+# Simple query with not in predicate, args[0] is a item row.
+# Explain and execute query: select * from t1 where (a,b) not in ((1,2), (2,5));
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where (a,b) not in ((1,2), (2,5));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a`,`test`.`t1`.`b`) not in ((1,2),(2,5)))
+EXPLAIN FORMAT=tree select * from t1 where (a,b) not in ((1,2), (2,5));;
+EXPLAIN
+-> Filter: ((t1.a,t1.b) not in ((1,2),(2,5)))  (cost=*** rows=***)
+    -> Table scan on t1  (cost=*** rows=***)
+
+select * from t1 where (a,b) not in ((1,2), (2,5));;
+a	b
+4	6
+9	7
+3	1
+7	8
+# Case 3. Simple query with (not) in predicate, args contains non-constant item.
+# Explain and execute query: select * from t1 where (a,b) in ((1,now()), (2,5));
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where (a,b) in ((1,now()), (2,5));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a`,`test`.`t1`.`b`) in ((1,now()),(2,5)))
+EXPLAIN FORMAT=tree select * from t1 where (a,b) in ((1,now()), (2,5));;
+EXPLAIN
+-> Filter: ((t1.a,t1.b) in ((1,now()),(2,5)))  (cost=*** rows=***)
+    -> Index range scan on t1 using PRIMARY over (a = 1) OR (a = 2)  (cost=*** rows=***)
+
+select * from t1 where (a,b) in ((1,now()), (2,5));;
+a	b
+2	5
+# Case 4. Duplicate value in in predicate.
+# Explain and execute query: select * from t1 where a in (1,1,1,2,3,4,5,6,7,8);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where a in (1,1,1,2,3,4,5,6,7,8);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	NULL
+1	SIMPLE	<in_predicate_2>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	4	test.t1.a	#	#	IN-list converted
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_2>` join `test`.`t1` where (`test`.`<in_predicate_2>`.`a` = `test`.`t1`.`a`)
+EXPLAIN FORMAT=tree select * from t1 where a in (1,1,1,2,3,4,5,6,7,8);;
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Table scan on t1  (cost=*** rows=***)
+    -> Single-row index lookup on <in_predicate_2> using <auto_distinct_key> (a=t1.a)  (cost=*** rows=***)
+
+select * from t1 where a in (1,1,1,2,3,4,5,6,7,8);;
+a	b
+1	2
+4	6
+3	1
+2	5
+7	8
+# Explain and execute query: select * from t1 where (a,b) in ((1,2),(1,2),(2,3),(2,5));
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where (a,b) in ((1,2),(1,2),(2,3),(2,5));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_2>.a	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_2>` join `test`.`t1` where ((`test`.`t1`.`b` = `test`.`<in_predicate_2>`.`b`) and (`test`.`t1`.`a` = `test`.`<in_predicate_2>`.`a`))
+EXPLAIN FORMAT=tree select * from t1 where (a,b) in ((1,2),(1,2),(2,3),(2,5));;
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Table scan on <in_predicate_2>  (cost=*** rows=***)
+    -> Filter: (t1.b = `<in_predicate_2>`.b)  (cost=*** rows=***)
+        -> Single-row index lookup on t1 using PRIMARY (a=`<in_predicate_2>`.a)  (cost=*** rows=***)
+
+select * from t1 where (a,b) in ((1,2),(1,2),(2,3),(2,5));;
+a	b
+1	2
+2	5
+# Case 5. Simulate create tmp table failed.
+SET DEBUG='+d,simulate_in_predicate_to_in_sub_create_tmp_table_failed';
+# Explain and execute query: select * from t1 where a in (1,2);
+set @explain = "traditional,opt_trace";;
+EXPLAIN select * from t1 where a in (1,2);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	#	#	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` in (1,2))
+SET optimizer_trace="enabled=on";
+select * from t1 where a in (1,2);;
+a	b
+1	2
+2	5
+SELECT * FROM information_schema.OPTIMIZER_TRACE;
+QUERY	TRACE	MISSING_BYTES_BEYOND_MAX_MEM_SIZE	INSUFFICIENT_PRIVILEGES
+select * from t1 where a in (1,2)	{
+  "steps": [
+    {
+      "join_preparation": {
+        "select#": 1,
+        "steps": [
+          {
+            "IN_uses_bisection": true
+          },
+          {
+            "in_to_subquery_conversion": {
+              "item": "(`t1`.`a` in (1,2))",
+              "steps": [
+              ],
+              "done": false,
+              "reason": "Fail to create In-list tmp table"
+            }
+          },
+          {
+            "expanded_query": "/* select#1 */ select `t1`.`a` AS `a`,`t1`.`b` AS `b` from `t1` where (`t1`.`a` in (1,2))"
+          }
+        ]
+      }
+    },
+    {
+      "join_optimization": {
+        "select#": 1,
+        "steps": [
+          {
+            "condition_processing": {
+              "condition": "WHERE",
+              "original_condition": "(`t1`.`a` in (1,2))",
+              "steps": [
+                {
+                  "transformation": "equality_propagation",
+                  "resulting_condition": "(`t1`.`a` in (1,2))"
+                },
+                {
+                  "transformation": "constant_propagation",
+                  "resulting_condition": "(`t1`.`a` in (1,2))"
+                },
+                {
+                  "transformation": "trivial_condition_removal",
+                  "resulting_condition": "(`t1`.`a` in (1,2))"
+                }
+              ]
+            }
+          },
+          {
+            "substitute_generated_columns": {
+            }
+          },
+          {
+            "table_dependencies": [
+              {
+                "table": "`t1`",
+                "row_may_be_null": false,
+                "map_bit": 0,
+                "depends_on_map_bits": [
+                ]
+              }
+            ]
+          },
+          {
+            "ref_optimizer_key_uses": [
+            ]
+          },
+          {
+            "rows_estimation": [
+              {
+                "table": "`t1`",
+                "range_analysis": {
+                  "table_scan": {
+                    "rows": 6,
+                    "cost": ***
+                  },
+                  "potential_range_indexes": [
+                    {
+                      "index": "PRIMARY",
+                      "usable": true,
+                      "key_parts": [
+                        "a"
+                      ]
+                    }
+                  ],
+                  "setup_range_conditions": [
+                  ],
+                  "group_index_range": {
+                    "chosen": false,
+                    "cause": "not_group_by_or_distinct"
+                  },
+                  "skip_scan_range": {
+                    "potential_skip_scan_indexes": [
+                      {
+                        "index": "PRIMARY",
+                        "usable": false,
+                        "cause": "query_references_nonkey_column"
+                      }
+                    ]
+                  },
+                  "analyzing_range_alternatives": {
+                    "range_scan_alternatives": [
+                      {
+                        "index": "PRIMARY",
+                        "ranges": [
+                          "a = 1",
+                          "a = 2"
+                        ],
+                        "index_dives_for_eq_ranges": true,
+                        "rowid_ordered": false,
+                        "using_mrr": false,
+                        "index_only": false,
+                        "in_memory": -1,
+                        "rows": 2,
+                        "cost": ***,
+                        "chosen": true
+                      }
+                    ],
+                    "analyzing_roworder_intersect": {
+                      "usable": false,
+                      "cause": "too_few_roworder_scans"
+                    }
+                  },
+                  "chosen_range_access_summary": {
+                    "range_access_plan": {
+                      "type": "range_scan",
+                      "index": "PRIMARY",
+                      "rows": 2,
+                      "ranges": [
+                        "a = 1",
+                        "a = 2"
+                      ]
+                    },
+                    "rows_for_plan": 2,
+                    "cost_for_plan": ***,
+                    "chosen": true
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "considered_execution_plans": [
+              {
+                "plan_prefix": [
+                ],
+                "table": "`t1`",
+                "best_access_path": {
+                  "considered_access_paths": [
+                    {
+                      "rows_to_scan": 2,
+                      "access_type": "range",
+                      "range_details": {
+                        "used_index": "PRIMARY"
+                      },
+                      "resulting_rows": 2,
+                      "cost": ***,
+                      "chosen": true
+                    }
+                  ]
+                },
+                "condition_filtering_pct": 100,
+                "rows_for_plan": 2,
+                "cost_for_plan": ***,
+                "chosen": true
+              }
+            ]
+          },
+          {
+            "attaching_conditions_to_tables": {
+              "original_condition": "(`t1`.`a` in (1,2))",
+              "attached_conditions_computation": [
+              ],
+              "attached_conditions_summary": [
+                {
+                  "table": "`t1`",
+                  "attached": "(`t1`.`a` in (1,2))"
+                }
+              ]
+            }
+          },
+          {
+            "finalizing_table_conditions": [
+              {
+                "table": "`t1`",
+                "original_table_condition": "(`t1`.`a` in (1,2))",
+                "final_table_condition   ": "(`t1`.`a` in (1,2))"
+              }
+            ]
+          },
+          {
+            "refine_plan": [
+              {
+                "table": "`t1`",
+                "pushed_index_condition": "(`t1`.`a` in (1,2))",
+                "table_condition_attached": null
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "not_apply_pq_plan": {
+        "select#": 1,
+        "chosen": false,
+        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+      }
+    },
+    {
+      "join_execution": {
+        "select#": 1,
+        "steps": [
+        ]
+      }
+    }
+  ]
+}	0	0
+SET optimizer_trace="enabled=off";
+SET DEBUG='';
+# Simulate fix Item_in_subs failed.
+SET DEBUG='+d,simulate_in_predicate_to_in_subs_fix_in_subs_failed';
+# Explain and execute query: select * from t1 where a in (1,2);
+set @explain = "traditional,opt_trace";;
+EXPLAIN select * from t1 where a in (1,2);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	#	#	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` in (1,2))
+SET optimizer_trace="enabled=on";
+select * from t1 where a in (1,2);;
+a	b
+1	2
+2	5
+SELECT * FROM information_schema.OPTIMIZER_TRACE;
+QUERY	TRACE	MISSING_BYTES_BEYOND_MAX_MEM_SIZE	INSUFFICIENT_PRIVILEGES
+select * from t1 where a in (1,2)	{
+  "steps": [
+    {
+      "join_preparation": {
+        "select#": 1,
+        "steps": [
+          {
+            "IN_uses_bisection": true
+          },
+          {
+            "in_to_subquery_conversion": {
+              "item": "(`t1`.`a` in (1,2))",
+              "steps": [
+                {
+                  "creating_tmp_table": {
+                    "tmp_table_info": {
+                      "table": "intermediate_tmp_table",
+                      "columns": 1,
+                      "row_length": 5,
+                      "key_length": 4,
+                      "unique_constraint": false,
+                      "makes_grouped_rows": false,
+                      "cannot_insert_duplicates": true,
+                      "location": "TempTable"
+                    }
+                  }
+                },
+                {
+                  "join_preparation": {
+                    "select#": 2,
+                    "steps": [
+                      {
+                        "expanded_query": "/* select#2 */ select `<in_predicate_2>`.`a` from `<in_predicate_2>`"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "done": false,
+              "reason": "Item_in_subselect fix failed"
+            }
+          },
+          {
+            "expanded_query": "/* select#1 */ select `t1`.`a` AS `a`,`t1`.`b` AS `b` from `t1` where (`t1`.`a` in (1,2))"
+          }
+        ]
+      }
+    },
+    {
+      "join_optimization": {
+        "select#": 1,
+        "steps": [
+          {
+            "condition_processing": {
+              "condition": "WHERE",
+              "original_condition": "(`t1`.`a` in (1,2))",
+              "steps": [
+                {
+                  "transformation": "equality_propagation",
+                  "resulting_condition": "(`t1`.`a` in (1,2))"
+                },
+                {
+                  "transformation": "constant_propagation",
+                  "resulting_condition": "(`t1`.`a` in (1,2))"
+                },
+                {
+                  "transformation": "trivial_condition_removal",
+                  "resulting_condition": "(`t1`.`a` in (1,2))"
+                }
+              ]
+            }
+          },
+          {
+            "substitute_generated_columns": {
+            }
+          },
+          {
+            "table_dependencies": [
+              {
+                "table": "`t1`",
+                "row_may_be_null": false,
+                "map_bit": 0,
+                "depends_on_map_bits": [
+                ]
+              }
+            ]
+          },
+          {
+            "ref_optimizer_key_uses": [
+            ]
+          },
+          {
+            "rows_estimation": [
+              {
+                "table": "`t1`",
+                "range_analysis": {
+                  "table_scan": {
+                    "rows": 6,
+                    "cost": ***
+                  },
+                  "potential_range_indexes": [
+                    {
+                      "index": "PRIMARY",
+                      "usable": true,
+                      "key_parts": [
+                        "a"
+                      ]
+                    }
+                  ],
+                  "setup_range_conditions": [
+                  ],
+                  "group_index_range": {
+                    "chosen": false,
+                    "cause": "not_group_by_or_distinct"
+                  },
+                  "skip_scan_range": {
+                    "potential_skip_scan_indexes": [
+                      {
+                        "index": "PRIMARY",
+                        "usable": false,
+                        "cause": "query_references_nonkey_column"
+                      }
+                    ]
+                  },
+                  "analyzing_range_alternatives": {
+                    "range_scan_alternatives": [
+                      {
+                        "index": "PRIMARY",
+                        "ranges": [
+                          "a = 1",
+                          "a = 2"
+                        ],
+                        "index_dives_for_eq_ranges": true,
+                        "rowid_ordered": false,
+                        "using_mrr": false,
+                        "index_only": false,
+                        "in_memory": -1,
+                        "rows": 2,
+                        "cost": ***,
+                        "chosen": true
+                      }
+                    ],
+                    "analyzing_roworder_intersect": {
+                      "usable": false,
+                      "cause": "too_few_roworder_scans"
+                    }
+                  },
+                  "chosen_range_access_summary": {
+                    "range_access_plan": {
+                      "type": "range_scan",
+                      "index": "PRIMARY",
+                      "rows": 2,
+                      "ranges": [
+                        "a = 1",
+                        "a = 2"
+                      ]
+                    },
+                    "rows_for_plan": 2,
+                    "cost_for_plan": ***,
+                    "chosen": true
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "considered_execution_plans": [
+              {
+                "plan_prefix": [
+                ],
+                "table": "`t1`",
+                "best_access_path": {
+                  "considered_access_paths": [
+                    {
+                      "rows_to_scan": 2,
+                      "access_type": "range",
+                      "range_details": {
+                        "used_index": "PRIMARY"
+                      },
+                      "resulting_rows": 2,
+                      "cost": ***,
+                      "chosen": true
+                    }
+                  ]
+                },
+                "condition_filtering_pct": 100,
+                "rows_for_plan": 2,
+                "cost_for_plan": ***,
+                "chosen": true
+              }
+            ]
+          },
+          {
+            "attaching_conditions_to_tables": {
+              "original_condition": "(`t1`.`a` in (1,2))",
+              "attached_conditions_computation": [
+              ],
+              "attached_conditions_summary": [
+                {
+                  "table": "`t1`",
+                  "attached": "(`t1`.`a` in (1,2))"
+                }
+              ]
+            }
+          },
+          {
+            "finalizing_table_conditions": [
+              {
+                "table": "`t1`",
+                "original_table_condition": "(`t1`.`a` in (1,2))",
+                "final_table_condition   ": "(`t1`.`a` in (1,2))"
+              }
+            ]
+          },
+          {
+            "refine_plan": [
+              {
+                "table": "`t1`",
+                "pushed_index_condition": "(`t1`.`a` in (1,2))",
+                "table_condition_attached": null
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "not_apply_pq_plan": {
+        "select#": 1,
+        "chosen": false,
+        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+      }
+    },
+    {
+      "join_execution": {
+        "select#": 1,
+        "steps": [
+        ]
+      }
+    }
+  ]
+}	0	0
+SET optimizer_trace="enabled=off";
+SET DEBUG='-d,simulate_in_predicate_to_in_subs_fix_in_subs_failed';
+# Case 6. Test transform only execute in where and having clause.
+# Explain and execute query: select a in (1,2) from t1;
+set @explain = 'traditional,tree';;
+EXPLAIN select a in (1,2) from t1;;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select (`test`.`t1`.`a` in (1,2)) AS `a in (1,2)` from `test`.`t1`
+EXPLAIN FORMAT=tree select a in (1,2) from t1;;
+EXPLAIN
+-> Index scan on t1 using PRIMARY  (cost=*** rows=***)
+
+select a in (1,2) from t1;;
+a in (1,2)
+1
+1
+0
+0
+0
+0
+# Explain and execute query: select a in (1,2) from t1 where a in (1,3);
+set @explain = 'traditional,tree';;
+EXPLAIN select a in (1,2) from t1 where a in (1,3);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_2>.a	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select (`test`.`t1`.`a` in (1,2)) AS `a in (1,2)` from `test`.`<in_predicate_2>` join `test`.`t1` where (`test`.`t1`.`a` = `test`.`<in_predicate_2>`.`a`)
+EXPLAIN FORMAT=tree select a in (1,2) from t1 where a in (1,3);;
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Table scan on <in_predicate_2>  (cost=*** rows=***)
+    -> Single-row covering index lookup on t1 using PRIMARY (a=`<in_predicate_2>`.a)  (cost=*** rows=***)
+
+select a in (1,2) from t1 where a in (1,3);;
+a in (1,2)
+1
+0
+# Explain and execute query: select sum(a) from t1 having sum(a) in (2,4,6);
+set @explain = 'traditional,tree';;
+EXPLAIN select sum(a) from t1 having sum(a) in (2,4,6);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	#	#	Using aggregate; Using index
+Warnings:
+Note	1003	/* select#1 */ select sum(`test`.`t1`.`a`) AS `sum(a)` from `test`.`t1` having (sum(`test`.`t1`.`a`) in (2,4,6))
+EXPLAIN FORMAT=tree select sum(a) from t1 having sum(a) in (2,4,6);;
+EXPLAIN
+-> Filter: (sum(t1.a) in (2,4,6))  (cost=*** rows=***)
+    -> Aggregate: sum(t1.a), sum(t1.a)  (cost=*** rows=***)
+        -> Index scan on t1 using PRIMARY, with aggregate  (cost=*** rows=***)
+
+select sum(a) from t1 having sum(a) in (2,4,6);;
+sum(a)
+# Case 7. Simple query with more than one in predicate.
+alter table t1 add index idx_b(b);
+# Explain and execute query: select * from t1 where a in(1,2) and b in(2,3);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where a in(1,2) and b in(2,3);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY,idx_b	PRIMARY	4	test.<in_predicate_2>.a	#	#	Using where
+1	SIMPLE	<in_predicate_3>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	5	test.t1.b	#	#	IN-list converted
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_2>` join `test`.`<in_predicate_3>` join `test`.`t1` where ((`test`.`<in_predicate_3>`.`b` = `test`.`t1`.`b`) and (`test`.`t1`.`a` = `test`.`<in_predicate_2>`.`a`))
+EXPLAIN FORMAT=tree select * from t1 where a in(1,2) and b in(2,3);;
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Nested loop inner join  (cost=*** rows=***)
+        -> Table scan on <in_predicate_2>  (cost=*** rows=***)
+        -> Filter: (t1.b is not null)  (cost=*** rows=***)
+            -> Single-row index lookup on t1 using PRIMARY (a=`<in_predicate_2>`.a)  (cost=*** rows=***)
+    -> Single-row index lookup on <in_predicate_3> using <auto_distinct_key> (b=t1.b)  (cost=*** rows=***)
+
+select * from t1 where a in(1,2) and b in(2,3);;
+a	b
+1	2
+# Explain and execute query: select * from t1 where a in(1,2) or b in(2,3);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where a in(1,2) or b in(2,3);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index_merge	PRIMARY,idx_b	PRIMARY,idx_b	4,5	NULL	#	#	Using sort_union(PRIMARY,idx_b); Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a` in (1,2)) or (`test`.`t1`.`b` in (2,3)))
+EXPLAIN FORMAT=tree select * from t1 where a in(1,2) or b in(2,3);;
+EXPLAIN
+-> Filter: ((t1.a in (1,2)) or (t1.b in (2,3)))  (cost=*** rows=***)
+    -> Sort-deduplicate by row ID  (cost=*** rows=***)
+        -> Index range scan on t1 using PRIMARY over (a = 1) OR (a = 2)  (cost=*** rows=***)
+        -> Index range scan on t1 using idx_b over (b = 2) OR (b = 3)  (cost=*** rows=***)
+
+select * from t1 where a in(1,2) or b in(2,3);;
+a	b
+1	2
+2	5
+alter table t1 drop index idx_b;
+# Case 8. Union (all) with in predicate.
+# Explain and execute query: select * from t1 where a in (1,2) union select * from t1 where (a,b) in ((1,2),(2,3));
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where a in (1,2) union select * from t1 where (a,b) in ((1,2),(2,3));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<in_predicate_4>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+1	PRIMARY	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_4>.a	#	#	NULL
+2	UNION	<in_predicate_5>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+2	UNION	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_5>.a	#	#	Using where
+3	UNION RESULT	<union1,2>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using temporary
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_4>` join `test`.`t1` where (`test`.`t1`.`a` = `test`.`<in_predicate_4>`.`a`) union /* select#2 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_5>` join `test`.`t1` where ((`test`.`t1`.`b` = `test`.`<in_predicate_5>`.`b`) and (`test`.`t1`.`a` = `test`.`<in_predicate_5>`.`a`))
+EXPLAIN FORMAT=tree select * from t1 where a in (1,2) union select * from t1 where (a,b) in ((1,2),(2,3));;
+EXPLAIN
+-> Table scan on <union temporary>  (cost=*** rows=***)
+    -> Union materialize with deduplication  (cost=*** rows=***)
+        -> Nested loop inner join  (cost=*** rows=***)
+            -> Table scan on <in_predicate_4>  (cost=*** rows=***)
+            -> Single-row index lookup on t1 using PRIMARY (a=`<in_predicate_4>`.a)  (cost=*** rows=***)
+        -> Nested loop inner join  (cost=*** rows=***)
+            -> Table scan on <in_predicate_5>  (cost=*** rows=***)
+            -> Filter: (t1.b = `<in_predicate_5>`.b)  (cost=*** rows=***)
+                -> Single-row index lookup on t1 using PRIMARY (a=`<in_predicate_5>`.a)  (cost=*** rows=***)
+
+select * from t1 where a in (1,2) union select * from t1 where (a,b) in ((1,2),(2,3));;
+a	b
+1	2
+2	5
+# Explain and execute query: select * from t1 where a in (1,2) union all select * from t1 where (a,b) in ((1,2),(2,3));
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where a in (1,2) union all select * from t1 where (a,b) in ((1,2),(2,3));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<in_predicate_4>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+1	PRIMARY	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_4>.a	#	#	NULL
+2	UNION	<in_predicate_5>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+2	UNION	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_5>.a	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_4>` join `test`.`t1` where (`test`.`t1`.`a` = `test`.`<in_predicate_4>`.`a`) union all /* select#2 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_5>` join `test`.`t1` where ((`test`.`t1`.`b` = `test`.`<in_predicate_5>`.`b`) and (`test`.`t1`.`a` = `test`.`<in_predicate_5>`.`a`))
+EXPLAIN FORMAT=tree select * from t1 where a in (1,2) union all select * from t1 where (a,b) in ((1,2),(2,3));;
+EXPLAIN
+-> Append  (cost=*** rows=***)
+    -> Stream results  (cost=*** rows=***)
+        -> Nested loop inner join  (cost=*** rows=***)
+            -> Table scan on <in_predicate_4>  (cost=*** rows=***)
+            -> Single-row index lookup on t1 using PRIMARY (a=`<in_predicate_4>`.a)  (cost=*** rows=***)
+    -> Stream results  (cost=*** rows=***)
+        -> Nested loop inner join  (cost=*** rows=***)
+            -> Table scan on <in_predicate_5>  (cost=*** rows=***)
+            -> Filter: (t1.b = `<in_predicate_5>`.b)  (cost=*** rows=***)
+                -> Single-row index lookup on t1 using PRIMARY (a=`<in_predicate_5>`.a)  (cost=*** rows=***)
+
+select * from t1 where a in (1,2) union all select * from t1 where (a,b) in ((1,2),(2,3));;
+a	b
+1	2
+2	5
+1	2
+# Case 9. CTE with in predicate.
+# Explain and execute query: with test_cte (a, b) as (select * from t1 where (a,b) in ((1,2),(2,3))) select * from test_cte where a in (1,3,5);
+set @explain = 'traditional,tree';;
+EXPLAIN with test_cte (a, b) as (select * from t1 where (a,b) in ((1,2),(2,3))) select * from test_cte where a in (1,3,5);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_3>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+1	SIMPLE	<in_predicate_4>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	4	test.<in_predicate_3>.a	#	#	IN-list converted
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_3>.a	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_3>` join `test`.`<in_predicate_4>` join `test`.`t1` where ((`test`.`t1`.`b` = `test`.`<in_predicate_3>`.`b`) and (`test`.`<in_predicate_4>`.`a` = `test`.`<in_predicate_3>`.`a`) and (`test`.`t1`.`a` = `test`.`<in_predicate_3>`.`a`))
+EXPLAIN FORMAT=tree with test_cte (a, b) as (select * from t1 where (a,b) in ((1,2),(2,3))) select * from test_cte where a in (1,3,5);;
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Nested loop inner join  (cost=*** rows=***)
+        -> Table scan on <in_predicate_3>  (cost=*** rows=***)
+        -> Single-row index lookup on <in_predicate_4> using <auto_distinct_key> (a=`<in_predicate_3>`.a)  (cost=*** rows=***)
+    -> Filter: (t1.b = `<in_predicate_3>`.b)  (cost=*** rows=***)
+        -> Single-row index lookup on t1 using PRIMARY (a=`<in_predicate_3>`.a)  (cost=*** rows=***)
+
+with test_cte (a, b) as (select * from t1 where (a,b) in ((1,2),(2,3))) select * from test_cte where a in (1,3,5);;
+a	b
+1	2
+# Case 10. Derived table (subquery) with in predicate.
+SET @optimizer_switch_backup= @@session.optimizer_switch;
+set optimizer_switch = 'derived_merge=off';
+# Explain and execute query: select * from (select * from t1 where (a,b) in ((1,2),(2,3))) derived_table where a in(1,2);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from (select * from t1 where (a,b) in ((1,2),(2,3))) derived_table where a in(1,2);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+2	DERIVED	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	#	#	Using index condition; Using where
+2	DERIVED	<in_predicate_3>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	9	test.t1.a,test.t1.b	#	#	IN-list converted
+Warnings:
+Note	1003	/* select#1 */ select `derived_table`.`a` AS `a`,`derived_table`.`b` AS `b` from (/* select#2 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_3>` join `test`.`t1` where ((`test`.`<in_predicate_3>`.`b` = `test`.`t1`.`b`) and (`test`.`<in_predicate_3>`.`a` = `test`.`t1`.`a`) and (`test`.`t1`.`a` in (1,2)))) `derived_table`
+EXPLAIN FORMAT=tree select * from (select * from t1 where (a,b) in ((1,2),(2,3))) derived_table where a in(1,2);;
+EXPLAIN
+-> Table scan on derived_table  (cost=*** rows=***)
+    -> Materialize  (cost=*** rows=***)
+        -> Nested loop inner join  (cost=*** rows=***)
+            -> Filter: (t1.b is not null)  (cost=*** rows=***)
+                -> Index range scan on t1 using PRIMARY over (a = 1) OR (a = 2), with index condition: (t1.a in (1,2))  (cost=*** rows=***)
+            -> Single-row index lookup on <in_predicate_3> using <auto_distinct_key> (a=t1.a, b=t1.b)  (cost=*** rows=***)
+
+select * from (select * from t1 where (a,b) in ((1,2),(2,3))) derived_table where a in(1,2);;
+a	b
+1	2
+set @@session.optimizer_switch=@optimizer_switch_backup;
+# Explain and execute query: select (select a from t1 where (a,b) in ((1,2),(2,3))) from t1 where a in(1,2);
+set @explain = 'traditional,tree';;
+EXPLAIN select (select a from t1 where (a,b) in ((1,2),(2,3))) from t1 where a in(1,2);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<in_predicate_4>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+1	PRIMARY	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_4>.a	#	#	Using index
+2	SUBQUERY	<in_predicate_3>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+2	SUBQUERY	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_3>.a	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select (/* select#2 */ select `test`.`t1`.`a` from `test`.`<in_predicate_3>` join `test`.`t1` where ((`test`.`t1`.`b` = `test`.`<in_predicate_3>`.`b`) and (`test`.`t1`.`a` = `test`.`<in_predicate_3>`.`a`))) AS `(select a from t1 where (a,b) in ((1,2),(2,3)))` from `test`.`<in_predicate_4>` join `test`.`t1` where (`test`.`t1`.`a` = `test`.`<in_predicate_4>`.`a`)
+EXPLAIN FORMAT=tree select (select a from t1 where (a,b) in ((1,2),(2,3))) from t1 where a in(1,2);;
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Table scan on <in_predicate_4>  (cost=*** rows=***)
+    -> Single-row covering index lookup on t1 using PRIMARY (a=`<in_predicate_4>`.a)  (cost=*** rows=***)
+-> Select #2 (subquery in projection; run only once)
+    -> Nested loop inner join  (cost=*** rows=***)
+        -> Table scan on <in_predicate_3>  (cost=*** rows=***)
+        -> Filter: (t1.b = `<in_predicate_3>`.b)  (cost=*** rows=***)
+            -> Single-row index lookup on t1 using PRIMARY (a=`<in_predicate_3>`.a)  (cost=*** rows=***)
+
+select (select a from t1 where (a,b) in ((1,2),(2,3))) from t1 where a in(1,2);;
+(select a from t1 where (a,b) in ((1,2),(2,3)))
+1
+1
+# Explain and execute query: select * from t1 where a in ((select max(a) from t1 where a in (1,3,5,7,9)), 2, 3);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where a in ((select max(a) from t1 where a in (1,3,5,7,9)), 2, 3);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	#	#	Using where
+2	SUBQUERY	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	#	#	Using index
+2	SUBQUERY	<in_predicate_3>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	4	test.t1.a	#	#	IN-list converted
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` in ((/* select#2 */ select max(`test`.`t1`.`a`) from `test`.`<in_predicate_3>` join `test`.`t1` where (`test`.`<in_predicate_3>`.`a` = `test`.`t1`.`a`)),2,3))
+EXPLAIN FORMAT=tree select * from t1 where a in ((select max(a) from t1 where a in (1,3,5,7,9)), 2, 3);;
+EXPLAIN
+-> Filter: (t1.a in ((select #2),2,3))  (cost=*** rows=***)
+    -> Index range scan on t1 using PRIMARY over (a = 2) OR (a = 3) OR (a = 9)  (cost=*** rows=***)
+    -> Select #2 (subquery in condition; run only once)
+        -> Aggregate: max(t1.a)  (cost=*** rows=***)
+            -> Nested loop inner join  (cost=*** rows=***)
+                -> Covering index scan on t1 using PRIMARY  (cost=*** rows=***)
+                -> Single-row index lookup on <in_predicate_3> using <auto_distinct_key> (a=t1.a)  (cost=*** rows=***)
+
+select * from t1 where a in ((select max(a) from t1 where a in (1,3,5,7,9)), 2, 3);;
+a	b
+2	5
+3	1
+9	7
+# Explain and execute query: select * from t1 where a in (2, 3) and b in (select max(a) from t1 where a in (1,3,5,7,9) group by a);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where a in (2, 3) and b in (select max(a) from t1 where a in (1,3,5,7,9) group by a);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<in_predicate_3>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+1	PRIMARY	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_3>.a	#	#	Using where
+2	SUBQUERY	<in_predicate_4>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted; Using temporary
+2	SUBQUERY	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_4>.a	#	#	Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_3>` join `test`.`t1` where ((`test`.`t1`.`a` = `test`.`<in_predicate_3>`.`a`) and <in_optimizer>(`test`.`t1`.`b`,`test`.`t1`.`b` in ( <materialize> (/* select#2 */ select max(`test`.`t1`.`a`) from `test`.`<in_predicate_4>` join `test`.`t1` where (`test`.`t1`.`a` = `test`.`<in_predicate_4>`.`a`) group by `test`.`t1`.`a` having true ), <primary_index_lookup>(`test`.`t1`.`b` in <temporary table> on <auto_distinct_key> where ((`test`.`t1`.`b` = `<materialized_subquery>`.`max(a)`))))))
+EXPLAIN FORMAT=tree select * from t1 where a in (2, 3) and b in (select max(a) from t1 where a in (1,3,5,7,9) group by a);;
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Table scan on <in_predicate_3>  (cost=*** rows=***)
+    -> Filter: <in_optimizer>(t1.b,t1.b in (select #2))  (cost=*** rows=***)
+        -> Single-row index lookup on t1 using PRIMARY (a=`<in_predicate_3>`.a)  (cost=*** rows=***)
+        -> Select #2 (subquery in condition; run only once)
+            -> Filter: ((t1.b = `<materialized_subquery>`.`max(a)`))  (cost=*** rows=***)
+                -> Limit: 1 row(s)  (cost=*** rows=***)
+                    -> Index lookup on <materialized_subquery> using <auto_distinct_key> (max(a)=t1.b)
+                        -> Materialize with deduplication  (cost=*** rows=***)
+                            -> Table scan on <temporary>
+                                -> Aggregate using temporary table
+                                    -> Nested loop inner join  (cost=*** rows=***)
+                                        -> Table scan on <in_predicate_4>  (cost=*** rows=***)
+                                        -> Single-row covering index lookup on t1 using PRIMARY (a=`<in_predicate_4>`.a)  (cost=*** rows=***)
+
+select * from t1 where a in (2, 3) and b in (select max(a) from t1 where a in (1,3,5,7,9) group by a);;
+a	b
+3	1
+# Explain and execute query: select sum(a), sum(b) from t1 group by a having sum(a) in (1,2,3) and sum(b) in (select max(b) from t1 where b in (1,3,5,7,9) group by b);
+set @explain = 'traditional,tree';;
+EXPLAIN select sum(a), sum(b) from t1 group by a having sum(a) in (1,2,3) and sum(b) in (select max(b) from t1 where b in (1,3,5,7,9) group by b);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	#	#	Using aggregate
+2	SUBQUERY	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; Using temporary
+Warnings:
+Note	1003	/* select#1 */ select sum(`test`.`t1`.`a`) AS `sum(a)`,sum(`test`.`t1`.`b`) AS `sum(b)` from `test`.`t1` group by `test`.`t1`.`a` having ((sum(`test`.`t1`.`a`) in (1,2,3)) and <in_optimizer>(sum(`test`.`t1`.`b`),sum(`test`.`t1`.`b`) in ( <materialize> (/* select#2 */ select max(`test`.`t1`.`b`) from `test`.`t1` where (`test`.`t1`.`b` in (1,3,5,7,9)) group by `test`.`t1`.`b` having true ), <primary_index_lookup>(sum(`test`.`t1`.`b`) in <temporary table> on <auto_distinct_key> where ((sum(`test`.`t1`.`b`) = `<materialized_subquery>`.`max(b)`))))))
+EXPLAIN FORMAT=tree select sum(a), sum(b) from t1 group by a having sum(a) in (1,2,3) and sum(b) in (select max(b) from t1 where b in (1,3,5,7,9) group by b);;
+EXPLAIN
+-> Filter: ((sum(t1.a) in (1,2,3)) and <in_optimizer>(sum(t1.b),sum(t1.b) in (select #2)))  (cost=*** rows=***)
+    -> Group aggregate: sum(t1.b), sum(t1.a), sum(t1.a), sum(t1.b)  (cost=*** rows=***)
+        -> Index scan on t1 using PRIMARY, with aggregate  (cost=*** rows=***)
+    -> Select #2 (subquery in condition; run only once)
+        -> Filter: ((sum(t1.b) = `<materialized_subquery>`.`max(b)`))  (cost=*** rows=***)
+            -> Limit: 1 row(s)  (cost=*** rows=***)
+                -> Index lookup on <materialized_subquery> using <auto_distinct_key> (max(b)=sum(t1.b))
+                    -> Materialize with deduplication  (cost=*** rows=***)
+                        -> Table scan on <temporary>
+                            -> Aggregate using temporary table
+                                -> Filter: (t1.b in (1,3,5,7,9))  (cost=*** rows=***)
+                                    -> Table scan on t1  (cost=*** rows=***)
+
+select sum(a), sum(b) from t1 group by a having sum(a) in (1,2,3) and sum(b) in (select max(b) from t1 where b in (1,3,5,7,9) group by b);;
+sum(a)	sum(b)
+2	5
+3	1
+SET @@session.optimizer_switch= @optimizer_switch_backup;
+# Explain and execute query: select (select a from t1 where (a,b) in ((1,2),(2,3))) from t1 where a in(1,2);
+set @explain = 'traditional,tree';;
+EXPLAIN select (select a from t1 where (a,b) in ((1,2),(2,3))) from t1 where a in(1,2);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<in_predicate_4>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+1	PRIMARY	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_4>.a	#	#	Using index
+2	SUBQUERY	<in_predicate_3>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+2	SUBQUERY	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_3>.a	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select (/* select#2 */ select `test`.`t1`.`a` from `test`.`<in_predicate_3>` join `test`.`t1` where ((`test`.`t1`.`b` = `test`.`<in_predicate_3>`.`b`) and (`test`.`t1`.`a` = `test`.`<in_predicate_3>`.`a`))) AS `(select a from t1 where (a,b) in ((1,2),(2,3)))` from `test`.`<in_predicate_4>` join `test`.`t1` where (`test`.`t1`.`a` = `test`.`<in_predicate_4>`.`a`)
+EXPLAIN FORMAT=tree select (select a from t1 where (a,b) in ((1,2),(2,3))) from t1 where a in(1,2);;
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Table scan on <in_predicate_4>  (cost=*** rows=***)
+    -> Single-row covering index lookup on t1 using PRIMARY (a=`<in_predicate_4>`.a)  (cost=*** rows=***)
+-> Select #2 (subquery in projection; run only once)
+    -> Nested loop inner join  (cost=*** rows=***)
+        -> Table scan on <in_predicate_3>  (cost=*** rows=***)
+        -> Filter: (t1.b = `<in_predicate_3>`.b)  (cost=*** rows=***)
+            -> Single-row index lookup on t1 using PRIMARY (a=`<in_predicate_3>`.a)  (cost=*** rows=***)
+
+select (select a from t1 where (a,b) in ((1,2),(2,3))) from t1 where a in(1,2);;
+(select a from t1 where (a,b) in ((1,2),(2,3)))
+1
+1
+# Case 11. Create view with in predicate.
+create view v as select * from t1 where a in (1,2,3,4,5);
+# Explain and execute query: select * from v where b in (2,3,4,5,6);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from v where b in (2,3,4,5,6);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	Using where
+1	SIMPLE	<in_predicate_3>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	4	test.t1.a	#	#	IN-list converted
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_3>` join `test`.`t1` where ((`test`.`<in_predicate_3>`.`a` = `test`.`t1`.`a`) and (`test`.`t1`.`b` in (2,3,4,5,6)))
+EXPLAIN FORMAT=tree select * from v where b in (2,3,4,5,6);;
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Filter: (t1.b in (2,3,4,5,6))  (cost=*** rows=***)
+        -> Table scan on t1  (cost=*** rows=***)
+    -> Single-row index lookup on <in_predicate_3> using <auto_distinct_key> (a=t1.a)  (cost=*** rows=***)
+
+select * from v where b in (2,3,4,5,6);;
+a	b
+1	2
+4	6
+2	5
+drop view v;
+create table t3 as select * from t1 where a in (1,2,3,4,5);
+select * from t3;
+a	b
+1	2
+2	5
+3	1
+4	6
+drop table t3;
+# Case 12. Test query already exists semijoin.
+# Explain and execute query: select * from t1 where a in(1,2,3,4,5) and exists(select b from t1 where b > 5);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where a in(1,2,3,4,5) and exists(select b from t1 where b > 5);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; FirstMatch
+1	SIMPLE	t1	NULL	ALL	PRIMARY	NULL	NULL	NULL	#	#	Using join buffer (hash join)
+1	SIMPLE	<in_predicate_3>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	4	test.t1.a	#	#	IN-list converted
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_3>` join `test`.`t1` semi join (`test`.`t1`) where ((`test`.`<in_predicate_3>`.`a` = `test`.`t1`.`a`) and (`test`.`t1`.`b` > 5))
+EXPLAIN FORMAT=tree select * from t1 where a in(1,2,3,4,5) and exists(select b from t1 where b > 5);;
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Inner hash join (no condition)  (cost=*** rows=***)
+        -> Table scan on t1  (cost=*** rows=***)
+        -> Hash
+            -> Limit: 1 row(s)  (cost=*** rows=***)
+                -> Filter: (t1.b > 5)  (cost=*** rows=***)
+                    -> Table scan on t1  (cost=*** rows=***)
+    -> Single-row index lookup on <in_predicate_3> using <auto_distinct_key> (a=t1.a)  (cost=*** rows=***)
+
+select * from t1 where a in(1,2,3,4,5) and exists(select b from t1 where b > 5);;
+a	b
+1	2
+4	6
+3	1
+2	5
+SET DEBUG='+d,simulate_in_predicate_to_in_subs_fix_in_subs_failed';
+# Explain and execute query: select * from t1 where a in(1,2,3,4,5) and exists(select b from t1 where b > 5);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where a in(1,2,3,4,5) and exists(select b from t1 where b > 5);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where; FirstMatch
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	#	#	Using index condition; Using join buffer (hash join)
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` semi join (`test`.`t1`) where ((`test`.`t1`.`a` in (1,2,3,4,5)) and (`test`.`t1`.`b` > 5))
+EXPLAIN FORMAT=tree select * from t1 where a in(1,2,3,4,5) and exists(select b from t1 where b > 5);;
+EXPLAIN
+-> Inner hash join (no condition)  (cost=*** rows=***)
+    -> Index range scan on t1 using PRIMARY over (a = 1) OR (a = 2) OR (3 more), with index condition: (t1.a in (1,2,3,4,5))  (cost=*** rows=***)
+    -> Hash
+        -> Limit: 1 row(s)  (cost=*** rows=***)
+            -> Filter: (t1.b > 5)  (cost=*** rows=***)
+                -> Table scan on t1  (cost=*** rows=***)
+
+select * from t1 where a in(1,2,3,4,5) and exists(select b from t1 where b > 5);;
+a	b
+1	2
+2	5
+3	1
+4	6
+SET DEBUG='';
+# Case 13. Test item type cast(NULL value).
+# Null can't store in tmp table.
+# Explain and execute query: select * from t1 where a in(1,2,3,4,5,NULL);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where a in(1,2,3,4,5,NULL);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	#	#	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` in (1,2,3,4,5,NULL))
+EXPLAIN FORMAT=tree select * from t1 where a in(1,2,3,4,5,NULL);;
+EXPLAIN
+-> Index range scan on t1 using PRIMARY over (a = 1) OR (a = 2) OR (3 more), with index condition: (t1.a in (1,2,3,4,5,NULL))  (cost=*** rows=***)
+
+select * from t1 where a in(1,2,3,4,5,NULL);;
+a	b
+1	2
+2	5
+3	1
+4	6
+# Explain and execute query: select * from t1 where a in (1, '2', "34", 4.00);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where a in (1, '2', "34", 4.00);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	#	#	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` in (1,'2','34',4.00))
+EXPLAIN FORMAT=tree select * from t1 where a in (1, '2', "34", 4.00);;
+EXPLAIN
+-> Index range scan on t1 using PRIMARY over (a = 1) OR (a = 2) OR (2 more), with index condition: (t1.a in (1,'2','34',4.00))  (cost=*** rows=***)
+
+select * from t1 where a in (1, '2', "34", 4.00);;
+a	b
+1	2
+2	5
+4	6
+# Out of range
+select * from t1 where a in (-1.7976931348623157E+309, -2.2250738585072014E-308, 2.2250738585072014E-309, 1.7976931348623157E+308);;
+ERROR 22007: Illegal double '1.7976931348623157E+309' value found during parsing
+# Case 14. Test opt_trace.
+# Explain and execute query: select * from t1 where (a,b) in ((1,2),(2,3));
+set @explain = "traditional,opt_trace";;
+EXPLAIN select * from t1 where (a,b) in ((1,2),(2,3));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_2>.a	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_2>` join `test`.`t1` where ((`test`.`t1`.`b` = `test`.`<in_predicate_2>`.`b`) and (`test`.`t1`.`a` = `test`.`<in_predicate_2>`.`a`))
+SET optimizer_trace="enabled=on";
+select * from t1 where (a,b) in ((1,2),(2,3));;
+a	b
+1	2
+SELECT * FROM information_schema.OPTIMIZER_TRACE;
+QUERY	TRACE	MISSING_BYTES_BEYOND_MAX_MEM_SIZE	INSUFFICIENT_PRIVILEGES
+select * from t1 where (a,b) in ((1,2),(2,3))	{
+  "steps": [
+    {
+      "join_preparation": {
+        "select#": 1,
+        "steps": [
+          {
+            "IN_uses_bisection": true
+          },
+          {
+            "in_to_subquery_conversion": {
+              "item": "((`t1`.`a`,`t1`.`b`) in ((1,2),(2,3)))",
+              "steps": [
+                {
+                  "creating_tmp_table": {
+                    "tmp_table_info": {
+                      "table": "intermediate_tmp_table",
+                      "columns": 2,
+                      "row_length": 9,
+                      "key_length": 9,
+                      "unique_constraint": false,
+                      "makes_grouped_rows": false,
+                      "cannot_insert_duplicates": true,
+                      "location": "TempTable"
+                    }
+                  }
+                },
+                {
+                  "join_preparation": {
+                    "select#": 2,
+                    "steps": [
+                      {
+                        "expanded_query": "/* select#2 */ select `<in_predicate_2>`.`a`,`<in_predicate_2>`.`b` from `<in_predicate_2>`"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "done": true
+            }
+          },
+          {
+            "expanded_query": "/* select#1 */ select `t1`.`a` AS `a`,`t1`.`b` AS `b` from `t1` where (`t1`.`a`,`t1`.`b`) in (/* select#2 */ select `<in_predicate_2>`.`a`,`<in_predicate_2>`.`b` from `<in_predicate_2>`)"
+          },
+          {
+            "transformation": {
+              "select#": 2,
+              "from": "IN (SELECT)",
+              "to": "semijoin",
+              "chosen": true,
+              "transformation_to_semi_join": {
+                "subquery_predicate": "(`t1`.`a`,`t1`.`b`) in (/* select#2 */ select `<in_predicate_2>`.`a`,`<in_predicate_2>`.`b` from `<in_predicate_2>`)",
+                "embedded in": "WHERE",
+                "evaluating_constant_semijoin_conditions": [
+                ],
+                "semi-join condition": "((`t1`.`a` = `<in_predicate_2>`.`a`) and (`t1`.`b` = `<in_predicate_2>`.`b`))",
+                "decorrelated_predicates": [
+                  {
+                    "outer": "`t1`.`a`",
+                    "inner": "`<in_predicate_2>`.`a`"
+                  },
+                  {
+                    "outer": "`t1`.`b`",
+                    "inner": "`<in_predicate_2>`.`b`"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "transformations_to_nested_joins": {
+              "transformations": [
+                "semijoin"
+              ],
+              "expanded_query": "/* select#1 */ select `t1`.`a` AS `a`,`t1`.`b` AS `b` from `t1` semi join (`<in_predicate_2>`) where ((`t1`.`a` = `<in_predicate_2>`.`a`) and (`t1`.`b` = `<in_predicate_2>`.`b`))"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "join_optimization": {
+        "select#": 1,
+        "steps": [
+          {
+            "condition_processing": {
+              "condition": "WHERE",
+              "original_condition": "((`t1`.`a` = `<in_predicate_2>`.`a`) and (`t1`.`b` = `<in_predicate_2>`.`b`))",
+              "steps": [
+                {
+                  "transformation": "equality_propagation",
+                  "resulting_condition": "(multiple equal(`t1`.`a`, `<in_predicate_2>`.`a`) and multiple equal(`t1`.`b`, `<in_predicate_2>`.`b`))"
+                },
+                {
+                  "transformation": "constant_propagation",
+                  "resulting_condition": "(multiple equal(`t1`.`a`, `<in_predicate_2>`.`a`) and multiple equal(`t1`.`b`, `<in_predicate_2>`.`b`))"
+                },
+                {
+                  "transformation": "trivial_condition_removal",
+                  "resulting_condition": "(multiple equal(`t1`.`a`, `<in_predicate_2>`.`a`) and multiple equal(`t1`.`b`, `<in_predicate_2>`.`b`))"
+                }
+              ]
+            }
+          },
+          {
+            "substitute_generated_columns": {
+            }
+          },
+          {
+            "table_dependencies": [
+              {
+                "table": "`t1`",
+                "row_may_be_null": false,
+                "map_bit": 0,
+                "depends_on_map_bits": [
+                ]
+              },
+              {
+                "table": "`<in_predicate_2>`",
+                "row_may_be_null": false,
+                "map_bit": 1,
+                "depends_on_map_bits": [
+                ]
+              }
+            ]
+          },
+          {
+            "ref_optimizer_key_uses": [
+              {
+                "table": "`t1`",
+                "field": "a",
+                "equals": "`<in_predicate_2>`.`a`",
+                "null_rejecting": true
+              },
+              {
+                "table": "`<in_predicate_2>`",
+                "field": "a",
+                "equals": "`t1`.`a`",
+                "null_rejecting": true
+              },
+              {
+                "table": "`<in_predicate_2>`",
+                "field": "b",
+                "equals": "`t1`.`b`",
+                "null_rejecting": true
+              }
+            ]
+          },
+          {
+            "pulled_out_semijoin_tables": [
+              {
+                "table": "`<in_predicate_2>`",
+                "functionally_dependent": true
+              }
+            ]
+          },
+          {
+            "rows_estimation": [
+              {
+                "table": "`t1`",
+                "table_scan": {
+                  "rows": 6,
+                  "cost": ***
+                }
+              },
+              {
+                "table": "`<in_predicate_2>`",
+                "table_scan": {
+                  "rows": 2,
+                  "cost": ***
+                }
+              }
+            ]
+          },
+          {
+            "considered_execution_plans": [
+              {
+                "plan_prefix": [
+                ],
+                "table": "`<in_predicate_2>`",
+                "best_access_path": {
+                  "considered_access_paths": [
+                    {
+                      "access_type": "ref",
+                      "index": "<auto_distinct_key>",
+                      "usable": false,
+                      "chosen": false
+                    },
+                    {
+                      "rows_to_scan": 2,
+                      "filtering_effect": [
+                      ],
+                      "final_filtering_effect": 1,
+                      "access_type": "scan",
+                      "resulting_rows": 2,
+                      "cost": ***,
+                      "chosen": true
+                    }
+                  ]
+                },
+                "condition_filtering_pct": 100,
+                "rows_for_plan": 2,
+                "cost_for_plan": ***,
+                "rest_of_plan": [
+                  {
+                    "plan_prefix": [
+                      "`<in_predicate_2>`"
+                    ],
+                    "table": "`t1`",
+                    "best_access_path": {
+                      "considered_access_paths": [
+                        {
+                          "access_type": "eq_ref",
+                          "index": "PRIMARY",
+                          "rows": 1,
+                          "cost": ***,
+                          "chosen": true
+                        },
+                        {
+                          "access_type": "scan",
+                          "cost": ***,
+                          "rows": 6,
+                          "chosen": false,
+                          "cause": "cost"
+                        }
+                      ]
+                    },
+                    "condition_filtering_pct": 100,
+                    "rows_for_plan": 2,
+                    "cost_for_plan": ***,
+                    "chosen": true
+                  }
+                ]
+              },
+              {
+                "plan_prefix": [
+                ],
+                "table": "`t1`",
+                "best_access_path": {
+                  "considered_access_paths": [
+                    {
+                      "access_type": "ref",
+                      "index": "PRIMARY",
+                      "usable": false,
+                      "chosen": false
+                    },
+                    {
+                      "rows_to_scan": 6,
+                      "filtering_effect": [
+                      ],
+                      "final_filtering_effect": 1,
+                      "access_type": "scan",
+                      "resulting_rows": 6,
+                      "cost": ***,
+                      "chosen": true
+                    }
+                  ]
+                },
+                "condition_filtering_pct": 100,
+                "rows_for_plan": 6,
+                "cost_for_plan": ***,
+                "rest_of_plan": [
+                  {
+                    "plan_prefix": [
+                      "`t1`"
+                    ],
+                    "table": "`<in_predicate_2>`",
+                    "best_access_path": {
+                      "considered_access_paths": [
+                        {
+                          "access_type": "eq_ref",
+                          "index": "<auto_distinct_key>",
+                          "rows": 1,
+                          "cost": ***,
+                          "chosen": true
+                        },
+                        {
+                          "access_type": "scan",
+                          "cost": ***,
+                          "rows": 2,
+                          "chosen": false,
+                          "cause": "cost"
+                        }
+                      ]
+                    },
+                    "condition_filtering_pct": 100,
+                    "rows_for_plan": 6,
+                    "cost_for_plan": ***,
+                    "pruned_by_cost": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "attaching_conditions_to_tables": {
+              "original_condition": "((`t1`.`b` = `<in_predicate_2>`.`b`) and (`t1`.`a` = `<in_predicate_2>`.`a`))",
+              "attached_conditions_computation": [
+              ],
+              "attached_conditions_summary": [
+                {
+                  "table": "`<in_predicate_2>`",
+                  "attached": null
+                },
+                {
+                  "table": "`t1`",
+                  "attached": "((`t1`.`b` = `<in_predicate_2>`.`b`) and (`t1`.`a` = `<in_predicate_2>`.`a`))"
+                }
+              ]
+            }
+          },
+          {
+            "finalizing_table_conditions": [
+              {
+                "table": "`t1`",
+                "original_table_condition": "((`t1`.`b` = `<in_predicate_2>`.`b`) and (`t1`.`a` = `<in_predicate_2>`.`a`))",
+                "final_table_condition   ": "(`t1`.`b` = `<in_predicate_2>`.`b`)"
+              }
+            ]
+          },
+          {
+            "refine_plan": [
+              {
+                "table": "`<in_predicate_2>`"
+              },
+              {
+                "table": "`t1`"
+              }
+            ]
+          },
+          {
+            "partial_result_cache": {
+              "caching_result_of": "nested_loop_join",
+              "plan_prefix": [
+                "`<in_predicate_2>`"
+              ],
+              "right_tables": [
+                "`t1`"
+              ],
+              "distinct_rows": 2,
+              "estimate_rows": 2,
+              "estimate_distinct_val_ratio": 0,
+              "chosen": false,
+              "cause": "cost below threshold"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "not_apply_pq_plan": {
+        "select#": 1,
+        "chosen": false,
+        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+      }
+    },
+    {
+      "join_execution": {
+        "select#": 1,
+        "steps": [
+        ]
+      }
+    }
+  ]
+}	0	0
+SET optimizer_trace="enabled=off";
+# Case 15. Test dummy error handler.
+set debug='+d,simulate_in_predicate_to_in_sub_oom';
+# Explain and execute query: select * from t1 where (a,b) in ((1,2),(2,3));
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where (a,b) in ((1,2),(2,3));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a`,`test`.`t1`.`b`) in ((1,2),(2,3)))
+EXPLAIN FORMAT=tree select * from t1 where (a,b) in ((1,2),(2,3));;
+EXPLAIN
+-> Filter: ((t1.a,t1.b) in ((1,2),(2,3)))  (cost=*** rows=***)
+    -> Index range scan on t1 using PRIMARY over (a = 1) OR (a = 2)  (cost=*** rows=***)
+
+select * from t1 where (a,b) in ((1,2),(2,3));;
+a	b
+1	2
+set debug='-d,simulate_in_predicate_to_in_sub_oom';
+# Case 16. Test prepared stmt, Stored procedure,trigger.
+prepare stmt from "select * from t1 where a in (1,2)";
+prepare explain_stmt from "explain select * from t1 where a in (1,2)";
+execute stmt;
+a	b
+1	2
+2	5
+execute explain_stmt;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	2	100.00	IN-list converted
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_2>.a	1	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_2>` join `test`.`t1` where (`test`.`t1`.`a` = `test`.`<in_predicate_2>`.`a`)
+deallocate prepare stmt;
+deallocate prepare explain_stmt;
+CREATE PROCEDURE transform_in_sp()
+BEGIN
+EXPLAIN SELECT * FROM t1 WHERE (a,b) IN ((1,2),(2,3));
+SELECT * FROM t1 WHERE (a,b) IN ((1,2),(2,3));
+END $$
+call transform_in_sp();
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	2	33.33	Using where
+a	b
+1	2
+DROP PROCEDURE transform_in_sp;
+create table t3 like t1;
+CREATE TRIGGER before_t1_insert
+BEFORE INSERT ON t1
+FOR EACH ROW
+BEGIN
+INSERT INTO t3 SELECT * FROM t1 WHERE (a,b) IN ((1,2),(2,3));
+END $$
+insert into t1 values (99,99);
+select * from t3;
+a	b
+1	2
+drop table t3;
+DROP TRIGGER before_t1_insert;
+# Case 17. Test insert_select, replace_select.
+create table t3 like t1;
+# Explain and execute query: insert into t3 select * from t1 where (a,b) in ((1,2), (2,3));
+set @explain = 'traditional,tree';;
+EXPLAIN insert into t3 select * from t1 where (a,b) in ((1,2), (2,3));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	INSERT	t3	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_2>.a	#	#	Using where
+Warnings:
+Note	1003	insert into `test`.`t3` /* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_2>` join `test`.`t1` where ((`test`.`t1`.`b` = `test`.`<in_predicate_2>`.`b`) and (`test`.`t1`.`a` = `test`.`<in_predicate_2>`.`a`))
+EXPLAIN FORMAT=tree insert into t3 select * from t1 where (a,b) in ((1,2), (2,3));;
+EXPLAIN
+-> Insert into t3
+    -> Nested loop inner join  (cost=*** rows=***)
+        -> Table scan on <in_predicate_2>  (cost=*** rows=***)
+        -> Filter: (t1.b = `<in_predicate_2>`.b)  (cost=*** rows=***)
+            -> Single-row index lookup on t1 using PRIMARY (a=`<in_predicate_2>`.a)  (cost=*** rows=***)
+
+insert into t3 select * from t1 where (a,b) in ((1,2), (2,3));;
+select * from t3;
+a	b
+1	2
+update t3 set b = 999;
+select * from t3;
+a	b
+1	999
+# Explain and execute query: replace into t3 select * from t1 where (a,b) in ((1,2), (2,3));
+set @explain = 'traditional,tree';;
+EXPLAIN replace into t3 select * from t1 where (a,b) in ((1,2), (2,3));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	REPLACE	t3	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_2>.a	#	#	Using where
+Warnings:
+Note	1003	replace into `test`.`t3` /* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_2>` join `test`.`t1` where ((`test`.`t1`.`b` = `test`.`<in_predicate_2>`.`b`) and (`test`.`t1`.`a` = `test`.`<in_predicate_2>`.`a`))
+EXPLAIN FORMAT=tree replace into t3 select * from t1 where (a,b) in ((1,2), (2,3));;
+EXPLAIN
+-> Replace into t3
+    -> Nested loop inner join  (cost=*** rows=***)
+        -> Table scan on <in_predicate_2>  (cost=*** rows=***)
+        -> Filter: (t1.b = `<in_predicate_2>`.b)  (cost=*** rows=***)
+            -> Single-row index lookup on t1 using PRIMARY (a=`<in_predicate_2>`.a)  (cost=*** rows=***)
+
+replace into t3 select * from t1 where (a,b) in ((1,2), (2,3));;
+select * from t3;
+a	b
+1	2
+drop table t3;
+# Case 18. Test generated column.
+alter table t1 add column c int generated always as (a + 10);
+alter table t1 add index idx_c(c);
+# Explain and execute query: select * from t1 where c in (11,12);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where c in (11,12);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted; Using where
+1	SIMPLE	t1	NULL	ref	idx_c	idx_c	5	test.<in_predicate_2>.c	#	#	NULL
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t1`.`c` AS `c` from `test`.`<in_predicate_2>` join `test`.`t1` where (`test`.`t1`.`c` = `test`.`<in_predicate_2>`.`c`)
+EXPLAIN FORMAT=tree select * from t1 where c in (11,12);;
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Filter: (`<in_predicate_2>`.c is not null)  (cost=*** rows=***)
+        -> Table scan on <in_predicate_2>  (cost=*** rows=***)
+    -> Index lookup on t1 using idx_c (c=`<in_predicate_2>`.c)  (cost=*** rows=***)
+
+select * from t1 where c in (11,12);;
+a	b	c
+1	2	11
+2	5	12
+alter table t1 drop index idx_c;
+alter table t1 drop column c;
+# Case 20. Test use keys, not in.
+# Explain and execute query: select * from t2 where (a,b) in ((1,2), (2,3));
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t2 where (a,b) in ((1,2), (2,3));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t2` where ((`test`.`t2`.`a`,`test`.`t2`.`b`) in ((1,2),(2,3)))
+EXPLAIN FORMAT=tree select * from t2 where (a,b) in ((1,2), (2,3));;
+EXPLAIN
+-> Filter: ((t2.a,t2.b) in ((1,2),(2,3)))  (cost=*** rows=***)
+    -> Table scan on t2  (cost=*** rows=***)
+
+select * from t2 where (a,b) in ((1,2), (2,3));;
+a	b
+1	2
+alter table t2 add index idx_b(b);
+# Explain and execute query: select * from t2 where (a,b) in ((1,2), (2,3));
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t2 where (a,b) in ((1,2), (2,3));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted; Using where
+1	SIMPLE	t2	NULL	ref	idx_b	idx_b	5	test.<in_predicate_2>.b	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`<in_predicate_2>` join `test`.`t2` where ((`test`.`t2`.`b` = `test`.`<in_predicate_2>`.`b`) and (`test`.`t2`.`a` = `test`.`<in_predicate_2>`.`a`))
+EXPLAIN FORMAT=tree select * from t2 where (a,b) in ((1,2), (2,3));;
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Filter: (`<in_predicate_2>`.b is not null)  (cost=*** rows=***)
+        -> Table scan on <in_predicate_2>  (cost=*** rows=***)
+    -> Filter: (t2.a = `<in_predicate_2>`.a)  (cost=*** rows=***)
+        -> Index lookup on t2 using idx_b (b=`<in_predicate_2>`.b)  (cost=*** rows=***)
+
+select * from t2 where (a,b) in ((1,2), (2,3));;
+a	b
+1	2
+alter table t2 drop index idx_b;
+alter table t2 add index idx_a(a);
+# Explain and execute query: select * from t2 where (a,b) in ((1,2), (2,3));
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t2 where (a,b) in ((1,2), (2,3));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted; Using where
+1	SIMPLE	t2	NULL	ref	idx_a	idx_a	5	test.<in_predicate_2>.a	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`<in_predicate_2>` join `test`.`t2` where ((`test`.`t2`.`b` = `test`.`<in_predicate_2>`.`b`) and (`test`.`t2`.`a` = `test`.`<in_predicate_2>`.`a`))
+EXPLAIN FORMAT=tree select * from t2 where (a,b) in ((1,2), (2,3));;
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Filter: (`<in_predicate_2>`.a is not null)  (cost=*** rows=***)
+        -> Table scan on <in_predicate_2>  (cost=*** rows=***)
+    -> Filter: (t2.b = `<in_predicate_2>`.b)  (cost=*** rows=***)
+        -> Index lookup on t2 using idx_a (a=`<in_predicate_2>`.a)  (cost=*** rows=***)
+
+select * from t2 where (a,b) in ((1,2), (2,3));;
+a	b
+1	2
+alter table t2 drop index idx_a;
+alter table t2 add index idx_ab(a,b);
+# Explain and execute query: select * from t2 where b in (1,2);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t2 where b in (1,2);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	index	NULL	idx_ab	10	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t2` where (`test`.`t2`.`b` in (1,2))
+EXPLAIN FORMAT=tree select * from t2 where b in (1,2);;
+EXPLAIN
+-> Filter: (t2.b in (1,2))  (cost=*** rows=***)
+    -> Index scan on t2 using idx_ab  (cost=*** rows=***)
+
+select * from t2 where b in (1,2);;
+a	b
+1	2
+3	1
+alter table t2 drop index idx_ab;
+# Explain and execute query: select * from t2 where a not in (1,2);
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t2 where a not in (1,2);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t2` where (`test`.`t2`.`a` not in (1,2))
+EXPLAIN FORMAT=tree select * from t2 where a not in (1,2);;
+EXPLAIN
+-> Filter: (t2.a not in (1,2))  (cost=*** rows=***)
+    -> Table scan on t2  (cost=*** rows=***)
+
+select * from t2 where a not in (1,2);;
+a	b
+4	6
+9	7
+3	1
+7	8
+# Case 21. Const field in arg list.
+# Explain and execute query: select * from t1 where (a,1,b) in ((1,1,2), (2,2,3));
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where (a,1,b) in ((1,1,2), (2,2,3));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted; Using where
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.<in_predicate_2>.a	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_2>` join `test`.`t1` where ((`test`.`t1`.`b` = `test`.`<in_predicate_2>`.`b`) and (`test`.`<in_predicate_2>`.`1` = 1) and (`test`.`t1`.`a` = `test`.`<in_predicate_2>`.`a`))
+EXPLAIN FORMAT=tree select * from t1 where (a,1,b) in ((1,1,2), (2,2,3));;
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Filter: (`<in_predicate_2>`.`1` = 1)  (cost=*** rows=***)
+        -> Table scan on <in_predicate_2>  (cost=*** rows=***)
+    -> Filter: (t1.b = `<in_predicate_2>`.b)  (cost=*** rows=***)
+        -> Single-row index lookup on t1 using PRIMARY (a=`<in_predicate_2>`.a)  (cost=*** rows=***)
+
+select * from t1 where (a,1,b) in ((1,1,2), (2,2,3));;
+a	b
+1	2
+# case 22, Test type holder.
+# Explain and execute query: select * from t1 where (a,b) in ((1.23, 2.45), (2.56, 5.66), (1,2));
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where (a,b) in ((1.23, 2.45), (2.56, 5.66), (1,2));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a`,`test`.`t1`.`b`) in ((1.23,2.45),(2.56,5.66),(1,2)))
+EXPLAIN FORMAT=tree select * from t1 where (a,b) in ((1.23, 2.45), (2.56, 5.66), (1,2));;
+EXPLAIN
+-> Filter: ((t1.a,t1.b) in ((1.23,2.45),(2.56,5.66),(1,2)))  (cost=*** rows=***)
+    -> Index range scan on t1 using PRIMARY over (a = 1) OR (a = 3)  (cost=*** rows=***)
+
+select * from t1 where (a,b) in ((1.23, 2.45), (2.56, 5.66), (1,2));;
+a	b
+1	2
+# case 23, Test rollback if execute fails.
+SET DEBUG='+d,simulate_in_predicate_to_in_sub_create_tmp_table_failed';
+# Explain and execute query: select * from t1 where (a,b) in ((1,2),(2,3));
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where (a,b) in ((1,2),(2,3));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	#	#	Using where
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where ((`test`.`t1`.`a`,`test`.`t1`.`b`) in ((1,2),(2,3)))
+EXPLAIN FORMAT=tree select * from t1 where (a,b) in ((1,2),(2,3));;
+EXPLAIN
+-> Filter: ((t1.a,t1.b) in ((1,2),(2,3)))  (cost=*** rows=***)
+    -> Index range scan on t1 using PRIMARY over (a = 1) OR (a = 2)  (cost=*** rows=***)
+
+select * from t1 where (a,b) in ((1,2),(2,3));;
+a	b
+1	2
+prepare stmt from "select * from t1 where a in (1,2)";
+prepare explain_stmt from "explain select * from t1 where a in (1,2)";
+execute stmt;
+a	b
+1	2
+2	5
+execute explain_stmt;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	2	100.00	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` in (1,2))
+deallocate prepare stmt;
+deallocate prepare explain_stmt;
+SET DEBUG='-d,simulate_in_predicate_to_in_sub_create_tmp_table_failed';
+# case 24, re-prepare when type is not compatible.
+prepare stmt from "select * from t1 where a in (1,2,?)";
+prepare explain_stmt from "explain select * from t1 where a in (1,2,?)";
+set @var=3.123;
+execute stmt using @var;
+a	b
+1	2
+2	5
+execute explain_stmt using @var;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` in (1,2,3.123))
+deallocate prepare stmt;
+deallocate prepare explain_stmt;
+# case 25, re-prepare when fill tmp table fail.
+SET DEBUG='+d,simulate_in_predicate_to_in_sub_fill_tmp_table_failed';
+prepare stmt from "select * from t1 where a in (1,2,?)";
+prepare explain_stmt from "explain select * from t1 where a in (1,2,?)";
+set @var=3.123;
+execute stmt using @var;
+a	b
+1	2
+2	5
+execute explain_stmt using @var;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	4	NULL	3	100.00	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` in (1,2,3.123))
+deallocate prepare stmt;
+deallocate prepare explain_stmt;
+SET DEBUG='-d,simulate_in_predicate_to_in_sub_fill_tmp_table_failed';
+drop table t1;
+drop table t2;
+#
+# BUG2023051902473: View is not supported
+#
+CREATE TABLE t1(a int, b int);
+INSERT INTO t1 VALUES(1,2),(2,3);
+ALTER TABLE t1 ADD INDEX idx(a);
+CREATE VIEW v1 AS SELECT * FROM t1;
+EXPLAIN SELECT * FROM v1 WHERE a IN (1, 2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	idx	NULL	NULL	NULL	2	100.00	Using where
+1	SIMPLE	<in_predicate_3>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	5	test.t1.a	1	100.00	IN-list converted
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_3>` join `test`.`t1` where (`test`.`<in_predicate_3>`.`a` = `test`.`t1`.`a`)
+SELECT * FROM v1 WHERE a IN (1, 2);
+a	b
+1	2
+2	3
+DROP VIEW v1;
+DROP TABLE t1;
+#
+# BUG2023052402386: Conversion fails if previous conversion failed
+#
+CREATE TABLE tb1 (id_col int NOT NULL AUTO_INCREMENT, PRIMARY key(id_col));
+INSERT INTO tb1 VALUES(1);
+EXPLAIN
+SELECT *
+FROM tb1
+WHERE id_col in (-9999999999999999999999999999999999999999999999999999999999999999.9, 1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tb1	NULL	index	PRIMARY	PRIMARY	4	NULL	1	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`tb1`.`id_col` AS `id_col` from `test`.`tb1` where (`test`.`tb1`.`id_col` in (<cache>(-(9999999999999999999999999999999999999999999999999999999999999999.9)),1))
+EXPLAIN
+SELECT *
+FROM tb1
+WHERE id_col in (-99999999999999999999999999999999999999999999999999999999999999999.9, 1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tb1	NULL	index	PRIMARY	PRIMARY	4	NULL	1	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`tb1`.`id_col` AS `id_col` from `test`.`tb1` where (`test`.`tb1`.`id_col` in (<cache>(-(99999999999999999999999999999999999999999999999999999999999999999.9)),1))
+EXPLAIN
+SELECT *
+FROM tb1
+WHERE id_col in (-9999999999999999999999999999999999999999999999999999999999999999.9, 1);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tb1	NULL	index	PRIMARY	PRIMARY	4	NULL	1	100.00	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`tb1`.`id_col` AS `id_col` from `test`.`tb1` where (`test`.`tb1`.`id_col` in (<cache>(-(9999999999999999999999999999999999999999999999999999999999999999.9)),1))
+SET DEBUG='+d,simulate_in_predicate_to_in_sub_fill_tmp_table_failed';
+prepare stmt from "select * from tb1 where id_col in (1,2)";
+execute stmt;
+id_col
+1
+SET DEBUG='-d,simulate_in_predicate_to_in_sub_fill_tmp_table_failed';
+prepare stmt from "explain select * from tb1 where id_col in (1,2)";
+execute stmt;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	tb1	NULL	index	PRIMARY	PRIMARY	4	NULL	1	100.00	Using index
+1	SIMPLE	<in_predicate_2>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	4	test.tb1.id_col	1	100.00	IN-list converted
+Warnings:
+Note	1003	/* select#1 */ select `test`.`tb1`.`id_col` AS `id_col` from `test`.`<in_predicate_2>` join `test`.`tb1` where (`test`.`<in_predicate_2>`.`id_col` = `test`.`tb1`.`id_col`)
+DROP TABLE tb1;
+#
+# BUG2023052901120: Hint is invalid for IN-list conversion
+#
+set rds_in_predicate_conversion_threshold = 0;
+CREATE TABLE t1(a INT, b INT, key(a));
+INSERT INTO t1 VALUES(1,2),(3,4);
+EXPLAIN SELECT * FROM t1 WHERE a IN (1, 2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	a	a	5	NULL	2	100.00	Using index condition
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` in (1,2))
+EXPLAIN SELECT /*+ SET_VAR(rds_in_predicate_conversion_threshold = 1) */ * FROM t1 WHERE a IN (1, 2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	a	NULL	NULL	NULL	2	100.00	Using where
+1	SIMPLE	<in_predicate_2>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	5	test.t1.a	1	100.00	IN-list converted
+Warnings:
+Note	1003	/* select#1 */ select /*+ SET_VAR(rds_in_predicate_conversion_threshold=1) */ `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`<in_predicate_2>` join `test`.`t1` where (`test`.`<in_predicate_2>`.`a` = `test`.`t1`.`a`)
+DROP TABLE t1;
+#
+# BUG2023060201559: Differnt type causes In-list conversion to have a mismatched result
+#
+CREATE TABLE t1(varbinary_col varbinary(255) DEFAULT NULL, decimal_col decimal(25,5) DEFAULT NULL,
+KEY vb(varbinary_col), KEY dec_key(decimal_col));
+INSERT INTO t1 VALUES(binary 'dddddddddd1', null), (binary 'eeeeeeeeeee1', null);
+Warnings:
+Warning	1287	'BINARY expr' is deprecated and will be removed in a future release. Please use CAST instead
+Warning	1287	'BINARY expr' is deprecated and will be removed in a future release. Please use CAST instead
+# Explain and execute query: select decimal_col from t1 where decimal_col in (-99999999999999999999.9999,-3.40282e38);
+set @explain = 'traditional,tree';;
+EXPLAIN select decimal_col from t1 where decimal_col in (-99999999999999999999.9999,-3.40282e38);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	dec_key	dec_key	13	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`decimal_col` AS `decimal_col` from `test`.`t1` where (`test`.`t1`.`decimal_col` in (<cache>(-(99999999999999999999.9999)),<cache>(-(3.40282e38))))
+EXPLAIN FORMAT=tree select decimal_col from t1 where decimal_col in (-99999999999999999999.9999,-3.40282e38);;
+EXPLAIN
+-> Filter: (t1.decimal_col in (<cache>(-(99999999999999999999.9999)),<cache>(-(3.40282e38))))  (cost=*** rows=***)
+    -> Covering index range scan on t1 using dec_key over (decimal_col = -99999999999999999999.99990)  (cost=*** rows=***)
+
+select decimal_col from t1 where decimal_col in (-99999999999999999999.9999,-3.40282e38);;
+decimal_col
+# Explain and execute query: select count(*) from t1 where varbinary_col in ('1', 0);
+set @explain = 'traditional,tree';;
+EXPLAIN select count(*) from t1 where varbinary_col in ('1', 0);;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	vb	vb	258	NULL	#	#	Using where; Using index
+Warnings:
+Warning	1739	Cannot use range access on index 'vb' due to type or collation conversion on field 'varbinary_col'
+Note	1003	/* select#1 */ select count(0) AS `count(*)` from `test`.`t1` where (`test`.`t1`.`varbinary_col` in ('1',0))
+EXPLAIN FORMAT=tree select count(*) from t1 where varbinary_col in ('1', 0);;
+EXPLAIN
+-> Aggregate: count(0)  (cost=*** rows=***)
+    -> Filter: (t1.varbinary_col in ('1',0))  (cost=*** rows=***)
+        -> Index scan on t1 using vb  (cost=*** rows=***)
+
+Warnings:
+Warning	1739	Cannot use range access on index 'vb' due to type or collation conversion on field 'varbinary_col'
+select count(*) from t1 where varbinary_col in ('1', 0);;
+count(*)
+2
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'dddddddddd1'
+Warning	1292	Truncated incorrect DOUBLE value: 'eeeeeeeeeee1'
+DROP TABLE t1;
+#
+# BUG2023060602873: Result mismatch after in-list conversion
+#
+CREATE TABLE test6 (
+b3 blob,
+gen_3 varchar(3) GENERATED ALWAYS AS (left(b3,3)) STORED,
+KEY key_3 (gen_3)
+);
+INSERT INTO test6 (b3) VALUES (_binary '00158124837-54289467866-63898207856-kjihgfedcba-2785532715900158124837-54289467866-63898207856-kjihgfedcba'),
+(_binary 'h01857915357-17612134148-88720199355-96890455862-95815779431');
+SELECT gen_3 FROM test6 WHERE gen_3 IN ('h01',1);
+gen_3
+001
+h01
+DROP TABLE test6;
+#
+# BUG2025090201272: the in predicate `t.c0 IN (..., NULL, ...)  is is [not] null/unknown` lead to incorrect results
+#
+CREATE TABLE `t` (`c0` varchar(32) DEFAULT NULL, KEY `i0` (`c0`));
+INSERT INTO `t` VALUES ('12');
+CREATE TABLE `t_temp` (`c0` varchar(32) DEFAULT NULL, KEY `i0` (`c0`));
+INSERT INTO `t_temp` VALUES ('-1706708328'),(NULL);
+set rds_in_predicate_conversion_threshold=0;
+SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS UNKNOWN;
+c0
+12
+SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NULL;
+c0
+12
+SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NOT UNKNOWN;
+c0
+SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NOT NULL;
+c0
+set rds_in_predicate_conversion_threshold=1;
+# Explain and execute query: SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS UNKNOWN;
+set @explain = 'traditional,tree';;
+EXPLAIN SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS UNKNOWN;;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	index	NULL	i0	131	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`c0` AS `c0` from `test`.`t` where ((`test`.`t`.`c0` in ('-1706708328',NULL)) is null)
+EXPLAIN FORMAT=tree SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS UNKNOWN;;
+EXPLAIN
+-> Filter: ((t.c0 in ('-1706708328',NULL)) is null)  (cost=*** rows=***)
+    -> Index scan on t using i0  (cost=*** rows=***)
+
+SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS UNKNOWN;;
+c0
+12
+# Explain and execute query: SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NULL;
+set @explain = 'traditional,tree';;
+EXPLAIN SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NULL;;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	index	NULL	i0	131	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`c0` AS `c0` from `test`.`t` where ((`test`.`t`.`c0` in ('-1706708328',NULL)) is null)
+EXPLAIN FORMAT=tree SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NULL;;
+EXPLAIN
+-> Filter: ((t.c0 in ('-1706708328',NULL)) is null)  (cost=*** rows=***)
+    -> Index scan on t using i0  (cost=*** rows=***)
+
+SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NULL;;
+c0
+12
+# Explain and execute query: SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NOT UNKNOWN;
+set @explain = 'traditional,tree';;
+EXPLAIN SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NOT UNKNOWN;;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	index	NULL	i0	131	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`c0` AS `c0` from `test`.`t` where ((`test`.`t`.`c0` in ('-1706708328',NULL)) is not null)
+EXPLAIN FORMAT=tree SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NOT UNKNOWN;;
+EXPLAIN
+-> Filter: ((t.c0 in ('-1706708328',NULL)) is not null)  (cost=*** rows=***)
+    -> Index scan on t using i0  (cost=*** rows=***)
+
+SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NOT UNKNOWN;;
+c0
+# Explain and execute query: SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NOT NULL;
+set @explain = 'traditional,tree';;
+EXPLAIN SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NOT NULL;;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t	NULL	index	NULL	i0	131	NULL	#	#	Using where; Using index
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t`.`c0` AS `c0` from `test`.`t` where ((`test`.`t`.`c0` in ('-1706708328',NULL)) is not null)
+EXPLAIN FORMAT=tree SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NOT NULL;;
+EXPLAIN
+-> Filter: ((t.c0 in ('-1706708328',NULL)) is not null)  (cost=*** rows=***)
+    -> Index scan on t using i0  (cost=*** rows=***)
+
+SELECT t.c0 FROM t WHERE ((t.c0) IN ('-1706708328',  NULL)) IS NOT NULL;;
+c0
+DROP TABLE t;
+DROP TABLE t_temp;
+#
+# BUG2025091100137: IN-LIST subquery incorrectly use `ref` access instead of `ref_or_null` access
+#
+CREATE TABLE `t2` (`c1` varchar(500) DEFAULT NULL,`c6` varchar(237) DEFAULT NULL,index idx_c6(c6));
+insert into t2 values("","");
+CREATE TABLE `t_tmp` (`c6` varchar(237) DEFAULT "", KEY `id_c6` (`c6`));
+insert into t_tmp values(NULL),("0.6798096730298574");
+# Explain and execute query: SELECT /*+ SET_VAR(rds_in_predicate_conversion_threshold=1) */ t2.c6,t2.c1 FROM t2 WHERE (t2.c6 NOT IN (t2.c1)) IN (t2.c6 IN (NULL, "0.6798096730298574"));
+set @explain = 'traditional,tree';;
+EXPLAIN SELECT /*+ SET_VAR(rds_in_predicate_conversion_threshold=1) */ t2.c6,t2.c1 FROM t2 WHERE (t2.c6 NOT IN (t2.c1)) IN (t2.c6 IN (NULL, "0.6798096730298574"));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+2	DEPENDENT SUBQUERY	<in_predicate_2>	NULL	index_subquery	<auto_distinct_key>	<auto_distinct_key>	951	func	#	#	IN-list converted; Using where; Full scan on NULL key
+Warnings:
+Note	1003	/* select#1 */ select /*+ SET_VAR(rds_in_predicate_conversion_threshold=1) */ `test`.`t2`.`c6` AS `c6`,`test`.`t2`.`c1` AS `c1` from `test`.`t2` where ((`test`.`t2`.`c6` <> `test`.`t2`.`c1`) = <in_optimizer>(`test`.`t2`.`c6`,<exists>(<index_lookup>(<cache>(`test`.`t2`.`c6`) in <temporary table> on <auto_distinct_key> checking NULL where <if>(outer_field_is_not_null, ((<cache>(`test`.`t2`.`c6`) = `test`.`<in_predicate_2>`.`c6`) or (`test`.`<in_predicate_2>`.`c6` is null)), true) having <if>(outer_field_is_not_null, <is_not_null_test>(`test`.`<in_predicate_2>`.`c6`), true)))))
+EXPLAIN FORMAT=tree SELECT /*+ SET_VAR(rds_in_predicate_conversion_threshold=1) */ t2.c6,t2.c1 FROM t2 WHERE (t2.c6 NOT IN (t2.c1)) IN (t2.c6 IN (NULL, "0.6798096730298574"));;
+EXPLAIN
+-> Filter: ((t2.c6 <> t2.c1) = <in_optimizer>(t2.c6,<exists>(select #2)))  (cost=*** rows=***)
+    -> Table scan on t2  (cost=*** rows=***)
+    -> Select #2 (subquery in condition; dependent)
+        -> Limit: 1 row(s)
+            -> Filter: <if>(outer_field_is_not_null, <is_not_null_test>(`<in_predicate_2>`.c6), true)
+                -> Filter: <if>(outer_field_is_not_null, ((<cache>(t2.c6) = `<in_predicate_2>`.c6) or (`<in_predicate_2>`.c6 is null)), true)
+                    -> Alternative plans for IN subquery: Index lookup unless c6 IS NULL  (cost=*** rows=***)
+                        -> Index lookup on <in_predicate_2> using <auto_distinct_key> (c6=<cache>(t2.c6) or NULL)  (cost=*** rows=***)
+                        -> Table scan on <in_predicate_2>  (cost=*** rows=***)
+
+SELECT /*+ SET_VAR(rds_in_predicate_conversion_threshold=1) */ t2.c6,t2.c1 FROM t2 WHERE (t2.c6 NOT IN (t2.c1)) IN (t2.c6 IN (NULL, "0.6798096730298574"));;
+c6	c1
+# Explain and execute query: SELECT t2.c6,t2.c1 FROM t2 WHERE (t2.c6 NOT IN (t2.c1)) IN (t2.c6 IN (select * from t_tmp));
+set @explain = 'traditional,tree';;
+EXPLAIN SELECT t2.c6,t2.c1 FROM t2 WHERE (t2.c6 NOT IN (t2.c1)) IN (t2.c6 IN (select * from t_tmp));;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+2	DEPENDENT SUBQUERY	t_tmp	NULL	index_subquery	id_c6	id_c6	951	func	#	#	Using where; Using index; Full scan on NULL key
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t2`.`c6` AS `c6`,`test`.`t2`.`c1` AS `c1` from `test`.`t2` where ((`test`.`t2`.`c6` <> `test`.`t2`.`c1`) = <in_optimizer>(`test`.`t2`.`c6`,<exists>(<index_lookup>(<cache>(`test`.`t2`.`c6`) in t_tmp on id_c6 checking NULL where <if>(outer_field_is_not_null, ((<cache>(`test`.`t2`.`c6`) = `test`.`t_tmp`.`c6`) or (`test`.`t_tmp`.`c6` is null)), true) having <if>(outer_field_is_not_null, <is_not_null_test>(`test`.`t_tmp`.`c6`), true)))))
+EXPLAIN FORMAT=tree SELECT t2.c6,t2.c1 FROM t2 WHERE (t2.c6 NOT IN (t2.c1)) IN (t2.c6 IN (select * from t_tmp));;
+EXPLAIN
+-> Filter: ((t2.c6 <> t2.c1) = <in_optimizer>(t2.c6,<exists>(select #2)))  (cost=*** rows=***)
+    -> Table scan on t2  (cost=*** rows=***)
+    -> Select #2 (subquery in condition; dependent)
+        -> Limit: 1 row(s)
+            -> Filter: <if>(outer_field_is_not_null, <is_not_null_test>(t_tmp.c6), true)
+                -> Filter: <if>(outer_field_is_not_null, ((<cache>(t2.c6) = t_tmp.c6) or (t_tmp.c6 is null)), true)
+                    -> Alternative plans for IN subquery: Index lookup unless c6 IS NULL  (cost=*** rows=***)
+                        -> Covering index lookup on t_tmp using id_c6 (c6=<cache>(t2.c6) or NULL)  (cost=*** rows=***)
+                        -> Table scan on t_tmp  (cost=*** rows=***)
+
+SELECT t2.c6,t2.c1 FROM t2 WHERE (t2.c6 NOT IN (t2.c1)) IN (t2.c6 IN (select * from t_tmp));;
+c6	c1
+DROP TABLE t2;
+DROP TABLE t_tmp;
+#
+# BUG2025120324811: IN-LIST query of enum field in condition has invalid enum value incorrectly in sql_mode = ''.
+#
+create table t1(`enum_col` enum('aaa','bbb','ccc') not null, index index_c1(`enum_col`));
+set sql_mode = '';
+insert into t1 values('aaa'),('bbb'),('ccc'),('xxx'),('kkk');
+set rds_in_predicate_conversion_threshold=0;
+# Explain and execute query: select * from t1 where enum_col in ('bbb', 'ccc', 'false', 'true')
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where enum_col in ('bbb', 'ccc', 'false', 'true');
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	index_c1	index_c1	1	NULL	#	#	Using where; Using index
+EXPLAIN FORMAT=tree select * from t1 where enum_col in ('bbb', 'ccc', 'false', 'true');
+EXPLAIN
+-> Filter: (t1.enum_col in ('bbb','ccc','false','true'))  (cost=*** rows=***)
+    -> Covering index range scan on t1 using index_c1 over (enum_col = '') OR (enum_col = 'bbb') OR (enum_col = 'ccc')  (cost=*** rows=***)
+
+select * from t1 where enum_col in ('bbb', 'ccc', 'false', 'true');
+enum_col
+bbb
+ccc
+# Explain and execute query: select * from t1 where enum_col in ('bbb', 'ccc', null)
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where enum_col in ('bbb', 'ccc', null);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	index_c1	index_c1	1	NULL	#	#	Using where; Using index
+EXPLAIN FORMAT=tree select * from t1 where enum_col in ('bbb', 'ccc', null);
+EXPLAIN
+-> Filter: (t1.enum_col in ('bbb','ccc',NULL))  (cost=*** rows=***)
+    -> Covering index range scan on t1 using index_c1 over (enum_col = 'bbb') OR (enum_col = 'ccc')  (cost=*** rows=***)
+
+select * from t1 where enum_col in ('bbb', 'ccc', null);
+enum_col
+bbb
+ccc
+set rds_in_predicate_conversion_threshold=1;
+# Explain and execute query: select * from t1 where enum_col in ('bbb', 'ccc', 'false', 'true')
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where enum_col in ('bbb', 'ccc', 'false', 'true');
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	index_c1	index_c1	1	NULL	#	#	Using where; Using index
+EXPLAIN FORMAT=tree select * from t1 where enum_col in ('bbb', 'ccc', 'false', 'true');
+EXPLAIN
+-> Filter: (t1.enum_col in ('bbb','ccc','false','true'))  (cost=*** rows=***)
+    -> Covering index range scan on t1 using index_c1 over (enum_col = '') OR (enum_col = 'bbb') OR (enum_col = 'ccc')  (cost=*** rows=***)
+
+select * from t1 where enum_col in ('bbb', 'ccc', 'false', 'true');
+enum_col
+bbb
+ccc
+# Explain and execute query: select * from t1 where enum_col in ('bbb', 'ccc', null)
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where enum_col in ('bbb', 'ccc', null);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	index_c1	index_c1	1	NULL	#	#	Using where; Using index
+EXPLAIN FORMAT=tree select * from t1 where enum_col in ('bbb', 'ccc', null);
+EXPLAIN
+-> Filter: (t1.enum_col in ('bbb','ccc',NULL))  (cost=*** rows=***)
+    -> Covering index range scan on t1 using index_c1 over (enum_col = 'bbb') OR (enum_col = 'ccc')  (cost=*** rows=***)
+
+select * from t1 where enum_col in ('bbb', 'ccc', null);
+enum_col
+bbb
+ccc
+# Explain and execute query: select * from t1 where enum_col in ('bbb', 'ccc')
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where enum_col in ('bbb', 'ccc');
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	<in_predicate_2>	NULL	ALL	<auto_distinct_key>	NULL	NULL	NULL	#	#	IN-list converted
+1	SIMPLE	t1	NULL	ref	index_c1	index_c1	1	test.<in_predicate_2>.enum_col	#	#	Using index
+EXPLAIN FORMAT=tree select * from t1 where enum_col in ('bbb', 'ccc');
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Table scan on <in_predicate_2>  (cost=*** rows=***)
+    -> Covering index lookup on t1 using index_c1 (enum_col=`<in_predicate_2>`.enum_col)  (cost=*** rows=***)
+
+select * from t1 where enum_col in ('bbb', 'ccc');
+enum_col
+bbb
+ccc
+drop table t1;
+create table t1(`enum_col1` enum('aaa','bbb','ccc') not null, `enum_col2` enum('ddd','eee','fff') not null, index index_c1(`enum_col1`), index index_c2(`enum_col2`));
+insert into t1 values('aaa', 'ddd'), ('bbb', 'eee'), ('ccc', 'fff'), ('kkk', 'eee');
+set rds_in_predicate_conversion_threshold=0;
+# Explain and execute query: select * from t1 where (enum_col1, enum_col2) in (('aaa', 'ddd'), ('bbb', 'eee'), ('xxx', 'eee'))
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where (enum_col1, enum_col2) in (('aaa', 'ddd'), ('bbb', 'eee'), ('xxx', 'eee'));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	index_c1,index_c2	index_c2	1	NULL	#	#	Using where
+EXPLAIN FORMAT=tree select * from t1 where (enum_col1, enum_col2) in (('aaa', 'ddd'), ('bbb', 'eee'), ('xxx', 'eee'));
+EXPLAIN
+-> Filter: ((t1.enum_col1,t1.enum_col2) in (('aaa','ddd'),('bbb','eee'),('xxx','eee')))  (cost=*** rows=***)
+    -> Index range scan on t1 using index_c2 over (enum_col2 = 'ddd') OR (enum_col2 = 'eee')  (cost=*** rows=***)
+
+select * from t1 where (enum_col1, enum_col2) in (('aaa', 'ddd'), ('bbb', 'eee'), ('xxx', 'eee'));
+enum_col1	enum_col2
+aaa	ddd
+bbb	eee
+set rds_in_predicate_conversion_threshold=1;
+# Explain and execute query: select * from t1 where (enum_col1, enum_col2) in (('aaa', 'ddd'), ('bbb', 'eee'), ('xxx', 'eee'))
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where (enum_col1, enum_col2) in (('aaa', 'ddd'), ('bbb', 'eee'), ('xxx', 'eee'));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	index_c1,index_c2	index_c2	1	NULL	#	#	Using where
+EXPLAIN FORMAT=tree select * from t1 where (enum_col1, enum_col2) in (('aaa', 'ddd'), ('bbb', 'eee'), ('xxx', 'eee'));
+EXPLAIN
+-> Filter: ((t1.enum_col1,t1.enum_col2) in (('aaa','ddd'),('bbb','eee'),('xxx','eee')))  (cost=*** rows=***)
+    -> Index range scan on t1 using index_c2 over (enum_col2 = 'ddd') OR (enum_col2 = 'eee')  (cost=*** rows=***)
+
+select * from t1 where (enum_col1, enum_col2) in (('aaa', 'ddd'), ('bbb', 'eee'), ('xxx', 'eee'));
+enum_col1	enum_col2
+aaa	ddd
+bbb	eee
+# Explain and execute query: select * from t1 where (enum_col1, enum_col2) in (('aaa', 'ddd'), ('bbb', 'eee'))
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where (enum_col1, enum_col2) in (('aaa', 'ddd'), ('bbb', 'eee'));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	index_c1,index_c2	NULL	NULL	NULL	#	#	NULL
+1	SIMPLE	<in_predicate_2>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	2	test.t1.enum_col1,test.t1.enum_col2	#	#	IN-list converted
+EXPLAIN FORMAT=tree select * from t1 where (enum_col1, enum_col2) in (('aaa', 'ddd'), ('bbb', 'eee'));
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Table scan on t1  (cost=*** rows=***)
+    -> Single-row index lookup on <in_predicate_2> using <auto_distinct_key> (enum_col1=t1.enum_col1, enum_col2=t1.enum_col2)  (cost=*** rows=***)
+
+select * from t1 where (enum_col1, enum_col2) in (('aaa', 'ddd'), ('bbb', 'eee'));
+enum_col1	enum_col2
+aaa	ddd
+bbb	eee
+drop table t1;
+create table t1(`enum_col1` enum('aaa','bbb','ccc') not null, c2 int not null, index index_c1(`enum_col1`), index index_c2(c2));
+insert into t1 values('aaa', 1), ('bbb', 2), ('ccc', 3), ('kkk', 4);
+set rds_in_predicate_conversion_threshold=0;
+# Explain and execute query: select * from t1 where (enum_col1, c2) in (('aaa', 1), ('bbb', 2), ('xxx', 4))
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where (enum_col1, c2) in (('aaa', 1), ('bbb', 2), ('xxx', 4));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	index_c1,index_c2	index_c1	1	NULL	#	#	Using where
+EXPLAIN FORMAT=tree select * from t1 where (enum_col1, c2) in (('aaa', 1), ('bbb', 2), ('xxx', 4));
+EXPLAIN
+-> Filter: ((t1.enum_col1,t1.c2) in (('aaa',1),('bbb',2),('xxx',4)))  (cost=*** rows=***)
+    -> Index range scan on t1 using index_c1 over (enum_col1 = '') OR (enum_col1 = 'aaa') OR (enum_col1 = 'bbb')  (cost=*** rows=***)
+
+select * from t1 where (enum_col1, c2) in (('aaa', 1), ('bbb', 2), ('xxx', 4));
+enum_col1	c2
+aaa	1
+bbb	2
+set rds_in_predicate_conversion_threshold=1;
+# Explain and execute query: select * from t1 where (enum_col1, c2) in (('aaa', 1), ('bbb', 2), ('xxx', 4))
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where (enum_col1, c2) in (('aaa', 1), ('bbb', 2), ('xxx', 4));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	index_c1,index_c2	index_c1	1	NULL	#	#	Using where
+EXPLAIN FORMAT=tree select * from t1 where (enum_col1, c2) in (('aaa', 1), ('bbb', 2), ('xxx', 4));
+EXPLAIN
+-> Filter: ((t1.enum_col1,t1.c2) in (('aaa',1),('bbb',2),('xxx',4)))  (cost=*** rows=***)
+    -> Index range scan on t1 using index_c1 over (enum_col1 = '') OR (enum_col1 = 'aaa') OR (enum_col1 = 'bbb')  (cost=*** rows=***)
+
+select * from t1 where (enum_col1, c2) in (('aaa', 1), ('bbb', 2), ('xxx', 4));
+enum_col1	c2
+aaa	1
+bbb	2
+# Explain and execute query: select * from t1 where (enum_col1, c2) in (('aaa', 1), ('bbb', 2))
+set @explain = 'traditional,tree';;
+EXPLAIN select * from t1 where (enum_col1, c2) in (('aaa', 1), ('bbb', 2));
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	index_c1,index_c2	NULL	NULL	NULL	#	#	NULL
+1	SIMPLE	<in_predicate_2>	NULL	eq_ref	<auto_distinct_key>	<auto_distinct_key>	5	test.t1.enum_col1,test.t1.c2	#	#	IN-list converted
+EXPLAIN FORMAT=tree select * from t1 where (enum_col1, c2) in (('aaa', 1), ('bbb', 2));
+EXPLAIN
+-> Nested loop inner join  (cost=*** rows=***)
+    -> Table scan on t1  (cost=*** rows=***)
+    -> Single-row index lookup on <in_predicate_2> using <auto_distinct_key> (enum_col1=t1.enum_col1, c2=t1.c2)  (cost=*** rows=***)
+
+select * from t1 where (enum_col1, c2) in (('aaa', 1), ('bbb', 2));
+enum_col1	c2
+aaa	1
+bbb	2
+drop table t1;
+set rds_in_predicate_conversion_threshold=default;
+set optimizer_trace_max_mem_size=default;
+set sql_mode = default;
+# restart

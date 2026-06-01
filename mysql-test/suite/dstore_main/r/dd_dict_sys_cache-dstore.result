@@ -1,0 +1,187 @@
+use test;
+use test;
+#
+# test concurrent access dict sys cache by multithread, ensure function is correct.
+#
+create table q_c_t1 (a int not null);
+SET DEBUG_SYNC = 'AddTableEntryWait WAIT_FOR unexists_signal TIMEOUT 1';
+create table q_c_t2 (a int not null);
+select * from q_c_t1;
+a
+Warnings:
+Warning	1639	debug sync point wait timed out
+SET DEBUG_SYNC = 'RESET';
+DROP TABLE if exists q_c_t1;
+DROP TABLE if exists q_c_t2;
+create table q_r_t1 (a int not null);
+SET DEBUG_SYNC = 'RenameTableEntryWait WAIT_FOR unexists_signal TIMEOUT 1';
+RENAME TABLE q_r_t1 TO q_r_t3;
+select * from q_r_t3;
+a
+Warnings:
+Warning	1639	debug sync point wait timed out
+SET DEBUG_SYNC = 'RESET';
+DROP TABLE if exists q_r_t1;
+Warnings:
+Note	1051	Unknown table 'test.q_r_t1'
+DROP TABLE if exists q_r_t3;
+create table q_d_t1 (a int not null);
+create table q_d_t2 (a int not null);
+SET DEBUG_SYNC = 'RemoveTableEntryBegin WAIT_FOR unexists_signal TIMEOUT 1';
+drop TABLE q_d_t1;
+select * from q_d_t2;
+a
+Warnings:
+Warning	1639	debug sync point wait timed out
+SET DEBUG_SYNC = 'RESET';
+DROP TABLE if exists q_d_t1;
+Warnings:
+Note	1051	Unknown table 'test.q_d_t1'
+DROP TABLE if exists q_d_t2;
+SET DEBUG_SYNC = 'AddTableEntryWait WAIT_FOR unexists_signal TIMEOUT 1 EXECUTE 1';
+create table c_c_t1 (a int not null);
+create table c_c_t2 (a int not null);
+Warnings:
+Warning	1639	debug sync point wait timed out
+SET DEBUG_SYNC = 'RESET';
+DROP TABLE if exists c_c_t1;
+DROP TABLE if exists c_c_t2;
+create table c_r_t1 (a int not null);
+SET DEBUG_SYNC = 'RenameTableEntryWait WAIT_FOR unexists_signal TIMEOUT 1';
+RENAME TABLE c_r_t1 TO c_r_t3;
+create table c_r_t2 (a int not null);
+Warnings:
+Warning	1639	debug sync point wait timed out
+SET DEBUG_SYNC = 'RESET';
+DROP TABLE if exists c_r_t1;
+Warnings:
+Note	1051	Unknown table 'test.c_r_t1'
+DROP TABLE if exists c_r_t2;
+DROP TABLE if exists c_r_t3;
+create table c_d_t1 (a int not null);
+SET DEBUG_SYNC = 'RemoveTableEntryBegin WAIT_FOR unexists_signal TIMEOUT 1';
+drop TABLE c_d_t1;
+create table c_d_t2 (a int not null);
+Warnings:
+Warning	1639	debug sync point wait timed out
+SET DEBUG_SYNC = 'RESET';
+DROP TABLE if exists c_d_t1;
+Warnings:
+Note	1051	Unknown table 'test.c_d_t1'
+DROP TABLE if exists c_d_t2;
+create table r_r_t1 (a int not null);
+create table r_r_t2 (a int not null);
+SET DEBUG_SYNC = 'RenameTableEntryWait WAIT_FOR unexists_signal TIMEOUT 1';
+RENAME TABLE r_r_t1 TO r_r_t3;
+RENAME TABLE r_r_t2 TO r_r_t4;
+Warnings:
+Warning	1639	debug sync point wait timed out
+SET DEBUG_SYNC= 'RESET';
+DROP TABLE if exists r_r_t1;
+Warnings:
+Note	1051	Unknown table 'test.r_r_t1'
+DROP TABLE if exists r_r_t2;
+Warnings:
+Note	1051	Unknown table 'test.r_r_t2'
+DROP TABLE if exists r_r_t3;
+DROP TABLE if exists r_r_t4;
+create table r_d_t1 (a int not null);
+create table r_d_t2 (a int not null);
+SET DEBUG_SYNC = 'RemoveTableEntryBegin WAIT_FOR unexists_signal TIMEOUT 1';
+drop TABLE r_d_t1;
+RENAME TABLE r_d_t2 TO r_d_t3;
+Warnings:
+Warning	1639	debug sync point wait timed out
+SET DEBUG_SYNC= 'RESET';
+DROP TABLE if exists r_d_t1;
+Warnings:
+Note	1051	Unknown table 'test.r_d_t1'
+DROP TABLE if exists r_d_t2;
+Warnings:
+Note	1051	Unknown table 'test.r_d_t2'
+DROP TABLE if exists r_d_t3;
+create table d_d_t1 (a int not null);
+create table d_d_t2 (a int not null);
+SET DEBUG_SYNC = 'RemoveTableEntryBegin WAIT_FOR unexists_signal TIMEOUT 1';
+drop TABLE d_d_t1;
+drop TABLE d_d_t2;
+Warnings:
+Warning	1639	debug sync point wait timed out
+SET DEBUG_SYNC= 'RESET';
+DROP TABLE if exists d_d_t1;
+Warnings:
+Note	1051	Unknown table 'test.d_d_t1'
+DROP TABLE if exists d_d_t2;
+Warnings:
+Note	1051	Unknown table 'test.d_d_t2'
+create table a_a_t1 (a int not null);
+create table a_a_t2 (a int not null);
+SET DEBUG_SYNC = 'RemoveTableEntryBegin WAIT_FOR unexists_signal TIMEOUT 1';
+SET DEBUG_SYNC = 'RenameTableEntryWait WAIT_FOR unexists_signal TIMEOUT 1';
+ALTER TABLE a_a_t1 ADD COLUMN b VARCHAR(100) NOT NULL DEFAULT '', ALGORITHM=COPY;
+ALTER TABLE a_a_t2 ADD COLUMN c VARCHAR(100) NOT NULL DEFAULT '', ALGORITHM=COPY;
+Warnings:
+Warning	1639	debug sync point wait timed out
+Warning	1639	debug sync point wait timed out
+ALTER TABLE a_a_t1 ADD COLUMN c VARCHAR(100) NOT NULL DEFAULT '';
+ALTER TABLE a_a_t1 ADD COLUMN d VARCHAR(100) NOT NULL DEFAULT '';
+SET DEBUG_SYNC= 'RESET';
+DROP TABLE if exists a_a_t1;
+DROP TABLE if exists a_a_t2;
+SET DEBUG_SYNC = 'RemoveTableEntryEnd SIGNAL resume_bg_stat_sig';
+SET GLOBAL DEBUG='+d,bg_stat_after_get_table_wait';
+create table d_bgstat_t1 (a int not null);
+insert into d_bgstat_t1 values (1);
+insert into d_bgstat_t1 values (2);
+insert into d_bgstat_t1 values (3);
+SET GLOBAL DEBUG='-d,bg_stat_after_get_table_wait';
+drop table d_bgstat_t1;
+SET DEBUG_SYNC= 'RESET';
+create table t0 SELECT 1,"table 1";
+create table t2 SELECT 2,"table 2";
+create table t3 SELECT 3,"table 3";
+rename table t3 to t4, t2 to t3, t1 to t2;
+ERROR 42S02: Table 'test.t1' doesn't exist
+show tables like "t_";
+Tables_in_test (t_)
+t0
+t2
+t3
+drop table t0;
+drop table t2;
+drop table t3;
+create table t1 (a int not null);
+insert into t1 values (1);
+# restart
+CALL mtr.add_suppression(".*open table name =.*");
+CALL mtr.add_suppression(".*can't open table:.*");
+SET SESSION DEBUG='+d,dd_table_load_foreign_key_failed';
+select * from t1;
+ERROR 42S02: Table 'test.t1' doesn't exist
+SET SESSION DEBUG='-d,dd_table_load_foreign_key_failed';
+select * from t1;
+a
+1
+drop table if exists t1;
+create table t1 (a int not null);
+insert into t1 values (1);
+insert into t1 values (2);
+insert into t1 values (3);
+# restart
+use test;
+create table t1 (a int not null);
+ERROR 42S01: Table 't1' already exists
+create table t2 (a int not null);
+insert into t2 values (5);
+insert into t2 values (6);
+delete from t1 where a = 1;
+select * from t1;
+a
+2
+3
+select * from t2;
+a
+5
+6
+drop table t1;
+drop table t2;

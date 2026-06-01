@@ -1,0 +1,3865 @@
+From 89600f53af34b91d16189ce01e6893203aa5931b Mon Sep 17 00:00:00 2001
+From: songliyong <songliyong@contributor>
+
+
+Date: Mon, 20 Oct 2025 17:46:09 +0800
+Subject: [PATCH] USERSTORY dstore support offset pushdown
+
+Issue:
+----------
+We consider the case of SELECT queries with LIMIT(n) /OFFSET(p). As it
+stood, the storage engine returned all the rows that satisfied the
+WHERE clause, and the SQL layer took care of discarding the p rows
+accounting for the OFFSET and selecting up to n rows. In cases where
+p>>n, this led to a large number of rows sent from the storage engine to
+the SQL-layer only to be discarded by the latter.
+
+Solution:
+----------
+We developed a feature called offset pushdown in which the OFFSET is
+handled in the storage engine, whenever possible. A certain number of
+conditions have to be met in order for this optimization to be possible,
+but it essentially revolves around whether the WHERE clause can be
+handled in its entirety by the storage engine as it is a necessary
+condition for the OFFSET to be handled there as well. If the WHERE
+clause requires a SQL-layer check to discard some rows, it will not be
+possible to push the OFFSET down to the storage engine as we might skip
+rows that would otherwise have been discarded by the SQL-layer.
+---
+ .../dstore_main/r/derived_limit-dstore.result |    2 +-
+ .../dstore_main/r/explain_tree-dstore.result  |    2 +-
+ .../suite/dstore_main/r/limit-dstore.result   |    2 +-
+ .../r/offset_pushdown-dstore.result           | 1210 +++++++++++++++++
+ ...ushdown_insert_delete_update-dstore.result |  427 ++++++
+ .../offset_pushdown_limitations-dstore.result |  105 ++
+ ...offset_pushdown_locking_test-dstore.result |   88 ++
+ ...n_remove_redundant_condition-dstore.result |   14 +-
+ .../dstore_main/r/subquery_all-dstore.result  |    2 +-
+ .../r/subquery_all_bka-dstore.result          |    2 +-
+ .../r/subquery_all_bka_nobnl-dstore.result    |    2 +-
+ .../r/subquery_nomat_nosj-dstore.result       |    2 +-
+ .../r/subquery_nomat_nosj_bka-dstore.result   |    2 +-
+ ...ubquery_nomat_nosj_bka_nobnl-dstore.result |    2 +-
+ .../dstore_main/r/subquery_none-dstore.result |    2 +-
+ .../r/subquery_none_bka-dstore.result         |    2 +-
+ .../r/subquery_none_bka_nobnl-dstore.result   |    2 +-
+ .../suite/dstore_main/r/view-dstore.result    |    6 +-
+ .../dstore_main/t/offset_pushdown-dstore.test |  626 +++++++++
+ ..._pushdown_insert_delete_update-dstore.test |  561 ++++++++
+ .../t/offset_pushdown_limitations-dstore.test |   81 ++
+ .../offset_pushdown_locking_test-dstore.test  |  129 ++
+ sql/sql_select.cc                             |    7 +-
+ storage/dstore/dml/cde_dml.cc                 |   37 +-
+ storage/dstore/dml/cde_dml.h                  |    7 +-
+ storage/dstore/handler/ha_cde.cc              |   14 +
+ storage/dstore/handler/ha_cde.h               |   35 +
+ 27 files changed, 3336 insertions(+), 35 deletions(-)
+ create mode 100644 mysql-test/suite/dstore_main/r/offset_pushdown-dstore.result
+ create mode 100644 mysql-test/suite/dstore_main/r/offset_pushdown_insert_delete_update-dstore.result
+ create mode 100644 mysql-test/suite/dstore_main/r/offset_pushdown_limitations-dstore.result
+ create mode 100644 mysql-test/suite/dstore_main/r/offset_pushdown_locking_test-dstore.result
+ create mode 100644 mysql-test/suite/dstore_main/t/offset_pushdown-dstore.test
+ create mode 100644 mysql-test/suite/dstore_main/t/offset_pushdown_insert_delete_update-dstore.test
+ create mode 100644 mysql-test/suite/dstore_main/t/offset_pushdown_limitations-dstore.test
+ create mode 100644 mysql-test/suite/dstore_main/t/offset_pushdown_locking_test-dstore.test
+
+diff --git a/mysql-test/suite/dstore_main/r/derived_limit-dstore.result b/mysql-test/suite/dstore_main/r/derived_limit-dstore.result
+index 7844ac7709b..88a1230e068 100644
+--- a/mysql-test/suite/dstore_main/r/derived_limit-dstore.result
++++ b/mysql-test/suite/dstore_main/r/derived_limit-dstore.result
+@@ -197,7 +197,7 @@ EXPLAIN FORMAT=TREE WITH cte AS (SELECT * FROM t1 LIMIT 5 OFFSET 1) SELECT * FRO
+ EXPLAIN
+ -> Table scan on cte  (cost=3.26..5.31 rows=5)
+     -> Materialize CTE cte  (cost=2.75..2.75 rows=5)
+-        -> Limit/Offset: 5/1 row(s)  (cost=2.25 rows=5)
++        -> Limit/Offset: 5/1 row(s), with offset pushdown  (cost=2.25 rows=5)
+             -> Table scan on t1  (cost=2.25 rows=10)
+ 
+ WITH cte AS (SELECT * FROM t1 LIMIT 5 OFFSET 1) SELECT * FROM cte;
+diff --git a/mysql-test/suite/dstore_main/r/explain_tree-dstore.result b/mysql-test/suite/dstore_main/r/explain_tree-dstore.result
+index 80e421b629e..15ba0cf531e 100644
+--- a/mysql-test/suite/dstore_main/r/explain_tree-dstore.result
++++ b/mysql-test/suite/dstore_main/r/explain_tree-dstore.result
+@@ -520,7 +520,7 @@ EXPLAIN
+     -> Filter: <nop>((alias1.f1 <= (select #3)))  (cost=2.75..2.75 rows=0)
+         -> Table scan on alias1  (cost=2.75..2.75 rows=0)
+             -> Materialize  (cost=0.25..0.25 rows=0)
+-                -> Limit/Offset: 2/1 row(s)  (cost=0.25 rows=0)
++                -> Limit/Offset: 2/1 row(s), with offset pushdown  (cost=0.25 rows=0)
+                     -> Table scan on t1  (cost=0.25 rows=0)
+         -> Select #3 (subquery in condition; run only once)
+             -> Aggregate: max(t1.f1)  (cost=0.25 rows=1)
+diff --git a/mysql-test/suite/dstore_main/r/limit-dstore.result b/mysql-test/suite/dstore_main/r/limit-dstore.result
+index 34fbb54455f..9b4ac81f5db 100644
+--- a/mysql-test/suite/dstore_main/r/limit-dstore.result
++++ b/mysql-test/suite/dstore_main/r/limit-dstore.result
+@@ -22,7 +22,7 @@ a
+ 16
+ EXPLAIN FORMAT=TREE SELECT * FROM t1 LIMIT 5 OFFSET 1;
+ EXPLAIN
+--> Limit/Offset: 5/1 row(s)  (cost=2.15 rows=5)
++-> Limit/Offset: 5/1 row(s), with offset pushdown  (cost=2.15 rows=5)
+     -> Table scan on t1  (cost=2.15 rows=9)
+ 
+ (SELECT * FROM t1 LIMIT 7) ORDER BY a DESC LIMIT 4;
+diff --git a/mysql-test/suite/dstore_main/r/offset_pushdown-dstore.result b/mysql-test/suite/dstore_main/r/offset_pushdown-dstore.result
+new file mode 100644
+index 00000000000..c7717a9f03a
+--- /dev/null
++++ b/mysql-test/suite/dstore_main/r/offset_pushdown-dstore.result
+@@ -0,0 +1,1210 @@
++# Initialise
++# In EXPLAIN, "Using offset pushdown " indicates whether the feature is activated for a given query
++# optimizer switch offset_pushdown flag defaults to true
++# system variable rds_empty_redundant_check_in_range_scan defaults to true
++# table 1
++CREATE TABLE t1 (a INT , b INT , INDEX(b));
++INSERT INTO t1 VALUES (1, 2), (2, 3), (3, 3), (4, 3);
++analyze TABLE t1;
++Table	Op	Msg_type	Msg_text
++test.t1	analyze	status	OK
++SET rds_empty_redundant_check_in_range_scan=false;
++# Shows that offset pushdown  works with table scan, later in
++# this file we will show it for index scan, range scan and lookup.
++explain format=tree SELECT * FROM t1 LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++    -> Table scan on t1  (cost=X rows=X)
++
++# non-covering index - icp is not disabled
++# ICP is used and removes condition FROM server layer
++# OFFSET pushdow  is therefore active even opt rds_empty_redundant_check_in_range_scan is false.
++explain  SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using offset pushdown; Using index condition
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 2) limit 1,100
++# Also visible in other EXPLAIN formats:
++explain format=tree SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++    -> Index range scan on t1 using b over (2 < b), with index condition: (t1.b > 2)  (cost=X rows=X)
++
++explain format=json SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++EXPLAIN
++{
++  "query_block": {
++    "select_id": 1,
++    "cost_info": {
++      "query_cost": "1.61"
++    },
++    "table": {
++      "table_name": "t1",
++      "access_type": "range",
++      "possible_keys": [
++        "b"
++      ],
++      "key": "b",
++      "used_key_parts": [
++        "b"
++      ],
++      "key_length": "5",
++      "rows_examined_per_scan": 3,
++      "rows_produced_per_join": 3,
++      "filtered": "100.00",
++      "offset pushdown": true,
++      "index_condition": "(`test`.`t1`.`b` > 2)",
++      "cost_info": {
++        "read_cost": "1.31",
++        "eval_cost": "0.30",
++        "prefix_cost": "1.61",
++        "data_read_per_join": "48"
++      },
++      "used_columns": [
++        "a",
++        "b"
++      ]
++    }
++  }
++}
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 2) limit 1,100
++# The existing MySQL implementation of ICP is that it is off when the chosen index is covering.
++# covering index => no icp => condition remains at SQL layer => no offset pushdown  without opt rds_empty_redundant_check_in_range_scan
++explain  SELECT b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using where; Using index
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 2) limit 1,100
++# covering index => no icp => but option rds_empty_redundant_check_in_range_scan active, removes the condition => offset pushdown  happens
++SET rds_empty_redundant_check_in_range_scan = true;
++explain  SELECT b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using offset pushdown; Using index
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 2) limit 1,100
++# ORDER BY (asc): condition removed, ORDER BY desc, condition removed; offset pushdown  activated either way
++explain  format=tree SELECT b FROM t1 WHERE b > 2 ORDER BY b DESC LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++    -> Covering index range scan on t1 using b over (2 < b) (reverse)  (cost=X rows=X)
++
++explain  format=tree SELECT b FROM t1 WHERE b > 2 ORDER BY b ASC LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++    -> Covering index range scan on t1 using b over (2 < b)  (cost=X rows=X)
++
++# works whether b OP cond or cond OP b
++explain format=tree SELECT a,b FROM t1 WHERE 2 < b;
++EXPLAIN
++-> Index range scan on t1 using b over (2 < b)  (cost=X rows=X)
++
++CREATE TABLE t3 (a INT , b INT , INDEX(a,b));
++INSERT INTO t3 VALUES (1, 2),(2, 3),(3, 3),(4, 3);
++analyze TABLE t3;
++Table	Op	Msg_type	Msg_text
++test.t3	analyze	status	OK
++explain format=tree SELECT a,b FROM t3 WHERE a = 2 AND b < 2;
++EXPLAIN
++-> Covering index range scan on t3 using a over (a = 2 AND NULL < b < 2)  (cost=X rows=X)
++
++explain format=tree SELECT a,b FROM t3 WHERE 2 = a AND b < 2;
++EXPLAIN
++-> Covering index range scan on t3 using a over (a = 2 AND NULL < b < 2)  (cost=X rows=X)
++
++explain format=tree SELECT a,b FROM t3 WHERE 2 = a AND 2 < b;
++EXPLAIN
++-> Covering index range scan on t3 using a over (a = 2 AND 2 < b)  (cost=X rows=X)
++
++# t3 is re-used to show that a BETWEEN clause can also be emptied by rds_empty_redundant_check_in_range_scan
++# thereby allowing offset pushdown
++SET rds_empty_redundant_check_in_range_scan = false;
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND 3;
++EXPLAIN
++-> Filter: (t3.a between 2 and 3)  (cost=X rows=X)
++    -> Covering index range scan on t3 using a over (2 <= a <= 3)  (cost=X rows=X)
++
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND 3 LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s)  (cost=X rows=X)
++    -> Filter: (t3.a between 2 and 3)  (cost=X rows=X)
++        -> Covering index range scan on t3 using a over (2 <= a <= 3)  (cost=X rows=X)
++
++CREATE TABLE comp_1a AS SELECT * FROM t3 WHERE a BETWEEN 2 AND 3;
++CREATE TABLE comp_1b AS SELECT * FROM t3 WHERE a BETWEEN 2 AND 3 LIMIT 100 OFFSET 1;
++SET rds_empty_redundant_check_in_range_scan = true;
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND 3;
++EXPLAIN
++-> Covering index range scan on t3 using a over (2 <= a <= 3)  (cost=X rows=X)
++
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND 3 LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++    -> Covering index range scan on t3 using a over (2 <= a <= 3)  (cost=X rows=X)
++
++CREATE TABLE comp_2a AS SELECT * FROM t3 WHERE a BETWEEN 2 AND 3;
++CREATE TABLE comp_2b AS SELECT * FROM t3 WHERE a BETWEEN 2 AND 3 LIMIT 100 OFFSET 1;
++checksum TABLE comp_1a;
++Table	Checksum
++test.comp_1a	3442709342
++checksum TABLE comp_2a;
++Table	Checksum
++test.comp_2a	3442709342
++checksum TABLE comp_1b;
++Table	Checksum
++test.comp_1b	1080478050
++checksum TABLE comp_2b;
++Table	Checksum
++test.comp_2b	1080478050
++DROP TABLE comp_1a, comp_2a, comp_1b, comp_2b;
++# BETWEEN and type conversion
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN "b" AND 5;
++EXPLAIN
++-> Filter: (t3.a between 'b' and 5)  (cost=X rows=X)
++    -> Index scan on t3 using a  (cost=X rows=X)
++
++Warnings:
++Warning	1292	Truncated incorrect DOUBLE value: 'b'
++SELECT * FROM t3 WHERE a BETWEEN "b" AND 5;
++a	b
++1	2
++2	3
++3	3
++4	3
++Warnings:
++Warning	1292	Truncated incorrect DOUBLE value: 'b'
++Warning	1292	Truncated incorrect DOUBLE value: 'b'
++Warning	1292	Truncated incorrect DOUBLE value: 'b'
++Warning	1292	Truncated incorrect DOUBLE value: 'b'
++Warning	1292	Truncated incorrect DOUBLE value: 'b'
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN "2" AND "5";
++EXPLAIN
++-> Covering index range scan on t3 using a over (2 <= a <= 5)  (cost=X rows=X)
++
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN "2" AND 5;
++EXPLAIN
++-> Covering index range scan on t3 using a over (2 <= a <= 5)  (cost=X rows=X)
++
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND "5";
++EXPLAIN
++-> Covering index range scan on t3 using a over (2 <= a <= 5)  (cost=X rows=X)
++
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN "2.0" AND "5";
++EXPLAIN
++-> Covering index range scan on t3 using a over (2 <= a <= 5)  (cost=X rows=X)
++
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN "2" AND "5.0";
++EXPLAIN
++-> Covering index range scan on t3 using a over (2 <= a <= 5)  (cost=X rows=X)
++
++# Empty IS NULL in WHERE clause
++explain format=tree  SELECT * FROM  t3 WHERE a IS NULL AND b > 5;
++EXPLAIN
++-> Covering index range scan on t3 using a over (a = NULL AND 5 < b)  (cost=X rows=X)
++
++explain format=tree  SELECT * FROM  t3 WHERE a IS NULL AND b > 5 LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++    -> Covering index range scan on t3 using a over (a = NULL AND 5 < b)  (cost=X rows=X)
++
++# reset default
++SET rds_empty_redundant_check_in_range_scan = false;
++# Offset pushdown is done for for "index lookup" too, and redundant
++# conditions are removed even if empty_etc is false.
++explain format=tree SELECT * FROM  t3 WHERE a = 12 LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++    -> Covering index lookup on t3 using a (a=12)  (cost=X rows=X)
++
++explain format=tree SELECT * FROM  t3 WHERE a = 12 AND b = 27 LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++    -> Covering index lookup on t3 using a (a=12, b=27)  (cost=X rows=X)
++
++DROP TABLE t3;
++# show the results are the same with or without the optimization
++SET optimizer_switch = 'offset_pushdown=on';
++explain SELECT a,b FROM t1 WHERE b>2 LIMIT 100 OFFSET 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using offset pushdown; Using index condition
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 2) limit 1,100
++CREATE TABLE comp_1 AS SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++SET optimizer_switch = 'offset_pushdown=off';
++explain SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using index condition
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 2) limit 1,100
++CREATE TABLE comp_2 AS SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++# checksum for comp_1 and comp_2 should give the same output:
++checksum TABLE comp_1;
++Table	Checksum
++test.comp_1	2332723677
++checksum TABLE comp_2;
++Table	Checksum
++test.comp_2	2332723677
++DROP TABLE comp_1,comp_2;
++#reset default
++SET optimizer_switch = 'offset_pushdown=on';
++SET rds_empty_redundant_check_in_range_scan = false;
++# Use with stored procedure
++CREATE PROCEDURE p1(p1 integer, p2 integer)
++begin
++SELECT * FROM t1  WHERE b>2 LIMIT p1 OFFSET p2;
++end //
++CREATE PROCEDURE p2(p1 integer, p2 integer)
++begin
++explain SELECT * FROM t1  WHERE b > 2 LIMIT p1 OFFSET p2;
++end //
++call p2(100,1);
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using offset pushdown; Using index condition
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 2) limit p2@1,p1@0
++call p1(100,1);
++a	b
++3	3
++4	3
++DROP PROCEDURE if EXISTS p1;
++DROP PROCEDURE if EXISTS p2;
++# SQL_CALC_FOUND_ROWS disables optimization
++explain SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using offset pushdown; Using index condition
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 2) limit 1,100
++explain SELECT sql_calc_found_rows a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	b	b	5	NULL	3	100.00	Using index condition
++Warnings:
++Warning	1287	SQL_CALC_FOUND_ROWS is deprecated and will be removed in a future release. Consider using two separate queries instead.
++Note	1003	/* select#1 */ select sql_calc_found_rows `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`b` > 2) limit 1,100
++SELECT sql_calc_found_rows a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++a	b
++3	3
++4	3
++Warnings:
++Warning	1287	SQL_CALC_FOUND_ROWS is deprecated and will be removed in a future release. Consider using two separate queries instead.
++SELECT found_rows();
++found_rows()
++3
++Warnings:
++Warning	1287	FOUND_ROWS() is deprecated and will be removed in a future release. Consider using COUNT(*) instead.
++# HAVING does, too
++SELECT b FROM t1 HAVING b = 3;
++b
++3
++3
++3
++explain SELECT b FROM t1 HAVING b = 3 LIMIT 100 OFFSET 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	index	NULL	b	5	NULL	4	100.00	Using index
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`b` AS `b` from `test`.`t1` having (`test`.`t1`.`b` = 3) limit 1,100
++SELECT b FROM t1 HAVING b = 3 LIMIT 100 OFFSET 1;
++b
++3
++3
++# Offset pushdown supports merged derived tables
++SET big_tables = 1;
++# use dstore if we materialize
++explain format=tree SELECT  * FROM  (SELECT * FROM t1) d  LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++    -> Table scan on t1  (cost=X rows=X)
++
++SELECT  * FROM  (SELECT * FROM t1) d  LIMIT 100 OFFSET 1;
++a	b
++2	3
++3	3
++4	3
++# Offset pushdown doesn't support materialized derived tables
++explain format=tree SELECT /*+ no_merge() */ * FROM  (SELECT * FROM t1) d  LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s)  (cost=X rows=X)
++    -> Table scan on d  (cost=X rows=X)
++        -> Materialize  (cost=X rows=X)
++            -> Table scan on t1  (cost=X rows=X)
++
++SELECT /*+ no_merge() */ * FROM  (SELECT * FROM t1) d  LIMIT 100 OFFSET 1;
++a	b
++2	3
++3	3
++4	3
++# even if an index is used
++SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3;
++a	b
++2	3
++3	3
++4	3
++explain format=tree SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 1/1 row(s)  (cost=X rows=X)
++    -> Index lookup on d using <auto_key0> (b=3)  (cost=X rows=X)
++        -> Materialize  (cost=X rows=X)
++            -> Table scan on t1  (cost=X rows=X)
++
++SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 0;
++a	b
++2	3
++SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 1;
++a	b
++3	3
++SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 2;
++a	b
++4	3
++SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 3;
++a	b
++SET big_tables = default;
++# Offset pushdown in a correlated subquery which is executed multiple times:
++# check that each result is ok
++explain format=tree SELECT (SELECT b+0*t0.b FROM t1 ORDER BY b LIMIT 1 OFFSET 2) FROM t1 AS t0;
++EXPLAIN
++-> Index scan on t0 using b  (cost=X rows=X)
++-> Select #2 (subquery in projection; dependent)
++    -> Result cache : cache keys(t0.b)
++        -> Limit/Offset: 1/2 row(s), with offset pushdown  (cost=X rows=X)
++            -> Index scan on t1 using b  (cost=X rows=X)
++
++Warnings:
++Note	1276	Field or reference 'test.t0.b' of SELECT #2 was resolved in SELECT #1
++SELECT (SELECT b+0*t0.b FROM t1 ORDER BY b LIMIT 1 OFFSET 2) FROM t1 AS t0;
++(SELECT b+0*t0.b FROM t1 ORDER BY b LIMIT 1 OFFSET 2)
++3
++3
++3
++3
++# prepared statements:
++# check that nothing that is reused is changed
++prepare stmt1 FROM 'SELECT * FROM t1 where b < 4 limit 100 OFFSET 1';
++execute stmt1;
++a	b
++2	3
++3	3
++4	3
++execute stmt1;
++a	b
++2	3
++3	3
++4	3
++execute stmt1;
++a	b
++2	3
++3	3
++4	3
++deallocate prepare stmt1;
++DROP TABLE t1;
++# test
++CREATE TABLE t2(a INT , b INT , INDEX(b));
++INSERT INTO t2 VALUES (1, 2), (2, 3), (3, 3), (4, 3),(5,6),(6,7);
++analyze TABLE t2;
++Table	Op	Msg_type	Msg_text
++test.t2	analyze	status	OK
++# With UNION ALL
++# without overlap
++(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 0) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 0) LIMIT 100 OFFSET 0;
++a	b
++5	6
++6	7
++1	2
++(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 0) LIMIT 100 OFFSET 0;
++a	b
++6	7
++1	2
++(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 0) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 0;
++a	b
++5	6
++6	7
++(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 0;
++a	b
++6	7
++(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 0) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 0) LIMIT 100 OFFSET 1;
++a	b
++6	7
++1	2
++(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 0) LIMIT 100 OFFSET 1;
++a	b
++1	2
++(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 0) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
++a	b
++6	7
++# outer OFFSET does not activate offset pushdown
++# inner OFFSET activates offset pushdown
++(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
++a	b
++explain format=tree (SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s)  (cost=X rows=X)
++    -> Append  (cost=X rows=X)
++        -> Stream results  (cost=X rows=X)
++            -> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++                -> Index range scan on t2 using b over (4 < b), with index condition: (t2.b > 4)  (cost=X rows=X)
++        -> Stream results  (cost=X rows=X)
++            -> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++                -> Index range scan on t2 using b over (NULL < b < 3), with index condition: (t2.b < 3)  (cost=X rows=X)
++
++with overlap
++(SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 0) UNION ALL (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 0) LIMIT 100 OFFSET 0;
++a	b
++1	2
++2	3
++3	3
++4	3
++5	6
++1	2
++2	3
++3	3
++4	3
++(SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 0;
++a	b
++2	3
++3	3
++4	3
++5	6
++2	3
++3	3
++4	3
++(SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
++a	b
++3	3
++4	3
++5	6
++2	3
++3	3
++4	3
++explain format=tree (SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s)  (cost=X rows=X)
++    -> Append  (cost=X rows=X)
++        -> Stream results  (cost=X rows=X)
++            -> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++                -> Index range scan on t2 using b over (NULL < b < 7), with index condition: (t2.b < 7)  (cost=X rows=X)
++        -> Stream results  (cost=X rows=X)
++            -> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++                -> Index range scan on t2 using b over (NULL < b < 4), with index condition: (t2.b < 4)  (cost=X rows=X)
++
++# With UNION
++# Only test with overlap
++(SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 0) UNION (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 0) LIMIT 100 OFFSET 0;
++a	b
++1	2
++2	3
++3	3
++4	3
++5	6
++(SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 0;
++a	b
++2	3
++3	3
++4	3
++5	6
++(SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
++a	b
++3	3
++4	3
++5	6
++# Same behavior as UNION ALL:
++# outer OFFSET does not activate offset pushdown
++# inner OFFSET activates offset pushdown
++explain format=tree (SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s)  (cost=X rows=X)
++    -> Table scan on <union temporary>  (cost=X rows=X)
++        -> Union materialize with deduplication  (cost=X rows=X)
++            -> Limit table size: 101 unique row(s)
++                -> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++                    -> Index range scan on t2 using b over (NULL < b < 7), with index condition: (t2.b < 7)  (cost=X rows=X)
++            -> Limit table size: 101 unique row(s)
++                -> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++                    -> Index range scan on t2 using b over (NULL < b < 4), with index condition: (t2.b < 4)  (cost=X rows=X)
++
++HA_POS_ERROR has to disable offset pushdown  optimisation although the query otherwise satisfies the condition for said optimisation:
++SET optimizer_switch = 'offset_pushdown=off';
++SELECT * FROM t2 WHERE b > 2 LIMIT 18446744073709551615 OFFSET 1;
++a	b
++3	3
++4	3
++5	6
++6	7
++explain format=tree SELECT * FROM t2  WHERE b > 2 LIMIT 18446744073709551615 OFFSET 1;
++EXPLAIN
++-> Offset: 1 row(s)  (cost=X rows=X)
++    -> Index range scan on t2 using b over (2 < b), with index condition: (t2.b > 2)  (cost=X rows=X)
++
++SET optimizer_switch = 'offset_pushdown=on';
++SELECT * FROM t2 LIMIT 18446744073709551615 OFFSET 1;
++a	b
++2	3
++3	3
++4	3
++5	6
++6	7
++explain format=tree SELECT * FROM t2  WHERE b > 2 LIMIT 18446744073709551615 OFFSET 1;
++EXPLAIN
++-> Offset: 1 row(s)  (cost=X rows=X)
++    -> Index range scan on t2 using b over (2 < b), with index condition: (t2.b > 2)  (cost=X rows=X)
++
++# Fewer calls from sql-layer to handler when the optimization is on:
++SET optimizer_switch = 'offset_pushdown=off';
++flush status;
++SELECT * FROM t2 WHERE b > 2 LIMIT 100 OFFSET 4;
++a	b
++6	7
++show status LIKE 'handler_read%';
++Variable_name	Value
++Handler_read_first	0
++Handler_read_key	1
++Handler_read_last	0
++Handler_read_next	5
++Handler_read_prev	0
++Handler_read_rnd	0
++Handler_read_rnd_next	0
++SET optimizer_switch = 'offset_pushdown=on';
++flush status;
++SELECT * FROM t2 WHERE b > 2 LIMIT 100 OFFSET 4;
++a	b
++6	7
++show status LIKE 'handler_read%';
++Variable_name	Value
++Handler_read_first	0
++Handler_read_key	1
++Handler_read_last	0
++Handler_read_next	1
++Handler_read_prev	0
++Handler_read_rnd	0
++Handler_read_rnd_next	0
++DROP TABLE t2;
++# offset pushdown  with primary key  - feature activated only with rds_empty_redundant_check_in_range_scan
++# which removes the unnecessary SQL layer check of the WHERE clause
++CREATE TABLE test_pk
++(a INT NOT NULL, b  INT NOT NULL, PRIMARY KEY (a));
++INSERT INTO test_pk VALUES (1,0),(2,1),(3,2),(4,3);
++analyze TABLE test_pk;
++Table	Op	Msg_type	Msg_text
++test.test_pk	analyze	status	OK
++SET rds_empty_redundant_check_in_range_scan = false;
++explain  SELECT * FROM test_pk WHERE a > 2 ORDER BY a LIMIT 100 OFFSET 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	test_pk	NULL	range	PRIMARY	PRIMARY	4	NULL	2	100.00	Using offset pushdown; Using index condition
++Warnings:
++Note	1003	/* select#1 */ select `test`.`test_pk`.`a` AS `a`,`test`.`test_pk`.`b` AS `b` from `test`.`test_pk` where (`test`.`test_pk`.`a` > 2) order by `test`.`test_pk`.`a` limit 1,100
++SET rds_empty_redundant_check_in_range_scan = true;
++explain  SELECT * FROM test_pk WHERE a > 2 ORDER BY a LIMIT 100 OFFSET 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	test_pk	NULL	range	PRIMARY	PRIMARY	4	NULL	2	100.00	Using offset pushdown
++Warnings:
++Note	1003	/* select#1 */ select `test`.`test_pk`.`a` AS `a`,`test`.`test_pk`.`b` AS `b` from `test`.`test_pk` where (`test`.`test_pk`.`a` > 2) order by `test`.`test_pk`.`a` limit 1,100
++# Query with only constant tables, makes sure changes to EXPLAIN code don't crash
++# (no pushdown needed):
++explain format=tree SELECT * FROM test_pk WHERE a = 2 LIMIT 100;
++EXPLAIN
++-> Limit: 100 row(s)  (cost=X rows=X)
++    -> Rows fetched before execution  (cost=X rows=X)
++
++DROP TABLE test_pk;
++# Empty redundant condition in index range scan: check different data types
++# redundant check removal  extended to real numbers (DOUBLE)
++CREATE TABLE t6(a DOUBLE, b DOUBLE, c DOUBLE , INDEX(a,b,c));
++INSERT INTO t6 VALUES (1,2,6), (2,3,7), (3,3,8), (4,3,12);
++analyze TABLE t6;
++Table	Op	Msg_type	Msg_text
++test.t6	analyze	status	OK
++SET rds_empty_redundant_check_in_range_scan = false;
++explain format=tree SELECT * FROM t6 WHERE a > 2;
++EXPLAIN
++-> Filter: (t6.a > 2)  (cost=X rows=X)
++    -> Covering index range scan on t6 using a over (2 < a)  (cost=X rows=X)
++
++explain format=tree SELECT * FROM t6 WHERE a = 2 AND b < 5 AND b > 1;
++EXPLAIN
++-> Filter: ((t6.a = 2) and (t6.b < 5) and (t6.b > 1))  (cost=X rows=X)
++    -> Covering index range scan on t6 using a over (a = 2 AND 1 < b < 5)  (cost=X rows=X)
++
++SET rds_empty_redundant_check_in_range_scan = true;
++explain format=tree SELECT * FROM t6 WHERE a > 2;
++EXPLAIN
++-> Covering index range scan on t6 using a over (2 < a)  (cost=X rows=X)
++
++explain format=tree SELECT * FROM t6 WHERE a = 2 AND b < 5 AND b > 1;
++EXPLAIN
++-> Covering index range scan on t6 using a over (a = 2 AND 1 < b < 5)  (cost=X rows=X)
++
++DROP TABLE t6;
++# redundant check removal extended to DECIMAL
++CREATE TABLE t6(a DECIMAL, b DECIMAL, c DECIMAL , INDEX(a,b,c));
++INSERT INTO t6 VALUES (1,2,6), (2,3,7), (3,3,8), (4,3,12);
++analyze TABLE t6;
++Table	Op	Msg_type	Msg_text
++test.t6	analyze	status	OK
++SET rds_empty_redundant_check_in_range_scan = false;
++explain format=tree SELECT * FROM t6 WHERE a > 2;
++EXPLAIN
++-> Filter: (t6.a > 2)  (cost=X rows=X)
++    -> Covering index range scan on t6 using a over (2 < a)  (cost=X rows=X)
++
++explain format=tree SELECT * FROM t6 WHERE a = 2 AND b < 5 AND b > 1;
++EXPLAIN
++-> Filter: ((t6.a = 2) and (t6.b < 5) and (t6.b > 1))  (cost=X rows=X)
++    -> Covering index range scan on t6 using a over (a = 2 AND 1 < b < 5)  (cost=X rows=X)
++
++SET rds_empty_redundant_check_in_range_scan = true;
++explain format=tree SELECT * FROM t6 WHERE a > 2;
++EXPLAIN
++-> Covering index range scan on t6 using a over (2 < a)  (cost=X rows=X)
++
++explain format=tree SELECT * FROM t6 WHERE a = 2 AND b < 5 AND b > 1;
++EXPLAIN
++-> Covering index range scan on t6 using a over (a = 2 AND 1 < b < 5)  (cost=X rows=X)
++
++DROP TABLE t6;
++# redundant check removal extended to String
++CREATE TABLE people(zipcode CHAR(10),lastname CHAR(10), firstname CHAR(10),address CHAR(10), INDEX (zipcode, lastname, firstname));
++analyze TABLE people;
++Table	Op	Msg_type	Msg_text
++test.people	analyze	status	OK
++SET rds_empty_redundant_check_in_range_scan = false;
++explain format=tree  SELECT * FROM people WHERE zipcode > '95054';
++EXPLAIN
++-> Index range scan on people using zipcode over ('95054' < zipcode), with index condition: (people.zipcode > '95054')  (cost=X rows=X)
++
++SET rds_empty_redundant_check_in_range_scan = true;
++explain format=tree  SELECT * FROM people WHERE zipcode > '95054';
++EXPLAIN
++-> Index range scan on people using zipcode over ('95054' < zipcode)  (cost=X rows=X)
++
++DROP TABLE people;
++# Test skip scan
++CREATE TABLE t1 (f1 INT NOT NULL, f2 INT NOT NULL, PRIMARY KEY(f1, f2));
++INSERT INTO t1 VALUES
++(1,1), (1,2), (1,3), (1,4), (1,5),
++(2,1), (2,2), (2,3), (2,4), (2,5);
++INSERT INTO t1 SELECT f1, f2 + 5 FROM t1;
++INSERT INTO t1 SELECT f1, f2 + 10 FROM t1;
++INSERT INTO t1 SELECT f1, f2 + 20 FROM t1;
++INSERT INTO t1 SELECT f1, f2 + 40 FROM t1;
++ANALYZE TABLE t1;
++Table	Op	Msg_type	Msg_text
++test.t1	analyze	status	OK
++# first test without LIMIT OFFSET
++SET rds_empty_redundant_check_in_range_scan = false;
++EXPLAIN SELECT f1, f2 FROM t1 WHERE f2 > 40;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	8	NULL	1	100.00	Using where; Using index for skip scan
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`f1` AS `f1`,`test`.`t1`.`f2` AS `f2` from `test`.`t1` where (`test`.`t1`.`f2` > 40)
++SET rds_empty_redundant_check_in_range_scan = true;
++EXPLAIN SELECT f1, f2 FROM t1 WHERE f2 > 40;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	8	NULL	1	100.00	Using where; Using index for skip scan
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`f1` AS `f1`,`test`.`t1`.`f2` AS `f2` from `test`.`t1` where (`test`.`t1`.`f2` > 40)
++#redundant conditions in skip scans can be removed
++# test with LIMIT OFFSET
++SET rds_empty_redundant_check_in_range_scan = true;
++EXPLAIN SELECT f1, f2 FROM t1 WHERE f2 > 40 LIMIT 100 OFFSET 2;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	PRIMARY	PRIMARY	8	NULL	1	100.00	Using where; Using index for skip scan
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`f1` AS `f1`,`test`.`t1`.`f2` AS `f2` from `test`.`t1` where (`test`.`t1`.`f2` > 40) limit 2,100
++#  but skip scan cannot be used together with offset pushdown
++DROP TABLE if EXISTS t1;
++CREATE TABLE jemp (
++c JSON,
++g INT GENERATED ALWAYS AS (c->"$.id"),
++INDEX i (g)
++);
++INSERT INTO jemp (c) VALUES
++('{"id": "1", "name": "Fred"}'), ('{"id": "2", "name": "Wilma"}'),
++('{"id": "3", "name": "Barney"}'), ('{"id": "4", "name": "Betty"}');
++analyze TABLE jemp;
++Table	Op	Msg_type	Msg_text
++test.jemp	analyze	status	OK
++# without optimization
++SET rds_empty_redundant_check_in_range_scan = false;
++SELECT c->>"$.name" AS name
++FROM jemp WHERE g > 2;
++name
++Barney
++Betty
++EXPLAIN SELECT c->>"$.name" AS name
++FROM jemp WHERE g > 2;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	jemp	NULL	range	i	i	5	NULL	2	100.00	Using where
++Warnings:
++Note	1003	/* select#1 */ select json_unquote(json_extract(`test`.`jemp`.`c`,'$.name')) AS `name` from `test`.`jemp` where (`test`.`jemp`.`g` > 2)
++# with optimization
++SET rds_empty_redundant_check_in_range_scan = true;
++SELECT c->>"$.name" AS name
++FROM jemp WHERE g > 2;
++name
++Barney
++Betty
++EXPLAIN SELECT c->>"$.name" AS name
++FROM jemp WHERE g > 2;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	jemp	NULL	range	i	i	5	NULL	2	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select json_unquote(json_extract(`test`.`jemp`.`c`,'$.name')) AS `name` from `test`.`jemp` where (`test`.`jemp`.`g` > 2)
++# works with offset pushdown
++SELECT c->>"$.name" AS name
++FROM jemp WHERE g > 2 LIMIT 1 OFFSET 1;
++name
++Betty
++EXPLAIN format=tree SELECT c->>"$.name" AS name
++FROM jemp WHERE g > 2;
++EXPLAIN
++-> Index range scan on jemp using i over (2 < g)  (cost=1.16 rows=2)
++
++DROP TABLE if EXISTS jemp;
++# Inspired by the test for Bug #27578340: INCONSISTENT RESULTS FOR SELECTS FROM TABLE WITH CHAR(N) COLUMN
++# AND NO_PAD COLLATION from ctype_uca.test,
++# verify that an inequality condition is kept at SQL layer:
++CREATE TABLE t1 (
++f1 CHAR(20) COLLATE utf8mb4_0900_ai_ci  # A NO PAD collation.
++);
++INSERT INTO t1 VALUES ('ABC  ');
++INSERT INTO t1 VALUES ('XYZ');
++INSERT INTO t1 VALUES ('XYZ ');
++INSERT INTO t1 VALUES ('ABC ');
++CREATE INDEX f1_index ON t1 ( f1 );
++analyze table t1;
++Table	Op	Msg_type	Msg_text
++test.t1	analyze	status	OK
++set rds_empty_redundant_check_in_range_scan = on;
++explain format=tree  SELECT CONCAT(f1, '|') FROM t1 WHERE f1 >= 'XYZ ';
++EXPLAIN
++-> Filter: (t1.f1 >= 'XYZ ')  (cost=X rows=X)
++    -> Covering index range scan on t1 using f1_index over ('XYZ' < f1)  (cost=X rows=X)
++
++# Now, a PAD SPACE collation, condition is not kept
++ALTER TABLE t1 modify f1 CHAR(20) COLLATE utf8mb4_unicode_ci;
++analyze TABLE t1;
++Table	Op	Msg_type	Msg_text
++test.t1	analyze	status	OK
++explain format=tree  SELECT CONCAT(f1, '|') FROM t1 WHERE f1 >= 'XYZ ';
++EXPLAIN
++-> Covering index range scan on t1 using f1_index over ('XYZ' <= f1)  (cost=X rows=X)
++
++SET rds_empty_redundant_check_in_range_scan=default;
++DROP TABLE t1;
++# Can remove DATE
++SET rds_empty_redundant_check_in_range_scan = true;
++CREATE TABLE t9(a date);
++ALTER TABLE t9 ADD INDEX (a);
++INSERT INTO t9 VALUES ("20210907");
++INSERT INTO t9 VALUES ("20210907");
++INSERT INTO t9 VALUES ("20210907");
++INSERT INTO t9 VALUES ("20210907");
++INSERT INTO t9 VALUES ("20210907");
++INSERT INTO t9 VALUES ("20210907");
++INSERT INTO t9 VALUES ("20210907");
++INSERT INTO t9 VALUES ("20210907");
++INSERT INTO t9 VALUES ("20210907");
++INSERT INTO t9 VALUES ("20210907");
++INSERT INTO t9 VALUES ("20210907");
++INSERT INTO t9 VALUES ("20210907");
++INSERT INTO t9 VALUES ("20210907");
++INSERT INTO t9 VALUES ("20210907");
++INSERT INTO t9 VALUES ("20210907");
++INSERT INTO t9 VALUES ("20210907");
++analyze TABLE t9;
++Table	Op	Msg_type	Msg_text
++test.t9	analyze	status	OK
++explain format=tree SELECT * FROM t9 WHERE a >= "20211001";
++EXPLAIN
++-> Covering index range scan on t9 using a over ('2021-10-01' <= a)  (cost=X rows=X)
++
++explain format=tree SELECT * FROM t9 WHERE a >= "2021-10-01";
++EXPLAIN
++-> Covering index range scan on t9 using a over ('2021-10-01' <= a)  (cost=X rows=X)
++
++# can remove DATETIME
++DROP TABLE if EXISTS t9;
++CREATE TABLE t9(a datetime);
++ALTER TABLE t9 ADD index(a);
++INSERT INTO t9 VALUES ("2021-09-07 12:11");
++INSERT INTO t9 VALUES ("2021-09-07 12:11");
++INSERT INTO t9 VALUES ("2021-09-07 12:11");
++INSERT INTO t9 VALUES ("2021-09-07 12:11");
++INSERT INTO t9 VALUES ("2021-09-07 12:11");
++INSERT INTO t9 VALUES ("2021-09-07 12:11");
++analyze TABLE t9;
++Table	Op	Msg_type	Msg_text
++test.t9	analyze	status	OK
++explain format=tree SELECT * FROM t9 WHERE a >= "2022-09-07 12:25";
++EXPLAIN
++-> Covering index range scan on t9 using a over ('2022-09-07 12:25:00' <= a)  (cost=X rows=X)
++
++# can remove TIMESTAMP
++DROP TABLE if EXISTS t9;
++CREATE TABLE t9 (a TIMESTAMP);
++ALTER TABLE t9 ADD INDEX (a);
++INSERT INTO t9 VALUES ("2021-09-07 12:11");
++INSERT INTO t9 VALUES ("2021-09-07 12:11");
++INSERT INTO t9 VALUES ("2021-09-07 12:11");
++INSERT INTO t9 VALUES ("2021-09-07 12:11");
++INSERT INTO t9 VALUES ("2021-09-07 12:11");
++INSERT INTO t9 VALUES ("2021-09-07 12:11");
++analyze TABLE t9;
++Table	Op	Msg_type	Msg_text
++test.t9	analyze	status	OK
++explain format=tree SELECT * FROM t9 WHERE a >= "2022-09-07 12:25";
++EXPLAIN
++-> Covering index range scan on t9 using a over ('2022-09-07 12:25:00' <= a)  (cost=X rows=X)
++
++# can remove TIME
++DROP TABLE if EXISTS t9;
++CREATE TABLE t9 (a time);
++ALTER TABLE t9 ADD INDEX (a);
++INSERT INTO t9 VALUES ("1211");
++INSERT INTO t9 VALUES ("1211");
++INSERT INTO t9 VALUES ("1211");
++INSERT INTO t9 VALUES ("1211");
++INSERT INTO t9 VALUES ("1211");
++INSERT INTO t9 VALUES ("1211");
++INSERT INTO t9 VALUES ("1211");
++INSERT INTO t9 VALUES ("1211");
++analyze TABLE t9;
++Table	Op	Msg_type	Msg_text
++test.t9	analyze	status	OK
++explain format=tree SELECT * FROM t9 WHERE a >= "1218";
++EXPLAIN
++-> Covering index range scan on t9 using a over ('00:12:18' <= a)  (cost=X rows=X)
++
++explain format=tree SELECT * FROM t9 WHERE a >= "12:18";
++EXPLAIN
++-> Covering index range scan on t9 using a over ('12:18:00' <= a)  (cost=X rows=X)
++
++DROP TABLE IF EXISTS t9;
++# ORDER BY ASC/DESC with INDEX ASC/DESC
++# table t10 has descending index while t11 has normal index
++CREATE TABLE t10 (
++c1 INT, c2 INT,
++INDEX idx4 (c1 DESC, c2 DESC)
++);
++INSERT INTO t10 VALUES (1,2),(3,4),(5,6),(7,8),(9,10);
++CREATE TABLE t11 (
++c1 INT, c2 INT,
++INDEX idx4 (c1 , c2 )
++);
++INSERT INTO t11 VALUES (1,2),(3,4),(5,6),(7,8),(9,10);
++EXPLAIN format=tree SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++    -> Covering index range scan on t10 using idx4 over (c1 < 2)  (cost=X rows=X)
++
++EXPLAIN format=tree SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++    -> Covering index range scan on t11 using idx4 over (2 < c1) (reverse)  (cost=X rows=X)
++
++EXPLAIN format=tree SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++    -> Covering index range scan on t10 using idx4 over (c1 < 2) (reverse)  (cost=X rows=X)
++
++EXPLAIN format=tree SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++    -> Covering index range scan on t11 using idx4 over (2 < c1)  (cost=X rows=X)
++
++SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
++c1	c2
++7	8
++5	6
++3	4
++SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
++c1	c2
++7	8
++5	6
++3	4
++SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
++c1	c2
++5	6
++7	8
++9	10
++SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
++c1	c2
++5	6
++7	8
++9	10
++# Verify that the hint overrules the switch:
++EXPLAIN format=tree SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t11 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s)  (cost=X rows=X)
++    -> Covering index range scan on t11 using idx4 over (2 < c1)  (cost=X rows=X)
++
++SET optimizer_switch = 'offset_pushdown=off';
++EXPLAIN format=tree SELECT * FROM t11 WHERE c1>2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s)  (cost=X rows=X)
++    -> Covering index range scan on t11 using idx4 over (2 < c1)  (cost=X rows=X)
++
++EXPLAIN format=tree SELECT /*+ OFFSET_PUSHDOWN() */ * FROM t11 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++    -> Covering index range scan on t11 using idx4 over (2 < c1)  (cost=X rows=X)
++
++SET optimizer_switch='offset_pushdown=on';
++# Verify that in a LEFT JOIN, the range condition is removed or not, correctly.
++# Conditions on left table can be removed:
++EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t11.c1 > 3 WHERE t11.c1 > 2;
++EXPLAIN
++-> Left hash join (no condition), extra conditions: (t11.c1 > 3)  (cost=X rows=X)
++    -> Covering index range scan on t11 using idx4 over (2 < c1)  (cost=X rows=X)
++    -> Hash
++        -> Index scan on t12 using idx4  (cost=X rows=X)
++
++# Condition on right table too, as it's in ON: if the range access has kept only
++# rows of t12 with c1>3, this condition will not need to be checked again.
++EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t12.c1 > 3 WHERE t11.c1 > 2;
++EXPLAIN
++-> Left hash join (no condition)  (cost=X rows=X)
++    -> Covering index range scan on t11 using idx4 over (2 < c1)  (cost=X rows=X)
++    -> Hash
++        -> Covering index range scan on t12 using idx4 over (3 < c1)  (cost=X rows=X)
++
++# These two don't prove much, as the left join is changed to an inner join
++# (as NULL-complemented rows cannot match the WHERE).
++EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t11.c1 > 3 WHERE t12.c1 > 2;
++EXPLAIN
++-> Inner hash join (no condition)  (cost=X rows=X)
++    -> Covering index range scan on t12 using idx4 over (2 < c1)  (cost=X rows=X)
++    -> Hash
++        -> Covering index range scan on t11 using idx4 over (3 < c1)  (cost=X rows=X)
++
++EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t12.c1 > 3 WHERE t12.c1 > 2;
++EXPLAIN
++-> Inner hash join (no condition)  (cost=X rows=X)
++    -> Index scan on t11 using idx4  (cost=X rows=X)
++    -> Hash
++        -> Filter: (t12.c1 > 2)  (cost=X rows=X)
++            -> Covering index range scan on t12 using idx4 over (3 < c1)  (cost=X rows=X)
++
++# Here the WHERE IS NULL cannot be removed: the range access has kept only
++# rows of t12 with c1 NULL, but there can be other NULL-complemented rows,
++# and then the WHERE must be checked on them too. This case is properly caught
++# by the test: !(func->used_tables() & null_extended) in reduce_cond_for_table().
++EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t12.c1 > 3 WHERE t12.c1 IS NULL;
++EXPLAIN
++-> Filter: (t12.c1 is null)  (cost=X rows=X)
++    -> Left hash join (no condition)  (cost=X rows=X)
++        -> Index scan on t11 using idx4  (cost=X rows=X)
++        -> Hash
++            -> Covering index range scan on t12 using idx4 over (3 < c1)  (cost=X rows=X)
++
++DROP TABLE t10,t11;
++CREATE TABLE t2 (b INT , key(b));
++INSERT INTO t2 VALUES (1),(1),(2),(2),(3),(3);
++# Check that offset pushdown  is deactivated when DISTINCT is done by doing some grouping
++# inside ORDER BY ( "grouped" is true in if() condition in JOIN::offset_pushdown().)
++explain format=tree SELECT /*+ NO_OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s)  (cost=X rows=X)
++    -> Group (no aggregates)  (cost=X rows=X)
++        -> Index scan on t2 using b  (cost=X rows=X)
++
++SELECT /*+ NO_OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
++b
++2
++3
++explain  format=tree SELECT /*+ OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s)  (cost=X rows=X)
++    -> Group (no aggregates)  (cost=X rows=X)
++        -> Index scan on t2 using b  (cost=X rows=X)
++
++SELECT /*+ OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
++b
++2
++3
++# Check that offset pushdown  is deactivated when  using index for group-by is used
++# (similarly to the previous test: DISTINCT is done by doing some grouping inside ORDER BY)
++# in that case  "grouped" is true and quick->get_type()=QUICK_SELECT_I::QS_TYPE_GROUP_MIN_MAX
++# in if() condition in JOIN::offset_pushdown()
++analyze TABLE t2;
++Table	Op	Msg_type	Msg_text
++test.t2	analyze	status	OK
++explain  SELECT /*+ NO_OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t2	NULL	range	b	b	5	NULL	4	100.00	Using index for group-by
++Warnings:
++Note	1003	/* select#1 */ select /*+ NO_OFFSET_PUSHDOWN(@`select#1`) */ distinct `test`.`t2`.`b` AS `b` from `test`.`t2` order by `test`.`t2`.`b` limit 1,100
++SELECT /*+ NO_OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
++b
++2
++3
++explain  SELECT /*+ OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t2	NULL	range	b	b	5	NULL	4	100.00	Using index for group-by
++Warnings:
++Note	1003	/* select#1 */ select /*+ OFFSET_PUSHDOWN(@`select#1`) */ distinct `test`.`t2`.`b` AS `b` from `test`.`t2` order by `test`.`t2`.`b` limit 1,100
++SELECT /*+ OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
++b
++2
++3
++DROP TABLE t2;
++CREATE TABLE t1 (a INT , b INT , c INT , INDEX(a,b,c));
++INSERT INTO t1 VALUES (1,100,1),(2,200,1),(3,300,1),(4,10,2),(5,20,2),(6,30,2),(7,110,3),(8,120,3),(9,130,3);
++CREATE TABLE t2 (a INT , b INT , c INT , INDEX(a,b,c));
++INSERT INTO t2 VALUES (1,110,1),(2,210,1),(4,20,2),(5,30,2),(7,130,3),(8,140,3);
++# Subqueries
++# Offset pushdown is evaluated for each JOIN object and can therefore be applied to subqueries if a given JOIN object does qualify for OP.
++# Both explain  format=tree and actual query output are given since the feature is activated  -- easier to maintain if outputs are produced
++# Uncorrelated
++# Inner query with LIMIT OFFSET
++explain format=tree SELECT * FROM t1 WHERE a > (SELECT a FROM t1 LIMIT 1 OFFSET 1);
++EXPLAIN
++-> Filter: (t1.a > (select #2))  (cost=X rows=X)
++    -> Covering index range scan on t1 using a over (2 < a)  (cost=X rows=X)
++    -> Select #2 (subquery in condition; run only once)
++        -> Limit/Offset: 1/1 row(s), with offset pushdown  (cost=X rows=X)
++            -> Covering index scan on t1 using a  (cost=X rows=X)
++
++SELECT * FROM t1 WHERE a > (SELECT a FROM t1 LIMIT 1 OFFSET 1);
++a	b	c
++3	300	1
++4	10	2
++5	20	2
++6	30	2
++7	110	3
++8	120	3
++9	130	3
++explain format=tree SELECT * FROM t1 WHERE a > (SELECT a FROM t1 WHERE a>2 LIMIT 1 OFFSET 1);
++EXPLAIN
++-> Filter: (t1.a > (select #2))  (cost=X rows=X)
++    -> Covering index range scan on t1 using a over (4 < a)  (cost=X rows=X)
++    -> Select #2 (subquery in condition; run only once)
++        -> Limit/Offset: 1/1 row(s), with offset pushdown  (cost=X rows=X)
++            -> Covering index range scan on t1 using a over (2 < a)  (cost=X rows=X)
++
++SELECT * FROM t1 WHERE a > (SELECT a FROM t1 WHERE a>2 LIMIT 1 OFFSET 1);
++a	b	c
++5	20	2
++6	30	2
++7	110	3
++8	120	3
++9	130	3
++# Offset pushdown outer query
++# add row for non empty output of following SELECT statement
++INSERT INTO t1 values (9,131,1);
++explain format=tree SELECT * FROM t1 WHERE a = (SELECT max(a) FROM t1 WHERE a > 2) LIMIT 1 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 1/1 row(s)  (cost=X rows=X)
++    -> Filter: (t1.a = (select #2))  (cost=X rows=X)
++        -> Covering index lookup on t1 using a (a=(select #2))  (cost=X rows=X)
++        -> Select #2 (subquery in condition; run only once)
++            -> Rows fetched before execution  (cost=X rows=X)
++
++SELECT * FROM t1 WHERE a = (SELECT max(a) FROM t1 WHERE a > 2) LIMIT 1 OFFSET 1;
++a	b	c
++9	131	1
++DELETE FROM t1 WHERE a=9 AND b=131 AND c=3;
++# DOUBLE offset pushdown , both inner and outer queries with LIMIT OFFSET
++# add row for non empty output of following SELECT statement
++INSERT INTO t1 values (4,10,3),(4,10,3),(4,10,3);
++explain format=tree SELECT * FROM t1 WHERE a =(SELECT a FROM t1 WHERE a > 2 LIMIT 1 OFFSET 1) LIMIT 2 OFFSET 3;
++EXPLAIN
++-> Limit/Offset: 2/3 row(s)  (cost=X rows=X)
++    -> Filter: (t1.a = (select #2))  (cost=X rows=X)
++        -> Covering index lookup on t1 using a (a=(select #2))  (cost=X rows=X)
++        -> Select #2 (subquery in condition; run only once)
++            -> Limit/Offset: 1/1 row(s), with offset pushdown  (cost=X rows=X)
++                -> Covering index range scan on t1 using a over (2 < a)  (cost=X rows=X)
++
++SELECT * FROM t1 WHERE a = (SELECT a FROM t1 WHERE a > 2 LIMIT 1 OFFSET 1) LIMIT 2 OFFSET 3;
++a	b	c
++4	10	3
++DELETE FROM t1 WHERE a=4 AND b=10 AND c=3;
++# Correlated was covered before
++# SHOW that JOIN, SELF JOIN do not trigger offset pushdown
++explain format=tree SELECT * FROM t1 JOIN t2 LIMIT 1 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 1/1 row(s)  (cost=X rows=X)
++    -> Inner hash join (no condition)  (cost=X rows=X)
++        -> Index scan on t1 using a  (cost=X rows=X)
++        -> Hash
++            -> Index scan on t2 using a  (cost=X rows=X)
++
++explain format=tree SELECT * FROM t1 T1, t1 T2 LIMIT 2 OFFSET 10;
++EXPLAIN
++-> Limit/Offset: 2/10 row(s)  (cost=X rows=X)
++    -> Inner hash join (no condition)  (cost=X rows=X)
++        -> Index scan on T2 using a  (cost=X rows=X)
++        -> Hash
++            -> Index scan on T1 using a  (cost=X rows=X)
++
++# Table function are not compatible with offset pushdown
++explain format=tree SELECT * FROM JSON_TABLE('[{"x":2,"y":"8"},{"x":"3","y":"7"},{"x":"4","y":6}]',"$[1]" COLUMNS(xval VARCHAR(100) PATH "$.x", yval VARCHAR(100) PATH "$.y")) AS jt1 LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s)
++    -> Materialize table function
++
++DROP TABLE t1,t2;
++# OFFSET exceeds number of rows: When the offset exceed the number of rows returned by the query without offset, offset pushdown still works
++CREATE TABLE t1 (a INT, b INT , INDEX(a,b));
++INSERT INTO t1 VALUES (1,1),(2,2),(3,4),(8,9);
++EXPLAIN format=tree SELECT * FROM t1 LIMIT 1 OFFSET 5;
++EXPLAIN
++-> Limit/Offset: 1/5 row(s), with offset pushdown  (cost=X rows=X)
++    -> Index scan on t1 using a  (cost=X rows=X)
++
++SELECT * FROM t1 LIMIT 1 OFFSET 5;
++a	b
++DROP TABLE t1;
++#  BUGFIX
++# failed on assert
++# Reason: using qep_tab which points to qep_tab[0] instead of qep_tab[const_table]
++# Why: Oversight
++CREATE TABLE t0 (c0 INT);
++CREATE TABLE t2 (c1 INT PRIMARY KEY);
++SELECT 1 FROM t0 LEFT JOIN t2 ON c1 = NULL LIMIT 1 OFFSET 1;
++1
++drop table t0,t2;
++# BUG BUGFIX
++# failed on assert:
++# assert(query_expression()->is_simple() || query_block != query_expression()->global_parameters());
++# Reason: materialized table written to disk - materialized tables were filtered by looking at whether it was an dstore table
++# Query was a candidate for offset pushdown even though it should not have been.
++SET SESSION BIG_TABLES = 1;
++explain format=tree   (SELECT 1) UNION (SELECT 1) LIMIT 1 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 1/1 row(s)  (cost=1.2..1.2 rows=1)
++    -> Table scan on <union temporary>  (cost=0.7..1.2 rows=2)
++        -> Union materialize with deduplication  (cost=0.2..0.2 rows=2)
++            -> Limit table size: 2 unique row(s)
++                -> Rows fetched before execution  (cost=0..0 rows=1)
++            -> Limit table size: 2 unique row(s)
++                -> Rows fetched before execution  (cost=0..0 rows=1)
++
++(SELECT 1) UNION (SELECT 1) LIMIT 1 OFFSET 1;
++1
++# Table function
++# Offset pushdown not compatible
++# table functions is an intrinsic table
++# Reads rows using row_search_no_mvcc
++# No support for offset pushdown in row_search_no_mvcc
++explain format=tree SELECT *
++FROM
++JSON_TABLE(
++'[{"x":2,"y":"8"},{"x":"3","y":"7"},{"x":"4","y":6}]',
++"$[*]" COLUMNS(
++xval VARCHAR(100) PATH "$.x",
++yval VARCHAR(100) PATH "$.y"
++         )
++) AS  jt LIMIT 1 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 1/1 row(s)
++    -> Materialize table function
++
++SELECT * FROM JSON_TABLE(
++'[{"x":2,"y":"8"},{"x":"3","y":"7"},{"x":"4","y":6}]',
++"$[*]" COLUMNS(
++xval VARCHAR(100) PATH "$.x",
++yval VARCHAR(100) PATH "$.y"
++         )
++) AS  jt LIMIT 1 OFFSET 1;
++xval	yval
++3	7
++SET SESSION BIG_TABLES =default;
+diff --git a/mysql-test/suite/dstore_main/r/offset_pushdown_insert_delete_update-dstore.result b/mysql-test/suite/dstore_main/r/offset_pushdown_insert_delete_update-dstore.result
+new file mode 100644
+index 00000000000..122f468e132
+--- /dev/null
++++ b/mysql-test/suite/dstore_main/r/offset_pushdown_insert_delete_update-dstore.result
+@@ -0,0 +1,427 @@
++SET @old_dstore_lock_wait_timeout= @@global.dstore_lock_wait_timeout;
++SET @@global.dstore_lock_wait_timeout = 1;
++# ----------------------
++# ----------------------
++#  MVCC - INSERT/ UPDATE/ DELETE with OFFSET PUSHDOWN
++# For each, we test
++# 1/ INSERT/ UPDATE/ DELETE first in one session then SELECT with OP  in another
++# 2/ SELECT with OP first in one session then INSERT/ UPDATE/ DELETE in another
++# ----------------------
++# ----------------------
++CREATE TABLE t3 (a INT, b INT, INDEX(a,b));
++INSERT INTO t3 VALUES (1, 2), (2, 3), (3, 3), (4, 3);
++ANALYZE table t3;
++Table	Op	Msg_type	Msg_text
++test.t3	analyze	status	OK
++# ----------------------
++# ----------------------
++# MVCC INSERT and OFFSET pushdown
++# ----------------------
++# ----------------------
++# Insert in one session, not committed, SELECT query with OP in another session - check that results are consistent
++# session 1: Trx that inserts a new rows
++START TRANSACTION;
++INSERT INTO t3 VALUES (6,6);
++SELECT * FROM t3;
++a	b
++1	2
++2	3
++3	3
++4	3
++6	6
++# session 2: Trx with SELECT query with OP - check that the inserted row is not accounted for
++# neither for the SELECT with and without OFFSET pushdown.
++START TRANSACTION;
++explain format=tree SELECT * FROM t3 WHERE a>1 LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++    -> Covering index range scan on t3 using a over (1 < a)  (cost=X rows=X)
++
++# Both SELECT return the same output! rows skipped differ
++SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
++a	b
++3	3
++4	3
++SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
++a	b
++3	3
++4	3
++rollback;
++rollback;
++# MVCC Insert and Offset pushdown
++# Select first with OP - insert then
++# session 1: SELECT rows using OP
++START TRANSACTION;
++explain SELECT * FROM t3 WHERE a>1 LIMIT 100 OFFSET 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t3	NULL	range	a	a	5	NULL	4	100.00	Using offset pushdown; Using index
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t3`.`a` AS `a`,`test`.`t3`.`b` AS `b` from `test`.`t3` where (`test`.`t3`.`a` > 1) limit 1,100
++SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
++a	b
++3	3
++4	3
++# session 2: Insert rows in the table queried by OP
++START TRANSACTION;
++INSERT INTO t3 VALUES (6,6);
++# (6,6) is inserted here
++SELECT * FROM t3;
++a	b
++1	2
++2	3
++3	3
++4	3
++6	6
++# (6,6) is not visible.
++SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
++a	b
++3	3
++4	3
++rollback;
++rollback;
++# ----------------------
++# ----------------------
++# MVCC UPDATE with OFFSET pushdown
++# ----------------------
++# ----------------------
++# session 1: Trx that updates a row
++START TRANSACTION;
++UPDATE t3 SET a = 8 WHERE a = 4;
++SELECT * FROM t3;
++a	b
++1	2
++2	3
++3	3
++8	3
++# session 2: Trx with SELECT query with OP - check that the updated row is not accounted for
++# neither for the SELECT with and without OFFSET pushdown.
++START TRANSACTION;
++# Both output the same rows - rows skipped differ
++SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
++a	b
++3	3
++4	3
++SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
++a	b
++3	3
++4	3
++rollback;
++rollback;
++# MVCC UPDATE and Offset pushdown
++# Select first with OP - UPDATE then
++# session 1: SELECT rows using OP
++START TRANSACTION;
++explain SELECT * FROM t3 WHERE a>1 LIMIT 100 OFFSET 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t3	NULL	range	a	a	5	NULL	5	100.00	Using offset pushdown; Using index
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t3`.`a` AS `a`,`test`.`t3`.`b` AS `b` from `test`.`t3` where (`test`.`t3`.`a` > 1) limit 1,100
++SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
++a	b
++3	3
++4	3
++# session 2: Insert rows in the table queried by OP
++UPDATE t3 SET a = 8 WHERE a =4;
++# (8,3) is updated here
++SELECT * FROM t3;
++a	b
++1	2
++2	3
++3	3
++8	3
++# (8,3) is not updated.
++SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
++a	b
++3	3
++4	3
++rollback;
++rollback;
++# ----------------------
++# ----------------------
++# Additional testing for MVCC UPDATE : SELECT first - UPDATE then with VARCHAR
++# ----------------------
++# ----------------------
++CREATE TABLE t4 ( a INT, b VARCHAR(50), INDEX(a));
++INSERT INTO t4 VALUES (1,'apples'),(2,'bananas'), (3,'oranges'),(4,'pears');
++ANALYZE table t4;
++Table	Op	Msg_type	Msg_text
++test.t4	analyze	status	OK
++start transaction;
++EXPLAIN format=tree SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 10/1 row(s), with offset pushdown  (cost=1.16 rows=2)
++    -> Index range scan on t4 using a over (2 < a)  (cost=1.16 rows=2)
++
++# Does not inspect clustered record.
++SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
++a	b
++4	pears
++start transaction;
++UPDATE t4 SET a = 2 WHERE a > 1;
++UPDATE t4 SET b = ' I really do not like fruits' WHERE a = 2;
++SELECT * FROM t4;
++a	b
++1	apples
++2	 I really do not like fruits
++2	 I really do not like fruits
++2	 I really do not like fruits
++# Inspect clustered record - table unchanged
++SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
++a	b
++4	pears
++rollback;
++rollback;
++DROP TABLE t4;
++# ----------------------
++# ----------------------
++# With PK access
++# ----------------------
++# ----------------------
++CREATE TABLE t4 ( a INT, b VARCHAR(50), PRIMARY KEY (a));
++INSERT INTO t4 VALUES (1,'apples'),(2,'bananas'), (3,'oranges'),(4,'pears');
++ANALYZE table t4;
++Table	Op	Msg_type	Msg_text
++test.t4	analyze	status	OK
++start transaction;
++EXPLAIN format=tree SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 10/1 row(s), with offset pushdown  (cost=1.16 rows=2)
++    -> Index range scan on t4 using PRIMARY over (2 < a)  (cost=1.16 rows=2)
++
++SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
++a	b
++4	pears
++start transaction;
++UPDATE t4 SET a = 5 WHERE a = 1;
++UPDATE t4 SET b = ' I really do not like fruits' WHERE a = 5;
++SELECT * FROM t4;
++a	b
++5	 I really do not like fruits
++2	bananas
++3	oranges
++4	pears
++# table unchanged
++SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
++a	b
++4	pears
++rollback;
++rollback;
++DROP TABLE t4;
++# ----------------------
++# ----------------------
++# MVCC DELETE and OFFSET pushdown
++# ----------------------
++# ----------------------
++# Delete row in one session, not committed, SELECT query (including the row to be deleted)
++# with OP in another session - check that results are consistent
++insert into t3 values (3,10),(3,11),(3,12);
++# session 1: Trx that delete a row
++start transaction;
++DELETE FROM  t3  WHERE a > 2;
++SELECT * FROM t3;
++a	b
++1	2
++2	3
++# session 2 : Trx that SELECTs the "to be deleted" row with OP - check that the deleted rows is not accounted for
++# neither for the SELECT with and without OFFSET pushdown.
++explain SELECT * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t3	NULL	ref	a	a	5	const	1	100.00	Using offset pushdown; Using index
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t3`.`a` AS `a`,`test`.`t3`.`b` AS `b` from `test`.`t3` where (`test`.`t3`.`a` = 3) limit 1,100
++# They both output the same - rows skipped differ
++SELECT /*+ NO_OFFSET_PUSHDOWN()*/ * FROM t3 WHERE a=3 LIMIT 100 OFFSET 1;
++a	b
++3	10
++3	11
++3	12
++SELECT  * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
++a	b
++3	10
++3	11
++3	12
++rollback;
++# ----------------------
++# ----------------------
++# SELECT first- DELETE NEXT
++# ----------------------
++# ----------------------
++# session 1: SELECT with OP
++start transaction;
++explain SELECT * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t3	NULL	ref	a	a	5	const	1	100.00	Using offset pushdown; Using index
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t3`.`a` AS `a`,`test`.`t3`.`b` AS `b` from `test`.`t3` where (`test`.`t3`.`a` = 3) limit 1,100
++SELECT * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
++a	b
++3	10
++3	11
++3	12
++# session 2 : DELETE after SELECT with OP
++DELETE FROM  t3  WHERE a > 2;
++# rows are deleted here
++SELECT * FROM t3;
++a	b
++1	2
++2	3
++# rows are not deleted here
++SELECT * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
++a	b
++3	10
++3	11
++3	12
++rollback;
++rollback;
++DROP TABLE t3;
++# ----------------------
++# ----------------------
++# SELECT for UPDATE - INSERT with LOCKING READ
++# ----------------------
++# ----------------------
++CREATE TABLE t1 (
++dummy INT PRIMARY KEY,
++a INT UNIQUE,
++b INT,
++KEY (a)
++);
++INSERT INTO t1 VALUES (1,1,1),(2,2,2),(3,3,3),(4,4,4),(5,5,5);
++SELECT @@transaction_isolation;
++@@transaction_isolation
++REPEATABLE-READ
++START TRANSACTION;
++EXPLAIN SELECT * FROM t1 WHERE a < 2 FOR UPDATE;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	a,a_2	a	5	NULL	1	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`dummy` AS `dummy`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` < 2)
++SELECT * FROM t1 WHERE a < 2 FOR UPDATE;
++dummy	a	b
++1	1	1
++START TRANSACTION;
++explain format=tree SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t1  LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s)  (cost=X rows=X)
++    -> Table scan on t1  (cost=X rows=X)
++
++explain format=tree SELECT * FROM t1  LIMIT 100 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=X rows=X)
++    -> Table scan on t1  (cost=X rows=X)
++
++SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t1  LIMIT 100 OFFSET 1;
++dummy	a	b
++2	2	2
++3	3	3
++4	4	4
++5	5	5
++SELECT * FROM t1  LIMIT 100 OFFSET 1;
++dummy	a	b
++2	2	2
++3	3	3
++4	4	4
++5	5	5
++ROLLBACK;
++ROLLBACK;
++DROP TABLE t1;
++# SELECT for update
++CREATE TABLE t1 (
++dummy INT PRIMARY KEY,
++a INT UNIQUE,
++b INT,
++KEY (a)
++);
++INSERT INTO t1 VALUES (2,2,2),(3,3,3),(4,4,4),(5,5,5);
++SELECT @@transaction_isolation;
++@@transaction_isolation
++REPEATABLE-READ
++START TRANSACTION;
++EXPLAIN SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t1 WHERE a < 2 LIMIT 100 OFFSET 2 FOR UPDATE;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	a,a_2	a	5	NULL	1	100.00	NULL
++Warnings:
++Note	1003	/* select#1 */ select /*+ NO_OFFSET_PUSHDOWN(@`select#1`) */ `test`.`t1`.`dummy` AS `dummy`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` < 2) limit 2,100
++SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t1 WHERE a < 2 LIMIT 100 OFFSET 2 FOR UPDATE;
++dummy	a	b
++START TRANSACTION;
++INSERT INTO t1 VALUES (1,1,1);
++ROLLBACK;
++ROLLBACK;
++DROP TABLE t1;
++# SELECT for update with OP activated in for update
++CREATE TABLE t1 (
++dummy INT PRIMARY KEY,
++a INT UNIQUE,
++b INT,
++KEY (a)
++);
++INSERT INTO t1 VALUES (1,1,1),(2,2,2),(4,4,4),(5,5,5);
++SELECT @@transaction_isolation;
++@@transaction_isolation
++REPEATABLE-READ
++START TRANSACTION;
++EXPLAIN SELECT * FROM t1 WHERE a < 5 LIMIT 100 OFFSET 2 FOR UPDATE;
++id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
++1	SIMPLE	t1	NULL	range	a,a_2	a	5	NULL	3	100.00	Using offset pushdown
++Warnings:
++Note	1003	/* select#1 */ select `test`.`t1`.`dummy` AS `dummy`,`test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` where (`test`.`t1`.`a` < 5) limit 2,100
++# does not place a lock on the rows skipped by OFFSET pushdown
++SELECT * FROM t1 WHERE a < 5 LIMIT 100 OFFSET 2 FOR UPDATE;
++dummy	a	b
++4	4	4
++START TRANSACTION;
++# OP is deactivated here
++INSERT INTO t1 VALUES (3,3,3);
++ROLLBACK;
++ROLLBACK;
++DROP TABLE t1;
++# ----------------
++# ----------------
++# Virtual COLUMN - UPDATE
++# ----------------
++# ----------------
++CREATE TABLE tv (
++a INT DEFAULT NULL,
++b INT DEFAULT NULL,
++c INT GENERATED ALWAYS AS ((a + b)) VIRTUAL,
++KEY c (c)
++);
++INSERT INTO tv(a,b) VALUES (1,2),(3,4),(5,6);
++# NON-LOCKING read
++start transaction;
++EXPLAIN format=tree SELECT * FROM tv WHERE c > 5 LIMIT 1 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 1/1 row(s), with offset pushdown  (cost=1.16 rows=1)
++    -> Index range scan on tv using c over (5 < c)  (cost=1.16 rows=2)
++
++SELECT * FROM tv WHERE c > 5 LIMIT 1 OFFSET 1;
++a	b	c
++5	6	11
++start transaction;
++UPDATE tv SET a = 12 WHERE b > 1;
++SELECT * FROM tv;
++a	b	c
++12	2	14
++12	4	16
++12	6	18
++SELECT * FROM tv WHERE c > 5 LIMIT 1 OFFSET 1;
++a	b	c
++5	6	11
++rollback;
++rollback;
++# ----------------
++# ----------------
++# Virtual COLUMN: UPDATE with LOCKING READ
++# ----------------
++# ----------------
++SELECT * FROM tv WHERE c > 5 LIMIT 1 OFFSET 1;
++a	b	c
++5	6	11
++rollback;
++rollback;
++DROP TABLE tv;
++# Restore orig wait timeout
++SET @@global.dstore_lock_wait_timeout = @old_dstore_lock_wait_timeout;
++DROP TABLE IF EXISTS t1;
++Warnings:
++Note	1051	Unknown table 'test.t1'
+diff --git a/mysql-test/suite/dstore_main/r/offset_pushdown_limitations-dstore.result b/mysql-test/suite/dstore_main/r/offset_pushdown_limitations-dstore.result
+new file mode 100644
+index 00000000000..0f0ead96d22
+--- /dev/null
++++ b/mysql-test/suite/dstore_main/r/offset_pushdown_limitations-dstore.result
+@@ -0,0 +1,105 @@
++# Cases where Offset pushdown cannot be used:
++SET @old_dstore_lock_wait_timeout= @@global.dstore_lock_wait_timeout;
++SET @@global.dstore_lock_wait_timeout = 1;
++# 1/ Index scan scenarios
++# Exotic scans not compatible with either offset pushing or redundant removal condition
++#( no skip scan or group min max already addressed in main test file.)
++# 1/a/  QS_TYPE_ROR_INTERSECT - Using intersect() (grep shows it's always with Using where) - OR clause disable with offset pushdown
++# Redundant range condition is not compatible with using intersect
++# the where clause is going to stay - even if there is no where clause
++# which seems unlikely offset pushdown is not compatible with it anyways
++CREATE TABLE t1
++(a smallint,
++b smallint,
++c smallint,
++KEY  a (a),
++KEY  b (b)
++);
++INSERT INTO t1 VALUES (1,1,1), (1,1,3),(1,2,7), (2,2,10),(1, 1, 13),(1, 2, 16),(2,1,19);
++ANALYZE TABLE t1;
++Table	Op	Msg_type	Msg_text
++test.t1	analyze	status	OK
++EXPLAIN format=tree SELECT * FROM t1 WHERE b = 2 AND a = 2 LIMIT 1 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 1/1 row(s)  (cost=X rows=X)
++    -> Filter: ((t1.a = 2) and (t1.b = 2))  (cost=X rows=X)
++        -> Intersect rows sorted by row ID  (cost=X rows=X)
++            -> Index range scan on t1 using a over (a = 2)  (cost=X rows=X)
++            -> Index range scan on t1 using b over (b = 2)  (cost=X rows=X)
++
++DROP TABLE t1;
++# 1/b/ Using union() - OR clause disabled with offset pushdown
++# Redundant range condition is not compatible with using union
++# the where clause is going to stay - even if there is no where clause
++# which seems unlikely offset pushdown is not compatible with it anyways (grep shows)
++CREATE TABLE t1
++(
++key1 INT NOT NULL,
++key2 INT NOT NULL,
++key3 INT NOT NULL,
++key4 INT NOT NULL,
++key5 INT,
++key6 INT,
++key7 INT NOT NULL,
++key8 INT NOT NULL,
++INDEX i1(key1),
++INDEX i2(key2),
++INDEX i3(key3),
++INDEX i4(key4),
++INDEX i5(key5),
++INDEX i6(key6)
++);
++INSERT INTO t1 VALUES ( 1,1,1,1,1,1,1,1),(2,2,2,2,2,2,2,2);
++SET @d=2;
++INSERT INTO t1 SELECT key1+@d, key2+@d, key3+@d, key4+@d,
++key5+@d, key6+@d, key7+@d, key8+@d FROM t1;
++SET @d=@d*2;
++INSERT INTO t1 SELECT key1+@d, key2+@d, key3+@d, key4+@d,
++key5+@d, key6+@d, key7+@d, key8+@d FROM t1;
++SET @d=@d*2;
++INSERT INTO t1 SELECT key1+@d, key2+@d, key3+@d, key4+@d,
++key5+@d, key6+@d, key7+@d, key8+@d FROM t1;
++SET @d=@d*2;
++INSERT INTO t1 SELECT key1+@d, key2+@d, key3+@d, key4+@d,
++key5+@d, key6+@d, key7+@d, key8+@d FROM t1;
++SET @d=@d*2;
++INSERT INTO t1 SELECT key1+@d, key2+@d, key3+@d, key4+@d,
++key5+@d, key6+@d, key7+@d, key8+@d FROM t1;
++SET @d=@d*2;
++INSERT INTO t1 SELECT key1+@d, key2+@d, key3+@d, key4+@d,
++key5+@d, key6+@d, key7+@d, key8+@d FROM t1;
++SET @d=@d*2;
++INSERT INTO t1 SELECT key1+@d, key2+@d, key3+@d, key4+@d,
++key5+@d, key6+@d, key7+@d, key8+@d FROM t1;
++SET @d=@d*2;
++INSERT INTO t1 SELECT key1+@d, key2+@d, key3+@d, key4+@d,
++key5+@d, key6+@d, key7+@d, key8+@d FROM t1;
++SET @d=@d*2;
++INSERT INTO t1 SELECT key1+@d, key2+@d, key3+@d, key4+@d,
++key5+@d, key6+@d, key7+@d, key8+@d FROM t1;
++SET @d=@d*2;
++INSERT INTO t1 SELECT key1+@d, key2+@d, key3+@d, key4+@d,
++key5+@d, key6+@d, key7+@d, key8+@d FROM t1;
++SET @d=@d*2;
++ANALYZE TABLE t1;
++Table	Op	Msg_type	Msg_text
++test.t1	analyze	status	OK
++ANALYZE TABLE t1 UPDATE HISTOGRAM ON key1,key4,key6;
++Table	Op	Msg_type	Msg_text
++test.t1	histogram	status	Histogram statistics created for column 'key1'.
++test.t1	histogram	status	Histogram statistics created for column 'key4'.
++test.t1	histogram	status	Histogram statistics created for column 'key6'.
++EXPLAIN format=tree SELECT * FROM t1 WHERE key1=48 OR key4=2 OR key6=3 LIMIT 1 OFFSET 1;
++EXPLAIN
++-> Limit/Offset: 1/1 row(s)  (cost=X rows=X)
++    -> Filter: ((t1.key1 = 48) or (t1.key4 = 2) or (t1.key6 = 3))  (cost=X rows=X)
++        -> Deduplicate rows sorted by row ID  (cost=X rows=X)
++            -> Index range scan on t1 using i1 over (key1 = 48)  (cost=X rows=X)
++            -> Index range scan on t1 using i4 over (key4 = 2)  (cost=X rows=X)
++            -> Index range scan on t1 using i6 over (key6 = 3)  (cost=X rows=X)
++
++DROP TABLE t1;
++SET @@global.dstore_lock_wait_timeout= @old_dstore_lock_wait_timeout;
++DROP TABLE IF EXISTS t1;
++Warnings:
++Note	1051	Unknown table 'test.t1'
+diff --git a/mysql-test/suite/dstore_main/r/offset_pushdown_locking_test-dstore.result b/mysql-test/suite/dstore_main/r/offset_pushdown_locking_test-dstore.result
+new file mode 100644
+index 00000000000..136dd88babf
+--- /dev/null
++++ b/mysql-test/suite/dstore_main/r/offset_pushdown_locking_test-dstore.result
+@@ -0,0 +1,88 @@
++# -------------------------------
++# -------------------------------
++# Content of the test file:
++# Offset pushdown and non-locking read
++SET @old_dstore_lock_wait_timeout = @@global.dstore_lock_wait_timeout;
++SET @@global.dstore_lock_wait_timeout = 1;
++CREATE TABLE `tv` (
++`id` int NOT NULL,
++`c` int NOT NULL,
++`data` varchar(32) DEFAULT NULL,
++PRIMARY KEY (`id`),
++KEY `idx_tv_c` (`c`)
++);
++INSERT INTO tv VALUES (5,5,'row1'), (6,6,'row2'),(7,7,'row3'), (8,8,'row4');
++start transaction;
++SELECT * FROM tv WHERE c > 5  LIMIT 1 OFFSET 1 FOR UPDATE;
++id	c	data
++7	7	row3
++# Check that we don't skip any rows
++START TRANSACTION;
++SELECT * FROM tv WHERE c > 5  LIMIT 1 OFFSET 2 FOR UPDATE;
++ERROR HY000: Lock wait timeout exceeded; try restarting transaction
++SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM tv WHERE c > 5  LIMIT 1 OFFSET 2 FOR UPDATE;
++ERROR HY000: Lock wait timeout exceeded; try restarting transaction
++rollback;
++rollback;
++start transaction;
++SELECT * FROM tv WHERE c > 5  LIMIT 1 OFFSET 1 FOR UPDATE;
++id	c	data
++7	7	row3
++START TRANSACTION;
++update tv set data='row0' where id =5;
++update tv set data='row0' where id =6;
++ERROR HY000: Lock wait timeout exceeded; try restarting transaction
++update tv set data='row0' where id =7;
++ERROR HY000: Lock wait timeout exceeded; try restarting transaction
++update tv set data='row0' where id =8;
++rollback;
++rollback;
++start transaction;
++SELECT c FROM tv WHERE c > 5  LIMIT 1 OFFSET 1 FOR UPDATE;
++c
++7
++START TRANSACTION;
++update tv set data='row0' where id =5;
++update tv set data='row0' where id =6;
++ERROR HY000: Lock wait timeout exceeded; try restarting transaction
++update tv set data='row0' where id =7;
++ERROR HY000: Lock wait timeout exceeded; try restarting transaction
++update tv set data='row0' where id =8;
++rollback;
++rollback;
++start transaction;
++SELECT * FROM tv LIMIT 1 OFFSET 1 FOR UPDATE;
++id	c	data
++6	6	row2
++START TRANSACTION;
++update tv set data='row0' where id =5;
++ERROR HY000: Lock wait timeout exceeded; try restarting transaction
++update tv set data='row0' where id =6;
++ERROR HY000: Lock wait timeout exceeded; try restarting transaction
++update tv set data='row0' where id =7;
++update tv set data='row0' where id =8;
++rollback;
++rollback;
++start transaction;
++SELECT c FROM tv LIMIT 1 OFFSET 1 FOR UPDATE;
++c
++6
++START TRANSACTION;
++update tv set data='row0' where id =5;
++ERROR HY000: Lock wait timeout exceeded; try restarting transaction
++update tv set data='row0' where id =6;
++ERROR HY000: Lock wait timeout exceeded; try restarting transaction
++update tv set data='row0' where id =7;
++update tv set data='row0' where id =8;
++rollback;
++rollback;
++DROP TABLE tv;
++# Restore orig wait timeout
++# BOTTOM
++show variables LIKE '%dstore_lock_wait_timeout%';
++Variable_name	Value
++dstore_lock_wait_timeout	1
++SET @@global.dstore_lock_wait_timeout = @old_dstore_lock_wait_timeout;
++show variables LIKE '%dstore_lock_wait_timeout%';
++Variable_name	Value
++dstore_lock_wait_timeout	50
+diff --git a/mysql-test/suite/dstore_main/r/range_scan_remove_redundant_condition-dstore.result b/mysql-test/suite/dstore_main/r/range_scan_remove_redundant_condition-dstore.result
+index 0ae55713fd7..25215bc87c9 100644
+--- a/mysql-test/suite/dstore_main/r/range_scan_remove_redundant_condition-dstore.result
++++ b/mysql-test/suite/dstore_main/r/range_scan_remove_redundant_condition-dstore.result
+@@ -116,7 +116,7 @@ EXPLAIN
+ 
+ explain format=tree  SELECT * FROM  t2 WHERE a IS NULL AND b > 5 LIMIT 100 OFFSET 1;
+ EXPLAIN
+--> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=*** rows=***)
+     -> Covering index range scan on t2 using a over (a = NULL AND 5 < b)  (cost=*** rows=***)
+ 
+ # between condition removal
+@@ -171,7 +171,7 @@ EXPLAIN
+ 
+ explain format=tree  SELECT * FROM  t2 WHERE a IS NULL AND b > 5 LIMIT 100 OFFSET 1;
+ EXPLAIN
+--> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=*** rows=***)
+     -> Covering index range scan on t2 using a over (a = NULL AND 5 < b)  (cost=*** rows=***)
+ 
+ DROP TABLE t1, t2;
+@@ -492,22 +492,22 @@ test.t10	analyze	status	OK
+ test.t11	analyze	status	OK
+ EXPLAIN format=tree SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
+ EXPLAIN
+--> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=*** rows=***)
+     -> Covering index range scan on t10 using idx4 over (c1 < 2)  (cost=*** rows=***)
+ 
+ EXPLAIN format=tree SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
+ EXPLAIN
+--> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=*** rows=***)
+     -> Covering index range scan on t11 using idx4 over (2 < c1) (reverse)  (cost=*** rows=***)
+ 
+ EXPLAIN format=tree SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
+ EXPLAIN
+--> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=*** rows=***)
+     -> Covering index range scan on t10 using idx4 over (c1 < 2) (reverse)  (cost=*** rows=***)
+ 
+ EXPLAIN format=tree SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
+ EXPLAIN
+--> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=*** rows=***)
+     -> Covering index range scan on t11 using idx4 over (2 < c1)  (cost=*** rows=***)
+ 
+ # Verify that in a LEFT JOIN, the range condition is removed or not, correctly.
+@@ -620,7 +620,7 @@ Table	Op	Msg_type	Msg_text
+ test.t10	analyze	status	OK
+ EXPLAIN format=tree SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
+ EXPLAIN
+--> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
++-> Limit/Offset: 100/1 row(s), with offset pushdown  (cost=*** rows=***)
+     -> Covering index range scan on t10 using idx4 over (c1 < 2)  (cost=*** rows=***)
+ 
+ drop table t10;
+diff --git a/mysql-test/suite/dstore_main/r/subquery_all-dstore.result b/mysql-test/suite/dstore_main/r/subquery_all-dstore.result
+index 395487b54c6..e23cd1cfab0 100644
+--- a/mysql-test/suite/dstore_main/r/subquery_all-dstore.result
++++ b/mysql-test/suite/dstore_main/r/subquery_all-dstore.result
+@@ -7927,7 +7927,7 @@ FROM t1
+ LIMIT 1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+-2	DEPENDENT SUBQUERY	t2	NULL	ref	t1_id,t1_id_position	t1_id_position	5	test.t1.id	0	0.00	Using index
++2	DEPENDENT SUBQUERY	t2	NULL	ref	t1_id,t1_id_position	t1_id_position	5	test.t1.id	0	0.00	Using offset pushdown; Using index
+ Warnings:
+ Note	1276	Field or reference 'test.t1.id' of SELECT #2 was resolved in SELECT #1
+ Note	1003	/* select#1 */ select (/* select#2 */ select `test`.`t2`.`position` from `test`.`t2` where (`test`.`t2`.`t1_id` = `test`.`t1`.`id`) order by `test`.`t2`.`t1_id`,`test`.`t2`.`position` limit 10,1) AS `maxkey` from `test`.`t1` limit 1
+diff --git a/mysql-test/suite/dstore_main/r/subquery_all_bka-dstore.result b/mysql-test/suite/dstore_main/r/subquery_all_bka-dstore.result
+index 1bbaad16202..9e9891957c1 100644
+--- a/mysql-test/suite/dstore_main/r/subquery_all_bka-dstore.result
++++ b/mysql-test/suite/dstore_main/r/subquery_all_bka-dstore.result
+@@ -7930,7 +7930,7 @@ FROM t1
+ LIMIT 1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+-2	DEPENDENT SUBQUERY	t2	NULL	ref	t1_id,t1_id_position	t1_id_position	5	test.t1.id	0	0.00	Using index
++2	DEPENDENT SUBQUERY	t2	NULL	ref	t1_id,t1_id_position	t1_id_position	5	test.t1.id	0	0.00	Using offset pushdown; Using index
+ Warnings:
+ Note	1276	Field or reference 'test.t1.id' of SELECT #2 was resolved in SELECT #1
+ Note	1003	/* select#1 */ select (/* select#2 */ select `test`.`t2`.`position` from `test`.`t2` where (`test`.`t2`.`t1_id` = `test`.`t1`.`id`) order by `test`.`t2`.`t1_id`,`test`.`t2`.`position` limit 10,1) AS `maxkey` from `test`.`t1` limit 1
+diff --git a/mysql-test/suite/dstore_main/r/subquery_all_bka_nobnl-dstore.result b/mysql-test/suite/dstore_main/r/subquery_all_bka_nobnl-dstore.result
+index 28fb2cf5783..aa5819ee416 100644
+--- a/mysql-test/suite/dstore_main/r/subquery_all_bka_nobnl-dstore.result
++++ b/mysql-test/suite/dstore_main/r/subquery_all_bka_nobnl-dstore.result
+@@ -7932,7 +7932,7 @@ FROM t1
+ LIMIT 1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+-2	DEPENDENT SUBQUERY	t2	NULL	ref	t1_id,t1_id_position	t1_id_position	5	test.t1.id	0	0.00	Using index
++2	DEPENDENT SUBQUERY	t2	NULL	ref	t1_id,t1_id_position	t1_id_position	5	test.t1.id	0	0.00	Using offset pushdown; Using index
+ Warnings:
+ Note	1276	Field or reference 'test.t1.id' of SELECT #2 was resolved in SELECT #1
+ Note	1003	/* select#1 */ select (/* select#2 */ select `test`.`t2`.`position` from `test`.`t2` where (`test`.`t2`.`t1_id` = `test`.`t1`.`id`) order by `test`.`t2`.`t1_id`,`test`.`t2`.`position` limit 10,1) AS `maxkey` from `test`.`t1` limit 1
+diff --git a/mysql-test/suite/dstore_main/r/subquery_nomat_nosj-dstore.result b/mysql-test/suite/dstore_main/r/subquery_nomat_nosj-dstore.result
+index dd906307eef..b9fa39248f6 100644
+--- a/mysql-test/suite/dstore_main/r/subquery_nomat_nosj-dstore.result
++++ b/mysql-test/suite/dstore_main/r/subquery_nomat_nosj-dstore.result
+@@ -7927,7 +7927,7 @@ FROM t1
+ LIMIT 1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+-2	DEPENDENT SUBQUERY	t2	NULL	ref	t1_id,t1_id_position	t1_id_position	5	test.t1.id	0	0.00	Using index
++2	DEPENDENT SUBQUERY	t2	NULL	ref	t1_id,t1_id_position	t1_id_position	5	test.t1.id	0	0.00	Using offset pushdown; Using index
+ Warnings:
+ Note	1276	Field or reference 'test.t1.id' of SELECT #2 was resolved in SELECT #1
+ Note	1003	/* select#1 */ select (/* select#2 */ select `test`.`t2`.`position` from `test`.`t2` where (`test`.`t2`.`t1_id` = `test`.`t1`.`id`) order by `test`.`t2`.`t1_id`,`test`.`t2`.`position` limit 10,1) AS `maxkey` from `test`.`t1` limit 1
+diff --git a/mysql-test/suite/dstore_main/r/subquery_nomat_nosj_bka-dstore.result b/mysql-test/suite/dstore_main/r/subquery_nomat_nosj_bka-dstore.result
+index 4ca74e6039c..a1d1c17ec93 100644
+--- a/mysql-test/suite/dstore_main/r/subquery_nomat_nosj_bka-dstore.result
++++ b/mysql-test/suite/dstore_main/r/subquery_nomat_nosj_bka-dstore.result
+@@ -7930,7 +7930,7 @@ FROM t1
+ LIMIT 1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+-2	DEPENDENT SUBQUERY	t2	NULL	ref	t1_id,t1_id_position	t1_id_position	5	test.t1.id	0	0.00	Using index
++2	DEPENDENT SUBQUERY	t2	NULL	ref	t1_id,t1_id_position	t1_id_position	5	test.t1.id	0	0.00	Using offset pushdown; Using index
+ Warnings:
+ Note	1276	Field or reference 'test.t1.id' of SELECT #2 was resolved in SELECT #1
+ Note	1003	/* select#1 */ select (/* select#2 */ select `test`.`t2`.`position` from `test`.`t2` where (`test`.`t2`.`t1_id` = `test`.`t1`.`id`) order by `test`.`t2`.`t1_id`,`test`.`t2`.`position` limit 10,1) AS `maxkey` from `test`.`t1` limit 1
+diff --git a/mysql-test/suite/dstore_main/r/subquery_nomat_nosj_bka_nobnl-dstore.result b/mysql-test/suite/dstore_main/r/subquery_nomat_nosj_bka_nobnl-dstore.result
+index ad6b2af3977..b303aac64fa 100644
+--- a/mysql-test/suite/dstore_main/r/subquery_nomat_nosj_bka_nobnl-dstore.result
++++ b/mysql-test/suite/dstore_main/r/subquery_nomat_nosj_bka_nobnl-dstore.result
+@@ -7930,7 +7930,7 @@ FROM t1
+ LIMIT 1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+-2	DEPENDENT SUBQUERY	t2	NULL	ref	t1_id,t1_id_position	t1_id_position	5	test.t1.id	0	0.00	Using index
++2	DEPENDENT SUBQUERY	t2	NULL	ref	t1_id,t1_id_position	t1_id_position	5	test.t1.id	0	0.00	Using offset pushdown; Using index
+ Warnings:
+ Note	1276	Field or reference 'test.t1.id' of SELECT #2 was resolved in SELECT #1
+ Note	1003	/* select#1 */ select (/* select#2 */ select `test`.`t2`.`position` from `test`.`t2` where (`test`.`t2`.`t1_id` = `test`.`t1`.`id`) order by `test`.`t2`.`t1_id`,`test`.`t2`.`position` limit 10,1) AS `maxkey` from `test`.`t1` limit 1
+diff --git a/mysql-test/suite/dstore_main/r/subquery_none-dstore.result b/mysql-test/suite/dstore_main/r/subquery_none-dstore.result
+index 2063b77efb7..a0fa76f762f 100644
+--- a/mysql-test/suite/dstore_main/r/subquery_none-dstore.result
++++ b/mysql-test/suite/dstore_main/r/subquery_none-dstore.result
+@@ -7926,7 +7926,7 @@ FROM t1
+ LIMIT 1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+-2	DEPENDENT SUBQUERY	t2	NULL	ref	t1_id,t1_id_position	t1_id_position	5	test.t1.id	0	0.00	Using index
++2	DEPENDENT SUBQUERY	t2	NULL	ref	t1_id,t1_id_position	t1_id_position	5	test.t1.id	0	0.00	Using offset pushdown; Using index
+ Warnings:
+ Note	1276	Field or reference 'test.t1.id' of SELECT #2 was resolved in SELECT #1
+ Note	1003	/* select#1 */ select (/* select#2 */ select `test`.`t2`.`position` from `test`.`t2` where (`test`.`t2`.`t1_id` = `test`.`t1`.`id`) order by `test`.`t2`.`t1_id`,`test`.`t2`.`position` limit 10,1) AS `maxkey` from `test`.`t1` limit 1
+diff --git a/mysql-test/suite/dstore_main/r/subquery_none_bka-dstore.result b/mysql-test/suite/dstore_main/r/subquery_none_bka-dstore.result
+index ce7ba7faf4f..28f7d36f5bb 100644
+--- a/mysql-test/suite/dstore_main/r/subquery_none_bka-dstore.result
++++ b/mysql-test/suite/dstore_main/r/subquery_none_bka-dstore.result
+@@ -7929,7 +7929,7 @@ FROM t1
+ LIMIT 1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+-2	DEPENDENT SUBQUERY	t2	NULL	ref	t1_id,t1_id_position	t1_id_position	5	test.t1.id	0	0.00	Using index
++2	DEPENDENT SUBQUERY	t2	NULL	ref	t1_id,t1_id_position	t1_id_position	5	test.t1.id	0	0.00	Using offset pushdown; Using index
+ Warnings:
+ Note	1276	Field or reference 'test.t1.id' of SELECT #2 was resolved in SELECT #1
+ Note	1003	/* select#1 */ select (/* select#2 */ select `test`.`t2`.`position` from `test`.`t2` where (`test`.`t2`.`t1_id` = `test`.`t1`.`id`) order by `test`.`t2`.`t1_id`,`test`.`t2`.`position` limit 10,1) AS `maxkey` from `test`.`t1` limit 1
+diff --git a/mysql-test/suite/dstore_main/r/subquery_none_bka_nobnl-dstore.result b/mysql-test/suite/dstore_main/r/subquery_none_bka_nobnl-dstore.result
+index b87a1f04aa5..f709e1bd9fd 100644
+--- a/mysql-test/suite/dstore_main/r/subquery_none_bka_nobnl-dstore.result
++++ b/mysql-test/suite/dstore_main/r/subquery_none_bka_nobnl-dstore.result
+@@ -7929,7 +7929,7 @@ FROM t1
+ LIMIT 1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+-2	DEPENDENT SUBQUERY	t2	NULL	ref	t1_id,t1_id_position	t1_id_position	5	test.t1.id	0	0.00	Using index
++2	DEPENDENT SUBQUERY	t2	NULL	ref	t1_id,t1_id_position	t1_id_position	5	test.t1.id	0	0.00	Using offset pushdown; Using index
+ Warnings:
+ Note	1276	Field or reference 'test.t1.id' of SELECT #2 was resolved in SELECT #1
+ Note	1003	/* select#1 */ select (/* select#2 */ select `test`.`t2`.`position` from `test`.`t2` where (`test`.`t2`.`t1_id` = `test`.`t1`.`id`) order by `test`.`t2`.`t1_id`,`test`.`t2`.`position` limit 10,1) AS `maxkey` from `test`.`t1` limit 1
+diff --git a/mysql-test/suite/dstore_main/r/view-dstore.result b/mysql-test/suite/dstore_main/r/view-dstore.result
+index bfa9acb465b..32c1a29f08f 100644
+--- a/mysql-test/suite/dstore_main/r/view-dstore.result
++++ b/mysql-test/suite/dstore_main/r/view-dstore.result
+@@ -4537,7 +4537,7 @@ FROM t1 JOIN vlo_1 AS dt ON t1.a=dt.a;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
+ 1	PRIMARY	<derived2>	NULL	ref	<auto_key0>	<auto_key0>	5	test.t1.a	#	#	NULL
+-2	DERIVED	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
++2	DERIVED	t2	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using offset pushdown
+ Warnings:
+ Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`dt`.`a` AS `a`,`test`.`dt`.`b` AS `b` from `test`.`t1` join `test`.`vlo_1` `dt` where (`test`.`dt`.`a` = `test`.`t1`.`a`)
+ SELECT *
+@@ -4912,13 +4912,13 @@ a	b
+ explain SELECT * FROM v1;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	<derived3>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+-3	DERIVED	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
++3	DERIVED	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using offset pushdown
+ Warnings:
+ Note	1003	/* select#1 */ select `dt`.`a` AS `a`,`dt`.`b` AS `b` from (/* select#3 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` limit 3,3) `dt`
+ explain SELECT * FROM (SELECT * FROM t1 LIMIT 3 OFFSET 3) AS dt;
+ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+ 1	PRIMARY	<derived2>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
+-2	DERIVED	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	NULL
++2	DERIVED	t1	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using offset pushdown
+ Warnings:
+ Note	1003	/* select#1 */ select `dt`.`a` AS `a`,`dt`.`b` AS `b` from (/* select#2 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` limit 3,3) `dt`
+ DROP VIEW v1;
+diff --git a/mysql-test/suite/dstore_main/t/offset_pushdown-dstore.test b/mysql-test/suite/dstore_main/t/offset_pushdown-dstore.test
+new file mode 100644
+index 00000000000..1f371e837ab
+--- /dev/null
++++ b/mysql-test/suite/dstore_main/t/offset_pushdown-dstore.test
+@@ -0,0 +1,626 @@
++# offset pushdown
++--source include/have_only_dstore.inc
++--echo # Initialise
++--disable_warnings
++--enable_warnings
++
++--echo # In EXPLAIN, "Using offset pushdown " indicates whether the feature is activated for a given query
++--echo # optimizer switch offset_pushdown flag defaults to true
++--echo # system variable rds_empty_redundant_check_in_range_scan defaults to true
++--echo # table 1
++
++CREATE TABLE t1 (a INT , b INT , INDEX(b));
++INSERT INTO t1 VALUES (1, 2), (2, 3), (3, 3), (4, 3);
++analyze TABLE t1;
++SET rds_empty_redundant_check_in_range_scan=false;
++--echo # Shows that offset pushdown  works with table scan, later in
++--echo # this file we will show it for index scan, range scan and lookup.
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t1 LIMIT 100 OFFSET 1;
++
++--echo # non-covering index - icp is not disabled
++--echo # ICP is used and removes condition FROM server layer
++--echo # OFFSET pushdow  is therefore active even opt rds_empty_redundant_check_in_range_scan is false.
++explain  SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++--echo # Also visible in other EXPLAIN formats:
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=json SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++
++--echo # The existing MySQL implementation of ICP is that it is off when the chosen index is covering.
++--echo # covering index => no icp => condition remains at SQL layer => no offset pushdown  without opt rds_empty_redundant_check_in_range_scan
++explain  SELECT b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++--echo # covering index => no icp => but option rds_empty_redundant_check_in_range_scan active, removes the condition => offset pushdown  happens
++SET rds_empty_redundant_check_in_range_scan = true;
++explain  SELECT b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++--echo # ORDER BY (asc): condition removed, ORDER BY desc, condition removed; offset pushdown  activated either way
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain  format=tree SELECT b FROM t1 WHERE b > 2 ORDER BY b DESC LIMIT 100 OFFSET 1;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain  format=tree SELECT b FROM t1 WHERE b > 2 ORDER BY b ASC LIMIT 100 OFFSET 1;
++
++--echo # works whether b OP cond or cond OP b
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT a,b FROM t1 WHERE 2 < b;
++CREATE TABLE t3 (a INT , b INT , INDEX(a,b));
++INSERT INTO t3 VALUES (1, 2),(2, 3),(3, 3),(4, 3);
++analyze TABLE t3;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT a,b FROM t3 WHERE a = 2 AND b < 2;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT a,b FROM t3 WHERE 2 = a AND b < 2;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT a,b FROM t3 WHERE 2 = a AND 2 < b;
++
++--echo # t3 is re-used to show that a BETWEEN clause can also be emptied by rds_empty_redundant_check_in_range_scan
++--echo # thereby allowing offset pushdown
++SET rds_empty_redundant_check_in_range_scan = false;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND 3;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND 3 LIMIT 100 OFFSET 1;
++CREATE TABLE comp_1a AS SELECT * FROM t3 WHERE a BETWEEN 2 AND 3;
++CREATE TABLE comp_1b AS SELECT * FROM t3 WHERE a BETWEEN 2 AND 3 LIMIT 100 OFFSET 1;
++SET rds_empty_redundant_check_in_range_scan = true;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND 3;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND 3 LIMIT 100 OFFSET 1;
++CREATE TABLE comp_2a AS SELECT * FROM t3 WHERE a BETWEEN 2 AND 3;
++CREATE TABLE comp_2b AS SELECT * FROM t3 WHERE a BETWEEN 2 AND 3 LIMIT 100 OFFSET 1;
++checksum TABLE comp_1a;
++checksum TABLE comp_2a;
++checksum TABLE comp_1b;
++checksum TABLE comp_2b;
++DROP TABLE comp_1a, comp_2a, comp_1b, comp_2b;
++--echo # BETWEEN and type conversion
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN "b" AND 5;
++SELECT * FROM t3 WHERE a BETWEEN "b" AND 5;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN "2" AND "5";
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN "2" AND 5;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND "5";
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN "2.0" AND "5";
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t3 WHERE a BETWEEN "2" AND "5.0";
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++--echo # Empty IS NULL in WHERE clause
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree  SELECT * FROM  t3 WHERE a IS NULL AND b > 5;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree  SELECT * FROM  t3 WHERE a IS NULL AND b > 5 LIMIT 100 OFFSET 1;
++--echo # reset default
++SET rds_empty_redundant_check_in_range_scan = false;
++--echo # Offset pushdown is done for for "index lookup" too, and redundant
++--echo # conditions are removed even if empty_etc is false.
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM  t3 WHERE a = 12 LIMIT 100 OFFSET 1;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM  t3 WHERE a = 12 AND b = 27 LIMIT 100 OFFSET 1;
++DROP TABLE t3;
++
++--echo # show the results are the same with or without the optimization
++ SET optimizer_switch = 'offset_pushdown=on';
++explain SELECT a,b FROM t1 WHERE b>2 LIMIT 100 OFFSET 1;
++CREATE TABLE comp_1 AS SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++ SET optimizer_switch = 'offset_pushdown=off';
++explain SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++CREATE TABLE comp_2 AS SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++
++--echo # checksum for comp_1 and comp_2 should give the same output:
++checksum TABLE comp_1;
++checksum TABLE comp_2;
++DROP TABLE comp_1,comp_2;
++--echo #reset default
++SET optimizer_switch = 'offset_pushdown=on';
++SET rds_empty_redundant_check_in_range_scan = false;
++
++--echo # Use with stored procedure
++DELIMITER //;
++CREATE PROCEDURE p1(p1 integer, p2 integer)
++begin
++  SELECT * FROM t1  WHERE b>2 LIMIT p1 OFFSET p2;
++end //
++CREATE PROCEDURE p2(p1 integer, p2 integer)
++begin
++ explain SELECT * FROM t1  WHERE b > 2 LIMIT p1 OFFSET p2;
++end //
++delimiter ;//
++
++call p2(100,1);
++call p1(100,1);
++DROP PROCEDURE if EXISTS p1;
++DROP PROCEDURE if EXISTS p2;
++
++--echo # SQL_CALC_FOUND_ROWS disables optimization
++explain SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++explain SELECT sql_calc_found_rows a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++SELECT sql_calc_found_rows a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
++SELECT found_rows();
++
++--echo # HAVING does, too
++
++SELECT b FROM t1 HAVING b = 3;
++explain SELECT b FROM t1 HAVING b = 3 LIMIT 100 OFFSET 1;
++SELECT b FROM t1 HAVING b = 3 LIMIT 100 OFFSET 1;
++
++--echo # Offset pushdown supports merged derived tables
++SET big_tables = 1;
++--echo # use dstore if we materialize
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT  * FROM  (SELECT * FROM t1) d  LIMIT 100 OFFSET 1;
++SELECT  * FROM  (SELECT * FROM t1) d  LIMIT 100 OFFSET 1;
++--echo # Offset pushdown doesn't support materialized derived tables
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT /*+ no_merge() */ * FROM  (SELECT * FROM t1) d  LIMIT 100 OFFSET 1;
++SELECT /*+ no_merge() */ * FROM  (SELECT * FROM t1) d  LIMIT 100 OFFSET 1;
++--echo # even if an index is used
++SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 1;
++SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 0;
++SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 1;
++SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 2;
++SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 3;
++SET big_tables = default;
++
++--echo # Offset pushdown in a correlated subquery which is executed multiple times:
++--echo # check that each result is ok
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT (SELECT b+0*t0.b FROM t1 ORDER BY b LIMIT 1 OFFSET 2) FROM t1 AS t0;
++SELECT (SELECT b+0*t0.b FROM t1 ORDER BY b LIMIT 1 OFFSET 2) FROM t1 AS t0;
++
++--echo # prepared statements:
++--echo # check that nothing that is reused is changed
++prepare stmt1 FROM 'SELECT * FROM t1 where b < 4 limit 100 OFFSET 1';
++execute stmt1;
++execute stmt1;
++execute stmt1;
++deallocate prepare stmt1;
++DROP TABLE t1;
++--echo # test
++CREATE TABLE t2(a INT , b INT , INDEX(b));
++INSERT INTO t2 VALUES (1, 2), (2, 3), (3, 3), (4, 3),(5,6),(6,7);
++analyze TABLE t2;
++--echo # With UNION ALL
++--echo # without overlap
++(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 0) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 0) LIMIT 100 OFFSET 0;
++(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 0) LIMIT 100 OFFSET 0;
++(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 0) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 0;
++(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 0;
++(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 0) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 0) LIMIT 100 OFFSET 1;
++(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 0) LIMIT 100 OFFSET 1;
++(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 0) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
++--echo # outer OFFSET does not activate offset pushdown
++--echo # inner OFFSET activates offset pushdown
++(SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree (SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
++--echo with overlap
++(SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 0) UNION ALL (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 0) LIMIT 100 OFFSET 0;
++(SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 0;
++(SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree (SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
++--echo # With UNION
++--echo # Only test with overlap
++(SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 0) UNION (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 0) LIMIT 100 OFFSET 0;
++(SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 0;
++(SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
++--echo # Same behavior as UNION ALL:
++--echo # outer OFFSET does not activate offset pushdown
++--echo # inner OFFSET activates offset pushdown
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree (SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
++--echo HA_POS_ERROR has to disable offset pushdown  optimisation although the query otherwise satisfies the condition for said optimisation:
++ SET optimizer_switch = 'offset_pushdown=off';
++SELECT * FROM t2 WHERE b > 2 LIMIT 18446744073709551615 OFFSET 1;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t2  WHERE b > 2 LIMIT 18446744073709551615 OFFSET 1;
++ SET optimizer_switch = 'offset_pushdown=on';
++SELECT * FROM t2 LIMIT 18446744073709551615 OFFSET 1;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t2  WHERE b > 2 LIMIT 18446744073709551615 OFFSET 1;
++--echo # Fewer calls from sql-layer to handler when the optimization is on:
++SET optimizer_switch = 'offset_pushdown=off';
++flush status;
++SELECT * FROM t2 WHERE b > 2 LIMIT 100 OFFSET 4;
++show status LIKE 'handler_read%';
++SET optimizer_switch = 'offset_pushdown=on';
++flush status;
++SELECT * FROM t2 WHERE b > 2 LIMIT 100 OFFSET 4;
++show status LIKE 'handler_read%';
++DROP TABLE t2;
++--echo # offset pushdown  with primary key  - feature activated only with rds_empty_redundant_check_in_range_scan
++--echo # which removes the unnecessary SQL layer check of the WHERE clause
++CREATE TABLE test_pk
++(a INT NOT NULL, b  INT NOT NULL, PRIMARY KEY (a));
++INSERT INTO test_pk VALUES (1,0),(2,1),(3,2),(4,3);
++analyze TABLE test_pk;
++SET rds_empty_redundant_check_in_range_scan = false;
++explain  SELECT * FROM test_pk WHERE a > 2 ORDER BY a LIMIT 100 OFFSET 1;
++SET rds_empty_redundant_check_in_range_scan = true;
++explain  SELECT * FROM test_pk WHERE a > 2 ORDER BY a LIMIT 100 OFFSET 1;
++
++--echo # Query with only constant tables, makes sure changes to EXPLAIN code don't crash
++--echo # (no pushdown needed):
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM test_pk WHERE a = 2 LIMIT 100;
++
++DROP TABLE test_pk;
++--echo # Empty redundant condition in index range scan: check different data types
++--echo # redundant check removal  extended to real numbers (DOUBLE)
++CREATE TABLE t6(a DOUBLE, b DOUBLE, c DOUBLE , INDEX(a,b,c));
++INSERT INTO t6 VALUES (1,2,6), (2,3,7), (3,3,8), (4,3,12);
++analyze TABLE t6;
++SET rds_empty_redundant_check_in_range_scan = false;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t6 WHERE a > 2;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t6 WHERE a = 2 AND b < 5 AND b > 1;
++SET rds_empty_redundant_check_in_range_scan = true;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t6 WHERE a > 2;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t6 WHERE a = 2 AND b < 5 AND b > 1;
++DROP TABLE t6;
++--echo # redundant check removal extended to DECIMAL
++CREATE TABLE t6(a DECIMAL, b DECIMAL, c DECIMAL , INDEX(a,b,c));
++INSERT INTO t6 VALUES (1,2,6), (2,3,7), (3,3,8), (4,3,12);
++analyze TABLE t6;
++SET rds_empty_redundant_check_in_range_scan = false;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t6 WHERE a > 2;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t6 WHERE a = 2 AND b < 5 AND b > 1;
++SET rds_empty_redundant_check_in_range_scan = true;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t6 WHERE a > 2;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t6 WHERE a = 2 AND b < 5 AND b > 1;
++DROP TABLE t6;
++--echo # redundant check removal extended to String
++CREATE TABLE people(zipcode CHAR(10),lastname CHAR(10), firstname CHAR(10),address CHAR(10), INDEX (zipcode, lastname, firstname));
++analyze TABLE people;
++SET rds_empty_redundant_check_in_range_scan = false;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree  SELECT * FROM people WHERE zipcode > '95054';
++SET rds_empty_redundant_check_in_range_scan = true;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree  SELECT * FROM people WHERE zipcode > '95054';
++DROP TABLE people;
++--echo # Test skip scan
++CREATE TABLE t1 (f1 INT NOT NULL, f2 INT NOT NULL, PRIMARY KEY(f1, f2));
++INSERT INTO t1 VALUES
++  (1,1), (1,2), (1,3), (1,4), (1,5),
++  (2,1), (2,2), (2,3), (2,4), (2,5);
++INSERT INTO t1 SELECT f1, f2 + 5 FROM t1;
++INSERT INTO t1 SELECT f1, f2 + 10 FROM t1;
++INSERT INTO t1 SELECT f1, f2 + 20 FROM t1;
++INSERT INTO t1 SELECT f1, f2 + 40 FROM t1;
++ANALYZE TABLE t1;
++--echo # first test without LIMIT OFFSET
++SET rds_empty_redundant_check_in_range_scan = false;
++EXPLAIN SELECT f1, f2 FROM t1 WHERE f2 > 40;
++SET rds_empty_redundant_check_in_range_scan = true;
++EXPLAIN SELECT f1, f2 FROM t1 WHERE f2 > 40;
++--echo #redundant conditions in skip scans can be removed
++--echo # test with LIMIT OFFSET
++SET rds_empty_redundant_check_in_range_scan = true;
++EXPLAIN SELECT f1, f2 FROM t1 WHERE f2 > 40 LIMIT 100 OFFSET 2;
++--echo #  but skip scan cannot be used together with offset pushdown
++DROP TABLE if EXISTS t1;
++ CREATE TABLE jemp (
++     c JSON,
++    g INT GENERATED ALWAYS AS (c->"$.id"),
++    INDEX i (g)
++ );
++
++
++ INSERT INTO jemp (c) VALUES
++        ('{"id": "1", "name": "Fred"}'), ('{"id": "2", "name": "Wilma"}'),
++        ('{"id": "3", "name": "Barney"}'), ('{"id": "4", "name": "Betty"}');
++analyze TABLE jemp;
++
++--echo # without optimization
++SET rds_empty_redundant_check_in_range_scan = false;
++ SELECT c->>"$.name" AS name
++    FROM jemp WHERE g > 2;
++ EXPLAIN SELECT c->>"$.name" AS name
++   FROM jemp WHERE g > 2;
++--echo # with optimization
++SET rds_empty_redundant_check_in_range_scan = true;
++ SELECT c->>"$.name" AS name
++    FROM jemp WHERE g > 2;
++ EXPLAIN SELECT c->>"$.name" AS name
++   FROM jemp WHERE g > 2;
++--echo # works with offset pushdown
++ SELECT c->>"$.name" AS name
++    FROM jemp WHERE g > 2 LIMIT 1 OFFSET 1;
++ EXPLAIN format=tree SELECT c->>"$.name" AS name
++   FROM jemp WHERE g > 2;
++
++DROP TABLE if EXISTS jemp;
++
++--echo # Inspired by the test for Bug #27578340: INCONSISTENT RESULTS FOR SELECTS FROM TABLE WITH CHAR(N) COLUMN
++--echo # AND NO_PAD COLLATION from ctype_uca.test,
++--echo # verify that an inequality condition is kept at SQL layer:
++
++CREATE TABLE t1 (
++    f1 CHAR(20) COLLATE utf8mb4_0900_ai_ci  # A NO PAD collation.
++);
++INSERT INTO t1 VALUES ('ABC  ');
++INSERT INTO t1 VALUES ('XYZ');
++INSERT INTO t1 VALUES ('XYZ ');
++INSERT INTO t1 VALUES ('ABC ');
++
++CREATE INDEX f1_index ON t1 ( f1 );
++analyze table t1;
++
++set rds_empty_redundant_check_in_range_scan = on;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree  SELECT CONCAT(f1, '|') FROM t1 WHERE f1 >= 'XYZ ';
++
++--echo # Now, a PAD SPACE collation, condition is not kept
++
++ALTER TABLE t1 modify f1 CHAR(20) COLLATE utf8mb4_unicode_ci;
++analyze TABLE t1;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree  SELECT CONCAT(f1, '|') FROM t1 WHERE f1 >= 'XYZ ';
++
++SET rds_empty_redundant_check_in_range_scan=default;
++DROP TABLE t1;
++--echo # Can remove DATE
++SET rds_empty_redundant_check_in_range_scan = true;
++CREATE TABLE t9(a date);
++ ALTER TABLE t9 ADD INDEX (a);
++ INSERT INTO t9 VALUES ("20210907");
++ INSERT INTO t9 VALUES ("20210907");
++ INSERT INTO t9 VALUES ("20210907");
++ INSERT INTO t9 VALUES ("20210907");
++ INSERT INTO t9 VALUES ("20210907");
++ INSERT INTO t9 VALUES ("20210907");
++ INSERT INTO t9 VALUES ("20210907");
++ INSERT INTO t9 VALUES ("20210907");
++ INSERT INTO t9 VALUES ("20210907");
++ INSERT INTO t9 VALUES ("20210907");
++ INSERT INTO t9 VALUES ("20210907");
++ INSERT INTO t9 VALUES ("20210907");
++ INSERT INTO t9 VALUES ("20210907");
++ INSERT INTO t9 VALUES ("20210907");
++ INSERT INTO t9 VALUES ("20210907");
++ INSERT INTO t9 VALUES ("20210907");
++ analyze TABLE t9;
++ --replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t9 WHERE a >= "20211001";
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t9 WHERE a >= "2021-10-01";
++
++--echo # can remove DATETIME
++DROP TABLE if EXISTS t9;
++CREATE TABLE t9(a datetime);
++ ALTER TABLE t9 ADD index(a);
++ INSERT INTO t9 VALUES ("2021-09-07 12:11");
++ INSERT INTO t9 VALUES ("2021-09-07 12:11");
++ INSERT INTO t9 VALUES ("2021-09-07 12:11");
++ INSERT INTO t9 VALUES ("2021-09-07 12:11");
++ INSERT INTO t9 VALUES ("2021-09-07 12:11");
++ INSERT INTO t9 VALUES ("2021-09-07 12:11");
++analyze TABLE t9;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t9 WHERE a >= "2022-09-07 12:25";
++--echo # can remove TIMESTAMP
++DROP TABLE if EXISTS t9;
++CREATE TABLE t9 (a TIMESTAMP);
++ ALTER TABLE t9 ADD INDEX (a);
++ INSERT INTO t9 VALUES ("2021-09-07 12:11");
++ INSERT INTO t9 VALUES ("2021-09-07 12:11");
++ INSERT INTO t9 VALUES ("2021-09-07 12:11");
++ INSERT INTO t9 VALUES ("2021-09-07 12:11");
++ INSERT INTO t9 VALUES ("2021-09-07 12:11");
++ INSERT INTO t9 VALUES ("2021-09-07 12:11");
++analyze TABLE t9;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t9 WHERE a >= "2022-09-07 12:25";
++--echo # can remove TIME
++DROP TABLE if EXISTS t9;
++CREATE TABLE t9 (a time);
++ ALTER TABLE t9 ADD INDEX (a);
++ INSERT INTO t9 VALUES ("1211");
++ INSERT INTO t9 VALUES ("1211");
++ INSERT INTO t9 VALUES ("1211");
++ INSERT INTO t9 VALUES ("1211");
++ INSERT INTO t9 VALUES ("1211");
++ INSERT INTO t9 VALUES ("1211");
++ INSERT INTO t9 VALUES ("1211");
++ INSERT INTO t9 VALUES ("1211");
++analyze TABLE t9;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t9 WHERE a >= "1218";
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t9 WHERE a >= "12:18";
++DROP TABLE IF EXISTS t9;
++--echo # ORDER BY ASC/DESC with INDEX ASC/DESC
++--echo # table t10 has descending index while t11 has normal index
++CREATE TABLE t10 (
++  c1 INT, c2 INT,
++  INDEX idx4 (c1 DESC, c2 DESC)
++);
++INSERT INTO t10 VALUES (1,2),(3,4),(5,6),(7,8),(9,10);
++CREATE TABLE t11 (
++  c1 INT, c2 INT,
++  INDEX idx4 (c1 , c2 )
++);
++INSERT INTO t11 VALUES (1,2),(3,4),(5,6),(7,8),(9,10);
++
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++EXPLAIN format=tree SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++EXPLAIN format=tree SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++EXPLAIN format=tree SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++EXPLAIN format=tree SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
++SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
++SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
++SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
++SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
++
++--echo # Verify that the hint overrules the switch:
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++EXPLAIN format=tree SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t11 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
++SET optimizer_switch = 'offset_pushdown=off';
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++EXPLAIN format=tree SELECT * FROM t11 WHERE c1>2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++EXPLAIN format=tree SELECT /*+ OFFSET_PUSHDOWN() */ * FROM t11 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
++SET optimizer_switch='offset_pushdown=on';
++
++--echo # Verify that in a LEFT JOIN, the range condition is removed or not, correctly.
++--echo # Conditions on left table can be removed:
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t11.c1 > 3 WHERE t11.c1 > 2;
++--echo # Condition on right table too, as it's in ON: if the range access has kept only
++--echo # rows of t12 with c1>3, this condition will not need to be checked again.
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t12.c1 > 3 WHERE t11.c1 > 2;
++--echo # These two don't prove much, as the left join is changed to an inner join
++--echo # (as NULL-complemented rows cannot match the WHERE).
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t11.c1 > 3 WHERE t12.c1 > 2;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t12.c1 > 3 WHERE t12.c1 > 2;
++--echo # Here the WHERE IS NULL cannot be removed: the range access has kept only
++--echo # rows of t12 with c1 NULL, but there can be other NULL-complemented rows,
++--echo # and then the WHERE must be checked on them too. This case is properly caught
++--echo # by the test: !(func->used_tables() & null_extended) in reduce_cond_for_table().
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t12.c1 > 3 WHERE t12.c1 IS NULL;
++
++DROP TABLE t10,t11;
++CREATE TABLE t2 (b INT , key(b));
++INSERT INTO t2 VALUES (1),(1),(2),(2),(3),(3);
++--echo # Check that offset pushdown  is deactivated when DISTINCT is done by doing some grouping
++--echo # inside ORDER BY ( "grouped" is true in if() condition in JOIN::offset_pushdown().)
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT /*+ NO_OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
++SELECT /*+ NO_OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain  format=tree SELECT /*+ OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
++SELECT /*+ OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
++--echo # Check that offset pushdown  is deactivated when  using index for group-by is used
++--echo # (similarly to the previous test: DISTINCT is done by doing some grouping inside ORDER BY)
++--echo # in that case  "grouped" is true and quick->get_type()=QUICK_SELECT_I::QS_TYPE_GROUP_MIN_MAX
++--echo # in if() condition in JOIN::offset_pushdown()
++analyze TABLE t2;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain  SELECT /*+ NO_OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
++SELECT /*+ NO_OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain  SELECT /*+ OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
++SELECT /*+ OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
++
++DROP TABLE t2;
++
++CREATE TABLE t1 (a INT , b INT , c INT , INDEX(a,b,c));
++INSERT INTO t1 VALUES (1,100,1),(2,200,1),(3,300,1),(4,10,2),(5,20,2),(6,30,2),(7,110,3),(8,120,3),(9,130,3);
++
++CREATE TABLE t2 (a INT , b INT , c INT , INDEX(a,b,c));
++INSERT INTO t2 VALUES (1,110,1),(2,210,1),(4,20,2),(5,30,2),(7,130,3),(8,140,3);
++--echo # Subqueries
++--echo # Offset pushdown is evaluated for each JOIN object and can therefore be applied to subqueries if a given JOIN object does qualify for OP.
++--echo # Both explain  format=tree and actual query output are given since the feature is activated  -- easier to maintain if outputs are produced
++--echo # Uncorrelated
++--echo # Inner query with LIMIT OFFSET
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t1 WHERE a > (SELECT a FROM t1 LIMIT 1 OFFSET 1);
++SELECT * FROM t1 WHERE a > (SELECT a FROM t1 LIMIT 1 OFFSET 1);
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t1 WHERE a > (SELECT a FROM t1 WHERE a>2 LIMIT 1 OFFSET 1);
++SELECT * FROM t1 WHERE a > (SELECT a FROM t1 WHERE a>2 LIMIT 1 OFFSET 1);
++--echo # Offset pushdown outer query
++--echo # add row for non empty output of following SELECT statement
++INSERT INTO t1 values (9,131,1);
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t1 WHERE a = (SELECT max(a) FROM t1 WHERE a > 2) LIMIT 1 OFFSET 1;
++SELECT * FROM t1 WHERE a = (SELECT max(a) FROM t1 WHERE a > 2) LIMIT 1 OFFSET 1;
++DELETE FROM t1 WHERE a=9 AND b=131 AND c=3;
++--echo # DOUBLE offset pushdown , both inner and outer queries with LIMIT OFFSET
++--echo # add row for non empty output of following SELECT statement
++INSERT INTO t1 values (4,10,3),(4,10,3),(4,10,3);
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t1 WHERE a =(SELECT a FROM t1 WHERE a > 2 LIMIT 1 OFFSET 1) LIMIT 2 OFFSET 3;
++SELECT * FROM t1 WHERE a = (SELECT a FROM t1 WHERE a > 2 LIMIT 1 OFFSET 1) LIMIT 2 OFFSET 3;
++DELETE FROM t1 WHERE a=4 AND b=10 AND c=3;
++--echo # Correlated was covered before
++
++--echo # SHOW that JOIN, SELF JOIN do not trigger offset pushdown
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t1 JOIN t2 LIMIT 1 OFFSET 1;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t1 T1, t1 T2 LIMIT 2 OFFSET 10;
++
++--echo # Table function are not compatible with offset pushdown
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM JSON_TABLE('[{"x":2,"y":"8"},{"x":"3","y":"7"},{"x":"4","y":6}]',"$[1]" COLUMNS(xval VARCHAR(100) PATH "$.x", yval VARCHAR(100) PATH "$.y")) AS jt1 LIMIT 100 OFFSET 1;
++
++DROP TABLE t1,t2;
++
++--echo # OFFSET exceeds number of rows: When the offset exceed the number of rows returned by the query without offset, offset pushdown still works
++CREATE TABLE t1 (a INT, b INT , INDEX(a,b));
++INSERT INTO t1 VALUES (1,1),(2,2),(3,4),(8,9);
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++EXPLAIN format=tree SELECT * FROM t1 LIMIT 1 OFFSET 5;
++SELECT * FROM t1 LIMIT 1 OFFSET 5;
++DROP TABLE t1;
++
++--echo #  BUGFIX
++--echo # failed on assert
++--echo # Reason: using qep_tab which points to qep_tab[0] instead of qep_tab[const_table]
++--echo # Why: Oversight
++CREATE TABLE t0 (c0 INT);
++CREATE TABLE t2 (c1 INT PRIMARY KEY);
++SELECT 1 FROM t0 LEFT JOIN t2 ON c1 = NULL LIMIT 1 OFFSET 1;
++drop table t0,t2;
++
++--echo # BUG BUGFIX
++--echo # failed on assert:
++--echo # assert(query_expression()->is_simple() || query_block != query_expression()->global_parameters());
++--echo # Reason: materialized table written to disk - materialized tables were filtered by looking at whether it was an dstore table
++--echo # Query was a candidate for offset pushdown even though it should not have been.
++
++SET SESSION BIG_TABLES = 1;
++
++explain format=tree   (SELECT 1) UNION (SELECT 1) LIMIT 1 OFFSET 1;
++
++  (SELECT 1) UNION (SELECT 1) LIMIT 1 OFFSET 1;
++
++
++--echo # Table function
++--echo # Offset pushdown not compatible
++--echo # table functions is an intrinsic table
++--echo # Reads rows using row_search_no_mvcc
++--echo # No support for offset pushdown in row_search_no_mvcc
++
++explain format=tree SELECT *
++     FROM
++       JSON_TABLE(
++         '[{"x":2,"y":"8"},{"x":"3","y":"7"},{"x":"4","y":6}]',
++         "$[*]" COLUMNS(
++           xval VARCHAR(100) PATH "$.x",
++           yval VARCHAR(100) PATH "$.y"
++         )
++       ) AS  jt LIMIT 1 OFFSET 1;
++ SELECT * FROM JSON_TABLE(
++         '[{"x":2,"y":"8"},{"x":"3","y":"7"},{"x":"4","y":6}]',
++         "$[*]" COLUMNS(
++           xval VARCHAR(100) PATH "$.x",
++           yval VARCHAR(100) PATH "$.y"
++         )
++       ) AS  jt LIMIT 1 OFFSET 1;
++SET SESSION BIG_TABLES =default;
+diff --git a/mysql-test/suite/dstore_main/t/offset_pushdown_insert_delete_update-dstore.test b/mysql-test/suite/dstore_main/t/offset_pushdown_insert_delete_update-dstore.test
+new file mode 100644
+index 00000000000..6fbaf66cddc
+--- /dev/null
++++ b/mysql-test/suite/dstore_main/t/offset_pushdown_insert_delete_update-dstore.test
+@@ -0,0 +1,561 @@
++--source include/have_only_dstore.inc
++
++if ($PQ_TEST)
++{
++  --skip cannot run in '--pq' option
++}
++--source include/count_sessions.inc
++
++SET @old_dstore_lock_wait_timeout= @@global.dstore_lock_wait_timeout;
++
++SET @@global.dstore_lock_wait_timeout = 1;
++
++
++
++
++--echo # ----------------------
++--echo # ----------------------
++
++--echo #  MVCC - INSERT/ UPDATE/ DELETE with OFFSET PUSHDOWN
++
++--echo # For each, we test
++--echo # 1/ INSERT/ UPDATE/ DELETE first in one session then SELECT with OP  in another
++--echo # 2/ SELECT with OP first in one session then INSERT/ UPDATE/ DELETE in another
++
++--echo # ----------------------
++--echo # ----------------------
++
++CREATE TABLE t3 (a INT, b INT, INDEX(a,b));
++INSERT INTO t3 VALUES (1, 2), (2, 3), (3, 3), (4, 3);
++ANALYZE table t3;
++
++--echo # ----------------------
++--echo # ----------------------
++
++--echo # MVCC INSERT and OFFSET pushdown
++
++--echo # ----------------------
++--echo # ----------------------
++
++--echo # Insert in one session, not committed, SELECT query with OP in another session - check that results are consistent
++connect (con1,localhost,root,,);
++connect (con2,localhost,root,,);
++
++connection con1;
++
++
++
++-- echo # session 1: Trx that inserts a new rows
++START TRANSACTION;
++INSERT INTO t3 VALUES (6,6);
++SELECT * FROM t3;
++
++--echo # session 2: Trx with SELECT query with OP - check that the inserted row is not accounted for
++--echo # neither for the SELECT with and without OFFSET pushdown.
++connection con2;
++START TRANSACTION;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t3 WHERE a>1 LIMIT 100 OFFSET 1;
++--echo # Both SELECT return the same output! rows skipped differ
++
++SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
++
++SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
++
++
++rollback;
++connection con1;
++rollback;
++
++connection default;
++disconnect con1;
++disconnect con2;
++
++
++
++
++--echo # MVCC Insert and Offset pushdown
++--echo # Select first with OP - insert then
++connect (con1,localhost,root,,);
++connect (con2,localhost,root,,);
++
++connection con1;
++
++
++-- echo # session 1: SELECT rows using OP
++START TRANSACTION;
++explain SELECT * FROM t3 WHERE a>1 LIMIT 100 OFFSET 1;
++SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
++
++
++
++
++--echo # session 2: Insert rows in the table queried by OP
++connection con2;
++START TRANSACTION;
++INSERT INTO t3 VALUES (6,6);
++--echo # (6,6) is inserted here
++SELECT * FROM t3;
++
++
++connection con1;
++--echo # (6,6) is not visible.
++SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
++rollback;
++connection con2;
++rollback;
++connection default;
++disconnect con1;
++disconnect con2;
++
++--echo # ----------------------
++--echo # ----------------------
++
++--echo # MVCC UPDATE with OFFSET pushdown
++
++--echo # ----------------------
++--echo # ----------------------
++
++
++connect (con1,localhost,root,,);
++connect (con2,localhost,root,,);
++
++connection con1;
++
++
++-- echo # session 1: Trx that updates a row
++START TRANSACTION;
++UPDATE t3 SET a = 8 WHERE a = 4;
++SELECT * FROM t3;
++
++--echo # session 2: Trx with SELECT query with OP - check that the updated row is not accounted for
++--echo # neither for the SELECT with and without OFFSET pushdown.
++connection con2;
++START TRANSACTION;
++--echo # Both output the same rows - rows skipped differ
++
++SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
++SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
++
++rollback;
++connection con1;
++rollback;
++
++connection default;
++disconnect con1;
++disconnect con2;
++
++
++
++
++--echo # MVCC UPDATE and Offset pushdown
++--echo # Select first with OP - UPDATE then
++connect (con1,localhost,root,,);
++connect (con2,localhost,root,,);
++
++connection con1;
++
++
++-- echo # session 1: SELECT rows using OP
++START TRANSACTION;
++explain SELECT * FROM t3 WHERE a>1 LIMIT 100 OFFSET 1;
++SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
++
++
++--echo # session 2: Insert rows in the table queried by OP
++connection con2;
++UPDATE t3 SET a = 8 WHERE a =4;
++--echo # (8,3) is updated here
++SELECT * FROM t3;
++
++
++
++connection con1;
++--echo # (8,3) is not updated.
++SELECT * FROM t3 WHERE a > 1 LIMIT 100 OFFSET 1;
++rollback;
++connection con2;
++rollback;
++connection default;
++disconnect con1;
++disconnect con2;
++
++
++--echo # ----------------------
++--echo # ----------------------
++
++--echo # Additional testing for MVCC UPDATE : SELECT first - UPDATE then with VARCHAR
++
++--echo # ----------------------
++--echo # ----------------------
++
++CREATE TABLE t4 ( a INT, b VARCHAR(50), INDEX(a));
++INSERT INTO t4 VALUES (1,'apples'),(2,'bananas'), (3,'oranges'),(4,'pears');
++ANALYZE table t4;
++connect (con1,localhost,root,,);
++connect (con2,localhost,root,,);
++
++connection con1;
++
++start transaction;
++EXPLAIN format=tree SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
++--echo # Does not inspect clustered record.
++SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
++
++
++connection con2;
++start transaction;
++UPDATE t4 SET a = 2 WHERE a > 1;
++UPDATE t4 SET b = ' I really do not like fruits' WHERE a = 2;
++SELECT * FROM t4;
++
++connection con1;
++--echo # Inspect clustered record - table unchanged
++SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
++
++rollback;
++
++connection con2;
++rollback;
++
++connection default;
++disconnect con1;
++disconnect con2;
++
++DROP TABLE t4;
++
++--echo # ----------------------
++--echo # ----------------------
++
++--echo # With PK access
++
++--echo # ----------------------
++--echo # ----------------------
++
++CREATE TABLE t4 ( a INT, b VARCHAR(50), PRIMARY KEY (a));
++INSERT INTO t4 VALUES (1,'apples'),(2,'bananas'), (3,'oranges'),(4,'pears');
++ANALYZE table t4;
++
++connect (con1,localhost,root,,);
++connect (con2,localhost,root,,);
++
++connection con1;
++
++start transaction;
++EXPLAIN format=tree SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
++SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
++
++
++connection con2;
++start transaction;
++UPDATE t4 SET a = 5 WHERE a = 1;
++UPDATE t4 SET b = ' I really do not like fruits' WHERE a = 5;
++SELECT * FROM t4;
++
++connection con1;
++--echo # table unchanged
++SELECT * FROM t4 WHERE a > 2 LIMIT 10 OFFSET 1;
++
++rollback;
++
++connection con2;
++rollback;
++
++connection default;
++disconnect con1;
++disconnect con2;
++
++DROP TABLE t4;
++
++--echo # ----------------------
++--echo # ----------------------
++
++--echo # MVCC DELETE and OFFSET pushdown
++
++
++--echo # ----------------------
++--echo # ----------------------
++
++--echo # Delete row in one session, not committed, SELECT query (including the row to be deleted)
++--echo # with OP in another session - check that results are consistent
++insert into t3 values (3,10),(3,11),(3,12);
++connect (con1,localhost,root,,);
++connect (con2,localhost,root,,);
++
++connection con1;
++
++-- echo # session 1: Trx that delete a row
++start transaction;
++DELETE FROM  t3  WHERE a > 2;
++SELECT * FROM t3;
++
++--echo # session 2 : Trx that SELECTs the "to be deleted" row with OP - check that the deleted rows is not accounted for
++--echo # neither for the SELECT with and without OFFSET pushdown.
++connection con2;
++
++explain SELECT * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
++--echo # They both output the same - rows skipped differ
++SELECT /*+ NO_OFFSET_PUSHDOWN()*/ * FROM t3 WHERE a=3 LIMIT 100 OFFSET 1;
++
++SELECT  * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
++
++connection con1;
++rollback;
++connection default;
++disconnect con1;
++disconnect con2;
++
++--echo # ----------------------
++--echo # ----------------------
++
++--echo # SELECT first- DELETE NEXT
++
++--echo # ----------------------
++--echo # ----------------------
++
++connect (con1,localhost,root,,);
++connect (con2,localhost,root,,);
++
++connection con1;
++
++-- echo # session 1: SELECT with OP
++start transaction;
++explain SELECT * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
++SELECT * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
++
++
++--echo # session 2 : DELETE after SELECT with OP
++connection con2;
++DELETE FROM  t3  WHERE a > 2;
++--echo # rows are deleted here
++SELECT * FROM t3;
++
++connection con1;
++--echo # rows are not deleted here
++SELECT * FROM t3 WHERE a = 3 LIMIT 100 OFFSET 1;
++rollback;
++connection con2;
++rollback;
++connection default;
++disconnect con1;
++disconnect con2;
++
++DROP TABLE t3;
++
++--echo # ----------------------
++--echo # ----------------------
++
++--echo # SELECT for UPDATE - INSERT with LOCKING READ
++
++--echo # ----------------------
++--echo # ----------------------
++
++connect (con1,localhost,root,,);
++connect (con2,localhost,root,,);
++
++connection con1;
++
++
++
++CREATE TABLE t1 (
++  dummy INT PRIMARY KEY,
++  a INT UNIQUE,
++  b INT,
++  KEY (a)
++);
++
++INSERT INTO t1 VALUES (1,1,1),(2,2,2),(3,3,3),(4,4,4),(5,5,5);
++
++SELECT @@transaction_isolation;
++START TRANSACTION;
++
++EXPLAIN SELECT * FROM t1 WHERE a < 2 FOR UPDATE;
++
++SELECT * FROM t1 WHERE a < 2 FOR UPDATE;
++
++connection con2;
++
++START TRANSACTION;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t1  LIMIT 100 OFFSET 1;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++explain format=tree SELECT * FROM t1  LIMIT 100 OFFSET 1;
++
++SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t1  LIMIT 100 OFFSET 1;
++
++SELECT * FROM t1  LIMIT 100 OFFSET 1;
++
++ROLLBACK;
++
++connection con1;
++
++ROLLBACK;
++DROP TABLE t1;
++
++connection default;
++disconnect con1;
++disconnect con2;
++
++--echo # SELECT for update
++
++connect (con1,localhost,root,,);
++connect (con2,localhost,root,,);
++
++connection con1;
++
++
++
++CREATE TABLE t1 (
++  dummy INT PRIMARY KEY,
++  a INT UNIQUE,
++  b INT,
++  KEY (a)
++);
++
++INSERT INTO t1 VALUES (2,2,2),(3,3,3),(4,4,4),(5,5,5);
++
++
++
++SELECT @@transaction_isolation;
++START TRANSACTION;
++
++EXPLAIN SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t1 WHERE a < 2 LIMIT 100 OFFSET 2 FOR UPDATE;
++SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t1 WHERE a < 2 LIMIT 100 OFFSET 2 FOR UPDATE;
++
++connection con2;
++
++
++START TRANSACTION;
++INSERT INTO t1 VALUES (1,1,1);
++ROLLBACK;
++
++connection con1;
++
++ROLLBACK;
++DROP TABLE t1;
++
++connection default;
++disconnect con1;
++disconnect con2;
++
++--echo # SELECT for update with OP activated in for update
++
++connect (con1,localhost,root,,);
++connect (con2,localhost,root,,);
++
++connection con1;
++
++
++
++CREATE TABLE t1 (
++  dummy INT PRIMARY KEY,
++  a INT UNIQUE,
++  b INT,
++  KEY (a)
++);
++
++INSERT INTO t1 VALUES (1,1,1),(2,2,2),(4,4,4),(5,5,5);
++
++SELECT @@transaction_isolation;
++START TRANSACTION;
++
++EXPLAIN SELECT * FROM t1 WHERE a < 5 LIMIT 100 OFFSET 2 FOR UPDATE;
++--echo # does not place a lock on the rows skipped by OFFSET pushdown
++SELECT * FROM t1 WHERE a < 5 LIMIT 100 OFFSET 2 FOR UPDATE;
++
++
++connection con2;
++
++
++START TRANSACTION;
++--echo # OP is deactivated here
++INSERT INTO t1 VALUES (3,3,3);
++ROLLBACK;
++
++connection con1;
++
++ROLLBACK;
++DROP TABLE t1;
++
++connection default;
++disconnect con1;
++disconnect con2;
++
++--echo # ----------------
++--echo # ----------------
++
++--echo # Virtual COLUMN - UPDATE
++
++--echo # ----------------
++--echo # ----------------
++
++ CREATE TABLE tv (
++  a INT DEFAULT NULL,
++  b INT DEFAULT NULL,
++  c INT GENERATED ALWAYS AS ((a + b)) VIRTUAL,
++  KEY c (c)
++);
++
++ INSERT INTO tv(a,b) VALUES (1,2),(3,4),(5,6);
++
++--echo # NON-LOCKING read
++
++
++connect (con1,localhost,root,,);
++connect (con2,localhost,root,,);
++
++connection con1;
++start transaction;
++EXPLAIN format=tree SELECT * FROM tv WHERE c > 5 LIMIT 1 OFFSET 1;
++
++SELECT * FROM tv WHERE c > 5 LIMIT 1 OFFSET 1;
++
++
++connection con2;
++start transaction;
++UPDATE tv SET a = 12 WHERE b > 1;
++SELECT * FROM tv;
++
++connection con1;
++SELECT * FROM tv WHERE c > 5 LIMIT 1 OFFSET 1;
++
++rollback;
++
++connection con2;
++rollback;
++
++connection default;
++disconnect con1;
++disconnect con2;
++
++--echo # ----------------
++--echo # ----------------
++
++--echo # Virtual COLUMN: UPDATE with LOCKING READ
++
++--echo # ----------------
++--echo # ----------------
++
++
++
++connect (con1,localhost,root,,);
++connect (con2,localhost,root,,);
++
++
++connection con1;
++SELECT * FROM tv WHERE c > 5 LIMIT 1 OFFSET 1;
++
++rollback;
++
++connection con2;
++rollback;
++
++connection default;
++disconnect con1;
++disconnect con2;
++
++DROP TABLE tv;
++--echo # Restore orig wait timeout
++--source include/wait_until_count_sessions.inc
++SET @@global.dstore_lock_wait_timeout = @old_dstore_lock_wait_timeout;
++DROP TABLE IF EXISTS t1;
+\ No newline at end of file
+diff --git a/mysql-test/suite/dstore_main/t/offset_pushdown_limitations-dstore.test b/mysql-test/suite/dstore_main/t/offset_pushdown_limitations-dstore.test
+new file mode 100644
+index 00000000000..d836c00e264
+--- /dev/null
++++ b/mysql-test/suite/dstore_main/t/offset_pushdown_limitations-dstore.test
+@@ -0,0 +1,81 @@
++--source include/have_only_dstore.inc
++--echo # Cases where Offset pushdown cannot be used:
++
++if ($PQ_TEST)
++{
++  --skip cannot run in '--pq' option
++}
++--source include/count_sessions.inc
++
++SET @old_dstore_lock_wait_timeout= @@global.dstore_lock_wait_timeout;
++
++SET @@global.dstore_lock_wait_timeout = 1;
++
++--echo # 1/ Index scan scenarios
++--echo # Exotic scans not compatible with either offset pushing or redundant removal condition
++--echo #( no skip scan or group min max already addressed in main test file.)
++
++--echo # 1/a/  QS_TYPE_ROR_INTERSECT - Using intersect() (grep shows it's always with Using where) - OR clause disable with offset pushdown
++
++--echo # Redundant range condition is not compatible with using intersect
++--echo # the where clause is going to stay - even if there is no where clause
++--echo # which seems unlikely offset pushdown is not compatible with it anyways
++
++CREATE TABLE t1
++(a smallint,
++ b smallint,
++ c smallint,
++ KEY  a (a),
++ KEY  b (b)
++);
++
++INSERT INTO t1 VALUES (1,1,1), (1,1,3),(1,2,7), (2,2,10),(1, 1, 13),(1, 2, 16),(2,1,19);
++ANALYZE TABLE t1;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++EXPLAIN format=tree SELECT * FROM t1 WHERE b = 2 AND a = 2 LIMIT 1 OFFSET 1;
++DROP TABLE t1;
++
++--echo # 1/b/ Using union() - OR clause disabled with offset pushdown
++
++--echo # Redundant range condition is not compatible with using union
++--echo # the where clause is going to stay - even if there is no where clause
++--echo # which seems unlikely offset pushdown is not compatible with it anyways (grep shows)
++
++CREATE TABLE t1
++(
++  key1 INT NOT NULL,
++  key2 INT NOT NULL,
++  key3 INT NOT NULL,
++  key4 INT NOT NULL,
++  key5 INT,
++  key6 INT,
++  key7 INT NOT NULL,
++  key8 INT NOT NULL,
++  INDEX i1(key1),
++  INDEX i2(key2),
++  INDEX i3(key3),
++  INDEX i4(key4),
++  INDEX i5(key5),
++  INDEX i6(key6)
++);
++INSERT INTO t1 VALUES ( 1,1,1,1,1,1,1,1),(2,2,2,2,2,2,2,2);
++
++let $i=10;
++SET @d=2;
++while($i)
++{
++  INSERT INTO t1 SELECT key1+@d, key2+@d, key3+@d, key4+@d,
++                            key5+@d, key6+@d, key7+@d, key8+@d FROM t1;
++  SET @d=@d*2;
++  dec $i;
++}
++ANALYZE TABLE t1;
++ANALYZE TABLE t1 UPDATE HISTOGRAM ON key1,key4,key6;
++--replace_regex /\(cost=\d+(\.\d+)?(\.\.\d+(\.\d+)?)?\s+rows=\d+(\.\d+)?\)/(cost=X rows=X)/
++EXPLAIN format=tree SELECT * FROM t1 WHERE key1=48 OR key4=2 OR key6=3 LIMIT 1 OFFSET 1;
++DROP TABLE t1;
++
++# Restore orig wait timeout
++--source include/wait_until_count_sessions.inc
++SET @@global.dstore_lock_wait_timeout= @old_dstore_lock_wait_timeout;
++DROP TABLE IF EXISTS t1;
+\ No newline at end of file
+diff --git a/mysql-test/suite/dstore_main/t/offset_pushdown_locking_test-dstore.test b/mysql-test/suite/dstore_main/t/offset_pushdown_locking_test-dstore.test
+new file mode 100644
+index 00000000000..9d1ee1f7603
+--- /dev/null
++++ b/mysql-test/suite/dstore_main/t/offset_pushdown_locking_test-dstore.test
+@@ -0,0 +1,129 @@
++--source include/have_only_dstore.inc
++
++if ($PQ_TEST)
++{
++  --skip cannot run in '--pq' option
++}
++
++--echo # -------------------------------
++--echo # -------------------------------
++
++--source include/count_sessions.inc
++
++--echo # Content of the test file:
++
++--echo # Offset pushdown and non-locking read
++
++SET @old_dstore_lock_wait_timeout = @@global.dstore_lock_wait_timeout;
++
++SET @@global.dstore_lock_wait_timeout = 1;
++
++connect (con1,localhost,root,,);
++connect (con2,localhost,root,,);
++
++connection con1;
++
++CREATE TABLE `tv` (
++  `id` int NOT NULL,
++  `c` int NOT NULL,
++  `data` varchar(32) DEFAULT NULL,
++  PRIMARY KEY (`id`),
++  KEY `idx_tv_c` (`c`)
++);
++
++INSERT INTO tv VALUES (5,5,'row1'), (6,6,'row2'),(7,7,'row3'), (8,8,'row4');
++
++# ICP test
++start transaction;
++SELECT * FROM tv WHERE c > 5  LIMIT 1 OFFSET 1 FOR UPDATE;
++--echo # Check that we don't skip any rows
++
++connection con2;
++START TRANSACTION;
++--error ER_LOCK_WAIT_TIMEOUT
++SELECT * FROM tv WHERE c > 5  LIMIT 1 OFFSET 2 FOR UPDATE;
++
++--error ER_LOCK_WAIT_TIMEOUT
++SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM tv WHERE c > 5  LIMIT 1 OFFSET 2 FOR UPDATE;
++
++rollback;
++connection con1;
++rollback;
++
++# ICP test
++start transaction;
++SELECT * FROM tv WHERE c > 5  LIMIT 1 OFFSET 1 FOR UPDATE;
++
++connection con2;
++START TRANSACTION;
++update tv set data='row0' where id =5;
++--error ER_LOCK_WAIT_TIMEOUT
++update tv set data='row0' where id =6;
++--error ER_LOCK_WAIT_TIMEOUT
++update tv set data='row0' where id =7;
++update tv set data='row0' where id =8;
++rollback;
++connection con1;
++rollback;
++
++# index only
++start transaction;
++SELECT c FROM tv WHERE c > 5  LIMIT 1 OFFSET 1 FOR UPDATE;
++
++connection con2;
++START TRANSACTION;
++update tv set data='row0' where id =5;
++--error ER_LOCK_WAIT_TIMEOUT
++update tv set data='row0' where id =6;
++--error ER_LOCK_WAIT_TIMEOUT
++update tv set data='row0' where id =7;
++update tv set data='row0' where id =8;
++rollback;
++connection con1;
++rollback;
++
++# table scan test
++start transaction;
++SELECT * FROM tv LIMIT 1 OFFSET 1 FOR UPDATE;
++
++connection con2;
++START TRANSACTION;
++--error ER_LOCK_WAIT_TIMEOUT
++update tv set data='row0' where id =5;
++--error ER_LOCK_WAIT_TIMEOUT
++update tv set data='row0' where id =6;
++update tv set data='row0' where id =7;
++update tv set data='row0' where id =8;
++rollback;
++connection con1;
++rollback;
++
++
++# index scan test
++start transaction;
++SELECT c FROM tv LIMIT 1 OFFSET 1 FOR UPDATE;
++
++connection con2;
++START TRANSACTION;
++--error ER_LOCK_WAIT_TIMEOUT
++update tv set data='row0' where id =5;
++--error ER_LOCK_WAIT_TIMEOUT
++update tv set data='row0' where id =6;
++update tv set data='row0' where id =7;
++update tv set data='row0' where id =8;
++rollback;
++connection con1;
++rollback;
++
++DROP TABLE tv;
++
++connection default;
++disconnect con1;
++disconnect con2;
++
++--source include/wait_until_count_sessions.inc
++--echo # Restore orig wait timeout
++--echo # BOTTOM
++show variables LIKE '%dstore_lock_wait_timeout%';
++SET @@global.dstore_lock_wait_timeout = @old_dstore_lock_wait_timeout;
++show variables LIKE '%dstore_lock_wait_timeout%';
+\ No newline at end of file
+diff --git a/sql/sql_select.cc b/sql/sql_select.cc
+index 696761b2535..544adb766cf 100644
+--- a/sql/sql_select.cc
++++ b/sql/sql_select.cc
+@@ -3512,13 +3512,13 @@ bool make_join_readinfo(JOIN *join, uint no_jbuf_after) {
+  *     implementation in Temptable and InnoDB-intrinsic)
+  *     - The table should be accessed by a simple access method (using only
+  *    one index - no index merge, or using a table scan)
+- *     - The table in the query must be an InnoDB table
++ *     - The table in the query must be an InnoDB or Dstore table
+  *     - no HAVING (sits between table reading and OFFSET applying, and alters
+  *     the result, so OFFSET cannot be applied before HAVING)
+  *     - No aggregation (same, needs all rows)
+  *     - No GROUP BY (same)
+  *     - Check that grouped, group_optimized_away and implicit_grouping are
+- *     false because because they are special forms of grouping where the
++ *     false because they are special forms of grouping where the
+  *     GROUP BY clause is empty at this point
+  *     - No SELECT DISTINCT (same)
+  *     - No ROLLUP (same)
+@@ -3580,7 +3580,8 @@ void JOIN::offset_pushdown() {
+           tab->table_ref->is_table_function() ||
+           tab->table_ref->schema_table) &&
+         (tab->effective_index() != MAX_KEY || tab->type() == JT_ALL) &&
+-        (tbl->s->db_type() && tbl->s->db_type()->db_type == DB_TYPE_INNODB) &&
++        (tbl->s->db_type() && (tbl->s->db_type()->db_type == DB_TYPE_INNODB ||
++                               tbl->s->db_type()->db_type == DB_TYPE_DSTORE)) &&
+         (tbl->s->tmp_table == NO_TMP_TABLE ||
+          tbl->s->tmp_table == TRANSACTIONAL_TMP_TABLE) &&
+         !having_cond && !query_block->agg_func_used() &&
+diff --git a/storage/dstore/dml/cde_dml.cc b/storage/dstore/dml/cde_dml.cc
+index c96b6a0e789..a0121b1f31a 100644
+--- a/storage/dstore/dml/cde_dml.cc
++++ b/storage/dstore/dml/cde_dml.cc
+@@ -31,7 +31,6 @@
+ #include "common/cde_srv.h"
+ #include "common/cde_session.h"
+ #include "my_icp.h"
+-#include "handler/ha_cde.h"
+ #include "dict/cde_relation.h"
+ #include "common/cde_perf.h"
+ #include "ddl/cde_ddl.h"    // todo: remove dependent on ddl
+@@ -1056,7 +1055,7 @@ ICP_RESULT CdeIndexCondFunc(handler *handler) {
+ }
+ 
+ int cde_dml_api::ReadIndexOnly(cde_isolation_level_t isolationLevel, uchar *buf,
+-                               const TABLE *table, handler *ha,
++                               const TABLE *table, ha_cde *ha,
+                                dstore_handler_t *dstoreHandler,
+                                DSTORE::IndexScanHandler *indexScanHandler,
+                                DSTORE::SnapshotData *snapShotData) {
+@@ -1118,6 +1117,13 @@ int cde_dml_api::ReadIndexOnly(cde_isolation_level_t isolationLevel, uchar *buf,
+       TupleInterface::DestroyTuple(tuple, CdeFreeMemForDtuple);
+       tuple = nullptr;
+     }
++    // do not need to convert data if there is no idx_cond
++    if (likely(ha) && ha->pushed_idx_cond == nullptr) {
++      if (ha->skip_row_for_offset_pushdown()) {
++        ha->increment_scanned_offset();
++        continue;
++      }
++    }
+ 
+     TupleInterface::DeformIndexTuple(
+         itup, td, dstoreHandler->m_valuesWithoutVarlen, dstoreHandler->m_nulls);
+@@ -1126,7 +1132,7 @@ int cde_dml_api::ReadIndexOnly(cde_isolation_level_t isolationLevel, uchar *buf,
+                            curIndex->index_col_num,
+                            dstoreHandler->table_handler->attrFull);
+ 
+-    if (ha && ha->pushed_idx_cond != nullptr) {
++    if (likely(ha) && ha->pushed_idx_cond != nullptr) {
+       ICP_RESULT res = CdeIndexCondFunc(ha);
+       ++dstoreHandler->m_icpCheckCount;
+       switch (res) {
+@@ -1139,16 +1145,21 @@ int cde_dml_api::ReadIndexOnly(cde_isolation_level_t isolationLevel, uchar *buf,
+           return HA_ERR_KEY_NOT_FOUND;
+         case ICP_MATCH:
+           ++dstoreHandler->m_icpMatchCount;
++          if (ha->skip_row_for_offset_pushdown()) {
++            ha->increment_scanned_offset();
++            continue;
++          }
+           // scan heap to get the ctid.
+           break;
+       }
+     }
++
+     return CDE_OK;
+   }
+ }
+ 
+ int cde_dml_api::ReadFullRow(cde_isolation_level_t isolationLevel, uchar *buf,
+-                             const TABLE *table, handler *ha,
++                             const TABLE *table, ha_cde *ha,
+                              dstore_handler_t *dstore_handler,
+                              DSTORE::IndexScanHandler *index_scan_handler,
+                              MEM_ROOT *blobMemRoot,
+@@ -1160,7 +1171,7 @@ int cde_dml_api::ReadFullRow(cde_isolation_level_t isolationLevel, uchar *buf,
+ 
+   HeapTuple *tuple = nullptr;
+   HeapTuple *tupleWithLob = nullptr;
+-
++  CDE_ASSERT(ha != nullptr);
+   // it while keep loop only if CdeIndexCondFunc() returns ICP_NO_MATCH
+   while (true) {
+     DSTORE::RetStatus status = IndexInterface::ScanNext(
+@@ -1252,8 +1263,21 @@ int cde_dml_api::ReadFullRow(cde_isolation_level_t isolationLevel, uchar *buf,
+         }
+         return error;
+       }
++
++      if (ha->skip_row_for_offset_pushdown()) {
++        ha->increment_scanned_offset();
++        TupleInterface::DestroyTuple(tuple, CdeFreeMemForDtuple);
++        tuple = nullptr;
++        continue;
++      }
++
+     } else {
+       /* handle non-locking read */
++      if (ha->skip_row_for_offset_pushdown()) {
++        ha->increment_scanned_offset();
++        continue;
++      }
++
+       tuple = HeapInterface::FetchTuple(dstore_handler->dstore_heap_scan,
+                                         *extremeCtid);
+       if (tuple == nullptr) {
+@@ -1344,8 +1368,7 @@ int cde_dml_api::ReadFullRow(cde_isolation_level_t isolationLevel, uchar *buf,
+ }
+ 
+ int cde_dml_api::ReadRecordFromIndex(cde_isolation_level_t isolationLevel,
+-                                     uchar *buf, const TABLE *table,
+-                                     handler *ha,
++                                     uchar *buf, const TABLE *table, ha_cde *ha,
+                                      dstore_handler_t *dstoreHandler,
+                                      MEM_ROOT *blobMemRoot,
+                                      DSTORE::SnapshotData *snapShotData) {
+diff --git a/storage/dstore/dml/cde_dml.h b/storage/dstore/dml/cde_dml.h
+index db4c51bec30..4701531f574 100644
+--- a/storage/dstore/dml/cde_dml.h
++++ b/storage/dstore/dml/cde_dml.h
+@@ -5,6 +5,7 @@
+ 
+ #include "common/cde_trxmgr.h"
+ #include "dml/cde_dml_ctx.h"
++#include "handler/ha_cde.h"
+ #include "page/dstore_itemptr.h"
+ #include "systable/dstore_relation.h"
+ 
+@@ -50,7 +51,7 @@ class cde_dml_api {
+   HA_ERR_END_OF_FILE, HA_ERR_LOCK_TABLE_FULL).
+   */
+   static int ReadRecordFromIndex(cde_isolation_level_t isolationLevel,
+-                                 uchar *buf, const TABLE *table, handler *ha,
++                                 uchar *buf, const TABLE *table, ha_cde *ha,
+                                  dstore_handler_t *dstoreHandler,
+                                  MEM_ROOT *blobMemRoot,
+                                  DSTORE::SnapshotData *snapShotData);
+@@ -71,7 +72,7 @@ class cde_dml_api {
+   (e.g., HA_ERR_END_OF_FILE, HA_ERR_LOCK_TABLE_FULL).
+   */
+   static int ReadIndexOnly(cde_isolation_level_t isolationLevel, uchar *buf,
+-                           const TABLE *table, handler *ha,
++                           const TABLE *table, ha_cde *ha,
+                            dstore_handler_t *dstoreHandler,
+                            DSTORE::IndexScanHandler *indexScanHandler,
+                            DSTORE::SnapshotData *snapShotData);
+@@ -93,7 +94,7 @@ class cde_dml_api {
+   HA_ERR_END_OF_FILE, HA_ERR_LOCK_TABLE_FULL).
+   */
+   static int ReadFullRow(cde_isolation_level_t isolationLevel, uchar *buf,
+-                         const TABLE *table, handler *ha,
++                         const TABLE *table, ha_cde *ha,
+                          dstore_handler_t *dstore_handler,
+                          DSTORE::IndexScanHandler *index_scan_handler,
+                          MEM_ROOT *blobMemRoot,
+diff --git a/storage/dstore/handler/ha_cde.cc b/storage/dstore/handler/ha_cde.cc
+index 1693110dadd..d065eeb4499 100644
+--- a/storage/dstore/handler/ha_cde.cc
++++ b/storage/dstore/handler/ha_cde.cc
+@@ -3518,6 +3518,16 @@ int ha_cde::rnd_next(
+         goto func_exit;
+       }
+     }
++
++    if (skip_row_for_offset_pushdown()) {
++      increment_scanned_offset();
++      if (m_dstore->select_lock_type != LOCK_NONE && tuple) {
++        TupleInterface::DestroyTuple(tuple, CdeFreeMemForDtuple);
++        tuple = nullptr;
++      }
++      continue;
++    }
++
+     realTuple = tuple;
+     if (tupleDesc->tdhaslob && tuple != nullptr) {
+       /*  After multiple queries with SeqScan, the tuple address returned
+@@ -4842,6 +4852,8 @@ int ha_cde::index_init(
+     bool sorted) /*!< in: 1 if result MUST be sorted according to index */
+ {
+   DBUG_TRACE;
++  m_scanned_offset = 0;
++
+   if (keynr > table->s->keys) {
+     CDE_LOG_ERROR(
+         "keynr > table->s->keys should not happen: keynr=%d, table->s->keys "
+@@ -4941,6 +4953,7 @@ int ha_cde::index_end(void) {
+ @return 0 or error number */
+ int ha_cde::rnd_init(bool scan) {
+   DBUG_TRACE;
++  m_scanned_offset = 0;
+ 
+   if (m_dstore->dstore_heap_scan) {
+     HeapInterface::ReScan(m_dstore->dstore_heap_scan);
+@@ -5098,6 +5111,7 @@ int ha_cde::reset() {
+   if (session) {
+     session->get_trxinfo()->removeHeapScanHandler(&m_dstore->dstore_heap_scan);
+   }
++  m_pushed_offset = m_scanned_offset = 0;
+   return 0;
+ }
+ 
+diff --git a/storage/dstore/handler/ha_cde.h b/storage/dstore/handler/ha_cde.h
+index 0d767c867c4..bca92f83f4b 100644
+--- a/storage/dstore/handler/ha_cde.h
++++ b/storage/dstore/handler/ha_cde.h
+@@ -362,6 +362,32 @@ class ha_cde : public handler {
+   const dstore_handler_t *get_dstore_handler() { return m_dstore; }
+   MEM_ROOT &get_mem_root() { return m_mem_root; }
+ 
++  /** When offset pushdown is activated, it is used to communicate the offset
++  value to the handler */
++  void set_pushed_offset(ha_rows pushed_offset) override {
++    m_pushed_offset = pushed_offset;
++  }
++  /** If non-zero, offset pushdown is activated */
++  ha_rows get_pushed_offset() const override { return m_pushed_offset; }
++
++  /// This isn't declared in class 'handler' as it's an implementation detail
++  /// which is internal to dstore.
++  /** Increments the scanned_offset counter that accounts for the number of rows
++  that have been skipped during offset pushdown */
++  void increment_scanned_offset() { m_scanned_offset++; }
++  /** Retrieves how many rows have been skipped so far due to offset pushdown */
++  ha_rows get_scanned_offset() const { return m_scanned_offset; }
++
++  /** If offset_pushdown determined that the offset should be pushed down to
++  dstore, we check whether we have skipped enough rows to reach the
++  required offset.
++  @param[in]	ha  contains information about offset pushdown
++  @return true if offset pushdown is active and not all rows have been skipped,
++  false otherwise */
++  bool skip_row_for_offset_pushdown() {
++    return (get_pushed_offset() > get_scanned_offset());
++  }
++
+  private:
+   /*note:MRR is implemented by MySQL handler actually */
+   /** @name Multi Range Read interface
+@@ -588,6 +614,15 @@ class ha_cde : public handler {
+   // used for sampling info
+   std::unique_ptr<CDESampler> m_samplerCtx{nullptr};
+   CdeCondHandler m_cond_handler;
++
++  /** value of the offset used for pushing down the offset to dstore. */
++  ha_rows m_pushed_offset{0};
++  /**
++     Number of rows that have been skipped in dstore,
++     scanned_offset is incremented up to pushed_offset when offset_pushdown
++     has determined the offset should be pushed
++  */
++  ha_rows m_scanned_offset{0};
+ };
+ 
+ void DrawGtidInfo(const unsigned char *buffer, uint32_t &start_position);
+-- 
+2.23.0
+

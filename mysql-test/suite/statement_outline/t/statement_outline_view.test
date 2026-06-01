@@ -1,0 +1,372 @@
+# This is mainly used to verify that index_hint(force/ignore)
+# injected to the view drived from single table in explicit or statemnt outline mode take effect.
+#
+# [Start of test variable rds_hint_work_for_view]
+# Verify the usage scope and valid value of the parameter rds_hint_work_for_view.
+#
+# [Start of test index hint on view when rds_hint_work_for_view=$switch_start_status]
+# When rds_hint_work_for_view=0, verify that the index_hint(force/ignore)
+# injected to the view in explicit or statemnt outline mode do not take effect. An error message
+# is displayed when you explicitly add hint to the view. Hint added to the view in statement outline
+# mode will be ignored. But these hints injected to the basic table are still valid without being
+# affected by this parameter.
+# When rds_hint_work_for_view=1, verify that index_hint injected to the view
+# in explicit or statemnt outline mode takes effect and these hints injected to the basic table
+# also take effect.
+# Observation method : explain/explain analyze/show_outline/performance_schema.table_io_waits_summary_by_index_usage
+#
+# [Start of test prepare/execute, preview, control combination, multiple coverages]
+# Verify that the index_hint injected to the view
+# in explicit or statemnt outline format take effect in prepare/execute statment and multiple coverages.
+# Verify that the index_hint injected to the view
+# in explicit or statemnt outline format can be looked up in statemnt outline's preview mode.
+# Verify that the hint effect when parameter rds_opt_outline_enabled and
+# parameter rds_hint_work_for_view are set to on/off respectively.
+#
+# [Start of test view derived from multiple tables/views and optimizer hint]
+# Verify that the index_hint injected to the view
+# derived from multiple tables/views in explicit or statemnt outline format
+# cannot take effect.
+# Verify that the optimizer hint injected to the view
+# in explicit or statemnt outline format cannot take effect.
+#
+# [Start of test multiple combinations between views]
+# Verify that the views injecting index hints can take effect in Multi-table join/
+# non-correlation subquery/correlation subquery/nested view scenarios.
+#
+call mtr.add_suppression("mysql.outline");
+call mtr.add_suppression("Statement outline");
+
+set global rds_opt_outline_enabled = on;
+connect(con_root,localhost, root,,);
+connection con_root;
+# prepare data
+create database outline_db;
+create table outline_db.t1(c1 int auto_increment primary key,
+                           c2 int,
+                           c3 varchar(100),
+                           key idx_2(c2),
+                           key idx_2_3(c2,c3)) engine = Dstore;
+insert into outline_db.t1 values(1, 1, 'test_1');
+insert into outline_db.t1 values(2, 2, 'test_2');
+insert into outline_db.t1 values(3, 3, 'test_3');
+create view outline_db.v_t1 as select * from outline_db.t1;
+
+--echo ============================================================================
+--echo # Start of test variable rds_hint_work_for_view
+--echo #
+SELECT @@global.rds_hint_work_for_view;
+SET GLOBAL rds_hint_work_for_view=off;
+SELECT @@global.rds_hint_work_for_view;
+--Error ER_GLOBAL_VARIABLE
+SET rds_hint_work_for_view=on;
+--Error ER_GLOBAL_VARIABLE
+SET SESSION rds_hint_work_for_view=on;
+--Error ER_GLOBAL_VARIABLE
+SET LOCAL rds_hint_work_for_view=on;
+--Error ER_INCORRECT_GLOBAL_LOCAL_VAR
+SELECT @@local.rds_hint_work_for_view;
+--Error ER_INCORRECT_GLOBAL_LOCAL_VAR
+SELECT @@session.rds_hint_work_for_view;
+SET GLOBAL rds_hint_work_for_view=default;
+SELECT @@rds_hint_work_for_view;
+--echo # End of test variable rds_hint_work_for_view
+
+# When rds_hint_work_for_view is set to on, statement_outline or explicit hint creation take effect for the view.
+# When rds_hint_work_for_view is set to off, hint in both scenarios do not take effect.
+--let $switch_start_status = 0
+--let $switch_end_status = 1
+while ($switch_start_status <= $switch_end_status)
+{
+    --echo ============================================================================
+    --echo # Start of test index hint on view when rds_hint_work_for_view=$switch_start_status
+    --echo #
+    --eval set global rds_hint_work_for_view=$switch_start_status
+    use outline_db;
+    truncate table performance_schema.table_io_waits_summary_by_index_usage;
+    select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+    # test force index for base table
+    --replace_column 10 # 11 #
+    explain select c2 from t1 where c2 = 2;
+    call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select c2 from t1 where c2 = 2");
+    --replace_column 10 # 11 #
+    explain select c2 from t1 where c2 = 2;
+    --replace_regex /[(]cost=[0-9.]+ rows/(rows/ /[(]actual time=[0-9.]+ rows/(actual rows/
+    explain analyze select c2 from t1 where c2 = 2;
+    --disable_result_log
+    select c2 from t1 where c2 = 2;
+    --enable_result_log
+    call dbms_outln.show_outline();
+    select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+    # test ignore index for base table
+    --replace_column 10 # 11 #
+    explain select c2,c3 from t1 where c3 = 'test_2';
+    call dbms_outln.add_index_outline('outline_db', '', 1, 'IGNORE INDEX', 'idx_2_3', '', "select c2,c3 from t1 where c3 = 'test_2'");
+    --replace_column 10 # 11 #
+    explain select c2,c3 from t1 where c3 = 'test_2';
+    --replace_regex /[(]cost=[0-9.]+ rows/(rows/ /[(]actual time=[0-9.]+ rows/(actual rows/
+    explain analyze select c2,c3 from t1 where c3 = 'test_2';
+    --disable_result_log
+    select c2,c3 from t1 where c3 = 'test_2';
+    --enable_result_log
+    call dbms_outln.show_outline();
+    select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+
+    # test force index for view
+    --replace_column 10 # 11 #
+    explain select c2 from v_t1 where c2 = 2;
+    call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select c2 from v_t1 where c2 = 2");
+    --replace_column 10 # 11 #
+    explain select c2 from v_t1 where c2 = 2;
+    --replace_regex /[(]cost=[0-9.]+ rows/(rows/ /[(]actual time=[0-9.]+ rows/(actual rows/
+    explain analyze select c2 from v_t1 where c2 = 2;
+    if ($switch_start_status == 0)
+    {
+        --error ER_KEY_DOES_NOT_EXITS
+        explain select c2 from v_t1 force index(idx_2_3) where c2 = 2;
+        --error ER_KEY_DOES_NOT_EXITS
+        explain analyze select c2 from v_t1 force index(idx_2_3) where c2 = 2;
+    }
+    if ($switch_start_status == 1)
+    {
+        --replace_column 10 # 11 #
+        explain select c2 from v_t1 force index(idx_2_3) where c2 = 2;
+        --replace_regex /[(]cost=[0-9.]+ rows/(rows/ /[(]actual time=[0-9.]+ rows/(actual rows/
+        explain analyze select c2 from v_t1 force index(idx_2_3) where c2 = 2;
+    }
+    --disable_result_log
+    select c2 from v_t1 where c2 = 2;
+    --enable_result_log
+    call dbms_outln.show_outline();
+    select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+    # test ignore index for view
+    --replace_column 10 # 11 #
+    explain select c2,c3 from v_t1 where c3 = 'test_2';
+    call dbms_outln.add_index_outline('outline_db', '', 1, 'IGNORE INDEX', 'idx_2_3', '', "select c2,c3 from v_t1 where c3 = 'test_2'");
+    --replace_column 10 # 11 #
+    explain select c2,c3 from v_t1 where c3 = 'test_2';
+    --replace_regex /[(]cost=[0-9.]+ rows/(rows/ /[(]actual time=[0-9.]+ rows/(actual rows/
+    explain analyze select c2,c3 from v_t1 where c3 = 'test_2';
+    if ($switch_start_status == 0)
+    {
+        --error ER_KEY_DOES_NOT_EXITS
+        explain select c2,c3 from v_t1 ignore index(idx_2_3) where c3 = 'test_2';
+        --error ER_KEY_DOES_NOT_EXITS
+        explain analyze select c2,c3 from v_t1 ignore index(idx_2_3) where c3 = 'test_2';
+    }
+    if ($switch_start_status == 1)
+    {
+        --replace_column 10 # 11 #
+        explain select c2,c3 from v_t1 ignore index(idx_2_3) where c3 = 'test_2';
+        --replace_regex /[(]cost=[0-9.]+ rows/(rows/ /[(]actual time=[0-9.]+ rows/(actual rows/
+        explain analyze select c2,c3 from v_t1 ignore index(idx_2_3) where c3 = 'test_2';
+    }
+    --disable_result_log
+    select c2,c3 from v_t1 where c3 = 'test_2';
+    --enable_result_log
+    call dbms_outln.show_outline();
+    select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+    truncate table mysql.outline;
+    call dbms_outln.flush_outline();
+    --inc $switch_start_status
+}
+--echo # End of test index hint on view
+--echo ============================================================================
+--echo # Start of test prepare/execute, preview, control combination, multiple coverages
+--echo #
+use outline_db;
+truncate table performance_schema.table_io_waits_summary_by_index_usage;
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select c2 from v_t1 where c2 = 2");
+call dbms_outln.preview_outline('outline_db', "select c2 from v_t1 where c2 = 2");
+call dbms_outln.add_index_outline('outline_db', '', 1, 'IGNORE INDEX', 'idx_2_3', '', "select c2,c3 from v_t1 where c3 = 'test_2'");
+call dbms_outln.preview_outline('outline_db', "select c2,c3 from v_t1 where c3 = 'test_2'");
+PREPARE stmt1 FROM 'select c2 from v_t1 where c2 = ?';
+set @a=2;
+PREPARE stmt2 FROM 'select c2,c3 from v_t1 where c3 = ?';
+set @b="test_2";
+--disable_result_log
+EXECUTE stmt1 USING @a;
+EXECUTE stmt2 USING @b;
+--enable_result_log
+call dbms_outln.show_outline();
+select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+--replace_column 10 # 11 #
+explain select c2, avg(c1) from v_t1 group by c2;
+--replace_column 10 # 11 #
+explain select c2, avg(c1) from v_t1 force index for group by(idx_2_3) group by c2;
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', 'FOR GROUP BY', "select c2, avg(c1) from v_t1 group by c2");
+--replace_column 10 # 11 #
+explain select c2, avg(c1) from v_t1 group by c2;
+PREPARE stmt3 from 'select c2, avg(c1) from v_t1 group by c2';
+--disable_result_log
+EXECUTE stmt3;
+--enable_result_log
+call dbms_outln.show_outline();
+select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+truncate table performance_schema.table_io_waits_summary_by_index_usage;
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select c2 from v_t1 where c2 = 2");
+select @@global.rds_opt_outline_enabled;
+select @@global.rds_hint_work_for_view;
+set global rds_opt_outline_enabled=off;
+--replace_column 10 # 11 #
+explain select c2 from v_t1 where c2 = 2;
+--replace_column 10 # 11 #
+explain select c2 from v_t1 force index(idx_2_3) where c2 = 2;
+set global rds_hint_work_for_view=off;
+--replace_column 10 # 11 #
+explain select c2 from v_t1 where c2 = 2;
+--error ER_KEY_DOES_NOT_EXITS
+explain select c2 from v_t1 force index(idx_2_3) where c2 = 2;
+set global rds_opt_outline_enabled=on;
+--replace_column 10 # 11 #
+explain select c2 from v_t1 where c2 = 2;
+--error ER_KEY_DOES_NOT_EXITS
+explain select c2 from v_t1 force index(idx_2_3) where c2 = 2;
+select INDEX_NAME,count_star,count_read,count_fetch from performance_schema.table_io_waits_summary_by_index_usage where object_schema="outline_db" and INDEX_NAME="idx_2_3";
+set global rds_hint_work_for_view=on;
+create view v_t1_force as select * from t1 force index(idx_2_3);
+--replace_column 10 # 11 #
+explain select c2 from v_t1_force where c2 = 2;
+--replace_column 10 # 11 #
+explain select c2 from v_t1_force force index(idx_2) where c2 = 2;
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2', '', "select c2 from v_t1_force where c2 = 2");
+--replace_column 10 # 11 #
+explain select c2 from v_t1_force where c2 = 2;
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select outline_db.t1.c1 AS c1,outline_db.t1.c2 AS c2,outline_db.t1.c3 AS c3 from outline_db.t1");
+--replace_column 10 # 11 #
+explain select c2 from v_t1 where c2 = 2;
+--echo # End of test prepare/execute, preview, control combination, multiple coverages
+--echo ============================================================================
+--echo # Start of test view derived from multiple tables/views and optimizer hint
+--echo #
+use outline_db;
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+create table t2(c11 int auto_increment primary key, c22 int, c33 int, key idx_22(c22), key idx_22_33(c22,c33)) engine=Dstore;
+insert into t2 values(1, 11, 111);
+insert into t2 values(2, 22, 222);
+insert into t2 values(3, 33, 333);
+# test view derived from multiple tables/views
+create view v_t1_t2 as select * from t1 join t2 on t1.c1 = t2.c11;
+--replace_column 10 # 11 #
+explain select c2,c22 from v_t1_t2 where c2=2;
+--replace_column 10 # 11 #
+explain select c2,c22 from v_t1_t2 force index(idx_2_3) where c2=2;
+--replace_column 10 # 11 #
+explain select c2,c22 from v_t1_t2 force index(idx_22_33) where c2=2;
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select c2,c22 from v_t1_t2 where c2=2");
+--replace_column 10 # 11 #
+explain select c2,c22 from v_t1_t2 where c2=2;
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_22_33', '', "select c2,c22 from v_t1_t2 where c2=2");
+--replace_column 10 # 11 #
+explain select c2,c22 from v_t1_t2 where c2=2;
+drop view v_t1_t2;
+create view v_t1_t2 as select c22,(select c2 from t1) from t2;
+--replace_column 10 # 11 #
+explain select * from v_t1_t2;
+--replace_column 10 # 11 #
+explain select * from v_t1_t2 force index(idx_2_3);
+--replace_column 10 # 11 #
+explain select * from v_t1_t2 force index(idx_22_33);
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select * from v_t1_t2");
+--replace_column 10 # 11 #
+explain select * from v_t1_t2;
+drop view v_t1_t2;
+create algorithm=merge view v_t1_t2 as select c22,(select c2 from t1) from t2;
+--replace_column 10 # 11 #
+explain select * from v_t1_t2;
+--replace_column 10 # 11 #
+explain select * from v_t1_t2 force index(idx_2_3);
+--replace_column 10 # 11 #
+explain select * from v_t1_t2 force index(idx_22_33);
+drop view v_t1_t2;
+create view v_t2 as select * from t2;
+create view v_v_t1_t2 as select * from v_t1 join v_t2 on v_t1.c1 = v_t2.c11;
+--replace_column 10 # 11 #
+explain select c2,c22 from v_v_t1_t2 where c2=2;
+--replace_column 10 # 11 #
+explain select c2,c22 from v_v_t1_t2 force index(idx_2_3) where c2=2;
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select c2,c22 from v_v_t1_t2 where c2=2");
+--replace_column 10 # 11 #
+explain select c2,c22 from v_v_t1_t2 where c2=2;
+drop view v_v_t1_t2;
+create view v_v_t1_t2 as select c22,(select c2 from v_t1) from v_t2;
+--replace_column 10 # 11 #
+explain select * from v_v_t1_t2;
+--replace_column 10 # 11 #
+explain select * from v_v_t1_t2 force index(idx_2_3);
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select * from v_v_t1_t2");
+--replace_column 10 # 11 #
+explain select * from v_v_t1_t2;
+call dbms_outln.show_outline();
+drop view v_v_t1_t2;
+# optimizer hint is not supported
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+--replace_column 10 # 11 #
+explain select c2 from v_t1 where c2 = 2;
+--replace_column 10 # 11 #
+explain select /*+ INDEX(v_t1 idx_2_3) */ c2 from v_t1 where c2 = 2;
+--replace_column 10 # 11 #
+explain select c2,c3 from v_t1 where c3 = 'test_2';
+--replace_column 10 # 11 #
+explain select /*+ NO_INDEX(v_t1 idx_2_3) */ c2,c3 from v_t1 where c3 = 'test_2';
+call dbms_outln.add_optimizer_outline("outline_db", '', 1, '/*+ INDEX(v_t1 idx_2_3) */', "select c2 from v_t1 where c2 = 2");
+call dbms_outln.add_optimizer_outline("outline_db", '', 1, '/*+ NO_INDEX(v_t1 idx_2_3) */', "select c2,c3 from v_t1 where c3 = 'test_2'");
+--replace_column 10 # 11 #
+explain select c2 from v_t1 where c2 = 2;
+--replace_column 10 # 11 #
+explain select c2,c3 from v_t1 where c3 = 'test_2';
+call dbms_outln.show_outline();
+--echo # End of test view derived from multiple tables
+--echo ============================================================================
+--echo # Start of test multiple combinations between views(Multi-table join, non-correlation subquery, correlation subquery, nested view)
+--echo #
+use outline_db;
+truncate table mysql.outline;
+call dbms_outln.flush_outline();
+# Multi-table join
+--replace_column 10 # 11 #
+explain select v_t1.c1,v_t1.c2,v_t1.c3,v_t2.c11,v_t2.c22,v_t2.c33 from v_t1 force index(idx_2_3) LEFT JOIN v_t2 ON v_t1.c1=v_t2.c11 where v_t1.c2=3 and v_t2.c33 < '12';
+--replace_column 10 # 11 #
+explain select v_t1.c1,v_t1.c2,v_t1.c3,v_t2.c11,v_t2.c22,v_t2.c33 from v_t1 force index(idx_2_3) LEFT JOIN v_t2 force index(idx_22_33) ON v_t1.c1=v_t2.c11 where v_t1.c2=3 and v_t2.c33 < '12';
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select v_t1.c1,v_t1.c2,v_t1.c3,v_t2.c11,v_t2.c22,v_t2.c33 from v_t1 LEFT JOIN v_t2 ON v_t1.c1=v_t2.c11 where v_t1.c2=3 and v_t2.c33 < '12'");
+call dbms_outln.add_index_outline('outline_db', '', 2, 'FORCE INDEX', 'idx_22_33', '', "select v_t1.c1,v_t1.c2,v_t1.c3,v_t2.c11,v_t2.c22,v_t2.c33 from v_t1 LEFT JOIN v_t2 ON v_t1.c1=v_t2.c11 where v_t1.c2=3 and v_t2.c33 < '12'");
+--replace_column 10 # 11 #
+explain select v_t1.c1,v_t1.c2,v_t1.c3,v_t2.c11,v_t2.c22,v_t2.c33 from v_t1 LEFT JOIN v_t2 ON v_t1.c1=v_t2.c11 where v_t1.c2=3 and v_t2.c33 < 12;
+# non-correlation subquery
+--replace_column 10 # 11 #
+explain select avg(v_t1.c2), (select avg(v_t2.c22) from v_t2) from v_t1;
+--replace_column 10 # 11 #
+explain select avg(v_t1.c2), (select avg(v_t2.c22) from v_t2 force index(idx_22_33)) from v_t1 force index(idx_2_3);
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_22_33', '', "select avg(v_t1.c2), (select avg(v_t2.c22) from v_t2) from v_t1");
+call dbms_outln.add_index_outline('outline_db', '', 2, 'FORCE INDEX', 'idx_2_3', '', "select avg(v_t1.c2), (select avg(v_t2.c22) from v_t2) from v_t1");
+--replace_column 10 # 11 #
+explain select avg(v_t1.c2), (select avg(v_t2.c22) from v_t2) from v_t1;
+# correlation subquery
+--replace_column 10 # 11 #
+explain select v_t1.c1,v_t1.c2,v_t1.c3 from v_t1 force index(idx_2_3) where exists (select c1, c2, c3 from v_t2 force index(idx_22_33) where c3 > v_t1.c1) and v_t1.c2=2;
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', '', "select v_t1.c1,v_t1.c2,v_t1.c3 from v_t1 where exists (select c1, c2, c3 from v_t2 where c3 > v_t1.c1) and v_t1.c2=2");
+call dbms_outln.add_index_outline('outline_db', '', 2, 'FORCE INDEX', 'idx_22_33', '', "select v_t1.c1,v_t1.c2,v_t1.c3 from v_t1 where exists (select c1, c2, c3 from v_t2 where c3 > v_t1.c1) and v_t1.c2=2");
+--replace_column 10 # 11 #
+explain select v_t1.c1,v_t1.c2,v_t1.c3 from v_t1 where exists (select c1, c2, c3 from v_t2 where c3 > v_t1.c1) and v_t1.c2=2;
+# nested view
+create view v_v_t1 as select * from v_t1;
+--replace_column 10 # 11 #
+explain select c2, avg(c1) from v_v_t1 group by c2;
+--replace_column 10 # 11 #
+explain select c2, avg(c1) from v_v_t1 force index for group by(idx_2_3) group by c2;
+call dbms_outln.add_index_outline('outline_db', '', 1, 'FORCE INDEX', 'idx_2_3', 'FOR GROUP BY', "select c2, avg(c1) from v_v_t1 group by c2");
+--replace_column 10 # 11 #
+explain select c2, avg(c1) from v_v_t1 group by c2;
+--echo # End of test multiple combinations between views
+--echo ============================================================================
+# cleanup
+connection default;
+disconnect con_root;
+drop database outline_db;
+truncate table mysql.outline;
+set global rds_opt_outline_enabled = default;
+set global rds_hint_work_for_view = default;

@@ -1,0 +1,80 @@
+--source include/have_only_dstore.inc
+--source ../include/basic_prepare.inc
+
+--echo # use conn1 represent my_root, conn2 represent test1, conn3 represent test2 throughout recycbin suite
+--echo # drop and purge table in the test file, prepare.inc and cleanup.inc only deal with db and user;
+
+--echo #
+--echo # prepare the conn
+--echo #
+connect(conn1, 127.0.0.1, my_root, 123456, __recyclebin__);
+drop table sbtest1.t1;
+create table sbtest1.test(id int, name varchar(255));
+let $t1_name_in_recyclebin = query_get_value(call dbms_recyclebin.show_tables(), TABLE, 1);
+
+--echo #
+--echo # Case 1: check general DDL statement for __recyclebin__ schema
+--echo #
+
+connection conn1;
+--error ER_DBACCESS_DENIED_ERROR
+create table test(id int);
+--error ER_DBACCESS_DENIED_ERROR
+alter database __recyclebin__ read only = 1;
+
+--replace_result $t1_name_in_recyclebin t1
+--error ER_DBACCESS_DENIED_ERROR
+eval drop table `$t1_name_in_recyclebin`;
+
+--echo #
+--echo # Case 2: check general DML statement for __recyclebin__ schema
+--echo #
+
+--replace_result $t1_name_in_recyclebin t1
+eval select * from `$t1_name_in_recyclebin`;
+
+--replace_result $t1_name_in_recyclebin t1
+--error ER_DBACCESS_DENIED_ERROR
+eval insert into `$t1_name_in_recyclebin` values (3);
+
+--replace_result $t1_name_in_recyclebin t1
+eval lock table `$t1_name_in_recyclebin` write;
+--replace_result $t1_name_in_recyclebin t1
+--error ER_DBACCESS_DENIED_ERROR
+eval insert into `$t1_name_in_recyclebin` values (3);
+unlock tables;
+
+--echo #
+--echo # Case 3: check several less frequently used DDL statement for __recyclebin__ schema
+--echo #
+
+--error ER_DBACCESS_DENIED_ERROR
+create view my_view as select id from sbtest1.test;
+
+create temporary table tmp1(id int);
+select * from tmp1;
+drop temporary table tmp1;
+
+--replace_result $t1_name_in_recyclebin t1
+eval call dbms_recyclebin.purge_table('$t1_name_in_recyclebin');
+
+set rds_recycle_bin_mode=OFF;
+drop table sbtest1.test;
+disconnect conn1;
+
+--echo #
+--echo # Case 4: recreate __recyclebin__ by enabling the recyclebin switch.
+--echo #
+
+connection default;
+set rds_recycle_bin_mode=ON;
+drop database __recyclebin__;
+--error ER_PREPARE_RECYCLE_TABLE_ERROR
+call dbms_recyclebin.show_tables();
+
+set rds_recycle_bin_mode=ON;
+call dbms_recyclebin.show_tables();
+
+set rds_recycle_bin_mode=OFF;
+
+--source ../include/basic_cleanup.inc

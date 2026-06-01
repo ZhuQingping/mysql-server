@@ -1,0 +1,681 @@
+--source include/pq_test.inc
+--source include/elide_costs.inc
+
+--echo #Run TPC-H test
+--source suite/parallel_query/include/tpch_prepare.inc
+--disable_query_log
+--disable_warnings
+
+--echo #Run TPC-H Query 1
+# Table scan + Filter + Aggregation + Sort
+let $query = select
+  l_returnflag,
+  l_linestatus,
+  sum(l_quantity) as sum_qty,
+  sum(l_extendedprice) as sum_base_price,
+  sum(l_extendedprice * (1 - l_discount)) as sum_disc_price,
+  sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as sum_charge,
+  avg(l_quantity) as avg_qty,
+  avg(l_extendedprice) as avg_price,
+  avg(l_discount) as avg_disc,
+  count(*) as count_order
+from
+  lineitem
+where
+  l_shipdate <= date_sub('1998-12-01', interval '119' day)
+group by
+  l_returnflag,
+  l_linestatus
+order by
+  l_returnflag,
+  l_linestatus;
+
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/
+--eval explain format=tree $query
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/ /actual time=[0-9.,]+ rows=[0-9.,]+ loops=[0-9,]+/actual time=*** rows=*** loops=***/
+--eval explain analyze $query
+--eval $query
+
+--echo #Run TPC-H Query 2
+# Hash Join + Nested Loop Join + Dependent Subquery + Aggregatation + Sort
+let query = select s_acctbal,
+  s_name,
+  n_name,
+  p_partkey,
+  p_mfgr,
+  s_address,
+  s_phone,
+  s_comment
+from
+  part,
+  supplier,
+  partsupp,
+  nation,
+  region
+where
+  p_partkey = ps_partkey
+  and s_suppkey = ps_suppkey
+  and p_size = 19
+  and p_type like '%NICKEL'
+  and s_nationkey = n_nationkey
+  and n_regionkey = r_regionkey
+  and r_name = 'EUROPE'
+  and ps_supplycost = (
+    select
+      min(ps_supplycost)
+    from
+      partsupp,
+      supplier,
+      nation,
+      region
+    where
+      p_partkey = ps_partkey
+      and s_suppkey = ps_suppkey
+      and s_nationkey = n_nationkey
+      and n_regionkey = r_regionkey
+      and r_name = 'EUROPE'
+  )
+order by
+  s_acctbal desc,
+  n_name,
+  s_name,
+  p_partkey
+LIMIT 5;
+
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/
+--eval explain format=tree $query
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/ /actual time=[0-9.,]+ rows=[0-9.,]+ loops=[0-9,]+/actual time=*** rows=*** loops=***/
+--eval explain analyze $query
+--eval $query
+
+--echo #Run TPC-H Query 11
+# Nested Loop Join + Aggregation + Non-dependent Subquery + Sort
+let query = select
+  ps_partkey,
+  sum(ps_supplycost * ps_availqty) as value
+from
+  partsupp,
+  supplier,
+  nation
+where
+  ps_suppkey = s_suppkey
+  and s_nationkey = n_nationkey
+  and n_name = 'RUSSIA'
+group by
+  ps_partkey having
+    sum(ps_supplycost * ps_availqty) > (
+      select
+        sum(ps_supplycost * ps_availqty) * 0.0000010000
+      from
+        partsupp,
+        supplier,
+        nation
+      where
+        ps_suppkey = s_suppkey
+        and s_nationkey = n_nationkey
+        and n_name = 'RUSSIA'
+    )
+order by
+  value desc
+limit 5;
+
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/
+--eval explain format=tree $query
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/ /actual time=[0-9.,]+ rows=[0-9.,]+ loops=[0-9,]+/actual time=*** rows=*** loops=***/
+--eval explain analyze $query
+--eval $query
+
+--echo #Run TPC-H Query 13
+# 2 stage parallel
+let query = select
+  c_count,
+  count(*) as custdist
+from
+  (
+    select
+      c_custkey,
+      count(o_orderkey) as c_count
+    from
+      customer left outer join orders on
+        c_custkey = o_custkey
+        and o_comment not like '%unusual%accounts%'
+    group by
+      c_custkey
+  ) as c_orders
+group by
+  c_count
+order by
+  custdist desc,
+  c_count desc
+limit 5;
+
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/
+--eval explain format=tree $query
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/ /actual time=[0-9.,]+ rows=[0-9.,]+ loops=[0-9,]+/actual time=*** rows=*** loops=***/
+--eval explain analyze $query
+--eval $query
+
+--echo #Run TPC-H Query 15 by view
+create view revenue0 (supplier_no, total_revenue) as
+  select
+    l_suppkey,
+    sum(l_extendedprice * (1 - l_discount))
+  from
+    lineitem
+  where
+    l_shipdate >= date '1993-04-01'
+    and l_shipdate < date '1993-04-01' + interval '3' month
+  group by
+    l_suppkey;
+
+let query = select
+  s_suppkey,
+  s_name,
+  s_address,
+  s_phone,
+  total_revenue
+from
+  supplier,
+  revenue0
+where
+  s_suppkey = supplier_no
+  and total_revenue = (
+    select
+      max(total_revenue)
+    from
+      revenue0
+  )
+order by
+  s_suppkey;
+
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/
+--eval explain format=tree $query
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/ /actual time=[0-9.,]+ rows=[0-9.,]+ loops=[0-9,]+/actual time=*** rows=*** loops=***/
+--eval explain analyze $query
+--eval $query
+drop view revenue0;
+
+--echo #Run TPC-H Query 15 by CTE
+let query = with revenue (supplier_no, total_revenue) as (
+  select
+    l_suppkey,
+    sum(l_extendedprice * (1 - l_discount))
+  from
+    lineitem
+  where
+    l_shipdate >= '1993-02-01'
+    and l_shipdate < date_add('1993-02-01', interval '90' day)
+  group by
+    l_suppkey
+)
+select
+  s_suppkey,
+  s_name,
+  s_address,
+  s_phone,
+  total_revenue
+from
+  supplier,
+  revenue
+where
+  s_suppkey = supplier_no
+  and total_revenue = (
+    select
+      max(total_revenue)
+    from
+      revenue
+  )
+order by
+  s_suppkey;
+
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/
+--eval explain format=tree $query
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/ /actual time=[0-9.,]+ rows=[0-9.,]+ loops=[0-9,]+/actual time=*** rows=*** loops=***/
+--eval explain analyze $query
+--eval $query
+
+--echo #Run TPC-H Query 17
+# Dependent subquery + Nested Loop Join + Aggregation
+let query = select
+  sum(l_extendedprice) / 7.0 as avg_yearly
+from
+  lineitem,
+  part
+where
+  p_partkey = l_partkey
+  and p_brand = 'Brand#15'
+  and p_container = 'WRAP PACK'
+  and l_quantity < (
+    select
+      0.2 * avg(l_quantity)
+    from
+      lineitem
+    where
+      l_partkey = p_partkey
+  );
+
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/
+--eval explain format=tree $query
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/ /actual time=[0-9.,]+ rows=[0-9.,]+ loops=[0-9,]+/actual time=*** rows=*** loops=***/
+--eval explain analyze $query
+--eval $query
+
+--echo #Run TPC-H Query 20
+# Dependent subquery + Nested Loop Join + Aggregation
+let query = select /*+ PQ(supplier) */
+  s_name,
+  s_address
+from
+  supplier,
+  nation
+where
+  s_suppkey in (
+    select
+      ps_suppkey
+    from
+      partsupp
+    where
+      ps_partkey in (
+        select
+          p_partkey
+        from
+          part
+        where
+          p_name like 'lime%'
+      )
+      and ps_availqty > (
+        select
+          0.5 * sum(l_quantity)
+        from
+          lineitem
+        where
+          l_partkey = ps_partkey
+          and l_suppkey = ps_suppkey
+          and l_shipdate >= '1994-01-01'
+          and l_shipdate < date_add( '1994-01-01' ,interval '1' year)
+      )
+  )
+  and s_nationkey = n_nationkey
+  and n_name = 'MOZAMBIQUE'
+order by
+  s_name
+limit 5;
+
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/
+--eval explain format=tree $query
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/ /actual time=[0-9.,]+ rows=[0-9.,]+ loops=[0-9,]+/actual time=*** rows=*** loops=***/
+--eval explain analyze $query
+--eval $query
+
+--echo # BUG2024110728662
+set @saved_parallel_rows_threshold = @@parallel_rows_threshold;
+set @saved_parallel_cost_threshold = @@parallel_cost_threshold;
+set @saved_pq_support_features_switch = @@pq_support_features_switch;
+set parallel_rows_threshold = 0;
+
+--echo # Q2
+let query =  select
+  s_acctbal,
+  s_name,
+  n_name,
+  p_partkey,
+  p_mfgr,
+  s_address,
+  s_phone,
+  s_comment
+from
+  part,
+  supplier,
+  partsupp,
+  nation,
+  region
+where
+  p_partkey = ps_partkey
+  and s_suppkey = ps_suppkey
+  and p_size = 15
+  and p_type like '%BRASS'
+  and s_nationkey = n_nationkey
+  and n_regionkey = r_regionkey
+  and r_name = 'EUROPE'
+  and ps_supplycost = (
+    select
+      min(ps_supplycost)
+    from
+      partsupp,
+      supplier,
+      nation,
+      region
+    where
+      p_partkey = ps_partkey
+      and s_suppkey = ps_suppkey
+      and s_nationkey = n_nationkey
+      and n_regionkey = r_regionkey
+      and r_name = 'EUROPE'
+  )
+order by
+  s_acctbal desc,
+  n_name,
+  s_name,
+  p_partkey;
+
+set parallel_cost_threshold = 0;
+--replace_column 10 # 11 #
+eval explain $query;
+
+set parallel_cost_threshold = 100;
+--replace_column 10 # 11 #
+eval explain $query;
+
+--echo # Q17
+
+let query =  select
+  sum(l_extendedprice) / 7.0 as avg_yearly
+from
+  lineitem,
+  part
+where
+  p_partkey = l_partkey
+  and p_brand = 'Brand#23'
+  and p_container = 'MED BOX'
+  and l_quantity < (
+    select
+      0.2 * avg(l_quantity)
+    from
+      lineitem
+    where
+      l_partkey = p_partkey
+  );
+
+set parallel_cost_threshold = 0;
+--replace_column 10 # 11 #
+eval explain $query;
+
+set parallel_cost_threshold = 100;
+--replace_column 10 # 11 #
+eval explain $query;
+
+--echo # Q20
+let query =  select
+  s_name, s_address
+from
+  supplier,
+  nation
+where
+  s_suppkey in (
+    select
+      ps_suppkey
+    from
+      partsupp
+    where
+      ps_partkey in (
+        select
+          p_partkey
+        from
+          part
+        where
+          p_name like 'forest%'
+      )
+      and ps_availqty > (
+        select
+          0.5 * sum(l_quantity)
+        from
+          lineitem
+        where
+          l_partkey = ps_partkey
+          and l_suppkey = ps_suppkey
+          and l_shipdate >= date '1994-01-01'
+          and l_shipdate < date '1994-01-01' + interval '1' year
+      )
+  )
+  and s_nationkey = n_nationkey and n_name = 'CANADA' order by s_name;
+
+set pq_support_features_switch='hash_join_spill_to_disk=on';
+set parallel_cost_threshold = 0;
+--replace_column 10 # 11 #
+eval explain $query;
+
+set parallel_cost_threshold = 100;
+--replace_column 10 # 11 #
+eval explain $query;
+
+set parallel_rows_threshold = @saved_parallel_rows_threshold;
+set parallel_cost_threshold = @saved_parallel_cost_threshold;
+set pq_support_features_switch = @saved_pq_support_features_switch;
+
+--enable_query_log
+--enable_warnings
+--source suite/parallel_query/include/tpch_cleanup.inc
+--echo #TPC-H test finished
+
+# scalar subquery, currently pq not support
+# create table t1(a int, b int);
+# insert into t1 (a) values(1),(2);
+# create table t2 select * from t1;
+# analyze table t1,t2;
+# select (with dt as (select t1.a as a from t2 limit 1) select * from dt dt1 where dt1.a=(select * from dt as dt2)) as subq from t1;
+# select (with dt as (select t1.a as a from t2 limit 1) select * from dt dt1 where dt1.a=(select * from dt as dt2)) as subq from t1;
+
+--echo #Parallel Index Scan + Ref Access Subquery
+create table t1 (a int , b int , c int , index(a,b,c));
+insert into t1 values (1,100,1),(2,200,1),(3,300,1),(4,10,2),(5,20,2),(6,30,2),(7,110,3),(8,120,3),(9,130,3),(9,131,1);
+create table t2 (a int , b int , c int , index(a,b,c));
+insert into t2 values (1,110,1),(2,210,1),(4,20,2),(5,30,2),(7,130,3),(8,140,3);
+analyze table t1,t2;
+
+# PQ_REF_SCAN
+--replace_regex $elide_costs_and_rows
+explain format=tree select * from t1 where a = (select max(a) from t1 where a > 2) limit 1 offset 1;
+--replace_regex $elide_pq_costs_and_time_and_row_estimate
+explain analyze select * from t1 where a = (select max(a) from t1 where a > 2) limit 1 offset 1;
+
+# dependent subquery
+--replace_regex $elide_costs_and_rows
+explain format=tree select * from t2 where a = (select max(a) from t1 where t1.a > t2.a) limit 1 offset 1;
+--replace_regex $elide_pq_costs_and_time_and_row_estimate
+explain analyze select * from t2 where a = (select max(a) from t1 where t1.a > t2.a) limit 1 offset 1;
+
+# cleanup
+drop table t1,t2;
+
+--echo # 2 Stage Parallel + Non-Dependent Subquery
+create table t1 (id int, a int);
+create table t2 (b int);
+insert into t1 values (1, 1), (2, 1), (0, 2), (1, 3), (3, 3), (0, 2);
+insert into t2 values (1), (3), (2), (0), (1), (2), (1);
+analyze table t1, t2;
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/
+explain format=tree select * from t1 where t1.a = (select max(b) from t2);
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/ /actual time=[0-9.,]+ rows=[0-9.,]+ loops=[0-9,]+/actual time=*** rows=*** loops=***/
+explain analyze select * from t1 where t1.a = (select max(b) from t2);
+
+--echo #Parallel Index Scan + Ref Access Non-Dependent Subquery
+alter table t1 add index (a);
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/
+explain format=tree select * from t1 where t1.a = (select max(b) from t2);
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/ /actual time=[0-9.,]+ rows=[0-9.,]+ loops=[0-9,]+/actual time=*** rows=*** loops=***/
+explain analyze select * from t1 where t1.a = (select max(b) from t2);
+drop table t1,t2;
+
+# subquery in reference key of index access; dependent
+create table t1 (a int primary key, b int);
+alter table t1 add index idx(b);
+insert into t1 values(1,3), (2,3);
+analyze table t1;
+
+--echo # Index lookup(REF) + dependent subquery in reference key of index access
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/
+explain format=tree select b from t1 where (1+(select t1.a from t1 as t2 limit 1)) in (select t3.b from t1 as t3) order by 1;
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/ /actual time=[0-9.,]+ rows=[0-9.,]+ loops=[0-9,]+/actual time=*** rows=*** loops=***/
+explain analyze select b from t1 where (1+(select t1.a from t1 as t2 limit 1)) in (select t3.b from t1 as t3) order by 1;
+# EQ_REF
+--echo # Single-row index lookup(EQ_REF) + dependent subquery in reference key of index access
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/
+explain format=tree select b from t1 where (1+(select t1.a from t1 as t2 limit 1)) in (select t3.a from t1 as t3)order by 1;
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/ /actual time=[0-9.,]+ rows=[0-9.,]+ loops=[0-9,]+/actual time=*** rows=*** loops=***/
+explain analyze select b from t1 where (1+(select t1.a from t1 as t2 limit 1)) in (select t3.a from t1 as t3)order by 1;
+
+# cleanup
+drop table t1;
+
+--echo # Parallel table scan + Non-dependent subquery
+create table t1(a int);
+insert into t1 values(1),(2);
+analyze table t1;
+
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/
+explain format=tree with qn(a) as (select 1 from t1 limit 2)
+select * from qn where qn.a=(select * from qn qn1 limit 1);
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/ /actual time=[0-9.,]+ rows=[0-9.,]+ loops=[0-9,]+/actual time=*** rows=*** loops=***/
+explain analyze with qn(a) as (select 1 from t1 limit 2)
+select * from qn where qn.a=(select * from qn qn1 limit 1);
+
+# cleanup
+drop table t1;
+
+--echo # Parallel table scan + Dependent subquery in select list
+create table t1(a int);
+insert into t1 values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+analyze table t1;
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/
+explain format=tree select a, (select count(*) from t1 as inner_t1 where inner_t1.a < t1.a) from t1;
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/ /actual time=[0-9.,]+ rows=[0-9.,]+ loops=[0-9,]+/actual time=*** rows=*** loops=***/
+explain analyze select a, (select count(*) from t1 as inner_t1 where inner_t1.a < t1.a) from t1;
+select a, (select count(*) from t1 as inner_t1 where inner_t1.a < t1.a) from t1;
+
+# cleanup
+drop table t1;
+
+--echo # Parallel index range scan
+create table t1 (
+  int_col int NOT NULL,
+  KEY idx_int_col (int_col)
+);
+insert into t1 values(1),(2),(3);
+insert into t1 values(1);
+analyze table t1;
+
+--replace_regex $elide_pq_costs_and_time_and_row_estimate
+explain analyze select int_col from t1 where int_col not between 0 and 1 order by int_col;
+--replace_regex $elide_pq_costs_and_time_and_row_estimate
+explain analyze select int_col from t1 where int_col not between 0 and 1 order by int_col desc;
+
+# cleanup
+drop table t1;
+
+--echo # In FindShareMaterializeNode function, path->iterator wolud be nullptr
+CREATE TABLE t1 (
+  id_col int NOT NULL DEFAULT 0,
+  int_col int DEFAULT NULL,
+  set_col set('111','222','333') DEFAULT NULL,
+  KEY ndx_id_col (id_col)
+);
+CREATE TABLE t2 (
+  id_col int NOT NULL AUTO_INCREMENT,
+  tinyint_col tinyint DEFAULT NULL,
+  bool_col tinyint(1) DEFAULT NULL,
+  PRIMARY KEY (id_col DESC)
+);
+CREATE VIEW view_t2 AS select id_col AS id_col, tinyint_col AS tinyint_col, bool_col AS bool_col from t2;
+--replace_regex $elide_pq_costs_and_time_and_row_estimate
+explain analyze
+select col1
+from
+  (
+    select b.col1, b.col2, b.col3, SUM(b.col4) col4
+    from
+      (
+        select
+          set_col col1, id_col col2, int_col col3, id_col col4
+        from
+          t1
+        group by 1, 2, 3 order by 1, 2, 3, 4
+      ) b
+      left join view_t2 c on b.col2 is null
+    where
+      b.col3 in (65, 'NULL', 2147483647, 101, 99, -2147483648, 67, 22, 76, 131)
+    group by 1, 2, 3 order by 1, 2, 3, 4
+  ) a;
+drop table t1, t2;
+drop view view_t2;
+
+--echo # table->file->pushed_idx_cond is not nullptr when path'type is AccessPath::PQ_REF_SCAN.
+CREATE TABLE t1 (
+  decimal_col decimal(25,5) DEFAULT NULL,
+  float_col float DEFAULT NULL,
+  time_col time(6) DEFAULT NULL,
+  binary_col binary(11) DEFAULT NULL,
+  KEY ndx_decimal_col (decimal_col DESC),
+  KEY ndx_float_col (float_col DESC),
+  KEY ndx_time_col (time_col DESC),
+  KEY ndx_binary_col (binary_col DESC)
+);
+--replace_regex $elide_pq_costs_and_time_and_row_estimate
+explain analyze
+SELECT
+  col1,
+  col2,
+  ifnull(col2, col3) as col3
+FROM (SELECT 1) b
+  join (
+    SELECT
+      time_col col1,
+      decimal_col col2,
+      float_col col3,
+      COUNT(binary_col) col4
+    FROM t1 GROUP BY 1,2,3
+    HAVING
+      time_col in (
+        '12:00:00.000000', '06:59:59.000000',
+        '07:59:59.000000', 'NULL', '01:59:59.000000',
+        '04:59:59.000000', '20:59:59.000000',
+        '09:09:59.000000', '05:59:59.000000',
+        '08:59:59.000000'
+      )
+    order by 1,2,3,4
+  ) a on a.col2 is null;
+drop table t1;
+
+--echo # MaterializeIterator
+
+create table t1(
+  set_col set('111','222','333') DEFAULT NULL
+);
+insert into t1 values('111'),('222'),('333'),(NULL),
+('111'),('222'),('333'),(NULL),('111'),('222'),('333'),(NULL),
+('111'),('222'),('333'),(NULL);
+
+CREATE TABLE t2(
+  tinyint_col tinyint DEFAULT NULL,
+  date_col date DEFAULT NULL,
+  set_col set('111','222','333') DEFAULT NULL,
+  KEY ndx_tinyint_col(tinyint_col DESC),
+  KEY ndx_date_col(date_col DESC)
+);
+insert into t2 values
+(0,'1998-10-03','111'),(0,'1998-10-03','222'),(0,'1998-10-03','333'),(0,'1998-10-03',NULL),
+(16,'1998-10-03','111'),(16,'1998-10-03','222'),(16,'1998-10-03','333'),(16,'1998-10-03',NULL),
+(32,'1998-10-03','111'),(32,'1998-10-03','222'),(32,'1998-10-03','333'),(32,'1998-10-03',NULL);
+--replace_regex $elide_pq_costs_and_time_and_row_estimate
+explain analyze select 1 from t1 where
+  set_col IN (
+    WITH CTE1 (c1, c2) AS(
+      select set_col, tinyint_col from t2 where t2.date_col <> '1998-09-02' order by 1, 2 limit 101
+    ),
+    CTE2 AS (
+      select
+        *
+      from
+        (
+          select set_col, date_col from t2
+          UNION ALL
+          select set_col, date_col from t2 order by 1 desc, 2 limit 1000
+        ) dt
+        inner join CTE1 a ON dt.set_col = a.c1
+    )
+    select
+      set_col
+    from
+      CTE2
+  );
+
+drop table t1,t2;

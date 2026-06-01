@@ -1,0 +1,215 @@
+#  ------------------------------------------
+# Test update_sql_filter interface
+# dbms_sqlfilter.update_sql_filter(
+#     item_id bigint,
+#     type ENUM('SELECT', 'UPDATE', 'DELETE', 'INSERT'),
+#     max_concurrency INT UNSIGNED,
+#     key_str VARCHAR(1024),
+#     node_id VARCHAR(64));
+#  ------------------------------------------
+CREATE PROCEDURE delete_one_sql_filter_rule(IN offset_value INT)
+begin
+declare my_var BIGINT default 1;
+select item_id into my_var from mysql.rds_sql_filter_rules limit offset_value,1;
+call dbms_sqlfilter.delete_sql_filter(my_var);
+end |
+#----------- case1:  basic functions of update_sql_filter -------
+call dbms_sqlfilter.add_sql_filter('SELECT', 10, "select~from~t", "");
+set session debug = '+d,inject_record_is_null';
+call dbms_sqlfilter.update_sql_filter(#, 'SELECT', 20, "SELECT~from~t", "abc34567890123dfe7890123456789012345");
+ERROR HY000: Statement sqlfilter is not valid when update a sql filter rule since record is null
+select node_id from mysql.rds_sql_filter_rules;
+node_id
+
+set session debug = '-d,inject_record_is_null';
+call dbms_sqlfilter.update_sql_filter(#, 'UPDATE', 10, "select~from~t", "");
+ERROR HY000: Statement sqlfilter is not valid when update a sql filter rule since the header of key_str is not same with sql filter type.
+select type from mysql.rds_sql_filter_rules;
+type
+SELECT
+call dbms_sqlfilter.update_sql_filter(#, 'INVALID', 10, "select~from~t", "");
+ERROR HY000: Statement sqlfilter is not valid when update a sql filter rule since the type is not any of select, update, delete, or insert.
+select type from mysql.rds_sql_filter_rules;
+type
+SELECT
+call dbms_sqlfilter.update_sql_filter(#, 'REPLACE', 10, "select~from~t", "");
+ERROR HY000: Statement sqlfilter is not valid when update a sql filter rule since the type is not any of select, update, delete, or insert.
+call dbms_sqlfilter.update_sql_filter(#, 'SELECT', 20, "select~from~t", "");
+select max_concurrency from mysql.rds_sql_filter_rules;
+max_concurrency
+20
+call dbms_sqlfilter.update_sql_filter(#, 'SELECT', -1, "select~from~t", "");
+ERROR HY000: Statement sqlfilter is not valid when update a sql filter rule since the max_concurrency is out of range, the valid range is [0, 1000000000].
+select max_concurrency from mysql.rds_sql_filter_rules;
+max_concurrency
+20
+call dbms_sqlfilter.update_sql_filter(#, 'SELECT', 1000000001, "select~from~t", "");
+ERROR HY000: Statement sqlfilter is not valid when update a sql filter rule since the max_concurrency is out of range, the valid range is [0, 1000000000].
+select max_concurrency from mysql.rds_sql_filter_rules;
+max_concurrency
+20
+call dbms_sqlfilter.update_sql_filter(#, 'SELECT', 20, "SELECT~from~t", "");
+select key_str from mysql.rds_sql_filter_rules;
+key_str
+SELECT~from~t
+call dbms_sqlfilter.update_sql_filter(#, 'SELECT', 20, "SELECT~from~t~", "");
+ERROR HY000: Statement sqlfilter is not valid when update a sql filter rule since rule contain illegal empty key.
+select key_str from mysql.rds_sql_filter_rules;
+key_str
+SELECT~from~t
+call dbms_sqlfilter.update_sql_filter(#, 'SELECT', 20, "", "");
+ERROR HY000: Statement sqlfilter is not valid when update a sql filter rule since the key_str's char length is out of range or collation is incompatible, the valid range is [1, 1024].
+select key_str from mysql.rds_sql_filter_rules;
+key_str
+SELECT~from~t
+call dbms_sqlfilter.update_sql_filter(#, 'SELECT', 20, "SELECT~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a~a", "");
+ERROR HY000: Statement sqlfilter is not valid when update a sql filter rule since the number of keywords is out of range, the valid range is [2, 128].
+select key_str from mysql.rds_sql_filter_rules;
+key_str
+SELECT~from~t
+call dbms_sqlfilter.update_sql_filter(#, 'update', 20, "update~from~t", "");
+ERROR HY000: Statement sqlfilter is not valid when update a sql filter rule since updating the type is not allowed.
+call dbms_sqlfilter.update_sql_filter(#, 'insert', 20, "insert~from~t", "");
+ERROR HY000: Statement sqlfilter is not valid when update a sql filter rule since updating the type is not allowed.
+call dbms_sqlfilter.update_sql_filter(#, 'delete', 20, "delete~from~t", "");
+ERROR HY000: Statement sqlfilter is not valid when update a sql filter rule since updating the type is not allowed.
+key_str_1024_charlen
+1024
+key_str_1024_len
+1038
+call dbms_sqlfilter.update_sql_filter(#, 'SELECT', 20, "select~xxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库ddddddddddxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddxxxxxxxxxxx数xxdddddxxxxxxxxx", "");
+select char_length(key_str) from mysql.rds_sql_filter_rules;
+char_length(key_str)
+1024
+call dbms_sqlfilter.update_sql_filter(#, 'SELECT', 20, "select~xxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx数据库ddddddddddxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddxxxxxxxxxxx数xxdddddxxxxxxxxxa", "");
+ERROR HY000: Statement sqlfilter is not valid when update a sql filter rule since the key_str's char length is out of range or collation is incompatible, the valid range is [1, 1024].
+select char_length(key_str) from mysql.rds_sql_filter_rules;
+char_length(key_str)
+1024
+call dbms_sqlfilter.update_sql_filter(#, 'SELECT', 20, "SELECT~from~t", "abc34567890123dfe7890123456789012345");
+select node_id from mysql.rds_sql_filter_rules;
+node_id
+abc34567890123dfe7890123456789012345
+call dbms_sqlfilter.update_sql_filter(#, 'SELECT', 20, "SELECT~from~t", "abc34567890123dfe7890123456789012345more");
+ERROR HY000: Statement sqlfilter is not valid when update a sql filter rule since Parameter node_id's char length is invalid or collation is incompatible, range[0, 36].
+select node_id from mysql.rds_sql_filter_rules;
+node_id
+abc34567890123dfe7890123456789012345
+call delete_one_sql_filter_rule(0);
+SET GLOBAL rds_sqlfilter_control=ON;
+#----------- case2:  node_id of update_sql_filter -------
+CALL dbms_sqlfilter.add_sql_filter('SELECT', 0, "SELECT~FROM~t1~WHERE~iddd", "012345678901234567890123456789012345");
+CALL dbms_sqlfilter.add_sql_filter('UPDATE', 0, "UPDATE~t1", "012345678901234567890123456789012345");
+CALL dbms_sqlfilter.add_sql_filter('DELETE', 0, "DELETE~FROM~t1", "012345678901234567890123456789012345");
+SET GLOBAL rds_node_id = "012345678901234567890123456789abcdfg";
+CREATE TABLE t1 (iddd INT, name VARCHAR(20));
+INSERT INTO t1 VALUES (1,"a"),(2,"b"),(4,"d");
+CREATE TABLE t2 (idd int, name VARCHAR(20));
+INSERT INTO t2 VALUES (1,"a"),(2,"b");
+SELECT * FROM t1 WHERE iddd > 1;
+iddd	name
+2	b
+4	d
+UPDATE t1 SET name="a" WHERE iddd=1;
+DELETE FROM t1 WHERE iddd > 5;
+SET GLOBAL rds_node_id = "012345678901234567890123456789012345";
+SELECT * FROM t1 WHERE iddd > 1;
+ERROR 70100: Query execution was interrupted
+UPDATE t1 SET name="a" WHERE iddd=1;
+ERROR 70100: Query execution was interrupted
+DELETE FROM t1 WHERE iddd > 5;
+ERROR 70100: Query execution was interrupted
+CALL dbms_sqlfilter.update_sql_filter(#, 'SELECT', 0, "SELECT~FROM~t1~WHERE~iddd", "");
+CALL dbms_sqlfilter.update_sql_filter(#, 'UPDATE', 0, "UPDATE~t1", "");
+CALL dbms_sqlfilter.update_sql_filter(#, 'DELETE', 0, "DELETE~FROM~t1", "");
+SELECT * FROM t1 WHERE iddd > 1;
+ERROR 70100: Query execution was interrupted
+UPDATE t1 SET name="a" WHERE iddd=1;
+ERROR 70100: Query execution was interrupted
+DELETE FROM t1 WHERE iddd > 5;
+ERROR 70100: Query execution was interrupted
+CALL dbms_sqlfilter.update_sql_filter(#, 'SELECT', 0, "SELECT~FROM~t1~WHERE~iddd", "012345678901234567890123456789abcdfg");
+CALL dbms_sqlfilter.update_sql_filter(#, 'UPDATE', 0, "UPDATE~t1", "012345678901234567890123456789abcdfg");
+CALL dbms_sqlfilter.update_sql_filter(#, 'DELETE', 0, "DELETE~FROM~t1", "012345678901234567890123456789abcdfg");
+CALL dbms_sqlfilter.add_sql_filter('SELECT', 0, "SELECT~FROM~t1~WHERE~iddd", "012345678901234567890123456789012345");
+CALL dbms_sqlfilter.add_sql_filter('UPDATE', 0, "UPDATE~t1", "012345678901234567890123456789012345");
+CALL dbms_sqlfilter.add_sql_filter('DELETE', 0, "DELETE~FROM~t1", "012345678901234567890123456789012345");
+select * from mysql.rds_sql_filter_rules;
+item_id	type	max_concurrency	key_str	node_id
+#	SELECT	0	SELECT~FROM~t1~WHERE~iddd	012345678901234567890123456789abcdfg
+#	UPDATE	0	UPDATE~t1	012345678901234567890123456789abcdfg
+#	DELETE	0	DELETE~FROM~t1	012345678901234567890123456789abcdfg
+#	SELECT	0	SELECT~FROM~t1~WHERE~iddd	012345678901234567890123456789012345
+#	UPDATE	0	UPDATE~t1	012345678901234567890123456789012345
+#	DELETE	0	DELETE~FROM~t1	012345678901234567890123456789012345
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	5	0	SELECT~FROM~t1~WHERE~iddd	012345678901234567890123456789012345
+#	SELECT	0	0	5	2	SELECT~FROM~t1~WHERE~iddd	012345678901234567890123456789abcdfg
+#	UPDATE	0	0	2	0	UPDATE~t1	012345678901234567890123456789012345
+#	UPDATE	0	0	2	2	UPDATE~t1	012345678901234567890123456789abcdfg
+#	DELETE	0	0	3	0	DELETE~FROM~t1	012345678901234567890123456789012345
+#	DELETE	0	0	3	2	DELETE~FROM~t1	012345678901234567890123456789abcdfg
+SELECT * FROM t1 WHERE iddd > 1;
+ERROR 70100: Query execution was interrupted
+UPDATE t1 SET name="a" WHERE iddd=1;
+ERROR 70100: Query execution was interrupted
+DELETE FROM t1 WHERE iddd > 5;
+ERROR 70100: Query execution was interrupted
+SET GLOBAL rds_node_id = "012345678901234567890123456789abcdfg";
+SELECT * FROM t1 WHERE iddd > 1;
+ERROR 70100: Query execution was interrupted
+UPDATE t1 SET name="a" WHERE iddd=1;
+ERROR 70100: Query execution was interrupted
+DELETE FROM t1 WHERE iddd > 5;
+ERROR 70100: Query execution was interrupted
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	5	1	SELECT~FROM~t1~WHERE~iddd	012345678901234567890123456789012345
+#	SELECT	0	0	5	3	SELECT~FROM~t1~WHERE~iddd	012345678901234567890123456789abcdfg
+#	UPDATE	0	0	2	1	UPDATE~t1	012345678901234567890123456789012345
+#	UPDATE	0	0	2	3	UPDATE~t1	012345678901234567890123456789abcdfg
+#	DELETE	0	0	3	1	DELETE~FROM~t1	012345678901234567890123456789012345
+#	DELETE	0	0	3	3	DELETE~FROM~t1	012345678901234567890123456789abcdfg
+call delete_one_sql_filter_rule(3);
+call delete_one_sql_filter_rule(3);
+call delete_one_sql_filter_rule(3);
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+call delete_one_sql_filter_rule(0);
+#----------- case3: rds_node_id is "" and drop single ----
+SET GLOBAL rds_node_id="";
+CREATE TABLE t3(a INT NOT NULL);
+INSERT INTO t3 values(1);
+CALL dbms_sqlfilter.add_sql_filter('SELECT', 0, "SELECT~FROM~t3", "012345678901234567890123456789012345");
+CALL dbms_sqlfilter.add_sql_filter('SELECT', 1, "SELECT~FROM~t4", "012345678901234567890123456789012345");
+SELECT * FROM t3;
+ERROR 70100: Query execution was interrupted
+delete from mysql.rds_sql_filter_rules where max_concurrency = 0;
+call dbms_sqlfilter.flush_sql_filter();
+SELECT * FROM t3;
+a
+1
+call delete_one_sql_filter_rule(0);
+#----------- case4: if key_str updated, CUR_CONC/BLOCK_QUERY_NUM will be reset ----
+CALL dbms_sqlfilter.add_sql_filter('SELECT', 0, "SELECT~FROM~t3", "");
+SELECT * FROM t3;
+ERROR 70100: Query execution was interrupted
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	0	3	1	SELECT~FROM~t3	
+call dbms_sqlfilter.update_sql_filter(#, 'SELECT', 1, "SELECT~FROM~t3", "012345678901234567890123456789012345");
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	1	3	1	SELECT~FROM~t3	012345678901234567890123456789012345
+call dbms_sqlfilter.update_sql_filter(#, 'SELECT', 1, "SELECT~FROM~t4", "");
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+#	SELECT	0	1	3	0	SELECT~FROM~t4	
+call delete_one_sql_filter_rule(0);
+call dbms_sqlfilter.show_sql_filter();
+item_id	type	cur_concur	max_concurrency	key_num	cur_reject	key_str	node_id
+SET GLOBAL rds_sqlfilter_control=default;
+SET GLOBAL rds_node_id = default;
+drop table t1, t2, t3;
+DROP PROCEDURE delete_one_sql_filter_rule;

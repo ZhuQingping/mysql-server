@@ -1,0 +1,735 @@
+From e9f2cfcb48d55d8ec98e2fe540476ace253aee36 Mon Sep 17 00:00:00 2001
+From: xuemengjiao <xuemengjiao@contributor>
+
+
+Date: Fri, 20 Mar 2026 14:44:35 +0800
+Subject: [PATCH] BUGFIX when subpartition type is list/range and no
+ define part_def, mysqld crashed.
+
+Problem:
+When create subpartition table and subpartition type is list/range, but no define part definition,
+mysqld crash at fix_parser_data function becuase part_elem is nullptr.
+
+Fix:
+
+In PT_partition::contextualize function, when part_defs is nullptr, if there are subpartitions
+and the subpartition types are RANGE and LIST partitioning, an error is reported.
+---
+ .../r/subpartition_bugfix-dstore.result       | 114 ++++++++++++++++
+ .../t/subpartition_bugfix-dstore.test         | 128 ++++++++++++++++++
+ .../suite/parts/r/subpartition_bugfix.result  | 114 ++++++++++++++++
+ .../parts/r/subpartition_bugfix.result-pq     | 114 ++++++++++++++++
+ .../suite/parts/t/subpartition_bugfix.test    | 128 ++++++++++++++++++
+ sql/parse_tree_partitions.cc                  |  17 +++
+ sql/partition_info.cc                         |  12 +-
+ 7 files changed, 626 insertions(+), 1 deletion(-)
+
+diff --git a/mysql-test/suite/dstore_parts/r/subpartition_bugfix-dstore.result b/mysql-test/suite/dstore_parts/r/subpartition_bugfix-dstore.result
+index d640c8e912f..e64265d457d 100644
+--- a/mysql-test/suite/dstore_parts/r/subpartition_bugfix-dstore.result
++++ b/mysql-test/suite/dstore_parts/r/subpartition_bugfix-dstore.result
+@@ -647,4 +647,118 @@ subpartition sub3 values in (2000),
+ subpartition sub4 values in (2002)));
+ ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+ DROP DATABASE test1;
++#
++# BUGFIX : subpartition typs is list or range and not define part_def and mysql will crashed.
++#
++use test;
++set global rds_extended_partitions_enabled = off;
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY RANGE (i_price) SUBPARTITIONS 3;
++ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3;
++ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
++set global rds_extended_partitions_enabled = on;
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY RANGE (i_price) SUBPARTITIONS 3;
++ERROR HY000: For RANGE partitions each partition must be defined
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3;
++ERROR HY000: For LIST partitions each partition must be defined
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3 (
++partition p0,
++partition p1
++);
++ERROR HY000: For LIST partitions each partition must be defined
++set debug = "+d, no_partitions_for_range";
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++) partition by range (i_id) (
++partition p1 values less than (10),
++partition p2 values less than (20)
++);
++ERROR HY000: For RANGE partitions each partition must be defined
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++) partition by list (i_id) (
++partition p1 values in (1,2,3,4,5),
++partition p2 values in (6,7,8,9)
++);
++ERROR HY000: For LIST partitions each partition must be defined
++create table t3 (
++id int not null,
++store_id int not null
++) partition by hash (store_id) subpartition by range(id)
++(
++partition p0 (
++subpartition q1 values less than (4),
++subpartition q2 values less than (10)
++),
++partition p1 (
++subpartition q3 values less than (15),
++subpartition q4 values less than (20)
++)
++);
++ERROR HY000: For RANGE partitions each partition must be defined
++create table t1
++(
++dept_no     int,
++part_no     int,
++country     varchar(20),
++date        date,
++amount      int
++)
++partition by hash (dept_no)
++subpartition by list (part_no)
++(
++partition p0 (
++subpartition p0partno0 values in (1, 2),
++subpartition p0partno1 values in (3, 4)
++),
++partition p1 (
++subpartition p1partno0 values in (1, 2),
++subpartition p1partno2 values in (3, 4)
++)
++);
++ERROR HY000: For LIST partitions each partition must be defined
++set debug = "";
+ SET global rds_extended_partitions_enabled = default;
+diff --git a/mysql-test/suite/dstore_parts/t/subpartition_bugfix-dstore.test b/mysql-test/suite/dstore_parts/t/subpartition_bugfix-dstore.test
+index 8437ad8d974..fce14bfc899 100644
+--- a/mysql-test/suite/dstore_parts/t/subpartition_bugfix-dstore.test
++++ b/mysql-test/suite/dstore_parts/t/subpartition_bugfix-dstore.test
+@@ -1,4 +1,5 @@
+ #--source include/not_have_only_dstore.inc
++--source include/have_debug.inc
+ 
+ SET @saved_rds_extended_partitions_enabled=@@rds_extended_partitions_enabled;
+ SET global rds_extended_partitions_enabled = true;
+@@ -534,5 +535,132 @@ subpartition sub4 values in (2002)));
+ --disconnect con1
+ DROP DATABASE test1;
+ 
++--echo #
++--echo # BUGFIX : subpartition typs is list or range and not define part_def and mysql will crashed.
++--echo #
++
++use test;
++set global rds_extended_partitions_enabled = off;
++
++--error ER_PARTITION_SUBPARTITION_ERROR
++create table t1 (
++  i_id     integer not null,
++  i_name   varchar(24),
++  i_price  decimal(5,2),
++  i_data   varchar(50),
++  i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY RANGE (i_price) SUBPARTITIONS 3;
++
++--error ER_PARTITION_SUBPARTITION_ERROR
++create table t1 (
++  i_id     integer not null,
++  i_name   varchar(24),
++  i_price  decimal(5,2),
++  i_data   varchar(50),
++  i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3;
++
++set global rds_extended_partitions_enabled = on;
++
++--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
++create table t1 (
++  i_id     integer not null,
++  i_name   varchar(24),
++  i_price  decimal(5,2),
++  i_data   varchar(50),
++  i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY RANGE (i_price) SUBPARTITIONS 3;
++
++--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
++create table t1 (
++  i_id     integer not null,
++  i_name   varchar(24),
++  i_price  decimal(5,2),
++  i_data   varchar(50),
++  i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3;
++
++--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
++create table t1 (
++  i_id     integer not null,
++  i_name   varchar(24),
++  i_price  decimal(5,2),
++  i_data   varchar(50),
++  i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3 (
++  partition p0,
++  partition p1
++);
++
++set debug = "+d, no_partitions_for_range";
++--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
++create table t1 (
++  i_id     integer not null,
++  i_name   varchar(24),
++  i_price  decimal(5,2),
++  i_data   varchar(50),
++  i_im_id  integer
++) partition by range (i_id) (
++  partition p1 values less than (10),
++  partition p2 values less than (20)
++);
++
++--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
++create table t1 (
++  i_id     integer not null,
++  i_name   varchar(24),
++  i_price  decimal(5,2),
++  i_data   varchar(50),
++  i_im_id  integer
++) partition by list (i_id) (
++  partition p1 values in (1,2,3,4,5),
++  partition p2 values in (6,7,8,9)
++);
++
++--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
++create table t3 (
++  id int not null,
++  store_id int not null
++) partition by hash (store_id) subpartition by range(id)
++(
++  partition p0 (
++    subpartition q1 values less than (4),
++    subpartition q2 values less than (10)
++      ),
++  partition p1 (
++    subpartition q3 values less than (15),
++    subpartition q4 values less than (20)
++  )
++);
++
++--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
++create table t1
++(
++  dept_no     int,
++  part_no     int,
++  country     varchar(20),
++  date        date,
++  amount      int
++)
++partition by hash (dept_no)
++subpartition by list (part_no)
++(
++  partition p0 (
++    subpartition p0partno0 values in (1, 2),
++    subpartition p0partno1 values in (3, 4)
++  ),
++  partition p1 (
++    subpartition p1partno0 values in (1, 2),
++    subpartition p1partno2 values in (3, 4)
++  )
++);
++
++set debug = "";
++
+ #reset
+ SET global rds_extended_partitions_enabled = default;
+diff --git a/mysql-test/suite/parts/r/subpartition_bugfix.result b/mysql-test/suite/parts/r/subpartition_bugfix.result
+index 8aee44e7076..ee325642ad4 100644
+--- a/mysql-test/suite/parts/r/subpartition_bugfix.result
++++ b/mysql-test/suite/parts/r/subpartition_bugfix.result
+@@ -647,4 +647,118 @@ subpartition sub3 values in (2000),
+ subpartition sub4 values in (2002)));
+ ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+ DROP DATABASE test1;
++#
++# BUGFIX : subpartition typs is list or range and not define part_def and mysql will crashed.
++#
++use test;
++set global rds_extended_partitions_enabled = off;
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY RANGE (i_price) SUBPARTITIONS 3;
++ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3;
++ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
++set global rds_extended_partitions_enabled = on;
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY RANGE (i_price) SUBPARTITIONS 3;
++ERROR HY000: For RANGE partitions each partition must be defined
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3;
++ERROR HY000: For LIST partitions each partition must be defined
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3 (
++partition p0,
++partition p1
++);
++ERROR HY000: For LIST partitions each partition must be defined
++set debug = "+d, no_partitions_for_range";
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++) partition by range (i_id) (
++partition p1 values less than (10),
++partition p2 values less than (20)
++);
++ERROR HY000: For RANGE partitions each partition must be defined
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++) partition by list (i_id) (
++partition p1 values in (1,2,3,4,5),
++partition p2 values in (6,7,8,9)
++);
++ERROR HY000: For LIST partitions each partition must be defined
++create table t3 (
++id int not null,
++store_id int not null
++) partition by hash (store_id) subpartition by range(id)
++(
++partition p0 (
++subpartition q1 values less than (4),
++subpartition q2 values less than (10)
++),
++partition p1 (
++subpartition q3 values less than (15),
++subpartition q4 values less than (20)
++)
++);
++ERROR HY000: For RANGE partitions each partition must be defined
++create table t1
++(
++dept_no     int,
++part_no     int,
++country     varchar(20),
++date        date,
++amount      int
++)
++partition by hash (dept_no)
++subpartition by list (part_no)
++(
++partition p0 (
++subpartition p0partno0 values in (1, 2),
++subpartition p0partno1 values in (3, 4)
++),
++partition p1 (
++subpartition p1partno0 values in (1, 2),
++subpartition p1partno2 values in (3, 4)
++)
++);
++ERROR HY000: For LIST partitions each partition must be defined
++set debug = "";
+ SET global rds_extended_partitions_enabled = default;
+diff --git a/mysql-test/suite/parts/r/subpartition_bugfix.result-pq b/mysql-test/suite/parts/r/subpartition_bugfix.result-pq
+index ba0fced4ea7..b482e454e44 100644
+--- a/mysql-test/suite/parts/r/subpartition_bugfix.result-pq
++++ b/mysql-test/suite/parts/r/subpartition_bugfix.result-pq
+@@ -648,4 +648,118 @@ subpartition sub3 values in (2000),
+ subpartition sub4 values in (2002)));
+ ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
+ DROP DATABASE test1;
++#
++# BUGFIX : subpartition typs is list or range and not define part_def and mysql will crashed.
++#
++use test;
++set global rds_extended_partitions_enabled = off;
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY RANGE (i_price) SUBPARTITIONS 3;
++ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3;
++ERROR HY000: It only supports to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning when rds_extended_partitions_enabled is disabled.
++set global rds_extended_partitions_enabled = on;
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY RANGE (i_price) SUBPARTITIONS 3;
++ERROR HY000: For RANGE partitions each partition must be defined
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3;
++ERROR HY000: For LIST partitions each partition must be defined
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3 (
++partition p0,
++partition p1
++);
++ERROR HY000: For LIST partitions each partition must be defined
++set debug = "+d, no_partitions_for_range";
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++) partition by range (i_id) (
++partition p1 values less than (10),
++partition p2 values less than (20)
++);
++ERROR HY000: For RANGE partitions each partition must be defined
++create table t1 (
++i_id     integer not null,
++i_name   varchar(24),
++i_price  decimal(5,2),
++i_data   varchar(50),
++i_im_id  integer
++) partition by list (i_id) (
++partition p1 values in (1,2,3,4,5),
++partition p2 values in (6,7,8,9)
++);
++ERROR HY000: For LIST partitions each partition must be defined
++create table t3 (
++id int not null,
++store_id int not null
++) partition by hash (store_id) subpartition by range(id)
++(
++partition p0 (
++subpartition q1 values less than (4),
++subpartition q2 values less than (10)
++),
++partition p1 (
++subpartition q3 values less than (15),
++subpartition q4 values less than (20)
++)
++);
++ERROR HY000: For RANGE partitions each partition must be defined
++create table t1
++(
++dept_no     int,
++part_no     int,
++country     varchar(20),
++date        date,
++amount      int
++)
++partition by hash (dept_no)
++subpartition by list (part_no)
++(
++partition p0 (
++subpartition p0partno0 values in (1, 2),
++subpartition p0partno1 values in (3, 4)
++),
++partition p1 (
++subpartition p1partno0 values in (1, 2),
++subpartition p1partno2 values in (3, 4)
++)
++);
++ERROR HY000: For LIST partitions each partition must be defined
++set debug = "";
+ SET global rds_extended_partitions_enabled = default;
+diff --git a/mysql-test/suite/parts/t/subpartition_bugfix.test b/mysql-test/suite/parts/t/subpartition_bugfix.test
+index 7a89b4fbc6f..f88b48ff722 100644
+--- a/mysql-test/suite/parts/t/subpartition_bugfix.test
++++ b/mysql-test/suite/parts/t/subpartition_bugfix.test
+@@ -1,3 +1,4 @@
++--source include/have_debug.inc
+ --source include/not_have_only_dstore.inc
+ 
+ SET @saved_rds_extended_partitions_enabled=@@rds_extended_partitions_enabled;
+@@ -534,5 +535,132 @@ subpartition sub4 values in (2002)));
+ --disconnect con1
+ DROP DATABASE test1;
+ 
++--echo #
++--echo # BUGFIX : subpartition typs is list or range and not define part_def and mysql will crashed.
++--echo #
++
++use test;
++set global rds_extended_partitions_enabled = off;
++
++--error ER_PARTITION_SUBPARTITION_ERROR
++create table t1 (
++  i_id     integer not null,
++  i_name   varchar(24),
++  i_price  decimal(5,2),
++  i_data   varchar(50),
++  i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY RANGE (i_price) SUBPARTITIONS 3;
++
++--error ER_PARTITION_SUBPARTITION_ERROR
++create table t1 (
++  i_id     integer not null,
++  i_name   varchar(24),
++  i_price  decimal(5,2),
++  i_data   varchar(50),
++  i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3;
++
++set global rds_extended_partitions_enabled = on;
++
++--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
++create table t1 (
++  i_id     integer not null,
++  i_name   varchar(24),
++  i_price  decimal(5,2),
++  i_data   varchar(50),
++  i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY RANGE (i_price) SUBPARTITIONS 3;
++
++--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
++create table t1 (
++  i_id     integer not null,
++  i_name   varchar(24),
++  i_price  decimal(5,2),
++  i_data   varchar(50),
++  i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3;
++
++--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
++create table t1 (
++  i_id     integer not null,
++  i_name   varchar(24),
++  i_price  decimal(5,2),
++  i_data   varchar(50),
++  i_im_id  integer
++)
++PARTITION BY HASH (i_id) SUBPARTITION BY LIST (i_price) SUBPARTITIONS 3 (
++  partition p0,
++  partition p1
++);
++
++set debug = "+d, no_partitions_for_range";
++--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
++create table t1 (
++  i_id     integer not null,
++  i_name   varchar(24),
++  i_price  decimal(5,2),
++  i_data   varchar(50),
++  i_im_id  integer
++) partition by range (i_id) (
++  partition p1 values less than (10),
++  partition p2 values less than (20)
++);
++
++--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
++create table t1 (
++  i_id     integer not null,
++  i_name   varchar(24),
++  i_price  decimal(5,2),
++  i_data   varchar(50),
++  i_im_id  integer
++) partition by list (i_id) (
++  partition p1 values in (1,2,3,4,5),
++  partition p2 values in (6,7,8,9)
++);
++
++--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
++create table t3 (
++  id int not null,
++  store_id int not null
++) partition by hash (store_id) subpartition by range(id)
++(
++  partition p0 (
++    subpartition q1 values less than (4),
++    subpartition q2 values less than (10)
++      ),
++  partition p1 (
++    subpartition q3 values less than (15),
++    subpartition q4 values less than (20)
++  )
++);
++
++--error ER_PARTITIONS_MUST_BE_DEFINED_ERROR
++create table t1
++(
++  dept_no     int,
++  part_no     int,
++  country     varchar(20),
++  date        date,
++  amount      int
++)
++partition by hash (dept_no)
++subpartition by list (part_no)
++(
++  partition p0 (
++    subpartition p0partno0 values in (1, 2),
++    subpartition p0partno1 values in (3, 4)
++  ),
++  partition p1 (
++    subpartition p1partno0 values in (1, 2),
++    subpartition p1partno2 values in (3, 4)
++  )
++);
++
++set debug = "";
++
+ #reset
+ SET global rds_extended_partitions_enabled = default;
+diff --git a/sql/parse_tree_partitions.cc b/sql/parse_tree_partitions.cc
+index 215ae75a888..8dacd45a330 100644
+--- a/sql/parse_tree_partitions.cc
++++ b/sql/parse_tree_partitions.cc
+@@ -477,6 +477,23 @@ bool PT_partition::contextualize(Parse_context *pc) {
+     } else if (part_info.part_type == partition_type::LIST) {
+       my_error(ER_PARTITIONS_MUST_BE_DEFINED_ERROR, MYF(0), "LIST");
+       return true;
++    } else {
++      if (part_info.sub_part_info != nullptr) {
++        if (part_info.sub_part_info->part_type == partition_type::RANGE ||
++            part_info.sub_part_info->part_type == partition_type::LIST) {
++          if (!extended_partitions_enabled) {
++            my_error(ER_PARTITION_SUBPARTITION_ERROR, MYF(0));
++          } else {
++            if (part_info.sub_part_info->part_type == partition_type::RANGE) {
++              my_error(ER_PARTITIONS_MUST_BE_DEFINED_ERROR, MYF(0), "RANGE");
++            } else if (part_info.sub_part_info->part_type ==
++                       partition_type::LIST) {
++              my_error(ER_PARTITIONS_MUST_BE_DEFINED_ERROR, MYF(0), "LIST");
++            }
++          }
++          return true;
++        }
++      }
+     }
+   } else {
+     for (auto part_def : *part_defs) {
+diff --git a/sql/partition_info.cc b/sql/partition_info.cc
+index 2bcce8f67e8..43833b8a9ed 100644
+--- a/sql/partition_info.cc
++++ b/sql/partition_info.cc
+@@ -2574,8 +2574,18 @@ bool partition_info::fix_parser_data(THD *thd) {
+     }
+     return false;
+   }
++
+   uint count_parts = num_parts;
+-  assert(count_parts);
++  if (!count_parts || (partitions.elements == 0) ||
++      DBUG_EVALUATE_IF("no_partitions_for_range", true, false)) {
++    const char *error_string;
++    if (part_type == partition_type::RANGE)
++      error_string = partition_keywords[PKW_RANGE].str;
++    else
++      error_string = partition_keywords[PKW_LIST].str;
++    my_error(ER_PARTITIONS_MUST_BE_DEFINED_ERROR, MYF(0), error_string);
++    return true;
++  }
+   if (is_subpart_info()) count_parts = num_parts * get_parent()->num_parts;
+   do {
+     part_elem = it++;
+-- 
+2.23.0
+

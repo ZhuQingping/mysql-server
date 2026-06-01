@@ -1,0 +1,34 @@
+--source include/have_only_dstore.inc
+--source include/have_debug.inc
+
+--echo # Shutdown server firstly.
+--exec echo "wait" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--shutdown_server
+--source include/wait_until_disconnected.inc
+
+--echo 1. Test key variable is not set
+--echo 1.1 Test dstore_tenant_config is not set.
+--error 1
+--exec $MYSQLD_CMD --user=root --dstore_tenant_config=""
+--echo 1.2 Test dstore_tenant_config is not a valid path.
+--error 1
+--exec $MYSQLD_CMD --user=root --dstore_tenant_config="xyz"
+--echo 1.3 Test dstore_tenant_config is not a valid file.
+--exec touch $MYSQLTEST_VARDIR/tmp/my_test_file.txt
+--error 1
+--exec $MYSQLD_CMD --user=root --dstore_tenant_config=$MYSQLTEST_VARDIR/tmp/my_test_file.txt
+--remove_file $MYSQLTEST_VARDIR/tmp/my_test_file.txt
+
+--let $expect_file_name = $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--echo # Restart server with normal configuration
+--exec echo "restart" > $expect_file_name
+--enable_reconnect
+--source include/wait_until_connected_again.inc
+
+--echo # Test with debug flag (dstore_free_guc_nullptr)
+--let $restart_parameters = restart: --debug="+d,dstore_free_guc_nullptr"
+--source include/restart_mysqld.inc
+--source include/shutdown_mysqld.inc
+
+--let $restart_parameters = restart:
+--source include/start_mysqld.inc

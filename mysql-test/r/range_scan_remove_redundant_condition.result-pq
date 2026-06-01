@@ -1,0 +1,1336 @@
+CREATE TABLE t1(a INT,  b INT, INDEX(b));
+INSERT INTO t1 VALUES (1,2),(2,3),(3,3),(4,3);
+CREATE TABLE t2(a INT,  b INT, INDEX(a,b));
+INSERT INTO t2 VALUES (1,2),(2,3),(3,3),(4,3);
+ANALYZE TABLE t1, t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+#
+# Test that redundant condition in not removed when we disable redundant condition removal
+#
+set rds_empty_redundant_check_in_range_scan=false;
+explain format=tree SELECT b FROM t1 WHERE b > 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+    -> Filter: (t1.b > 2)  (cost=*** rows=***.75)
+        -> Parallel covering index range scan on t1 using b over (2 < b)  (cost=*** rows=***.75)
+
+explain format=tree SELECT a, b FROM t2 WHERE a = 2 AND b < 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Filter: ((t2.a = 2) and (t2.b < 2))  (cost=*** rows=***.25)
+        -> Parallel covering index range scan on t2 using a over (a = 2 AND NULL < b < 2)  (cost=*** rows=***.25)
+
+explain format=tree SELECT a, b FROM t2 WHERE 2 = a AND b < 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Filter: ((t2.a = 2) and (t2.b < 2))  (cost=*** rows=***.25)
+        -> Parallel covering index range scan on t2 using a over (a = 2 AND NULL < b < 2)  (cost=*** rows=***.25)
+
+explain format=tree SELECT a, b FROM t2 WHERE a = 2 AND 2 < b;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Filter: ((t2.a = 2) and (2 < t2.b))  (cost=*** rows=***.25)
+        -> Parallel covering index range scan on t2 using a over (a = 2 AND 2 < b)  (cost=*** rows=***.25)
+
+# between with condition
+explain format=tree SELECT * FROM t2 WHERE a BETWEEN 2 and 3;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Filter: (t2.a between 2 and 3)  (cost=*** rows=***.5)
+        -> Parallel covering index range scan on t2 using a over (2 <= a <= 3)  (cost=*** rows=***.5)
+
+# BETWEEN and type conversion
+explain format=tree SELECT * FROM t2 WHERE a BETWEEN "b" AND 5;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Filter: (t2.a between 'b' and 5)  (cost=*** rows=***)
+        -> Parallel index scan on t2 using a  (cost=*** rows=***)
+
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+SELECT * FROM t2 WHERE a BETWEEN "b" AND 5;
+a	b
+1	2
+2	3
+3	3
+4	3
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+explain format=tree SELECT * FROM t2 WHERE a BETWEEN "2" AND "5";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Filter: (t2.a between '2' and '5')  (cost=*** rows=***.75)
+        -> Parallel covering index range scan on t2 using a over (2 <= a <= 5)  (cost=*** rows=***.75)
+
+explain format=tree SELECT * FROM t2 WHERE a BETWEEN "2" AND 5;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Filter: (t2.a between '2' and 5)  (cost=*** rows=***.75)
+        -> Parallel covering index range scan on t2 using a over (2 <= a <= 5)  (cost=*** rows=***.75)
+
+explain format=tree SELECT * FROM t2 WHERE a BETWEEN 2 AND "5";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Filter: (t2.a between 2 and '5')  (cost=*** rows=***.75)
+        -> Parallel covering index range scan on t2 using a over (2 <= a <= 5)  (cost=*** rows=***.75)
+
+explain format=tree SELECT * FROM t2 WHERE a BETWEEN "2.0" AND "5";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Filter: (t2.a between '2.0' and '5')  (cost=*** rows=***.75)
+        -> Parallel covering index range scan on t2 using a over (2 <= a <= 5)  (cost=*** rows=***.75)
+
+explain format=tree SELECT * FROM t2 WHERE a BETWEEN "2" AND "5.0";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Filter: (t2.a between '2' and '5.0')  (cost=*** rows=***.75)
+        -> Parallel covering index range scan on t2 using a over (2 <= a <= 5)  (cost=*** rows=***.75)
+
+#
+# Now enable redundant condition removal
+#
+set rds_empty_redundant_check_in_range_scan=true;
+explain format=tree SELECT b FROM t1 WHERE b > 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+    -> Parallel covering index range scan on t1 using b over (2 < b)  (cost=*** rows=***.75)
+
+# works whether b OP cond or cond OP b
+explain format=tree SELECT a, b FROM t2 WHERE a = 2 AND b < 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Parallel covering index range scan on t2 using a over (a = 2 AND NULL < b < 2)  (cost=*** rows=***.25)
+
+explain format=tree SELECT a, b FROM t2 WHERE 2 = a AND b < 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Parallel covering index range scan on t2 using a over (a = 2 AND NULL < b < 2)  (cost=*** rows=***.25)
+
+explain format=tree SELECT a, b FROM t2 WHERE a = 2 AND 2 < b;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Parallel covering index range scan on t2 using a over (a = 2 AND 2 < b)  (cost=*** rows=***.25)
+
+# Empty IS NULL in WHERE clause
+explain format=tree  SELECT * FROM  t2 WHERE a IS NULL AND b > 5;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Parallel covering index range scan on t2 using a over (a = NULL AND 5 < b)  (cost=*** rows=***.25)
+
+explain format=tree  SELECT * FROM  t2 WHERE a IS NULL AND b > 5 LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=***.25)
+            -> Parallel covering index range scan on t2 using a over (a = NULL AND 5 < b)  (cost=*** rows=***.25)
+
+# between condition removal
+explain format=tree SELECT * FROM t2 WHERE a BETWEEN 2 and 3;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Parallel covering index range scan on t2 using a over (2 <= a <= 3)  (cost=*** rows=***.5)
+
+# BETWEEN and type conversion
+explain format=tree SELECT * FROM t2 WHERE a BETWEEN "b" AND 5;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Filter: (t2.a between 'b' and 5)  (cost=*** rows=***)
+        -> Parallel index scan on t2 using a  (cost=*** rows=***)
+
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+SELECT * FROM t2 WHERE a BETWEEN "b" AND 5;
+a	b
+1	2
+2	3
+3	3
+4	3
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+Warning	1292	Truncated incorrect DOUBLE value: 'b'
+explain format=tree SELECT * FROM t2 WHERE a BETWEEN "2" AND "5";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Parallel covering index range scan on t2 using a over (2 <= a <= 5)  (cost=*** rows=***.75)
+
+explain format=tree SELECT * FROM t2 WHERE a BETWEEN "2" AND 5;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Parallel covering index range scan on t2 using a over (2 <= a <= 5)  (cost=*** rows=***.75)
+
+explain format=tree SELECT * FROM t2 WHERE a BETWEEN 2 AND "5";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Parallel covering index range scan on t2 using a over (2 <= a <= 5)  (cost=*** rows=***.75)
+
+explain format=tree SELECT * FROM t2 WHERE a BETWEEN "2.0" AND "5";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Parallel covering index range scan on t2 using a over (2 <= a <= 5)  (cost=*** rows=***.75)
+
+explain format=tree SELECT * FROM t2 WHERE a BETWEEN "2" AND "5.0";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Parallel covering index range scan on t2 using a over (2 <= a <= 5)  (cost=*** rows=***.75)
+
+# Empty IS NULL in WHERE clause
+explain format=tree  SELECT * FROM  t2 WHERE a IS NULL AND b > 5;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+    -> Parallel covering index range scan on t2 using a over (a = NULL AND 5 < b)  (cost=*** rows=***.25)
+
+explain format=tree  SELECT * FROM  t2 WHERE a IS NULL AND b > 5 LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t2  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=***.25)
+            -> Parallel covering index range scan on t2 using a over (a = NULL AND 5 < b)  (cost=*** rows=***.25)
+
+DROP TABLE t1, t2;
+# Empty redundant condition in index range scan: check different data types
+# redundant check removal  extended to real numbers (DOUBLE)
+CREATE TABLE t(a DOUBLE, b DOUBLE, c DOUBLE , INDEX(a,b,c));
+INSERT INTO t VALUES (1,2,6), (2,3,7), (3,3,8), (4,3,12);
+analyze TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+SET rds_empty_redundant_check_in_range_scan = false;
+explain format=tree SELECT * FROM t WHERE a > 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t  (cost=*** rows=***)
+    -> Filter: (t.a > 2)  (cost=*** rows=***.5)
+        -> Parallel covering index range scan on t using a over (2 < a)  (cost=*** rows=***.5)
+
+explain format=tree SELECT * FROM t WHERE a = 2 AND b < 5 AND b > 1;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t  (cost=*** rows=***)
+    -> Filter: ((t.a = 2) and (t.b < 5) and (t.b > 1))  (cost=*** rows=***.25)
+        -> Parallel covering index range scan on t using a over (a = 2 AND 1 < b < 5)  (cost=*** rows=***.25)
+
+SET rds_empty_redundant_check_in_range_scan = true;
+explain format=tree SELECT * FROM t WHERE a > 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t  (cost=*** rows=***)
+    -> Parallel covering index range scan on t using a over (2 < a)  (cost=*** rows=***.5)
+
+explain format=tree SELECT * FROM t WHERE a = 2 AND b < 5 AND b > 1;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t  (cost=*** rows=***)
+    -> Parallel covering index range scan on t using a over (a = 2 AND 1 < b < 5)  (cost=*** rows=***.25)
+
+DROP TABLE t;
+# redundant check removal extended to DECIMAL
+CREATE TABLE t(a DECIMAL, b DECIMAL, c DECIMAL , INDEX(a,b,c));
+INSERT INTO t VALUES (1,2,6), (2,3,7), (3,3,8), (4,3,12);
+analyze TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	analyze	status	OK
+SET rds_empty_redundant_check_in_range_scan = false;
+explain format=tree SELECT * FROM t WHERE a > 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t  (cost=*** rows=***)
+    -> Filter: (t.a > 2)  (cost=*** rows=***.5)
+        -> Parallel covering index range scan on t using a over (2 < a)  (cost=*** rows=***.5)
+
+explain format=tree SELECT * FROM t WHERE a = 2 AND b < 5 AND b > 1;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t  (cost=*** rows=***)
+    -> Filter: ((t.a = 2) and (t.b < 5) and (t.b > 1))  (cost=*** rows=***.25)
+        -> Parallel covering index range scan on t using a over (a = 2 AND 1 < b < 5)  (cost=*** rows=***.25)
+
+SET rds_empty_redundant_check_in_range_scan = true;
+explain format=tree SELECT * FROM t WHERE a > 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t  (cost=*** rows=***)
+    -> Parallel covering index range scan on t using a over (2 < a)  (cost=*** rows=***.5)
+
+explain format=tree SELECT * FROM t WHERE a = 2 AND b < 5 AND b > 1;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t  (cost=*** rows=***)
+    -> Parallel covering index range scan on t using a over (a = 2 AND 1 < b < 5)  (cost=*** rows=***.25)
+
+DROP TABLE t;
+# redundant check removal extended to String
+CREATE TABLE people(zipcode CHAR(10),lastname CHAR(10), firstname CHAR(10),address CHAR(10), INDEX (zipcode, lastname, firstname));
+analyze TABLE people;
+Table	Op	Msg_type	Msg_text
+test.people	analyze	status	OK
+SET rds_empty_redundant_check_in_range_scan = false;
+explain format=tree  SELECT * FROM people WHERE zipcode > '95054';
+EXPLAIN
+-> Gather: 4 workers, parallel scan on people  (cost=*** rows=***)
+    -> Parallel index range scan on people using zipcode over ('95054' < zipcode), with index condition: (people.zipcode > '95054')  (cost=*** rows=***.25)
+
+SET rds_empty_redundant_check_in_range_scan = true;
+explain format=tree  SELECT * FROM people WHERE zipcode > '95054';
+EXPLAIN
+-> Gather: 4 workers, parallel scan on people  (cost=*** rows=***)
+    -> Parallel index range scan on people using zipcode over ('95054' < zipcode)  (cost=*** rows=***.25)
+
+DROP TABLE people;
+# Test skip scan 
+CREATE TABLE t1 (f1 INT NOT NULL, f2 INT NOT NULL, PRIMARY KEY(f1, f2));
+INSERT INTO t1 VALUES
+(1,1), (1,2), (1,3), (1,4), (1,5),
+(2,1), (2,2), (2,3), (2,4), (2,5);
+INSERT INTO t1 SELECT f1, f2 + 5 FROM t1;
+INSERT INTO t1 SELECT f1, f2 + 10 FROM t1;
+INSERT INTO t1 SELECT f1, f2 + 20 FROM t1;
+INSERT INTO t1 SELECT f1, f2 + 40 FROM t1;
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+SET rds_empty_redundant_check_in_range_scan = false;
+EXPLAIN format=tree SELECT f1, f2 FROM t1 WHERE f2 > 40;
+EXPLAIN
+-> Filter: (t1.f2 > 40)  (cost=15.9 rows=53)
+    -> Covering index skip scan on t1 using PRIMARY over 40 < f2  (cost=15.9 rows=53)
+
+SET rds_empty_redundant_check_in_range_scan = true;
+EXPLAIN format=tree SELECT f1, f2 FROM t1 WHERE f2 > 40;
+EXPLAIN
+-> Filter: (t1.f2 > 40)  (cost=15.9 rows=53)
+    -> Covering index skip scan on t1 using PRIMARY over 40 < f2  (cost=15.9 rows=53)
+
+DROP TABLE t1;
+CREATE TABLE jemp (
+c JSON,
+g INT GENERATED ALWAYS AS (c->"$.id"),
+INDEX i (g)
+);
+INSERT INTO jemp (c) VALUES
+('{"id": "1", "name": "Fred"}'), ('{"id": "2", "name": "Wilma"}'),
+('{"id": "3", "name": "Barney"}'), ('{"id": "4", "name": "Betty"}');
+analyze TABLE jemp;
+Table	Op	Msg_type	Msg_text
+test.jemp	analyze	status	OK
+# without optimization
+SET rds_empty_redundant_check_in_range_scan = false;
+SELECT c->>"$.name" AS name
+FROM jemp WHERE g > 2;
+name
+Barney
+Betty
+EXPLAIN SELECT c->>"$.name" AS name
+FROM jemp WHERE g > 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	jemp	NULL	range	i	i	5	NULL	2	100.00	Using where
+Warnings:
+Note	1003	/* select#1 */ select json_unquote(json_extract(`test`.`jemp`.`c`,'$.name')) AS `name` from `test`.`jemp` where (`test`.`jemp`.`g` > 2)
+# with optimization 
+SET rds_empty_redundant_check_in_range_scan = true;
+SELECT c->>"$.name" AS name
+FROM jemp WHERE g > 2;
+name
+Barney
+Betty
+EXPLAIN SELECT c->>"$.name" AS name
+FROM jemp WHERE g > 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	jemp	NULL	range	i	i	5	NULL	2	100.00	NULL
+Warnings:
+Note	1003	/* select#1 */ select json_unquote(json_extract(`test`.`jemp`.`c`,'$.name')) AS `name` from `test`.`jemp` where (`test`.`jemp`.`g` > 2)
+DROP TABLE jemp;
+# INCONSISTENT RESULTS FOR SELECTS FROM TABLE WITH CHAR(N) COLUMN
+# AND NO_PAD COLLATION from ctype_uca.test,
+# verify that an inequality condition is kept at SQL layer:
+CREATE TABLE t1 (
+f1 CHAR(20) COLLATE utf8mb4_0900_ai_ci  # A NO PAD collation.
+);
+INSERT INTO t1 VALUES ('ABC  ');
+INSERT INTO t1 VALUES ('XYZ');
+INSERT INTO t1 VALUES ('XYZ ');
+INSERT INTO t1 VALUES ('ABC ');
+CREATE INDEX f1_index ON t1 ( f1 );
+analyze table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+set rds_empty_redundant_check_in_range_scan = on;
+explain format=tree  SELECT CONCAT(f1, '|') FROM t1 WHERE f1 >= 'XYZ ';
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+    -> Filter: (t1.f1 >= 'XYZ ')  (cost=*** rows=***.25)
+        -> Parallel covering index range scan on t1 using f1_index over ('XYZ' < f1)  (cost=*** rows=***.25)
+
+# Now, a PAD SPACE collation, condition is not kept
+ALTER TABLE t1 modify f1 CHAR(20) COLLATE utf8mb4_unicode_ci;
+analyze TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+explain format=tree  SELECT CONCAT(f1, '|') FROM t1 WHERE f1 >= 'XYZ ';
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+    -> Parallel covering index range scan on t1 using f1_index over ('XYZ' <= f1)  (cost=*** rows=***.5)
+
+SET rds_empty_redundant_check_in_range_scan=default;
+DROP TABLE t1;
+# Can remove DATE
+SET rds_empty_redundant_check_in_range_scan = true;
+CREATE TABLE t9(a date);
+ALTER TABLE t9 ADD INDEX (a);
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+INSERT INTO t9 VALUES ("20210907");
+analyze TABLE t9;
+Table	Op	Msg_type	Msg_text
+test.t9	analyze	status	OK
+explain format=tree SELECT * FROM t9 WHERE a >= "20211001";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t9  (cost=*** rows=***)
+    -> Parallel covering index range scan on t9 using a over ('2021-10-01' <= a)  (cost=*** rows=***.25)
+
+explain format=tree SELECT * FROM t9 WHERE a >= "2021-10-01";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t9  (cost=*** rows=***)
+    -> Parallel covering index range scan on t9 using a over ('2021-10-01' <= a)  (cost=*** rows=***.25)
+
+# can remove DATETIME
+DROP TABLE if EXISTS t9;
+CREATE TABLE t9(a datetime);
+ALTER TABLE t9 ADD index(a);
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+analyze TABLE t9;
+Table	Op	Msg_type	Msg_text
+test.t9	analyze	status	OK
+explain format=tree SELECT * FROM t9 WHERE a >= "2022-09-07 12:25";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t9  (cost=*** rows=***)
+    -> Parallel covering index range scan on t9 using a over ('2022-09-07 12:25:00' <= a)  (cost=*** rows=***.25)
+
+# can remove TIMESTAMP
+DROP TABLE if EXISTS t9;
+CREATE TABLE t9 (a TIMESTAMP);
+ALTER TABLE t9 ADD INDEX (a);
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+INSERT INTO t9 VALUES ("2021-09-07 12:11");
+analyze TABLE t9;
+Table	Op	Msg_type	Msg_text
+test.t9	analyze	status	OK
+explain format=tree SELECT * FROM t9 WHERE a >= "2022-09-07 12:25";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t9  (cost=*** rows=***)
+    -> Parallel covering index range scan on t9 using a over ('2022-09-07 12:25:00' <= a)  (cost=*** rows=***.25)
+
+# can remove TIME
+DROP TABLE if EXISTS t9;
+CREATE TABLE t9 (a time);
+ALTER TABLE t9 ADD INDEX (a);
+INSERT INTO t9 VALUES ("1211");
+INSERT INTO t9 VALUES ("1211");
+INSERT INTO t9 VALUES ("1211");
+INSERT INTO t9 VALUES ("1211");
+INSERT INTO t9 VALUES ("1211");
+INSERT INTO t9 VALUES ("1211");
+INSERT INTO t9 VALUES ("1211");
+INSERT INTO t9 VALUES ("1211");
+analyze TABLE t9;
+Table	Op	Msg_type	Msg_text
+test.t9	analyze	status	OK
+explain format=tree SELECT * FROM t9 WHERE a >= "1218";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t9  (cost=*** rows=***)
+    -> Parallel covering index range scan on t9 using a over ('00:12:18' <= a)  (cost=*** rows=***.25)
+
+explain format=tree SELECT * FROM t9 WHERE a >= "12:18";
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t9  (cost=*** rows=***)
+    -> Parallel covering index range scan on t9 using a over ('12:18:00' <= a)  (cost=*** rows=***.25)
+
+DROP TABLE IF EXISTS t9;
+# ORDER BY ASC/DESC with INDEX ASC/DESC
+# table t10 has descending index while t11 has normal index 
+CREATE TABLE t10 (
+c1 INT, c2 INT,
+INDEX idx4 (c1 DESC, c2 DESC)
+);
+INSERT INTO t10 VALUES (1,2),(3,4),(5,6),(7,8),(9,10);
+CREATE TABLE t11 (
+c1 INT, c2 INT,
+INDEX idx4 (c1 , c2 )
+);
+INSERT INTO t11 VALUES (1,2),(3,4),(5,6),(7,8),(9,10);
+ANALYZE TABLE t10, t11;
+Table	Op	Msg_type	Msg_text
+test.t10	analyze	status	OK
+test.t11	analyze	status	OK
+EXPLAIN format=tree SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t10  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=***)
+            -> Parallel covering index range scan on t10 using idx4 over (c1 < 2)  (cost=*** rows=***)
+
+EXPLAIN format=tree SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t11  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=***)
+            -> Parallel covering index range scan on t11 using idx4 over (2 < c1) (reverse)  (cost=*** rows=***)
+
+EXPLAIN format=tree SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t10  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=***)
+            -> Parallel covering index range scan on t10 using idx4 over (c1 < 2) (reverse)  (cost=*** rows=***)
+
+EXPLAIN format=tree SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t11  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=***)
+            -> Parallel covering index range scan on t11 using idx4 over (2 < c1)  (cost=*** rows=***)
+
+# Verify that in a LEFT JOIN, the range condition is removed or not, correctly.
+# Conditions on left table can be removed:
+EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t11.c1 > 3 WHERE t11.c1 > 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t12, t11  (cost=*** rows=***)
+    -> Left hash join, hash table shared by worker threads (no condition), extra conditions: (t11.c1 > 3)  (cost=*** rows=***)
+        -> Parallel covering index range scan on t11 using idx4 over (2 < c1)  (cost=*** rows=***)
+        -> Hash
+            -> Parallel index scan on t12 using idx4  (cost=*** rows=***.25)
+
+# Condition on right table too, as it's in ON: if the range access has kept only
+# rows of t12 with c1>3, this condition will not need to be checked again.
+EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t12.c1 > 3 WHERE t11.c1 > 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t12, t11  (cost=*** rows=***)
+    -> Left hash join, hash table shared by worker threads (no condition)  (cost=*** rows=***)
+        -> Parallel covering index range scan on t11 using idx4 over (2 < c1)  (cost=*** rows=***)
+        -> Hash
+            -> Parallel covering index range scan on t12 using idx4 over (3 < c1)  (cost=*** rows=***.75)
+
+# These two don't prove much, as the left join is changed to an inner join
+# (as NULL-complemented rows cannot match the WHERE).
+EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t11.c1 > 3 WHERE t12.c1 > 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t11, t12  (cost=*** rows=***)
+    -> Inner hash join, hash table shared by worker threads (no condition)  (cost=*** rows=***)
+        -> Parallel covering index range scan on t12 using idx4 over (2 < c1)  (cost=*** rows=***)
+        -> Hash
+            -> Parallel covering index range scan on t11 using idx4 over (3 < c1)  (cost=*** rows=***.75)
+
+EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t12.c1 > 3 WHERE t12.c1 > 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t12, t11  (cost=*** rows=***)
+    -> Inner hash join, hash table shared by worker threads (no condition)  (cost=*** rows=***.75)
+        -> Parallel index scan on t11 using idx4  (cost=*** rows=***.25)
+        -> Hash
+            -> Filter: (t12.c1 > 2)  (cost=*** rows=***.75)
+                -> Parallel covering index range scan on t12 using idx4 over (3 < c1)  (cost=*** rows=***.75)
+
+# Here the WHERE IS NULL cannot be removed: the range access has kept only
+# rows of t12 with c1 NULL, but there can be other NULL-complemented rows,
+# and then the WHERE must be checked on them too. This case is properly caught
+# by the test: !(func->used_tables() & null_extended) in reduce_cond_for_table().
+EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t12.c1 > 3 WHERE t12.c1 IS NULL;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t12, t11  (cost=*** rows=***)
+    -> Filter: (t12.c1 is null)  (cost=*** rows=***)
+        -> Left hash join, hash table shared by worker threads (no condition)  (cost=*** rows=***)
+            -> Parallel index scan on t11 using idx4  (cost=*** rows=***)
+            -> Hash
+                -> Parallel covering index range scan on t12 using idx4 over (3 < c1)  (cost=*** rows=***)
+
+DROP TABLE t10,t11;
+CREATE TABLE t11 (
+c1 INT, c2 INT,
+INDEX idx4 (c1 , c2 )
+);
+INSERT INTO t11 VALUES (1,2),(3,4),(5,6),(7,8),(9,10);
+ANALYZE TABLE t11;
+Table	Op	Msg_type	Msg_text
+test.t11	analyze	status	OK
+# Two items containing t12.c1 > 3 and t12.c1 > 2
+# key_min only contains  3
+# we can only remove t12.c1 > 3
+EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t12.c1 > 3 WHERE t12.c1 > 2;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t12, t11  (cost=*** rows=***)
+    -> Inner hash join, hash table shared by worker threads (no condition)  (cost=*** rows=***.75)
+        -> Parallel index scan on t11 using idx4  (cost=*** rows=***.25)
+        -> Hash
+            -> Filter: (t12.c1 > 2)  (cost=*** rows=***.75)
+                -> Parallel covering index range scan on t12 using idx4 over (3 < c1)  (cost=*** rows=***.75)
+
+drop table t11;
+CREATE TABLE t11 (
+c1 BIGINT UNSIGNED, c2 BIGINT UNSIGNED,
+INDEX idx4 (c1 , c2 )
+);
+INSERT INTO t11 VALUES (1,2),(3,4),(5,6),(7,8),(9,10);
+ANALYZE TABLE t11;
+Table	Op	Msg_type	Msg_text
+test.t11	analyze	status	OK
+# Two items containing t12.c1 > -2 and t12.c1 > 18446744073709551614
+# key_min only contains 18446744073709551614
+# can only remove t12.c1 > 18446744073709551614
+EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t11.c1 > -2 WHERE t11.c1 > 18446744073709551614;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t12, t11  (cost=*** rows=***)
+    -> Left hash join, hash table shared by worker threads (no condition), extra conditions: (t11.c1 > <cache>(-(2)))  (cost=*** rows=***.25)
+        -> Parallel covering index range scan on t11 using idx4 over (18446744073709551614 < c1)  (cost=*** rows=***.25)
+        -> Hash
+            -> Parallel index scan on t12 using idx4  (cost=*** rows=***.25)
+
+drop table t11;
+# test DESC index
+CREATE TABLE t10 (
+c1 INT, c2 INT,
+INDEX idx4 (c1 DESC, c2 DESC)
+);
+INSERT INTO t10 VALUES (1,2),(3,4),(5,6),(7,8),(9,10);
+ANALYZE TABLE t10;
+Table	Op	Msg_type	Msg_text
+test.t10	analyze	status	OK
+EXPLAIN format=tree SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
+EXPLAIN
+-> Limit/Offset: 100/1 row(s)  (cost=*** rows=***)
+    -> Gather: 4 workers, parallel scan on t10  (cost=*** rows=***)
+        -> Limit: 101 row(s)  (cost=*** rows=***)
+            -> Parallel covering index range scan on t10 using idx4 over (c1 < 2)  (cost=*** rows=***)
+
+drop table t10;
+CREATE TABLE t1 (
+pk INT PRIMARY KEY,
+i1 INT,
+i2 INT,
+v varchar(1),
+INDEX i1_idx (i1),
+INDEX v_idx (v,i1)
+) ENGINE=InnoDB, CHARSET utf8mb4;
+INSERT INTO t1 VALUES (1, 1, 9,'a'), (2, 2, 8,'b'), (3, 3, 7,'c'), (4, 4, 6,'d'), (5, 5, 5,'e');
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+EXPLAIN format=tree SELECT v FROM t1 WHERE i1 = 1 AND v = 'a' AND pk < 3;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+    -> Parallel covering index range scan on t1 using v_idx over (v = 'a' AND i1 = 1 AND pk < 3)  (cost=*** rows=***.25)
+
+DROP TABLE t1;
+CREATE TABLE t1(pk INT , i4 INT ,INDEX(i4));
+INSERT INTO t1 VALUES (1,10), (2,20), (3,30);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+EXPLAIN format=tree SELECT * FROM t1 WHERE i4 BETWEEN 10 AND 99999999999999999;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=*** rows=***)
+    -> Parallel index range scan on t1 using i4 over (10 <= i4), with index condition: (t1.i4 between 10 and 99999999999999999)  (cost=*** rows=***.75)
+
+drop table t1;
+# column_A IS NULL is the only comparison we handle
+# Following example: 2 items NULL and 18446744073709551614
+#                  : 1 key_min  18446744073709551614
+# We cannot justify removing NULL.
+CREATE TABLE t11 (
+c1 BIGINT UNSIGNED, c2 BIGINT UNSIGNED,
+INDEX idx4 (c1 , c2 )
+);
+INSERT INTO t11 VALUES (1,2),(3,4),(5,6),(7,8),(9,10);
+ANALYZE TABLE t11;
+Table	Op	Msg_type	Msg_text
+test.t11	analyze	status	OK
+EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t11.c1 > NULL WHERE t11.c1 > 18446744073709551614;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t12, t11  (cost=*** rows=***)
+    -> Left hash join, hash table shared by worker threads (no condition), extra conditions: (t11.c1 > NULL)  (cost=*** rows=***.25)
+        -> Parallel covering index range scan on t11 using idx4 over (18446744073709551614 < c1)  (cost=*** rows=***.25)
+        -> Hash
+            -> Parallel index scan on t12 using idx4  (cost=*** rows=***.25)
+
+# If we try to remove c1>NULL, we get a wrong select output
+# The following test verifies that the current implementation produce the same results
+# regardless of the status of rds_empty_redundant_check_in_range_scan
+EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t11.c1 > NULL WHERE t11.c1 > 3;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t12, t11  (cost=*** rows=***)
+    -> Left hash join, hash table shared by worker threads (no condition), extra conditions: (t11.c1 > NULL)  (cost=*** rows=***.75)
+        -> Parallel covering index range scan on t11 using idx4 over (3 < c1)  (cost=*** rows=***.75)
+        -> Hash
+            -> Parallel index scan on t12 using idx4  (cost=*** rows=***.25)
+
+SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t11.c1 > NULL WHERE t11.c1 > 3;
+c1	c2	c1	c2
+5	6	NULL	NULL
+7	8	NULL	NULL
+9	10	NULL	NULL
+SET rds_empty_redundant_check_in_range_scan=false;
+EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t11.c1 > NULL WHERE t11.c1 > 3;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t12, t11  (cost=*** rows=***)
+    -> Left hash join, hash table shared by worker threads (no condition), extra conditions: (t11.c1 > NULL)  (cost=*** rows=***.75)
+        -> Filter: (t11.c1 > 3)  (cost=*** rows=***.75)
+            -> Parallel covering index range scan on t11 using idx4 over (3 < c1)  (cost=*** rows=***.75)
+        -> Hash
+            -> Parallel index scan on t12 using idx4  (cost=*** rows=***.25)
+
+SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t11.c1 > NULL WHERE t11.c1 > 3;
+c1	c2	c1	c2
+5	6	NULL	NULL
+7	8	NULL	NULL
+9	10	NULL	NULL
+SET rds_empty_redundant_check_in_range_scan=true;
+drop table t11;
+# NOT BETWEEN should not be handled by redundant condition removal
+# Disjoint intervals, similar to OR clauses, not handled by current design.
+create table ta ( a float default NULL ,b decimal(25,5) DEFAULT NULL, key(a));
+insert into ta values (100,1),(2000,2),(30000,3),(400000,4),(900000,5);
+analyze table ta;
+Table	Op	Msg_type	Msg_text
+test.ta	analyze	status	OK
+explain format=tree select * from ta INNER JOIN ta tb ON ta.b=tb.a where ta.a NOT BETWEEN -1.17549e-38 AND -1.17549e-38;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on ta  (cost=*** rows=***)
+    -> Nested loop inner join  (cost=*** rows=***.25)
+        -> Filter: (ta.b is not null)  (cost=*** rows=***.25)
+            -> Parallel index range scan on ta using a over (NULL < a), with index condition: (ta.a not between <cache>(-(1.17549e-38)) and <cache>(-(1.17549e-38)))  (cost=*** rows=***.25)
+        -> Index lookup on tb using a (a=ta.b), with index condition: (ta.b = tb.a)  (cost=*** rows=***)
+
+drop table ta;
+CREATE TABLE t1 (c1 INT, c0 INT) AS (SELECT 0 c0 FROM DUAL HAVING 0);
+CREATE INDEX i1 ON t1 (c1,c0);
+INSERT INTO t1 VALUES (3,-3),(2,NULL);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+explain format =tree SELECT 1 FROM t1 WHERE c0 BETWEEN 0 and 18446744073709551615 and c1=0;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (t1.c0 between 0 and 18446744073709551615)  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using i1 over (c1 = 0 AND 0 <= c0)  (cost=0.385 rows=0.25)
+
+drop table t1;
+create table t1 ( a enum('aaa','bbb','ccc','ddd'), index(a));
+insert into t1 values ('aaa'),('bbb'),('ccc'),('ddd');
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+# If the inequality condition is strict, we should not remove it
+explain format=tree select * from t1 where a<'ccc' and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: ((t1.a < 'ccc') and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using a over (a = 'ccc')  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 where a>'ccc' and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: ((t1.a > 'ccc') and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using a over (a = 'ccc')  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 where 'ccc'>a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' > t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using a over (a = 'ccc')  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 where 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using a over (a = 'ccc')  (cost=0.385 rows=0.25)
+
+select * from t1 where a<'ccc' and a IN(NULL,'ccc');
+a
+select * from t1 where a>'ccc' and a IN(NULL,'ccc');
+a
+select * from t1 where 'ccc'>a and a IN(NULL,'ccc');
+a
+select * from t1 where 'ccc'<a and a IN(NULL,'ccc');
+a
+# If the inequality condition is not strict, we can remove it
+explain format=tree select * from t1 where a<='ccc' and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (t1.a in (NULL,'ccc'))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using a over (a = 'ccc')  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 where a>='ccc' and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (t1.a in (NULL,'ccc'))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using a over (a = 'ccc')  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 where 'ccc'>=a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (t1.a in (NULL,'ccc'))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using a over (a = 'ccc')  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 where 'ccc'<=a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (t1.a in (NULL,'ccc'))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using a over (a = 'ccc')  (cost=0.385 rows=0.25)
+
+select * from t1 where a<='ccc' and a IN(NULL,'ccc');
+a
+ccc
+select * from t1 where a>='ccc' and a IN(NULL,'ccc');
+a
+ccc
+select * from t1 where 'ccc'>=a and a IN(NULL,'ccc');
+a
+ccc
+select * from t1 where 'ccc'<=a and a IN(NULL,'ccc');
+a
+ccc
+drop table if exists t1;
+create table t1 (b int, a enum('aaa','bbb','ccc','ddd'), index idx1(a,b),index idx2(b,a));
+insert into t1 values (1,'aaa'),(2,'bbb'),(3,'ccc'),(4,'ddd');
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+explain format=tree select * from t1 USE INDEX(idx1) where b<5 and 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND NULL < b < 5)  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx1) where  b<5 and a>'ccc' and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: ((t1.a > 'ccc') and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND NULL < b < 5)  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx1) where  b<5 and'ccc'>a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' > t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND NULL < b < 5)  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx1) where  b<5 and 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND NULL < b < 5)  (cost=0.385 rows=0.25)
+
+select * from t1 USE INDEX(idx1) where b<5 and 'ccc'<a and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx1) where  b<5 and a>'ccc' and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx1) where  b<5 and'ccc'>a and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx1) where  b<5 and 'ccc'<a and a IN(NULL,'ccc');
+b	a
+explain format=tree select * from t1 USE INDEX(idx1) where b=3 and 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND b = 3)  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx1) where  b=3 and a>'ccc' and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: ((t1.a > 'ccc') and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND b = 3)  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx1) where  b=3 and'ccc'>a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' > t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND b = 3)  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx1) where  b=3 and 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND b = 3)  (cost=0.385 rows=0.25)
+
+select * from t1 USE INDEX(idx1) where b=3 and 'ccc'<a and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx1) where  b=3 and a>'ccc' and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx1) where  b=3 and'ccc'>a and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx1) where  b=3 and 'ccc'<a and a IN(NULL,'ccc');
+b	a
+explain format=tree select * from t1 USE INDEX(idx2) where b=3 and 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx2 over (b = 3 AND a = 'ccc')  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx2) where  b=3 and a>'ccc' and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: ((t1.a > 'ccc') and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx2 over (b = 3 AND a = 'ccc')  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx2) where  b=3 and'ccc'>a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' > t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx2 over (b = 3 AND a = 'ccc')  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx2) where  b=3 and 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx2 over (b = 3 AND a = 'ccc')  (cost=0.385 rows=0.25)
+
+select * from t1 USE INDEX(idx2) where b=3 and 'ccc'<a and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx2) where  b=3 and a>'ccc' and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx2) where  b=3 and'ccc'>a and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx2) where  b=3 and 'ccc'<a and a IN(NULL,'ccc');
+b	a
+drop table t1;
+create table t1 ( a enum('aaa','bbb','ccc','ddd'), index(a DESC));
+insert into t1 values ('aaa'),('bbb'),('ccc'),('ddd');
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+explain format=tree select * from t1 where a<'ccc' and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: ((t1.a < 'ccc') and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using a over (a = 'ccc')  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 where a>'ccc' and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: ((t1.a > 'ccc') and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using a over (a = 'ccc')  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 where 'ccc'>a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' > t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using a over (a = 'ccc')  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 where 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using a over (a = 'ccc')  (cost=0.385 rows=0.25)
+
+select * from t1 where a<'ccc' and a IN(NULL,'ccc');
+a
+select * from t1 where a>'ccc' and a IN(NULL,'ccc');
+a
+select * from t1 where 'ccc'>a and a IN(NULL,'ccc');
+a
+select * from t1 where 'ccc'<a and a IN(NULL,'ccc');
+a
+drop table if exists t1;
+create table t1 (b int, a enum('aaa','bbb','ccc','ddd'), index idx1(a DESC,b DESC),index idx2(b DESC,a DESC));
+insert into t1 values (1,'aaa'),(2,'bbb'),(3,'ccc'),(4,'ddd');
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+explain format=tree select * from t1 USE INDEX(idx1) where b<5 and 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND 5 < b < NULL)  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx1) where  b<5 and a>'ccc' and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: ((t1.a > 'ccc') and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND 5 < b < NULL)  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx1) where  b<5 and'ccc'>a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' > t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND 5 < b < NULL)  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx1) where  b<5 and 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND 5 < b < NULL)  (cost=0.385 rows=0.25)
+
+select * from t1 USE INDEX(idx1) where b<5 and 'ccc'<a and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx1) where  b<5 and a>'ccc' and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx1) where  b<5 and'ccc'>a and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx1) where  b<5 and 'ccc'<a and a IN(NULL,'ccc');
+b	a
+explain format=tree select * from t1 USE INDEX(idx1) where b=3 and 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND b = 3)  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx1) where  b=3 and a>'ccc' and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: ((t1.a > 'ccc') and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND b = 3)  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx1) where  b=3 and'ccc'>a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' > t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND b = 3)  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx1) where  b=3 and 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND b = 3)  (cost=0.385 rows=0.25)
+
+select * from t1 USE INDEX(idx1) where b=3 and 'ccc'<a and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx1) where  b=3 and a>'ccc' and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx1) where  b=3 and'ccc'>a and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx1) where  b=3 and 'ccc'<a and a IN(NULL,'ccc');
+b	a
+explain format=tree select * from t1 USE INDEX(idx2) where b=3 and 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx2 over (b = 3 AND a = 'ccc')  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx2) where  b=3 and a>'ccc' and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: ((t1.a > 'ccc') and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx2 over (b = 3 AND a = 'ccc')  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx2) where  b=3 and'ccc'>a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' > t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx2 over (b = 3 AND a = 'ccc')  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx2) where  b=3 and 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx2 over (b = 3 AND a = 'ccc')  (cost=0.385 rows=0.25)
+
+select * from t1 USE INDEX(idx2) where b=3 and 'ccc'<a and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx2) where  b=3 and a>'ccc' and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx2) where  b=3 and'ccc'>a and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx2) where  b=3 and 'ccc'<a and a IN(NULL,'ccc');
+b	a
+drop table t1;
+create table t1 (b int, a enum('aaa','bbb','ccc','ddd'), index idx1(a ASC,b DESC),index idx2(b DESC,a ASC));
+insert into t1 values (1,'aaa'),(2,'bbb'),(3,'ccc'),(4,'ddd');
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+explain format=tree select * from t1 USE INDEX(idx1) where b<5 and 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND 5 < b < NULL)  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx1) where  b<5 and a>'ccc' and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: ((t1.a > 'ccc') and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND 5 < b < NULL)  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx1) where  b<5 and'ccc'>a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' > t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND 5 < b < NULL)  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx1) where  b<5 and 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND 5 < b < NULL)  (cost=0.385 rows=0.25)
+
+select * from t1 USE INDEX(idx1) where b<5 and 'ccc'<a and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx1) where  b<5 and a>'ccc' and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx1) where  b<5 and'ccc'>a and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx1) where  b<5 and 'ccc'<a and a IN(NULL,'ccc');
+b	a
+explain format=tree select * from t1 USE INDEX(idx1) where b=3 and 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND b = 3)  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx1) where  b=3 and a>'ccc' and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: ((t1.a > 'ccc') and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND b = 3)  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx1) where  b=3 and'ccc'>a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' > t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND b = 3)  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx1) where  b=3 and 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx1 over (a = 'ccc' AND b = 3)  (cost=0.385 rows=0.25)
+
+select * from t1 USE INDEX(idx1) where b=3 and 'ccc'<a and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx1) where  b=3 and a>'ccc' and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx1) where  b=3 and'ccc'>a and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx1) where  b=3 and 'ccc'<a and a IN(NULL,'ccc');
+b	a
+explain format=tree select * from t1 USE INDEX(idx2) where b=3 and 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx2 over (b = 3 AND a = 'ccc')  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx2) where  b=3 and a>'ccc' and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: ((t1.a > 'ccc') and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx2 over (b = 3 AND a = 'ccc')  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx2) where  b=3 and'ccc'>a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' > t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx2 over (b = 3 AND a = 'ccc')  (cost=0.385 rows=0.25)
+
+explain format=tree select * from t1 USE INDEX(idx2) where  b=3 and 'ccc'<a and a IN(NULL,'ccc');
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t1  (cost=0.385 rows=1)
+    -> Filter: (('ccc' < t1.a) and (t1.a in (NULL,'ccc')))  (cost=0.385 rows=0.25)
+        -> Parallel covering index range scan on t1 using idx2 over (b = 3 AND a = 'ccc')  (cost=0.385 rows=0.25)
+
+select * from t1 USE INDEX(idx2) where b=3 and 'ccc'<a and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx2) where  b=3 and a>'ccc' and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx2) where  b=3 and'ccc'>a and a IN(NULL,'ccc');
+b	a
+select * from t1 USE INDEX(idx2) where  b=3 and 'ccc'<a and a IN(NULL,'ccc');
+b	a
+drop table t1;
+# Flag on descending key part
+create table t4 ( a int, b int, INDEX(a ASC, b DESC));
+insert into t4 values (1,5),(1,5),(1,5),(1,5),(1,5);
+ANALYZE TABLE t4;
+Table	Op	Msg_type	Msg_text
+test.t4	analyze	status	OK
+explain format=tree select * from t4 where a=3 and b>=2 and  b<5;
+EXPLAIN
+-> Gather: 4 workers, parallel scan on t4  (cost=0.385 rows=1)
+    -> Parallel covering index range scan on t4 using a over (a = 3 AND 5 < b <= 2)  (cost=0.385 rows=0.25)
+
+drop table t4;
+#
+# Test tpcc Q34 (simulated) (FE2025041500028)
+#
+CREATE TABLE bmsql_stock (
+s_w_id INT NOT NULL,
+s_i_id int NOT NULL,
+s_quantity SMALLINT,
+PRIMARY KEY(s_w_id, s_i_id)
+);
+INSERT INTO bmsql_stock VALUES (316, 5, 10),(316, 9, 10),(317, 12, 351), (316, 1, 9999);
+ANALYZE TABLE bmsql_stock;
+Table	Op	Msg_type	Msg_text
+test.bmsql_stock	analyze	status	OK
+CREATE TABLE bmsql_order_line (
+ol_w_id INT NOT NULL,
+ol_d_id TINYINT NOT NULL,
+ol_o_id INT NOT NULL,
+ol_i_id INT,
+ol_number TINYINT NOT NULL,
+PRIMARY KEY(ol_w_id , ol_d_id , ol_o_id , ol_number)
+);
+INSERT INTO bmsql_order_line VALUES (316, 7, 90, 5, 34);
+ANALYZE TABLE bmsql_order_line;
+Table	Op	Msg_type	Msg_text
+test.bmsql_order_line	analyze	status	OK
+CREATE TABLE bmsql_district (
+d_w_id INT NOT NULL,
+d_id TINYINT NOT NULL,
+d_next_o_id INT,
+PRIMARY KEY (d_w_id , d_id)
+);
+INSERT INTO bmsql_district VALUES (316, 7, 100);
+ANALYZE TABLE bmsql_district;
+Table	Op	Msg_type	Msg_text
+test.bmsql_district	analyze	status	OK
+# first no condition removal
+set rds_empty_redundant_check_in_range_scan=false;
+EXPLAIN format=tree SELECT count(*) AS low_stock FROM ( 
+SELECT s_w_id, s_i_id, s_quantity FROM
+bmsql_stock WHERE s_w_id = 316 AND s_quantity < 10 AND
+s_i_id IN ( SELECT ol_i_id FROM 
+bmsql_district JOIN bmsql_order_line ON ol_w_id = d_w_id AND
+ol_d_id = d_id AND ol_o_id >= d_next_o_id - 20 AND
+ol_o_id < d_next_o_id WHERE d_w_id = 316 AND d_id = 7 ) ) AS L ;
+EXPLAIN
+-> Aggregate: count(`<temporary>`.low_stock)  (cost=0.925 rows=1)
+    -> Gather: 4 workers, parallel scan on bmsql_order_line, bmsql_stock  (cost=0.525 rows=4)
+        -> Aggregate: count(`<temporary>`.low_stock)  (cost=0.525 rows=1)
+            -> Hash semijoin, hash table shared by worker threads (bmsql_order_line.ol_i_id = bmsql_stock.s_i_id)  (cost=0.5 rows=0.25)
+                -> Filter: (bmsql_stock.s_quantity < 10)  (cost=0.276 rows=0.25)
+                    -> Parallel index lookup on bmsql_stock using PRIMARY (s_w_id=316)  (cost=0.276 rows=0.75)
+                -> Hash
+                    -> Filter: ((bmsql_order_line.ol_d_id = 7) and (bmsql_order_line.ol_w_id = 316) and (bmsql_order_line.ol_o_id >= <cache>((bmsql_district.d_next_o_id - 20))) and (bmsql_order_line.ol_o_id < bmsql_district.d_next_o_id))  (cost=0.385 rows=0.25)
+                        -> Parallel index range scan on bmsql_order_line using PRIMARY over (ol_w_id = 316 AND ol_d_id = 7 AND 80 <= ol_o_id < 100)  (cost=0.385 rows=0.25)
+
+# with condition removal
+set rds_empty_redundant_check_in_range_scan=true;
+EXPLAIN format=tree SELECT count(*) AS low_stock FROM ( 
+SELECT s_w_id, s_i_id, s_quantity FROM
+bmsql_stock WHERE s_w_id = 316 AND s_quantity < 10 AND
+s_i_id IN ( SELECT ol_i_id FROM 
+bmsql_district JOIN bmsql_order_line ON ol_w_id = d_w_id AND
+ol_d_id = d_id AND ol_o_id >= d_next_o_id - 20 AND
+ol_o_id < d_next_o_id WHERE d_w_id = 316 AND d_id = 7 ) ) AS L ;
+EXPLAIN
+-> Aggregate: count(`<temporary>`.low_stock)  (cost=0.925 rows=1)
+    -> Gather: 4 workers, parallel scan on bmsql_order_line, bmsql_stock  (cost=0.525 rows=4)
+        -> Aggregate: count(`<temporary>`.low_stock)  (cost=0.525 rows=1)
+            -> Hash semijoin, hash table shared by worker threads (bmsql_order_line.ol_i_id = bmsql_stock.s_i_id)  (cost=0.5 rows=0.25)
+                -> Filter: (bmsql_stock.s_quantity < 10)  (cost=0.276 rows=0.25)
+                    -> Parallel index lookup on bmsql_stock using PRIMARY (s_w_id=316)  (cost=0.276 rows=0.75)
+                -> Hash
+                    -> Parallel index range scan on bmsql_order_line using PRIMARY over (ol_w_id = 316 AND ol_d_id = 7 AND 80 <= ol_o_id < 100)  (cost=0.385 rows=0.25)
+
+DROP TABLE bmsql_district, bmsql_order_line, bmsql_stock;
+#
+# BUG2026030947301 Incorrect result issue caused by the rds_empty_redundant_check_in_range_scan feature.
+#
+CREATE TABLE `t1` (
+`c1` tinyint DEFAULT NULL,
+`c2` char(4) DEFAULT NULL
+);
+CREATE TABLE `t2` (
+`c1` tinyint DEFAULT NULL,
+`c2` char(4) DEFAULT NULL,
+KEY `c1` (`c1`)
+);
+INSERT INTO t1 VALUES(   1, 'aaaa');
+INSERT INTO t1 VALUES(   1, 'aabb');
+INSERT INTO t1 VALUES(   1, 'aacd');
+INSERT INTO t1 VALUES(   0, 'aaa2');
+INSERT INTO t1 VALUES(   0, 'ab');
+INSERT INTO t1 VALUES(   0, NULL);
+INSERT INTO t1 VALUES(   1, NULL);
+INSERT INTO t1 VALUES(   2, NULL);
+INSERT INTO t1 VALUES(NULL, NULL);
+INSERT INTO t2 VALUES(   1, 'aaaa');
+INSERT INTO t2 VALUES(   1, 'aabb');
+INSERT INTO t2 VALUES(   1, 'aacd');
+INSERT INTO t2 VALUES(   0, 'aaa2');
+INSERT INTO t2 VALUES(   0, 'ab');
+INSERT INTO t2 VALUES(   1, NULL);
+INSERT INTO t2 VALUES(   0, NULL);
+INSERT INTO t2 VALUES(   2, NULL);
+INSERT INTO t2 VALUES(NULL, NULL);
+ANALYZE TABLE t1,t2;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+test.t2	analyze	status	OK
+SET rds_empty_redundant_check_in_range_scan=ON;
+SELECT t1.c2, t2.c2
+FROM 
+t1, t2
+WHERE t1.c1 <= t1.c1
+AND t2.c1 IN (false, 0)
+AND t2.c1 BETWEEN 'true' AND t2.c2
+GROUP BY 1, 2
+ORDER BY 1, 2;
+c2	c2
+NULL	aaa2
+NULL	ab
+aaa2	aaa2
+aaa2	ab
+aaaa	aaa2
+aaaa	ab
+aabb	aaa2
+aabb	ab
+aacd	aaa2
+aacd	ab
+ab	aaa2
+ab	ab
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'true'
+Warning	1292	Truncated incorrect DOUBLE value: 'true'
+Warning	1292	Truncated incorrect DOUBLE value: 'aaa2'
+Warning	1292	Truncated incorrect DOUBLE value: 'true'
+Warning	1292	Truncated incorrect DOUBLE value: 'ab'
+Warning	1292	Truncated incorrect DOUBLE value: 'true'
+SET rds_empty_redundant_check_in_range_scan=OFF;
+SELECT t1.c2, t2.c2
+FROM 
+t1, t2
+WHERE t1.c1 <= t1.c1
+AND t2.c1 IN (false, 0)
+AND t2.c1 BETWEEN 'true' AND t2.c2
+GROUP BY 1, 2
+ORDER BY 1, 2;
+c2	c2
+NULL	aaa2
+NULL	ab
+aaa2	aaa2
+aaa2	ab
+aaaa	aaa2
+aaaa	ab
+aabb	aaa2
+aabb	ab
+aacd	aaa2
+aacd	ab
+ab	aaa2
+ab	ab
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'true'
+Warning	1292	Truncated incorrect DOUBLE value: 'true'
+Warning	1292	Truncated incorrect DOUBLE value: 'aaa2'
+Warning	1292	Truncated incorrect DOUBLE value: 'true'
+Warning	1292	Truncated incorrect DOUBLE value: 'ab'
+Warning	1292	Truncated incorrect DOUBLE value: 'true'
+DROP TABLE t1,t2;

@@ -1,0 +1,534 @@
+From ea82404780ae813d2e4db64f8d4924e4acdf0bd9 Mon Sep 17 00:00:00 2001
+From: wangyunhua <wangyunhua3@contributor>
+
+
+Date: Sun, 15 Mar 2026 13:42:09 +0000
+Subject: [PATCH] BUGFIX Fix the incorrect result issue caused by the
+ rds_empty_redundant_check_in_range_scan feature.
+
+Issue:
+------
+The rds_empty_redundant_check_in_range_scan feature produces incorrect
+query results in certain scenarios. This feature is designed exclusively
+for constant filtering conditions(e.g., `WHERE a > 1`).However, when
+handling BETWEEN conditions, the logic only verified that the first two
+arguments (arguments()[0] and arguments()[1]) were constants, while failing
+to check the third argument (arguments()[2]). This allowed the feature to
+be incorrectly applied to unsupported scenarios involving non-constant
+parameters.
+
+Solution:
+---------
+Add a check: only allow constant items to be optimized away.
+---
+ ...nge_scan_remove_redundant_condition.result | 93 +++++++++++++++++++
+ ..._scan_remove_redundant_condition.result-pq | 93 +++++++++++++++++++
+ ...n_remove_redundant_condition-dstore.result | 93 +++++++++++++++++++
+ .../dstore_main/r/session_plan_cache.result   |  8 +-
+ ...can_remove_redundant_condition-dstore.test | 60 ++++++++++++
+ ...range_scan_remove_redundant_condition.test | 62 ++++++++++++-
+ sql/sql_optimizer.cc                          |  9 +-
+ 7 files changed, 411 insertions(+), 7 deletions(-)
+
+diff --git a/mysql-test/r/range_scan_remove_redundant_condition.result b/mysql-test/r/range_scan_remove_redundant_condition.result
+index c44271816f4..97e8d77fe44 100644
+--- a/mysql-test/r/range_scan_remove_redundant_condition.result
++++ b/mysql-test/r/range_scan_remove_redundant_condition.result
+@@ -1118,3 +1118,96 @@ EXPLAIN
+             -> Index range scan on bmsql_order_line using PRIMARY over (ol_w_id = 316 AND ol_d_id = 7 AND 80 <= ol_o_id < 100)  (cost=0.46 rows=1)
+ 
+ DROP TABLE bmsql_district, bmsql_order_line, bmsql_stock;
++#
++# BUGFIX Incorrect result issue caused by the rds_empty_redundant_check_in_range_scan feature.
++#
++CREATE TABLE `t1` (
++`c1` tinyint DEFAULT NULL,
++`c2` char(4) DEFAULT NULL
++);
++CREATE TABLE `t2` (
++`c1` tinyint DEFAULT NULL,
++`c2` char(4) DEFAULT NULL,
++KEY `c1` (`c1`)
++);
++INSERT INTO t1 VALUES(   1, 'aaaa');
++INSERT INTO t1 VALUES(   1, 'aabb');
++INSERT INTO t1 VALUES(   1, 'aacd');
++INSERT INTO t1 VALUES(   0, 'aaa2');
++INSERT INTO t1 VALUES(   0, 'ab');
++INSERT INTO t1 VALUES(   0, NULL);
++INSERT INTO t1 VALUES(   1, NULL);
++INSERT INTO t1 VALUES(   2, NULL);
++INSERT INTO t1 VALUES(NULL, NULL);
++INSERT INTO t2 VALUES(   1, 'aaaa');
++INSERT INTO t2 VALUES(   1, 'aabb');
++INSERT INTO t2 VALUES(   1, 'aacd');
++INSERT INTO t2 VALUES(   0, 'aaa2');
++INSERT INTO t2 VALUES(   0, 'ab');
++INSERT INTO t2 VALUES(   1, NULL);
++INSERT INTO t2 VALUES(   0, NULL);
++INSERT INTO t2 VALUES(   2, NULL);
++INSERT INTO t2 VALUES(NULL, NULL);
++ANALYZE TABLE t1,t2;
++Table	Op	Msg_type	Msg_text
++test.t1	analyze	status	OK
++test.t2	analyze	status	OK
++SET rds_empty_redundant_check_in_range_scan=ON;
++SELECT t1.c2, t2.c2
++FROM 
++t1, t2
++WHERE t1.c1 <= t1.c1
++AND t2.c1 IN (false, 0)
++AND t2.c1 BETWEEN 'true' AND t2.c2
++GROUP BY 1, 2
++ORDER BY 1, 2;
++c2	c2
++NULL	aaa2
++NULL	ab
++aaa2	aaa2
++aaa2	ab
++aaaa	aaa2
++aaaa	ab
++aabb	aaa2
++aabb	ab
++aacd	aaa2
++aacd	ab
++ab	aaa2
++ab	ab
++Warnings:
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++Warning	1292	Truncated incorrect DOUBLE value: 'aaa2'
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++Warning	1292	Truncated incorrect DOUBLE value: 'ab'
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++SET rds_empty_redundant_check_in_range_scan=OFF;
++SELECT t1.c2, t2.c2
++FROM 
++t1, t2
++WHERE t1.c1 <= t1.c1
++AND t2.c1 IN (false, 0)
++AND t2.c1 BETWEEN 'true' AND t2.c2
++GROUP BY 1, 2
++ORDER BY 1, 2;
++c2	c2
++NULL	aaa2
++NULL	ab
++aaa2	aaa2
++aaa2	ab
++aaaa	aaa2
++aaaa	ab
++aabb	aaa2
++aabb	ab
++aacd	aaa2
++aacd	ab
++ab	aaa2
++ab	ab
++Warnings:
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++Warning	1292	Truncated incorrect DOUBLE value: 'aaa2'
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++Warning	1292	Truncated incorrect DOUBLE value: 'ab'
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++DROP TABLE t1,t2;
+diff --git a/mysql-test/r/range_scan_remove_redundant_condition.result-pq b/mysql-test/r/range_scan_remove_redundant_condition.result-pq
+index 016e96e8b9b..f2dbf8ec924 100644
+--- a/mysql-test/r/range_scan_remove_redundant_condition.result-pq
++++ b/mysql-test/r/range_scan_remove_redundant_condition.result-pq
+@@ -1241,3 +1241,96 @@ EXPLAIN
+                     -> Parallel index range scan on bmsql_order_line using PRIMARY over (ol_w_id = 316 AND ol_d_id = 7 AND 80 <= ol_o_id < 100)  (cost=0.385 rows=0.25)
+ 
+ DROP TABLE bmsql_district, bmsql_order_line, bmsql_stock;
++#
++# BUGFIX Incorrect result issue caused by the rds_empty_redundant_check_in_range_scan feature.
++#
++CREATE TABLE `t1` (
++`c1` tinyint DEFAULT NULL,
++`c2` char(4) DEFAULT NULL
++);
++CREATE TABLE `t2` (
++`c1` tinyint DEFAULT NULL,
++`c2` char(4) DEFAULT NULL,
++KEY `c1` (`c1`)
++);
++INSERT INTO t1 VALUES(   1, 'aaaa');
++INSERT INTO t1 VALUES(   1, 'aabb');
++INSERT INTO t1 VALUES(   1, 'aacd');
++INSERT INTO t1 VALUES(   0, 'aaa2');
++INSERT INTO t1 VALUES(   0, 'ab');
++INSERT INTO t1 VALUES(   0, NULL);
++INSERT INTO t1 VALUES(   1, NULL);
++INSERT INTO t1 VALUES(   2, NULL);
++INSERT INTO t1 VALUES(NULL, NULL);
++INSERT INTO t2 VALUES(   1, 'aaaa');
++INSERT INTO t2 VALUES(   1, 'aabb');
++INSERT INTO t2 VALUES(   1, 'aacd');
++INSERT INTO t2 VALUES(   0, 'aaa2');
++INSERT INTO t2 VALUES(   0, 'ab');
++INSERT INTO t2 VALUES(   1, NULL);
++INSERT INTO t2 VALUES(   0, NULL);
++INSERT INTO t2 VALUES(   2, NULL);
++INSERT INTO t2 VALUES(NULL, NULL);
++ANALYZE TABLE t1,t2;
++Table	Op	Msg_type	Msg_text
++test.t1	analyze	status	OK
++test.t2	analyze	status	OK
++SET rds_empty_redundant_check_in_range_scan=ON;
++SELECT t1.c2, t2.c2
++FROM 
++t1, t2
++WHERE t1.c1 <= t1.c1
++AND t2.c1 IN (false, 0)
++AND t2.c1 BETWEEN 'true' AND t2.c2
++GROUP BY 1, 2
++ORDER BY 1, 2;
++c2	c2
++NULL	aaa2
++NULL	ab
++aaa2	aaa2
++aaa2	ab
++aaaa	aaa2
++aaaa	ab
++aabb	aaa2
++aabb	ab
++aacd	aaa2
++aacd	ab
++ab	aaa2
++ab	ab
++Warnings:
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++Warning	1292	Truncated incorrect DOUBLE value: 'aaa2'
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++Warning	1292	Truncated incorrect DOUBLE value: 'ab'
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++SET rds_empty_redundant_check_in_range_scan=OFF;
++SELECT t1.c2, t2.c2
++FROM 
++t1, t2
++WHERE t1.c1 <= t1.c1
++AND t2.c1 IN (false, 0)
++AND t2.c1 BETWEEN 'true' AND t2.c2
++GROUP BY 1, 2
++ORDER BY 1, 2;
++c2	c2
++NULL	aaa2
++NULL	ab
++aaa2	aaa2
++aaa2	ab
++aaaa	aaa2
++aaaa	ab
++aabb	aaa2
++aabb	ab
++aacd	aaa2
++aacd	ab
++ab	aaa2
++ab	ab
++Warnings:
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++Warning	1292	Truncated incorrect DOUBLE value: 'aaa2'
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++Warning	1292	Truncated incorrect DOUBLE value: 'ab'
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++DROP TABLE t1,t2;
+diff --git a/mysql-test/suite/dstore_main/r/range_scan_remove_redundant_condition-dstore.result b/mysql-test/suite/dstore_main/r/range_scan_remove_redundant_condition-dstore.result
+index 25215bc87c9..0170969e3bb 100644
+--- a/mysql-test/suite/dstore_main/r/range_scan_remove_redundant_condition-dstore.result
++++ b/mysql-test/suite/dstore_main/r/range_scan_remove_redundant_condition-dstore.result
+@@ -1235,3 +1235,96 @@ EXPLAIN
+             -> Index range scan on bmsql_order_line using PRIMARY over (ol_w_id = 316 AND ol_d_id = 7 AND 80 <= ol_o_id < 100)  (cost=0.71 rows=1)
+ 
+ DROP TABLE bmsql_district, bmsql_order_line, bmsql_stock;
++#
++# BUGFIX Incorrect result issue caused by the rds_empty_redundant_check_in_range_scan feature.
++#
++CREATE TABLE `t1` (
++`c1` tinyint DEFAULT NULL,
++`c2` char(4) DEFAULT NULL
++);
++CREATE TABLE `t2` (
++`c1` tinyint DEFAULT NULL,
++`c2` char(4) DEFAULT NULL,
++KEY `c1` (`c1`)
++);
++INSERT INTO t1 VALUES(   1, 'aaaa');
++INSERT INTO t1 VALUES(   1, 'aabb');
++INSERT INTO t1 VALUES(   1, 'aacd');
++INSERT INTO t1 VALUES(   0, 'aaa2');
++INSERT INTO t1 VALUES(   0, 'ab');
++INSERT INTO t1 VALUES(   0, NULL);
++INSERT INTO t1 VALUES(   1, NULL);
++INSERT INTO t1 VALUES(   2, NULL);
++INSERT INTO t1 VALUES(NULL, NULL);
++INSERT INTO t2 VALUES(   1, 'aaaa');
++INSERT INTO t2 VALUES(   1, 'aabb');
++INSERT INTO t2 VALUES(   1, 'aacd');
++INSERT INTO t2 VALUES(   0, 'aaa2');
++INSERT INTO t2 VALUES(   0, 'ab');
++INSERT INTO t2 VALUES(   1, NULL);
++INSERT INTO t2 VALUES(   0, NULL);
++INSERT INTO t2 VALUES(   2, NULL);
++INSERT INTO t2 VALUES(NULL, NULL);
++ANALYZE TABLE t1,t2;
++Table	Op	Msg_type	Msg_text
++test.t1	analyze	status	OK
++test.t2	analyze	status	OK
++SET rds_empty_redundant_check_in_range_scan=ON;
++SELECT t1.c2, t2.c2
++FROM 
++t1, t2
++WHERE t1.c1 <= t1.c1
++AND t2.c1 IN (false, 0)
++AND t2.c1 BETWEEN 'true' AND t2.c2
++GROUP BY 1, 2
++ORDER BY 1, 2;
++c2	c2
++NULL	aaa2
++NULL	ab
++aaa2	aaa2
++aaa2	ab
++aaaa	aaa2
++aaaa	ab
++aabb	aaa2
++aabb	ab
++aacd	aaa2
++aacd	ab
++ab	aaa2
++ab	ab
++Warnings:
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++Warning	1292	Truncated incorrect DOUBLE value: 'aaa2'
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++Warning	1292	Truncated incorrect DOUBLE value: 'ab'
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++SET rds_empty_redundant_check_in_range_scan=OFF;
++SELECT t1.c2, t2.c2
++FROM 
++t1, t2
++WHERE t1.c1 <= t1.c1
++AND t2.c1 IN (false, 0)
++AND t2.c1 BETWEEN 'true' AND t2.c2
++GROUP BY 1, 2
++ORDER BY 1, 2;
++c2	c2
++NULL	aaa2
++NULL	ab
++aaa2	aaa2
++aaa2	ab
++aaaa	aaa2
++aaaa	ab
++aabb	aaa2
++aabb	ab
++aacd	aaa2
++aacd	ab
++ab	aaa2
++ab	ab
++Warnings:
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++Warning	1292	Truncated incorrect DOUBLE value: 'aaa2'
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++Warning	1292	Truncated incorrect DOUBLE value: 'ab'
++Warning	1292	Truncated incorrect DOUBLE value: 'true'
++DROP TABLE t1,t2;
+diff --git a/mysql-test/suite/dstore_main/r/session_plan_cache.result b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+index ceaea938c13..21c917744a8 100644
+--- a/mysql-test/suite/dstore_main/r/session_plan_cache.result
++++ b/mysql-test/suite/dstore_main/r/session_plan_cache.result
+@@ -3586,13 +3586,13 @@ set @col1='07:59:59.000000', @col2='1995-09-02 12:20:00.000000';
+ EXECUTE stmt_explain USING @col1,@col2;
+ EXPLAIN
+ -> Sort: date_col, bigint_col  (...)
+-    -> Index range scan on A using ndx_timestamp_time_col over (timestamp_col = '1995-09-02 12:20:00.000000' AND time_col <= '07:59:59.000000'), with index condition: (A.time_col >= '07:59:59.000000')  (...)
++    -> Index range scan on A using ndx_timestamp_time_col over (timestamp_col = '1995-09-02 12:20:00.000000' AND time_col <= '07:59:59.000000'), with index condition: ((A.time_col >= '07:59:59.000000') and (A.timestamp_col between '1995-09-02 12:20:00.000000' and '1995-09-02 12:20:00.000000'))  (...)
+ 
+ set @col1='01:59:59.000000', @col2='2020-03-02 10:00:00.000000';
+ EXECUTE stmt_explain USING @col1,@col2;
+ EXPLAIN
+ -> Sort: date_col, bigint_col  (...)
+-    -> Index range scan on A using ndx_timestamp_time_col over ('2020-03-02 10:00:00.000000' <= timestamp_col <= '1995-09-02 12:20:00.000000' AND time_col <= '01:59:59.000000'), with index condition: (A.time_col >= '01:59:59.000000')  (...)
++    -> Index range scan on A using ndx_timestamp_time_col over ('2020-03-02 10:00:00.000000' <= timestamp_col <= '1995-09-02 12:20:00.000000' AND time_col <= '01:59:59.000000'), with index condition: ((A.time_col >= '01:59:59.000000') and (A.timestamp_col between '1995-09-02 12:20:00.000000' and '2020-03-02 10:00:00.000000'))  (...)
+ 
+ set rds_plan_cache=1;
+ PREPARE stmt_explain FROM 
+@@ -3606,13 +3606,13 @@ set @col1='07:59:59.000000', @col2='1995-09-02 12:20:00.000000';
+ EXECUTE stmt_explain USING @col1,@col2;
+ EXPLAIN
+ -> Sort: date_col, bigint_col  (...)
+-    -> Index range scan on A using ndx_timestamp_time_col over (timestamp_col = '1995-09-02 12:20:00.000000' AND time_col <= '07:59:59.000000'), with index condition: (A.time_col >= '07:59:59.000000')  (...)
++    -> Index range scan on A using ndx_timestamp_time_col over (timestamp_col = '1995-09-02 12:20:00.000000' AND time_col <= '07:59:59.000000'), with index condition: ((A.time_col >= '07:59:59.000000') and (A.timestamp_col between '1995-09-02 12:20:00.000000' and '1995-09-02 12:20:00.000000'))  (...)
+ 
+ set @col1='01:59:59.000000', @col2='2020-03-02 10:00:00.000000';
+ EXECUTE stmt_explain USING @col1,@col2;
+ EXPLAIN
+ -> Sort: date_col, bigint_col  (...)
+-    -> Index range scan on A using ndx_timestamp_time_col over ('2020-03-02 10:00:00.000000' <= timestamp_col <= '1995-09-02 12:20:00.000000' AND time_col <= '01:59:59.000000'), with index condition: (A.time_col >= '01:59:59.000000')  (...)
++    -> Index range scan on A using ndx_timestamp_time_col over ('2020-03-02 10:00:00.000000' <= timestamp_col <= '1995-09-02 12:20:00.000000' AND time_col <= '01:59:59.000000'), with index condition: ((A.time_col >= '01:59:59.000000') and (A.timestamp_col between '1995-09-02 12:20:00.000000' and '2020-03-02 10:00:00.000000'))  (...)
+ 
+ DROP PREPARE stmt_explain;
+ # Observe how the whole testcase has not increased the count of cached plan hits: it is because of the invalidation as each time the range optimizer fails to recreate an index range scan identical to the previously cached one, due to the constant hop between point-range and true-range.
+diff --git a/mysql-test/suite/dstore_main/t/range_scan_remove_redundant_condition-dstore.test b/mysql-test/suite/dstore_main/t/range_scan_remove_redundant_condition-dstore.test
+index e451507ddbe..9bf3742906f 100644
+--- a/mysql-test/suite/dstore_main/t/range_scan_remove_redundant_condition-dstore.test
++++ b/mysql-test/suite/dstore_main/t/range_scan_remove_redundant_condition-dstore.test
+@@ -667,3 +667,63 @@ EXPLAIN format=tree SELECT count(*) AS low_stock FROM (
+         ol_o_id < d_next_o_id WHERE d_w_id = 316 AND d_id = 7 ) ) AS L ;
+ 
+ DROP TABLE bmsql_district, bmsql_order_line, bmsql_stock;
++
++--echo #
++--echo # BUGFIX Incorrect result issue caused by the rds_empty_redundant_check_in_range_scan feature.
++--echo #
++CREATE TABLE `t1` (
++  `c1` tinyint DEFAULT NULL,
++  `c2` char(4) DEFAULT NULL
++);
++
++CREATE TABLE `t2` (
++  `c1` tinyint DEFAULT NULL,
++  `c2` char(4) DEFAULT NULL,
++  KEY `c1` (`c1`)
++);
++
++INSERT INTO t1 VALUES(   1, 'aaaa');
++INSERT INTO t1 VALUES(   1, 'aabb');
++INSERT INTO t1 VALUES(   1, 'aacd');
++INSERT INTO t1 VALUES(   0, 'aaa2');
++INSERT INTO t1 VALUES(   0, 'ab');
++INSERT INTO t1 VALUES(   0, NULL);
++INSERT INTO t1 VALUES(   1, NULL);
++INSERT INTO t1 VALUES(   2, NULL);
++INSERT INTO t1 VALUES(NULL, NULL);
++
++INSERT INTO t2 VALUES(   1, 'aaaa');
++INSERT INTO t2 VALUES(   1, 'aabb');
++INSERT INTO t2 VALUES(   1, 'aacd');
++INSERT INTO t2 VALUES(   0, 'aaa2');
++INSERT INTO t2 VALUES(   0, 'ab');
++INSERT INTO t2 VALUES(   1, NULL);
++INSERT INTO t2 VALUES(   0, NULL);
++INSERT INTO t2 VALUES(   2, NULL);
++INSERT INTO t2 VALUES(NULL, NULL);
++
++ANALYZE TABLE t1,t2;
++
++SET rds_empty_redundant_check_in_range_scan=ON;
++
++SELECT t1.c2, t2.c2
++FROM 
++    t1, t2
++WHERE t1.c1 <= t1.c1
++    AND t2.c1 IN (false, 0)
++    AND t2.c1 BETWEEN 'true' AND t2.c2
++GROUP BY 1, 2
++ORDER BY 1, 2;
++
++SET rds_empty_redundant_check_in_range_scan=OFF;
++
++SELECT t1.c2, t2.c2
++FROM 
++    t1, t2
++WHERE t1.c1 <= t1.c1
++    AND t2.c1 IN (false, 0)
++    AND t2.c1 BETWEEN 'true' AND t2.c2
++GROUP BY 1, 2
++ORDER BY 1, 2;
++
++DROP TABLE t1,t2;
+diff --git a/mysql-test/t/range_scan_remove_redundant_condition.test b/mysql-test/t/range_scan_remove_redundant_condition.test
+index 0ab36a38e47..559e35eff17 100644
+--- a/mysql-test/t/range_scan_remove_redundant_condition.test
++++ b/mysql-test/t/range_scan_remove_redundant_condition.test
+@@ -635,4 +635,64 @@ EXPLAIN format=tree SELECT count(*) AS low_stock FROM (
+        ol_d_id = d_id AND ol_o_id >= d_next_o_id - 20 AND
+         ol_o_id < d_next_o_id WHERE d_w_id = 316 AND d_id = 7 ) ) AS L ;
+ 
+-DROP TABLE bmsql_district, bmsql_order_line, bmsql_stock;
+\ No newline at end of file
++DROP TABLE bmsql_district, bmsql_order_line, bmsql_stock;
++
++--echo #
++--echo # BUGFIX Incorrect result issue caused by the rds_empty_redundant_check_in_range_scan feature.
++--echo #
++CREATE TABLE `t1` (
++  `c1` tinyint DEFAULT NULL,
++  `c2` char(4) DEFAULT NULL
++);
++
++CREATE TABLE `t2` (
++  `c1` tinyint DEFAULT NULL,
++  `c2` char(4) DEFAULT NULL,
++  KEY `c1` (`c1`)
++);
++
++INSERT INTO t1 VALUES(   1, 'aaaa');
++INSERT INTO t1 VALUES(   1, 'aabb');
++INSERT INTO t1 VALUES(   1, 'aacd');
++INSERT INTO t1 VALUES(   0, 'aaa2');
++INSERT INTO t1 VALUES(   0, 'ab');
++INSERT INTO t1 VALUES(   0, NULL);
++INSERT INTO t1 VALUES(   1, NULL);
++INSERT INTO t1 VALUES(   2, NULL);
++INSERT INTO t1 VALUES(NULL, NULL);
++
++INSERT INTO t2 VALUES(   1, 'aaaa');
++INSERT INTO t2 VALUES(   1, 'aabb');
++INSERT INTO t2 VALUES(   1, 'aacd');
++INSERT INTO t2 VALUES(   0, 'aaa2');
++INSERT INTO t2 VALUES(   0, 'ab');
++INSERT INTO t2 VALUES(   1, NULL);
++INSERT INTO t2 VALUES(   0, NULL);
++INSERT INTO t2 VALUES(   2, NULL);
++INSERT INTO t2 VALUES(NULL, NULL);
++
++ANALYZE TABLE t1,t2;
++
++SET rds_empty_redundant_check_in_range_scan=ON;
++
++SELECT t1.c2, t2.c2
++FROM 
++    t1, t2
++WHERE t1.c1 <= t1.c1
++    AND t2.c1 IN (false, 0)
++    AND t2.c1 BETWEEN 'true' AND t2.c2
++GROUP BY 1, 2
++ORDER BY 1, 2;
++
++SET rds_empty_redundant_check_in_range_scan=OFF;
++
++SELECT t1.c2, t2.c2
++FROM 
++    t1, t2
++WHERE t1.c1 <= t1.c1
++    AND t2.c1 IN (false, 0)
++    AND t2.c1 BETWEEN 'true' AND t2.c2
++GROUP BY 1, 2
++ORDER BY 1, 2;
++
++DROP TABLE t1,t2;
+\ No newline at end of file
+diff --git a/sql/sql_optimizer.cc b/sql/sql_optimizer.cc
+index 403317a6473..e79e8e9f43c 100644
+--- a/sql/sql_optimizer.cc
++++ b/sql/sql_optimizer.cc
+@@ -9512,8 +9512,13 @@ static bool reduce_cond_for_table(THD *thd, Item *cond, table_map null_extended,
+                     // disjoint intervals
+                     negated = down_cast<Item_func_between *>(func)->negated;
+                     Item *right_item_2 = func->arguments()[2]->real_item();
+-                    cmp_with_max = right_item_2;
+-                    cmp_with_min = right_item;
++                    if (!right_item_2->const_item()) {
++                      cmp_with_max = nullptr;
++                      cmp_with_min = nullptr;
++                    } else {
++                      cmp_with_max = right_item_2;
++                      cmp_with_min = right_item;
++                    }
+                   }
+                   // If the range scan's upper/lower bound is included in the
+                   // range (<=,>=), we should not remove a condition that has a
+-- 
+2.23.0
+

@@ -1,0 +1,71 @@
+# ==== Purpose ====
+#
+# This script tests single-thread binlog commit.
+#
+# ==== Implementation ====
+#
+# 1. Create a table with DStore as a storage-engine.
+# 2. Execute DMLs within a transaction and commit it.
+#
+
+--source include/have_dstore.inc
+--source include/have_debug.inc
+
+let $sysvars_to_save = [
+    "GLOBAL.binlog_order_commits",
+    "GLOBAL.binlog_error_action",
+    "GLOBAL.binlog_group_commit_sync_delay"
+];
+--source include/save_sysvars.inc
+
+if ($DSTORE_TEST == 0) {
+  --disable_query_log
+  SET GLOBAL binlog_order_commits = 1;
+  --enable_query_log
+}
+
+--disable_query_log
+set sql_log_bin=0;
+--enable_query_log
+CALL mtr.add_suppression(".*An error occurred during sync stage of the commit. 'binlog_error_action' is set to 'IGNORE_ERROR'.*");
+--disable_query_log
+set sql_log_bin=1;
+--enable_query_log
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  data VARCHAR(100)
+) ENGINE=DStore;
+
+SET SESSION debug = "+d,force_rotate";
+SET GLOBAL binlog_group_commit_sync_delay = 1;
+BEGIN;
+INSERT INTO test.t1 VALUES (1, 'Testing gropu-commit with just 1 thread');
+INSERT INTO test.t1 VALUES (2, 'Testing again group-commit with just 1 thread');
+INSERT INTO test.t1 VALUES (3, 'Testing for the last time group-commit with just 1 thread');
+UPDATE test.t1 SET data = 'Testing group-commit with just 1 thread' WHERE id = 1;
+DELETE FROM test.t1 WHERE id = 2;
+COMMIT;
+
+SET SESSION debug = "";
+SET SESSION debug = "+d,force_update_binlog_end_pos_after_sync,force_run_after_commit_hooks";
+BEGIN;
+INSERT INTO test.t1 VALUES (2, 'Testing again group-commit with just 1 thread');
+COMMIT;
+
+SET SESSION debug = "";
+SET SESSION debug = "+d,simulate_binlog_is_closed";
+BEGIN;
+DELETE FROM test.t1 WHERE id = 2;
+COMMIT;
+
+SET SESSION debug = "";
+SET GLOBAL binlog_error_action = IGNORE_ERROR;
+SET SESSION debug = "+d,after_flush_simulate_error";
+BEGIN;
+UPDATE test.t1 SET data = 'Now really testing for the last time with just 1 thread' WHERE id = 3;
+COMMIT;
+
+--source include/restore_sysvars.inc
+DROP TABLE t1;
+--source include/destroy_json_functions.inc

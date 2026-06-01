@@ -1,0 +1,80 @@
+From 083448b8e8f1fa5d6fa132f7a0c6158ad32d8963 Mon Sep 17 00:00:00 2001
+From: wuwenbin <wuwenbin19@contributor>
+
+Date: Fri, 20 Feb 2026 16:38:48 +0800
+Subject: [PATCH] Fix partial_result_cache test case
+
+Issue:
+---------
+The dstore_main.partial_result_cache-dstore test case fails due to non-deterministic output from Result Cache statistics. The Cache Hits, Cache Misses, Cache Evictions, and Cache Overflows values vary between test runs, causing result mismatches.
+
+Solution:
+---------
+Added --replace_regex directives to replace non-deterministic Result Cache statistics with placeholders (#) in three EXPLAIN ANALYZE statements. This ensures stable and reproducible test results regardless of execution environment variations.
+---
+ .../suite/dstore_main/r/partial_result_cache-dstore.result  | 6 +++---
+ .../suite/dstore_main/t/partial_result_cache-dstore.test    | 6 +++---
+ 2 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/mysql-test/suite/dstore_main/r/partial_result_cache-dstore.result b/mysql-test/suite/dstore_main/r/partial_result_cache-dstore.result
+index c5fb41992b2..f8835f944d7 100644
+--- a/mysql-test/suite/dstore_main/r/partial_result_cache-dstore.result
++++ b/mysql-test/suite/dstore_main/r/partial_result_cache-dstore.result
+@@ -3153,7 +3153,7 @@ EXPLAIN
+ -> Nested loop inner join 
+     -> Filter: (t1.a is not null) 
+         -> Table scan on t1 
+-    -> Result cache : cache keys(t1.a, t1.b) (Cache Hits: 10, Cache Misses: 32, Cache Evictions: 4, Cache Overflows: 0, Memory Usage: # ) 
++    -> Result cache : cache keys(t1.a, t1.b) (Cache Hits: # , Cache Misses: # , Cache Evictions: # , Cache Overflows: # , Memory Usage: # ) 
+         -> Index lookup on t2 using a (a=t1.a) 
+ 
+ select /*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a order by 1,2,3,4;
+@@ -3470,7 +3470,7 @@ EXPLAIN
+ -> Nested loop inner join 
+     -> Filter: (t1.a is not null) 
+         -> Table scan on t1 
+-    -> Result cache : cache keys(t1.a, t1.b) (Cache Hits: 0, Cache Misses: 31, Cache Evictions: 0, Cache Overflows: 1, Memory Usage: # ) 
++    -> Result cache : cache keys(t1.a, t1.b) (Cache Hits: # , Cache Misses: # , Cache Evictions: # , Cache Overflows: # , Memory Usage: # ) 
+         -> Index lookup on t2 using a (a=t1.a) 
+ 
+ SET SESSION DEBUG='-d,key_pair_key_null_pointer_injection';
+@@ -3515,7 +3515,7 @@ EXPLAIN
+ -> Nested loop inner join 
+     -> Filter: (t1.a is not null) 
+         -> Table scan on t1 
+-    -> Result cache : cache keys(t1.a, t1.b) (Cache Hits: 0, Cache Misses: 33, Cache Evictions: 6, Cache Overflows: 0, Memory Usage: # ) 
++    -> Result cache : cache keys(t1.a, t1.b) (Cache Hits: # , Cache Misses: # , Cache Evictions: # , Cache Overflows: # , Memory Usage: # ) 
+         -> Index lookup on t2 using a (a=t1.a) 
+ 
+ select /*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a order by 1,2,3,4;
+diff --git a/mysql-test/suite/dstore_main/t/partial_result_cache-dstore.test b/mysql-test/suite/dstore_main/t/partial_result_cache-dstore.test
+index 73f57520a24..4135d153579 100644
+--- a/mysql-test/suite/dstore_main/t/partial_result_cache-dstore.test
++++ b/mysql-test/suite/dstore_main/t/partial_result_cache-dstore.test
+@@ -684,12 +684,12 @@ set @old_partial_result_cache_max_mem_size=@@rds_partial_result_cache_max_mem_si
+ set rds_partial_result_cache_max_mem_size = 65*1024;
+ --replace_regex /  \(cost.*//
+ explain format=tree select/*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a;
+---replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*//
++--replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*// /Cache Hits: [0-9]+/Cache Hits: # / /Cache Misses: [0-9]+/Cache Misses: # / /Cache Evictions: [0-9]+/Cache Evictions: # / /Cache Overflows: [0-9]+/Cache Overflows: # / / \(cost.*//
+ explain analyze select/*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a;
+ select /*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a order by 1,2,3,4;
+ select /*+ no_prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a order by 1,2,3,4;
+ SET SESSION DEBUG='+d,key_pair_key_null_pointer_injection';
+---replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*//
++--replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*// /Cache Hits: [0-9]+/Cache Hits: # / /Cache Misses: [0-9]+/Cache Misses: # / /Cache Evictions: [0-9]+/Cache Evictions: # / /Cache Overflows: [0-9]+/Cache Overflows: # / / \(cost.*//
+ explain analyze select/*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a;
+ SET SESSION DEBUG='-d,key_pair_key_null_pointer_injection';
+ set rds_partial_result_cache_max_mem_size=@old_partial_result_cache_max_mem_size;
+@@ -730,7 +730,7 @@ set @old_partial_result_cache_max_mem_size=@@rds_partial_result_cache_max_mem_si
+ set rds_partial_result_cache_max_mem_size=1024*64;
+ --replace_regex /  \(cost.*//
+ explain format=tree select/*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a;
+---replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*//
++--replace_regex /time.* /time=# / /Memory Usage: [0-9]+ /Memory Usage: # / / \(cost.*// /Cache Hits: [0-9]+/Cache Hits: # / /Cache Misses: [0-9]+/Cache Misses: # / /Cache Evictions: [0-9]+/Cache Evictions: # / /Cache Overflows: [0-9]+/Cache Overflows: # / / \(cost.*//
+ explain analyze select/*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a;
+ select /*+ prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a order by 1,2,3,4;
+ select /*+ no_prc_join() */ t1.a,length(t1.b),t2.a,length(t2.b) from t1,t2 where t1.a=t2.a order by 1,2,3,4;
+-- 
+2.23.0
+

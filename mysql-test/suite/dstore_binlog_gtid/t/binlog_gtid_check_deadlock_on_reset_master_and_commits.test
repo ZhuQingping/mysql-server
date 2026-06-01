@@ -1,0 +1,185 @@
+# ==== Purpose ====
+# Verify that there is no deadlock on reset master and
+# concurrent transaction commits.
+#
+# ==== References ====
+#
+# BUG2026031735751 the MySQL connection was stuck on
+# reset master in concurrent test
+#
+
+--source include/have_binlog_format_row.inc
+--source include/have_only_dstore.inc
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+
+RESET MASTER;
+CREATE DATABASE db1;
+DROP DATABASE db1;
+CREATE TABLE t1(c1 INT PRIMARY KEY);
+--echo #
+--echo # Create connections.
+--echo #
+--connect(conn_1,localhost,root,,)
+--connect(conn_2,localhost,root,,)
+--connect(conn_3,localhost,root,,)
+--connect(conn_4,localhost,root,,)
+--connect(conn_5,localhost,root,,)
+--connect(conn_6,localhost,root,,)
+--connect(conn_7,localhost,root,,)
+--connect(conn_8,localhost,root,,)
+--connect(conn_9,localhost,root,,)
+--connect(conn_10,localhost,root,,)
+--connect(conn_11,localhost,root,,)
+--connect(conn_12,localhost,root,,)
+--connect(conn_13,localhost,root,,)
+--connect(conn_14,localhost,root,,)
+--connect(conn_15,localhost,root,,)
+--connect(conn_16,localhost,root,,)
+
+--echo #
+--echo # Execute 'RESET MASTER' and inserts in parallel on master.
+--echo #
+--connection conn_1
+--send RESET MASTER;
+--connection conn_2
+--send INSERT INTO t1 VALUES (2);
+--connection conn_3
+--send INSERT INTO t1 VALUES (3);
+--connection conn_4
+--send INSERT INTO t1 VALUES (4);
+--connection conn_5
+--send INSERT INTO t1 VALUES (5);
+--connection conn_6
+--send INSERT INTO t1 VALUES (6);
+--connection conn_7
+--send INSERT INTO t1 VALUES (7);
+--connection conn_8
+--send INSERT INTO t1 VALUES (8);
+--connection conn_9
+--send INSERT INTO t1 VALUES (9);
+--connection conn_10
+--send INSERT INTO t1 VALUES (10);
+--connection conn_11
+--send INSERT INTO t1 VALUES (11);
+--connection conn_12
+--send INSERT INTO t1 VALUES (12);
+--connection conn_13
+--send INSERT INTO t1 VALUES (13);
+--connection conn_14
+--send INSERT INTO t1 VALUES (14);
+--connection conn_15
+--send INSERT INTO t1 VALUES (15);
+--connection conn_16
+--send INSERT INTO t1 VALUES (16);
+
+--connection conn_1
+--reap
+--connection conn_2
+--reap
+--connection conn_3
+--reap
+--connection conn_4
+--reap
+--connection conn_5
+--reap
+--connection conn_6
+--reap
+--connection conn_7
+--reap
+--connection conn_8
+--reap
+--connection conn_9
+--reap
+--connection conn_10
+--reap
+--connection conn_11
+--reap
+--connection conn_12
+--reap
+--connection conn_13
+--reap
+--connection conn_14
+--reap
+--connection conn_15
+--reap
+--connection conn_16
+--reap
+
+--echo #
+--echo # Execute inserts in parallel on master again.
+--echo #
+--connection conn_1
+--send INSERT INTO t1 VALUES (101);
+--connection conn_2
+--send INSERT INTO t1 VALUES (102);
+--connection conn_3
+--send INSERT INTO t1 VALUES (103);
+--connection conn_4
+--send INSERT INTO t1 VALUES (104);
+--connection conn_5
+--send INSERT INTO t1 VALUES (105);
+--connection conn_6
+--send INSERT INTO t1 VALUES (106);
+--connection conn_7
+--send INSERT INTO t1 VALUES (107);
+--connection conn_8
+--send INSERT INTO t1 VALUES (108);
+--connection conn_9
+--send INSERT INTO t1 VALUES (109);
+--connection conn_10
+--send INSERT INTO t1 VALUES (110);
+--connection conn_11
+--send INSERT INTO t1 VALUES (111);
+--connection conn_12
+--send INSERT INTO t1 VALUES (112);
+--connection conn_13
+--send INSERT INTO t1 VALUES (113);
+--connection conn_14
+--send INSERT INTO t1 VALUES (114);
+--connection conn_15
+--send INSERT INTO t1 VALUES (115);
+--connection conn_16
+--send INSERT INTO t1 VALUES (116);
+
+--connection conn_1
+--reap
+--connection conn_2
+--reap
+--connection conn_3
+--reap
+--connection conn_4
+--reap
+--connection conn_5
+--reap
+--connection conn_6
+--reap
+--connection conn_7
+--reap
+--connection conn_8
+--reap
+--connection conn_9
+--reap
+--connection conn_10
+--reap
+--connection conn_11
+--reap
+--connection conn_12
+--reap
+--connection conn_13
+--reap
+--connection conn_14
+--reap
+--connection conn_15
+--reap
+--connection conn_16
+--reap
+
+--echo #
+--echo # Check that the concurrent transactions are committed successfully.
+--echo #
+SELECT * FROM t1 ORDER BY t1.c1;
+
+# Cleanup
+DROP TABLE t1;
+

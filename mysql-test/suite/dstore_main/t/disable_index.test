@@ -1,0 +1,115 @@
+#
+# Testing of disabled index scan
+#
+
+--source include/have_only_dstore.inc
+
+# Save current optimizer_switch value
+SET @optimizer_switch_saved = @@optimizer_switch;
+
+CREATE TABLE tt (
+    a INT,
+    b INT,
+    c INT,
+    INDEX idx_abc(a,b,c)
+) ENGINE=Dstore;
+
+CREATE TABLE t (
+    a INT
+);
+
+INSERT INTO t VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10);
+INSERT INTO tt(a,b,c) SELECT t1.a, t2.a, t3.a FROM t t1, t t2, t t3;
+
+ANALYZE TABLE tt UPDATE HISTOGRAM ON a,b,c;
+ANALYZE TABLE tt;
+
+--echo # Enable index scan in Dstore
+SET @@optimizer_switch = 'dstore_enable_indexscan=on';
+
+# GROUP BY with aggregation using index scan
+EXPLAIN SELECT a, COUNT(*) AS cnt, SUM(b) AS total_b FROM tt GROUP BY a ORDER BY a;
+SELECT a, COUNT(*) AS cnt, SUM(b) AS total_b FROM tt GROUP BY a ORDER BY a;
+
+# ORDER BY with LIMIT using index scan
+EXPLAIN SELECT * FROM tt ORDER BY a, b, c LIMIT 10;
+SELECT * FROM tt ORDER BY a, b, c LIMIT 10;
+
+EXPLAIN SELECT COUNT(*) FROM tt;
+EXPLAIN SELECT SUM(b),AVG(a) FROM tt;
+EXPLAIN SELECT * FROM tt WHERE a % 2 = 1 AND b % 2 = 1 AND c % 2 = 1;
+EXPLAIN SELECT * FROM tt FORCE INDEX (idx_abc) WHERE  b % 2 = 1 AND c % 2 = 1;
+
+--echo #
+--echo # Disable index scan in Dstore
+--echo # Even when index scan is disabled, queries that can use indexes to avoid sorting
+--echo # (e.g., ORDER BY and GROUP BY aligned with index) will still benefit from the index
+--echo #
+SET @@optimizer_switch = 'dstore_enable_indexscan=off';
+
+# GROUP BY with aggregation using index scan
+EXPLAIN SELECT a, COUNT(*) AS cnt, SUM(b) AS total_b FROM tt GROUP BY a ORDER BY a;
+SELECT a, COUNT(*) AS cnt, SUM(b) AS total_b FROM tt GROUP BY a ORDER BY a;
+
+# ORDER BY with LIMIT using index scan
+EXPLAIN SELECT * FROM tt ORDER BY a, b, c LIMIT 10;
+SELECT * FROM tt ORDER BY a, b, c LIMIT 10;
+
+EXPLAIN SELECT COUNT(*) FROM tt;
+EXPLAIN SELECT SUM(b),AVG(a) FROM tt;
+EXPLAIN SELECT * FROM tt WHERE a % 2 = 1 AND b % 2 = 1 AND c % 2 = 1;
+EXPLAIN SELECT * FROM tt FORCE INDEX (idx_abc) WHERE  b % 2 = 1 AND c % 2 = 1;
+# Clean up
+DROP TABLE t;
+DROP TABLE tt;
+
+--echo #
+--echo # BUG2025121548996
+--echo #
+CREATE TABLE t (
+  c1 varbinary(3) NOT NULL,
+  c2 double NOT NULL,
+  c3 int(10) unsigned zerofill DEFAULT NULL,
+  PRIMARY KEY (c1,c2)
+) ENGINE=Dstore DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+INSERT INTO t (c1, c2, c3) VALUES
+(0x6B, -9.183, 4),
+(0x38, -9.183, 4),
+(0x53, -9.183, 4),
+(0x51, -9.183, 4),
+(0x52, -9.183, 4),
+(0x77, -9.183, 4),
+(0x36, -9.183, 4),
+(0x36, 58, 1),
+(0x30, -9.183, 7),
+(0x4E, -3.6163668666435744e306, 7),
+(0x6D, -9.183, 0),
+(0x39, 1.7976931348623157e308, 1),
+(0x75, 43.1334, 7),
+(0x65, 68.1563, 4),
+(0x6F, 1.009, NULL),
+(0x61, -18, NULL),
+(0x53, 12.991, NULL),
+(0x62, -26, 1),
+(0x38, 78.1671, 3),
+(0x41, 27, 1),
+(0x4E, 1.009, 0);
+
+SET @@optimizer_switch = 'loosescan=on';
+SET @@optimizer_switch = 'dstore_enable_indexscan=on';
+SELECT count(*) FROM t WHERE (((c1) IN (SELECT c1 AS ca7 FROM t order by 1 )));
+
+SET @@optimizer_switch = 'dstore_enable_indexscan=off';
+SELECT count(*) FROM t WHERE (((c1) IN (SELECT c1 AS ca7 FROM t order by 1 )));
+
+SET @@optimizer_switch = 'loosescan=off';
+SET @@optimizer_switch = 'dstore_enable_indexscan=on';
+SELECT count(*) FROM t WHERE (((c1) IN (SELECT c1 AS ca7 FROM t order by 1 )));
+
+SET @@optimizer_switch = 'dstore_enable_indexscan=off';
+SELECT count(*) FROM t WHERE (((c1) IN (SELECT c1 AS ca7 FROM t order by 1 )));
+
+drop table t;
+# Restore original optimizer_switch value
+SET @@optimizer_switch = @optimizer_switch_saved;

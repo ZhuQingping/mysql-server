@@ -1,0 +1,990 @@
+From a0be857b2f2aee286a683768742d857bfc768d72 Mon Sep 17 00:00:00 2001
+From: zhuqingping <zhuqingping1@contributor>
+
+Date: Tue, 20 Jan 2026 23:46:29 +0800
+Subject: [PATCH] Optimize parallel query code
+
+Issue:
+------
+When disable pq + run sysbench read only test, we find out that
+pq related hotspot function get_pq_memory_total. The function
+call stack as follows:
+
+-> mysql_execute_command
+--> Sql_cmd_dml::execute
+---> Sql_cmd_dml::execute_inner
+----> Query_expression::optimize
+-----> make_pq_unit_plan
+------> JOIN::suite_for_parallel_query
+-------> get_pq_memory_total
+
+Solution:
+---------
+(1) In function JOIN::suite_for_parallel_query, we can use
+Query_block::m_suite_for_pq quickly determine whether is
+suitable for parallel query, if not skip following checks.
+
+(2) In function THD::suite_for_parallel_query, old logic is
+check no_pq first then check pq_dop, for simple select without
+pq hint scenario, when force_parallel_execute is off, no_pq is
+false and pq_dop is 0, so we check pq_dop before no_pq to reduce
+one if condition judgment.
+
+Notes:
+------
+Rename select_lex to query_block in pq related comments.
+Remove unused TODO in function make_pq_unit_plan.
+---
+ mysql-test/r/window_functions_explain.result  |  2 +-
+ .../r/window_functions_explain.result-pq      |  2 +-
+ .../r/partial_result_cache-dstore.result      |  4 +-
+ .../r/window_functions_explain-dstore.result  |  2 +-
+ .../suite/gcol/r/gcol_keys_innodb.result      |  2 +-
+ .../suite/gcol/r/gcol_keys_myisam.result      |  2 +-
+ .../r/derived_condition_pushdown.result       |  4 +-
+ .../r/derived_condition_pushdown.result-pq    |  4 +-
+ .../suite/opt_trace/r/filesort_pq.result      |  4 +-
+ .../suite/opt_trace/r/general2_no_prot.result |  8 +--
+ .../opt_trace/r/general2_no_prot.result-pq    |  2 +-
+ .../opt_trace/r/general_no_prot_all.result    |  4 +-
+ .../opt_trace/r/general_no_prot_none.result   |  4 +-
+ .../suite/opt_trace/r/range_no_prot.result    | 10 ++--
+ .../suite/opt_trace/r/subquery_no_prot.result |  2 +-
+ .../suite/opt_trace/r/temp_table.result       |  8 +--
+ .../suite/opt_trace/r/temp_table.result-pq    |  6 +--
+ .../r/pq_optimizer_trace.result-pq            |  4 +-
+ .../r/pq_optimizer_trace_bugfix.result-pq     |  6 +--
+ .../parallel_query/r/pq_prepare.result-pq     |  9 ++++
+ .../suite/parallel_query/t/pq_prepare.test    |  3 +-
+ .../suite/ptrc/r/partial_result_cache.result  |  4 +-
+ mysql-test/suite/ptrc/r/ptrc_bugs.result-pq   | 54 +++++++++++++++++++
+ sql/item.h                                    |  2 +-
+ sql/item_sum.cc                               |  6 +--
+ sql/opt_explain.cc                            |  4 +-
+ sql/parallel_query/pq_clone.cc                | 16 +++---
+ sql/parallel_query/pq_optimizer.cc            | 12 +++--
+ sql/parallel_query/pq_optimizer.h             |  4 +-
+ sql/parallel_query/pq_refix_fields_item.cc    |  4 +-
+ sql/parallel_query/pq_resolver.cc             | 21 +++++---
+ sql/parallel_query/sql_parallel.cc            |  8 +--
+ sql/parallel_query/sql_parallel.h             |  2 +-
+ sql/sql_parse.cc                              |  8 ++-
+ sql/sql_plan_cache.cc                         | 11 ++--
+ 35 files changed, 160 insertions(+), 88 deletions(-)
+
+diff --git a/mysql-test/r/window_functions_explain.result b/mysql-test/r/window_functions_explain.result
+index 7d902e0b4ae..d9721c23963 100644
+--- a/mysql-test/r/window_functions_explain.result
++++ b/mysql-test/r/window_functions_explain.result
+@@ -16650,7 +16650,7 @@ join_optimization": {
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       }
+     },
+     {
+diff --git a/mysql-test/r/window_functions_explain.result-pq b/mysql-test/r/window_functions_explain.result-pq
+index f982412f0f1..d0132bd80b6 100644
+--- a/mysql-test/r/window_functions_explain.result-pq
++++ b/mysql-test/r/window_functions_explain.result-pq
+@@ -16805,7 +16805,7 @@ join_optimization": {
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Query cached the result set(such as with SQL_BUFFER_RESULT or insert select into the same table) or with rollup or more than one value item of table value constructor or has windows function."
+       }
+     },
+     {
+diff --git a/mysql-test/suite/dstore_main/r/partial_result_cache-dstore.result b/mysql-test/suite/dstore_main/r/partial_result_cache-dstore.result
+index 3abfeecc53c..d67fd8e5b9a 100644
+--- a/mysql-test/suite/dstore_main/r/partial_result_cache-dstore.result
++++ b/mysql-test/suite/dstore_main/r/partial_result_cache-dstore.result
+@@ -536,7 +536,7 @@ SELECT /*+ NO_PQ */ * FROM t1 WHERE t1.a = (SELECT max(a) FROM t2 WHERE t2.b > t
+       "not_apply_pq_plan": {
+         "select#": 2,
+         "chosen": false,
+-        "reason": "Query has NO_PQ hint or pq_master_enable is off or PQ is not supported in some scenarios."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       }
+     },
+     {
+@@ -552,7 +552,7 @@ SELECT /*+ NO_PQ */ * FROM t1 WHERE t1.a = (SELECT max(a) FROM t2 WHERE t2.b > t
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query has NO_PQ hint or pq_master_enable is off or PQ is not supported in some scenarios."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       }
+     },
+     {
+diff --git a/mysql-test/suite/dstore_main/r/window_functions_explain-dstore.result b/mysql-test/suite/dstore_main/r/window_functions_explain-dstore.result
+index c5795cf7ffa..7f0507b60fb 100644
+--- a/mysql-test/suite/dstore_main/r/window_functions_explain-dstore.result
++++ b/mysql-test/suite/dstore_main/r/window_functions_explain-dstore.result
+@@ -16651,7 +16651,7 @@ join_optimization": {
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       }
+     },
+     {
+diff --git a/mysql-test/suite/gcol/r/gcol_keys_innodb.result b/mysql-test/suite/gcol/r/gcol_keys_innodb.result
+index 639a1502104..80b53522bd6 100644
+--- a/mysql-test/suite/gcol/r/gcol_keys_innodb.result
++++ b/mysql-test/suite/gcol/r/gcol_keys_innodb.result
+@@ -1005,7 +1005,7 @@ EXPLAIN SELECT f1 + 1, MAX(GC) FROM t1 GROUP BY f1 + 1	{
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       } /* not_apply_pq_plan */
+     },
+     {
+diff --git a/mysql-test/suite/gcol/r/gcol_keys_myisam.result b/mysql-test/suite/gcol/r/gcol_keys_myisam.result
+index 3fcd7114cdc..7e51df8bbd2 100644
+--- a/mysql-test/suite/gcol/r/gcol_keys_myisam.result
++++ b/mysql-test/suite/gcol/r/gcol_keys_myisam.result
+@@ -756,7 +756,7 @@ EXPLAIN SELECT f1 + 1, MAX(GC) FROM t1 GROUP BY f1 + 1	{
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       } /* not_apply_pq_plan */
+     },
+     {
+diff --git a/mysql-test/suite/opt_trace/r/derived_condition_pushdown.result b/mysql-test/suite/opt_trace/r/derived_condition_pushdown.result
+index b45cf77ba84..cbf4cee4fb9 100644
+--- a/mysql-test/suite/opt_trace/r/derived_condition_pushdown.result
++++ b/mysql-test/suite/opt_trace/r/derived_condition_pushdown.result
+@@ -357,7 +357,7 @@ trace
+             "not_apply_pq_plan": {
+               "select#": 2,
+               "chosen": false,
+-              "reason": "Query block implicitly generate aggregate function after prepare stage."
++              "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+             }
+           },
+           {
+@@ -1937,7 +1937,7 @@ trace
+             "not_apply_pq_plan": {
+               "select#": 2,
+               "chosen": false,
+-              "reason": "Query block implicitly generate aggregate function after prepare stage."
++              "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+             }
+           },
+           {
+diff --git a/mysql-test/suite/opt_trace/r/derived_condition_pushdown.result-pq b/mysql-test/suite/opt_trace/r/derived_condition_pushdown.result-pq
+index 7bb22aa8dd0..064b7c82b38 100644
+--- a/mysql-test/suite/opt_trace/r/derived_condition_pushdown.result-pq
++++ b/mysql-test/suite/opt_trace/r/derived_condition_pushdown.result-pq
+@@ -357,7 +357,7 @@ trace
+             "not_apply_pq_plan": {
+               "select#": 2,
+               "chosen": false,
+-              "reason": "Query block implicitly generate aggregate function after prepare stage."
++              "reason": "Query cached the result set(such as with SQL_BUFFER_RESULT or insert select into the same table) or with rollup or more than one value item of table value constructor or has windows function."
+             }
+           },
+           {
+@@ -1989,7 +1989,7 @@ trace
+             "not_apply_pq_plan": {
+               "select#": 2,
+               "chosen": false,
+-              "reason": "Query block implicitly generate aggregate function after prepare stage."
++              "reason": "Query cached the result set(such as with SQL_BUFFER_RESULT or insert select into the same table) or with rollup or more than one value item of table value constructor or has windows function."
+             }
+           },
+           {
+diff --git a/mysql-test/suite/opt_trace/r/filesort_pq.result b/mysql-test/suite/opt_trace/r/filesort_pq.result
+index 431c1a7067b..ab1060f799d 100644
+--- a/mysql-test/suite/opt_trace/r/filesort_pq.result
++++ b/mysql-test/suite/opt_trace/r/filesort_pq.result
+@@ -7272,7 +7272,7 @@ GROUP BY 1 ORDER BY 2,1 LIMIT 5	{
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       }
+     },
+     {
+@@ -7370,7 +7370,7 @@ GROUP BY 1 ORDER BY 2,1 LIMIT 0	{
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       }
+     },
+     {
+diff --git a/mysql-test/suite/opt_trace/r/general2_no_prot.result b/mysql-test/suite/opt_trace/r/general2_no_prot.result
+index b06e0e438c8..8ded9dd259c 100644
+--- a/mysql-test/suite/opt_trace/r/general2_no_prot.result
++++ b/mysql-test/suite/opt_trace/r/general2_no_prot.result
+@@ -1415,7 +1415,7 @@ TRACE
+             "not_apply_pq_plan": {
+               "select#": 2,
+               "chosen": false,
+-              "reason": "Query block implicitly generate aggregate function after prepare stage."
++              "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+             } /* not_apply_pq_plan */
+           },
+           {
+@@ -3997,7 +3997,7 @@ select 497, tmp.ID, NULL from (select 497 as ID, MAX(t3.DATA) as DATA      from
+             "not_apply_pq_plan": {
+               "select#": 2,
+               "chosen": false,
+-              "reason": "Query block implicitly generate aggregate function after prepare stage."
++              "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+             } /* not_apply_pq_plan */
+           },
+           {
+@@ -5147,7 +5147,7 @@ link_alias_148._field_156	{
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       } /* not_apply_pq_plan */
+     },
+     {
+@@ -5512,7 +5512,7 @@ GROUP BY field2 ORDER BY alias1.col_int_key,alias2.pk	{
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       } /* not_apply_pq_plan */
+     },
+     {
+diff --git a/mysql-test/suite/opt_trace/r/general2_no_prot.result-pq b/mysql-test/suite/opt_trace/r/general2_no_prot.result-pq
+index 5bd04a2fd4f..b7403ef9683 100644
+--- a/mysql-test/suite/opt_trace/r/general2_no_prot.result-pq
++++ b/mysql-test/suite/opt_trace/r/general2_no_prot.result-pq
+@@ -5174,7 +5174,7 @@ link_alias_148._field_156	{
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Query does not comply with the ONLY_FULL_GROUP_BY rule which is required by PQ."
+       } /* not_apply_pq_plan */
+     },
+     {
+diff --git a/mysql-test/suite/opt_trace/r/general_no_prot_all.result b/mysql-test/suite/opt_trace/r/general_no_prot_all.result
+index 209de6cc757..b46273bee21 100644
+--- a/mysql-test/suite/opt_trace/r/general_no_prot_all.result
++++ b/mysql-test/suite/opt_trace/r/general_no_prot_all.result
+@@ -7403,7 +7403,7 @@ trace
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       } /* not_apply_pq_plan */
+     },
+     {
+@@ -7504,7 +7504,7 @@ trace
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       } /* not_apply_pq_plan */
+     },
+     {
+diff --git a/mysql-test/suite/opt_trace/r/general_no_prot_none.result b/mysql-test/suite/opt_trace/r/general_no_prot_none.result
+index 1d0ba8e7bc6..e27ed1eb65f 100644
+--- a/mysql-test/suite/opt_trace/r/general_no_prot_none.result
++++ b/mysql-test/suite/opt_trace/r/general_no_prot_none.result
+@@ -6023,7 +6023,7 @@ trace
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       } /* not_apply_pq_plan */
+     },
+     {
+@@ -6124,7 +6124,7 @@ trace
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       } /* not_apply_pq_plan */
+     },
+     {
+diff --git a/mysql-test/suite/opt_trace/r/range_no_prot.result b/mysql-test/suite/opt_trace/r/range_no_prot.result
+index 0a813ccc71b..6cc255b3151 100644
+--- a/mysql-test/suite/opt_trace/r/range_no_prot.result
++++ b/mysql-test/suite/opt_trace/r/range_no_prot.result
+@@ -1017,7 +1017,7 @@ EXPLAIN SELECT key2, MIN(key2_1) FROM t2 GROUP BY key2	{
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       } /* not_apply_pq_plan */
+     },
+     {
+@@ -1615,7 +1615,7 @@ GROUP BY key2	{
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       } /* not_apply_pq_plan */
+     },
+     {
+@@ -4633,7 +4633,7 @@ EXPLAIN SELECT 1 FROM
+             "not_apply_pq_plan": {
+               "select#": 2,
+               "chosen": false,
+-              "reason": "Query block implicitly generate aggregate function after prepare stage."
++              "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+             } /* not_apply_pq_plan */
+           },
+           {
+@@ -5012,7 +5012,7 @@ EXPLAIN SELECT 1 FROM
+             "not_apply_pq_plan": {
+               "select#": 2,
+               "chosen": false,
+-              "reason": "Query block implicitly generate aggregate function after prepare stage."
++              "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+             } /* not_apply_pq_plan */
+           },
+           {
+@@ -6788,7 +6788,7 @@ EXPLAIN SELECT MAX(b), a FROM t1 WHERE b < 2 AND a = 1 GROUP BY a	{
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       } /* not_apply_pq_plan */
+     },
+     {
+diff --git a/mysql-test/suite/opt_trace/r/subquery_no_prot.result b/mysql-test/suite/opt_trace/r/subquery_no_prot.result
+index 76e81a2f26d..f1fdfeb5a53 100644
+--- a/mysql-test/suite/opt_trace/r/subquery_no_prot.result
++++ b/mysql-test/suite/opt_trace/r/subquery_no_prot.result
+@@ -1297,7 +1297,7 @@ field4,field5,field6	{
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       } /* not_apply_pq_plan */
+     },
+     {
+diff --git a/mysql-test/suite/opt_trace/r/temp_table.result b/mysql-test/suite/opt_trace/r/temp_table.result
+index f5e4c228ce2..90814e92945 100644
+--- a/mysql-test/suite/opt_trace/r/temp_table.result
++++ b/mysql-test/suite/opt_trace/r/temp_table.result
+@@ -141,7 +141,7 @@ SELECT uniq, col1 FROM t1 GROUP BY col2,uniq LIMIT 3	{
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       } /* not_apply_pq_plan */
+     },
+     {
+@@ -309,7 +309,7 @@ SELECT uniq, col1, col2 FROM t1 GROUP BY uniq	{
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       } /* not_apply_pq_plan */
+     },
+     {
+@@ -492,7 +492,7 @@ SELECT uniq, col1, col2 FROM t1 GROUP BY uniq	{
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       } /* not_apply_pq_plan */
+     },
+     {
+@@ -1229,7 +1229,7 @@ ORDER BY cc	{
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       } /* not_apply_pq_plan */
+     },
+     {
+diff --git a/mysql-test/suite/opt_trace/r/temp_table.result-pq b/mysql-test/suite/opt_trace/r/temp_table.result-pq
+index ca1f65bb792..f395180da17 100644
+--- a/mysql-test/suite/opt_trace/r/temp_table.result-pq
++++ b/mysql-test/suite/opt_trace/r/temp_table.result-pq
+@@ -149,7 +149,7 @@ SELECT uniq, col1 FROM t1 GROUP BY col2,uniq LIMIT 3	{
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Query does not comply with the ONLY_FULL_GROUP_BY rule which is required by PQ."
+       } /* not_apply_pq_plan */
+     },
+     {
+@@ -324,7 +324,7 @@ SELECT uniq, col1, col2 FROM t1 GROUP BY uniq	{
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Query does not comply with the ONLY_FULL_GROUP_BY rule which is required by PQ."
+       } /* not_apply_pq_plan */
+     },
+     {
+@@ -514,7 +514,7 @@ SELECT uniq, col1, col2 FROM t1 GROUP BY uniq	{
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query block implicitly generate aggregate function after prepare stage."
++        "reason": "Query does not comply with the ONLY_FULL_GROUP_BY rule which is required by PQ."
+       } /* not_apply_pq_plan */
+     },
+     {
+diff --git a/mysql-test/suite/parallel_query/r/pq_optimizer_trace.result-pq b/mysql-test/suite/parallel_query/r/pq_optimizer_trace.result-pq
+index 9ef992f0a5a..a338fa333c5 100644
+--- a/mysql-test/suite/parallel_query/r/pq_optimizer_trace.result-pq
++++ b/mysql-test/suite/parallel_query/r/pq_optimizer_trace.result-pq
+@@ -137,7 +137,7 @@ select  /*+NO_PQ */ /*+PQ(1) */ b from tab_3;
+ b
+ SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+ json_extract(trace,"$.steps[*].not_apply_pq_plan")
+-[{"chosen": false, "reason": "Query has NO_PQ hint or pq_master_enable is off or PQ is not supported in some scenarios.", "select#": 1}]
++[{"chosen": false, "reason": "Force_parallel_execute is off or parallel_default_dop is zero.", "select#": 1}]
+ set force_parallel_execute = on;
+ select b from tab_3;
+ b
+@@ -209,7 +209,7 @@ a
+ NULL
+ SELECT json_extract(trace,"$.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+ json_extract(trace,"$.steps[*].not_apply_pq_plan")
+-[{"chosen": false, "reason": "Query block implicitly generate aggregate function after prepare stage.", "select#": 1}]
++[{"chosen": false, "reason": "Query cached the result set(such as with SQL_BUFFER_RESULT or insert select into the same table) or with rollup or more than one value item of table value constructor or has windows function.", "select#": 1}]
+ #
+ # query has windows functions
+ drop table if exists tab_2;
+diff --git a/mysql-test/suite/parallel_query/r/pq_optimizer_trace_bugfix.result-pq b/mysql-test/suite/parallel_query/r/pq_optimizer_trace_bugfix.result-pq
+index ddc59a976f7..3391d90e9f4 100644
+--- a/mysql-test/suite/parallel_query/r/pq_optimizer_trace_bugfix.result-pq
++++ b/mysql-test/suite/parallel_query/r/pq_optimizer_trace_bugfix.result-pq
+@@ -685,7 +685,7 @@ json_extract(trace,"$.steps[*].not_apply_pq_plan")
+ [{"chosen": false, "reason": "Query has NO_PQ hint or pq_master_enable is off or PQ is not supported in some scenarios.", "select#": 1}]
+ SELECT json_extract(trace,"$.steps[*].join_optimization.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+ json_extract(trace,"$.steps[*].join_optimization.steps[*].not_apply_pq_plan")
+-[{"chosen": false, "reason": "Query block implicitly generate aggregate function after prepare stage.", "select#": 2}]
++[{"chosen": false, "reason": "Query cached the result set(such as with SQL_BUFFER_RESULT or insert select into the same table) or with rollup or more than one value item of table value constructor or has windows function.", "select#": 2}]
+ create table t1 (a int , b int);
+ insert into t1 values (1,3),(4,6);
+ select SQL_BUFFER_RESULT * from t1;
+@@ -712,7 +712,7 @@ json_extract(trace,"$.steps[*].not_apply_pq_plan")
+ [{"chosen": false, "reason": "Query has NO_PQ hint or pq_master_enable is off or PQ is not supported in some scenarios.", "select#": 1}]
+ SELECT json_extract(trace,"$.steps[*].join_optimization.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+ json_extract(trace,"$.steps[*].join_optimization.steps[*].not_apply_pq_plan")
+-[{"chosen": false, "reason": "Query block implicitly generate aggregate function after prepare stage.", "select#": 2}]
++[{"chosen": false, "reason": "Query has NO_PQ hint or pq_master_enable is off or PQ is not supported in some scenarios.", "select#": 2}]
+ select SQL_BUFFER_RESULT * from t1;
+ a	b
+ 1	3
+@@ -729,7 +729,7 @@ json_extract(trace,"$.steps[*].not_apply_pq_plan")
+ [{"chosen": false, "reason": "Query has NO_PQ hint or pq_master_enable is off or PQ is not supported in some scenarios.", "select#": 1}]
+ SELECT json_extract(trace,"$.steps[*].join_optimization.steps[*].not_apply_pq_plan") FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE;
+ json_extract(trace,"$.steps[*].join_optimization.steps[*].not_apply_pq_plan")
+-[{"chosen": false, "reason": "Query block implicitly generate aggregate function after prepare stage.", "select#": 2}]
++[{"chosen": false, "reason": "Query cached the result set(such as with SQL_BUFFER_RESULT or insert select into the same table) or with rollup or more than one value item of table value constructor or has windows function.", "select#": 2}]
+ drop table t0;
+ drop table t1;
+ set global parallel_cost_threshold = @saved_parallel_cost_threshold;
+diff --git a/mysql-test/suite/parallel_query/r/pq_prepare.result-pq b/mysql-test/suite/parallel_query/r/pq_prepare.result-pq
+index c3f7e69d0ce..d32d9924fec 100644
+--- a/mysql-test/suite/parallel_query/r/pq_prepare.result-pq
++++ b/mysql-test/suite/parallel_query/r/pq_prepare.result-pq
+@@ -1818,6 +1818,15 @@ KEY ndx_19_20_21 (c_payment_cnt,c_delivery_cnt,c_data) USING BTREE,
+ KEY ndx_4_7_9_13_15_19 (c_first,c_street_1,c_city,c_since,c_credit_lim,c_payment_cnt) USING BTREE
+ ) partition by hash(c_id) partitions 1;
+ insert into t0_hash_partition_p1 select * from t0;
++ANALYZE TABLE t0_range_partition, t0_list_partition, t0_hash_partition, t0_linear_hash_partition, t0_key_partition, t0_range_key_subpartition, t0_hash_partition_p1;
++Table	Op	Msg_type	Msg_text
++test.t0_range_partition	analyze	status	OK
++test.t0_list_partition	analyze	status	OK
++test.t0_hash_partition	analyze	status	OK
++test.t0_linear_hash_partition	analyze	status	OK
++test.t0_key_partition	analyze	status	OK
++test.t0_range_key_subpartition	analyze	status	OK
++test.t0_hash_partition_p1	analyze	status	OK
+ create view t0_range_key_subpartition_sub_view as select * from t0_range_key_subpartition where c_d_id < 15 and c_w_id=2 union all select * from t0_range_key_subpartition where c_d_id > 15 and c_d_id<30 and c_w_id=1 union all select * from t0_range_key_subpartition where c_d_id > 30 and  c_d_id<50 and c_w_id=1;
+ create view t0_hash_partition_p1_view  as select * from t0_hash_partition_p1;
+ create view t0_partition_sub_view_mixed_001 as select * from t0_range_partition where c_d_id <15 Union all select * from t0_list_partition where c_w_id in (0,2) union all select * from t0_key_partition where c_w_id = 4 union all select * from t0_linear_hash_partition where c_w_id = 5 union select * from t0_hash_partition where c_w_id =8;
+diff --git a/mysql-test/suite/parallel_query/t/pq_prepare.test b/mysql-test/suite/parallel_query/t/pq_prepare.test
+index 14b9a5702c4..0076a09564a 100644
+--- a/mysql-test/suite/parallel_query/t/pq_prepare.test
++++ b/mysql-test/suite/parallel_query/t/pq_prepare.test
+@@ -1373,9 +1373,8 @@ CREATE TABLE t0_hash_partition_p1 (
+   KEY ndx_19_20_21 (c_payment_cnt,c_delivery_cnt,c_data) USING BTREE,
+   KEY ndx_4_7_9_13_15_19 (c_first,c_street_1,c_city,c_since,c_credit_lim,c_payment_cnt) USING BTREE
+ ) partition by hash(c_id) partitions 1;
+-
+-
+ insert into t0_hash_partition_p1 select * from t0;
++ANALYZE TABLE t0_range_partition, t0_list_partition, t0_hash_partition, t0_linear_hash_partition, t0_key_partition, t0_range_key_subpartition, t0_hash_partition_p1;
+ 
+ create view t0_range_key_subpartition_sub_view as select * from t0_range_key_subpartition where c_d_id < 15 and c_w_id=2 union all select * from t0_range_key_subpartition where c_d_id > 15 and c_d_id<30 and c_w_id=1 union all select * from t0_range_key_subpartition where c_d_id > 30 and  c_d_id<50 and c_w_id=1;
+ 
+diff --git a/mysql-test/suite/ptrc/r/partial_result_cache.result b/mysql-test/suite/ptrc/r/partial_result_cache.result
+index 5814b8d862f..a1a6d115d61 100644
+--- a/mysql-test/suite/ptrc/r/partial_result_cache.result
++++ b/mysql-test/suite/ptrc/r/partial_result_cache.result
+@@ -532,7 +532,7 @@ SELECT /*+ NO_PQ */ * FROM t1 WHERE t1.a = (SELECT max(a) FROM t2 WHERE t2.b > t
+       "not_apply_pq_plan": {
+         "select#": 2,
+         "chosen": false,
+-        "reason": "Query has NO_PQ hint or pq_master_enable is off or PQ is not supported in some scenarios."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       }
+     },
+     {
+@@ -548,7 +548,7 @@ SELECT /*+ NO_PQ */ * FROM t1 WHERE t1.a = (SELECT max(a) FROM t2 WHERE t2.b > t
+       "not_apply_pq_plan": {
+         "select#": 1,
+         "chosen": false,
+-        "reason": "Query has NO_PQ hint or pq_master_enable is off or PQ is not supported in some scenarios."
++        "reason": "Force_parallel_execute is off or parallel_default_dop is zero."
+       }
+     },
+     {
+diff --git a/mysql-test/suite/ptrc/r/ptrc_bugs.result-pq b/mysql-test/suite/ptrc/r/ptrc_bugs.result-pq
+index 6c50131122b..e7f70754a75 100644
+--- a/mysql-test/suite/ptrc/r/ptrc_bugs.result-pq
++++ b/mysql-test/suite/ptrc/r/ptrc_bugs.result-pq
+@@ -1029,6 +1029,60 @@ EXECUTE stmt0;
+ col2
+ drop table t1;
+ drop table t2;
++# BUGFIX: See in estimate_num_groups(), this is a case where 
++# tab->m_position==nullptr. When tab->m_position==nullptr, we cannot 
++# estimate whether using PTRC would be beneficial. By controlling the
++# values of the distinct_rows and est_rows variables, we ensure that 
++# the calculated cost ratio is always 0. PTRC is used only when 
++# rds_partial_result_cache_cost_threshold is 0.
++CREATE TABLE t0 (
++c1 bit(1) NOT NULL,
++PRIMARY KEY (c1)
++);
++set rds_partial_result_cache_cost_threshold=0.01;
++EXPLAIN ANALYZE SELECT c1 AS c10 FROM t0 t1 WHERE c1 NOT IN ((( SELECT c1 AS c11 FROM t0 t2 ) IN (t1.c1 IS NULL)) IN ( SELECT c1 AS c12 FROM t0 t3 ));
++EXPLAIN
++-> Filter: (t1.c1 <> <cache>(<in_optimizer>(((select #2) = (t1.c1 is null)),<exists>(select #3)))) 
++    -> Covering index scan on t1 using PRIMARY 
++    -> Select #2 (subquery in condition; run only once)
++        -> Gather: 4 workers, parallel scan on t2 
++            -> Parallel index scan on t2 using PRIMARY 
++    -> Select #3 (subquery in condition; dependent)
++        -> Limit: 1 row(s)  (actual time=# loops=1)
++            -> Filter: <if>(outer_field_is_not_null, (<cache>(((select #2) = (t1.c1 is null))) = t3.c1), true)  (actual time=# loops=1)
++                -> Alternative plans for IN subquery: Index lookup unless c1 IS NULL 
++                    -> Single-row covering index lookup on t3 using PRIMARY (c1=<cache>(((select #2) = (t1.c1 is null)))) 
++                        -> Select #2 (subquery in reference key of index access; run only once)
++                            -> Gather: 4 workers, parallel scan on t2 
++                                -> Parallel index scan on t2 using PRIMARY 
++                    -> Table scan on t3 
++                -> Select #2 (subquery in condition; run only once)
++                    -> Gather: 4 workers, parallel scan on t2 
++                        -> Parallel index scan on t2 using PRIMARY 
++
++set rds_partial_result_cache_cost_threshold=0;
++EXPLAIN ANALYZE SELECT c1 AS c10 FROM t0 t1 WHERE c1 NOT IN ((( SELECT c1 AS c11 FROM t0 t2 ) IN (t1.c1 IS NULL)) IN ( SELECT c1 AS c12 FROM t0 t3 ));
++EXPLAIN
++-> Filter: (t1.c1 <> <cache>(<in_optimizer>(((select #2) = (t1.c1 is null)),<exists>(select #3)))) 
++    -> Covering index scan on t1 using PRIMARY 
++    -> Select #2 (subquery in condition; run only once)
++        -> Gather: 4 workers, parallel scan on t2 
++            -> Parallel index scan on t2 using PRIMARY 
++    -> Select #3 (subquery in condition; dependent)
++        -> Result cache : cache keys(t1.c1) (Cache Hits: 0, Cache Misses: 1, Cache Evictions: 0, Cache Overflows: 0, Memory Usage: # )  (actual time=# loops=1)
++            -> Limit: 1 row(s)  (actual time=# loops=1)
++                -> Filter: <if>(outer_field_is_not_null, (<cache>(((select #2) = (t1.c1 is null))) = t3.c1), true)  (actual time=# loops=1)
++                    -> Alternative plans for IN subquery: Index lookup unless c1 IS NULL 
++                        -> Single-row covering index lookup on t3 using PRIMARY (c1=<cache>(((select #2) = (t1.c1 is null)))) 
++                            -> Select #2 (subquery in reference key of index access; run only once)
++                                -> Gather: 4 workers, parallel scan on t2 
++                                    -> Parallel index scan on t2 using PRIMARY 
++                        -> Table scan on t3 
++                    -> Select #2 (subquery in condition; run only once)
++                        -> Gather: 4 workers, parallel scan on t2 
++                            -> Parallel index scan on t2 using PRIMARY 
++
++drop table t0;
+ SET force_parallel_execute= @save_force_parallel_execute;
+ SET parallel_cost_threshold= @save_parallel_cost_threshold;
+ SET parallel_rows_threshold= @save_parallel_rows_threshold;
+diff --git a/sql/item.h b/sql/item.h
+index c003c39b25b..aa88716cb9b 100644
+--- a/sql/item.h
++++ b/sql/item.h
+@@ -461,7 +461,7 @@ struct Name_resolution_context {
+ 
+   /**
+     When true, items are resolved in this context against
+-    Query_block::item_list, SELECT_lex::group_list and
++    Query_block::item_list, Query_block::group_list and
+     this->table_list. If false, items are resolved only against
+     this->table_list.
+ 
+diff --git a/sql/item_sum.cc b/sql/item_sum.cc
+index 078b3efb0c2..645cd077474 100644
+--- a/sql/item_sum.cc
++++ b/sql/item_sum.cc
+@@ -1035,7 +1035,7 @@ static bool create_tmp_table_from_item(THD *thd, Item_sum *m_item_sum,
+                                        Temp_table_param *tmp_param,
+                                        uint *const_distinct) {
+   mem_root_deque<Item *> list(thd->mem_root);
+-  Query_block *select_lex = m_item_sum->aggr_query_block;
++  Query_block *query_block = m_item_sum->aggr_query_block;
+ 
+   uint const_items = 0;
+   uint num_args = m_item_sum->argument_count();
+@@ -1057,7 +1057,7 @@ static bool create_tmp_table_from_item(THD *thd, Item_sum *m_item_sum,
+     *const_distinct = Aggregator_distinct::CONST_NOT_NULL;
+     return false;
+   }
+-  count_field_types(select_lex, tmp_param, list, false, false);
++  count_field_types(query_block, tmp_param, list, false, false);
+   tmp_param->force_copy_fields = m_item_sum->has_force_copy_fields();
+   assert(*m_table == nullptr);
+   /*
+@@ -1074,7 +1074,7 @@ static bool create_tmp_table_from_item(THD *thd, Item_sum *m_item_sum,
+   }
+   if (!((*m_table) =
+             create_tmp_table(thd, tmp_param, list, nullptr, true, false,
+-                             select_lex->active_options(), HA_POS_ERROR, "")))
++                             query_block->active_options(), HA_POS_ERROR, "")))
+     return true;
+   (*m_table)->file->ha_extra(HA_EXTRA_NO_ROWS);  // Don't update rows
+   (*m_table)->no_rows = true;
+diff --git a/sql/opt_explain.cc b/sql/opt_explain.cc
+index bba9ff77d12..58592d5262c 100644
+--- a/sql/opt_explain.cc
++++ b/sql/opt_explain.cc
+@@ -1480,7 +1480,7 @@ bool Explain_join::explain_pq_gather(QEP_TAB *tab_arg) {
+   assert(tab_arg->gather);
+ 
+   JOIN *join = tab_arg->gather->m_template_join;
+-  Query_block *select_lex = join->query_block;
++  Query_block *query_block = join->query_block;
+   const Explain_format_flags *flags = &join->explain_flags;
+   const bool need_tmp_table_flag = flags->any(ESP_USING_TMPTABLE);
+   const bool need_order_flag = flags->any(ESP_USING_FILESORT);
+@@ -1488,7 +1488,7 @@ bool Explain_join::explain_pq_gather(QEP_TAB *tab_arg) {
+ 
+   join->thd->lock_query_plan();
+   Explain_join *ej = new (join->thd->pq_mem_root)
+-      Explain_join(explain_thd, join->thd, select_lex, need_tmp_table_flag,
++      Explain_join(explain_thd, join->thd, query_block, need_tmp_table_flag,
+                    need_order_flag, distinct_flag);
+ 
+   ej->shallow_explain();
+diff --git a/sql/parallel_query/pq_clone.cc b/sql/parallel_query/pq_clone.cc
+index 0930d9cd4ce..8fdd9d1bef8 100644
+--- a/sql/parallel_query/pq_clone.cc
++++ b/sql/parallel_query/pq_clone.cc
+@@ -478,7 +478,7 @@ static Item *pq_dup_condition(THD *thd, Query_block *select, Item *condition,
+   // Item_field::eq() will determine that two item_fields are equal by
+   // their fixed table. However, Item_field in "condition" here is
+   // fixed to leader's table, while its cloned equal item in
+-  // select_lex->fields is referred to gather's table, thus
++  // Query_block->fields is referred to gather's table, thus
+   // "Item_field::eq()" will return false even if they are equal
+   // items.
+   if (gather) condition->walk(&Item::set_fixed, enum_walk::PREFIX, &UNFIX);
+@@ -667,7 +667,7 @@ bool pq_dup_tabs(JOIN *join, JOIN *top_orig, bool gather) {
+             // Item_field::eq() will determine that two item_fields are equal by
+             // their fixed table. However, Item_field in "condition" here is
+             // fixed to leader's table, while its cloned equal item in
+-            // select_lex->fields is referred to gather's table, thus
++            // Query_block->fields is referred to gather's table, thus
+             // "Item_field::eq()" will return false even if they are equal
+             // items.
+             Item *cond = pq_dup_condition(join->thd, select, condition, gather);
+@@ -812,7 +812,7 @@ ORDER *pq_dup_order(THD *thd, Query_block *select, ORDER *orig) {
+ }
+ 
+ /**
+-  clone the select_lex group/order list, using orig saved group/order list
++  clone the Query_block group/order list, using orig saved group/order list
+   and orig group/order list.
+ 
+   @param[in]  thd                  cloned THD handler
+@@ -1130,8 +1130,8 @@ static Query_block *pq_dup_select(THD *thd, Query_block *top_orig) {
+         if (!table) {
+           return nullptr;
+         }
+-        // Put table in 'it' (select_lex->leaf_tables) so
+-        // that the table is closed and freed during the select_lex clean up
++        // Put table in 'it' (Query_block->leaf_tables) so
++        // that the table is closed and freed during the Query_block clean up
+         table->pq_shared_table = true;
+         table->pos_in_table_list = it;
+         it->table = table;
+@@ -1262,9 +1262,9 @@ static Query_block *pq_dup_select(THD *thd, Query_block *top_orig) {
+       }
+     }
+ 
+-    // phase 3. duplicate group list. For template select_lex, we use
++    // phase 3. duplicate group list. For template query_block, we use
+     // leader's saved_group_list_ptrs to get access to original
+-    // group_list, and then copy it to template. For worker's select_lex,
++    // group_list, and then copy it to template. For worker's query_block,
+     // we directly use template's info to generate its group_list.
+     if (pq_dup_order_list(thd, select, orig->saved_group_list_ptrs,
+                           orig->group_list, select->group_list)) {
+@@ -1370,7 +1370,7 @@ static bool pq_select_prepare(THD *thd, Query_block *select,
+   thd->mark_used_columns = MARK_COLUMNS_READ;
+   select->resolve_place = Query_block::RESOLVE_SELECT_LIST;
+   // select->fields is setup in sql_parse and setup_fields.
+-  // pq_select_lex->fields is cloned from orig_fields and orig_fields
++  // pq_query_block->fields is cloned from orig_fields and orig_fields
+   // has been updated in Query_block::prepare function.
+   // So split_sum_funcs/want_privilege/column_update set to false.
+   if (setup_fields(thd, /*want_privilege=*/false, /*allow_sum_func=*/true,
+diff --git a/sql/parallel_query/pq_optimizer.cc b/sql/parallel_query/pq_optimizer.cc
+index d472d412e6f..e175335d340 100644
+--- a/sql/parallel_query/pq_optimizer.cc
++++ b/sql/parallel_query/pq_optimizer.cc
+@@ -151,7 +151,7 @@ bool JOIN::restore_optimized_vars() {
+   }
+ 
+   having_cond = saved_optimized_vars.pq_saved_having_cond;
+-  // Note that, mysteriously, the worker uses select_lex->having_cond() while
++  // Note that, mysteriously, the worker uses Query_block->having_cond() while
+   // the leader uses pq_saved_having_cond.
+   if (query_block->parallel_exec) {
+     if (push_down_having()) {
+@@ -184,7 +184,7 @@ void JOIN::save_optimized_vars() {
+   saved_optimized_vars.pq_m_ordered_index_usage = m_ordered_index_usage;
+   saved_optimized_vars.pq_select_distinct = select_distinct;
+ 
+-  // record the mapping: JOIN::group_list -> select_lex->group_list
++  // record the mapping: JOIN::group_list -> Query_block->group_list
+   saved_join_order = query_block->saved_order_list_ptrs;
+   if (!saved_join_group_list) {
+     saved_join_group_list = query_block->saved_group_list_ptrs;
+@@ -443,11 +443,13 @@ bool JOIN::suite_for_parallel_query() {
+   Opt_trace_context *const trace = &thd->opt_trace;
+ 
+   // for quickly determine whether is suitable for parallel query
+-  if (!query_block->m_suite_for_pq)
++  if (!query_block->m_suite_for_pq) {
+     if (thd->retry_without_pq) {
+       query_block->pq_unsuite_info = PQUnsuiteInfo::RETRY_WITHOUT_PQ;
+-      goto print_info;
+     }
++    assert(query_block->pq_unsuite_info < PQUnsuiteInfo::PQ_MAX_UNSUITE);
++    goto print_info;
++  }
+ 
+   if (query_block->group_list.elements > 0) {
+     uint saved_group_list_elements =
+@@ -1697,7 +1699,7 @@ void pq_save_join_group_list(THD *thd, Query_block *query_block,
+       old_group_list && !select_distinct) {
+     // The group_list.order belongs to the JOIN object, so we save it in
+     // saved_join_group_list to differenciate between the group_list we save
+-    // from the JOIN and the one we save from the select_lex, that is saved in
++    // from the JOIN and the one we save from the query_block, that is saved in
+     // saved_group_list_ptrs
+     SQL_I_List<ORDER> tmp_list;
+     if (old_group_list->convert_to_list(tmp_list, thd) ||
+diff --git a/sql/parallel_query/pq_optimizer.h b/sql/parallel_query/pq_optimizer.h
+index d6c8acbf0d6..9ce821bb54d 100644
+--- a/sql/parallel_query/pq_optimizer.h
++++ b/sql/parallel_query/pq_optimizer.h
+@@ -79,7 +79,9 @@ enum class PQUnsuiteInfo {
+   ONLY_SUPPORT_INNODB,
+   NO_PQ,
+   ZERO_DOP,
+-  HYPERGRAPH_OPTIMIZER
++  HYPERGRAPH_OPTIMIZER,
++  // Max enum member
++  PQ_MAX_UNSUITE
+ };
+ 
+ /* @@pq_support_features_switch flags. */
+diff --git a/sql/parallel_query/pq_refix_fields_item.cc b/sql/parallel_query/pq_refix_fields_item.cc
+index be01d3cf787..4d134aa6969 100644
+--- a/sql/parallel_query/pq_refix_fields_item.cc
++++ b/sql/parallel_query/pq_refix_fields_item.cc
+@@ -148,8 +148,8 @@ bool Item_field::refix_fields(THD *thd, Item **reference) {
+     /*
+       We should resolve this as an outer field reference if
+       1. we haven't done it before, and
+-      2. the select_lex of the table that contains this field is
+-         different from the select_lex of the current name resolution
++      2. the query_block of the table that contains this field is
++         different from the query_block of the current name resolution
+          context.
+      */
+     if (!outer_fixed &&  // 1
+diff --git a/sql/parallel_query/pq_resolver.cc b/sql/parallel_query/pq_resolver.cc
+index 9c776e6e9d7..d7344ad9ecc 100644
+--- a/sql/parallel_query/pq_resolver.cc
++++ b/sql/parallel_query/pq_resolver.cc
+@@ -100,7 +100,7 @@ bool Query_block::pq_check_table_list() {
+ 
+     if (tbl_list->query_block != this) {
+       /*
+-        This is defensive programming. tlb_list->select_lex should always be
++        This is defensive programming. tlb_list->query_block should always be
+         equal to 'this', but with subquery-to-derived it sometimes is not
+         (this is a bug in Community MySQL). This in turn causes problems in
+         pq_can_resolve_Item_field_in(). So we block this case.
+@@ -225,12 +225,16 @@ bool Query_block::suite_for_parallel_query(THD *thd) {
+ }
+ 
+ bool THD::suite_for_parallel_query(PQUnsuiteInfo *pq_info) const {
+-  if (no_pq) {
+-    *pq_info = PQUnsuiteInfo::NO_PQ;
++  // For simple select without pq hint, when force_parallel_execute is off,
++  // no_pq is false and pq_dop is 0, we check pq_dop first to reduce one if
++  // condition judgment.
++  if (pq_dop == 0) {
++    *pq_info = PQUnsuiteInfo::ZERO_DOP;
+     return false;
+   }
+-  if (!pq_dop) {
+-    *pq_info = PQUnsuiteInfo::ZERO_DOP;
++
++  if (no_pq) {
++    *pq_info = PQUnsuiteInfo::NO_PQ;
+     return false;
+   }
+ 
+@@ -241,9 +245,10 @@ bool THD::suite_for_parallel_query(PQUnsuiteInfo *pq_info) const {
+     return false;
+   }
+ 
+-  if (lex->in_execute_ps || in_sp_trigger ||  // store procedure or trigger
+-      m_attachable_trx ||                     // attachable transaction
+-      tx_isolation == ISO_SERIALIZABLE)       // serializable with locking reads
++  if (lex->in_execute_ps ||              // prepared statement
++      in_sp_trigger ||                   // store procedure or trigger
++      m_attachable_trx ||                // attachable transaction
++      tx_isolation == ISO_SERIALIZABLE)  // serializable with locking reads
+   {
+     *pq_info = PQUnsuiteInfo::PREPARE_TRIGER_PROCEDURE;
+     return false;
+diff --git a/sql/parallel_query/sql_parallel.cc b/sql/parallel_query/sql_parallel.cc
+index 301a3c546ee..90b9f7df580 100644
+--- a/sql/parallel_query/sql_parallel.cc
++++ b/sql/parallel_query/sql_parallel.cc
+@@ -853,11 +853,7 @@ PQ_exec_status make_pq_unit_plan(Query_expression *unit, THD *thd) {
+       }
+     }
+   } else if (unit->is_union_all_of_simple()) {
+-    // TODO(dhw): used to test fake_select_lex == nullptr. Now that we
+-    // have general set operations and any number of query_expressions
+-    // with possible ordering/limit in addition, how should PQ be
+-    // generalized (if at all)? For now, allow only union all of
+-    // simple query blocks
++    // For now, allow only union all of simple query blocks
+     for (Query_block *sl = unit->first_query_block(); sl;
+          sl = sl->next_query_block()) {
+       join = sl->join;
+@@ -1972,7 +1968,7 @@ bool pq_check_stable_sort(JOIN *join) {
+ 
+ /*
+  * record the mapping:
+- *      L = join->select_lex->group_list -------> join->group_list = R
++ *      L = join->query_block->group_list -------> join->group_list = R
+  *
+  * @result:
+  *    if L[i] \in R, then optimized_flags[i] = 0; otherwise, optimized_flags[i]
+diff --git a/sql/parallel_query/sql_parallel.h b/sql/parallel_query/sql_parallel.h
+index 5b914bb91c9..304090a4a52 100644
+--- a/sql/parallel_query/sql_parallel.h
++++ b/sql/parallel_query/sql_parallel.h
+@@ -62,7 +62,7 @@ struct PQ_optimized_var {
+   int pq_m_ordered_index_usage;
+ 
+   /*
+-   * optimized_*_flags record each element in select_lex->group_list (or
++   * optimized_*_flags record each element in Query_block->group_list (or
+    * order_list) is optimized or not. Specifically, optimized_group_flags[i] = 1
+    * means that group_list[i] is optimized in JOIN::optimize(); otherwise,
+    * pq_group_optimized[i] = 0 and group_list[i] is remained in
+diff --git a/sql/sql_parse.cc b/sql/sql_parse.cc
+index dacf4f75d3e..40691ea53d6 100644
+--- a/sql/sql_parse.cc
++++ b/sql/sql_parse.cc
+@@ -3477,7 +3477,13 @@ int mysql_execute_command(THD *thd, bool first_level) {
+ 
+   if (!read_only && !pq_master_enable) thd->no_pq = true;
+ 
+-  if (!thd->no_pq && thd->variables.force_parallel_execute && !thd->pq_dop)
++  /*
++    pq_dop maybe already set when parse pq hint, only update pq_dop if
++    force_parallel_execute is on and pq_dop not set, the reason do not
++    check no_pq here is that we want to separate PQUnsuiteInfo in function
++    THD::suite_for_parallel_query.
++  */
++  if (thd->variables.force_parallel_execute && (thd->pq_dop == 0))
+     thd->pq_dop = thd->variables.parallel_default_dop;
+ 
+   /*
+diff --git a/sql/sql_plan_cache.cc b/sql/sql_plan_cache.cc
+index 6ac7d09e5d7..27695fc7760 100644
+--- a/sql/sql_plan_cache.cc
++++ b/sql/sql_plan_cache.cc
+@@ -113,7 +113,7 @@
+        ...
+        make_join_readinfo
+        if (cache_plan)
+-         SEELCT_LEX::cached_plan points to cached plan
++         Query_block::cached_plan points to cached plan
+        cached plan start its life
+ 
+     =======================================
+@@ -920,9 +920,8 @@ bool check_query_plan_cachable(JOIN *join) {
+       thd->locked_tables_mode == LTM_PRELOCKED_UNDER_LOCK_TABLES)
+     return false;
+ 
+-  // Here we need check UNION from root Query_expression. Because
+-  // fake_select_lex can be null for UNION ALL. PLAN_CACHE_PORT: also blocking
+-  // EXCEPT,INTERSECT (possible in .41).
++  // Here we need check UNION from root Query_expression.
++  // PLAN_CACHE_PORT: also blocking EXCEPT,INTERSECT (possible in .41).
+   if (unit->is_set_operation()) return false;
+ 
+   if (!(  // user asked to cache plans
+@@ -1446,7 +1445,7 @@ static int reinit_qep_tab_properties(QEP_TAB *qt) {
+       if (!((table->s->system || table->file->stats.records <= 1 ||
+              table->all_partitions_pruned_away) &&
+             (table->file->ha_table_flags() & HA_STATS_RECORDS_IS_EXACT))) {
+-        // PLAN_CACHE_PORT invalidate_cached_plan(join->select_lex) removed;
++        // PLAN_CACHE_PORT invalidate_cached_plan(join->query_block) removed;
+         // instead, doing this at the end of the caller (exec_cached_plan()), to
+         // "centralize" this.
+         return 1;
+@@ -1521,7 +1520,7 @@ static int reinit_qep_tab_properties(QEP_TAB *qt) {
+           join->query_block, &qck);
+       DBUG_EXECUTE_IF("plan_cache_debug_test_quick_select_fail", rc = 0;);
+       if (!rc) {
+-        // PLAN_CACHE_PORT invalidate_cached_plan(join->select_lex); removed;
++        // PLAN_CACHE_PORT invalidate_cached_plan(join->query_block); removed;
+         // instead, doing this at the end of the caller (exec_cached_plan()),
+         // to "centralize" this.
+         return 1;
+-- 
+2.23.0
+

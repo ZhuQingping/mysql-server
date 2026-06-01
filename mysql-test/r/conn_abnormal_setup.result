@@ -1,0 +1,68 @@
+SET @save_max_connections= @@global.max_connections;
+SET @save_rds_reserved_connections= @@global.rds_reserved_connections;
+SET @save_rds_conn_log_error_verbosity= @@global.rds_conn_log_error_verbosity;
+SET @save_log_error_verbosity= @@global.log_error_verbosity;
+SET GLOBAL max_connections=2;
+SET GLOBAL rds_reserved_connections=1;
+SET GLOBAL rds_reserved_users='reserved_user1,reserved_user2';
+SET GLOBAL rds_conn_log_error_verbosity=1;
+SET GLOBAL log_error_verbosity=2;
+CREATE USER 'reserved_user1'@'%' IDENTIFIED BY '123456';
+GRANT SELECT ON *.* TO 'reserved_user1'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'reserved_user1'@'%';
+Grants for reserved_user1@%
+GRANT SELECT ON *.* TO `reserved_user1`@`%` WITH GRANT OPTION
+CREATE USER 'reserved_user2'@'%' IDENTIFIED BY '123456';
+GRANT SELECT ON *.* TO 'reserved_user2'@'%' WITH GRANT OPTION;
+SHOW GRANTS FOR 'reserved_user2'@'%';
+Grants for reserved_user2@%
+GRANT SELECT ON *.* TO `reserved_user2`@`%` WITH GRANT OPTION
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+Variable_name	Value
+Threads_connected	3
+SHOW GLOBAL STATUS LIKE "Reserved_threads_connected";
+Variable_name	Value
+Reserved_threads_connected	0
+#
+# root's connections reached the maximum limit
+#
+Got one of the listed errors
+include/assert_grep.inc [Check that there is 'Too many connections, valid_connection_count check fail' in error log.]
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+Variable_name	Value
+Threads_connected	4
+SHOW GLOBAL STATUS LIKE "Reserved_threads_connected";
+Variable_name	Value
+Reserved_threads_connected	1
+#
+# all users can not be connected
+#
+Got one of the listed errors
+include/assert_grep.inc [Check that there is 'Too many connections, check_and_incr_conn_count fail' in error log.]
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+Variable_name	Value
+Threads_connected	2
+SHOW GLOBAL STATUS LIKE "Reserved_threads_connected";
+Variable_name	Value
+Reserved_threads_connected	1
+#
+# reserved user's connections reached the maximum limit
+#
+Got one of the listed errors
+include/assert_grep.inc [Check that there is 'Too many connections, check_and_incr_reserved_conn_count fail' in error log.]
+#
+# password error
+#
+ERROR 28000: Access denied for user 'reserved_user2'@'localhost' (using password: YES)
+include/assert_grep.inc [Check that there is 'Access denied for user' in error log.]
+SET GLOBAL max_connections=@save_max_connections;
+SET GLOBAL rds_reserved_connections=@save_rds_reserved_connections;
+SET GLOBAL rds_reserved_users=default;
+SET GLOBAL rds_conn_log_error_verbosity=@save_rds_conn_log_error_verbosity;
+SET GLOBAL log_error_verbosity=@save_log_error_verbosity;
+select count(*) from information_schema.PROCESSLIST where user in ('reserved_user1','reserved_user2');
+count(*)
+0
+Warnings:
+Warning	1287	'INFORMATION_SCHEMA.PROCESSLIST' is deprecated and will be removed in a future release. Please use performance_schema.processlist instead
+DROP USER reserved_user1,reserved_user2;
