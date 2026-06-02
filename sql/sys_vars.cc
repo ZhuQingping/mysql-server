@@ -7729,3 +7729,43 @@ static Sys_var_enum Sys_explain_format(
     SESSION_VAR(explain_format), CMD_LINE(OPT_ARG), explain_format_names,
     DEFAULT(static_cast<ulong>(Explain_format_type::TRADITIONAL)),
     NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(nullptr), ON_UPDATE(nullptr));
+
+/*
+  Parallel Query (PQ) system variables.
+  Phase 0: skeleton only, not connected to any execution path.
+*/
+
+static Sys_var_bool Sys_parallel_query(
+    "parallel_query",
+    "Enable or disable parallel query execution for the session",
+    SESSION_VAR(parallel_query), CMD_LINE(OPT_ARG), DEFAULT(false));
+
+static Sys_var_uint Sys_parallel_default_dop(
+    "parallel_default_dop",
+    "Default degree of parallelism (number of worker threads) "
+    "for parallel query execution",
+    SESSION_VAR(parallel_default_dop), CMD_LINE(REQUIRED_ARG),
+    VALID_RANGE(1, 256), DEFAULT(4), BLOCK_SIZE(1));
+
+static Sys_var_ulonglong Sys_parallel_cost_threshold(
+    "parallel_cost_threshold",
+    "Minimum estimated cost for a query to be considered "
+    "for parallel execution. Queries below this threshold "
+    "will always run serially",
+    SESSION_VAR(parallel_cost_threshold), CMD_LINE(REQUIRED_ARG),
+    VALID_RANGE(0, (ulonglong) ~(intptr)0), DEFAULT(10000), BLOCK_SIZE(1));
+
+static Sys_var_ulonglong Sys_parallel_memory_limit(
+    "parallel_memory_limit",
+    "Maximum memory in bytes available for parallel query "
+    "allocations across all parallel queries",
+    SESSION_VAR(parallel_memory_limit), CMD_LINE(REQUIRED_ARG),
+    VALID_RANGE(0, (ulonglong) ~(intptr)0), DEFAULT(268435456),
+    BLOCK_SIZE(1));
+
+static Sys_var_uint Sys_parallel_queue_timeout(
+    "parallel_queue_timeout",
+    "Timeout in milliseconds for a worker waiting in the "
+    "parallel execution queue. 0 means no timeout",
+    SESSION_VAR(parallel_queue_timeout), CMD_LINE(REQUIRED_ARG),
+    VALID_RANGE(0, UINT_MAX32), DEFAULT(0), BLOCK_SIZE(1));

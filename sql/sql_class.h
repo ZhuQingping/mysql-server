@@ -4758,6 +4758,36 @@ class THD : public MDL_context_owner,
 
  private:
   std::unordered_map<unsigned int, void *> external_store_;
+
+  /*
+    Parallel Query (PQ) context fields.
+    Phase 0: skeleton only, inert defaults, not connected to any execution path.
+    Opaque pointers use void* to avoid pulling in sql/parallel_query headers.
+  */
+
+  /// True if this THD is a parallel query worker thread
+  bool pq_is_worker = false;
+
+  /// True if a parallel query plan has been executed on this THD (leader)
+  bool pq_executed = false;
+
+  /// Degree of parallelism for the current parallel query
+  uint pq_dop = 0;
+
+  /// Error code propagated from parallel query workers
+  int pq_error = 0;
+
+  /// MEM_ROOT for all parallel query allocations; nullptr until PQ activated
+  MEM_ROOT *pq_mem_root = nullptr;
+
+  /// Opaque pointer to Gather_operator (leader side)
+  void *pq_leader = nullptr;
+
+  /// Opaque pointer to PQ_worker_info (worker side)
+  void *pq_worker_info = nullptr;
+
+  /// Opaque pointer to list of Gather_operator instances (leader side)
+  void *pq_gathers = nullptr;
 };  // End of class THD
 
 /**

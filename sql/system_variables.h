@@ -500,6 +500,42 @@ struct System_variables {
     @sa Sys_explain_format
    */
   Explain_format_type explain_format;
+
+  /*
+    Parallel Query (PQ) session variables.
+    Phase 0: skeleton only, not connected to any execution path.
+  */
+
+  /**
+    @sa Sys_parallel_query
+    Whether parallel query is enabled for this session.
+  */
+  bool parallel_query;
+
+  /**
+    @sa Sys_parallel_default_dop
+    Default degree of parallelism (number of worker threads).
+  */
+  uint parallel_default_dop;
+
+  /**
+    @sa Sys_parallel_cost_threshold
+    Minimum estimated cost for a query to be considered for parallel execution.
+  */
+  ulonglong parallel_cost_threshold;
+
+  /**
+    @sa Sys_parallel_memory_limit
+    Maximum memory (in bytes) available for parallel query allocations.
+  */
+  ulonglong parallel_memory_limit;
+
+  /**
+    @sa Sys_parallel_queue_timeout
+    Timeout (in milliseconds) for a worker waiting in the parallel queue.
+    0 means no timeout.
+  */
+  uint parallel_queue_timeout;
 };
 
 /**

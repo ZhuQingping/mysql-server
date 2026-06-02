@@ -2196,6 +2196,21 @@ class Query_block : public Query_term {
   /// @note that using this means we modify resolved data during optimization
   uint hidden_items_from_optimization{0};
 
+  /*
+    Parallel Query (PQ) context fields.
+    Phase 0: skeleton only, inert defaults, not connected to any execution path.
+  */
+
+  /// True if this query block is selected for parallel execution
+  bool parallel_exec{false};
+
+  /// True if this query block is a candidate for parallel execution
+  /// (set during optimization eligibility check)
+  bool pq_candidate{false};
+
+  /// Opaque pointer to PQUnsuiteInfo (reasons for PQ disqualification)
+  void *pq_unsuite_info{nullptr};
+
  private:
   friend class Query_expression;
   friend class Condition_context;
