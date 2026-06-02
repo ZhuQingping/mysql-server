@@ -460,6 +460,8 @@ SET(SQL_SHARED_SOURCES
   opt_sum.cc
   opt_trace.cc
   opt_trace2server.cc
+  parallel_query/exchange.cc
+  parallel_query/msg_queue.cc
   parallel_query/pq_handler.cc
   parallel_query/pq_optimizer.cc
   pack_rows.cc
