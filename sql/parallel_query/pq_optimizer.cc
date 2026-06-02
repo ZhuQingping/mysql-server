@@ -32,6 +32,7 @@
 
 #include "sql/sql_class.h"        // THD
 #include "sql/sql_lex.h"          // Query_block, LEX, Table_ref
+#include "sql/sql_opt_exec_shared.h"  // JOIN_TAB, join_type, JT_ALL
 #include "sql/sql_optimizer.h"    // JOIN
 #include "sql/table.h"            // TABLE, TABLE_SHARE, Table_ref
 
@@ -162,6 +163,10 @@ static bool pq_check_single_table(Table_ref *table_ref,
   Any secondary index access, range scan, ref access, ICP, or MRR
   must fallback to serial.
 
+  When called from within JOIN::optimize() (Phase 5), we can inspect
+  the JOIN_TAB type of the first non-const table in best_ref[].
+  A JT_ALL type indicates a full table scan, which is what MVP requires.
+
   @param join  The JOIN object (may be nullptr if not yet optimized)
   @param info  Output: set reason if disqualified
 
@@ -175,35 +180,52 @@ static bool pq_check_full_table_scan(JOIN *join, PQUnsuiteInfo *info) {
                      "JOIN not available for access path check");
   }
 
-  // In Phase 1, we conservatively check by examining the best read cost
-  // and the number of primary tables. A full table scan on a single table
-  // would have primary_tables == 1 and const_tables == 0.
-  // But the access method can only be reliably determined after
-  // JOIN::optimize() has completed. Since Phase 1 does not hook into
-  // the optimizer, we can only do a partial check.
-
-  // If we have more const tables than 0, the remaining table may still
-  // use a scan, but const tables are optimized away. However, const_tables
-  // > 0 means there are conditions that reduce the table set, which is
-  // not a simple full scan scenario for MVP.
-  if (join->const_tables > 0) {
-    return pq_reject(info, PQUnsuiteReason::UNSUPPORTED_BY_PHASE1,
-                     "const tables present - access path uncertain");
-  }
-
   // If there are tmp_tables, the query involves materialization steps.
   if (join->tmp_tables > 0) {
     return pq_reject(info, PQUnsuiteReason::UNSUPPORTED_BY_PHASE1,
                      "tmp tables present");
   }
 
-  // NOTE: A more precise access-path check (checking QEP_TAB or
-  // AccessPath type) requires the optimizer to have run. Phase 1
-  // does not call this from within JOIN::optimize(), so we rely on
-  // conservative rules. If the JOIN has been optimized and we can
-  // safely read the access path, that check would be added in Phase 5.
+  // Check the access type of the first non-const table.
+  // When called from JOIN::optimize() after make_join_plan(),
+  // best_ref[] is populated and the type has been set.
+  if (join->const_tables >= join->primary_tables) {
+    // No non-const tables left, or all tables are const/system.
+    // This is not a candidate for parallel full scan.
+    return pq_reject(info, PQUnsuiteReason::UNSUPPORTED_BY_PHASE1,
+                     "all tables are const/system");
+  }
 
-  return true;  // Passed partial scan check
+  // Check the first non-const table's access type.
+  // best_ref[] is ordered by the optimizer; the first non-const
+  // table at index [const_tables] is the primary driving table.
+  // Any null pointer or missing position must fallback serial.
+  if (join->best_ref == nullptr) {
+    return pq_reject(info, PQUnsuiteReason::UNSUPPORTED_BY_PHASE1,
+                     "best_ref not available");
+  }
+
+  JOIN_TAB *first_tab = join->best_ref[join->const_tables];
+  if (first_tab == nullptr) {
+    return pq_reject(info, PQUnsuiteReason::UNSUPPORTED_BY_PHASE1,
+                     "best_ref entry not available");
+  }
+
+  if (first_tab->position() == nullptr) {
+    return pq_reject(info, PQUnsuiteReason::UNSUPPORTED_BY_PHASE1,
+                     "access path position not available");
+  }
+
+  // Only JT_ALL (full table scan) is eligible for PQ in MVP.
+  // Any other access type (ref, range, index scan, etc.) must fallback.
+  join_type access_type = first_tab->type();
+  if (access_type != JT_ALL) {
+    return pq_reject(info, PQUnsuiteReason::NON_FULL_TABLE_SCAN,
+                     pq_unsuite_reason_to_string(
+                         PQUnsuiteReason::NON_FULL_TABLE_SCAN));
+  }
+
+  return true;  // Passed full table scan check
 }
 
 bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
@@ -418,12 +440,24 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
   return true;
 }
 
+/**
+  Write eligibility result into Query_block and JOIN boolean fields.
+
+  Does NOT set Query_block::pq_unsuite_info because the PQUnsuiteInfo
+  object is typically stack-allocated and would become a dangling pointer.
+  Reason storage is deferred until PQUnsuiteInfo can be allocated on a
+  long-lived MEM_ROOT.
+*/
 void pq_mark_query_block_result(Query_block *query_block, JOIN *join,
-                                bool eligible, PQUnsuiteInfo *info) {
-  if (query_block == nullptr || info == nullptr) return;
+                                bool eligible) {
+  if (query_block == nullptr) return;
 
   query_block->pq_candidate = eligible;
-  query_block->pq_unsuite_info = eligible ? nullptr : info;
+
+  // Explicitly clear pq_unsuite_info to avoid stale pointers from
+  // re-optimization or subsequent phases. Reason storage is deferred
+  // until PQUnsuiteInfo can be allocated on a long-lived MEM_ROOT.
+  query_block->pq_unsuite_info = nullptr;
 
   if (join != nullptr) {
     join->pq_eligible = eligible;

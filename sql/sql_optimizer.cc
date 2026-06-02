@@ -91,6 +91,7 @@
 #include "sql/opt_trace.h"    // Opt_trace_object
 #include "sql/opt_trace_context.h"
 #include "sql/parse_tree_node_base.h"
+#include "sql/parallel_query/pq_optimizer.h"  // pq_check_query_block_eligible
 #include "sql/parser_yystype.h"
 #include "sql/query_options.h"
 #include "sql/query_result.h"
@@ -1061,6 +1062,35 @@ bool JOIN::optimize(bool finalize_access_paths) {
     has finalized the 'plan'.
   */
   if (push_to_engines()) return true;
+
+  // ------------------------------------------------------------------
+  // Parallel Query eligibility check (Phase 5).
+  //
+  // At this point, the traditional optimizer has completed:
+  // - best_read cost is determined
+  // - join plan is finalized
+  // - access paths are created
+  // - engine pushdown is done
+  //
+  // We check PQ eligibility and mark the result into
+  // Query_block::pq_candidate and JOIN::pq_eligible.
+  // This does NOT:
+  // - Modify the execution plan
+  // - Start workers
+  // - Call handler/InnoDB PQ API
+  // - Create PQ iterators or access paths
+  //
+  // When parallel_query=OFF, pq_check_query_block_eligible() returns
+  // false with reason DISABLED, and no fields are changed beyond
+  // pq_candidate=false / pq_eligible=false. Since those fields default
+  // to false, there is zero behavioral impact when PQ is disabled.
+  // ------------------------------------------------------------------
+  {
+    PQUnsuiteInfo pq_info;
+    bool pq_elig =
+        pq_check_query_block_eligible(thd, query_block, this, &pq_info);
+    pq_mark_query_block_result(query_block, this, pq_elig);
+  }
 
   // Make plan visible for EXPLAIN
   set_plan_state(PLAN_READY);

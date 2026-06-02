@@ -133,20 +133,27 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
 const char *pq_unsuite_reason_to_string(PQUnsuiteReason reason);
 
 /**
-  Write eligibility result into Phase 0 inert fields.
+  Write eligibility result into Phase 0/1 inert fields.
 
-  Helper that sets Query_block::pq_candidate, Query_block::pq_unsuite_info,
-  and JOIN::pq_eligible based on the eligibility check result.
+  Helper that sets Query_block::pq_candidate and JOIN::pq_eligible
+  based on the eligibility check result.
 
-  Phase 1 does NOT call this from any execution path; it is provided
-  for Phase 5 integration.
+  NOTE: This function intentionally sets Query_block::pq_unsuite_info to nullptr.
+  This clears any stale pointer from re-optimization or subsequent phases.
+  The PQUnsuiteInfo object passed to pq_check_query_block_eligible() is
+  typically a stack-allocated local in JOIN::optimize(). Storing its address
+  in the query block would create a dangling pointer after optimize() returns.
+  Reason storage is deferred: the pq_unsuite_info pointer will be populated
+  only when we can allocate PQUnsuiteInfo on a long-lived MEM_ROOT (e.g.,
+  THD::pq_mem_root after PQ activation). Until then, the boolean fields
+  pq_candidate and pq_eligible are sufficient for the optimizer to decide
+  whether to proceed with PQ.
 
   @param query_block  The query block to mark
   @param join         The JOIN to mark (may be nullptr)
   @param eligible     Whether the query block is eligible
-  @param info         The PQUnsuiteInfo from eligibility check
 */
 void pq_mark_query_block_result(Query_block *query_block, JOIN *join,
-                                bool eligible, PQUnsuiteInfo *info);
+                                bool eligible);
 
 #endif  // PQ_OPTIMIZER_INCLUDED
