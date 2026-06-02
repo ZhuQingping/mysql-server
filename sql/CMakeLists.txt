@@ -464,6 +464,7 @@ SET(SQL_SHARED_SOURCES
   parallel_query/msg_queue.cc
   parallel_query/pq_handler.cc
   parallel_query/pq_optimizer.cc
+  parallel_query/sql_parallel.cc
   pack_rows.cc
   parse_file.cc
   parse_tree_handler.cc
