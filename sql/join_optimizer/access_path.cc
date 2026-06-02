@@ -44,6 +44,7 @@
 #include "sql/join_optimizer/relational_expression.h"
 #include "sql/join_optimizer/walk_access_paths.h"
 #include "sql/mem_root_array.h"
+#include "sql/parallel_query/pq_iterator.h"
 #include "sql/range_optimizer/geometry_index_range_scan.h"
 #include "sql/range_optimizer/group_index_skip_scan.h"
 #include "sql/range_optimizer/group_index_skip_scan_plan.h"
@@ -421,8 +422,21 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
     switch (path->type) {
       case AccessPath::TABLE_SCAN: {
         const auto &param = path->table_scan();
-        iterator = NewIterator<TableScanIterator>(
-            thd, mem_root, param.table, path->num_output_rows(), examined_rows);
+        // Phase 5B: Try PQ iterator first. If TryCreatePQTableScanIterator
+        // returns nullptr (guards not met or PQ not ready), fall back to
+        // serial TableScanIterator. In Phase 5B, TryCreate always returns
+        // nullptr, so the serial path is always taken. Phase 6+ will return
+        // a real PQ iterator when PQ is ready for execution.
+        auto pq_iter = TryCreatePQTableScanIterator(
+            thd, mem_root, param.table, join,
+            path->num_output_rows(), examined_rows);
+        if (pq_iter != nullptr) {
+          iterator = std::move(pq_iter);
+        } else {
+          iterator = NewIterator<TableScanIterator>(
+              thd, mem_root, param.table, path->num_output_rows(),
+              examined_rows);
+        }
         break;
       }
       case AccessPath::INDEX_SCAN: {
