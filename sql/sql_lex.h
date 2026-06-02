@@ -2209,7 +2209,7 @@ class Query_block : public Query_term {
   bool pq_candidate{false};
 
   /// Opaque pointer to PQUnsuiteInfo (reasons for PQ disqualification)
-  void *pq_unsuite_info{nullptr};
+  struct PQUnsuiteInfo *pq_unsuite_info{nullptr};
 
  private:
   friend class Query_expression;

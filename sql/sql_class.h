@@ -4756,12 +4756,10 @@ class THD : public MDL_context_owner,
   bool add_external(unsigned int slot, void *data);
   void *fetch_external(unsigned int slot);
 
- private:
-  std::unordered_map<unsigned int, void *> external_store_;
-
   /*
     Parallel Query (PQ) context fields.
-    Phase 0: skeleton only, inert defaults, not connected to any execution path.
+    Phase 1: moved from private to public for pq_optimizer access.
+    All fields have inert defaults, not connected to any execution path.
     Opaque pointers use void* to avoid pulling in sql/parallel_query headers.
   */
 
@@ -4788,6 +4786,9 @@ class THD : public MDL_context_owner,
 
   /// Opaque pointer to list of Gather_operator instances (leader side)
   void *pq_gathers = nullptr;
+
+ private:
+  std::unordered_map<unsigned int, void *> external_store_;
 };  // End of class THD
 
 /**

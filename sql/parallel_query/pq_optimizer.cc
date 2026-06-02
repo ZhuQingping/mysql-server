@@ -1,0 +1,431 @@
+/* Copyright (c) 2026, Oracle and/or its affiliates.
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License, version 2.0,
+   as published by the Free Software Foundation.
+
+   This program is also distributed with certain software (including
+   but not limited to OpenSSL) that is licensed under separate terms,
+   as designated in a particular file or component or in license.xml
+   elsewhere in this distribution.  You may use this software under
+   the terms of the GNU General Public License, version 2.0,
+   or the terms of any other license that is available in this distribution.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License, version 2.0, for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
+
+/**
+  @file sql/parallel_query/pq_optimizer.cc
+  Parallel Query V1-MVP: Conservative eligibility check and fallback skeleton.
+
+  Phase 1 implementation: pq_check_query_block_eligible() and helpers.
+  All uncertain cases default to serial fallback.
+*/
+
+#include "sql/parallel_query/pq_optimizer.h"
+
+#include "sql/sql_class.h"        // THD
+#include "sql/sql_lex.h"          // Query_block, LEX, Table_ref
+#include "sql/sql_optimizer.h"    // JOIN
+#include "sql/table.h"            // TABLE, TABLE_SHARE, Table_ref
+
+/**
+  String representation of each PQUnsuiteReason value.
+  Indexed by (int)reason, terminated by PQ_UNSUITED_REASON_COUNT sentinel.
+*/
+static const char *pq_unsuite_reason_names[] = {
+    "NONE",                      // PQUnsuiteReason::NONE
+    "DISABLED",                  // PQUnsuiteReason::DISABLED
+    "WORKER_THD",                // PQUnsuiteReason::WORKER_THD
+    "HYPERGRAPH_OPTIMIZER",      // PQUnsuiteReason::HYPERGRAPH_OPTIMIZER
+    "NOT_SELECT",                // PQUnsuiteReason::NOT_SELECT
+    "MULTI_QUERY_BLOCK",         // PQUnsuiteReason::MULTI_QUERY_BLOCK
+    "NO_TABLE",                  // PQUnsuiteReason::NO_TABLE
+    "MULTI_TABLE",               // PQUnsuiteReason::MULTI_TABLE
+    "NON_INNODB",                // PQUnsuiteReason::NON_INNODB
+    "TEMPORARY_TABLE",           // PQUnsuiteReason::TEMPORARY_TABLE
+    "PARTITIONED_TABLE",         // PQUnsuiteReason::PARTITIONED_TABLE
+    "FULLTEXT",                  // PQUnsuiteReason::FULLTEXT
+    "LOCKING_READ",              // PQUnsuiteReason::LOCKING_READ
+    "SERIALIZABLE",              // PQUnsuiteReason::SERIALIZABLE
+    "HAS_SUBQUERY",              // PQUnsuiteReason::HAS_SUBQUERY
+    "HAS_UNION",                 // PQUnsuiteReason::HAS_UNION
+    "HAS_DERIVED_OR_VIEW",       // PQUnsuiteReason::HAS_DERIVED_OR_VIEW
+    "HAS_WINDOW",                // PQUnsuiteReason::HAS_WINDOW
+    "HAS_DISTINCT",              // PQUnsuiteReason::HAS_DISTINCT
+    "HAS_ORDER_BY",              // PQUnsuiteReason::HAS_ORDER_BY
+    "HAS_GROUP_BY",              // PQUnsuiteReason::HAS_GROUP_BY
+    "HAS_ROLLUP",                // PQUnsuiteReason::HAS_ROLLUP
+    "HAS_SEMIJOIN",              // PQUnsuiteReason::HAS_SEMIJOIN
+    "NON_FULL_TABLE_SCAN",       // PQUnsuiteReason::NON_FULL_TABLE_SCAN
+    "COST_BELOW_THRESHOLD",      // PQUnsuiteReason::COST_BELOW_THRESHOLD
+    "UNSUPPORTED_BY_PHASE1",     // PQUnsuiteReason::UNSUPPORTED_BY_PHASE1
+};
+
+const char *pq_unsuite_reason_to_string(PQUnsuiteReason reason) {
+  int idx = static_cast<int>(reason);
+  if (idx >= 0 && idx < static_cast<int>(PQUnsuiteReason::PQ_UNSUITED_REASON_COUNT))
+    return pq_unsuite_reason_names[idx];
+  return "UNKNOWN";
+}
+
+/**
+  Helper: set info and return false (not eligible).
+  @param info  Output disqualification info
+  @param r     The reason
+  @param d     Detail string (static constant)
+  @retval false  Always returns false (not eligible)
+*/
+static bool pq_reject(PQUnsuiteInfo *info, PQUnsuiteReason r,
+                      const char *d = nullptr) {
+  info->reason = r;
+  info->detail = d;
+  return false;
+}
+
+/**
+  Check whether a single leaf table meets PQ eligibility requirements.
+
+  MVP eligibility requires:
+  - InnoDB engine
+  - Non-temporary
+  - Non-partitioned
+  - Non-fulltext
+  - Non-view/derived/CTE
+
+  @param thd         Thread context
+  @param table_ref   The Table_ref (leaf table) to check
+  @param info        Output: set reason if disqualified
+
+  @retval true   Table passes PQ eligibility
+  @retval false  Table is disqualified
+*/
+static bool pq_check_single_table(Table_ref *table_ref,
+                                  PQUnsuiteInfo *info) {
+  // Must not be a view or derived table
+  if (table_ref->is_view_or_derived()) {
+    return pq_reject(info, PQUnsuiteReason::HAS_DERIVED_OR_VIEW,
+                     "base table is view or derived");
+  }
+
+  TABLE *table = table_ref->table;
+  if (table == nullptr) {
+    // Table not opened yet - cannot reliably check. Fallback.
+    return pq_reject(info, PQUnsuiteReason::UNSUPPORTED_BY_PHASE1,
+                     "table not opened");
+  }
+
+  TABLE_SHARE *share = table->s;
+
+  // Must be InnoDB engine
+  if (ha_legacy_type(share->db_type()) != DB_TYPE_INNODB) {
+    return pq_reject(info, PQUnsuiteReason::NON_INNODB,
+                     "table engine is not InnoDB");
+  }
+
+  // Must not be temporary
+  if (share->tmp_table != NO_TMP_TABLE) {
+    return pq_reject(info, PQUnsuiteReason::TEMPORARY_TABLE,
+                     "table is temporary");
+  }
+
+  // Must not be partitioned
+  if (share->m_part_info != nullptr) {
+    return pq_reject(info, PQUnsuiteReason::PARTITIONED_TABLE,
+                     "table is partitioned");
+  }
+
+  // Must not have fulltext index involvement
+  // Check: if the table has any fulltext key defined, conservatively reject.
+  // A more precise check would verify if the query actually uses FTS,
+  // but Phase 1 errs on the side of safety.
+  for (uint i = 0; i < share->keys; i++) {
+    if ((share->key_info[i].flags & HA_FULLTEXT) != 0) {
+      return pq_reject(info, PQUnsuiteReason::FULLTEXT,
+                       "table has fulltext index");
+    }
+  }
+
+  return true;  // Table passes all checks
+}
+
+/**
+  Check whether the query block's access path is a full table scan.
+
+  MVP only supports full table scan on the single base table.
+  Any secondary index access, range scan, ref access, ICP, or MRR
+  must fallback to serial.
+
+  @param join  The JOIN object (may be nullptr if not yet optimized)
+  @param info  Output: set reason if disqualified
+
+  @retval true   Access path is full table scan
+  @retval false  Access path is something else or cannot be determined
+*/
+static bool pq_check_full_table_scan(JOIN *join, PQUnsuiteInfo *info) {
+  if (join == nullptr) {
+    // JOIN not yet constructed - cannot check access path. Fallback.
+    return pq_reject(info, PQUnsuiteReason::UNSUPPORTED_BY_PHASE1,
+                     "JOIN not available for access path check");
+  }
+
+  // In Phase 1, we conservatively check by examining the best read cost
+  // and the number of primary tables. A full table scan on a single table
+  // would have primary_tables == 1 and const_tables == 0.
+  // But the access method can only be reliably determined after
+  // JOIN::optimize() has completed. Since Phase 1 does not hook into
+  // the optimizer, we can only do a partial check.
+
+  // If we have more const tables than 0, the remaining table may still
+  // use a scan, but const tables are optimized away. However, const_tables
+  // > 0 means there are conditions that reduce the table set, which is
+  // not a simple full scan scenario for MVP.
+  if (join->const_tables > 0) {
+    return pq_reject(info, PQUnsuiteReason::UNSUPPORTED_BY_PHASE1,
+                     "const tables present - access path uncertain");
+  }
+
+  // If there are tmp_tables, the query involves materialization steps.
+  if (join->tmp_tables > 0) {
+    return pq_reject(info, PQUnsuiteReason::UNSUPPORTED_BY_PHASE1,
+                     "tmp tables present");
+  }
+
+  // NOTE: A more precise access-path check (checking QEP_TAB or
+  // AccessPath type) requires the optimizer to have run. Phase 1
+  // does not call this from within JOIN::optimize(), so we rely on
+  // conservative rules. If the JOIN has been optimized and we can
+  // safely read the access path, that check would be added in Phase 5.
+
+  return true;  // Passed partial scan check
+}
+
+bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
+                                   JOIN *join, PQUnsuiteInfo *info) {
+  // Initialize info to eligible state
+  info->reset();
+
+  // ================================================================
+  // 1. Global/session switch: parallel_query must be ON
+  // ================================================================
+  if (!thd->variables.parallel_query) {
+    return pq_reject(info, PQUnsuiteReason::DISABLED,
+                     "parallel_query is OFF");
+  }
+
+  // ================================================================
+  // 2. This THD must not be a PQ worker (no recursive parallelism)
+  // ================================================================
+  if (thd->pq_is_worker) {
+    return pq_reject(info, PQUnsuiteReason::WORKER_THD,
+                     "THD is already a PQ worker");
+  }
+
+  // ================================================================
+  // 3. Must use traditional optimizer, not hypergraph
+  // ================================================================
+  if (thd->lex->using_hypergraph_optimizer()) {
+    return pq_reject(info, PQUnsuiteReason::HYPERGRAPH_OPTIMIZER,
+                     "hypergraph optimizer in use");
+  }
+
+  // ================================================================
+  // 4. Must be a simple SELECT statement
+  // ================================================================
+  if (thd->lex->sql_command != SQLCOM_SELECT) {
+    return pq_reject(info, PQUnsuiteReason::NOT_SELECT,
+                     "statement is not SELECT");
+  }
+
+  // ================================================================
+  // 5. Must be a simple query block (no UNION, no subquery wrapping)
+  // ================================================================
+  if (!query_block->is_simple_query_block()) {
+    return pq_reject(info, PQUnsuiteReason::MULTI_QUERY_BLOCK,
+                     "query has multiple query blocks (UNION/subquery)");
+  }
+
+  // ================================================================
+  // 6. Must have at least one table
+  // ================================================================
+  if (!query_block->has_tables()) {
+    return pq_reject(info, PQUnsuiteReason::NO_TABLE,
+                     "no tables in query block");
+  }
+
+  // ================================================================
+  // 7. Must have exactly one base table (no joins)
+  // ================================================================
+  if (query_block->table_count() > 1) {
+    return pq_reject(info, PQUnsuiteReason::MULTI_TABLE,
+                     "more than one table");
+  }
+
+  // ================================================================
+  // 8. Must not have DISTINCT
+  // ================================================================
+  if (query_block->is_distinct()) {
+    return pq_reject(info, PQUnsuiteReason::HAS_DISTINCT,
+                     "query has DISTINCT");
+  }
+
+  // ================================================================
+  // 9. Must not have ORDER BY
+  // ================================================================
+  if (query_block->is_ordered()) {
+    return pq_reject(info, PQUnsuiteReason::HAS_ORDER_BY,
+                     "query has ORDER BY");
+  }
+
+  // ================================================================
+  // 10. Must not have explicit GROUP BY
+  // ================================================================
+  if (query_block->is_explicitly_grouped()) {
+    return pq_reject(info, PQUnsuiteReason::HAS_GROUP_BY,
+                     "query has GROUP BY");
+  }
+
+  // ================================================================
+  // 11. Must not have implicit grouping (aggregate without GROUP BY)
+  // ================================================================
+  if (query_block->is_implicitly_grouped()) {
+    return pq_reject(info, PQUnsuiteReason::HAS_GROUP_BY,
+                     "query has implicit grouping (aggregates without GROUP BY)");
+  }
+
+  // ================================================================
+  // 12. Must not have WITH ROLLUP
+  // ================================================================
+  // olap_type is defined in parser_yystype.h:
+  //   enum olap_type { UNSPECIFIED_OLAP_TYPE, ROLLUP_TYPE };
+  if (query_block->olap != UNSPECIFIED_OLAP_TYPE) {
+    return pq_reject(info, PQUnsuiteReason::HAS_ROLLUP,
+                     "query has WITH ROLLUP");
+  }
+
+  // ================================================================
+  // 13. Must not have window functions
+  // ================================================================
+  if (query_block->has_windows()) {
+    return pq_reject(info, PQUnsuiteReason::HAS_WINDOW,
+                     "query has window functions");
+  }
+
+  // ================================================================
+  // 14. Must not have full-text functions
+  // ================================================================
+  if (query_block->has_ft_funcs()) {
+    return pq_reject(info, PQUnsuiteReason::FULLTEXT,
+                     "query has full-text search");
+  }
+
+  // ================================================================
+  // 15. Must not have semi-join or anti-join nests
+  //     has_sj_candidates() checks for subqueries that are
+  //     semi-join candidates during resolution. If any exist,
+  //     conservatively reject. If none, but we cannot fully
+  //     verify (sj_nests is updated during optimization), we
+  //     still proceed because single-table queries should not
+  //     have semi-joins.
+  // ================================================================
+  if (query_block->has_sj_candidates()) {
+    return pq_reject(info, PQUnsuiteReason::HAS_SEMIJOIN,
+                     "query has semi-join candidates");
+  }
+
+  // ================================================================
+  // 16. Must not reference derived tables, views, or CTEs in the
+  //     leaf table list (this overlaps with single-table check below,
+  //     but we check the leaf list explicitly too)
+  // ================================================================
+  for (Table_ref *tr = query_block->leaf_tables; tr != nullptr;
+       tr = tr->next_leaf) {
+    if (tr->is_view_or_derived()) {
+      return pq_reject(info, PQUnsuiteReason::HAS_DERIVED_OR_VIEW,
+                       "leaf table is view or derived");
+    }
+  }
+
+  // ================================================================
+  // 17. Transaction isolation must not be SERIALIZABLE
+  // ================================================================
+  if (thd->tx_isolation == ISO_SERIALIZABLE) {
+    return pq_reject(info, PQUnsuiteReason::SERIALIZABLE,
+                     "transaction isolation is SERIALIZABLE");
+  }
+
+  // ================================================================
+  // 18. Must not be a locking read
+  //     Check m_lock_type on the leaf table. A locking read uses
+  //     TL_READ_WITH_SHARED_LOCKS (LOCK IN SHARE MODE) or stronger.
+  //     For simplicity, any lock type stronger than TL_READ_DEFAULT
+  //     disqualifies PQ in MVP.
+  // ================================================================
+  for (Table_ref *tr = query_block->leaf_tables; tr != nullptr;
+       tr = tr->next_leaf) {
+    TABLE *tbl = tr->table;
+    if (tbl != nullptr) {
+      thr_lock_type lt = tbl->reginfo.lock_type;
+      if (lt >= TL_READ_WITH_SHARED_LOCKS) {
+        return pq_reject(info, PQUnsuiteReason::LOCKING_READ,
+                         "locking read detected");
+      }
+    }
+  }
+
+  // ================================================================
+  // 19. Single base table must pass InnoDB/temporary/partition/FTS
+  //     checks
+  // ================================================================
+  Table_ref *single_table = query_block->get_table_list();
+  if (!pq_check_single_table(single_table, info)) {
+    return false;
+  }
+
+  // ================================================================
+  // 20. Access path must be full table scan (MVP only supports scan)
+  // ================================================================
+  if (!pq_check_full_table_scan(join, info)) {
+    return false;
+  }
+
+  // ================================================================
+  // 21. Estimated cost must reach parallel_cost_threshold
+  // ================================================================
+  if (join != nullptr) {
+    if (join->best_read < static_cast<double>(
+            thd->variables.parallel_cost_threshold)) {
+      return pq_reject(info, PQUnsuiteReason::COST_BELOW_THRESHOLD,
+                       "estimated cost below threshold");
+    }
+  } else {
+    // JOIN not yet optimized - cannot check cost. Fallback.
+    return pq_reject(info, PQUnsuiteReason::UNSUPPORTED_BY_PHASE1,
+                     "JOIN not available for cost check");
+  }
+
+  // ================================================================
+  // All checks passed - eligible for PQ (within Phase 1 MVP scope)
+  // ================================================================
+  info->reason = PQUnsuiteReason::NONE;
+  info->detail = nullptr;
+  return true;
+}
+
+void pq_mark_query_block_result(Query_block *query_block, JOIN *join,
+                                bool eligible, PQUnsuiteInfo *info) {
+  if (query_block == nullptr || info == nullptr) return;
+
+  query_block->pq_candidate = eligible;
+  query_block->pq_unsuite_info = eligible ? nullptr : info;
+
+  if (join != nullptr) {
+    join->pq_eligible = eligible;
+  }
+}

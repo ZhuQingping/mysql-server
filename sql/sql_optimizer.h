@@ -837,6 +837,28 @@ class JOIN {
   */
   bool select_count{false};
 
+  /*
+    Parallel Query (PQ) context fields.
+    Phase 1: moved to public section for pq_optimizer access.
+    All fields have inert defaults, not connected to any execution path.
+    Opaque pointers use void* to avoid pulling in sql/parallel_query headers.
+  */
+
+  /// True if this JOIN is eligible for parallel execution
+  bool pq_eligible{false};
+
+  /// True if the plan has been rewritten for parallel execution
+  bool pq_plan_rewritten{false};
+
+  /// True if a temporary table is needed for the PQ leader plan
+  bool need_tmp_pq_leader{false};
+
+  /// Degree of parallelism decided for this JOIN
+  uint pq_dop{0};
+
+  /// Opaque pointer to PQ_optimized_var (saved optimizer state for PQ)
+  void *pq_optimized_var{nullptr};
+
  private:
   /**
     Create a temporary table to be used for processing DISTINCT/ORDER
@@ -1072,27 +1094,6 @@ class JOIN {
     See comments in JOIN::optimize().
    */
   AccessPath *m_root_access_path_no_in2exists = nullptr;
-
-  /*
-    Parallel Query (PQ) context fields.
-    Phase 0: skeleton only, inert defaults, not connected to any execution path.
-    Opaque pointers use void* to avoid pulling in sql/parallel_query headers.
-  */
-
-  /// True if this JOIN is eligible for parallel execution
-  bool pq_eligible{false};
-
-  /// True if the plan has been rewritten for parallel execution
-  bool pq_plan_rewritten{false};
-
-  /// True if a temporary table is needed for the PQ leader plan
-  bool need_tmp_pq_leader{false};
-
-  /// Degree of parallelism decided for this JOIN
-  uint pq_dop{0};
-
-  /// Opaque pointer to PQ_optimized_var (saved optimizer state for PQ)
-  void *pq_optimized_var{nullptr};
 };
 
 /**
