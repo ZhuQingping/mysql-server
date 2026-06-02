@@ -77,6 +77,9 @@ struct INNOBASE_SHARE {
 /** Prebuilt structures in an InnoDB table handle used within MySQL */
 struct row_prebuilt_t;
 
+class PQ_Leader_context;
+class PQ_Worker_context;
+
 namespace dd {
 namespace cache {
 class Dictionary_client;
@@ -464,6 +467,39 @@ class ha_innobase : public handler {
   /** End of the parallel scan.
   @param[in]      scan_ctx      A scan context created by parallel_scan_init. */
   void parallel_scan_end(void *scan_ctx) override;
+
+  /**
+    Initialize InnoDB-specific Parallel Query leader scan state.
+
+    Phase 6B-1 skeleton only: this API is intentionally not connected to any
+    SQL execution path yet and returns an unsupported result until the
+    clustered full scan adapter is implemented.
+  */
+  int pq_leader_scan_init(THD *leader_thd, PQ_Leader_context **leader_ctx,
+                          uint requested_dop, bool reverse);
+
+  /**
+    Initialize InnoDB-specific Parallel Query worker scan state.
+
+    Phase 6B-1 skeleton only; real worker range dispatch is deferred.
+  */
+  int pq_worker_scan_init(THD *worker_thd, PQ_Leader_context *leader_ctx,
+                          PQ_Worker_context **worker_ctx);
+
+  /**
+    Pull one row for a PQ worker.
+
+    Phase 6B-1 skeleton only. The implementation reports EOF when no concrete
+    worker context exists.
+  */
+  int pq_worker_scan_next(PQ_Worker_context *worker_ctx, uchar *record,
+                          bool *eof);
+
+  /** End a PQ worker scan. Safe for nullptr skeleton contexts. */
+  int pq_worker_scan_end(PQ_Worker_context *worker_ctx);
+
+  /** End a PQ leader scan. Safe for nullptr skeleton contexts. */
+  int pq_leader_scan_end(PQ_Leader_context *leader_ctx);
 
   bool check_if_incompatible_data(HA_CREATE_INFO *info,
                                   uint table_changes) override;

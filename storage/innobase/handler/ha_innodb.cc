@@ -2301,6 +2301,48 @@ int convert_error_code_to_mysql(dberr_t error, uint32_t flags, THD *thd) {
   }
 }
 
+/**
+  Map InnoDB/PQ scan errors to handler results for the InnoDB PQ skeleton.
+
+  Phase 6B-1 keeps this helper local to InnoDB and uses it only from
+  unconnected PQ API stubs. End-of-scan states are reported through eof so
+  callers can distinguish normal exhaustion from fatal handler errors.
+
+  @param[in]  err  InnoDB dberr_t value
+  @param[out] eof  Set to true for normal scan exhaustion; may be nullptr
+
+  @return handler error code, or 0 on success/EOF
+*/
+static int pq_map_dberr_to_handler_error(dberr_t err, bool *eof) {
+  if (eof != nullptr) {
+    *eof = false;
+  }
+
+  switch (err) {
+    case DB_SUCCESS:
+      return 0;
+
+    case DB_END_OF_INDEX:
+    case DB_NOT_FOUND:
+      if (eof != nullptr) {
+        *eof = true;
+      }
+      return 0;
+
+    case DB_OUT_OF_MEMORY:
+      return HA_ERR_OUT_OF_MEM;
+
+    case DB_INTERRUPTED:
+      return HA_ERR_QUERY_INTERRUPTED;
+
+    case DB_UNSUPPORTED:
+      return HA_ERR_UNSUPPORTED;
+
+    default:
+      return convert_error_code_to_mysql(err, 0, nullptr);
+  }
+}
+
 /** Prints info of a THD object (== user session thread) to the given file. */
 void innobase_mysql_print_thd(FILE *f,            /*!< in: output stream */
                               THD *thd,           /*!< in: MySQL THD object */
@@ -10795,6 +10837,36 @@ int ha_innobase::sample_end(void *scan_ctx) {
 
   return 0;
 }
+
+int ha_innobase::pq_leader_scan_init(THD *, PQ_Leader_context **leader_ctx,
+                                     uint, bool) {
+  if (leader_ctx != nullptr) {
+    *leader_ctx = nullptr;
+  }
+
+  return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+}
+
+int ha_innobase::pq_worker_scan_init(THD *, PQ_Leader_context *,
+                                     PQ_Worker_context **worker_ctx) {
+  if (worker_ctx != nullptr) {
+    *worker_ctx = nullptr;
+  }
+
+  return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+}
+
+int ha_innobase::pq_worker_scan_next(PQ_Worker_context *, uchar *, bool *eof) {
+  if (eof != nullptr) {
+    *eof = true;
+  }
+
+  return 0;
+}
+
+int ha_innobase::pq_worker_scan_end(PQ_Worker_context *) { return 0; }
+
+int ha_innobase::pq_leader_scan_end(PQ_Leader_context *) { return 0; }
 
 int ha_innobase::read_range_first(const key_range *start_key,
                                   const key_range *end_key, bool eq_range_arg,
