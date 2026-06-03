@@ -93,6 +93,8 @@ enum Extra_tag {
   ET_SKIP_RECORDS_IN_RANGE,
   ET_USING_SECONDARY_ENGINE,
   ET_REMATERIALIZE,
+  ET_PARALLEL_QUERY,          // Parallel query eligible
+  ET_NOT_PARALLEL,            // Not eligible for parallel query
   //------------------------------------
   ET_total
 };

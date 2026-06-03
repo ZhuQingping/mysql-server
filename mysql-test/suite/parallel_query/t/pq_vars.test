@@ -1,0 +1,40 @@
+# Test: pq_vars
+# Verify that PQ system variables are visible and have correct defaults.
+# This test only checks variable existence and values - no execution impact.
+
+--source include/have_innodb_16k.inc
+
+# Verify all 5 PQ system variables exist with expected defaults
+SELECT @@session.parallel_query;
+SELECT @@session.parallel_default_dop;
+SELECT @@session.parallel_cost_threshold;
+SELECT @@session.parallel_memory_limit;
+SELECT @@session.parallel_queue_timeout;
+
+# Verify defaults: parallel_query=OFF, dop=4, cost_threshold=10000
+--let $pq_default_off = `SELECT @@session.parallel_query`
+--echo $pq_default_off
+
+--let $pq_default_dop = `SELECT @@session.parallel_default_dop`
+--echo $pq_default_dop
+
+--let $pq_default_cost = `SELECT @@session.parallel_cost_threshold`
+--echo $pq_default_cost
+
+# Verify we can turn parallel_query ON
+SET SESSION parallel_query=ON;
+SELECT @@session.parallel_query;
+
+# Verify we can adjust dop
+SET SESSION parallel_default_dop=2;
+SELECT @@session.parallel_default_dop;
+
+# Reset to defaults
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SELECT @@session.parallel_query;
+SELECT @@session.parallel_default_dop;
+
+# Verify global variables are visible
+SELECT @@global.parallel_query;
+SELECT @@global.parallel_default_dop;

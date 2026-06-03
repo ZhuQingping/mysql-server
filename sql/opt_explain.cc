@@ -91,6 +91,7 @@
 #include "sql/sql_list.h"
 #include "sql/sql_opt_exec_shared.h"
 #include "sql/sql_optimizer.h"  // JOIN
+#include "sql/parallel_query/pq_optimizer.h"  // pq_unsuite_reason_to_string
 #include "sql/sql_parse.h"      // is_explainable_query
 #include "sql/sql_partition.h"  // for make_used_partitions_str()
 #include "sql/sql_select.h"
@@ -1693,6 +1694,27 @@ bool Explain_join::explain_extra() {
   if (table->s->is_secondary_engine() &&
       push_extra(ET_USING_SECONDARY_ENGINE, table->file->table_type()))
     return true;
+
+  // ---------------------------------------------------------------
+  // Parallel Query annotation in EXPLAIN Extra column.
+  // Phase 7 MVP: show PQ eligibility or fallback reason.
+  // Only annotate when parallel_query=ON (feature is active).
+  // ---------------------------------------------------------------
+  if (join != nullptr && explain_thd->variables.parallel_query) {
+    if (join->pq_eligible) {
+      StringBuffer<64> pq_buff(cs);
+      pq_buff.append("dop=");
+      pq_buff.append_ulonglong(join->pq_dop > 0 ? join->pq_dop
+                                                  : explain_thd->variables
+                                                        .parallel_default_dop);
+      if (push_extra(ET_PARALLEL_QUERY, pq_buff)) return true;
+    } else {
+      // Show fallback reason. PQUnsuitableReason persists in JOIN.
+      const char *reason_str =
+          pq_unsuite_reason_to_string(join->pq_unsuitable_reason);
+      if (push_extra(ET_NOT_PARALLEL, reason_str)) return true;
+    }
+  }
 
   return false;
 }

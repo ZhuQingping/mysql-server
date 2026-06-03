@@ -143,17 +143,16 @@ const char *pq_unsuite_reason_to_string(PQUnsuiteReason reason);
   The PQUnsuiteInfo object passed to pq_check_query_block_eligible() is
   typically a stack-allocated local in JOIN::optimize(). Storing its address
   in the query block would create a dangling pointer after optimize() returns.
-  Reason storage is deferred: the pq_unsuite_info pointer will be populated
-  only when we can allocate PQUnsuiteInfo on a long-lived MEM_ROOT (e.g.,
-  THD::pq_mem_root after PQ activation). Until then, the boolean fields
-  pq_candidate and pq_eligible are sufficient for the optimizer to decide
-  whether to proceed with PQ.
+
+  Starting from Phase 7, the PQUnsuiteReason is persisted in
+  JOIN::pq_unsuitable_reason for EXPLAIN visibility.
 
   @param query_block  The query block to mark
   @param join         The JOIN to mark (may be nullptr)
   @param eligible     Whether the query block is eligible
+  @param reason       The PQUnsuiteReason (NONE if eligible)
 */
 void pq_mark_query_block_result(Query_block *query_block, JOIN *join,
-                                bool eligible);
+                                bool eligible, PQUnsuiteReason reason);
 
 #endif  // PQ_OPTIMIZER_INCLUDED

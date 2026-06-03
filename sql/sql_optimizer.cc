@@ -1089,7 +1089,8 @@ bool JOIN::optimize(bool finalize_access_paths) {
     PQUnsuiteInfo pq_info;
     bool pq_elig =
         pq_check_query_block_eligible(thd, query_block, this, &pq_info);
-    pq_mark_query_block_result(query_block, this, pq_elig);
+    pq_mark_query_block_result(query_block, this, pq_elig,
+                               pq_info.reason);
   }
 
   // Make plan visible for EXPLAIN

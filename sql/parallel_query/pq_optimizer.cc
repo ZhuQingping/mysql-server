@@ -163,9 +163,11 @@ static bool pq_check_single_table(Table_ref *table_ref,
   Any secondary index access, range scan, ref access, ICP, or MRR
   must fallback to serial.
 
-  When called from within JOIN::optimize() (Phase 5), we can inspect
-  the JOIN_TAB type of the first non-const table in best_ref[].
-  A JT_ALL type indicates a full table scan, which is what MVP requires.
+  Phase 7: improved robustness for EXPLAIN paths. We try both
+  best_ref[] (available during optimization) and qep_tab[]
+  (available after final plan construction). Either source
+  that provides a valid non-const table with JT_ALL type
+  is sufficient to confirm full table scan eligibility.
 
   @param join  The JOIN object (may be nullptr if not yet optimized)
   @param info  Output: set reason if disqualified
@@ -186,39 +188,43 @@ static bool pq_check_full_table_scan(JOIN *join, PQUnsuiteInfo *info) {
                      "tmp tables present");
   }
 
-  // Check the access type of the first non-const table.
-  // When called from JOIN::optimize() after make_join_plan(),
-  // best_ref[] is populated and the type has been set.
-  if (join->const_tables >= join->primary_tables) {
-    // No non-const tables left, or all tables are const/system.
-    // This is not a candidate for parallel full scan.
-    return pq_reject(info, PQUnsuiteReason::UNSUPPORTED_BY_PHASE1,
-                     "all tables are const/system");
+  // Check the access type using best_ref[] (from make_join_plan).
+  // best_ref[] is populated after make_join_plan() and contains
+  // the optimizer's selected access path for each table.
+  join_type access_type = JT_UNKNOWN;
+
+  // Try best_ref[] first (available during optimization).
+  if (join->best_ref != nullptr &&
+      join->const_tables < join->primary_tables &&
+      join->best_ref[join->const_tables] != nullptr) {
+    JOIN_TAB *first_tab = join->best_ref[join->const_tables];
+    access_type = first_tab->type();
   }
 
-  // Check the first non-const table's access type.
-  // best_ref[] is ordered by the optimizer; the first non-const
-  // table at index [const_tables] is the primary driving table.
-  // Any null pointer or missing position must fallback serial.
-  if (join->best_ref == nullptr) {
-    return pq_reject(info, PQUnsuiteReason::UNSUPPORTED_BY_PHASE1,
-                     "best_ref not available");
+  // If best_ref[] didn't give a valid type, try qep_tab[]
+  // (available after the final plan is constructed).
+  if (access_type == JT_UNKNOWN && join->qep_tab != nullptr) {
+    // qep_tab[] is ordered differently: const tables first,
+    // then primary_tables. Find the first non-const table.
+    for (uint i = 0; i < join->primary_tables; i++) {
+      QEP_TAB *tab = &join->qep_tab[i];
+      if (tab != nullptr && tab->type() != JT_SYSTEM &&
+          tab->type() != JT_CONST) {
+        access_type = tab->type();
+        break;
+      }
+    }
   }
 
-  JOIN_TAB *first_tab = join->best_ref[join->const_tables];
-  if (first_tab == nullptr) {
+  // If we couldn't determine the access type from either source,
+  // conservatively fallback.
+  if (access_type == JT_UNKNOWN) {
     return pq_reject(info, PQUnsuiteReason::UNSUPPORTED_BY_PHASE1,
-                     "best_ref entry not available");
-  }
-
-  if (first_tab->position() == nullptr) {
-    return pq_reject(info, PQUnsuiteReason::UNSUPPORTED_BY_PHASE1,
-                     "access path position not available");
+                     "cannot determine access path type");
   }
 
   // Only JT_ALL (full table scan) is eligible for PQ in MVP.
   // Any other access type (ref, range, index scan, etc.) must fallback.
-  join_type access_type = first_tab->type();
   if (access_type != JT_ALL) {
     return pq_reject(info, PQUnsuiteReason::NON_FULL_TABLE_SCAN,
                      pq_unsuite_reason_to_string(
@@ -449,7 +455,8 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
   long-lived MEM_ROOT.
 */
 void pq_mark_query_block_result(Query_block *query_block, JOIN *join,
-                                bool eligible) {
+                                bool eligible,
+                                PQUnsuiteReason reason) {
   if (query_block == nullptr) return;
 
   query_block->pq_candidate = eligible;
@@ -461,5 +468,6 @@ void pq_mark_query_block_result(Query_block *query_block, JOIN *join,
 
   if (join != nullptr) {
     join->pq_eligible = eligible;
+    join->pq_unsuitable_reason = reason;
   }
 }

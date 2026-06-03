@@ -45,6 +45,7 @@
 #include "sql/iterators/row_iterator.h"
 #include "sql/mem_root_array.h"
 #include "sql/opt_explain_format.h"  // Explain_sort_clause
+#include "sql/parallel_query/pq_optimizer.h"  // PQUnsuiteReason
 #include "sql/sql_executor.h"
 #include "sql/sql_lex.h"
 #include "sql/sql_list.h"
@@ -846,6 +847,9 @@ class JOIN {
 
   /// True if this JOIN is eligible for parallel execution
   bool pq_eligible{false};
+
+  /// Reason for PQ fallback (NONE if eligible, persists for EXPLAIN)
+  PQUnsuiteReason pq_unsuitable_reason{PQUnsuiteReason::NONE};
 
   /// True if the plan has been rewritten for parallel execution
   bool pq_plan_rewritten{false};

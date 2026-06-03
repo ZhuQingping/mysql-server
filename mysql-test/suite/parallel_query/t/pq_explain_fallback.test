@@ -1,0 +1,39 @@
+# Test: pq_explain_fallback
+# Verify that EXPLAIN shows PQ fallback reason when parallel_query=ON
+# but the query is not eligible (e.g., has ORDER BY, GROUP BY, etc.)
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,10),(2,20),(3,30),(4,40),(5,50);
+
+# Turn PQ ON and test various fallback reasons
+SET SESSION parallel_query=ON;
+
+# 1. ORDER BY causes fallback (HAS_ORDER_BY)
+EXPLAIN SELECT * FROM t1 ORDER BY val;
+
+# 2. GROUP BY causes fallback (HAS_GROUP_BY)
+EXPLAIN SELECT val, COUNT(*) FROM t1 GROUP BY val;
+
+# 3. DISTINCT causes fallback (HAS_DISTINCT)
+EXPLAIN SELECT DISTINCT val FROM t1;
+
+# 4. LIMIT without ORDER BY is eligible for PQ in theory,
+#    but cost threshold may block it for small tables
+EXPLAIN SELECT * FROM t1 LIMIT 2;
+
+# 5. WHERE clause on non-PK column (should still be full scan eligible
+#    if cost threshold is lowered)
+SET SESSION parallel_cost_threshold=0;
+EXPLAIN SELECT * FROM t1 WHERE val > 20;
+
+# Reset
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE t1;

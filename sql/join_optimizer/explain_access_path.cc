@@ -55,6 +55,7 @@
 #include "sql/range_optimizer/internal.h"
 #include "sql/range_optimizer/range_optimizer.h"
 #include "sql/sql_optimizer.h"
+#include "sql/parallel_query/pq_optimizer.h"  // pq_unsuite_reason_to_string
 #include "sql/table.h"
 #include "template_utils.h"
 
@@ -955,6 +956,28 @@ static std::unique_ptr<Json_object> SetObjectMembers(
             string(" in secondary engine ") + table->file->table_type();
       }
       description += table->file->explain_extra();
+
+      // Phase 7 MVP: Parallel Query annotation in FORMAT=TREE.
+      // Only annotate when parallel_query=ON (feature is active).
+      THD *thd = current_thd;
+      if (join != nullptr && thd->variables.parallel_query) {
+        if (join->pq_eligible) {
+          uint dop = join->pq_dop > 0
+                         ? join->pq_dop
+                         : thd->variables.parallel_default_dop;
+          description += string(", parallel query (dop=") +
+                         std::to_string(dop) + ")";
+          error |= AddMemberToObject<Json_int>(obj, "pq_dop", dop);
+          error |= AddMemberToObject<Json_boolean>(obj, "parallel_query",
+                                                    true);
+        } else {
+          const char *reason_str =
+              pq_unsuite_reason_to_string(join->pq_unsuitable_reason);
+          description += string(", not parallel (") + reason_str + ")";
+          error |= AddMemberToObject<Json_string>(obj, "not_parallel",
+                                                   reason_str);
+        }
+      }
 
       error |= AddMemberToObject<Json_string>(obj, "table_name", table->alias);
       error |= AddMemberToObject<Json_string>(obj, "access_type", "table");
