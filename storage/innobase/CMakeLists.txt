@@ -216,6 +216,7 @@ SET(INNOBASE_SOURCES
   row/row0mysql.cc
   row/row0log.cc
   row/row0pread.cc
+  row/row0pread_pq.cc
   row/row0purge.cc
   row/row0pread-adapter.cc
   row/row0pread-histogram.cc

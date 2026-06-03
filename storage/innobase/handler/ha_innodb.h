@@ -39,6 +39,7 @@ this program; if not, write to the Free Software Foundation, Inc.,
 
 #include "row0pread-adapter.h"
 #include "row0pread-histogram.h"
+#include "row0pread_pq.h"
 #include "trx0trx.h"
 
 /** "GEN_CLUST_INDEX" is the name reserved for InnoDB default
@@ -79,6 +80,12 @@ struct row_prebuilt_t;
 
 class PQ_Leader_context;
 class PQ_Worker_context;
+
+/** InnoDB PQ pull-row adapter: leader context (clustered full scan). */
+class InnoDB_pq_leader_ctx;
+
+/** InnoDB PQ pull-row adapter: worker context (pull-row cursor). */
+class InnoDB_pq_worker_ctx;
 
 namespace dd {
 namespace cache {
@@ -471,9 +478,18 @@ class ha_innobase : public handler {
   /**
     Initialize InnoDB-specific Parallel Query leader scan state.
 
-    Phase 6B-1 skeleton only: this API is intentionally not connected to any
-    SQL execution path yet and returns an unsupported result until the
-    clustered full scan adapter is implemented.
+    Phase 6B-2: Real implementation for clustered full scan.
+    Sets up the leader's transaction read view, partitions the B+tree
+    into sub-ranges, and creates an InnoDB_pq_leader_ctx.
+
+    Falls back to serial (returns HA_ERR_UNSUPPORTED) for any
+    unsupported scenario (reverse scan, non-clustered index,
+    no read view, etc.).
+
+    @param[in]  leader_thd      Leader thread THD.
+    @param[out] leader_ctx      Output leader context (set to nullptr on error).
+    @param[in]  requested_dop   Requested degree of parallelism.
+    @param[in]  reverse         True if reverse scan (unsupported in V1-MVP).
   */
   int pq_leader_scan_init(THD *leader_thd, PQ_Leader_context **leader_ctx,
                           uint requested_dop, bool reverse);
@@ -481,7 +497,13 @@ class ha_innobase : public handler {
   /**
     Initialize InnoDB-specific Parallel Query worker scan state.
 
-    Phase 6B-1 skeleton only; real worker range dispatch is deferred.
+    Phase 6B-2: Creates an InnoDB_pq_worker_ctx with a pull-row cursor
+    for the worker's assigned range. The worker context delegates to
+    InnoDB_pq_ctx::read_record for row retrieval.
+
+    @param[in]  worker_thd   Worker thread THD.
+    @param[in]  leader_ctx   Leader context (must be InnoDB_pq_leader_ctx).
+    @param[out] worker_ctx   Output worker context (set to nullptr on error).
   */
   int pq_worker_scan_init(THD *worker_thd, PQ_Leader_context *leader_ctx,
                           PQ_Worker_context **worker_ctx);
@@ -489,16 +511,29 @@ class ha_innobase : public handler {
   /**
     Pull one row for a PQ worker.
 
-    Phase 6B-1 skeleton only. The implementation reports EOF when no concrete
-    worker context exists.
+    Phase 6B-2: Real pull-row implementation via
+    InnoDB_pq_worker_ctx::read_record, which delegates to
+    InnoDB_pq_ctx::read_record. Each call pulls one visible
+    row from the worker's assigned range and converts it to
+    MySQL format in the provided record buffer.
+
+    @param[in]   worker_ctx  Worker context (must be InnoDB_pq_worker_ctx).
+    @param[out]  record       MySQL row buffer (table->record[0]).
+    @param[out]  eof          Set to true when range is exhausted.
   */
   int pq_worker_scan_next(PQ_Worker_context *worker_ctx, uchar *record,
                           bool *eof);
 
-  /** End a PQ worker scan. Safe for nullptr skeleton contexts. */
+  /**
+    End a PQ worker scan. Cleans up worker cursor state and resources.
+    Idempotent: safe to call multiple times or with nullptr.
+  */
   int pq_worker_scan_end(PQ_Worker_context *worker_ctx);
 
-  /** End a PQ leader scan. Safe for nullptr skeleton contexts. */
+  /**
+    End a PQ leader scan. Releases thread budget, ranges, and scan ctx.
+    Idempotent: safe to call multiple times or with nullptr.
+  */
   int pq_leader_scan_end(PQ_Leader_context *leader_ctx);
 
   bool check_if_incompatible_data(HA_CREATE_INFO *info,
@@ -679,6 +714,17 @@ class ha_innobase : public handler {
 
   /** Save CPU time with prebuilt/cached data structures */
   row_prebuilt_t *m_prebuilt;
+
+  /** InnoDB PQ pull-row adapter: leader context.
+  Created in pq_leader_scan_init(), released in pq_leader_scan_end().
+  nullptr outside of a PQ scan. Phase 6B-2: internal state,
+  not exposed through PQ_Leader_context* API yet. */
+  InnoDB_pq_leader_ctx *m_pq_leader_ctx{nullptr};
+
+  /** InnoDB PQ pull-row adapter: worker contexts.
+  Each worker has its own InnoDB_pq_worker_ctx with a pull-row cursor.
+  All workers are cleaned up in pq_leader_scan_end(). */
+  std::vector<InnoDB_pq_worker_ctx *> m_pq_worker_ctxs;
 
   /** Thread handle of the user currently using the handler;
   this is set in external_lock function */

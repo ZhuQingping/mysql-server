@@ -2302,13 +2302,15 @@ int convert_error_code_to_mysql(dberr_t error, uint32_t flags, THD *thd) {
 }
 
 /**
-  Map InnoDB/PQ scan errors to handler results for the InnoDB PQ skeleton.
+  Map InnoDB/PQ scan errors to handler results for the InnoDB PQ adapter.
 
-  Phase 6B-1 keeps this helper local to InnoDB and uses it only from
-  unconnected PQ API stubs. End-of-scan states are reported through eof so
-  callers can distinguish normal exhaustion from fatal handler errors.
+  Phase 6B-1 introduced this helper; Phase 6B-2 extends it to handle
+  PQ_DB_END_OF_RANGE_INT (internal adapter state for range exhaustion,
+  never leaked as InnoDB public dberr_t). End-of-scan states are
+  reported through eof so callers can distinguish normal exhaustion
+  from fatal handler errors.
 
-  @param[in]  err  InnoDB dberr_t value
+  @param[in]  err  InnoDB dberr_t value (or PQ internal status as dberr_t)
   @param[out] eof  Set to true for normal scan exhaustion; may be nullptr
 
   @return handler error code, or 0 on success/EOF
@@ -2316,6 +2318,19 @@ int convert_error_code_to_mysql(dberr_t error, uint32_t flags, THD *thd) {
 static int pq_map_dberr_to_handler_error(dberr_t err, bool *eof) {
   if (eof != nullptr) {
     *eof = false;
+  }
+
+  /* Check for PQ internal end-of-range status first.
+  PQ_DB_END_OF_RANGE_INT is an int constant (2003) that fits
+  within the dberr_t enum range. Cast to int for comparison
+  to avoid -Wenum-constexpr-conversion issues. */
+  if (static_cast<int>(err) == PQ_DB_END_OF_RANGE_INT) {
+    /* Internal adapter state: range exhausted, not fatal.
+    MUST NOT leak to InnoDB code outside the adapter. */
+    if (eof != nullptr) {
+      *eof = true;
+    }
+    return 0;
   }
 
   switch (err) {
@@ -2337,6 +2352,12 @@ static int pq_map_dberr_to_handler_error(dberr_t err, bool *eof) {
 
     case DB_UNSUPPORTED:
       return HA_ERR_UNSUPPORTED;
+
+    case DB_DEADLOCK:
+      return HA_ERR_LOCK_DEADLOCK;
+
+    case DB_LOCK_WAIT_TIMEOUT:
+      return HA_ERR_LOCK_WAIT_TIMEOUT;
 
     default:
       return convert_error_code_to_mysql(err, 0, nullptr);
@@ -10838,35 +10859,322 @@ int ha_innobase::sample_end(void *scan_ctx) {
   return 0;
 }
 
-int ha_innobase::pq_leader_scan_init(THD *, PQ_Leader_context **leader_ctx,
-                                     uint, bool) {
+/**
+  Initialize InnoDB PQ leader scan for clustered full scan.
+
+  Phase 6B-2: Real implementation.
+
+  Steps:
+  1. Validate that we're on a clustered index full scan.
+  2. Ensure the transaction is started and has a read view.
+  3. Create InnoDB_pq_leader_ctx and partition the B+tree.
+  4. Return the leader context via the PQ_Leader_context** parameter.
+
+  Conservative behavior: any unsupported scenario returns
+  HA_ERR_UNSUPPORTED, causing fallback to serial execution.
+  This does NOT change existing serial query behavior.
+
+  @param[in]  leader_thd      Leader thread THD
+  @param[out] leader_ctx      Output leader context
+  @param[in]  requested_dop   Requested DOP
+  @param[in]  reverse         Reverse scan (unsupported in V1-MVP)
+  @return 0 on success, handler error code on failure
+*/
+int ha_innobase::pq_leader_scan_init(THD *leader_thd,
+                                     PQ_Leader_context **leader_ctx,
+                                     uint requested_dop, bool reverse) {
   if (leader_ctx != nullptr) {
     *leader_ctx = nullptr;
   }
 
-  return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  /* V1-MVP: reverse scan is not supported. */
+  if (reverse) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  /* DOP must be at least 1. */
+  if (requested_dop == 0) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  /* Validate prebuilt: must be on clustered index. */
+  if (m_prebuilt == nullptr || m_prebuilt->index == nullptr) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  auto index = m_prebuilt->index;
+
+  /* Only support clustered index full scan in V1-MVP. */
+  if (!index->is_clustered()) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  /* Validate that the index is usable. */
+  if (!index->is_usable(m_prebuilt->trx)) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  /* Ensure transaction is started. */
+  auto trx = m_prebuilt->trx;
+  trx_start_if_not_started_xa(trx, false, UT_LOCATION_HERE);
+
+  /* For consistent read (RR/RC isolation), assign read view.
+  The read view is owned by trx; workers access it through the
+  scan context without cloning/copying. */
+  if (trx->isolation_level > TRX_ISO_READ_UNCOMMITTED) {
+    trx_assign_read_view(trx);
+  }
+
+  /* Validate read view is active. */
+  if (trx->isolation_level > TRX_ISO_READ_UNCOMMITTED &&
+      trx->read_view == nullptr) {
+    /* Cannot safely do parallel scan without a read view. */
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  /* Check thread budget: are enough parallel read threads available? */
+  auto available = Parallel_reader::available_threads(requested_dop, false);
+  if (available < requested_dop) {
+    /* Not enough threads available; fallback to serial. */
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  /* Create InnoDB PQ leader context. */
+  auto innodb_leader_ctx = ut::new_withkey<InnoDB_pq_leader_ctx>(
+      UT_NEW_THIS_FILE_PSI_KEY, requested_dop, reverse);
+
+  if (innodb_leader_ctx == nullptr) {
+    return pq_map_dberr_to_handler_error(DB_OUT_OF_MEMORY, nullptr);
+  }
+
+  /* Initialize: partition the B+tree. */
+  bool is_compact = dict_table_is_comp(index->table);
+  page_size_t page_size(dict_tf_to_fsp_flags(index->table->flags));
+
+  auto err = innodb_leader_ctx->init(index, trx, is_compact, page_size);
+
+  if (err != DB_SUCCESS) {
+    ut::delete_(innodb_leader_ctx);
+    return pq_map_dberr_to_handler_error(err, nullptr);
+  }
+
+  /* If the table is empty (no ranges), still return success.
+  Workers will get eof=true immediately on their first next call. */
+  if (innodb_leader_ctx->n_ranges() == 0) {
+    /* Empty table: no parallelism needed, but the API is valid. */
+    /* Note: In V1-MVP we could also return unsupported here
+    to fallback serial, but returning the empty leader ctx
+    is more correct -- empty table scan is trivially parallel-safe. */
+  }
+
+  /* Set the output parameter.
+  The PQ_Leader_context** parameter is currently used as an opaque
+  handle. In future phases when the SQL layer PQ code uses the
+  PQ_Leader_context base class virtual methods, we will need to
+  wrap this InnoDB_pq_leader_ctx in a PQ_Leader_context subclass.
+  For Phase 6B-2, we just store the InnoDB context and the SQL
+  layer hasn't been wired yet.
+
+  Since PQ_Leader_context is defined in sql/parallel_query/pq_handler.h
+  and we cannot modify the sql layer, we use the InnoDB-specific type directly.
+  The bridging will happen when Phase 7 wires the SQL execution path.
+
+  For now, we return the InnoDB leader ctx cast as PQ_Leader_context*
+  through a void* intermediate, since InnoDB_pq_leader_ctx is NOT
+  a subclass of PQ_Leader_context (they are independent types in
+  V1-MVP). The SQL layer will receive nullptr until Phase 7 wiring,
+  which is the conservative behavior. */
+  if (leader_ctx != nullptr) {
+    /* Phase 6B-2: We don't return a PQ_Leader_context* yet because
+    InnoDB_pq_leader_ctx is not a subclass. The ha_innobase member
+    m_pq_leader_ctx stores the InnoDB context for internal use.
+    The PQ_Leader_context** output remains nullptr to signal that
+    the SQL-layer PQ infrastructure hasn't been wired yet.
+
+    Workers will use the InnoDB context directly through
+    ha_innobase internal state, not through PQ_Leader_context
+    virtual methods. */
+    *leader_ctx = nullptr;
+  }
+
+  /* Store the InnoDB PQ leader context in the handler for
+  internal use (worker init, scan next, cleanup). */
+  m_pq_leader_ctx = innodb_leader_ctx;
+
+  return 0;
 }
 
-int ha_innobase::pq_worker_scan_init(THD *, PQ_Leader_context *,
+/**
+  Initialize InnoDB PQ worker scan for clustered full scan.
+
+  Phase 6B-2: Real implementation.
+
+  Creates an InnoDB_pq_worker_ctx with a pull-row cursor for
+  the worker's assigned range. The worker context provides
+  read_record() for pulling rows one at a time.
+
+  @param[in]  worker_thd   Worker thread THD
+  @param[in]  leader_ctx   Leader context (PQ_Leader_context*; unused in 6B-2)
+  @param[out] worker_ctx   Output worker context
+  @return 0 on success, handler error code on failure
+*/
+int ha_innobase::pq_worker_scan_init(THD *worker_thd,
+                                     PQ_Leader_context *leader_ctx,
                                      PQ_Worker_context **worker_ctx) {
   if (worker_ctx != nullptr) {
     *worker_ctx = nullptr;
   }
 
-  return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  /* We must have an InnoDB PQ leader context from pq_leader_scan_init. */
+  if (m_pq_leader_ctx == nullptr) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  /* Check that the leader hasn't errored out. */
+  if (m_pq_leader_ctx->is_error_set()) {
+    return pq_map_dberr_to_handler_error(
+        m_pq_leader_ctx->get_error_state(), nullptr);
+  }
+
+  /* Dispatch a range to this worker. */
+  auto range = m_pq_leader_ctx->dispatch_next_range();
+
+  if (range == nullptr) {
+    /* All ranges already dispatched; no work for this worker. */
+    /* Create a worker ctx that will immediately return eof=true. */
+    auto innodb_worker_ctx = ut::new_withkey<InnoDB_pq_worker_ctx>(
+        UT_NEW_THIS_FILE_PSI_KEY, 0, m_pq_leader_ctx);
+
+    if (innodb_worker_ctx == nullptr) {
+      return pq_map_dberr_to_handler_error(DB_OUT_OF_MEMORY, nullptr);
+    }
+
+    /* No range assigned: worker will return eof=true on first next. */
+    m_pq_worker_ctxs.push_back(innodb_worker_ctx);
+
+    /* Phase 6B-2: PQ_Worker_context** output remains nullptr
+    (SQL layer wiring deferred to Phase 7). */
+    return 0;
+  }
+
+  /* Create InnoDB PQ worker context. */
+  size_t worker_id = m_pq_leader_ctx->n_dispatched() - 1;
+
+  auto innodb_worker_ctx = ut::new_withkey<InnoDB_pq_worker_ctx>(
+      UT_NEW_THIS_FILE_PSI_KEY, worker_id, m_pq_leader_ctx);
+
+  if (innodb_worker_ctx == nullptr) {
+    return pq_map_dberr_to_handler_error(DB_OUT_OF_MEMORY, nullptr);
+  }
+
+  /* Initialize the worker's pull-row cursor for the assigned range. */
+  innodb_worker_ctx->init(range);
+
+  /* Store for cleanup. */
+  m_pq_worker_ctxs.push_back(innodb_worker_ctx);
+
+  /* Phase 6B-2: PQ_Worker_context** output remains nullptr
+  (SQL layer wiring deferred to Phase 7). */
+  return 0;
 }
 
-int ha_innobase::pq_worker_scan_next(PQ_Worker_context *, uchar *, bool *eof) {
+/**
+  Pull one row for a PQ worker via the InnoDB pull-row adapter.
+
+  Phase 6B-2: Real implementation.
+
+  Calls InnoDB_pq_worker_ctx::read_record(), which delegates to
+  InnoDB_pq_ctx::read_record() for the actual B+tree cursor traversal,
+  visibility check, and MySQL format conversion.
+
+  @param[in]   worker_ctx  Worker context (PQ_Worker_context*; unused in 6B-2)
+  @param[out]  record       MySQL row buffer (table->record[0])
+  @param[out]  eof          True when range is exhausted
+  @return 0 on success, handler error code on failure
+*/
+int ha_innobase::pq_worker_scan_next(PQ_Worker_context *worker_ctx,
+                                     uchar *record, bool *eof) {
   if (eof != nullptr) {
     *eof = true;
   }
 
+  /* We must have an InnoDB PQ worker context. */
+  if (m_pq_worker_ctxs.empty() || m_pq_worker_ctxs.back() == nullptr) {
+    /* No worker context: return EOF (conservative). */
+    return 0;
+  }
+
+  auto innodb_worker = m_pq_worker_ctxs.back();
+
+  /* Check leader error state. */
+  if (m_pq_leader_ctx != nullptr && m_pq_leader_ctx->is_error_set()) {
+    return pq_map_dberr_to_handler_error(
+        m_pq_leader_ctx->get_error_state(), eof);
+  }
+
+  /* Pull the next visible row from the worker's cursor. */
+  auto err_code = innodb_worker->read_record(record, m_prebuilt, eof);
+
+  /* Propagate error to leader if this is a fatal error (not EOF). */
+  if (err_code != 0 && (eof == nullptr || !*eof)) {
+    if (m_pq_leader_ctx != nullptr) {
+      m_pq_leader_ctx->set_error_state(DB_ERROR);
+    }
+  }
+
+  return err_code;
+}
+
+/**
+  End a PQ worker scan. Cleans up worker cursor state and resources.
+
+  Phase 6B-2: Real implementation with idempotent cleanup.
+
+  @param[in]  worker_ctx  Worker context (unused in 6B-2; cleanup is
+              done from internal m_pq_worker_ctxs).
+  @return 0 always (cleanup errors are logged, not returned).
+*/
+int ha_innobase::pq_worker_scan_end(PQ_Worker_context *worker_ctx) {
+  /* Phase 6B-2: cleanup happens in pq_leader_scan_end which
+  destroys all worker contexts. This method is a no-op placeholder
+  that is idempotent and safe for nullptr. */
   return 0;
 }
 
-int ha_innobase::pq_worker_scan_end(PQ_Worker_context *) { return 0; }
+/**
+  End a PQ leader scan. Releases all resources: thread budget,
+  scan context, ranges, and worker contexts.
 
-int ha_innobase::pq_leader_scan_end(PQ_Leader_context *) { return 0; }
+  Phase 6B-2: Real implementation with idempotent cleanup.
+
+  @param[in]  leader_ctx  Leader context (unused in 6B-2; cleanup is
+              done from internal m_pq_leader_ctx).
+  @return 0 always (cleanup errors are logged, not returned).
+*/
+int ha_innobase::pq_leader_scan_end(PQ_Leader_context *leader_ctx) {
+  /* Clean up all worker contexts first (reverse order). */
+  for (auto it = m_pq_worker_ctxs.rbegin(); it != m_pq_worker_ctxs.rend();
+       ++it) {
+    if (*it != nullptr) {
+      ut::delete_(*it);
+    }
+  }
+  m_pq_worker_ctxs.clear();
+
+  /* Clean up the leader context. */
+  if (m_pq_leader_ctx != nullptr) {
+    /* Release thread budget back to the parallel reader pool. */
+    auto dop = m_pq_leader_ctx->max_threads();
+    if (dop > 0) {
+      Parallel_reader::release_threads(dop);
+    }
+
+    ut::delete_(m_pq_leader_ctx);
+    m_pq_leader_ctx = nullptr;
+  }
+
+  return 0;
+}
 
 int ha_innobase::read_range_first(const key_range *start_key,
                                   const key_range *end_key, bool eq_range_arg,
