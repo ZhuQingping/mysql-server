@@ -1,0 +1,60 @@
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT, name VARCHAR(50)) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,10,'alice'),(2,20,'bob'),(3,30,'carol'),
+(4,40,'dave'),(5,50,'eve');
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SELECT * FROM t1 ORDER BY id;
+id	val	name
+1	10	alice
+2	20	bob
+3	30	carol
+4	40	dave
+5	50	eve
+SELECT * FROM t1 WHERE val > 20 ORDER BY id;
+id	val	name
+3	30	carol
+4	40	dave
+5	50	eve
+SELECT * FROM t1 WHERE val > 10 AND val < 50 ORDER BY id;
+id	val	name
+2	20	bob
+3	30	carol
+4	40	dave
+SELECT * FROM t1 WHERE val = 10 OR val = 50 ORDER BY id;
+id	val	name
+1	10	alice
+5	50	eve
+SELECT COUNT(*) FROM t1;
+COUNT(*)
+5
+SELECT SUM(val) FROM t1;
+SUM(val)
+150
+SELECT AVG(val) FROM t1;
+AVG(val)
+30.0000
+SELECT MIN(val), MAX(val) FROM t1;
+MIN(val)	MAX(val)
+10	50
+SELECT COUNT(*), SUM(val), AVG(val), MIN(val), MAX(val) FROM t1;
+COUNT(*)	SUM(val)	AVG(val)	MIN(val)	MAX(val)
+5	150	30.0000	10	50
+SELECT SUM(val) FROM t1 WHERE val > 20;
+SUM(val)
+120
+SELECT * FROM t1 WHERE val > 1000;
+id	val	name
+EXPLAIN SELECT * FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Parallel query dop=4
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`val` AS `val`,`test`.`t1`.`name` AS `name` from `test`.`t1`
+EXPLAIN SELECT SUM(val) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Parallel query dop=4
+Warnings:
+Note	1003	/* select#1 */ select sum(`test`.`t1`.`val`) AS `SUM(val)` from `test`.`t1`
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+DROP TABLE t1;

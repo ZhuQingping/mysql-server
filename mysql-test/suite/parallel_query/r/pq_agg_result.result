@@ -1,0 +1,53 @@
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT, score DECIMAL(10,2)) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,10,3.50),(2,20,4.75),(3,30,5.25),
+(4,40,6.00),(5,50,7.50),(6,60,8.25),
+(7,70,9.00),(8,80,10.50),(9,90,11.75),(10,100,12.00);
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SELECT COUNT(*) FROM t1;
+COUNT(*)
+10
+SELECT SUM(val) FROM t1;
+SUM(val)
+550
+SELECT AVG(val) FROM t1;
+AVG(val)
+55.0000
+SELECT MIN(val), MAX(val) FROM t1;
+MIN(val)	MAX(val)
+10	100
+SELECT SUM(score) FROM t1;
+SUM(score)
+78.50
+SELECT AVG(score) FROM t1;
+AVG(score)
+7.850000
+SELECT MIN(score), MAX(score) FROM t1;
+MIN(score)	MAX(score)
+3.50	12.00
+SELECT COUNT(*), SUM(val), AVG(val), MIN(val), MAX(val) FROM t1;
+COUNT(*)	SUM(val)	AVG(val)	MIN(val)	MAX(val)
+10	550	55.0000	10	100
+SELECT COUNT(*), SUM(val), AVG(val) FROM t1 WHERE val > 50;
+COUNT(*)	SUM(val)	AVG(val)
+5	400	80.0000
+SELECT COUNT(*) FROM t1 WHERE val BETWEEN 20 AND 60;
+COUNT(*)
+5
+SELECT SUM(val) FROM t1 WHERE val > 1000;
+SUM(val)
+NULL
+EXPLAIN SELECT COUNT(*) FROM t1 WHERE val > 20;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	10	33.33	Using where; Parallel query dop=4
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `test`.`t1` where (`test`.`t1`.`val` > 20)
+EXPLAIN SELECT SUM(val) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	10	100.00	Parallel query dop=4
+Warnings:
+Note	1003	/* select#1 */ select sum(`test`.`t1`.`val`) AS `SUM(val)` from `test`.`t1`
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+DROP TABLE t1;

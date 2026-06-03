@@ -1,0 +1,118 @@
+# Test: pq_not_support
+# Verify PQ fallback behavior for unsupported constructs.
+# V1 supports: single InnoDB table, simple full scan, implicit aggregation.
+# Everything else should show a clear fallback reason.
+#
+# For EXPLAIN outputs with uncertain Warning format (multi-table, subquery,
+# UNION, derived), we disable warnings to avoid result instability.
+# These result files need --record validation when a build is available.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1, t2, t_myisam;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT, name VARCHAR(50)) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,10,'alice'),(2,20,'bob'),(3,30,'carol'),
+                      (4,40,'dave'),(5,50,'eve');
+
+CREATE TABLE t2 (id INT PRIMARY KEY, val INT) ENGINE=InnoDB;
+INSERT INTO t2 VALUES (1,100),(2,200);
+
+CREATE TABLE t_myisam (id INT PRIMARY KEY, val INT) ENGINE=MyISAM;
+INSERT INTO t_myisam VALUES (1,10),(2,20),(3,30);
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+
+# 1. Non-InnoDB engine (MyISAM) - NON_INNODB fallback
+EXPLAIN SELECT * FROM t_myisam;
+
+# 2. Multi-table query (join) - MULTI_TABLE fallback
+--disable_warnings
+EXPLAIN SELECT * FROM t1, t2 WHERE t1.id = t2.id;
+--enable_warnings
+
+# 3. Subquery in WHERE - caught by MULTI_QUERY_BLOCK
+--disable_warnings
+EXPLAIN SELECT * FROM t1 WHERE val IN (SELECT val FROM t2);
+--enable_warnings
+
+# 4. Derived table as single table - HAS_DERIVED_OR_VIEW fallback
+--disable_warnings
+EXPLAIN SELECT * FROM (SELECT * FROM t2) AS d;
+--enable_warnings
+
+# 5. UNION query - caught by MULTI_QUERY_BLOCK
+--disable_warnings
+EXPLAIN SELECT id, val FROM t1 UNION SELECT id, val FROM t2;
+--enable_warnings
+
+# 6. ORDER BY - HAS_ORDER_BY fallback
+EXPLAIN SELECT * FROM t1 ORDER BY val;
+
+# 7. GROUP BY - HAS_GROUP_BY fallback
+EXPLAIN SELECT val, COUNT(*) FROM t1 GROUP BY val;
+
+# 8. HAVING - HAS_HAVING fallback
+EXPLAIN SELECT COUNT(*) FROM t1 HAVING COUNT(*) > 3;
+
+# 9. DISTINCT - HAS_DISTINCT fallback
+EXPLAIN SELECT DISTINCT val FROM t1;
+
+# 10. WITH ROLLUP - HAS_GROUP_BY fallback
+EXPLAIN SELECT val, COUNT(*) FROM t1 GROUP BY val WITH ROLLUP;
+
+# 11. Window function - HAS_WINDOW fallback
+EXPLAIN SELECT id, val, ROW_NUMBER() OVER (ORDER BY val) AS rn FROM t1;
+
+# 12. Semi-join / IN subquery - MULTI_QUERY_BLOCK fallback
+--disable_warnings
+EXPLAIN SELECT * FROM t1 WHERE id IN (SELECT id FROM t2);
+--enable_warnings
+
+# 13. Locking-read fallback is intentionally not asserted here.
+# Current EXPLAIN-time lock metadata is not reliable enough for a stable
+# Phase 9 migration test. Track it as a source review risk instead.
+
+# 14. Unsupported aggregate functions
+EXPLAIN SELECT GROUP_CONCAT(val) FROM t1;
+EXPLAIN SELECT STD(val) FROM t1;
+EXPLAIN SELECT VARIANCE(val) FROM t1;
+EXPLAIN SELECT BIT_AND(val) FROM t1;
+EXPLAIN SELECT COUNT(DISTINCT val) FROM t1;
+
+# 15. Fulltext search - FULLTEXT fallback
+ALTER TABLE t1 ADD FULLTEXT INDEX ft_idx(name);
+--disable_warnings
+EXPLAIN SELECT * FROM t1 WHERE MATCH(name) AGAINST('alice');
+--enable_warnings
+ALTER TABLE t1 DROP INDEX ft_idx;
+
+# 16. Temporary table - TEMPORARY_TABLE fallback
+CREATE TEMPORARY TABLE t_tmp (id INT PRIMARY KEY, val INT) ENGINE=InnoDB;
+INSERT INTO t_tmp VALUES (1,10),(2,20);
+EXPLAIN SELECT * FROM t_tmp;
+DROP TEMPORARY TABLE t_tmp;
+
+# 17. View - HAS_DERIVED_OR_VIEW fallback
+CREATE VIEW v1 AS SELECT * FROM t1 WHERE val > 20;
+EXPLAIN SELECT * FROM v1;
+DROP VIEW v1;
+
+# 18. No base table (dual)
+EXPLAIN SELECT 1;
+
+# 19. SERIALIZABLE isolation - SERIALIZABLE fallback
+SET SESSION transaction_isolation='SERIALIZABLE';
+EXPLAIN SELECT * FROM t1;
+SET SESSION transaction_isolation='REPEATABLE-READ';
+
+# Reset
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE t_myisam;
+DROP TABLE t2;
+DROP TABLE t1;

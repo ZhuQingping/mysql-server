@@ -1,0 +1,60 @@
+# Test: pq_fullscan_result
+# Verify that SELECT execution results are correct when PQ is enabled.
+# Phase 9: Since V1 falls back to serial execution, results must match
+# standard MySQL serial behavior exactly.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT, name VARCHAR(50)) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,10,'alice'),(2,20,'bob'),(3,30,'carol'),
+                      (4,40,'dave'),(5,50,'eve');
+
+# 1. Full table scan - SELECT all rows with PQ ON
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+
+SELECT * FROM t1 ORDER BY id;
+
+# 2. Simple WHERE filter - full scan with condition
+SELECT * FROM t1 WHERE val > 20 ORDER BY id;
+
+# 3. WHERE with AND condition
+SELECT * FROM t1 WHERE val > 10 AND val < 50 ORDER BY id;
+
+# 4. WHERE with OR condition
+SELECT * FROM t1 WHERE val = 10 OR val = 50 ORDER BY id;
+
+# 5. COUNT(*) on full table
+SELECT COUNT(*) FROM t1;
+
+# 6. SUM aggregate
+SELECT SUM(val) FROM t1;
+
+# 7. AVG aggregate
+SELECT AVG(val) FROM t1;
+
+# 8. MIN/MAX aggregate
+SELECT MIN(val), MAX(val) FROM t1;
+
+# 9. Combined aggregate
+SELECT COUNT(*), SUM(val), AVG(val), MIN(val), MAX(val) FROM t1;
+
+# 10. Aggregate with WHERE filter
+SELECT SUM(val) FROM t1 WHERE val > 20;
+
+# 11. Empty result set with WHERE
+SELECT * FROM t1 WHERE val > 1000;
+
+# 12. Verify PQ is eligible for these queries via EXPLAIN
+EXPLAIN SELECT * FROM t1;
+EXPLAIN SELECT SUM(val) FROM t1;
+
+# Reset
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE t1;

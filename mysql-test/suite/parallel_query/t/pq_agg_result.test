@@ -1,0 +1,61 @@
+# Test: pq_agg_result
+# Verify that implicit aggregation (COUNT/SUM/AVG/MIN/MAX without GROUP BY)
+# produces correct results when PQ is enabled.
+# V1 falls back to serial execution, so results must match serial MySQL.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT, score DECIMAL(10,2)) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,10,3.50),(2,20,4.75),(3,30,5.25),
+                      (4,40,6.00),(5,50,7.50),(6,60,8.25),
+                      (7,70,9.00),(8,80,10.50),(9,90,11.75),(10,100,12.00);
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+
+# 1. COUNT(*) on full table
+SELECT COUNT(*) FROM t1;
+
+# 2. SUM on integer column
+SELECT SUM(val) FROM t1;
+
+# 3. AVG on integer column
+SELECT AVG(val) FROM t1;
+
+# 4. MIN/MAX on integer column
+SELECT MIN(val), MAX(val) FROM t1;
+
+# 5. SUM on decimal column
+SELECT SUM(score) FROM t1;
+
+# 6. AVG on decimal column
+SELECT AVG(score) FROM t1;
+
+# 7. MIN/MAX on decimal column
+SELECT MIN(score), MAX(score) FROM t1;
+
+# 8. Combined aggregate (COUNT + SUM + AVG + MIN + MAX)
+SELECT COUNT(*), SUM(val), AVG(val), MIN(val), MAX(val) FROM t1;
+
+# 9. Aggregate with WHERE filter
+SELECT COUNT(*), SUM(val), AVG(val) FROM t1 WHERE val > 50;
+
+# 10. COUNT(*) with WHERE returning subset
+SELECT COUNT(*) FROM t1 WHERE val BETWEEN 20 AND 60;
+
+# 11. SUM with WHERE returning empty result set
+SELECT SUM(val) FROM t1 WHERE val > 1000;
+
+# 12. Verify EXPLAIN shows PQ eligible for these aggregates
+EXPLAIN SELECT COUNT(*) FROM t1 WHERE val > 20;
+EXPLAIN SELECT SUM(val) FROM t1;
+
+# Reset
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE t1;

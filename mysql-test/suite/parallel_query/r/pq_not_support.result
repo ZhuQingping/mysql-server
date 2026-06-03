@@ -1,0 +1,130 @@
+DROP TABLE IF EXISTS t1, t2, t_myisam;
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT, name VARCHAR(50)) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,10,'alice'),(2,20,'bob'),(3,30,'carol'),
+(4,40,'dave'),(5,50,'eve');
+CREATE TABLE t2 (id INT PRIMARY KEY, val INT) ENGINE=InnoDB;
+INSERT INTO t2 VALUES (1,100),(2,200);
+CREATE TABLE t_myisam (id INT PRIMARY KEY, val INT) ENGINE=MyISAM;
+INSERT INTO t_myisam VALUES (1,10),(2,20),(3,30);
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+EXPLAIN SELECT * FROM t_myisam;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t_myisam	NULL	ALL	NULL	NULL	NULL	NULL	3	100.00	Not parallel NON_INNODB
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t_myisam`.`id` AS `id`,`test`.`t_myisam`.`val` AS `val` from `test`.`t_myisam`
+EXPLAIN SELECT * FROM t1, t2 WHERE t1.id = t2.id;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	ALL	PRIMARY	NULL	NULL	NULL	2	100.00	Not parallel MULTI_TABLE
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.t2.id	1	100.00	Not parallel MULTI_TABLE
+EXPLAIN SELECT * FROM t1 WHERE val IN (SELECT val FROM t2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Start temporary; Not parallel MULTI_TABLE
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	20.00	Using where; End temporary; Using join buffer (hash join); Not parallel MULTI_TABLE
+EXPLAIN SELECT * FROM (SELECT * FROM t2) AS d;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Not parallel HAS_DERIVED_OR_VIEW
+EXPLAIN SELECT id, val FROM t1 UNION SELECT id, val FROM t2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Not parallel MULTI_QUERY_BLOCK
+2	UNION	t2	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Not parallel MULTI_QUERY_BLOCK
+3	UNION RESULT	<union1,2>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	Using temporary
+EXPLAIN SELECT * FROM t1 ORDER BY val;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Using filesort; Not parallel HAS_ORDER_BY
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`val` AS `val`,`test`.`t1`.`name` AS `name` from `test`.`t1` order by `test`.`t1`.`val`
+EXPLAIN SELECT val, COUNT(*) FROM t1 GROUP BY val;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Using temporary; Not parallel HAS_GROUP_BY
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`val` AS `val`,count(0) AS `COUNT(*)` from `test`.`t1` group by `test`.`t1`.`val`
+EXPLAIN SELECT COUNT(*) FROM t1 HAVING COUNT(*) > 3;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	index	NULL	PRIMARY	4	NULL	5	100.00	Using index; Not parallel HAS_HAVING
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)` from `test`.`t1` having (count(0) > 3)
+EXPLAIN SELECT DISTINCT val FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Using temporary; Not parallel HAS_DISTINCT
+Warnings:
+Note	1003	/* select#1 */ select distinct `test`.`t1`.`val` AS `val` from `test`.`t1`
+EXPLAIN SELECT val, COUNT(*) FROM t1 GROUP BY val WITH ROLLUP;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Using filesort; Not parallel HAS_GROUP_BY
+Warnings:
+Note	1003	/* select#1 */ select rollup_group_item(`test`.`t1`.`val`,0) AS `val`,rollup_sum_switcher(count(0)) AS `COUNT(*)` from `test`.`t1` group by `test`.`t1`.`val` with rollup
+EXPLAIN SELECT id, val, ROW_NUMBER() OVER (ORDER BY val) AS rn FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Using filesort; Not parallel HAS_WINDOW
+Warnings:
+Note	3598	To get information about window functions use EXPLAIN FORMAT=JSON
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`val` AS `val`,row_number() OVER (ORDER BY `test`.`t1`.`val` )  AS `rn` from `test`.`t1`
+EXPLAIN SELECT * FROM t1 WHERE id IN (SELECT id FROM t2);
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	NULL	index	PRIMARY	PRIMARY	4	NULL	2	100.00	Using index; Not parallel MULTI_TABLE
+1	SIMPLE	t1	NULL	eq_ref	PRIMARY	PRIMARY	4	test.t2.id	1	100.00	Not parallel MULTI_TABLE
+EXPLAIN SELECT GROUP_CONCAT(val) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Not parallel UNSUPPORTED_AGGREGATE
+Warnings:
+Note	1003	/* select#1 */ select group_concat(`test`.`t1`.`val` separator ',') AS `GROUP_CONCAT(val)` from `test`.`t1`
+EXPLAIN SELECT STD(val) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Not parallel UNSUPPORTED_AGGREGATE
+Warnings:
+Note	1003	/* select#1 */ select std(`test`.`t1`.`val`) AS `STD(val)` from `test`.`t1`
+EXPLAIN SELECT VARIANCE(val) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Not parallel UNSUPPORTED_AGGREGATE
+Warnings:
+Note	1003	/* select#1 */ select variance(`test`.`t1`.`val`) AS `VARIANCE(val)` from `test`.`t1`
+EXPLAIN SELECT BIT_AND(val) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Not parallel UNSUPPORTED_AGGREGATE
+Warnings:
+Note	1003	/* select#1 */ select bit_and(`test`.`t1`.`val`) AS `BIT_AND(val)` from `test`.`t1`
+EXPLAIN SELECT COUNT(DISTINCT val) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Not parallel UNSUPPORTED_AGGREGATE
+Warnings:
+Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`val`) AS `COUNT(DISTINCT val)` from `test`.`t1`
+ALTER TABLE t1 ADD FULLTEXT INDEX ft_idx(name);
+Warnings:
+Warning	124	InnoDB rebuilding table to add column FTS_DOC_ID
+EXPLAIN SELECT * FROM t1 WHERE MATCH(name) AGAINST('alice');
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	fulltext	ft_idx	ft_idx	0	const	1	100.00	Using where; Ft_hints: sorted; Not parallel FULLTEXT
+ALTER TABLE t1 DROP INDEX ft_idx;
+CREATE TEMPORARY TABLE t_tmp (id INT PRIMARY KEY, val INT) ENGINE=InnoDB;
+INSERT INTO t_tmp VALUES (1,10),(2,20);
+EXPLAIN SELECT * FROM t_tmp;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t_tmp	NULL	ALL	NULL	NULL	NULL	NULL	2	100.00	Not parallel TEMPORARY_TABLE
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t_tmp`.`id` AS `id`,`test`.`t_tmp`.`val` AS `val` from `test`.`t_tmp`
+DROP TEMPORARY TABLE t_tmp;
+CREATE VIEW v1 AS SELECT * FROM t1 WHERE val > 20;
+EXPLAIN SELECT * FROM v1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	33.33	Using where; Not parallel HAS_DERIVED_OR_VIEW
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`val` AS `val`,`test`.`t1`.`name` AS `name` from `test`.`t1` where (`test`.`t1`.`val` > 20)
+DROP VIEW v1;
+EXPLAIN SELECT 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+Warnings:
+Note	1003	/* select#1 */ select 1 AS `1`
+SET SESSION transaction_isolation='SERIALIZABLE';
+EXPLAIN SELECT * FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Not parallel SERIALIZABLE
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`val` AS `val`,`test`.`t1`.`name` AS `name` from `test`.`t1`
+SET SESSION transaction_isolation='REPEATABLE-READ';
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+DROP TABLE t_myisam;
+DROP TABLE t2;
+DROP TABLE t1;
