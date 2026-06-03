@@ -11095,16 +11095,16 @@ int ha_innobase::pq_worker_scan_init(THD *worker_thd,
 int ha_innobase::pq_worker_scan_next(PQ_Worker_context *worker_ctx,
                                      uchar *record, bool *eof) {
   if (eof != nullptr) {
-    *eof = true;
+    *eof = false;
   }
 
-  /* We must have an InnoDB PQ worker context. */
-  if (m_pq_worker_ctxs.empty() || m_pq_worker_ctxs.back() == nullptr) {
-    /* No worker context: return EOF (conservative). */
+  auto innodb_worker = reinterpret_cast<InnoDB_pq_worker_ctx *>(worker_ctx);
+  if (innodb_worker == nullptr) {
+    if (eof != nullptr) {
+      *eof = true;
+    }
     return 0;
   }
-
-  auto innodb_worker = m_pq_worker_ctxs.back();
 
   /* Check leader error state. */
   if (m_pq_leader_ctx != nullptr && m_pq_leader_ctx->is_error_set()) {
@@ -11135,9 +11135,18 @@ int ha_innobase::pq_worker_scan_next(PQ_Worker_context *worker_ctx,
   @return 0 always (cleanup errors are logged, not returned).
 */
 int ha_innobase::pq_worker_scan_end(PQ_Worker_context *worker_ctx) {
-  /* Phase 6B-2: cleanup happens in pq_leader_scan_end which
-  destroys all worker contexts. This method is a no-op placeholder
-  that is idempotent and safe for nullptr. */
+  auto innodb_worker = reinterpret_cast<InnoDB_pq_worker_ctx *>(worker_ctx);
+  if (innodb_worker == nullptr) {
+    return 0;
+  }
+
+  auto it = std::find(m_pq_worker_ctxs.begin(), m_pq_worker_ctxs.end(),
+                      innodb_worker);
+  if (it != m_pq_worker_ctxs.end()) {
+    ut::delete_(*it);
+    m_pq_worker_ctxs.erase(it);
+  }
+
   return 0;
 }
 
