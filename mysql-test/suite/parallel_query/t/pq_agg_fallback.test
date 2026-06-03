@@ -1,0 +1,45 @@
+# Test: pq_agg_fallback
+# Verify that EXPLAIN shows fallback reason when aggregate functions
+# are not PQ-compatible (e.g., GROUP_CONCAT, STDDEV, DISTINCT aggregates).
+# Phase 8: explicit GROUP BY, DISTINCT in aggregates, and unsupported
+# aggregate functions cause PQ fallback.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT, name VARCHAR(100)) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,10,'a'),(2,20,'b'),(3,30,'c'),(4,40,'d'),(5,50,'e');
+
+# Turn PQ ON and lower cost threshold
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+
+# 1. Explicit GROUP BY still causes fallback (HAS_GROUP_BY)
+EXPLAIN SELECT val, COUNT(*) FROM t1 GROUP BY val;
+
+# 2. GROUP_CONCAT causes fallback (UNSUPPORTED_AGGREGATE)
+EXPLAIN SELECT GROUP_CONCAT(name) FROM t1;
+
+# 3. STDDEV causes fallback (UNSUPPORTED_AGGREGATE)
+EXPLAIN SELECT STDDEV(val) FROM t1;
+
+# 4. VARIANCE causes fallback (UNSUPPORTED_AGGREGATE)
+EXPLAIN SELECT VARIANCE(val) FROM t1;
+
+# 5. BIT_AND causes fallback (UNSUPPORTED_AGGREGATE)
+EXPLAIN SELECT BIT_AND(val) FROM t1;
+
+# 6. COUNT(DISTINCT val) causes fallback (UNSUPPORTED_AGGREGATE)
+EXPLAIN SELECT COUNT(DISTINCT val) FROM t1;
+
+# 7. HAVING clause causes fallback (HAS_HAVING)
+EXPLAIN SELECT COUNT(*) FROM t1 HAVING COUNT(*) > 3;
+
+# Reset
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE t1;

@@ -51,7 +51,14 @@
 #include <cassert>
 #include <cstring>
 
-class THD;
+#include "mysqld_error.h"         // ER_QUERY_INTERRUPTED
+#include "sql/sql_class.h"        // THD
+
+// ---------------------------------------------------------------------------
+// PQ_global_stats instance
+// ---------------------------------------------------------------------------
+
+PQ_global_stats pq_global_stats;
 
 // ---------------------------------------------------------------------------
 // PQ_worker_info: transition_status
@@ -346,23 +353,39 @@ void Gather_operator::abort_workers(THD *leader_thd [[maybe_unused]]) {
 // ---------------------------------------------------------------------------
 
 Gather_operator::GatherErrorState Gather_operator::resolve_error_priority(
-    THD *leader_thd [[maybe_unused]]) {
+    THD *leader_thd) {
   GatherErrorState result;
   result.reset();
 
+  // ================================================================
   // Priority 1: KILL -- check leader THD killed flag.
-  // In Phase 5, we will also check worker THD killed flags.
-  // Phase 4: THD::killed is not checked directly because we don't
-  // have the THD header included and this is a stub. Phase 5 will
-  // add: if (leader_thd->killed != 0) { ... }
-  // RISK: Phase 4 stub cannot actually check THD::killed. This is
-  // documented for Phase 5 implementation.
+  // Phase 8: now actually checks THD::killed instead of stub comment.
+  // If the leader is killed (KILL QUERY, KILL CONNECTION, or
+  // max_execution_time exceeded), this takes absolute priority.
+  // ================================================================
+  if (leader_thd != nullptr && leader_thd->killed != 0) {
+    result.priority = PRIORITY_KILL;
+    result.error_code = ER_QUERY_INTERRUPTED;
+    result.source_worker_id = 0;  // Kill originated from leader, not a worker
+    m_error_state = result;
+    return result;
+  }
 
+  // ================================================================
   // Priority 2: LEADER_FATAL -- check for OOM or unrecoverable error.
-  // Phase 4: no leader fatal detection. Phase 5 will check for
-  // allocation failures and other fatal conditions.
+  // Phase 8: checks THD::pq_error for leader-side errors.
+  // ================================================================
+  if (leader_thd != nullptr && leader_thd->pq_error != 0) {
+    if (result.priority < PRIORITY_LEADER_FATAL) {
+      result.priority = PRIORITY_LEADER_FATAL;
+      result.error_code = leader_thd->pq_error;
+      result.source_worker_id = 0;  // Leader-side error
+    }
+  }
 
+  // ================================================================
   // Priority 3: WORKER_FATAL -- check each worker's error code.
+  // ================================================================
   for (uint32 i = 0; i < m_dop; i++) {
     if (m_workers[i] == nullptr) continue;
 
@@ -377,17 +400,81 @@ Gather_operator::GatherErrorState Gather_operator::resolve_error_priority(
     }
   }
 
+  // ================================================================
   // Priority 4: MQ_CLOSED -- check if Exchange reports all workers done.
+  // ================================================================
   if (m_all_finished && !result.has_error()) {
     result.priority = PRIORITY_MQ_CLOSED;
     result.error_code = 0;
   }
 
+  // ================================================================
   // Priority 5: NORMAL_FINISH -- default if no errors found.
+  // ================================================================
   if (!result.has_error() && !m_all_finished) {
     result.priority = PRIORITY_NORMAL_FINISH;
   }
 
   m_error_state = result;
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Gather_operator: check_leader_kill
+// ---------------------------------------------------------------------------
+
+bool Gather_operator::check_leader_kill(THD *leader_thd) {
+  if (leader_thd == nullptr) return false;
+
+  // Check THD::killed flag (set by KILL QUERY, KILL CONNECTION, or shutdown).
+  if (leader_thd->killed != 0) {
+    return true;
+  }
+
+  // Check max_execution_time exceeded.
+  // In MySQL 8.0, max_execution_time is checked via
+  // THD->get_stmt_da()->statement_warn_area().has_warn_expr().
+  // For simplicity, Phase 8 checks if max_execution_time_set > 0 and
+  // the timeout has been exceeded. The actual timeout logic is handled
+  // by MySQL's execution timer; here we just check the killed flag
+  // which is also set on timeout.
+  // Note: MySQL sets THD::killed = THD::KILL_QUERY on max_execution_time
+  // timeout, so the killed check above already covers this.
+
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Gather_operator: propagate_kill_to_workers
+// ---------------------------------------------------------------------------
+
+void Gather_operator::propagate_kill_to_workers(THD *leader_thd
+                                                 [[maybe_unused]]) {
+  if (!m_initialized) return;
+
+  // Set all worker statuses to KILLED.
+  for (uint32 i = 0; i < m_dop; i++) {
+    if (m_workers[i] == nullptr) continue;
+    if (!m_workers[i]->is_terminal()) {
+      m_workers[i]->transition_status(PQ_Worker_status::KILLED);
+    }
+  }
+
+  // Close MQ producer side on all handles to signal workers that
+  // the leader has stopped reading. This causes workers to detect
+  // MQ_DETACHED on their next send() call and exit.
+  if (m_exchange != nullptr) {
+    for (uint32 i = 0; i < m_dop; i++) {
+      MQueue_handle *handle = m_exchange->get_mq_handle(i);
+      if (handle != nullptr) {
+        handle->abort_consumer();
+      }
+    }
+  }
+
+  // Phase 5+ will also:
+  // - Set THD::killed on each worker THD
+  // - Send ABORT control token to each worker's MQ
+
+  m_all_finished = true;
 }

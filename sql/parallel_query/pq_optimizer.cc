@@ -30,11 +30,13 @@
 
 #include "sql/parallel_query/pq_optimizer.h"
 
+#include "include/thr_lock.h"     // Lock_descriptor, thr_lock_type
 #include "sql/sql_class.h"        // THD
 #include "sql/sql_lex.h"          // Query_block, LEX, Table_ref
 #include "sql/sql_opt_exec_shared.h"  // JOIN_TAB, join_type, JT_ALL
 #include "sql/sql_optimizer.h"    // JOIN
 #include "sql/table.h"            // TABLE, TABLE_SHARE, Table_ref
+#include "sql/parallel_query/pq_aggregate.h"  // pq_check_agg_supported
 
 /**
   String representation of each PQUnsuiteReason value.
@@ -61,11 +63,13 @@ static const char *pq_unsuite_reason_names[] = {
     "HAS_WINDOW",                // PQUnsuiteReason::HAS_WINDOW
     "HAS_DISTINCT",              // PQUnsuiteReason::HAS_DISTINCT
     "HAS_ORDER_BY",              // PQUnsuiteReason::HAS_ORDER_BY
+    "HAS_HAVING",                // PQUnsuiteReason::HAS_HAVING
     "HAS_GROUP_BY",              // PQUnsuiteReason::HAS_GROUP_BY
     "HAS_ROLLUP",                // PQUnsuiteReason::HAS_ROLLUP
     "HAS_SEMIJOIN",              // PQUnsuiteReason::HAS_SEMIJOIN
     "NON_FULL_TABLE_SCAN",       // PQUnsuiteReason::NON_FULL_TABLE_SCAN
     "COST_BELOW_THRESHOLD",      // PQUnsuiteReason::COST_BELOW_THRESHOLD
+    "UNSUPPORTED_AGGREGATE",     // PQUnsuiteReason::UNSUPPORTED_AGGREGATE
     "UNSUPPORTED_BY_PHASE1",     // PQUnsuiteReason::UNSUPPORTED_BY_PHASE1
 };
 
@@ -313,6 +317,9 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
 
   // ================================================================
   // 10. Must not have explicit GROUP BY
+  //     Phase 8: explicit GROUP BY is still serial fallback.
+  //     Explicit GROUP BY with aggregates requires gather-merge or
+  //     partial aggregation per group, which is Phase 9 territory.
   // ================================================================
   if (query_block->is_explicitly_grouped()) {
     return pq_reject(info, PQUnsuiteReason::HAS_GROUP_BY,
@@ -320,11 +327,38 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
   }
 
   // ================================================================
-  // 11. Must not have implicit grouping (aggregate without GROUP BY)
+  // 11. Implicit grouping (aggregate without GROUP BY):
+  //     Phase 8 expansion: allow implicit grouping if all aggregates
+  //     are PQ-compatible (COUNT, SUM, AVG, MIN, MAX).
+  //     Unsupported aggregates (GROUP_CONCAT, STD, VAR, BIT_AND, etc.)
+  //     still fall back to serial.
   // ================================================================
   if (query_block->is_implicitly_grouped()) {
-    return pq_reject(info, PQUnsuiteReason::HAS_GROUP_BY,
-                     "query has implicit grouping (aggregates without GROUP BY)");
+    // Check whether all aggregate Items are PQ-compatible.
+    if (!pq_check_agg_supported(query_block)) {
+      return pq_reject(info, PQUnsuiteReason::UNSUPPORTED_AGGREGATE,
+                       "query has unsupported aggregate function");
+    }
+    // All aggregates are PQ-compatible. Continue eligibility check.
+    // Note: implicit grouping queries are eligible but still fall
+    // back to serial execution because TryCreatePQTableScanIterator
+    // returns nullptr in Phase 8 (no real workers). Phase 6+ will
+    // activate parallel aggregation when InnoDB PQ scan is ready.
+  }
+
+  // ================================================================
+  // 11b. Must not have HAVING clause.
+  //      Phase 8: conservatively reject HAVING because:
+  //      - HAVING can reference aggregates that are NOT in the SELECT
+  //        list (hidden aggregates), which pq_check_agg_supported()
+  //        would miss if it only checks visible_fields().
+  //      - HAVING is evaluated after aggregation; PQ V1 workers
+  //        send partial aggregates, and the leader must apply HAVING
+  //        after combining them, which is Phase 9 territory.
+  // ================================================================
+  if (query_block->having_cond() != nullptr) {
+    return pq_reject(info, PQUnsuiteReason::HAS_HAVING,
+                     "query has HAVING clause");
   }
 
   // ================================================================
@@ -389,21 +423,34 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
   }
 
   // ================================================================
-  // 18. Must not be a locking read
-  //     Check m_lock_type on the leaf table. A locking read uses
-  //     TL_READ_WITH_SHARED_LOCKS (LOCK IN SHARE MODE) or stronger.
-  //     For simplicity, any lock type stronger than TL_READ_DEFAULT
-  //     disqualifies PQ in MVP.
+  // 18. Must not be a locking read (FOR UPDATE / LOCK IN SHARE MODE)
+  //     Check lock_descriptor() on all leaf tables AND check
+  //     the top-level table list for lock descriptors.
+  //     A locking read uses TL_READ_WITH_SHARED_LOCKS or stronger.
+  //     For single-table queries, the leaf table and top-level table
+  //     should be the same Table_ref, but we check both to be safe.
   // ================================================================
   for (Table_ref *tr = query_block->leaf_tables; tr != nullptr;
        tr = tr->next_leaf) {
-    TABLE *tbl = tr->table;
-    if (tbl != nullptr) {
-      thr_lock_type lt = tbl->reginfo.lock_type;
-      if (lt >= TL_READ_WITH_SHARED_LOCKS) {
-        return pq_reject(info, PQUnsuiteReason::LOCKING_READ,
-                         "locking read detected");
-      }
+    thr_lock_type lt = tr->lock_descriptor().type;
+    // Check both lock_descriptor() and updating flag.
+    // For FOR UPDATE, lock_descriptor().type should be TL_WRITE
+    // and updating should be true. For LOCK IN SHARE MODE,
+    // lock_descriptor().type should be TL_READ_WITH_SHARED_LOCKS.
+    if (lt >= TL_READ_WITH_SHARED_LOCKS || tr->updating) {
+      return pq_reject(info, PQUnsuiteReason::LOCKING_READ,
+                       "locking read detected");
+    }
+  }
+
+  // Also check the top-level table list (for cases where
+  // leaf_tables may not have lock descriptors propagated).
+  for (Table_ref *tr = query_block->get_table_list(); tr != nullptr;
+       tr = tr->next_local) {
+    thr_lock_type lt = tr->lock_descriptor().type;
+    if (lt >= TL_READ_WITH_SHARED_LOCKS || tr->updating) {
+      return pq_reject(info, PQUnsuiteReason::LOCKING_READ,
+                       "locking read detected");
     }
   }
 

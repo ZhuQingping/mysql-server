@@ -1,0 +1,42 @@
+# Test: pq_error_paths
+# Verify PQ error path logic through EXPLAIN output.
+# Phase 8 tests the eligibility check paths that relate to error
+# conditions: unsupported aggregates, SERIALIZABLE isolation, etc.
+# Note: Locking read (FOR UPDATE / LOCK IN SHARE MODE) detection
+# is deferred to Phase 9 because lock_descriptor() is not reliably
+# set during the EXPLAIN optimization phase.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,10),(2,20),(3,30),(4,40),(5,50);
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+
+# 1. Normal full scan - PQ eligible (baseline)
+EXPLAIN SELECT * FROM t1;
+
+# 2. Implicit grouping with supported aggregate - PQ eligible
+EXPLAIN SELECT SUM(val) FROM t1;
+
+# 3. Implicit grouping with unsupported aggregate - fallback
+EXPLAIN SELECT STD(val) FROM t1;
+
+# 4. Explicit GROUP BY - fallback (Phase 9 scope)
+EXPLAIN SELECT val, COUNT(*) FROM t1 GROUP BY val;
+
+# 5. SERIALIZABLE isolation - fallback
+SET SESSION transaction_isolation='SERIALIZABLE';
+EXPLAIN SELECT * FROM t1;
+SET SESSION transaction_isolation='REPEATABLE-READ';
+
+# Reset
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE t1;

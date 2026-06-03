@@ -1,0 +1,48 @@
+# Test: pq_agg_eligible
+# Verify that EXPLAIN shows "Parallel query" annotation when implicit
+# grouping (aggregates without GROUP BY) uses PQ-compatible functions.
+# Phase 8: COUNT/SUM/AVG/MIN/MAX without GROUP BY are PQ-eligible.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT, name VARCHAR(100)) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,10,'a'),(2,20,'b'),(3,30,'c'),(4,40,'d'),(5,50,'e');
+
+# Turn PQ ON and lower cost threshold
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+
+# 1. COUNT(*) without GROUP BY - should be PQ eligible
+EXPLAIN SELECT COUNT(*) FROM t1;
+
+# 2. SUM(val) without GROUP BY - should be PQ eligible
+EXPLAIN SELECT SUM(val) FROM t1;
+
+# 3. AVG(val) without GROUP BY - should be PQ eligible
+EXPLAIN SELECT AVG(val) FROM t1;
+
+# 4. MIN(val) without GROUP BY - should be PQ eligible
+EXPLAIN SELECT MIN(val) FROM t1;
+
+# 5. MAX(val) without GROUP BY - should be PQ eligible
+EXPLAIN SELECT MAX(val) FROM t1;
+
+# 6. Multiple aggregates without GROUP BY - should be PQ eligible
+EXPLAIN SELECT COUNT(*), SUM(val), AVG(val), MIN(val), MAX(val) FROM t1;
+
+# 7. Aggregate with WHERE clause (still full scan, PQ eligible)
+EXPLAIN SELECT COUNT(*) FROM t1 WHERE val > 20;
+
+# 8. Aggregate + non-aggregate column (implicit grouping)
+# This should still be PQ eligible since only COUNT/SUM/AVG/MIN/MAX are used
+EXPLAIN SELECT COUNT(*), MIN(val), MAX(val) FROM t1;
+
+# Reset
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE t1;

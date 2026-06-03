@@ -37,6 +37,7 @@
 #include "include/my_sqlcommand.h"  // enum_sql_command, SQLCOM_SELECT
 #include "sql/handler.h"            // enum_tx_isolation, ISO_SERIALIZABLE,
                                     // ha_legacy_type, DB_TYPE_INNODB
+#include "sql/parallel_query/pq_aggregate.h"  // PQ_agg_type
 
 class THD;
 class Query_block;
@@ -71,11 +72,13 @@ enum class PQUnsuiteReason {
   HAS_WINDOW,               // Has window functions
   HAS_DISTINCT,             // Has DISTINCT
   HAS_ORDER_BY,             // Has ORDER BY
+  HAS_HAVING,               // Has HAVING clause (conservative reject)
   HAS_GROUP_BY,             // Has GROUP BY (explicit or implicit)
   HAS_ROLLUP,               // Has WITH ROLLUP
   HAS_SEMIJOIN,             // Has semi-join or anti-join nest
   NON_FULL_TABLE_SCAN,      // Access path is not full table scan
   COST_BELOW_THRESHOLD,     // Estimated cost below parallel_cost_threshold
+  UNSUPPORTED_AGGREGATE,    // Has aggregate function not supported by PQ V1
   UNSUPPORTED_BY_PHASE1,    // Check deferred to later phase
 
   // Keep last - sentinel for array size and iteration

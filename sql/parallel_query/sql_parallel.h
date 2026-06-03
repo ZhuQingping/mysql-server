@@ -79,6 +79,77 @@
 class THD;
 
 // ---------------------------------------------------------------------------
+// PQ_stats: resource statistics for parallel query execution
+// ---------------------------------------------------------------------------
+
+/**
+  Per-query PQ execution statistics.
+
+  PQ_stats tracks resource usage during a parallel query execution.
+  It is attached to THD::pq_leader (via Gather_operator) and records:
+  - Number of workers launched
+  - Rows scanned by all workers
+  - Execution time
+  - Whether PQ was actually executed or fell back to serial
+
+  Phase 8: PQ_stats is defined but not populated by a real PQ execution path
+  yet. Real execution stats require Phase 6+ when workers are actually
+  launched.
+*/
+struct PQ_stats {
+  uint32 workers_launched{0};      ///< Number of workers actually launched
+  uint64 rows_scanned{0};          ///< Total rows scanned by all workers
+  uint64 rows_returned{0};         ///< Total rows returned to leader
+  uint64 scan_time_us{0};          ///< Time spent in parallel scan (microseconds)
+  bool pq_executed{false};         ///< True if PQ actually ran (not fallback)
+  bool pq_fallback{false};         ///< True if fell back to serial
+
+  /** Reset all counters. */
+  void reset() {
+    workers_launched = 0;
+    rows_scanned = 0;
+    rows_returned = 0;
+    scan_time_us = 0;
+    pq_executed = false;
+    pq_fallback = false;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// PQ global statistics counters
+// ---------------------------------------------------------------------------
+
+/**
+  Global PQ statistics counters, visible via SHOW STATUS.
+
+  These are atomic counters that track aggregate PQ usage across
+  all sessions. Updated at the end of each PQ query execution
+  (or fallback). Displayed as SHOW STATUS LIKE 'Parallel%'.
+
+  Phase 8: fallback is incremented when the execution iterator factory
+  reaches a PQ-eligible table scan but returns nullptr because real worker
+  execution is not enabled yet. Real execution counters require Phase 6+
+  when workers are actually launched.
+*/
+struct PQ_global_stats {
+  std::atomic<uint64> queries_executed{0};    ///< PQ queries that actually ran
+  std::atomic<uint64> queries_fallback{0};    ///< PQ-eligible queries that fell back
+  std::atomic<uint64> workers_launched{0};    ///< Total worker threads launched
+  std::atomic<uint64> rows_scanned{0};        ///< Total rows scanned by PQ workers
+
+  /** Reset all counters. */
+  void reset() {
+    queries_executed.store(0, std::memory_order_relaxed);
+    queries_fallback.store(0, std::memory_order_relaxed);
+    workers_launched.store(0, std::memory_order_relaxed);
+    rows_scanned.store(0, std::memory_order_relaxed);
+  }
+};
+
+/** Global PQ stats instance. Defined in sql_parallel.cc. */
+extern PQ_global_stats pq_global_stats;
+
+// ---------------------------------------------------------------------------
 // PQ_worker_info: per-worker metadata
 // ---------------------------------------------------------------------------
 
@@ -300,6 +371,7 @@ class Gather_operator {
   Exchange_nosort *m_exchange{nullptr}; ///< Exchange for row collection
   PQ_worker_manager m_worker_mgr;      ///< Worker lifecycle manager
   GatherErrorState m_error_state;      ///< Highest-priority error
+  PQ_stats m_stats;                    ///< Per-query execution stats
   bool m_all_finished{false};          ///< All workers reached terminal state
   bool m_initialized{false};           ///< init() has been called
   uint32 m_ring_size{PQ_MQ_DEFAULT_RING_SIZE};  ///< MQ ring buffer size
@@ -426,6 +498,34 @@ class Gather_operator {
 
   /** Check if initialized. */
   bool is_initialized() const { return m_initialized; }
+
+  /** Get per-query stats. */
+  PQ_stats &stats() { return m_stats; }
+  const PQ_stats &stats() const { return m_stats; }
+
+  /**
+    Check if leader THD has been killed or timed out.
+
+    Phase 8: checks THD::killed and max_execution_time.
+    Returns true if the leader should abort PQ execution.
+
+    @param leader_thd  Leader THD to check
+
+    @retval true   Leader is killed or timed out
+    @retval false  Leader is still running
+  */
+  bool check_leader_kill(THD *leader_thd);
+
+  /**
+    Propagate kill signal to all workers.
+
+    Phase 8: sets all worker statuses to KILLED and closes MQ producer
+    side on all handles. Phase 5+ will also set THD::killed on each
+    worker THD and send ABORT control tokens.
+
+    @param leader_thd  Leader THD (source of kill signal)
+  */
+  void propagate_kill_to_workers(THD *leader_thd);
 };
 
 #endif  // SQL_PARALLEL_PQ_INCLUDED

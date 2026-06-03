@@ -1,0 +1,101 @@
+# Test: pq_stats
+# Verify that PQ status variables are visible and track PQ usage.
+# Phase 8: status variables track queries eligible but falling back
+# because the PQ iterator is not yet functional.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,10),(2,20),(3,30),(4,40),(5,50);
+
+# 1. Verify PQ status variables exist (4 variables)
+SELECT COUNT(*) FROM (
+  SELECT variable_name FROM performance_schema.global_status
+  WHERE variable_name LIKE 'Parallel%'
+) AS pq_vars;
+
+# 2. Verify all 4 PQ status variable names are present
+SELECT variable_name FROM performance_schema.global_status
+  WHERE variable_name LIKE 'Parallel%'
+  ORDER BY variable_name;
+
+# 3. Verify status values are numeric (non-negative)
+SELECT COUNT(*) AS numeric_parallel_status_vars
+  FROM performance_schema.global_status
+  WHERE variable_name LIKE 'Parallel%'
+    AND variable_value REGEXP '^[0-9]+$';
+
+SET @pq_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_rows_scanned');
+SET @pq_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+
+# 4. Run a PQ-eligible query (will fall back to serial in Phase 8)
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+
+SELECT * FROM t1;
+
+# 5. Check that fallback counter increased by 1
+SET @pq_fallback_after_scan = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SELECT @pq_fallback_after_scan - @pq_fallback_before AS fallback_delta;
+
+# 6. Run another PQ-eligible query (SUM aggregate, implicit grouping)
+SELECT SUM(val) FROM t1;
+
+# 7. Verify fallback counter increased further
+SET @pq_fallback_after_sum = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SELECT @pq_fallback_after_sum - @pq_fallback_before AS fallback_delta;
+
+# 8. Run a PQ-ineligible query (GROUP BY - should NOT increment)
+SELECT val, COUNT(*) FROM t1 GROUP BY val;
+
+# 9. Verify fallback counter did NOT change for ineligible query
+SET @pq_fallback_after_group = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SELECT @pq_fallback_after_group - @pq_fallback_before AS fallback_delta;
+
+# 10. Verify final deltas are stable regardless of previous tests
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+    AS fallback_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+    AS rows_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+    AS workers_delta;
+
+# Reset
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE t1;

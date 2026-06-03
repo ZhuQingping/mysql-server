@@ -1,0 +1,97 @@
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,10),(2,20),(3,30),(4,40),(5,50);
+SELECT COUNT(*) FROM (
+SELECT variable_name FROM performance_schema.global_status
+WHERE variable_name LIKE 'Parallel%'
+) AS pq_vars;
+COUNT(*)
+4
+SELECT variable_name FROM performance_schema.global_status
+WHERE variable_name LIKE 'Parallel%'
+  ORDER BY variable_name;
+variable_name
+Parallel_queries_executed
+Parallel_queries_fallback
+Parallel_rows_scanned
+Parallel_workers_launched
+SELECT COUNT(*) AS numeric_parallel_status_vars
+FROM performance_schema.global_status
+WHERE variable_name LIKE 'Parallel%'
+    AND variable_value REGEXP '^[0-9]+$';
+numeric_parallel_status_vars
+4
+SET @pq_executed_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_rows_scanned');
+SET @pq_workers_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched');
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SELECT * FROM t1;
+id	val
+1	10
+2	20
+3	30
+4	40
+5	50
+SET @pq_fallback_after_scan = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback');
+SELECT @pq_fallback_after_scan - @pq_fallback_before AS fallback_delta;
+fallback_delta
+1
+SELECT SUM(val) FROM t1;
+SUM(val)
+150
+SET @pq_fallback_after_sum = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback');
+SELECT @pq_fallback_after_sum - @pq_fallback_before AS fallback_delta;
+fallback_delta
+2
+SELECT val, COUNT(*) FROM t1 GROUP BY val;
+val	COUNT(*)
+10	1
+20	1
+30	1
+40	1
+50	1
+SET @pq_fallback_after_group = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback');
+SELECT @pq_fallback_after_group - @pq_fallback_before AS fallback_delta;
+fallback_delta
+2
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+AS executed_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+AS fallback_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+AS rows_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+AS workers_delta;
+executed_delta	fallback_delta	rows_delta	workers_delta
+0	2	0	0
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+DROP TABLE t1;

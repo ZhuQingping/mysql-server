@@ -38,6 +38,7 @@
 
 #include "my_base.h"
 #include "sql/mysqld.h"       // innodb_hton
+#include "sql/parallel_query/sql_parallel.h"  // pq_global_stats
 #include "sql/sql_class.h"    // THD::variables, THD::pq_is_worker
 #include "sql/sql_optimizer.h"  // JOIN::pq_eligible
 #include "sql/table.h"        // TABLE, TABLE_SHARE::db_type
@@ -172,6 +173,13 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQTableScanIterator(
   static_cast<void>(mem_root);
   static_cast<void>(expected_rows);
   static_cast<void>(examined_rows);
+
+  // Phase 8 execution fallback: all PQ guards passed, but the real
+  // PQ iterator is intentionally disabled until worker execution is ready.
+  // Count this at iterator creation time rather than optimizer time so EXPLAIN
+  // and optimizer re-entry do not inflate execution fallback statistics.
+  pq_global_stats.queries_fallback.fetch_add(1, std::memory_order_relaxed);
+  thd->pq_executed = false;
 
   return nullptr;
 

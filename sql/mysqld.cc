@@ -867,6 +867,7 @@ MySQL clients support the protocol:
 #include "sql/ssl_init_callback.h"
 #include "sql/sys_vars.h"         // fixup_enforce_gtid_consistency_...
 #include "sql/sys_vars_shared.h"  // intern_find_sys_var
+#include "sql/parallel_query/sql_parallel.h"  // PQ_global_stats, pq_global_stats
 #include "sql/table_cache.h"      // table_cache_manager
 #include "sql/tc_log.h"           // tc_log
 #include "sql/thd_raii.h"
@@ -9660,6 +9661,42 @@ static int show_deprecated_use_i_s_processlist_count(THD *, SHOW_VAR *var,
   return 0;
 }
 
+// ---------------------------------------------------------------------------
+// PQ status variable show functions
+// ---------------------------------------------------------------------------
+
+static int show_pq_queries_executed(THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) =
+      (longlong)(pq_global_stats.queries_executed.load(std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_queries_fallback(THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) =
+      (longlong)(pq_global_stats.queries_fallback.load(std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_workers_launched(THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) =
+      (longlong)(pq_global_stats.workers_launched.load(std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_rows_scanned(THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) =
+      (longlong)(pq_global_stats.rows_scanned.load(std::memory_order_relaxed));
+  return 0;
+}
+
 static int show_deprecated_use_i_s_processlist_last_timestamp(THD *,
                                                               SHOW_VAR *var,
                                                               char *buf) {
@@ -10035,6 +10072,14 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Deprecated_use_i_s_processlist_last_timestamp",
      (char *)&show_deprecated_use_i_s_processlist_last_timestamp, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_queries_executed", (char *)&show_pq_queries_executed, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_queries_fallback", (char *)&show_pq_queries_fallback, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_workers_launched", (char *)&show_pq_workers_launched, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_rows_scanned", (char *)&show_pq_rows_scanned, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {NullS, NullS, SHOW_FUNC, SHOW_SCOPE_ALL}};
 
