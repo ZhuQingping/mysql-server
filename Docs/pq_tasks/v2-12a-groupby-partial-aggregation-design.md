@@ -193,6 +193,17 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - 默认 experimental gate OFF；
 - DOP=1 结果与串行一致。
 
+状态：Task Contract Created。
+
+任务书：[v2-12a-3-dop1-partial-group-execution.md](v2-12a-3-dop1-partial-group-execution.md)
+
+关键约束：
+
+- 接入点是 `AccessPath::AGGREGATE`，不是 `TABLE_SCAN` hook；
+- 不新增 `AccessPath` 类型；
+- 不修改原生 `AggregateIterator`；
+- 第一段先做 gated DOP=1，默认 OFF。
+
 ### V2-12A-4 DOP2/DOP4 Partial Merge
 
 - 接入 range-aware worker；
