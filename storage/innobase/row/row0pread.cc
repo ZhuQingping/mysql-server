@@ -696,36 +696,36 @@ dberr_t PCursor::move_to_next_block(dict_index_t *index) {
   return move_to_next_block_at_level_one(index);
 }
 
-bool Parallel_reader::Scan_ctx::check_visibility(const rec_t *&rec,
-                                                 ulint *&offsets,
-                                                 mem_heap_t *&heap,
-                                                 mtr_t *mtr) {
-  const auto table_name = m_config.m_index->table->name;
+bool Parallel_reader::check_visibility(dict_index_t *index, bool is_compact,
+                                       const trx_t *trx, const rec_t *&rec,
+                                       ulint *&offsets, mem_heap_t *&heap,
+                                       mtr_t *mtr) {
+  const auto table_name = index->table->name;
 
-  ut_ad(!m_trx || m_trx->read_view == nullptr ||
-        MVCC::is_view_active(m_trx->read_view));
+  ut_ad(!trx || trx->read_view == nullptr ||
+        MVCC::is_view_active(trx->read_view));
 
-  if (!m_trx) {
+  if (!trx) {
     /* Do nothing */
-  } else if (m_trx->read_view != nullptr) {
-    auto view = m_trx->read_view;
+  } else if (trx->read_view != nullptr) {
+    auto view = trx->read_view;
 
-    if (m_config.m_index->is_clustered()) {
+    if (index->is_clustered()) {
       trx_id_t rec_trx_id;
 
-      if (m_config.m_index->trx_id_offset > 0) {
-        rec_trx_id = trx_read_trx_id(rec + m_config.m_index->trx_id_offset);
+      if (index->trx_id_offset > 0) {
+        rec_trx_id = trx_read_trx_id(rec + index->trx_id_offset);
       } else {
-        rec_trx_id = row_get_rec_trx_id(rec, m_config.m_index, offsets);
+        rec_trx_id = row_get_rec_trx_id(rec, index, offsets);
       }
 
-      if (m_trx->isolation_level > TRX_ISO_READ_UNCOMMITTED &&
+      if (trx->isolation_level > TRX_ISO_READ_UNCOMMITTED &&
           !view->changes_visible(rec_trx_id, table_name)) {
         rec_t *old_vers;
 
-        row_vers_build_for_consistent_read(rec, mtr, m_config.m_index, &offsets,
-                                           view, &heap, heap, &old_vers,
-                                           nullptr, nullptr);
+        row_vers_build_for_consistent_read(rec, mtr, index, &offsets, view,
+                                           &heap, heap, &old_vers, nullptr,
+                                           nullptr);
 
         rec = old_vers;
 
@@ -739,16 +739,25 @@ bool Parallel_reader::Scan_ctx::check_visibility(const rec_t *&rec,
     }
   }
 
-  if (rec_get_deleted_flag(rec, m_config.m_is_compact)) {
+  if (rec_get_deleted_flag(rec, is_compact)) {
     /* This record was deleted in the latest committed version, or it was
     deleted and then reinserted-by-update before purge kicked in. Skip it. */
     return (false);
   }
 
-  ut_ad(!m_trx || m_trx->isolation_level == TRX_ISO_READ_UNCOMMITTED ||
-        !rec_offs_any_null_extern(m_config.m_index, rec, offsets));
+  ut_ad(!trx || trx->isolation_level == TRX_ISO_READ_UNCOMMITTED ||
+        !rec_offs_any_null_extern(index, rec, offsets));
 
   return (true);
+}
+
+bool Parallel_reader::Scan_ctx::check_visibility(const rec_t *&rec,
+                                                 ulint *&offsets,
+                                                 mem_heap_t *&heap,
+                                                 mtr_t *mtr) {
+  return Parallel_reader::check_visibility(m_config.m_index,
+                                           m_config.m_is_compact, m_trx, rec,
+                                           offsets, heap, mtr);
 }
 
 void Parallel_reader::Scan_ctx::copy_row(const rec_t *rec, Iter *iter) const {

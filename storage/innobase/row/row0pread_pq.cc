@@ -219,15 +219,8 @@ bool InnoDB_pq_scan_ctx::check_visibility(const rec_t *&rec,
                                            ulint *&offsets,
                                            mem_heap_t *&heap,
                                            mtr_t *mtr) {
-  /* V2-8F placeholder. Real worker row reads must use the same visibility
-  semantics as upstream Parallel_reader::Scan_ctx::check_visibility(), with
-  the leader statement read view. The disabled row_search_mvcc() latent path is
-  not the selected execution route. */
-  (void)rec;
-  (void)offsets;
-  (void)heap;
-  (void)mtr;
-  return true;
+  return Parallel_reader::check_visibility(m_index, m_is_compact, m_trx, rec,
+                                           offsets, heap, mtr);
 }
 
 /* ============================================================ */

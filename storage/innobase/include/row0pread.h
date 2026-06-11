@@ -142,6 +142,28 @@ class Parallel_reader {
   /** Callback to process the rows. */
   using F = std::function<dberr_t(const Ctx *)>;
 
+  /** Build an old version of the row if required using Parallel_reader
+  visibility semantics.
+
+  This helper is intentionally narrow so internal adapters can reuse the
+  visibility rules without exposing Scan_ctx cursor/range internals.
+
+  @param[in]      index         Clustered index being scanned.
+  @param[in]      is_compact    True for compact row format.
+  @param[in]      trx           Covering transaction, or nullptr.
+  @param[in,out]  rec           Current row read from the index. This can be
+                                modified if an older version is needed.
+  @param[in,out]  offsets       Record offsets.
+  @param[in,out]  heap          Heap to use if a previous version is built.
+  @param[in,out]  mtr           Mini-transaction covering the read.
+  @return true if row is visible to the transaction. */
+  [[nodiscard]] static bool check_visibility(dict_index_t *index,
+                                             bool is_compact,
+                                             const trx_t *trx,
+                                             const rec_t *&rec,
+                                             ulint *&offsets,
+                                             mem_heap_t *&heap, mtr_t *mtr);
+
   /** Specifies the range from where to start the scan and where to end it. */
   struct Scan_range {
     /** Default constructor. */

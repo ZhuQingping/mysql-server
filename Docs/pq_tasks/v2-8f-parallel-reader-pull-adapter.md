@@ -72,6 +72,12 @@ reading rows.
 - 如果必须改 `row0pread.h/cc`，只暴露最小 internal API；
 - 不把 `Scan_ctx` 大量私有结构直接公开给 SQL/handler。
 
+Status: Visibility helper implemented. The core
+`Parallel_reader::Scan_ctx::check_visibility()` logic is now exposed as the
+narrow static helper `Parallel_reader::check_visibility(...)`; `Scan_ctx` and
+`InnoDB_pq_scan_ctx` both call this helper. Cursor/range private structures
+remain private.
+
 ### Step 3: Conversion Smoke
 
 - 用 worker prebuilt template 和 `row_sel_store_mysql_rec()` 转换一行；
@@ -111,22 +117,23 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 - [x] pull adapter internal API 第一段完成；
 - [x] leader active read view gate 明确；
 - [x] whole-range DOP=1 first gate 明确；
-- [ ] 不公开 `Parallel_reader::Scan_ctx` 大量私有状态；
+- [x] visibility helper 抽出，不公开 `Parallel_reader::Scan_ctx` 大量私有状态；
 - [ ] `pq_worker_scan_next()` 仍 disabled；
 - [x] build 和完整 `parallel_query` suite 通过。
 
 ## Current Status
 
-- Status: Gate primitive completed
+- Status: Visibility helper completed
 - Owner: Codex Orchestrator
 - Started: 2026-06-11
 
 ## Completion Report
 
-已完成第一段 gate primitive：
+已完成两段 internal primitive：
 
 - `InnoDB_pq_scan_ctx::has_active_read_view()`；
 - `InnoDB_pq_scan_ctx::validate_pull_adapter_gate()`；
+- `Parallel_reader::check_visibility(...)` narrow static helper；
 - 不读取 row，不接 `pq_worker_scan_next()`，不改变执行状态。
 
 验证：
