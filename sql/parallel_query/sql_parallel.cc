@@ -105,6 +105,13 @@ void pq_set_execution_state(THD *thd, PQ_execution_state state) {
 // PQ_worker_info: transition_status
 // ---------------------------------------------------------------------------
 
+void PQ_worker_info::reset_open_context() {
+  m_open_ctx = PQ_Worker_open_context{};
+  m_open_ctx.worker_thd = m_worker_thd;
+  m_open_ctx.worker_id = m_worker_id;
+  m_open_ctx.mq_handle = m_mq_handle;
+}
+
 bool PQ_worker_info::transition_status(PQ_Worker_status new_status) {
   // Forward-only transition rules:
   // NOT_STARTED -> RUNNING -> FINISHED/ERROR/KILLED/ABORTED
@@ -260,6 +267,8 @@ bool Gather_operator::init() {
   // Wire each worker's MQ handle to the Exchange handle for that worker.
   for (uint32 i = 0; i < m_dop; i++) {
     m_workers[i]->m_mq_handle = m_exchange->get_mq_handle(i);
+    m_workers[i]->reset_open_context();
+    m_workers[i]->m_open_ctx.actual_dop = m_dop;
   }
 
   m_initialized = true;
@@ -274,6 +283,28 @@ err:
   return true;  // Failure
 }
 
+bool Gather_operator::configure_worker_open_contexts(
+    TABLE *leader_table, PQ_Leader_context *leader_ctx, uint actual_dop) {
+  if (!m_initialized || m_workers == nullptr || m_exchange == nullptr ||
+      leader_table == nullptr || leader_ctx == nullptr || actual_dop == 0 ||
+      actual_dop != m_dop) {
+    return true;
+  }
+
+  for (uint32 i = 0; i < m_dop; i++) {
+    auto *worker = m_workers[i];
+    if (worker == nullptr) return true;
+
+    worker->reset_open_context();
+    worker->m_open_ctx.leader_table = leader_table;
+    worker->m_open_ctx.leader_ctx = leader_ctx;
+    worker->m_open_ctx.actual_dop = actual_dop;
+    worker->m_open_ctx.mq_handle = worker->m_mq_handle;
+  }
+
+  return false;
+}
+
 void Gather_operator::destroy() {
   // Clean up worker info array.
   // Note: PQ_worker_manager::cleanup handles the per-worker cleanup.
@@ -283,6 +314,7 @@ void Gather_operator::destroy() {
         // Unlink MQ handle before freeing worker info.
         // Exchange owns the MQ handles, so we don't free them here.
         m_workers[i]->m_mq_handle = nullptr;
+        m_workers[i]->reset_open_context();
         delete m_workers[i];
         m_workers[i] = nullptr;
       }

@@ -80,7 +80,9 @@ Output:
 - 移除 worker end path 的 `reinterpret_cast`。
 
 Status: Completed in contract/gate step. Real worker row production remains
-disabled.
+disabled. `PQ_Worker_open_context` now has stable storage in
+`PQ_worker_info`, and `Gather_operator` configures leader table/context, DOP,
+worker id, and MQ handle metadata after leader probe succeeds.
 
 ### Task 2: Execute Commit Point
 
@@ -234,6 +236,13 @@ struct PQ_Worker_open_context {
 - `sql/parallel_query/pq_iterator.cc`
   - Current fallback-safe bridge call now explicitly uses
     `PQ_leader_scan_mode::PROBE`.
+  - The fallback-safe smoke path now initializes `Gather_operator` once and
+    configures stable worker open carriers before worker lifecycle smoke.
+- `sql/parallel_query/sql_parallel.{h,cc}`
+  - Added `PQ_worker_info::m_open_ctx` as SQL-owned stable storage for
+    `PQ_Worker_open_context`.
+  - Added `Gather_operator::configure_worker_open_contexts()` to wire leader
+    TABLE/context, worker id, actual DOP, and borrowed MQ handle metadata.
 - `storage/innobase/handler/ha_innodb.cc`
   - Added `InnoDB_pq_sql_worker_context final : public PQ_Worker_context`.
   - Added `PQ_leader_scan_mode` handling. `PROBE` keeps the existing
@@ -247,6 +256,18 @@ struct PQ_Worker_open_context {
     TABLE, and independent worker `record[0]`.
 - No real worker TABLE open, read-view pinning, InnoDB row read, or
   `PQ_execution_state::EXECUTED` update was enabled in this step.
+
+## Explorer Findings For Next Step
+
+- Worker independent TABLE open should use `open_ltable()` with a new
+  `Table_ref` built from leader table metadata. Do not reuse leader `TABLE`,
+  handler, record buffer, Field objects, or MDL ticket.
+- Worker `PQ_Worker_open_context` ownership belongs to SQL worker lifecycle,
+  specifically `PQ_worker_info`. InnoDB may reference the carrier but must not
+  own worker TABLE/handler.
+- Cleanup order for real worker path must be: stop/abort producer, wait worker,
+  `pq_worker_scan_end()`, close worker tables via `close_thread_tables()`,
+  release worker transaction/MDL state, then release Exchange MQ resources.
 
 ## Allowed Files
 

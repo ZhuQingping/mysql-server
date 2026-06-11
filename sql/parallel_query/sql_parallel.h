@@ -211,10 +211,16 @@ struct PQ_worker_info {
   int m_error_code{0};              ///< Error code if status == ERROR/KILLED
   MQueue_handle *m_mq_handle{nullptr};  ///< MQ handle for this worker's queue
   PQ_Worker_context *m_worker_ctx{nullptr};  ///< Worker scan context (Phase 6)
+  PQ_Worker_open_context m_open_ctx;  ///< Stable SQL-owned worker open carrier
 
-  PQ_worker_info() = default;
+  PQ_worker_info() { reset_open_context(); }
 
-  explicit PQ_worker_info(uint32 id) : m_worker_id(id) {}
+  explicit PQ_worker_info(uint32 id) : m_worker_id(id) {
+    reset_open_context();
+  }
+
+  /** Reset borrowed open-context fields while preserving worker identity. */
+  void reset_open_context();
 
   /**
     Transition worker status.
@@ -438,6 +444,24 @@ class Gather_operator {
     @retval true   Failure (OOM or invalid DOP)
   */
   bool init();
+
+  /**
+    Configure stable per-worker open contexts after leader probe succeeds.
+
+    This only fills SQL-owned carrier metadata. It does not create worker THDs,
+    open worker TABLE objects, call handler worker init, or enable real row
+    production.
+
+    @param leader_table  Leader TABLE for metadata/reference checks
+    @param leader_ctx    Handler leader context from pq_leader_scan_init()
+    @param actual_dop    Actual DOP selected by the handler
+
+    @retval false  Contexts configured
+    @retval true   Gather is not initialized or input is invalid
+  */
+  bool configure_worker_open_contexts(TABLE *leader_table,
+                                      PQ_Leader_context *leader_ctx,
+                                      uint actual_dop);
 
   /**
     Destroy the Gather_operator: free workers, Exchange, and all MQ resources.

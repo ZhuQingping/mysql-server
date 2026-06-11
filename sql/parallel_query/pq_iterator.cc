@@ -84,7 +84,10 @@ bool PQTableScanIterator::Init() {
   if (error == 0) {
     uint smoke_dop = actual_dop > 0 ? actual_dop : requested_dop;
     m_gather = new Gather_operator(smoke_dop);
-    if (m_gather == nullptr || m_gather->run_worker_lifecycle_smoke(thd())) {
+    if (m_gather == nullptr || m_gather->init() ||
+        m_gather->configure_worker_open_contexts(table(), m_leader_ctx,
+                                                 smoke_dop) ||
+        m_gather->run_worker_lifecycle_smoke(thd())) {
       cleanup_pq_resources(true);
       PrintError(HA_ERR_OUT_OF_MEM);
       return true;
