@@ -408,6 +408,9 @@ void PQTableScanIterator::EndPSIBatchModeIfStarted() {
   if (m_serial_iterator != nullptr) {
     m_serial_iterator->EndPSIBatchModeIfStarted();
   } else {
+    if (m_gather != nullptr || m_leader_ctx != nullptr) {
+      cleanup_pq_resources(true);
+    }
     TableRowIterator::EndPSIBatchModeIfStarted();
   }
 }
