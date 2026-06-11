@@ -31,18 +31,19 @@ InnoDB PQ (Parallel Query) pull-row adapter for clustered full scan.
 TEMPORARY MVP adapter (Phase 6B-2): This file provides InnoDB-internal
 types and a pull-row API for SQL-layer PQ workers.
 
-Key design decisions (V1-MVP temporary):
-1. B+tree partitioning is simplified: creates a single range covering
-   the entire clustered index. Proper multi-range partitioning will
-   use upstream Parallel_reader's partition() in Phase 8 refactor.
-2. Pull-row traversal uses the standard row_search_mvcc() path
-   through the worker's row_prebuilt_t, avoiding reimplementation
-   of low-level InnoDB cursor/mtr/latch APIs.
-3. Read view is owned by leader trx_t; workers access it through
-   the scan context without cloning/copying.
+Key design decisions:
+1. B+tree partitioning currently exports Parallel_reader-planned ranges.
+   DOP=1 real scan will use a single whole clustered range first.
+2. The older row_search_mvcc() pull path is a disabled latent adapter.
+   V2-8D selected the Parallel_reader visibility adapter route for real
+   worker rows, so worker-local row_search_mvcc() must not be wired into
+   PQTableScanIterator::Read().
+3. The leader trx_t owns the statement read view. Workers may only read a
+   leader-equivalent snapshot through controlled visibility adapter code;
+   they must not create independent read views or mutate the leader trx.
 4. PQ_DB_END_OF_RANGE_INT is an internal adapter state (int, not
    dberr_t); never leaked as InnoDB public dberr_t.
-5. Only V1-MVP clustered index full scan is supported.
+5. Only clustered index full scan is supported in the first real path.
 6. Unsupported scenarios fall back to serial execution.
 
 Created 2026-06-02 by Qingping Zhu (PQ Phase 6B-2). */
@@ -151,9 +152,9 @@ class InnoDB_pq_scan_ctx {
 
   /** Check visibility of a record.
 
-  V1-MVP placeholder: actual visibility is handled by
-  row_search_mvcc() through the worker's prebuilt. Direct
-  visibility checking will be added in Phase 8 refactor.
+  V2-8F placeholder: real visibility must follow upstream Parallel_reader
+  semantics using the leader statement read view. The disabled
+  row_search_mvcc() latent path is not the selected real execution route.
 
   @return true (placeholder; real check deferred). */
   bool check_visibility(const rec_t *&rec, ulint *&offsets,
@@ -195,7 +196,8 @@ class InnoDB_pq_ctx {
 
   /** Pull the next visible row and convert to MySQL format.
 
-  Uses row_search_mvcc() through the worker's row_prebuilt_t,
+  Disabled latent adapter that uses row_search_mvcc() through the worker's
+  row_prebuilt_t,
   which naturally handles:
   - MVCC visibility (only after the worker snapshot contract is proven)
   - Record to MySQL format conversion (row_sel_store_mysql_rec)
