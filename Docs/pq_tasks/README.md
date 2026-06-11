@@ -37,6 +37,7 @@
   - [v2-5-worker-thd-minimal-scan.md](v2-5-worker-thd-minimal-scan.md): V2-5 已提交，完成 worker lifecycle smoke observable，真实 row stream 仍未打开。
   - [v2-6-exchange-gather-row-stream.md](v2-6-exchange-gather-row-stream.md): V2-6 已完成验证，先用 synthetic MQ token/row stream 验证 Exchange/Gather，不接真实 InnoDB row。
   - [v2-7-predicate-projection-boundary.md](v2-7-predicate-projection-boundary.md): V2-7 已提交，锁定 leader-side predicate/projection contract，避免提前引入 worker-side Item/JOIN clone。
+  - [v2-8-single-table-fullscan-closure.md](v2-8-single-table-fullscan-closure.md): V2-8 当前任务书，准备真实单表 clustered full scan 闭环。
   - [v2-execution-path-roadmap.md](v2-execution-path-roadmap.md): V2 真实执行路径拆分，覆盖 SQL iterator、worker THD、Exchange/Gather row 流、InnoDB 分片扫描、full scan 闭环和基础聚合。
   - [v2-test-matrix.md](v2-test-matrix.md): V1/V2 阶段化 MTR 测试矩阵，明确 DOP=1 first 和 DOP>1 range-partition gate。
 - Next recommended action: 进入 V2-8 Single Table Full Scan Closure 任务拆分。
@@ -100,6 +101,7 @@ Recommended worktrees:
 | V2-5 - Worker THD + Minimal Worker Scan | Completed | Codex Orchestrator + parallel explorers | [v2-5-worker-thd-minimal-scan.md](v2-5-worker-thd-minimal-scan.md) | Commit `1e8078544e8`; Worker lifecycle smoke 已接入；不打开真实 row stream；完整 suite 通过 |
 | V2-6 - Exchange/Gather Row Stream | Completed | Codex Orchestrator + parallel explorers | [v2-6-exchange-gather-row-stream.md](v2-6-exchange-gather-row-stream.md) | Commit `d0b4988a584`; Synthetic MQ ROW/FINISH stream smoke 已接入；不进入 `Read()`；完整 suite 通过 |
 | V2-7 - Predicate/Projection Boundary | Completed | Codex Orchestrator | [v2-7-predicate-projection-boundary.md](v2-7-predicate-projection-boundary.md) | Commit `1d39b510348`; Boundary MTR 已完成；不打开真实 worker row；完整 suite 通过 |
+| V2-8 - Single Table Full Scan Closure | In Progress | Codex Orchestrator | [v2-8-single-table-fullscan-closure.md](v2-8-single-table-fullscan-closure.md) | 当前任务拆分：真实 row materialization / `Read()` 接管前的硬 gate |
 
 ## Decisions
 
