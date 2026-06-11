@@ -61,12 +61,57 @@ using std::min;
 static bool is_key_scan_ror(RANGE_OPT_PARAM *param, uint keynr, uint nparts);
 static bool eq_ranges_exceeds_limit(const SEL_ROOT *keypart, uint *count,
                                     uint limit);
+struct Quick_range_memory_budget;
 static bool get_ranges_from_tree_given_base(
     THD *thd, MEM_ROOT *return_mem_root, const KEY *table_key, KEY_PART *key,
     SEL_ROOT *key_tree, uchar *const base_min_key, uchar *min_key,
     uint min_key_flag, uchar *const base_max_key, uchar *max_key,
     uint max_key_flag, bool first_keypart_is_asc, uint num_key_parts,
-    uint *used_key_parts, uint *num_exact_key_parts, Quick_ranges *ranges);
+    uint *used_key_parts, uint *num_exact_key_parts, Quick_ranges *ranges,
+    Quick_range_memory_budget *range_mem_budget);
+static bool get_ranges_from_tree_with_budget(
+    MEM_ROOT *return_mem_root, TABLE *table, KEY_PART *key, uint keyno,
+    SEL_ROOT *key_tree, uint num_key_parts, unsigned *used_key_parts,
+    unsigned *num_exact_key_parts, Quick_ranges *ranges,
+    Quick_range_memory_budget *range_mem_budget);
+
+struct Quick_range_memory_budget {
+  explicit Quick_range_memory_budget(ulonglong max_arg)
+      : max(max_arg), used(0), exceeded(false) {}
+
+  bool consume(uint min_length, uint max_length) {
+    if (max == 0) return false;
+
+    /*
+      Match QUICK_RANGE materialization at the allocation site:
+        - one QUICK_RANGE object,
+        - one pointer stored in Quick_ranges,
+        - one copied min key image,
+        - one copied max key image.
+
+      The min and max key images are accounted separately because asymmetric
+      ranges can use different numbers of key parts on each side. For example,
+      one endpoint may be bounded only by the first key part while the other is
+      extended by later key parts. Counting both endpoints as the full used
+      prefix would be safe, but it can reject valid range plans too early.
+    */
+    const ulonglong bytes =
+        sizeof(QUICK_RANGE) + sizeof(QUICK_RANGE *) + min_length + 1 +
+        max_length + 1;
+
+    if (bytes > (~0ULL) - used || used + bytes > max) {
+      exceeded = true;
+      return true;
+    }
+
+    used += bytes;
+    return false;
+  }
+
+  ulonglong max;
+  ulonglong used;
+  bool exceeded;
+};
 
 /* MRR range sequence, SEL_ARG* implementation: stack entry */
 struct RANGE_SEQ_ENTRY {
@@ -775,6 +820,17 @@ bool get_ranges_from_tree(MEM_ROOT *return_mem_root, TABLE *table,
                           KEY_PART *key, uint keyno, SEL_ROOT *key_tree,
                           uint num_key_parts, unsigned *used_key_parts,
                           unsigned *num_exact_key_parts, Quick_ranges *ranges) {
+  return get_ranges_from_tree_with_budget(
+      return_mem_root, table, key, keyno, key_tree, num_key_parts,
+      used_key_parts, num_exact_key_parts, ranges,
+      /*range_mem_budget=*/nullptr);
+}
+
+static bool get_ranges_from_tree_with_budget(
+    MEM_ROOT *return_mem_root, TABLE *table, KEY_PART *key, uint keyno,
+    SEL_ROOT *key_tree, uint num_key_parts, unsigned *used_key_parts,
+    unsigned *num_exact_key_parts, Quick_ranges *ranges,
+    Quick_range_memory_budget *range_mem_budget) {
   *used_key_parts = 0;
   if (key_tree->type != SEL_ROOT::Type::KEY_RANGE) {
     return false;
@@ -786,7 +842,8 @@ bool get_ranges_from_tree(MEM_ROOT *return_mem_root, TABLE *table,
   if (get_ranges_from_tree_given_base(
           current_thd, return_mem_root, &table->key_info[keyno], key, key_tree,
           min_key, min_key, 0, max_key, max_key, 0, first_keypart_is_asc,
-          num_key_parts, used_key_parts, num_exact_key_parts, ranges)) {
+          num_key_parts, used_key_parts, num_exact_key_parts, ranges,
+          range_mem_budget)) {
     return true;
   }
   *num_exact_key_parts = std::min(*num_exact_key_parts, *used_key_parts);
@@ -959,16 +1016,31 @@ AccessPath *get_key_scans_params(THD *thd, RANGE_OPT_PARAM *param,
     return nullptr;
   }
 
+  const uint best_keynr = param->real_keynr[best_idx];
+  Quick_range_memory_budget range_mem_budget(
+      thd->variables.range_optimizer_max_mem_size);
+
   Quick_ranges ranges(param->return_mem_root);
   unsigned used_key_parts, num_exact_key_parts;
-  if (get_ranges_from_tree(param->return_mem_root, param->table,
-                           param->key[best_idx], param->real_keynr[best_idx],
-                           key_to_read, MAX_REF_PARTS, &used_key_parts,
-                           &num_exact_key_parts, &ranges)) {
+  if (get_ranges_from_tree_with_budget(
+          param->return_mem_root, param->table, param->key[best_idx],
+          best_keynr, key_to_read, MAX_REF_PARTS, &used_key_parts,
+          &num_exact_key_parts, &ranges, &range_mem_budget)) {
+    if (range_mem_budget.exceeded) {
+      Opt_trace_object trace_idx(trace);
+      trace_idx.add_utf8("index", param->table->key_info[best_keynr].name)
+          .add("chosen", false)
+          .add("range_count", param->table->quick_n_ranges[best_keynr])
+          .add("quick_range_memory_used", range_mem_budget.used)
+          .add("quick_range_memory_limit", range_mem_budget.max)
+          .add_alnum("cause", "range_optimizer_max_mem_size_exceeded");
+
+      param->error_handler.report_memory_error(thd);
+    }
     return nullptr;
   }
 
-  KEY *used_key = &param->table->key_info[param->real_keynr[best_idx]];
+  KEY *used_key = &param->table->key_info[best_keynr];
 
   AccessPath *path = new (param->return_mem_root) AccessPath;
   path->type = AccessPath::INDEX_RANGE_SCAN;
@@ -1051,6 +1123,10 @@ static inline std::basic_string_view<uchar> make_string_view(const uchar *start,
                         used_key_parts), subsuming conditions touching
                         that key part.
   @param ranges         The ranges to scan
+  @param range_mem_budget  Optional statement budget for QUICK_RANGE metadata.
+                           This is checked with actual endpoint lengths at the
+                           materialization site, before allocating the next
+                           QUICK_RANGE on return_mem_root.
 
   @note Fix this to get all possible sub_ranges
 
@@ -1064,7 +1140,8 @@ static bool get_ranges_from_tree_given_base(
     SEL_ROOT *key_tree, uchar *const base_min_key, uchar *min_key,
     uint min_key_flag, uchar *const base_max_key, uchar *max_key,
     uint max_key_flag, bool first_keypart_is_asc, uint num_key_parts,
-    uint *used_key_parts, uint *num_exact_key_parts, Quick_ranges *ranges) {
+    uint *used_key_parts, uint *num_exact_key_parts, Quick_ranges *ranges,
+    Quick_range_memory_budget *range_mem_budget) {
   const uint part = key_tree->root->part;
   const bool asc = key_tree->root->is_ascending;
 
@@ -1100,7 +1177,7 @@ static bool get_ranges_from_tree_given_base(
                 base_min_key, tmp_min_key, min_key_flag | node->get_min_flag(),
                 base_max_key, tmp_max_key, max_key_flag | node->get_max_flag(),
                 first_keypart_is_asc, num_key_parts - 1, used_key_parts,
-                num_exact_key_parts, ranges)) {
+                num_exact_key_parts, ranges, range_mem_budget)) {
           return true;
         }
         continue;
@@ -1190,11 +1267,17 @@ static bool get_ranges_from_tree_given_base(
     }
 
     assert(!thd->m_mem_cnt.is_error());
+    const uint min_length = (uint)(tmp_min_key - base_min_key);
+    const uint max_length = (uint)(tmp_max_key - base_max_key);
+    if (range_mem_budget != nullptr &&
+        range_mem_budget->consume(min_length, max_length)) {
+      return true;
+    }
+
     /* Get range for retrieving rows in RowIterator::Read() */
     QUICK_RANGE *range = new (return_mem_root) QUICK_RANGE(
-        return_mem_root, base_min_key, (uint)(tmp_min_key - base_min_key),
-        min_part >= 0 ? make_keypart_map(min_part) : 0, base_max_key,
-        (uint)(tmp_max_key - base_max_key),
+        return_mem_root, base_min_key, min_length,
+        min_part >= 0 ? make_keypart_map(min_part) : 0, base_max_key, max_length,
         max_part >= 0 ? make_keypart_map(max_part) : 0, flag,
         node->rkey_func_flag);
     if (range == nullptr || thd->killed) {

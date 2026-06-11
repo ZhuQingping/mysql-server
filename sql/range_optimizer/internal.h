@@ -85,15 +85,9 @@ class Range_optimizer_error_handler : public Internal_error_handler {
       /* Out of memory error is reported only once. Return as handled */
       if (m_is_mem_error && sql_errno == EE_CAPACITY_EXCEEDED) return true;
       if (sql_errno == EE_CAPACITY_EXCEEDED) {
-        m_is_mem_error = true;
+        report_memory_error(thd);
         /* Convert the error into a warning. */
         *level = Sql_condition::SL_WARNING;
-        push_warning_printf(
-            thd, Sql_condition::SL_WARNING, ER_CAPACITY_EXCEEDED,
-            ER_THD(thd, ER_CAPACITY_EXCEEDED),
-            (ulonglong)thd->variables.range_optimizer_max_mem_size,
-            "range_optimizer_max_mem_size",
-            ER_THD(thd, ER_CAPACITY_EXCEEDED_IN_RANGE_OPTIMIZER));
         return true;
       }
     }
@@ -101,6 +95,30 @@ class Range_optimizer_error_handler : public Internal_error_handler {
   }
 
   bool has_errors() const { return m_has_errors; }
+
+  /**
+    Report that range analysis exceeded range_optimizer_max_mem_size.
+
+    Most callers reach this through the internal error handler when a MEM_ROOT
+    with max_capacity set raises EE_CAPACITY_EXCEEDED. Some range optimizer
+    allocations, however, intentionally use return_mem_root because the chosen
+    AccessPath must survive after range analysis. Those allocations are not
+    capped by temp_mem_root, so callers that can predict an excessive permanent
+    allocation use this helper to produce the same user-visible warning and to
+    mark range analysis as unusable.
+  */
+  void report_memory_error(THD *thd) {
+    m_has_errors = true;
+    if (m_is_mem_error) return;
+
+    m_is_mem_error = true;
+    push_warning_printf(
+        thd, Sql_condition::SL_WARNING, ER_CAPACITY_EXCEEDED,
+        ER_THD(thd, ER_CAPACITY_EXCEEDED),
+        (ulonglong)thd->variables.range_optimizer_max_mem_size,
+        "range_optimizer_max_mem_size",
+        ER_THD(thd, ER_CAPACITY_EXCEEDED_IN_RANGE_OPTIMIZER));
+  }
 
  private:
   bool m_has_errors;

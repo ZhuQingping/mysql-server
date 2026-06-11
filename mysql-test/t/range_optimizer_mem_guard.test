@@ -1,0 +1,85 @@
+--source include/have_innodb.inc
+
+--echo #
+--echo # Range optimizer should not materialize excessive QUICK_RANGE objects.
+--echo #
+
+--disable_warnings
+DROP TABLE IF EXISTS t_range_mem_guard;
+DROP TABLE IF EXISTS seq_range_mem_guard;
+--enable_warnings
+
+CREATE TABLE seq_range_mem_guard(n INT PRIMARY KEY);
+
+SET SESSION cte_max_recursion_depth=1100;
+INSERT INTO seq_range_mem_guard
+WITH RECURSIVE cte(n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM cte WHERE n < 1024
+)
+SELECT n FROM cte;
+
+CREATE TABLE t_range_mem_guard (
+  id INT NOT NULL,
+  c1 VARCHAR(32) COLLATE utf8mb4_general_ci NOT NULL,
+  c2 INT NOT NULL,
+  c3 VARCHAR(32) COLLATE utf8mb4_general_ci NOT NULL,
+  c4 VARCHAR(32) COLLATE utf8mb4_general_ci NOT NULL,
+  c5 VARCHAR(32) COLLATE utf8mb4_general_ci NOT NULL,
+  payload VARCHAR(16),
+  PRIMARY KEY(id),
+  KEY k1(c1, c2, c3 DESC, c4 DESC, c5 DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+INSERT INTO t_range_mem_guard
+SELECT (a.n - 1) * 64 + b.n,
+       'x',
+       1,
+       CONCAT('a', LPAD(a.n, 5, '0')),
+       CONCAT('b', LPAD(b.n, 5, '0')),
+       CONCAT('z', LPAD(b.n, 5, '0')),
+       'p'
+FROM seq_range_mem_guard a
+JOIN seq_range_mem_guard b
+WHERE a.n <= 128 AND b.n <= 64;
+
+ANALYZE TABLE t_range_mem_guard;
+
+SET SESSION group_concat_max_len=1024 * 1024;
+SET SESSION range_optimizer_max_mem_size=8388608;
+
+SELECT GROUP_CONCAT(QUOTE(CONCAT('a', LPAD(n, 5, '0'))) ORDER BY n)
+INTO @c3_values
+FROM seq_range_mem_guard;
+
+SELECT GROUP_CONCAT(QUOTE(CONCAT('b', LPAD(n, 5, '0'))) ORDER BY n)
+INTO @c4_values
+FROM seq_range_mem_guard;
+
+SET @range_mem_guard_sql=CONCAT(
+  'EXPLAIN SELECT * FROM t_range_mem_guard FORCE INDEX(k1) ',
+  'WHERE c1 = ''x'' AND c2 = 1 ',
+  'AND c3 IN (', @c3_values, ') ',
+  'AND c4 IN (', @c4_values, ') ',
+  'ORDER BY c3 DESC, c4 DESC, c5 DESC'
+);
+
+SELECT COUNT(*) AS table_rows,
+       1024 * 1024 AS expected_range_count
+FROM t_range_mem_guard;
+
+PREPARE range_mem_guard_stmt FROM @range_mem_guard_sql;
+--disable_warnings
+--replace_column 10 #
+EXECUTE range_mem_guard_stmt;
+--enable_warnings
+SHOW WARNINGS LIMIT 1;
+DEALLOCATE PREPARE range_mem_guard_stmt;
+
+SET SESSION range_optimizer_max_mem_size=DEFAULT;
+SET SESSION group_concat_max_len=DEFAULT;
+SET SESSION cte_max_recursion_depth=DEFAULT;
+
+DROP TABLE t_range_mem_guard;
+DROP TABLE seq_range_mem_guard;
