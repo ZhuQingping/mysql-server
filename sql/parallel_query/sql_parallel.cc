@@ -620,6 +620,14 @@ bool Gather_operator::run_worker_open_table_smoke(THD *leader_thd,
 
   bool failed = pq_open_worker_table(&worker->m_open_ctx);
   if (!failed) {
+    failed = worker->m_open_ctx.worker_handler->pq_worker_scan_init(
+        &worker->m_open_ctx, &worker->m_worker_ctx) != 0;
+  }
+  if (!failed) {
+    worker->m_open_ctx.worker_handler->pq_worker_scan_end(worker->m_worker_ctx);
+    worker->m_worker_ctx = nullptr;
+    pq_global_stats.worker_handler_smoke_runs.fetch_add(
+        1, std::memory_order_relaxed);
     pq_close_worker_table(&worker->m_open_ctx, false);
   }
   pq_destroy_worker_thd(worker);

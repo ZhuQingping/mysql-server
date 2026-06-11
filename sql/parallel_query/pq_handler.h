@@ -107,6 +107,8 @@ struct PQ_Worker_open_context {
 
 enum class PQ_leader_scan_mode : uint { PROBE, EXECUTE };
 
+enum class PQ_Leader_context_kind { GENERIC, INNODB };
+
 enum class PQ_Worker_context_kind { GENERIC, INNODB };
 
 /**
@@ -387,6 +389,10 @@ class PQ_Leader_context {
   PQ_Leader_context(size_t max_threads, bool reverse_scan);
 
   virtual ~PQ_Leader_context();
+
+  virtual PQ_Leader_context_kind kind() const {
+    return PQ_Leader_context_kind::GENERIC;
+  }
 
   size_t max_threads() const { return m_max_threads; }
   bool is_reverse() const { return m_reverse; }

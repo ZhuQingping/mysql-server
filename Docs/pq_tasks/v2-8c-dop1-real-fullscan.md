@@ -259,11 +259,17 @@ struct PQ_Worker_open_context {
   - Added `Parallel_worker_open_smoke_runs` status counter and wired
     `PQTableScanIterator::Init()` to run the DOP=1 open-table smoke after a
     fallback-safe leader probe succeeds.
+  - Added `Parallel_worker_handler_smoke_runs` status counter and extended the
+    safe-window smoke to call `worker_handler->pq_worker_scan_init()` followed
+    immediately by `pq_worker_scan_end()`.
 - `storage/innobase/handler/ha_innodb.cc`
   - Added `InnoDB_pq_sql_worker_context final : public PQ_Worker_context`.
   - Added `PQ_leader_scan_mode` handling. `PROBE` keeps the existing
     fallback-safe partition probe; `EXECUTE` returns unsupported until
     worker TABLE open and read-view ownership are proven safe.
+  - `pq_worker_scan_init()` now creates a typed InnoDB worker context for
+    safe-window smoke when gates pass. It still does not initialize a cursor or
+    read rows.
   - Changed `pq_worker_scan_end()` from `reinterpret_cast` to
     `kind() == INNODB` plus typed `static_cast`.
   - Added conservative contract gates in `pq_worker_scan_init()`:
@@ -273,7 +279,8 @@ struct PQ_Worker_open_context {
 - No real worker OS thread, read-view pinning, InnoDB row read, or
   `PQ_execution_state::EXECUTED` update was enabled in this step. The worker
   THD/TABLE helpers run only as a safe-window smoke and are not yet called from
-  `PQ_worker_manager::start()` for row production.
+  `PQ_worker_manager::start()` for row production. `pq_worker_scan_next()` is
+  still disabled.
 
 ## Explorer Findings For Next Step
 

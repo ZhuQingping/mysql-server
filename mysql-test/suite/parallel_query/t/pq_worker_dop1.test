@@ -51,6 +51,10 @@ SET @pq_open_smoke_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_worker_open_smoke_runs');
+SET @pq_handler_smoke_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_worker_handler_smoke_runs');
 
 SET SESSION parallel_default_dop=1;
 --disable_result_log
@@ -88,7 +92,10 @@ SELECT
     AS worker_smoke_delta,
   (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
    WHERE variable_name = 'Parallel_worker_open_smoke_runs') - @pq_open_smoke_before
-    >= 1 AS worker_open_smoke_ran;
+    >= 1 AS worker_open_smoke_ran,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_worker_handler_smoke_runs') - @pq_handler_smoke_before
+    >= 1 AS worker_handler_smoke_ran;
 
 SET SESSION parallel_query=OFF;
 SET SESSION parallel_default_dop=4;

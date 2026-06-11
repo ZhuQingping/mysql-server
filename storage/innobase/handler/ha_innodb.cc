@@ -10868,6 +10868,10 @@ class InnoDB_pq_sql_leader_context final : public PQ_Leader_context {
                           innodb_ctx != nullptr && innodb_ctx->is_reverse()),
         m_innodb_ctx(innodb_ctx) {}
 
+  PQ_Leader_context_kind kind() const override {
+    return PQ_Leader_context_kind::INNODB;
+  }
+
   std::shared_ptr<PQ_Scan_ctx> make_scan_ctx(
       void *handler_specific [[maybe_unused]],
       const PQ_Config &config [[maybe_unused]]) override {
@@ -11083,8 +11087,14 @@ int ha_innobase::pq_worker_scan_init(PQ_Worker_open_context *open_ctx,
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 
-  if (open_ctx->leader_ctx != m_pq_sql_leader_ctx ||
-      m_pq_leader_ctx == nullptr || m_pq_leader_ctx->n_ranges() != 1) {
+  if (open_ctx->leader_ctx->kind() != PQ_Leader_context_kind::INNODB) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  auto sql_leader =
+      static_cast<InnoDB_pq_sql_leader_context *>(open_ctx->leader_ctx);
+  auto innodb_leader = sql_leader->innodb_ctx();
+  if (innodb_leader == nullptr || innodb_leader->n_ranges() == 0) {
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 
@@ -11099,10 +11109,24 @@ int ha_innobase::pq_worker_scan_init(PQ_Worker_open_context *open_ctx,
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 
-  /* V2-8C contract gate: real worker row production remains disabled until
-  worker TABLE open, read-view pinning, and first-row positioning are proven
-  safe. */
-  return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  auto innodb_worker = ut::new_withkey<InnoDB_pq_worker_ctx>(
+      UT_NEW_THIS_FILE_PSI_KEY, open_ctx->worker_id, innodb_leader);
+  if (innodb_worker == nullptr) {
+    return pq_map_dberr_to_handler_error(DB_OUT_OF_MEMORY, nullptr);
+  }
+
+  auto sql_worker = ut::new_withkey<InnoDB_pq_sql_worker_context>(
+      UT_NEW_THIS_FILE_PSI_KEY, *sql_leader, innodb_worker, open_ctx);
+  if (sql_worker == nullptr) {
+    ut::delete_(innodb_worker);
+    return pq_map_dberr_to_handler_error(DB_OUT_OF_MEMORY, nullptr);
+  }
+
+  m_pq_worker_ctxs.push_back(innodb_worker);
+  if (worker_ctx != nullptr) {
+    *worker_ctx = sql_worker;
+  }
+  return 0;
 }
 
 /**
