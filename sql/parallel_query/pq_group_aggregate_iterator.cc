@@ -84,10 +84,12 @@ const PQ_integer_group_state *pq_find_group(const PQ_integer_group_state *groups
 }  // namespace
 
 unique_ptr_destroy_only<RowIterator> TryCreatePQGroupAggregateIterator(
-    THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *aggregate_path) {
+    THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *aggregate_path,
+    unique_ptr_destroy_only<RowIterator> *child_iterator) {
   (void)mem_root;
 
-  if (thd == nullptr || join == nullptr || aggregate_path == nullptr) {
+  if (thd == nullptr || join == nullptr || aggregate_path == nullptr ||
+      child_iterator == nullptr) {
     return nullptr;
   }
 
@@ -122,10 +124,13 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQGroupAggregateIterator(
 }
 
 unique_ptr_destroy_only<RowIterator> TryCreatePQTemptableGroupAggregateIterator(
-    THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *aggregate_path) {
+    THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *aggregate_path,
+    unique_ptr_destroy_only<RowIterator> *subquery_iterator,
+    unique_ptr_destroy_only<RowIterator> *table_iterator) {
   (void)mem_root;
 
-  if (thd == nullptr || join == nullptr || aggregate_path == nullptr) {
+  if (thd == nullptr || join == nullptr || aggregate_path == nullptr ||
+      subquery_iterator == nullptr || table_iterator == nullptr) {
     return nullptr;
   }
 

@@ -40,10 +40,13 @@ struct MEM_ROOT;
   executable path.
 */
 unique_ptr_destroy_only<RowIterator> TryCreatePQGroupAggregateIterator(
-    THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *aggregate_path);
+    THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *aggregate_path,
+    unique_ptr_destroy_only<RowIterator> *child_iterator);
 
 unique_ptr_destroy_only<RowIterator> TryCreatePQTemptableGroupAggregateIterator(
-    THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *aggregate_path);
+    THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *aggregate_path,
+    unique_ptr_destroy_only<RowIterator> *subquery_iterator,
+    unique_ptr_destroy_only<RowIterator> *table_iterator);
 
 bool RunPQGroupAggregateTypedStateSmoke(uint32 *groups_built,
                                         uint64 *sum_total);

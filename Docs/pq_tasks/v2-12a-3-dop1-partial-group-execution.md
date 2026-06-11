@@ -259,7 +259,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 ## 当前状态
 
-状态：V2-12A-3.4c factory observability Completed；真实 GROUP BY SQL result 接管仍未打开。
+状态：V2-12A-3.4d ownership carrier Completed；真实 GROUP BY SQL result 接管仍未打开。
 
 已完成：
 
@@ -273,6 +273,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - 在 `AccessPath::TEMPTABLE_AGGREGATE` 分支接入 factory skeleton；
 - 新增 `Parallel_groupby_dop1_factory_attempts` / `Parallel_groupby_dop1_factory_fallback`，验证 gate ON + DOP=1 时 GROUP BY factory hook 可观测；
 - 新增 `pq_groupby_dop1_factory_observable`，确认 factory hook 仍返回 `nullptr` 并保持原生 GROUP BY 结果正确。
+- `TryCreatePQGroupAggregateIterator()` / `TryCreatePQTemptableGroupAggregateIterator()` 已接收 child iterator ownership carrier 指针，后续真实 iterator 可在通过白名单后显式 `std::move()` 接管；当前仍不移动 ownership。
 
 验证：
 
@@ -415,3 +416,38 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 - V2-12A-3.4d 进入 `TEMPTABLE_AGGREGATE` SQL result smoke 设计/实现；
 - 需要先扩展 factory 接口，使其能接收 `subquery_iterator`、`table_iterator`、`Temp_table_param`、output `TABLE` 和 `ref_slice`；
 - 真实接管必须复用临时表输出链路，不直接向客户端发送 row。
+
+### V2-12A-3.4d Ownership Carrier
+
+状态：Completed。
+
+目标：
+
+- 在 `AccessPath::AGGREGATE` factory 中接收 child iterator ownership carrier；
+- 在 `AccessPath::TEMPTABLE_AGGREGATE` factory 中接收 `subquery_iterator` 和 `table_iterator` ownership carrier；
+- 本步骤不移动 child ownership，不创建真实 PQ group iterator，不改变原生执行结果；
+- 后续只有在 shape 白名单完全通过后，factory 才能 `std::move()` child iterator 并返回真实 iterator。
+
+实现：
+
+- `TryCreatePQGroupAggregateIterator(..., unique_ptr_destroy_only<RowIterator> *child_iterator)`；
+- `TryCreatePQTemptableGroupAggregateIterator(..., unique_ptr_destroy_only<RowIterator> *subquery_iterator, unique_ptr_destroy_only<RowIterator> *table_iterator)`；
+- `access_path.cc` 在原生 iterator 创建前传入 `job.children[]` 地址；
+- factory 继续返回 `nullptr`，原生 `AggregateIterator` / `TemptableAggregateIterator` 保持唯一执行路径。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_dop1_factory_observable pq_groupby_diagnostics \
+  pq_groupby_typed_state_smoke \
+  --parallel=1 --vardir=/tmp/pqv_groupby_carrier \
+  --tmpdir=/tmp/pqt_groupby_carrier
+```
+
+下一步：
+
+- 扩展 factory 参数读取 `Temp_table_param`、output `TABLE` 和 `ref_slice`；
+- 新增只读/diagnostic 白名单 helper，确认 `GROUP BY int_col COUNT(*)` 的 temp-table shape；
+- 仍不修改 `TemptableAggregateIterator` 和 `item_sum.*`。

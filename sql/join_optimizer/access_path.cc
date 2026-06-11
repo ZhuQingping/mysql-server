@@ -890,7 +890,8 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
         Prealloced_array<TABLE *, 4> tables =
             GetUsedTables(param.child, /*include_pruned_tables=*/true);
         auto pq_iter =
-            TryCreatePQGroupAggregateIterator(thd, mem_root, join, path);
+            TryCreatePQGroupAggregateIterator(thd, mem_root, join, path,
+                                              &job.children[0]);
         if (pq_iter != nullptr) {
           iterator = std::move(pq_iter);
         } else {
@@ -922,7 +923,7 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
         }
 
         auto pq_iter = TryCreatePQTemptableGroupAggregateIterator(
-            thd, mem_root, join, path);
+            thd, mem_root, join, path, &job.children[0], &job.children[1]);
         if (pq_iter != nullptr) {
           iterator = std::move(pq_iter);
         } else {
