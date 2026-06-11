@@ -802,3 +802,54 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - 扩展 typed-state 到 MIN/MAX（先保持整数 Field::store 语义）；
 - SUM 需要单独处理 DECIMAL/REAL result field 与 overflow/all-NULL 语义，不与 MIN/MAX 混在一个提交里推进；
 - nullable group key 和 hash group key 继续保持保守路径或后续显式设计。
+
+### V2-12A-3.10 MIN/MAX Typed-State Temp-Table Output
+
+状态：Completed。
+
+目标：
+
+- 将 `MIN(int_col)` / `MAX(int_col)` 的最小安全范围切到 typed-state 聚合后一次性写 temp table rows；
+- 保持 `SUM(int_col)` 在 legacy temp-table update loop，等待 DECIMAL/overflow 语义单独收敛；
+- 增加独立状态变量，确认 MIN/MAX typed path 被执行。
+
+实现边界：
+
+- 新增 `pq_accumulate_min_max_group()`；
+- 新路径只在以下条件同时满足时启用：
+  - 非 hash group key；
+  - 单 group key；
+  - key 临时表输出字段为 NOT NULL signed integer；
+  - 单个 `MIN` 或 `MAX` aggregate；
+  - aggregate 参数是 signed integer base field；
+  - aggregate result field 是整数类型；
+- all-NULL group 输出 NULL，非 NULL group 使用 `Field::store(longlong, false)` 写结果；
+- 新增 `Parallel_groupby_dop1_typed_minmax_executed` 状态变量；
+- `pq_groupby_dop1_sum_min_max` 验证 MIN/MAX typed path delta；
+- `pq_stats` 更新 Parallel 状态变量数量为 36。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_dop1_sum_min_max pq_stats \
+  pq_groupby_dop1_factory_observable pq_groupby_dop1_unsupported \
+  --parallel=1 --vardir=/tmp/pqv_minmax_verify \
+  --tmpdir=/tmp/pqt_minmax_verify
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full_minmax \
+  --tmpdir=/tmp/pqt_full_minmax
+```
+
+结果：
+
+- `cmake --build build-ninja --target mysqld -j 16` 通过；
+- targeted MIN/MAX suite 通过；
+- 完整 `parallel_query` suite 通过，共 57 项。
+
+SUM 后续结论：
+
+- `SUM(INT)` 通常是 DECIMAL result，不应简单等同于整数 result field；
+- 如果 partial state 保证在 int64 内，`Field_new_decimal::store(longlong, bool)` 可写入，但完整 MySQL SUM 语义允许超过 int64；
+- 下一步 SUM typed-state 需要单独 gate signed non-BIGINT 输入、检测 int64 overflow、处理 all-NULL 输出 NULL，并增加 unsigned/BIGINT/overflow fallback 用例。

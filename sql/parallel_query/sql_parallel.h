@@ -209,6 +209,7 @@ struct PQ_global_stats {
   std::atomic<uint64> groupby_dop1_native_delegate_executed{0};  ///< Native delegate
   std::atomic<uint64> groupby_dop1_temp_table_executed{0};  ///< PQ temp-table path
   std::atomic<uint64> groupby_dop1_typed_count_executed{0};  ///< Typed COUNT path
+  std::atomic<uint64> groupby_dop1_typed_minmax_executed{0};  ///< Typed MIN/MAX
   std::atomic<uint64> groupby_dop1_factory_fallback{0};  ///< Native fallback
   std::atomic<uint64> groupby_temp_shape_supported{0};  ///< Temp shape ok
   std::atomic<uint64> groupby_temp_shape_unsupported{0};  ///< Temp shape reject
@@ -247,6 +248,7 @@ struct PQ_global_stats {
     groupby_dop1_native_delegate_executed.store(0, std::memory_order_relaxed);
     groupby_dop1_temp_table_executed.store(0, std::memory_order_relaxed);
     groupby_dop1_typed_count_executed.store(0, std::memory_order_relaxed);
+    groupby_dop1_typed_minmax_executed.store(0, std::memory_order_relaxed);
     groupby_dop1_factory_fallback.store(0, std::memory_order_relaxed);
     groupby_temp_shape_supported.store(0, std::memory_order_relaxed);
     groupby_temp_shape_unsupported.store(0, std::memory_order_relaxed);
