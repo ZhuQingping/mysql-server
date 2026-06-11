@@ -747,3 +747,58 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 下一步：
 
 - 推进 PQ partial state merge，逐步替换 leader-local temp-table update loop 的 aggregate state 来源。
+
+### V2-12A-3.9 COUNT Typed-State Temp-Table Output
+
+状态：Completed。
+
+目标：
+
+- 将最小安全范围的 `GROUP BY int_not_null, COUNT(*)` 从逐输入行更新 temp table，切到 typed-state 聚合后一次性写 temp table rows；
+- 保留 SUM/MIN/MAX 现有 temp-table update loop，避免在本步骤引入 DECIMAL、overflow、all-NULL 语义风险；
+- 增加可观测状态变量，确认新路径真实执行。
+
+实现边界：
+
+- 新增 `PQ_count_group_state`，按单个 NOT NULL signed integer group key 累计 COUNT；
+- 新路径只在以下条件同时满足时启用：
+  - 非 hash group key；
+  - 单 group key；
+  - key 临时表输出字段为 NOT NULL signed integer；
+  - 单个 `COUNT` aggregate；
+  - COUNT 参数不可为 NULL（覆盖 `COUNT(*)` / `COUNT(non_nullable_expr)`）；
+- 写最终输出行时使用 `(*table->group->item)->get_tmp_table_field()` 写 group key，使用 `Item_sum::get_result_field()` 写 COUNT 结果；
+- 新增 `Parallel_groupby_dop1_typed_count_executed` 状态变量；
+- `pq_groupby_dop1_factory_observable` 验证 typed COUNT path delta；
+- `pq_stats` 更新 Parallel 状态变量数量为 35。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_dop1_factory_observable pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_typed_count_verify \
+  --tmpdir=/tmp/pqt_typed_count_verify
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_dop1_sum_min_max pq_groupby_dop1_unsupported \
+  pq_groupby_typed_state_smoke \
+  --parallel=1 --vardir=/tmp/pqv_groupby_typed_reg \
+  --tmpdir=/tmp/pqt_groupby_typed_reg
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full_typed_count \
+  --tmpdir=/tmp/pqt_full_typed_count
+```
+
+结果：
+
+- `cmake --build build-ninja --target mysqld -j 16` 通过；
+- COUNT typed path targeted suite 通过；
+- GROUP BY SUM/MIN/MAX 与 unsupported 回归通过。
+- 完整 `parallel_query` suite 通过，共 57 项。
+
+下一步：
+
+- 扩展 typed-state 到 MIN/MAX（先保持整数 Field::store 语义）；
+- SUM 需要单独处理 DECIMAL/REAL result field 与 overflow/all-NULL 语义，不与 MIN/MAX 混在一个提交里推进；
+- nullable group key 和 hash group key 继续保持保守路径或后续显式设计。

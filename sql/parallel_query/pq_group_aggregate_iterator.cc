@@ -24,6 +24,7 @@
 
 #include <utility>
 
+#include "prealloced_array.h"                 // Prealloced_array
 #include "sql/iterators/row_iterator.h"         // TableRowIterator
 #include "sql/join_optimizer/access_path.h"  // AccessPath
 #include "sql/item_sum.h"                    // Item_sum
@@ -112,6 +113,26 @@ struct PQ_integer_group_state {
   bool has_value{false};
 };
 
+struct PQ_count_group_state {
+  longlong key{0};
+  ulonglong count{0};
+};
+
+bool pq_accumulate_count_group(Prealloced_array<PQ_count_group_state, 16> *groups,
+                               longlong key) {
+  for (PQ_count_group_state &group : *groups) {
+    if (group.key == key) {
+      ++group.count;
+      return false;
+    }
+  }
+
+  PQ_count_group_state group;
+  group.key = key;
+  group.count = 1;
+  return groups->push_back(group);
+}
+
 bool pq_accumulate_integer_group(PQ_integer_group_state *groups,
                                  uint32 *group_count, int64 key, int64 value,
                                  bool value_is_null) {
@@ -172,6 +193,10 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
     if (m_subquery_iterator == nullptr || m_table_iterator == nullptr ||
         m_temp_table_param == nullptr || m_join == nullptr) {
       return true;
+    }
+
+    if (can_use_typed_count_path()) {
+      return InitTypedCountPath();
     }
 
     m_join->set_ref_item_slice(REF_SLICE_SAVED_BASE);
@@ -365,6 +390,136 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
 
  private:
   bool using_hash_key() const { return table()->hash_field; }
+
+  bool can_use_typed_count_path() const {
+    if (using_hash_key() || table()->group == nullptr ||
+        table()->group->next != nullptr || table()->group->item == nullptr ||
+        *table()->group->item == nullptr || m_join->sum_funcs == nullptr ||
+        m_join->sum_funcs[0] == nullptr || m_join->sum_funcs[1] != nullptr) {
+      return false;
+    }
+
+    Item_sum *sum = m_join->sum_funcs[0];
+    Field *key_field = (*table()->group->item)->get_tmp_table_field();
+    Field *result_field = sum->get_result_field();
+    if (sum->sum_func() != Item_sum::COUNT_FUNC || key_field == nullptr ||
+        result_field == nullptr || key_field->is_nullable() ||
+        key_field->is_unsigned()) {
+      return false;
+    }
+
+    /*
+      The typed COUNT path counts every input row. That is correct for
+      COUNT(*) and COUNT(non_nullable_expr), but not for COUNT(nullable_expr).
+    */
+    return sum->argument_count() == 1 && sum->arguments() != nullptr &&
+           sum->arguments()[0] != nullptr &&
+           !sum->arguments()[0]->is_nullable();
+  }
+
+  bool prepare_table_for_materialization() {
+    if (!table()->is_created()) {
+      if (instantiate_tmp_table(thd(), table())) {
+        return true;
+      }
+      empty_record(table());
+    } else {
+      if (table()->file->inited) {
+        table()->file->ha_index_or_rnd_end();
+      }
+      table()->file->ha_delete_all_rows();
+    }
+    return false;
+  }
+
+  bool InitTypedCountPath() {
+    m_join->set_ref_item_slice(REF_SLICE_SAVED_BASE);
+
+    if (m_subquery_iterator->Init()) {
+      return true;
+    }
+
+    if (prepare_table_for_materialization()) {
+      return true;
+    }
+
+    if (table()->file->ha_index_init(0, false)) {
+      return true;
+    }
+    auto end_unique_index =
+        create_scope_guard([&] { table()->file->ha_index_end(); });
+
+    Field *key_field = (*table()->group->item)->get_tmp_table_field();
+    Item_sum *sum = m_join->sum_funcs[0];
+    Field *result_field = sum->get_result_field();
+    if (key_field == nullptr || result_field == nullptr) {
+      return true;
+    }
+
+    Prealloced_array<PQ_count_group_state, 16> groups(PSI_NOT_INSTRUMENTED);
+
+    PFSBatchMode pfs_batch_mode(m_subquery_iterator.get());
+    for (;;) {
+      int read_error = m_subquery_iterator->Read();
+      if (read_error > 0 || thd()->is_error()) {
+        return true;
+      }
+      if (read_error < 0) {
+        break;
+      }
+      if (thd()->killed) {
+        thd()->send_kill_message();
+        return true;
+      }
+
+      if (copy_funcs(m_temp_table_param, thd(), CFT_FIELDS)) {
+        return true;
+      }
+
+      if (key_field->is_null()) {
+        return true;
+      }
+
+      if (pq_accumulate_count_group(&groups, key_field->val_int())) {
+        return true;
+      }
+    }
+
+    for (const PQ_count_group_state &group : groups) {
+      empty_record(table());
+      key_field->set_notnull();
+      key_field->store(group.key, false);
+
+      result_field->set_notnull();
+      result_field->store(static_cast<longlong>(group.count), true);
+
+      int error = table()->file->ha_write_row(table()->record[0]);
+      if (error != 0) {
+        if (move_table_to_disk(error, true)) {
+          end_unique_index.release();
+          return true;
+        }
+      }
+    }
+
+    table()->file->ha_index_end();
+    end_unique_index.release();
+
+    table()->materialized = true;
+
+    if (m_table_iterator->Init()) {
+      return true;
+    }
+
+    if (!m_executed_counted) {
+      pq_global_stats.groupby_dop1_temp_table_executed.fetch_add(
+          1, std::memory_order_relaxed);
+      pq_global_stats.groupby_dop1_typed_count_executed.fetch_add(
+          1, std::memory_order_relaxed);
+      m_executed_counted = true;
+    }
+    return false;
+  }
 
   bool move_table_to_disk(int error, bool was_insert) {
     if (create_ondisk_from_heap(thd(), table(), error, was_insert,
