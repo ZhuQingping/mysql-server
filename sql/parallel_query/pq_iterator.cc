@@ -316,6 +316,12 @@ int PQTableScanIterator::Read() {
     }
 
     if (status == Exchange_nosort::Materialize_status::EOF_REACHED) {
+      if (!m_executed_counted) {
+        pq_set_execution_state(thd(), PQ_execution_state::EXECUTED);
+        pq_global_stats.queries_executed.fetch_add(1,
+                                                   std::memory_order_relaxed);
+        m_executed_counted = true;
+      }
       cleanup_pq_resources(false);
       return -1;
     }

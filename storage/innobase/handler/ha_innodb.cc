@@ -11137,7 +11137,7 @@ int ha_innobase::pq_worker_scan_init(PQ_Worker_open_context *open_ctx,
   auto sql_leader =
       static_cast<InnoDB_pq_sql_leader_context *>(open_ctx->leader_ctx);
   auto innodb_leader = sql_leader->innodb_ctx();
-  if (innodb_leader == nullptr || innodb_leader->n_ranges() == 0) {
+  if (innodb_leader == nullptr) {
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 

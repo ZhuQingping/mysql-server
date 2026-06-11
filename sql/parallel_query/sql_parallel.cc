@@ -189,6 +189,10 @@ bool pq_open_worker_table(PQ_Worker_open_context *open_ctx) {
   }
 
   open_ctx->worker_table = worker_table;
+  bitmap_copy(worker_table->read_set, leader_table->read_set);
+  bitmap_copy(worker_table->write_set, leader_table->write_set);
+  worker_table->column_bitmaps_set_no_signal(worker_table->read_set,
+                                             worker_table->write_set);
   open_ctx->worker_handler = worker_table->file;
   return false;
 }
@@ -965,6 +969,11 @@ bool pq_run_callback_limited_producer_task(PQ_worker_info *worker,
   }
 
   bool failed = pq_open_worker_table(&worker->m_open_ctx);
+  bool rnd_inited = false;
+  if (!failed) {
+    failed = worker->m_open_ctx.worker_handler->ha_rnd_init(true) != 0;
+    rnd_inited = !failed;
+  }
   if (!failed) {
     failed = worker->m_open_ctx.worker_handler->pq_worker_scan_init(
         &worker->m_open_ctx, &worker->m_worker_ctx) != 0;
@@ -982,8 +991,7 @@ bool pq_run_callback_limited_producer_task(PQ_worker_info *worker,
                                                    &row_sink) != 0;
   }
   if (!failed) {
-    failed = row_sink.rows_sent() == 0 ||
-             nosort->enqueue_finish_smoke(worker->m_worker_id);
+    failed = nosort->enqueue_finish_smoke(worker->m_worker_id);
   }
 
   if (worker->m_worker_ctx != nullptr &&
@@ -991,6 +999,9 @@ bool pq_run_callback_limited_producer_task(PQ_worker_info *worker,
     worker->m_open_ctx.worker_handler->pq_worker_scan_end(
         worker->m_worker_ctx);
     worker->m_worker_ctx = nullptr;
+  }
+  if (rnd_inited && worker->m_open_ctx.worker_handler != nullptr) {
+    worker->m_open_ctx.worker_handler->ha_rnd_end();
   }
   if (worker->m_open_ctx.worker_table != nullptr) {
     pq_close_worker_table(&worker->m_open_ctx, failed);
