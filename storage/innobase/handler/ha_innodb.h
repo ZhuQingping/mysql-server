@@ -80,6 +80,7 @@ struct row_prebuilt_t;
 
 class PQ_Leader_context;
 class PQ_Worker_context;
+struct PQ_Worker_open_context;
 
 /** InnoDB PQ pull-row adapter: leader context (clustered full scan). */
 class InnoDB_pq_leader_ctx;
@@ -501,11 +502,10 @@ class ha_innobase : public handler {
     V2-3: worker row production is disabled until workers have independent
     handler/prebuilt/trx/read-view state. Returns HA_ERR_UNSUPPORTED.
 
-    @param[in]  worker_thd   Worker thread THD.
-    @param[in]  leader_ctx   Leader context (must be InnoDB_pq_leader_ctx).
+    @param[in]  open_ctx     Worker open context carrying THD/TABLE/handler.
     @param[out] worker_ctx   Output worker context (set to nullptr on error).
   */
-  int pq_worker_scan_init(THD *worker_thd, PQ_Leader_context *leader_ctx,
+  int pq_worker_scan_init(PQ_Worker_open_context *open_ctx,
                           PQ_Worker_context **worker_ctx) override;
 
   /**
@@ -513,7 +513,7 @@ class ha_innobase : public handler {
 
     V2-3: disabled until worker-side mutable scan state is defined.
 
-    @param[in]   worker_ctx  Worker context (must be InnoDB_pq_worker_ctx).
+    @param[in]   worker_ctx  Worker context (must be typed InnoDB wrapper).
     @param[out]  record       MySQL row buffer (table->record[0]).
     @param[out]  eof          Set to true when range is exhausted.
   */

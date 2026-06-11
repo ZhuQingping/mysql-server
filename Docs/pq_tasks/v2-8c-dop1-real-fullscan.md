@@ -79,12 +79,18 @@ Output:
 - InnoDB 新增 typed wrapper，拥有或引用 worker internal ctx；
 - 移除 worker end path 的 `reinterpret_cast`。
 
+Status: Completed in contract/gate step. Real worker row production remains
+disabled.
+
 ### Task 2: Execute Commit Point
 
 - `pq_leader_scan_init()` 区分 probe 与 execute mode；
 - probe 只建可释放上下文，不绑定 read view；
 - execute mode 在 fallback 不再允许的点绑定 read view；
 - commit point 后错误走 fatal，不 serial fallback。
+
+Status: Pending. Current code still uses probe-style leader init and serial
+fallback.
 
 ### Task 3: DOP=1 Worker Row Path
 
@@ -93,6 +99,10 @@ Output:
 - worker 读取 row 到 worker-local record buffer；
 - 通过 V2-8B typed row image protocol 发送给 leader；
 - leader `Read()` materialize 后返回 `0`。
+
+Status: Partially gated. `pq_worker_scan_init()` now rejects non-DOP=1,
+non-single-range, BLOB, shared TABLE/record, and non-current-handler contexts,
+but still returns unsupported before real row production.
 
 ### Task 4: Counters / State
 
@@ -208,6 +218,27 @@ struct PQ_Worker_open_context {
   - secondary index、ICP、partition、reverse scan、ORDER/GROUP/JOIN、
     worker-side Item/JOIN clone。
 
+## Contract/Gate Implementation Summary
+
+- `sql/parallel_query/pq_handler.h`
+  - Added `PQ_Worker_open_context` as the SQL-visible carrier for worker THD,
+    worker TABLE, worker handler, leader TABLE/context, worker id, DOP, and MQ
+    handle.
+  - Added `PQ_Worker_context_kind` and virtual `PQ_Worker_context::kind()` so
+    engine cleanup can identify typed contexts without RTTI.
+- `sql/handler.h`
+  - Changed `pq_worker_scan_init()` to take `PQ_Worker_open_context *`.
+- `storage/innobase/handler/ha_innodb.cc`
+  - Added `InnoDB_pq_sql_worker_context final : public PQ_Worker_context`.
+  - Changed `pq_worker_scan_end()` from `reinterpret_cast` to
+    `kind() == INNODB` plus typed `static_cast`.
+  - Added conservative contract gates in `pq_worker_scan_init()`:
+    `actual_dop == 1`, current worker handler, current leader ctx,
+    `m_pq_leader_ctx->n_ranges() == 1`, no BLOB fields, independent worker
+    TABLE, and independent worker `record[0]`.
+- No real worker TABLE open, read-view pinning, InnoDB row read, or
+  `PQ_execution_state::EXECUTED` update was enabled in this step.
+
 ## Allowed Files
 
 - `sql/parallel_query/pq_handler.*`
@@ -242,29 +273,45 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 ## Acceptance Checklist
 
 - [x] 两个 V2-8C explorer 完成；
-- [ ] worker context typed wrapper 完成；
+- [x] worker context typed wrapper 完成；
 - [ ] probe/execute mode 和 commit point 完成；
-- [ ] DOP=1 single range gate 完成；
-- [ ] BLOB/TEXT/JSON real execution gate 完成；
+- [x] DOP=1 single range gate 完成；
+- [x] BLOB/TEXT/JSON real execution gate 完成；
 - [ ] leader `Read()` 真实 materialize row；
 - [ ] post-start error 不 fallback；
 - [ ] counters/state 只在真实 row path 更新；
 - [ ] `pq_fullscan_real_dop1` 通过；
-- [ ] 完整 `parallel_query` suite 通过。
+- [x] 完整 `parallel_query` suite 通过。
 
 ## Current Status
 
-- Status: Design Confirmed
+- Status: Contract/Gate Implemented
 - Owner: Codex Orchestrator
 - Started: 2026-06-11
 - Confirmed: 2026-06-11
+- Contract/Gate Implemented: 2026-06-11
 - Agents:
   - `Meitner`: Worker Open / TABLE Handler Boundary completed
   - `Hilbert`: InnoDB Worker Wrapper / DOP=1 Scan completed
 
 ## Completion Report
 
-V2-8C 两个只读确认已完成。结论：真实 DOP=1 full scan 只能在 worker THD
-打开完整独立 `TABLE`、InnoDB typed worker wrapper 消除 `reinterpret_cast`、并且
-worker-local trx/read view 能安全绑定到 leader statement snapshot 后打开。若 read view
-一致性无法证明，V2-8C 必须继续 fallback。
+V2-8C 两个只读确认已完成，且 contract/gate 第一段已实现。当前代码已经具备
+`PQ_Worker_open_context`、typed InnoDB worker wrapper、DOP=1/single-range/blob/
+independent TABLE/record gate，并清除了 `pq_worker_scan_end()` 的
+`reinterpret_cast` hard gate。
+
+真实 DOP=1 full scan 仍未打开。后续必须继续完成 probe/execute mode、read-view
+commit point、worker THD 完整 open TABLE、first row `index_first()` 等价定位、
+leader `Read()` 真实 materialization 和 post-start fatal error path。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir=/tmp/pqt
+```
+
+结果：`mysqld` build 通过；完整 `parallel_query` suite 通过，18 个测试加
+`shutdown_report` 共 19 项成功。

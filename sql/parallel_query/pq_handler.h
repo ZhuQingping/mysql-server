@@ -77,12 +77,35 @@ constexpr int PQ_DB_END_OF_RANGE = 1504;
 constexpr int PQ_DB_NOT_FOUND = 1505;
 
 // Forward declarations for base classes
+class MQueue_handle;
 class PQ_Slice;
 class PQ_Range;
 class PQ_Scan_ctx;
 class PQ_Ctx;
 class PQ_Leader_context;
 class PQ_Worker_context;
+class THD;
+class handler;
+struct TABLE;
+
+/**
+  Worker open carrier for V2 real execution.
+
+  The SQL worker layer owns this carrier. Engine-specific worker contexts may
+  reference these objects but must not own the worker TABLE or handler.
+*/
+struct PQ_Worker_open_context {
+  THD *worker_thd{nullptr};
+  TABLE *worker_table{nullptr};
+  handler *worker_handler{nullptr};
+  TABLE *leader_table{nullptr};
+  PQ_Leader_context *leader_ctx{nullptr};
+  uint worker_id{0};
+  uint actual_dop{0};
+  MQueue_handle *mq_handle{nullptr};
+};
+
+enum class PQ_Worker_context_kind { GENERIC, INNODB };
 
 /**
   Specifies the scan range boundaries.
@@ -423,6 +446,10 @@ class PQ_Worker_context {
 
   virtual ~PQ_Worker_context() = default;
 
+  virtual PQ_Worker_context_kind kind() const {
+    return PQ_Worker_context_kind::GENERIC;
+  }
+
   /**
     Pick a PQ_Ctx for execution based on ref key.
 
@@ -485,8 +512,10 @@ const char *pq_worker_status_to_string(PQ_Worker_status status);
                             size_t *dop_out);
     Leader initializes partitioning, fixes read view, returns actual DOP.
 
-  - int pq_worker_scan_init(uint keyno, void *scan_ctx);
-    Worker binds handler/table/record buffer to scan context.
+  - int pq_worker_scan_init(PQ_Worker_open_context *open_ctx,
+                            PQ_Worker_context **worker_ctx);
+    Worker binds an independently opened worker TABLE/handler/record buffer to
+    scan context.
 
   - int pq_worker_scan_next(uchar *buf);
     Worker pulls one row into buf, returns 0/HA_ERR_END_OF_FILE/error.

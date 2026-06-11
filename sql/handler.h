@@ -89,6 +89,7 @@ class handler;
 class partition_info;
 class PQ_Leader_context;
 class PQ_Worker_context;
+struct PQ_Worker_open_context;
 struct System_status_var;
 
 namespace dd {
@@ -4914,9 +4915,9 @@ class handler {
   }
 
   /** Initialize worker-side pull-row scan context. */
-  virtual int pq_worker_scan_init(THD *worker_thd [[maybe_unused]],
-                                  PQ_Leader_context *leader_ctx [[maybe_unused]],
-                                  PQ_Worker_context **worker_ctx) {
+  virtual int pq_worker_scan_init(
+      PQ_Worker_open_context *open_ctx [[maybe_unused]],
+      PQ_Worker_context **worker_ctx) {
     if (worker_ctx != nullptr) *worker_ctx = nullptr;
     return HA_ERR_UNSUPPORTED;
   }

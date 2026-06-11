@@ -10880,6 +10880,34 @@ class InnoDB_pq_sql_leader_context final : public PQ_Leader_context {
   InnoDB_pq_leader_ctx *m_innodb_ctx{nullptr};
 };
 
+class InnoDB_pq_sql_worker_context final : public PQ_Worker_context {
+ public:
+  InnoDB_pq_sql_worker_context(InnoDB_pq_sql_leader_context &leader,
+                               InnoDB_pq_worker_ctx *innodb_ctx,
+                               PQ_Worker_open_context *open_ctx)
+      : PQ_Worker_context(leader.is_reverse(), leader),
+        m_innodb_ctx(innodb_ctx),
+        m_open_ctx(open_ctx) {}
+
+  ~InnoDB_pq_sql_worker_context() override {
+    if (m_innodb_ctx != nullptr) {
+      ut::delete_(m_innodb_ctx);
+      m_innodb_ctx = nullptr;
+    }
+  }
+
+  PQ_Worker_context_kind kind() const override {
+    return PQ_Worker_context_kind::INNODB;
+  }
+
+  InnoDB_pq_worker_ctx *innodb_ctx() const { return m_innodb_ctx; }
+  PQ_Worker_open_context *open_ctx() const { return m_open_ctx; }
+
+ private:
+  InnoDB_pq_worker_ctx *m_innodb_ctx{nullptr};
+  PQ_Worker_open_context *m_open_ctx{nullptr};
+};
+
 /**
   Initialize InnoDB PQ leader scan for clustered full scan.
 
@@ -11026,20 +11054,44 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
   and is not safe to share with worker THDs. Return unsupported until a worker
   handler/prebuilt/trx/read-view contract exists.
 
-  @param[in]  worker_thd   Worker thread THD
-  @param[in]  leader_ctx   Leader context (PQ_Leader_context*; unused in 6B-2)
+  @param[in]  open_ctx     Worker open context; used only for V2-8C gates
   @param[out] worker_ctx   Output worker context
   @return 0 on success, handler error code on failure
 */
-int ha_innobase::pq_worker_scan_init(THD *worker_thd,
-                                     PQ_Leader_context *leader_ctx,
+int ha_innobase::pq_worker_scan_init(PQ_Worker_open_context *open_ctx,
                                      PQ_Worker_context **worker_ctx) {
-  (void)worker_thd;
-  (void)leader_ctx;
   if (worker_ctx != nullptr) {
     *worker_ctx = nullptr;
   }
 
+  if (open_ctx == nullptr || open_ctx->leader_ctx == nullptr ||
+      open_ctx->worker_thd == nullptr || open_ctx->worker_table == nullptr ||
+      open_ctx->worker_handler == nullptr ||
+      open_ctx->worker_handler != this ||
+      open_ctx->worker_table == open_ctx->leader_table ||
+      open_ctx->actual_dop != 1) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  if (open_ctx->leader_ctx != m_pq_sql_leader_ctx ||
+      m_pq_leader_ctx == nullptr || m_pq_leader_ctx->n_ranges() != 1) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  if (open_ctx->worker_table->s != nullptr &&
+      open_ctx->worker_table->s->blob_fields > 0) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  if (open_ctx->worker_table->record[0] == nullptr ||
+      (open_ctx->leader_table != nullptr &&
+       open_ctx->worker_table->record[0] == open_ctx->leader_table->record[0])) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  /* V2-8C contract gate: real worker row production remains disabled until
+  worker TABLE open, read-view pinning, and first-row positioning are proven
+  safe. */
   return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
 }
 
@@ -11048,7 +11100,7 @@ int ha_innobase::pq_worker_scan_init(THD *worker_thd,
 
   V2-3: disabled until workers have independent mutable scan state.
 
-  @param[in]   worker_ctx  Worker context (PQ_Worker_context*; unused in 6B-2)
+  @param[in]   worker_ctx  Worker context (PQ_Worker_context*; unused in V2-8C gate)
   @param[out]  record       MySQL row buffer (table->record[0])
   @param[out]  eof          True when range is exhausted
   @return 0 on success, handler error code on failure
@@ -11072,23 +11124,30 @@ int ha_innobase::pq_worker_scan_next(PQ_Worker_context *worker_ctx,
 
   Phase 6B-2: Real implementation with idempotent cleanup.
 
-  @param[in]  worker_ctx  Worker context (unused in 6B-2; cleanup is
-              done from internal m_pq_worker_ctxs).
+  @param[in]  worker_ctx  Typed worker context wrapper. Unknown context kinds
+              are ignored for idempotent cleanup.
   @return 0 always (cleanup errors are logged, not returned).
 */
 int ha_innobase::pq_worker_scan_end(PQ_Worker_context *worker_ctx) {
-  auto innodb_worker = reinterpret_cast<InnoDB_pq_worker_ctx *>(worker_ctx);
-  if (innodb_worker == nullptr) {
+  if (worker_ctx == nullptr) {
     return 0;
   }
+
+  if (worker_ctx->kind() != PQ_Worker_context_kind::INNODB) {
+    return 0;
+  }
+
+  auto sql_worker =
+      static_cast<InnoDB_pq_sql_worker_context *>(worker_ctx);
+  auto innodb_worker = sql_worker->innodb_ctx();
 
   auto it = std::find(m_pq_worker_ctxs.begin(), m_pq_worker_ctxs.end(),
                       innodb_worker);
   if (it != m_pq_worker_ctxs.end()) {
-    ut::delete_(*it);
     m_pq_worker_ctxs.erase(it);
   }
 
+  ut::delete_(sql_worker);
   return 0;
 }
 
