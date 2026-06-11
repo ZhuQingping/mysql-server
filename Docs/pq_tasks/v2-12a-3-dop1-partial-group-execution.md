@@ -259,7 +259,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 ## 当前状态
 
-状态：V2-12A-3.4e temp-table carrier Completed；真实 GROUP BY SQL result 接管仍未打开。
+状态：V2-12A-3.4f temp-table shape helper Completed；真实 GROUP BY SQL result 接管仍未打开。
 
 已完成：
 
@@ -275,6 +275,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - 新增 `pq_groupby_dop1_factory_observable`，确认 factory hook 仍返回 `nullptr` 并保持原生 GROUP BY 结果正确。
 - `TryCreatePQGroupAggregateIterator()` / `TryCreatePQTemptableGroupAggregateIterator()` 已接收 child iterator ownership carrier 指针，后续真实 iterator 可在通过白名单后显式 `std::move()` 接管；当前仍不移动 ownership。
 - `TryCreatePQTemptableGroupAggregateIterator()` 已接收 `Temp_table_param`、output `TABLE` 和 `ref_slice`，后续真实 iterator 可复用原生 temp-table 输出链路；当前仍返回 `nullptr`。
+- 新增 temp-table shape helper，识别 `GROUP BY` 单个整数 key + 单个 `COUNT(*)` 的候选形态，并通过 status counter 观察；当前仍不放开 eligibility、不移动 ownership、不接管输出。
 
 验证：
 
@@ -484,3 +485,42 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 
 - 新增只读 shape helper，识别 `GROUP BY int_col COUNT(*)` 的 temp-table 参数布局；
 - 在 helper 可观测后，再决定是否创建真正的 PQ temp-table group iterator。
+
+### V2-12A-3.4f Temp-table Shape Helper
+
+状态：Completed。
+
+目标：
+
+- 在 factory 内只读识别 `GROUP BY int_col, COUNT(*)` 的 temp-table 聚合形态；
+- 通过 status counter 区分 supported/unsupported shape；
+- 不改变 eligibility，显式 GROUP BY 仍可因 `GROUP_BY_PARTIAL_AGG_UNSUPPORTED` 走原生路径；
+- 不接管 child iterator ownership，不写 temp table。
+
+实现：
+
+- 新增 `Parallel_groupby_temp_shape_supported`；
+- 新增 `Parallel_groupby_temp_shape_unsupported`；
+- shape 条件：
+  - `Temp_table_param::group_parts == 1`；
+  - `Temp_table_param::sum_func_count == 1`；
+  - `table->group` 单一 group key；
+  - group key tmp field 为整数类型；
+  - `join->sum_funcs` 中只有一个 `Item_sum::COUNT_FUNC`，且非 distinct。
+- 扩展 `pq_groupby_dop1_factory_observable` 验证 gate ON 后可观察到 supported shape。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_dop1_factory_observable pq_stats pq_groupby_diagnostics \
+  pq_groupby_typed_state_smoke \
+  --parallel=1 --vardir=/tmp/pqv_groupby_shape \
+  --tmpdir=/tmp/pqt_groupby_shape
+```
+
+下一步：
+
+- 增加 eligibility 白名单，但仍先返回 native fallback；
+- 再实现真正的 `TEMPTABLE_AGGREGATE` PQ iterator，复用 temp table output contract。

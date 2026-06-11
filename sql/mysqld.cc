@@ -9906,6 +9906,26 @@ static int show_pq_groupby_dop1_factory_fallback(THD *, SHOW_VAR *var,
   return 0;
 }
 
+static int show_pq_groupby_temp_shape_supported(THD *, SHOW_VAR *var,
+                                                char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.groupby_temp_shape_supported.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_groupby_temp_shape_unsupported(THD *, SHOW_VAR *var,
+                                                  char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.groupby_temp_shape_unsupported.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
 static int show_pq_groupby_typed_smoke_sum(THD *, SHOW_VAR *var, char *buf) {
   var->type = SHOW_LONGLONG;
   var->value = buf;
@@ -10319,6 +10339,12 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_groupby_dop1_factory_fallback",
      (char *)&show_pq_groupby_dop1_factory_fallback, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_groupby_temp_shape_supported",
+     (char *)&show_pq_groupby_temp_shape_supported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_groupby_temp_shape_unsupported",
+     (char *)&show_pq_groupby_temp_shape_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_groupby_typed_smoke_groups",
      (char *)&show_pq_groupby_typed_smoke_groups, SHOW_FUNC,

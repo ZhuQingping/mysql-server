@@ -206,6 +206,8 @@ struct PQ_global_stats {
   std::atomic<uint64> exchange_partial_group_smoke_finishes{0};  ///< FINISH
   std::atomic<uint64> groupby_dop1_factory_attempts{0};  ///< GROUP BY hook
   std::atomic<uint64> groupby_dop1_factory_fallback{0};  ///< Native fallback
+  std::atomic<uint64> groupby_temp_shape_supported{0};  ///< Temp shape ok
+  std::atomic<uint64> groupby_temp_shape_unsupported{0};  ///< Temp shape reject
   std::atomic<uint64> groupby_typed_smoke_groups{0};  ///< Typed groups built
   std::atomic<uint64> groupby_typed_smoke_sum{0};     ///< Typed SUM check
   std::atomic<uint64> callback_smoke_attempts{0};  ///< Callback smoke attempts
@@ -238,6 +240,8 @@ struct PQ_global_stats {
     exchange_partial_group_smoke_finishes.store(0, std::memory_order_relaxed);
     groupby_dop1_factory_attempts.store(0, std::memory_order_relaxed);
     groupby_dop1_factory_fallback.store(0, std::memory_order_relaxed);
+    groupby_temp_shape_supported.store(0, std::memory_order_relaxed);
+    groupby_temp_shape_unsupported.store(0, std::memory_order_relaxed);
     groupby_typed_smoke_groups.store(0, std::memory_order_relaxed);
     groupby_typed_smoke_sum.store(0, std::memory_order_relaxed);
     callback_smoke_attempts.store(0, std::memory_order_relaxed);
