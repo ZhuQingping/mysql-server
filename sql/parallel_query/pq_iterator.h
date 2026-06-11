@@ -64,6 +64,8 @@
 #include "my_base.h"             // ha_rows
 #include "sql/iterators/row_iterator.h"
 
+#include <cassert>
+
 class THD;
 struct TABLE;
 class JOIN;
@@ -145,8 +147,32 @@ class PQTableScanIterator final : public TableRowIterator {
   void EndPSIBatchModeIfStarted() override;
 
  private:
+  enum class Runtime_state {
+    SAFE_FALLBACK,
+    PQ_STARTED,
+    PQ_ROW_RETURNED,
+  };
+
   /** Release any PQ resources owned by this iterator. */
   void cleanup_pq_resources(bool abort_workers);
+
+  /** @return true while serial fallback is still allowed. */
+  bool can_fallback_serial() const {
+    return m_runtime_state == Runtime_state::SAFE_FALLBACK;
+  }
+
+  /** Mark the no-fallback point where real workers or row stream start. */
+  void mark_pq_started() {
+    assert(can_fallback_serial());
+    m_runtime_state = Runtime_state::PQ_STARTED;
+  }
+
+  /** Mark that a real PQ row has been returned to the SQL executor. */
+  void mark_pq_row_returned() {
+    assert(m_runtime_state == Runtime_state::PQ_STARTED ||
+           m_runtime_state == Runtime_state::PQ_ROW_RETURNED);
+    m_runtime_state = Runtime_state::PQ_ROW_RETURNED;
+  }
 
   MEM_ROOT *m_mem_root;        ///< MEM_ROOT used for owned fallback iterator
   JOIN *m_join;                ///< JOIN context for PQ eligibility
@@ -156,6 +182,7 @@ class PQTableScanIterator final : public TableRowIterator {
   unique_ptr_destroy_only<RowIterator> m_serial_iterator;  ///< V2-1 fallback
   PQ_Leader_context *m_leader_ctx{nullptr};  ///< Handler leader context
   Gather_operator *m_gather{nullptr};        ///< Worker lifecycle owner
+  Runtime_state m_runtime_state{Runtime_state::SAFE_FALLBACK};
   bool m_fallback_counted{false};  ///< Count per query iterator, not per Init()
 };
 

@@ -133,6 +133,7 @@ bool PQTableScanIterator::Init() {
   // V2-1 safe fallback window: no worker, Gather/Exchange, or row stream has
   // been initialized. Build the same serial table scan the caller would have
   // built when TryCreatePQTableScanIterator returned nullptr.
+  assert(can_fallback_serial());
   if (m_serial_iterator == nullptr) {
     m_serial_iterator = NewIterator<TableScanIterator>(
         thd(), m_mem_root, table(), m_expected_rows, m_examined_rows);
