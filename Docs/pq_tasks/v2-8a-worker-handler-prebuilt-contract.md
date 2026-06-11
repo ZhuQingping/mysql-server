@@ -74,6 +74,33 @@ V2-8A 是 V2-8 真实 full scan 闭环前的设计 gate。目标是明确 worker
 - DOP=2/4 前必须补的 no-duplicate/no-missing gate；
 - row image 生成位置建议。
 
+### Local Range Dispatch Findings
+
+- `storage/innobase/row/row0pread_pq.cc:217`
+  `InnoDB_pq_ctx::read_record()` 当前只在首次读取时调用
+  `row_search_mvcc(..., ROW_SEL_EXACT, 0)` 定位到 clustered index 起点，
+  后续调用 `ROW_SEL_NEXT`。它没有使用 `InnoDB_pq_range::m_start` /
+  `m_end` boundary。
+- `storage/innobase/row/row0pread_pq.cc:366`
+  `InnoDB_pq_leader_ctx::dispatch_next_range()` 通过普通
+  `m_next_range_id++` 分配 range；当前没有 mutex/atomic。真实并发 worker
+  下不能直接使用。
+- `storage/innobase/row/row0pread_pq.cc:138`
+  `InnoDB_pq_scan_ctx::partition()` 已将
+  `Parallel_reader::export_scan_ranges()` 的 boundary 深拷贝进
+  `InnoDB_pq_iter`，所以 boundary metadata 已存在，缺的是 scan 使用它。
+- V2-8C 若只做 DOP=1 real full scan，可暂时接受 whole-index scan；
+  但必须显式 gate：`actual_dop == 1` 且只 dispatch 一个 range，否则结果会
+  重复或漏读。
+- V2-8D 前必须补：
+  - range start seek；
+  - end boundary 截断；
+  - dispatch_next_range 线程安全；
+  - no duplicate / no missing MTR。
+- Row image 生成建议先沿用 `row_search_mvcc()` 写入 worker-side
+  MySQL record buffer，然后通过 MQ copy record image 给 leader；
+  不建议 V2-8A 引入低层 InnoDB rec 转 MySQL record 的新转换路径。
+
 ## Allowed Files For V2-8A
 
 - `Docs/pq_tasks/README.md`
