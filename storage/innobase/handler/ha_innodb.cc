@@ -10920,7 +10920,8 @@ class InnoDB_pq_sql_worker_context final : public PQ_Worker_context {
 
   V2-3: this function is still used as a DOP=1 bridge probe before serial
   fallback, so it must not create or pin a transaction read view. Real row
-  production will need a separate execution init boundary before workers read.
+  production must use EXECUTE mode as the no-fallback commit point before
+  workers read.
 
   Conservative behavior: any unsupported scenario returns
   HA_ERR_UNSUPPORTED, causing fallback to serial execution.
@@ -10928,12 +10929,14 @@ class InnoDB_pq_sql_worker_context final : public PQ_Worker_context {
 
   @param[in]  leader_thd      Leader thread THD
   @param[out] leader_ctx      Output leader context
+  @param[in]  mode            PROBE is fallback-safe; EXECUTE is commit point
   @param[in]  requested_dop   Requested DOP
   @param[in]  reverse         Reverse scan (unsupported in V1-MVP)
   @return 0 on success, handler error code on failure
 */
 int ha_innobase::pq_leader_scan_init(THD *leader_thd,
                                      PQ_Leader_context **leader_ctx,
+                                     PQ_leader_scan_mode mode,
                                      uint requested_dop, uint *actual_dop,
                                      bool reverse) {
   if (leader_ctx != nullptr) {
@@ -10951,6 +10954,13 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
 
   /* V1-MVP: reverse scan is not supported. */
   if (reverse) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  /* V2-8C contract: PROBE is allowed to build fallback-safe partition
+  metadata. EXECUTE is the future read-view binding commit point and remains
+  disabled until worker TABLE open and snapshot ownership are proven safe. */
+  if (mode != PQ_leader_scan_mode::PROBE) {
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 

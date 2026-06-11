@@ -89,8 +89,10 @@ disabled.
 - execute mode 在 fallback 不再允许的点绑定 read view；
 - commit point 后错误走 fatal，不 serial fallback。
 
-Status: Pending. Current code still uses probe-style leader init and serial
-fallback.
+Status: Partially completed. `pq_leader_scan_init()` now has explicit
+`PROBE`/`EXECUTE` mode. Current iterator still calls `PROBE` and serial
+fallback; `EXECUTE` remains unsupported until the read-view commit point is
+implemented.
 
 ### Task 3: DOP=1 Worker Row Path
 
@@ -228,8 +230,15 @@ struct PQ_Worker_open_context {
     engine cleanup can identify typed contexts without RTTI.
 - `sql/handler.h`
   - Changed `pq_worker_scan_init()` to take `PQ_Worker_open_context *`.
+  - Changed `pq_leader_scan_init()` to take `PQ_leader_scan_mode`.
+- `sql/parallel_query/pq_iterator.cc`
+  - Current fallback-safe bridge call now explicitly uses
+    `PQ_leader_scan_mode::PROBE`.
 - `storage/innobase/handler/ha_innodb.cc`
   - Added `InnoDB_pq_sql_worker_context final : public PQ_Worker_context`.
+  - Added `PQ_leader_scan_mode` handling. `PROBE` keeps the existing
+    fallback-safe partition probe; `EXECUTE` returns unsupported until
+    worker TABLE open and read-view ownership are proven safe.
   - Changed `pq_worker_scan_end()` from `reinterpret_cast` to
     `kind() == INNODB` plus typed `static_cast`.
   - Added conservative contract gates in `pq_worker_scan_init()`:
@@ -274,7 +283,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 
 - [x] 两个 V2-8C explorer 完成；
 - [x] worker context typed wrapper 完成；
-- [ ] probe/execute mode 和 commit point 完成；
+- [ ] probe/execute mode 和 commit point 完成；已具备 mode API，commit point 未打开；
 - [x] DOP=1 single range gate 完成；
 - [x] BLOB/TEXT/JSON real execution gate 完成；
 - [ ] leader `Read()` 真实 materialize row；

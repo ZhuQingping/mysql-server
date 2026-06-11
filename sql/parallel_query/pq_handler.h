@@ -105,6 +105,8 @@ struct PQ_Worker_open_context {
   MQueue_handle *mq_handle{nullptr};
 };
 
+enum class PQ_leader_scan_mode : uint { PROBE, EXECUTE };
+
 enum class PQ_Worker_context_kind { GENERIC, INNODB };
 
 /**
@@ -501,16 +503,12 @@ const char *pq_worker_status_to_string(PQ_Worker_status status);
   Phase 2 records these signatures so that Phase 5 (plan rewrite)
   and Phase 6 (InnoDB full scan) know what handler API to call.
 
-  Note: These are NOT virtual methods added to handler. Instead,
-  InnoDB's ha_innobase subclass will add them as public methods,
-  and the SQL-layer PQ code will call them via down_cast<ha_innobase*>
-  after eligibility check confirms InnoDB engine. This avoids
-  polluting the generic handler interface.
-
-  Proposed handler PQ API:
-  - int pq_leader_scan_init(uint keyno, void **scan_ctx_out,
-                            size_t *dop_out);
-    Leader initializes partitioning, fixes read view, returns actual DOP.
+  Current handler PQ API:
+  - int pq_leader_scan_init(THD *leader_thd, PQ_Leader_context **leader_ctx,
+                            PQ_leader_scan_mode mode, uint requested_dop,
+                            uint *actual_dop, bool reverse);
+    Leader initializes partitioning. PROBE must remain fallback-safe; EXECUTE
+    is the future no-fallback commit point for read-view binding.
 
   - int pq_worker_scan_init(PQ_Worker_open_context *open_ctx,
                             PQ_Worker_context **worker_ctx);

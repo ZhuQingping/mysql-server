@@ -89,6 +89,7 @@ class handler;
 class partition_info;
 class PQ_Leader_context;
 class PQ_Worker_context;
+enum class PQ_leader_scan_mode : uint;
 struct PQ_Worker_open_context;
 struct System_status_var;
 
@@ -4907,6 +4908,7 @@ class handler {
   */
   virtual int pq_leader_scan_init(THD *leader_thd [[maybe_unused]],
                                   PQ_Leader_context **leader_ctx,
+                                  PQ_leader_scan_mode mode [[maybe_unused]],
                                   uint requested_dop [[maybe_unused]],
                                   uint *actual_dop, bool reverse [[maybe_unused]]) {
     if (leader_ctx != nullptr) *leader_ctx = nullptr;

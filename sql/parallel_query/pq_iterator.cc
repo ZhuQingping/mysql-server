@@ -79,7 +79,8 @@ bool PQTableScanIterator::Init() {
   uint requested_dop = thd()->variables.parallel_default_dop;
   if (requested_dop == 0) requested_dop = 1;
   int error = table()->file->pq_leader_scan_init(
-      thd(), &m_leader_ctx, requested_dop, &actual_dop, false);
+      thd(), &m_leader_ctx, PQ_leader_scan_mode::PROBE, requested_dop,
+      &actual_dop, false);
   if (error == 0) {
     uint smoke_dop = actual_dop > 0 ? actual_dop : requested_dop;
     m_gather = new Gather_operator(smoke_dop);

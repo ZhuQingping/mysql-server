@@ -80,6 +80,7 @@ struct row_prebuilt_t;
 
 class PQ_Leader_context;
 class PQ_Worker_context;
+enum class PQ_leader_scan_mode : uint;
 struct PQ_Worker_open_context;
 
 /** InnoDB PQ pull-row adapter: leader context (clustered full scan). */
@@ -493,8 +494,8 @@ class ha_innobase : public handler {
     @param[in]  reverse         True if reverse scan (unsupported in V1-MVP).
   */
   int pq_leader_scan_init(THD *leader_thd, PQ_Leader_context **leader_ctx,
-                          uint requested_dop, uint *actual_dop,
-                          bool reverse) override;
+                          PQ_leader_scan_mode mode, uint requested_dop,
+                          uint *actual_dop, bool reverse) override;
 
   /**
     Initialize InnoDB-specific Parallel Query worker scan state.
