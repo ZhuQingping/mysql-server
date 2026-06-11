@@ -41,6 +41,7 @@
 
 #include "my_base.h"
 #include "my_dbug.h"
+#include "sql/debug_sync.h"
 #include "sql/iterators/basic_row_iterators.h"  // TableScanIterator
 #include "sql/iterators/timing_iterator.h"     // NewIterator
 #include "sql/mysqld.h"       // innodb_hton
@@ -204,6 +205,7 @@ bool PQTableScanIterator::Init() {
         PrintError(HA_ERR_INTERNAL_ERROR);
         return true;
       }
+      DEBUG_SYNC(thd(), "pq_read_threaded_worker_started");
       DBUG_EXECUTE_IF("pq_read_threaded_shadow_abort_after_start", {
         cleanup_pq_resources(true);
         PrintError(HA_ERR_INTERNAL_ERROR);

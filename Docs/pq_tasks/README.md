@@ -5,7 +5,7 @@
 ## Current Summary
 
 - Last synced: 2026-06-11
-- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0、V2-1、V2-2、V2-3、V2-4、V2-5、V2-6、V2-7 已提交；V2-8A worker handler/prebuilt contract design 已完成；V2-8B Row Image Protocol 已完成；V2-8C contract/gate 第一段、leader probe/execute mode API、worker open context carrier 生命周期、worker THD/TABLE helper、safe-window open-table smoke 和 handler init/end smoke 已实现；V2-8D 已完成 first-row/read-view 方案选型；V2-8E EXECUTE commit point primitive 已完成；V2-8F callback conversion smoke primitive 已完成；V2-8G EXECUTE callback smoke observability 已完成；V2-8H row stream activation boundary 已完成；V2-8I iterator runtime state contract 已完成；V2-8J-1 callback row producer smoke 已完成；V2-8J-2 worker producer FINISH/EOF、ERROR 和 abort skeleton 已完成；V2-8J-3 `Read()` shadow path scaffold 已完成并增加 PROBE guard；V2-8J-4 PROBE 诊断计数、Exchange materialize status helper、ROW-only enqueue helper、callback multi-row producer API、SQL 层 limited multi-row producer smoke、`Read()` wait/kill policy、PROBE unsupported 细分诊断、首次 PROBE gate 修复、debug shadow first-row MTR 和 debug shadow 2-row/EOF producer 已完成；V2-8K worker thread lifecycle、debug threaded callback producer 和 ERROR/abort/EOF hardening 已完成；V2-8L debug threaded projection/WHERE/empty EOF 语义边界已完成；V2-8M 默认 OFF 实验变量保护路径已完成。
+- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0、V2-1、V2-2、V2-3、V2-4、V2-5、V2-6、V2-7 已提交；V2-8A worker handler/prebuilt contract design 已完成；V2-8B Row Image Protocol 已完成；V2-8C contract/gate 第一段、leader probe/execute mode API、worker open context carrier 生命周期、worker THD/TABLE helper、safe-window open-table smoke 和 handler init/end smoke 已实现；V2-8D 已完成 first-row/read-view 方案选型；V2-8E EXECUTE commit point primitive 已完成；V2-8F callback conversion smoke primitive 已完成；V2-8G EXECUTE callback smoke observability 已完成；V2-8H row stream activation boundary 已完成；V2-8I iterator runtime state contract 已完成；V2-8J-1 callback row producer smoke 已完成；V2-8J-2 worker producer FINISH/EOF、ERROR 和 abort skeleton 已完成；V2-8J-3 `Read()` shadow path scaffold 已完成并增加 PROBE guard；V2-8J-4 PROBE 诊断计数、Exchange materialize status helper、ROW-only enqueue helper、callback multi-row producer API、SQL 层 limited multi-row producer smoke、`Read()` wait/kill policy、PROBE unsupported 细分诊断、首次 PROBE gate 修复、debug shadow first-row MTR 和 debug shadow 2-row/EOF producer 已完成；V2-8K worker thread lifecycle、debug threaded callback producer 和 ERROR/abort/EOF hardening 已完成；V2-8L debug threaded projection/WHERE/empty EOF 语义边界已完成；V2-8M 默认 OFF 实验变量保护路径已完成；V2-8N threaded external KILL 验证已完成。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
@@ -64,6 +64,7 @@
   - V2-8K-3 threaded hardening: 本轮提交，新增 worker ERROR token 和 abort-after-start cleanup MTR，完整 suite 增至 23 个测试
   - V2-8L threaded semantics: 本轮提交，修复 worker read_set/prebuilt lifecycle、空表 EOF 和 EOF-before-first-row executed counter，完整 suite 增至 24 个测试
   - V2-8M experimental threaded gate: 本轮提交，新增 `parallel_query_experimental_threaded_dop1`，无 debug 下显式启用 DOP=1 threaded full scan，完整 suite 增至 25 个测试
+  - V2-8N threaded external KILL: 本轮提交，新增 `pq_read_threaded_worker_started` debug sync 点和 external `KILL QUERY` cleanup MTR
   - V2-1: `9a58ff94cdf` Add PQ V2-1 iterator safe fallback
   - V2-0: `a420e8a3f26` Add PQ V2-0 execution state contract
   - Phase 8: `113d2ba44c1` Add PQ phase 8 V1 completion scaffolding
@@ -99,9 +100,10 @@
   - [v2-8k-worker-thread-producer.md](v2-8k-worker-thread-producer.md): V2-8K-1/2/3 已完成 worker thread lifecycle scaffold、debug-only threaded callback producer、worker ERROR 和 abort/EOF cleanup hardening。
   - [v2-8l-threaded-semantics-boundary.md](v2-8l-threaded-semantics-boundary.md): V2-8L 已完成 debug-only threaded projection/WHERE/empty EOF 语义边界。
   - [v2-8m-experimental-threaded-gate.md](v2-8m-experimental-threaded-gate.md): V2-8M 已完成默认 OFF 的实验变量保护路径。
+  - [v2-8n-threaded-external-kill.md](v2-8n-threaded-external-kill.md): V2-8N 已完成 debug-only threaded external `KILL QUERY` cleanup 验证。
   - [v2-execution-path-roadmap.md](v2-execution-path-roadmap.md): V2 真实执行路径拆分，覆盖 SQL iterator、worker THD、Exchange/Gather row 流、InnoDB 分片扫描、full scan 闭环和基础聚合。
   - [v2-test-matrix.md](v2-test-matrix.md): V1/V2 阶段化 MTR 测试矩阵，明确 DOP=1 first 和 DOP>1 range-partition gate。
-- Next recommended action: 保持实验变量默认 OFF；下一步补齐 external KILL 测试、DOP>1 range correctness 或基础聚合真实执行路径，`pq_worker_scan_next()` 继续 disabled。
+- Next recommended action: 保持实验变量默认 OFF；下一步补齐基础聚合 threaded 覆盖、DOP>1 Exchange 多队列前置验证或 DOP>1 range correctness，`pq_worker_scan_next()` 继续 disabled。
 - Parallel-ready task overview: [parallel_wave2_tasks.md](parallel_wave2_tasks.md)
 - Remaining risk: Phase 8 的 aggregate 当前仍是基础设施和 eligibility 扩展，真实并行聚合执行尚未启用；locking read 的 EXPLAIN annotation 当前仍可能显示 `Parallel query dop=4`，已从 Phase 9 测试中移除，后续需单独修复。
 
@@ -176,6 +178,7 @@ Recommended worktrees:
 | V2-8K - Worker Thread Producer | V2-8K-3 Completed | Codex Orchestrator + Explorer | [v2-8k-worker-thread-producer.md](v2-8k-worker-thread-producer.md) | 已完成 joinable worker thread scaffold、debug-only threaded callback producer、worker ERROR token、abort-after-start cleanup 和 EOF join 验证；默认真实 DOP=1 full scan 仍未启用 |
 | V2-8L - Threaded Semantics Boundary | Completed | Codex Orchestrator | [v2-8l-threaded-semantics-boundary.md](v2-8l-threaded-semantics-boundary.md) | 已完成 worker read_set/prebuilt lifecycle、projection/WHERE/empty EOF、EOF-before-first-row executed counter；完整 suite 24 个测试通过 |
 | V2-8M - Experimental Threaded Gate | Completed | Codex Orchestrator | [v2-8m-experimental-threaded-gate.md](v2-8m-experimental-threaded-gate.md) | 新增默认 OFF 的 `parallel_query_experimental_threaded_dop1`；无 debug 下可显式启用 DOP=1 threaded full scan；完整 suite 25 个测试通过 |
+| V2-8N - Threaded External KILL | Completed | Codex Orchestrator + Explorer | [v2-8n-threaded-external-kill.md](v2-8n-threaded-external-kill.md) | 新增 worker-started debug sync 点和 external `KILL QUERY` MTR，覆盖 worker 已启动后的 abort/join/cleanup |
 
 ## Decisions
 
