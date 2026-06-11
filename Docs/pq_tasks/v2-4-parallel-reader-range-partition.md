@@ -90,9 +90,10 @@ cd build-ninja/mysql-test
 
 ## Current Status
 
-- Status: Verified, pending follow-up commit
+- Status: Completed
 - Owner: Codex Orchestrator
 - Started: 2026-06-11
+- Completed: 2026-06-11
 
 ## Parallel Agent Notes
 
@@ -186,3 +187,8 @@ cd build-ninja/mysql-test
 - worker row read 仍 disabled；真实按 boundary seek/end 截断留到后续阶段。
 - `Parallel_ranges_built` 证明 range planning 发生，不证明 DOP>1 查询结果正确。
 - DOP>1 查询结果验收仍不能开启。
+
+### Commits
+
+- `0b7f7485a7b Add PQ V2-4 range planning export`
+- `79d1355cf2f Add PQ V2-4 range planning status`
