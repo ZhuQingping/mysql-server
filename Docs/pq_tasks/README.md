@@ -5,9 +5,10 @@
 ## Current Summary
 
 - Last synced: 2026-06-11
-- Current phase: Phase 0-9 已提交完成；PQ V1 当前主线阶段已收口，正在进行 V1 风险收敛与 V2 执行路径拆分。
+- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛已提交，进入 V2-0 Execution State Contract。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
+  - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
   - Phase 8: `113d2ba44c1` Add PQ phase 8 V1 completion scaffolding
   - Phase 7: `9af8fe777d2` Add PQ phase 7 EXPLAIN and MVP tests
 - Phase 8 validation:
@@ -18,10 +19,11 @@
   - `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir=/tmp/pqt` 通过，实际 `parallel_query` 测试 12 个，加 `shutdown_report` 共 13 项通过
 - Current V1 capability boundary: 当前分支具备 PQ 系统变量、保守 eligibility、EXPLAIN 注解、fallback/status 统计、SQL/InnoDB/worker/MQ 框架和 V1 测试闭环；真实并行执行仍未启用，eligible 查询最终仍保守走串行路径。
 - Active orchestration:
-  - [v1-risk-convergence.md](v1-risk-convergence.md): V1 风险收敛任务书，覆盖 locking read、fallback counter、PQUnsuiteInfo 生命周期、best_ref/qep_tab 访问安全和 V1 测试缺口。
+  - [v1-risk-convergence.md](v1-risk-convergence.md): V1 风险收敛已提交，覆盖 locking read、fallback counter、PQUnsuiteInfo 生命周期、best_ref/qep_tab 访问安全和 V1 测试缺口。
+  - [v2-0-execution-state-contract.md](v2-0-execution-state-contract.md): V2-0 当前任务书，定义 PQ execution state contract，供 V2-1 iterator ownership 使用。
   - [v2-execution-path-roadmap.md](v2-execution-path-roadmap.md): V2 真实执行路径拆分，覆盖 SQL iterator、worker THD、Exchange/Gather row 流、InnoDB 分片扫描、full scan 闭环和基础聚合。
   - [v2-test-matrix.md](v2-test-matrix.md): V1/V2 阶段化 MTR 测试矩阵，明确 DOP=1 first 和 DOP>1 range-partition gate。
-- Next recommended action: V1 风险收敛候选改动已完成主控 review、修正和验证；下一步可提交该收敛改动，随后进入 V2-0 execution state contract 的任务书细化。
+- Next recommended action: 派发 V2-0 Code Agent；完成后由 Codex review patch、构建并运行 `parallel_query` 目标测试。
 - Parallel-ready task overview: [parallel_wave2_tasks.md](parallel_wave2_tasks.md)
 - Remaining risk: Phase 8 的 aggregate 当前仍是基础设施和 eligibility 扩展，真实并行聚合执行尚未启用；locking read 的 EXPLAIN annotation 当前仍可能显示 `Parallel query dop=4`，已从 Phase 9 测试中移除，后续需单独修复。
 
@@ -73,6 +75,8 @@ Recommended worktrees:
 | Phase 7 - EXPLAIN and MVP tests | Completed | Claude Code / Orchestrator | [phase7-explain-mvp-tests.md](phase7-explain-mvp-tests.md) | Commit `9af8fe777d2`; EXPLAIN annotation and MVP MTR committed |
 | Phase 8 - V1-complete scaffolding | Completed | Claude Code + Codex Orchestrator fix | [phase8-v1-complete.md](phase8-v1-complete.md) | Commit `113d2ba44c1`; aggregation infrastructure, error path/stat counters, Phase 8 MTR, and macOS `Aligned_atomic` startup fix; full `parallel_query` suite passed |
 | Phase 9 - parallel_query suite migration | Completed | Claude Code Test Agent + Codex Orchestrator review | [phase9-parallel-query-suite.md](phase9-parallel-query-suite.md), [parallel_query_suite_manifest.md](parallel_query_suite_manifest.md) | Commit `9c7e9aede42`; 参考测试套 97 个测试已分类；新增 3 个 V1 测试；完整 suite 通过 |
+| V1 risk convergence | Completed | Codex Orchestrator + Review Agents | [v1-risk-convergence.md](v1-risk-convergence.md) | Commit `69ed0ac66e7`; EXPLAIN 文案收敛为 candidate/fallback-disabled；fallback counter 不被 EXPLAIN 污染；完整 suite 通过 |
+| V2-0 - Execution State Contract | Ready for dispatch | Codex Orchestrator -> Claude Code | [v2-0-execution-state-contract.md](v2-0-execution-state-contract.md) | 定义 execution state contract；不启用真实 PQ iterator |
 
 ## Decisions
 
