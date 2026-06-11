@@ -243,6 +243,11 @@ struct PQ_Worker_open_context {
     `PQ_Worker_open_context`.
   - Added `Gather_operator::configure_worker_open_contexts()` to wire leader
     TABLE/context, worker id, actual DOP, and borrowed MQ handle metadata.
+  - Added disabled-by-default worker TABLE helper boundary:
+    `pq_open_worker_table()` builds a worker-local `Table_ref` from leader
+    metadata and uses `open_ltable()`; `pq_close_worker_table()` performs
+    statement transaction cleanup, `close_thread_tables()`, and transactional
+    MDL release.
 - `storage/innobase/handler/ha_innodb.cc`
   - Added `InnoDB_pq_sql_worker_context final : public PQ_Worker_context`.
   - Added `PQ_leader_scan_mode` handling. `PROBE` keeps the existing
@@ -254,8 +259,9 @@ struct PQ_Worker_open_context {
     `actual_dop == 1`, current worker handler, current leader ctx,
     `m_pq_leader_ctx->n_ranges() == 1`, no BLOB fields, independent worker
     TABLE, and independent worker `record[0]`.
-- No real worker TABLE open, read-view pinning, InnoDB row read, or
-  `PQ_execution_state::EXECUTED` update was enabled in this step.
+- No real worker thread, read-view pinning, InnoDB row read, or
+  `PQ_execution_state::EXECUTED` update was enabled in this step. The worker
+  TABLE helper is not yet called from `PQ_worker_manager::start()`.
 
 ## Explorer Findings For Next Step
 

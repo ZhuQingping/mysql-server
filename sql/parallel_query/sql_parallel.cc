@@ -52,7 +52,11 @@
 #include <cstring>
 
 #include "mysqld_error.h"         // ER_QUERY_INTERRUPTED
+#include "sql/handler.h"          // handler
+#include "sql/sql_base.h"         // close_thread_tables, open_ltable
 #include "sql/sql_class.h"        // THD
+#include "sql/table.h"            // TABLE, Table_ref
+#include "sql/transaction.h"      // trans_commit_stmt, trans_rollback_stmt
 
 // ---------------------------------------------------------------------------
 // PQ_global_stats instance
@@ -99,6 +103,59 @@ void pq_set_execution_state(THD *thd, PQ_execution_state state) {
   if (thd == nullptr) return;
   thd->pq_execution_state = pq_execution_state_to_uint(state);
   thd->pq_executed = (state == PQ_execution_state::EXECUTED);
+}
+
+bool pq_open_worker_table(PQ_Worker_open_context *open_ctx) {
+  if (open_ctx == nullptr || open_ctx->worker_thd == nullptr ||
+      open_ctx->leader_table == nullptr || open_ctx->leader_table->s == nullptr ||
+      open_ctx->worker_table != nullptr || open_ctx->worker_handler != nullptr) {
+    return true;
+  }
+
+  THD *worker_thd = open_ctx->worker_thd;
+  TABLE *leader_table = open_ctx->leader_table;
+  TABLE_SHARE *share = leader_table->s;
+  const char *alias = share->table_name.str;
+  if (leader_table->pos_in_table_list != nullptr &&
+      leader_table->pos_in_table_list->alias != nullptr) {
+    alias = leader_table->pos_in_table_list->alias;
+  }
+
+  auto *worker_ref = new (worker_thd->mem_root)
+      Table_ref(share->db.str, share->db.length, share->table_name.str,
+                share->table_name.length, alias, TL_READ, MDL_SHARED_READ);
+  if (worker_ref == nullptr) return true;
+
+  TABLE *worker_table = open_ltable(worker_thd, worker_ref, TL_READ, 0);
+  if (worker_table == nullptr || worker_table->file == nullptr ||
+      worker_table == leader_table || worker_table->file == leader_table->file ||
+      worker_table->record[0] == nullptr ||
+      worker_table->record[0] == leader_table->record[0]) {
+    trans_rollback_stmt(worker_thd);
+    close_thread_tables(worker_thd);
+    worker_thd->mdl_context.release_transactional_locks();
+    return true;
+  }
+
+  open_ctx->worker_table = worker_table;
+  open_ctx->worker_handler = worker_table->file;
+  return false;
+}
+
+void pq_close_worker_table(PQ_Worker_open_context *open_ctx,
+                           bool statement_error) {
+  if (open_ctx == nullptr || open_ctx->worker_thd == nullptr) return;
+
+  THD *worker_thd = open_ctx->worker_thd;
+  if (statement_error) {
+    trans_rollback_stmt(worker_thd);
+  } else {
+    trans_commit_stmt(worker_thd);
+  }
+  close_thread_tables(worker_thd);
+  worker_thd->mdl_context.release_transactional_locks();
+  open_ctx->worker_table = nullptr;
+  open_ctx->worker_handler = nullptr;
 }
 
 // ---------------------------------------------------------------------------

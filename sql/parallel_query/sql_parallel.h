@@ -191,6 +191,28 @@ struct PQ_global_stats {
 /** Global PQ stats instance. Defined in sql_parallel.cc. */
 extern PQ_global_stats pq_global_stats;
 
+/**
+  Open an independent worker TABLE through the normal SQL open path.
+
+  This is a V2-8C scaffold helper. It consumes a SQL-owned
+  PQ_Worker_open_context, builds a worker-local Table_ref from leader TABLE
+  metadata, calls open_ltable(), and fills worker_table/worker_handler on
+  success. It does not start a worker thread or enable real row production.
+
+  @retval false  Worker TABLE opened and context filled
+  @retval true   Open failed or independence gates failed
+*/
+bool pq_open_worker_table(PQ_Worker_open_context *open_ctx);
+
+/**
+  Close a worker TABLE opened by pq_open_worker_table().
+
+  @param open_ctx         Worker open context to clear
+  @param statement_error  true to rollback the worker statement transaction
+*/
+void pq_close_worker_table(PQ_Worker_open_context *open_ctx,
+                           bool statement_error);
+
 // ---------------------------------------------------------------------------
 // PQ_worker_info: per-worker metadata
 // ---------------------------------------------------------------------------
