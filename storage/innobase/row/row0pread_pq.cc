@@ -556,6 +556,11 @@ InnoDB_pq_worker_ctx::~InnoDB_pq_worker_ctx() {
 }
 
 void InnoDB_pq_worker_ctx::init(InnoDB_pq_range *range) {
+  if (m_cursor_ctx != nullptr) {
+    ut::delete_(m_cursor_ctx);
+    m_cursor_ctx = nullptr;
+  }
+
   m_assigned_range = range;
 
   /* Create the pull-row cursor context. */

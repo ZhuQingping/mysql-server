@@ -72,7 +72,19 @@ V2-9 目标是从 V2-8 的 DOP=1 threaded full scan，推进到 DOP>1 clustered 
 - workers launched delta 等于 DOP；
 - ROW/FINISH/ERROR/KILL 资源回收路径必须覆盖。
 
-### V2-9D Experimental DOP>1 Gate
+### V2-9D Multi-range Callback Drain
+
+目标：修复 `ranges > workers` 时每个 worker 只消费一个 range 导致潜在漏读的问题。
+
+要求：
+
+- worker 完成当前 assigned range 后继续从 leader ctx 原子领取下一个 range；
+- 每个 range 最多被一个 worker 领取；
+- 全部 range 被消费后 worker 才发送 FINISH；
+- `Parallel_ranges_dispatched` 覆盖所有已领取 range；
+- MTR 必须验证完整 row 集合、`rows_delta`、`workers_delta` 和 `ranges_dispatched >= 2`。
+
+### V2-9E Experimental DOP>1 Gate
 
 目标：在 V2-9A/B/C 通过后，新增独立默认 OFF 变量。
 
@@ -132,4 +144,4 @@ V2-9 目标是从 V2-8 的 DOP=1 threaded full scan，推进到 DOP>1 clustered 
 - 必须先做 assigned/exhausted/produced observable，再放开 DOP>1；
 - 禁止启用 latent `pq_worker_scan_next()` / `row_search_mvcc()` pull path。
 
-当前状态：V2-9 任务拆分完成，下一步进入 V2-9A Range Dispatch Contract 编码。
+当前状态：V2-9A/B/C 已完成；V2-9D multi-range callback drain 已完成验证；下一步再评估 V2-9E experimental DOP>1 gate。
