@@ -44,6 +44,7 @@
 #include "sql/join_optimizer/relational_expression.h"
 #include "sql/join_optimizer/walk_access_paths.h"
 #include "sql/mem_root_array.h"
+#include "sql/parallel_query/pq_group_aggregate_iterator.h"
 #include "sql/parallel_query/pq_iterator.h"
 #include "sql/range_optimizer/geometry_index_range_scan.h"
 #include "sql/range_optimizer/group_index_skip_scan.h"
@@ -888,12 +889,18 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
         }
         Prealloced_array<TABLE *, 4> tables =
             GetUsedTables(param.child, /*include_pruned_tables=*/true);
-        iterator = NewIterator<AggregateIterator>(
-            thd, mem_root, std::move(job.children[0]), join,
-            TableCollection(tables, /*store_rowids=*/false,
-                            /*tables_to_get_rowid_for=*/0,
-                            GetNullableEqRefTables(param.child)),
-            param.rollup);
+        auto pq_iter =
+            TryCreatePQGroupAggregateIterator(thd, mem_root, join, path);
+        if (pq_iter != nullptr) {
+          iterator = std::move(pq_iter);
+        } else {
+          iterator = NewIterator<AggregateIterator>(
+              thd, mem_root, std::move(job.children[0]), join,
+              TableCollection(tables, /*store_rowids=*/false,
+                              /*tables_to_get_rowid_for=*/0,
+                              GetNullableEqRefTables(param.child)),
+              param.rollup);
+        }
         break;
       }
       case AccessPath::TEMPTABLE_AGGREGATE: {
