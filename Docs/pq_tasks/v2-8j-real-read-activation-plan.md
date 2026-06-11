@@ -108,6 +108,11 @@ Status: In progress. 已新增 typed ERROR producer smoke：worker metadata 进�
 RUNNING，发送 typed ERROR，leader 通过 Exchange 观察 expected error，worker 进入
 ERROR。该 expected error 被 smoke 内部消费，不影响用户查询。
 
+Status: Completed for smoke scope. 已新增 leader abort producer smoke：worker
+metadata 进入 RUNNING，leader 调用 `abort_workers()`，MQ consumer side detach，
+leader 通过 Exchange 观察 EOF，worker 进入 ABORTED。该 abort 被 smoke 内部
+消费，不影响用户查询。
+
 ### V2-8J-3: `Read()` Shadow Path
 
 目标：
@@ -130,7 +135,7 @@ ERROR。该 expected error 被 smoke 内部消费，不影响用户查询。
 - [x] callback row producer smoke 能稳定产出 ROW；
 - [x] worker producer loop skeleton 有 FINISH/EOF 语义；
 - [x] worker producer loop 有 ERROR 语义；
-- [ ] worker producer loop 有 abort 语义；
+- [x] worker producer loop 有 abort 语义；
 - [ ] `Read()` shadow path 可编译、默认不可达；
 - [ ] DOP=1 real full scan MTR 通过；
 - [ ] full `parallel_query` suite 通过；
@@ -158,6 +163,8 @@ ERROR。该 expected error 被 smoke 内部消费，不影响用户查询。
   RUNNING -> typed FINISH -> EOF -> FINISHED；
 - 增加 `Gather_operator::run_worker_producer_error_smoke()`，验证
   RUNNING -> typed ERROR -> expected leader error -> ERROR；
+- 增加 `Gather_operator::run_worker_producer_abort_smoke()`，验证
+  RUNNING -> leader abort -> MQ detach -> EOF -> ABORTED；
 - 新增 `Parallel_worker_producer_smoke_runs` 状态变量；
 - 仍不接真实 `Read()`。
 
@@ -174,5 +181,5 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 Result: passed, 19 tests successful
 ```
 
-下一步继续 V2-8J-2：worker producer loop skeleton，补 abort 分支；
-仍不返回 row 给 SQL executor。
+下一步进入 V2-8J-3：`Read()` shadow path。该路径必须默认不可达，
+仍不打开真实 DOP=1 full scan。
