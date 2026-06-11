@@ -18,7 +18,7 @@
   - V2-7: `1d39b510348` Add PQ V2-7 predicate projection boundary
   - V2-8A dispatch: `25f216d9a9d` Dispatch PQ V2-8A contract design
   - V2-8A range findings: `332361020f4` Record PQ V2-8A range dispatch findings
-  - V2-8A complete: `e78b387ddb7` Complete PQ V2-8A contract design
+  - V2-8A complete: `8dc30b6a1d2` Complete PQ V2-8A contract design
   - V2-1: `9a58ff94cdf` Add PQ V2-1 iterator safe fallback
   - V2-0: `a420e8a3f26` Add PQ V2-0 execution state contract
   - Phase 8: `113d2ba44c1` Add PQ phase 8 V1 completion scaffolding
@@ -106,7 +106,7 @@ Recommended worktrees:
 | V2-6 - Exchange/Gather Row Stream | Completed | Codex Orchestrator + parallel explorers | [v2-6-exchange-gather-row-stream.md](v2-6-exchange-gather-row-stream.md) | Commit `d0b4988a584`; Synthetic MQ ROW/FINISH stream smoke 已接入；不进入 `Read()`；完整 suite 通过 |
 | V2-7 - Predicate/Projection Boundary | Completed | Codex Orchestrator | [v2-7-predicate-projection-boundary.md](v2-7-predicate-projection-boundary.md) | Commit `1d39b510348`; Boundary MTR 已完成；不打开真实 worker row；完整 suite 通过 |
 | V2-8 - Single Table Full Scan Closure | In Progress | Codex Orchestrator | [v2-8-single-table-fullscan-closure.md](v2-8-single-table-fullscan-closure.md) | 当前任务拆分：真实 row materialization / `Read()` 接管前的硬 gate |
-| V2-8A - Worker Handler/Prebuilt Contract Design | Completed | Codex Orchestrator + Design Explorers | [v2-8a-worker-handler-prebuilt-contract.md](v2-8a-worker-handler-prebuilt-contract.md) | Commit `e78b387ddb7`; 完成 SQL/handler、InnoDB read-view/prebuilt、range dispatch 三项设计收敛；后续先做 V2-8B Row Image Protocol |
+| V2-8A - Worker Handler/Prebuilt Contract Design | Completed | Codex Orchestrator + Design Explorers | [v2-8a-worker-handler-prebuilt-contract.md](v2-8a-worker-handler-prebuilt-contract.md) | Commit `8dc30b6a1d2`; 完成 SQL/handler、InnoDB read-view/prebuilt、range dispatch 三项设计收敛；后续先做 V2-8B Row Image Protocol |
 
 ## Decisions
 
