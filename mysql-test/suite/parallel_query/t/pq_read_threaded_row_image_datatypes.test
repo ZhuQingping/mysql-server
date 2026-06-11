@@ -1,0 +1,79 @@
+# Test: pq_read_threaded_row_image_datatypes
+# No-debug DOP=2 threaded full scan row image materialization for nullable
+# scalar datatypes. BLOB/TEXT are intentionally excluded because the current
+# threaded PQ gate rejects blob tables.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  nullable_i INT NULL,
+  wide_v VARCHAR(220) NULL,
+  fixed_c CHAR(48) NULL,
+  amount DECIMAL(20,6) NULL,
+  d DATE NULL
+) ENGINE=InnoDB;
+
+INSERT INTO t1 VALUES
+  (1, NULL, NULL, NULL, NULL, NULL),
+  (2, 20, 'alpha-wide-row-image-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'char-alpha', 1234567890.123456, '2024-01-02'),
+  (3, NULL, 'nullable-int-with-date', NULL, -42.500000, '1999-12-31'),
+  (4, 40, NULL, 'char-only-row', NULL, '2038-01-19'),
+  (5, NULL, 'varchar-with-decimal-null', 'char-five', NULL, NULL),
+  (6, -60, 'wide-value-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', NULL, 0.000001, '2000-02-29'),
+  (7, NULL, NULL, 'char-seven', -9999999999.999999, NULL),
+  (8, 80, 'omega-wide-row-image-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', 'char-omega', 314159.265359, '2026-06-11');
+
+SET SESSION parallel_query=OFF;
+--sorted_result
+SELECT id, nullable_i, wide_v, fixed_c, amount, d FROM t1;
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+SET SESSION parallel_query_experimental_threaded_dop=ON;
+
+SET @pq_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_rows_scanned');
+SET @pq_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+
+--sorted_result
+SELECT id, nullable_i, wide_v, fixed_c, amount, d FROM t1;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+    AS fallback_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+    AS rows_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+    AS workers_delta;
+
+SET SESSION parallel_query_experimental_threaded_dop=OFF;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE t1;
