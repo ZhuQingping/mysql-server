@@ -55,6 +55,7 @@
 #include "sql/handler.h"          // handler
 #include "sql/sql_base.h"         // close_thread_tables, open_ltable
 #include "sql/sql_class.h"        // THD
+#include "sql/sql_thd_internal_api.h"  // create_internal_thd
 #include "sql/table.h"            // TABLE, Table_ref
 #include "sql/transaction.h"      // trans_commit_stmt, trans_rollback_stmt
 
@@ -156,6 +157,43 @@ void pq_close_worker_table(PQ_Worker_open_context *open_ctx,
   worker_thd->mdl_context.release_transactional_locks();
   open_ctx->worker_table = nullptr;
   open_ctx->worker_handler = nullptr;
+}
+
+THD *pq_create_worker_thd(PQ_worker_info *worker, Gather_operator *gather) {
+  if (worker == nullptr || gather == nullptr || worker->m_worker_thd != nullptr) {
+    return nullptr;
+  }
+
+  THD *worker_thd = create_internal_thd();
+  if (worker_thd == nullptr) return nullptr;
+
+  worker_thd->pq_is_worker = true;
+  worker_thd->pq_leader = gather;
+  worker_thd->pq_worker_info = worker;
+  worker_thd->pq_dop = gather->dop();
+
+  worker->m_worker_thd = worker_thd;
+  worker->m_open_ctx.worker_thd = worker_thd;
+  return worker_thd;
+}
+
+void pq_destroy_worker_thd(PQ_worker_info *worker) {
+  if (worker == nullptr || worker->m_worker_thd == nullptr) return;
+
+  THD *worker_thd = worker->m_worker_thd;
+  if (worker->m_open_ctx.worker_table != nullptr ||
+      worker->m_open_ctx.worker_handler != nullptr) {
+    pq_close_worker_table(&worker->m_open_ctx, true);
+  }
+
+  worker_thd->pq_is_worker = false;
+  worker_thd->pq_leader = nullptr;
+  worker_thd->pq_worker_info = nullptr;
+  worker_thd->pq_dop = 0;
+  destroy_internal_thd(worker_thd);
+
+  worker->m_worker_thd = nullptr;
+  worker->reset_open_context();
 }
 
 // ---------------------------------------------------------------------------

@@ -191,6 +191,9 @@ struct PQ_global_stats {
 /** Global PQ stats instance. Defined in sql_parallel.cc. */
 extern PQ_global_stats pq_global_stats;
 
+struct PQ_worker_info;
+class Gather_operator;
+
 /**
   Open an independent worker TABLE through the normal SQL open path.
 
@@ -212,6 +215,18 @@ bool pq_open_worker_table(PQ_Worker_open_context *open_ctx);
 */
 void pq_close_worker_table(PQ_Worker_open_context *open_ctx,
                            bool statement_error);
+
+/**
+  Create a background THD for a PQ worker and bind it to worker metadata.
+
+  This helper only prepares lifecycle metadata. It is intended to run from the
+  future worker OS thread entry; callers must not use it for real row
+  production until the worker execution path is enabled.
+*/
+THD *pq_create_worker_thd(PQ_worker_info *worker, Gather_operator *gather);
+
+/** Destroy a THD created by pq_create_worker_thd(). */
+void pq_destroy_worker_thd(PQ_worker_info *worker);
 
 // ---------------------------------------------------------------------------
 // PQ_worker_info: per-worker metadata

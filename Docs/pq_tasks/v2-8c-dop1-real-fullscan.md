@@ -248,6 +248,11 @@ struct PQ_Worker_open_context {
     metadata and uses `open_ltable()`; `pq_close_worker_table()` performs
     statement transaction cleanup, `close_thread_tables()`, and transactional
     MDL release.
+  - Added disabled-by-default worker THD lifecycle helpers:
+    `pq_create_worker_thd()` creates a background worker THD and binds
+    `THD::pq_is_worker`, `THD::pq_leader`, `THD::pq_worker_info`, and
+    `THD::pq_dop`; `pq_destroy_worker_thd()` clears bindings and destroys the
+    THD.
 - `storage/innobase/handler/ha_innodb.cc`
   - Added `InnoDB_pq_sql_worker_context final : public PQ_Worker_context`.
   - Added `PQ_leader_scan_mode` handling. `PROBE` keeps the existing
@@ -261,7 +266,7 @@ struct PQ_Worker_open_context {
     TABLE, and independent worker `record[0]`.
 - No real worker thread, read-view pinning, InnoDB row read, or
   `PQ_execution_state::EXECUTED` update was enabled in this step. The worker
-  TABLE helper is not yet called from `PQ_worker_manager::start()`.
+  THD/TABLE helpers are not yet called from `PQ_worker_manager::start()`.
 
 ## Explorer Findings For Next Step
 
