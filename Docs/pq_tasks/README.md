@@ -5,7 +5,7 @@
 ## Current Summary
 
 - Last synced: 2026-06-11
-- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0、V2-1、V2-2、V2-3、V2-4、V2-5、V2-6、V2-7 已提交；V2-8A worker handler/prebuilt contract design 已完成；V2-8B Row Image Protocol 已完成；V2-8C contract/gate 第一段、leader probe/execute mode API、worker open context carrier 生命周期、worker THD/TABLE helper、safe-window open-table smoke 和 handler init/end smoke 已实现；V2-8D 已完成 first-row/read-view 方案选型；V2-8E EXECUTE commit point primitive 已完成；V2-8F callback conversion smoke primitive 已完成；V2-8G EXECUTE callback smoke observability 已完成；V2-8H row stream activation boundary 已完成；V2-8I iterator runtime state contract 已完成；V2-8J-1 callback row producer smoke 已完成；V2-8J-2 worker producer FINISH/EOF、ERROR 和 abort skeleton 已完成；V2-8J-3 `Read()` shadow path scaffold 已完成并增加 PROBE guard；V2-8J-4 PROBE 诊断计数、Exchange materialize status helper、ROW-only enqueue helper、callback multi-row producer API、SQL 层 limited multi-row producer smoke、`Read()` wait/kill policy、PROBE unsupported 细分诊断、首次 PROBE gate 修复、debug shadow first-row MTR 和 debug shadow 2-row/EOF producer 已完成；V2-8K worker thread lifecycle、debug threaded callback producer 和 ERROR/abort/EOF hardening 已完成；V2-8L debug threaded projection/WHERE/empty EOF 语义边界已完成；V2-8M 默认 OFF 实验变量保护路径已完成；V2-8N threaded external KILL 验证已完成；V2-8O threaded 基础聚合覆盖已完成；V2-8P DOP 多队列 Exchange smoke 已完成；V2-8Q DOP2 experimental guard 已完成；V2-9 DOP range correctness 已启动任务拆分。
+- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0、V2-1、V2-2、V2-3、V2-4、V2-5、V2-6、V2-7 已提交；V2-8A worker handler/prebuilt contract design 已完成；V2-8B Row Image Protocol 已完成；V2-8C contract/gate 第一段、leader probe/execute mode API、worker open context carrier 生命周期、worker THD/TABLE helper、safe-window open-table smoke 和 handler init/end smoke 已实现；V2-8D 已完成 first-row/read-view 方案选型；V2-8E EXECUTE commit point primitive 已完成；V2-8F callback conversion smoke primitive 已完成；V2-8G EXECUTE callback smoke observability 已完成；V2-8H row stream activation boundary 已完成；V2-8I iterator runtime state contract 已完成；V2-8J-1 callback row producer smoke 已完成；V2-8J-2 worker producer FINISH/EOF、ERROR 和 abort skeleton 已完成；V2-8J-3 `Read()` shadow path scaffold 已完成并增加 PROBE guard；V2-8J-4 PROBE 诊断计数、Exchange materialize status helper、ROW-only enqueue helper、callback multi-row producer API、SQL 层 limited multi-row producer smoke、`Read()` wait/kill policy、PROBE unsupported 细分诊断、首次 PROBE gate 修复、debug shadow first-row MTR 和 debug shadow 2-row/EOF producer 已完成；V2-8K worker thread lifecycle、debug threaded callback producer 和 ERROR/abort/EOF hardening 已完成；V2-8L debug threaded projection/WHERE/empty EOF 语义边界已完成；V2-8M 默认 OFF 实验变量保护路径已完成；V2-8N threaded external KILL 验证已完成；V2-8O threaded 基础聚合覆盖已完成；V2-8P DOP 多队列 Exchange smoke 已完成；V2-8Q DOP2 experimental guard 已完成；V2-9 DOP range correctness 已启动任务拆分；V2-9A Range Dispatch Contract 已完成。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
@@ -69,6 +69,7 @@
   - V2-8P DOP multi-queue Exchange smoke: 本轮提交，新增 row-image smoke 专用 status counters，并精确验证 DOP=1/2/4 synthetic ROW/FINISH 消费
   - V2-8Q DOP2 experimental guard: 本轮提交，验证 experimental threaded gate 不会误启 DOP=2 真实执行
   - V2-9 DOP range correctness: 已生成任务书，拆分 V2-9A/B/C/D，等待 range-aware callback producer 最小实现确认
+  - V2-9A Range Dispatch Contract: 本轮提交，新增 `Parallel_ranges_dispatched` / `Parallel_empty_worker_ranges`，DOP=1 worker scan init 可观测领取 range
   - V2-1: `9a58ff94cdf` Add PQ V2-1 iterator safe fallback
   - V2-0: `a420e8a3f26` Add PQ V2-0 execution state contract
   - Phase 8: `113d2ba44c1` Add PQ phase 8 V1 completion scaffolding
@@ -109,6 +110,7 @@
   - [v2-8p-dop-multiqueue-exchange-smoke.md](v2-8p-dop-multiqueue-exchange-smoke.md): V2-8P 已完成 DOP=1/2/4 synthetic row-image 多队列 smoke 验证。
   - [v2-8q-dop2-experimental-guard.md](v2-8q-dop2-experimental-guard.md): V2-8Q 已完成 experimental gate 的 DOP=2 fallback guard。
   - [v2-9-dop-range-correctness.md](v2-9-dop-range-correctness.md): V2-9 已启动 DOP>1 range correctness 任务拆分。
+  - [v2-9a-range-dispatch-contract.md](v2-9a-range-dispatch-contract.md): V2-9A 已完成 range dispatch observable。
   - [v2-execution-path-roadmap.md](v2-execution-path-roadmap.md): V2 真实执行路径拆分，覆盖 SQL iterator、worker THD、Exchange/Gather row 流、InnoDB 分片扫描、full scan 闭环和基础聚合。
   - [v2-test-matrix.md](v2-test-matrix.md): V1/V2 阶段化 MTR 测试矩阵，明确 DOP=1 first 和 DOP>1 range-partition gate。
 - Next recommended action: 保持实验变量默认 OFF；下一步进入 DOP>1 range correctness 任务拆分，`pq_worker_scan_next()` 继续 disabled。
@@ -191,6 +193,7 @@ Recommended worktrees:
 | V2-8P - DOP Multi-Queue Exchange Smoke | Completed | Codex Orchestrator | [v2-8p-dop-multiqueue-exchange-smoke.md](v2-8p-dop-multiqueue-exchange-smoke.md) | 新增 row-image smoke 专用 status counters，精确验证 DOP=1/2/4 synthetic ROW/FINISH 多队列消费；不打开 InnoDB DOP>1 |
 | V2-8Q - DOP2 Experimental Guard | Completed | Codex Orchestrator | [v2-8q-dop2-experimental-guard.md](v2-8q-dop2-experimental-guard.md) | 新增 no-debug guard MTR，验证 experimental threaded path 只允许 DOP=1，DOP=2 仍 serial fallback |
 | V2-9 - DOP Range Correctness | In Progress | Codex Orchestrator + Explorer | [v2-9-dop-range-correctness.md](v2-9-dop-range-correctness.md) | 已拆分 V2-9A/B/C/D；先做 range dispatch contract，再做 range-aware callback producer |
+| V2-9A - Range Dispatch Contract | Completed | Codex Orchestrator | [v2-9a-range-dispatch-contract.md](v2-9a-range-dispatch-contract.md) | 新增 range dispatched/empty worker counters，`pq_worker_scan_init()` 可观测领取 assigned range；DOP>1 gate 仍关闭 |
 
 ## Decisions
 

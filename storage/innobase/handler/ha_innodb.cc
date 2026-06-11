@@ -11157,6 +11157,14 @@ int ha_innobase::pq_worker_scan_init(PQ_Worker_open_context *open_ctx,
   if (innodb_worker == nullptr) {
     return pq_map_dberr_to_handler_error(DB_OUT_OF_MEMORY, nullptr);
   }
+  auto assigned_range = innodb_leader->dispatch_next_range();
+  if (assigned_range != nullptr) {
+    innodb_worker->init(assigned_range);
+    pq_global_stats.ranges_dispatched.fetch_add(1, std::memory_order_relaxed);
+  } else {
+    pq_global_stats.empty_worker_ranges.fetch_add(1,
+                                                  std::memory_order_relaxed);
+  }
 
   auto sql_worker = ut::new_withkey<InnoDB_pq_sql_worker_context>(
       UT_NEW_THIS_FILE_PSI_KEY, *sql_leader, innodb_worker, open_ctx);

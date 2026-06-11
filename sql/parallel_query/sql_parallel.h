@@ -192,6 +192,8 @@ struct PQ_global_stats {
   std::atomic<uint64> probe_thread_budget_unsupported{0};  ///< PROBE thread budget rejects
   std::atomic<uint64> probe_init_unsupported{0};  ///< PROBE range init rejects
   std::atomic<uint64> ranges_built{0};        ///< Total InnoDB PQ ranges planned
+  std::atomic<uint64> ranges_dispatched{0};   ///< InnoDB PQ ranges assigned
+  std::atomic<uint64> empty_worker_ranges{0}; ///< Workers assigned no range
   std::atomic<uint64> worker_smoke_runs{0};   ///< Worker lifecycle smoke runs
   std::atomic<uint64> worker_producer_smoke_runs{0};  ///< Producer loop smoke runs
   std::atomic<uint64> worker_open_smoke_runs{0};  ///< Worker THD/TABLE smoke runs
@@ -216,6 +218,8 @@ struct PQ_global_stats {
     probe_thread_budget_unsupported.store(0, std::memory_order_relaxed);
     probe_init_unsupported.store(0, std::memory_order_relaxed);
     ranges_built.store(0, std::memory_order_relaxed);
+    ranges_dispatched.store(0, std::memory_order_relaxed);
+    empty_worker_ranges.store(0, std::memory_order_relaxed);
     worker_smoke_runs.store(0, std::memory_order_relaxed);
     worker_producer_smoke_runs.store(0, std::memory_order_relaxed);
     worker_open_smoke_runs.store(0, std::memory_order_relaxed);
