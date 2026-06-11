@@ -23,6 +23,7 @@
 #include "sql/parallel_query/pq_group_aggregate_iterator.h"
 
 #include "sql/join_optimizer/access_path.h"  // AccessPath
+#include "sql/parallel_query/sql_parallel.h"  // pq_global_stats
 #include "sql/sql_class.h"                   // THD
 #include "sql/sql_optimizer.h"               // JOIN
 
@@ -99,10 +100,14 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQGroupAggregateIterator(
       thd->variables.parallel_default_dop != 1) {
     return nullptr;
   }
+  pq_global_stats.groupby_dop1_factory_attempts.fetch_add(
+      1, std::memory_order_relaxed);
 
   if (!join->pq_eligible || aggregate_path->aggregate().rollup ||
       aggregate_path->aggregate().child == nullptr ||
       aggregate_path->aggregate().child->type != AccessPath::TABLE_SCAN) {
+    pq_global_stats.groupby_dop1_factory_fallback.fetch_add(
+        1, std::memory_order_relaxed);
     return nullptr;
   }
 
@@ -111,6 +116,8 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQGroupAggregateIterator(
     nullptr with a real PQGroupAggregateIterator after typed state, SQL
     result-row construction, and child iterator ownership are implemented.
   */
+  pq_global_stats.groupby_dop1_factory_fallback.fetch_add(
+      1, std::memory_order_relaxed);
   return nullptr;
 }
 
@@ -131,8 +138,12 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQTemptableGroupAggregateIterator(
       thd->variables.parallel_default_dop != 1) {
     return nullptr;
   }
+  pq_global_stats.groupby_dop1_factory_attempts.fetch_add(
+      1, std::memory_order_relaxed);
 
   if (!join->pq_eligible) {
+    pq_global_stats.groupby_dop1_factory_fallback.fetch_add(
+        1, std::memory_order_relaxed);
     return nullptr;
   }
 
@@ -142,6 +153,8 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQTemptableGroupAggregateIterator(
     iterators yet, so native TemptableAggregateIterator remains the only
     executable path.
   */
+  pq_global_stats.groupby_dop1_factory_fallback.fetch_add(
+      1, std::memory_order_relaxed);
   return nullptr;
 }
 

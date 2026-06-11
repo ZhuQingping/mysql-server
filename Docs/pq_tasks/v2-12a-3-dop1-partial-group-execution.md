@@ -259,7 +259,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 ## 当前状态
 
-状态：V2-12A-3.3 Completed。
+状态：V2-12A-3.4c factory observability Completed；真实 GROUP BY SQL result 接管仍未打开。
 
 已完成：
 
@@ -270,6 +270,9 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - 在 `AccessPath::AGGREGATE` 分支接入 factory；
 - factory 当前不接管 child iterator ownership，严格返回 `nullptr`，原生 `AggregateIterator` 行为保持不变。
 - 新增 in-memory typed GROUP BY state smoke，覆盖 integer group key、`COUNT(*)`、`COUNT(col)`、`SUM`、`MIN`、`MAX` 和 NULL aggregate argument。
+- 在 `AccessPath::TEMPTABLE_AGGREGATE` 分支接入 factory skeleton；
+- 新增 `Parallel_groupby_dop1_factory_attempts` / `Parallel_groupby_dop1_factory_fallback`，验证 gate ON + DOP=1 时 GROUP BY factory hook 可观测；
+- 新增 `pq_groupby_dop1_factory_observable`，确认 factory hook 仍返回 `nullptr` 并保持原生 GROUP BY 结果正确。
 
 验证：
 
@@ -289,12 +292,17 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
   pq_groupby_typed_state_smoke pq_groupby_partial_group_smoke pq_stats \
   --parallel=1 --vardir=/tmp/pqv_groupby_typed \
   --tmpdir=/tmp/pqt_groupby_typed
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_dop1_factory_observable pq_stats pq_groupby_diagnostics \
+  pq_groupby_typed_state_smoke \
+  --parallel=1 --vardir=/tmp/pqv_groupby_obs \
+  --tmpdir=/tmp/pqt_groupby_obs
 TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
   --vardir=/tmp/pqv_full_groupby_typed \
   --tmpdir=/tmp/pqt_full_groupby_typed
 ```
 
-结果：完整 `parallel_query` suite 通过，共 52 项。
+结果：完整 `parallel_query` suite 通过，共 54 项。
 
 下一步：
 
@@ -370,3 +378,40 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - 不修改 `setup_tmptable_write_func()`、`make_group_fields()` 或 `streaming_aggregation` 语义；
 - 不全局放开显式 GROUP BY eligibility；
 - 不绕过 `TemptableAggregateIterator` 的 spill/slice/sum-func 语义，除非 PQ iterator 完整复制并有独立验证。
+
+### V2-12A-3.4c Factory Observability
+
+状态：Completed。
+
+目标：
+
+- 在不接管 SQL result 的前提下，使 DOP=1 GROUP BY factory hook 可观测；
+- gate OFF 时不增加 GROUP BY factory counters；
+- gate ON + DOP=1 时，`TEMPTABLE_AGGREGATE` / `AGGREGATE` factory 尝试可通过 status counter 验证；
+- factory 继续返回 `nullptr`，原生 iterator 继续负责 GROUP BY 结果输出。
+
+实现：
+
+- 新增 `Parallel_groupby_dop1_factory_attempts`；
+- 新增 `Parallel_groupby_dop1_factory_fallback`；
+- `TryCreatePQGroupAggregateIterator()` / `TryCreatePQTemptableGroupAggregateIterator()` 在 experimental gate 命中后递增 attempts，在返回 `nullptr` 前递增 fallback；
+- 新增 `pq_groupby_dop1_factory_observable`。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_dop1_factory_observable pq_stats pq_groupby_diagnostics \
+  pq_groupby_typed_state_smoke \
+  --parallel=1 --vardir=/tmp/pqv_groupby_obs \
+  --tmpdir=/tmp/pqt_groupby_obs
+```
+
+结果：targeted suite 通过。完整 suite 需随提交前验证。
+
+下一步：
+
+- V2-12A-3.4d 进入 `TEMPTABLE_AGGREGATE` SQL result smoke 设计/实现；
+- 需要先扩展 factory 接口，使其能接收 `subquery_iterator`、`table_iterator`、`Temp_table_param`、output `TABLE` 和 `ref_slice`；
+- 真实接管必须复用临时表输出链路，不直接向客户端发送 row。
