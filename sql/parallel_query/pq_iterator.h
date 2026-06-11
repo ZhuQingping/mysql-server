@@ -156,6 +156,9 @@ class PQTableScanIterator final : public TableRowIterator {
   /** Release any PQ resources owned by this iterator. */
   void cleanup_pq_resources(bool abort_workers);
 
+  /** @return true when the internal debug-only shadow Read path may run. */
+  bool should_enter_read_shadow_path(uint requested_dop) const;
+
   /** @return true while serial fallback is still allowed. */
   bool can_fallback_serial() const {
     return m_runtime_state == Runtime_state::SAFE_FALLBACK;
@@ -184,6 +187,7 @@ class PQTableScanIterator final : public TableRowIterator {
   Gather_operator *m_gather{nullptr};        ///< Worker lifecycle owner
   Runtime_state m_runtime_state{Runtime_state::SAFE_FALLBACK};
   bool m_fallback_counted{false};  ///< Count per query iterator, not per Init()
+  bool m_executed_counted{false};  ///< Count real PQ execution at first row
 };
 
 /**

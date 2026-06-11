@@ -38,6 +38,7 @@
 #include "sql/parallel_query/pq_iterator.h"
 
 #include "my_base.h"
+#include "my_dbug.h"
 #include "sql/iterators/basic_row_iterators.h"  // TableScanIterator
 #include "sql/iterators/timing_iterator.h"     // NewIterator
 #include "sql/mysqld.h"       // innodb_hton
@@ -151,6 +152,29 @@ bool PQTableScanIterator::Init() {
     return true;
   }
 
+  if (should_enter_read_shadow_path(requested_dop)) {
+    uint execute_dop = 0;
+    error = table()->file->pq_leader_scan_init(
+        thd(), &m_leader_ctx, PQ_leader_scan_mode::EXECUTE, 1, &execute_dop,
+        false);
+    if (error != 0) {
+      cleanup_pq_resources(true);
+      PrintError(error);
+      return true;
+    }
+
+    m_gather = new Gather_operator(1);
+    if (m_gather == nullptr || m_gather->init() ||
+        m_gather->configure_worker_open_contexts(table(), m_leader_ctx, 1)) {
+      cleanup_pq_resources(true);
+      PrintError(HA_ERR_OUT_OF_MEM);
+      return true;
+    }
+
+    mark_pq_started();
+    return false;
+  }
+
   // V2-1 safe fallback window: no worker, Gather/Exchange, or row stream has
   // been initialized. Build the same serial table scan the caller would have
   // built when TryCreatePQTableScanIterator returned nullptr.
@@ -185,9 +209,61 @@ void PQTableScanIterator::cleanup_pq_resources(bool abort_workers) {
   }
 }
 
+bool PQTableScanIterator::should_enter_read_shadow_path(
+    uint requested_dop) const {
+  bool enabled = false;
+  DBUG_EXECUTE_IF("pq_read_shadow_path", enabled = true;);
+  return enabled && requested_dop == 1 && table() != nullptr &&
+         table()->s != nullptr && table()->s->blob_fields == 0 &&
+         table()->s->reclength > 0;
+}
+
 int PQTableScanIterator::Read() {
-  assert(m_serial_iterator != nullptr);
-  return m_serial_iterator->Read();
+  if (m_serial_iterator != nullptr) {
+    return m_serial_iterator->Read();
+  }
+
+  assert(m_runtime_state == Runtime_state::PQ_STARTED ||
+         m_runtime_state == Runtime_state::PQ_ROW_RETURNED);
+  assert(m_gather != nullptr);
+  assert(m_gather->get_exchange() != nullptr);
+
+  if (m_gather->check_leader_kill(thd())) {
+    m_gather->propagate_kill_to_workers(thd());
+    cleanup_pq_resources(true);
+    thd()->send_kill_message();
+    return 1;
+  }
+
+  bool eof = false;
+  bool row = false;
+  if (m_gather->get_exchange()->materialize_next_record_image(table(), &eof,
+                                                              &row)) {
+    cleanup_pq_resources(true);
+    PrintError(HA_ERR_INTERNAL_ERROR);
+    return 1;
+  }
+
+  if (row) {
+    if (!m_executed_counted) {
+      mark_pq_row_returned();
+      pq_set_execution_state(thd(), PQ_execution_state::EXECUTED);
+      pq_global_stats.queries_executed.fetch_add(1,
+                                                 std::memory_order_relaxed);
+      m_executed_counted = true;
+    }
+    pq_global_stats.rows_scanned.fetch_add(1, std::memory_order_relaxed);
+    return 0;
+  }
+
+  if (eof) {
+    cleanup_pq_resources(false);
+    return -1;
+  }
+
+  cleanup_pq_resources(true);
+  PrintError(HA_ERR_INTERNAL_ERROR);
+  return 1;
 }
 
 void PQTableScanIterator::UnlockRow() {

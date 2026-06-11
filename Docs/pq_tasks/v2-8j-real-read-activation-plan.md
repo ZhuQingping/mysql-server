@@ -121,6 +121,13 @@ leader 通过 Exchange 观察 EOF，worker 进入 ABORTED。该 abort 被 smoke 
 - 使用 runtime state、Exchange helper 和 cleanup 逻辑；
 - 默认仍走 serial fallback。
 
+Status: Completed for scaffold scope. 已新增 debug-only `pq_read_shadow_path`
+gate；默认不可达。shadow path 在 DOP=1 fixed-row 表上可绕过 serial fallback，
+进入 `PQ_STARTED` no-fallback 状态，并让 `Read()` 通过
+`Exchange_nosort::materialize_next_record_image()` 处理 ROW/EOF/ERROR。
+首次真实 ROW 返回时才设置 `EXECUTED` 并递增真实执行/行计数。当前仍没有真实
+worker producer，因此默认测试路径继续 serial fallback。
+
 ### V2-8J-4: DOP=1 Real Full Scan Gate
 
 目标：
@@ -136,7 +143,7 @@ leader 通过 Exchange 观察 EOF，worker 进入 ABORTED。该 abort 被 smoke 
 - [x] worker producer loop skeleton 有 FINISH/EOF 语义；
 - [x] worker producer loop 有 ERROR 语义；
 - [x] worker producer loop 有 abort 语义；
-- [ ] `Read()` shadow path 可编译、默认不可达；
+- [x] `Read()` shadow path 可编译、默认不可达；
 - [ ] DOP=1 real full scan MTR 通过；
 - [ ] full `parallel_query` suite 通过；
 - [ ] fatal-after-start 不 fallback。
@@ -165,8 +172,12 @@ leader 通过 Exchange 观察 EOF，worker 进入 ABORTED。该 abort 被 smoke 
   RUNNING -> typed ERROR -> expected leader error -> ERROR；
 - 增加 `Gather_operator::run_worker_producer_abort_smoke()`，验证
   RUNNING -> leader abort -> MQ detach -> EOF -> ABORTED；
+- 增加 debug-only `PQTableScanIterator::Read()` shadow path scaffold，默认
+  不可达；
+- shadow path 使用 `mark_pq_started()` 锁定 no-fallback 边界，并仅在第一条
+  ROW 返回时 `mark_pq_row_returned()` / `EXECUTED` / 真实计数；
 - 新增 `Parallel_worker_producer_smoke_runs` 状态变量；
-- 仍不接真实 `Read()`。
+- 默认仍不接真实 `Read()`。
 
 验证：
 
@@ -181,5 +192,5 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 Result: passed, 19 tests successful
 ```
 
-下一步进入 V2-8J-3：`Read()` shadow path。该路径必须默认不可达，
-仍不打开真实 DOP=1 full scan。
+下一步进入 V2-8J-4：DOP=1 real full scan gate。打开前必须补真实 producer
+ROW 进入持久 `m_gather` 的路径和 wait/kill policy。
