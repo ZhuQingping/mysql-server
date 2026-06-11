@@ -82,7 +82,7 @@ cd build-ninja/mysql-test
 - [x] `Parallel_reader` private boundary 已明确，不暴露不稳定内部执行对象；
 - [x] PQ adapter 不再只创建 single whole-table range；
 - [x] range boundary ownership / deep-copy 规则明确；
-- [ ] DOP=1/2/4 range partition 可通过测试或 debug observable 验证；
+- [x] DOP=1/2/4 range partition 可通过测试或 debug observable 验证；
 - [x] 不启动 worker、不读取 PQ row；
 - [x] DOP>1 查询结果验收仍被 gate；
 - [x] `mysqld` build 通过；
@@ -90,7 +90,7 @@ cd build-ninja/mysql-test
 
 ## Current Status
 
-- Status: Range planning export verified; range observable pending
+- Status: Verified, pending follow-up commit
 - Owner: Codex Orchestrator
 - Started: 2026-06-11
 
@@ -158,9 +158,31 @@ cd build-ninja/mysql-test
 - targeted MTR: 4/4 pass。
 - full `parallel_query` suite: 15/15 pass。
 
-### Remaining Work
+### Follow-up Observable
 
-- 需要补 range observable/MTR，直接验证 DOP=1/2/4 range count 和非
-  whole-range fallback。
+- 新增 `Parallel_ranges_built` global status variable。
+- `PQTableScanIterator::Init()` 的 bridge smoke 使用 session
+  `parallel_default_dop` 请求 leader init，但仍立即 leader end 并 serial fallback。
+- 新增 `pq_range_planning_dop`，覆盖 DOP=1/2/4 下 range planning 可观测，
+  同时断言 `executed/workers/rows` 仍为 0。
+
+### Final Validation
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+./mtr --suite=parallel_query --parallel=1 --extern socket=/private/tmp/pq20.sock --extern user=root pq_range_planning_dop pq_stats
+./mtr --suite=parallel_query --parallel=1 --extern socket=/private/tmp/pq20.sock --extern user=root
+```
+
+结果：
+
+- `mysqld` build 通过。
+- `pq_range_planning_dop pq_stats`: 3/3 pass。
+- full `parallel_query` suite: 16/16 pass。
+
+### Remaining Risks
+
 - worker row read 仍 disabled；真实按 boundary seek/end 截断留到后续阶段。
+- `Parallel_ranges_built` 证明 range planning 发生，不证明 DOP>1 查询结果正确。
 - DOP>1 查询结果验收仍不能开启。

@@ -79,9 +79,10 @@ bool PQTableScanIterator::Init() {
   // errors are reported before serial iterator state is initialized.
   PQ_Leader_context *leader_ctx = nullptr;
   uint actual_dop = 0;
-  int error =
-      table()->file->pq_leader_scan_init(thd(), &leader_ctx, 1, &actual_dop,
-                                         false);
+  uint requested_dop = thd()->variables.parallel_default_dop;
+  if (requested_dop == 0) requested_dop = 1;
+  int error = table()->file->pq_leader_scan_init(
+      thd(), &leader_ctx, requested_dop, &actual_dop, false);
   if (error == 0) {
     (void)actual_dop;
     table()->file->pq_leader_scan_end(leader_ctx);

@@ -67,6 +67,7 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #include <sql_table.h>
 #include "mysql/components/services/system_variable_source.h"
 #include "sql/parallel_query/pq_handler.h"
+#include "sql/parallel_query/sql_parallel.h"
 
 #ifndef UNIV_HOTBACKUP
 #include <current_thd.h>
@@ -11005,6 +11006,8 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
   internal use (worker init, scan next, cleanup). */
   m_pq_leader_ctx = innodb_leader_ctx;
   m_pq_sql_leader_ctx = sql_leader_ctx;
+  pq_global_stats.ranges_built.fetch_add(innodb_leader_ctx->n_ranges(),
+                                         std::memory_order_relaxed);
   if (leader_ctx != nullptr) {
     *leader_ctx = sql_leader_ctx;
   }

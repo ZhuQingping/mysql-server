@@ -9697,6 +9697,14 @@ static int show_pq_rows_scanned(THD *, SHOW_VAR *var, char *buf) {
   return 0;
 }
 
+static int show_pq_ranges_built(THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) =
+      (longlong)(pq_global_stats.ranges_built.load(std::memory_order_relaxed));
+  return 0;
+}
+
 static int show_deprecated_use_i_s_processlist_last_timestamp(THD *,
                                                               SHOW_VAR *var,
                                                               char *buf) {
@@ -10080,6 +10088,8 @@ SHOW_VAR status_vars[] = {
     {"Parallel_workers_launched", (char *)&show_pq_workers_launched, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_rows_scanned", (char *)&show_pq_rows_scanned, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_ranges_built", (char *)&show_pq_ranges_built, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {NullS, NullS, SHOW_FUNC, SHOW_SCOPE_ALL}};
 

@@ -1,0 +1,84 @@
+# Test: pq_range_planning_dop
+# Verify V2-4 range planning is observable for DOP=1/2/4 while real PQ
+# worker execution remains disabled.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, pad CHAR(100)) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,'a');
+INSERT INTO t1 SELECT id + 1, pad FROM t1;
+INSERT INTO t1 SELECT id + 2, pad FROM t1;
+INSERT INTO t1 SELECT id + 4, pad FROM t1;
+INSERT INTO t1 SELECT id + 8, pad FROM t1;
+INSERT INTO t1 SELECT id + 16, pad FROM t1;
+INSERT INTO t1 SELECT id + 32, pad FROM t1;
+INSERT INTO t1 SELECT id + 64, pad FROM t1;
+INSERT INTO t1 SELECT id + 128, pad FROM t1;
+INSERT INTO t1 SELECT id + 256, pad FROM t1;
+INSERT INTO t1 SELECT id + 512, pad FROM t1;
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+
+SET @pq_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_rows_scanned');
+SET @pq_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+SET @pq_ranges_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_built');
+
+SET SESSION parallel_default_dop=1;
+--disable_result_log
+SELECT * FROM t1;
+--enable_result_log
+
+SET SESSION parallel_default_dop=2;
+--disable_result_log
+SELECT * FROM t1;
+--enable_result_log
+
+SET SESSION parallel_default_dop=4;
+--disable_result_log
+SELECT * FROM t1;
+--enable_result_log
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+    AS fallback_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+    AS rows_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+    AS workers_delta,
+  ((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_built') - @pq_ranges_before) >= 3
+    AS ranges_were_planned;
+
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE t1;
