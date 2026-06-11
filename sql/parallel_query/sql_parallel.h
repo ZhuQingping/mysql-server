@@ -77,6 +77,7 @@
 #include <cstdint>
 
 class THD;
+struct TABLE;
 
 // ---------------------------------------------------------------------------
 // PQ_execution_state: per-statement execution state contract
@@ -524,6 +525,21 @@ class Gather_operator {
     @retval true   Smoke pass failed
   */
   bool run_exchange_row_stream_smoke(THD *leader_thd);
+
+  /**
+    Run a V2-8B synthetic row-image materialization smoke pass.
+
+    This pre-fills MQ handles with typed ROW/FINISH messages, copies each ROW
+    payload into leader table->record[0], and leaves real PQ execution disabled.
+    It must not update real execution counters.
+
+    @param leader_thd  Leader THD
+    @param table       Leader TABLE whose record[0] receives synthetic rows
+
+    @retval false  Smoke pass completed
+    @retval true   Smoke pass failed
+  */
+  bool run_exchange_row_image_smoke(THD *leader_thd, TABLE *table);
 
   /**
     Abort all workers and close MQ producers.

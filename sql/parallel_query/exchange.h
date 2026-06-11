@@ -60,6 +60,26 @@
 #include <cassert>
 #include <cstdint>
 
+struct TABLE;
+
+/**
+  Typed MQ message header for PQ row-image protocol.
+
+  The outer MQueue message still uses [len:4B][data:lenB]. The inner payload
+  starts with this header so Exchange can distinguish ROW/FINISH/ERROR without
+  guessing from data length.
+*/
+struct PQ_mq_message_header {
+  uint32 magic;
+  uint16 version;
+  uint16 type;
+  uint32 payload_len;
+  uint32 flags;
+};
+
+constexpr uint32 PQ_MQ_MESSAGE_MAGIC = 0x5051524d;  // "PQRM"
+constexpr uint16 PQ_MQ_MESSAGE_VERSION = 1;
+
 /**
   Base class for PQ leader-side record collection.
 
@@ -235,6 +255,26 @@ class Exchange_nosort : public Exchange {
   */
   bool run_synthetic_row_stream_smoke(uint32 *rows_read,
                                       uint32 *finishes_read);
+
+  /**
+    Run a controlled synthetic row-image materialization smoke.
+
+    The helper pre-fills each worker queue with one typed ROW message carrying
+    a fixed-size MySQL record image, then a typed FINISH message. The leader
+    consumes the messages and copies ROW payloads into table->record[0].
+
+    This is only a V2-8B protocol smoke. It does not start real workers, does
+    not read InnoDB rows, and must not be counted as real PQ execution.
+
+    @param table              Leader TABLE whose record[0] receives payloads
+    @param[out] rows_read     Number of typed ROW payloads materialized
+    @param[out] finishes_read Number of FINISH tokens observed
+
+    @retval false  Smoke pass completed
+    @retval true   Smoke pass failed
+  */
+  bool run_synthetic_row_image_smoke(TABLE *table, uint32 *rows_read,
+                                     uint32 *finishes_read);
 
   ExchangeType get_exchange_type() const override { return EXCHANGE_NOSORT; }
 };

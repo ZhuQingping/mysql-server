@@ -137,6 +137,66 @@ payload bytes
    - eligible 查询仍 fallback serial；
    - `Parallel_queries_executed` 不增加。
 
+## Explorer Results
+
+### Exchange/MQ Payload
+
+- 底层 `MQueue_handle::send()` / `receive()` 已能承载 variable-size payload，
+  因为 outer wire format 已是 `[len:uint32][data:len]`，且 receive local buffer 可扩容。
+- 原协议不能继续使用：`Exchange_nosort::get_next_from_worker()` 依赖
+  `raw_len == 1` 判断 control token，1 字节 row image 会误判。
+- `MQueue` 不应理解 `TABLE`；typed row image header 应放在 Exchange 层。
+- ERROR/ABORT token 的真实错误码和 worker loop 后续仍未完整实现，V2-8B 只保证 header
+  decode 后不会再用 payload length 猜测类型。
+
+### Iterator/Record Buffer Boundary
+
+- V2-8B 不新增 handler row-image virtual API。handler 仍只负责后续 V2-8C 通过
+  `pq_worker_scan_next(PQ_Worker_context*, uchar *record, bool *eof)` 填充
+  worker-local record buffer。
+- `table->s->reclength` 可作为 fixed record image MVP 长度；整段 copy 会包含
+  null bitmap、varchar length/data 等 MySQL row buffer 内容。
+- BLOB/TEXT/JSON/GEOMETRY 不适合 fixed copy，因为 record buffer 存的是指针槽。
+  V2-8B synthetic smoke 对 `blob_fields > 0` 的表直接跳过 materialization；
+  V2-8C 打开真实执行前必须显式 gate 或实现 deep serialization。
+- `PQTableScanIterator::Read()` 是未来真实 PQ row materialization 边界；本阶段只在
+  Init safe window 内运行 synthetic row-image smoke，之后仍进入 serial fallback。
+
+## Implementation Summary
+
+- `sql/parallel_query/exchange.h`
+  - 新增 `PQ_mq_message_header`、`PQ_MQ_MESSAGE_MAGIC`、
+    `PQ_MQ_MESSAGE_VERSION`；
+  - 新增 `Exchange_nosort::run_synthetic_row_image_smoke()`。
+- `sql/parallel_query/exchange.cc`
+  - 新增 typed message encode/decode helper；
+  - `Exchange_nosort::get_next_from_worker()` 改为解析 header，不再依赖
+    `raw_len == 1`；
+  - synthetic row stream smoke 改为发送 typed ROW/FINISH；
+  - 新增 row image smoke：按 `table->s->reclength` 构造 fixed payload，MQ
+    decode 后 copy 到 `table->record[0]` 并调用 `table->set_found_row()`。
+- `sql/parallel_query/sql_parallel.h/.cc`
+  - 新增 `Gather_operator::run_exchange_row_image_smoke()`。
+- `sql/parallel_query/pq_iterator.cc`
+  - `PQTableScanIterator::Init()` 中将 V2-6 exchange smoke 升级为 V2-8B
+    row-image materialization smoke；
+  - 仍在 safe fallback window 内运行，不设置 `PQ_execution_state::EXECUTED`。
+
+## V2-8C Handoff
+
+- worker side 后续只需把 worker-local `TABLE::record[0]` 的
+  `table->s->reclength` bytes 作为 ROW payload 发送。
+- leader side 后续真实 `Read()` 分支必须在下一次 MQ receive 前 copy payload 到
+  leader `table->record[0]`，并更新 row status。
+- V2-8C 必须补：
+  - typed `PQ_Worker_context` wrapper；
+  - worker open context；
+  - probe vs execute mode；
+  - leader read-view commit point；
+  - `blob_fields == 0` execution gate；
+  - DOP=1 single range gate。
+- DOP>1 range start/end、thread-safe dispatch、no duplicate/no missing 仍留给 V2-8D。
+
 ## Validation
 
 最低验证：
@@ -151,24 +211,41 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 
 ## Acceptance Checklist
 
-- [ ] 显式 row message header 已定义；
-- [ ] ROW/FINISH/ERROR 不再依赖 `raw_len == 1` 猜测；
-- [ ] fixed record image copy 使用 `table->s->reclength`；
-- [ ] leader materialize 后更新 `TABLE` row status；
-- [ ] synthetic row image smoke 覆盖 MQ -> leader record copy；
-- [ ] 真实 InnoDB worker scan 仍未启用；
-- [ ] eligible 查询仍安全 fallback，真实 execution counters 不增加；
-- [ ] README 当前状态已更新。
+- [x] 显式 row message header 已定义；
+- [x] ROW/FINISH/ERROR 不再依赖 `raw_len == 1` 猜测；
+- [x] fixed record image copy 使用 `table->s->reclength`；
+- [x] leader materialize 后更新 `TABLE` row status；
+- [x] synthetic row image smoke 覆盖 MQ -> leader record copy；
+- [x] 真实 InnoDB worker scan 仍未启用；
+- [x] eligible 查询仍安全 fallback，真实 execution counters 不增加；
+- [x] README 当前状态已更新。
 
 ## Current Status
 
-- Status: In Progress
+- Status: Completed
 - Owner: Codex Orchestrator
 - Started: 2026-06-11
-- Active agents:
-  - `Helmholtz`: Exchange/MQ payload
-  - `Mill`: Iterator/record buffer boundary
+- Completed: 2026-06-11
+- Agents:
+  - `Helmholtz`: Exchange/MQ payload completed
+  - `Mill`: Iterator/record buffer boundary completed
 
 ## Completion Report
 
-待实现后补充。
+V2-8B 已完成。typed MQ row image protocol 已接入 synthetic smoke，eligible 查询仍
+保持 serial fallback，真实 InnoDB worker row scan 未启用。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_exchange_rows_dop1 --parallel=1 --vardir=/tmp/pqv --tmpdir=/tmp/pqt
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir=/tmp/pqt
+```
+
+结果：
+
+- `mysqld` build 通过；
+- `pq_exchange_rows_dop1` targeted MTR 通过；
+- 完整 `parallel_query` suite 通过，18 个测试加 `shutdown_report` 共 19 项成功。

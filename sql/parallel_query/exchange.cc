@@ -50,6 +50,95 @@
 #include <cassert>
 #include <cstring>
 
+#include "sql/table.h"  // TABLE, TABLE_SHARE::reclength
+
+namespace {
+
+static_assert(sizeof(PQ_mq_message_header) == 16,
+              "PQ MQ message header must stay wire-stable");
+
+uint16 pq_mq_type_to_uint(MQMessageType type) {
+  return static_cast<uint16>(type);
+}
+
+bool pq_is_valid_mq_type(uint16 type) {
+  return type <= static_cast<uint16>(MQMessageType::ABORT);
+}
+
+bool pq_send_typed_mq_message(MQueue_handle *handle, MQMessageType type,
+                              const void *payload, uint32 payload_len,
+                              uint32 flags = 0) {
+  if (handle == nullptr) return true;
+  if (payload_len > 0 && payload == nullptr) return true;
+
+  const uint32 total_len =
+      static_cast<uint32>(sizeof(PQ_mq_message_header)) + payload_len;
+  char *message = new char[total_len];
+  if (message == nullptr) return true;
+
+  auto *header = reinterpret_cast<PQ_mq_message_header *>(message);
+  header->magic = PQ_MQ_MESSAGE_MAGIC;
+  header->version = PQ_MQ_MESSAGE_VERSION;
+  header->type = pq_mq_type_to_uint(type);
+  header->payload_len = payload_len;
+  header->flags = flags;
+
+  if (payload_len > 0) {
+    memcpy(message + sizeof(PQ_mq_message_header), payload, payload_len);
+  }
+
+  const MQ_RESULT result = handle->send(message, total_len);
+  delete[] message;
+  return result != MQ_SUCCESS;
+}
+
+bool pq_decode_typed_mq_message(void *raw_data, uint32 raw_len,
+                                MQMessageType *type, void **payload,
+                                uint32 *payload_len) {
+  if (raw_data == nullptr || type == nullptr || payload == nullptr ||
+      payload_len == nullptr) {
+    return true;
+  }
+  if (raw_len < sizeof(PQ_mq_message_header)) return true;
+
+  auto *header = reinterpret_cast<PQ_mq_message_header *>(raw_data);
+  if (header->magic != PQ_MQ_MESSAGE_MAGIC ||
+      header->version != PQ_MQ_MESSAGE_VERSION ||
+      !pq_is_valid_mq_type(header->type)) {
+    return true;
+  }
+
+  const uint32 expected_len =
+      static_cast<uint32>(sizeof(PQ_mq_message_header)) + header->payload_len;
+  if (expected_len != raw_len) return true;
+
+  *type = static_cast<MQMessageType>(header->type);
+  *payload_len = header->payload_len;
+  *payload = header->payload_len == 0
+                 ? nullptr
+                 : static_cast<char *>(raw_data) +
+                       sizeof(PQ_mq_message_header);
+  return false;
+}
+
+bool pq_materialize_record_image(TABLE *table, const void *payload,
+                                 uint32 payload_len) {
+  if (table == nullptr || table->s == nullptr || table->record[0] == nullptr) {
+    return true;
+  }
+
+  const uint32 record_len = static_cast<uint32>(table->s->reclength);
+  if (record_len == 0 || payload == nullptr || payload_len != record_len) {
+    return true;
+  }
+
+  memcpy(table->record[0], payload, record_len);
+  table->set_found_row();
+  return false;
+}
+
+}  // namespace
+
 // ---------------------------------------------------------------------------
 // Exchange: init / cleanup
 // ---------------------------------------------------------------------------
@@ -210,36 +299,44 @@ bool Exchange_nosort::get_next_from_worker(uint32 worker_id,
     return false;
   }
 
-  // MQ_SUCCESS: we have data. Determine if it's a control token or a row.
-  // MVP convention: control tokens are sent as send_control_token() which
-  // produces a 1-byte payload [len=1:4B][type_byte:1B]. Rows are longer.
+  // MQ_SUCCESS: typed row-image protocol. The outer MQueue has no type; the
+  // inner payload must start with PQ_mq_message_header.
   assert(raw_data != nullptr);
 
-  if (raw_len == 1) {
-    // Control token: decode type from the byte
-    uint8 type_byte = *reinterpret_cast<uint8 *>(raw_data);
-    type = static_cast<MQMessageType>(type_byte);
+  void *payload = nullptr;
+  uint32 payload_len = 0;
+  if (pq_decode_typed_mq_message(raw_data, raw_len, &type, &payload,
+                                 &payload_len)) {
+    type = MQMessageType::ERROR;
     *datap = nullptr;
     len = 0;
+    return true;
+  }
 
-    if (type == MQMessageType::FINISH) {
-      done = true;
-      handle->set_readdone();
-      return false;
-    }
+  if (type == MQMessageType::FINISH) {
+    done = true;
+    handle->set_readdone();
+    *datap = nullptr;
+    len = 0;
+    return false;
+  }
 
-    if (type == MQMessageType::ERROR) {
-      return true;  // Error needs to be propagated to leader
-    }
+  if (type == MQMessageType::ERROR) {
+    *datap = payload;
+    len = payload_len;
+    return true;  // Error needs to be propagated to leader
+  }
 
-    // ABORT from leader side: shouldn't be received by leader, but handle it
+  if (type == MQMessageType::ABORT) {
+    *datap = nullptr;
+    len = 0;
     return false;
   }
 
   // Regular row data
   type = MQMessageType::ROW;
-  *datap = raw_data;
-  len = raw_len;
+  *datap = payload;
+  len = payload_len;
   return true;
 }
 
@@ -325,8 +422,11 @@ bool Exchange_nosort::run_synthetic_row_stream_smoke(uint32 *rows_read,
   for (uint32 i = 0; i < m_nqueues; ++i) {
     const uint32 payload[2] = {0x50514558U, i};
     MQueue_handle *handle = get_mq_handle(i);
-    if (handle->send(payload, sizeof(payload)) != MQ_SUCCESS) return true;
-    if (handle->send_control_token(MQMessageType::FINISH) != MQ_SUCCESS) {
+    if (pq_send_typed_mq_message(handle, MQMessageType::ROW, payload,
+                                 sizeof(payload))) {
+      return true;
+    }
+    if (pq_send_typed_mq_message(handle, MQMessageType::FINISH, nullptr, 0)) {
       return true;
     }
   }
@@ -355,6 +455,72 @@ bool Exchange_nosort::run_synthetic_row_stream_smoke(uint32 *rows_read,
   }
 
   if (local_rows != m_nqueues) return true;
+  if (rows_read != nullptr) *rows_read = local_rows;
+  if (finishes_read != nullptr) *finishes_read = m_nqueues;
+  return false;
+}
+
+bool Exchange_nosort::run_synthetic_row_image_smoke(TABLE *table,
+                                                    uint32 *rows_read,
+                                                    uint32 *finishes_read) {
+  if (rows_read != nullptr) *rows_read = 0;
+  if (finishes_read != nullptr) *finishes_read = 0;
+  if (m_mq_handles == nullptr || m_nqueues == 0 || table == nullptr ||
+      table->s == nullptr) {
+    return true;
+  }
+
+  if (table->s->reclength == 0) return true;
+
+  // Fixed record-image copy is unsafe for BLOB/TEXT/JSON/GEOMETRY because the
+  // record buffer stores pointer slots. V2-8B is a protocol smoke, so skip it
+  // for such tables instead of changing execution behavior.
+  if (table->s->blob_fields > 0) return false;
+
+  const uint32 record_len = static_cast<uint32>(table->s->reclength);
+  char *record_image = new char[record_len];
+  if (record_image == nullptr) return true;
+
+  for (uint32 i = 0; i < m_nqueues; ++i) {
+    for (uint32 j = 0; j < record_len; ++j) {
+      record_image[j] = static_cast<char>((i + j) & 0xff);
+    }
+
+    MQueue_handle *handle = get_mq_handle(i);
+    if (pq_send_typed_mq_message(handle, MQMessageType::ROW, record_image,
+                                 record_len)) {
+      delete[] record_image;
+      return true;
+    }
+    if (pq_send_typed_mq_message(handle, MQMessageType::FINISH, nullptr, 0)) {
+      delete[] record_image;
+      return true;
+    }
+  }
+
+  delete[] record_image;
+
+  uint32 local_rows = 0;
+  while (!m_all_done) {
+    MQMessageType type;
+    void *datap = nullptr;
+    uint32 data_len = 0;
+    bool got_message = read_mq_message(type, &datap, data_len);
+
+    if (!got_message) {
+      if (m_all_done) break;
+      return true;
+    }
+
+    if (type == MQMessageType::ROW) {
+      if (pq_materialize_record_image(table, datap, data_len)) return true;
+      ++local_rows;
+      continue;
+    }
+
+    if (type == MQMessageType::ERROR) return true;
+  }
+
   if (rows_read != nullptr) *rows_read = local_rows;
   if (finishes_read != nullptr) *finishes_read = m_nqueues;
   return false;
