@@ -498,9 +498,8 @@ class ha_innobase : public handler {
   /**
     Initialize InnoDB-specific Parallel Query worker scan state.
 
-    Phase 6B-2: Creates an InnoDB_pq_worker_ctx with a pull-row cursor
-    for the worker's assigned range. The worker context delegates to
-    InnoDB_pq_ctx::read_record for row retrieval.
+    V2-3: worker row production is disabled until workers have independent
+    handler/prebuilt/trx/read-view state. Returns HA_ERR_UNSUPPORTED.
 
     @param[in]  worker_thd   Worker thread THD.
     @param[in]  leader_ctx   Leader context (must be InnoDB_pq_leader_ctx).
@@ -512,11 +511,7 @@ class ha_innobase : public handler {
   /**
     Pull one row for a PQ worker.
 
-    Phase 6B-2: Real pull-row implementation via
-    InnoDB_pq_worker_ctx::read_record, which delegates to
-    InnoDB_pq_ctx::read_record. Each call pulls one visible
-    row from the worker's assigned range and converts it to
-    MySQL format in the provided record buffer.
+    V2-3: disabled until worker-side mutable scan state is defined.
 
     @param[in]   worker_ctx  Worker context (must be InnoDB_pq_worker_ctx).
     @param[out]  record       MySQL row buffer (table->record[0]).
@@ -726,8 +721,8 @@ class ha_innobase : public handler {
   PQ_Leader_context *m_pq_sql_leader_ctx{nullptr};
 
   /** InnoDB PQ pull-row adapter: worker contexts.
-  Each worker has its own InnoDB_pq_worker_ctx with a pull-row cursor.
-  All workers are cleaned up in pq_leader_scan_end(). */
+  V2-3 keeps worker row production disabled; this container is retained for
+  defensive cleanup of legacy or future contexts. */
   std::vector<InnoDB_pq_worker_ctx *> m_pq_worker_ctxs;
 
   /** Thread handle of the user currently using the handler;

@@ -10886,9 +10886,12 @@ class InnoDB_pq_sql_leader_context final : public PQ_Leader_context {
 
   Steps:
   1. Validate that we're on a clustered index full scan.
-  2. Ensure the transaction is started and has a read view.
-  3. Create InnoDB_pq_leader_ctx and partition the B+tree.
-  4. Return the leader context via the PQ_Leader_context** parameter.
+  2. Create InnoDB_pq_leader_ctx and partition metadata.
+  3. Return the leader context via the PQ_Leader_context** parameter.
+
+  V2-3: this function is still used as a DOP=1 bridge probe before serial
+  fallback, so it must not create or pin a transaction read view. Real row
+  production will need a separate execution init boundary before workers read.
 
   Conservative behavior: any unsupported scenario returns
   HA_ERR_UNSUPPORTED, causing fallback to serial execution.
@@ -10944,23 +10947,11 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 
-  /* Ensure transaction is started. */
+  /* Do not start the transaction or assign a read view in this bridge probe.
+  The normal serial fallback path owns statement read-view creation, and future
+  real PQ row production must move read-view binding into an execution-only
+  boundary after fallback is no longer possible. */
   auto trx = m_prebuilt->trx;
-  trx_start_if_not_started_xa(trx, false, UT_LOCATION_HERE);
-
-  /* For consistent read (RR/RC isolation), assign read view.
-  The read view is owned by trx; workers access it through the
-  scan context without cloning/copying. */
-  if (trx->isolation_level > TRX_ISO_READ_UNCOMMITTED) {
-    trx_assign_read_view(trx);
-  }
-
-  /* Validate read view is active. */
-  if (trx->isolation_level > TRX_ISO_READ_UNCOMMITTED &&
-      trx->read_view == nullptr) {
-    /* Cannot safely do parallel scan without a read view. */
-    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
-  }
 
   /* Check thread budget: are enough parallel read threads available? */
   auto available = Parallel_reader::available_threads(requested_dop, false);
@@ -11027,11 +11018,10 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
 /**
   Initialize InnoDB PQ worker scan for clustered full scan.
 
-  Phase 6B-2: Real implementation.
-
-  Creates an InnoDB_pq_worker_ctx with a pull-row cursor for
-  the worker's assigned range. The worker context provides
-  read_record() for pulling rows one at a time.
+  V2-3: worker row production remains disabled. The current pull-row adapter
+  would use the leader handler's row_prebuilt_t, which is mutable cursor state
+  and is not safe to share with worker THDs. Return unsupported until a worker
+  handler/prebuilt/trx/read-view contract exists.
 
   @param[in]  worker_thd   Worker thread THD
   @param[in]  leader_ctx   Leader context (PQ_Leader_context*; unused in 6B-2)
@@ -11047,67 +11037,13 @@ int ha_innobase::pq_worker_scan_init(THD *worker_thd,
     *worker_ctx = nullptr;
   }
 
-  /* We must have an InnoDB PQ leader context from pq_leader_scan_init. */
-  if (m_pq_leader_ctx == nullptr) {
-    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
-  }
-
-  /* Check that the leader hasn't errored out. */
-  if (m_pq_leader_ctx->is_error_set()) {
-    return pq_map_dberr_to_handler_error(
-        m_pq_leader_ctx->get_error_state(), nullptr);
-  }
-
-  /* Dispatch a range to this worker. */
-  auto range = m_pq_leader_ctx->dispatch_next_range();
-
-  if (range == nullptr) {
-    /* All ranges already dispatched; no work for this worker. */
-    /* Create a worker ctx that will immediately return eof=true. */
-    auto innodb_worker_ctx = ut::new_withkey<InnoDB_pq_worker_ctx>(
-        UT_NEW_THIS_FILE_PSI_KEY, 0, m_pq_leader_ctx);
-
-    if (innodb_worker_ctx == nullptr) {
-      return pq_map_dberr_to_handler_error(DB_OUT_OF_MEMORY, nullptr);
-    }
-
-    /* No range assigned: worker will return eof=true on first next. */
-    m_pq_worker_ctxs.push_back(innodb_worker_ctx);
-
-    /* Phase 6B-2: PQ_Worker_context** output remains nullptr
-    (SQL layer wiring deferred to Phase 7). */
-    return 0;
-  }
-
-  /* Create InnoDB PQ worker context. */
-  size_t worker_id = m_pq_leader_ctx->n_dispatched() - 1;
-
-  auto innodb_worker_ctx = ut::new_withkey<InnoDB_pq_worker_ctx>(
-      UT_NEW_THIS_FILE_PSI_KEY, worker_id, m_pq_leader_ctx);
-
-  if (innodb_worker_ctx == nullptr) {
-    return pq_map_dberr_to_handler_error(DB_OUT_OF_MEMORY, nullptr);
-  }
-
-  /* Initialize the worker's pull-row cursor for the assigned range. */
-  innodb_worker_ctx->init(range);
-
-  /* Store for cleanup. */
-  m_pq_worker_ctxs.push_back(innodb_worker_ctx);
-
-  /* Phase 6B-2: PQ_Worker_context** output remains nullptr
-  (SQL layer wiring deferred to Phase 7). */
-  return 0;
+  return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
 }
 
 /**
   Pull one row for a PQ worker via the InnoDB pull-row adapter.
 
-  Phase 6B-2: Real implementation.
-
-  Calls InnoDB_pq_worker_ctx::read_record(), which delegates to
-  InnoDB_pq_ctx::read_record() for the actual B+tree cursor traversal,
-  visibility check, and MySQL format conversion.
+  V2-3: disabled until workers have independent mutable scan state.
 
   @param[in]   worker_ctx  Worker context (PQ_Worker_context*; unused in 6B-2)
   @param[out]  record       MySQL row buffer (table->record[0])
@@ -11120,31 +11056,12 @@ int ha_innobase::pq_worker_scan_next(PQ_Worker_context *worker_ctx,
     *eof = false;
   }
 
-  auto innodb_worker = reinterpret_cast<InnoDB_pq_worker_ctx *>(worker_ctx);
-  if (innodb_worker == nullptr) {
-    if (eof != nullptr) {
-      *eof = true;
-    }
-    return 0;
+  (void)worker_ctx;
+  (void)record;
+  if (eof != nullptr) {
+    *eof = true;
   }
-
-  /* Check leader error state. */
-  if (m_pq_leader_ctx != nullptr && m_pq_leader_ctx->is_error_set()) {
-    return pq_map_dberr_to_handler_error(
-        m_pq_leader_ctx->get_error_state(), eof);
-  }
-
-  /* Pull the next visible row from the worker's cursor. */
-  auto err_code = innodb_worker->read_record(record, m_prebuilt, eof);
-
-  /* Propagate error to leader if this is a fatal error (not EOF). */
-  if (err_code != 0 && (eof == nullptr || !*eof)) {
-    if (m_pq_leader_ctx != nullptr) {
-      m_pq_leader_ctx->set_error_state(DB_ERROR);
-    }
-  }
-
-  return err_code;
+  return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, eof);
 }
 
 /**
