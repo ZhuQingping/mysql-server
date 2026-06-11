@@ -176,6 +176,14 @@ class Exchange {
   These are deferred to Phase 5+ integration.
 */
 class Exchange_nosort : public Exchange {
+ public:
+  enum class Materialize_status {
+    ROW,
+    EOF_REACHED,
+    WOULD_BLOCK,
+    ERROR
+  };
+
  private:
   uint32 m_active_readers;  ///< Workers still producing data
   uint32 m_next_queue;     ///< Next queue to read from (round-robin index)
@@ -256,6 +264,21 @@ class Exchange_nosort : public Exchange {
     @retval true   ERROR token or malformed row image
   */
   bool materialize_next_record_image(TABLE *table, bool *eof, bool *row);
+
+  /**
+    Read and materialize one typed row-image message with precise stream status.
+
+    This is the V2-8J wait-policy boundary. It remains non-blocking, but lets
+    future `Read()` code distinguish a temporary no-message condition from EOF.
+
+    @param table        TABLE whose record[0] receives the row image
+    @param[out] status  ROW, EOF_REACHED, WOULD_BLOCK, or ERROR
+
+    @retval false  Status is valid
+    @retval true   Invalid input or malformed row image
+  */
+  bool materialize_next_record_image_status(TABLE *table,
+                                            Materialize_status *status);
 
   /**
     Enqueue one fixed-size record image for a smoke producer.

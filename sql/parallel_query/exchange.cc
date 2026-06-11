@@ -419,6 +419,30 @@ bool Exchange_nosort::materialize_next_record_image(TABLE *table, bool *eof,
   if (row != nullptr) *row = false;
   if (table == nullptr || eof == nullptr || row == nullptr) return true;
 
+  Materialize_status status = Materialize_status::ERROR;
+  if (materialize_next_record_image_status(table, &status)) return true;
+
+  switch (status) {
+    case Materialize_status::ROW:
+      *row = true;
+      return false;
+    case Materialize_status::EOF_REACHED:
+      *eof = true;
+      return false;
+    case Materialize_status::WOULD_BLOCK:
+      return false;
+    case Materialize_status::ERROR:
+      return true;
+  }
+
+  return true;
+}
+
+bool Exchange_nosort::materialize_next_record_image_status(
+    TABLE *table, Materialize_status *status) {
+  if (status != nullptr) *status = Materialize_status::ERROR;
+  if (table == nullptr || status == nullptr) return true;
+
   while (!m_all_done) {
     MQMessageType type;
     void *datap = nullptr;
@@ -426,20 +450,25 @@ bool Exchange_nosort::materialize_next_record_image(TABLE *table, bool *eof,
     const bool got_message = read_mq_message(type, &datap, data_len);
 
     if (!got_message) {
-      *eof = m_all_done;
+      *status =
+          m_all_done ? Materialize_status::EOF_REACHED
+                     : Materialize_status::WOULD_BLOCK;
       return false;
     }
 
     if (type == MQMessageType::ROW) {
       if (pq_materialize_record_image(table, datap, data_len)) return true;
-      *row = true;
+      *status = Materialize_status::ROW;
       return false;
     }
 
-    if (type == MQMessageType::ERROR) return true;
+    if (type == MQMessageType::ERROR) {
+      *status = Materialize_status::ERROR;
+      return false;
+    }
   }
 
-  *eof = true;
+  *status = Materialize_status::EOF_REACHED;
   return false;
 }
 

@@ -157,6 +157,12 @@ Status update: 已新增 `Parallel_probe_attempts` /
 现在验证 DOP=1/2/4 执行路径会同时观察到 PROBE success 和 unsupported，
 用于后续定位 DOP=1 real gate 卡点。
 
+Status update: 已新增
+`Exchange_nosort::materialize_next_record_image_status()`，把 ROW、EOF、
+WOULD_BLOCK、ERROR 显式拆开。旧 `materialize_next_record_image()` 保持兼容；
+shadow `Read()` 已切到 status helper。真实异步 worker 仍需在 WOULD_BLOCK
+外层补 wait/kill policy。
+
 ## Acceptance Checklist
 
 - [x] callback row conversion smoke 能稳定产出 row；
@@ -197,6 +203,7 @@ Status update: 已新增 `Parallel_probe_attempts` /
   不可达，且受 PROBE-supported guard 保护；
 - shadow path 使用 `mark_pq_started()` 锁定 no-fallback 边界，并仅在第一条
   ROW 返回时 `mark_pq_row_returned()` / `EXECUTED` / 真实计数；
+- 增加 Exchange materialize status helper，明确 WOULD_BLOCK 与 EOF 的边界；
 - 新增 `Parallel_worker_producer_smoke_runs` 状态变量；
 - 默认仍不接真实 `Read()`。
 

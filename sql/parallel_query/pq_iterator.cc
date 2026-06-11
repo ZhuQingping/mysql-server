@@ -266,16 +266,16 @@ int PQTableScanIterator::Read() {
     return 1;
   }
 
-  bool eof = false;
-  bool row = false;
-  if (m_gather->get_exchange()->materialize_next_record_image(table(), &eof,
-                                                              &row)) {
+  Exchange_nosort::Materialize_status status =
+      Exchange_nosort::Materialize_status::ERROR;
+  if (m_gather->get_exchange()->materialize_next_record_image_status(table(),
+                                                                     &status)) {
     cleanup_pq_resources(true);
     PrintError(HA_ERR_INTERNAL_ERROR);
     return 1;
   }
 
-  if (row) {
+  if (status == Exchange_nosort::Materialize_status::ROW) {
     if (!m_executed_counted) {
       mark_pq_row_returned();
       pq_set_execution_state(thd(), PQ_execution_state::EXECUTED);
@@ -287,7 +287,7 @@ int PQTableScanIterator::Read() {
     return 0;
   }
 
-  if (eof) {
+  if (status == Exchange_nosort::Materialize_status::EOF_REACHED) {
     cleanup_pq_resources(false);
     return -1;
   }
