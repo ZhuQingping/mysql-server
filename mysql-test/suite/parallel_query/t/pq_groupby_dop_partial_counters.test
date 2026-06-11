@@ -1,0 +1,52 @@
+# Test: pq_groupby_dop_partial_counters
+# V2-12B-1: DOP partial GROUP BY status counters are visible but dormant.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, grp INT NOT NULL, val INT NOT NULL)
+  ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,10,5),(2,10,7),(3,20,2),(4,20,9);
+
+SELECT variable_name FROM performance_schema.global_status
+  WHERE variable_name IN (
+    'Parallel_groupby_dop_partial_attempts',
+    'Parallel_groupby_dop_partial_selected',
+    'Parallel_groupby_dop_partial_worker_groups',
+    'Parallel_groupby_dop_partial_merged_groups',
+    'Parallel_groupby_dop_partial_fallback')
+  ORDER BY variable_name;
+
+SET @pq_groupby_dop_partial_before = (
+  SELECT SUM(CAST(variable_value AS UNSIGNED))
+    FROM performance_schema.global_status
+    WHERE variable_name LIKE 'Parallel_groupby_dop_partial_%');
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=1;
+SET SESSION parallel_query_experimental_groupby_dop1=ON;
+
+SELECT grp, COUNT(*) AS cnt FROM t1 GROUP BY grp;
+
+SET SESSION parallel_query_experimental_groupby_dop1=OFF;
+SET SESSION parallel_default_dop=2;
+SET SESSION parallel_query_experimental_threaded_dop=ON;
+
+SELECT COUNT(*) AS cnt FROM t1;
+
+SELECT CAST((
+  SELECT SUM(CAST(variable_value AS UNSIGNED))
+    FROM performance_schema.global_status
+    WHERE variable_name LIKE 'Parallel_groupby_dop_partial_%') -
+      @pq_groupby_dop_partial_before AS SIGNED) AS dop_partial_counter_delta;
+
+SET SESSION parallel_query_experimental_threaded_dop=OFF;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE t1;

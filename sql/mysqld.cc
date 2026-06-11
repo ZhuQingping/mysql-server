@@ -9966,6 +9966,28 @@ static int show_pq_groupby_dop1_factory_fallback(THD *, SHOW_VAR *var,
   return 0;
 }
 
+#define DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC(NAME, FIELD)            \
+  static int show_pq_##NAME(THD *, SHOW_VAR *var, char *buf) {          \
+    var->type = SHOW_LONGLONG;                                          \
+    var->value = buf;                                                    \
+    *((longlong *)buf) =                                                \
+        (longlong)(pq_global_stats.FIELD.load(std::memory_order_relaxed)); \
+    return 0;                                                           \
+  }
+
+DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC(
+    groupby_dop_partial_attempts, groupby_dop_partial_attempts)
+DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC(
+    groupby_dop_partial_selected, groupby_dop_partial_selected)
+DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC(
+    groupby_dop_partial_worker_groups, groupby_dop_partial_worker_groups)
+DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC(
+    groupby_dop_partial_merged_groups, groupby_dop_partial_merged_groups)
+DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC(
+    groupby_dop_partial_fallback, groupby_dop_partial_fallback)
+
+#undef DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC
+
 static int show_pq_groupby_temp_shape_supported(THD *, SHOW_VAR *var,
                                                 char *buf) {
   var->type = SHOW_LONGLONG;
@@ -10417,6 +10439,21 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_groupby_dop1_factory_fallback",
      (char *)&show_pq_groupby_dop1_factory_fallback, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_groupby_dop_partial_attempts",
+     (char *)&show_pq_groupby_dop_partial_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_groupby_dop_partial_selected",
+     (char *)&show_pq_groupby_dop_partial_selected, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_groupby_dop_partial_worker_groups",
+     (char *)&show_pq_groupby_dop_partial_worker_groups, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_groupby_dop_partial_merged_groups",
+     (char *)&show_pq_groupby_dop_partial_merged_groups, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_groupby_dop_partial_fallback",
+     (char *)&show_pq_groupby_dop_partial_fallback, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_groupby_temp_shape_supported",
      (char *)&show_pq_groupby_temp_shape_supported, SHOW_FUNC,
