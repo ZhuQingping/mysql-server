@@ -7790,3 +7790,10 @@ static Sys_var_bool Sys_parallel_query_experimental_threaded_dop4(
     "Default OFF; intended for controlled testing only",
     SESSION_VAR(parallel_query_experimental_threaded_dop4), CMD_LINE(OPT_ARG),
     DEFAULT(false));
+
+static Sys_var_bool Sys_parallel_query_experimental_groupby_dop1(
+    "parallel_query_experimental_groupby_dop1",
+    "Enable experimental Parallel Query DOP=1 GROUP BY partial aggregation. "
+    "Default OFF; intended for controlled testing only",
+    SESSION_VAR(parallel_query_experimental_groupby_dop1), CMD_LINE(OPT_ARG),
+    DEFAULT(false));

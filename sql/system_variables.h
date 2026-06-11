@@ -554,6 +554,12 @@ struct System_variables {
     Enable the experimental DOP=4 threaded full-scan execution path.
   */
   bool parallel_query_experimental_threaded_dop4;
+
+  /**
+    @sa Sys_parallel_query_experimental_groupby_dop1
+    Enable the experimental DOP=1 GROUP BY partial aggregation path.
+  */
+  bool parallel_query_experimental_groupby_dop1;
 };
 
 /**

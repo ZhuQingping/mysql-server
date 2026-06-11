@@ -259,9 +259,23 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 ## 当前状态
 
-状态：Task Contract Created。
+状态：V2-12A-3.1 Completed。
+
+已完成：
+
+- 新增默认 OFF 的 `parallel_query_experimental_groupby_dop1` session/global sysvar；
+- `pq_vars` 覆盖新变量默认值、set/reset 和 global 可见性；
+- GROUP BY eligibility 和执行路径保持不变，显式 GROUP BY 继续 fallback。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_vars pq_groupby_diagnostics \
+  --parallel=1 --vardir=/tmp/pqv_groupby_gate \
+  --tmpdir=/tmp/pqt_groupby_gate
+```
 
 下一步：
 
-- 先执行 V2-12A-3.1，新增 gate 且不改变 GROUP BY fallback；
-- 再进入 V2-12A-3.2 factory skeleton。
+- 进入 V2-12A-3.2 factory skeleton。
