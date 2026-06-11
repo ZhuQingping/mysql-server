@@ -204,6 +204,11 @@ bool PQTableScanIterator::Init() {
         PrintError(HA_ERR_INTERNAL_ERROR);
         return true;
       }
+      DBUG_EXECUTE_IF("pq_read_threaded_shadow_abort_after_start", {
+        cleanup_pq_resources(true);
+        PrintError(HA_ERR_INTERNAL_ERROR);
+        return true;
+      });
     } else {
       uint32 rows_produced = 0;
       if (m_gather->run_worker_callback_limited_producer(thd(), table(), 2,

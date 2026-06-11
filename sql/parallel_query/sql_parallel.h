@@ -294,6 +294,7 @@ struct PQ_worker_info {
   PQ_worker_task m_task{PQ_worker_task::NOOP};  ///< Thread entry task
   uint32 m_task_max_rows{0};          ///< Task-specific callback row limit
   std::atomic<uint32> m_task_rows_sent{0};  ///< Rows enqueued by worker task
+  bool m_task_force_error{false};     ///< Debug task injects worker ERROR
 
   PQ_worker_info() { reset_open_context(); }
 

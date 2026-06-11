@@ -174,7 +174,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_full --t
 
 ## Current Status
 
-- Status: V2-8K-2 Completed
+- Status: V2-8K-3 Completed
 - Owner: Codex Orchestrator
 - Started: 2026-06-11
 - Last updated: 2026-06-11
@@ -268,3 +268,47 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_full --t
 - V2-8K-3：增加 worker ERROR token、leader kill/abort、EOF/cleanup 幂等测试；
 - 之后再评估是否把 debug-only threaded DOP=1 full scan 提升为受系统变量保护的
   实验执行路径。
+
+### V2-8K-3: Error/Kill/EOF Hardening
+
+已完成：
+
+- 新增 leader-side debug 注入
+  `pq_read_threaded_shadow_force_worker_error`，由 leader 配置 worker task，
+  不依赖 worker thread 继承 session debug；
+- worker task 支持强制发送 ERROR token 并设置 `HA_ERR_INTERNAL_ERROR`；
+- 新增 `pq_read_threaded_worker_error` MTR，验证 worker ERROR 不被吞成 EOF
+  或 WOULD_BLOCK：SQL 返回 handler error，`executed/fallback/rows` 不增加，
+  `workers_launched` 增加；
+- 新增 `pq_read_threaded_shadow_abort_after_start` debug 注入，在 worker
+  start 后立即走 leader abort cleanup；
+- 新增 `pq_read_threaded_abort_cleanup` MTR，验证 abort cleanup 后 worker 已
+  启动、未 executed、未 fallback，并且同一连接可继续串行查询；
+- 复用 V2-8K-2 的 EOF normal path MTR `pq_read_threaded_shadow_dop1`，覆盖
+  FINISH/EOF 后 join worker 并释放 leader context 的正常路径。
+
+未打开：
+
+- 默认真实 DOP=1 full scan 仍未启用；
+- 未实现外部 `KILL QUERY` 异步 MTR；当前覆盖的是 leader-side abort cleanup；
+- DOP>1、谓词下推、projection 下推、真实并行聚合仍后移。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_read_threaded_shadow_dop1 pq_read_threaded_worker_error pq_read_threaded_abort_cleanup --parallel=1 --vardir=/tmp/pqv_threaded_hardening --tmpdir=/tmp/pqt_threaded_hardening
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_full --tmpdir=/tmp/pqt_full
+```
+
+结果：
+
+- `mysqld` build 通过；
+- threaded normal/error/abort cleanup 三个用例通过；
+- 完整 `parallel_query` suite 23 个测试通过。
+
+后续：
+
+- 评估 debug-only threaded DOP=1 full scan 是否进入受系统变量保护的实验路径；
+- 在默认启用前继续补齐 WHERE/projection 语义边界和更真实的 kill 测试。

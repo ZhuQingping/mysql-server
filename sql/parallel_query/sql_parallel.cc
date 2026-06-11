@@ -51,6 +51,7 @@
 #include <cassert>
 #include <cstring>
 
+#include "my_dbug.h"
 #include "mysql/psi/mysql_thread.h"
 #include "mysqld_error.h"         // ER_QUERY_INTERRUPTED
 #include "sql/mysqld.h"           // key_thread_parallel_query_worker
@@ -957,6 +958,12 @@ bool pq_run_callback_limited_producer_task(PQ_worker_info *worker,
   }
 
   auto *nosort = static_cast<Exchange_nosort *>(exchange);
+  if (worker->m_task_force_error) {
+    worker->m_error_code = HA_ERR_INTERNAL_ERROR;
+    (void)nosort->enqueue_error_smoke(worker->m_worker_id);
+    return true;
+  }
+
   bool failed = pq_open_worker_table(&worker->m_open_ctx);
   if (!failed) {
     failed = worker->m_open_ctx.worker_handler->pq_worker_scan_init(
@@ -1212,6 +1219,9 @@ bool Gather_operator::run_worker_callback_threaded_producer(
 
   worker->m_task = PQ_worker_task::CALLBACK_LIMITED_PRODUCER;
   worker->m_task_max_rows = max_rows;
+  worker->m_task_force_error = false;
+  DBUG_EXECUTE_IF("pq_read_threaded_shadow_force_worker_error",
+                  worker->m_task_force_error = true;);
   worker->m_task_rows_sent.store(0, std::memory_order_release);
 
   if (start_workers(leader_thd)) {
