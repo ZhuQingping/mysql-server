@@ -24,13 +24,16 @@
 
 #include <utility>
 
-#include "sql/iterators/composite_iterators.h"  // temptable_aggregate_iterator
 #include "sql/iterators/row_iterator.h"         // TableRowIterator
 #include "sql/join_optimizer/access_path.h"  // AccessPath
 #include "sql/item_sum.h"                    // Item_sum
+#include "sql/pfs_batch_mode.h"              // PFSBatchMode
 #include "sql/parallel_query/sql_parallel.h"  // pq_global_stats
+#include "scope_guard.h"                     // create_scope_guard
+#include "sql/sql_executor.h"                // copy_funcs, sum funcs
+#include "sql/sql_optimizer.h"               // JOIN, Switch_ref_item_slice
+#include "sql/sql_tmp_table.h"               // instantiate_tmp_table
 #include "sql/sql_class.h"                   // THD
-#include "sql/sql_optimizer.h"               // JOIN
 #include "sql/table.h"                       // TABLE
 #include "sql/temp_table_param.h"            // Temp_table_param
 
@@ -137,16 +140,171 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
       unique_ptr_destroy_only<RowIterator> table_iterator, JOIN *join,
       int ref_slice)
       : TableRowIterator(thd, table),
-        m_native_iterator(temptable_aggregate_iterator::CreateIterator(
-            thd, std::move(subquery_iterator), temp_table_param, table,
-            std::move(table_iterator), join, ref_slice)) {}
+        m_subquery_iterator(std::move(subquery_iterator)),
+        m_table_iterator(std::move(table_iterator)),
+        m_temp_table_param(temp_table_param),
+        m_join(join),
+        m_ref_slice(ref_slice) {}
 
   bool Init() override {
-    if (m_native_iterator == nullptr || m_native_iterator->Init()) {
+    if (m_subquery_iterator == nullptr || m_table_iterator == nullptr ||
+        m_temp_table_param == nullptr || m_join == nullptr) {
       return true;
     }
+
+    m_join->set_ref_item_slice(REF_SLICE_SAVED_BASE);
+
+    if (m_subquery_iterator->Init()) {
+      return true;
+    }
+
+    if (!table()->is_created()) {
+      if (instantiate_tmp_table(thd(), table())) {
+        return true;
+      }
+      empty_record(table());
+    } else {
+      if (table()->file->inited) {
+        table()->file->ha_index_or_rnd_end();
+      }
+      table()->file->ha_delete_all_rows();
+    }
+
+    if (table()->file->ha_index_init(0, false)) {
+      return true;
+    }
+    auto end_unique_index =
+        create_scope_guard([&] { table()->file->ha_index_end(); });
+
+    PFSBatchMode pfs_batch_mode(m_subquery_iterator.get());
+    for (;;) {
+      int read_error = m_subquery_iterator->Read();
+      if (read_error > 0 || thd()->is_error()) {
+        return true;
+      }
+      if (read_error < 0) {
+        break;
+      }
+      if (thd()->killed) {
+        thd()->send_kill_message();
+        return true;
+      }
+
+      if (copy_funcs(m_temp_table_param, thd(), CFT_FIELDS)) {
+        return true;
+      }
+
+      bool group_found = false;
+      if (using_hash_key()) {
+        if (copy_funcs(m_temp_table_param, thd())) {
+          return true;
+        }
+        group_found = !check_unique_constraint(table());
+      } else {
+        for (ORDER *group = table()->group; group; group = group->next) {
+          Item *item = *group->item;
+          item->save_org_in_field(group->field_in_tmp_table);
+          if (item->is_nullable()) {
+            group->buff[-1] =
+                static_cast<char>(group->field_in_tmp_table->is_null());
+          }
+        }
+        const uchar *key = m_temp_table_param->group_buff;
+        group_found = !table()->file->ha_index_read_map(
+            table()->record[1], key, HA_WHOLE_KEY, HA_READ_KEY_EXACT);
+      }
+
+      if (group_found) {
+        restore_record(table(), record[1]);
+        update_tmptable_sum_func(m_join->sum_funcs, table());
+        if (thd()->is_error()) {
+          return true;
+        }
+
+        int error = table()->file->ha_update_row(table()->record[1],
+                                                 table()->record[0]);
+        if (error != 0 && error != HA_ERR_RECORD_IS_THE_SAME) {
+          if (move_table_to_disk(error, false)) {
+            end_unique_index.release();
+            return true;
+          }
+
+          const uchar *key = using_hash_key()
+                                 ? table()->hash_field->field_ptr()
+                                 : m_temp_table_param->group_buff;
+          if (table()->file->ha_index_read_map(
+                  table()->record[1], key, HA_WHOLE_KEY,
+                  HA_READ_KEY_EXACT)) {
+            return true;
+          }
+
+          restore_record(table(), record[1]);
+          update_tmptable_sum_func(m_join->sum_funcs, table());
+          if (thd()->is_error()) {
+            return true;
+          }
+
+          error = table()->file->ha_update_row(table()->record[1],
+                                               table()->record[0]);
+          if (error != 0 && error != HA_ERR_RECORD_IS_THE_SAME) {
+            PrintError(error);
+            return true;
+          }
+        }
+        continue;
+      }
+
+      Switch_ref_item_slice slice_switch(m_join, m_ref_slice);
+
+      if (!using_hash_key()) {
+        ORDER *group;
+        KEY_PART_INFO *key_part;
+        for (group = table()->group, key_part = table()->key_info[0].key_part;
+             group; group = group->next, key_part++) {
+          if (key_part->null_bit) {
+            memcpy(table()->record[0] + key_part->offset - 1,
+                   group->buff - 1, 1);
+          }
+        }
+        if (copy_funcs(m_temp_table_param, thd())) {
+          return true;
+        }
+      }
+
+      init_tmptable_sum_functions(m_join->sum_funcs);
+      if (thd()->is_error()) {
+        return true;
+      }
+
+      int error = table()->file->ha_write_row(table()->record[0]);
+      if (error != 0) {
+        if (error == HA_ERR_FOUND_DUPP_KEY) {
+          for (ORDER *group = table()->group; group; group = group->next) {
+            if (group->field_in_tmp_table->type() == MYSQL_TYPE_TIMESTAMP) {
+              my_error(ER_GROUPING_ON_TIMESTAMP_IN_DST, MYF(0));
+              return true;
+            }
+          }
+        }
+
+        if (move_table_to_disk(error, true)) {
+          end_unique_index.release();
+          return true;
+        }
+      }
+    }
+
+    table()->file->ha_index_end();
+    end_unique_index.release();
+
+    table()->materialized = true;
+
+    if (m_table_iterator->Init()) {
+      return true;
+    }
+
     if (!m_executed_counted) {
-      pq_global_stats.groupby_dop1_native_delegate_executed.fetch_add(
+      pq_global_stats.groupby_dop1_temp_table_executed.fetch_add(
           1, std::memory_order_relaxed);
       m_executed_counted = true;
     }
@@ -154,36 +312,56 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
   }
 
   int Read() override {
-    if (m_native_iterator == nullptr) return 1;
-    return m_native_iterator->Read();
+    if (m_table_iterator == nullptr) return 1;
+    if (m_join != nullptr && m_ref_slice != -1 &&
+        !m_join->ref_items[m_ref_slice].is_null()) {
+      m_join->set_ref_item_slice(m_ref_slice);
+    }
+    return m_table_iterator->Read();
   }
 
   void SetNullRowFlag(bool is_null_row) override {
-    if (m_native_iterator != nullptr) {
-      m_native_iterator->SetNullRowFlag(is_null_row);
+    if (m_table_iterator != nullptr) {
+      m_table_iterator->SetNullRowFlag(is_null_row);
     }
   }
 
-  void UnlockRow() override {
-    if (m_native_iterator != nullptr) {
-      m_native_iterator->UnlockRow();
-    }
-  }
+  void UnlockRow() override {}
 
   void StartPSIBatchMode() override {
-    if (m_native_iterator != nullptr) {
-      m_native_iterator->StartPSIBatchMode();
-    }
+    // Batch mode is managed explicitly while materializing input rows.
   }
 
   void EndPSIBatchModeIfStarted() override {
-    if (m_native_iterator != nullptr) {
-      m_native_iterator->EndPSIBatchModeIfStarted();
+    if (m_table_iterator != nullptr) {
+      m_table_iterator->EndPSIBatchModeIfStarted();
+    }
+    if (m_subquery_iterator != nullptr) {
+      m_subquery_iterator->EndPSIBatchModeIfStarted();
     }
   }
 
  private:
-  unique_ptr_destroy_only<RowIterator> m_native_iterator;
+  bool using_hash_key() const { return table()->hash_field; }
+
+  bool move_table_to_disk(int error, bool was_insert) {
+    if (create_ondisk_from_heap(thd(), table(), error, was_insert,
+                                false, nullptr)) {
+      return true;
+    }
+    error = table()->file->ha_index_init(0, false);
+    if (error != 0) {
+      PrintError(error);
+      return true;
+    }
+    return false;
+  }
+
+  unique_ptr_destroy_only<RowIterator> m_subquery_iterator;
+  unique_ptr_destroy_only<RowIterator> m_table_iterator;
+  Temp_table_param *m_temp_table_param{nullptr};
+  JOIN *const m_join{nullptr};
+  const int m_ref_slice{-1};
   bool m_executed_counted{false};
 };
 

@@ -611,3 +611,52 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 下一步：
 
 - 再把 wrapper 的 `Init()` 从 native delegate 替换为 PQ-owned temp-table 写入循环。
+
+### V2-12A-3.6 PQ-owned Temp-table Write Loop
+
+状态：Completed。
+
+目标：
+
+- 移除 3.5 wrapper 内部的 native delegate；
+- PQ wrapper 自己驱动 `subquery_iterator`，写入 output temp table，并通过 `table_iterator` 输出最终结果；
+- 继续复用 MySQL helper：`copy_funcs()`、`init_tmptable_sum_functions()`、`update_tmptable_sum_func()`、`instantiate_tmp_table()`、`create_ondisk_from_heap()`；
+- 不修改原生 `TemptableAggregateIterator` 和 `item_sum.*`；
+- 不接 worker partial state，仍是 leader-local DOP=1 temp-table 聚合执行。
+
+实现：
+
+- `PQTemptableGroupAggregateIterator::Init()` 复用原生 temp-table aggregate contract：
+  - 输入阶段切到 `REF_SLICE_SAVED_BASE`；
+  - 创建/清空 output temp table；
+  - 使用 index 0 查找已有 group；
+  - group 命中时 `update_tmptable_sum_func()` + `ha_update_row()`；
+  - 新 group 时切到 `ref_slice`，`copy_funcs()` + `init_tmptable_sum_functions()` + `ha_write_row()`；
+  - 完成后 `table()->materialized = true` 并初始化 `table_iterator`。
+- 新增 `Parallel_groupby_dop1_temp_table_executed`；
+- 保留 `Parallel_groupby_dop1_native_delegate_executed` 作为 3.5 历史观测项，本步骤期望其 delta 为 0。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_dop1_factory_observable pq_stats pq_groupby_diagnostics \
+  pq_groupby_typed_state_smoke \
+  --parallel=1 --vardir=/tmp/pqv_groupby_owned \
+  --tmpdir=/tmp/pqt_groupby_owned
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full_groupby_owned \
+  --tmpdir=/tmp/pqt_full_groupby_owned
+```
+
+结果：
+
+- `cmake --build build-ninja --target mysqld -j 16` 通过；
+- targeted suite 通过：`pq_groupby_dop1_factory_observable`、`pq_stats`、`pq_groupby_diagnostics`、`pq_groupby_typed_state_smoke`；
+- 完整 `parallel_query` suite 通过，共 55 项。
+
+下一步：
+
+- 扩展正向 MTR：COUNT/SUM/MIN/MAX、NULL、更多 group 数；
+- 再把 leader-local temp-table 聚合内部替换为 PQ partial state merge。

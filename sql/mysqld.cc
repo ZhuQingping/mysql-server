@@ -9916,6 +9916,16 @@ static int show_pq_groupby_dop1_native_delegate_executed(THD *, SHOW_VAR *var,
   return 0;
 }
 
+static int show_pq_groupby_dop1_temp_table_executed(THD *, SHOW_VAR *var,
+                                                    char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.groupby_dop1_temp_table_executed.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
 static int show_pq_groupby_dop1_factory_fallback(THD *, SHOW_VAR *var,
                                                  char *buf) {
   var->type = SHOW_LONGLONG;
@@ -10362,6 +10372,9 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_groupby_dop1_native_delegate_executed",
      (char *)&show_pq_groupby_dop1_native_delegate_executed, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_groupby_dop1_temp_table_executed",
+     (char *)&show_pq_groupby_dop1_temp_table_executed, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_groupby_dop1_factory_fallback",
      (char *)&show_pq_groupby_dop1_factory_fallback, SHOW_FUNC,

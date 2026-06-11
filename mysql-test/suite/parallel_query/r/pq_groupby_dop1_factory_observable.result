@@ -53,6 +53,10 @@ SET @pq_groupby_delegate_executed_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_groupby_dop1_native_delegate_executed');
+SET @pq_groupby_temp_executed_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_dop1_temp_table_executed');
 SELECT val, COUNT(*) AS cnt FROM t1 GROUP BY val;
 val	cnt
 10	2
@@ -70,12 +74,15 @@ WHERE variable_name = 'Parallel_groupby_dop1_factory_selected') -
 @pq_groupby_selected_before) >= 1 AS factory_selected,
 ((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_groupby_dop1_native_delegate_executed') -
-@pq_groupby_delegate_executed_before) >= 1 AS native_delegate_executed,
+@pq_groupby_delegate_executed_before) AS native_delegate_delta,
+((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_dop1_temp_table_executed') -
+@pq_groupby_temp_executed_before) >= 1 AS temp_table_executed,
 ((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_groupby_temp_shape_supported') -
 @pq_groupby_shape_supported_before) >= 1 AS temp_shape_supported;
-factory_attempted	factory_fallback_delta	factory_selected	native_delegate_executed	temp_shape_supported
-1	0	1	1	1
+factory_attempted	factory_fallback_delta	factory_selected	native_delegate_delta	temp_table_executed	temp_shape_supported
+1	0	1	0	1	1
 SET SESSION parallel_query_experimental_groupby_dop1=OFF;
 SET SESSION parallel_query=OFF;
 SET SESSION parallel_default_dop=4;
