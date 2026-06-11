@@ -705,3 +705,45 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 - 增加负向 MTR：DOP=2、HAVING、ORDER BY、DISTINCT、表达式 group key、表达式 aggregate argument、非整数/BLOB/TEXT；
 - 再推进 PQ partial state merge。
+
+### V2-12A-3.8 Unsupported Shape Coverage
+
+状态：Completed。
+
+目标：
+
+- 增加 GROUP BY DOP1 负向覆盖，确认 unsupported shape 不进入 PQ-owned temp-table execution；
+- 覆盖 optimizer guard 和 factory shape guard 两类拒绝路径；
+- 保证 selected/temp-table executed counters 不增长。
+
+覆盖：
+
+- DOP=2；
+- HAVING；
+- ORDER BY；
+- DISTINCT aggregate；
+- expression group key；
+- expression aggregate argument；
+- string group key。
+
+验证：
+
+```bash
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_dop1_unsupported pq_groupby_dop1_sum_min_max \
+  pq_groupby_dop1_factory_observable pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_groupby_neg \
+  --tmpdir=/tmp/pqt_groupby_neg
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full_groupby_neg \
+  --tmpdir=/tmp/pqt_full_groupby_neg
+```
+
+结果：
+
+- targeted suite 通过；
+- 完整 `parallel_query` suite 通过，共 57 项。
+
+下一步：
+
+- 推进 PQ partial state merge，逐步替换 leader-local temp-table update loop 的 aggregate state 来源。
