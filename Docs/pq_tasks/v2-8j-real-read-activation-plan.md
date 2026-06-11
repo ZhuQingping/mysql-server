@@ -100,6 +100,10 @@ image 已发送为 typed MQ ROW，leader 通过
 - leader wait/cleanup 不死等；
 - 不返回 row 给 SQL executor。
 
+Status: Completed for smoke scope. 已新增 smoke-only producer loop skeleton：worker metadata
+进入 RUNNING，发送 typed FINISH，leader 通过 Exchange 观察 EOF，worker 进入
+FINISHED。该路径不创建 OS worker thread，不读 InnoDB row。
+
 ### V2-8J-3: `Read()` Shadow Path
 
 目标：
@@ -120,7 +124,8 @@ image 已发送为 typed MQ ROW，leader 通过
 
 - [x] callback row conversion smoke 能稳定产出 row；
 - [x] callback row producer smoke 能稳定产出 ROW；
-- [ ] worker producer loop 有 FINISH/ERROR/abort 语义；
+- [x] worker producer loop skeleton 有 FINISH/EOF 语义；
+- [ ] worker producer loop 有 ERROR/abort 语义；
 - [ ] `Read()` shadow path 可编译、默认不可达；
 - [ ] DOP=1 real full scan MTR 通过；
 - [ ] full `parallel_query` suite 通过；
@@ -141,8 +146,12 @@ image 已发送为 typed MQ ROW，leader 通过
 - callback conversion smoke 现在只要求 clustered index + active read view；
 - `pq_worker_dop1` 已把 `Parallel_callback_smoke_rows >= 1` 作为硬验收；
 - 增加 `Exchange_nosort::enqueue_record_image_smoke()`；
+- 增加 `Exchange_nosort::enqueue_finish_smoke()`；
 - callback conversion 成功后，worker record image 被发送为 typed MQ ROW；
 - leader 通过 `materialize_next_record_image()` 消费该 row image；
+- 增加 `Gather_operator::run_worker_producer_loop_smoke()`，验证
+  RUNNING -> typed FINISH -> EOF -> FINISHED；
+- 新增 `Parallel_worker_producer_smoke_runs` 状态变量；
 - 仍不接真实 `Read()`。
 
 验证：
@@ -159,4 +168,4 @@ Result: passed, 19 tests successful
 ```
 
 下一步进入 V2-8J-2：worker producer loop skeleton，补 FINISH/ERROR/abort
-语义，但仍不返回 row 给 SQL executor。
+的 ERROR/abort 分支；仍不返回 row 给 SQL executor。

@@ -517,6 +517,46 @@ bool Gather_operator::run_worker_lifecycle_smoke(THD *leader_thd) {
   return false;
 }
 
+bool Gather_operator::run_worker_producer_loop_smoke(
+    THD *leader_thd [[maybe_unused]], TABLE *leader_table) {
+  if (leader_table == nullptr || m_dop != 1) return true;
+
+  bool initialized_here = false;
+
+  if (!m_initialized) {
+    if (init()) return true;
+    initialized_here = true;
+  }
+
+  auto *worker = get_worker(0);
+  auto *exchange = get_exchange();
+  if (worker == nullptr || exchange == nullptr) {
+    if (initialized_here) destroy();
+    return true;
+  }
+
+  if (!worker->transition_status(PQ_Worker_status::RUNNING)) {
+    if (initialized_here) destroy();
+    return true;
+  }
+
+  bool eof = false;
+  bool row = false;
+  bool failed = exchange->enqueue_finish_smoke(0) ||
+                exchange->materialize_next_record_image(leader_table, &eof,
+                                                        &row) ||
+                !eof || row ||
+                !worker->transition_status(PQ_Worker_status::FINISHED);
+
+  if (!failed) {
+    pq_global_stats.worker_producer_smoke_runs.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+
+  if (initialized_here) destroy();
+  return failed;
+}
+
 bool Gather_operator::run_exchange_row_stream_smoke(THD *leader_thd
                                                     [[maybe_unused]]) {
   bool initialized_here = false;

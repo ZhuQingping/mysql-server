@@ -172,6 +172,7 @@ struct PQ_global_stats {
   std::atomic<uint64> rows_scanned{0};        ///< Total rows scanned by PQ workers
   std::atomic<uint64> ranges_built{0};        ///< Total InnoDB PQ ranges planned
   std::atomic<uint64> worker_smoke_runs{0};   ///< Worker lifecycle smoke runs
+  std::atomic<uint64> worker_producer_smoke_runs{0};  ///< Producer loop smoke runs
   std::atomic<uint64> worker_open_smoke_runs{0};  ///< Worker THD/TABLE smoke runs
   std::atomic<uint64> worker_handler_smoke_runs{0};  ///< Handler init/end smoke runs
   std::atomic<uint64> exchange_smoke_rows{0};      ///< Synthetic MQ rows read
@@ -187,6 +188,7 @@ struct PQ_global_stats {
     rows_scanned.store(0, std::memory_order_relaxed);
     ranges_built.store(0, std::memory_order_relaxed);
     worker_smoke_runs.store(0, std::memory_order_relaxed);
+    worker_producer_smoke_runs.store(0, std::memory_order_relaxed);
     worker_open_smoke_runs.store(0, std::memory_order_relaxed);
     worker_handler_smoke_runs.store(0, std::memory_order_relaxed);
     exchange_smoke_rows.store(0, std::memory_order_relaxed);
@@ -580,6 +582,19 @@ class Gather_operator {
     @retval true   Smoke pass failed
   */
   bool run_worker_lifecycle_smoke(THD *leader_thd);
+
+  /**
+    Run a V2-8J worker producer loop skeleton smoke.
+
+    This does not create an OS worker thread or read InnoDB rows. It exercises
+    the minimal producer lifecycle contract: worker metadata transitions to
+    RUNNING, sends a typed FINISH token, leader observes EOF via Exchange, and
+    worker transitions to FINISHED.
+
+    @retval false  Smoke pass completed
+    @retval true   Smoke pass failed
+  */
+  bool run_worker_producer_loop_smoke(THD *leader_thd, TABLE *leader_table);
 
   /**
     Run a V2-6 synthetic Exchange/Gather row-stream smoke pass.

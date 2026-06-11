@@ -461,6 +461,15 @@ bool Exchange_nosort::enqueue_record_image_smoke(uint32 worker_id,
   return pq_send_typed_mq_message(handle, MQMessageType::FINISH, nullptr, 0);
 }
 
+bool Exchange_nosort::enqueue_finish_smoke(uint32 worker_id) {
+  if (m_mq_handles == nullptr || worker_id >= m_nqueues) {
+    return true;
+  }
+
+  return pq_send_typed_mq_message(get_mq_handle(worker_id),
+                                  MQMessageType::FINISH, nullptr, 0);
+}
+
 bool Exchange_nosort::run_synthetic_row_stream_smoke(uint32 *rows_read,
                                                      uint32 *finishes_read) {
   if (rows_read != nullptr) *rows_read = 0;
