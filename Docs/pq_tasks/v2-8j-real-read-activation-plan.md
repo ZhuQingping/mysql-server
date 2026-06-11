@@ -48,6 +48,11 @@ primitive 和 smoke attempts，不提供 pull-row API。
 `Parallel_callback_smoke_attempts` 已可观测，但 `Parallel_callback_smoke_rows`
 当前可能为 0。打开真实执行前，必须先让 callback row conversion 在目标表上稳定产出。
 
+Status: In progress. `smoke_callback_conversion()` 已从 pull adapter 的
+whole-range gate 中拆出，不再因为 range planning 产出多个 range 而跳过
+callback conversion smoke；目标是让 fixed-row InnoDB 表稳定观察到
+`Parallel_callback_smoke_rows >= 1`。
+
 ### Blocker 4: fatal-after-start 还没有执行路径使用
 
 V2-8I 已有 iterator runtime state，但当前没有调用 `mark_pq_started()` /
@@ -103,6 +108,7 @@ V2-8I 已有 iterator runtime state，但当前没有调用 `mark_pq_started()` 
 
 ## Acceptance Checklist
 
+- [ ] callback row conversion smoke 能稳定产出 row；
 - [ ] callback row producer smoke 能稳定产出 ROW；
 - [ ] worker producer loop 有 FINISH/ERROR/abort 语义；
 - [ ] `Read()` shadow path 可编译、默认不可达；
@@ -112,10 +118,32 @@ V2-8I 已有 iterator runtime state，但当前没有调用 `mark_pq_started()` 
 
 ## Current Status
 
-- Status: Planned
+- Status: In Progress
 - Owner: Codex Orchestrator
 - Started: 2026-06-11
 
 ## Completion Report
 
-设计拆分已完成。下一步建议先做 V2-8J-1，不直接启用真实 `Read()`。
+已完成第一段 hard blocker 收敛：
+
+- `InnoDB_pq_scan_ctx::smoke_callback_conversion()` 不再复用 pull adapter 的
+  whole-range gate；
+- callback conversion smoke 现在只要求 clustered index + active read view；
+- `pq_worker_dop1` 已把 `Parallel_callback_smoke_rows >= 1` 作为硬验收；
+- 仍不发送 MQ ROW，不接真实 `Read()`。
+
+验证：
+
+```text
+cmake --build build-ninja --target mysqld -j 16
+Result: passed
+
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_worker_dop1 --parallel=1 --vardir=/tmp/pqv --tmpdir=/tmp/pqt
+Result: passed
+
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir=/tmp/pqt
+Result: passed, 19 tests successful
+```
+
+下一步继续 V2-8J-1：把 callback-converted row image 送入 typed MQ，并由
+leader `materialize_next_record_image()` 消费。

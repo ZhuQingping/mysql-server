@@ -203,24 +203,24 @@ dberr_t InnoDB_pq_scan_ctx::smoke_callback_conversion(
     return DB_UNSUPPORTED;
   }
 
-  auto err = validate_pull_adapter_gate();
-  if (err != DB_SUCCESS) {
-    return err;
+  if (m_index == nullptr || !m_index->is_clustered() || m_trx == nullptr ||
+      !has_active_read_view()) {
+    return DB_UNSUPPORTED;
   }
 
   Parallel_reader reader(0);
   Parallel_reader::Config config(Parallel_reader::Scan_range{}, m_index);
 
   bool saw_row = false;
-  err = reader.add_scan(const_cast<trx_t *>(m_trx), config,
-                        [&](const Parallel_reader::Ctx *reader_ctx) {
-                          if (!store_callback_record(mysql_rec, prebuilt,
-                                                     reader_ctx, nullptr)) {
-                            return DB_ERROR;
-                          }
-                          saw_row = true;
-                          return DB_INTERRUPTED;
-                        });
+  auto err = reader.add_scan(const_cast<trx_t *>(m_trx), config,
+                             [&](const Parallel_reader::Ctx *reader_ctx) {
+                               if (!store_callback_record(mysql_rec, prebuilt,
+                                                          reader_ctx, nullptr)) {
+                                 return DB_ERROR;
+                               }
+                               saw_row = true;
+                               return DB_INTERRUPTED;
+                             });
   if (err != DB_SUCCESS) {
     return err;
   }
