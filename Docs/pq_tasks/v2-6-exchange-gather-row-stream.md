@@ -211,20 +211,84 @@ cd build-ninja/mysql-test
 
 ## Acceptance Checklist
 
-- [ ] synthetic ROW token 能被 Exchange/Gather 读取；
-- [ ] FINISH/EOF token 能被读取或正确识别；
-- [ ] synthetic smoke 不污染真实 execution counters；
-- [ ] `PQTableScanIterator::Read()` 仍不返回 synthetic row；
-- [ ] serial fallback 结果不变；
-- [ ] targeted MTR 通过；
-- [ ] full `parallel_query` suite 通过。
+- [x] synthetic ROW token 能被 Exchange/Gather 读取；
+- [x] FINISH/EOF token 能被读取或正确识别；
+- [x] synthetic smoke 不污染真实 execution counters；
+- [x] `PQTableScanIterator::Read()` 仍不返回 synthetic row；
+- [x] serial fallback 结果不变；
+- [x] targeted MTR 通过；
+- [x] full `parallel_query` suite 通过。
 
 ## Current Status
 
-- Status: In Progress
+- Status: Completed
 - Owner: Codex Orchestrator
 - Started: 2026-06-11
+- Completed: 2026-06-11
 
 ## Completion Report
 
-待实现后补充。
+### Codex Orchestrator 实现结果（2026-06-11）
+
+Changed files:
+
+- `sql/parallel_query/exchange.h`
+- `sql/parallel_query/exchange.cc`
+- `sql/parallel_query/sql_parallel.h`
+- `sql/parallel_query/sql_parallel.cc`
+- `sql/parallel_query/pq_iterator.cc`
+- `sql/mysqld.cc`
+- `mysql-test/suite/parallel_query/t/pq_exchange_rows_dop1.test`
+- `mysql-test/suite/parallel_query/r/pq_exchange_rows_dop1.result`
+- `mysql-test/suite/parallel_query/t/pq_stats.test`
+- `mysql-test/suite/parallel_query/r/pq_stats.result`
+- `Docs/pq_tasks/README.md`
+- `Docs/pq_tasks/v2-6-exchange-gather-row-stream.md`
+
+Implementation summary:
+
+- 新增 `Exchange_nosort::run_synthetic_row_stream_smoke()`：
+  - 每个 worker queue 预填 8-byte synthetic ROW payload；
+  - 发送显式 `FINISH` control token；
+  - 通过现有 `read_mq_message()` round-robin 消费；
+  - 校验 payload magic、row 数和 finish 数。
+- 新增 `Gather_operator::run_exchange_row_stream_smoke()`，封装 V2-6
+  synthetic Exchange/Gather smoke，不进入 SQL `Read()`。
+- 新增 global status：
+  - `Parallel_exchange_smoke_rows`
+  - `Parallel_exchange_smoke_finishes`
+- `PQTableScanIterator::Init()` 在 V2-5 worker lifecycle smoke 后追加
+  V2-6 exchange smoke，然后继续 cleanup + serial fallback。
+- 新增 `pq_exchange_rows_dop1`，验证 DOP=1/2/4 eligible SELECT 下：
+  - fallback delta = 3；
+  - worker smoke delta = 2；
+  - exchange synthetic row/finish delta = 6；
+  - real executed/workers/rows 仍为 0。
+
+Validation:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+./mtr --suite=parallel_query --parallel=1 --extern socket=/private/tmp/pq20.sock --extern user=root pq_exchange_rows_dop1 pq_worker_dop1 pq_stats
+./mtr --suite=parallel_query --parallel=1 --extern socket=/private/tmp/pq20.sock --extern user=root
+```
+
+结果：
+
+- `mysqld` build 通过。
+- targeted MTR: 4/4 pass。
+- full `parallel_query` suite: 18/18 pass。
+
+Remaining risks:
+
+- `read_mq_message()` 的 `false` 仍同时表示 active-but-empty 和 all-done；
+  V2-6 smoke 通过预填 ROW/FINISH 避开了真实异步等待问题。
+- control token 仍依赖 1-byte payload 判定；真实 row stream 前需要更稳的
+  message header/type contract。
+- `PQTableScanIterator::Read()` 仍不消费 Exchange row，也不填充
+  `table->record[0]`；真实结果流后移。
+
+Commit:
+
+- `d0b4988a584 Add PQ V2-6 exchange row stream smoke`

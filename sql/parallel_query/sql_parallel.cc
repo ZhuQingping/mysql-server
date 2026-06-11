@@ -390,6 +390,41 @@ bool Gather_operator::run_worker_lifecycle_smoke(THD *leader_thd) {
   return false;
 }
 
+bool Gather_operator::run_exchange_row_stream_smoke(THD *leader_thd
+                                                    [[maybe_unused]]) {
+  bool initialized_here = false;
+
+  if (!m_initialized) {
+    if (init()) return true;
+    initialized_here = true;
+  }
+
+  auto *exchange = get_exchange();
+  if (exchange == nullptr ||
+      exchange->get_exchange_type() != Exchange::EXCHANGE_NOSORT) {
+    if (initialized_here) destroy();
+    return true;
+  }
+
+  uint32 rows_read = 0;
+  uint32 finishes_read = 0;
+  auto *nosort = static_cast<Exchange_nosort *>(exchange);
+  bool failed =
+      nosort->run_synthetic_row_stream_smoke(&rows_read, &finishes_read);
+  if (failed) {
+    if (initialized_here) destroy();
+    return true;
+  }
+
+  pq_global_stats.exchange_smoke_rows.fetch_add(rows_read,
+                                                std::memory_order_relaxed);
+  pq_global_stats.exchange_smoke_finishes.fetch_add(
+      finishes_read, std::memory_order_relaxed);
+
+  if (initialized_here) destroy();
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Gather_operator: abort_workers (stub)
 // ---------------------------------------------------------------------------

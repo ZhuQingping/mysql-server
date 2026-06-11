@@ -219,6 +219,23 @@ class Exchange_nosort : public Exchange {
   bool read_mq_message(MQMessageType &type, void **datap,
                         uint32 &data_len) override;
 
+  /**
+    Run a controlled synthetic row stream through this exchange.
+
+    The helper pre-fills each worker queue with one ROW payload followed by a
+    FINISH token, then consumes the messages through read_mq_message(). It is
+    only a V2-6 transport smoke: it does not materialize rows into TABLE
+    records and does not imply real PQ execution.
+
+    @param[out] rows_read      Number of synthetic ROW payloads read
+    @param[out] finishes_read  Number of FINISH tokens observed
+
+    @retval false  Smoke pass completed
+    @retval true   Smoke pass failed
+  */
+  bool run_synthetic_row_stream_smoke(uint32 *rows_read,
+                                      uint32 *finishes_read);
+
   ExchangeType get_exchange_type() const override { return EXCHANGE_NOSORT; }
 };
 

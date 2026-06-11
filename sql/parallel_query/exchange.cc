@@ -315,3 +315,47 @@ bool Exchange_nosort::read_mq_message(MQMessageType &type, void **datap,
 
   return result;
 }
+
+bool Exchange_nosort::run_synthetic_row_stream_smoke(uint32 *rows_read,
+                                                     uint32 *finishes_read) {
+  if (rows_read != nullptr) *rows_read = 0;
+  if (finishes_read != nullptr) *finishes_read = 0;
+  if (m_mq_handles == nullptr || m_nqueues == 0) return true;
+
+  for (uint32 i = 0; i < m_nqueues; ++i) {
+    const uint32 payload[2] = {0x50514558U, i};
+    MQueue_handle *handle = get_mq_handle(i);
+    if (handle->send(payload, sizeof(payload)) != MQ_SUCCESS) return true;
+    if (handle->send_control_token(MQMessageType::FINISH) != MQ_SUCCESS) {
+      return true;
+    }
+  }
+
+  uint32 local_rows = 0;
+  while (!m_all_done) {
+    MQMessageType type;
+    void *datap = nullptr;
+    uint32 data_len = 0;
+    bool got_message = read_mq_message(type, &datap, data_len);
+
+    if (got_message) {
+      if (type != MQMessageType::ROW || datap == nullptr ||
+          data_len != sizeof(uint32) * 2) {
+        return true;
+      }
+      const uint32 *payload = static_cast<const uint32 *>(datap);
+      if (payload[0] != 0x50514558U) return true;
+      ++local_rows;
+      continue;
+    }
+
+    if (!m_all_done) {
+      return true;
+    }
+  }
+
+  if (local_rows != m_nqueues) return true;
+  if (rows_read != nullptr) *rows_read = local_rows;
+  if (finishes_read != nullptr) *finishes_read = m_nqueues;
+  return false;
+}

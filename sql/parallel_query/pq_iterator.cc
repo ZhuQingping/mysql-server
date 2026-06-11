@@ -88,6 +88,11 @@ bool PQTableScanIterator::Init() {
       PrintError(HA_ERR_OUT_OF_MEM);
       return true;
     }
+    if (m_gather->run_exchange_row_stream_smoke(thd())) {
+      cleanup_pq_resources(true);
+      PrintError(HA_ERR_OUT_OF_MEM);
+      return true;
+    }
     cleanup_pq_resources(false);
   } else if (error != HA_ERR_UNSUPPORTED) {
     cleanup_pq_resources(true);

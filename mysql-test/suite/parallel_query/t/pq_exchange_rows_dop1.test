@@ -1,0 +1,98 @@
+# Test: pq_exchange_rows_dop1
+# Verify V2-6 synthetic Exchange/Gather row stream smoke is observable while
+# real PQ row execution remains disabled and serial fallback preserves results.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, pad CHAR(100)) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,'a');
+INSERT INTO t1 SELECT id + 1, pad FROM t1;
+INSERT INTO t1 SELECT id + 2, pad FROM t1;
+INSERT INTO t1 SELECT id + 4, pad FROM t1;
+INSERT INTO t1 SELECT id + 8, pad FROM t1;
+INSERT INTO t1 SELECT id + 16, pad FROM t1;
+INSERT INTO t1 SELECT id + 32, pad FROM t1;
+INSERT INTO t1 SELECT id + 64, pad FROM t1;
+INSERT INTO t1 SELECT id + 128, pad FROM t1;
+INSERT INTO t1 SELECT id + 256, pad FROM t1;
+INSERT INTO t1 SELECT id + 512, pad FROM t1;
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+
+SET @pq_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_rows_scanned');
+SET @pq_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+SET @pq_worker_smoke_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_worker_smoke_runs');
+SET @pq_exchange_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_exchange_smoke_rows');
+SET @pq_exchange_finishes_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_exchange_smoke_finishes');
+
+SET SESSION parallel_default_dop=1;
+--disable_result_log
+SELECT * FROM t1;
+--enable_result_log
+
+SET SESSION parallel_default_dop=2;
+--disable_result_log
+SELECT * FROM t1;
+--enable_result_log
+
+SET SESSION parallel_default_dop=4;
+--disable_result_log
+SELECT * FROM t1;
+--enable_result_log
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+    AS fallback_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+    AS rows_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+    AS workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_worker_smoke_runs') - @pq_worker_smoke_before
+    AS worker_smoke_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_exchange_smoke_rows') - @pq_exchange_rows_before
+    AS exchange_rows_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_exchange_smoke_finishes') - @pq_exchange_finishes_before
+    AS exchange_finishes_delta;
+
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE t1;

@@ -171,6 +171,8 @@ struct PQ_global_stats {
   std::atomic<uint64> rows_scanned{0};        ///< Total rows scanned by PQ workers
   std::atomic<uint64> ranges_built{0};        ///< Total InnoDB PQ ranges planned
   std::atomic<uint64> worker_smoke_runs{0};   ///< Worker lifecycle smoke runs
+  std::atomic<uint64> exchange_smoke_rows{0};      ///< Synthetic MQ rows read
+  std::atomic<uint64> exchange_smoke_finishes{0};  ///< Synthetic FINISH tokens
 
   /** Reset all counters. */
   void reset() {
@@ -180,6 +182,8 @@ struct PQ_global_stats {
     rows_scanned.store(0, std::memory_order_relaxed);
     ranges_built.store(0, std::memory_order_relaxed);
     worker_smoke_runs.store(0, std::memory_order_relaxed);
+    exchange_smoke_rows.store(0, std::memory_order_relaxed);
+    exchange_smoke_finishes.store(0, std::memory_order_relaxed);
   }
 };
 
@@ -506,6 +510,20 @@ class Gather_operator {
     @retval true   Smoke pass failed
   */
   bool run_worker_lifecycle_smoke(THD *leader_thd);
+
+  /**
+    Run a V2-6 synthetic Exchange/Gather row-stream smoke pass.
+
+    This pre-fills MQ handles with synthetic ROW/FINISH tokens and consumes
+    them through Exchange_nosort. It does not return rows to SQL execution and
+    must not update real execution counters.
+
+    @param leader_thd  Leader THD
+
+    @retval false  Smoke pass completed
+    @retval true   Smoke pass failed
+  */
+  bool run_exchange_row_stream_smoke(THD *leader_thd);
 
   /**
     Abort all workers and close MQ producers.
