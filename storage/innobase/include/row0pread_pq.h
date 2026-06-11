@@ -345,10 +345,15 @@ class InnoDB_pq_leader_ctx {
   }
 
   trx_t *trx() const { return m_trx; }
+  void set_close_read_view_on_end(bool close_on_end) {
+    m_close_read_view_on_end = close_on_end;
+  }
+  bool close_read_view_on_end() const { return m_close_read_view_on_end; }
 
  private:
   size_t m_max_threads{0};
   bool m_reverse{false};
+  bool m_close_read_view_on_end{false};
   trx_t *m_trx{nullptr};
   InnoDB_pq_scan_ctx *m_scan_ctx{nullptr};
   std::atomic_size_t m_next_range_id{0};

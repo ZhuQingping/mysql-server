@@ -154,7 +154,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 ### P1-E Aggregate Fallback Read-view Cleanup
 
-状态：Open。
+状态：Completed。
 
 触发记录：
 
@@ -170,6 +170,29 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - 重点检查 implicit aggregate safe fallback 后 leader/worker open context、trx read view、handler end 的释放顺序；
 - 若复现稳定，应在 started 前 fallback window 清理 read view，或禁止该路径留下 inactive read view 给后续 threaded scan。
 
+实现：
+
+- `pq_leader_scan_init()` 在 `PROBE`/`EXECUTE` 中为 `Parallel_reader` 分区和 callback producer 绑定 active read view；
+- autocommit 且本次 PQ 打开的 read view 由 `InnoDB_pq_leader_ctx` 标记，在 `pq_leader_scan_end()` 中关闭，并恢复 `m_prebuilt->sql_stat_start`，避免内部 callback smoke 污染后续串行 fallback；
+- `InnoDB_pq_scan_ctx::partition()` 在进入 `Parallel_reader::export_scan_ranges()` 前拒绝 inactive read view，作为防御性 guard；
+- 新增 `pq_read_threaded_aggregate_fallback_read_view`，覆盖连续 implicit aggregate fallback 后再执行 DOP=2 threaded `LIMIT/OFFSET` 查询。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_read_threaded_aggregate_fallback_read_view \
+  --parallel=1 --vardir=/tmp/pqv_agg_rv --tmpdir=/tmp/pqt_agg_rv
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_read_threaded_dop2_read_view pq_read_threaded_limit_counters pq_worker_dop1 \
+  --parallel=1 --vardir=/tmp/pqv_rv_guard --tmpdir=/tmp/pqt_rv_guard
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full_agg_rv --tmpdir=/tmp/pqt_full_agg_rv
+```
+
+结果：完整 `parallel_query` suite 通过，共 54 项。
+
 ## P1 Feature Expansion Decision
 
 候选方向：
@@ -181,4 +204,4 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 建议下一阶段优先考虑 GROUP BY partial aggregation，因为 implicit aggregate row stream 已经闭环，但显式 GROUP BY 仍 fallback。
 
-当前状态：P0-A/P0-B/P0-C Completed；下一步进入 P0-D performance baseline。
+当前状态：P0-A/P0-B/P0-C/P1-E Completed，P0-D baseline materials completed；下一步继续 V2-12A-3 DOP1 Partial Group Execution。

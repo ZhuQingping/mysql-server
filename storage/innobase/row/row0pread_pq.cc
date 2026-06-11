@@ -305,6 +305,14 @@ dberr_t InnoDB_pq_scan_ctx::produce_callback_rows_for_range(
 dberr_t InnoDB_pq_scan_ctx::partition(size_t split_level) {
   m_ranges.clear();
 
+  if (m_index == nullptr || m_trx == nullptr) {
+    return DB_UNSUPPORTED;
+  }
+
+  if (m_trx->read_view != nullptr && !MVCC::is_view_active(m_trx->read_view)) {
+    return DB_UNSUPPORTED;
+  }
+
   Parallel_reader reader(0);
   Parallel_reader::Config config(Parallel_reader::Scan_range{}, m_index);
   Parallel_reader::Exported_ranges exported_ranges{};

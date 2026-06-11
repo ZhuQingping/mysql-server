@@ -11022,16 +11022,27 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
   }
 
   auto trx = m_prebuilt->trx;
+  bool close_read_view_on_end = false;
 
-  if (mode == PQ_leader_scan_mode::EXECUTE) {
+  if (mode == PQ_leader_scan_mode::PROBE ||
+      mode == PQ_leader_scan_mode::EXECUTE) {
     if (m_prebuilt->select_lock_type != LOCK_NONE) {
       return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
     }
 
+    const bool had_active_read_view =
+        srv_read_only_mode ||
+        (trx->read_view != nullptr && MVCC::is_view_active(trx->read_view));
     trx_start_if_not_started(trx, false, UT_LOCATION_HERE);
     if (!srv_read_only_mode) {
       trx_assign_read_view(trx);
     }
+    close_read_view_on_end =
+        !had_active_read_view &&
+        !thd_test_options(leader_thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
+  }
+
+  if (mode == PQ_leader_scan_mode::EXECUTE) {
     m_prebuilt->sql_stat_start = false;
   }
 
@@ -11059,9 +11070,17 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
   bool is_compact = dict_table_is_comp(index->table);
   page_size_t page_size(dict_tf_to_fsp_flags(index->table->flags));
 
+  innodb_leader_ctx->set_close_read_view_on_end(close_read_view_on_end);
   auto err = innodb_leader_ctx->init(index, trx, is_compact, page_size);
 
   if (err != DB_SUCCESS) {
+    if (close_read_view_on_end && trx->read_view != nullptr &&
+        MVCC::is_view_active(trx->read_view)) {
+      mutex_enter(&trx_sys->mutex);
+      trx_sys->mvcc->view_close(trx->read_view, true);
+      mutex_exit(&trx_sys->mutex);
+      m_prebuilt->sql_stat_start = true;
+    }
     ut::delete_(innodb_leader_ctx);
     Parallel_reader::release_threads(available);
     if (err == DB_UNSUPPORTED) {
@@ -11333,6 +11352,19 @@ int ha_innobase::pq_leader_scan_end(PQ_Leader_context *leader_ctx) {
     auto dop = m_pq_leader_ctx->max_threads();
     if (dop > 0) {
       Parallel_reader::release_threads(dop);
+    }
+
+    if (m_pq_leader_ctx->close_read_view_on_end()) {
+      trx_t *trx = m_pq_leader_ctx->trx();
+      if (trx != nullptr && trx->read_view != nullptr &&
+          MVCC::is_view_active(trx->read_view)) {
+        mutex_enter(&trx_sys->mutex);
+        trx_sys->mvcc->view_close(trx->read_view, true);
+        mutex_exit(&trx_sys->mutex);
+      }
+      if (m_prebuilt != nullptr) {
+        m_prebuilt->sql_stat_start = true;
+      }
     }
 
     ut::delete_(m_pq_leader_ctx);
