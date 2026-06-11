@@ -1,5 +1,6 @@
 # Test: pq_explain_eligible
-# Verify that EXPLAIN shows "Parallel query" annotation when PQ is eligible.
+# Verify that EXPLAIN shows V1 PQ-candidate annotation when PQ is eligible.
+# Real PQ execution is disabled in V1, so EXPLAIN must show serial fallback.
 # A simple full scan on InnoDB table with low cost threshold should be eligible.
 
 --source include/have_innodb_16k.inc
@@ -15,13 +16,13 @@ INSERT INTO t1 VALUES (1,10,'a'),(2,20,'b'),(3,30,'c'),(4,40,'d'),(5,50,'e');
 SET SESSION parallel_query=ON;
 SET SESSION parallel_cost_threshold=0;
 
-# Simple full scan should be PQ eligible (no ORDER BY, GROUP BY, etc.)
+# Simple full scan should be PQ eligible but execution-disabled in V1.
 EXPLAIN SELECT * FROM t1;
 
-# FORMAT=TREE should also show PQ annotation
+# FORMAT=TREE should also show the V1 annotation
 EXPLAIN FORMAT=TREE SELECT * FROM t1;
 
-# FORMAT=JSON should also show PQ annotation
+# FORMAT=JSON should also show the V1 annotation
 --replace_column 10 #
 EXPLAIN FORMAT=JSON SELECT * FROM t1;
 

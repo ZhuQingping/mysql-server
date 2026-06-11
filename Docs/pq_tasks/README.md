@@ -4,17 +4,24 @@
 
 ## Current Summary
 
-- Current phase: Phase 0-9 已提交完成；PQ V1 当前主线阶段已收口。
+- Last synced: 2026-06-11
+- Current phase: Phase 0-9 已提交完成；PQ V1 当前主线阶段已收口，正在进行 V1 风险收敛与 V2 执行路径拆分。
 - Latest commits:
-  - Phase 7: `9af8fe777d2` Add PQ phase 7 EXPLAIN and MVP tests
+  - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - Phase 8: `113d2ba44c1` Add PQ phase 8 V1 completion scaffolding
+  - Phase 7: `9af8fe777d2` Add PQ phase 7 EXPLAIN and MVP tests
 - Phase 8 validation:
   - `cmake --build build-ninja --target mysqld -j 16` 通过
   - `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help` 通过
   - `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir=/tmp/pqt` 通过，完整 `parallel_query` suite 共 10 个测试通过
 - Phase 9 validation:
   - `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir=/tmp/pqt` 通过，实际 `parallel_query` 测试 12 个，加 `shutdown_report` 共 13 项通过
-- Next recommended action: 进入 V1 总体验收和已知风险收敛。
+- Current V1 capability boundary: 当前分支具备 PQ 系统变量、保守 eligibility、EXPLAIN 注解、fallback/status 统计、SQL/InnoDB/worker/MQ 框架和 V1 测试闭环；真实并行执行仍未启用，eligible 查询最终仍保守走串行路径。
+- Active orchestration:
+  - [v1-risk-convergence.md](v1-risk-convergence.md): V1 风险收敛任务书，覆盖 locking read、fallback counter、PQUnsuiteInfo 生命周期、best_ref/qep_tab 访问安全和 V1 测试缺口。
+  - [v2-execution-path-roadmap.md](v2-execution-path-roadmap.md): V2 真实执行路径拆分，覆盖 SQL iterator、worker THD、Exchange/Gather row 流、InnoDB 分片扫描、full scan 闭环和基础聚合。
+  - [v2-test-matrix.md](v2-test-matrix.md): V1/V2 阶段化 MTR 测试矩阵，明确 DOP=1 first 和 DOP>1 range-partition gate。
+- Next recommended action: V1 风险收敛候选改动已完成主控 review、修正和验证；下一步可提交该收敛改动，随后进入 V2-0 execution state contract 的任务书细化。
 - Parallel-ready task overview: [parallel_wave2_tasks.md](parallel_wave2_tasks.md)
 - Remaining risk: Phase 8 的 aggregate 当前仍是基础设施和 eligibility 扩展，真实并行聚合执行尚未启用；locking read 的 EXPLAIN annotation 当前仍可能显示 `Parallel query dop=4`，已从 Phase 9 测试中移除，后续需单独修复。
 
@@ -53,7 +60,7 @@ Recommended worktrees:
 | Phase | Status | Owner | Log | Notes |
 |------|--------|-------|-----|-------|
 | Phase A - V1-MVP interface contract | Completed | Design Agent Russell / Orchestrator | [phaseA-interface-contract.md](phaseA-interface-contract.md) | Hybrid InnoDB route accepted as working direction |
-| Phase 0 - System variables and minimal context fields | Patch received | Claude Code / Orchestrator | [phase0-system-vars.md](phase0-system-vars.md) | Needs review and build verification |
+| Phase 0 - System variables and minimal context fields | Completed | Claude Code / Orchestrator | [phase0-system-vars.md](phase0-system-vars.md) | Commit `cb3253f97a8`; system variables and minimal context fields committed |
 | Phase 1 - Conservative eligibility and fallback | Completed | Claude Code / Orchestrator | [phase1-eligibility-fallback.md](phase1-eligibility-fallback.md) | Main worktree build passed; new `sql/parallel_query/pq_optimizer.*` must be included in final patch/commit |
 | Phase 2 - Handler/InnoDB contract and route validation | Completed | Claude Code / Orchestrator | [phase2-handler-innodb-contract.md](phase2-handler-innodb-contract.md) | v2 fixed `PQ_ref_key`; `mysqld` build passed |
 | Phase 3 - MQueue and Exchange MVP | Completed | Claude Code / Orchestrator | [phase3-mqueue-exchange.md](phase3-mqueue-exchange.md) | `exchange.*` and `msg_queue.*`; `mysqld` build passed |
@@ -65,7 +72,7 @@ Recommended worktrees:
 | Phase 6B-2 - InnoDB pull-row adapter | Completed | Claude Code / Orchestrator | [phase6b2-innodb-pull-adapter.md](phase6b2-innodb-pull-adapter.md) | Commit `f001e1631f7` (base) + `b0ac9740cfd` (review-fix); build passed |
 | Phase 7 - EXPLAIN and MVP tests | Completed | Claude Code / Orchestrator | [phase7-explain-mvp-tests.md](phase7-explain-mvp-tests.md) | Commit `9af8fe777d2`; EXPLAIN annotation and MVP MTR committed |
 | Phase 8 - V1-complete scaffolding | Completed | Claude Code + Codex Orchestrator fix | [phase8-v1-complete.md](phase8-v1-complete.md) | Commit `113d2ba44c1`; aggregation infrastructure, error path/stat counters, Phase 8 MTR, and macOS `Aligned_atomic` startup fix; full `parallel_query` suite passed |
-| Phase 9 - parallel_query suite migration | Completed | Claude Code Test Agent + Codex Orchestrator review | [phase9-parallel-query-suite.md](phase9-parallel-query-suite.md), [parallel_query_suite_manifest.md](parallel_query_suite_manifest.md) | Commit `f91ec75a051`; 参考测试套 97 个测试已分类；新增 3 个 V1 测试；完整 suite 通过 |
+| Phase 9 - parallel_query suite migration | Completed | Claude Code Test Agent + Codex Orchestrator review | [phase9-parallel-query-suite.md](phase9-parallel-query-suite.md), [parallel_query_suite_manifest.md](parallel_query_suite_manifest.md) | Commit `9c7e9aede42`; 参考测试套 97 个测试已分类；新增 3 个 V1 测试；完整 suite 通过 |
 
 ## Decisions
 

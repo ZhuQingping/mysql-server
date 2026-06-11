@@ -80,6 +80,10 @@ const char *pq_unsuite_reason_to_string(PQUnsuiteReason reason) {
   return "UNKNOWN";
 }
 
+const char *pq_v1_explain_eligible_label() {
+  return "eligible, execution disabled, serial fallback";
+}
+
 /**
   Helper: set info and return false (not eligible).
   @param info  Output disqualification info
@@ -170,8 +174,9 @@ static bool pq_check_single_table(Table_ref *table_ref,
   Phase 7: improved robustness for EXPLAIN paths. We try both
   best_ref[] (available during optimization) and qep_tab[]
   (available after final plan construction). Either source
-  that provides a valid non-const table with JT_ALL type
-  is sufficient to confirm full table scan eligibility.
+  that provides a valid JT_ALL type is sufficient to confirm full table scan
+  eligibility. Any const, range, ref, index or covering-index path must remain
+  serial in V1.
 
   @param join  The JOIN object (may be nullptr if not yet optimized)
   @param info  Output: set reason if disqualified
@@ -194,30 +199,23 @@ static bool pq_check_full_table_scan(JOIN *join, PQUnsuiteInfo *info) {
 
   // Check the access type using best_ref[] (from make_join_plan).
   // best_ref[] is populated after make_join_plan() and contains
-  // the optimizer's selected access path for each table.
+  // the optimizer's selected access path for each table. The preceding
+  // eligibility checks already require a single base table, so best_ref[0]
+  // is enough to catch const, range, index and full-scan decisions.
   join_type access_type = JT_UNKNOWN;
 
   // Try best_ref[] first (available during optimization).
-  if (join->best_ref != nullptr &&
-      join->const_tables < join->primary_tables &&
-      join->best_ref[join->const_tables] != nullptr) {
-    JOIN_TAB *first_tab = join->best_ref[join->const_tables];
+  if (join->best_ref != nullptr && join->primary_tables > 0 &&
+      join->best_ref[0] != nullptr) {
+    JOIN_TAB *first_tab = join->best_ref[0];
     access_type = first_tab->type();
   }
 
   // If best_ref[] didn't give a valid type, try qep_tab[]
   // (available after the final plan is constructed).
-  if (access_type == JT_UNKNOWN && join->qep_tab != nullptr) {
-    // qep_tab[] is ordered differently: const tables first,
-    // then primary_tables. Find the first non-const table.
-    for (uint i = 0; i < join->primary_tables; i++) {
-      QEP_TAB *tab = &join->qep_tab[i];
-      if (tab != nullptr && tab->type() != JT_SYSTEM &&
-          tab->type() != JT_CONST) {
-        access_type = tab->type();
-        break;
-      }
-    }
+  if (access_type == JT_UNKNOWN && join->qep_tab != nullptr &&
+      join->primary_tables > 0) {
+    access_type = join->qep_tab[0].type();
   }
 
   // If we couldn't determine the access type from either source,

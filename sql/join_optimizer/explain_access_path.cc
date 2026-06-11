@@ -965,11 +965,12 @@ static std::unique_ptr<Json_object> SetObjectMembers(
           uint dop = join->pq_dop > 0
                          ? join->pq_dop
                          : thd->variables.parallel_default_dop;
-          description += string(", parallel query (dop=") +
+          description += string(", parallel query ") +
+                         pq_v1_explain_eligible_label() + " (dop=" +
                          std::to_string(dop) + ")";
           error |= AddMemberToObject<Json_int>(obj, "pq_dop", dop);
-          error |= AddMemberToObject<Json_boolean>(obj, "parallel_query",
-                                                    true);
+          error |= AddMemberToObject<Json_string>(
+              obj, "parallel_query", pq_v1_explain_eligible_label());
         } else {
           const char *reason_str =
               pq_unsuite_reason_to_string(join->pq_unsuitable_reason);

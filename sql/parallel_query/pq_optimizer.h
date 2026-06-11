@@ -136,6 +136,16 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
 const char *pq_unsuite_reason_to_string(PQUnsuiteReason reason);
 
 /**
+  Return the stable EXPLAIN annotation used for PQ-eligible V1 queries.
+
+  V1 may identify a query as a PQ candidate, but real PQ workers are still
+  disabled and TryCreatePQTableScanIterator() falls back to the serial table
+  scan path. Keep EXPLAIN explicit so it does not imply true parallel
+  execution.
+*/
+const char *pq_v1_explain_eligible_label();
+
+/**
   Write eligibility result into Phase 0/1 inert fields.
 
   Helper that sets Query_block::pq_candidate and JOIN::pq_eligible

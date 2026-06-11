@@ -1703,7 +1703,8 @@ bool Explain_join::explain_extra() {
   if (join != nullptr && explain_thd->variables.parallel_query) {
     if (join->pq_eligible) {
       StringBuffer<64> pq_buff(cs);
-      pq_buff.append("dop=");
+      pq_buff.append(pq_v1_explain_eligible_label());
+      pq_buff.append(", dop=");
       pq_buff.append_ulonglong(join->pq_dop > 0 ? join->pq_dop
                                                   : explain_thd->variables
                                                         .parallel_default_dop);

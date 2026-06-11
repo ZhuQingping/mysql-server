@@ -72,9 +72,9 @@ EXPLAIN SELECT id, val, ROW_NUMBER() OVER (ORDER BY val) AS rn FROM t1;
 EXPLAIN SELECT * FROM t1 WHERE id IN (SELECT id FROM t2);
 --enable_warnings
 
-# 13. Locking-read fallback is intentionally not asserted here.
-# Current EXPLAIN-time lock metadata is not reliable enough for a stable
-# Phase 9 migration test. Track it as a source review risk instead.
+# 13. Locking-read fallback is tested in pq_stats with real execution.
+# MySQL intentionally ignores locking clauses during EXPLAIN contextualization,
+# so EXPLAIN SELECT ... FOR UPDATE cannot reliably expose LOCKING_READ here.
 
 # 14. Unsupported aggregate functions
 EXPLAIN SELECT GROUP_CONCAT(val) FROM t1;
@@ -108,6 +108,13 @@ EXPLAIN SELECT 1;
 SET SESSION transaction_isolation='SERIALIZABLE';
 EXPLAIN SELECT * FROM t1;
 SET SESSION transaction_isolation='REPEATABLE-READ';
+
+# 20. Non-full-table-scan access paths
+EXPLAIN SELECT * FROM t1 WHERE id = 1;
+CREATE INDEX val_idx ON t1(val);
+EXPLAIN SELECT * FROM t1 FORCE INDEX(val_idx) WHERE val BETWEEN 20 AND 40;
+EXPLAIN SELECT id FROM t1 FORCE INDEX(PRIMARY);
+DROP INDEX val_idx ON t1;
 
 # Reset
 SET SESSION parallel_query=OFF;
