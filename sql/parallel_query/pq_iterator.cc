@@ -80,11 +80,13 @@ bool PQTableScanIterator::Init() {
   uint requested_dop = thd()->variables.parallel_default_dop;
   if (requested_dop == 0) requested_dop = 1;
   const bool read_shadow_path = should_enter_read_shadow_path(requested_dop);
+  pq_global_stats.probe_attempts.fetch_add(1, std::memory_order_relaxed);
   int error = table()->file->pq_leader_scan_init(
       thd(), &m_leader_ctx, PQ_leader_scan_mode::PROBE, requested_dop,
       &actual_dop, false);
   bool probe_supported = false;
   if (error == 0) {
+    pq_global_stats.probe_success.fetch_add(1, std::memory_order_relaxed);
     probe_supported = true;
     uint smoke_dop = actual_dop > 0 ? actual_dop : requested_dop;
     m_gather = new Gather_operator(smoke_dop);
@@ -151,7 +153,9 @@ bool PQTableScanIterator::Init() {
         return true;
       }
     }
-  } else if (error != HA_ERR_UNSUPPORTED) {
+  } else if (error == HA_ERR_UNSUPPORTED) {
+    pq_global_stats.probe_unsupported.fetch_add(1, std::memory_order_relaxed);
+  } else {
     cleanup_pq_resources(true);
     PrintError(error);
     return true;

@@ -152,6 +152,11 @@ DOP=1 real gate 前还需要收敛 PROBE/range gate 和真实 producer 入口。
 - 打开 DOP=1 前必须先补一个受控 producer，把多行 ROW/FINISH 放入持久
   `m_gather`，并定义 no-message 时的 wait/kill 语义。
 
+Status update: 已新增 `Parallel_probe_attempts` /
+`Parallel_probe_success` / `Parallel_probe_unsupported` 诊断计数。`pq_worker_dop1`
+现在验证 DOP=1/2/4 执行路径会同时观察到 PROBE success 和 unsupported，
+用于后续定位 DOP=1 real gate 卡点。
+
 ## Acceptance Checklist
 
 - [x] callback row conversion smoke 能稳定产出 row；
@@ -208,5 +213,5 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 Result: passed, 19 tests successful
 ```
 
-下一步继续 V2-8J-4：先补 PROBE/range gate 诊断，再实现多行 producer/wait
-policy；真实 DOP=1 full scan 仍未打开。
+下一步继续 V2-8J-4：实现多行 producer/wait policy，并基于 PROBE 诊断收敛
+DOP=1 real gate；真实 DOP=1 full scan 仍未打开。

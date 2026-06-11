@@ -43,6 +43,18 @@ SET @pq_ranges_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_ranges_built');
+SET @pq_probe_attempts_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_probe_attempts');
+SET @pq_probe_success_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_probe_success');
+SET @pq_probe_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_probe_unsupported');
 SET @pq_smoke_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
@@ -99,6 +111,15 @@ SELECT
   ((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_ranges_built') - @pq_ranges_before) >= 3
     AS ranges_were_planned,
+  ((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_probe_attempts') - @pq_probe_attempts_before)
+    >= 3 AS probe_attempted,
+  ((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_probe_success') - @pq_probe_success_before)
+    >= 1 AS probe_succeeded,
+  ((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_probe_unsupported') -
+      @pq_probe_unsupported_before) >= 1 AS probe_unsupported_seen,
   (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
    WHERE variable_name = 'Parallel_worker_smoke_runs') - @pq_smoke_before
     AS worker_smoke_delta,
