@@ -152,6 +152,24 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - OOM / MQ backpressure；
 - production-like worker error propagation。
 
+### P1-E Aggregate Fallback Read-view Cleanup
+
+状态：Open。
+
+触发记录：
+
+- 在新增 V2-11E noop 测试的初版中，`parallel_query=ON`、DOP1/DOP2/DOP4 experimental gate 全部 OFF 时连续执行 `COUNT(*)` safe fallback；
+- 后续 `pq_read_threaded_limit_counters` 的 DOP2 threaded path 进入 worker `Parallel_reader::check_visibility()` 时触发 debug assertion：
+  `!trx || trx->read_view == nullptr || MVCC::is_view_active(trx->read_view)`；
+- 将 V2-11E 改为普通 full scan 查询后，`pq_read_threaded_experimental_vars_noop + pq_read_threaded_limit_counters` 短序列和完整 suite 均通过。
+
+后续要求：
+
+- 单独设计 aggregate fallback read-view cleanup 回归；
+- 不要混入 experimental vars noop；
+- 重点检查 implicit aggregate safe fallback 后 leader/worker open context、trx read view、handler end 的释放顺序；
+- 若复现稳定，应在 started 前 fallback window 清理 read view，或禁止该路径留下 inactive read view 给后续 threaded scan。
+
 ## P1 Feature Expansion Decision
 
 候选方向：

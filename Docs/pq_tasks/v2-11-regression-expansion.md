@@ -32,7 +32,7 @@
 | V2-11B row image datatypes | MTR | Completed | `pq_read_threaded_row_image_datatypes.test/result` |
 | V2-11C limit/counter boundary | MTR | Completed | `pq_read_threaded_limit_counters.test/result` |
 | V2-11D concurrency hardening | MTR | Large kill Completed; MDL pending | `pq_read_threaded_large_kill.test/result` |
-| V2-11E experimental vars noop | MTR | Pending | vars OFF/ON counter isolation |
+| V2-11E experimental vars noop | MTR | Completed | `pq_read_threaded_experimental_vars_noop.test/result` |
 
 ## 验收标准
 
@@ -49,7 +49,7 @@
 
 ## 当前状态
 
-状态：V2-11A/B/C Completed；V2-11D large kill Completed。
+状态：V2-11A/B/C Completed；V2-11D large kill Completed；V2-11E Completed。
 
 已完成：
 
@@ -57,6 +57,7 @@
 - V2-11B row image datatypes；
 - V2-11C limit/counter boundary。
 - V2-11D large scan external KILL hardening。
+- V2-11E experimental vars noop counter isolation。
 
 验证：
 
@@ -77,6 +78,10 @@ TMPDIR=/tmp ./mtr --suite=parallel_query pq_read_threaded_large_kill \
   --tmpdir=/tmp/pqt_large_kill
 TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
   --vardir=/tmp/pqv_full21 --tmpdir=/tmp/pqt_full21
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_read_threaded_experimental_vars_noop \
+  --parallel=1 --vardir=/tmp/pqv_vars_noop \
+  --tmpdir=/tmp/pqt_vars_noop
 ```
 
 V2-11A/B 结果：完整 `parallel_query` suite 通过，共 46 项。
@@ -93,7 +98,13 @@ V2-11D large kill 说明：
 - 预期查询返回 `ER_QUERY_INTERRUPTED`，不计入 `Parallel_queries_executed`，不触发 serial fallback；
 - 验证 worker launch delta 为 4，随后串行 `COUNT(*)` 仍返回 2048。
 
+V2-11E experimental vars noop 说明：
+
+- `parallel_query=OFF` 时，即使 DOP1/DOP2/DOP4 experimental gate 全部 ON，也不应触发 PQ executed/fallback/rows/workers counters；
+- `parallel_query=ON` 但三个 experimental gate 全部 OFF 时，DOP1/DOP2/DOP4 查询均应走 safe fallback，不启动 workers。
+- 用普通 full scan 查询验证 gate noop，避免把 implicit aggregate read-view 生命周期混入本测试。
+
 下一步：
 
-- 继续 V2-11D MDL minimal concurrency 或 V2-11E experimental vars noop；
+- 继续 V2-11D MDL minimal concurrency；
 - 继续评估 V2-12A-3 DOP1 Partial Group Execution。
