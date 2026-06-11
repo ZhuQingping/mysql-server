@@ -116,6 +116,98 @@ Output:
   - BLOB/TEXT/JSON 表不走 real PQ execution；
   - 仍保持结果正确。
 
+## Read-Only Confirmation Results
+
+### Worker Open / TABLE Handler Boundary
+
+- V2-8C worker 必须由 worker THD 打开完整独立 `TABLE`，不要手工浅拷贝
+  `TABLE`，也不要只 clone handler。
+- 最小可行路径是 worker side 构造独立 `Table_ref`，使用 `open_ltable()` 或
+  `open_table()` 走正常 server open path。该路径会经 `open_table_from_share()`
+  构造独立 `TABLE`、独立 `record[0]/record[1]`、独立 `Field`、独立 bitmaps 和
+  独立 handler。
+- `handler::clone()` 不能作为 V2-8C 主路径：它会创建新 handler，但
+  `new_handler->ha_open(table, ...)` 仍传入同一个 `TABLE*`，因此不会得到独立
+  `record[0]`、`read_set`、`write_set`、`read_set_internal`、`m_status` 或绑定到新
+  record buffer 的 Field。
+- `PQ_Worker_open_context` 应定义在 SQL-visible PQ 边界，建议字段：
+
+```cpp
+struct PQ_Worker_open_context {
+  THD *worker_thd;
+  TABLE *worker_table;
+  handler *worker_handler;
+  TABLE *leader_table;
+  PQ_Leader_context *leader_ctx;
+  uint worker_id;
+  uint actual_dop;
+  MQueue_handle *mq_handle;
+};
+```
+
+- 生命周期建议：
+  - `Gather_operator` / `PQ_worker_manager` 拥有 worker metadata 和 open context
+    carrier；
+  - worker `TABLE` 生命周期由 worker THD open table list 拥有，使用
+    `close_thread_tables(worker_thd)` 释放；
+  - InnoDB `PQ_Worker_context` 只引用 worker `TABLE` / handler，不拥有它们。
+- cleanup 顺序：
+  1. leader 停止消费时先 abort/close MQ producer；
+  2. 等 worker 退出 row read loop；
+  3. 调 `worker_handler->pq_worker_scan_end(worker_ctx)`；
+  4. worker THD 调 `close_thread_tables(worker_thd)`；
+  5. 释放 worker THD / MEM_ROOT / `PQ_worker_info`；
+  6. 所有 worker 停止后，leader 调 `pq_leader_scan_end(leader_ctx)`。
+- V2-8C 最小 fallback gate：
+  - `actual_dop == 1`；
+  - leader ctx 只有 single range；
+  - `table->s->blob_fields == 0`；
+  - `worker_table != leader_table`；
+  - `worker_table->file != leader_table->file`；
+  - `worker_table->record[0] != leader_table->record[0]`；
+  - typed `PQ_Worker_context` wrapper 已生效；
+  - probe 阶段未绑定 read view；
+  - worker start/execute commit point 前失败才允许 fallback。
+
+### InnoDB Worker Wrapper / DOP=1 Scan Boundary
+
+- InnoDB 侧应新增
+  `InnoDB_pq_sql_worker_context final : public PQ_Worker_context`，仿照
+  `InnoDB_pq_sql_leader_context`。wrapper 内部拥有 `InnoDB_pq_worker_ctx`，引用
+  leader ctx、worker `THD`、worker `TABLE`、worker `ha_innobase`，并记录
+  worker id、assigned range、EOF/error/started/closed 状态，保证 end 幂等。
+- wrapper 必须使用 worker handler 的独立 `m_prebuilt`，不能共享 leader
+  `m_prebuilt`。`row_prebuilt_t` 不可 copy/move，且包含 cursor/search tuple/mysql
+  template/blob heap/back pointers 等 mutable state。
+- `pq_worker_scan_end()` 当前对 `PQ_Worker_context*` 做
+  `reinterpret_cast<InnoDB_pq_worker_ctx*>` 是 V2-8C 前必须消除的 hard gate。
+- `pq_worker_scan_init()` / `next()` / `end()` 最小改动方向：
+  - 验证 leader ctx 是 typed InnoDB leader wrapper；
+  - V2-8C 只允许 `actual_dop == 1 && n_ranges == 1`；
+  - 创建 typed worker wrapper，并在内部创建 `InnoDB_pq_worker_ctx`；
+  - `pq_worker_scan_next()` 从 typed wrapper 取 worker handler `m_prebuilt`；
+  - `pq_worker_scan_end()` 释放 internal ctx 并从 tracking 容器移除，避免
+    `pq_leader_scan_end()` 二次释放。
+- DOP=1 可以使用 `row_search_mvcc()`，但不能沿用当前
+  `InnoDB_pq_ctx::read_record()` 的 first-call 写法。当前 first call 使用
+  `PAGE_CUR_UNSUPP + ROW_SEL_EXACT`，不等价于 `index_first()`。V2-8C first row
+  必须走 `index_first()` 等价定位路径，后续再使用 `ROW_SEL_NEXT`。
+- read view / trx gate：
+  - worker 不能各自创建 read view；
+  - 不能让不同 OS thread 盲目共享 leader `trx_t`；
+  - 若当前没有安全机制把 worker-local trx 绑定到 leader-pinned statement
+    snapshot 或等价 snapshot，则必须 fallback；
+  - `select_lock_type != LOCK_NONE` 必须 fallback；
+  - isolation/statement 状态不是普通 consistent read 时必须 fallback。
+- V2-8C 绝对不做：
+  - DOP>1 real scan；
+  - `InnoDB_pq_range::m_start/m_end` range seek/end cut；
+  - 并发 range scheduler；
+  - no-duplicate/no-missing correctness；
+  - 手写低层 `btr_pcur_t` cursor/mtr/latch scan；
+  - secondary index、ICP、partition、reverse scan、ORDER/GROUP/JOIN、
+    worker-side Item/JOIN clone。
+
 ## Allowed Files
 
 - `sql/parallel_query/pq_handler.*`
@@ -149,7 +241,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 
 ## Acceptance Checklist
 
-- [ ] 两个 V2-8C explorer 完成；
+- [x] 两个 V2-8C explorer 完成；
 - [ ] worker context typed wrapper 完成；
 - [ ] probe/execute mode 和 commit point 完成；
 - [ ] DOP=1 single range gate 完成；
@@ -162,10 +254,17 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 
 ## Current Status
 
-- Status: Planned
+- Status: Design Confirmed
 - Owner: Codex Orchestrator
 - Started: 2026-06-11
+- Confirmed: 2026-06-11
+- Agents:
+  - `Meitner`: Worker Open / TABLE Handler Boundary completed
+  - `Hilbert`: InnoDB Worker Wrapper / DOP=1 Scan completed
 
 ## Completion Report
 
-待实现后补充。
+V2-8C 两个只读确认已完成。结论：真实 DOP=1 full scan 只能在 worker THD
+打开完整独立 `TABLE`、InnoDB typed worker wrapper 消除 `reinterpret_cast`、并且
+worker-local trx/read view 能安全绑定到 leader statement snapshot 后打开。若 read view
+一致性无法证明，V2-8C 必须继续 fallback。
