@@ -182,10 +182,11 @@ class InnoDB_pq_scan_ctx {
 /** Pull-row cursor context for a PQ worker.
 
 V1-MVP: Pull-row via row_search_mvcc() through the worker's
-row_prebuilt_t. On first read_record() call, positions the
-cursor at the start of the assigned range. On subsequent calls,
-advances forward (ROW_SEL_NEXT). When end-of-index is reached,
-returns eof=true. */
+row_prebuilt_t. On first read_record() call, positions the cursor
+with the same protocol as ha_innobase::index_first(); subsequent
+calls advance forward (ROW_SEL_NEXT). This path must stay disabled
+until worker snapshot ownership is proven. When end-of-index is
+reached, returns eof=true. */
 class InnoDB_pq_ctx {
  public:
   InnoDB_pq_ctx(size_t id, InnoDB_pq_scan_ctx *scan_ctx,
@@ -196,7 +197,7 @@ class InnoDB_pq_ctx {
 
   Uses row_search_mvcc() through the worker's row_prebuilt_t,
   which naturally handles:
-  - MVCC visibility (via prebuilt->trx->read_view)
+  - MVCC visibility (only after the worker snapshot contract is proven)
   - Record to MySQL format conversion (row_sel_store_mysql_rec)
   - BLOB handling
   - Deleted record handling

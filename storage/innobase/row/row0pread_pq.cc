@@ -43,8 +43,9 @@ Key design decisions for this temporary implementation:
 3. This avoids reimplementing low-level InnoDB APIs (btr_pcur_t page
    cursor traversal, rec_get_offsets, mtr savepoints, etc.) and
    instead leverages the well-tested existing scan path.
-4. Read view is owned by leader trx; workers access it through
-   the leader's scan context without cloning/copying.
+4. Real worker row reads remain disabled until the worker snapshot
+   contract is proven. Worker-local row_search_mvcc() must not create
+   an independent read view, and workers must not mutate the leader trx.
 
 This adapter is temporary and should be refactored in Phase 8 to
 share code with Parallel_reader via controlled public/protected
@@ -237,16 +238,17 @@ int InnoDB_pq_ctx::read_record(byte *mysql_rec, row_prebuilt_t *prebuilt,
   the existing row_search_mvcc() function through the worker's
   own row_prebuilt_t. This gives us:
 
-  1. Correct MVCC visibility (using the leader's read view via
-     prebuilt->trx, which points to the leader's trx_t).
+  1. Correct MVCC visibility through the worker prebuilt. The caller
+     must prove the worker snapshot contract before enabling this path.
   2. Correct MySQL format conversion (row_sel_store_mysql_rec).
   3. Correct BLOB handling (prebuilt->blob_heap).
   4. Correct deleted record handling.
   5. No need for custom mtr/latch management.
 
-  The worker's prebuilt is initialized with:
+  Before this path is connected to real execution, the worker's prebuilt
+  must be initialized with:
   - prebuilt->index = clustered index
-  - prebuilt->trx = leader's trx (same read view)
+  - a statement snapshot equivalent to the leader snapshot
   - prebuilt->select_lock_type = LOCK_NONE (consistent read)
   - prebuilt->row_read_type = ROW_READ_WITH_LOCKS
 
@@ -262,8 +264,10 @@ int InnoDB_pq_ctx::read_record(byte *mysql_rec, row_prebuilt_t *prebuilt,
     /* Position the cursor at the start of the scan range.
 
     For V1-MVP (whole table scan), position at the leftmost record.
-    This is equivalent to ha_innobase::index_first() which calls
-    row_search_mvcc with PAGE_CUR_GE mode and nullptr key. */
+    This is equivalent to ha_innobase::index_first(), which calls
+    index_read(nullptr, 0, HA_READ_AFTER_KEY). That maps to
+    row_search_mvcc(..., PAGE_CUR_G, ..., 0, 0) with an empty
+    search_tuple. */
 
     prebuilt->index = m_scan_ctx->index();
 
@@ -273,12 +277,12 @@ int InnoDB_pq_ctx::read_record(byte *mysql_rec, row_prebuilt_t *prebuilt,
     }
 
     /* Start the scan: position at first record of the index.
-    This mirrors ha_innobase::index_first() -> general_fetch()
-    -> row_search_mvcc(buf, PAGE_CUR_UNSUPP, prebuilt, 0, 0)
-    where direction=0 means "first record". */
+    This mirrors ha_innobase::index_first() -> index_read(nullptr,
+    HA_READ_AFTER_KEY). PAGE_CUR_UNSUPP is only valid after a cursor
+    has already been positioned. */
 
-    auto err = row_search_mvcc(mysql_rec, PAGE_CUR_UNSUPP, prebuilt,
-                                ROW_SEL_EXACT, 0);
+    dtuple_set_n_fields(prebuilt->search_tuple, 0);
+    auto err = row_search_mvcc(mysql_rec, PAGE_CUR_G, prebuilt, 0, 0);
 
     if (err == DB_SUCCESS) {
       m_start_of_range = false;
@@ -303,8 +307,8 @@ int InnoDB_pq_ctx::read_record(byte *mysql_rec, row_prebuilt_t *prebuilt,
   This mirrors ha_innobase::general_fetch(buf, ROW_SEL_NEXT, 0)
   -> row_search_mvcc(buf, PAGE_CUR_UNSUPP, prebuilt, 0, ROW_SEL_NEXT). */
 
-  auto err = row_search_mvcc(mysql_rec, PAGE_CUR_UNSUPP, prebuilt,
-                              ROW_SEL_EXACT, ROW_SEL_NEXT);
+  auto err = row_search_mvcc(mysql_rec, PAGE_CUR_UNSUPP, prebuilt, 0,
+                              ROW_SEL_NEXT);
 
   if (err == DB_SUCCESS) {
     return 0;

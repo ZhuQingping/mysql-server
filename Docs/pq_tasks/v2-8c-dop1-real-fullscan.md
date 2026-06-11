@@ -293,6 +293,16 @@ struct PQ_Worker_open_context {
 - Cleanup order for real worker path must be: stop/abort producer, wait worker,
   `pq_worker_scan_end()`, close worker tables via `close_thread_tables()`,
   release worker transaction/MDL state, then release Exchange MQ resources.
+- V2-8D first-row confirmation: `ha_innobase::index_first()` is
+  `index_read(nullptr, 0, HA_READ_AFTER_KEY)`, which maps to
+  `row_search_mvcc(..., PAGE_CUR_G, ..., 0, 0)` with an empty search tuple.
+  `PAGE_CUR_UNSUPP` is only valid after a cursor is already positioned.
+- V2-8D read-view confirmation: worker TABLE open binds a worker-local
+  `trx_t`; a direct worker `row_search_mvcc()` would create a worker-local
+  read view on first read. Directly pointing worker prebuilt to leader `trx_t`
+  is also unsafe because InnoDB assumes trx state is served by the owning
+  thread. Real worker row read remains disabled until snapshot ownership is
+  proven.
 
 ## Allowed Files
 
@@ -356,9 +366,10 @@ V2-8C 两个只读确认已完成，且 contract/gate 第一段已实现。当�
 independent TABLE/record gate，并清除了 `pq_worker_scan_end()` 的
 `reinterpret_cast` hard gate。
 
-真实 DOP=1 full scan 仍未打开。后续必须继续完成 probe/execute mode、read-view
-commit point、worker THD 完整 open TABLE、first row `index_first()` 等价定位、
-leader `Read()` 真实 materialization 和 post-start fatal error path。
+真实 DOP=1 full scan 仍未打开。V2-8D 已接管 first-row/read-view contract：
+latent `row0pread_pq` 首行定位已修正为 `index_first()` 等价参数，但
+read-view ownership、EXECUTE commit point、leader `Read()` 真实 materialization
+和 post-start fatal error path 仍待完成。
 
 验证：
 
