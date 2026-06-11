@@ -197,6 +197,21 @@ class InnoDB_pq_scan_ctx {
   dberr_t produce_callback_rows(byte *mysql_rec, row_prebuilt_t *prebuilt,
                                 PQ_row_sink *row_sink) const;
 
+  /** Produce callback rows from one assigned range.
+
+  A nullptr range means this worker owns no range and should produce EOF
+  without rows. This is needed before DOP>1 can safely use workers when ranges
+  are fewer than requested workers.
+
+  @param[out] mysql_rec  MySQL row buffer.
+  @param[in]  prebuilt   Worker row_prebuilt_t for conversion.
+  @param[in]  row_sink   SQL-layer sink for converted rows.
+  @param[in]  range      Assigned static scan range, or nullptr.
+  @return DB_SUCCESS or error code. */
+  dberr_t produce_callback_rows_for_range(
+      byte *mysql_rec, row_prebuilt_t *prebuilt, PQ_row_sink *row_sink,
+      const InnoDB_pq_range *range) const;
+
   /** Mutable access to ranges for dispatch. */
   std::vector<InnoDB_pq_range> &mutable_ranges() { return m_ranges; }
 

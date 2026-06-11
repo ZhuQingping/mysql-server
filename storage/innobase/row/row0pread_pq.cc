@@ -239,6 +239,14 @@ dberr_t InnoDB_pq_scan_ctx::smoke_callback_conversion(
 
 dberr_t InnoDB_pq_scan_ctx::produce_callback_rows(
     byte *mysql_rec, row_prebuilt_t *prebuilt, PQ_row_sink *row_sink) const {
+  InnoDB_pq_range full_range;
+  return produce_callback_rows_for_range(mysql_rec, prebuilt, row_sink,
+                                         &full_range);
+}
+
+dberr_t InnoDB_pq_scan_ctx::produce_callback_rows_for_range(
+    byte *mysql_rec, row_prebuilt_t *prebuilt, PQ_row_sink *row_sink,
+    const InnoDB_pq_range *range) const {
   if (mysql_rec == nullptr || prebuilt == nullptr || row_sink == nullptr) {
     return DB_UNSUPPORTED;
   }
@@ -248,8 +256,15 @@ dberr_t InnoDB_pq_scan_ctx::produce_callback_rows(
     return DB_UNSUPPORTED;
   }
 
+  if (range == nullptr) {
+    return DB_SUCCESS;
+  }
+
   Parallel_reader reader(0);
-  Parallel_reader::Config config(Parallel_reader::Scan_range{}, m_index);
+  Parallel_reader::Scan_range scan_range(
+      range->m_start != nullptr ? range->m_start->tuple() : nullptr,
+      range->m_end != nullptr ? range->m_end->tuple() : nullptr);
+  Parallel_reader::Config config(scan_range, m_index);
 
   bool stop_requested = false;
   auto err = reader.add_scan(const_cast<trx_t *>(m_trx), config,
