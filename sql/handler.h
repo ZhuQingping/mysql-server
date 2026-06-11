@@ -4931,6 +4931,14 @@ class handler {
     return HA_ERR_UNSUPPORTED;
   }
 
+  /** Run an internal worker-side callback conversion smoke. */
+  virtual int pq_worker_scan_callback_smoke(
+      PQ_Worker_context *worker_ctx [[maybe_unused]],
+      uchar *record [[maybe_unused]], bool *converted) {
+    if (converted != nullptr) *converted = false;
+    return HA_ERR_UNSUPPORTED;
+  }
+
   /** End worker-side PQ scan context. Idempotent. */
   virtual int pq_worker_scan_end(PQ_Worker_context *worker_ctx [[maybe_unused]]) {
     return 0;

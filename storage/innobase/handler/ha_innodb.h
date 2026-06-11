@@ -522,6 +522,16 @@ class ha_innobase : public handler {
                           bool *eof) override;
 
   /**
+    Run an internal callback conversion smoke for a worker context.
+
+    This does not advance the public pull-row API or enable real row
+    production. It validates that an EXECUTE leader read view can drive a
+    Parallel_reader callback into a worker-local MySQL record buffer.
+  */
+  int pq_worker_scan_callback_smoke(PQ_Worker_context *worker_ctx,
+                                    uchar *record, bool *converted) override;
+
+  /**
     End a PQ worker scan. Cleans up worker cursor state and resources.
     Idempotent: safe to call multiple times or with nullptr.
   */

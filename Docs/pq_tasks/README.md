@@ -5,7 +5,7 @@
 ## Current Summary
 
 - Last synced: 2026-06-11
-- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0、V2-1、V2-2、V2-3、V2-4、V2-5、V2-6、V2-7 已提交；V2-8A worker handler/prebuilt contract design 已完成；V2-8B Row Image Protocol 已完成；V2-8C contract/gate 第一段、leader probe/execute mode API、worker open context carrier 生命周期、worker THD/TABLE helper、safe-window open-table smoke 和 handler init/end smoke 已实现；V2-8D 已完成 first-row/read-view 方案选型；V2-8E EXECUTE commit point primitive 已完成；V2-8F callback conversion smoke primitive 已完成，真实 DOP=1 full scan 仍未打开。
+- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0、V2-1、V2-2、V2-3、V2-4、V2-5、V2-6、V2-7 已提交；V2-8A worker handler/prebuilt contract design 已完成；V2-8B Row Image Protocol 已完成；V2-8C contract/gate 第一段、leader probe/execute mode API、worker open context carrier 生命周期、worker THD/TABLE helper、safe-window open-table smoke 和 handler init/end smoke 已实现；V2-8D 已完成 first-row/read-view 方案选型；V2-8E EXECUTE commit point primitive 已完成；V2-8F callback conversion smoke primitive 已完成；V2-8G EXECUTE callback smoke observability 已完成，真实 DOP=1 full scan 仍未打开。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
@@ -40,6 +40,7 @@
   - V2-8F callback accessors: `e817a9176ec` Add PQ V2-8F callback row accessors
   - V2-8F callback conversion helper: `f23320fb5f7` Add PQ V2-8F callback conversion helper
   - V2-8F callback conversion smoke: `816a6808699` Add PQ V2-8F callback conversion smoke
+  - V2-8G EXECUTE callback smoke: 本轮提交，增加 EXECUTE read-view callback smoke attempts/rows observability
   - V2-1: `9a58ff94cdf` Add PQ V2-1 iterator safe fallback
   - V2-0: `a420e8a3f26` Add PQ V2-0 execution state contract
   - Phase 8: `113d2ba44c1` Add PQ phase 8 V1 completion scaffolding
@@ -68,9 +69,10 @@
   - [v2-8d-first-row-read-view-contract.md](v2-8d-first-row-read-view-contract.md): V2-8D 已完成方案选型：首行定位按 `index_first()` 等价协议，真实读取走 `Parallel_reader` visibility adapter 路线，不直连 worker-local `row_search_mvcc()`；`pq_worker_scan_next()` 继续 disabled，直到 EXECUTE commit point 和 pull adapter 完成。
   - [v2-8e-execute-commit-point.md](v2-8e-execute-commit-point.md): V2-8E 已完成 InnoDB leader `EXECUTE` commit point primitive；`PROBE` 仍 fallback-safe，`EXECUTE` 在 leader 线程绑定 active read view，但当前 SQL iterator 尚不调用 EXECUTE；build 和完整 `parallel_query` suite 通过。
   - [v2-8f-parallel-reader-pull-adapter.md](v2-8f-parallel-reader-pull-adapter.md): V2-8F callback conversion smoke primitive 已完成，`InnoDB_pq_scan_ctx` 可用 `Parallel_reader(0)` 在当前线程转换最多一行 visible clustered record；不接 SQL `Read()`，不设置 EXECUTED；build 和完整 `parallel_query` suite 通过。
+  - [v2-8g-execute-callback-smoke.md](v2-8g-execute-callback-smoke.md): V2-8G 已完成，SQL iterator 在 safe fallback window 内尝试固定 DOP=1 EXECUTE callback smoke；新增 `Parallel_callback_smoke_attempts` / `Parallel_callback_smoke_rows`；失败不影响 serial fallback；完整 `parallel_query` suite 通过。
   - [v2-execution-path-roadmap.md](v2-execution-path-roadmap.md): V2 真实执行路径拆分，覆盖 SQL iterator、worker THD、Exchange/Gather row 流、InnoDB 分片扫描、full scan 闭环和基础聚合。
   - [v2-test-matrix.md](v2-test-matrix.md): V1/V2 阶段化 MTR 测试矩阵，明确 DOP=1 first 和 DOP>1 range-partition gate。
-- Next recommended action: 继续 V2-8F pull adapter internal API 小步实现；在 adapter 完成前，`pq_worker_scan_next()` 继续 disabled。
+- Next recommended action: 进入 V2-8H row stream activation design，先定义 `Read()` 接管、EOF/error、MQ row image 和 fatal-after-start 边界；在 hard gate 完成前，`pq_worker_scan_next()` 继续 disabled。
 - Parallel-ready task overview: [parallel_wave2_tasks.md](parallel_wave2_tasks.md)
 - Remaining risk: Phase 8 的 aggregate 当前仍是基础设施和 eligibility 扩展，真实并行聚合执行尚未启用；locking read 的 EXPLAIN annotation 当前仍可能显示 `Parallel query dop=4`，已从 Phase 9 测试中移除，后续需单独修复。
 
@@ -138,6 +140,7 @@ Recommended worktrees:
 | V2-8D - First Row / Read View Contract | Design Selected | Codex Orchestrator + Explorer Agents | [v2-8d-first-row-read-view-contract.md](v2-8d-first-row-read-view-contract.md) | 已确认 `index_first()` 等价首行参数为 `PAGE_CUR_G + match_mode 0`；真实读取选择 `Parallel_reader` visibility adapter 路线，避免 worker-local `row_search_mvcc()` 创建独立 read view；真实 row read 继续 disabled，直到 EXECUTE commit point 和 pull adapter 完成 |
 | V2-8E - EXECUTE Commit Point | Completed | Codex Orchestrator | [v2-8e-execute-commit-point.md](v2-8e-execute-commit-point.md) | InnoDB leader `EXECUTE` mode 已能在 leader 线程绑定 active read view；当前 SQL iterator 仍只调用 `PROBE`，不打开真实 row stream；`mysqld` build 和完整 `parallel_query` suite 通过 |
 | V2-8F - Parallel_reader Pull Adapter | Callback conversion smoke primitive completed | Codex Orchestrator | [v2-8f-parallel-reader-pull-adapter.md](v2-8f-parallel-reader-pull-adapter.md) | `InnoDB_pq_scan_ctx::smoke_callback_conversion()` 已实现，可用同步 `Parallel_reader` 转换最多一行；先不接 SQL `Read()`，不打开真实 row stream；`mysqld` build 和完整 `parallel_query` suite 通过 |
+| V2-8G - EXECUTE Callback Smoke | Completed | Codex Orchestrator | [v2-8g-execute-callback-smoke.md](v2-8g-execute-callback-smoke.md) | SQL iterator safe fallback window 内尝试固定 DOP=1 EXECUTE callback smoke；新增 attempts/rows 状态变量；不打开真实 row stream；`mysqld` build 和完整 `parallel_query` suite 通过 |
 
 ## Decisions
 

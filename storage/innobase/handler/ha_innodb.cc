@@ -11159,6 +11159,35 @@ int ha_innobase::pq_worker_scan_next(PQ_Worker_context *worker_ctx,
   return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, eof);
 }
 
+int ha_innobase::pq_worker_scan_callback_smoke(PQ_Worker_context *worker_ctx,
+                                               uchar *record,
+                                               bool *converted) {
+  if (converted != nullptr) {
+    *converted = false;
+  }
+
+  if (worker_ctx == nullptr || record == nullptr || converted == nullptr ||
+      m_prebuilt == nullptr ||
+      worker_ctx->kind() != PQ_Worker_context_kind::INNODB) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  auto sql_worker =
+      static_cast<InnoDB_pq_sql_worker_context *>(worker_ctx);
+  auto innodb_worker = sql_worker->innodb_ctx();
+  if (innodb_worker == nullptr || innodb_worker->leader_ctx() == nullptr ||
+      innodb_worker->leader_ctx()->scan_ctx() == nullptr) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  auto err = innodb_worker->leader_ctx()->scan_ctx()->smoke_callback_conversion(
+      record, m_prebuilt, converted);
+  if (err == DB_SUCCESS) {
+    return 0;
+  }
+  return pq_map_dberr_to_handler_error(err, nullptr);
+}
+
 /**
   End a PQ worker scan. Cleans up worker cursor state and resources.
 

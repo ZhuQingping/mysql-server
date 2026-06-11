@@ -176,6 +176,8 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_handler_smoke_runs{0};  ///< Handler init/end smoke runs
   std::atomic<uint64> exchange_smoke_rows{0};      ///< Synthetic MQ rows read
   std::atomic<uint64> exchange_smoke_finishes{0};  ///< Synthetic FINISH tokens
+  std::atomic<uint64> callback_smoke_attempts{0};  ///< Callback smoke attempts
+  std::atomic<uint64> callback_smoke_rows{0};      ///< Callback converted rows
 
   /** Reset all counters. */
   void reset() {
@@ -189,6 +191,8 @@ struct PQ_global_stats {
     worker_handler_smoke_runs.store(0, std::memory_order_relaxed);
     exchange_smoke_rows.store(0, std::memory_order_relaxed);
     exchange_smoke_finishes.store(0, std::memory_order_relaxed);
+    callback_smoke_attempts.store(0, std::memory_order_relaxed);
+    callback_smoke_rows.store(0, std::memory_order_relaxed);
   }
 };
 
@@ -620,6 +624,25 @@ class Gather_operator {
     @retval true   Smoke pass failed
   */
   bool run_worker_open_table_smoke(THD *leader_thd, TABLE *leader_table);
+
+  /**
+    Run a V2-8G EXECUTE read-view callback conversion smoke pass.
+
+    This creates a worker THD/TABLE, initializes a worker handler context, and
+    asks the engine to attempt conversion of at most one Parallel_reader
+    callback row into the worker TABLE record buffer. It must not return that
+    row to SQL execution or update real execution counters. Small/empty tables
+    may complete without a callback row; attempts and converted rows are
+    counted separately.
+
+    @param leader_thd    Leader THD to restore as current THD after smoke
+    @param leader_table  Leader TABLE used as metadata source
+
+    @retval false  Smoke pass completed or table was empty
+    @retval true   Smoke pass failed
+  */
+  bool run_worker_callback_conversion_smoke(THD *leader_thd,
+                                            TABLE *leader_table);
 
   /**
     Abort all workers and close MQ producers.

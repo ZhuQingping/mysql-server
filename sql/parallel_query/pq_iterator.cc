@@ -106,6 +106,24 @@ bool PQTableScanIterator::Init() {
       return true;
     }
     cleanup_pq_resources(false);
+
+    PQ_Leader_context *execute_ctx = nullptr;
+    uint execute_dop = 0;
+    error = table()->file->pq_leader_scan_init(
+        thd(), &execute_ctx, PQ_leader_scan_mode::EXECUTE, 1, &execute_dop,
+        false);
+    if (error == 0) {
+      Gather_operator callback_smoke(1);
+      (void)(callback_smoke.init() ||
+             callback_smoke.configure_worker_open_contexts(table(), execute_ctx,
+                                                           1) ||
+             callback_smoke.run_worker_callback_conversion_smoke(thd(),
+                                                                 table()));
+      table()->file->pq_leader_scan_end(execute_ctx);
+    } else if (error != HA_ERR_UNSUPPORTED) {
+      PrintError(error);
+      return true;
+    }
   } else if (error != HA_ERR_UNSUPPORTED) {
     cleanup_pq_resources(true);
     PrintError(error);

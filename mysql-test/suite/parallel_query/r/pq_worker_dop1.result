@@ -45,6 +45,14 @@ SET @pq_handler_smoke_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_worker_handler_smoke_runs');
+SET @pq_callback_smoke_attempts_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_callback_smoke_attempts');
+SET @pq_callback_smoke_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_callback_smoke_rows');
 SET SESSION parallel_default_dop=1;
 SELECT * FROM t1;
 SET SESSION parallel_default_dop=2;
@@ -75,9 +83,16 @@ WHERE variable_name = 'Parallel_worker_open_smoke_runs') - @pq_open_smoke_before
 >= 1 AS worker_open_smoke_ran,
 (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_worker_handler_smoke_runs') - @pq_handler_smoke_before
->= 1 AS worker_handler_smoke_ran;
-executed_delta	fallback_delta	rows_delta	workers_delta	ranges_were_planned	worker_smoke_delta	worker_open_smoke_ran	worker_handler_smoke_ran
-0	3	0	0	1	2	1	1
+>= 1 AS worker_handler_smoke_ran,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_callback_smoke_attempts') -
+@pq_callback_smoke_attempts_before
+>= 1 AS callback_smoke_attempted,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_callback_smoke_rows') - @pq_callback_smoke_before
+AS callback_smoke_rows_delta;
+executed_delta	fallback_delta	rows_delta	workers_delta	ranges_were_planned	worker_smoke_delta	worker_open_smoke_ran	worker_handler_smoke_ran	callback_smoke_attempted	callback_smoke_rows_delta
+0	3	0	0	1	2	1	1	1	0
 SET SESSION parallel_query=OFF;
 SET SESSION parallel_default_dop=4;
 SET SESSION parallel_cost_threshold=10000;
