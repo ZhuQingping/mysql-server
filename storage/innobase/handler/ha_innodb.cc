@@ -10951,6 +10951,25 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
   }
   (void)leader_thd;
 
+  auto record_probe_gate_unsupported = [mode]() {
+    if (mode == PQ_leader_scan_mode::PROBE) {
+      pq_global_stats.probe_gate_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+    }
+  };
+  auto record_probe_thread_budget_unsupported = [mode]() {
+    if (mode == PQ_leader_scan_mode::PROBE) {
+      pq_global_stats.probe_thread_budget_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+    }
+  };
+  auto record_probe_init_unsupported = [mode]() {
+    if (mode == PQ_leader_scan_mode::PROBE) {
+      pq_global_stats.probe_init_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+    }
+  };
+
   if (m_pq_leader_ctx != nullptr || m_pq_sql_leader_ctx != nullptr ||
       !m_pq_worker_ctxs.empty()) {
     pq_leader_scan_end(nullptr);
@@ -10958,21 +10977,25 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
 
   /* V1-MVP: reverse scan is not supported. */
   if (reverse) {
+    record_probe_gate_unsupported();
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 
   if (mode != PQ_leader_scan_mode::PROBE &&
       mode != PQ_leader_scan_mode::EXECUTE) {
+    record_probe_gate_unsupported();
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 
   /* DOP must be at least 1. */
   if (requested_dop == 0) {
+    record_probe_gate_unsupported();
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 
   /* Validate prebuilt: must be on clustered index. */
   if (m_prebuilt == nullptr || m_prebuilt->index == nullptr) {
+    record_probe_gate_unsupported();
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 
@@ -10980,11 +11003,13 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
 
   /* Only support clustered index full scan in V1-MVP. */
   if (!index->is_clustered()) {
+    record_probe_gate_unsupported();
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 
   /* Validate that the index is usable. */
   if (!index->is_usable(m_prebuilt->trx)) {
+    record_probe_gate_unsupported();
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 
@@ -11008,6 +11033,7 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
     if (available > 0) {
       Parallel_reader::release_threads(available);
     }
+    record_probe_thread_budget_unsupported();
     /* Not enough threads available; fallback to serial. */
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
@@ -11030,6 +11056,9 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
   if (err != DB_SUCCESS) {
     ut::delete_(innodb_leader_ctx);
     Parallel_reader::release_threads(available);
+    if (err == DB_UNSUPPORTED) {
+      record_probe_init_unsupported();
+    }
     return pq_map_dberr_to_handler_error(err, nullptr);
   }
 

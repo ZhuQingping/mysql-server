@@ -9729,6 +9729,32 @@ static int show_pq_probe_unsupported(THD *, SHOW_VAR *var, char *buf) {
   return 0;
 }
 
+static int show_pq_probe_gate_unsupported(THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.probe_gate_unsupported.load(std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_probe_thread_budget_unsupported(THD *, SHOW_VAR *var,
+                                                   char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(pq_global_stats
+                                      .probe_thread_budget_unsupported.load(
+                                          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_probe_init_unsupported(THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.probe_init_unsupported.load(std::memory_order_relaxed));
+  return 0;
+}
+
 static int show_pq_worker_smoke_runs(THD *, SHOW_VAR *var, char *buf) {
   var->type = SHOW_LONGLONG;
   var->value = buf;
@@ -10188,6 +10214,13 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_probe_unsupported", (char *)&show_pq_probe_unsupported,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_probe_gate_unsupported",
+     (char *)&show_pq_probe_gate_unsupported, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_probe_init_unsupported",
+     (char *)&show_pq_probe_init_unsupported, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_probe_thread_budget_unsupported",
+     (char *)&show_pq_probe_thread_budget_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
     {"Parallel_workers_launched", (char *)&show_pq_workers_launched, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_rows_scanned", (char *)&show_pq_rows_scanned, SHOW_FUNC,

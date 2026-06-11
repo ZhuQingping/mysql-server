@@ -187,6 +187,13 @@ policy。`Exchange_nosort::wait_for_message()` 每次最多等待 1ms；`Read()`
 遇到 kill 则传播到 worker/MQ 并返回 kill error。该边界仍不启动真实异步
 worker，但已经避免把暂时无消息误判为内部错误。
 
+Status update: 尝试新增 debug-only `pq_read_shadow_path` MTR 时发现普通
+fixed-row 表在 shadow gate 下仍只走 serial fallback，细查显示 PROBE 返回
+unsupported。已先移除失败测试，并新增 PROBE unsupported 细分诊断：
+`Parallel_probe_gate_unsupported`、`Parallel_probe_thread_budget_unsupported`
+和 `Parallel_probe_init_unsupported`，用于后续判断真实 DOP=1 blocker 是基础
+gate、线程预算还是 range init。
+
 ## Acceptance Checklist
 
 - [x] callback row conversion smoke 能稳定产出 row；
@@ -197,6 +204,7 @@ worker，但已经避免把暂时无消息误判为内部错误。
 - [x] `Read()` shadow path 可编译、默认不可达；
 - [x] callback multi-row producer smoke 接入 SQL worker loop / Exchange sink；
 - [x] `Read()` wait/kill policy 边界已实现；
+- [x] PROBE unsupported 细分诊断已实现；
 - [ ] DOP=1 real full scan MTR 通过；
 - [ ] full `parallel_query` suite 通过；
 - [ ] fatal-after-start 不 fallback。
@@ -238,6 +246,8 @@ worker，但已经避免把暂时无消息误判为内部错误。
   conversion smoke + multi-row producer smoke；
 - 增加 `Exchange_nosort::wait_for_message()` 和 shadow `Read()` bounded
   wait/kill loop，明确 WOULD_BLOCK 不等于内部错误；
+- 增加 PROBE unsupported 细分诊断状态变量，便于定位 shadow / real gate
+  未进入的具体原因；
 - 新增 `Parallel_worker_producer_smoke_runs` 状态变量；
 - 默认仍不接真实 `Read()`。
 
@@ -254,6 +264,6 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 Result: passed, 19 tests successful
 ```
 
-下一步继续 V2-8J-4：在 debug gate 下验证真实 DOP=1 full scan，并决定是否
-把 limited producer 从 smoke-only 推进到 shadow `Read()` producer；真实
-DOP=1 full scan 仍未打开。
+下一步继续 V2-8J-4：用 PROBE 细分诊断定位 shadow gate 的 unsupported 原因，
+再决定是否把 limited producer 从 smoke-only 推进到 shadow `Read()` producer；
+真实 DOP=1 full scan 仍未打开。
