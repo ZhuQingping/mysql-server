@@ -32,7 +32,7 @@
 | V2-4 Parallel_reader Adapter + Range Partition | `pq_range_partition_dop`: DOP=1/2/4 验证空表、小表、多页表 `COUNT(*)` / `SUM(pk)` 无重复无漏；这是 DOP>1 gate |
 | V2-5 Worker THD + Minimal Worker Scan | `pq_worker_dop1`: 真实 worker 启动、等待、清理；空表/小表可扫；nested PQ fallback 或拒绝 |
 | V2-6 Exchange/Gather Row Stream | `pq_exchange_rows_dop1`: 单 worker row stream，`SELECT *`、EOF、error token 不死等；leader 填 `table->record[0]` 正确 |
-| V2-7 Predicate/Projection Boundary | `pq_projection_where_dop1`: worker 只产 base row，leader 执行 WHERE/projection；覆盖 `SELECT cols`、简单 AND/OR、空结果 |
+| V2-7 Predicate/Projection Boundary | `pq_projection_where_boundary`: 当前阶段锁定 worker 不执行 Item/JOIN clone、查询仍 serial fallback、EXPLAIN 不污染 counters；真实 leader-side WHERE/projection 正确性放到 V2-8 row materialization 后验收 |
 | V2-8 Single Table Full Scan Closure | `pq_fullscan_real_dop1` 先跑通真实闭环；V2-4 后增加 `pq_fullscan_real_dop2_4`，验证 status `executed/workers/rows` |
 | V2-9 Basic Aggregation | `pq_agg_real_dop1`: `COUNT/SUM/AVG/MIN/MAX` 无 GROUP BY；V2-4 后加 DOP=2/4；explicit GROUP BY 继续 fallback |
 

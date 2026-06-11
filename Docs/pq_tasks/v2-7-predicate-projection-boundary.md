@@ -153,20 +153,70 @@ cd build-ninja/mysql-test
 
 ## Acceptance Checklist
 
-- [ ] `SELECT cols`、简单 WHERE、空结果在当前阶段结果正确；
-- [ ] 查询仍 serial fallback，不设置真实 executed/workers/rows；
-- [ ] EXPLAIN 不污染 fallback/smoke counters；
-- [ ] 文档明确 worker-side Item/JOIN clone 禁止；
-- [ ] V2-8 前置条件明确：真实 row materialization 后再验收 leader-side predicate/projection；
-- [ ] targeted MTR 通过；
-- [ ] full `parallel_query` suite 通过。
+- [x] `SELECT cols`、简单 WHERE、空结果在当前阶段结果正确；
+- [x] 查询仍 serial fallback，不设置真实 executed/workers/rows；
+- [x] EXPLAIN 不污染 fallback/smoke counters；
+- [x] 文档明确 worker-side Item/JOIN clone 禁止；
+- [x] V2-8 前置条件明确：真实 row materialization 后再验收 leader-side predicate/projection；
+- [x] targeted MTR 通过；
+- [x] full `parallel_query` suite 通过。
 
 ## Current Status
 
-- Status: In Progress
+- Status: Completed
 - Owner: Codex Orchestrator
 - Started: 2026-06-11
+- Completed: 2026-06-11
 
 ## Completion Report
 
-待实现后补充。
+### Codex Orchestrator 实现结果（2026-06-11）
+
+Changed files:
+
+- `mysql-test/suite/parallel_query/t/pq_projection_where_boundary.test`
+- `mysql-test/suite/parallel_query/r/pq_projection_where_boundary.result`
+- `Docs/pq_tasks/README.md`
+- `Docs/pq_tasks/v2-7-predicate-projection-boundary.md`
+- `Docs/pq_tasks/v2-test-matrix.md`
+- `Docs/pq_tasks/v2-execution-path-roadmap.md`
+
+Implementation summary:
+
+- 新增 `pq_projection_where_boundary` MTR，覆盖：
+  - `SELECT id FROM t1 WHERE val >= 20`
+  - `SELECT val, pad FROM t1 WHERE id IN (2,4)`
+  - `SELECT id FROM t1 WHERE val > 999`
+  - traditional/TREE/JSON EXPLAIN counter stability。
+- 明确当前阶段仍 serial fallback，`Parallel_queries_executed`、
+  `Parallel_workers_launched`、`Parallel_rows_scanned` 都保持 0。
+- 验证 EXPLAIN 不增加 fallback、worker smoke、exchange smoke counters。
+- 更新 V2 测试矩阵和 roadmap：V2-7 是 boundary phase；真实
+  leader-side predicate/projection 正确性等 V2-8 row materialization 后验收。
+
+Validation:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+./mtr --suite=parallel_query --parallel=1 --extern socket=/private/tmp/pq20.sock --extern user=root pq_projection_where_boundary pq_exchange_rows_dop1 pq_stats
+./mtr --suite=parallel_query --parallel=1 --extern socket=/private/tmp/pq20.sock --extern user=root
+```
+
+结果：
+
+- `mysqld` build 通过。
+- targeted MTR: 4/4 pass。
+- full `parallel_query` suite: 19/19 pass。
+
+Remaining risks:
+
+- 当前仍未打开真实 `PQTableScanIterator::Read()` row materialization。
+- `id IN (2,4)` 走 PK/range path，不是 PQ eligible；这是当前 conservative
+  eligibility 的预期行为。
+- V2-8 需要先定义 worker row image 到 `table->record[0]` 的 ownership 和
+  lifetime，才能让 leader-side WHERE/projection 真正消费 PQ row。
+
+Commit:
+
+- `1d39b510348 Add PQ V2-7 predicate projection boundary`

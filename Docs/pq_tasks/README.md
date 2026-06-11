@@ -5,7 +5,7 @@
 ## Current Summary
 
 - Last synced: 2026-06-11
-- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0、V2-1、V2-2、V2-3、V2-4、V2-5、V2-6 已提交；当前进入 V2-7 Predicate/Projection Boundary 任务拆分。
+- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0、V2-1、V2-2、V2-3、V2-4、V2-5、V2-6、V2-7 已提交；当前进入 V2-8 Single Table Full Scan Closure 任务拆分。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
@@ -15,6 +15,7 @@
   - V2-4 observable: `79d1355cf2f` Add PQ V2-4 range planning status
   - V2-5: `1e8078544e8` Add PQ V2-5 worker lifecycle smoke
   - V2-6: `d0b4988a584` Add PQ V2-6 exchange row stream smoke
+  - V2-7: `1d39b510348` Add PQ V2-7 predicate projection boundary
   - V2-1: `9a58ff94cdf` Add PQ V2-1 iterator safe fallback
   - V2-0: `a420e8a3f26` Add PQ V2-0 execution state contract
   - Phase 8: `113d2ba44c1` Add PQ phase 8 V1 completion scaffolding
@@ -35,10 +36,10 @@
   - [v2-4-parallel-reader-range-partition.md](v2-4-parallel-reader-range-partition.md): V2-4 已提交，完成 Parallel_reader thin adapter、range planning observable 和 DOP>1 range gate。
   - [v2-5-worker-thd-minimal-scan.md](v2-5-worker-thd-minimal-scan.md): V2-5 已提交，完成 worker lifecycle smoke observable，真实 row stream 仍未打开。
   - [v2-6-exchange-gather-row-stream.md](v2-6-exchange-gather-row-stream.md): V2-6 已完成验证，先用 synthetic MQ token/row stream 验证 Exchange/Gather，不接真实 InnoDB row。
-  - [v2-7-predicate-projection-boundary.md](v2-7-predicate-projection-boundary.md): V2-7 当前任务书，锁定 leader-side predicate/projection contract，避免提前引入 worker-side Item/JOIN clone。
+  - [v2-7-predicate-projection-boundary.md](v2-7-predicate-projection-boundary.md): V2-7 已提交，锁定 leader-side predicate/projection contract，避免提前引入 worker-side Item/JOIN clone。
   - [v2-execution-path-roadmap.md](v2-execution-path-roadmap.md): V2 真实执行路径拆分，覆盖 SQL iterator、worker THD、Exchange/Gather row 流、InnoDB 分片扫描、full scan 闭环和基础聚合。
   - [v2-test-matrix.md](v2-test-matrix.md): V1/V2 阶段化 MTR 测试矩阵，明确 DOP=1 first 和 DOP>1 range-partition gate。
-- Next recommended action: 进入 V2-7 Predicate/Projection Boundary 任务拆分。
+- Next recommended action: 进入 V2-8 Single Table Full Scan Closure 任务拆分。
 - Parallel-ready task overview: [parallel_wave2_tasks.md](parallel_wave2_tasks.md)
 - Remaining risk: Phase 8 的 aggregate 当前仍是基础设施和 eligibility 扩展，真实并行聚合执行尚未启用；locking read 的 EXPLAIN annotation 当前仍可能显示 `Parallel query dop=4`，已从 Phase 9 测试中移除，后续需单独修复。
 
@@ -98,7 +99,7 @@ Recommended worktrees:
 | V2-4 - Parallel_reader Thin Adapter + Range Partition | Completed | Codex Orchestrator + parallel explorers | [v2-4-parallel-reader-range-partition.md](v2-4-parallel-reader-range-partition.md) | Commit `0b7f7485a7b` + `79d1355cf2f`；`Parallel_reader::export_scan_ranges()`、`Parallel_ranges_built` 和 `pq_range_planning_dop`；完整 suite 通过 |
 | V2-5 - Worker THD + Minimal Worker Scan | Completed | Codex Orchestrator + parallel explorers | [v2-5-worker-thd-minimal-scan.md](v2-5-worker-thd-minimal-scan.md) | Commit `1e8078544e8`; Worker lifecycle smoke 已接入；不打开真实 row stream；完整 suite 通过 |
 | V2-6 - Exchange/Gather Row Stream | Completed | Codex Orchestrator + parallel explorers | [v2-6-exchange-gather-row-stream.md](v2-6-exchange-gather-row-stream.md) | Commit `d0b4988a584`; Synthetic MQ ROW/FINISH stream smoke 已接入；不进入 `Read()`；完整 suite 通过 |
-| V2-7 - Predicate/Projection Boundary | In Progress | Codex Orchestrator | [v2-7-predicate-projection-boundary.md](v2-7-predicate-projection-boundary.md) | 当前任务拆分：先锁定 leader-side contract 和负向测试，不打开真实 worker row |
+| V2-7 - Predicate/Projection Boundary | Completed | Codex Orchestrator | [v2-7-predicate-projection-boundary.md](v2-7-predicate-projection-boundary.md) | Commit `1d39b510348`; Boundary MTR 已完成；不打开真实 worker row；完整 suite 通过 |
 
 ## Decisions
 

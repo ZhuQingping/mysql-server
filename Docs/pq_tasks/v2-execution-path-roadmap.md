@@ -259,8 +259,10 @@ Allowed files:
 
 验收：
 
-- `SELECT *`、`SELECT cols`、简单 WHERE 正确；
-- 未引入 worker Item clone 复杂度。
+- 当前 V2-7 boundary：`SELECT cols`、简单 WHERE、空结果仍通过 serial fallback 保持正确；
+- EXPLAIN 不污染 fallback/smoke counters；
+- 未引入 worker Item clone / JOIN clone 复杂度；
+- 真实 leader-side WHERE/projection 正确性在 V2-8 打开 row materialization 后验收。
 
 ### V2-8: 单表 full scan 真实闭环
 
