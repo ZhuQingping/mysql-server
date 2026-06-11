@@ -22,6 +22,10 @@
 
 #include "sql/parallel_query/pq_group_aggregate_iterator.h"
 
+#include <utility>
+
+#include "sql/iterators/composite_iterators.h"  // temptable_aggregate_iterator
+#include "sql/iterators/row_iterator.h"         // TableRowIterator
 #include "sql/join_optimizer/access_path.h"  // AccessPath
 #include "sql/item_sum.h"                    // Item_sum
 #include "sql/parallel_query/sql_parallel.h"  // pq_global_stats
@@ -125,6 +129,64 @@ const PQ_integer_group_state *pq_find_group(const PQ_integer_group_state *groups
   return nullptr;
 }
 
+class PQTemptableGroupAggregateIterator final : public TableRowIterator {
+ public:
+  PQTemptableGroupAggregateIterator(
+      THD *thd, unique_ptr_destroy_only<RowIterator> subquery_iterator,
+      Temp_table_param *temp_table_param, TABLE *table,
+      unique_ptr_destroy_only<RowIterator> table_iterator, JOIN *join,
+      int ref_slice)
+      : TableRowIterator(thd, table),
+        m_native_iterator(temptable_aggregate_iterator::CreateIterator(
+            thd, std::move(subquery_iterator), temp_table_param, table,
+            std::move(table_iterator), join, ref_slice)) {}
+
+  bool Init() override {
+    if (m_native_iterator == nullptr || m_native_iterator->Init()) {
+      return true;
+    }
+    if (!m_executed_counted) {
+      pq_global_stats.groupby_dop1_native_delegate_executed.fetch_add(
+          1, std::memory_order_relaxed);
+      m_executed_counted = true;
+    }
+    return false;
+  }
+
+  int Read() override {
+    if (m_native_iterator == nullptr) return 1;
+    return m_native_iterator->Read();
+  }
+
+  void SetNullRowFlag(bool is_null_row) override {
+    if (m_native_iterator != nullptr) {
+      m_native_iterator->SetNullRowFlag(is_null_row);
+    }
+  }
+
+  void UnlockRow() override {
+    if (m_native_iterator != nullptr) {
+      m_native_iterator->UnlockRow();
+    }
+  }
+
+  void StartPSIBatchMode() override {
+    if (m_native_iterator != nullptr) {
+      m_native_iterator->StartPSIBatchMode();
+    }
+  }
+
+  void EndPSIBatchModeIfStarted() override {
+    if (m_native_iterator != nullptr) {
+      m_native_iterator->EndPSIBatchModeIfStarted();
+    }
+  }
+
+ private:
+  unique_ptr_destroy_only<RowIterator> m_native_iterator;
+  bool m_executed_counted{false};
+};
+
 }  // namespace
 
 unique_ptr_destroy_only<RowIterator> TryCreatePQGroupAggregateIterator(
@@ -192,7 +254,9 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQTemptableGroupAggregateIterator(
   pq_global_stats.groupby_dop1_factory_attempts.fetch_add(
       1, std::memory_order_relaxed);
 
-  if (pq_groupby_dop1_temp_shape_supported(join, temp_table_param, table)) {
+  const bool supported_shape =
+      pq_groupby_dop1_temp_shape_supported(join, temp_table_param, table);
+  if (supported_shape) {
     pq_global_stats.groupby_temp_shape_supported.fetch_add(
         1, std::memory_order_relaxed);
   } else {
@@ -200,21 +264,18 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQTemptableGroupAggregateIterator(
         1, std::memory_order_relaxed);
   }
 
-  if (!join->pq_eligible) {
+  if (!join->pq_eligible || !supported_shape) {
     pq_global_stats.groupby_dop1_factory_fallback.fetch_add(
         1, std::memory_order_relaxed);
     return nullptr;
   }
 
-  /*
-    V2-12A-3.4b only establishes the temp-table aggregate access-path hook.
-    It deliberately does not take ownership of subquery_path/table_path
-    iterators yet, so native TemptableAggregateIterator remains the only
-    executable path.
-  */
-  pq_global_stats.groupby_dop1_factory_fallback.fetch_add(
+  pq_global_stats.groupby_dop1_factory_selected.fetch_add(
       1, std::memory_order_relaxed);
-  return nullptr;
+  return unique_ptr_destroy_only<RowIterator>(
+      new (mem_root) PQTemptableGroupAggregateIterator(
+          thd, std::move(*subquery_iterator), temp_table_param, table,
+          std::move(*table_iterator), join, ref_slice));
 }
 
 bool RunPQGroupAggregateTypedStateSmoke(uint32 *groups_built,

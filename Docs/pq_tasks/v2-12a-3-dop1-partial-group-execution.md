@@ -568,3 +568,46 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 下一步：
 
 - 后续进入真正的 `TEMPTABLE_AGGREGATE` PQ iterator，实现可验证的 temp-table 写入和结果输出。
+
+### V2-12A-3.5 Temp-table Native Delegate Wrapper
+
+状态：Completed。
+
+目标：
+
+- 在 `AccessPath::TEMPTABLE_AGGREGATE` factory 中真正返回 PQ-owned iterator；
+- PQ iterator 接管 `subquery_iterator` / `table_iterator` ownership；
+- 第一小步内部委托原生 `temptable_aggregate_iterator::CreateIterator()` 完成 temp table 写入和读取；
+- 验证 output temp table contract、ref slice、batch-mode forwarding 和结果输出链路可执行；
+- 不实现 worker partial aggregation，不修改 `TemptableAggregateIterator` / `item_sum.*`。
+
+实现约束：
+
+- 仅在 gate ON、DOP=1、`join->pq_eligible`、temp shape supported 时 selected；
+- unsupported shape 或非 eligible 继续 native fallback；
+- selected 计数和 native delegate executed 计数只表示 PQ wrapper 接管，不表示 worker partial group 已执行；
+- `Parallel_queries_executed` 仍只保留 threaded row-stream execution 语义，不被 native delegate wrapper 污染。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_dop1_factory_observable pq_stats pq_groupby_diagnostics \
+  pq_groupby_typed_state_smoke \
+  --parallel=1 --vardir=/tmp/pqv_groupby_delegate \
+  --tmpdir=/tmp/pqt_groupby_delegate
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full_groupby_delegate \
+  --tmpdir=/tmp/pqt_full_groupby_delegate
+```
+
+结果：
+
+- `cmake --build build-ninja --target mysqld -j 16` 通过；
+- targeted suite 通过：`pq_groupby_dop1_factory_observable`、`pq_stats`、`pq_groupby_diagnostics`、`pq_groupby_typed_state_smoke`；
+- 完整 `parallel_query` suite 通过，共 55 项。
+
+下一步：
+
+- 再把 wrapper 的 `Init()` 从 native delegate 替换为 PQ-owned temp-table 写入循环。
