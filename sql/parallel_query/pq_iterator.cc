@@ -184,18 +184,6 @@ bool PQTableScanIterator::Init() {
       return true;
     }
 
-    const uint64 callback_rows_before =
-        pq_global_stats.callback_smoke_rows.load(std::memory_order_relaxed);
-    Gather_operator callback_smoke(1);
-    if (callback_smoke.init() ||
-        callback_smoke.configure_worker_open_contexts(table(), m_leader_ctx,
-                                                      1) ||
-        callback_smoke.run_worker_callback_conversion_smoke(thd(), table())) {
-      cleanup_pq_resources(true);
-      PrintError(HA_ERR_INTERNAL_ERROR);
-      return true;
-    }
-
     m_gather = new Gather_operator(1);
     if (m_gather == nullptr || m_gather->init() ||
         m_gather->configure_worker_open_contexts(table(), m_leader_ctx, 1)) {
@@ -204,17 +192,15 @@ bool PQTableScanIterator::Init() {
       return true;
     }
 
-    mark_pq_started();
-    const bool converted =
-        pq_global_stats.callback_smoke_rows.load(std::memory_order_relaxed) >
-        callback_rows_before;
-    if (converted
-            ? m_gather->get_exchange()->enqueue_record_image_smoke(0, table())
-            : m_gather->get_exchange()->enqueue_finish_smoke(0)) {
+    uint32 rows_produced = 0;
+    if (m_gather->run_worker_callback_limited_producer(thd(), table(), 2,
+                                                       &rows_produced)) {
       cleanup_pq_resources(true);
       PrintError(HA_ERR_INTERNAL_ERROR);
       return true;
     }
+
+    mark_pq_started();
     return false;
   }
 

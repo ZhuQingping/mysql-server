@@ -715,6 +715,27 @@ class Gather_operator {
                                                    TABLE *leader_table);
 
   /**
+    Produce a bounded callback row stream into this gather's Exchange.
+
+    This is the V2-8J shadow Read() producer bridge. It opens one worker
+    THD/TABLE/handler in the configured EXECUTE context, sends up to max_rows
+    ROW messages through a SQL-owned sink, then sends FINISH. The caller owns
+    subsequent Exchange consumption.
+
+    @param leader_thd    Leader THD
+    @param leader_table  Leader TABLE for worker open context
+    @param max_rows      Maximum rows to enqueue
+    @param[out] rows_sent Number of ROW messages enqueued
+
+    @retval false  Producer completed and FINISH was enqueued
+    @retval true   Failure
+  */
+  bool run_worker_callback_limited_producer(THD *leader_thd,
+                                            TABLE *leader_table,
+                                            uint32 max_rows,
+                                            uint32 *rows_sent);
+
+  /**
     Abort all workers and close MQ producers.
 
     Phase 4 stub: delegates to PQ_worker_manager::abort() and

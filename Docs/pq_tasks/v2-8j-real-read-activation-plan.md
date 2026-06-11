@@ -206,6 +206,13 @@ Status update: 已新增 debug-only `pq_read_shadow_dop1` MTR。该测试通过
 `Parallel_queries_fallback` 不增加。当前仍只验证 first row，不代表完整
 full scan 已打开。
 
+Status update: 已把 limited callback producer 从 smoke-only 推进到 shadow
+`Read()` producer。`Gather_operator::run_worker_callback_limited_producer()`
+会在当前 `m_gather` 的 Exchange 中写入最多 2 条 ROW 和 FINISH，由
+`PQTableScanIterator::Read()` 消费。`pq_read_shadow_dop1` 现在验证
+`Parallel_rows_scanned=2`、`EXECUTED=1`、fallback 不增加，覆盖多行和 EOF
+边界。该路径仍受 debug gate 保护，真实默认 DOP=1 full scan 未打开。
+
 ## Acceptance Checklist
 
 - [x] callback row conversion smoke 能稳定产出 row；
@@ -219,6 +226,7 @@ full scan 已打开。
 - [x] PROBE unsupported 细分诊断已实现；
 - [x] 首次 PQ iterator Init 的 clustered index PROBE gate 已修复；
 - [x] debug-only shadow `Read()` first-row MTR 通过；
+- [x] debug-only shadow `Read()` 2-row + EOF MTR 通过；
 - [ ] DOP=1 real full scan MTR 通过；
 - [ ] full `parallel_query` suite 通过；
 - [ ] fatal-after-start 不 fallback。
@@ -266,6 +274,8 @@ full scan 已打开。
   first-query gate unsupported；
 - 新增 `pq_read_shadow_dop1`，覆盖 debug-only shadow `Read()` first-row
   no-fallback 计数；
+- 新增 `Gather_operator::run_worker_callback_limited_producer()`，让 shadow
+  `Read()` 消费 callback producer 写入的 2-row + FINISH；
 - 新增 `Parallel_worker_producer_smoke_runs` 状态变量；
 - 默认仍不接真实 `Read()`。
 
@@ -282,6 +292,6 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_full --t
 Result: passed, 20 tests successful
 ```
 
-下一步继续 V2-8J-4：把 limited producer 从 smoke-only 推进到 shadow
-`Read()` producer，先在 debug gate 下验证多行/EOF，再评估真实 DOP=1 full
-scan gate；真实 DOP=1 full scan 仍未打开。
+下一步继续 V2-8J-4：评估是否能把 debug-only 2-row gate 推进到真实
+DOP=1 full scan gate；需要先解决 full scan row-count 完整性和 producer /
+consumer 并发背压问题。真实 DOP=1 full scan 仍未打开。
