@@ -597,6 +597,19 @@ class Gather_operator {
   bool run_worker_producer_loop_smoke(THD *leader_thd, TABLE *leader_table);
 
   /**
+    Run a V2-8J worker producer ERROR smoke.
+
+    This verifies the controlled ERROR path: worker metadata transitions to
+    RUNNING, sends a typed ERROR token, leader observes an error via Exchange,
+    and worker transitions to ERROR. The error is expected and consumed inside
+    the smoke; it must not affect the user query.
+
+    @retval false  Smoke pass completed
+    @retval true   Smoke pass failed
+  */
+  bool run_worker_producer_error_smoke(THD *leader_thd, TABLE *leader_table);
+
+  /**
     Run a V2-6 synthetic Exchange/Gather row-stream smoke pass.
 
     This pre-fills MQ handles with synthetic ROW/FINISH tokens and consumes

@@ -112,6 +112,13 @@ bool PQTableScanIterator::Init() {
       PrintError(HA_ERR_OUT_OF_MEM);
       return true;
     }
+    Gather_operator producer_error_smoke(1);
+    if (producer_error_smoke.init() ||
+        producer_error_smoke.run_worker_producer_error_smoke(thd(), table())) {
+      cleanup_pq_resources(true);
+      PrintError(HA_ERR_OUT_OF_MEM);
+      return true;
+    }
     cleanup_pq_resources(false);
 
     PQ_Leader_context *execute_ctx = nullptr;

@@ -278,6 +278,14 @@ class Exchange_nosort : public Exchange {
   bool enqueue_finish_smoke(uint32 worker_id);
 
   /**
+    Enqueue a typed ERROR token for a smoke producer.
+
+    @retval false  ERROR enqueued
+    @retval true   Invalid worker id or MQ send failure
+  */
+  bool enqueue_error_smoke(uint32 worker_id);
+
+  /**
     Run a controlled synthetic row stream through this exchange.
 
     The helper pre-fills each worker queue with one ROW payload followed by a
