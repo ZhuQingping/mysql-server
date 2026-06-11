@@ -38,6 +38,8 @@
   - V2-8F visibility helper: `379e3c60581` Extract PQ V2-8F visibility helper
   - V2-8F conversion helper: `62f8058375d` Add PQ V2-8F record conversion helper
   - V2-8F callback accessors: `e817a9176ec` Add PQ V2-8F callback row accessors
+  - V2-8F callback conversion helper: `f23320fb5f7` Add PQ V2-8F callback conversion helper
+  - V2-8F callback conversion smoke: `816a6808699` Add PQ V2-8F callback conversion smoke
   - V2-1: `9a58ff94cdf` Add PQ V2-1 iterator safe fallback
   - V2-0: `a420e8a3f26` Add PQ V2-0 execution state contract
   - Phase 8: `113d2ba44c1` Add PQ phase 8 V1 completion scaffolding
