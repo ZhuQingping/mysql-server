@@ -31,6 +31,10 @@ SET @pq_groupby_typed_minmax_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_groupby_dop1_typed_minmax_executed');
+SET @pq_groupby_typed_sum_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_dop1_typed_sum_executed');
 SELECT grp, COUNT(*) AS cnt FROM t1 GROUP BY grp;
 grp	cnt
 10	3
@@ -65,10 +69,13 @@ WHERE variable_name = 'Parallel_groupby_dop1_factory_fallback') -
 WHERE variable_name = 'Parallel_groupby_dop1_typed_minmax_executed') -
 @pq_groupby_typed_minmax_before) >= 2 AS typed_minmax_delta_ok,
 ((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_dop1_typed_sum_executed') -
+@pq_groupby_typed_sum_before) >= 1 AS typed_sum_delta_ok,
+((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_groupby_temp_shape_supported') -
 @pq_groupby_shape_supported_before) >= 4 AS shape_supported_delta_ok;
-selected_delta_ok	temp_executed_delta_ok	fallback_delta	typed_minmax_delta_ok	shape_supported_delta_ok
-1	1	0	1	1
+selected_delta_ok	temp_executed_delta_ok	fallback_delta	typed_minmax_delta_ok	typed_sum_delta_ok	shape_supported_delta_ok
+1	1	0	1	1	1
 SET SESSION parallel_query_experimental_groupby_dop1=OFF;
 SET SESSION parallel_query=OFF;
 SET SESSION parallel_default_dop=4;

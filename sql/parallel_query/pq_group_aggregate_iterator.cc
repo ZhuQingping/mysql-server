@@ -22,6 +22,7 @@
 
 #include "sql/parallel_query/pq_group_aggregate_iterator.h"
 
+#include <climits>
 #include <utility>
 
 #include "prealloced_array.h"                 // Prealloced_array
@@ -171,6 +172,54 @@ bool pq_accumulate_min_max_group(
   return false;
 }
 
+bool pq_add_longlong_checked(longlong lhs, longlong rhs, longlong *result) {
+  if ((rhs > 0 && lhs > LLONG_MAX - rhs) ||
+      (rhs < 0 && lhs < LLONG_MIN - rhs)) {
+    return true;
+  }
+  *result = lhs + rhs;
+  return false;
+}
+
+bool pq_accumulate_sum_group(Prealloced_array<PQ_count_group_state, 16> *groups,
+                             longlong key, longlong value,
+                             bool value_is_null, bool *overflow) {
+  PQ_count_group_state *state = nullptr;
+  for (PQ_count_group_state &group : *groups) {
+    if (group.key == key) {
+      state = &group;
+      break;
+    }
+  }
+
+  if (state == nullptr) {
+    PQ_count_group_state group;
+    group.key = key;
+    if (groups->push_back(group)) {
+      return true;
+    }
+    state = &groups->back();
+  }
+
+  if (value_is_null) {
+    return false;
+  }
+
+  if (!state->has_value) {
+    state->value = value;
+    state->has_value = true;
+    return false;
+  }
+
+  longlong new_sum = 0;
+  if (pq_add_longlong_checked(state->value, value, &new_sum)) {
+    *overflow = true;
+    return false;
+  }
+  state->value = new_sum;
+  return false;
+}
+
 bool pq_accumulate_integer_group(PQ_integer_group_state *groups,
                                  uint32 *group_count, int64 key, int64 value,
                                  bool value_is_null) {
@@ -239,6 +288,9 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
     if (can_use_typed_min_max_path()) {
       Item_sum *sum = m_join->sum_funcs[0];
       return InitTypedMinMaxPath(sum->sum_func() == Item_sum::MIN_FUNC);
+    }
+    if (can_use_typed_sum_path()) {
+      return InitTypedSumPath();
     }
 
     return InitLegacyTempTablePath();
@@ -494,6 +546,46 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
            pq_is_integer_field_type(field_item->field->type());
   }
 
+  bool can_use_typed_sum_path() const {
+    if (using_hash_key() || table()->group == nullptr ||
+        table()->group->next != nullptr || table()->group->item == nullptr ||
+        *table()->group->item == nullptr || m_join->sum_funcs == nullptr ||
+        m_join->sum_funcs[0] == nullptr || m_join->sum_funcs[1] != nullptr) {
+      return false;
+    }
+
+    Item_sum *sum = m_join->sum_funcs[0];
+    Field *key_field = (*table()->group->item)->get_tmp_table_field();
+    Field *result_field = sum->get_result_field();
+    if (sum->sum_func() != Item_sum::SUM_FUNC || key_field == nullptr ||
+        result_field == nullptr || key_field->is_nullable() ||
+        key_field->is_unsigned()) {
+      return false;
+    }
+
+    if (sum->argument_count() != 1 || sum->arguments() == nullptr ||
+        sum->arguments()[0] == nullptr ||
+        sum->arguments()[0]->type() != Item::FIELD_ITEM) {
+      return false;
+    }
+
+    const Item_field *field_item =
+        down_cast<const Item_field *>(sum->arguments()[0]);
+    if (field_item->field == nullptr || field_item->field->is_unsigned()) {
+      return false;
+    }
+
+    switch (field_item->field->type()) {
+      case MYSQL_TYPE_TINY:
+      case MYSQL_TYPE_SHORT:
+      case MYSQL_TYPE_INT24:
+      case MYSQL_TYPE_LONG:
+        return true;
+      default:
+        return false;
+    }
+  }
+
   bool prepare_table_for_materialization() {
     if (!table()->is_created()) {
       if (instantiate_tmp_table(thd(), table())) {
@@ -691,6 +783,117 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
       pq_global_stats.groupby_dop1_temp_table_executed.fetch_add(
           1, std::memory_order_relaxed);
       pq_global_stats.groupby_dop1_typed_minmax_executed.fetch_add(
+          1, std::memory_order_relaxed);
+      m_executed_counted = true;
+    }
+    return false;
+  }
+
+  bool InitTypedSumPath() {
+    m_join->set_ref_item_slice(REF_SLICE_SAVED_BASE);
+
+    if (m_subquery_iterator->Init()) {
+      return true;
+    }
+
+    if (prepare_table_for_materialization()) {
+      return true;
+    }
+
+    if (table()->file->ha_index_init(0, false)) {
+      return true;
+    }
+    auto end_unique_index =
+        create_scope_guard([&] { table()->file->ha_index_end(); });
+
+    Field *key_field = (*table()->group->item)->get_tmp_table_field();
+    Item_sum *sum = m_join->sum_funcs[0];
+    Field *result_field = sum->get_result_field();
+    Item_field *value_item = down_cast<Item_field *>(sum->arguments()[0]);
+    Field *value_field = value_item->field;
+    if (key_field == nullptr || result_field == nullptr ||
+        value_field == nullptr) {
+      return true;
+    }
+
+    bool overflow = false;
+    Prealloced_array<PQ_count_group_state, 16> groups(PSI_NOT_INSTRUMENTED);
+
+    {
+      PFSBatchMode pfs_batch_mode(m_subquery_iterator.get());
+      for (;;) {
+        int read_error = m_subquery_iterator->Read();
+        if (read_error > 0 || thd()->is_error()) {
+          return true;
+        }
+        if (read_error < 0) {
+          break;
+        }
+        if (thd()->killed) {
+          thd()->send_kill_message();
+          return true;
+        }
+
+        if (copy_funcs(m_temp_table_param, thd(), CFT_FIELDS)) {
+          return true;
+        }
+
+        if (key_field->is_null()) {
+          return true;
+        }
+
+        if (pq_accumulate_sum_group(&groups, key_field->val_int(),
+                                    value_field->val_int(),
+                                    value_field->is_null(), &overflow)) {
+          return true;
+        }
+        if (overflow) {
+          break;
+        }
+      }
+    }
+
+    if (overflow) {
+      table()->file->ha_index_end();
+      end_unique_index.release();
+      return InitLegacyTempTablePath();
+    }
+
+    for (const PQ_count_group_state &group : groups) {
+      empty_record(table());
+      key_field->set_notnull();
+      key_field->store(group.key, false);
+
+      if (group.has_value) {
+        result_field->set_notnull();
+        result_field->store(group.value, false);
+      } else {
+        result_field->store(0LL, false);
+        result_field->set_null();
+      }
+
+      int error = table()->file->ha_write_row(table()->record[0]);
+      if (error != 0) {
+        if (move_table_to_disk(error, true)) {
+          end_unique_index.release();
+          return true;
+        }
+      }
+    }
+
+    table()->file->ha_index_end();
+    end_unique_index.release();
+
+    table()->materialized = true;
+
+    if (m_table_iterator->Init()) {
+      return true;
+    }
+
+    if (!m_executed_counted) {
+      pq_global_stats.groupby_dop1_temp_table_executed.fetch_add(
+          1, std::memory_order_relaxed);
+      pq_global_stats.groupby_dop1_typed_sum_executed.fetch_add(
           1, std::memory_order_relaxed);
       m_executed_counted = true;
     }

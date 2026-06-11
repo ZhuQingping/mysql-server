@@ -1,0 +1,48 @@
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+grp INT NOT NULL,
+val_big BIGINT NOT NULL,
+val_unsigned INT UNSIGNED NOT NULL,
+val_int INT NOT NULL
+) ENGINE=InnoDB;
+INSERT INTO t1 VALUES
+(1,10,9223372036854775800,5,1),
+(2,10,1,7,2),
+(3,20,10,2,3),
+(4,20,20,9,4);
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=1;
+SET SESSION parallel_query_experimental_groupby_dop1=ON;
+SET @pq_groupby_typed_sum_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_dop1_typed_sum_executed');
+SELECT grp, SUM(val_big) AS sum_big FROM t1 GROUP BY grp;
+grp	sum_big
+10	9223372036854775801
+20	30
+SELECT grp, SUM(val_unsigned) AS sum_unsigned FROM t1 GROUP BY grp;
+grp	sum_unsigned
+10	12
+20	11
+SELECT grp, SUM(val_int + 1) AS sum_expr FROM t1 GROUP BY grp;
+grp	sum_expr
+10	5
+20	9
+SELECT grp, SUM(DISTINCT val_int) AS sum_distinct FROM t1 GROUP BY grp;
+grp	sum_distinct
+10	3
+20	7
+SELECT
+((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_dop1_typed_sum_executed') -
+@pq_groupby_typed_sum_before) AS typed_sum_delta;
+typed_sum_delta
+0
+SET SESSION parallel_query_experimental_groupby_dop1=OFF;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+DROP TABLE t1;

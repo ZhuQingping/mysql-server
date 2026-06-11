@@ -853,3 +853,54 @@ SUM 后续结论：
 - `SUM(INT)` 通常是 DECIMAL result，不应简单等同于整数 result field；
 - 如果 partial state 保证在 int64 内，`Field_new_decimal::store(longlong, bool)` 可写入，但完整 MySQL SUM 语义允许超过 int64；
 - 下一步 SUM typed-state 需要单独 gate signed non-BIGINT 输入、检测 int64 overflow、处理 all-NULL 输出 NULL，并增加 unsigned/BIGINT/overflow fallback 用例。
+
+### V2-12A-3.11 SUM Typed-State Temp-Table Output
+
+状态：Completed。
+
+目标：
+
+- 将最小安全范围的 `SUM(signed_int_col)` 切到 typed-state 聚合后一次性写 temp table rows；
+- 对不安全 SUM shape 保持 legacy temp-table loop 或原生 fallback；
+- 运行时检测 int64 累加溢出，发现 overflow 时重新初始化 child iterator 并回退 legacy loop，避免错误结果。
+
+实现边界：
+
+- 新增 `pq_accumulate_sum_group()` 和 `pq_add_longlong_checked()`；
+- 新路径只在以下条件同时满足时启用：
+  - 非 hash group key；
+  - 单 group key；
+  - key 临时表输出字段为 NOT NULL signed integer；
+  - 单个 `SUM` aggregate；
+  - aggregate 参数是 signed `TINYINT` / `SMALLINT` / `MEDIUMINT` / `INT` base field；
+  - 拒绝 unsigned、`BIGINT`、表达式参数、DISTINCT、多 aggregate；
+- all-NULL group 写入物理 0 后设置 NULL bit；
+- 非 NULL group 使用 `Field::store(longlong, false)` 写 result field；`SUM(INT)` 的 DECIMAL result field 由 Field 层做 longlong 到 decimal 的转换；
+- 新增 `Parallel_groupby_dop1_typed_sum_executed` 状态变量；
+- 新增 `pq_groupby_dop1_sum_typed_fallback`，覆盖 BIGINT、unsigned、表达式和 DISTINCT SUM 不进入 typed SUM path；
+- `pq_stats` 更新 Parallel 状态变量数量为 37。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_dop1_sum_typed_fallback pq_groupby_dop1_sum_min_max pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_sum_verify2 \
+  --tmpdir=/tmp/pqt_sum_verify2
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full_sum \
+  --tmpdir=/tmp/pqt_full_sum
+```
+
+结果：
+
+- `cmake --build build-ninja --target mysqld -j 16` 通过；
+- targeted SUM suite 通过；
+- 完整 `parallel_query` suite 通过，共 58 项。
+
+剩余边界：
+
+- 当前 typed GROUP BY 仍是 DOP1 leader-local execution；DOP>1 partial aggregation merge 未启用；
+- nullable group key、unsigned group key、hash group key 仍保持保守路径；
+- SUM overflow fallback 已有代码路径，但尚未单独 MTR 覆盖可触发 overflow 的可重复用例。
