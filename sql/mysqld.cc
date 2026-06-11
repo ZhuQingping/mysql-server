@@ -12275,6 +12275,7 @@ PSI_thread_key key_thread_one_connection;
 PSI_thread_key key_thread_compress_gtid_table;
 PSI_thread_key key_thread_parser_service;
 PSI_thread_key key_thread_handle_con_admin_sockets;
+PSI_thread_key key_thread_parallel_query_worker;
 
 /* clang-format off */
 static PSI_thread_info all_server_threads[]=
@@ -12294,6 +12295,7 @@ PSI_FLAG_USER | PSI_FLAG_NO_SEQNUM, 0, PSI_DOCUMENT_ME},
   { &key_thread_compress_gtid_table, "compress_gtid_table", "gtid_zip", PSI_FLAG_SINGLETON, 0, PSI_DOCUMENT_ME},
   { &key_thread_parser_service, "parser_service", "parser_srv", PSI_FLAG_SINGLETON, 0, PSI_DOCUMENT_ME},
   { &key_thread_handle_con_admin_sockets, "admin_interface", "con_admin", PSI_FLAG_USER, 0, PSI_DOCUMENT_ME},
+  { &key_thread_parallel_query_worker, "parallel_query_worker", "pq_worker", 0, 0, PSI_DOCUMENT_ME},
 };
 /* clang-format on */
 

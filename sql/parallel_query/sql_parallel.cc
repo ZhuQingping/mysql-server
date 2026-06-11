@@ -22,14 +22,14 @@
 
 /**
   @file sql/parallel_query/sql_parallel.cc
-  Parallel Query V1-MVP: Gather operator and worker lifecycle stub implementation.
+  Parallel Query: Gather operator and worker lifecycle implementation.
 
   Phase 4 scope:
   - Implement PQ_worker_info::transition_status() with forward-only transitions.
-  - Implement PQ_worker_manager::start/wait/abort/cleanup stubs.
+  - Implement PQ_worker_manager::start/wait/abort/cleanup.
   - Implement Gather_operator::init/destroy/start_workers/gather_rows/
     wait_for_workers/abort_workers/resolve_error_priority.
-  - All stubs are inert: not called from any existing execution path.
+  - V2-8K-1 worker manager starts joinable no-op worker scaffold threads.
   - No optimizer integration, no execution path change, no handler/InnoDB call.
 
   Memory ownership (Phase 4):
@@ -51,7 +51,9 @@
 #include <cassert>
 #include <cstring>
 
+#include "mysql/psi/mysql_thread.h"
 #include "mysqld_error.h"         // ER_QUERY_INTERRUPTED
+#include "sql/mysqld.h"           // key_thread_parallel_query_worker
 #include "sql/handler.h"          // handler
 #include "sql/sql_base.h"         // close_thread_tables, open_ltable
 #include "sql/sql_class.h"        // THD
@@ -64,6 +66,45 @@
 // ---------------------------------------------------------------------------
 
 PQ_global_stats pq_global_stats;
+
+namespace {
+
+struct PQ_worker_thread_arg {
+  PQ_worker_info *worker{nullptr};
+  Gather_operator *gather{nullptr};
+};
+
+void *pq_worker_thread_entry(void *arg_ptr) {
+  auto *arg = static_cast<PQ_worker_thread_arg *>(arg_ptr);
+  PQ_worker_info *worker = arg != nullptr ? arg->worker : nullptr;
+  Gather_operator *gather = arg != nullptr ? arg->gather : nullptr;
+  delete arg;
+
+  if (worker == nullptr || gather == nullptr) return nullptr;
+
+  if (my_thread_init()) {
+    worker->m_error_code = HA_ERR_OUT_OF_MEM;
+    worker->transition_status(PQ_Worker_status::RUNNING);
+    worker->transition_status(PQ_Worker_status::ERROR);
+    return nullptr;
+  }
+
+  worker->transition_status(PQ_Worker_status::RUNNING);
+  THD *worker_thd = pq_create_worker_thd(worker, gather);
+  if (worker_thd == nullptr) {
+    worker->m_error_code = HA_ERR_OUT_OF_MEM;
+    worker->transition_status(PQ_Worker_status::ERROR);
+    my_thread_end();
+    return nullptr;
+  }
+
+  pq_destroy_worker_thd(worker);
+  worker->transition_status(PQ_Worker_status::FINISHED);
+  my_thread_end();
+  return nullptr;
+}
+
+}  // namespace
 
 const char *pq_execution_state_to_string(PQ_execution_state state) {
   switch (state) {
@@ -212,38 +253,36 @@ bool PQ_worker_info::transition_status(PQ_Worker_status new_status) {
   // NOT_STARTED -> RUNNING -> FINISHED/ERROR/KILLED/ABORTED
   // Any -> ABORTED (abort can override any state except terminal)
   // Terminal states are final: no further transitions allowed.
-  if (is_terminal()) {
-    // Already in a terminal state; reject transition.
-    return false;
+  PQ_Worker_status current = m_status.load(std::memory_order_acquire);
+  for (;;) {
+    bool allowed = false;
+    switch (current) {
+      case PQ_Worker_status::NOT_STARTED:
+        // NOT_STARTED can transition to RUNNING or ABORTED.
+        allowed = new_status == PQ_Worker_status::RUNNING ||
+                  new_status == PQ_Worker_status::ABORTED;
+        break;
+
+      case PQ_Worker_status::RUNNING:
+        // RUNNING can transition to FINISHED, ERROR, KILLED, or ABORTED.
+        allowed = new_status == PQ_Worker_status::FINISHED ||
+                  new_status == PQ_Worker_status::ERROR ||
+                  new_status == PQ_Worker_status::KILLED ||
+                  new_status == PQ_Worker_status::ABORTED;
+        break;
+
+      default:
+        allowed = false;
+        break;
+    }
+
+    if (!allowed) return false;
+    if (m_status.compare_exchange_weak(current, new_status,
+                                       std::memory_order_acq_rel,
+                                       std::memory_order_acquire)) {
+      return true;
+    }
   }
-
-  switch (m_status) {
-    case PQ_Worker_status::NOT_STARTED:
-      // NOT_STARTED can transition to RUNNING or ABORTED
-      if (new_status == PQ_Worker_status::RUNNING ||
-          new_status == PQ_Worker_status::ABORTED) {
-        m_status = new_status;
-        return true;
-      }
-      break;
-
-    case PQ_Worker_status::RUNNING:
-      // RUNNING can transition to FINISHED, ERROR, KILLED, or ABORTED
-      if (new_status == PQ_Worker_status::FINISHED ||
-          new_status == PQ_Worker_status::ERROR ||
-          new_status == PQ_Worker_status::KILLED ||
-          new_status == PQ_Worker_status::ABORTED) {
-        m_status = new_status;
-        return true;
-      }
-      break;
-
-    default:
-      // Unexpected current state; reject.
-      break;
-  }
-
-  return false;  // Transition rejected
 }
 
 // ---------------------------------------------------------------------------
@@ -251,17 +290,33 @@ bool PQ_worker_info::transition_status(PQ_Worker_status new_status) {
 // ---------------------------------------------------------------------------
 
 bool PQ_worker_manager::start(PQ_worker_info **workers, uint32 n_workers,
-                              THD *leader_thd [[maybe_unused]]) {
+                              THD *leader_thd [[maybe_unused]],
+                              Gather_operator *gather) {
   assert(workers != nullptr);
   assert(n_workers > 0);
 
-  // Phase 4 stub: transition all workers to RUNNING without creating
-  // real OS threads or worker THDs.
   for (uint32 i = 0; i < n_workers; i++) {
     if (workers[i] == nullptr) return true;  // Invalid worker info
-    if (!workers[i]->transition_status(PQ_Worker_status::RUNNING)) {
-      return true;  // Transition failed (should not happen for NOT_STARTED)
+    if (workers[i]->m_thread_started || workers[i]->m_thread_joined) {
+      return true;
     }
+
+    auto *arg = new (std::nothrow) PQ_worker_thread_arg{workers[i], gather};
+    if (arg == nullptr) {
+      abort(workers, i);
+      wait(workers, i, leader_thd);
+      return true;
+    }
+
+    if (mysql_thread_create(key_thread_parallel_query_worker,
+                            &workers[i]->m_thread_handle, nullptr,
+                            pq_worker_thread_entry, arg)) {
+      delete arg;
+      abort(workers, i);
+      wait(workers, i, leader_thd);
+      return true;
+    }
+    workers[i]->m_thread_started = true;
   }
 
   return false;  // Success
@@ -272,21 +327,27 @@ int PQ_worker_manager::wait(PQ_worker_info **workers, uint32 n_workers,
   assert(workers != nullptr);
   assert(n_workers > 0);
 
-  // Phase 4 stub: transition all workers to FINISHED immediately.
-  // In production (Phase 5), this will block on worker completion events,
-  // check THD::killed, and apply error priority.
   for (uint32 i = 0; i < n_workers; i++) {
     if (workers[i] == nullptr) continue;
-
-    if (!workers[i]->is_terminal()) {
-      // Force transition to FINISHED for stub.
-      // Production code will wait for real worker status changes.
+    if (workers[i]->m_thread_started && !workers[i]->m_thread_joined) {
+      if (my_thread_join(&workers[i]->m_thread_handle, nullptr) != 0) {
+        workers[i]->m_error_code = HA_ERR_INTERNAL_ERROR;
+        workers[i]->transition_status(PQ_Worker_status::ERROR);
+        return -1;
+      }
+      workers[i]->m_thread_joined = true;
+    } else if (!workers[i]->is_terminal()) {
       workers[i]->transition_status(PQ_Worker_status::FINISHED);
+    }
+    const PQ_Worker_status status =
+        workers[i]->m_status.load(std::memory_order_acquire);
+    if (status == PQ_Worker_status::ERROR ||
+        status == PQ_Worker_status::KILLED ||
+        status == PQ_Worker_status::ABORTED) {
+      return -1;
     }
   }
 
-  // Phase 4 stub: always return normal finish (0).
-  // Production will compute result based on error priority.
   return 0;
 }
 
@@ -314,9 +375,13 @@ void PQ_worker_manager::cleanup(PQ_worker_info **workers, uint32 n_workers,
   // Free individual PQ_worker_info structs
   for (uint32 i = 0; i < n_workers; i++) {
     if (workers[i] != nullptr) {
-      // Note: PQ_worker_info does not own m_worker_thd or m_worker_ctx
-      // in Phase 4 (they are nullptr). Phase 5 will need to free worker
-      // THDs and contexts here.
+      if (workers[i]->m_thread_started && !workers[i]->m_thread_joined) {
+        (void)my_thread_join(&workers[i]->m_thread_handle, nullptr);
+        workers[i]->m_thread_joined = true;
+      }
+      if (workers[i]->m_worker_thd != nullptr) {
+        pq_destroy_worker_thd(workers[i]);
+      }
       delete workers[i];
       workers[i] = nullptr;
     }
@@ -443,7 +508,7 @@ bool Gather_operator::start_workers(THD *leader_thd) {
   // - Launch worker threads
   // - Wire worker THD::pq_worker_info to PQ_worker_info
   // - Wire worker THD::pq_leader to this Gather_operator
-  return m_worker_mgr.start(m_workers, m_dop, leader_thd);
+  return m_worker_mgr.start(m_workers, m_dop, leader_thd, this);
 }
 
 // ---------------------------------------------------------------------------
@@ -630,7 +695,8 @@ bool Gather_operator::run_worker_producer_abort_smoke(
       !exchange->materialize_next_record_image(leader_table, &eof, &row) &&
       eof && !row;
   const bool detached = handle != nullptr && handle->is_detached();
-  const bool failed = worker->m_status != PQ_Worker_status::ABORTED ||
+  const bool failed = worker->m_status.load(std::memory_order_acquire) !=
+                          PQ_Worker_status::ABORTED ||
                       !detached || !observed_eof || !m_all_finished;
 
   if (!failed) {
@@ -1123,8 +1189,10 @@ Gather_operator::GatherErrorState Gather_operator::resolve_error_priority(
   for (uint32 i = 0; i < m_dop; i++) {
     if (m_workers[i] == nullptr) continue;
 
-    if (m_workers[i]->m_status == PQ_Worker_status::ERROR ||
-        m_workers[i]->m_status == PQ_Worker_status::KILLED) {
+    const PQ_Worker_status status =
+        m_workers[i]->m_status.load(std::memory_order_acquire);
+    if (status == PQ_Worker_status::ERROR ||
+        status == PQ_Worker_status::KILLED) {
       // Worker fatal: update result if higher priority than current.
       if (result.priority < PRIORITY_WORKER_FATAL) {
         result.priority = PRIORITY_WORKER_FATAL;

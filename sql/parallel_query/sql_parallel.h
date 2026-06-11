@@ -76,7 +76,10 @@
 #include <atomic>
 #include <cstdint>
 
+#include "my_thread.h"
+
 class THD;
+class Gather_operator;
 struct TABLE;
 
 // ---------------------------------------------------------------------------
@@ -260,17 +263,22 @@ void pq_destroy_worker_thd(PQ_worker_info *worker);
   Each PQ_worker_info tracks a single worker's identity, status, and
   error state. Gather_operator holds an array of PQ_worker_info pointers.
 
-  Phase 4: no real OS thread is created. PQ_worker_info exists only as
-  metadata for the future worker lifecycle. Status stays NOT_STARTED.
+  V2-8K-1: PQ_worker_info owns a joinable scaffold worker thread handle.
+  The thread creates and destroys its worker THD inside the worker thread
+  context; row production is added by later V2-8K steps.
 */
 struct PQ_worker_info {
   uint32 m_worker_id{0};            ///< Worker index (0 .. DOP-1)
-  PQ_Worker_status m_status{PQ_Worker_status::NOT_STARTED};  ///< Current status
+  std::atomic<PQ_Worker_status> m_status{
+      PQ_Worker_status::NOT_STARTED};  ///< Current status
   THD *m_worker_thd{nullptr};       ///< Worker THD (nullptr until Phase 5)
   int m_error_code{0};              ///< Error code if status == ERROR/KILLED
   MQueue_handle *m_mq_handle{nullptr};  ///< MQ handle for this worker's queue
   PQ_Worker_context *m_worker_ctx{nullptr};  ///< Worker scan context (Phase 6)
   PQ_Worker_open_context m_open_ctx;  ///< Stable SQL-owned worker open carrier
+  my_thread_handle m_thread_handle{};  ///< Joinable worker thread handle
+  bool m_thread_started{false};        ///< Thread was successfully created
+  bool m_thread_joined{false};         ///< Thread has been joined
 
   PQ_worker_info() { reset_open_context(); }
 
@@ -295,10 +303,11 @@ struct PQ_worker_info {
 
   /** Check if worker is in a terminal state. */
   bool is_terminal() const {
-    return m_status == PQ_Worker_status::FINISHED ||
-           m_status == PQ_Worker_status::ERROR ||
-           m_status == PQ_Worker_status::KILLED ||
-           m_status == PQ_Worker_status::ABORTED;
+    const PQ_Worker_status status = m_status.load(std::memory_order_acquire);
+    return status == PQ_Worker_status::FINISHED ||
+           status == PQ_Worker_status::ERROR ||
+           status == PQ_Worker_status::KILLED ||
+           status == PQ_Worker_status::ABORTED;
   }
 };
 
@@ -310,13 +319,14 @@ struct PQ_worker_info {
   Worker lifecycle manager.
 
   PQ_worker_manager provides start/wait/abort/cleanup for all workers.
-  Phase 4: all methods are stubs. start() does NOT create OS threads.
-  wait() returns immediately. abort() sets status but does not signal.
-  cleanup() frees PQ_worker_info array.
+  V2-8K-1: start() creates joinable no-op worker threads that bind worker THDs
+  inside their own thread context and immediately finish. wait() joins them.
+  abort() sets status but does not yet wake handler waits. cleanup() frees
+  PQ_worker_info array.
 
-  These stubs must NOT be called from any existing execution path.
-  They exist so that Phase 5/6 can replace the stubs with real thread
-  creation and synchronization without changing the interface.
+  The scaffold is only used from guarded PQ smoke/debug paths. Later V2-8K
+  steps replace the no-op thread entry with real row production without
+  changing the manager interface.
 
   Memory note:
   - PQ_worker_info array is allocated with new[] in Phase 4.
@@ -332,22 +342,23 @@ class PQ_worker_manager {
   /**
     Start all workers.
 
-    Phase 4 stub: transitions all PQ_worker_info from NOT_STARTED to RUNNING
-    but does NOT create OS threads or worker THDs.
+    V2-8K-1: creates joinable scaffold worker threads.
 
     @param workers    Array of PQ_worker_info pointers
     @param n_workers  Number of workers (= DOP)
-    @param leader_thd Leader THD (for kill-check in Phase 5)
+    @param leader_thd Leader THD (for kill-check in later phases)
+    @param gather     Owning Gather_operator passed to worker THD setup
 
-    @retval false  Success (stub: always succeeds)
-    @retval true   Failure (stub: never fails)
+    @retval false  Success
+    @retval true   Failure
   */
-  bool start(PQ_worker_info **workers, uint32 n_workers, THD *leader_thd);
+  bool start(PQ_worker_info **workers, uint32 n_workers, THD *leader_thd,
+             Gather_operator *gather);
 
   /**
     Wait for all workers to reach a terminal state.
 
-    Phase 4 stub: transitions all workers to FINISHED immediately.
+    V2-8K-1: joins all started scaffold worker threads.
 
     In production (Phase 5), this will:
     - Poll worker status and THD::killed

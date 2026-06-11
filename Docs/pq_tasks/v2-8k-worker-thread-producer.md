@@ -46,6 +46,28 @@ V2-8J 已能在 debug-only shadow path 中完成 2-row + EOF：
 
 ## Design Requirements
 
+### Thread / THD Decision
+
+已完成只读调研，结论如下：
+
+- 不能在 leader 线程调用 `create_internal_thd()` 后把 THD 交给另一个线程；
+  `create_internal_thd()` 会 `store_globals()` 并绑定当前线程 PSI THD；
+- 真实 PQ worker producer 必须先通过 `mysql_thread_create()` 创建 joinable
+  worker thread，再在 worker thread 入口内部调用 `pq_create_worker_thd()`；
+- worker thread 退出时必须在同一线程内调用 `pq_destroy_worker_thd()`；
+- `THD::awake()` / `killed` 必须按 MySQL 模式持有 `LOCK_thd_data`；
+- MVP 暂不把 worker THD 加入 `Global_THD_manager`，避免 processlist 生命周期和
+  shutdown 等待语义扩大。
+
+参考文件：
+
+- `include/mysql/psi/mysql_thread.h`: `mysql_thread_create()`；
+- `sql/sql_thd_internal_api.cc`: `create_internal_thd()` / `destroy_internal_thd()`；
+- `sql/event_scheduler.cc`: event worker thread 创建和 THD lifecycle 范式；
+- `sql/rpl_replica.cc`: replica worker start/wait/awake 范式；
+- `storage/innobase/row/row0pread.cc`: `Parallel_reader` 内部 InnoDB worker
+  thread，不能直接作为 SQL THD worker。
+
 ### Worker Thread Ownership
 
 - `Gather_operator` 仍是 worker lifecycle owner；
@@ -152,10 +174,50 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_full --t
 
 ## Current Status
 
-- Status: Planned
+- Status: V2-8K-1 Completed
 - Owner: Codex Orchestrator
 - Started: 2026-06-11
+- Last updated: 2026-06-11
 
 ## Completion Report
 
-待实现后补充。
+### V2-8K-1: Thread Lifecycle Design/Scaffold
+
+已完成：
+
+- 新增 `parallel_query_worker` PSI thread key；
+- `PQ_worker_info` 增加 joinable worker thread handle、started/joined 状态；
+- `PQ_worker_manager::start()` 使用 `mysql_thread_create()` 创建 scaffold
+  worker thread；
+- worker thread entry 在 worker 线程内调用 `my_thread_init()`、
+  `pq_create_worker_thd()`、`pq_destroy_worker_thd()`、`my_thread_end()`；
+- `PQ_worker_manager::wait()` / `cleanup()` join 已启动线程，避免 detach 遗留；
+- `PQ_worker_info::m_status` 改为原子状态，`transition_status()` 使用 CAS，
+  收敛 start/abort/future worker 并发状态迁移风险。
+
+未打开：
+
+- worker thread 尚不调用 InnoDB callback producer；
+- 未新增 `pq_read_threaded_shadow_path`；
+- 默认真实 DOP=1 full scan 仍未启用。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_worker_dop1 pq_read_shadow_dop1 pq_exchange_rows_dop1 --parallel=1 --vardir=/tmp/pqv_thread --tmpdir=/tmp/pqt_thread
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_full --tmpdir=/tmp/pqt_full
+```
+
+结果：
+
+- `mysqld` build 通过；
+- 关键 3 个 PQ 用例通过；
+- 完整 `parallel_query` suite 20 个测试通过。
+
+后续：
+
+- V2-8K-2：增加 debug-only threaded callback producer path，让 worker thread
+  写 Exchange，leader `Read()` 并发消费；
+- V2-8K-3：补齐 worker ERROR、leader kill/abort、EOF/cleanup 幂等用例。
