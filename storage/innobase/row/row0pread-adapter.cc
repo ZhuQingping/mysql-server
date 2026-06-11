@@ -204,14 +204,14 @@ dberr_t Parallel_reader_adapter::process_rows(
 
   rec_offs_init(offsets_);
 
-  offsets = rec_get_offsets(reader_ctx->m_rec, reader_ctx->index(), offsets,
+  offsets = rec_get_offsets(reader_ctx->record(), reader_ctx->index(), offsets,
                             ULINT_UNDEFINED, UT_LOCATION_HERE, &heap);
 
   const auto next_rec = ctx->m_n_read % m_batch_size;
 
   const auto buffer_loc = &ctx->m_buffer[0] + next_rec * m_mysql_row.m_max_len;
 
-  if (row_sel_store_mysql_rec(buffer_loc, m_prebuilt, reader_ctx->m_rec,
+  if (row_sel_store_mysql_rec(buffer_loc, m_prebuilt, reader_ctx->record(),
                               nullptr, true, reader_ctx->index(),
                               reader_ctx->index(), offsets, false, nullptr,
                               blob_heap)) {

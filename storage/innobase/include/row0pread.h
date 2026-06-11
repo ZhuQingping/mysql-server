@@ -792,6 +792,12 @@ class Parallel_reader::Ctx {
     return m_scan_ctx->m_config.m_partition_id;
   }
 
+  /** @return the current visible record for callback processing. */
+  [[nodiscard]] const rec_t *record() const { return m_rec; }
+
+  /** @return offsets for the current visible record. */
+  [[nodiscard]] ulint *offsets() const { return m_offsets; }
+
   /** Build an old version of the row if required.
   @param[in,out]  rec           Current row read from the index. This can
                                 be modified by this method if an older version
