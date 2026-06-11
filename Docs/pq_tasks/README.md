@@ -5,7 +5,7 @@
 ## Current Summary
 
 - Last synced: 2026-06-11
-- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0、V2-1、V2-2、V2-3、V2-4、V2-5、V2-6、V2-7 已提交；V2-8A worker handler/prebuilt contract design 已完成；V2-8B Row Image Protocol 已完成；V2-8C contract/gate 第一段、leader probe/execute mode API、worker open context carrier 生命周期、worker THD/TABLE helper、safe-window open-table smoke 和 handler init/end smoke 已实现；V2-8D 已完成 first-row/read-view 方案选型；V2-8E EXECUTE commit point primitive 已完成；V2-8F callback conversion smoke primitive 已完成；V2-8G EXECUTE callback smoke observability 已完成；V2-8H row stream activation boundary 已完成；V2-8I iterator runtime state contract 已完成；V2-8J-1 callback row producer smoke 已完成；V2-8J-2 worker producer FINISH/EOF、ERROR 和 abort skeleton 已完成；V2-8J-3 `Read()` shadow path scaffold 已完成并增加 PROBE guard；V2-8J-4 PROBE 诊断计数、Exchange materialize status helper、ROW-only enqueue helper 和 callback multi-row producer API 已完成，真实 DOP=1 full scan 仍未打开。
+- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0、V2-1、V2-2、V2-3、V2-4、V2-5、V2-6、V2-7 已提交；V2-8A worker handler/prebuilt contract design 已完成；V2-8B Row Image Protocol 已完成；V2-8C contract/gate 第一段、leader probe/execute mode API、worker open context carrier 生命周期、worker THD/TABLE helper、safe-window open-table smoke 和 handler init/end smoke 已实现；V2-8D 已完成 first-row/read-view 方案选型；V2-8E EXECUTE commit point primitive 已完成；V2-8F callback conversion smoke primitive 已完成；V2-8G EXECUTE callback smoke observability 已完成；V2-8H row stream activation boundary 已完成；V2-8I iterator runtime state contract 已完成；V2-8J-1 callback row producer smoke 已完成；V2-8J-2 worker producer FINISH/EOF、ERROR 和 abort skeleton 已完成；V2-8J-3 `Read()` shadow path scaffold 已完成并增加 PROBE guard；V2-8J-4 PROBE 诊断计数、Exchange materialize status helper、ROW-only enqueue helper、callback multi-row producer API 和 SQL 层 limited multi-row producer smoke 已完成，真实 DOP=1 full scan 仍未打开。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
@@ -53,6 +53,7 @@
   - V2-8J-4 materialize status helper: 本轮提交，显式区分 ROW/EOF/WOULD_BLOCK/ERROR
   - V2-8J-4 ROW-only enqueue helper: 本轮提交，拆出可连续发送多行的 ROW helper
   - V2-8J-4 callback multi-row producer API: 本轮提交，新增 `PQ_row_sink` 和 InnoDB push producer
+  - V2-8J-4 callback multi-row producer smoke: 本轮提交，SQL-owned sink 连续发送 2 条 ROW + FINISH，leader 通过 Exchange materialize
   - V2-1: `9a58ff94cdf` Add PQ V2-1 iterator safe fallback
   - V2-0: `a420e8a3f26` Add PQ V2-0 execution state contract
   - Phase 8: `113d2ba44c1` Add PQ phase 8 V1 completion scaffolding
@@ -84,10 +85,10 @@
   - [v2-8g-execute-callback-smoke.md](v2-8g-execute-callback-smoke.md): V2-8G 已完成，SQL iterator 在 safe fallback window 内尝试固定 DOP=1 EXECUTE callback smoke；新增 `Parallel_callback_smoke_attempts` / `Parallel_callback_smoke_rows`；失败不影响 serial fallback；完整 `parallel_query` suite 通过。
   - [v2-8h-row-stream-activation.md](v2-8h-row-stream-activation.md): V2-8H 已完成，抽出 `Exchange_nosort::materialize_next_record_image()`，不接真实 `Read()`；完整 `parallel_query` suite 通过。
   - [v2-8i-iterator-runtime-state.md](v2-8i-iterator-runtime-state.md): V2-8I 已完成，增加 iterator runtime state contract，不打开真实 `Read()`；完整 `parallel_query` suite 通过。
-  - [v2-8j-real-read-activation-plan.md](v2-8j-real-read-activation-plan.md): V2-8J 已拆分真实 `Read()` 激活前的硬阻塞；V2-8J-1 callback row producer smoke、V2-8J-2 FINISH/EOF/ERROR/abort skeleton、V2-8J-3 `Read()` shadow scaffold、V2-8J-4 PROBE diagnostics、Exchange materialize status helper、ROW-only enqueue helper 和 callback multi-row producer API 已完成；下一步接 SQL worker loop / Exchange sink，并实现 wait/kill policy。
+  - [v2-8j-real-read-activation-plan.md](v2-8j-real-read-activation-plan.md): V2-8J 已拆分真实 `Read()` 激活前的硬阻塞；V2-8J-1 callback row producer smoke、V2-8J-2 FINISH/EOF/ERROR/abort skeleton、V2-8J-3 `Read()` shadow scaffold、V2-8J-4 PROBE diagnostics、Exchange materialize status helper、ROW-only enqueue helper、callback multi-row producer API 和 SQL 层 limited multi-row producer smoke 已完成；下一步实现 wait/kill policy，并在 debug gate 下验证真实 DOP=1 full scan。
   - [v2-execution-path-roadmap.md](v2-execution-path-roadmap.md): V2 真实执行路径拆分，覆盖 SQL iterator、worker THD、Exchange/Gather row 流、InnoDB 分片扫描、full scan 闭环和基础聚合。
   - [v2-test-matrix.md](v2-test-matrix.md): V1/V2 阶段化 MTR 测试矩阵，明确 DOP=1 first 和 DOP>1 range-partition gate。
-- Next recommended action: 继续 V2-8J-4 DOP=1 real full scan gate；接 SQL worker loop / Exchange sink，并实现 wait/kill policy，`pq_worker_scan_next()` 继续 disabled。
+- Next recommended action: 继续 V2-8J-4 DOP=1 real full scan gate；实现 wait/kill policy，并在 debug gate 下验证真实 DOP=1 full scan，`pq_worker_scan_next()` 继续 disabled。
 - Parallel-ready task overview: [parallel_wave2_tasks.md](parallel_wave2_tasks.md)
 - Remaining risk: Phase 8 的 aggregate 当前仍是基础设施和 eligibility 扩展，真实并行聚合执行尚未启用；locking read 的 EXPLAIN annotation 当前仍可能显示 `Parallel query dop=4`，已从 Phase 9 测试中移除，后续需单独修复。
 
@@ -158,7 +159,7 @@ Recommended worktrees:
 | V2-8G - EXECUTE Callback Smoke | Completed | Codex Orchestrator | [v2-8g-execute-callback-smoke.md](v2-8g-execute-callback-smoke.md) | SQL iterator safe fallback window 内尝试固定 DOP=1 EXECUTE callback smoke；新增 attempts/rows 状态变量；不打开真实 row stream；`mysqld` build 和完整 `parallel_query` suite 通过 |
 | V2-8H - Row Stream Activation Boundary | Completed | Codex Orchestrator | [v2-8h-row-stream-activation.md](v2-8h-row-stream-activation.md) | 抽出 Exchange row/eof/error materialization helper；不接真实 `Read()`；`mysqld` build 和完整 `parallel_query` suite 通过 |
 | V2-8I - Iterator Runtime State Contract | Completed | Codex Orchestrator | [v2-8i-iterator-runtime-state.md](v2-8i-iterator-runtime-state.md) | 显式记录 safe-fallback / started / row-returned 边界；不接真实 `Read()`；`mysqld` build 和完整 `parallel_query` suite 通过 |
-| V2-8J - Real Read Activation Plan | In Progress | Codex Orchestrator | [v2-8j-real-read-activation-plan.md](v2-8j-real-read-activation-plan.md) | 已完成 callback row producer smoke、worker producer FINISH/EOF/ERROR/abort skeleton、`Read()` shadow scaffold、PROBE diagnostics、materialize status helper、ROW-only enqueue helper 和 callback multi-row producer API；下一步接 SQL worker loop / Exchange sink |
+| V2-8J - Real Read Activation Plan | In Progress | Codex Orchestrator | [v2-8j-real-read-activation-plan.md](v2-8j-real-read-activation-plan.md) | 已完成 callback row producer smoke、worker producer FINISH/EOF/ERROR/abort skeleton、`Read()` shadow scaffold、PROBE diagnostics、materialize status helper、ROW-only enqueue helper、callback multi-row producer API 和 SQL 层 limited multi-row producer smoke；下一步实现 wait/kill policy |
 
 ## Decisions
 

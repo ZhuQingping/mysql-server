@@ -844,6 +844,138 @@ bool Gather_operator::run_worker_callback_conversion_smoke(
   return failed;
 }
 
+class PQ_limited_mq_row_sink final : public PQ_row_sink {
+ public:
+  PQ_limited_mq_row_sink(Exchange_nosort *exchange, uint32 worker_id,
+                         uint32 max_rows)
+      : m_exchange(exchange), m_worker_id(worker_id), m_max_rows(max_rows) {}
+
+  bool send_row(TABLE *source_table) override {
+    if (should_abort()) return true;
+    m_failed = m_exchange == nullptr ||
+               m_exchange->enqueue_record_image(m_worker_id, source_table);
+    if (!m_failed) ++m_rows_sent;
+    return m_failed;
+  }
+
+  bool should_abort() const override {
+    return m_failed || m_rows_sent >= m_max_rows;
+  }
+
+  bool stop_is_success() const override {
+    return !m_failed && m_rows_sent >= m_max_rows;
+  }
+
+  uint32 rows_sent() const { return m_rows_sent; }
+
+ private:
+  Exchange_nosort *m_exchange;
+  uint32 m_worker_id;
+  uint32 m_max_rows;
+  uint32 m_rows_sent{0};
+  bool m_failed{false};
+};
+
+bool Gather_operator::run_worker_callback_multirow_producer_smoke(
+    THD *leader_thd, TABLE *leader_table) {
+  if (leader_thd == nullptr || leader_table == nullptr || m_dop != 1) {
+    return true;
+  }
+
+  bool initialized_here = false;
+
+  if (!m_initialized) {
+    if (init()) return true;
+    initialized_here = true;
+  }
+
+  auto *worker = get_worker(0);
+  auto *exchange = get_exchange();
+  if (worker == nullptr || exchange == nullptr) {
+    if (initialized_here) destroy();
+    return true;
+  }
+
+  if (worker->m_open_ctx.leader_table == nullptr) {
+    worker->m_open_ctx.leader_table = leader_table;
+    worker->m_open_ctx.actual_dop = m_dop;
+  }
+
+  if (pq_create_worker_thd(worker, this) == nullptr) {
+    leader_thd->store_globals();
+    if (initialized_here) destroy();
+    return true;
+  }
+
+  bool failed = pq_open_worker_table(&worker->m_open_ctx);
+  if (!failed) {
+    failed = worker->m_open_ctx.worker_handler->pq_worker_scan_init(
+        &worker->m_open_ctx, &worker->m_worker_ctx) != 0;
+  }
+  if (!failed) {
+    pq_global_stats.callback_smoke_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+
+  PQ_limited_mq_row_sink row_sink(exchange, 0, 2);
+  if (!failed) {
+    failed = worker->m_open_ctx.worker_handler
+                 ->pq_worker_scan_callback_produce(worker->m_worker_ctx,
+                                                   &row_sink) != 0;
+  }
+  if (!failed) {
+    failed = exchange->enqueue_finish_smoke(0);
+  }
+
+  uint32 rows_read = 0;
+  bool saw_eof = false;
+  while (!failed && !saw_eof) {
+    Exchange_nosort::Materialize_status status =
+        Exchange_nosort::Materialize_status::ERROR;
+    failed = exchange->materialize_next_record_image_status(leader_table,
+                                                            &status);
+    if (failed) break;
+    switch (status) {
+      case Exchange_nosort::Materialize_status::ROW:
+        ++rows_read;
+        break;
+      case Exchange_nosort::Materialize_status::EOF_REACHED:
+        saw_eof = true;
+        break;
+      case Exchange_nosort::Materialize_status::WOULD_BLOCK:
+      case Exchange_nosort::Materialize_status::ERROR:
+        failed = true;
+        break;
+    }
+  }
+
+  failed = failed || !saw_eof || rows_read != row_sink.rows_sent() ||
+           rows_read < 2;
+
+  if (worker->m_worker_ctx != nullptr &&
+      worker->m_open_ctx.worker_handler != nullptr) {
+    worker->m_open_ctx.worker_handler->pq_worker_scan_end(
+        worker->m_worker_ctx);
+    worker->m_worker_ctx = nullptr;
+  }
+  if (worker->m_open_ctx.worker_table != nullptr) {
+    pq_close_worker_table(&worker->m_open_ctx, failed);
+  }
+  pq_destroy_worker_thd(worker);
+  leader_thd->store_globals();
+
+  if (initialized_here) destroy();
+  if (!failed) {
+    pq_global_stats.callback_smoke_rows.fetch_add(rows_read,
+                                                  std::memory_order_relaxed);
+    pq_global_stats.exchange_smoke_rows.fetch_add(rows_read,
+                                                  std::memory_order_relaxed);
+    pq_global_stats.exchange_smoke_finishes.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+  return failed;
+}
+
 // ---------------------------------------------------------------------------
 // Gather_operator: abort_workers (stub)
 // ---------------------------------------------------------------------------

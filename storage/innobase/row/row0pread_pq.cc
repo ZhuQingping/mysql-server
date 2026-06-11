@@ -251,9 +251,11 @@ dberr_t InnoDB_pq_scan_ctx::produce_callback_rows(
   Parallel_reader reader(0);
   Parallel_reader::Config config(Parallel_reader::Scan_range{}, m_index);
 
+  bool stop_requested = false;
   auto err = reader.add_scan(const_cast<trx_t *>(m_trx), config,
                              [&](const Parallel_reader::Ctx *reader_ctx) {
                                if (row_sink->should_abort()) {
+                                 stop_requested = true;
                                  return DB_INTERRUPTED;
                                }
                                if (!store_callback_record(mysql_rec, prebuilt,
@@ -269,7 +271,12 @@ dberr_t InnoDB_pq_scan_ctx::produce_callback_rows(
     return err;
   }
 
-  return reader.run(0);
+  err = reader.run(0);
+  if (stop_requested && row_sink->stop_is_success() &&
+      err == DB_INTERRUPTED) {
+    return DB_SUCCESS;
+  }
+  return err;
 }
 
 dberr_t InnoDB_pq_scan_ctx::partition(size_t split_level) {

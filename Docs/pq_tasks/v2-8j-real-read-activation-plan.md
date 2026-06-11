@@ -173,6 +173,14 @@ Status update: 已新增 push-style callback producer API：
 路线推送多行，不启用 `pq_worker_scan_next()` pull 路线。当前仅完成 API 和
 InnoDB 实现，尚未接入 SQL worker loop / Exchange sink。
 
+Status update: 已把 callback producer API 接入 SQL 层 limited multi-row
+producer smoke。`Gather_operator::run_worker_callback_multirow_producer_smoke()`
+在 EXECUTE context 下创建 worker THD/TABLE/handler，使用 SQL-owned
+`PQ_row_sink` 连续发送 2 条 ROW，再发送 FINISH；leader 通过
+`materialize_next_record_image_status()` 消费 ROW/EOF，并把
+`Parallel_callback_smoke_rows` 验收从 `>= 1` 提升到 `>= 3`。该路径仍是
+smoke-only，不接默认 `Read()`，真实 DOP=1 full scan 仍未打开。
+
 ## Acceptance Checklist
 
 - [x] callback row conversion smoke 能稳定产出 row；
@@ -181,6 +189,7 @@ InnoDB 实现，尚未接入 SQL worker loop / Exchange sink。
 - [x] worker producer loop 有 ERROR 语义；
 - [x] worker producer loop 有 abort 语义；
 - [x] `Read()` shadow path 可编译、默认不可达；
+- [x] callback multi-row producer smoke 接入 SQL worker loop / Exchange sink；
 - [ ] DOP=1 real full scan MTR 通过；
 - [ ] full `parallel_query` suite 通过；
 - [ ] fatal-after-start 不 fallback。
@@ -216,6 +225,10 @@ InnoDB 实现，尚未接入 SQL worker loop / Exchange sink。
 - 增加 Exchange materialize status helper，明确 WOULD_BLOCK 与 EOF 的边界；
 - 拆出 ROW-only record image enqueue helper，保留旧 smoke ROW+FINISH 语义；
 - 增加 callback multi-row producer API 和 InnoDB 实现，仍不接执行路径；
+- 增加 SQL 层 limited callback multi-row producer smoke，验证 2-row ROW +
+  FINISH 经 Exchange 被 leader materialize；
+- `pq_worker_dop1` 将 callback rows 下限提升到 3，覆盖 single-row
+  conversion smoke + multi-row producer smoke；
 - 新增 `Parallel_worker_producer_smoke_runs` 状态变量；
 - 默认仍不接真实 `Read()`。
 
@@ -232,5 +245,5 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 Result: passed, 19 tests successful
 ```
 
-下一步继续 V2-8J-4：把 callback producer API 接到 SQL worker loop /
-Exchange sink，并实现 wait/kill policy；真实 DOP=1 full scan 仍未打开。
+下一步继续 V2-8J-4：实现 wait/kill policy，并在 debug gate 下验证真实
+DOP=1 full scan；真实 DOP=1 full scan 仍未打开。

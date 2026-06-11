@@ -499,6 +499,9 @@ class PQ_row_sink {
 
   /** @return true when the producer should stop early. */
   virtual bool should_abort() const { return false; }
+
+  /** @return true when an early stop requested by should_abort() is normal. */
+  virtual bool stop_is_success() const { return false; }
 };
 
 /**

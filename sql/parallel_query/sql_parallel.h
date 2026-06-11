@@ -692,6 +692,23 @@ class Gather_operator {
                                             TABLE *leader_table);
 
   /**
+    Run a limited V2-8J callback multi-row producer smoke pass.
+
+    This uses the push-style handler callback producer and a SQL-owned row sink
+    that deep-copies at most two worker record images into Exchange. The leader
+    drains those rows plus FINISH through the materialize status helper. It does
+    not connect to PQTableScanIterator::Read().
+
+    @param leader_thd    Leader THD to restore as current THD after smoke
+    @param leader_table  Leader TABLE used as metadata source
+
+    @retval false  Smoke pass completed
+    @retval true   Smoke pass failed
+  */
+  bool run_worker_callback_multirow_producer_smoke(THD *leader_thd,
+                                                   TABLE *leader_table);
+
+  /**
     Abort all workers and close MQ producers.
 
     Phase 4 stub: delegates to PQ_worker_manager::abort() and

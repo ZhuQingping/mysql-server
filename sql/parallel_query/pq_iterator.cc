@@ -147,6 +147,12 @@ bool PQTableScanIterator::Init() {
                    table(), execute_ctx, 1) ||
                callback_smoke.run_worker_callback_conversion_smoke(thd(),
                                                                    table()));
+        Gather_operator callback_multirow_smoke(1);
+        (void)(callback_multirow_smoke.init() ||
+               callback_multirow_smoke.configure_worker_open_contexts(
+                   table(), execute_ctx, 1) ||
+               callback_multirow_smoke.run_worker_callback_multirow_producer_smoke(
+                   thd(), table()));
         table()->file->pq_leader_scan_end(execute_ctx);
       } else if (error != HA_ERR_UNSUPPORTED) {
         PrintError(error);
