@@ -60,6 +60,47 @@
 
 PQ_global_stats pq_global_stats;
 
+const char *pq_execution_state_to_string(PQ_execution_state state) {
+  switch (state) {
+    case PQ_execution_state::DISABLED:
+      return "disabled";
+    case PQ_execution_state::NOT_ELIGIBLE:
+      return "not_eligible";
+    case PQ_execution_state::ELIGIBLE:
+      return "eligible";
+    case PQ_execution_state::ITERATOR_SELECTED:
+      return "iterator_selected";
+    case PQ_execution_state::EXECUTED:
+      return "executed";
+    case PQ_execution_state::FALLBACK_SERIAL:
+      return "fallback_serial";
+  }
+  return "unknown";
+}
+
+uint pq_execution_state_to_uint(PQ_execution_state state) {
+  return static_cast<uint>(state);
+}
+
+PQ_execution_state pq_execution_state_from_uint(uint state) {
+  switch (static_cast<PQ_execution_state>(state)) {
+    case PQ_execution_state::DISABLED:
+    case PQ_execution_state::NOT_ELIGIBLE:
+    case PQ_execution_state::ELIGIBLE:
+    case PQ_execution_state::ITERATOR_SELECTED:
+    case PQ_execution_state::EXECUTED:
+    case PQ_execution_state::FALLBACK_SERIAL:
+      return static_cast<PQ_execution_state>(state);
+  }
+  return PQ_execution_state::DISABLED;
+}
+
+void pq_set_execution_state(THD *thd, PQ_execution_state state) {
+  if (thd == nullptr) return;
+  thd->pq_execution_state = pq_execution_state_to_uint(state);
+  thd->pq_executed = (state == PQ_execution_state::EXECUTED);
+}
+
 // ---------------------------------------------------------------------------
 // PQ_worker_info: transition_status
 // ---------------------------------------------------------------------------

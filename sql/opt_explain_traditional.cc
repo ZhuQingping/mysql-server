@@ -82,6 +82,7 @@ static const char *traditional_extra_tags[ET_total] = {
     "Using secondary engine",           // ET_USING_SECONDARY_ENGINE
     "Rematerialize",                    // ET_REMATERIALIZE
     "Parallel query",                   // ET_PARALLEL_QUERY
+    "Parallel query state",             // ET_PARALLEL_QUERY_STATE
     "Not parallel"                      // ET_NOT_PARALLEL
 };
 

@@ -247,20 +247,70 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 
 ## Completion Report
 
-等待 Code Agent 填写。
+### Codex Orchestrator 实现结果（2026-06-11）
+
+用户确认后续不再调度 Claude Code，本任务由 Codex 直接在主工作树实现。此前已启动的 Claude Code 会话已终止，未产生 worktree 改动。
+
+Changed files:
+
+- `sql/parallel_query/sql_parallel.h`
+- `sql/parallel_query/sql_parallel.cc`
+- `sql/parallel_query/pq_iterator.cc`
+- `sql/parallel_query/pq_optimizer.cc`
+- `sql/sql_class.h`
+- `sql/sql_optimizer.cc`
+- `sql/sql_parse.cc`
+- `sql/opt_explain.cc`
+- `sql/opt_explain_format.h`
+- `sql/opt_explain_json.cc`
+- `sql/opt_explain_traditional.cc`
+- `sql/join_optimizer/explain_access_path.cc`
+- `mysql-test/suite/parallel_query/r/pq_explain_eligible.result`
+
+实现说明:
+
+1. 新增 `PQ_execution_state`，当前包含 `DISABLED / NOT_ELIGIBLE / ELIGIBLE / ITERATOR_SELECTED / EXECUTED / FALLBACK_SERIAL`。
+2. 在 `sql_parallel.h/.cc` 提供 `pq_execution_state_to_string()`、`pq_execution_state_from_uint()`、`pq_set_execution_state()`，作为状态字符串和 THD 状态设置的单一来源。
+3. `THD` 增加 `pq_execution_state`，并在 `THD::reset_for_next_command()` 清理 `pq_executed / pq_execution_state / pq_dop / pq_error`，避免 prepared statement 和重复执行串状态。
+4. `JOIN::optimize()` 在非 `optimized` 早返回路径、真正优化前清理 `JOIN::pq_*` 和 `Query_block::parallel_exec / pq_candidate / pq_unsuite_info`。
+5. `pq_mark_query_block_result()` 将 optimizer eligibility 写入 `ELIGIBLE / NOT_ELIGIBLE`。
+6. `TryCreatePQTableScanIterator()` 的 EXPLAIN 路径保持 `ELIGIBLE` 且不增加 fallback counter；真实执行 fallback 处设置 `FALLBACK_SERIAL` 并保持 `pq_executed=false`。
+7. `FORMAT=JSON` 增加 `parallel_query_state: "eligible"`，traditional EXPLAIN Extra 文案保持不变。
+8. V2-0 没有启用真实 PQ iterator，没有启动 worker，没有修改 InnoDB。
+
+验证结果:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+# PASS
+
+cd build-ninja/mysql-test
+./mtr --suite=parallel_query --parallel=1 --extern socket=/private/tmp/pq20.sock --extern user=root pq_explain_eligible pq_stats
+# PASS: parallel_query.pq_explain_eligible, parallel_query.pq_stats, shutdown_report
+
+./mtr --suite=parallel_query --parallel=1 --extern socket=/private/tmp/pq20.sock --extern user=root
+# PASS: 12 个实际 parallel_query 测试 + shutdown_report，共 13 项
+```
+
+风险点:
+
+- `pq_execution_state` 当前保存在 `THD` 的 `uint` 字段中，避免 `sql_class.h` 直接依赖 `sql_parallel.h`；后续若需要对外暴露状态变量，可再通过 helper 封装。
+- `pq_mem_root / pq_leader / pq_gathers / pq_worker_info` 仍未在 statement reset 中直接置空，避免未来真实 worker 资源被无 owner 地丢弃；V2-1 需要在 iterator/Gather 生命周期中定义销毁顺序。
+- `ITERATOR_SELECTED / EXECUTED` 目前是预留状态，只有 V2-1/V2-8 启用真实 iterator 后才能进入。
 
 ## Acceptance Checklist
 
-- [ ] 定义了单一来源的 PQ execution state；
-- [ ] EXPLAIN candidate 与 actual execution 语义清晰；
-- [ ] EXPLAIN 不增加 `Parallel_queries_fallback`；
-- [ ] V2-0 仍不启用真实 PQ iterator；
-- [ ] `parallel_query=OFF` 无 PQ annotation、无 PQ counter side effect；
-- [ ] `mysqld` build 通过；
-- [ ] 目标 MTR 或完整 `parallel_query` suite 通过，或清楚记录环境原因。
+- [x] 定义了单一来源的 PQ execution state；
+- [x] EXPLAIN candidate 与 actual execution 语义清晰；
+- [x] EXPLAIN 不增加 `Parallel_queries_fallback`；
+- [x] V2-0 仍不启用真实 PQ iterator；
+- [x] `parallel_query=OFF` 无 PQ annotation、无 PQ counter side effect；
+- [x] `mysqld` build 通过；
+- [x] 目标 MTR 或完整 `parallel_query` suite 通过，或清楚记录环境原因。
 
 ## Current Status
 
-- Status: Ready for Claude Code dispatch
-- Owner: Codex Orchestrator -> Claude Code Code Agent
+- Status: Code complete, validated, pending Codex review/commit
+- Owner: Codex Orchestrator
 - Started: 2026-06-11
+- Completed: 2026-06-11

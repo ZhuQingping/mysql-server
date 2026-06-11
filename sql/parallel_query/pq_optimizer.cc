@@ -31,6 +31,7 @@
 #include "sql/parallel_query/pq_optimizer.h"
 
 #include "include/thr_lock.h"     // Lock_descriptor, thr_lock_type
+#include "sql/parallel_query/sql_parallel.h"  // pq_set_execution_state
 #include "sql/sql_class.h"        // THD
 #include "sql/sql_lex.h"          // Query_block, LEX, Table_ref
 #include "sql/sql_opt_exec_shared.h"  // JOIN_TAB, join_type, JT_ALL
@@ -514,5 +515,11 @@ void pq_mark_query_block_result(Query_block *query_block, JOIN *join,
   if (join != nullptr) {
     join->pq_eligible = eligible;
     join->pq_unsuitable_reason = reason;
+    const PQ_execution_state state =
+        eligible ? PQ_execution_state::ELIGIBLE
+                 : (reason == PQUnsuiteReason::DISABLED
+                        ? PQ_execution_state::DISABLED
+                        : PQ_execution_state::NOT_ELIGIBLE);
+    pq_set_execution_state(join->thd, state);
   }
 }

@@ -94,6 +94,7 @@ enum Extra_tag {
   ET_USING_SECONDARY_ENGINE,
   ET_REMATERIALIZE,
   ET_PARALLEL_QUERY,          // Parallel query eligible
+  ET_PARALLEL_QUERY_STATE,    // Parallel query execution state
   ET_NOT_PARALLEL,            // Not eligible for parallel query
   //------------------------------------
   ET_total

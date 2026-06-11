@@ -178,6 +178,7 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQTableScanIterator(
   // EXPLAIN may build iterators, but it is not a real statement execution
   // fallback. Keep PQ execution status counters tied to non-EXPLAIN execution.
   if (thd->lex != nullptr && thd->lex->is_explain()) {
+    pq_set_execution_state(thd, PQ_execution_state::ELIGIBLE);
     return nullptr;
   }
 
@@ -186,7 +187,7 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQTableScanIterator(
   // Count this at iterator creation time rather than optimizer time so EXPLAIN
   // and optimizer re-entry do not inflate execution fallback statistics.
   pq_global_stats.queries_fallback.fetch_add(1, std::memory_order_relaxed);
-  thd->pq_executed = false;
+  pq_set_execution_state(thd, PQ_execution_state::FALLBACK_SERIAL);
 
   return nullptr;
 

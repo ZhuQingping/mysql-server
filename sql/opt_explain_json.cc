@@ -98,6 +98,7 @@ static const char *json_extra_tags[ET_total] = {
     "using_secondary_engine",              // ET_USING_SECONDARY_ENGINE
     "rematerialize",                        // ET_REMATERIALIZE
     "parallel_query",                       // ET_PARALLEL_QUERY
+    "parallel_query_state",                 // ET_PARALLEL_QUERY_STATE
     "not_parallel"                          // ET_NOT_PARALLEL
 };
 

@@ -350,6 +350,16 @@ bool JOIN::optimize(bool finalize_access_paths) {
   // to prevent double initialization on EXPLAIN
   if (optimized) return false;
 
+  pq_eligible = false;
+  pq_unsuitable_reason = PQUnsuiteReason::NONE;
+  pq_plan_rewritten = false;
+  need_tmp_pq_leader = false;
+  pq_dop = 0;
+  pq_optimized_var = nullptr;
+  query_block->parallel_exec = false;
+  query_block->pq_candidate = false;
+  query_block->pq_unsuite_info = nullptr;
+
   DEBUG_SYNC(thd, "before_join_optimize");
 
   THD_STAGE_INFO(thd, stage_optimizing);

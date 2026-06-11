@@ -79,6 +79,39 @@
 class THD;
 
 // ---------------------------------------------------------------------------
+// PQ_execution_state: per-statement execution state contract
+// ---------------------------------------------------------------------------
+
+/**
+  Per-statement PQ execution state.
+
+  This execution-side contract is separate from optimizer eligibility fields
+  such as JOIN::pq_eligible. Eligibility means the optimizer found a PQ
+  candidate; execution state records whether the execution layer selected and
+  ran PQ.
+*/
+enum class PQ_execution_state : uint {
+  DISABLED = 0,
+  NOT_ELIGIBLE,
+  ELIGIBLE,
+  ITERATOR_SELECTED,
+  EXECUTED,
+  FALLBACK_SERIAL
+};
+
+/** Convert PQ execution state to a stable diagnostic string. */
+const char *pq_execution_state_to_string(PQ_execution_state state);
+
+/** Return a stable integer representation for storage in THD. */
+uint pq_execution_state_to_uint(PQ_execution_state state);
+
+/** Convert a THD-stored integer to PQ execution state. */
+PQ_execution_state pq_execution_state_from_uint(uint state);
+
+/** Set the current statement's PQ execution state on a THD. */
+void pq_set_execution_state(THD *thd, PQ_execution_state state);
+
+// ---------------------------------------------------------------------------
 // PQ_stats: resource statistics for parallel query execution
 // ---------------------------------------------------------------------------
 

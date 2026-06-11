@@ -4769,6 +4769,9 @@ class THD : public MDL_context_owner,
   /// True if a parallel query plan has been executed on this THD (leader)
   bool pq_executed = false;
 
+  /// Current statement PQ execution state. Values are PQ_execution_state.
+  uint pq_execution_state = 0;
+
   /// Degree of parallelism for the current parallel query
   uint pq_dop = 0;
 

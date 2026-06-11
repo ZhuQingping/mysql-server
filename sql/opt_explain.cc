@@ -92,6 +92,7 @@
 #include "sql/sql_opt_exec_shared.h"
 #include "sql/sql_optimizer.h"  // JOIN
 #include "sql/parallel_query/pq_optimizer.h"  // pq_unsuite_reason_to_string
+#include "sql/parallel_query/sql_parallel.h"  // pq_execution_state_to_string
 #include "sql/sql_parse.h"      // is_explainable_query
 #include "sql/sql_partition.h"  // for make_used_partitions_str()
 #include "sql/sql_select.h"
@@ -1709,6 +1710,11 @@ bool Explain_join::explain_extra() {
                                                   : explain_thd->variables
                                                         .parallel_default_dop);
       if (push_extra(ET_PARALLEL_QUERY, pq_buff)) return true;
+      if (fmt->is_hierarchical() &&
+          push_extra(ET_PARALLEL_QUERY_STATE,
+                     pq_execution_state_to_string(pq_execution_state_from_uint(
+                         explain_thd->pq_execution_state))))
+        return true;
     } else {
       // Show fallback reason. PQUnsuitableReason persists in JOIN.
       const char *reason_str =

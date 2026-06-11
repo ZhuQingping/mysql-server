@@ -5161,6 +5161,10 @@ void THD::reset_for_next_command() {
   */
   thd->auto_inc_intervals_in_cur_stmt_for_binlog.clear();
   thd->stmt_depends_on_first_successful_insert_id_in_prev_stmt = false;
+  thd->pq_executed = false;
+  thd->pq_execution_state = 0;
+  thd->pq_dop = 0;
+  thd->pq_error = 0;
 
   thd->query_start_usec_used = false;
   thd->m_is_fatal_error = false;

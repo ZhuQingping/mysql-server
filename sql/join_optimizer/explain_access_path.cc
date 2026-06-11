@@ -56,6 +56,7 @@
 #include "sql/range_optimizer/range_optimizer.h"
 #include "sql/sql_optimizer.h"
 #include "sql/parallel_query/pq_optimizer.h"  // pq_unsuite_reason_to_string
+#include "sql/parallel_query/sql_parallel.h"  // pq_execution_state_to_string
 #include "sql/table.h"
 #include "template_utils.h"
 
@@ -971,6 +972,10 @@ static std::unique_ptr<Json_object> SetObjectMembers(
           error |= AddMemberToObject<Json_int>(obj, "pq_dop", dop);
           error |= AddMemberToObject<Json_string>(
               obj, "parallel_query", pq_v1_explain_eligible_label());
+          error |= AddMemberToObject<Json_string>(
+              obj, "parallel_query_state",
+              pq_execution_state_to_string(pq_execution_state_from_uint(
+                  thd->pq_execution_state)));
         } else {
           const char *reason_str =
               pq_unsuite_reason_to_string(join->pq_unsuitable_reason);
