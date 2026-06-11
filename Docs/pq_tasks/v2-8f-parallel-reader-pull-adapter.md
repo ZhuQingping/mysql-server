@@ -84,6 +84,11 @@ remain private.
 - 只在 internal smoke 中验证，不进入 SQL iterator `Read()`；
 - 继续保持 `pq_worker_scan_next()` disabled，直到 EOF/error/MQ/materialization 都补齐。
 
+Status: Conversion helper implemented. `InnoDB_pq_scan_ctx::store_mysql_record()`
+wraps `row_sel_store_mysql_rec()` for clustered records and keeps ownership of
+`mysql_rec`, `row_prebuilt_t`, offsets, and blob heap with the caller. It is not
+yet connected to a cursor smoke or SQL iterator.
+
 ## Allowed Files
 
 - `storage/innobase/include/row0pread.h`
@@ -118,12 +123,13 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 - [x] leader active read view gate 明确；
 - [x] whole-range DOP=1 first gate 明确；
 - [x] visibility helper 抽出，不公开 `Parallel_reader::Scan_ctx` 大量私有状态；
+- [x] record conversion helper 第一段完成；
 - [ ] `pq_worker_scan_next()` 仍 disabled；
 - [x] build 和完整 `parallel_query` suite 通过。
 
 ## Current Status
 
-- Status: Visibility helper completed
+- Status: Conversion helper completed
 - Owner: Codex Orchestrator
 - Started: 2026-06-11
 
@@ -134,6 +140,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 - `InnoDB_pq_scan_ctx::has_active_read_view()`；
 - `InnoDB_pq_scan_ctx::validate_pull_adapter_gate()`；
 - `Parallel_reader::check_visibility(...)` narrow static helper；
+- `InnoDB_pq_scan_ctx::store_mysql_record()`；
 - 不读取 row，不接 `pq_worker_scan_next()`，不改变执行状态。
 
 验证：

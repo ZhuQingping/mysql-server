@@ -149,6 +149,16 @@ class InnoDB_pq_scan_ctx {
   @return DB_SUCCESS or DB_UNSUPPORTED. */
   dberr_t validate_pull_adapter_gate() const;
 
+  /** Convert a visible clustered record to a MySQL record image.
+
+  This is a narrow wrapper around row_sel_store_mysql_rec() for the future
+  pull adapter. The caller owns mysql_rec, prebuilt, offsets, and blob_heap.
+
+  @return true on success. */
+  bool store_mysql_record(byte *mysql_rec, row_prebuilt_t *prebuilt,
+                          const rec_t *rec, ulint *offsets,
+                          mem_heap_t *blob_heap) const;
+
   /** Mutable access to ranges for dispatch. */
   std::vector<InnoDB_pq_range> &mutable_ranges() { return m_ranges; }
 

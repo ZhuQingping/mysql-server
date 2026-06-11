@@ -169,6 +169,20 @@ dberr_t InnoDB_pq_scan_ctx::validate_pull_adapter_gate() const {
   return DB_SUCCESS;
 }
 
+bool InnoDB_pq_scan_ctx::store_mysql_record(byte *mysql_rec,
+                                             row_prebuilt_t *prebuilt,
+                                             const rec_t *rec, ulint *offsets,
+                                             mem_heap_t *blob_heap) const {
+  if (mysql_rec == nullptr || prebuilt == nullptr || rec == nullptr ||
+      offsets == nullptr || m_index == nullptr || !m_index->is_clustered()) {
+    return false;
+  }
+
+  return row_sel_store_mysql_rec(mysql_rec, prebuilt, rec, nullptr, true,
+                                 m_index, m_index, offsets, false, nullptr,
+                                 blob_heap);
+}
+
 dberr_t InnoDB_pq_scan_ctx::partition(size_t split_level) {
   m_ranges.clear();
 
