@@ -87,6 +87,8 @@ class String;
 class THD;
 class handler;
 class partition_info;
+class PQ_Leader_context;
+class PQ_Worker_context;
 struct System_status_var;
 
 namespace dd {
@@ -4894,6 +4896,47 @@ class handler {
     @param[in]      scan_ctx      A scan context created by parallel_scan_init.
   */
   virtual void parallel_scan_end(void *scan_ctx [[maybe_unused]]) { return; }
+
+  /**
+    Initialize a pull-row Parallel Query scan.
+
+    This API is separate from parallel_scan_* above, which is a push/batch
+    callback interface. PQ workers need a pull-row context that can later be
+    consumed by pq_worker_scan_next().
+  */
+  virtual int pq_leader_scan_init(THD *leader_thd [[maybe_unused]],
+                                  PQ_Leader_context **leader_ctx,
+                                  uint requested_dop [[maybe_unused]],
+                                  uint *actual_dop, bool reverse [[maybe_unused]]) {
+    if (leader_ctx != nullptr) *leader_ctx = nullptr;
+    if (actual_dop != nullptr) *actual_dop = 0;
+    return HA_ERR_UNSUPPORTED;
+  }
+
+  /** Initialize worker-side pull-row scan context. */
+  virtual int pq_worker_scan_init(THD *worker_thd [[maybe_unused]],
+                                  PQ_Leader_context *leader_ctx [[maybe_unused]],
+                                  PQ_Worker_context **worker_ctx) {
+    if (worker_ctx != nullptr) *worker_ctx = nullptr;
+    return HA_ERR_UNSUPPORTED;
+  }
+
+  /** Pull one row into record, or set eof=true when exhausted. */
+  virtual int pq_worker_scan_next(PQ_Worker_context *worker_ctx [[maybe_unused]],
+                                  uchar *record [[maybe_unused]], bool *eof) {
+    if (eof != nullptr) *eof = true;
+    return HA_ERR_UNSUPPORTED;
+  }
+
+  /** End worker-side PQ scan context. Idempotent. */
+  virtual int pq_worker_scan_end(PQ_Worker_context *worker_ctx [[maybe_unused]]) {
+    return 0;
+  }
+
+  /** End leader-side PQ scan context. Idempotent. */
+  virtual int pq_leader_scan_end(PQ_Leader_context *leader_ctx [[maybe_unused]]) {
+    return 0;
+  }
 
   /**
     Submit a dd::Table object representing a core DD table having

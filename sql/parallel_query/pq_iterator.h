@@ -103,16 +103,17 @@ class PQTableScanIterator final : public TableRowIterator {
   /**
     Initialize the parallel scan.
 
-    V2-1 safe fallback: create and initialize an owned serial TableScanIterator
-    before workers or InnoDB PQ scan are touched.
+    V2-1/V2-2 safe fallback: optionally probe the handler leader init/end
+    contract with DOP=1, then create and initialize an owned serial
+    TableScanIterator before workers, exchange, or row streams are touched.
 
     In production (Phase 6+):
     - Call handler->pq_leader_scan_init() to partition the table.
-    - If pq_leader_scan_init() returns HA_ERR_UNSUPPORTED or any error,
-      Init() returns true (failure). The factory (TryCreate) must then
-      implement in-iterator fallback to serial scan, because
-      CreateIteratorFromAccessPath() cannot re-create a serial iterator
-      after returning a PQ one.
+    - If pq_leader_scan_init() returns HA_ERR_UNSUPPORTED, continue with
+      in-iterator serial fallback. CreateIteratorFromAccessPath() cannot
+      re-create a serial iterator after returning a PQ one.
+    - If pq_leader_scan_init() returns a fatal handler error, Init() returns
+      true and reports the error instead of masking it as fallback.
     - If successful, create Gather_operator and start workers.
     - If worker start fails, Init() returns true => in-iterator fallback.
 

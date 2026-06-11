@@ -66,6 +66,7 @@ this program; if not, write to the Free Software Foundation, Inc.,
 
 #include <sql_table.h>
 #include "mysql/components/services/system_variable_source.h"
+#include "sql/parallel_query/pq_handler.h"
 
 #ifndef UNIV_HOTBACKUP
 #include <current_thd.h>
@@ -10859,6 +10860,25 @@ int ha_innobase::sample_end(void *scan_ctx) {
   return 0;
 }
 
+class InnoDB_pq_sql_leader_context final : public PQ_Leader_context {
+ public:
+  explicit InnoDB_pq_sql_leader_context(InnoDB_pq_leader_ctx *innodb_ctx)
+      : PQ_Leader_context(innodb_ctx != nullptr ? innodb_ctx->max_threads() : 0,
+                          innodb_ctx != nullptr && innodb_ctx->is_reverse()),
+        m_innodb_ctx(innodb_ctx) {}
+
+  std::shared_ptr<PQ_Scan_ctx> make_scan_ctx(
+      void *handler_specific [[maybe_unused]],
+      const PQ_Config &config [[maybe_unused]]) override {
+    return nullptr;
+  }
+
+  InnoDB_pq_leader_ctx *innodb_ctx() const { return m_innodb_ctx; }
+
+ private:
+  InnoDB_pq_leader_ctx *m_innodb_ctx{nullptr};
+};
+
 /**
   Initialize InnoDB PQ leader scan for clustered full scan.
 
@@ -10882,9 +10902,19 @@ int ha_innobase::sample_end(void *scan_ctx) {
 */
 int ha_innobase::pq_leader_scan_init(THD *leader_thd,
                                      PQ_Leader_context **leader_ctx,
-                                     uint requested_dop, bool reverse) {
+                                     uint requested_dop, uint *actual_dop,
+                                     bool reverse) {
   if (leader_ctx != nullptr) {
     *leader_ctx = nullptr;
+  }
+  if (actual_dop != nullptr) {
+    *actual_dop = 0;
+  }
+  (void)leader_thd;
+
+  if (m_pq_leader_ctx != nullptr || m_pq_sql_leader_ctx != nullptr ||
+      !m_pq_worker_ctxs.empty()) {
+    pq_leader_scan_end(nullptr);
   }
 
   /* V1-MVP: reverse scan is not supported. */
@@ -10935,6 +10965,9 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
   /* Check thread budget: are enough parallel read threads available? */
   auto available = Parallel_reader::available_threads(requested_dop, false);
   if (available < requested_dop) {
+    if (available > 0) {
+      Parallel_reader::release_threads(available);
+    }
     /* Not enough threads available; fallback to serial. */
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
@@ -10944,6 +10977,7 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
       UT_NEW_THIS_FILE_PSI_KEY, requested_dop, reverse);
 
   if (innodb_leader_ctx == nullptr) {
+    Parallel_reader::release_threads(available);
     return pq_map_dberr_to_handler_error(DB_OUT_OF_MEMORY, nullptr);
   }
 
@@ -10955,6 +10989,7 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
 
   if (err != DB_SUCCESS) {
     ut::delete_(innodb_leader_ctx);
+    Parallel_reader::release_threads(available);
     return pq_map_dberr_to_handler_error(err, nullptr);
   }
 
@@ -10967,39 +11002,24 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
     is more correct -- empty table scan is trivially parallel-safe. */
   }
 
-  /* Set the output parameter.
-  The PQ_Leader_context** parameter is currently used as an opaque
-  handle. In future phases when the SQL layer PQ code uses the
-  PQ_Leader_context base class virtual methods, we will need to
-  wrap this InnoDB_pq_leader_ctx in a PQ_Leader_context subclass.
-  For Phase 6B-2, we just store the InnoDB context and the SQL
-  layer hasn't been wired yet.
-
-  Since PQ_Leader_context is defined in sql/parallel_query/pq_handler.h
-  and we cannot modify the sql layer, we use the InnoDB-specific type directly.
-  The bridging will happen when Phase 7 wires the SQL execution path.
-
-  For now, we return the InnoDB leader ctx cast as PQ_Leader_context*
-  through a void* intermediate, since InnoDB_pq_leader_ctx is NOT
-  a subclass of PQ_Leader_context (they are independent types in
-  V1-MVP). The SQL layer will receive nullptr until Phase 7 wiring,
-  which is the conservative behavior. */
-  if (leader_ctx != nullptr) {
-    /* Phase 6B-2: We don't return a PQ_Leader_context* yet because
-    InnoDB_pq_leader_ctx is not a subclass. The ha_innobase member
-    m_pq_leader_ctx stores the InnoDB context for internal use.
-    The PQ_Leader_context** output remains nullptr to signal that
-    the SQL-layer PQ infrastructure hasn't been wired yet.
-
-    Workers will use the InnoDB context directly through
-    ha_innobase internal state, not through PQ_Leader_context
-    virtual methods. */
-    *leader_ctx = nullptr;
+  auto sql_leader_ctx = ut::new_withkey<InnoDB_pq_sql_leader_context>(
+      UT_NEW_THIS_FILE_PSI_KEY, innodb_leader_ctx);
+  if (sql_leader_ctx == nullptr) {
+    ut::delete_(innodb_leader_ctx);
+    Parallel_reader::release_threads(available);
+    return pq_map_dberr_to_handler_error(DB_OUT_OF_MEMORY, nullptr);
   }
 
   /* Store the InnoDB PQ leader context in the handler for
   internal use (worker init, scan next, cleanup). */
   m_pq_leader_ctx = innodb_leader_ctx;
+  m_pq_sql_leader_ctx = sql_leader_ctx;
+  if (leader_ctx != nullptr) {
+    *leader_ctx = sql_leader_ctx;
+  }
+  if (actual_dop != nullptr) {
+    *actual_dop = static_cast<uint>(available);
+  }
 
   return 0;
 }
@@ -11021,6 +11041,8 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
 int ha_innobase::pq_worker_scan_init(THD *worker_thd,
                                      PQ_Leader_context *leader_ctx,
                                      PQ_Worker_context **worker_ctx) {
+  (void)worker_thd;
+  (void)leader_ctx;
   if (worker_ctx != nullptr) {
     *worker_ctx = nullptr;
   }
@@ -11180,6 +11202,11 @@ int ha_innobase::pq_leader_scan_end(PQ_Leader_context *leader_ctx) {
 
     ut::delete_(m_pq_leader_ctx);
     m_pq_leader_ctx = nullptr;
+  }
+
+  if (m_pq_sql_leader_ctx != nullptr) {
+    ut::delete_(m_pq_sql_leader_ctx);
+    m_pq_sql_leader_ctx = nullptr;
   }
 
   return 0;

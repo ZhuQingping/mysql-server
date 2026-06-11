@@ -29,8 +29,10 @@
   - TryCreatePQTableScanIterator guarded factory.
   - V2-1 returns a PQ iterator for ordinary eligible execution.
   - Init() falls back to an owned serial TableScanIterator before workers,
-    InnoDB PQ APIs, or Exchange/Gather are touched.
-  - No real worker launch, no InnoDB PQ API calls, no MQ interaction.
+    Exchange/Gather, worker THDs, or row streams are touched.
+  - V2-2 may probe the handler leader init/end contract with DOP=1 before
+    serial fallback.
+  - No real worker launch, no MQ interaction.
 */
 
 #include "sql/parallel_query/pq_iterator.h"
@@ -71,9 +73,29 @@ bool PQTableScanIterator::Init() {
 
   pq_set_execution_state(thd(), PQ_execution_state::ITERATOR_SELECTED);
 
-  // V2-1 safe fallback window: no worker, Gather/Exchange, InnoDB PQ API or
-  // row stream has been initialized yet. Build the same serial table scan the
-  // caller would have built when TryCreatePQTableScanIterator returned nullptr.
+  // V2-2 bridge smoke: prove the handler can create and release a SQL-visible
+  // leader context without starting workers or reading rows. Unsupported
+  // engines/states still use the V2-1 serial fallback path; real handler
+  // errors are reported before serial iterator state is initialized.
+  PQ_Leader_context *leader_ctx = nullptr;
+  uint actual_dop = 0;
+  int error =
+      table()->file->pq_leader_scan_init(thd(), &leader_ctx, 1, &actual_dop,
+                                         false);
+  if (error == 0) {
+    (void)actual_dop;
+    table()->file->pq_leader_scan_end(leader_ctx);
+  } else if (error != HA_ERR_UNSUPPORTED) {
+    if (leader_ctx != nullptr) {
+      table()->file->pq_leader_scan_end(leader_ctx);
+    }
+    PrintError(error);
+    return true;
+  }
+
+  // V2-1 safe fallback window: no worker, Gather/Exchange, or row stream has
+  // been initialized. Build the same serial table scan the caller would have
+  // built when TryCreatePQTableScanIterator returned nullptr.
   if (m_serial_iterator == nullptr) {
     m_serial_iterator = NewIterator<TableScanIterator>(
         thd(), m_mem_root, table(), m_expected_rows, m_examined_rows);

@@ -492,7 +492,8 @@ class ha_innobase : public handler {
     @param[in]  reverse         True if reverse scan (unsupported in V1-MVP).
   */
   int pq_leader_scan_init(THD *leader_thd, PQ_Leader_context **leader_ctx,
-                          uint requested_dop, bool reverse);
+                          uint requested_dop, uint *actual_dop,
+                          bool reverse) override;
 
   /**
     Initialize InnoDB-specific Parallel Query worker scan state.
@@ -506,7 +507,7 @@ class ha_innobase : public handler {
     @param[out] worker_ctx   Output worker context (set to nullptr on error).
   */
   int pq_worker_scan_init(THD *worker_thd, PQ_Leader_context *leader_ctx,
-                          PQ_Worker_context **worker_ctx);
+                          PQ_Worker_context **worker_ctx) override;
 
   /**
     Pull one row for a PQ worker.
@@ -522,19 +523,19 @@ class ha_innobase : public handler {
     @param[out]  eof          Set to true when range is exhausted.
   */
   int pq_worker_scan_next(PQ_Worker_context *worker_ctx, uchar *record,
-                          bool *eof);
+                          bool *eof) override;
 
   /**
     End a PQ worker scan. Cleans up worker cursor state and resources.
     Idempotent: safe to call multiple times or with nullptr.
   */
-  int pq_worker_scan_end(PQ_Worker_context *worker_ctx);
+  int pq_worker_scan_end(PQ_Worker_context *worker_ctx) override;
 
   /**
     End a PQ leader scan. Releases thread budget, ranges, and scan ctx.
     Idempotent: safe to call multiple times or with nullptr.
   */
-  int pq_leader_scan_end(PQ_Leader_context *leader_ctx);
+  int pq_leader_scan_end(PQ_Leader_context *leader_ctx) override;
 
   bool check_if_incompatible_data(HA_CREATE_INFO *info,
                                   uint table_changes) override;
@@ -717,9 +718,12 @@ class ha_innobase : public handler {
 
   /** InnoDB PQ pull-row adapter: leader context.
   Created in pq_leader_scan_init(), released in pq_leader_scan_end().
-  nullptr outside of a PQ scan. Phase 6B-2: internal state,
-  not exposed through PQ_Leader_context* API yet. */
+  nullptr outside of a PQ scan. */
   InnoDB_pq_leader_ctx *m_pq_leader_ctx{nullptr};
+
+  /** SQL-visible PQ leader wrapper.
+  Owns no InnoDB resources; released together with m_pq_leader_ctx. */
+  PQ_Leader_context *m_pq_sql_leader_ctx{nullptr};
 
   /** InnoDB PQ pull-row adapter: worker contexts.
   Each worker has its own InnoDB_pq_worker_ctx with a pull-row cursor.
