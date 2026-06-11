@@ -2149,7 +2149,10 @@ bool PT_create_table_default_collation::contextualize(
 bool PT_locking_clause::contextualize(Parse_context *pc) {
   LEX *lex = pc->thd->lex;
 
-  if (lex->is_explain()) return false;
+  if (lex->is_explain()) {
+    if (pc->thd->variables.parallel_query) return set_lock_for_tables(pc);
+    return false;
+  }
 
   if (m_locked_row_action == Locked_row_action::SKIP)
     lex->set_stmt_unsafe(LEX::BINLOG_STMT_UNSAFE_SKIP_LOCKED);

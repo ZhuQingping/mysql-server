@@ -16,6 +16,25 @@ V2-9E 后，DOP=1/DOP=2 clustered full scan threaded row stream 已在默认 OFF
 - 恢复或新增 `pq_locking_read_fallback`；
 - 验证不会污染 fallback/executed counters。
 
+状态：Completed。
+
+实现：
+
+- `PT_locking_clause::contextualize()` 在 `parallel_query=ON` 的 EXPLAIN 中保留 locking clause 到 `Table_ref`，使 PQ eligibility 能稳定看到 `LOCKING_READ`；
+- 新增 `pq_locking_read_fallback`，覆盖 `FOR UPDATE` / `LOCK IN SHARE MODE` / `FOR SHARE` 的 EXPLAIN 和真实执行 counters。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_locking_read_fallback \
+  --parallel=1 --vardir=/tmp/pqv_locking2 --tmpdir=/tmp/pqt_locking2
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full8 --tmpdir=/tmp/pqt_full8
+```
+
+结果：完整 `parallel_query` suite 通过，共 37 项。
+
 ## P0-B DOP2 Read-view Concurrency
 
 目标：验证 no-debug `parallel_query_experimental_threaded_dop=ON` 下 DOP=2 row stream 的 read-view 一致性。
@@ -72,4 +91,4 @@ V2-9E 后，DOP=1/DOP=2 clustered full scan threaded row stream 已在默认 OFF
 
 建议下一阶段优先考虑 GROUP BY partial aggregation，因为 implicit aggregate row stream 已经闭环，但显式 GROUP BY 仍 fallback。
 
-当前状态：Planned，等待从 P0-A 开始串行收口。
+当前状态：P0-A Completed；下一步进入 P0-B DOP2 Read-view Concurrency。

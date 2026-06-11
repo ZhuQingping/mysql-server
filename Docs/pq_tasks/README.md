@@ -5,7 +5,7 @@
 ## Current Summary
 
 - Last synced: 2026-06-11
-- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0、V2-1、V2-2、V2-3、V2-4、V2-5、V2-6、V2-7 已提交；V2-8A worker handler/prebuilt contract design 已完成；V2-8B Row Image Protocol 已完成；V2-8C contract/gate 第一段、leader probe/execute mode API、worker open context carrier 生命周期、worker THD/TABLE helper、safe-window open-table smoke 和 handler init/end smoke 已实现；V2-8D 已完成 first-row/read-view 方案选型；V2-8E EXECUTE commit point primitive 已完成；V2-8F callback conversion smoke primitive 已完成；V2-8G EXECUTE callback smoke observability 已完成；V2-8H row stream activation boundary 已完成；V2-8I iterator runtime state contract 已完成；V2-8J-1 callback row producer smoke 已完成；V2-8J-2 worker producer FINISH/EOF、ERROR 和 abort skeleton 已完成；V2-8J-3 `Read()` shadow path scaffold 已完成并增加 PROBE guard；V2-8J-4 PROBE 诊断计数、Exchange materialize status helper、ROW-only enqueue helper、callback multi-row producer API、SQL 层 limited multi-row producer smoke、`Read()` wait/kill policy、PROBE unsupported 细分诊断、首次 PROBE gate 修复、debug shadow first-row MTR 和 debug shadow 2-row/EOF producer 已完成；V2-8K worker thread lifecycle、debug threaded callback producer 和 ERROR/abort/EOF hardening 已完成；V2-8L debug threaded projection/WHERE/empty EOF 语义边界已完成；V2-8M 默认 OFF 实验变量保护路径已完成；V2-8N threaded external KILL 验证已完成；V2-8O threaded 基础聚合覆盖已完成；V2-8P DOP 多队列 Exchange smoke 已完成；V2-8Q DOP2 experimental guard 已完成；V2-9 DOP range correctness 已启动任务拆分；V2-9A Range Dispatch Contract 已完成；V2-9B Range-Aware Callback Producer 已完成；V2-9C debug DOP2 threaded shadow 和 DOP2 ERROR/KILL hardening 已完成；V2-9D multi-range callback drain 已完成；V2-9E experimental DOP2 gate、基础聚合和负向 gate 覆盖已完成。
+- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0、V2-1、V2-2、V2-3、V2-4、V2-5、V2-6、V2-7 已提交；V2-8A worker handler/prebuilt contract design 已完成；V2-8B Row Image Protocol 已完成；V2-8C contract/gate 第一段、leader probe/execute mode API、worker open context carrier 生命周期、worker THD/TABLE helper、safe-window open-table smoke 和 handler init/end smoke 已实现；V2-8D 已完成 first-row/read-view 方案选型；V2-8E EXECUTE commit point primitive 已完成；V2-8F callback conversion smoke primitive 已完成；V2-8G EXECUTE callback smoke observability 已完成；V2-8H row stream activation boundary 已完成；V2-8I iterator runtime state contract 已完成；V2-8J-1 callback row producer smoke 已完成；V2-8J-2 worker producer FINISH/EOF、ERROR 和 abort skeleton 已完成；V2-8J-3 `Read()` shadow path scaffold 已完成并增加 PROBE guard；V2-8J-4 PROBE 诊断计数、Exchange materialize status helper、ROW-only enqueue helper、callback multi-row producer API、SQL 层 limited multi-row producer smoke、`Read()` wait/kill policy、PROBE unsupported 细分诊断、首次 PROBE gate 修复、debug shadow first-row MTR 和 debug shadow 2-row/EOF producer 已完成；V2-8K worker thread lifecycle、debug threaded callback producer 和 ERROR/abort/EOF hardening 已完成；V2-8L debug threaded projection/WHERE/empty EOF 语义边界已完成；V2-8M 默认 OFF 实验变量保护路径已完成；V2-8N threaded external KILL 验证已完成；V2-8O threaded 基础聚合覆盖已完成；V2-8P DOP 多队列 Exchange smoke 已完成；V2-8Q DOP2 experimental guard 已完成；V2-9 DOP range correctness 已启动任务拆分；V2-9A Range Dispatch Contract 已完成；V2-9B Range-Aware Callback Producer 已完成；V2-9C debug DOP2 threaded shadow 和 DOP2 ERROR/KILL hardening 已完成；V2-9D multi-range callback drain 已完成；V2-9E experimental DOP2 gate、基础聚合和负向 gate 覆盖已完成；V2 next risk P0-A locking read EXPLAIN fix 已完成。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
@@ -117,10 +117,10 @@
   - [v2-9e-experimental-dop2-gate.md](v2-9e-experimental-dop2-gate.md): V2-9E 已新增默认 OFF 的 `parallel_query_experimental_threaded_dop`，无 debug 下初始只允许 DOP=2，并补齐基础聚合和 DOP1/DOP4 负向 gate 覆盖；完整 suite 36 项通过。
   - [v2-execution-path-roadmap.md](v2-execution-path-roadmap.md): V2 真实执行路径拆分，覆盖 SQL iterator、worker THD、Exchange/Gather row 流、InnoDB 分片扫描、full scan 闭环和基础聚合。
   - [v2-test-matrix.md](v2-test-matrix.md): V1/V2 阶段化 MTR 测试矩阵，明确 DOP=1 first 和 DOP>1 range-partition gate。
-- Next recommended action: 保持实验变量默认 OFF；下一步进行 V2 收口 review，明确是否进入 DOP=4 扩展、性能验证或回归补强；`pq_worker_scan_next()` 继续 disabled。
+- Next recommended action: 保持实验变量默认 OFF；下一步进入 P0-B DOP2 read-view concurrency；`pq_worker_scan_next()` 继续 disabled。
 - Next risk closure board: [v2-next-risk-closure.md](v2-next-risk-closure.md)
 - Parallel-ready task overview: [parallel_wave2_tasks.md](parallel_wave2_tasks.md)
-- Remaining risk: 基础 implicit aggregate 已可通过 DOP=1/DOP=2 threaded row stream 由上层 MySQL 聚合算子消费；GROUP BY partial aggregation、ORDER BY、secondary index/ICP、partition table、DOP>2 和性能验证仍未完成。locking read 的 EXPLAIN annotation 当前仍可能显示 `Parallel query dop=4`，已从 Phase 9 测试中移除，后续需单独修复。
+- Remaining risk: 基础 implicit aggregate 已可通过 DOP=1/DOP=2 threaded row stream 由上层 MySQL 聚合算子消费；locking read EXPLAIN fallback 已修复；GROUP BY partial aggregation、ORDER BY、secondary index/ICP、partition table、DOP>2、read-view 并发和性能验证仍未完成。
 
 ## Prepared Claude Code Worktrees
 
@@ -203,6 +203,7 @@ Recommended worktrees:
 | V2-9C - Debug DOP2 Threaded Shadow | Completed | Codex Orchestrator | [v2-9c-debug-dop2-threaded-shadow.md](v2-9c-debug-dop2-threaded-shadow.md) | 新增 debug-only DOP=2 threaded shadow path；多 worker 启动、empty worker FINISH、Exchange 消费、小表结果正确性、worker ERROR 和 external KILL 已覆盖 |
 | V2-9D - Multi-range Callback Drain | Completed | Codex Orchestrator | [v2-9d-multirange-callback-drain.md](v2-9d-multirange-callback-drain.md) | worker 完成当前 range 后继续领取后续 range；DOP=2 debug shadow 验证 1024 行完整集合、`rows_delta=1024`、`ranges_dispatched>=2` |
 | V2-9E - Experimental DOP2 Gate | Completed | Codex Orchestrator | [v2-9e-experimental-dop2-gate.md](v2-9e-experimental-dop2-gate.md) | 新增默认 OFF 的 `parallel_query_experimental_threaded_dop`；无 debug 下只打开 DOP=2 threaded full scan，并覆盖基础聚合和 DOP1/DOP4 负向 gate；完整 suite 36 项通过 |
+| V2 next P0-A - Locking Read EXPLAIN Fix | Completed | Codex Orchestrator | [v2-next-risk-closure.md](v2-next-risk-closure.md) | `EXPLAIN SELECT ... FOR UPDATE/SHARE` 稳定显示 `Not parallel LOCKING_READ`；真实执行不污染 fallback/executed counters；完整 suite 37 项通过 |
 
 ## Decisions
 
@@ -213,8 +214,7 @@ Recommended worktrees:
 
 ## Open Decisions
 
-- LOCKING_READ fallback 的 EXPLAIN 阶段检测需要单独修复；当前 `FOR UPDATE` / `LOCK IN SHARE MODE` / `FOR SHARE` 没有进入 Phase 9 测试。
-- 真实并行聚合执行、GROUP BY partial aggregation、ORDER BY、复杂 join、二级索引/ICP 等后移到 V2。
+- DOP2 read-view concurrency、DOP4、性能验证、GROUP BY partial aggregation、ORDER BY、复杂 join、二级索引/ICP 等仍需后续阶段拆分。
 
 ## How To Update
 

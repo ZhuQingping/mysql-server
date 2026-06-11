@@ -1,0 +1,62 @@
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT, pad CHAR(16)) ENGINE=InnoDB;
+INSERT INTO t1 VALUES
+(1,10,'a'),(2,20,'b'),(3,30,'c'),(4,40,'d'),(5,50,'e');
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+EXPLAIN SELECT * FROM t1 FOR UPDATE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Not parallel LOCKING_READ
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`val` AS `val`,`test`.`t1`.`pad` AS `pad` from `test`.`t1`
+EXPLAIN SELECT * FROM t1 LOCK IN SHARE MODE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Not parallel LOCKING_READ
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`val` AS `val`,`test`.`t1`.`pad` AS `pad` from `test`.`t1`
+EXPLAIN SELECT * FROM t1 FOR SHARE;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Not parallel LOCKING_READ
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`val` AS `val`,`test`.`t1`.`pad` AS `pad` from `test`.`t1`
+SET @pq_fallback_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_executed_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed');
+SELECT * FROM t1 FOR UPDATE;
+id	val	pad
+1	10	a
+2	20	b
+3	30	c
+4	40	d
+5	50	e
+SELECT * FROM t1 LOCK IN SHARE MODE;
+id	val	pad
+1	10	a
+2	20	b
+3	30	c
+4	40	d
+5	50	e
+SELECT * FROM t1 FOR SHARE;
+id	val	pad
+1	10	a
+2	20	b
+3	30	c
+4	40	d
+5	50	e
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+AS fallback_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+AS executed_delta;
+fallback_delta	executed_delta
+0	0
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+DROP TABLE t1;
