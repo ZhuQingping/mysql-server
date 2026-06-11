@@ -1,0 +1,89 @@
+# Test: pq_read_threaded_dop2_read_view
+# No-debug DOP=2 threaded row stream must preserve InnoDB RR/RC read-view
+# semantics while concurrent writers commit changes.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,10),(2,20),(3,30),(4,40);
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_default_dop=2;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_query_experimental_threaded_dop=ON;
+
+SET @pq_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_rows_scanned');
+SET @pq_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+
+--connect(writer,localhost,root,,test)
+
+--connection default
+SET SESSION transaction_isolation='REPEATABLE-READ';
+START TRANSACTION;
+SELECT COUNT(*) AS cnt, SUM(val) AS sum_val FROM t1;
+
+--connection writer
+INSERT INTO t1 VALUES (5,50);
+UPDATE t1 SET val=200 WHERE id=2;
+DELETE FROM t1 WHERE id=3;
+COMMIT;
+
+--connection default
+SELECT COUNT(*) AS cnt, SUM(val) AS sum_val FROM t1;
+COMMIT;
+SELECT COUNT(*) AS cnt, SUM(val) AS sum_val FROM t1;
+
+SET SESSION transaction_isolation='READ-COMMITTED';
+START TRANSACTION;
+SELECT COUNT(*) AS cnt, SUM(val) AS sum_val FROM t1;
+
+--connection writer
+INSERT INTO t1 VALUES (6,60);
+COMMIT;
+
+--connection default
+SELECT COUNT(*) AS cnt, SUM(val) AS sum_val FROM t1;
+COMMIT;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+    AS fallback_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+    AS rows_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+    AS workers_delta;
+
+SET SESSION parallel_query_experimental_threaded_dop=OFF;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION transaction_isolation='REPEATABLE-READ';
+
+--disconnect writer
+--connection default
+
+DROP TABLE t1;

@@ -46,6 +46,27 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - 明确 leader-pinned read view 与 worker callback producer 的边界；
 - 不引入 DOP4 或复杂算子。
 
+状态：Completed。
+
+实现：
+
+- 新增 `pq_read_threaded_dop2_read_view`；
+- RR 下事务内第二次 DOP2 聚合读取仍看到旧 snapshot；
+- commit 后新语句看到已提交 insert/update/delete；
+- RC 下同一事务后续语句看到 writer 新提交；
+- status 验证 `executed_delta=5`、`fallback_delta=0`、`rows_delta=21`、`workers_delta=10`。
+
+验证：
+
+```bash
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_read_threaded_dop2_read_view \
+  --parallel=1 --vardir=/tmp/pqv_dop2_rv2 --tmpdir=/tmp/pqt_dop2_rv2
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full9 --tmpdir=/tmp/pqt_full9
+```
+
+结果：完整 `parallel_query` suite 通过，共 38 项。
+
 ## P0-C DOP4 Guard And Correctness
 
 目标：在 DOP2 稳定后评估 DOP4。
@@ -91,4 +112,4 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 建议下一阶段优先考虑 GROUP BY partial aggregation，因为 implicit aggregate row stream 已经闭环，但显式 GROUP BY 仍 fallback。
 
-当前状态：P0-A Completed；下一步进入 P0-B DOP2 Read-view Concurrency。
+当前状态：P0-A/P0-B Completed；下一步进入 P0-C DOP4 Guard And Correctness。
