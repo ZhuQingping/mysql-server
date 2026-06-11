@@ -2,7 +2,7 @@
 
 ## 背景
 
-V2-9E 后，DOP=1/DOP=2 clustered full scan threaded row stream 已在默认 OFF 实验变量保护下闭环。完整 `parallel_query` suite 当前 36 项通过。
+V2-9E 后，DOP=1/DOP=2 clustered full scan threaded row stream 已在默认 OFF 实验变量保护下闭环。后续 P0-C 已把 DOP=4 no-debug experimental gate 纳入同样的默认 OFF 保护。
 
 本文件记录后续收口任务，避免把 DOP4、性能、复杂算子和回归补强混在一个大阶段。
 
@@ -78,7 +78,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - DOP4 worker ERROR / external KILL；
 - 通过后再新增默认 OFF 的 no-debug DOP4 gate。
 
-状态：Debug shadow correctness/hardening completed；no-debug DOP4 gate 尚未打开。
+状态：Completed。
 
 实现：
 
@@ -86,6 +86,9 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - 新增 `pq_read_threaded_dop4_shadow_multirange`，验证 1024 行多 range 聚合完整性；
 - 新增 `pq_read_threaded_dop4_worker_error`，验证 worker ERROR token propagation；
 - 新增 `pq_read_threaded_dop4_external_kill`，验证 4 worker 启动后 external `KILL QUERY` cleanup。
+- 新增默认 OFF 的 `parallel_query_experimental_threaded_dop4`；
+- 新增 `pq_read_threaded_dop4_experimental_var`，验证 no-debug DOP=4 threaded full scan 可显式启用；
+- 新增 `pq_read_threaded_dop4_gate_negative`，验证 DOP4 gate 不会误启 DOP=1/DOP=2。
 
 验证：
 
@@ -97,9 +100,15 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
   --parallel=1 --vardir=/tmp/pqv_dop4_group --tmpdir=/tmp/pqt_dop4_group
 TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
   --vardir=/tmp/pqv_full11 --tmpdir=/tmp/pqt_full11
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_vars pq_read_threaded_dop4_experimental_var \
+  pq_read_threaded_dop4_gate_negative \
+  --parallel=1 --vardir=/tmp/pqv_dop4_gate2 --tmpdir=/tmp/pqt_dop4_gate2
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full12 --tmpdir=/tmp/pqt_full12
 ```
 
-结果：完整 `parallel_query` suite 通过，共 41 项。
+结果：完整 `parallel_query` suite 通过，共 43 项。
 
 ## P0-D Performance Baseline
 
@@ -135,4 +144,4 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 建议下一阶段优先考虑 GROUP BY partial aggregation，因为 implicit aggregate row stream 已经闭环，但显式 GROUP BY 仍 fallback。
 
-当前状态：P0-A/P0-B Completed；P0-C debug shadow correctness/hardening completed；下一步进入 no-debug DOP4 experimental gate 评估。
+当前状态：P0-A/P0-B/P0-C Completed；下一步进入 P0-D performance baseline。

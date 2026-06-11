@@ -1,0 +1,72 @@
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 (id INT PRIMARY KEY, pad CHAR(100)) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,'a');
+INSERT INTO t1 SELECT id + 1, pad FROM t1;
+INSERT INTO t1 SELECT id + 2, pad FROM t1;
+INSERT INTO t1 SELECT id + 4, pad FROM t1;
+INSERT INTO t1 SELECT id + 8, pad FROM t1;
+INSERT INTO t1 SELECT id + 16, pad FROM t1;
+INSERT INTO t1 SELECT id + 32, pad FROM t1;
+INSERT INTO t1 SELECT id + 64, pad FROM t1;
+INSERT INTO t1 SELECT id + 128, pad FROM t1;
+INSERT INTO t1 SELECT id + 256, pad FROM t1;
+INSERT INTO t1 SELECT id + 512, pad FROM t1;
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_query_experimental_threaded_dop4=ON;
+SET @pq_executed_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_rows_scanned');
+SET @pq_workers_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched');
+SET @pq_ranges_built_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_ranges_built');
+SET @pq_ranges_dispatched_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_ranges_dispatched');
+SELECT COUNT(*) AS cnt, SUM(id) AS sum_id, AVG(id) AS avg_id,
+MIN(id) AS min_id, MAX(id) AS max_id
+FROM t1 WHERE pad='a';
+cnt	sum_id	avg_id	min_id	max_id
+1024	524800	512.5000	1	1024
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+AS executed_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+AS fallback_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+AS rows_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+AS workers_delta,
+((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_ranges_built') - @pq_ranges_built_before) >= 4
+AS ranges_built_ge_4,
+((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_ranges_dispatched') -
+@pq_ranges_dispatched_before) >= 4 AS ranges_dispatched_ge_4;
+executed_delta	fallback_delta	rows_delta	workers_delta	ranges_built_ge_4	ranges_dispatched_ge_4
+1	0	1024	4	1	1
+SET SESSION parallel_query_experimental_threaded_dop4=OFF;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+DROP TABLE t1;

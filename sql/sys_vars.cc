@@ -7783,3 +7783,10 @@ static Sys_var_bool Sys_parallel_query_experimental_threaded_dop(
     "Default OFF; intended for controlled testing only",
     SESSION_VAR(parallel_query_experimental_threaded_dop), CMD_LINE(OPT_ARG),
     DEFAULT(false));
+
+static Sys_var_bool Sys_parallel_query_experimental_threaded_dop4(
+    "parallel_query_experimental_threaded_dop4",
+    "Enable experimental Parallel Query DOP=4 threaded full-scan execution. "
+    "Default OFF; intended for controlled testing only",
+    SESSION_VAR(parallel_query_experimental_threaded_dop4), CMD_LINE(OPT_ARG),
+    DEFAULT(false));
