@@ -686,6 +686,17 @@ bool Gather_operator::run_worker_callback_conversion_smoke(
                  worker->m_worker_ctx, worker->m_open_ctx.worker_table->record[0],
                  &converted) != 0;
   }
+  if (!failed && converted && m_exchange != nullptr) {
+    failed = m_exchange->enqueue_record_image_smoke(
+                 0, worker->m_open_ctx.worker_table) != 0;
+  }
+  if (!failed && converted && m_exchange != nullptr) {
+    bool eof = false;
+    bool row = false;
+    failed = m_exchange->materialize_next_record_image(leader_table, &eof,
+                                                       &row) ||
+             !row || eof;
+  }
   if (worker->m_worker_ctx != nullptr && worker->m_open_ctx.worker_handler != nullptr) {
     worker->m_open_ctx.worker_handler->pq_worker_scan_end(worker->m_worker_ctx);
     worker->m_worker_ctx = nullptr;
@@ -700,6 +711,10 @@ bool Gather_operator::run_worker_callback_conversion_smoke(
   if (!failed && converted) {
     pq_global_stats.callback_smoke_rows.fetch_add(1,
                                                   std::memory_order_relaxed);
+    pq_global_stats.exchange_smoke_rows.fetch_add(1,
+                                                  std::memory_order_relaxed);
+    pq_global_stats.exchange_smoke_finishes.fetch_add(
+        1, std::memory_order_relaxed);
   }
   return failed;
 }

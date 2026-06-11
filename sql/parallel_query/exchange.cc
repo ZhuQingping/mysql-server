@@ -443,6 +443,24 @@ bool Exchange_nosort::materialize_next_record_image(TABLE *table, bool *eof,
   return false;
 }
 
+bool Exchange_nosort::enqueue_record_image_smoke(uint32 worker_id,
+                                                 TABLE *source_table) {
+  if (m_mq_handles == nullptr || worker_id >= m_nqueues ||
+      source_table == nullptr || source_table->s == nullptr ||
+      source_table->record[0] == nullptr || source_table->s->reclength == 0 ||
+      source_table->s->blob_fields > 0) {
+    return true;
+  }
+
+  MQueue_handle *handle = get_mq_handle(worker_id);
+  const uint32 record_len = static_cast<uint32>(source_table->s->reclength);
+  if (pq_send_typed_mq_message(handle, MQMessageType::ROW,
+                               source_table->record[0], record_len)) {
+    return true;
+  }
+  return pq_send_typed_mq_message(handle, MQMessageType::FINISH, nullptr, 0);
+}
+
 bool Exchange_nosort::run_synthetic_row_stream_smoke(uint32 *rows_read,
                                                      uint32 *finishes_read) {
   if (rows_read != nullptr) *rows_read = 0;
@@ -508,27 +526,13 @@ bool Exchange_nosort::run_synthetic_row_image_smoke(TABLE *table,
   if (table->s->blob_fields > 0) return false;
 
   const uint32 record_len = static_cast<uint32>(table->s->reclength);
-  char *record_image = new char[record_len];
-  if (record_image == nullptr) return true;
-
   for (uint32 i = 0; i < m_nqueues; ++i) {
     for (uint32 j = 0; j < record_len; ++j) {
-      record_image[j] = static_cast<char>((i + j) & 0xff);
+      table->record[0][j] = static_cast<uchar>((i + j) & 0xff);
     }
 
-    MQueue_handle *handle = get_mq_handle(i);
-    if (pq_send_typed_mq_message(handle, MQMessageType::ROW, record_image,
-                                 record_len)) {
-      delete[] record_image;
-      return true;
-    }
-    if (pq_send_typed_mq_message(handle, MQMessageType::FINISH, nullptr, 0)) {
-      delete[] record_image;
-      return true;
-    }
+    if (enqueue_record_image_smoke(i, table)) return true;
   }
-
-  delete[] record_image;
 
   uint32 local_rows = 0;
   while (!m_all_done) {

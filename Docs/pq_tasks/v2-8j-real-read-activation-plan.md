@@ -53,6 +53,11 @@ whole-range gate 中拆出，不再因为 range planning 产出多个 range 而�
 callback conversion smoke；目标是让 fixed-row InnoDB 表稳定观察到
 `Parallel_callback_smoke_rows >= 1`。
 
+Status: In progress. 已新增 `Exchange_nosort::enqueue_record_image_smoke()`，
+callback conversion 成功后会把 worker record image 发送为 typed ROW，并由
+leader 通过 `materialize_next_record_image()` 消费。该路径仍是 smoke-only，
+不接 `PQTableScanIterator::Read()`。
+
 ### Blocker 4: fatal-after-start 还没有执行路径使用
 
 V2-8I 已有 iterator runtime state，但当前没有调用 `mark_pq_started()` /
@@ -81,6 +86,11 @@ V2-8I 已有 iterator runtime state，但当前没有调用 `mark_pq_started()` 
 - `pq_exchange_rows_dop1` 或新增 `pq_callback_row_image_dop1` 通过；
 - 完整 suite 通过。
 
+Status: Completed for smoke scope. 当前 callback-converted worker record
+image 已发送为 typed MQ ROW，leader 通过
+`Exchange_nosort::materialize_next_record_image()` 消费。该路径仍不接
+`PQTableScanIterator::Read()`。
+
 ### V2-8J-2: Worker Producer Loop Skeleton
 
 目标：
@@ -108,8 +118,8 @@ V2-8I 已有 iterator runtime state，但当前没有调用 `mark_pq_started()` 
 
 ## Acceptance Checklist
 
-- [ ] callback row conversion smoke 能稳定产出 row；
-- [ ] callback row producer smoke 能稳定产出 ROW；
+- [x] callback row conversion smoke 能稳定产出 row；
+- [x] callback row producer smoke 能稳定产出 ROW；
 - [ ] worker producer loop 有 FINISH/ERROR/abort 语义；
 - [ ] `Read()` shadow path 可编译、默认不可达；
 - [ ] DOP=1 real full scan MTR 通过；
@@ -124,13 +134,16 @@ V2-8I 已有 iterator runtime state，但当前没有调用 `mark_pq_started()` 
 
 ## Completion Report
 
-已完成第一段 hard blocker 收敛：
+已完成 V2-8J-1 smoke scope：
 
 - `InnoDB_pq_scan_ctx::smoke_callback_conversion()` 不再复用 pull adapter 的
   whole-range gate；
 - callback conversion smoke 现在只要求 clustered index + active read view；
 - `pq_worker_dop1` 已把 `Parallel_callback_smoke_rows >= 1` 作为硬验收；
-- 仍不发送 MQ ROW，不接真实 `Read()`。
+- 增加 `Exchange_nosort::enqueue_record_image_smoke()`；
+- callback conversion 成功后，worker record image 被发送为 typed MQ ROW；
+- leader 通过 `materialize_next_record_image()` 消费该 row image；
+- 仍不接真实 `Read()`。
 
 验证：
 
@@ -145,5 +158,5 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 Result: passed, 19 tests successful
 ```
 
-下一步继续 V2-8J-1：把 callback-converted row image 送入 typed MQ，并由
-leader `materialize_next_record_image()` 消费。
+下一步进入 V2-8J-2：worker producer loop skeleton，补 FINISH/ERROR/abort
+语义，但仍不返回 row 给 SQL executor。

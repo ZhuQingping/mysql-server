@@ -258,6 +258,18 @@ class Exchange_nosort : public Exchange {
   bool materialize_next_record_image(TABLE *table, bool *eof, bool *row);
 
   /**
+    Enqueue one fixed-size record image for a smoke producer.
+
+    This is a controlled V2-8J helper: it copies the current
+    source_table->record[0] into a typed ROW message for worker_id, followed by
+    a typed FINISH token. It is not a general worker producer API.
+
+    @retval false  ROW and FINISH enqueued
+    @retval true   Invalid input or MQ send failure
+  */
+  bool enqueue_record_image_smoke(uint32 worker_id, TABLE *source_table);
+
+  /**
     Run a controlled synthetic row stream through this exchange.
 
     The helper pre-fills each worker queue with one ROW payload followed by a
