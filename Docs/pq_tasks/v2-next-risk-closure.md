@@ -121,6 +121,25 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - rows/sec、CPU、worker wait、MQ wait；
 - 明确 macOS debug build 结果只作趋势参考，最终需要 release build 或目标环境验证。
 
+状态：Baseline materials completed；release/目标环境采样待执行。
+
+实现：
+
+- 新增 [v2-p0d-performance-baseline.md](v2-p0d-performance-baseline.md)，定义 serial/DOP1/DOP2/DOP4 对比矩阵、采样要求和验收标准；
+- 新增 [pq_perf_baseline.sql](pq_perf_baseline.sql)，可在已启动 mysqld 上创建 1M+ clustered rows 并输出 per-run 与 aggregate 结果；
+- 新增 `pq_perf_baseline_contract` MTR，只验证 serial/DOP1/DOP2/DOP4 的 status counter contract，不做 timing assertion。
+
+验证：
+
+```bash
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_perf_baseline_contract \
+  --parallel=1 --vardir=/tmp/pqv_perf_contract --tmpdir=/tmp/pqt_perf_contract
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full13 --tmpdir=/tmp/pqt_full13
+```
+
+结果：完整 `parallel_query` suite 通过，共 44 项。
+
 ## P1 Regression Expansion
 
 候选项：
