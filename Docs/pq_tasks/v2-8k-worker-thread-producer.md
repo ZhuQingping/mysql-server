@@ -174,7 +174,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_full --t
 
 ## Current Status
 
-- Status: V2-8K-1 Completed
+- Status: V2-8K-2 Completed
 - Owner: Codex Orchestrator
 - Started: 2026-06-11
 - Last updated: 2026-06-11
@@ -218,6 +218,53 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_full --t
 
 后续：
 
-- V2-8K-2：增加 debug-only threaded callback producer path，让 worker thread
-  写 Exchange，leader `Read()` 并发消费；
 - V2-8K-3：补齐 worker ERROR、leader kill/abort、EOF/cleanup 幂等用例。
+
+### V2-8K-2: Threaded Callback Producer Debug Path
+
+已完成：
+
+- 新增 `PQ_worker_task::CALLBACK_LIMITED_PRODUCER`，保持默认 worker
+  lifecycle smoke 为 `NOOP`；
+- worker thread entry 根据 task 调用 InnoDB callback producer，把 ROW 写入
+  当前 `Gather_operator` 的 `Exchange_nosort`；
+- worker thread 成功时发送 FINISH，失败时尝试发送 ERROR，并设置 worker
+  terminal status；
+- 新增 `Gather_operator::run_worker_callback_threaded_producer()`，只由
+  debug-only path 调用；
+- `PQTableScanIterator` 新增独立 debug gate
+  `pq_read_threaded_shadow_path`，与同步 `pq_read_shadow_path` 分离；
+- `Gather_operator::destroy()` 改为走 `PQ_worker_manager::cleanup()`，确保
+  EOF/cleanup 路径会 join worker，再释放 leader context；
+- 新增 MTR `pq_read_threaded_shadow_dop1`，验证 worker thread producer 与
+  leader `Read()` 并发消费完整 8 行。
+
+未打开：
+
+- 默认真实 DOP=1 full scan 仍未启用；
+- DOP>1 range-partition producer 未启用；
+- worker-side WHERE/projection/Item/JOIN clone 未启用；
+- `pq_worker_scan_next()` 继续 disabled。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_read_threaded_shadow_dop1 --parallel=1 --vardir=/tmp/pqv_threaded --tmpdir=/tmp/pqt_threaded
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_worker_dop1 pq_read_shadow_dop1 pq_read_threaded_shadow_dop1 pq_exchange_rows_dop1 --parallel=1 --vardir=/tmp/pqv_threaded_related --tmpdir=/tmp/pqt_threaded_related
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_full --tmpdir=/tmp/pqt_full
+```
+
+结果：
+
+- `mysqld` build 通过；
+- 新增 threaded shadow 用例通过；
+- 相关 shadow/worker/exchange 用例通过；
+- 完整 `parallel_query` suite 21 个测试通过。
+
+后续：
+
+- V2-8K-3：增加 worker ERROR token、leader kill/abort、EOF/cleanup 幂等测试；
+- 之后再评估是否把 debug-only threaded DOP=1 full scan 提升为受系统变量保护的
+  实验执行路径。

@@ -159,6 +159,9 @@ class PQTableScanIterator final : public TableRowIterator {
   /** @return true when the internal debug-only shadow Read path may run. */
   bool should_enter_read_shadow_path(uint requested_dop) const;
 
+  /** @return true when the debug-only threaded shadow Read path may run. */
+  bool should_enter_threaded_read_shadow_path(uint requested_dop) const;
+
   /** @return true while serial fallback is still allowed. */
   bool can_fallback_serial() const {
     return m_runtime_state == Runtime_state::SAFE_FALLBACK;

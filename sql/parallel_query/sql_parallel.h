@@ -115,6 +115,18 @@ PQ_execution_state pq_execution_state_from_uint(uint state);
 /** Set the current statement's PQ execution state on a THD. */
 void pq_set_execution_state(THD *thd, PQ_execution_state state);
 
+/**
+  Worker task selected before a scaffold thread is started.
+
+  NOOP preserves the existing worker lifecycle smoke behavior. Other tasks are
+  debug-gated execution experiments and must be configured by Gather_operator
+  before PQ_worker_manager::start() creates the worker thread.
+*/
+enum class PQ_worker_task : uint {
+  NOOP = 0,
+  CALLBACK_LIMITED_PRODUCER
+};
+
 // ---------------------------------------------------------------------------
 // PQ_stats: resource statistics for parallel query execution
 // ---------------------------------------------------------------------------
@@ -279,6 +291,9 @@ struct PQ_worker_info {
   my_thread_handle m_thread_handle{};  ///< Joinable worker thread handle
   bool m_thread_started{false};        ///< Thread was successfully created
   bool m_thread_joined{false};         ///< Thread has been joined
+  PQ_worker_task m_task{PQ_worker_task::NOOP};  ///< Thread entry task
+  uint32 m_task_max_rows{0};          ///< Task-specific callback row limit
+  std::atomic<uint32> m_task_rows_sent{0};  ///< Rows enqueued by worker task
 
   PQ_worker_info() { reset_open_context(); }
 
@@ -745,6 +760,24 @@ class Gather_operator {
                                             TABLE *leader_table,
                                             uint32 max_rows,
                                             uint32 *rows_sent);
+
+  /**
+    Start a worker-thread callback producer into this gather's Exchange.
+
+    This is the V2-8K-2 debug-only bridge. It configures one worker task and
+    returns immediately after the worker thread has been created. The caller
+    owns subsequent leader-side Exchange consumption through Read().
+
+    @param leader_thd    Leader THD
+    @param leader_table  Leader TABLE for worker open context
+    @param max_rows      Maximum rows to enqueue; UINT32_MAX means natural EOF
+
+    @retval false  Worker thread started
+    @retval true   Failure
+  */
+  bool run_worker_callback_threaded_producer(THD *leader_thd,
+                                             TABLE *leader_table,
+                                             uint32 max_rows);
 
   /**
     Abort all workers and close MQ producers.

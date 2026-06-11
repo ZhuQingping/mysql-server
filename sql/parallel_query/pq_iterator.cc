@@ -37,6 +37,8 @@
 
 #include "sql/parallel_query/pq_iterator.h"
 
+#include <limits>
+
 #include "my_base.h"
 #include "my_dbug.h"
 #include "sql/iterators/basic_row_iterators.h"  // TableScanIterator
@@ -85,7 +87,10 @@ bool PQTableScanIterator::Init() {
   uint actual_dop = 0;
   uint requested_dop = thd()->variables.parallel_default_dop;
   if (requested_dop == 0) requested_dop = 1;
-  const bool read_shadow_path = should_enter_read_shadow_path(requested_dop);
+  const bool threaded_read_shadow_path =
+      should_enter_threaded_read_shadow_path(requested_dop);
+  const bool read_shadow_path =
+      !threaded_read_shadow_path && should_enter_read_shadow_path(requested_dop);
   pq_global_stats.probe_attempts.fetch_add(1, std::memory_order_relaxed);
   int error = table()->file->pq_leader_scan_init(
       thd(), &m_leader_ctx, PQ_leader_scan_mode::PROBE, requested_dop,
@@ -140,7 +145,7 @@ bool PQTableScanIterator::Init() {
     }
     cleanup_pq_resources(false);
 
-    if (!read_shadow_path) {
+    if (!read_shadow_path && !threaded_read_shadow_path) {
       PQ_Leader_context *execute_ctx = nullptr;
       uint execute_dop = 0;
       error = table()->file->pq_leader_scan_init(
@@ -173,7 +178,7 @@ bool PQTableScanIterator::Init() {
     return true;
   }
 
-  if (read_shadow_path && probe_supported) {
+  if ((read_shadow_path || threaded_read_shadow_path) && probe_supported) {
     uint execute_dop = 0;
     error = table()->file->pq_leader_scan_init(
         thd(), &m_leader_ctx, PQ_leader_scan_mode::EXECUTE, 1, &execute_dop,
@@ -192,12 +197,21 @@ bool PQTableScanIterator::Init() {
       return true;
     }
 
-    uint32 rows_produced = 0;
-    if (m_gather->run_worker_callback_limited_producer(thd(), table(), 2,
-                                                       &rows_produced)) {
-      cleanup_pq_resources(true);
-      PrintError(HA_ERR_INTERNAL_ERROR);
-      return true;
+    if (threaded_read_shadow_path) {
+      if (m_gather->run_worker_callback_threaded_producer(
+              thd(), table(), std::numeric_limits<uint32>::max())) {
+        cleanup_pq_resources(true);
+        PrintError(HA_ERR_INTERNAL_ERROR);
+        return true;
+      }
+    } else {
+      uint32 rows_produced = 0;
+      if (m_gather->run_worker_callback_limited_producer(thd(), table(), 2,
+                                                         &rows_produced)) {
+        cleanup_pq_resources(true);
+        PrintError(HA_ERR_INTERNAL_ERROR);
+        return true;
+      }
     }
 
     mark_pq_started();
@@ -243,6 +257,15 @@ bool PQTableScanIterator::should_enter_read_shadow_path(
   bool enabled = false;
   DBUG_EXECUTE_IF("pq_read_shadow_path", enabled = true;);
   return enabled && requested_dop > 0 && table() != nullptr &&
+         table()->s != nullptr && table()->s->blob_fields == 0 &&
+         table()->s->reclength > 0;
+}
+
+bool PQTableScanIterator::should_enter_threaded_read_shadow_path(
+    uint requested_dop) const {
+  bool enabled = false;
+  DBUG_EXECUTE_IF("pq_read_threaded_shadow_path", enabled = true;);
+  return enabled && requested_dop == 1 && table() != nullptr &&
          table()->s != nullptr && table()->s->blob_fields == 0 &&
          table()->s->reclength > 0;
 }
