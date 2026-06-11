@@ -413,6 +413,36 @@ bool Exchange_nosort::read_mq_message(MQMessageType &type, void **datap,
   return result;
 }
 
+bool Exchange_nosort::materialize_next_record_image(TABLE *table, bool *eof,
+                                                    bool *row) {
+  if (eof != nullptr) *eof = false;
+  if (row != nullptr) *row = false;
+  if (table == nullptr || eof == nullptr || row == nullptr) return true;
+
+  while (!m_all_done) {
+    MQMessageType type;
+    void *datap = nullptr;
+    uint32 data_len = 0;
+    const bool got_message = read_mq_message(type, &datap, data_len);
+
+    if (!got_message) {
+      *eof = m_all_done;
+      return false;
+    }
+
+    if (type == MQMessageType::ROW) {
+      if (pq_materialize_record_image(table, datap, data_len)) return true;
+      *row = true;
+      return false;
+    }
+
+    if (type == MQMessageType::ERROR) return true;
+  }
+
+  *eof = true;
+  return false;
+}
+
 bool Exchange_nosort::run_synthetic_row_stream_smoke(uint32 *rows_read,
                                                      uint32 *finishes_read) {
   if (rows_read != nullptr) *rows_read = 0;
@@ -502,23 +532,15 @@ bool Exchange_nosort::run_synthetic_row_image_smoke(TABLE *table,
 
   uint32 local_rows = 0;
   while (!m_all_done) {
-    MQMessageType type;
-    void *datap = nullptr;
-    uint32 data_len = 0;
-    bool got_message = read_mq_message(type, &datap, data_len);
-
-    if (!got_message) {
-      if (m_all_done) break;
-      return true;
-    }
-
-    if (type == MQMessageType::ROW) {
-      if (pq_materialize_record_image(table, datap, data_len)) return true;
+    bool eof = false;
+    bool row = false;
+    if (materialize_next_record_image(table, &eof, &row)) return true;
+    if (row) {
       ++local_rows;
       continue;
     }
-
-    if (type == MQMessageType::ERROR) return true;
+    if (eof) break;
+    return true;
   }
 
   if (rows_read != nullptr) *rows_read = local_rows;

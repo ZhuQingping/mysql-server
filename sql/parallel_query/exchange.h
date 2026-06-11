@@ -240,6 +240,24 @@ class Exchange_nosort : public Exchange {
                         uint32 &data_len) override;
 
   /**
+    Read and materialize one typed row-image message.
+
+    This helper is the future `PQTableScanIterator::Read()` building block. It
+    consumes messages until it either materializes one ROW payload into
+    table->record[0], observes EOF, or sees an error/no-data condition. It does
+    not wait on worker events; production `Read()` must add kill-check and wait
+    policy around it before real row stream activation.
+
+    @param table       TABLE whose record[0] receives the row image
+    @param[out] eof    True when all worker queues finished
+    @param[out] row    True when a row was materialized
+
+    @retval false  Row materialized, EOF observed, or no data currently ready
+    @retval true   ERROR token or malformed row image
+  */
+  bool materialize_next_record_image(TABLE *table, bool *eof, bool *row);
+
+  /**
     Run a controlled synthetic row stream through this exchange.
 
     The helper pre-fills each worker queue with one ROW payload followed by a
