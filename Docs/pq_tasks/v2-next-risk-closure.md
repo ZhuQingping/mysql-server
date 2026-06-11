@@ -78,6 +78,29 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - DOP4 worker ERROR / external KILL；
 - 通过后再新增默认 OFF 的 no-debug DOP4 gate。
 
+状态：Debug shadow correctness/hardening completed；no-debug DOP4 gate 尚未打开。
+
+实现：
+
+- 新增 debug flag `pq_read_threaded_dop4_shadow_path`；
+- 新增 `pq_read_threaded_dop4_shadow_multirange`，验证 1024 行多 range 聚合完整性；
+- 新增 `pq_read_threaded_dop4_worker_error`，验证 worker ERROR token propagation；
+- 新增 `pq_read_threaded_dop4_external_kill`，验证 4 worker 启动后 external `KILL QUERY` cleanup。
+
+验证：
+
+```bash
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_read_threaded_dop4_worker_error \
+  pq_read_threaded_dop4_external_kill \
+  pq_read_threaded_dop4_shadow_multirange \
+  --parallel=1 --vardir=/tmp/pqv_dop4_group --tmpdir=/tmp/pqt_dop4_group
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full11 --tmpdir=/tmp/pqt_full11
+```
+
+结果：完整 `parallel_query` suite 通过，共 41 项。
+
 ## P0-D Performance Baseline
 
 目标：建立可复现性能基线，不作为功能正确性提交混入。
@@ -112,4 +135,4 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 建议下一阶段优先考虑 GROUP BY partial aggregation，因为 implicit aggregate row stream 已经闭环，但显式 GROUP BY 仍 fallback。
 
-当前状态：P0-A/P0-B Completed；下一步进入 P0-C DOP4 Guard And Correctness。
+当前状态：P0-A/P0-B Completed；P0-C debug shadow correctness/hardening completed；下一步进入 no-debug DOP4 experimental gate 评估。

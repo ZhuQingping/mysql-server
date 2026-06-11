@@ -1,0 +1,76 @@
+# Test: pq_read_threaded_dop4_external_kill
+# Debug-only DOP=4 external KILL QUERY after threaded PQ worker start.
+
+--source include/have_debug.inc
+--source include/have_debug_sync.inc
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, pad CHAR(40)) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,'a');
+INSERT INTO t1 SELECT id + 1, pad FROM t1;
+INSERT INTO t1 SELECT id + 2, pad FROM t1;
+INSERT INTO t1 SELECT id + 4, pad FROM t1;
+INSERT INTO t1 SELECT id + 8, pad FROM t1;
+INSERT INTO t1 SELECT id + 16, pad FROM t1;
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=4;
+
+SET @old_debug=@@session.debug;
+SET SESSION debug="d,pq_read_threaded_dop4_shadow_path";
+SET DEBUG_SYNC='pq_read_threaded_worker_started SIGNAL pq_worker_started WAIT_FOR pq_kill_continue TIMEOUT 10';
+
+SET @pq_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+
+--let $target_id= `SELECT CONNECTION_ID()`
+--send SELECT * FROM t1
+
+--connect(killer,localhost,root,,)
+SET DEBUG_SYNC='now WAIT_FOR pq_worker_started TIMEOUT 10';
+--replace_result $target_id TARGET_ID
+--eval KILL QUERY $target_id
+SET DEBUG_SYNC='now SIGNAL pq_kill_continue';
+
+--connection default
+--error ER_QUERY_INTERRUPTED
+--reap
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+    AS fallback_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+    AS workers_delta;
+
+SET DEBUG_SYNC='RESET';
+SET SESSION debug=@old_debug;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+
+--disconnect killer
+--connection default
+
+SELECT COUNT(*) AS serial_count FROM t1;
+
+DROP TABLE t1;

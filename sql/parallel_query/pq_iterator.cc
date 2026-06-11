@@ -280,12 +280,17 @@ bool PQTableScanIterator::should_enter_threaded_read_shadow_path(
   bool dop2_enabled =
       thd() != nullptr &&
       thd()->variables.parallel_query_experimental_threaded_dop;
+  bool debug_dop4 = false;
   DBUG_EXECUTE_IF("pq_read_threaded_shadow_path", dop1_enabled = true;);
   DBUG_EXECUTE_IF("pq_read_threaded_dop2_shadow_path", {
     dop2_enabled = true;
   });
+  DBUG_EXECUTE_IF("pq_read_threaded_dop4_shadow_path", {
+    debug_dop4 = true;
+  });
   return ((dop1_enabled && requested_dop == 1) ||
-          (dop2_enabled && requested_dop == 2)) &&
+          (dop2_enabled && requested_dop == 2) ||
+          (debug_dop4 && requested_dop == 4)) &&
          table() != nullptr &&
          table()->s != nullptr && table()->s->blob_fields == 0 &&
          table()->s->reclength > 0;
