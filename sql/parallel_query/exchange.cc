@@ -472,8 +472,8 @@ bool Exchange_nosort::materialize_next_record_image_status(
   return false;
 }
 
-bool Exchange_nosort::enqueue_record_image_smoke(uint32 worker_id,
-                                                 TABLE *source_table) {
+bool Exchange_nosort::enqueue_record_image(uint32 worker_id,
+                                           TABLE *source_table) {
   if (m_mq_handles == nullptr || worker_id >= m_nqueues ||
       source_table == nullptr || source_table->s == nullptr ||
       source_table->record[0] == nullptr || source_table->s->reclength == 0 ||
@@ -487,7 +487,13 @@ bool Exchange_nosort::enqueue_record_image_smoke(uint32 worker_id,
                                source_table->record[0], record_len)) {
     return true;
   }
-  return pq_send_typed_mq_message(handle, MQMessageType::FINISH, nullptr, 0);
+  return false;
+}
+
+bool Exchange_nosort::enqueue_record_image_smoke(uint32 worker_id,
+                                                 TABLE *source_table) {
+  return enqueue_record_image(worker_id, source_table) ||
+         enqueue_finish_smoke(worker_id);
 }
 
 bool Exchange_nosort::enqueue_finish_smoke(uint32 worker_id) {

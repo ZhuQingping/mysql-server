@@ -163,6 +163,10 @@ WOULD_BLOCK、ERROR 显式拆开。旧 `materialize_next_record_image()` 保持�
 shadow `Read()` 已切到 status helper。真实异步 worker 仍需在 WOULD_BLOCK
 外层补 wait/kill policy。
 
+Status update: 已拆出 `Exchange_nosort::enqueue_record_image()` 作为 ROW-only
+producer helper；旧 `enqueue_record_image_smoke()` 继续包装 ROW+FINISH。后续
+多行 producer 可以连续发送 ROW，最后再发送 FINISH。
+
 ## Acceptance Checklist
 
 - [x] callback row conversion smoke 能稳定产出 row；
@@ -204,6 +208,7 @@ shadow `Read()` 已切到 status helper。真实异步 worker 仍需在 WOULD_BL
 - shadow path 使用 `mark_pq_started()` 锁定 no-fallback 边界，并仅在第一条
   ROW 返回时 `mark_pq_row_returned()` / `EXECUTED` / 真实计数；
 - 增加 Exchange materialize status helper，明确 WOULD_BLOCK 与 EOF 的边界；
+- 拆出 ROW-only record image enqueue helper，保留旧 smoke ROW+FINISH 语义；
 - 新增 `Parallel_worker_producer_smoke_runs` 状态变量；
 - 默认仍不接真实 `Read()`。
 

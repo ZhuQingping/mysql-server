@@ -281,6 +281,17 @@ class Exchange_nosort : public Exchange {
                                             Materialize_status *status);
 
   /**
+    Enqueue one fixed-size record image as a typed ROW message.
+
+    This helper is for controlled producer paths. It does not send FINISH, so
+    callers can enqueue multiple ROW messages before closing the stream.
+
+    @retval false  ROW enqueued
+    @retval true   Invalid input or MQ send failure
+  */
+  bool enqueue_record_image(uint32 worker_id, TABLE *source_table);
+
+  /**
     Enqueue one fixed-size record image for a smoke producer.
 
     This is a controlled V2-8J helper: it copies the current
