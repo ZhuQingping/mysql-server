@@ -1,0 +1,64 @@
+# Test: pq_read_threaded_aggregate
+# Experimental DOP=1 threaded row stream feeding normal MySQL aggregates.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT, score DECIMAL(10,2), pad CHAR(8))
+ENGINE=InnoDB;
+INSERT INTO t1 VALUES
+  (1,10,1.50,'a'),(2,20,2.50,'b'),(3,30,3.50,'c'),
+  (4,40,4.50,'d'),(5,50,5.50,'e'),(6,60,6.50,'f'),
+  (7,70,7.50,'g'),(8,80,8.50,'h'),(9,90,9.50,'i'),
+  (10,100,10.50,'j');
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=1;
+SET SESSION parallel_query_experimental_threaded_dop1=ON;
+
+SET @pq_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_rows_scanned');
+SET @pq_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+
+SELECT COUNT(*), SUM(val), AVG(val), MIN(val), MAX(val) FROM t1;
+SELECT SUM(score), AVG(score), MIN(score), MAX(score) FROM t1;
+SELECT COUNT(*), SUM(val), AVG(val) FROM t1 WHERE val > 50;
+SELECT SUM(val) FROM t1 WHERE val > 1000;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+    AS fallback_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+    AS rows_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+    AS workers_delta;
+
+SET SESSION parallel_query_experimental_threaded_dop1=OFF;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE t1;
