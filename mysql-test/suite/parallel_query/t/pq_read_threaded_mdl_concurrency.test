@@ -1,0 +1,97 @@
+# Test: pq_read_threaded_mdl_concurrency
+# Debug-only DOP=4 threaded PQ SELECT holds MDL while concurrent DDL waits.
+
+--source include/have_debug.inc
+--source include/have_debug_sync.inc
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, pad CHAR(40)) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,'a');
+INSERT INTO t1 SELECT id + 1, pad FROM t1;
+INSERT INTO t1 SELECT id + 2, pad FROM t1;
+INSERT INTO t1 SELECT id + 4, pad FROM t1;
+INSERT INTO t1 SELECT id + 8, pad FROM t1;
+INSERT INTO t1 SELECT id + 16, pad FROM t1;
+INSERT INTO t1 SELECT id + 32, pad FROM t1;
+INSERT INTO t1 SELECT id + 64, pad FROM t1;
+INSERT INTO t1 SELECT id + 128, pad FROM t1;
+INSERT INTO t1 SELECT id + 256, pad FROM t1;
+INSERT INTO t1 SELECT id + 512, pad FROM t1;
+INSERT INTO t1 SELECT id + 1024, pad FROM t1;
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=4;
+
+SET @old_debug=@@session.debug;
+SET SESSION debug="d,pq_read_threaded_dop4_shadow_path";
+SET DEBUG_SYNC='pq_read_threaded_worker_started SIGNAL pq_worker_started WAIT_FOR pq_mdl_continue TIMEOUT 10';
+
+SET @pq_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_rows_scanned');
+SET @pq_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+
+--send SELECT COUNT(*) AS cnt FROM t1 WHERE pad='a'
+
+--connect(ddl,localhost,root,,)
+SET DEBUG_SYNC='now WAIT_FOR pq_worker_started TIMEOUT 10';
+--send ALTER TABLE t1 ADD COLUMN c INT NULL
+
+--connect(observer,localhost,root,,)
+--let $wait_condition= SELECT COUNT(*) = 1 FROM performance_schema.events_waits_current WHERE event_name = 'wait/lock/metadata/sql/mdl' AND object_schema = 'test' AND object_name = 't1'
+--source include/wait_condition.inc
+SELECT 'ddl_waiting' AS mdl_state;
+SET DEBUG_SYNC='now SIGNAL pq_mdl_continue';
+
+--connection default
+--reap
+
+--connection ddl
+--reap
+
+--connection default
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+    AS fallback_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+    AS rows_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+    AS workers_delta;
+
+SET DEBUG_SYNC='RESET';
+SET SESSION debug=@old_debug;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+
+--disconnect observer
+--disconnect ddl
+--connection default
+
+SHOW COLUMNS FROM t1 LIKE 'c';
+SELECT COUNT(*) AS serial_count FROM t1;
+
+DROP TABLE t1;
