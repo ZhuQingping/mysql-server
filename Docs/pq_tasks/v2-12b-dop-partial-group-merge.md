@@ -211,3 +211,41 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - V2-12B-2：正式化 `PARTIAL_GROUP` payload v1 schema；
 - 增加 payload encode/decode smoke、leader in-memory merge smoke、malformed payload counter；
 - 继续不打开 SQL GROUP BY DOP>1 执行路径。
+
+### V2-12B-2 Partial Group Payload V1 Smoke
+
+状态：Completed。
+
+实现：
+
+- 新增正式 `PQ_partial_group_payload_v1` wire struct；
+- 新增 `PQ_PARTIAL_GROUP_PAYLOAD_MAGIC` / `PQ_PARTIAL_GROUP_PAYLOAD_VERSION`；
+- 新增 `PQ_partial_group_agg_kind`，当前 schema 覆盖：
+  - 单 signed integer group key；
+  - 单 aggregate kind；
+  - `count_star` / `count_value`；
+  - `sum` / `min` / `max` typed state；
+- `Exchange_nosort::run_synthetic_partial_group_smoke()` 从临时局部 payload 切到 payload v1；
+- smoke 现在会在 leader 侧按 group key 做 in-memory merge 校验；
+- 不修改 SQL GROUP BY DOP>1 eligibility；
+- 不增长 V2-12B DOP partial execution counters。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_partial_group_smoke pq_groupby_dop_partial_counters pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_partial_payload_v1 \
+  --tmpdir=/tmp/pqt_partial_payload_v1
+```
+
+结果：
+
+- `cmake --build build-ninja --target mysqld -j 16` 通过；
+- targeted payload v1 suite 通过。
+
+下一步：
+
+- 增加 malformed payload smoke 和 payload error counter；
+- 将 payload v1 decode/merge helper 从 smoke 内部进一步抽出，供 worker partial producer 复用。

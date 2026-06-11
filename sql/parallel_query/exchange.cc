@@ -56,6 +56,8 @@ namespace {
 
 static_assert(sizeof(PQ_mq_message_header) == 16,
               "PQ MQ message header must stay wire-stable");
+static_assert(sizeof(PQ_partial_group_payload_v1) == 64,
+              "PQ partial group payload v1 must stay wire-stable");
 
 uint16 pq_mq_type_to_uint(MQMessageType type) {
   return static_cast<uint16>(type);
@@ -622,18 +624,20 @@ bool Exchange_nosort::run_synthetic_partial_group_smoke(
   if (finishes_read != nullptr) *finishes_read = 0;
   if (m_mq_handles == nullptr || m_nqueues == 0) return true;
 
-  struct Partial_group_smoke_payload {
-    uint32 magic;
-    uint32 worker_id;
-    uint32 group_key;
-    uint64 count;
-    int64 sum;
-  };
-
   for (uint32 i = 0; i < m_nqueues; ++i) {
-    const Partial_group_smoke_payload payload = {
-        0x50514750U, i, i % 2, static_cast<uint64>(i + 1),
-        static_cast<int64>((i + 1) * 10)};
+    const int64 sum_value = static_cast<int64>((i + 1) * 10);
+    const PQ_partial_group_payload_v1 payload = {
+        PQ_PARTIAL_GROUP_PAYLOAD_MAGIC,
+        PQ_PARTIAL_GROUP_PAYLOAD_VERSION,
+        static_cast<uint16>(PQ_partial_group_agg_kind::SUM),
+        i,
+        0,
+        static_cast<int64>(i % 2),
+        static_cast<uint64>(i + 1),
+        static_cast<uint64>(i + 1),
+        sum_value,
+        sum_value,
+        sum_value};
     MQueue_handle *handle = get_mq_handle(i);
     if (pq_send_typed_mq_message(handle, MQMessageType::PARTIAL_GROUP,
                                  &payload, sizeof(payload))) {
@@ -645,6 +649,8 @@ bool Exchange_nosort::run_synthetic_partial_group_smoke(
   }
 
   uint32 local_groups = 0;
+  uint64 merged_count_star[2] = {0, 0};
+  int64 merged_sum[2] = {0, 0};
   while (!m_all_done) {
     MQMessageType type;
     void *datap = nullptr;
@@ -653,14 +659,22 @@ bool Exchange_nosort::run_synthetic_partial_group_smoke(
 
     if (got_message) {
       if (type != MQMessageType::PARTIAL_GROUP || datap == nullptr ||
-          data_len != sizeof(Partial_group_smoke_payload)) {
+          data_len != sizeof(PQ_partial_group_payload_v1)) {
         return true;
       }
       const auto *payload =
-          static_cast<const Partial_group_smoke_payload *>(datap);
-      if (payload->magic != 0x50514750U || payload->worker_id >= m_nqueues) {
+          static_cast<const PQ_partial_group_payload_v1 *>(datap);
+      if (payload->magic != PQ_PARTIAL_GROUP_PAYLOAD_MAGIC ||
+          payload->version != PQ_PARTIAL_GROUP_PAYLOAD_VERSION ||
+          payload->agg_kind !=
+              static_cast<uint16>(PQ_partial_group_agg_kind::SUM) ||
+          payload->worker_id >= m_nqueues || payload->group_key < 0 ||
+          payload->group_key > 1 || payload->count_value > payload->count_star) {
         return true;
       }
+      const uint32 group_index = static_cast<uint32>(payload->group_key);
+      merged_count_star[group_index] += payload->count_star;
+      merged_sum[group_index] += payload->sum;
       ++local_groups;
       continue;
     }
@@ -669,6 +683,18 @@ bool Exchange_nosort::run_synthetic_partial_group_smoke(
   }
 
   if (local_groups != m_nqueues) return true;
+  uint64 expected_count_star[2] = {0, 0};
+  int64 expected_sum[2] = {0, 0};
+  for (uint32 i = 0; i < m_nqueues; ++i) {
+    const uint32 group_index = i % 2;
+    expected_count_star[group_index] += static_cast<uint64>(i + 1);
+    expected_sum[group_index] += static_cast<int64>((i + 1) * 10);
+  }
+  if (merged_count_star[0] != expected_count_star[0] ||
+      merged_count_star[1] != expected_count_star[1] ||
+      merged_sum[0] != expected_sum[0] || merged_sum[1] != expected_sum[1]) {
+    return true;
+  }
   if (groups_read != nullptr) *groups_read = local_groups;
   if (finishes_read != nullptr) *finishes_read = m_nqueues;
   return false;

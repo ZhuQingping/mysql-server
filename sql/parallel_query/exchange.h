@@ -80,6 +80,38 @@ struct PQ_mq_message_header {
 constexpr uint32 PQ_MQ_MESSAGE_MAGIC = 0x5051524d;  // "PQRM"
 constexpr uint16 PQ_MQ_MESSAGE_VERSION = 1;
 
+constexpr uint32 PQ_PARTIAL_GROUP_PAYLOAD_MAGIC = 0x50514750;  // "PQGP"
+constexpr uint16 PQ_PARTIAL_GROUP_PAYLOAD_VERSION = 1;
+
+enum class PQ_partial_group_agg_kind : uint16 {
+  COUNT = 1,
+  SUM = 2,
+  MIN = 3,
+  MAX = 4,
+};
+
+/**
+  V1 wire schema for a single integer-key, single-integer-aggregate partial
+  group payload.
+
+  This is intentionally narrower than the final GROUP BY protocol. It gives
+  the DOP partial merge work a versioned payload boundary before any real SQL
+  GROUP BY DOP>1 path is enabled.
+*/
+struct PQ_partial_group_payload_v1 {
+  uint32 magic;
+  uint16 version;
+  uint16 agg_kind;
+  uint32 worker_id;
+  uint32 flags;
+  int64 group_key;
+  uint64 count_star;
+  uint64 count_value;
+  int64 sum;
+  int64 min;
+  int64 max;
+};
+
 /**
   Base class for PQ leader-side record collection.
 
