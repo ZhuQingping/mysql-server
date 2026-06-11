@@ -20,6 +20,7 @@ V2-9E 目标是在 V2-9A/B/C/D 已通过后，新增一个默认 OFF 的实验�
 - `pq_vars` 增加新变量默认值、SET/RESET 和 global 可见性覆盖；
 - 新增 `pq_read_threaded_dop2_experimental_var`，验证 no-debug DOP2 threaded path。
 - 新增 `pq_read_threaded_dop2_aggregate`，验证 no-debug DOP2 row stream 可被上层 MySQL 聚合算子消费。
+- 新增 `pq_read_threaded_dop2_gate_negative`，验证 DOP2 实验变量不会误打开 DOP=1 或 DOP>2。
 
 ## 验证
 
@@ -47,6 +48,16 @@ V2-9E 目标是在 V2-9A/B/C/D 已通过后，新增一个默认 OFF 的实验�
   - `rows_delta=40`
   - `workers_delta=8`
 
+新增 `pq_read_threaded_dop2_gate_negative`：
+
+- `parallel_query_experimental_threaded_dop=ON`
+- 分别设置 `parallel_default_dop=1` 和 `parallel_default_dop=4`
+- 预期：
+  - `executed_delta=0`
+  - `fallback_delta=2`
+  - `rows_delta=0`
+  - `workers_delta=0`
+
 回归组：
 
 ```bash
@@ -69,7 +80,8 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - `mysqld` build 通过；
 - DOP2 gate 相关回归组通过；
 - `pq_read_threaded_dop2_aggregate` 单测通过；
-- 完整 `parallel_query` suite 通过，共 35 项。
+- `pq_read_threaded_dop2_gate_negative` 单测通过；
+- 完整 `parallel_query` suite 通过，共 36 项。
 
 ## 风险
 
