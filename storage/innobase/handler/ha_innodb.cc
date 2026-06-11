@@ -10922,10 +10922,10 @@ class InnoDB_pq_sql_worker_context final : public PQ_Worker_context {
   2. Create InnoDB_pq_leader_ctx and partition metadata.
   3. Return the leader context via the PQ_Leader_context** parameter.
 
-  V2-3: this function is still used as a DOP=1 bridge probe before serial
-  fallback, so it must not create or pin a transaction read view. Real row
-  production must use EXECUTE mode as the no-fallback commit point before
-  workers read.
+  V2-3/V2-8E: PROBE is still used as a DOP=1 bridge probe before serial
+  fallback, so it must not create or pin a transaction read view. EXECUTE is
+  the no-fallback commit point and binds the leader statement read view before
+  workers may read through a Parallel_reader visibility adapter.
 
   Conservative behavior: any unsupported scenario returns
   HA_ERR_UNSUPPORTED, causing fallback to serial execution.
@@ -10961,10 +10961,8 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 
-  /* V2-8C contract: PROBE is allowed to build fallback-safe partition
-  metadata. EXECUTE is the future read-view binding commit point and remains
-  disabled until worker TABLE open and snapshot ownership are proven safe. */
-  if (mode != PQ_leader_scan_mode::PROBE) {
+  if (mode != PQ_leader_scan_mode::PROBE &&
+      mode != PQ_leader_scan_mode::EXECUTE) {
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 
@@ -10990,11 +10988,19 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 
-  /* Do not start the transaction or assign a read view in this bridge probe.
-  The normal serial fallback path owns statement read-view creation, and future
-  real PQ row production must move read-view binding into an execution-only
-  boundary after fallback is no longer possible. */
   auto trx = m_prebuilt->trx;
+
+  if (mode == PQ_leader_scan_mode::EXECUTE) {
+    if (m_prebuilt->select_lock_type != LOCK_NONE) {
+      return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+    }
+
+    trx_start_if_not_started(trx, false, UT_LOCATION_HERE);
+    if (!srv_read_only_mode) {
+      trx_assign_read_view(trx);
+    }
+    m_prebuilt->sql_stat_start = false;
+  }
 
   /* Check thread budget: are enough parallel read threads available? */
   auto available = Parallel_reader::available_threads(requested_dop, false);

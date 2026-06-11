@@ -5,7 +5,7 @@
 ## Current Summary
 
 - Last synced: 2026-06-11
-- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0、V2-1、V2-2、V2-3、V2-4、V2-5、V2-6、V2-7 已提交；V2-8A worker handler/prebuilt contract design 已完成；V2-8B Row Image Protocol 已完成；V2-8C contract/gate 第一段、leader probe/execute mode API、worker open context carrier 生命周期、worker THD/TABLE helper、safe-window open-table smoke 和 handler init/end smoke 已实现；V2-8D 已完成 first-row/read-view 方案选型，真实 DOP=1 full scan 仍未打开。
+- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0、V2-1、V2-2、V2-3、V2-4、V2-5、V2-6、V2-7 已提交；V2-8A worker handler/prebuilt contract design 已完成；V2-8B Row Image Protocol 已完成；V2-8C contract/gate 第一段、leader probe/execute mode API、worker open context carrier 生命周期、worker THD/TABLE helper、safe-window open-table smoke 和 handler init/end smoke 已实现；V2-8D 已完成 first-row/read-view 方案选型；V2-8E EXECUTE commit point primitive 已完成，真实 DOP=1 full scan 仍未打开。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
@@ -56,9 +56,10 @@
   - [v2-8b-row-image-protocol.md](v2-8b-row-image-protocol.md): V2-8B 已完成，定义 typed MQ row message、fixed record image copy 和 synthetic materialization smoke。
   - [v2-8c-dop1-real-fullscan.md](v2-8c-dop1-real-fullscan.md): V2-8C 已完成两个只读确认、contract/gate 第一段、leader probe/execute mode API、worker open context carrier 生命周期、worker THD/TABLE helper 边界、safe-window open-table smoke 和 handler init/end smoke；已落地 worker open context、typed InnoDB worker wrapper、DOP=1/blob/independent TABLE/record gate，真实 row scan 仍未打开。
   - [v2-8d-first-row-read-view-contract.md](v2-8d-first-row-read-view-contract.md): V2-8D 已完成方案选型：首行定位按 `index_first()` 等价协议，真实读取走 `Parallel_reader` visibility adapter 路线，不直连 worker-local `row_search_mvcc()`；`pq_worker_scan_next()` 继续 disabled，直到 EXECUTE commit point 和 pull adapter 完成。
+  - [v2-8e-execute-commit-point.md](v2-8e-execute-commit-point.md): V2-8E 已完成 InnoDB leader `EXECUTE` commit point primitive；`PROBE` 仍 fallback-safe，`EXECUTE` 在 leader 线程绑定 active read view，但当前 SQL iterator 尚不调用 EXECUTE；build 和完整 `parallel_query` suite 通过。
   - [v2-execution-path-roadmap.md](v2-execution-path-roadmap.md): V2 真实执行路径拆分，覆盖 SQL iterator、worker THD、Exchange/Gather row 流、InnoDB 分片扫描、full scan 闭环和基础聚合。
   - [v2-test-matrix.md](v2-test-matrix.md): V1/V2 阶段化 MTR 测试矩阵，明确 DOP=1 first 和 DOP>1 range-partition gate。
-- Next recommended action: 继续 V2-8E EXECUTE commit point + `Parallel_reader` pull adapter 设计与小步实现；在 adapter 完成前，`pq_worker_scan_next()` 继续 disabled。
+- Next recommended action: 继续 `Parallel_reader` pull adapter 设计与小步实现；在 adapter 完成前，`pq_worker_scan_next()` 继续 disabled。
 - Parallel-ready task overview: [parallel_wave2_tasks.md](parallel_wave2_tasks.md)
 - Remaining risk: Phase 8 的 aggregate 当前仍是基础设施和 eligibility 扩展，真实并行聚合执行尚未启用；locking read 的 EXPLAIN annotation 当前仍可能显示 `Parallel query dop=4`，已从 Phase 9 测试中移除，后续需单独修复。
 
@@ -124,6 +125,7 @@ Recommended worktrees:
 | V2-8B - Row Image Protocol | Completed | Codex Orchestrator + Design Explorers | [v2-8b-row-image-protocol.md](v2-8b-row-image-protocol.md) | typed MQ header、fixed record image synthetic materialization 已完成；`mysqld` build 和完整 `parallel_query` suite 通过 |
 | V2-8C - DOP=1 Real Full Scan | Contract/Gate Implemented | Codex Orchestrator + Design Explorers | [v2-8c-dop1-real-fullscan.md](v2-8c-dop1-real-fullscan.md) | Commits `24209d09ce3`, `6638e36def7`, `36b2d9a764c`, `09033e1c2a0`, `9c242c61cc7`, `2dab52a2d9c`, `a79c2109d7a`, `13ce85e4d47`; 已落地 `PQ_Worker_open_context`、typed worker wrapper、leader PROBE/EXECUTE mode API、worker_info carrier、worker THD/TABLE helpers、safe-window open-table smoke、handler init/end smoke、DOP=1/blob/independent record gates；真实 row scan 仍未打开 |
 | V2-8D - First Row / Read View Contract | Design Selected | Codex Orchestrator + Explorer Agents | [v2-8d-first-row-read-view-contract.md](v2-8d-first-row-read-view-contract.md) | 已确认 `index_first()` 等价首行参数为 `PAGE_CUR_G + match_mode 0`；真实读取选择 `Parallel_reader` visibility adapter 路线，避免 worker-local `row_search_mvcc()` 创建独立 read view；真实 row read 继续 disabled，直到 EXECUTE commit point 和 pull adapter 完成 |
+| V2-8E - EXECUTE Commit Point | Completed | Codex Orchestrator | [v2-8e-execute-commit-point.md](v2-8e-execute-commit-point.md) | InnoDB leader `EXECUTE` mode 已能在 leader 线程绑定 active read view；当前 SQL iterator 仍只调用 `PROBE`，不打开真实 row stream；`mysqld` build 和完整 `parallel_query` suite 通过 |
 
 ## Decisions
 
