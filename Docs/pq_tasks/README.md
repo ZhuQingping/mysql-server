@@ -19,6 +19,7 @@
   - V2-8A dispatch: `25f216d9a9d` Dispatch PQ V2-8A contract design
   - V2-8A range findings: `332361020f4` Record PQ V2-8A range dispatch findings
   - V2-8A complete: `8dc30b6a1d2` Complete PQ V2-8A contract design
+  - V2-8B: `db14645bcf4` Add PQ V2-8B row image protocol
   - V2-1: `9a58ff94cdf` Add PQ V2-1 iterator safe fallback
   - V2-0: `a420e8a3f26` Add PQ V2-0 execution state contract
   - Phase 8: `113d2ba44c1` Add PQ phase 8 V1 completion scaffolding
@@ -43,6 +44,7 @@
   - [v2-8-single-table-fullscan-closure.md](v2-8-single-table-fullscan-closure.md): V2-8 当前任务书，准备真实单表 clustered full scan 闭环。
   - [v2-8a-worker-handler-prebuilt-contract.md](v2-8a-worker-handler-prebuilt-contract.md): V2-8A 已完成，确认 worker 独立 TABLE/handler/prebuilt、leader-pinned read view、typed worker wrapper、DOP=1 first gate。
   - [v2-8b-row-image-protocol.md](v2-8b-row-image-protocol.md): V2-8B 已完成，定义 typed MQ row message、fixed record image copy 和 synthetic materialization smoke。
+  - [v2-8c-dop1-real-fullscan.md](v2-8c-dop1-real-fullscan.md): V2-8C 已规划，目标是 DOP=1 single-table real full scan，编码前先做 worker open 和 InnoDB wrapper 两个只读确认。
   - [v2-execution-path-roadmap.md](v2-execution-path-roadmap.md): V2 真实执行路径拆分，覆盖 SQL iterator、worker THD、Exchange/Gather row 流、InnoDB 分片扫描、full scan 闭环和基础聚合。
   - [v2-test-matrix.md](v2-test-matrix.md): V1/V2 阶段化 MTR 测试矩阵，明确 DOP=1 first 和 DOP>1 range-partition gate。
 - Next recommended action: 创建 V2-8C DOP=1 Real Full Scan 任务书，先补 typed `PQ_Worker_context` wrapper、worker open context、probe/execute mode 和 DOP=1/blob gate。
@@ -109,6 +111,7 @@ Recommended worktrees:
 | V2-8 - Single Table Full Scan Closure | In Progress | Codex Orchestrator | [v2-8-single-table-fullscan-closure.md](v2-8-single-table-fullscan-closure.md) | 当前任务拆分：真实 row materialization / `Read()` 接管前的硬 gate |
 | V2-8A - Worker Handler/Prebuilt Contract Design | Completed | Codex Orchestrator + Design Explorers | [v2-8a-worker-handler-prebuilt-contract.md](v2-8a-worker-handler-prebuilt-contract.md) | Commit `8dc30b6a1d2`; 完成 SQL/handler、InnoDB read-view/prebuilt、range dispatch 三项设计收敛；后续先做 V2-8B Row Image Protocol |
 | V2-8B - Row Image Protocol | Completed | Codex Orchestrator + Design Explorers | [v2-8b-row-image-protocol.md](v2-8b-row-image-protocol.md) | typed MQ header、fixed record image synthetic materialization 已完成；`mysqld` build 和完整 `parallel_query` suite 通过 |
+| V2-8C - DOP=1 Real Full Scan | Planned | Codex Orchestrator | [v2-8c-dop1-real-fullscan.md](v2-8c-dop1-real-fullscan.md) | 编码前先完成 worker TABLE/handler open boundary 和 InnoDB typed worker wrapper 两个只读确认 |
 
 ## Decisions
 
