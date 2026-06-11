@@ -33,17 +33,13 @@
   - Define TryCreatePQTableScanIterator helper: guarded factory that
     returns nullptr if any PQ condition is not met, forcing fallback
     to serial TableScanIterator.
-  - Phase 5B does NOT start real worker threads, does NOT call InnoDB
+  - V2-1 does NOT start real worker threads, does NOT call InnoDB
     PQ API for real scanning, and does NOT change default query behavior.
-  - PQTableScanIterator::Init() and Read() are conservative stubs.
-    Init() always returns true (failure) in Phase 5B; however, this stub
-    is never actually invoked because TryCreatePQTableScanIterator always
-    returns nullptr. The safety mechanism is at the factory level: the
-    guarded factory returns nullptr in Phase 5B, so no PQ iterator is ever
-    created, and the serial TableScanIterator path is always taken.
-  - There is no mechanism in CreateIteratorFromAccessPath() to call Init()
-    and fallback on failure — the factory must guarantee that a returned
-    iterator will work. Hence, Phase 5B never returns a PQ iterator.
+  - V2-1 lets ordinary eligible execution return a PQTableScanIterator.
+    Init() falls back to an owned serial TableScanIterator before any worker,
+    InnoDB PQ API, or irreversible handler state is touched.
+  - EXPLAIN still does not create a PQ iterator and therefore never increments
+    execution fallback counters.
 
   Design rationale:
   - PQTableScanIterator inherits TableRowIterator to reuse UnlockRow(),
@@ -53,17 +49,15 @@
        then start workers via Gather_operator.
     2. Read(): pull rows from Exchange_nosort (worker results).
     3. End(): signal workers to stop, join threads, release resources.
-  - Phase 5B skeleton only creates the class shape; it never enters
-    the PQ execution path because Init() returns true (error/fallback).
+  - V2-1 enters the PQ iterator shape but delegates execution to an owned
+    serial TableScanIterator until real worker execution is ready.
 
   Fallback guarantee:
   - TryCreatePQTableScanIterator checks: parallel_query ON, join != nullptr,
     join->pq_eligible == true, table is InnoDB, AccessPath is TABLE_SCAN.
   - If any condition fails, returns nullptr => serial path taken.
-  - In Phase 5B, even if all conditions pass, returns nullptr => serial path
-    taken. There is no mechanism in CreateIteratorFromAccessPath() to call
-    Init() and create a fallback iterator; the factory must guarantee that
-    any returned iterator will work.
+  - In V2-1, ordinary eligible execution returns a PQ iterator. That iterator
+    owns a serial fallback iterator and uses it from Init().
 */
 
 #include "my_alloc.h"            // unique_ptr_destroy_only
@@ -78,11 +72,9 @@ struct MEM_ROOT;
 /**
   Parallel table scan iterator skeleton.
 
-  Phase 5B: conservative stub. Init() returns true (failure), Read()
-  returns -1 (EOF per RowIterator convention). No real worker threads
-  are launched. Note: these stubs are never actually invoked because
-  TryCreatePQTableScanIterator always returns nullptr in Phase 5B,
-  forcing serial TableScanIterator to be used instead.
+  V2-1: ownership and safe fallback scaffold. No real worker threads are
+  launched. Init() switches to an owned serial TableScanIterator before any
+  irreversible PQ state is created.
 
   In production (Phase 6+):
   - Init() will call handler->pq_leader_scan_init() to set up InnoDB
@@ -103,7 +95,7 @@ class PQTableScanIterator final : public TableRowIterator {
     @param expected_rows  Expected row count for record buffer scaling
     @param examined_rows  Pointer to examined_rows counter (may be nullptr)
   */
-  PQTableScanIterator(THD *thd, TABLE *table, JOIN *join,
+  PQTableScanIterator(THD *thd, MEM_ROOT *mem_root, TABLE *table, JOIN *join,
                       double expected_rows, ha_rows *examined_rows);
 
   ~PQTableScanIterator() override;
@@ -111,10 +103,8 @@ class PQTableScanIterator final : public TableRowIterator {
   /**
     Initialize the parallel scan.
 
-    Phase 5B stub: always returns true (failure). Note: this stub is
-    never actually invoked because TryCreatePQTableScanIterator returns
-    nullptr in Phase 5B, so no PQ iterator is ever created. The Init()
-    stub exists purely to satisfy the RowIterator interface contract.
+    V2-1 safe fallback: create and initialize an owned serial TableScanIterator
+    before workers or InnoDB PQ scan are touched.
 
     In production (Phase 6+):
     - Call handler->pq_leader_scan_init() to partition the table.
@@ -134,9 +124,7 @@ class PQTableScanIterator final : public TableRowIterator {
   /**
     Read one row from the parallel scan result channel.
 
-    Phase 5B stub: always returns -1 (EOF per RowIterator convention).
-    Note: this stub is never actually invoked because TryCreate returns
-    nullptr in Phase 5B.
+    V2-1 fallback: delegate to the owned serial TableScanIterator.
 
     In production (Phase 6+):
     - Pull rows from Exchange_nosort (round-robin from worker MQs).
@@ -148,12 +136,19 @@ class PQTableScanIterator final : public TableRowIterator {
     @retval 1    Error
   */
   int Read() override;
+  void UnlockRow() override;
+  void SetNullRowFlag(bool is_null_row) override;
+  void StartPSIBatchMode() override;
+  void EndPSIBatchModeIfStarted() override;
 
  private:
+  MEM_ROOT *m_mem_root;        ///< MEM_ROOT used for owned fallback iterator
   JOIN *m_join;                ///< JOIN context for PQ eligibility
   double m_expected_rows;      ///< Expected rows for buffer scaling
   ha_rows *m_examined_rows;    ///< Examined rows counter
   uchar *m_record;             ///< Record buffer (table->record[0])
+  unique_ptr_destroy_only<RowIterator> m_serial_iterator;  ///< V2-1 fallback
+  bool m_fallback_counted{false};  ///< Count per query iterator, not per Init()
 };
 
 /**
@@ -167,16 +162,8 @@ class PQTableScanIterator final : public TableRowIterator {
   4. table uses InnoDB engine (innodb_hton check)
   5. THD is not a PQ worker (no recursive parallelism)
 
-  Phase 5B: even when all guards pass, this function returns nullptr.
-  This is NOT because Init() fails and the caller falls back — there
-  is no such mechanism in CreateIteratorFromAccessPath(). Rather, the
-  safety guarantee is that TryCreatePQTableScanIterator never returns
-  a PQ iterator in Phase 5B, so the serial path is always taken.
-  Phase 6+ will change this to return a real PQ iterator, but must
-  then implement in-iterator fallback (PQTableScanIterator holds a
-  TableScanIterator member that takes over on Init() failure), because
-  CreateIteratorFromAccessPath() cannot re-create iterators after
-  returning.
+  V2-1: ordinary eligible execution returns a PQTableScanIterator. EXPLAIN
+  still returns nullptr so explain-only paths do not affect execution counters.
 
   If any guard fails, returns nullptr. The caller must then create
   a serial TableScanIterator.
@@ -188,8 +175,8 @@ class PQTableScanIterator final : public TableRowIterator {
   @param expected_rows  Expected row count for record buffer scaling
   @param examined_rows  Pointer to examined_rows counter (may be nullptr)
 
-  @return non-null  PQTableScanIterator created (Phase 6+: when Init() can succeed)
-  @return nullptr   Conditions not met or PQ not ready (Phase 5B: always nullptr)
+  @return non-null  PQTableScanIterator created for ordinary eligible execution
+  @return nullptr   Conditions not met, EXPLAIN, or PQ not ready for that path
 */
 unique_ptr_destroy_only<RowIterator> TryCreatePQTableScanIterator(
     THD *thd, MEM_ROOT *mem_root, TABLE *table, JOIN *join,

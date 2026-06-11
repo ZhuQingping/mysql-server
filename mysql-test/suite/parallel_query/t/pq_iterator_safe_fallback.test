@@ -1,0 +1,92 @@
+# Test: pq_iterator_safe_fallback
+# Verify V2-1 PQ iterator ownership: eligible execution can enter the PQ
+# iterator shape, but Init() safely falls back to an owned serial table scan.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  val INT,
+  name VARCHAR(20)
+) ENGINE=InnoDB;
+
+INSERT INTO t1 VALUES
+  (1,10,'alice'),(2,20,'bob'),(3,30,'carol'),
+  (4,40,'dave'),(5,50,'eve');
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_default_dop=1;
+SET SESSION parallel_cost_threshold=0;
+
+SET @pq_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_rows_scanned');
+SET @pq_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+
+# EXPLAIN is candidate-only and must not count execution fallback.
+EXPLAIN FORMAT=JSON SELECT * FROM t1;
+SET @pq_fallback_after_explain = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SELECT @pq_fallback_after_explain - @pq_fallback_before AS fallback_delta;
+
+# Eligible full scan: PQ iterator Init() falls back to owned serial scan.
+SELECT * FROM t1;
+SET @pq_fallback_after_scan = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SELECT @pq_fallback_after_scan - @pq_fallback_before AS fallback_delta;
+
+# Eligible WHERE full scan: row filtering remains leader/serial-equivalent.
+SELECT * FROM t1 WHERE val > 20;
+SET @pq_fallback_after_where = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SELECT @pq_fallback_after_where - @pq_fallback_before AS fallback_delta;
+
+# Eligible implicit aggregate: still serial fallback, result stable.
+SELECT COUNT(*), SUM(val), MIN(val), MAX(val) FROM t1;
+SET @pq_fallback_after_agg = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SELECT @pq_fallback_after_agg - @pq_fallback_before AS fallback_delta;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+    AS fallback_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+    AS rows_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+    AS workers_delta;
+
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE t1;
