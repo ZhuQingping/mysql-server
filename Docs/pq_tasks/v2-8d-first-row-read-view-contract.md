@@ -59,6 +59,36 @@ row_search_mvcc(record, PAGE_CUR_UNSUPP, prebuilt, 0, ROW_SEL_NEXT);
 - 直接把 worker `prebuilt->trx` 指向 leader `trx_t` 也不安全；InnoDB 代码中存在
   当前线程可处理该 trx 的假设和断言，worker 线程不能随意修改 leader trx state。
 
+## Selected Design
+
+V2-8D 选择方案 B：复用 upstream `Parallel_reader` 的 cursor traversal /
+visibility 语义，避免直接把 worker handler 的 `row_search_mvcc()` 接入真实 row
+read。
+
+理由：
+
+- upstream `Parallel_reader::add_scan(trx, config, callback)` 已把 leader trx 作为
+  covering transaction 传入 `Scan_ctx`；
+- `Scan_ctx::check_visibility()` 只读取 `trx->read_view`，并用
+  `ReadView::changes_visible()` / `row_vers_build_for_consistent_read()` 做可见性
+  判断，不触发 `trx_assign_read_view()`；
+- `row0pread-adapter.cc` 已有可参考路径：`Parallel_reader` 产出 visible `rec`，
+  再用 `row_sel_store_mysql_rec()` 按 `row_prebuilt_t` template 转成 MySQL record；
+- 这比让 worker-local handler 直接调用 `row_search_mvcc()` 更可控，因为后者会
+  触发 worker trx 的 statement read view 分配，也会修改 handler/prebuilt cursor
+  状态。
+
+因此后续 real row read 应拆为：
+
+1. leader 在 EXECUTE commit point 创建并 pin `trx->read_view`；
+2. InnoDB PQ worker 不调用 `row_search_mvcc()`；
+3. InnoDB PQ worker 使用 `Parallel_reader` range/cursor/visibility adapter 获取
+   visible clustered record；
+4. worker 使用自己的 `row_prebuilt_t` template 和 blob heap 调用
+   `row_sel_store_mysql_rec()` 转成 worker-local `record[0]`；
+5. SQL 层按 V2-8B row image protocol copy 到 MQ，leader materialize 到
+   leader `table->record[0]`。
+
 ## Required Design
 
 V2-8D 必须在编码前确定一种安全方案：
@@ -69,14 +99,8 @@ V2-8D 必须在编码前确定一种安全方案：
 4. worker 不共享 leader `row_prebuilt_t` / cursor / mutable handler state；
 5. post-start error 走 fatal/error path，不 transparent serial fallback。
 
-可选方向：
-
-- 方案 A：设计 worker-local trx 绑定 leader-equivalent read view 的生命周期，并证明
-  `row_search_mvcc()` 可安全使用；
-- 方案 B：绕开标准 `row_search_mvcc()` 的 trx/read-view 分配路径，使用受控 cursor
-  和显式 `ReadView*` 可见性检查 adapter。
-
-在方案 A/B 证明前，禁止把 `pq_worker_scan_next()` 接入真实 `Read()`。
+`row_search_mvcc()` 只能保留为 disabled latent adapter，不作为 V2-8D/V2-8E
+真实执行路线。禁止把 `pq_worker_scan_next()` 直接接到该 latent adapter。
 
 ## Implementation Tasks
 
@@ -88,17 +112,29 @@ V2-8D 必须在编码前确定一种安全方案：
 
 ### Task 2: Read View Contract 设计
 
-- 调研 `ReadView` ownership、clone/pin 可行性、RC/RR 语义；
-- 明确 worker-local trx 是否允许引用 leader snapshot；
+- leader `trx->read_view` 必须在 EXECUTE commit point 已 active；
+- worker 只读 leader `ReadView`，不修改 leader `trx_t`；
+- worker-local handler/prebuilt 仅负责 MySQL record conversion，不负责
+  statement snapshot 分配；
+- 禁止 worker-local `trx_assign_read_view()` 出现在 real row read 路径；
 - 明确 cleanup：normal EOF、error、KILL、worker open 后失败。
 
-### Task 3: Execute Commit Point 设计
+### Task 3: Parallel_reader Pull Adapter 设计
+
+- 从 upstream `Parallel_reader::Scan_ctx` 抽出或包裹一个 pull-style cursor；
+- 复用 `check_visibility()` 和 `row_vers_build_for_consistent_read()`；
+- DOP=1 first gate 只处理 whole clustered scan；
+- DOP>1 range end boundary 后续再打开；
+- conversion 使用 worker prebuilt template + per-worker blob heap +
+  `row_sel_store_mysql_rec()`。
+
+### Task 4: Execute Commit Point 设计
 
 - `PQ_leader_scan_mode::EXECUTE` 的 no-fallback boundary；
 - EXECUTE 成功后状态从 candidate/iterator-selected 进入 executed-ready；
 - EXECUTE 失败如何返回错误而不是污染 fallback counter。
 
-### Task 4: 验证计划
+### Task 5: 验证计划
 
 新增或准备 MTR：
 
@@ -141,17 +177,21 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 
 - [x] first-row 定位协议修正为 `index_first()` 等价参数；
 - [x] latent adapter 注释不再宣称 worker 可以直接使用 leader trx；
-- [ ] read-view ownership 方案选型完成；
+- [x] read-view ownership 方案选型完成：选择 `Parallel_reader` visibility adapter
+  路线，不直连 worker `row_search_mvcc()`；
 - [ ] EXECUTE commit point 方案完成；
 - [ ] 并发可见性 MTR 准备完成；
 - [ ] 真实 `pq_worker_scan_next()` 仍保持 disabled，直到上述 gate 完成。
 
 ## Current Status
 
-- Status: In Progress
+- Status: Design Selected
 - Owner: Codex Orchestrator
 - Started: 2026-06-11
 
 ## Completion Report
 
-待 read-view contract 和 execute commit point 设计完成后补充。
+V2-8D 已完成 first-row/read-view 方案选型：后续真实读取不直接调用
+worker-local `row_search_mvcc()`，而是复用/抽出 upstream `Parallel_reader` 的
+range/cursor/visibility 语义，再用 worker prebuilt template 做 MySQL record
+conversion。EXECUTE commit point 和 pull-style adapter 仍需后续小步实现。
