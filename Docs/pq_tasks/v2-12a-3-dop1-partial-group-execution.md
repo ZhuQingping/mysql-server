@@ -259,7 +259,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 ## 当前状态
 
-状态：V2-12A-3.2 Completed。
+状态：V2-12A-3.3 Completed。
 
 已完成：
 
@@ -269,6 +269,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - 新增 `TryCreatePQGroupAggregateIterator()` skeleton；
 - 在 `AccessPath::AGGREGATE` 分支接入 factory；
 - factory 当前不接管 child iterator ownership，严格返回 `nullptr`，原生 `AggregateIterator` 行为保持不变。
+- 新增 in-memory typed GROUP BY state smoke，覆盖 integer group key、`COUNT(*)`、`COUNT(col)`、`SUM`、`MIN`、`MAX` 和 NULL aggregate argument。
 
 验证：
 
@@ -281,11 +282,20 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
   pq_groupby_diagnostics pq_groupby_partial_group_smoke pq_vars \
   --parallel=1 --vardir=/tmp/pqv_groupby_factory \
   --tmpdir=/tmp/pqt_groupby_factory
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_groupby_typed_state_smoke \
+  --parallel=1 --vardir=/tmp/pqv_groupby_typed \
+  --tmpdir=/tmp/pqt_groupby_typed
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_typed_state_smoke pq_groupby_partial_group_smoke pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_groupby_typed \
+  --tmpdir=/tmp/pqt_groupby_typed
 TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
-  --vardir=/tmp/pqv_full_groupby_factory \
-  --tmpdir=/tmp/pqt_full_groupby_factory
+  --vardir=/tmp/pqv_full_groupby_typed \
+  --tmpdir=/tmp/pqt_full_groupby_typed
 ```
+
+结果：完整 `parallel_query` suite 通过，共 52 项。
 
 下一步：
 
-- 进入 V2-12A-3.3 typed state smoke。
+- 进入 V2-12A-3.4 DOP1 SQL result smoke 前，先评估 result-row construction 风险。

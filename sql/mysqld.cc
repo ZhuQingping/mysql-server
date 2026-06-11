@@ -9876,6 +9876,24 @@ static int show_pq_callback_smoke_rows(THD *, SHOW_VAR *var, char *buf) {
   return 0;
 }
 
+static int show_pq_groupby_typed_smoke_groups(THD *, SHOW_VAR *var,
+                                              char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.groupby_typed_smoke_groups.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_groupby_typed_smoke_sum(THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.groupby_typed_smoke_sum.load(std::memory_order_relaxed));
+  return 0;
+}
+
 static int show_deprecated_use_i_s_processlist_last_timestamp(THD *,
                                                               SHOW_VAR *var,
                                                               char *buf) {
@@ -10276,6 +10294,11 @@ SHOW_VAR status_vars[] = {
     {"Parallel_exchange_partial_group_smoke_rows",
      (char *)&show_pq_exchange_partial_group_smoke_rows, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
+    {"Parallel_groupby_typed_smoke_groups",
+     (char *)&show_pq_groupby_typed_smoke_groups, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_groupby_typed_smoke_sum",
+     (char *)&show_pq_groupby_typed_smoke_sum, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_probe_attempts", (char *)&show_pq_probe_attempts, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_probe_success", (char *)&show_pq_probe_success, SHOW_FUNC,

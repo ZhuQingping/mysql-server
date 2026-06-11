@@ -26,6 +26,62 @@
 #include "sql/sql_class.h"                   // THD
 #include "sql/sql_optimizer.h"               // JOIN
 
+namespace {
+
+struct PQ_integer_group_state {
+  int64 key{0};
+  uint64 count_star{0};
+  uint64 count_value{0};
+  int64 sum{0};
+  int64 min{0};
+  int64 max{0};
+  bool has_value{false};
+};
+
+bool pq_accumulate_integer_group(PQ_integer_group_state *groups,
+                                 uint32 *group_count, int64 key, int64 value,
+                                 bool value_is_null) {
+  PQ_integer_group_state *state = nullptr;
+  for (uint32 i = 0; i < *group_count; ++i) {
+    if (groups[i].key == key) {
+      state = &groups[i];
+      break;
+    }
+  }
+
+  if (state == nullptr) {
+    if (*group_count >= 4) return true;
+    state = &groups[*group_count];
+    state->key = key;
+    ++(*group_count);
+  }
+
+  ++state->count_star;
+  if (value_is_null) return false;
+
+  ++state->count_value;
+  state->sum += value;
+  if (!state->has_value) {
+    state->min = value;
+    state->max = value;
+    state->has_value = true;
+  } else {
+    if (value < state->min) state->min = value;
+    if (value > state->max) state->max = value;
+  }
+  return false;
+}
+
+const PQ_integer_group_state *pq_find_group(const PQ_integer_group_state *groups,
+                                            uint32 group_count, int64 key) {
+  for (uint32 i = 0; i < group_count; ++i) {
+    if (groups[i].key == key) return &groups[i];
+  }
+  return nullptr;
+}
+
+}  // namespace
+
 unique_ptr_destroy_only<RowIterator> TryCreatePQGroupAggregateIterator(
     THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *aggregate_path) {
   (void)mem_root;
@@ -56,4 +112,44 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQGroupAggregateIterator(
     result-row construction, and child iterator ownership are implemented.
   */
   return nullptr;
+}
+
+bool RunPQGroupAggregateTypedStateSmoke(uint32 *groups_built,
+                                        uint64 *sum_total) {
+  if (groups_built == nullptr || sum_total == nullptr) return true;
+
+  PQ_integer_group_state groups[4];
+  uint32 group_count = 0;
+
+  if (pq_accumulate_integer_group(groups, &group_count, 1, 10, false) ||
+      pq_accumulate_integer_group(groups, &group_count, 1, 20, false) ||
+      pq_accumulate_integer_group(groups, &group_count, 2, 0, true) ||
+      pq_accumulate_integer_group(groups, &group_count, 2, 5, false) ||
+      pq_accumulate_integer_group(groups, &group_count, 3, 7, false)) {
+    return true;
+  }
+
+  const PQ_integer_group_state *g1 = pq_find_group(groups, group_count, 1);
+  const PQ_integer_group_state *g2 = pq_find_group(groups, group_count, 2);
+  const PQ_integer_group_state *g3 = pq_find_group(groups, group_count, 3);
+  if (g1 == nullptr || g2 == nullptr || g3 == nullptr || group_count != 3) {
+    return true;
+  }
+
+  if (g1->count_star != 2 || g1->count_value != 2 || g1->sum != 30 ||
+      g1->min != 10 || g1->max != 20) {
+    return true;
+  }
+  if (g2->count_star != 2 || g2->count_value != 1 || g2->sum != 5 ||
+      g2->min != 5 || g2->max != 5) {
+    return true;
+  }
+  if (g3->count_star != 1 || g3->count_value != 1 || g3->sum != 7 ||
+      g3->min != 7 || g3->max != 7) {
+    return true;
+  }
+
+  *groups_built = group_count;
+  *sum_total = static_cast<uint64>(g1->sum + g2->sum + g3->sum);
+  return false;
 }

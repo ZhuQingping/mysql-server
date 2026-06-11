@@ -45,6 +45,7 @@
 #include "sql/iterators/basic_row_iterators.h"  // TableScanIterator
 #include "sql/iterators/timing_iterator.h"     // NewIterator
 #include "sql/mysqld.h"       // innodb_hton
+#include "sql/parallel_query/pq_group_aggregate_iterator.h"
 #include "sql/parallel_query/sql_parallel.h"  // pq_global_stats
 #include "sql/sql_class.h"    // THD::variables, THD::pq_is_worker
 #include "sql/sql_lex.h"      // LEX::is_explain
@@ -130,6 +131,18 @@ bool PQTableScanIterator::Init() {
       PrintError(HA_ERR_OUT_OF_MEM);
       return true;
     }
+    uint32 typed_group_smoke_groups = 0;
+    uint64 typed_group_smoke_sum = 0;
+    if (RunPQGroupAggregateTypedStateSmoke(&typed_group_smoke_groups,
+                                           &typed_group_smoke_sum)) {
+      cleanup_pq_resources(true);
+      PrintError(HA_ERR_OUT_OF_MEM);
+      return true;
+    }
+    pq_global_stats.groupby_typed_smoke_groups.fetch_add(
+        typed_group_smoke_groups, std::memory_order_relaxed);
+    pq_global_stats.groupby_typed_smoke_sum.fetch_add(
+        typed_group_smoke_sum, std::memory_order_relaxed);
     Gather_operator producer_smoke(1);
     if (producer_smoke.init() ||
         producer_smoke.run_worker_producer_loop_smoke(thd(), table())) {

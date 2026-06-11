@@ -23,7 +23,8 @@
 #ifndef PQ_GROUP_AGGREGATE_ITERATOR_INCLUDED
 #define PQ_GROUP_AGGREGATE_ITERATOR_INCLUDED
 
-#include "my_alloc.h"  // unique_ptr_destroy_only
+#include "my_alloc.h"     // unique_ptr_destroy_only
+#include "my_inttypes.h"  // uint32, uint64
 
 class JOIN;
 class RowIterator;
@@ -40,5 +41,8 @@ struct MEM_ROOT;
 */
 unique_ptr_destroy_only<RowIterator> TryCreatePQGroupAggregateIterator(
     THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *aggregate_path);
+
+bool RunPQGroupAggregateTypedStateSmoke(uint32 *groups_built,
+                                        uint64 *sum_total);
 
 #endif  // PQ_GROUP_AGGREGATE_ITERATOR_INCLUDED
