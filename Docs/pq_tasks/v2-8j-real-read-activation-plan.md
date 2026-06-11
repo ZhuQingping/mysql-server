@@ -194,6 +194,18 @@ unsupported。已先移除失败测试，并新增 PROBE unsupported 细分诊�
 和 `Parallel_probe_init_unsupported`，用于后续判断真实 DOP=1 blocker 是基础
 gate、线程预算还是 range init。
 
+Status update: 已修复首次 PQ iterator Init 的 PROBE gate。根因是
+`pq_leader_scan_init()` 在 `TableScanIterator::Init()` / `rnd_init()` 之前调用，
+此时 `m_prebuilt->index` 可能尚未设置；现在当 `m_prebuilt->index == nullptr`
+时回退到 InnoDB dict table 的 first clustered index。临时诊断确认 DOP=1/2/4
+首次 PROBE 均成功，`probe_gate_unsupported` 不再增加。
+
+Status update: 已新增 debug-only `pq_read_shadow_dop1` MTR。该测试通过
+`pq_read_shadow_path` 打开 shadow `Read()`，验证 first-row path 会计入
+`Parallel_queries_executed=1`、`Parallel_rows_scanned=1`，且
+`Parallel_queries_fallback` 不增加。当前仍只验证 first row，不代表完整
+full scan 已打开。
+
 ## Acceptance Checklist
 
 - [x] callback row conversion smoke 能稳定产出 row；
@@ -205,6 +217,8 @@ gate、线程预算还是 range init。
 - [x] callback multi-row producer smoke 接入 SQL worker loop / Exchange sink；
 - [x] `Read()` wait/kill policy 边界已实现；
 - [x] PROBE unsupported 细分诊断已实现；
+- [x] 首次 PQ iterator Init 的 clustered index PROBE gate 已修复；
+- [x] debug-only shadow `Read()` first-row MTR 通过；
 - [ ] DOP=1 real full scan MTR 通过；
 - [ ] full `parallel_query` suite 通过；
 - [ ] fatal-after-start 不 fallback。
@@ -248,6 +262,10 @@ gate、线程预算还是 range init。
   wait/kill loop，明确 WOULD_BLOCK 不等于内部错误；
 - 增加 PROBE unsupported 细分诊断状态变量，便于定位 shadow / real gate
   未进入的具体原因；
+- 修复 InnoDB PROBE 在 `rnd_init()` 前 `m_prebuilt->index` 未设置导致的
+  first-query gate unsupported；
+- 新增 `pq_read_shadow_dop1`，覆盖 debug-only shadow `Read()` first-row
+  no-fallback 计数；
 - 新增 `Parallel_worker_producer_smoke_runs` 状态变量；
 - 默认仍不接真实 `Read()`。
 
@@ -260,10 +278,10 @@ Result: passed
 TMPDIR=/tmp ./mtr --suite=parallel_query pq_worker_dop1 --parallel=1 --vardir=/tmp/pqv --tmpdir=/tmp/pqt
 Result: passed
 
-TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir=/tmp/pqt
-Result: passed, 19 tests successful
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_full --tmpdir=/tmp/pqt_full
+Result: passed, 20 tests successful
 ```
 
-下一步继续 V2-8J-4：用 PROBE 细分诊断定位 shadow gate 的 unsupported 原因，
-再决定是否把 limited producer 从 smoke-only 推进到 shadow `Read()` producer；
-真实 DOP=1 full scan 仍未打开。
+下一步继续 V2-8J-4：把 limited producer 从 smoke-only 推进到 shadow
+`Read()` producer，先在 debug gate 下验证多行/EOF，再评估真实 DOP=1 full
+scan gate；真实 DOP=1 full scan 仍未打开。

@@ -1,0 +1,78 @@
+# Test: pq_read_shadow_dop1
+# Debug-only smoke for the shadow PQ Read() path.
+
+--source include/have_debug.inc
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, pad CHAR(100)) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,'a');
+INSERT INTO t1 SELECT id + 1, pad FROM t1;
+INSERT INTO t1 SELECT id + 2, pad FROM t1;
+INSERT INTO t1 SELECT id + 4, pad FROM t1;
+INSERT INTO t1 SELECT id + 8, pad FROM t1;
+INSERT INTO t1 SELECT id + 16, pad FROM t1;
+INSERT INTO t1 SELECT id + 32, pad FROM t1;
+INSERT INTO t1 SELECT id + 64, pad FROM t1;
+INSERT INTO t1 SELECT id + 128, pad FROM t1;
+INSERT INTO t1 SELECT id + 256, pad FROM t1;
+INSERT INTO t1 SELECT id + 512, pad FROM t1;
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=4;
+
+SET @old_debug=@@session.debug;
+SET SESSION debug="d,pq_read_shadow_path";
+
+SET @pq_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_rows_scanned');
+SET @pq_probe_success_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_probe_success');
+SET @pq_probe_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_probe_unsupported');
+
+--disable_result_log
+SELECT * FROM t1;
+--enable_result_log
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+    AS fallback_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+    AS rows_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_probe_success') - @pq_probe_success_before
+    AS probe_success_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_probe_unsupported') -
+      @pq_probe_unsupported_before AS probe_unsupported_delta;
+
+SET SESSION debug=@old_debug;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE t1;

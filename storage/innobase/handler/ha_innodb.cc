@@ -10993,13 +10993,21 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 
-  /* Validate prebuilt: must be on clustered index. */
-  if (m_prebuilt == nullptr || m_prebuilt->index == nullptr) {
+  /* Validate prebuilt and choose the clustered scan index. The SQL PQ
+  iterator probes before TableScanIterator::Init() calls rnd_init(), so
+  m_prebuilt->index may still be unset on the first eligible execution. */
+  if (m_prebuilt == nullptr || m_prebuilt->table == nullptr ||
+      m_prebuilt->trx == nullptr) {
     record_probe_gate_unsupported();
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 
-  auto index = m_prebuilt->index;
+  auto index = m_prebuilt->index != nullptr ? m_prebuilt->index
+                                            : m_prebuilt->table->first_index();
+  if (index == nullptr) {
+    record_probe_gate_unsupported();
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
 
   /* Only support clustered index full scan in V1-MVP. */
   if (!index->is_clustered()) {
