@@ -170,6 +170,19 @@ class InnoDB_pq_scan_ctx {
                              const Parallel_reader::Ctx *reader_ctx,
                              mem_heap_t *blob_heap) const;
 
+  /** Run a synchronous callback conversion smoke.
+
+  This uses Parallel_reader in synchronous mode and converts at most one visible
+  clustered record. It is an internal primitive for future safe-window smoke;
+  it is not connected to SQL iterator Read().
+
+  @param[out] mysql_rec  MySQL row buffer.
+  @param[in]  prebuilt   Worker row_prebuilt_t for conversion.
+  @param[out] converted  True if a row was converted.
+  @return DB_SUCCESS or error code. */
+  dberr_t smoke_callback_conversion(byte *mysql_rec, row_prebuilt_t *prebuilt,
+                                    bool *converted) const;
+
   /** Mutable access to ranges for dispatch. */
   std::vector<InnoDB_pq_range> &mutable_ranges() { return m_ranges; }
 

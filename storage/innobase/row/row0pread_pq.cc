@@ -194,6 +194,49 @@ bool InnoDB_pq_scan_ctx::store_callback_record(
                             reader_ctx->offsets(), blob_heap);
 }
 
+dberr_t InnoDB_pq_scan_ctx::smoke_callback_conversion(
+    byte *mysql_rec, row_prebuilt_t *prebuilt, bool *converted) const {
+  if (converted != nullptr) {
+    *converted = false;
+  }
+  if (mysql_rec == nullptr || prebuilt == nullptr || converted == nullptr) {
+    return DB_UNSUPPORTED;
+  }
+
+  auto err = validate_pull_adapter_gate();
+  if (err != DB_SUCCESS) {
+    return err;
+  }
+
+  Parallel_reader reader(0);
+  Parallel_reader::Config config(Parallel_reader::Scan_range{}, m_index);
+
+  bool saw_row = false;
+  err = reader.add_scan(const_cast<trx_t *>(m_trx), config,
+                        [&](const Parallel_reader::Ctx *reader_ctx) {
+                          if (!store_callback_record(mysql_rec, prebuilt,
+                                                     reader_ctx, nullptr)) {
+                            return DB_ERROR;
+                          }
+                          saw_row = true;
+                          return DB_INTERRUPTED;
+                        });
+  if (err != DB_SUCCESS) {
+    return err;
+  }
+
+  err = reader.run(0);
+  if (saw_row && err == DB_INTERRUPTED) {
+    *converted = true;
+    return DB_SUCCESS;
+  }
+
+  if (err == DB_SUCCESS) {
+    *converted = saw_row;
+  }
+  return err;
+}
+
 dberr_t InnoDB_pq_scan_ctx::partition(size_t split_level) {
   m_ranges.clear();
 

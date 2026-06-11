@@ -88,6 +88,12 @@ Status: Callback record conversion helper implemented.
 `store_mysql_record()`. It does not advance cursors and is not called from the
 SQL iterator.
 
+Status: Synchronous callback smoke primitive implemented.
+`InnoDB_pq_scan_ctx::smoke_callback_conversion()` uses `Parallel_reader(0)` and
+`run(0)` to convert at most one visible clustered record in the current thread.
+It requires the active read-view / whole-range gate and is not connected to
+SQL iterator `Read()`.
+
 ### Step 3: Conversion Smoke
 
 - 用 worker prebuilt template 和 `row_sel_store_mysql_rec()` 转换一行；
@@ -136,12 +142,13 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 - [x] callback row accessor 第一段完成；
 - [x] record conversion helper 第一段完成；
 - [x] callback record conversion helper 第一段完成；
+- [x] synchronous callback conversion smoke primitive 完成；
 - [ ] `pq_worker_scan_next()` 仍 disabled；
 - [x] build 和完整 `parallel_query` suite 通过。
 
 ## Current Status
 
-- Status: Callback record conversion helper completed
+- Status: Callback conversion smoke primitive completed
 - Owner: Codex Orchestrator
 - Started: 2026-06-11
 
@@ -155,6 +162,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 - `Parallel_reader::Ctx::record()` / `offsets()` accessors；
 - `InnoDB_pq_scan_ctx::store_mysql_record()`；
 - `InnoDB_pq_scan_ctx::store_callback_record()`；
+- `InnoDB_pq_scan_ctx::smoke_callback_conversion()`；
 - 不读取 row，不接 `pq_worker_scan_next()`，不改变执行状态。
 
 验证：
