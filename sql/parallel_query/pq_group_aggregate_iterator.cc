@@ -77,7 +77,29 @@ bool pq_groupby_dop1_temp_shape_supported(JOIN *join,
     return false;
   }
 
-  return sum->sum_func() == Item_sum::COUNT_FUNC && !sum->has_with_distinct();
+  if (sum->has_with_distinct()) {
+    return false;
+  }
+
+  switch (sum->sum_func()) {
+    case Item_sum::COUNT_FUNC:
+      return true;
+    case Item_sum::SUM_FUNC:
+    case Item_sum::MIN_FUNC:
+    case Item_sum::MAX_FUNC: {
+      if (sum->argument_count() != 1 || sum->arguments() == nullptr ||
+          sum->arguments()[0] == nullptr ||
+          sum->arguments()[0]->type() != Item::FIELD_ITEM) {
+        return false;
+      }
+      const Item_field *field_item =
+          down_cast<const Item_field *>(sum->arguments()[0]);
+      return field_item->field != nullptr &&
+             pq_is_integer_field_type(field_item->field->type());
+    }
+    default:
+      return false;
+  }
 }
 
 struct PQ_integer_group_state {

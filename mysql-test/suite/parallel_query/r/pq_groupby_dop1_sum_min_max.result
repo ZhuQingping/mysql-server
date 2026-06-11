@@ -1,0 +1,69 @@
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+grp INT NOT NULL,
+val INT NULL
+) ENGINE=InnoDB;
+INSERT INTO t1 VALUES
+(1,10,5),(2,10,7),(3,10,NULL),
+(4,20,2),(5,20,9),(6,30,NULL);
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=1;
+SET SESSION parallel_query_experimental_groupby_dop1=ON;
+SET @pq_groupby_selected_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_dop1_factory_selected');
+SET @pq_groupby_temp_executed_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_dop1_temp_table_executed');
+SET @pq_groupby_fallback_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_dop1_factory_fallback');
+SET @pq_groupby_shape_supported_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_temp_shape_supported');
+SELECT grp, COUNT(*) AS cnt FROM t1 GROUP BY grp;
+grp	cnt
+10	3
+20	2
+30	1
+SELECT grp, SUM(val) AS sum_val FROM t1 GROUP BY grp;
+grp	sum_val
+10	12
+20	11
+30	NULL
+SELECT grp, MIN(val) AS min_val FROM t1 GROUP BY grp;
+grp	min_val
+10	5
+20	2
+30	NULL
+SELECT grp, MAX(val) AS max_val FROM t1 GROUP BY grp;
+grp	max_val
+10	7
+20	9
+30	NULL
+SELECT
+((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_dop1_factory_selected') -
+@pq_groupby_selected_before) >= 4 AS selected_delta_ok,
+((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_dop1_temp_table_executed') -
+@pq_groupby_temp_executed_before) >= 4 AS temp_executed_delta_ok,
+((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_dop1_factory_fallback') -
+@pq_groupby_fallback_before) AS fallback_delta,
+((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_temp_shape_supported') -
+@pq_groupby_shape_supported_before) >= 4 AS shape_supported_delta_ok;
+selected_delta_ok	temp_executed_delta_ok	fallback_delta	shape_supported_delta_ok
+1	1	0	1
+SET SESSION parallel_query_experimental_groupby_dop1=OFF;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+DROP TABLE t1;

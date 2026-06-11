@@ -660,3 +660,48 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 - 扩展正向 MTR：COUNT/SUM/MIN/MAX、NULL、更多 group 数；
 - 再把 leader-local temp-table 聚合内部替换为 PQ partial state merge。
+
+### V2-12A-3.7 SUM/MIN/MAX Coverage
+
+状态：Completed。
+
+目标：
+
+- 将 supported temp-table shape 从单 `COUNT` 放宽到单个整数聚合：
+  - `COUNT`
+  - `SUM(int_col)`
+  - `MIN(int_col)`
+  - `MAX(int_col)`
+- 继续拒绝 DISTINCT aggregate、表达式参数、非整数参数和多 aggregate；
+- 新增正向 MTR 覆盖 NULL 输入和多个 group。
+
+实现：
+
+- `pq_groupby_dop1_temp_shape_supported()` 支持 `Item_sum::SUM_FUNC`、`MIN_FUNC`、`MAX_FUNC`；
+- SUM/MIN/MAX 要求唯一参数是 `Item_field` 且字段类型为整数；
+- 新增 `pq_groupby_dop1_sum_min_max`，验证 selected、temp-table executed、fallback delta 和 shape supported counters。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_dop1_sum_min_max pq_groupby_dop1_factory_observable \
+  pq_stats pq_groupby_diagnostics \
+  --parallel=1 --vardir=/tmp/pqv_groupby_smm \
+  --tmpdir=/tmp/pqt_groupby_smm
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full_groupby_smm \
+  --tmpdir=/tmp/pqt_full_groupby_smm
+```
+
+结果：
+
+- `cmake --build build-ninja --target mysqld -j 16` 通过；
+- targeted suite 通过；
+- 完整 `parallel_query` suite 通过，共 56 项。
+
+下一步：
+
+- 增加负向 MTR：DOP=2、HAVING、ORDER BY、DISTINCT、表达式 group key、表达式 aggregate argument、非整数/BLOB/TEXT；
+- 再推进 PQ partial state merge。
