@@ -31,7 +31,7 @@
 | V2-11A prepare state | MTR | Completed | `pq_read_threaded_prepare_state.test/result` |
 | V2-11B row image datatypes | MTR | Completed | `pq_read_threaded_row_image_datatypes.test/result` |
 | V2-11C limit/counter boundary | MTR | Completed | `pq_read_threaded_limit_counters.test/result` |
-| V2-11D concurrency hardening | MTR | Pending | large kill / MDL minimal tests |
+| V2-11D concurrency hardening | MTR | Large kill Completed; MDL pending | `pq_read_threaded_large_kill.test/result` |
 | V2-11E experimental vars noop | MTR | Pending | vars OFF/ON counter isolation |
 
 ## 验收标准
@@ -49,13 +49,14 @@
 
 ## 当前状态
 
-状态：V2-11A/B/C Completed。
+状态：V2-11A/B/C Completed；V2-11D large kill Completed。
 
 已完成：
 
 - V2-11A prepare state；
 - V2-11B row image datatypes；
 - V2-11C limit/counter boundary。
+- V2-11D large scan external KILL hardening。
 
 验证：
 
@@ -71,6 +72,11 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
   --vardir=/tmp/pqv_full14 --tmpdir=/tmp/pqt_full14
 TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
   --vardir=/tmp/pqv_full15 --tmpdir=/tmp/pqt_full15
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_read_threaded_large_kill \
+  --parallel=1 --vardir=/tmp/pqv_large_kill \
+  --tmpdir=/tmp/pqt_large_kill
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full21 --tmpdir=/tmp/pqt_full21
 ```
 
 V2-11A/B 结果：完整 `parallel_query` suite 通过，共 46 项。
@@ -81,7 +87,13 @@ V2-11C 说明：
 - `rows_delta=7`，记录 leader early-stop accounting，即 OFFSET + LIMIT。
 - V2-11C 后完整 `parallel_query` suite 通过，共 47 项。
 
+V2-11D large kill 说明：
+
+- DOP=4 debug threaded shadow path 在 2048 行表上启动 worker 后接受外部 `KILL QUERY`；
+- 预期查询返回 `ER_QUERY_INTERRUPTED`，不计入 `Parallel_queries_executed`，不触发 serial fallback；
+- 验证 worker launch delta 为 4，随后串行 `COUNT(*)` 仍返回 2048。
+
 下一步：
 
-- 继续 V2-11D concurrency hardening；
-- 启动 V2-12A GROUP BY partial aggregation design。
+- 继续 V2-11D MDL minimal concurrency 或 V2-11E experimental vars noop；
+- 继续评估 V2-12A-3 DOP1 Partial Group Execution。
