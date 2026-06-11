@@ -5,11 +5,12 @@
 ## Current Summary
 
 - Last synced: 2026-06-11
-- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0、V2-1、V2-2 已提交；V2-3 Read View / Trx Contract 已完成验证，等待提交。
+- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0、V2-1、V2-2、V2-3 已提交；V2-4 range planning export 已完成验证，range observable/MTR 仍待补齐。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
   - V2-2: `a123cdabe7c` Add PQ V2-2 handler context bridge
+  - V2-3: `54bd78429cf` Tighten PQ V2-3 read view boundary
   - V2-1: `9a58ff94cdf` Add PQ V2-1 iterator safe fallback
   - V2-0: `a420e8a3f26` Add PQ V2-0 execution state contract
   - Phase 8: `113d2ba44c1` Add PQ phase 8 V1 completion scaffolding
@@ -26,10 +27,11 @@
   - [v2-0-execution-state-contract.md](v2-0-execution-state-contract.md): V2-0 已实现，定义 PQ execution state contract，供 V2-1 iterator ownership 使用。
   - [v2-1-iterator-safe-fallback.md](v2-1-iterator-safe-fallback.md): V2-1 已完成验证，建立 PQ iterator ownership 和 Init 安全回退。
   - [v2-2-handler-innodb-context-bridge.md](v2-2-handler-innodb-context-bridge.md): V2-2 已提交，补齐 handler virtual API 与 InnoDB leader context bridge。
-  - [v2-3-read-view-trx-contract.md](v2-3-read-view-trx-contract.md): V2-3 当前任务书，收敛 InnoDB read view / trx / row_prebuilt 边界。
+  - [v2-3-read-view-trx-contract.md](v2-3-read-view-trx-contract.md): V2-3 已提交，收敛 InnoDB read view / trx / row_prebuilt 边界。
+  - [v2-4-parallel-reader-range-partition.md](v2-4-parallel-reader-range-partition.md): V2-4 当前任务书，设计 Parallel_reader thin adapter 和 DOP>1 range gate。
   - [v2-execution-path-roadmap.md](v2-execution-path-roadmap.md): V2 真实执行路径拆分，覆盖 SQL iterator、worker THD、Exchange/Gather row 流、InnoDB 分片扫描、full scan 闭环和基础聚合。
   - [v2-test-matrix.md](v2-test-matrix.md): V1/V2 阶段化 MTR 测试矩阵，明确 DOP=1 first 和 DOP>1 range-partition gate。
-- Next recommended action: 提交 V2-3；随后进入 V2-4 Parallel_reader Thin Adapter + Range Partition 任务拆分。
+- Next recommended action: 提交 V2-4 range planning export；随后补 V2-4 range observable/MTR，验证 DOP=1/2/4 range count。
 - Parallel-ready task overview: [parallel_wave2_tasks.md](parallel_wave2_tasks.md)
 - Remaining risk: Phase 8 的 aggregate 当前仍是基础设施和 eligibility 扩展，真实并行聚合执行尚未启用；locking read 的 EXPLAIN annotation 当前仍可能显示 `Parallel query dop=4`，已从 Phase 9 测试中移除，后续需单独修复。
 
@@ -85,7 +87,8 @@ Recommended worktrees:
 | V2-0 - Execution State Contract | Completed | Codex Orchestrator | [v2-0-execution-state-contract.md](v2-0-execution-state-contract.md) | Commit `a420e8a3f26`; 定义 execution state contract；不启用真实 PQ iterator；`mysqld` build 和完整 `parallel_query` suite 通过 |
 | V2-1 - Iterator Ownership + Safe Fallback | Completed | Codex Orchestrator | [v2-1-iterator-safe-fallback.md](v2-1-iterator-safe-fallback.md) | Commit `9a58ff94cdf`; 允许 eligible execution 返回 PQ iterator，并在 Init 安全窗口串行 fallback；完整 suite 通过 |
 | V2-2 - Handler/InnoDB Context Bridge | Completed | Codex Orchestrator + parallel explorers | [v2-2-handler-innodb-context-bridge.md](v2-2-handler-innodb-context-bridge.md) | Commit `a123cdabe7c`; DOP=1 leader init/end bridge；不启动 worker；`mysqld` build 和完整 `parallel_query` suite 通过 |
-| V2-3 - Read View / Trx Contract | Verified | Codex Orchestrator + parallel explorers | [v2-3-read-view-trx-contract.md](v2-3-read-view-trx-contract.md) | leader probe 不再提前分配 read view；worker row read 明确 unsupported；新增 `pq_read_view_dop1`；完整 suite 通过 |
+| V2-3 - Read View / Trx Contract | Completed | Codex Orchestrator + parallel explorers | [v2-3-read-view-trx-contract.md](v2-3-read-view-trx-contract.md) | Commit `54bd78429cf`; leader probe 不再提前分配 read view；worker row read 明确 unsupported；新增 `pq_read_view_dop1`；完整 suite 通过 |
+| V2-4 - Parallel_reader Thin Adapter + Range Partition | Partially verified | Codex Orchestrator + parallel explorers | [v2-4-parallel-reader-range-partition.md](v2-4-parallel-reader-range-partition.md) | `Parallel_reader::export_scan_ranges()` + PQ adapter range conversion 已通过 build/full suite；range observable/MTR 待补 |
 
 ## Decisions
 

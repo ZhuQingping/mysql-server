@@ -55,6 +55,7 @@ Created 2026-06-02 by Qingping Zhu (PQ Phase 6B-2). */
 #include "row0pread_pq.h"
 
 #include "ha_prototypes.h"
+#include "row0pread.h"
 #include "row0mysql.h"
 #include "row0sel.h"
 #include "trx0trx.h"
@@ -64,7 +65,38 @@ Created 2026-06-02 by Qingping Zhu (PQ Phase 6B-2). */
 /* InnoDB_pq_iter                                               */
 /* ============================================================ */
 
-InnoDB_pq_iter::~InnoDB_pq_iter() {}
+InnoDB_pq_iter::~InnoDB_pq_iter() {
+  if (m_heap != nullptr) {
+    mem_heap_free(m_heap);
+    m_heap = nullptr;
+    m_tuple = nullptr;
+  }
+}
+
+dberr_t InnoDB_pq_iter::assign(const dtuple_t *tuple) {
+  if (m_heap != nullptr) {
+    mem_heap_free(m_heap);
+    m_heap = nullptr;
+    m_tuple = nullptr;
+  }
+
+  if (tuple == nullptr) {
+    return DB_SUCCESS;
+  }
+
+  m_heap = mem_heap_create(sizeof(dtuple_t) + 256, UT_LOCATION_HERE);
+  if (m_heap == nullptr) {
+    return DB_OUT_OF_MEMORY;
+  }
+
+  auto copy = dtuple_copy(tuple, m_heap);
+  for (size_t i = 0; i < dtuple_get_n_fields(copy); ++i) {
+    dfield_dup(&copy->fields[i], m_heap);
+  }
+
+  m_tuple = copy;
+  return DB_SUCCESS;
+}
 
 /** Map InnoDB dberr_t to handler error code for the pull-row adapter.
 Used only for row_search_mvcc return values.
@@ -104,51 +136,47 @@ InnoDB_pq_scan_ctx::InnoDB_pq_scan_ctx(dict_index_t *index, const trx_t *trx,
 InnoDB_pq_scan_ctx::~InnoDB_pq_scan_ctx() = default;
 
 dberr_t InnoDB_pq_scan_ctx::partition(size_t split_level) {
-  /* TEMPORARY MVP: Use Parallel_reader's add_scan() + partition()
-  to create scan ranges. We create a "capture callback" that just
-  records the range boundary tuples without processing any rows.
-
-  The Parallel_reader's private Scan_ctx::partition() does the
-  B+tree breadth-first walk and creates persistent cursors at
-  sub-range boundaries. We capture these boundaries by registering
-  a callback that stores them in our m_ranges vector.
-
-  Since add_scan() creates the partitions internally and then
-  create_contexts() enqueues Ctx objects, we use a two-step approach:
-  1. Create a Parallel_reader instance.
-  2. Call add_scan() with a capture callback.
-  3. Call run(0) to force partitioning without spawning threads.
-  4. Extract range information from the Parallel_reader.
-
-  However, since Scan_ctx, Ctx, and Range are all private to
-  Parallel_reader, we cannot directly extract range boundaries.
-
-  V1-MVP simplification: For the MVP, we don't actually partition
-  the B+tree into multiple ranges. Instead, each worker scans the
-  entire table from the beginning. This means:
-  - Only 1 "range" is created: the whole clustered index.
-  - Workers scan independently but will read duplicate rows unless
-    they have assigned page ranges.
-  - This is NOT correct for parallel execution, but it establishes
-    the adapter framework and API contracts.
-
-  Proper partitioning will be added after Phase 6B-2, once the
-  adapter is refactored to use controlled Parallel_reader wrappers
-  or the SQL layer wiring is done.
-
-  For now, create a single range covering the entire clustered index. */
-
   m_ranges.clear();
 
-  /* Create a single range for the whole table.
-  Both start and end boundaries are nullptr (full table scan). */
-  InnoDB_pq_range whole_range;
-  whole_range.m_id = 0;
-  whole_range.m_start = nullptr; /* -infinity */
-  whole_range.m_end = nullptr;   /* +infinity */
-  whole_range.m_split = false;
+  Parallel_reader reader(0);
+  Parallel_reader::Config config(Parallel_reader::Scan_range{}, m_index);
+  Parallel_reader::Exported_ranges exported_ranges{};
+  auto err = reader.export_scan_ranges(const_cast<trx_t *>(m_trx), config,
+                                       &exported_ranges, split_level);
+  if (err != DB_SUCCESS) {
+    return err;
+  }
 
-  m_ranges.push_back(whole_range);
+  m_ranges.reserve(exported_ranges.size());
+  for (const auto &exported_range : exported_ranges) {
+    InnoDB_pq_range range;
+    range.m_id = exported_range.m_id;
+    range.m_split = exported_range.m_split;
+
+    if (exported_range.m_start != nullptr) {
+      range.m_start = std::make_shared<InnoDB_pq_iter>();
+      if (range.m_start == nullptr) {
+        return DB_OUT_OF_MEMORY;
+      }
+      err = range.m_start->assign(exported_range.m_start);
+      if (err != DB_SUCCESS) {
+        return err;
+      }
+    }
+
+    if (exported_range.m_end != nullptr) {
+      range.m_end = std::make_shared<InnoDB_pq_iter>();
+      if (range.m_end == nullptr) {
+        return DB_OUT_OF_MEMORY;
+      }
+      err = range.m_end->assign(exported_range.m_end);
+      if (err != DB_SUCCESS) {
+        return err;
+      }
+    }
+
+    m_ranges.push_back(std::move(range));
+  }
 
   return DB_SUCCESS;
 }

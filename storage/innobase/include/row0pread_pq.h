@@ -83,19 +83,24 @@ highest InnoDB dberr_t value (2002) while staying within the
 enum's representable range for safe casting. */
 constexpr int PQ_DB_END_OF_RANGE_INT = 2003;
 
-/** Boundary iterator for a PQ scan range.
-
-V1-MVP: simplified placeholder. The full version (with persistent
-cursor, deep-copy record, and dtuple) will be added in Phase 8
-when proper B+tree partitioning is implemented. */
+/** Boundary iterator for a PQ scan range. */
 struct InnoDB_pq_iter {
   ~InnoDB_pq_iter();
+
+  /** Copy an exported Parallel_reader boundary tuple into this iterator. */
+  dberr_t assign(const dtuple_t *tuple);
+
+  const dtuple_t *tuple() const { return m_tuple; }
+
+ private:
+  mem_heap_t *m_heap{nullptr};
+  const dtuple_t *m_tuple{nullptr};
 };
 
 /** A B+tree sub-range for a PQ worker to scan.
 
-V1-MVP: simplified. For the whole-table scan MVP, there is only
-one range with nullptr boundaries (-infinity to +infinity). */
+V2-4: boundaries are planned by Parallel_reader and stored as deep-copy
+tuples. A nullptr boundary still means -infinity/+infinity. */
 struct InnoDB_pq_range {
   /** Range ID. */
   size_t m_id{std::numeric_limits<size_t>::max()};

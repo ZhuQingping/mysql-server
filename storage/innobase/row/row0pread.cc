@@ -72,6 +72,83 @@ std::string Parallel_reader::Scan_range::to_string() const {
   return (os.str());
 }
 
+Parallel_reader::Exported_range::~Exported_range() { clear(); }
+
+Parallel_reader::Exported_range::Exported_range(
+    Exported_range &&other) noexcept
+    : m_id(other.m_id),
+      m_start(other.m_start),
+      m_end(other.m_end),
+      m_split(other.m_split),
+      m_heap(other.m_heap) {
+  other.m_id = std::numeric_limits<size_t>::max();
+  other.m_start = nullptr;
+  other.m_end = nullptr;
+  other.m_split = false;
+  other.m_heap = nullptr;
+}
+
+Parallel_reader::Exported_range &Parallel_reader::Exported_range::operator=(
+    Exported_range &&other) noexcept {
+  if (this != &other) {
+    clear();
+    m_id = other.m_id;
+    m_start = other.m_start;
+    m_end = other.m_end;
+    m_split = other.m_split;
+    m_heap = other.m_heap;
+
+    other.m_id = std::numeric_limits<size_t>::max();
+    other.m_start = nullptr;
+    other.m_end = nullptr;
+    other.m_split = false;
+    other.m_heap = nullptr;
+  }
+  return *this;
+}
+
+void Parallel_reader::Exported_range::clear() {
+  if (m_heap != nullptr) {
+    mem_heap_free(m_heap);
+    m_heap = nullptr;
+  }
+  m_id = std::numeric_limits<size_t>::max();
+  m_start = nullptr;
+  m_end = nullptr;
+  m_split = false;
+}
+
+static const dtuple_t *parallel_reader_copy_tuple(const dtuple_t *tuple,
+                                                  mem_heap_t *heap) {
+  if (tuple == nullptr) {
+    return nullptr;
+  }
+
+  auto copy = dtuple_copy(tuple, heap);
+  for (size_t i = 0; i < dtuple_get_n_fields(copy); ++i) {
+    dfield_dup(&copy->fields[i], heap);
+  }
+  return copy;
+}
+
+dberr_t Parallel_reader::Exported_range::assign(size_t id,
+                                                const dtuple_t *start,
+                                                const dtuple_t *end,
+                                                bool split) {
+  clear();
+  m_heap = mem_heap_create(sizeof(dtuple_t) * 2 + 256, UT_LOCATION_HERE);
+  if (m_heap == nullptr) {
+    return DB_OUT_OF_MEMORY;
+  }
+
+  m_id = id;
+  m_start = parallel_reader_copy_tuple(start, m_heap);
+  m_end = parallel_reader_copy_tuple(end, m_heap);
+  m_split = split;
+
+  return DB_SUCCESS;
+}
+
 Parallel_reader::Scan_ctx::Iter::~Iter() {
   if (m_heap == nullptr) {
     return;
@@ -1593,4 +1670,65 @@ dberr_t Parallel_reader::add_scan(trx_t *trx,
   scan_ctx->index_s_unlock();
 
   return (err);
+}
+
+dberr_t Parallel_reader::export_scan_ranges(
+    trx_t *trx, const Parallel_reader::Config &config,
+    Parallel_reader::Exported_ranges *exported_ranges, size_t split_level) {
+  if (exported_ranges == nullptr) {
+    return DB_ERROR;
+  }
+
+  exported_ranges->clear();
+
+  auto scan_ctx = std::shared_ptr<Scan_ctx>(
+      ut::new_withkey<Scan_ctx>(UT_NEW_THIS_FILE_PSI_KEY, this, m_scan_ctx_id,
+                                trx, config, F{}),
+      [](Scan_ctx *scan_ctx) { ut::delete_(scan_ctx); });
+
+  if (scan_ctx.get() == nullptr) {
+    ib::error(ER_IB_ERR_PARALLEL_READ_OOM) << "Out of memory";
+    return DB_OUT_OF_MEMORY;
+  }
+
+  ++m_scan_ctx_id;
+
+  scan_ctx->index_s_lock();
+
+  Parallel_reader::Scan_ctx::Ranges ranges{};
+  dberr_t err =
+      scan_ctx->partition(config.m_scan_range, ranges, split_level);
+
+  if (err == DB_SUCCESS && !ranges.empty()) {
+    size_t split_point{};
+    const auto n = std::max(max_threads(), size_t{1});
+
+    if (ranges.size() > n) {
+      split_point = (ranges.size() / n) * n;
+    }
+
+    exported_ranges->reserve(ranges.size());
+    size_t id = 0;
+    for (const auto &range : ranges) {
+      Exported_range exported_range;
+      const dtuple_t *start =
+          range.first != nullptr ? range.first->m_tuple : nullptr;
+      const dtuple_t *end =
+          range.second != nullptr ? range.second->m_tuple : nullptr;
+      err = exported_range.assign(id, start, end, id >= split_point);
+      if (err != DB_SUCCESS) {
+        break;
+      }
+      exported_ranges->push_back(std::move(exported_range));
+      ++id;
+    }
+  }
+
+  scan_ctx->index_s_unlock();
+
+  if (err != DB_SUCCESS) {
+    exported_ranges->clear();
+  }
+
+  return err;
 }

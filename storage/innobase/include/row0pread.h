@@ -211,6 +211,44 @@ class Parallel_reader {
     size_t m_partition_id{std::numeric_limits<size_t>::max()};
   };
 
+  /** Stable exported scan range boundary for adapters that need planning
+  metadata without using Parallel_reader::Ctx traversal. */
+  struct Exported_range {
+    Exported_range() = default;
+    ~Exported_range();
+
+    Exported_range(Exported_range &&other) noexcept;
+    Exported_range &operator=(Exported_range &&other) noexcept;
+
+    Exported_range(const Exported_range &) = delete;
+    Exported_range &operator=(const Exported_range &) = delete;
+
+    /** Release owned boundary memory. */
+    void clear();
+
+    /** Copy the start/end boundary tuples into this range's heap. */
+    [[nodiscard]] dberr_t assign(size_t id, const dtuple_t *start,
+                                 const dtuple_t *end, bool split);
+
+    /** Range ID in key order. */
+    size_t m_id{std::numeric_limits<size_t>::max()};
+
+    /** Start boundary, nullptr means -infinity. Owned by m_heap if non-null. */
+    const dtuple_t *m_start{};
+
+    /** End boundary, nullptr means +infinity. Owned by m_heap if non-null. */
+    const dtuple_t *m_end{};
+
+    /** Whether this range should be split dynamically by a future executor. */
+    bool m_split{};
+
+   private:
+    mem_heap_t *m_heap{};
+  };
+
+  using Exported_ranges =
+      std::vector<Exported_range, ut::allocator<Exported_range>>;
+
   /** Thread related context information. */
   struct Thread_ctx {
     /** Constructor.
@@ -313,6 +351,16 @@ class Parallel_reader {
   (default is 0 which is leaf level)
   @return error. */
   [[nodiscard]] dberr_t add_scan(trx_t *trx, const Config &config, F &&f);
+
+  /** Build scan ranges without creating execution contexts or reading rows.
+  @param[in,out] trx transaction covering the scan
+  @param[in] config scan configuration
+  @param[out] exported_ranges exported disjoint range boundaries
+  @param[in] split_level B-tree level to split at
+  @return DB_SUCCESS or error. */
+  [[nodiscard]] dberr_t export_scan_ranges(
+      trx_t *trx, const Config &config, Exported_ranges *exported_ranges,
+      size_t split_level = 0);
 
   /** Wait for the join of threads spawned by the parallel reader. */
   void join() {
