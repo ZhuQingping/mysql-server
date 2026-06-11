@@ -79,10 +79,13 @@ bool PQTableScanIterator::Init() {
   uint actual_dop = 0;
   uint requested_dop = thd()->variables.parallel_default_dop;
   if (requested_dop == 0) requested_dop = 1;
+  const bool read_shadow_path = should_enter_read_shadow_path(requested_dop);
   int error = table()->file->pq_leader_scan_init(
       thd(), &m_leader_ctx, PQ_leader_scan_mode::PROBE, requested_dop,
       &actual_dop, false);
+  bool probe_supported = false;
   if (error == 0) {
+    probe_supported = true;
     uint smoke_dop = actual_dop > 0 ? actual_dop : requested_dop;
     m_gather = new Gather_operator(smoke_dop);
     if (m_gather == nullptr || m_gather->init() ||
@@ -129,22 +132,24 @@ bool PQTableScanIterator::Init() {
     }
     cleanup_pq_resources(false);
 
-    PQ_Leader_context *execute_ctx = nullptr;
-    uint execute_dop = 0;
-    error = table()->file->pq_leader_scan_init(
-        thd(), &execute_ctx, PQ_leader_scan_mode::EXECUTE, 1, &execute_dop,
-        false);
-    if (error == 0) {
-      Gather_operator callback_smoke(1);
-      (void)(callback_smoke.init() ||
-             callback_smoke.configure_worker_open_contexts(table(), execute_ctx,
-                                                           1) ||
-             callback_smoke.run_worker_callback_conversion_smoke(thd(),
-                                                                 table()));
-      table()->file->pq_leader_scan_end(execute_ctx);
-    } else if (error != HA_ERR_UNSUPPORTED) {
-      PrintError(error);
-      return true;
+    if (!read_shadow_path) {
+      PQ_Leader_context *execute_ctx = nullptr;
+      uint execute_dop = 0;
+      error = table()->file->pq_leader_scan_init(
+          thd(), &execute_ctx, PQ_leader_scan_mode::EXECUTE, 1, &execute_dop,
+          false);
+      if (error == 0) {
+        Gather_operator callback_smoke(1);
+        (void)(callback_smoke.init() ||
+               callback_smoke.configure_worker_open_contexts(
+                   table(), execute_ctx, 1) ||
+               callback_smoke.run_worker_callback_conversion_smoke(thd(),
+                                                                   table()));
+        table()->file->pq_leader_scan_end(execute_ctx);
+      } else if (error != HA_ERR_UNSUPPORTED) {
+        PrintError(error);
+        return true;
+      }
     }
   } else if (error != HA_ERR_UNSUPPORTED) {
     cleanup_pq_resources(true);
@@ -152,7 +157,7 @@ bool PQTableScanIterator::Init() {
     return true;
   }
 
-  if (should_enter_read_shadow_path(requested_dop)) {
+  if (read_shadow_path && probe_supported) {
     uint execute_dop = 0;
     error = table()->file->pq_leader_scan_init(
         thd(), &m_leader_ctx, PQ_leader_scan_mode::EXECUTE, 1, &execute_dop,
@@ -160,6 +165,18 @@ bool PQTableScanIterator::Init() {
     if (error != 0) {
       cleanup_pq_resources(true);
       PrintError(error);
+      return true;
+    }
+
+    const uint64 callback_rows_before =
+        pq_global_stats.callback_smoke_rows.load(std::memory_order_relaxed);
+    Gather_operator callback_smoke(1);
+    if (callback_smoke.init() ||
+        callback_smoke.configure_worker_open_contexts(table(), m_leader_ctx,
+                                                      1) ||
+        callback_smoke.run_worker_callback_conversion_smoke(thd(), table())) {
+      cleanup_pq_resources(true);
+      PrintError(HA_ERR_INTERNAL_ERROR);
       return true;
     }
 
@@ -172,6 +189,16 @@ bool PQTableScanIterator::Init() {
     }
 
     mark_pq_started();
+    const bool converted =
+        pq_global_stats.callback_smoke_rows.load(std::memory_order_relaxed) >
+        callback_rows_before;
+    if (converted
+            ? m_gather->get_exchange()->enqueue_record_image_smoke(0, table())
+            : m_gather->get_exchange()->enqueue_finish_smoke(0)) {
+      cleanup_pq_resources(true);
+      PrintError(HA_ERR_INTERNAL_ERROR);
+      return true;
+    }
     return false;
   }
 
@@ -213,7 +240,7 @@ bool PQTableScanIterator::should_enter_read_shadow_path(
     uint requested_dop) const {
   bool enabled = false;
   DBUG_EXECUTE_IF("pq_read_shadow_path", enabled = true;);
-  return enabled && requested_dop == 1 && table() != nullptr &&
+  return enabled && requested_dop > 0 && table() != nullptr &&
          table()->s != nullptr && table()->s->blob_fields == 0 &&
          table()->s->reclength > 0;
 }

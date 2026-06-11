@@ -128,6 +128,12 @@ gate；默认不可达。shadow path 在 DOP=1 fixed-row 表上可绕过 serial 
 首次真实 ROW 返回时才设置 `EXECUTED` 并递增真实执行/行计数。当前仍没有真实
 worker producer，因此默认测试路径继续 serial fallback。
 
+Status update: shadow path 已增加 PROBE-supported guard；如果 PROBE 返回
+unsupported，即使 debug gate 打开也继续 serial fallback，避免 EXECUTE 越过
+fallback-safe 边界。已尝试把既有 callback conversion row 重新放入持久
+Exchange 供 shadow `Read()` 消费，但普通 `SELECT *` 仍会走 fallback，说明
+DOP=1 real gate 前还需要收敛 PROBE/range gate 和真实 producer 入口。
+
 ### V2-8J-4: DOP=1 Real Full Scan Gate
 
 目标：
@@ -135,6 +141,16 @@ worker producer，因此默认测试路径继续 serial fallback。
 - 显式 gate 下打开真实 DOP=1；
 - `SELECT *`、simple WHERE、projection 与串行一致；
 - `Parallel_queries_executed=1`、fallback 不增加、rows/workers 计数合理。
+
+当前阻塞：
+
+- 普通 `SELECT *` 在 debug shadow gate 下仍可能因 PROBE unsupported 走
+  serial fallback；
+- callback conversion primitive 当前最多产出一行，不能作为 full scan；
+- `materialize_next_record_image()` 仍无 wait/kill policy，不能承载真实异步
+  worker；
+- 打开 DOP=1 前必须先补一个受控 producer，把多行 ROW/FINISH 放入持久
+  `m_gather`，并定义 no-message 时的 wait/kill 语义。
 
 ## Acceptance Checklist
 
@@ -173,7 +189,7 @@ worker producer，因此默认测试路径继续 serial fallback。
 - 增加 `Gather_operator::run_worker_producer_abort_smoke()`，验证
   RUNNING -> leader abort -> MQ detach -> EOF -> ABORTED；
 - 增加 debug-only `PQTableScanIterator::Read()` shadow path scaffold，默认
-  不可达；
+  不可达，且受 PROBE-supported guard 保护；
 - shadow path 使用 `mark_pq_started()` 锁定 no-fallback 边界，并仅在第一条
   ROW 返回时 `mark_pq_row_returned()` / `EXECUTED` / 真实计数；
 - 新增 `Parallel_worker_producer_smoke_runs` 状态变量；
@@ -192,5 +208,5 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 Result: passed, 19 tests successful
 ```
 
-下一步进入 V2-8J-4：DOP=1 real full scan gate。打开前必须补真实 producer
-ROW 进入持久 `m_gather` 的路径和 wait/kill policy。
+下一步继续 V2-8J-4：先补 PROBE/range gate 诊断，再实现多行 producer/wait
+policy；真实 DOP=1 full scan 仍未打开。
