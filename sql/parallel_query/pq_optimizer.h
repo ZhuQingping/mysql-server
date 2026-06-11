@@ -74,6 +74,11 @@ enum class PQUnsuiteReason {
   HAS_ORDER_BY,             // Has ORDER BY
   HAS_HAVING,               // Has HAVING clause (conservative reject)
   HAS_GROUP_BY,             // Has GROUP BY (explicit or implicit)
+  GROUP_BY_ROLLUP,          // GROUP BY WITH ROLLUP is not supported
+  GROUP_BY_HAVING,          // GROUP BY with HAVING is not supported
+  GROUP_BY_UNSUPPORTED_EXPR,       // GROUP BY key is not a direct field
+  GROUP_BY_UNSUPPORTED_AGGREGATE,  // GROUP BY aggregate is not supported
+  GROUP_BY_PARTIAL_AGG_UNSUPPORTED,  // Partial GROUP BY not implemented yet
   HAS_ROLLUP,               // Has WITH ROLLUP
   HAS_SEMIJOIN,             // Has semi-join or anti-join nest
   NON_FULL_TABLE_SCAN,      // Access path is not full table scan

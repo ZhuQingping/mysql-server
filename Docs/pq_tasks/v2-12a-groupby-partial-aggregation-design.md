@@ -140,6 +140,21 @@ Parallel group aggregate, dop=N, partial=worker_hash, merge=leader_hash
 - fallback reason 从笼统 `HAS_GROUP_BY` 细分；
 - 新增 MTR 验证 fallback reason。
 
+状态：Completed。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_diagnostics pq_not_support pq_error_paths \
+  --parallel=1 --vardir=/tmp/pqv_group_diag4 --tmpdir=/tmp/pqt_group_diag4
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full18 --tmpdir=/tmp/pqt_full18
+```
+
+结果：完整 `parallel_query` suite 通过，共 48 项。
+
 ### V2-12A-2 Wire Protocol Smoke
 
 - 扩展 MQ `PARTIAL_GROUP`；
@@ -233,10 +248,10 @@ Parallel group aggregate, dop=N, partial=worker_hash, merge=leader_hash
 
 ## 当前状态
 
-状态：Design Completed。
+状态：V2-12A-1 Completed。
 
 下一步建议：
 
-1. 先实施 V2-12A-1 Gate And Diagnostics；
+1. 实施 V2-12A-2 Wire Protocol Smoke；
 2. 继续保持 GROUP BY partial aggregation 实现串行推进；
 3. ORDER BY / ICP / partition 继续设计先行，不与 GROUP BY 实现并行修改同一路径。

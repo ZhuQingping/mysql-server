@@ -66,6 +66,11 @@ static const char *pq_unsuite_reason_names[] = {
     "HAS_ORDER_BY",              // PQUnsuiteReason::HAS_ORDER_BY
     "HAS_HAVING",                // PQUnsuiteReason::HAS_HAVING
     "HAS_GROUP_BY",              // PQUnsuiteReason::HAS_GROUP_BY
+    "GROUP_BY_ROLLUP",           // PQUnsuiteReason::GROUP_BY_ROLLUP
+    "GROUP_BY_HAVING",           // PQUnsuiteReason::GROUP_BY_HAVING
+    "GROUP_BY_UNSUPPORTED_EXPR", // PQUnsuiteReason::GROUP_BY_UNSUPPORTED_EXPR
+    "GROUP_BY_UNSUPPORTED_AGGREGATE",  // PQUnsuiteReason::GROUP_BY_UNSUPPORTED_AGGREGATE
+    "GROUP_BY_PARTIAL_AGG_UNSUPPORTED",  // PQUnsuiteReason::GROUP_BY_PARTIAL_AGG_UNSUPPORTED
     "HAS_ROLLUP",                // PQUnsuiteReason::HAS_ROLLUP
     "HAS_SEMIJOIN",              // PQUnsuiteReason::HAS_SEMIJOIN
     "NON_FULL_TABLE_SCAN",       // PQUnsuiteReason::NON_FULL_TABLE_SCAN
@@ -315,14 +320,33 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
   }
 
   // ================================================================
-  // 10. Must not have explicit GROUP BY
-  //     Phase 8: explicit GROUP BY is still serial fallback.
-  //     Explicit GROUP BY with aggregates requires gather-merge or
-  //     partial aggregation per group, which is Phase 9 territory.
+  // 10. Explicit GROUP BY is still serial fallback. V2-12A-1 keeps
+  //     execution disabled but records a more precise diagnostic so
+  //     partial aggregation can be implemented in smaller follow-up steps.
   // ================================================================
   if (query_block->is_explicitly_grouped()) {
-    return pq_reject(info, PQUnsuiteReason::HAS_GROUP_BY,
-                     "query has GROUP BY");
+    if (query_block->olap != UNSPECIFIED_OLAP_TYPE) {
+      return pq_reject(info, PQUnsuiteReason::GROUP_BY_ROLLUP,
+                       "GROUP BY WITH ROLLUP is not supported");
+    }
+
+    if (query_block->having_cond() != nullptr) {
+      return pq_reject(info, PQUnsuiteReason::GROUP_BY_HAVING,
+                       "GROUP BY with HAVING is not supported");
+    }
+
+    if (!is_simple_order(query_block->group_list.first)) {
+      return pq_reject(info, PQUnsuiteReason::GROUP_BY_UNSUPPORTED_EXPR,
+                       "GROUP BY key is not a direct field");
+    }
+
+    if (!pq_check_agg_supported(query_block)) {
+      return pq_reject(info, PQUnsuiteReason::GROUP_BY_UNSUPPORTED_AGGREGATE,
+                       "GROUP BY has unsupported aggregate function");
+    }
+
+    return pq_reject(info, PQUnsuiteReason::GROUP_BY_PARTIAL_AGG_UNSUPPORTED,
+                     "GROUP BY partial aggregation is not implemented");
   }
 
   // ================================================================
