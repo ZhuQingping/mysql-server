@@ -9840,6 +9840,26 @@ static int show_pq_exchange_row_image_smoke_finishes(THD *, SHOW_VAR *var,
   return 0;
 }
 
+static int show_pq_exchange_partial_group_smoke_rows(THD *, SHOW_VAR *var,
+                                                     char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) =
+      (longlong)(pq_global_stats.exchange_partial_group_smoke_rows.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_partial_group_smoke_finishes(THD *, SHOW_VAR *var,
+                                                        char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) =
+      (longlong)(pq_global_stats.exchange_partial_group_smoke_finishes.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
 static int show_pq_callback_smoke_attempts(THD *, SHOW_VAR *var, char *buf) {
   var->type = SHOW_LONGLONG;
   var->value = buf;
@@ -10249,6 +10269,12 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_exchange_row_image_smoke_rows",
      (char *)&show_pq_exchange_row_image_smoke_rows, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_partial_group_smoke_finishes",
+     (char *)&show_pq_exchange_partial_group_smoke_finishes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_partial_group_smoke_rows",
+     (char *)&show_pq_exchange_partial_group_smoke_rows, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_probe_attempts", (char *)&show_pq_probe_attempts, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},

@@ -60,10 +60,10 @@ GROUP BY partial aggregation 实现阶段预计会触碰：
 
 ## 当前状态
 
-状态：V2-12A-1 completed。
+状态：V2-12A-2 completed。
 
 下一步：
 
-- 按 [v2-12a-groupby-partial-aggregation-design.md](v2-12a-groupby-partial-aggregation-design.md) 继续实施 V2-12A-2 Wire Protocol Smoke；
+- 按 [v2-12a-groupby-partial-aggregation-design.md](v2-12a-groupby-partial-aggregation-design.md) 继续评估 V2-12A-3 DOP1 Partial Group Execution；
 - V2-12A 实现阶段默认串行推进；
 - ORDER BY / secondary index / ICP / partition table 继续保持设计先行。

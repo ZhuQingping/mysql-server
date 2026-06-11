@@ -62,7 +62,7 @@ uint16 pq_mq_type_to_uint(MQMessageType type) {
 }
 
 bool pq_is_valid_mq_type(uint16 type) {
-  return type <= static_cast<uint16>(MQMessageType::ABORT);
+  return type <= static_cast<uint16>(MQMessageType::PARTIAL_GROUP);
 }
 
 bool pq_send_typed_mq_message(MQueue_handle *handle, MQMessageType type,
@@ -333,8 +333,12 @@ bool Exchange_nosort::get_next_from_worker(uint32 worker_id,
     return false;
   }
 
-  // Regular row data
-  type = MQMessageType::ROW;
+  if (type != MQMessageType::ROW && type != MQMessageType::PARTIAL_GROUP) {
+    *datap = nullptr;
+    len = 0;
+    return false;
+  }
+
   *datap = payload;
   len = payload_len;
   return true;
@@ -608,6 +612,64 @@ bool Exchange_nosort::run_synthetic_row_image_smoke(TABLE *table,
   }
 
   if (rows_read != nullptr) *rows_read = local_rows;
+  if (finishes_read != nullptr) *finishes_read = m_nqueues;
+  return false;
+}
+
+bool Exchange_nosort::run_synthetic_partial_group_smoke(
+    uint32 *groups_read, uint32 *finishes_read) {
+  if (groups_read != nullptr) *groups_read = 0;
+  if (finishes_read != nullptr) *finishes_read = 0;
+  if (m_mq_handles == nullptr || m_nqueues == 0) return true;
+
+  struct Partial_group_smoke_payload {
+    uint32 magic;
+    uint32 worker_id;
+    uint32 group_key;
+    uint64 count;
+    int64 sum;
+  };
+
+  for (uint32 i = 0; i < m_nqueues; ++i) {
+    const Partial_group_smoke_payload payload = {
+        0x50514750U, i, i % 2, static_cast<uint64>(i + 1),
+        static_cast<int64>((i + 1) * 10)};
+    MQueue_handle *handle = get_mq_handle(i);
+    if (pq_send_typed_mq_message(handle, MQMessageType::PARTIAL_GROUP,
+                                 &payload, sizeof(payload))) {
+      return true;
+    }
+    if (pq_send_typed_mq_message(handle, MQMessageType::FINISH, nullptr, 0)) {
+      return true;
+    }
+  }
+
+  uint32 local_groups = 0;
+  while (!m_all_done) {
+    MQMessageType type;
+    void *datap = nullptr;
+    uint32 data_len = 0;
+    const bool got_message = read_mq_message(type, &datap, data_len);
+
+    if (got_message) {
+      if (type != MQMessageType::PARTIAL_GROUP || datap == nullptr ||
+          data_len != sizeof(Partial_group_smoke_payload)) {
+        return true;
+      }
+      const auto *payload =
+          static_cast<const Partial_group_smoke_payload *>(datap);
+      if (payload->magic != 0x50514750U || payload->worker_id >= m_nqueues) {
+        return true;
+      }
+      ++local_groups;
+      continue;
+    }
+
+    if (!m_all_done) return true;
+  }
+
+  if (local_groups != m_nqueues) return true;
+  if (groups_read != nullptr) *groups_read = local_groups;
   if (finishes_read != nullptr) *finishes_read = m_nqueues;
   return false;
 }

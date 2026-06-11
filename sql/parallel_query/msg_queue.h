@@ -77,7 +77,8 @@ enum class MQMessageType {
   ROW,     ///< Row data (byte buffer, format deferred to Exchange)
   FINISH,  ///< Worker finished normally
   ERROR,   ///< Worker encountered an error
-  ABORT    ///< Leader aborting; close producer side
+  ABORT,   ///< Leader aborting; close producer side
+  PARTIAL_GROUP  ///< GROUP BY partial aggregate payload
 };
 
 /**

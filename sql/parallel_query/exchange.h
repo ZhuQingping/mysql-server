@@ -366,6 +366,23 @@ class Exchange_nosort : public Exchange {
   bool run_synthetic_row_image_smoke(TABLE *table, uint32 *rows_read,
                                      uint32 *finishes_read);
 
+  /**
+    Run a controlled synthetic partial GROUP BY message smoke.
+
+    The helper sends one typed PARTIAL_GROUP payload and one FINISH per worker,
+    then verifies the leader can decode the PARTIAL_GROUP messages through the
+    normal Exchange_nosort round-robin path. It does not merge aggregates and
+    does not connect to SQL execution.
+
+    @param[out] groups_read   Number of PARTIAL_GROUP payloads decoded
+    @param[out] finishes_read Number of FINISH tokens observed
+
+    @retval false  Smoke pass completed
+    @retval true   Smoke pass failed
+  */
+  bool run_synthetic_partial_group_smoke(uint32 *groups_read,
+                                         uint32 *finishes_read);
+
   ExchangeType get_exchange_type() const override { return EXCHANGE_NOSORT; }
 };
 

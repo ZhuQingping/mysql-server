@@ -202,6 +202,8 @@ struct PQ_global_stats {
   std::atomic<uint64> exchange_smoke_finishes{0};  ///< Synthetic FINISH tokens
   std::atomic<uint64> exchange_row_image_smoke_rows{0};  ///< Row-image smoke rows
   std::atomic<uint64> exchange_row_image_smoke_finishes{0};  ///< Row-image FINISH
+  std::atomic<uint64> exchange_partial_group_smoke_rows{0};  ///< Partial groups
+  std::atomic<uint64> exchange_partial_group_smoke_finishes{0};  ///< FINISH
   std::atomic<uint64> callback_smoke_attempts{0};  ///< Callback smoke attempts
   std::atomic<uint64> callback_smoke_rows{0};      ///< Callback converted rows
 
@@ -228,6 +230,8 @@ struct PQ_global_stats {
     exchange_smoke_finishes.store(0, std::memory_order_relaxed);
     exchange_row_image_smoke_rows.store(0, std::memory_order_relaxed);
     exchange_row_image_smoke_finishes.store(0, std::memory_order_relaxed);
+    exchange_partial_group_smoke_rows.store(0, std::memory_order_relaxed);
+    exchange_partial_group_smoke_finishes.store(0, std::memory_order_relaxed);
     callback_smoke_attempts.store(0, std::memory_order_relaxed);
     callback_smoke_rows.store(0, std::memory_order_relaxed);
   }
@@ -697,6 +701,20 @@ class Gather_operator {
     @retval true   Smoke pass failed
   */
   bool run_exchange_row_image_smoke(THD *leader_thd, TABLE *table);
+
+  /**
+    Run a V2-12A-2 synthetic GROUP BY partial aggregate wire-protocol smoke.
+
+    This pre-fills MQ handles with typed PARTIAL_GROUP/FINISH messages and
+    verifies Exchange can decode them. It does not merge aggregate states and
+    must not update real execution counters.
+
+    @param leader_thd  Leader THD
+
+    @retval false  Smoke pass completed
+    @retval true   Smoke pass failed
+  */
+  bool run_exchange_partial_group_smoke(THD *leader_thd);
 
   /**
     Run a V2-8C worker THD/TABLE lifecycle smoke pass.

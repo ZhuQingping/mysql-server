@@ -162,6 +162,30 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - leader decode / merge smoke；
 - 不接真实 execution。
 
+状态：Completed。
+
+实现：
+
+- 新增 `MQMessageType::PARTIAL_GROUP`；
+- `Exchange_nosort::read_mq_message()` 可原样返回 `PARTIAL_GROUP`；
+- 新增 synthetic partial group smoke，不执行 merge，不接 SQL execution；
+- 新增 `Parallel_exchange_partial_group_smoke_rows` / `Parallel_exchange_partial_group_smoke_finishes`；
+- 新增 `pq_groupby_partial_group_smoke` MTR。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_partial_group_smoke pq_exchange_rows_dop1 \
+  --parallel=1 --vardir=/tmp/pqv_partial_group2 \
+  --tmpdir=/tmp/pqt_partial_group2
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full20 --tmpdir=/tmp/pqt_full20
+```
+
+结果：完整 `parallel_query` suite 通过，共 49 项。
+
 ### V2-12A-3 DOP1 Partial Group Execution
 
 - 支持直接字段 group key；
@@ -248,10 +272,10 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 ## 当前状态
 
-状态：V2-12A-1 Completed。
+状态：V2-12A-2 Completed。
 
 下一步建议：
 
-1. 实施 V2-12A-2 Wire Protocol Smoke；
+1. 实施 V2-12A-3 DOP1 Partial Group Execution；
 2. 继续保持 GROUP BY partial aggregation 实现串行推进；
 3. ORDER BY / ICP / partition 继续设计先行，不与 GROUP BY 实现并行修改同一路径。
