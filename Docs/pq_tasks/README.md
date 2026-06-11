@@ -211,7 +211,7 @@ Recommended worktrees:
 | V2-12A - GROUP BY Partial Aggregation Design | Completed | Codex Orchestrator + Explorer Agent | [v2-12a-groupby-partial-aggregation-design.md](v2-12a-groupby-partial-aggregation-design.md) | 结论：worker partial aggregate state + leader merge；V2-12A-1 gate/diagnostics 已完成 |
 | V2-12A-1 - GROUP BY Gate And Diagnostics | Completed | Codex Orchestrator | [v2-12a-groupby-partial-aggregation-design.md](v2-12a-groupby-partial-aggregation-design.md) | GROUP BY fallback reason 已细分；新增 `pq_groupby_diagnostics`；完整 suite 48 项通过 |
 | V2-12A-2 - GROUP BY Wire Protocol Smoke | Completed | Codex Orchestrator | [v2-12a-groupby-partial-aggregation-design.md](v2-12a-groupby-partial-aggregation-design.md) | 新增 `PARTIAL_GROUP` typed MQ message 和 synthetic smoke；完整 suite 49 项通过 |
-| V2-12A-3 - DOP1 Partial Group Execution | V2-12A-3.3 Completed; 3.4 path tracing needed | Codex Orchestrator + Explorer Agent | [v2-12a-3-dop1-partial-group-execution.md](v2-12a-3-dop1-partial-group-execution.md) | 默认 OFF gate、`AccessPath::AGGREGATE` factory skeleton 和 typed state smoke；3.4 SQL result smoke 需先确认传统优化器 GROUP BY access path |
+| V2-12A-3 - DOP1 Partial Group Execution | V2-12A-3.4 path tracing completed | Codex Orchestrator + Explorer Agent | [v2-12a-3-dop1-partial-group-execution.md](v2-12a-3-dop1-partial-group-execution.md) | 默认 OFF gate、`AccessPath::AGGREGATE` factory skeleton 和 typed state smoke；已确认 3.4 需覆盖 `TEMPTABLE_AGGREGATE` 与 `INDEX_SCAN + AGGREGATE` 两类路径 |
 
 ## Decisions
 

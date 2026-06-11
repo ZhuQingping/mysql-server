@@ -321,3 +321,25 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - 先做只读 path tracing，确认 GROUP BY 在当前 optimizer/executor 下的实际 access path；
 - 如果是 `TEMPTABLE_AGGREGATE`，需要单独设计接入点，不应把 3.4 强塞到 `TABLE_SCAN` hook；
 - 保持 `sql/iterators/composite_iterators.*` 和 `sql/item_sum.*` 不修改。
+
+### V2-12A-3.4 Path Tracing 结论
+
+只读 Agent 结论：
+
+- `SELECT val, COUNT(*) FROM t1 GROUP BY val` 在 `val` 无有序索引时通常走 `AccessPath::TEMPTABLE_AGGREGATE`，创建 `TemptableAggregateIterator`；
+- `SELECT id, COUNT(*) FROM t1 GROUP BY id` 在主键有序输入下可能走 `INDEX_SCAN + AccessPath::AGGREGATE`，但当前 factory 只允许 `AGGREGATE(TABLE_SCAN)`，因此也不会接管；
+- gate ON 只影响 PQ eligibility 诊断，不改变 optimizer plan；
+- 当前显式 GROUP BY 仍在 eligibility 阶段被 `GROUP_BY_PARTIAL_AGG_UNSUPPORTED` 拒绝。
+
+3.4 正确拆分：
+
+1. `V2-12A-3.4a`：只读/可观测 path tracing，新增 debug/status 或 MTR 证明目标 SQL 的 access path；
+2. `V2-12A-3.4b`：为 `TEMPTABLE_AGGREGATE` 设计 gated factory skeleton，先返回 nullptr；
+3. `V2-12A-3.4c`：仅在明确白名单下尝试 `GROUP BY int_col COUNT(*)` SQL result smoke。
+
+禁止事项：
+
+- 不强行改变 optimizer，让 temp-table group 变成 streaming aggregate；
+- 不修改 `setup_tmptable_write_func()`、`make_group_fields()` 或 `streaming_aggregation` 语义；
+- 不全局放开显式 GROUP BY eligibility；
+- 不绕过 `TemptableAggregateIterator` 的 spill/slice/sum-func 语义，除非 PQ iterator 完整复制并有独立验证。
