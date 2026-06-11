@@ -52,6 +52,12 @@
 // PQTableScanIterator implementation (Phase 5B stub)
 // ---------------------------------------------------------------------------
 
+namespace {
+
+constexpr uint64 kPQReadWaitTimeoutUs = 1000;
+
+}  // namespace
+
 PQTableScanIterator::PQTableScanIterator(THD *thd, MEM_ROOT *mem_root,
                                          TABLE *table, JOIN *join,
                                          double expected_rows,
@@ -265,42 +271,50 @@ int PQTableScanIterator::Read() {
   assert(m_gather != nullptr);
   assert(m_gather->get_exchange() != nullptr);
 
-  if (m_gather->check_leader_kill(thd())) {
-    m_gather->propagate_kill_to_workers(thd());
-    cleanup_pq_resources(true);
-    thd()->send_kill_message();
-    return 1;
-  }
+  auto *exchange = m_gather->get_exchange();
 
-  Exchange_nosort::Materialize_status status =
-      Exchange_nosort::Materialize_status::ERROR;
-  if (m_gather->get_exchange()->materialize_next_record_image_status(table(),
-                                                                     &status)) {
+  for (;;) {
+    if (m_gather->check_leader_kill(thd())) {
+      m_gather->propagate_kill_to_workers(thd());
+      cleanup_pq_resources(true);
+      thd()->send_kill_message();
+      return 1;
+    }
+
+    Exchange_nosort::Materialize_status status =
+        Exchange_nosort::Materialize_status::ERROR;
+    if (exchange->materialize_next_record_image_status(table(), &status)) {
+      cleanup_pq_resources(true);
+      PrintError(HA_ERR_INTERNAL_ERROR);
+      return 1;
+    }
+
+    if (status == Exchange_nosort::Materialize_status::ROW) {
+      if (!m_executed_counted) {
+        mark_pq_row_returned();
+        pq_set_execution_state(thd(), PQ_execution_state::EXECUTED);
+        pq_global_stats.queries_executed.fetch_add(1,
+                                                   std::memory_order_relaxed);
+        m_executed_counted = true;
+      }
+      pq_global_stats.rows_scanned.fetch_add(1, std::memory_order_relaxed);
+      return 0;
+    }
+
+    if (status == Exchange_nosort::Materialize_status::EOF_REACHED) {
+      cleanup_pq_resources(false);
+      return -1;
+    }
+
+    if (status == Exchange_nosort::Materialize_status::WOULD_BLOCK) {
+      exchange->wait_for_message(kPQReadWaitTimeoutUs);
+      continue;
+    }
+
     cleanup_pq_resources(true);
     PrintError(HA_ERR_INTERNAL_ERROR);
     return 1;
   }
-
-  if (status == Exchange_nosort::Materialize_status::ROW) {
-    if (!m_executed_counted) {
-      mark_pq_row_returned();
-      pq_set_execution_state(thd(), PQ_execution_state::EXECUTED);
-      pq_global_stats.queries_executed.fetch_add(1,
-                                                 std::memory_order_relaxed);
-      m_executed_counted = true;
-    }
-    pq_global_stats.rows_scanned.fetch_add(1, std::memory_order_relaxed);
-    return 0;
-  }
-
-  if (status == Exchange_nosort::Materialize_status::EOF_REACHED) {
-    cleanup_pq_resources(false);
-    return -1;
-  }
-
-  cleanup_pq_resources(true);
-  PrintError(HA_ERR_INTERNAL_ERROR);
-  return 1;
 }
 
 void PQTableScanIterator::UnlockRow() {

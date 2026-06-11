@@ -147,8 +147,8 @@ DOP=1 real gate 前还需要收敛 PROBE/range gate 和真实 producer 入口。
 - 普通 `SELECT *` 在 debug shadow gate 下仍可能因 PROBE unsupported 走
   serial fallback；
 - callback conversion primitive 当前最多产出一行，不能作为 full scan；
-- `materialize_next_record_image()` 仍无 wait/kill policy，不能承载真实异步
-  worker；
+- `materialize_next_record_image()` 已有 bounded wait/kill policy 边界，但尚未
+  接真实异步 worker；
 - 打开 DOP=1 前必须先补一个受控 producer，把多行 ROW/FINISH 放入持久
   `m_gather`，并定义 no-message 时的 wait/kill 语义。
 
@@ -181,6 +181,12 @@ producer smoke。`Gather_operator::run_worker_callback_multirow_producer_smoke()
 `Parallel_callback_smoke_rows` 验收从 `>= 1` 提升到 `>= 3`。该路径仍是
 smoke-only，不接默认 `Read()`，真实 DOP=1 full scan 仍未打开。
 
+Status update: 已在 `PQTableScanIterator::Read()` 增加 bounded wait/kill
+policy。`Exchange_nosort::wait_for_message()` 每次最多等待 1ms；`Read()`
+在每轮 materialize 前检查 leader kill，遇到 `WOULD_BLOCK` 时等待后重试，
+遇到 kill 则传播到 worker/MQ 并返回 kill error。该边界仍不启动真实异步
+worker，但已经避免把暂时无消息误判为内部错误。
+
 ## Acceptance Checklist
 
 - [x] callback row conversion smoke 能稳定产出 row；
@@ -190,6 +196,7 @@ smoke-only，不接默认 `Read()`，真实 DOP=1 full scan 仍未打开。
 - [x] worker producer loop 有 abort 语义；
 - [x] `Read()` shadow path 可编译、默认不可达；
 - [x] callback multi-row producer smoke 接入 SQL worker loop / Exchange sink；
+- [x] `Read()` wait/kill policy 边界已实现；
 - [ ] DOP=1 real full scan MTR 通过；
 - [ ] full `parallel_query` suite 通过；
 - [ ] fatal-after-start 不 fallback。
@@ -229,6 +236,8 @@ smoke-only，不接默认 `Read()`，真实 DOP=1 full scan 仍未打开。
   FINISH 经 Exchange 被 leader materialize；
 - `pq_worker_dop1` 将 callback rows 下限提升到 3，覆盖 single-row
   conversion smoke + multi-row producer smoke；
+- 增加 `Exchange_nosort::wait_for_message()` 和 shadow `Read()` bounded
+  wait/kill loop，明确 WOULD_BLOCK 不等于内部错误；
 - 新增 `Parallel_worker_producer_smoke_runs` 状态变量；
 - 默认仍不接真实 `Read()`。
 
@@ -245,5 +254,6 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 Result: passed, 19 tests successful
 ```
 
-下一步继续 V2-8J-4：实现 wait/kill policy，并在 debug gate 下验证真实
-DOP=1 full scan；真实 DOP=1 full scan 仍未打开。
+下一步继续 V2-8J-4：在 debug gate 下验证真实 DOP=1 full scan，并决定是否
+把 limited producer 从 smoke-only 推进到 shadow `Read()` producer；真实
+DOP=1 full scan 仍未打开。

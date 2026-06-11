@@ -281,6 +281,16 @@ class Exchange_nosort : public Exchange {
                                             Materialize_status *status);
 
   /**
+    Wait briefly for producer activity.
+
+    This is the bounded wait primitive for `PQTableScanIterator::Read()`: the
+    caller must perform THD kill checks before and after waiting.
+
+    @param timeout_us  Maximum wait time in microseconds; 0 means unbounded
+  */
+  void wait_for_message(uint64 timeout_us);
+
+  /**
     Enqueue one fixed-size record image as a typed ROW message.
 
     This helper is for controlled producer paths. It does not send FINISH, so

@@ -472,6 +472,13 @@ bool Exchange_nosort::materialize_next_record_image_status(
   return false;
 }
 
+void Exchange_nosort::wait_for_message(uint64 timeout_us) {
+  if (m_receiver_event == nullptr || m_all_done) return;
+
+  m_receiver_event->wait_latch(timeout_us);
+  m_receiver_event->reset_latch();
+}
+
 bool Exchange_nosort::enqueue_record_image(uint32 worker_id,
                                            TABLE *source_table) {
   if (m_mq_handles == nullptr || worker_id >= m_nqueues ||
