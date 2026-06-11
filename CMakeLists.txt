@@ -125,6 +125,27 @@ ENDIF()
 
 OPTION(WITH_DEBUG "Use dbug/safemutex" OFF)
 OPTION(CHECK_ERRMSG_FORMAT "Check printf format for English error messages" OFF)
+OPTION(WITHOUT_CDE_STORAGE_ENGINE "Build without CDE/Dstore storage engine support." ON)
+OPTION(WITH_THREADPOOL "Build threadpool plugin support." OFF)
+
+IF(DEFINED WITHOUT_CDE)
+  SET(WITHOUT_CDE_STORAGE_ENGINE ${WITHOUT_CDE} CACHE BOOL
+    "Build without CDE/Dstore storage engine support." FORCE)
+ENDIF()
+
+IF(DEFINED WITHOUT_THREADPOOL)
+  IF(WITHOUT_THREADPOOL)
+    SET(WITH_THREADPOOL OFF CACHE BOOL
+      "Build threadpool plugin support." FORCE)
+  ELSE()
+    SET(WITH_THREADPOOL ON CACHE BOOL
+      "Build threadpool plugin support." FORCE)
+  ENDIF()
+ENDIF()
+
+IF(WITHOUT_CDE_STORAGE_ENGINE)
+  ADD_COMPILE_DEFINITIONS(WITHOUT_CDE_STORAGE_ENGINE)
+ENDIF()
 
 # Use a default manufacturer if no manufacturer was identified.
 SET(MANUFACTURER_DOCSTRING
@@ -839,7 +860,7 @@ ENDIF()
 
 INCLUDE(CMakePushCheckState)
 
-OPTION(SUPPORT_OBS "Enable Huawei OBS support." ON)
+OPTION(SUPPORT_OBS "Enable Huawei OBS support." OFF)
 
 # Add macros
 INCLUDE(add_custom_target)
@@ -900,7 +921,7 @@ IF(WITH_TCMALLOC OR WITH_TCMALLOC_DEBUG)
   ENDIF()
 ENDIF()
 
-OPTION(WITH_JEMALLOC "Use jemalloc rather than builtin malloc/free etc." ON)
+OPTION(WITH_JEMALLOC "Use jemalloc rather than builtin malloc/free etc." OFF)
 IF(WITH_JEMALLOC)
   SET(WITH_JEMALLOC "bundled")
   INCLUDE(jemalloc)

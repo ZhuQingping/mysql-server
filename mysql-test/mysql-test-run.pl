@@ -3206,10 +3206,12 @@ sub environment_setup {
             $ENV{'LD_LIBRARY_PATH'} ? split(':', $ENV{'LD_LIBRARY_PATH'}) : ());
     mtr_warning("LD_LIBRARY_PATH: $ENV{'LD_LIBRARY_PATH'}");
 
-    $ENV{'DYLD_LIBRARY_PATH'} = join(":",
-        @ld_library_paths,
-        $ENV{'DYLD_LIBRARY_PATH'} ? split(':', $ENV{'DYLD_LIBRARY_PATH'}) : ());
-    mtr_verbose("DYLD_LIBRARY_PATH: $ENV{'DYLD_LIBRARY_PATH'}");
+    if (!IS_MAC) {
+      $ENV{'DYLD_LIBRARY_PATH'} = join(":",
+          @ld_library_paths,
+          $ENV{'DYLD_LIBRARY_PATH'} ? split(':', $ENV{'DYLD_LIBRARY_PATH'}) : ());
+      mtr_verbose("DYLD_LIBRARY_PATH: $ENV{'DYLD_LIBRARY_PATH'}");
+    }
   }
   $ENV{'UMASK'}     = "0660";    # The octal *string*
   $ENV{'UMASK_DIR'} = "0770";    # The octal *string*
@@ -4318,9 +4320,11 @@ sub mysql_install_db {
   mtr_add_arg($args, "--datadir=%s", "$install_datadir");
   mtr_add_arg($args, "--secure-file-priv=%s", "$opt_vardir");
 
-  # Insert dstore variables
-  setup_dstore_conf();
-  mtr_add_arg($args, "--dstore_tenant_config=%s", "$dstore_tenant_config_path");
+  # Insert dstore variables only when running dstore tests.
+  if ($opt_dstore) {
+    setup_dstore_conf();
+    mtr_add_arg($args, "--dstore_tenant_config=%s", "$dstore_tenant_config_path");
+  }
 
   # Overwrite the buffer size to 24M for certain tests to pass
   mtr_add_arg($args, "--innodb_buffer_pool_size=24M");
@@ -5093,9 +5097,11 @@ sub run_testcase ($) {
                            bind_local          => $opt_bind_local
                          });
 
-      # Add dstore parameters.
-      my $name = "mysqld";
-      $config->insert($name, "dstore_tenant_config", "$dstore_tenant_config_path");
+      # Add dstore parameters only when running dstore tests.
+      if ($opt_dstore) {
+        my $name = "mysqld";
+        $config->insert($name, "dstore_tenant_config", "$dstore_tenant_config_path");
+      }
 
       # Write the new my.cnf
       $config->save($path_config_file);
@@ -6407,7 +6413,8 @@ sub mysqld_arguments ($$$) {
   my $opt_no_defaults    = grep(/^--no-defaults/,         @$extra_opts);
   my $opt_defaults_extra = grep(/^--defaults-extra-file/, @$extra_opts);
   my $opt_defaults       = grep(/^--defaults-file/,       @$extra_opts);
-  if ($opt_no_defaults || $opt_defaults_extra || $opt_defaults) {
+  if ($opt_dstore &&
+      ($opt_no_defaults || $opt_defaults_extra || $opt_defaults)) {
     mtr_add_arg($args, "--dstore_tenant_config=%s", "$dstore_tenant_config_path");
   }
 

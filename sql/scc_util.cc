@@ -16,9 +16,27 @@ this program; if not, write to the Free Software Foundation, Inc.,
 
 *****************************************************************************/
 
+#include <dlfcn.h>
 #include <fcntl.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#if defined(__has_include)
+#if __has_include(<sc_cryptoapi.h>) && __has_include(<sc_errcode.h>)
 #include <sc_cryptoapi.h>
 #include <sc_errcode.h>
+#else
+#define SEC_SUCCESS 0
+#define SEC_FAILURE 1
+#define SEC_ERR_NO_INIT 2
+#endif
+#else
+#include <sc_cryptoapi.h>
+#include <sc_errcode.h>
+#endif
+
+#include <string>
 #include "my_securec.h"
 #include "sql/log.h"
 #include "sql/mysqld.h"

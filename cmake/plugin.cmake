@@ -355,6 +355,16 @@ MACRO(CONFIGURE_PLUGINS)
   
   FOREACH(dir ${dirs_storage} ${dirs_plugin})
     IF (EXISTS ${dir}/CMakeLists.txt)
+      IF(dir STREQUAL "${CMAKE_SOURCE_DIR}/storage/dstore" AND
+         WITHOUT_CDE_STORAGE_ENGINE)
+        MESSAGE(STATUS "Skipping the Dstore storage engine.")
+        CONTINUE()
+      ENDIF()
+      IF(dir STREQUAL "${CMAKE_SOURCE_DIR}/plugin/threadpool" AND
+         NOT WITH_THREADPOOL)
+        MESSAGE(STATUS "Skipping the THREADPOOL plugin.")
+        CONTINUE()
+      ENDIF()
       ADD_SUBDIRECTORY(${dir})
     ENDIF()
   ENDFOREACH()

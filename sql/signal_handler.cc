@@ -438,8 +438,11 @@ void ffic_print_enhanced_crash_info(int sig, const siginfo_t *info_ptr,
                                     const ucontext_t *context) {
 #ifndef _WIN32
   ffic_print_crash_banner(sig, info_ptr);
-  ffic_print_signal_info(sig, info_ptr);
 #endif /* !_WIN32 */
+
+#if defined(__linux__) && !defined(_WIN32)
+  ffic_print_signal_info(sig, info_ptr);
+#endif /* Linux */
 
 #if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
   /* Register dump and hints */
@@ -472,9 +475,9 @@ void ffic_print_enhanced_crash_info(int sig, const siginfo_t *info_ptr,
   ffic_print_os_info();
 #endif /* Linux */
 
-#ifndef _WIN32
+#if defined(__linux__) && !defined(_WIN32)
   ffic_print_post_crash_tips();
-#endif
+#endif /* Linux */
 }
 
 /* ffic_print_post_crash_tips() is now defined in mysys/stacktrace.cc

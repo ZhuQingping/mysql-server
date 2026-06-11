@@ -25,13 +25,17 @@
 #include "mysql/psi/mysql_memory.h"
 
 #include "sql/outline/outline_proc.h"
+#ifndef WITHOUT_LOCAL_BACKUP
 #include "sql/package/dbms_dstore_proc.h"
+#endif
 
 #include "sql/package/package.h"
 #include "sql/package/package_common.h"
 #include "sql/package/package_parse.h"
 #include "sql/package/proc.h"
+#ifndef WITHOUT_LOCAL_BACKUP
 #include "sql/package/rds_backup_proc.h"
+#endif
 #include "sql/package/rpl_wal_proc.h"
 #include "sql/package/show_native_procedure.h"
 #include "sql/recyclebin/recycle_proc.h"
@@ -80,7 +84,7 @@ static const T *find_package_element(const std::string &schema_name,
   return Package::instance()->lookup_element<T>(schema_name, element_name);
 }
 /* Template instantiation */
-template static const Proc *find_package_element(
+template const Proc *find_package_element<Proc>(
     const std::string &schema_name, const std::string &element_name);
 
 /**
@@ -126,6 +130,7 @@ void package_context_init() {
 #endif
 
   register_package<Proc, im::Show_native_procedure_proc>(im::ADMIN_PROC_SCHEMA);
+#ifndef WITHOUT_LOCAL_BACKUP
   /* rds_backup.start_full_local_backup() */
   register_package<Proc, rds_backup::Proc_start_full_local_backup>(
       rds_backup::RDS_BACKUP_PROC_SCHEMA);
@@ -138,6 +143,7 @@ void package_context_init() {
   /* rds_backup.stop_log_archive() */
   register_package<Proc, rds_backup::Proc_stop_log_archive>(
       rds_backup::RDS_BACKUP_PROC_SCHEMA);
+#endif
 
   /* Register the native procedure: rpl_wal.pdb_promote() */
   register_package<Proc, rpl_wal::Proc_pdb_promote>(
@@ -147,8 +153,10 @@ void package_context_init() {
       rpl_wal::RPL_WAL_PROC_SCHEMA);
   /* Register the native procedure: dbms_dstore_maintenance.show_dstore_info()
    */
+#ifndef WITHOUT_LOCAL_BACKUP
   register_package<Proc, dbms_dstore_maintenance::Proc_show_dstore_info>(
       dbms_dstore_maintenance::DBMS_DSTORE_MAINTENANCE_PROC_SCHEMA);
+#endif
   /* dbms_sqlfilter.add_sql_filter(....) */
   register_package<Proc, Sqlfilter_proc_add>(SQL_FILTER_PROC_SCHEMA);
   /* dbms_sqlfilter.delete_sql_filter(...) */

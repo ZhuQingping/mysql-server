@@ -57,6 +57,37 @@ static PSI_thread_info full_local_backup_threads[] = {
     {&key_thread_full_local_backup, "full_local_backup", "full_lb",
      PSI_FLAG_SINGLETON, 0, PSI_DOCUMENT_ME}};
 
+static bool full_lb_check_handlers(THD *thd, handlerton **cde_hton_arg) {
+  handlerton *cde_hton = ha_resolve_by_legacy_type(thd, DB_TYPE_DSTORE);
+  if (cde_hton == nullptr || cde_hton->start_full_local_backup == nullptr ||
+      cde_hton->stop_full_local_backup == nullptr ||
+      cde_hton->finish_full_backup_binlog == nullptr ||
+      cde_hton->write_full_backup_meta_info == nullptr ||
+      cde_hton->write_full_backup_restore_meta == nullptr ||
+      cde_hton->write_full_backup_meta_json == nullptr) {
+    LogErr(ERROR_LEVEL, ER_LOCAL_BACKUP_ERROR,
+           "dstore full backup handler is unavailable");
+    my_error(ER_DA_LOCAL_BACKUP_ERROR, MYF(0),
+             "dstore full backup handler is unavailable");
+    return true;
+  }
+
+  if (innodb_hton == nullptr ||
+      innodb_hton->start_full_local_backup == nullptr ||
+      innodb_hton->stop_full_local_backup == nullptr) {
+    LogErr(ERROR_LEVEL, ER_LOCAL_BACKUP_ERROR,
+           "innodb full backup handler is unavailable");
+    my_error(ER_DA_LOCAL_BACKUP_ERROR, MYF(0),
+             "innodb full backup handler is unavailable");
+    return true;
+  }
+
+  if (cde_hton_arg != nullptr) {
+    *cde_hton_arg = cde_hton;
+  }
+  return false;
+}
+
 /** No full backup is requested since mysqld process start. */
 constexpr const char *full_lb_status_none = "None";
 constexpr const char *full_lb_status_sucess = "Success";
@@ -418,6 +449,10 @@ extern "C" void *full_local_backup_main(void *arg) {
   local_backup_point bak_point;
   bak_point.time_point = 0;
   handlerton *cde_hton = ha_resolve_by_legacy_type(thd, DB_TYPE_DSTORE);
+  if (full_lb_check_handlers(thd, &cde_hton)) {
+    error = true;
+    goto exit;
+  }
 
   LogErr(SYSTEM_LEVEL, ER_LOCAL_BACKUP_ERROR, "start full backup");
 
@@ -486,7 +521,8 @@ extern "C" void *full_local_backup_main(void *arg) {
 
 exit:
   /* Finish the binlog backup logic, release the backup binlog lock */
-  if (rds_full_local_backup_fetch_gtid &&
+  if (cde_hton != nullptr && cde_hton->finish_full_backup_binlog != nullptr &&
+      rds_full_local_backup_fetch_gtid &&
       cde_hton->finish_full_backup_binlog(bak_point)) {
     error = true;
     ss_err_msg << "failed to finish backup binlog logic";
@@ -548,7 +584,8 @@ exit:
     binlog info to full local backup meta json file.
   */
   std::string err_msg = ss_err_msg.str();
-  if (cde_hton->write_full_backup_meta_json(&err_msg, &bak_point,
+  if (cde_hton != nullptr && cde_hton->write_full_backup_meta_json != nullptr &&
+      cde_hton->write_full_backup_meta_json(&err_msg, &bak_point,
                                             cde_bak_cfg.root_path)) {
     error = true;
     LogErr(ERROR_LEVEL, ER_LOCAL_BACKUP_ERROR,
@@ -588,13 +625,17 @@ exit:
 constexpr longlong LB_FLAG_INVOLVE_LOG_ARCH = 1;
 constexpr longlong LB_FLAG_INVOLVE_REPLICA = 1 << 1;
 
-bool exec_start_full_lb_cmd(THD *, longlong flag) {
+bool exec_start_full_lb_cmd(THD *thd, longlong flag) {
   std::unique_lock<std::mutex> lock(full_lb_mutex);
   if (full_lb_running) {
     LogErr(ERROR_LEVEL, ER_LOCAL_BACKUP_ERROR,
            "previous full backup is running");
     my_error(ER_DA_LOCAL_BACKUP_ERROR, MYF(0),
              "previous full backup is running");
+    return true;
+  }
+
+  if (full_lb_check_handlers(thd, nullptr)) {
     return true;
   }
 
@@ -656,6 +697,9 @@ bool exec_stop_full_lb_cmd(THD *thd) {
   }
 
   handlerton *cde_hton = ha_resolve_by_legacy_type(thd, DB_TYPE_DSTORE);
+  if (full_lb_check_handlers(thd, &cde_hton)) {
+    return true;
+  }
   if (DBUG_EVALUATE_IF("full_lb_stop_dstore_fail", true, false) ||
       cde_hton->stop_full_local_backup()) {
     LogErr(ERROR_LEVEL, ER_LOCAL_BACKUP_ERROR,

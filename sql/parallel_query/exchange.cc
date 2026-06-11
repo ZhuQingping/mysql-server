@@ -34,7 +34,8 @@
 bool Exchange::init() {
   uint i = 0;
   MQueue **mqueues = nullptr;
-  uint64 ring_size = lower_exponent(m_thd->variables.pq_msg_queue_size);
+  uint64 msg_queue_size = m_thd->variables.pq_msg_queue_size;
+  uint64 ring_size = lower_exponent(msg_queue_size);
 
   /** note that: all workers share one receiver. */
   m_receiver = new (m_thd->pq_mem_root) MQ_event(m_thd);

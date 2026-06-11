@@ -185,6 +185,7 @@ IF(MY_COMPILER_IS_GNU_OR_CLANG)
     COMPILE_FLAGS "-Wno-unused-parameter -Wno-cast-qual")
 ENDIF()
 
+IF(NOT WITHOUT_CDE_STORAGE_ENGINE)
 IF(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
     SET(DSTORE_PLATFORM "euleros2.5_x86_64")
     MESSAGE(STATUS "Building on x86_64 architecture")
@@ -313,4 +314,7 @@ TARGET_COMPILE_DEFINITIONS(backup_download PRIVATE UNIV_NO_ERR_MSGS UNIV_LIBRARY
 IF(MY_COMPILER_IS_GNU_OR_CLANG)
   ADD_COMPILE_FLAGS(backup_download.cc
     COMPILE_FLAGS "-Wno-unused-parameter -Wno-cast-qual")
+ENDIF()
+ELSE()
+  MESSAGE(STATUS "Skipping Dstore backup utilities.")
 ENDIF()

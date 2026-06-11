@@ -86,7 +86,9 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #include "arch0arch.h"
 #include "arch0page.h"
 #include "auth_acls.h"
+#ifndef WITHOUT_LOCAL_BACKUP
 #include "backup0local_backup.h"
+#endif
 #include "btr0btr.h"
 #include "btr0cur.h"
 #include "btr0sea.h"
@@ -4400,6 +4402,7 @@ static void innobase_page_track_get_status(
   arch_page_sys->get_status(status);
 }
 
+#ifndef WITHOUT_LOCAL_BACKUP
 static bool innobase_start_full_local_backup(local_backup_config *config,
                                              local_backup_point *backup_point,
                                              bool involve_wal_archive,
@@ -4413,6 +4416,7 @@ static bool innobase_start_full_local_backup(local_backup_config *config,
 static bool innobase_stop_full_local_backup() {
   return local_backup_sys->stop_backup();
 }
+#endif
 
 /** Gives the file extension of an InnoDB single-table tablespace. */
 static const char *ha_innobase_exts[] = {dot_ext[IBD], NullS};
@@ -5299,8 +5303,13 @@ static int innodb_init(void *p) {
       innobase_page_track_get_num_page_ids;
   innobase_hton->page_track.get_status = innobase_page_track_get_status;
 
+#ifndef WITHOUT_LOCAL_BACKUP
   innobase_hton->start_full_local_backup = innobase_start_full_local_backup;
   innobase_hton->stop_full_local_backup = innobase_stop_full_local_backup;
+#else
+  innobase_hton->start_full_local_backup = nullptr;
+  innobase_hton->stop_full_local_backup = nullptr;
+#endif
   innobase_hton->start_wal_archive = nullptr;
   innobase_hton->stop_wal_archive = nullptr;
   innobase_hton->write_full_backup_meta_info = nullptr;
@@ -23328,6 +23337,7 @@ static MYSQL_SYSVAR_STR(directories, srv_innodb_directories,
                         "'innodb-data-home-dir;innodb-undo-directory;datadir'",
                         nullptr, nullptr, nullptr);
 
+#ifndef WITHOUT_LOCAL_BACKUP
 static MYSQL_SYSVAR_BOOL(lb_use_io_thread, innodb_lb_use_io_thread,
                          PLUGIN_VAR_RQCMDARG,
                          "Whether use io thread for local backup innodb part.",
@@ -23355,6 +23365,7 @@ static MYSQL_SYSVAR_INT(lb_local_io_thread_quit_timeout_ms,
                         PLUGIN_VAR_RQCMDARG,
                         "timeout ms of waiting innodb io thread quit.", nullptr,
                         nullptr, 1000, 0, INT_MAX, 0);
+#endif
 
 #ifdef UNIV_DEBUG
 /** Use this variable innodb_interpreter to execute debug code within InnoDB.
@@ -23605,11 +23616,13 @@ static SYS_VAR *innobase_system_variables[] = {
 #endif /* UNIV_DEBUG */
     MYSQL_SYSVAR(parallel_read_threads),
     MYSQL_SYSVAR(segment_reserve_factor),
+#ifndef WITHOUT_LOCAL_BACKUP
     MYSQL_SYSVAR(lb_use_io_thread),
     MYSQL_SYSVAR(lb_global_io_retry_number),
     MYSQL_SYSVAR(lb_local_io_retry_times),
     MYSQL_SYSVAR(lb_local_io_hang_timeout_ms),
     MYSQL_SYSVAR(lb_local_io_thread_quit_timeout_ms),
+#endif
     nullptr};
 
 mysql_declare_plugin(innobase){

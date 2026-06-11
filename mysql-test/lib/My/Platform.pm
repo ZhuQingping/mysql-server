@@ -129,8 +129,9 @@ sub check_socket_path_length {
     }
   }
 
-  # Create a tempfile name with same length as "path"
-  my $tmpdir   = tempdir(CLEANUP => 0);
+  # Create a tempfile name with same length as "path". On macOS the default
+  # TMPDIR can itself be longer than a valid MySQL socket path.
+  my $tmpdir   = tempdir("mtr_socket_XXXX", DIR => "/tmp", CLEANUP => 0);
   my $len      = length($path) - length($tmpdir) - 1;
   my $testfile = $tmpdir . "/" . "x" x ($len > 0 ? $len : 1);
 

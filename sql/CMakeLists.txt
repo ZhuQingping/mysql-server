@@ -875,6 +875,23 @@ SET(SQL_SOURCE
   srv_session_service.cc
   )
 
+IF(WITHOUT_CDE_STORAGE_ENGINE)
+  ADD_COMPILE_DEFINITIONS(WITHOUT_LOCAL_BACKUP)
+  LIST(REMOVE_ITEM SQL_SOURCE
+    package/rds_backup_proc.cc
+    package/dbms_dstore_proc.cc
+    local_backup/full_local_backup.cc
+    local_backup/log_archive.cc
+    local_backup/local_backup_binlog.cc
+    local_backup/local_backup_file_utils.cc
+    local_backup/local_backup_obs_download_utils.cc
+    local_backup/local_backup_obs_download.cc
+    local_backup/local_backup_obs_handler.cc
+    local_backup/local_backup_obs_utils.cc
+    local_backup/local_backup_utils.cc
+  )
+ENDIF()
+
 IF(NOT HAVE_SETNS)
   LIST(REMOVE_ITEM SQL_SOURCE ../sql-common/net_ns.cc)
 ENDIF()

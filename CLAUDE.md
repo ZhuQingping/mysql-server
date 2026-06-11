@@ -62,6 +62,48 @@
   - main 自定义测试优先自包含（建表/插数/清理尽量写在用例内），减少 include 依赖导致的路径问题。  
   - Cursor agent 跑 mtr 时需使用完整终端权限（非受限沙箱），以避免与本机直接执行结果不一致。  
 
+### 3.1 本地 dstore 数据库连接
+
+用于手工验证 SQL、EXPLAIN、Parallel Query 运行状态时，可连接相邻工作区的本地 dstore 安装实例。
+
+```bash
+cd /Users/zhuqingping/Work/Database/MySQL/dstore
+sh connect_db.sh
+```
+
+`connect_db.sh` 当前等价于：
+
+```bash
+export PATH=/Users/zhuqingping/Work/Database/MySQL/dstore/install/bin:$PATH
+mysql -uroot -h127.0.0.1 -P3306 -pTAKE0one -A
+```
+
+如果 `127.0.0.1:3306` 无法连接，先确认本地 mysqld 是否已经启动。启动脚本为：
+
+```bash
+cd /Users/zhuqingping/Work/Database/MySQL/dstore
+sh only_start.sh
+```
+
+该脚本使用 `/Users/zhuqingping/Work/Database/MySQL/dstore/my.cnf`，数据目录为
+`/Users/zhuqingping/Work/Database/MySQL/dstore/install/data`，socket 为
+`/Users/zhuqingping/Work/Database/MySQL/dstore/install/data/mysql.sock`，错误日志为
+`/Users/zhuqingping/Work/Database/MySQL/dstore/install/log/mysql.log`。
+
+Parallel Query 手工验证示例：
+
+```sql
+SET force_parallel_execute=ON;
+EXPLAIN SELECT COUNT(*) FROM tpch.lineitem WHERE L_SHIPDATE > '1997-01-01';
+
+SET force_parallel_execute=OFF;
+EXPLAIN SELECT COUNT(*) FROM tpch.lineitem WHERE L_SHIPDATE > '1997-01-01';
+
+SHOW GLOBAL STATUS LIKE '%PQ%';
+```
+
+注意：`force_parallel_execute=ON` 不代表无条件进入 PQ，查询仍需要通过 eligibility rules、feature switch、成本模型和资源限制。
+
 ---
 
 ## 4. 如何描述你的诉求（给模型的提示）

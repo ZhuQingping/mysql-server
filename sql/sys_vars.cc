@@ -106,11 +106,13 @@
 #include "sql/discrete_interval.h"
 #include "sql/events.h"          // Events
 #include "sql/hostname_cache.h"  // host_cache_resize
+#ifndef WITHOUT_LOCAL_BACKUP
 #include "sql/local_backup/full_local_backup.h"
 #include "sql/local_backup/local_backup_binlog.h"
 #include "sql/local_backup/local_backup_file_utils.h"
 #include "sql/local_backup/local_backup_obs_handler.h"
 #include "sql/local_backup/log_archive.h"
+#endif
 #include "sql/log.h"
 #include "sql/mdl.h"
 #include "sql/my_decimal.h"
@@ -1198,7 +1200,13 @@ static Sys_var_enum Sys_storage_engine_mode(
     "Create user table with storage engine Dstore or InnoDB or Both. "
     "Both is only for emergency offline situation. ",
     READ_ONLY GLOBAL_VAR(storage_engine_mode), CMD_LINE(OPT_ARG),
-    storage_engine_mode_names, DEFAULT(ONLY_DSTORE), NO_MUTEX_GUARD,
+    storage_engine_mode_names,
+#ifdef WITHOUT_CDE_STORAGE_ENGINE
+    DEFAULT(ONLY_INNODB),
+#else
+    DEFAULT(ONLY_DSTORE),
+#endif
+    NO_MUTEX_GUARD,
     NOT_IN_BINLOG, ON_CHECK(nullptr), ON_UPDATE(nullptr));
 
 static Sys_var_ulong Sys_back_log(
@@ -8349,6 +8357,7 @@ static Sys_var_bool Sys_dstore_use_histogram_auto_update(
     DEFAULT(true), NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(nullptr),
     ON_UPDATE(nullptr));
 
+#ifndef WITHOUT_LOCAL_BACKUP
 static Sys_var_charptr Sys_rds_full_local_backup_path(
     "rds_full_local_backup_path", "Path for full local backup data",
     GLOBAL_VAR(rds_full_local_backup_path_ptr), CMD_LINE(OPT_ARG),
@@ -8561,6 +8570,8 @@ static Sys_var_charptr Sys_rds_lb_obs_kms_key_id(
     GLOBAL_VAR(rds_lb_obs_kms_key_id), CMD_LINE(REQUIRED_ARG), IN_FS_CHARSET,
     DEFAULT(nullptr), NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(nullptr),
     ON_UPDATE(nullptr));
+#endif
+
 static Sys_var_ulong Sys_recycle_scheduler_interval(
     "rds_recycle_scheduler_interval",
     "Interval in seconds for recycle scheduler.",

@@ -52,7 +52,7 @@ static inline size_t _cache_line_size() {
   size_t line_size{0};
   size_t sizeof_line_size = sizeof(line_size);
   sysctlbyname("hw.cachelinesize", &line_size, &sizeof_line_size, 0, 0);
-  return line_size;
+  return line_size > 0 ? line_size : 64;
 }
 
 #elif defined(_WIN32)

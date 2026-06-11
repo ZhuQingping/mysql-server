@@ -97,7 +97,9 @@ this program; if not, write to the Free Software Foundation, Inc.,
 
 #include "arch0arch.h"
 #include "arch0recv.h"
+#ifndef WITHOUT_LOCAL_BACKUP
 #include "backup0local_backup.h"
+#endif
 #include "btr0pcur.h"
 #include "btr0sea.h"
 #include "buf0flu.h"
@@ -2351,7 +2353,9 @@ dberr_t srv_start(bool create_new_db) {
   if it is already done before creating new log files. */
   clone_files_recovery(true);
 
+#ifndef WITHOUT_LOCAL_BACKUP
   local_backup_sys = Local_Backup_Sys::get_instance();
+#endif
 
   ib::info(ER_IB_MSG_1151, INNODB_VERSION_STR,
            ulonglong{log_get_lsn(*log_sys)});
@@ -2970,7 +2974,9 @@ void srv_shutdown() {
   uint data_version = MYSQL_VERSION_ID;
 
   /* Stop on-going local backup. */
+#ifndef WITHOUT_LOCAL_BACKUP
   local_backup_sys->stop_backup();
+#endif
 
   if (!fsp_header_dict_get_server_version(&data_version) &&
       data_version != MYSQL_VERSION_ID) {

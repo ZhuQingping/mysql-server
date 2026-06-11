@@ -976,8 +976,10 @@ MySQL clients support the protocol:
 #include "sql/dd/performance_schema/init.h"  // performance_schema::init
 #include "sql/dd/upgrade/server.h"      // dd::upgrade::upgrade_system_schemas
 #include "sql/dd/upgrade_57/upgrade.h"  // dd::upgrade_57::in_progress
+#ifndef WITHOUT_LOCAL_BACKUP
 #include "sql/local_backup/full_local_backup.h"
 #include "sql/local_backup/log_archive.h"
+#endif
 #include "sql/server_component/component_sys_var_service_imp.h"
 #include "sql/server_component/log_builtins_filter_imp.h"
 #include "sql/server_component/log_builtins_imp.h"
@@ -2935,7 +2937,9 @@ static void clean_up(bool print_message) {
     connection/transaction to InnoDB. Make sure that we stop and disconnect
     this thread before we deinitialize the InnoDB plugin further down.
   */
+#ifndef WITHOUT_LOCAL_BACKUP
   CDE::CdeBgStatSrvDeinit();
+#endif
 
   ha_pre_dd_shutdown();
   dd::shutdown();
@@ -5257,7 +5261,12 @@ int init_common_variables() {
 
     From MySQL 5.5 onwards, the default storage engine is InnoDB.
   */
-  default_storage_engine = DSTORE_ENGINE_NAME;
+  default_storage_engine =
+#ifdef WITHOUT_CDE_STORAGE_ENGINE
+      INNODB_ENGINE_NAME;
+#else
+      DSTORE_ENGINE_NAME;
+#endif
   default_tmp_storage_engine = default_storage_engine;
 
   /*
@@ -8650,7 +8659,9 @@ int mysqld_main(int argc, char **argv)
                                          &opt_replica_skip_errors);
 
   if (!opt_initialize) {
+#ifndef WITHOUT_LOCAL_BACKUP
     init_full_local_backup();
+#endif
   }
 
 #ifdef WITH_LOCK_ORDER
