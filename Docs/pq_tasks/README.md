@@ -40,9 +40,10 @@
   - V2-8F callback accessors: `e817a9176ec` Add PQ V2-8F callback row accessors
   - V2-8F callback conversion helper: `f23320fb5f7` Add PQ V2-8F callback conversion helper
   - V2-8F callback conversion smoke: `816a6808699` Add PQ V2-8F callback conversion smoke
-  - V2-8G EXECUTE callback smoke: 本轮提交，增加 EXECUTE read-view callback smoke attempts/rows observability
-  - V2-8H row stream activation boundary: 本轮提交，抽出 Exchange row/eof/error materialization helper
-  - V2-8I iterator runtime state contract: 本轮提交，显式记录 safe-fallback / started / row-returned 边界
+  - V2-8G EXECUTE callback smoke: `03fb7eb4bf8` Add PQ V2-8G execute callback smoke
+  - V2-8H row stream activation boundary: `ccc187e271c` Add PQ V2-8H row stream boundary helper
+  - V2-8I iterator runtime state contract: `eb0cd14e659` Add PQ V2-8I iterator runtime state
+  - V2-8J real read activation plan: planned，真实 `Read()` 打开前硬阻塞拆分
   - V2-1: `9a58ff94cdf` Add PQ V2-1 iterator safe fallback
   - V2-0: `a420e8a3f26` Add PQ V2-0 execution state contract
   - Phase 8: `113d2ba44c1` Add PQ phase 8 V1 completion scaffolding
@@ -74,9 +75,10 @@
   - [v2-8g-execute-callback-smoke.md](v2-8g-execute-callback-smoke.md): V2-8G 已完成，SQL iterator 在 safe fallback window 内尝试固定 DOP=1 EXECUTE callback smoke；新增 `Parallel_callback_smoke_attempts` / `Parallel_callback_smoke_rows`；失败不影响 serial fallback；完整 `parallel_query` suite 通过。
   - [v2-8h-row-stream-activation.md](v2-8h-row-stream-activation.md): V2-8H 已完成，抽出 `Exchange_nosort::materialize_next_record_image()`，不接真实 `Read()`；完整 `parallel_query` suite 通过。
   - [v2-8i-iterator-runtime-state.md](v2-8i-iterator-runtime-state.md): V2-8I 已完成，增加 iterator runtime state contract，不打开真实 `Read()`；完整 `parallel_query` suite 通过。
+  - [v2-8j-real-read-activation-plan.md](v2-8j-real-read-activation-plan.md): V2-8J 已拆分真实 `Read()` 激活前的硬阻塞；建议先做 callback row producer smoke。
   - [v2-execution-path-roadmap.md](v2-execution-path-roadmap.md): V2 真实执行路径拆分，覆盖 SQL iterator、worker THD、Exchange/Gather row 流、InnoDB 分片扫描、full scan 闭环和基础聚合。
   - [v2-test-matrix.md](v2-test-matrix.md): V1/V2 阶段化 MTR 测试矩阵，明确 DOP=1 first 和 DOP>1 range-partition gate。
-- Next recommended action: 进入 V2-8H row stream activation design，先定义 `Read()` 接管、EOF/error、MQ row image 和 fatal-after-start 边界；在 hard gate 完成前，`pq_worker_scan_next()` 继续 disabled。
+- Next recommended action: 进入 V2-8J-1 callback row producer smoke，让 EXECUTE context 下的 `Parallel_reader` callback 稳定产出 typed ROW image，经 MQ 由 leader materialize；在该 gate 完成前，`PQTableScanIterator::Read()` 和 `pq_worker_scan_next()` 继续 disabled。
 - Parallel-ready task overview: [parallel_wave2_tasks.md](parallel_wave2_tasks.md)
 - Remaining risk: Phase 8 的 aggregate 当前仍是基础设施和 eligibility 扩展，真实并行聚合执行尚未启用；locking read 的 EXPLAIN annotation 当前仍可能显示 `Parallel query dop=4`，已从 Phase 9 测试中移除，后续需单独修复。
 
@@ -147,6 +149,7 @@ Recommended worktrees:
 | V2-8G - EXECUTE Callback Smoke | Completed | Codex Orchestrator | [v2-8g-execute-callback-smoke.md](v2-8g-execute-callback-smoke.md) | SQL iterator safe fallback window 内尝试固定 DOP=1 EXECUTE callback smoke；新增 attempts/rows 状态变量；不打开真实 row stream；`mysqld` build 和完整 `parallel_query` suite 通过 |
 | V2-8H - Row Stream Activation Boundary | Completed | Codex Orchestrator | [v2-8h-row-stream-activation.md](v2-8h-row-stream-activation.md) | 抽出 Exchange row/eof/error materialization helper；不接真实 `Read()`；`mysqld` build 和完整 `parallel_query` suite 通过 |
 | V2-8I - Iterator Runtime State Contract | Completed | Codex Orchestrator | [v2-8i-iterator-runtime-state.md](v2-8i-iterator-runtime-state.md) | 显式记录 safe-fallback / started / row-returned 边界；不接真实 `Read()`；`mysqld` build 和完整 `parallel_query` suite 通过 |
+| V2-8J - Real Read Activation Plan | Planned | Codex Orchestrator | [v2-8j-real-read-activation-plan.md](v2-8j-real-read-activation-plan.md) | 拆分真实 `Read()` 激活前硬阻塞；下一步先做 callback row producer smoke |
 
 ## Decisions
 
