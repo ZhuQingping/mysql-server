@@ -56,9 +56,11 @@ Created 2026-06-02 by Qingping Zhu (PQ Phase 6B-2). */
 #include "row0pread_pq.h"
 
 #include "ha_prototypes.h"
+#include "read0read.h"
 #include "row0pread.h"
 #include "row0mysql.h"
 #include "row0sel.h"
+#include "srv0srv.h"
 #include "trx0trx.h"
 #include "ut0new.h"
 
@@ -136,6 +138,37 @@ InnoDB_pq_scan_ctx::InnoDB_pq_scan_ctx(dict_index_t *index, const trx_t *trx,
 
 InnoDB_pq_scan_ctx::~InnoDB_pq_scan_ctx() = default;
 
+bool InnoDB_pq_scan_ctx::has_active_read_view() const {
+  if (m_trx == nullptr) {
+    return false;
+  }
+
+  return srv_read_only_mode ||
+         (m_trx->read_view != nullptr &&
+          MVCC::is_view_active(m_trx->read_view));
+}
+
+dberr_t InnoDB_pq_scan_ctx::validate_pull_adapter_gate() const {
+  if (m_index == nullptr || !m_index->is_clustered() || m_trx == nullptr) {
+    return DB_UNSUPPORTED;
+  }
+
+  if (!has_active_read_view()) {
+    return DB_UNSUPPORTED;
+  }
+
+  if (m_ranges.size() != 1) {
+    return DB_UNSUPPORTED;
+  }
+
+  const auto &range = m_ranges[0];
+  if (range.m_start != nullptr || range.m_end != nullptr || range.m_split) {
+    return DB_UNSUPPORTED;
+  }
+
+  return DB_SUCCESS;
+}
+
 dberr_t InnoDB_pq_scan_ctx::partition(size_t split_level) {
   m_ranges.clear();
 
@@ -186,16 +219,14 @@ bool InnoDB_pq_scan_ctx::check_visibility(const rec_t *&rec,
                                            ulint *&offsets,
                                            mem_heap_t *&heap,
                                            mtr_t *mtr) {
-  /* V1-MVP simplified visibility check.
-
-  For the MVP, we delegate visibility to the standard row_search_mvcc
-  path through the worker's row_prebuilt_t. This function is kept
-  as a placeholder for future direct visibility checks when we
-  refactor to use the adapter's own cursor traversal.
-
-  Currently, visibility is handled entirely by row_search_mvcc,
-  which uses the leader trx's read view via the worker's prebuilt->trx.
-  */
+  /* V2-8F placeholder. Real worker row reads must use the same visibility
+  semantics as upstream Parallel_reader::Scan_ctx::check_visibility(), with
+  the leader statement read view. The disabled row_search_mvcc() latent path is
+  not the selected execution route. */
+  (void)rec;
+  (void)offsets;
+  (void)heap;
+  (void)mtr;
   return true;
 }
 

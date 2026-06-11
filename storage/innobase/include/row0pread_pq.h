@@ -138,6 +138,17 @@ class InnoDB_pq_scan_ctx {
 
   const std::vector<InnoDB_pq_range> &ranges() const { return m_ranges; }
 
+  /** @return true if the covering transaction has an active read view. */
+  bool has_active_read_view() const;
+
+  /** Validate the first gate for a future Parallel_reader pull adapter.
+
+  This does not read rows. It only checks immutable prerequisites that must be
+  true before a PQ worker can use the leader snapshot for visibility.
+
+  @return DB_SUCCESS or DB_UNSUPPORTED. */
+  dberr_t validate_pull_adapter_gate() const;
+
   /** Mutable access to ranges for dispatch. */
   std::vector<InnoDB_pq_range> &mutable_ranges() { return m_ranges; }
 

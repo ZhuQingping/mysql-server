@@ -60,6 +60,11 @@ V2-8F 的目标是为 PQ worker 提供一个 pull-style InnoDB row adapter：
 - helper 明确 whole-range/DOP=1 限制；
 - helper 注释引用 `Parallel_reader` visibility adapter 路线。
 
+Status: Implemented first gate primitive. `InnoDB_pq_scan_ctx` now exposes
+`has_active_read_view()` and `validate_pull_adapter_gate()`, which check
+clustered index, leader active read view, and a single whole range without
+reading rows.
+
 ### Step 2: Cursor / Visibility Extraction
 
 - 评估能否把 `Parallel_reader::Scan_ctx::check_visibility()` 和相关 cursor traversal
@@ -103,19 +108,35 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 
 ## Acceptance Checklist
 
-- [ ] pull adapter internal API 设计完成；
-- [ ] leader active read view gate 明确；
-- [ ] whole-range DOP=1 first gate 明确；
+- [x] pull adapter internal API 第一段完成；
+- [x] leader active read view gate 明确；
+- [x] whole-range DOP=1 first gate 明确；
 - [ ] 不公开 `Parallel_reader::Scan_ctx` 大量私有状态；
 - [ ] `pq_worker_scan_next()` 仍 disabled；
-- [ ] build 和完整 `parallel_query` suite 通过。
+- [x] build 和完整 `parallel_query` suite 通过。
 
 ## Current Status
 
-- Status: Planned
+- Status: Gate primitive completed
 - Owner: Codex Orchestrator
 - Started: 2026-06-11
 
 ## Completion Report
 
-待实现后补充。
+已完成第一段 gate primitive：
+
+- `InnoDB_pq_scan_ctx::has_active_read_view()`；
+- `InnoDB_pq_scan_ctx::validate_pull_adapter_gate()`；
+- 不读取 row，不接 `pq_worker_scan_next()`，不改变执行状态。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_worker_dop1 --parallel=1 --vardir=/tmp/pqv --tmpdir=/tmp/pqt
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir=/tmp/pqt
+```
+
+结果：`mysqld` build 通过；`pq_worker_dop1` 通过；完整 `parallel_query` suite
+19 项通过。
