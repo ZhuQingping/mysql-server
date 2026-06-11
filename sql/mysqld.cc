@@ -9985,6 +9985,8 @@ DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC(
     groupby_dop_partial_merged_groups, groupby_dop_partial_merged_groups)
 DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC(
     groupby_dop_partial_fallback, groupby_dop_partial_fallback)
+DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC(
+    groupby_partial_payload_errors, groupby_partial_payload_errors)
 
 #undef DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC
 
@@ -10454,6 +10456,9 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_groupby_dop_partial_fallback",
      (char *)&show_pq_groupby_dop_partial_fallback, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_groupby_partial_payload_errors",
+     (char *)&show_pq_groupby_partial_payload_errors, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_groupby_temp_shape_supported",
      (char *)&show_pq_groupby_temp_shape_supported, SHOW_FUNC,

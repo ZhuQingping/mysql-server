@@ -415,6 +415,19 @@ class Exchange_nosort : public Exchange {
   bool run_synthetic_partial_group_smoke(uint32 *groups_read,
                                          uint32 *finishes_read);
 
+  /**
+    Run a local malformed PARTIAL_GROUP payload smoke.
+
+    This validates that the typed MQ decoder rejects bad partial-group payloads
+    before real worker partial aggregation is enabled.
+
+    @param[out] errors_seen  Number of malformed payloads rejected
+
+    @retval false  Smoke pass completed
+    @retval true   Smoke pass failed
+  */
+  bool run_synthetic_partial_group_malformed_smoke(uint32 *errors_seen);
+
   ExchangeType get_exchange_type() const override { return EXCHANGE_NOSORT; }
 };
 

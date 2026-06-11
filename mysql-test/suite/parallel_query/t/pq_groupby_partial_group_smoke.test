@@ -28,6 +28,10 @@ SET @pq_partial_finishes_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_exchange_partial_group_smoke_finishes');
+SET @pq_partial_payload_errors_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_partial_payload_errors');
 
 --disable_result_log
 SELECT * FROM t1;
@@ -44,7 +48,11 @@ SELECT
   (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
    WHERE variable_name = 'Parallel_exchange_partial_group_smoke_finishes') -
       @pq_partial_finishes_before
-    AS partial_group_finishes_delta;
+    AS partial_group_finishes_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_groupby_partial_payload_errors') -
+      @pq_partial_payload_errors_before >= 3
+    AS partial_group_payload_errors_observed;
 
 SET SESSION parallel_query=OFF;
 SET SESSION parallel_default_dop=4;

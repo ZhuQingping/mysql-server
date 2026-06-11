@@ -245,7 +245,46 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 - `cmake --build build-ninja --target mysqld -j 16` 通过；
 - targeted payload v1 suite 通过。
 
+后续补充：
+
+- 已增加 malformed payload smoke 和 payload error counter；
+- 已将 payload v1 validation helper 从 smoke 内部抽出；
+- 后续仍需将 merge helper 进一步抽出，供 worker partial producer 复用。
+
+### V2-12B-2b Malformed Payload Smoke
+
+状态：Completed。
+
+实现：
+
+- 新增 `Parallel_groupby_partial_payload_errors`；
+- 新增 `Exchange_nosort::run_synthetic_partial_group_malformed_smoke()`；
+- 抽出 `pq_validate_partial_group_payload_v1()`；
+- malformed smoke 覆盖 bad magic、bad version、short payload；
+- `pq_groupby_partial_group_smoke` 验证 payload error counter 增长；
+- `pq_stats` 更新 Parallel 状态变量数量为 43。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_partial_group_smoke pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_payload_error_verify \
+  --tmpdir=/tmp/pqt_payload_error_verify
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full_payload_error \
+  --tmpdir=/tmp/pqt_full_payload_error
+```
+
+结果：
+
+- `cmake --build build-ninja --target mysqld -j 16` 通过；
+- targeted payload error suite 通过；
+- 完整 `parallel_query` suite 通过，共 59 项。
+
 下一步：
 
-- 增加 malformed payload smoke 和 payload error counter；
-- 将 payload v1 decode/merge helper 从 smoke 内部进一步抽出，供 worker partial producer 复用。
+- V2-12B-3：抽出 leader in-memory merge helper；
+- 先用 synthetic payload v1 做多 worker same-key/different-key merge smoke；
+- 继续不打开 SQL GROUP BY DOP>1 执行路径。

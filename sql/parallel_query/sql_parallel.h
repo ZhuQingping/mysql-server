@@ -217,6 +217,7 @@ struct PQ_global_stats {
   std::atomic<uint64> groupby_dop_partial_worker_groups{0};  ///< Worker groups
   std::atomic<uint64> groupby_dop_partial_merged_groups{0};  ///< Merged groups
   std::atomic<uint64> groupby_dop_partial_fallback{0};  ///< DOP partial fallback
+  std::atomic<uint64> groupby_partial_payload_errors{0};  ///< Payload errors
   std::atomic<uint64> groupby_temp_shape_supported{0};  ///< Temp shape ok
   std::atomic<uint64> groupby_temp_shape_unsupported{0};  ///< Temp shape reject
   std::atomic<uint64> groupby_typed_smoke_groups{0};  ///< Typed groups built
@@ -262,6 +263,7 @@ struct PQ_global_stats {
     groupby_dop_partial_worker_groups.store(0, std::memory_order_relaxed);
     groupby_dop_partial_merged_groups.store(0, std::memory_order_relaxed);
     groupby_dop_partial_fallback.store(0, std::memory_order_relaxed);
+    groupby_partial_payload_errors.store(0, std::memory_order_relaxed);
     groupby_temp_shape_supported.store(0, std::memory_order_relaxed);
     groupby_temp_shape_unsupported.store(0, std::memory_order_relaxed);
     groupby_typed_smoke_groups.store(0, std::memory_order_relaxed);

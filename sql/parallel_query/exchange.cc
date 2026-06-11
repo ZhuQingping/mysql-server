@@ -139,6 +139,37 @@ bool pq_materialize_record_image(TABLE *table, const void *payload,
   return false;
 }
 
+bool pq_validate_partial_group_payload_v1(
+    const void *payload_data, uint32 payload_len, uint32 nqueues,
+    const PQ_partial_group_payload_v1 **payload) {
+  if (payload == nullptr) return true;
+  *payload = nullptr;
+  if (payload_data == nullptr ||
+      payload_len != sizeof(PQ_partial_group_payload_v1)) {
+    return true;
+  }
+
+  const auto *decoded =
+      static_cast<const PQ_partial_group_payload_v1 *>(payload_data);
+  if (decoded->magic != PQ_PARTIAL_GROUP_PAYLOAD_MAGIC ||
+      decoded->version != PQ_PARTIAL_GROUP_PAYLOAD_VERSION ||
+      decoded->worker_id >= nqueues || decoded->group_key < 0 ||
+      decoded->group_key > 1 || decoded->count_value > decoded->count_star) {
+    return true;
+  }
+
+  switch (static_cast<PQ_partial_group_agg_kind>(decoded->agg_kind)) {
+    case PQ_partial_group_agg_kind::COUNT:
+    case PQ_partial_group_agg_kind::SUM:
+    case PQ_partial_group_agg_kind::MIN:
+    case PQ_partial_group_agg_kind::MAX:
+      *payload = decoded;
+      return false;
+  }
+
+  return true;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -662,14 +693,11 @@ bool Exchange_nosort::run_synthetic_partial_group_smoke(
           data_len != sizeof(PQ_partial_group_payload_v1)) {
         return true;
       }
-      const auto *payload =
-          static_cast<const PQ_partial_group_payload_v1 *>(datap);
-      if (payload->magic != PQ_PARTIAL_GROUP_PAYLOAD_MAGIC ||
-          payload->version != PQ_PARTIAL_GROUP_PAYLOAD_VERSION ||
+      const PQ_partial_group_payload_v1 *payload = nullptr;
+      if (pq_validate_partial_group_payload_v1(datap, data_len, m_nqueues,
+                                               &payload) ||
           payload->agg_kind !=
-              static_cast<uint16>(PQ_partial_group_agg_kind::SUM) ||
-          payload->worker_id >= m_nqueues || payload->group_key < 0 ||
-          payload->group_key > 1 || payload->count_value > payload->count_star) {
+              static_cast<uint16>(PQ_partial_group_agg_kind::SUM)) {
         return true;
       }
       const uint32 group_index = static_cast<uint32>(payload->group_key);
@@ -697,5 +725,50 @@ bool Exchange_nosort::run_synthetic_partial_group_smoke(
   }
   if (groups_read != nullptr) *groups_read = local_groups;
   if (finishes_read != nullptr) *finishes_read = m_nqueues;
+  return false;
+}
+
+bool Exchange_nosort::run_synthetic_partial_group_malformed_smoke(
+    uint32 *errors_seen) {
+  if (errors_seen != nullptr) *errors_seen = 0;
+
+  PQ_partial_group_payload_v1 payload = {
+      PQ_PARTIAL_GROUP_PAYLOAD_MAGIC,
+      PQ_PARTIAL_GROUP_PAYLOAD_VERSION,
+      static_cast<uint16>(PQ_partial_group_agg_kind::SUM),
+      0,
+      0,
+      1,
+      1,
+      1,
+      10,
+      10,
+      10};
+
+  uint32 local_errors = 0;
+  payload.magic = 0;
+  const PQ_partial_group_payload_v1 *decoded_payload = nullptr;
+  if (!pq_validate_partial_group_payload_v1(&payload, sizeof(payload), 1,
+                                            &decoded_payload)) {
+    return true;
+  }
+  ++local_errors;
+
+  payload.magic = PQ_PARTIAL_GROUP_PAYLOAD_MAGIC;
+  payload.version = 0;
+  if (!pq_validate_partial_group_payload_v1(&payload, sizeof(payload), 1,
+                                            &decoded_payload)) {
+    return true;
+  }
+  ++local_errors;
+
+  payload.version = PQ_PARTIAL_GROUP_PAYLOAD_VERSION;
+  if (!pq_validate_partial_group_payload_v1(&payload, sizeof(payload) - 1, 1,
+                                            &decoded_payload)) {
+    return true;
+  }
+  ++local_errors;
+
+  if (errors_seen != nullptr) *errors_seen = local_errors;
   return false;
 }

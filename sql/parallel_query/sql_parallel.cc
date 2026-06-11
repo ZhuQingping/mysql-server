@@ -812,10 +812,18 @@ bool Gather_operator::run_exchange_partial_group_smoke(
     return true;
   }
 
+  uint32 payload_errors = 0;
+  if (nosort->run_synthetic_partial_group_malformed_smoke(&payload_errors)) {
+    if (initialized_here) destroy();
+    return true;
+  }
+
   pq_global_stats.exchange_partial_group_smoke_rows.fetch_add(
       groups_read, std::memory_order_relaxed);
   pq_global_stats.exchange_partial_group_smoke_finishes.fetch_add(
       finishes_read, std::memory_order_relaxed);
+  pq_global_stats.groupby_partial_payload_errors.fetch_add(
+      payload_errors, std::memory_order_relaxed);
 
   if (initialized_here) destroy();
   return false;
