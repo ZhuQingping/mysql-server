@@ -30,7 +30,7 @@
 |------|------|--------|-------|
 | V2-11A prepare state | MTR | Completed | `pq_read_threaded_prepare_state.test/result` |
 | V2-11B row image datatypes | MTR | Completed | `pq_read_threaded_row_image_datatypes.test/result` |
-| V2-11C limit/counter boundary | MTR | Pending | `pq_read_threaded_limit_counters.test/result` |
+| V2-11C limit/counter boundary | MTR | Completed | `pq_read_threaded_limit_counters.test/result` |
 | V2-11D concurrency hardening | MTR | Pending | large kill / MDL minimal tests |
 | V2-11E experimental vars noop | MTR | Pending | vars OFF/ON counter isolation |
 
@@ -49,12 +49,13 @@
 
 ## 当前状态
 
-状态：V2-11A/B Completed。
+状态：V2-11A/B/C Completed。
 
 已完成：
 
 - V2-11A prepare state；
-- V2-11B row image datatypes。
+- V2-11B row image datatypes；
+- V2-11C limit/counter boundary。
 
 验证：
 
@@ -63,13 +64,24 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
   pq_read_threaded_prepare_state \
   pq_read_threaded_row_image_datatypes \
   --parallel=1 --vardir=/tmp/pqv_reg_a_b --tmpdir=/tmp/pqt_reg_a_b
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_read_threaded_limit_counters \
+  --parallel=1 --vardir=/tmp/pqv_limit_counters2 \
+  --tmpdir=/tmp/pqt_limit_counters2
 TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
   --vardir=/tmp/pqv_full14 --tmpdir=/tmp/pqt_full14
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full15 --tmpdir=/tmp/pqt_full15
 ```
 
-结果：完整 `parallel_query` suite 通过，共 46 项。
+V2-11A/B 结果：完整 `parallel_query` suite 通过，共 46 项。
+
+V2-11C 说明：
+
+- `LIMIT 4 OFFSET 3` 下 threaded path 返回与串行一致；
+- `rows_delta=7`，记录 leader early-stop accounting，即 OFFSET + LIMIT。
+- V2-11C 后完整 `parallel_query` suite 通过，共 47 项。
 
 下一步：
 
-- 继续 V2-11C limit/counter boundary；
+- 继续 V2-11D concurrency hardening；
 - 启动 V2-12A GROUP BY partial aggregation design。
