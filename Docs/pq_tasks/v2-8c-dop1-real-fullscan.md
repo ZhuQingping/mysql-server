@@ -253,6 +253,9 @@ struct PQ_Worker_open_context {
     `THD::pq_is_worker`, `THD::pq_leader`, `THD::pq_worker_info`, and
     `THD::pq_dop`; `pq_destroy_worker_thd()` clears bindings and destroys the
     THD.
+  - Added `Gather_operator::run_worker_open_table_smoke()` to sequence the
+    worker THD helper and worker TABLE open/close helper for DOP=1 lifecycle
+    validation. It is not yet called from `PQTableScanIterator::Init()`.
 - `storage/innobase/handler/ha_innodb.cc`
   - Added `InnoDB_pq_sql_worker_context final : public PQ_Worker_context`.
   - Added `PQ_leader_scan_mode` handling. `PROBE` keeps the existing
@@ -266,7 +269,8 @@ struct PQ_Worker_open_context {
     TABLE, and independent worker `record[0]`.
 - No real worker thread, read-view pinning, InnoDB row read, or
   `PQ_execution_state::EXECUTED` update was enabled in this step. The worker
-  THD/TABLE helpers are not yet called from `PQ_worker_manager::start()`.
+  THD/TABLE helpers are not yet called from `PQ_worker_manager::start()` or
+  the iterator execution path.
 
 ## Explorer Findings For Next Step
 

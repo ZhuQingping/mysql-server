@@ -603,6 +603,21 @@ class Gather_operator {
   bool run_exchange_row_image_smoke(THD *leader_thd, TABLE *table);
 
   /**
+    Run a V2-8C worker THD/TABLE lifecycle smoke pass.
+
+    This creates worker THD metadata, opens an independent worker TABLE through
+    pq_open_worker_table(), closes it, and destroys the worker THD. It does not
+    start OS worker threads, call handler worker scan init, or produce rows.
+
+    @param leader_thd    Leader THD to restore as current THD after smoke
+    @param leader_table  Leader TABLE used as metadata source
+
+    @retval false  Smoke pass completed
+    @retval true   Smoke pass failed
+  */
+  bool run_worker_open_table_smoke(THD *leader_thd, TABLE *leader_table);
+
+  /**
     Abort all workers and close MQ producers.
 
     Phase 4 stub: delegates to PQ_worker_manager::abort() and

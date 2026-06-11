@@ -588,6 +588,47 @@ bool Gather_operator::run_exchange_row_image_smoke(THD *leader_thd
   return false;
 }
 
+bool Gather_operator::run_worker_open_table_smoke(THD *leader_thd,
+                                                  TABLE *leader_table) {
+  if (leader_thd == nullptr || leader_table == nullptr || m_dop != 1) {
+    return true;
+  }
+
+  bool initialized_here = false;
+
+  if (!m_initialized) {
+    if (init()) return true;
+    initialized_here = true;
+  }
+
+  auto *worker = get_worker(0);
+  if (worker == nullptr) {
+    if (initialized_here) destroy();
+    return true;
+  }
+
+  if (worker->m_open_ctx.leader_table == nullptr) {
+    worker->m_open_ctx.leader_table = leader_table;
+    worker->m_open_ctx.actual_dop = m_dop;
+  }
+
+  if (pq_create_worker_thd(worker, this) == nullptr) {
+    leader_thd->store_globals();
+    if (initialized_here) destroy();
+    return true;
+  }
+
+  bool failed = pq_open_worker_table(&worker->m_open_ctx);
+  if (!failed) {
+    pq_close_worker_table(&worker->m_open_ctx, false);
+  }
+  pq_destroy_worker_thd(worker);
+  leader_thd->store_globals();
+
+  if (initialized_here) destroy();
+  return failed;
+}
+
 // ---------------------------------------------------------------------------
 // Gather_operator: abort_workers (stub)
 // ---------------------------------------------------------------------------
