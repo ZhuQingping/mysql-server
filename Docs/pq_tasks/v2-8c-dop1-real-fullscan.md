@@ -255,7 +255,10 @@ struct PQ_Worker_open_context {
     THD.
   - Added `Gather_operator::run_worker_open_table_smoke()` to sequence the
     worker THD helper and worker TABLE open/close helper for DOP=1 lifecycle
-    validation. It is not yet called from `PQTableScanIterator::Init()`.
+    validation.
+  - Added `Parallel_worker_open_smoke_runs` status counter and wired
+    `PQTableScanIterator::Init()` to run the DOP=1 open-table smoke after a
+    fallback-safe leader probe succeeds.
 - `storage/innobase/handler/ha_innodb.cc`
   - Added `InnoDB_pq_sql_worker_context final : public PQ_Worker_context`.
   - Added `PQ_leader_scan_mode` handling. `PROBE` keeps the existing
@@ -267,10 +270,10 @@ struct PQ_Worker_open_context {
     `actual_dop == 1`, current worker handler, current leader ctx,
     `m_pq_leader_ctx->n_ranges() == 1`, no BLOB fields, independent worker
     TABLE, and independent worker `record[0]`.
-- No real worker thread, read-view pinning, InnoDB row read, or
+- No real worker OS thread, read-view pinning, InnoDB row read, or
   `PQ_execution_state::EXECUTED` update was enabled in this step. The worker
-  THD/TABLE helpers are not yet called from `PQ_worker_manager::start()` or
-  the iterator execution path.
+  THD/TABLE helpers run only as a safe-window smoke and are not yet called from
+  `PQ_worker_manager::start()` for row production.
 
 ## Explorer Findings For Next Step
 

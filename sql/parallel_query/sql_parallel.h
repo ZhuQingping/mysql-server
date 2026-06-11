@@ -172,6 +172,7 @@ struct PQ_global_stats {
   std::atomic<uint64> rows_scanned{0};        ///< Total rows scanned by PQ workers
   std::atomic<uint64> ranges_built{0};        ///< Total InnoDB PQ ranges planned
   std::atomic<uint64> worker_smoke_runs{0};   ///< Worker lifecycle smoke runs
+  std::atomic<uint64> worker_open_smoke_runs{0};  ///< Worker THD/TABLE smoke runs
   std::atomic<uint64> exchange_smoke_rows{0};      ///< Synthetic MQ rows read
   std::atomic<uint64> exchange_smoke_finishes{0};  ///< Synthetic FINISH tokens
 
@@ -183,6 +184,7 @@ struct PQ_global_stats {
     rows_scanned.store(0, std::memory_order_relaxed);
     ranges_built.store(0, std::memory_order_relaxed);
     worker_smoke_runs.store(0, std::memory_order_relaxed);
+    worker_open_smoke_runs.store(0, std::memory_order_relaxed);
     exchange_smoke_rows.store(0, std::memory_order_relaxed);
     exchange_smoke_finishes.store(0, std::memory_order_relaxed);
   }

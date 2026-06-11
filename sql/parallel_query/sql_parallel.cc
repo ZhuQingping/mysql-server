@@ -626,6 +626,10 @@ bool Gather_operator::run_worker_open_table_smoke(THD *leader_thd,
   leader_thd->store_globals();
 
   if (initialized_here) destroy();
+  if (!failed) {
+    pq_global_stats.worker_open_smoke_runs.fetch_add(
+        1, std::memory_order_relaxed);
+  }
   return failed;
 }
 

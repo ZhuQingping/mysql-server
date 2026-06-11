@@ -92,6 +92,14 @@ bool PQTableScanIterator::Init() {
       PrintError(HA_ERR_OUT_OF_MEM);
       return true;
     }
+    Gather_operator open_smoke(1);
+    if (open_smoke.init() ||
+        open_smoke.configure_worker_open_contexts(table(), m_leader_ctx, 1) ||
+        open_smoke.run_worker_open_table_smoke(thd(), table())) {
+      cleanup_pq_resources(true);
+      PrintError(HA_ERR_OUT_OF_MEM);
+      return true;
+    }
     if (m_gather->run_exchange_row_image_smoke(thd(), table())) {
       cleanup_pq_resources(true);
       PrintError(HA_ERR_OUT_OF_MEM);
