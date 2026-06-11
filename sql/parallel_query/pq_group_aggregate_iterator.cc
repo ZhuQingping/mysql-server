@@ -241,6 +241,43 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
       return InitTypedMinMaxPath(sum->sum_func() == Item_sum::MIN_FUNC);
     }
 
+    return InitLegacyTempTablePath();
+  }
+
+  int Read() override {
+    if (m_table_iterator == nullptr) return 1;
+    if (m_join != nullptr && m_ref_slice != -1 &&
+        !m_join->ref_items[m_ref_slice].is_null()) {
+      m_join->set_ref_item_slice(m_ref_slice);
+    }
+    return m_table_iterator->Read();
+  }
+
+  void SetNullRowFlag(bool is_null_row) override {
+    if (m_table_iterator != nullptr) {
+      m_table_iterator->SetNullRowFlag(is_null_row);
+    }
+  }
+
+  void UnlockRow() override {}
+
+  void StartPSIBatchMode() override {
+    // Batch mode is managed explicitly while materializing input rows.
+  }
+
+  void EndPSIBatchModeIfStarted() override {
+    if (m_table_iterator != nullptr) {
+      m_table_iterator->EndPSIBatchModeIfStarted();
+    }
+    if (m_subquery_iterator != nullptr) {
+      m_subquery_iterator->EndPSIBatchModeIfStarted();
+    }
+  }
+
+ private:
+  bool using_hash_key() const { return table()->hash_field; }
+
+  bool InitLegacyTempTablePath() {
     m_join->set_ref_item_slice(REF_SLICE_SAVED_BASE);
 
     if (m_subquery_iterator->Init()) {
@@ -399,39 +436,6 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
     }
     return false;
   }
-
-  int Read() override {
-    if (m_table_iterator == nullptr) return 1;
-    if (m_join != nullptr && m_ref_slice != -1 &&
-        !m_join->ref_items[m_ref_slice].is_null()) {
-      m_join->set_ref_item_slice(m_ref_slice);
-    }
-    return m_table_iterator->Read();
-  }
-
-  void SetNullRowFlag(bool is_null_row) override {
-    if (m_table_iterator != nullptr) {
-      m_table_iterator->SetNullRowFlag(is_null_row);
-    }
-  }
-
-  void UnlockRow() override {}
-
-  void StartPSIBatchMode() override {
-    // Batch mode is managed explicitly while materializing input rows.
-  }
-
-  void EndPSIBatchModeIfStarted() override {
-    if (m_table_iterator != nullptr) {
-      m_table_iterator->EndPSIBatchModeIfStarted();
-    }
-    if (m_subquery_iterator != nullptr) {
-      m_subquery_iterator->EndPSIBatchModeIfStarted();
-    }
-  }
-
- private:
-  bool using_hash_key() const { return table()->hash_field; }
 
   bool can_use_typed_count_path() const {
     if (using_hash_key() || table()->group == nullptr ||
