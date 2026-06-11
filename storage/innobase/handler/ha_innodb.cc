@@ -11250,8 +11250,11 @@ int ha_innobase::pq_worker_scan_callback_produce(
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 
-  auto err = innodb_worker->leader_ctx()->scan_ctx()->produce_callback_rows(
-      m_prebuilt->m_mysql_table->record[0], m_prebuilt, row_sink);
+  auto err = innodb_worker->leader_ctx()
+                 ->scan_ctx()
+                 ->produce_callback_rows_for_range(
+                     m_prebuilt->m_mysql_table->record[0], m_prebuilt,
+                     row_sink, innodb_worker->assigned_range());
   if (err == DB_SUCCESS) {
     return 0;
   }

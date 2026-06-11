@@ -113,7 +113,7 @@
   - [v2-9a-range-dispatch-contract.md](v2-9a-range-dispatch-contract.md): V2-9A 已完成 range dispatch observable。
   - [v2-execution-path-roadmap.md](v2-execution-path-roadmap.md): V2 真实执行路径拆分，覆盖 SQL iterator、worker THD、Exchange/Gather row 流、InnoDB 分片扫描、full scan 闭环和基础聚合。
   - [v2-test-matrix.md](v2-test-matrix.md): V1/V2 阶段化 MTR 测试矩阵，明确 DOP=1 first 和 DOP>1 range-partition gate。
-- Next recommended action: 保持实验变量默认 OFF；下一步分析 `Exported_range` boundary tuple 与 `Parallel_reader::Scan_range` 输入契约，解除 V2-9B blocker；`pq_worker_scan_next()` 继续 disabled。
+- Next recommended action: 保持实验变量默认 OFF；下一步进入 V2-9C debug-only DOP>1 threaded shadow path；`pq_worker_scan_next()` 继续 disabled。
 - Parallel-ready task overview: [parallel_wave2_tasks.md](parallel_wave2_tasks.md)
 - Remaining risk: Phase 8 的 aggregate 当前仍是基础设施和 eligibility 扩展，真实并行聚合执行尚未启用；locking read 的 EXPLAIN annotation 当前仍可能显示 `Parallel query dop=4`，已从 Phase 9 测试中移除，后续需单独修复。
 
@@ -194,7 +194,7 @@ Recommended worktrees:
 | V2-8Q - DOP2 Experimental Guard | Completed | Codex Orchestrator | [v2-8q-dop2-experimental-guard.md](v2-8q-dop2-experimental-guard.md) | 新增 no-debug guard MTR，验证 experimental threaded path 只允许 DOP=1，DOP=2 仍 serial fallback |
 | V2-9 - DOP Range Correctness | In Progress | Codex Orchestrator + Explorer | [v2-9-dop-range-correctness.md](v2-9-dop-range-correctness.md) | 已拆分 V2-9A/B/C/D；先做 range dispatch contract，再做 range-aware callback producer |
 | V2-9A - Range Dispatch Contract | Completed | Codex Orchestrator | [v2-9a-range-dispatch-contract.md](v2-9a-range-dispatch-contract.md) | 新增 range dispatched/empty worker counters，`pq_worker_scan_init()` 可观测领取 assigned range；DOP>1 gate 仍关闭 |
-| V2-9B - Range-Aware Callback Producer | Blocked | Codex Orchestrator | [v2-9b-range-aware-callback-producer.md](v2-9b-range-aware-callback-producer.md) | latent helper 已加；直接消费 assigned exported range 会触发 InnoDB debug assertion，handler 主路径未接线 |
+| V2-9B - Range-Aware Callback Producer | Completed | Codex Orchestrator | [v2-9b-range-aware-callback-producer.md](v2-9b-range-aware-callback-producer.md) | handler 已接入 assigned range；修复 exported boundary `n_fields_cmp` 过大导致的 InnoDB debug assertion；DOP>1 gate 仍关闭 |
 
 ## Decisions
 

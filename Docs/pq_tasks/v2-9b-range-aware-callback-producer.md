@@ -4,7 +4,7 @@
 
 V2-9B 目标是把 InnoDB callback producer 从“总是 full scan”改为“按 worker assigned range 扫描”，为后续 DOP>1 correctness 做前置。
 
-本阶段仍不打开 DOP>1，且不把 range-aware helper 接入 handler 主路径：
+本阶段仍不打开 DOP>1：
 
 - `pq_worker_scan_init()` 的 `actual_dop != 1` gate 保持；
 - `Gather_operator::run_worker_callback_threaded_producer()` 的 `m_dop != 1` gate 保持；
@@ -22,13 +22,14 @@ V2-9B 目标是把 InnoDB callback producer 从“总是 full scan”改为“�
 - `range != nullptr`：使用 `Parallel_reader::Scan_range(start,end)` 只扫描 assigned range；
 - `range == nullptr`：表示 worker 没有 range，producer 成功但不发送 ROW，后续 worker 发送 FINISH；
 - 旧 `produce_callback_rows()` 保持 full-range 兼容语义；
-已确认的 blocker：
+已确认并修复的 blocker：
 
 - 直接把 `innodb_worker->assigned_range()` 传给 `Parallel_reader::Scan_range(start,end)` 会触发 InnoDB debug assertion：
   - `page0cur.cc:452:n <= searchable`
   - 调用栈位于 `Parallel_reader::Scan_ctx::create_ranges()` / `partition()` / `add_scan()`
-- 因此 handler 主路径仍调用旧 `produce_callback_rows()` 的 full-range 兼容路径；
-- V2-9B 不提交会崩溃的 handler 接线。
+- 根因是 PQ deep-copy 的 exported boundary tuple 保留了过多 compare fields；
+- 修复：`InnoDB_pq_iter::assign()` 按 `dict_index_get_n_unique_in_tree(index)` clamp `n_fields_cmp`；
+- handler 主路径已重新接入 `produce_callback_rows_for_range(... assigned_range)`。
 
 ## 验证
 
@@ -64,7 +65,10 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 验证结果：
 
 - `cmake --build build-ninja --target mysqld -j 16` 通过；
-- `pq_read_threaded_projection_where`、`pq_read_threaded_aggregate`、`pq_range_dispatch_dop1`、`pq_read_threaded_dop2_guard` 通过；
-- 完整 `parallel_query` suite 29 个测试通过。
+- `pq_read_threaded_projection_where`、`pq_read_threaded_aggregate`、`pq_range_dispatch_dop1`、`pq_read_threaded_dop2_guard` 通过。
 
-当前状态：Blocked for real handler wiring。latent helper 已实现；直接消费 exported boundary 触发 InnoDB debug assertion，下一步需要单独分析 `Exported_range` tuple 和 `Scan_range` 输入契约。
+完整 suite：
+
+- `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_full --tmpdir=/tmp/pqt_full` 通过，29 个测试全部成功。
+
+当前状态：Completed，等待提交。

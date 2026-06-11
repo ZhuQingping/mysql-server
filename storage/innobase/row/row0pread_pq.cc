@@ -76,7 +76,8 @@ InnoDB_pq_iter::~InnoDB_pq_iter() {
   }
 }
 
-dberr_t InnoDB_pq_iter::assign(const dtuple_t *tuple) {
+dberr_t InnoDB_pq_iter::assign(const dtuple_t *tuple,
+                               const dict_index_t *index) {
   if (m_heap != nullptr) {
     mem_heap_free(m_heap);
     m_heap = nullptr;
@@ -95,6 +96,13 @@ dberr_t InnoDB_pq_iter::assign(const dtuple_t *tuple) {
   auto copy = dtuple_copy(tuple, m_heap);
   for (size_t i = 0; i < dtuple_get_n_fields(copy); ++i) {
     dfield_dup(&copy->fields[i], m_heap);
+  }
+  if (index != nullptr) {
+    const auto searchable = dict_index_get_n_unique_in_tree(index);
+    const auto n_cmp = dtuple_get_n_fields_cmp(copy);
+    if (n_cmp > searchable) {
+      dtuple_set_n_fields_cmp(copy, searchable);
+    }
   }
 
   m_tuple = copy;
@@ -317,7 +325,7 @@ dberr_t InnoDB_pq_scan_ctx::partition(size_t split_level) {
       if (range.m_start == nullptr) {
         return DB_OUT_OF_MEMORY;
       }
-      err = range.m_start->assign(exported_range.m_start);
+      err = range.m_start->assign(exported_range.m_start, m_index);
       if (err != DB_SUCCESS) {
         return err;
       }
@@ -328,7 +336,7 @@ dberr_t InnoDB_pq_scan_ctx::partition(size_t split_level) {
       if (range.m_end == nullptr) {
         return DB_OUT_OF_MEMORY;
       }
-      err = range.m_end->assign(exported_range.m_end);
+      err = range.m_end->assign(exported_range.m_end, m_index);
       if (err != DB_SUCCESS) {
         return err;
       }

@@ -91,7 +91,7 @@ struct InnoDB_pq_iter {
   ~InnoDB_pq_iter();
 
   /** Copy an exported Parallel_reader boundary tuple into this iterator. */
-  dberr_t assign(const dtuple_t *tuple);
+  dberr_t assign(const dtuple_t *tuple, const dict_index_t *index);
 
   const dtuple_t *tuple() const { return m_tuple; }
 
