@@ -259,7 +259,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 ## 当前状态
 
-状态：V2-12A-3.4d ownership carrier Completed；真实 GROUP BY SQL result 接管仍未打开。
+状态：V2-12A-3.4e temp-table carrier Completed；真实 GROUP BY SQL result 接管仍未打开。
 
 已完成：
 
@@ -274,6 +274,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - 新增 `Parallel_groupby_dop1_factory_attempts` / `Parallel_groupby_dop1_factory_fallback`，验证 gate ON + DOP=1 时 GROUP BY factory hook 可观测；
 - 新增 `pq_groupby_dop1_factory_observable`，确认 factory hook 仍返回 `nullptr` 并保持原生 GROUP BY 结果正确。
 - `TryCreatePQGroupAggregateIterator()` / `TryCreatePQTemptableGroupAggregateIterator()` 已接收 child iterator ownership carrier 指针，后续真实 iterator 可在通过白名单后显式 `std::move()` 接管；当前仍不移动 ownership。
+- `TryCreatePQTemptableGroupAggregateIterator()` 已接收 `Temp_table_param`、output `TABLE` 和 `ref_slice`，后续真实 iterator 可复用原生 temp-table 输出链路；当前仍返回 `nullptr`。
 
 验证：
 
@@ -451,3 +452,35 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 - 扩展 factory 参数读取 `Temp_table_param`、output `TABLE` 和 `ref_slice`；
 - 新增只读/diagnostic 白名单 helper，确认 `GROUP BY int_col COUNT(*)` 的 temp-table shape；
 - 仍不修改 `TemptableAggregateIterator` 和 `item_sum.*`。
+
+### V2-12A-3.4e Temp-table Carrier
+
+状态：Completed。
+
+目标：
+
+- 将 `AccessPath::TEMPTABLE_AGGREGATE` 的 temp-table output contract 传入 PQ factory；
+- 暴露 `Temp_table_param`、output `TABLE`、`ref_slice` 给后续真实 PQ group iterator；
+- 本步骤不读取/写入 temp table，不移动 child ownership，不改变原生执行路径。
+
+实现：
+
+- `TryCreatePQTemptableGroupAggregateIterator(..., Temp_table_param *temp_table_param, TABLE *table, int ref_slice)`；
+- `access_path.cc` 传入 `param.temp_table_param`、`param.table`、`param.ref_slice`；
+- factory 做 null/ref_slice guard 后仍返回 `nullptr`。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_dop1_factory_observable pq_groupby_diagnostics \
+  pq_groupby_typed_state_smoke \
+  --parallel=1 --vardir=/tmp/pqv_groupby_temp_carrier \
+  --tmpdir=/tmp/pqt_groupby_temp_carrier
+```
+
+下一步：
+
+- 新增只读 shape helper，识别 `GROUP BY int_col COUNT(*)` 的 temp-table 参数布局；
+- 在 helper 可观测后，再决定是否创建真正的 PQ temp-table group iterator。

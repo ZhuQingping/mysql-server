@@ -923,7 +923,8 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
         }
 
         auto pq_iter = TryCreatePQTemptableGroupAggregateIterator(
-            thd, mem_root, join, path, &job.children[0], &job.children[1]);
+            thd, mem_root, join, path, &job.children[0], &job.children[1],
+            param.temp_table_param, param.table, param.ref_slice);
         if (pq_iter != nullptr) {
           iterator = std::move(pq_iter);
         } else {

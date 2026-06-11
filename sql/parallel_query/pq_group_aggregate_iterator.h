@@ -29,7 +29,9 @@
 class JOIN;
 class RowIterator;
 class THD;
+class Temp_table_param;
 struct AccessPath;
+struct TABLE;
 struct MEM_ROOT;
 
 /**
@@ -46,7 +48,8 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQGroupAggregateIterator(
 unique_ptr_destroy_only<RowIterator> TryCreatePQTemptableGroupAggregateIterator(
     THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *aggregate_path,
     unique_ptr_destroy_only<RowIterator> *subquery_iterator,
-    unique_ptr_destroy_only<RowIterator> *table_iterator);
+    unique_ptr_destroy_only<RowIterator> *table_iterator,
+    Temp_table_param *temp_table_param, TABLE *table, int ref_slice);
 
 bool RunPQGroupAggregateTypedStateSmoke(uint32 *groups_built,
                                         uint64 *sum_total);

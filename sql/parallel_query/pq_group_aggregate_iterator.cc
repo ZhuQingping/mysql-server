@@ -26,6 +26,7 @@
 #include "sql/parallel_query/sql_parallel.h"  // pq_global_stats
 #include "sql/sql_class.h"                   // THD
 #include "sql/sql_optimizer.h"               // JOIN
+#include "sql/table.h"                       // TABLE
 
 namespace {
 
@@ -126,11 +127,13 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQGroupAggregateIterator(
 unique_ptr_destroy_only<RowIterator> TryCreatePQTemptableGroupAggregateIterator(
     THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *aggregate_path,
     unique_ptr_destroy_only<RowIterator> *subquery_iterator,
-    unique_ptr_destroy_only<RowIterator> *table_iterator) {
+    unique_ptr_destroy_only<RowIterator> *table_iterator,
+    Temp_table_param *temp_table_param, TABLE *table, int ref_slice) {
   (void)mem_root;
 
   if (thd == nullptr || join == nullptr || aggregate_path == nullptr ||
-      subquery_iterator == nullptr || table_iterator == nullptr) {
+      subquery_iterator == nullptr || table_iterator == nullptr ||
+      temp_table_param == nullptr || table == nullptr || ref_slice < -1) {
     return nullptr;
   }
 
