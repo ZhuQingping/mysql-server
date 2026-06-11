@@ -144,4 +144,4 @@ V2-9 目标是从 V2-8 的 DOP=1 threaded full scan，推进到 DOP>1 clustered 
 - 必须先做 assigned/exhausted/produced observable，再放开 DOP>1；
 - 禁止启用 latent `pq_worker_scan_next()` / `row_search_mvcc()` pull path。
 
-当前状态：V2-9A/B/C 已完成；V2-9D multi-range callback drain 已完成验证；下一步再评估 V2-9E experimental DOP>1 gate。
+当前状态：V2-9A/B/C/D 已完成；V2-9E experimental DOP2 gate 已完成验证；DOP>2 仍保持关闭。

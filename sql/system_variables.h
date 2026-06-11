@@ -542,6 +542,12 @@ struct System_variables {
     Enable the experimental DOP=1 threaded full-scan execution path.
   */
   bool parallel_query_experimental_threaded_dop1;
+
+  /**
+    @sa Sys_parallel_query_experimental_threaded_dop
+    Enable the experimental DOP=2 threaded full-scan execution path.
+  */
+  bool parallel_query_experimental_threaded_dop;
 };
 
 /**
