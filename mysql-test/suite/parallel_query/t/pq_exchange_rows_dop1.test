@@ -1,6 +1,8 @@
 # Test: pq_exchange_rows_dop1
 # Verify V2-6 synthetic Exchange/Gather row stream smoke is observable while
 # real PQ row execution remains disabled and serial fallback preserves results.
+# V2-8P tightens this as a DOP 1/2/4 multi-queue row-image smoke: three
+# fallback probes must consume exactly 1 + 2 + 4 synthetic ROW/FINISH tokens.
 
 --source include/have_innodb_16k.inc
 
@@ -52,6 +54,14 @@ SET @pq_exchange_finishes_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_exchange_smoke_finishes');
+SET @pq_exchange_row_image_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_exchange_row_image_smoke_rows');
+SET @pq_exchange_row_image_finishes_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_exchange_row_image_smoke_finishes');
 
 SET SESSION parallel_default_dop=1;
 --disable_result_log
@@ -86,10 +96,18 @@ SELECT
     AS worker_smoke_delta,
   (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
    WHERE variable_name = 'Parallel_exchange_smoke_rows') - @pq_exchange_rows_before
-    >= 6 AS exchange_rows_at_least_6,
+    AS exchange_rows_delta,
   (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
    WHERE variable_name = 'Parallel_exchange_smoke_finishes') - @pq_exchange_finishes_before
-    >= 6 AS exchange_finishes_at_least_6;
+    AS exchange_finishes_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_exchange_row_image_smoke_rows') -
+      @pq_exchange_row_image_rows_before
+    AS row_image_rows_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_exchange_row_image_smoke_finishes') -
+      @pq_exchange_row_image_finishes_before
+    AS row_image_finishes_delta;
 
 SET SESSION parallel_query=OFF;
 SET SESSION parallel_default_dop=4;

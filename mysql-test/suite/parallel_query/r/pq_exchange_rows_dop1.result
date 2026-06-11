@@ -41,6 +41,14 @@ SET @pq_exchange_finishes_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_exchange_smoke_finishes');
+SET @pq_exchange_row_image_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_exchange_row_image_smoke_rows');
+SET @pq_exchange_row_image_finishes_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_exchange_row_image_smoke_finishes');
 SET SESSION parallel_default_dop=1;
 SELECT * FROM t1;
 SET SESSION parallel_default_dop=2;
@@ -65,12 +73,20 @@ WHERE variable_name = 'Parallel_worker_smoke_runs') - @pq_worker_smoke_before
 AS worker_smoke_delta,
 (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_exchange_smoke_rows') - @pq_exchange_rows_before
->= 6 AS exchange_rows_at_least_6,
+AS exchange_rows_delta,
 (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_exchange_smoke_finishes') - @pq_exchange_finishes_before
->= 6 AS exchange_finishes_at_least_6;
-executed_delta	fallback_delta	rows_delta	workers_delta	worker_smoke_delta	exchange_rows_at_least_6	exchange_finishes_at_least_6
-0	3	0	0	3	1	1
+AS exchange_finishes_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_exchange_row_image_smoke_rows') -
+@pq_exchange_row_image_rows_before
+AS row_image_rows_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_exchange_row_image_smoke_finishes') -
+@pq_exchange_row_image_finishes_before
+AS row_image_finishes_delta;
+executed_delta	fallback_delta	rows_delta	workers_delta	worker_smoke_delta	exchange_rows_delta	exchange_finishes_delta	row_image_rows_delta	row_image_finishes_delta
+0	3	0	0	3	16	13	7	7
 SET SESSION parallel_query=OFF;
 SET SESSION parallel_default_dop=4;
 SET SESSION parallel_cost_threshold=10000;

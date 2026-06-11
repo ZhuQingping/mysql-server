@@ -198,6 +198,8 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_handler_smoke_runs{0};  ///< Handler init/end smoke runs
   std::atomic<uint64> exchange_smoke_rows{0};      ///< Synthetic MQ rows read
   std::atomic<uint64> exchange_smoke_finishes{0};  ///< Synthetic FINISH tokens
+  std::atomic<uint64> exchange_row_image_smoke_rows{0};  ///< Row-image smoke rows
+  std::atomic<uint64> exchange_row_image_smoke_finishes{0};  ///< Row-image FINISH
   std::atomic<uint64> callback_smoke_attempts{0};  ///< Callback smoke attempts
   std::atomic<uint64> callback_smoke_rows{0};      ///< Callback converted rows
 
@@ -220,6 +222,8 @@ struct PQ_global_stats {
     worker_handler_smoke_runs.store(0, std::memory_order_relaxed);
     exchange_smoke_rows.store(0, std::memory_order_relaxed);
     exchange_smoke_finishes.store(0, std::memory_order_relaxed);
+    exchange_row_image_smoke_rows.store(0, std::memory_order_relaxed);
+    exchange_row_image_smoke_finishes.store(0, std::memory_order_relaxed);
     callback_smoke_attempts.store(0, std::memory_order_relaxed);
     callback_smoke_rows.store(0, std::memory_order_relaxed);
   }

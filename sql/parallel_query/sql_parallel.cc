@@ -777,6 +777,10 @@ bool Gather_operator::run_exchange_row_image_smoke(THD *leader_thd
                                                 std::memory_order_relaxed);
   pq_global_stats.exchange_smoke_finishes.fetch_add(
       finishes_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_row_image_smoke_rows.fetch_add(
+      rows_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_row_image_smoke_finishes.fetch_add(
+      finishes_read, std::memory_order_relaxed);
 
   if (initialized_here) destroy();
   return false;
