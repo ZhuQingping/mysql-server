@@ -237,6 +237,41 @@ dberr_t InnoDB_pq_scan_ctx::smoke_callback_conversion(
   return err;
 }
 
+dberr_t InnoDB_pq_scan_ctx::produce_callback_rows(
+    byte *mysql_rec, row_prebuilt_t *prebuilt, PQ_row_sink *row_sink) const {
+  if (mysql_rec == nullptr || prebuilt == nullptr || row_sink == nullptr) {
+    return DB_UNSUPPORTED;
+  }
+
+  if (m_index == nullptr || !m_index->is_clustered() || m_trx == nullptr ||
+      !has_active_read_view()) {
+    return DB_UNSUPPORTED;
+  }
+
+  Parallel_reader reader(0);
+  Parallel_reader::Config config(Parallel_reader::Scan_range{}, m_index);
+
+  auto err = reader.add_scan(const_cast<trx_t *>(m_trx), config,
+                             [&](const Parallel_reader::Ctx *reader_ctx) {
+                               if (row_sink->should_abort()) {
+                                 return DB_INTERRUPTED;
+                               }
+                               if (!store_callback_record(mysql_rec, prebuilt,
+                                                          reader_ctx, nullptr)) {
+                                 return DB_ERROR;
+                               }
+                               if (row_sink->send_row(prebuilt->m_mysql_table)) {
+                                 return DB_INTERRUPTED;
+                               }
+                               return DB_SUCCESS;
+                             });
+  if (err != DB_SUCCESS) {
+    return err;
+  }
+
+  return reader.run(0);
+}
+
 dberr_t InnoDB_pq_scan_ctx::partition(size_t split_level) {
   m_ranges.clear();
 

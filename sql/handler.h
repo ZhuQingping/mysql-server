@@ -89,6 +89,7 @@ class handler;
 class partition_info;
 class PQ_Leader_context;
 class PQ_Worker_context;
+class PQ_row_sink;
 enum class PQ_leader_scan_mode : uint;
 struct PQ_Worker_open_context;
 struct System_status_var;
@@ -4936,6 +4937,13 @@ class handler {
       PQ_Worker_context *worker_ctx [[maybe_unused]],
       uchar *record [[maybe_unused]], bool *converted) {
     if (converted != nullptr) *converted = false;
+    return HA_ERR_UNSUPPORTED;
+  }
+
+  /** Produce callback rows into a SQL-layer row sink. */
+  virtual int pq_worker_scan_callback_produce(
+      PQ_Worker_context *worker_ctx [[maybe_unused]],
+      PQ_row_sink *row_sink [[maybe_unused]]) {
     return HA_ERR_UNSUPPORTED;
   }
 

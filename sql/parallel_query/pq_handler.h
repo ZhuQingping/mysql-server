@@ -479,6 +479,29 @@ class PQ_Worker_context {
 };
 
 /**
+  Push sink for worker-produced row images.
+
+  InnoDB callback producers write each visible row into the worker TABLE record
+  buffer, then call send_row(). The SQL layer owns the sink implementation and
+  must deep-copy the row image into Exchange/MQ before send_row() returns.
+*/
+class PQ_row_sink {
+ public:
+  virtual ~PQ_row_sink() = default;
+
+  /**
+    Send the current worker TABLE record image.
+
+    @retval false  Row accepted
+    @retval true   Sink failed or aborted
+  */
+  virtual bool send_row(TABLE *source_table) = 0;
+
+  /** @return true when the producer should stop early. */
+  virtual bool should_abort() const { return false; }
+};
+
+/**
   Scan status codes for PQ worker lifecycle.
 
   Used by Gather_operator to track worker state transitions.
@@ -523,6 +546,10 @@ const char *pq_worker_status_to_string(PQ_Worker_status status);
 
   - int pq_worker_scan_next(uchar *buf);
     Worker pulls one row into buf, returns 0/HA_ERR_END_OF_FILE/error.
+
+  - int pq_worker_scan_callback_produce(PQ_Worker_context *worker_ctx,
+                                        PQ_row_sink *row_sink);
+    Worker pushes each callback-produced row into a SQL-owned row sink.
 
   - void pq_worker_scan_end();
     Worker ends scan; idempotent.

@@ -532,6 +532,15 @@ class ha_innobase : public handler {
                                     uchar *record, bool *converted) override;
 
   /**
+    Produce callback rows into a SQL-layer row sink.
+
+    This is the selected V2 route for real row production. It does not enable
+    the disabled pull-row pq_worker_scan_next() path.
+  */
+  int pq_worker_scan_callback_produce(PQ_Worker_context *worker_ctx,
+                                      PQ_row_sink *row_sink) override;
+
+  /**
     End a PQ worker scan. Cleans up worker cursor state and resources.
     Idempotent: safe to call multiple times or with nullptr.
   */

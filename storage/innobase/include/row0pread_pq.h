@@ -63,6 +63,7 @@ Created 2026-06-02 by Qingping Zhu (PQ Phase 6B-2). */
 #include "page0size.h"
 #include "rem0types.h"
 #include "row0pread.h"
+#include "sql/parallel_query/pq_handler.h"
 #include "trx0trx.h"
 #include "ut0new.h"
 
@@ -182,6 +183,19 @@ class InnoDB_pq_scan_ctx {
   @return DB_SUCCESS or error code. */
   dberr_t smoke_callback_conversion(byte *mysql_rec, row_prebuilt_t *prebuilt,
                                     bool *converted) const;
+
+  /** Produce all callback rows into a SQL-layer row sink.
+
+  This uses Parallel_reader in synchronous mode. Each visible clustered record
+  is converted into prebuilt->mysql_template format in mysql_rec and then sent
+  through row_sink. The sink must deep-copy the record before returning.
+
+  @param[out] mysql_rec  MySQL row buffer.
+  @param[in]  prebuilt   Worker row_prebuilt_t for conversion.
+  @param[in]  row_sink   SQL-layer sink for converted rows.
+  @return DB_SUCCESS or error code. */
+  dberr_t produce_callback_rows(byte *mysql_rec, row_prebuilt_t *prebuilt,
+                                PQ_row_sink *row_sink) const;
 
   /** Mutable access to ranges for dispatch. */
   std::vector<InnoDB_pq_range> &mutable_ranges() { return m_ranges; }

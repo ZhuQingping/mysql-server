@@ -167,6 +167,12 @@ Status update: 已拆出 `Exchange_nosort::enqueue_record_image()` 作为 ROW-on
 producer helper；旧 `enqueue_record_image_smoke()` 继续包装 ROW+FINISH。后续
 多行 producer 可以连续发送 ROW，最后再发送 FINISH。
 
+Status update: 已新增 push-style callback producer API：
+`handler::pq_worker_scan_callback_produce()`、`PQ_row_sink` 和
+`InnoDB_pq_scan_ctx::produce_callback_rows()`。它沿用 Parallel_reader callback
+路线推送多行，不启用 `pq_worker_scan_next()` pull 路线。当前仅完成 API 和
+InnoDB 实现，尚未接入 SQL worker loop / Exchange sink。
+
 ## Acceptance Checklist
 
 - [x] callback row conversion smoke 能稳定产出 row；
@@ -209,6 +215,7 @@ producer helper；旧 `enqueue_record_image_smoke()` 继续包装 ROW+FINISH。�
   ROW 返回时 `mark_pq_row_returned()` / `EXECUTED` / 真实计数；
 - 增加 Exchange materialize status helper，明确 WOULD_BLOCK 与 EOF 的边界；
 - 拆出 ROW-only record image enqueue helper，保留旧 smoke ROW+FINISH 语义；
+- 增加 callback multi-row producer API 和 InnoDB 实现，仍不接执行路径；
 - 新增 `Parallel_worker_producer_smoke_runs` 状态变量；
 - 默认仍不接真实 `Read()`。
 
@@ -225,5 +232,5 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 Result: passed, 19 tests successful
 ```
 
-下一步继续 V2-8J-4：实现多行 producer/wait policy，并基于 PROBE 诊断收敛
-DOP=1 real gate；真实 DOP=1 full scan 仍未打开。
+下一步继续 V2-8J-4：把 callback producer API 接到 SQL worker loop /
+Exchange sink，并实现 wait/kill policy；真实 DOP=1 full scan 仍未打开。

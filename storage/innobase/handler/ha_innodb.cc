@@ -11188,6 +11188,31 @@ int ha_innobase::pq_worker_scan_callback_smoke(PQ_Worker_context *worker_ctx,
   return pq_map_dberr_to_handler_error(err, nullptr);
 }
 
+int ha_innobase::pq_worker_scan_callback_produce(
+    PQ_Worker_context *worker_ctx, PQ_row_sink *row_sink) {
+  if (worker_ctx == nullptr || row_sink == nullptr || m_prebuilt == nullptr ||
+      worker_ctx->kind() != PQ_Worker_context_kind::INNODB) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  auto sql_worker =
+      static_cast<InnoDB_pq_sql_worker_context *>(worker_ctx);
+  auto innodb_worker = sql_worker->innodb_ctx();
+  if (innodb_worker == nullptr || innodb_worker->leader_ctx() == nullptr ||
+      innodb_worker->leader_ctx()->scan_ctx() == nullptr ||
+      m_prebuilt->m_mysql_table == nullptr ||
+      m_prebuilt->m_mysql_table->record[0] == nullptr) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  auto err = innodb_worker->leader_ctx()->scan_ctx()->produce_callback_rows(
+      m_prebuilt->m_mysql_table->record[0], m_prebuilt, row_sink);
+  if (err == DB_SUCCESS) {
+    return 0;
+  }
+  return pq_map_dberr_to_handler_error(err, nullptr);
+}
+
 /**
   End a PQ worker scan. Cleans up worker cursor state and resources.
 
