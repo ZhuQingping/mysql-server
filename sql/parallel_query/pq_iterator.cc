@@ -268,7 +268,8 @@ bool PQTableScanIterator::should_enter_read_shadow_path(
 
 bool PQTableScanIterator::should_enter_threaded_read_shadow_path(
     uint requested_dop) const {
-  bool enabled = false;
+  bool enabled = thd() != nullptr &&
+                 thd()->variables.parallel_query_experimental_threaded_dop1;
   DBUG_EXECUTE_IF("pq_read_threaded_shadow_path", enabled = true;);
   return enabled && requested_dop == 1 && table() != nullptr &&
          table()->s != nullptr && table()->s->blob_fields == 0 &&

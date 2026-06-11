@@ -7769,3 +7769,10 @@ static Sys_var_uint Sys_parallel_queue_timeout(
     "parallel execution queue. 0 means no timeout",
     SESSION_VAR(parallel_queue_timeout), CMD_LINE(REQUIRED_ARG),
     VALID_RANGE(0, UINT_MAX32), DEFAULT(0), BLOCK_SIZE(1));
+
+static Sys_var_bool Sys_parallel_query_experimental_threaded_dop1(
+    "parallel_query_experimental_threaded_dop1",
+    "Enable experimental Parallel Query DOP=1 threaded full-scan execution. "
+    "Default OFF; intended for controlled testing only",
+    SESSION_VAR(parallel_query_experimental_threaded_dop1), CMD_LINE(OPT_ARG),
+    DEFAULT(false));

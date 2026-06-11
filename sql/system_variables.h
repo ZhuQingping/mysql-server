@@ -536,6 +536,12 @@ struct System_variables {
     0 means no timeout.
   */
   uint parallel_queue_timeout;
+
+  /**
+    @sa Sys_parallel_query_experimental_threaded_dop1
+    Enable the experimental DOP=1 threaded full-scan execution path.
+  */
+  bool parallel_query_experimental_threaded_dop1;
 };
 
 /**
