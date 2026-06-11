@@ -35,6 +35,9 @@
   - V2-8E execute commit point: `657cc94eb9a` Add PQ V2-8E execute commit point
   - V2-8F pull adapter plan: `d5c004c9461` Plan PQ V2-8F pull adapter
   - V2-8F pull adapter gates: `e73c73f053f` Add PQ V2-8F pull adapter gates
+  - V2-8F visibility helper: `379e3c60581` Extract PQ V2-8F visibility helper
+  - V2-8F conversion helper: `62f8058375d` Add PQ V2-8F record conversion helper
+  - V2-8F callback accessors: `e817a9176ec` Add PQ V2-8F callback row accessors
   - V2-1: `9a58ff94cdf` Add PQ V2-1 iterator safe fallback
   - V2-0: `a420e8a3f26` Add PQ V2-0 execution state contract
   - Phase 8: `113d2ba44c1` Add PQ phase 8 V1 completion scaffolding
