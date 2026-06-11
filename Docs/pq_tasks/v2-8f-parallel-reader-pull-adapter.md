@@ -82,6 +82,12 @@ Status: Callback row accessors implemented. `Parallel_reader::Ctx` now exposes
 `record()` and `offsets()` accessors for future PQ callback producers, and the
 existing upstream adapter uses `record()` instead of directly reading `m_rec`.
 
+Status: Callback record conversion helper implemented.
+`InnoDB_pq_scan_ctx::store_callback_record()` accepts a
+`Parallel_reader::Ctx` callback row and converts it through
+`store_mysql_record()`. It does not advance cursors and is not called from the
+SQL iterator.
+
 ### Step 3: Conversion Smoke
 
 - 用 worker prebuilt template 和 `row_sel_store_mysql_rec()` 转换一行；
@@ -129,12 +135,13 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 - [x] visibility helper 抽出，不公开 `Parallel_reader::Scan_ctx` 大量私有状态；
 - [x] callback row accessor 第一段完成；
 - [x] record conversion helper 第一段完成；
+- [x] callback record conversion helper 第一段完成；
 - [ ] `pq_worker_scan_next()` 仍 disabled；
 - [x] build 和完整 `parallel_query` suite 通过。
 
 ## Current Status
 
-- Status: Callback row accessor completed
+- Status: Callback record conversion helper completed
 - Owner: Codex Orchestrator
 - Started: 2026-06-11
 
@@ -147,6 +154,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv --tmpdir
 - `Parallel_reader::check_visibility(...)` narrow static helper；
 - `Parallel_reader::Ctx::record()` / `offsets()` accessors；
 - `InnoDB_pq_scan_ctx::store_mysql_record()`；
+- `InnoDB_pq_scan_ctx::store_callback_record()`；
 - 不读取 row，不接 `pq_worker_scan_next()`，不改变执行状态。
 
 验证：

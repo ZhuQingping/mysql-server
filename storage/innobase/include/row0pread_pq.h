@@ -62,6 +62,7 @@ Created 2026-06-02 by Qingping Zhu (PQ Phase 6B-2). */
 #include "mem0mem.h"
 #include "page0size.h"
 #include "rem0types.h"
+#include "row0pread.h"
 #include "trx0trx.h"
 #include "ut0new.h"
 
@@ -158,6 +159,16 @@ class InnoDB_pq_scan_ctx {
   bool store_mysql_record(byte *mysql_rec, row_prebuilt_t *prebuilt,
                           const rec_t *rec, ulint *offsets,
                           mem_heap_t *blob_heap) const;
+
+  /** Convert the current row from a Parallel_reader callback context.
+
+  This helper is for the future callback producer smoke. It does not advance
+  cursors or own row memory.
+
+  @return true on success. */
+  bool store_callback_record(byte *mysql_rec, row_prebuilt_t *prebuilt,
+                             const Parallel_reader::Ctx *reader_ctx,
+                             mem_heap_t *blob_heap) const;
 
   /** Mutable access to ranges for dispatch. */
   std::vector<InnoDB_pq_range> &mutable_ranges() { return m_ranges; }

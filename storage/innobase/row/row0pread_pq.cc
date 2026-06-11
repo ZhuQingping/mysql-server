@@ -183,6 +183,17 @@ bool InnoDB_pq_scan_ctx::store_mysql_record(byte *mysql_rec,
                                  blob_heap);
 }
 
+bool InnoDB_pq_scan_ctx::store_callback_record(
+    byte *mysql_rec, row_prebuilt_t *prebuilt,
+    const Parallel_reader::Ctx *reader_ctx, mem_heap_t *blob_heap) const {
+  if (reader_ctx == nullptr || reader_ctx->index() != m_index) {
+    return false;
+  }
+
+  return store_mysql_record(mysql_rec, prebuilt, reader_ctx->record(),
+                            reader_ctx->offsets(), blob_heap);
+}
+
 dberr_t InnoDB_pq_scan_ctx::partition(size_t split_level) {
   m_ranges.clear();
 
