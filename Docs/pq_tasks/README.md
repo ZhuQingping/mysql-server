@@ -30,6 +30,11 @@
   - V2-8C worker open smoke run: `a79c2109d7a` Run PQ V2-8C worker open table smoke
   - V2-8C worker handler smoke: `13ce85e4d47` Run PQ V2-8C worker handler init smoke
   - V2-8C status: `cb34ece63ef` Record PQ V2-8C worker handler smoke status
+  - V2-8D first row contract: `1d39beafe15` Tighten PQ V2-8D first row contract
+  - V2-8D read-view strategy: `50f7ed3dbd5` Select PQ V2-8D read view strategy
+  - V2-8E execute commit point: `657cc94eb9a` Add PQ V2-8E execute commit point
+  - V2-8F pull adapter plan: `d5c004c9461` Plan PQ V2-8F pull adapter
+  - V2-8F pull adapter gates: `e73c73f053f` Add PQ V2-8F pull adapter gates
   - V2-1: `9a58ff94cdf` Add PQ V2-1 iterator safe fallback
   - V2-0: `a420e8a3f26` Add PQ V2-0 execution state contract
   - Phase 8: `113d2ba44c1` Add PQ phase 8 V1 completion scaffolding
