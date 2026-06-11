@@ -298,4 +298,26 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 下一步：
 
-- 进入 V2-12A-3.4 DOP1 SQL result smoke 前，先评估 result-row construction 风险。
+- V2-12A-3.4 DOP1 SQL result smoke 需要先确认当前传统优化器下 `GROUP BY` 的实际 iterator access path。
+
+## V2-12A-3.4 预研记录
+
+只读 Agent 建议的最小路径：
+
+- 只支持 `GROUP BY int_col, COUNT(*)`；
+- 使用 `Item_sum_count::make_const(count)` 输出每组 count；
+- 使用 `StoreFromTableBuffers()` / `LoadIntoTableBuffers()` 保存和恢复 group key 代表行；
+- 不修改 `AggregateIterator` 和 `item_sum.*`。
+
+本地验证结论：
+
+- 已尝试实现 gated SQL result smoke；
+- `SELECT val, COUNT(*) FROM t1 GROUP BY val` 和 `SELECT id, COUNT(*) FROM t1 GROUP BY id` 结果正确，但 `Parallel_queries_executed` 未增长，说明当前查询没有进入 `AccessPath::AGGREGATE` factory；
+- 这意味着当前接入点对传统优化器 GROUP BY 形态不足，可能实际走 `TEMPTABLE_AGGREGATE` 或其他 legacy aggregation 路径；
+- 未提交该实验代码，避免引入不可观测或不可验证的执行路径。
+
+后续要求：
+
+- 先做只读 path tracing，确认 GROUP BY 在当前 optimizer/executor 下的实际 access path；
+- 如果是 `TEMPTABLE_AGGREGATE`，需要单独设计接入点，不应把 3.4 强塞到 `TABLE_SCAN` hook；
+- 保持 `sql/iterators/composite_iterators.*` 和 `sql/item_sum.*` 不修改。
