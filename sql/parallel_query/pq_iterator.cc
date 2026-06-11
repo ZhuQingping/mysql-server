@@ -180,19 +180,23 @@ bool PQTableScanIterator::Init() {
   }
 
   if ((read_shadow_path || threaded_read_shadow_path) && probe_supported) {
+    const uint threaded_execute_dop =
+        threaded_read_shadow_path ? requested_dop : 1;
     uint execute_dop = 0;
     error = table()->file->pq_leader_scan_init(
-        thd(), &m_leader_ctx, PQ_leader_scan_mode::EXECUTE, 1, &execute_dop,
-        false);
+        thd(), &m_leader_ctx, PQ_leader_scan_mode::EXECUTE,
+        threaded_execute_dop, &execute_dop, false);
     if (error != 0) {
       cleanup_pq_resources(true);
       PrintError(error);
       return true;
     }
 
-    m_gather = new Gather_operator(1);
+    const uint gather_dop = execute_dop > 0 ? execute_dop : threaded_execute_dop;
+    m_gather = new Gather_operator(gather_dop);
     if (m_gather == nullptr || m_gather->init() ||
-        m_gather->configure_worker_open_contexts(table(), m_leader_ctx, 1)) {
+        m_gather->configure_worker_open_contexts(table(), m_leader_ctx,
+                                                 gather_dop)) {
       cleanup_pq_resources(true);
       PrintError(HA_ERR_OUT_OF_MEM);
       return true;
@@ -272,8 +276,14 @@ bool PQTableScanIterator::should_enter_threaded_read_shadow_path(
     uint requested_dop) const {
   bool enabled = thd() != nullptr &&
                  thd()->variables.parallel_query_experimental_threaded_dop1;
+  bool debug_dop2 = false;
   DBUG_EXECUTE_IF("pq_read_threaded_shadow_path", enabled = true;);
-  return enabled && requested_dop == 1 && table() != nullptr &&
+  DBUG_EXECUTE_IF("pq_read_threaded_dop2_shadow_path", {
+    enabled = true;
+    debug_dop2 = true;
+  });
+  return enabled && (requested_dop == 1 || (debug_dop2 && requested_dop == 2)) &&
+         table() != nullptr &&
          table()->s != nullptr && table()->s->blob_fields == 0 &&
          table()->s->reclength > 0;
 }

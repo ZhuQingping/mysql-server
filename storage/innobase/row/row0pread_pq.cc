@@ -531,12 +531,12 @@ InnoDB_pq_range *InnoDB_pq_leader_ctx::dispatch_next_range() {
 
   auto &ranges = m_scan_ctx->mutable_ranges();
 
-  if (m_next_range_id >= ranges.size()) {
+  const auto range_id = m_next_range_id.fetch_add(1, std::memory_order_relaxed);
+  if (range_id >= ranges.size()) {
     return nullptr;
   }
 
-  auto &range = ranges[m_next_range_id];
-  ++m_next_range_id;
+  auto &range = ranges[range_id];
   return &range;
 }
 

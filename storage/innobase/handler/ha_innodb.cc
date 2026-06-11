@@ -11126,7 +11126,7 @@ int ha_innobase::pq_worker_scan_init(PQ_Worker_open_context *open_ctx,
       open_ctx->worker_handler == nullptr ||
       open_ctx->worker_handler != this ||
       open_ctx->worker_table == open_ctx->leader_table ||
-      open_ctx->actual_dop != 1) {
+      open_ctx->actual_dop == 0) {
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 

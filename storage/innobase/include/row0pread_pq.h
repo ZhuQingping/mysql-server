@@ -329,8 +329,10 @@ class InnoDB_pq_leader_ctx {
   size_t n_ranges() const {
     return m_scan_ctx != nullptr ? m_scan_ctx->ranges().size() : 0;
   }
-  size_t n_dispatched() const { return m_next_range_id; }
-  bool all_ranges_dispatched() const { return m_next_range_id >= n_ranges(); }
+  size_t n_dispatched() const {
+    return m_next_range_id.load(std::memory_order_relaxed);
+  }
+  bool all_ranges_dispatched() const { return n_dispatched() >= n_ranges(); }
 
   void set_error_state(dberr_t err) {
     m_err.store(err, std::memory_order_relaxed);
@@ -349,7 +351,7 @@ class InnoDB_pq_leader_ctx {
   bool m_reverse{false};
   trx_t *m_trx{nullptr};
   InnoDB_pq_scan_ctx *m_scan_ctx{nullptr};
-  size_t m_next_range_id{0};
+  std::atomic_size_t m_next_range_id{0};
   std::atomic<dberr_t> m_err{DB_SUCCESS};
   std::vector<InnoDB_pq_range> m_empty_ranges;
 };

@@ -1215,36 +1215,43 @@ bool Gather_operator::run_worker_callback_limited_producer(
 
 bool Gather_operator::run_worker_callback_threaded_producer(
     THD *leader_thd, TABLE *leader_table, uint32 max_rows) {
-  if (leader_thd == nullptr || leader_table == nullptr || m_dop != 1 ||
+  if (leader_thd == nullptr || leader_table == nullptr || m_dop == 0 ||
       max_rows == 0 || !m_initialized) {
     return true;
   }
 
-  auto *worker = get_worker(0);
   auto *exchange = get_exchange();
-  if (worker == nullptr || exchange == nullptr ||
+  if (exchange == nullptr ||
       exchange->get_exchange_type() != Exchange::EXCHANGE_NOSORT) {
     return true;
   }
 
-  if (worker->m_open_ctx.leader_table == nullptr) {
-    worker->m_open_ctx.leader_table = leader_table;
-    worker->m_open_ctx.actual_dop = m_dop;
+  for (uint32 i = 0; i < m_dop; ++i) {
+    auto *worker = get_worker(i);
+    if (worker == nullptr) return true;
+
+    if (worker->m_open_ctx.leader_table == nullptr) {
+      worker->m_open_ctx.leader_table = leader_table;
+      worker->m_open_ctx.actual_dop = m_dop;
+    }
+
+    worker->m_task = PQ_worker_task::CALLBACK_LIMITED_PRODUCER;
+    worker->m_task_max_rows = max_rows;
+    worker->m_task_force_error = false;
+    DBUG_EXECUTE_IF("pq_read_threaded_shadow_force_worker_error",
+                    worker->m_task_force_error = (i == 0););
+    worker->m_task_rows_sent.store(0, std::memory_order_release);
   }
 
-  worker->m_task = PQ_worker_task::CALLBACK_LIMITED_PRODUCER;
-  worker->m_task_max_rows = max_rows;
-  worker->m_task_force_error = false;
-  DBUG_EXECUTE_IF("pq_read_threaded_shadow_force_worker_error",
-                  worker->m_task_force_error = true;);
-  worker->m_task_rows_sent.store(0, std::memory_order_release);
-
   if (start_workers(leader_thd)) {
-    worker->m_task = PQ_worker_task::NOOP;
+    for (uint32 i = 0; i < m_dop; ++i) {
+      auto *worker = get_worker(i);
+      if (worker != nullptr) worker->m_task = PQ_worker_task::NOOP;
+    }
     return true;
   }
 
-  pq_global_stats.workers_launched.fetch_add(1, std::memory_order_relaxed);
+  pq_global_stats.workers_launched.fetch_add(m_dop, std::memory_order_relaxed);
   return false;
 }
 
