@@ -42,6 +42,9 @@ struct MEM_ROOT;
 unique_ptr_destroy_only<RowIterator> TryCreatePQGroupAggregateIterator(
     THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *aggregate_path);
 
+unique_ptr_destroy_only<RowIterator> TryCreatePQTemptableGroupAggregateIterator(
+    THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *aggregate_path);
+
 bool RunPQGroupAggregateTypedStateSmoke(uint32 *groups_built,
                                         uint64 *sum_total);
 

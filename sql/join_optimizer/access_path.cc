@@ -921,11 +921,17 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
           continue;
         }
 
-        iterator = unique_ptr_destroy_only<RowIterator>(
-            temptable_aggregate_iterator::CreateIterator(
-                thd, std::move(job.children[0]), param.temp_table_param,
-                param.table, std::move(job.children[1]), join,
-                param.ref_slice));
+        auto pq_iter = TryCreatePQTemptableGroupAggregateIterator(
+            thd, mem_root, join, path);
+        if (pq_iter != nullptr) {
+          iterator = std::move(pq_iter);
+        } else {
+          iterator = unique_ptr_destroy_only<RowIterator>(
+              temptable_aggregate_iterator::CreateIterator(
+                  thd, std::move(job.children[0]), param.temp_table_param,
+                  param.table, std::move(job.children[1]), join,
+                  param.ref_slice));
+        }
 
         break;
       }

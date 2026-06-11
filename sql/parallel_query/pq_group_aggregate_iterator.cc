@@ -114,6 +114,37 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQGroupAggregateIterator(
   return nullptr;
 }
 
+unique_ptr_destroy_only<RowIterator> TryCreatePQTemptableGroupAggregateIterator(
+    THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *aggregate_path) {
+  (void)mem_root;
+
+  if (thd == nullptr || join == nullptr || aggregate_path == nullptr) {
+    return nullptr;
+  }
+
+  if (aggregate_path->type != AccessPath::TEMPTABLE_AGGREGATE) {
+    return nullptr;
+  }
+
+  if (!thd->variables.parallel_query ||
+      !thd->variables.parallel_query_experimental_groupby_dop1 ||
+      thd->variables.parallel_default_dop != 1) {
+    return nullptr;
+  }
+
+  if (!join->pq_eligible) {
+    return nullptr;
+  }
+
+  /*
+    V2-12A-3.4b only establishes the temp-table aggregate access-path hook.
+    It deliberately does not take ownership of subquery_path/table_path
+    iterators yet, so native TemptableAggregateIterator remains the only
+    executable path.
+  */
+  return nullptr;
+}
+
 bool RunPQGroupAggregateTypedStateSmoke(uint32 *groups_built,
                                         uint64 *sum_total) {
   if (groups_built == nullptr || sum_total == nullptr) return true;

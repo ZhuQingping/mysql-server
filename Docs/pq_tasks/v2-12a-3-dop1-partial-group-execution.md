@@ -337,6 +337,33 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 2. `V2-12A-3.4b`：为 `TEMPTABLE_AGGREGATE` 设计 gated factory skeleton，先返回 nullptr；
 3. `V2-12A-3.4c`：仅在明确白名单下尝试 `GROUP BY int_col COUNT(*)` SQL result smoke。
 
+### V2-12A-3.4b TEMPTABLE_AGGREGATE Factory Skeleton
+
+状态：Completed。
+
+目标：
+
+- 在 `AccessPath::TEMPTABLE_AGGREGATE` 分支建立 PQ GROUP BY factory hook；
+- factory 当前仍返回 `nullptr`；
+- 不接管 `subquery_path` / `table_path` child ownership；
+- 不改变原生 `TemptableAggregateIterator` 行为。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_diagnostics pq_groupby_partial_group_smoke \
+  pq_groupby_typed_state_smoke \
+  --parallel=1 --vardir=/tmp/pqv_groupby_temp_factory \
+  --tmpdir=/tmp/pqt_groupby_temp_factory
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full_temp_factory \
+  --tmpdir=/tmp/pqt_full_temp_factory
+```
+
+结果：完整 `parallel_query` suite 通过，共 53 项。
+
 禁止事项：
 
 - 不强行改变 optimizer，让 temp-table group 变成 streaming aggregate；
