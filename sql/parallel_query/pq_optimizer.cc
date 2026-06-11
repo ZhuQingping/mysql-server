@@ -186,11 +186,14 @@ static bool pq_check_single_table(Table_ref *table_ref,
 
   @param join  The JOIN object (may be nullptr if not yet optimized)
   @param info  Output: set reason if disqualified
+  @param allow_tmp_tables  Whether a narrowly gated GROUP BY candidate may
+                           continue with optimizer-created tmp tables
 
   @retval true   Access path is full table scan
   @retval false  Access path is something else or cannot be determined
 */
-static bool pq_check_full_table_scan(JOIN *join, PQUnsuiteInfo *info) {
+static bool pq_check_full_table_scan(JOIN *join, PQUnsuiteInfo *info,
+                                     bool allow_tmp_tables) {
   if (join == nullptr) {
     // JOIN not yet constructed - cannot check access path. Fallback.
     return pq_reject(info, PQUnsuiteReason::UNSUPPORTED_BY_PHASE1,
@@ -198,7 +201,7 @@ static bool pq_check_full_table_scan(JOIN *join, PQUnsuiteInfo *info) {
   }
 
   // If there are tmp_tables, the query involves materialization steps.
-  if (join->tmp_tables > 0) {
+  if (join->tmp_tables > 0 && !allow_tmp_tables) {
     return pq_reject(info, PQUnsuiteReason::UNSUPPORTED_BY_PHASE1,
                      "tmp tables present");
   }
@@ -250,6 +253,8 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
   // ================================================================
   // 1. Global/session switch: parallel_query must be ON
   // ================================================================
+  bool explicit_groupby_dop1_candidate = false;
+
   if (!thd->variables.parallel_query) {
     return pq_reject(info, PQUnsuiteReason::DISABLED,
                      "parallel_query is OFF");
@@ -320,9 +325,10 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
   }
 
   // ================================================================
-  // 10. Explicit GROUP BY is still serial fallback. V2-12A-1 keeps
-  //     execution disabled but records a more precise diagnostic so
-  //     partial aggregation can be implemented in smaller follow-up steps.
+  // 10. Explicit GROUP BY is still serial by default. V2-12A-3 allows a
+  //     narrowly gated DOP=1 candidate to reach the GROUP BY factory
+  //     diagnostics; the factory still returns nullptr unless a later
+  //     substep creates a real PQ group iterator.
   // ================================================================
   if (query_block->is_explicitly_grouped()) {
     if (query_block->olap != UNSPECIFIED_OLAP_TYPE) {
@@ -345,8 +351,16 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
                        "GROUP BY has unsupported aggregate function");
     }
 
-    return pq_reject(info, PQUnsuiteReason::GROUP_BY_PARTIAL_AGG_UNSUPPORTED,
-                     "GROUP BY partial aggregation is not implemented");
+    if (thd->variables.parallel_query_experimental_groupby_dop1 &&
+        thd->variables.parallel_default_dop == 1) {
+      // Continue the normal single-table/full-scan/cost checks below. This
+      // marks only a candidate; current GROUP BY factories still fall back to
+      // native iterators unless a later substep takes child ownership.
+      explicit_groupby_dop1_candidate = true;
+    } else {
+      return pq_reject(info, PQUnsuiteReason::GROUP_BY_PARTIAL_AGG_UNSUPPORTED,
+                       "GROUP BY partial aggregation is not implemented");
+    }
   }
 
   // ================================================================
@@ -489,7 +503,7 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
   // ================================================================
   // 20. Access path must be full table scan (MVP only supports scan)
   // ================================================================
-  if (!pq_check_full_table_scan(join, info)) {
+  if (!pq_check_full_table_scan(join, info, explicit_groupby_dop1_candidate)) {
     return false;
   }
 

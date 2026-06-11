@@ -524,3 +524,47 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 
 - 增加 eligibility 白名单，但仍先返回 native fallback；
 - 再实现真正的 `TEMPTABLE_AGGREGATE` PQ iterator，复用 temp table output contract。
+
+### V2-12A-3.4g Eligibility Whitelist
+
+状态：Completed。
+
+目标：
+
+- 对显式 `GROUP BY` 增加最小 eligibility 白名单，让 gate ON + DOP=1 的候选查询可以到达 GROUP BY factory 诊断；
+- `parallel_query_experimental_groupby_dop1=OFF` 或 DOP>1 时继续 `GROUP_BY_PARTIAL_AGG_UNSUPPORTED`；
+- 仅对这个显式 GROUP BY 候选允许 optimizer 已创建的 tmp table 继续通过 full-scan 检查；
+- factory 仍返回 `nullptr`，真实结果仍由原生 `TemptableAggregateIterator` 输出。
+
+实现约束：
+
+- 不放宽 ORDER BY、DISTINCT、multi-table、partition、secondary index 等既有 guard；
+- 不移动 child iterator ownership；
+- 不写 temp table；
+- 不修改 `TemptableAggregateIterator`、`AggregateIterator`、`item_sum.*` 或 InnoDB 核心；
+- EXPLAIN 只用于确认候选状态，不能代表真实 GROUP BY PQ iterator 已执行。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_dop1_factory_observable pq_groupby_diagnostics \
+  pq_groupby_typed_state_smoke \
+  --parallel=1 --vardir=/tmp/pqv_groupby_elig \
+  --tmpdir=/tmp/pqt_groupby_elig
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full_groupby_elig \
+  --tmpdir=/tmp/pqt_full_groupby_elig
+```
+
+结果：
+
+- `cmake --build build-ninja --target mysqld -j 16` 通过；
+- targeted GROUP BY suite 通过：`pq_groupby_dop1_factory_observable`、`pq_groupby_diagnostics`、`pq_groupby_typed_state_smoke`；
+- 完整 `parallel_query` suite 通过，共 55 项；
+- 验证过程中发现 LIMIT/OFFSET early-stop 会暴露 worker/read-view 生命周期风险，已通过 `PQTableScanIterator::EndPSIBatchModeIfStarted()` 在 statement unlock 前清理并 join worker，保留 LIMIT threaded counter 预期。
+
+下一步：
+
+- 后续进入真正的 `TEMPTABLE_AGGREGATE` PQ iterator，实现可验证的 temp-table 写入和结果输出。
