@@ -22,6 +22,7 @@
   - V2-8B: `db14645bcf4` Add PQ V2-8B row image protocol
   - V2-8C plan: `75dc2e297db` Plan PQ V2-8C DOP1 real full scan
   - V2-8C contract/gate: `24209d09ce3` Add PQ V2-8C worker context gates
+  - V2-8C leader mode: `6638e36def7` Add PQ V2-8C leader scan mode contract
   - V2-1: `9a58ff94cdf` Add PQ V2-1 iterator safe fallback
   - V2-0: `a420e8a3f26` Add PQ V2-0 execution state contract
   - Phase 8: `113d2ba44c1` Add PQ phase 8 V1 completion scaffolding
@@ -113,7 +114,7 @@ Recommended worktrees:
 | V2-8 - Single Table Full Scan Closure | In Progress | Codex Orchestrator | [v2-8-single-table-fullscan-closure.md](v2-8-single-table-fullscan-closure.md) | 当前任务拆分：真实 row materialization / `Read()` 接管前的硬 gate |
 | V2-8A - Worker Handler/Prebuilt Contract Design | Completed | Codex Orchestrator + Design Explorers | [v2-8a-worker-handler-prebuilt-contract.md](v2-8a-worker-handler-prebuilt-contract.md) | Commit `8dc30b6a1d2`; 完成 SQL/handler、InnoDB read-view/prebuilt、range dispatch 三项设计收敛；后续先做 V2-8B Row Image Protocol |
 | V2-8B - Row Image Protocol | Completed | Codex Orchestrator + Design Explorers | [v2-8b-row-image-protocol.md](v2-8b-row-image-protocol.md) | typed MQ header、fixed record image synthetic materialization 已完成；`mysqld` build 和完整 `parallel_query` suite 通过 |
-| V2-8C - DOP=1 Real Full Scan | Contract/Gate Implemented | Codex Orchestrator + Design Explorers | [v2-8c-dop1-real-fullscan.md](v2-8c-dop1-real-fullscan.md) | Commit `24209d09ce3`; 已落地 `PQ_Worker_open_context`、typed worker wrapper、DOP=1/single-range/blob/independent record gates；真实 row scan 仍未打开 |
+| V2-8C - DOP=1 Real Full Scan | Contract/Gate Implemented | Codex Orchestrator + Design Explorers | [v2-8c-dop1-real-fullscan.md](v2-8c-dop1-real-fullscan.md) | Commits `24209d09ce3`, `6638e36def7`; 已落地 `PQ_Worker_open_context`、typed worker wrapper、leader PROBE/EXECUTE mode API、DOP=1/single-range/blob/independent record gates；真实 row scan 仍未打开 |
 
 ## Decisions
 
