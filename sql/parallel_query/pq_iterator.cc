@@ -63,9 +63,7 @@ PQTableScanIterator::PQTableScanIterator(THD *thd, MEM_ROOT *mem_root,
       m_record(table->record[0]) {}
 
 PQTableScanIterator::~PQTableScanIterator() {
-  // V2-1: m_serial_iterator owns only destructor calls on MEM_ROOT storage.
-  // Future phases must release PQ_Leader_context, Gather_operator and workers
-  // before destroying the iterator.
+  cleanup_pq_resources(true);
 }
 
 bool PQTableScanIterator::Init() {
@@ -77,19 +75,22 @@ bool PQTableScanIterator::Init() {
   // leader context without starting workers or reading rows. Unsupported
   // engines/states still use the V2-1 serial fallback path; real handler
   // errors are reported before serial iterator state is initialized.
-  PQ_Leader_context *leader_ctx = nullptr;
   uint actual_dop = 0;
   uint requested_dop = thd()->variables.parallel_default_dop;
   if (requested_dop == 0) requested_dop = 1;
   int error = table()->file->pq_leader_scan_init(
-      thd(), &leader_ctx, requested_dop, &actual_dop, false);
+      thd(), &m_leader_ctx, requested_dop, &actual_dop, false);
   if (error == 0) {
-    (void)actual_dop;
-    table()->file->pq_leader_scan_end(leader_ctx);
-  } else if (error != HA_ERR_UNSUPPORTED) {
-    if (leader_ctx != nullptr) {
-      table()->file->pq_leader_scan_end(leader_ctx);
+    uint smoke_dop = actual_dop > 0 ? actual_dop : requested_dop;
+    m_gather = new Gather_operator(smoke_dop);
+    if (m_gather == nullptr || m_gather->run_worker_lifecycle_smoke(thd())) {
+      cleanup_pq_resources(true);
+      PrintError(HA_ERR_OUT_OF_MEM);
+      return true;
     }
+    cleanup_pq_resources(false);
+  } else if (error != HA_ERR_UNSUPPORTED) {
+    cleanup_pq_resources(true);
     PrintError(error);
     return true;
   }
@@ -109,6 +110,22 @@ bool PQTableScanIterator::Init() {
   }
   pq_set_execution_state(thd(), PQ_execution_state::FALLBACK_SERIAL);
   return m_serial_iterator->Init();
+}
+
+void PQTableScanIterator::cleanup_pq_resources(bool abort_workers) {
+  if (m_gather != nullptr) {
+    if (abort_workers && m_gather->is_initialized()) {
+      m_gather->abort_workers(thd());
+    }
+    m_gather->destroy();
+    delete m_gather;
+    m_gather = nullptr;
+  }
+
+  if (m_leader_ctx != nullptr) {
+    table()->file->pq_leader_scan_end(m_leader_ctx);
+    m_leader_ctx = nullptr;
+  }
 }
 
 int PQTableScanIterator::Read() {

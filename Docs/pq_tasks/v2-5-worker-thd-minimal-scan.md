@@ -177,22 +177,85 @@ cd build-ninja/mysql-test
 
 ## Acceptance Checklist
 
-- [ ] worker lifecycle smoke 有明确 API；
-- [ ] `PQTableScanIterator::Init()` 能在 safe window 内执行 lifecycle smoke 后 serial fallback；
-- [ ] 不读取 worker row，不打开 Exchange row stream；
-- [ ] `Parallel_queries_executed` 和 `Parallel_rows_scanned` 不被 smoke 污染；
-- [ ] fallback/range/worker observable 可通过 MTR 验证；
-- [ ] nested PQ guard 保持有效；
-- [ ] `mysqld` build 通过；
-- [ ] targeted MTR 通过；
-- [ ] full `parallel_query` suite 通过。
+- [x] worker lifecycle smoke 有明确 API；
+- [x] `PQTableScanIterator::Init()` 能在 safe window 内执行 lifecycle smoke 后 serial fallback；
+- [x] 不读取 worker row，不打开 Exchange row stream；
+- [x] `Parallel_queries_executed` 和 `Parallel_rows_scanned` 不被 smoke 污染；
+- [x] fallback/range/worker observable 可通过 MTR 验证；
+- [x] nested PQ guard 保持有效；
+- [x] `mysqld` build 通过；
+- [x] targeted MTR 通过；
+- [x] full `parallel_query` suite 通过。
 
 ## Current Status
 
-- Status: In Progress
+- Status: Completed
 - Owner: Codex Orchestrator
 - Started: 2026-06-11
+- Completed: 2026-06-11
 
 ## Completion Report
 
-待实现后补充。
+### Codex Orchestrator 实现结果（2026-06-11）
+
+Changed files:
+
+- `sql/parallel_query/sql_parallel.h`
+- `sql/parallel_query/sql_parallel.cc`
+- `sql/parallel_query/pq_iterator.h`
+- `sql/parallel_query/pq_iterator.cc`
+- `sql/mysqld.cc`
+- `mysql-test/suite/parallel_query/t/pq_worker_dop1.test`
+- `mysql-test/suite/parallel_query/r/pq_worker_dop1.result`
+- `mysql-test/suite/parallel_query/t/pq_stats.test`
+- `mysql-test/suite/parallel_query/r/pq_stats.result`
+- `Docs/pq_tasks/README.md`
+- `Docs/pq_tasks/v2-5-worker-thd-minimal-scan.md`
+
+Implementation summary:
+
+- 新增 `PQ_global_stats::worker_smoke_runs` 和 SHOW STATUS
+  `Parallel_worker_smoke_runs`，用于区分 V2-5 lifecycle smoke 与真实
+  worker launch。
+- 新增 `Gather_operator::run_worker_lifecycle_smoke()`：只执行
+  worker metadata `start -> wait -> resolve_error_priority`，不创建 OS
+  thread，不读取 InnoDB row，不发送 row data。
+- `Gather_operator::~Gather_operator()` 现在调用 `destroy()`，保证拥有者
+  `delete` 时幂等释放 worker metadata 和 Exchange。
+- `PQTableScanIterator` 现在拥有 `PQ_Leader_context` 和 `Gather_operator`
+  指针，并通过 `cleanup_pq_resources()` 统一处理 Init error、safe
+  fallback 和析构路径。
+- `PQTableScanIterator::Init()` 在 leader init 成功后执行 lifecycle
+  smoke，然后立即清理 PQ 资源并继续 serial fallback。
+- 新增 `pq_worker_dop1` MTR，复用 V2-4 的 DOP=1/2/4 full scan 路径，
+  验证 fallback/range/smoke observable，同时断言真实
+  `executed/workers/rows` 仍为 0。
+
+Validation:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+./mtr --suite=parallel_query --parallel=1 --extern socket=/private/tmp/pq20.sock --extern user=root pq_worker_dop1 pq_range_planning_dop pq_stats
+./mtr --suite=parallel_query --parallel=1 --extern socket=/private/tmp/pq20.sock --extern user=root
+```
+
+结果：
+
+- `mysqld` build 通过。
+- targeted MTR: `pq_worker_dop1 pq_range_planning_dop pq_stats` 加
+  `shutdown_report`，4/4 pass。
+- full `parallel_query` suite: 16 个测试加 `shutdown_report`，17/17 pass。
+
+Remaining risks:
+
+- V2-5 仍不创建真实 worker THD；`PQ_worker_manager::start()` 仍是
+  metadata smoke。
+- `pq_worker_scan_init()` / `pq_worker_scan_next()` 仍保持 unsupported；
+  真实 InnoDB worker row scan 需要先补独立 handler/prebuilt/read-view 合同。
+- `Parallel_worker_smoke_runs` 只说明 lifecycle smoke 发生，不说明真实
+  row stream 或性能收益。
+
+Commit:
+
+- `1e8078544e8 Add PQ V2-5 worker lifecycle smoke`

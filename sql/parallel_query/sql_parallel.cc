@@ -230,6 +230,8 @@ void PQ_worker_manager::cleanup(PQ_worker_info **workers, uint32 n_workers,
 // Gather_operator: init / destroy
 // ---------------------------------------------------------------------------
 
+Gather_operator::~Gather_operator() { destroy(); }
+
 bool Gather_operator::init() {
   if (m_dop == 0) return true;  // Invalid DOP
   if (m_initialized) return false;  // Already initialized (no-op success)
@@ -360,6 +362,32 @@ int Gather_operator::wait_for_workers(THD *leader_thd) {
   }
 
   return result;
+}
+
+bool Gather_operator::run_worker_lifecycle_smoke(THD *leader_thd) {
+  bool initialized_here = false;
+
+  if (!m_initialized) {
+    if (init()) return true;
+    initialized_here = true;
+  }
+
+  if (start_workers(leader_thd)) {
+    if (initialized_here) destroy();
+    return true;
+  }
+
+  int wait_result = wait_for_workers(leader_thd);
+  auto error_state = resolve_error_priority(leader_thd);
+  if (wait_result != 0 || error_state.has_error()) {
+    if (initialized_here) destroy();
+    return true;
+  }
+
+  pq_global_stats.worker_smoke_runs.fetch_add(1, std::memory_order_relaxed);
+
+  if (initialized_here) destroy();
+  return false;
 }
 
 // ---------------------------------------------------------------------------

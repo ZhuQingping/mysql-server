@@ -68,6 +68,8 @@ class THD;
 struct TABLE;
 class JOIN;
 struct MEM_ROOT;
+class Gather_operator;
+class PQ_Leader_context;
 
 /**
   Parallel table scan iterator skeleton.
@@ -143,12 +145,17 @@ class PQTableScanIterator final : public TableRowIterator {
   void EndPSIBatchModeIfStarted() override;
 
  private:
+  /** Release any PQ resources owned by this iterator. */
+  void cleanup_pq_resources(bool abort_workers);
+
   MEM_ROOT *m_mem_root;        ///< MEM_ROOT used for owned fallback iterator
   JOIN *m_join;                ///< JOIN context for PQ eligibility
   double m_expected_rows;      ///< Expected rows for buffer scaling
   ha_rows *m_examined_rows;    ///< Examined rows counter
   uchar *m_record;             ///< Record buffer (table->record[0])
   unique_ptr_destroy_only<RowIterator> m_serial_iterator;  ///< V2-1 fallback
+  PQ_Leader_context *m_leader_ctx{nullptr};  ///< Handler leader context
+  Gather_operator *m_gather{nullptr};        ///< Worker lifecycle owner
   bool m_fallback_counted{false};  ///< Count per query iterator, not per Init()
 };
 

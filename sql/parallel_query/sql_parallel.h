@@ -170,6 +170,7 @@ struct PQ_global_stats {
   std::atomic<uint64> workers_launched{0};    ///< Total worker threads launched
   std::atomic<uint64> rows_scanned{0};        ///< Total rows scanned by PQ workers
   std::atomic<uint64> ranges_built{0};        ///< Total InnoDB PQ ranges planned
+  std::atomic<uint64> worker_smoke_runs{0};   ///< Worker lifecycle smoke runs
 
   /** Reset all counters. */
   void reset() {
@@ -178,6 +179,7 @@ struct PQ_global_stats {
     workers_launched.store(0, std::memory_order_relaxed);
     rows_scanned.store(0, std::memory_order_relaxed);
     ranges_built.store(0, std::memory_order_relaxed);
+    worker_smoke_runs.store(0, std::memory_order_relaxed);
   }
 };
 
@@ -488,6 +490,22 @@ class Gather_operator {
     @retval  1  MQ closed but no error (normal end-of-data)
   */
   int wait_for_workers(THD *leader_thd);
+
+  /**
+    Run a V2-5 worker lifecycle smoke pass.
+
+    This exercises worker metadata start/wait/error-priority cleanup without
+    creating OS threads, reading InnoDB rows, or sending row data through MQ.
+    It must not update real execution counters such as
+    Parallel_queries_executed, Parallel_workers_launched, or
+    Parallel_rows_scanned.
+
+    @param leader_thd  Leader THD
+
+    @retval false  Smoke pass completed
+    @retval true   Smoke pass failed
+  */
+  bool run_worker_lifecycle_smoke(THD *leader_thd);
 
   /**
     Abort all workers and close MQ producers.
