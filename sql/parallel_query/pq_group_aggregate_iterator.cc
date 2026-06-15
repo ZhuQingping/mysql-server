@@ -127,9 +127,14 @@ bool pq_groupby_dop_partial_supported(JOIN *join,
 
   switch (sum->sum_func()) {
     case Item_sum::COUNT_FUNC:
-      return sum->argument_count() == 1 && sum->arguments() != nullptr &&
-             sum->arguments()[0] != nullptr &&
-             !sum->arguments()[0]->is_nullable();
+      if (sum->argument_count() != 1 || sum->arguments() == nullptr ||
+          sum->arguments()[0] == nullptr) {
+        return false;
+      }
+      if (sum->arguments()[0]->type() != Item::FIELD_ITEM) {
+        return !sum->arguments()[0]->is_nullable();
+      }
+      return true;
     case Item_sum::SUM_FUNC:
     case Item_sum::MIN_FUNC:
     case Item_sum::MAX_FUNC: {
@@ -404,7 +409,15 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
     if (sum == nullptr) return false;
     switch (sum->sum_func()) {
       case Item_sum::COUNT_FUNC:
-        if (!can_use_typed_count_path()) return false;
+        if (using_hash_key() || table()->group == nullptr ||
+            table()->group->next != nullptr ||
+            table()->group->item == nullptr ||
+            *table()->group->item == nullptr ||
+            sum->argument_count() != 1 || sum->arguments() == nullptr ||
+            sum->arguments()[0] == nullptr ||
+            sum->get_result_field() == nullptr) {
+          return false;
+        }
         *agg_kind = PQ_partial_group_agg_kind::COUNT;
         break;
       case Item_sum::SUM_FUNC:
