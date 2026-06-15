@@ -448,6 +448,10 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
   `parallel_default_dop=4`；
 - DOP4 显式 experimental gates 下支持单表 integer
   `COUNT/SUM/MIN/MAX` GROUP BY partial result path；
+- 新增 `pq_groupby_dop_partial_count_star` MTR；
+- DOP2/DOP4 `COUNT(*)` 复用 partial payload 的 `count_star`/`count_value`
+  语义，非字段 COUNT 参数使用非 NULL group key 作为 worker local
+  accumulation 输入；
 - `Gather_operator::run_worker_partial_group_merge()` 增加 debug-only worker
   error injection 和 worker contexts opened debug sync 点；
 - worker open 后恢复 leader THD globals，避免 debug sync ownership 错配；
@@ -470,6 +474,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query pq_groupby_dop2_partial_count_min_max \
   --tmpdir=/tmp/pqt_dop2_groupby_count_minmax_green
 TMPDIR=/tmp ./mtr --suite=parallel_query \
   pq_groupby_dop2_partial_sum pq_groupby_dop2_partial_count_min_max \
+  pq_groupby_dop_partial_count_star \
   pq_groupby_dop4_partial_count_sum_min_max \
   pq_groupby_dop2_partial_unsupported pq_groupby_partial_group_smoke \
   pq_groupby_dop2_partial_worker_error pq_groupby_dop2_partial_external_kill \
@@ -489,11 +494,12 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - DOP2 GROUP BY SUM 单测通过；
 - DOP2 GROUP BY COUNT/MIN/MAX 单测通过；
 - DOP4 GROUP BY COUNT/SUM/MIN/MAX 单测通过；
+- DOP2/DOP4 GROUP BY COUNT(*) 单测通过；
 - DOP2 GROUP BY unsupported shape 单测通过；
 - DOP2 GROUP BY worker error / external kill 单测通过；
 - DOP4 GROUP BY worker error / external kill 单测通过；
 - GROUP BY/partial/counter targeted suite 通过；
-- 完整 `parallel_query` suite 通过，共 67 项。
+- 完整 `parallel_query` suite 通过，共 68 项。
 
 下一步：
 

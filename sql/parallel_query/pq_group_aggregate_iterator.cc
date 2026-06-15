@@ -125,24 +125,23 @@ bool pq_groupby_dop_partial_supported(JOIN *join,
     return false;
   }
 
-  if (sum->argument_count() != 1 || sum->arguments() == nullptr ||
-      sum->arguments()[0] == nullptr ||
-      sum->arguments()[0]->type() != Item::FIELD_ITEM) {
-    return false;
-  }
-  auto *value_item = down_cast<Item_field *>(sum->arguments()[0]);
-  if (value_item->field == nullptr ||
-      value_item->field->table != group_field_item->field->table) {
-    return false;
-  }
-
   switch (sum->sum_func()) {
     case Item_sum::COUNT_FUNC:
-      return !sum->arguments()[0]->is_nullable();
+      return sum->argument_count() == 1 && sum->arguments() != nullptr &&
+             sum->arguments()[0] != nullptr &&
+             !sum->arguments()[0]->is_nullable();
     case Item_sum::SUM_FUNC:
     case Item_sum::MIN_FUNC:
-    case Item_sum::MAX_FUNC:
-      return true;
+    case Item_sum::MAX_FUNC: {
+      if (sum->argument_count() != 1 || sum->arguments() == nullptr ||
+          sum->arguments()[0] == nullptr ||
+          sum->arguments()[0]->type() != Item::FIELD_ITEM) {
+        return false;
+      }
+      auto *value_item = down_cast<Item_field *>(sum->arguments()[0]);
+      return value_item->field != nullptr &&
+             value_item->field->table == group_field_item->field->table;
+    }
     default:
       return false;
   }
@@ -430,14 +429,23 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
     }
     auto *group_field_item = down_cast<Item_field *>(group_item);
     if (sum->argument_count() != 1 || sum->arguments() == nullptr ||
-        sum->arguments()[0] == nullptr ||
-        sum->arguments()[0]->type() != Item::FIELD_ITEM) {
+        sum->arguments()[0] == nullptr) {
       return false;
     }
-    auto *value_item = down_cast<Item_field *>(sum->arguments()[0]);
-    if (group_field_item->field == nullptr || value_item->field == nullptr ||
+    Field *value_field = nullptr;
+    if (sum->sum_func() == Item_sum::COUNT_FUNC &&
+        sum->arguments()[0]->type() != Item::FIELD_ITEM) {
+      value_field = group_field_item->field;
+    } else {
+      if (sum->arguments()[0]->type() != Item::FIELD_ITEM) {
+        return false;
+      }
+      auto *value_item = down_cast<Item_field *>(sum->arguments()[0]);
+      value_field = value_item->field;
+    }
+    if (group_field_item->field == nullptr || value_field == nullptr ||
         group_field_item->field->table == nullptr ||
-        group_field_item->field->table != value_item->field->table ||
+        group_field_item->field->table != value_field->table ||
         group_field_item->field->is_nullable()) {
       return false;
     }
@@ -450,7 +458,7 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
 
     *source_table = base_table;
     *group_field_index = group_field_item->field->field_index();
-    *value_field_index = value_item->field->field_index();
+    *value_field_index = value_field->field_index();
     return true;
   }
 
