@@ -148,6 +148,8 @@ bool pq_groupby_dop_partial_supported(JOIN *join,
   }
 }
 
+bool pq_groupby_dop_partial_dop_supported(uint dop) { return dop == 2 || dop == 4; }
+
 struct PQ_integer_group_state {
   int64 key{0};
   uint64 count_star{0};
@@ -392,7 +394,8 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
     }
     *source_table = nullptr;
 
-    if (thd()->variables.parallel_default_dop != 2 ||
+    if (!pq_groupby_dop_partial_dop_supported(
+            thd()->variables.parallel_default_dop) ||
         !thd()->variables.parallel_query_experimental_threaded_dop ||
         !thd()->variables.parallel_query_experimental_groupby_dop1) {
       return false;
@@ -1262,16 +1265,17 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQTemptableGroupAggregateIterator(
   const bool groupby_dop1_enabled =
       thd->variables.parallel_query_experimental_groupby_dop1 &&
       thd->variables.parallel_default_dop == 1;
-  const bool groupby_dop2_partial_enabled =
+  const bool groupby_dop_partial_enabled =
       thd->variables.parallel_query_experimental_groupby_dop1 &&
       thd->variables.parallel_query_experimental_threaded_dop &&
-      thd->variables.parallel_default_dop == 2;
+      pq_groupby_dop_partial_dop_supported(
+          thd->variables.parallel_default_dop);
 
   if (!thd->variables.parallel_query ||
-      (!groupby_dop1_enabled && !groupby_dop2_partial_enabled)) {
+      (!groupby_dop1_enabled && !groupby_dop_partial_enabled)) {
     return nullptr;
   }
-  if (groupby_dop2_partial_enabled) {
+  if (groupby_dop_partial_enabled) {
     pq_global_stats.groupby_dop_partial_attempts.fetch_add(
         1, std::memory_order_relaxed);
   } else {
@@ -1279,7 +1283,7 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQTemptableGroupAggregateIterator(
         1, std::memory_order_relaxed);
   }
 
-  const bool supported_shape = groupby_dop2_partial_enabled
+  const bool supported_shape = groupby_dop_partial_enabled
                                    ? pq_groupby_dop_partial_supported(
                                          join, temp_table_param, table)
                                    : pq_groupby_dop1_temp_shape_supported(
@@ -1293,7 +1297,7 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQTemptableGroupAggregateIterator(
   }
 
   if (!join->pq_eligible || !supported_shape) {
-    if (groupby_dop2_partial_enabled) {
+    if (groupby_dop_partial_enabled) {
       pq_global_stats.groupby_dop_partial_fallback.fetch_add(
           1, std::memory_order_relaxed);
     } else {
@@ -1303,7 +1307,7 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQTemptableGroupAggregateIterator(
     return nullptr;
   }
 
-  if (!groupby_dop2_partial_enabled) {
+  if (!groupby_dop_partial_enabled) {
     pq_global_stats.groupby_dop1_factory_selected.fetch_add(
         1, std::memory_order_relaxed);
   }

@@ -441,6 +441,11 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
   且能观察到 fallback / unsupported shape counter。
 - 新增 `pq_groupby_dop2_partial_worker_error` MTR；
 - 新增 `pq_groupby_dop2_partial_external_kill` MTR；
+- 新增 `pq_groupby_dop4_partial_count_sum_min_max` MTR；
+- optimizer eligibility、temptable aggregate factory 和 runtime partial path 均放开
+  `parallel_default_dop=4`；
+- DOP4 显式 experimental gates 下支持单表 integer
+  `COUNT/SUM/MIN/MAX` GROUP BY partial result path；
 - `Gather_operator::run_worker_partial_group_merge()` 增加 debug-only worker
   error injection 和 worker contexts opened debug sync 点；
 - worker open 后恢复 leader THD globals，避免 debug sync ownership 错配；
@@ -449,7 +454,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 仍未覆盖：
 
-- DOP4 GROUP BY partial result path；
+- DOP4 GROUP BY partial result-path worker error / external kill 专门回归；
 
 验证：
 
@@ -463,15 +468,16 @@ TMPDIR=/tmp ./mtr --suite=parallel_query pq_groupby_dop2_partial_count_min_max \
   --tmpdir=/tmp/pqt_dop2_groupby_count_minmax_green
 TMPDIR=/tmp ./mtr --suite=parallel_query \
   pq_groupby_dop2_partial_sum pq_groupby_dop2_partial_count_min_max \
+  pq_groupby_dop4_partial_count_sum_min_max \
   pq_groupby_dop2_partial_unsupported pq_groupby_partial_group_smoke \
   pq_groupby_dop2_partial_worker_error pq_groupby_dop2_partial_external_kill \
   pq_groupby_dop_partial_counters pq_groupby_dop1_sum_min_max \
   pq_groupby_dop1_unsupported pq_stats \
-  --parallel=1 --vardir=/tmp/pqv_groupby_partial_error_kill_related \
-  --tmpdir=/tmp/pqt_groupby_partial_error_kill_related
+  --parallel=1 --vardir=/tmp/pqv_groupby_dop4_partial_related \
+  --tmpdir=/tmp/pqt_groupby_dop4_partial_related
 TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
-  --vardir=/tmp/pqv_full_groupby_partial_error_kill \
-  --tmpdir=/tmp/pqt_full_groupby_partial_error_kill
+  --vardir=/tmp/pqv_full_groupby_dop4_partial \
+  --tmpdir=/tmp/pqt_full_groupby_dop4_partial
 ```
 
 结果：
@@ -479,11 +485,13 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - `cmake --build build-ninja --target mysqld -j 16` 通过；
 - DOP2 GROUP BY SUM 单测通过；
 - DOP2 GROUP BY COUNT/MIN/MAX 单测通过；
+- DOP4 GROUP BY COUNT/SUM/MIN/MAX 单测通过；
 - DOP2 GROUP BY unsupported shape 单测通过；
 - DOP2 GROUP BY worker error / external kill 单测通过；
 - GROUP BY/partial/counter targeted suite 通过；
-- 完整 `parallel_query` suite 通过，共 64 项。
+- 完整 `parallel_query` suite 通过，共 65 项。
 
 下一步：
 
-- 再评估 DOP4 gate expansion。
+- 增加 DOP4 GROUP BY partial result-path worker error / external kill 专门回归；
+- 后续评估更复杂 GROUP BY shape。
