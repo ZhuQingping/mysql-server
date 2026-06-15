@@ -54,6 +54,7 @@
 #include "my_dbug.h"
 #include "mysql/psi/mysql_thread.h"
 #include "mysqld_error.h"         // ER_QUERY_INTERRUPTED
+#include "sql/field.h"            // Field
 #include "sql/mysqld.h"           // key_thread_parallel_query_worker
 #include "sql/handler.h"          // handler
 #include "sql/sql_base.h"         // close_thread_tables, open_ltable
@@ -992,6 +993,84 @@ class PQ_limited_mq_row_sink final : public PQ_row_sink {
   bool m_failed{false};
 };
 
+class PQ_partial_group_mq_sink final : public PQ_row_sink {
+ public:
+  PQ_partial_group_mq_sink(Exchange_nosort *exchange, uint32 worker_id)
+      : m_exchange(exchange), m_worker_id(worker_id) {}
+
+  bool send_row(TABLE *source_table) override {
+    if (m_failed || source_table == nullptr || source_table->s == nullptr ||
+        source_table->s->fields < 2) {
+      m_failed = true;
+      return true;
+    }
+
+    Field *value_field = source_table->field[1];
+    if (value_field == nullptr) {
+      m_failed = true;
+      return true;
+    }
+    if (value_field->result_type() != INT_RESULT) {
+      m_skipped = true;
+      return false;
+    }
+    if (source_table->read_set != nullptr &&
+        !bitmap_is_set(source_table->read_set, value_field->field_index())) {
+      m_skipped = true;
+      return false;
+    }
+
+    ++m_count_star;
+    if (!value_field->is_null()) {
+      const int64 value = static_cast<int64>(value_field->val_int());
+      ++m_count_value;
+      m_sum += value;
+      if (!m_has_value) {
+        m_has_value = true;
+        m_min = value;
+        m_max = value;
+      } else {
+        if (value < m_min) m_min = value;
+        if (value > m_max) m_max = value;
+      }
+    }
+    return false;
+  }
+
+  bool send_partial_group() {
+    if (m_failed || m_exchange == nullptr) return true;
+    if (m_skipped || m_count_star == 0) return false;
+
+    const PQ_partial_group_payload_v1 payload = {
+        PQ_PARTIAL_GROUP_PAYLOAD_MAGIC,
+        PQ_PARTIAL_GROUP_PAYLOAD_VERSION,
+        static_cast<uint16>(PQ_partial_group_agg_kind::SUM),
+        m_worker_id,
+        0,
+        static_cast<int64>(m_worker_id % 2),
+        m_count_star,
+        m_count_value,
+        m_sum,
+        m_min,
+        m_max};
+    return m_exchange->enqueue_partial_group_smoke(m_worker_id, payload);
+  }
+
+  uint32 groups_sent() const { return m_count_star == 0 ? 0 : 1; }
+
+ private:
+  Exchange_nosort *m_exchange;
+  uint32 m_worker_id;
+  uint64 m_count_star{0};
+  uint64 m_count_value{0};
+  int64 m_sum{0};
+  int64 m_min{0};
+  int64 m_max{0};
+  bool m_has_value{false};
+  bool m_skipped{false};
+  bool m_failed{false};
+};
+
 namespace {
 
 bool pq_run_callback_limited_producer_task(PQ_worker_info *worker,
@@ -1173,6 +1252,145 @@ bool Gather_operator::run_worker_callback_multirow_producer_smoke(
                                                   std::memory_order_relaxed);
     pq_global_stats.exchange_smoke_finishes.fetch_add(
         1, std::memory_order_relaxed);
+  }
+  return failed;
+}
+
+bool Gather_operator::run_worker_partial_group_smoke(THD *leader_thd,
+                                                     TABLE *leader_table) {
+  if (leader_thd == nullptr || leader_table == nullptr || m_dop == 0) {
+    return true;
+  }
+
+  bool initialized_here = false;
+
+  if (!m_initialized) {
+    if (init()) return true;
+    initialized_here = true;
+  }
+
+  auto *exchange = get_exchange();
+  if (exchange == nullptr ||
+      exchange->get_exchange_type() != Exchange::EXCHANGE_NOSORT) {
+    if (initialized_here) destroy();
+    return true;
+  }
+
+  bool *rnd_inited = new (std::nothrow) bool[m_dop];
+  if (rnd_inited == nullptr) {
+    if (initialized_here) destroy();
+    return true;
+  }
+  for (uint32 i = 0; i < m_dop; ++i) rnd_inited[i] = false;
+
+  bool failed = false;
+  for (uint32 i = 0; !failed && i < m_dop; ++i) {
+    auto *worker = get_worker(i);
+    if (worker == nullptr || worker->m_open_ctx.leader_ctx == nullptr ||
+        worker->m_open_ctx.leader_table == nullptr) {
+      failed = true;
+      break;
+    }
+
+    if (pq_create_worker_thd(worker, this) == nullptr) {
+      leader_thd->store_globals();
+      failed = true;
+      break;
+    }
+    worker->m_worker_thd->store_globals();
+
+    failed = pq_open_worker_table(&worker->m_open_ctx);
+    if (!failed) {
+      failed = worker->m_open_ctx.worker_handler->ha_rnd_init(true) != 0;
+      rnd_inited[i] = !failed;
+    }
+    if (!failed) {
+      failed = worker->m_open_ctx.worker_handler->pq_worker_scan_init(
+          &worker->m_open_ctx, &worker->m_worker_ctx) != 0;
+    }
+  }
+
+  uint32 worker_groups = 0;
+  for (uint32 i = 0; !failed && i < m_dop; ++i) {
+    auto *worker = get_worker(i);
+    worker->m_worker_thd->store_globals();
+    PQ_partial_group_mq_sink group_sink(exchange, worker->m_worker_id);
+    failed = worker->m_open_ctx.worker_handler
+                 ->pq_worker_scan_callback_produce(worker->m_worker_ctx,
+                                                   &group_sink) != 0;
+    if (!failed && group_sink.groups_sent() > 0) {
+      failed = group_sink.send_partial_group();
+      if (!failed) worker_groups += group_sink.groups_sent();
+    }
+    if (!failed) {
+      failed = exchange->enqueue_finish_smoke(worker->m_worker_id);
+    }
+  }
+
+  for (uint32 i = 0; i < m_dop; ++i) {
+    auto *worker = get_worker(i);
+    if (worker == nullptr) continue;
+    if (worker->m_worker_thd != nullptr) {
+      worker->m_worker_thd->store_globals();
+    }
+    if (worker->m_worker_ctx != nullptr &&
+        worker->m_open_ctx.worker_handler != nullptr) {
+      worker->m_open_ctx.worker_handler->pq_worker_scan_end(
+          worker->m_worker_ctx);
+      worker->m_worker_ctx = nullptr;
+    }
+    if (rnd_inited[i] && worker->m_open_ctx.worker_handler != nullptr) {
+      worker->m_open_ctx.worker_handler->ha_rnd_end();
+    }
+    if (worker->m_open_ctx.worker_table != nullptr) {
+      pq_close_worker_table(&worker->m_open_ctx, failed);
+    }
+    pq_destroy_worker_thd(worker);
+  }
+  leader_thd->store_globals();
+
+  uint32 payloads_read = 0;
+  uint32 merged_groups = 0;
+  PQ_partial_group_merge_slot_v1 merge_slots[2];
+  while (!failed) {
+    MQMessageType type;
+    void *datap = nullptr;
+    uint32 data_len = 0;
+    const bool got_message = exchange->read_mq_message(type, &datap, data_len);
+
+    if (!got_message) {
+      if (exchange->all_done()) break;
+      failed = true;
+      break;
+    }
+
+    if (type == MQMessageType::PARTIAL_GROUP) {
+      const PQ_partial_group_payload_v1 *payload = nullptr;
+      failed = pq_validate_partial_group_payload_v1(datap, data_len, m_dop,
+                                                    &payload) ||
+               pq_merge_partial_group_payload_v1(*payload, merge_slots, 2,
+                                                 &merged_groups);
+      if (!failed) ++payloads_read;
+      continue;
+    }
+
+    if (type != MQMessageType::FINISH) {
+      failed = true;
+      break;
+    }
+  }
+
+  failed = failed || payloads_read != worker_groups ||
+           (worker_groups > 0 &&
+            (merged_groups == 0 || merged_groups > worker_groups));
+
+  delete[] rnd_inited;
+  if (initialized_here) destroy();
+  if (!failed) {
+    pq_global_stats.groupby_dop_partial_worker_groups.fetch_add(
+        worker_groups, std::memory_order_relaxed);
+    pq_global_stats.groupby_dop_partial_merged_groups.fetch_add(
+        merged_groups, std::memory_order_relaxed);
   }
   return failed;
 }

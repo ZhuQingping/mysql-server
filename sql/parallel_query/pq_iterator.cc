@@ -167,6 +167,31 @@ bool PQTableScanIterator::Init() {
     cleanup_pq_resources(false);
 
     if (!read_shadow_path && !threaded_read_shadow_path) {
+      PQ_Leader_context *partial_execute_ctx = nullptr;
+      uint partial_execute_dop = 0;
+      error = table()->file->pq_leader_scan_init(
+          thd(), &partial_execute_ctx, PQ_leader_scan_mode::EXECUTE,
+          smoke_dop, &partial_execute_dop, false);
+      if (error == 0) {
+        const uint worker_partial_dop =
+            partial_execute_dop > 0 ? partial_execute_dop : smoke_dop;
+        Gather_operator worker_partial_smoke(worker_partial_dop);
+        const bool partial_failed =
+            worker_partial_smoke.init() ||
+            worker_partial_smoke.configure_worker_open_contexts(
+                table(), partial_execute_ctx, worker_partial_dop) ||
+            worker_partial_smoke.run_worker_partial_group_smoke(thd(),
+                                                                table());
+        table()->file->pq_leader_scan_end(partial_execute_ctx);
+        if (partial_failed) {
+          PrintError(HA_ERR_OUT_OF_MEM);
+          return true;
+        }
+      } else if (error != HA_ERR_UNSUPPORTED) {
+        PrintError(error);
+        return true;
+      }
+
       PQ_Leader_context *execute_ctx = nullptr;
       uint execute_dop = 0;
       error = table()->file->pq_leader_scan_init(

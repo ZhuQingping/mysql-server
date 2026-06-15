@@ -1,5 +1,6 @@
 # Test: pq_groupby_dop_partial_counters
-# V2-12B-1: DOP partial GROUP BY status counters are visible but dormant.
+# V2-12B-1: DOP partial GROUP BY execution-selection counters are visible
+# but dormant while worker/merge smoke counters may grow in later V2-12B steps.
 
 --source include/have_innodb_16k.inc
 
@@ -20,10 +21,13 @@ SELECT variable_name FROM performance_schema.global_status
     'Parallel_groupby_dop_partial_fallback')
   ORDER BY variable_name;
 
-SET @pq_groupby_dop_partial_before = (
+SET @pq_groupby_dop_partial_exec_before = (
   SELECT SUM(CAST(variable_value AS UNSIGNED))
     FROM performance_schema.global_status
-    WHERE variable_name LIKE 'Parallel_groupby_dop_partial_%');
+    WHERE variable_name IN (
+      'Parallel_groupby_dop_partial_attempts',
+      'Parallel_groupby_dop_partial_selected',
+      'Parallel_groupby_dop_partial_fallback'));
 
 SET SESSION parallel_query=ON;
 SET SESSION parallel_cost_threshold=0;
@@ -41,8 +45,12 @@ SELECT COUNT(*) AS cnt FROM t1;
 SELECT CAST((
   SELECT SUM(CAST(variable_value AS UNSIGNED))
     FROM performance_schema.global_status
-    WHERE variable_name LIKE 'Parallel_groupby_dop_partial_%') -
-      @pq_groupby_dop_partial_before AS SIGNED) AS dop_partial_counter_delta;
+    WHERE variable_name IN (
+      'Parallel_groupby_dop_partial_attempts',
+      'Parallel_groupby_dop_partial_selected',
+      'Parallel_groupby_dop_partial_fallback')) -
+      @pq_groupby_dop_partial_exec_before AS SIGNED)
+    AS dop_partial_exec_counter_delta;
 
 SET SESSION parallel_query_experimental_threaded_dop=OFF;
 SET SESSION parallel_query=OFF;

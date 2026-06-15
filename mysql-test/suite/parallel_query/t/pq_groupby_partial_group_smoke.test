@@ -1,7 +1,8 @@
 # Test: pq_groupby_partial_group_smoke
-# V2-12B-2: synthetic PARTIAL_GROUP payload v1 wire-protocol smoke.
-# This validates transport plus in-memory merge, but does not enable SQL
-# GROUP BY DOP>1 execution.
+# V2-12B: PARTIAL_GROUP payload v1 wire-protocol and worker partial producer
+# smoke. Worker group counters observe non-empty worker ranges; empty workers
+# still send FINISH but do not contribute a partial group. This does not enable
+# SQL GROUP BY DOP>1 execution.
 
 --source include/have_innodb_16k.inc
 
@@ -32,6 +33,14 @@ SET @pq_partial_payload_errors_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_groupby_partial_payload_errors');
+SET @pq_dop_partial_worker_groups_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_dop_partial_worker_groups');
+SET @pq_dop_partial_merged_groups_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_dop_partial_merged_groups');
 
 --disable_result_log
 SELECT * FROM t1;
@@ -52,7 +61,15 @@ SELECT
   (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
    WHERE variable_name = 'Parallel_groupby_partial_payload_errors') -
       @pq_partial_payload_errors_before >= 3
-    AS partial_group_payload_errors_observed;
+    AS partial_group_payload_errors_observed,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_groupby_dop_partial_worker_groups') -
+      @pq_dop_partial_worker_groups_before
+    AS dop_partial_worker_groups_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_groupby_dop_partial_merged_groups') -
+      @pq_dop_partial_merged_groups_before
+    AS dop_partial_merged_groups_delta;
 
 SET SESSION parallel_query=OFF;
 SET SESSION parallel_default_dop=4;

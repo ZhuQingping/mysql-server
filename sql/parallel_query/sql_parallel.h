@@ -804,6 +804,22 @@ class Gather_operator {
                                                    TABLE *leader_table);
 
   /**
+    Run a worker-local partial GROUP BY producer smoke pass.
+
+    Each configured worker opens its own TABLE/handler, scans its assigned
+    callback range, accumulates one local integer partial group, sends it as a
+    PARTIAL_GROUP message, and sends FINISH. The leader drains and merges those
+    payloads through Exchange. This does not open SQL GROUP BY DOP>1 execution.
+
+    @param leader_thd    Leader THD to restore as current THD after smoke
+    @param leader_table  Leader TABLE used as metadata source
+
+    @retval false  Smoke pass completed
+    @retval true   Smoke pass failed
+  */
+  bool run_worker_partial_group_smoke(THD *leader_thd, TABLE *leader_table);
+
+  /**
     Produce a bounded callback row stream into this gather's Exchange.
 
     This is the V2-8J shadow Read() producer bridge. It opens one worker

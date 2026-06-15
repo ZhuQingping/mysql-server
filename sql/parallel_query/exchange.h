@@ -299,6 +299,8 @@ class Exchange_nosort : public Exchange {
   bool read_mq_message(MQMessageType &type, void **datap,
                         uint32 &data_len) override;
 
+  bool all_done() const { return m_all_done; }
+
   /**
     Read and materialize one typed row-image message.
 
@@ -380,6 +382,15 @@ class Exchange_nosort : public Exchange {
     @retval true   Invalid worker id or MQ send failure
   */
   bool enqueue_error_smoke(uint32 worker_id);
+
+  /**
+    Enqueue one typed PARTIAL_GROUP payload for a smoke producer.
+
+    @retval false  PARTIAL_GROUP enqueued
+    @retval true   Invalid input or MQ send failure
+  */
+  bool enqueue_partial_group_smoke(
+      uint32 worker_id, const PQ_partial_group_payload_v1 &payload);
 
   /**
     Run a controlled synthetic row stream through this exchange.

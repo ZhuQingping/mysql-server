@@ -335,9 +335,67 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - targeted partial-group suite 通过；
 - 完整 `parallel_query` suite 通过，共 59 项。
 
+### V2-12B-4 Worker Local Partial State
+
+状态：Completed。
+
+实现：
+
+- 新增 `Exchange_nosort::enqueue_partial_group_smoke()`；
+- 新增 SQL-owned `PQ_partial_group_mq_sink`，在 worker callback producer
+  侧本地累积一个 integer partial group；
+- 新增 `Gather_operator::run_worker_partial_group_smoke()`：
+  - 为每个 worker 先完成 `pq_worker_scan_init()`，确保初始 range 先分配；
+  - worker callback producer 本地累积 `count_star` / `count_value` /
+    `sum` / `min` / `max`；
+  - 非空 worker EOF 时发送 `PARTIAL_GROUP`，empty worker 只发送 FINISH；
+  - leader drain MQ 后复用 `pq_merge_partial_group_payload_v1()` merge；
+- `PQTableScanIterator::Init()` 在 safe fallback window 内用独立
+  `EXECUTE` context 运行 worker partial smoke；
+- `pq_groupby_partial_group_smoke` 增加 worker groups / merged groups
+  counter 验证；
+- `pq_groupby_dop_partial_counters` 收敛为只验证 attempts/selected/fallback
+  真实执行选择类 counter 不增长；
+- 不修改 SQL GROUP BY DOP>1 eligibility，不打开真实 GROUP BY DOP>1 输出路径。
+
+风险收敛：
+
+- worker partial producer 必须运行在 `EXECUTE` context；`PROBE` context 不读 row；
+- 两阶段 worker init/produce 避免第一个 serial worker 领取后续 worker range；
+- worker THD/TABLE cleanup 前必须切换到对应 worker THD，避免 InnoDB
+  debug `EQ_CURRENT_THD(thd)` 断言；
+- smoke 读取字段前必须检查 `read_set`，避免普通聚合查询只读取其他列时触发
+  `Field::val_int()` debug 断言；
+- worker groups counter 统计非空 worker partial groups，不假设每个 worker 都有
+  非空 range。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_agg_result pq_groupby_partial_group_smoke pq_exchange_rows_dop1 pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_worker_partial_regress \
+  --tmpdir=/tmp/pqt_worker_partial_regress
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_dop_partial_counters pq_groupby_partial_group_smoke \
+  --parallel=1 --vardir=/tmp/pqv_worker_partial_counters \
+  --tmpdir=/tmp/pqt_worker_partial_counters
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full_worker_partial_final \
+  --tmpdir=/tmp/pqt_full_worker_partial_final
+```
+
+结果：
+
+- `cmake --build build-ninja --target mysqld -j 16` 通过；
+- targeted regression suite 通过；
+- counter/partial smoke suite 通过；
+- 完整 `parallel_query` suite 通过，共 59 项。
+
 下一步：
 
-- V2-12B-4：worker local partial state；
-- 先在 worker producer debug/experimental 路径内累积 partial groups；
-- EOF 时发送 `PARTIAL_GROUP`，empty worker 只发送 FINISH；
-- 覆盖 worker error、external kill 和 cleanup。
+- V2-12B-5：Leader Merge To Temp Table；
+- 将 leader merged partial state 写入 output temp table；
+- 先覆盖显式 gate 下 DOP=2 `COUNT/SUM/MIN/MAX` 正向结果；
+- unsupported shape 继续 fallback，不得产错结果。
