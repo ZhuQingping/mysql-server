@@ -351,11 +351,17 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
                        "GROUP BY has unsupported aggregate function");
     }
 
-    if (thd->variables.parallel_query_experimental_groupby_dop1 &&
-        thd->variables.parallel_default_dop == 1) {
+    const bool groupby_dop1_candidate =
+        thd->variables.parallel_query_experimental_groupby_dop1 &&
+        thd->variables.parallel_default_dop == 1;
+    const bool groupby_dop2_partial_candidate =
+        thd->variables.parallel_query_experimental_groupby_dop1 &&
+        thd->variables.parallel_query_experimental_threaded_dop &&
+        thd->variables.parallel_default_dop == 2;
+    if (groupby_dop1_candidate || groupby_dop2_partial_candidate) {
       // Continue the normal single-table/full-scan/cost checks below. This
-      // marks only a candidate; current GROUP BY factories still fall back to
-      // native iterators unless a later substep takes child ownership.
+      // marks only a candidate; GROUP BY factories still own the final shape
+      // decision and fall back for unsupported partial aggregation shapes.
       explicit_groupby_dop1_candidate = true;
     } else {
       return pq_reject(info, PQUnsuiteReason::GROUP_BY_PARTIAL_AGG_UNSUPPORTED,

@@ -104,6 +104,16 @@ bool pq_groupby_dop1_temp_shape_supported(JOIN *join,
   }
 }
 
+bool pq_groupby_dop_partial_sum_supported(JOIN *join,
+                                          Temp_table_param *temp_table_param,
+                                          TABLE *table) {
+  if (!pq_groupby_dop1_temp_shape_supported(join, temp_table_param, table)) {
+    return false;
+  }
+  Item_sum *sum = join->sum_funcs[0];
+  return sum != nullptr && sum->sum_func() == Item_sum::SUM_FUNC;
+}
+
 struct PQ_integer_group_state {
   int64 key{0};
   uint64 count_star{0};
@@ -282,6 +292,15 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
       return true;
     }
 
+    TABLE *dop_source_table = nullptr;
+    uint32 dop_group_field_index = 0;
+    uint32 dop_value_field_index = 0;
+    if (can_use_dop_partial_sum_path(&dop_source_table, &dop_group_field_index,
+                                     &dop_value_field_index)) {
+      return InitDopPartialSumPath(dop_source_table, dop_group_field_index,
+                                   dop_value_field_index);
+    }
+
     if (can_use_typed_count_path()) {
       return InitTypedCountPath();
     }
@@ -328,6 +347,48 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
 
  private:
   bool using_hash_key() const { return table()->hash_field; }
+
+  bool can_use_dop_partial_sum_path(TABLE **source_table,
+                                    uint32 *group_field_index,
+                                    uint32 *value_field_index) const {
+    if (source_table == nullptr || group_field_index == nullptr ||
+        value_field_index == nullptr) {
+      return false;
+    }
+    *source_table = nullptr;
+
+    if (thd()->variables.parallel_default_dop != 2 ||
+        !thd()->variables.parallel_query_experimental_threaded_dop ||
+        !thd()->variables.parallel_query_experimental_groupby_dop1 ||
+        !can_use_typed_sum_path()) {
+      return false;
+    }
+
+    Item *group_item = *table()->group->item;
+    if (group_item == nullptr || group_item->type() != Item::FIELD_ITEM) {
+      return false;
+    }
+    auto *group_field_item = down_cast<Item_field *>(group_item);
+    Item_sum *sum = m_join->sum_funcs[0];
+    auto *value_item = down_cast<Item_field *>(sum->arguments()[0]);
+    if (group_field_item->field == nullptr || value_item->field == nullptr ||
+        group_field_item->field->table == nullptr ||
+        group_field_item->field->table != value_item->field->table ||
+        group_field_item->field->is_nullable()) {
+      return false;
+    }
+
+    TABLE *base_table = group_field_item->field->table;
+    if (base_table->file == nullptr || base_table->s == nullptr ||
+        base_table->s->blob_fields > 0) {
+      return false;
+    }
+
+    *source_table = base_table;
+    *group_field_index = group_field_item->field->field_index();
+    *value_field_index = value_item->field->field_index();
+    return true;
+  }
 
   bool InitLegacyTempTablePath() {
     m_join->set_ref_item_slice(REF_SLICE_SAVED_BASE);
@@ -484,6 +545,113 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
     if (!m_executed_counted) {
       pq_global_stats.groupby_dop1_temp_table_executed.fetch_add(
           1, std::memory_order_relaxed);
+      m_executed_counted = true;
+    }
+    return false;
+  }
+
+  bool InitDopPartialSumPath(TABLE *source_table, uint32 group_field_index,
+                             uint32 value_field_index) {
+    m_join->set_ref_item_slice(REF_SLICE_SAVED_BASE);
+
+    if (source_table == nullptr || source_table->file == nullptr) {
+      PrintError(HA_ERR_INTERNAL_ERROR);
+      return true;
+    }
+
+    if (prepare_table_for_materialization()) {
+      return true;
+    }
+
+    if (table()->file->ha_index_init(0, false)) {
+      return true;
+    }
+    auto end_unique_index =
+        create_scope_guard([&] { table()->file->ha_index_end(); });
+
+    PQ_Leader_context *leader_ctx = nullptr;
+    uint actual_dop = 0;
+    int error = source_table->file->pq_leader_scan_init(
+        thd(), &leader_ctx, PQ_leader_scan_mode::EXECUTE,
+        thd()->variables.parallel_default_dop, &actual_dop, false);
+    if (error != 0) {
+      table()->file->ha_index_end();
+      end_unique_index.release();
+      if (error == HA_ERR_UNSUPPORTED) {
+        return InitTypedSumPath();
+      }
+      PrintError(error);
+      return true;
+    }
+    auto end_leader_scan = create_scope_guard(
+        [&] { source_table->file->pq_leader_scan_end(leader_ctx); });
+
+    const uint dop = actual_dop > 0 ? actual_dop
+                                    : thd()->variables.parallel_default_dop;
+    Gather_operator gather(dop);
+    PQ_partial_group_merge_slot_v1 merge_slots[16];
+    uint32 worker_groups = 0;
+    uint32 merged_groups = 0;
+    if (gather.init() ||
+        gather.configure_worker_open_contexts(source_table, leader_ctx, dop) ||
+        gather.run_worker_partial_group_merge(
+            thd(), source_table, group_field_index, value_field_index,
+            merge_slots, 16, &worker_groups, &merged_groups)) {
+      PrintError(HA_ERR_INTERNAL_ERROR);
+      return true;
+    }
+
+    Field *key_field = (*table()->group->item)->get_tmp_table_field();
+    Item_sum *sum = m_join->sum_funcs[0];
+    Field *result_field = sum->get_result_field();
+    if (key_field == nullptr || result_field == nullptr) {
+      PrintError(HA_ERR_INTERNAL_ERROR);
+      return true;
+    }
+
+    for (uint32 i = 0; i < 16; ++i) {
+      if (!merge_slots[i].used) continue;
+      empty_record(table());
+      key_field->set_notnull();
+      key_field->store(merge_slots[i].group_key, false);
+
+      if (merge_slots[i].has_value) {
+        result_field->set_notnull();
+        result_field->store(merge_slots[i].sum, false);
+      } else {
+        result_field->store(0LL, false);
+        result_field->set_null();
+      }
+
+      error = table()->file->ha_write_row(table()->record[0]);
+      if (error != 0) {
+        if (move_table_to_disk(error, true)) {
+          end_unique_index.release();
+          return true;
+        }
+      }
+    }
+
+    table()->file->ha_index_end();
+    end_unique_index.release();
+    end_leader_scan.release();
+    source_table->file->pq_leader_scan_end(leader_ctx);
+
+    table()->materialized = true;
+
+    if (m_table_iterator->Init()) {
+      return true;
+    }
+
+    if (!m_executed_counted) {
+      pq_global_stats.queries_executed.fetch_add(1,
+                                                 std::memory_order_relaxed);
+      pq_global_stats.groupby_dop_partial_selected.fetch_add(
+          1, std::memory_order_relaxed);
+      pq_global_stats.groupby_dop_partial_worker_groups.fetch_add(
+          worker_groups, std::memory_order_relaxed);
+      pq_global_stats.groupby_dop_partial_merged_groups.fetch_add(
+          merged_groups, std::memory_order_relaxed);
       m_executed_counted = true;
     }
     return false;
@@ -980,16 +1148,31 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQTemptableGroupAggregateIterator(
     return nullptr;
   }
 
+  const bool groupby_dop1_enabled =
+      thd->variables.parallel_query_experimental_groupby_dop1 &&
+      thd->variables.parallel_default_dop == 1;
+  const bool groupby_dop2_partial_enabled =
+      thd->variables.parallel_query_experimental_groupby_dop1 &&
+      thd->variables.parallel_query_experimental_threaded_dop &&
+      thd->variables.parallel_default_dop == 2;
+
   if (!thd->variables.parallel_query ||
-      !thd->variables.parallel_query_experimental_groupby_dop1 ||
-      thd->variables.parallel_default_dop != 1) {
+      (!groupby_dop1_enabled && !groupby_dop2_partial_enabled)) {
     return nullptr;
   }
-  pq_global_stats.groupby_dop1_factory_attempts.fetch_add(
-      1, std::memory_order_relaxed);
+  if (groupby_dop2_partial_enabled) {
+    pq_global_stats.groupby_dop_partial_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+  } else {
+    pq_global_stats.groupby_dop1_factory_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+  }
 
-  const bool supported_shape =
-      pq_groupby_dop1_temp_shape_supported(join, temp_table_param, table);
+  const bool supported_shape = groupby_dop2_partial_enabled
+                                   ? pq_groupby_dop_partial_sum_supported(
+                                         join, temp_table_param, table)
+                                   : pq_groupby_dop1_temp_shape_supported(
+                                         join, temp_table_param, table);
   if (supported_shape) {
     pq_global_stats.groupby_temp_shape_supported.fetch_add(
         1, std::memory_order_relaxed);
@@ -999,13 +1182,20 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQTemptableGroupAggregateIterator(
   }
 
   if (!join->pq_eligible || !supported_shape) {
-    pq_global_stats.groupby_dop1_factory_fallback.fetch_add(
-        1, std::memory_order_relaxed);
+    if (groupby_dop2_partial_enabled) {
+      pq_global_stats.groupby_dop_partial_fallback.fetch_add(
+          1, std::memory_order_relaxed);
+    } else {
+      pq_global_stats.groupby_dop1_factory_fallback.fetch_add(
+          1, std::memory_order_relaxed);
+    }
     return nullptr;
   }
 
-  pq_global_stats.groupby_dop1_factory_selected.fetch_add(
-      1, std::memory_order_relaxed);
+  if (!groupby_dop2_partial_enabled) {
+    pq_global_stats.groupby_dop1_factory_selected.fetch_add(
+        1, std::memory_order_relaxed);
+  }
   return unique_ptr_destroy_only<RowIterator>(
       new (mem_root) PQTemptableGroupAggregateIterator(
           thd, std::move(*subquery_iterator), temp_table_param, table,

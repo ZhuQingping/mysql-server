@@ -1,0 +1,72 @@
+# Test: pq_groupby_dop2_partial_sum
+# V2-12B-5 RED: explicit DOP=2 GROUP BY SUM should use worker partial
+# aggregation under the experimental gates and produce the same SQL result.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, grp INT NOT NULL, val INT NOT NULL)
+  ENGINE=InnoDB;
+INSERT INTO t1 VALUES
+  (1,1,10),(2,1,20),(3,2,30),(4,2,40),
+  (5,1,50),(6,2,60),(7,3,70),(8,3,80);
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+SET SESSION parallel_query_experimental_threaded_dop=ON;
+SET SESSION parallel_query_experimental_groupby_dop1=ON;
+
+SET @pq_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_partial_selected_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_dop_partial_selected');
+SET @pq_partial_worker_groups_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_dop_partial_worker_groups');
+SET @pq_partial_merged_groups_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_dop_partial_merged_groups');
+
+SELECT grp, SUM(val) AS s FROM t1 GROUP BY grp;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+    AS fallback_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_groupby_dop_partial_selected') -
+      @pq_partial_selected_before
+    AS partial_selected_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_groupby_dop_partial_worker_groups') -
+      @pq_partial_worker_groups_before > 0
+    AS partial_worker_groups_observed,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_groupby_dop_partial_merged_groups') -
+      @pq_partial_merged_groups_before
+    AS partial_merged_groups_delta;
+
+SET SESSION parallel_query_experimental_groupby_dop1=OFF;
+SET SESSION parallel_query_experimental_threaded_dop=OFF;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE t1;

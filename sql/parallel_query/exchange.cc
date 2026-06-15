@@ -166,7 +166,7 @@ bool pq_validate_partial_group_payload_v1(
   if (decoded->magic != PQ_PARTIAL_GROUP_PAYLOAD_MAGIC ||
       decoded->version != PQ_PARTIAL_GROUP_PAYLOAD_VERSION ||
       decoded->worker_id >= nqueues || decoded->group_key < 0 ||
-      decoded->group_key > 1 || decoded->count_value > decoded->count_star) {
+      decoded->count_value > decoded->count_star) {
     return true;
   }
 
