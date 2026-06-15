@@ -397,23 +397,25 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 ### V2-12B-5 Leader Merge To Temp Table
 
-状态：SUM path Completed。
+状态：COUNT/SUM/MIN/MAX path Completed。
 
 实现：
 
 - 新增 `pq_groupby_dop2_partial_sum` MTR；
+- 新增 `pq_groupby_dop2_partial_count_min_max` MTR；
 - optimizer 显式 GROUP BY gate 放行条件扩展为：
   - `parallel_query=ON`
   - `parallel_default_dop=2`
   - `parallel_query_experimental_threaded_dop=ON`
   - `parallel_query_experimental_groupby_dop1=ON`
-- `TryCreatePQTemptableGroupAggregateIterator()` 在 DOP=2 下只选择 typed SUM
-  shape，其他 shape 继续 fallback；
-- `PQTemptableGroupAggregateIterator` 新增 DOP partial SUM path：
+- `TryCreatePQTemptableGroupAggregateIterator()` 在 DOP=2 下选择 typed
+  `COUNT/SUM/MIN/MAX` shape，其他 shape 继续 fallback；
+- `PQTemptableGroupAggregateIterator` 新增 DOP partial temp-table result path：
   - 从 GROUP BY key `Item_field` 和 SUM argument `Item_field` 找到同一 base table；
   - 启动 InnoDB `EXECUTE` leader context；
   - `Gather_operator::run_worker_partial_group_merge()` 运行 worker local partial；
-  - leader merge slots 写入 output temp table；
+  - worker payload 按 `PQ_partial_group_agg_kind` 标记 `COUNT/SUM/MIN/MAX`；
+  - leader merge slots 按 aggregate kind 写入 output temp table；
   - `m_table_iterator` 输出最终 GROUP BY rows；
 - payload v1 校验移除早期 smoke 的 `group_key <= 1` 限制，改为支持非负
   signed integer group key；
@@ -425,13 +427,13 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - DOP=2；
 - 单表 InnoDB full scan；
 - 单个 signed integer NOT NULL group key；
-- 单个 signed integer `SUM(field)`；
+- 单个 signed integer `COUNT(field)` / `SUM(field)` / `MIN(field)` /
+  `MAX(field)`；
 - 显式 experimental gates；
 - 默认行为仍关闭。
 
 仍未覆盖：
 
-- DOP2 `COUNT/MIN/MAX` 结果路径；
 - DOP4 GROUP BY partial result path；
 - worker ERROR / external KILL 的 GROUP BY partial result-path 专门回归；
 - unsupported shape 的 DOP2 GROUP BY fallback MTR 扩展。
@@ -443,26 +445,29 @@ cmake --build build-ninja --target mysqld -j 16
 TMPDIR=/tmp ./mtr --suite=parallel_query pq_groupby_dop2_partial_sum \
   --parallel=1 --vardir=/tmp/pqv_dop2_groupby_green2 \
   --tmpdir=/tmp/pqt_dop2_groupby_green2
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_groupby_dop2_partial_count_min_max \
+  --parallel=1 --vardir=/tmp/pqv_dop2_groupby_count_minmax_green \
+  --tmpdir=/tmp/pqt_dop2_groupby_count_minmax_green
 TMPDIR=/tmp ./mtr --suite=parallel_query \
-  pq_groupby_dop2_partial_sum pq_groupby_partial_group_smoke \
-  pq_groupby_dop_partial_counters pq_groupby_dop1_sum_min_max \
-  pq_groupby_dop1_unsupported pq_stats \
-  --parallel=1 --vardir=/tmp/pqv_dop2_groupby_related2 \
-  --tmpdir=/tmp/pqt_dop2_groupby_related2
+  pq_groupby_dop2_partial_sum pq_groupby_dop2_partial_count_min_max \
+  pq_groupby_partial_group_smoke pq_groupby_dop_partial_counters \
+  pq_groupby_dop1_sum_min_max pq_groupby_dop1_unsupported pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_dop2_groupby_count_minmax_related \
+  --tmpdir=/tmp/pqt_dop2_groupby_count_minmax_related
 TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
-  --vardir=/tmp/pqv_full_dop2_groupby \
-  --tmpdir=/tmp/pqt_full_dop2_groupby
+  --vardir=/tmp/pqv_full_dop2_groupby_count_minmax \
+  --tmpdir=/tmp/pqt_full_dop2_groupby_count_minmax
 ```
 
 结果：
 
 - `cmake --build build-ninja --target mysqld -j 16` 通过；
 - DOP2 GROUP BY SUM 单测通过；
+- DOP2 GROUP BY COUNT/MIN/MAX 单测通过；
 - GROUP BY/partial/counter targeted suite 通过；
-- 完整 `parallel_query` suite 通过，共 60 项。
+- 完整 `parallel_query` suite 通过，共 61 项。
 
 下一步：
 
-- V2-12B-5b：扩展 DOP2 `COUNT/MIN/MAX` result path；
 - 增加 unsupported shape fallback 和 worker error / external kill 专门回归；
 - 再评估 DOP4 gate expansion。

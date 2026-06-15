@@ -821,8 +821,9 @@ class Gather_operator {
 
   bool run_worker_partial_group_merge(
       THD *leader_thd, TABLE *leader_table, uint32 group_field_index,
-      uint32 value_field_index, PQ_partial_group_merge_slot_v1 *merge_slots,
-      uint32 slot_count, uint32 *worker_groups, uint32 *merged_groups);
+      uint32 value_field_index, PQ_partial_group_agg_kind agg_kind,
+      PQ_partial_group_merge_slot_v1 *merge_slots, uint32 slot_count,
+      uint32 *worker_groups, uint32 *merged_groups);
 
   /**
     Produce a bounded callback row stream into this gather's Exchange.

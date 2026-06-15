@@ -104,14 +104,48 @@ bool pq_groupby_dop1_temp_shape_supported(JOIN *join,
   }
 }
 
-bool pq_groupby_dop_partial_sum_supported(JOIN *join,
-                                          Temp_table_param *temp_table_param,
-                                          TABLE *table) {
+bool pq_groupby_dop_partial_supported(JOIN *join,
+                                      Temp_table_param *temp_table_param,
+                                      TABLE *table) {
   if (!pq_groupby_dop1_temp_shape_supported(join, temp_table_param, table)) {
     return false;
   }
   Item_sum *sum = join->sum_funcs[0];
-  return sum != nullptr && sum->sum_func() == Item_sum::SUM_FUNC;
+  if (sum == nullptr) return false;
+
+  if (table->group->item == nullptr) return false;
+  Item *group_item = *table->group->item;
+  if (group_item == nullptr || group_item->type() != Item::FIELD_ITEM) {
+    return false;
+  }
+  auto *group_field_item = down_cast<Item_field *>(group_item);
+  if (group_field_item->field == nullptr ||
+      group_field_item->field->table == nullptr ||
+      group_field_item->field->is_nullable()) {
+    return false;
+  }
+
+  if (sum->argument_count() != 1 || sum->arguments() == nullptr ||
+      sum->arguments()[0] == nullptr ||
+      sum->arguments()[0]->type() != Item::FIELD_ITEM) {
+    return false;
+  }
+  auto *value_item = down_cast<Item_field *>(sum->arguments()[0]);
+  if (value_item->field == nullptr ||
+      value_item->field->table != group_field_item->field->table) {
+    return false;
+  }
+
+  switch (sum->sum_func()) {
+    case Item_sum::COUNT_FUNC:
+      return !sum->arguments()[0]->is_nullable();
+    case Item_sum::SUM_FUNC:
+    case Item_sum::MIN_FUNC:
+    case Item_sum::MAX_FUNC:
+      return true;
+    default:
+      return false;
+  }
 }
 
 struct PQ_integer_group_state {
@@ -295,10 +329,11 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
     TABLE *dop_source_table = nullptr;
     uint32 dop_group_field_index = 0;
     uint32 dop_value_field_index = 0;
-    if (can_use_dop_partial_sum_path(&dop_source_table, &dop_group_field_index,
-                                     &dop_value_field_index)) {
-      return InitDopPartialSumPath(dop_source_table, dop_group_field_index,
-                                   dop_value_field_index);
+    PQ_partial_group_agg_kind dop_agg_kind = PQ_partial_group_agg_kind::SUM;
+    if (can_use_dop_partial_path(&dop_source_table, &dop_group_field_index,
+                                 &dop_value_field_index, &dop_agg_kind)) {
+      return InitDopPartialPath(dop_source_table, dop_group_field_index,
+                                dop_value_field_index, dop_agg_kind);
     }
 
     if (can_use_typed_count_path()) {
@@ -348,20 +383,42 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
  private:
   bool using_hash_key() const { return table()->hash_field; }
 
-  bool can_use_dop_partial_sum_path(TABLE **source_table,
-                                    uint32 *group_field_index,
-                                    uint32 *value_field_index) const {
+  bool can_use_dop_partial_path(TABLE **source_table, uint32 *group_field_index,
+                                uint32 *value_field_index,
+                                PQ_partial_group_agg_kind *agg_kind) const {
     if (source_table == nullptr || group_field_index == nullptr ||
-        value_field_index == nullptr) {
+        value_field_index == nullptr || agg_kind == nullptr) {
       return false;
     }
     *source_table = nullptr;
 
     if (thd()->variables.parallel_default_dop != 2 ||
         !thd()->variables.parallel_query_experimental_threaded_dop ||
-        !thd()->variables.parallel_query_experimental_groupby_dop1 ||
-        !can_use_typed_sum_path()) {
+        !thd()->variables.parallel_query_experimental_groupby_dop1) {
       return false;
+    }
+
+    Item_sum *sum = m_join->sum_funcs[0];
+    if (sum == nullptr) return false;
+    switch (sum->sum_func()) {
+      case Item_sum::COUNT_FUNC:
+        if (!can_use_typed_count_path()) return false;
+        *agg_kind = PQ_partial_group_agg_kind::COUNT;
+        break;
+      case Item_sum::SUM_FUNC:
+        if (!can_use_typed_sum_path()) return false;
+        *agg_kind = PQ_partial_group_agg_kind::SUM;
+        break;
+      case Item_sum::MIN_FUNC:
+        if (!can_use_typed_min_max_path()) return false;
+        *agg_kind = PQ_partial_group_agg_kind::MIN;
+        break;
+      case Item_sum::MAX_FUNC:
+        if (!can_use_typed_min_max_path()) return false;
+        *agg_kind = PQ_partial_group_agg_kind::MAX;
+        break;
+      default:
+        return false;
     }
 
     Item *group_item = *table()->group->item;
@@ -369,7 +426,11 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
       return false;
     }
     auto *group_field_item = down_cast<Item_field *>(group_item);
-    Item_sum *sum = m_join->sum_funcs[0];
+    if (sum->argument_count() != 1 || sum->arguments() == nullptr ||
+        sum->arguments()[0] == nullptr ||
+        sum->arguments()[0]->type() != Item::FIELD_ITEM) {
+      return false;
+    }
     auto *value_item = down_cast<Item_field *>(sum->arguments()[0]);
     if (group_field_item->field == nullptr || value_item->field == nullptr ||
         group_field_item->field->table == nullptr ||
@@ -550,8 +611,9 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
     return false;
   }
 
-  bool InitDopPartialSumPath(TABLE *source_table, uint32 group_field_index,
-                             uint32 value_field_index) {
+  bool InitDopPartialPath(TABLE *source_table, uint32 group_field_index,
+                          uint32 value_field_index,
+                          PQ_partial_group_agg_kind agg_kind) {
     m_join->set_ref_item_slice(REF_SLICE_SAVED_BASE);
 
     if (source_table == nullptr || source_table->file == nullptr) {
@@ -578,7 +640,19 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
       table()->file->ha_index_end();
       end_unique_index.release();
       if (error == HA_ERR_UNSUPPORTED) {
-        return InitTypedSumPath();
+        switch (agg_kind) {
+          case PQ_partial_group_agg_kind::COUNT:
+            return InitTypedCountPath();
+          case PQ_partial_group_agg_kind::SUM:
+            return InitTypedSumPath();
+          case PQ_partial_group_agg_kind::MIN:
+            return InitTypedMinMaxPath(true);
+          case PQ_partial_group_agg_kind::MAX:
+            return InitTypedMinMaxPath(false);
+          default:
+            PrintError(HA_ERR_INTERNAL_ERROR);
+            return true;
+        }
       }
       PrintError(error);
       return true;
@@ -596,7 +670,7 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
         gather.configure_worker_open_contexts(source_table, leader_ctx, dop) ||
         gather.run_worker_partial_group_merge(
             thd(), source_table, group_field_index, value_field_index,
-            merge_slots, 16, &worker_groups, &merged_groups)) {
+            agg_kind, merge_slots, 16, &worker_groups, &merged_groups)) {
       PrintError(HA_ERR_INTERNAL_ERROR);
       return true;
     }
@@ -615,12 +689,42 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
       key_field->set_notnull();
       key_field->store(merge_slots[i].group_key, false);
 
-      if (merge_slots[i].has_value) {
-        result_field->set_notnull();
-        result_field->store(merge_slots[i].sum, false);
-      } else {
-        result_field->store(0LL, false);
-        result_field->set_null();
+      switch (agg_kind) {
+        case PQ_partial_group_agg_kind::COUNT:
+          result_field->set_notnull();
+          result_field->store(
+              static_cast<longlong>(merge_slots[i].count_value), true);
+          break;
+        case PQ_partial_group_agg_kind::SUM:
+          if (merge_slots[i].has_value) {
+            result_field->set_notnull();
+            result_field->store(merge_slots[i].sum, false);
+          } else {
+            result_field->store(0LL, false);
+            result_field->set_null();
+          }
+          break;
+        case PQ_partial_group_agg_kind::MIN:
+          if (merge_slots[i].has_value) {
+            result_field->set_notnull();
+            result_field->store(merge_slots[i].min, false);
+          } else {
+            result_field->store(0LL, false);
+            result_field->set_null();
+          }
+          break;
+        case PQ_partial_group_agg_kind::MAX:
+          if (merge_slots[i].has_value) {
+            result_field->set_notnull();
+            result_field->store(merge_slots[i].max, false);
+          } else {
+            result_field->store(0LL, false);
+            result_field->set_null();
+          }
+          break;
+        default:
+          PrintError(HA_ERR_INTERNAL_ERROR);
+          return true;
       }
 
       error = table()->file->ha_write_row(table()->record[0]);
@@ -1169,7 +1273,7 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQTemptableGroupAggregateIterator(
   }
 
   const bool supported_shape = groupby_dop2_partial_enabled
-                                   ? pq_groupby_dop_partial_sum_supported(
+                                   ? pq_groupby_dop_partial_supported(
                                          join, temp_table_param, table)
                                    : pq_groupby_dop1_temp_shape_supported(
                                          join, temp_table_param, table);

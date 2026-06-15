@@ -996,11 +996,13 @@ class PQ_limited_mq_row_sink final : public PQ_row_sink {
 class PQ_partial_group_mq_sink final : public PQ_row_sink {
  public:
   PQ_partial_group_mq_sink(Exchange_nosort *exchange, uint32 worker_id,
-                           uint32 group_field_index, uint32 value_field_index)
+                           uint32 group_field_index, uint32 value_field_index,
+                           PQ_partial_group_agg_kind agg_kind)
       : m_exchange(exchange),
         m_worker_id(worker_id),
         m_group_field_index(group_field_index),
-        m_value_field_index(value_field_index) {}
+        m_value_field_index(value_field_index),
+        m_agg_kind(agg_kind) {}
 
   bool send_row(TABLE *source_table) override {
     if (m_failed || source_table == nullptr || source_table->s == nullptr ||
@@ -1042,7 +1044,7 @@ class PQ_partial_group_mq_sink final : public PQ_row_sink {
     PQ_partial_group_payload_v1 payload = {
         PQ_PARTIAL_GROUP_PAYLOAD_MAGIC,
         PQ_PARTIAL_GROUP_PAYLOAD_VERSION,
-        static_cast<uint16>(PQ_partial_group_agg_kind::SUM),
+        static_cast<uint16>(m_agg_kind),
         m_worker_id,
         0,
         static_cast<int64>(group_field->val_int()),
@@ -1075,7 +1077,7 @@ class PQ_partial_group_mq_sink final : public PQ_row_sink {
       const PQ_partial_group_payload_v1 payload = {
           PQ_PARTIAL_GROUP_PAYLOAD_MAGIC,
           PQ_PARTIAL_GROUP_PAYLOAD_VERSION,
-          static_cast<uint16>(PQ_partial_group_agg_kind::SUM),
+          static_cast<uint16>(m_agg_kind),
           m_worker_id,
           0,
           m_slots[i].group_key,
@@ -1100,6 +1102,7 @@ class PQ_partial_group_mq_sink final : public PQ_row_sink {
   uint32 m_worker_id;
   uint32 m_group_field_index;
   uint32 m_value_field_index;
+  PQ_partial_group_agg_kind m_agg_kind;
   PQ_partial_group_merge_slot_v1 m_slots[kMaxGroups];
   uint32 m_group_count{0};
   bool m_skipped{false};
@@ -1297,8 +1300,8 @@ bool Gather_operator::run_worker_partial_group_smoke(THD *leader_thd,
   uint32 worker_groups = 0;
   uint32 merged_groups = 0;
   const bool failed = run_worker_partial_group_merge(
-      leader_thd, leader_table, 0, 1, merge_slots, 16, &worker_groups,
-      &merged_groups);
+      leader_thd, leader_table, 0, 1, PQ_partial_group_agg_kind::SUM,
+      merge_slots, 16, &worker_groups, &merged_groups);
   if (!failed) {
     pq_global_stats.groupby_dop_partial_worker_groups.fetch_add(
         worker_groups, std::memory_order_relaxed);
@@ -1310,8 +1313,9 @@ bool Gather_operator::run_worker_partial_group_smoke(THD *leader_thd,
 
 bool Gather_operator::run_worker_partial_group_merge(
     THD *leader_thd, TABLE *leader_table, uint32 group_field_index,
-    uint32 value_field_index, PQ_partial_group_merge_slot_v1 *merge_slots,
-    uint32 slot_count, uint32 *worker_groups, uint32 *merged_groups) {
+    uint32 value_field_index, PQ_partial_group_agg_kind agg_kind,
+    PQ_partial_group_merge_slot_v1 *merge_slots, uint32 slot_count,
+    uint32 *worker_groups, uint32 *merged_groups) {
   if (worker_groups != nullptr) *worker_groups = 0;
   if (merged_groups != nullptr) *merged_groups = 0;
   if (leader_thd == nullptr || leader_table == nullptr || m_dop == 0) {
@@ -1374,7 +1378,8 @@ bool Gather_operator::run_worker_partial_group_merge(
     auto *worker = get_worker(i);
     worker->m_worker_thd->store_globals();
     PQ_partial_group_mq_sink group_sink(exchange, worker->m_worker_id,
-                                        group_field_index, value_field_index);
+                                        group_field_index, value_field_index,
+                                        agg_kind);
     failed = worker->m_open_ctx.worker_handler
                  ->pq_worker_scan_callback_produce(worker->m_worker_ctx,
                                                    &group_sink) != 0;
