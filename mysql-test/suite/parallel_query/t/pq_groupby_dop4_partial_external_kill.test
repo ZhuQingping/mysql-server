@@ -1,0 +1,64 @@
+# Test: pq_groupby_dop4_partial_external_kill
+# Debug-only DOP=4 GROUP BY partial external KILL after worker contexts open.
+
+--source include/have_debug.inc
+--source include/have_debug_sync.inc
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, grp INT NOT NULL, val INT NOT NULL)
+  ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,1,10);
+INSERT INTO t1 SELECT id + 1, IF(grp = 1, 2, 1), val + 1 FROM t1;
+INSERT INTO t1 SELECT id + 2, IF(grp = 1, 2, 1), val + 2 FROM t1;
+INSERT INTO t1 SELECT id + 4, IF(grp = 1, 2, 1), val + 4 FROM t1;
+INSERT INTO t1 SELECT id + 8, IF(grp = 1, 2, 1), val + 8 FROM t1;
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_query_experimental_threaded_dop=ON;
+SET SESSION parallel_query_experimental_groupby_dop1=ON;
+
+SET DEBUG_SYNC='pq_groupby_dop_partial_workers_opened SIGNAL pq_groupby_workers_opened WAIT_FOR pq_groupby_kill_continue TIMEOUT 10';
+
+SET @pq_partial_selected_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_dop_partial_selected');
+
+--let $target_id= `SELECT CONNECTION_ID()`
+--send SELECT grp, SUM(val) AS s FROM t1 GROUP BY grp
+
+--connect(killer,localhost,root,,)
+SET DEBUG_SYNC='now WAIT_FOR pq_groupby_workers_opened TIMEOUT 10';
+--replace_result $target_id TARGET_ID
+--eval KILL QUERY $target_id
+SET DEBUG_SYNC='now SIGNAL pq_groupby_kill_continue';
+
+--connection default
+--error ER_QUERY_INTERRUPTED
+--reap
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_groupby_dop_partial_selected') -
+      @pq_partial_selected_before
+    AS partial_selected_delta;
+
+SET DEBUG_SYNC='RESET';
+SET SESSION parallel_query_experimental_groupby_dop1=OFF;
+SET SESSION parallel_query_experimental_threaded_dop=OFF;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+
+--disconnect killer
+--connection default
+
+SELECT COUNT(*) AS serial_count FROM t1;
+
+DROP TABLE t1;

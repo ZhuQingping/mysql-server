@@ -1,0 +1,40 @@
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 (id INT PRIMARY KEY, grp INT NOT NULL, val INT NOT NULL)
+ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,1,10);
+INSERT INTO t1 SELECT id + 1, IF(grp = 1, 2, 1), val + 1 FROM t1;
+INSERT INTO t1 SELECT id + 2, IF(grp = 1, 2, 1), val + 2 FROM t1;
+INSERT INTO t1 SELECT id + 4, IF(grp = 1, 2, 1), val + 4 FROM t1;
+INSERT INTO t1 SELECT id + 8, IF(grp = 1, 2, 1), val + 8 FROM t1;
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_query_experimental_threaded_dop=ON;
+SET SESSION parallel_query_experimental_groupby_dop1=ON;
+SET DEBUG_SYNC='pq_groupby_dop_partial_workers_opened SIGNAL pq_groupby_workers_opened WAIT_FOR pq_groupby_kill_continue TIMEOUT 10';
+SET @pq_partial_selected_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_dop_partial_selected');
+SELECT grp, SUM(val) AS s FROM t1 GROUP BY grp;
+SET DEBUG_SYNC='now WAIT_FOR pq_groupby_workers_opened TIMEOUT 10';
+KILL QUERY TARGET_ID;
+SET DEBUG_SYNC='now SIGNAL pq_groupby_kill_continue';
+ERROR 70100: Query execution was interrupted
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_dop_partial_selected') -
+@pq_partial_selected_before
+AS partial_selected_delta;
+partial_selected_delta
+0
+SET DEBUG_SYNC='RESET';
+SET SESSION parallel_query_experimental_groupby_dop1=OFF;
+SET SESSION parallel_query_experimental_threaded_dop=OFF;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+SELECT COUNT(*) AS serial_count FROM t1;
+serial_count
+16
+DROP TABLE t1;
