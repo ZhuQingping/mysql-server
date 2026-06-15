@@ -1,0 +1,59 @@
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+grp INT NOT NULL,
+val INT NULL,
+txt VARCHAR(16) NOT NULL
+) ENGINE=InnoDB;
+INSERT INTO t1 VALUES
+(1,10,5,'a'),(2,10,NULL,'a'),(3,20,2,'b'),(4,20,9,'b');
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+SET SESSION parallel_query_experimental_threaded_dop=ON;
+SET SESSION parallel_query_experimental_groupby_dop1=ON;
+SET @pq_partial_selected_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_dop_partial_selected');
+SET @pq_partial_fallback_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_dop_partial_fallback');
+SET @pq_groupby_shape_unsupported_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_temp_shape_unsupported');
+SELECT grp, COUNT(*) AS cnt FROM t1 GROUP BY grp;
+grp	cnt
+10	2
+20	2
+SELECT grp, SUM(val + 1) AS sum_expr FROM t1 GROUP BY grp;
+grp	sum_expr
+10	6
+20	13
+SELECT txt, COUNT(val) AS cnt FROM t1 GROUP BY txt;
+txt	cnt
+a	1
+b	2
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_dop_partial_selected') -
+@pq_partial_selected_before
+AS partial_selected_delta,
+((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_dop_partial_fallback') -
+@pq_partial_fallback_before) >= 1
+AS partial_fallback_observed,
+((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_groupby_temp_shape_unsupported') -
+@pq_groupby_shape_unsupported_before) >= 1
+AS unsupported_shape_observed;
+partial_selected_delta	partial_fallback_observed	unsupported_shape_observed
+0	1	1
+SET SESSION parallel_query_experimental_groupby_dop1=OFF;
+SET SESSION parallel_query_experimental_threaded_dop=OFF;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+DROP TABLE t1;
