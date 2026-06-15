@@ -92,7 +92,23 @@ In Progress。
 - 不接 SQL GROUP BY 执行路径；
 - 完整 suite 通过。
 
-### V2-12B-3 Worker Local Partial State
+### V2-12B-3 Leader Merge Helper
+
+目标：
+
+- 抽出可复用 leader in-memory merge helper；
+- helper 接收 `PQ_partial_group_payload_v1`，按 group key 合并
+  `count_star` / `count_value` / `sum` / `min` / `max`；
+- synthetic payload v1 smoke 复用 helper 验证 DOP=1 和 DOP>1 场景；
+- 继续不打开 SQL GROUP BY DOP>1 执行路径。
+
+验收：
+
+- `pq_groupby_partial_group_smoke` 通过；
+- `pq_exchange_rows_dop1` 通过，确认 DOP=1 smoke 只要求实际出现的 group；
+- 完整 `parallel_query` suite 通过。
+
+### V2-12B-4 Worker Local Partial State
 
 目标：
 
@@ -107,7 +123,7 @@ In Progress。
 - 新增 worker partial group counters；
 - 覆盖 empty worker、worker error、external kill。
 
-### V2-12B-4 Leader Merge To Temp Table
+### V2-12B-5 Leader Merge To Temp Table
 
 目标：
 
@@ -121,7 +137,7 @@ In Progress。
 - 不支持 shape 的 fallback MTR；
 - 完整 suite 通过。
 
-### V2-12B-5 Gate Expansion And Hardening
+### V2-12B-6 Gate Expansion And Hardening
 
 目标：
 
@@ -283,8 +299,45 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - targeted payload error suite 通过；
 - 完整 `parallel_query` suite 通过，共 59 项。
 
+### V2-12B-3 Leader Merge Helper
+
+状态：Completed。
+
+实现：
+
+- 新增 `PQ_partial_group_merge_slot_v1`；
+- 新增 `pq_merge_partial_group_payload_v1()`，按 group key 合并
+  `count_star` / `count_value` / `sum` / `min` / `max`；
+- `Exchange_nosort::run_synthetic_partial_group_smoke()` 改为复用 merge helper；
+- smoke 会按实际 DOP 计算期望 group 数，覆盖 DOP=1 只有一个 group 的场景；
+- 不修改 SQL GROUP BY DOP>1 eligibility，不打开真实 DOP partial execution。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_exchange_rows_dop1 \
+  --parallel=1 --vardir=/tmp/pqv_exchange_repro_fix \
+  --tmpdir=/tmp/pqt_exchange_repro_fix
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_groupby_partial_group_smoke pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_merge_helper_fix \
+  --tmpdir=/tmp/pqt_merge_helper_fix
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_full_merge_helper_fix \
+  --tmpdir=/tmp/pqt_full_merge_helper_fix
+```
+
+结果：
+
+- `cmake --build build-ninja --target mysqld -j 16` 通过；
+- `pq_exchange_rows_dop1` 通过；
+- targeted partial-group suite 通过；
+- 完整 `parallel_query` suite 通过，共 59 项。
+
 下一步：
 
-- V2-12B-3：抽出 leader in-memory merge helper；
-- 先用 synthetic payload v1 做多 worker same-key/different-key merge smoke；
-- 继续不打开 SQL GROUP BY DOP>1 执行路径。
+- V2-12B-4：worker local partial state；
+- 先在 worker producer debug/experimental 路径内累积 partial groups；
+- EOF 时发送 `PARTIAL_GROUP`，empty worker 只发送 FINISH；
+- 覆盖 worker error、external kill 和 cleanup。

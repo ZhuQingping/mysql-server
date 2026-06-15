@@ -112,6 +112,26 @@ struct PQ_partial_group_payload_v1 {
   int64 max;
 };
 
+struct PQ_partial_group_merge_slot_v1 {
+  bool used{false};
+  bool has_value{false};
+  int64 group_key{0};
+  uint64 count_star{0};
+  uint64 count_value{0};
+  int64 sum{0};
+  int64 min{0};
+  int64 max{0};
+};
+
+bool pq_validate_partial_group_payload_v1(
+    const void *payload_data, uint32 payload_len, uint32 nqueues,
+    const PQ_partial_group_payload_v1 **payload);
+
+bool pq_merge_partial_group_payload_v1(
+    const PQ_partial_group_payload_v1 &payload,
+    PQ_partial_group_merge_slot_v1 *slots, uint32 slot_count,
+    uint32 *new_groups);
+
 /**
   Base class for PQ leader-side record collection.
 
@@ -402,9 +422,9 @@ class Exchange_nosort : public Exchange {
     Run a controlled synthetic partial GROUP BY message smoke.
 
     The helper sends one typed PARTIAL_GROUP payload and one FINISH per worker,
-    then verifies the leader can decode the PARTIAL_GROUP messages through the
-    normal Exchange_nosort round-robin path. It does not merge aggregates and
-    does not connect to SQL execution.
+    then verifies the leader can decode and merge the PARTIAL_GROUP messages
+    through the normal Exchange_nosort round-robin path. It does not connect
+    to SQL GROUP BY execution.
 
     @param[out] groups_read   Number of PARTIAL_GROUP payloads decoded
     @param[out] finishes_read Number of FINISH tokens observed

@@ -139,6 +139,18 @@ bool pq_materialize_record_image(TABLE *table, const void *payload,
   return false;
 }
 
+const PQ_partial_group_merge_slot_v1 *pq_find_partial_group_merge_slot(
+    const PQ_partial_group_merge_slot_v1 *slots, uint32 slot_count,
+    int64 group_key) {
+  if (slots == nullptr) return nullptr;
+  for (uint32 i = 0; i < slot_count; ++i) {
+    if (slots[i].used && slots[i].group_key == group_key) return &slots[i];
+  }
+  return nullptr;
+}
+
+}  // namespace
+
 bool pq_validate_partial_group_payload_v1(
     const void *payload_data, uint32 payload_len, uint32 nqueues,
     const PQ_partial_group_payload_v1 **payload) {
@@ -170,7 +182,51 @@ bool pq_validate_partial_group_payload_v1(
   return true;
 }
 
-}  // namespace
+bool pq_merge_partial_group_payload_v1(
+    const PQ_partial_group_payload_v1 &payload,
+    PQ_partial_group_merge_slot_v1 *slots, uint32 slot_count,
+    uint32 *new_groups) {
+  if (slots == nullptr || slot_count == 0 || new_groups == nullptr) {
+    return true;
+  }
+  if (payload.count_value > payload.count_star) return true;
+
+  PQ_partial_group_merge_slot_v1 *target = nullptr;
+  for (uint32 i = 0; i < slot_count; ++i) {
+    if (slots[i].used && slots[i].group_key == payload.group_key) {
+      target = &slots[i];
+      break;
+    }
+    if (target == nullptr && !slots[i].used) {
+      target = &slots[i];
+    }
+  }
+  if (target == nullptr) return true;
+
+  if (!target->used) {
+    *target = PQ_partial_group_merge_slot_v1{};
+    target->used = true;
+    target->group_key = payload.group_key;
+    ++(*new_groups);
+  }
+
+  target->count_star += payload.count_star;
+  target->count_value += payload.count_value;
+  target->sum += payload.sum;
+
+  if (payload.count_value > 0) {
+    if (!target->has_value) {
+      target->has_value = true;
+      target->min = payload.min;
+      target->max = payload.max;
+    } else {
+      if (payload.min < target->min) target->min = payload.min;
+      if (payload.max > target->max) target->max = payload.max;
+    }
+  }
+
+  return false;
+}
 
 // ---------------------------------------------------------------------------
 // Exchange: init / cleanup
@@ -679,9 +735,9 @@ bool Exchange_nosort::run_synthetic_partial_group_smoke(
     }
   }
 
-  uint32 local_groups = 0;
-  uint64 merged_count_star[2] = {0, 0};
-  int64 merged_sum[2] = {0, 0};
+  uint32 payloads_read = 0;
+  uint32 merged_groups = 0;
+  PQ_partial_group_merge_slot_v1 merge_slots[2];
   while (!m_all_done) {
     MQMessageType type;
     void *datap = nullptr;
@@ -700,30 +756,58 @@ bool Exchange_nosort::run_synthetic_partial_group_smoke(
               static_cast<uint16>(PQ_partial_group_agg_kind::SUM)) {
         return true;
       }
-      const uint32 group_index = static_cast<uint32>(payload->group_key);
-      merged_count_star[group_index] += payload->count_star;
-      merged_sum[group_index] += payload->sum;
-      ++local_groups;
+      if (pq_merge_partial_group_payload_v1(*payload, merge_slots, 2,
+                                            &merged_groups)) {
+        return true;
+      }
+      ++payloads_read;
       continue;
     }
 
     if (!m_all_done) return true;
   }
 
-  if (local_groups != m_nqueues) return true;
+  uint32 expected_groups = 0;
   uint64 expected_count_star[2] = {0, 0};
   int64 expected_sum[2] = {0, 0};
+  int64 expected_min[2] = {0, 0};
+  int64 expected_max[2] = {0, 0};
+  bool expected_has_value[2] = {false, false};
   for (uint32 i = 0; i < m_nqueues; ++i) {
     const uint32 group_index = i % 2;
+    const int64 sum_value = static_cast<int64>((i + 1) * 10);
     expected_count_star[group_index] += static_cast<uint64>(i + 1);
-    expected_sum[group_index] += static_cast<int64>((i + 1) * 10);
+    expected_sum[group_index] += sum_value;
+    if (!expected_has_value[group_index]) {
+      expected_has_value[group_index] = true;
+      ++expected_groups;
+      expected_min[group_index] = sum_value;
+      expected_max[group_index] = sum_value;
+    } else {
+      if (sum_value < expected_min[group_index]) {
+        expected_min[group_index] = sum_value;
+      }
+      if (sum_value > expected_max[group_index]) {
+        expected_max[group_index] = sum_value;
+      }
+    }
   }
-  if (merged_count_star[0] != expected_count_star[0] ||
-      merged_count_star[1] != expected_count_star[1] ||
-      merged_sum[0] != expected_sum[0] || merged_sum[1] != expected_sum[1]) {
+  if (payloads_read != m_nqueues || merged_groups != expected_groups) {
     return true;
   }
-  if (groups_read != nullptr) *groups_read = local_groups;
+  for (uint32 group_index = 0; group_index < 2; ++group_index) {
+    if (!expected_has_value[group_index]) continue;
+    const PQ_partial_group_merge_slot_v1 *slot =
+        pq_find_partial_group_merge_slot(merge_slots, 2, group_index);
+    if (slot == nullptr || slot->count_star != expected_count_star[group_index] ||
+        slot->count_value != expected_count_star[group_index] ||
+        slot->sum != expected_sum[group_index] || !slot->has_value ||
+        slot->min != expected_min[group_index] ||
+        slot->max != expected_max[group_index]) {
+      return true;
+    }
+  }
+  if (groups_read != nullptr) *groups_read = payloads_read;
   if (finishes_read != nullptr) *finishes_read = m_nqueues;
   return false;
 }
