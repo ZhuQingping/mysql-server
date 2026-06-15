@@ -667,11 +667,18 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
     uint32 worker_groups = 0;
     uint32 merged_groups = 0;
     if (gather.init() ||
-        gather.configure_worker_open_contexts(source_table, leader_ctx, dop) ||
-        gather.run_worker_partial_group_merge(
+        gather.configure_worker_open_contexts(source_table, leader_ctx, dop)) {
+      PrintError(HA_ERR_INTERNAL_ERROR);
+      return true;
+    }
+    if (gather.run_worker_partial_group_merge(
             thd(), source_table, group_field_index, value_field_index,
             agg_kind, merge_slots, 16, &worker_groups, &merged_groups)) {
-      PrintError(HA_ERR_INTERNAL_ERROR);
+      if (thd()->killed) {
+        thd()->send_kill_message();
+      } else {
+        source_table->file->print_error(HA_ERR_INTERNAL_ERROR, MYF(0));
+      }
       return true;
     }
 

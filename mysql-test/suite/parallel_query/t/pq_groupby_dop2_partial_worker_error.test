@@ -1,0 +1,47 @@
+# Test: pq_groupby_dop2_partial_worker_error
+# Debug-only DOP=2 GROUP BY partial worker error cleanup.
+
+--source include/have_debug.inc
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, grp INT NOT NULL, val INT NOT NULL)
+  ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,1,10),(2,1,20),(3,2,30),(4,2,40);
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+SET SESSION parallel_query_experimental_threaded_dop=ON;
+SET SESSION parallel_query_experimental_groupby_dop1=ON;
+
+SET @old_debug=@@session.debug;
+SET SESSION debug="d,pq_groupby_dop_partial_force_worker_error";
+
+SET @pq_partial_selected_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_dop_partial_selected');
+
+--error ER_GET_ERRNO
+SELECT grp, SUM(val) AS s FROM t1 GROUP BY grp;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_groupby_dop_partial_selected') -
+      @pq_partial_selected_before
+    AS partial_selected_delta;
+
+SET SESSION debug=@old_debug;
+SET SESSION parallel_query_experimental_groupby_dop1=OFF;
+SET SESSION parallel_query_experimental_threaded_dop=OFF;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+
+SELECT grp, SUM(val) AS serial_sum FROM t1 GROUP BY grp;
+
+DROP TABLE t1;

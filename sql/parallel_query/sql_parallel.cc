@@ -54,6 +54,7 @@
 #include "my_dbug.h"
 #include "mysql/psi/mysql_thread.h"
 #include "mysqld_error.h"         // ER_QUERY_INTERRUPTED
+#include "sql/debug_sync.h"       // DEBUG_SYNC
 #include "sql/field.h"            // Field
 #include "sql/mysqld.h"           // key_thread_parallel_query_worker
 #include "sql/handler.h"          // handler
@@ -1373,10 +1374,21 @@ bool Gather_operator::run_worker_partial_group_merge(
           &worker->m_open_ctx, &worker->m_worker_ctx) != 0;
     }
   }
+  leader_thd->store_globals();
+
+  if (!failed) {
+    DEBUG_SYNC(leader_thd, "pq_groupby_dop_partial_workers_opened");
+    failed = leader_thd->killed != THD::NOT_KILLED;
+  }
 
   for (uint32 i = 0; !failed && i < m_dop; ++i) {
     auto *worker = get_worker(i);
     worker->m_worker_thd->store_globals();
+    DBUG_EXECUTE_IF("pq_groupby_dop_partial_force_worker_error", {
+      worker->m_error_code = HA_ERR_INTERNAL_ERROR;
+      failed = true;
+    });
+    if (failed) break;
     PQ_partial_group_mq_sink group_sink(exchange, worker->m_worker_id,
                                         group_field_index, value_field_index,
                                         agg_kind);

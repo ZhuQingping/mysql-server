@@ -439,11 +439,17 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
   unsupported shape；
 - 验证 unsupported shape 不增长 `Parallel_groupby_dop_partial_selected`，
   且能观察到 fallback / unsupported shape counter。
+- 新增 `pq_groupby_dop2_partial_worker_error` MTR；
+- 新增 `pq_groupby_dop2_partial_external_kill` MTR；
+- `Gather_operator::run_worker_partial_group_merge()` 增加 debug-only worker
+  error injection 和 worker contexts opened debug sync 点；
+- worker open 后恢复 leader THD globals，避免 debug sync ownership 错配；
+- DOP partial gather 失败时使用 source table handler 报错，避免 temp-table
+  handler 在 debug build 下格式化内部 handler error 时 abort。
 
 仍未覆盖：
 
 - DOP4 GROUP BY partial result path；
-- worker ERROR / external KILL 的 GROUP BY partial result-path 专门回归。
 
 验证：
 
@@ -458,13 +464,14 @@ TMPDIR=/tmp ./mtr --suite=parallel_query pq_groupby_dop2_partial_count_min_max \
 TMPDIR=/tmp ./mtr --suite=parallel_query \
   pq_groupby_dop2_partial_sum pq_groupby_dop2_partial_count_min_max \
   pq_groupby_dop2_partial_unsupported pq_groupby_partial_group_smoke \
+  pq_groupby_dop2_partial_worker_error pq_groupby_dop2_partial_external_kill \
   pq_groupby_dop_partial_counters pq_groupby_dop1_sum_min_max \
   pq_groupby_dop1_unsupported pq_stats \
-  --parallel=1 --vardir=/tmp/pqv_dop2_groupby_unsupported_related \
-  --tmpdir=/tmp/pqt_dop2_groupby_unsupported_related
+  --parallel=1 --vardir=/tmp/pqv_groupby_partial_error_kill_related \
+  --tmpdir=/tmp/pqt_groupby_partial_error_kill_related
 TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
-  --vardir=/tmp/pqv_full_dop2_groupby_unsupported \
-  --tmpdir=/tmp/pqt_full_dop2_groupby_unsupported
+  --vardir=/tmp/pqv_full_groupby_partial_error_kill \
+  --tmpdir=/tmp/pqt_full_groupby_partial_error_kill
 ```
 
 结果：
@@ -473,10 +480,10 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - DOP2 GROUP BY SUM 单测通过；
 - DOP2 GROUP BY COUNT/MIN/MAX 单测通过；
 - DOP2 GROUP BY unsupported shape 单测通过；
+- DOP2 GROUP BY worker error / external kill 单测通过；
 - GROUP BY/partial/counter targeted suite 通过；
-- 完整 `parallel_query` suite 通过，共 62 项。
+- 完整 `parallel_query` suite 通过，共 64 项。
 
 下一步：
 
-- 增加 worker error / external kill 专门回归；
 - 再评估 DOP4 gate expansion。
