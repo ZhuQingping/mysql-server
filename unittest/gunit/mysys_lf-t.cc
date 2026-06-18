@@ -32,6 +32,7 @@
 #include <gtest/gtest.h>
 #include <stddef.h>
 #include <sys/types.h>
+#include <vector>
 
 #include "lf.h"
 #include "my_byteorder.h"
@@ -195,6 +196,25 @@ TEST(Mysys, LockFree) {
   do_tests();
 
   my_thread_attr_destroy(&thr_attr);
+}
+
+TEST(Mysys, LFPinboxAllocatesPastOldLimit) {
+  LF_ALLOCATOR allocator;
+  lf_alloc_init(&allocator, sizeof(TLA), offsetof(TLA, not_used));
+
+  constexpr int old_usable_pin_limit = 65535;
+  std::vector<LF_PINS *> pins;
+  pins.reserve(old_usable_pin_limit + 1);
+
+  for (int i = 0; i <= old_usable_pin_limit; ++i) {
+    LF_PINS *allocated = lf_pinbox_get_pins(&allocator.pinbox);
+    ASSERT_NE(nullptr, allocated) << "allocation " << i;
+    pins.push_back(allocated);
+  }
+
+  for (LF_PINS *allocated : pins) lf_pinbox_put_pins(allocated);
+
+  lf_alloc_destroy(&allocator);
 }
 
 extern "C" {

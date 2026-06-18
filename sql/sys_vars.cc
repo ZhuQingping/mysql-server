@@ -3292,9 +3292,10 @@ static Sys_var_ulong Sys_max_binlog_size(
 
 static Sys_var_ulong Sys_max_connections(
     "max_connections", "The number of simultaneous clients allowed",
-    GLOBAL_VAR(max_connections), CMD_LINE(REQUIRED_ARG), VALID_RANGE(1, 100000),
-    DEFAULT(MAX_CONNECTIONS_DEFAULT), BLOCK_SIZE(1), NO_MUTEX_GUARD,
-    NOT_IN_BINLOG, ON_CHECK(nullptr), ON_UPDATE(nullptr), nullptr,
+    GLOBAL_VAR(max_connections), CMD_LINE(REQUIRED_ARG),
+    VALID_RANGE(1, MAX_CONNECTIONS_LIMIT), DEFAULT(MAX_CONNECTIONS_DEFAULT),
+    BLOCK_SIZE(1), NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(nullptr),
+    ON_UPDATE(nullptr), nullptr,
     /* max_connections is used as a sizing hint by the performance schema. */
     sys_var::PARSE_EARLY);
 

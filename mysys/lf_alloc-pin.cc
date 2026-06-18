@@ -116,8 +116,8 @@ static_assert(sizeof(std::atomic<void *>) == sizeof(void *),
   Pins are given away from a "pinbox". Pinbox is stack-based allocator.
   It used dynarray for storing pins, new elements are allocated by dynarray
   as necessary, old are pushed in the stack for reuse. ABA is solved by
-  versioning a pointer - because we use an array, a pointer to pins is 16 bit,
-  upper 16 bits are used for a version.
+  versioning a pointer - the low 32 bits are used as the pin array index,
+  upper 32 bits are used for a version.
 */
 #include "lf.h"
 #include "my_atomic.h"
@@ -129,9 +129,26 @@ static_assert(sizeof(std::atomic<void *>) == sizeof(void *),
 #include "mysql/service_mysql_alloc.h"
 #include "mysys/mysys_priv.h" /* key_memory_lf_node */
 
-#define LF_PINBOX_MAX_PINS 65536
-
 static void lf_pinbox_real_free(LF_PINS *pins);
+
+static constexpr uint32 LF_PINBOX_MAX_PINS = 2U * 1024U * 1024U;
+static constexpr uint64 LF_PINBOX_STATE_INDEX_MASK = UINT_MAX32;
+
+static inline uint32 lf_pinbox_state_index(uint64 state) {
+  return static_cast<uint32>(state & LF_PINBOX_STATE_INDEX_MASK);
+}
+
+static inline uint32 lf_pinbox_state_version(uint64 state) {
+  return static_cast<uint32>(state >> 32);
+}
+
+static inline uint64 lf_pinbox_make_state(uint32 index, uint32 version) {
+  return (static_cast<uint64>(version) << 32) | index;
+}
+
+static inline uint64 lf_pinbox_next_state(uint64 old_state, uint32 new_index) {
+  return lf_pinbox_make_state(new_index, lf_pinbox_state_version(old_state) + 1);
+}
 
 /*
   Initialize a pinbox. Normally called from lf_alloc_init.
@@ -164,20 +181,21 @@ void lf_pinbox_destroy(LF_PINBOX *pinbox) {
     or allocate a new one out of dynarray.
 */
 LF_PINS *lf_pinbox_get_pins(LF_PINBOX *pinbox) {
-  uint32 pins, next, top_ver;
+  uint32 pins, next;
+  uint64 top_ver;
   LF_PINS *el;
   /*
-    We have an array of max. 64k elements.
+    We have an array of max. LF_PINBOX_MAX_PINS elements.
     The highest index currently allocated is pinbox->pins_in_array.
     Freed elements are in a lifo stack, pinstack_top_ver.
-    pinstack_top_ver is 32 bits; 16 low bits are the index in the
-    array, to the first element of the list. 16 high bits are a version
-    (every time the 16 low bits are updated, the 16 high bits are
+    pinstack_top_ver is 64 bits; 32 low bits are the index in the
+    array, to the first element of the list. 32 high bits are a version
+    (every time the 32 low bits are updated, the 32 high bits are
     incremented). Versioning prevents the ABA problem.
   */
   top_ver = pinbox->pinstack_top_ver;
   do {
-    if (!(pins = top_ver % LF_PINBOX_MAX_PINS)) {
+    if (!(pins = lf_pinbox_state_index(top_ver))) {
       /* the stack of free elements is empty */
       pins = pinbox->pins_in_array.fetch_add(1) + 1;
       if (unlikely(pins >= LF_PINBOX_MAX_PINS)) {
@@ -197,7 +215,7 @@ LF_PINS *lf_pinbox_get_pins(LF_PINBOX *pinbox) {
     next = el->link;
   } while (!atomic_compare_exchange_strong(
       &pinbox->pinstack_top_ver, &top_ver,
-      top_ver - pins + next + LF_PINBOX_MAX_PINS));
+      lf_pinbox_next_state(top_ver, next)));
   /*
     set el->link to the index of el in the dynarray (el->link has two usages:
     - if element is allocated, it's its own index
@@ -218,7 +236,8 @@ LF_PINS *lf_pinbox_get_pins(LF_PINBOX *pinbox) {
 */
 void lf_pinbox_put_pins(LF_PINS *pins) {
   LF_PINBOX *pinbox = pins->pinbox;
-  uint32 top_ver, nr;
+  uint32 nr;
+  uint64 top_ver;
   nr = pins->link;
 
 #ifndef NDEBUG
@@ -245,10 +264,10 @@ void lf_pinbox_put_pins(LF_PINS *pins) {
   }
   top_ver = pinbox->pinstack_top_ver;
   do {
-    pins->link = top_ver % LF_PINBOX_MAX_PINS;
+    pins->link = lf_pinbox_state_index(top_ver);
   } while (!atomic_compare_exchange_strong(
       &pinbox->pinstack_top_ver, &top_ver,
-      top_ver - pins->link + nr + LF_PINBOX_MAX_PINS));
+      lf_pinbox_next_state(top_ver, nr)));
 }
 
 /*

@@ -3790,17 +3790,24 @@ TEST_F(MDLTest, FindLockOwner) {
 }
 
 /**
-   Verify that correct error is reported when the MDL system exhausts the LF
-   Pinbox.
+   Verify that the MDL system can allocate more pins than the old 16-bit
+   LF Pinbox index limit allowed.
 */
-TEST_F(MDLTest, ExhaustPinbox) {
-  for (int i = 0; i < 65535; ++i) {
-    MDL_context c;
-    EXPECT_FALSE(test_drive_fix_pins(&c));
+TEST_F(MDLTest, AllocatesPastOldPinboxLimit) {
+  constexpr int old_usable_pin_limit = 65535;
+  std::vector<MDL_context *> contexts;
+  contexts.reserve(old_usable_pin_limit + 1);
+
+  for (int i = 0; i <= old_usable_pin_limit; ++i) {
+    MDL_context *c = new MDL_context();
+    ASSERT_FALSE(test_drive_fix_pins(c)) << "allocation " << i;
+    contexts.push_back(c);
   }
-  MDL_context bad;
-  expected_error = ER_MDL_OUT_OF_RESOURCES;
-  EXPECT_TRUE(test_drive_fix_pins(&bad));
+
+  for (MDL_context *c : contexts) {
+    c->destroy();
+    delete c;
+  }
 }
 
 /** Test class for SE notification testing. */

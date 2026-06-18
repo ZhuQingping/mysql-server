@@ -27,12 +27,13 @@
 | 18 | Extended Secondary Partition Types | 9fd5bbe38853 | [commits_for_review.md](18_extended_secondary_partition/commits_for_review.md) | 3 |
 | 19 | PGO/LTO Compilation | 43b6a0f590c7 | [commits_for_review.md](19_pgo_lto_compilation/commits_for_review.md) | 2 |
 | 20 | Enhanced Crash Diagnostics | 2ef131b5d1e | [commits_for_review.md](20_enhanced_crash_diagnostics/commits_for_review.md) | 3 |
+| 21 | MDL Pinbox Capacity | MR tip | [commits_for_review.md](21_mdl_pinbox_capacity/commits_for_review.md) | 1 |
 
 ## Status
 
 | Status | Count |
 |--------|-------|
-| Completed | 20 |
+| Completed | 21 |
 | Pending | 0 |
 
 ## Directory Structure
@@ -47,13 +48,17 @@ features_for_opensource/
 │   ├── commits_for_review.md
 │   └── patches/
 ├── ...
-└── 19_pgo_lto_compilation/
+├── 19_pgo_lto_compilation/
     ├── commits_for_review.md
     └── patches/
 ├── 20_enhanced_crash_diagnostics/
 │   ├── commits_for_review.md
 │   ├── EnhancedCrashDiagnostics-Feature-Spec.md
 │   └── patches/
+└── 21_mdl_pinbox_capacity/
+    ├── commits_for_review.md
+    ├── MDLPinboxCapacity-Feature-Spec.md
+    └── TestReport.md
 ```
 
 ## Cross-Feature Shared Commits
@@ -64,7 +69,7 @@ features_for_opensource/
 | 53191dcfb87 | Plan Cache #2, COUNT #6 | Count not null column optimization [post-fix] |
 | ea82404780a | Redundant Condition #8, Range Scan #11 | Fix rds_empty_redundant_check_in_range_scan |
 
-## Total Patch Count: 100
+## Total Patch Count: 101
 
 ## Apply All Patches
 

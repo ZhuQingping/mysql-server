@@ -77,7 +77,7 @@ struct LF_PINBOX {
   lf_pinbox_free_func *free_func;
   void *free_func_arg;
   uint free_ptr_offset;
-  std::atomic<uint32> pinstack_top_ver; /* this is a versioned pointer */
+  std::atomic<uint64> pinstack_top_ver; /* this is a versioned pointer */
   std::atomic<uint32> pins_in_array;    /* number of elements in array */
 };
 

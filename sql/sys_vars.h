@@ -107,6 +107,7 @@ constexpr const unsigned long TABLE_DEF_CACHE_DEFAULT{400};
   to avoid "too many connections" error in a common setup.
 */
 constexpr const unsigned long MAX_CONNECTIONS_DEFAULT{151};
+constexpr const unsigned long MAX_CONNECTIONS_LIMIT{1000000};
 /**
   Maximum number of connections for admin port connection default value.
 */
