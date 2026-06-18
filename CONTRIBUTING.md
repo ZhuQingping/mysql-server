@@ -16,3 +16,17 @@ Submitting a contribution
 4. Verify that the entire test suite passes with your code applied.
 5. Submit your pull request via GitHub or uploading it using the contribution tab to a bug
     record in https://bugs.mysql.com (using the 'contribution' tab).
+
+Commit message format
+---------------------
+
+For non-trivial changes, use the repository commit message format documented in
+`Docs/development/commit_message.md`. In short, include `Issue:` and
+`Solution:` sections, wrap body text at 72 columns, and use section underlines
+whose length matches the header text including the colon.
+
+You can enable the local template with:
+
+```
+git config commit.template .gitmessage
+```

@@ -83,8 +83,12 @@ ninja install -j 24
 - **自然语言**: 用户与助手对话可使用中文；代码、注释、提交信息等保持与现有代码风格一致（一般为英文）。
 - **修改范围**: 做特性或 bug 修复时，优先只改必要文件；涉及优化器/执行路径时注意是否影响 EXPLAIN、ICP、索引选择等。
 - **验证**: 修改后应先能成功编译，再跑至少一个相关 mtr 用例（如 `1st` 或你添加的用例）确认无回归。
+- **提交信息**: 非平凡代码变更必须包含 `Issue:` 和 `Solution:`，
+  正文按 Google 风格 72 列换行，分割线长度与标题长度一致。
+  完整规范见 `Docs/development/commit_message.md`，模板见 `.gitmessage`。
 
 ## 参考
 
 - 更细的构建/测试步骤与「如何让大模型更好理解本仓库」见 **CLAUDE.md**。
+- 提交信息格式见 **Docs/development/commit_message.md**。
 - 版本号以仓库根目录下 **MYSQL_VERSION** 为准（当前 MySQL 8.0.41 LTS，`MYSQL_VERSION_EXTRA=-260400`，`TAURUS_PRODUCT_VERSION=V2.0.76`）。
