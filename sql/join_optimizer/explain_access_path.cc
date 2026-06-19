@@ -1184,6 +1184,42 @@ static std::unique_ptr<Json_object> SetObjectMembers(
       error |= AddChildrenFromPushedCondition(table, children);
       break;
     }
+    case AccessPath::PARALLEL_SCAN: {
+      TABLE *table = path->parallel_scan().table;
+      description = string("Parallel query candidate scan on ") +
+                    table->alias +
+                    " (commercial skeleton, execution disabled)";
+      error |= AddMemberToObject<Json_string>(obj, "table_name", table->alias);
+      error |= AddMemberToObject<Json_string>(obj, "access_type",
+                                              "parallel_query_candidate");
+      error |= AddMemberToObject<Json_string>(obj, "parallel_query",
+                                              "skeleton_not_executed");
+      break;
+    }
+    case AccessPath::PQ_BLOCK_SCAN: {
+      TABLE *table = path->pq_block_scan().table;
+      description = string("Parallel query worker block scan on ") +
+                    table->alias +
+                    " (commercial skeleton, execution disabled)";
+      error |= AddMemberToObject<Json_string>(obj, "table_name", table->alias);
+      error |= AddMemberToObject<Json_string>(obj, "access_type",
+                                              "parallel_query_block_candidate");
+      error |= AddMemberToObject<Json_string>(obj, "parallel_query",
+                                              "skeleton_not_executed");
+      break;
+    }
+    case AccessPath::PQ_REF_SCAN: {
+      TABLE *table = path->pq_ref_scan().table;
+      description = string("Parallel query worker ref scan on ") +
+                    table->alias +
+                    " (commercial skeleton, execution disabled)";
+      error |= AddMemberToObject<Json_string>(obj, "table_name", table->alias);
+      error |= AddMemberToObject<Json_string>(obj, "access_type",
+                                              "parallel_query_ref_candidate");
+      error |= AddMemberToObject<Json_string>(obj, "parallel_query",
+                                              "skeleton_not_executed");
+      break;
+    }
     case AccessPath::TABLE_VALUE_CONSTRUCTOR:
     case AccessPath::FAKE_SINGLE_ROW:
       error |= AddMemberToObject<Json_string>(obj, "access_type",

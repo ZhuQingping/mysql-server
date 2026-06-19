@@ -5,7 +5,7 @@
 ## Current Summary
 
 - Last synced: 2026-06-19
-- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1 Commercial Core Skeleton Port 已完成为 compile-only skeleton，商用核心文件边界已落位但默认不可达；下一步进入 M2 Commercial Iterator Access Path Skeleton。
+- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1 Commercial Core Skeleton Port 和 M2 Commercial Iterator Access Path Skeleton 已完成为 compile-only skeleton，商用核心文件与 iterator/access path 边界已落位但默认不可达；下一步进入 M3 Commercial Plan Clone And Resolver Activation。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
@@ -120,7 +120,10 @@
 - Commercial port validation:
   - M1: `cmake --build build-ninja --target mysqld -j 16` 通过
   - M1: `TMPDIR=/tmp ./mtr --suite=parallel_query pq_vars --parallel=1 --vardir=/tmp/pqv_m1_vars --tmpdir=/tmp/pqt_m1_vars` 通过
-- Next recommended action: 执行 M2 Commercial Iterator Access Path Skeleton；默认不可达，不接 handler/InnoDB 真实扫描，不替换当前 `PQTableScanIterator`。
+  - M2: `cmake --build build-ninja --target mysqld -j 16` 通过
+  - M2: `TMPDIR=/tmp ./mtr --suite=parallel_query pq_vars --parallel=1 --vardir=/tmp/pqv_m2_vars --tmpdir=/tmp/pqt_m2_vars` 通过
+  - M2: `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_m2_full --tmpdir=/tmp/pqt_m2_full` 通过，完整当前 suite 69 项成功
+- Next recommended action: 执行 M3 Commercial Plan Clone And Resolver Activation；必须保持 worker-start 前失败/回退，不接商用 iterator 真实执行。
 - Next risk closure board: [v2-next-risk-closure.md](v2-next-risk-closure.md)
 - Commercial port board: [commercial-port-gap-analysis.md](commercial-port-gap-analysis.md)
 - Parallel-ready task overview: [parallel_wave2_tasks.md](parallel_wave2_tasks.md)

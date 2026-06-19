@@ -325,6 +325,8 @@ both passed
 
 **Goal:** 迁移 `ParallelScanIterator` / `PQblockScanIterator` / `PQRefIterator` 类型和 access path 创建骨架，但默认不执行。
 
+**Status:** Completed as compile-only skeleton. 商用 iterator/access path 类型已进入构建，默认不可达，所有新 iterator `Init()` fail-closed。
+
 **Files:**
 
 - Create: `sql/parallel_query/pq_iterators.h`
@@ -332,6 +334,8 @@ both passed
 - Modify: `sql/join_optimizer/access_path.h`
 - Modify: `sql/join_optimizer/access_path.cc`
 - Modify: `sql/join_optimizer/explain_access_path.cc`
+- Modify: `sql/join_optimizer/join_optimizer.cc`
+- Modify: `sql/join_optimizer/walk_access_paths.h`
 - Modify: `Docs/pq_tasks/commercial-port-gap-analysis.md`
 
 **Rules:**
@@ -355,6 +359,22 @@ Expected:
 ```text
 build passes; existing basic PQ tests pass; no default behavior change.
 ```
+
+M2 actual validation:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query pq_vars --parallel=1 --vardir=/tmp/pqv_m2_vars --tmpdir=/tmp/pqt_m2_vars
+cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_m2_full --tmpdir=/tmp/pqt_m2_full
+```
+
+Result:
+
+```text
+all passed; full current parallel_query suite: 69 tests successful
+```
+
+`pq_variables pq_explain_basic` are commercial-reference names that do not exist in this branch; current branch coverage is `pq_vars` plus the full existing `parallel_query` suite.
 
 ### Task M3: Commercial Plan Clone And Resolver Activation
 
@@ -656,29 +676,30 @@ M6 通过后再分支推进：
 
 ## 下一步任务书
 
-下一步应执行 M2，不继续 V2-12C-2。
+下一步应执行 M3，不继续 V2-12C-2。
 
-M2 的具体任务：
+M3 的具体任务：
 
 ```text
 角色：Code Agent
 主控：Codex
-任务：Commercial Iterator Access Path Skeleton
+任务：Commercial Plan Clone And Resolver Activation
 
 目标：
-1. 从 taurusdbondstore 调研并迁移商用 ParallelScanIterator / PQblockScanIterator / PQRefIterator 的最小类型骨架。
-2. 只做 access path 类型、factory shell、EXPLAIN shell 和 build glue。
-3. 默认不可达，不接 handler/InnoDB 真实扫描，不替换当前 PQTableScanIterator。
+1. 从 taurusdbondstore 调研并迁移 `pq_make_join()`、clone/resolver/refix/base item 的最小声明与执行前失败边界。
+2. 只允许在 worker-start 前建立 clone contract，不启动 worker，不接 `ParallelScanIterator` 真实执行。
+3. clone 失败必须 fallback；不得引入 subquery/UNION/derived/semijoin 等复杂 shape。
 
 验证：
 cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_m3 --tmpdir=/tmp/pqt_m3
 
 完成：
 1. 更新本文档 Completion Report；
 2. 说明新增/修改文件；
 3. 说明与商用源码的偏差；
 4. 说明未接入主路径的保护措施；
-5. 提交只包含 M2 相关文件。
+5. 提交只包含 M3 相关文件。
 ```
 
 ## Acceptance Checklist
@@ -701,3 +722,11 @@ M1 source migration completed as a compile-only commercial skeleton:
 - 当前分支 `parallel_query.pq_vars` smoke 通过；
 - `pq_clone` / `pq_resolver` / `Query_result_mq` 的商用主体因依赖 `Item`、`THD`、`Query_block`、`JOIN`、`TABLE`、成熟 MQ wire protocol 和 worker temp-table contract，已后置到 M3/M4；
 - 当前提交不改变 optimizer、access path、handler、InnoDB 或默认执行路径。
+
+M2 source migration completed as a compile-only iterator/access path skeleton:
+
+- `pq_iterators.*` 已新增，包含 `ParallelScanIterator` / `PQblockScanIterator` / `PQRefIterator` 类壳；
+- `AccessPath::PARALLEL_SCAN` / `PQ_BLOCK_SCAN` / `PQ_REF_SCAN`、accessor、factory、iterator creation switch、EXPLAIN case、walk/debug switch 已补齐；
+- 当前 `TABLE_SCAN` hook 和 `TryCreatePQTableScanIterator()` 未改变；
+- 所有新增商用 iterator 默认 `Init()` fail-closed，不启动 worker，不读 MQ，不调用 handler/InnoDB；
+- `mysqld` build、`pq_vars` smoke、完整当前 `parallel_query` suite 69 项通过。

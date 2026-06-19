@@ -4298,6 +4298,15 @@ string PrintAccessPath(const AccessPath &path, const JoinHypergraph &graph,
     case AccessPath::DYNAMIC_INDEX_RANGE_SCAN:
       str += "DYNAMIC_INDEX_RANGE_SCAN";
       break;
+    case AccessPath::PARALLEL_SCAN:
+      str += "PARALLEL_SCAN";
+      break;
+    case AccessPath::PQ_BLOCK_SCAN:
+      str += "PQ_BLOCK_SCAN";
+      break;
+    case AccessPath::PQ_REF_SCAN:
+      str += "PQ_REF_SCAN";
+      break;
     case AccessPath::TABLE_VALUE_CONSTRUCTOR:
       str += "TABLE_VALUE_CONSTRUCTOR";
       break;

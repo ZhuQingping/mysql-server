@@ -46,6 +46,7 @@
 #include "sql/mem_root_array.h"
 #include "sql/parallel_query/pq_group_aggregate_iterator.h"
 #include "sql/parallel_query/pq_iterator.h"
+#include "sql/parallel_query/pq_iterators.h"
 #include "sql/range_optimizer/geometry_index_range_scan.h"
 #include "sql/range_optimizer/group_index_skip_scan.h"
 #include "sql/range_optimizer/group_index_skip_scan_plan.h"
@@ -198,6 +199,12 @@ TABLE *GetBasicTable(const AccessPath *path) {
       return path->group_index_skip_scan().table;
     case AccessPath::DYNAMIC_INDEX_RANGE_SCAN:
       return path->dynamic_index_range_scan().table;
+    case AccessPath::PARALLEL_SCAN:
+      return path->parallel_scan().table;
+    case AccessPath::PQ_BLOCK_SCAN:
+      return path->pq_block_scan().table;
+    case AccessPath::PQ_REF_SCAN:
+      return path->pq_ref_scan().table;
 
     // Basic access paths that don't correspond to a specific table.
     case AccessPath::TABLE_VALUE_CONSTRUCTOR:
@@ -288,6 +295,8 @@ bool ShouldEnableBatchMode(AccessPath *path) {
     case AccessPath::PUSHED_JOIN_REF:
     case AccessPath::FULL_TEXT_SEARCH:
     case AccessPath::DYNAMIC_INDEX_RANGE_SCAN:
+    case AccessPath::PQ_BLOCK_SCAN:
+    case AccessPath::PQ_REF_SCAN:
       return true;
     case AccessPath::FILTER:
       if (path->filter().condition->has_subquery()) {
@@ -676,6 +685,35 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
         const auto &param = path->dynamic_index_range_scan();
         iterator = NewIterator<DynamicRangeIterator>(
             thd, mem_root, param.table, param.qep_tab, examined_rows);
+        break;
+      }
+      case AccessPath::PARALLEL_SCAN: {
+        const auto &param = path->parallel_scan();
+        double estimated_rows = path->num_output_rows();
+        if (estimated_rows < 0.0) estimated_rows = 1048576.0;
+        iterator = NewIterator<ParallelScanIterator>(
+            thd, mem_root, param.qep_tab, param.table, estimated_rows,
+            examined_rows, param.join, param.gather, param.stable_output,
+            param.root_access_path);
+        break;
+      }
+      case AccessPath::PQ_BLOCK_SCAN: {
+        const auto &param = path->pq_block_scan();
+        double estimated_rows = path->num_output_rows();
+        if (estimated_rows < 0.0) estimated_rows = 1048576.0;
+        iterator = NewIterator<PQblockScanIterator>(
+            thd, mem_root, param.table, estimated_rows, examined_rows,
+            param.tab_type, param.gather, param.qep_tab, param.need_rowid);
+        break;
+      }
+      case AccessPath::PQ_REF_SCAN: {
+        const auto &param = path->pq_ref_scan();
+        double estimated_rows = path->num_output_rows();
+        if (estimated_rows < 0.0) estimated_rows = 1048576.0;
+        iterator = NewIterator<PQRefIterator>(
+            thd, mem_root, param.table, param.ref, param.use_order,
+            param.tab_type, estimated_rows, examined_rows, param.gather,
+            param.qep_tab);
         break;
       }
       case AccessPath::TABLE_VALUE_CONSTRUCTOR: {

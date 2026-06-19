@@ -47,6 +47,7 @@ template <class T>
 class Bounds_checked_array;
 class Common_table_expr;
 class Filesort;
+class Gather_operator;
 class Item;
 class Item_func_match;
 class JOIN;
@@ -66,6 +67,8 @@ struct ORDER;
 struct POSITION;
 struct RelationalExpression;
 struct TABLE;
+
+enum PQTabType { CUT_TAB = 0, DIV_TAB, END_TAB };
 
 /**
   A specification that two specific relational expressions
@@ -261,6 +264,12 @@ struct AccessPath {
     // Access paths that modify tables.
     DELETE_ROWS,
     UPDATE_ROWS,
+
+    // Commercial Parallel Query skeleton paths. M2 reserves these types but
+    // does not make them reachable from the optimizer.
+    PARALLEL_SCAN,
+    PQ_BLOCK_SCAN,
+    PQ_REF_SCAN,
   } type;
 
   /// A general enum to describe the safety of a given operation.
@@ -843,6 +852,30 @@ struct AccessPath {
     assert(type == UPDATE_ROWS);
     return u.update_rows;
   }
+  auto &parallel_scan() {
+    assert(type == PARALLEL_SCAN);
+    return u.parallel_scan;
+  }
+  const auto &parallel_scan() const {
+    assert(type == PARALLEL_SCAN);
+    return u.parallel_scan;
+  }
+  auto &pq_block_scan() {
+    assert(type == PQ_BLOCK_SCAN);
+    return u.pq_block_scan;
+  }
+  const auto &pq_block_scan() const {
+    assert(type == PQ_BLOCK_SCAN);
+    return u.pq_block_scan;
+  }
+  auto &pq_ref_scan() {
+    assert(type == PQ_REF_SCAN);
+    return u.pq_ref_scan;
+  }
+  const auto &pq_ref_scan() const {
+    assert(type == PQ_REF_SCAN);
+    return u.pq_ref_scan;
+  }
 
   double num_output_rows() const { return m_num_output_rows; }
 
@@ -1212,6 +1245,31 @@ struct AccessPath {
       table_map tables_to_update;
       table_map immediate_tables;
     } update_rows;
+    struct {
+      QEP_TAB *qep_tab;
+      TABLE *table;
+      JOIN *join;
+      Gather_operator *gather;
+      bool stable_output;
+      AccessPath *root_access_path;
+    } parallel_scan;
+    struct {
+      TABLE *table;
+      Gather_operator *gather;
+      QEP_TAB *qep_tab;
+      PQTabType tab_type;
+      bool need_rowid;
+    } pq_block_scan;
+    struct {
+      TABLE *table;
+      Gather_operator *gather;
+      Index_lookup *ref;
+      QEP_TAB *qep_tab;
+      PQTabType tab_type;
+      bool need_rowid;
+      bool use_order;
+      bool reverse;
+    } pq_ref_scan;
   } u;
 };
 static_assert(std::is_trivially_destructible<AccessPath>::value,
@@ -1242,6 +1300,58 @@ inline AccessPath *NewTableScanAccessPath(THD *thd, TABLE *table,
   path->type = AccessPath::TABLE_SCAN;
   path->count_examined_rows = count_examined_rows;
   path->table_scan().table = table;
+  return path;
+}
+
+inline AccessPath *NewParallelScanAccessPath(THD *thd, QEP_TAB *qep_tab,
+                                             TABLE *table, JOIN *join,
+                                             Gather_operator *gather,
+                                             bool stable_output,
+                                             AccessPath *root_path) {
+  AccessPath *path = new (thd->mem_root) AccessPath;
+  path->type = AccessPath::PARALLEL_SCAN;
+  path->parallel_scan().qep_tab = qep_tab;
+  path->parallel_scan().table = table;
+  path->parallel_scan().join = join;
+  path->parallel_scan().gather = gather;
+  path->parallel_scan().stable_output = stable_output;
+  path->parallel_scan().root_access_path = root_path;
+  return path;
+}
+
+inline AccessPath *NewPQblockScanAccessPath(THD *thd, TABLE *table,
+                                            Gather_operator *gather,
+                                            PQTabType tab_type,
+                                            QEP_TAB *qep_tab,
+                                            bool need_rowid) {
+  AccessPath *path = new (thd->mem_root) AccessPath;
+  path->type = AccessPath::PQ_BLOCK_SCAN;
+  path->count_examined_rows = true;
+  path->pq_block_scan().table = table;
+  path->pq_block_scan().gather = gather;
+  path->pq_block_scan().qep_tab = qep_tab;
+  path->pq_block_scan().tab_type = tab_type;
+  path->pq_block_scan().need_rowid = need_rowid;
+  return path;
+}
+
+inline AccessPath *NewPQrefScanAccessPath(THD *thd, TABLE *table,
+                                          Gather_operator *gather,
+                                          PQTabType tab_type, bool need_rowid,
+                                          Index_lookup *used_ref,
+                                          bool reverse_scan, bool use_order,
+                                          QEP_TAB *tab) {
+  AccessPath *path = new (thd->mem_root) AccessPath;
+  path->type = AccessPath::PQ_REF_SCAN;
+  path->count_examined_rows = true;
+  path->pq_ref_scan().table = table;
+  path->pq_ref_scan().gather = gather;
+  path->pq_ref_scan().tab_type = tab_type;
+  path->pq_ref_scan().need_rowid = need_rowid;
+  path->pq_ref_scan().ref = used_ref;
+  path->pq_ref_scan().reverse = reverse_scan;
+  path->pq_ref_scan().use_order = use_order;
+  path->pq_ref_scan().qep_tab = tab;
   return path;
 }
 

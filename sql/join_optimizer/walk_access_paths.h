@@ -94,6 +94,8 @@ void WalkAccessPaths(AccessPathPtr path, JoinPtr join,
     case AccessPath::INDEX_SKIP_SCAN:
     case AccessPath::GROUP_INDEX_SKIP_SCAN:
     case AccessPath::DYNAMIC_INDEX_RANGE_SCAN:
+    case AccessPath::PQ_BLOCK_SCAN:
+    case AccessPath::PQ_REF_SCAN:
     case AccessPath::TABLE_VALUE_CONSTRUCTOR:
     case AccessPath::FAKE_SINGLE_ROW:
     case AccessPath::ZERO_ROWS:
@@ -101,6 +103,13 @@ void WalkAccessPaths(AccessPathPtr path, JoinPtr join,
     case AccessPath::MATERIALIZED_TABLE_FUNCTION:
     case AccessPath::UNQUALIFIED_COUNT:
       // No children.
+      break;
+    case AccessPath::PARALLEL_SCAN:
+      if (path->parallel_scan().root_access_path != nullptr) {
+        WalkAccessPaths(path->parallel_scan().root_access_path, join,
+                        cross_query_blocks, std::forward<Func &&>(func),
+                        post_order_traversal);
+      }
       break;
     case AccessPath::NESTED_LOOP_JOIN:
       WalkAccessPaths(path->nested_loop_join().outer, join, cross_query_blocks,
@@ -292,6 +301,12 @@ void WalkTablesUnderAccessPath(AccessPath *root_path, Func &&func,
             return func(path->group_index_skip_scan().table);
           case AccessPath::DYNAMIC_INDEX_RANGE_SCAN:
             return func(path->dynamic_index_range_scan().table);
+          case AccessPath::PARALLEL_SCAN:
+            return func(path->parallel_scan().table);
+          case AccessPath::PQ_BLOCK_SCAN:
+            return func(path->pq_block_scan().table);
+          case AccessPath::PQ_REF_SCAN:
+            return func(path->pq_ref_scan().table);
           case AccessPath::STREAM:
             return func(path->stream().table);
           case AccessPath::MATERIALIZE:

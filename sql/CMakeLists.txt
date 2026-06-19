@@ -468,6 +468,7 @@ SET(SQL_SHARED_SOURCES
   parallel_query/pq_group_aggregate_iterator.cc
   parallel_query/pq_handler.cc
   parallel_query/pq_iterator.cc
+  parallel_query/pq_iterators.cc
   parallel_query/pq_optimizer.cc
   parallel_query/pq_refix_fields_item.cc
   parallel_query/pq_replace_base_item.cc
