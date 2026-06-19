@@ -88,6 +88,17 @@ EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
 --enable_warnings
 SET SESSION optimizer_switch=@old_optimizer_switch;
 
+# Debug-only M9-B2 smoke: build secondary range partitions without row
+# production or user-visible PQ execution.
+SET @old_debug=@@session.debug;
+SET SESSION debug="d,pq_secondary_range_partition_smoke";
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+  WHERE k >= 20 AND k < 40;
+--enable_warnings
+SET SESSION debug=@old_debug;
+
 # Secondary covering index scan remains fallback.
 --disable_warnings
 --replace_column 10 #

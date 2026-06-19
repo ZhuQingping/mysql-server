@@ -655,7 +655,8 @@ ORDER BY commercial path passes targeted tests.
 
 ### Task M9: Secondary Index / Ref / ICP
 
-Status: M9-A, M9-B0, and M9-B1 Completed on 2026-06-19. M9-B2 is Design Ready.
+Status: M9-A, M9-B0, and M9-B1 Completed on 2026-06-19. M9-B2 is implemented
+and pending code review.
 Secondary/ref/ICP real PQ execution remains closed; M9-A added negative guards
 only. M9-B0 confirmed secondary range must be split into candidate probe,
 secondary partition, and callback row production before any execution path is
@@ -720,14 +721,15 @@ M9-B1 candidate probe completed:
 - Review 修正后 probe 显式要求 `range_scan()->type == AccessPath::INDEX_RANGE_SCAN`，避免误计 skip scan / group skip scan；
 - `mysqld` build、M9-B1 targeted suite、完整当前 `parallel_query` suite 74 项通过。
 
-M9-B2 secondary range partition design ready:
+M9-B2 secondary range partition implemented:
 
 - 当前分支 clustered full scan partition 只使用空 `Parallel_reader::Scan_range{}`；
 - 商用 `pq_range_scan_init()` 使用 `mrr_cur_range.start_key/end_key` 加 `index_read()` 生成 secondary tuple 边界；
-- M9-B2 必须建立 SQL range metadata、handler carrier、InnoDB boundary tuple deep-copy 和 partition counter contract；
-- M9-B2 只允许构造 partition，不允许产生 secondary row；
-- `Parallel_secondary_ranges_built` 只能表示 partition built，`Parallel_secondary_rows_produced` 必须保持 0；
+- 当前实现建立 SQL range metadata、handler carrier、InnoDB boundary tuple deep-copy 和 partition counter contract；
+- debug-only smoke 只允许构造 partition，不允许产生 secondary row；
+- `Parallel_secondary_ranges_built` 只表示 partition built，`Parallel_secondary_rows_produced` 保持 0；
 - 普通 secondary range SELECT 仍 fallback；`INDEX_RANGE_SCAN` iterator factory、ICP、回表、reverse、partition table、dependent ref 均后置。
+- `mysqld` build、M9-B2 targeted suite、完整当前 `parallel_query` suite 74 项通过。
 
 ### Task M10: Commercial Test Suite Gap Closure
 

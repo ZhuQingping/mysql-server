@@ -30,15 +30,19 @@
 
 #include "sql/parallel_query/pq_optimizer.h"
 
+#include <vector>
+
 #include "include/thr_lock.h"     // Lock_descriptor, thr_lock_type
+#include "my_dbug.h"
 #include "sql/join_optimizer/access_path.h"  // AccessPath
+#include "sql/parallel_query/pq_aggregate.h"  // pq_check_agg_supported
 #include "sql/parallel_query/sql_parallel.h"  // pq_set_execution_state
+#include "sql/range_optimizer/range_optimizer.h"  // QUICK_RANGE
 #include "sql/sql_class.h"        // THD
 #include "sql/sql_lex.h"          // Query_block, LEX, Table_ref
 #include "sql/sql_opt_exec_shared.h"  // JOIN_TAB, join_type, JT_ALL
 #include "sql/sql_optimizer.h"    // JOIN
 #include "sql/table.h"            // TABLE, TABLE_SHARE, Table_ref
-#include "sql/parallel_query/pq_aggregate.h"  // pq_check_agg_supported
 
 /**
   String representation of each PQUnsuiteReason value.
@@ -89,6 +93,114 @@ const char *pq_unsuite_reason_to_string(PQUnsuiteReason reason) {
 
 const char *pq_v1_explain_eligible_label() {
   return "eligible, execution disabled, serial fallback";
+}
+
+struct PQ_copied_key_endpoint {
+  key_range range{};
+  std::vector<uchar> key;
+  bool present{false};
+};
+
+static bool pq_copy_key_endpoint(const key_range &src,
+                                 PQ_copied_key_endpoint *dst) {
+  if (dst == nullptr) return false;
+  dst->range = src;
+  dst->key.clear();
+  dst->present = src.keypart_map != 0;
+  if (!dst->present) {
+    dst->range.key = nullptr;
+    dst->range.length = 0;
+    return true;
+  }
+  if (src.length > 0 && src.key == nullptr) return false;
+  dst->key.assign(src.key, src.key + src.length);
+  dst->range.key = dst->key.empty() ? nullptr : dst->key.data();
+  return true;
+}
+
+static bool pq_secondary_range_key_has_unsupported_parts(const TABLE *table,
+                                                         uint keyno) {
+  if (table == nullptr || table->s == nullptr || table->key_info == nullptr ||
+      keyno >= table->s->keys) {
+    return true;
+  }
+  const KEY &key = table->key_info[keyno];
+  if (key.flags & (HA_SPATIAL | HA_MULTI_VALUED_KEY)) {
+    return true;
+  }
+  for (uint i = 0; i < key.user_defined_key_parts; ++i) {
+    if (key.key_part[i].key_part_flag & HA_REVERSE_SORT) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void pq_maybe_run_secondary_range_partition_smoke(
+    THD *thd, TABLE *table, AccessPath *range_scan, uint keyno) {
+  bool enabled = false;
+  DBUG_EXECUTE_IF("pq_secondary_range_partition_smoke", enabled = true;);
+  if (!enabled) return;
+
+  pq_global_stats.secondary_range_clone_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  auto mark_failed = []() {
+    pq_global_stats.secondary_range_clone_failed.fetch_add(
+        1, std::memory_order_relaxed);
+  };
+
+  if (thd == nullptr || table == nullptr || table->s == nullptr ||
+      table->file == nullptr || range_scan == nullptr ||
+      range_scan->type != AccessPath::INDEX_RANGE_SCAN ||
+      keyno >= table->s->keys || keyno == table->s->primary_key ||
+      table->part_info != nullptr || table->file->pushed_idx_cond != nullptr) {
+    mark_failed();
+    return;
+  }
+
+  const auto &param = range_scan->index_range_scan();
+  if (param.reverse || param.geometry || param.num_ranges != 1 ||
+      param.ranges == nullptr ||
+      pq_secondary_range_key_has_unsupported_parts(table, keyno)) {
+    mark_failed();
+    return;
+  }
+
+  QUICK_RANGE *quick_range = param.ranges[0];
+  if (quick_range == nullptr) {
+    mark_failed();
+    return;
+  }
+
+  key_range start_key{};
+  key_range end_key{};
+  quick_range->make_min_endpoint(&start_key);
+  quick_range->make_max_endpoint(&end_key);
+
+  PQ_copied_key_endpoint copied_start;
+  PQ_copied_key_endpoint copied_end;
+  if (!pq_copy_key_endpoint(start_key, &copied_start) ||
+      !pq_copy_key_endpoint(end_key, &copied_end)) {
+    mark_failed();
+    return;
+  }
+
+  uint ranges_built = 0;
+  uint requested_dop = thd->variables.parallel_default_dop;
+  if (requested_dop == 0) requested_dop = 1;
+
+  const int error = table->file->pq_secondary_range_partition_smoke(
+      thd, keyno, copied_start.present ? &copied_start.range : nullptr,
+      copied_end.present ? &copied_end.range : nullptr, requested_dop,
+      &ranges_built);
+  if (error != 0) {
+    mark_failed();
+    return;
+  }
+
+  pq_global_stats.secondary_ranges_built.fetch_add(
+      ranges_built, std::memory_order_relaxed);
 }
 
 /**
@@ -258,6 +370,8 @@ static bool pq_check_full_table_scan(JOIN *join, PQUnsuiteInfo *info,
             1, std::memory_order_relaxed);
         pq_global_stats.secondary_range_probe_unsupported.fetch_add(
             1, std::memory_order_relaxed);
+        pq_maybe_run_secondary_range_partition_smoke(
+            join->thd, candidate_table, candidate_range_scan, candidate_index);
       }
     }
     return pq_reject(info, PQUnsuiteReason::NON_FULL_TABLE_SCAN,

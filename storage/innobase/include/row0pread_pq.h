@@ -224,6 +224,19 @@ class InnoDB_pq_scan_ctx {
   @return DB_SUCCESS or error code. */
   dberr_t partition(size_t split_level);
 
+  /** Partition one explicit B+tree scan range.
+
+  This is a contract helper for secondary index range partition smoke. It only
+  exports range boundaries; row production for secondary indexes remains
+  unsupported until M9-B3.
+
+  @param[in]  split_level  B+tree level to split at.
+  @param[in]  start        Start tuple, or nullptr for -infinity.
+  @param[in]  end          End tuple, or nullptr for +infinity.
+  @return DB_SUCCESS or error code. */
+  dberr_t partition(size_t split_level, const dtuple_t *start,
+                    const dtuple_t *end);
+
   /** Check visibility of a record.
 
   V2-8F placeholder: real visibility must follow upstream Parallel_reader

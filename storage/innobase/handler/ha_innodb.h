@@ -541,6 +541,18 @@ class ha_innobase : public handler {
                                       PQ_row_sink *row_sink) override;
 
   /**
+    Debug-only secondary range partition smoke.
+
+    Converts one SQL key_range pair into temporary InnoDB tuples and exports
+    scan partitions. It does not produce rows and must not be called by the
+    normal execution path.
+  */
+  int pq_secondary_range_partition_smoke(
+      THD *leader_thd, uint keyno, const key_range *start_key,
+      const key_range *end_key, uint requested_dop,
+      uint *ranges_built) override;
+
+  /**
     End a PQ worker scan. Cleans up worker cursor state and resources.
     Idempotent: safe to call multiple times or with nullptr.
   */

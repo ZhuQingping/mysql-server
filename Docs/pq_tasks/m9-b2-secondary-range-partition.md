@@ -2,7 +2,7 @@
 
 ## 状态
 
-Design Ready，等待实现阶段。本文档只定义 M9-B2 的接口契约、任务边界和验收项；不修改源码。
+Implementation completed by Codex Orchestrator，等待代码 Review Agent 检视。
 
 ## 目标
 
@@ -153,13 +153,41 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_m9b2_ful
 
 ## Completion Report
 
-Design-only stage completed by Codex Orchestrator.
+Implementation completed by Codex Orchestrator.
+
+Changed files:
+
+- `sql/handler.h`
+- `sql/parallel_query/pq_optimizer.cc`
+- `storage/innobase/handler/ha_innodb.h`
+- `storage/innobase/handler/ha_innodb_pq.cc`
+- `storage/innobase/include/row0pread_pq.h`
+- `storage/innobase/row/row0pread_pq.cc`
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+- `Docs/pq_tasks/m9-b2-secondary-range-partition.md`
+
+Implementation notes:
+
+- 新增 handler debug-only API `pq_secondary_range_partition_smoke()`；
+- InnoDB 实现直接用 deep-copied MySQL `key_range` endpoint 调用 `row_sel_convert_mysql_key_to_innobase()` 构造临时 `dtuple_t`；
+- 当前只接受 `Parallel_reader::Scan_range(start,end)` 能精确表达的 forward half-open range：start absent/`HA_READ_KEY_OR_NEXT`，end absent/`HA_READ_BEFORE_KEY`；
+- `BETWEEN`、`>`、`<=` 等需要物理边界二次定位的 range 在 M9-B2 fail-closed，不增长 `Parallel_secondary_ranges_built`；
+- `InnoDB_pq_scan_ctx::partition()` 新增显式 start/end tuple 重载，原 clustered full scan 路径继续走空 range；
+- optimizer secondary range fallback 在 `pq_secondary_range_partition_smoke` DBUG flag 下触发 smoke；
+- 普通 secondary range SELECT 仍返回 `NON_FULL_TABLE_SCAN` fallback；
+- 不修改 `access_path.cc`，不创建 `INDEX_RANGE_SCAN` PQ iterator，不打开 `PQblockScanIterator::Read()` / `PQRefIterator::Read()`；
+- 不产生 secondary row，`Parallel_secondary_rows_produced` 保持 0；
+- helper 不调用 `change_active_index()`，避免移动 handler active index/cursor。
 
 Review:
 
 - M9-B2 design Review Agent APPROVE；
 - Review 确认当前分支和商用实现描述准确；
 - Review 确认文档覆盖 metadata 生命周期、start/end boundary flag、reverse fallback、ICP fallback、回表/row production 延后、partition table 禁止、iterator factory 禁止修改、worker prebuilt/cursor 不复用 leader mutable cursor 等核心风险。
+- 第一轮代码 Review Agent 发现 blocker：直接 key->dtuple 会丢失 `key_range::flag` open/closed 边界语义；
+- 已修正为只接受 half-open forward range，其它边界 fail-closed；
+- 第二轮代码 Review Agent APPROVE，确认 M9-B2 blocker 已闭环。
 
 Residual risks for implementation:
 
@@ -171,5 +199,7 @@ Residual risks for implementation:
 
 Validation:
 
-- Design-only；无源码改动；
-- 未运行 build/MTR。
+- `cmake --build build-ninja --target mysqld -j 16` 通过；
+- `TMPDIR=/tmp ./mtr --suite=parallel_query --record pq_commercial_ref_icp pq_stats` 通过；
+- `TMPDIR=/tmp ./mtr --suite=parallel_query pq_commercial_ref_icp pq_stats pq_not_support --parallel=1 --vardir=/tmp/pqv_m9b2d --tmpdir=/tmp/pqt_m9b2d` 通过；
+- `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_m9b2_full4 --tmpdir=/tmp/pqt_m9b2_full4` 通过，完整 suite 74 项成功。

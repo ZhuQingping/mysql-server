@@ -2,7 +2,7 @@
 
 ## 状态
 
-M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Design Ready。M9-B3/M9-C/M9-D/M9-E/M9-F Planned。
+M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Implemented, Pending Code Review。M9-B3/M9-C/M9-D/M9-E/M9-F Planned。
 
 ## 目标
 
@@ -229,3 +229,43 @@ Validation:
 
 - Design-only；无源码改动；
 - 未运行 build/MTR。
+
+M9-B2 implementation completed by Codex Orchestrator.
+
+Changed files:
+
+- `sql/handler.h`
+- `sql/parallel_query/pq_optimizer.cc`
+- `storage/innobase/handler/ha_innodb.h`
+- `storage/innobase/handler/ha_innodb_pq.cc`
+- `storage/innobase/include/row0pread_pq.h`
+- `storage/innobase/row/row0pread_pq.cc`
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+- `Docs/pq_tasks/m9-b2-secondary-range-partition.md`
+- `Docs/pq_tasks/commercial-port-m9-ref-icp.md`
+- `Docs/pq_tasks/commercial-port-gap-analysis.md`
+- `Docs/pq_tasks/README.md`
+
+Implementation notes:
+
+- 新增 debug-only secondary range partition smoke；
+- SQL 层从 `QUICK_RANGE` endpoint deep-copy key buffer，再调用 handler smoke API；
+- InnoDB 层用 `row_sel_convert_mysql_key_to_innobase()` 构造临时 start/end tuple，并通过 `Parallel_reader::export_scan_ranges()` 生成 partitions；
+- 当前只接受 forward half-open range；不能由 `Parallel_reader::Scan_range(start,end)` 精确表达的边界继续 fail-closed；
+- 不修改 iterator factory，不打开 secondary row production；
+- MTR 验证 clone attempts +1、clone failed 0、secondary ranges built +1、secondary rows produced 0；
+- 普通 secondary range/ref/ICP SELECT 继续 fallback。
+
+Review:
+
+- 第一轮代码 Review Agent 发现 boundary blocker；
+- 已修正为 only half-open forward range built，其它边界 fail-closed；
+- 第二轮代码 Review Agent APPROVE。
+
+Validation:
+
+- `mysqld` build passed；
+- M9-B2 record passed；
+- M9-B2 targeted suite passed；
+- full current `parallel_query` suite passed，74 tests successful。

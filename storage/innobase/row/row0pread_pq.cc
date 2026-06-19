@@ -303,6 +303,12 @@ dberr_t InnoDB_pq_scan_ctx::produce_callback_rows_for_range(
 }
 
 dberr_t InnoDB_pq_scan_ctx::partition(size_t split_level) {
+  return partition(split_level, nullptr, nullptr);
+}
+
+dberr_t InnoDB_pq_scan_ctx::partition(size_t split_level,
+                                      const dtuple_t *start,
+                                      const dtuple_t *end) {
   m_ranges.clear();
 
   if (m_index == nullptr || m_trx == nullptr) {
@@ -314,7 +320,8 @@ dberr_t InnoDB_pq_scan_ctx::partition(size_t split_level) {
   }
 
   Parallel_reader reader(0);
-  Parallel_reader::Config config(Parallel_reader::Scan_range{}, m_index);
+  Parallel_reader::Scan_range scan_range(start, end);
+  Parallel_reader::Config config(scan_range, m_index);
   Parallel_reader::Exported_ranges exported_ranges{};
   auto err = reader.export_scan_ranges(const_cast<trx_t *>(m_trx), config,
                                        &exported_ranges, split_level);
