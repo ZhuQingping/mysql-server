@@ -125,6 +125,11 @@ bool PQTableScanIterator::Init() {
       PrintError(HA_ERR_OUT_OF_MEM);
       return true;
     }
+    if (m_gather->run_query_result_mq_contract_smoke(thd())) {
+      cleanup_pq_resources(true);
+      PrintError(HA_ERR_OUT_OF_MEM);
+      return true;
+    }
     Gather_operator partial_group_smoke(smoke_dop);
     if (partial_group_smoke.init() ||
         partial_group_smoke.run_exchange_partial_group_smoke(thd())) {

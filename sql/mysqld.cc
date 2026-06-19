@@ -9821,6 +9821,24 @@ static int show_pq_worker_handler_smoke_runs(THD *, SHOW_VAR *var, char *buf) {
   return 0;
 }
 
+static int show_pq_worker_result_smoke_rows(THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.worker_result_smoke_rows.load(std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_worker_result_smoke_finishes(THD *, SHOW_VAR *var,
+                                                char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) =
+      (longlong)(pq_global_stats.worker_result_smoke_finishes.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
 static int show_pq_exchange_smoke_rows(THD *, SHOW_VAR *var, char *buf) {
   var->type = SHOW_LONGLONG;
   var->value = buf;
@@ -10526,6 +10544,11 @@ SHOW_VAR status_vars[] = {
     {"Parallel_worker_producer_smoke_runs",
      (char *)&show_pq_worker_producer_smoke_runs, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_result_smoke_finishes",
+     (char *)&show_pq_worker_result_smoke_finishes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_result_smoke_rows",
+     (char *)&show_pq_worker_result_smoke_rows, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_smoke_runs", (char *)&show_pq_worker_smoke_runs,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {NullS, NullS, SHOW_FUNC, SHOW_SCOPE_ALL}};

@@ -58,6 +58,7 @@
 #include "sql/field.h"            // Field
 #include "sql/mysqld.h"           // key_thread_parallel_query_worker
 #include "sql/handler.h"          // handler
+#include "sql/parallel_query/query_result_mq.h"  // pq_run_query_result_mq_contract_smoke
 #include "sql/sql_base.h"         // close_thread_tables, open_ltable
 #include "sql/sql_class.h"        // THD
 #include "sql/sql_thd_internal_api.h"  // create_internal_thd
@@ -960,6 +961,21 @@ bool Gather_operator::run_worker_callback_conversion_smoke(
         1, std::memory_order_relaxed);
   }
   return failed;
+}
+
+bool Gather_operator::run_query_result_mq_contract_smoke(THD *leader_thd
+                                                         [[maybe_unused]]) {
+  uint32 rows_read = 0;
+  uint32 finishes_read = 0;
+  if (pq_run_query_result_mq_contract_smoke(&rows_read, &finishes_read)) {
+    return true;
+  }
+
+  pq_global_stats.worker_result_smoke_rows.fetch_add(
+      rows_read, std::memory_order_relaxed);
+  pq_global_stats.worker_result_smoke_finishes.fetch_add(
+      finishes_read, std::memory_order_relaxed);
+  return false;
 }
 
 class PQ_limited_mq_row_sink final : public PQ_row_sink {

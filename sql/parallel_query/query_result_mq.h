@@ -27,10 +27,44 @@
 #include "sql/parallel_query/msg_queue.h"
 #include "sql/query_result.h"
 
+struct Field_raw_data {
+  uchar *m_ptr{nullptr};
+  uint32 m_len{0};
+  uchar m_var_len{0};
+  bool m_need_send{true};
+};
+
+enum class PQ_worker_result_message_type : uint16 {
+  ROW = 1,
+  FINISH = 2,
+  ERROR = 3,
+};
+
+struct PQ_worker_result_frame_header {
+  uint32 magic;
+  uint16 version;
+  uint16 type;
+  uint32 field_count;
+  uint32 null_bitmap_len;
+  uint32 payload_len;
+  uint32 flags;
+};
+
+constexpr uint32 PQ_WORKER_RESULT_FRAME_MAGIC = 0x50515752;  // "PQWR"
+constexpr uint16 PQ_WORKER_RESULT_FRAME_VERSION = 1;
+
 struct TABLE;
 class Temp_table_param;
 class JOIN;
 class handler;
+
+bool pq_validate_worker_result_frame(
+    const void *raw_data, uint32 raw_len,
+    const PQ_worker_result_frame_header **header, const uchar **null_bitmap,
+    const uchar **payload);
+
+bool pq_run_query_result_mq_contract_smoke(uint32 *rows_read,
+                                           uint32 *finishes_read);
 
 /*
   This is used to get result from a query executed by PQ worker
@@ -67,6 +101,7 @@ class Query_result_mq : public Query_result {
   MQueue_handle *m_handler{nullptr};
   mem_root_deque<Item *> *send_fields{nullptr};
   uint send_fields_size{0};
+  Field_raw_data *mq_fields_data{nullptr};
   bool *mq_fields_null_array{nullptr};
   char *mq_fields_null_flag{nullptr};
   bool m_stable_output;

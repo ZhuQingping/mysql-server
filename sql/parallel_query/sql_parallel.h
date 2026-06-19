@@ -202,6 +202,8 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_producer_smoke_runs{0};  ///< Producer loop smoke runs
   std::atomic<uint64> worker_open_smoke_runs{0};  ///< Worker THD/TABLE smoke runs
   std::atomic<uint64> worker_handler_smoke_runs{0};  ///< Handler init/end smoke runs
+  std::atomic<uint64> worker_result_smoke_rows{0};  ///< Worker result frames
+  std::atomic<uint64> worker_result_smoke_finishes{0};  ///< FINISH frames
   std::atomic<uint64> exchange_smoke_rows{0};      ///< Synthetic MQ rows read
   std::atomic<uint64> exchange_smoke_finishes{0};  ///< Synthetic FINISH tokens
   std::atomic<uint64> exchange_row_image_smoke_rows{0};  ///< Row-image smoke rows
@@ -252,6 +254,8 @@ struct PQ_global_stats {
     worker_producer_smoke_runs.store(0, std::memory_order_relaxed);
     worker_open_smoke_runs.store(0, std::memory_order_relaxed);
     worker_handler_smoke_runs.store(0, std::memory_order_relaxed);
+    worker_result_smoke_rows.store(0, std::memory_order_relaxed);
+    worker_result_smoke_finishes.store(0, std::memory_order_relaxed);
     exchange_smoke_rows.store(0, std::memory_order_relaxed);
     exchange_smoke_finishes.store(0, std::memory_order_relaxed);
     exchange_row_image_smoke_rows.store(0, std::memory_order_relaxed);
@@ -793,6 +797,18 @@ class Gather_operator {
   */
   bool run_worker_callback_conversion_smoke(THD *leader_thd,
                                             TABLE *leader_table);
+
+  /**
+    Run an M4a Query_result_mq worker-result wire contract smoke.
+
+    This validates the commercial worker-result frame boundary through a local
+    MQueue handle. It does not create a worker plan, start a worker, read
+    InnoDB rows, or materialize data into the leader TABLE.
+
+    @retval false  Smoke pass completed
+    @retval true   Smoke pass failed
+  */
+  bool run_query_result_mq_contract_smoke(THD *leader_thd);
 
   /**
     Run a limited V2-8J callback multi-row producer smoke pass.

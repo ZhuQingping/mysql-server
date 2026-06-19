@@ -12,7 +12,7 @@
 
 ## 状态
 
-M0/M1/M2/M3 已完成，M4-M10 任务书已启动。
+M0/M1/M2/M3/M4a 已完成，M4b-M10 任务书已启动。
 
 本文档是商用实现平移的总差异清单和迁移计划。M3-M10 后续执行采用 Codex 主控 + 子 Agent 只读/实现后 review 的方式推进：每个阶段先按任务书实施，实施完成后启动独立 review 子 Agent 检视阶段 diff、测试证据和风险项，主控确认意见闭环后再提交。
 
@@ -695,7 +695,7 @@ Expected:
 1. M1 Commercial Core Skeleton Port；
 2. M2 Commercial Iterator Access Path Skeleton；
 3. M3 Commercial Plan Clone And Resolver Activation；已完成 clone activation probe 与 diagnostics；
-4. M4 Query_result_mq And Worker Result Path；
+4. M4 Query_result_mq And Worker Result Path；M4a worker-result MQ contract smoke 已完成，M4b 真实 worker result path 待 M5/M6 后继续；
 5. M5 InnoDB Commercial PQ Path Alignment；
 6. M6 Commercial Full Scan Execution Gate。
 
@@ -784,3 +784,12 @@ M3 source migration completed:
 - 当前 probe 不调用 `pq_make_join()`，不创建 cloned JOIN，不启动 worker，不调用 handler/InnoDB；
 - 为保持当前分支 V2 smoke/回归护栏，probe 后继续进入既有 `PQTableScanIterator` fallback/smoke 路径；
 - `mysqld` build、`pq_clone_diagnostics`、`pq_stats`、完整当前 `parallel_query` suite 70 项通过。
+
+M4a worker-result protocol contract completed:
+
+- 新增 `PQ_worker_result_frame_header` / `PQ_worker_result_message_type` / `Field_raw_data` 占位 contract；
+- 新增本地 synthetic `Query_result_mq` worker-result frame smoke，不接真实 `send_data()`；
+- 新增 `Parallel_worker_result_smoke_rows` / `Parallel_worker_result_smoke_finishes`；
+- 修复 review 发现的 worker-result frame 发送/解码 32-bit length overflow 风险；
+- `mysqld` build、M4 targeted suite、完整当前 `parallel_query` suite 71 项通过；
+- `exchange.cc` 旧 typed MQ helper 的 length overflow 收敛作为后续独立风险项。
