@@ -9681,6 +9681,23 @@ static int show_pq_queries_fallback(THD *, SHOW_VAR *var, char *buf) {
   return 0;
 }
 
+#define DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(NAME, FIELD)                   \
+  static int show_pq_##NAME(THD *, SHOW_VAR *var, char *buf) {         \
+    var->type = SHOW_LONGLONG;                                         \
+    var->value = buf;                                                   \
+    *((longlong *)buf) =                                                \
+        (longlong)(pq_global_stats.FIELD.load(std::memory_order_relaxed)); \
+    return 0;                                                          \
+  }
+
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(clone_probe_attempts, clone_probe_attempts)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(clone_probe_fallback, clone_probe_fallback)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(clone_probe_success, clone_probe_success)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(clone_probe_unsupported,
+                                clone_probe_unsupported)
+
+#undef DEFINE_PQ_CLONE_PROBE_SHOW_FUNC
+
 static int show_pq_workers_launched(THD *, SHOW_VAR *var, char *buf) {
   var->type = SHOW_LONGLONG;
   var->value = buf;
@@ -10398,6 +10415,14 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_queries_fallback", (char *)&show_pq_queries_fallback, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
+    {"Parallel_clone_probe_attempts",
+     (char *)&show_pq_clone_probe_attempts, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_clone_probe_fallback",
+     (char *)&show_pq_clone_probe_fallback, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_clone_probe_success",
+     (char *)&show_pq_clone_probe_success, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_clone_probe_unsupported",
+     (char *)&show_pq_clone_probe_unsupported, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_callback_smoke_attempts",
      (char *)&show_pq_callback_smoke_attempts, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_callback_smoke_rows", (char *)&show_pq_callback_smoke_rows,

@@ -1,0 +1,59 @@
+CREATE TABLE pq_clone_diag_t (id INT PRIMARY KEY, v INT) ENGINE=InnoDB;
+INSERT INTO pq_clone_diag_t VALUES (1, 10), (2, 20), (3, 30);
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+SET @clone_attempts_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_clone_probe_attempts');
+SET @clone_fallback_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_clone_probe_fallback');
+SET @clone_success_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_clone_probe_success');
+SET @clone_unsupported_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_clone_probe_unsupported');
+SET @workers_launched_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_workers_launched');
+SELECT id, v FROM pq_clone_diag_t WHERE v >= 0;
+id	v
+1	10
+2	20
+3	30
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_clone_probe_attempts') -
+@clone_attempts_before) >= 1 AS clone_attempt_delta;
+clone_attempt_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_clone_probe_fallback') -
+@clone_fallback_before) >= 1 AS clone_fallback_delta;
+clone_fallback_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_clone_probe_unsupported') -
+@clone_unsupported_before) >= 1 AS clone_unsupported_delta;
+clone_unsupported_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_clone_probe_success') -
+@clone_success_before) AS clone_success_delta;
+clone_success_delta
+0
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_workers_launched') -
+@workers_launched_before) AS workers_launched_delta;
+workers_launched_delta
+0
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+DROP TABLE pq_clone_diag_t;

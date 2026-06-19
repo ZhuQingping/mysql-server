@@ -5,7 +5,7 @@
 ## Current Summary
 
 - Last synced: 2026-06-19
-- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1 Commercial Core Skeleton Port 和 M2 Commercial Iterator Access Path Skeleton 已完成为 compile-only skeleton，商用核心文件与 iterator/access path 边界已落位但默认不可达；下一步进入 M3 Commercial Plan Clone And Resolver Activation。
+- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1 Commercial Core Skeleton Port、M2 Commercial Iterator Access Path Skeleton、M3 Commercial Plan Clone Activation Probe 已完成；下一步进入 M4 Query_result_mq And Worker Result Path。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
@@ -123,7 +123,11 @@
   - M2: `cmake --build build-ninja --target mysqld -j 16` 通过
   - M2: `TMPDIR=/tmp ./mtr --suite=parallel_query pq_vars --parallel=1 --vardir=/tmp/pqv_m2_vars --tmpdir=/tmp/pqt_m2_vars` 通过
   - M2: `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_m2_full --tmpdir=/tmp/pqt_m2_full` 通过，完整当前 suite 69 项成功
-- Next recommended action: 执行 M3 Commercial Plan Clone And Resolver Activation；必须保持 worker-start 前失败/回退，不接商用 iterator 真实执行。
+  - M3: `cmake --build build-ninja --target mysqld -j 16` 通过
+  - M3: `TMPDIR=/tmp ./mtr --suite=parallel_query pq_clone_diagnostics --parallel=1 --vardir=/tmp/pqv_m3_clone --tmpdir=/tmp/pqt_m3_clone` 通过
+  - M3: `TMPDIR=/tmp ./mtr --suite=parallel_query pq_stats --parallel=1 --vardir=/tmp/pqv_m3_stats --tmpdir=/tmp/pqt_m3_stats` 通过
+  - M3: `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_m3_full --tmpdir=/tmp/pqt_m3_full` 通过，完整当前 suite 70 项成功
+- Next recommended action: 执行 M4 Query_result_mq And Worker Result Path；必须先明确 MQ wire protocol，不越过 M6 fullscan gate 打开真实 InnoDB 并行执行。
 - Commercial port taskbooks:
   - [commercial-port-m3-plan-clone-resolver.md](commercial-port-m3-plan-clone-resolver.md)
   - [commercial-port-m4-worker-result-path.md](commercial-port-m4-worker-result-path.md)

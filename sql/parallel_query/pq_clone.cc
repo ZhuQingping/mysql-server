@@ -25,7 +25,9 @@
 
 #include <vector>
 
+#include "sql/parallel_query/sql_parallel.h"
 #include "sql/sql_lex.h"
+#include "sql/sql_optimizer.h"
 
 AccessPath *CopyRangeScanAccessPath(THD *, AccessPath *, TABLE *) {
   return nullptr;
@@ -36,6 +38,28 @@ ORDER *pq_dup_order(THD *, Query_block *, ORDER *) { return nullptr; }
 bool pq_dup_tabs(JOIN *, JOIN *, bool) { return true; }
 
 JOIN *pq_make_join(THD *, JOIN *) { return nullptr; }
+
+bool pq_clone_activation_probe(THD *thd, JOIN *join) {
+  pq_global_stats.clone_probe_attempts.fetch_add(1,
+                                                 std::memory_order_relaxed);
+
+  if (thd == nullptr || join == nullptr || join->query_block == nullptr ||
+      join->query_block->table_count() != 1) {
+    pq_global_stats.clone_probe_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    pq_global_stats.clone_probe_fallback.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+
+  // The commercial clone path requires Item/JOIN/QEP_TAB clone contracts not
+  // present in this branch yet. M3 only records the activation boundary.
+  pq_global_stats.clone_probe_unsupported.fetch_add(
+      1, std::memory_order_relaxed);
+  pq_global_stats.clone_probe_fallback.fetch_add(
+      1, std::memory_order_relaxed);
+  return false;
+}
 
 void swap_column_names_of_unit_and_tmp_table(
     const mem_root_deque<Item *> &, const Create_col_name_list &) {}

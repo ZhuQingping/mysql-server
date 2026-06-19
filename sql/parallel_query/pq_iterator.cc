@@ -45,6 +45,7 @@
 #include "sql/iterators/basic_row_iterators.h"  // TableScanIterator
 #include "sql/iterators/timing_iterator.h"     // NewIterator
 #include "sql/mysqld.h"       // innodb_hton
+#include "sql/parallel_query/pq_clone.h"  // pq_clone_activation_probe
 #include "sql/parallel_query/pq_group_aggregate_iterator.h"
 #include "sql/parallel_query/sql_parallel.h"  // pq_global_stats
 #include "sql/sql_class.h"    // THD::variables, THD::pq_is_worker
@@ -496,6 +497,8 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQTableScanIterator(
     pq_set_execution_state(thd, PQ_execution_state::ELIGIBLE);
     return nullptr;
   }
+
+  if (pq_clone_activation_probe(thd, join)) return nullptr;
 
   return NewIterator<PQTableScanIterator>(thd, mem_root, mem_root, table, join,
                                           expected_rows, examined_rows);

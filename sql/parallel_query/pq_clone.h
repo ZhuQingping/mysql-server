@@ -44,6 +44,22 @@ bool pq_dup_tabs(JOIN *pq_join, JOIN *join, bool gather);
 
 JOIN *pq_make_join(THD *thd, JOIN *join);
 
+/**
+  Run the M3 commercial clone activation probe.
+
+  This is intentionally a diagnostic-only preflight. It inspects the JOIN
+  boundary and records that the commercial clone contract is not active yet,
+  but it must not call pq_make_join(), store a cloned JOIN, create a
+  Gather_operator, start workers, or call handler/InnoDB.
+
+  The caller may continue into the existing V2 smoke/fallback iterator path
+  after this probe. This helper owns only clone-probe diagnostics.
+
+  @retval false  Probe completed without fatal error; serial execution remains.
+  @retval true   Fatal local error such as OOM.
+*/
+bool pq_clone_activation_probe(THD *thd, JOIN *join);
+
 extern void swap_column_names_of_unit_and_tmp_table(
     const mem_root_deque<Item *> &unit_items,
     const Create_col_name_list &tmp_table_col_names);

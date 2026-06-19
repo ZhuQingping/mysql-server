@@ -183,6 +183,10 @@ struct PQ_stats {
 struct PQ_global_stats {
   std::atomic<uint64> queries_executed{0};    ///< PQ queries that actually ran
   std::atomic<uint64> queries_fallback{0};    ///< PQ-eligible queries that fell back
+  std::atomic<uint64> clone_probe_attempts{0};  ///< Clone probe attempts
+  std::atomic<uint64> clone_probe_success{0};   ///< Clone probe successes
+  std::atomic<uint64> clone_probe_fallback{0};  ///< Clone probe fallback
+  std::atomic<uint64> clone_probe_unsupported{0};  ///< Missing clone contract
   std::atomic<uint64> workers_launched{0};    ///< Total worker threads launched
   std::atomic<uint64> rows_scanned{0};        ///< Total rows scanned by PQ workers
   std::atomic<uint64> probe_attempts{0};      ///< Handler PROBE attempts
@@ -229,6 +233,10 @@ struct PQ_global_stats {
   void reset() {
     queries_executed.store(0, std::memory_order_relaxed);
     queries_fallback.store(0, std::memory_order_relaxed);
+    clone_probe_attempts.store(0, std::memory_order_relaxed);
+    clone_probe_success.store(0, std::memory_order_relaxed);
+    clone_probe_fallback.store(0, std::memory_order_relaxed);
+    clone_probe_unsupported.store(0, std::memory_order_relaxed);
     workers_launched.store(0, std::memory_order_relaxed);
     rows_scanned.store(0, std::memory_order_relaxed);
     probe_attempts.store(0, std::memory_order_relaxed);

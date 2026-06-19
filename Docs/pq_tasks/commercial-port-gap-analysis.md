@@ -12,7 +12,7 @@
 
 ## 状态
 
-M0/M1/M2 已完成，M3-M10 任务书已启动。
+M0/M1/M2/M3 已完成，M4-M10 任务书已启动。
 
 本文档是商用实现平移的总差异清单和迁移计划。M3-M10 后续执行采用 Codex 主控 + 子 Agent 只读/实现后 review 的方式推进：每个阶段先按任务书实施，实施完成后启动独立 review 子 Agent 检视阶段 diff、测试证据和风险项，主控确认意见闭环后再提交。
 
@@ -694,7 +694,7 @@ Expected:
 
 1. M1 Commercial Core Skeleton Port；
 2. M2 Commercial Iterator Access Path Skeleton；
-3. M3 Commercial Plan Clone And Resolver Activation；
+3. M3 Commercial Plan Clone And Resolver Activation；已完成 clone activation probe 与 diagnostics；
 4. M4 Query_result_mq And Worker Result Path；
 5. M5 InnoDB Commercial PQ Path Alignment；
 6. M6 Commercial Full Scan Execution Gate。
@@ -776,3 +776,11 @@ M3-M10 task launch completed:
 - 已基于子 Agent 只读调研结果收敛 M3-M10 的拆分边界；
 - 当前确认 M3 只做 clone activation probe 与 worker-start 前 fallback，不启动 worker，不接真实 `ParallelScanIterator::Read()`；
 - 后续每个源码阶段必须经过独立 review 子 Agent 检视，意见闭环后再提交。
+
+M3 source migration completed:
+
+- `pq_clone_activation_probe()` 已接入 guarded `TryCreatePQTableScanIterator()`；
+- 新增 `Parallel_clone_probe_attempts` / `Parallel_clone_probe_fallback` / `Parallel_clone_probe_success` / `Parallel_clone_probe_unsupported`；
+- 当前 probe 不调用 `pq_make_join()`，不创建 cloned JOIN，不启动 worker，不调用 handler/InnoDB；
+- 为保持当前分支 V2 smoke/回归护栏，probe 后继续进入既有 `PQTableScanIterator` fallback/smoke 路径；
+- `mysqld` build、`pq_clone_diagnostics`、`pq_stats`、完整当前 `parallel_query` suite 70 项通过。
