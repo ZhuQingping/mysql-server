@@ -12,9 +12,9 @@
 
 ## 状态
 
-Design Created。
+M0/M1/M2 已完成，M3-M10 任务书已启动。
 
-本文档只制定差异清单和迁移计划，不修改源码。
+本文档是商用实现平移的总差异清单和迁移计划。M3-M10 后续执行采用 Codex 主控 + 子 Agent 只读/实现后 review 的方式推进：每个阶段先按任务书实施，实施完成后启动独立 review 子 Agent 检视阶段 diff、测试证据和风险项，主控确认意见闭环后再提交。
 
 ## 背景结论
 
@@ -209,6 +209,38 @@ Docs/features_for_opensource/01_parallel_query/patches/parallel_query-0009-updat
 - 每个阶段提交只包含任务相关文件。
 
 ## 迁移阶段计划
+
+### M3-M10 启动与协作约束
+
+**当前启动状态：**
+
+- M3-M10 独立任务书已生成；
+- M3-M6 保持串行，避免同时改动 plan clone、worker result、handler/InnoDB、full scan gate 这条同一执行链；
+- M7-M10 在 M6 通过后再决定是否并行，其中 M10 的测试 manifest 分类可提前只读维护，但测试启用必须跟随能力 gate；
+- 每个阶段完成代码后必须启动一个 review 子 Agent；review 只检查本阶段 diff、任务书验收项、构建/MTR 证据和与商用参考实现的偏差；
+- review 意见闭环前不提交源码。
+
+**已确认点：**
+
+- M3 不直接平移完整商用 `pq_make_join()`；当前分支缺少完整 `Item::pq_clone()` / `refix_fields()` / `pq_restore()` 虚函数契约，第一步只做 clone activation probe、诊断和 worker-start 前 fallback。
+- M4 拆分为 MQ wire protocol contract 与 worker `Query_result_mq` result path 两段；不得混用当前 typed row-image header 与商用 `Field_raw_data` / NULL bitmap / CONST bitmap 协议。
+- M5 拆分为 handler contract alignment、`ha_innodb_pq.cc` 文件拆分、clustered full-scan row producer alignment；保留当前 `PROBE` / `EXECUTE` 安全语义。
+- M6 默认 OFF，只打开单表 clustered full scan 的最小 gate；BLOB/TEXT/JSON/GEOMETRY、ORDER/GROUP、ref/ICP、partition 等 shape 先 fallback。
+- M7 aggregation 必须保证 legacy typed-state path 与 commercial aggregation path 互斥，不能两个路径同时声称同一 query shape executed。
+- M8 先做 `binary_heap.h` / `exchange_sort.*` compile-only 和 synthetic smoke，再接真实 ORDER BY。
+- M9 先补 secondary/ref/ICP fallback 和负向测试，再打开正向 ref/range/ICP。
+- M10 维护 enabled/adapted/deferred manifest；deferred 必须写明缺失能力，不删除测试意图。
+
+**任务书入口：**
+
+- [commercial-port-m3-plan-clone-resolver.md](commercial-port-m3-plan-clone-resolver.md)
+- [commercial-port-m4-worker-result-path.md](commercial-port-m4-worker-result-path.md)
+- [commercial-port-m5-innodb-path-alignment.md](commercial-port-m5-innodb-path-alignment.md)
+- [commercial-port-m6-fullscan-execution-gate.md](commercial-port-m6-fullscan-execution-gate.md)
+- [commercial-port-m7-aggregation-reconciliation.md](commercial-port-m7-aggregation-reconciliation.md)
+- [commercial-port-m8-order-by-gather-merge.md](commercial-port-m8-order-by-gather-merge.md)
+- [commercial-port-m9-ref-icp.md](commercial-port-m9-ref-icp.md)
+- [commercial-port-m10-test-suite-gap-closure.md](commercial-port-m10-test-suite-gap-closure.md)
 
 ### Task M0: 固化商用差异清单
 
@@ -674,6 +706,13 @@ M6 通过后再分支推进：
 - M9 Secondary Index / Ref / ICP；
 - M10 Commercial Test Suite Gap Closure。
 
+当前执行策略：
+
+- 立即执行 M3；
+- M3 提交后继续 M4；
+- M4/M5/M6 继续串行；
+- M7/M8/M9/M10 在 M6 后重评依赖，优先并行化 read-only test manifest、ORDER BY compile-only 和 ref/ICP fallback 分类，真实执行路径仍按风险串行。
+
 ## 下一步任务书
 
 下一步应执行 M3，不继续 V2-12C-2。
@@ -730,3 +769,10 @@ M2 source migration completed as a compile-only iterator/access path skeleton:
 - 当前 `TABLE_SCAN` hook 和 `TryCreatePQTableScanIterator()` 未改变；
 - 所有新增商用 iterator 默认 `Init()` fail-closed，不启动 worker，不读 MQ，不调用 handler/InnoDB；
 - `mysqld` build、`pq_vars` smoke、完整当前 `parallel_query` suite 69 项通过。
+
+M3-M10 task launch completed:
+
+- 已生成 M3-M10 阶段任务书；
+- 已基于子 Agent 只读调研结果收敛 M3-M10 的拆分边界；
+- 当前确认 M3 只做 clone activation probe 与 worker-start 前 fallback，不启动 worker，不接真实 `ParallelScanIterator::Read()`；
+- 后续每个源码阶段必须经过独立 review 子 Agent 检视，意见闭环后再提交。

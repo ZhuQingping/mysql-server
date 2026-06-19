@@ -124,6 +124,15 @@
   - M2: `TMPDIR=/tmp ./mtr --suite=parallel_query pq_vars --parallel=1 --vardir=/tmp/pqv_m2_vars --tmpdir=/tmp/pqt_m2_vars` 通过
   - M2: `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_m2_full --tmpdir=/tmp/pqt_m2_full` 通过，完整当前 suite 69 项成功
 - Next recommended action: 执行 M3 Commercial Plan Clone And Resolver Activation；必须保持 worker-start 前失败/回退，不接商用 iterator 真实执行。
+- Commercial port taskbooks:
+  - [commercial-port-m3-plan-clone-resolver.md](commercial-port-m3-plan-clone-resolver.md)
+  - [commercial-port-m4-worker-result-path.md](commercial-port-m4-worker-result-path.md)
+  - [commercial-port-m5-innodb-path-alignment.md](commercial-port-m5-innodb-path-alignment.md)
+  - [commercial-port-m6-fullscan-execution-gate.md](commercial-port-m6-fullscan-execution-gate.md)
+  - [commercial-port-m7-aggregation-reconciliation.md](commercial-port-m7-aggregation-reconciliation.md)
+  - [commercial-port-m8-order-by-gather-merge.md](commercial-port-m8-order-by-gather-merge.md)
+  - [commercial-port-m9-ref-icp.md](commercial-port-m9-ref-icp.md)
+  - [commercial-port-m10-test-suite-gap-closure.md](commercial-port-m10-test-suite-gap-closure.md)
 - Next risk closure board: [v2-next-risk-closure.md](v2-next-risk-closure.md)
 - Commercial port board: [commercial-port-gap-analysis.md](commercial-port-gap-analysis.md)
 - Parallel-ready task overview: [parallel_wave2_tasks.md](parallel_wave2_tasks.md)
