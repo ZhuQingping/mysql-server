@@ -2,7 +2,7 @@
 
 ## 状态
 
-M9-A Completed。M9-B/M9-C/M9-D/M9-E/M9-F Planned。
+M9-A Completed。M9-B0 Completed。M9-B1/M9-B2/M9-B3/M9-C/M9-D/M9-E/M9-F Planned。
 
 ## 目标
 
@@ -11,7 +11,10 @@ M9-A Completed。M9-B/M9-C/M9-D/M9-E/M9-F Planned。
 设计调研后拆分：
 
 - M9-A: secondary index/range/ref/ICP 仍默认 fallback，补负向 MTR，不改执行路径；
-- M9-B: secondary index range 最小正例，先限制 single-table InnoDB、非 partition、非 reverse、非 ref；
+- M9-B0: secondary index range 正例设计与护栏，不改执行路径；
+- M9-B1: secondary range candidate probe，synthetic/probe-only，不产生真实 secondary row；
+- M9-B2: secondary range partition 最小前置，先限定 single-table InnoDB、非 partition、非 reverse、非 ref；
+- M9-B3: secondary range callback row production 最小正例；
 - M9-C: 常量 `JT_REF` 最小正例，含 `pq_ref_build_ranges`，不做 dependent ref；
 - M9-D: dependent `PQRefIterator` / per-ref-key range dispatch；
 - M9-E: ICP pushdown，迁移 worker 侧 `make_cond_for_index` / `idx_cond_push` / `make_cond_remainder`；
@@ -26,6 +29,7 @@ M9-A Completed。M9-B/M9-C/M9-D/M9-E/M9-F Planned。
 - `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
 - `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
 - `Docs/pq_tasks/commercial-port-m9-ref-icp.md`
+- `Docs/pq_tasks/m9-b0-secondary-range-design.md`
 - `Docs/pq_tasks/commercial-port-gap-analysis.md`
 - `Docs/pq_tasks/README.md`
 
@@ -124,6 +128,28 @@ Result:
 
 Remaining:
 
-- M9-B 需要独立设计 secondary index range 正例，不得复用 table scan factory；
+- M9-B0 已确认 M9-B 需要拆成 candidate probe、secondary partition、callback row production 三段，不得一次性打开正例；
+- M9-B1 前不得放开 `NON_FULL_TABLE_SCAN` fallback，也不得修改 InnoDB secondary row production；
 - M9-C/M9-D/M9-E/M9-F 继续拆分 ref、dependent ref、ICP pushdown 和边角能力；
 - 正例阶段前必须先明确 `AccessPath::INDEX_RANGE_SCAN`、range clone、InnoDB secondary range partition、record buffer/回表/可见性和 ICP Item 生命周期。
+
+M9-B0 completed by Codex Orchestrator.
+
+Design notes:
+
+- 当前分支 `pq_check_full_table_scan()` 明确拒绝非 `JT_ALL`；
+- `access_path.cc` 只在 `TABLE_SCAN` 分支尝试 PQ；
+- `CopyRangeScanAccessPath()` 返回 `nullptr`；
+- `PQblockScanIterator` / `PQRefIterator` 仍 fail-closed；
+- InnoDB `pq_leader_scan_init()` 对非 clustered index 返回 unsupported；
+- `InnoDB_pq_scan_ctx::partition()` 使用 empty `Parallel_reader::Scan_range{}`，只适合 clustered full scan。
+
+Review:
+
+- M9-B 设计检视 Agent 确认不建议直接进入 secondary range 正例；
+- 建议先做 M9-B0 设计与护栏，再按 M9-B1/B2/B3 拆分推进。
+
+Validation:
+
+- Design-only；无源码改动；
+- 复用 M9-A full suite 结果：完整当前 `parallel_query` suite 74 项通过。

@@ -655,10 +655,10 @@ ORDER BY commercial path passes targeted tests.
 
 ### Task M9: Secondary Index / Ref / ICP
 
-Status: M9-A Completed on 2026-06-19. Secondary/ref/ICP real PQ execution
-remains closed; M9-A added negative guards only. M9-B+ must be split into
-secondary range, constant ref, dependent ref, ICP pushdown, and edge-case
-phases before any execution path is opened.
+Status: M9-A and M9-B0 Completed on 2026-06-19. Secondary/ref/ICP real PQ
+execution remains closed; M9-A added negative guards only. M9-B0 confirmed
+secondary range must be split into candidate probe, secondary partition, and
+callback row production before any execution path is opened.
 
 **Goal:** 迁移 `PQRefIterator`、secondary index、ICP 能力。
 
@@ -700,6 +700,13 @@ M9-A guard completed:
 - 未修改 `sql/` 或 `storage/innobase/` 执行路径；
 - Review Agent 确认 M9-A blocker 已解决，建议可提交；
 - targeted suite 与完整当前 `parallel_query` suite 74 项通过。
+
+M9-B0 design completed:
+
+- 确认当前分支仍只允许 clustered full scan PQ；
+- `pq_check_full_table_scan()`、`access_path.cc`、`CopyRangeScanAccessPath()`、`PQblockScanIterator` 和 InnoDB clustered guard 均阻止 secondary range 正例；
+- 设计检视 Agent 建议 M9-B 拆分为 M9-B1 candidate probe、M9-B2 secondary partition、M9-B3 callback row production；
+- M9-B1 前不得放开 `NON_FULL_TABLE_SCAN` fallback，也不得修改 InnoDB secondary row production。
 
 ### Task M10: Commercial Test Suite Gap Closure
 
