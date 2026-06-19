@@ -160,6 +160,12 @@ bool PQTableScanIterator::Init() {
       PrintError(HA_ERR_OUT_OF_MEM);
       return true;
     }
+    Gather_operator orderby_smoke(3);
+    if (orderby_smoke.run_exchange_sort_smoke(thd())) {
+      cleanup_pq_resources(true);
+      PrintError(HA_ERR_OUT_OF_MEM);
+      return true;
+    }
     uint32 typed_group_smoke_groups = 0;
     uint64 typed_group_smoke_sum = 0;
     if (RunPQGroupAggregateTypedStateSmoke(&typed_group_smoke_groups,

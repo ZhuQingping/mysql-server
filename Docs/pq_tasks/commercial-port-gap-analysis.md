@@ -610,6 +610,14 @@ GROUP BY existing tests pass; commercial aggregation direction documented.
 
 ### Task M8: ORDER BY Gather Merge
 
+Status: Completed on 2026-06-19 for M8-A/B. `binary_heap.h` and
+`exchange_sort.*` are now compile-integrated, and a synthetic leader-only
+merge smoke validates ASC, DESC, and rowid tie-break ordering. Real ORDER BY
+worker output remains disabled: optimizer eligibility still rejects ORDER BY
+with `HAS_ORDER_BY`, and `pq_commercial_order_by` documents this as an
+optimizer-reject serial boundary. M8-C/D/E are deferred until the worker result
+path is stable enough to carry ordered rows.
+
 **Goal:** 迁移 `Exchange_sort` 和 ORDER BY/Gather Merge 测试。
 
 **Files:**
@@ -626,8 +634,9 @@ GROUP BY existing tests pass; commercial aggregation direction documented.
 
 **Rules:**
 
-- 先支持 ORDER BY group/key 简单场景；
-- 不支持 shape 必须 fallback；
+- 本阶段只支持 synthetic leader merge smoke；
+- 真实 ORDER BY worker path 不打开；
+- ORDER BY 查询必须保持 optimizer reject / serial boundary；
 - 输出顺序必须由 MTR 验证。
 
 **Validation:**

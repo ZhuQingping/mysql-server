@@ -58,6 +58,7 @@
 #include "sql/field.h"            // Field
 #include "sql/mysqld.h"           // key_thread_parallel_query_worker
 #include "sql/handler.h"          // handler
+#include "sql/parallel_query/exchange_sort.h"  // Exchange_sort
 #include "sql/parallel_query/query_result_mq.h"  // pq_run_query_result_mq_contract_smoke
 #include "sql/sql_base.h"         // close_thread_tables, open_ltable
 #include "sql/sql_class.h"        // THD
@@ -829,6 +830,22 @@ bool Gather_operator::run_exchange_partial_group_smoke(
       payload_errors, std::memory_order_relaxed);
 
   if (initialized_here) destroy();
+  return false;
+}
+
+bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd
+                                              [[maybe_unused]]) {
+  Exchange_sort sort_exchange(3, PQ_MQ_DEFAULT_RING_SIZE);
+
+  uint32 rows_read = 0;
+  if (sort_exchange.run_synthetic_order_merge_smoke(&rows_read)) {
+    return true;
+  }
+
+  pq_global_stats.exchange_sort_smoke_runs.fetch_add(
+      1, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_smoke_rows.fetch_add(
+      rows_read, std::memory_order_relaxed);
   return false;
 }
 

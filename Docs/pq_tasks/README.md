@@ -5,7 +5,7 @@
 ## Current Summary
 
 - Last synced: 2026-06-19
-- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1 Commercial Core Skeleton Port、M2 Commercial Iterator Access Path Skeleton、M3 Commercial Plan Clone Activation Probe、M4a Worker Result MQ Contract、M5 InnoDB Commercial PQ Path Alignment、M6 Commercial Full Scan Execution Gate、M7 Aggregation Strategy Reconciliation 已完成；下一步进入 M8 ORDER BY Gather Merge 或 M4b worker result path。
+- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1 Commercial Core Skeleton Port、M2 Commercial Iterator Access Path Skeleton、M3 Commercial Plan Clone Activation Probe、M4a Worker Result MQ Contract、M5 InnoDB Commercial PQ Path Alignment、M6 Commercial Full Scan Execution Gate、M7 Aggregation Strategy Reconciliation、M8 ORDER BY Gather Merge synthetic skeleton 已完成；下一步建议回补 M4b worker result path 或进入 M9 前置设计确认。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
@@ -142,7 +142,12 @@
   - M7: `TMPDIR=/tmp ./mtr --suite=parallel_query pq_stats --parallel=1 --vardir=/tmp/pqv_m7_stats --tmpdir=/tmp/pqt_m7_stats` 通过
   - M7: `TMPDIR=/tmp ./mtr --suite=parallel_query pq_groupby_diagnostics pq_groupby_dop1_sum_min_max pq_groupby_dop2_partial_count_min_max pq_groupby_dop4_partial_count_sum_min_max pq_groupby_dop_partial_count_star pq_groupby_dop_partial_count_nullable pq_groupby_dop2_partial_worker_error pq_groupby_dop2_partial_external_kill --parallel=1 --vardir=/tmp/pqv_m7b --tmpdir=/tmp/pqt_m7b` 通过，9 项成功
   - M7: `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_m7_full2 --tmpdir=/tmp/pqt_m7_full2` 通过，完整当前 suite 72 项成功
-- Next recommended action: 执行 M8 ORDER BY Gather Merge 或回补 M4b 真实 `Query_result_mq` worker path；M7-D 商用 GROUP BY 子集迁移延后到 worker plan/result path 稳定后。
+  - M8: `cmake --build build-ninja --target mysqld -j 16` 通过
+  - M8: `TMPDIR=/tmp ./mtr --suite=parallel_query pq_commercial_order_by --parallel=1 --vardir=/tmp/pqv_m8_order2 --tmpdir=/tmp/pqt_m8_order2` 通过
+  - M8: `TMPDIR=/tmp ./mtr --suite=parallel_query pq_stats --parallel=1 --vardir=/tmp/pqv_m8_stats --tmpdir=/tmp/pqt_m8_stats` 通过
+  - M8: `TMPDIR=/tmp ./mtr --suite=parallel_query pq_commercial_order_by pq_explain_fallback pq_read_threaded_dop2_multirange pq_groupby_dop2_partial_count_min_max --parallel=1 --vardir=/tmp/pqv_m8b --tmpdir=/tmp/pqt_m8b` 通过，5 项成功
+  - M8: `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_m8_full2 --tmpdir=/tmp/pqt_m8_full2` 通过，完整当前 suite 73 项成功
+- Next recommended action: 回补 M4b 真实 `Query_result_mq` worker path，或先做 M9 Secondary Index / Ref / ICP 的前置设计确认；M7-D 和 M8-C/D/E 均延后到 worker result path 稳定后。
 - Commercial port taskbooks:
   - [commercial-port-m3-plan-clone-resolver.md](commercial-port-m3-plan-clone-resolver.md)
   - [commercial-port-m4-worker-result-path.md](commercial-port-m4-worker-result-path.md)

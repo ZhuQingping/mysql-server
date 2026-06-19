@@ -1,0 +1,84 @@
+# Test: pq_commercial_order_by
+# M8: commercial ORDER BY gather-merge skeleton remains synthetic-only.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  k INT NOT NULL,
+  pad CHAR(8) NOT NULL
+) ENGINE=InnoDB;
+
+INSERT INTO t1 VALUES
+  (1,30,'c'),(2,10,'a'),(3,20,'b'),(4,20,'d'),
+  (5,40,'e'),(6,10,'f');
+
+SELECT variable_name FROM performance_schema.global_status
+  WHERE variable_name IN (
+    'Parallel_exchange_sort_smoke_runs',
+    'Parallel_exchange_sort_smoke_rows')
+  ORDER BY variable_name;
+
+SET @pq_sort_smoke_runs_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_exchange_sort_smoke_runs');
+SET @pq_sort_smoke_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_exchange_sort_smoke_rows');
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+SET SESSION parallel_query_experimental_threaded_dop=ON;
+
+--sorted_result
+SELECT * FROM t1;
+
+SELECT
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_exchange_sort_smoke_runs') -
+      @pq_sort_smoke_runs_before) >= 1 AS orderby_smoke_runs_nonzero,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_exchange_sort_smoke_rows') -
+      @pq_sort_smoke_rows_before) >= 12 AS orderby_smoke_rows_nonzero;
+
+SET @pq_executed_before_order = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before_order = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+
+# ORDER BY is still optimizer-rejected in M8. It must stay serial and must not
+# create a PQ iterator until the real Exchange_sort worker path is wired.
+EXPLAIN SELECT id, k FROM t1 ORDER BY k ASC, id ASC LIMIT 4;
+
+SELECT id, k FROM t1 ORDER BY k ASC, id ASC LIMIT 4;
+SELECT id, k FROM t1 ORDER BY k DESC, id ASC LIMIT 4;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_queries_executed') -
+      @pq_executed_before_order AS orderby_executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_queries_fallback') -
+      @pq_fallback_before_order AS orderby_fallback_delta;
+
+SET SESSION parallel_query_experimental_threaded_dop=OFF;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE t1;

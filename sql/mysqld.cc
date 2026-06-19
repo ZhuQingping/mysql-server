@@ -9886,12 +9886,28 @@ static int show_pq_exchange_partial_group_smoke_rows(THD *, SHOW_VAR *var,
 }
 
 static int show_pq_exchange_partial_group_smoke_finishes(THD *, SHOW_VAR *var,
-                                                        char *buf) {
+                                                         char *buf) {
   var->type = SHOW_LONGLONG;
   var->value = buf;
   *((longlong *)buf) =
       (longlong)(pq_global_stats.exchange_partial_group_smoke_finishes.load(
           std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_smoke_runs(THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_smoke_runs.load(std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_smoke_rows(THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_smoke_rows.load(std::memory_order_relaxed));
   return 0;
 }
 
@@ -10475,6 +10491,10 @@ SHOW_VAR status_vars[] = {
     {"Parallel_exchange_partial_group_smoke_rows",
      (char *)&show_pq_exchange_partial_group_smoke_rows, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_smoke_runs",
+     (char *)&show_pq_exchange_sort_smoke_runs, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_smoke_rows",
+     (char *)&show_pq_exchange_sort_smoke_rows, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_groupby_dop1_factory_attempts",
      (char *)&show_pq_groupby_dop1_factory_attempts, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
