@@ -1,0 +1,610 @@
+/****************************************************************************
+
+Copyright (c) 2026, Oracle and/or its affiliates.
+
+This program is free software; you can redistribute it and/or modify it under
+the terms of the GNU General Public License, version 2.0, as published by the
+Free Software Foundation.
+
+This program is designed to work with certain software (including
+but not limited to OpenSSL) that is licensed under separate terms,
+as designated in a particular file or component or in included license
+documentation.  The authors of MySQL hereby grant you an additional
+permission to link the program and your derivative works with the
+separately licensed software that they have either included with
+the program or referenced in the documentation.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU General Public License, version 2.0,
+for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program; if not, write to the Free Software Foundation, Inc.,
+51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA
+
+*****************************************************************************/
+
+/** @file handler/ha_innodb_pq.cc
+InnoDB Parallel Query handler adapter.
+*/
+
+#include <algorithm>
+#include <atomic>
+#include <memory>
+
+#include "ha_innodb.h"
+#include "mysql/plugin.h"
+#include "row0pread_pq.h"
+#include "sql/parallel_query/pq_handler.h"
+#include "sql/parallel_query/sql_parallel.h"
+#include "sql/query_options.h"
+
+#include "dict0dict.h"
+#include "row0mysql.h"
+#include "srv0srv.h"
+#include "trx0sys.h"
+#include "trx0trx.h"
+#include "ut0new.h"
+
+static int pq_map_dberr_to_handler_error(dberr_t err, bool *eof) {
+  if (eof != nullptr) {
+    *eof = false;
+  }
+
+  if (static_cast<int>(err) == PQ_DB_END_OF_RANGE_INT) {
+    if (eof != nullptr) {
+      *eof = true;
+    }
+    return 0;
+  }
+
+  switch (err) {
+    case DB_SUCCESS:
+      return 0;
+    case DB_END_OF_INDEX:
+    case DB_NOT_FOUND:
+      if (eof != nullptr) {
+        *eof = true;
+      }
+      return 0;
+    case DB_OUT_OF_MEMORY:
+      return HA_ERR_OUT_OF_MEM;
+    case DB_INTERRUPTED:
+      return HA_ERR_QUERY_INTERRUPTED;
+    case DB_UNSUPPORTED:
+      return HA_ERR_UNSUPPORTED;
+    case DB_DEADLOCK:
+      return HA_ERR_LOCK_DEADLOCK;
+    case DB_LOCK_WAIT_TIMEOUT:
+      return HA_ERR_LOCK_WAIT_TIMEOUT;
+    default:
+      return convert_error_code_to_mysql(err, 0, nullptr);
+  }
+}
+
+class InnoDB_pq_sql_leader_context final : public PQ_Leader_context {
+ public:
+  explicit InnoDB_pq_sql_leader_context(InnoDB_pq_leader_ctx *innodb_ctx)
+      : PQ_Leader_context(innodb_ctx != nullptr ? innodb_ctx->max_threads() : 0,
+                          innodb_ctx != nullptr && innodb_ctx->is_reverse()),
+        m_innodb_ctx(innodb_ctx) {}
+
+  PQ_Leader_context_kind kind() const override {
+    return PQ_Leader_context_kind::INNODB;
+  }
+
+  std::shared_ptr<PQ_Scan_ctx> make_scan_ctx(
+      void *handler_specific [[maybe_unused]],
+      const PQ_Config &config [[maybe_unused]]) override {
+    return nullptr;
+  }
+
+  InnoDB_pq_leader_ctx *innodb_ctx() const { return m_innodb_ctx; }
+
+ private:
+  InnoDB_pq_leader_ctx *m_innodb_ctx{nullptr};
+};
+
+class InnoDB_pq_sql_worker_context final : public PQ_Worker_context {
+ public:
+  InnoDB_pq_sql_worker_context(InnoDB_pq_sql_leader_context &leader,
+                               InnoDB_pq_worker_ctx *innodb_ctx,
+                               PQ_Worker_open_context *open_ctx)
+      : PQ_Worker_context(leader.is_reverse(), leader),
+        m_innodb_ctx(innodb_ctx),
+        m_open_ctx(open_ctx) {}
+
+  ~InnoDB_pq_sql_worker_context() override {
+    if (m_innodb_ctx != nullptr) {
+      ut::delete_(m_innodb_ctx);
+      m_innodb_ctx = nullptr;
+    }
+  }
+
+  PQ_Worker_context_kind kind() const override {
+    return PQ_Worker_context_kind::INNODB;
+  }
+
+  InnoDB_pq_worker_ctx *innodb_ctx() const { return m_innodb_ctx; }
+  PQ_Worker_open_context *open_ctx() const { return m_open_ctx; }
+
+ private:
+  InnoDB_pq_worker_ctx *m_innodb_ctx{nullptr};
+  PQ_Worker_open_context *m_open_ctx{nullptr};
+};
+
+/**
+  Initialize InnoDB PQ leader scan for clustered full scan.
+
+  Phase 6B-2: Real implementation.
+
+  Steps:
+  1. Validate that we're on a clustered index full scan.
+  2. Create InnoDB_pq_leader_ctx and partition metadata.
+  3. Return the leader context via the PQ_Leader_context** parameter.
+
+  V2-3/V2-8E/M5: PROBE is still used as a bridge probe before fallback. It may
+  bind a temporary read view for local smoke checks, but only as reversible
+  handler state owned by the returned leader context. EXECUTE is the
+  no-fallback commit point and binds the leader statement read view before
+  workers may read through a Parallel_reader visibility adapter.
+
+  Conservative behavior: any unsupported scenario returns
+  HA_ERR_UNSUPPORTED, causing fallback to serial execution.
+  This does NOT change existing serial query behavior.
+
+  @param[in]  leader_thd      Leader thread THD
+  @param[out] leader_ctx      Output leader context
+  @param[in]  mode            PROBE is fallback-safe; EXECUTE is commit point
+  @param[in]  requested_dop   Requested DOP
+  @param[in]  reverse         Reverse scan (unsupported in V1-MVP)
+  @return 0 on success, handler error code on failure
+*/
+int ha_innobase::pq_leader_scan_init(THD *leader_thd,
+                                     PQ_Leader_context **leader_ctx,
+                                     PQ_leader_scan_mode mode,
+                                     uint requested_dop, uint *actual_dop,
+                                     bool reverse) {
+  if (leader_ctx != nullptr) {
+    *leader_ctx = nullptr;
+  }
+  if (actual_dop != nullptr) {
+    *actual_dop = 0;
+  }
+  (void)leader_thd;
+
+  auto record_probe_gate_unsupported = [mode]() {
+    if (mode == PQ_leader_scan_mode::PROBE) {
+      pq_global_stats.probe_gate_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+    }
+  };
+  auto record_probe_thread_budget_unsupported = [mode]() {
+    if (mode == PQ_leader_scan_mode::PROBE) {
+      pq_global_stats.probe_thread_budget_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+    }
+  };
+  auto record_probe_init_unsupported = [mode]() {
+    if (mode == PQ_leader_scan_mode::PROBE) {
+      pq_global_stats.probe_init_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+    }
+  };
+
+  if (m_pq_leader_ctx != nullptr || m_pq_sql_leader_ctx != nullptr ||
+      !m_pq_worker_ctxs.empty()) {
+    pq_leader_scan_end(nullptr);
+  }
+
+  /* V1-MVP: reverse scan is not supported. */
+  if (reverse) {
+    record_probe_gate_unsupported();
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  if (mode != PQ_leader_scan_mode::PROBE &&
+      mode != PQ_leader_scan_mode::EXECUTE) {
+    record_probe_gate_unsupported();
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  /* DOP must be at least 1. */
+  if (requested_dop == 0) {
+    record_probe_gate_unsupported();
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  /* Validate prebuilt and choose the clustered scan index. The SQL PQ
+  iterator probes before TableScanIterator::Init() calls rnd_init(), so
+  m_prebuilt->index may still be unset on the first eligible execution. */
+  if (m_prebuilt == nullptr || m_prebuilt->table == nullptr ||
+      m_prebuilt->trx == nullptr) {
+    record_probe_gate_unsupported();
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  auto index = m_prebuilt->index != nullptr ? m_prebuilt->index
+                                            : m_prebuilt->table->first_index();
+  if (index == nullptr) {
+    record_probe_gate_unsupported();
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  /* Only support clustered index full scan in V1-MVP. */
+  if (!index->is_clustered()) {
+    record_probe_gate_unsupported();
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  /* Validate that the index is usable. */
+  if (!index->is_usable(m_prebuilt->trx)) {
+    record_probe_gate_unsupported();
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  auto trx = m_prebuilt->trx;
+  bool close_read_view_on_end = false;
+
+  if (m_prebuilt->select_lock_type != LOCK_NONE) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  /* Check thread budget: are enough parallel read threads available? */
+  auto available = Parallel_reader::available_threads(requested_dop, false);
+  if (available < requested_dop) {
+    if (available > 0) {
+      Parallel_reader::release_threads(available);
+    }
+    record_probe_thread_budget_unsupported();
+    /* Not enough threads available; fallback to serial. */
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  /* Create InnoDB PQ leader context. */
+  auto innodb_leader_ctx = ut::new_withkey<InnoDB_pq_leader_ctx>(
+      UT_NEW_THIS_FILE_PSI_KEY, requested_dop, reverse);
+
+  if (innodb_leader_ctx == nullptr) {
+    Parallel_reader::release_threads(available);
+    return pq_map_dberr_to_handler_error(DB_OUT_OF_MEMORY, nullptr);
+  }
+
+  auto cleanup_execute_read_view = [&]() {
+    if (close_read_view_on_end && trx->read_view != nullptr &&
+        MVCC::is_view_active(trx->read_view)) {
+      mutex_enter(&trx_sys->mutex);
+      trx_sys->mvcc->view_close(trx->read_view, true);
+      mutex_exit(&trx_sys->mutex);
+    }
+    if (close_read_view_on_end && m_prebuilt != nullptr) {
+      m_prebuilt->sql_stat_start = true;
+    }
+  };
+
+  if (mode == PQ_leader_scan_mode::PROBE ||
+      mode == PQ_leader_scan_mode::EXECUTE) {
+    const bool had_active_read_view =
+        srv_read_only_mode ||
+        (trx->read_view != nullptr && MVCC::is_view_active(trx->read_view));
+    trx_start_if_not_started(trx, false, UT_LOCATION_HERE);
+    if (!srv_read_only_mode) {
+      trx_assign_read_view(trx);
+    }
+    close_read_view_on_end =
+        !had_active_read_view &&
+        !thd_test_options(leader_thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
+  }
+
+  /* Initialize: partition the B+tree. */
+  bool is_compact = dict_table_is_comp(index->table);
+  page_size_t page_size(dict_tf_to_fsp_flags(index->table->flags));
+
+  innodb_leader_ctx->set_close_read_view_on_end(close_read_view_on_end);
+  auto err = innodb_leader_ctx->init(index, trx, is_compact, page_size);
+
+  if (err != DB_SUCCESS) {
+    cleanup_execute_read_view();
+    ut::delete_(innodb_leader_ctx);
+    Parallel_reader::release_threads(available);
+    if (err == DB_UNSUPPORTED) {
+      record_probe_init_unsupported();
+    }
+    return pq_map_dberr_to_handler_error(err, nullptr);
+  }
+
+  /* If the table is empty (no ranges), still return success.
+  Workers will get eof=true immediately on their first next call. */
+  if (innodb_leader_ctx->n_ranges() == 0) {
+    /* Empty table: no parallelism needed, but the API is valid. */
+    /* Note: In V1-MVP we could also return unsupported here
+    to fallback serial, but returning the empty leader ctx
+    is more correct -- empty table scan is trivially parallel-safe. */
+  }
+
+  auto sql_leader_ctx = ut::new_withkey<InnoDB_pq_sql_leader_context>(
+      UT_NEW_THIS_FILE_PSI_KEY, innodb_leader_ctx);
+  if (sql_leader_ctx == nullptr) {
+    cleanup_execute_read_view();
+    ut::delete_(innodb_leader_ctx);
+    Parallel_reader::release_threads(available);
+    return pq_map_dberr_to_handler_error(DB_OUT_OF_MEMORY, nullptr);
+  }
+
+  if (mode == PQ_leader_scan_mode::EXECUTE) {
+    m_prebuilt->sql_stat_start = false;
+  }
+
+  /* Store the InnoDB PQ leader context in the handler for
+  internal use (worker init, scan next, cleanup). */
+  m_pq_leader_ctx = innodb_leader_ctx;
+  m_pq_sql_leader_ctx = sql_leader_ctx;
+  pq_global_stats.ranges_built.fetch_add(innodb_leader_ctx->n_ranges(),
+                                         std::memory_order_relaxed);
+  if (leader_ctx != nullptr) {
+    *leader_ctx = sql_leader_ctx;
+  }
+  if (actual_dop != nullptr) {
+    *actual_dop = static_cast<uint>(available);
+  }
+
+  return 0;
+}
+
+/**
+  Initialize InnoDB PQ worker scan for clustered full scan.
+
+  V2-3: worker row production remains disabled. The current pull-row adapter
+  would use the leader handler's row_prebuilt_t, which is mutable cursor state
+  and is not safe to share with worker THDs. Return unsupported until a worker
+  handler/prebuilt/trx/read-view contract exists.
+
+  @param[in]  open_ctx     Worker open context; used only for V2-8C gates
+  @param[out] worker_ctx   Output worker context
+  @return 0 on success, handler error code on failure
+*/
+int ha_innobase::pq_worker_scan_init(PQ_Worker_open_context *open_ctx,
+                                     PQ_Worker_context **worker_ctx) {
+  if (worker_ctx != nullptr) {
+    *worker_ctx = nullptr;
+  }
+
+  if (open_ctx == nullptr || open_ctx->leader_ctx == nullptr ||
+      open_ctx->worker_thd == nullptr || open_ctx->worker_table == nullptr ||
+      open_ctx->worker_handler == nullptr ||
+      open_ctx->worker_handler != this ||
+      open_ctx->worker_table == open_ctx->leader_table ||
+      open_ctx->actual_dop == 0) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  if (open_ctx->leader_ctx->kind() != PQ_Leader_context_kind::INNODB) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  auto sql_leader =
+      static_cast<InnoDB_pq_sql_leader_context *>(open_ctx->leader_ctx);
+  auto innodb_leader = sql_leader->innodb_ctx();
+  if (innodb_leader == nullptr) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  if (open_ctx->worker_table->s != nullptr &&
+      open_ctx->worker_table->s->blob_fields > 0) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  if (open_ctx->worker_table->record[0] == nullptr ||
+      (open_ctx->leader_table != nullptr &&
+       open_ctx->worker_table->record[0] == open_ctx->leader_table->record[0])) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  auto innodb_worker = ut::new_withkey<InnoDB_pq_worker_ctx>(
+      UT_NEW_THIS_FILE_PSI_KEY, open_ctx->worker_id, innodb_leader);
+  if (innodb_worker == nullptr) {
+    return pq_map_dberr_to_handler_error(DB_OUT_OF_MEMORY, nullptr);
+  }
+  auto assigned_range = innodb_leader->dispatch_next_range();
+  if (assigned_range != nullptr) {
+    innodb_worker->init(assigned_range);
+    pq_global_stats.ranges_dispatched.fetch_add(1, std::memory_order_relaxed);
+  } else {
+    pq_global_stats.empty_worker_ranges.fetch_add(1,
+                                                  std::memory_order_relaxed);
+  }
+
+  auto sql_worker = ut::new_withkey<InnoDB_pq_sql_worker_context>(
+      UT_NEW_THIS_FILE_PSI_KEY, *sql_leader, innodb_worker, open_ctx);
+  if (sql_worker == nullptr) {
+    ut::delete_(innodb_worker);
+    return pq_map_dberr_to_handler_error(DB_OUT_OF_MEMORY, nullptr);
+  }
+
+  m_pq_worker_ctxs.push_back(innodb_worker);
+  if (worker_ctx != nullptr) {
+    *worker_ctx = sql_worker;
+  }
+  return 0;
+}
+
+/**
+  Pull one row for a PQ worker via the InnoDB pull-row adapter.
+
+  V2-3: disabled until workers have independent mutable scan state.
+
+  @param[in]   worker_ctx  Worker context (PQ_Worker_context*; unused in V2-8C gate)
+  @param[out]  record       MySQL row buffer (table->record[0])
+  @param[out]  eof          True when range is exhausted
+  @return 0 on success, handler error code on failure
+*/
+int ha_innobase::pq_worker_scan_next(PQ_Worker_context *worker_ctx,
+                                     uchar *record, bool *eof) {
+  if (eof != nullptr) {
+    *eof = false;
+  }
+
+  (void)worker_ctx;
+  (void)record;
+  if (eof != nullptr) {
+    *eof = true;
+  }
+  return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, eof);
+}
+
+int ha_innobase::pq_worker_scan_callback_smoke(PQ_Worker_context *worker_ctx,
+                                               uchar *record,
+                                               bool *converted) {
+  if (converted != nullptr) {
+    *converted = false;
+  }
+
+  if (worker_ctx == nullptr || record == nullptr || converted == nullptr ||
+      m_prebuilt == nullptr ||
+      worker_ctx->kind() != PQ_Worker_context_kind::INNODB) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  auto sql_worker =
+      static_cast<InnoDB_pq_sql_worker_context *>(worker_ctx);
+  auto innodb_worker = sql_worker->innodb_ctx();
+  if (innodb_worker == nullptr || innodb_worker->leader_ctx() == nullptr ||
+      innodb_worker->leader_ctx()->scan_ctx() == nullptr) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  auto err = innodb_worker->leader_ctx()->scan_ctx()->smoke_callback_conversion(
+      record, m_prebuilt, converted);
+  if (err == DB_SUCCESS) {
+    return 0;
+  }
+  return pq_map_dberr_to_handler_error(err, nullptr);
+}
+
+int ha_innobase::pq_worker_scan_callback_produce(
+    PQ_Worker_context *worker_ctx, PQ_row_sink *row_sink) {
+  if (worker_ctx == nullptr || row_sink == nullptr || m_prebuilt == nullptr ||
+      worker_ctx->kind() != PQ_Worker_context_kind::INNODB) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  auto sql_worker =
+      static_cast<InnoDB_pq_sql_worker_context *>(worker_ctx);
+  auto innodb_worker = sql_worker->innodb_ctx();
+  if (innodb_worker == nullptr || innodb_worker->leader_ctx() == nullptr ||
+      innodb_worker->leader_ctx()->scan_ctx() == nullptr ||
+      m_prebuilt->m_mysql_table == nullptr ||
+      m_prebuilt->m_mysql_table->record[0] == nullptr) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  auto *leader_ctx = innodb_worker->leader_ctx();
+  auto *scan_ctx = leader_ctx->scan_ctx();
+  auto *range = innodb_worker->assigned_range();
+
+  while (range != nullptr) {
+    auto err = scan_ctx->produce_callback_rows_for_range(
+        m_prebuilt->m_mysql_table->record[0], m_prebuilt, row_sink, range);
+    if (err != DB_SUCCESS) {
+      return pq_map_dberr_to_handler_error(err, nullptr);
+    }
+    if (row_sink->should_abort()) {
+      break;
+    }
+
+    range = leader_ctx->dispatch_next_range();
+    if (range != nullptr) {
+      innodb_worker->init(range);
+      pq_global_stats.ranges_dispatched.fetch_add(1,
+                                                  std::memory_order_relaxed);
+    }
+  }
+
+  return 0;
+}
+
+/**
+  End a PQ worker scan. Cleans up worker cursor state and resources.
+
+  Phase 6B-2: Real implementation with idempotent cleanup.
+
+  @param[in]  worker_ctx  Typed worker context wrapper. Unknown context kinds
+              are ignored for idempotent cleanup.
+  @return 0 always (cleanup errors are logged, not returned).
+*/
+int ha_innobase::pq_worker_scan_end(PQ_Worker_context *worker_ctx) {
+  if (worker_ctx == nullptr) {
+    return 0;
+  }
+
+  if (worker_ctx->kind() != PQ_Worker_context_kind::INNODB) {
+    return 0;
+  }
+
+  auto sql_worker =
+      static_cast<InnoDB_pq_sql_worker_context *>(worker_ctx);
+  auto innodb_worker = sql_worker->innodb_ctx();
+
+  auto it = std::find(m_pq_worker_ctxs.begin(), m_pq_worker_ctxs.end(),
+                      innodb_worker);
+  if (it != m_pq_worker_ctxs.end()) {
+    m_pq_worker_ctxs.erase(it);
+  }
+
+  ut::delete_(sql_worker);
+  return 0;
+}
+
+/**
+  End a PQ leader scan. Releases all resources: thread budget,
+  scan context, ranges, and worker contexts.
+
+  Phase 6B-2: Real implementation with idempotent cleanup.
+
+  @param[in]  leader_ctx  Leader context (unused in 6B-2; cleanup is
+              done from internal m_pq_leader_ctx).
+  @return 0 always (cleanup errors are logged, not returned).
+*/
+int ha_innobase::pq_leader_scan_end(PQ_Leader_context *leader_ctx) {
+  /* Clean up all worker contexts first (reverse order). */
+  for (auto it = m_pq_worker_ctxs.rbegin(); it != m_pq_worker_ctxs.rend();
+       ++it) {
+    if (*it != nullptr) {
+      ut::delete_(*it);
+    }
+  }
+  m_pq_worker_ctxs.clear();
+
+  /* Clean up the leader context. */
+  if (m_pq_leader_ctx != nullptr) {
+    /* Release thread budget back to the parallel reader pool. */
+    auto dop = m_pq_leader_ctx->max_threads();
+    if (dop > 0) {
+      Parallel_reader::release_threads(dop);
+    }
+
+    if (m_pq_leader_ctx->close_read_view_on_end()) {
+      trx_t *trx = m_pq_leader_ctx->trx();
+      if (trx != nullptr && trx->read_view != nullptr &&
+          MVCC::is_view_active(trx->read_view)) {
+        mutex_enter(&trx_sys->mutex);
+        trx_sys->mvcc->view_close(trx->read_view, true);
+        mutex_exit(&trx_sys->mutex);
+      }
+      if (m_prebuilt != nullptr) {
+        m_prebuilt->sql_stat_start = true;
+      }
+    }
+
+    ut::delete_(m_pq_leader_ctx);
+    m_pq_leader_ctx = nullptr;
+  }
+
+  if (m_pq_sql_leader_ctx != nullptr) {
+    ut::delete_(m_pq_sql_leader_ctx);
+    m_pq_sql_leader_ctx = nullptr;
+  }
+
+  return 0;
+}

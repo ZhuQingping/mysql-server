@@ -2,7 +2,7 @@
 
 ## 状态
 
-Planned。
+Completed。
 
 ## 目标
 
@@ -47,4 +47,41 @@ TMPDIR=/tmp ./mtr --suite=parallel_query pq_read_threaded_dop2_read_view pq_read
 
 ## Completion Report
 
-Pending.
+### 2026-06-19 Codex Orchestrator
+
+本阶段完成 M5b 文件形态对齐，并顺带收敛 leader init 的 read-view 失败清理风险。
+
+Changed files:
+
+- `storage/innobase/handler/ha_innodb_pq.cc`
+- `storage/innobase/handler/ha_innodb.cc`
+- `storage/innobase/CMakeLists.txt`
+
+实现说明:
+
+- 新增 `handler/ha_innodb_pq.cc`，把当前 InnoDB PQ handler 方法从 `ha_innodb.cc` 拆出到独立编译单元，贴近商用实现的文件形态；
+- 保留当前 MySQL 8.0.46 安全桥接签名，不切换到商用旧 `uint keyno, void *scan_ctx` 签名；
+- 未打开 secondary index、ICP、partition、ref path；
+- `PROBE` 仍可为 smoke 创建临时 leader context/read view，但该状态由 `pq_leader_scan_end()` 统一回收；`EXECUTE` 才设置 `m_prebuilt->sql_stat_start=false`；
+- 调整 `pq_leader_scan_init()` 失败出口，确保 read view、thread budget、leader ctx 在 init/sql leader 分配失败时释放。
+
+验证:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_read_threaded_dop2_read_view pq_read_threaded_dop2_external_kill pq_read_threaded_dop4_external_kill pq_read_threaded_mdl_concurrency pq_locking_read_fallback --parallel=1 --vardir=/tmp/pqv_m5 --tmpdir=/tmp/pqt_m5
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=4 --vardir=/tmp/pqv_m5_full --tmpdir=/tmp/pqt_m5_full
+```
+
+结果:
+
+- `mysqld` build 通过；
+- M5 指定测试 6 项成功；
+- 完整 `parallel_query` suite 71 项成功。
+
+Review:
+
+- Review Agent 首轮指出 PROBE/read-view cleanup 和新文件未跟踪风险；
+- 已补齐失败出口 cleanup，并在提交时显式纳入 `ha_innodb_pq.cc`；
+- 复核后无 blocking lifecycle/resource leak 问题，剩余风险为 PROBE 临时 read view 依赖调用方正确调用 `pq_leader_scan_end()`，当前 SQL iterator 已覆盖该清理路径。

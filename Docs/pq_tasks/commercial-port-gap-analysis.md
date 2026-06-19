@@ -483,6 +483,11 @@ worker result path positive case passes; KILL cleanup still passes.
 
 ### Task M5: InnoDB Commercial PQ Path Alignment
 
+Status: Completed on 2026-06-19. Current InnoDB PQ handler methods were split
+from `ha_innodb.cc` into `handler/ha_innodb_pq.cc`; the MySQL 8.0.46
+`PQ_Leader_context` / `PQ_Worker_context` bridge remains in place. M5 did not
+open secondary index, ICP, partition, or ref paths.
+
 **Goal:** 迁移商用 `ha_innodb_pq.cc` 形态，把当前散落在 `ha_innodb.cc` 的 PQ 逻辑收敛为独立实现文件。
 
 **Files:**

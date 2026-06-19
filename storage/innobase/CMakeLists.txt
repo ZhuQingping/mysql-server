@@ -146,6 +146,7 @@ SET(INNOBASE_SOURCES
   gis/gis0sea.cc
   fts/fts0plugin.cc
   handler/ha_innodb.cc
+  handler/ha_innodb_pq.cc
   handler/ha_innopart.cc
   handler/handler0alter.cc
   handler/i_s.cc
