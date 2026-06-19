@@ -66,6 +66,10 @@ bool pq_validate_worker_result_frame(
 bool pq_run_query_result_mq_contract_smoke(uint32 *rows_read,
                                            uint32 *finishes_read);
 
+bool pq_run_query_result_mq_send_data_smoke(THD *thd, uint32 *rows_read,
+                                            uint32 *finishes_read,
+                                            uint32 *errors_read);
+
 /*
   This is used to get result from a query executed by PQ worker
 */

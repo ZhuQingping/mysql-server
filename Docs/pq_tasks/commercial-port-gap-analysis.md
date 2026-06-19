@@ -12,7 +12,7 @@
 
 ## 状态
 
-M0/M1/M2/M3/M4a 已完成，M4b-M10 任务书已启动。
+M0/M1/M2/M3/M4a/M4b 已完成，M5-M8 已完成，M9-M10 任务书已启动。
 
 本文档是商用实现平移的总差异清单和迁移计划。M3-M10 后续执行采用 Codex 主控 + 子 Agent 只读/实现后 review 的方式推进：每个阶段先按任务书实施，实施完成后启动独立 review 子 Agent 检视阶段 diff、测试证据和风险项，主控确认意见闭环后再提交。
 
@@ -725,7 +725,7 @@ Expected:
 1. M1 Commercial Core Skeleton Port；
 2. M2 Commercial Iterator Access Path Skeleton；
 3. M3 Commercial Plan Clone And Resolver Activation；已完成 clone activation probe 与 diagnostics；
-4. M4 Query_result_mq And Worker Result Path；M4a worker-result MQ contract smoke 已完成，M4b 真实 worker result path 待 M5/M6 后继续；
+4. M4 Query_result_mq And Worker Result Path；M4a worker-result MQ contract smoke 与 M4b controlled `Query_result_mq` send path 已完成，真实 worker execution 接入后续继续；
 5. M5 InnoDB Commercial PQ Path Alignment；
 6. M6 Commercial Full Scan Execution Gate。
 
@@ -823,3 +823,14 @@ M4a worker-result protocol contract completed:
 - 修复 review 发现的 worker-result frame 发送/解码 32-bit length overflow 风险；
 - `mysqld` build、M4 targeted suite、完整当前 `parallel_query` suite 71 项通过；
 - `exchange.cc` 旧 typed MQ helper 的 length overflow 收敛作为后续独立风险项。
+
+M4b controlled `Query_result_mq` send path completed:
+
+- `Query_result_mq::send_data()` 已能发送 controlled ROW frame，payload 为内部 length-prefixed string 序列；
+- `Query_result_mq::send_eof()` 已能发送 FINISH frame，ERROR frame 通过 synthetic payload 做受控验证；
+- ROW frame validator 强校验 `null_bitmap_len == ceil(field_count / 8)`；
+- 新增 `Parallel_worker_result_smoke_errors`，`pq_commercial_worker_result` 覆盖 ROW/FINISH/ERROR smoke counters；
+- smoke 保存并恢复 leader THD `sent_row_count`，避免 synthetic row 污染用户语句诊断；
+- 独立 Review Agent 确认 blocker 已解决，建议可提交；
+- `mysqld` build、M4b targeted suite、完整当前 `parallel_query` suite 73 项通过；
+- 真实 worker execution 尚未切到 `Query_result_mq`，真实 MySQL error payload / OOM 映射 / 协议长期收敛仍为后续风险项。

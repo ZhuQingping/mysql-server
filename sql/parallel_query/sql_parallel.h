@@ -204,6 +204,7 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_handler_smoke_runs{0};  ///< Handler init/end smoke runs
   std::atomic<uint64> worker_result_smoke_rows{0};  ///< Worker result frames
   std::atomic<uint64> worker_result_smoke_finishes{0};  ///< FINISH frames
+  std::atomic<uint64> worker_result_smoke_errors{0};  ///< ERROR frames
   std::atomic<uint64> exchange_smoke_rows{0};      ///< Synthetic MQ rows read
   std::atomic<uint64> exchange_smoke_finishes{0};  ///< Synthetic FINISH tokens
   std::atomic<uint64> exchange_row_image_smoke_rows{0};  ///< Row-image smoke rows
@@ -265,6 +266,7 @@ struct PQ_global_stats {
     worker_handler_smoke_runs.store(0, std::memory_order_relaxed);
     worker_result_smoke_rows.store(0, std::memory_order_relaxed);
     worker_result_smoke_finishes.store(0, std::memory_order_relaxed);
+    worker_result_smoke_errors.store(0, std::memory_order_relaxed);
     exchange_smoke_rows.store(0, std::memory_order_relaxed);
     exchange_smoke_finishes.store(0, std::memory_order_relaxed);
     exchange_row_image_smoke_rows.store(0, std::memory_order_relaxed);
@@ -841,6 +843,18 @@ class Gather_operator {
     @retval true   Smoke pass failed
   */
   bool run_query_result_mq_contract_smoke(THD *leader_thd);
+
+  /**
+    Run an M4b Query_result_mq send_data/send_eof smoke.
+
+    This validates the minimal worker result path through Query_result_mq
+    itself. It builds synthetic Items and local MQ frames only; it does not
+    attach Query_result_mq to real worker execution or InnoDB row production.
+
+    @retval false  Smoke pass completed
+    @retval true   Smoke pass failed
+  */
+  bool run_query_result_mq_send_data_smoke(THD *leader_thd);
 
   /**
     Run a limited V2-8J callback multi-row producer smoke pass.

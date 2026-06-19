@@ -1,4 +1,4 @@
-# Verify M4a commercial worker-result MQ contract smoke.
+# Verify M4a/M4b commercial worker-result MQ contract and send path smoke.
 
 --source include/have_innodb_16k.inc
 
@@ -18,6 +18,9 @@ SET @worker_result_rows_before = (
 SET @worker_result_finishes_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_finishes');
+SET @worker_result_errors_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_errors');
 SET @workers_launched_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_workers_launched');
@@ -32,6 +35,10 @@ SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_finishes') -
   @worker_result_finishes_before) >= 1 AS worker_result_finishes_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_errors') -
+  @worker_result_errors_before) >= 1 AS worker_result_errors_delta;
 SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_workers_launched') -

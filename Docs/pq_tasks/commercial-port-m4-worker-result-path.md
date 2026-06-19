@@ -2,7 +2,7 @@
 
 ## 状态
 
-M4a Completed。M4b Pending。
+M4a Completed。M4b Completed。
 
 ## 目标
 
@@ -101,6 +101,58 @@ Result:
 
 Remaining:
 
-- M4b 仍需实现真实 `Query_result_mq` worker path，但必须等 M5/M6 的 handler/InnoDB execution gate 稳定；
-- M4b 前应补 ERROR frame 正/负例；
-- M4b 前应决定是否将 worker-result frame 收敛到 `Exchange` typed header flags，避免长期维护两套 decoder。
+M4b completed by Codex Orchestrator.
+
+Changed files:
+
+- `sql/parallel_query/query_result_mq.h`
+- `sql/parallel_query/query_result_mq.cc`
+- `sql/parallel_query/sql_parallel.h`
+- `sql/parallel_query/sql_parallel.cc`
+- `sql/parallel_query/pq_iterator.cc`
+- `sql/mysqld.cc`
+- `mysql-test/suite/parallel_query/t/pq_commercial_worker_result.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_worker_result.result`
+- `mysql-test/suite/parallel_query/r/pq_stats.result`
+- `Docs/pq_tasks/commercial-port-m4-worker-result-path.md`
+- `Docs/pq_tasks/commercial-port-gap-analysis.md`
+- `Docs/pq_tasks/README.md`
+
+Implementation notes:
+
+- `Query_result_mq::send_data()` 从 fail-closed 改为 controlled worker-result ROW frame 发送；
+- ROW frame payload 当前为内部 length-prefixed string 序列，NULL bitmap 使用 `ceil(field_count / 8)` 并由 validator 强校验；
+- `Query_result_mq::send_eof()` 发送 FINISH frame；`thd->is_error()` 时发送 synthetic ERROR frame 并保持失败语义；
+- 新增 `pq_run_query_result_mq_send_data_smoke()`，通过本地 `MQueue` 和 synthetic `Item_int(7), Item_int(42)` 验证 `send_data()` + FINISH + ERROR；
+- 新增 `Parallel_worker_result_smoke_errors` status counter，并扩展 `pq_commercial_worker_result` / `pq_stats` 护栏；
+- smoke 调用前后保存并恢复 leader THD `sent_row_count`，避免 synthetic row 污染用户语句诊断；
+- M4b 不创建 cloned JOIN，不启动 worker，不读取 InnoDB row，不把 `Query_result_mq` 接入真实 worker execution。
+
+Review:
+
+- 第一轮 Review Agent 发现 `send_data()` smoke 使用 leader THD 会污染 `sent_row_count`，判定为 blocker；
+- 已通过 `get_sent_row_count()` / `set_sent_row_count()` 在 smoke 内恢复计数闭环；
+- 同步收紧 ROW `null_bitmap_len == ceil(field_count / 8)`；
+- 第二轮 Review Agent 确认 blocker 已解决，未发现新的提交前必须修改项，建议可提交。
+
+Validation:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+./mtr --suite=parallel_query pq_commercial_worker_result pq_stats
+./mtr --suite=parallel_query
+```
+
+Result:
+
+- `mysqld` build passed；
+- M4b targeted suite passed；
+- full current `parallel_query` suite passed，73 tests successful。
+
+Remaining:
+
+- 真实 worker execution 尚未改为 `Query_result_mq` result path；
+- ERROR frame payload 仍是 synthetic string，后续真实 worker path 需要携带 MySQL error code/message；
+- `std::vector` OOM 未映射为 MySQL error，真实 result transport 前需收敛；
+- 是否长期保留独立 `PQWR` frame，或与 `Exchange` typed header flags 收敛，仍需在后续集成阶段确认。
