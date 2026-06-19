@@ -4,8 +4,8 @@
 
 ## Current Summary
 
-- Last synced: 2026-06-11
-- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现，已创建商用实现差异清单、模块迁移计划和 M1 Commercial Core Skeleton Port 任务书，不继续 V2-12C-2 小 shape 扩展。
+- Last synced: 2026-06-19
+- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1 Commercial Core Skeleton Port 已完成为 compile-only skeleton，商用核心文件边界已落位但默认不可达；下一步进入 M2 Commercial Iterator Access Path Skeleton。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
@@ -117,7 +117,10 @@
   - [v2-9e-experimental-dop2-gate.md](v2-9e-experimental-dop2-gate.md): V2-9E 已新增默认 OFF 的 `parallel_query_experimental_threaded_dop`，无 debug 下初始只允许 DOP=2，并补齐基础聚合和 DOP1/DOP4 负向 gate 覆盖；完整 suite 36 项通过。
   - [v2-execution-path-roadmap.md](v2-execution-path-roadmap.md): V2 真实执行路径拆分，覆盖 SQL iterator、worker THD、Exchange/Gather row 流、InnoDB 分片扫描、full scan 闭环和基础聚合。
   - [v2-test-matrix.md](v2-test-matrix.md): V1/V2 阶段化 MTR 测试矩阵，明确 DOP=1 first 和 DOP>1 range-partition gate。
-- Next recommended action: 等待明确源码编辑授权后执行 M1 Commercial Core Skeleton Port；任务书见 [commercial-port-m1-core-skeleton.md](commercial-port-m1-core-skeleton.md)，默认不接执行路径。
+- Commercial port validation:
+  - M1: `cmake --build build-ninja --target mysqld -j 16` 通过
+  - M1: `TMPDIR=/tmp ./mtr --suite=parallel_query pq_vars --parallel=1 --vardir=/tmp/pqv_m1_vars --tmpdir=/tmp/pqt_m1_vars` 通过
+- Next recommended action: 执行 M2 Commercial Iterator Access Path Skeleton；默认不可达，不接 handler/InnoDB 真实扫描，不替换当前 `PQTableScanIterator`。
 - Next risk closure board: [v2-next-risk-closure.md](v2-next-risk-closure.md)
 - Commercial port board: [commercial-port-gap-analysis.md](commercial-port-gap-analysis.md)
 - Parallel-ready task overview: [parallel_wave2_tasks.md](parallel_wave2_tasks.md)

@@ -264,6 +264,8 @@ Expected:
 
 **Goal:** 先迁移商用 SQL 层核心文件骨架，让代码可编译但不接执行路径。
 
+**Status:** Completed as compile-only skeleton. 商用文件边界已进入当前分支构建，深层实现按 fail-closed stub 保留，核心 SQL 类扩展和执行路径接入后置。
+
 Detailed taskbook:
 
 - [commercial-port-m1-core-skeleton.md](commercial-port-m1-core-skeleton.md)
@@ -303,6 +305,21 @@ Expected:
 ```text
 mysqld build passes.
 ```
+
+M1 actual validation:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query pq_vars --parallel=1 --vardir=/tmp/pqv_m1_vars --tmpdir=/tmp/pqt_m1_vars
+```
+
+Result:
+
+```text
+both passed
+```
+
+`pq_variables` exists in the commercial reference suite, but the current branch test is named `pq_vars`; commercial test name alignment is deferred to M10.
 
 ### Task M2: Commercial Iterator Access Path Skeleton
 
@@ -639,26 +656,19 @@ M6 通过后再分支推进：
 
 ## 下一步任务书
 
-下一步应执行 M1，不继续 V2-12C-2。
+下一步应执行 M2，不继续 V2-12C-2。
 
-M1 的具体任务：
+M2 的具体任务：
 
 ```text
 角色：Code Agent
 主控：Codex
-任务：Commercial Core Skeleton Port
+任务：Commercial Iterator Access Path Skeleton
 
 目标：
-1. 从 taurusdbondstore 迁移 SQL 层商用核心骨架文件：
-   - pq_clone.*
-   - pq_clone_item.cc
-   - pq_resolver.*
-   - pq_refix_fields_item.cc
-   - pq_replace_base_item.cc
-   - query_result_mq.*
-   - pq_resource_stat.*
-2. 只做 build glue 和 8.0.46 编译适配。
-3. 不接执行路径，不替换当前 PQTableScanIterator。
+1. 从 taurusdbondstore 调研并迁移商用 ParallelScanIterator / PQblockScanIterator / PQRefIterator 的最小类型骨架。
+2. 只做 access path 类型、factory shell、EXPLAIN shell 和 build glue。
+3. 默认不可达，不接 handler/InnoDB 真实扫描，不替换当前 PQTableScanIterator。
 
 验证：
 cmake --build build-ninja --target mysqld -j 16
@@ -668,7 +678,7 @@ cmake --build build-ninja --target mysqld -j 16
 2. 说明新增/修改文件；
 3. 说明与商用源码的偏差；
 4. 说明未接入主路径的保护措施；
-5. 提交只包含 M1 相关文件。
+5. 提交只包含 M2 相关文件。
 ```
 
 ## Acceptance Checklist
@@ -682,4 +692,12 @@ cmake --build build-ninja --target mysqld -j 16
 
 ## Completion Report
 
-M0 design-only task completed. No source code was changed. M1 taskbook has been created. M1 source migration has not started.
+M0 design-only task completed. No source code was changed. M1 taskbook was created.
+
+M1 source migration completed as a compile-only commercial skeleton:
+
+- 商用核心文件边界和 build glue 已落位；
+- `mysqld` build 通过；
+- 当前分支 `parallel_query.pq_vars` smoke 通过；
+- `pq_clone` / `pq_resolver` / `Query_result_mq` 的商用主体因依赖 `Item`、`THD`、`Query_block`、`JOIN`、`TABLE`、成熟 MQ wire protocol 和 worker temp-table contract，已后置到 M3/M4；
+- 当前提交不改变 optimizer、access path、handler、InnoDB 或默认执行路径。

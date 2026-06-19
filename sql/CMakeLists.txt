@@ -463,10 +463,17 @@ SET(SQL_SHARED_SOURCES
   parallel_query/exchange.cc
   parallel_query/msg_queue.cc
   parallel_query/pq_aggregate.cc
+  parallel_query/pq_clone.cc
+  parallel_query/pq_clone_item.cc
   parallel_query/pq_group_aggregate_iterator.cc
   parallel_query/pq_handler.cc
   parallel_query/pq_iterator.cc
   parallel_query/pq_optimizer.cc
+  parallel_query/pq_refix_fields_item.cc
+  parallel_query/pq_replace_base_item.cc
+  parallel_query/pq_resolver.cc
+  parallel_query/pq_resource_stat.cc
+  parallel_query/query_result_mq.cc
   parallel_query/sql_parallel.cc
   pack_rows.cc
   parse_file.cc

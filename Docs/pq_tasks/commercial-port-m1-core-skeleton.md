@@ -2,9 +2,9 @@
 
 ## 状态
 
-Taskbook Created。
+Completed。
 
-本任务书用于后续源码迁移派发。本轮只创建任务书，不修改源码。
+本任务书已执行。M1 只完成商用核心模块边界和可编译骨架落位，不接入执行路径，不改变默认行为。
 
 ## 场景
 
@@ -423,7 +423,7 @@ Reference files:
 
 Required commands:
   - cmake --build build-ninja --target mysqld -j 16
-  - cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query pq_variables --parallel=1 --vardir=/tmp/pqv_m1_vars --tmpdir=/tmp/pqt_m1_vars
+  - cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query pq_vars --parallel=1 --vardir=/tmp/pqv_m1_vars --tmpdir=/tmp/pqt_m1_vars
 
 Patch output:
   - Not needed when Codex implements directly in main worktree.
@@ -455,4 +455,95 @@ Commit policy:
 
 ## Completion Report
 
-Taskbook created. Source migration has not started.
+M1 source migration completed as a compile-only commercial skeleton.
+
+### Changed files
+
+- Added commercial module headers:
+  - `sql/parallel_query/pq_clone.h`
+  - `sql/parallel_query/pq_resolver.h`
+  - `sql/parallel_query/query_result_mq.h`
+  - `sql/parallel_query/pq_resource_stat.h`
+- Added compile-only implementation boundaries:
+  - `sql/parallel_query/pq_clone.cc`
+  - `sql/parallel_query/pq_clone_item.cc`
+  - `sql/parallel_query/pq_resolver.cc`
+  - `sql/parallel_query/pq_refix_fields_item.cc`
+  - `sql/parallel_query/pq_replace_base_item.cc`
+  - `sql/parallel_query/query_result_mq.cc`
+  - `sql/parallel_query/pq_resource_stat.cc`
+- Updated build glue:
+  - `sql/CMakeLists.txt`
+
+### Commercial source deviations
+
+The files were first copied from `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore`, then narrowed to M1-safe stubs where the commercial body requires broad core SQL class API expansion.
+
+Deferred commercial bodies:
+
+- `pq_clone.cc`
+- `pq_clone_item.cc`
+- `pq_resolver.cc`
+- `pq_refix_fields_item.cc`
+- `pq_replace_base_item.cc`
+- `query_result_mq.cc`
+
+Reason:
+
+- Commercial clone/resolver code depends on `Item::pq_clone`, `Item::pq_copy_from`, `Item::refix_fields`, `Query_block::pq_backup`, `Query_block::pq_restore`, `Query_block::record_map_order`, `TABLE::pq_saved_const_table`, and related `JOIN`/`Query_block` state.
+- Commercial `Query_result_mq` depends on the mature MQ wire protocol: `Field_raw_data`, `Batch_buffer`, `MQueue_handle::send(Field_raw_data *)`, worker temp table fields, and `JOIN::make_worker_tmp_table()`.
+- These contracts belong to later migration stages and are intentionally not introduced in M1.
+
+### Protection
+
+- No optimizer hook was added.
+- No access path factory was changed.
+- No InnoDB or handler code was changed.
+- `Query_result_mq::send_data()` returns error if called, so the skeleton cannot silently claim a successful worker result path.
+- Clone/resolver helper stubs return conservative failure or `nullptr` values and are not reachable from the current execution path.
+
+### Commands run
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+```
+
+Result:
+
+```text
+passed
+```
+
+```bash
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_variables --parallel=1 --vardir=/tmp/pqv_m1_vars --tmpdir=/tmp/pqt_m1_vars
+```
+
+Result:
+
+```text
+failed before running tests: current branch does not contain pq_variables
+```
+
+Replacement smoke test:
+
+```bash
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_vars --parallel=1 --vardir=/tmp/pqv_m1_vars --tmpdir=/tmp/pqt_m1_vars
+```
+
+Result:
+
+```text
+passed
+```
+
+### Blocked APIs for later phases
+
+- M3: `Item` clone/copy/refix and `Query_block` backup/restore/base-ref contracts.
+- M4: commercial `Query_result_mq` protocol, `Field_raw_data`, `Batch_buffer`, worker temp table output path.
+- M5/M6: commercial InnoDB PQ scan path and execution gate.
+
+### Next suggested task
+
+Proceed to M2 Commercial Iterator Access Path Skeleton, still default OFF and unreachable.
