@@ -83,6 +83,29 @@ bool PQTableScanIterator::Init() {
 
   pq_set_execution_state(thd(), PQ_execution_state::ITERATOR_SELECTED);
 
+  auto init_serial_fallback = [&]() -> bool {
+    // V2-1 safe fallback window: no worker, Gather/Exchange, or row stream has
+    // been initialized. Build the same serial table scan the caller would have
+    // built when TryCreatePQTableScanIterator returned nullptr.
+    assert(can_fallback_serial());
+    if (m_serial_iterator == nullptr) {
+      m_serial_iterator = NewIterator<TableScanIterator>(
+          thd(), m_mem_root, table(), m_expected_rows, m_examined_rows);
+      if (m_serial_iterator == nullptr) return true;
+    }
+
+    if (!m_fallback_counted) {
+      pq_global_stats.queries_fallback.fetch_add(1, std::memory_order_relaxed);
+      m_fallback_counted = true;
+    }
+    pq_set_execution_state(thd(), PQ_execution_state::FALLBACK_SERIAL);
+    return m_serial_iterator->Init();
+  };
+
+  if (table() == nullptr || table()->s == nullptr || table()->s->blob_fields > 0) {
+    return init_serial_fallback();
+  }
+
   // V2-2 bridge smoke: prove the handler can create and release a SQL-visible
   // leader context without starting workers or reading rows. Unsupported
   // engines/states still use the V2-1 serial fallback path; real handler
@@ -280,22 +303,7 @@ bool PQTableScanIterator::Init() {
     return false;
   }
 
-  // V2-1 safe fallback window: no worker, Gather/Exchange, or row stream has
-  // been initialized. Build the same serial table scan the caller would have
-  // built when TryCreatePQTableScanIterator returned nullptr.
-  assert(can_fallback_serial());
-  if (m_serial_iterator == nullptr) {
-    m_serial_iterator = NewIterator<TableScanIterator>(
-        thd(), m_mem_root, table(), m_expected_rows, m_examined_rows);
-    if (m_serial_iterator == nullptr) return true;
-  }
-
-  if (!m_fallback_counted) {
-    pq_global_stats.queries_fallback.fetch_add(1, std::memory_order_relaxed);
-    m_fallback_counted = true;
-  }
-  pq_set_execution_state(thd(), PQ_execution_state::FALLBACK_SERIAL);
-  return m_serial_iterator->Init();
+  return init_serial_fallback();
 }
 
 void PQTableScanIterator::cleanup_pq_resources(bool abort_workers) {

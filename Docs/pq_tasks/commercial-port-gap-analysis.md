@@ -522,6 +522,11 @@ InnoDB PQ path build passes; read-view and KILL tests pass.
 
 ### Task M6: Commercial Full Scan Execution Gate
 
+Status: Completed on 2026-06-19. The existing explicit DOP2/DOP4 threaded
+gates now have a commercial-port M6 acceptance test covering default OFF,
+`SELECT *`, simple projection/WHERE, DOP4, and TEXT/BLOB safe fallback before
+worker launch.
+
 **Goal:** 用商用主路径跑通单表 clustered full scan 的 DOP2/DOP4 查询。
 
 **Files:**

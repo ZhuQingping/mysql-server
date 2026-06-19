@@ -2,7 +2,7 @@
 
 ## 状态
 
-Planned。
+Completed。
 
 ## 目标
 
@@ -40,4 +40,43 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_m6_full 
 
 ## Completion Report
 
-Pending.
+### 2026-06-19 Codex Orchestrator
+
+Changed files:
+
+- `sql/parallel_query/pq_iterator.cc`
+- `mysql-test/suite/parallel_query/t/pq_commercial_fullscan.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_fullscan.result`
+
+实现说明:
+
+- 保留现有默认 OFF 的执行 gate：DOP2 由 `parallel_query_experimental_threaded_dop` 显式开启，DOP4 由 `parallel_query_experimental_threaded_dop4` 显式开启；
+- 新增 `pq_commercial_fullscan` MTR，集中覆盖 commercial fullscan gate：
+  - 默认 OFF 时串行 fallback；
+  - DOP2 `SELECT *` clustered full scan；
+  - DOP2 简单 projection + WHERE；
+  - DOP4 projection + WHERE；
+  - TEXT/BLOB 表在 worker 启动前串行 fallback，`workers_delta=0`；
+- 在 `PQTableScanIterator::Init()` safe fallback window 增加 BLOB/TEXT early guard，避免 PROBE/smoke 或 worker open 触碰当前不支持的 row image 类型；
+- 未打开 ORDER/GROUP/ref/ICP/partition 路径。
+
+验证:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_commercial_fullscan --parallel=1 --vardir=/tmp/pqv_m6 --tmpdir=/tmp/pqt_m6
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=4 --vardir=/tmp/pqv_m6_full2 --tmpdir=/tmp/pqt_m6_full2
+```
+
+结果:
+
+- `mysqld` build 通过；
+- `pq_commercial_fullscan` 通过；
+- 完整 `parallel_query` suite 72 项成功。
+
+Review:
+
+- Review Agent 指出首版 BLOB 分支只查 `id`，不能证明 BLOB/TEXT fallback；
+- 已改为 `SELECT * FROM t_blob`，并断言 `executed_delta=0`、`fallback_delta=1`、`workers_delta=0`；
+- 复跑目标测试和完整 suite 均通过。

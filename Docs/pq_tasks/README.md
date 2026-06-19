@@ -5,7 +5,7 @@
 ## Current Summary
 
 - Last synced: 2026-06-19
-- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1 Commercial Core Skeleton Port、M2 Commercial Iterator Access Path Skeleton、M3 Commercial Plan Clone Activation Probe、M4a Worker Result MQ Contract、M5 InnoDB Commercial PQ Path Alignment 已完成；下一步进入 M6 Commercial Full Scan Execution Gate。
+- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1 Commercial Core Skeleton Port、M2 Commercial Iterator Access Path Skeleton、M3 Commercial Plan Clone Activation Probe、M4a Worker Result MQ Contract、M5 InnoDB Commercial PQ Path Alignment、M6 Commercial Full Scan Execution Gate 已完成；下一步进入 M7 Aggregation Strategy Reconciliation。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
@@ -133,7 +133,10 @@
   - M5: `cmake --build build-ninja --target mysqld -j 16` 通过
   - M5: `TMPDIR=/tmp ./mtr --suite=parallel_query pq_read_threaded_dop2_read_view pq_read_threaded_dop2_external_kill pq_read_threaded_dop4_external_kill pq_read_threaded_mdl_concurrency pq_locking_read_fallback --parallel=1 --vardir=/tmp/pqv_m5 --tmpdir=/tmp/pqt_m5` 通过
   - M5: `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=4 --vardir=/tmp/pqv_m5_full --tmpdir=/tmp/pqt_m5_full` 通过，完整当前 suite 71 项成功
-- Next recommended action: 执行 M6 Commercial Full Scan Execution Gate；M4b 真实 `Query_result_mq` worker path 暂缓到 M6 execution gate 稳定后继续。
+  - M6: `cmake --build build-ninja --target mysqld -j 16` 通过
+  - M6: `TMPDIR=/tmp ./mtr --suite=parallel_query pq_commercial_fullscan --parallel=1 --vardir=/tmp/pqv_m6 --tmpdir=/tmp/pqt_m6` 通过
+  - M6: `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=4 --vardir=/tmp/pqv_m6_full2 --tmpdir=/tmp/pqt_m6_full2` 通过，完整当前 suite 72 项成功
+- Next recommended action: 执行 M7 Aggregation Strategy Reconciliation；M4b 真实 `Query_result_mq` worker path 暂缓到后续 commercial result path 稳定后继续。
 - Commercial port taskbooks:
   - [commercial-port-m3-plan-clone-resolver.md](commercial-port-m3-plan-clone-resolver.md)
   - [commercial-port-m4-worker-result-path.md](commercial-port-m4-worker-result-path.md)
