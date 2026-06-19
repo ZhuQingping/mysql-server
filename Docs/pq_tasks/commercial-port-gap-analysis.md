@@ -264,6 +264,10 @@ Expected:
 
 **Goal:** 先迁移商用 SQL 层核心文件骨架，让代码可编译但不接执行路径。
 
+Detailed taskbook:
+
+- [commercial-port-m1-core-skeleton.md](commercial-port-m1-core-skeleton.md)
+
 **Files:**
 
 - Create: `sql/parallel_query/pq_clone.h`
@@ -678,4 +682,4 @@ cmake --build build-ninja --target mysqld -j 16
 
 ## Completion Report
 
-M0 design-only task completed. No source code was changed. M1 has not started.
+M0 design-only task completed. No source code was changed. M1 taskbook has been created. M1 source migration has not started.
