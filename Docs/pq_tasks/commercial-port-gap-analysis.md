@@ -564,6 +564,16 @@ commercial full scan gate passes targeted and current full suite.
 
 ### Task M7: Aggregation Strategy Reconciliation
 
+Status: Completed on 2026-06-19. M7 was intentionally scoped to
+reconciliation first: commercial aggregation is not wired to execution yet, and
+the current MySQL 8.0.46 typed-state GROUP BY implementation remains as a
+legacy/experimental guard path. The stage added explicit commercial vs legacy
+status counters so one query shape cannot be counted as executed by both paths.
+Commercial aggregation migration (M7-D) is deferred until worker plan clone,
+`Query_result_mq`, and the commercial worker result path are stable enough to
+carry GROUP BY result rows. Build, targeted GROUP BY MTR, `pq_stats`, and full
+`parallel_query` suite passed after review fixes.
+
 **Goal:** 决定当前 V2-12 GROUP BY typed-state 子集与商用 aggregation path 的关系。
 
 **Files:**
@@ -578,10 +588,11 @@ commercial full scan gate passes targeted and current full suite.
 
 **Rules:**
 
-- 若商用 aggregation path 能覆盖当前 V2-12A/B，则当前 typed-state path 转为 fallback-only 或删除；
-- 若商用 path 迁移成本过高，则当前 typed-state path 临时保留；
+- 当前商用 aggregation path 尚未接入执行，commercial counters 只能记录 attempt/fallback；
+- 当前 typed-state path 临时保留为 legacy/experimental path；
 - 不允许两个路径同时声称同一 query shape executed；
-- status counters 必须区分 commercial path 和 legacy typed-state path。
+- status counters 必须区分 commercial path 和 legacy typed-state path；
+- 本阶段 `Parallel_groupby_commercial_executed` 必须保持 0，legacy typed executed 才能增长。
 
 **Validation:**
 

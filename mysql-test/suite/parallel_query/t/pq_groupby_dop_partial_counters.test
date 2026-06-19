@@ -18,7 +18,14 @@ SELECT variable_name FROM performance_schema.global_status
     'Parallel_groupby_dop_partial_selected',
     'Parallel_groupby_dop_partial_worker_groups',
     'Parallel_groupby_dop_partial_merged_groups',
-    'Parallel_groupby_dop_partial_fallback')
+    'Parallel_groupby_dop_partial_fallback',
+    'Parallel_groupby_commercial_attempts',
+    'Parallel_groupby_commercial_selected',
+    'Parallel_groupby_commercial_executed',
+    'Parallel_groupby_commercial_fallback',
+    'Parallel_groupby_legacy_typed_selected',
+    'Parallel_groupby_legacy_typed_executed',
+    'Parallel_groupby_legacy_typed_fallback')
   ORDER BY variable_name;
 
 SET @pq_groupby_dop_partial_exec_before = (
@@ -28,6 +35,35 @@ SET @pq_groupby_dop_partial_exec_before = (
       'Parallel_groupby_dop_partial_attempts',
       'Parallel_groupby_dop_partial_selected',
       'Parallel_groupby_dop_partial_fallback'));
+
+SET @pq_groupby_commercial_attempts_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_commercial_attempts');
+SET @pq_groupby_commercial_selected_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_commercial_selected');
+SET @pq_groupby_commercial_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_commercial_executed');
+SET @pq_groupby_commercial_fallback_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_commercial_fallback');
+SET @pq_groupby_legacy_typed_selected_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_legacy_typed_selected');
+SET @pq_groupby_legacy_typed_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_legacy_typed_executed');
+SET @pq_groupby_legacy_typed_fallback_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_legacy_typed_fallback');
 
 SET SESSION parallel_query=ON;
 SET SESSION parallel_cost_threshold=0;
@@ -52,6 +88,80 @@ SELECT CAST((
       @pq_groupby_dop_partial_exec_before AS SIGNED)
     AS dop_partial_exec_counter_delta;
 
+SELECT
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_groupby_commercial_attempts') -
+      @pq_groupby_commercial_attempts_before) >= 1
+    AS commercial_attempts_delta_nonzero,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_groupby_commercial_selected') -
+      @pq_groupby_commercial_selected_before) = 0
+    AS commercial_selected_delta_zero,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_groupby_commercial_executed') -
+      @pq_groupby_commercial_executed_before) = 0
+    AS commercial_executed_delta_zero,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_groupby_commercial_fallback') -
+      @pq_groupby_commercial_fallback_before) >= 1
+    AS commercial_fallback_delta_nonzero,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_groupby_legacy_typed_selected') -
+      @pq_groupby_legacy_typed_selected_before) >= 1
+    AS legacy_selected_delta_nonzero,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_groupby_legacy_typed_executed') -
+      @pq_groupby_legacy_typed_executed_before) >= 1
+    AS legacy_executed_delta_nonzero,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_groupby_legacy_typed_fallback') -
+      @pq_groupby_legacy_typed_fallback_before) = 0
+    AS legacy_fallback_delta_zero;
+
+SET @pq_groupby_legacy_typed_selected_before_unsupported = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_legacy_typed_selected');
+SET @pq_groupby_legacy_typed_executed_before_unsupported = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_legacy_typed_executed');
+SET @pq_groupby_legacy_typed_fallback_before_unsupported = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_legacy_typed_fallback');
+
+SET SESSION parallel_query_experimental_groupby_dop1=ON;
+SET SESSION parallel_query_experimental_threaded_dop=OFF;
+SET SESSION parallel_default_dop=1;
+
+SELECT grp, SUM(val + 1) AS sum_expr FROM t1 GROUP BY grp;
+
+SELECT
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_groupby_legacy_typed_selected') -
+      @pq_groupby_legacy_typed_selected_before_unsupported) = 0
+    AS unsupported_legacy_selected_delta_zero,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_groupby_legacy_typed_executed') -
+      @pq_groupby_legacy_typed_executed_before_unsupported) = 0
+    AS unsupported_legacy_executed_delta_zero,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_groupby_legacy_typed_fallback') -
+      @pq_groupby_legacy_typed_fallback_before_unsupported) = 0
+    AS unsupported_legacy_fallback_delta_zero;
+
+SET SESSION parallel_query_experimental_groupby_dop1=OFF;
 SET SESSION parallel_query_experimental_threaded_dop=OFF;
 SET SESSION parallel_query=OFF;
 SET SESSION parallel_default_dop=4;

@@ -154,6 +154,31 @@ bool pq_groupby_dop_partial_supported(JOIN *join,
 
 bool pq_groupby_dop_partial_dop_supported(uint dop) { return dop == 2 || dop == 4; }
 
+void pq_record_groupby_commercial_attempt() {
+  pq_global_stats.groupby_commercial_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+}
+
+void pq_record_groupby_commercial_fallback() {
+  pq_global_stats.groupby_commercial_fallback.fetch_add(
+      1, std::memory_order_relaxed);
+}
+
+void pq_record_groupby_legacy_selected() {
+  pq_global_stats.groupby_legacy_typed_selected.fetch_add(
+      1, std::memory_order_relaxed);
+}
+
+void pq_record_groupby_legacy_executed() {
+  pq_global_stats.groupby_legacy_typed_executed.fetch_add(
+      1, std::memory_order_relaxed);
+}
+
+void pq_record_groupby_legacy_fallback() {
+  pq_global_stats.groupby_legacy_typed_fallback.fetch_add(
+      1, std::memory_order_relaxed);
+}
+
 struct PQ_integer_group_state {
   int64 key{0};
   uint64 count_star{0};
@@ -664,6 +689,7 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
       table()->file->ha_index_end();
       end_unique_index.release();
       if (error == HA_ERR_UNSUPPORTED) {
+        pq_record_groupby_legacy_fallback();
         switch (agg_kind) {
           case PQ_partial_group_agg_kind::COUNT:
             return InitTypedCountPath();
@@ -787,6 +813,8 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
           worker_groups, std::memory_order_relaxed);
       pq_global_stats.groupby_dop_partial_merged_groups.fetch_add(
           merged_groups, std::memory_order_relaxed);
+      pq_record_groupby_legacy_selected();
+      pq_record_groupby_legacy_executed();
       m_executed_counted = true;
     }
     return false;
@@ -984,10 +1012,12 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
     }
 
     if (!m_executed_counted) {
+      pq_record_groupby_legacy_selected();
       pq_global_stats.groupby_dop1_temp_table_executed.fetch_add(
           1, std::memory_order_relaxed);
       pq_global_stats.groupby_dop1_typed_count_executed.fetch_add(
           1, std::memory_order_relaxed);
+      pq_record_groupby_legacy_executed();
       m_executed_counted = true;
     }
     return false;
@@ -1083,10 +1113,12 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
     }
 
     if (!m_executed_counted) {
+      pq_record_groupby_legacy_selected();
       pq_global_stats.groupby_dop1_temp_table_executed.fetch_add(
           1, std::memory_order_relaxed);
       pq_global_stats.groupby_dop1_typed_minmax_executed.fetch_add(
           1, std::memory_order_relaxed);
+      pq_record_groupby_legacy_executed();
       m_executed_counted = true;
     }
     return false;
@@ -1159,6 +1191,7 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
     if (overflow) {
       table()->file->ha_index_end();
       end_unique_index.release();
+      pq_record_groupby_legacy_fallback();
       return InitLegacyTempTablePath();
     }
 
@@ -1194,10 +1227,12 @@ class PQTemptableGroupAggregateIterator final : public TableRowIterator {
     }
 
     if (!m_executed_counted) {
+      pq_record_groupby_legacy_selected();
       pq_global_stats.groupby_dop1_temp_table_executed.fetch_add(
           1, std::memory_order_relaxed);
       pq_global_stats.groupby_dop1_typed_sum_executed.fetch_add(
           1, std::memory_order_relaxed);
+      pq_record_groupby_legacy_executed();
       m_executed_counted = true;
     }
     return false;
@@ -1247,12 +1282,14 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQGroupAggregateIterator(
   }
   pq_global_stats.groupby_dop1_factory_attempts.fetch_add(
       1, std::memory_order_relaxed);
+  pq_record_groupby_commercial_attempt();
 
   if (!join->pq_eligible || aggregate_path->aggregate().rollup ||
       aggregate_path->aggregate().child == nullptr ||
       aggregate_path->aggregate().child->type != AccessPath::TABLE_SCAN) {
     pq_global_stats.groupby_dop1_factory_fallback.fetch_add(
         1, std::memory_order_relaxed);
+    pq_record_groupby_commercial_fallback();
     return nullptr;
   }
 
@@ -1263,6 +1300,7 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQGroupAggregateIterator(
   */
   pq_global_stats.groupby_dop1_factory_fallback.fetch_add(
       1, std::memory_order_relaxed);
+  pq_record_groupby_commercial_fallback();
   return nullptr;
 }
 
@@ -1303,6 +1341,8 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQTemptableGroupAggregateIterator(
     pq_global_stats.groupby_dop1_factory_attempts.fetch_add(
         1, std::memory_order_relaxed);
   }
+  pq_record_groupby_commercial_attempt();
+  pq_record_groupby_commercial_fallback();
 
   const bool supported_shape = groupby_dop_partial_enabled
                                    ? pq_groupby_dop_partial_supported(

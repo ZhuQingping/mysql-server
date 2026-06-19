@@ -10021,6 +10021,20 @@ DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC(
 DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC(
     groupby_dop_partial_fallback, groupby_dop_partial_fallback)
 DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC(
+    groupby_commercial_attempts, groupby_commercial_attempts)
+DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC(
+    groupby_commercial_selected, groupby_commercial_selected)
+DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC(
+    groupby_commercial_executed, groupby_commercial_executed)
+DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC(
+    groupby_commercial_fallback, groupby_commercial_fallback)
+DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC(
+    groupby_legacy_typed_selected, groupby_legacy_typed_selected)
+DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC(
+    groupby_legacy_typed_executed, groupby_legacy_typed_executed)
+DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC(
+    groupby_legacy_typed_fallback, groupby_legacy_typed_fallback)
+DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC(
     groupby_partial_payload_errors, groupby_partial_payload_errors)
 
 #undef DEFINE_PQ_GROUPBY_DOP_PARTIAL_SHOW_FUNC
@@ -10499,6 +10513,27 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_groupby_dop_partial_fallback",
      (char *)&show_pq_groupby_dop_partial_fallback, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_groupby_commercial_attempts",
+     (char *)&show_pq_groupby_commercial_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_groupby_commercial_selected",
+     (char *)&show_pq_groupby_commercial_selected, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_groupby_commercial_executed",
+     (char *)&show_pq_groupby_commercial_executed, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_groupby_commercial_fallback",
+     (char *)&show_pq_groupby_commercial_fallback, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_groupby_legacy_typed_selected",
+     (char *)&show_pq_groupby_legacy_typed_selected, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_groupby_legacy_typed_executed",
+     (char *)&show_pq_groupby_legacy_typed_executed, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_groupby_legacy_typed_fallback",
+     (char *)&show_pq_groupby_legacy_typed_fallback, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_groupby_partial_payload_errors",
      (char *)&show_pq_groupby_partial_payload_errors, SHOW_FUNC,
