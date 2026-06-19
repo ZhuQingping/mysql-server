@@ -655,6 +655,11 @@ ORDER BY commercial path passes targeted tests.
 
 ### Task M9: Secondary Index / Ref / ICP
 
+Status: M9-A Completed on 2026-06-19. Secondary/ref/ICP real PQ execution
+remains closed; M9-A added negative guards only. M9-B+ must be split into
+secondary range, constant ref, dependent ref, ICP pushdown, and edge-case
+phases before any execution path is opened.
+
 **Goal:** 迁移 `PQRefIterator`、secondary index、ICP 能力。
 
 **Files:**
@@ -686,6 +691,15 @@ Expected:
 ```text
 ref/ICP targeted tests pass.
 ```
+
+M9-A guard completed:
+
+- 新增 `pq_commercial_ref_icp` negative MTR；
+- 覆盖 secondary ref、secondary range + ICP on/off、secondary covering index scan、multi-table ref；
+- 实际 SELECT counter window 验证 `Parallel_queries_executed`、`Parallel_workers_launched`、`Parallel_ranges_built`、`Parallel_ranges_dispatched` 均不增加；
+- 未修改 `sql/` 或 `storage/innobase/` 执行路径；
+- Review Agent 确认 M9-A blocker 已解决，建议可提交；
+- targeted suite 与完整当前 `parallel_query` suite 74 项通过。
 
 ### Task M10: Commercial Test Suite Gap Closure
 

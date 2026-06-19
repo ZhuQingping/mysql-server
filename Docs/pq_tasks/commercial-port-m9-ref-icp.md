@@ -2,19 +2,20 @@
 
 ## 状态
 
-Planned。
+M9-A Completed。M9-B/M9-C/M9-D/M9-E/M9-F Planned。
 
 ## 目标
 
 迁移 `PQRefIterator`、secondary index、ICP 能力。该阶段依赖 M5/M6 的 handler/InnoDB execution gate 稳定。
 
-推荐拆分：
+设计调研后拆分：
 
-- M9-A: secondary index/range eligibility 仍默认 fallback，补负向 MTR；
-- M9-B: `PQblockScanIterator` secondary index range 最小正例，不开 ICP；
-- M9-C: `PQRefIterator` 非唯一 ref 最小正例，含 `pq_ref_build_ranges`；
-- M9-D: ICP pushdown，迁移 `make_cond_for_index` / `idx_cond_push` 路径；
-- M9-E: MVI unique filter、reverse scan、secondary index MIN 等边角。
+- M9-A: secondary index/range/ref/ICP 仍默认 fallback，补负向 MTR，不改执行路径；
+- M9-B: secondary index range 最小正例，先限制 single-table InnoDB、非 partition、非 reverse、非 ref；
+- M9-C: 常量 `JT_REF` 最小正例，含 `pq_ref_build_ranges`，不做 dependent ref；
+- M9-D: dependent `PQRefIterator` / per-ref-key range dispatch；
+- M9-E: ICP pushdown，迁移 worker 侧 `make_cond_for_index` / `idx_cond_push` / `make_cond_remainder`；
+- M9-F: MVI unique filter、reverse scan、partition、secondary index MIN、record buffer/prefetch 等边角。
 
 ## 允许修改
 
@@ -28,6 +29,26 @@ Planned。
 - `Docs/pq_tasks/commercial-port-gap-analysis.md`
 - `Docs/pq_tasks/README.md`
 
+M9-A 只允许修改：
+
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+- `Docs/pq_tasks/commercial-port-m9-ref-icp.md`
+- `Docs/pq_tasks/commercial-port-gap-analysis.md`
+- `Docs/pq_tasks/README.md`
+
+M9-A 禁止修改：
+
+- `sql/handler.h`
+- `sql/join_optimizer/access_path.cc`
+- `sql/parallel_query/pq_iterator.cc`
+- `sql/parallel_query/pq_iterators.*`
+- `sql/parallel_query/pq_clone.cc`
+- `storage/innobase/handler/ha_innodb_pq.cc`
+- `storage/innobase/row/row0pread_pq.cc`
+- `storage/innobase/include/row0pread_pq.h`
+- `sql/range_optimizer/*`
+
 ## 设计要求
 
 - 先支持 ref/range 最小正例；
@@ -35,6 +56,14 @@ Planned。
 - `pushed_idx_cond` 存在但未验证时必须拒绝；
 - MVI/unique filter 逻辑按商用实现迁移并单测；
 - 不支持 partition/subquery 形态时必须 fallback。
+
+M9-A 设计确认：
+
+- 当前分支 SQL eligibility 仍只允许 `JT_ALL`，`JT_RANGE` / `JT_REF` / `JT_INDEX_SCAN` / `JT_CONST` 均应返回 `NON_FULL_TABLE_SCAN`；
+- 当前 access path factory 只在 `TABLE_SCAN` 尝试创建 PQ iterator，M9-A 不新增 `INDEX_RANGE_SCAN` / `REF` factory；
+- 当前 InnoDB PQ leader path 对非 clustered index 有 hard guard，M9-A 不放开；
+- `CopyRangeScanAccessPath()` 仍 fail-closed，M9-A 不迁移 range clone；
+- secondary ref/range/covering/ICP-on/off 的实际 SELECT 不应增加 `Parallel_queries_executed`、`Parallel_workers_launched`、`Parallel_ranges_built`、`Parallel_ranges_dispatched`。
 
 ## 验证
 
@@ -49,4 +78,52 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_m9_full 
 
 ## Completion Report
 
-Pending.
+M9-A completed by Codex Orchestrator.
+
+Design notes:
+
+- Commercial implementation uses `PQblockScanIterator`, `PQRefIterator`, handler `pq_ref_*` state, `pq_ref_build_ranges()`, worker-side ICP clone/refix and InnoDB secondary-index row production.
+- Current branch does not have a safe secondary/ref/ICP execution path. M9-A therefore only adds negative guards before any positive migration.
+- Two read-only Agents agreed M9-B+ must be split further and must not be mixed with M9-A tests.
+
+Changed files:
+
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+- `Docs/pq_tasks/commercial-port-m9-ref-icp.md`
+- `Docs/pq_tasks/commercial-port-gap-analysis.md`
+- `Docs/pq_tasks/README.md`
+
+Implementation notes:
+
+- 新增 `pq_commercial_ref_icp` negative MTR；
+- 覆盖 secondary ref、secondary range + ICP on、secondary range + ICP off、secondary covering index scan、multi-table ref；
+- 实际 SELECT counter window 验证 `Parallel_queries_executed`、`Parallel_workers_launched`、`Parallel_ranges_built`、`Parallel_ranges_dispatched` 均不增加；
+- EXPLAIN rows 估算列使用 `--replace_column 10 #` 屏蔽，避免统计估算在单跑/全套中波动；
+- 未修改 `sql/` 或 `storage/innobase/` 执行路径。
+
+Review:
+
+- 第一轮 Review Agent 发现 ICP-off secondary range 和 multi-table ref 只有 EXPLAIN，缺少 runtime counter guard；
+- 已补充两类 actual SELECT，并重新 record；
+- 第二轮 Review Agent 确认 blocker 已解决，未发现提交前必须修改项，建议可提交。
+
+Validation:
+
+```bash
+cd build-ninja/mysql-test
+./mtr --suite=parallel_query --record pq_commercial_ref_icp
+./mtr --suite=parallel_query pq_commercial_ref_icp pq_not_support pq_stats
+./mtr --suite=parallel_query
+```
+
+Result:
+
+- M9-A targeted suite passed；
+- full current `parallel_query` suite passed，74 tests successful。
+
+Remaining:
+
+- M9-B 需要独立设计 secondary index range 正例，不得复用 table scan factory；
+- M9-C/M9-D/M9-E/M9-F 继续拆分 ref、dependent ref、ICP pushdown 和边角能力；
+- 正例阶段前必须先明确 `AccessPath::INDEX_RANGE_SCAN`、range clone、InnoDB secondary range partition、record buffer/回表/可见性和 ICP Item 生命周期。

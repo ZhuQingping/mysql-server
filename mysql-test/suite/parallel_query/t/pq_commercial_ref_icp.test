@@ -1,0 +1,132 @@
+# Test: pq_commercial_ref_icp
+# M9-A guard: secondary index range/ref/ICP still fall back before commercial
+# secondary-index execution is enabled.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS pq_ref_icp_t1, pq_ref_icp_t2;
+--enable_warnings
+
+CREATE TABLE pq_ref_icp_t1 (
+  id INT PRIMARY KEY,
+  k INT NOT NULL,
+  v INT NOT NULL,
+  pad CHAR(8),
+  KEY k_idx(k),
+  KEY k_v_idx(k, v)
+) ENGINE=InnoDB;
+
+CREATE TABLE pq_ref_icp_t2 (
+  id INT PRIMARY KEY,
+  k INT NOT NULL,
+  KEY k_idx(k)
+) ENGINE=InnoDB;
+
+INSERT INTO pq_ref_icp_t1 VALUES
+  (1,10,100,'a'),(2,20,200,'b'),(3,20,210,'c'),
+  (4,30,300,'d'),(5,40,400,'e'),(6,50,500,'f');
+INSERT INTO pq_ref_icp_t2 VALUES (1,20),(2,30);
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+SET SESSION parallel_query_experimental_threaded_dop=ON;
+
+# Secondary ref remains an explicit NON_FULL_TABLE_SCAN fallback.
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx) WHERE k = 20;
+--enable_warnings
+
+# Secondary range with ICP enabled remains fallback.
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+  WHERE k BETWEEN 20 AND 40 AND v > 150;
+--enable_warnings
+
+# The guard must not depend on the optimizer printing "Using index condition".
+SET @old_optimizer_switch = @@optimizer_switch;
+SET SESSION optimizer_switch='index_condition_pushdown=off';
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+  WHERE k BETWEEN 20 AND 40 AND v > 150;
+--enable_warnings
+SET SESSION optimizer_switch=@old_optimizer_switch;
+
+# Secondary covering index scan remains fallback.
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx);
+--enable_warnings
+
+# Multi-table ref/eq_ref shape must stay out of PQ.
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT pq_ref_icp_t1.id, pq_ref_icp_t2.id
+  FROM pq_ref_icp_t1 JOIN pq_ref_icp_t2
+    ON pq_ref_icp_t1.k = pq_ref_icp_t2.k;
+--enable_warnings
+
+SET @executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+SET @ranges_built_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_built');
+SET @ranges_dispatched_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_dispatched');
+
+--sorted_result
+SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx) WHERE k = 20;
+--sorted_result
+SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+  WHERE k BETWEEN 20 AND 40 AND v > 150;
+SET SESSION optimizer_switch='index_condition_pushdown=off';
+--sorted_result
+SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+  WHERE k BETWEEN 20 AND 40 AND v > 150;
+SET SESSION optimizer_switch=@old_optimizer_switch;
+--sorted_result
+SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx);
+--sorted_result
+SELECT pq_ref_icp_t1.id AS t1_id, pq_ref_icp_t2.id AS t2_id
+  FROM pq_ref_icp_t1 JOIN pq_ref_icp_t2
+    ON pq_ref_icp_t1.k = pq_ref_icp_t2.k;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_queries_executed') - @executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_workers_launched') - @workers_before
+    AS workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_ranges_built') - @ranges_built_before
+    AS ranges_built_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_ranges_dispatched') -
+     @ranges_dispatched_before
+    AS ranges_dispatched_delta;
+
+SET SESSION parallel_query_experimental_threaded_dop=OFF;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+
+DROP TABLE pq_ref_icp_t2;
+DROP TABLE pq_ref_icp_t1;

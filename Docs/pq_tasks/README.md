@@ -5,7 +5,7 @@
 ## Current Summary
 
 - Last synced: 2026-06-19
-- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1 Commercial Core Skeleton Port、M2 Commercial Iterator Access Path Skeleton、M3 Commercial Plan Clone Activation Probe、M4a Worker Result MQ Contract、M4b Controlled Query_result_mq Send Path、M5 InnoDB Commercial PQ Path Alignment、M6 Commercial Full Scan Execution Gate、M7 Aggregation Strategy Reconciliation、M8 ORDER BY Gather Merge synthetic skeleton 已完成；下一步建议进入 M9 Secondary Index / Ref / ICP 前置设计确认。
+- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1 Commercial Core Skeleton Port、M2 Commercial Iterator Access Path Skeleton、M3 Commercial Plan Clone Activation Probe、M4a Worker Result MQ Contract、M4b Controlled Query_result_mq Send Path、M5 InnoDB Commercial PQ Path Alignment、M6 Commercial Full Scan Execution Gate、M7 Aggregation Strategy Reconciliation、M8 ORDER BY Gather Merge synthetic skeleton、M9-A Secondary Ref/ICP Negative Guard 已完成；下一步建议进入 M9-B Secondary Index Range 正例设计。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
@@ -150,7 +150,9 @@
   - M8: `TMPDIR=/tmp ./mtr --suite=parallel_query pq_stats --parallel=1 --vardir=/tmp/pqv_m8_stats --tmpdir=/tmp/pqt_m8_stats` 通过
   - M8: `TMPDIR=/tmp ./mtr --suite=parallel_query pq_commercial_order_by pq_explain_fallback pq_read_threaded_dop2_multirange pq_groupby_dop2_partial_count_min_max --parallel=1 --vardir=/tmp/pqv_m8b --tmpdir=/tmp/pqt_m8b` 通过，5 项成功
   - M8: `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_m8_full2 --tmpdir=/tmp/pqt_m8_full2` 通过，完整当前 suite 73 项成功
-- Next recommended action: 进入 M9 Secondary Index / Ref / ICP 前置设计确认；真实 worker execution 切到 `Query_result_mq`、真实 worker ERROR payload、M7-D 和 M8-C/D/E 继续作为后续集成项。
+  - M9-A: `./mtr --suite=parallel_query pq_commercial_ref_icp pq_not_support pq_stats` 通过
+  - M9-A: `./mtr --suite=parallel_query` 通过，完整当前 suite 74 项成功
+- Next recommended action: 进入 M9-B Secondary Index Range 正例设计；真实 worker execution 切到 `Query_result_mq`、真实 worker ERROR payload、M7-D 和 M8-C/D/E 继续作为后续集成项。
 - Commercial port taskbooks:
   - [commercial-port-m3-plan-clone-resolver.md](commercial-port-m3-plan-clone-resolver.md)
   - [commercial-port-m4-worker-result-path.md](commercial-port-m4-worker-result-path.md)
