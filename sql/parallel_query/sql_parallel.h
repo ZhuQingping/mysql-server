@@ -198,6 +198,12 @@ struct PQ_global_stats {
   std::atomic<uint64> ranges_built{0};        ///< Total InnoDB PQ ranges planned
   std::atomic<uint64> ranges_dispatched{0};   ///< InnoDB PQ ranges assigned
   std::atomic<uint64> empty_worker_ranges{0}; ///< Workers assigned no range
+  std::atomic<uint64> secondary_range_probe_attempts{0};  ///< Secondary range probes
+  std::atomic<uint64> secondary_range_probe_unsupported{0};  ///< Unsupported probes
+  std::atomic<uint64> secondary_range_clone_attempts{0};  ///< Range clone probes
+  std::atomic<uint64> secondary_range_clone_failed{0};  ///< Range clone failures
+  std::atomic<uint64> secondary_ranges_built{0};  ///< Secondary ranges built
+  std::atomic<uint64> secondary_rows_produced{0};  ///< Secondary rows produced
   std::atomic<uint64> worker_smoke_runs{0};   ///< Worker lifecycle smoke runs
   std::atomic<uint64> worker_producer_smoke_runs{0};  ///< Producer loop smoke runs
   std::atomic<uint64> worker_open_smoke_runs{0};  ///< Worker THD/TABLE smoke runs
@@ -260,6 +266,12 @@ struct PQ_global_stats {
     ranges_built.store(0, std::memory_order_relaxed);
     ranges_dispatched.store(0, std::memory_order_relaxed);
     empty_worker_ranges.store(0, std::memory_order_relaxed);
+    secondary_range_probe_attempts.store(0, std::memory_order_relaxed);
+    secondary_range_probe_unsupported.store(0, std::memory_order_relaxed);
+    secondary_range_clone_attempts.store(0, std::memory_order_relaxed);
+    secondary_range_clone_failed.store(0, std::memory_order_relaxed);
+    secondary_ranges_built.store(0, std::memory_order_relaxed);
+    secondary_rows_produced.store(0, std::memory_order_relaxed);
     worker_smoke_runs.store(0, std::memory_order_relaxed);
     worker_producer_smoke_runs.store(0, std::memory_order_relaxed);
     worker_open_smoke_runs.store(0, std::memory_order_relaxed);

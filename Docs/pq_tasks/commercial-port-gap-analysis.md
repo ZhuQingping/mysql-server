@@ -655,10 +655,11 @@ ORDER BY commercial path passes targeted tests.
 
 ### Task M9: Secondary Index / Ref / ICP
 
-Status: M9-A and M9-B0 Completed on 2026-06-19. Secondary/ref/ICP real PQ
-execution remains closed; M9-A added negative guards only. M9-B0 confirmed
+Status: M9-A, M9-B0, and M9-B1 Completed on 2026-06-19. Secondary/ref/ICP real
+PQ execution remains closed; M9-A added negative guards only. M9-B0 confirmed
 secondary range must be split into candidate probe, secondary partition, and
-callback row production before any execution path is opened.
+callback row production before any execution path is opened. M9-B1 adds the
+candidate probe only.
 
 **Goal:** 迁移 `PQRefIterator`、secondary index、ICP 能力。
 
@@ -707,6 +708,16 @@ M9-B0 design completed:
 - `pq_check_full_table_scan()`、`access_path.cc`、`CopyRangeScanAccessPath()`、`PQblockScanIterator` 和 InnoDB clustered guard 均阻止 secondary range 正例；
 - 设计检视 Agent 建议 M9-B 拆分为 M9-B1 candidate probe、M9-B2 secondary partition、M9-B3 callback row production；
 - M9-B1 前不得放开 `NON_FULL_TABLE_SCAN` fallback，也不得修改 InnoDB secondary row production。
+
+M9-B1 candidate probe completed:
+
+- 新增 `Parallel_secondary_range_probe_attempts` / `Parallel_secondary_range_probe_unsupported`；
+- 同步暴露 clone/partition/row-production 前置 counters，但本阶段保持 0；
+- eligibility 在 secondary `INDEX_RANGE_SCAN` fallback 时记录 probe，仍返回 `NON_FULL_TABLE_SCAN`；
+- `pq_commercial_ref_icp` 验证 secondary range probe 增长，同时 clone/ranges/rows 保持 0；
+- 不修改 `access_path.cc`，不创建 PQ iterator，不进入 InnoDB secondary row production；
+- Review 修正后 probe 显式要求 `range_scan()->type == AccessPath::INDEX_RANGE_SCAN`，避免误计 skip scan / group skip scan；
+- `mysqld` build、M9-B1 targeted suite、完整当前 `parallel_query` suite 74 项通过。
 
 ### Task M10: Commercial Test Suite Gap Closure
 

@@ -31,6 +31,7 @@
 #include "sql/parallel_query/pq_optimizer.h"
 
 #include "include/thr_lock.h"     // Lock_descriptor, thr_lock_type
+#include "sql/join_optimizer/access_path.h"  // AccessPath
 #include "sql/parallel_query/sql_parallel.h"  // pq_set_execution_state
 #include "sql/sql_class.h"        // THD
 #include "sql/sql_lex.h"          // Query_block, LEX, Table_ref
@@ -212,12 +213,18 @@ static bool pq_check_full_table_scan(JOIN *join, PQUnsuiteInfo *info,
   // eligibility checks already require a single base table, so best_ref[0]
   // is enough to catch const, range, index and full-scan decisions.
   join_type access_type = JT_UNKNOWN;
+  TABLE *candidate_table = nullptr;
+  uint candidate_index = MAX_KEY;
+  AccessPath *candidate_range_scan = nullptr;
 
   // Try best_ref[] first (available during optimization).
   if (join->best_ref != nullptr && join->primary_tables > 0 &&
       join->best_ref[0] != nullptr) {
     JOIN_TAB *first_tab = join->best_ref[0];
     access_type = first_tab->type();
+    candidate_table = first_tab->table();
+    candidate_index = first_tab->index();
+    candidate_range_scan = first_tab->range_scan();
   }
 
   // If best_ref[] didn't give a valid type, try qep_tab[]
@@ -225,6 +232,9 @@ static bool pq_check_full_table_scan(JOIN *join, PQUnsuiteInfo *info,
   if (access_type == JT_UNKNOWN && join->qep_tab != nullptr &&
       join->primary_tables > 0) {
     access_type = join->qep_tab[0].type();
+    candidate_table = join->qep_tab[0].table();
+    candidate_index = join->qep_tab[0].index();
+    candidate_range_scan = join->qep_tab[0].range_scan();
   }
 
   // If we couldn't determine the access type from either source,
@@ -237,6 +247,19 @@ static bool pq_check_full_table_scan(JOIN *join, PQUnsuiteInfo *info,
   // Only JT_ALL (full table scan) is eligible for PQ in MVP.
   // Any other access type (ref, range, index scan, etc.) must fallback.
   if (access_type != JT_ALL) {
+    if (access_type == JT_RANGE && candidate_range_scan != nullptr &&
+        candidate_range_scan->type == AccessPath::INDEX_RANGE_SCAN) {
+      candidate_index = candidate_range_scan->index_range_scan().index;
+      if (candidate_table != nullptr && candidate_table->s != nullptr &&
+          candidate_index != MAX_KEY &&
+          candidate_index < candidate_table->s->keys &&
+          candidate_index != candidate_table->s->primary_key) {
+        pq_global_stats.secondary_range_probe_attempts.fetch_add(
+            1, std::memory_order_relaxed);
+        pq_global_stats.secondary_range_probe_unsupported.fetch_add(
+            1, std::memory_order_relaxed);
+      }
+    }
     return pq_reject(info, PQUnsuiteReason::NON_FULL_TABLE_SCAN,
                      pq_unsuite_reason_to_string(
                          PQUnsuiteReason::NON_FULL_TABLE_SCAN));

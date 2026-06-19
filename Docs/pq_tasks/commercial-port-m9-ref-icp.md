@@ -2,7 +2,7 @@
 
 ## 状态
 
-M9-A Completed。M9-B0 Completed。M9-B1/M9-B2/M9-B3/M9-C/M9-D/M9-E/M9-F Planned。
+M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2/M9-B3/M9-C/M9-D/M9-E/M9-F Planned。
 
 ## 目标
 
@@ -153,3 +153,50 @@ Validation:
 
 - Design-only；无源码改动；
 - 复用 M9-A full suite 结果：完整当前 `parallel_query` suite 74 项通过。
+
+M9-B1 completed by Codex Orchestrator.
+
+Changed files:
+
+- `sql/parallel_query/pq_optimizer.cc`
+- `sql/parallel_query/sql_parallel.h`
+- `sql/mysqld.cc`
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+- `mysql-test/suite/parallel_query/r/pq_stats.result`
+- `Docs/pq_tasks/commercial-port-m9-ref-icp.md`
+- `Docs/pq_tasks/m9-b0-secondary-range-design.md`
+- `Docs/pq_tasks/commercial-port-gap-analysis.md`
+- `Docs/pq_tasks/README.md`
+
+Implementation notes:
+
+- 新增 secondary range candidate probe counters；
+- eligibility 仍在 `JT_RANGE` 返回 `NON_FULL_TABLE_SCAN`；
+- 仅当 `AccessPath::INDEX_RANGE_SCAN` 的 key 是非 PRIMARY key 时记录 candidate；
+- 本阶段只增长 `Parallel_secondary_range_probe_attempts` / `Parallel_secondary_range_probe_unsupported`；
+- `Parallel_secondary_range_clone_attempts`、`Parallel_secondary_range_clone_failed`、`Parallel_secondary_ranges_built`、`Parallel_secondary_rows_produced` 保持 0，用于证明未进入 clone/partition/row production；
+- 不创建 PQ iterator，不修改 `access_path.cc`，不修改 InnoDB secondary row production。
+- Review 修正：probe 门控必须显式要求 `range_scan()->type == AccessPath::INDEX_RANGE_SCAN`，避免误计 skip scan / group skip scan；
+- 新增 primary range 负向护栏，确认 PRIMARY range 不增长 secondary range probe。
+
+Review:
+
+- 第一轮 Review Agent 发现 `JT_RANGE` 不等价于 `INDEX_RANGE_SCAN`，原门控可能误计 skip scan / group skip scan；
+- 已收紧为 `JT_RANGE && range_scan != nullptr && range_scan->type == AccessPath::INDEX_RANGE_SCAN && secondary key`；
+- 第二轮 Review Agent 确认 blocker 已解决，建议可提交。
+
+Validation:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+./mtr --suite=parallel_query --record pq_commercial_ref_icp pq_stats
+./mtr --suite=parallel_query pq_commercial_ref_icp pq_stats pq_not_support
+```
+
+Result:
+
+- `mysqld` build passed；
+- M9-B1 targeted suite passed；
+- full current `parallel_query` suite passed，74 tests successful。

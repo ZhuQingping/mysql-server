@@ -9738,6 +9738,30 @@ static int show_pq_empty_worker_ranges(THD *, SHOW_VAR *var, char *buf) {
   return 0;
 }
 
+#define DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(NAME, FIELD)                \
+  static int show_pq_##NAME(THD *, SHOW_VAR *var, char *buf) {          \
+    var->type = SHOW_LONGLONG;                                          \
+    var->value = buf;                                                    \
+    *((longlong *)buf) =                                                \
+        (longlong)(pq_global_stats.FIELD.load(std::memory_order_relaxed)); \
+    return 0;                                                           \
+  }
+
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_range_probe_attempts,
+                                    secondary_range_probe_attempts)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_range_probe_unsupported,
+                                    secondary_range_probe_unsupported)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_range_clone_attempts,
+                                    secondary_range_clone_attempts)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_range_clone_failed,
+                                    secondary_range_clone_failed)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_ranges_built,
+                                    secondary_ranges_built)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_rows_produced,
+                                    secondary_rows_produced)
+
+#undef DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC
+
 static int show_pq_probe_attempts(THD *, SHOW_VAR *var, char *buf) {
   var->type = SHOW_LONGLONG;
   var->value = buf;
@@ -10601,6 +10625,22 @@ SHOW_VAR status_vars[] = {
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_empty_worker_ranges", (char *)&show_pq_empty_worker_ranges,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_secondary_range_clone_attempts",
+     (char *)&show_pq_secondary_range_clone_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_secondary_range_clone_failed",
+     (char *)&show_pq_secondary_range_clone_failed, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_secondary_range_probe_attempts",
+     (char *)&show_pq_secondary_range_probe_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_secondary_range_probe_unsupported",
+     (char *)&show_pq_secondary_range_probe_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_secondary_ranges_built",
+     (char *)&show_pq_secondary_ranges_built, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_secondary_rows_produced",
+     (char *)&show_pq_secondary_rows_produced, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_handler_smoke_runs",
      (char *)&show_pq_worker_handler_smoke_runs, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_open_smoke_runs",

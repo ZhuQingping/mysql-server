@@ -33,6 +33,31 @@ SET SESSION parallel_cost_threshold=0;
 SET SESSION parallel_default_dop=2;
 SET SESSION parallel_query_experimental_threaded_dop=ON;
 
+SET @secondary_range_probe_attempts_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_range_probe_attempts');
+SET @secondary_range_probe_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_range_probe_unsupported');
+SET @secondary_range_clone_attempts_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_range_clone_attempts');
+SET @secondary_range_clone_failed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_range_clone_failed');
+SET @secondary_ranges_built_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_ranges_built');
+SET @secondary_rows_produced_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_produced');
+
 # Secondary ref remains an explicit NON_FULL_TABLE_SCAN fallback.
 --disable_warnings
 --replace_column 10 #
@@ -44,6 +69,13 @@ EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx) WHERE k = 20;
 --replace_column 10 #
 EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
   WHERE k BETWEEN 20 AND 40 AND v > 150;
+--enable_warnings
+
+# Primary range remains fallback but must not count as secondary range probe.
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(PRIMARY)
+  WHERE id BETWEEN 2 AND 4;
 --enable_warnings
 
 # The guard must not depend on the optimizer printing "Using index condition".
@@ -92,6 +124,19 @@ SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx) WHERE k = 20;
 --sorted_result
 SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
   WHERE k BETWEEN 20 AND 40 AND v > 150;
+SET @secondary_probe_before_primary_range = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_range_probe_attempts');
+--sorted_result
+SELECT * FROM pq_ref_icp_t1 FORCE INDEX(PRIMARY)
+  WHERE id BETWEEN 2 AND 4;
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_secondary_range_probe_attempts') -
+     @secondary_probe_before_primary_range
+    AS secondary_probe_delta_after_primary_range;
 SET SESSION optimizer_switch='index_condition_pushdown=off';
 --sorted_result
 SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
@@ -122,6 +167,38 @@ SELECT
      WHERE variable_name = 'Parallel_ranges_dispatched') -
      @ranges_dispatched_before
     AS ranges_dispatched_delta;
+
+SELECT
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_range_probe_attempts') -
+      @secondary_range_probe_attempts_before) >= 4
+    AS secondary_range_probe_attempts_delta,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_range_probe_unsupported') -
+      @secondary_range_probe_unsupported_before) >= 4
+    AS secondary_range_probe_unsupported_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_range_clone_attempts') -
+      @secondary_range_clone_attempts_before
+    AS secondary_range_clone_attempts_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_range_clone_failed') -
+      @secondary_range_clone_failed_before
+    AS secondary_range_clone_failed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_ranges_built') -
+      @secondary_ranges_built_before
+    AS secondary_ranges_built_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_rows_produced') -
+      @secondary_rows_produced_before
+    AS secondary_rows_produced_delta;
 
 SET SESSION parallel_query_experimental_threaded_dop=OFF;
 SET SESSION parallel_query=OFF;

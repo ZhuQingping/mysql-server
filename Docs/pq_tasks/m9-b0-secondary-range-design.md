@@ -47,6 +47,8 @@ M9-B0 只确认 secondary index range 正例的拆分边界和前置护栏，不
 
 ### M9-B1: Secondary Range Candidate Probe
 
+Status: Completed.
+
 目标是 synthetic/probe-only，不产生真实 secondary row。
 
 建议范围：
@@ -62,6 +64,13 @@ M9-B0 只确认 secondary index range 正例的拆分边界和前置护栏，不
 - `Parallel_secondary_range_probe_unsupported`
 - `Parallel_secondary_range_clone_attempts`
 - `Parallel_secondary_range_clone_failed`
+
+Implementation status:
+
+- `Parallel_secondary_range_probe_attempts` / `Parallel_secondary_range_probe_unsupported` 已在 `JT_RANGE` + secondary `INDEX_RANGE_SCAN` fallback 时增长；
+- clone counters 已暴露但保持 0；
+- 本阶段仍返回 `NON_FULL_TABLE_SCAN`。
+- Review 修正后，probe 明确要求 `range_scan()->type == AccessPath::INDEX_RANGE_SCAN`，不会把 skip scan / group skip scan 误计为 M9-B1 candidate。
 
 ### M9-B2: InnoDB Secondary Range Partition
 

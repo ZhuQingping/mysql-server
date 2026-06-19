@@ -20,6 +20,30 @@ SET SESSION parallel_query=ON;
 SET SESSION parallel_cost_threshold=0;
 SET SESSION parallel_default_dop=2;
 SET SESSION parallel_query_experimental_threaded_dop=ON;
+SET @secondary_range_probe_attempts_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_range_probe_attempts');
+SET @secondary_range_probe_unsupported_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_range_probe_unsupported');
+SET @secondary_range_clone_attempts_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_range_clone_attempts');
+SET @secondary_range_clone_failed_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_range_clone_failed');
+SET @secondary_ranges_built_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_ranges_built');
+SET @secondary_rows_produced_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_rows_produced');
 EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx) WHERE k = 20;
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 1	SIMPLE	pq_ref_icp_t1	NULL	ref	k_idx	k_idx	4	const	#	100.00	Not parallel NON_FULL_TABLE_SCAN
@@ -27,6 +51,10 @@ EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
 WHERE k BETWEEN 20 AND 40 AND v > 150;
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 1	SIMPLE	pq_ref_icp_t1	NULL	range	k_idx	k_idx	4	NULL	#	33.33	Using index condition; Using where; Not parallel NON_FULL_TABLE_SCAN
+EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(PRIMARY)
+WHERE id BETWEEN 2 AND 4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pq_ref_icp_t1	NULL	range	PRIMARY	PRIMARY	4	NULL	#	100.00	Using where; Not parallel NON_FULL_TABLE_SCAN
 SET @old_optimizer_switch = @@optimizer_switch;
 SET SESSION optimizer_switch='index_condition_pushdown=off';
 EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
@@ -70,6 +98,24 @@ id	k	v	pad
 3	20	210	c
 4	30	300	d
 5	40	400	e
+SET @secondary_probe_before_primary_range = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_range_probe_attempts');
+SELECT * FROM pq_ref_icp_t1 FORCE INDEX(PRIMARY)
+WHERE id BETWEEN 2 AND 4;
+id	k	v	pad
+2	20	200	b
+3	20	210	c
+4	30	300	d
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_range_probe_attempts') -
+@secondary_probe_before_primary_range
+AS secondary_probe_delta_after_primary_range;
+secondary_probe_delta_after_primary_range
+0
 SET SESSION optimizer_switch='index_condition_pushdown=off';
 SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
 WHERE k BETWEEN 20 AND 40 AND v > 150;
@@ -114,6 +160,39 @@ WHERE variable_name = 'Parallel_ranges_dispatched') -
 AS ranges_dispatched_delta;
 executed_delta	workers_delta	ranges_built_delta	ranges_dispatched_delta
 0	0	0	0
+SELECT
+((SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_range_probe_attempts') -
+@secondary_range_probe_attempts_before) >= 4
+AS secondary_range_probe_attempts_delta,
+((SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_range_probe_unsupported') -
+@secondary_range_probe_unsupported_before) >= 4
+AS secondary_range_probe_unsupported_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_range_clone_attempts') -
+@secondary_range_clone_attempts_before
+AS secondary_range_clone_attempts_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_range_clone_failed') -
+@secondary_range_clone_failed_before
+AS secondary_range_clone_failed_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_ranges_built') -
+@secondary_ranges_built_before
+AS secondary_ranges_built_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_rows_produced') -
+@secondary_rows_produced_before
+AS secondary_rows_produced_delta;
+secondary_range_probe_attempts_delta	secondary_range_probe_unsupported_delta	secondary_range_clone_attempts_delta	secondary_range_clone_failed_delta	secondary_ranges_built_delta	secondary_rows_produced_delta
+1	1	0	0	0	0
 SET SESSION parallel_query_experimental_threaded_dop=OFF;
 SET SESSION parallel_query=OFF;
 SET SESSION parallel_cost_threshold=10000;
