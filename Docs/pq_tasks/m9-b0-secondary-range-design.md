@@ -74,6 +74,8 @@ Implementation status:
 
 ### M9-B2: InnoDB Secondary Range Partition
 
+Status: Design Ready，详见 [m9-b2-secondary-range-partition.md](m9-b2-secondary-range-partition.md)。
+
 目标是 InnoDB secondary range partition 正例的最小执行前置。
 
 建议限制：
@@ -91,6 +93,14 @@ Implementation status:
 
 - `Parallel_secondary_ranges_built`
 - `Parallel_secondary_rows_produced`
+
+已确认边界：
+
+- 只做 SQL secondary range metadata、handler carrier、InnoDB boundary tuple 和 partition counter contract；
+- 普通 secondary range SELECT 继续 fallback；
+- `Parallel_secondary_rows_produced` 在 M9-B2 必须保持 0；
+- 不修改 iterator factory，不打开 `PQblockScanIterator::Read()` / `PQRefIterator::Read()`；
+- 不接 ICP、回表、reverse、partition table、dependent ref。
 
 ### M9-B3: Secondary Range Callback Row Production
 
@@ -136,6 +146,6 @@ M9-B 设计检视 Agent 确认：
 
 ## 下一步
 
-推荐进入 M9-B1：secondary range candidate probe。
+推荐进入 M9-B2 实现：secondary range partition contract。
 
-M9-B1 完成前，不应修改 InnoDB secondary row production，也不应放开 `NON_FULL_TABLE_SCAN` fallback。
+M9-B3 完成前，不应修改 InnoDB secondary row production，也不应放开普通 secondary range SELECT 的 `NON_FULL_TABLE_SCAN` fallback。

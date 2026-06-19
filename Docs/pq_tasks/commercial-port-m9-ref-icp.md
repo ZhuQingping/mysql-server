@@ -2,7 +2,7 @@
 
 ## 状态
 
-M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2/M9-B3/M9-C/M9-D/M9-E/M9-F Planned。
+M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Design Ready。M9-B3/M9-C/M9-D/M9-E/M9-F Planned。
 
 ## 目标
 
@@ -30,6 +30,7 @@ M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2/M9-B3/M9-C/M9-D/M9-E/
 - `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
 - `Docs/pq_tasks/commercial-port-m9-ref-icp.md`
 - `Docs/pq_tasks/m9-b0-secondary-range-design.md`
+- `Docs/pq_tasks/m9-b2-secondary-range-partition.md`
 - `Docs/pq_tasks/commercial-port-gap-analysis.md`
 - `Docs/pq_tasks/README.md`
 
@@ -200,3 +201,31 @@ Result:
 - `mysqld` build passed；
 - M9-B1 targeted suite passed；
 - full current `parallel_query` suite passed，74 tests successful。
+
+M9-B2 design completed by Codex Orchestrator.
+
+Design notes:
+
+- 当前分支 `InnoDB_pq_scan_ctx::partition()` 只使用空 `Parallel_reader::Scan_range{}`，适合 clustered full scan，不具备 secondary range boundary carrier；
+- 商用实现 `pq_range_scan_init()` 遍历 `mrr_funcs.next()`，用 `start_key/end_key` 调用 `index_read()` 定位 `range_start/range_end` tuple，再用 `PQ_Borders` / `PQ_Config` 构造 B+tree partitions；
+- M9-B2 必须先定义 SQL range metadata、handler carrier、InnoDB boundary tuple deep-copy 和 partition counter contract；
+- M9-B2 不允许创建 secondary PQ iterator、不允许让 `PQblockScanIterator::Read()` / `PQRefIterator::Read()` 读取真实 row、不允许接入 ICP/回表；
+- 普通 secondary range SELECT 仍必须 fallback，`Parallel_secondary_rows_produced` 必须保持 0。
+
+Changed files:
+
+- `Docs/pq_tasks/m9-b2-secondary-range-partition.md`
+- `Docs/pq_tasks/commercial-port-m9-ref-icp.md`
+- `Docs/pq_tasks/commercial-port-gap-analysis.md`
+- `Docs/pq_tasks/README.md`
+
+Review:
+
+- M9-B2 design Review Agent APPROVE；
+- 未发现必须修改项；
+- implementation residual risks 已写入 [m9-b2-secondary-range-partition.md](m9-b2-secondary-range-partition.md)。
+
+Validation:
+
+- Design-only；无源码改动；
+- 未运行 build/MTR。
