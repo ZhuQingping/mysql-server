@@ -298,9 +298,10 @@ Review result:
 状态：
 
 - Coding taskbook drafted；Design Review accepted；
+- 编码入口探测后 blocked；
 - 不进入 worker/MQ/clone；
 - 不支持 ref/dependent ref/non-covering；
-- 编码前必须 review accepted；当前 review 已 `ACCEPT`。
+- 当前不提交源码改动。
 
 目标：
 
@@ -503,6 +504,33 @@ Review result:
 - re-review found one M9 taskbook allowed-list inconsistency；qualified the
   M9-wide allowed list as historical and made E1b-specific files authoritative；
 - final re-review returned `ACCEPT`。
+
+Coding entry result:
+
+- Codex attempted the minimum source path locally:
+  - keep public handler virtual signature unchanged；
+  - expose a narrow `row0sel.cc` ICP wrapper；
+  - branch inside user-visible secondary range producer；
+  - handle `ICP_NO_MATCH` before `row_sink->send_row()`；
+- build passed during the local attempt；
+- before keeping source changes, Codex probed stable SQL shapes in
+  `pq_commercial_ref_icp` and confirmed:
+  - non-covering `FORCE INDEX(k_idx)` + `v > ...` prints
+    `Using index condition` but violates E1b non-covering prohibition；
+  - covering `FORCE INDEX(k_v_idx)` / `FORCE INDEX(k_pad_idx)` shapes print
+    `Using where; Using index` and do not produce `Using index condition`；
+  - narrower projections such as `SELECT k ... FORCE INDEX(k_v_idx)` also do
+    not produce `Using index condition`；
+- therefore E1b has no stable user-visible strict-covering ICP positive MTR in
+  the current schema/optimizer behavior；
+- unverified source changes were removed；
+- `pq_commercial_ref_icp --record` passed after removing probes；
+- result: E1b coding is blocked until the scope changes to one of:
+  - allow non-covering secondary ICP with clustered lookup contract；or
+  - accept a debug-only ICP smoke；or
+  - find a stable upstream optimizer shape that is both covering and
+    `Using index condition`。
+- Blocked-result Review Agent returned `ACCEPT`。
 
 ### M9-E2: Constant Covering Ref ICP
 
