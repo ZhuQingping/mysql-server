@@ -5,7 +5,7 @@
 --source include/have_innodb_16k.inc
 
 --disable_warnings
-DROP TABLE IF EXISTS pq_ref_icp_t1, pq_ref_icp_t2;
+DROP TABLE IF EXISTS pq_ref_icp_t1, pq_ref_icp_t2, pq_ref_icp_t3;
 --enable_warnings
 
 CREATE TABLE pq_ref_icp_t1 (
@@ -24,10 +24,17 @@ CREATE TABLE pq_ref_icp_t2 (
   KEY k_idx(k)
 ) ENGINE=InnoDB;
 
+CREATE TABLE pq_ref_icp_t3 (
+  id INT PRIMARY KEY,
+  k INT NOT NULL,
+  KEY k_idx(k)
+) ENGINE=InnoDB;
+
 INSERT INTO pq_ref_icp_t1 VALUES
   (1,10,100,'a'),(2,20,200,'b'),(3,20,210,'c'),
   (4,30,300,'d'),(5,40,400,'e'),(6,50,500,'f');
 INSERT INTO pq_ref_icp_t2 VALUES (1,20),(2,30);
+INSERT INTO pq_ref_icp_t3 VALUES (1,20),(2,20),(3,999),(4,30),(5,20);
 
 SET SESSION parallel_query=ON;
 SET SESSION parallel_cost_threshold=0;
@@ -223,6 +230,58 @@ EXPLAIN SELECT pq_ref_icp_t1.id, pq_ref_icp_t2.id
     ON pq_ref_icp_t1.k = pq_ref_icp_t2.k;
 --enable_warnings
 
+# M9-D1: dependent ref remains serial. Repeated and missing outer keys must
+# preserve nested-loop multiplicity without growing PQ execution counters.
+SET @d1_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @d1_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+SET @d1_ranges_built_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_built');
+SET @d1_ranges_dispatched_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_dispatched');
+SET @d1_secondary_rows_produced_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_produced');
+--sorted_result
+SELECT pq_ref_icp_t3.id AS outer_id, pq_ref_icp_t1.id AS inner_id,
+       pq_ref_icp_t1.k
+  FROM pq_ref_icp_t3 STRAIGHT_JOIN pq_ref_icp_t1 FORCE INDEX(k_idx)
+    ON pq_ref_icp_t1.k = pq_ref_icp_t3.k
+  ORDER BY outer_id, inner_id;
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_queries_executed') - @d1_executed_before
+    AS d1_dependent_ref_executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_workers_launched') - @d1_workers_before
+    AS d1_dependent_ref_workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_ranges_built') - @d1_ranges_built_before
+    AS d1_dependent_ref_ranges_built_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_ranges_dispatched') -
+     @d1_ranges_dispatched_before
+    AS d1_dependent_ref_ranges_dispatched_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_secondary_rows_produced') -
+     @d1_secondary_rows_produced_before
+    AS d1_dependent_ref_secondary_rows_delta;
+
 SET @executed_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
@@ -387,5 +446,6 @@ SET SESSION parallel_query=OFF;
 SET SESSION parallel_cost_threshold=10000;
 SET SESSION parallel_default_dop=4;
 
+DROP TABLE pq_ref_icp_t3;
 DROP TABLE pq_ref_icp_t2;
 DROP TABLE pq_ref_icp_t1;

@@ -2,10 +2,13 @@
 
 ## 状态
 
-Design-only taskbook created by Codex Orchestrator. First Design Review Agent
-returned `CHANGES REQUESTED`; counter, repeated-key, fallback ownership, and D2
-forbidden-scope contracts were revised. Re-review returned `ACCEPT`. No source
-code changes in this step.
+D0 design-only taskbook completed by Codex Orchestrator. First Design Review
+Agent returned `CHANGES REQUESTED`; counter, repeated-key, fallback ownership,
+and D2 forbidden-scope contracts were revised. Re-review returned `ACCEPT`.
+
+D1 dependent ref negative guard completed. Targeted MTR record/replay passed,
+full `parallel_query` suite passed, and Code/Task Review Agent returned
+`ACCEPT`. No source execution path was opened in D1.
 
 Base commit:
 
@@ -132,6 +135,41 @@ Dependent ref 额外不变量：
 - `Parallel_queries_executed` / `Parallel_secondary_rows_produced` 不因
   dependent ref 增长；
 - full suite 通过。
+
+实现状态：
+
+- 新增 `pq_ref_icp_t3` outer table，outer keys 为 `20,20,999,30,20`；
+- 使用 `STRAIGHT_JOIN` + inner `FORCE INDEX(k_idx)` 固定 dependent ref 形态；
+- 结果必须按 outer-row 顺序产生 `2,2,0,1,2` inner row multiplicity；
+- 局部 counter window 验证：
+  - `Parallel_queries_executed = 0`；
+  - `Parallel_workers_launched = 0`；
+  - `Parallel_ranges_built = 0`；
+  - `Parallel_ranges_dispatched = 0`；
+  - `Parallel_secondary_rows_produced = 0`。
+
+验证：
+
+```bash
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --record pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_commercial_ref_icp
+```
+
+结果：
+
+- targeted record passed；
+- targeted replay passed；
+- full `parallel_query` suite passed，74 tests successful。
+
+Review:
+
+- Code/Task Review Agent returned `ACCEPT`；
+- confirmed D1 only adds MTR/docs negative guard；
+- confirmed repeated/missing outer keys express `2,2,0,1,2` multiplicity；
+- confirmed local counter window proves no PQ execution, workers, ranges, or
+  secondary row production from dependent ref；
+- confirmed no pollution of existing C2 `executed_delta=3` /
+  `secondary_rows_produced_delta=5` assertions。
 
 ### M9-D2: Ref-key Dispatch Smoke
 
