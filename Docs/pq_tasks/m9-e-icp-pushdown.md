@@ -1074,6 +1074,183 @@ Completion Report:
     `ICP_MATCH`, one-record stop, state restore, counters, MTR and completion
     report are acceptable。
 
+#### M9-E1c-2: User-visible Non-covering Secondary Range ICP Gate Design
+
+状态：
+
+- Design taskbook drafted；Design Review accepted；
+- 不改源码；
+- 目标是从 E1c-1 one-record smoke 进入 user-visible gate 前的实现契约。
+
+目标：
+
+- 定义最小 user-visible non-covering secondary range ICP path；
+- 复用 E1c-1 已验证的 ICP -> clustered lookup -> clustered materialization；
+- 新增安全的 continued secondary drain / cursor restore contract；
+- 只打开 single-table、single range、forward、non-partition、
+  non-covering secondary ICP 正例；
+- worker-side ICP clone/refix、ref/dependent ref ICP、reverse/partition/MVI
+  继续禁止。
+
+候选 SQL 正例：
+
+```sql
+SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+ WHERE k >= 20 AND k < 40 AND v > 250;
+```
+
+测试数据前置：
+
+- 当前 `pq_ref_icp_t1` 的 `k >= 20 AND k < 40` 覆盖
+  `(20,200)`、`(20,210)`、`(30,300)`；
+- `v > 250` 必须稳定产生：
+  - in-range `ICP_NO_MATCH`：`k=20` 两行被 ICP 过滤；
+  - in-range `ICP_MATCH`：`k=30, v=300` 通过 ICP 并做 clustered
+    materialization；
+- 若后续调整测试数据，必须继续保留至少一个 in-range ICP filtered row 和
+  至少一个 in-range ICP matched row。
+
+进入条件：
+
+- `EXPLAIN` 稳定显示 `Using index condition`；
+- 访问路径是单表 `JT_RANGE` / `INDEX_RANGE_SCAN`；
+- `range_scan->index_range_scan().num_ranges == 1`；
+- key 是 secondary index，非 primary，非 partition；
+- range endpoint 仅支持 M9-B3 已验证的 half-open forward range：
+  start `HA_READ_KEY_OR_NEXT`，end `HA_READ_BEFORE_KEY`；
+- `table->file->pushed_idx_cond != nullptr` 且
+  `pushed_idx_cond_keyno == keyno`；
+- 必须新增显式正向 predicate 判断“non-covering but clustered-materializable
+  and safe”，不能使用 `!pq_secondary_covering_read_set_is_safe()`：
+  - read_set 至少包含一个目标 secondary index 不覆盖的列；
+  - 所有 read_set 字段必须是 clustered record 可 materialize 的普通 stored
+    base column；
+  - 第一版只允许 fixed-length、non-null、非 virtual/generated、非 blob/text/
+    json/geometry、非 multi-valued/functional key 相关字段；
+  - WHERE residual / ICP 中引用的非 key 列必须可从 clustered record
+    materialize；
+  - 不支持 partial prefix、nullable、varlen 或需要外部 LOB 的字段；
+  - 该 predicate 返回 false 时只是“unsupported”，不能被解释为
+    non-covering safe；
+- 不允许 GROUP BY、HAVING、ORDER BY gather merge、JOIN、dependent ref、
+  locking read、reverse scan、geometry/MVI/spatial/FTS、virtual/generated
+  output列、BLOB/TEXT/JSON first path。
+
+实现契约：
+
+1. SQL gate：
+   - 不能修改 existing covering range gate 的安全边界；
+   - 建议新增独立
+     `TryCreatePQSecondaryNoncoveringIcpRangeIterator()` 或同等清晰入口；
+   - ordinary unsupported 情况继续 serial fallback；
+   - 一旦 handler 已经向 row sink 发送 row，后续 error/unsupported 必须
+     返回错误，不能 serial fallback 混合输出。
+2. Handler / prebuilt：
+   - public handler API 可新增窄 user-visible hook，但不得改已有 hook
+     语义；
+   - 必须保存并恢复 `active_index`、`pushed_idx_cond`、
+     `pushed_idx_cond_keyno`、`prebuilt->idx_cond`、
+     `idx_cond_n_cols`、`need_to_access_clustered`、`read_just_key`、
+     `m_end_range`、`mysql_template`、`n_template`、`template_type`、
+     `null_bitmap_len` 等状态；
+   - build template 必须等价于 serial secondary ICP non-covering path：
+     `read_just_key=0`、secondary `prebuilt->index`、pushed key 等于 keyno、
+     `need_to_access_clustered=true`；
+   - `reset_template()` 会清理 ICP 状态，不能依赖隐式恢复。
+3. InnoDB scan loop：
+   - ICP 必须先在 secondary record 上执行；
+   - `ICP_NO_MATCH`：不做 clustered lookup，不发送 row，继续下一条；
+   - `ICP_OUT_OF_RANGE`：结束当前 range；
+   - `ICP_MATCH`：做 clustered lookup；
+   - clustered record missing/delete-mark：不发送 row，继续下一条；
+   - visible clustered record：从 clustered record materialize，再
+     `row_sink->send_row()`；
+   - `Parallel_secondary_rows_produced` 只在 send 成功后增长。
+4. continued drain / cursor restore：
+   - 每次 clustered lookup 后，若继续扫描，必须保存 secondary pcur
+     position，commit mtr 释放 clustered latch，restart mtr，restore
+     secondary position，清空 extra-latch 标记，再做 boundary check 后移动；
+   - heap reset 后必须重置 `offsets` / `clust_offsets`；
+   - 不允许持有 clustered latch 后直接移动 secondary cursor；
+   - cursor restore 失败必须返回 error/unsupported，不得 silent fallback。
+5. row sink / counters：
+   - user-visible path 成功时可增长 `Parallel_queries_executed`；
+   - 不 launch workers，不 build/dispatch worker ranges；
+   - `Parallel_secondary_rows_produced` 等于最终发送行数；
+   - ICP filtered / invisible / delete-mark / out-of-range / abort 均不增长；
+   - `row_count` 必须和 SQL row sink buffered rows 一致。
+
+验证要求：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --record pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --parallel=1
+```
+
+MTR 必须覆盖：
+
+- serial baseline 与 PQ result correctness：
+  - ICP on/off 对照；
+  - 返回行数与内容一致；
+  - 必须覆盖 in-range `ICP_NO_MATCH` 跳过行，例如 `v > 250` 在
+    `k >= 20 AND k < 40` 中过滤 `k=20` 两行并保留 `k=30` 一行；
+- positive counter window：
+  - `Parallel_queries_executed` delta = 1；
+  - `Parallel_secondary_rows_produced` delta = expected output rows；
+  - `Parallel_workers_launched`、`Parallel_ranges_built`、
+    `Parallel_ranges_dispatched` delta = 0；
+- fallback windows：
+  - covering ICP candidate 不误入该 path；
+  - unsafe non-covering read_set 不能因
+    `!pq_secondary_covering_read_set_is_safe()` 被误判为 eligible；
+  - multi-range / reverse / partition / primary / ref / dependent ref /
+    no ICP 继续 fallback；
+  - fallback windows 的 `executed/workers/ranges/secondary_rows` 均为 0；
+- error/abort:
+  - 如本阶段不实现 KILL/error injection，必须在 taskbook 中显式说明
+    deferred，并保持 max_rows cap fail-closed。
+
+Design Review Prompt:
+
+```text
+请先阅读 AGENTS.md，并遵守其中指向的 CLAUDE.md。
+
+你的角色是 Design Review Agent。
+主控 Agent 是 Codex。
+当前任务是 M9-E1c-2 User-visible Non-covering Secondary Range ICP Gate
+Design Review。
+
+只读任务：不改文件。
+
+请阅读：
+- Docs/pq_tasks/m9-e-icp-pushdown.md
+- Docs/pq_tasks/commercial-port-m9-ref-icp.md
+- sql/parallel_query/pq_iterators.cc
+- sql/parallel_query/pq_optimizer.cc
+- storage/innobase/handler/ha_innodb_pq.cc
+- storage/innobase/row/row0pread_pq.cc
+- mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test
+
+检视目标：
+1. 判断 user-visible E1c-2 gate 是否应该以该设计进入 coding；
+2. 检查 SQL gate、handler/prebuilt、continued drain、counter、MTR 约束是否
+   足够保守；
+3. 检查是否遗漏必须先完成的安全前置；
+4. 给出 `ACCEPT` 或 `REVISE`。
+```
+
+Design Review result:
+
+- First review returned `REVISE`；
+- blocking findings addressed:
+  - replaced `!pq_secondary_covering_read_set_is_safe()` with a required
+    positive “non-covering but clustered-materializable and safe” predicate；
+  - changed positive SQL shape to `v > 250` over current test data, so the
+    range has both in-range `ICP_NO_MATCH` rows and an `ICP_MATCH` row；
+- second review returned `ACCEPT`。
+
 ### M9-E2: Constant Covering Ref ICP
 
 目标：

@@ -2,7 +2,7 @@
 
 ## 状态
 
-M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Completed。M9-C0 Design Taskbook Created。M9-C1 Completed / Review Accepted。M9-C2 Completed / Review Accepted。M9-D0 Design Accepted。M9-D1 Dependent Ref Negative Guard completed / Review Accepted。M9-D2 Ref-key Dispatch Smoke completed / Review Accepted。M9-D3a User-visible Dependent Ref Gate design completed / Review Accepted。M9-D3b Iterator Scaffold completed / Review Accepted。M9-D3c Single-probe Buffering Smoke completed / Review Accepted。M9-D3d User-visible Leader-local Gate completed / Review Accepted。M9-E ICP Pushdown design accepted。M9-E0 ICP negative guard coding/validation/review completed。M9-E1a Leader-local ICP contract design accepted。M9-E1b coding taskbook accepted / coding blocked by missing stable covering ICP positive shape。M9-E1c non-covering ICP + clustered lookup contract design accepted。M9-E1c-0 detailed contract review accepted。M9-E1c-1 coding/review completed。M9-F Planned。
+M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Completed。M9-C0 Design Taskbook Created。M9-C1 Completed / Review Accepted。M9-C2 Completed / Review Accepted。M9-D0 Design Accepted。M9-D1 Dependent Ref Negative Guard completed / Review Accepted。M9-D2 Ref-key Dispatch Smoke completed / Review Accepted。M9-D3a User-visible Dependent Ref Gate design completed / Review Accepted。M9-D3b Iterator Scaffold completed / Review Accepted。M9-D3c Single-probe Buffering Smoke completed / Review Accepted。M9-D3d User-visible Leader-local Gate completed / Review Accepted。M9-E ICP Pushdown design accepted。M9-E0 ICP negative guard coding/validation/review completed。M9-E1a Leader-local ICP contract design accepted。M9-E1b coding taskbook accepted / coding blocked by missing stable covering ICP positive shape。M9-E1c non-covering ICP + clustered lookup contract design accepted。M9-E1c-0 detailed contract review accepted。M9-E1c-1 coding/review completed。M9-E1c-2 design accepted。M9-F Planned。
 
 ## 目标
 
@@ -93,6 +93,9 @@ M9-E1c 当前边界：
 - E1c-0 detailed contract 已通过 Design Review；E1c-1 仍只能是 debug-only
   one-record smoke，E1c-2 才允许考虑 user-visible non-covering range gate。
 - E1c-1 coding/review 已完成；该阶段未打开 user-visible ICP path。
+- E1c-2 user-visible gate design 已通过 Design Review；编码前必须继续
+  保持 positive non-covering-safe predicate 与 continued drain / cursor
+  restore contract。
 
 ## 允许修改
 
