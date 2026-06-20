@@ -2,7 +2,7 @@
 
 ## 状态
 
-M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Completed。M9-C0 Design Taskbook Created。M9-C1 Completed / Review Accepted。M9-C2 Completed / Review Accepted。M9-D0 Design Accepted。M9-D1 Dependent Ref Negative Guard completed / Review Accepted。M9-D2 Ref-key Dispatch Smoke next。M9-E/M9-F Planned。
+M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Completed。M9-C0 Design Taskbook Created。M9-C1 Completed / Review Accepted。M9-C2 Completed / Review Accepted。M9-D0 Design Accepted。M9-D1 Dependent Ref Negative Guard completed / Review Accepted。M9-D2 Ref-key Dispatch Smoke completed / Review Accepted。M9-D3 User-visible Dependent Ref Gate design convergence next。M9-E/M9-F Planned。
 
 ## 目标
 

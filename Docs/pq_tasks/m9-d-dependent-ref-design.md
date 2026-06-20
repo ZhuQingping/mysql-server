@@ -10,6 +10,10 @@ D1 dependent ref negative guard completed. Targeted MTR record/replay passed,
 full `parallel_query` suite passed, and Code/Task Review Agent returned
 `ACCEPT`. No source execution path was opened in D1.
 
+D2 ref-key dispatch smoke completed. Build, targeted MTR record/replay, full
+`parallel_query` suite, and Code/Task Review Agent passed. No access-path
+factory, user-visible iterator replacement, worker, or MQ path was added.
+
 Base commit:
 
 ```text
@@ -199,6 +203,46 @@ Review:
 - debug smoke 能证明 key=20、key=30、key=999 的 row_count 分别为 2、1、0；
 - 每个 key 都使用独立 deep-copy buffer；
 - 普通 dependent ref 仍 serial fallback。
+
+实现状态：
+
+- `pq_secondary_covering_ref_smoke` 在调用 handler 前 deep-copy
+  `Index_lookup::key_buff` 到 `PQ_copied_key_endpoint`；
+- 新增 debug hook `pq_secondary_covering_ref_multi_key_smoke`，复用同一
+  fail-closed helper，不新增 iterator/factory；
+- MTR 通过三次常量 ref EXPLAIN 模拟多 key dispatch：
+  - `k=20` -> 2 rows；
+  - `k=30` -> 1 row；
+  - `k=999` -> 0 rows；
+- `d2_ref_multi_key_smoke_delta=3`；
+- 总 `secondary_rows_materialized_smoke_delta` 从 7 增加到 10；
+- `Parallel_secondary_rows_produced` 仍保持 C2 用户可见路径的 5，不因
+  D2 debug smoke 增长。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --record pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_commercial_ref_icp
+```
+
+结果：
+
+- `mysqld` build passed；
+- targeted record passed；
+- targeted replay passed；
+- full `parallel_query` suite passed，74 tests successful。
+
+Review:
+
+- Code/Task Review Agent returned `ACCEPT`；
+- confirmed handler receives copied ref key storage, not
+  `Index_lookup::key_buff` directly；
+- confirmed the new DBUG hook remains inside `JT_REF` fallback smoke only；
+- confirmed no access-path factory, iterator replacement, worker, or MQ changes；
+- confirmed `executed_delta=3` and `secondary_rows_produced_delta=5` are
+  unchanged while materialized smoke grows to 10。
 
 ### M9-D3: User-visible Dependent Ref Gate Candidate
 

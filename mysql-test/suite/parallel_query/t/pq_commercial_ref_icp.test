@@ -216,6 +216,35 @@ SELECT
       @c1_ref_materialized_smoke_before
     AS c1_ref_materialized_smoke_delta;
 
+# Debug-only M9-D2 smoke: repeatedly dispatch independent copied ref keys
+# through the current covering secondary ref smoke path. This remains
+# debug-only and does not create a user-visible dependent ref iterator.
+SET @d2_ref_multi_key_smoke_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke');
+SET @old_debug=@@session.debug;
+SET SESSION debug="d,pq_secondary_covering_ref_multi_key_smoke";
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx) WHERE k = 20;
+--enable_warnings
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx) WHERE k = 30;
+--enable_warnings
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx) WHERE k = 999;
+--enable_warnings
+SET SESSION debug=@old_debug;
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke') -
+      @d2_ref_multi_key_smoke_before
+    AS d2_ref_multi_key_smoke_delta;
+
 # Secondary covering index scan remains fallback.
 --disable_warnings
 --replace_column 10 #

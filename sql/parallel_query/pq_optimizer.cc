@@ -535,6 +535,8 @@ static void pq_maybe_run_secondary_covering_ref_smoke(THD *thd, TABLE *table,
                                                       Index_lookup *ref) {
   bool enabled = false;
   DBUG_EXECUTE_IF("pq_secondary_covering_ref_smoke", enabled = true;);
+  DBUG_EXECUTE_IF("pq_secondary_covering_ref_multi_key_smoke",
+                  enabled = true;);
   if (!enabled) return;
 
   pq_global_stats.secondary_visibility_attempts.fetch_add(
@@ -586,9 +588,16 @@ static void pq_maybe_run_secondary_covering_ref_smoke(THD *thd, TABLE *table,
   ref_key.keypart_map = keypart_map;
   ref_key.flag = HA_READ_KEY_EXACT;
 
+  PQ_copied_key_endpoint copied_ref_key;
+  if (!pq_copy_key_endpoint(ref_key, &copied_ref_key) ||
+      !copied_ref_key.present) {
+    mark_unsupported();
+    return;
+  }
+
   uint row_count = 0;
   const int error = table->file->pq_secondary_covering_ref_smoke(
-      thd, static_cast<uint>(ref->key), &ref_key, &row_count);
+      thd, static_cast<uint>(ref->key), &copied_ref_key.range, &row_count);
   if (error != 0) {
     mark_unsupported();
   } else {
