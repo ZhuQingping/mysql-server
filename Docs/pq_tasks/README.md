@@ -5,7 +5,7 @@
 ## Current Summary
 
 - Last synced: 2026-06-19
-- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1 Commercial Core Skeleton Port、M2 Commercial Iterator Access Path Skeleton、M3 Commercial Plan Clone Activation Probe、M4a Worker Result MQ Contract、M4b Controlled Query_result_mq Send Path、M5 InnoDB Commercial PQ Path Alignment、M6 Commercial Full Scan Execution Gate、M7 Aggregation Strategy Reconciliation、M8 ORDER BY Gather Merge synthetic skeleton、M9-A Secondary Ref/ICP Negative Guard、M9-B0 Secondary Range Design、M9-B1 Secondary Range Candidate Probe 已完成；M9-B2 Secondary Range Partition Contract 已实现，等待代码 Review Agent 检视。
+- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1 Commercial Core Skeleton Port、M2 Commercial Iterator Access Path Skeleton、M3 Commercial Plan Clone Activation Probe、M4a Worker Result MQ Contract、M4b Controlled Query_result_mq Send Path、M5 InnoDB Commercial PQ Path Alignment、M6 Commercial Full Scan Execution Gate、M7 Aggregation Strategy Reconciliation、M8 ORDER BY Gather Merge synthetic skeleton、M9-A Secondary Ref/ICP Negative Guard、M9-B0 Secondary Range Design、M9-B1 Secondary Range Candidate Probe、M9-B2 Secondary Range Partition Contract、M9-B3a secondary visibility fast-path、M9-B3b/B3c debug-only covering secondary materialization 已完成；M9-B3d 用户可见 covering secondary range gate 已实现并通过 build/完整 parallel_query suite，等待 Review Agent 最终结论。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
@@ -159,7 +159,16 @@
   - M9-B2: `cmake --build build-ninja --target mysqld -j 16` 通过
   - M9-B2: `./mtr --suite=parallel_query pq_commercial_ref_icp pq_stats pq_not_support` 通过
   - M9-B2: `./mtr --suite=parallel_query` 通过，完整当前 suite 74 项成功
-- Next recommended action: 启动 M9-B2 code Review Agent；Review 闭环后提交 M9-B2。真实 worker execution 切到 `Query_result_mq`、真实 worker ERROR payload、M7-D 和 M8-C/D/E 继续作为后续集成项。
+  - M9-B3: design-only 任务书已生成，Review Agent 返回 `ACCEPT WITH RISKS`
+  - M9-B3a: 编码入口检查发现 upstream `Parallel_reader` secondary visibility 仍 unsupported，按设计硬停止条件未做源码改动；blocked-result Review Agent 返回 `ACCEPT`
+  - M9-B3a-0: Secondary Visibility Helper fail-closed contract 已实现，代码/任务 Review Agent 返回 `APPROVE`
+  - M9-B3a-1: Secondary Visibility Fast-path helper 已实现，`mysqld` build、targeted MTR、完整 `parallel_query` suite 74 项通过；code/task Review Agent 返回 `APPROVE`
+  - M9-B3a-2: clustered lookup for visibility helper 已实现；`mysqld` build、targeted MTR、完整 `parallel_query` suite 74 项通过；code/task Review Agent 返回 `APPROVE`
+  - M9-B3a-3: one-record secondary visibility smoke 已实现；`mysqld` build、targeted MTR、完整 `parallel_query` suite 74 项通过；code/task Review Agent 返回 `APPROVE`
+  - M9-B3b: debug-only covering secondary one-record materialization smoke 已完成；Code Review Agent 两轮 `REVISE` 后最终返回 `ACCEPT`；SQL covering gate、generated/hidden 字段拒绝、InnoDB `m_prebuilt` template 状态恢复和 ICP-off DBUG 负例已落地；`mysqld` build、targeted MTR、完整 `parallel_query` suite 74 项通过
+  - M9-B3c: debug-only covering secondary range multi-row materialization smoke 已完成；B3c-0 contract Review Agent 返回 `ACCEPT`；code/task Review Agent 返回 `ACCEPT`；实现采用单 mtr、不 restart/无 bookmark、fast-path-only、逐记录 offsets、错误全量 fail-closed；`mysqld` build、targeted MTR、完整 `parallel_query` suite 74 项通过
+  - M9-B3d: 用户可见 covering secondary range gate 已实现；只允许 strict covering integer secondary forward range；运行时 `HA_ERR_UNSUPPORTED` 回退串行 `IndexRangeScanIterator`；`SELECT k ... WHERE k >= 20 AND k < 40` 返回 3 行并使 `Parallel_secondary_rows_produced` 增长 3；初审发现 composite child hook 和 unsafe keypart 两个问题，已修复为 root/FILTER-only gate 和 whole-keypart safety gate；`mysqld` build、targeted MTR、完整 `parallel_query` suite 74 项通过；Review Agent 最终复核 `ACCEPT`
+- Next recommended action: 提交 M9-B3d 用户可见 covering secondary range gate。后续继续按商用平移路线推进 clustered lookup visibility、non-covering secondary materialization、ICP/ref/dependent-ref 和 worker/MQ row stream。
 - Commercial port taskbooks:
   - [commercial-port-m3-plan-clone-resolver.md](commercial-port-m3-plan-clone-resolver.md)
   - [commercial-port-m4-worker-result-path.md](commercial-port-m4-worker-result-path.md)
@@ -169,6 +178,7 @@
   - [commercial-port-m8-order-by-gather-merge.md](commercial-port-m8-order-by-gather-merge.md)
   - [commercial-port-m9-ref-icp.md](commercial-port-m9-ref-icp.md)
   - [m9-b2-secondary-range-partition.md](m9-b2-secondary-range-partition.md)
+  - [m9-b3-secondary-range-row-production.md](m9-b3-secondary-range-row-production.md)
   - [commercial-port-m10-test-suite-gap-closure.md](commercial-port-m10-test-suite-gap-closure.md)
 - Next risk closure board: [v2-next-risk-closure.md](v2-next-risk-closure.md)
 - Commercial port board: [commercial-port-gap-analysis.md](commercial-port-gap-analysis.md)

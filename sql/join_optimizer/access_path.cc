@@ -349,6 +349,7 @@ struct IteratorToBeCreated {
   bool eligible_for_batch_mode;
   unique_ptr_destroy_only<RowIterator> *destination;
   Bounds_checked_array<unique_ptr_destroy_only<RowIterator>> children;
+  bool allow_pq_secondary_range{false};
 
   void AllocChildren(MEM_ROOT *mem_root, int num_children) {
     children =
@@ -360,12 +361,14 @@ struct IteratorToBeCreated {
 void SetupJobsForChildren(MEM_ROOT *mem_root, AccessPath *child, JOIN *join,
                           bool eligible_for_batch_mode,
                           IteratorToBeCreated *job,
-                          Mem_root_array<IteratorToBeCreated> *todo) {
+                          Mem_root_array<IteratorToBeCreated> *todo,
+                          bool allow_pq_secondary_range = false) {
   // Make jobs for the child, and we'll return to this job later.
   job->AllocChildren(mem_root, 1);
   todo->push_back(*job);
   todo->push_back(
-      {child, join, eligible_for_batch_mode, &job->children[0], {}});
+      {child, join, eligible_for_batch_mode, &job->children[0], {},
+       allow_pq_secondary_range});
 }
 
 void SetupJobsForChildren(MEM_ROOT *mem_root, AccessPath *outer,
@@ -393,7 +396,8 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
 
   unique_ptr_destroy_only<RowIterator> ret;
   Mem_root_array<IteratorToBeCreated> todo(mem_root);
-  todo.push_back({top_path, top_join, top_eligible_for_batch_mode, &ret, {}});
+  todo.push_back(
+      {top_path, top_join, top_eligible_for_batch_mode, &ret, {}, true});
 
   // The access path trees can be pretty deep, and the stack frames can be big
   // on certain compilers/setups, so instead of explicit recursion, we push jobs
@@ -540,11 +544,19 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
               Bounds_checked_array{param.ranges, param.num_ranges},
               param.using_extended_key_parts);
         } else {
-          iterator = NewIterator<IndexRangeScanIterator>(
-              thd, mem_root, table, examined_rows, path->num_output_rows(),
-              param.index, param.need_rows_in_rowid_order, param.reuse_handler,
-              mem_root, param.mrr_flags, param.mrr_buf_size,
-              Bounds_checked_array{param.ranges, param.num_ranges});
+          auto pq_iter = TryCreatePQSecondaryCoveringRangeIterator(
+              thd, mem_root, join, path, examined_rows,
+              job.allow_pq_secondary_range);
+          if (pq_iter != nullptr) {
+            iterator = std::move(pq_iter);
+          } else {
+            iterator = NewIterator<IndexRangeScanIterator>(
+                thd, mem_root, table, examined_rows, path->num_output_rows(),
+                param.index, param.need_rows_in_rowid_order,
+                param.reuse_handler, mem_root, param.mrr_flags,
+                param.mrr_buf_size,
+                Bounds_checked_array{param.ranges, param.num_ranges});
+          }
         }
         break;
       }
@@ -885,7 +897,8 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
         const auto &param = path->filter();
         if (job.children.is_null()) {
           SetupJobsForChildren(mem_root, param.child, join,
-                               eligible_for_batch_mode, &job, &todo);
+                               eligible_for_batch_mode, &job, &todo,
+                               job.allow_pq_secondary_range);
           continue;
         }
         if (FinalizeMaterializedSubqueries(thd, join, path)) {

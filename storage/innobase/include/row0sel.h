@@ -119,6 +119,19 @@ bool row_sel_store_mysql_rec(byte *mysql_rec, row_prebuilt_t *prebuilt,
                              lob::undo_vers_t *lob_undo,
                              mem_heap_t *&blob_heap);
 
+/** Fetch the clustered record associated with a secondary index record.
+
+This is a narrow wrapper around the internal
+Row_sel_get_clust_rec_for_mysql helper for PQ visibility checks. The caller must
+hold an active mtr that protects the secondary record. The returned clustered
+record is valid only while that mtr remains active.
+
+@return DB_SUCCESS or an InnoDB error code. */
+dberr_t pq_row_sel_get_clust_rec_for_mysql(
+    row_prebuilt_t *prebuilt, dict_index_t *sec_index, const rec_t *rec,
+    que_thr_t *thr, const rec_t **out_rec, ulint **offsets,
+    mem_heap_t **offset_heap, const dtuple_t **vrow, mtr_t *mtr);
+
 /** Converts a key value stored in MySQL format to an Innobase dtuple. The last
 field of the key value may be just a prefix of a fixed length field: hence
 the parameter key_len. But currently we do not allow search keys where the

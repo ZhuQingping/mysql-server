@@ -33,6 +33,7 @@ class JOIN;
 class MQueue_handle;
 class QEP_TAB;
 class THD;
+struct MEM_ROOT;
 struct AccessPath;
 struct Index_lookup;
 struct TABLE;
@@ -109,5 +110,9 @@ class PQRefIterator final : public TableRowIterator {
   Gather_operator *m_gather;
   QEP_TAB *m_tab;
 };
+
+unique_ptr_destroy_only<RowIterator> TryCreatePQSecondaryCoveringRangeIterator(
+    THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *path,
+    ha_rows *examined_rows, bool is_root_range_scan);
 
 #endif  // SQL_PARALLEL_QUERY_PQ_ITERATORS_H

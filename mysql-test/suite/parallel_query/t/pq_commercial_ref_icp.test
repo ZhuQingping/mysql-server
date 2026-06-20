@@ -14,7 +14,8 @@ CREATE TABLE pq_ref_icp_t1 (
   v INT NOT NULL,
   pad CHAR(8),
   KEY k_idx(k),
-  KEY k_v_idx(k, v)
+  KEY k_v_idx(k, v),
+  KEY k_pad_idx(k, pad)
 ) ENGINE=InnoDB;
 
 CREATE TABLE pq_ref_icp_t2 (
@@ -57,6 +58,22 @@ SET @secondary_rows_produced_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_secondary_rows_produced');
+SET @secondary_rows_materialized_smoke_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke');
+SET @secondary_visibility_attempts_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_visibility_attempts');
+SET @secondary_visibility_supported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_visibility_supported');
+SET @secondary_visibility_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_visibility_unsupported');
 
 # Secondary ref remains an explicit NON_FULL_TABLE_SCAN fallback.
 --disable_warnings
@@ -88,16 +105,74 @@ EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
 --enable_warnings
 SET SESSION optimizer_switch=@old_optimizer_switch;
 
-# Debug-only M9-B2 smoke: build secondary range partitions without row
-# production or user-visible PQ execution.
+# Debug-only M9-B2/B3a-0 smoke: build secondary range partitions and prove
+# secondary visibility remains fail-closed, without row production or
+# user-visible PQ execution.
+SET @b3b_materialized_smoke_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke');
 SET @old_debug=@@session.debug;
-SET SESSION debug="d,pq_secondary_range_partition_smoke";
+SET SESSION debug="d,pq_secondary_range_partition_smoke,pq_secondary_visibility_smoke,pq_secondary_visibility_one_record_smoke,pq_secondary_covering_one_row_smoke";
 --disable_warnings
 --replace_column 10 #
 EXPLAIN SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
   WHERE k >= 20 AND k < 40;
 --enable_warnings
+# Non-covering and unsafe read sets must remain fail-closed even with the
+# debug-only covering smoke enabled. Keep ICP off so this proves the SQL
+# covering read_set gate, not only the pushed_idx_cond gate.
+SET SESSION optimizer_switch='index_condition_pushdown=off';
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+  WHERE k >= 20 AND k < 40;
+--enable_warnings
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT v FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+  WHERE k >= 20 AND k < 40;
+--enable_warnings
+SET SESSION optimizer_switch=@old_optimizer_switch;
 SET SESSION debug=@old_debug;
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke') -
+      @b3b_materialized_smoke_before
+    AS b3b_materialized_smoke_delta;
+
+# Debug-only M9-B3c smoke: materialize a bounded covering secondary range.
+SET @b3c_materialized_smoke_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke');
+SET @old_debug=@@session.debug;
+SET SESSION debug="d,pq_secondary_covering_range_materialize_smoke";
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+  WHERE k >= 20 AND k < 40;
+--enable_warnings
+SET SESSION optimizer_switch='index_condition_pushdown=off';
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+  WHERE k >= 20 AND k < 40;
+--enable_warnings
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT v FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+  WHERE k >= 20 AND k < 40;
+--enable_warnings
+SET SESSION optimizer_switch=@old_optimizer_switch;
+SET SESSION debug=@old_debug;
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke') -
+      @b3c_materialized_smoke_before
+    AS b3c_materialized_smoke_delta;
 
 # Secondary covering index scan remains fallback.
 --disable_warnings
@@ -129,7 +204,23 @@ SET @ranges_dispatched_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_ranges_dispatched');
+SET @secondary_rows_produced_runtime_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_produced');
+SET @secondary_rows_materialized_runtime_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke');
 
+--sorted_result
+SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+  WHERE k >= 20 AND k < 40;
+# A range that uses an unsafe CHAR secondary keypart must stay serial even if
+# the projection itself is a safe covering integer field.
+--sorted_result
+SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_pad_idx)
+  WHERE k = 20 AND pad >= 'b' AND pad < 'z';
 --sorted_result
 SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx) WHERE k = 20;
 --sorted_result
@@ -177,7 +268,17 @@ SELECT
      FROM performance_schema.global_status
      WHERE variable_name = 'Parallel_ranges_dispatched') -
      @ranges_dispatched_before
-    AS ranges_dispatched_delta;
+    AS ranges_dispatched_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_secondary_rows_produced') -
+     @secondary_rows_produced_runtime_before
+    AS secondary_rows_produced_runtime_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke') -
+     @secondary_rows_materialized_runtime_before
+    AS secondary_rows_materialized_runtime_delta;
 
 SELECT
   ((SELECT CAST(variable_value AS UNSIGNED)
@@ -209,7 +310,27 @@ SELECT
       FROM performance_schema.global_status
       WHERE variable_name = 'Parallel_secondary_rows_produced') -
       @secondary_rows_produced_before
-    AS secondary_rows_produced_delta;
+    AS secondary_rows_produced_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke') -
+      @secondary_rows_materialized_smoke_before
+    AS secondary_rows_materialized_smoke_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_visibility_attempts') -
+      @secondary_visibility_attempts_before
+    AS secondary_visibility_attempts_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_visibility_supported') -
+      @secondary_visibility_supported_before
+    AS secondary_visibility_supported_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_visibility_unsupported') -
+      @secondary_visibility_unsupported_before
+    AS secondary_visibility_unsupported_delta;
 
 SET SESSION parallel_query_experimental_threaded_dop=OFF;
 SET SESSION parallel_query=OFF;

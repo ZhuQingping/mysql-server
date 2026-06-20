@@ -5,7 +5,8 @@ k INT NOT NULL,
 v INT NOT NULL,
 pad CHAR(8),
 KEY k_idx(k),
-KEY k_v_idx(k, v)
+KEY k_v_idx(k, v),
+KEY k_pad_idx(k, pad)
 ) ENGINE=InnoDB;
 CREATE TABLE pq_ref_icp_t2 (
 id INT PRIMARY KEY,
@@ -44,6 +45,22 @@ SET @secondary_rows_produced_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_secondary_rows_produced');
+SET @secondary_rows_materialized_smoke_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke');
+SET @secondary_visibility_attempts_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_visibility_attempts');
+SET @secondary_visibility_supported_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_visibility_supported');
+SET @secondary_visibility_unsupported_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_visibility_unsupported');
 EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx) WHERE k = 20;
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 1	SIMPLE	pq_ref_icp_t1	NULL	ref	k_idx	k_idx	4	const	#	100.00	Not parallel NON_FULL_TABLE_SCAN
@@ -62,13 +79,64 @@ WHERE k BETWEEN 20 AND 40 AND v > 150;
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 1	SIMPLE	pq_ref_icp_t1	NULL	range	k_idx	k_idx	4	NULL	#	33.33	Using where; Not parallel NON_FULL_TABLE_SCAN
 SET SESSION optimizer_switch=@old_optimizer_switch;
+SET @b3b_materialized_smoke_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke');
 SET @old_debug=@@session.debug;
-SET SESSION debug="d,pq_secondary_range_partition_smoke";
+SET SESSION debug="d,pq_secondary_range_partition_smoke,pq_secondary_visibility_smoke,pq_secondary_visibility_one_record_smoke,pq_secondary_covering_one_row_smoke";
 EXPLAIN SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
 WHERE k >= 20 AND k < 40;
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 1	SIMPLE	pq_ref_icp_t1	NULL	range	k_idx	k_idx	4	NULL	#	100.00	Using where; Using index; Not parallel NON_FULL_TABLE_SCAN
+SET SESSION optimizer_switch='index_condition_pushdown=off';
+EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+WHERE k >= 20 AND k < 40;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pq_ref_icp_t1	NULL	range	k_idx	k_idx	4	NULL	#	100.00	Using where; Not parallel NON_FULL_TABLE_SCAN
+EXPLAIN SELECT v FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+WHERE k >= 20 AND k < 40;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pq_ref_icp_t1	NULL	range	k_idx	k_idx	4	NULL	#	100.00	Using where; Not parallel NON_FULL_TABLE_SCAN
+SET SESSION optimizer_switch=@old_optimizer_switch;
 SET SESSION debug=@old_debug;
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke') -
+@b3b_materialized_smoke_before
+AS b3b_materialized_smoke_delta;
+b3b_materialized_smoke_delta
+1
+SET @b3c_materialized_smoke_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke');
+SET @old_debug=@@session.debug;
+SET SESSION debug="d,pq_secondary_covering_range_materialize_smoke";
+EXPLAIN SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+WHERE k >= 20 AND k < 40;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pq_ref_icp_t1	NULL	range	k_idx	k_idx	4	NULL	#	100.00	Using where; Using index; Not parallel NON_FULL_TABLE_SCAN
+SET SESSION optimizer_switch='index_condition_pushdown=off';
+EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+WHERE k >= 20 AND k < 40;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pq_ref_icp_t1	NULL	range	k_idx	k_idx	4	NULL	#	100.00	Using where; Not parallel NON_FULL_TABLE_SCAN
+EXPLAIN SELECT v FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+WHERE k >= 20 AND k < 40;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pq_ref_icp_t1	NULL	range	k_idx	k_idx	4	NULL	#	100.00	Using where; Not parallel NON_FULL_TABLE_SCAN
+SET SESSION optimizer_switch=@old_optimizer_switch;
+SET SESSION debug=@old_debug;
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke') -
+@b3c_materialized_smoke_before
+AS b3c_materialized_smoke_delta;
+b3c_materialized_smoke_delta
+3
 EXPLAIN SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx);
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 1	SIMPLE	pq_ref_icp_t1	NULL	index	NULL	k_idx	4	NULL	#	100.00	Using index; Not parallel NON_FULL_TABLE_SCAN
@@ -77,7 +145,7 @@ FROM pq_ref_icp_t1 JOIN pq_ref_icp_t2
 ON pq_ref_icp_t1.k = pq_ref_icp_t2.k;
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 1	SIMPLE	pq_ref_icp_t2	NULL	index	k_idx	k_idx	4	NULL	#	100.00	Using index; Not parallel MULTI_TABLE
-1	SIMPLE	pq_ref_icp_t1	NULL	ref	k_idx,k_v_idx	k_idx	4	test.pq_ref_icp_t2.k	#	100.00	Using index; Not parallel MULTI_TABLE
+1	SIMPLE	pq_ref_icp_t1	NULL	ref	k_idx,k_v_idx,k_pad_idx	k_idx	4	test.pq_ref_icp_t2.k	#	100.00	Using index; Not parallel MULTI_TABLE
 SET @executed_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
@@ -94,6 +162,25 @@ SET @ranges_dispatched_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_ranges_dispatched');
+SET @secondary_rows_produced_runtime_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_rows_produced');
+SET @secondary_rows_materialized_runtime_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke');
+SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+WHERE k >= 20 AND k < 40;
+k
+20
+20
+30
+SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_pad_idx)
+WHERE k = 20 AND pad >= 'b' AND pad < 'z';
+k
+20
+20
 SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx) WHERE k = 20;
 id	k	v	pad
 2	20	200	b
@@ -164,9 +251,19 @@ AS ranges_built_delta,
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_ranges_dispatched') -
 @ranges_dispatched_before
-AS ranges_dispatched_delta;
-executed_delta	workers_delta	ranges_built_delta	ranges_dispatched_delta
-0	0	0	0
+AS ranges_dispatched_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_rows_produced') -
+@secondary_rows_produced_runtime_before
+AS secondary_rows_produced_runtime_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke') -
+@secondary_rows_materialized_runtime_before
+AS secondary_rows_materialized_runtime_delta;
+executed_delta	workers_delta	ranges_built_delta	ranges_dispatched_delta	secondary_rows_produced_runtime_delta	secondary_rows_materialized_runtime_delta
+1	0	0	0	3	0
 SELECT
 ((SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
@@ -197,9 +294,29 @@ AS secondary_ranges_built_delta,
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_secondary_rows_produced') -
 @secondary_rows_produced_before
-AS secondary_rows_produced_delta;
-secondary_range_probe_attempts_delta	secondary_range_probe_unsupported_delta	secondary_range_clone_attempts_delta	secondary_range_clone_failed_delta	secondary_ranges_built_delta	secondary_rows_produced_delta
-1	1	1	0	1	0
+AS secondary_rows_produced_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke') -
+@secondary_rows_materialized_smoke_before
+AS secondary_rows_materialized_smoke_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_visibility_attempts') -
+@secondary_visibility_attempts_before
+AS secondary_visibility_attempts_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_visibility_supported') -
+@secondary_visibility_supported_before
+AS secondary_visibility_supported_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_visibility_unsupported') -
+@secondary_visibility_unsupported_before
+AS secondary_visibility_unsupported_delta;
+secondary_range_probe_attempts_delta	secondary_range_probe_unsupported_delta	secondary_range_clone_attempts_delta	secondary_range_clone_failed_delta	secondary_ranges_built_delta	secondary_rows_produced_delta	secondary_rows_materialized_smoke_delta	secondary_visibility_attempts_delta	secondary_visibility_supported_delta	secondary_visibility_unsupported_delta
+1	1	3	0	3	3	4	12	3	7
 SET SESSION parallel_query_experimental_threaded_dop=OFF;
 SET SESSION parallel_query=OFF;
 SET SESSION parallel_cost_threshold=10000;

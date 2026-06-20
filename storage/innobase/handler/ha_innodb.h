@@ -553,6 +553,54 @@ class ha_innobase : public handler {
       uint *ranges_built) override;
 
   /**
+    Debug-only secondary visibility contract smoke.
+
+    This validates that M9-B3a remains fail-closed before a secondary
+    MVCC/delete-mark helper exists. It does not read or produce rows.
+  */
+  int pq_secondary_visibility_smoke(THD *leader_thd, uint keyno) override;
+
+  /**
+    Debug-only one-record secondary visibility smoke.
+
+    Positions on at most one secondary record and validates the visibility
+    helper contract. It does not materialize or produce rows.
+  */
+  int pq_secondary_visibility_one_record_smoke(
+      THD *leader_thd, uint keyno, const key_range *start_key,
+      const key_range *end_key) override;
+
+  /**
+    Debug-only covering secondary materialization smoke.
+
+    Converts at most one visible covering secondary record into record[0] and
+    discards it. It does not produce rows.
+  */
+  int pq_secondary_covering_one_row_smoke(
+      THD *leader_thd, uint keyno, const key_range *start_key,
+      const key_range *end_key) override;
+
+  /**
+    Debug-only covering secondary range materialization smoke.
+
+    Converts a bounded number of visible covering secondary records into
+    record[0] and discards them. It does not produce rows.
+  */
+  int pq_secondary_covering_range_smoke(
+      THD *leader_thd, uint keyno, const key_range *start_key,
+      const key_range *end_key, uint *row_count) override;
+
+  /**
+    Experimental covering secondary range row producer.
+
+    Pushes bounded fast-path-only covering secondary rows into row_sink.
+  */
+  int pq_secondary_covering_range_produce(
+      THD *leader_thd, uint keyno, const key_range *start_key,
+      const key_range *end_key, PQ_row_sink *row_sink,
+      uint *row_count) override;
+
+  /**
     End a PQ worker scan. Cleans up worker cursor state and resources.
     Idempotent: safe to call multiple times or with nullptr.
   */

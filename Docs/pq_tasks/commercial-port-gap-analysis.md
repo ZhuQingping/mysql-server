@@ -655,8 +655,8 @@ ORDER BY commercial path passes targeted tests.
 
 ### Task M9: Secondary Index / Ref / ICP
 
-Status: M9-A, M9-B0, and M9-B1 Completed on 2026-06-19. M9-B2 is implemented
-and pending code review.
+Status: M9-A, M9-B0, M9-B1, and M9-B2 Completed on 2026-06-19. M9-B3 design
+taskbook has been created.
 Secondary/ref/ICP real PQ execution remains closed; M9-A added negative guards
 only. M9-B0 confirmed secondary range must be split into candidate probe,
 secondary partition, and callback row production before any execution path is
@@ -730,6 +730,56 @@ M9-B2 secondary range partition implemented:
 - `Parallel_secondary_ranges_built` 只表示 partition built，`Parallel_secondary_rows_produced` 保持 0；
 - 普通 secondary range SELECT 仍 fallback；`INDEX_RANGE_SCAN` iterator factory、ICP、回表、reverse、partition table、dependent ref 均后置。
 - `mysqld` build、M9-B2 targeted suite、完整当前 `parallel_query` suite 74 项通过。
+
+M9-B3 secondary range row production design created:
+
+- 任务书：[m9-b3-secondary-range-row-production.md](m9-b3-secondary-range-row-production.md)；
+- 推荐先做 covering secondary range callback row production；
+- 不扩大 M9-B2 half-open forward boundary；
+- 不混入 non-covering cluster lookup、ICP、ref/dependent ref、reverse、partition table、MVI/spatial/descending keypart；
+- 第一提交建议为 debug-only smoke，普通 secondary range SELECT 继续 fallback；
+- 用户可见 secondary range PQ gate 后置到 B3b，并需独立 review。
+
+M9-B3a-0 secondary visibility fail-closed contract implemented:
+
+- 当前 upstream `Parallel_reader` secondary visibility 仍 unsupported；
+- 新增 debug-only `pq_secondary_visibility_smoke()` 和 fail-closed InnoDB helper；
+- 新增 visibility attempts/unsupported status counters；
+- 不读取 secondary row，不产生 MySQL record，不打开 execution gate；
+- `mysqld` build、targeted suite、完整当前 `parallel_query` suite 74 项通过；
+- 等待代码/任务 Review Agent。
+
+M9-B3a-1 secondary visibility fast-path design created:
+
+- 不直接迁移完整 clustered lookup；
+- 先定义 covering secondary fast-path；
+- active read view 必须 sees page max trx id；
+- uncertain page whole-smoke fail-closed；
+- clustered lookup for visibility 后置到 B3a-2；
+- 等待 Design Review Agent。
+
+M9-B3a-1 secondary visibility fast-path helper implemented:
+
+- requires explicit active read view；
+- no ICP / no clustered access / LOCK_NONE only；
+- requires read view sees page max trx id；
+- uncertain pages fail closed；
+- supported counter added but current smoke remains unsupported until a safe
+  secondary record source exists；
+- `mysqld` build、targeted MTR、完整当前 `parallel_query` suite 74 项通过；
+- waiting for Review Agent。
+
+M9-B3a-2 clustered lookup for visibility helper implemented:
+
+- added narrow `pq_row_sel_get_clust_rec_for_mysql()` wrapper；
+- added one-record-and-stop
+  `validate_secondary_visibility_with_cluster_lookup()` helper；
+- explicit active `mtr_t *` / latch lifetime contract；
+- clustered lookup only for visibility/delete-mark；
+- no row materialization / no execution gate；
+- rejects unsupported states including intrinsic tables；
+- `mysqld` build、targeted MTR、完整当前 `parallel_query` suite 74 项通过；
+- waiting for code/task Review Agent。
 
 ### Task M10: Commercial Test Suite Gap Closure
 

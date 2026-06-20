@@ -237,6 +237,92 @@ class InnoDB_pq_scan_ctx {
   dberr_t partition(size_t split_level, const dtuple_t *start,
                     const dtuple_t *end);
 
+  /** Validate the secondary visibility contract before M9-B3 row production.
+
+  Current MySQL 8.0.46 Parallel_reader still treats secondary scans as
+  unsupported under an active read view. This method has no record source, so
+  it must fail closed. Use validate_secondary_visibility_fast_path() once a
+  caller can provide a latched secondary record and offsets.
+
+  @return DB_UNSUPPORTED for all secondary indexes in this stage. */
+  dberr_t validate_secondary_visibility_contract() const;
+
+  /** Validate a latched secondary record using the B3a-1 fast path.
+
+  This does not perform clustered lookup. It accepts only the commercial
+  page-max-trx-id fast path where the active read view sees the entire page.
+  Uncertain pages must fail closed so a future smoke cannot silently skip rows
+  and produce incomplete results.
+
+  @param[in] prebuilt Worker/handler prebuilt for the scan.
+  @param[in] rec      Latched secondary index record.
+  @param[in] offsets  Offsets for rec in m_index.
+  @return DB_SUCCESS when the record is safe for a covering secondary fast
+          path, DB_UNSUPPORTED otherwise. */
+  dberr_t validate_secondary_visibility_fast_path(
+      const row_prebuilt_t *prebuilt, const rec_t *rec,
+      const ulint *offsets) const;
+
+  /** Validate a secondary record using clustered lookup for visibility.
+
+  This is a one-record-and-stop helper. The caller must provide an active mtr
+  protecting rec and must not continue scanning with that mtr after this helper
+  takes an extra clustered latch. No MySQL record is materialized.
+
+  @return DB_SUCCESS for visible, DB_NOT_FOUND for invisible/delete-marked, or
+          DB_UNSUPPORTED for unsupported/error. */
+  dberr_t validate_secondary_visibility_with_cluster_lookup(
+      row_prebuilt_t *prebuilt, const rec_t *rec, ulint *offsets,
+      mem_heap_t **heap, mtr_t *mtr) const;
+
+  /** Validate at most one secondary record for B3a-3 debug smoke.
+
+  The method positions on the first record at or after start, checks the
+  exclusive end boundary, executes the visibility helper, and stops. It never
+  materializes or produces rows.
+
+  @return DB_SUCCESS when the one-record visibility path executed or the range
+          has no first user record, DB_UNSUPPORTED for unsafe states/errors. */
+  dberr_t validate_one_secondary_record_for_smoke(row_prebuilt_t *prebuilt,
+                                                  const dtuple_t *start,
+                                                  const dtuple_t *end) const;
+
+  /** Materialize at most one visible covering secondary record for B3b smoke.
+
+  This method is debug-smoke only. It uses the same one-record cursor lifetime
+  as validate_one_secondary_record_for_smoke(), converts a visible covering
+  secondary record into mysql_rec, and stops without enqueueing any row.
+
+  @return DB_SUCCESS when one record was materialized or the range has no first
+          visible record, DB_UNSUPPORTED for unsafe states/errors. */
+  dberr_t materialize_one_secondary_record_for_smoke(byte *mysql_rec,
+                                                     row_prebuilt_t *prebuilt,
+                                                     const dtuple_t *start,
+                                                     const dtuple_t *end) const;
+
+  /** Materialize a bounded fast-path-only secondary range for B3c smoke.
+
+  The method keeps one mtr open, advances only the secondary pcur, recomputes
+  offsets per record, and never calls clustered lookup. Any unsupported
+  candidate, cap hit, or error fails the whole smoke with row_count reset to 0.
+
+  @return DB_SUCCESS with an exact row_count, or DB_UNSUPPORTED/DB_OUT_OF_MEMORY
+          with row_count reset to 0. */
+  dberr_t materialize_secondary_range_for_smoke(
+      byte *mysql_rec, row_prebuilt_t *prebuilt, const dtuple_t *start,
+      const dtuple_t *end, uint max_rows, uint *row_count) const;
+
+  /** Produce a bounded fast-path-only covering secondary range into row_sink.
+
+  Uses the same cursor/mtr/visibility contract as
+  materialize_secondary_range_for_smoke(), but deep-copy ownership is delegated
+  to the SQL-layer row sink.
+  */
+  dberr_t produce_secondary_range_for_user_gate(
+      byte *mysql_rec, row_prebuilt_t *prebuilt, const dtuple_t *start,
+      const dtuple_t *end, uint max_rows, PQ_row_sink *row_sink,
+      uint *row_count) const;
+
   /** Check visibility of a record.
 
   V2-8F placeholder: real visibility must follow upstream Parallel_reader

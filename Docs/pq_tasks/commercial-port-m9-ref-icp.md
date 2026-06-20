@@ -2,7 +2,7 @@
 
 ## 状态
 
-M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Implemented, Pending Code Review。M9-B3/M9-C/M9-D/M9-E/M9-F Planned。
+M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Design Taskbook Created。M9-C/M9-D/M9-E/M9-F Planned。
 
 ## 目标
 
@@ -269,3 +269,179 @@ Validation:
 - M9-B2 record passed；
 - M9-B2 targeted suite passed；
 - full current `parallel_query` suite passed，74 tests successful。
+
+M9-B3 design taskbook created by Codex Orchestrator.
+
+Design boundary:
+
+- 详见 [m9-b3-secondary-range-row-production.md](m9-b3-secondary-range-row-production.md)；
+- M9-B3 默认先做 covering secondary range callback row production，不做 non-covering cluster lookup；
+- 继续限定 half-open forward range：`k >= a AND k < b`；
+- 不打开 `JT_REF`、dependent ref、ICP、reverse、partition table、MVI/spatial/descending keypart；
+- B3 第一实现建议为 debug-only smoke，证明 `Parallel_secondary_rows_produced` 可控增长；
+- 用户可见 secondary range PQ gate 必须在 B3a review 通过后单独进入 B3b。
+
+Validation:
+
+- Design-only；无源码改动；
+- 未运行 build/MTR。
+
+M9-B3a coding entry blocked by Codex Orchestrator.
+
+Blocking reason:
+
+- 当前 `Parallel_reader::check_visibility()` 对 secondary index under active
+  read view 仍走 `ut_error`；
+- 当前 `produce_callback_rows_for_range()` 保持 clustered-only；
+- 按 M9-B3 design review 已接受的规则，无法证明 secondary callback
+  visibility/delete-mark 前不得实现 row smoke。
+
+Next:
+
+- 先进入 M9-B3a-0 Secondary Visibility Helper；
+- 对齐商用 `PQ_Scan_ctx::find_visible_record()` 的最小 secondary visibility
+  语义；
+- M9-B3a-0 review 通过后再重新评估 covering secondary row smoke。
+
+M9-B3a-0 Secondary Visibility Helper fail-closed contract implemented by Codex
+Orchestrator.
+
+Changed files:
+
+- `sql/handler.h`
+- `sql/mysqld.cc`
+- `sql/parallel_query/pq_optimizer.cc`
+- `sql/parallel_query/sql_parallel.h`
+- `storage/innobase/handler/ha_innodb.h`
+- `storage/innobase/handler/ha_innodb_pq.cc`
+- `storage/innobase/include/row0pread_pq.h`
+- `storage/innobase/row/row0pread_pq.cc`
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+- `mysql-test/suite/parallel_query/r/pq_stats.result`
+- `Docs/pq_tasks/m9-b3-secondary-range-row-production.md`
+- `Docs/pq_tasks/README.md`
+- `Docs/pq_tasks/commercial-port-m9-ref-icp.md`
+
+Implementation notes:
+
+- 新增 handler debug-only `pq_secondary_visibility_smoke()`；
+- 新增 `InnoDB_pq_scan_ctx::validate_secondary_visibility_contract()`；
+- 当前 helper 对 secondary index under active read view 稳定 fail-closed，不读取 row；
+- 新增 `Parallel_secondary_visibility_attempts` /
+  `Parallel_secondary_visibility_unsupported`；
+- optimizer 只在 `pq_secondary_visibility_smoke` DBUG flag 下触发；
+- 普通 secondary range/ref/ICP SELECT 继续 fallback；
+- 不修改 `access_path.cc`，不创建 secondary PQ iterator，不产生 row；
+- `Parallel_secondary_rows_produced` 保持 0。
+
+Validation:
+
+- `cmake --build build-ninja --target mysqld -j 16` 通过；
+- `TMPDIR=/tmp ./mtr --suite=parallel_query --record pq_commercial_ref_icp pq_stats` 通过；
+- `TMPDIR=/tmp ./mtr --suite=parallel_query pq_commercial_ref_icp pq_stats pq_not_support --parallel=1 --vardir=/tmp/pqv_m9b3a0 --tmpdir=/tmp/pqt_m9b3a0` 通过；
+- `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_m9b3a0_full --tmpdir=/tmp/pqt_m9b3a0_full` 通过，完整 suite 74 项成功。
+
+Review:
+
+- Review Agent Dewey returned `APPROVE`；
+- No blocker；
+- Packaging reminder: include the new M9-B3 taskbook explicitly and exclude
+  unrelated dirty/untracked files。
+
+M9-B3a-1 Secondary Visibility Fast-path design created by Codex Orchestrator.
+
+Design notes:
+
+- 不直接迁移完整 commercial clustered lookup 分支；
+- 当前分支缺少 commercial `pq_row_sel_get_clust_rec_for_mysql()` public
+  wrapper，`row_search_idx_cond_check()` 仍是 static；
+- B3a-1 只做 covering secondary visibility fast-path；
+- `view->sees(page_get_max_trx_id(page_align(rec)))` 必须成立；
+- uncertain page 必须 whole-smoke fail-closed，不能 skip row 后继续；
+- clustered lookup for visibility 后置到 B3a-2；
+- 用户可见 execution gate 仍禁止。
+
+Review:
+
+- Pending M9-B3a-1 design Review Agent。
+
+M9-B3a-1 Secondary Visibility Fast-path helper implemented by Codex
+Orchestrator.
+
+Implementation notes:
+
+- 新增 `InnoDB_pq_scan_ctx::validate_secondary_visibility_fast_path()`；
+- 显式要求 active `m_trx->read_view`，不复用 `has_active_read_view()`；
+- read-only mode without active read view 继续 unsupported；
+- fast-path 只接受 no ICP、no clustered access、`LOCK_NONE`、matching
+  secondary prebuilt index、page max trx id visible、record not delete-marked；
+- uncertain page 返回 `DB_UNSUPPORTED`；
+- 新增 `Parallel_secondary_visibility_supported`；
+- 当前 smoke 没有安全 secondary record source，因此 supported delta 仍为 0，
+  unsupported delta 仍为 1；
+- 不产生 row，`Parallel_secondary_rows_produced` 保持 0。
+
+Validation:
+
+- `cmake --build build-ninja --target mysqld -j 16` 通过；
+- `TMPDIR=/tmp ./mtr --suite=parallel_query --record pq_commercial_ref_icp pq_stats` 通过；
+- `TMPDIR=/tmp ./mtr --suite=parallel_query pq_commercial_ref_icp pq_stats pq_not_support --parallel=1 --vardir=/tmp/pqv_m9b3a1 --tmpdir=/tmp/pqt_m9b3a1` 通过；
+- `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_m9b3a1_full --tmpdir=/tmp/pqt_m9b3a1_full` 通过，完整 suite 74 项成功。
+
+Review:
+
+- Review Agent Curie returned `APPROVE`；
+- No blocker；
+- Open question for B3a-2: define explicit `mtr_t *` / latch contract for
+  secondary visibility helpers before row smoke work。
+
+M9-B3a-2 clustered lookup for visibility design created by Codex Orchestrator.
+
+Design notes:
+
+- 需要新增窄 `pq_row_sel_get_clust_rec_for_mysql()` wrapper；
+- 允许触碰 `storage/innobase/include/row0sel.h` 与
+  `storage/innobase/row/row0sel.cc`，但只新增 wrapper；
+- wrapper 不改变现有 `row_search_mvcc()` 行为；
+- caller 提供 active `mtr_t *`，secondary record 和返回 clustered record 的
+  lifetime 都受该 mtr 保护；
+- B3a-2 只允许 one-record-and-stop，不允许 clustered lookup 后继续推进
+  secondary cursor；
+- fast-path success 必须保留 secondary delete-mark check；
+- helper 必须硬门控 `prebuilt->index == sec_index/m_index`；
+- intrinsic table explicitly unsupported；
+- clustered lookup 只用于 visibility/delete-mark；
+- 不 materialize MySQL record，不调用 row sink，不打开 execution gate。
+
+Review:
+
+- Review Agent Hooke returned `REVISE`；
+- Design has been revised；
+- Review Agent Hooke returned `ACCEPT` on re-review。
+
+M9-B3a-2 clustered lookup visibility helper implemented by Codex
+Orchestrator.
+
+Implementation notes:
+
+- 新增窄 `pq_row_sel_get_clust_rec_for_mysql()` wrapper；
+- 新增 `InnoDB_pq_scan_ctx::validate_secondary_visibility_with_cluster_lookup()`；
+- helper 要求 active read view、secondary index、`LOCK_NONE`、no ICP、
+  matching prebuilt index、matching prebuilt trx、non-intrinsic table、
+  non-null `prebuilt->clust_pcur`、active `mtr_t *`；
+- helper 只做 visibility/delete-mark validation，不 materialize MySQL row，
+  不 enqueue row，不打开 execution gate；
+- `pq_secondary_visibility_smoke()` 对 intrinsic table fail closed。
+
+Validation:
+
+- `cmake --build build-ninja --target mysqld -j 16` 通过；
+- `TMPDIR=/tmp ./mtr --suite=parallel_query pq_commercial_ref_icp pq_stats pq_not_support --parallel=1 --vardir=/tmp/pqv_m9b3a2_r2 --tmpdir=/tmp/pqt_m9b3a2_r2` 通过；
+- `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_m9b3a2_full_r2 --tmpdir=/tmp/pqt_m9b3a2_full_r2` 通过，完整 suite 74 项成功。
+
+Review:
+
+- Review Agent Parfit returned `APPROVE`；
+- No blocker；
+- Minor documentation gap for `prebuilt->clust_pcur != nullptr` has been fixed。

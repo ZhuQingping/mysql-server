@@ -4962,6 +4962,71 @@ class handler {
     return HA_ERR_UNSUPPORTED;
   }
 
+  /** Debug-only secondary visibility contract smoke.
+
+    This must not read rows, produce rows, or open a user-visible PQ execution
+    path. It is used to prove that secondary callback row production remains
+    fail-closed until the engine has an explicit MVCC/delete-mark helper.
+  */
+  virtual int pq_secondary_visibility_smoke(THD *leader_thd [[maybe_unused]],
+                                            uint keyno [[maybe_unused]]) {
+    return HA_ERR_UNSUPPORTED;
+  }
+
+  /** Debug-only one-record secondary visibility smoke.
+
+    This may inspect at most one latched secondary record to validate the
+    engine visibility helper. It must not materialize rows, enqueue rows, or
+    open a user-visible PQ execution path.
+  */
+  virtual int pq_secondary_visibility_one_record_smoke(
+      THD *leader_thd [[maybe_unused]], uint keyno [[maybe_unused]],
+      const key_range *start_key [[maybe_unused]],
+      const key_range *end_key [[maybe_unused]]) {
+    return HA_ERR_UNSUPPORTED;
+  }
+
+  /** Debug-only covering secondary materialization smoke.
+
+    This may inspect at most one visible covering secondary record and convert
+    it into the handler record buffer. It must not enqueue rows or open a
+    user-visible PQ execution path.
+  */
+  virtual int pq_secondary_covering_one_row_smoke(
+      THD *leader_thd [[maybe_unused]], uint keyno [[maybe_unused]],
+      const key_range *start_key [[maybe_unused]],
+      const key_range *end_key [[maybe_unused]]) {
+    return HA_ERR_UNSUPPORTED;
+  }
+
+  /** Debug-only covering secondary range materialization smoke.
+
+    This may drain a bounded covering secondary range into the handler record
+    buffer and report the exact number of materialized records. It must not
+    enqueue rows or open a user-visible PQ execution path.
+  */
+  virtual int pq_secondary_covering_range_smoke(
+      THD *leader_thd [[maybe_unused]], uint keyno [[maybe_unused]],
+      const key_range *start_key [[maybe_unused]],
+      const key_range *end_key [[maybe_unused]],
+      uint *row_count [[maybe_unused]]) {
+    return HA_ERR_UNSUPPORTED;
+  }
+
+  /** Experimental covering secondary range row producer.
+
+    This is a user-visible but narrowly gated bridge for covering secondary
+    range scans. It pushes materialized row images into a SQL-owned sink. It
+    must not support non-covering scans, ICP, ref access, or worker execution.
+  */
+  virtual int pq_secondary_covering_range_produce(
+      THD *leader_thd [[maybe_unused]], uint keyno [[maybe_unused]],
+      const key_range *start_key [[maybe_unused]],
+      const key_range *end_key [[maybe_unused]],
+      PQ_row_sink *row_sink [[maybe_unused]], uint *row_count [[maybe_unused]]) {
+    return HA_ERR_UNSUPPORTED;
+  }
+
   /** End worker-side PQ scan context. Idempotent. */
   virtual int pq_worker_scan_end(PQ_Worker_context *worker_ctx [[maybe_unused]]) {
     return 0;

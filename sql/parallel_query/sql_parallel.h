@@ -204,6 +204,10 @@ struct PQ_global_stats {
   std::atomic<uint64> secondary_range_clone_failed{0};  ///< Range clone failures
   std::atomic<uint64> secondary_ranges_built{0};  ///< Secondary ranges built
   std::atomic<uint64> secondary_rows_produced{0};  ///< Secondary rows produced
+  std::atomic<uint64> secondary_rows_materialized_smoke{0};  ///< Mat smoke rows
+  std::atomic<uint64> secondary_visibility_attempts{0};  ///< Visibility probes
+  std::atomic<uint64> secondary_visibility_supported{0};  ///< Fast-path ok
+  std::atomic<uint64> secondary_visibility_unsupported{0};  ///< Unsupported
   std::atomic<uint64> worker_smoke_runs{0};   ///< Worker lifecycle smoke runs
   std::atomic<uint64> worker_producer_smoke_runs{0};  ///< Producer loop smoke runs
   std::atomic<uint64> worker_open_smoke_runs{0};  ///< Worker THD/TABLE smoke runs
@@ -272,6 +276,10 @@ struct PQ_global_stats {
     secondary_range_clone_failed.store(0, std::memory_order_relaxed);
     secondary_ranges_built.store(0, std::memory_order_relaxed);
     secondary_rows_produced.store(0, std::memory_order_relaxed);
+    secondary_rows_materialized_smoke.store(0, std::memory_order_relaxed);
+    secondary_visibility_attempts.store(0, std::memory_order_relaxed);
+    secondary_visibility_supported.store(0, std::memory_order_relaxed);
+    secondary_visibility_unsupported.store(0, std::memory_order_relaxed);
     worker_smoke_runs.store(0, std::memory_order_relaxed);
     worker_producer_smoke_runs.store(0, std::memory_order_relaxed);
     worker_open_smoke_runs.store(0, std::memory_order_relaxed);
