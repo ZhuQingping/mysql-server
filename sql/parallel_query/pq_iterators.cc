@@ -287,6 +287,17 @@ bool pq_secondary_dependent_ref_gate_is_safe(const JOIN *join,
          path->num_output_rows() <= kPQSecondaryCoveringMaxEstimatedRows;
 }
 
+void pq_record_buffer_probe(TABLE *table) {
+  if (table != nullptr && table->file != nullptr &&
+      table->file->ha_get_record_buffer() != nullptr) {
+    pq_global_stats.secondary_record_buffer_nonnull_probes.fetch_add(
+        1, std::memory_order_relaxed);
+  } else {
+    pq_global_stats.secondary_record_buffer_null_probes.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+}
+
 class PQ_record_buffer_sink final : public PQ_row_sink {
  public:
   PQ_record_buffer_sink(TABLE *leader_table,
@@ -362,6 +373,7 @@ class PQSecondaryCoveringRangeIterator final : public TableRowIterator {
       return true;
     }
 
+    pq_record_buffer_probe(table());
     PQ_record_buffer_sink sink(table(), &m_rows);
     uint row_count = 0;
     const int error = table()->file->pq_secondary_covering_range_produce(
@@ -490,6 +502,7 @@ class PQSecondaryNoncoveringIcpRangeIterator final : public TableRowIterator {
       return true;
     }
 
+    pq_record_buffer_probe(table());
     PQ_record_buffer_sink sink(table(), &m_rows);
     uint row_count = 0;
     const int error = table()->file->pq_secondary_noncovering_icp_range_produce(
@@ -613,6 +626,7 @@ class PQSecondaryCoveringRefIterator final : public TableRowIterator {
     ref_key.keypart_map = make_prev_keypart_map(m_ref->key_parts);
     ref_key.flag = HA_READ_KEY_EXACT;
 
+    pq_record_buffer_probe(table());
     PQ_record_buffer_sink sink(table(), &m_rows);
     uint row_count = 0;
     const int error = table()->file->pq_secondary_covering_ref_produce(
@@ -908,6 +922,7 @@ class PQSecondaryDependentRefIterator final : public TableRowIterator {
     ref_key.keypart_map = make_prev_keypart_map(m_ref->key_parts);
     ref_key.flag = HA_READ_KEY_EXACT;
 
+    pq_record_buffer_probe(table());
     PQ_record_buffer_sink sink(table(), &m_rows);
     uint row_count = 0;
     const int error = table()->file->pq_secondary_covering_ref_produce(

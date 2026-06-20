@@ -8,6 +8,7 @@ M9-F2 reverse scan guard completed / Code/Task Review accepted。
 M9-F3 partition guard completed / Code/Task Review accepted。
 M9-F4 secondary index MIN guard completed / Code/Task Review accepted。
 M9-F5 record buffer / prefetch contract completed / Design Review accepted。
+M9-F5a/F5b record-buffer diagnostics completed / Code/Task Review accepted。
 M9-F6 optional reverse positive gate skipped: F2 review did not recommend
 opening a positive reverse range gate。
 M9-F7 commercial breadth backlog recorded。
@@ -500,6 +501,72 @@ Status: contract completed; Design Review accepted。
   cache；
 - confirmed conservative contract covers correctness boundaries and native
   `Record_buffer` remains a later performance optimization。
+
+### M9-F5a/F5b: Record-buffer Diagnostics
+
+Status: completed / Code/Task Review accepted。
+
+目标：
+
+- F5a：确认当前 PQ secondary/ref user-visible gates 进入 producer 前
+  `ha_get_record_buffer()` 为空；
+- F5b：增加可持续运行的 MTR 护栏，防止后续误把 native
+  `Record_buffer` 接入当前 PQ row-production path；
+- 保持 native `Record_buffer` 作为后续性能优化，不改变当前 row sink
+  deep-copy 语义。
+
+实现：
+
+- 新增 status counters：
+  - `Parallel_secondary_record_buffer_null_probes`
+  - `Parallel_secondary_record_buffer_nonnull_probes`
+- 在当前四个 PQ secondary/ref producer 调用前打点：
+  - covering secondary range；
+  - non-covering ICP secondary range；
+  - constant covering ref；
+  - dependent covering ref per-probe path；
+- 仅记录入口状态，不改变 gate、fallback、row materialization 或 InnoDB
+  行为；
+- `pq_commercial_ref_icp` 在 runtime positive window 中验证：
+  - `f5_record_buffer_null_probes_seen=1`；
+  - `f5_record_buffer_nonnull_probe_delta=0`。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --record pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --record pq_stats
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_stats
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1
+```
+
+结果：
+
+- `mysqld` build passed；
+- targeted record/replay passed；
+- `pq_stats` record/replay passed，PQ status variable count updated from
+  74 to 76；
+- full `parallel_query` suite passed: 74/74；
+- native `Record_buffer` non-null probe delta stayed 0 in current PQ
+  secondary/ref user-visible positive window。
+
+Review:
+
+- Code/Task Review Agent returned `ACCEPT`；
+- confirmed counters are registered/reset and `pq_stats` updates 74 -> 76；
+- confirmed probes cover current user-visible PQ secondary/ref producer entries：
+  covering range、non-covering ICP range、constant covering ref、dependent ref；
+- confirmed probes are diagnostics only and do not change gate、fallback、row
+  materialization or InnoDB producer behavior；
+- confirmed MTR guard proves current positive window has null probes and
+  non-null native `Record_buffer` probe delta remains 0。
 
 ### M9-F6: Optional Reverse Range Positive Gate
 

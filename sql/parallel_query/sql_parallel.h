@@ -205,6 +205,8 @@ struct PQ_global_stats {
   std::atomic<uint64> secondary_ranges_built{0};  ///< Secondary ranges built
   std::atomic<uint64> secondary_rows_produced{0};  ///< Secondary rows produced
   std::atomic<uint64> secondary_rows_materialized_smoke{0};  ///< Mat smoke rows
+  std::atomic<uint64> secondary_record_buffer_null_probes{0};  ///< Native RB null
+  std::atomic<uint64> secondary_record_buffer_nonnull_probes{0};  ///< Native RB set
   std::atomic<uint64> secondary_visibility_attempts{0};  ///< Visibility probes
   std::atomic<uint64> secondary_visibility_supported{0};  ///< Fast-path ok
   std::atomic<uint64> secondary_visibility_unsupported{0};  ///< Unsupported
@@ -282,6 +284,8 @@ struct PQ_global_stats {
     secondary_ranges_built.store(0, std::memory_order_relaxed);
     secondary_rows_produced.store(0, std::memory_order_relaxed);
     secondary_rows_materialized_smoke.store(0, std::memory_order_relaxed);
+    secondary_record_buffer_null_probes.store(0, std::memory_order_relaxed);
+    secondary_record_buffer_nonnull_probes.store(0, std::memory_order_relaxed);
     secondary_visibility_attempts.store(0, std::memory_order_relaxed);
     secondary_visibility_supported.store(0, std::memory_order_relaxed);
     secondary_visibility_unsupported.store(0, std::memory_order_relaxed);

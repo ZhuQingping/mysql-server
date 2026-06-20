@@ -1402,6 +1402,14 @@ SET @secondary_rows_materialized_runtime_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke');
+SET @secondary_record_buffer_null_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_record_buffer_null_probes');
+SET @secondary_record_buffer_nonnull_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_record_buffer_nonnull_probes');
 
 SET @secondary_rows_produced_ref_before = (
   SELECT CAST(variable_value AS UNSIGNED)
@@ -1484,6 +1492,18 @@ SELECT
      WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke') -
      @secondary_rows_materialized_runtime_before
     AS secondary_rows_materialized_runtime_delta;
+
+SELECT
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_record_buffer_null_probes') -
+      @secondary_record_buffer_null_before) >= 3
+    AS f5_record_buffer_null_probes_seen,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_record_buffer_nonnull_probes') -
+      @secondary_record_buffer_nonnull_before
+    AS f5_record_buffer_nonnull_probe_delta;
 
 SELECT
   ((SELECT CAST(variable_value AS UNSIGNED)

@@ -9761,6 +9761,10 @@ DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_rows_produced,
                                     secondary_rows_produced)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_rows_materialized_smoke,
                                     secondary_rows_materialized_smoke)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_record_buffer_null_probes,
+                                    secondary_record_buffer_null_probes)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_record_buffer_nonnull_probes,
+                                    secondary_record_buffer_nonnull_probes)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_visibility_attempts,
                                     secondary_visibility_attempts)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_visibility_supported,
@@ -10676,6 +10680,12 @@ SHOW_VAR status_vars[] = {
      (char *)&show_pq_secondary_rows_produced, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_secondary_rows_materialized_smoke",
      (char *)&show_pq_secondary_rows_materialized_smoke, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_secondary_record_buffer_null_probes",
+     (char *)&show_pq_secondary_record_buffer_null_probes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_secondary_record_buffer_nonnull_probes",
+     (char *)&show_pq_secondary_record_buffer_nonnull_probes, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_secondary_visibility_attempts",
      (char *)&show_pq_secondary_visibility_attempts, SHOW_FUNC,
