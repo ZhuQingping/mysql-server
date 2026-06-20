@@ -1452,7 +1452,8 @@ Completion Report:
 
 #### M9-E2 Design Taskbook: Constant Covering Ref ICP
 
-Status: design taskbook accepted by Design Review Agent.
+Status: E2-0 access-shape read-only confirmation completed; E2-1/E2-2
+coding blocked by missing stable constant covering ref ICP shape.
 
 为什么 E2 不能直接编码：
 
@@ -1473,9 +1474,10 @@ E2 总目标：
 5. ICP 必须在 row_sink->send_row() 前过滤；
 6. no-ICP constant covering ref 必须保持现有 M9-C2 user-visible 行为；
 7. no-ICP dependent ref 必须保持现有 M9-D3d user-visible 行为；
-8. ICP candidate but unsupported shapes（range ICP、dependent-ref ICP、
-   non-covering ref ICP、unsafe read_set ICP、worker/MQ）保持
-   fallback/serial 或既有安全行为。
+8. ICP candidate but unsupported shapes（dependent-ref ICP、non-covering
+   ref ICP、unsafe read_set ICP、worker/MQ）保持 fallback/serial；E2 不新增、
+   不重审 range ICP，保留既有 E1c-2a non-covering secondary range ICP
+   安全行为。
 
 E2-0: Access-shape read-only confirmation
 
@@ -1514,11 +1516,46 @@ Acceptance:
   E2 coding blocked，改为记录结论并转入 E3/E4 或另开设计；
 - read-only probe 不提交源码；若保留 MTR 只应作为 design evidence。
 
+E2-0 只读确认结果：
+
+- 临时 MTR mysqld 启动命令：
+
+```bash
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --start pq_commercial_ref_icp
+```
+
+- 覆盖候选 `k = 20 AND icp_col >= 250`：
+  `EXPLAIN` 为 `type=range`，Extra 为 `Using where; Using index`；
+- 覆盖候选 `k = 20 AND payload >= 2500`：
+  `EXPLAIN` 为 `type=ref`，但 Extra 仍为 `Using where; Using index`，
+  `EXPLAIN FORMAT=JSON` 中是 `attached_condition`，不是
+  `index_condition`；
+- 覆盖候选表达式 predicate（如 `icp_col + 0 >= 250`、
+  `payload + 0 >= 2500`）同样只得到 `type=ref` +
+  `Using where; Using index`；
+- 非覆盖对照 `SELECT id,k,icp_col,payload,pad ... WHERE k = 20 AND
+  payload >= 2500` 可以得到 `type=ref` + `Using index condition`，
+  JSON 中出现 `index_condition`；
+- optimizer trace 对 covering ref 只显示 final/attached condition；对
+  non-covering ref 才在 `refine_plan` 中出现 `pushed_index_condition`。
+
+E2-0 判定：
+
+- 当前没有稳定 constant covering `REF + ICP` 正例；
+- E2-1 debug-only smoke 和 E2-2 user-visible gate 不进入编码；
+- 不为了制造 E2 正例修改 optimizer，也不把 non-covering ref ICP 混入
+  E2；
+- 若后续仍要重新打开 E2，先新增 debug-only shape probe，记录
+  `path->type`、`ref->key`、`pushed_idx_cond`、
+  `pushed_idx_cond_keyno`、covering read-set safety，默认不改变执行行为。
+
 E2-1: Debug-only constant covering ref ICP smoke
 
 前置：
 
 - E2-0 找到稳定 `JT_REF + pushed_idx_cond` 正例。
+- 当前前置不满足，本阶段 blocked。
 
 目标：
 
@@ -1594,8 +1631,9 @@ Design Review Prompt:
 1. E2 是否必须先做 access-shape read-only confirmation；
 2. `JT_REF + pushed_idx_cond + AccessPath::REF` 正例条件是否定义清楚；
 3. E2-1 debug-only smoke 和 E2-2 user-visible gate 拆分是否合理；
-4. 是否继续禁止 dependent-ref ICP、range ICP、non-covering ref ICP、
-   worker/MQ，同时不回退现有 C2/D3d no-ICP user-visible 行为；
+4. 是否继续禁止 dependent-ref ICP、non-covering ref ICP、worker/MQ；
+   E2 是否不新增、不重审 range ICP，并保留既有 E1c-2a range ICP 和
+   C2/D3d no-ICP user-visible 行为；
 5. fallback/counter/row_count 语义是否足够吸收 E1c-2a 的经验教训。
 
 输出：
