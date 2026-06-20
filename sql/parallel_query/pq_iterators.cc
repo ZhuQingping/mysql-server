@@ -31,6 +31,7 @@
 #include "include/my_sqlcommand.h"
 #include "my_base.h"
 #include "my_bitmap.h"
+#include "my_dbug.h"
 #include "sql/field.h"
 #include "sql/handler.h"
 #include "sql/iterators/ref_row_iterators.h"
@@ -493,6 +494,120 @@ class PQSecondaryCoveringRefIterator final : public TableRowIterator {
   unique_ptr_destroy_only<RowIterator> m_serial_iterator;
 };
 
+class PQSecondaryDependentRefSmokeIterator final : public TableRowIterator {
+ public:
+  PQSecondaryDependentRefSmokeIterator(THD *thd, MEM_ROOT *mem_root,
+                                       TABLE *table, Index_lookup *ref,
+                                       bool use_order, double expected_rows,
+                                       ha_rows *examined_rows)
+      : TableRowIterator(thd, table),
+        m_mem_root(mem_root),
+        m_ref(ref),
+        m_use_order(use_order),
+        m_expected_rows(expected_rows),
+        m_examined_rows(examined_rows) {}
+
+  bool Init() override {
+    m_smoke_ran = false;
+    m_serial_iterator = NewIterator<RefIterator<false>>(
+        thd(), m_mem_root, table(), m_ref, m_use_order, m_expected_rows,
+        m_examined_rows);
+    return m_serial_iterator == nullptr || m_serial_iterator->Init();
+  }
+
+  int Read() override {
+    if (!m_smoke_ran) {
+      m_smoke_ran = true;
+      if (run_smoke_probe()) return 1;
+      if (m_serial_iterator == nullptr || m_serial_iterator->Init()) return 1;
+    }
+    return m_serial_iterator->Read();
+  }
+
+  void UnlockRow() override {
+    if (m_serial_iterator != nullptr) {
+      m_serial_iterator->UnlockRow();
+      return;
+    }
+    TableRowIterator::UnlockRow();
+  }
+
+ private:
+  bool run_smoke_probe() {
+    pq_global_stats.secondary_ref_probe_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+
+    if (table() == nullptr || table()->file == nullptr ||
+        table()->s == nullptr || table()->s->reclength == 0 ||
+        m_ref == nullptr ||
+        !pq_secondary_ref_is_dependent_scaffold_candidate(table(), m_ref)) {
+      pq_global_stats.secondary_ref_fallback_probes.fetch_add(
+          1, std::memory_order_relaxed);
+      return false;
+    }
+
+    if (m_ref->impossible_null_ref()) {
+      pq_global_stats.secondary_ref_empty_probes.fetch_add(
+          1, std::memory_order_relaxed);
+      return false;
+    }
+
+    if (construct_lookup(thd(), table(), m_ref)) {
+      table()->set_no_row();
+      pq_global_stats.secondary_ref_fallback_probes.fetch_add(
+          1, std::memory_order_relaxed);
+      return false;
+    }
+
+    std::vector<uchar> copied_key(m_ref->key_buff,
+                                  m_ref->key_buff + m_ref->key_length);
+    key_range ref_key{};
+    ref_key.key = copied_key.data();
+    ref_key.length = m_ref->key_length;
+    ref_key.keypart_map = make_prev_keypart_map(m_ref->key_parts);
+    ref_key.flag = HA_READ_KEY_EXACT;
+
+    std::vector<std::vector<uchar>> smoke_rows;
+    PQ_record_buffer_sink sink(table(), &smoke_rows);
+    uint row_count = 0;
+    const int error = table()->file->pq_secondary_covering_ref_produce(
+        thd(), static_cast<uint>(m_ref->key), &ref_key, &sink, &row_count);
+
+    if (error == HA_ERR_UNSUPPORTED) {
+      pq_global_stats.secondary_ref_fallback_probes.fetch_add(
+          1, std::memory_order_relaxed);
+      return false;
+    }
+
+    if (error != 0) {
+      PrintError(error);
+      return true;
+    }
+
+    if (row_count != smoke_rows.size()) {
+      PrintError(HA_ERR_INTERNAL_ERROR);
+      return true;
+    }
+
+    if (row_count == 0) {
+      pq_global_stats.secondary_ref_empty_probes.fetch_add(
+          1, std::memory_order_relaxed);
+    } else {
+      pq_global_stats.secondary_ref_rows_produced.fetch_add(
+          row_count, std::memory_order_relaxed);
+    }
+    return false;
+  }
+
+  MEM_ROOT *const m_mem_root;
+  Index_lookup *const m_ref;
+  const bool m_use_order;
+  const double m_expected_rows;
+  ha_rows *const m_examined_rows;
+  bool m_smoke_ran{false};
+  unique_ptr_destroy_only<RowIterator> m_serial_iterator;
+};
+
 }  // namespace
 
 ParallelScanIterator::ParallelScanIterator(
@@ -640,6 +755,14 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQSecondaryCoveringRefIterator(
         join->query_block->having_cond() == nullptr &&
         path->num_output_rows() <= kPQSecondaryCoveringMaxEstimatedRows &&
         pq_secondary_ref_is_dependent_scaffold_candidate(table, ref)) {
+      bool dependent_ref_smoke_enabled = false;
+      DBUG_EXECUTE_IF("pq_secondary_dependent_ref_single_probe_smoke",
+                      dependent_ref_smoke_enabled = true;);
+      if (dependent_ref_smoke_enabled) {
+        return NewIterator<PQSecondaryDependentRefSmokeIterator>(
+            thd, mem_root, mem_root, table, ref, param.use_order,
+            path->num_output_rows(), examined_rows);
+      }
       pq_global_stats.secondary_ref_probe_attempts.fetch_add(
           1, std::memory_order_relaxed);
       pq_global_stats.secondary_ref_probe_unsupported.fetch_add(

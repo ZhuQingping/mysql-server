@@ -9,6 +9,11 @@ D3b iterator scaffold / ref-specific counters completed. Build, targeted MTR
 record/replay, full `parallel_query` suite, and Code/Task Review Agent passed.
 D3b still opens no user-visible dependent ref path.
 
+D3c single-probe buffering smoke completed. Build, targeted MTR record/replay,
+full `parallel_query` suite, and Code/Task Review Agent passed. D3c remains
+DBUG-only and delegates all user-visible rows to the native
+`RefIterator<false>`.
+
 Base commits:
 
 ```text
@@ -171,6 +176,59 @@ Review:
 - repeated/missing outer key MTR 仍 serial；
 - debug smoke 可观测 key=20 -> 2、key=30 -> 1、key=999 -> 0；
 - `Parallel_queries_executed` 不增长。
+
+实现状态：
+
+- 新增 DBUG hook `pq_secondary_dependent_ref_single_probe_smoke`；
+- hook 开启时，非 root dependent covering secondary ref candidate 使用
+  `PQSecondaryDependentRefSmokeIterator`；
+- wrapper 在每个 inner probe 的 first `Read()` 前执行 debug-only smoke：
+  - `impossible_null_ref()`；
+  - `construct_lookup()`；
+  - deep-copy `Index_lookup::key_buff`；
+  - 调用 `pq_secondary_covering_ref_produce()`；
+  - buffer rows only for counting；
+  - 重新 `Init()` 原生 `RefIterator<false>`，用户可见 rows 仍由 serial
+    iterator 返回；
+- hook 关闭时仍保持 D3b 行为：candidate attempts/unsupported 后返回
+  `nullptr`；
+- 不修改 worker/MQ、handler API、`PQ_REF_SCAN` 或默认用户可见 dependent ref
+  path。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --record pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_commercial_ref_icp
+```
+
+结果：
+
+- `mysqld` build passed；
+- targeted record passed；
+- targeted replay passed；
+- D3c debug block observed:
+  - key=20 -> 2 serial-visible rows；
+  - key=30 -> 1 serial-visible row；
+  - key=999 -> 0 serial-visible rows；
+  - `d3c_ref_probe_attempts_delta = 3`；
+  - `d3c_ref_probe_unsupported_delta = 0`；
+  - `d3c_ref_empty_probes_delta = 1`；
+  - `d3c_ref_fallback_probes_delta = 0`；
+  - `d3c_ref_rows_produced_delta = 3`；
+  - `d3c_executed_delta = 0`；
+  - `d3c_secondary_rows_produced_delta = 0`。
+- full `parallel_query` suite passed，74 tests successful。
+
+Review:
+
+- Code/Task Review Agent returned `ACCEPT`；
+- confirmed DBUG-only scope and default D3b behavior are preserved；
+- confirmed user-visible rows still come from native `RefIterator<false>`；
+- confirmed smoke order, key deep-copy lifetime, and row-buffer-for-counting
+  behavior；
+- confirmed C2/D1/D3b semantics are not polluted。
 
 ### M9-D3d: User-visible Leader-local Gate
 
