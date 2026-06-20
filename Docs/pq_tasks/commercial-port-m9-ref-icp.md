@@ -2,7 +2,7 @@
 
 ## 状态
 
-M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Completed。M9-C0 Design Taskbook Created。M9-C1 Completed / Review Accepted。M9-C2 Completed / Review Accepted。M9-D0 Design Accepted。M9-D1 Dependent Ref Negative Guard completed / Review Accepted。M9-D2 Ref-key Dispatch Smoke completed / Review Accepted。M9-D3a User-visible Dependent Ref Gate design completed / Review Accepted。M9-D3b Iterator Scaffold completed / Review Accepted。M9-D3c Single-probe Buffering Smoke completed / Review Accepted。M9-D3d User-visible Leader-local Gate completed / Review Accepted。M9-E ICP Pushdown design accepted。M9-E0 ICP negative guard coding/validation/review completed。M9-E1a Leader-local ICP contract design accepted。M9-E1b coding taskbook accepted / coding blocked by missing stable covering ICP positive shape。M9-E1c non-covering ICP + clustered lookup contract design accepted。M9-E1c-0 detailed contract review accepted。M9-E1c-1 coding/review completed。M9-E1c-2 design accepted。M9-E1c-2a coding/validation/review completed。M9-F Planned。
+M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Completed。M9-C0 Design Taskbook Created。M9-C1 Completed / Review Accepted。M9-C2 Completed / Review Accepted。M9-D0 Design Accepted。M9-D1 Dependent Ref Negative Guard completed / Review Accepted。M9-D2 Ref-key Dispatch Smoke completed / Review Accepted。M9-D3a User-visible Dependent Ref Gate design completed / Review Accepted。M9-D3b Iterator Scaffold completed / Review Accepted。M9-D3c Single-probe Buffering Smoke completed / Review Accepted。M9-D3d User-visible Leader-local Gate completed / Review Accepted。M9-E ICP Pushdown design accepted。M9-E0 ICP negative guard coding/validation/review completed。M9-E1a Leader-local ICP contract design accepted。M9-E1b coding taskbook accepted / coding blocked by missing stable covering ICP positive shape。M9-E1c non-covering ICP + clustered lookup contract design accepted。M9-E1c-0 detailed contract review accepted。M9-E1c-1 coding/review completed。M9-E1c-2 design accepted。M9-E1c-2a coding/validation/review completed。M9-E2 design taskbook accepted。M9-F Planned。
 
 ## 目标
 
@@ -30,6 +30,17 @@ M9-E 设计拆分详见 [m9-e-icp-pushdown.md](m9-e-icp-pushdown.md)：
 - M9-E2: constant covering ref ICP；
 - M9-E3: dependent ref ICP contract；
 - M9-E4: worker-side ICP clone/refix。
+
+M9-E2 当前边界：
+
+- 先做 access-shape read-only confirmation，不直接编码；
+- 必须证明存在稳定 `JT_REF + pushed_idx_cond` 正例，否则 E2 user-visible
+  coding blocked；
+- 只处理 constant covering ref ICP；保持 existing C2 no-ICP constant ref 和
+  existing D3d no-ICP dependent ref 行为不变；
+- dependent-ref ICP、range ICP、non-covering ref ICP、worker/MQ 全部禁止。
+- Design Review Agent 首轮 `REVISE`，修正 no-ICP C2/D3d 既有行为表述后
+  复审 `ACCEPT`。
 
 M9-E0 当前边界：
 

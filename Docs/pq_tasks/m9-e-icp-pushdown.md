@@ -1450,6 +1450,171 @@ Completion Report:
 - ref equality producer 当前按 copied key 读取全部 matching rows；
 - ICP filter 后 row count / empty probe counter 需要重新定义。
 
+#### M9-E2 Design Taskbook: Constant Covering Ref ICP
+
+Status: design taskbook accepted by Design Review Agent.
+
+为什么 E2 不能直接编码：
+
+- MySQL optimizer 可能把 `k = const AND extra_index_col >= const` 规划成
+  `JT_RANGE`，而不是 `JT_REF`；
+- 当前 M9-C2 constant covering ref gate 明确拒绝
+  `table->file->pushed_idx_cond != nullptr`；
+- E1c 已打开 non-covering range ICP，但不应复用为 ref ICP；
+- 若没有稳定 `JT_REF + pushed_idx_cond_keyno == ref->key` 正例，直接编码
+  会把 range/ref 边界混在一起。
+
+E2 总目标：
+
+1. 只扩展 constant covering secondary ref；
+2. 只支持 single-table/simple/no group/order/having/no reverse/no partition；
+3. 只允许 constant ref key，不支持 dependent ref；
+4. 只允许 strict covering、non-null integer read_set；
+5. ICP 必须在 row_sink->send_row() 前过滤；
+6. no-ICP constant covering ref 必须保持现有 M9-C2 user-visible 行为；
+7. no-ICP dependent ref 必须保持现有 M9-D3d user-visible 行为；
+8. ICP candidate but unsupported shapes（range ICP、dependent-ref ICP、
+   non-covering ref ICP、unsafe read_set ICP、worker/MQ）保持
+   fallback/serial 或既有安全行为。
+
+E2-0: Access-shape read-only confirmation
+
+目标：
+
+- 在 `pq_commercial_ref_icp` 或临时 probe 中确认是否存在稳定
+  `JT_REF + pushed_idx_cond` 正例；
+- 确认 `EXPLAIN` 是否能稳定显示 `Using index condition`，并且 access type
+  是 `ref` 而不是 `range`；
+- 确认 iterator dispatch 看到的是 `AccessPath::REF`，而不只是 EXPLAIN 文本
+  显示 `type=ref`；
+- 若只能形成 `range`，E2 user-visible coding 必须 blocked，不得为了进入
+  ref path 改 optimizer。
+
+建议 probe SQL：
+
+```sql
+CREATE TABLE pq_ref_icp_e2 (
+  id INT PRIMARY KEY,
+  k INT NOT NULL,
+  icp_col INT NOT NULL,
+  payload INT NOT NULL,
+  KEY k_icp_payload_idx(k, icp_col, payload)
+) ENGINE=InnoDB;
+
+EXPLAIN SELECT k, icp_col, payload
+  FROM pq_ref_icp_e2 FORCE INDEX(k_icp_payload_idx)
+ WHERE k = 20 AND icp_col >= 250;
+```
+
+Acceptance:
+
+- 若 EXPLAIN type 是 `ref`、Extra 含 `Using index condition`，且 iterator
+  dispatch 确认为 `AccessPath::REF`，进入 E2-1；
+- 若 EXPLAIN type 是 `range` 或 Extra 只有 `Using where; Using index`，
+  E2 coding blocked，改为记录结论并转入 E3/E4 或另开设计；
+- read-only probe 不提交源码；若保留 MTR 只应作为 design evidence。
+
+E2-1: Debug-only constant covering ref ICP smoke
+
+前置：
+
+- E2-0 找到稳定 `JT_REF + pushed_idx_cond` 正例。
+
+目标：
+
+- 复用 serial ICP helper/wrapper，不裸调 `pushed_idx_cond->val_int()`；
+- 在 handler/InnoDB 内使用 ref equality endpoint；
+- 对每个 matching ref record 执行 ICP；
+- ICP_NO_MATCH 不 materialize、不计入 produced rows；
+- ICP_MATCH 才走 covering secondary materialization；
+- debug-only，不打开 user-visible execution。
+
+禁止：
+
+- dependent ref；
+- non-covering clustered lookup；
+- worker/MQ；
+- range path；
+- nullable/CHAR/VARCHAR/BLOB/JSON/geometry；
+- partition/reverse/MVI/spatial。
+
+E2-2: User-visible constant covering ref ICP gate
+
+前置：
+
+- E2-1 coding/review accepted；
+- E2-1 target MTR 证明 ICP filtering before send_row；
+- fallback windows 独立验证 ICP candidate but unsupported shapes（range ICP、
+  dependent-ref ICP、non-covering ref ICP、unsafe read_set ICP、worker/MQ）
+  均 `executed/fallback/workers/ranges/secondary_rows = 0` 或保持既有
+  safe behavior；
+- existing C2 no-ICP constant covering ref counters must remain unchanged；
+- existing D3d no-ICP dependent ref counters must remain unchanged。
+
+实现边界：
+
+- 独立 `PQSecondaryCoveringIcpRefIterator` 或清晰分支；
+- handler hook 可新增
+  `pq_secondary_covering_icp_ref_produce()`，不要改变已有 covering ref
+  hook 语义；
+- `HA_ERR_UNSUPPORTED` 只允许在未缓冲 row 前 fallback；
+- 缓冲 row 后的 unsupported/error 必须 fail closed；
+- `row_count` 必须与 SQL sink buffered rows 一致，包括 `ICP_OUT_OF_RANGE`
+  early-finish。
+- ICP-filtered rows、invisible rows、delete-marked rows、`ICP_OUT_OF_RANGE`
+  early-finish 不增加 produced counters。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --record pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --parallel=1
+```
+
+Design Review Prompt:
+
+```text
+请先阅读 AGENTS.md，并遵守其中指向的 CLAUDE.md。
+
+你的角色是 Design Review Agent。
+当前任务是 M9-E2 Constant Covering Ref ICP Design Review。
+
+请阅读：
+- Docs/pq_tasks/README.md
+- Docs/pq_tasks/commercial-port-m9-ref-icp.md
+- Docs/pq_tasks/m9-e-icp-pushdown.md
+- sql/parallel_query/pq_iterators.cc
+- storage/innobase/handler/ha_innodb_pq.cc
+- storage/innobase/row/row0pread_pq.cc
+- mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test
+
+请重点判断：
+1. E2 是否必须先做 access-shape read-only confirmation；
+2. `JT_REF + pushed_idx_cond + AccessPath::REF` 正例条件是否定义清楚；
+3. E2-1 debug-only smoke 和 E2-2 user-visible gate 拆分是否合理；
+4. 是否继续禁止 dependent-ref ICP、range ICP、non-covering ref ICP、
+   worker/MQ，同时不回退现有 C2/D3d no-ICP user-visible 行为；
+5. fallback/counter/row_count 语义是否足够吸收 E1c-2a 的经验教训。
+
+输出：
+- Verdict: ACCEPT 或 REVISE
+- Blocking findings
+- Non-blocking risks
+- 建议下一步
+```
+
+Design Review result:
+
+- First review returned `REVISE`；
+- fixed wording so no-ICP constant covering ref preserves existing M9-C2
+  user-visible behavior and no-ICP dependent ref preserves existing M9-D3d
+  user-visible behavior；
+- scoped fallback windows to unsupported ICP candidate shapes only；
+- added `AccessPath::REF` confirmation to E2-0 acceptance；
+- second review returned `ACCEPT`。
+
 ### M9-E3: Dependent Ref ICP Contract
 
 目标：
