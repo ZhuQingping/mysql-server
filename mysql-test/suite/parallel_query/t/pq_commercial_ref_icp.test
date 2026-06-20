@@ -7,7 +7,8 @@
 --disable_warnings
 DROP TABLE IF EXISTS pq_ref_icp_t1, pq_ref_icp_t2, pq_ref_icp_t3,
                      pq_ref_icp_t4, pq_ref_icp_mvi, pq_ref_icp_part,
-                     pq_ref_icp_rev, pq_ref_icp_min, pq_ref_icp_blob;
+                     pq_ref_icp_mvi_outer, pq_ref_icp_rev, pq_ref_icp_min,
+                     pq_ref_icp_blob;
 --enable_warnings
 
 CREATE TABLE pq_ref_icp_t1 (
@@ -58,6 +59,12 @@ CREATE TABLE pq_ref_icp_part (
 ) ENGINE=InnoDB
 PARTITION BY HASH(id) PARTITIONS 2;
 
+CREATE TABLE pq_ref_icp_mvi_outer (
+  id INT PRIMARY KEY,
+  doc_id INT NOT NULL,
+  b INT NOT NULL
+) ENGINE=InnoDB;
+
 CREATE TABLE pq_ref_icp_rev (
   id INT PRIMARY KEY,
   k INT NOT NULL,
@@ -91,6 +98,7 @@ INSERT INTO pq_ref_icp_mvi VALUES
   (3,1,1,'{"val":[3,4]}');
 INSERT INTO pq_ref_icp_part VALUES
   (1,10),(2,20),(3,20),(4,30),(5,40);
+INSERT INTO pq_ref_icp_mvi_outer VALUES (1,2,2),(2,1,1),(3,999,9);
 INSERT INTO pq_ref_icp_rev VALUES
   (1,10),(2,20),(3,20),(4,30),(5,40);
 INSERT INTO pq_ref_icp_min VALUES
@@ -1056,6 +1064,84 @@ SELECT
       @f0_secondary_rows_before
     AS f0_edge_secondary_rows_delta;
 
+# M9-F1: MVI / multi-valued key guard. Even when the access shape is ref or
+# dependent ref on non-array leading keyparts, the key itself is multi-valued
+# and must stay out of current PQ secondary/ref execution paths.
+SET @f1_mvi_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @f1_mvi_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+SET @f1_mvi_ranges_built_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_built');
+SET @f1_mvi_ranges_dispatched_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_dispatched');
+SET @f1_mvi_secondary_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_produced');
+
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT id, doc_id, b FROM pq_ref_icp_mvi
+  FORCE INDEX(mv_doc_id_b)
+  WHERE doc_id = 2 AND b = 2;
+--enable_warnings
+--sorted_result
+SELECT id, doc_id, b FROM pq_ref_icp_mvi FORCE INDEX(mv_doc_id_b)
+  WHERE doc_id = 2 AND b = 2;
+
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT pq_ref_icp_mvi_outer.id AS outer_id,
+       pq_ref_icp_mvi.id AS inner_id
+  FROM pq_ref_icp_mvi_outer STRAIGHT_JOIN pq_ref_icp_mvi
+    FORCE INDEX(mv_doc_id_b)
+    ON pq_ref_icp_mvi.doc_id = pq_ref_icp_mvi_outer.doc_id
+   AND pq_ref_icp_mvi.b = pq_ref_icp_mvi_outer.b;
+--enable_warnings
+--sorted_result
+SELECT pq_ref_icp_mvi_outer.id AS outer_id,
+       pq_ref_icp_mvi.id AS inner_id
+  FROM pq_ref_icp_mvi_outer STRAIGHT_JOIN pq_ref_icp_mvi
+    FORCE INDEX(mv_doc_id_b)
+    ON pq_ref_icp_mvi.doc_id = pq_ref_icp_mvi_outer.doc_id
+   AND pq_ref_icp_mvi.b = pq_ref_icp_mvi_outer.b;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_queries_executed') -
+      @f1_mvi_executed_before
+    AS f1_mvi_executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_workers_launched') -
+      @f1_mvi_workers_before
+    AS f1_mvi_workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_ranges_built') -
+      @f1_mvi_ranges_built_before
+    AS f1_mvi_ranges_built_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_ranges_dispatched') -
+      @f1_mvi_ranges_dispatched_before
+    AS f1_mvi_ranges_dispatched_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_rows_produced') -
+      @f1_mvi_secondary_rows_before
+    AS f1_mvi_secondary_rows_delta;
+
 SET @executed_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
@@ -1223,6 +1309,7 @@ SET SESSION parallel_default_dop=4;
 DROP TABLE pq_ref_icp_blob;
 DROP TABLE pq_ref_icp_min;
 DROP TABLE pq_ref_icp_rev;
+DROP TABLE pq_ref_icp_mvi_outer;
 DROP TABLE pq_ref_icp_part;
 DROP TABLE pq_ref_icp_mvi;
 DROP TABLE pq_ref_icp_t4;

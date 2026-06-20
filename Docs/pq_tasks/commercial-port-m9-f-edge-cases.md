@@ -3,6 +3,7 @@
 ## 状态
 
 Status: M9-F0 negative guard matrix completed / Code/Task Review accepted。
+M9-F1 MVI guard completed / Code/Task Review accepted。
 No source edits outside MTR/docs。
 
 M9-E2-0 已确认当前没有稳定 constant covering `REF + ICP` 正例，因此
@@ -142,6 +143,8 @@ Review:
 
 ### M9-F1: MVI Guard
 
+Status: coding/validation completed; Code/Task Review accepted。
+
 目标：
 
 - 明确 current branch 是否应该直接拒绝 MVI key / functional array key；
@@ -161,6 +164,47 @@ Review:
 - PQ secondary/ref counters 不增长；
 - review 确认没有把 JSON/array field materialization 引入现有 fixed
   record path。
+
+Implementation notes:
+
+- 在 F0 MVI 单表 ref guard 基础上新增 MVI dependent-ref guard；
+- 新增 outer table 驱动 `pq_ref_icp_mvi` 的 `mv_doc_id_b` key；
+- 使用局部 counter window 验证 MVI ref/dependent-ref 不增长
+  `Parallel_queries_executed`、`Parallel_workers_launched`、
+  `Parallel_ranges_built`、`Parallel_ranges_dispatched`、
+  `Parallel_secondary_rows_produced`。
+
+Validation:
+
+```bash
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --record pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1
+```
+
+Results:
+
+- targeted record/replay passed；
+- full `parallel_query` suite passed: 74/74；
+- F1 local deltas:
+  `f1_mvi_executed_delta=0`、`f1_mvi_workers_delta=0`、
+  `f1_mvi_ranges_built_delta=0`、
+  `f1_mvi_ranges_dispatched_delta=0`、
+  `f1_mvi_secondary_rows_delta=0`。
+
+Review:
+
+- Code/Task Review Agent returned `ACCEPT`；
+- confirmed constant MVI ref and dependent MVI ref are both covered；
+- confirmed no `sql/` or `storage/innobase/` files were modified；
+- confirmed F0 negative guards and existing B3/C2/D3d/E1c2a positive
+  statistics remain stable；
+- non-blocking note: the dependent-ref EXPLAIN is currently rejected as
+  `MULTI_TABLE`; if a future path opens multi-table MVI shapes, add a more
+  direct unsupported-reason probe for `HA_MULTI_VALUED_KEY`。
 
 ### M9-F2: Reverse Scan Guard / Shape Probe
 
