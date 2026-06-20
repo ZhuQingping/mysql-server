@@ -2,7 +2,7 @@
 
 ## 状态
 
-M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Completed。M9-C0 Design Taskbook Created。M9-C1 Completed / Review Accepted。M9-C2 Completed / Review Accepted。M9-D0 Design Accepted。M9-D1 Dependent Ref Negative Guard completed / Review Accepted。M9-D2 Ref-key Dispatch Smoke completed / Review Accepted。M9-D3a User-visible Dependent Ref Gate design completed / Review Accepted。M9-D3b Iterator Scaffold completed / Review Accepted。M9-D3c Single-probe Buffering Smoke completed / Review Accepted。M9-D3d User-visible Leader-local Gate completed / Review Accepted。M9-E/M9-F Planned。
+M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Completed。M9-C0 Design Taskbook Created。M9-C1 Completed / Review Accepted。M9-C2 Completed / Review Accepted。M9-D0 Design Accepted。M9-D1 Dependent Ref Negative Guard completed / Review Accepted。M9-D2 Ref-key Dispatch Smoke completed / Review Accepted。M9-D3a User-visible Dependent Ref Gate design completed / Review Accepted。M9-D3b Iterator Scaffold completed / Review Accepted。M9-D3c Single-probe Buffering Smoke completed / Review Accepted。M9-D3d User-visible Leader-local Gate completed / Review Accepted。M9-E ICP Pushdown design accepted。M9-E0 coding next。M9-F Planned。
 
 ## 目标
 
@@ -19,6 +19,14 @@ M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Com
 - M9-D: dependent `PQRefIterator` / per-ref-key range dispatch；
 - M9-E: ICP pushdown，迁移 worker 侧 `make_cond_for_index` / `idx_cond_push` / `make_cond_remainder`；
 - M9-F: MVI unique filter、reverse scan、partition、secondary index MIN、record buffer/prefetch 等边角。
+
+M9-E 设计拆分详见 [m9-e-icp-pushdown.md](m9-e-icp-pushdown.md)：
+
+- M9-E0: ICP negative guard and DBUG smoke；
+- M9-E1: leader-local covering secondary range ICP；
+- M9-E2: constant covering ref ICP；
+- M9-E3: dependent ref ICP contract；
+- M9-E4: worker-side ICP clone/refix。
 
 ## 允许修改
 
@@ -549,3 +557,34 @@ Review:
   - per-probe fallback after earlier PQ-visible probes remains allowed；
   - join shape remains protected by current two-table/simple/nested-loop REF
     gates rather than an explicit join-type enum check。
+
+M9-E design taskbook created by Codex Orchestrator.
+
+Summary:
+
+- 任务书：[m9-e-icp-pushdown.md](m9-e-icp-pushdown.md)；
+- 两个只读调研 Agent 均确认当前分支不适合直接打开用户可见 ICP；
+- 商用 worker-side ICP 依赖 `pq_cond`、`pushed_idx_cond` clone/refix、
+  worker `idx_cond_push()`、InnoDB ICP template、`row_search_idx_cond_check()`
+  和真实 `PQblockScanIterator` / `PQRefIterator`；
+- 当前分支 secondary range/ref/dependent-ref 仍是 leader-local covering gate，
+  且 SQL iterator/InnoDB producer 都显式拒绝 `pushed_idx_cond` /
+  `prebuilt->idx_cond`；
+- M9-E0 先做 negative guard + DBUG smoke，不迁移
+  `make_cond_for_index()` / `make_cond_remainder()`，不调用
+  `pushed_idx_cond->val_int()`，不打开 worker/MQ。
+
+Review:
+
+- First Design Review Agent returned `REVISE`；
+- Taskbook tightened:
+  - E0 ICP SQL shapes are explicit；
+  - ICP-on `EXPLAIN` must show `Using index condition`；
+  - ICP-off baseline must match ICP-on results；
+  - negative window must report `executed=0`、
+    `secondary_rows_produced=0`、`workers=0`、`ranges_built=0`、
+    `ranges_dispatched=0`；
+  - Forbidden Files include iterator factory、eligibility、handler/InnoDB
+    headers and executor entry points；
+  - optional DBUG smoke must not add API or alter runtime gate。
+- Design Re-review Agent returned `ACCEPT`。
