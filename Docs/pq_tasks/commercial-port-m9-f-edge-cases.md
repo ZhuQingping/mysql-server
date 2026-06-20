@@ -8,6 +8,9 @@ M9-F2 reverse scan guard completed / Code/Task Review accepted。
 M9-F3 partition guard completed / Code/Task Review accepted。
 M9-F4 secondary index MIN guard completed / Code/Task Review accepted。
 M9-F5 record buffer / prefetch contract completed / Design Review accepted。
+M9-F6 optional reverse positive gate skipped: F2 review did not recommend
+opening a positive reverse range gate。
+M9-F7 commercial breadth backlog recorded。
 No source edits outside MTR/docs。
 
 M9-E2-0 已确认当前没有稳定 constant covering `REF + ICP` 正例，因此
@@ -500,6 +503,8 @@ Status: contract completed; Design Review accepted。
 
 ### M9-F6: Optional Reverse Range Positive Gate
 
+Status: skipped for current M9-F pass。
+
 前置：
 
 - F2 review explicitly recommends a positive reverse range gate。
@@ -518,7 +523,16 @@ Status: contract completed; Design Review accepted。
 - workers/ranges/counters 与现有 leader-local secondary path 语义一致；
 - 完整 `parallel_query` suite 通过。
 
+Decision:
+
+- F2 Code/Task Review accepted the reverse guard and only recommended a
+  direct `param.reverse` / `m_reversed_access` probe if ORDER BY / Gather
+  Merge later opens；
+- therefore F6 is not executed in the current M9-F pass。
+
 ### M9-F7: Commercial Breadth Backlog
+
+Status: backlog recorded。
 
 目标：
 
@@ -527,6 +541,20 @@ Status: contract completed; Design Review accepted。
   - `pq_partition` subquery/semijoin/materialization；
   - reverse group merge / LIMIT / JOIN；
   - MVI positive unique filter。
+
+Backlog:
+
+- `pq_record_buffer`：按 F5a/F5b/F5c/F5d 分层推进，不一次迁移全量；
+- `pq_partition`：partition full/range/ref/dependent-ref positive path 必须
+  先完成 `ha_innopart` per-part state contract；
+- reverse：在 ORDER BY / Gather Merge 打开后补 direct reverse unsupported
+  probe，再决定是否做正向 gate；
+- MVI：只有在 JSON/array materialization 与 `HA_MULTI_VALUED_KEY` unique
+  filter contract 明确后才做 positive path；
+- `pq_sec_index_min`：若后续要并行化，归入 M7/MIN aggregate 或 optimizer
+  shortcut 专项，不混入 M9 secondary row-production path；
+- ICP + native `Record_buffer`：必须单独阶段验证，不并入首个
+  record-buffer performance gate。
 
 ## 推荐执行顺序
 
