@@ -532,6 +532,118 @@ Coding entry result:
     `Using index condition`。
 - Blocked-result Review Agent returned `ACCEPT`。
 
+#### M9-E1c: Non-covering Secondary Range ICP + Clustered Lookup Contract
+
+状态：
+
+- Design-only drafted；Design Review accepted；
+- 不改源码；
+- 不直接打开用户可见 non-covering ICP。
+
+为什么需要 E1c：
+
+- E1b strict covering ICP 无稳定 SQL 正例；
+- 当前唯一稳定 `Using index condition` 正例是
+  `FORCE INDEX(k_idx)` + `v > ...`，这是 non-covering secondary range；
+- 当前 user-visible range producer 明确拒绝
+  `prebuilt->idx_cond` 与 `prebuilt->need_to_access_clustered`；
+- 当前 clustered lookup helper 只服务 visibility/delete-mark 判断，不支持
+  non-covering row materialization 后继续 drain；
+- 因此下一步必须先定义 non-covering secondary ICP 的 clustered lookup
+  contract，而不是直接编码。
+
+当前分支已有能力：
+
+- `pq_row_sel_get_clust_rec_for_mysql()` wrapper 可在 active mtr 下按
+  secondary record 找 clustered record；
+- `validate_secondary_visibility_with_cluster_lookup()` 可作为 visibility
+  fallback；
+- B3a/B3c 文档已明确：当前 clustered lookup 后不允许继续 secondary
+  drain，避免 latch/order/lifetime 风险；
+- user-visible producer 当前只从 secondary record
+  `row_sel_store_mysql_rec()` 并 `row_sink->send_row()`。
+
+商用实现目标序：
+
+- 对 secondary record 执行 ICP；
+- `ICP_NO_MATCH`：跳过，不做 clustered lookup，不发送 row；
+- `ICP_OUT_OF_RANGE`：结束 range；
+- `ICP_MATCH`：继续 visibility；
+- 若需要 clustered lookup，则取 visible clustered record；
+- 若 extra clustered latch / old version 存在，必须明确是否可以继续当前
+  secondary scan；不能复用 B3c fast-path-only drain 假设；
+- materialization 对 non-covering 列必须来自 clustered record 或正确版本。
+
+E1c 必须回答的问题：
+
+- 是否允许 user-visible producer 在 clustered lookup 后继续扫描；
+- 如果不允许，是否需要 bookmark/restart 或 one-record-at-a-time 协议；
+- clustered record materialization helper 应放在哪里，是否复用
+  `row_sel_store_mysql_rec()` 的 clustered record 路径；
+- ICP 在 visibility 前还是后执行：商用路径是先 ICP 再 clustered lookup；
+- `prebuilt->need_to_access_clustered`、`read_just_key`、
+  `idx_cond_n_cols`、`m_end_range`、`mysql_template` 如何构建和 restore；
+- `Parallel_secondary_rows_produced` 只统计最终发送 row，还是统计
+  ICP_MATCH 后 visible clustered rows；
+- visible row 后发生 unsupported/cluster lookup error 是否必须报错，
+  不允许 serial restart。
+
+建议 E1c 拆分：
+
+1. E1c-0 design/read-only：
+   - 对照 commercial `find_visible_record()` 和当前 B3a/B3c helper；
+   - 写清楚 latch/mtr/clustered lookup continuation contract；
+   - 不改源码。
+2. E1c-1 debug-only one-record smoke：
+   - 只验证 ICP -> clustered lookup -> materialize one row；
+   - 不继续 drain；
+   - 不 user-visible。
+3. E1c-2 user-visible non-covering secondary range：
+   - 只有 E1c-0/E1c-1 review 通过后再考虑；
+   - 必须有 serial baseline、ICP positive MTR、KILL/error cleanup 和 fallback
+     counter window。
+
+M9-E1c Design Review Prompt:
+
+```text
+请先阅读 AGENTS.md，并遵守其中指向的 CLAUDE.md。
+
+你的角色是 Design Review Agent。
+主控 Agent 是 Codex。
+当前任务是 M9-E1c Non-covering Secondary Range ICP + Clustered Lookup
+Contract Review。
+
+请阅读：
+- Docs/pq_tasks/m9-e-icp-pushdown.md
+- Docs/pq_tasks/m9-b3-secondary-range-row-production.md
+- Docs/pq_tasks/commercial-port-m9-ref-icp.md
+- storage/innobase/row/row0pread_pq.cc
+- storage/innobase/include/row0sel.h
+- storage/innobase/row/row0sel.cc
+- storage/innobase/handler/ha_innodb_pq.cc
+- /Users/zhuqingping/Work/Database/MySQL/taurusdbondstore/storage/innobase/row/row0pread_pq.cc
+
+检视目标：
+1. 判断 E1c 选择 non-covering ICP + clustered lookup contract 是否是合理下一步；
+2. 检查是否仍应 design-only，不进入编码；
+3. 检查当前问题清单是否覆盖 latch/mtr、clustered lookup continuation、
+   materialization、ICP ordering、counter semantics、fallback/error；
+4. 给出 `ACCEPT` 或 `REVISE`。
+
+禁止：
+- 不改文件；
+- 不运行破坏性命令。
+```
+
+Review result:
+
+- Design Review Agent returned `ACCEPT`；
+- no blocking findings；
+- confirmed E1c is the right next design step after E1b blocked；
+- confirmed current branch has clustered lookup visibility plumbing but lacks
+  non-covering materialization / drain continuation contract；
+- confirmed E1c-0/E1c-1/E1c-2 split is reasonable。
+
 ### M9-E2: Constant Covering Ref ICP
 
 目标：
