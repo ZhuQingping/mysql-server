@@ -2,7 +2,7 @@
 
 ## 状态
 
-M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Completed。M9-C0 Design Taskbook Created。M9-C1 Completed / Review Accepted。M9-C2 Completed / Review Accepted。M9-D0 Design Accepted。M9-D1 Dependent Ref Negative Guard completed / Review Accepted。M9-D2 Ref-key Dispatch Smoke completed / Review Accepted。M9-D3a User-visible Dependent Ref Gate design completed / Review Accepted。M9-D3b Iterator Scaffold completed / Review Accepted。M9-D3c Single-probe Buffering Smoke completed / Review Accepted。M9-D3d User-visible Leader-local Gate completed / Review Accepted。M9-E ICP Pushdown design accepted。M9-E0 coding next。M9-F Planned。
+M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Completed。M9-C0 Design Taskbook Created。M9-C1 Completed / Review Accepted。M9-C2 Completed / Review Accepted。M9-D0 Design Accepted。M9-D1 Dependent Ref Negative Guard completed / Review Accepted。M9-D2 Ref-key Dispatch Smoke completed / Review Accepted。M9-D3a User-visible Dependent Ref Gate design completed / Review Accepted。M9-D3b Iterator Scaffold completed / Review Accepted。M9-D3c Single-probe Buffering Smoke completed / Review Accepted。M9-D3d User-visible Leader-local Gate completed / Review Accepted。M9-E ICP Pushdown design accepted。M9-E0 ICP negative guard coding/validation/review completed。M9-F Planned。
 
 ## 目标
 
@@ -27,6 +27,23 @@ M9-E 设计拆分详见 [m9-e-icp-pushdown.md](m9-e-icp-pushdown.md)：
 - M9-E2: constant covering ref ICP；
 - M9-E3: dependent ref ICP contract；
 - M9-E4: worker-side ICP clone/refix。
+
+M9-E0 当前边界：
+
+- 只新增 MTR negative guard，不改 SQL/InnoDB 执行路径；
+- secondary range ICP 使用 `FORCE INDEX(k_idx)` +
+  `WHERE k BETWEEN 20 AND 40 AND v > 150`，`EXPLAIN` 稳定显示
+  `Using index condition`；
+- constant ref / dependent ref 在当前测试表结构下不会稳定生成剩余
+  pushed index condition，因此作为 adjacent boundary guard 保留，不声明
+  已覆盖真实 ref ICP；
+- negative counter window 验证
+  `Parallel_queries_executed`、`Parallel_workers_launched`、
+  `Parallel_ranges_built`、`Parallel_ranges_dispatched`、
+  `Parallel_secondary_rows_produced` 均不增长；
+- `pq_commercial_ref_icp` record/replay、`mysqld` build、完整
+  `parallel_query` suite 74/74 通过；Code/Task Review Agent 复审
+  `ACCEPT`。
 
 ## 允许修改
 

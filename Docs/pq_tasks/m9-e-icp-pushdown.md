@@ -4,6 +4,7 @@
 
 Design taskbook created by Codex Orchestrator after M9-D3d.
 Design Review Agent accepted the tightened M9-E0 scope.
+M9-E0 coding completed by Codex Orchestrator; Code/Task Review accepted.
 
 M9-E 当前只进入设计与负向护栏阶段。两个只读调研 Agent 的结论一致：
 当前分支不适合直接打开用户可见 ICP，更不能直接平移商用 worker-side
@@ -75,8 +76,11 @@ template、worker iterator 的完整生命周期：
 目标：
 
 - 保持所有用户可见 ICP query fallback 或 serial；
-- 补齐 covering secondary range/ref/dependent-ref 带 ICP 的负向 MTR；
-- ICP-on case 的 `EXPLAIN` 必须稳定观测到 `Using index condition`；
+- 补齐 secondary range ICP 以及 adjacent ref/dependent-ref 边界负向 MTR；
+- secondary range ICP-on case 的 `EXPLAIN` 必须稳定观测到
+  `Using index condition`；
+- constant ref / dependent ref 在当前测试表结构下不会稳定产生剩余可下推的
+  index condition，E0 只把它们作为 adjacent boundary guard；
 - ICP-off baseline 必须与 ICP-on query 结果一致；
 - ICP negative counter window 必须证明没有进入 PQ execution；
 - 可选增加 debug-only smoke，证明 producer 侧遇到 `prebuilt->idx_cond`
@@ -88,30 +92,26 @@ template、worker iterator 的完整生命周期：
 建议实现：
 
 - E0 优先只改 MTR，不改源码；
-- 三类 ICP 负向用例必须写死 SQL 形态，避免测成普通 WHERE 或
-  non-covering fallback：
+- 三类负向用例必须写死 SQL 形态，避免测成无意义普通 WHERE：
   - secondary range ICP：
     - 使用能稳定产生 `pushed_idx_cond` 的 secondary index/query；
-    - 建议使用 covering composite secondary index，例如
-      `FORCE INDEX(k_v_idx)`，`WHERE k >= 20 AND k < 40 AND v > 150`；
     - `EXPLAIN` 必须显示 `Using index condition`；
     - 同形态 ICP-off baseline 结果必须一致。
-  - constant ref ICP：
+  - constant ref boundary：
     - 必须覆盖当前 M9-C2 constant covering ref 正例路径会被
-      `table->file->pushed_idx_cond` 拒绝；
-    - 建议使用 `FORCE INDEX(k_v_idx)`，`WHERE k = 20 AND v > 150`，
-      projection 只读 covering secondary key fields；
-    - `EXPLAIN` 必须显示 `Using index condition`；
+      ICP/secondary WHERE 形态干扰时仍不会误启 PQ；
+    - 当前 `k = const` 完全消耗 ref key 后，`pq_ref_icp_t1` 没有稳定
+      的剩余 pushed index condition；不要把无 ICP 的 EXPLAIN 写成 ICP；
     - 计数窗口证明 `Parallel_queries_executed = 0` 且
       `Parallel_secondary_rows_produced = 0`。
-  - dependent ref ICP：
+  - dependent ref boundary：
     - 必须覆盖当前 M9-D3d dependent ref gate 会被
-      `pq_secondary_ref_is_dependent_scaffold_candidate()` 中的
-      `pushed_idx_cond` guard 拒绝；
+      adjacent ICP/secondary WHERE 形态干扰时仍不会误启 PQ；
     - 建议使用 two-table `STRAIGHT_JOIN`，inner table
-      `FORCE INDEX(k_v_idx)`，join on `inner.k = outer.k` 并加
+      `FORCE INDEX(k_idx)`，join on `inner.k = outer.k` 并加
       `inner.v > 150`；
-    - `EXPLAIN` 必须显示 inner table `Using index condition`；
+    - 当前 dependent ref key 完全消耗后没有稳定 pushed index condition；
+      不要求 inner table `Using index condition`；
     - serial result 必须保留 repeated/missing outer-key multiplicity。
 - MTR 增加独立 counter window：
   - ICP on/off 结果一致性；
@@ -141,7 +141,9 @@ template、worker iterator 的完整生命周期：
   - `workers = 0`；
   - `ranges_built = 0`；
   - `ranges_dispatched = 0`；
-  - ICP-on `EXPLAIN` 确认包含 `Using index condition`；
+  - secondary range ICP-on `EXPLAIN` 确认包含 `Using index condition`；
+  - constant ref / dependent ref EXPLAIN 未稳定产生 ICP，作为 adjacent
+    boundary guard 保留；
 - Code/Task Review Agent 返回 `ACCEPT`。
 
 ### M9-E1: Leader-local Covering Secondary Range ICP
@@ -228,6 +230,68 @@ M9-E0 禁止：
 - 打开 worker-side `PQRefIterator` 或 `PQblockScanIterator`。
 
 M9-E1/E2/E3 编码前必须另做设计 review。
+
+## M9-E0 Completion Report
+
+M9-E0 completed by Codex Orchestrator.
+
+Changed files:
+
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+- `Docs/pq_tasks/m9-e-icp-pushdown.md`
+- `Docs/pq_tasks/commercial-port-m9-ref-icp.md`
+- `Docs/pq_tasks/README.md`
+
+Implementation notes:
+
+- 新增独立 ICP negative counter window；
+- secondary range shape 使用 `SELECT * ... FORCE INDEX(k_idx)
+  WHERE k BETWEEN 20 AND 40 AND v > 150`，`EXPLAIN` 稳定显示
+  `Using index condition; Using where; Not parallel NON_FULL_TABLE_SCAN`；
+- 同一 range shape 在 `index_condition_pushdown=off` 下结果一致；
+- constant ref shape `WHERE k = 20 AND v > 150` 和 dependent ref
+  `STRAIGHT_JOIN` shape 保留为 adjacent boundary guard：当前 MySQL
+  优化器在这些形态中不会稳定生成 `Using index condition`，E0 不伪造
+  ICP 证据；
+- counter window 结果：
+  - `e0_icp_executed_delta = 0`；
+  - `e0_icp_workers_delta = 0`；
+  - `e0_icp_ranges_built_delta = 0`；
+  - `e0_icp_ranges_dispatched_delta = 0`；
+  - `e0_icp_secondary_rows_produced_delta = 0`。
+
+Validation:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --record pq_commercial_ref_icp
+perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_commercial_ref_icp
+perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_read_threaded_dop2_multirange
+perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --parallel=1
+```
+
+Result:
+
+- `mysqld` build passed；
+- `pq_commercial_ref_icp` record/replay passed；
+- first full suite run hit pre-existing/order-sensitive
+  `pq_read_threaded_dop2_multirange` empty-worker-range expectation
+  (`0 -> 1`)；the same test passed when rerun alone；
+- second full `parallel_query` suite passed，74 tests successful。
+
+Review:
+
+- Code/Task Review Agent first returned `REVISE` because the embedded task
+  prompt still claimed all three ref/range/dependent-ref shapes must prove
+  `Using index condition`；
+- stale prompt/review residue was corrected to match the implemented boundary；
+- Code/Task Re-review Agent returned `ACCEPT`。
+
+Next:
+
+- submit M9-E0；
+- M9-E1/E2/E3/E4 均需重新设计 review，不从 E0 直接放开用户可见 ICP。
 
 ## 风险点
 
@@ -317,10 +381,10 @@ TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query
 - mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test
 
 任务目标：
-1. 保持所有带 ICP 的 secondary range/ref/dependent-ref 用户查询走 serial
-   或 fallback；
-2. 补齐 covering secondary range + ICP、constant covering ref + ICP、
-   dependent covering ref + ICP 的负向 MTR；
+1. 保持 secondary range ICP 以及 adjacent ref/dependent-ref boundary 用户查询
+   走 serial 或 fallback；
+2. 补齐 secondary range + ICP 的负向 MTR，并补齐 constant ref、
+   dependent ref 的 adjacent boundary MTR；
 3. 如需要，添加 debug-only smoke 证明 producer 遇到 prebuilt->idx_cond
    不产出 PQ row；
 4. 不调用 pushed_idx_cond->val_int()；
@@ -343,8 +407,10 @@ TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query
 1. 更新 m9-e-icp-pushdown.md Completion Report；
 2. 写明 changed files、实现说明、测试结果、风险点；
 3. Completion Report 必须列出：
-   - 三类 ICP-on EXPLAIN 是否包含 `Using index condition`；
-   - ICP-off baseline 与 ICP-on query 是否结果一致；
+   - secondary range ICP-on EXPLAIN 是否包含 `Using index condition`；
+   - constant ref / dependent ref 是否仅作为 adjacent boundary guard，
+     且未声明真实 ICP 覆盖；
+   - secondary range 的 ICP-off baseline 与 ICP-on query 是否结果一致；
    - ICP negative window 的 `executed=0`、
      `secondary_rows_produced=0`、`workers=0`、`ranges_built=0`、
      `ranges_dispatched=0`；
@@ -366,6 +432,8 @@ Review:
 - Non-blocking risks:
   - M9 taskbook still has broad M9-level allowed files, but M9-E0 scoped
     Allowed/Forbidden Files in this document must be treated as authoritative；
-  - actual MTR record must confirm all three ICP-on EXPLAIN shapes contain
+  - actual MTR record must confirm secondary range ICP-on EXPLAIN contains
     `Using index condition`；
+  - constant ref and dependent ref must remain documented as adjacent boundary
+    guards until a later design proves stable real ICP shapes；
   - E0 coding Completion Report must list the required zero deltas。

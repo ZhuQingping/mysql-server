@@ -112,6 +112,112 @@ EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
 --enable_warnings
 SET SESSION optimizer_switch=@old_optimizer_switch;
 
+# M9-E0: ICP negative guard. The secondary range shape must prove real ICP
+# with EXPLAIN. The ref/dependent-ref shapes guard the adjacent fallback
+# boundary and must remain serial with no PQ execution or secondary rows.
+SET @e0_icp_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @e0_icp_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+SET @e0_icp_ranges_built_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_built');
+SET @e0_icp_ranges_dispatched_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_dispatched');
+SET @e0_icp_secondary_rows_produced_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_produced');
+
+# Secondary range ICP.
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+  WHERE k BETWEEN 20 AND 40 AND v > 150;
+--enable_warnings
+--sorted_result
+SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+  WHERE k BETWEEN 20 AND 40 AND v > 150;
+SET SESSION optimizer_switch='index_condition_pushdown=off';
+--sorted_result
+SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+  WHERE k BETWEEN 20 AND 40 AND v > 150;
+SET SESSION optimizer_switch=@old_optimizer_switch;
+
+# Constant ref boundary: with k fully consumed as ref access, this schema has
+# no stable remaining index condition to push. Keep the runtime boundary serial.
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+  WHERE k = 20 AND v > 150;
+--enable_warnings
+--sorted_result
+SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+  WHERE k = 20 AND v > 150;
+SET SESSION optimizer_switch='index_condition_pushdown=off';
+--sorted_result
+SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+  WHERE k = 20 AND v > 150;
+SET SESSION optimizer_switch=@old_optimizer_switch;
+
+# Dependent ref boundary: with the join key fully consumed as dependent ref,
+# this schema has no stable remaining index condition to push. Keep it serial.
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT pq_ref_icp_t3.id AS outer_id, pq_ref_icp_t1.id AS inner_id,
+       pq_ref_icp_t1.k, pq_ref_icp_t1.v, pq_ref_icp_t1.pad
+  FROM pq_ref_icp_t3 STRAIGHT_JOIN pq_ref_icp_t1 FORCE INDEX(k_idx)
+    ON pq_ref_icp_t1.k = pq_ref_icp_t3.k
+  WHERE pq_ref_icp_t1.v > 150;
+--enable_warnings
+--sorted_result
+SELECT pq_ref_icp_t3.id AS outer_id, pq_ref_icp_t1.id AS inner_id,
+       pq_ref_icp_t1.k, pq_ref_icp_t1.v, pq_ref_icp_t1.pad
+  FROM pq_ref_icp_t3 STRAIGHT_JOIN pq_ref_icp_t1 FORCE INDEX(k_idx)
+    ON pq_ref_icp_t1.k = pq_ref_icp_t3.k
+  WHERE pq_ref_icp_t1.v > 150;
+SET SESSION optimizer_switch='index_condition_pushdown=off';
+--sorted_result
+SELECT pq_ref_icp_t3.id AS outer_id, pq_ref_icp_t1.id AS inner_id,
+       pq_ref_icp_t1.k, pq_ref_icp_t1.v, pq_ref_icp_t1.pad
+  FROM pq_ref_icp_t3 STRAIGHT_JOIN pq_ref_icp_t1 FORCE INDEX(k_idx)
+    ON pq_ref_icp_t1.k = pq_ref_icp_t3.k
+  WHERE pq_ref_icp_t1.v > 150;
+SET SESSION optimizer_switch=@old_optimizer_switch;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_queries_executed') -
+     @e0_icp_executed_before
+    AS e0_icp_executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_workers_launched') - @e0_icp_workers_before
+    AS e0_icp_workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_ranges_built') -
+     @e0_icp_ranges_built_before
+    AS e0_icp_ranges_built_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_ranges_dispatched') -
+     @e0_icp_ranges_dispatched_before
+    AS e0_icp_ranges_dispatched_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_secondary_rows_produced') -
+     @e0_icp_secondary_rows_produced_before
+    AS e0_icp_secondary_rows_produced_delta;
+
 # Debug-only M9-B2/B3a-0 smoke: build secondary range partitions and prove
 # secondary visibility remains fail-closed, without row production or
 # user-visible PQ execution.
