@@ -7,6 +7,7 @@ M9-F1 MVI guard completed / Code/Task Review accepted。
 M9-F2 reverse scan guard completed / Code/Task Review accepted。
 M9-F3 partition guard completed / Code/Task Review accepted。
 M9-F4 secondary index MIN guard completed / Code/Task Review accepted。
+M9-F5 record buffer / prefetch contract completed / Design Review accepted。
 No source edits outside MTR/docs。
 
 M9-E2-0 已确认当前没有稳定 constant covering `REF + ICP` 正例，因此
@@ -415,6 +416,8 @@ Review:
 
 ### M9-F5: Record Buffer / Prefetch Contract
 
+Status: contract completed; Design Review accepted。
+
 目标：
 
 - 设计 server `Record_buffer` 与 InnoDB `prebuilt->n_fetch_cached`、
@@ -428,6 +431,72 @@ Review:
 - 明确与 ICP filtered rows、clustered lookup、reverse boundary、
   partition boundary 的交互；
 - review accept 后再考虑编码。
+
+结论：
+
+- F5 不直接迁移商用 `pq_record_buffer` 大矩阵，也不修改源码；
+- 当前仓 PQ row-production 已使用 SQL-owned `PQ_row_sink`：
+  - InnoDB 写入 `TABLE::record[0]`；
+  - `PQ_record_buffer_sink` 或 MQ sink 在 `send_row()` 返回前 deep-copy；
+  - `Parallel_secondary_rows_produced` 只在 materialization 和 sink enqueue
+    成功后增长；
+  - 这不是 server `Record_buffer` / InnoDB fetch cache；
+- 原生 `Record_buffer` 由 `set_record_buffer()` 分配，并通过
+  `handler::ha_set_record_buffer()` 交给 handler；
+- `handler::set_end_range()` 会清理 `record_buffer->out_of_range` 并把
+  `in_range_check_pushed_down` 置为 true；
+- `handler::compare_key_in_buffer()` 假设 ascending range，且依赖
+  `m_record_buffer` 的 out-of-range 状态；
+- InnoDB `row_prebuilt_t::can_prefetch_records()` 只允许无锁、非 BLOB、
+  非 fixed-point、非 generated clustered index、非 HANDLER/API/FTS 等场景；
+- `ha_innopart::index_init()` 在 ordered partition scan 时显式设置
+  `m_prebuilt->m_no_prefetch = true`，原因是 prefetch buffer 不是
+  partition-aware。
+
+当前保守契约：
+
+1. 当前 M9 secondary/ref user-visible gates 不启用 native
+   `Record_buffer` / fetch cache；
+2. PQ leader-local row sink 必须继续 deep-copy row image，不能返回指向
+   InnoDB cursor page、handler record buffer、fetch cache slot 的悬挂指针；
+3. ICP 必须在 `row_sink->send_row()` 前完成，被 ICP 过滤或
+   `ICP_OUT_OF_RANGE` 截断的记录不得增长 PQ row counters；
+4. clustered lookup 必须在 same mtr / restored cursor 边界内完成后再
+   materialize；若 lookup 后 unsupported，且已经发送过 row，不允许静默
+   serial fallback；
+5. reverse scan、partition table、MVI、BLOB/fixed-point/read-set-hostile
+   shape 继续 fail closed；
+6. worker/MQ 正向路径若要接 native `Record_buffer`，必须保证每个 worker
+   TABLE/handler/prebuilt 独占自己的 buffer，leader 不共享 worker buffer；
+7. abort/KILL/ERROR 必须先停止 producer，再丢弃未消费 buffer，不允许
+   leader 继续读已关闭 handler 的 buffered row。
+
+后续编码拆分建议：
+
+- F5a：只读 probe，确认当前 PQ gates 下 `ha_get_record_buffer()` 始终
+  为 nullptr，作为 fail-closed 诊断；同时记录 serial fallback iterator
+  是否可能设置 native `Record_buffer`，避免把“PQ gate 未设置”和“串行
+  fallback 可设置”混为一谈；
+- F5b：debug-only record-buffer-disabled smoke，验证开启 PQ secondary/ref
+  正例时仍不设置 native record buffer；
+- F5c：若需要性能优化，再设计 worker-owned `Record_buffer` adapter，
+  首批只允许 non-partitioned、forward、covering secondary range、no ICP、
+  no BLOB/fixed-point；
+- ICP + native `Record_buffer` 后续必须单独成阶段验证，不能并入 F5c；
+  需要同时覆盖 `ICP_OUT_OF_RANGE` 与 `record_buffer->out_of_range` 两套
+  边界；
+- F5d：迁移商用 `pq_record_buffer` 子集，按 normal table / partition /
+  reverse / ICP / BLOB 分层，不一次性纳入全量 693 行测试。
+
+验证：
+
+- F5 为 design-only，无 MTR；
+- Design Review Agent returned `ACCEPT`；
+- confirmed current `PQ_row_sink` / `PQ_record_buffer_sink` deep-copy
+  mechanism is clearly separated from native `Record_buffer` / InnoDB fetch
+  cache；
+- confirmed conservative contract covers correctness boundaries and native
+  `Record_buffer` remains a later performance optimization。
 
 ### M9-F6: Optional Reverse Range Positive Gate
 
