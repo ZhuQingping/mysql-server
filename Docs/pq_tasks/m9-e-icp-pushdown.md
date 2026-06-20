@@ -293,6 +293,217 @@ Review result:
   - assert rows filtered by ICP do not increment
     `Parallel_secondary_rows_produced`。
 
+#### M9-E1b: Leader-local Covering Secondary Range ICP Coding Taskbook
+
+状态：
+
+- Coding taskbook drafted；Design Review accepted；
+- 不进入 worker/MQ/clone；
+- 不支持 ref/dependent ref/non-covering；
+- 编码前必须 review accepted；当前 review 已 `ACCEPT`。
+
+目标：
+
+- 在 M9-B3d 已有 user-visible leader-local covering secondary range gate 上，
+  只对 strict covering integer secondary forward range 打开真实 ICP；
+- 支持形态：
+  - single-table simple SELECT；
+  - root `INDEX_RANGE_SCAN`；
+  - InnoDB secondary index；
+  - `pushed_idx_cond_keyno == range keyno`；
+  - no partition / no reverse / no geometry / one range；
+  - read_set 和 ICP 所需字段均可由当前 secondary index 安全覆盖；
+- 保持 `Parallel_workers_launched == 0`，不打开 worker thread 或 MQ；
+- 对 unsupported 形态在 visible row 发送前 serial fallback；
+- 一旦已有 visible row 发送，后续错误不能 serial restart。
+
+建议实现策略：
+
+1. SQL gate：
+   - 在 `TryCreatePQSecondaryCoveringRangeIterator()` 中拆分无 ICP 与 ICP
+     两条 narrow gate；
+   - 继续保留 root range、simple query、DOP experimental gate、estimated row
+     cap、keypart safety、read_set safety；
+   - ICP path 必须额外要求：
+     - `table->file->pushed_idx_cond != nullptr`；
+     - `table->file->pushed_idx_cond_keyno == param.index`；
+     - no ref/dependent/ref path；
+     - no outer refs / multi-table；
+   - 不改变 constant ref / dependent ref 的 ICP fallback。
+2. Handler/InnoDB gate：
+   - 保持 `handler` public virtual contract 和
+     `ha_innobase::pq_secondary_covering_range_produce()` 签名不变；
+   - 不修改 `sql/handler.h` / `storage/innobase/handler/ha_innodb.h`；
+   - 若需要区分 ICP，必须只在 allowed source file 内新增 private/internal
+     helper，或在现有 implementation 内按现有 handler state 分支；
+   - 不能删除现有 non-ICP guard；ICP 入口必须是显式窄分支；
+   - non-ICP path 行为必须保持不变；
+   - ICP path 必须在 `build_template(false)` 后确认：
+     - `m_prebuilt->idx_cond == true`；
+     - `m_prebuilt->idx_cond_n_cols > 0`；
+     - `pushed_idx_cond_keyno == keyno`；
+     - `m_prebuilt->index == innobase_get_index(keyno)`；
+     - `m_prebuilt->need_to_access_clustered == false`；
+     - materialization template 仍满足 strict covering safety。
+3. InnoDB row producer：
+   - 新增窄 helper，语义等价于 serial `row_search_idx_cond_check()` 的
+     covering-secondary 子集；
+   - 不允许直接裸调 `pushed_idx_cond->val_int()`；
+   - 因 `row_sel_store_mysql_field()` 是 `row0sel.cc` 内部 static，E1b
+     必须二选一：
+     - 在 `row0sel.cc` 暴露一个非常窄的 PQ-only wrapper；或
+     - 将必要字段转换逻辑以受控 helper 形式移动到可复用位置；
+   - helper 必须返回并处理：
+     - `ICP_NO_MATCH`：跳过当前 secondary record，不发送 row，不增长
+       produced counter；
+     - `ICP_MATCH`：继续 visibility + materialization + send；
+     - `ICP_OUT_OF_RANGE`：结束当前 range；
+   - helper 必须在调用 `innobase_index_cond()` 前按 ICP template 写好
+     `handler/table->record[0]`。
+4. State restore：
+   - 保存并恢复现有 prebuilt/template 状态；
+   - handler-level state 必须默认只读：
+     - `pushed_idx_cond`；
+     - `pushed_idx_cond_keyno`；
+     - `end_range`；
+   - 如任何实现触碰上述 handler-level state，必须保存/恢复并在
+     Completion Report 中说明原因；
+   - prebuilt-level restore 清单至少包括：
+     - `m_prebuilt->idx_cond`；
+     - `m_prebuilt->idx_cond_n_cols`；
+     - `m_prebuilt->mysql_template`；
+     - `m_prebuilt->n_template`；
+     - `m_prebuilt->need_to_access_clustered`；
+     - `m_prebuilt->index`；
+     - `m_prebuilt->read_just_key`；
+     - `m_prebuilt->m_end_range`；
+   - 新增保存/恢复 `idx_cond` 相关状态时不得破坏 serial handler；
+   - close read view / pcur / clust_pcur / heap cleanup 必须覆盖所有 exit。
+
+禁止范围：
+
+- 不迁移 commercial worker-side `pq_cond` clone/refix；
+- 不修改 `QEP_TAB::push_index_cond()`；
+- 不修改 `make_cond_for_index()` / `make_cond_remainder()`；
+- 不打开 `PQblockScanIterator` / `PQRefIterator` worker path；
+- 不支持 constant ref / dependent ref ICP；
+- 不支持 non-covering clustered lookup；
+- 不支持 nullable、CHAR/VARCHAR、BLOB、virtual/gcol、MVI、spatial、
+  descending keypart、partition table、reverse scan、join cache/BKA。
+
+Allowed Files:
+
+- `sql/parallel_query/pq_iterators.cc`
+- `storage/innobase/handler/ha_innodb_pq.cc`
+- `storage/innobase/row/row0pread_pq.cc`
+- `storage/innobase/include/row0pread_pq.h`（仅新增窄 helper 声明时）
+- `storage/innobase/row/row0sel.cc`（仅新增窄 PQ ICP wrapper 或迁移
+  最小字段转换 helper 时）
+- `storage/innobase/include/row0sel.h`（仅暴露窄 wrapper/helper 时）
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+- `Docs/pq_tasks/m9-e-icp-pushdown.md`
+- `Docs/pq_tasks/commercial-port-m9-ref-icp.md`
+- `Docs/pq_tasks/README.md`
+
+Forbidden Files:
+
+- `sql/sql_select.cc`
+- `sql/sql_optimizer.cc`
+- `sql/sql_executor.cc`
+- `sql/handler.cc`
+- `sql/handler.h`
+- `storage/innobase/handler/ha_innodb.h`
+- `sql/parallel_query/pq_clone*`
+- `sql/parallel_query/pq_refix_fields_item.cc`
+- worker/MQ/exchange files
+
+测试要求：
+
+- `pq_commercial_ref_icp`：
+  - 新增 user-visible ICP range 正例；
+  - ICP-on `EXPLAIN` 必须含 `Using index condition`；
+  - ICP-on PQ result 与 ICP-off serial baseline 一致；
+  - `Parallel_queries_executed` 增长 1；
+  - `Parallel_workers_launched`、`Parallel_ranges_built`、
+    `Parallel_ranges_dispatched` 不增长；
+  - `Parallel_secondary_rows_produced` 只等于 ICP 过滤后的输出行数，
+    被 ICP 过滤的 secondary record 不计入 produced；
+  - unsupported ICP shapes 必须有独立 status window，至少覆盖
+    non-covering ICP、constant ref ICP、dependent ref ICP：
+    - serial result matches baseline；
+    - `Parallel_queries_executed` 不增长；
+    - `Parallel_secondary_rows_produced` 不增长；
+    - `Parallel_workers_launched` 不增长；
+    - `Parallel_ranges_built` 不增长；
+    - `Parallel_ranges_dispatched` 不增长。
+- `pq_stats` 仅在新增 status variable 时 record。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --record pq_commercial_ref_icp
+perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_commercial_ref_icp
+perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_not_support pq_stats
+perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --parallel=1
+```
+
+Completion Report 必须列出：
+
+- changed files；
+- ICP helper/wrapper 的确切边界；
+- 为什么没有裸调 `pushed_idx_cond->val_int()`；
+- public handler virtual signature 是否保持不变；
+- state restore 清单，必须覆盖 handler-level read-only state 与
+  prebuilt-level restored state；
+- user-visible ICP 正例 delta；
+- fallback 形态 delta；
+- build/MTR 结果；
+- Code/Task Review Agent 结论。
+
+#### Agent Task Prompt: M9-E1b Coding Taskbook Review
+
+```text
+请先阅读 AGENTS.md，并遵守其中指向的 CLAUDE.md。
+
+你的角色是 Design Review Agent。
+主控 Agent 是 Codex。
+当前任务是 M9-E1b Coding Taskbook Review。
+
+请阅读：
+- Docs/pq_tasks/m9-e-icp-pushdown.md
+- Docs/pq_tasks/commercial-port-m9-ref-icp.md
+- sql/parallel_query/pq_iterators.cc
+- storage/innobase/handler/ha_innodb_pq.cc
+- storage/innobase/row/row0pread_pq.cc
+- storage/innobase/row/row0sel.cc
+- storage/innobase/handler/ha_innodb.cc
+
+检视目标：
+1. 判断 E1b 任务书是否足够窄、可编码、可验证；
+2. 检查 Allowed/Forbidden Files 是否合理；
+3. 检查是否应暴露 row0sel.cc 窄 wrapper，或还有更安全方案；
+4. 检查测试 delta 是否足以证明 ICP 过滤发生在 row send 前；
+5. 给出 `ACCEPT` 或 `REVISE`。
+
+禁止：
+- 不改文件；
+- 不运行破坏性命令。
+```
+
+Review result:
+
+- First Coding Taskbook Review Agent returned `REVISE`；
+- fixed public handler virtual signature scope by keeping `sql/handler.h` and
+  `storage/innobase/handler/ha_innodb.h` forbidden；
+- fixed unsupported fallback tests to require independent counter windows；
+- fixed lifecycle checklist to include handler-level and prebuilt-level ICP
+  state；
+- re-review found one M9 taskbook allowed-list inconsistency；qualified the
+  M9-wide allowed list as historical and made E1b-specific files authoritative；
+- final re-review returned `ACCEPT`。
+
 ### M9-E2: Constant Covering Ref ICP
 
 目标：

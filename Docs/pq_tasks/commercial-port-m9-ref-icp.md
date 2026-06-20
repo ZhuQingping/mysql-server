@@ -2,7 +2,7 @@
 
 ## 状态
 
-M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Completed。M9-C0 Design Taskbook Created。M9-C1 Completed / Review Accepted。M9-C2 Completed / Review Accepted。M9-D0 Design Accepted。M9-D1 Dependent Ref Negative Guard completed / Review Accepted。M9-D2 Ref-key Dispatch Smoke completed / Review Accepted。M9-D3a User-visible Dependent Ref Gate design completed / Review Accepted。M9-D3b Iterator Scaffold completed / Review Accepted。M9-D3c Single-probe Buffering Smoke completed / Review Accepted。M9-D3d User-visible Leader-local Gate completed / Review Accepted。M9-E ICP Pushdown design accepted。M9-E0 ICP negative guard coding/validation/review completed。M9-E1a Leader-local ICP contract design accepted。M9-F Planned。
+M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Completed。M9-C0 Design Taskbook Created。M9-C1 Completed / Review Accepted。M9-C2 Completed / Review Accepted。M9-D0 Design Accepted。M9-D1 Dependent Ref Negative Guard completed / Review Accepted。M9-D2 Ref-key Dispatch Smoke completed / Review Accepted。M9-D3a User-visible Dependent Ref Gate design completed / Review Accepted。M9-D3b Iterator Scaffold completed / Review Accepted。M9-D3c Single-probe Buffering Smoke completed / Review Accepted。M9-D3d User-visible Leader-local Gate completed / Review Accepted。M9-E ICP Pushdown design accepted。M9-E0 ICP negative guard coding/validation/review completed。M9-E1a Leader-local ICP contract design accepted。M9-E1b coding taskbook accepted。M9-F Planned。
 
 ## 目标
 
@@ -61,7 +61,27 @@ M9-E1a 当前边界：
   non-covering clustered lookup、reverse、partition。
 - E1a Design Review Agent 返回 `ACCEPT`，无 blocking findings。
 
+M9-E1b 当前边界：
+
+- coding taskbook 已生成并通过 review；
+- 只允许 leader-local covering secondary range ICP；
+- 必须使用 InnoDB 窄 wrapper/helper 复用 serial ICP 语义，不允许裸调
+  `pushed_idx_cond->val_int()`；
+- 必须保持 public handler virtual signature 不变；
+- 必须证明 ICP 过滤发生在 `row_sink->send_row()` 前，被过滤记录不增长
+  `Parallel_secondary_rows_produced`；
+- non-covering ICP、constant ref ICP、dependent ref ICP 必须用独立 counter
+  window 证明继续 fallback。
+- E1b Coding Taskbook Review Agent 首轮 `REVISE`，修正文件边界、
+  unsupported fallback delta 和状态清单后最终 `ACCEPT`。
+
 ## 允许修改
+
+以下为 M9 整体历史允许范围。具体子阶段以各自 taskbook 的
+Allowed/Forbidden Files 为准；M9-E1b 必须遵守
+`m9-e-icp-pushdown.md`，禁止修改 `sql/handler.h` 和
+`storage/innobase/handler/ha_innodb.h`，保持 public handler virtual
+signature 不变。
 
 - `sql/parallel_query/pq_iterators.*`
 - `sql/handler.h`
