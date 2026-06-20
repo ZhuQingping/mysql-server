@@ -2,7 +2,7 @@
 
 ## 状态
 
-M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Completed。M9-C0 Design Taskbook Created。M9-C1 Completed / Review Accepted。M9-C2 Completed / Review Accepted。M9-D0 Design Accepted。M9-D1 Dependent Ref Negative Guard completed / Review Accepted。M9-D2 Ref-key Dispatch Smoke completed / Review Accepted。M9-D3a User-visible Dependent Ref Gate design completed / Review Accepted。M9-D3b Iterator Scaffold completed / Review Accepted。M9-D3c Single-probe Buffering Smoke completed / Review Accepted。M9-D3d User-visible Leader-local Gate completed / Review Accepted。M9-E ICP Pushdown design accepted。M9-E0 ICP negative guard coding/validation/review completed。M9-F Planned。
+M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Completed。M9-C0 Design Taskbook Created。M9-C1 Completed / Review Accepted。M9-C2 Completed / Review Accepted。M9-D0 Design Accepted。M9-D1 Dependent Ref Negative Guard completed / Review Accepted。M9-D2 Ref-key Dispatch Smoke completed / Review Accepted。M9-D3a User-visible Dependent Ref Gate design completed / Review Accepted。M9-D3b Iterator Scaffold completed / Review Accepted。M9-D3c Single-probe Buffering Smoke completed / Review Accepted。M9-D3d User-visible Leader-local Gate completed / Review Accepted。M9-E ICP Pushdown design accepted。M9-E0 ICP negative guard coding/validation/review completed。M9-E1a Leader-local ICP contract design accepted。M9-F Planned。
 
 ## 目标
 
@@ -23,7 +23,9 @@ M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Com
 M9-E 设计拆分详见 [m9-e-icp-pushdown.md](m9-e-icp-pushdown.md)：
 
 - M9-E0: ICP negative guard and DBUG smoke；
-- M9-E1: leader-local covering secondary range ICP；
+- M9-E1a: leader-local covering secondary range ICP contract design；
+- M9-E1b: leader-local covering secondary range ICP coding，只有 E1a review
+  通过后才允许进入；
 - M9-E2: constant covering ref ICP；
 - M9-E3: dependent ref ICP contract；
 - M9-E4: worker-side ICP clone/refix。
@@ -44,6 +46,20 @@ M9-E0 当前边界：
 - `pq_commercial_ref_icp` record/replay、`mysqld` build、完整
   `parallel_query` suite 74/74 通过；Code/Task Review Agent 复审
   `ACCEPT`。
+
+M9-E1a 当前边界：
+
+- 两个只读 Explorer Agent 均建议 E1 不直接编码；
+- 当前 SQL gate 与 InnoDB producer 都显式拒绝
+  `pushed_idx_cond` / `prebuilt->idx_cond`；
+- 现有 producer 写入 `handler/table->record[0]` 后由 SQL sink deep-copy，
+  尚未建立 ICP template / `idx_cond_n_cols` / pushed key / end-range
+  等价契约；
+- E1b 若进入编码，必须先通过 E1a Design Review，且范围只能是
+  leader-local、single-threaded、single-table、strict covering integer
+  secondary forward range，不涉及 worker clone、ref/dependent ref、
+  non-covering clustered lookup、reverse、partition。
+- E1a Design Review Agent 返回 `ACCEPT`，无 blocking findings。
 
 ## 允许修改
 

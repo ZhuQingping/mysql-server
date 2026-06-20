@@ -5,6 +5,7 @@
 Design taskbook created by Codex Orchestrator after M9-D3d.
 Design Review Agent accepted the tightened M9-E0 scope.
 M9-E0 coding completed by Codex Orchestrator; Code/Task Review accepted.
+M9-E1a leader-local ICP contract design accepted.
 
 M9-E 当前只进入设计与负向护栏阶段。两个只读调研 Agent 的结论一致：
 当前分支不适合直接打开用户可见 ICP，更不能直接平移商用 worker-side
@@ -172,6 +173,125 @@ template、worker iterator 的完整生命周期：
 - 不支持 clustered lookup；
 - 不支持 dependent ref；
 - 不支持 worker-side clone/refix。
+
+#### M9-E1a: Leader-local ICP Contract Design
+
+状态：
+
+- Design-only；不改源码；
+- 两个只读 Explorer Agent 均建议 E1 先做 contract/blocking design，
+  不直接编码；
+- Design Review Agent 返回 `ACCEPT`；
+- 当前结论：现有 leader-local covering secondary range producer 不能安全地
+  直接调用 `pushed_idx_cond->val_int()`，也不能仅删除
+  `pushed_idx_cond` / `prebuilt->idx_cond` guard。
+
+已确认事实：
+
+- SQL 层当前 secondary range gate 在
+  `TryCreatePQSecondaryCoveringRangeIterator()` 中拒绝
+  `table->file->pushed_idx_cond != nullptr`；
+- constant ref gate 和 dependent ref scaffold 也拒绝 pushed ICP；
+- `ha_innobase::pq_secondary_covering_range_produce()` 拒绝
+  `m_prebuilt->idx_cond`；
+- `InnoDB_pq_scan_ctx::produce_secondary_range_for_user_gate()` 拒绝
+  `prebuilt->idx_cond`；
+- 当前 producer 用 `row_sel_store_mysql_rec()` 写入
+  `m_prebuilt->m_mysql_table->record[0]`，SQL sink 再 deep-copy 到
+  iterator 内部 `m_rows`，`Read()` 时再拷回 `table()->record[0]`；
+- serial InnoDB ICP 的正常路径是 `row_search_idx_cond_check()`：
+  先按 ICP template 把字段写入 MySQL record，再调用
+  `innobase_index_cond()`，后者依赖 handler 上的
+  `pushed_idx_cond` / `pushed_idx_cond_keyno` 并调用
+  `pushed_idx_cond->val_int()`；
+- 当前 PQ producer 虽然会 `build_template(false)` 并 restore prebuilt
+  template state，但现有安全条件显式要求 `idx_cond == false`，尚未证明
+  ICP template ordering、`idx_cond_n_cols`、end-range `ICP_OUT_OF_RANGE`、
+  active key 与 pushed key 一致性。
+
+商用实现对照：
+
+- 商用真实 PQ ICP 是 worker-context lifecycle：
+  `QEP_TAB::push_index_cond()` 保存 PQ condition，worker setup 重新
+  `make_cond_for_index()` / `make_cond_remainder()`，再对 worker handler
+  `idx_cond_push()`；
+- commercial `TABLE::pq_copy()` / clone path 会 deep-copy 并 refix
+  `pq_cond` / `pushed_idx_cond`；
+- InnoDB worker read path 通过 `row_search_idx_cond_check()` 评估 ICP；
+- ref range boundary build 阶段不能用 ICP 判断 key 是否存在，ICP 必须在
+  worker/row read 阶段执行。
+
+E1a 设计结论：
+
+- 不建议直接编码 E1 用户可见 ICP；
+- 下一步应先定义 `M9-E1b` 的最小安全契约，若无法满足则继续保持
+  E0 negative guard；
+- E1b 最小允许范围只能是 leader-local、single-threaded、single-table、
+  strict covering integer secondary forward range、no worker/no MQ/no clone、
+  no clustered lookup、no ref/dependent ref、no outer refs、no reverse、
+  no partition；
+- E1b 必须使用 InnoDB ICP 等价路径或窄 wrapper，不允许裸调
+  `pushed_idx_cond->val_int()`；
+- E1b 必须明确处理 `ICP_NO_MATCH`、`ICP_MATCH`、`ICP_OUT_OF_RANGE`；
+- E1b 必须保证 unsupported 在任何 visible row 发送前可回退 serial，
+  visible row 后只能报错/中止，不能 serial restart；
+- E1b 必须证明所有 handler/prebuilt/template/end-range 状态 restore
+  完整。
+
+E1b 编码前硬门槛：
+
+- E1a 设计 review `ACCEPT`；
+- 明确是否新增窄 InnoDB helper 来复用 `row_search_idx_cond_check()` 语义；
+- 明确 `pushed_idx_cond_keyno == keyno` 的校验点；
+- 明确 SQL 层 read_set / covering gate 是否必须包含 ICP 用到的字段；
+- 明确 MTR 如何证明：
+  - ICP-on `EXPLAIN` 含 `Using index condition`；
+  - PQ path 执行并产出过滤后的行；
+  - ICP-off serial baseline 结果一致；
+  - filtered-out rows 不增长 `Parallel_secondary_rows_produced`；
+  - unsupported 形态仍保持 E0 fallback。
+
+#### Agent Task Prompt: M9-E1a Design Review
+
+```text
+请先阅读 AGENTS.md，并遵守其中指向的 CLAUDE.md。
+
+你的角色是 Design Review Agent。
+主控 Agent 是 Codex。
+当前任务是 M9-E1a Leader-local ICP Contract Design Review。
+
+请阅读：
+- Docs/pq_tasks/m9-e-icp-pushdown.md
+- Docs/pq_tasks/commercial-port-m9-ref-icp.md
+- sql/parallel_query/pq_iterators.cc
+- storage/innobase/handler/ha_innodb_pq.cc
+- storage/innobase/row/row0pread_pq.cc
+- storage/innobase/row/row0sel.cc
+- storage/innobase/handler/ha_innodb.cc
+
+检视目标：
+1. 判断 E1a “不直接编码，先定义 E1b 最小安全契约” 是否合理；
+2. 检查当前文档列出的 SQL/InnoDB ICP blocking points 是否准确；
+3. 检查 E1b 最小允许范围是否足够窄；
+4. 检查是否遗漏必须在编码前确认的生命周期、record[0]、template、
+   pushed key、end-range、fallback/error 语义；
+5. 给出 `ACCEPT` 或 `REVISE`。
+
+禁止：
+- 不改文件；
+- 不运行破坏性命令；
+- 不建议直接删除 `pushed_idx_cond` / `prebuilt->idx_cond` guard。
+```
+
+Review result:
+
+- Design Review Agent returned `ACCEPT`；
+- no blocking findings；
+- optional E1b follow-ups:
+  - keep existing root-range/simple-query gates explicit；
+  - require a narrow InnoDB helper or wrapper around serial ICP semantics；
+  - assert rows filtered by ICP do not increment
+    `Parallel_secondary_rows_produced`。
 
 ### M9-E2: Constant Covering Ref ICP
 
