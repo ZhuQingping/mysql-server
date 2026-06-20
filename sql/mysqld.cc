@@ -9767,6 +9767,16 @@ DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_visibility_supported,
                                     secondary_visibility_supported)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_visibility_unsupported,
                                     secondary_visibility_unsupported)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_ref_probe_attempts,
+                                    secondary_ref_probe_attempts)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_ref_probe_unsupported,
+                                    secondary_ref_probe_unsupported)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_ref_empty_probes,
+                                    secondary_ref_empty_probes)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_ref_fallback_probes,
+                                    secondary_ref_fallback_probes)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_ref_rows_produced,
+                                    secondary_ref_rows_produced)
 
 #undef DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC
 
@@ -10647,6 +10657,21 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_secondary_ranges_built",
      (char *)&show_pq_secondary_ranges_built, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_secondary_ref_empty_probes",
+     (char *)&show_pq_secondary_ref_empty_probes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_secondary_ref_fallback_probes",
+     (char *)&show_pq_secondary_ref_fallback_probes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_secondary_ref_probe_attempts",
+     (char *)&show_pq_secondary_ref_probe_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_secondary_ref_probe_unsupported",
+     (char *)&show_pq_secondary_ref_probe_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_secondary_ref_rows_produced",
+     (char *)&show_pq_secondary_ref_rows_produced, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
     {"Parallel_secondary_rows_produced",
      (char *)&show_pq_secondary_rows_produced, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_secondary_rows_materialized_smoke",

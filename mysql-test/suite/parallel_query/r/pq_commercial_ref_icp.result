@@ -263,6 +263,65 @@ WHERE variable_name = 'Parallel_secondary_rows_produced') -
 AS d1_dependent_ref_secondary_rows_delta;
 d1_dependent_ref_executed_delta	d1_dependent_ref_workers_delta	d1_dependent_ref_ranges_built_delta	d1_dependent_ref_ranges_dispatched_delta	d1_dependent_ref_secondary_rows_delta
 0	0	0	0	0
+SET @d3b_ref_probe_attempts_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_ref_probe_attempts');
+SET @d3b_ref_probe_unsupported_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_ref_probe_unsupported');
+SET @d3b_ref_empty_probes_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_ref_empty_probes');
+SET @d3b_ref_fallback_probes_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_ref_fallback_probes');
+SET @d3b_ref_rows_produced_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_ref_rows_produced');
+SELECT pq_ref_icp_t3.id AS outer_id, pq_ref_icp_t1.k AS inner_k
+FROM pq_ref_icp_t3 STRAIGHT_JOIN pq_ref_icp_t1 FORCE INDEX(k_idx)
+ON pq_ref_icp_t1.k = pq_ref_icp_t3.k;
+outer_id	inner_k
+1	20
+1	20
+2	20
+2	20
+4	30
+5	20
+5	20
+SELECT
+((SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_ref_probe_attempts') -
+@d3b_ref_probe_attempts_before) >= 1
+AS d3b_ref_probe_attempts_delta,
+((SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_ref_probe_unsupported') -
+@d3b_ref_probe_unsupported_before) >= 1
+AS d3b_ref_probe_unsupported_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_ref_empty_probes') -
+@d3b_ref_empty_probes_before
+AS d3b_ref_empty_probes_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_ref_fallback_probes') -
+@d3b_ref_fallback_probes_before
+AS d3b_ref_fallback_probes_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_ref_rows_produced') -
+@d3b_ref_rows_produced_before
+AS d3b_ref_rows_produced_delta;
+d3b_ref_probe_attempts_delta	d3b_ref_probe_unsupported_delta	d3b_ref_empty_probes_delta	d3b_ref_fallback_probes_delta	d3b_ref_rows_produced_delta
+1	1	0	0	0
 SET @executed_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status

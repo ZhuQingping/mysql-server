@@ -3,7 +3,11 @@
 ## 状态
 
 Design convergence taskbook created by Codex Orchestrator after M9-D1/D2.
-No source code changes in this step.
+D3a design review completed and accepted.
+
+D3b iterator scaffold / ref-specific counters completed. Build, targeted MTR
+record/replay, full `parallel_query` suite, and Code/Task Review Agent passed.
+D3b still opens no user-visible dependent ref path.
 
 Base commits:
 
@@ -104,6 +108,55 @@ D3 编码阶段禁止：
 - dependent ref D1 negative guard 仍 0；
 - C2 constant ref 不回退；
 - full `parallel_query` suite 通过。
+
+实现状态：
+
+- 新增 ref-specific global status counters：
+  - `Parallel_secondary_ref_probe_attempts`；
+  - `Parallel_secondary_ref_probe_unsupported`；
+  - `Parallel_secondary_ref_empty_probes`；
+  - `Parallel_secondary_ref_fallback_probes`；
+  - `Parallel_secondary_ref_rows_produced`；
+- `pq_stats` 中 `Parallel%` status variable 数量从 69 增加到 74；
+- `TryCreatePQSecondaryCoveringRefIterator()` 在非 root child REF 上识别
+  dependent covering secondary ref candidate；
+- D3b scaffold 只增长 attempts/unsupported，然后返回 `nullptr`，继续使用
+  原生 `RefIterator`；
+- 不修改 access-path factory、worker/MQ、handler producer 或
+  `PQ_REF_SCAN`；
+- MTR 新增 covering dependent ref 查询，验证：
+  - result multiplicity 仍为 `2,2,0,1,2`；
+  - `d3b_ref_probe_attempts_delta >= 1`；
+  - `d3b_ref_probe_unsupported_delta >= 1`；
+  - `d3b_ref_empty_probes_delta = 0`；
+  - `d3b_ref_fallback_probes_delta = 0`；
+  - `d3b_ref_rows_produced_delta = 0`。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --record pq_stats pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_stats pq_commercial_ref_icp
+```
+
+结果：
+
+- `mysqld` build passed；
+- targeted record passed；
+- targeted replay passed；
+- full `parallel_query` suite passed，74 tests successful。
+
+Review:
+
+- Code/Task Review Agent returned `ACCEPT`；
+- confirmed counter reset/SHOW lifecycle is complete；
+- confirmed scaffold only increments attempts/unsupported on non-root
+  dependent covering secondary ref candidates and returns `nullptr`；
+- confirmed no iterator replacement, handler producer, worker/MQ, or
+  `PQ_REF_SCAN` path was opened；
+- confirmed C2 root constant ref and D1 dependent negative guard semantics are
+  unchanged。
 
 ### M9-D3c: Single-probe Buffering Smoke
 

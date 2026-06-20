@@ -192,6 +192,34 @@ bool pq_secondary_ref_is_constant_and_safe(TABLE *table,
          ref->key_length;
 }
 
+bool pq_secondary_ref_is_dependent_scaffold_candidate(TABLE *table,
+                                                      const Index_lookup *ref) {
+  if (table == nullptr || table->s == nullptr || table->file == nullptr ||
+      table->key_info == nullptr || table->s->db_type() != innodb_hton ||
+      table->part_info != nullptr || table->file->pushed_idx_cond != nullptr ||
+      ref == nullptr || ref->key < 0 ||
+      static_cast<uint>(ref->key) >= table->s->keys ||
+      static_cast<uint>(ref->key) == table->s->primary_key ||
+      ref->key_parts == 0 || ref->key_length == 0 ||
+      ref->key_buff == nullptr || ref->key_copy == nullptr ||
+      ref->cond_guards == nullptr || ref->depend_map == 0 ||
+      ref->disable_cache || ref->keypart_hash != nullptr) {
+    return false;
+  }
+
+  for (uint part = 0; part < ref->key_parts; ++part) {
+    if (ref->cond_guards[part] != nullptr) {
+      return false;
+    }
+  }
+
+  const uint keyno = static_cast<uint>(ref->key);
+  const key_part_map keypart_map = make_prev_keypart_map(ref->key_parts);
+  return calculate_key_len(table, keyno, keypart_map) == ref->key_length &&
+         pq_secondary_key_parts_are_safe(table, keyno) &&
+         pq_secondary_covering_read_set_is_safe(table, keyno);
+}
+
 class PQ_record_buffer_sink final : public PQ_row_sink {
  public:
   PQ_record_buffer_sink(TABLE *leader_table,
@@ -590,10 +618,6 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQSecondaryCoveringRefIterator(
     return nullptr;
   }
 
-  if (!is_root_ref) {
-    return nullptr;
-  }
-
   if (!thd->variables.parallel_query ||
       !thd->variables.parallel_query_experimental_threaded_dop ||
       thd->pq_is_worker) {
@@ -602,6 +626,25 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQSecondaryCoveringRefIterator(
 
   if (thd->lex == nullptr || thd->lex->is_explain() ||
       thd->lex->sql_command != SQLCOM_SELECT) {
+    return nullptr;
+  }
+
+  const auto &param = path->ref();
+  TABLE *table = param.table;
+  Index_lookup *ref = param.ref;
+
+  if (!is_root_ref) {
+    if (!param.reverse && join->query_block != nullptr &&
+        join->query_block->is_simple_query_block() &&
+        !join->query_block->is_explicitly_grouped() &&
+        join->query_block->having_cond() == nullptr &&
+        path->num_output_rows() <= kPQSecondaryCoveringMaxEstimatedRows &&
+        pq_secondary_ref_is_dependent_scaffold_candidate(table, ref)) {
+      pq_global_stats.secondary_ref_probe_attempts.fetch_add(
+          1, std::memory_order_relaxed);
+      pq_global_stats.secondary_ref_probe_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+    }
     return nullptr;
   }
 
@@ -617,9 +660,6 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQSecondaryCoveringRefIterator(
     return nullptr;
   }
 
-  const auto &param = path->ref();
-  TABLE *table = param.table;
-  Index_lookup *ref = param.ref;
   if (param.reverse || table == nullptr || table->s == nullptr ||
       table->file == nullptr || table->key_info == nullptr ||
       table->s->db_type() != innodb_hton || table->part_info != nullptr ||

@@ -208,6 +208,11 @@ struct PQ_global_stats {
   std::atomic<uint64> secondary_visibility_attempts{0};  ///< Visibility probes
   std::atomic<uint64> secondary_visibility_supported{0};  ///< Fast-path ok
   std::atomic<uint64> secondary_visibility_unsupported{0};  ///< Unsupported
+  std::atomic<uint64> secondary_ref_probe_attempts{0};  ///< Dep ref probes
+  std::atomic<uint64> secondary_ref_probe_unsupported{0};  ///< Unsupported ref
+  std::atomic<uint64> secondary_ref_empty_probes{0};  ///< Ref probes with no row
+  std::atomic<uint64> secondary_ref_fallback_probes{0};  ///< Probe fallbacks
+  std::atomic<uint64> secondary_ref_rows_produced{0};  ///< Dep ref rows
   std::atomic<uint64> worker_smoke_runs{0};   ///< Worker lifecycle smoke runs
   std::atomic<uint64> worker_producer_smoke_runs{0};  ///< Producer loop smoke runs
   std::atomic<uint64> worker_open_smoke_runs{0};  ///< Worker THD/TABLE smoke runs
@@ -280,6 +285,11 @@ struct PQ_global_stats {
     secondary_visibility_attempts.store(0, std::memory_order_relaxed);
     secondary_visibility_supported.store(0, std::memory_order_relaxed);
     secondary_visibility_unsupported.store(0, std::memory_order_relaxed);
+    secondary_ref_probe_attempts.store(0, std::memory_order_relaxed);
+    secondary_ref_probe_unsupported.store(0, std::memory_order_relaxed);
+    secondary_ref_empty_probes.store(0, std::memory_order_relaxed);
+    secondary_ref_fallback_probes.store(0, std::memory_order_relaxed);
+    secondary_ref_rows_produced.store(0, std::memory_order_relaxed);
     worker_smoke_runs.store(0, std::memory_order_relaxed);
     worker_producer_smoke_runs.store(0, std::memory_order_relaxed);
     worker_open_smoke_runs.store(0, std::memory_order_relaxed);
