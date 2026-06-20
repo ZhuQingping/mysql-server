@@ -591,6 +591,16 @@ class ha_innobase : public handler {
       const key_range *end_key, uint *row_count) override;
 
   /**
+    Debug-only covering secondary ref materialization smoke.
+
+    Converts a bounded constant ref equality set into record[0] and discards
+    it. It does not produce rows.
+  */
+  int pq_secondary_covering_ref_smoke(THD *leader_thd, uint keyno,
+                                      const key_range *ref_key,
+                                      uint *row_count) override;
+
+  /**
     Experimental covering secondary range row producer.
 
     Pushes bounded fast-path-only covering secondary rows into row_sink.

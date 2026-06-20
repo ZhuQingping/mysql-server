@@ -206,6 +206,37 @@ static bool pq_secondary_covering_read_set_is_safe(const TABLE *table,
   return saw_read_field;
 }
 
+static bool pq_secondary_ref_key_parts_are_safe(const TABLE *table, uint keyno,
+                                                uint key_parts) {
+  if (table == nullptr || table->s == nullptr || table->key_info == nullptr ||
+      keyno >= table->s->keys || keyno == table->s->primary_key ||
+      key_parts == 0) {
+    return false;
+  }
+
+  const KEY &key = table->key_info[keyno];
+  if (key_parts > key.user_defined_key_parts ||
+      key.flags & (HA_SPATIAL | HA_MULTI_VALUED_KEY)) {
+    return false;
+  }
+
+  for (uint part = 0; part < key_parts; ++part) {
+    const KEY_PART_INFO &key_part = key.key_part[part];
+    Field *field = key_part.field;
+    if (!pq_secondary_covering_field_type_is_safe(field)) {
+      return false;
+    }
+    if ((key_part.key_part_flag &
+         (HA_REVERSE_SORT | HA_PART_KEY_SEG | HA_VAR_LENGTH_PART |
+          HA_BLOB_PART | HA_BIT_PART)) != 0 ||
+        key_part.length != field->key_length()) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 static void pq_maybe_run_secondary_range_partition_smoke(
     THD *thd, TABLE *table, AccessPath *range_scan, uint keyno) {
   bool enabled = false;
@@ -500,6 +531,72 @@ static void pq_maybe_run_secondary_covering_range_smoke(
   }
 }
 
+static void pq_maybe_run_secondary_covering_ref_smoke(THD *thd, TABLE *table,
+                                                      Index_lookup *ref) {
+  bool enabled = false;
+  DBUG_EXECUTE_IF("pq_secondary_covering_ref_smoke", enabled = true;);
+  if (!enabled) return;
+
+  pq_global_stats.secondary_visibility_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  auto mark_unsupported = []() {
+    pq_global_stats.secondary_visibility_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+  };
+
+  if (thd == nullptr || table == nullptr || table->s == nullptr ||
+      table->file == nullptr || ref == nullptr || ref->key < 0 ||
+      static_cast<uint>(ref->key) >= table->s->keys ||
+      static_cast<uint>(ref->key) == table->s->primary_key ||
+      table->part_info != nullptr || table->file->pushed_idx_cond != nullptr ||
+      ref->key_parts == 0 || ref->key_length == 0 ||
+      ref->key_buff == nullptr || ref->key_copy == nullptr ||
+      ref->cond_guards == nullptr || ref->depend_map != 0 ||
+      ref->disable_cache || ref->keypart_hash != nullptr ||
+      !pq_secondary_covering_read_set_is_safe(table,
+                                              static_cast<uint>(ref->key)) ||
+      !pq_secondary_ref_key_parts_are_safe(table, static_cast<uint>(ref->key),
+                                           ref->key_parts)) {
+    mark_unsupported();
+    return;
+  }
+
+  for (uint part = 0; part < ref->key_parts; ++part) {
+    if (ref->key_copy[part] != nullptr || ref->cond_guards[part] != nullptr) {
+      mark_unsupported();
+      return;
+    }
+  }
+
+  if (ref->impossible_null_ref()) {
+    mark_unsupported();
+    return;
+  }
+
+  const key_part_map keypart_map = make_prev_keypart_map(ref->key_parts);
+  if (calculate_key_len(table, ref->key, keypart_map) != ref->key_length) {
+    mark_unsupported();
+    return;
+  }
+
+  key_range ref_key{};
+  ref_key.key = ref->key_buff;
+  ref_key.length = ref->key_length;
+  ref_key.keypart_map = keypart_map;
+  ref_key.flag = HA_READ_KEY_EXACT;
+
+  uint row_count = 0;
+  const int error = table->file->pq_secondary_covering_ref_smoke(
+      thd, static_cast<uint>(ref->key), &ref_key, &row_count);
+  if (error != 0) {
+    mark_unsupported();
+  } else {
+    pq_global_stats.secondary_rows_materialized_smoke.fetch_add(
+        row_count, std::memory_order_relaxed);
+  }
+}
+
 /**
   Helper: set info and return false (not eligible).
   @param info  Output disqualification info
@@ -625,6 +722,7 @@ static bool pq_check_full_table_scan(JOIN *join, PQUnsuiteInfo *info,
   TABLE *candidate_table = nullptr;
   uint candidate_index = MAX_KEY;
   AccessPath *candidate_range_scan = nullptr;
+  Index_lookup *candidate_ref = nullptr;
 
   // Try best_ref[] first (available during optimization).
   if (join->best_ref != nullptr && join->primary_tables > 0 &&
@@ -634,6 +732,7 @@ static bool pq_check_full_table_scan(JOIN *join, PQUnsuiteInfo *info,
     candidate_table = first_tab->table();
     candidate_index = first_tab->index();
     candidate_range_scan = first_tab->range_scan();
+    candidate_ref = &first_tab->ref();
   }
 
   // If best_ref[] didn't give a valid type, try qep_tab[]
@@ -644,6 +743,7 @@ static bool pq_check_full_table_scan(JOIN *join, PQUnsuiteInfo *info,
     candidate_table = join->qep_tab[0].table();
     candidate_index = join->qep_tab[0].index();
     candidate_range_scan = join->qep_tab[0].range_scan();
+    candidate_ref = &join->qep_tab[0].ref();
   }
 
   // If we couldn't determine the access type from either source,
@@ -678,6 +778,9 @@ static bool pq_check_full_table_scan(JOIN *join, PQUnsuiteInfo *info,
         pq_maybe_run_secondary_covering_range_smoke(
             join->thd, candidate_table, candidate_range_scan, candidate_index);
       }
+    } else if (access_type == JT_REF) {
+      pq_maybe_run_secondary_covering_ref_smoke(join->thd, candidate_table,
+                                                candidate_ref);
     }
     return pq_reject(info, PQUnsuiteReason::NON_FULL_TABLE_SCAN,
                      pq_unsuite_reason_to_string(

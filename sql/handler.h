@@ -5013,6 +5013,19 @@ class handler {
     return HA_ERR_UNSUPPORTED;
   }
 
+  /** Debug-only covering secondary ref materialization smoke.
+
+    This may drain a bounded constant ref equality set into the handler record
+    buffer and report the exact number of materialized records. It must not
+    enqueue rows or open a user-visible PQ execution path.
+  */
+  virtual int pq_secondary_covering_ref_smoke(
+      THD *leader_thd [[maybe_unused]], uint keyno [[maybe_unused]],
+      const key_range *ref_key [[maybe_unused]],
+      uint *row_count [[maybe_unused]]) {
+    return HA_ERR_UNSUPPORTED;
+  }
+
   /** Experimental covering secondary range row producer.
 
     This is a user-visible but narrowly gated bridge for covering secondary

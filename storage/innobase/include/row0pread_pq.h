@@ -312,6 +312,18 @@ class InnoDB_pq_scan_ctx {
       byte *mysql_rec, row_prebuilt_t *prebuilt, const dtuple_t *start,
       const dtuple_t *end, uint max_rows, uint *row_count) const;
 
+  /** Materialize a bounded fast-path-only secondary ref equality set.
+
+  The method positions on the first record greater than or equal to ref_key,
+  materializes records while the ref key prefix remains equal, and stops before
+  the first non-matching key. It is debug-smoke only and never enqueues rows.
+
+  @return DB_SUCCESS with an exact row_count, or DB_UNSUPPORTED/DB_OUT_OF_MEMORY
+          with row_count reset to 0. */
+  dberr_t materialize_secondary_ref_for_smoke(
+      byte *mysql_rec, row_prebuilt_t *prebuilt, const dtuple_t *ref_key,
+      uint max_rows, uint *row_count) const;
+
   /** Produce a bounded fast-path-only covering secondary range into row_sink.
 
   Uses the same cursor/mtr/visibility contract as

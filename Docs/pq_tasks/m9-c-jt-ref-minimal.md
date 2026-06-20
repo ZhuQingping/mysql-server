@@ -2,8 +2,8 @@
 
 ## 状态
 
-M9-C0 design taskbook created by Codex Orchestrator. No source code changes in
-this step.
+M9-C0 design taskbook created by Codex Orchestrator. M9-C1 debug-only ref
+equality endpoint bridge completed and accepted by Review Agent.
 
 Base commit:
 
@@ -104,6 +104,8 @@ SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx) WHERE k = 20;
 
 ### M9-C1: Ref Equality Endpoint Bridge
 
+Status: completed by Codex. Review Agent result: `ACCEPT`.
+
 建议先不接 `PQRefIterator`，只实现一个内部 helper / debug smoke：
 
 - 输入 `Index_lookup` 或已构造的 `key_range`；
@@ -140,6 +142,33 @@ SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx) WHERE k = 20;
   专用 counter；
 - non-covering / ICP / multi-table / nullable / varlen / dependent ref 负例
   仍 fail-closed。
+
+实现结果：
+
+- 新增 `pq_secondary_covering_ref_smoke()` handler API 和 InnoDB override；
+- 新增 `InnoDB_pq_scan_ctx::materialize_secondary_ref_for_smoke()`；
+- 新增 optimizer debug hook，严格由
+  `DBUG_EXECUTE_IF("pq_secondary_covering_ref_smoke")` 触发；
+- `JT_REF` 普通路径仍返回 `NON_FULL_TABLE_SCAN` fallback；
+- MTR 覆盖 duplicate (`k=20`)、empty (`k=999`)、last-key (`k=50`) 和
+  non-covering fail-closed。
+
+验证结果：
+
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- `TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --record pq_commercial_ref_icp pq_stats` passed；
+- `TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_commercial_ref_icp pq_stats` passed；
+- 关键结果：`c1_ref_materialized_smoke_delta=3`；
+- C1 不打开用户可见 `JT_REF` PQ：`executed_delta=1` 和
+  `secondary_rows_produced_runtime_delta=3` 仍来自既有 M9-B3d covering range
+  positive path。
+
+Review result:
+
+- Review Agent: `ACCEPT`；
+- No blocking findings；
+- Residual risk: C1 仍只证明 fast-path secondary visibility；deleted-row /
+  full MVCC 行为、ref-specific smoke counter 留待后续阶段。
 
 ### M9-C2: User-visible Constant Covering Ref Gate
 
