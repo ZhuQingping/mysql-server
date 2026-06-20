@@ -5,7 +5,8 @@
 --source include/have_innodb_16k.inc
 
 --disable_warnings
-DROP TABLE IF EXISTS pq_ref_icp_t1, pq_ref_icp_t2, pq_ref_icp_t3;
+DROP TABLE IF EXISTS pq_ref_icp_t1, pq_ref_icp_t2, pq_ref_icp_t3,
+                     pq_ref_icp_t4;
 --enable_warnings
 
 CREATE TABLE pq_ref_icp_t1 (
@@ -30,11 +31,22 @@ CREATE TABLE pq_ref_icp_t3 (
   KEY k_idx(k)
 ) ENGINE=InnoDB;
 
+CREATE TABLE pq_ref_icp_t4 (
+  id INT PRIMARY KEY,
+  k INT NOT NULL,
+  icp_col INT NOT NULL,
+  payload INT NOT NULL,
+  KEY k_icp_idx(k, icp_col)
+) ENGINE=InnoDB;
+
 INSERT INTO pq_ref_icp_t1 VALUES
   (1,10,100,'a'),(2,20,200,'b'),(3,20,210,'c'),
   (4,30,300,'d'),(5,40,400,'e'),(6,50,500,'f');
 INSERT INTO pq_ref_icp_t2 VALUES (1,20),(2,30);
 INSERT INTO pq_ref_icp_t3 VALUES (1,20),(2,20),(3,999),(4,30),(5,20);
+INSERT INTO pq_ref_icp_t4 VALUES
+  (1,20,100,1000),(2,20,110,1100),(3,30,300,3000),
+  (4,40,400,4000);
 
 SET SESSION parallel_query=ON;
 SET SESSION parallel_cost_threshold=0;
@@ -284,6 +296,187 @@ SELECT
       WHERE variable_name = 'Parallel_ranges_dispatched') -
       @e1c1_ranges_dispatched_before
     AS e1c1_ranges_dispatched_delta;
+
+# M9-E1c-2a: user-visible non-covering secondary range ICP gate. The selected
+# columns are intentionally limited to non-null integer fields. payload is not
+# covered by k_icp_idx, while icp_col is an indexed ICP predicate column, so only
+# one ICP_MATCH row should be materialized from the clustered record.
+SET @e1c2_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @e1c2_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+SET @e1c2_ranges_built_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_built');
+SET @e1c2_ranges_dispatched_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_dispatched');
+SET @e1c2_secondary_rows_produced_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_produced');
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT id, k, payload FROM pq_ref_icp_t4 FORCE INDEX(k_icp_idx)
+  WHERE k >= 20 AND k < 40 AND icp_col >= 250;
+--enable_warnings
+--sorted_result
+SELECT id, k, payload FROM pq_ref_icp_t4 FORCE INDEX(k_icp_idx)
+  WHERE k >= 20 AND k < 40 AND icp_col >= 250;
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_queries_executed') -
+      @e1c2_executed_before
+    AS e1c2_executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_workers_launched') -
+      @e1c2_workers_before
+    AS e1c2_workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_ranges_built') -
+      @e1c2_ranges_built_before
+    AS e1c2_ranges_built_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_ranges_dispatched') -
+      @e1c2_ranges_dispatched_before
+    AS e1c2_ranges_dispatched_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_rows_produced') -
+      @e1c2_secondary_rows_produced_before
+    AS e1c2_secondary_rows_produced_delta;
+
+# No-ICP and unsafe-read-set boundaries must not execute PQ or produce
+# secondary rows.
+SET @e1c2_no_icp_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @e1c2_no_icp_fallback_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SET @e1c2_no_icp_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+SET @e1c2_no_icp_ranges_built_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_built');
+SET @e1c2_no_icp_ranges_dispatched_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_dispatched');
+SET @e1c2_no_icp_secondary_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_produced');
+SET SESSION optimizer_switch='index_condition_pushdown=off';
+--sorted_result
+SELECT id, k, payload FROM pq_ref_icp_t4 FORCE INDEX(k_icp_idx)
+  WHERE k >= 20 AND k < 40 AND icp_col >= 250;
+SET SESSION optimizer_switch=@old_optimizer_switch;
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_queries_executed') -
+      @e1c2_no_icp_executed_before
+    AS e1c2_no_icp_executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_queries_fallback') -
+      @e1c2_no_icp_fallback_before
+    AS e1c2_no_icp_fallback_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_workers_launched') -
+      @e1c2_no_icp_workers_before
+    AS e1c2_no_icp_workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_ranges_built') -
+      @e1c2_no_icp_ranges_built_before
+    AS e1c2_no_icp_ranges_built_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_ranges_dispatched') -
+      @e1c2_no_icp_ranges_dispatched_before
+    AS e1c2_no_icp_ranges_dispatched_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_rows_produced') -
+      @e1c2_no_icp_secondary_rows_before
+    AS e1c2_no_icp_secondary_rows_delta;
+
+SET @e1c2_unsafe_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @e1c2_unsafe_fallback_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SET @e1c2_unsafe_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+SET @e1c2_unsafe_ranges_built_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_built');
+SET @e1c2_unsafe_ranges_dispatched_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_dispatched');
+SET @e1c2_unsafe_secondary_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_produced');
+--sorted_result
+SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+  WHERE k >= 20 AND k < 40 AND v > 250;
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_queries_executed') -
+      @e1c2_unsafe_executed_before
+    AS e1c2_unsafe_executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_queries_fallback') -
+      @e1c2_unsafe_fallback_before
+    AS e1c2_unsafe_fallback_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_workers_launched') -
+      @e1c2_unsafe_workers_before
+    AS e1c2_unsafe_workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_ranges_built') -
+      @e1c2_unsafe_ranges_built_before
+    AS e1c2_unsafe_ranges_built_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_ranges_dispatched') -
+      @e1c2_unsafe_ranges_dispatched_before
+    AS e1c2_unsafe_ranges_dispatched_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_rows_produced') -
+      @e1c2_unsafe_secondary_rows_before
+    AS e1c2_unsafe_secondary_rows_delta;
 
 # Debug-only M9-B2/B3a-0 smoke: build secondary range partitions and prove
 # secondary visibility remains fail-closed, without row production or
@@ -885,6 +1078,7 @@ SET SESSION parallel_query=OFF;
 SET SESSION parallel_cost_threshold=10000;
 SET SESSION parallel_default_dop=4;
 
+DROP TABLE pq_ref_icp_t4;
 DROP TABLE pq_ref_icp_t3;
 DROP TABLE pq_ref_icp_t2;
 DROP TABLE pq_ref_icp_t1;

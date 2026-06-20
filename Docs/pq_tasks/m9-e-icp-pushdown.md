@@ -1099,6 +1099,10 @@ SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
  WHERE k >= 20 AND k < 40 AND v > 250;
 ```
 
+Coding note: E1c-2a 实现时将用户可见正例收窄为
+`pq_ref_icp_t4 FORCE INDEX(k_icp_idx)` + `icp_col >= 250` + non-covering
+integer `payload`，避免首个 gate 同时承诺 nullable/CHAR materialization。
+
 测试数据前置：
 
 - 当前 `pq_ref_icp_t1` 的 `k >= 20 AND k < 40` 覆盖
@@ -1194,8 +1198,9 @@ MTR 必须覆盖：
 - serial baseline 与 PQ result correctness：
   - ICP on/off 对照；
   - 返回行数与内容一致；
-  - 必须覆盖 in-range `ICP_NO_MATCH` 跳过行，例如 `v > 250` 在
-    `k >= 20 AND k < 40` 中过滤 `k=20` 两行并保留 `k=30` 一行；
+  - 必须覆盖 in-range `ICP_NO_MATCH` 跳过行。E1c-2a 实际使用
+    `pq_ref_icp_t4(k, icp_col, payload)` 中的 `icp_col >= 250`，过滤
+    `k=20` 两行并保留 `k=30` 一行；
 - positive counter window：
   - `Parallel_queries_executed` delta = 1；
   - `Parallel_secondary_rows_produced` delta = expected output rows；
@@ -1249,6 +1254,9 @@ Design Review result:
     positive “non-covering but clustered-materializable and safe” predicate；
   - changed positive SQL shape to `v > 250` over current test data, so the
     range has both in-range `ICP_NO_MATCH` rows and an `ICP_MATCH` row；
+- coding later replaced the test shape with `pq_ref_icp_t4/k_icp_idx` and
+  `icp_col >= 250` to keep the first user-visible gate integer-only while
+  preserving in-range ICP misses plus one ICP match；
 - second review returned `ACCEPT`。
 
 #### M9-E1c-2a: User-visible Non-covering ICP Range Coding Taskbook
@@ -1357,9 +1365,9 @@ Design Review result:
    - ICP filtered / invisible / delete-mark / abort do not increment
      produced rows。
 6. MTR:
-   - positive query uses `v > 250` to force two in-range ICP misses and one
-     ICP match；
-   - expected result is one row: id 4 / k 30 / v 300 / pad d；
+   - positive query uses `pq_ref_icp_t4/k_icp_idx` and `icp_col >= 250` to
+     force two in-range ICP misses and one ICP match；
+   - expected result is one row: id 3 / k 30 / payload 3000；
    - compare serial ICP on/off result；
    - assert counters；
    - assert fallback for no ICP, covering candidate, unsafe non-covering
@@ -1693,3 +1701,85 @@ Review:
   - constant ref and dependent ref must remain documented as adjacent boundary
     guards until a later design proves stable real ICP shapes；
   - E0 coding Completion Report must list the required zero deltas。
+
+## M9-E1c-2a Completion Report
+
+Coding completed by Codex Orchestrator; Code/Task Review accepted.
+
+Changed files:
+
+- `sql/handler.h`
+- `sql/parallel_query/pq_iterators.cc`
+- `storage/innobase/handler/ha_innodb.h`
+- `storage/innobase/handler/ha_innodb_pq.cc`
+- `storage/innobase/include/row0pread_pq.h`
+- `storage/innobase/row/row0pread_pq.cc`
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+- `Docs/pq_tasks/commercial-port-m9-ref-icp.md`
+- `Docs/pq_tasks/README.md`
+- `Docs/pq_tasks/m9-e-icp-pushdown.md`
+
+Implementation notes:
+
+- Added a positive SQL predicate for non-covering but clustered-materializable
+  secondary range ICP; it is not implemented as `!covering_safe`。
+- Added `PQSecondaryNoncoveringIcpRangeIterator` as a separate leader-local
+  iterator. It buffers bounded row images, falls back only before any row is
+  buffered, and treats unsupported/error after buffering as fatal。
+- Added handler/InnoDB hook
+  `pq_secondary_noncovering_icp_range_produce()` and scan_ctx helper
+  `produce_secondary_icp_range_for_user_gate()`。
+- InnoDB order is ICP on secondary record -> clustered lookup for
+  `ICP_MATCH` -> clustered record materialization -> secondary cursor
+  restore -> continue drain。
+- Scope remains single-table, single range, InnoDB, non-partitioned,
+  non-reverse, no worker/MQ, no ref/dependent-ref ICP, max 64 produced rows。
+
+Validation:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --record pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_commercial_ref_icp
+```
+
+Target MTR assertions:
+
+- Positive query uses `pq_ref_icp_t4 FORCE INDEX(k_icp_idx)` with
+  `WHERE k >= 20 AND k < 40 AND icp_col >= 250` and selects non-covering
+  integer `payload`；
+- `EXPLAIN` contains `Using index condition`；
+- result row is `(id=3, k=30, payload=3000)`；
+- `e1c2_executed_delta=1`；
+- `e1c2_secondary_rows_produced_delta=1`；
+- `e1c2_workers_delta=0`；
+- `e1c2_ranges_built_delta=0`；
+- `e1c2_ranges_dispatched_delta=0`；
+- ICP-off fallback window has `executed=0`、`fallback=0`、`workers=0`、
+  `ranges_built=0`、`ranges_dispatched=0`、`secondary_rows=0`；
+- unsafe read-set fallback window has `executed=0`、`fallback=0`、
+  `workers=0`、`ranges_built=0`、`ranges_dispatched=0`、
+  `secondary_rows=0`。
+
+Risk notes:
+
+- This is still leader-local and buffered; it does not migrate worker-side ICP
+  clone/refix。
+- The user-visible positive is intentionally limited to non-null integer
+  projected/predicate fields. Nullable, CHAR/VARCHAR, BLOB, JSON, geometry,
+  partition, reverse, ref/dependent-ref, and worker/MQ paths remain out of
+  scope。
+- Range endpoint support remains conservative; this stage does not add
+  `HA_READ_AFTER_KEY` semantics。
+
+Review:
+
+- First Code/Task Review returned `REVISE`；
+- fixed `ICP_OUT_OF_RANGE` to use common success finalization so `row_count`
+  remains consistent with buffered rows；
+- expanded no-ICP and unsafe-read-set fallback windows to assert zero
+  `executed/fallback/workers/ranges_built/ranges_dispatched/secondary_rows`；
+- clarified the actual `pq_ref_icp_t4/k_icp_idx/icp_col/payload` positive
+  shape in taskbook history；
+- second Code/Task Review returned `ACCEPT`。

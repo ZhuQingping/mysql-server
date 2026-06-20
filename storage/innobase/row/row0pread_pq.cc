@@ -1148,6 +1148,151 @@ dberr_t InnoDB_pq_scan_ctx::produce_secondary_range_for_user_gate(
   return result;
 }
 
+dberr_t InnoDB_pq_scan_ctx::produce_secondary_icp_range_for_user_gate(
+    byte *mysql_rec, row_prebuilt_t *prebuilt, const dtuple_t *start,
+    const dtuple_t *end, uint max_rows, PQ_row_sink *row_sink,
+    uint *row_count) const {
+  if (row_count != nullptr) {
+    *row_count = 0;
+  }
+
+  if (mysql_rec == nullptr || row_sink == nullptr || row_count == nullptr ||
+      max_rows == 0 || m_index == nullptr || m_index->is_clustered() ||
+      dict_table_has_fts_index(m_index->table) || m_trx == nullptr ||
+      m_trx->read_view == nullptr ||
+      !MVCC::is_view_active(m_trx->read_view) || prebuilt == nullptr ||
+      !prebuilt->idx_cond || !prebuilt->need_to_access_clustered ||
+      prebuilt->read_just_key || prebuilt->select_lock_type != LOCK_NONE ||
+      prebuilt->index != m_index || prebuilt->trx != m_trx ||
+      prebuilt->table == nullptr || prebuilt->table->is_intrinsic() ||
+      prebuilt->pcur == nullptr || prebuilt->clust_pcur == nullptr ||
+      prebuilt->m_mysql_table == nullptr) {
+    return DB_UNSUPPORTED;
+  }
+
+  if (prebuilt->sel_graph == nullptr) {
+    row_prebuild_sel_graph(prebuilt);
+  }
+  if (prebuilt->sel_graph == nullptr) {
+    return DB_UNSUPPORTED;
+  }
+
+  mem_heap_t *heap = mem_heap_create(256, UT_LOCATION_HERE);
+  if (heap == nullptr) {
+    return DB_OUT_OF_MEMORY;
+  }
+
+  mtr_t mtr;
+  mtr.start();
+
+  dberr_t result = DB_SUCCESS;
+  uint produced = 0;
+
+  prebuilt->pcur->init();
+  if (start != nullptr) {
+    prebuilt->pcur->open_on_user_rec(m_index, start, PAGE_CUR_GE,
+                                     BTR_SEARCH_LEAF, &mtr, UT_LOCATION_HERE);
+  } else {
+    prebuilt->pcur->begin_leaf(m_index, BTR_SEARCH_LEAF, &mtr);
+    result = prebuilt->pcur->move_to_next_user_rec(&mtr);
+  }
+
+  while (result == DB_SUCCESS && prebuilt->pcur->is_on_user_rec()) {
+    if (row_sink->should_abort()) {
+      result = row_sink->stop_is_success() ? DB_SUCCESS : DB_INTERRUPTED;
+      break;
+    }
+
+    const rec_t *rec = prebuilt->pcur->get_rec();
+    ulint *offsets = rec_get_offsets(rec, m_index, nullptr, ULINT_UNDEFINED,
+                                     UT_LOCATION_HERE, &heap);
+    if (offsets == nullptr) {
+      result = DB_OUT_OF_MEMORY;
+      break;
+    }
+
+    if (end != nullptr && end->compare(rec, m_index, offsets) <= 0) {
+      result = DB_SUCCESS;
+      break;
+    }
+
+    switch (pq_row_search_idx_cond_check(mysql_rec, prebuilt, rec, offsets)) {
+      case ICP_NO_MATCH:
+        mem_heap_empty(heap);
+        result = prebuilt->pcur->move_to_next_user_rec(&mtr);
+        continue;
+      case ICP_OUT_OF_RANGE:
+        result = DB_SUCCESS;
+        goto finalize;
+      case ICP_MATCH:
+        break;
+    }
+
+    if (produced >= max_rows) {
+      result = DB_UNSUPPORTED;
+      break;
+    }
+
+    que_thr_t *thr = que_fork_get_first_thr(prebuilt->sel_graph);
+    if (thr == nullptr) {
+      result = DB_UNSUPPORTED;
+      break;
+    }
+
+    prebuilt->pcur->store_position(&mtr);
+
+    const rec_t *clust_rec = nullptr;
+    ulint *clust_offsets = offsets;
+    const dtuple_t *vrow = nullptr;
+    result = pq_row_sel_get_clust_rec_for_mysql(
+        prebuilt, m_index, rec, thr, &clust_rec, &clust_offsets, &heap, &vrow,
+        &mtr);
+    if (result != DB_SUCCESS) {
+      result = DB_UNSUPPORTED;
+      break;
+    }
+
+    if (clust_rec != nullptr &&
+        !rec_get_deleted_flag(clust_rec, m_is_compact)) {
+      const dict_index_t *clust_index = m_index->table->first_index();
+      if (!row_sel_store_mysql_rec(mysql_rec, prebuilt, clust_rec, vrow, true,
+                                   clust_index, prebuilt->index, clust_offsets,
+                                   false, nullptr, prebuilt->blob_heap) ||
+          row_sink->send_row(prebuilt->m_mysql_table)) {
+        result = DB_UNSUPPORTED;
+        break;
+      }
+      ++produced;
+    }
+
+    prebuilt->clust_pcur->close();
+    mtr.commit();
+    mtr.start();
+    if (!prebuilt->pcur->restore_position(BTR_SEARCH_LEAF, &mtr,
+                                          UT_LOCATION_HERE)) {
+      result = DB_UNSUPPORTED;
+      break;
+    }
+
+    mem_heap_empty(heap);
+    result = prebuilt->pcur->move_to_next_user_rec(&mtr);
+  }
+
+finalize:
+  if (result == DB_END_OF_INDEX || result == DB_SUCCESS) {
+    *row_count = produced;
+    result = DB_SUCCESS;
+  } else {
+    *row_count = 0;
+  }
+
+  prebuilt->pcur->close();
+  prebuilt->clust_pcur->close();
+  mtr.commit();
+  mem_heap_free(heap);
+  return result;
+}
+
 bool InnoDB_pq_scan_ctx::check_visibility(const rec_t *&rec,
                                            ulint *&offsets,
                                            mem_heap_t *&heap,

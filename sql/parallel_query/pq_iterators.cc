@@ -51,6 +51,7 @@ namespace {
 
 constexpr double kPQSecondaryCoveringMaxEstimatedRows = 64.0;
 constexpr size_t kPQSecondaryDependentRefMaxBufferedRows = 1024;
+constexpr uint kPQSecondaryNoncoveringIcpMaxRows = 64;
 
 struct PQ_copied_key_endpoint {
   key_range range{};
@@ -141,6 +142,58 @@ bool pq_secondary_covering_read_set_is_safe(const TABLE *table, uint keyno) {
   }
 
   return saw_read_field;
+}
+
+bool pq_secondary_noncovering_clustered_read_set_is_safe(const TABLE *table,
+                                                         uint keyno) {
+  if (table == nullptr || table->s == nullptr || table->key_info == nullptr ||
+      table->field == nullptr || table->read_set == nullptr ||
+      keyno >= table->s->keys || keyno == table->s->primary_key) {
+    return false;
+  }
+
+  const KEY &key = table->key_info[keyno];
+  if (key.flags & (HA_SPATIAL | HA_MULTI_VALUED_KEY)) {
+    return false;
+  }
+
+  bool saw_read_field = false;
+  bool saw_noncovered_field = false;
+  for (uint i = 0; i < table->s->fields; ++i) {
+    Field *field = table->field[i];
+    if (field == nullptr || !bitmap_is_set(table->read_set, i)) {
+      continue;
+    }
+
+    saw_read_field = true;
+    if (!pq_secondary_covering_field_type_is_safe(field)) {
+      return false;
+    }
+
+    bool found_full_keypart = false;
+    for (uint part = 0; part < key.user_defined_key_parts; ++part) {
+      const KEY_PART_INFO &key_part = key.key_part[part];
+      if (key_part.field != field) {
+        continue;
+      }
+
+      if ((key_part.key_part_flag &
+           (HA_REVERSE_SORT | HA_PART_KEY_SEG | HA_VAR_LENGTH_PART |
+            HA_BLOB_PART | HA_BIT_PART)) != 0 ||
+          key_part.length != field->key_length()) {
+        return false;
+      }
+
+      found_full_keypart = true;
+      break;
+    }
+
+    if (!found_full_keypart) {
+      saw_noncovered_field = true;
+    }
+  }
+
+  return saw_read_field && saw_noncovered_field;
 }
 
 bool pq_secondary_key_parts_are_safe(const TABLE *table, uint keyno) {
@@ -388,6 +441,133 @@ class PQSecondaryCoveringRangeIterator final : public TableRowIterator {
   std::vector<std::vector<uchar>> m_rows;
   size_t m_pos{0};
   bool m_executed_counted{false};
+  unique_ptr_destroy_only<RowIterator> m_serial_iterator;
+};
+
+class PQSecondaryNoncoveringIcpRangeIterator final : public TableRowIterator {
+ public:
+  PQSecondaryNoncoveringIcpRangeIterator(
+      THD *thd, MEM_ROOT *mem_root, TABLE *table, ha_rows *examined_rows,
+      double expected_rows, uint index_arg, bool need_rows_in_rowid_order,
+      bool reuse_handler, uint mrr_flags, uint mrr_buf_size,
+      Bounds_checked_array<QUICK_RANGE *> ranges)
+      : TableRowIterator(thd, table),
+        m_mem_root(mem_root),
+        m_examined_rows(examined_rows),
+        m_expected_rows(expected_rows),
+        m_index(index_arg),
+        m_need_rows_in_rowid_order(need_rows_in_rowid_order),
+        m_reuse_handler(reuse_handler),
+        m_mrr_flags(mrr_flags),
+        m_mrr_buf_size(mrr_buf_size),
+        m_ranges(ranges) {}
+
+  bool Init() override {
+    m_rows.clear();
+    m_pos = 0;
+    m_serial_iterator = nullptr;
+
+    if (m_ranges.size() != 1 || table() == nullptr || table()->file == nullptr ||
+        table()->s == nullptr || table()->s->reclength == 0) {
+      return fallback_to_serial();
+    }
+
+    QUICK_RANGE *range = m_ranges[0];
+    if (range == nullptr) {
+      return fallback_to_serial();
+    }
+
+    key_range start_key;
+    key_range end_key;
+    range->make_min_endpoint(&start_key);
+    range->make_max_endpoint(&end_key);
+
+    PQ_copied_key_endpoint copied_start;
+    PQ_copied_key_endpoint copied_end;
+    if (!pq_copy_key_endpoint(start_key, &copied_start) ||
+        !pq_copy_key_endpoint(end_key, &copied_end)) {
+      PrintError(HA_ERR_OUT_OF_MEM);
+      return true;
+    }
+
+    PQ_record_buffer_sink sink(table(), &m_rows);
+    uint row_count = 0;
+    const int error = table()->file->pq_secondary_noncovering_icp_range_produce(
+        thd(), m_index, copied_start.present ? &copied_start.range : nullptr,
+        copied_end.present ? &copied_end.range : nullptr, &sink, &row_count);
+
+    if (error == HA_ERR_UNSUPPORTED && m_rows.empty()) {
+      return fallback_to_serial();
+    }
+
+    if (error != 0) {
+      PrintError(error == HA_ERR_UNSUPPORTED ? HA_ERR_INTERNAL_ERROR : error);
+      return true;
+    }
+
+    if (row_count != m_rows.size() ||
+        row_count > kPQSecondaryNoncoveringIcpMaxRows) {
+      PrintError(HA_ERR_INTERNAL_ERROR);
+      return true;
+    }
+
+    pq_set_execution_state(thd(), PQ_execution_state::EXECUTED);
+    pq_global_stats.queries_executed.fetch_add(1, std::memory_order_relaxed);
+    pq_global_stats.secondary_rows_produced.fetch_add(row_count,
+                                                      std::memory_order_relaxed);
+    pq_global_stats.rows_scanned.fetch_add(row_count, std::memory_order_relaxed);
+    return false;
+  }
+
+  int Read() override {
+    if (m_serial_iterator != nullptr) {
+      return m_serial_iterator->Read();
+    }
+
+    if (m_pos >= m_rows.size()) {
+      table()->set_no_row();
+      return -1;
+    }
+
+    std::memcpy(table()->record[0], m_rows[m_pos].data(),
+                table()->s->reclength);
+    ++m_pos;
+    if (m_examined_rows != nullptr) {
+      ++*m_examined_rows;
+    }
+    return 0;
+  }
+
+  void UnlockRow() override {
+    if (m_serial_iterator != nullptr) {
+      m_serial_iterator->UnlockRow();
+      return;
+    }
+    TableRowIterator::UnlockRow();
+  }
+
+ private:
+  bool fallback_to_serial() {
+    pq_set_execution_state(thd(), PQ_execution_state::FALLBACK_SERIAL);
+    pq_global_stats.queries_fallback.fetch_add(1, std::memory_order_relaxed);
+    m_serial_iterator = NewIterator<IndexRangeScanIterator>(
+        thd(), m_mem_root, table(), m_examined_rows, m_expected_rows, m_index,
+        m_need_rows_in_rowid_order, m_reuse_handler, m_mem_root, m_mrr_flags,
+        m_mrr_buf_size, m_ranges);
+    return m_serial_iterator == nullptr || m_serial_iterator->Init();
+  }
+
+  MEM_ROOT *const m_mem_root;
+  ha_rows *const m_examined_rows;
+  const double m_expected_rows;
+  const uint m_index;
+  const bool m_need_rows_in_rowid_order;
+  const bool m_reuse_handler;
+  const uint m_mrr_flags;
+  const uint m_mrr_buf_size;
+  Bounds_checked_array<QUICK_RANGE *> m_ranges;
+  std::vector<std::vector<uchar>> m_rows;
+  size_t m_pos{0};
   unique_ptr_destroy_only<RowIterator> m_serial_iterator;
 };
 
@@ -889,13 +1069,31 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQSecondaryCoveringRangeIterator(
                      : nullptr;
   if (table == nullptr || table->s == nullptr || table->file == nullptr ||
       table->key_info == nullptr || table->s->db_type() != innodb_hton ||
-      table->part_info != nullptr || table->file->pushed_idx_cond != nullptr ||
-      param.index >= table->s->keys || param.index == table->s->primary_key) {
+      table->part_info != nullptr || param.index >= table->s->keys ||
+      param.index == table->s->primary_key) {
     return nullptr;
   }
 
-  if (!pq_secondary_key_parts_are_safe(table, param.index) ||
-      !pq_secondary_covering_read_set_is_safe(table, param.index)) {
+  if (!pq_secondary_key_parts_are_safe(table, param.index)) {
+    return nullptr;
+  }
+
+  if (table->file->pushed_idx_cond != nullptr) {
+    if (table->file->pushed_idx_cond_keyno != param.index ||
+        !pq_secondary_noncovering_clustered_read_set_is_safe(table,
+                                                            param.index)) {
+      return nullptr;
+    }
+
+    pq_set_execution_state(thd, PQ_execution_state::ITERATOR_SELECTED);
+    return NewIterator<PQSecondaryNoncoveringIcpRangeIterator>(
+        thd, mem_root, mem_root, table, examined_rows,
+        path->num_output_rows(), param.index, param.need_rows_in_rowid_order,
+        param.reuse_handler, param.mrr_flags, param.mrr_buf_size,
+        Bounds_checked_array{param.ranges, param.num_ranges});
+  }
+
+  if (!pq_secondary_covering_read_set_is_safe(table, param.index)) {
     return nullptr;
   }
 
