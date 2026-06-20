@@ -4999,6 +4999,21 @@ class handler {
     return HA_ERR_UNSUPPORTED;
   }
 
+  /** Debug-only non-covering secondary ICP materialization smoke.
+
+    This may inspect secondary records, evaluate pushed ICP, fetch one
+    clustered record, and convert it into the handler record buffer. It must
+    not enqueue rows or open a user-visible PQ execution path.
+  */
+  virtual int pq_secondary_noncovering_icp_one_row_smoke(
+      THD *leader_thd [[maybe_unused]], uint keyno [[maybe_unused]],
+      const key_range *start_key [[maybe_unused]],
+      const key_range *end_key [[maybe_unused]],
+      bool *materialized [[maybe_unused]]) {
+    if (materialized != nullptr) *materialized = false;
+    return HA_ERR_UNSUPPORTED;
+  }
+
   /** Debug-only covering secondary range materialization smoke.
 
     This may drain a bounded covering secondary range into the handler record

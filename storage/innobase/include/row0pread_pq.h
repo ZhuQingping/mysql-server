@@ -300,6 +300,20 @@ class InnoDB_pq_scan_ctx {
                                                      const dtuple_t *start,
                                                      const dtuple_t *end) const;
 
+  /** Materialize one non-covering secondary ICP record for E1c-1 smoke.
+
+  This debug-only method evaluates ICP on secondary records, fetches the
+  clustered record only after ICP_MATCH, materializes exactly one visible
+  clustered record into mysql_rec, and stops. It does not drain the range or
+  enqueue rows.
+
+  @return DB_SUCCESS when one record was materialized or no matching visible
+          record was found, DB_UNSUPPORTED/DB_OUT_OF_MEMORY for unsafe states
+          or errors. */
+  dberr_t materialize_one_secondary_icp_record_for_smoke(
+      byte *mysql_rec, row_prebuilt_t *prebuilt, const dtuple_t *start,
+      const dtuple_t *end, bool *materialized) const;
+
   /** Materialize a bounded fast-path-only secondary range for B3c smoke.
 
   The method keeps one mtr open, advances only the secondary pcur, recomputes

@@ -531,6 +531,71 @@ static void pq_maybe_run_secondary_covering_range_smoke(
   }
 }
 
+static void pq_maybe_run_secondary_noncovering_icp_one_row_smoke(
+    THD *thd, TABLE *table, AccessPath *range_scan, uint keyno) {
+  bool enabled = false;
+  DBUG_EXECUTE_IF("pq_secondary_noncovering_icp_one_record_smoke",
+                  enabled = true;);
+  if (!enabled) return;
+
+  pq_global_stats.secondary_visibility_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  auto mark_unsupported = []() {
+    pq_global_stats.secondary_visibility_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+  };
+
+  if (thd == nullptr || table == nullptr || table->s == nullptr ||
+      table->file == nullptr || range_scan == nullptr ||
+      range_scan->type != AccessPath::INDEX_RANGE_SCAN ||
+      keyno >= table->s->keys || keyno == table->s->primary_key ||
+      table->part_info != nullptr || table->file->pushed_idx_cond == nullptr ||
+      table->file->pushed_idx_cond_keyno != keyno) {
+    mark_unsupported();
+    return;
+  }
+
+  const auto &param = range_scan->index_range_scan();
+  if (param.reverse || param.geometry || param.num_ranges != 1 ||
+      param.ranges == nullptr ||
+      pq_secondary_range_key_has_unsupported_parts(table, keyno) ||
+      pq_secondary_covering_read_set_is_safe(table, keyno)) {
+    mark_unsupported();
+    return;
+  }
+
+  QUICK_RANGE *quick_range = param.ranges[0];
+  if (quick_range == nullptr) {
+    mark_unsupported();
+    return;
+  }
+
+  key_range start_key{};
+  key_range end_key{};
+  quick_range->make_min_endpoint(&start_key);
+  quick_range->make_max_endpoint(&end_key);
+
+  PQ_copied_key_endpoint copied_start;
+  PQ_copied_key_endpoint copied_end;
+  if (!pq_copy_key_endpoint(start_key, &copied_start) ||
+      !pq_copy_key_endpoint(end_key, &copied_end)) {
+    mark_unsupported();
+    return;
+  }
+
+  bool materialized = false;
+  const int error = table->file->pq_secondary_noncovering_icp_one_row_smoke(
+      thd, keyno, copied_start.present ? &copied_start.range : nullptr,
+      copied_end.present ? &copied_end.range : nullptr, &materialized);
+  if (error != 0) {
+    mark_unsupported();
+  } else if (materialized) {
+    pq_global_stats.secondary_rows_materialized_smoke.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+}
+
 static void pq_maybe_run_secondary_covering_ref_smoke(THD *thd, TABLE *table,
                                                       Index_lookup *ref) {
   bool enabled = false;
@@ -785,6 +850,8 @@ static bool pq_check_full_table_scan(JOIN *join, PQUnsuiteInfo *info,
         pq_maybe_run_secondary_covering_one_row_smoke(
             join->thd, candidate_table, candidate_range_scan, candidate_index);
         pq_maybe_run_secondary_covering_range_smoke(
+            join->thd, candidate_table, candidate_range_scan, candidate_index);
+        pq_maybe_run_secondary_noncovering_icp_one_row_smoke(
             join->thd, candidate_table, candidate_range_scan, candidate_index);
       }
     } else if (access_type == JT_REF) {

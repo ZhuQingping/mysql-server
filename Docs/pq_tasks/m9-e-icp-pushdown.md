@@ -829,7 +829,7 @@ Review result:
 
 - Coding taskbook drafted；Taskbook Review accepted；
 - 设计目标是 debug-only one-record smoke；
-- 下一步进入 E1c-1 coding。
+- Coding completed；Code/Task Review accepted。
 
 目标：
 
@@ -1024,7 +1024,55 @@ Taskbook Review result:
 
 Completion Report:
 
-- Pending coding。
+- Changed files:
+  - `sql/handler.h`
+  - `sql/parallel_query/pq_optimizer.cc`
+  - `storage/innobase/handler/ha_innodb.h`
+  - `storage/innobase/handler/ha_innodb_pq.cc`
+  - `storage/innobase/include/row0pread_pq.h`
+  - `storage/innobase/row/row0pread_pq.cc`
+  - `storage/innobase/include/row0sel.h`
+  - `storage/innobase/row/row0sel.cc`
+  - `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+  - `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+- Implementation:
+  - added a debug-only handler hook
+    `pq_secondary_noncovering_icp_one_row_smoke()`；
+  - added an InnoDB narrow ICP wrapper over serial
+    `row_search_idx_cond_check()`；
+  - added a one-record scan_ctx smoke helper that evaluates ICP on secondary
+    records, fetches clustered record only after `ICP_MATCH`, materializes one
+    clustered record, then stops；
+  - added optimizer DBUG gate
+    `pq_secondary_noncovering_icp_one_record_smoke`；
+  - added MTR assertions proving materialized smoke delta is 1 while
+    user-visible PQ execution / workers / ranges / secondary rows stay 0。
+- Validation:
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl
+    --suite=parallel_query --record pq_commercial_ref_icp` passed；
+  - `TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl
+    --suite=parallel_query pq_commercial_ref_icp` passed；
+  - `TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl
+    --suite=parallel_query --parallel=1` passed 74/74。
+- Observed MTR delta:
+  - `e1c1_materialized_smoke_delta = 1`；
+  - `e1c1_secondary_rows_produced_delta = 0`；
+  - `e1c1_executed_delta = 0`；
+  - `e1c1_workers_delta = 0`；
+  - `e1c1_ranges_built_delta = 0`；
+  - `e1c1_ranges_dispatched_delta = 0`。
+- Risks:
+  - still debug-only；does not prove safe continued secondary drain after
+    clustered lookup；
+  - user-visible non-covering ICP remains disabled until E1c-2；
+  - worker-side ICP clone/refix remains out of scope。
+- Review:
+  - Code/Task Review Agent returned `ACCEPT`；
+  - no blocking findings；
+  - confirmed debug-only gate, serial ICP wrapper reuse, clustered lookup after
+    `ICP_MATCH`, one-record stop, state restore, counters, MTR and completion
+    report are acceptable。
 
 ### M9-E2: Constant Covering Ref ICP
 

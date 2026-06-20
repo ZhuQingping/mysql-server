@@ -581,6 +581,16 @@ class ha_innobase : public handler {
       const key_range *end_key) override;
 
   /**
+    Debug-only non-covering secondary ICP materialization smoke.
+
+    Evaluates ICP on secondary records, fetches one clustered record, converts
+    it into record[0], and discards it. It does not produce rows.
+  */
+  int pq_secondary_noncovering_icp_one_row_smoke(
+      THD *leader_thd, uint keyno, const key_range *start_key,
+      const key_range *end_key, bool *materialized) override;
+
+  /**
     Debug-only covering secondary range materialization smoke.
 
     Converts a bounded number of visible covering secondary records into

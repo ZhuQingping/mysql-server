@@ -40,6 +40,7 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #include "data0data.h"
 #include "dict0stats.h"
 #include "dict0types.h"
+#include "my_icp.h"
 #include "pars0sym.h"
 #include "que0types.h"
 #include "read0types.h"
@@ -131,6 +132,17 @@ dberr_t pq_row_sel_get_clust_rec_for_mysql(
     row_prebuilt_t *prebuilt, dict_index_t *sec_index, const rec_t *rec,
     que_thr_t *thr, const rec_t **out_rec, ulint **offsets,
     mem_heap_t **offset_heap, const dtuple_t **vrow, mtr_t *mtr);
+
+/** Evaluate a pushed index condition for a latched secondary record.
+
+This is a narrow wrapper for PQ debug smoke paths. It preserves the serial
+row_search_idx_cond_check() semantics.
+
+@return ICP_NO_MATCH, ICP_MATCH, or ICP_OUT_OF_RANGE. */
+ICP_RESULT pq_row_search_idx_cond_check(byte *mysql_rec,
+                                        row_prebuilt_t *prebuilt,
+                                        const rec_t *rec,
+                                        const ulint *offsets);
 
 /** Converts a key value stored in MySQL format to an Innobase dtuple. The last
 field of the key value may be just a prefix of a fixed length field: hence

@@ -3858,6 +3858,13 @@ static ICP_RESULT row_search_idx_cond_check(
   ut_error;
 }
 
+ICP_RESULT pq_row_search_idx_cond_check(byte *mysql_rec,
+                                        row_prebuilt_t *prebuilt,
+                                        const rec_t *rec,
+                                        const ulint *offsets) {
+  return row_search_idx_cond_check(mysql_rec, prebuilt, rec, offsets);
+}
+
 /** Check the pushed-down end-range condition to avoid extra traversal
 if records are not with in view and also to avoid prefetching too
 many records into the record buffer.
