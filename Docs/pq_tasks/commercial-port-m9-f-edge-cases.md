@@ -2,7 +2,8 @@
 
 ## 状态
 
-Status: design draft。No source edits yet。
+Status: M9-F0 negative guard matrix completed / Code/Task Review accepted。
+No source edits outside MTR/docs。
 
 M9-E2-0 已确认当前没有稳定 constant covering `REF + ICP` 正例，因此
 E2-1/E2-2 不进入编码。M9-F 接手商用 secondary/ref/ICP 迁移中剩余的
@@ -71,6 +72,8 @@ record buffer ownership 和 MQ/result path。默认策略：
 
 ### M9-F0: Edge-case Negative Guard Matrix
 
+Status: coding/validation completed; Code/Task Review accepted。
+
 目标：
 
 - 用当前仓最小 SQL 覆盖 MVI、reverse、partition、secondary MIN、
@@ -98,6 +101,44 @@ record buffer ownership 和 MQ/result path。默认策略：
   `Parallel_workers_launched`、`Parallel_ranges_built`、
   `Parallel_ranges_dispatched`、`Parallel_secondary_rows_produced` 不增长；
 - 不回退 M9-B3d/C2/D3d/E1c2a 已有正例。
+
+Implementation notes:
+
+- 新增 MVI / multi-valued index、partition table、reverse secondary range、
+  secondary MIN shortcut、BLOB read-set 五类小表和负向查询；
+- 使用局部 counter window 验证
+  `Parallel_queries_executed`、`Parallel_workers_launched`、
+  `Parallel_ranges_built`、`Parallel_ranges_dispatched`、
+  `Parallel_secondary_rows_produced` 均不增长；
+- F0 不修改 `sql/` 或 `storage/innobase/`。
+
+Validation:
+
+```bash
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --record pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1
+```
+
+Results:
+
+- targeted record/replay passed；
+- full `parallel_query` suite passed: 74/74；
+- F0 local deltas:
+  `f0_edge_executed_delta=0`、`f0_edge_workers_delta=0`、
+  `f0_edge_ranges_built_delta=0`、
+  `f0_edge_ranges_dispatched_delta=0`、
+  `f0_edge_secondary_rows_delta=0`。
+
+Review:
+
+- Code/Task Review Agent returned `ACCEPT`；
+- confirmed five edge shapes are covered；
+- confirmed no `sql/` or `storage/innobase/` files were modified；
+- confirmed existing B3/C2/D3d/E1c2a positive statistics remain stable。
 
 ### M9-F1: MVI Guard
 

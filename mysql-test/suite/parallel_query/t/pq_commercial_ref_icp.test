@@ -6,7 +6,8 @@
 
 --disable_warnings
 DROP TABLE IF EXISTS pq_ref_icp_t1, pq_ref_icp_t2, pq_ref_icp_t3,
-                     pq_ref_icp_t4;
+                     pq_ref_icp_t4, pq_ref_icp_mvi, pq_ref_icp_part,
+                     pq_ref_icp_rev, pq_ref_icp_min, pq_ref_icp_blob;
 --enable_warnings
 
 CREATE TABLE pq_ref_icp_t1 (
@@ -39,6 +40,44 @@ CREATE TABLE pq_ref_icp_t4 (
   KEY k_icp_idx(k, icp_col)
 ) ENGINE=InnoDB;
 
+CREATE TABLE pq_ref_icp_mvi (
+  id INT PRIMARY KEY,
+  doc_id INT NOT NULL,
+  b INT NOT NULL,
+  doc JSON,
+  KEY mv_doc_id_b (
+    doc_id,
+    b,
+    (CAST(JSON_EXTRACT(doc, '$.val') AS UNSIGNED ARRAY)))
+) ENGINE=InnoDB;
+
+CREATE TABLE pq_ref_icp_part (
+  id INT NOT NULL,
+  k INT NOT NULL,
+  KEY k_idx(k)
+) ENGINE=InnoDB
+PARTITION BY HASH(id) PARTITIONS 2;
+
+CREATE TABLE pq_ref_icp_rev (
+  id INT PRIMARY KEY,
+  k INT NOT NULL,
+  KEY k_idx(k)
+) ENGINE=InnoDB;
+
+CREATE TABLE pq_ref_icp_min (
+  id INT PRIMARY KEY,
+  i INT NOT NULL,
+  j INT NOT NULL,
+  KEY j_idx(j)
+) ENGINE=InnoDB;
+
+CREATE TABLE pq_ref_icp_blob (
+  id INT PRIMARY KEY,
+  k INT NOT NULL,
+  payload BLOB,
+  KEY k_idx(k)
+) ENGINE=InnoDB;
+
 INSERT INTO pq_ref_icp_t1 VALUES
   (1,10,100,'a'),(2,20,200,'b'),(3,20,210,'c'),
   (4,30,300,'d'),(5,40,400,'e'),(6,50,500,'f');
@@ -47,6 +86,17 @@ INSERT INTO pq_ref_icp_t3 VALUES (1,20),(2,20),(3,999),(4,30),(5,20);
 INSERT INTO pq_ref_icp_t4 VALUES
   (1,20,100,1000),(2,20,110,1100),(3,30,300,3000),
   (4,40,400,4000);
+INSERT INTO pq_ref_icp_mvi VALUES
+  (1,2,2,'{"val":[1,2]}'),(2,2,2,'{"val":[2,3]}'),
+  (3,1,1,'{"val":[3,4]}');
+INSERT INTO pq_ref_icp_part VALUES
+  (1,10),(2,20),(3,20),(4,30),(5,40);
+INSERT INTO pq_ref_icp_rev VALUES
+  (1,10),(2,20),(3,20),(4,30),(5,40);
+INSERT INTO pq_ref_icp_min VALUES
+  (1,1,10),(2,2,20),(3,3,30);
+INSERT INTO pq_ref_icp_blob VALUES
+  (1,10,'a'),(2,20,'b'),(3,30,'c');
 
 SET SESSION parallel_query=ON;
 SET SESSION parallel_cost_threshold=0;
@@ -914,6 +964,98 @@ SELECT
       @d3c_secondary_rows_produced_before
     AS d3c_secondary_rows_produced_delta;
 
+# M9-F0: edge-case negative guard matrix. MVI, reverse scan, partition,
+# secondary MIN shortcut, and record-buffer-hostile BLOB shapes must not
+# enter current secondary/ref/ICP PQ execution paths.
+SET @f0_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @f0_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+SET @f0_ranges_built_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_built');
+SET @f0_ranges_dispatched_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_dispatched');
+SET @f0_secondary_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_produced');
+
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT id, doc_id, b FROM pq_ref_icp_mvi
+  FORCE INDEX(mv_doc_id_b)
+  WHERE doc_id = 2 AND b = 2;
+--enable_warnings
+--sorted_result
+SELECT id, doc_id, b FROM pq_ref_icp_mvi FORCE INDEX(mv_doc_id_b)
+  WHERE doc_id = 2 AND b = 2;
+
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT id, k FROM pq_ref_icp_rev FORCE INDEX(k_idx)
+  WHERE k >= 20 AND k < 40 ORDER BY k DESC, id DESC;
+--enable_warnings
+SELECT id, k FROM pq_ref_icp_rev FORCE INDEX(k_idx)
+  WHERE k >= 20 AND k < 40 ORDER BY k DESC, id DESC;
+
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT id, k FROM pq_ref_icp_part FORCE INDEX(k_idx)
+  WHERE k >= 20 AND k < 40;
+--enable_warnings
+--sorted_result
+SELECT id, k FROM pq_ref_icp_part FORCE INDEX(k_idx)
+  WHERE k >= 20 AND k < 40;
+
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT MIN(j) FROM pq_ref_icp_min FORCE INDEX(j_idx)
+  WHERE j < 30;
+--enable_warnings
+SELECT MIN(j) FROM pq_ref_icp_min FORCE INDEX(j_idx)
+  WHERE j < 30;
+
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT id, k, payload FROM pq_ref_icp_blob FORCE INDEX(k_idx)
+  WHERE k >= 20 AND k < 40;
+--enable_warnings
+--sorted_result
+SELECT id, k, payload FROM pq_ref_icp_blob FORCE INDEX(k_idx)
+  WHERE k >= 20 AND k < 40;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_queries_executed') - @f0_executed_before
+    AS f0_edge_executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_workers_launched') - @f0_workers_before
+    AS f0_edge_workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_ranges_built') - @f0_ranges_built_before
+    AS f0_edge_ranges_built_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_ranges_dispatched') -
+      @f0_ranges_dispatched_before
+    AS f0_edge_ranges_dispatched_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_rows_produced') -
+      @f0_secondary_rows_before
+    AS f0_edge_secondary_rows_delta;
+
 SET @executed_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
@@ -1078,6 +1220,11 @@ SET SESSION parallel_query=OFF;
 SET SESSION parallel_cost_threshold=10000;
 SET SESSION parallel_default_dop=4;
 
+DROP TABLE pq_ref_icp_blob;
+DROP TABLE pq_ref_icp_min;
+DROP TABLE pq_ref_icp_rev;
+DROP TABLE pq_ref_icp_part;
+DROP TABLE pq_ref_icp_mvi;
 DROP TABLE pq_ref_icp_t4;
 DROP TABLE pq_ref_icp_t3;
 DROP TABLE pq_ref_icp_t2;
