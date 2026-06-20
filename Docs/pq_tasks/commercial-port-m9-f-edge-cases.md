@@ -6,6 +6,7 @@ Status: M9-F0 negative guard matrix completed / Code/Task Review accepted。
 M9-F1 MVI guard completed / Code/Task Review accepted。
 M9-F2 reverse scan guard completed / Code/Task Review accepted。
 M9-F3 partition guard completed / Code/Task Review accepted。
+M9-F4 secondary index MIN guard completed / Code/Task Review accepted。
 No source edits outside MTR/docs。
 
 M9-E2-0 已确认当前没有稳定 constant covering `REF + ICP` 正例，因此
@@ -356,6 +357,8 @@ Review:
 
 ### M9-F4: Secondary Index MIN Guard / Design
 
+Status: coding/validation completed; Code/Task Review accepted。
+
 目标：
 
 - 迁移 `pq_sec_index_min` 最小护栏；
@@ -368,6 +371,47 @@ Review:
 - 结果与串行一致；
 - 不误入已打开 secondary/ref PQ path；
 - 明确是否保留串行、增加后续 guard，或另开 M7/MIN 聚合子阶段。
+
+Implementation notes:
+
+- 商用 `pq_sec_index_min` 主要覆盖 secondary-index 最小值/首行访问正确性；
+- 当前仓 `MIN(j)` 与带 range 的 `MIN(j)` 都被 optimizer 处理为
+  `Select tables optimized away`；
+- 等价 first-row 查询 `ORDER BY j LIMIT 1` 走 secondary range，但当前
+  fallback 为 `Not parallel HAS_ORDER_BY`；
+- 因此 F4 暂归类为 optimizer shortcut / M7 aggregate 边界，不打开
+  M9 secondary row-production 路径。
+
+Validation:
+
+```bash
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --record pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1
+```
+
+Results:
+
+- targeted record/replay passed；
+- full `parallel_query` suite passed: 74/74；
+- F4 local deltas:
+  `f4_min_executed_delta=0`、`f4_min_workers_delta=0`、
+  `f4_min_ranges_built_delta=0`、
+  `f4_min_ranges_dispatched_delta=0`、
+  `f4_min_secondary_rows_delta=0`。
+
+Review:
+
+- Code/Task Review Agent returned `ACCEPT`；
+- confirmed bare `MIN(j)`、range `MIN(j)`、`ORDER BY j LIMIT 1`
+  first-row shapes are covered；
+- confirmed both `MIN(j)` shapes are optimized away and first-row shape
+  falls back with `Not parallel HAS_ORDER_BY`；
+- confirmed F4 does not enter M9 secondary/ref PQ row-production path；
+- confirmed no `sql/` or `storage/innobase/` files were modified。
 
 ### M9-F5: Record Buffer / Prefetch Contract
 

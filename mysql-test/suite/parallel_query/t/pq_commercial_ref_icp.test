@@ -1305,6 +1305,79 @@ SELECT
       @f3_partition_secondary_rows_before
     AS f3_partition_secondary_rows_delta;
 
+# M9-F4: secondary-index MIN / first-row shortcuts are optimizer shortcuts,
+# not the current PQ secondary row-production path. Keep them observable and
+# fallback-safe until a dedicated MIN contract is designed.
+SET @f4_min_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @f4_min_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+SET @f4_min_ranges_built_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_built');
+SET @f4_min_ranges_dispatched_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_dispatched');
+SET @f4_min_secondary_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_produced');
+
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT MIN(j) FROM pq_ref_icp_min FORCE INDEX(j_idx);
+--enable_warnings
+SELECT MIN(j) FROM pq_ref_icp_min FORCE INDEX(j_idx);
+
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT MIN(j) FROM pq_ref_icp_min FORCE INDEX(j_idx)
+  WHERE j < 30;
+--enable_warnings
+SELECT MIN(j) FROM pq_ref_icp_min FORCE INDEX(j_idx)
+  WHERE j < 30;
+
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT id, i, j FROM pq_ref_icp_min FORCE INDEX(j_idx)
+  WHERE j < 30 ORDER BY j LIMIT 1;
+--enable_warnings
+SELECT id, i, j FROM pq_ref_icp_min FORCE INDEX(j_idx)
+  WHERE j < 30 ORDER BY j LIMIT 1;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_queries_executed') -
+      @f4_min_executed_before
+    AS f4_min_executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_workers_launched') -
+      @f4_min_workers_before
+    AS f4_min_workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_ranges_built') -
+      @f4_min_ranges_built_before
+    AS f4_min_ranges_built_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_ranges_dispatched') -
+      @f4_min_ranges_dispatched_before
+    AS f4_min_ranges_dispatched_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_rows_produced') -
+      @f4_min_secondary_rows_before
+    AS f4_min_secondary_rows_delta;
+
 SET @executed_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
