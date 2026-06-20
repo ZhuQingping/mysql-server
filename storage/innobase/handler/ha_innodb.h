@@ -601,6 +601,16 @@ class ha_innobase : public handler {
                                       uint *row_count) override;
 
   /**
+    Experimental covering secondary ref row producer.
+
+    Pushes bounded fast-path-only constant ref rows into row_sink.
+  */
+  int pq_secondary_covering_ref_produce(THD *leader_thd, uint keyno,
+                                        const key_range *ref_key,
+                                        PQ_row_sink *row_sink,
+                                        uint *row_count) override;
+
+  /**
     Experimental covering secondary range row producer.
 
     Pushes bounded fast-path-only covering secondary rows into row_sink.

@@ -324,6 +324,16 @@ class InnoDB_pq_scan_ctx {
       byte *mysql_rec, row_prebuilt_t *prebuilt, const dtuple_t *ref_key,
       uint max_rows, uint *row_count) const;
 
+  /** Produce a bounded fast-path-only secondary ref equality set into row_sink.
+
+  Uses the same equality endpoint semantics as
+  materialize_secondary_ref_for_smoke(), but deep-copy ownership is delegated to
+  the SQL-layer row sink.
+  */
+  dberr_t produce_secondary_ref_for_user_gate(
+      byte *mysql_rec, row_prebuilt_t *prebuilt, const dtuple_t *ref_key,
+      uint max_rows, PQ_row_sink *row_sink, uint *row_count) const;
+
   /** Produce a bounded fast-path-only covering secondary range into row_sink.
 
   Uses the same cursor/mtr/visibility contract as

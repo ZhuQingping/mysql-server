@@ -350,6 +350,7 @@ struct IteratorToBeCreated {
   unique_ptr_destroy_only<RowIterator> *destination;
   Bounds_checked_array<unique_ptr_destroy_only<RowIterator>> children;
   bool allow_pq_secondary_range{false};
+  bool allow_pq_secondary_ref{false};
 
   void AllocChildren(MEM_ROOT *mem_root, int num_children) {
     children =
@@ -362,13 +363,14 @@ void SetupJobsForChildren(MEM_ROOT *mem_root, AccessPath *child, JOIN *join,
                           bool eligible_for_batch_mode,
                           IteratorToBeCreated *job,
                           Mem_root_array<IteratorToBeCreated> *todo,
-                          bool allow_pq_secondary_range = false) {
+                          bool allow_pq_secondary_range = false,
+                          bool allow_pq_secondary_ref = false) {
   // Make jobs for the child, and we'll return to this job later.
   job->AllocChildren(mem_root, 1);
   todo->push_back(*job);
   todo->push_back(
       {child, join, eligible_for_batch_mode, &job->children[0], {},
-       allow_pq_secondary_range});
+       allow_pq_secondary_range, allow_pq_secondary_ref});
 }
 
 void SetupJobsForChildren(MEM_ROOT *mem_root, AccessPath *outer,
@@ -397,7 +399,7 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
   unique_ptr_destroy_only<RowIterator> ret;
   Mem_root_array<IteratorToBeCreated> todo(mem_root);
   todo.push_back(
-      {top_path, top_join, top_eligible_for_batch_mode, &ret, {}, true});
+      {top_path, top_join, top_eligible_for_batch_mode, &ret, {}, true, true});
 
   // The access path trees can be pretty deep, and the stack frames can be big
   // on certain compilers/setups, so instead of explicit recursion, we push jobs
@@ -468,7 +470,12 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
       }
       case AccessPath::REF: {
         const auto &param = path->ref();
-        if (param.reverse) {
+        auto pq_iter = TryCreatePQSecondaryCoveringRefIterator(
+            thd, mem_root, join, path, examined_rows,
+            job.allow_pq_secondary_ref);
+        if (pq_iter != nullptr) {
+          iterator = std::move(pq_iter);
+        } else if (param.reverse) {
           iterator = NewIterator<RefIterator<true>>(
               thd, mem_root, param.table, param.ref, param.use_order,
               path->num_output_rows(), examined_rows);
@@ -898,7 +905,8 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
         if (job.children.is_null()) {
           SetupJobsForChildren(mem_root, param.child, join,
                                eligible_for_batch_mode, &job, &todo,
-                               job.allow_pq_secondary_range);
+                               job.allow_pq_secondary_range,
+                               job.allow_pq_secondary_ref);
           continue;
         }
         if (FinalizeMaterializedSubqueries(thd, join, path)) {

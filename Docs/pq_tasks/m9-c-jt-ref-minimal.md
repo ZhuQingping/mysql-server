@@ -172,6 +172,8 @@ Review result:
 
 ### M9-C2: User-visible Constant Covering Ref Gate
 
+Status: completed by Codex. Review Agent result: `ACCEPT`.
+
 在 C1 review 通过后，再接用户可见路径：
 
 - 优先在 `AccessPath::REF` factory 增加 guarded factory；
@@ -195,6 +197,47 @@ Review result:
 - empty ref key 正例或负例必须有测试；
 - unsafe keypart / non-covering / ICP / multi-table / dependent ref 不增加
   executed/produced。
+
+实现结果：
+
+- 新增 `pq_secondary_covering_ref_produce()` handler API 和 InnoDB override；
+- 新增 `InnoDB_pq_scan_ctx::produce_secondary_ref_for_user_gate()`；
+- 新增 `PQSecondaryCoveringRefIterator`，成功时通过 SQL-owned row sink
+  buffer row images，失败时回退标准 `RefIterator`；
+- `CreateIteratorFromAccessPath()` 仅在 root / `FILTER`-through root `REF`
+  上尝试 C2 factory，避免 composite child/join child 误替换；
+- 不启动 worker，不写 `Query_result_mq`；
+- dependent ref、non-covering、ICP、partition、reverse、unsafe keypart、
+  multi-table 仍 fail-closed。
+
+当前验证结果：
+
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- `TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --record pq_commercial_ref_icp pq_stats` passed；
+- `TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_commercial_ref_icp pq_stats` passed；
+- `c2_ref_rows_produced_delta=2`；
+- `executed_delta=3`：constant ref positive、empty ref、covering range
+  positive；
+- `secondary_rows_produced_runtime_delta=5`：constant ref positive 2 rows +
+  covering range positive 3 rows；
+- `workers_delta=0`、`ranges_built_delta=0`、`ranges_dispatched_delta=0`。
+
+Final validation:
+
+- `TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query` passed 74/74；
+- `git diff --check` passed。
+
+Review result:
+
+- Review Agent: `ACCEPT`；
+- No blocking findings；
+- Residual risks:
+  - covering safety depends on `TABLE::read_set` being complete for future
+    expression/residual-condition expansion；
+  - ref producer remains fast-path-only, max 64 rows, and falls back serial for
+    unsupported visibility/template states；
+  - prebuilt/read-view state restoration follows B3 range producer, but future
+    concurrent/transactional shapes still need conservative tests.
 
 ## 禁止范围
 

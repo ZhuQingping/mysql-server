@@ -837,6 +837,99 @@ dberr_t InnoDB_pq_scan_ctx::materialize_secondary_ref_for_smoke(
   return result;
 }
 
+dberr_t InnoDB_pq_scan_ctx::produce_secondary_ref_for_user_gate(
+    byte *mysql_rec, row_prebuilt_t *prebuilt, const dtuple_t *ref_key,
+    uint max_rows, PQ_row_sink *row_sink, uint *row_count) const {
+  if (row_count != nullptr) {
+    *row_count = 0;
+  }
+
+  if (mysql_rec == nullptr || row_sink == nullptr || row_count == nullptr ||
+      ref_key == nullptr || max_rows == 0 || m_index == nullptr ||
+      m_index->is_clustered() || dict_table_has_fts_index(m_index->table) ||
+      m_trx == nullptr || m_trx->read_view == nullptr ||
+      !MVCC::is_view_active(m_trx->read_view) || prebuilt == nullptr ||
+      prebuilt->idx_cond || prebuilt->need_to_access_clustered ||
+      !prebuilt->read_just_key || prebuilt->select_lock_type != LOCK_NONE ||
+      prebuilt->index != m_index || prebuilt->trx != m_trx ||
+      prebuilt->table == nullptr || prebuilt->table->is_intrinsic() ||
+      prebuilt->pcur == nullptr || prebuilt->clust_pcur == nullptr ||
+      !pq_secondary_materialization_template_is_safe(prebuilt, m_index)) {
+    return DB_UNSUPPORTED;
+  }
+
+  mem_heap_t *heap = mem_heap_create(256, UT_LOCATION_HERE);
+  if (heap == nullptr) {
+    return DB_OUT_OF_MEMORY;
+  }
+
+  mtr_t mtr;
+  mtr.start();
+
+  dberr_t result = DB_SUCCESS;
+  uint produced = 0;
+
+  prebuilt->pcur->init();
+  prebuilt->pcur->open_on_user_rec(m_index, ref_key, PAGE_CUR_GE,
+                                   BTR_SEARCH_LEAF, &mtr, UT_LOCATION_HERE);
+
+  while (result == DB_SUCCESS && prebuilt->pcur->is_on_user_rec()) {
+    if (row_sink->should_abort()) {
+      result = row_sink->stop_is_success() ? DB_SUCCESS : DB_INTERRUPTED;
+      break;
+    }
+
+    const rec_t *rec = prebuilt->pcur->get_rec();
+    ulint *offsets = rec_get_offsets(rec, m_index, nullptr, ULINT_UNDEFINED,
+                                     UT_LOCATION_HERE, &heap);
+    if (offsets == nullptr) {
+      result = DB_OUT_OF_MEMORY;
+      break;
+    }
+
+    if (ref_key->compare(rec, m_index, offsets) != 0) {
+      result = DB_SUCCESS;
+      break;
+    }
+
+    if (produced >= max_rows) {
+      result = DB_UNSUPPORTED;
+      break;
+    }
+
+    result = validate_secondary_visibility_fast_path(prebuilt, rec, offsets);
+    if (result != DB_SUCCESS) {
+      result = DB_UNSUPPORTED;
+      break;
+    }
+
+    if (!row_sel_store_mysql_rec(mysql_rec, prebuilt, rec, nullptr, false,
+                                 m_index, m_index, offsets, false, nullptr,
+                                 prebuilt->blob_heap) ||
+        row_sink->send_row(prebuilt->m_mysql_table)) {
+      result = DB_UNSUPPORTED;
+      break;
+    }
+
+    ++produced;
+    mem_heap_empty(heap);
+    result = prebuilt->pcur->move_to_next_user_rec(&mtr);
+  }
+
+  if (result == DB_END_OF_INDEX || result == DB_SUCCESS) {
+    *row_count = produced;
+    result = DB_SUCCESS;
+  } else {
+    *row_count = 0;
+  }
+
+  prebuilt->pcur->close();
+  prebuilt->clust_pcur->close();
+  mtr.commit();
+  mem_heap_free(heap);
+  return result;
+}
+
 dberr_t InnoDB_pq_scan_ctx::produce_secondary_range_for_user_gate(
     byte *mysql_rec, row_prebuilt_t *prebuilt, const dtuple_t *start,
     const dtuple_t *end, uint max_rows, PQ_row_sink *row_sink,

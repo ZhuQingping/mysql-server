@@ -248,6 +248,21 @@ SET @secondary_rows_materialized_runtime_before = (
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_secondary_rows_materialized_smoke');
 
+SET @secondary_rows_produced_ref_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_produced');
+--sorted_result
+SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx) WHERE k = 20;
+--sorted_result
+SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx) WHERE k = 999;
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_secondary_rows_produced') -
+     @secondary_rows_produced_ref_before
+    AS c2_ref_rows_produced_delta;
+
 --sorted_result
 SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
   WHERE k >= 20 AND k < 40;

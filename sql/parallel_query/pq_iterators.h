@@ -115,4 +115,8 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQSecondaryCoveringRangeIterator(
     THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *path,
     ha_rows *examined_rows, bool is_root_range_scan);
 
+unique_ptr_destroy_only<RowIterator> TryCreatePQSecondaryCoveringRefIterator(
+    THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *path,
+    ha_rows *examined_rows, bool is_root_ref);
+
 #endif  // SQL_PARALLEL_QUERY_PQ_ITERATORS_H

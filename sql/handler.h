@@ -5026,6 +5026,20 @@ class handler {
     return HA_ERR_UNSUPPORTED;
   }
 
+  /** Experimental covering secondary ref row producer.
+
+    This is a user-visible but narrowly gated bridge for constant covering
+    secondary ref lookups. It pushes materialized row images into a SQL-owned
+    sink. It must not support dependent ref, non-covering scans, ICP, or worker
+    execution.
+  */
+  virtual int pq_secondary_covering_ref_produce(
+      THD *leader_thd [[maybe_unused]], uint keyno [[maybe_unused]],
+      const key_range *ref_key [[maybe_unused]],
+      PQ_row_sink *row_sink [[maybe_unused]], uint *row_count [[maybe_unused]]) {
+    return HA_ERR_UNSUPPORTED;
+  }
+
   /** Experimental covering secondary range row producer.
 
     This is a user-visible but narrowly gated bridge for covering secondary
