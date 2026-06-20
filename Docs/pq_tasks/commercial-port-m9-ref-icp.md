@@ -2,7 +2,7 @@
 
 ## 状态
 
-M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Completed。M9-C0 Design Taskbook Created。M9-C1 Completed / Review Accepted。M9-C2 Completed / Review Accepted。M9-D0 Design Accepted。M9-D1 Dependent Ref Negative Guard completed / Review Accepted。M9-D2 Ref-key Dispatch Smoke completed / Review Accepted。M9-D3a User-visible Dependent Ref Gate design completed / Review Accepted。M9-D3b Iterator Scaffold completed / Review Accepted。M9-D3c Single-probe Buffering Smoke completed / Review Accepted。M9-D3d User-visible Leader-local Gate completed / Review Accepted。M9-E ICP Pushdown design accepted。M9-E0 ICP negative guard coding/validation/review completed。M9-E1a Leader-local ICP contract design accepted。M9-E1b coding taskbook accepted / coding blocked by missing stable covering ICP positive shape。M9-E1c non-covering ICP + clustered lookup contract design accepted。M9-E1c-0 detailed contract review accepted。M9-E1c-1 coding/review completed。M9-E1c-2 design accepted。M9-F Planned。
+M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Completed。M9-C0 Design Taskbook Created。M9-C1 Completed / Review Accepted。M9-C2 Completed / Review Accepted。M9-D0 Design Accepted。M9-D1 Dependent Ref Negative Guard completed / Review Accepted。M9-D2 Ref-key Dispatch Smoke completed / Review Accepted。M9-D3a User-visible Dependent Ref Gate design completed / Review Accepted。M9-D3b Iterator Scaffold completed / Review Accepted。M9-D3c Single-probe Buffering Smoke completed / Review Accepted。M9-D3d User-visible Leader-local Gate completed / Review Accepted。M9-E ICP Pushdown design accepted。M9-E0 ICP negative guard coding/validation/review completed。M9-E1a Leader-local ICP contract design accepted。M9-E1b coding taskbook accepted / coding blocked by missing stable covering ICP positive shape。M9-E1c non-covering ICP + clustered lookup contract design accepted。M9-E1c-0 detailed contract review accepted。M9-E1c-1 coding/review completed。M9-E1c-2 design accepted。M9-E1c-2a coding taskbook accepted。M9-F Planned。
 
 ## 目标
 
@@ -96,6 +96,7 @@ M9-E1c 当前边界：
 - E1c-2 user-visible gate design 已通过 Design Review；编码前必须继续
   保持 positive non-covering-safe predicate 与 continued drain / cursor
   restore contract。
+- E1c-2a coding taskbook 已通过 Taskbook Review。
 
 ## 允许修改
 

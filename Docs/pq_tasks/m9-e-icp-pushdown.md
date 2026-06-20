@@ -1251,6 +1251,184 @@ Design Review result:
     range has both in-range `ICP_NO_MATCH` rows and an `ICP_MATCH` row；
 - second review returned `ACCEPT`。
 
+#### M9-E1c-2a: User-visible Non-covering ICP Range Coding Taskbook
+
+状态：
+
+- Coding taskbook drafted；Taskbook Review accepted；
+- 下一步进入 coding。
+
+目标：
+
+- 打开最小 user-visible non-covering secondary range ICP path；
+- 只支持 single-table、single forward half-open secondary range；
+- ICP 在 secondary record 上先执行；
+- `ICP_MATCH` 后 clustered lookup 并从 clustered record materialize；
+- clustered lookup 后安全继续 secondary drain；
+- 不 launch worker，不 build/dispatch worker ranges。
+
+允许修改：
+
+- `sql/handler.h`
+- `sql/parallel_query/pq_iterators.cc`
+- `sql/parallel_query/pq_iterators.h`
+- `storage/innobase/handler/ha_innodb.h`
+- `storage/innobase/handler/ha_innodb_pq.cc`
+- `storage/innobase/include/row0pread_pq.h`
+- `storage/innobase/row/row0pread_pq.cc`
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+- `Docs/pq_tasks/m9-e-icp-pushdown.md`
+- `Docs/pq_tasks/commercial-port-m9-ref-icp.md`
+- `Docs/pq_tasks/README.md`
+
+禁止修改：
+
+- `sql/join_optimizer/access_path.cc`
+- `sql/sql_optimizer.cc`
+- `sql/sql_select.cc`
+- `sql/parallel_query/pq_clone.*`
+- worker-side Item clone / refix；
+- ref / dependent ref ICP path；
+- M9-E1c-1 debug smoke 语义；
+- E1c-2 设计之外的 range boundary 扩展。
+
+实现要求：
+
+1. SQL gate / iterator：
+   - 新增独立 non-covering ICP range iterator 或清晰分支，不复用 covering
+     name 造成语义混淆；
+   - eligibility 必须要求：
+     - single table；
+     - `JT_RANGE` / `INDEX_RANGE_SCAN`；
+     - secondary key；
+     - `num_ranges == 1`；
+     - non-reverse, non-geometry, non-partition；
+     - `pushed_idx_cond != nullptr` and `pushed_idx_cond_keyno == keyno`；
+     - half-open forward endpoint only；
+     - positive non-covering-safe predicate accepted；
+   - handler 在发送任何 row 前返回 `HA_ERR_UNSUPPORTED` 可以 fallback；
+   - handler 一旦发送过 row，后续 error/unsupported 必须返回 error，不得
+     serial fallback。
+2. Positive non-covering-safe predicate：
+   - 不得使用 `!pq_secondary_covering_read_set_is_safe()`；
+   - read_set 必须包含至少一个 secondary key 不覆盖的列；
+   - 所有 read_set 字段必须是 stored base column，fixed-length，
+     non-null，非 virtual/generated/blob/text/json/geometry/MVI/functional；
+   - 第一版可以只允许 `INT NOT NULL` 这类简单字段；
+   - unsafe 返回仅代表 unsupported。
+3. Handler / prebuilt：
+   - 新增 user-visible handler hook；
+   - 必须显式保存恢复 `active_index`、`pushed_idx_cond`、
+     `pushed_idx_cond_keyno`、`prebuilt->idx_cond`、
+     `idx_cond_n_cols`、`need_to_access_clustered`、`read_just_key`、
+     `m_end_range`、`mysql_template`、`n_template`、`template_type`、
+     `null_bitmap_len`；
+   - build template 使用 serial-equivalent non-covering secondary ICP state：
+     `read_just_key=0`、secondary `prebuilt->index`、
+     `pushed_idx_cond_keyno=keyno`、`need_to_access_clustered=true`。
+4. InnoDB scan loop:
+   - start/end endpoint 与 B3 half-open 语义一致；
+   - per record:
+     - compute secondary offsets；
+     - check end boundary；
+     - run `pq_row_search_idx_cond_check()`；
+     - `ICP_NO_MATCH`: continue；
+     - `ICP_OUT_OF_RANGE`: finish；
+     - `ICP_MATCH`: clustered lookup；
+     - missing/delete-mark: continue；
+     - visible: materialize from clustered record and `row_sink->send_row()`；
+   - after clustered lookup, if continuing:
+     - store secondary pcur position；
+     - commit mtr；
+     - restart mtr；
+     - restore secondary pcur；
+     - reset offsets heap state；
+     - boundary check before moving cursor；
+   - cursor restore failure must return error/unsupported；
+   - after any row has been sent to the SQL row sink, subsequent
+     error/unsupported must not silently fallback to serial execution；
+   - no clustered latch may be held while advancing secondary cursor。
+5. Counters:
+   - successful path:
+     - `Parallel_queries_executed += 1`；
+     - `Parallel_secondary_rows_produced += sent_rows`；
+     - `Parallel_workers_launched/ranges_built/ranges_dispatched` unchanged；
+   - ICP filtered / invisible / delete-mark / abort do not increment
+     produced rows。
+6. MTR:
+   - positive query uses `v > 250` to force two in-range ICP misses and one
+     ICP match；
+   - expected result is one row: id 4 / k 30 / v 300 / pad d；
+   - compare serial ICP on/off result；
+   - assert counters；
+   - assert fallback for no ICP, covering candidate, unsafe non-covering
+     read_set, primary, ref, dependent ref, multi-range/reverse if expressible；
+   - each fallback boundary must use an independent counter window and assert
+     `Parallel_queries_executed`、`Parallel_workers_launched`、
+     `Parallel_ranges_built`、`Parallel_ranges_dispatched`、
+     `Parallel_secondary_rows_produced` deltas are 0。
+7. Error/abort scope:
+   - E1c-2a does not need to add KILL/error injection if the taskbook records
+     this as deferred；
+   - if KILL/error injection is deferred, the implementation must keep a
+     bounded `max_rows` cap and fail closed on cap hit；
+   - cap hit before any row is sent may return unsupported and fallback；
+   - cap hit after any row is sent must return error/abort, not fallback。
+
+验证命令：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --record pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --parallel=1
+```
+
+Taskbook Review Prompt:
+
+```text
+请先阅读 AGENTS.md，并遵守其中指向的 CLAUDE.md。
+
+你的角色是 Taskbook Review Agent。
+主控 Agent 是 Codex。
+当前任务是 M9-E1c-2a User-visible Non-covering ICP Range Coding Taskbook
+Review。
+
+只读任务：不改文件。
+
+请阅读：
+- Docs/pq_tasks/m9-e-icp-pushdown.md
+- Docs/pq_tasks/commercial-port-m9-ref-icp.md
+- sql/parallel_query/pq_iterators.cc
+- storage/innobase/handler/ha_innodb_pq.cc
+- storage/innobase/row/row0pread_pq.cc
+- mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test
+
+检视目标：
+1. 判断 allowed/forbidden files 是否足以实现且范围不外溢；
+2. 检查 positive non-covering-safe predicate 是否写清楚；
+3. 检查 continued drain / cursor restore 是否足以进入 coding；
+4. 检查 MTR 与 counters 是否能证明 user-visible path 和 fallback 边界；
+5. 给出 `ACCEPT` 或 `REVISE`。
+```
+
+Taskbook Review result:
+
+- First review returned `REVISE`；
+- blocking findings addressed:
+  - carried forward cursor restore failure and post-row no-silent-fallback
+    requirements；
+  - required independent zero-growth counter windows for every fallback
+    boundary；
+  - recorded KILL/error injection as deferrable only with bounded max_rows
+    fail-closed semantics；
+- second review returned `ACCEPT`。
+
+Completion Report:
+
+- Pending coding。
+
 ### M9-E2: Constant Covering Ref ICP
 
 目标：
