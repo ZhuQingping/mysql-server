@@ -2,7 +2,7 @@
 
 ## 状态
 
-M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Design Taskbook Created。M9-C/M9-D/M9-E/M9-F Planned。
+M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Completed。M9-C0 Design Taskbook Created。M9-D/M9-E/M9-F Planned。
 
 ## 目标
 
@@ -445,3 +445,40 @@ Review:
 - Review Agent Parfit returned `APPROVE`；
 - No blocker；
 - Minor documentation gap for `prebuilt->clust_pcur != nullptr` has been fixed。
+
+M9-B3 secondary range row production completed by Codex Orchestrator.
+
+Summary:
+
+- 详见 [m9-b3-secondary-range-row-production.md](m9-b3-secondary-range-row-production.md)；
+- 已完成 secondary visibility fail-closed contract、fast-path helper、
+  clustered lookup visibility helper、one-record materialization smoke、
+  range materialization smoke 和用户可见 covering secondary range gate；
+- 用户可见 gate 只允许 strict covering integer secondary forward range；
+- runtime `HA_ERR_UNSUPPORTED` 回退串行；
+- `SELECT k ... WHERE k >= 20 AND k < 40` 返回 3 行并使
+  `Parallel_secondary_rows_produced` 增长 3；
+- composite child hook 和 unsafe non-projected keypart 风险已由 Review Agent
+  提出并修复；
+- Review Agent 最终复核 `ACCEPT`；
+- commit: `233e8f039df Add PQ M9B3 secondary range row production gate`。
+
+Validation:
+
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- `TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --record pq_commercial_ref_icp pq_stats` passed；
+- `TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_commercial_ref_icp pq_stats` passed；
+- `TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query` passed, 74/74。
+
+M9-C0 constant JT_REF minimal design created by Codex Orchestrator.
+
+Summary:
+
+- 任务书：[m9-c-jt-ref-minimal.md](m9-c-jt-ref-minimal.md)；
+- 商用实现使用 `PQRefIterator -> pq_ref_build_ranges() -> ha_pq_next()`；
+- 当前分支 worker pull-row 仍显式 disabled，因此 C0 不建议直接搬商用
+  worker ref 路线；
+- C1 建议先做 debug-only ref-to-range endpoint bridge，复用 B3d
+  `pq_secondary_covering_range_produce()`；
+- C2 再接用户可见 constant covering ref gate；
+- dependent ref、ICP、non-covering、multi-table、worker/MQ 全部后置。
