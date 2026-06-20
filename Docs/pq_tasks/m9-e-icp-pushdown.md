@@ -823,6 +823,209 @@ Review result:
   conservative enough；
 - confirmed README / M9 taskbook / E1c-0 document status is consistent。
 
+#### M9-E1c-1: Debug-only Non-covering ICP One-record Smoke Taskbook
+
+状态：
+
+- Coding taskbook drafted；Taskbook Review accepted；
+- 设计目标是 debug-only one-record smoke；
+- 下一步进入 E1c-1 coding。
+
+目标：
+
+- 用最小 debug-only 入口验证 non-covering secondary range ICP 的关键链路：
+  secondary record -> serial-equivalent ICP -> clustered lookup ->
+  clustered-record materialization。
+- 不接 user-visible optimizer gate；
+- 不做 range drain；
+- 不增长 user-visible PQ execution counters；
+- 不支持 worker clone / worker-side ICP / dependent ref / constant ref ICP。
+
+允许修改：
+
+- `storage/innobase/include/row0sel.h`
+- `storage/innobase/row/row0sel.cc`
+- `storage/innobase/include/row0pread_pq.h`
+- `storage/innobase/row/row0pread_pq.cc`
+- `storage/innobase/handler/ha_innodb_pq.cc`
+- `storage/innobase/handler/ha_innodb.h`
+- `sql/handler.h`
+- `sql/parallel_query/pq_optimizer.cc`
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+- `Docs/pq_tasks/m9-e-icp-pushdown.md`
+- `Docs/pq_tasks/commercial-port-m9-ref-icp.md`
+- `Docs/pq_tasks/README.md`
+
+禁止修改：
+
+- `sql/parallel_query/pq_iterators.cc`
+- `sql/parallel_query/pq_iterators.h`
+- `sql/join_optimizer/access_path.cc`
+- `sql/sql_select.cc`
+- `sql/sql_optimizer.cc`
+- `sql/parallel_query/pq_clone.*`
+- worker-side Item clone / refix 逻辑；
+- 用户可见 secondary range / ref eligibility gate；
+- public handler execution API 的已有语义。
+
+实现要求：
+
+1. 新增窄 ICP wrapper：
+   - 必须复用 serial `row_search_idx_cond_check()` 语义；
+   - 不允许直接调用 `pushed_idx_cond->val_int()`；
+   - wrapper 输入必须包含 `row_prebuilt_t *`、secondary `rec`、
+     secondary `offsets`、MySQL `record[0]` buffer；
+   - 必须准确返回 `ICP_NO_MATCH` / `ICP_OUT_OF_RANGE` / `ICP_MATCH`
+     或等价的 PQ-local enum；
+   - wrapper 必须留在 InnoDB 内部窄接口，不扩大 SQL public handler API。
+2. 新增 debug-only InnoDB one-record helper：
+   - 只处理 single-table、secondary index、forward half-open range；
+   - 要求 active read view、`LOCK_NONE`、非 intrinsic table；
+   - 允许 `prebuilt->idx_cond != nullptr`；
+   - 允许 `prebuilt->need_to_access_clustered == true`；
+   - 必须从 secondary record 先执行 ICP；
+   - `ICP_NO_MATCH` 可以继续找下一条 secondary record；
+   - `ICP_OUT_OF_RANGE` 结束 smoke，不能 materialize；
+   - `ICP_MATCH` 后做 clustered lookup；
+   - clustered record 不存在或 delete-mark 时继续找下一条 secondary record；
+   - 成功 materialize 一条 clustered record 后立即停止，不继续 drain。
+3. materialization contract：
+   - non-covering 输出必须从 `clust_rec` materialize；
+   - 必须使用 `row_sel_store_mysql_rec(..., rec_clust=true, clust_index,
+     prebuilt->index, clust_offsets, ...)` 等价路径；
+   - clustered record lifetime 只在 active mtr 内有效；
+   - 如果 helper 在 materialize 后需要继续扫描，必须先设计
+     store/commit/restart/restore cursor；E1c-1 不允许继续 drain，因此可以
+     materialize 后停止并提交 mtr。
+4. debug 入口：
+   - 新增 DBUG 名建议：
+     `pq_secondary_noncovering_icp_one_record_smoke`；
+   - 触发方式可沿用 `pq_optimizer.cc` 的 secondary range smoke 风格；
+   - 只允许在 `EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+     WHERE k BETWEEN 20 AND 40 AND v > 150` 这类 non-covering ICP 形态中触发；
+   - 普通执行不受影响。
+5. counters：
+   - 可以复用 `Parallel_secondary_rows_materialized_smoke`，成功
+     materialize 一条 clustered row 后增长 1；
+   - 不得增长 `Parallel_secondary_rows_produced`；
+   - 不得增长 `Parallel_queries_executed`；
+   - fallback negative window 中 `executed/workers/ranges/secondary_rows`
+     必须保持 0。
+6. prebuilt / template 状态：
+   - 必须保存并恢复 `index`、`read_just_key`、
+     `need_to_access_clustered`、`idx_cond`、`idx_cond_n_cols`、
+     `m_end_range`、
+     `mysql_template`、`n_template`、`template_type`、`null_bitmap_len` 等
+     handler template 状态；
+   - 不能依赖 `reset_template()` 隐式处理 ICP 状态，因为它会清理
+     `idx_cond` / `idx_cond_n_cols`；E1c-1 必须显式保存并恢复二者；
+   - helper 结束后必须关闭 cursor、commit mtr、释放 heap；
+   - 不得留下 dirty `pcur` / `clust_pcur` / read view。
+7. fail-closed：
+   - template mismatch、clustered lookup error、ICP wrapper error、
+     cursor open/restore error、OOM、KILL/abort 均返回 unsupported/error；
+   - debug smoke 不能 silent 开启 user-visible PQ path；
+   - 普通 ICP SELECT 仍保持 E0 negative guard。
+
+验证要求：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --record pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_commercial_ref_icp
+```
+
+建议 MTR 断言：
+
+- 开启 `SET SESSION debug="d,pq_secondary_noncovering_icp_one_record_smoke"`；
+- `EXPLAIN SELECT * FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
+  WHERE k BETWEEN 20 AND 40 AND v > 150`；
+- `Parallel_secondary_rows_materialized_smoke` delta 为 1；
+- 同一窗口内 `Parallel_secondary_rows_produced` delta 为 0；
+- `Parallel_queries_executed` delta 为 0；
+- `Parallel_workers_launched` delta 为 0；
+- `Parallel_ranges_built` delta 为 0；
+- `Parallel_ranges_dispatched` delta 为 0；
+- debug 关闭后同一 ICP SELECT 仍 fallback，E0 negative guard 不变；
+- 非 ICP / covering ICP 候选不触发该 smoke。
+
+Agent task prompt:
+
+```text
+请先阅读 AGENTS.md，并遵守其中指向的 CLAUDE.md。
+
+你的角色是 Code Agent。
+主控 Agent 是 Codex。
+当前任务是 M9-E1c-1 Debug-only Non-covering ICP One-record Smoke。
+
+请阅读：
+- Docs/pq_tasks/m9-e-icp-pushdown.md
+- Docs/pq_tasks/commercial-port-m9-ref-icp.md
+- storage/innobase/row/row0pread_pq.cc
+- storage/innobase/include/row0pread_pq.h
+- storage/innobase/include/row0sel.h
+- storage/innobase/row/row0sel.cc
+- storage/innobase/handler/ha_innodb_pq.cc
+- storage/innobase/handler/ha_innodb.h
+- sql/handler.h
+- sql/parallel_query/pq_optimizer.cc
+- mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test
+
+任务目标：
+1. 新增 debug-only one-record smoke，验证 secondary ICP -> clustered lookup
+   -> clustered materialization；
+2. 保持 user-visible ICP SELECT fallback；
+3. 不增长 `Parallel_secondary_rows_produced` 或
+   `Parallel_queries_executed`；
+4. 编译并运行 targeted MTR。
+
+必须遵守本 taskbook 的 Allowed / Forbidden Files。
+
+完成后：
+1. 在本文件 Completion Report 填写 changed files、实现说明、验证结果、
+   风险点；
+2. 不要提交 commit。
+```
+
+Taskbook Review Prompt:
+
+```text
+请先阅读 AGENTS.md，并遵守其中指向的 CLAUDE.md。
+
+你的角色是 Taskbook Review Agent。
+主控 Agent 是 Codex。
+当前任务是 M9-E1c-1 Debug-only Non-covering ICP One-record Smoke
+Taskbook Review。
+
+只读任务：不改文件。
+
+请检查：
+1. allowed / forbidden files 是否能支撑 debug-only smoke 且不会误开
+   user-visible gate；
+2. ICP wrapper、clustered lookup、materialization、counter、prebuilt restore
+   要求是否足够完整；
+3. MTR 断言是否能证明 debug-only one-record smoke，同时保持 E0 negative
+   guard；
+4. 给出 `ACCEPT` 或 `REVISE`。
+```
+
+Taskbook Review result:
+
+- First review returned `REVISE`；
+- fixed requirements:
+  - explicitly save/restore `prebuilt->idx_cond` as well as
+    `idx_cond_n_cols`；
+  - assert same-window `Parallel_workers_launched`、
+    `Parallel_ranges_built`、`Parallel_ranges_dispatched` deltas are 0；
+  - add `sql/handler.h` and `storage/innobase/handler/ha_innodb.h` to the
+    Code Agent read list；
+- second review returned `ACCEPT`。
+
+Completion Report:
+
+- Pending coding。
+
 ### M9-E2: Constant Covering Ref ICP
 
 目标：
