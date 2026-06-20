@@ -5,7 +5,7 @@
 ## Current Summary
 
 - Last synced: 2026-06-19
-- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1 Commercial Core Skeleton Port、M2 Commercial Iterator Access Path Skeleton、M3 Commercial Plan Clone Activation Probe、M4a Worker Result MQ Contract、M4b Controlled Query_result_mq Send Path、M5 InnoDB Commercial PQ Path Alignment、M6 Commercial Full Scan Execution Gate、M7 Aggregation Strategy Reconciliation、M8 ORDER BY Gather Merge synthetic skeleton、M9-A Secondary Ref/ICP Negative Guard、M9-B0 Secondary Range Design、M9-B1 Secondary Range Candidate Probe、M9-B2 Secondary Range Partition Contract、M9-B3 secondary range row production、M9-C0 Constant JT_REF Minimal Design、M9-C1 debug-only ref equality endpoint bridge 已完成并提交；M9-C2 user-visible constant covering ref gate 已实现并通过 Review Agent `ACCEPT`，等待提交。
+- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1 Commercial Core Skeleton Port、M2 Commercial Iterator Access Path Skeleton、M3 Commercial Plan Clone Activation Probe、M4a Worker Result MQ Contract、M4b Controlled Query_result_mq Send Path、M5 InnoDB Commercial PQ Path Alignment、M6 Commercial Full Scan Execution Gate、M7 Aggregation Strategy Reconciliation、M8 ORDER BY Gather Merge synthetic skeleton、M9-A Secondary Ref/ICP Negative Guard、M9-B0 Secondary Range Design、M9-B1 Secondary Range Candidate Probe、M9-B2 Secondary Range Partition Contract、M9-B3 secondary range row production、M9-C0 Constant JT_REF Minimal Design、M9-C1 debug-only ref equality endpoint bridge、M9-C2 user-visible constant covering ref gate 已完成并提交；当前进入 M9-D dependent ref / per-ref-key dispatch design-only。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
@@ -173,7 +173,9 @@
   - M9-C1: debug-only constant covering secondary ref smoke 已实现；验证 duplicate/empty/last-key equality endpoint；`c1_ref_materialized_smoke_delta=3`；不增长 `Parallel_queries_executed` 或 `Parallel_secondary_rows_produced`；Review Agent `ACCEPT`
   - M9-C1 commit: `faca19c680f Add PQ M9C ref equality smoke`
   - M9-C2: user-visible constant covering ref gate 已实现；`c2_ref_rows_produced_delta=2`；总 runtime `executed_delta=3`、`secondary_rows_produced_runtime_delta=5`、`workers_delta=0`；完整 `parallel_query` suite 74/74 通过；Review Agent `ACCEPT`
-- Next recommended action: 提交 M9-C2 后进入 M9-D dependent ref / ICP 后续拆分前置设计。
+  - M9-C2 commit: `e65817cc693 Add PQ M9C covering ref gate`
+  - M9-D0: dependent ref / per-ref-key dispatch design taskbook created；首轮 Design Review `CHANGES REQUESTED`，补强 per-statement/per-probe counter、repeated outer key、per-probe fallback、D2 forbidden scope 后复审 `ACCEPT`
+- Next recommended action: 提交 M9-D0 后进入 D1 dependent ref negative guard。
 - Commercial port taskbooks:
   - [commercial-port-m3-plan-clone-resolver.md](commercial-port-m3-plan-clone-resolver.md)
   - [commercial-port-m4-worker-result-path.md](commercial-port-m4-worker-result-path.md)
@@ -182,6 +184,7 @@
   - [commercial-port-m7-aggregation-reconciliation.md](commercial-port-m7-aggregation-reconciliation.md)
   - [commercial-port-m8-order-by-gather-merge.md](commercial-port-m8-order-by-gather-merge.md)
   - [commercial-port-m9-ref-icp.md](commercial-port-m9-ref-icp.md)
+  - [m9-d-dependent-ref-design.md](m9-d-dependent-ref-design.md)
   - [m9-b2-secondary-range-partition.md](m9-b2-secondary-range-partition.md)
   - [m9-b3-secondary-range-row-production.md](m9-b3-secondary-range-row-production.md)
   - [m9-c-jt-ref-minimal.md](m9-c-jt-ref-minimal.md)
