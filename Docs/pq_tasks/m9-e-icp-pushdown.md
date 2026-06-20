@@ -644,6 +644,185 @@ Review result:
   non-covering materialization / drain continuation contract；
 - confirmed E1c-0/E1c-1/E1c-2 split is reasonable。
 
+#### M9-E1c-0: Non-covering ICP Clustered Lookup Detailed Contract
+
+状态：
+
+- Contract drafted；Design Review accepted；
+- 只改文档，不改源码；
+- 不打开用户可见 non-covering ICP；
+- 下一步进入 E1c-1 debug-only one-record smoke 任务书。
+
+目标：
+
+- 对齐商用 non-covering secondary range ICP 的最小正确顺序；
+- 明确当前分支哪些 helper 可复用、哪些能力缺失；
+- 给 E1c-1/E1c-2 留出清晰入口，避免直接把 non-covering ICP 接到
+  user-visible gate。
+
+商用路径 contract：
+
+- `find_visible_record()` 在 secondary index 分支先执行 ICP：
+  - `ICP_NO_MATCH` 返回 `DB_NOT_FOUND`；
+  - `ICP_OUT_OF_RANGE` 返回 `DB_END_OF_RANGE`；
+  - `ICP_MATCH` 继续 visibility / clustered lookup。
+- ICP 执行后，如果 read view 无法直接看到 secondary page `max_trx_id`，
+  或 `prebuilt->need_to_access_clustered` 为 true，则构建/复用
+  `prebuilt->sel_graph`，通过 `pq_row_sel_get_clust_rec_for_mysql()` 取
+  clustered record，并设置 `mtr_has_extra_clust_latch = true`。
+- clustered record 不存在或 delete-mark 时返回 `DB_NOT_FOUND`；可见时返回
+  `DB_SUCCESS`。
+- materialization 必须跟随 record 来源：
+  - `mtr_has_extra_clust_latch == true`：从 `clust_rec` 调
+    `row_sel_store_mysql_rec(..., rec_clust=true, clust_index,
+    prebuilt->index, clust_offsets, ...)`；
+  - 否则从 secondary/clustered 当前 `rec` 调
+    `row_sel_store_mysql_rec(..., config.m_index->is_clustered(), index,
+    prebuilt->index, offsets, ...)`。
+- 如果做过 clustered lookup，继续扫描前必须：
+  - `pcur->store_position(&mtr)`；
+  - `mtr.commit()` 释放 extra clustered latch；
+  - `mtr.start()`；
+  - `mtr.set_log_mode(MTR_LOG_NO_REDO)`；
+  - `pcursor.restore_position()`；
+  - 清空 `mtr_has_extra_clust_latch`；
+  - 移动 cursor 前执行 boundary check。
+- offsets / record buffer 生命周期必须与 cursor restore 一起定义：
+  - heap 清空后必须重置 `offsets` / `clust_offsets`；
+  - server record buffer 的 `out_of_range`、`n_fetch_cached`、
+    `fetch_cache_first`、`n_rows_fetched` 不能与未提交 mtr 或旧 cursor
+    position 脱节；
+  - generated clustered row id 必须基于实际 materialized record 写回
+    `prebuilt`。
+- `DB_NOT_FOUND` 表示 invisible 或 ICP filtered row，不能推进输出 buffer，
+  但可以继续当前 range 的下一条 secondary record。
+- `DB_END_OF_RANGE` 表示当前 range 结束；如果已有 cached rows，则先返回
+  cached rows 并标记 out-of-range。
+
+当前分支可复用能力：
+
+- `pq_row_sel_get_clust_rec_for_mysql()` 已存在，且文档明确 returned
+  clustered record 只在 active mtr 生命周期内有效。
+- `validate_secondary_visibility_with_cluster_lookup()` 已能基于 secondary
+  record 做 clustered lookup visibility 判定，但当前只返回
+  `DB_SUCCESS` / `DB_NOT_FOUND` / `DB_UNSUPPORTED`，不返回 clustered record
+  给 materialization。
+- `pq_secondary_covering_range_produce()` 已保存并恢复一批
+  `row_prebuilt_t` template 状态：
+  `index`、`read_just_key`、`template_type`、`n_template`、
+  `null_bitmap_len`、`need_to_access_clustered`、`templ_contains_blob`、
+  `templ_contains_fixed_point`、`mysql_prefix_len`、`idx_cond_n_cols`、
+  `keep_other_fields_on_keyread`、`in_fts_query`、`m_end_range`、
+  `mysql_template`。
+- `produce_secondary_range_for_user_gate()` 已有 start/end cursor、abort、
+  row sink、`Parallel_secondary_rows_produced` 增长位置的基本框架。
+
+当前分支缺口：
+
+- user-visible secondary range producer 仍硬拒绝：
+  `prebuilt->idx_cond`、`prebuilt->need_to_access_clustered`、
+  `!prebuilt->read_just_key`。
+- 当前 producer 只走 covering fast-path：
+  `validate_secondary_visibility_fast_path()` 后直接从 secondary `rec`
+  `row_sel_store_mysql_rec()`，不支持从 clustered record materialize。
+- 当前 clustered lookup helper 不暴露 `clust_rec`、`clust_offsets`、
+  `mtr_has_extra_clust_latch` 给调用方，也没有 continuation / restore
+  协议。
+- `row_search_idx_cond_check()` 仍是 `row0sel.cc` 内部 static；E1c-1 若要
+  复用 serial ICP，必须新增窄 wrapper，不允许裸调
+  `pushed_idx_cond->val_int()`。
+- 当前 SQL 层还没有为 non-covering ICP 定义 `read_just_key=false`、
+  `need_to_access_clustered=true`、`idx_cond_n_cols`、`m_end_range`、
+  `mysql_template` 的构建/恢复 contract。
+- fallback atomicity 仍未定义：当前 user-visible iterator 允许 handler
+  `HA_ERR_UNSUPPORTED` 时回到 serial，但一旦已经有 row 进入
+  `PQ_record_buffer_sink`，后续 unsupported 不能再 silent serial fallback。
+  E1c-2 前必须定义 commit point：发送任何 row 后发生 error/unsupported
+  只能报错或中止 PQ path，不能混合 serial 输出。
+
+E1c-1 debug-only one-record smoke contract：
+
+- 入口必须是 debug-only 或 DBUG-only，不接 user-visible optimizer gate；
+- 只验证一条记录的链路：
+  secondary rec -> ICP -> clustered lookup -> clustered materialization；
+- 允许 `DB_NOT_FOUND` 后继续找下一条 secondary record，但成功 materialize
+  一条后立即停止，不做长 range drain；
+- 不增长 user-visible `Parallel_queries_executed`；如需观测，只使用
+  scoped debug/status counter，并在 taskbook 中写清 delta；不得增长
+  `Parallel_secondary_rows_produced`。
+- helper 必须返回/管理：
+  - ICP result；
+  - `clust_rec` / `clust_offsets`；
+  - `mtr_has_extra_clust_latch`；
+  - 是否需要 commit/restart/restore cursor；
+  - materialization record 来源。
+- 任何 clustered lookup error、template mismatch、cursor restore failure、
+  KILL/abort 都必须返回错误或 unsupported，不允许 silent serial restart。
+- 如需要复用 existing smoke counter，应优先使用
+  `Parallel_secondary_rows_materialized_smoke` 或新增 debug-only counter；
+  E1c-1 不是 user-visible PQ execution。
+
+E1c-2 user-visible non-covering range gate 前置条件：
+
+- E1c-1 debug-only smoke 通过 Code/Task Review；
+- SQL `EXPLAIN` 必须稳定出现 `Using index condition`，且查询形态为当前已知
+  non-covering positive：`FORCE INDEX(k_idx)` + `v > ...`；
+- 必须有 serial baseline 对照、ICP positive result correctness、
+  fallback-after-boundary counter window、KILL/error cleanup；
+- `Parallel_secondary_rows_produced` 只在 row 已通过 ICP、visibility、
+  clustered materialization，并且 `row_sink->send_row()` 成功后增长；
+- ICP filtered、invisible、delete-mark、out-of-range、unsupported、abort
+  都不能增长该 counter；
+- 如果后续引入 record buffer cache，`ICP_OUT_OF_RANGE` 必须正确处理
+  “已有 cached rows 先返回、range 完结状态留给下一轮”的语义，不得漏行、
+  重复或提前推进下一 range；
+- worker clone / worker-side `idx_cond_push` / dependent ref ICP 继续禁止；
+- 若 visible row 已经开始进入 PQ path，后续 unsupported 必须报错或中止
+  当前 PQ path，不允许返回 serial executor 混合输出。
+
+E1c-0 Design Review Prompt:
+
+```text
+请先阅读 AGENTS.md，并遵守其中指向的 CLAUDE.md。
+
+你的角色是 Design Review Agent。
+主控 Agent 是 Codex。
+当前任务是 M9-E1c-0 Non-covering ICP Clustered Lookup Detailed Contract
+Review。
+
+请阅读：
+- Docs/pq_tasks/m9-e-icp-pushdown.md
+- Docs/pq_tasks/commercial-port-m9-ref-icp.md
+- storage/innobase/row/row0pread_pq.cc
+- storage/innobase/include/row0sel.h
+- storage/innobase/row/row0sel.cc
+- storage/innobase/handler/ha_innodb_pq.cc
+- /Users/zhuqingping/Work/Database/MySQL/taurusdbondstore/storage/innobase/row/row0pread_pq.cc
+
+检视目标：
+1. 判断 E1c-0 是否准确描述商用 ICP -> clustered lookup -> materialization
+   -> mtr commit/restart/restore cursor 顺序；
+2. 检查当前分支可复用能力与缺口是否完整；
+3. 检查 E1c-1 debug-only 和 E1c-2 user-visible 的进入条件是否足够保守；
+4. 给出 `ACCEPT` 或 `REVISE`，如 REVISE 请列出必须修改项。
+
+禁止：
+- 不改文件；
+- 不运行破坏性命令。
+```
+
+Review result:
+
+- Design Review Agent returned `ACCEPT`；
+- no blocking findings；
+- confirmed commercial order is accurately captured:
+  ICP -> clustered lookup -> materialization -> mtr commit/restart/restore
+  cursor；
+- confirmed current branch reuse points and gaps are complete；
+- confirmed E1c-1 debug-only and E1c-2 user-visible entry conditions are
+  conservative enough；
+- confirmed README / M9 taskbook / E1c-0 document status is consistent。
+
 ### M9-E2: Constant Covering Ref ICP
 
 目标：
