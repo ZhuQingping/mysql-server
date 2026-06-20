@@ -5,6 +5,7 @@
 Status: M9-F0 negative guard matrix completed / Code/Task Review accepted。
 M9-F1 MVI guard completed / Code/Task Review accepted。
 M9-F2 reverse scan guard completed / Code/Task Review accepted。
+M9-F3 partition guard completed / Code/Task Review accepted。
 No source edits outside MTR/docs。
 
 M9-E2-0 已确认当前没有稳定 constant covering `REF + ICP` 正例，因此
@@ -275,6 +276,8 @@ Review:
 
 ### M9-F3: Partition Guard / Contract Design
 
+Status: coding/validation completed; Code/Task Review accepted。
+
 目标：
 
 - 迁移 partition table 最小负向护栏，覆盖 full/range/ref/dependent-ref
@@ -296,6 +299,60 @@ Review:
 - PQ execution/secondary counters 不增长，或只保持既有 safe fallback；
 - 输出 partition full/range/ref/dependent-ref 后续正向拆分；
 - review accept 后再考虑编码。
+
+Implementation notes:
+
+- 新增局部 F3 counter window，覆盖 partition full scan、secondary
+  range、constant ref、dependent ref；
+- full/range/ref 单表形态均显示 `Not parallel PARTITIONED_TABLE`；
+- dependent-ref 形态使用 non-partitioned outer table 驱动 partitioned inner
+  table，当前 fallback 为 `Not parallel MULTI_TABLE`；
+- 本阶段不修改 `sql/` 或 `storage/innobase/`，只补用户可见护栏。
+
+后续正向拆分：
+
+- partition full scan 必须先定义 `ha_innopart`/partition handler 与
+  per-part `m_prebuilt` 的 ownership；
+- partition secondary range/ref 必须定义 partition pruning 后的 range
+  分发粒度；
+- partition dependent-ref 必须等待 multi-table/ref path 正式打开后单独
+  处理；
+- record buffer / prefetch 需要额外增加 partition-aware 生命周期约束。
+
+Validation:
+
+```bash
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --record pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1
+```
+
+Results:
+
+- targeted record/replay passed；
+- full `parallel_query` suite passed: 74/74；
+- F3 local deltas:
+  `f3_partition_executed_delta=0`、
+  `f3_partition_workers_delta=0`、
+  `f3_partition_ranges_built_delta=0`、
+  `f3_partition_ranges_dispatched_delta=0`、
+  `f3_partition_secondary_rows_delta=0`。
+
+Review:
+
+- Code/Task Review Agent returned `ACCEPT`；
+- confirmed partition full scan、secondary range、constant ref、dependent
+  ref representative shapes are covered；
+- confirmed single-table full/range/ref fall back with `Not parallel
+  PARTITIONED_TABLE`；
+- confirmed dependent-ref partition inner remains safe fallback through
+  `Not parallel MULTI_TABLE`；
+- confirmed no `sql/` or `storage/innobase/` files were modified；
+- non-blocking note: when multi-table/ref path expands, add a more direct
+  partition-inner unsupported-reason probe。
 
 ### M9-F4: Secondary Index MIN Guard / Design
 

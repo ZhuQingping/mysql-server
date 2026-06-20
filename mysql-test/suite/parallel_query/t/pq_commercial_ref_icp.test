@@ -1217,6 +1217,94 @@ SELECT
       @f2_reverse_secondary_rows_before
     AS f2_reverse_secondary_rows_delta;
 
+# M9-F3: partition tables have per-part handler state and partition pruning
+# semantics that are not enabled for current PQ full/secondary/ref paths.
+SET @f3_partition_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @f3_partition_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+SET @f3_partition_ranges_built_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_built');
+SET @f3_partition_ranges_dispatched_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_dispatched');
+SET @f3_partition_secondary_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_produced');
+
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT id, k FROM pq_ref_icp_part;
+--enable_warnings
+--sorted_result
+SELECT id, k FROM pq_ref_icp_part;
+
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT id, k FROM pq_ref_icp_part FORCE INDEX(k_idx)
+  WHERE k >= 20 AND k < 40;
+--enable_warnings
+--sorted_result
+SELECT id, k FROM pq_ref_icp_part FORCE INDEX(k_idx)
+  WHERE k >= 20 AND k < 40;
+
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT id, k FROM pq_ref_icp_part FORCE INDEX(k_idx)
+  WHERE k = 20;
+--enable_warnings
+--sorted_result
+SELECT id, k FROM pq_ref_icp_part FORCE INDEX(k_idx)
+  WHERE k = 20;
+
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT pq_ref_icp_t2.id AS outer_id,
+       pq_ref_icp_part.id AS part_id
+  FROM pq_ref_icp_t2 STRAIGHT_JOIN pq_ref_icp_part FORCE INDEX(k_idx)
+    ON pq_ref_icp_part.k = pq_ref_icp_t2.k;
+--enable_warnings
+--sorted_result
+SELECT pq_ref_icp_t2.id AS outer_id,
+       pq_ref_icp_part.id AS part_id
+  FROM pq_ref_icp_t2 STRAIGHT_JOIN pq_ref_icp_part FORCE INDEX(k_idx)
+    ON pq_ref_icp_part.k = pq_ref_icp_t2.k;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_queries_executed') -
+      @f3_partition_executed_before
+    AS f3_partition_executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_workers_launched') -
+      @f3_partition_workers_before
+    AS f3_partition_workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_ranges_built') -
+      @f3_partition_ranges_built_before
+    AS f3_partition_ranges_built_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_ranges_dispatched') -
+      @f3_partition_ranges_dispatched_before
+    AS f3_partition_ranges_dispatched_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_rows_produced') -
+      @f3_partition_secondary_rows_before
+    AS f3_partition_secondary_rows_delta;
+
 SET @executed_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
