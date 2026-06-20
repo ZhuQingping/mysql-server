@@ -311,58 +311,154 @@ SELECT
      @d1_secondary_rows_produced_before
     AS d1_dependent_ref_secondary_rows_delta;
 
-# M9-D3b: dependent covering secondary ref is recognized as a candidate, but
-# the scaffold still returns nullptr and falls back to the native RefIterator.
-SET @d3b_ref_probe_attempts_before = (
+# M9-D3d: dependent covering secondary ref uses the reviewed leader-local
+# bridge. Repeated and missing outer keys must preserve nested-loop
+# multiplicity while PQ execution is counted once per statement.
+SET SESSION parallel_query=OFF;
+SELECT pq_ref_icp_t3.id AS serial_outer_id, pq_ref_icp_t1.k AS serial_inner_k
+  FROM pq_ref_icp_t3 STRAIGHT_JOIN pq_ref_icp_t1 FORCE INDEX(k_idx)
+    ON pq_ref_icp_t1.k = pq_ref_icp_t3.k;
+SET SESSION parallel_query=ON;
+SET @d3d_ref_probe_attempts_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_secondary_ref_probe_attempts');
-SET @d3b_ref_probe_unsupported_before = (
+SET @d3d_ref_probe_unsupported_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_secondary_ref_probe_unsupported');
-SET @d3b_ref_empty_probes_before = (
+SET @d3d_ref_empty_probes_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_secondary_ref_empty_probes');
-SET @d3b_ref_fallback_probes_before = (
+SET @d3d_ref_fallback_probes_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_secondary_ref_fallback_probes');
-SET @d3b_ref_rows_produced_before = (
+SET @d3d_ref_rows_produced_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_secondary_ref_rows_produced');
---sorted_result
+SET @d3d_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @d3d_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+SET @d3d_ranges_built_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_built');
+SET @d3d_ranges_dispatched_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_dispatched');
+SET @d3d_secondary_rows_produced_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_produced');
 SELECT pq_ref_icp_t3.id AS outer_id, pq_ref_icp_t1.k AS inner_k
   FROM pq_ref_icp_t3 STRAIGHT_JOIN pq_ref_icp_t1 FORCE INDEX(k_idx)
     ON pq_ref_icp_t1.k = pq_ref_icp_t3.k;
 SELECT
-  ((SELECT CAST(variable_value AS UNSIGNED)
+  (SELECT CAST(variable_value AS UNSIGNED)
       FROM performance_schema.global_status
       WHERE variable_name = 'Parallel_secondary_ref_probe_attempts') -
-      @d3b_ref_probe_attempts_before) >= 1
-    AS d3b_ref_probe_attempts_delta,
-  ((SELECT CAST(variable_value AS UNSIGNED)
+      @d3d_ref_probe_attempts_before
+    AS d3d_ref_probe_attempts_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
       FROM performance_schema.global_status
       WHERE variable_name = 'Parallel_secondary_ref_probe_unsupported') -
-      @d3b_ref_probe_unsupported_before) >= 1
-    AS d3b_ref_probe_unsupported_delta,
+      @d3d_ref_probe_unsupported_before
+    AS d3d_ref_probe_unsupported_delta,
   (SELECT CAST(variable_value AS UNSIGNED)
       FROM performance_schema.global_status
       WHERE variable_name = 'Parallel_secondary_ref_empty_probes') -
-      @d3b_ref_empty_probes_before
-    AS d3b_ref_empty_probes_delta,
+      @d3d_ref_empty_probes_before
+    AS d3d_ref_empty_probes_delta,
   (SELECT CAST(variable_value AS UNSIGNED)
       FROM performance_schema.global_status
       WHERE variable_name = 'Parallel_secondary_ref_fallback_probes') -
-      @d3b_ref_fallback_probes_before
-    AS d3b_ref_fallback_probes_delta,
+      @d3d_ref_fallback_probes_before
+    AS d3d_ref_fallback_probes_delta,
   (SELECT CAST(variable_value AS UNSIGNED)
       FROM performance_schema.global_status
       WHERE variable_name = 'Parallel_secondary_ref_rows_produced') -
-      @d3b_ref_rows_produced_before
-    AS d3b_ref_rows_produced_delta;
+      @d3d_ref_rows_produced_before
+    AS d3d_ref_rows_produced_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_queries_executed') - @d3d_executed_before
+    AS d3d_executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_workers_launched') - @d3d_workers_before
+    AS d3d_workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_ranges_built') - @d3d_ranges_built_before
+    AS d3d_ranges_built_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_ranges_dispatched') -
+     @d3d_ranges_dispatched_before
+    AS d3d_ranges_dispatched_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_secondary_rows_produced') -
+     @d3d_secondary_rows_produced_before
+    AS d3d_secondary_rows_produced_delta;
+
+# D3d fallback boundary: if the leader-local producer reports unsupported
+# after buffering rows internally but before any row is visible to the parent,
+# the current probe must discard the buffer and restart with native RefIterator.
+SET @d3d_fallback_ref_probe_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_ref_probe_unsupported');
+SET @d3d_fallback_ref_fallback_probes_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_ref_fallback_probes');
+SET @d3d_fallback_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @d3d_fallback_secondary_rows_produced_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_produced');
+SET @old_debug=@@session.debug;
+SET SESSION debug="d,pq_secondary_dependent_ref_unsupported_after_buffer";
+SELECT pq_ref_icp_t3.id AS outer_id, pq_ref_icp_t1.k AS inner_k
+  FROM pq_ref_icp_t3 FORCE INDEX(PRIMARY)
+       STRAIGHT_JOIN pq_ref_icp_t1 FORCE INDEX(k_idx)
+    ON pq_ref_icp_t1.k = pq_ref_icp_t3.k
+  WHERE pq_ref_icp_t3.id >= 1 AND pq_ref_icp_t3.id < 2;
+SET SESSION debug=@old_debug;
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_ref_probe_unsupported') -
+      @d3d_fallback_ref_probe_unsupported_before
+    AS d3d_fallback_ref_probe_unsupported_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_ref_fallback_probes') -
+      @d3d_fallback_ref_fallback_probes_before
+    AS d3d_fallback_ref_fallback_probes_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_queries_executed') -
+      @d3d_fallback_executed_before
+    AS d3d_fallback_executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_rows_produced') -
+      @d3d_fallback_secondary_rows_produced_before
+    AS d3d_fallback_secondary_rows_produced_delta;
 
 # M9-D3c: debug-only single-probe smoke buffers one dependent ref probe
 # internally and then delegates all user-visible rows to the native RefIterator.

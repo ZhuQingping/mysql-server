@@ -14,6 +14,10 @@ full `parallel_query` suite, and Code/Task Review Agent passed. D3c remains
 DBUG-only and delegates all user-visible rows to the native
 `RefIterator<false>`.
 
+D3d user-visible leader-local gate completed by Codex Orchestrator. Build,
+targeted MTR record/replay, full `parallel_query` suite, and Code/Task Review
+Agent passed.
+
 Base commits:
 
 ```text
@@ -262,6 +266,96 @@ Review:
 - C2 constant ref regression 通过；
 - non-covering / ICP / nullable / reverse / partition fallback；
 - full `parallel_query` suite 通过。
+
+实现状态：
+
+- 新增 `PQSecondaryDependentRefIterator`；
+- 非 root dependent REF gate 只允许：
+  - two-table join，`primary_tables == 2` 且 `const_tables == 0`；
+  - simple query block；
+  - no grouped / having；
+  - no reverse；
+  - InnoDB non-partitioned secondary key；
+  - no pushed ICP；
+  - dependent ref，`depend_map != 0`；
+  - safe integer key parts；
+  - projection/read_set 被 secondary key 覆盖；
+  - estimated rows <= 64；
+  - statement-level buffered rows <= 1024。
+- D3c DBUG hook `pq_secondary_dependent_ref_single_probe_smoke` 优先保留；
+  hook 开启时仍返回 smoke wrapper，并继续由原生 `RefIterator<false>`
+  返回用户可见 rows。
+- 默认路径在每个 inner probe 的 first `Read()` 执行：
+  - `impossible_null_ref()`；
+  - `construct_lookup()`；
+  - deep-copy `Index_lookup::key_buff`；
+  - 调用 leader-local `pq_secondary_covering_ref_produce()`；
+  - SQL-owned buffer 保存当前 probe rows。
+- empty probe 返回 EOF；
+- `HA_ERR_UNSUPPORTED` 仅在当前 probe 未返回任何 row 前回退原生
+  `RefIterator<false>`；即使 producer 已经写入内部 SQL-owned buffer，只要
+  尚未对父 iterator 返回 visible row，也会丢弃 buffer 后 serial fallback；
+- 当前 probe 一旦已有 visible row，禁止 serial restart；
+- statement-level buffered row cap overflow 视为 pre-visible unsupported
+  fallback，不作为 internal error；
+- `Parallel_queries_executed` 通过 `thd->pq_executed` 每 statement 最多
+  增长 1；
+- `Parallel_secondary_rows_produced` 和
+  `Parallel_secondary_ref_rows_produced` 按真实 returned inner rows 增长；
+- `Parallel_workers_launched`、`Parallel_ranges_built`、
+  `Parallel_ranges_dispatched` 保持 0。
+
+验证：
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --record pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query
+```
+
+结果：
+
+- `mysqld` build passed；
+- targeted record passed；
+- targeted replay passed；
+- full `parallel_query` suite passed，74 tests successful；
+- D3d covering dependent ref query observed:
+  - outer keys `20,20,999,30,20` 返回 inner rows `2,2,0,1,2`；
+  - unsorted D3d output matches `parallel_query=OFF` serial
+    `STRAIGHT_JOIN` baseline；
+  - `d3d_ref_probe_attempts_delta = 5`；
+  - `d3d_ref_probe_unsupported_delta = 0`；
+  - `d3d_ref_empty_probes_delta = 1`；
+  - `d3d_ref_fallback_probes_delta = 0`；
+  - `d3d_ref_rows_produced_delta = 7`；
+  - `d3d_executed_delta = 1`；
+  - `d3d_workers_delta = 0`；
+  - `d3d_ranges_built_delta = 0`；
+  - `d3d_ranges_dispatched_delta = 0`；
+  - `d3d_secondary_rows_produced_delta = 7`。
+- D3d debug fallback-after-buffer block observed:
+  - serial-visible rows remain `1,20` / `1,20`；
+  - `d3d_fallback_ref_probe_unsupported_delta = 1`；
+  - `d3d_fallback_ref_fallback_probes_delta = 1`；
+  - `d3d_fallback_executed_delta = 0`；
+  - `d3d_fallback_secondary_rows_produced_delta = 0`。
+
+Review:
+
+- First Code/Task Review Agent returned `REVISE`；
+- Fixed pre-visible partially-buffered unsupported fallback；
+- Fixed statement buffer cap overflow to serial fallback；
+- Added unsorted serial baseline vs D3d order check；
+- Added debug-only fallback-after-buffer MTR；
+- Re-review Agent returned `ACCEPT`；
+- Remaining non-blocking risks:
+  - 1024 statement cap fallback path is code-reviewed but not directly forced
+    by MTR；
+  - later probe fallback after earlier visible PQ probes remains allowed by the
+    current-probe boundary；
+  - D3d gate relies on the current two-table/simple/nested-loop REF shape and
+    does not add a separate explicit join-type enum check。
 
 ## 主要风险
 

@@ -2,7 +2,7 @@
 
 ## 状态
 
-M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Completed。M9-C0 Design Taskbook Created。M9-C1 Completed / Review Accepted。M9-C2 Completed / Review Accepted。M9-D0 Design Accepted。M9-D1 Dependent Ref Negative Guard completed / Review Accepted。M9-D2 Ref-key Dispatch Smoke completed / Review Accepted。M9-D3a User-visible Dependent Ref Gate design completed / Review Accepted。M9-D3b Iterator Scaffold completed / Review Accepted。M9-D3c Single-probe Buffering Smoke completed / Review Accepted。M9-D3d User-visible Leader-local Gate next。M9-E/M9-F Planned。
+M9-A Completed。M9-B0 Completed。M9-B1 Completed。M9-B2 Completed。M9-B3 Completed。M9-C0 Design Taskbook Created。M9-C1 Completed / Review Accepted。M9-C2 Completed / Review Accepted。M9-D0 Design Accepted。M9-D1 Dependent Ref Negative Guard completed / Review Accepted。M9-D2 Ref-key Dispatch Smoke completed / Review Accepted。M9-D3a User-visible Dependent Ref Gate design completed / Review Accepted。M9-D3b Iterator Scaffold completed / Review Accepted。M9-D3c Single-probe Buffering Smoke completed / Review Accepted。M9-D3d User-visible Leader-local Gate completed / Review Accepted。M9-E/M9-F Planned。
 
 ## 目标
 
@@ -482,3 +482,70 @@ Summary:
   `pq_secondary_covering_range_produce()`；
 - C2 再接用户可见 constant covering ref gate；
 - dependent ref、ICP、non-covering、multi-table、worker/MQ 全部后置。
+
+M9-D3d user-visible leader-local dependent ref gate implemented by Codex
+Orchestrator.
+
+Summary:
+
+- 详见 [m9-d3-dependent-ref-gate-plan.md](m9-d3-dependent-ref-gate-plan.md)；
+- 新增 `PQSecondaryDependentRefIterator`；
+- 仅允许 two-table、simple query、no group/having、no reverse、InnoDB
+  non-partitioned covering secondary dependent `REF`；
+- D3c DBUG hook 优先保留，hook 开启时仍由原生 `RefIterator<false>`
+  返回用户可见 rows；
+- 默认用户可见路径按 probe 执行 `impossible_null_ref()`、
+  `construct_lookup()`、deep-copy `key_buff`、leader-local
+  `pq_secondary_covering_ref_produce()`；
+- 当前 probe rows 缓存在 SQL-owned buffer；
+- empty probe 返回 EOF；
+- `HA_ERR_UNSUPPORTED` 只在当前 probe 未对外返回 row 前回退原生
+  `RefIterator<false>`；若 producer 已写入内部 buffer 但尚未返回 visible
+  row，则丢弃 buffer 后 serial fallback；
+- statement-level buffered row cap overflow 视为 pre-visible unsupported
+  fallback；
+- `Parallel_queries_executed` 每 statement 最多 +1；
+- `Parallel_secondary_rows_produced` /
+  `Parallel_secondary_ref_rows_produced` 按真实 inner rows 增长；
+- `Parallel_workers_launched`、`Parallel_ranges_built`、
+  `Parallel_ranges_dispatched` 保持 0。
+
+Validation:
+
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- `TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query --record pq_commercial_ref_icp` passed；
+- `TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_commercial_ref_icp` passed；
+- `TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query` passed, 74/74。
+
+Observed MTR counters:
+
+- `d3d_ref_probe_attempts_delta = 5`；
+- `d3d_ref_probe_unsupported_delta = 0`；
+- `d3d_ref_empty_probes_delta = 1`；
+- `d3d_ref_fallback_probes_delta = 0`；
+- `d3d_ref_rows_produced_delta = 7`；
+- `d3d_executed_delta = 1`；
+- `d3d_workers_delta = 0`；
+- `d3d_ranges_built_delta = 0`；
+- `d3d_ranges_dispatched_delta = 0`；
+- `d3d_secondary_rows_produced_delta = 7`。
+- D3d fallback-after-buffer debug block:
+  - `d3d_fallback_ref_probe_unsupported_delta = 1`；
+  - `d3d_fallback_ref_fallback_probes_delta = 1`；
+  - `d3d_fallback_executed_delta = 0`；
+  - `d3d_fallback_secondary_rows_produced_delta = 0`。
+
+Review:
+
+- First Code/Task Review Agent returned `REVISE`；
+- Fixed pre-visible partially-buffered unsupported fallback；
+- Fixed statement buffer cap overflow fallback；
+- Added serial baseline / unsorted D3d order comparison；
+- Added debug-only fallback-after-buffer MTR；
+- Re-review Agent returned `ACCEPT`；
+- Non-blocking residual risks:
+  - 1024 statement cap fallback is code-reviewed but not directly forced by
+    MTR；
+  - per-probe fallback after earlier PQ-visible probes remains allowed；
+  - join shape remains protected by current two-table/simple/nested-loop REF
+    gates rather than an explicit join-type enum check。
