@@ -4,6 +4,7 @@
 
 Status: M9-F0 negative guard matrix completed / Code/Task Review accepted。
 M9-F1 MVI guard completed / Code/Task Review accepted。
+M9-F2 reverse scan guard completed / Code/Task Review accepted。
 No source edits outside MTR/docs。
 
 M9-E2-0 已确认当前没有稳定 constant covering `REF + ICP` 正例，因此
@@ -208,6 +209,8 @@ Review:
 
 ### M9-F2: Reverse Scan Guard / Shape Probe
 
+Status: coding/validation completed; Code/Task Review accepted。
+
 目标：
 
 - 用最小 MTR 覆盖 reverse range、reverse index、reverse ref；
@@ -229,6 +232,46 @@ Review:
 - debug-only probe 能证明 reverse shape 被观测或被明确拒绝；
 - current user-visible paths 对 reverse 仍 fallback；
 - 文档给出是否另开 reverse 正向支持子阶段的明确前置条件。
+
+Implementation notes:
+
+- 新增局部 F2 counter window，覆盖 reverse secondary range、reverse
+  index scan、reverse ref scan；
+- 三类 EXPLAIN 均显示 `Backward index scan`，并因 `ORDER BY` 维持
+  `Not parallel HAS_ORDER_BY` fallback；
+- 本阶段不修改 `sql/` 或 `storage/innobase/`，只补用户可见护栏。
+
+Validation:
+
+```bash
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --record pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1
+```
+
+Results:
+
+- targeted record/replay passed；
+- full `parallel_query` suite passed: 74/74；
+- F2 local deltas:
+  `f2_reverse_executed_delta=0`、`f2_reverse_workers_delta=0`、
+  `f2_reverse_ranges_built_delta=0`、
+  `f2_reverse_ranges_dispatched_delta=0`、
+  `f2_reverse_secondary_rows_delta=0`。
+
+Review:
+
+- Code/Task Review Agent returned `ACCEPT`；
+- confirmed reverse secondary range、reverse index scan、reverse ref scan
+  all show `Backward index scan`；
+- confirmed current user-visible path falls back with `Not parallel
+  HAS_ORDER_BY` and does not grow PQ counters；
+- confirmed no `sql/` or `storage/` files were modified；
+- non-blocking note: if ORDER BY / Gather Merge later opens, add a more
+  direct probe for `param.reverse` / `m_reversed_access` rejection。
 
 ### M9-F3: Partition Guard / Contract Design
 

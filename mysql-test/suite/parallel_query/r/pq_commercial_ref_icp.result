@@ -1112,6 +1112,85 @@ WHERE variable_name = 'Parallel_secondary_rows_produced') -
 AS f1_mvi_secondary_rows_delta;
 f1_mvi_executed_delta	f1_mvi_workers_delta	f1_mvi_ranges_built_delta	f1_mvi_ranges_dispatched_delta	f1_mvi_secondary_rows_delta
 0	0	0	0	0
+SET @f2_reverse_executed_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed');
+SET @f2_reverse_workers_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched');
+SET @f2_reverse_ranges_built_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_ranges_built');
+SET @f2_reverse_ranges_dispatched_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_ranges_dispatched');
+SET @f2_reverse_secondary_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_rows_produced');
+EXPLAIN SELECT id, k FROM pq_ref_icp_rev FORCE INDEX(k_idx)
+WHERE k >= 20 AND k < 40 ORDER BY k DESC, id DESC;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pq_ref_icp_rev	NULL	range	k_idx	k_idx	4	NULL	#	100.00	Using where; Backward index scan; Using index; Not parallel HAS_ORDER_BY
+SELECT id, k FROM pq_ref_icp_rev FORCE INDEX(k_idx)
+WHERE k >= 20 AND k < 40 ORDER BY k DESC, id DESC;
+id	k
+4	30
+3	20
+2	20
+EXPLAIN SELECT id, k FROM pq_ref_icp_rev FORCE INDEX(k_idx)
+ORDER BY k DESC, id DESC;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pq_ref_icp_rev	NULL	index	NULL	k_idx	4	NULL	#	100.00	Backward index scan; Using index; Not parallel HAS_ORDER_BY
+SELECT id, k FROM pq_ref_icp_rev FORCE INDEX(k_idx)
+ORDER BY k DESC, id DESC;
+id	k
+5	40
+4	30
+3	20
+2	20
+1	10
+EXPLAIN SELECT id, k FROM pq_ref_icp_rev FORCE INDEX(k_idx)
+WHERE k = 20 ORDER BY id DESC;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pq_ref_icp_rev	NULL	ref	k_idx	k_idx	4	const	#	100.00	Backward index scan; Using index; Not parallel HAS_ORDER_BY
+SELECT id, k FROM pq_ref_icp_rev FORCE INDEX(k_idx)
+WHERE k = 20 ORDER BY id DESC;
+id	k
+3	20
+2	20
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed') -
+@f2_reverse_executed_before
+AS f2_reverse_executed_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched') -
+@f2_reverse_workers_before
+AS f2_reverse_workers_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_ranges_built') -
+@f2_reverse_ranges_built_before
+AS f2_reverse_ranges_built_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_ranges_dispatched') -
+@f2_reverse_ranges_dispatched_before
+AS f2_reverse_ranges_dispatched_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_secondary_rows_produced') -
+@f2_reverse_secondary_rows_before
+AS f2_reverse_secondary_rows_delta;
+f2_reverse_executed_delta	f2_reverse_workers_delta	f2_reverse_ranges_built_delta	f2_reverse_ranges_dispatched_delta	f2_reverse_secondary_rows_delta
+0	0	0	0	0
 SET @executed_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status

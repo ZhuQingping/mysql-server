@@ -1142,6 +1142,81 @@ SELECT
       @f1_mvi_secondary_rows_before
     AS f1_mvi_secondary_rows_delta;
 
+# M9-F2: reverse secondary range/index/ref shapes must stay out of current
+# PQ secondary/ref execution paths. Reverse cursor ordering has different
+# handler and InnoDB boundary semantics and is not enabled for PQ yet.
+SET @f2_reverse_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @f2_reverse_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+SET @f2_reverse_ranges_built_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_built');
+SET @f2_reverse_ranges_dispatched_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_dispatched');
+SET @f2_reverse_secondary_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_produced');
+
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT id, k FROM pq_ref_icp_rev FORCE INDEX(k_idx)
+  WHERE k >= 20 AND k < 40 ORDER BY k DESC, id DESC;
+--enable_warnings
+SELECT id, k FROM pq_ref_icp_rev FORCE INDEX(k_idx)
+  WHERE k >= 20 AND k < 40 ORDER BY k DESC, id DESC;
+
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT id, k FROM pq_ref_icp_rev FORCE INDEX(k_idx)
+  ORDER BY k DESC, id DESC;
+--enable_warnings
+SELECT id, k FROM pq_ref_icp_rev FORCE INDEX(k_idx)
+  ORDER BY k DESC, id DESC;
+
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT id, k FROM pq_ref_icp_rev FORCE INDEX(k_idx)
+  WHERE k = 20 ORDER BY id DESC;
+--enable_warnings
+SELECT id, k FROM pq_ref_icp_rev FORCE INDEX(k_idx)
+  WHERE k = 20 ORDER BY id DESC;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_queries_executed') -
+      @f2_reverse_executed_before
+    AS f2_reverse_executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_workers_launched') -
+      @f2_reverse_workers_before
+    AS f2_reverse_workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_ranges_built') -
+      @f2_reverse_ranges_built_before
+    AS f2_reverse_ranges_built_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_ranges_dispatched') -
+      @f2_reverse_ranges_dispatched_before
+    AS f2_reverse_ranges_dispatched_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_rows_produced') -
+      @f2_reverse_secondary_rows_before
+    AS f2_reverse_secondary_rows_delta;
+
 SET @executed_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
