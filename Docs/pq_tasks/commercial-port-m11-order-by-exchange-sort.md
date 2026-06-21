@@ -7,7 +7,8 @@ completed and committed；M11-E5d-S0/S1/S2/S3 completed and committed；
 M11-E5d-1 fail-closed Filesort contract shape completed and committed；
 M11-E5d-2 design completed and committed；M11-E5d-2a owned ORDER chain copy
 smoke completed and committed；M11-E5d-2b optimized flag contract smoke
-completed，waiting for commit。
+completed and committed；M11-E5d-2c restore-to-sidecar contract smoke coding
+completed，waiting for review/full validation/commit。
 
 ## 背景
 
@@ -1808,7 +1809,7 @@ Commit:
 ### M11-E5d-2b: Optimized ORDER Flag Contract Smoke
 
 Status: coding completed；Code/Doc/Test Review Agent accepted；full
-`parallel_query` suite passed；waiting for commit。
+`parallel_query` suite passed；committed。
 
 Goal:
 
@@ -1874,6 +1875,90 @@ Code/Doc/Test Review - M11-E5d-2b:
 - confirmed stats and MTR coverage are complete；
 - remaining risk: E5d-2b proves pointer-membership flags only. Restored
   sidecar chain construction remains E5d-2c。
+
+Commit:
+
+- `6e815347ce5` Add PQ M11E order chain flag smoke。
+
+### M11-E5d-2c: Restore-to-Sidecar Contract Smoke
+
+Status: coding completed；Code/Doc/Test Review Agent accepted；full
+`parallel_query` suite passed；waiting for commit。
+
+Goal:
+
+- reconstruct a restored sidecar `ORDER` chain from the copied owned nodes and
+  recorded optimized membership flags；
+- prove restored nodes are sidecar-owned and do not alias the live optimizer
+  `ORDER` nodes；
+- prove restored chain semantics match a controlled optimized chain before any
+  real `Filesort`, `Sort_param`, or `Filesort::make_sortorder()` integration。
+
+Implementation:
+
+- extended internal `PQ_owned_order_chain_sidecar` with `restored_nodes`；
+- added `restored_head()` accessors for the restored sidecar chain；
+- added `pq_restore_order_chain_from_flags()`:
+  - validates owned node count and optimized flag count match；
+  - copies only optimized source nodes into `restored_nodes`；
+  - rewires restored `next` pointers inside sidecar-owned storage；
+  - fails closed when no optimized nodes remain；
+- added `pq_restored_order_chain_matches_optimized()` to compare restored
+  sidecar nodes against a supplied optimized `ORDER_with_src` while confirming
+  restored nodes do not alias expected/live nodes；
+- added DBUG smoke `pq_saved_order_chain_restore_smoke` on the existing
+  `HAS_ORDER_BY` reject path；
+- smoke uses the same controlled optimized view as E5d-2b
+  (`join->order.order->next`) to simulate first-node cleanup without mutating
+  live `JOIN::order`；
+- added status counters:
+  `Parallel_saved_order_chain_restore_smoke_attempts`,
+  `Parallel_saved_order_chain_restore_smoke_success`,
+  `Parallel_saved_order_chain_restore_smoke_unsupported`；
+- extended `pq_saved_order_group_contract` to verify no-DBUG zero counters,
+  DBUG attempts/success, unsupported zero for the controlled shape, serial
+  ORDER BY boundary, and zero executed/workers/ranges；
+- updated `pq_stats` Parallel status variable count from 124 to 127。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed:
+  `pq_saved_order_group_contract pq_commercial_order_by pq_stats` 4/4
+  including `shutdown_report`；
+- full `parallel_query` suite passed: 89/89。
+
+Scope notes:
+
+- no `sql/sql_optimizer.*` hook or live optimizer list mutation；
+- no `Query_block::restore_cmd_properties()` semantic change；
+- no real `Filesort`, `Sort_param`, `Filesort::make_sortorder()`, sorting
+  iterator, or `exchange_sort.*` integration；
+- no clone lifecycle, worker, handler, MQ, AccessPath, `Read()`, or
+  `HAS_ORDER_BY` eligibility relaxation；
+- restored sidecar chain remains an internal contract smoke and is not yet
+  exposed as a public PQ optimizer API。
+
+Code/Doc/Test Review - M11-E5d-2c:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- validation gaps: none；
+- confirmed `pq_restore_order_chain_from_flags()` only builds
+  sidecar-owned `restored_nodes` and rewires restored `next` pointers inside
+  that vector；
+- confirmed restore does not mutate live `JOIN::order`, `ORDER_with_src`,
+  `Item`, or `Field` state；
+- confirmed restore helper rejects count mismatch and empty restored chains,
+  reserves before push, and rewires after all copies；
+- confirmed match helper verifies restored nodes do not alias live optimized
+  nodes while preserving expected ORDER semantics；
+- confirmed DBUG smoke remains inside the existing `HAS_ORDER_BY` reject path
+  and does not open user-visible ORDER BY PQ；
+- confirmed stats fields, reset, SHOW STATUS, `pq_stats`, MTR assertions, and
+  docs are consistent；
+- confirmed forbidden scope is not touched。
 
 ## Risk Areas
 

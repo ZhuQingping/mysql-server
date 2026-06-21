@@ -178,6 +178,7 @@ bool pq_build_orderby_filesort_contract(
 
 struct PQ_owned_order_chain_sidecar {
   std::vector<ORDER> nodes;
+  std::vector<ORDER> restored_nodes;
   std::vector<const ORDER *> source_nodes;
   std::vector<bool> optimized_flags;
   Explain_sort_clause src{ESC_none};
@@ -185,6 +186,7 @@ struct PQ_owned_order_chain_sidecar {
 
   void reset() {
     nodes.clear();
+    restored_nodes.clear();
     source_nodes.clear();
     optimized_flags.clear();
     src = ESC_none;
@@ -193,6 +195,12 @@ struct PQ_owned_order_chain_sidecar {
 
   ORDER *head() { return nodes.empty() ? nullptr : &nodes[0]; }
   const ORDER *head() const { return nodes.empty() ? nullptr : &nodes[0]; }
+  ORDER *restored_head() {
+    return restored_nodes.empty() ? nullptr : &restored_nodes[0];
+  }
+  const ORDER *restored_head() const {
+    return restored_nodes.empty() ? nullptr : &restored_nodes[0];
+  }
 };
 
 static uint pq_count_order_chain(const ORDER *order) {
@@ -291,6 +299,58 @@ static bool pq_record_order_chain_optimized_flags(
         pq_order_chain_contains_source(optimized.order, source_node));
   }
   return sidecar->optimized_flags.size() == sidecar->source_nodes.size();
+}
+
+static bool pq_restore_order_chain_from_flags(
+    PQ_owned_order_chain_sidecar *sidecar) {
+  if (sidecar == nullptr ||
+      sidecar->nodes.size() != sidecar->optimized_flags.size()) {
+    return false;
+  }
+
+  sidecar->restored_nodes.clear();
+  sidecar->restored_nodes.reserve(sidecar->nodes.size());
+  for (uint i = 0; i < sidecar->nodes.size(); ++i) {
+    if (sidecar->optimized_flags[i]) {
+      sidecar->restored_nodes.push_back(sidecar->nodes[i]);
+    }
+  }
+
+  for (uint i = 0; i < sidecar->restored_nodes.size(); ++i) {
+    sidecar->restored_nodes[i].next =
+        (i + 1 < sidecar->restored_nodes.size())
+            ? &sidecar->restored_nodes[i + 1]
+            : nullptr;
+  }
+  return !sidecar->restored_nodes.empty();
+}
+
+static bool pq_restored_order_chain_matches_optimized(
+    const ORDER_with_src &optimized,
+    const PQ_owned_order_chain_sidecar &sidecar) {
+  const ORDER *expected = optimized.order;
+  const ORDER *restored = sidecar.restored_head();
+  uint count = 0;
+  while (expected != nullptr && restored != nullptr && count < 1024) {
+    if (expected == restored ||
+        expected->item_initial != restored->item_initial ||
+        expected->item != restored->item ||
+        expected->direction != restored->direction ||
+        expected->in_field_list != restored->in_field_list ||
+        expected->used_alias != restored->used_alias ||
+        expected->field_in_tmp_table != restored->field_in_tmp_table ||
+        expected->buff != restored->buff || expected->used != restored->used ||
+        expected->depend_map != restored->depend_map ||
+        expected->is_explicit != restored->is_explicit) {
+      return false;
+    }
+    expected = expected->next;
+    restored = restored->next;
+    ++count;
+  }
+
+  return expected == nullptr && restored == nullptr &&
+         count == sidecar.restored_nodes.size();
 }
 
 struct PQ_copied_key_endpoint {
@@ -670,6 +730,43 @@ static void pq_maybe_run_saved_order_chain_flags_smoke(
       copied.optimized_flags.size() >= 2 && !copied.optimized_flags[0] &&
       copied.optimized_flags[1]) {
     pq_global_stats.saved_order_chain_flags_smoke_success.fetch_add(
+        1, std::memory_order_relaxed);
+  } else {
+    mark_unsupported();
+  }
+}
+
+static void pq_maybe_run_saved_order_chain_restore_smoke(
+    Query_block *query_block [[maybe_unused]], JOIN *join) {
+  bool enabled = false;
+  DBUG_EXECUTE_IF("pq_saved_order_chain_restore_smoke", enabled = true;);
+  if (!enabled) return;
+
+  pq_global_stats.saved_order_chain_restore_smoke_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  auto mark_unsupported = []() {
+    pq_global_stats.saved_order_chain_restore_smoke_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+  };
+
+  if (join == nullptr || join->order.empty() ||
+      join->order.order->next == nullptr) {
+    mark_unsupported();
+    return;
+  }
+
+  PQ_owned_order_chain_sidecar sidecar;
+  ORDER_with_src optimized_without_first(join->order.order->next,
+                                         join->order.src,
+                                         join->order.is_const_optimized());
+  if (pq_copy_order_chain(join->order, &sidecar) &&
+      pq_order_chain_copy_matches(join->order, sidecar) &&
+      pq_record_order_chain_optimized_flags(optimized_without_first, &sidecar) &&
+      pq_restore_order_chain_from_flags(&sidecar) &&
+      pq_restored_order_chain_matches_optimized(optimized_without_first,
+                                                sidecar)) {
+    pq_global_stats.saved_order_chain_restore_smoke_success.fetch_add(
         1, std::memory_order_relaxed);
   } else {
     mark_unsupported();
@@ -1386,6 +1483,7 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
     pq_maybe_run_orderby_filesort_contract_smoke(query_block, join);
     pq_maybe_run_saved_order_chain_copy_smoke(query_block, join);
     pq_maybe_run_saved_order_chain_flags_smoke(query_block, join);
+    pq_maybe_run_saved_order_chain_restore_smoke(query_block, join);
     return pq_reject(info, PQUnsuiteReason::HAS_ORDER_BY,
                      "query has ORDER BY");
   }

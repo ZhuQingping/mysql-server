@@ -73,6 +73,18 @@ SET @pq_order_chain_flags_unsupported_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_saved_order_chain_flags_smoke_unsupported');
+SET @pq_order_chain_restore_attempts_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_saved_order_chain_restore_smoke_attempts');
+SET @pq_order_chain_restore_success_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_saved_order_chain_restore_smoke_success');
+SET @pq_order_chain_restore_unsupported_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_saved_order_chain_restore_smoke_unsupported');
 SET @pq_executed_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
@@ -162,7 +174,22 @@ WHERE variable_name = 'Parallel_saved_order_chain_flags_smoke_unsupported') -
 @pq_order_chain_flags_unsupported_before AS order_chain_flags_unsupported_without_debug;
 order_chain_flags_attempts_without_debug	order_chain_flags_success_without_debug	order_chain_flags_unsupported_without_debug
 0	0	0
-SET SESSION debug="d,pq_saved_order_group_contract_smoke,pq_saved_order_group_restore_smoke,pq_saved_order_group_clone_copy_smoke,pq_orderby_filesort_contract_smoke,pq_saved_order_chain_copy_smoke,pq_saved_order_chain_flags_smoke";
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_saved_order_chain_restore_smoke_attempts') -
+@pq_order_chain_restore_attempts_before AS order_chain_restore_attempts_without_debug,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_saved_order_chain_restore_smoke_success') -
+@pq_order_chain_restore_success_before AS order_chain_restore_success_without_debug,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_saved_order_chain_restore_smoke_unsupported') -
+@pq_order_chain_restore_unsupported_before AS order_chain_restore_unsupported_without_debug;
+order_chain_restore_attempts_without_debug	order_chain_restore_success_without_debug	order_chain_restore_unsupported_without_debug
+0	0	0
+SET SESSION debug="d,pq_saved_order_group_contract_smoke,pq_saved_order_group_restore_smoke,pq_saved_order_group_clone_copy_smoke,pq_orderby_filesort_contract_smoke,pq_saved_order_chain_copy_smoke,pq_saved_order_chain_flags_smoke,pq_saved_order_chain_restore_smoke";
 EXPLAIN SELECT id, k FROM t1 ORDER BY k ASC, id ASC LIMIT 2;
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	Using filesort; Not parallel HAS_ORDER_BY
@@ -258,6 +285,21 @@ FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_saved_order_chain_flags_smoke_unsupported') -
 @pq_order_chain_flags_unsupported_before AS order_chain_flags_unsupported_delta;
 order_chain_flags_attempts_delta	order_chain_flags_success_delta	order_chain_flags_unsupported_delta
+1	1	0
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_saved_order_chain_restore_smoke_attempts') -
+@pq_order_chain_restore_attempts_before AS order_chain_restore_attempts_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_saved_order_chain_restore_smoke_success') -
+@pq_order_chain_restore_success_before AS order_chain_restore_success_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_saved_order_chain_restore_smoke_unsupported') -
+@pq_order_chain_restore_unsupported_before AS order_chain_restore_unsupported_delta;
+order_chain_restore_attempts_delta	order_chain_restore_success_delta	order_chain_restore_unsupported_delta
 1	1	0
 SELECT
 (SELECT CAST(variable_value AS UNSIGNED)
