@@ -2,7 +2,11 @@
 
 ## 状态
 
-M11-A0 / M11-B0 taskbooks completed / Docs-Design Review accepted。
+M11-A0-A5 plan clone / resolver contract completed。
+M11-B0-B3 worker result / `Query_result_mq` adapter and guarded wiring
+completed。
+M11-D0-D3 `ParallelScanIterator` lifecycle contract and guarded construction
+probe completed。
 
 ## 目标
 
@@ -91,9 +95,10 @@ callback 的 output 改走 `Query_result_mq`，leader 通过 adapter 消费。
 
 ### M11-D: ParallelScanIterator Lifecycle Contract
 
-只在 A/B/C 稳定后启动。目标是补齐商用 `ParallelScanIterator` 生命周期
-边界：Init/Read/End/destructor、worker launch/wait/cleanup 诊断、ERROR/KILL
-优先级。默认仍 fail-closed。
+已完成 D0-D3：先建立 owner/cleanup/fallback/commit-point 合同，再用
+debug-only construction probe 验证 `ParallelScanIterator::Init()` 当前保持
+fail-closed 且 cleanup 可观测。下一步 D4 只做正路径迁移设计，不直接打开
+真实执行。
 
 ### M11-E: ORDER BY Gather Merge Real Path Gate
 
@@ -116,11 +121,13 @@ F 负责继续评估 `PQRefIterator`、`ha_pq_next`、secondary ICP worker path�
 
 ## 当前推荐下一步
 
-1. 完成 M11-A0 / M11-B0 design taskbooks；
+1. 完成 M11-D4 `ParallelScanIterator` 正路径最小迁移设计；
 2. 启动独立 Docs-Design Review Agent；
 3. review accepted 后提交 design-only 文档；
-4. 进入 M11-B1/B2，优先打通 `PQWR` leader decode adapter + synthetic smoke；
-5. M11-A1 在 B1/B2 后或并行分支中单独做 compile-only contract skeleton。
+4. 进入 D4a/D4b/D4c 的小步编码：worker attach contract smoke、leader
+   row stream adapter smoke、commit-point/cleanup error smoke；
+5. D4 全部稳定后再评估 M11-E ORDER BY real path 或 M11-F ref/ICP worker
+   path。
 
 ## Review
 

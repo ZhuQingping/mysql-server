@@ -427,6 +427,146 @@ Code-Docs-Test Review:
 - full resource control / `parallel_max_threads` budget；
 - `Field_raw_data` / `Batch_buffer` commercial row serialization。
 
+### M11-D4: Positive Path Migration Design
+
+Status: design completed / Docs-Design Review accepted。
+
+Goal:
+
+- define the smallest safe path from D3's synthetic fail-closed construction
+  probe toward a guarded positive `ParallelScanIterator` execution path；
+- do not edit source in D4；
+- do not enable user-visible `PARALLEL_SCAN`；
+- preserve current typed handler context, callback row sink, ROW/ERROR/FINISH
+  worker-result frame, and explicit no-fallback commit point。
+
+Commercial reference:
+
+- commercial `ParallelScanIterator::Init()` creates `MQ_record_gather`,
+  initializes `Gather_operator`, initializes handler/InnoDB scan state, creates
+  snapshot state, and launches workers；
+- commercial `Read()` pulls rows from MQ into leader record；
+- commercial `End()` detaches MQ, waits workers, merges worker diagnostics, and
+  returns the final error；
+- commercial `PQblockScanIterator` worker side calls `pq_worker_scan_init()`,
+  `ha_pq_next()`, and `pq_worker_scan_end()`；
+- commercial `make_pq_worker_plan()` attaches `Query_result_mq` to cloned JOIN
+  worker execution。
+
+Current branch differences:
+
+- handler/InnoDB contract is typed:
+  `PQ_Leader_context` / `PQ_Worker_open_context` / `PQ_Worker_context`；
+- current worker row model is callback-produce through `PQ_row_sink`, not
+  commercial pull-row `ha_pq_next()`；
+- current worker-result protocol already has explicit ROW/ERROR/FINISH frames；
+- current commit point is represented by `PQTableScanIterator::mark_pq_started()`
+  and must remain the only point after which serial fallback is forbidden；
+- current `ParallelScanIterator` remains fail-closed and is only exercised by
+  D3's debug-only lifecycle smoke。
+
+Design decisions:
+
+- do not directly copy commercial `void *scan_ctx` handler contract；
+- do not migrate commercial `PQblockScanIterator::Read()` pull-row loop in
+  the next coding step；
+- prefer callback-produce + `PQ_row_sink` for early worker row production；
+- use current `Query_result_mq` ROW/ERROR/FINISH frames instead of commercial
+  EOF-via-`my_eof()` semantics；
+- keep normal execution fallback before EXECUTE/worker-start；
+- after EXECUTE succeeds and a worker thread is started, cleanup/error
+  propagation must replace silent serial fallback。
+
+Recommended coding split after D4:
+
+#### M11-D4a: Worker Attach Contract Smoke
+
+Scope:
+
+- add a debug-only helper that opens a worker TABLE/handler using existing
+  `PQ_Worker_open_context`；
+- call `pq_worker_scan_init()` and `pq_worker_scan_end()` under a bounded
+  smoke；
+- do not produce rows；
+- do not create cloned JOIN；
+- do not call `ParallelScanIterator::Read()`；
+- assert worker context cleanup and no user-visible execution counters。
+
+Candidate files for D4a taskbook refinement:
+
+- `sql/parallel_query/sql_parallel.h`；
+- `sql/parallel_query/sql_parallel.cc`；
+- `sql/parallel_query/pq_iterators.*` only if the hook must live near
+  `ParallelScanIterator`；
+- `sql/parallel_query/pq_iterator.cc` only for an explicit DBUG hook before
+  positive execution；
+- focused MTR/status updates。
+
+D4a coding taskbook must replace this candidate list with strict
+`Allowed files` and `Forbidden files` before any source edit. It must also
+define worker TABLE open/close ownership, whether existing worker-open helpers
+are reused, and which failures may still serial fallback before worker start.
+
+#### M11-D4b: Leader Row Stream Adapter Smoke
+
+Scope:
+
+- reuse current `Query_result_mq` / `PQWR` adapter and `Exchange_nosort`
+  materialization；
+- use controlled worker output, not cloned JOIN；
+- leader consumes ROW/FINISH and materializes a small fixed row set through
+  current row-image/record materialization path；
+- no default user-visible PQ。
+
+#### M11-D4c: Commit-point / Cleanup Error Smoke
+
+Scope:
+
+- model EXECUTE + worker-start as the no-fallback commit point；
+- inject worker ERROR / leader abort / empty range cases；
+- verify abort, detach/close MQ, wait/join workers, worker scan end, leader scan
+  end, and Gather/Exchange destroy order；
+- assert serial fallback counter does not increment after the commit point。
+
+Forbidden until D4a-D4c pass:
+
+- default `ParallelScanIterator` positive `Init()`；
+- real `make_pq_worker_plan()`；
+- `ExecuteIteratorQuery()` inside worker；
+- `PQblockScanIterator::Read()` pull-row positive path；
+- secondary range/ref/ICP/dependent ref；
+- ORDER BY real merge；
+- GROUP BY commercial aggregation；
+- partition/reverse/hash join/stable sort；
+- direct commercial `Field_raw_data` / `Batch_buffer` serialization。
+
+Validation required for each coding subtask:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query <focused_test> pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11d4_target --tmpdir=/tmp/pqt_m11d4_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11d4_full --tmpdir=/tmp/pqt_m11d4_full
+```
+
+Docs-Design Review:
+
+- Review Agent returned `ACCEPT`；
+- confirmed D4 reflects the commercial/current-branch differences around
+  typed handler context, callback row sink, explicit ROW/ERROR/FINISH frames,
+  and the existing no-fallback commit point；
+- confirmed D4a/D4b/D4c split avoids directly enabling default
+  `PARALLEL_SCAN`；
+- confirmed forbidden list blocks direct `pq_make_join()` positive path,
+  `PQblockScanIterator` pull-row positive path, ORDER/GROUP/ref/ICP, and other
+  broad commercial paths；
+- non-blocking review notes require D4a to define strict allowed/forbidden
+  files and worker TABLE open/close ownership before source edits。
+
 ## Review 要求
 
 - D0 requires Docs-Design Review；
