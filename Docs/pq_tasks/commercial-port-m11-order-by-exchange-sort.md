@@ -2047,6 +2047,159 @@ Commit:
 
 - `a4cc361c759` Add PQ M11E order chain clone copy smoke。
 
+### M11-E5d-3: Post-Sidecar Filesort Boundary Design
+
+Status: design-only taskbook completed；Design Review Agent accepted；waiting
+for commit。
+
+Goal:
+
+- define the first integration boundary after E5d-2 sidecar completion；
+- make `PQOrderByFilesortContract` depend on restored sidecar readiness rather
+  than scalar-only `PQSavedOrderGroupContract::READY`；
+- keep real `Filesort`, `Sort_param`, `Filesort::make_sortorder()`, sorting
+  iterator, `Exchange_sort`, worker MQ, and user-visible ORDER BY PQ disabled；
+- prepare a minimal, reviewable E5d-3a coding step that proves contract state
+  only, not Filesort lifecycle。
+
+Commercial reference:
+
+- commercial `ParallelScanIterator::pq_make_filesort()` restores optimized
+  ORDER/GROUP state before creating leader `Filesort`；
+- commercial `restore_optimized_group_order()` rebuilds an optimized ORDER
+  chain from original list plus optimized flags；
+- commercial `Exchange_sort::init()` assumes `Filesort::m_order` is already
+  valid, then calls `Filesort::make_sortorder()` and initializes `Sort_param`；
+- current MySQL 8.0.46 `Filesort` constructor calls private
+  `make_sortorder()` immediately, so constructing `Filesort` is already a real
+  Filesort lifecycle action, not a harmless shape check。
+
+Current branch facts:
+
+- E5d-2a owns copied `ORDER` nodes and rewired `next` links；
+- E5d-2b records source-vs-optimized membership flags；
+- E5d-2c reconstructs a restored sidecar ORDER chain from owned nodes and
+  flags；
+- E5d-2d proves leader-to-clone diagnostic copy rewires cloned `next` links to
+  clone-owned vectors；
+- the sidecar is still internal to `pq_optimizer.cc` and has no public API；
+- existing `PQOrderByFilesortContract` remains fail-closed because it depends
+  on scalar-only `PQSavedOrderGroupContract` readiness。
+
+Design decision:
+
+- do not construct `Filesort` in the next coding step；
+- do not call `Filesort::make_sortorder()` directly or indirectly；
+- do not include `sql/filesort.h` in `pq_optimizer.cc` for E5d-3a；
+- expose only a narrow contract shape that records whether a restored
+  sidecar ORDER chain exists and how many ORDER nodes it contains；
+- keep the restored ORDER pointer private/internal until a later reviewed
+  Filesort lifecycle phase decides ownership and lifetime；
+- preserve `HAS_ORDER_BY` serial rejection and DBUG-only observability；
+- treat GROUP-based Filesort, ordered-index synthesized key order, DESC group
+  marking, and real `Sort_param` as later separate phases。
+
+Proposed coding split:
+
+1. M11-E5d-3a Restored ORDER Filesort Contract:
+   - allowed files:
+     - `sql/parallel_query/pq_optimizer.h`
+     - `sql/parallel_query/pq_optimizer.cc`
+     - `sql/parallel_query/sql_parallel.h`
+     - `sql/mysqld.cc`
+     - `mysql-test/suite/parallel_query/t/pq_saved_order_group_contract.test`
+     - `mysql-test/suite/parallel_query/r/pq_saved_order_group_contract.result`
+     - `mysql-test/suite/parallel_query/r/pq_stats.result`
+     - this task document and README；
+   - extend `PQOrderByFilesortContract` with diagnostics such as:
+     - `restored_order_ready`
+     - `restored_order_count`
+     - `sidecar_clone_ready`
+   - add an internal helper that builds the owned ORDER sidecar, records
+     optimized flags, restores the sidecar chain, clone-copies it, and fills
+     the contract；
+   - add DBUG smoke
+     `pq_orderby_filesort_restored_order_contract_smoke` on the existing
+     ORDER BY reject path；
+   - add counters:
+     `Parallel_orderby_filesort_restored_order_contract_attempts`,
+     `Parallel_orderby_filesort_restored_order_contract_success`,
+     `Parallel_orderby_filesort_restored_order_contract_unsupported`；
+   - MTR must prove no-DBUG zero counters, DBUG success for the controlled
+     two-column ORDER BY shape, `Not parallel HAS_ORDER_BY`, and zero
+     executed/workers/ranges。
+2. M11-E5d-3b Filesort Constructor Risk Review:
+   - design-only unless E5d-3a review accepts；
+   - inspect whether constructing `Filesort` on `THD::mem_root` during
+     eligibility reject path is safe enough for a debug-only smoke；
+   - decide whether the next step may use a temporary MEM_ROOT, leader THD
+     mem_root, or must wait until real iterator construction。
+3. M11-E5d-3c Debug-only Filesort Construction Smoke:
+   - only after E5d-3b review；
+   - if approved, construct `Filesort` only under a dedicated DBUG flag and
+     still reject `HAS_ORDER_BY`；
+   - must not initialize `Sort_param`, `Exchange_sort`, worker MQ, or
+     user-visible ORDER BY PQ。
+
+Forbidden files / actions for E5d-3a:
+
+- no `sql/filesort.*` include or edits；
+- no `sql/iterators/sorting_iterator.*` edits；
+- no `sql/parallel_query/exchange_sort.*` edits；
+- no `sql/parallel_query/pq_iterators.*` edits；
+- no `sql/parallel_query/pq_clone.*` edits；
+- no `sql/sql_optimizer.*` hook or semantic change；
+- no `Filesort` allocation；
+- no `Sort_param` allocation or initialization；
+- no direct or indirect `Filesort::make_sortorder()` call；
+- no worker thread, MQ, handler/InnoDB, `Read()`, AccessPath, or
+  `HAS_ORDER_BY` eligibility relaxation。
+
+Required validation for E5d-3a:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_saved_order_group_contract \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d3a_target --tmpdir=/tmp/pqt_m11e5d3a_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d3a_full --tmpdir=/tmp/pqt_m11e5d3a_full
+```
+
+Design review request:
+
+- confirm E5d-3a should remain contract-only and must not construct
+  `Filesort`；
+- confirm `Filesort` constructor is unsafe as a shape check because it calls
+  `make_sortorder()` immediately；
+- confirm `PQOrderByFilesortContract` may be extended with restored sidecar
+  readiness diagnostics without exposing the internal sidecar pointer；
+- confirm GROUP, ordered-index synthesized order, DESC group marking,
+  `Sort_param`, and `Exchange_sort` should remain separate follow-ups；
+- confirm validation and forbidden scope are sufficient。
+
+Design Review - M11-E5d-3:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- required changes: none；
+- confirmed E5d-3a should stay contract-only and continue to reject
+  `HAS_ORDER_BY` after DBUG-only probes；
+- confirmed MySQL 8.0.46 `Filesort` construction is not a harmless shape
+  check because the constructor calls `make_sortorder()` immediately and
+  allocates/initializes `sortorder`；
+- confirmed extending `PQOrderByFilesortContract` with restored sidecar
+  readiness/count/clone-ready diagnostics is the correct minimal next step；
+- confirmed not exposing the internal sidecar pointer preserves the lifetime
+  boundary；
+- confirmed GROUP Filesort, ordered-index synthesized order, DESC group
+  marking, `Sort_param`, `Exchange_sort`, worker MQ, and user-visible ORDER BY
+  PQ must remain separate follow-ups；
+- confirmed allowed/forbidden scope and validation commands are sufficient。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
