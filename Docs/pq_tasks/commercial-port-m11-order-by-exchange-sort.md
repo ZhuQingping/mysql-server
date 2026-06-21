@@ -24,8 +24,9 @@ scalar handoff completed，Code/Doc/Test Review Agent accepted，full
 `Exchange_sort` init / MQ / Read boundary design completed and committed；
 M11-E5d-5a `Exchange_sort` real-init state owner shape completed and
 committed；M11-E5d-5b sort-key buffer / record-group allocation smoke completed
-and committed；M11-E5d-5c controlled ORDER BY MQ-to-record-group loader design
-accepted。
+and committed；M11-E5d-5c controlled ORDER BY MQ-to-record-group loader
+completed and committed；M11-E5d-5d debug-only ordered leader Read shadow path
+design drafted，waiting for Design Review。
 
 ## 背景
 
@@ -3777,6 +3778,143 @@ Code/Doc/Test Review - M11-E5d-5c:
 - confirmed the diff does not open real ORDER BY eligibility, default worker MQ
   consumption, ordered `ParallelScanIterator::Read()`, `Filesort` /
   `Sort_param`, optimizer, AccessPath, handler, or InnoDB behavior。
+
+### M11-E5d-5d: Debug-only Ordered Leader Read Shadow Path Design
+
+Status: design completed；Design Review Agent accepted；waiting for commit。
+
+Goal:
+
+- define the smallest post-5c bridge from controlled `Exchange_sort` record
+  groups to a leader-read-like state machine；
+- keep the bridge DBUG/smoke-only and disconnected from user-visible ORDER BY
+  SQL；
+- prove explicit `ROW` / `EOF` / `ERROR` ordered-read status boundaries before
+  any default `ParallelScanIterator::Read()` branch or eligibility gate is
+  opened；
+- preserve the current `Exchange_nosort` `PQRM` row-image protocol and ordinary
+  PQ row path unchanged。
+
+Current branch facts:
+
+- `ParallelScanIterator::Read()` currently consumes only `Exchange_nosort` via
+  `materialize_next_record_image_status()`；
+- the current `ORDER_GATHER_VALIDATED` lifecycle branch only cleans up and
+  returns EOF；it does not produce ordered rows；
+- `Exchange_sort::read_mq_message()` is still a FINISH/no-data stub and must not
+  be treated as a real ordered reader；
+- `Exchange_sort::read_ordered_record_shape()` currently only checks that order
+  gather shape was initialized；
+- 5c added controlled `PQOF` frame loading into owned `m_record_groups` but did
+  not add a leader `Read()` bridge；
+- `PQOF`, `PQWR`, and `PQRM` remain separate frame/protocol families。
+
+Commercial reference facts:
+
+- commercial ordered flow is
+  `ParallelScanIterator::Read()` -> `MQ_record_gather::mq_scan_next()` ->
+  `Exchange_sort::read_mq_record()`；
+- commercial `Exchange_sort::read_mq_record()` eventually writes the selected
+  ordered row into leader `table->record[0]`；
+- the commercial bool return shape folds EOF/error diagnosis through surrounding
+  thread/error state, which is too broad for the current branch's debug shadow
+  boundary；
+- the commercial path depends on full `Filesort` / `Sort_param` lifecycle,
+  `make_sortorder()`, worker row serialization, rowid tie-break, heap state,
+  queue detach handling, and worker manager diagnostics, so it must not be
+  copied as one 5d patch。
+
+Design shape for future coding:
+
+- add a local ordered-read shadow status, for example `ROW`, `EOF_REACHED`, and
+  `ERROR`；
+- add an `Exchange_sort` helper that consumes already-loaded owned record groups
+  and returns exactly one shadow status per call；
+- the helper may copy a cached row image into a caller-owned debug buffer, but
+  must not write `TABLE::record[0]` unless a later reviewed task explicitly
+  designs that step；
+- the helper must treat incomplete groups with no available row as `ERROR` or a
+  separate debug-only blocked state only if that state is explicitly tested；
+- the first coding step should use fully completed controlled groups so EOF is
+  deterministic；
+- add a smoke that loads controlled `PQOF` frames through the 5c loader, then
+  drains them through the ordered-read shadow helper and verifies:
+  - rows are returned in the expected deterministic order for the debug data；
+  - EOF is returned only after all completed groups are drained；
+  - ERROR is returned for incomplete or invalid group state；
+  - cleanup clears owned groups and buffers；
+  - no ordinary SQL counter indicates visible ORDER BY execution。
+
+Recommended coding scope:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- `sql/parallel_query/sql_parallel.cc` only if smoke orchestration needs a new
+  DBUG-gated call site；
+- focused MTR under `mysql-test/suite/parallel_query/` only if existing
+  `pq_commercial_order_by_frames` cannot observe the new smoke；
+- M11 taskbook and progress README。
+
+Forbidden for 5d coding:
+
+- no default `ParallelScanIterator::Read()` ORDER BY branch；
+- no user-visible `HAS_ORDER_BY` acceptance；
+- no `Filesort::make_sortorder()` visibility change or persistent
+  `Filesort` / `Sort_param` ownership；
+- no `TABLE::record[0]` writes from the ordered shadow helper；
+- no changes to `Exchange_nosort`, `PQRM`, `PQWR`, `Query_result_mq`, or
+  `msg_queue` semantics；
+- no optimizer, AccessPath, handler, InnoDB, sysvar, or default SQL behavior
+  changes；
+- no claim that visible ORDER BY result correctness is supported。
+
+Validation for future coding:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by_frames \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d5d_target --tmpdir=/tmp/pqt_m11e5d5d_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d5d_full --tmpdir=/tmp/pqt_m11e5d5d_full
+```
+
+Required validation expectations:
+
+- real ORDER BY SQL still reports `Not parallel HAS_ORDER_BY`；
+- ORDER BY negative tests do not increase executed/workers/ranges counters；
+- default `ParallelScanIterator::Read()` still consumes only `Exchange_nosort`
+  materialized row images；
+- ordered shadow status is visible only through a DBUG/smoke path。
+
+Design review request:
+
+- confirm 5d should use explicit `ROW` / `EOF` / `ERROR` shadow status instead
+  of copying the commercial bool-return boundary；
+- confirm no `TABLE::record[0]` writes are allowed in 5d；
+- confirm `PQOF` controlled groups must remain separate from `PQWR` and `PQRM`
+  worker-result paths；
+- confirm visible ORDER BY eligibility and default ordered
+  `ParallelScanIterator::Read()` remain blocked until later review。
+
+Design Review - M11-E5d-5d:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none blocking；
+- confirmed 5d is debug/smoke-only and blocks visible ORDER BY eligibility plus
+  default ordered `ParallelScanIterator::Read()` activation；
+- confirmed `PQOF` / `PQWR` / `PQRM` separation is clear；
+- confirmed explicit `ROW` / `EOF_REACHED` / `ERROR` shadow status is the right
+  boundary for the current branch；
+- confirmed the ban on `TABLE::record[0]` writes is appropriate for 5d and does
+  not conflict with later migration because that step requires a separate
+  reviewed task；
+- accepted kill/WOULD_BLOCK residual risk because the first coding step is
+  constrained to fully completed controlled groups and any blocked state must be
+  explicit and tested。
 
 ## Risk Areas
 
