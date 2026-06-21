@@ -35,7 +35,10 @@ remain disabled；M11-E5d-5f runtime prerequisite diagnostics coding and
 validation completed，Code/Doc/Test Review Agent accepted，committed as
 `b94ca90cb75`；M11-E5g-0/1/2 completed and committed；M11-E5g-3 ordered
 leader materialization smoke from streaming reader completed locally with build,
-targeted MTR, full `parallel_query` suite, and Code/Doc/Test Review passed。
+targeted MTR, full `parallel_query` suite, and Code/Doc/Test Review passed；
+M11-E5g-4a/4b/4c/4d/4e completed and committed；M11-E5g-4f minimal
+ASC-only visible ORDER BY gate design completed locally，Design Explorer and
+Code/Doc/Test Review Agent accepted。
 
 ## 背景
 
@@ -5550,6 +5553,140 @@ Code/Doc/Test Review - M11-E5g-4e:
 - residual risk: real THD kill polling, worker-thread propagation,
   backpressure, and default ORDER BY worker MQ consumption remain future
   reviewed boundaries。
+
+### M11-E5g-4f: Minimal ASC-only Visible ORDER BY Gate Design
+
+Status: design-only completed；Design Explorer and Code/Doc/Test Review Agent
+accepted；no source changes。
+
+Goal:
+
+- re-check whether the branch can now relax the user-visible `HAS_ORDER_BY`
+  boundary for a minimal ASC-only ORDER BY subset；
+- define the exact visible candidate shape and fail-closed diagnostics that any
+  later coding step must preserve；
+- decide whether M11-E5g-4g may open an executable ORDER BY PQ path。
+
+Current code facts:
+
+- `pq_optimizer.cc` still rejects every normal `query_block->is_ordered()`
+  statement through `PQUnsuiteReason::HAS_ORDER_BY`；
+- `pq_build_orderby_eligibility_contract()` can identify a disabled future
+  candidate only for a narrow shape: simple SELECT, non-hypergraph, single
+  query block, single table, simple direct ORDER list, ASC-only, no LIMIT, no
+  DISTINCT, no GROUP BY, no HAVING, no window functions, filesort required, and
+  full scan；
+- `pq_build_orderby_execution_preflight()` intentionally returns false for
+  that candidate because all real runtime readiness flags remain false:
+  saved ORDER/GROUP runtime state, Filesort runtime, Sort_param runtime, worker
+  ORDER frame producer, Exchange_sort heap read, leader materialization, rowid
+  tie-break, default ordered `Read()`, and kill/detach/error diagnostics；
+- M11-E5g-4b/4c/4d/4e added DBUG-only skeletons and diagnostics, but none of
+  them changed default optimizer eligibility, worker launch, real MQ
+  consumption, or default ordered `ParallelScanIterator::Read()` behavior。
+
+Design conclusion:
+
+- M11-E5g-4f rejects opening an executable user-visible ORDER BY PQ gate now；
+- keep `HAS_ORDER_BY` as the hard default serial boundary for normal SQL；
+- the current branch may keep the disabled future-candidate contract as a
+  diagnostic/design artifact, but it must not route matching ORDER BY SQL into
+  PQ execution until `pq_build_orderby_execution_preflight()` has reviewed real
+  runtime owners for every readiness flag；
+- M11-E5g-4g should not remove the `HAS_ORDER_BY` return or set any ORDER BY
+  preflight readiness flag true. If 4g is still needed, it should be limited to
+  documentation or additional disabled diagnostics, not executable SQL。
+
+Minimum future visible candidate shape, not approved for current coding:
+
+- SQL command is simple `SELECT` in one simple query block；
+- non-hypergraph optimizer path only until a separate review covers the
+  hypergraph AccessPath factory；
+- exactly one InnoDB base table and no partition table；
+- access path is clustered full scan only；no secondary range/ref/ICP, no
+  reverse range, no dependent ref, and no worker-side predicate pushdown mixed
+  into ORDER BY；
+- ORDER BY list contains only selected fixed-length integer fields, direct
+  field references, explicit ASC direction, and no expression/subquery；
+- projection is limited to record-image shapes already proven by current row
+  materialization tests；
+- no GROUP BY, DISTINCT, HAVING, window functions, rollup, locking read,
+  subquery, derived table, view, union, generated/hidden/functional-index
+  fields, BLOB/TEXT, nullable ORDER fields, DESC, or LIMIT；
+- deterministic duplicate-key order must be proven by explicit ORDER BY
+  tie-break columns or by reviewed rowid/ref-length semantics before LIMIT can
+  be introduced。
+
+Required prerequisites before any later executable gate:
+
+1. `Filesort::make_sortorder()` / saved ORDER state visibility is available
+   without mutating normal executor state；
+2. `Sort_param` ownership is persistent for the lifetime of `Exchange_sort`；
+3. default worker ORDER BY `PQOF` producer is wired from real worker rows, not
+   only from smoke helpers；
+4. default `Exchange_sort` heap reader consumes worker MQ frames with bounded
+   wait, EOF, ERROR, DETACHED, and cleanup semantics；
+5. leader materialization writes real ordered records into `table->record[0]`
+   through a reviewed API；
+6. stable duplicate-key tie-break semantics are implemented and tested；
+7. default `ParallelScanIterator::Read()` can choose ordered gather only after
+   preflight succeeds and before the PQ commit point；
+8. THD kill, worker abort, MQ detach, and diagnostics are wired for the
+   ordered path；
+9. positive and negative MTR tests cover row order, duplicate keys, empty/one
+   row tables, rejected shapes, zero-delta fallback counters, and full
+   `parallel_query` suite stability。
+
+Forbidden for M11-E5g-4g unless a new design review changes this conclusion:
+
+- weakening or removing `PQUnsuiteReason::HAS_ORDER_BY` for ordinary SQL；
+- setting `PQOrderByExecutionPreflight` readiness flags true by assertion；
+- changing `execution_disabled` to false；
+- changing AccessPath factory, handler/InnoDB, worker launch, `PQWR` /
+  `Query_result_mq`, or default `ParallelScanIterator::Read()` ordered path；
+- claiming DBUG-only smoke counters as proof of user-visible ORDER BY PQ
+  correctness。
+
+Design Explorer - M11-E5g-4f:
+
+- Explorer verdict: `REJECT 4g executable gate`；
+- confirmed `pq_optimizer.cc` still hard-rejects all ordinary ORDER BY through
+  `HAS_ORDER_BY` after running only DBUG diagnostics；
+- confirmed `pq_build_orderby_eligibility_contract()` only recognizes a
+  disabled future candidate and `pq_build_orderby_execution_preflight()` keeps
+  every real runtime readiness flag false；
+- confirmed default `Exchange_sort` and iterator paths are not executable for
+  ORDER BY: real MQ read is inert, materialization returns disabled, ordered
+  reader is skeleton-only, and kill diagnostics explicitly report
+  `kill_not_wired`；
+- confirmed `TryCreatePQTableScanIterator()` still depends on
+  `join->pq_eligible`, so the `HAS_ORDER_BY` rejection prevents a normal ORDER
+  BY statement from entering the PQ iterator；
+- recommended that 4g, if kept, be limited to documentation, disabled
+  diagnostics/status, or stronger serial-boundary MTR assertions；it must not
+  remove `HAS_ORDER_BY`, set readiness flags true, change `execution_disabled`,
+  or wire AccessPath/handler/InnoDB/worker launch/`PQWR`/`Query_result_mq`/
+  default ordered `Read()`。
+
+Validation for 4f:
+
+- docs-only review；
+- `git diff --check`；
+- no build/MTR required because no source or test files are changed。
+
+Code/Doc/Test Review - M11-E5g-4f:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed both taskbook and README consistently reject the current executable
+  ORDER BY PQ gate and keep `HAS_ORDER_BY` as the default serial boundary；
+- confirmed the taskbook forbids weakening `HAS_ORDER_BY`, setting readiness
+  flags true, changing `execution_disabled`, or wiring AccessPath / worker /
+  default ordered `Read()` in 4g；
+- confirmed README next action says not to enter executable 4g coding if the
+  review maintains the current conclusion；
+- confirmed `git diff --check` passed；
+- no build/MTR run because 4f only changes docs。
 
 ## Risk Areas
 
