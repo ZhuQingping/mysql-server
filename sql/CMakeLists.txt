@@ -565,6 +565,7 @@ SET(SQL_SHARED_SOURCES
   sql_optimizer.cc
   sql_parse.cc
   sql_partition.cc
+  sql_plan_cache.cc
   sql_partition_admin.cc
   sql_planner.cc
   sql_plugin.cc

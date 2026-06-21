@@ -1,0 +1,49 @@
+# Phase 4D-8: commercial 0006-like range order boundary
+CREATE TABLE pc4d_ro (
+id INT PRIMARY KEY,
+c BIGINT NOT NULL,
+v VARCHAR(16),
+KEY c_desc_idx(c DESC)
+) ENGINE=InnoDB;
+INSERT INTO pc4d_ro VALUES
+(1, 9223372036854775807, 'max'),
+(2, 13, 'thirteen'),
+(3, 7, 'seven'),
+(4, -5, 'minus-five');
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET SESSION rds_plan_cache=ON;
+# descending-index range with ascending ORDER BY remains fallback
+FLUSH STATUS;
+EXPLAIN SELECT c, v FROM pc4d_ro FORCE INDEX (c_desc_idx)
+WHERE c > -10 ORDER BY c ASC;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pc4d_ro	NULL	range	c_desc_idx	c_desc_idx	8	NULL	#	#	Using index condition; Backward index scan
+PREPARE range_order_stmt FROM
+'SELECT c, v FROM pc4d_ro FORCE INDEX (c_desc_idx)
+    WHERE c > ? ORDER BY c ASC';
+SET @min_c=300;
+EXECUTE range_order_stmt USING @min_c;
+c	v
+9223372036854775807	max
+SET @min_c=-10;
+EXECUTE range_order_stmt USING @min_c;
+c	v
+-5	minus-five
+7	seven
+13	thirteen
+9223372036854775807	max
+EXECUTE range_order_stmt USING @min_c;
+c	v
+-5	minus-five
+7	seven
+13	thirteen
+9223372036854775807	max
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+DEALLOCATE PREPARE range_order_stmt;
+DROP TABLE pc4d_ro;
+SET SESSION rds_plan_cache=@old_rds_plan_cache;

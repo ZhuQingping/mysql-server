@@ -1,0 +1,39 @@
+# Phase 4D-1: cached plan lifecycle with primary-key cached hit
+CREATE TABLE t1 (id INT PRIMARY KEY, c INT) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1, 10), (2, 20);
+SET SESSION rds_plan_cache=ON;
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+PREPARE stmt FROM 'SELECT c FROM t1 WHERE id = ?';
+SET @id=1;
+EXECUTE stmt USING @id;
+c
+10
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SET @id=2;
+EXECUTE stmt USING @id;
+c
+20
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	1
+DEALLOCATE PREPARE stmt;
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	1
+DROP TABLE t1;

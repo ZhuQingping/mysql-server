@@ -1,0 +1,63 @@
+# Phase 5S: cached const-table reads preserve covering key-read
+CREATE TABLE pc5s_keyread (
+id INT NOT NULL,
+c INT NOT NULL,
+pad VARCHAR(64),
+PRIMARY KEY (id),
+UNIQUE KEY c_uq (c)
+) ENGINE=InnoDB;
+INSERT INTO pc5s_keyread VALUES
+(1, 10, 'ten'),
+(2, 20, 'twenty'),
+(3, 30, 'thirty'),
+(4, 40, 'forty');
+SET SESSION rds_plan_cache=ON;
+# The optimizer reports a const covering-index read.
+EXPLAIN SELECT c FROM pc5s_keyread FORCE INDEX (c_uq) WHERE c = 20;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pc5s_keyread	NULL	const	c_uq	c_uq	4	const	1	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select '20' AS `c` from `test`.`pc5s_keyread` FORCE INDEX (`c_uq`) where true
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+PREPARE stmt FROM
+'SELECT c FROM pc5s_keyread FORCE INDEX (c_uq) WHERE c = ?';
+SET @c=20;
+EXECUTE stmt USING @c;
+c
+20
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+# Cached const-table apply must enable key-read before read_const().
+SET SESSION debug='+d,plan_cache_require_const_keyread';
+SET @c=30;
+EXECUTE stmt USING @c;
+c
+30
+SET @c=40;
+EXECUTE stmt USING @c;
+c
+40
+SET SESSION debug='-d,plan_cache_require_const_keyread';
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	2
+DEALLOCATE PREPARE stmt;
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	2
+DROP TABLE pc5s_keyread;

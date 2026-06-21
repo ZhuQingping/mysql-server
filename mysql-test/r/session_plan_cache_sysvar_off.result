@@ -1,0 +1,71 @@
+# Phase 5H: rds_plan_cache OFF and sys-var behavior
+CREATE TABLE pc5h_sysvar (
+id INT PRIMARY KEY,
+v VARCHAR(16)
+) ENGINE=InnoDB;
+INSERT INTO pc5h_sysvar VALUES
+(1, 'one'),
+(2, 'two'),
+(3, 'three');
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET @old_plan_cache_ratio=@@SESSION.rds_plan_cache_allow_change_ratio;
+# OFF-before-prepare must not create cached hits or READY plans
+SET SESSION rds_plan_cache=OFF;
+SET SESSION rds_plan_cache_allow_change_ratio=0;
+SET SESSION rds_plan_cache_allow_change_ratio=-0.01;
+Warnings:
+Warning	1292	Truncated incorrect rds_plan_cache_allow_change_ratio value: '-0.01'
+SHOW WARNINGS;
+Level	Code	Message
+Warning	1292	Truncated incorrect rds_plan_cache_allow_change_ratio value: '-0.01'
+FLUSH STATUS;
+PREPARE off_stmt FROM 'SELECT v FROM pc5h_sysvar WHERE id = ?';
+SET @id=1;
+EXECUTE off_stmt USING @id;
+v
+one
+SET @id=2;
+EXECUTE off_stmt USING @id;
+v
+two
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+# Toggling ON lets the existing prepared statement create and hit a cache
+SET SESSION rds_plan_cache=ON;
+SET @id=1;
+EXECUTE off_stmt USING @id;
+v
+one
+SET @id=2;
+EXECUTE off_stmt USING @id;
+v
+two
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	1
+# Toggling OFF bypasses an existing READY cached plan without evicting it
+SET SESSION rds_plan_cache=OFF;
+SET @id=3;
+EXECUTE off_stmt USING @id;
+v
+three
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	1
+DEALLOCATE PREPARE off_stmt;
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SET SESSION rds_plan_cache_allow_change_ratio=@old_plan_cache_ratio;
+SET SESSION rds_plan_cache=@old_rds_plan_cache;
+DROP TABLE pc5h_sysvar;

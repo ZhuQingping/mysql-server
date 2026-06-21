@@ -1,0 +1,102 @@
+# Phase 5H: scalar max/min and uncacheable fallback boundaries
+CREATE TABLE pc5h_scalar_outer (
+id INT PRIMARY KEY,
+score INT NOT NULL,
+label VARCHAR(16)
+) ENGINE=InnoDB;
+CREATE TABLE pc5h_scalar_inner (
+id INT PRIMARY KEY,
+grp INT NOT NULL,
+score INT NOT NULL,
+KEY grp_idx(grp)
+) ENGINE=InnoDB;
+INSERT INTO pc5h_scalar_outer VALUES
+(1, 10, 'ten'),
+(2, 20, 'twenty'),
+(3, 30, 'thirty');
+INSERT INTO pc5h_scalar_inner VALUES
+(1, 1, 12),
+(2, 1, 22),
+(3, 2, 5);
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET SESSION rds_plan_cache=ON;
+# ANY/ALL max/min-transformed scalar shapes stay on the fallback path
+FLUSH STATUS;
+PREPARE maxmin_stmt FROM
+'SELECT id FROM pc5h_scalar_outer WHERE score > ALL (SELECT score FROM pc5h_scalar_inner WHERE grp = ?)';
+SET @grp=1;
+EXECUTE maxmin_stmt USING @grp;
+id
+3
+SET @grp=2;
+EXECUTE maxmin_stmt USING @grp;
+id
+1
+2
+3
+SET @grp=1;
+EXECUTE maxmin_stmt USING @grp;
+id
+3
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+DEALLOCATE PREPARE maxmin_stmt;
+# SELECT-list ANY/ALL wrappers stay on the fallback path too
+FLUSH STATUS;
+PREPARE maxmin_select_stmt FROM
+'SELECT id, score > ALL (SELECT score FROM pc5h_scalar_inner WHERE grp = ?) AS is_gt_all FROM pc5h_scalar_outer WHERE id = ?';
+SET @grp=1;
+SET @id=1;
+EXECUTE maxmin_select_stmt USING @grp, @id;
+id	is_gt_all
+1	0
+SET @grp=1;
+SET @id=3;
+EXECUTE maxmin_select_stmt USING @grp, @id;
+id	is_gt_all
+3	1
+SET @grp=2;
+SET @id=2;
+EXECUTE maxmin_select_stmt USING @grp, @id;
+id	is_gt_all
+2	1
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+DEALLOCATE PREPARE maxmin_select_stmt;
+# Uncacheable scalar subqueries stay on the fallback path
+FLUSH STATUS;
+PREPARE uncacheable_stmt FROM
+'SELECT id FROM pc5h_scalar_outer WHERE id = ? AND (SELECT RAND() FROM pc5h_scalar_inner WHERE id = ?) IS NOT NULL';
+SET @id=1;
+SET @inner_id=1;
+EXECUTE uncacheable_stmt USING @id, @inner_id;
+id
+1
+SET @id=2;
+SET @inner_id=2;
+EXECUTE uncacheable_stmt USING @id, @inner_id;
+id
+2
+SET @id=3;
+SET @inner_id=3;
+EXECUTE uncacheable_stmt USING @id, @inner_id;
+id
+3
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+DEALLOCATE PREPARE uncacheable_stmt;
+SET SESSION rds_plan_cache=@old_rds_plan_cache;
+DROP TABLE pc5h_scalar_inner;
+DROP TABLE pc5h_scalar_outer;

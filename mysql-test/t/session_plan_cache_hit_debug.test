@@ -1,0 +1,40 @@
+--source include/have_debug.inc
+
+--echo # Phase 4C: cached hit apply failure restores state and falls back
+
+CREATE TABLE pc4c_dbg (c INT, v VARCHAR(16)) ENGINE=InnoDB;
+INSERT INTO pc4c_dbg VALUES (10, 'ten'), (20, 'twenty'), (30, 'thirty');
+
+SET SESSION rds_plan_cache=ON;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+PREPARE stmt FROM 'SELECT v FROM pc4c_dbg WHERE c = ?';
+
+SET @c=10;
+EXECUTE stmt USING @c;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET SESSION debug='+d,plan_cache_apply_after_bind_fail';
+SET @c=20;
+EXECUTE stmt USING @c;
+SET SESSION debug='-d,plan_cache_apply_after_bind_fail';
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET @c=30;
+EXECUTE stmt USING @c;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DEALLOCATE PREPARE stmt;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DROP TABLE pc4c_dbg;

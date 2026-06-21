@@ -1,0 +1,141 @@
+# Phase 5B: cached-hit cleanup detaches execution TABLE state
+CREATE TABLE pc5b_cleanup (
+id INT PRIMARY KEY,
+c INT,
+v VARCHAR(16),
+KEY c_idx(c)
+) ENGINE=InnoDB;
+INSERT INTO pc5b_cleanup VALUES
+(1, 10, 'ten'),
+(2, 20, 'twenty'),
+(3, 30, 'thirty');
+SET SESSION rds_plan_cache=ON;
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+PREPARE stmt FROM
+'SELECT v FROM pc5b_cleanup FORCE INDEX (c_idx) WHERE c = ?';
+SET @c=10;
+EXECUTE stmt USING @c;
+v
+ten
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SET @c=20;
+EXECUTE stmt USING @c;
+v
+twenty
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	1
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+# The debug hook asserts the cached plan is detached before rebinding.
+# The injected early apply failure then invalidates and falls back.
+SET SESSION debug='+d,plan_cache_apply_assert_detached_before_rebind,plan_cache_apply_before_alloc_slices_fail';
+SET @c=30;
+EXECUTE stmt USING @c;
+v
+thirty
+SET SESSION debug='-d,plan_cache_apply_assert_detached_before_rebind,plan_cache_apply_before_alloc_slices_fail';
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	1
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+# Late apply failures after a cached hit need full JOIN cleanup too.
+# First execute once successfully to mark the replacement cache as hit.
+SET @c=10;
+EXECUTE stmt USING @c;
+v
+ten
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	2
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SET SESSION debug='+d,plan_cache_apply_after_access_paths_fail';
+SET @c=20;
+EXECUTE stmt USING @c;
+v
+twenty
+SET SESSION debug='-d,plan_cache_apply_after_access_paths_fail';
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	2
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+# Re-mark the replacement cache as hit before the engine-push failure.
+SET @c=30;
+EXECUTE stmt USING @c;
+v
+thirty
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	3
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SET SESSION debug='+d,plan_cache_apply_after_push_to_engines_fail';
+SET @c=10;
+EXECUTE stmt USING @c;
+v
+ten
+SET SESSION debug='-d,plan_cache_apply_after_push_to_engines_fail';
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	3
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+# Fatal apply errors must not fall back to normal optimization.
+SET SESSION debug='+d,plan_cache_apply_after_access_paths_error';
+SET @c=20;
+EXECUTE stmt USING @c;
+ERROR HY000: Unknown error
+SET SESSION debug='-d,plan_cache_apply_after_access_paths_error';
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	3
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+# Handler row-count errors during apply are fatal too.
+# Recreate a cached plan first because the previous fatal error removed it.
+SET @c=30;
+EXECUTE stmt USING @c;
+v
+thirty
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	3
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SET SESSION debug='+d,bug35208539_raise_error';
+SET @c=10;
+EXECUTE stmt USING @c;
+ERROR HY000: Got error 168 - 'Unknown (generic) error from engine' from storage engine
+SET SESSION debug='-d,bug35208539_raise_error';
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	3
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+DEALLOCATE PREPARE stmt;
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+DROP TABLE pc5b_cleanup;

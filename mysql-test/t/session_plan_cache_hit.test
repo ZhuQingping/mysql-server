@@ -1,0 +1,36 @@
+--echo # Phase 4C: minimal cached hit for prepared single-table SELECT
+
+CREATE TABLE pc4c_t (c INT, v VARCHAR(16)) ENGINE=InnoDB;
+INSERT INTO pc4c_t VALUES (10, 'ten'), (20, 'twenty'), (30, 'thirty');
+
+SET SESSION rds_plan_cache=ON;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+PREPARE stmt FROM 'SELECT v FROM pc4c_t WHERE c = ?';
+
+SET @c=10;
+EXECUTE stmt USING @c;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET @c=20;
+EXECUTE stmt USING @c;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET @c=30;
+EXECUTE stmt USING @c;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DEALLOCATE PREPARE stmt;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DROP TABLE pc4c_t;

@@ -313,6 +313,17 @@ enum class enum_condition_context {
   ANDS_ORS,
 };
 
+namespace plan_cache {
+
+enum class plan_cache_state {
+  NONE,
+  START,
+  READY,
+  UNCACHEABLE,
+};
+
+}  // namespace plan_cache
+
 /// Used to uniquely name expressions in derived tables
 #define SYNTHETIC_FIELD_NAME "Name_exp_"
 #endif /* SQL_CONST_INCLUDED */

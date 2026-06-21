@@ -1,0 +1,75 @@
+--echo # Phase 4D-1: cached hit for prepared ref access
+
+CREATE TABLE pc4d_ref (
+  id INT PRIMARY KEY,
+  c INT,
+  v VARCHAR(16),
+  KEY c_idx(c)
+) ENGINE=InnoDB;
+INSERT INTO pc4d_ref VALUES
+  (1, 10, 'ten-a'),
+  (2, 20, 'twenty'),
+  (3, 10, 'ten-b'),
+  (4, 30, 'thirty');
+
+SET SESSION rds_plan_cache=ON;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+--echo # primary-key eq_ref/const lookup is eligible for 4D-1 cached hits
+PREPARE pk_stmt FROM 'SELECT v FROM pc4d_ref WHERE id = ?';
+
+SET @p=1;
+EXECUTE pk_stmt USING @p;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET @p=2;
+EXECUTE pk_stmt USING @p;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET @p=4;
+EXECUTE pk_stmt USING @p;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DEALLOCATE PREPARE pk_stmt;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+--echo # secondary non-unique ref lookup is eligible for 4D-1 cached hits
+PREPARE ref_stmt FROM 'SELECT id, v FROM pc4d_ref WHERE c = ?';
+
+SET @p=10;
+--sorted_result
+EXECUTE ref_stmt USING @p;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET @p=20;
+--sorted_result
+EXECUTE ref_stmt USING @p;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET @p=30;
+--sorted_result
+EXECUTE ref_stmt USING @p;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DEALLOCATE PREPARE ref_stmt;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DROP TABLE pc4d_ref;

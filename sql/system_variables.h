@@ -219,7 +219,9 @@ struct System_variables {
   ulonglong max_heap_table_size;
   ulonglong tmp_table_size;
   ulonglong long_query_time;
+  double rds_plan_cache_allow_change_ratio;
   bool end_markers_in_json;
+  bool rds_plan_cache;
   bool windowing_use_high_precision;
   /* A bitmap for switching optimizations on/off */
   ulonglong optimizer_switch;
@@ -568,6 +570,9 @@ struct System_status_var {
 
   /* Number of statements sent from the client. */
   ulonglong questions;
+
+  /// Number of session plan cache hits.
+  ulonglong cached_plan_hits;
 
   /// How many queries have been executed on a secondary storage engine.
   ulonglong secondary_engine_execution_count;

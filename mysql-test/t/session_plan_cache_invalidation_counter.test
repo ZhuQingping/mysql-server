@@ -1,0 +1,142 @@
+--echo # Phase 5H: ordinary cached-plan invalidation counter deltas
+
+CREATE TABLE pc5h_inv (
+  id INT PRIMARY KEY,
+  c INT,
+  v VARCHAR(16)
+) ENGINE=InnoDB;
+INSERT INTO pc5h_inv VALUES
+  (1, 10, 'one'),
+  (2, 20, 'two'),
+  (3, 30, 'three');
+
+CREATE TABLE pc5h_inv_stats (
+  id INT PRIMARY KEY,
+  v VARCHAR(16)
+) ENGINE=MyISAM;
+INSERT INTO pc5h_inv_stats VALUES
+  (1, 'one'),
+  (2, 'two'),
+  (3, 'three');
+
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET @old_plan_cache_ratio=@@SESSION.rds_plan_cache_allow_change_ratio;
+SET @old_optimizer_switch=@@SESSION.optimizer_switch;
+SET SESSION rds_plan_cache=ON;
+
+--echo # optimizer_switch changes increment Cached_plan_invalidations once
+FLUSH STATUS;
+SET SESSION optimizer_switch='index_condition_pushdown=on';
+let $pc_invalidations_before= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+PREPARE opt_stmt FROM 'SELECT v FROM pc5h_inv WHERE id = ?';
+
+SET @id=1;
+EXECUTE opt_stmt USING @id;
+
+SET SESSION optimizer_switch='index_condition_pushdown=off';
+SET @id=2;
+EXECUTE opt_stmt USING @id;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+--disable_query_log
+eval SELECT $pc_invalidations_after - $pc_invalidations_before AS invalidation_delta;
+--enable_query_log
+let $pc_expected_invalidations= `SELECT $pc_invalidations_before + 1`;
+if ($pc_invalidations_after != $pc_expected_invalidations) {
+  --die optimizer_switch invalidation did not increment exactly once
+}
+DEALLOCATE PREPARE opt_stmt;
+SET SESSION optimizer_switch=@old_optimizer_switch;
+
+--echo # character_set_client changes increment Cached_plan_invalidations once
+FLUSH STATUS;
+SET NAMES utf8mb4;
+let $pc_invalidations_before= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+PREPARE charset_stmt FROM 'SELECT v FROM pc5h_inv WHERE id = ?';
+
+SET @id=1;
+EXECUTE charset_stmt USING @id;
+
+SET NAMES latin1;
+SET @id=2;
+EXECUTE charset_stmt USING @id;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+--disable_query_log
+eval SELECT $pc_invalidations_after - $pc_invalidations_before AS invalidation_delta;
+--enable_query_log
+let $pc_expected_invalidations= `SELECT $pc_invalidations_before + 1`;
+if ($pc_invalidations_after != $pc_expected_invalidations) {
+  --die charset invalidation did not increment exactly once
+}
+DEALLOCATE PREPARE charset_stmt;
+SET NAMES utf8mb4;
+
+--echo # table metadata changes increment Cached_plan_invalidations once
+FLUSH STATUS;
+let $pc_invalidations_before= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+PREPARE ddl_stmt FROM 'SELECT v FROM pc5h_inv WHERE id = ?';
+
+SET @id=1;
+EXECUTE ddl_stmt USING @id;
+
+ALTER TABLE pc5h_inv ADD COLUMN d INT DEFAULT 0;
+SET @id=2;
+EXECUTE ddl_stmt USING @id;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+--disable_query_log
+eval SELECT $pc_invalidations_after - $pc_invalidations_before AS invalidation_delta;
+--enable_query_log
+let $pc_expected_invalidations= `SELECT $pc_invalidations_before + 1`;
+if ($pc_invalidations_after != $pc_expected_invalidations) {
+  --die DDL invalidation did not increment exactly once
+}
+DEALLOCATE PREPARE ddl_stmt;
+
+--echo # table-stat changes beyond the allowed ratio increment once
+FLUSH STATUS;
+SET SESSION rds_plan_cache_allow_change_ratio=0.01;
+let $pc_invalidations_before= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+PREPARE stats_stmt FROM 'SELECT v FROM pc5h_inv_stats WHERE id = ?';
+
+SET @id=1;
+EXECUTE stats_stmt USING @id;
+
+INSERT INTO pc5h_inv_stats VALUES
+  (4, 'four'),
+  (5, 'five'),
+  (6, 'six'),
+  (7, 'seven'),
+  (8, 'eight'),
+  (9, 'nine'),
+  (10, 'ten'),
+  (11, 'eleven'),
+  (12, 'twelve');
+
+SET @id=2;
+EXECUTE stats_stmt USING @id;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+--disable_query_log
+eval SELECT $pc_invalidations_after - $pc_invalidations_before AS invalidation_delta;
+--enable_query_log
+let $pc_expected_invalidations= `SELECT $pc_invalidations_before + 1`;
+if ($pc_invalidations_after != $pc_expected_invalidations) {
+  --die table-stat invalidation did not increment exactly once
+}
+DEALLOCATE PREPARE stats_stmt;
+
+SET SESSION rds_plan_cache_allow_change_ratio=@old_plan_cache_ratio;
+SET SESSION optimizer_switch=@old_optimizer_switch;
+SET SESSION rds_plan_cache=@old_rds_plan_cache;
+DROP TABLE pc5h_inv_stats;
+DROP TABLE pc5h_inv;

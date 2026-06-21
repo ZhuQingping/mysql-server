@@ -1,0 +1,50 @@
+# Phase 4D-13: patch 0017-like remove_eq_conds change-list lifetime
+CREATE TABLE pc4d13_recond (
+id INT PRIMARY KEY,
+a TINYINT UNSIGNED NOT NULL,
+b INT NOT NULL,
+KEY b_idx(b)
+) ENGINE=InnoDB;
+INSERT INTO pc4d13_recond VALUES
+(1, 0, 10),
+(2, 1, 10),
+(3, 0, 20),
+(4, 1, 20),
+(5, 0, 30);
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET SESSION rds_plan_cache=ON;
+FLUSH STATUS;
+EXPLAIN SELECT id FROM pc4d13_recond FORCE INDEX(b_idx)
+WHERE b = 10 AND a <= 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pc4d13_recond	NULL	ref	b_idx	b_idx	4	const	#	#	Using where
+PREPARE stmt FROM
+'SELECT id FROM pc4d13_recond FORCE INDEX(b_idx)
+   WHERE b = ? AND a <= 0';
+SET @b=10;
+EXECUTE stmt USING @b;
+id
+1
+SET @b=20;
+EXECUTE stmt USING @b;
+id
+3
+SET @b=30;
+EXECUTE stmt USING @b;
+id
+5
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	2
+DEALLOCATE PREPARE stmt;
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	2
+SET SESSION rds_plan_cache=@old_rds_plan_cache;
+DROP TABLE pc4d13_recond;

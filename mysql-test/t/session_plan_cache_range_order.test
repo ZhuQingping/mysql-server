@@ -1,0 +1,57 @@
+--echo # Phase 4D-8: commercial 0006-like range order boundary
+
+CREATE TABLE pc4d_ro (
+  id INT PRIMARY KEY,
+  c BIGINT NOT NULL,
+  v VARCHAR(16),
+  KEY c_desc_idx(c DESC)
+) ENGINE=InnoDB;
+
+INSERT INTO pc4d_ro VALUES
+  (1, 9223372036854775807, 'max'),
+  (2, 13, 'thirteen'),
+  (3, 7, 'seven'),
+  (4, -5, 'minus-five');
+
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET SESSION rds_plan_cache=ON;
+
+--echo # descending-index range with ascending ORDER BY remains fallback
+FLUSH STATUS;
+let $pc_invalidations_before= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+
+--disable_warnings
+--replace_column 10 # 11 #
+EXPLAIN SELECT c, v FROM pc4d_ro FORCE INDEX (c_desc_idx)
+  WHERE c > -10 ORDER BY c ASC;
+--enable_warnings
+
+PREPARE range_order_stmt FROM
+  'SELECT c, v FROM pc4d_ro FORCE INDEX (c_desc_idx)
+    WHERE c > ? ORDER BY c ASC';
+
+SET @min_c=300;
+EXECUTE range_order_stmt USING @min_c;
+
+SET @min_c=-10;
+EXECUTE range_order_stmt USING @min_c;
+EXECUTE range_order_stmt USING @min_c;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_hits= query_get_value(SHOW STATUS LIKE 'Cached_plan_hits', Value, 1);
+if ($pc_hits != 0) {
+  --die range order fallback produced cached hits
+}
+let $pc_count= query_get_value(SHOW STATUS LIKE 'Cached_plan_count', Value, 1);
+if ($pc_count != 0) {
+  --die range order fallback leaked a READY cached plan
+}
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+if ($pc_invalidations_after != $pc_invalidations_before) {
+  --die range order fallback changed Cached_plan_invalidations
+}
+DEALLOCATE PREPARE range_order_stmt;
+
+DROP TABLE pc4d_ro;
+SET SESSION rds_plan_cache=@old_rds_plan_cache;

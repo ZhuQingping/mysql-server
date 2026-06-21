@@ -1,0 +1,51 @@
+--echo # Phase 5H: cached-hit DML visibility and current-read behavior
+
+CREATE TABLE pc5h_dml (
+  id INT PRIMARY KEY,
+  c INT,
+  v VARCHAR(16),
+  KEY c_idx(c)
+) ENGINE=InnoDB;
+INSERT INTO pc5h_dml VALUES
+  (1, 10, 'one'),
+  (2, 20, 'two'),
+  (3, 20, 'three');
+
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET @old_plan_cache_ratio=@@SESSION.rds_plan_cache_allow_change_ratio;
+SET SESSION rds_plan_cache=ON;
+SET SESSION rds_plan_cache_allow_change_ratio=0;
+
+FLUSH STATUS;
+PREPARE dml_stmt FROM
+  'SELECT id, v FROM pc5h_dml FORCE INDEX (c_idx) WHERE c = ?';
+
+SET @c=20;
+--sorted_result
+EXECUTE dml_stmt USING @c;
+
+UPDATE pc5h_dml SET c=30, v='two-moved' WHERE id=2;
+--sorted_result
+EXECUTE dml_stmt USING @c;
+
+INSERT INTO pc5h_dml VALUES (4, 20, 'four');
+--sorted_result
+EXECUTE dml_stmt USING @c;
+
+DELETE FROM pc5h_dml WHERE id=3;
+--sorted_result
+EXECUTE dml_stmt USING @c;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+let $pc_hits= query_get_value(SHOW STATUS LIKE 'Cached_plan_hits', Value, 1);
+if ($pc_hits != 3) {
+  --die cached-hit DML visibility test did not produce three cache hits
+}
+
+DEALLOCATE PREPARE dml_stmt;
+SHOW STATUS LIKE 'Cached_plan_count';
+
+SET SESSION rds_plan_cache_allow_change_ratio=@old_plan_cache_ratio;
+SET SESSION rds_plan_cache=@old_rds_plan_cache;
+DROP TABLE pc5h_dml;

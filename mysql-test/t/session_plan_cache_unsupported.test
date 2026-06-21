@@ -1,0 +1,116 @@
+--echo # Phase 4C/4D: unsupported plan shapes fall back without cached hits
+
+CREATE TABLE pc4c_u (
+  id INT PRIMARY KEY,
+  c INT,
+  v VARCHAR(16)
+) ENGINE=InnoDB;
+INSERT INTO pc4c_u VALUES
+  (1, 1, 'alpha'),
+  (2, 2, 'beta'),
+  (3, 3, 'bravo'),
+  (4, 4, 'beta');
+
+SET SESSION rds_plan_cache=ON;
+let $pc_invalidations_before= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+
+--echo # aggregate table scans remain unsupported for cached hits
+PREPARE agg_stmt FROM 'SELECT COUNT(*) FROM pc4c_u WHERE v LIKE ?';
+SET @p='b%';
+EXECUTE agg_stmt USING @p;
+SET @p='a%';
+EXECUTE agg_stmt USING @p;
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+DEALLOCATE PREPARE agg_stmt;
+
+--echo # ORDER BY table scans remain unsupported for cached hits
+PREPARE order_stmt FROM 'SELECT v FROM pc4c_u WHERE c > ? ORDER BY v';
+SET @p=1;
+EXECUTE order_stmt USING @p;
+SET @p=2;
+EXECUTE order_stmt USING @p;
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+DEALLOCATE PREPARE order_stmt;
+
+--echo # DISTINCT table scans remain unsupported for cached hits
+PREPARE distinct_stmt FROM 'SELECT DISTINCT v FROM pc4c_u WHERE c > ? ORDER BY v';
+SET @p=1;
+EXECUTE distinct_stmt USING @p;
+SET @p=3;
+EXECUTE distinct_stmt USING @p;
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+DEALLOCATE PREPARE distinct_stmt;
+
+--echo # simple HAVING without GROUP BY remains unsupported for cached hits
+PREPARE having_stmt FROM
+  'SELECT id, c * 2 AS marker FROM pc4c_u WHERE c >= ? HAVING marker > ?';
+
+SET @lo=1, @marker=2;
+--sorted_result
+EXECUTE having_stmt USING @lo, @marker;
+
+SET @lo=2, @marker=4;
+--sorted_result
+EXECUTE having_stmt USING @lo, @marker;
+
+SET @lo=1, @marker=6;
+--sorted_result
+EXECUTE having_stmt USING @lo, @marker;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_hits= query_get_value(SHOW STATUS LIKE 'Cached_plan_hits', Value, 1);
+if ($pc_hits != 0) {
+  --die simple HAVING fallback produced cached hits
+}
+let $pc_count= query_get_value(SHOW STATUS LIKE 'Cached_plan_count', Value, 1);
+if ($pc_count != 0) {
+  --die simple HAVING fallback leaked a READY cached plan
+}
+DEALLOCATE PREPARE having_stmt;
+
+--echo # simple single-index range remains unsupported for cached hits
+ALTER TABLE pc4c_u ADD KEY c_idx(c);
+
+SET @old_optimizer_switch=@@SESSION.optimizer_switch;
+SET SESSION optimizer_switch='index_condition_pushdown=off,mrr=off,mrr_cost_based=off,index_merge=off,skip_scan=off';
+
+--disable_warnings
+--replace_column 10 # 11 #
+EXPLAIN SELECT id, v FROM pc4c_u FORCE INDEX (c_idx)
+  WHERE c > 1 AND c < 4;
+--enable_warnings
+
+PREPARE range_stmt FROM
+  'SELECT id, v FROM pc4c_u FORCE INDEX (c_idx) WHERE c > ? AND c < ?';
+
+SET @lo=1, @hi=4;
+--sorted_result
+EXECUTE range_stmt USING @lo, @hi;
+
+SET @lo=0, @hi=3;
+--sorted_result
+EXECUTE range_stmt USING @lo, @hi;
+
+SET @lo=3, @hi=5;
+--sorted_result
+EXECUTE range_stmt USING @lo, @hi;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+if ($pc_invalidations_after != $pc_invalidations_before) {
+  --die Cached_plan_invalidations changed during unsupported fallback test
+}
+
+DEALLOCATE PREPARE range_stmt;
+SET SESSION optimizer_switch=@old_optimizer_switch;
+
+DROP TABLE pc4c_u;

@@ -1,0 +1,70 @@
+--echo # Phase 4D-9: commercial 0010-like timestamp/time ICP boundary
+
+CREATE TABLE pc4d_ti (
+  id INT PRIMARY KEY,
+  bigint_col BIGINT NOT NULL,
+  date_col DATE DEFAULT NULL,
+  timestamp_col TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  time_col TIME(6) DEFAULT NULL,
+  varchar_col VARCHAR(255) DEFAULT NULL,
+  KEY ts_time_idx(timestamp_col DESC, time_col DESC),
+  KEY ts_varchar_idx(timestamp_col DESC, varchar_col(4) DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+INSERT INTO pc4d_ti VALUES
+  (6, 1, '1998-12-03', '2020-01-01 02:00:00.000000', '23:23:59.000000', 'bbbbbbbbbb'),
+  (7, 1, '1998-12-03', '2020-01-01 02:00:00.000000', '23:23:59.000000', 'bbbbbbbbbb'),
+  (8, 1, '1998-12-03', '2020-01-01 02:00:00.000000', '23:23:59.000000', 'bbbbbbbbbb'),
+  (11, 1, '1998-11-03', '2020-02-03 02:00:00.000000', '10:59:59.000000', 'bbbbbbbbcd'),
+  (12, 1, '1998-11-03', '2020-02-03 02:00:00.000000', '10:59:59.000000', 'bbbbbbbbcd'),
+  (13, 1, '1998-11-03', '2020-02-03 02:00:00.000000', '10:59:59.000000', 'bbbbbbbbcd');
+
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET SESSION rds_plan_cache=ON;
+
+--echo # timestamp equality-like range with time ICP remains fallback
+FLUSH STATUS;
+let $pc_invalidations_before= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+
+--disable_warnings
+--replace_column 10 # 11 #
+EXPLAIN SELECT date_col, bigint_col FROM pc4d_ti FORCE INDEX (ts_time_idx)
+  WHERE time_col >= '07:59:59.000000'
+    AND timestamp_col BETWEEN '1995-09-02 12:20:00.000000'
+                          AND '1995-09-02 12:20:00.000000';
+--enable_warnings
+
+PREPARE timestamp_icp_stmt FROM
+  'SELECT date_col, bigint_col FROM pc4d_ti FORCE INDEX (ts_time_idx)
+    WHERE time_col >= ?
+      AND timestamp_col BETWEEN ''1995-09-02 12:20:00.000000'' AND ?';
+
+SET @time_limit='07:59:59.000000';
+SET @ts_high='1995-09-02 12:20:00.000000';
+EXECUTE timestamp_icp_stmt USING @time_limit, @ts_high;
+
+SET @time_limit='01:59:59.000000';
+SET @ts_high='2020-03-02 10:00:00.000000';
+--sorted_result
+EXECUTE timestamp_icp_stmt USING @time_limit, @ts_high;
+--sorted_result
+EXECUTE timestamp_icp_stmt USING @time_limit, @ts_high;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_hits= query_get_value(SHOW STATUS LIKE 'Cached_plan_hits', Value, 1);
+if ($pc_hits != 0) {
+  --die timestamp ICP fallback produced cached hits
+}
+let $pc_count= query_get_value(SHOW STATUS LIKE 'Cached_plan_count', Value, 1);
+if ($pc_count != 0) {
+  --die timestamp ICP fallback leaked a READY cached plan
+}
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+if ($pc_invalidations_after != $pc_invalidations_before) {
+  --die timestamp ICP fallback changed Cached_plan_invalidations
+}
+DEALLOCATE PREPARE timestamp_icp_stmt;
+
+DROP TABLE pc4d_ti;
+SET SESSION rds_plan_cache=@old_rds_plan_cache;

@@ -1,0 +1,181 @@
+# Phase 4D-2: ref edge cases
+CREATE TABLE pc4d_ref_edge (
+id INT PRIMARY KEY,
+a INT NOT NULL,
+b INT NOT NULL,
+c INT NULL,
+v VARCHAR(16),
+KEY ab_idx(a, b),
+KEY c_idx(c)
+) ENGINE=InnoDB;
+INSERT INTO pc4d_ref_edge VALUES
+(1, 1, 1, 10, 'edge-11'),
+(2, 1, 2, 20, 'edge-12'),
+(3, 2, 1, NULL, 'edge-21-null'),
+(4, 2, 2, NULL, 'edge-22-null'),
+(5, 3, 1, 30, 'edge-31');
+SET SESSION rds_plan_cache=ON;
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+# composite non-unique ref key rebuilds all key parts
+EXPLAIN SELECT id, v FROM pc4d_ref_edge FORCE INDEX (ab_idx)
+WHERE a = 1 AND b = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pc4d_ref_edge	NULL	ref	ab_idx	ab_idx	8	const,const	#	#	NULL
+PREPARE composite_stmt FROM
+'SELECT id, v FROM pc4d_ref_edge FORCE INDEX (ab_idx) WHERE a = ? AND b = ?';
+SET @a=1, @b=1;
+EXECUTE composite_stmt USING @a, @b;
+id	v
+1	edge-11
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SET @a=1, @b=2;
+EXECUTE composite_stmt USING @a, @b;
+id	v
+2	edge-12
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	1
+SET @a=2, @b=1;
+EXECUTE composite_stmt USING @a, @b;
+id	v
+3	edge-21-null
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	2
+DEALLOCATE PREPARE composite_stmt;
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	2
+# nullable ref key does not return stale rows for NULL parameters
+EXPLAIN SELECT id, v FROM pc4d_ref_edge FORCE INDEX (c_idx)
+WHERE c = 10;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pc4d_ref_edge	NULL	ref	c_idx	c_idx	5	const	#	#	NULL
+PREPARE nullable_stmt FROM
+'SELECT id, v FROM pc4d_ref_edge FORCE INDEX (c_idx) WHERE c = ?';
+SET @c=10;
+EXECUTE nullable_stmt USING @c;
+id	v
+1	edge-11
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	2
+SET @c=NULL;
+EXECUTE nullable_stmt USING @c;
+id	v
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	3
+SET @c=30;
+EXECUTE nullable_stmt USING @c;
+id	v
+5	edge-31
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	4
+DEALLOCATE PREPARE nullable_stmt;
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	4
+# non-covering ref_or_null with ICP falls back and returns current key rows plus NULL key rows
+EXPLAIN SELECT id, v FROM pc4d_ref_edge FORCE INDEX (c_idx)
+WHERE c = 10 OR c IS NULL;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pc4d_ref_edge	NULL	ref_or_null	c_idx	c_idx	5	const	#	#	Using index condition
+PREPARE ref_or_null_stmt FROM
+'SELECT id, v FROM pc4d_ref_edge FORCE INDEX (c_idx) WHERE c = ? OR c IS NULL';
+SET @c=10;
+EXECUTE ref_or_null_stmt USING @c;
+id	v
+1	edge-11
+3	edge-21-null
+4	edge-22-null
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	4
+SET @c=20;
+EXECUTE ref_or_null_stmt USING @c;
+id	v
+2	edge-12
+3	edge-21-null
+4	edge-22-null
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	4
+SET @c=999;
+EXECUTE ref_or_null_stmt USING @c;
+id	v
+3	edge-21-null
+4	edge-22-null
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	4
+DEALLOCATE PREPARE ref_or_null_stmt;
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	4
+# missing primary-key row falls back without a stale cached hit
+EXPLAIN SELECT v FROM pc4d_ref_edge FORCE INDEX (PRIMARY)
+WHERE id = 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pc4d_ref_edge	NULL	const	PRIMARY	PRIMARY	4	const	#	#	NULL
+PREPARE missing_stmt FROM
+'SELECT v FROM pc4d_ref_edge FORCE INDEX (PRIMARY) WHERE id = ?';
+SET @id=1;
+EXECUTE missing_stmt USING @id;
+v
+edge-11
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	4
+SET @id=999;
+EXECUTE missing_stmt USING @id;
+v
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	4
+DEALLOCATE PREPARE missing_stmt;
+DROP TABLE pc4d_ref_edge;

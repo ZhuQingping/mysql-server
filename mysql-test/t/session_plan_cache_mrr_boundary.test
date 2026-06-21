@@ -1,0 +1,179 @@
+--echo # Phase 4D-10: commercial 0012-like MRR boundary
+
+CREATE TABLE pc4d_mrr (
+  id INT PRIMARY KEY,
+  c INT DEFAULT NULL,
+  payload VARCHAR(32) DEFAULT NULL,
+  tinyblob_col TINYBLOB,
+  year_col YEAR DEFAULT NULL,
+  KEY c_idx(c),
+  KEY year_idx(year_col)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+INSERT INTO pc4d_mrr VALUES
+  (1, 1, 'row-01', _binary 'b01', 2001),
+  (2, 2, 'row-02', _binary 'b02', 2002),
+  (3, 3, 'row-03', _binary 'b03', 2003),
+  (4, 4, 'row-04', _binary 'b04', 2004),
+  (5, 5, 'row-05', _binary 'b05', 2005),
+  (6, 6, 'row-06', _binary 'b06', 2006),
+  (7, 7, 'row-07', _binary 'b07', 2007),
+  (8, 8, 'row-08', _binary 'b08', 2008),
+  (9, 9, 'row-09', _binary 'b09', 2009),
+  (10, 10, 'row-10', _binary 'b10', 2010),
+  (11, 11, 'row-11', _binary 'b11', 2011),
+  (12, 12, 'row-12', _binary 'b12', 2012);
+
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET @old_optimizer_switch=@@SESSION.optimizer_switch;
+SET SESSION rds_plan_cache=ON;
+SET SESSION optimizer_switch='mrr=on,mrr_cost_based=off,index_condition_pushdown=on';
+
+--echo # visible MRR range remains fallback
+FLUSH STATUS;
+let $pc_invalidations_before= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+
+--disable_warnings
+--replace_column 10 # 11 #
+EXPLAIN SELECT id, payload FROM pc4d_mrr FORCE INDEX (c_idx)
+  WHERE c BETWEEN 3 AND 8;
+--enable_warnings
+
+PREPARE mrr_range_stmt FROM
+  'SELECT id, payload FROM pc4d_mrr FORCE INDEX (c_idx)
+    WHERE c BETWEEN ? AND ?';
+
+SET @lo=20, @hi=30;
+EXECUTE mrr_range_stmt USING @lo, @hi;
+
+SET @lo=3, @hi=8;
+--sorted_result
+EXECUTE mrr_range_stmt USING @lo, @hi;
+--sorted_result
+EXECUTE mrr_range_stmt USING @lo, @hi;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_hits= query_get_value(SHOW STATUS LIKE 'Cached_plan_hits', Value, 1);
+if ($pc_hits != 0) {
+  --die MRR range fallback produced cached hits
+}
+let $pc_count= query_get_value(SHOW STATUS LIKE 'Cached_plan_count', Value, 1);
+if ($pc_count != 0) {
+  --die MRR range fallback leaked a READY cached plan
+}
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+if ($pc_invalidations_after != $pc_invalidations_before) {
+  --die MRR range fallback changed Cached_plan_invalidations
+}
+
+DEALLOCATE PREPARE mrr_range_stmt;
+
+--echo # TINYBLOB IS NOT UNKNOWN with NOT BETWEEN remains fallback
+FLUSH STATUS;
+let $pc_invalidations_before= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+
+PREPARE mrr_not_between_stmt FROM
+  'SELECT id, c FROM pc4d_mrr FORCE INDEX (c_idx)
+    WHERE tinyblob_col IS NOT UNKNOWN AND c NOT BETWEEN ? AND ?';
+
+SET @lo=4, @hi=8;
+--sorted_result
+EXECUTE mrr_not_between_stmt USING @lo, @hi;
+--sorted_result
+EXECUTE mrr_not_between_stmt USING @lo, @hi;
+--sorted_result
+EXECUTE mrr_not_between_stmt USING @lo, @hi;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_hits= query_get_value(SHOW STATUS LIKE 'Cached_plan_hits', Value, 1);
+if ($pc_hits != 0) {
+  --die NOT BETWEEN MRR fallback produced cached hits
+}
+let $pc_count= query_get_value(SHOW STATUS LIKE 'Cached_plan_count', Value, 1);
+if ($pc_count != 0) {
+  --die NOT BETWEEN MRR fallback leaked a READY cached plan
+}
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+if ($pc_invalidations_after != $pc_invalidations_before) {
+  --die NOT BETWEEN MRR fallback changed Cached_plan_invalidations
+}
+
+DEALLOCATE PREPARE mrr_not_between_stmt;
+
+--echo # YEAR range remains fallback
+FLUSH STATUS;
+let $pc_invalidations_before= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+
+PREPARE mrr_year_stmt FROM
+  'SELECT id, year_col FROM pc4d_mrr FORCE INDEX (year_idx)
+    WHERE year_col BETWEEN ? AND ?';
+
+SET @year_lo=1990, @year_hi=1991;
+EXECUTE mrr_year_stmt USING @year_lo, @year_hi;
+
+SET @year_lo=2003, @year_hi=2008;
+--sorted_result
+EXECUTE mrr_year_stmt USING @year_lo, @year_hi;
+--sorted_result
+EXECUTE mrr_year_stmt USING @year_lo, @year_hi;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_hits= query_get_value(SHOW STATUS LIKE 'Cached_plan_hits', Value, 1);
+if ($pc_hits != 0) {
+  --die YEAR range fallback produced cached hits
+}
+let $pc_count= query_get_value(SHOW STATUS LIKE 'Cached_plan_count', Value, 1);
+if ($pc_count != 0) {
+  --die YEAR range fallback leaked a READY cached plan
+}
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+if ($pc_invalidations_after != $pc_invalidations_before) {
+  --die YEAR range fallback changed Cached_plan_invalidations
+}
+
+DEALLOCATE PREPARE mrr_year_stmt;
+
+--echo # sorted grouped MRR-related range remains fallback
+FLUSH STATUS;
+let $pc_invalidations_before= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+
+--disable_warnings
+--replace_column 10 # 11 #
+EXPLAIN SELECT c AS c1 FROM pc4d_mrr FORCE INDEX (c_idx)
+  WHERE payload IS NOT NULL AND c NOT BETWEEN 4 AND 8
+  GROUP BY 1 ORDER BY 1;
+--enable_warnings
+
+PREPARE mrr_sorted_stmt FROM
+  'SELECT c AS c1 FROM pc4d_mrr FORCE INDEX (c_idx)
+    WHERE payload IS NOT NULL AND c NOT BETWEEN ? AND ?
+    GROUP BY 1 ORDER BY 1';
+
+SET @lo=4, @hi=8;
+EXECUTE mrr_sorted_stmt USING @lo, @hi;
+EXECUTE mrr_sorted_stmt USING @lo, @hi;
+EXECUTE mrr_sorted_stmt USING @lo, @hi;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_hits= query_get_value(SHOW STATUS LIKE 'Cached_plan_hits', Value, 1);
+if ($pc_hits != 0) {
+  --die sorted MRR fallback produced cached hits
+}
+let $pc_count= query_get_value(SHOW STATUS LIKE 'Cached_plan_count', Value, 1);
+if ($pc_count != 0) {
+  --die sorted MRR fallback leaked a READY cached plan
+}
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+if ($pc_invalidations_after != $pc_invalidations_before) {
+  --die sorted MRR fallback changed Cached_plan_invalidations
+}
+
+DEALLOCATE PREPARE mrr_sorted_stmt;
+
+SET SESSION optimizer_switch=@old_optimizer_switch;
+DROP TABLE pc4d_mrr;
+SET SESSION rds_plan_cache=@old_rds_plan_cache;

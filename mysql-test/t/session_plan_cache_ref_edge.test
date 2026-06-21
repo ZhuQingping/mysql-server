@@ -1,0 +1,148 @@
+--echo # Phase 4D-2: ref edge cases
+
+CREATE TABLE pc4d_ref_edge (
+  id INT PRIMARY KEY,
+  a INT NOT NULL,
+  b INT NOT NULL,
+  c INT NULL,
+  v VARCHAR(16),
+  KEY ab_idx(a, b),
+  KEY c_idx(c)
+) ENGINE=InnoDB;
+INSERT INTO pc4d_ref_edge VALUES
+  (1, 1, 1, 10, 'edge-11'),
+  (2, 1, 2, 20, 'edge-12'),
+  (3, 2, 1, NULL, 'edge-21-null'),
+  (4, 2, 2, NULL, 'edge-22-null'),
+  (5, 3, 1, 30, 'edge-31');
+
+SET SESSION rds_plan_cache=ON;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+--echo # composite non-unique ref key rebuilds all key parts
+--disable_warnings
+--replace_column 10 # 11 #
+EXPLAIN SELECT id, v FROM pc4d_ref_edge FORCE INDEX (ab_idx)
+  WHERE a = 1 AND b = 1;
+--enable_warnings
+
+PREPARE composite_stmt FROM
+  'SELECT id, v FROM pc4d_ref_edge FORCE INDEX (ab_idx) WHERE a = ? AND b = ?';
+
+SET @a=1, @b=1;
+EXECUTE composite_stmt USING @a, @b;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET @a=1, @b=2;
+EXECUTE composite_stmt USING @a, @b;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET @a=2, @b=1;
+EXECUTE composite_stmt USING @a, @b;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DEALLOCATE PREPARE composite_stmt;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+--echo # nullable ref key does not return stale rows for NULL parameters
+--disable_warnings
+--replace_column 10 # 11 #
+EXPLAIN SELECT id, v FROM pc4d_ref_edge FORCE INDEX (c_idx)
+  WHERE c = 10;
+--enable_warnings
+
+PREPARE nullable_stmt FROM
+  'SELECT id, v FROM pc4d_ref_edge FORCE INDEX (c_idx) WHERE c = ?';
+
+SET @c=10;
+EXECUTE nullable_stmt USING @c;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET @c=NULL;
+EXECUTE nullable_stmt USING @c;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET @c=30;
+EXECUTE nullable_stmt USING @c;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DEALLOCATE PREPARE nullable_stmt;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+--echo # non-covering ref_or_null with ICP falls back and returns current key rows plus NULL key rows
+--disable_warnings
+--replace_column 10 # 11 #
+EXPLAIN SELECT id, v FROM pc4d_ref_edge FORCE INDEX (c_idx)
+  WHERE c = 10 OR c IS NULL;
+--enable_warnings
+
+PREPARE ref_or_null_stmt FROM
+  'SELECT id, v FROM pc4d_ref_edge FORCE INDEX (c_idx) WHERE c = ? OR c IS NULL';
+
+SET @c=10;
+--sorted_result
+EXECUTE ref_or_null_stmt USING @c;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET @c=20;
+--sorted_result
+EXECUTE ref_or_null_stmt USING @c;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET @c=999;
+--sorted_result
+EXECUTE ref_or_null_stmt USING @c;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DEALLOCATE PREPARE ref_or_null_stmt;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+--echo # missing primary-key row falls back without a stale cached hit
+--disable_warnings
+--replace_column 10 # 11 #
+EXPLAIN SELECT v FROM pc4d_ref_edge FORCE INDEX (PRIMARY)
+  WHERE id = 1;
+--enable_warnings
+
+PREPARE missing_stmt FROM
+  'SELECT v FROM pc4d_ref_edge FORCE INDEX (PRIMARY) WHERE id = ?';
+
+SET @id=1;
+EXECUTE missing_stmt USING @id;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET @id=999;
+EXECUTE missing_stmt USING @id;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DEALLOCATE PREPARE missing_stmt;
+
+DROP TABLE pc4d_ref_edge;

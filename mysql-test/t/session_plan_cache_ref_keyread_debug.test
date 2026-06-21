@@ -1,0 +1,102 @@
+--source include/have_debug.inc
+
+--echo # Phase 5U: cached covering ref reads preserve key-read
+
+CREATE TABLE pc5u_keyread (
+  id INT NOT NULL,
+  c INT NULL,
+  pad VARCHAR(64),
+  PRIMARY KEY (id),
+  KEY c_id_idx (c, id)
+) ENGINE=InnoDB;
+
+INSERT INTO pc5u_keyread VALUES
+  (1, 10, 'ten-a'),
+  (2, 10, 'ten-b'),
+  (3, 20, 'twenty'),
+  (4, NULL, 'null-a'),
+  (5, NULL, 'null-b'),
+  (6, 30, 'thirty');
+
+SET SESSION rds_plan_cache=ON;
+
+--echo # The optimizer reports a covering secondary ref read.
+--disable_warnings
+--replace_column 10 # 11 #
+EXPLAIN SELECT id, c FROM pc5u_keyread FORCE INDEX (c_id_idx)
+  WHERE c = 10;
+--enable_warnings
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+PREPARE ref_stmt FROM
+  'SELECT id, c FROM pc5u_keyread FORCE INDEX (c_id_idx) WHERE c = ?';
+
+SET @c=10;
+--sorted_result
+EXECUTE ref_stmt USING @c;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+--echo # Cached ref apply must enable key-read before the ref iterator reads.
+SET SESSION debug='+d,plan_cache_require_ref_keyread';
+
+SET @c=20;
+--sorted_result
+EXECUTE ref_stmt USING @c;
+
+SET @c=30;
+--sorted_result
+EXECUTE ref_stmt USING @c;
+
+SET SESSION debug='-d,plan_cache_require_ref_keyread';
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DEALLOCATE PREPARE ref_stmt;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+--echo # The optimizer reports a covering ref_or_null read.
+--disable_warnings
+--replace_column 10 # 11 #
+EXPLAIN SELECT id, c FROM pc5u_keyread FORCE INDEX (c_id_idx)
+  WHERE c = 10 OR c IS NULL;
+--enable_warnings
+
+PREPARE ref_or_null_stmt FROM
+  'SELECT id, c FROM pc5u_keyread FORCE INDEX (c_id_idx) WHERE c = ? OR c IS NULL';
+
+SET @c=10;
+--sorted_result
+EXECUTE ref_or_null_stmt USING @c;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+--echo # Cached ref_or_null apply must also preserve key-read.
+SET SESSION debug='+d,plan_cache_require_ref_keyread';
+
+SET @c=20;
+--sorted_result
+EXECUTE ref_or_null_stmt USING @c;
+
+SET @c=999;
+--sorted_result
+EXECUTE ref_or_null_stmt USING @c;
+
+SET SESSION debug='-d,plan_cache_require_ref_keyread';
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DEALLOCATE PREPARE ref_or_null_stmt;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DROP TABLE pc5u_keyread;

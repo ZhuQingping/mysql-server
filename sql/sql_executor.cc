@@ -3569,16 +3569,8 @@ int join_read_const_table(JOIN_TAB *tab, POSITION *pos) {
 
   if (tab->type() == JT_SYSTEM)
     error = read_system(table);
-  else {
-    if (!table->key_read && table->covering_keys.is_set(tab->ref().key) &&
-        !table->no_keyread &&
-        (int)table->reginfo.lock_type <= (int)TL_READ_HIGH_PRIORITY) {
-      table->set_keyread(true);
-      tab->set_index(tab->ref().key);
-    }
-    error = read_const(table, &tab->ref());
-    table->set_keyread(false);
-  }
+  else
+    error = read_const_maybe_key_read(tab);
 
   if (error) {
     // Promote error to fatal if an actual error was reported
@@ -3660,9 +3652,34 @@ static int read_system(TABLE *table) {
   return table->has_row() ? 0 : -1;
 }
 
+int read_const_maybe_key_read(QEP_shared_owner *qs_owner) {
+  TABLE *table = qs_owner->table();
+  Index_lookup *ref = &qs_owner->ref();
+
+  if (!table->key_read && table->covering_keys.is_set(ref->key) &&
+      !table->no_keyread &&
+      static_cast<int>(table->reginfo.lock_type) <=
+          static_cast<int>(TL_READ_HIGH_PRIORITY)) {
+    table->set_keyread(true);
+    qs_owner->set_index(ref->key);
+  }
+
+  int error = read_const(table, ref);
+  table->set_keyread(false);
+  return error;
+}
+
+/// @see read_const_maybe_key_read().
 int read_const(TABLE *table, Index_lookup *ref) {
   int error;
   DBUG_TRACE;
+
+  DBUG_EXECUTE_IF("plan_cache_require_const_keyread", {
+    if (!table->key_read) {
+      my_error(ER_UNKNOWN_ERROR, MYF(0));
+      return 1;
+    }
+  });
 
   if (!table->is_started())  // If first read
   {

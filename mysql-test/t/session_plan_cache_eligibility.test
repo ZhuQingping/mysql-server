@@ -1,0 +1,150 @@
+--echo # Phase 4D-5: unsupported eligibility boundaries
+
+CREATE TABLE pc4d_e1 (
+  id INT PRIMARY KEY,
+  c INT,
+  v VARCHAR(16)
+) ENGINE=InnoDB;
+CREATE TABLE pc4d_e2 (
+  id INT PRIMARY KEY,
+  w VARCHAR(16)
+) ENGINE=InnoDB;
+INSERT INTO pc4d_e1 VALUES
+  (1, 10, 'one'),
+  (2, 20, 'two'),
+  (3, 30, 'three');
+INSERT INTO pc4d_e2 VALUES
+  (1, 'uno'),
+  (2, 'dos'),
+  (3, 'tres');
+
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET SESSION rds_plan_cache=ON;
+
+--echo # multi-table joins remain unsupported for cached hits
+FLUSH STATUS;
+let $pc_invalidations_before= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+PREPARE join_stmt FROM
+  'SELECT t1.v, t2.w FROM pc4d_e1 t1 JOIN pc4d_e2 t2 ON t2.id = t1.id WHERE t1.id = ?';
+
+SET @id=1;
+EXECUTE join_stmt USING @id;
+
+SET @id=2;
+EXECUTE join_stmt USING @id;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_hits= query_get_value(SHOW STATUS LIKE 'Cached_plan_hits', Value, 1);
+if ($pc_hits != 0) {
+  --die multi-table join fallback produced cached hits
+}
+let $pc_count= query_get_value(SHOW STATUS LIKE 'Cached_plan_count', Value, 1);
+if ($pc_count != 0) {
+  --die multi-table join fallback leaked a READY cached plan
+}
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+if ($pc_invalidations_after != $pc_invalidations_before) {
+  --die multi-table join fallback changed Cached_plan_invalidations
+}
+DEALLOCATE PREPARE join_stmt;
+
+--echo # in-query user-variable assignments remain unsupported for cached hits
+FLUSH STATUS;
+let $pc_invalidations_before= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+--disable_warnings
+PREPARE assign_stmt FROM
+  'SELECT @pc4d_seen := v FROM pc4d_e1 WHERE id = ?';
+--enable_warnings
+
+SET @id=1;
+EXECUTE assign_stmt USING @id;
+
+SET @id=2;
+EXECUTE assign_stmt USING @id;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_hits= query_get_value(SHOW STATUS LIKE 'Cached_plan_hits', Value, 1);
+if ($pc_hits != 0) {
+  --die assignment fallback produced cached hits
+}
+let $pc_count= query_get_value(SHOW STATUS LIKE 'Cached_plan_count', Value, 1);
+if ($pc_count != 0) {
+  --die assignment fallback leaked a READY cached plan
+}
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+if ($pc_invalidations_after != $pc_invalidations_before) {
+  --die assignment fallback changed Cached_plan_invalidations
+}
+DEALLOCATE PREPARE assign_stmt;
+
+--echo # set operations remain unsupported for cached hits
+FLUSH STATUS;
+let $pc_invalidations_before= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+PREPARE union_stmt FROM
+  'SELECT v AS out_col FROM pc4d_e1 WHERE id = ? UNION ALL SELECT w AS out_col FROM pc4d_e2 WHERE id = ?';
+
+SET @id1=1, @id2=2;
+--sorted_result
+EXECUTE union_stmt USING @id1, @id2;
+
+SET @id1=3, @id2=1;
+--sorted_result
+EXECUTE union_stmt USING @id1, @id2;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_hits= query_get_value(SHOW STATUS LIKE 'Cached_plan_hits', Value, 1);
+if ($pc_hits != 0) {
+  --die set-operation fallback produced cached hits
+}
+let $pc_count= query_get_value(SHOW STATUS LIKE 'Cached_plan_count', Value, 1);
+if ($pc_count != 0) {
+  --die set-operation fallback leaked a READY cached plan
+}
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+if ($pc_invalidations_after != $pc_invalidations_before) {
+  --die set-operation fallback changed Cached_plan_invalidations
+}
+DEALLOCATE PREPARE union_stmt;
+
+--echo # temporary tables remain unsupported for cached hits
+CREATE TEMPORARY TABLE pc4d_tmp (
+  id INT PRIMARY KEY,
+  v VARCHAR(16)
+) ENGINE=InnoDB;
+INSERT INTO pc4d_tmp VALUES
+  (1, 'tmp-one'),
+  (2, 'tmp-two');
+
+FLUSH STATUS;
+let $pc_invalidations_before= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+PREPARE tmp_stmt FROM 'SELECT v FROM pc4d_tmp WHERE id = ?';
+
+SET @id=1;
+EXECUTE tmp_stmt USING @id;
+
+SET @id=2;
+EXECUTE tmp_stmt USING @id;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_hits= query_get_value(SHOW STATUS LIKE 'Cached_plan_hits', Value, 1);
+if ($pc_hits != 0) {
+  --die temporary-table fallback produced cached hits
+}
+let $pc_count= query_get_value(SHOW STATUS LIKE 'Cached_plan_count', Value, 1);
+if ($pc_count != 0) {
+  --die temporary-table fallback leaked a READY cached plan
+}
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+if ($pc_invalidations_after != $pc_invalidations_before) {
+  --die temporary-table fallback changed Cached_plan_invalidations
+}
+DEALLOCATE PREPARE tmp_stmt;
+
+DROP TEMPORARY TABLE pc4d_tmp;
+DROP TABLE pc4d_e2;
+DROP TABLE pc4d_e1;
+SET SESSION rds_plan_cache=@old_rds_plan_cache;

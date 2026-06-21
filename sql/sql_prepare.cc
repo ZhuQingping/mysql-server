@@ -167,6 +167,7 @@ When one supplies long data for a placeholder:
 #include "sql/sql_lex.h"
 #include "sql/sql_list.h"
 #include "sql/sql_parse.h"  // sql_command_flags
+#include "sql/sql_plan_cache.h"
 #include "sql/sql_profile.h"
 #include "sql/sql_query_rewrite.h"
 #include "sql/sql_rewrite.h"  // mysql_rewrite_query
@@ -3221,6 +3222,8 @@ bool Prepared_statement::reprepare(THD *thd) {
   Prepared_statement copy(thd);
 
   swap_prepared_statement(&copy);
+  if (copy.m_lex != nullptr)
+    plan_cache::invalidate_cached_plan(copy.m_lex->query_block);
   auto copy_guard =
       create_scope_guard([&]() { swap_prepared_statement(&copy); });
 

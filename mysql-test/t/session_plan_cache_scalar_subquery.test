@@ -1,0 +1,72 @@
+--echo # Phase 4D-6: restricted scalar subquery plan-cache behavior
+
+CREATE TABLE pc4d_s_outer (
+  id INT PRIMARY KEY,
+  v VARCHAR(16)
+) ENGINE=InnoDB;
+CREATE TABLE pc4d_s_inner (
+  id INT PRIMARY KEY,
+  marker INT NOT NULL,
+  label VARCHAR(16),
+  KEY marker_idx(marker)
+) ENGINE=InnoDB;
+
+INSERT INTO pc4d_s_outer VALUES
+  (10, 'outer-ten'),
+  (20, 'outer-twenty'),
+  (30, 'outer-thirty');
+INSERT INTO pc4d_s_inner VALUES
+  (10, 100, 'outer-ten'),
+  (20, 200, 'outer-twenty'),
+  (30, 300, 'outer-thirty');
+
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET SESSION rds_plan_cache=ON;
+
+--echo # non-correlated scalar subquery caches outer and inner query blocks
+FLUSH STATUS;
+PREPARE scalar_stmt FROM
+  'SELECT v FROM pc4d_s_outer WHERE id = (SELECT id FROM pc4d_s_inner FORCE INDEX(marker_idx) WHERE marker = ?)';
+
+SET @marker=100;
+EXECUTE scalar_stmt USING @marker;
+
+SET @marker=200;
+EXECUTE scalar_stmt USING @marker;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+DEALLOCATE PREPARE scalar_stmt;
+
+--echo # non-scalar subqueries remain unsupported for cached hits
+FLUSH STATUS;
+PREPARE nonscalar_stmt FROM
+  'SELECT v FROM pc4d_s_outer WHERE id IN (SELECT id FROM pc4d_s_inner WHERE marker >= ?)';
+
+SET @marker=200;
+--sorted_result
+EXECUTE nonscalar_stmt USING @marker;
+
+SET @marker=100;
+--sorted_result
+EXECUTE nonscalar_stmt USING @marker;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+DEALLOCATE PREPARE nonscalar_stmt;
+
+--echo # correlated scalar subqueries remain unsupported for cached hits
+FLUSH STATUS;
+PREPARE correlated_stmt FROM
+  'SELECT o.v FROM pc4d_s_outer o WHERE o.v = (SELECT i.label FROM pc4d_s_inner i WHERE i.id = o.id)';
+
+--sorted_result
+EXECUTE correlated_stmt;
+
+--sorted_result
+EXECUTE correlated_stmt;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+DEALLOCATE PREPARE correlated_stmt;
+
+DROP TABLE pc4d_s_inner;
+DROP TABLE pc4d_s_outer;
+SET SESSION rds_plan_cache=@old_rds_plan_cache;

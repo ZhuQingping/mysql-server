@@ -256,6 +256,7 @@ bool make_group_fields(JOIN *main_join, JOIN *curr_join);
 bool check_unique_constraint(TABLE *table);
 ulonglong unique_hash(const Field *field, ulonglong *hash);
 int read_const(TABLE *table, Index_lookup *ref);
+int read_const_maybe_key_read(QEP_shared_owner *qs_owner);
 
 class QEP_TAB : public QEP_shared_owner {
  public:

@@ -1,0 +1,141 @@
+# Phase 4D-11: commercial 0008/0009-like tmp-table/aggregate boundary
+CREATE TABLE pc4d_tmp (
+id INT NOT NULL,
+tinyint_field TINYINT DEFAULT NULL,
+smallint_field SMALLINT DEFAULT NULL,
+bigint_field BIGINT DEFAULT NULL,
+float_field FLOAT DEFAULT NULL,
+datetime_field DATETIME DEFAULT NULL,
+timestamp_field TIMESTAMP NULL DEFAULT NULL,
+char_field CHAR(8) DEFAULT NULL,
+varchar_field VARCHAR(10) DEFAULT NULL,
+text_field TINYTEXT,
+PRIMARY KEY (id),
+UNIQUE KEY idx_uni (id, tinyint_field, smallint_field, bigint_field),
+KEY idx_f (char_field, varchar_field),
+KEY idx_n (float_field),
+KEY idx_d (datetime_field, timestamp_field)
+) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+INSERT INTO pc4d_tmp VALUES
+(67401, 1, 1, 10, 1.25, '2018-08-08 00:00:00', NULL, 'c1', 'v1', 'alpha'),
+(67501, 2, 2, 20, 2.50, '2018-08-09 00:00:00', NULL, 'c2', 'v2', 'beta'),
+(67601, 3, 3, 30, 3.75, '2018-08-08 00:00:00', NULL, 'c3', 'v3', 'gamma'),
+(68101, 4, 4, 40, 4.50, '2018-08-10 00:00:00', NULL, 'c4', 'v4', 'delta');
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET @old_sql_mode=@@SESSION.sql_mode;
+SET SESSION rds_plan_cache=ON;
+SET SESSION sql_mode='';
+FLUSH STATUS;
+# GROUP BY/HAVING/ORDER BY with TINYTEXT remains fallback
+EXPLAIN SELECT HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BUFFER_RESULT
+id, tinyint_field, smallint_field, bigint_field, float_field,
+datetime_field, timestamp_field, char_field, varchar_field, text_field
+FROM pc4d_tmp AS t1
+WHERE id IN (67401, 67501, 67601, 68101)
+GROUP BY id, text_field
+HAVING datetime_field LIKE '2018-08-08 00:00:00' OR MAX(smallint_field) > 2
+ORDER BY id, text_field
+LIMIT 2200000 OFFSET 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	range	PRIMARY,idx_uni	PRIMARY	4	NULL	#	#	Using where; Using temporary; Using filesort
+PREPARE tmp_table_stmt FROM
+'SELECT HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BUFFER_RESULT
+      id, tinyint_field, smallint_field, bigint_field, float_field,
+      datetime_field, timestamp_field, char_field, varchar_field, text_field
+    FROM pc4d_tmp AS t1
+    WHERE id IN (?, ?, ?, ?)
+    GROUP BY id, text_field
+    HAVING datetime_field LIKE ? OR MAX(smallint_field) > ?
+    ORDER BY id, text_field
+    LIMIT 2200000 OFFSET 0';
+SET @id1=67401, @id2=67501, @id3=67601, @id4=68101;
+SET @dt='2018-08-08 00:00:00', @min_smallint=2;
+EXECUTE tmp_table_stmt USING @id1, @id2, @id3, @id4, @dt, @min_smallint;
+id	tinyint_field	smallint_field	bigint_field	float_field	datetime_field	timestamp_field	char_field	varchar_field	text_field
+67401	1	1	10	1.25	2018-08-08 00:00:00	NULL	c1	v1	alpha
+67601	3	3	30	3.75	2018-08-08 00:00:00	NULL	c3	v3	gamma
+68101	4	4	40	4.5	2018-08-10 00:00:00	NULL	c4	v4	delta
+EXECUTE tmp_table_stmt USING @id1, @id2, @id3, @id4, @dt, @min_smallint;
+id	tinyint_field	smallint_field	bigint_field	float_field	datetime_field	timestamp_field	char_field	varchar_field	text_field
+67401	1	1	10	1.25	2018-08-08 00:00:00	NULL	c1	v1	alpha
+67601	3	3	30	3.75	2018-08-08 00:00:00	NULL	c3	v3	gamma
+68101	4	4	40	4.5	2018-08-10 00:00:00	NULL	c4	v4	delta
+EXECUTE tmp_table_stmt USING @id1, @id2, @id3, @id4, @dt, @min_smallint;
+id	tinyint_field	smallint_field	bigint_field	float_field	datetime_field	timestamp_field	char_field	varchar_field	text_field
+67401	1	1	10	1.25	2018-08-08 00:00:00	NULL	c1	v1	alpha
+67601	3	3	30	3.75	2018-08-08 00:00:00	NULL	c3	v3	gamma
+68101	4	4	40	4.5	2018-08-10 00:00:00	NULL	c4	v4	delta
+EXECUTE tmp_table_stmt USING @id1, @id2, @id3, @id4, @dt, @min_smallint;
+id	tinyint_field	smallint_field	bigint_field	float_field	datetime_field	timestamp_field	char_field	varchar_field	text_field
+67401	1	1	10	1.25	2018-08-08 00:00:00	NULL	c1	v1	alpha
+67601	3	3	30	3.75	2018-08-08 00:00:00	NULL	c3	v3	gamma
+68101	4	4	40	4.5	2018-08-10 00:00:00	NULL	c4	v4	delta
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+DEALLOCATE PREPARE tmp_table_stmt;
+# many aggregate functions remain fallback
+FLUSH STATUS;
+PREPARE aggregate_stmt FROM
+'SELECT DISTINCT STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BUFFER_RESULT
+      AVG(smallint_field), AVG(DISTINCT smallint_field),
+      BIT_AND(tinyint_field), BIT_OR(tinyint_field), BIT_XOR(tinyint_field),
+      COUNT(1), COUNT(*), COUNT(DISTINCT float_field),
+      COUNT(DISTINCT tinyint_field, smallint_field, bigint_field),
+      MAX(smallint_field), MAX(DISTINCT smallint_field),
+      MIN(smallint_field), MIN(DISTINCT smallint_field),
+      STD(float_field), STDDEV(float_field), STDDEV_SAMP(float_field),
+      SUM(smallint_field), SUM(DISTINCT smallint_field),
+      VAR_POP(bigint_field), VAR_SAMP(bigint_field), VARIANCE(bigint_field)
+    FROM pc4d_tmp
+    WHERE id IN (?, ?, ?, ?)
+    LIMIT 2200000 OFFSET 0';
+SET @id1=1280601, @id2=1280701, @id3=1280801, @id4=1280901;
+EXECUTE aggregate_stmt USING @id1, @id2, @id3, @id4;
+AVG(smallint_field)	AVG(DISTINCT smallint_field)	BIT_AND(tinyint_field)	BIT_OR(tinyint_field)	BIT_XOR(tinyint_field)	COUNT(1)	COUNT(*)	COUNT(DISTINCT float_field)	COUNT(DISTINCT tinyint_field, smallint_field, bigint_field)	MAX(smallint_field)	MAX(DISTINCT smallint_field)	MIN(smallint_field)	MIN(DISTINCT smallint_field)	STD(float_field)	STDDEV(float_field)	STDDEV_SAMP(float_field)	SUM(smallint_field)	SUM(DISTINCT smallint_field)	VAR_POP(bigint_field)	VAR_SAMP(bigint_field)	VARIANCE(bigint_field)
+NULL	NULL	18446744073709551615	0	0	0	0	0	0	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+EXECUTE aggregate_stmt USING @id1, @id2, @id3, @id4;
+AVG(smallint_field)	AVG(DISTINCT smallint_field)	BIT_AND(tinyint_field)	BIT_OR(tinyint_field)	BIT_XOR(tinyint_field)	COUNT(1)	COUNT(*)	COUNT(DISTINCT float_field)	COUNT(DISTINCT tinyint_field, smallint_field, bigint_field)	MAX(smallint_field)	MAX(DISTINCT smallint_field)	MIN(smallint_field)	MIN(DISTINCT smallint_field)	STD(float_field)	STDDEV(float_field)	STDDEV_SAMP(float_field)	SUM(smallint_field)	SUM(DISTINCT smallint_field)	VAR_POP(bigint_field)	VAR_SAMP(bigint_field)	VARIANCE(bigint_field)
+NULL	NULL	18446744073709551615	0	0	0	0	0	0	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+EXECUTE aggregate_stmt USING @id1, @id2, @id3, @id4;
+AVG(smallint_field)	AVG(DISTINCT smallint_field)	BIT_AND(tinyint_field)	BIT_OR(tinyint_field)	BIT_XOR(tinyint_field)	COUNT(1)	COUNT(*)	COUNT(DISTINCT float_field)	COUNT(DISTINCT tinyint_field, smallint_field, bigint_field)	MAX(smallint_field)	MAX(DISTINCT smallint_field)	MIN(smallint_field)	MIN(DISTINCT smallint_field)	STD(float_field)	STDDEV(float_field)	STDDEV_SAMP(float_field)	SUM(smallint_field)	SUM(DISTINCT smallint_field)	VAR_POP(bigint_field)	VAR_SAMP(bigint_field)	VARIANCE(bigint_field)
+NULL	NULL	18446744073709551615	0	0	0	0	0	0	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+EXECUTE aggregate_stmt USING @id1, @id2, @id3, @id4;
+AVG(smallint_field)	AVG(DISTINCT smallint_field)	BIT_AND(tinyint_field)	BIT_OR(tinyint_field)	BIT_XOR(tinyint_field)	COUNT(1)	COUNT(*)	COUNT(DISTINCT float_field)	COUNT(DISTINCT tinyint_field, smallint_field, bigint_field)	MAX(smallint_field)	MAX(DISTINCT smallint_field)	MIN(smallint_field)	MIN(DISTINCT smallint_field)	STD(float_field)	STDDEV(float_field)	STDDEV_SAMP(float_field)	SUM(smallint_field)	SUM(DISTINCT smallint_field)	VAR_POP(bigint_field)	VAR_SAMP(bigint_field)	VARIANCE(bigint_field)
+NULL	NULL	18446744073709551615	0	0	0	0	0	0	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+DEALLOCATE PREPARE aggregate_stmt;
+# JSON aggregate functions remain fallback
+FLUSH STATUS;
+PREPARE json_aggregate_stmt FROM
+'SELECT JSON_ARRAYAGG(varchar_field), JSON_OBJECTAGG(id, varchar_field)
+    FROM pc4d_tmp
+    WHERE id IN (?, ?, ?, ?)';
+SET @id1=1280601, @id2=1280701, @id3=1280801, @id4=1280901;
+EXECUTE json_aggregate_stmt USING @id1, @id2, @id3, @id4;
+JSON_ARRAYAGG(varchar_field)	JSON_OBJECTAGG(id, varchar_field)
+NULL	NULL
+EXECUTE json_aggregate_stmt USING @id1, @id2, @id3, @id4;
+JSON_ARRAYAGG(varchar_field)	JSON_OBJECTAGG(id, varchar_field)
+NULL	NULL
+EXECUTE json_aggregate_stmt USING @id1, @id2, @id3, @id4;
+JSON_ARRAYAGG(varchar_field)	JSON_OBJECTAGG(id, varchar_field)
+NULL	NULL
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+DEALLOCATE PREPARE json_aggregate_stmt;
+SET SESSION sql_mode=@old_sql_mode;
+SET SESSION rds_plan_cache=@old_rds_plan_cache;
+DROP TABLE pc4d_tmp;

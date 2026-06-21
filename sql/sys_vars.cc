@@ -2067,6 +2067,21 @@ static Sys_var_ulong Sys_information_schema_stats_expiry(
     SESSION_VAR(information_schema_stats_expiry), CMD_LINE(REQUIRED_ARG),
     VALID_RANGE(0, LONG_TIMEOUT), DEFAULT(24 * 60 * 60), BLOCK_SIZE(1));
 
+static Sys_var_bool Sys_plan_cache("rds_plan_cache",
+                                   "Allows the server to store query plans "
+                                   "into a cache and to reuse them for next "
+                                   "queries.",
+                                   SESSION_VAR(rds_plan_cache),
+                                   CMD_LINE(OPT_ARG), DEFAULT(true));
+
+static Sys_var_double Sys_plan_cache_allow_change_ratio(
+    "rds_plan_cache_allow_change_ratio",
+    "If the number of rows in the table is changed more than this fraction, "
+    "cached plan will be invalidated. A value of 0 disables row-count drift "
+    "invalidation.",
+    SESSION_VAR(rds_plan_cache_allow_change_ratio), CMD_LINE(REQUIRED_ARG),
+    VALID_RANGE(0, DBL_MAX), DEFAULT(0.2));
+
 static Sys_var_charptr Sys_datadir(
     "datadir", "Path to the database root directory",
     READ_ONLY NON_PERSIST GLOBAL_VAR(mysql_real_data_home_ptr),

@@ -83,7 +83,12 @@
 #define PFS_STATEMENTS_STACK_SIZE 10
 #endif
 #ifndef PFS_MAX_MEMORY_CLASS
-#define PFS_MAX_MEMORY_CLASS 450
+/*
+  Session plan cache adds a server memory instrument. Keep the commercial
+  plan-cache headroom so later memory instruments are not dropped when the
+  upstream default limit is reached.
+*/
+#define PFS_MAX_MEMORY_CLASS 454
 #endif
 
 #ifndef PFS_MAX_GLOBAL_SERVER_ERRORS

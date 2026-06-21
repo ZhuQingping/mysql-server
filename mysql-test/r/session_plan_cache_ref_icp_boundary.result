@@ -1,0 +1,47 @@
+# Phase 5W: ref-family pushed ICP remains outside cached hits
+CREATE TABLE pc5w_ref_icp (
+id INT PRIMARY KEY,
+a INT NOT NULL,
+b INT NOT NULL,
+payload VARCHAR(16),
+KEY ab_idx (a, b)
+) ENGINE=InnoDB;
+INSERT INTO pc5w_ref_icp VALUES
+(1, 1, 1, 'a1-low-1'),
+(2, 1, 2, 'a1-low-2'),
+(3, 1, 7, 'a1-high-7'),
+(4, 1, 9, 'a1-high-9'),
+(5, 2, 3, 'a2-low-3'),
+(6, 2, 8, 'a2-high-8');
+SET SESSION rds_plan_cache=ON;
+# The optimizer reports a non-covering ref read with ICP.
+EXPLAIN SELECT id, payload FROM pc5w_ref_icp FORCE INDEX (ab_idx)
+WHERE a = 1 AND b + 0 > 5;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pc5w_ref_icp	NULL	ref	ab_idx	ab_idx	4	const	#	#	Using index condition
+PREPARE stmt FROM
+'SELECT id, payload FROM pc5w_ref_icp FORCE INDEX (ab_idx)
+    WHERE a = ? AND b + 0 > ?';
+# First execution runs normally and must not create a READY cached plan.
+SET @a=1, @b=5;
+EXECUTE stmt USING @a, @b;
+id	payload
+3	a1-high-7
+4	a1-high-9
+# Later executions must keep ICP filtering through normal optimization.
+SET @a=2, @b=5;
+EXECUTE stmt USING @a, @b;
+id	payload
+6	a2-high-8
+SET @a=1, @b=8;
+EXECUTE stmt USING @a, @b;
+id	payload
+4	a1-high-9
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+DEALLOCATE PREPARE stmt;
+DROP TABLE pc5w_ref_icp;

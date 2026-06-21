@@ -1,0 +1,63 @@
+# Phase 4D-9: commercial 0010-like timestamp/time ICP boundary
+CREATE TABLE pc4d_ti (
+id INT PRIMARY KEY,
+bigint_col BIGINT NOT NULL,
+date_col DATE DEFAULT NULL,
+timestamp_col TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+time_col TIME(6) DEFAULT NULL,
+varchar_col VARCHAR(255) DEFAULT NULL,
+KEY ts_time_idx(timestamp_col DESC, time_col DESC),
+KEY ts_varchar_idx(timestamp_col DESC, varchar_col(4) DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO pc4d_ti VALUES
+(6, 1, '1998-12-03', '2020-01-01 02:00:00.000000', '23:23:59.000000', 'bbbbbbbbbb'),
+(7, 1, '1998-12-03', '2020-01-01 02:00:00.000000', '23:23:59.000000', 'bbbbbbbbbb'),
+(8, 1, '1998-12-03', '2020-01-01 02:00:00.000000', '23:23:59.000000', 'bbbbbbbbbb'),
+(11, 1, '1998-11-03', '2020-02-03 02:00:00.000000', '10:59:59.000000', 'bbbbbbbbcd'),
+(12, 1, '1998-11-03', '2020-02-03 02:00:00.000000', '10:59:59.000000', 'bbbbbbbbcd'),
+(13, 1, '1998-11-03', '2020-02-03 02:00:00.000000', '10:59:59.000000', 'bbbbbbbbcd');
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET SESSION rds_plan_cache=ON;
+# timestamp equality-like range with time ICP remains fallback
+FLUSH STATUS;
+EXPLAIN SELECT date_col, bigint_col FROM pc4d_ti FORCE INDEX (ts_time_idx)
+WHERE time_col >= '07:59:59.000000'
+    AND timestamp_col BETWEEN '1995-09-02 12:20:00.000000'
+                          AND '1995-09-02 12:20:00.000000';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pc4d_ti	NULL	range	ts_time_idx	ts_time_idx	14	NULL	#	#	Using index condition
+PREPARE timestamp_icp_stmt FROM
+'SELECT date_col, bigint_col FROM pc4d_ti FORCE INDEX (ts_time_idx)
+    WHERE time_col >= ?
+      AND timestamp_col BETWEEN ''1995-09-02 12:20:00.000000'' AND ?';
+SET @time_limit='07:59:59.000000';
+SET @ts_high='1995-09-02 12:20:00.000000';
+EXECUTE timestamp_icp_stmt USING @time_limit, @ts_high;
+date_col	bigint_col
+SET @time_limit='01:59:59.000000';
+SET @ts_high='2020-03-02 10:00:00.000000';
+EXECUTE timestamp_icp_stmt USING @time_limit, @ts_high;
+date_col	bigint_col
+1998-11-03	1
+1998-11-03	1
+1998-11-03	1
+1998-12-03	1
+1998-12-03	1
+1998-12-03	1
+EXECUTE timestamp_icp_stmt USING @time_limit, @ts_high;
+date_col	bigint_col
+1998-11-03	1
+1998-11-03	1
+1998-11-03	1
+1998-12-03	1
+1998-12-03	1
+1998-12-03	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+DEALLOCATE PREPARE timestamp_icp_stmt;
+DROP TABLE pc4d_ti;
+SET SESSION rds_plan_cache=@old_rds_plan_cache;

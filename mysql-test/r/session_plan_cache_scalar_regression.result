@@ -1,0 +1,49 @@
+# Phase 4D-7: commercial 0005-like scalar follow-up boundary
+CREATE TABLE pc4d_sr (
+id INT DEFAULT NULL,
+sex ENUM('boy','girl','secret') DEFAULT 'secret',
+b BLOB
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO pc4d_sr VALUES
+(1, 'secret', _binary 'abc'),
+(2, 'secret', _binary 'abc'),
+(100, 'secret', REPEAT('a', 24)),
+(101, 'secret', REPEAT('x', 40)),
+(100, 'girl', _binary ''),
+(255, 'boy', REPEAT('b', 13));
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET SESSION rds_plan_cache=ON;
+# 0005-like HAVING/ORDER shape stays correct across repeated execution
+FLUSH STATUS;
+PREPARE scalar_regression_stmt FROM
+'SELECT sex, id, LENGTH(b) AS b_len,
+          CAST((SELECT AVG(id) FROM pc4d_sr) AS DECIMAL(10,4)) AS avg_id
+     FROM pc4d_sr
+    WHERE sex IS NOT NULL AND LENGTH(b) < ?
+   HAVING id > (SELECT AVG(id) FROM pc4d_sr)
+    ORDER BY sex DESC, id DESC';
+SET @len_limit=30;
+EXECUTE scalar_regression_stmt USING @len_limit;
+sex	id	b_len	avg_id
+secret	100	24	93.1667
+girl	100	0	93.1667
+boy	255	13	93.1667
+EXECUTE scalar_regression_stmt USING @len_limit;
+sex	id	b_len	avg_id
+secret	100	24	93.1667
+girl	100	0	93.1667
+boy	255	13	93.1667
+EXECUTE scalar_regression_stmt USING @len_limit;
+sex	id	b_len	avg_id
+secret	100	24	93.1667
+girl	100	0	93.1667
+boy	255	13	93.1667
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+DEALLOCATE PREPARE scalar_regression_stmt;
+DROP TABLE pc4d_sr;
+SET SESSION rds_plan_cache=@old_rds_plan_cache;

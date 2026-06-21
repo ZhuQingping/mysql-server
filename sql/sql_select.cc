@@ -112,6 +112,7 @@
 #include "sql/sql_list.h"
 #include "sql/sql_optimizer.h"  // JOIN
 #include "sql/sql_parse.h"      // bind_fields
+#include "sql/sql_plan_cache.h"
 #include "sql/sql_planner.h"    // calculate_condition_filter
 #include "sql/sql_resolver.h"
 #include "sql/sql_test.h"       // misc. debug printing utilities
@@ -129,10 +130,10 @@
 using std::max;
 using std::min;
 
-static store_key *get_store_key(THD *thd, Item *val, table_map used_tables,
-                                table_map const_tables,
-                                const KEY_PART_INFO *key_part, uchar *key_buff,
-                                uint maybe_null);
+store_key *get_store_key(THD *thd, Item *val, table_map used_tables,
+                         table_map const_tables,
+                         const KEY_PART_INFO *key_part, uchar *key_buff,
+                         uint maybe_null);
 
 using Global_tables_iterator =
     IntrusiveListIterator<Table_ref, &Table_ref::next_global>;
@@ -1987,16 +1988,20 @@ bool Query_block::optimize(THD *thd, bool finalize_access_paths) {
   DBUG_TRACE;
 
   assert(join == nullptr);
-  JOIN *const join_local = new (thd->mem_root) JOIN(thd, this);
-  if (!join_local) return true; /* purecov: inspected */
+  if (plan_cache::exec_cached_plan(this)) {
+    JOIN *const join_local = new (thd->mem_root) JOIN(thd, this);
+    if (!join_local) return true; /* purecov: inspected */
 
-  /*
-    Updating Query_block::join requires acquiring THD::LOCK_query_plan
-    to avoid races when EXPLAIN FOR CONNECTION is used.
-  */
-  thd->lock_query_plan();
-  join = join_local;
-  thd->unlock_query_plan();
+    /*
+      Updating Query_block::join requires acquiring THD::LOCK_query_plan
+      to avoid races when EXPLAIN FOR CONNECTION is used.
+    */
+    thd->lock_query_plan();
+    join = join_local;
+    thd->unlock_query_plan();
+  } else if (thd->is_error() || thd->killed.load() != THD::NOT_KILLED) {
+    return true;
+  }
 
   if (join->optimize(finalize_access_paths)) return true;
 
@@ -2571,10 +2576,10 @@ class store_key_json_item final : public store_key {
 
 }  // namespace
 
-static store_key *get_store_key(THD *thd, Item *val, table_map used_tables,
-                                table_map const_tables,
-                                const KEY_PART_INFO *key_part, uchar *key_buff,
-                                uint maybe_null) {
+store_key *get_store_key(THD *thd, Item *val, table_map used_tables,
+                         table_map const_tables,
+                         const KEY_PART_INFO *key_part, uchar *key_buff,
+                         uint maybe_null) {
   if (key_part->field->is_array()) {
     return new (thd->mem_root)
         store_key_json_item(thd, key_part->field, key_buff + maybe_null,

@@ -1,0 +1,189 @@
+--echo # Phase 4D-4: cached hit invalidation boundaries
+
+CREATE TABLE pc4d_inv (
+  id INT PRIMARY KEY,
+  c INT,
+  v VARCHAR(16)
+) ENGINE=InnoDB;
+INSERT INTO pc4d_inv VALUES
+  (1, 10, 'one'),
+  (2, 20, 'two'),
+  (3, 30, 'three');
+
+SET @old_optimizer_switch=@@SESSION.optimizer_switch;
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET @old_plan_cache_ratio=@@SESSION.rds_plan_cache_allow_change_ratio;
+SET SESSION rds_plan_cache=ON;
+
+--echo # optimizer_switch changes invalidate the cached plan before reuse
+FLUSH STATUS;
+SET SESSION optimizer_switch='index_condition_pushdown=on';
+PREPARE opt_stmt FROM 'SELECT v FROM pc4d_inv WHERE id = ?';
+
+SET @id=1;
+EXECUTE opt_stmt USING @id;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET SESSION optimizer_switch='index_condition_pushdown=off';
+SET @id=2;
+EXECUTE opt_stmt USING @id;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET @id=3;
+EXECUTE opt_stmt USING @id;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DEALLOCATE PREPARE opt_stmt;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+SET SESSION optimizer_switch=@old_optimizer_switch;
+
+--echo # character_set_client changes invalidate the cached plan before reuse
+FLUSH STATUS;
+SET NAMES utf8mb4;
+PREPARE charset_stmt FROM 'SELECT v FROM pc4d_inv WHERE id = ?';
+
+SET @id=1;
+EXECUTE charset_stmt USING @id;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET NAMES latin1;
+SET @id=2;
+EXECUTE charset_stmt USING @id;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET @id=3;
+EXECUTE charset_stmt USING @id;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DEALLOCATE PREPARE charset_stmt;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+SET NAMES utf8mb4;
+
+--echo # table metadata changes invalidate the cached plan before reuse
+FLUSH STATUS;
+PREPARE ddl_stmt FROM 'SELECT v FROM pc4d_inv WHERE id = ?';
+
+SET @id=1;
+EXECUTE ddl_stmt USING @id;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+ALTER TABLE pc4d_inv ADD COLUMN d INT DEFAULT 0;
+SET @id=2;
+EXECUTE ddl_stmt USING @id;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET @id=3;
+EXECUTE ddl_stmt USING @id;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DEALLOCATE PREPARE ddl_stmt;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+--echo # table row-count changes beyond the allowed ratio invalidate before reuse
+CREATE TABLE pc4d_inv_stats (
+  id INT PRIMARY KEY,
+  v VARCHAR(16)
+) ENGINE=MyISAM;
+INSERT INTO pc4d_inv_stats VALUES
+  (1, 'one'),
+  (2, 'two'),
+  (3, 'three');
+
+FLUSH STATUS;
+SET SESSION rds_plan_cache_allow_change_ratio=0.01;
+PREPARE stats_stmt FROM 'SELECT v FROM pc4d_inv_stats WHERE id = ?';
+
+SET @id=1;
+EXECUTE stats_stmt USING @id;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+INSERT INTO pc4d_inv_stats VALUES
+  (4, 'four'),
+  (5, 'five'),
+  (6, 'six'),
+  (7, 'seven'),
+  (8, 'eight'),
+  (9, 'nine'),
+  (10, 'ten'),
+  (11, 'eleven'),
+  (12, 'twelve');
+
+SET @id=2;
+EXECUTE stats_stmt USING @id;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET @id=3;
+EXECUTE stats_stmt USING @id;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DEALLOCATE PREPARE stats_stmt;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+SET SESSION rds_plan_cache_allow_change_ratio=@old_plan_cache_ratio;
+
+--echo # table row-count decreases inside the allowed ratio do not invalidate
+CREATE TABLE pc4d_inv_stats_down (
+  id INT PRIMARY KEY,
+  v VARCHAR(16)
+) ENGINE=MyISAM;
+INSERT INTO pc4d_inv_stats_down VALUES
+  (1, 'one'),
+  (2, 'two'),
+  (3, 'three'),
+  (4, 'four'),
+  (5, 'five'),
+  (6, 'six'),
+  (7, 'seven'),
+  (8, 'eight'),
+  (9, 'nine'),
+  (10, 'ten');
+
+FLUSH STATUS;
+SET SESSION rds_plan_cache_allow_change_ratio=0.50;
+PREPARE stats_down_stmt FROM 'SELECT v FROM pc4d_inv_stats_down WHERE id = ?';
+
+SET @id=1;
+EXECUTE stats_down_stmt USING @id;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+SET @id=2;
+EXECUTE stats_down_stmt USING @id;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DELETE FROM pc4d_inv_stats_down WHERE id = 10;
+
+SET @id=3;
+EXECUTE stats_down_stmt USING @id;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+let $pc_stats_down_hits= query_get_value(SHOW STATUS LIKE 'Cached_plan_hits', Value, 1);
+if ($pc_stats_down_hits != 2) {
+  --die Cached_plan_hits did not increase after an allowed row-count decrease
+}
+
+DEALLOCATE PREPARE stats_down_stmt;
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+SET SESSION rds_plan_cache_allow_change_ratio=@old_plan_cache_ratio;
+
+DROP TABLE pc4d_inv_stats_down;
+DROP TABLE pc4d_inv_stats;
+DROP TABLE pc4d_inv;
+SET SESSION rds_plan_cache=@old_rds_plan_cache;

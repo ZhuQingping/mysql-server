@@ -1,0 +1,125 @@
+# Phase 5H: ordinary cached-plan invalidation counter deltas
+CREATE TABLE pc5h_inv (
+id INT PRIMARY KEY,
+c INT,
+v VARCHAR(16)
+) ENGINE=InnoDB;
+INSERT INTO pc5h_inv VALUES
+(1, 10, 'one'),
+(2, 20, 'two'),
+(3, 30, 'three');
+CREATE TABLE pc5h_inv_stats (
+id INT PRIMARY KEY,
+v VARCHAR(16)
+) ENGINE=MyISAM;
+INSERT INTO pc5h_inv_stats VALUES
+(1, 'one'),
+(2, 'two'),
+(3, 'three');
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET @old_plan_cache_ratio=@@SESSION.rds_plan_cache_allow_change_ratio;
+SET @old_optimizer_switch=@@SESSION.optimizer_switch;
+SET SESSION rds_plan_cache=ON;
+# optimizer_switch changes increment Cached_plan_invalidations once
+FLUSH STATUS;
+SET SESSION optimizer_switch='index_condition_pushdown=on';
+PREPARE opt_stmt FROM 'SELECT v FROM pc5h_inv WHERE id = ?';
+SET @id=1;
+EXECUTE opt_stmt USING @id;
+v
+one
+SET SESSION optimizer_switch='index_condition_pushdown=off';
+SET @id=2;
+EXECUTE opt_stmt USING @id;
+v
+two
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+invalidation_delta
+1
+DEALLOCATE PREPARE opt_stmt;
+SET SESSION optimizer_switch=@old_optimizer_switch;
+# character_set_client changes increment Cached_plan_invalidations once
+FLUSH STATUS;
+SET NAMES utf8mb4;
+PREPARE charset_stmt FROM 'SELECT v FROM pc5h_inv WHERE id = ?';
+SET @id=1;
+EXECUTE charset_stmt USING @id;
+v
+one
+SET NAMES latin1;
+SET @id=2;
+EXECUTE charset_stmt USING @id;
+v
+two
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+invalidation_delta
+1
+DEALLOCATE PREPARE charset_stmt;
+SET NAMES utf8mb4;
+# table metadata changes increment Cached_plan_invalidations once
+FLUSH STATUS;
+PREPARE ddl_stmt FROM 'SELECT v FROM pc5h_inv WHERE id = ?';
+SET @id=1;
+EXECUTE ddl_stmt USING @id;
+v
+one
+ALTER TABLE pc5h_inv ADD COLUMN d INT DEFAULT 0;
+SET @id=2;
+EXECUTE ddl_stmt USING @id;
+v
+two
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+invalidation_delta
+1
+DEALLOCATE PREPARE ddl_stmt;
+# table-stat changes beyond the allowed ratio increment once
+FLUSH STATUS;
+SET SESSION rds_plan_cache_allow_change_ratio=0.01;
+PREPARE stats_stmt FROM 'SELECT v FROM pc5h_inv_stats WHERE id = ?';
+SET @id=1;
+EXECUTE stats_stmt USING @id;
+v
+one
+INSERT INTO pc5h_inv_stats VALUES
+(4, 'four'),
+(5, 'five'),
+(6, 'six'),
+(7, 'seven'),
+(8, 'eight'),
+(9, 'nine'),
+(10, 'ten'),
+(11, 'eleven'),
+(12, 'twelve');
+SET @id=2;
+EXECUTE stats_stmt USING @id;
+v
+two
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+invalidation_delta
+1
+DEALLOCATE PREPARE stats_stmt;
+SET SESSION rds_plan_cache_allow_change_ratio=@old_plan_cache_ratio;
+SET SESSION optimizer_switch=@old_optimizer_switch;
+SET SESSION rds_plan_cache=@old_rds_plan_cache;
+DROP TABLE pc5h_inv_stats;
+DROP TABLE pc5h_inv;

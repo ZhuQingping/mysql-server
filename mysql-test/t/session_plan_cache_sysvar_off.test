@@ -1,0 +1,96 @@
+--echo # Phase 5H: rds_plan_cache OFF and sys-var behavior
+
+CREATE TABLE pc5h_sysvar (
+  id INT PRIMARY KEY,
+  v VARCHAR(16)
+) ENGINE=InnoDB;
+INSERT INTO pc5h_sysvar VALUES
+  (1, 'one'),
+  (2, 'two'),
+  (3, 'three');
+
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET @old_plan_cache_ratio=@@SESSION.rds_plan_cache_allow_change_ratio;
+
+--echo # OFF-before-prepare must not create cached hits or READY plans
+SET SESSION rds_plan_cache=OFF;
+let $pc_off= query_get_value(SELECT @@SESSION.rds_plan_cache AS v, v, 1);
+if ($pc_off != 0) {
+  --die rds_plan_cache did not switch OFF
+}
+
+SET SESSION rds_plan_cache_allow_change_ratio=0;
+let $pc_ratio_zero= `SELECT @@SESSION.rds_plan_cache_allow_change_ratio = 0`;
+if ($pc_ratio_zero != 1) {
+  --die rds_plan_cache_allow_change_ratio did not accept zero
+}
+
+SET SESSION rds_plan_cache_allow_change_ratio=-0.01;
+SHOW WARNINGS;
+let $pc_ratio_zero= `SELECT @@SESSION.rds_plan_cache_allow_change_ratio = 0`;
+if ($pc_ratio_zero != 1) {
+  --die negative rds_plan_cache_allow_change_ratio did not clamp to zero
+}
+
+FLUSH STATUS;
+let $pc_invalidations_before= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+PREPARE off_stmt FROM 'SELECT v FROM pc5h_sysvar WHERE id = ?';
+
+SET @id=1;
+EXECUTE off_stmt USING @id;
+
+SET @id=2;
+EXECUTE off_stmt USING @id;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+let $pc_count= query_get_value(SHOW STATUS LIKE 'Cached_plan_count', Value, 1);
+if ($pc_count != 0) {
+  --die OFF mode created a READY cached plan
+}
+let $pc_hits= query_get_value(SHOW STATUS LIKE 'Cached_plan_hits', Value, 1);
+if ($pc_hits != 0) {
+  --die OFF mode produced cached hits
+}
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+if ($pc_invalidations_after != $pc_invalidations_before) {
+  --die OFF mode changed Cached_plan_invalidations
+}
+
+--echo # Toggling ON lets the existing prepared statement create and hit a cache
+SET SESSION rds_plan_cache=ON;
+SET @id=1;
+EXECUTE off_stmt USING @id;
+
+SET @id=2;
+EXECUTE off_stmt USING @id;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+let $pc_count= query_get_value(SHOW STATUS LIKE 'Cached_plan_count', Value, 1);
+if ($pc_count != 1) {
+  --die ON mode did not create exactly one READY cached plan
+}
+let $pc_hits= query_get_value(SHOW STATUS LIKE 'Cached_plan_hits', Value, 1);
+if ($pc_hits != 1) {
+  --die ON mode did not produce exactly one cached hit
+}
+
+--echo # Toggling OFF bypasses an existing READY cached plan without evicting it
+SET SESSION rds_plan_cache=OFF;
+SET @id=3;
+EXECUTE off_stmt USING @id;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+let $pc_hits= query_get_value(SHOW STATUS LIKE 'Cached_plan_hits', Value, 1);
+if ($pc_hits != 1) {
+  --die OFF execution of an existing READY plan changed Cached_plan_hits
+}
+
+DEALLOCATE PREPARE off_stmt;
+SHOW STATUS LIKE 'Cached_plan_count';
+
+SET SESSION rds_plan_cache_allow_change_ratio=@old_plan_cache_ratio;
+SET SESSION rds_plan_cache=@old_rds_plan_cache;
+DROP TABLE pc5h_sysvar;

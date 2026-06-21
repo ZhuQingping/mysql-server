@@ -1,0 +1,38 @@
+--source include/have_debug.inc
+
+--echo # Phase 4B: transient Item clone failure disables cached plan creation
+
+CREATE TABLE dt_t (dt DATETIME, i INT) ENGINE=InnoDB;
+INSERT INTO dt_t VALUES ('2024-01-01 00:00:00', 20240101);
+
+SET SESSION rds_plan_cache=ON;
+
+--echo # Positive control: transient CAST nodes remain lifecycle-cacheable
+
+PREPARE stmt FROM 'SELECT * FROM dt_t WHERE dt_t.dt = dt_t.i';
+EXECUTE stmt;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DEALLOCATE PREPARE stmt;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+--echo # Debug-injected clone failure marks only this plan uncacheable
+
+SET SESSION debug='+d,plan_cache_clone_if_transient_fail';
+PREPARE stmt FROM 'SELECT * FROM dt_t WHERE dt_t.dt = dt_t.i';
+EXECUTE stmt;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DEALLOCATE PREPARE stmt;
+SET SESSION debug='-d,plan_cache_clone_if_transient_fail';
+
+SHOW STATUS LIKE 'Cached_plan_count';
+SHOW STATUS LIKE 'Cached_plan_hits';
+
+DROP TABLE dt_t;

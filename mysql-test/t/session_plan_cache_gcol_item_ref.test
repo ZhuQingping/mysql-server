@@ -1,0 +1,69 @@
+--echo # Phase 4D-12: commercial 0007-like generated-column and Item_ref boundary
+
+CREATE TABLE pc4d12_gcol (
+  id INT PRIMARY KEY,
+  a INT NOT NULL,
+  b INT NOT NULL,
+  gc INT GENERATED ALWAYS AS (a + b) STORED,
+  KEY gc_idx(gc)
+) ENGINE=InnoDB;
+
+INSERT INTO pc4d12_gcol (id, a, b) VALUES
+  (1, 1, 2),
+  (2, 3, 4),
+  (3, 5, 6);
+
+CREATE TABLE pc4d12_iwr (
+  id INT PRIMARY KEY,
+  b TINYINT,
+  KEY b_idx(b)
+) ENGINE=InnoDB;
+
+INSERT INTO pc4d12_iwr VALUES
+  (1, 1),
+  (2, 2);
+
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET SESSION rds_plan_cache=ON;
+
+--echo # generated-column substitution should cache and hit
+FLUSH STATUS;
+
+--disable_warnings
+--replace_column 10 # 11 #
+EXPLAIN SELECT id FROM pc4d12_gcol WHERE a + b = 3;
+--enable_warnings
+
+PREPARE gcol_stmt FROM
+  'SELECT id FROM pc4d12_gcol WHERE a + b = ?';
+
+SET @v=3;
+EXECUTE gcol_stmt USING @v;
+SET @v=7;
+EXECUTE gcol_stmt USING @v;
+SET @v=11;
+EXECUTE gcol_stmt USING @v;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+DEALLOCATE PREPARE gcol_stmt;
+
+--echo # Item_int_with_ref-like parameter transformation remains fallback-safe
+FLUSH STATUS;
+
+PREPARE iwr_stmt FROM
+  'SELECT id FROM pc4d12_iwr FORCE INDEX(b_idx) WHERE b = ?';
+
+SET @p='2020';
+EXECUTE iwr_stmt USING @p;
+SET @p='1';
+EXECUTE iwr_stmt USING @p;
+SET @p='1';
+EXECUTE iwr_stmt USING @p;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+DEALLOCATE PREPARE iwr_stmt;
+
+SET SESSION rds_plan_cache=@old_rds_plan_cache;
+DROP TABLE pc4d12_iwr;
+DROP TABLE pc4d12_gcol;

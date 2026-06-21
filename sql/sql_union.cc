@@ -90,6 +90,7 @@
 #include "sql/sql_lex.h"
 #include "sql/sql_list.h"
 #include "sql/sql_optimizer.h"  // JOIN
+#include "sql/sql_plan_cache.h"
 #include "sql/sql_select.h"
 #include "sql/sql_tmp_table.h"   // tmp tables
 #include "sql/table_function.h"  // Table_function
@@ -2081,8 +2082,15 @@ void Query_block::cleanup(bool full) {
   if (join) {
     if (full) {
       assert(join->query_block == this);
-      join->destroy();
-      ::destroy(join);
+      if (join == cached_plan) {
+        join->destroy();
+        plan_cache::detach_cached_plan(join);
+        plan_cache::set_ready(this);
+        plan_cache::cleanup_cached_plan_items(join);
+      } else {
+        join->destroy();
+        ::destroy(join);
+      }
       join = nullptr;
     } else
       join->cleanup();
@@ -2137,6 +2145,12 @@ void Query_block::destroy() {
     rollup_group_items.shrink_to_fit();
     rollup_sums.clear();
     rollup_sums.shrink_to_fit();
+  }
+  if (cached_plan != nullptr) {
+    if (!cached_plan->is_cached_plan_hit()) cached_plan->destroy();
+    plan_cache::destroy_cached_plan(cached_plan);
+    cached_plan = nullptr;
+    plan_cache_state = plan_cache::plan_cache_state::NONE;
   }
   invalidate();
 }

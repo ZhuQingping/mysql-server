@@ -1,0 +1,53 @@
+--echo # Phase 4D-7: commercial 0005-like scalar follow-up boundary
+
+CREATE TABLE pc4d_sr (
+  id INT DEFAULT NULL,
+  sex ENUM('boy','girl','secret') DEFAULT 'secret',
+  b BLOB
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+INSERT INTO pc4d_sr VALUES
+  (1, 'secret', _binary 'abc'),
+  (2, 'secret', _binary 'abc'),
+  (100, 'secret', REPEAT('a', 24)),
+  (101, 'secret', REPEAT('x', 40)),
+  (100, 'girl', _binary ''),
+  (255, 'boy', REPEAT('b', 13));
+
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET SESSION rds_plan_cache=ON;
+
+--echo # 0005-like HAVING/ORDER shape stays correct across repeated execution
+FLUSH STATUS;
+let $pc_invalidations_before= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+PREPARE scalar_regression_stmt FROM
+  'SELECT sex, id, LENGTH(b) AS b_len,
+          CAST((SELECT AVG(id) FROM pc4d_sr) AS DECIMAL(10,4)) AS avg_id
+     FROM pc4d_sr
+    WHERE sex IS NOT NULL AND LENGTH(b) < ?
+   HAVING id > (SELECT AVG(id) FROM pc4d_sr)
+    ORDER BY sex DESC, id DESC';
+
+SET @len_limit=30;
+EXECUTE scalar_regression_stmt USING @len_limit;
+EXECUTE scalar_regression_stmt USING @len_limit;
+EXECUTE scalar_regression_stmt USING @len_limit;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_hits= query_get_value(SHOW STATUS LIKE 'Cached_plan_hits', Value, 1);
+if ($pc_hits != 0) {
+  --die scalar regression fallback produced cached hits
+}
+let $pc_count= query_get_value(SHOW STATUS LIKE 'Cached_plan_count', Value, 1);
+if ($pc_count != 0) {
+  --die scalar regression fallback leaked a READY cached plan
+}
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+if ($pc_invalidations_after != $pc_invalidations_before) {
+  --die scalar regression fallback changed Cached_plan_invalidations
+}
+DEALLOCATE PREPARE scalar_regression_stmt;
+
+DROP TABLE pc4d_sr;
+SET SESSION rds_plan_cache=@old_rds_plan_cache;

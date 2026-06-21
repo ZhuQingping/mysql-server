@@ -1976,6 +1976,8 @@ class Query_block : public Query_term {
     should be changed only when THD::LOCK_query_plan mutex is taken.
   */
   JOIN *join{nullptr};
+  /// Reusable execution plan owned by session plan cache.
+  JOIN *cached_plan{nullptr};
   /// Set of table references contained in outer-most join nest
   mem_root_deque<Table_ref *> m_table_nest;
   /// Pointer to the set of table references in the currently active join
@@ -2195,6 +2197,9 @@ class Query_block : public Query_term {
   /// Hidden items added during optimization
   /// @note that using this means we modify resolved data during optimization
   uint hidden_items_from_optimization{0};
+
+  plan_cache::plan_cache_state plan_cache_state{
+      plan_cache::plan_cache_state::NONE};
 
  private:
   friend class Query_expression;

@@ -1,0 +1,49 @@
+# Phase 5H: cached-hit DML visibility and current-read behavior
+CREATE TABLE pc5h_dml (
+id INT PRIMARY KEY,
+c INT,
+v VARCHAR(16),
+KEY c_idx(c)
+) ENGINE=InnoDB;
+INSERT INTO pc5h_dml VALUES
+(1, 10, 'one'),
+(2, 20, 'two'),
+(3, 20, 'three');
+SET @old_rds_plan_cache=@@SESSION.rds_plan_cache;
+SET @old_plan_cache_ratio=@@SESSION.rds_plan_cache_allow_change_ratio;
+SET SESSION rds_plan_cache=ON;
+SET SESSION rds_plan_cache_allow_change_ratio=0;
+FLUSH STATUS;
+PREPARE dml_stmt FROM
+'SELECT id, v FROM pc5h_dml FORCE INDEX (c_idx) WHERE c = ?';
+SET @c=20;
+EXECUTE dml_stmt USING @c;
+id	v
+2	two
+3	three
+UPDATE pc5h_dml SET c=30, v='two-moved' WHERE id=2;
+EXECUTE dml_stmt USING @c;
+id	v
+3	three
+INSERT INTO pc5h_dml VALUES (4, 20, 'four');
+EXECUTE dml_stmt USING @c;
+id	v
+3	three
+4	four
+DELETE FROM pc5h_dml WHERE id=3;
+EXECUTE dml_stmt USING @c;
+id	v
+4	four
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	3
+DEALLOCATE PREPARE dml_stmt;
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SET SESSION rds_plan_cache_allow_change_ratio=@old_plan_cache_ratio;
+SET SESSION rds_plan_cache=@old_rds_plan_cache;
+DROP TABLE pc5h_dml;

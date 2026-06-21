@@ -37,6 +37,7 @@
 #include "my_dbug.h"
 #include "my_inttypes.h"
 #include "my_table_map.h"
+#include "mysqld_error.h"
 #include "sql/debug_sync.h"  // DEBUG_SYNC
 #include "sql/handler.h"
 #include "sql/item.h"
@@ -73,6 +74,16 @@ using std::pair;
 
 static inline pair<uchar *, key_part_map> FindKeyBufferAndMap(
     const Index_lookup *ref);
+
+static bool require_plan_cache_ref_keyread(TABLE *table) {
+  DBUG_EXECUTE_IF("plan_cache_require_ref_keyread", {
+    if (!table->key_read) {
+      my_error(ER_UNKNOWN_ERROR, MYF(0));
+      return true;
+    }
+  });
+  return false;
+}
 
 ConstIterator::ConstIterator(THD *thd, TABLE *table, Index_lookup *table_ref,
                              ha_rows *examined_rows)
@@ -211,6 +222,8 @@ int EQRefIterator::Read() {
       table()->set_no_row();
       return -1;
     }
+
+    if (require_plan_cache_ref_keyread(table())) return 1;
 
     pair<uchar *, key_part_map> key_buff_and_map = FindKeyBufferAndMap(m_ref);
     int error = table()->file->ha_index_read_map(
@@ -377,6 +390,8 @@ int RefIterator<false>::Read() {  // Forward read.
       return -1;
     }
 
+    if (require_plan_cache_ref_keyread(table())) return 1;
+
     pair<uchar *, key_part_map> key_buff_and_map = FindKeyBufferAndMap(m_ref);
     int error = table()->file->ha_index_read_map(
         table()->record[0], key_buff_and_map.first, key_buff_and_map.second,
@@ -385,6 +400,8 @@ int RefIterator<false>::Read() {  // Forward read.
       return HandleError(error);
     }
   } else {
+    if (require_plan_cache_ref_keyread(table())) return 1;
+
     int error = 0;
     // Fetch unique rows matching the Ref Key in case of multi-value index
     do {
@@ -429,6 +446,9 @@ int RefIterator<true>::Read() {  // Reverse read.
       table()->set_no_row();
       return -1;
     }
+
+    if (require_plan_cache_ref_keyread(table())) return 1;
+
     int error = table()->file->ha_index_read_last_map(
         table()->record[0], m_ref->key_buff,
         make_prev_keypart_map(m_ref->key_parts));
@@ -445,6 +465,8 @@ int RefIterator<true>::Read() {  // Reverse read.
       found.
      */
     assert(table()->file->pushed_idx_cond == nullptr);
+    if (require_plan_cache_ref_keyread(table())) return 1;
+
     int error = table()->file->ha_index_prev(table()->record[0]);
     if (error) {
       return HandleError(error);
@@ -725,10 +747,14 @@ int RefOrNullIterator::Read() {
   int error;
   if (m_reading_first_row) {
     m_reading_first_row = false;
+    if (require_plan_cache_ref_keyread(table())) return 1;
+
     error = table()->file->ha_index_read_map(
         table()->record[0], key_buff_and_map.first, key_buff_and_map.second,
         HA_READ_KEY_EXACT);
   } else {
+    if (require_plan_cache_ref_keyread(table())) return 1;
+
     // Fetch unique rows matching the Ref Key in case of multi-value index
     do {
       error = table()->file->ha_index_next_same(

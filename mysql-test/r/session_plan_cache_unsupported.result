@@ -1,0 +1,131 @@
+# Phase 4C/4D: unsupported plan shapes fall back without cached hits
+CREATE TABLE pc4c_u (
+id INT PRIMARY KEY,
+c INT,
+v VARCHAR(16)
+) ENGINE=InnoDB;
+INSERT INTO pc4c_u VALUES
+(1, 1, 'alpha'),
+(2, 2, 'beta'),
+(3, 3, 'bravo'),
+(4, 4, 'beta');
+SET SESSION rds_plan_cache=ON;
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+# aggregate table scans remain unsupported for cached hits
+PREPARE agg_stmt FROM 'SELECT COUNT(*) FROM pc4c_u WHERE v LIKE ?';
+SET @p='b%';
+EXECUTE agg_stmt USING @p;
+COUNT(*)
+3
+SET @p='a%';
+EXECUTE agg_stmt USING @p;
+COUNT(*)
+1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+DEALLOCATE PREPARE agg_stmt;
+# ORDER BY table scans remain unsupported for cached hits
+PREPARE order_stmt FROM 'SELECT v FROM pc4c_u WHERE c > ? ORDER BY v';
+SET @p=1;
+EXECUTE order_stmt USING @p;
+v
+beta
+beta
+bravo
+SET @p=2;
+EXECUTE order_stmt USING @p;
+v
+beta
+bravo
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+DEALLOCATE PREPARE order_stmt;
+# DISTINCT table scans remain unsupported for cached hits
+PREPARE distinct_stmt FROM 'SELECT DISTINCT v FROM pc4c_u WHERE c > ? ORDER BY v';
+SET @p=1;
+EXECUTE distinct_stmt USING @p;
+v
+beta
+bravo
+SET @p=3;
+EXECUTE distinct_stmt USING @p;
+v
+beta
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+DEALLOCATE PREPARE distinct_stmt;
+# simple HAVING without GROUP BY remains unsupported for cached hits
+PREPARE having_stmt FROM
+'SELECT id, c * 2 AS marker FROM pc4c_u WHERE c >= ? HAVING marker > ?';
+SET @lo=1, @marker=2;
+EXECUTE having_stmt USING @lo, @marker;
+id	marker
+2	4
+3	6
+4	8
+SET @lo=2, @marker=4;
+EXECUTE having_stmt USING @lo, @marker;
+id	marker
+3	6
+4	8
+SET @lo=1, @marker=6;
+EXECUTE having_stmt USING @lo, @marker;
+id	marker
+4	8
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+DEALLOCATE PREPARE having_stmt;
+# simple single-index range remains unsupported for cached hits
+ALTER TABLE pc4c_u ADD KEY c_idx(c);
+SET @old_optimizer_switch=@@SESSION.optimizer_switch;
+SET SESSION optimizer_switch='index_condition_pushdown=off,mrr=off,mrr_cost_based=off,index_merge=off,skip_scan=off';
+EXPLAIN SELECT id, v FROM pc4c_u FORCE INDEX (c_idx)
+WHERE c > 1 AND c < 4;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pc4c_u	NULL	range	c_idx	c_idx	5	NULL	#	#	Using where
+PREPARE range_stmt FROM
+'SELECT id, v FROM pc4c_u FORCE INDEX (c_idx) WHERE c > ? AND c < ?';
+SET @lo=1, @hi=4;
+EXECUTE range_stmt USING @lo, @hi;
+id	v
+2	beta
+3	bravo
+SET @lo=0, @hi=3;
+EXECUTE range_stmt USING @lo, @hi;
+id	v
+1	alpha
+2	beta
+SET @lo=3, @hi=5;
+EXECUTE range_stmt USING @lo, @hi;
+id	v
+4	beta
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+DEALLOCATE PREPARE range_stmt;
+SET SESSION optimizer_switch=@old_optimizer_switch;
+DROP TABLE pc4c_u;

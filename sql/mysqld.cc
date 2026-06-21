@@ -853,6 +853,7 @@ MySQL clients support the protocol:
 #include "sql/sql_locale.h"   // MY_LOCALE
 #include "sql/sql_manager.h"  // start_handle_manager
 #include "sql/sql_parse.h"    // check_stack_overrun
+#include "sql/sql_plan_cache.h"
 #include "sql/sql_plugin.h"   // opt_plugin_dir
 #include "sql/sql_plugin_ref.h"
 #include "sql/sql_reload.h"          // handle_reload_request
@@ -9670,12 +9671,34 @@ static int show_deprecated_use_i_s_processlist_last_timestamp(THD *,
   return 0;
 }
 
+static int show_cached_plan_invalidations(THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONG;
+  var->value = buf;
+  *((long *)buf) = (long)plan_cache::cached_plan_invalidations.load(
+      std::memory_order_relaxed);
+  return 0;
+}
+
+static int show_cached_plan_count(THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONG;
+  var->value = buf;
+  *((long *)buf) =
+      (long)plan_cache::cached_plan_count.load(std::memory_order_relaxed);
+  return 0;
+}
+
 SHOW_VAR status_vars[] = {
     {"Aborted_clients", (char *)&aborted_threads, SHOW_LONG, SHOW_SCOPE_GLOBAL},
     {"Aborted_connects", (char *)&show_aborted_connects, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Acl_cache_items_count", (char *)&show_acl_cache_items_count, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
+    {"Cached_plan_count", (char *)&show_cached_plan_count, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Cached_plan_hits", (char *)offsetof(System_status_var, cached_plan_hits),
+     SHOW_LONGLONG_STATUS, SHOW_SCOPE_ALL},
+    {"Cached_plan_invalidations", (char *)&show_cached_plan_invalidations,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
 #ifndef NDEBUG
     {"Ongoing_anonymous_gtid_violating_transaction_count",
      (char *)&show_ongoing_anonymous_gtid_violating_transaction_count,

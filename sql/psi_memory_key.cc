@@ -120,6 +120,7 @@ PSI_memory_key key_memory_partition_syntax_buffer;
 PSI_memory_key key_memory_persisted_variables_memroot;
 PSI_memory_key key_memory_persisted_variables_unordered_map;
 PSI_memory_key key_memory_persisted_variables_unordered_set;
+PSI_memory_key key_memory_plan_cache_mem_root;
 PSI_memory_key key_memory_prepared_statement_infrastructure;
 PSI_memory_key key_memory_prepared_statement_main_mem_root;
 PSI_memory_key key_memory_partitions_prune_exec;
@@ -181,6 +182,9 @@ static PSI_memory_info all_server_memory[] = {
      "Prepared_statement::main_mem_root",
      (PSI_FLAG_THREAD | PSI_FLAG_MEM_COLLECT), 0,
      "Mem root for each prepared statement for items etc."},
+    {&key_memory_plan_cache_mem_root, "plan_cache_mem_root",
+     (PSI_FLAG_THREAD | PSI_FLAG_MEM_COLLECT), 0,
+     "Mem root for session plan cache."},
     {&key_memory_sp_cache, "THD::sp_cache", PSI_FLAG_MEM_COLLECT, 0,
      "Per session cache for stored programs."},
     {&key_memory_sp_head_main_root, "sp_head::main_mem_root", 0, 0,

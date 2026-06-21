@@ -43,6 +43,7 @@
 #include <deque>
 #include <limits>
 #include <new>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -105,6 +106,7 @@
 #include "sql/sql_error.h"
 #include "sql/sql_join_buffer.h"  // JOIN_CACHE
 #include "sql/sql_planner.h"      // calculate_condition_filter
+#include "sql/sql_plan_cache.h"
 #include "sql/sql_test.h"         // print_where
 #include "sql/sql_tmp_table.h"
 #include "sql/system_variables.h"
@@ -200,6 +202,8 @@ JOIN::JOIN(THD *thd_arg, Query_block *select)
   for (ORDER *group = group_list.order; group; group = group->next)
     send_group_parts++;
 }
+
+JOIN::~JOIN() { ::destroy(plan_cache_exec_context); }
 
 bool JOIN::alloc_ref_item_slice(THD *thd_arg, int sliceno) {
   assert(sliceno > 0);
@@ -337,6 +341,10 @@ bool JOIN::check_access_path_with_fts() const {
 bool JOIN::optimize(bool finalize_access_paths) {
   DBUG_TRACE;
 
+  // Cached JOINs are applied before optimize() and already have table state.
+  // This also keeps EXPLAIN re-entry from double-initializing an optimized JOIN.
+  if (optimized) return false;
+
   uint no_jbuf_after = UINT_MAX;
   Query_block *const set_operand_block =
       query_expression()->non_simple_result_query_block();
@@ -345,9 +353,6 @@ bool JOIN::optimize(bool finalize_access_paths) {
          thd->lex->is_query_tables_locked() ||
          query_block == set_operand_block);
   assert(tables == 0 && primary_tables == 0 && tables_list == (Table_ref *)1);
-
-  // to prevent double initialization on EXPLAIN
-  if (optimized) return false;
 
   DEBUG_SYNC(thd, "before_join_optimize");
 
@@ -1018,6 +1023,8 @@ bool JOIN::optimize(bool finalize_access_paths) {
 
   if (make_join_readinfo(this, no_jbuf_after))
     return true; /* purecov: inspected */
+
+  if (plan_cache::cache_plan(this)) return true;
 
   if (make_tmp_tables_info()) return true;
 
@@ -10432,6 +10439,7 @@ bool optimize_cond(THD *thd, Item **cond, COND_EQUAL **cond_equal,
   /*
     change field = field to field = const for each found field = const
    */
+  std::set<Item *> params_before_reduce;
   if (*cond) {
     Opt_trace_object step_wrapper(trace);
     step_wrapper.add_alnum("transformation", "constant_propagation");
@@ -10442,6 +10450,7 @@ bool optimize_cond(THD *thd, Item **cond, COND_EQUAL **cond_equal,
       if (propagate_cond_constants(thd, nullptr, *cond, *cond)) return true;
     }
     step_wrapper.add("resulting_condition", *cond);
+    plan_cache::collect_item_params(*cond, params_before_reduce);
   }
 
   /*
@@ -10459,6 +10468,8 @@ bool optimize_cond(THD *thd, Item **cond, COND_EQUAL **cond_equal,
       Opt_trace_array trace_subselect(trace, "subselect_evaluation");
       if (remove_eq_conds(thd, *cond, cond, cond_value)) return true;
     }
+    plan_cache::cmp_item_params_after_reduce_cond(thd, params_before_reduce,
+                                                  *cond);
     step_wrapper.add("resulting_condition", *cond);
   }
   if (thd->is_error()) return true;
@@ -10513,15 +10524,19 @@ bool remove_eq_conds(THD *thd, Item *cond, Item **retcond,
     bool should_fix_fields = false;
     *cond_value = Item::COND_UNDEF;
     Item *item;
-    while ((item = li++)) {
-      Item *new_item;
+    while ((item = li++) != nullptr) {
+      Item **item_ptr = li.ref();
       Item::cond_result tmp_cond_value;
-      if (remove_eq_conds(thd, item, &new_item, &tmp_cond_value)) return true;
+      /*
+        remove_eq_conds() may call fold_condition(), which may record item
+        changes in THD::change_list. Use the list element address so recorded
+        changes never point to a stack-local Item pointer.
+      */
+      if (remove_eq_conds(thd, item, item_ptr, &tmp_cond_value)) return true;
 
-      if (new_item == nullptr)
+      if (*item_ptr == nullptr)
         li.remove();
-      else if (item != new_item) {
-        (void)li.replace(new_item);
+      else if (item != *item_ptr) {
         should_fix_fields = true;
       }
       if (*cond_value == Item::COND_UNDEF) *cond_value = tmp_cond_value;

@@ -963,6 +963,11 @@ bool init_ref_part(THD *thd, unsigned part_no, Item *val, bool *cond_guard,
                    const KEY_PART_INFO *key_part_info, uchar *key_buff,
                    Index_lookup *ref);
 
+store_key *get_store_key(THD *thd, Item *val, table_map used_tables,
+                         table_map const_tables,
+                         const KEY_PART_INFO *key_part, uchar *key_buff,
+                         uint maybe_null);
+
 /**
   Set up the support structures (NULL bits, row offsets, etc.) for a semijoin
   duplicate weedout table. The object is allocated on the given THD's MEM_ROOT.

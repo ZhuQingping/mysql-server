@@ -1,0 +1,60 @@
+--echo # Phase 5W: ref-family pushed ICP remains outside cached hits
+
+CREATE TABLE pc5w_ref_icp (
+  id INT PRIMARY KEY,
+  a INT NOT NULL,
+  b INT NOT NULL,
+  payload VARCHAR(16),
+  KEY ab_idx (a, b)
+) ENGINE=InnoDB;
+
+INSERT INTO pc5w_ref_icp VALUES
+  (1, 1, 1, 'a1-low-1'),
+  (2, 1, 2, 'a1-low-2'),
+  (3, 1, 7, 'a1-high-7'),
+  (4, 1, 9, 'a1-high-9'),
+  (5, 2, 3, 'a2-low-3'),
+  (6, 2, 8, 'a2-high-8');
+
+SET SESSION rds_plan_cache=ON;
+
+--echo # The optimizer reports a non-covering ref read with ICP.
+--disable_warnings
+--replace_column 10 # 11 #
+EXPLAIN SELECT id, payload FROM pc5w_ref_icp FORCE INDEX (ab_idx)
+  WHERE a = 1 AND b + 0 > 5;
+--enable_warnings
+
+PREPARE stmt FROM
+  'SELECT id, payload FROM pc5w_ref_icp FORCE INDEX (ab_idx)
+    WHERE a = ? AND b + 0 > ?';
+
+--echo # First execution runs normally and must not create a READY cached plan.
+SET @a=1, @b=5;
+--sorted_result
+EXECUTE stmt USING @a, @b;
+
+--echo # Later executions must keep ICP filtering through normal optimization.
+SET @a=2, @b=5;
+--sorted_result
+EXECUTE stmt USING @a, @b;
+
+SET @a=1, @b=8;
+--sorted_result
+EXECUTE stmt USING @a, @b;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+
+let $pc_hits= query_get_value(SHOW STATUS LIKE 'Cached_plan_hits', Value, 1);
+if ($pc_hits != 0) {
+  --die ref ICP fallback produced cached hits
+}
+let $pc_count= query_get_value(SHOW STATUS LIKE 'Cached_plan_count', Value, 1);
+if ($pc_count != 0) {
+  --die ref ICP fallback leaked a READY cached plan
+}
+
+DEALLOCATE PREPARE stmt;
+
+DROP TABLE pc5w_ref_icp;

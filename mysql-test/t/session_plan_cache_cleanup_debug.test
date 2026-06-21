@@ -1,0 +1,134 @@
+--source include/have_debug.inc
+
+--echo # Phase 5B: cached-hit cleanup detaches execution TABLE state
+
+CREATE TABLE pc5b_cleanup (
+  id INT PRIMARY KEY,
+  c INT,
+  v VARCHAR(16),
+  KEY c_idx(c)
+) ENGINE=InnoDB;
+INSERT INTO pc5b_cleanup VALUES
+  (1, 10, 'ten'),
+  (2, 20, 'twenty'),
+  (3, 30, 'thirty');
+
+SET SESSION rds_plan_cache=ON;
+let $pc_invalidations_before= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+
+PREPARE stmt FROM
+  'SELECT v FROM pc5b_cleanup FORCE INDEX (c_idx) WHERE c = ?';
+
+SET @c=10;
+EXECUTE stmt USING @c;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+
+SET @c=20;
+EXECUTE stmt USING @c;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+
+--echo # The debug hook asserts the cached plan is detached before rebinding.
+--echo # The injected early apply failure then invalidates and falls back.
+SET SESSION debug='+d,plan_cache_apply_assert_detached_before_rebind,plan_cache_apply_before_alloc_slices_fail';
+SET @c=30;
+EXECUTE stmt USING @c;
+SET SESSION debug='-d,plan_cache_apply_assert_detached_before_rebind,plan_cache_apply_before_alloc_slices_fail';
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+let $pc_expected_invalidations= `SELECT $pc_invalidations_before + 1`;
+if ($pc_invalidations_after != $pc_expected_invalidations) {
+  --die Cached_plan_invalidations did not increase exactly once
+}
+
+--echo # Late apply failures after a cached hit need full JOIN cleanup too.
+--echo # First execute once successfully to mark the replacement cache as hit.
+SET @c=10;
+EXECUTE stmt USING @c;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+
+SET SESSION debug='+d,plan_cache_apply_after_access_paths_fail';
+SET @c=20;
+EXECUTE stmt USING @c;
+SET SESSION debug='-d,plan_cache_apply_after_access_paths_fail';
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+let $pc_expected_invalidations= `SELECT $pc_invalidations_before + 2`;
+if ($pc_invalidations_after != $pc_expected_invalidations) {
+  --die Cached_plan_invalidations did not increase after access-path failure
+}
+
+--echo # Re-mark the replacement cache as hit before the engine-push failure.
+SET @c=30;
+EXECUTE stmt USING @c;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+
+SET SESSION debug='+d,plan_cache_apply_after_push_to_engines_fail';
+SET @c=10;
+EXECUTE stmt USING @c;
+SET SESSION debug='-d,plan_cache_apply_after_push_to_engines_fail';
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+let $pc_expected_invalidations= `SELECT $pc_invalidations_before + 3`;
+if ($pc_invalidations_after != $pc_expected_invalidations) {
+  --die Cached_plan_invalidations did not increase after engine-push failure
+}
+
+--echo # Fatal apply errors must not fall back to normal optimization.
+SET SESSION debug='+d,plan_cache_apply_after_access_paths_error';
+SET @c=20;
+--error ER_UNKNOWN_ERROR
+EXECUTE stmt USING @c;
+SET SESSION debug='-d,plan_cache_apply_after_access_paths_error';
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+let $pc_expected_invalidations= `SELECT $pc_invalidations_before + 4`;
+if ($pc_invalidations_after != $pc_expected_invalidations) {
+  --die Cached_plan_invalidations did not increase after fatal apply error
+}
+
+--echo # Handler row-count errors during apply are fatal too.
+--echo # Recreate a cached plan first because the previous fatal error removed it.
+SET @c=30;
+EXECUTE stmt USING @c;
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+
+SET SESSION debug='+d,bug35208539_raise_error';
+SET @c=10;
+--error ER_GET_ERRNO
+EXECUTE stmt USING @c;
+SET SESSION debug='-d,bug35208539_raise_error';
+
+SHOW STATUS LIKE 'Cached_plan_hits';
+SHOW STATUS LIKE 'Cached_plan_count';
+let $pc_invalidations_after= query_get_value(SHOW STATUS LIKE 'Cached_plan_invalidations', Value, 1);
+let $pc_expected_invalidations= `SELECT $pc_invalidations_before + 5`;
+if ($pc_invalidations_after != $pc_expected_invalidations) {
+  --die Cached_plan_invalidations did not increase after row-count error
+}
+
+DEALLOCATE PREPARE stmt;
+
+SHOW STATUS LIKE 'Cached_plan_count';
+
+DROP TABLE pc5b_cleanup;

@@ -58,10 +58,26 @@ class COND_EQUAL;
 class Item_subselect;
 class Item_sum;
 class Opt_trace_context;
+class JOIN;
+class Query_block;
 class THD;
 class Window;
 struct AccessPath;
 struct MYSQL_LOCK;
+
+namespace plan_cache {
+struct Exec_context;
+enum class Cached_apply_result;
+bool cache_plan(JOIN *join);
+bool exec_cached_plan(Query_block *query_block);
+void reset_cached_plan(JOIN *join);
+void detach_cached_plan(JOIN *join);
+Cached_apply_result apply_cached_plan(JOIN *join);
+Cached_apply_result apply_cached_plan_if_suitable(THD *thd,
+                                                  Query_block *query_block);
+void destroy_cached_plan(JOIN *join);
+void cleanup_cached_plan_items(JOIN *join);
+}
 
 class Item_equal;
 template <class T>
@@ -133,6 +149,7 @@ class ORDER_with_src {
 class JOIN {
  public:
   JOIN(THD *thd_arg, Query_block *select);
+  ~JOIN();
   JOIN(const JOIN &rhs) = delete;
   JOIN &operator=(const JOIN &rhs) = delete;
 
@@ -702,6 +719,17 @@ class JOIN {
   void restore_fields(table_map save_nullinfo);
 
  private:
+  friend bool plan_cache::cache_plan(JOIN *join);
+  friend bool plan_cache::exec_cached_plan(Query_block *query_block);
+  friend void plan_cache::reset_cached_plan(JOIN *join);
+  friend void plan_cache::detach_cached_plan(JOIN *join);
+  friend plan_cache::Cached_apply_result plan_cache::apply_cached_plan(
+      JOIN *join);
+  friend plan_cache::Cached_apply_result plan_cache::apply_cached_plan_if_suitable(
+      THD *thd, Query_block *query_block);
+  friend void plan_cache::destroy_cached_plan(JOIN *join);
+  friend void plan_cache::cleanup_cached_plan_items(JOIN *join);
+
   /**
     Return whether the caller should send a row even if the join
     produced no rows if:
@@ -826,6 +854,9 @@ class JOIN {
 
   /// Final execution plan state. Currently used only for EXPLAIN
   enum_plan_state plan_state{NO_PLAN};
+
+  /// False means cached plan has never been hit by this prepared statement.
+  bool cached_plan_hit{false};
 
  public:
   /*
@@ -1042,6 +1073,14 @@ class JOIN {
   void create_access_paths();
 
  public:
+  bool shallow_clone(JOIN *orig);
+
+  /**
+    Mark this cached plan as having been used for execution.
+  */
+  void set_cached_plan_hit() { cached_plan_hit = true; }
+  bool is_cached_plan_hit() const { return cached_plan_hit; }
+
   /**
     Create access paths with the knowledge that there are going to be zero rows
     coming from tables (before aggregation); typically because we know that
@@ -1072,6 +1111,8 @@ class JOIN {
     See comments in JOIN::optimize().
    */
   AccessPath *m_root_access_path_no_in2exists = nullptr;
+
+  plan_cache::Exec_context *plan_cache_exec_context{nullptr};
 };
 
 /**

@@ -1,0 +1,112 @@
+# Phase 5U: cached covering ref reads preserve key-read
+CREATE TABLE pc5u_keyread (
+id INT NOT NULL,
+c INT NULL,
+pad VARCHAR(64),
+PRIMARY KEY (id),
+KEY c_id_idx (c, id)
+) ENGINE=InnoDB;
+INSERT INTO pc5u_keyread VALUES
+(1, 10, 'ten-a'),
+(2, 10, 'ten-b'),
+(3, 20, 'twenty'),
+(4, NULL, 'null-a'),
+(5, NULL, 'null-b'),
+(6, 30, 'thirty');
+SET SESSION rds_plan_cache=ON;
+# The optimizer reports a covering secondary ref read.
+EXPLAIN SELECT id, c FROM pc5u_keyread FORCE INDEX (c_id_idx)
+WHERE c = 10;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pc5u_keyread	NULL	ref	c_id_idx	c_id_idx	5	const	#	#	Using index
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+PREPARE ref_stmt FROM
+'SELECT id, c FROM pc5u_keyread FORCE INDEX (c_id_idx) WHERE c = ?';
+SET @c=10;
+EXECUTE ref_stmt USING @c;
+id	c
+1	10
+2	10
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	0
+# Cached ref apply must enable key-read before the ref iterator reads.
+SET SESSION debug='+d,plan_cache_require_ref_keyread';
+SET @c=20;
+EXECUTE ref_stmt USING @c;
+id	c
+3	20
+SET @c=30;
+EXECUTE ref_stmt USING @c;
+id	c
+6	30
+SET SESSION debug='-d,plan_cache_require_ref_keyread';
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	2
+DEALLOCATE PREPARE ref_stmt;
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	2
+# The optimizer reports a covering ref_or_null read.
+EXPLAIN SELECT id, c FROM pc5u_keyread FORCE INDEX (c_id_idx)
+WHERE c = 10 OR c IS NULL;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	pc5u_keyread	NULL	ref_or_null	c_id_idx	c_id_idx	5	const	#	#	Using where; Using index
+PREPARE ref_or_null_stmt FROM
+'SELECT id, c FROM pc5u_keyread FORCE INDEX (c_id_idx) WHERE c = ? OR c IS NULL';
+SET @c=10;
+EXECUTE ref_or_null_stmt USING @c;
+id	c
+1	10
+2	10
+4	NULL
+5	NULL
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	2
+# Cached ref_or_null apply must also preserve key-read.
+SET SESSION debug='+d,plan_cache_require_ref_keyread';
+SET @c=20;
+EXECUTE ref_or_null_stmt USING @c;
+id	c
+3	20
+4	NULL
+5	NULL
+SET @c=999;
+EXECUTE ref_or_null_stmt USING @c;
+id	c
+4	NULL
+5	NULL
+SET SESSION debug='-d,plan_cache_require_ref_keyread';
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	1
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	4
+DEALLOCATE PREPARE ref_or_null_stmt;
+SHOW STATUS LIKE 'Cached_plan_count';
+Variable_name	Value
+Cached_plan_count	0
+SHOW STATUS LIKE 'Cached_plan_hits';
+Variable_name	Value
+Cached_plan_hits	4
+DROP TABLE pc5u_keyread;
