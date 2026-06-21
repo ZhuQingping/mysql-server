@@ -103,6 +103,16 @@ enum class PQ_orderby_materialize_status : uint8 {
   ERROR,
 };
 
+enum class PQ_orderby_ordered_read_status : uint8 {
+  ROW = 1,
+  EOF_REACHED,
+  WOULD_BLOCK,
+  DETACHED,
+  UNSUPPORTED,
+  DISABLED,
+  ERROR,
+};
+
 struct PQ_orderby_frame_header {
   uint32 magic;
   uint16 version;
@@ -302,6 +312,7 @@ class Exchange_sort final : public Exchange {
   std::vector<bool> m_heap_reader_in_heap;
   std::vector<bool> m_heap_reader_terminal_workers;
   bool m_orderby_read_mq_shape_enabled{false};
+  bool m_orderby_rich_status_shape_enabled{false};
 
   bool init_sort_state_shape(uint32 workers, bool stable_output,
                              bool index_sort, uint32 sort_order_length,
@@ -348,6 +359,9 @@ class Exchange_sort final : public Exchange {
   bool init_orderby_heap_reader_state_shape(uint32 workers, bool descending);
   bool read_next_ordered_record_image_owned_shape(
       std::vector<uchar> *row_image, PQ_orderby_stream_read_status *status);
+  bool read_ordered_record_rich_status_shape(
+      std::vector<uchar> *row_image, PQ_orderby_ordered_read_status *status);
+  bool run_orderby_rich_status_api_smoke();
   void cleanup_orderby_heap_reader_state_shape();
   void cleanup_real_init_state_owner_shape();
   void cleanup_runtime_sort_state_owner_shape();

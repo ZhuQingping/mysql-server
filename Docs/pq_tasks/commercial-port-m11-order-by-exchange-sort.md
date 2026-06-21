@@ -6777,6 +6777,121 @@ Code/Doc/Test Review - M11-E5l:
 - confirmed docs record the residual risk that public `read_mq_message()` cannot
   express WOULD_BLOCK / DETACHED distinctly。
 
+### M11-E5m: Exchange_sort Ordered Read Rich Status API
+
+Status: Code/Doc/Test Review accepted；ready to commit。
+
+Goal:
+
+- add a controlled internal richer status API for ordered reads；
+- explicitly represent `ROW`, `EOF_REACHED`, `WOULD_BLOCK`, `DETACHED`,
+  `UNSUPPORTED`, `DISABLED`, and `ERROR`；
+- keep public `read_mq_message()` default behavior inert；
+- keep `materialize_next_ordered_record_image_status()` fail-closed as
+  `DISABLED`；
+- do not connect this API to default SQL execution or user-visible ORDER BY PQ。
+
+Design Explorer - M11-E5m:
+
+- verdict: `ACCEPT WITH SCOPE REVISION`；
+- next step should prioritize richer status API before ordered materializer
+  owner shape；
+- reason: the public bool / FINISH shape cannot distinguish temporary
+  WOULD_BLOCK, worker DETACHED, EOF, and ERROR；materialization before this
+  boundary risks treating transient states as EOF；
+- follow-up task after E5m should be M11-E5n ordered materializer owner shape。
+
+Allowed files:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- this taskbook and `Docs/pq_tasks/README.md`。
+
+Forbidden:
+
+- `pq_optimizer.*`, `sql_optimizer.*`, `sql_executor.*`, `access_path.*`,
+  `sql_parallel.*`, `pq_iterators.*`, `Query_result_mq.*`, handler/InnoDB, or
+  storage-engine changes；
+- relaxing `HAS_ORDER_BY`；
+- changing default `Exchange_sort::read_mq_message()` behavior when the private
+  E5l flag is false；
+- changing `materialize_next_ordered_record_image_status()` non-`DISABLED`
+  behavior；
+- adding public readiness counters, sysvars, or user-visible ORDER BY
+  eligibility。
+
+Implementation plan:
+
+- add private `PQ_orderby_ordered_read_status` as the richer internal boundary；
+- add private `read_ordered_record_rich_status_shape()`；
+- add a private smoke-only enable flag, default false；
+- map disabled state to `DISABLED`；
+- map enabled-but-not-ready owned reader state to `UNSUPPORTED`；
+- map owned heap-reader states one-for-one:
+  `ROW`, `EOF_REACHED`, `WOULD_BLOCK`, `DETACHED`, and `ERROR`；
+- add private `run_orderby_rich_status_api_smoke()` and call it from the
+  existing ordered-reader skeleton smoke, without adding public counters or new
+  MTR files。
+
+Validation:
+
+- `git diff --check`；
+- `cmake --build build-ninja --target mysqld -j 16`；
+- targeted MTR:
+  `pq_commercial_order_by pq_commercial_order_by_frames pq_stats`；
+- full `parallel_query` suite；
+- confirm ORDER BY SQL remains serial through `HAS_ORDER_BY` and PQ executed /
+  worker / range counters do not grow for visible ORDER BY。
+
+Completion Report - M11-E5m:
+
+- changed files:
+  - `sql/parallel_query/exchange_sort.h`；
+  - `sql/parallel_query/exchange_sort.cc`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - added private richer status enum
+    `PQ_orderby_ordered_read_status`；
+  - added private `read_ordered_record_rich_status_shape()`；
+  - added private `m_orderby_rich_status_shape_enabled`, default false and
+    cleared by `cleanup_order_gather_shape()`；
+  - added private `run_orderby_rich_status_api_smoke()`；
+  - smoke covers disabled, unsupported, would-block, row, EOF, error, and
+    detached mappings；
+  - wired the smoke through existing
+    `run_orderby_ordered_reader_skeleton_smoke()`；
+  - no default `read_mq_message()`, materializer, optimizer, iterator,
+    handler/InnoDB, sysvar, or public counter changes。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `pq_commercial_order_by pq_commercial_order_by_frames pq_stats`
+    plus `shutdown_report`；
+  - full `parallel_query` suite passed: 89/89。
+- residual risk:
+  - this is still an internal status boundary；it does not write
+    `TABLE::record[0]` and does not prove visible ORDER BY readiness；
+  - a later materializer owner must consume this richer status and must not
+    collapse `WOULD_BLOCK` / `DETACHED` into EOF。
+
+Code/Doc/Test Review - M11-E5m:
+
+- Review Agent verdict: `ACCEPT`；
+- no blocking findings；
+- confirmed richer status API is private to `Exchange_sort` and has no external
+  SQL / optimizer / iterator / handler / InnoDB call sites；
+- confirmed `DISABLED` and `UNSUPPORTED` mappings are explicit；
+- confirmed `ROW`, `EOF_REACHED`, `WOULD_BLOCK`, `DETACHED`, and `ERROR` map
+  one-for-one from owned heap-reader status；
+- confirmed `WOULD_BLOCK` and `DETACHED` are not folded into EOF；
+- confirmed `m_orderby_rich_status_shape_enabled` defaults false and cleanup
+  clears it；
+- confirmed public `read_mq_message()` remains inert by default and
+  `materialize_next_ordered_record_image_status()` remains `DISABLED`；
+- confirmed `HAS_ORDER_BY` and execution preflight remain fail-closed。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
