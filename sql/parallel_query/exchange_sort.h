@@ -60,6 +60,11 @@ struct PQ_orderby_record_batch {
       PQ_orderby_batch_compare_state::NOT_EVALUATED};
 };
 
+struct PQ_orderby_cached_merge_ctx {
+  PQ_orderby_record_batch *batches{nullptr};
+  bool descending{false};
+};
+
 enum class PQ_orderby_frame_type : uint16 {
   ROW = 1,
   FINISH = 2,
@@ -163,6 +168,23 @@ struct PQ_orderby_runtime_sort_state_owner_shape {
   bool filesorts_cleanup_attached{false};
   bool qep_attached{false};
   bool access_path_attached{false};
+};
+
+struct PQ_orderby_heap_reader_state_shape {
+  uint32 workers{0};
+  bool initialized{false};
+  bool heap_initialized{false};
+  bool cleanup_seen{false};
+};
+
+struct PQ_orderby_heap_reader_counters {
+  uint32 finishes_read{0};
+  uint32 would_blocks_read{0};
+  uint32 errors_read{0};
+  uint32 detaches_read{0};
+  uint32 refills_read{0};
+  uint32 heap_replaces_read{0};
+  uint32 heap_removes_read{0};
 };
 
 constexpr uint32 PQ_ORDERBY_FRAME_MAGIC = 0x50514f46;  // "PQOF"
@@ -273,6 +295,11 @@ class Exchange_sort final : public Exchange {
   PQ_orderby_sort_state_shape m_sort_state_shape;
   PQ_orderby_real_init_state_shape m_real_init_state_shape;
   PQ_orderby_runtime_sort_state_owner_shape m_runtime_sort_state_owner_shape;
+  PQ_orderby_heap_reader_state_shape m_heap_reader_state_shape;
+  PQ_orderby_heap_reader_counters m_heap_reader_counters;
+  PQ_orderby_cached_merge_ctx m_heap_reader_ctx;
+  std::vector<bool> m_heap_reader_in_heap;
+  std::vector<bool> m_heap_reader_terminal_workers;
 
   bool init_sort_state_shape(uint32 workers, bool stable_output,
                              bool index_sort, uint32 sort_order_length,
@@ -312,6 +339,10 @@ class Exchange_sort final : public Exchange {
       uint32 *would_blocks_read, uint32 *errors_read, uint32 *detaches_read,
       uint32 *refills_read, uint32 *heap_replaces_read,
       uint32 *heap_removes_read);
+  bool init_orderby_heap_reader_state_shape(uint32 workers, bool descending);
+  bool read_next_ordered_record_image_owned_shape(
+      std::vector<uchar> *row_image, PQ_orderby_stream_read_status *status);
+  void cleanup_orderby_heap_reader_state_shape();
   void cleanup_real_init_state_owner_shape();
   void cleanup_runtime_sort_state_owner_shape();
 };

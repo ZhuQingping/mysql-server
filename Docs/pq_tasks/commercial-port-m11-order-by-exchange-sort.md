@@ -6374,6 +6374,170 @@ Code/Doc/Test Review - M11-E5i-1:
 - confirmed documentation accurately records scope, validation, and residual
   risks。
 
+### M11-E5j: Exchange_sort Default Heap-reader State Owner Shape
+
+Status: completed；Code/Doc/Test Review accepted。
+
+Goal:
+
+- add a default-path-compatible heap-reader state owner shape inside
+  `Exchange_sort`；
+- own heap / in-heap / terminal-worker vectors and reader counters through an
+  explicit init/cleanup lifecycle；
+- drive it only from controlled / DBUG `PQOF` smoke；
+- do not enter default SQL execution and do not open user-visible ORDER BY PQ。
+
+Design Explorer - M11-E5j:
+
+- verdict: `ACCEPT with scope revision`；
+- recommended coding the state owner shape directly after writing this
+  taskbook；
+- selected option A: `Exchange_sort` default heap-reader state owner shape；
+- deferred option B: do not change `Exchange_sort::read_mq_message()` default
+  semantics yet；
+- rejected option C: keep
+  `materialize_next_ordered_record_image_status()` returning `DISABLED`；
+- recommended serial coding with only review agents in parallel。
+
+Allowed files:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- `sql/parallel_query/sql_parallel.cc` only for DBUG smoke dispatch and summary；
+- `sql/parallel_query/sql_parallel.h` / `sql/mysqld.cc` only if a minimal new
+  counter is required；
+- focused `pq_commercial_order_by*.test/result` and `pq_stats.result` only if
+  counters change；
+- this taskbook and `Docs/pq_tasks/README.md`。
+
+Forbidden:
+
+- `sql/parallel_query/pq_optimizer.*`；
+- `sql/sql_optimizer.*`；
+- `sql/join_optimizer/access_path.*`；
+- `sql/sql_executor.*` / `sql/sql_select.*`；
+- `sql/handler.*`；
+- `storage/innobase/**`；
+- `sql/parallel_query/pq_clone*`；
+- `sql/parallel_query/query_result_mq.*`；
+- `Gather_operator::init()` default `Exchange_nosort` replacement；
+- default `ParallelScanIterator::Read()` / `PQTableScanIterator::Read()`
+  ordered path；
+- `Exchange_sort::read_mq_message()` real MQ consumption；
+- `materialize_next_ordered_record_image_status()` non-`DISABLED` behavior。
+
+Required fail-closed conditions:
+
+- `HAS_ORDER_BY` remains the ordinary SQL serial boundary；
+- `pq_build_orderby_execution_preflight()` continues to return false；
+- `worker_order_frame_producer_ready=false`；
+- `exchange_sort_heap_read_ready=false`；
+- `default_ordered_read_ready=false`；
+- `execution_disabled=true`；
+- ordinary ORDER BY SQL must not increase `Parallel_queries_executed`,
+  workers, or ranges；
+- controlled ASC scalar sort-key smoke must not be treated as real Filesort
+  key, DESC, NULL ordering, rowid tie-break, or runtime readiness。
+
+Implementation expectations:
+
+- add an owned reader state shape that can be initialized with worker count and
+  existing record groups；
+- the state shape should own `binary_heap`, `in_heap`, `terminal_workers`, and
+  reader counters or equivalent tracked fields；
+- cleanup must reset heap/vector/counter ownership and be idempotent；
+- add or adapt one controlled smoke that proves:
+  - initial no-row state returns WOULD_BLOCK without leaking ownership；
+  - ROW / EOF path works with controlled `PQOF` frames；
+  - ERROR / DETACHED path resets or reports through owned state；
+  - cleanup after success and error returns the state to uninitialized；
+- do not add a new public status family unless existing counters cannot prove
+  the smoke。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by \
+  pq_commercial_order_by_frames pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5j_target --tmpdir=/tmp/pqt_m11e5j_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5j_full --tmpdir=/tmp/pqt_m11e5j_full
+```
+
+Review requirements:
+
+- Code/Doc/Test Review Agent must verify no default execution path is opened；
+- Review must confirm `read_mq_message()` remains inert and materializer remains
+  `DISABLED`；
+- Review must confirm heap owner cleanup is explicit and does not leave stale
+  heap/vector state。
+
+Completion Report - M11-E5j:
+
+- changed files:
+  - `sql/parallel_query/exchange_sort.h`；
+  - `sql/parallel_query/exchange_sort.cc`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - moved `PQ_orderby_cached_merge_ctx` to the header so `Exchange_sort` can own
+    a heap-reader context；
+  - added `PQ_orderby_heap_reader_state_shape` and
+    `PQ_orderby_heap_reader_counters`；
+  - added owned state fields for heap reader context, in-heap flags, terminal
+    workers, counters, and heap lifecycle；
+  - added `init_orderby_heap_reader_state_shape()`,
+    `read_next_ordered_record_image_owned_shape()`, and
+    `cleanup_orderby_heap_reader_state_shape()`；
+  - adapted existing `run_orderby_ordered_reader_skeleton_smoke()` to exercise
+    the owned heap-reader state instead of local heap/vector variables；
+  - reused existing DBUG flag/counters for ordered reader skeleton smoke and
+    added no new public status variables。
+- fail-closed scope:
+  - no `pq_optimizer.*` changes；
+  - no readiness flag changes；
+  - no `HAS_ORDER_BY` relaxation；
+  - no `Gather_operator::init()` Exchange selection change；
+  - no `Exchange_sort::read_mq_message()` real MQ consumption；
+  - no materializer behavior change; it remains `DISABLED`；
+  - no default `ParallelScanIterator::Read()` ordered path；
+  - no `Query_result_mq`, handler/InnoDB, AccessPath, or clone changes。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `pq_commercial_order_by pq_commercial_order_by_frames pq_stats`
+    plus `shutdown_report`；
+  - full `parallel_query` suite passed: 89/89。
+- residual risk:
+  - owner state is still controlled-smoke-only and uses ASC scalar sort-key
+    frames；
+  - `read_mq_message()`, materialization, wait/kill policy, default worker MQ
+    consumption, real Filesort key generation, DESC / NULL ordering, rowid
+    tie-break, and visible ORDER BY eligibility remain future reviewed tasks。
+
+Code/Doc/Test Review - M11-E5j:
+
+- verdict: `ACCEPT`；
+- confirmed moving `PQ_orderby_cached_merge_ctx` to the header is reasonable
+  because `Exchange_sort` now owns it as a member；
+- confirmed owned counters preserve existing smoke status semantics and remain
+  wired through the existing DBUG-only path；
+- confirmed `Exchange_sort::read_mq_message()` remains inert and the
+  materializer still returns `DISABLED`；
+- confirmed no tracked diff touches `pq_optimizer.*`, readiness flags,
+  `HAS_ORDER_BY`, `Gather_operator::init()`, iterators, MQ result,
+  handler/InnoDB, or AccessPath；
+- non-blocking lifecycle notes for future phases:
+  - `m_order_heap` is explicit lifecycle rather than RAII; current controlled
+    paths clean it idempotently, but future hardening may use RAII；
+  - `m_heap_reader_ctx.batches` points into `m_record_groups.data()`; future
+    code must keep heap-reader cleanup before clearing/resizing record groups。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
