@@ -489,7 +489,56 @@ bool Exchange_sort::init_real_init_state_owner_shape(
   return false;
 }
 
+bool Exchange_sort::allocate_real_init_buffers_shape() {
+  m_compare_key_buffers[0].clear();
+  m_compare_key_buffers[1].clear();
+  m_tmp_key_buffer.clear();
+  m_min_records.clear();
+  m_record_groups.clear();
+
+  if (!m_real_init_state_shape.initialized ||
+      m_real_init_state_shape.workers == 0 ||
+      m_real_init_state_shape.compare_key_buffer_length == 0 ||
+      m_real_init_state_shape.max_record_length == UINT32_MAX ||
+      m_real_init_state_shape.compare_key_buffer_length !=
+          m_real_init_state_shape.max_record_length + 1 ||
+      m_real_init_state_shape.tmp_key_buffer_length !=
+          (m_real_init_state_shape.rowid_required
+               ? m_real_init_state_shape.ref_length
+               : 0) ||
+      m_real_init_state_shape.min_record_slots !=
+          m_real_init_state_shape.workers ||
+      m_real_init_state_shape.record_group_slots !=
+          m_real_init_state_shape.workers) {
+    return true;
+  }
+  if (m_real_init_state_shape.rowid_required &&
+      m_real_init_state_shape.tmp_key_buffer_length == 0) {
+    return true;
+  }
+
+  m_compare_key_buffers[0].assign(
+      m_real_init_state_shape.compare_key_buffer_length, 0);
+  m_compare_key_buffers[1].assign(
+      m_real_init_state_shape.compare_key_buffer_length, 0);
+  m_tmp_key_buffer.assign(m_real_init_state_shape.tmp_key_buffer_length, 0);
+  m_min_records.resize(m_real_init_state_shape.min_record_slots);
+  m_record_groups.resize(m_real_init_state_shape.record_group_slots);
+
+  return m_compare_key_buffers[0].size() !=
+             m_real_init_state_shape.compare_key_buffer_length ||
+         m_compare_key_buffers[1].size() !=
+             m_real_init_state_shape.compare_key_buffer_length ||
+         m_tmp_key_buffer.size() !=
+             m_real_init_state_shape.tmp_key_buffer_length ||
+         m_min_records.size() != m_real_init_state_shape.min_record_slots ||
+         m_record_groups.size() != m_real_init_state_shape.record_group_slots;
+}
+
 void Exchange_sort::cleanup_real_init_state_owner_shape() {
+  m_compare_key_buffers[0].clear();
+  m_compare_key_buffers[1].clear();
+  m_tmp_key_buffer.clear();
   m_real_init_state_shape = PQ_orderby_real_init_state_shape{};
 }
 
@@ -517,7 +566,11 @@ bool Exchange_sort::run_orderby_sort_state_shape_smoke() {
     return true;
   }
 
-  return run_orderby_real_init_state_owner_smoke();
+  if (run_orderby_real_init_state_owner_smoke()) {
+    return true;
+  }
+
+  return run_orderby_real_init_allocation_smoke();
 }
 
 bool Exchange_sort::run_orderby_sort_state_shape_handoff_smoke(
@@ -576,6 +629,55 @@ bool Exchange_sort::run_orderby_real_init_state_owner_smoke() {
       m_real_init_state_shape.tmp_key_buffer_length != 0) {
     return true;
   }
+  return false;
+}
+
+bool Exchange_sort::run_orderby_real_init_allocation_smoke() {
+  constexpr uint32 kWorkers = 3;
+  constexpr uint32 kSortOrderLength = 2;
+  constexpr uint32 kMaxRecordLength = 64;
+  constexpr uint32 kRefLength = 8;
+
+  if (init_real_init_state_owner_shape(
+          kWorkers, /*stable_output=*/true, /*index_sort=*/false,
+          kSortOrderLength, kMaxRecordLength, kRefLength) ||
+      allocate_real_init_buffers_shape()) {
+    cleanup_order_gather_shape();
+    return true;
+  }
+
+  const bool valid =
+      m_compare_key_buffers[0].size() == kMaxRecordLength + 1 &&
+      m_compare_key_buffers[1].size() == kMaxRecordLength + 1 &&
+      m_tmp_key_buffer.size() == kRefLength &&
+      m_min_records.size() == kWorkers && m_record_groups.size() == kWorkers &&
+      m_real_init_state_shape.initialized &&
+      m_real_init_state_shape.compare_key_buffer_length == kMaxRecordLength + 1;
+
+  cleanup_order_gather_shape();
+  if (!valid || !m_compare_key_buffers[0].empty() ||
+      !m_compare_key_buffers[1].empty() || !m_tmp_key_buffer.empty() ||
+      !m_min_records.empty() || !m_record_groups.empty() ||
+      m_real_init_state_shape.initialized) {
+    return true;
+  }
+
+  if (init_real_init_state_owner_shape(
+          kWorkers, /*stable_output=*/true, /*index_sort=*/false,
+          kSortOrderLength, kMaxRecordLength, kRefLength)) {
+    cleanup_order_gather_shape();
+    return true;
+  }
+  m_real_init_state_shape.compare_key_buffer_length = kMaxRecordLength;
+  if (!allocate_real_init_buffers_shape() ||
+      !m_compare_key_buffers[0].empty() || !m_compare_key_buffers[1].empty() ||
+      !m_tmp_key_buffer.empty() || !m_min_records.empty() ||
+      !m_record_groups.empty()) {
+    cleanup_order_gather_shape();
+    return true;
+  }
+  cleanup_order_gather_shape();
+
   return false;
 }
 

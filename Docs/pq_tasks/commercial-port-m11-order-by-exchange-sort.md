@@ -22,7 +22,9 @@ completed and committed；M11-E5d-4c-1 debug-only optimizer-to-Exchange_sort
 scalar handoff completed，Code/Doc/Test Review Agent accepted，full
 `parallel_query` suite passed，committed as `4dc34748200`；M11-E5d-5 real
 `Exchange_sort` init / MQ / Read boundary design completed and committed；
-M11-E5d-5a `Exchange_sort` real-init state owner shape coding in progress。
+M11-E5d-5a `Exchange_sort` real-init state owner shape completed and
+committed；M11-E5d-5b sort-key buffer / record-group allocation smoke completed,
+reviewed, and ready to commit。
 
 ## 背景
 
@@ -3438,9 +3440,9 @@ Design Review - M11-E5d-5:
 
 ### M11-E5d-5a: Exchange_sort Real-init State Owner Shape
 
-Status: coding completed locally；`git diff --check`, `mysqld` build,
-targeted MTR, and full `parallel_query` suite passed；Code/Doc/Test Review
-pending。
+Status: coding completed；Code/Doc/Test Review Agent accepted；`git diff
+--check`, `mysqld` build, targeted MTR, and full `parallel_query` suite passed；
+committed as `83d91fed0f5`。
 
 Goal:
 
@@ -3497,6 +3499,130 @@ Result:
 - targeted MTR passed，4/4 including `shutdown_report`:
   `pq_commercial_order_by_frames pq_commercial_order_by pq_stats`。
 - full `parallel_query` suite passed，89/89 including `shutdown_report`。
+
+Code/Doc/Test Review - M11-E5d-5a:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed `PQ_orderby_real_init_state_shape` is scalar-only and stores no
+  `ORDER *`, `Filesort *`, `Sort_param *`, `TABLE *`, handler, or storage
+  pointer；
+- confirmed init/cleanup/reset smoke is wired only through existing
+  `pq_exchange_sort_state_shape_smoke` and default SQL behavior is unchanged；
+- confirmed no `Filesort::make_sortorder()`, `Sort_param`, eligibility,
+  AccessPath, handler/InnoDB, worker MQ consumption, or
+  `ParallelScanIterator::Read()` changes；
+- confirmed no MTR/result update is needed because the new owner shape is
+  internal, DBUG-only, and reuses existing smoke counters/result assertions。
+
+### M11-E5d-5b: Sort-key Buffer / Record-group Allocation Smoke
+
+Status: coding completed；Code/Doc/Test Review Agent accepted；`git diff
+--check`, `mysqld` build, targeted MTR, and full `parallel_query` suite passed；
+waiting for commit。
+
+Goal:
+
+- allocate controlled, owned buffer/container placeholders from the 5a scalar
+  real-init state；
+- prove cleanup resets those owned allocations；
+- keep the smoke local to `Exchange_sort` and the existing
+  `pq_exchange_sort_state_shape_smoke` DBUG entry；
+- do not consume real worker MQ frames and do not connect to
+  `ParallelScanIterator::Read()`。
+
+Implementation requirements:
+
+- add owned vectors for two compare-key buffers and one temporary key buffer；
+- resize `m_min_records` and `m_record_groups` according to the 5a worker
+  count；
+- buffer lengths must come from 5a shape:
+  `compare_key_buffer_length = max_record_length + 1`,
+  `tmp_key_buffer_length = ref_length` only when stable output is required；
+- the smoke must verify:
+  - allocation succeeds for stable-output shape；
+  - compare-key buffers have expected lengths；
+  - tmp-key buffer has expected rowid/ref length；
+  - min-record and record-group slots match workers；
+  - cleanup clears buffers, groups, and the real-init owner shape；
+- invalid shapes must fail closed and leave no partial owned state。
+
+Allowed files:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+
+Forbidden files/actions:
+
+- no `sql/filesort.*` or `sql/sort_param.*` changes；
+- no optimizer, executor, AccessPath, handler, or InnoDB changes；
+- no persistent raw optimizer/executor/storage pointers；
+- no real `Filesort::make_sortorder()` visibility or execution；
+- no default worker MQ ORDER BY consumption；
+- no default `ParallelScanIterator::Read()` ordered path；
+- no user-visible `HAS_ORDER_BY` acceptance；
+- no new status variables unless review finds existing smoke counters
+  insufficient。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by_frames \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d5b_target --tmpdir=/tmp/pqt_m11e5d5b_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d5b_full --tmpdir=/tmp/pqt_m11e5d5b_full
+```
+
+Implementation summary:
+
+- added owned compare-key buffers and a tmp-key buffer to `Exchange_sort`；
+- added `Exchange_sort::allocate_real_init_buffers_shape()`；
+- extended `run_orderby_sort_state_shape_smoke()` to run the 5b allocation
+  smoke after the 5a owner-shape smoke；
+- `run_orderby_real_init_allocation_smoke()` verifies expected buffer lengths,
+  worker slot counts, and cleanup reset；
+- reused the existing `pq_exchange_sort_state_shape_smoke` DBUG entry and
+  `Parallel_exchange_sort_state_shape_smoke_*` counters。
+
+Validation result:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed，4/4 including `shutdown_report`:
+  `pq_commercial_order_by_frames pq_commercial_order_by pq_stats`。
+- full `parallel_query` suite passed，89/89 including `shutdown_report`。
+
+Code/Doc/Test Review follow-up:
+
+- added explicit 5a shape self-consistency checks before owned allocation；
+- added an invalid-shape fail-closed smoke that corrupts
+  `compare_key_buffer_length` and verifies allocation fails with owned buffers
+  and containers still empty；
+- re-ran `git diff --check`, `mysqld` build, and targeted MTR after the fix；
+  all passed。
+- re-ran full `parallel_query` suite after the fix；89/89 passed including
+  `shutdown_report`。
+
+Code/Doc/Test Review - M11-E5d-5b:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none after requested changes；
+- confirmed `allocate_real_init_buffers_shape()` pre-clears owned state and
+  validates buffer length self-consistency plus `UINT32_MAX`；
+- confirmed invalid-shape smoke fails closed with empty owned buffers and
+  containers；
+- confirmed the change remains scoped to the four allowed files and runs only
+  through the existing `pq_exchange_sort_state_shape_smoke` DBUG path；
+- confirmed no MTR/result update is needed because existing
+  `pq_commercial_order_by_frames` toggles the DBUG entry and detailed buffer
+  assertions live inside the C++ smoke。
 
 ## Risk Areas
 

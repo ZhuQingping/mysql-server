@@ -154,6 +154,7 @@ class Exchange_sort final : public Exchange {
                                                   uint32 max_record_length,
                                                   uint32 ref_length);
   bool run_orderby_real_init_state_owner_smoke();
+  bool run_orderby_real_init_allocation_smoke();
 
   bool init_order_gather_shape(uint32 workers, bool stable_output,
                                bool index_sort);
@@ -177,6 +178,8 @@ class Exchange_sort final : public Exchange {
  private:
   std::vector<PQ_orderby_cached_record> m_min_records;
   std::vector<PQ_orderby_record_batch> m_record_groups;
+  std::vector<uchar> m_compare_key_buffers[2];
+  std::vector<uchar> m_tmp_key_buffer;
   binary_heap *m_order_heap{nullptr};
   uint32 m_order_shape_workers{0};
   bool m_order_shape_initialized{false};
@@ -194,6 +197,7 @@ class Exchange_sort final : public Exchange {
                                         uint32 sort_order_length,
                                         uint32 max_record_length,
                                         uint32 ref_length);
+  bool allocate_real_init_buffers_shape();
   void cleanup_real_init_state_owner_shape();
 };
 
