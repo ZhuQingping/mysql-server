@@ -218,6 +218,53 @@ bool pq_validate_worker_result_frame(
   return false;
 }
 
+bool pq_decode_worker_result_row(
+    const void *raw_data, uint32 raw_len,
+    std::vector<PQ_worker_result_decoded_field> *fields) {
+  if (fields == nullptr) return true;
+  fields->clear();
+
+  const PQ_worker_result_frame_header *header = nullptr;
+  const uchar *null_bitmap = nullptr;
+  const uchar *payload = nullptr;
+  if (pq_validate_worker_result_frame(raw_data, raw_len, &header, &null_bitmap,
+                                      &payload) ||
+      header == nullptr ||
+      header->type !=
+          static_cast<uint16>(PQ_worker_result_message_type::ROW) ||
+      null_bitmap == nullptr || payload == nullptr) {
+    return true;
+  }
+
+  const uchar *cursor = payload;
+  const uchar *payload_end = payload + header->payload_len;
+  fields->reserve(header->field_count);
+  for (uint32 i = 0; i < header->field_count; ++i) {
+    const char *value = nullptr;
+    uint32 value_len = 0;
+    if (pq_worker_result_decode_field(&cursor, payload_end, &value,
+                                      &value_len)) {
+      fields->clear();
+      return true;
+    }
+
+    const bool is_null =
+        pq_worker_result_is_null(null_bitmap, header->null_bitmap_len, i);
+    if (is_null && value_len != 0) {
+      fields->clear();
+      return true;
+    }
+
+    fields->push_back({is_null ? nullptr : value, value_len, is_null});
+  }
+
+  if (cursor != payload_end) {
+    fields->clear();
+    return true;
+  }
+  return false;
+}
+
 bool pq_run_query_result_mq_contract_smoke(uint32 *rows_read,
                                            uint32 *finishes_read) {
   if (rows_read == nullptr || finishes_read == nullptr) return true;
@@ -372,6 +419,74 @@ bool pq_run_query_result_mq_send_data_smoke(THD *thd, uint32 *rows_read,
 
   handle.cleanup();
   return failed || *rows_read != 1 || *finishes_read != 1 || *errors_read != 1;
+}
+
+bool pq_run_query_result_mq_adapter_smoke(THD *thd, uint32 *rows_read,
+                                          uint32 *finishes_read) {
+  if (thd == nullptr || rows_read == nullptr || finishes_read == nullptr) {
+    return true;
+  }
+  *rows_read = 0;
+  *finishes_read = 0;
+
+  PQ_mq_event sender_event;
+  PQ_mq_event receiver_event;
+  char ring[PQ_MQ_DEFAULT_RING_SIZE];
+  MQueue queue(&sender_event, &receiver_event, ring, sizeof(ring));
+  MQueue_handle handle(&queue, PQ_MQ_DEFAULT_BUFFER_SIZE);
+  if (handle.init()) return true;
+
+  Query_result_mq result(nullptr, &handle, false);
+  mem_root_deque<Item *> fields(thd->mem_root);
+  fields.push_back(new (thd->mem_root) Item_int(7));
+  fields.push_back(new (thd->mem_root) Item_int(42));
+
+  const ha_rows sent_rows_before = thd->get_sent_row_count();
+  bool failed = fields[0] == nullptr || fields[1] == nullptr ||
+                result.send_data(thd, fields) || result.send_eof(thd);
+  thd->set_sent_row_count(sent_rows_before);
+
+  for (uint32 i = 0; !failed && i < 2; ++i) {
+    void *raw_data = nullptr;
+    uint32 raw_len = 0;
+    if (handle.receive(&raw_data, &raw_len) != MQ_SUCCESS) {
+      failed = true;
+      break;
+    }
+
+    const PQ_worker_result_frame_header *header = nullptr;
+    const uchar *decoded_null_bitmap = nullptr;
+    const uchar *decoded_payload = nullptr;
+    if (pq_validate_worker_result_frame(raw_data, raw_len, &header,
+                                        &decoded_null_bitmap,
+                                        &decoded_payload)) {
+      failed = true;
+      break;
+    }
+
+    if (header->type ==
+        static_cast<uint16>(PQ_worker_result_message_type::ROW)) {
+      std::vector<PQ_worker_result_decoded_field> decoded_fields;
+      failed = pq_decode_worker_result_row(raw_data, raw_len, &decoded_fields) ||
+               decoded_fields.size() != 2 || decoded_fields[0].is_null ||
+               decoded_fields[1].is_null || decoded_fields[0].value_len != 1 ||
+               decoded_fields[1].value_len != 2 ||
+               memcmp(decoded_fields[0].value, "7", 1) != 0 ||
+               memcmp(decoded_fields[1].value, "42", 2) != 0;
+      if (!failed) ++(*rows_read);
+    } else if (header->type ==
+               static_cast<uint16>(PQ_worker_result_message_type::FINISH)) {
+      failed = decoded_null_bitmap != nullptr || decoded_payload != nullptr ||
+               header->field_count != 0 || header->null_bitmap_len != 0 ||
+               header->payload_len != 0;
+      if (!failed) ++(*finishes_read);
+    } else {
+      failed = true;
+    }
+  }
+
+  handle.cleanup();
+  return failed || *rows_read != 1 || *finishes_read != 1;
 }
 
 Query_result_mq::Query_result_mq(JOIN *join, MQueue_handle *msg_handler,

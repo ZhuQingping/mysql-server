@@ -27,7 +27,8 @@ M10-D final `parallel_query` suite clean run 已完成，79/79 通过，
 并通过 Docs-Test Review。
 M11 Post-M10 Commercial Main Architecture Restart 已启动：M11-A0 plan
 clone / resolver contract 与 M11-B0 worker result / `Query_result_mq`
-adapter contract 已生成，当前等待 Docs-Design Review。
+adapter contract 已生成并通过 Docs-Design Review。M11-B1/B2 PQWR leader
+decode adapter coding/validation completed，并通过 Code-Docs-Test Review。
 
 本文档是商用实现平移的总差异清单和迁移计划。M3-M10 后续执行采用 Codex 主控 + 子 Agent 只读/实现后 review 的方式推进：每个阶段先按任务书实施，实施完成后启动独立 review 子 Agent 检视阶段 diff、测试证据和风险项，主控确认意见闭环后再提交。
 

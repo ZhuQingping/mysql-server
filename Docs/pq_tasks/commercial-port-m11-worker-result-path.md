@@ -3,6 +3,8 @@
 ## 状态
 
 M11-B0 design-only completed / Docs-Design Review accepted。
+M11-B1/B2 PQWR leader decode adapter coding/validation completed /
+Code-Docs-Test Review accepted。
 
 ## 目标
 
@@ -77,6 +79,10 @@ M11-B1/B2 不支持：
 - `sql/parallel_query/query_result_mq.cc`；
 - `sql/parallel_query/exchange.h`；
 - `sql/parallel_query/exchange.cc`；
+- `sql/parallel_query/sql_parallel.h` / `.cc` only for adding the local smoke
+  wrapper；
+- `sql/parallel_query/pq_iterator.cc` only for wiring the local smoke into the
+  existing guarded `PQTableScanIterator::Init()` smoke chain；
 - `Docs/pq_tasks/commercial-port-m11-worker-result-path.md`。
 
 禁止：
@@ -91,8 +97,9 @@ M11-B1/B2 不支持：
 - `sql/parallel_query/pq_clone*`；
 - `sql/parallel_query/pq_resolver*`；
 - `sql/parallel_query/pq_iterators.*`；
-- `sql/parallel_query/pq_iterator.*`；
-- `sql/parallel_query/sql_parallel.*`，除非 B3 明确进入 guarded probe。
+- any `pq_iterator.*` change outside the existing guarded
+  `PQTableScanIterator::Init()` smoke chain；
+- any `sql_parallel.*` change outside a local smoke wrapper；
 
 验证：
 
@@ -129,6 +136,67 @@ TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
   --vardir=/tmp/pqv_m11b_full --tmpdir=/tmp/pqt_m11b_full
 ```
 
+## M11-B1/B2 Implementation Notes
+
+Status: coding/validation completed / Code-Docs-Test Review accepted。
+
+Changed scope:
+
+- `sql/parallel_query/query_result_mq.h`
+- `sql/parallel_query/query_result_mq.cc`
+- `sql/parallel_query/sql_parallel.h`
+- `sql/parallel_query/sql_parallel.cc`
+- `sql/parallel_query/pq_iterator.cc`
+- `mysql-test/suite/parallel_query/t/pq_commercial_worker_result_adapter.test`
+
+Implementation:
+
+- added `PQ_worker_result_decoded_field` and `pq_decode_worker_result_row()`；
+- added local `pq_run_query_result_mq_adapter_smoke()`；
+- wired the adapter smoke after existing M4a/M4b Query_result_mq smokes in the
+  guarded `PQTableScanIterator::Init()` smoke chain；
+- reused existing `Parallel_worker_result_smoke_rows/finishes/errors`
+  counters；
+- did not add new status variables；
+- the adapter smoke itself uses only local MQ and does not start workers,
+  attach `Query_result_mq` to real worker execution, create cloned JOIN,
+  modify AccessPath, or touch handler/InnoDB；
+- the surrounding guarded `PQTableScanIterator::Init()` smoke chain still runs
+  its pre-existing worker lifecycle smoke before this adapter smoke。
+
+Validation:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --record pq_commercial_worker_result_adapter \
+  --parallel=1 --vardir=/tmp/pqv_m11b_record --tmpdir=/tmp/pqt_m11b_record
+
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_worker_result_adapter \
+  --parallel=1 --vardir=/tmp/pqv_m11b_replay --tmpdir=/tmp/pqt_m11b_replay
+
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_worker_result \
+  pq_commercial_worker_result_adapter pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11b_target --tmpdir=/tmp/pqt_m11b_target
+
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11b_full --tmpdir=/tmp/pqt_m11b_full
+```
+
+Result:
+
+- `mysqld` build passed；
+- `--record` generated `.result` but reported the known copy errno 1 at the
+  end；
+- targeted replay passed；
+- targeted set passed: 4/4；
+- full `parallel_query` suite passed: 80/80；
+- no server restarts or reinitialization。
+
 ### M11-B3: Guarded Worker-result Wiring Probe
 
 目标：
@@ -158,3 +226,12 @@ M11-B0 只接受 docs/design review。B1/B2/B3 每个源码或测试子任务必
 Docs-Design Review Agent accepted this B0 taskbook after confirming it keeps
 `PQWR` as the near-term adapter shell, does not directly migrate
 `Field_raw_data` / Batch_buffer, and does not attach real worker JOIN execution.
+
+Code-Docs-Test Review Agent first returned REVISE for B1/B2 because the
+taskbook allowed/forbidden file boundaries did not mention the local
+`sql_parallel.*` wrapper and guarded `pq_iterator.cc` smoke-chain hook, the
+decoded field pointer lifetime was implicit, and the documentation could be
+read as saying the whole guarded smoke chain never starts workers. The follow-up
+revision narrowed those statements: adapter smoke itself uses local MQ only,
+while the surrounding `PQTableScanIterator::Init()` guarded smoke chain still
+runs pre-existing worker lifecycle smoke. Re-review returned ACCEPT.

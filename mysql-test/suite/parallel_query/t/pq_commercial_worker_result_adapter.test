@@ -1,0 +1,52 @@
+# Verify M11-B PQWR leader decode adapter smoke.
+
+--source include/have_innodb_16k.inc
+
+CREATE TABLE pq_commercial_worker_result_adapter_t (
+  id INT PRIMARY KEY,
+  v INT
+) ENGINE=InnoDB;
+INSERT INTO pq_commercial_worker_result_adapter_t VALUES
+  (1, 10), (2, 20), (3, 30);
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+
+SET @worker_result_rows_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_rows');
+SET @worker_result_finishes_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_finishes');
+SET @worker_result_errors_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_errors');
+SET @workers_launched_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_workers_launched');
+
+SELECT id, v FROM pq_commercial_worker_result_adapter_t WHERE v >= 0;
+
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_rows') -
+  @worker_result_rows_before) >= 3 AS worker_result_rows_delta_at_least_3;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_finishes') -
+  @worker_result_finishes_before) >= 3 AS worker_result_finishes_delta_at_least_3;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_errors') -
+  @worker_result_errors_before) >= 1 AS worker_result_errors_delta_at_least_1;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_workers_launched') -
+  @workers_launched_before) AS workers_launched_delta;
+
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+
+DROP TABLE pq_commercial_worker_result_adapter_t;

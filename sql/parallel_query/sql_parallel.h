@@ -891,6 +891,18 @@ class Gather_operator {
   bool run_query_result_mq_send_data_smoke(THD *leader_thd);
 
   /**
+    Run an M11-B2 Query_result_mq leader adapter smoke.
+
+    This validates that a synthetic PQWR ROW frame can be decoded into
+    leader-side field views. It does not materialize rows into TABLE,
+    attach Query_result_mq to worker execution, or start workers.
+
+    @retval false  Smoke pass completed
+    @retval true   Smoke pass failed
+  */
+  bool run_query_result_mq_adapter_smoke(THD *leader_thd);
+
+  /**
     Run a limited V2-8J callback multi-row producer smoke pass.
 
     This uses the push-style handler callback producer and a SQL-owned row sink

@@ -27,6 +27,8 @@
 #include "sql/parallel_query/msg_queue.h"
 #include "sql/query_result.h"
 
+#include <vector>
+
 struct Field_raw_data {
   uchar *m_ptr{nullptr};
   uint32 m_len{0};
@@ -50,6 +52,17 @@ struct PQ_worker_result_frame_header {
   uint32 flags;
 };
 
+struct PQ_worker_result_decoded_field {
+  /*
+    Borrowed pointer into the validated worker-result frame payload. The caller
+    must not keep it past the backing raw buffer lifetime or past the next
+    MQueue_handle::receive() on the same queue.
+  */
+  const char *value{nullptr};
+  uint32 value_len{0};
+  bool is_null{false};
+};
+
 constexpr uint32 PQ_WORKER_RESULT_FRAME_MAGIC = 0x50515752;  // "PQWR"
 constexpr uint16 PQ_WORKER_RESULT_FRAME_VERSION = 1;
 
@@ -63,12 +76,19 @@ bool pq_validate_worker_result_frame(
     const PQ_worker_result_frame_header **header, const uchar **null_bitmap,
     const uchar **payload);
 
+bool pq_decode_worker_result_row(
+    const void *raw_data, uint32 raw_len,
+    std::vector<PQ_worker_result_decoded_field> *fields);
+
 bool pq_run_query_result_mq_contract_smoke(uint32 *rows_read,
                                            uint32 *finishes_read);
 
 bool pq_run_query_result_mq_send_data_smoke(THD *thd, uint32 *rows_read,
                                             uint32 *finishes_read,
                                             uint32 *errors_read);
+
+bool pq_run_query_result_mq_adapter_smoke(THD *thd, uint32 *rows_read,
+                                          uint32 *finishes_read);
 
 /*
   This is used to get result from a query executed by PQ worker
