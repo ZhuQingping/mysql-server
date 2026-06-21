@@ -493,6 +493,123 @@ Design Review - M11-E5c:
   ORDER/GROUP restoration, ordered-index/reverse metadata, and no normal
   executor state mutation。
 
+## M11-E5d: Filesort State Contract
+
+Status: design taskbook completed，Review Agent accepted，waiting for commit；
+no source code change yet。
+
+Goal:
+
+- establish a leader-only/debug-only contract for commercial ORDER BY
+  `Filesort` / `Sort_param` state before any visible ORDER BY gate；
+- prove which commercial helpers can be ported safely and which require
+  separate optimizer-state preservation work；
+- keep `HAS_ORDER_BY` serial boundary unchanged。
+
+Commercial reference:
+
+- `ParallelScanIterator::pq_make_filesort()`:
+  - restores saved GROUP or ORDER lists when the optimizer optimized them away；
+  - reconstructs index-order sort metadata when `ORDERED_INDEX_ORDER_BY` is used；
+  - creates a leader `Filesort` when `m_order || m_stable_sort`；
+  - rewrites ORDER direction for reverse range scans；
+  - relies on helper functions such as `restore_list()`,
+    `restore_optimized_group_order()`, `get_table_key_fields()`, and
+    `set_key_order()`。
+- `Exchange_sort::init()`:
+  - calls `Filesort::make_sortorder()`；
+  - marks DESC groups；
+  - creates and initializes `Sort_param` using `init_for_filesort()`；
+  - allocates key buffers and rowid/ref tie-break buffers；
+  - expects stable rowid/ref ownership from handler metadata。
+
+Current branch gap:
+
+- current branch has debug frame/merge/materialization smokes but no
+  `Filesort` / `Sort_param` construction；
+- current branch does not yet carry the commercial saved ORDER/GROUP helper
+  layer；
+- current `pq_optimizer` intentionally rejects `query_block->is_ordered()` with
+  `HAS_ORDER_BY`；
+- current `Exchange_sort::read_mq_message()` remains inert and must not become
+  the user-visible ORDER BY path in E5d。
+
+Allowed files for E5d design/coding:
+
+- design:
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`；
+  - `Docs/pq_tasks/README.md`。
+- coding only after design review:
+  - `sql/parallel_query/exchange_sort.h`；
+  - `sql/parallel_query/exchange_sort.cc`；
+  - `sql/parallel_query/sql_parallel.h`；
+  - `sql/parallel_query/sql_parallel.cc`；
+  - focused MTR under `mysql-test/suite/parallel_query/`；
+  - helper declarations only if review proves they can be isolated from
+    optimizer mutation。
+
+Forbidden in E5d:
+
+- relaxing `HAS_ORDER_BY`；
+- modifying `pq_optimizer.cc` eligibility to allow visible ORDER BY；
+- default `ParallelScanIterator::Read()` changes；
+- worker thread or InnoDB path changes；
+- real `MQ_record_gather` replacement；
+- importing saved ORDER/GROUP restore helpers into optimizer state without a
+  separate review。
+
+Proposed E5d substeps:
+
+1. E5d-0 Read-only Helper Inventory:
+   verify current branch availability of saved ORDER/GROUP state and helper
+   equivalents；produce a short gap list before coding。
+2. E5d-1 Compile-only Filesort Contract Shape:
+   add a fail-closed `PQ_orderby_filesort_contract` structure or helper API that
+   records whether a leader table/order state is usable；no `Filesort`
+   allocation yet if helper state is absent。
+3. E5d-2 Leader-only Filesort Smoke:
+   only if E5d-0/E5d-1 pass review，construct a leader `Filesort` for a
+   narrowly controlled already-present `QEP_TAB::filesort` or direct order
+   pointer；do not restore optimized-away ORDER/GROUP state in this step。
+4. E5d-3 Sort_param Smoke:
+   initialize `Sort_param` against controlled leader table/order metadata and
+   generate a sort key for synthetic record images；keep all state local and
+   clean up before returning。
+
+Required tests:
+
+- `git diff --check`；
+- `cmake --build build-ninja --target mysqld -j 16` for coding steps；
+- targeted MTR:
+  `pq_commercial_order_by pq_commercial_order_by_frames pq_stats`；
+- full `parallel_query` suite；
+- `pq_commercial_order_by` must continue to show `Not parallel HAS_ORDER_BY`
+  and no visible ORDER BY PQ executed/workers/ranges deltas。
+
+Hard stop:
+
+- if current branch lacks saved ORDER/GROUP state equivalent to commercial
+  `saved_join_order`, `saved_join_group_list`, or `saved_optimized_vars`, E5d
+  coding must stop at helper inventory/compile-only shape；
+- if `Filesort::make_sortorder()` or `Sort_param::init_for_filesort()` mutates
+  JOIN/QEP_TAB/TABLE state outside the smoke, stop；
+- if reverse index-order metadata cannot be proven from current AccessPath/QEP
+  state, defer reverse/DESC support；
+- if any MTR indicates visible ORDER BY no longer falls back through
+  `HAS_ORDER_BY`, revert the E5d attempt。
+
+Design Review - M11-E5d:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- required changes before commit: none；
+- suggested next phase: M11-E5d-0 read-only helper inventory first；
+- if current branch still lacks `saved_join_order`, `saved_join_group_list`, or
+  `saved_optimized_vars` equivalents, stop E5d coding at inventory or
+  compile-only fail-closed contract shape；
+- keep `pq_commercial_order_by` as the negative guard for `HAS_ORDER_BY`, with
+  zero executed/workers/ranges deltas before any later visible ORDER BY design。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
