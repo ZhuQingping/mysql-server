@@ -20,8 +20,10 @@ committed；M11-E5d-4b-1 debug-only Exchange_sort scalar sort-state adapter
 shape completed and committed；M11-E5d-4c optimizer-side scalar handoff design
 completed and committed；M11-E5d-4c-1 debug-only optimizer-to-Exchange_sort
 scalar handoff completed，Code/Doc/Test Review Agent accepted，full
-`parallel_query` suite passed，committed as `4dc34748200`；next step is real
-`Exchange_sort` init / MQ / Read boundary design。
+`parallel_query` suite passed，committed as `4dc34748200`；M11-E5d-5 real
+`Exchange_sort` init / MQ / Read boundary design drafted，waiting for
+independent design review；after accepted review, next step is M11-E5d-5a
+`Exchange_sort` real-init state owner shape。
 
 ## 背景
 
@@ -3254,6 +3256,171 @@ Code/Doc/Test Review - M11-E5d-4c-1:
 - confirmed only scalar values are passed to `Exchange_sort`；
 - confirmed `Exchange_sort` remains scalar-only and cleanup-scoped；
 - confirmed forbidden files/actions are not touched。
+
+### M11-E5d-5: Real Exchange_sort Init / MQ / Read Boundary Design
+
+Status: design drafted；waiting for independent design review。
+
+Goal:
+
+- choose the next safe split after E5d-4c-1 scalar handoff；
+- define how current debug-only ORDER BY frame, Filesort/Sort_param scalar
+  handoff, MQ, and `ParallelScanIterator::Read()` pieces should converge toward
+  the commercial `Exchange_sort` path；
+- avoid a single large patch that simultaneously changes Filesort ownership,
+  MQ worker consumption, leader `Read()`, and user-visible ORDER BY eligibility。
+
+Commercial reference path:
+
+- `ParallelScanIterator::pq_make_filesort()` constructs or reuses a leader
+  `Filesort` when merge sort or stable output is needed；
+- `ParallelScanIterator::pq_init_record_gather()` creates `MQ_record_gather`
+  and passes `Filesort *`, worker count, DESC groups, stable-output, and
+  index-sort flags；
+- `MQ_record_gather::mq_scan_init()` selects `Exchange_sort` when sort metadata
+  exists, otherwise `Exchange_nosort`；
+- commercial `Exchange_sort::init()` calls `Exchange::init()`, then mixes:
+  `Filesort::make_sortorder()`, DESC group marking, `Sort_param` allocation and
+  `init_for_filesort()`, compare-key buffers, rowid/ref-length checks,
+  record-group allocation, and heap setup；
+- commercial `MQ_record_gather::mq_scan_next()` delegates to
+  `Exchange_sort::read_mq_record()`；`ParallelScanIterator::Read()` returns one
+  row when `mq_scan_next()` succeeds and EOF otherwise。
+
+Current branch facts:
+
+- E5b-0/E5b-1/E5b-2/E5b-3 introduced an ORDER BY frame contract, controlled
+  K-way merge, empty/ERROR edges, and debug-only row materialization smoke；
+- E5d-S1/S2/S3 and E5d-2a/2b/2c/2d introduced saved ORDER/GROUP and owned
+  sidecar/clone-copy contracts；
+- E5d-3a/E5d-3c can construct a restored-order debug `Filesort` in the
+  `HAS_ORDER_BY` reject window；
+- E5d-4a initializes a stack-local `Sort_param` for that debug `Filesort`；
+- E5d-4b-1 and E5d-4c-1 hand scalar Filesort/Sort_param metadata to
+  `Exchange_sort` without persisting raw optimizer pointers；
+- current `Exchange_sort` still has no persistent real `Sort_param`, no real
+  `make_sortorder()` visibility change, and no default worker MQ consumption；
+- current `ParallelScanIterator::Read()` consumes `Exchange_nosort`
+  materialized record images only；ORDER BY remains rejected by `HAS_ORDER_BY`。
+
+Explorer confirmations:
+
+- Commercial Path Explorer confirmed `Exchange_sort::init()` is not a small
+  constructor-equivalent step: it combines base MQ init, `make_sortorder()`,
+  DESC marking, `Sort_param::init_for_filesort()`, compare-key buffers,
+  rowid/ref-length validation, per-worker record groups, and heap setup；
+- Commercial Path Explorer confirmed ordered `Read()` is thin only after
+  `MQ_record_gather` and `Exchange_sort` are fully initialized: leader
+  `Read()` calls `mq_scan_next()`, which delegates to
+  `Exchange_sort::read_mq_record()` and writes the min heap record into
+  `table->record[0]`；
+- Current Branch Explorer confirmed current `Exchange_sort::read_mq_message()`
+  is still a FINISH/no-data stub and all ORDER BY behavior is debug/smoke
+  scoped；
+- Current Branch Explorer confirmed `PQOF` ORDER BY frames and `PQWR`
+  worker-result frames must remain separate；do not mix SELECT-list worker
+  result frames with ORDER BY row/sort-key frames；
+- both explorers recommend keeping the next step to state/init shape,
+  ordered MQ/rowid frame contract, and Read boundary adapter before any
+  user-visible ORDER BY eligibility。
+
+Design decision:
+
+- do not implement commercial `Exchange_sort::init()` in one patch；
+- keep `HAS_ORDER_BY` rejection and all user-visible ORDER BY PQ disabled；
+- split the real-path migration into small reviewed subtasks that each prove one
+  ownership/lifetime boundary。
+
+Proposed follow-up split:
+
+1. M11-E5d-5a: `Exchange_sort` real-init state owner shape.
+   - compile/debug-only owner struct for scalar sort metadata plus owned buffer
+     slots needed by commercial init；
+   - no persisted `Filesort *`, `Sort_param *`, `ORDER *`, `TABLE *`, or
+     handler pointer；
+   - no `Filesort::make_sortorder()` visibility change；
+   - validation: debug smoke proves init/cleanup/reset and full suite passes。
+
+2. M11-E5d-5b: sort-key buffer and record-group allocation smoke.
+   - allocate compare-key buffers and worker record-group containers from
+     `Exchange_sort` owned state using scalar lengths from E5d-4c-1；
+   - verify cleanup on success/error and stable rowid-required shape；
+   - no MQ receive from normal worker path。
+
+3. M11-E5d-5c: controlled ORDER BY MQ-to-record-group loader.
+   - consume only dedicated E5b ORDER BY frames from controlled local MQ；
+   - deep-copy record image, rowid, and optional prebuilt sort key into
+     `Exchange_sort` owned record groups；
+   - handle FINISH/ERROR/WOULD_BLOCK explicitly；
+   - existing PQWR worker-result frames must remain unchanged。
+
+4. M11-E5d-5d: debug-only ordered leader Read shadow path.
+   - add a DBUG-only shadow helper that lets `ParallelScanIterator` consume an
+     already-populated `Exchange_sort` in an isolated smoke；
+   - do not route default SQL or normal ORDER BY queries to it；
+   - preserve existing `Exchange_nosort` `Read()` behavior and counters。
+
+5. M11-E5d-5e: user-visible ORDER BY eligibility gate design.
+   - design only, after 5a-5d pass；
+   - define the first visible subset and negative tests；
+   - likely limit to single-table, ASC, non-nullable/simple fields, no LIMIT
+     pushdown, no GROUP BY/DISTINCT/HAVING/window, and no DESC until explicit
+     tests exist。
+
+Allowed files for M11-E5d-5 design only:
+
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+
+Allowed files for future coding after design review:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- `sql/parallel_query/exchange.h` / `.cc` only for reusable typed-MQ status
+  helpers；
+- `sql/parallel_query/sql_parallel.h` / `.cc` only for DBUG counters and smoke
+  orchestration；
+- `mysql-test/suite/parallel_query/` focused MTRs；
+- M11 taskbook and progress README。
+
+Forbidden until a later reviewed gate:
+
+- `sql/filesort.*` and `sql/sort_param.*` visibility or ownership changes；
+- persistent raw `ORDER *`, `Filesort *`, `Sort_param *`, `TABLE *`, `handler *`
+  inside `Exchange_sort` real state；
+- commercial `MQ_record_gather` wholesale import；
+- default worker MQ ORDER BY consumption；
+- default `ParallelScanIterator::Read()` ORDER BY path；
+- optimizer eligibility, AccessPath, handler, or InnoDB changes；
+- user-visible `HAS_ORDER_BY` acceptance；
+- `filesort()` execution inside PQ ORDER BY path。
+
+Required validation for future coding subtasks:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_saved_order_group_contract \
+  pq_commercial_order_by_frames pq_commercial_order_by pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11e5d5_target \
+  --tmpdir=/tmp/pqt_m11e5d5_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d5_full --tmpdir=/tmp/pqt_m11e5d5_full
+```
+
+Design review request:
+
+- confirm the 5a-5e split is small enough and keeps risky ownership/lifetime
+  boundaries serial；
+- confirm 5a should still avoid persistent raw optimizer/executor pointers；
+- confirm 5b/5c should prove allocation and controlled MQ consumption before
+  any `Read()` bridge；
+- confirm 5d must remain DBUG-only and should not change default
+  `ParallelScanIterator::Read()` behavior；
+- confirm user-visible ORDER BY eligibility should remain blocked until 5e
+  design review。
 
 ## Risk Areas
 
