@@ -1792,6 +1792,11 @@ bool Gather_operator::run_worker_callback_limited_producer(
   }
 
   bool failed = pq_open_worker_table(&worker->m_open_ctx);
+  bool rnd_inited = false;
+  if (!failed) {
+    failed = worker->m_open_ctx.worker_handler->ha_rnd_init(true) != 0;
+    rnd_inited = !failed;
+  }
   if (!failed) {
     failed = worker->m_open_ctx.worker_handler->pq_worker_scan_init(
         &worker->m_open_ctx, &worker->m_worker_ctx) != 0;
@@ -1816,6 +1821,9 @@ bool Gather_operator::run_worker_callback_limited_producer(
     worker->m_open_ctx.worker_handler->pq_worker_scan_end(
         worker->m_worker_ctx);
     worker->m_worker_ctx = nullptr;
+  }
+  if (rnd_inited && worker->m_open_ctx.worker_handler != nullptr) {
+    worker->m_open_ctx.worker_handler->ha_rnd_end();
   }
   if (worker->m_open_ctx.worker_table != nullptr) {
     pq_close_worker_table(&worker->m_open_ctx, failed);

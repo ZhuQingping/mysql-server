@@ -1453,6 +1453,49 @@ Docs-Design Review:
   handler/InnoDB, no `Query_result_mq`, no clone/JOIN, no AccessPath, and no
   Exchange protocol changes。
 
+Implementation:
+
+- updated `Gather_operator::run_worker_callback_limited_producer()` to wrap
+  worker callback row production with `ha_rnd_init(true)` / `ha_rnd_end()`；
+- kept the change inside `sql_parallel.cc` and matched the existing threaded
+  callback producer handler scan init/end pattern；
+- did not modify `exchange.*`, handler/InnoDB, `Query_result_mq`, clone/JOIN,
+  AccessPath/factory, or default execution behavior；
+- added focused MTR `pq_leader_row_stream_row_values`；
+- the test uses a two-row fixed integer InnoDB table without primary or
+  secondary indexes and keeps visible SELECT output enabled；
+- the test verifies actual row values `(1,10)` and `(2,20)`, D4b
+  attempts/selected/rows deltas, executed/rows/fallback/probe/workers deltas,
+  and no D4a/D4c counter growth。
+
+Validation result:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- `--record pq_leader_row_stream_row_values` executed successfully but MTR
+  failed to copy the new result file with errno 1, so the result file was
+  synchronized from the generated test log；
+- targeted MTR passed:
+  `pq_leader_row_stream_row_values` and `pq_stats`, 3/3 including
+  `shutdown_report`；
+- full `parallel_query` suite passed, 85/85。
+
+Code-Docs-Test Review:
+
+- Review Agent returned `ACCEPT`；
+- confirmed `sql_parallel.cc` only adds `ha_rnd_init(true)` /
+  `ha_rnd_end()` in `Gather_operator::run_worker_callback_limited_producer()`；
+- confirmed no forbidden tracked files were modified, including handler/InnoDB,
+  `exchange.*`, `Query_result_mq`, clone/JOIN, AccessPath/factory, and
+  `pq_iterators.*`；
+- confirmed cleanup order matches existing threaded producer practice:
+  `pq_worker_scan_end()` before `ha_rnd_end()`；
+- confirmed MTR uses a two-row fixed integer InnoDB table with no primary or
+  secondary index and visible SELECT output `(1,10)`, `(2,20)`；
+- confirmed MTR asserts D4b deltas, executed/rows/fallback/probe/workers
+  deltas, and D4a/D4c counters remain 0；
+- non-blocking note: new MTR test/result files must be explicitly staged。
+
 ## Review 要求
 
 - D0 requires Docs-Design Review；
