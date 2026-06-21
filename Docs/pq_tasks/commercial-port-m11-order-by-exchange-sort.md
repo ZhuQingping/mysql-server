@@ -9,8 +9,9 @@ M11-E5d-2 design completed and committed；M11-E5d-2a owned ORDER chain copy
 smoke completed and committed；M11-E5d-2b optimized flag contract smoke
 completed and committed；M11-E5d-2c restore-to-sidecar contract smoke
 completed and committed；M11-E5d-2d clone-copy contract smoke completed and
-committed。Next: design the first post-sidecar Filesort integration boundary
-without enabling user-visible ORDER BY PQ。
+committed；M11-E5d-3 design completed and committed；M11-E5d-3a restored
+ORDER Filesort contract coding completed，waiting for review/full
+validation/commit。
 
 ## 背景
 
@@ -2199,6 +2200,98 @@ Design Review - M11-E5d-3:
   marking, `Sort_param`, `Exchange_sort`, worker MQ, and user-visible ORDER BY
   PQ must remain separate follow-ups；
 - confirmed allowed/forbidden scope and validation commands are sufficient。
+
+Commit:
+
+- `2665375de96` Plan PQ M11E filesort sidecar boundary。
+
+### M11-E5d-3a: Restored ORDER Filesort Contract
+
+Status: coding completed；Code/Doc/Test Review Agent accepted；full
+`parallel_query` suite passed；waiting for commit。
+
+Goal:
+
+- extend `PQOrderByFilesortContract` with restored sidecar readiness
+  diagnostics；
+- prove the restored ORDER sidecar can satisfy the first post-sidecar Filesort
+  contract boundary；
+- keep this contract-only: no real `Filesort`, `Sort_param`,
+  `Filesort::make_sortorder()`, `Exchange_sort`, or user-visible ORDER BY PQ。
+
+Implementation:
+
+- extended `PQOrderByFilesortContract` with:
+  - `restored_order_ready`
+  - `restored_order_count`
+  - `sidecar_clone_ready`；
+- added status
+  `PQOrderByFilesortContractStatus::UNSUPPORTED_MISSING_RESTORED_ORDER`；
+- kept existing `pq_build_orderby_filesort_contract()` fail-closed behavior for
+  the E5d-1 scalar saved-contract smoke；
+- added internal helper
+  `pq_build_orderby_filesort_restored_order_contract()` that:
+  - builds the owned ORDER sidecar；
+  - records optimized membership flags；
+  - restores the sidecar ORDER chain；
+  - verifies restored ORDER semantics；
+  - clone-copies the sidecar and verifies clone-owned `next` links；
+  - fills restored-order readiness/count/clone-ready diagnostics；
+- added DBUG smoke
+  `pq_orderby_filesort_restored_order_contract_smoke` on the existing
+  `HAS_ORDER_BY` reject path；
+- added counters:
+  `Parallel_orderby_filesort_restored_order_contract_attempts`,
+  `Parallel_orderby_filesort_restored_order_contract_success`,
+  `Parallel_orderby_filesort_restored_order_contract_unsupported`；
+- extended `pq_saved_order_group_contract` to verify no-DBUG zero counters,
+  DBUG attempts/success, unsupported zero, serial ORDER BY boundary, and zero
+  executed/workers/ranges；
+- updated `pq_stats` Parallel status variable count from 130 to 133。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed:
+  `pq_saved_order_group_contract pq_commercial_order_by pq_stats` 4/4
+  including `shutdown_report`；
+- full `parallel_query` suite passed: 89/89。
+
+Scope notes:
+
+- no `sql/filesort.*` include or edits；
+- no `Filesort` allocation；
+- no direct or indirect `Filesort::make_sortorder()` call；
+- no `Sort_param` allocation or initialization；
+- no `sql/iterators/sorting_iterator.*` edits；
+- no `sql/parallel_query/exchange_sort.*` edits；
+- no `sql/parallel_query/pq_iterators.*` edits；
+- no `sql/parallel_query/pq_clone.*` edits；
+- no `sql/sql_optimizer.*` hook or semantic change；
+- no worker thread, MQ, handler/InnoDB, `Read()`, AccessPath, or
+  `HAS_ORDER_BY` eligibility relaxation。
+
+Code/Doc/Test Review - M11-E5d-3a:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- validation gaps: none；
+- confirmed tracked diff only covers the allowed E5d-3a scope；
+- confirmed no `sql/filesort.*`, sorting iterator, `exchange_sort.*`,
+  `pq_iterators.*`, `pq_clone.*`, `sql_optimizer.*`, handler/InnoDB,
+  AccessPath, `Read()`, MQ, or worker path changes；
+- confirmed the new helper only uses owned ORDER sidecar, flag restore, and
+  clone-copy checks；
+- confirmed no restored sidecar pointer is exposed and live `JOIN::order`,
+  `Item`, and `Field` state are not modified；
+- confirmed `PQOrderByFilesortContract` reset and status semantics are
+  complete；
+- confirmed DBUG smoke remains under the existing `HAS_ORDER_BY` reject path
+  and success requires `ready()`, `restored_order_ready`,
+  `restored_order_count > 0`, and `sidecar_clone_ready`；
+- confirmed SHOW STATUS counters, reset, `pq_stats`, MTR assertions, and docs
+  are consistent。
 
 ## Risk Areas
 

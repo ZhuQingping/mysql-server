@@ -9719,6 +9719,15 @@ DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_filesort_contract_attempts,
                                 orderby_filesort_contract_attempts)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_filesort_contract_unsupported,
                                 orderby_filesort_contract_unsupported)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(
+    orderby_filesort_restored_order_contract_attempts,
+    orderby_filesort_restored_order_contract_attempts)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(
+    orderby_filesort_restored_order_contract_success,
+    orderby_filesort_restored_order_contract_success)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(
+    orderby_filesort_restored_order_contract_unsupported,
+    orderby_filesort_restored_order_contract_unsupported)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(saved_order_chain_copy_smoke_attempts,
                                 saved_order_chain_copy_smoke_attempts)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(saved_order_chain_copy_smoke_success,
@@ -10770,6 +10779,15 @@ SHOW_VAR status_vars[] = {
     {"Parallel_orderby_filesort_contract_unsupported",
      (char *)&show_pq_orderby_filesort_contract_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_filesort_restored_order_contract_attempts",
+     (char *)&show_pq_orderby_filesort_restored_order_contract_attempts,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_filesort_restored_order_contract_success",
+     (char *)&show_pq_orderby_filesort_restored_order_contract_success,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_filesort_restored_order_contract_unsupported",
+     (char *)&show_pq_orderby_filesort_restored_order_contract_unsupported,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_saved_order_chain_copy_smoke_attempts",
      (char *)&show_pq_saved_order_chain_copy_smoke_attempts, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},

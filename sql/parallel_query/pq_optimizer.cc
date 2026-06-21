@@ -422,6 +422,63 @@ static bool pq_order_chain_sidecar_clone_matches(
                                        clone.restored_nodes);
 }
 
+static bool pq_build_orderby_filesort_restored_order_contract(
+    Query_block *query_block, JOIN *join,
+    PQOrderByFilesortContract *contract) {
+  if (contract == nullptr) return false;
+
+  contract->reset();
+  if (query_block == nullptr || join == nullptr) {
+    contract->status = PQOrderByFilesortContractStatus::UNSUPPORTED_NULL_INPUT;
+    contract->detail = "missing Query_block or JOIN";
+    return false;
+  }
+
+  contract->has_order = query_block->is_ordered() || !join->order.empty();
+  contract->stable_sort_requested = contract->has_order;
+
+  PQSavedOrderGroupContract saved_contract;
+  (void)pq_build_saved_order_group_contract(query_block, join, &saved_contract);
+  contract->ordered_index_usage = saved_contract.ordered_index_usage;
+  contract->saved_order_group_ready = saved_contract.ready();
+
+  if (join->order.empty() || join->order.order->next == nullptr) {
+    contract->status =
+        PQOrderByFilesortContractStatus::UNSUPPORTED_MISSING_RESTORED_ORDER;
+    contract->detail = "restored ORDER sidecar is not available";
+    return false;
+  }
+
+  PQ_owned_order_chain_sidecar leader_sidecar;
+  PQ_owned_order_chain_sidecar clone_sidecar;
+  ORDER_with_src optimized_without_first(join->order.order->next,
+                                         join->order.src,
+                                         join->order.is_const_optimized());
+  if (!pq_copy_order_chain(join->order, &leader_sidecar) ||
+      !pq_order_chain_copy_matches(join->order, leader_sidecar) ||
+      !pq_record_order_chain_optimized_flags(optimized_without_first,
+                                             &leader_sidecar) ||
+      !pq_restore_order_chain_from_flags(&leader_sidecar) ||
+      !pq_restored_order_chain_matches_optimized(optimized_without_first,
+                                                 leader_sidecar) ||
+      !pq_clone_order_chain_sidecar(leader_sidecar, &clone_sidecar) ||
+      !pq_order_chain_sidecar_clone_matches(leader_sidecar, clone_sidecar) ||
+      !pq_restored_order_chain_matches_optimized(optimized_without_first,
+                                                 clone_sidecar)) {
+    contract->status =
+        PQOrderByFilesortContractStatus::UNSUPPORTED_MISSING_RESTORED_ORDER;
+    contract->detail = "restored ORDER sidecar contract failed";
+    return false;
+  }
+
+  contract->restored_order_ready = true;
+  contract->restored_order_count = clone_sidecar.restored_nodes.size();
+  contract->sidecar_clone_ready = true;
+  contract->status = PQOrderByFilesortContractStatus::READY;
+  contract->detail = "ready";
+  return true;
+}
+
 struct PQ_copied_key_endpoint {
   key_range range{};
   std::vector<uchar> key;
@@ -737,6 +794,29 @@ static void pq_maybe_run_orderby_filesort_contract_smoke(
           PQOrderByFilesortContractStatus::UNSUPPORTED_MISSING_SAVED_HELPERS) {
     pq_global_stats.orderby_filesort_contract_unsupported.fetch_add(
         1, std::memory_order_relaxed);
+  }
+}
+
+static void pq_maybe_run_orderby_filesort_restored_order_contract_smoke(
+    Query_block *query_block, JOIN *join) {
+  bool enabled = false;
+  DBUG_EXECUTE_IF("pq_orderby_filesort_restored_order_contract_smoke",
+                  enabled = true;);
+  if (!enabled) return;
+
+  pq_global_stats.orderby_filesort_restored_order_contract_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  PQOrderByFilesortContract contract;
+  if (pq_build_orderby_filesort_restored_order_contract(query_block, join,
+                                                        &contract) &&
+      contract.ready() && contract.restored_order_ready &&
+      contract.restored_order_count > 0 && contract.sidecar_clone_ready) {
+    pq_global_stats.orderby_filesort_restored_order_contract_success.fetch_add(
+        1, std::memory_order_relaxed);
+  } else {
+    pq_global_stats.orderby_filesort_restored_order_contract_unsupported
+        .fetch_add(1, std::memory_order_relaxed);
   }
 }
 
@@ -1592,6 +1672,8 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
     pq_maybe_run_saved_order_group_restore_smoke(query_block, join);
     pq_maybe_run_saved_order_group_clone_copy_smoke(query_block, join);
     pq_maybe_run_orderby_filesort_contract_smoke(query_block, join);
+    pq_maybe_run_orderby_filesort_restored_order_contract_smoke(query_block,
+                                                                join);
     pq_maybe_run_saved_order_chain_copy_smoke(query_block, join);
     pq_maybe_run_saved_order_chain_flags_smoke(query_block, join);
     pq_maybe_run_saved_order_chain_restore_smoke(query_block, join);

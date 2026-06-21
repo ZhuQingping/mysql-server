@@ -118,7 +118,8 @@ enum class PQSavedOrderGroupContractStatus {
 enum class PQOrderByFilesortContractStatus {
   READY,
   UNSUPPORTED_NULL_INPUT,
-  UNSUPPORTED_MISSING_SAVED_HELPERS
+  UNSUPPORTED_MISSING_SAVED_HELPERS,
+  UNSUPPORTED_MISSING_RESTORED_ORDER
 };
 
 /**
@@ -224,6 +225,9 @@ struct PQOrderByFilesortContract {
   bool stable_sort_requested{false};
   int ordered_index_usage{0};
   bool saved_order_group_ready{false};
+  bool restored_order_ready{false};
+  uint restored_order_count{0};
+  bool sidecar_clone_ready{false};
 
   void reset() {
     status = PQOrderByFilesortContractStatus::UNSUPPORTED_NULL_INPUT;
@@ -232,6 +236,9 @@ struct PQOrderByFilesortContract {
     stable_sort_requested = false;
     ordered_index_usage = 0;
     saved_order_group_ready = false;
+    restored_order_ready = false;
+    restored_order_count = 0;
+    sidecar_clone_ready = false;
   }
 
   bool ready() const {
