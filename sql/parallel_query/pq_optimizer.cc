@@ -803,6 +803,14 @@ static bool pq_run_orderby_sort_state_handoff_smoke(Query_block *query_block,
   TABLE *table = pq_find_orderby_filesort_smoke_table(query_block, join);
   if (table == nullptr) return false;
 
+  const size_t filesorts_to_cleanup_size = join->filesorts_to_cleanup.size();
+  const ORDER *join_order_head = join->order.order;
+  const Explain_sort_clause join_order_src = join->order.src;
+  const bool join_order_const_optimized = join->order.is_const_optimized();
+  JOIN_TAB **best_ref = join->best_ref;
+  QEP_TAB *qep_tab = join->qep_tab;
+  TABLE *sort_by_table = join->sort_by_table;
+
   PQ_owned_order_chain_sidecar leader_sidecar;
   PQ_owned_order_chain_sidecar clone_sidecar;
   ORDER_with_src optimized_without_first(join->order.order->next,
@@ -848,14 +856,37 @@ static bool pq_run_orderby_sort_state_handoff_smoke(Query_block *query_block,
     return false;
   }
 
+  const bool join_state_unchanged_before_handoff =
+      join->filesorts_to_cleanup.size() == filesorts_to_cleanup_size &&
+      join->order.order == join_order_head && join->order.src == join_order_src &&
+      join->order.is_const_optimized() == join_order_const_optimized &&
+      join->best_ref == best_ref && join->qep_tab == qep_tab &&
+      join->sort_by_table == sort_by_table;
+  if (!join_state_unchanged_before_handoff) return false;
+
   const uint32 workers =
       std::max<uint32>(1, static_cast<uint32>(join->thd->variables.parallel_default_dop));
   Exchange_sort sort_exchange;
-  return !sort_exchange.run_orderby_sort_state_shape_handoff_smoke(
+  const bool first_handoff =
+      !sort_exchange.run_orderby_sort_state_shape_handoff_smoke(
+          workers, /*stable_output=*/true, /*index_sort=*/false,
+          static_cast<uint32>(filesort->sort_order_length()),
+          static_cast<uint32>(sort_param.max_record_length()),
+          /*ref_length=*/1);
+  const bool repeat_handoff =
+      !sort_exchange.run_orderby_sort_state_shape_handoff_smoke(
       workers, /*stable_output=*/true, /*index_sort=*/false,
       static_cast<uint32>(filesort->sort_order_length()),
       static_cast<uint32>(sort_param.max_record_length()),
       /*ref_length=*/1);
+  const bool join_state_unchanged_after_handoff =
+      join->filesorts_to_cleanup.size() == filesorts_to_cleanup_size &&
+      join->order.order == join_order_head && join->order.src == join_order_src &&
+      join->order.is_const_optimized() == join_order_const_optimized &&
+      join->best_ref == best_ref && join->qep_tab == qep_tab &&
+      join->sort_by_table == sort_by_table;
+
+  return first_handoff && repeat_handoff && join_state_unchanged_after_handoff;
 }
 
 struct PQ_copied_key_endpoint {

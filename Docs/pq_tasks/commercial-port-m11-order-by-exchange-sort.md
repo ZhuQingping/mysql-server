@@ -7001,6 +7001,108 @@ Code/Doc/Test Review - M11-E5n:
   handler/InnoDB, default Gather, eligibility, sysvar, readiness, or public
   counter changes。
 
+### M11-E5o: Filesort / Sort_param Real Runtime Owner Readiness
+
+Status: Code/Doc/Test Review accepted；ready to commit。
+
+Goal:
+
+- close the next ORDER BY runtime-owner gap before any visible gate work；
+- strengthen the optimizer-side `Filesort` / `Sort_param` smoke into a
+  runtime owner readiness proof；
+- prove construction, Sort_param initialization, repeated Exchange_sort
+  handoff, and cleanup do not pollute `JOIN` / QEP / AccessPath-visible state；
+- keep execution preflight fail-closed and keep user-visible ORDER BY PQ
+  disabled。
+
+Design Explorer - M11-E5o:
+
+- verdict: coding allowed, but not default ordered read or visible gate；
+- next step must address `Filesort` / `Sort_param` runtime owner readiness；
+- default Exchange_sort selection, `ParallelScanIterator::Read()` ordered hook,
+  and visible eligibility remain too early；
+- readiness evidence may be recorded through controlled smoke only and must not
+  set runtime readiness flags true。
+
+Allowed files:
+
+- `sql/parallel_query/pq_optimizer.cc`；
+- this taskbook and `Docs/pq_tasks/README.md`。
+
+Forbidden:
+
+- `HAS_ORDER_BY` rejection changes；
+- `pq_build_orderby_execution_preflight()` readiness true flags；
+- AccessPath, executor, iterator, `Gather_operator::init()`, `Query_result_mq`,
+  handler/InnoDB, storage-engine, sysvar, or public counter changes；
+- default worker launch or default ordered read integration。
+
+Implementation:
+
+- enhanced existing `pq_run_orderby_sort_state_handoff_smoke()`；
+- snapshot `JOIN::filesorts_to_cleanup`, `JOIN::order`, `best_ref`, `qep_tab`,
+  and `sort_by_table` before real Filesort / Sort_param construction；
+- keep using restored ORDER sidecar and local `Filesort` / stack `Sort_param`；
+- verify Sort_param has a local sort order and nonzero max record length；
+- run `Exchange_sort::run_orderby_sort_state_shape_handoff_smoke()` twice to
+  prove repeat init / cleanup shape；
+- require the JOIN/QEP pointers and cleanup list size to remain unchanged；
+- keep existing DBUG trigger and counters:
+  `pq_orderby_sort_state_handoff_smoke` and
+  `Parallel_orderby_sort_state_handoff_smoke_*`。
+
+Validation:
+
+- `git diff --check`；
+- `cmake --build build-ninja --target mysqld -j 16`；
+- targeted MTR:
+  `pq_commercial_order_by pq_commercial_order_by_frames
+  pq_saved_order_group_contract pq_stats`；
+- full `parallel_query` suite。
+
+Completion Report - M11-E5o:
+
+- changed files:
+  - `sql/parallel_query/pq_optimizer.cc`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - strengthened existing optimizer-side sort-state handoff smoke；
+  - added no-pollution snapshots for `JOIN::filesorts_to_cleanup`,
+    `JOIN::order`, `best_ref`, `qep_tab`, and `sort_by_table`；
+  - added repeat Exchange_sort handoff verification；
+  - did not add counters, sysvars, readiness flags, default Exchange selection,
+    iterator hooks, or visible eligibility。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `pq_commercial_order_by pq_commercial_order_by_frames
+    pq_saved_order_group_contract pq_stats` plus `shutdown_report`；
+  - full `parallel_query` suite passed: 89/89。
+- residual risk:
+  - this is still DBUG-only runtime owner evidence；
+  - it does not make real default ORDER BY execution ready；
+  - worker ORDER BY `PQOF` producer, default heap reader, rowid tie-break,
+    kill/detach/error wait policy, and default ordered `Read()` remain blocked。
+
+Code/Doc/Test Review - M11-E5o:
+
+- Review Agent verdict: `ACCEPT`；
+- no blocking findings；
+- confirmed the enhanced sort-state handoff smoke remains DBUG-only；
+- confirmed default SQL execution and `HAS_ORDER_BY` rejection are unchanged；
+- confirmed no-pollution snapshot covers `filesorts_to_cleanup`, `JOIN::order`,
+  `best_ref`, `qep_tab`, and `sort_by_table`；
+- confirmed local `Filesort` / stack `Sort_param` construction does not push to
+  `JOIN::filesorts_to_cleanup`；
+- confirmed repeated `Exchange_sort` handoff proves repeat init / cleanup shape
+  without setting runtime readiness true；
+- confirmed preflight readiness flags remain false and `execution_disabled`
+  remains true；
+- confirmed no AccessPath, executor, iterator, `Gather_operator`,
+  `Query_result_mq`, handler/InnoDB, sysvar, or public counter changes。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
