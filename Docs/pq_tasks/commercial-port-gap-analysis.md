@@ -35,6 +35,8 @@ M11-A2 Query_block / JOIN clone-link skeleton 已完成，并通过
 Code-Docs-Test Review。
 M11-A3 Resolver helper compile-only subset 已完成，并通过
 Code-Docs-Test Review。
+M11-A4 Clone contract preflight probe 已完成，并通过 Code-Docs-Test
+Review；新增 preflight 诊断计数，但不打开 cloned JOIN 或 worker plan。
 
 本文档是商用实现平移的总差异清单和迁移计划。M3-M10 后续执行采用 Codex 主控 + 子 Agent 只读/实现后 review 的方式推进：每个阶段先按任务书实施，实施完成后启动独立 review 子 Agent 检视阶段 diff、测试证据和风险项，主控确认意见闭环后再提交。
 

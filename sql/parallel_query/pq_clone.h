@@ -45,6 +45,19 @@ bool pq_dup_tabs(JOIN *pq_join, JOIN *join, bool gather);
 JOIN *pq_make_join(THD *thd, JOIN *join);
 
 /**
+  Run the M11-A clone contract preflight.
+
+  The helper verifies whether the current statement has enough local contract
+  support to call the commercial pq_make_join() path. During M11-A4 it is still
+  diagnostic-only and must return false before creating or storing a cloned
+  JOIN.
+
+  @retval false  Clone contract is not executable yet.
+  @retval true   Clone contract is complete enough for a later guarded caller.
+*/
+bool pq_clone_contract_preflight(THD *thd, JOIN *join);
+
+/**
   Run the M3 commercial clone activation probe.
 
   This is intentionally a diagnostic-only preflight. It inspects the JOIN

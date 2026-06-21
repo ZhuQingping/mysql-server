@@ -51,12 +51,33 @@ bool JOIN::restore_optimized_vars() { return true; }
 
 void JOIN::pq_restore() {}
 
+bool pq_clone_contract_preflight(THD *thd, JOIN *join) {
+  pq_global_stats.clone_preflight_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  if (thd == nullptr || join == nullptr || join->query_block == nullptr ||
+      join->query_block->table_count() != 1) {
+    pq_global_stats.clone_preflight_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+
+  /*
+    M11-A has only the base Item/JOIN/Query_block shells and conservative
+    resolver lookup helpers. The commercial clone path still lacks executable
+    Item subclass clone/refix/restore coverage and full QEP_TAB/JOIN state
+    cleanup, so the preflight remains fail-closed.
+  */
+  pq_global_stats.clone_preflight_unsupported.fetch_add(
+      1, std::memory_order_relaxed);
+  return false;
+}
+
 bool pq_clone_activation_probe(THD *thd, JOIN *join) {
   pq_global_stats.clone_probe_attempts.fetch_add(1,
                                                  std::memory_order_relaxed);
 
-  if (thd == nullptr || join == nullptr || join->query_block == nullptr ||
-      join->query_block->table_count() != 1) {
+  if (!pq_clone_contract_preflight(thd, join)) {
     pq_global_stats.clone_probe_unsupported.fetch_add(
         1, std::memory_order_relaxed);
     pq_global_stats.clone_probe_fallback.fetch_add(
@@ -64,8 +85,11 @@ bool pq_clone_activation_probe(THD *thd, JOIN *join) {
     return false;
   }
 
-  // The commercial clone path requires Item/JOIN/QEP_TAB clone contracts not
-  // present in this branch yet. M3 only records the activation boundary.
+  /*
+    A4 does not produce an executable cloned JOIN even if the preflight helper
+    is extended later. Keep activation fail-closed until pq_make_join()
+    ownership, restore, and cleanup contracts are proven.
+  */
   pq_global_stats.clone_probe_unsupported.fetch_add(
       1, std::memory_order_relaxed);
   pq_global_stats.clone_probe_fallback.fetch_add(

@@ -9,6 +9,8 @@ M11-A2 Query_block / JOIN clone-link skeleton completed /
 Code-Docs-Test Review accepted。
 M11-A3 Resolver helper compile-only subset completed /
 Code-Docs-Test Review accepted。
+M11-A4 Clone contract preflight probe completed /
+Code-Docs-Test Review accepted。
 
 ## 目标
 
@@ -188,13 +190,43 @@ Review:
 - 只记录更细诊断，不创建 executable cloned JOIN；
 - `Parallel_clone_probe_success` 不能被误用为 worker plan 可执行。
 
+Implementation notes:
+
+- add `pq_clone_contract_preflight()` as a diagnostic-only helper；
+- expose `Parallel_clone_preflight_attempts` and
+  `Parallel_clone_preflight_unsupported`；
+- keep `Parallel_clone_probe_attempts/fallback/unsupported` semantics；
+- keep `Parallel_clone_probe_success` delta at 0；
+- do not call `pq_make_join()`；
+- do not store cloned JOIN, create `Gather_operator`, start workers, or call
+  handler/InnoDB；
+- if preflight is extended later, activation remains fail-closed until cloned
+  JOIN ownership, restore, and cleanup contracts are proven。
+
+Status: coding/validation completed / Code-Docs-Test Review accepted。
+
 验证：
 
 ```bash
+cmake --build build-ninja --target mysqld -j 16
+
 TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
-  --suite=parallel_query pq_clone_diagnostics \
-  --parallel=1 --vardir=/tmp/pqv_m11a_clone --tmpdir=/tmp/pqt_m11a_clone
+  --suite=parallel_query pq_clone_diagnostics pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11a4_target --tmpdir=/tmp/pqt_m11a4_target
+
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11a4_full --tmpdir=/tmp/pqt_m11a4_full
 ```
+
+Review:
+
+- Explorer accepted the minimal implementation plan and required
+  `Parallel_clone_probe_success` to stay at 0；
+- Code-Docs-Test Review returned `ACCEPT` after confirming preflight remains
+  fail-closed, no `pq_make_join()` / worker / handler / InnoDB path is opened,
+  counters are reset/exported, and MTR covers success/workers delta 0；
+- full `parallel_query` suite passed 80/80。
 
 ### M11-A5: Clone Preflight MTR Smoke
 
