@@ -20,7 +20,8 @@ committed；M11-E5d-4b-1 debug-only Exchange_sort scalar sort-state adapter
 shape completed and committed；M11-E5d-4c optimizer-side scalar handoff design
 completed and committed；M11-E5d-4c-1 debug-only optimizer-to-Exchange_sort
 scalar handoff completed，Code/Doc/Test Review Agent accepted，full
-`parallel_query` suite passed，waiting for commit。
+`parallel_query` suite passed，committed as `4dc34748200`；next step is real
+`Exchange_sort` init / MQ / Read boundary design。
 
 ## 背景
 
@@ -2693,7 +2694,7 @@ Design Review - M11-E5d-4:
 
 Status: coding completed；Code/Doc/Test Review Agent accepted；`git diff
 --check`, `mysqld` build, targeted MTR, and full `parallel_query` suite passed；
-waiting for commit。
+committed as `08579119b9b`。
 
 Goal:
 
@@ -3243,6 +3244,7 @@ Result:
 Code/Doc/Test Review - M11-E5d-4c-1:
 
 - Review Agent verdict: `ACCEPT`；
+- commit: `4dc34748200` Add PQ M11E optimizer sort state handoff；
 - findings: one low documentation finding，top status summary was stale and
   has been refreshed before commit；
 - confirmed the handoff is DBUG-gated via
