@@ -1000,7 +1000,35 @@ ParallelScanIterator::ParallelScanIterator(
       m_stable_output(stab_output),
       m_root_access_path(access_path) {}
 
-bool ParallelScanIterator::Init() { return true; }
+ParallelScanIterator::~ParallelScanIterator() { cleanup_lifecycle(false); }
+
+void ParallelScanIterator::cleanup_lifecycle(bool init_failed) {
+  if (m_cleanup_done) return;
+
+  /*
+    M11-D1 keeps the commercial iterator fail-closed. This helper is still
+    exercised from Init() failure and destructor so the future positive path
+    has a single idempotent cleanup point before workers are enabled here.
+  */
+  if (m_owns_gather && m_gather != nullptr) {
+    m_gather->destroy();
+    delete m_gather;
+    m_gather = nullptr;
+  }
+
+  m_worker_started = false;
+  m_no_fallback_commit = false;
+  m_cleanup_done = true;
+  m_lifecycle_state =
+      init_failed ? Lifecycle_state::FAIL_CLOSED
+                  : Lifecycle_state::CLEANED_UP;
+}
+
+bool ParallelScanIterator::Init() {
+  m_lifecycle_state = Lifecycle_state::INITIALIZING;
+  cleanup_lifecycle(true);
+  return true;
+}
 
 int ParallelScanIterator::Read() { return 1; }
 

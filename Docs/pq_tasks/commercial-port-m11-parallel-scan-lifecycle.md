@@ -167,6 +167,39 @@ TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
   --parallel=1 --vardir=/tmp/pqv_m11d1_target --tmpdir=/tmp/pqt_m11d1_target
 ```
 
+Status: coding/validation completed / Code-Docs-Test Review accepted。
+
+Implementation:
+
+- added explicit `ParallelScanIterator` lifecycle state；
+- added destructor and idempotent private cleanup helper；
+- documented borrowed optimizer/executor pointers and current borrowed
+  `Gather_operator` ownership；
+- cleanup helper is exercised from `Init()` failure and destructor；
+- `Init()` remains fail-closed；
+- `Read()` remains fail-closed；
+- no factory/hook behavior changed。
+
+Validation result:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed: `pq_commercial_worker_result_adapter`
+  `pq_clone_diagnostics` `pq_stats`, 4/4。
+
+Code-Docs-Test Review:
+
+- Review Agent returned `ACCEPT`；
+- confirmed only `pq_iterators.*` and taskbook changed；
+- confirmed `ParallelScanIterator::Init()` and `Read()` remain fail-closed；
+- confirmed cleanup helper is called from `Init()` failure and destructor and is
+  guarded by `m_cleanup_done`；
+- confirmed current `Gather_operator` ownership stays borrowed and no
+  incomplete/delete risk exists；
+- non-blocking suggestion to explicitly mention base `TABLE` borrowed ownership
+  was applied；
+- post-review build and targeted MTR passed again。
+
 ### M11-D2: Lifecycle Status Smoke
 
 Only after D1 review accepted. Add observability for fail-closed lifecycle

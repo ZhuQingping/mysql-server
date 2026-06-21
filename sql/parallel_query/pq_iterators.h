@@ -51,18 +51,38 @@ class ParallelScanIterator final : public TableRowIterator {
                        double expected_rows, ha_rows *examined_rows, JOIN *join,
                        Gather_operator *gather, bool stab_output = false,
                        AccessPath *access_path = nullptr);
+  ~ParallelScanIterator() override;
 
   bool Init() override;
   int Read() override;
 
  private:
+  enum class Lifecycle_state : uint8_t {
+    CONSTRUCTED,
+    INITIALIZING,
+    FAIL_CLOSED,
+    CLEANED_UP,
+  };
+
+  void cleanup_lifecycle(bool init_failed);
+
+  // Borrowed optimizer/executor pointers. ParallelScanIterator must not delete
+  // or mutate ownership of these objects. The TABLE pointer held by the
+  // TableRowIterator base class is also borrowed from the executor.
   QEP_TAB *m_tab;
   const double m_expected_rows;
   ha_rows *const m_examined_rows;
   JOIN *m_join;
+  // Borrowed in the current fail-closed skeleton. A future positive path may
+  // allocate its own Gather_operator and set m_owns_gather.
   Gather_operator *m_gather;
   const bool m_stable_output;
   AccessPath *m_root_access_path;
+  Lifecycle_state m_lifecycle_state{Lifecycle_state::CONSTRUCTED};
+  bool m_owns_gather{false};
+  bool m_cleanup_done{false};
+  bool m_worker_started{false};
+  bool m_no_fallback_commit{false};
 };
 
 /**
