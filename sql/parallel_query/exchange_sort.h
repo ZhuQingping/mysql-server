@@ -173,6 +173,9 @@ class Exchange_sort final : public Exchange {
   bool run_orderby_worker_frame_producer_smoke(uint32 *rows_read,
                                                uint32 *finishes_read,
                                                uint32 *errors_read);
+  bool run_orderby_worker_producer_adapter_skeleton_smoke(
+      uint32 *rows_read, uint32 *finishes_read, uint32 *errors_read,
+      uint32 *order_rejects, uint32 *after_finish_rejects);
   bool run_orderby_frame_merge_smoke(uint32 *rows_read,
                                      uint32 *finishes_read);
   bool run_orderby_frame_merge_edge_smoke(uint32 *rows_read,

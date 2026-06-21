@@ -59,6 +59,14 @@ struct PQ_orderby_worker_frame_producer_shape {
   bool finished{false};
 };
 
+struct PQ_orderby_worker_producer_adapter_shape {
+  MQueue_handle *handle{nullptr};
+  uint32 worker_id{0};
+  int64 last_sort_key{0};
+  bool has_last_sort_key{false};
+  bool finished{false};
+};
+
 bool pq_orderby_smoke_compare_records(const PQ_orderby_smoke_record &left,
                                       const PQ_orderby_smoke_record &right,
                                       bool descending) {
@@ -284,6 +292,60 @@ bool pq_worker_orderby_producer_finish(
 
 bool pq_worker_orderby_producer_error(
     PQ_orderby_worker_frame_producer_shape *producer) {
+  if (producer == nullptr || producer->handle == nullptr ||
+      producer->finished) {
+    return true;
+  }
+  if (pq_send_orderby_frame(producer->handle, PQ_orderby_frame_type::ERROR,
+                            nullptr, 0, nullptr, 0, nullptr, 0,
+                            producer->worker_id)) {
+    return true;
+  }
+  producer->finished = true;
+  return false;
+}
+
+bool pq_orderby_worker_producer_adapter_emit_row(
+    PQ_orderby_worker_producer_adapter_shape *producer,
+    const void *record_image, uint32 record_image_len, const void *row_id,
+    uint32 row_id_len, int64 sort_key) {
+  if (producer == nullptr || producer->handle == nullptr ||
+      producer->finished || record_image == nullptr || record_image_len == 0 ||
+      row_id == nullptr || row_id_len == 0) {
+    return true;
+  }
+  if (producer->has_last_sort_key && sort_key < producer->last_sort_key) {
+    return true;
+  }
+
+  if (pq_send_orderby_frame(producer->handle, PQ_orderby_frame_type::ROW,
+                            record_image, record_image_len, row_id, row_id_len,
+                            &sort_key, sizeof(sort_key),
+                            producer->worker_id)) {
+    return true;
+  }
+  producer->last_sort_key = sort_key;
+  producer->has_last_sort_key = true;
+  return false;
+}
+
+bool pq_orderby_worker_producer_adapter_finish(
+    PQ_orderby_worker_producer_adapter_shape *producer) {
+  if (producer == nullptr || producer->handle == nullptr ||
+      producer->finished) {
+    return true;
+  }
+  if (pq_send_orderby_frame(producer->handle, PQ_orderby_frame_type::FINISH,
+                            nullptr, 0, nullptr, 0, nullptr, 0,
+                            producer->worker_id)) {
+    return true;
+  }
+  producer->finished = true;
+  return false;
+}
+
+bool pq_orderby_worker_producer_adapter_error(
+    PQ_orderby_worker_producer_adapter_shape *producer) {
   if (producer == nullptr || producer->handle == nullptr ||
       producer->finished) {
     return true;
@@ -1433,6 +1495,126 @@ bool Exchange_sort::run_orderby_worker_frame_producer_smoke(
 
   return failed || *rows_read != 3 || *finishes_read != 2 ||
          *errors_read != 1;
+}
+
+bool Exchange_sort::run_orderby_worker_producer_adapter_skeleton_smoke(
+    uint32 *rows_read, uint32 *finishes_read, uint32 *errors_read,
+    uint32 *order_rejects, uint32 *after_finish_rejects) {
+  if (rows_read == nullptr || finishes_read == nullptr ||
+      errors_read == nullptr || order_rejects == nullptr ||
+      after_finish_rejects == nullptr) {
+    return true;
+  }
+  *rows_read = 0;
+  *finishes_read = 0;
+  *errors_read = 0;
+  *order_rejects = 0;
+  *after_finish_rejects = 0;
+
+  PQ_mq_event sender_event;
+  PQ_mq_event receiver_event;
+  char ring[PQ_MQ_DEFAULT_RING_SIZE];
+  MQueue queue(&sender_event, &receiver_event, ring, sizeof(ring));
+  MQueue_handle handle(&queue, PQ_MQ_DEFAULT_BUFFER_SIZE);
+  if (handle.init()) return true;
+
+  PQ_orderby_worker_producer_adapter_shape worker0{&handle, 0};
+  PQ_orderby_worker_producer_adapter_shape worker1{&handle, 1};
+  PQ_orderby_worker_producer_adapter_shape worker2{&handle, 2};
+
+  const int64 record10 = 100;
+  const int64 record30 = 300;
+  const int64 record20 = 200;
+  const uint32 rowid10 = 10;
+  const uint32 rowid30 = 30;
+  const uint32 rowid20 = 20;
+
+  bool failed =
+      pq_orderby_worker_producer_adapter_emit_row(
+          &worker0, &record10, sizeof(record10), &rowid10, sizeof(rowid10),
+          1) ||
+      pq_orderby_worker_producer_adapter_emit_row(
+          &worker0, &record30, sizeof(record30), &rowid30, sizeof(rowid30),
+          3) ||
+      pq_orderby_worker_producer_adapter_finish(&worker0);
+
+  if (!failed &&
+      pq_orderby_worker_producer_adapter_emit_row(
+          &worker0, &record10, sizeof(record10), &rowid10, sizeof(rowid10),
+          4)) {
+    ++(*after_finish_rejects);
+  } else if (!failed) {
+    failed = true;
+  }
+
+  if (!failed) {
+    failed = pq_orderby_worker_producer_adapter_emit_row(
+        &worker1, &record20, sizeof(record20), &rowid20, sizeof(rowid20), 2);
+  }
+  if (!failed &&
+      pq_orderby_worker_producer_adapter_emit_row(
+          &worker1, &record10, sizeof(record10), &rowid10, sizeof(rowid10),
+          1)) {
+    ++(*order_rejects);
+  } else if (!failed) {
+    failed = true;
+  }
+  if (!failed) {
+    failed = pq_orderby_worker_producer_adapter_finish(&worker1) ||
+             pq_orderby_worker_producer_adapter_error(&worker2);
+  }
+
+  const PQ_orderby_frame_type expected_types[] = {
+      PQ_orderby_frame_type::ROW, PQ_orderby_frame_type::ROW,
+      PQ_orderby_frame_type::FINISH, PQ_orderby_frame_type::ROW,
+      PQ_orderby_frame_type::FINISH, PQ_orderby_frame_type::ERROR};
+  const uint32 expected_worker_ids[] = {0, 0, 0, 1, 1, 2};
+  const int64 expected_records[] = {record10, record30, 0, record20, 0, 0};
+  const uint32 expected_rowids[] = {rowid10, rowid30, 0, rowid20, 0, 0};
+  const int64 expected_keys[] = {1, 3, 0, 2, 0, 0};
+
+  for (uint32 i = 0; !failed && i < std::size(expected_types); ++i) {
+    void *raw_data = nullptr;
+    uint32 raw_len = 0;
+    if (handle.receive(&raw_data, &raw_len) != MQ_SUCCESS) {
+      failed = true;
+      break;
+    }
+
+    const PQ_orderby_frame_header *header = nullptr;
+    const uchar *payload = nullptr;
+    PQ_orderby_decoded_frame decoded;
+    failed = pq_validate_orderby_frame(raw_data, raw_len, &header, &payload) ||
+             pq_decode_orderby_frame(raw_data, raw_len, &decoded) ||
+             decoded.type != expected_types[i] ||
+             header->flags != expected_worker_ids[i];
+    if (failed) break;
+
+    if (decoded.type == PQ_orderby_frame_type::ROW) {
+      int64 record = 0;
+      uint32 rowid = 0;
+      int64 key = 0;
+      failed = decoded.record_image_len != sizeof(record) ||
+               decoded.row_id_len != sizeof(rowid) ||
+               decoded.sort_key_len != sizeof(key);
+      if (!failed) {
+        memcpy(&record, decoded.record_image, sizeof(record));
+        memcpy(&rowid, decoded.row_id, sizeof(rowid));
+        memcpy(&key, decoded.sort_key, sizeof(key));
+        failed = record != expected_records[i] || rowid != expected_rowids[i] ||
+                 key != expected_keys[i];
+      }
+      if (!failed) ++(*rows_read);
+    } else if (decoded.type == PQ_orderby_frame_type::FINISH) {
+      ++(*finishes_read);
+    } else {
+      ++(*errors_read);
+    }
+  }
+
+  return failed || *rows_read != 3 || *finishes_read != 2 ||
+         *errors_read != 1 || *order_rejects != 1 ||
+         *after_finish_rejects != 1;
 }
 
 bool Exchange_sort::run_orderby_streaming_heap_read_smoke(

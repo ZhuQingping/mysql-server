@@ -30,6 +30,30 @@ WHERE VARIABLE_NAME = 'Parallel_orderby_worker_frame_producer_smoke_success');
 SET @worker_frame_unsupported_before = (
 SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
 WHERE VARIABLE_NAME = 'Parallel_orderby_worker_frame_producer_smoke_unsupported');
+SET @worker_adapter_attempts_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_attempts');
+SET @worker_adapter_success_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_success');
+SET @worker_adapter_unsupported_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_unsupported');
+SET @worker_adapter_rows_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_rows');
+SET @worker_adapter_finishes_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_finishes');
+SET @worker_adapter_errors_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_errors');
+SET @worker_adapter_order_rejects_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_order_rejects');
+SET @worker_adapter_after_finish_rejects_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_after_finish_rejects');
 SET @stream_heap_attempts_before = (
 SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
 WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_attempts');
@@ -194,6 +218,30 @@ orderby_worker_frame_rows_without_debug
 1
 SELECT (
 (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_attempts') -
+@worker_adapter_attempts_before) = 0 AS orderby_worker_adapter_attempts_without_debug;
+orderby_worker_adapter_attempts_without_debug
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_rows') -
+@worker_adapter_rows_before) = 0 AS orderby_worker_adapter_rows_without_debug;
+orderby_worker_adapter_rows_without_debug
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_finishes') -
+@worker_adapter_finishes_before) = 0 AS orderby_worker_adapter_finishes_without_debug;
+orderby_worker_adapter_finishes_without_debug
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_errors') -
+@worker_adapter_errors_before) = 0 AS orderby_worker_adapter_errors_without_debug;
+orderby_worker_adapter_errors_without_debug
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
 WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_attempts') -
 @stream_heap_attempts_before) = 0 AS orderby_stream_heap_attempts_without_debug;
 orderby_stream_heap_attempts_without_debug
@@ -252,7 +300,7 @@ WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_detaches')
 @ordered_reader_detaches_before) = 0 AS orderby_reader_detaches_without_debug;
 orderby_reader_detaches_without_debug
 1
-SET SESSION debug="d,pq_exchange_sort_state_shape_smoke,pq_orderby_worker_frame_producer_smoke,pq_exchange_sort_stream_heap_smoke,pq_exchange_sort_stream_materialized_smoke,pq_exchange_sort_ordered_materialize_api_smoke,pq_exchange_sort_ordered_reader_skeleton_smoke";
+SET SESSION debug="d,pq_exchange_sort_state_shape_smoke,pq_orderby_worker_frame_producer_smoke,pq_orderby_worker_producer_adapter_skeleton_smoke,pq_exchange_sort_stream_heap_smoke,pq_exchange_sort_stream_materialized_smoke,pq_exchange_sort_ordered_materialize_api_smoke,pq_exchange_sort_ordered_reader_skeleton_smoke";
 SELECT * FROM pq_orderby_frame_t;
 id	k
 1	30
@@ -294,6 +342,54 @@ SELECT (
 WHERE VARIABLE_NAME = 'Parallel_orderby_worker_frame_producer_smoke_unsupported') -
 @worker_frame_unsupported_before) = 0 AS orderby_worker_frame_unsupported_delta;
 orderby_worker_frame_unsupported_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_attempts') -
+@worker_adapter_attempts_before) = 1 AS orderby_worker_adapter_attempts_delta;
+orderby_worker_adapter_attempts_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_success') -
+@worker_adapter_success_before) = 1 AS orderby_worker_adapter_success_delta;
+orderby_worker_adapter_success_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_unsupported') -
+@worker_adapter_unsupported_before) = 0 AS orderby_worker_adapter_unsupported_delta;
+orderby_worker_adapter_unsupported_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_rows') -
+@worker_adapter_rows_before) >= 3 AS orderby_worker_adapter_rows_delta;
+orderby_worker_adapter_rows_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_finishes') -
+@worker_adapter_finishes_before) >= 2 AS orderby_worker_adapter_finishes_delta;
+orderby_worker_adapter_finishes_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_errors') -
+@worker_adapter_errors_before) >= 1 AS orderby_worker_adapter_errors_delta;
+orderby_worker_adapter_errors_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_order_rejects') -
+@worker_adapter_order_rejects_before) >= 1 AS orderby_worker_adapter_order_rejects_delta;
+orderby_worker_adapter_order_rejects_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_orderby_worker_adapter_after_finish_rejects') -
+@worker_adapter_after_finish_rejects_before) >= 1 AS orderby_worker_adapter_after_finish_rejects_delta;
+orderby_worker_adapter_after_finish_rejects_delta
 1
 SELECT (
 (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status

@@ -872,6 +872,28 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd [[maybe_unused]],
     pq_global_stats.orderby_worker_frame_producer_smoke_success.fetch_add(
         1, std::memory_order_relaxed);
   }
+  bool worker_adapter_enabled = false;
+  uint32 worker_adapter_rows = 0;
+  uint32 worker_adapter_finishes = 0;
+  uint32 worker_adapter_errors = 0;
+  uint32 worker_adapter_order_rejects = 0;
+  uint32 worker_adapter_after_finish_rejects = 0;
+  DBUG_EXECUTE_IF("pq_orderby_worker_producer_adapter_skeleton_smoke",
+                  worker_adapter_enabled = true;);
+  if (worker_adapter_enabled) {
+    pq_global_stats.orderby_worker_producer_adapter_skeleton_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+    if (sort_exchange.run_orderby_worker_producer_adapter_skeleton_smoke(
+            &worker_adapter_rows, &worker_adapter_finishes,
+            &worker_adapter_errors, &worker_adapter_order_rejects,
+            &worker_adapter_after_finish_rejects)) {
+      pq_global_stats.orderby_worker_producer_adapter_skeleton_unsupported
+          .fetch_add(1, std::memory_order_relaxed);
+      return true;
+    }
+    pq_global_stats.orderby_worker_producer_adapter_skeleton_success.fetch_add(
+        1, std::memory_order_relaxed);
+  }
   bool stream_heap_enabled = false;
   uint32 stream_heap_rows_read = 0;
   uint32 stream_heap_finishes_read = 0;
@@ -1020,6 +1042,17 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd [[maybe_unused]],
       worker_frame_finishes_read, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_worker_frame_smoke_errors.fetch_add(
       worker_frame_errors_read, std::memory_order_relaxed);
+  pq_global_stats.orderby_worker_producer_adapter_skeleton_rows.fetch_add(
+      worker_adapter_rows, std::memory_order_relaxed);
+  pq_global_stats.orderby_worker_producer_adapter_skeleton_finishes.fetch_add(
+      worker_adapter_finishes, std::memory_order_relaxed);
+  pq_global_stats.orderby_worker_producer_adapter_skeleton_errors.fetch_add(
+      worker_adapter_errors, std::memory_order_relaxed);
+  pq_global_stats.orderby_worker_producer_adapter_skeleton_order_rejects
+      .fetch_add(worker_adapter_order_rejects, std::memory_order_relaxed);
+  pq_global_stats
+      .orderby_worker_producer_adapter_skeleton_after_finish_rejects.fetch_add(
+          worker_adapter_after_finish_rejects, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_stream_heap_smoke_rows.fetch_add(
       stream_heap_rows_read, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_stream_heap_smoke_finishes.fetch_add(

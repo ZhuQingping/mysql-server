@@ -308,6 +308,15 @@ struct PQ_global_stats {
   std::atomic<uint64> orderby_worker_frame_producer_smoke_attempts{0};  ///< 5g
   std::atomic<uint64> orderby_worker_frame_producer_smoke_success{0};  ///< 5g
   std::atomic<uint64> orderby_worker_frame_producer_smoke_unsupported{0};
+  std::atomic<uint64> orderby_worker_producer_adapter_skeleton_attempts{0};
+  std::atomic<uint64> orderby_worker_producer_adapter_skeleton_success{0};
+  std::atomic<uint64> orderby_worker_producer_adapter_skeleton_unsupported{0};
+  std::atomic<uint64> orderby_worker_producer_adapter_skeleton_rows{0};
+  std::atomic<uint64> orderby_worker_producer_adapter_skeleton_finishes{0};
+  std::atomic<uint64> orderby_worker_producer_adapter_skeleton_errors{0};
+  std::atomic<uint64> orderby_worker_producer_adapter_skeleton_order_rejects{0};
+  std::atomic<uint64>
+      orderby_worker_producer_adapter_skeleton_after_finish_rejects{0};
   std::atomic<uint64> exchange_sort_worker_frame_smoke_rows{0};  ///< Rows
   std::atomic<uint64> exchange_sort_worker_frame_smoke_finishes{0};  ///< EOF
   std::atomic<uint64> exchange_sort_worker_frame_smoke_errors{0};  ///< ERROR
@@ -556,6 +565,22 @@ struct PQ_global_stats {
     orderby_worker_frame_producer_smoke_success.store(
         0, std::memory_order_relaxed);
     orderby_worker_frame_producer_smoke_unsupported.store(
+        0, std::memory_order_relaxed);
+    orderby_worker_producer_adapter_skeleton_attempts.store(
+        0, std::memory_order_relaxed);
+    orderby_worker_producer_adapter_skeleton_success.store(
+        0, std::memory_order_relaxed);
+    orderby_worker_producer_adapter_skeleton_unsupported.store(
+        0, std::memory_order_relaxed);
+    orderby_worker_producer_adapter_skeleton_rows.store(
+        0, std::memory_order_relaxed);
+    orderby_worker_producer_adapter_skeleton_finishes.store(
+        0, std::memory_order_relaxed);
+    orderby_worker_producer_adapter_skeleton_errors.store(
+        0, std::memory_order_relaxed);
+    orderby_worker_producer_adapter_skeleton_order_rejects.store(
+        0, std::memory_order_relaxed);
+    orderby_worker_producer_adapter_skeleton_after_finish_rejects.store(
         0, std::memory_order_relaxed);
     exchange_sort_worker_frame_smoke_rows.store(0, std::memory_order_relaxed);
     exchange_sort_worker_frame_smoke_finishes.store(

@@ -10236,6 +10236,97 @@ static int show_pq_orderby_worker_frame_producer_smoke_unsupported(
   return 0;
 }
 
+static int show_pq_orderby_worker_producer_adapter_skeleton_attempts(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) =
+      (longlong)(pq_global_stats
+                     .orderby_worker_producer_adapter_skeleton_attempts.load(
+                         std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_orderby_worker_producer_adapter_skeleton_success(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) =
+      (longlong)(pq_global_stats
+                     .orderby_worker_producer_adapter_skeleton_success.load(
+                         std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_orderby_worker_producer_adapter_skeleton_unsupported(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) =
+      (longlong)(pq_global_stats
+                     .orderby_worker_producer_adapter_skeleton_unsupported.load(
+                         std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_orderby_worker_producer_adapter_skeleton_rows(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) =
+      (longlong)(pq_global_stats
+                     .orderby_worker_producer_adapter_skeleton_rows.load(
+                         std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_orderby_worker_producer_adapter_skeleton_finishes(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) =
+      (longlong)(pq_global_stats
+                     .orderby_worker_producer_adapter_skeleton_finishes.load(
+                         std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_orderby_worker_producer_adapter_skeleton_errors(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) =
+      (longlong)(pq_global_stats
+                     .orderby_worker_producer_adapter_skeleton_errors.load(
+                         std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_orderby_worker_producer_adapter_skeleton_order_rejects(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) =
+      (longlong)(
+          pq_global_stats
+              .orderby_worker_producer_adapter_skeleton_order_rejects.load(
+                  std::memory_order_relaxed));
+  return 0;
+}
+
+static int
+show_pq_orderby_worker_producer_adapter_skeleton_after_finish_rejects(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) =
+      (longlong)(
+          pq_global_stats
+              .orderby_worker_producer_adapter_skeleton_after_finish_rejects
+              .load(std::memory_order_relaxed));
+  return 0;
+}
+
 static int show_pq_exchange_sort_worker_frame_smoke_rows(THD *, SHOW_VAR *var,
                                                          char *buf) {
   var->type = SHOW_LONGLONG;
@@ -11463,6 +11554,30 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_orderby_worker_frame_producer_smoke_unsupported",
      (char *)&show_pq_orderby_worker_frame_producer_smoke_unsupported,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_worker_adapter_after_finish_rejects",
+     (char *)&show_pq_orderby_worker_producer_adapter_skeleton_after_finish_rejects,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_worker_adapter_attempts",
+     (char *)&show_pq_orderby_worker_producer_adapter_skeleton_attempts,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_worker_adapter_errors",
+     (char *)&show_pq_orderby_worker_producer_adapter_skeleton_errors,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_worker_adapter_finishes",
+     (char *)&show_pq_orderby_worker_producer_adapter_skeleton_finishes,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_worker_adapter_order_rejects",
+     (char *)&show_pq_orderby_worker_producer_adapter_skeleton_order_rejects,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_worker_adapter_rows",
+     (char *)&show_pq_orderby_worker_producer_adapter_skeleton_rows, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_worker_adapter_success",
+     (char *)&show_pq_orderby_worker_producer_adapter_skeleton_success,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_worker_adapter_unsupported",
+     (char *)&show_pq_orderby_worker_producer_adapter_skeleton_unsupported,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_exchange_sort_worker_frame_smoke_errors",
      (char *)&show_pq_exchange_sort_worker_frame_smoke_errors, SHOW_FUNC,

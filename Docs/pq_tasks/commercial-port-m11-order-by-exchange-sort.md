@@ -5349,6 +5349,110 @@ Code/Doc/Test Review - M11-E5g-4c:
   or visible ORDER BY iterator integration；those remain future reviewed
   boundaries。
 
+### M11-E5g-4d: DBUG-only Worker PQOF Producer Adapter Skeleton
+
+Status: coding completed；`mysqld` build, targeted MTR, and full
+`parallel_query` suite passed；waiting for Code/Doc/Test Review。
+
+Goal:
+
+- extract a named worker-side `PQOF` producer adapter skeleton for future ORDER
+  BY worker output；
+- keep it DBUG-only and controlled-input only；
+- keep default ORDER BY PQ closed: no worker thread launch, no InnoDB/handler
+  scan, no `PQWR` / `Query_result_mq`, and no default ORDER BY SQL entry。
+
+Implementation:
+
+- added internal `PQ_orderby_worker_producer_adapter_shape`；
+- added adapter helpers that emit ROW / FINISH / ERROR through existing
+  `pq_send_orderby_frame()`；
+- adapter validates monotonic `int64` sort keys within one worker and rejects
+  row emission after FINISH / ERROR；
+- added `Exchange_sort::run_orderby_worker_producer_adapter_skeleton_smoke()`
+  with a controlled local `MQueue_handle`；
+- smoke verifies 3 ROW frames, 2 FINISH frames, 1 ERROR frame, one sort-key
+  order reject, and one after-finish reject；
+- added DBUG flag `pq_orderby_worker_producer_adapter_skeleton_smoke`；
+- added status variables:
+  `Parallel_orderby_worker_adapter_attempts`,
+  `..._success`, `..._unsupported`, `..._rows`, `..._finishes`,
+  `..._errors`, `..._order_rejects`, and `..._after_finish_rejects`；
+- extended `pq_commercial_order_by_frames` to assert no ordinary-path counter
+  growth and DBUG-path adapter deltas；
+- updated `pq_stats` expected `Parallel%` count and status variable list。
+
+Scope notes:
+
+- no `HAS_ORDER_BY` relaxation；
+- no `execution_disabled=false` or readiness flag change；
+- no optimizer, AccessPath, handler, InnoDB, worker launch, `PQWR` /
+  `Query_result_mq`, or default worker MQ consumption change；
+- no `PQOF` frame header/format change；
+- no `Exchange_sort::read_mq_message()` default path change；
+- no `ParallelScanIterator::Read()` or `PQTableScanIterator` ordered default
+  behavior change。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by_frames \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5g4d_target --tmpdir=/tmp/pqt_m11e5g4d_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5g4d_full --tmpdir=/tmp/pqt_m11e5g4d_full
+```
+
+Results:
+
+- `git diff --check` passed；
+- `mysqld` build passed；
+- first record run exposed MySQL status-name truncation for the long
+  `after_finish_rejects` name；public 4d status names were shortened to
+  `Parallel_orderby_worker_adapter_*`；
+- targeted MTR passed:
+  `pq_commercial_order_by_frames pq_commercial_order_by pq_stats` 4/4；
+- full `parallel_query` suite passed: 89/89。
+
+Design Explorer - M11-E5g-4d:
+
+- Explorer verdict: 4d can proceed directly to coding, no separate design-only
+  commit required；
+- Explorer recommended a new worker producer adapter wrapper instead of
+  treating the older 5g-1 smoke as the future adapter boundary；
+- Explorer confirmed adapter arguments must remain limited to controlled
+  `MQueue_handle` and row/sort-key bytes, with no `THD`, `JOIN`, `TABLE`,
+  handler, `Query_result_mq`, or `PQWR` dependency。
+
+Code/Doc/Test Review - M11-E5g-4d:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none blocking；
+- confirmed adapter shape is internal and only stores `MQueue_handle *`,
+  `worker_id`, monotonic sort-key state, and finish state；
+- confirmed ROW / FINISH / ERROR emissions use existing `pq_send_orderby_frame()`
+  and do not change `PQOF` header/format；
+- confirmed smoke uses a local controlled `MQueue` / `MQueue_handle` and
+  validates ROW, FINISH, ERROR, sort-key order reject, and after-finish reject；
+- confirmed execution is gated strictly by
+  `pq_orderby_worker_producer_adapter_skeleton_smoke`；
+- confirmed no tracked diff touches optimizer eligibility, `HAS_ORDER_BY`,
+  AccessPath, handler/InnoDB, worker launch, `PQWR`, `Query_result_mq`, default
+  worker MQ consumption, or default ordered `Read()` paths；
+- confirmed `pq_commercial_order_by_frames` covers ordinary no-growth and
+  DBUG-path positive deltas；
+- confirmed `pq_stats` count update from 197 to 205 matches 8 new public status
+  variables, and shortened `Parallel_orderby_worker_adapter_*` names avoid
+  status-name truncation；
+- residual risk: 4d proves only controlled in-process adapter behavior；real
+  worker thread wiring, InnoDB scan integration, backpressure, kill/wait
+  handling, filesort key encoding, tie-breaks, DESC/mixed sort parts, and row
+  materialization remain future reviewed boundaries。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
