@@ -11,6 +11,8 @@ M10-C1 supported/deferred subset declaration completed / Docs-Task Review
 accepted。
 M10-C2 GROUP BY supported subset adapted test completed /
 Code-Docs-Test Review accepted。
+M10-C3 GROUP BY deferred boundary adapted test completed /
+Code-Docs-Test Review accepted。
 
 ## 目标
 
@@ -49,7 +51,7 @@ mysql-test/suite/parallel_query/t/*.test
 | 项 | 数量 |
 |---|---:|
 | M10-A baseline current `t/*.test` | 73 |
-| Current after M10-C2 `t/*.test` | 77 |
+| Current after M10-C3 `t/*.test` | 78 |
 | 商用参考 `t/*.test` | 98 |
 | 同名重合 | 1 |
 | 当前独有 | 72 |
@@ -94,9 +96,10 @@ Enabled:
 
 - M10-A baseline 73 个本仓 `parallel_query` tests 继续作为 enabled
   local guards；
-- M10-B/M10-C2 新增 adapted guards 后，当前 `t/*.test` 为 77 个；
+- M10-B/M10-C2/M10-C3 新增 adapted guards 后，当前 `t/*.test`
+  为 78 个；
 - 商用同名 enabled 目前只有 `pq_not_support`；
-- 完整 suite 最近记录为 78/78 通过，其中额外 1 项来自 MTR
+- 完整 suite 最近记录为 79/79 通过，其中额外 1 项来自 MTR
   `shutdown_report`。
 
 Adapted:
@@ -264,6 +267,64 @@ M10-D:
 - 完整 `parallel_query` suite clean run；
 - 记录最终 enabled/adapted/deferred 数量；
 - 若新增测试导致当前 suite 数量变化，更新 README 和本任务书。
+
+## M10-C3: GROUP BY Deferred Boundary Adapted Test
+
+Status: completed / Code-Docs-Test Review accepted。
+
+目标：
+
+- 将商用 `pq_group_by` 中当前不应声明支持的边界固定为 MTR；
+- 避免 HAVING、DISTINCT aggregate、expression group key、
+  expression aggregate、string group key、GROUP BY + ORDER BY 被误接入
+  DOP partial / legacy typed-state / commercial aggregation path；
+- 继续明确 commercial worker-plan aggregation 未完成。
+
+新增测试：
+
+- `pq_commercial_group_by_deferred_boundary`
+
+Counter contract：
+
+- `Parallel_groupby_dop_partial_selected` 增量为 0；
+- `Parallel_groupby_dop_partial_fallback` 至少增长 1；
+- `Parallel_groupby_legacy_typed_selected` 增量为 0；
+- `Parallel_groupby_legacy_typed_executed` 增量为 0；
+- `Parallel_groupby_commercial_selected` 增量为 0；
+- `Parallel_groupby_commercial_executed` 增量为 0；
+- `Parallel_groupby_temp_shape_unsupported` 至少增长 1。
+
+验证：
+
+```bash
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --record pq_commercial_group_by_deferred_boundary \
+  --parallel=1 --vardir=/tmp/pqv_m10c3_record --tmpdir=/tmp/pqt_m10c3_record
+
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_group_by_deferred_boundary \
+  --parallel=1 --vardir=/tmp/pqv_m10c3_replay --tmpdir=/tmp/pqt_m10c3_replay
+
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m10c3_full --tmpdir=/tmp/pqt_m10c3_full
+```
+
+结果：
+
+- `--record` 生成 `.result`，末尾报告 copy errno 1，但目标
+  `.result` 文件已生成且内容完整；
+- targeted replay pass；
+- 完整 suite 79/79 pass，其中包含 78 个 suite tests 和 MTR
+  `shutdown_report`。
+
+Review:
+
+- Code-Docs-Test Review Agent returned `ACCEPT`；
+- confirmed six deferred boundaries are covered: HAVING, DISTINCT aggregate,
+  expression group key, expression aggregate, string group key, and
+  GROUP BY + ORDER BY；
+- confirmed only the five M10-C3 target files should be committed。
 
 ## M10-C2: GROUP BY Supported Subset Adapted Test
 
