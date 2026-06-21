@@ -5244,6 +5244,111 @@ Code/Doc/Test Review - M11-E5g-4b:
   default reader lifecycle, worker producer, `ROW` materialization, ordering
   semantics, and visible eligibility gates through separate review。
 
+### M11-E5g-4c: DBUG-only Controlled Ordered Reader Skeleton
+
+Status: coding completed；`mysqld` build, targeted MTR, and full
+`parallel_query` suite passed；waiting for Code/Doc/Test Review。
+
+Goal:
+
+- extract a named ordered-reader skeleton boundary that can return ordered row
+  images and stream status from controlled `PQOF` input；
+- keep the reader DBUG-only and smoke-only；
+- keep default ORDER BY PQ closed: no default worker MQ consumption, no default
+  ordered `Read()`, and no materialization into `TABLE::record[0]`。
+
+Implementation:
+
+- added `Exchange_sort::read_next_ordered_record_image_skeleton()` as a narrow
+  wrapper around the existing controlled `read_ordered_record_stream_shape()`；
+- added `Exchange_sort::run_orderby_ordered_reader_skeleton_smoke()` with a
+  controlled 3-worker `PQOF` shape covering:
+  - initial `WOULD_BLOCK` before worker 1 produces；
+  - ordered ROW sequence from workers 0/1/2；
+  - EOF after all workers finish；
+  - fail-closed ERROR frame observation；
+  - DETACHED observation when a producer closes；
+- the new reader skeleton accepts only heap/in-heap/terminal-worker state and
+  row-image/status output; it has no `TABLE *` argument and does not write
+  leader record buffers；
+- added DBUG flag `pq_exchange_sort_ordered_reader_skeleton_smoke`；
+- added status variables:
+  `Parallel_exchange_sort_ordered_reader_skeleton_attempts`,
+  `..._success`, `..._unsupported`, `..._rows`, `..._would_blocks`,
+  `..._finishes`, `..._errors`, `..._detaches`, `..._refills`,
+  `..._heap_replaces`, and `..._heap_removes`；
+- extended `pq_commercial_order_by_frames` to assert no ordinary-path counter
+  growth and DBUG-path reader skeleton deltas；
+- updated `pq_stats` expected `Parallel%` count and status variable list。
+
+Scope notes:
+
+- no `HAS_ORDER_BY` relaxation；
+- no `execution_disabled=false` or readiness flag change；
+- no optimizer, AccessPath, handler, InnoDB, worker launch, `PQWR` /
+  `Query_result_mq`, or default worker MQ consumption change；
+- no `Exchange_sort::read_mq_message()` default path change；
+- no `ParallelScanIterator::Read()` or `PQTableScanIterator` ordered default
+  behavior change；
+- no `table->record[0]` writes in 4c；materialization remains a separate
+  reviewed boundary。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by_frames \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5g4c_target --tmpdir=/tmp/pqt_m11e5g4c_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5g4c_full --tmpdir=/tmp/pqt_m11e5g4c_full
+```
+
+Results:
+
+- `git diff --check` passed；
+- `mysqld` build passed；
+- targeted MTR passed:
+  `pq_commercial_order_by_frames pq_commercial_order_by pq_stats` 4/4；
+- full `parallel_query` suite passed: 89/89。
+
+Design Explorer - M11-E5g-4c:
+
+- Explorer verdict: 4c can proceed directly to coding, no separate design-only
+  commit required；
+- Explorer confirmed the reader skeleton must remain controlled-input only,
+  not accept `TABLE *`, not write `record[0]`, and not call default
+  `Exchange_sort::read_mq_message()` or default `Read()`；
+- Explorer recommended reusing `PQ_orderby_stream_read_status`, adding a
+  DBUG-only smoke flag, and extending `pq_commercial_order_by_frames` plus
+  `pq_stats`。
+
+Code/Doc/Test Review - M11-E5g-4c:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none blocking；
+- confirmed the 4c reader skeleton is a narrow wrapper over
+  `read_ordered_record_stream_shape()` with no `TABLE *`, no `record[0]`, and
+  no default `Read()`；
+- confirmed controlled reader input flows through `PQOF` frame loader and
+  `MQueue_handle::receive()`, not default `Exchange_sort::read_mq_message()`；
+- confirmed 4b materialization remains fail-closed `DISABLED`；
+- confirmed no tracked diff touches optimizer eligibility, AccessPath,
+  handler, InnoDB, worker/PQWR, `Query_result_mq`, or iterator default read
+  paths；
+- confirmed DBUG entry is gated only by
+  `pq_exchange_sort_ordered_reader_skeleton_smoke`；
+- confirmed MTR covers ordinary no-growth for attempts/rows/errors/detaches and
+  DBUG-path positive deltas；
+- confirmed `pq_stats` count update from 186 to 197 is consistent with 11 new
+  status variables；
+- residual risk: 4c still does not prove default worker MQ, kill/wait policy,
+  or visible ORDER BY iterator integration；those remain future reviewed
+  boundaries。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

@@ -940,6 +940,34 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd [[maybe_unused]],
       return true;
     }
   }
+  bool ordered_reader_skeleton_enabled = false;
+  uint32 ordered_reader_skeleton_rows = 0;
+  uint32 ordered_reader_skeleton_finishes = 0;
+  uint32 ordered_reader_skeleton_would_blocks = 0;
+  uint32 ordered_reader_skeleton_errors = 0;
+  uint32 ordered_reader_skeleton_detaches = 0;
+  uint32 ordered_reader_skeleton_refills = 0;
+  uint32 ordered_reader_skeleton_heap_replaces = 0;
+  uint32 ordered_reader_skeleton_heap_removes = 0;
+  DBUG_EXECUTE_IF("pq_exchange_sort_ordered_reader_skeleton_smoke",
+                  ordered_reader_skeleton_enabled = true;);
+  if (ordered_reader_skeleton_enabled) {
+    pq_global_stats.exchange_sort_ordered_reader_skeleton_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+    if (sort_exchange.run_orderby_ordered_reader_skeleton_smoke(
+            &ordered_reader_skeleton_rows, &ordered_reader_skeleton_finishes,
+            &ordered_reader_skeleton_would_blocks,
+            &ordered_reader_skeleton_errors, &ordered_reader_skeleton_detaches,
+            &ordered_reader_skeleton_refills,
+            &ordered_reader_skeleton_heap_replaces,
+            &ordered_reader_skeleton_heap_removes)) {
+      pq_global_stats.exchange_sort_ordered_reader_skeleton_unsupported
+          .fetch_add(1, std::memory_order_relaxed);
+      return true;
+    }
+    pq_global_stats.exchange_sort_ordered_reader_skeleton_success.fetch_add(
+        1, std::memory_order_relaxed);
+  }
   uint32 frame_merge_rows_read = 0;
   uint32 frame_merge_finishes_read = 0;
   if (sort_exchange.run_orderby_frame_merge_smoke(
@@ -1020,6 +1048,22 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd [[maybe_unused]],
                  std::memory_order_relaxed);
   pq_global_stats.exchange_sort_ordered_materialize_api_rows.fetch_add(
       ordered_materialize_api_rows, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_ordered_reader_skeleton_rows.fetch_add(
+      ordered_reader_skeleton_rows, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_ordered_reader_skeleton_finishes.fetch_add(
+      ordered_reader_skeleton_finishes, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_ordered_reader_skeleton_would_blocks.fetch_add(
+      ordered_reader_skeleton_would_blocks, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_ordered_reader_skeleton_errors.fetch_add(
+      ordered_reader_skeleton_errors, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_ordered_reader_skeleton_detaches.fetch_add(
+      ordered_reader_skeleton_detaches, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_ordered_reader_skeleton_refills.fetch_add(
+      ordered_reader_skeleton_refills, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_ordered_reader_skeleton_heap_replaces.fetch_add(
+      ordered_reader_skeleton_heap_replaces, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_ordered_reader_skeleton_heap_removes.fetch_add(
+      ordered_reader_skeleton_heap_removes, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_frame_merge_smoke_rows.fetch_add(
       frame_merge_rows_read, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_frame_merge_smoke_finishes.fetch_add(

@@ -331,6 +331,17 @@ struct PQ_global_stats {
   std::atomic<uint64> exchange_sort_ordered_materialize_api_disabled{0};
   std::atomic<uint64> exchange_sort_ordered_materialize_api_unsupported{0};
   std::atomic<uint64> exchange_sort_ordered_materialize_api_rows{0};
+  std::atomic<uint64> exchange_sort_ordered_reader_skeleton_attempts{0};
+  std::atomic<uint64> exchange_sort_ordered_reader_skeleton_success{0};
+  std::atomic<uint64> exchange_sort_ordered_reader_skeleton_unsupported{0};
+  std::atomic<uint64> exchange_sort_ordered_reader_skeleton_rows{0};
+  std::atomic<uint64> exchange_sort_ordered_reader_skeleton_would_blocks{0};
+  std::atomic<uint64> exchange_sort_ordered_reader_skeleton_finishes{0};
+  std::atomic<uint64> exchange_sort_ordered_reader_skeleton_errors{0};
+  std::atomic<uint64> exchange_sort_ordered_reader_skeleton_detaches{0};
+  std::atomic<uint64> exchange_sort_ordered_reader_skeleton_refills{0};
+  std::atomic<uint64> exchange_sort_ordered_reader_skeleton_heap_replaces{0};
+  std::atomic<uint64> exchange_sort_ordered_reader_skeleton_heap_removes{0};
   std::atomic<uint64> exchange_sort_frame_merge_smoke_rows{0};  ///< Merge rows
   std::atomic<uint64> exchange_sort_frame_merge_smoke_finishes{0};  ///< FINISH
   std::atomic<uint64> exchange_sort_frame_merge_edge_smoke_rows{0};  ///< Rows
@@ -589,6 +600,28 @@ struct PQ_global_stats {
     exchange_sort_ordered_materialize_api_unsupported.store(
         0, std::memory_order_relaxed);
     exchange_sort_ordered_materialize_api_rows.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_ordered_reader_skeleton_attempts.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_ordered_reader_skeleton_success.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_ordered_reader_skeleton_unsupported.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_ordered_reader_skeleton_rows.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_ordered_reader_skeleton_would_blocks.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_ordered_reader_skeleton_finishes.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_ordered_reader_skeleton_errors.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_ordered_reader_skeleton_detaches.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_ordered_reader_skeleton_refills.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_ordered_reader_skeleton_heap_replaces.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_ordered_reader_skeleton_heap_removes.store(
         0, std::memory_order_relaxed);
     exchange_sort_frame_merge_smoke_rows.store(0, std::memory_order_relaxed);
     exchange_sort_frame_merge_smoke_finishes.store(0,

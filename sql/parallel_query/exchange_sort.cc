@@ -2231,3 +2231,198 @@ bool Exchange_sort::run_orderby_materialize_api_skeleton_smoke(
   }
   return true;
 }
+
+bool Exchange_sort::read_next_ordered_record_image_skeleton(
+    binary_heap *heap, std::vector<bool> *in_heap,
+    std::vector<bool> *terminal_workers, std::vector<uchar> *row_image,
+    PQ_orderby_stream_read_status *status, uint32 *finishes_read,
+    uint32 *would_blocks_read, uint32 *errors_read, uint32 *detaches_read,
+    uint32 *refills_read, uint32 *heap_replaces_read,
+    uint32 *heap_removes_read) {
+  /*
+    This is an ordered-reader boundary only. It delegates to the controlled
+    stream-shape reader and deliberately has no TABLE, default Read(), or
+    materialization side effect.
+  */
+  return read_ordered_record_stream_shape(
+      heap, in_heap, terminal_workers, row_image, status, finishes_read,
+      would_blocks_read, errors_read, detaches_read, refills_read,
+      heap_replaces_read, heap_removes_read);
+}
+
+bool Exchange_sort::run_orderby_ordered_reader_skeleton_smoke(
+    uint32 *rows_read, uint32 *finishes_read, uint32 *would_blocks_read,
+    uint32 *errors_read, uint32 *detaches_read, uint32 *refills_read,
+    uint32 *heap_replaces_read, uint32 *heap_removes_read) {
+  if (rows_read == nullptr || finishes_read == nullptr ||
+      would_blocks_read == nullptr || errors_read == nullptr ||
+      detaches_read == nullptr || refills_read == nullptr ||
+      heap_replaces_read == nullptr || heap_removes_read == nullptr) {
+    return true;
+  }
+  *rows_read = 0;
+  *finishes_read = 0;
+  *would_blocks_read = 0;
+  *errors_read = 0;
+  *detaches_read = 0;
+  *refills_read = 0;
+  *heap_replaces_read = 0;
+  *heap_removes_read = 0;
+
+  constexpr uint32 kWorkers = 3;
+  constexpr uint32 kSortOrderLength = 2;
+  constexpr uint32 kMaxRecordLength = 64;
+  constexpr uint32 kRefLength = 8;
+
+  bool initialized_here = false;
+  if (m_mq_handles == nullptr) {
+    if (init()) return true;
+    initialized_here = true;
+  }
+  if (m_nqueues != kWorkers) {
+    if (initialized_here) cleanup();
+    return true;
+  }
+
+  bool failed =
+      init_real_init_state_owner_shape(kWorkers, /*stable_output=*/true,
+                                       /*index_sort=*/false, kSortOrderLength,
+                                       kMaxRecordLength, kRefLength) ||
+      allocate_real_init_buffers_shape();
+
+  const int64 record1 = 100;
+  const int64 record2 = 200;
+  const int64 record3 = 300;
+  const int64 record4 = 400;
+  const uint32 rowid = 1;
+  const int64 key1 = 1;
+  const int64 key2 = 2;
+  const int64 key3 = 3;
+  const int64 key4 = 4;
+
+  if (!failed) {
+    failed = pq_send_orderby_frame(get_mq_handle(0), PQ_orderby_frame_type::ROW,
+                                   &record1, sizeof(record1), &rowid,
+                                   sizeof(rowid), &key1, sizeof(key1)) ||
+             pq_send_orderby_frame(get_mq_handle(0), PQ_orderby_frame_type::ROW,
+                                   &record4, sizeof(record4), &rowid,
+                                   sizeof(rowid), &key4, sizeof(key4)) ||
+             pq_send_orderby_frame(get_mq_handle(0),
+                                   PQ_orderby_frame_type::FINISH, nullptr, 0,
+                                   nullptr, 0, nullptr, 0) ||
+             pq_send_orderby_frame(get_mq_handle(2), PQ_orderby_frame_type::ROW,
+                                   &record2, sizeof(record2), &rowid,
+                                   sizeof(rowid), &key2, sizeof(key2)) ||
+             pq_send_orderby_frame(get_mq_handle(2),
+                                   PQ_orderby_frame_type::FINISH, nullptr, 0,
+                                   nullptr, 0, nullptr, 0);
+  }
+
+  PQ_orderby_cached_merge_ctx ctx{m_record_groups.data(),
+                                  /*descending=*/false};
+  binary_heap heap(static_cast<int>(kWorkers), &ctx,
+                   pq_orderby_cached_compare_batches);
+  std::vector<bool> in_heap(kWorkers, false);
+  std::vector<bool> terminal_workers(kWorkers, false);
+  if (!failed && heap.init_binary_heap()) failed = true;
+
+  std::vector<uchar> row_image;
+  PQ_orderby_stream_read_status status = PQ_orderby_stream_read_status::ERROR;
+  if (!failed) {
+    failed = read_next_ordered_record_image_skeleton(
+                 &heap, &in_heap, &terminal_workers, &row_image, &status,
+                 finishes_read, would_blocks_read, errors_read, detaches_read,
+                 refills_read, heap_replaces_read, heap_removes_read) ||
+             status != PQ_orderby_stream_read_status::WOULD_BLOCK ||
+             !row_image.empty();
+  }
+  if (!failed) {
+    failed = pq_send_orderby_frame(get_mq_handle(1), PQ_orderby_frame_type::ROW,
+                                   &record3, sizeof(record3), &rowid,
+                                   sizeof(rowid), &key3, sizeof(key3)) ||
+             pq_send_orderby_frame(get_mq_handle(1),
+                                   PQ_orderby_frame_type::FINISH, nullptr, 0,
+                                   nullptr, 0, nullptr, 0);
+  }
+
+  const int64 expected_rows[] = {record1, record2, record3, record4};
+  for (const int64 expected_row : expected_rows) {
+    if (failed) break;
+    failed = read_next_ordered_record_image_skeleton(
+                 &heap, &in_heap, &terminal_workers, &row_image, &status,
+                 finishes_read, would_blocks_read, errors_read, detaches_read,
+                 refills_read, heap_replaces_read, heap_removes_read) ||
+             status != PQ_orderby_stream_read_status::ROW ||
+             row_image.size() != sizeof(expected_row);
+    if (!failed) {
+      int64 actual_row = 0;
+      memcpy(&actual_row, row_image.data(), sizeof(actual_row));
+      failed = actual_row != expected_row;
+    }
+    if (!failed) ++(*rows_read);
+  }
+
+  if (!failed) {
+    failed = read_next_ordered_record_image_skeleton(
+                 &heap, &in_heap, &terminal_workers, &row_image, &status,
+                 finishes_read, would_blocks_read, errors_read, detaches_read,
+                 refills_read, heap_replaces_read, heap_removes_read) ||
+             status != PQ_orderby_stream_read_status::EOF_REACHED ||
+             !row_image.empty() || *finishes_read != kWorkers;
+  }
+
+  cleanup_order_gather_shape();
+  heap.reset();
+  std::fill(in_heap.begin(), in_heap.end(), false);
+  std::fill(terminal_workers.begin(), terminal_workers.end(), false);
+  if (!failed) {
+    failed = init_real_init_state_owner_shape(kWorkers, /*stable_output=*/true,
+                                             /*index_sort=*/false,
+                                             kSortOrderLength, kMaxRecordLength,
+                                             kRefLength) ||
+             allocate_real_init_buffers_shape();
+  }
+  ctx.batches = m_record_groups.data();
+  if (!failed) {
+    failed = pq_send_orderby_frame(get_mq_handle(0),
+                                   PQ_orderby_frame_type::ERROR, nullptr, 0,
+                                   nullptr, 0, nullptr, 0);
+  }
+  if (!failed) {
+    failed = read_next_ordered_record_image_skeleton(
+                 &heap, &in_heap, &terminal_workers, &row_image, &status,
+                 finishes_read, would_blocks_read, errors_read, detaches_read,
+                 refills_read, heap_replaces_read, heap_removes_read) ||
+             status != PQ_orderby_stream_read_status::ERROR ||
+             !row_image.empty() || *errors_read == 0;
+  }
+
+  cleanup_order_gather_shape();
+  heap.reset();
+  std::fill(in_heap.begin(), in_heap.end(), false);
+  std::fill(terminal_workers.begin(), terminal_workers.end(), false);
+  if (!failed) {
+    failed = init_real_init_state_owner_shape(kWorkers, /*stable_output=*/true,
+                                             /*index_sort=*/false,
+                                             kSortOrderLength, kMaxRecordLength,
+                                             kRefLength) ||
+             allocate_real_init_buffers_shape();
+  }
+  ctx.batches = m_record_groups.data();
+  if (!failed) {
+    get_mq_handle(0)->close_producer();
+    failed = read_next_ordered_record_image_skeleton(
+                 &heap, &in_heap, &terminal_workers, &row_image, &status,
+                 finishes_read, would_blocks_read, errors_read, detaches_read,
+                 refills_read, heap_replaces_read, heap_removes_read) ||
+             status != PQ_orderby_stream_read_status::DETACHED ||
+             !row_image.empty() || *detaches_read == 0;
+  }
+
+  cleanup_order_gather_shape();
+  if (initialized_here) cleanup();
+  return failed || *rows_read != 4 || *finishes_read != 3 ||
+         *would_blocks_read == 0 || *errors_read != 1 ||
+         *detaches_read != 1 || *refills_read == 0 ||
+         *heap_replaces_read == 0 || *heap_removes_read == 0;
+}

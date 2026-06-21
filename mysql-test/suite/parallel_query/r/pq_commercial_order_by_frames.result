@@ -90,6 +90,39 @@ WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_materialize_api_unsupporte
 SET @ordered_mat_api_rows_before = (
 SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
 WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_materialize_api_rows');
+SET @ordered_reader_attempts_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_attempts');
+SET @ordered_reader_success_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_success');
+SET @ordered_reader_unsupported_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_unsupported');
+SET @ordered_reader_rows_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_rows');
+SET @ordered_reader_would_blocks_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_would_blocks');
+SET @ordered_reader_finishes_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_finishes');
+SET @ordered_reader_errors_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_errors');
+SET @ordered_reader_detaches_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_detaches');
+SET @ordered_reader_refills_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_refills');
+SET @ordered_reader_heap_replaces_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_heap_replaces');
+SET @ordered_reader_heap_removes_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_heap_removes');
 SET @frame_merge_rows_before = (
 SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
 WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_merge_smoke_rows');
@@ -195,7 +228,31 @@ WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_materialize_api_rows') -
 @ordered_mat_api_rows_before) = 0 AS orderby_mat_api_rows_without_debug;
 orderby_mat_api_rows_without_debug
 1
-SET SESSION debug="d,pq_exchange_sort_state_shape_smoke,pq_orderby_worker_frame_producer_smoke,pq_exchange_sort_stream_heap_smoke,pq_exchange_sort_stream_materialized_smoke,pq_exchange_sort_ordered_materialize_api_smoke";
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_attempts') -
+@ordered_reader_attempts_before) = 0 AS orderby_reader_attempts_without_debug;
+orderby_reader_attempts_without_debug
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_rows') -
+@ordered_reader_rows_before) = 0 AS orderby_reader_rows_without_debug;
+orderby_reader_rows_without_debug
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_errors') -
+@ordered_reader_errors_before) = 0 AS orderby_reader_errors_without_debug;
+orderby_reader_errors_without_debug
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_detaches') -
+@ordered_reader_detaches_before) = 0 AS orderby_reader_detaches_without_debug;
+orderby_reader_detaches_without_debug
+1
+SET SESSION debug="d,pq_exchange_sort_state_shape_smoke,pq_orderby_worker_frame_producer_smoke,pq_exchange_sort_stream_heap_smoke,pq_exchange_sort_stream_materialized_smoke,pq_exchange_sort_ordered_materialize_api_smoke,pq_exchange_sort_ordered_reader_skeleton_smoke";
 SELECT * FROM pq_orderby_frame_t;
 id	k
 1	30
@@ -297,6 +354,72 @@ SELECT (
 WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_materialize_api_rows') -
 @ordered_mat_api_rows_before) = 0 AS orderby_mat_api_rows_delta;
 orderby_mat_api_rows_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_attempts') -
+@ordered_reader_attempts_before) = 1 AS orderby_reader_attempts_delta;
+orderby_reader_attempts_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_success') -
+@ordered_reader_success_before) = 1 AS orderby_reader_success_delta;
+orderby_reader_success_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_unsupported') -
+@ordered_reader_unsupported_before) = 0 AS orderby_reader_unsupported_delta;
+orderby_reader_unsupported_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_rows') -
+@ordered_reader_rows_before) >= 4 AS orderby_reader_rows_delta;
+orderby_reader_rows_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_would_blocks') -
+@ordered_reader_would_blocks_before) >= 1 AS orderby_reader_would_blocks_delta;
+orderby_reader_would_blocks_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_finishes') -
+@ordered_reader_finishes_before) >= 3 AS orderby_reader_finishes_delta;
+orderby_reader_finishes_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_errors') -
+@ordered_reader_errors_before) >= 1 AS orderby_reader_errors_delta;
+orderby_reader_errors_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_detaches') -
+@ordered_reader_detaches_before) >= 1 AS orderby_reader_detaches_delta;
+orderby_reader_detaches_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_refills') -
+@ordered_reader_refills_before) >= 6 AS orderby_reader_refills_delta;
+orderby_reader_refills_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_heap_replaces') -
+@ordered_reader_heap_replaces_before) >= 1 AS orderby_reader_heap_replaces_delta;
+orderby_reader_heap_replaces_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_heap_removes') -
+@ordered_reader_heap_removes_before) >= 3 AS orderby_reader_heap_removes_delta;
+orderby_reader_heap_removes_delta
 1
 SELECT (
 (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status

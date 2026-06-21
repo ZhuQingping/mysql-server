@@ -191,6 +191,10 @@ class Exchange_sort final : public Exchange {
                                                   uint32 *disabled,
                                                   uint32 *unsupported,
                                                   uint32 *rows_read);
+  bool run_orderby_ordered_reader_skeleton_smoke(
+      uint32 *rows_read, uint32 *finishes_read, uint32 *would_blocks_read,
+      uint32 *errors_read, uint32 *detaches_read, uint32 *refills_read,
+      uint32 *heap_replaces_read, uint32 *heap_removes_read);
   bool run_orderby_sort_state_shape_smoke();
   bool run_orderby_sort_state_shape_handoff_smoke(uint32 workers,
                                                   bool stable_output,
@@ -260,6 +264,13 @@ class Exchange_sort final : public Exchange {
       std::vector<uchar> *row_image,
       PQ_orderby_shadow_read_status *status);
   bool read_ordered_record_stream_shape(
+      binary_heap *heap, std::vector<bool> *in_heap,
+      std::vector<bool> *terminal_workers, std::vector<uchar> *row_image,
+      PQ_orderby_stream_read_status *status, uint32 *finishes_read,
+      uint32 *would_blocks_read, uint32 *errors_read, uint32 *detaches_read,
+      uint32 *refills_read, uint32 *heap_replaces_read,
+      uint32 *heap_removes_read);
+  bool read_next_ordered_record_image_skeleton(
       binary_heap *heap, std::vector<bool> *in_heap,
       std::vector<bool> *terminal_workers, std::vector<uchar> *row_image,
       PQ_orderby_stream_read_status *status, uint32 *finishes_read,

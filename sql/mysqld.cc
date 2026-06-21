@@ -10475,6 +10475,116 @@ static int show_pq_exchange_sort_ordered_materialize_api_rows(
   return 0;
 }
 
+static int show_pq_exchange_sort_ordered_reader_skeleton_attempts(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_ordered_reader_skeleton_attempts.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_ordered_reader_skeleton_success(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_ordered_reader_skeleton_success.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_ordered_reader_skeleton_unsupported(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_ordered_reader_skeleton_unsupported.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_ordered_reader_skeleton_rows(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_ordered_reader_skeleton_rows.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_ordered_reader_skeleton_would_blocks(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_ordered_reader_skeleton_would_blocks.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_ordered_reader_skeleton_finishes(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_ordered_reader_skeleton_finishes.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_ordered_reader_skeleton_errors(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_ordered_reader_skeleton_errors.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_ordered_reader_skeleton_detaches(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_ordered_reader_skeleton_detaches.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_ordered_reader_skeleton_refills(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_ordered_reader_skeleton_refills.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_ordered_reader_skeleton_heap_replaces(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_ordered_reader_skeleton_heap_replaces.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_ordered_reader_skeleton_heap_removes(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_ordered_reader_skeleton_heap_removes.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
 static int show_pq_exchange_sort_frame_merge_smoke_rows(THD *, SHOW_VAR *var,
                                                         char *buf) {
   var->type = SHOW_LONGLONG;
@@ -11422,6 +11532,39 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_exchange_sort_ordered_materialize_api_unsupported",
      (char *)&show_pq_exchange_sort_ordered_materialize_api_unsupported,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ordered_reader_skeleton_attempts",
+     (char *)&show_pq_exchange_sort_ordered_reader_skeleton_attempts,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ordered_reader_skeleton_detaches",
+     (char *)&show_pq_exchange_sort_ordered_reader_skeleton_detaches,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ordered_reader_skeleton_errors",
+     (char *)&show_pq_exchange_sort_ordered_reader_skeleton_errors, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ordered_reader_skeleton_finishes",
+     (char *)&show_pq_exchange_sort_ordered_reader_skeleton_finishes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ordered_reader_skeleton_heap_removes",
+     (char *)&show_pq_exchange_sort_ordered_reader_skeleton_heap_removes,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ordered_reader_skeleton_heap_replaces",
+     (char *)&show_pq_exchange_sort_ordered_reader_skeleton_heap_replaces,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ordered_reader_skeleton_refills",
+     (char *)&show_pq_exchange_sort_ordered_reader_skeleton_refills, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ordered_reader_skeleton_rows",
+     (char *)&show_pq_exchange_sort_ordered_reader_skeleton_rows, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ordered_reader_skeleton_success",
+     (char *)&show_pq_exchange_sort_ordered_reader_skeleton_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ordered_reader_skeleton_unsupported",
+     (char *)&show_pq_exchange_sort_ordered_reader_skeleton_unsupported,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ordered_reader_skeleton_would_blocks",
+     (char *)&show_pq_exchange_sort_ordered_reader_skeleton_would_blocks,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_exchange_sort_smoke_runs",
      (char *)&show_pq_exchange_sort_smoke_runs, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
