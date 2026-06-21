@@ -112,6 +112,9 @@ class Exchange_sort final : public Exchange {
                                         uint32 *errors_read);
   bool run_orderby_frame_merge_smoke(uint32 *rows_read,
                                      uint32 *finishes_read);
+  bool run_orderby_frame_merge_edge_smoke(uint32 *rows_read,
+                                          uint32 *finishes_read,
+                                          uint32 *errors_read);
 
   bool init_order_gather_shape(uint32 workers, bool stable_output,
                                bool index_sort);

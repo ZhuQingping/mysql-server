@@ -285,7 +285,8 @@ bool pq_orderby_cached_merge(PQ_orderby_record_batch *batches, uint32 nbatches,
 
 bool pq_load_orderby_frame_batch(MQueue_handle *handle, uint32 worker_id,
                                  PQ_orderby_record_batch *batch,
-                                 uint32 *finishes_read) {
+                                 uint32 *finishes_read,
+                                 uint32 *errors_read = nullptr) {
   if (handle == nullptr || batch == nullptr || finishes_read == nullptr) {
     return true;
   }
@@ -317,9 +318,12 @@ bool pq_load_orderby_frame_batch(MQueue_handle *handle, uint32 worker_id,
     if (decoded.type == PQ_orderby_frame_type::FINISH) {
       batch->completed = true;
       ++(*finishes_read);
-      return batch->records.empty();
+      return false;
     }
 
+    if (decoded.type == PQ_orderby_frame_type::ERROR && errors_read != nullptr) {
+      ++(*errors_read);
+    }
     return true;
   }
 }
@@ -712,4 +716,71 @@ bool Exchange_sort::run_orderby_frame_merge_smoke(uint32 *rows_read,
 
   if (initialized_here) cleanup();
   return failed || *rows_read != 6 || *finishes_read != 3;
+}
+
+bool Exchange_sort::run_orderby_frame_merge_edge_smoke(uint32 *rows_read,
+                                                       uint32 *finishes_read,
+                                                       uint32 *errors_read) {
+  if (rows_read == nullptr || finishes_read == nullptr ||
+      errors_read == nullptr) {
+    return true;
+  }
+  *rows_read = 0;
+  *finishes_read = 0;
+  *errors_read = 0;
+
+  bool initialized_here = false;
+  if (m_mq_handles == nullptr) {
+    if (init()) return true;
+    initialized_here = true;
+  }
+  if (m_nqueues != 3) {
+    if (initialized_here) cleanup();
+    return true;
+  }
+
+  const int64 record50 = 500;
+  const uint32 rowid50 = 50;
+  const int64 key5 = 5;
+
+  bool failed =
+      pq_send_orderby_frame(get_mq_handle(0), PQ_orderby_frame_type::FINISH,
+                            nullptr, 0, nullptr, 0, nullptr, 0) ||
+      pq_send_orderby_frame(get_mq_handle(1), PQ_orderby_frame_type::ERROR,
+                            nullptr, 0, nullptr, 0, nullptr, 0) ||
+      pq_send_orderby_frame(get_mq_handle(2), PQ_orderby_frame_type::ROW,
+                            &record50, sizeof(record50), &rowid50,
+                            sizeof(rowid50), &key5, sizeof(key5)) ||
+      pq_send_orderby_frame(get_mq_handle(2), PQ_orderby_frame_type::FINISH,
+                            nullptr, 0, nullptr, 0, nullptr, 0);
+
+  PQ_orderby_record_batch batches[2];
+  if (!failed) {
+    failed = pq_load_orderby_frame_batch(get_mq_handle(0), 0, &batches[0],
+                                         finishes_read);
+  }
+
+  if (!failed) {
+    PQ_orderby_record_batch error_batch;
+    const bool saw_expected_error =
+        pq_load_orderby_frame_batch(get_mq_handle(1), 1, &error_batch,
+                                    finishes_read, errors_read);
+    failed = !saw_expected_error || *errors_read != 1;
+  }
+
+  if (!failed) {
+    failed = pq_load_orderby_frame_batch(get_mq_handle(2), 2, &batches[1],
+                                         finishes_read);
+  }
+
+  constexpr uint32 expected_row_ids[] = {50};
+  if (!failed) {
+    failed = pq_orderby_cached_merge(
+        batches, 2, false, expected_row_ids,
+        static_cast<uint32>(std::size(expected_row_ids)), rows_read);
+  }
+
+  if (initialized_here) cleanup();
+  return failed || *rows_read != 1 || *finishes_read != 2 ||
+         *errors_read != 1;
 }

@@ -859,6 +859,14 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd
           &frame_merge_rows_read, &frame_merge_finishes_read)) {
     return true;
   }
+  uint32 frame_merge_edge_rows_read = 0;
+  uint32 frame_merge_edge_finishes_read = 0;
+  uint32 frame_merge_edge_errors_read = 0;
+  if (sort_exchange.run_orderby_frame_merge_edge_smoke(
+          &frame_merge_edge_rows_read, &frame_merge_edge_finishes_read,
+          &frame_merge_edge_errors_read)) {
+    return true;
+  }
 
   pq_global_stats.exchange_sort_smoke_runs.fetch_add(
       1, std::memory_order_relaxed);
@@ -874,6 +882,12 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd
       frame_merge_rows_read, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_frame_merge_smoke_finishes.fetch_add(
       frame_merge_finishes_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_frame_merge_edge_smoke_rows.fetch_add(
+      frame_merge_edge_rows_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_frame_merge_edge_smoke_finishes.fetch_add(
+      frame_merge_edge_finishes_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_frame_merge_edge_smoke_errors.fetch_add(
+      frame_merge_edge_errors_read, std::memory_order_relaxed);
   return false;
 }
 

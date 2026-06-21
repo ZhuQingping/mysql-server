@@ -2,9 +2,9 @@
 
 ## 状态
 
-Status: M11-E0/E1/E2/E3/E4/E5a/E5b-0 completed and committed；M11-E5b-1
-controlled ORDER BY frame K-way merge smoke coding completed，Review Agent
-accepted，waiting for commit。
+Status: M11-E0/E1/E2/E3/E4/E5a/E5b-0/E5b-1 completed and committed；
+M11-E5b-2 merge-path edge smoke coding completed，Review Agent accepted，
+waiting for commit。
 
 ## 背景
 
@@ -214,10 +214,66 @@ Review:
 
 - Code/Doc/Test Review Agent verdict: `ACCEPT`；
 - no blocking findings；
+- confirmed FINISH-only empty worker is accepted for controlled merge；
+- confirmed ERROR frame remains fail-closed and observable；
+- residual risks stay out of scope for this step: real worker-thread,
+  InnoDB, optimizer, `table->record[0]` materialization, abort propagation, and
+  full Filesort-compatible comparison semantics。
+
+Review:
+
+- Code/Doc/Test Review Agent verdict: `ACCEPT`；
+- no blocking findings；
 - residual risks moved to M11-E5b-2 follow-up:
   - FINISH-only empty worker queue must be accepted before real merge path；
   - raw sort-key/rowid byte-vector compare remains controlled-smoke only；
   - ERROR frame path is fail-closed and still needs explicit observable smoke。
+
+### M11-E5b-2: Merge-path Empty Worker / ERROR Edge Smoke
+
+Coding scope:
+
+- `pq_load_orderby_frame_batch()` now accepts FINISH-only empty worker queues；
+- added `Exchange_sort::run_orderby_frame_merge_edge_smoke()` with a controlled
+  3-queue shape:
+  - worker 0 sends FINISH only；
+  - worker 1 sends ERROR and must fail closed with an observable error count；
+  - worker 2 sends one ROW then FINISH；
+  - leader merges the empty worker batch plus the one-row batch and expects
+    rowid `50`；
+- added dedicated counters:
+  `Parallel_exchange_sort_frame_merge_edge_smoke_rows`,
+  `Parallel_exchange_sort_frame_merge_edge_smoke_finishes`,
+  `Parallel_exchange_sort_frame_merge_edge_smoke_errors`；
+- extended `pq_commercial_order_by_frames` and `pq_stats` for the edge counters。
+
+Hard boundaries:
+
+- still no optimizer eligibility change；
+- still no user-visible ORDER BY PQ；
+- still no InnoDB / handler / worker-thread integration；
+- still no `table->record[0]` real materialization。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by_frames \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5b2_target --tmpdir=/tmp/pqt_m11e5b2_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5b2_full --tmpdir=/tmp/pqt_m11e5b2_full
+```
+
+Result:
+
+- `git diff --check` passed；
+- `mysqld` build passed；
+- targeted MTR passed，4/4；
+- full `parallel_query` suite passed，88/88。
 
 ## Risk Areas
 

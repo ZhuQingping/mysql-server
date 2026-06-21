@@ -24,6 +24,15 @@ SET @frame_merge_rows_before = (
 SET @frame_merge_finishes_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_merge_smoke_finishes');
+SET @frame_merge_edge_rows_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_merge_edge_smoke_rows');
+SET @frame_merge_edge_finishes_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_merge_edge_smoke_finishes');
+SET @frame_merge_edge_errors_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_merge_edge_smoke_errors');
 
 SET SESSION parallel_query=ON;
 SET SESSION parallel_cost_threshold=0;
@@ -52,6 +61,18 @@ SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_merge_smoke_finishes') -
   @frame_merge_finishes_before) >= 3 AS orderby_frame_merge_finishes_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_merge_edge_smoke_rows') -
+  @frame_merge_edge_rows_before) >= 1 AS orderby_frame_merge_edge_rows_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_merge_edge_smoke_finishes') -
+  @frame_merge_edge_finishes_before) >= 2 AS orderby_frame_merge_edge_finishes_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_merge_edge_smoke_errors') -
+  @frame_merge_edge_errors_before) >= 1 AS orderby_frame_merge_edge_errors_delta;
 
 SET SESSION parallel_query=OFF;
 SET SESSION parallel_cost_threshold=10000;
