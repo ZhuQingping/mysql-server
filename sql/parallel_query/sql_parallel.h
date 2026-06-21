@@ -190,6 +190,8 @@ struct PQ_global_stats {
   std::atomic<uint64> clone_probe_unsupported{0};  ///< Missing clone contract
   std::atomic<uint64> clone_preflight_attempts{0};  ///< Contract preflights
   std::atomic<uint64> clone_preflight_unsupported{0};  ///< Contract rejects
+  std::atomic<uint64> saved_order_group_contract_attempts{0};  ///< E5d-S1
+  std::atomic<uint64> saved_order_group_contract_unsupported{0};  ///< E5d-S1
   std::atomic<uint64> workers_launched{0};    ///< Total worker threads launched
   std::atomic<uint64> rows_scanned{0};        ///< Total rows scanned by PQ workers
   std::atomic<uint64> parallel_scan_iterator_order_gather_attempts{0};  ///< E3
@@ -301,6 +303,9 @@ struct PQ_global_stats {
     clone_probe_unsupported.store(0, std::memory_order_relaxed);
     clone_preflight_attempts.store(0, std::memory_order_relaxed);
     clone_preflight_unsupported.store(0, std::memory_order_relaxed);
+    saved_order_group_contract_attempts.store(0, std::memory_order_relaxed);
+    saved_order_group_contract_unsupported.store(0,
+                                                 std::memory_order_relaxed);
     workers_launched.store(0, std::memory_order_relaxed);
     rows_scanned.store(0, std::memory_order_relaxed);
     parallel_scan_iterator_order_gather_attempts.store(

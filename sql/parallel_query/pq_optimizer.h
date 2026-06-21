@@ -109,6 +109,62 @@ struct PQUnsuiteInfo {
   bool is_eligible() const { return reason == PQUnsuiteReason::NONE; }
 };
 
+enum class PQSavedOrderGroupContractStatus {
+  READY,
+  UNSUPPORTED_NULL_INPUT,
+  UNSUPPORTED_MISSING_SAVED_HELPERS
+};
+
+/**
+  Compile-only saved ORDER/GROUP contract shape.
+
+  This is a fail-closed sidecar for the commercial ORDER BY Filesort path. It
+  captures only publicly available JOIN / Query_block state in this step. It
+  intentionally does not own ORDER nodes, Item objects, or Query_block private
+  saved list pointers, and it must not be used to construct Filesort yet.
+*/
+struct PQSavedOrderGroupContract {
+  PQSavedOrderGroupContractStatus status{
+      PQSavedOrderGroupContractStatus::UNSUPPORTED_NULL_INPUT};
+  const char *detail{nullptr};
+
+  bool has_order{false};
+  bool has_group{false};
+  bool has_having{false};
+  bool grouped{false};
+  bool group_optimized_away{false};
+  bool implicit_grouping{false};
+  bool need_tmp_before_win{false};
+  bool simple_group{false};
+  bool simple_order{false};
+  bool streaming_aggregation{false};
+  bool skip_sort_order{false};
+  bool select_distinct{false};
+  int ordered_index_usage{0};
+
+  void reset() {
+    status = PQSavedOrderGroupContractStatus::UNSUPPORTED_NULL_INPUT;
+    detail = nullptr;
+    has_order = false;
+    has_group = false;
+    has_having = false;
+    grouped = false;
+    group_optimized_away = false;
+    implicit_grouping = false;
+    need_tmp_before_win = false;
+    simple_group = false;
+    simple_order = false;
+    streaming_aggregation = false;
+    skip_sort_order = false;
+    select_distinct = false;
+    ordered_index_usage = 0;
+  }
+
+  bool ready() const {
+    return status == PQSavedOrderGroupContractStatus::READY;
+  }
+};
+
 /**
   Check whether a query block is eligible for parallel execution.
 
@@ -130,6 +186,17 @@ struct PQUnsuiteInfo {
 */
 bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
                                    JOIN *join, PQUnsuiteInfo *info);
+
+/**
+  Build the current saved ORDER/GROUP contract sidecar.
+
+  @retval true   The saved ORDER/GROUP state is complete enough for a later
+                 Filesort contract step.
+  @retval false  Unsupported or incomplete. Callers must fail closed.
+*/
+bool pq_build_saved_order_group_contract(
+    Query_block *query_block, JOIN *join,
+    PQSavedOrderGroupContract *contract);
 
 /**
   Convert a PQUnsuiteReason to a human-readable string.

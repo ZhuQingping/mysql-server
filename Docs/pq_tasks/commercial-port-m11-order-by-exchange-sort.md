@@ -817,6 +817,95 @@ Design/Task Review - M11-E5d-S0:
 - next step: E5d-S1 compile-only saved state contract shape, fail-closed and
   without user-visible ORDER BY activation。
 
+### M11-E5d-S1: Saved State Contract Shape
+
+Status: coding, validation, and Code/Doc/Test Review completed；ready to
+commit。
+
+Goal:
+
+- add a compile-only sidecar contract for saved ORDER/GROUP optimizer state；
+- capture only publicly available JOIN / Query_block scalar state；
+- report unsupported until the commercial saved helper layer is introduced；
+- keep the helper observable through a debug-only smoke without enabling real
+  Filesort or user-visible ORDER BY PQ。
+
+Implementation:
+
+- added `PQSavedOrderGroupContractStatus` and
+  `PQSavedOrderGroupContract` in `pq_optimizer.h`；
+- added `pq_build_saved_order_group_contract()` in `pq_optimizer.cc`；
+- the helper captures current public scalar state:
+  `has_order`, `has_group`, `has_having`, `grouped`,
+  `group_optimized_away`, `implicit_grouping`, `need_tmp_before_win`,
+  `simple_group`, `simple_order`, `streaming_aggregation`,
+  `skip_sort_order`, `select_distinct`, and `m_ordered_index_usage`；
+- the helper deliberately returns unsupported with
+  `UNSUPPORTED_MISSING_SAVED_HELPERS` because current branch still lacks
+  `saved_join_order`, `saved_join_group_list`, optimized ORDER/GROUP flags, and
+  restore helper APIs；
+- added `pq_saved_order_group_contract_smoke` DBUG hook inside the existing
+  ORDER BY `HAS_ORDER_BY` rejection path；
+- added status variables:
+  `Parallel_saved_order_group_contract_attempts` and
+  `Parallel_saved_order_group_contract_unsupported`；
+- added `pq_saved_order_group_contract` MTR to verify the smoke increments
+  attempts/unsupported while executed/workers/ranges remain zero；
+- updated `pq_stats` for the two new status variables。
+
+Hard boundaries preserved:
+
+- no `HAS_ORDER_BY` relaxation；
+- no `Filesort` / `Sort_param` construction；
+- no `Filesort::make_sortorder()` call；
+- no direct `JOIN` field additions for saved commercial state；
+- no `Query_block` private ORDER/GROUP list access；
+- no `ParallelScanIterator::Read()` behavior change；
+- no worker thread or real ORDER BY producer wiring。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_saved_order_group_contract \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5ds1_target --tmpdir=/tmp/pqt_m11e5ds1_target
+```
+
+Result:
+
+- `git diff --check` passed；
+- `mysqld` build passed；
+- targeted MTR passed，4/4 including `shutdown_report`。
+- full `parallel_query` suite passed，89/89。
+
+Review request:
+
+- confirm the sidecar helper is sufficiently fail-closed；
+- confirm the DBUG hook does not alter default ORDER BY eligibility；
+- confirm status variables and MTR assertions are scoped to S1；
+- confirm next step remains E5d-S2 leader save/restore smoke, not Filesort
+  construction。
+
+Code/Doc/Test Review - M11-E5d-S1:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed `HAS_ORDER_BY` remains rejected and user-visible ORDER BY PQ is not
+  enabled；
+- confirmed sidecar captures only public `Query_block` / `JOIN` scalar state,
+  does not access private saved ORDER/GROUP list pointers, and does not add
+  direct `JOIN` saved fields；
+- confirmed no `Filesort` / `Sort_param` construction, no
+  `make_sortorder()`, no `ParallelScanIterator::Read()` change, and no worker
+  path change；
+- confirmed DBUG hook is scoped to
+  `pq_saved_order_group_contract_smoke` and MTR verifies
+  attempts/unsupported growth while executed/workers/ranges stay zero；
+- next step remains E5d-S2 leader save/restore smoke。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

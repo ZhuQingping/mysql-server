@@ -9699,6 +9699,10 @@ DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(clone_preflight_attempts,
                                 clone_preflight_attempts)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(clone_preflight_unsupported,
                                 clone_preflight_unsupported)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(saved_order_group_contract_attempts,
+                                saved_order_group_contract_attempts)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(saved_order_group_contract_unsupported,
+                                saved_order_group_contract_unsupported)
 
 #undef DEFINE_PQ_CLONE_PROBE_SHOW_FUNC
 
@@ -10732,6 +10736,12 @@ SHOW_VAR status_vars[] = {
      (char *)&show_pq_clone_preflight_attempts, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_clone_preflight_unsupported",
      (char *)&show_pq_clone_preflight_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_saved_order_group_contract_attempts",
+     (char *)&show_pq_saved_order_group_contract_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_saved_order_group_contract_unsupported",
+     (char *)&show_pq_saved_order_group_contract_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_callback_smoke_attempts",
      (char *)&show_pq_callback_smoke_attempts, SHOW_FUNC, SHOW_SCOPE_GLOBAL},

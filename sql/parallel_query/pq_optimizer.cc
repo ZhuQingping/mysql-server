@@ -95,6 +95,47 @@ const char *pq_v1_explain_eligible_label() {
   return "eligible, execution disabled, serial fallback";
 }
 
+bool pq_build_saved_order_group_contract(
+    Query_block *query_block, JOIN *join,
+    PQSavedOrderGroupContract *contract) {
+  if (contract == nullptr) return false;
+
+  contract->reset();
+  if (query_block == nullptr || join == nullptr) {
+    contract->status =
+        PQSavedOrderGroupContractStatus::UNSUPPORTED_NULL_INPUT;
+    contract->detail = "missing Query_block or JOIN";
+    return false;
+  }
+
+  contract->has_order = query_block->is_ordered() || !join->order.empty();
+  contract->has_group =
+      query_block->is_explicitly_grouped() || !join->group_list.empty();
+  contract->has_having =
+      query_block->having_cond() != nullptr || join->having_cond != nullptr;
+  contract->grouped = join->grouped;
+  contract->group_optimized_away = join->group_optimized_away;
+  contract->implicit_grouping = join->implicit_grouping;
+  contract->need_tmp_before_win = join->need_tmp_before_win;
+  contract->simple_group = join->simple_group;
+  contract->simple_order = join->simple_order;
+  contract->streaming_aggregation = join->streaming_aggregation;
+  contract->skip_sort_order = join->skip_sort_order;
+  contract->select_distinct = join->select_distinct;
+  contract->ordered_index_usage = static_cast<int>(join->m_ordered_index_usage);
+
+  /*
+    E5d-S1 deliberately fails closed. The current branch does not expose the
+    commercial saved ORDER/GROUP helper layer (`saved_join_order`,
+    `saved_join_group_list`, optimized ORDER/GROUP flags, and restore helpers).
+    Captured scalar flags are diagnostics only until S2/S3 define ownership.
+  */
+  contract->status =
+      PQSavedOrderGroupContractStatus::UNSUPPORTED_MISSING_SAVED_HELPERS;
+  contract->detail = "missing saved ORDER/GROUP helper layer";
+  return false;
+}
+
 struct PQ_copied_key_endpoint {
   key_range range{};
   std::vector<uchar> key;
@@ -235,6 +276,22 @@ static bool pq_secondary_ref_key_parts_are_safe(const TABLE *table, uint keyno,
   }
 
   return true;
+}
+
+static void pq_maybe_run_saved_order_group_contract_smoke(
+    Query_block *query_block, JOIN *join) {
+  bool enabled = false;
+  DBUG_EXECUTE_IF("pq_saved_order_group_contract_smoke", enabled = true;);
+  if (!enabled) return;
+
+  pq_global_stats.saved_order_group_contract_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  PQSavedOrderGroupContract contract;
+  if (!pq_build_saved_order_group_contract(query_block, join, &contract)) {
+    pq_global_stats.saved_order_group_contract_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+  }
 }
 
 static void pq_maybe_run_secondary_range_partition_smoke(
@@ -941,6 +998,7 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
   // 9. Must not have ORDER BY
   // ================================================================
   if (query_block->is_ordered()) {
+    pq_maybe_run_saved_order_group_contract_smoke(query_block, join);
     return pq_reject(info, PQUnsuiteReason::HAS_ORDER_BY,
                      "query has ORDER BY");
   }
