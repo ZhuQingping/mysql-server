@@ -6646,6 +6646,137 @@ Code/Doc/Test Review - M11-E5k:
     `pq_commercial_order_by pq_commercial_order_by_frames pq_stats`
     plus `shutdown_report`。
 
+### M11-E5l: Controlled Exchange_sort::read_mq_message Typed PQOF Branch Smoke
+
+Status: Code/Doc/Test Review accepted；ready to commit。
+
+Goal:
+
+- add an explicit controlled branch inside `Exchange_sort::read_mq_message()`
+  for typed `PQOF` frames；
+- keep default behavior inert unless a private smoke-only flag is enabled；
+- validate controlled ROW / FINISH / ERROR / WOULD_BLOCK / DETACHED /
+  malformed mapping；
+- do not connect this branch to default SQL execution, materialization, or
+  iterator `Read()`。
+
+Design Explorer - M11-E5l:
+
+- verdict: `ACCEPT WITH SCOPE REVISION`；
+- allowed coding only with a private mode flag that defaults false and is
+  enabled only by smoke helper；
+- required disabled behavior to remain:
+  `type=FINISH`, `datap=nullptr`, `data_len=0`, `return false`；
+- required `materialize_next_ordered_record_image_status()` to remain
+  `DISABLED`；
+- required `Gather_operator::init()` to keep default `Exchange_nosort` and
+  ordinary ORDER BY to remain rejected by `HAS_ORDER_BY`。
+
+Allowed files:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- this taskbook and `Docs/pq_tasks/README.md`。
+
+Forbidden:
+
+- default `Exchange_sort::read_mq_message()` behavior change when flag is false；
+- `materialize_next_ordered_record_image_status()` behavior change；
+- `pq_optimizer.*`, readiness flags, or `HAS_ORDER_BY` eligibility changes；
+- `Gather_operator::init()` default `Exchange_nosort` replacement；
+- default `ParallelScanIterator::Read()` / `PQTableScanIterator::Read()`
+  ORDER BY branch；
+- `Query_result_mq`, handler/InnoDB, AccessPath, clone, optimizer/executor path
+  changes；
+- any user-visible sysvar or public readiness counter for this smoke-only flag。
+
+Implementation expectations:
+
+- add a private `Exchange_sort` flag for controlled `PQOF` read mode；
+- add a private or public smoke helper that enables the flag and drives local
+  `PQOF` frames through `read_mq_message()`；
+- when disabled, `read_mq_message()` must be byte-for-byte equivalent in
+  externally visible behavior to the current inert stub；
+- when enabled, it may read one controlled worker queue using the existing typed
+  `PQOF` helper；
+- ROW may expose the MQ-owned record-image pointer only for immediate smoke
+  validation；do not persist it beyond the call；
+- WOULD_BLOCK / DETACHED / malformed must not be treated as EOF success in
+  future default code; this smoke can map them to controlled FINISH/ERROR
+  behavior only as documented。
+
+Validation:
+
+- `git diff --check`；
+- `cmake --build build-ninja --target mysqld -j 16`；
+- targeted MTR:
+  `pq_commercial_order_by pq_commercial_order_by_frames pq_stats`；
+- full `parallel_query` suite。
+
+Completion Report - M11-E5l:
+
+- changed files:
+  - `sql/parallel_query/exchange_sort.h`；
+  - `sql/parallel_query/exchange_sort.cc`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - added private `m_orderby_read_mq_shape_enabled` flag, default false；
+  - added private `enable_orderby_read_mq_shape_for_smoke()`；
+  - added controlled branch in `Exchange_sort::read_mq_message()` that is only
+    active when the flag is true and MQ handles are initialized；
+  - disabled branch keeps inert behavior:
+    `type=FINISH`, `datap=nullptr`, `data_len=0`, `return false`；
+  - controlled branch uses existing `read_orderby_frame_from_worker_shape()` on
+    worker 0 only；
+  - ROW returns `MQMessageType::ROW` with the MQ-owned record-image pointer for
+    immediate smoke validation；
+  - ERROR / malformed return `MQMessageType::ERROR` and fail closed；
+  - FINISH / WOULD_BLOCK / DETACHED return false with the existing default
+    FINISH/no-data shape；
+  - `cleanup_order_gather_shape()` disables the smoke flag；
+  - existing `run_orderby_frame_contract_smoke()` now calls
+    `run_orderby_read_mq_message_controlled_smoke()`；
+  - no new public counters, sysvars, or MTR files were added。
+- fail-closed scope:
+  - no `pq_optimizer.*` changes；
+  - no readiness flag changes；
+  - no `HAS_ORDER_BY` relaxation；
+  - no `Gather_operator::init()` Exchange selection change；
+  - no materializer behavior change；it remains `DISABLED`；
+  - no default `ParallelScanIterator::Read()` ordered path；
+  - no `Query_result_mq`, handler/InnoDB, AccessPath, clone, or executor path
+    changes。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `pq_commercial_order_by pq_commercial_order_by_frames pq_stats`
+    plus `shutdown_report`；
+  - full `parallel_query` suite passed: 89/89。
+- residual risk:
+  - `read_mq_message()` still cannot represent WOULD_BLOCK / DETACHED distinctly
+    through its public interface；future default integration needs a richer
+    status API or a separate materialization layer；
+  - this smoke does not prove default worker MQ consumption, wait/kill policy,
+    materialization, or visible ORDER BY readiness。
+
+Code/Doc/Test Review - M11-E5l:
+
+- Review Agent verdict: `ACCEPT`；
+- no blocking findings；
+- confirmed disabled `read_mq_message()` remains inert:
+  `type=FINISH`, `datap=nullptr`, `data_len=0`, `return false`；
+- confirmed typed `PQOF` branch is guarded by the private smoke flag and does
+  not alter `Gather_operator::init()`, optimizer readiness, materializer, or
+  iterator default paths；
+- confirmed ROW data pointer is MQ-owned and only validated immediately by the
+  controlled smoke；
+- confirmed FINISH / WOULD_BLOCK / DETACHED remain folded into existing
+  FINISH/no-data/false shape and ERROR / malformed fail closed；
+- confirmed docs record the residual risk that public `read_mq_message()` cannot
+  express WOULD_BLOCK / DETACHED distinctly。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

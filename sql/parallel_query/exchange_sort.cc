@@ -478,6 +478,28 @@ bool Exchange_sort::read_mq_message(MQMessageType &type, void **datap,
   type = MQMessageType::FINISH;
   *datap = nullptr;
   data_len = 0;
+  if (m_orderby_read_mq_shape_enabled && m_mq_handles != nullptr &&
+      m_nqueues > 0) {
+    PQ_orderby_loader_status status = PQ_orderby_loader_status::ERROR;
+    PQ_orderby_decoded_frame decoded;
+    if (read_orderby_frame_from_worker_shape(get_mq_handle(0), &status,
+                                             &decoded)) {
+      type = MQMessageType::ERROR;
+      return true;
+    }
+
+    if (status == PQ_orderby_loader_status::ROW) {
+      type = MQMessageType::ROW;
+      *datap = const_cast<uchar *>(decoded.record_image);
+      data_len = decoded.record_image_len;
+      return true;
+    }
+
+    if (status == PQ_orderby_loader_status::ERROR) {
+      type = MQMessageType::ERROR;
+      return true;
+    }
+  }
   return false;
 }
 
@@ -683,6 +705,10 @@ bool Exchange_sort::read_orderby_frame_from_worker_shape(
     *status = PQ_orderby_loader_status::ERROR;
   }
   return false;
+}
+
+void Exchange_sort::enable_orderby_read_mq_shape_for_smoke(bool enabled) {
+  m_orderby_read_mq_shape_enabled = enabled;
 }
 
 bool Exchange_sort::load_orderby_frame_to_record_group(
@@ -989,6 +1015,7 @@ void Exchange_sort::cleanup_order_gather_shape() {
   m_order_shape_initialized = false;
   m_order_shape_stable_output = false;
   m_order_shape_index_sort = false;
+  m_orderby_read_mq_shape_enabled = false;
   cleanup_sort_state_shape();
   cleanup_real_init_state_owner_shape();
   cleanup_runtime_sort_state_owner_shape();
@@ -2207,9 +2234,93 @@ bool Exchange_sort::run_orderby_frame_contract_smoke(uint32 *rows_read,
     }
   }
 
+  if (!failed) {
+    failed = run_orderby_read_mq_message_controlled_smoke();
+  }
+
   handle.cleanup();
   return failed || *rows_read != 2 || *finishes_read != 1 ||
          *errors_read != 1;
+}
+
+bool Exchange_sort::run_orderby_read_mq_message_controlled_smoke() {
+  MQMessageType type = MQMessageType::ERROR;
+  void *data = reinterpret_cast<void *>(1);
+  uint32 data_len = 99;
+  if (read_mq_message(type, &data, data_len) || type != MQMessageType::FINISH ||
+      data != nullptr || data_len != 0) {
+    return true;
+  }
+
+  bool initialized_here = false;
+  if (m_mq_handles == nullptr) {
+    if (init()) return true;
+    initialized_here = true;
+  }
+
+  enable_orderby_read_mq_shape_for_smoke(true);
+  bool failed = false;
+  if (read_mq_message(type, &data, data_len) ||
+      type != MQMessageType::FINISH || data != nullptr || data_len != 0) {
+    failed = true;
+  }
+
+  const int64 record0 = 100;
+  const uint32 rowid0 = 10;
+  const int64 sortkey0 = 1;
+  failed = failed ||
+           pq_send_orderby_frame(get_mq_handle(0), PQ_orderby_frame_type::ROW,
+                                 &record0, sizeof(record0), &rowid0,
+                                 sizeof(rowid0), &sortkey0,
+                                 sizeof(sortkey0)) ||
+           !read_mq_message(type, &data, data_len) ||
+           type != MQMessageType::ROW || data == nullptr ||
+           data_len != sizeof(record0) ||
+           memcmp(data, &record0, sizeof(record0)) != 0;
+
+  if (!failed) {
+    failed = pq_send_orderby_frame(get_mq_handle(0),
+                                   PQ_orderby_frame_type::FINISH, nullptr, 0,
+                                   nullptr, 0, nullptr, 0) ||
+             read_mq_message(type, &data, data_len) ||
+             type != MQMessageType::FINISH || data != nullptr || data_len != 0;
+  }
+
+  if (!failed) {
+    failed = pq_send_orderby_frame(get_mq_handle(0),
+                                   PQ_orderby_frame_type::ERROR, nullptr, 0,
+                                   nullptr, 0, nullptr, 0) ||
+             !read_mq_message(type, &data, data_len) ||
+             type != MQMessageType::ERROR || data != nullptr || data_len != 0;
+  }
+
+  if (!failed) {
+    PQ_orderby_frame_header invalid{};
+    invalid.magic = PQ_MQ_MESSAGE_MAGIC;
+    invalid.version = PQ_ORDERBY_FRAME_VERSION;
+    invalid.type = pq_orderby_frame_type_to_uint(PQ_orderby_frame_type::ROW);
+    invalid.record_image_len = sizeof(record0);
+    invalid.payload_len = sizeof(record0);
+    failed = get_mq_handle(0)->send(&invalid, sizeof(invalid)) != MQ_SUCCESS ||
+             !read_mq_message(type, &data, data_len) ||
+             type != MQMessageType::ERROR || data != nullptr || data_len != 0;
+  }
+
+  enable_orderby_read_mq_shape_for_smoke(false);
+  if (initialized_here) cleanup();
+
+  Exchange_sort detached_exchange(1, PQ_MQ_DEFAULT_RING_SIZE);
+  if (!failed && detached_exchange.init()) failed = true;
+  if (!failed) {
+    detached_exchange.enable_orderby_read_mq_shape_for_smoke(true);
+    detached_exchange.get_mq_handle(0)->close_producer();
+    failed = detached_exchange.read_mq_message(type, &data, data_len) ||
+             type != MQMessageType::FINISH || data != nullptr || data_len != 0;
+    detached_exchange.enable_orderby_read_mq_shape_for_smoke(false);
+  }
+  detached_exchange.cleanup();
+
+  return failed;
 }
 
 bool Exchange_sort::run_orderby_frame_merge_smoke(uint32 *rows_read,

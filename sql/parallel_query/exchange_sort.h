@@ -212,6 +212,7 @@ class Exchange_sort final : public Exchange {
   bool run_orderby_frame_contract_smoke(uint32 *rows_read,
                                         uint32 *finishes_read,
                                         uint32 *errors_read);
+  bool run_orderby_read_mq_message_controlled_smoke();
   bool run_orderby_worker_frame_producer_smoke(uint32 *rows_read,
                                                uint32 *finishes_read,
                                                uint32 *errors_read);
@@ -300,6 +301,7 @@ class Exchange_sort final : public Exchange {
   PQ_orderby_cached_merge_ctx m_heap_reader_ctx;
   std::vector<bool> m_heap_reader_in_heap;
   std::vector<bool> m_heap_reader_terminal_workers;
+  bool m_orderby_read_mq_shape_enabled{false};
 
   bool init_sort_state_shape(uint32 workers, bool stable_output,
                              bool index_sort, uint32 sort_order_length,
@@ -322,6 +324,7 @@ class Exchange_sort final : public Exchange {
   bool read_orderby_frame_from_worker_shape(
       MQueue_handle *handle, PQ_orderby_loader_status *status,
       PQ_orderby_decoded_frame *decoded);
+  void enable_orderby_read_mq_shape_for_smoke(bool enabled);
   bool load_orderby_frame_to_record_group(MQueue_handle *handle,
                                           uint32 worker_id,
                                           PQ_orderby_loader_status *status);
