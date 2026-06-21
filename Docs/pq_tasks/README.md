@@ -5,7 +5,7 @@
 ## Current Summary
 
 - Last synced: 2026-06-21
-- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1-M10 已完成当前支持子集和测试收口；M11 Post-M10 Commercial Main Architecture Restart 已启动，M11-A0/B0 design accepted；M11-A1-A5 plan clone/resolver contract 与 preflight 已完成；M11-B1/B2 PQWR leader decode adapter、M11-B3a/B3b/B3c worker-result wiring probes 已完成；M11-D0-D6 已完成并提交；M11-E0/E1/E2/E3 已完成并提交；M11-E4 user-visible ORDER BY gate design review accepted，等待提交。
+- Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1-M10 已完成当前支持子集和测试收口；M11 Post-M10 Commercial Main Architecture Restart 已启动，M11-A0/B0 design accepted；M11-A1-A5 plan clone/resolver contract 与 preflight 已完成；M11-B1/B2 PQWR leader decode adapter、M11-B3a/B3b/B3c worker-result wiring probes 已完成；M11-D0-D6 已完成并提交；M11-E0/E1/E2/E3 已完成并提交；M11-E4 user-visible ORDER BY gate design 已提交；M11-E5a real `Exchange_sort` worker-frame materialization design review accepted，等待提交。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
@@ -99,6 +99,7 @@
   - M11-E3 design: `d89b69b335` Plan PQ M11E order gather debug path
   - M11-E3 code: `eed682ed9c` Add PQ M11E order gather debug smoke
   - M11-E4 design: review accepted，保持 `HAS_ORDER_BY` serial boundary，不直接打开用户可见 ORDER BY PQ
+  - M11-E5a design: review accepted，定义 ORDER BY worker-frame materialization contract，不改源码
 - Phase 8 validation:
   - `cmake --build build-ninja --target mysqld -j 16` 通过
   - `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help` 通过
@@ -203,7 +204,7 @@
   - M9-D3d: user-visible leader-local dependent ref gate 已完成；只允许 two-table/simple/no group/having/no reverse/covering secondary dependent ref；`d3d_ref_probe_attempts_delta=5`、`d3d_ref_empty_probes_delta=1`、`d3d_ref_rows_produced_delta=7`、`d3d_executed_delta=1`；`workers/ranges=0`；新增 serial baseline / unsorted D3d order check 和 fallback-after-buffer debug MTR；`mysqld` build、targeted record/replay、完整 `parallel_query` suite 74/74 通过；Review Agent 复审 `ACCEPT`。
   - M9-D3d commit: `6944472cb7e Add PQ M9D dependent ref leader gate`
   - M9-E: ICP Pushdown taskbook 已创建并通过 Design Review；M9-E0 ICP negative guard 已完成编码和验证：secondary range ICP `EXPLAIN` 稳定显示 `Using index condition`，constant ref / dependent ref 保留 adjacent boundary guard，negative window `executed/workers/ranges/secondary_rows = 0`；`mysqld` build、targeted record/replay、完整 `parallel_query` suite 74/74 通过；Code/Task Review Agent 首轮 `REVISE`，修正文档残留后复审 `ACCEPT`；M9-E1a 两个只读 Explorer 均建议先做 leader-local ICP contract/blocking design，不直接编码，Design Review Agent 返回 `ACCEPT`；M9-E1b coding taskbook 已通过 review，但 covering `k_v_idx` / `k_pad_idx` 候选均只产生 `Using where; Using index`，没有 stable strict-covering `Using index condition` 正例；源码探测改动已移除；M9-E1c explorer 建议下一步做 non-covering ICP + clustered lookup contract design，不直接编码，Design Review Agent 返回 `ACCEPT`；M9-E1c-0 detailed contract 通过 Design Review；M9-E1c-1 debug-only one-record smoke 已完成；M9-E1c-2a user-visible non-covering ICP range gate 已完成并通过 Code/Task Review；完整 `parallel_query` suite 74/74 通过；M9-E2 constant covering ref ICP 设计任务书已通过 Design Review；M9-E2-0 access-shape read-only confirmation 已完成，覆盖 ref 候选无法稳定产生 `Using index condition`，非覆盖 ref 才能产生 `type=ref` + `Using index condition`，因此 E2-1/E2-2 编码 blocked。
-- Next recommended action: 提交 M11-E4 设计文档；随后进入 M11-E5a real `Exchange_sort` worker-frame materialization design。
+- Next recommended action: 提交 M11-E5a 设计文档；随后进入 M11-E5b-0 ORDER BY frame contract helper。
 - Commercial port taskbooks:
   - [commercial-port-m3-plan-clone-resolver.md](commercial-port-m3-plan-clone-resolver.md)
   - [commercial-port-m4-worker-result-path.md](commercial-port-m4-worker-result-path.md)

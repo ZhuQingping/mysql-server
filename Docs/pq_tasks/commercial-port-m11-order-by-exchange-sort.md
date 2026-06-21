@@ -921,3 +921,164 @@ Design Review - M11-E4:
   locking read, GROUP BY, DISTINCT, window, HAVING, BLOB/TEXT, and related
   negative tests；
 - confirmed E4a/E4b/E5a/E5b/E5c split is safe to submit as design-only。
+
+## M11-E5a: Real Exchange_sort Worker-frame Materialization Design
+
+Status: design drafted；waiting for independent design review。
+
+Goal:
+
+- define how to migrate the commercial `Exchange_sort::read_mq_record()` /
+  batch / heap path into the current typed-MQ branch；
+- establish a safe worker-frame contract before any source code consumes real
+  ORDER BY worker output；
+- keep optimizer/user-visible ORDER BY eligibility unchanged。
+
+Design conclusion:
+
+- E5a is design-only；
+- do not code real `Exchange_sort::read_mq_message()` or
+  `ParallelScanIterator::Read()` ORDER BY consumption yet；
+- first introduce a dedicated ORDER BY worker-frame adapter design, because the
+  current branch's `Query_result_mq` sends PQWR field-value frames while the
+  commercial `Exchange_sort` expects record frames suitable for
+  `table->record[0]`, `Sort_param::make_sortkey()`, and rowid tie-break。
+
+Commercial behavior to preserve:
+
+- per-worker cached record groups (`MAX_RECORD_STORE`) allow batch refill from
+  MQ and heap-based K-way merge；
+- each cached record owns/deep-copies row bytes and, when stable output is
+  required, rowid bytes；
+- when `Filesort` metadata exists, each record can lazily cache its sort key；
+- `read_mq_record()` returns one visible row by copying or converting the
+  current min record into leader `table->record[0]`；
+- heap comparison uses sort key first and rowid/ref comparison as stable
+  tie-break when required；
+- EOF is per-worker completion, not a single global FINISH。
+
+Current branch constraints:
+
+- `Exchange_nosort` consumes typed `MQMessageType::ROW` row images；
+- `Query_result_mq` emits `PQ_worker_result_frame_header` / PQWR field-value
+  frames, not record images with rowid/sort-key metadata；
+- `Exchange_sort::read_mq_message()` is currently inert and returns `FINISH`；
+- E1/E2/E3 only validate shape and controlled adapter smokes；
+- worker threads and DOP range paths are already used by fullscan tests, so
+  ORDER BY frame changes must not alter default worker-result behavior。
+
+Proposed ORDER BY worker-frame contract:
+
+- define a new internal ORDER BY frame type or wrapper distinct from existing
+  PQWR row frames；
+- minimum frame fields:
+  - message type: ROW / FINISH / ERROR；
+  - worker id or queue id is implicit from MQ queue；
+  - record image length and fixed record image bytes；
+  - optional rowid length and rowid bytes for stable output；
+  - optional prebuilt sort key length and sort key bytes only after sort-key
+    ownership is reviewed；initial implementation should prefer lazy leader
+    `Sort_param::make_sortkey()` from record image；
+  - flags for NULL ordering / DESC semantics only after explicit support；
+- initial frame producer should be debug-only and leader-local or worker-smoke
+  controlled, not the normal SQL worker path；
+- existing PQWR frames must remain unchanged for M11-B worker-result tests。
+
+Proposed `Exchange_sort` materialization shape:
+
+- add typed read helpers that read one ORDER BY frame from a specific worker MQ；
+- deep-copy frame data into `PQ_orderby_cached_record` / batch-owned storage；
+- keep current synthetic/cached adapter helpers intact；
+- introduce an explicit materialization status enum:
+  `ROW`, `EOF_REACHED`, `WOULD_BLOCK`, `ERROR`；
+- preserve per-worker completion and heap removal semantics；
+- expose a debug-only helper that consumes controlled ORDER BY frames and
+  writes visible rows to `table->record[0]` only inside an isolated smoke；
+- do not call the helper from default `ParallelScanIterator::Read()` in E5a。
+
+Files allowed for future coding after design review:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- `sql/parallel_query/exchange.h` / `.cc` only for reusable typed-frame helpers
+  if needed；
+- `sql/parallel_query/query_result_mq.h` / `.cc` only if a separate ORDER BY
+  frame helper is added without changing existing PQWR behavior；
+- `sql/parallel_query/sql_parallel.h` / `.cc` only for debug helper/counters；
+- focused MTR under `mysql-test/suite/parallel_query/`；
+- this taskbook and README。
+
+Forbidden files until a later reviewed gate:
+
+- `sql/parallel_query/pq_optimizer.*`；
+- `sql/sql_optimizer.*`；
+- `sql/sql_executor.*`；
+- `sql/join_optimizer/access_path.*`；
+- `storage/innobase/**`；
+- default `ParallelScanIterator::Read()` ORDER BY path；
+- user-visible `HAS_ORDER_BY` eligibility changes；
+- M11-F ref/ICP worker path。
+
+Required future coding tests before any visible SQL gate:
+
+- debug-only ORDER BY frame smoke:
+  - three worker queues, duplicate keys, EOF per worker；
+  - ASC order with explicit tie-break；
+  - DESC stays fail-closed until a separate reviewed DESC path；
+  - NULL-ordering stays fail-closed until nullable ORDER BY semantics are
+    explicitly implemented and tested；
+  - ERROR frame propagation；
+  - WOULD_BLOCK does not spin forever and is bounded by existing wait policy；
+  - D6 row-value and E3 no-row counters do not grow。
+- materialization:
+  - visible rows written into leader `table->record[0]` in smoke only；
+  - row image length mismatch fails closed；
+  - nullable or unsupported field shape fails closed。
+- compatibility:
+  - existing `pq_commercial_worker_result*`, `pq_parallel_scan_iterator_*`,
+    `pq_commercial_order_by`, and full `parallel_query` suite remain passing；
+  - `pq_commercial_order_by` still reports `Not parallel HAS_ORDER_BY` until a
+    later reviewed E5c gate。
+
+Hard stop conditions:
+
+- if ORDER BY frames cannot be distinguished from PQWR frames, stop and do not
+  overload PQWR；
+- if leader `Sort_param::make_sortkey()` requires JOIN/TABLE state mutation not
+  isolated to the smoke, stop and split a `Filesort` state contract task；
+- if rowid/ref_length ownership cannot be proven for the leader table/handler,
+  stop and keep stable tie-break unsupported；
+- if any coding patch touches optimizer eligibility, reject it as out of E5a
+  scope。
+
+Proposed next split after E5a review:
+
+- M11-E5b-0: ORDER BY frame contract helper, compile-only + unit smoke；
+- M11-E5b-1: `Exchange_sort` controlled frame K-way merge smoke；
+- M11-E5b-2: debug-only visible row materialization smoke into
+  `table->record[0]`；
+- M11-E5c: user-visible ORDER BY path design review after visible-row smoke
+  passes。
+
+Validation for E5a:
+
+- design review only；
+- no build/MTR required because no source or test code changes。
+
+Design Review - M11-E5a:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none blocking；
+- confirmed E5a is reasonable as design-only and preserves the `HAS_ORDER_BY`
+  serial boundary；
+- confirmed current PQWR frames are field-value frames and should not be
+  overloaded for `Exchange_sort`；
+- confirmed a dedicated ORDER BY frame contract is the correct direction for
+  record materialization, rowid/ref tie-break, lazy `Sort_param::make_sortkey()`,
+  and per-worker EOF semantics；
+- confirmed allowed/forbidden file split protects optimizer, executor,
+  AccessPath, InnoDB, default `ParallelScanIterator::Read()`, and user-visible
+  eligibility；
+- residual risk carried forward: before any visible ORDER BY gate, DESC and
+  NULL-ordering tests must be explicit, even if initial E5b only supports ASC
+  and fails closed for nullable/DESC shapes。
