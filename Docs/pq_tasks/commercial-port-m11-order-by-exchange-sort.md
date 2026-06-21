@@ -10,8 +10,8 @@ smoke completed and committed；M11-E5d-2b optimized flag contract smoke
 completed and committed；M11-E5d-2c restore-to-sidecar contract smoke
 completed and committed；M11-E5d-2d clone-copy contract smoke completed and
 committed；M11-E5d-3 design completed and committed；M11-E5d-3a restored
-ORDER Filesort contract coding completed，waiting for review/full
-validation/commit。
+ORDER Filesort contract completed and committed；M11-E5d-3b Filesort
+constructor risk design in progress。
 
 ## 背景
 
@@ -2208,7 +2208,7 @@ Commit:
 ### M11-E5d-3a: Restored ORDER Filesort Contract
 
 Status: coding completed；Code/Doc/Test Review Agent accepted；full
-`parallel_query` suite passed；waiting for commit。
+`parallel_query` suite passed；committed。
 
 Goal:
 
@@ -2292,6 +2292,141 @@ Code/Doc/Test Review - M11-E5d-3a:
   `restored_order_count > 0`, and `sidecar_clone_ready`；
 - confirmed SHOW STATUS counters, reset, `pq_stats`, MTR assertions, and docs
   are consistent。
+
+Commit:
+
+- `952beeeafa1` Add PQ M11E restored order filesort contract。
+
+### M11-E5d-3b: Filesort Constructor Risk Review
+
+Status: design-only taskbook completed；Design Review Agent accepted；waiting
+for commit。
+
+Goal:
+
+- decide whether the next coding stage may create a debug-only `Filesort`
+  object from the restored ORDER sidecar；
+- define strict memory/lifecycle boundaries if a debug-only construction smoke
+  is allowed；
+- keep `Sort_param`, `Exchange_sort`, worker MQ, real row sorting, and
+  user-visible ORDER BY PQ out of scope。
+
+Current branch facts:
+
+- `Filesort::Filesort()` calls `make_sortorder(order, unwrap_rollup)` in its
+  initializer；
+- `Filesort::make_sortorder()` counts ORDER nodes, allocates `sortorder` from
+  `THR_MALLOC`, initializes `st_sort_field`, stores `real_item()`, and sets
+  reverse flags from `ORDER::direction`；
+- normal executor/finalize paths allocate `Filesort` on `thd->mem_root` and
+  attach it to execution-owned cleanup structures such as
+  `JOIN::filesorts_to_cleanup` or QEP/AccessPath objects；
+- constructing `Filesort` inside an eligibility reject path would be a real
+  allocation and sortorder initialization, not a passive shape check；
+- E5d-3a already proves the restored sidecar ORDER chain exists and can be
+  clone-copied without exposing the sidecar pointer。
+
+Design decision:
+
+- do not construct `Filesort` in the normal eligibility path；
+- do not construct `Filesort` unless a dedicated DBUG flag is set；
+- if E5d-3c is approved, construct `Filesort` only from the restored sidecar
+  ORDER chain after E5d-3a contract success；
+- E5d-3c must allocate on the current THD MEM_ROOT like normal MySQL
+  `Filesort` construction, then rely on statement MEM_ROOT cleanup；
+- E5d-3c must not attach the debug-only `Filesort` to
+  `JOIN::filesorts_to_cleanup`, QEP_TAB, AccessPath, iterator state, or any
+  persistent PQ state；
+- E5d-3c must not call `using_addon_fields()`, `Sort_param::init_for_filesort()`,
+  `filesort()`, `Exchange_sort::init()`, or worker MQ code；
+- E5d-3c may inspect only constructor-visible diagnostics such as
+  `sort_order_length()` and should treat zero length as unsupported；
+- E5d-3c must stay in the existing `HAS_ORDER_BY` reject path and must still
+  return serial rejection。
+
+Proposed next coding step:
+
+1. M11-E5d-3c Debug-only Filesort Construction Smoke:
+   - allowed files:
+     - `sql/parallel_query/pq_optimizer.cc`
+     - `sql/parallel_query/sql_parallel.h`
+     - `sql/mysqld.cc`
+     - focused MTR under `mysql-test/suite/parallel_query/`
+     - this task document and README；
+   - may include `sql/filesort.h` in `pq_optimizer.cc` only for this DBUG-only
+     smoke；
+   - add internal helper that builds restored sidecar contract, then constructs
+     `Filesort(thd, {table}, false, restored_order, HA_POS_ERROR, false,
+     false, false)` under DBUG；
+   - verify `sort_order_length() == restored_order_count`；
+   - add counters:
+     `Parallel_orderby_filesort_construct_smoke_attempts`,
+     `Parallel_orderby_filesort_construct_smoke_success`,
+     `Parallel_orderby_filesort_construct_smoke_unsupported`；
+   - MTR must verify no-DBUG zero counters, DBUG success, old
+     `HAS_ORDER_BY` rejection, and zero executed/workers/ranges。
+
+Forbidden files / actions for E5d-3c:
+
+- no `sql/filesort.*` edits；
+- no `sql/iterators/sorting_iterator.*` edits；
+- no `sql/parallel_query/exchange_sort.*` edits；
+- no `sql/parallel_query/pq_iterators.*` edits；
+- no `sql/parallel_query/pq_clone.*` edits；
+- no `sql/sql_optimizer.*` hook or semantic change；
+- no `Sort_param` allocation or initialization；
+- no `Filesort::using_addon_fields()`；
+- no `filesort()` execution；
+- no `Exchange_sort::init()`；
+- no worker thread, MQ, handler/InnoDB, `Read()`, AccessPath, or
+  `HAS_ORDER_BY` eligibility relaxation。
+
+Required validation for E5d-3c:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_saved_order_group_contract \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d3c_target --tmpdir=/tmp/pqt_m11e5d3c_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d3c_full --tmpdir=/tmp/pqt_m11e5d3c_full
+```
+
+Design review request:
+
+- confirm a DBUG-only `Filesort` construction smoke is acceptable after
+  E5d-3a contract success；
+- confirm THD MEM_ROOT allocation with statement cleanup is acceptable for
+  debug-only smoke；
+- confirm the smoke must not attach the `Filesort` to cleanup/execution
+  structures；
+- confirm inspecting only `sort_order_length()` is enough for this stage；
+- confirm `Sort_param`, `Exchange_sort`, worker MQ, and user-visible ORDER BY
+  PQ remain later phases。
+
+Design Review - M11-E5d-3b:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- required changes: none；
+- confirmed dedicated DBUG-only `Filesort` construction is reasonable after
+  E5d-3a success；
+- confirmed current THD MEM_ROOT allocation is consistent with normal
+  construction paths；
+- confirmed not attaching the debug-only `Filesort` to
+  `JOIN::filesorts_to_cleanup`, QEP_TAB, AccessPath, or iterator state is
+  acceptable because no execution-owned cleanup path should see it；
+- confirmed `sort_order_length() == restored_order_count` is sufficient for
+  the first construction smoke；
+- confirmed `using_addon_fields()` must stay forbidden because it lazily
+  initializes `Sort_param` state；
+- confirmed no `filesort()`, `Exchange_sort`, worker/MQ, or eligibility
+  relaxation should be introduced；
+- confirmed E5d-3c must keep the restored sidecar ORDER chain alive through
+  the constructor call and treat zero length or failed contract as unsupported。
 
 ## Risk Areas
 
