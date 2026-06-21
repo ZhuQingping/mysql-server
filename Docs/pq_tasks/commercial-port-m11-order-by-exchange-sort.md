@@ -3,8 +3,8 @@
 ## 状态
 
 Status: M11-E0/E1/E2/E3/E4/E5a/E5b-0/E5b-1/E5b-2/E5b-3/E5c/E5d/E5d-0
-completed and committed；M11-E5d-S0/S1/S2 completed and committed；
-M11-E5d-S3 clone-copy contract completed，waiting for commit。
+completed and committed；M11-E5d-S0/S1/S2/S3 completed and committed；
+M11-E5d-1 fail-closed Filesort contract shape design started。
 
 ## 背景
 
@@ -1340,6 +1340,147 @@ Code/Doc/Test Review - M11-E5d-S3:
   count/list；
 - next step: E5d-1 fail-closed Filesort contract shape, not
   `make_sortorder()` smoke。
+
+Commit:
+
+- `c49fc064cca` Add PQ M11E saved state clone copy smoke。
+
+### M11-E5d-1: Fail-closed Filesort Contract Shape Design
+
+Status: design-only taskbook completed；Review Agent accepted；no source code
+change。
+
+Goal:
+
+- introduce a leader-only contract shape that represents whether commercial
+  ORDER BY Filesort state is usable；
+- report fail-closed unsupported while the branch lacks owned saved
+  ORDER/GROUP helper state；
+- prepare a narrow entry point for later Filesort lifecycle review without
+  constructing `Filesort` or `Sort_param`。
+
+Commercial reference:
+
+- commercial `ParallelScanIterator::pq_make_filesort()` restores saved
+  ORDER/GROUP state and then prepares leader Filesort metadata；
+- commercial `Exchange_sort::init()` calls `Filesort::make_sortorder()` and
+  initializes `Sort_param`；
+- current branch has S1/S2/S3 sidecar proofs only. It still lacks owned
+  commercial saved ORDER/GROUP helper state, so E5d-1 must not invoke the
+  commercial Filesort code path。
+
+Design boundary:
+
+- E5d-1 may define a small contract struct such as
+  `PQOrderByFilesortContract` with fields for status, detail, has order,
+  stable sort request, ordered-index usage, and whether saved helper state is
+  ready；
+- E5d-1 may build this contract from `PQSavedOrderGroupContract` and public
+  leader JOIN / Query_block scalar state；
+- E5d-1 must return unsupported unless the saved ORDER/GROUP sidecar is
+  `READY`；
+- because S1-S3 deliberately keep the sidecar unsupported, E5d-1 must remain
+  fail-closed in all current MTRs；
+- E5d-1 must not allocate or reference a real `Filesort` object。
+
+Allowed files for coding after review:
+
+- `sql/parallel_query/pq_optimizer.h`；
+- `sql/parallel_query/pq_optimizer.cc`；
+- `sql/parallel_query/sql_parallel.h`；
+- `sql/mysqld.cc`；
+- focused MTR under `mysql-test/suite/parallel_query/`；
+- this taskbook and `Docs/pq_tasks/README.md`。
+
+Forbidden files / actions:
+
+- no `sql/filesort.*` changes；
+- no `sql/iterators/sorting_iterator.*` changes；
+- no `sql/sql_optimizer.*` changes；
+- no `sql/parallel_query/exchange_sort.*` real Filesort integration；
+- no `Filesort`, `Sort_param`, or `Filesort::make_sortorder()` construction or
+  invocation；
+- no `pq_clone.cc` or real clone lifecycle wiring；
+- no `HAS_ORDER_BY` relaxation, `Read()` change, worker, handler, MQ, or real
+  ORDER BY producer wiring。
+
+Proposed coding shape:
+
+- add enum / struct for a fail-closed Filesort contract:
+  - `UNSUPPORTED_NULL_INPUT`；
+  - `UNSUPPORTED_MISSING_SAVED_HELPERS`；
+  - reserved `READY` for later phases only。
+- add helper such as
+  `pq_build_orderby_filesort_contract(Query_block *, JOIN *,
+  PQOrderByFilesortContract *)`；
+- helper first builds `PQSavedOrderGroupContract`；
+- if saved sidecar is not `READY`, set
+  `UNSUPPORTED_MISSING_SAVED_HELPERS` and return false；
+- add debug-only smoke under
+  `pq_orderby_filesort_contract_smoke` on existing ORDER BY reject path；
+- smoke verifies attempts/unsupported grow and no ready/success is reported。
+
+Required observability:
+
+- new status counters:
+  `Parallel_orderby_filesort_contract_attempts`；
+  `Parallel_orderby_filesort_contract_unsupported`。
+- MTR:
+  - no-DBUG negative window verifies Filesort contract counters do not grow by
+    default；
+  - DBUG positive window verifies attempts/unsupported grow；
+  - saved ORDER/GROUP S1-S3 counters remain compatible；
+  - `Parallel_queries_executed`, `Parallel_workers_launched`, and
+    `Parallel_ranges_dispatched` stay zero；
+  - ORDER BY EXPLAIN still reports `Not parallel HAS_ORDER_BY`。
+
+Required validation for coding:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_saved_order_group_contract \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d1_target --tmpdir=/tmp/pqt_m11e5d1_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d1_full --tmpdir=/tmp/pqt_m11e5d1_full
+```
+
+Acceptance checklist:
+
+- no source edits before design review；
+- no real Filesort or Sort_param object exists；
+- helper is fail-closed because saved helper state is unsupported；
+- user-visible ORDER BY remains serial；
+- next step after E5d-1 is to decide whether to implement owned saved
+  ORDER/GROUP helper state or keep Filesort construction blocked。
+
+Review request:
+
+- confirm E5d-1 should be a fail-closed contract shape only；
+- confirm `Filesort::make_sortorder()` smoke remains forbidden；
+- confirm using `PQSavedOrderGroupContract` as prerequisite is correct；
+- confirm counters/MTR prove no user-visible ORDER BY activation。
+
+Design Review - M11-E5d-1:
+
+- Review Agent verdict: `ACCEPT`；
+- confirmed E5d-1 must be fail-closed contract shape only, not
+  `Filesort::make_sortorder()` smoke；
+- confirmed `PQSavedOrderGroupContract::READY` is the correct prerequisite,
+  and current S1-S3 unsupported state means E5d-1 must remain unsupported in
+  current MTRs；
+- confirmed forbidden file/action list is sufficient to prevent real Filesort
+  lifecycle or user-visible ORDER BY activation；
+- required coding assertion: no-DBUG Filesort contract counters do not grow；
+  DBUG attempts grow and unsupported equals attempts；
+  executed/workers/ranges stay zero；ORDER BY EXPLAIN remains
+  `Not parallel HAS_ORDER_BY`；
+- confirmed next step after E5d-1 should be owned saved ORDER/GROUP helper
+  state design/implementation, or explicitly blocked, not Filesort
+  construction。
 
 ## Risk Areas
 
