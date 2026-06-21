@@ -8,8 +8,9 @@ M11-E5d-1 fail-closed Filesort contract shape completed and committed；
 M11-E5d-2 design completed and committed；M11-E5d-2a owned ORDER chain copy
 smoke completed and committed；M11-E5d-2b optimized flag contract smoke
 completed and committed；M11-E5d-2c restore-to-sidecar contract smoke
-completed and committed；M11-E5d-2d clone-copy contract smoke coding
-completed，waiting for review/full validation/commit。
+completed and committed；M11-E5d-2d clone-copy contract smoke completed and
+committed。Next: design the first post-sidecar Filesort integration boundary
+without enabling user-visible ORDER BY PQ。
 
 ## 背景
 
@@ -1968,7 +1969,7 @@ Commit:
 ### M11-E5d-2d: Clone-copy Contract Smoke
 
 Status: coding completed；Code/Doc/Test Review Agent accepted；full
-`parallel_query` suite passed；waiting for commit。
+`parallel_query` suite passed；committed。
 
 Goal:
 
@@ -2041,6 +2042,10 @@ Code/Doc/Test Review - M11-E5d-2d:
 - confirmed SHOW STATUS counters, reset, `pq_stats` count/order, MTR
   assertions, and docs are consistent；
 - confirmed forbidden scope is not touched。
+
+Commit:
+
+- `a4cc361c759` Add PQ M11E order chain clone copy smoke。
 
 ## Risk Areas
 
