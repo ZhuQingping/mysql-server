@@ -2520,7 +2520,8 @@ Commit:
 
 ### M11-E5d-4: Sort_param / Exchange_sort Initialization Boundary Design
 
-Status: design-only taskbook in progress。
+Status: design-only taskbook completed；Design Review Agent accepted；waiting
+for commit。
 
 Goal:
 
@@ -2539,6 +2540,147 @@ Initial constraints:
   InnoDB, AccessPath, or optimizer eligibility changes；
 - any future coding must be DBUG-only and must preserve `HAS_ORDER_BY`
   rejection。
+
+Commercial reference:
+
+- commercial `Exchange_sort::init()` does all of the following in one path:
+  - calls `Exchange::init()`；
+  - calls `m_sort->make_sortorder(m_sort->m_order, false)`；
+  - applies DESC group metadata to `m_sort->sortorder[pos].reverse`；
+  - allocates `Sort_param` on PQ mem_root；
+  - pushes the leader table into `m_sort->tables`；
+  - calls `Sort_param::init_for_filesort()`；
+  - allocates compare keys and tmp rowid buffers；
+  - allocates record groups, min-record array, and heap state；
+  - later consumes worker MQ frames through `read_mq_record()`。
+- current branch already has synthetic `Exchange_sort` smoke and ORDER BY frame
+  smoke, but no real `Filesort`/`Sort_param` member state in `Exchange_sort`。
+
+Current branch facts:
+
+- E5d-3c proves a restored sidecar ORDER chain can be consumed by the
+  `Filesort` constructor under DBUG；
+- `Filesort` constructor already calls `make_sortorder()` once；
+- MySQL 8.0.46 `Filesort::make_sortorder()` is private, so commercial
+  `Exchange_sort::init()` cannot be copied directly without changing
+  `Filesort` visibility or reworking the flow；
+- `Sort_param::init_for_filesort()` calls `decide_addon_fields()`, which reads
+  table metadata/read sets and decides row-id vs addon-field layout；
+- `using_addon_fields()` is lazy in normal code and is intentionally not called
+  from the `Filesort` constructor because read sets may not be fully finalized
+  at constructor time；
+- E5d-3c runs in an eligibility reject path, not in executor iterator
+  construction。
+
+Design decision:
+
+- do not copy commercial `Exchange_sort::init()` as-is；
+- do not expose `Filesort::make_sortorder()` or change `sql/filesort.*` for
+  E5d-4；
+- do not call `Exchange_sort::init()` with real `Filesort` state yet；
+- split the next work into two smaller gates:
+  - E5d-4a: debug-only `Sort_param` initialization smoke, without
+    `Exchange_sort`；
+  - E5d-4b: design-only `Exchange_sort` real-state adapter after E5d-4a
+    passes review；
+- E5d-4a may allocate local `Sort_param` only under a dedicated DBUG flag and
+  only after E5d-3c-style restored sidecar + debug Filesort construction
+  succeeds；
+- E5d-4a must not call `Filesort::using_addon_fields()` separately because
+  `Sort_param::init_for_filesort()` already performs the required decision；
+- E5d-4a must verify only narrow diagnostics:
+  - `local_sortorder.size() == filesort->sort_order_length()`；
+  - `max_record_length() > 0`；
+  - no execution counters grow；
+- E5d-4a must not persist `Sort_param`, `Filesort`, sort keys, or buffers；
+- E5d-4a must not attach any object to `JOIN`, `QEP_TAB`, `AccessPath`,
+  `Exchange_sort`, iterator, MQ, or PQ state。
+
+Proposed next coding step:
+
+1. M11-E5d-4a Debug-only Sort_param Init Smoke:
+   - allowed files:
+     - `sql/parallel_query/pq_optimizer.cc`
+     - `sql/parallel_query/sql_parallel.h`
+     - `sql/mysqld.cc`
+     - focused MTR under `mysql-test/suite/parallel_query/`
+     - this task document and README；
+   - may include `sql/sort_param.h` if not already pulled by `filesort.h`；
+   - add internal helper that:
+     - repeats E5d-3c restored sidecar + debug Filesort construction；
+     - builds a local `Sort_param` on the stack；
+     - calls `init_for_filesort(filesort, make_array(filesort->sortorder,
+       sort_order_length), sortlength(thd, filesort->sortorder,
+       sort_order_length), filesort->tables, HA_POS_ERROR, false)`；
+     - verifies local sortorder length and max record length；
+     - does not store the local `Sort_param` anywhere；
+   - add counters:
+     `Parallel_orderby_sort_param_init_smoke_attempts`,
+     `Parallel_orderby_sort_param_init_smoke_success`,
+     `Parallel_orderby_sort_param_init_smoke_unsupported`；
+   - MTR verifies no-DBUG zero counters, DBUG success, `HAS_ORDER_BY`
+     rejection, and zero executed/workers/ranges。
+
+Forbidden files / actions for E5d-4a:
+
+- no `sql/filesort.*` edits；
+- no `sql/sort_param.*` edits；
+- no `sql/iterators/sorting_iterator.*` edits；
+- no `sql/parallel_query/exchange_sort.*` edits；
+- no `sql/parallel_query/pq_iterators.*` edits；
+- no `sql/parallel_query/pq_clone.*` edits；
+- no `sql/sql_optimizer.*` hook or semantic change；
+- no persisted `Filesort` or `Sort_param` pointer；
+- no `filesort()` execution；
+- no `Exchange_sort::init()`；
+- no worker thread, MQ, handler/InnoDB, `Read()`, AccessPath, or
+  `HAS_ORDER_BY` eligibility relaxation。
+
+Required validation for E5d-4a:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_saved_order_group_contract \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d4a_target --tmpdir=/tmp/pqt_m11e5d4a_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d4a_full --tmpdir=/tmp/pqt_m11e5d4a_full
+```
+
+Design review request:
+
+- confirm E5d-4a may call `Sort_param::init_for_filesort()` under DBUG after
+  E5d-3c succeeds；
+- confirm E5d-4a should remain independent from current `Exchange_sort`；
+- confirm not changing `Filesort::make_sortorder()` visibility is required；
+- confirm stack-local `Sort_param` and THD MEM_ROOT `Filesort` lifetime are
+  acceptable for debug-only smoke；
+- confirm E5d-4b should be a separate design for real `Exchange_sort` state
+  adapter。
+
+Design Review - M11-E5d-4:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- required changes: none；
+- confirmed E5d-4a may call stack-local `Sort_param::init_for_filesort()`
+  under a dedicated DBUG flag after E5d-3c succeeds；
+- confirmed E5d-4a must stay in the `HAS_ORDER_BY` reject/debug-smoke window；
+- confirmed E5d-4a should remain independent from current `Exchange_sort`
+  because commercial `Exchange_sort::init()` mixes `make_sortorder`,
+  `Sort_param`, buffers, heap, and MQ consumption；
+- confirmed `Filesort::make_sortorder()` visibility must not change；
+- confirmed `local_sortorder.size() == filesort->sort_order_length()` plus
+  `max_record_length() > 0`, with zero executed/workers/ranges counters, is
+  sufficient for the first `Sort_param` smoke；
+- coding caveat: `init_for_filesort()` may allocate/cache addon descriptors
+  through the debug `Filesort` embedded `m_sort_param`, so the temporary
+  `Filesort` must remain unpersisted and debug-only；
+- confirmed forbidden scope, allowed files, and validation commands are
+  complete for E5d-4a。
 
 ## Risk Areas
 
