@@ -206,6 +206,77 @@ Only after D1 review accepted. Add observability for fail-closed lifecycle
 cleanup without enabling `PARALLEL_SCAN`. Exact counters/MTR must be designed
 separately.
 
+Revised design:
+
+- D2 remains design-only / docs-only；
+- do not add counters in D2 because there is no legal MTR trigger for
+  `ParallelScanIterator::Init()` without either going through the
+  `PARALLEL_SCAN` AccessPath factory or touching the current `pq_iterator.*`
+  entry path；
+- do not create a synthetic SQL-visible trigger in `pq_stats`；
+- defer lifecycle counter implementation to D3, where a debug-only
+  `PARALLEL_SCAN` construction probe can explicitly own the trigger boundary；
+- D2 closes the status-smoke design question by recording that the smoke needs
+  a guarded construction probe before it can be testable。
+
+Counter semantics reserved for D3:
+
+- `Parallel_scan_lifecycle_smoke_attempts`；
+- `Parallel_scan_lifecycle_fail_closed`；
+- `Parallel_scan_lifecycle_cleanup_calls`。
+
+When D3 implements these counters, they must mean synthetic/debug lifecycle
+smoke only. MTR must also assert that real execution counters and unrelated
+smoke counters do not increase:
+
+- `Parallel_queries_executed`；
+- `Parallel_workers_launched`；
+- `Parallel_rows_scanned`；
+- handler probe/open/handler smoke counters；
+- clone probe/preflight counters；
+- worker-result smoke counters。
+
+Allowed files for D2:
+
+- this taskbook。
+
+Forbidden for D2:
+
+- `sql/parallel_query/pq_iterators.h`；
+- `sql/parallel_query/pq_iterators.cc`；
+- `sql/parallel_query/sql_parallel.h`；
+- `sql/mysqld.cc`；
+- `mysql-test/suite/parallel_query/t/pq_stats.test`；
+- `mysql-test/suite/parallel_query/r/pq_stats.result`；
+- `sql/parallel_query/pq_iterator.*`；
+- `sql/parallel_query/sql_parallel.cc`；
+- `sql/parallel_query/query_result_mq.*`；
+- `sql/parallel_query/exchange*`；
+- `sql/join_optimizer/access_path.*`；
+- `sql/sql_executor.*`；
+- `sql/handler.*`；
+- `storage/innobase/**`；
+- `sql/parallel_query/pq_clone*`；
+- optimizer eligibility files。
+
+Validation:
+
+```bash
+git diff --check -- Docs/pq_tasks/commercial-port-m11-parallel-scan-lifecycle.md
+```
+
+Status: docs-only design closure completed / Docs-Design Review accepted。
+
+Review:
+
+- first Docs-Design Review returned `REVISE` because D2 had no legal MTR
+  trigger for `ParallelScanIterator::Init()` without going through
+  `PARALLEL_SCAN` factory or touching `pq_iterator.*`；
+- D2 was narrowed to docs-only and records that lifecycle counters/testability
+  require a guarded D3 construction probe；
+- re-review returned `ACCEPT`；
+- validation: document `git diff --check` passed。
+
 ### M11-D3: Guarded PARALLEL_SCAN Factory Probe
 
 Only after D1/D2 accepted. Evaluate a debug-only `PARALLEL_SCAN` construction
