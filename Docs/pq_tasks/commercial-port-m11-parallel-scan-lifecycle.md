@@ -363,7 +363,7 @@ TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
   --parallel=1 --vardir=/tmp/pqv_m11d3_target --tmpdir=/tmp/pqt_m11d3_target
 ```
 
-Status: design completed / Docs-Design Review accepted。
+Status: coding/validation completed / Code-Docs-Test Review accepted。
 
 Review:
 
@@ -374,6 +374,47 @@ Review:
 - the hook must call only the `pq_iterators.*` synthetic lifecycle helper and
   then continue existing serial fallback behavior；
 - re-review returned `ACCEPT`。
+
+Implementation:
+
+- added synthetic `pq_run_parallel_scan_lifecycle_smoke()` in
+  `pq_iterators.*`；
+- added a guarded `DBUG_EXECUTE_IF("pq_parallel_scan_lifecycle_smoke", ...)`
+  hook in `PQTableScanIterator::Init()` before handler PROBE；
+- the hook constructs a local `ParallelScanIterator`, calls `Init()`, verifies
+  the current fail-closed result, then returns through existing serial
+  fallback；
+- added debug-smoke status counters:
+  `Parallel_scan_lifecycle_smoke_attempts`,
+  `Parallel_scan_lifecycle_fail_closed`,
+  `Parallel_scan_lifecycle_cleanup_calls`；
+- added focused MTR `pq_parallel_scan_lifecycle_smoke` and updated
+  `pq_stats` for the new status variables。
+
+Validation result:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed:
+  `pq_parallel_scan_lifecycle_smoke` and `pq_stats`, 3/3 including
+  `shutdown_report`；
+- full `parallel_query` suite passed, 81/81；
+- `--record pq_parallel_scan_lifecycle_smoke` executed successfully but MTR
+  failed to copy the new result file with errno 1, so the result file was
+  synchronized from the generated test log and then verified by normal MTR。
+
+Code-Docs-Test Review:
+
+- Review Agent returned `ACCEPT`；
+- confirmed the DBUG hook is before handler PROBE and returns through serial
+  fallback without entering the existing post-PROBE smoke chain；
+- confirmed the synthetic helper only constructs local `ParallelScanIterator`
+  and calls `Init()`；
+- confirmed cleanup counting is guarded by `m_cleanup_done` inside the cleanup
+  helper；
+- confirmed SHOW STATUS/reset wiring and MTR assertions are complete；
+- confirmed no forbidden files or real `PARALLEL_SCAN` positive path were
+  touched。
 
 ## Deferred
 

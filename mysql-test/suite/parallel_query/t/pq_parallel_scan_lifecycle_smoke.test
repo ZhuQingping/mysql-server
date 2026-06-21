@@ -1,0 +1,97 @@
+# Verify the guarded ParallelScanIterator lifecycle smoke stays fail-closed.
+
+--source include/have_innodb_16k.inc
+--source include/have_debug.inc
+
+CREATE TABLE pq_parallel_scan_lifecycle_t (
+  id INT PRIMARY KEY,
+  v INT
+) ENGINE=InnoDB;
+INSERT INTO pq_parallel_scan_lifecycle_t VALUES (1,10),(2,20),(3,30);
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+
+SET @lifecycle_attempts_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_scan_lifecycle_smoke_attempts');
+SET @lifecycle_fail_closed_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_scan_lifecycle_fail_closed');
+SET @lifecycle_cleanup_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_scan_lifecycle_cleanup_calls');
+SET @queries_executed_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_queries_executed');
+SET @workers_launched_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_workers_launched');
+SET @rows_scanned_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_rows_scanned');
+SET @worker_result_workers_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_workers');
+SET @probe_attempts_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_probe_attempts');
+SET @worker_open_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_open_smoke_runs');
+SET @worker_handler_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_handler_smoke_runs');
+
+SET @old_debug=@@session.debug;
+SET SESSION debug="d,pq_parallel_scan_lifecycle_smoke";
+SELECT id, v FROM pq_parallel_scan_lifecycle_t WHERE v >= 0;
+SET SESSION debug=@old_debug;
+
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_scan_lifecycle_smoke_attempts') -
+  @lifecycle_attempts_before) >= 1 AS lifecycle_attempt_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_scan_lifecycle_fail_closed') -
+  @lifecycle_fail_closed_before) >= 1 AS lifecycle_fail_closed_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_scan_lifecycle_cleanup_calls') -
+  @lifecycle_cleanup_before) >= 1 AS lifecycle_cleanup_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_queries_executed') -
+  @queries_executed_before) AS queries_executed_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_workers_launched') -
+  @workers_launched_before) AS workers_launched_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_rows_scanned') -
+  @rows_scanned_before) AS rows_scanned_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_workers') -
+  @worker_result_workers_before) AS worker_result_workers_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_probe_attempts') -
+  @probe_attempts_before) AS probe_attempts_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_open_smoke_runs') -
+  @worker_open_before) AS worker_open_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_handler_smoke_runs') -
+  @worker_handler_before) AS worker_handler_delta;
+
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+
+DROP TABLE pq_parallel_scan_lifecycle_t;

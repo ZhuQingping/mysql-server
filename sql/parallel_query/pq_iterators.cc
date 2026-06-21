@@ -1019,6 +1019,8 @@ void ParallelScanIterator::cleanup_lifecycle(bool init_failed) {
   m_worker_started = false;
   m_no_fallback_commit = false;
   m_cleanup_done = true;
+  pq_global_stats.parallel_scan_lifecycle_cleanup_calls.fetch_add(
+      1, std::memory_order_relaxed);
   m_lifecycle_state =
       init_failed ? Lifecycle_state::FAIL_CLOSED
                   : Lifecycle_state::CLEANED_UP;
@@ -1031,6 +1033,22 @@ bool ParallelScanIterator::Init() {
 }
 
 int ParallelScanIterator::Read() { return 1; }
+
+bool pq_run_parallel_scan_lifecycle_smoke(THD *thd) {
+  if (thd == nullptr) return true;
+
+  pq_global_stats.parallel_scan_lifecycle_smoke_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  ParallelScanIterator iterator(thd, nullptr, nullptr, 0.0, nullptr, nullptr,
+                                nullptr, false, nullptr);
+  const bool init_failed = iterator.Init();
+  if (!init_failed) return true;
+
+  pq_global_stats.parallel_scan_lifecycle_fail_closed.fetch_add(
+      1, std::memory_order_relaxed);
+  return false;
+}
 
 PQblockScanIterator::PQblockScanIterator(
     THD *thd, TABLE *table, double expected_rows, ha_rows *examined_rows,

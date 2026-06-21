@@ -43,8 +43,11 @@ M11-B3a guarded worker-result wiring probe design 已完成并通过
 Docs-Design Review。M11-B3b local `Query_result_mq` wiring helper 与
 M11-B3c debug-only worker-thread result probe 已完成，通过 build、targeted
 MTR、完整 `parallel_query` suite 与 Code-Docs-Test Review；下一步进入
-M11-D0 `ParallelScanIterator` lifecycle contract 与 M11-D1 compile-only
-lifecycle skeleton 已完成；下一步进入 M11-D2 lifecycle status smoke 设计。
+M11-D0 `ParallelScanIterator` lifecycle contract、M11-D1 compile-only
+lifecycle skeleton、M11-D2 lifecycle status smoke docs closure、M11-D3
+debug-only guarded construction probe 均已完成，并通过对应 Review Agent
+检视。M11-D3 新增 `Parallel_scan_lifecycle_*` 计数和定向 MTR，full
+`parallel_query` suite 通过 81/81。
 
 本文档是商用实现平移的总差异清单和迁移计划。M3-M10 后续执行采用 Codex 主控 + 子 Agent 只读/实现后 review 的方式推进：每个阶段先按任务书实施，实施完成后启动独立 review 子 Agent 检视阶段 diff、测试证据和风险项，主控确认意见闭环后再提交。
 
@@ -309,7 +312,8 @@ M11-B explorer 结论：
 10. M11-B3b local `Query_result_mq` wiring helper；
 11. M11-B3c debug-only worker-thread `Query_result_mq` probe；
 12. M11-D `ParallelScanIterator` lifecycle contract；
-13. M11-D2 lifecycle status smoke。
+13. M11-D2 lifecycle status smoke docs closure；
+14. M11-D3 debug-only guarded `ParallelScanIterator` construction probe。
 
 **任务书入口：**
 

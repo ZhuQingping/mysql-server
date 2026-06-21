@@ -139,4 +139,16 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQSecondaryCoveringRefIterator(
     THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *path,
     ha_rows *examined_rows, bool is_root_ref);
 
+/**
+  Run the DBUG-only ParallelScanIterator lifecycle smoke.
+
+  The helper constructs the commercial iterator skeleton directly, calls Init()
+  and expects the current fail-closed result. It must not call Read(), handler
+  scan APIs, worker launch, or the normal AccessPath factory.
+
+  @retval false  Expected fail-closed lifecycle path completed
+  @retval true   Unexpected success or invalid input
+*/
+bool pq_run_parallel_scan_lifecycle_smoke(THD *thd);
+
 #endif  // SQL_PARALLEL_QUERY_PQ_ITERATORS_H

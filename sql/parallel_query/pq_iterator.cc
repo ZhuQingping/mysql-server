@@ -47,6 +47,7 @@
 #include "sql/mysqld.h"       // innodb_hton
 #include "sql/parallel_query/pq_clone.h"  // pq_clone_activation_probe
 #include "sql/parallel_query/pq_group_aggregate_iterator.h"
+#include "sql/parallel_query/pq_iterators.h"
 #include "sql/parallel_query/sql_parallel.h"  // pq_global_stats
 #include "sql/sql_class.h"    // THD::variables, THD::pq_is_worker
 #include "sql/sql_lex.h"      // LEX::is_explain
@@ -105,6 +106,14 @@ bool PQTableScanIterator::Init() {
   if (table() == nullptr || table()->s == nullptr || table()->s->blob_fields > 0) {
     return init_serial_fallback();
   }
+
+  DBUG_EXECUTE_IF("pq_parallel_scan_lifecycle_smoke", {
+    if (pq_run_parallel_scan_lifecycle_smoke(thd())) {
+      PrintError(HA_ERR_INTERNAL_ERROR);
+      return true;
+    }
+    return init_serial_fallback();
+  });
 
   // V2-2 bridge smoke: prove the handler can create and release a SQL-visible
   // leader context without starting workers or reading rows. Unsupported

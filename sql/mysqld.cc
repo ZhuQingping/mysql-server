@@ -9718,6 +9718,26 @@ static int show_pq_rows_scanned(THD *, SHOW_VAR *var, char *buf) {
   return 0;
 }
 
+#define DEFINE_PQ_PARALLEL_SCAN_LIFECYCLE_SHOW_FUNC(NAME, FIELD)        \
+  static int show_pq_##NAME(THD *, SHOW_VAR *var, char *buf) {          \
+    var->type = SHOW_LONGLONG;                                          \
+    var->value = buf;                                                   \
+    *((longlong *)buf) =                                                \
+        (longlong)(pq_global_stats.FIELD.load(std::memory_order_relaxed)); \
+    return 0;                                                           \
+  }
+
+DEFINE_PQ_PARALLEL_SCAN_LIFECYCLE_SHOW_FUNC(
+    parallel_scan_lifecycle_smoke_attempts,
+    parallel_scan_lifecycle_smoke_attempts)
+DEFINE_PQ_PARALLEL_SCAN_LIFECYCLE_SHOW_FUNC(
+    parallel_scan_lifecycle_fail_closed, parallel_scan_lifecycle_fail_closed)
+DEFINE_PQ_PARALLEL_SCAN_LIFECYCLE_SHOW_FUNC(
+    parallel_scan_lifecycle_cleanup_calls,
+    parallel_scan_lifecycle_cleanup_calls)
+
+#undef DEFINE_PQ_PARALLEL_SCAN_LIFECYCLE_SHOW_FUNC
+
 static int show_pq_ranges_built(THD *, SHOW_VAR *var, char *buf) {
   var->type = SHOW_LONGLONG;
   var->value = buf;
@@ -10658,6 +10678,15 @@ SHOW_VAR status_vars[] = {
     {"Parallel_workers_launched", (char *)&show_pq_workers_launched, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_rows_scanned", (char *)&show_pq_rows_scanned, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_scan_lifecycle_cleanup_calls",
+     (char *)&show_pq_parallel_scan_lifecycle_cleanup_calls, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_scan_lifecycle_fail_closed",
+     (char *)&show_pq_parallel_scan_lifecycle_fail_closed, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_scan_lifecycle_smoke_attempts",
+     (char *)&show_pq_parallel_scan_lifecycle_smoke_attempts, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_ranges_built", (char *)&show_pq_ranges_built, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
