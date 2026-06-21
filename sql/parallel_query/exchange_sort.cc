@@ -51,14 +51,11 @@ struct PQ_orderby_cached_merge_ctx {
   bool descending{false};
 };
 
-struct PQ_orderby_worker_frame_producer_shape {
-  MQueue_handle *handle{nullptr};
-  uint32 worker_id{0};
-  int64 last_sort_key{0};
-  bool has_last_sort_key{false};
-  bool finished{false};
-};
-
+/*
+  Single controlled owner contract for future worker-local PQOF production.
+  Legacy producer smoke coverage below uses this shape too; it is not a second
+  runtime producer owner.
+*/
 struct PQ_orderby_worker_producer_adapter_shape {
   MQueue_handle *handle{nullptr};
   uint32 worker_id{0};
@@ -249,60 +246,6 @@ bool pq_send_orderby_frame(MQueue_handle *handle, PQ_orderby_frame_type type,
   }
 
   return handle->send(message.data(), total_len) != MQ_SUCCESS;
-}
-
-bool pq_worker_orderby_producer_emit_row(
-    PQ_orderby_worker_frame_producer_shape *producer, const void *record_image,
-    uint32 record_image_len, const void *row_id, uint32 row_id_len,
-    int64 sort_key) {
-  if (producer == nullptr || producer->handle == nullptr ||
-      producer->finished || record_image == nullptr || record_image_len == 0 ||
-      row_id == nullptr || row_id_len == 0) {
-    return true;
-  }
-  if (producer->has_last_sort_key && sort_key < producer->last_sort_key) {
-    return true;
-  }
-
-  if (pq_send_orderby_frame(producer->handle, PQ_orderby_frame_type::ROW,
-                            record_image, record_image_len, row_id, row_id_len,
-                            &sort_key, sizeof(sort_key),
-                            producer->worker_id)) {
-    return true;
-  }
-  producer->last_sort_key = sort_key;
-  producer->has_last_sort_key = true;
-  return false;
-}
-
-bool pq_worker_orderby_producer_finish(
-    PQ_orderby_worker_frame_producer_shape *producer) {
-  if (producer == nullptr || producer->handle == nullptr ||
-      producer->finished) {
-    return true;
-  }
-  if (pq_send_orderby_frame(producer->handle, PQ_orderby_frame_type::FINISH,
-                            nullptr, 0, nullptr, 0, nullptr, 0,
-                            producer->worker_id)) {
-    return true;
-  }
-  producer->finished = true;
-  return false;
-}
-
-bool pq_worker_orderby_producer_error(
-    PQ_orderby_worker_frame_producer_shape *producer) {
-  if (producer == nullptr || producer->handle == nullptr ||
-      producer->finished) {
-    return true;
-  }
-  if (pq_send_orderby_frame(producer->handle, PQ_orderby_frame_type::ERROR,
-                            nullptr, 0, nullptr, 0, nullptr, 0,
-                            producer->worker_id)) {
-    return true;
-  }
-  producer->finished = true;
-  return false;
 }
 
 bool pq_orderby_worker_producer_adapter_emit_row(
@@ -1564,9 +1507,9 @@ bool Exchange_sort::run_orderby_worker_frame_producer_smoke(
   MQueue_handle handle(&queue, PQ_MQ_DEFAULT_BUFFER_SIZE);
   if (handle.init()) return true;
 
-  PQ_orderby_worker_frame_producer_shape worker0{&handle, 0};
-  PQ_orderby_worker_frame_producer_shape worker1{&handle, 1};
-  PQ_orderby_worker_frame_producer_shape worker2{&handle, 2};
+  PQ_orderby_worker_producer_adapter_shape worker0{&handle, 0};
+  PQ_orderby_worker_producer_adapter_shape worker1{&handle, 1};
+  PQ_orderby_worker_producer_adapter_shape worker2{&handle, 2};
 
   const int64 record10 = 100;
   const int64 record30 = 300;
@@ -1576,21 +1519,21 @@ bool Exchange_sort::run_orderby_worker_frame_producer_smoke(
   const uint32 rowid20 = 20;
 
   bool failed =
-      pq_worker_orderby_producer_emit_row(&worker0, &record10,
-                                          sizeof(record10), &rowid10,
-                                          sizeof(rowid10), 1) ||
-      pq_worker_orderby_producer_emit_row(&worker0, &record30,
-                                          sizeof(record30), &rowid30,
-                                          sizeof(rowid30), 3) ||
-      pq_worker_orderby_producer_finish(&worker0) ||
-      !pq_worker_orderby_producer_emit_row(&worker0, &record10,
-                                           sizeof(record10), &rowid10,
-                                           sizeof(rowid10), 4) ||
-      pq_worker_orderby_producer_emit_row(&worker1, &record20,
-                                          sizeof(record20), &rowid20,
-                                          sizeof(rowid20), 2) ||
-      pq_worker_orderby_producer_finish(&worker1) ||
-      pq_worker_orderby_producer_error(&worker2);
+      pq_orderby_worker_producer_adapter_emit_row(
+          &worker0, &record10, sizeof(record10), &rowid10, sizeof(rowid10),
+          1) ||
+      pq_orderby_worker_producer_adapter_emit_row(
+          &worker0, &record30, sizeof(record30), &rowid30, sizeof(rowid30),
+          3) ||
+      pq_orderby_worker_producer_adapter_finish(&worker0) ||
+      !pq_orderby_worker_producer_adapter_emit_row(
+          &worker0, &record10, sizeof(record10), &rowid10, sizeof(rowid10),
+          4) ||
+      pq_orderby_worker_producer_adapter_emit_row(
+          &worker1, &record20, sizeof(record20), &rowid20, sizeof(rowid20),
+          2) ||
+      pq_orderby_worker_producer_adapter_finish(&worker1) ||
+      pq_orderby_worker_producer_adapter_error(&worker2);
 
   PQ_mq_event negative_sender_event;
   PQ_mq_event negative_receiver_event;
@@ -1599,12 +1542,12 @@ bool Exchange_sort::run_orderby_worker_frame_producer_smoke(
                         negative_ring, sizeof(negative_ring));
   MQueue_handle negative_handle(&negative_queue, PQ_MQ_DEFAULT_BUFFER_SIZE);
   if (!failed && negative_handle.init()) failed = true;
-  PQ_orderby_worker_frame_producer_shape negative_worker{&negative_handle, 9};
+  PQ_orderby_worker_producer_adapter_shape negative_worker{&negative_handle, 9};
   if (!failed) {
-    failed = pq_worker_orderby_producer_emit_row(
+    failed = pq_orderby_worker_producer_adapter_emit_row(
                  &negative_worker, &record30, sizeof(record30), &rowid30,
                  sizeof(rowid30), 30) ||
-             !pq_worker_orderby_producer_emit_row(
+             !pq_orderby_worker_producer_adapter_emit_row(
                  &negative_worker, &record20, sizeof(record20), &rowid20,
                  sizeof(rowid20), 20);
   }

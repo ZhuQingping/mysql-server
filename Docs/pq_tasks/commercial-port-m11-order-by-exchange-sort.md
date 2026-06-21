@@ -6316,6 +6316,64 @@ Design Re-review - M11-E5i:
   `HAS_ORDER_BY` serial boundary remain preserved；
 - approved entering M11-E5i-1 serial coding。
 
+### M11-E5i-1: Consolidate Worker-local PQOF Producer Owner Contract
+
+Status: completed；Code/Doc/Test Review accepted。
+
+Completion Report:
+
+- changed files:
+  - `sql/parallel_query/exchange_sort.cc`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - removed the older internal `PQ_orderby_worker_frame_producer_shape` owner
+    and its dedicated helper family；
+  - kept the existing public/DBUG legacy smoke entry
+    `Exchange_sort::run_orderby_worker_frame_producer_smoke()` for coverage；
+  - changed that legacy smoke to use
+    `PQ_orderby_worker_producer_adapter_shape` and
+    `pq_orderby_worker_producer_adapter_*()` helpers；
+  - documented `PQ_orderby_worker_producer_adapter_shape` as the single
+    controlled owner contract for future worker-local `PQOF` production；
+  - did not add a new `PQOF` producer shape, helper family, DBUG flag, status
+    variable, MTR file, or result file。
+- fail-closed scope:
+  - no `pq_optimizer.*` changes；
+  - no preflight readiness flag changes；
+  - no `HAS_ORDER_BY` relaxation；
+  - no default worker execution, default `Gather_operator::init()`, default
+    `Exchange_sort` selection, `Query_result_mq`, handler/InnoDB, or default
+    `ParallelScanIterator::Read()` changes；
+  - ordinary ORDER BY SQL remains protected by existing negative MTR coverage。
+- validation:
+  - `git diff --check -- sql/parallel_query/exchange_sort.cc` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `pq_commercial_order_by pq_commercial_order_by_frames pq_stats`
+    plus `shutdown_report`；
+  - full `parallel_query` suite passed: 89/89。
+- residual risk:
+  - the legacy smoke API and counters still exist for compatibility, but now
+    reuse the single adapter owner contract；
+  - real worker thread integration, real Filesort key generation, DESC / NULL
+    ordering, rowid tie-break, default MQ consumption, and default ordered
+    `Read()` remain future reviewed work。
+
+Code/Doc/Test Review - M11-E5i-1:
+
+- verdict: `ACCEPT`；
+- confirmed removing the old internal `PQ_orderby_worker_frame_producer_shape`
+  and helper family is reasonable because it duplicated adapter semantics；
+- confirmed the legacy `run_orderby_worker_frame_producer_smoke()` now reuses
+  the single adapter owner while preserving ROW / FINISH / ERROR, after-FINISH
+  reject, and descending-key reject coverage；
+- confirmed no tracked diff touches `pq_optimizer.*`, `HAS_ORDER_BY`,
+  `Gather_operator::init`, `Query_result_mq`, handler/InnoDB, or default
+  `ParallelScanIterator::Read`；
+- confirmed documentation accurately records scope, validation, and residual
+  risks。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
