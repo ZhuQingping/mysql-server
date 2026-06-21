@@ -7322,6 +7322,157 @@ Code/Doc/Test Review - M11-E5q:
 - confirmed materializer default remains unchanged and visible ORDER BY PQ
   remains blocked。
 
+### M11-E5r: Rowid Duplicate-key Tie-break Inventory
+
+Status: design-only/read-only inventory drafted；waiting Docs/Source Review。
+
+Goal:
+
+- decide whether ORDER BY equal-key tie-break is ready for fail-closed coding；
+- compare the current controlled `row_id` byte-vector rule with the commercial
+  handler `ref` / `cmp_ref()` contract；
+- document the exact gaps before any `rowid_tiebreak_ready` work；
+- keep visible ORDER BY PQ blocked。
+
+Design/Source Review input:
+
+- independent Review Agent verdict: `REVISE` for direct coding；
+- recommendation: split E5r into design-only/read-only inventory first；
+- reason: current branch has rowid/ref/tie-break shapes, but not a real
+  executable handler `ref` contract。
+
+Current branch inventory:
+
+- `PQ_orderby_cached_record` stores `row_id` as an owned byte-vector；
+- `PQ_orderby_frame_header` carries `row_id_len` and `sort_key_len`；
+- `PQ_orderby_sort_state_shape` and
+  `PQ_orderby_real_init_state_shape` carry `ref_length`,
+  `stable_output`, and `rowid_required`；
+- cached/synthetic comparator currently compares:
+  - byte-vector `sort_key`；
+  - byte-vector `row_id` when sort keys are equal；
+  - `worker_id` as final deterministic fallback；
+- controlled smokes cover duplicate scalar keys and expected rowid order；
+- controlled heap reader still requires `sort_key.size() == sizeof(int64)`；
+- `pq_build_orderby_execution_preflight()` keeps
+  `rowid_tiebreak_ready=false`,
+  `exchange_sort_heap_read_ready=false`, and
+  `default_ordered_read_ready=false`；
+- existing `HAS_ORDER_BY` serial boundary remains the user-visible gate。
+
+Commercial reference inventory:
+
+- commercial `Exchange_sort` stores MQ records carrying `m_row_id` and
+  `m_sort_key`, and owns `Sort_param *`, `handler *m_file`, `Filesort *`,
+  and heap state；
+- commercial `Exchange_sort::init()` builds real Filesort sort order and
+  `Sort_param`；
+- stable mode validates `ref_length == m_file->ref_length`；
+- commercial `heap_compare_records()` compares real Filesort keys first；
+- when keys are equal and stable output is required, commercial code uses
+  `handler::cmp_ref(row_id_0, row_id_1) < 0`；
+- commercial worker rowid source is handler `file->ref` populated after
+  `file->position(record)` in worker scan；
+- commercial MQ sends handler ref bytes using `file->ref_length` for stable
+  output。
+
+Decision:
+
+- do not code rowid tie-break in E5r；
+- byte-vector `row_id` ordering is not sufficient evidence for handler
+  `cmp_ref()` semantics；
+- scalar sort-key smokes are useful test guards, but cannot be claimed as real
+  Filesort key or real rowid/ref ordering；
+- keep E5r as a design checkpoint before any handler-ref comparator coding。
+
+Required next split before coding:
+
+- E5r-1: handler `ref` ownership contract design；
+  - worker-side `position(record)` call point；
+  - rowid/ref lifetime in MQ frame；
+  - leader-side handler object used for `cmp_ref()`；
+  - `ref_length` source and validation。
+- E5r-2: controlled `cmp_ref()` comparator contract, only if E5r-1 is
+  accepted；
+  - private flag only；
+  - no preflight readiness changes；
+  - no default ORDER BY SQL path；
+  - no claim that byte-vector order equals handler ref order。
+
+Allowed files for E5r documentation:
+
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+
+Allowed files for a later reviewed E5r-2 coding task:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- the same task docs；
+- optional focused MTR only after design review accepts the contract。
+
+Forbidden until later review:
+
+- `sql/parallel_query/pq_optimizer.*` readiness changes；
+- `HAS_ORDER_BY` serial boundary changes；
+- AccessPath, executor, iterator `Read()`, `Gather_operator`, worker launch,
+  `Query_result_mq`, `PQWR`, handler/InnoDB, sysvar, or public counter changes；
+- default `ParallelScanIterator::Read()` ORDER BY path；
+- treating scalar sort-key or byte-vector rowid order as equivalent to real
+  Filesort key + handler `cmp_ref()`。
+
+Hard gates:
+
+- `rowid_tiebreak_ready=false`；
+- `exchange_sort_heap_read_ready=false`；
+- `default_ordered_read_ready=false`；
+- visible ORDER BY SQL remains `Not parallel HAS_ORDER_BY`；
+- normal ORDER BY SQL must not increase executed / worker / range counters。
+
+Minimum validation for future E5r-2 coding:
+
+- `git diff --check`；
+- `cmake --build build-ninja --target mysqld -j 16`；
+- targeted MTR:
+  `TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_commercial_order_by_frames pq_commercial_order_by pq_stats --parallel=1 --vardir=/tmp/pqv_m11e5r --tmpdir=/tmp/pqt_m11e5r`。
+
+Completion Report - M11-E5r design inventory:
+
+- changed files:
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - no source code changes；
+  - captured independent Review Agent `REVISE` conclusion for direct coding；
+  - documented current controlled byte-vector rowid behavior；
+  - documented commercial handler `ref` / `cmp_ref()` behavior；
+  - split next work into E5r-1 handler ref ownership design and possible
+    E5r-2 controlled comparator contract。
+- validation:
+  - docs-only; `git diff --check` required before commit；
+  - no build/MTR required unless source or test files are changed。
+- residual risk:
+  - real handler `cmp_ref()` tie-break remains unimplemented in current branch；
+  - visible ORDER BY PQ remains blocked by design。
+
+Docs/Source Review - M11-E5r:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: no critical or important issues；
+- minor wording fix applied: commercial `m_row_id` / `m_sort_key` are carried
+  by MQ records managed by `Exchange_sort`, not direct `Exchange_sort` scalar
+  members；
+- confirmed current branch remains controlled byte-vector `row_id` / scalar
+  `sort_key` only and does not claim equivalence to handler `cmp_ref()`；
+- confirmed commercial reference uses real Filesort / `Sort_param` key compare
+  and `handler::cmp_ref()` for equal-key stable output；
+- confirmed worker handler ref source depends on `position(record)` and
+  `file->ref` / `file->ref_length`；
+- confirmed hard gates remain documented:
+  `rowid_tiebreak_ready=false`, `exchange_sort_heap_read_ready=false`,
+  `default_ordered_read_ready=false`, and `HAS_ORDER_BY` serial rejection；
+- confirmed docs-only scope is safe to commit。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
