@@ -6055,6 +6055,82 @@ Code/Doc/Test Review - M11-E5h-3:
   worker/MQ, or default `Read()` path is changed；
 - confirmed no new status variables or MTR files are needed。
 
+### M11-E5h-4: Preflight Evidence Update Decision
+
+Status: docs-only completed；Docs Review Agent accepted；no source changes。
+
+Goal:
+
+- decide whether E5h-1/2/3 evidence should be reflected in
+  `pq_build_orderby_execution_preflight()`；
+- keep the distinction between DBUG evidence and default runtime readiness
+  explicit。
+
+Design Explorer - M11-E5h-4:
+
+- Explorer verdict: `REVISE` against coding now；
+- recommended docs-only closure instead of adding owner-evidence fields or new
+  diagnostics；
+- confirmed E5h-1/2/3 prove DBUG smoke / owner-shape existence, not a reviewed
+  default preflight owner path；
+- confirmed existing `pq_saved_order_chain_clone_copy_smoke` and
+  `pq_exchange_sort_state_shape_smoke` counters are sufficient evidence for
+  this stage。
+
+Decision:
+
+- do not change `pq_build_orderby_execution_preflight()` in E5h-4；
+- do not add `owner_evidence` flags or public status variables；
+- keep `saved_order_group_runtime_ready=false`,
+  `filesort_runtime_ready=false`, and `sort_param_runtime_ready=false`；
+- keep `execution_disabled=true` and `BLOCKED_EXECUTION_DISABLED`；
+- continue treating E5h-1/2/3 as DBUG-only evidence, not runtime readiness。
+
+Reasoning:
+
+- E5h-1 owner shell does not construct `Filesort`, initialize `Sort_param`, or
+  attach to JOIN/QEP/AccessPath；
+- E5h-2 validates optimizer-side saved ORDER attach identity but still runs
+  only under DBUG before the `HAS_ORDER_BY` rejection；
+- E5h-3 stores scalar `Sort_param` metadata only and does not persist a real
+  `Sort_param` object；
+- default ORDER BY PQ still lacks a reviewed runtime path that can create these
+  owners before the PQ commit point and clean them up on fallback。
+
+Allowed future coding, only if a later review finds an observability gap:
+
+- `sql/parallel_query/pq_optimizer.h` / `.cc` for fail-closed evidence fields
+  that are not readiness and not eligibility；
+- `sql/parallel_query/sql_parallel.h` / `.cc`, `sql/mysqld.cc`,
+  `pq_commercial_order_by*.test/result`, and `pq_stats.result` only if a new
+  public status variable is explicitly justified。
+
+Forbidden:
+
+- weakening `HAS_ORDER_BY`；
+- setting any ORDER BY preflight readiness flag true；
+- changing `execution_disabled` to false；
+- changing AccessPath, handler/InnoDB, worker launch, `PQWR` /
+  `Query_result_mq`, default MQ consumption, or default ordered
+  `ParallelScanIterator::Read()`；
+- constructing real `Filesort` or persisting real `Sort_param`；
+- treating DBUG-only smoke counters as user-visible ORDER BY PQ correctness。
+
+Validation:
+
+- docs-only；
+- `git diff --check`。
+
+Docs Review - M11-E5h-4:
+
+- verdict: `ACCEPT`；
+- confirmed the taskbook does not change
+  `pq_build_orderby_execution_preflight()`；
+- confirmed readiness flags remain false and `execution_disabled` remains true；
+- confirmed E5h-1/2/3 are documented as DBUG evidence, not runtime readiness；
+- confirmed the next action correctly points to the default worker `PQOF`
+  producer / `Exchange_sort` default heap-reader boundary。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
