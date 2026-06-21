@@ -136,6 +136,14 @@ bool pq_build_saved_order_group_contract(
   return false;
 }
 
+bool pq_copy_saved_order_group_contract(
+    const PQSavedOrderGroupContract &src,
+    PQSavedOrderGroupContract *dst) {
+  if (dst == nullptr) return false;
+  *dst = src;
+  return dst->status != PQSavedOrderGroupContractStatus::READY;
+}
+
 struct PQ_copied_key_endpoint {
   key_range range{};
   std::vector<uchar> key;
@@ -304,6 +312,23 @@ static bool pq_saved_order_group_scalar_subset_matches(
          lhs.select_distinct == rhs.select_distinct;
 }
 
+static bool pq_saved_order_group_contract_matches(
+    const PQSavedOrderGroupContract &lhs,
+    const PQSavedOrderGroupContract &rhs) {
+  return lhs.status == rhs.status && lhs.detail == rhs.detail &&
+         lhs.has_order == rhs.has_order && lhs.has_group == rhs.has_group &&
+         lhs.has_having == rhs.has_having && lhs.grouped == rhs.grouped &&
+         lhs.group_optimized_away == rhs.group_optimized_away &&
+         lhs.implicit_grouping == rhs.implicit_grouping &&
+         lhs.need_tmp_before_win == rhs.need_tmp_before_win &&
+         lhs.simple_group == rhs.simple_group &&
+         lhs.simple_order == rhs.simple_order &&
+         lhs.streaming_aggregation == rhs.streaming_aggregation &&
+         lhs.skip_sort_order == rhs.skip_sort_order &&
+         lhs.select_distinct == rhs.select_distinct &&
+         lhs.ordered_index_usage == rhs.ordered_index_usage;
+}
+
 static void pq_maybe_run_saved_order_group_restore_smoke(
     Query_block *query_block, JOIN *join) {
   bool enabled = false;
@@ -379,6 +404,40 @@ static void pq_maybe_run_saved_order_group_restore_smoke(
           PQSavedOrderGroupContractStatus::UNSUPPORTED_MISSING_SAVED_HELPERS &&
       pq_saved_order_group_scalar_subset_matches(initial, restored)) {
     pq_global_stats.saved_order_group_restore_smoke_success.fetch_add(
+        1, std::memory_order_relaxed);
+  } else {
+    mark_unsupported();
+  }
+}
+
+static void pq_maybe_run_saved_order_group_clone_copy_smoke(
+    Query_block *query_block, JOIN *join) {
+  bool enabled = false;
+  DBUG_EXECUTE_IF("pq_saved_order_group_clone_copy_smoke", enabled = true;);
+  if (!enabled) return;
+
+  pq_global_stats.saved_order_group_clone_copy_smoke_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  auto mark_unsupported = []() {
+    pq_global_stats.saved_order_group_clone_copy_smoke_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+  };
+
+  PQSavedOrderGroupContract source;
+  (void)pq_build_saved_order_group_contract(query_block, join, &source);
+  if (source.status !=
+      PQSavedOrderGroupContractStatus::UNSUPPORTED_MISSING_SAVED_HELPERS) {
+    mark_unsupported();
+    return;
+  }
+
+  PQSavedOrderGroupContract copied;
+  if (pq_copy_saved_order_group_contract(source, &copied) &&
+      copied.status ==
+          PQSavedOrderGroupContractStatus::UNSUPPORTED_MISSING_SAVED_HELPERS &&
+      pq_saved_order_group_contract_matches(source, copied)) {
+    pq_global_stats.saved_order_group_clone_copy_smoke_success.fetch_add(
         1, std::memory_order_relaxed);
   } else {
     mark_unsupported();
@@ -1091,6 +1150,7 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
   if (query_block->is_ordered()) {
     pq_maybe_run_saved_order_group_contract_smoke(query_block, join);
     pq_maybe_run_saved_order_group_restore_smoke(query_block, join);
+    pq_maybe_run_saved_order_group_clone_copy_smoke(query_block, join);
     return pq_reject(info, PQUnsuiteReason::HAS_ORDER_BY,
                      "query has ORDER BY");
   }

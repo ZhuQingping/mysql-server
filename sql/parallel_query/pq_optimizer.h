@@ -198,6 +198,11 @@ bool pq_build_saved_order_group_contract(
     Query_block *query_block, JOIN *join,
     PQSavedOrderGroupContract *contract);
 
+/** Value-only copy for PQSavedOrderGroupContract sidecar diagnostics. */
+bool pq_copy_saved_order_group_contract(
+    const PQSavedOrderGroupContract &src,
+    PQSavedOrderGroupContract *dst);
+
 /**
   Convert a PQUnsuiteReason to a human-readable string.
 

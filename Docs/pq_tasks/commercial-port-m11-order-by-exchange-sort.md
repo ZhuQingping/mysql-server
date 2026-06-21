@@ -4,7 +4,7 @@
 
 Status: M11-E0/E1/E2/E3/E4/E5a/E5b-0/E5b-1/E5b-2/E5b-3/E5c/E5d/E5d-0
 completed and committed；M11-E5d-S0/S1/S2 completed and committed；
-M11-E5d-S3 clone-copy contract design started。
+M11-E5d-S3 clone-copy contract completed，waiting for commit。
 
 ## 背景
 
@@ -1113,6 +1113,7 @@ Completion Report - M11-E5d-S2 Coding:
   - targeted MTR passed:
     `pq_saved_order_group_contract pq_commercial_order_by pq_stats` 4/4。
   - full `parallel_query` suite passed，89/89。
+  - full `parallel_query` suite passed，89/89。
 
 Review request:
 
@@ -1271,6 +1272,74 @@ Design Review - M11-E5d-S3:
   ORDER BY PQ, and unsupported remains unsupported；
 - confirmed next step after S3 should be E5d-1 fail-closed Filesort contract
   shape, not `Filesort::make_sortorder()` smoke。
+
+Completion Report - M11-E5d-S3 Coding:
+
+- changed files:
+  - `sql/parallel_query/pq_optimizer.h`；
+  - `sql/parallel_query/pq_optimizer.cc`；
+  - `sql/parallel_query/sql_parallel.h`；
+  - `sql/mysqld.cc`；
+  - `mysql-test/suite/parallel_query/t/pq_saved_order_group_contract.test`；
+  - `mysql-test/suite/parallel_query/r/pq_saved_order_group_contract.result`；
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - added `pq_copy_saved_order_group_contract()` value-only helper；
+  - helper copies the sidecar struct and returns success only when copied state
+    is not `READY`；
+  - added debug-only `pq_saved_order_group_clone_copy_smoke` hook on the
+    existing ORDER BY `HAS_ORDER_BY` rejection path；
+  - clone-copy smoke builds a leader sidecar, copies it to a local destination,
+    compares every scalar/status/detail field, and counts success only when the
+    copied sidecar remains `UNSUPPORTED_MISSING_SAVED_HELPERS`；
+  - added counters:
+    `Parallel_saved_order_group_clone_copy_smoke_attempts`,
+    `Parallel_saved_order_group_clone_copy_smoke_success`, and
+    `Parallel_saved_order_group_clone_copy_smoke_unsupported`。
+- hard boundaries:
+  - no `sql/parallel_query/pq_clone.cc` changes；
+  - no real `JOIN::pq_copy_from()` wiring；
+  - no `sql/sql_optimizer.*` changes；
+  - no direct `JOIN` saved-state fields；
+  - no ORDER/GROUP list, `Item *`, `ORDER *`, QEP_TAB, AccessPath, TABLE,
+    handler, MEM_ROOT, or private saved-list ownership changes；
+  - no Filesort / Sort_param construction, `make_sortorder()`,
+    `HAS_ORDER_BY` relaxation, `Read()` change, worker, handler, MQ, or real
+    ORDER BY producer wiring。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `pq_saved_order_group_contract pq_commercial_order_by pq_stats` 4/4。
+
+Review request:
+
+- confirm value-only sidecar copy does not imply clone readiness；
+- confirm copied unsupported state remains unsupported and never `READY`；
+- confirm no real clone lifecycle is touched；
+- confirm MTR covers no-DBUG negative, DBUG positive, zero
+  executed/workers/ranges deltas, and `HAS_ORDER_BY` serial boundary；
+- confirm next step is E5d-1 fail-closed Filesort contract shape。
+
+Code/Doc/Test Review - M11-E5d-S3:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed `pq_copy_saved_order_group_contract()` is value-only sidecar copy；
+- confirmed `PQSavedOrderGroupContract` contains no ORDER/Item/TABLE/
+  AccessPath/QEP_TAB/MEM_ROOT/private saved-list ownership；
+- confirmed copied unsupported state remains unsupported and does not become
+  `READY`；
+- confirmed no `pq_clone.cc`, real `JOIN::pq_copy_from()`,
+  `sql/sql_optimizer.*`, Filesort / Sort_param, `make_sortorder()`, `Read()`,
+  worker, handler, or MQ changes；
+- confirmed MTR covers no-DBUG negative, DBUG positive, zero
+  executed/workers/ranges, `HAS_ORDER_BY` serial boundary, and `pq_stats`
+  count/list；
+- next step: E5d-1 fail-closed Filesort contract shape, not
+  `make_sortorder()` smoke。
 
 ## Risk Areas
 
