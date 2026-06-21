@@ -26,6 +26,7 @@ M11-E5d-5a `Exchange_sort` real-init state owner shape completed and
 committed；M11-E5d-5b sort-key buffer / record-group allocation smoke completed
 and committed；M11-E5d-5c controlled ORDER BY MQ-to-record-group loader
 completed and committed；M11-E5d-5d debug-only ordered leader Read shadow path
+completed and committed；M11-E5d-5e user-visible ORDER BY eligibility gate
 design drafted，waiting for Design Review。
 
 ## 背景
@@ -3957,6 +3958,162 @@ Code/Doc/Test Review - M11-E5d-5d:
 - confirmed scope remains contained to `Exchange_sort` plus docs, with no
   `Exchange_nosort`, `Query_result_mq`, `PQWR`, `PQRM`, optimizer eligibility,
   AccessPath, handler, or InnoDB changes。
+
+### M11-E5d-5e: User-visible ORDER BY Eligibility Gate Design
+
+Status: design completed；Design Review Agent accepted；waiting for commit；no
+code edits in this subtask。
+
+Goal:
+
+- design the first user-visible ORDER BY eligibility gate after 5a-5d state,
+  MQ-loader, and shadow-read smokes；
+- avoid turning on visible ORDER BY execution in this design step；
+- separate "ORDER BY shape recognized as a future candidate" from "ORDER BY
+  currently executable by PQ"；
+- keep all existing `HAS_ORDER_BY` negative MTRs valid until a later reviewed
+  coding task wires real execution。
+
+Current branch facts:
+
+- `pq_check_query_block_eligible()` still rejects `query_block->is_ordered()`
+  with `PQUnsuiteReason::HAS_ORDER_BY`；
+- the `HAS_ORDER_BY` reject window also hosts DBUG-only saved ORDER/GROUP,
+  Filesort, Sort_param, and scalar handoff smokes；
+- existing `pq_commercial_order_by`, `pq_not_support`,
+  `pq_explain_fallback`, `pq_saved_order_group_contract`, and
+  `pq_commercial_ref_icp` tests assert ORDER BY remains serial and does not
+  increase executed/workers/ranges counters；
+- 5a-5d proved owned state shape, buffer allocation, controlled `PQOF` loader,
+  and debug-only shadow read status, but did not implement real worker ORDER BY
+  frame production, persistent `Filesort` / `Sort_param`, leader table
+  materialization, default ordered `Read()`, or rowid tie-break。
+
+Commercial reference facts:
+
+- commercial ORDER BY eligibility is not a single gate; it is decided across
+  resolver, optimizer, leader plan construction, gather creation, and
+  `Exchange_sort` initialization；
+- commercial supports broader cases including multi-table shapes, index-order
+  paths, DESC groups, LIMIT with ORDER BY, range/ref/ICP, and some GROUP BY /
+  HAVING / DISTINCT paths, but only because the full Filesort/Sort_param,
+  worker producer, heap merge, rowid, leader materialization, and diagnostics
+  pipeline is complete；
+- current branch must not copy that broad gate before those execution pieces
+  are real rather than smoke-only。
+
+5e design decision:
+
+- 5e remains design-only；
+- the next coding step should create an explicit ORDER BY eligibility contract
+  helper that can classify a query as:
+  - unsupported ORDER BY shape；
+  - future visible ORDER BY candidate shape；
+  - executable visible ORDER BY PQ shape；
+- for the first coding step, `future visible ORDER BY candidate shape` must
+  still reject execution, preserve serial behavior, and keep current MTR
+  counter expectations；
+- `executable visible ORDER BY PQ shape` must remain unreachable until a later
+  task wires real Filesort/Sort_param lifetime, worker frame production,
+  `Exchange_sort` heap read, leader materialization, and default ordered
+  `ParallelScanIterator::Read()`。
+
+First visible-candidate subset:
+
+- single query block；
+- `SQLCOM_SELECT` only；
+- one InnoDB base table；
+- non-temporary, non-partitioned table；
+- traditional optimizer only；
+- `JT_ALL` clustered full table scan only；
+- ORDER BY items are simple base fields already safely resolvable from the
+  selected table；
+- filesort path only；no ordered-index skip-sort；
+- ASC-only；
+- no LIMIT/OFFSET；
+- WHERE predicates limited to shapes already accepted by the current full-scan
+  PQ gate；
+- existing cost/DOP/full-scan gates must still pass。
+
+Must remain disabled:
+
+- user-visible execution for every ORDER BY shape in 5e；
+- multi-table join；
+- DISTINCT；
+- explicit GROUP BY, ROLLUP, GROUP BY with ORDER BY, and partial aggregation
+  combinations；
+- HAVING；
+- window functions；
+- UNION / INTERSECT / EXCEPT / subquery wrappers / derived tables / views /
+  CTEs；
+- ORDER BY expression, function, ambiguous alias, or correlated subquery；
+- DESC or mixed ASC/DESC；
+- LIMIT/OFFSET；
+- index-order / skip-filesort ORDER BY；
+- secondary index, range, ref, dependent ref, ICP, MRR, reverse scan, backward
+  index scan；
+- partitioned table, MVI, BLOB/record-buffer-hostile row shapes, MIN shortcut；
+- non-InnoDB, temp table, locking read, SERIALIZABLE, PS/SP/trigger or
+  attachable transaction restricted cases。
+
+Proposed follow-up split:
+
+1. M11-E5d-5e-1: eligibility contract helper and negative matrix.
+   - coding task may add a helper and debug/MTR diagnostics that identify the
+     first visible-candidate subset；
+   - it must still return serial / disabled, not executable PQ；
+   - it must preserve the existing `HAS_ORDER_BY` tests or replace them only
+     with an equally strict "candidate but execution disabled" diagnostic and
+     zero executed/workers/ranges deltas。
+
+2. M11-E5d-5e-2: execution preflight blocker.
+   - coding task may add a central fail-closed blocker proving all real
+     prerequisites are absent or present；
+   - it must keep `executable visible ORDER BY PQ` unreachable until real
+     execution pieces are complete。
+
+3. Later reviewed task: first executable ORDER BY PQ subset.
+   - only after persistent Filesort/Sort_param, worker frame producer,
+     `Exchange_sort` heap read, leader materialization, rowid tie-break, kill /
+     detach / error diagnostics, and full MTR expected-result coverage are
+     implemented。
+
+Required tests for future coding:
+
+- keep existing negative ORDER BY tests green；
+- add/adjust a focused MTR for the first candidate subset that verifies
+  recognized-but-disabled diagnostics and zero executed/workers/ranges deltas；
+- retain `pq_saved_order_group_contract` DBUG smoke coverage in the
+  `HAS_ORDER_BY` or replacement reject window；
+- retain negative cases for ORDER BY LIMIT, DESC, GROUP BY + ORDER BY, ref,
+  range, ICP, and reverse index scan。
+
+Design review request:
+
+- confirm 5e should remain design-only；
+- confirm the first visible-candidate subset is intentionally narrower than
+  commercial；
+- confirm coding should first add a recognized-but-execution-disabled contract,
+  not executable ORDER BY PQ；
+- confirm existing ORDER BY negative MTRs must stay valid or be replaced by
+  stricter disabled diagnostics with zero runtime counters。
+
+Design Review - M11-E5d-5e:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed 5e remains design-only and does not enable visible ORDER BY
+  execution；
+- confirmed unsupported / future-candidate / executable-PQ classification is
+  the right layering, with executable ORDER BY kept unreachable；
+- confirmed the first candidate subset is conservative enough for a disabled
+  recognition step；
+- confirmed existing `HAS_ORDER_BY` behavior must be preserved or replaced only
+  by stricter disabled diagnostics with zero runtime counters；
+- confirmed the 5e-1 / 5e-2 split is executable and fail-closed；
+- residual field-type, nullability, and collation details for "simple base
+  fields" are deferred to 5e-1 because this design step still disables
+  execution。
 
 ## Risk Areas
 
