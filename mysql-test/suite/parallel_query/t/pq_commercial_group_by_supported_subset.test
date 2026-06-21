@@ -1,0 +1,102 @@
+# Test: pq_commercial_group_by_supported_subset
+# M10-C2: commercial-suite GROUP BY adapted subset guard.
+#
+# This test intentionally exercises the current legacy typed-state partial
+# GROUP BY path, not the commercial aggregation path. Commercial selected and
+# executed counters must remain zero until the worker result path is migrated.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  grp INT NOT NULL,
+  val INT NULL
+) ENGINE=InnoDB;
+
+INSERT INTO t1 VALUES
+  (1,1,10),(2,1,NULL),(3,2,30),
+  (4,2,40),(5,3,NULL),(6,3,60);
+
+SET @pq_partial_selected_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_dop_partial_selected');
+SET @pq_partial_merged_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_dop_partial_merged_groups');
+SET @pq_legacy_selected_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_legacy_typed_selected');
+SET @pq_legacy_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_legacy_typed_executed');
+SET @pq_commercial_selected_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_commercial_selected');
+SET @pq_commercial_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_groupby_commercial_executed');
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+SET SESSION parallel_query_experimental_threaded_dop=ON;
+SET SESSION parallel_query_experimental_groupby_dop1=ON;
+
+--sorted_result
+SELECT grp, COUNT(*) AS c FROM t1 GROUP BY grp;
+
+--sorted_result
+SELECT grp, COUNT(val) AS c FROM t1 GROUP BY grp;
+
+--sorted_result
+SELECT grp, SUM(val) AS s FROM t1 GROUP BY grp;
+
+--sorted_result
+SELECT grp, MIN(val) AS mn FROM t1 GROUP BY grp;
+
+--sorted_result
+SELECT grp, MAX(val) AS mx FROM t1 GROUP BY grp;
+
+SELECT
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_groupby_dop_partial_selected') -
+      @pq_partial_selected_before) >= 5 AS partial_selected_delta_at_least_5,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_groupby_dop_partial_merged_groups') -
+      @pq_partial_merged_before) >= 15 AS partial_merged_groups_at_least_15,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_groupby_legacy_typed_selected') -
+      @pq_legacy_selected_before) >= 5 AS legacy_selected_delta_at_least_5,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_groupby_legacy_typed_executed') -
+      @pq_legacy_executed_before) >= 5 AS legacy_executed_delta_at_least_5,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_groupby_commercial_selected') -
+      @pq_commercial_selected_before) = 0 AS commercial_selected_delta_zero,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_groupby_commercial_executed') -
+      @pq_commercial_executed_before) = 0 AS commercial_executed_delta_zero;
+
+SET SESSION parallel_query_experimental_groupby_dop1=OFF;
+SET SESSION parallel_query_experimental_threaded_dop=OFF;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE t1;

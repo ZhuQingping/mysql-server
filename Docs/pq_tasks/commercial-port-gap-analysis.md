@@ -19,6 +19,8 @@ rewrite 已完成编码、验证并通过 Code-Docs-Test Review。
 M10-B2 EXPLAIN JSON/TREE 与 fallback counter minimal tests 已完成编码、
 验证并通过 Code-Docs-Test Review。
 M10-C1 supported/deferred subset declaration 已完成并通过 Docs-Task Review。
+M10-C2 GROUP BY supported subset adapted test 已完成编码、targeted/full
+suite 验证，并通过 Code-Docs-Test Review。
 
 本文档是商用实现平移的总差异清单和迁移计划。M3-M10 后续执行采用 Codex 主控 + 子 Agent 只读/实现后 review 的方式推进：每个阶段先按任务书实施，实施完成后启动独立 review 子 Agent 检视阶段 diff、测试证据和风险项，主控确认意见闭环后再提交。
 
@@ -809,13 +811,25 @@ M9-B3a-2 clustered lookup for visibility helper implemented:
 
 **M10-A current result:**
 
-- 当前仓 `t/*.test`: 73；
+- M10-A baseline 当前仓 `t/*.test`: 73；
+- M10-B/M10-C2 新增 adapted guards 后当前仓 `t/*.test`: 77；
 - 商用参考 `t/*.test`: 98；
 - 同名重合: 1（`pq_not_support`）；
-- 当前 73 个测试继续作为 enabled local guards；
+- M10-A baseline 73 个测试继续作为 enabled local guards；
 - 商用独有 97 个测试已按 capability 分类，E/A/D 明细见 M10 任务书；
 - 后续 M10-B 先做 sysvars/fullscan/fallback/explain 小型改写；
 - M10-C 再处理 aggregation、ORDER BY、ref/ICP/secondary range 的已支持子集。
+
+**M10-C2 current result:**
+
+- 新增 `pq_commercial_group_by_supported_subset`；
+- 覆盖当前 legacy typed-state / experimental GROUP BY 子集；
+- `COUNT(*)`、`COUNT(nullable field)`、`SUM/MIN/MAX(integer field)` 在
+  DOP=2 partial path 下结果正确；
+- `Parallel_groupby_commercial_selected/executed` 增量保持 0，商用
+  worker-plan aggregation 仍未声明完成。
+- 完整当前 `parallel_query` suite 78/78 通过，其中包含 77 个 suite
+  tests 和 MTR `shutdown_report`。
 
 **Validation:**
 
