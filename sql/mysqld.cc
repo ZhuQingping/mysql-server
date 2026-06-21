@@ -10676,6 +10676,36 @@ static int show_pq_exchange_sort_ordered_reader_skeleton_heap_removes(
   return 0;
 }
 
+static int show_pq_exchange_sort_ordered_diag_attempts(THD *, SHOW_VAR *var,
+                                                       char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_ordered_diag_attempts.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_ordered_diag_success(THD *, SHOW_VAR *var,
+                                                      char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_ordered_diag_success.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_ordered_diag_kill_not_wired(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_ordered_diag_kill_not_wired.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
 static int show_pq_exchange_sort_frame_merge_smoke_rows(THD *, SHOW_VAR *var,
                                                         char *buf) {
   var->type = SHOW_LONGLONG;
@@ -11681,6 +11711,15 @@ SHOW_VAR status_vars[] = {
     {"Parallel_exchange_sort_ordered_reader_skeleton_would_blocks",
      (char *)&show_pq_exchange_sort_ordered_reader_skeleton_would_blocks,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ordered_diag_attempts",
+     (char *)&show_pq_exchange_sort_ordered_diag_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ordered_diag_kill_not_wired",
+     (char *)&show_pq_exchange_sort_ordered_diag_kill_not_wired, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ordered_diag_success",
+     (char *)&show_pq_exchange_sort_ordered_diag_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
     {"Parallel_exchange_sort_smoke_runs",
      (char *)&show_pq_exchange_sort_smoke_runs, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_exchange_sort_smoke_rows",

@@ -2608,3 +2608,15 @@ bool Exchange_sort::run_orderby_ordered_reader_skeleton_smoke(
          *detaches_read != 1 || *refills_read == 0 ||
          *heap_replaces_read == 0 || *heap_removes_read == 0;
 }
+
+bool Exchange_sort::run_orderby_ordered_diag_skeleton_smoke(
+    uint32 *kill_not_wired) {
+  if (kill_not_wired == nullptr) return true;
+  /*
+    ERROR/DETACHED/WOULD_BLOCK are covered by the ordered reader skeleton. The
+    remaining 4e diagnostic is explicit: ordered default execution has no real
+    THD kill polling or worker-thread propagation wired yet.
+  */
+  *kill_not_wired = 1;
+  return false;
+}

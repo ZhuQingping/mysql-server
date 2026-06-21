@@ -990,6 +990,20 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd [[maybe_unused]],
     pq_global_stats.exchange_sort_ordered_reader_skeleton_success.fetch_add(
         1, std::memory_order_relaxed);
   }
+  bool ordered_diag_enabled = false;
+  uint32 ordered_diag_kill_not_wired = 0;
+  DBUG_EXECUTE_IF("pq_exchange_sort_ordered_diag_smoke",
+                  ordered_diag_enabled = true;);
+  if (ordered_diag_enabled) {
+    pq_global_stats.exchange_sort_ordered_diag_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+    if (sort_exchange.run_orderby_ordered_diag_skeleton_smoke(
+            &ordered_diag_kill_not_wired)) {
+      return true;
+    }
+    pq_global_stats.exchange_sort_ordered_diag_success.fetch_add(
+        1, std::memory_order_relaxed);
+  }
   uint32 frame_merge_rows_read = 0;
   uint32 frame_merge_finishes_read = 0;
   if (sort_exchange.run_orderby_frame_merge_smoke(
@@ -1097,6 +1111,8 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd [[maybe_unused]],
       ordered_reader_skeleton_heap_replaces, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_ordered_reader_skeleton_heap_removes.fetch_add(
       ordered_reader_skeleton_heap_removes, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_ordered_diag_kill_not_wired.fetch_add(
+      ordered_diag_kill_not_wired, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_frame_merge_smoke_rows.fetch_add(
       frame_merge_rows_read, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_frame_merge_smoke_finishes.fetch_add(

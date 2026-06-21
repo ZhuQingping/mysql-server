@@ -147,6 +147,15 @@ WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_heap_repla
 SET @ordered_reader_heap_removes_before = (
 SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
 WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_heap_removes');
+SET @ordered_diag_attempts_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_diag_attempts');
+SET @ordered_diag_success_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_diag_success');
+SET @ordered_diag_kill_not_wired_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_diag_kill_not_wired');
 SET @frame_merge_rows_before = (
 SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
 WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_merge_smoke_rows');
@@ -300,7 +309,19 @@ WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_detaches')
 @ordered_reader_detaches_before) = 0 AS orderby_reader_detaches_without_debug;
 orderby_reader_detaches_without_debug
 1
-SET SESSION debug="d,pq_exchange_sort_state_shape_smoke,pq_orderby_worker_frame_producer_smoke,pq_orderby_worker_producer_adapter_skeleton_smoke,pq_exchange_sort_stream_heap_smoke,pq_exchange_sort_stream_materialized_smoke,pq_exchange_sort_ordered_materialize_api_smoke,pq_exchange_sort_ordered_reader_skeleton_smoke";
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_diag_attempts') -
+@ordered_diag_attempts_before) = 0 AS orderby_diag_attempts_without_debug;
+orderby_diag_attempts_without_debug
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_diag_kill_not_wired') -
+@ordered_diag_kill_not_wired_before) = 0 AS orderby_diag_kill_not_wired_without_debug;
+orderby_diag_kill_not_wired_without_debug
+1
+SET SESSION debug="d,pq_exchange_sort_state_shape_smoke,pq_orderby_worker_frame_producer_smoke,pq_orderby_worker_producer_adapter_skeleton_smoke,pq_exchange_sort_stream_heap_smoke,pq_exchange_sort_stream_materialized_smoke,pq_exchange_sort_ordered_materialize_api_smoke,pq_exchange_sort_ordered_reader_skeleton_smoke,pq_exchange_sort_ordered_diag_smoke";
 SELECT * FROM pq_orderby_frame_t;
 id	k
 1	30
@@ -516,6 +537,24 @@ SELECT (
 WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_reader_skeleton_heap_removes') -
 @ordered_reader_heap_removes_before) >= 3 AS orderby_reader_heap_removes_delta;
 orderby_reader_heap_removes_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_diag_attempts') -
+@ordered_diag_attempts_before) = 1 AS orderby_diag_attempts_delta;
+orderby_diag_attempts_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_diag_success') -
+@ordered_diag_success_before) = 1 AS orderby_diag_success_delta;
+orderby_diag_success_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_diag_kill_not_wired') -
+@ordered_diag_kill_not_wired_before) = 1 AS orderby_diag_kill_not_wired_delta;
+orderby_diag_kill_not_wired_delta
 1
 SELECT (
 (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status

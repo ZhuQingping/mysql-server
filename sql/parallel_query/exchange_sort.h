@@ -198,6 +198,7 @@ class Exchange_sort final : public Exchange {
       uint32 *rows_read, uint32 *finishes_read, uint32 *would_blocks_read,
       uint32 *errors_read, uint32 *detaches_read, uint32 *refills_read,
       uint32 *heap_replaces_read, uint32 *heap_removes_read);
+  bool run_orderby_ordered_diag_skeleton_smoke(uint32 *kill_not_wired);
   bool run_orderby_sort_state_shape_smoke();
   bool run_orderby_sort_state_shape_handoff_smoke(uint32 workers,
                                                   bool stable_output,

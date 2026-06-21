@@ -351,6 +351,9 @@ struct PQ_global_stats {
   std::atomic<uint64> exchange_sort_ordered_reader_skeleton_refills{0};
   std::atomic<uint64> exchange_sort_ordered_reader_skeleton_heap_replaces{0};
   std::atomic<uint64> exchange_sort_ordered_reader_skeleton_heap_removes{0};
+  std::atomic<uint64> exchange_sort_ordered_diag_attempts{0};
+  std::atomic<uint64> exchange_sort_ordered_diag_success{0};
+  std::atomic<uint64> exchange_sort_ordered_diag_kill_not_wired{0};
   std::atomic<uint64> exchange_sort_frame_merge_smoke_rows{0};  ///< Merge rows
   std::atomic<uint64> exchange_sort_frame_merge_smoke_finishes{0};  ///< FINISH
   std::atomic<uint64> exchange_sort_frame_merge_edge_smoke_rows{0};  ///< Rows
@@ -647,6 +650,10 @@ struct PQ_global_stats {
     exchange_sort_ordered_reader_skeleton_heap_replaces.store(
         0, std::memory_order_relaxed);
     exchange_sort_ordered_reader_skeleton_heap_removes.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_ordered_diag_attempts.store(0, std::memory_order_relaxed);
+    exchange_sort_ordered_diag_success.store(0, std::memory_order_relaxed);
+    exchange_sort_ordered_diag_kill_not_wired.store(
         0, std::memory_order_relaxed);
     exchange_sort_frame_merge_smoke_rows.store(0, std::memory_order_relaxed);
     exchange_sort_frame_merge_smoke_finishes.store(0,

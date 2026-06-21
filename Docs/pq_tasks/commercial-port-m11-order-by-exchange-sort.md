@@ -5453,6 +5453,104 @@ Code/Doc/Test Review - M11-E5g-4d:
   handling, filesort key encoding, tie-breaks, DESC/mixed sort parts, and row
   materialization remain future reviewed boundaries。
 
+### M11-E5g-4e: DBUG-only Ordered Diagnostics Consolidation
+
+Status: coding completed；`mysqld` build, targeted MTR, and full
+`parallel_query` suite passed；waiting for Code/Doc/Test Review。
+
+Goal:
+
+- add a minimal ordered shadow-path diagnostic boundary for the remaining kill
+  prerequisite；
+- avoid duplicating existing ERROR / DETACHED / WOULD_BLOCK smoke coverage；
+- explicitly record that real ordered-path THD kill polling and worker-thread
+  kill propagation are not wired yet。
+
+Implementation:
+
+- added `Exchange_sort::run_orderby_ordered_diag_skeleton_smoke()`；
+- helper only returns `kill_not_wired=1` and does not read MQ, call
+  `Exchange_sort::read_mq_message()`, write `TABLE::record[0]`, or call default
+  `Read()`；
+- added DBUG flag `pq_exchange_sort_ordered_diag_smoke`；
+- added status variables:
+  `Parallel_exchange_sort_ordered_diag_attempts`,
+  `Parallel_exchange_sort_ordered_diag_success`, and
+  `Parallel_exchange_sort_ordered_diag_kill_not_wired`；
+- extended `pq_commercial_order_by_frames` to assert no ordinary-path growth and
+  DBUG-path diagnostic deltas；
+- updated `pq_stats` expected `Parallel%` count and status variable list。
+
+Scope notes:
+
+- no `HAS_ORDER_BY` relaxation；
+- no `execution_disabled=false` or readiness flag change；
+- no optimizer, AccessPath, handler, InnoDB, worker launch, `PQWR` /
+  `Query_result_mq`, or default worker MQ consumption change；
+- no `PQOF` frame header/format change；
+- no `Exchange_sort::read_mq_message()` default path change；
+- no `ParallelScanIterator::Read()` or `PQTableScanIterator` ordered default
+  behavior change；
+- no claim that real kill handling is implemented；the public diagnostic is
+  explicitly `kill_not_wired`。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by_frames \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5g4e_target --tmpdir=/tmp/pqt_m11e5g4e_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5g4e_full --tmpdir=/tmp/pqt_m11e5g4e_full
+```
+
+Results:
+
+- `git diff --check` passed；
+- `mysqld` build passed；
+- targeted MTR passed:
+  `pq_commercial_order_by_frames pq_commercial_order_by pq_stats` 4/4；
+- full `parallel_query` suite passed: 89/89。
+
+Design Explorer - M11-E5g-4e:
+
+- Explorer recommended coding-light diagnostics consolidation, not true kill
+  wiring；
+- Explorer confirmed existing stream heap and ordered reader skeleton smokes
+  already cover ERROR / DETACHED / WOULD_BLOCK；
+- Explorer recommended only minimal counters for attempts, success, and
+  `kill_not_wired`；
+- Explorer confirmed 4e must not set any ordered readiness flag true and must
+  not claim real kill handling。
+
+Code/Doc/Test Review - M11-E5g-4e:
+
+- Review Agent first pass verdict: `REVISE`；
+- code/test findings: none blocking；
+- required doc fix: `Docs/pq_tasks/README.md` still had a stale
+  "Next recommended action" pointing to M11-E5g-4b；
+- fix applied: next recommended action now points to M11-E5g-4f minimal
+  ASC-only visible ORDER BY gate design and explicitly keeps executable ORDER BY
+  PQ closed unless 4f review accepts 4g coding conditions；
+- Review Agent second pass verdict: `ACCEPT`；
+- confirmed helper is diagnostic-only, DBUG-only, and only records
+  `kill_not_wired=1`；
+- confirmed no duplicated ERROR / DETACHED / WOULD_BLOCK smoke was added；
+- confirmed no tracked diff touches optimizer eligibility, `HAS_ORDER_BY`,
+  preflight readiness, AccessPath, handler/InnoDB, worker launch, `PQWR`,
+  `Query_result_mq`, or default ordered `Read()` paths；
+- confirmed ordinary no-growth and DBUG-path deltas are covered in
+  `pq_commercial_order_by_frames`；
+- confirmed `pq_stats` count update from 205 to 208 matches the three new
+  status variables；
+- residual risk: real THD kill polling, worker-thread propagation,
+  backpressure, and default ORDER BY worker MQ consumption remain future
+  reviewed boundaries。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
