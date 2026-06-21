@@ -24,6 +24,7 @@
 
 #include <array>
 #include <cstring>
+#include <utility>
 
 namespace {
 
@@ -149,6 +150,26 @@ PQ_orderby_cached_record pq_make_cached_orderby_record(int64 key,
   return record;
 }
 
+bool pq_copy_decoded_orderby_frame(const PQ_orderby_decoded_frame &decoded,
+                                   uint32 worker_id,
+                                   PQ_orderby_cached_record *record) {
+  if (record == nullptr || decoded.type != PQ_orderby_frame_type::ROW ||
+      decoded.record_image == nullptr || decoded.record_image_len == 0 ||
+      decoded.row_id == nullptr || decoded.row_id_len == 0 ||
+      decoded.sort_key == nullptr || decoded.sort_key_len == 0) {
+    return true;
+  }
+
+  record->worker_id = worker_id;
+  record->has_sort_key = true;
+  record->row_image.assign(decoded.record_image,
+                           decoded.record_image + decoded.record_image_len);
+  record->row_id.assign(decoded.row_id, decoded.row_id + decoded.row_id_len);
+  record->sort_key.assign(decoded.sort_key,
+                          decoded.sort_key + decoded.sort_key_len);
+  return false;
+}
+
 uint16 pq_orderby_frame_type_to_uint(PQ_orderby_frame_type type) {
   return static_cast<uint16>(type);
 }
@@ -260,6 +281,47 @@ bool pq_orderby_cached_merge(PQ_orderby_record_batch *batches, uint32 nbatches,
   }
 
   return *rows_read != expected_count;
+}
+
+bool pq_load_orderby_frame_batch(MQueue_handle *handle, uint32 worker_id,
+                                 PQ_orderby_record_batch *batch,
+                                 uint32 *finishes_read) {
+  if (handle == nullptr || batch == nullptr || finishes_read == nullptr) {
+    return true;
+  }
+
+  batch->records.clear();
+  batch->next_pos = 0;
+  batch->completed = false;
+  batch->new_group = false;
+  batch->compare_state = PQ_orderby_batch_compare_state::NOT_EVALUATED;
+
+  for (;;) {
+    void *raw_data = nullptr;
+    uint32 raw_len = 0;
+    const MQ_RESULT result = handle->receive(&raw_data, &raw_len);
+    if (result != MQ_SUCCESS) return true;
+
+    PQ_orderby_decoded_frame decoded;
+    if (pq_decode_orderby_frame(raw_data, raw_len, &decoded)) return true;
+
+    if (decoded.type == PQ_orderby_frame_type::ROW) {
+      PQ_orderby_cached_record record;
+      if (pq_copy_decoded_orderby_frame(decoded, worker_id, &record)) {
+        return true;
+      }
+      batch->records.push_back(std::move(record));
+      continue;
+    }
+
+    if (decoded.type == PQ_orderby_frame_type::FINISH) {
+      batch->completed = true;
+      ++(*finishes_read);
+      return batch->records.empty();
+    }
+
+    return true;
+  }
 }
 
 }  // namespace
@@ -574,4 +636,80 @@ bool Exchange_sort::run_orderby_frame_contract_smoke(uint32 *rows_read,
   handle.cleanup();
   return failed || *rows_read != 2 || *finishes_read != 1 ||
          *errors_read != 1;
+}
+
+bool Exchange_sort::run_orderby_frame_merge_smoke(uint32 *rows_read,
+                                                  uint32 *finishes_read) {
+  if (rows_read == nullptr || finishes_read == nullptr) return true;
+  *rows_read = 0;
+  *finishes_read = 0;
+
+  bool initialized_here = false;
+  if (m_mq_handles == nullptr) {
+    if (init()) return true;
+    initialized_here = true;
+  }
+  if (m_nqueues != 3) {
+    if (initialized_here) cleanup();
+    return true;
+  }
+
+  const int64 record10 = 100;
+  const int64 record11 = 110;
+  const int64 record20 = 200;
+  const int64 record21 = 210;
+  const int64 record30 = 300;
+  const int64 record40 = 400;
+  const uint32 rowid10 = 10;
+  const uint32 rowid11 = 11;
+  const uint32 rowid20 = 20;
+  const uint32 rowid21 = 21;
+  const uint32 rowid30 = 30;
+  const uint32 rowid40 = 40;
+  const int64 key1 = 1;
+  const int64 key2 = 2;
+  const int64 key3 = 3;
+  const int64 key4 = 4;
+
+  bool failed =
+      pq_send_orderby_frame(get_mq_handle(0), PQ_orderby_frame_type::ROW,
+                            &record10, sizeof(record10), &rowid10,
+                            sizeof(rowid10), &key1, sizeof(key1)) ||
+      pq_send_orderby_frame(get_mq_handle(0), PQ_orderby_frame_type::ROW,
+                            &record30, sizeof(record30), &rowid30,
+                            sizeof(rowid30), &key3, sizeof(key3)) ||
+      pq_send_orderby_frame(get_mq_handle(0), PQ_orderby_frame_type::FINISH,
+                            nullptr, 0, nullptr, 0, nullptr, 0) ||
+      pq_send_orderby_frame(get_mq_handle(1), PQ_orderby_frame_type::ROW,
+                            &record11, sizeof(record11), &rowid11,
+                            sizeof(rowid11), &key1, sizeof(key1)) ||
+      pq_send_orderby_frame(get_mq_handle(1), PQ_orderby_frame_type::ROW,
+                            &record20, sizeof(record20), &rowid20,
+                            sizeof(rowid20), &key2, sizeof(key2)) ||
+      pq_send_orderby_frame(get_mq_handle(1), PQ_orderby_frame_type::FINISH,
+                            nullptr, 0, nullptr, 0, nullptr, 0) ||
+      pq_send_orderby_frame(get_mq_handle(2), PQ_orderby_frame_type::ROW,
+                            &record21, sizeof(record21), &rowid21,
+                            sizeof(rowid21), &key2, sizeof(key2)) ||
+      pq_send_orderby_frame(get_mq_handle(2), PQ_orderby_frame_type::ROW,
+                            &record40, sizeof(record40), &rowid40,
+                            sizeof(rowid40), &key4, sizeof(key4)) ||
+      pq_send_orderby_frame(get_mq_handle(2), PQ_orderby_frame_type::FINISH,
+                            nullptr, 0, nullptr, 0, nullptr, 0);
+
+  PQ_orderby_record_batch batches[3];
+  for (uint32 worker_id = 0; !failed && worker_id < 3; ++worker_id) {
+    failed = pq_load_orderby_frame_batch(get_mq_handle(worker_id), worker_id,
+                                         &batches[worker_id], finishes_read);
+  }
+
+  constexpr uint32 expected_row_ids[] = {10, 11, 20, 21, 30, 40};
+  if (!failed) {
+    failed = pq_orderby_cached_merge(
+        batches, 3, false, expected_row_ids,
+        static_cast<uint32>(std::size(expected_row_ids)), rows_read);
+  }
+
+  if (initialized_here) cleanup();
+  return failed || *rows_read != 6 || *finishes_read != 3;
 }

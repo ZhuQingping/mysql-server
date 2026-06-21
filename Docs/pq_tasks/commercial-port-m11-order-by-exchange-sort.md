@@ -2,8 +2,9 @@
 
 ## 状态
 
-Status: M11-E0/E1/E2/E3 completed and committed；next step is M11-E4
-user-visible ORDER BY gate design。
+Status: M11-E0/E1/E2/E3/E4/E5a/E5b-0 completed and committed；M11-E5b-1
+controlled ORDER BY frame K-way merge smoke coding completed，Review Agent
+accepted，waiting for commit。
 
 ## 背景
 
@@ -164,6 +165,59 @@ order gather path；仍不改变默认 ORDER BY PQ eligibility。
 只有在 E1-E4 review accepted 后才评估是否允许 explicit gate + exact shape
 下的简单 `ORDER BY field [ASC|DESC] LIMIT` 进入 PQ，否则继续保持 serial
 boundary。
+
+### M11-E5b-1: Controlled Frame K-way Merge Smoke
+
+Coding scope:
+
+- `Exchange_sort::run_orderby_frame_merge_smoke()` 使用 3 个本地 MQ queue
+  发送受控 ORDER BY frame stream；
+- 每个 worker queue 使用 ROW...FINISH 协议，leader 侧 decode frame 并填充
+  `PQ_orderby_record_batch`；
+- 复用当前 `pq_orderby_cached_merge()` 验证跨 worker K-way merge 顺序和
+  rowid tie-break：期望 rowid 为 `10,11,20,21,30,40`；
+- 新增 `Parallel_exchange_sort_frame_merge_smoke_rows` 和
+  `Parallel_exchange_sort_frame_merge_smoke_finishes` 状态变量；
+- 扩展 `pq_commercial_order_by_frames` 和 `pq_stats`，验证 merge rows >= 6、
+  finishes >= 3，且原有 ORDER BY SQL 仍通过 serial boundary 测试。
+
+Hard boundaries:
+
+- 不修改 optimizer eligibility；
+- 不修改 `ParallelScanIterator::Read()` 默认用户可见路径；
+- 不启动 worker thread；
+- 不接 InnoDB handler 或真实 `table->record[0]` materialization；
+- `HAS_ORDER_BY` serial boundary 保持不变。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by_frames \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5b1_target --tmpdir=/tmp/pqt_m11e5b1_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5b1_full --tmpdir=/tmp/pqt_m11e5b1_full
+```
+
+Result:
+
+- `git diff --check` passed；
+- `mysqld` build passed；
+- targeted MTR passed，4/4；
+- full `parallel_query` suite passed，88/88。
+
+Review:
+
+- Code/Doc/Test Review Agent verdict: `ACCEPT`；
+- no blocking findings；
+- residual risks moved to M11-E5b-2 follow-up:
+  - FINISH-only empty worker queue must be accepted before real merge path；
+  - raw sort-key/rowid byte-vector compare remains controlled-smoke only；
+  - ERROR frame path is fail-closed and still needs explicit observable smoke。
 
 ## Risk Areas
 
