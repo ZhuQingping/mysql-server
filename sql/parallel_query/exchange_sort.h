@@ -66,6 +66,13 @@ enum class PQ_orderby_frame_type : uint16 {
   ERROR = 3,
 };
 
+enum class PQ_orderby_loader_status : uint8 {
+  ROW = 1,
+  FINISH,
+  WOULD_BLOCK,
+  ERROR,
+};
+
 struct PQ_orderby_frame_header {
   uint32 magic;
   uint16 version;
@@ -155,6 +162,7 @@ class Exchange_sort final : public Exchange {
                                                   uint32 ref_length);
   bool run_orderby_real_init_state_owner_smoke();
   bool run_orderby_real_init_allocation_smoke();
+  bool run_orderby_frame_loader_smoke();
 
   bool init_order_gather_shape(uint32 workers, bool stable_output,
                                bool index_sort);
@@ -198,6 +206,9 @@ class Exchange_sort final : public Exchange {
                                         uint32 max_record_length,
                                         uint32 ref_length);
   bool allocate_real_init_buffers_shape();
+  bool load_orderby_frame_to_record_group(MQueue_handle *handle,
+                                          uint32 worker_id,
+                                          PQ_orderby_loader_status *status);
   void cleanup_real_init_state_owner_shape();
 };
 

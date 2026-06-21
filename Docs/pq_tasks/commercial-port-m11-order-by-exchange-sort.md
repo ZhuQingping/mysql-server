@@ -3627,7 +3627,9 @@ Code/Doc/Test Review - M11-E5d-5b:
 
 ### M11-E5d-5c: Controlled ORDER BY MQ-to-record-group Loader Design
 
-Status: design completed；Design Review Agent accepted；waiting for commit。
+Status: coding completed；`git diff --check`, `mysqld` build, targeted MTR,
+and full `parallel_query` suite passed；Code/Doc/Test Review Agent accepted；
+waiting for commit。
 
 Goal:
 
@@ -3735,6 +3737,46 @@ Design Review - M11-E5d-5c:
   executed/workers/ranges growth, no default ordered
   `ParallelScanIterator::Read()`, and loader observability only through DBUG /
   frame-smoke counters。
+
+Implementation summary:
+
+- added `PQ_orderby_loader_status` with `ROW`, `FINISH`, `WOULD_BLOCK`, and
+  `ERROR` states；
+- added `Exchange_sort::load_orderby_frame_to_record_group()`；
+- added `Exchange_sort::run_orderby_frame_loader_smoke()` and chained it after
+  the 5a/5b state-shape/allocation smokes；
+- the smoke initializes controlled local MQ handles, sends `PQOF` ROW/FINISH
+  and ERROR frames, deep-copies row image / rowid / sort key bytes into owned
+  record groups, verifies empty FINISH worker behavior, verifies ERROR, verifies
+  WOULD_BLOCK on an empty controlled queue, and verifies cleanup clears buffers
+  and groups；
+- no new status variables were added；the loader remains covered by the
+  existing `pq_exchange_sort_state_shape_smoke` DBUG entry。
+
+Validation result:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed，4/4 including `shutdown_report`:
+  `pq_commercial_order_by_frames pq_commercial_order_by pq_stats`。
+- full `parallel_query` suite passed，89/89 including `shutdown_report`。
+
+Code/Doc/Test Review - M11-E5d-5c:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none after follow-up fix；
+- confirmed `MQ_DETACHED` is fail-closed as `ERROR` and does not mark a worker
+  group complete；
+- confirmed ROW deep-copies row image, rowid, and sort key into owned
+  `PQ_orderby_cached_record` vectors；
+- confirmed FINISH only marks the target worker complete and WOULD_BLOCK stays
+  distinct from EOF；
+- confirmed the smoke covers controlled local MQ only, including empty FINISH
+  worker, `PQOF` ERROR frame, WOULD_BLOCK, detach fail-closed, and cleanup
+  reset；
+- confirmed the diff does not open real ORDER BY eligibility, default worker MQ
+  consumption, ordered `ParallelScanIterator::Read()`, `Filesort` /
+  `Sort_param`, optimizer, AccessPath, handler, or InnoDB behavior。
 
 ## Risk Areas
 

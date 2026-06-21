@@ -535,6 +535,58 @@ bool Exchange_sort::allocate_real_init_buffers_shape() {
          m_record_groups.size() != m_real_init_state_shape.record_group_slots;
 }
 
+bool Exchange_sort::load_orderby_frame_to_record_group(
+    MQueue_handle *handle, uint32 worker_id,
+    PQ_orderby_loader_status *status) {
+  if (status == nullptr) return true;
+  *status = PQ_orderby_loader_status::ERROR;
+  if (handle == nullptr || worker_id >= m_record_groups.size()) return true;
+
+  void *raw_data = nullptr;
+  uint32 raw_len = 0;
+  const MQ_RESULT result = handle->receive(&raw_data, &raw_len);
+  if (result == MQ_WOULD_BLOCK) {
+    *status = PQ_orderby_loader_status::WOULD_BLOCK;
+    return false;
+  }
+  if (result == MQ_DETACHED) {
+    *status = PQ_orderby_loader_status::ERROR;
+    return false;
+  }
+  if (result != MQ_SUCCESS) return true;
+
+  PQ_orderby_decoded_frame decoded;
+  if (pq_decode_orderby_frame(raw_data, raw_len, &decoded)) {
+    *status = PQ_orderby_loader_status::ERROR;
+    return false;
+  }
+
+  PQ_orderby_record_batch &batch = m_record_groups[worker_id];
+  batch.compare_state = PQ_orderby_batch_compare_state::NOT_EVALUATED;
+
+  if (decoded.type == PQ_orderby_frame_type::ROW) {
+    PQ_orderby_cached_record record;
+    if (pq_copy_decoded_orderby_frame(decoded, worker_id, &record)) {
+      *status = PQ_orderby_loader_status::ERROR;
+      return false;
+    }
+    batch.records.push_back(std::move(record));
+    batch.completed = false;
+    batch.new_group = true;
+    *status = PQ_orderby_loader_status::ROW;
+    return false;
+  }
+
+  if (decoded.type == PQ_orderby_frame_type::FINISH) {
+    batch.completed = true;
+    *status = PQ_orderby_loader_status::FINISH;
+    return false;
+  }
+
+  *status = PQ_orderby_loader_status::ERROR;
+  return false;
+}
+
 void Exchange_sort::cleanup_real_init_state_owner_shape() {
   m_compare_key_buffers[0].clear();
   m_compare_key_buffers[1].clear();
@@ -570,7 +622,11 @@ bool Exchange_sort::run_orderby_sort_state_shape_smoke() {
     return true;
   }
 
-  return run_orderby_real_init_allocation_smoke();
+  if (run_orderby_real_init_allocation_smoke()) {
+    return true;
+  }
+
+  return run_orderby_frame_loader_smoke();
 }
 
 bool Exchange_sort::run_orderby_sort_state_shape_handoff_smoke(
@@ -679,6 +735,116 @@ bool Exchange_sort::run_orderby_real_init_allocation_smoke() {
   cleanup_order_gather_shape();
 
   return false;
+}
+
+bool Exchange_sort::run_orderby_frame_loader_smoke() {
+  constexpr uint32 kWorkers = 3;
+  constexpr uint32 kSortOrderLength = 2;
+  constexpr uint32 kMaxRecordLength = 64;
+  constexpr uint32 kRefLength = 8;
+
+  bool initialized_here = false;
+  if (m_mq_handles == nullptr) {
+    if (init()) return true;
+    initialized_here = true;
+  }
+  if (m_nqueues != kWorkers) {
+    if (initialized_here) cleanup();
+    return true;
+  }
+
+  bool failed =
+      init_real_init_state_owner_shape(kWorkers, /*stable_output=*/true,
+                                       /*index_sort=*/false, kSortOrderLength,
+                                       kMaxRecordLength, kRefLength) ||
+      allocate_real_init_buffers_shape();
+
+  const int64 record10 = 100;
+  const int64 record20 = 200;
+  const uint32 rowid10 = 10;
+  const uint32 rowid20 = 20;
+  const int64 key1 = 1;
+  const int64 key2 = 2;
+  if (!failed) {
+    failed = pq_send_orderby_frame(get_mq_handle(0), PQ_orderby_frame_type::ROW,
+                                   &record10, sizeof(record10), &rowid10,
+                                   sizeof(rowid10), &key1, sizeof(key1)) ||
+             pq_send_orderby_frame(get_mq_handle(0),
+                                   PQ_orderby_frame_type::FINISH, nullptr, 0,
+                                   nullptr, 0, nullptr, 0) ||
+             pq_send_orderby_frame(get_mq_handle(1),
+                                   PQ_orderby_frame_type::FINISH, nullptr, 0,
+                                   nullptr, 0, nullptr, 0) ||
+             pq_send_orderby_frame(get_mq_handle(2), PQ_orderby_frame_type::ROW,
+                                   &record20, sizeof(record20), &rowid20,
+                                   sizeof(rowid20), &key2, sizeof(key2)) ||
+             pq_send_orderby_frame(get_mq_handle(2),
+                                   PQ_orderby_frame_type::ERROR, nullptr, 0,
+                                   nullptr, 0, nullptr, 0);
+  }
+
+  PQ_orderby_loader_status status = PQ_orderby_loader_status::ERROR;
+  if (!failed) {
+    failed = load_orderby_frame_to_record_group(get_mq_handle(0), 0, &status) ||
+             status != PQ_orderby_loader_status::ROW ||
+             m_record_groups[0].records.size() != 1;
+  }
+  if (!failed) {
+    const PQ_orderby_cached_record &record = m_record_groups[0].records[0];
+    int64 payload = 0;
+    uint32 rowid = 0;
+    int64 key = 0;
+    failed = record.row_image.size() != sizeof(payload) ||
+             record.row_id.size() != sizeof(rowid) ||
+             record.sort_key.size() != sizeof(key) || !record.has_sort_key;
+    if (!failed) {
+      memcpy(&payload, record.row_image.data(), sizeof(payload));
+      memcpy(&rowid, record.row_id.data(), sizeof(rowid));
+      memcpy(&key, record.sort_key.data(), sizeof(key));
+      failed = payload != record10 || rowid != rowid10 || key != key1;
+    }
+  }
+  if (!failed) {
+    failed = load_orderby_frame_to_record_group(get_mq_handle(0), 0, &status) ||
+             status != PQ_orderby_loader_status::FINISH ||
+             !m_record_groups[0].completed;
+  }
+  if (!failed) {
+    failed = load_orderby_frame_to_record_group(get_mq_handle(1), 1, &status) ||
+             status != PQ_orderby_loader_status::FINISH ||
+             !m_record_groups[1].completed ||
+             !m_record_groups[1].records.empty();
+  }
+  if (!failed) {
+    failed = load_orderby_frame_to_record_group(get_mq_handle(2), 2, &status) ||
+             status != PQ_orderby_loader_status::ROW ||
+             m_record_groups[2].records.size() != 1;
+  }
+  if (!failed) {
+    failed = load_orderby_frame_to_record_group(get_mq_handle(2), 2, &status) ||
+             status != PQ_orderby_loader_status::ERROR;
+  }
+  if (!failed) {
+    failed = load_orderby_frame_to_record_group(get_mq_handle(1), 1, &status) ||
+             status != PQ_orderby_loader_status::WOULD_BLOCK ||
+             !m_record_groups[1].records.empty();
+  }
+  if (!failed) {
+    m_record_groups[1].completed = false;
+    get_mq_handle(1)->close_producer();
+    failed = load_orderby_frame_to_record_group(get_mq_handle(1), 1, &status) ||
+             status != PQ_orderby_loader_status::ERROR ||
+             m_record_groups[1].completed ||
+             !m_record_groups[1].records.empty();
+  }
+
+  cleanup_order_gather_shape();
+  failed = failed || !m_min_records.empty() || !m_record_groups.empty() ||
+           !m_compare_key_buffers[0].empty() ||
+           !m_compare_key_buffers[1].empty() || !m_tmp_key_buffer.empty();
+
+  if (initialized_here) cleanup();
+  return failed;
 }
 
 bool Exchange_sort::run_synthetic_order_merge_smoke(uint32 *rows_read) {
