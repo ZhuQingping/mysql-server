@@ -4,7 +4,8 @@
 
 Status: M11-E0/E1/E2/E3/E4/E5a/E5b-0/E5b-1/E5b-2/E5b-3/E5c/E5d/E5d-0
 completed and committed；M11-E5d-S0/S1/S2/S3 completed and committed；
-M11-E5d-1 fail-closed Filesort contract shape completed；waiting for commit。
+M11-E5d-1 fail-closed Filesort contract shape completed and committed；
+M11-E5d-2 owned saved ORDER/GROUP helper state design accepted。
 
 ## 背景
 
@@ -1547,6 +1548,172 @@ Code/Doc/Test Review - M11-E5d-1:
   `Not parallel HAS_ORDER_BY`, and zero executed/workers/ranges；
 - remaining risk: `READY` path is intentionally untested until owned saved
   ORDER/GROUP helper state is implemented。
+
+Commit:
+
+- `99526a6067d` Add PQ M11E filesort contract shape。
+
+### M11-E5d-2: Owned Saved ORDER/GROUP Helper State Design
+
+Status: design-only taskbook completed；Design Review Agent accepted；waiting
+for commit。
+
+Goal:
+
+- define the smallest owned PQ sidecar that can preserve and restore the
+  `ORDER*` chain required by commercial Filesort path；
+- replace the current scalar-only S1/S2/S3 sidecar limitation with a reviewed
+  ownership model；
+- keep real `Filesort`, `Sort_param`, `Filesort::make_sortorder()`, and
+  user-visible ORDER BY PQ disabled until this helper state is proven。
+
+Commercial reference summary:
+
+- commercial `ParallelScanIterator::pq_make_filesort()` restores GROUP/ORDER
+  through `saved_join_group_list`, `saved_join_order`,
+  `optimized_group_flags`, and `optimized_order_flags` before constructing
+  `Filesort`；
+- commercial `Exchange_sort::init()` assumes `m_sort->m_order` is already a
+  correct restored or synthesized ORDER chain, then calls
+  `Filesort::make_sortorder()`；
+- commercial `Filesort::make_sortorder()` consumes the `ORDER*` chain,
+  especially `ord->item[0]` and `ord->direction`；
+- commercial helper state also preserves JOIN scalar execution semantics such
+  as `grouped`, `group_optimized_away`, `implicit_grouping`,
+  `need_tmp_before_win`, `simple_group`, `simple_order`,
+  `streaming_aggregation`, `skip_sort_order`, `m_ordered_index_usage`,
+  `select_distinct`, and `having_cond`；
+- commercial helpers cannot be directly copied because they depend on fields
+  and lifecycle that are not present in this branch:
+  `saved_join_order`, `saved_join_group_list`, PQ resolver saved list pointers,
+  `saved_optimized_vars`, PQ clone ownership, and commercial `pq_mem_root`
+  conventions。
+
+Current branch facts:
+
+- upstream `Query_block::order_list_ptrs` / `group_list_ptrs` preserve
+  `ORDER::next` chains for prepared statement repeated optimization only；
+- `Query_block::save_order_properties()` is private and saves existing
+  pointers, not owned ORDER nodes；
+- `Query_block::restore_cmd_properties()` asserts `join == nullptr` and is a
+  pre-reoptimization restore entry, not a PQ runtime helper；
+- `JOIN::optimize_distinct_group_order()` can mutate `join->order` and
+  `join->group_list` through `remove_const()`, `group_list.clean()`, DISTINCT
+  to GROUP conversion, and ORDER cleanup；
+- current `PQSavedOrderGroupContract` captures only scalar diagnostics and
+  deliberately returns `UNSUPPORTED_MISSING_SAVED_HELPERS`。
+
+Design decision:
+
+- do not expose or call upstream `Query_block::save_order_properties()` from PQ；
+- do not call `restore_cmd_properties()` inside or after `JOIN::optimize()`；
+- do not deep-copy `Item` trees；
+- introduce a PQ-owned sidecar that owns copied `ORDER` nodes and `next` links,
+  while aliasing already resolved `Item` pointers；
+- keep `ORDER_with_src` metadata (`src`, `const_optimized`) and scalar JOIN
+  semantics in the sidecar；
+- make helper `READY` only after both structure copy and invariant checks pass；
+- keep `PQOrderByFilesortContract` fail-closed until this sidecar can provide
+  a restored `ORDER*` chain without mutating live optimizer state。
+
+Proposed coding split after design review:
+
+1. M11-E5d-2a Owned ORDER Chain Copy Smoke:
+   - allowed files: `sql/parallel_query/pq_optimizer.h`,
+     `sql/parallel_query/pq_optimizer.cc`, `sql/parallel_query/sql_parallel.h`,
+     `sql/mysqld.cc`, focused MTR, task docs；
+   - add a small sidecar type that copies `ORDER` struct nodes into owned
+     storage and rewires `next` within the copied chain；
+   - copied `ORDER::item` pointers alias source items and are never owned；
+   - add DBUG smoke that copies `join->order` for an ORDER BY reject query and
+     verifies length, direction, item pointer, source metadata, and copied chain
+     independence；
+   - sidecar may still report `UNSUPPORTED_MISSING_OPTIMIZED_FLAGS` for real
+     Filesort readiness。
+2. M11-E5d-2b GROUP Chain and Optimized Flag Contract:
+   - record source-vs-optimized membership flags for ORDER/GROUP chains；
+   - cover `remove_const()` / cleaned-list semantics through controlled smoke；
+   - do not call real `calc_group_buffer()` or mutate live `JOIN::group_list`。
+3. M11-E5d-2c Restore-to-Sidecar Contract:
+   - reconstruct a restored sidecar `ORDER_with_src` from owned nodes and flags；
+   - return a pointer to the sidecar chain for later Filesort lifecycle review；
+   - no real `Filesort` object yet。
+4. M11-E5d-2d Clone Copy Contract:
+   - copy the owned sidecar between leader/clone diagnostic objects；
+   - prove copied nodes do not alias node storage while still aliasing expected
+     `Item` pointers。
+
+Forbidden files / actions for E5d-2:
+
+- no `sql/filesort.*`；
+- no `sql/iterators/sorting_iterator.*`；
+- no `sql/sql_optimizer.*` mutation hooks until a separate reviewed phase；
+- no `Query_block::restore_cmd_properties()` semantic changes；
+- no public exposure of private `save_order_properties()`；
+- no real `Filesort`, `Sort_param`, or `Filesort::make_sortorder()`；
+- no `sql/parallel_query/exchange_sort.*` real Filesort integration；
+- no clone lifecycle, worker, handler, MQ, `Read()`, AccessPath, or
+  `HAS_ORDER_BY` eligibility relaxation；
+- no deep copy or ownership of `Item` trees。
+
+Required validation for first coding subtask:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_saved_order_group_contract \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d2_target --tmpdir=/tmp/pqt_m11e5d2_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d2_full --tmpdir=/tmp/pqt_m11e5d2_full
+```
+
+Acceptance checklist:
+
+- Design Review Agent accepts the ownership model before coding；
+- first coding patch proves owned copied ORDER node chain independence；
+- no user-visible ORDER BY PQ activation；
+- no real Filesort construction；
+- `PQOrderByFilesortContract` remains unsupported until restored sidecar chain
+  and optimized flags are both available；
+- after each coding subtask, run Code/Doc/Test Review Agent before commit。
+
+Design review request:
+
+- confirm owned ORDER node sidecar with aliased `Item` pointers is the right
+  minimal replacement for commercial saved list pointers；
+- confirm upstream `restore_cmd_properties()` must not be used in PQ runtime；
+- confirm E5d-2a should start with ORDER chain copy smoke only；
+- confirm optimized flags, GROUP chain, restore-to-sidecar, and clone copy
+  should remain separate follow-up subtasks；
+- confirm `Filesort::make_sortorder()` remains forbidden until E5d-2 is
+  complete。
+
+Design Review - M11-E5d-2:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none blocking；
+- confirmed upstream `Query_block::restore_cmd_properties()` and private
+  `save_order_properties()` are the wrong lifecycle for PQ runtime helper use；
+- confirmed owned copied `ORDER` nodes with aliased resolved `Item*` pointers
+  are the smallest safe replacement direction for commercial saved list
+  pointers in the current branch；
+- confirmed E5d-2a should start with ORDER chain copy smoke only, while
+  GROUP/optimized flags, restore-to-sidecar, and clone copy remain separate
+  follow-ups；
+- confirmed forbidden scope is strong enough to prevent premature Filesort,
+  optimizer hook, worker/MQ/Read, AccessPath, and `HAS_ORDER_BY` activation；
+- confirmed validation requirements are sufficient for the first coding
+  subtask；
+- remaining risks:
+  - `Item*` aliasing is safe only while the sidecar stays within leader/clone
+    diagnostic lifetime and does not outlive resolved query objects；
+  - E5d-2c must prove restored sidecar chains cannot mutate live optimizer
+    `ORDER_with_src` state；
+  - real `Filesort`, `Sort_param`, `Exchange_sort`, and user-visible ORDER BY
+    PQ still need separate review before activation。
 
 ## Risk Areas
 
