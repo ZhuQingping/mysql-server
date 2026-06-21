@@ -33,7 +33,9 @@ execution preflight blocker completed and committed as `68b27d804ca`；real
 ORDER BY execution, default worker MQ consumption, and default ordered `Read()`
 remain disabled；M11-E5d-5f runtime prerequisite diagnostics coding and
 validation completed，Code/Doc/Test Review Agent accepted，committed as
-`b94ca90cb75`。
+`b94ca90cb75`；M11-E5g-0/1/2 completed and committed；M11-E5g-3 ordered
+leader materialization smoke from streaming reader completed locally with build,
+targeted MTR, full `parallel_query` suite, and Code/Doc/Test Review passed。
 
 ## 背景
 
@@ -4727,6 +4729,107 @@ Next recommended action:
 - commit 5g-2；
 - then enter M11-E5g-3 ordered leader materialization smoke from streaming
   reader。
+
+Commit:
+
+- `914e32e438a` Add PQ M11E order by stream heap smoke。
+
+### M11-E5g-3: Ordered Leader Materialization Smoke from Streaming Reader
+
+Status: coding completed；build, targeted MTR, full `parallel_query` suite, and
+Code/Doc/Test Review passed。
+
+Goal:
+
+- prove the controlled streaming ORDER BY reader can return a record image that
+  is materialized into the leader `TABLE::record[0]`；
+- prove materialized rows preserve the stream reader's ORDER BY sequence；
+- prove row-image length mismatch is observable and fail-closed before visible
+  leader materialization；
+- keep real ORDER BY execution, default worker MQ consumption, default
+  `ParallelScanIterator::Read()`, optimizer eligibility, and preflight
+  readiness unchanged。
+
+Implementation:
+
+- added `Exchange_sort::run_orderby_streaming_materialization_smoke()`；
+- the smoke builds three controlled `PQOF` worker queues, sends two out-of-order
+  row images with sort keys, reads them through
+  `read_ordered_record_stream_shape()`, and copies each returned row image into
+  the leader table record for `Field::val_int()` verification；
+- the smoke preserves and restores `table->record[0]` and temporary
+  read/write bitmap bits for the first field；
+- unsupported leader table shapes return an unsupported counter instead of
+  touching the record；
+- a negative controlled frame sends a short row image and records a
+  bad-length/length-mismatch counter rather than materializing it；
+- wired the smoke behind DBUG flag
+  `pq_exchange_sort_stream_materialized_smoke`；
+- added status variables:
+  - `Parallel_exchange_sort_stream_materialized_smoke_attempts`；
+  - `Parallel_exchange_sort_stream_materialized_smoke_success`；
+  - `Parallel_exchange_sort_stream_materialized_smoke_unsupported`；
+  - `Parallel_exchange_sort_stream_materialized_smoke_rows`；
+  - `Parallel_exchange_sort_stream_materialized_smoke_bad_lengths`；
+- extended `pq_commercial_order_by_frames` and `pq_stats`。
+
+Scope notes:
+
+- no default `Exchange_sort::read_mq_message()` behavior change；
+- no default ordered `ParallelScanIterator::Read()` path；
+- no optimizer `HAS_ORDER_BY` relaxation；
+- no `PQWR` / `Query_result_mq` change；
+- no AccessPath, handler, InnoDB, worker launch, Filesort, or Sort_param
+  runtime-owner change；
+- no preflight readiness flag is set true。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by_frames \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5g3_target --tmpdir=/tmp/pqt_m11e5g3_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5g3_full --tmpdir=/tmp/pqt_m11e5g3_full
+```
+
+Results:
+
+- `git diff --check` passed；
+- `mysqld` build passed；
+- targeted MTR passed: 4/4 including `shutdown_report`；
+- full `parallel_query` suite passed: 89/89。
+
+Next recommended action:
+
+- enter M11-E5g-4 default execution path boundary design, still without opening
+  visible ORDER BY PQ。
+
+Code/Doc/Test Review - M11-E5g-3:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none blocking；
+- confirmed the new materialized stream smoke is gated by DBUG flag
+  `pq_exchange_sort_stream_materialized_smoke`；
+- confirmed default `HAS_ORDER_BY` rejection, preflight false flags,
+  `Exchange_sort::read_mq_message()`, and `ParallelScanIterator::Read()`
+  remain unchanged；
+- confirmed the smoke reads row images through
+  `read_ordered_record_stream_shape()` before copying into leader
+  `table->record[0]`；
+- confirmed status variables, reset, `SHOW STATUS`, `pq_stats`, and
+  `pq_commercial_order_by_frames` are aligned；
+- non-blocking review note identified a future fragility around reusing
+  `PQ_orderby_cached_merge_ctx` after `m_record_groups` reallocation；
+- follow-up fix applied before commit: refresh `ctx.batches`, clear row/status
+  state before the negative length-mismatch phase, and unconditionally clean up
+  order-gather shape on exit；
+- after follow-up fix, `git diff --check`, `mysqld` build, targeted MTR, and
+  full `parallel_query` suite passed again。
 
 ## Risk Areas
 

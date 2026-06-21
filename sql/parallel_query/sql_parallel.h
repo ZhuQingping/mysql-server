@@ -321,6 +321,11 @@ struct PQ_global_stats {
   std::atomic<uint64> exchange_sort_stream_heap_smoke_refills{0};
   std::atomic<uint64> exchange_sort_stream_heap_smoke_heap_replaces{0};
   std::atomic<uint64> exchange_sort_stream_heap_smoke_heap_removes{0};
+  std::atomic<uint64> exchange_sort_stream_materialized_smoke_attempts{0};
+  std::atomic<uint64> exchange_sort_stream_materialized_smoke_success{0};
+  std::atomic<uint64> exchange_sort_stream_materialized_smoke_unsupported{0};
+  std::atomic<uint64> exchange_sort_stream_materialized_smoke_rows{0};
+  std::atomic<uint64> exchange_sort_stream_materialized_smoke_length_mismatch{0};
   std::atomic<uint64> exchange_sort_frame_merge_smoke_rows{0};  ///< Merge rows
   std::atomic<uint64> exchange_sort_frame_merge_smoke_finishes{0};  ///< FINISH
   std::atomic<uint64> exchange_sort_frame_merge_edge_smoke_rows{0};  ///< Rows
@@ -559,6 +564,16 @@ struct PQ_global_stats {
     exchange_sort_stream_heap_smoke_heap_replaces.store(
         0, std::memory_order_relaxed);
     exchange_sort_stream_heap_smoke_heap_removes.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_stream_materialized_smoke_attempts.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_stream_materialized_smoke_success.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_stream_materialized_smoke_unsupported.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_stream_materialized_smoke_rows.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_stream_materialized_smoke_length_mismatch.store(
         0, std::memory_order_relaxed);
     exchange_sort_frame_merge_smoke_rows.store(0, std::memory_order_relaxed);
     exchange_sort_frame_merge_smoke_finishes.store(0,

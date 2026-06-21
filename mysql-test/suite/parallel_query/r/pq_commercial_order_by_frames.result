@@ -63,6 +63,21 @@ WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_heap_replaces');
 SET @stream_heap_removes_before = (
 SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
 WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_heap_removes');
+SET @stream_mat_attempts_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_materialized_smoke_attempts');
+SET @stream_mat_success_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_materialized_smoke_success');
+SET @stream_mat_unsupported_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_materialized_smoke_unsupported');
+SET @stream_mat_rows_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_materialized_smoke_rows');
+SET @stream_mat_length_mismatch_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_materialized_smoke_bad_lengths');
 SET @frame_merge_rows_before = (
 SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
 WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_merge_smoke_rows');
@@ -144,7 +159,19 @@ WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_rows') -
 @stream_heap_rows_before) = 0 AS orderby_stream_heap_rows_without_debug;
 orderby_stream_heap_rows_without_debug
 1
-SET SESSION debug="d,pq_exchange_sort_state_shape_smoke,pq_orderby_worker_frame_producer_smoke,pq_exchange_sort_stream_heap_smoke";
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_materialized_smoke_attempts') -
+@stream_mat_attempts_before) = 0 AS orderby_stream_mat_attempts_without_debug;
+orderby_stream_mat_attempts_without_debug
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_materialized_smoke_rows') -
+@stream_mat_rows_before) = 0 AS orderby_stream_mat_rows_without_debug;
+orderby_stream_mat_rows_without_debug
+1
+SET SESSION debug="d,pq_exchange_sort_state_shape_smoke,pq_orderby_worker_frame_producer_smoke,pq_exchange_sort_stream_heap_smoke,pq_exchange_sort_stream_materialized_smoke";
 SELECT * FROM pq_orderby_frame_t;
 id	k
 1	30
@@ -204,6 +231,24 @@ SELECT (
 WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_unsupported') -
 @stream_heap_unsupported_before) = 0 AS orderby_stream_heap_unsupported_delta;
 orderby_stream_heap_unsupported_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_materialized_smoke_attempts') -
+@stream_mat_attempts_before) = 1 AS orderby_stream_mat_attempts_delta;
+orderby_stream_mat_attempts_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_materialized_smoke_success') -
+@stream_mat_success_before) = 1 AS orderby_stream_mat_success_delta;
+orderby_stream_mat_success_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_materialized_smoke_unsupported') -
+@stream_mat_unsupported_before) = 0 AS orderby_stream_mat_unsupported_delta;
+orderby_stream_mat_unsupported_delta
 1
 SELECT (
 (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
@@ -288,6 +333,18 @@ SELECT (
 WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_heap_removes') -
 @stream_heap_removes_before) >= 3 AS orderby_stream_heap_removes_delta;
 orderby_stream_heap_removes_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_materialized_smoke_rows') -
+@stream_mat_rows_before) >= 2 AS orderby_stream_mat_rows_delta;
+orderby_stream_mat_rows_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_materialized_smoke_bad_lengths') -
+@stream_mat_length_mismatch_before) >= 1 AS orderby_stream_mat_length_mismatch_delta;
+orderby_stream_mat_length_mismatch_delta
 1
 SELECT (
 (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status

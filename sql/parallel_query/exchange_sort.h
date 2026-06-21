@@ -171,6 +171,10 @@ class Exchange_sort final : public Exchange {
   bool run_orderby_frame_materialization_smoke(TABLE *leader_table,
                                                uint32 *rows_read,
                                                uint32 *unsupported);
+  bool run_orderby_streaming_materialization_smoke(TABLE *leader_table,
+                                                   uint32 *rows_read,
+                                                   uint32 *unsupported,
+                                                   uint32 *length_errors);
   bool run_orderby_sort_state_shape_smoke();
   bool run_orderby_sort_state_shape_handoff_smoke(uint32 workers,
                                                   bool stable_output,

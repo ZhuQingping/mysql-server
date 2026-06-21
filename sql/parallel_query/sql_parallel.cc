@@ -898,6 +898,32 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd [[maybe_unused]],
     pq_global_stats.exchange_sort_stream_heap_smoke_success.fetch_add(
         1, std::memory_order_relaxed);
   }
+  bool stream_materialized_enabled = false;
+  uint32 stream_materialized_rows_read = 0;
+  uint32 stream_materialized_unsupported = 0;
+  uint32 stream_materialized_length_mismatch = 0;
+  DBUG_EXECUTE_IF("pq_exchange_sort_stream_materialized_smoke",
+                  stream_materialized_enabled = true;);
+  if (stream_materialized_enabled) {
+    pq_global_stats.exchange_sort_stream_materialized_smoke_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+    if (sort_exchange.run_orderby_streaming_materialization_smoke(
+            leader_table, &stream_materialized_rows_read,
+            &stream_materialized_unsupported,
+            &stream_materialized_length_mismatch)) {
+      pq_global_stats.exchange_sort_stream_materialized_smoke_unsupported
+          .fetch_add(1, std::memory_order_relaxed);
+      return true;
+    }
+    if (stream_materialized_unsupported > 0) {
+      pq_global_stats.exchange_sort_stream_materialized_smoke_unsupported
+          .fetch_add(stream_materialized_unsupported,
+                     std::memory_order_relaxed);
+    } else {
+      pq_global_stats.exchange_sort_stream_materialized_smoke_success
+          .fetch_add(1, std::memory_order_relaxed);
+    }
+  }
   uint32 frame_merge_rows_read = 0;
   uint32 frame_merge_finishes_read = 0;
   if (sort_exchange.run_orderby_frame_merge_smoke(
@@ -966,6 +992,11 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd [[maybe_unused]],
       stream_heap_replaces_read, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_stream_heap_smoke_heap_removes.fetch_add(
       stream_heap_removes_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_stream_materialized_smoke_rows.fetch_add(
+      stream_materialized_rows_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_stream_materialized_smoke_length_mismatch
+      .fetch_add(stream_materialized_length_mismatch,
+                 std::memory_order_relaxed);
   pq_global_stats.exchange_sort_frame_merge_smoke_rows.fetch_add(
       frame_merge_rows_read, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_frame_merge_smoke_finishes.fetch_add(

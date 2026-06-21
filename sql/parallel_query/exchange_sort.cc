@@ -1992,3 +1992,203 @@ bool Exchange_sort::run_orderby_frame_materialization_smoke(
   if (!failed) *rows_read = 1;
   return failed;
 }
+
+bool Exchange_sort::run_orderby_streaming_materialization_smoke(
+    TABLE *leader_table, uint32 *rows_read, uint32 *unsupported,
+    uint32 *length_errors) {
+  if (rows_read == nullptr || unsupported == nullptr ||
+      length_errors == nullptr) {
+    return true;
+  }
+  *rows_read = 0;
+  *unsupported = 0;
+  *length_errors = 0;
+
+  if (!pq_orderby_materialization_table_supported(leader_table)) {
+    *unsupported = 1;
+    return false;
+  }
+
+  constexpr uint32 kWorkers = 3;
+  constexpr uint32 kSortOrderLength = 2;
+  constexpr uint32 kMaxRecordLength = 64;
+  constexpr uint32 kRefLength = 8;
+
+  bool initialized_here = false;
+  if (m_mq_handles == nullptr) {
+    if (init()) return true;
+    initialized_here = true;
+  }
+  if (m_nqueues != kWorkers) {
+    if (initialized_here) cleanup();
+    return true;
+  }
+
+  Field *first_field = leader_table->field[0];
+  const uint field_index = first_field->field_index();
+  const bool had_read_bit =
+      leader_table->read_set == nullptr ||
+      bitmap_is_set(leader_table->read_set, field_index);
+  const bool had_write_bit =
+      leader_table->write_set == nullptr ||
+      bitmap_is_set(leader_table->write_set, field_index);
+  if (leader_table->read_set != nullptr && !had_read_bit) {
+    bitmap_set_bit(leader_table->read_set, field_index);
+  }
+  if (leader_table->write_set != nullptr && !had_write_bit) {
+    bitmap_set_bit(leader_table->write_set, field_index);
+  }
+
+  std::vector<uchar> original_record(
+      leader_table->record[0],
+      leader_table->record[0] + leader_table->s->reclength);
+  std::vector<uchar> record_low;
+  std::vector<uchar> record_high;
+
+  constexpr longlong low_value = 111;
+  constexpr longlong high_value = 222;
+  bool failed = first_field->store(high_value, false) != TYPE_OK;
+  if (!failed) {
+    record_high.assign(leader_table->record[0],
+                       leader_table->record[0] + leader_table->s->reclength);
+    failed = first_field->store(low_value, false) != TYPE_OK;
+  }
+  if (!failed) {
+    record_low.assign(leader_table->record[0],
+                      leader_table->record[0] + leader_table->s->reclength);
+  }
+  if (!original_record.empty()) {
+    memcpy(leader_table->record[0], original_record.data(),
+           original_record.size());
+  }
+
+  const uint32 rowid = 1;
+  const int64 key_low = 1;
+  const int64 key_high = 2;
+  if (!failed) {
+    failed = init_real_init_state_owner_shape(kWorkers, /*stable_output=*/true,
+                                             /*index_sort=*/false,
+                                             kSortOrderLength, kMaxRecordLength,
+                                             kRefLength) ||
+             allocate_real_init_buffers_shape();
+  }
+  if (!failed) {
+    failed = pq_send_orderby_frame(get_mq_handle(0), PQ_orderby_frame_type::ROW,
+                                   record_high.data(),
+                                   static_cast<uint32>(record_high.size()),
+                                   &rowid, sizeof(rowid), &key_high,
+                                   sizeof(key_high)) ||
+             pq_send_orderby_frame(get_mq_handle(0),
+                                   PQ_orderby_frame_type::FINISH, nullptr, 0,
+                                   nullptr, 0, nullptr, 0) ||
+             pq_send_orderby_frame(get_mq_handle(1), PQ_orderby_frame_type::ROW,
+                                   record_low.data(),
+                                   static_cast<uint32>(record_low.size()),
+                                   &rowid, sizeof(rowid), &key_low,
+                                   sizeof(key_low)) ||
+             pq_send_orderby_frame(get_mq_handle(1),
+                                   PQ_orderby_frame_type::FINISH, nullptr, 0,
+                                   nullptr, 0, nullptr, 0) ||
+             pq_send_orderby_frame(get_mq_handle(2),
+                                   PQ_orderby_frame_type::FINISH, nullptr, 0,
+                                   nullptr, 0, nullptr, 0);
+  }
+
+  PQ_orderby_cached_merge_ctx ctx{m_record_groups.data(),
+                                  /*descending=*/false};
+  binary_heap heap(static_cast<int>(kWorkers), &ctx,
+                   pq_orderby_cached_compare_batches);
+  std::vector<bool> in_heap(kWorkers, false);
+  std::vector<bool> terminal_workers(kWorkers, false);
+  if (!failed && heap.init_binary_heap()) failed = true;
+
+  uint32 finishes = 0;
+  uint32 would_blocks = 0;
+  uint32 errors = 0;
+  uint32 detaches = 0;
+  uint32 refills = 0;
+  uint32 heap_replaces = 0;
+  uint32 heap_removes = 0;
+  std::vector<uchar> row_image;
+  PQ_orderby_stream_read_status status = PQ_orderby_stream_read_status::ERROR;
+  const longlong expected_values[] = {low_value, high_value};
+  for (const longlong expected : expected_values) {
+    if (failed) break;
+    failed = read_ordered_record_stream_shape(
+                 &heap, &in_heap, &terminal_workers, &row_image, &status,
+                 &finishes, &would_blocks, &errors, &detaches, &refills,
+                 &heap_replaces, &heap_removes) ||
+             status != PQ_orderby_stream_read_status::ROW ||
+             row_image.size() != leader_table->s->reclength;
+    if (!failed) {
+      memcpy(leader_table->record[0], row_image.data(), row_image.size());
+      failed = first_field->val_int() != expected;
+    }
+    if (!failed) ++(*rows_read);
+  }
+  if (!failed) {
+    failed = read_ordered_record_stream_shape(
+                 &heap, &in_heap, &terminal_workers, &row_image, &status,
+                 &finishes, &would_blocks, &errors, &detaches, &refills,
+                 &heap_replaces, &heap_removes) ||
+             status != PQ_orderby_stream_read_status::EOF_REACHED ||
+             !row_image.empty();
+  }
+
+  cleanup_order_gather_shape();
+  heap.reset();
+  std::fill(in_heap.begin(), in_heap.end(), false);
+  std::fill(terminal_workers.begin(), terminal_workers.end(), false);
+  row_image.clear();
+  status = PQ_orderby_stream_read_status::ERROR;
+  if (!failed) {
+    failed = init_real_init_state_owner_shape(kWorkers, /*stable_output=*/true,
+                                             /*index_sort=*/false,
+                                             kSortOrderLength, kMaxRecordLength,
+                                             kRefLength) ||
+             allocate_real_init_buffers_shape();
+  }
+  ctx.batches = m_record_groups.data();
+  const uint32 short_record = 333;
+  if (!failed) {
+    failed = pq_send_orderby_frame(get_mq_handle(0), PQ_orderby_frame_type::ROW,
+                                   &short_record, sizeof(short_record), &rowid,
+                                   sizeof(rowid), &key_low, sizeof(key_low)) ||
+             pq_send_orderby_frame(get_mq_handle(0),
+                                   PQ_orderby_frame_type::FINISH, nullptr, 0,
+                                   nullptr, 0, nullptr, 0) ||
+             pq_send_orderby_frame(get_mq_handle(1),
+                                   PQ_orderby_frame_type::FINISH, nullptr, 0,
+                                   nullptr, 0, nullptr, 0) ||
+             pq_send_orderby_frame(get_mq_handle(2),
+                                   PQ_orderby_frame_type::FINISH, nullptr, 0,
+                                   nullptr, 0, nullptr, 0);
+  }
+  if (!failed) {
+    failed = read_ordered_record_stream_shape(
+                 &heap, &in_heap, &terminal_workers, &row_image, &status,
+                 &finishes, &would_blocks, &errors, &detaches, &refills,
+                 &heap_replaces, &heap_removes) ||
+             status != PQ_orderby_stream_read_status::ROW;
+  }
+  if (!failed && row_image.size() != leader_table->s->reclength) {
+    ++(*length_errors);
+  } else if (!failed) {
+    failed = true;
+  }
+
+  if (!original_record.empty()) {
+    memcpy(leader_table->record[0], original_record.data(),
+           original_record.size());
+  }
+  cleanup_order_gather_shape();
+  if (initialized_here) cleanup();
+  if (leader_table->read_set != nullptr && !had_read_bit) {
+    bitmap_clear_bit(leader_table->read_set, field_index);
+  }
+  if (leader_table->write_set != nullptr && !had_write_bit) {
+    bitmap_clear_bit(leader_table->write_set, field_index);
+  }
+
+  return failed || *rows_read != 2 || *length_errors != 1;
+}
