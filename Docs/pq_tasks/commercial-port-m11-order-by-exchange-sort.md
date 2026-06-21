@@ -4115,6 +4115,67 @@ Design Review - M11-E5d-5e:
   fields" are deferred to 5e-1 because this design step still disables
   execution。
 
+### M11-E5d-5e-1: ORDER BY Eligibility Contract Helper
+
+Status: coding completed；`git diff --check`, `mysqld` build, targeted MTR,
+and full `parallel_query` suite passed；Code/Doc/Test Review Agent accepted；
+waiting for commit。
+
+Goal:
+
+- add the first ORDER BY eligibility contract helper；
+- recognize the first future visible ORDER BY candidate subset；
+- keep execution disabled and preserve the existing `HAS_ORDER_BY` serial
+  boundary；
+- expose focused diagnostics through DBUG and status counters so the contract
+  is testable without opening visible ORDER BY PQ。
+
+Implementation summary:
+
+- added `PQOrderByEligibilityContractStatus` and
+  `PQOrderByEligibilityContract`；
+- added `pq_build_orderby_eligibility_contract()`；
+- the first future-candidate subset requires SELECT, traditional optimizer,
+  simple query block, one table, simple ORDER BY, ASC-only, no LIMIT, no
+  DISTINCT/GROUP/HAVING/window, filesort path, and `JT_ALL` full table scan；
+- candidate status is
+  `FUTURE_CANDIDATE_EXECUTION_DISABLED` and always keeps
+  `execution_disabled=true`；
+- added DBUG smoke `pq_orderby_eligibility_contract_smoke` in the existing
+  `HAS_ORDER_BY` reject window；
+- added status counters:
+  - `Parallel_orderby_eligibility_contract_attempts`；
+  - `Parallel_orderby_eligibility_contract_candidate_disabled`；
+  - `Parallel_orderby_eligibility_contract_unsupported`；
+- updated `pq_commercial_order_by` to verify a no-LIMIT ASC candidate is
+  recognized as candidate-disabled while `EXPLAIN` still reports
+  `Not parallel HAS_ORDER_BY`；
+- updated `pq_stats` for the three new status variables。
+
+Validation result:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed，4/4 including `shutdown_report`:
+  `pq_commercial_order_by pq_stats pq_saved_order_group_contract`；
+- full `parallel_query` suite passed，89/89 including `shutdown_report`。
+
+Code/Doc/Test Review - M11-E5d-5e-1:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed helper is fail-closed and only the full positive predicate reaches
+  `FUTURE_CANDIDATE_EXECUTION_DISABLED`；
+- confirmed DBUG smoke is read-only and remains inside the existing
+  `HAS_ORDER_BY` reject path before the unchanged reject return；
+- confirmed status exposure/reset is complete through `PQ_global_stats`, show
+  functions, and `SHOW_VAR` entries；
+- confirmed MTR proves the positive candidate-disabled path and that
+  `EXPLAIN` / runtime remain serial；
+- residual risk: LIMIT/DESC/GROUP/window and other unsupported shapes rely on
+  fail-closed predicate review plus existing negative ORDER BY tests rather
+  than separate per-shape DBUG assertions。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

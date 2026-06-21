@@ -2,6 +2,7 @@
 # M8: commercial ORDER BY gather-merge skeleton remains synthetic-only.
 
 --source include/have_innodb_16k.inc
+--source include/have_debug.inc
 
 --disable_warnings
 DROP TABLE IF EXISTS t1;
@@ -66,6 +67,39 @@ SET @pq_ranges_before_order = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_ranges_dispatched');
+SET @pq_orderby_elig_attempts_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_eligibility_contract_attempts');
+SET @pq_orderby_elig_candidate_disabled_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_eligibility_contract_candidate_disabled');
+SET @pq_orderby_elig_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_eligibility_contract_unsupported');
+
+# 5e-1: first visible ORDER BY candidate is recognized, but execution remains
+# disabled. The query must still be optimizer-rejected as HAS_ORDER_BY.
+SET @old_debug=@@debug;
+SET SESSION debug="d,pq_orderby_eligibility_contract_smoke";
+EXPLAIN SELECT id, k FROM t1 ORDER BY k ASC, id ASC;
+SET SESSION debug=@old_debug;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_eligibility_contract_attempts') -
+      @pq_orderby_elig_attempts_before AS orderby_elig_attempts_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_eligibility_contract_candidate_disabled') -
+      @pq_orderby_elig_candidate_disabled_before AS orderby_elig_candidate_disabled_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_eligibility_contract_unsupported') -
+      @pq_orderby_elig_unsupported_before AS orderby_elig_unsupported_delta;
 
 # ORDER BY is still optimizer-rejected in M8. It must stay serial and must not
 # create a PQ iterator until the real Exchange_sort worker path is wired.

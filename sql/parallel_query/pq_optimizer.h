@@ -122,6 +122,14 @@ enum class PQOrderByFilesortContractStatus {
   UNSUPPORTED_MISSING_RESTORED_ORDER
 };
 
+enum class PQOrderByEligibilityContractStatus {
+  UNSUPPORTED_NULL_INPUT,
+  UNSUPPORTED_NOT_ORDERED,
+  UNSUPPORTED_SHAPE,
+  FUTURE_CANDIDATE_EXECUTION_DISABLED,
+  EXECUTABLE_UNREACHABLE
+};
+
 /**
   Compile-only saved ORDER/GROUP contract shape.
 
@@ -249,6 +257,53 @@ struct PQOrderByFilesortContract {
 bool pq_build_orderby_filesort_contract(
     Query_block *query_block, JOIN *join,
     PQOrderByFilesortContract *contract);
+
+struct PQOrderByEligibilityContract {
+  PQOrderByEligibilityContractStatus status{
+      PQOrderByEligibilityContractStatus::UNSUPPORTED_NULL_INPUT};
+  const char *detail{nullptr};
+
+  bool has_order{false};
+  bool single_table{false};
+  bool simple_order{false};
+  bool asc_only{false};
+  bool has_limit{false};
+  bool select_distinct{false};
+  bool has_group{false};
+  bool has_having{false};
+  bool has_window{false};
+  bool filesort_required{false};
+  bool full_scan{false};
+  bool execution_disabled{true};
+
+  void reset() {
+    status = PQOrderByEligibilityContractStatus::UNSUPPORTED_NULL_INPUT;
+    detail = nullptr;
+    has_order = false;
+    single_table = false;
+    simple_order = false;
+    asc_only = false;
+    has_limit = false;
+    select_distinct = false;
+    has_group = false;
+    has_having = false;
+    has_window = false;
+    filesort_required = false;
+    full_scan = false;
+    execution_disabled = true;
+  }
+
+  bool future_candidate_disabled() const {
+    return status ==
+               PQOrderByEligibilityContractStatus::
+                   FUTURE_CANDIDATE_EXECUTION_DISABLED &&
+           execution_disabled;
+  }
+};
+
+bool pq_build_orderby_eligibility_contract(
+    THD *thd, Query_block *query_block, JOIN *join,
+    PQOrderByEligibilityContract *contract);
 
 /**
   Convert a PQUnsuiteReason to a human-readable string.

@@ -200,6 +200,9 @@ struct PQ_global_stats {
   std::atomic<uint64> saved_order_group_clone_copy_smoke_unsupported{0};  ///< S3
   std::atomic<uint64> orderby_filesort_contract_attempts{0};  ///< E5d-1
   std::atomic<uint64> orderby_filesort_contract_unsupported{0};  ///< E5d-1
+  std::atomic<uint64> orderby_eligibility_contract_attempts{0};  ///< 5e-1
+  std::atomic<uint64> orderby_eligibility_contract_candidate_disabled{0};
+  std::atomic<uint64> orderby_eligibility_contract_unsupported{0};
   std::atomic<uint64> orderby_filesort_construct_smoke_attempts{0};  ///< E5d-3c
   std::atomic<uint64> orderby_filesort_construct_smoke_success{0};  ///< E5d-3c
   std::atomic<uint64> orderby_filesort_construct_smoke_unsupported{0};  ///< E5d-3c
@@ -355,6 +358,11 @@ struct PQ_global_stats {
         0, std::memory_order_relaxed);
     orderby_filesort_contract_attempts.store(0, std::memory_order_relaxed);
     orderby_filesort_contract_unsupported.store(0, std::memory_order_relaxed);
+    orderby_eligibility_contract_attempts.store(0, std::memory_order_relaxed);
+    orderby_eligibility_contract_candidate_disabled.store(
+        0, std::memory_order_relaxed);
+    orderby_eligibility_contract_unsupported.store(0,
+                                                   std::memory_order_relaxed);
     orderby_filesort_construct_smoke_attempts.store(
         0, std::memory_order_relaxed);
     orderby_filesort_construct_smoke_success.store(0,

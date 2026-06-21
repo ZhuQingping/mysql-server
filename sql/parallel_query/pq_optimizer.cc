@@ -178,6 +178,91 @@ bool pq_build_orderby_filesort_contract(
   return true;
 }
 
+static bool pq_orderby_contract_access_is_full_scan(JOIN *join) {
+  if (join == nullptr) return false;
+
+  join_type access_type = JT_UNKNOWN;
+  if (join->best_ref != nullptr && join->primary_tables > 0 &&
+      join->best_ref[0] != nullptr) {
+    access_type = join->best_ref[0]->type();
+  }
+
+  if (access_type == JT_UNKNOWN && join->qep_tab != nullptr &&
+      join->primary_tables > 0) {
+    access_type = join->qep_tab[0].type();
+  }
+
+  return access_type == JT_ALL;
+}
+
+static bool pq_orderby_contract_asc_only(const JOIN *join) {
+  if (join == nullptr || join->order.empty()) return false;
+
+  for (ORDER *order = join->order.order; order != nullptr;
+       order = order->next) {
+    if (order->direction == ORDER_DESC) return false;
+  }
+  return true;
+}
+
+bool pq_build_orderby_eligibility_contract(
+    THD *thd, Query_block *query_block, JOIN *join,
+    PQOrderByEligibilityContract *contract) {
+  if (contract == nullptr) return false;
+
+  contract->reset();
+  if (thd == nullptr || query_block == nullptr || join == nullptr) {
+    contract->status =
+        PQOrderByEligibilityContractStatus::UNSUPPORTED_NULL_INPUT;
+    contract->detail = "missing THD, Query_block, or JOIN";
+    return false;
+  }
+
+  contract->has_order = query_block->is_ordered() || !join->order.empty();
+  if (!contract->has_order) {
+    contract->status =
+        PQOrderByEligibilityContractStatus::UNSUPPORTED_NOT_ORDERED;
+    contract->detail = "query has no ORDER BY";
+    return false;
+  }
+
+  contract->single_table = query_block->table_count() == 1;
+  contract->simple_order = !join->order.empty() && join->simple_order &&
+                           is_simple_order(join->order.order);
+  contract->asc_only = pq_orderby_contract_asc_only(join);
+  contract->has_limit = query_block->has_limit();
+  contract->select_distinct =
+      query_block->is_distinct() || join->select_distinct;
+  contract->has_group =
+      query_block->is_explicitly_grouped() || !join->group_list.empty();
+  contract->has_having =
+      query_block->having_cond() != nullptr || join->having_cond != nullptr;
+  contract->has_window = query_block->has_wfs();
+  contract->filesort_required =
+      join->m_ordered_index_usage == JOIN::ORDERED_INDEX_VOID &&
+      !join->skip_sort_order;
+  contract->full_scan = pq_orderby_contract_access_is_full_scan(join);
+
+  if (thd->lex->sql_command == SQLCOM_SELECT &&
+      !thd->lex->using_hypergraph_optimizer() &&
+      query_block->is_simple_query_block() && contract->single_table &&
+      contract->simple_order && contract->asc_only && !contract->has_limit &&
+      !contract->select_distinct && !contract->has_group &&
+      !contract->has_having && !contract->has_window &&
+      contract->filesort_required && contract->full_scan) {
+    contract->status =
+        PQOrderByEligibilityContractStatus::
+            FUTURE_CANDIDATE_EXECUTION_DISABLED;
+    contract->detail = "future ORDER BY candidate, execution disabled";
+    contract->execution_disabled = true;
+    return true;
+  }
+
+  contract->status = PQOrderByEligibilityContractStatus::UNSUPPORTED_SHAPE;
+  contract->detail = "ORDER BY shape is not in the first candidate subset";
+  return false;
+}
+
 struct PQ_owned_order_chain_sidecar {
   std::vector<ORDER> nodes;
   std::vector<ORDER> restored_nodes;
@@ -973,6 +1058,26 @@ static void pq_maybe_run_orderby_filesort_contract_smoke(
       contract.status ==
           PQOrderByFilesortContractStatus::UNSUPPORTED_MISSING_SAVED_HELPERS) {
     pq_global_stats.orderby_filesort_contract_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+}
+
+static void pq_maybe_run_orderby_eligibility_contract_smoke(
+    THD *thd, Query_block *query_block, JOIN *join) {
+  bool enabled = false;
+  DBUG_EXECUTE_IF("pq_orderby_eligibility_contract_smoke", enabled = true;);
+  if (!enabled) return;
+
+  pq_global_stats.orderby_eligibility_contract_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  PQOrderByEligibilityContract contract;
+  if (pq_build_orderby_eligibility_contract(thd, query_block, join, &contract) &&
+      contract.future_candidate_disabled()) {
+    pq_global_stats.orderby_eligibility_contract_candidate_disabled.fetch_add(
+        1, std::memory_order_relaxed);
+  } else {
+    pq_global_stats.orderby_eligibility_contract_unsupported.fetch_add(
         1, std::memory_order_relaxed);
   }
 }
@@ -1906,6 +2011,7 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
     pq_maybe_run_saved_order_group_restore_smoke(query_block, join);
     pq_maybe_run_saved_order_group_clone_copy_smoke(query_block, join);
     pq_maybe_run_orderby_filesort_contract_smoke(query_block, join);
+    pq_maybe_run_orderby_eligibility_contract_smoke(thd, query_block, join);
     pq_maybe_run_orderby_filesort_restored_order_contract_smoke(query_block,
                                                                 join);
     pq_maybe_run_orderby_filesort_construct_smoke(query_block, join);

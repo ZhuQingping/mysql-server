@@ -62,6 +62,41 @@ SET @pq_ranges_before_order = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_ranges_dispatched');
+SET @pq_orderby_elig_attempts_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_eligibility_contract_attempts');
+SET @pq_orderby_elig_candidate_disabled_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_eligibility_contract_candidate_disabled');
+SET @pq_orderby_elig_unsupported_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_eligibility_contract_unsupported');
+SET @old_debug=@@debug;
+SET SESSION debug="d,pq_orderby_eligibility_contract_smoke";
+EXPLAIN SELECT id, k FROM t1 ORDER BY k ASC, id ASC;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using filesort; Not parallel HAS_ORDER_BY
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`k` AS `k` from `test`.`t1` order by `test`.`t1`.`k`,`test`.`t1`.`id`
+SET SESSION debug=@old_debug;
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_eligibility_contract_attempts') -
+@pq_orderby_elig_attempts_before AS orderby_elig_attempts_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_eligibility_contract_candidate_disabled') -
+@pq_orderby_elig_candidate_disabled_before AS orderby_elig_candidate_disabled_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_eligibility_contract_unsupported') -
+@pq_orderby_elig_unsupported_before AS orderby_elig_unsupported_delta;
+orderby_elig_attempts_delta	orderby_elig_candidate_disabled_delta	orderby_elig_unsupported_delta
+1	1	0
 EXPLAIN SELECT id, k FROM t1 ORDER BY k ASC, id ASC LIMIT 4;
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using filesort; Not parallel HAS_ORDER_BY
