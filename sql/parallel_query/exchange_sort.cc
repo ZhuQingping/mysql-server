@@ -612,6 +612,33 @@ bool Exchange_sort::init_runtime_sort_state_owner_shape(
   return false;
 }
 
+bool Exchange_sort::init_runtime_sort_param_scalar_shape(
+    uint32 sort_order_length, uint32 max_record_length, uint32 ref_length) {
+  if (!m_runtime_sort_state_owner_shape.initialized ||
+      sort_order_length == 0 || max_record_length == 0) {
+    return true;
+  }
+  if (sort_order_length !=
+          m_runtime_sort_state_owner_shape.sort_order_length ||
+      max_record_length !=
+          m_runtime_sort_state_owner_shape.max_record_length ||
+      ref_length != m_runtime_sort_state_owner_shape.ref_length) {
+    return true;
+  }
+
+  /*
+    E5h-3 stores only scalar metadata. It does not construct or persist a real
+    Sort_param, and it does not claim default ORDER BY runtime readiness.
+  */
+  m_runtime_sort_state_owner_shape.sort_param_order_length =
+      sort_order_length;
+  m_runtime_sort_state_owner_shape.sort_param_max_record_length =
+      max_record_length;
+  m_runtime_sort_state_owner_shape.sort_param_ref_length = ref_length;
+  m_runtime_sort_state_owner_shape.sort_param_initialized = true;
+  return false;
+}
+
 bool Exchange_sort::init_real_init_state_owner_shape(
     uint32 workers, bool stable_output, bool index_sort,
     uint32 sort_order_length, uint32 max_record_length, uint32 ref_length) {
@@ -963,6 +990,10 @@ bool Exchange_sort::run_orderby_sort_state_shape_smoke() {
     return true;
   }
 
+  if (run_orderby_runtime_sort_param_lifetime_smoke()) {
+    return true;
+  }
+
   if (run_orderby_real_init_allocation_smoke()) {
     return true;
   }
@@ -1033,6 +1064,75 @@ bool Exchange_sort::run_orderby_runtime_sort_state_owner_shape_smoke() {
          m_runtime_sort_state_owner_shape.filesorts_cleanup_attached ||
          m_runtime_sort_state_owner_shape.qep_attached ||
          m_runtime_sort_state_owner_shape.access_path_attached;
+}
+
+bool Exchange_sort::run_orderby_runtime_sort_param_lifetime_smoke() {
+  constexpr uint32 kWorkers = 3;
+  constexpr uint32 kSortOrderLength = 2;
+  constexpr uint32 kMaxRecordLength = 64;
+  constexpr uint32 kRefLength = 8;
+  constexpr uint32 kSecondSortOrderLength = 3;
+  constexpr uint32 kSecondMaxRecordLength = 96;
+  constexpr uint32 kSecondRefLength = 12;
+
+  if (init_runtime_sort_state_owner_shape(
+          kWorkers, /*stable_output=*/true, /*index_sort=*/false,
+          kSortOrderLength, kMaxRecordLength, kRefLength) ||
+      init_runtime_sort_param_scalar_shape(kSortOrderLength, kMaxRecordLength,
+                                           kRefLength)) {
+    cleanup_runtime_sort_state_owner_shape();
+    return true;
+  }
+
+  const bool first_valid =
+      m_runtime_sort_state_owner_shape.sort_param_initialized &&
+      m_runtime_sort_state_owner_shape.sort_param_order_length ==
+          kSortOrderLength &&
+      m_runtime_sort_state_owner_shape.sort_param_max_record_length ==
+          kMaxRecordLength &&
+      m_runtime_sort_state_owner_shape.sort_param_ref_length == kRefLength &&
+      !m_runtime_sort_state_owner_shape.runtime_ready &&
+      !m_runtime_sort_state_owner_shape.filesort_constructed;
+
+  cleanup_runtime_sort_state_owner_shape();
+  if (!first_valid || m_runtime_sort_state_owner_shape.sort_param_initialized ||
+      m_runtime_sort_state_owner_shape.sort_param_order_length != 0 ||
+      m_runtime_sort_state_owner_shape.sort_param_max_record_length != 0 ||
+      m_runtime_sort_state_owner_shape.sort_param_ref_length != 0) {
+    return true;
+  }
+
+  if (init_runtime_sort_state_owner_shape(
+          kWorkers, /*stable_output=*/true, /*index_sort=*/false,
+          kSecondSortOrderLength, kSecondMaxRecordLength, kSecondRefLength) ||
+      init_runtime_sort_param_scalar_shape(kSecondSortOrderLength,
+                                           kSecondMaxRecordLength,
+                                           kSecondRefLength)) {
+    cleanup_runtime_sort_state_owner_shape();
+    return true;
+  }
+
+  const bool second_valid =
+      m_runtime_sort_state_owner_shape.sort_param_initialized &&
+      m_runtime_sort_state_owner_shape.sort_param_order_length ==
+          kSecondSortOrderLength &&
+      m_runtime_sort_state_owner_shape.sort_param_max_record_length ==
+          kSecondMaxRecordLength &&
+      m_runtime_sort_state_owner_shape.sort_param_ref_length ==
+          kSecondRefLength &&
+      !m_runtime_sort_state_owner_shape.runtime_ready &&
+      !m_runtime_sort_state_owner_shape.filesort_constructed &&
+      !m_runtime_sort_state_owner_shape.join_state_mutated &&
+      !m_runtime_sort_state_owner_shape.filesorts_cleanup_attached &&
+      !m_runtime_sort_state_owner_shape.qep_attached &&
+      !m_runtime_sort_state_owner_shape.access_path_attached;
+
+  cleanup_runtime_sort_state_owner_shape();
+  return !second_valid || m_runtime_sort_state_owner_shape.initialized ||
+         m_runtime_sort_state_owner_shape.sort_param_initialized ||
+         m_runtime_sort_state_owner_shape.sort_param_order_length != 0 ||
+         m_runtime_sort_state_owner_shape.sort_param_max_record_length != 0 ||
+         m_runtime_sort_state_owner_shape.sort_param_ref_length != 0;
 }
 
 bool Exchange_sort::run_orderby_real_init_state_owner_smoke() {

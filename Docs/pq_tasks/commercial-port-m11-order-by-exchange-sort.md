@@ -5982,6 +5982,79 @@ Code/Doc/Test Review - M11-E5h-2:
   worker / MQ, or default `Read()` path is changed；
 - confirmed no new status variables or MTR files are required。
 
+### M11-E5h-3: Runtime Sort_param Scalar Lifetime Smoke
+
+Status: coding completed locally；waiting for Code/Doc/Test Review。
+
+Goal:
+
+- validate owner-managed scalar `Sort_param` metadata lifetime in
+  `Exchange_sort` without persisting a real `Sort_param` object；
+- prove scalar metadata can initialize, cleanup, and initialize again with new
+  dimensions；
+- keep user-visible ORDER BY serial through `HAS_ORDER_BY`。
+
+Design Explorer - M11-E5h-3:
+
+- Explorer verdict: `ACCEPT`；
+- recommended not expanding real stack `Sort_param::init_for_filesort()` reuse
+  because it has no reviewed reset contract；
+- recommended putting E5h-3 in the `Exchange_sort` owner shape as scalar
+  metadata only；
+- recommended reusing existing `pq_exchange_sort_state_shape_smoke` and
+  `Parallel_exchange_sort_state_shape_smoke_*` counters。
+
+Completion Report - M11-E5h-3 Coding:
+
+- changed files:
+  - `sql/parallel_query/exchange_sort.h`；
+  - `sql/parallel_query/exchange_sort.cc`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - added scalar metadata fields to
+    `PQ_orderby_runtime_sort_state_owner_shape`:
+    `sort_param_order_length`, `sort_param_max_record_length`, and
+    `sort_param_ref_length`；
+  - added `Exchange_sort::init_runtime_sort_param_scalar_shape()`；
+  - added `Exchange_sort::run_orderby_runtime_sort_param_lifetime_smoke()`
+    under the existing `pq_exchange_sort_state_shape_smoke` path；
+  - the smoke validates first initialization, cleanup-to-zero, and a second
+    initialization with different dimensions。
+- scope notes:
+  - no real `Sort_param` object is constructed or persisted；
+  - no `Filesort` construction；
+  - no `Sort_param::init_for_filesort()` call；
+  - no `HAS_ORDER_BY` relaxation；
+  - no `sort_param_runtime_ready` or other preflight readiness change；
+  - no `execution_disabled=false`；
+  - no worker launch, `PQWR` / `Query_result_mq`, handler/InnoDB, default MQ
+    consumption, or default ordered `ParallelScanIterator::Read()` change；
+  - no new status variables or MTR files。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `pq_commercial_order_by_frames pq_commercial_order_by pq_stats` 4/4；
+  - full `parallel_query` suite passed: 89/89。
+
+Code/Doc/Test Review - M11-E5h-3:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed only scalar `uint32` metadata fields were added and no real
+  `Sort_param` is held；
+- confirmed `init_runtime_sort_param_scalar_shape()` only validates dimensions,
+  stores scalar metadata, and sets `sort_param_initialized`；
+- confirmed there is no `Sort_param::init_for_filesort()`, `Filesort`
+  construction, or `Filesort` call in the diff；
+- confirmed cleanup resets the entire owner shape and the smoke covers first
+  init, cleanup-to-zero, second init with different dimensions, and final
+  cleanup-to-zero；
+- confirmed no `HAS_ORDER_BY`, preflight readiness, `execution_disabled`,
+  worker/MQ, or default `Read()` path is changed；
+- confirmed no new status variables or MTR files are needed。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
