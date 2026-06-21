@@ -980,6 +980,219 @@ Code-Docs-Test Review:
   may grow existing callback/exchange smoke counters because it intentionally
   reuses the bounded callback producer。
 
+### M11-D4c: Commit-point Error Cleanup Smoke Taskbook
+
+Status: design-only taskbook created；waiting for Docs-Design Review。
+
+Goal:
+
+- add a debug-only smoke that enters the same leader row-stream commit point as
+  D4b and then forces a `Read()`-time ERROR token；
+- prove that after `mark_pq_started()` the iterator does not serial fallback；
+- prove `PQTableScanIterator::Read()` aborts/cleans owned PQ resources and
+  returns an error；
+- keep default execution unchanged；
+- do not introduce cloned JOIN, commercial worker plan, real worker thread, or
+  user-visible default `PARALLEL_SCAN`。
+
+Relationship to earlier work:
+
+- D4b proved a bounded ROW + FINISH stream can be consumed by
+  `PQTableScanIterator::Read()`；
+- D4c should reuse the D4b setup shape but replace the producer payload with a
+  deterministic ERROR after commit point；
+- D4c is not a row-value correctness task and must not expand record
+  materialization；
+- D4c is not a worker thread/KILL task；threaded external KILL remains covered
+  by existing V2-8K/V2-8N and M5 tests。
+
+Allowed path:
+
+1. DBUG-only hook in `PQTableScanIterator::Init()` after the table/blob guard
+   and before handler PROBE accounting；
+2. hook obtains handler leader `EXECUTE` context with DOP=1；
+3. hook creates and owns `m_gather` for the iterator；
+4. hook initializes/configures the exchange enough for `Read()` to consume；
+5. hook enqueues exactly one deterministic ERROR marker, with no ROW payload；
+6. hook calls `mark_pq_started()` and returns `false`；
+7. executor calls `PQTableScanIterator::Read()`；
+8. `Read()` observes ERROR, calls existing `cleanup_pq_resources(true)`,
+   reports an error, and returns `1`；
+9. the SQL statement fails, and MTR verifies status deltas。
+
+Required limits:
+
+- DOP fixed at 1；
+- only non-BLOB single-table InnoDB full scan shapes；
+- no successful ROW frame and no FINISH-only EOF in the D4c positive error
+  smoke；
+- no worker thread start；
+- no cloned JOIN or `ExecuteIteratorQuery()`；
+- no `Query_result_mq` send/read；
+- no ORDER BY / GROUP BY / ref / range / ICP / partition / reverse；
+- no new serial fallback after `mark_pq_started()`。
+
+Allowed files:
+
+- `sql/parallel_query/sql_parallel.h`；
+- `sql/parallel_query/sql_parallel.cc`；
+- `sql/parallel_query/pq_iterator.cc` only for a DBUG-only hook before handler
+  PROBE and for DBUG-only row-stream error accounting；
+- `sql/mysqld.cc` only for SHOW STATUS exposure；
+- one focused MTR test/result under `mysql-test/suite/parallel_query/`；
+- `mysql-test/suite/parallel_query/r/pq_stats.result` if status variable count
+  changes；
+- this taskbook；
+- `Docs/pq_tasks/README.md` only to refresh progress status。
+
+Forbidden files:
+
+- `sql/parallel_query/pq_iterators.*`；
+- `sql/parallel_query/pq_handler.*`；
+- `sql/parallel_query/query_result_mq.*`；
+- `sql/parallel_query/exchange.*` unless a tiny typed ERROR enqueue helper is
+  unavoidable and reviewed before coding；
+- `sql/parallel_query/pq_clone*`；
+- `sql/parallel_query/pq_resolver*`；
+- `sql/join_optimizer/access_path.*`；
+- `sql/sql_executor.*`；
+- `sql/sql_optimizer.*`；
+- `sql/handler.*`；
+- `storage/innobase/**`。
+
+Preferred implementation boundary:
+
+- first try to add a small `Gather_operator` helper such as
+  `prepare_leader_row_stream_error_smoke(THD *leader_thd, TABLE *leader_table,
+  PQ_Leader_context *leader_ctx)`；
+- helper may initialize gather/configure worker open contexts only if required
+  by existing Exchange/Gather invariants；
+- helper must enqueue an existing Exchange ERROR representation and must not
+  drain it；
+- if no public helper exists for ERROR enqueue, stop and split out a reviewed
+  Exchange-only design before touching `exchange.*`；
+- `PQTableScanIterator::Init()` must own `m_gather` only after allocation and
+  must rely on `cleanup_pq_resources(true)` for failures after leader context
+  creation；
+- unsupported handler/shape before commit point may still fallback serial；
+- any unexpected failure after `mark_pq_started()` must fail closed, not
+  fallback。
+
+Required counters:
+
+- `Parallel_leader_row_stream_error_smoke_attempts` increments when the D4c
+  hook is invoked；
+- `Parallel_leader_row_stream_error_smoke_selected` increments after the hook
+  has prepared the ERROR stream, marked PQ started, and returned to executor；
+- `Parallel_leader_row_stream_error_smoke_errors` increments when `Read()`
+  observes the D4c ERROR path；
+- `Parallel_leader_row_stream_error_smoke_cleanup` increments when the D4c
+  ERROR path reaches PQ resource cleanup；
+- D4c-specific `errors` and `cleanup` accounting must live in the
+  `PQTableScanIterator::Read()` ERROR branch under the
+  `pq_leader_row_stream_error_smoke` DBUG gate, immediately around
+  `cleanup_pq_resources(true)`；do not increment these counters inside generic
+  `cleanup_pq_resources()` or destructor cleanup；
+- `Parallel_queries_executed` delta must remain 0 because no ROW/EOF success
+  is reached；
+- `Parallel_rows_scanned` delta must remain 0；
+- `Parallel_workers_launched` delta must remain 0；
+- `Parallel_queries_fallback` delta must remain 0 after the selected counter
+  increments。
+
+Required MTR assertions:
+
+- statement uses `--error ER_GET_ERRNO` for the failing SELECT；
+- attempts delta >= 1；
+- selected delta >= 1；
+- errors delta = 1；
+- cleanup delta >= 1；
+- `Parallel_queries_executed` delta = 0；
+- `Parallel_rows_scanned` delta = 0；
+- `Parallel_workers_launched` delta = 0；
+- `Parallel_queries_fallback` delta = 0 for the D4c statement window；
+- `Parallel_probe_attempts` delta = 0；
+- `Parallel_worker_attach_smoke_attempts` delta = 0；
+- `Parallel_worker_attach_smoke_success` delta = 0；
+- `Parallel_worker_attach_smoke_cleanup_calls` delta = 0；
+- `Parallel_leader_row_stream_smoke_attempts` delta = 0；
+- `Parallel_leader_row_stream_smoke_selected` delta = 0；
+- `Parallel_leader_row_stream_smoke_rows` delta = 0。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query <d4c_test> pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11d4c_target --tmpdir=/tmp/pqt_m11d4c_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11d4c_full --tmpdir=/tmp/pqt_m11d4c_full
+```
+
+Agent Task Prompt:
+
+```text
+请先阅读 AGENTS.md，并遵守其中指向的 CLAUDE.md。
+
+你的角色是 Code Agent。
+主控 Agent 是 Codex。
+当前任务是 M11-D4c Commit-point Error Cleanup Smoke。
+
+请阅读：
+- Docs/pq_tasks/README.md；
+- Docs/pq_tasks/commercial-port-m11-parallel-scan-lifecycle.md；
+- sql/parallel_query/pq_iterator.cc；
+- sql/parallel_query/sql_parallel.h；
+- sql/parallel_query/sql_parallel.cc。
+
+任务目标：
+1. 实现 DBUG-only `pq_leader_row_stream_error_smoke`；
+2. 在 `PQTableScanIterator::Init()` 中进入 DOP=1 EXECUTE、准备 ERROR stream、
+   `mark_pq_started()` 后返回 executor；
+3. 让 `PQTableScanIterator::Read()` 观察 ERROR 并走 fail-closed cleanup，不得
+   serial fallback；
+4. 增加必要 SHOW STATUS counter 和一个 focused MTR；
+5. 更新本任务书 Completion Report。
+
+允许修改：
+- 见 M11-D4c Allowed files。
+
+禁止修改：
+- 见 M11-D4c Forbidden files。
+
+硬停止条件：
+- 若必须修改 `exchange.*` 才能表达 ERROR marker，先停止并报告，不要编码；
+- 若实现需要 worker thread、`Query_result_mq`、cloned JOIN、handler/InnoDB
+  接口变更，停止并报告；
+- 若 MTR 无法稳定断言 fallback delta=0，停止并报告。
+
+验证：
+- `git diff --check`；
+- `cmake --build build-ninja --target mysqld -j 16`；
+- targeted MTR: `<d4c_test> pq_stats`；
+- full `parallel_query` suite。
+
+完成后不要自行 commit。
+```
+
+Docs-Design Review:
+
+- first review returned `REVISE` with no critical findings；
+- review requested exact D4a/D4b counter delta assertions, D4c-specific
+  `errors/cleanup` accounting placement in `Read()` rather than generic
+  cleanup, and stable `--error ER_GET_ERRNO` expectation；
+- requested revisions were applied；
+- re-review returned `ACCEPT`；
+- confirmed D4a `attempts/success/cleanup_calls` deltas and D4b
+  `attempts/selected/rows` deltas are all explicitly required to remain 0；
+- confirmed D4c `errors/cleanup` counters are scoped to
+  `PQTableScanIterator::Read()` ERROR branch under
+  `pq_leader_row_stream_error_smoke`；
+- confirmed the failing SELECT uses `--error ER_GET_ERRNO`。
+
 ## Review 要求
 
 - D0 requires Docs-Design Review；
