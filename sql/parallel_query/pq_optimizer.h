@@ -305,6 +305,58 @@ bool pq_build_orderby_eligibility_contract(
     THD *thd, Query_block *query_block, JOIN *join,
     PQOrderByEligibilityContract *contract);
 
+enum class PQOrderByExecutionPreflightStatus {
+  UNSUPPORTED_NULL_INPUT,
+  BLOCKED_ELIGIBILITY,
+  BLOCKED_EXECUTION_DISABLED,
+  READY_UNREACHABLE
+};
+
+struct PQOrderByExecutionPreflight {
+  PQOrderByExecutionPreflightStatus status{
+      PQOrderByExecutionPreflightStatus::UNSUPPORTED_NULL_INPUT};
+  const char *detail{nullptr};
+  PQOrderByEligibilityContract eligibility;
+
+  bool eligibility_candidate_disabled{false};
+  bool filesort_runtime_ready{false};
+  bool sort_param_runtime_ready{false};
+  bool worker_order_frame_producer_ready{false};
+  bool exchange_sort_heap_read_ready{false};
+  bool leader_materialization_ready{false};
+  bool rowid_tiebreak_ready{false};
+  bool default_ordered_read_ready{false};
+  bool kill_detach_error_diagnostics_ready{false};
+  bool execution_disabled{true};
+
+  void reset() {
+    status = PQOrderByExecutionPreflightStatus::UNSUPPORTED_NULL_INPUT;
+    detail = nullptr;
+    eligibility.reset();
+    eligibility_candidate_disabled = false;
+    filesort_runtime_ready = false;
+    sort_param_runtime_ready = false;
+    worker_order_frame_producer_ready = false;
+    exchange_sort_heap_read_ready = false;
+    leader_materialization_ready = false;
+    rowid_tiebreak_ready = false;
+    default_ordered_read_ready = false;
+    kill_detach_error_diagnostics_ready = false;
+    execution_disabled = true;
+  }
+
+  bool blocked_by_execution_disabled() const {
+    return status ==
+               PQOrderByExecutionPreflightStatus::
+                   BLOCKED_EXECUTION_DISABLED &&
+           eligibility_candidate_disabled && execution_disabled;
+  }
+};
+
+bool pq_build_orderby_execution_preflight(
+    THD *thd, Query_block *query_block, JOIN *join,
+    PQOrderByExecutionPreflight *preflight);
+
 /**
   Convert a PQUnsuiteReason to a human-readable string.
 

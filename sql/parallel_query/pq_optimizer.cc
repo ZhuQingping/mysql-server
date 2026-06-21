@@ -263,6 +263,51 @@ bool pq_build_orderby_eligibility_contract(
   return false;
 }
 
+bool pq_build_orderby_execution_preflight(
+    THD *thd, Query_block *query_block, JOIN *join,
+    PQOrderByExecutionPreflight *preflight) {
+  if (preflight == nullptr) return false;
+
+  preflight->reset();
+  if (thd == nullptr || query_block == nullptr || join == nullptr) {
+    preflight->status =
+        PQOrderByExecutionPreflightStatus::UNSUPPORTED_NULL_INPUT;
+    preflight->detail = "missing THD, Query_block, or JOIN";
+    return false;
+  }
+
+  if (!pq_build_orderby_eligibility_contract(thd, query_block, join,
+                                             &preflight->eligibility) ||
+      !preflight->eligibility.future_candidate_disabled()) {
+    preflight->status =
+        PQOrderByExecutionPreflightStatus::BLOCKED_ELIGIBILITY;
+    preflight->detail = "ORDER BY eligibility contract did not select a "
+                        "disabled future candidate";
+    return false;
+  }
+
+  preflight->eligibility_candidate_disabled = true;
+
+  /*
+    M11-E5d-5e-2 centralizes the visible ORDER BY execution blocker. The
+    prerequisite flags below intentionally stay false until their real runtime
+    owners are wired into the default execution path.
+  */
+  preflight->filesort_runtime_ready = false;
+  preflight->sort_param_runtime_ready = false;
+  preflight->worker_order_frame_producer_ready = false;
+  preflight->exchange_sort_heap_read_ready = false;
+  preflight->leader_materialization_ready = false;
+  preflight->rowid_tiebreak_ready = false;
+  preflight->default_ordered_read_ready = false;
+  preflight->kill_detach_error_diagnostics_ready = false;
+  preflight->execution_disabled = true;
+  preflight->status =
+      PQOrderByExecutionPreflightStatus::BLOCKED_EXECUTION_DISABLED;
+  preflight->detail = "ORDER BY execution prerequisites are not ready";
+  return false;
+}
+
 struct PQ_owned_order_chain_sidecar {
   std::vector<ORDER> nodes;
   std::vector<ORDER> restored_nodes;
@@ -1078,6 +1123,26 @@ static void pq_maybe_run_orderby_eligibility_contract_smoke(
         1, std::memory_order_relaxed);
   } else {
     pq_global_stats.orderby_eligibility_contract_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+}
+
+static void pq_maybe_run_orderby_execution_preflight_smoke(
+    THD *thd, Query_block *query_block, JOIN *join) {
+  bool enabled = false;
+  DBUG_EXECUTE_IF("pq_orderby_execution_preflight_smoke", enabled = true;);
+  if (!enabled) return;
+
+  pq_global_stats.orderby_execution_preflight_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  PQOrderByExecutionPreflight preflight;
+  if (pq_build_orderby_execution_preflight(thd, query_block, join,
+                                           &preflight)) {
+    pq_global_stats.orderby_execution_preflight_ready.fetch_add(
+        1, std::memory_order_relaxed);
+  } else if (preflight.blocked_by_execution_disabled()) {
+    pq_global_stats.orderby_execution_preflight_blocked.fetch_add(
         1, std::memory_order_relaxed);
   }
 }
@@ -2012,6 +2077,7 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
     pq_maybe_run_saved_order_group_clone_copy_smoke(query_block, join);
     pq_maybe_run_orderby_filesort_contract_smoke(query_block, join);
     pq_maybe_run_orderby_eligibility_contract_smoke(thd, query_block, join);
+    pq_maybe_run_orderby_execution_preflight_smoke(thd, query_block, join);
     pq_maybe_run_orderby_filesort_restored_order_contract_smoke(query_block,
                                                                 join);
     pq_maybe_run_orderby_filesort_construct_smoke(query_block, join);

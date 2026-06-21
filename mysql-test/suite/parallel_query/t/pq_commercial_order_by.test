@@ -79,11 +79,25 @@ SET @pq_orderby_elig_unsupported_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_orderby_eligibility_contract_unsupported');
+SET @pq_orderby_preflight_attempts_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_execution_preflight_attempts');
+SET @pq_orderby_preflight_blocked_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_execution_preflight_blocked');
+SET @pq_orderby_preflight_ready_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_execution_preflight_ready');
 
-# 5e-1: first visible ORDER BY candidate is recognized, but execution remains
-# disabled. The query must still be optimizer-rejected as HAS_ORDER_BY.
+# 5e-1/5e-2: first visible ORDER BY candidate is recognized, but execution
+# remains disabled by the central preflight blocker. The query must still be
+# optimizer-rejected as HAS_ORDER_BY.
 SET @old_debug=@@debug;
-SET SESSION debug="d,pq_orderby_eligibility_contract_smoke";
+SET SESSION debug="+d,pq_orderby_eligibility_contract_smoke";
+SET SESSION debug="+d,pq_orderby_execution_preflight_smoke";
 EXPLAIN SELECT id, k FROM t1 ORDER BY k ASC, id ASC;
 SET SESSION debug=@old_debug;
 
@@ -99,7 +113,19 @@ SELECT
   (SELECT CAST(variable_value AS UNSIGNED)
      FROM performance_schema.global_status
      WHERE variable_name = 'Parallel_orderby_eligibility_contract_unsupported') -
-      @pq_orderby_elig_unsupported_before AS orderby_elig_unsupported_delta;
+      @pq_orderby_elig_unsupported_before AS orderby_elig_unsupported_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_execution_preflight_attempts') -
+      @pq_orderby_preflight_attempts_before AS orderby_preflight_attempts_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_execution_preflight_blocked') -
+      @pq_orderby_preflight_blocked_before AS orderby_preflight_blocked_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_execution_preflight_ready') -
+      @pq_orderby_preflight_ready_before AS orderby_preflight_ready_delta;
 
 # ORDER BY is still optimizer-rejected in M8. It must stay serial and must not
 # create a PQ iterator until the real Exchange_sort worker path is wired.

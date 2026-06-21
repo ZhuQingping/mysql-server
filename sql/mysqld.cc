@@ -9726,6 +9726,12 @@ DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(
     orderby_eligibility_contract_candidate_disabled)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_eligibility_contract_unsupported,
                                 orderby_eligibility_contract_unsupported)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_execution_preflight_attempts,
+                                orderby_execution_preflight_attempts)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_execution_preflight_blocked,
+                                orderby_execution_preflight_blocked)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_execution_preflight_ready,
+                                orderby_execution_preflight_ready)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_filesort_construct_smoke_attempts,
                                 orderby_filesort_construct_smoke_attempts)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_filesort_construct_smoke_success,
@@ -10845,6 +10851,15 @@ SHOW_VAR status_vars[] = {
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_orderby_eligibility_contract_unsupported",
      (char *)&show_pq_orderby_eligibility_contract_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_execution_preflight_attempts",
+     (char *)&show_pq_orderby_execution_preflight_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_execution_preflight_blocked",
+     (char *)&show_pq_orderby_execution_preflight_blocked, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_execution_preflight_ready",
+     (char *)&show_pq_orderby_execution_preflight_ready, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_orderby_filesort_construct_smoke_attempts",
      (char *)&show_pq_orderby_filesort_construct_smoke_attempts, SHOW_FUNC,

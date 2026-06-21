@@ -5,8 +5,8 @@
 ## Current Summary
 
 - Last synced: 2026-06-21
-- Active update: M11-E5d-5e-1 ORDER BY eligibility contract helper 已完成编码、验证和 Code/Doc/Test Review，等待提交；真实 ORDER BY execution、默认 worker MQ consumption 和默认 ordered `Read()` 仍未打开。
-- Current phase correction: M11-E5d-5e-1 只识别 future visible ORDER BY candidate 并保持 execution disabled；现有 `HAS_ORDER_BY` serial boundary 仍保留；Review 已 ACCEPT。下方超长历史摘要中的 5c 旧尾句不作为当前状态来源。
+- Active update: M11-E5d-5e-2 ORDER BY execution preflight blocker 已提交为 `1333004ebf9`；真实 ORDER BY execution、默认 worker MQ consumption 和默认 ordered `Read()` 仍未打开。
+- Current phase correction: M11-E5d-5e-1 已提交为 `f54474bda65`；M11-E5d-5e-2 在 5e-1 candidate-disabled contract 后新增 central preflight blocker，仍保持现有 `HAS_ORDER_BY` serial boundary。下方超长历史摘要中的 5c 旧尾句不作为当前状态来源。
 - Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1-M10 已完成当前支持子集和测试收口；M11 Post-M10 Commercial Main Architecture Restart 已启动，M11-A0/B0 design accepted；M11-A1-A5 plan clone/resolver contract 与 preflight 已完成；M11-B1/B2 PQWR leader decode adapter、M11-B3a/B3b/B3c worker-result wiring probes 已完成；M11-D0-D6 已完成并提交；M11-E0/E1/E2/E3 已完成并提交；M11-E4 user-visible ORDER BY gate design 已提交；M11-E5a real `Exchange_sort` worker-frame materialization design 已提交；M11-E5b-0 ORDER BY frame contract helper 已提交；M11-E5b-1 controlled frame K-way merge smoke 已提交；M11-E5b-2 merge-path empty-worker/ERROR edge smoke 已提交；M11-E5b-3 debug-only row materialization smoke 已提交；M11-E5c user-visible ORDER BY gate design 已提交；M11-E5d Filesort State Contract design 已提交；M11-E5d-0 read-only helper inventory 已提交；M11-E5d-S0 saved ORDER/GROUP helper design 已通过 review；M11-E5d-S1 saved state contract shape 已提交；M11-E5d-S2 leader save/restore smoke 已提交；M11-E5d-S3 clone-copy contract 已提交；M11-E5d-1 fail-closed Filesort contract shape 已提交；M11-E5d-2 design 已提交；M11-E5d-2a owned ORDER chain copy smoke 已提交；M11-E5d-2b optimized flag contract smoke 已提交；M11-E5d-2c restore-to-sidecar contract smoke 已提交；M11-E5d-2d clone-copy contract smoke 已提交；M11-E5d-3 post-sidecar Filesort boundary design 已提交；M11-E5d-3a restored ORDER Filesort contract 已提交；M11-E5d-3b Filesort constructor risk design 已提交；M11-E5d-3c debug-only Filesort construction smoke 已提交；M11-E5d-4 Sort_param / Exchange_sort initialization boundary design 已提交；M11-E5d-4a debug-only Sort_param init smoke 已提交；M11-E5d-4b Exchange_sort real-state adapter boundary design 已提交；M11-E5d-4b-1 debug-only Exchange_sort scalar sort-state adapter shape 已提交；M11-E5d-4c optimizer-side Filesort/Sort_param scalar handoff design 已提交；M11-E5d-4c-1 debug-only optimizer-to-Exchange_sort scalar handoff 已提交；M11-E5d-5 real `Exchange_sort` init / MQ / Read boundary design 已提交；M11-E5d-5a `Exchange_sort` real-init state owner shape 已提交；M11-E5d-5b sort-key buffer / record-group allocation smoke 已提交；M11-E5d-5c controlled ORDER BY MQ-to-record-group loader design 已起草，等待独立检视。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
@@ -133,6 +133,11 @@
   - M11-E5d-5 real Exchange_sort init boundary design: `89dbb6143a5` Plan PQ M11E exchange sort init boundary
   - M11-E5d-5a Exchange_sort real-init state owner shape: `83d91fed0f5` Add PQ M11E exchange sort init state shape
   - M11-E5d-5b Exchange_sort allocation smoke: `45c1b4efd30` Add PQ M11E exchange sort allocation smoke
+  - M11-E5d-5c controlled ORDER BY MQ-to-record-group loader: `4163db43197` Add PQ M11E order by frame loader smoke
+  - M11-E5d-5d debug-only ordered leader Read shadow path: `06b68f558d3` Add PQ M11E ordered read shadow smoke
+  - M11-E5d-5e visible ORDER BY eligibility gate design: `b6d964704e1` Plan PQ M11E order by eligibility gate
+  - M11-E5d-5e-1 ORDER BY eligibility contract helper: `f54474bda65` Add PQ M11E order by eligibility contract
+  - M11-E5d-5e-2 ORDER BY execution preflight blocker: `1333004ebf9` Add PQ M11E order by execution preflight
 - Phase 8 validation:
   - `cmake --build build-ninja --target mysqld -j 16` 通过
   - `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help` 通过

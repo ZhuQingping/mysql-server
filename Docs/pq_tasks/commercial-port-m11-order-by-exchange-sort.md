@@ -3631,7 +3631,7 @@ Code/Doc/Test Review - M11-E5d-5b:
 
 Status: coding completed；`git diff --check`, `mysqld` build, targeted MTR,
 and full `parallel_query` suite passed；Code/Doc/Test Review Agent accepted；
-waiting for commit。
+committed as `4163db43197`。
 
 Goal:
 
@@ -3784,7 +3784,7 @@ Code/Doc/Test Review - M11-E5d-5c:
 
 Status: coding completed；`git diff --check`, `mysqld` build, targeted MTR,
 and full `parallel_query` suite passed；Code/Doc/Test Review Agent accepted；
-waiting for commit。
+committed as `06b68f558d3`。
 
 Goal:
 
@@ -4119,7 +4119,7 @@ Design Review - M11-E5d-5e:
 
 Status: coding completed；`git diff --check`, `mysqld` build, targeted MTR,
 and full `parallel_query` suite passed；Code/Doc/Test Review Agent accepted；
-waiting for commit。
+committed as `1333004ebf9`。
 
 Goal:
 
@@ -4175,6 +4175,90 @@ Code/Doc/Test Review - M11-E5d-5e-1:
 - residual risk: LIMIT/DESC/GROUP/window and other unsupported shapes rely on
   fail-closed predicate review plus existing negative ORDER BY tests rather
   than separate per-shape DBUG assertions。
+
+### M11-E5d-5e-2: ORDER BY Execution Preflight Blocker
+
+Status: coding completed；`git diff --check`, `mysqld` build, targeted MTR,
+and full `parallel_query` suite passed；Code/Doc/Test Review Agent accepted；
+waiting for commit。
+
+Goal:
+
+- add a central fail-closed preflight blocker between the 5e-1 future ORDER BY
+  candidate contract and any user-visible ORDER BY PQ execution；
+- prove all real execution prerequisites remain absent from the default path；
+- keep executable visible ORDER BY PQ unreachable and preserve the existing
+  `HAS_ORDER_BY` serial boundary。
+
+Implementation summary:
+
+- added `PQOrderByExecutionPreflightStatus` and
+  `PQOrderByExecutionPreflight`；
+- added `pq_build_orderby_execution_preflight()`；
+- the preflight first requires the 5e-1 eligibility helper to classify the
+  query as `FUTURE_CANDIDATE_EXECUTION_DISABLED`；
+- the preflight then records the current prerequisite contract as not ready:
+  Filesort runtime, Sort_param runtime, worker ORDER BY frame producer,
+  `Exchange_sort` heap read, leader materialization, rowid tie-break, default
+  ordered `Read()`, and kill/detach/error diagnostics；
+- status remains `BLOCKED_EXECUTION_DISABLED` and the helper returns false；
+- added DBUG smoke `pq_orderby_execution_preflight_smoke` inside the existing
+  `HAS_ORDER_BY` reject window；
+- added status counters:
+  - `Parallel_orderby_execution_preflight_attempts`；
+  - `Parallel_orderby_execution_preflight_blocked`；
+  - `Parallel_orderby_execution_preflight_ready`；
+- updated `pq_commercial_order_by` to verify the first no-LIMIT ASC candidate
+  is recognized by 5e-1 and blocked by 5e-2 while `ready` remains zero；
+- updated `pq_stats` for the three new status variables。
+
+Scope confirmation:
+
+- no optimizer acceptance change；
+- no AccessPath, handler, InnoDB, worker MQ, `Exchange_sort` default read, or
+  `ParallelScanIterator::Read()` activation；
+- no `Filesort` / `Sort_param` ownership or execution change；
+- no user-visible ORDER BY PQ execution；
+- ordinary ORDER BY SQL still reports `Not parallel HAS_ORDER_BY` and runtime
+  counters stay zero。
+
+Validation result:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by pq_stats \
+  pq_saved_order_group_contract --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d5e2_target --tmpdir=/tmp/pqt_m11e5d5e2_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d5e2_full --tmpdir=/tmp/pqt_m11e5d5e2_full
+```
+
+Result:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed，4/4 including `shutdown_report`:
+  `pq_commercial_order_by pq_stats pq_saved_order_group_contract`；
+- full `parallel_query` suite passed，89/89 including `shutdown_report`。
+
+Code/Doc/Test Review - M11-E5d-5e-2:
+
+- Review Agent verdict: `ACCEPT` after documentation fix；
+- first review found stale 5c/5d commit-id status lines in this taskbook；
+- fixed 5c to `4163db43197` and 5d to `06b68f558d3`；
+- confirmed `pq_build_orderby_execution_preflight()` is fail-closed and only
+  runs after the 5e-1 `future_candidate_disabled()` contract；
+- confirmed the `HAS_ORDER_BY` serial boundary remains unchanged and no
+  optimizer acceptance, AccessPath, handler/InnoDB, worker MQ, default ordered
+  `Read()`, or `Filesort` / `Sort_param` execution path was opened；
+- confirmed status exposure/reset and `pq_commercial_order_by` /
+  `pq_stats` MTR updates are complete；
+- residual risk: unsupported ORDER BY shapes still rely on the 5e-1
+  fail-closed predicate and existing serial negative tests rather than
+  per-shape preflight smoke assertions。
 
 ## Risk Areas
 
