@@ -480,21 +480,28 @@ bool Exchange_sort::run_orderby_sort_state_shape_smoke() {
   constexpr uint32 kMaxRecordLength = 64;
   constexpr uint32 kRefLength = 8;
 
-  if (init_sort_state_shape(kWorkers, /*stable_output=*/true,
-                            /*index_sort=*/false, kSortOrderLength,
-                            kMaxRecordLength, kRefLength)) {
+  return run_orderby_sort_state_shape_handoff_smoke(
+      kWorkers, /*stable_output=*/true, /*index_sort=*/false, kSortOrderLength,
+      kMaxRecordLength, kRefLength);
+}
+
+bool Exchange_sort::run_orderby_sort_state_shape_handoff_smoke(
+    uint32 workers, bool stable_output, bool index_sort,
+    uint32 sort_order_length, uint32 max_record_length, uint32 ref_length) {
+  if (init_sort_state_shape(workers, stable_output, index_sort,
+                            sort_order_length, max_record_length, ref_length)) {
     cleanup_sort_state_shape();
     return true;
   }
-
   const bool valid =
       m_sort_state_shape.initialized &&
-      m_sort_state_shape.workers == kWorkers &&
-      m_sort_state_shape.sort_order_length == kSortOrderLength &&
-      m_sort_state_shape.max_record_length == kMaxRecordLength &&
-      m_sort_state_shape.ref_length == kRefLength &&
-      m_sort_state_shape.stable_output && !m_sort_state_shape.index_sort &&
-      m_sort_state_shape.rowid_required;
+      m_sort_state_shape.workers == workers &&
+      m_sort_state_shape.sort_order_length == sort_order_length &&
+      m_sort_state_shape.max_record_length == max_record_length &&
+      m_sort_state_shape.ref_length == ref_length &&
+      m_sort_state_shape.stable_output == stable_output &&
+      m_sort_state_shape.index_sort == index_sort &&
+      m_sort_state_shape.rowid_required == stable_output;
   cleanup_sort_state_shape();
   return !valid;
 }

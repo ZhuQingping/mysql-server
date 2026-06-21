@@ -9740,6 +9740,12 @@ DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_sort_param_init_smoke_success,
                                 orderby_sort_param_init_smoke_success)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_sort_param_init_smoke_unsupported,
                                 orderby_sort_param_init_smoke_unsupported)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_sort_state_handoff_smoke_attempts,
+                                orderby_sort_state_handoff_smoke_attempts)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_sort_state_handoff_smoke_success,
+                                orderby_sort_state_handoff_smoke_success)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_sort_state_handoff_smoke_unsupported,
+                                orderby_sort_state_handoff_smoke_unsupported)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(saved_order_chain_copy_smoke_attempts,
                                 saved_order_chain_copy_smoke_attempts)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(saved_order_chain_copy_smoke_success,
@@ -10850,6 +10856,15 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_orderby_sort_param_init_smoke_unsupported",
      (char *)&show_pq_orderby_sort_param_init_smoke_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_sort_state_handoff_smoke_attempts",
+     (char *)&show_pq_orderby_sort_state_handoff_smoke_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_sort_state_handoff_smoke_success",
+     (char *)&show_pq_orderby_sort_state_handoff_smoke_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_sort_state_handoff_smoke_unsupported",
+     (char *)&show_pq_orderby_sort_state_handoff_smoke_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_saved_order_chain_copy_smoke_attempts",
      (char *)&show_pq_saved_order_chain_copy_smoke_attempts, SHOW_FUNC,

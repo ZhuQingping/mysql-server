@@ -14,8 +14,13 @@ ORDER Filesort contract completed and committed；M11-E5d-3b Filesort
 constructor risk design completed and committed；M11-E5d-3c debug-only
 Filesort construction smoke completed and committed；M11-E5d-4 Sort_param /
 Exchange_sort initialization boundary design completed and committed；
-M11-E5d-4a debug-only Sort_param init smoke coding completed and targeted
-validation passed，waiting for code/doc/test review, full suite, and commit。
+M11-E5d-4a debug-only Sort_param init smoke completed and committed；
+M11-E5d-4b Exchange_sort real-state adapter boundary design completed and
+committed；M11-E5d-4b-1 debug-only Exchange_sort scalar sort-state adapter
+shape completed and committed；M11-E5d-4c optimizer-side scalar handoff design
+completed and committed；M11-E5d-4c-1 debug-only optimizer-to-Exchange_sort
+scalar handoff completed，Code/Doc/Test Review Agent accepted，full
+`parallel_query` suite passed，waiting for commit。
 
 ## 背景
 
@@ -3043,8 +3048,8 @@ Code/Doc/Test Review - M11-E5d-4b-1:
 
 ### M11-E5d-4c: Optimizer-side Filesort/Sort_param Scalar Handoff Design
 
-Status: design-only taskbook completed；Design Review Agent accepted；waiting
-for commit。
+Status: design-only taskbook completed；Design Review Agent accepted；committed
+as `01469aa124c`。
 
 Goal:
 
@@ -3159,6 +3164,94 @@ Design Review - M11-E5d-4c:
 - confirmed forbidden scope is complete；
 - confirmed validation commands and MTR negative guards are sufficient；
 - approved entering E5d-4c-1 coding after design commit。
+
+### M11-E5d-4c-1: Debug-only Optimizer-to-Exchange_sort Scalar Handoff
+
+Status: coding completed；Code/Doc/Test Review Agent accepted；`git diff
+--check`, `mysqld` build, targeted MTR, and full `parallel_query` suite passed；
+waiting for commit。
+
+Goal:
+
+- connect the optimizer-side E5d-4a debug `Filesort` / stack-local
+  `Sort_param` smoke to the E5d-4b-1 `Exchange_sort` scalar shape；
+- pass scalar metadata only；
+- keep the handoff DBUG-only and inside the existing `HAS_ORDER_BY` rejection
+  window。
+
+Implementation summary:
+
+- added public `Exchange_sort::run_orderby_sort_state_shape_handoff_smoke()`
+  accepting only scalar parameters；
+- kept `Exchange_sort` shape storage scalar-only and cleanup-scoped；
+- added `pq_run_orderby_sort_state_handoff_smoke()` in `pq_optimizer.cc`:
+  - repeats restored sidecar ORDER chain construction；
+  - constructs debug-only `Filesort`；
+  - initializes stack-local `Sort_param`；
+  - extracts `workers`, `stable_output`, `index_sort`, `sort_order_length`,
+    `max_record_length`, and `ref_length` as scalar values；
+  - calls the `Exchange_sort` scalar handoff smoke；
+- added DBUG flag `pq_orderby_sort_state_handoff_smoke`；
+- added status counters:
+  - `Parallel_orderby_sort_state_handoff_smoke_attempts`；
+  - `Parallel_orderby_sort_state_handoff_smoke_success`；
+  - `Parallel_orderby_sort_state_handoff_smoke_unsupported`；
+- extended `pq_saved_order_group_contract` to verify:
+  - no-DBUG handoff counters remain zero；
+  - DBUG handoff smoke records one attempt and one success；
+  - unsupported remains zero；
+  - `HAS_ORDER_BY` rejection remains active；
+  - `Parallel_queries_executed`, `Parallel_workers_launched`, and
+    `Parallel_ranges_dispatched` remain zero。
+
+Scope confirmation:
+
+- no `sql/filesort.*` or `sql/sort_param.*` edits；
+- no `Filesort::make_sortorder()` visibility change；
+- no persisted raw `ORDER *`, `Filesort *`, `Sort_param *`, `TABLE *`, or
+  handler pointer；
+- no persisted real `Sort_param` object or snapshot；
+- no commercial `MQ_record_gather` import；
+- no `Exchange_sort::init()` real-path override；
+- no worker MQ consumption from default SQL；
+- no `ParallelScanIterator::Read()` change；
+- no AccessPath, handler, InnoDB, or ORDER BY eligibility change；
+- no `filesort()` execution。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_saved_order_group_contract \
+  pq_commercial_order_by_frames pq_commercial_order_by pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11e5d4c1_target \
+  --tmpdir=/tmp/pqt_m11e5d4c1_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d4c1_full --tmpdir=/tmp/pqt_m11e5d4c1_full
+```
+
+Result:
+
+- `git diff --check` passed；
+- `mysqld` build passed；
+- targeted MTR passed，5/5 including `shutdown_report`。
+- full `parallel_query` suite passed，89/89 including `shutdown_report`。
+
+Code/Doc/Test Review - M11-E5d-4c-1:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: one low documentation finding，top status summary was stale and
+  has been refreshed before commit；
+- confirmed the handoff is DBUG-gated via
+  `pq_orderby_sort_state_handoff_smoke`；
+- confirmed the handoff is invoked only inside the `HAS_ORDER_BY` reject
+  window and the query still rejects；
+- confirmed only scalar values are passed to `Exchange_sort`；
+- confirmed `Exchange_sort` remains scalar-only and cleanup-scoped；
+- confirmed forbidden files/actions are not touched。
 
 ## Risk Areas
 

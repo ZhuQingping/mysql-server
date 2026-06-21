@@ -132,6 +132,12 @@ class Exchange_sort final : public Exchange {
                                                uint32 *rows_read,
                                                uint32 *unsupported);
   bool run_orderby_sort_state_shape_smoke();
+  bool run_orderby_sort_state_shape_handoff_smoke(uint32 workers,
+                                                  bool stable_output,
+                                                  bool index_sort,
+                                                  uint32 sort_order_length,
+                                                  uint32 max_record_length,
+                                                  uint32 ref_length);
 
   bool init_order_gather_shape(uint32 workers, bool stable_output,
                                bool index_sort);
